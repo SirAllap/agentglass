@@ -58,6 +58,7 @@ import {
 } from "../../src/model/cardBoard.ts";
 import { boardPath, listTarget } from "../../src/model/cardSelector.ts";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
+import { ComputerGone } from "../../src/nav/ComputerGone.tsx";
 
 /*
  * `/clickup/views` answers `ClickUpBoards` — the shared type the server
@@ -142,7 +143,12 @@ const EMPTY_TEXT = {
   "all-done": "Nothing is still open. The switch above shows the rest.",
 } as const;
 
+/** The screen, behind the card that says so when its computer is gone. */
 export default function TasksScreen(): React.ReactNode {
+  return <ComputerGone><TasksScreenBody /></ComputerGone>;
+}
+
+function TasksScreenBody(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
   const { host } = useAgentglass();
   const navigation = useNavigation();

@@ -11,6 +11,7 @@ import { describe, expect, test } from "bun:test";
 import { boxWording, processIsBoxed, processWillNotStart } from "../src/lib/pluginBoxState.ts";
 
 const SRC = await Bun.file(new URL("../src/components/plugins/PluginDeclaration.tsx", import.meta.url)).text();
+const LAYOUT_SRC = await Bun.file(new URL("../src/lib/pluginDeclarationLayout.ts", import.meta.url)).text();
 const BOX_SRC = await Bun.file(new URL("../src/lib/pluginBoxState.ts", import.meta.url)).text();
 const DOC = (await Bun.file(new URL("../../docs/PLUGINS.md", import.meta.url)).text()).replace(/\s+/g, " ");
 
@@ -68,14 +69,17 @@ describe("approval screen, sandbox grants", () => {
   });
 
   test("lists every read, write and program, and the network", () => {
-    expect(body).toContain("d.reads");
-    expect(body).toContain("d.writes");
-    expect(body).toContain("d.programs");
-    expect(body).toContain("d.internet");
+    // The grouping lives in the layout helper; the component draws what it returns.
+    expect(body).toContain("sandboxSections(d)");
+    expect(LAYOUT_SRC).toContain("d.reads");
+    expect(LAYOUT_SRC).toContain("d.writes");
+    expect(LAYOUT_SRC).toContain("d.programs");
+    expect(LAYOUT_SRC).toContain("d.internet");
   });
 
   test("marks a secret-looking path in the error colour", () => {
-    expect(body).toMatch(/g\.secret[^\n]*var\(--error\)|var\(--error\)[^\n]*g\.secret/);
+    expect(SRC).toMatch(/c\.secret \? "var\(--error\)"/);
+    expect(LAYOUT_SRC).toContain("secret: x.secret");
   });
 
   test("draws its box wording from the shared, testable helper, and that helper actually warns when the host cannot build one", () => {

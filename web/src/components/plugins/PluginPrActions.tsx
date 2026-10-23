@@ -1,14 +1,19 @@
-import { useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api } from "../../lib/api.ts";
 import { subscribePluginFrame } from "../../lib/pluginBus.ts";
 import { openSettings } from "../../lib/openSettings.ts";
 import type { PublicPlugin } from "../../../../shared/types.ts";
 import type { PrNote } from "../../lib/pluginTypes.ts";
 import { Menu, MenuItem, RepoCtx } from "../PrPanel.tsx";
-import { CTRL_H } from "../workspace/Chrome.tsx";
+import { CTRL_H, LINE } from "../workspace/Chrome.tsx";
 import { PluginMark } from "./PluginMark.tsx";
 import type { LocalNotes, LocalRun } from "./LocalReview.tsx";
 import { ICON } from "../../lib/iconSize.ts";
+import { notReadyChip } from "../../lib/prNotesChip.ts";
+import { loadNotesSummary, notesSummaryVersion, onNotesSummary, refreshOnNotes, summariesOf } from "../../lib/prNotesSummaryStore.ts";
+import { PublishReview } from "./PublishReview.tsx";
+import { latestRun } from "../../lib/publishReview.ts";
+import type { HeadRead } from "../../../../shared/headCompare.ts";
 
 /**
  * What a plugin can do to the pull request you are reading, in its header.
@@ -46,8 +51,12 @@ const STALE_MS = 24 * 60 * 60_000;
 
 let cache: { at: number; plugins: PublicPlugin[] } | null = null;
 
-export function PluginPrActions({ number, local, onShowLocal }: {
+export function PluginPrActions({ number, local, onShowLocal, root, head }: {
   number: number;
+  /** The checkout, and the pull request's head: what Publish review… posts from and compares with,
+   *  and what a review has to have covered before it can say the pull request is not ready. */
+  root: string;
+  head?: HeadRead;
   /** What plugins have written here — the runs are what the button reads. */
   local: LocalNotes;
   /** Take the person to the findings: the Conversation, filtered to Local. */
@@ -121,11 +130,30 @@ export function PluginPrActions({ number, local, onShowLocal }: {
     return off;
   }, [byPlugin, pending, repo, number]);
 
+  /* "Not ready", from the same summary the board's cards and the lane gate
+     read, so the header cannot say ready where a card says held. Only a review
+     that covered THIS head speaks (see blockingOpen); the button beside it keeps
+     saying what the plugin did. */
+  useSyncExternalStore(onNotesSummary, notesSummaryVersion, notesSummaryVersion);
+  useEffect(() => {
+    if (!repo) return;
+    const headSha = head?.sha;
+    const heads = () => (headSha && headSha.length >= 7 ? { [number]: headSha.slice(0, 12) } : {});
+    void loadNotesSummary(repo, heads());
+    return refreshOnNotes(repo, heads);
+  }, [repo, number, head?.sha]);
+  const notReady = repo ? notReadyChip(summariesOf(repo).get(number)) : null;
   if (!repo) return null;
+  // A review can be published whether or not its plugin is running now.
+  const latest = new Map<string, LocalRun>();
+  for (const p of new Set(local.runs.map((r) => r.plugin))) latest.set(p, latestRun(local.runs, p)!);
+  const publish = [...latest.values()].map((run) => (
+    <PublishReview key={`publish-${run.plugin}`} run={run} notes={local.notes} root={root} head={head} />
+  ));
   const rows = plugins
     .filter((p) => p.enabled && p.running && (p.contributes?.prActions?.length ?? 0) > 0)
     .map((p) => ({ p, actions: p.contributes!.prActions! }));
-  if (rows.length === 0) return null;
+  if (rows.length === 0) return notReady ? <><NotReady chip={notReady} onShowLocal={onShowLocal} />{publish}</> : <>{publish}</>;
 
   const press = async (p: PublicPlugin, id: string) => {
     setPending({ plugin: p.name, at: Date.now() });
@@ -140,13 +168,27 @@ export function PluginPrActions({ number, local, onShowLocal }: {
 
   return (
     <>
+      {notReady && <NotReady chip={notReady} onShowLocal={onShowLocal} />}
       {rows.map(({ p, actions }) => (
         <PluginAction key={p.name} p={p} actions={actions}
           run={byPlugin.get(p.name)?.run} notes={byPlugin.get(p.name)?.notes ?? []}
           pending={pending?.plugin === p.name ? pending.at : 0} error={pending === null ? error : null}
           onPress={(id) => { void press(p, id); }} onShowLocal={onShowLocal} />
       ))}
+      {publish}
     </>
+  );
+}
+
+function NotReady({ chip, onShowLocal }: { chip: { text: string; title: string }; onShowLocal: () => void }) {
+  return (
+    <button type="button" onClick={onShowLocal} title={`${chip.title} — press to read them`} data-not-ready
+      className="shrink-0 inline-flex items-center rounded-lg whitespace-nowrap leading-none text-[10.5px] px-2 hover:brightness-125"
+      style={{ height: CTRL_H.compact, color: "color-mix(in srgb, var(--error) 80%, var(--text))",
+        border: LINE, borderColor: "color-mix(in srgb, var(--error) 50%, transparent)",
+        background: "color-mix(in srgb, var(--error) 12%, transparent)" }}>
+      {chip.text}
+    </button>
   );
 }
 

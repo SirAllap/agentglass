@@ -240,7 +240,8 @@ describe("the agent's side", () => {
   it("list shows what is exposed and whether an agent may write it", () => {
     const l = api().list();
     expect(l.map((x) => x.id)).toContain("terminal.fontSize");
-    expect(l.every((x) => x.writable)).toBe(true);
+    // One def an agent reads and may not change: what a review plugin may see of the owner's work.
+    expect(l.filter((x) => !x.writable).map((x) => x.id)).toEqual(["plugins.sessionReads.repos"]);
     expect(l.find((x) => x.id === "diff.wrap")).toMatchObject({ page: "diff", value: false });
   });
 });

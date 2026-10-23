@@ -21,6 +21,7 @@
 // problem is a worse trade than reading one line and pasting it.
 import { networkInterfaces } from "node:os";
 import { existsSync, readFileSync, statSync } from "node:fs";
+import type { ServeResult } from "../../shared/types.ts";
 
 /**
  * A non-loopback address that has talked to us, and what we know about it.
@@ -647,6 +648,8 @@ const TAILNET_GRACE_MS = 10 * 60_000;
  */
 let expiredAlreadySaid = false;
 let healedIsNews = false;
+let freshAt = 0;
+let freshing: Promise<unknown> | null = null;
 
 interface TsRun {
   /** `tailscale` is not on PATH. An ANSWER — there is no tailnet — not a
@@ -656,10 +659,14 @@ interface TsRun {
   /** Exit status; null when the process could not be started or read at all. */
   code: number | null;
   out: string;
+  /** stderr, only when asked for: that is where `serve` prints its refusals. */
+  err?: string;
+  /** Killed after `timeoutMs` — `serve` waits for a click when Serve is off. */
+  timedOut?: boolean;
   why?: string;
 }
 
-async function tsCmd(args: string[]): Promise<TsRun> {
+async function tsCmd(args: string[], opts: { stderr?: boolean; timeoutMs?: number } = {}): Promise<TsRun> {
   // The PATH is passed rather than left implicit, and it is not a style choice:
   // measured, `Bun.which("tailscale")` resolves against the PATH the process
   // was STARTED with, and a `process.env.PATH` changed afterwards has no effect
@@ -670,10 +677,13 @@ async function tsCmd(args: string[]): Promise<TsRun> {
   const bin = Bun.which("tailscale", { PATH: process.env.PATH ?? "" });
   if (!bin) return { absent: true, code: null, out: "" };
   try {
-    const p = Bun.spawn([bin, ...args], { stdout: "pipe", stderr: "ignore" });
-    const out = await new Response(p.stdout).text();
+    const p = Bun.spawn([bin, ...args], { stdout: "pipe", stderr: opts.stderr ? "pipe" : "ignore" });
+    let timedOut = false;
+    const timer = opts.timeoutMs ? setTimeout(() => { timedOut = true; p.kill(); }, opts.timeoutMs) : null;
+    const [out, err] = await Promise.all([new Response(p.stdout).text(), opts.stderr ? new Response(p.stderr).text() : ""]);
     await p.exited;
-    return { code: p.exitCode, out };
+    if (timer) clearTimeout(timer);
+    return { code: p.exitCode, out, ...(opts.stderr ? { err } : {}), ...(timedOut ? { timedOut } : {}) };
   } catch (e) {
     return { code: null, out: "", why: String((e as Error)?.message ?? e).slice(0, 120) };
   }
@@ -782,6 +792,56 @@ export async function refreshTailscale(port: number, now = Date.now()): Promise<
   return { ok: true, nextMs: TAILNET_OK_MS };
 }
 
+/**
+ * Re-probe the tailnet unless an answer is younger than `maxAgeMs`.
+ *
+ * The 120 s timer is right for a trust cache and wrong for a person who just
+ * ran `tailscale serve` and is watching the Remote page: measured, the HTTPS
+ * route took up to two minutes to appear. The page asks for this on its poll,
+ * so the age cap is what keeps a 3 s poll from spawning two processes each
+ * time; callers in flight share one probe.
+ */
+export function refreshTailscaleIfStale(port: number, maxAgeMs: number, now = Date.now()): Promise<unknown> {
+  if (freshing) return freshing;
+  if (now - Math.max(tailnet.at, freshAt) < maxAgeMs) return Promise.resolve();
+  freshAt = now;
+  return (freshing = refreshTailscale(port, now).catch(() => null).finally(() => { freshing = null; }));
+}
+
+/** What `tailscale serve --bg` printed when it refused, as one action to take. */
+export function classifyServeFailure(text: string): ServeResult {
+  const t = text.trim();
+  if (/serve is not enabled/i.test(t)) {
+    return { ok: false, reason: "not-enabled", url: t.match(/https:\/\/\S+/)?.[0],
+      message: "Tailscale Serve is off for your tailnet. Open the link, turn it on, then press the button again." };
+  }
+  if (/access denied|permission denied|operator/i.test(t)) {
+    return { ok: false, reason: "access-denied", command: "sudo tailscale set --operator=$USER",
+      message: "Tailscale wants you to be its operator. Run this once in a terminal, then press the button again." };
+  }
+  if (/certificate/i.test(t)) {
+    return { ok: false, reason: "no-https",
+      message: "Your tailnet has no HTTPS certificates. In the Tailscale admin console open DNS and enable HTTPS Certificates, then press the button again." };
+  }
+  return { ok: false, reason: "failed", message: t.split("\n")[0]?.slice(0, 200) || "tailscale serve failed." };
+}
+
+/**
+ * Run `tailscale serve --bg <port>` for the person at this machine, then look
+ * again at once so the HTTPS route is in the status that goes back with it.
+ * Never sudo: the one refusal that needs it is returned as text to copy.
+ */
+export async function enableServe(port: number, opts: { timeoutMs?: number; reprobe?: boolean } = {}): Promise<ServeResult> {
+  const run = await tsCmd(["serve", "--bg", String(port)], { stderr: true, timeoutMs: opts.timeoutMs ?? 10_000 });
+  if (run.absent) return { ok: false, reason: "absent", message: "Tailscale is not installed on this machine." };
+  if (run.code === 0) {
+    if (opts.reprobe !== false) await refreshTailscale(port);
+    return { ok: true, url: tailnet.https?.url };
+  }
+  const r = classifyServeFailure(`${run.err ?? ""}\n${run.out}`);
+  return run.timedOut && r.reason === "failed" ? { ...r, message: "tailscale serve did not finish in time." } : r;
+}
+
 /** The `Web` map out of a serve status body, or null when that was not one. */
 function serveWeb(out: string): Record<string, unknown> | null {
   let j: unknown;
@@ -879,6 +939,7 @@ export function tailnetHealth(): TailnetHealth {
  *  and these are module-level by design (the gate reads them synchronously). */
 export function __resetTailnet(): void {
   tailnet = { names: new Set(), https: null, installed: true, at: 0, fails: 0, problem: null, dropped: false };
+  freshAt = 0;
   expiredAlreadySaid = false;
   healedIsNews = false;
 }

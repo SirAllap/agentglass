@@ -157,6 +157,7 @@ import { appsForAll, launchApp, mimeOf, setDefaultApp } from "./openwith.ts";
 import { actionsFor, deleteAction, listActions, readAction, runAction, saveAction } from "./finderactions.ts";
 import { fsRun, fsReadOp, fsJobs, fsPathsOf, fsGate, fsWantsJson } from "./fsroute.ts";
 import { mediaFacts, posterFrame } from "./mediafacts.ts";
+import { previewReview, publishReview, headerRun, publishNotes, cleanPublishOptions, type PublishDeps, type PublishRequest } from "./review-publish.ts";
 import { browseDir, browseReal, fileBytes, fileFacts, previewSlice, openInDesktop, pagePolicy, revealInFileManager } from "./browse.ts";
 import { fileGitFacts } from "./fileGit.ts";
 import { benchEdit, benchEnd, benchLive, finderEditEnd, finderEditSave, finderEditState, readNote, writeNote } from "./bench.ts";
@@ -171,6 +172,7 @@ import { capBuildCache, removeImages } from "./dockerprune.ts";
 import { inbox, markRead, markRepoRead, unsubscribe } from "./ghinbox.ts";
 import { applyMarks, listMarks, parseMarkOps, talkAlreadyRead, MARK_KINDS } from "./marks.ts";
 import { noteAsk as noteWatchAsk, startPrWatch } from "./prWatch.ts";
+import { onPrChanged, deliverPrChanged } from "./prChanged.ts";
 import {
   listWatches, addWatch, removeWatch, setPreset, applyPreset, sawMine, onTalkSeen as watchOnTalkSeen, pendingFires, ackFire,
   subscribeWatchChange, subscribeWatchFire, subscribeWatchChecks, startPrNotifyWatch,
@@ -186,10 +188,11 @@ import {
   prBaseOf,
   ghRateLimit,
   branchBehind, localHead, prRollup, prRowDetails, personBoard, refBranchRows, repoIdFor as prRepoIdFor, subscribeTalkSeen,
-  prBranches, githubStatusCached, prsForBranch, prForHead, nodeIdOk, locateRepo, isForeignRoot } from "./prs.ts";
+  prBranches, githubStatusCached, prsForBranch, prForHead, nodeIdOk, locateRepo, isForeignRoot, headRead, freshHead } from "./prs.ts";
+import type { HeadRead } from "../../shared/headCompare.ts";
 import { treeAtTar } from "./treeAt.ts";
 import { planCheckOnBase, startCheckOnBase, checkOnBaseStatus, cancelCheckOnBase } from "./checkOnBasePr.ts";
-import { repoSpend } from "./spend.ts";
+import { checkoutBranches, repoSpend, spendRows } from "./spend.ts";
 import { repoMetrics } from "./checkRuns.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, lastTmuxTarget, sessionTitle, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
@@ -223,6 +226,7 @@ import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, COD
 import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
 import { hermesStream, hermesModels, HERMES_ENABLED, hermesBypassAllowed } from "./hermes.ts";
 import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs, reloadEngineConf, tmuxCapability, engineWindowRunning, engineSessionName, tmux, validSessionName } from "./tmuxpane.ts";
+import { findLiveWindow } from "./livewindow.ts";
 import { takeLease, endLease, leaseHeld, reapLeases } from "./panelease.ts";
 import { runAgentInteractivePane } from "./understudy-pane.ts";
 import { startScanner, ownsSession, knownProjects, projectsKnownAtStart, resyncScope, scanningEnabled } from "./transcripts.ts";
@@ -248,10 +252,11 @@ import {
 import { setPluginSocketHandler, viaPluginSocket } from "./plugin-socket.ts";
 import { CanvasHandle, handleCanvasOps, isCanvasPanel, readBoundedJson, setCanvasResolver } from "./plugin-canvas.ts";
 import {
-  setPluginUiHook, setPanel, panelState, setOptions, pushEvent, takeEvents, upsertRun, upsertNotes, notesFor, answerNote, type GitHubPoster, flushPluginNotes,
+  setPluginUiHook, setPanel, panelState, setOptions, pushEvent, takeEvents, upsertRun, upsertNotes, notesFor, answerNote, replyAsPlugin, resolveOwnNote, costByDay, decideRun, pressNoteAction, flushPluginNotes, summaryFor, headsToRead, markRunPublished,
 } from "./plugin-ui.ts";
-import { PANEL_ID_RE, validPrRef } from "../../shared/pluginUi.ts";
+import { PANEL_ID_RE, PLUGIN_CONTRACT, validPrRef } from "../../shared/pluginUi.ts";
 import { readNotifyPrefs, writeNotifyPrefs } from "./notifyPrefs.ts";
+import { answerSessions, normalizeRepo, RATE_PER_HOUR, sessionFacts, sessionReadRepos, sessionsGate, setSessionReadRepos, takeSessionsSlot } from "./prsessions.ts";
 import { fetchCatalogue } from "./plugin-catalogue.ts";
 import { annotate, setAnnotations } from "./inbox-annotations.ts";
 import {
@@ -265,6 +270,10 @@ import {
   bankByPartition, refileBank,
 } from "./understudy.ts";
 import { listSources } from "./understudy-sources.ts";
+
+// A head or label change seen by any read the app already makes reaches the
+// running plugins that write notes, as `pr-open` does. See prChanged.ts.
+onPrChanged((ev) => deliverPrChanged(ev, listPlugins().map((p) => ({ name: p.name, running: p.running, prNotes: !!p.contributes.prNotes })), pushEvent));
 /** The last ingest run, so the panel can say what it learned without re-reading
  *  a single file. Deliberately in memory and not on disk: it is a receipt for
  *  something that just happened, and a stale one after a restart would claim
@@ -279,6 +288,32 @@ let lastUnderstudyLearn: import("./understudy-ingest.ts").IngestResult | null = 
  * the same shape as the actuator's runner and for the same reason: a module
  * that can start a process is a module every fence has to be re-argued around.
  */
+
+/**
+ * Which checkout on this machine is owner/name. The open project first, then
+ * the picker's sweep; see the `/prs/locate` route for why in that order.
+ */
+function locateCheckout(want: string): Promise<{ ok: true; root: string } | { ok: false; error: string }> {
+  return singleFlight(`locate:${want}`, async () => {
+    const paths = getChanges(300, undefined, false).map((c) => c.file_path);
+    const known = knownProjects().map((p) => p.path);
+    /*
+     * The open project FIRST, and it is not an optimisation.
+     *
+     * `ignoreScope` is the picker's sweep, and it deliberately leaves out
+     * the scoped project and folds linked worktrees into the project they
+     * belong to. Both of those are right for a picker and wrong here: the
+     * pull request being read is usually in the project that is open, or
+     * in one of its worktrees, and asking the picker's sweep for it
+     * answered "no checkout of it on this machine" while the app was
+     * showing that very repository.
+     */
+    const scoped = await discoverRepos(paths, known, {});
+    const root = await locateRepo(want, scoped.map((r) => r.root))
+      ?? await locateRepo(want, (await discoverRepos(paths, known, { ignoreScope: true })).map((r) => r.root));
+    return root ? { ok: true as const, root } : { ok: false as const, error: `no checkout of ${want} on this machine` };
+  });
+}
 
 /** Checkouts the loop may work in. The open project, and today only that. */
 /**
@@ -1481,7 +1516,7 @@ import { digest as logDigest } from "./logdigest.ts";
 import { mintTicket, claimTicket, pending as pendingPairings, acceptTicket, rejectTicket, collect as collectPairing, dropTicket, getTicket, MAX_ATTEMPTS } from "./pairing.ts";
 import { buildInfoPaths, updateStatus, viewerStatus, startUpdate, updateLog, releaseNotes } from "./selfupdate.ts";
 import { rateOk } from "./ratelimit.ts";
-import { noteClient, noteSocket, isLoopback, isSelf, isBlocked, blockDevice, remoteStatus, tailnetNames, refreshTailscale, TAILNET_OK_MS, proxiedByTailscaled, loopbackPeerIsOtherUser } from "./remote.ts";
+import { noteClient, noteSocket, isLoopback, isSelf, isBlocked, blockDevice, remoteStatus, tailnetNames, refreshTailscale, refreshTailscaleIfStale, enableServe, TAILNET_OK_MS, proxiedByTailscaled, loopbackPeerIsOtherUser } from "./remote.ts";
 import { parseWindowMs } from "./params.ts";
 import { serveWeb, serveIndex, WEB_UI_ENABLED, distPath } from "./webui.ts";
 import { notifyCapability, subscribeNotifications, notifyWatching, openNote } from "./notifications.ts";
@@ -1730,6 +1765,18 @@ function mayChangePolicy(req: Request, caller: Caller | null): boolean {
   if (caller?.principal || caller?.kind === "plugin") return false;
   if (caller?.kind === "device") return scopeAllows(caller.scope, "full");
   return mayHostBrowser(req);
+}
+
+/**
+ * Who may post a local review to GitHub: the person's own click, the same
+ * people as the policy and nobody else. Every credential an agent on this
+ * machine holds is refused: the machine token, a seat's, an understudy's, a
+ * plugin's, and any request that presents an agent's name. The ui-control door
+ * lists this action as refused for agents (UI_REFUSED_FOR_AGENTS).
+ */
+function mayPublishReview(req: Request, caller: Caller | null): boolean {
+  if (req.headers.get("x-agentglass-agent")) return false;
+  return mayChangePolicy(req, caller);
 }
 
 /** A project root as a policy key: absolute and plain, or nothing. */
@@ -5142,16 +5189,20 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       }
       return json({ ok: true, address, blocked, closed });
     }
+    const remoteNow = () =>
+      remoteStatus({
+        bind: BIND,
+        port: srv.port ?? PORT,
+        trustLan: TRUST_LAN,
+        token: AUTH_TOKEN,
+        webUi: WEB_UI_ENABLED,
+      });
     if (pathname === "/remote/status") {
-      return json(
-        remoteStatus({
-          bind: BIND,
-          port: srv.port ?? PORT,
-          trustLan: TRUST_LAN,
-          token: AUTH_TOKEN,
-          webUi: WEB_UI_ENABLED,
-        })
-      );
+      // `?fresh=1` is the Remote page asking for a tailnet look no older than
+      // 10 s, so a `tailscale serve` started elsewhere shows up in seconds
+      // instead of at the next 120 s tick.
+      if (url.searchParams.get("fresh")) await refreshTailscaleIfStale(srv.port ?? PORT, 10_000);
+      return json(remoteNow());
     }
     /**
      * --- pairing a device ---
@@ -5173,6 +5224,15 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       return !AUTH_TOKEN || tokenOk(req, url, AUTH_TOKEN);
     };
     const notHere = () => json({ ok: false, error: "only this machine can do that" }, 403);
+
+    // Turn on Tailscale HTTPS for the port this server answers on. Machine-only
+    // like pairing: it changes what the tailnet can reach.
+    if (pathname === "/remote/serve" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      if (!atMachine()) return notHere();
+      const r = await enableServe(srv.port ?? PORT);
+      return json({ ...r, status: remoteNow() });
+    }
 
     if (pathname === "/pair/ticket" && req.method === "POST") {
       if (!atMachine()) return notHere();
@@ -5482,7 +5542,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const body = async <T,>(): Promise<T | null> => { const r = await readBoundedJson(req, 4 * 1024 * 1024); return r.ok ? (r.value as T) : null; };
 
       if (pathname === "/plugin/self" && req.method === "GET") {
-        return json({ ok: true, name: self, contributes: c, settings: pluginOwnSettings(self) });
+        return json({ ok: true, name: self, contract: PLUGIN_CONTRACT, contributes: c, settings: pluginOwnSettings(self) });
       }
       if (pathname === "/plugin/self/events" && req.method === "GET") {
         const wait = Math.max(0, Math.min(30_000, Number(url.searchParams.get("wait") ?? 25_000) || 0));
@@ -5540,10 +5600,33 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         const r = upsertRun(self, c, await body<unknown>());
         return json(r, r.ok ? 200 : 400);
       }
+      /* GitHub reads for a plugin whose box has no keyring: the server holds
+         the `gh` login and answers only the operations in plugin-github.ts. */
+      if (pathname === "/plugin/self/github" && (req.method as string) === "GET") {
+        const op = url.searchParams.get("op") ?? "";
+        if (op === "tarball") {
+          const built = ghReadArgs(op, url.searchParams);
+          return built.ok ? streamTarball(built.args) : json({ ok: false, error: built.error }, 400);
+        }
+        const r = await runGhRead(op, url.searchParams);
+        return json(r, r.ok ? 200 : 400);
+      }
       if (pathname === "/plugin/self/pr/notes") {
         const b = await body<{ notes?: unknown }>();
         const r = upsertNotes(self, c, b?.notes);
         return json(r, r.ok ? 200 : 400);
+      }
+      if (pathname === "/plugin/self/pr/notes/reply") {
+        // The plugin answering a finding's thread. Stored with the finding,
+        // never sent to GitHub; a 404 here means an app from before this route.
+        const r = await replyAsPlugin(self, c, await body<unknown>());
+        return json(r, r.ok ? 200 : r.status);
+      }
+      if (pathname === "/plugin/self/pr/notes/status") {
+        // The plugin closing its own finding (open -> resolved only). The
+        // person's word outranks it; see resolveOwnNote.
+        const r = resolveOwnNote(self, c, await body<unknown>());
+        return json(r, r.ok ? 200 : r.status);
       }
       return json({ ok: false, error: "not found" }, 404);
     }
@@ -5614,6 +5697,26 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       broadcast({ type: "notify-prefs", data: prefs });
       return json({ ok: true, prefs });
     }
+    /* Which repositories the person lets review plugins read the authoring session of
+       (`plugins.sessionReads.repos`). Reading it is open to a plugin so its settings can
+       say "not allowed here"; changing it is `full` scope and the CSRF check, like the
+       rest of /plugins. */
+    if (pathname === "/plugins/session-reads" && req.method === "GET") {
+      /* `known`: the repositories the app already has a checkout of, as owner/name, for the picker.
+         Remembered per checkout by prs.ts (repoIdFor), so this is no `git` call once warm. */
+      const known = new Set<string>();
+      for (const root of await openProjectRepos().catch(() => [] as string[])) {
+        const id = await prRepoIdFor(root).catch(() => null);
+        if (id) known.add(id.nameWithOwner.toLowerCase());
+      }
+      return json({ ok: true, repos: sessionReadRepos(), known: [...known].sort() });
+    }
+    if (pathname === "/plugins/session-reads" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { repos?: unknown };
+      try { b = (await req.json()) as { repos?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      return json({ ok: true, repos: setSessionReadRepos(b.repos) });
+    }
     // Read marks, synced between devices — see marks.ts. Reading them is a
     // GET like any other; writing them is `answer` scope (auth.ts), because a
     // phone that may reply to a pull request may certainly say it has read one.
@@ -5655,30 +5758,130 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const r = notesFor(url.searchParams.get("repo"), url.searchParams.get("number"));
       if (!r) return json({ ok: false, error: "repo (owner/name) and number are required" }, 400);
       const names = new Map(listPlugins().map((p) => [p.name, p.publisher] as const));
-      return json({ ok: true, ...r, publishers: Object.fromEntries(names) });
+      // The finding buttons of each running plugin ride along, so the window
+      // needs no second request to know what to draw.
+      const noteActions = Object.fromEntries(listPlugins().filter((p) => p.running && p.contributes.noteActions?.length).map((p) => [p.name, p.contributes.noteActions!] as const));
+      return json({ ok: true, ...r, publishers: Object.fromEntries(names), noteActions });
+    }
+    if (pathname === "/plugins/pr-notes/summary" && req.method === "GET") {
+      // `heads=12:abc1234,13:def5678` is the list's own head per pull request,
+      // so `stale` can be answered here without asking GitHub anything.
+      const heads: Record<number, string> = {};
+      for (const part of (url.searchParams.get("heads") ?? "").split(",")) {
+        const m = /^(\d{1,9}):([0-9a-fA-F]{7,64})$/.exec(part.trim());
+        if (m) heads[Number(m[1])] = m[2]!;
+      }
+      const one = url.searchParams.get("head");
+      const num = url.searchParams.get("number");
+      if (one && num && /^[0-9a-fA-F]{7,64}$/.test(one)) heads[Number(num)] = one;
+      const slug = url.searchParams.get("repo");
+      // The caller's heads come from a cache that may be a push behind. The
+      // server's own newest read of each head (with its time) replaces them; a
+      // caller's head with no read behind it is unknown-age (at 0), and a review
+      // newer than the head we hold earns ONE targeted read before it is called
+      // stale (reviewStale: a head read before the review ended says nothing).
+      const reads: Record<number, HeadRead> = {};
+      if (slug) for (const [n, sha] of Object.entries(heads)) reads[Number(n)] = headRead(slug, Number(n)) ?? { sha, at: 0 };
+      if (slug && /^[\w.-]+\/[\w.-]+$/.test(slug)) {
+        const only = num ? Number(num) : null;
+        const want = headsToRead(slug, reads).filter((n) => only === n || n in reads).slice(0, 5);
+        await Promise.all(want.map(async (n) => { const f = await freshHead(slug, n); if (f) reads[n] = f; }));
+      }
+      const r = summaryFor(slug, num, reads);
+      if (!r) return json({ ok: false, error: "repo (owner/name) is required, and number must be a pull request number" }, 400);
+      return json({ ok: true, ...r });
     }
     if (pathname === "/plugins/pr-notes/status" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
-      let b: { plugin?: unknown; id?: unknown; status?: unknown; reply?: unknown; repo?: unknown; number?: unknown; root?: unknown };
+      let b: { plugin?: unknown; id?: unknown; status?: unknown; reply?: unknown; repo?: unknown; number?: unknown };
       try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       if (typeof b.plugin !== "string" || typeof b.id !== "string") return json({ ok: false, error: "plugin and id are required" }, 400);
       // Who is answering: an agent says so with the header its CLI sends (the
       // same honesty system as presentedWorker); anything else is the person.
       const agent = req.headers.get("x-agentglass-agent");
       const by = agent && /^[A-Za-z0-9_.-]{1,60}$/.test(agent) ? `agent:${agent}` : "user";
-      // The only path from a note to GitHub. It runs when the request asked
-      // for it AND the caller is full scope; `answerNote` enforces both, and
-      // this poster only checks the checkout belongs to the note's repository.
-      const poster: GitHubPoster = async (n, body) => {
-        const id = await prRepoIdFor(b.root);
-        if (!id || id.nameWithOwner.toLowerCase() !== n.repo.toLowerCase()) return { ok: false, error: `that project is not a checkout of ${n.repo}` };
-        const r = await addComment(b.root, n.number, body);
-        return r.ok ? { ok: true } : { ok: false, error: r.error };
+      const r = answerNote(b.plugin, b.id, { status: b.status, reply: b.reply, repo: b.repo, number: b.number, by });
+      return json(r, r.ok ? 200 : 400);
+    }
+    if ((pathname === "/plugins/pr-notes/publish-preview" || pathname === "/plugins/pr-notes/publish") && req.method === "POST") {
+      /*
+       * One organized comment from a local review. The preview reads and writes
+       * nothing; the publish is a person's click and nothing else (mayPublishReview).
+       * Both answer 403 to a plugin token, an agent's header or the machine token.
+       */
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      if (!mayPublishReview(req, caller)) {
+        return json({ ok: false, error: "publishing a review on GitHub is the person's own click; an agent or a plugin cannot do it" }, 403);
+      }
+      let b: { plugin?: unknown; repo?: unknown; number?: unknown; runId?: unknown; root?: unknown; options?: unknown; markdown?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const ref = typeof b.plugin === "string" ? notesFor(b.repo, b.number) : null;
+      if (typeof b.plugin !== "string" || !ref) return json({ ok: false, error: "plugin, repo (owner/name) and number are required" }, 400);
+      const runs = ref.runs.filter((r) => r.plugin === b.plugin);
+      const hdr = headerRun(runs, b.plugin);
+      const run = typeof b.runId === "string" ? runs.find((r) => r.id === b.runId) : hdr.run;
+      if (!run) return json({ ok: false, error: "that plugin has no review on this pull request" }, 404);
+      const rid = await prRepoIdFor(b.root);
+      if (!rid || rid.nameWithOwner.toLowerCase() !== run.repo.toLowerCase()) return json({ ok: false, error: `that project is not a checkout of ${run.repo}` }, 400);
+      const pr: PublishRequest = {
+        plugin: b.plugin, repo: run.repo, number: run.number, run,
+        // Every finding of this plugin on this pull request, whichever run last touched it.
+        notes: publishNotes(ref.notes, b.plugin, run.repo, run.number),
+        reviews: hdr.reviews,
+        totalCost: hdr.totalCost,
+        options: cleanPublishOptions(b.options),
       };
-      const r = await answerNote(b.plugin, b.id, {
-        status: b.status, reply: b.reply, repo: b.repo, number: b.number, by,
-        mayPost: (caller?.scope ?? "full") === "full",
-      }, poster);
+      const deps: PublishDeps = {
+        read: async () => {
+          const cap = await ghCapability();
+          if (!cap.available || !cap.authed) return { ok: false, error: cap.reason ?? "GitHub is not available" };
+          const d = await prDetail(b.root, run.number, true);
+          if (!d.ok || !d.detail) return { ok: false, error: d.error ?? "could not read the pull request" };
+          const det = d.detail as { headSha?: string; readAt?: number; comments?: { nodeId: string; author: string; body: string; url: string }[] };
+          return { ok: true, viewer: cap.login ?? "", headSha: det.headSha, headReadAt: det.readAt, comments: det.comments ?? [] };
+        },
+        create: async (body) => {
+          const r = await addComment(b.root, run.number, body);
+          return r.ok ? { ok: true, url: r.detail } : { ok: false, error: r.error };
+        },
+        edit: async (nodeId, body) => {
+          const r = await editComment(b.root, nodeId, body, "issue");
+          return r.ok ? { ok: true } : { ok: false, error: r.error };
+        },
+      };
+      if (pathname.endsWith("/publish-preview")) {
+        const r = await previewReview(pr, deps);
+        return json(r, r.ok ? 200 : 400);
+      }
+      const r = await publishReview(pr, typeof b.markdown === "string" ? b.markdown : undefined, deps);
+      if (!r.ok) return json(r, 400);
+      markRunPublished(b.plugin, run.id, { at: Date.now(), url: r.url, options: pr.options, ...(r.commit ? { commit: r.commit } : {}) });
+      return json({ ok: true, url: r.url, edited: r.edited });
+    }
+    if (pathname === "/plugins/pr-notes/cost" && req.method === "GET") {
+      // Read-only: what a plugin's runs cost, per day, for the Usage screen.
+      const r = costByDay(url.searchParams.get("plugin") ?? undefined, url.searchParams.get("days") ?? undefined);
+      return json(r, r.ok ? 200 : 400);
+    }
+    if (pathname === "/plugins/pr-run-decision" && req.method === "POST") {
+      // Approve run / Skip on a run waiting for the person's OK. The plugin is
+      // told; whether and how it goes on is the plugin's.
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { plugin?: unknown; id?: unknown; decision?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (typeof b.plugin !== "string") return json({ ok: false, error: "plugin and id are required" }, 400);
+      if (!isRunning(b.plugin)) return json({ ok: false, error: "that plugin is not running" }, 409);
+      const r = decideRun(b.plugin, b.id, b.decision);
+      return json(r, r.ok ? 200 : 400);
+    }
+    if (pathname === "/plugins/pr-note-action" && req.method === "POST") {
+      // A button a plugin declared on its findings was pressed.
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { plugin?: unknown; id?: unknown; noteId?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (typeof b.plugin !== "string") return json({ ok: false, error: "plugin, id and noteId are required" }, 400);
+      if (!isRunning(b.plugin)) return json({ ok: false, error: "that plugin is not running" }, 409);
+      const r = pressNoteAction(b.plugin, contributesOf(b.plugin), b.id, b.noteId);
       return json(r, r.ok ? 200 : 400);
     }
     if (pathname === "/plugins/pr-action" && req.method === "POST") {
@@ -8188,6 +8391,38 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const root = prRouteRoot(asked);
       return json(await branchBehind(root, Number(url.searchParams.get("number") ?? 0), url.searchParams.get("force") === "1"));
     }
+    /* The agent session(s) that wrote a pull request, as a redacted brief — only to a
+       running plugin whose manifest declares `reads: ["sessions"]`, only in a repository
+       the person allowed, and refused whole when anything in it looks like a secret.
+       See prsessions.ts for the three locks and what the brief holds. */
+    if (pathname === "/prs/sessions") {
+      const self = pluginOfRequest(req, url);
+      if (!self) return json({ ok: false, error: "only a running plugin reads this, with its own token" }, 403);
+      const asked = (url.searchParams.get("root") ?? "").trim();
+      const number = Number(url.searchParams.get("number") ?? 0);
+      if (!asked) return json({ ok: false, error: "root is required: owner/name or a checkout" }, 400);
+      if (!Number.isInteger(number) || number <= 0) return json({ ok: false, error: "invalid pull request number" }, 400);
+      const bare = normalizeRepo(asked);
+      const wanted = bare && !asked.startsWith("/") ? bare : null;
+      const repoOf = wanted ?? (inScopeReal(asked) ? (await prRepoIdFor(asked))?.nameWithOwner ?? null : null);
+      const gate = sessionsGate(contributesOf(self), repoOf);
+      if (!gate.ok) return json({ ok: false, error: gate.error, missing: gate.missing }, 403);
+      const slot = takeSessionsSlot(self);
+      if (!slot.ok) return new Response(JSON.stringify({ ok: false, error: `at most ${RATE_PER_HOUR} session reads an hour per plugin; try again in ${slot.retryAfterSec}s` }), {
+        status: 429, headers: { "content-type": "application/json", "retry-after": String(slot.retryAfterSec), ...cors } });
+      // No checkout of it here is not an error: there is nothing to read.
+      const local = wanted ? await locateCheckout(wanted) : { ok: true as const, root: asked };
+      if (!local.ok) return json({ ok: true, sessions: [] });
+      const pr = await prBranches(local.root, number);
+      if (!pr) return json({ ok: true, sessions: [] });
+      const out = await answerSessions(local.root, pr.head, {
+        rows: (r) => spendRows(r, RETENTION_DAYS ? Date.now() - RETENTION_DAYS * 86_400_000 : 0),
+        checkouts: checkoutBranches,
+        facts: sessionFacts,
+      });
+      // The kinds of text found, never the text; and nothing is logged here.
+      return out.ok ? json({ ok: true, sessions: out.sessions, ...(out.truncated ? { truncated: true } : {}) }) : json({ ok: false, error: out.error, kinds: out.kinds }, out.status);
+    }
     /* What this project's agents have spent, by branch and by checkout — the
        whole repository in one answer, because the board looks its rows up in it
        rather than asking per pull request. Scoped like every other read here:
@@ -8348,25 +8583,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        */
       const want = url.searchParams.get("repo") || "";
       if (!/^[\w.-]+\/[\w.-]+$/.test(want)) return json({ ok: false, error: "repo must be owner/name" }, 400);
-      return json(await singleFlight(`locate:${want}`, async () => {
-        const paths = getChanges(300, undefined, false).map((c) => c.file_path);
-        const known = knownProjects().map((p) => p.path);
-        /*
-         * The open project FIRST, and it is not an optimisation.
-         *
-         * `ignoreScope` is the picker's sweep, and it deliberately leaves out
-         * the scoped project and folds linked worktrees into the project they
-         * belong to. Both of those are right for a picker and wrong here: the
-         * pull request being read is usually in the project that is open, or
-         * in one of its worktrees, and asking the picker's sweep for it
-         * answered "no checkout of it on this machine" while the app was
-         * showing that very repository.
-         */
-        const scoped = await discoverRepos(paths, known, {});
-        const root = await locateRepo(want, scoped.map((r) => r.root))
-          ?? await locateRepo(want, (await discoverRepos(paths, known, { ignoreScope: true })).map((r) => r.root));
-        return root ? { ok: true, root } : { ok: false, error: `no checkout of ${want} on this machine` };
-      }));
+      return json(await locateCheckout(want));
     }
     if (pathname === "/prs/detail") {
       return json(await prDetail(
@@ -9634,6 +9851,19 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const name = String(url.searchParams.get("session") ?? "");
       if (!validSessionName(name)) return json({ ok: false, error: "invalid session" }, 400);
       return json({ ok: true, windows: await windowTree(name) });
+    }
+
+    /* Is Claude already working in the window a button is about to open? Exact
+       name, in this repository (and, when given, this checkout). Read on mount
+       and whenever the tab strip changes, so the card says so after a reload
+       and in a second window of the app. */
+    if (pathname === "/terminal/tmux/live-window" && req.method === "GET") {
+      const root = gitSafeAbs(url.searchParams.get("root"));
+      const name = String(url.searchParams.get("name") ?? "");
+      if (!root || !name) return json({ ok: false, error: "root and name are required" }, 400);
+      if (isForeignRoot(root) && !mayReadForeignRoot(caller)) return foreignRefused();
+      const path = url.searchParams.get("path");
+      return json({ ok: true, window: await findLiveWindow({ root, name, ...(path ? { path: gitSafeAbs(path) ?? "/nowhere" } : {}) }) });
     }
 
     if (pathname === "/terminal/tmux/windows" && req.method === "POST") {
@@ -10987,6 +11217,7 @@ import { detailStored as jiraDetailRead, mentionableStored as jiraMentionable, c
 import { setVoteStored as jiraVote, setWatchStored as jiraWatch } from "./jiraFollow.ts";
 import { logWorkStored as jiraWorkLog, editWorkStored as jiraWorkEdit, deleteWorkStored as jiraWorkDelete } from "./jiraWorklog.ts";
 import { editStored as jiraEditCard, labelSuggestionsStored as jiraLabels } from "./jiraEdit.ts";
+import { ghReadArgs, runGhRead, streamTarball } from "./plugin-github.ts";
 startJiraWatch((n) => broadcast({ type: "card", data: n }));
 /* Re-asks the open pull request lists a real client has looked at, on a timer,
    so a comment posted while nobody is on the PRs tab still reaches `noteTalk`

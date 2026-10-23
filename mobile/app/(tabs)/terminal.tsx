@@ -68,6 +68,9 @@ import { onHandoff, takeHandoff } from "../../src/terminal/handoff.ts";
 import { GateCard } from "../../src/terminal/GateCard.tsx";
 import { Glyph } from "../../src/nav/glyphs.tsx";
 import { UsageChip } from "../../src/usage/Usage.tsx";
+import { ComputerChip } from "../../src/nav/ComputerChip.tsx";
+import { ComputerGone } from "../../src/nav/ComputerGone.tsx";
+import { lastPane, rememberPane } from "../../src/state/last-pane.ts";
 import { gatesInOrder } from "../../src/model/gates.ts";
 import { paneFor } from "../../src/model/checkout.ts";
 import { ImageIcon, KeyboardIcon, MicIcon, ReposIcon, SettingsIcon } from "../../src/nav/icons.tsx";
@@ -328,6 +331,25 @@ function TerminalPane(): React.ReactNode {
   const [active, setActive] = useState<string | null>(null);
   const [state, setState] = useState<TerminalState>("connecting");
   const [why, setWhy] = useState<string | null>(null);
+  /* Which window each computer was on. On a switch the old computer's pane id
+     is dropped first, because `%5` is a window on every tmux server and the
+     new strip would otherwise match it by accident. */
+  const paneOwner = useRef(host?.id);
+  /** Whose windows `strip` holds. Set where the strip is, so a read that
+   *  belongs to the computer just left is neither adopted nor chosen from. */
+  const stripOwner = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (paneOwner.current !== host?.id) {
+      // The strip, the pane and everything half-asked are the old computer's
+      // too: a tapped alert's pane id would match them by accident, and a
+      // strip of the same shape would be taken for "nothing changed".
+      paneOwner.current = host?.id;
+      setActive(null); setStrip(null);
+      seen.current = null; wanted.current = null; stripOwner.current = undefined; pendingOpen.current = null;
+      return;
+    }
+    rememberPane(host?.id, active);
+  }, [host?.id, active]);
   /*
    * How wide the terminal is, in columns — not how big the text is.
    *
@@ -691,14 +713,17 @@ function TerminalPane(): React.ReactNode {
    * Kept while the strip does not have it yet — a window just opened on the
    * computer is on the next poll, not this one.
    */
-  const arriving = useLocalSearchParams<{ where?: string; window?: string; pane?: string }>();
+  const arriving = useLocalSearchParams<{ where?: string; window?: string; pane?: string; host?: string }>();
   useEffect(() => {
     // A tapped alert names the pane itself. Dropped once the strip is listed,
     // found or not, so a pane that has since closed cannot pin the request.
     if (arriving.pane && strip) {
+      // Only from the window list of the computer the alert is about: until
+      // the switch has landed and that computer's strip is read, wait.
+      if (stripOwner.current !== host?.id || (arriving.host && arriving.host !== host?.id)) return;
       const tab = strip.find((t) => t.paneId === arriving.pane);
       if (tab) { setActive(tab.paneId); setWhy(null); }
-      router.setParams({ pane: undefined });
+      router.setParams({ pane: undefined, host: undefined });
       return;
     }
     if (!arriving.where || !strip) return;
@@ -707,7 +732,7 @@ function TerminalPane(): React.ReactNode {
     setActive(tab.paneId);
     setWhy(null);
     router.setParams({ where: undefined, window: undefined });
-  }, [arriving.where, arriving.window, arriving.pane, strip, router]);
+  }, [arriving.where, arriving.window, arriving.pane, arriving.host, strip, router, host?.id]);
   const [past, setPast] = useState<AgentSessionRow[] | null>(null);
   useEffect(() => onTermPrefs(() => {
     setBar(keyLayout()); setColumns(termColumns()); setAssist(termAssist());
@@ -1091,12 +1116,17 @@ function TerminalPane(): React.ReactNode {
    */
   const load = useCallback(async (quiet = false): Promise<void> => {
     if (!host) return;
+    const hid = host.id;
     const answer = await ask<PanesResponse>(host, "/terminal/panes");
+    // The computer was switched while this was in flight: its windows are not
+    // this one's, and `%5` is a window on every tmux server.
+    if (paneOwner.current !== hid) return;
     if (!answer.ok) {
       if (quiet && seen.current !== null) return;
       seen.current = null;
       haveTabs.current = false;
       setError(answer.error);
+      stripOwner.current = hid;
       setStrip([]);
       return;
     }
@@ -1119,6 +1149,7 @@ function TerminalPane(): React.ReactNode {
      */
     setStale(next.stale);
     setError(null);
+    stripOwner.current = hid;
     setStrip(next.tabs);
     const all = next.tabs;
     // The bridge has done its job the moment the real poll agrees a pane
@@ -1141,6 +1172,10 @@ function TerminalPane(): React.ReactNode {
         return want;
       }
       if (current && all.some((t) => t.paneId === current)) return current;
+      // Back on a computer already visited: the window it was left on, if it
+      // is still there, before the rule below picks one.
+      const back = lastPane(host?.id);
+      if (back && all.some((t) => t.paneId === back)) return back;
       const inSession = all.filter((t) => t.session === best);
       // The first pane with an agent under it, or the first window. Either way
       // something is on the screen rather than an empty terminal.
@@ -1817,6 +1852,7 @@ function TerminalPane(): React.ReactNode {
           flexDirection: "row", alignItems: "center", minHeight: 56,
           paddingLeft: SPACE.xs, paddingRight: SPACE.xs,
         }}>
+          <ComputerChip colors={K} compact />
           <Pressable
             onPress={() => setSessionsOpen(true)}
             accessibilityRole="button"
@@ -1997,6 +2033,7 @@ function TerminalPane(): React.ReactNode {
       </View>
 
       {/* ── the terminal ───────────────────────────────────────────────── */}
+      <ComputerGone>
       <View style={{ flex: 1 }}>
         {open ? (
           <TerminalView
@@ -2717,6 +2754,7 @@ function TerminalPane(): React.ReactNode {
           </View>
         </View>
       </View>
+      </ComputerGone>
       {/*
         The new tab, as a choice rather than a silent default.
 

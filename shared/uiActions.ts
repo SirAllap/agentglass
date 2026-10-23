@@ -334,6 +334,16 @@ export const UI_READ_IDS = UI_ACTION_IDS.filter((id): id is UiReadId => (UI_ACTI
 export const isReadAction = (id: string): boolean => (UI_READ_IDS as readonly string[]).includes(id);
 
 /**
+ * Actions the app has that an agent has no door to, with the reason. Said in
+ * the answer of `ui.state` beside the panes it cannot read, so an agent learns
+ * the edge from the app. None of these is in UI_ACTIONS on purpose, not even as
+ * a `stage` entry: a test holds the two lists apart.
+ */
+export const UI_REFUSED_FOR_AGENTS: Readonly<Record<string, string>> = {
+  "pr.review.publish": "Publish review posts one comment on GitHub as the person, so it is their own click in the dialog and nothing else: the route answers 403 to a plugin, to any agent and to the machine token, and the dialog cannot be staged or pressed through a door. An agent can read the review's findings; the person decides what leaves the machine",
+};
+
+/**
  * Settings panes (and views) `ui.read` does NOT describe, with the reason. Said
  * in the answer of `ui.state`, so an agent learns the edge from the app and not
  * from a failed call.

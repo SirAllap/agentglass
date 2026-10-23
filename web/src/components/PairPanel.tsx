@@ -5,7 +5,7 @@ import { api } from "../lib/api.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import { qrMatrix, qrSvgPath } from "../lib/qr.ts";
 import { fmtAgo } from "../lib/format.ts";
-import type { DeviceScope, PairedDevice, PairRequest, PairState } from "../../../shared/types.ts";
+import type { DeviceScope, PairedDevice, PairRequest, PairState, RemoteStatus, ServeResult } from "../../../shared/types.ts";
 import { Button } from "./workspace/Chrome.tsx";
 
 /**
@@ -31,8 +31,14 @@ import { Button } from "./workspace/Chrome.tsx";
  * The full protocol, and what it does and does not defend against, is in
  * server/src/pairing.ts.
  */
-export function PairPanel({ baseUrl, variant = "hero", onPaired }: {
+export function PairPanel({ baseUrl, variant = "hero", onPaired, canTurnOnHttps = false, onStatus }: {
   baseUrl: string;
+  /** Tailscale is on this machine and no HTTPS route exists yet: offer the
+   *  button that runs `tailscale serve` instead of a command to paste. */
+  canTurnOnHttps?: boolean;
+  /** The fresh status that came back with the button, so the new route is in
+   *  the page before the next poll. */
+  onStatus?: (s: RemoteStatus) => void;
   /**
    * `hero` is the first-run face: the code fills the pane, because there is
    * nothing else to do on it yet. `row` is every visit after that, where
@@ -50,6 +56,16 @@ export function PairPanel({ baseUrl, variant = "hero", onPaired }: {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  const [serving, setServing] = useState(false);
+  const [serveFail, setServeFail] = useState<ServeResult | null>(null);
+  const turnOnHttps = async () => {
+    setServing(true);
+    setServeFail(null);
+    const r = await api.remoteServe().catch(() => null);
+    setServing(false);
+    if (r?.status) onStatus?.(r.status);
+    if (!r?.ok) setServeFail(r ?? { ok: false, reason: "failed", message: "Could not reach the server." });
+  };
   /**
    * Which invitation is open, as a ref rather than only as state.
    *
@@ -170,9 +186,25 @@ export function PairPanel({ baseUrl, variant = "hero", onPaired }: {
               makes its own key. The traffic is still readable by anything else on this network.
               {!tailnet && <span className="block mt-1">Serve the cockpit over HTTPS, or forward the port so the phone reaches it as <span className="t-mono">http://localhost</span>.</span>}
             </>}
-            below={tailnet ? (
+            below={canTurnOnHttps || tailnet ? (
               <div className="flex flex-col gap-2 text-[12px]" style={{ color: "var(--text2)" }}>
-                <div>You are on Tailscale already — put its HTTPS in front of agentglass. Run this on the machine:</div>
+                {canTurnOnHttps && (
+                  <div className="flex flex-col gap-1.5">
+                    <div>Tailscale is here. One click gives this machine an HTTPS address a browser can pair over.</div>
+                    <div><Button tone="primary" onClick={turnOnHttps} disabled={serving}>{serving ? "Turning on…" : "Turn on HTTPS"}</Button></div>
+                    {serveFail && (
+                      <div className="flex flex-col gap-1" style={{ color: "var(--error-ink)" }}>
+                        <div>{serveFail.message}</div>
+                        {serveFail.url && <a href={serveFail.url} target="_blank" rel="noreferrer" className="t-mono break-all underline">{serveFail.url}</a>}
+                        {serveFail.command && <CommandLine command={serveFail.command} />}
+                      </div>
+                    )}
+                  </div>
+                )}
+                <details>
+                <summary className="cursor-pointer t-dim">Or do it by hand</summary>
+                <div className="flex flex-col gap-2 mt-2">
+                <div>Put Tailscale's HTTPS in front of agentglass. Run this on the machine:</div>
                 <CommandLine command={`tailscale serve --bg ${port}`} />
                 <div className="t-dim">The first run may stop for one of these. Do it, then run the command again:</div>
                 <div className="flex flex-col gap-1.5 t-dim">
@@ -184,6 +216,8 @@ export function PairPanel({ baseUrl, variant = "hero", onPaired }: {
                 <div>When it prints <span className="t-mono">https://…ts.net/</span>, a <b>Tailscale (HTTPS)</b> address shows up in the list below — pick it and scan its QR.</div>
                 <div className="t-dim">Undo any time:</div>
                 <CommandLine command="tailscale serve reset" />
+                </div>
+                </details>
               </div>
             ) : undefined}
           />

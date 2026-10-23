@@ -23,6 +23,7 @@
  * thing after this and is not here. A panel that has to move (a board where
  * things travel between stages) is the other vocabulary, pluginCanvas.ts.
  */
+import type { PublishOptions } from "./reviewPublish.ts";
 
 export type Tone = "default" | "muted" | "accent" | "success" | "warning" | "danger";
 export const TONES: readonly Tone[] = ["default", "muted", "accent", "success", "warning", "danger"];
@@ -565,8 +566,15 @@ export function validateTree(raw: unknown): Ok<UiNode> | Err {
 // the app already shows. A reviewer, a linter or a CI watcher all say the
 // same kind of thing — "at this line of this commit, this" — so that is the
 // shape, and PrPanel draws it beside GitHub's own threads, marked as local.
-// Notes never go to GitHub by themselves. The one path is a person's reply
-// with its GitHub box ticked (answerNote in server/src/plugin-ui.ts).
+// Notes never go to GitHub by themselves. The one path is the person
+// publishing the review as one comment (server/src/review-publish.ts).
+
+/** The review-plugin contract this app speaks (docs/PLUGINS.md, "Review plugin
+ *  contract"). Sent in `GET /plugin/self`; an app from before it sends none,
+ *  which a plugin reads as 1. It is a convenience for a plugin that would
+ *  rather ask once than probe each route: every v2 addition is optional and
+ *  an old plugin works against a v2 app unchanged. */
+export const PLUGIN_CONTRACT = 2;
 
 export type NoteSeverity = "critical" | "high" | "medium" | "low" | "idea" | "info";
 export const NOTE_SEVERITIES: readonly NoteSeverity[] = ["critical", "high", "medium", "low", "idea", "info"];
@@ -582,12 +590,58 @@ export interface PrRun {
   repo: string;
   number: number;
   sha?: string;
-  state: "queued" | "running" | "done" | "failed" | "cancelled";
+  state: RunState;
   title: string;
   summary?: string;
   meta?: string;
+  /** What the run cost, in US dollars, as the plugin counts it. */
+  costUsd?: number;
+  /** Which agent and which model did the pass, as plain short names. `meta`
+   *  stays free display text and is never parsed for these. */
+  agent?: string;
+  model?: string;
+  /** Set by the app alone when the person publishes this run's review as a
+   *  pull-request comment; a plugin cannot send it. */
+  published?: { at: number; url: string; commit?: string; options?: PublishOptions };
+  /** The person's answer to a `needs-ok` run, kept until the plugin moves the
+   *  run to another state. Written by the app only; a plugin cannot send it. */
+  decision?: "approve" | "skip";
   startedAt: number;
   finishedAt?: number;
+}
+
+/** `needs-ok`: the run's estimate is over the person's threshold, so it waits
+ *  for a press on Approve run or Skip before it spends anything. */
+export const RUN_STATES = ["queued", "running", "needs-ok", "done", "failed", "cancelled"] as const;
+export type RunState = (typeof RUN_STATES)[number];
+export const COST_USD_MAX = 1000;
+export const RUN_AGENT_MAX = 40;
+export const RUN_MODEL_MAX = 80;
+
+/** A cost as it is kept: four decimals, a number between 0 and COST_USD_MAX. */
+export function validCostUsd(v: unknown): Ok<number> | Err {
+  if (typeof v !== "number" || !Number.isFinite(v)) return { ok: false, error: "run.costUsd must be a number" };
+  if (v < 0 || v > COST_USD_MAX) return { ok: false, error: `run.costUsd must be between 0 and ${COST_USD_MAX}` };
+  return { ok: true, value: Math.round(v * 1e4) / 1e4 };
+}
+
+/** One pull request's notes added up: `GET /plugins/pr-notes/summary`. */
+export interface PrNotesSummary {
+  repo: string;
+  number: number;
+  /** Open findings by severity; `idea` is counted under `info`. */
+  open: { critical: number; high: number; medium: number; low: number; info: number };
+  resolved: number;
+  dismissed: number;
+  /** When the newest finished review ended, or null when there is none. */
+  lastReviewAt: number | null;
+  plugins: string[];
+  /** The head the newest review covered, when the plugin said. */
+  reviewedSha: string | null;
+  /** The head the caller said is current; null when it did not say. */
+  headSha: string | null;
+  /** The review covered an older head than `headSha`; null when either is unknown. */
+  stale: boolean | null;
 }
 
 export interface PrNote {
@@ -602,16 +656,55 @@ export interface PrNote {
   title: string;
   body?: string;
   status: NoteStatus;
+  /** How many of the reviewers asked to confirm this finding agreed: 2 of 3. */
+  agreement?: NoteAgreement;
+  /** Which agents raised it (at most NOTE_BY_MAX, short names). */
+  by?: string[];
   /** Who set `status`. The person's word outranks the plugin's, and only
    *  the plugin's: a finding the reviewer itself marked resolved can be
    *  reopened by it when the bug comes back. */
   statusBy?: "person" | "plugin";
+  /** Set when the plugin itself closed the finding through
+   *  `POST /plugin/self/pr/notes/status`: `agent:<plugin>`. The card says
+   *  "resolved by acme-review". Cleared by anything the person does. */
+  statusAgent?: string;
+  /** When `statusAgent` closed it (ms). */
+  statusAt?: number;
   /** What was answered to this finding, oldest first. Written by the person
    *  (or an agent acting for them), never by the plugin's own upserts, and
    *  kept across them. Stored with the note, so removing the plugin removes it. */
   replies?: NoteReply[];
   createdAt: number;
   updatedAt: number;
+}
+
+export interface NoteAgreement { k: number; n: number }
+export const NOTE_BY_MAX = 5;
+export const NOTE_BY_CHARS = 40;
+export const AGREEMENT_N_MAX = 20;
+
+/** `agreement` as a plugin sends it: whole numbers, 0 <= k <= n <= AGREEMENT_N_MAX, n >= 1. */
+export function validateAgreement(raw: unknown): Ok<NoteAgreement> | Err {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, error: "note.agreement must be an object {k, n}" };
+  const { k, n } = raw as Record<string, unknown>;
+  if (typeof k !== "number" || typeof n !== "number" || !Number.isInteger(k) || !Number.isInteger(n)) return { ok: false, error: "note.agreement k and n must be whole numbers" };
+  if (n < 1 || n > AGREEMENT_N_MAX || k < 0 || k > n) return { ok: false, error: `note.agreement needs 0 <= k <= n and 1 <= n <= ${AGREEMENT_N_MAX}` };
+  return { ok: true, value: { k, n } };
+}
+
+/** `by` as a plugin sends it: a short list of agent names, cleaned like any
+ *  other note text (control characters and tags gone) and without repeats. */
+export function validateNoteBy(raw: unknown): Ok<string[]> | Err {
+  if (!Array.isArray(raw)) return { ok: false, error: "note.by must be a list of agent names" };
+  if (raw.length > NOTE_BY_MAX) return { ok: false, error: `note.by holds at most ${NOTE_BY_MAX} names` };
+  const out: string[] = [];
+  for (const x of raw) {
+    if (typeof x !== "string") return { ok: false, error: "note.by names must be strings" };
+    const name = cleanReplyText(x).replace(/\s+/g, " ");
+    if (!name || name.length > NOTE_BY_CHARS) return { ok: false, error: `note.by names must be 1-${NOTE_BY_CHARS} characters` };
+    if (!out.includes(name)) out.push(name);
+  }
+  return { ok: true, value: out };
 }
 
 /** One answer under a finding. */
@@ -621,8 +714,6 @@ export interface NoteReply {
   at: number;
   /** `"user"`, or `"agent:<name>"` for a reply an agent sent for the person. */
   by: string;
-  /** Whether this text was also commented on the pull request on GitHub. */
-  postedOnGitHub: boolean;
   /** The status this reply was sent together with, when it changed it. */
   withStatus?: "resolved" | "dismissed";
 }
@@ -648,8 +739,8 @@ export function validReplyBy(v: unknown): v is string {
   return v === "user" || (typeof v === "string" && REPLY_BY_RE.test(v));
 }
 
-/** The `reply` of a status request: `{ text, postToGitHub? }`. */
-export function validateReplyInput(raw: unknown): Ok<{ text: string; postToGitHub: boolean }> | Err {
+/** The `reply` of a status request: `{ text }`. Any other key is ignored; a reply never leaves the machine on its own. */
+export function validateReplyInput(raw: unknown): Ok<{ text: string }> | Err {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, error: "reply must be an object with a text" };
   const r = raw as Record<string, unknown>;
   if (typeof r.text !== "string") return { ok: false, error: "reply.text must be a string" };
@@ -657,8 +748,7 @@ export function validateReplyInput(raw: unknown): Ok<{ text: string; postToGitHu
   const text = cleanReplyText(r.text);
   if (!text) return { ok: false, error: "reply.text is empty" };
   if (text.length > REPLY_MAX_CHARS) return { ok: false, error: `reply.text is over ${REPLY_MAX_CHARS} characters` };
-  if (r.postToGitHub !== undefined && typeof r.postToGitHub !== "boolean") return { ok: false, error: "reply.postToGitHub must be true or false" };
-  return { ok: true, value: { text, postToGitHub: r.postToGitHub === true } };
+  return { ok: true, value: { text } };
 }
 
 const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
@@ -678,8 +768,8 @@ export function validateRun(raw: unknown, now = Date.now()): Ok<PrRun> | Err {
   if (typeof r.id !== "string" || !ID_RE.test(r.id)) return { ok: false, error: "run.id must be 1-120 of letters, digits, _ . : -" };
   const ref = validPrRef(r.repo, r.number);
   if (!ref) return { ok: false, error: "run needs repo as owner/name and a PR number" };
-  const state = oneOf(r.state, ["queued", "running", "done", "failed", "cancelled"] as const);
-  if (!state) return { ok: false, error: "run.state must be queued, running, done, failed or cancelled" };
+  const state = oneOf(r.state, RUN_STATES);
+  if (!state) return { ok: false, error: `run.state must be ${RUN_STATES.slice(0, -1).join(", ")} or ${RUN_STATES[RUN_STATES.length - 1]}` };
   if (typeof r.title !== "string" || !r.title.trim() || r.title.length > UI_LIMITS.short) return { ok: false, error: "run.title must be 1-400 characters" };
   const out: PrRun = {
     id: r.id, ...ref, state, title: r.title,
@@ -688,8 +778,18 @@ export function validateRun(raw: unknown, now = Date.now()): Ok<PrRun> | Err {
   if (typeof r.sha === "string" && SHA_RE.test(r.sha)) out.sha = r.sha;
   if (typeof r.summary === "string") out.summary = r.summary.slice(0, UI_LIMITS.long);
   if (typeof r.meta === "string") out.meta = r.meta.slice(0, 200);
+  for (const [key, max] of [["agent", RUN_AGENT_MAX], ["model", RUN_MODEL_MAX]] as const) {
+    if (typeof r[key] !== "string") continue;
+    const v = cleanReplyText(r[key] as string).replace(/\s+/g, " ").slice(0, max).trim();
+    if (v) out[key] = v;
+  }
   const fin = validMs(r.finishedAt);
   if (fin !== undefined) out.finishedAt = fin;
+  if (r.costUsd !== undefined) {
+    const c = validCostUsd(r.costUsd);
+    if (!c.ok) return c;
+    out.costUsd = c.value;
+  }
   return { ok: true, value: out };
 }
 
@@ -711,6 +811,16 @@ export function validateNote(raw: unknown, now = Date.now()): Ok<Omit<PrNote, "s
   if (typeof r.body === "string") out.body = r.body.slice(0, UI_LIMITS.long);
   const status = oneOf(r.status, NOTE_STATUSES);
   if (status) out.status = status;
+  if (r.agreement !== undefined) {
+    const a = validateAgreement(r.agreement);
+    if (!a.ok) return a;
+    out.agreement = a.value;
+  }
+  if (r.by !== undefined) {
+    const b = validateNoteBy(r.by);
+    if (!b.ok) return b;
+    if (b.value.length) out.by = b.value;
+  }
   return { ok: true, value: out };
 }
 
@@ -741,11 +851,41 @@ export interface PanelContribution {
  */
 export interface PrActionContribution { id: string; label: string }
 
+/**
+ * A button on each finding of THIS plugin, next to Reply, Resolve, Dismiss and
+ * Copy. Pressing it tells the plugin which finding; what it does is the
+ * plugin's (a fix, a question to the agent), and nothing is sent to GitHub.
+ */
+export interface NoteActionContribution { id: string; label: string }
+export const NOTE_ACTIONS_MAX = 4;
+export const NOTE_ACTION_LABEL_MAX = 24;
+
+/**
+ * What a plugin may ask the app to READ about the person's work, beyond what
+ * its scope already shows. Each is a named door, off until the manifest names
+ * it and the person approves the declaration; `sessions` is further off
+ * until the person allows it for a repository (docs/PLUGINS.md, "Review
+ * plugin contract").
+ */
+export const PLUGIN_READS = ["sessions"] as const;
+export type PluginRead = (typeof PLUGIN_READS)[number];
+export const PLUGIN_READS_MAX = 2;
+/** The declaration screen's sentence for each, in the words of what it lets the plugin see. */
+export const PLUGIN_READ_WORDS: Record<PluginRead, string> = {
+  sessions: "Can read a redacted summary of the agent session that wrote a pull request (only in repositories you allow)",
+};
+
 export interface Contributes {
   settings?: Field[];
   panels?: PanelContribution[];
   prNotes?: boolean;
   prActions?: PrActionContribution[];
+  /** Extra buttons on each of the plugin's own findings. Declared under
+   *  `contributes` so the approval hash covers them. */
+  noteActions?: NoteActionContribution[];
+  /** Reads of the person's work the plugin asks for. Under `contributes` so
+   *  the approval hash covers them: adding one re-asks. */
+  reads?: PluginRead[];
   /** Puts a badge and a sort order on Inbox rows. See `InboxAnnotation`. */
   inboxAnnotations?: boolean;
 }
@@ -806,6 +946,30 @@ export function validateContributes(raw: unknown): Ok<Contributes> | Err {
       if (typeof r.label !== "string" || !r.label.trim() || r.label.length > 28) return { ok: false, error: "action label must be 1-28 characters" };
       out.prActions.push({ id: r.id, label: r.label.trim() });
     }
+  }
+  if (c.noteActions !== undefined) {
+    if (!Array.isArray(c.noteActions) || c.noteActions.length > NOTE_ACTIONS_MAX) return { ok: false, error: `contributes.noteActions must be a list of at most ${NOTE_ACTIONS_MAX}` };
+    out.noteActions = [];
+    const seen = new Set<string>();
+    for (const a of c.noteActions) {
+      if (!a || typeof a !== "object" || Array.isArray(a)) return { ok: false, error: "a finding action must be an object" };
+      const r = a as Record<string, unknown>;
+      if (typeof r.id !== "string" || !PANEL_ID_RE.test(r.id)) return { ok: false, error: "finding action id must be 1-40 of a-z, 0-9, - and start with a letter" };
+      if (seen.has(r.id)) return { ok: false, error: `finding action id "${r.id}" appears twice` };
+      seen.add(r.id);
+      if (typeof r.label !== "string" || !r.label.trim() || r.label.trim().length > NOTE_ACTION_LABEL_MAX) return { ok: false, error: `finding action label must be 1-${NOTE_ACTION_LABEL_MAX} characters` };
+      out.noteActions.push({ id: r.id, label: r.label.trim() });
+    }
+  }
+  if (c.reads !== undefined) {
+    if (!Array.isArray(c.reads) || c.reads.length > PLUGIN_READS_MAX) return { ok: false, error: `contributes.reads must be a list of at most ${PLUGIN_READS_MAX}` };
+    const seen = new Set<string>();
+    for (const r of c.reads) {
+      if (typeof r !== "string" || !(PLUGIN_READS as readonly string[]).includes(r)) return { ok: false, error: `contributes.reads: unknown value ${JSON.stringify(typeof r === "string" ? r.slice(0, 40) : r)}; allowed: ${PLUGIN_READS.join(", ")}` };
+      if (seen.has(r)) return { ok: false, error: `contributes.reads: "${r}" appears twice` };
+      seen.add(r);
+    }
+    out.reads = [...seen] as PluginRead[];
   }
   return { ok: true, value: out };
 }

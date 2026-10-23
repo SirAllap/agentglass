@@ -8,7 +8,7 @@
  * handshake they finished last week.
  */
 import "../src/lib/rng.ts"; // installs crypto.getRandomValues — must be first
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { ActivityIndicator, View } from "react-native";
@@ -19,12 +19,12 @@ import { useDeskTheme, usePaletteTick } from "../src/state/use-palette.ts";
 import { UsageProvider } from "../src/state/use-usage.ts";
 import { C, T, currentLook } from "../src/theme.ts";
 import { watchAlertTaps } from "../src/notifications/notify.ts";
-import { alertRoute } from "../src/notifications/target.ts";
+import { alertHost, alertRoute } from "../src/notifications/target.ts";
 
 void SplashScreen.preventAutoHideAsync();
 
 function Gate(): React.ReactNode {
-  const { host, ready } = useAgentglass();
+  const { host, hosts, switchTo, ready } = useAgentglass();
   const segments = useSegments();
   const router = useRouter();
 
@@ -39,16 +39,33 @@ function Gate(): React.ReactNode {
     if (!ready) return;
     void SplashScreen.hideAsync();
     const onPairing = segments[0] === "pair";
+    // A paired phone may be on the pairing screen: that is Add computer. The
+    // screen itself leaves for the tabs once it has paired.
     if (!host && !onPairing) router.replace("/pair");
-    if (host && onPairing) router.replace("/");
   }, [host, ready, segments, router]);
 
   // A tapped alert opens what it is about, once there is a computer to show it
   // from. The route comes from `alertRoute`, never straight from the data.
+  // Read through a ref so the native tap listener is not re-subscribed every
+  // time the list or the actions change; it only moves with the computer.
+  const tap = useRef({ hosts, switchTo });
+  tap.current = { hosts, switchTo };
   useEffect(() => {
     if (!ready || !host) return;
-    return watchAlertTaps((data) => {
-      const to = alertRoute(data);
+    return watchAlertTaps(async (data) => {
+      let to = alertRoute(data);
+      const hostId = alertHost(data);
+      if (hostId) {
+        // The computer the alert is about, before the pane on it: a pane id is
+        // only a name on one tmux server. One that is gone or removed has no
+        // pane to open on any other computer, so the tap lands on the terminal
+        // without it; and a switch that fails does the same.
+        const there = tap.current.hosts.some((h) => h.id === hostId && !h.revoked);
+        if (!there) to = { pathname: "/terminal" };
+        else if (hostId !== host.id) {
+          try { await tap.current.switchTo(hostId); } catch { to = { pathname: "/terminal" }; }
+        }
+      }
       if (to) router.navigate(to);
     });
   }, [ready, host, router]);

@@ -31,11 +31,17 @@ import type {
 import { talkBody, talkSummary, talkUrgency } from "../../../shared/talkWords.ts";
 import { dedupePrs, mainCheckouts } from "../model/prRows.ts";
 import { ask, askCached, forgetCachedAsks, REVOKED } from "../lib/api.ts";
-import { forgetHost, loadHost, saveHost, type Host } from "../lib/host.ts";
+import type { Host } from "../lib/host.ts";
+import {
+  addHost, loadHosts, markRevoked, removeHost, renameHost, setActive, type HostEntry, type HostList,
+} from "../lib/hosts.ts";
 import { openLive, type LiveHandle, type LiveState } from "../lib/live.ts";
 import { remember, shouldNotify, shouldNotifyTalk } from "../notifications/policy.ts";
 import { alertsDeliverable, raise } from "../notifications/notify.ts";
-import { loadKeepAlivePref, syncKeepAlive, wantKeepAlive } from "../notifications/keepAlive.ts";
+import { alertTitle, nameOf } from "../model/computers.ts";
+import { learnName } from "./use-computer.ts";
+import { watchHost, type WatchEvents } from "./watch-host.ts";
+import { keepAliveRunning, loadKeepAlivePref, syncKeepAlive, wantKeepAlive } from "../notifications/keepAlive.ts";
 import { noteChecks, noteTalk } from "./pr-talk.ts";
 import { talkPref } from "../notifications/talkPref.ts";
 import { applyMarks, loadPrMarks, resetMarks } from "./read-marks.ts";
@@ -78,18 +84,35 @@ export interface Fleet {
 }
 
 interface Ctx {
-  host: Host | null;
+  /** The computer in use. Everything the 28 screens read hangs off this one;
+   *  the rest of the list is for the switcher and the Computers screen. */
+  host: HostEntry | null;
+  /** Every paired computer, most recently used first. */
+  hosts: HostEntry[];
   /** Null while the keystore is still being read: an app that renders "not
    *  paired" for one frame on every cold start sends people back through a
    *  handshake they already did. */
   ready: boolean;
   live: LiveState;
   fleet: Fleet;
+  /** Agents waiting on a person, per computer: the one in front from its fleet,
+   *  the others from the socket kept for each (watch-host.ts). */
+  waiting: Record<string, number>;
+  /** Whether each computer's socket is up, the one in front included. */
+  states: Record<string, LiveState>;
   refresh: () => void;
+  /** Pair a computer and make it the one in use. */
   pair: (host: Host) => Promise<void>;
+  /** Forget the computer in use (the phone's half only). */
   forget: () => Promise<void>;
+  switchTo: (id: string) => Promise<void>;
+  rename: (id: string, name: string) => Promise<void>;
+  /** Forget any computer on the list. When it is the one in use, the next most
+   *  recent takes its place, or the phone lands on Connect if none is left. */
+  forgetComputer: (id: string) => Promise<void>;
 }
 
+const NO_HOSTS: HostList = { active: null, hosts: [] };
 const EMPTY: Fleet = { gates: [], prs: [], me: "", at: 0, error: null };
 
 const HostContext = createContext<Ctx | null>(null);
@@ -100,11 +123,57 @@ export function useAgentglass(): Ctx {
   return ctx;
 }
 
+/** The alert as the notification will say it: the computer named only when
+ *  there are two or more on the phone. */
+const titled = (from: HostEntry, alert: AlertNote, paired: number): AlertNote => ({
+  ...alert,
+  title: alertTitle(alert.title, nameOf(from), paired),
+});
+
+type Bridge = {
+  onState: (id: string, state: LiveState) => void;
+  onWaiting: (id: string, n: number) => void;
+  onGone: (id: string) => void;
+  onAlert: (id: string, alert: AlertNote) => void;
+  onRevoked: (id: string, token: string) => void;
+};
+
+/**
+ * The one socket for a computer that is not in front (watch-host.ts), as a
+ * component so React does the diff: switching from A to B opens A's and closes
+ * B's, and the other computers' sockets are not touched. Keyed by id, address
+ * and key by the caller, so a rename never rebuilds it.
+ */
+function Watcher({ host, bridge }: { host: HostEntry; bridge: Bridge }): null {
+  useEffect(() => {
+    const events: WatchEvents = {
+      onState: (state) => bridge.onState(host.id, state),
+      onWaiting: (n) => bridge.onWaiting(host.id, n),
+      onAlert: (alert) => bridge.onAlert(host.id, alert),
+      onRevoked: () => bridge.onRevoked(host.id, host.token),
+    };
+    void learnName(host); // the alert says which computer, not its address
+    const stop = watchHost(host, events);
+    return () => { stop(); bridge.onGone(host.id); };
+    // The entry's name can change under a live socket; only its address and key
+    // are what the socket was made for.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [host.id, host.origin, host.token, bridge]);
+  return null;
+}
+
 export function HostProvider({ children }: { children: ReactNode }): ReactNode {
-  const [host, setHost] = useState<Host | null>(null);
+  const [list, setList] = useState<HostList>(NO_HOSTS);
   const [ready, setReady] = useState(false);
   const [live, setLive] = useState<LiveState>("offline");
   const [fleet, setFleet] = useState<Fleet>(EMPTY);
+  const [others, setOthers] = useState<{ waiting: Record<string, number>; states: Record<string, LiveState> }>(
+    { waiting: {}, states: {} },
+  );
+  /** Sockets for the computers not in front are kept while the app is on screen
+   *  or the foreground service is running, and not otherwise: a socket nothing
+   *  can act on is battery for nothing. */
+  const [watching, setWatching] = useState(() => AppState.currentState === "active");
 
   // A load in flight when another is asked for, so the newer one wins and the
   // older one cannot land on top of it.
@@ -119,9 +188,82 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
    *  anything: it does not, see SAME_ALERT_MS. */
   const seen = useRef(new Map<string, number>());
 
+  /* The entry in use, with an identity that moves only when something the
+     effects below depend on moves: its id, address, key, or removal. A rename
+     or a switch of `lastUsed` hands out a new object in `list`, and an effect
+     keyed on that would tear down and rebuild the socket for nothing. */
+  const active = list.hosts.find((h) => h.id === list.active) ?? null;
+  /** Which computer is in front, written WHEN the list is, not when the next
+   *  render happens: two taps inside one frame must each compare with the
+   *  answer of the one before. */
+  const activeId = useRef<string | null>(null);
+  const commit = useCallback((next: HostList): void => {
+    activeId.current = next.active;
+    setList(next);
+  }, []);
+  const host = useMemo(
+    () => active,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [active?.id, active?.origin, active?.token, active?.revoked, active?.name],
+  );
+
+  /** What callbacks that outlive a render read, so a rename, a new computer or
+   *  a switch reaches the next alert and the next action without rebuilding the
+   *  sockets or the value every screen reads. */
+  const listRef = useRef(list);
+  listRef.current = list;
+
+  /** Raise one alert for a computer. Opened in the dedupe window first and
+   *  rolled back if the OS never drew it — see the alert branch of the socket
+   *  effect for why that order. Stable: it reads refs. */
+  const buzz = useCallback((from: HostEntry, alert: AlertNote, now: number): void => {
+    const undo = remember(alert, { lastSeen: seen.current, now, hostId: from.id });
+    void raise(titled(from, alert, listRef.current.hosts.length), from.id).then((d) => { if (!d.ok) undo(); });
+  }, []);
+
+  /** What the sockets of the computers not in front report. Stable, and a
+   *  report that changes nothing changes nothing: a reconnect flap or a repeated
+   *  count would otherwise re-render the whole tree for no new fact. */
+  const bridge = useMemo(() => ({
+    onState: (id: string, state: LiveState): void =>
+      setOthers((p) => (p.states[id] === state ? p : { ...p, states: { ...p.states, [id]: state } })),
+    onWaiting: (id: string, n: number): void =>
+      setOthers((p) => (p.waiting[id] === n ? p : { ...p, waiting: { ...p.waiting, [id]: n } })),
+    // A count or a dot from a socket that is gone is a claim with nothing
+    // behind it; the next socket says it again when it opens.
+    onGone: (id: string): void =>
+      setOthers((p) => {
+        if (!(id in p.states) && !(id in p.waiting)) return p;
+        const { [id]: _s, ...states } = p.states;
+        const { [id]: _w, ...waiting } = p.waiting;
+        return { states, waiting };
+      }),
+    onAlert: (id: string, alert: AlertNote): void => {
+      const from = listRef.current.hosts.find((h) => h.id === id);
+      if (!from) return;
+      // Never "foreground": the person is looking at another computer, which
+      // is the case this socket exists for.
+      const now = Date.now();
+      if (shouldNotify(alert, { foreground: false, lastSeen: seen.current, now, hostId: id }).notify) buzz(from, alert, now);
+    },
+    onRevoked: (id: string, token: string): void => {
+      void markRevoked(id, token).then((next) => {
+        commit(next);
+        if (!next.hosts.some((x) => !x.revoked)) syncKeepAlive(false);
+      }, () => { /* the keystore would not open; the next 401 asks again */ });
+    },
+  }), [buzz, commit]);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      setWatching(state === "active" || keepAliveRunning());
+    });
+    return () => sub.remove();
+  }, []);
+
   useEffect(() => {
     void (async () => {
-      setHost(await loadHost());
+      commit(await loadHosts());
       setReady(true);
     })();
 
@@ -142,7 +284,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
     void alertsDeliverable();
   }, []);
 
-  const load = useCallback(async (which: Host): Promise<void> => {
+  const load = useCallback(async (which: HostEntry): Promise<void> => {
     const mine = ++generation.current;
     /*
      * The gates, and only the gates.
@@ -169,16 +311,27 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
     // person at the computer took this phone off the list, and every request
     // from here on is a 401. Drop it and land on the pairing screen.
     if (!gates.ok && gates.error === REVOKED) {
-      // Stopped explicitly, not left to the lifecycle effect noticing `host`
-      // went null: a revoke is usually noticed while the phone is in the
-      // background, which is exactly where the service is still running and
-      // the notification still up. Leaving it to the effect worked in
-      // principle (see its own `if (!host)` branch) but made the fix invisible
-      // at the one call site a reviewer would look at first.
-      syncKeepAlive(false);
-      await forgetHost();
-      setHost(null);
+      // MARKED, not forgotten: the entry stays so the list can say "Removed at
+      // the computer" and offer to forget it, and the other computers on the
+      // phone keep their keys and their alerts. Forgetting here lost the only
+      // record of what happened, and with one computer paired sent the phone
+      // back to the first-run screen without a word.
+      let next: HostList;
+      try {
+        // For the key that got the 401: a re-pair keeps the id, and a late 401
+        // for the old key must not mark the new one.
+        next = await markRevoked(which.id, which.token);
+      } catch {
+        return; // the keystore would not open; the next 401 asks again
+      }
+      if (mine !== generation.current) return;
+      commit(next);
       setFleet(EMPTY);
+      // Stopped explicitly, and only when nothing usable is left: a revoke is
+      // usually noticed while the phone is in the background, where the
+      // service is still running and its notification still up, and one
+      // removed computer must not silence the others.
+      if (!next.hosts.some((h) => !h.revoked)) syncKeepAlive(false);
       return;
     }
 
@@ -217,7 +370,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
    * limit and is stated rather than hidden: a machine with thirty repositories
    * would otherwise spend a minute of radio to find one red build.
    */
-  const loadPrs = useCallback(async (which: Host): Promise<void> => {
+  const loadPrs = useCallback(async (which: HostEntry): Promise<void> => {
     prsAt.current = Date.now();
     /* `force`: this IS the refresh. What it reads is kept for the Pull requests
        tab, which no longer asks the same lists again when it opens. */
@@ -241,6 +394,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
       }),
     ));
 
+    if (activeId.current !== which.id) return; // the computer was left while this was in flight
     // One row per pull request however many checkouts answered with it, and
     // `mine` kept over `review` when both did — a pull request you own and were
     // also asked to review is a thing to fix, and the queue should say so.
@@ -249,7 +403,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
 
   /** Who the viewer is, for "is this mine". Asked once per host: it is the
    *  GitHub login the machine is signed in as and it does not change under us. */
-  const loadMe = useCallback(async (which: Host): Promise<void> => {
+  const loadMe = useCallback(async (which: HostEntry): Promise<void> => {
     const answer = await ask<{ providers: { id: string; detail?: string }[] }>(which, "/providers");
     if (!answer.ok) return;
     const github = (answer.value.providers ?? []).find((p) => p.id === "github");
@@ -257,7 +411,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
     // word of it. Parsed rather than plumbed because there is no other route to
     // it, and a wrong answer here only costs the "yours and broken" tagging.
     const login = /as\s+(\S+)/.exec(github?.detail ?? "")?.[1] ?? "";
-    if (login) setFleet((prev) => ({ ...prev, me: login }));
+    if (login && activeId.current === which.id) setFleet((prev) => ({ ...prev, me: login }));
   }, []);
 
   const refresh = useCallback((): void => {
@@ -267,7 +421,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
   // The socket. Torn down and rebuilt when the host changes, which is the only
   // time its URL or credential can differ.
   useEffect(() => {
-    if (!host) { setLive("offline"); return; }
+    if (!host || host.revoked) { setLive("offline"); return; }
     resetMarks(); // another computer's marks are not this one's
     let dirty = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -318,6 +472,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
             foreground: AppState.currentState === "active",
             lastSeen: seen.current,
             now,
+            hostId: host.id,
           });
           if (verdict.notify) {
             /*
@@ -347,8 +502,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
              * window is about how recently the user was told about this text,
              * and an await in between would drift it.
              */
-            const undo = remember(alert, { lastSeen: seen.current, now });
-            void raise(alert).then((d) => { if (!d.ok) undo(); });
+            buzz(host, alert, now);
           }
         }
         /*
@@ -368,14 +522,14 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
             foreground: AppState.currentState === "active",
             lastSeen: seen.current,
             now,
+            hostId: host.id,
           });
           if (verdict.notify) {
             const alert: AlertNote = { title: talkSummary(note), body: talkBody(note), urgency: talkUrgency(note) };
             // Same remember/undo shape as the alert branch above: opened
             // before the await so two notes arriving inside it cannot both
             // pass, rolled back if the OS never actually drew it.
-            const undo = remember(alert, { lastSeen: seen.current, now });
-            void raise(alert).then((d) => { if (!d.ok) undo(); });
+            buzz(host, alert, now);
           }
         }
         // The checks of a pull request moved: an open detail re-reads.
@@ -408,7 +562,12 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
     // `forget()` already calls it directly; this is the backstop for every
     // OTHER way `host` can go null, so there is one place a stray keep-alive
     // cannot survive rather than one per caller.
-    if (!host) { syncKeepAlive(false); return; }
+    if (!host || host.revoked) {
+      // The computer in front being removed is not a reason to stop listening
+      // for the others: the service stays while any usable computer is left.
+      if (!listRef.current.hosts.some((h) => !h.revoked)) syncKeepAlive(false);
+      return;
+    }
     let timer: ReturnType<typeof setInterval> | null = null;
     // Set false in cleanup and checked before every syncKeepAlive call this
     // effect makes. `syncNow` awaits two promises with nothing to cancel them:
@@ -458,28 +617,73 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
     return () => { alive = false; stop(); sub.remove(); };
   }, [host, load, loadPrs]);
 
+  /* What a change of computer drops, in one place: the data and the colours of
+     the one left must not show under the one arrived at. The socket, the polls
+     and the marks are rebuilt by the effects keyed on `host`. */
+  const leave = useCallback((): void => {
+    generation.current++;
+    forgetCachedAsks();
+    setDeskTheme(null);
+    setFleet(EMPTY);
+  }, []);
+
+  const forgetComputer = useCallback(async (id: string): Promise<void> => {
+    const after = await removeHost(id);
+    // Only the one in use takes data with it. Forgetting another computer
+    // leaves what is on screen alone; forgetting the one in front hands over to
+    // the next most recent, which is a different computer.
+    if (after.active !== activeId.current) leave();
+    if (!after.hosts.some((h) => !h.revoked)) syncKeepAlive(false);
+    commit(after);
+  }, [leave, commit]);
+
+  /* Stable, and reading the list through a ref: the screens and the tap
+     listener that hold these are not rebuilt on every fleet poll. */
+  const actions = useMemo(() => ({
+    pair: async (next: Host): Promise<void> => {
+      const after = await addHost(next);
+      forgetCachedAsks();
+      generation.current++;
+      setFleet(EMPTY);
+      // Another computer than the one on screen: its colours do not carry over.
+      if (after.active !== activeId.current) setDeskTheme(null);
+      commit(after);
+    },
+    forget: async (): Promise<void> => {
+      if (activeId.current) await forgetComputer(activeId.current);
+    },
+    switchTo: async (id: string): Promise<void> => {
+      if (id === activeId.current) return;
+      const after = await setActive(id);
+      if (after.active !== activeId.current) leave();
+      commit(after);
+    },
+    rename: async (id: string, name: string): Promise<void> => {
+      commit(await renameHost(id, name));
+    },
+    forgetComputer,
+  }), [leave, forgetComputer, commit]);
+
   const value = useMemo<Ctx>(() => ({
     host,
+    hosts: list.hosts,
     ready,
     live,
     fleet,
+    waiting: host ? { ...others.waiting, [host.id]: fleet.gates.length } : others.waiting,
+    states: host ? { ...others.states, [host.id]: live } : others.states,
     refresh,
-    pair: async (next: Host): Promise<void> => {
-      await saveHost(next);
-      forgetCachedAsks();
-      setFleet(EMPTY);
-      setHost(next);
-    },
-    forget: async (): Promise<void> => {
-      syncKeepAlive(false);
-      await forgetHost();
-      forgetCachedAsks();
-      // The next computer paired must not start in this one's colours.
-      setDeskTheme(null);
-      setFleet(EMPTY);
-      setHost(null);
-    },
-  }), [host, ready, live, fleet, refresh]);
+    ...actions,
+  }), [host, list.hosts, ready, live, fleet, others, refresh, actions]);
 
-  return <HostContext.Provider value={value}>{children}</HostContext.Provider>;
+  return (
+    <HostContext.Provider value={value}>
+      {watching
+        ? list.hosts
+          .filter((h) => h.id !== list.active && !h.revoked)
+          .map((h) => <Watcher key={`${h.id}\0${h.origin}\0${h.token}`} host={h} bridge={bridge} />)
+        : null}
+      {children}
+    </HostContext.Provider>
+  );
 }

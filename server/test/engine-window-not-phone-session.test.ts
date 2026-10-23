@@ -12,7 +12,7 @@
 import { describe, expect, test } from "bun:test";
 
 const src = await Bun.file(new URL("../src/tmuxpane.ts", import.meta.url)).text();
-const start = src.indexOf("export async function engineWindowRunning(");
+const start = src.indexOf("export async function engineWindowOutcome(");
 const fn = src.slice(start, src.indexOf("\n}\n", start));
 
 describe("engineWindowRunning", () => {

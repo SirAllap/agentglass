@@ -574,3 +574,13 @@ describe("toggling a checklist item", () => {
     expect(toggleChecklistItem(body, 1)).toBe("- [ ] box\n- plain item, not a task\n- [ ] another box");
   });
 });
+
+describe("<details open>", () => {
+  test("written unfolded, it stays unfolded; plain <details> stays folded", () => {
+    const [a] = parseBody("<details open>\n<summary>Open</summary>\n\nbody\n</details>");
+    const [b] = parseBody("<details>\n<summary>Closed</summary>\n\nbody\n</details>");
+    expect(a).toMatchObject({ kind: "details", open: true });
+    expect(b).toMatchObject({ kind: "details" });
+    expect((b as { open?: boolean }).open).toBeUndefined();
+  });
+});

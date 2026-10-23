@@ -51,6 +51,7 @@ import { flatten, type RepoGroup } from "../../src/model/prLook.ts";
 import { mergeFresh, nextPageCount } from "../../src/model/prPaging.ts";
 import type { Host } from "../../src/lib/host.ts";
 import { C, SPACE, T } from "../../src/theme.ts";
+import { ComputerGone } from "../../src/nav/ComputerGone.tsx";
 
 type Filter = "mine" | "review" | "all";
 
@@ -113,7 +114,12 @@ function Item({ host, pr, tracked, now, forMe, unread, query, onOpen }: {
   return <PrCard pr={pr} now={now} forMe={forMe} unread={unread} card={state} query={query} onFind={find} onOpen={onOpen} />;
 }
 
+/** The screen, behind the card that says so when its computer is gone. */
 export default function PrsScreen(): React.ReactNode {
+  return <ComputerGone><PrsScreenBody /></ComputerGone>;
+}
+
+function PrsScreenBody(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
   const { host } = useAgentglass();
   const router = useRouter();

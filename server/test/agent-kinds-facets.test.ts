@@ -39,6 +39,12 @@ describe("version", () => {
     expect(extractVersion("qwen 0.3.1", get("qwen").version!.pattern)).toBe("0.3.1");
   });
 
+  test("opencode reads both the bare number and the `opencode v2.0.32` banner", () => {
+    const pattern = get("opencode").version!.pattern;
+    expect(extractVersion("1.18.32", pattern)).toBe("1.18.32");
+    expect(extractVersion("opencode v2.0.32", pattern)).toBe("2.0.32");
+  });
+
   test("a banner that is not this engine's gives nothing, and a pattern that is not a regex too", () => {
     expect(extractVersion("codex-cli 0.157.1", get("hermes").version!.pattern)).toBeNull();
     expect(extractVersion("anything 1.2.3", "(")).toBeNull();

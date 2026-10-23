@@ -69,3 +69,18 @@ export function pickIndex(addresses: readonly PickedAddress[], saved: PickedAddr
   const sameKind = addresses.findIndex((a) => a.tailnet === saved.tailnet);
   return sameKind >= 0 ? sameKind : 0;
 }
+
+/**
+ * A secure route that was not in the list the last time we looked.
+ *
+ * `prev` is null on the first look of a pane, and then nothing is "new": a
+ * saved choice survives a reopen. After that, an HTTPS route appearing means
+ * the person just turned it on, and it is the one they came here for.
+ */
+export function newlySecure<T extends PickedAddress & { secure?: boolean }>(
+  prev: readonly PickedAddress[] | null,
+  next: readonly T[],
+): T | null {
+  if (!prev) return null;
+  return next.find((a) => a.secure && !prev.some((p) => p.address === a.address)) ?? null;
+}

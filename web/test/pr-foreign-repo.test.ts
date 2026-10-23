@@ -26,7 +26,7 @@ describe("a checkout-less pull request", () => {
 
   it("switches every write off for the whole visit, and keeps refresh working", () => {
     expect(code).toContain('const readOnly = away?.root.startsWith("gh:") === true;');
-    expect(code).toContain("const busy = running || readOnly;");
+    expect(code).toContain("const busy = running || readOnly || updatingHere;");
     expect(code).toMatch(/busy=\{running\} spinning=\{refreshing\}/);
   });
 

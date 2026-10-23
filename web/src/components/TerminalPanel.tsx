@@ -9,8 +9,9 @@ import { usePoll } from "../lib/usePoll.ts";
 import { PILL_POLL_MS, withFreshRepo } from "../lib/repoPulse.ts";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
 import { subscribeTermReview, termReview, clearTermReview } from "../lib/termReview.ts";
-import { subscribeTermIssue, termIssue, clearTermIssue, type TermIssue } from "../lib/termIssue.ts";
+import { subscribeTermIssue, termIssue, clearTermIssue, resolveTermIssue, type TermIssue } from "../lib/termIssue.ts";
 import { dirName } from "../lib/worktree.ts";
+import { noteWindowSet } from "../lib/liveWindow.ts";
 import { requestWorktreeJump } from "../lib/worktreeJump.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { GearIcon } from "./workspace/icons.tsx";
@@ -38,6 +39,7 @@ import "@xterm/xterm/css/xterm.css";
 import { answerDecrqm } from "../lib/xtermDecrqm.ts";
 import { openExternal } from "../lib/externalUrl.ts";
 import { registerPathLinks } from "../lib/termPathLinks.ts";
+import { TERM_URL } from "../lib/termUrls.ts";
 import { followLink, oscLinkHandler } from "../lib/linkRouter.ts";
 import type { GitRepoRef, GitBranch, PrBranchSummary, TerminalCommands, TmuxWindow, TmuxPane, PtyServerFrame, PtyClientFrame } from "../../../shared/types.ts";
 import { chipTarget } from "../lib/chipTarget.ts";
@@ -680,6 +682,7 @@ function connect(s: Sess) {
       // file the app has never seen.
       s.tmux = f.active === true;
       s.tmuxWindows = Array.isArray(f.windows) ? f.windows : [];
+      noteWindowSet(s.tmuxWindows);
       /* The other sessions on this socket, for the strip's picker. */
       s.tmuxSessions = Array.isArray(f.sessions) ? f.sessions : [];
       s.tmuxPanes = Array.isArray(f.panes) ? f.panes : [];
@@ -690,6 +693,9 @@ function connect(s: Sess) {
       s.tmuxDue = false;
       settle(s);
       notify(s);
+    } else if (f.t === "issue") {
+      // The server's answer to a "start work in a window" request.
+      if (typeof f.n === "number") resolveTermIssue(f.n, { ok: f.ok === true, error: f.error, ...(f.reused === true ? { reused: true } : {}) });
     } else if (f.t === "openfail") {
       // Not fatal to the shell — the socket is fine and this pane keeps
       // working. It is an answer to something that was asked, so it is recorded
@@ -824,7 +830,7 @@ function createSession(root: string, agentTicket?: string): Sess {
   answerDecrqm(term as never);
   // A pull request or a ClickUp card opens in the app; Ctrl/Cmd-click still
   // goes to the browser. See linkRouter.ts.
-  term.loadAddon(new WebLinksAddon((e, uri) => { followLink(uri, e); }));
+  term.loadAddon(new WebLinksAddon((e, uri) => { followLink(uri, e); }, { urlRegex: TERM_URL }));
   // A path that exists opens in the finder. `root` is where this shell began.
   // Ceiling: after a `cd`, or over ssh, a relative path that ALSO exists under
   // `root` links to that one. Absolute and ~/ paths are exact.
@@ -2888,7 +2894,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     // slot is cleared here: a second press must not be blocked waiting on the
     // first one's answer.
     lastIssue.current = issue;
-    tmuxCmd({ cmd: "issue", cwd: issue.cwd, name: issue.name, prompt: issue.prompt, agent: issue.agent, yolo: issue.yolo, title: issue.title, model: issue.model, effort: issue.effort });
+    tmuxCmd({ cmd: "issue", n: issue.n, cwd: issue.cwd, name: issue.name, prompt: issue.prompt, agent: issue.agent, yolo: issue.yolo, title: issue.title, model: issue.model, effort: issue.effort, reuse: issue.reuse });
     clearTermIssue();
   }, [issue, socketLive, tmuxCmd]);
 
@@ -2924,8 +2930,10 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
         // Said in the terminal the person is looking at, rather than swallowed.
         // This is the case the audit was about, so it does not get to be quiet.
         sess.term.writeln(`\r\n\x1b[33mcould not start the agent here: ${r.error ?? "no ticket"}\x1b[0m`);
+        resolveTermIssue(want.n, { ok: false, error: `could not start the agent: ${r.error ?? "no ticket"}` });
         return;
       }
+      resolveTermIssue(want.n, { ok: true });
       const pane = createSession(want.cwd, r.ticket);
       setPaneIds((ids) => (ids.length >= 4 ? [...ids.slice(1), pane.id] : [...ids, pane.id]));
       setFocusIdx((i) => Math.min(i + 1, 3));

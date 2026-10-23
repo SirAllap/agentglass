@@ -292,7 +292,7 @@ export type MdBlock =
   | { kind: "image"; src: string; alt: string }
   /** `<details><summary>…` — what every bot folds its output into. Rendered as
    *  a real disclosure rather than escaped tags. */
-  | { kind: "details"; summary: string; blocks: MdBlock[] }
+  | { kind: "details"; summary: string; blocks: MdBlock[]; /** `<details open>`: written unfolded, as GitHub draws it. Absent when folded. */ open?: true }
   /** GitHub's callouts: `> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`,
    *  `[!CAUTION]`. */
   | { kind: "alert"; level: "note" | "tip" | "important" | "warning" | "caution"; html: string }
@@ -459,7 +459,7 @@ export function parseBody(body: string, autolinkRepo?: string, viewer?: string):
         inner = raw.slice(0, sum.index) + raw.slice(sum.index + sum[0].length);
       }
 
-      out.push({ kind: "details", summary: summary || "Details", blocks: parseBody(inner, autolinkRepo) });
+      out.push({ kind: "details", summary: summary || "Details", blocks: parseBody(inner, autolinkRepo), ...(/\sopen\b/i.test(det[0]) ? { open: true as const } : {}) });
 
       // Never closed: the fold has taken the rest of the document with it.
       if (!close) break;

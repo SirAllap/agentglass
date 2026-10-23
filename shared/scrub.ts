@@ -77,6 +77,40 @@ export function stripSecrets(s: string): string {
   return out;
 }
 
+/**
+ * What KIND of secret-shaped text is in `s`, without echoing any of it: a
+ * short label per kind found, empty when there is none. For a caller that
+ * refuses rather than redacts (the session brief a review plugin may read).
+ *
+ * Same families as `stripSecrets`, with differences on purpose, because this
+ * one refuses an answer instead of blurring a line: the long-blob rule needs
+ * a digit and a letter in the run (a 40-letter identifier is not a key) and
+ * skips a run that is only hex digits of a git object or sha256 length (40 or
+ * 64), because a commit id in a prompt is not a credential and refusing every
+ * brief that mentions one would make the door useless. A 40-character hex API
+ * key, and a key with no digit in it, are the ceiling of those choices.
+ */
+export function secretKinds(s: string): string[] {
+  const out: string[] = [];
+  const hit = (re: RegExp, kind: string, ok?: (m: string) => boolean) => {
+    for (const m of s.matchAll(new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g"))) {
+      if (!ok || ok(m[0])) { out.push(kind); return; }
+    }
+  };
+  hit(SECRET_PATTERNS[0]!, "github-token");
+  hit(SECRET_PATTERNS[1]!, "api-key");
+  hit(SECRET_PATTERNS[2]!, "slack-token");
+  hit(SECRET_PATTERNS[3]!, "aws-key");
+  hit(SECRET_PATTERNS[4]!, "jwt");
+  // The broad keyword rule above also fires on prose ("token expiration check");
+  // refusing needs the assignment shape: a keyword, a `:` or `=`, then the value.
+  hit(/(?:authorization|api[_-]?key|token|secret|password|passwd)\s*[:=]\s*["']?[A-Za-z0-9._~+/-]{12,}/gi, "credential-assignment");
+  hit(/\bbearer\s+[A-Za-z0-9._~+/-]{20,}/gi, "bearer-token");
+  hit(SECRET_PATTERNS[6]!, "long-token", (m) => /\d/.test(m) && /[A-Za-z]/.test(m) && !(/^[0-9a-f]+$/i.test(m) && (m.length === 40 || m.length === 64)));
+  if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(s)) out.push("private-key");
+  return out;
+}
+
 /** The app-relative tail of a path that runs through an app marker, else null. */
 function appRelative(p: string): string | null {
   const norm = p.replace(/\\/g, "/");

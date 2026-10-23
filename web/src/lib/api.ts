@@ -1,12 +1,12 @@
 import { deskGated } from "./deskGate.ts";
 import { forgetShared, sharedRead } from "./sharedRead.ts";
-import type { UiAction, Field, NoteReply, NoteStatus, PluginPanel, PluginPrNotes } from "./pluginTypes.ts";
+import type { UiAction, Field, NoteReply, NoteStatus, PluginPanel, PluginPrNotes, PrNotesSummary } from "./pluginTypes.ts";
 import type { ImportedPlace } from "./desktop.ts";
 import type { Policy } from "../../../shared/orchestration.ts";
 import type { PinnedPlace, PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/types.ts";
 import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, BrowsePage, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, EnginesReport, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, VolumeList, NetworkList, RemoteStep, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, PluginUpdateReport, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest, FsBody, FsAnswer, FsJob, FsTrashRow, FsProps, OpenWithList, FinderAction, FinderActionList, MediaFacts } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, BrowsePage, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, ServeResult, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, EnginesReport, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, VolumeList, NetworkList, RemoteStep, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, PluginUpdateReport, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest, FsBody, FsAnswer, FsJob, FsTrashRow, FsProps, OpenWithList, FinderAction, FinderActionList, MediaFacts } from "../../../shared/types.ts";
 import type { JiraUnits } from "../../../shared/jiraStatusUnits.ts";
 import type { WorkSend } from "./jiraWorklog.ts";
 import type { CardEdit, CardFact, ProvidersResponse, JiraBlockOutcome, JiraConnectResult, JiraHandoffRule, JiraMoves, JiraPerson, JiraSettings, JiraStep, JiraStepChoice, JiraStepKey, JiraStepPr, JiraSteps, JiraStepsRead, JiraStatus, JiraViews, JiraViewRead, JiraBoardAreas, JiraBoardContext, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, CardDev, CardWebLink, CardEvent, TrackerChoice } from "../../../shared/providers.ts";
@@ -26,6 +26,17 @@ type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? Partial<T[K]> : T
    pretending to know which it was would be wrong on the common case. */
 type ClickUpWrite = { ok: boolean; error?: string; conflict?: boolean; unauthorised?: boolean; task?: ProviderTask };
 /** One link type a Jira site has: the phrase for each side ("blocks" / "is blocked by"). */
+export interface PublishBody {
+  plugin: string; repo: string; number: number; root: string; runId?: string;
+  options: import("../../../shared/reviewPublish.ts").PublishOptions;
+  /** The dialog's edited text; absent when the person did not touch it. */
+  markdown?: string;
+}
+export interface PublishPreview {
+  ok: boolean; error?: string; markdown?: string; chars?: number; openCount?: number; omitted?: number; stale?: boolean;
+  existing?: { commentId: string; url: string } | null;
+}
+
 export type JiraLinkKind = { id: string; name: string; inward: string; outward: string };
 /** One field of a Jira card's Details, as `/jira/edit` takes it (see server/src/jiraEdit.ts). */
 export type JiraEditAsk = { field: string; value?: string | boolean | null; add?: string; remove?: string };
@@ -953,6 +964,11 @@ const realApi = {
   tmuxWindows: (session: string) =>
     get<{ ok: boolean; windows: Array<{ id: string; index: number; name: string; active: boolean; flags: string; panes: Array<{ id: string; index: number; active: boolean; command: string; path: string }> }> }>(
       `/terminal/tmux/windows?session=${encodeURIComponent(session)}`),
+  /** The live window of this exact name in this repository (and checkout, when
+   *  `path` is given), or null. */
+  tmuxLiveWindow: (root: string, name: string, path?: string) =>
+    get<{ ok: boolean; window: { session: string; windowId: string; paneId: string; name: string; path: string } | null }>(
+      `/terminal/tmux/live-window?root=${encodeURIComponent(root)}&name=${encodeURIComponent(name)}${path ? `&path=${encodeURIComponent(path)}` : ""}`),
   /** Tabs/splits/focus/kill/rename/resize on the engine's tmux. */
   tmuxWindowOp: (op: string, body: Record<string, unknown>) =>
     post<{ ok: boolean; stdout?: string; stderr?: string; error?: string }>("/terminal/tmux/windows", { op, ...body }),
@@ -2113,7 +2129,9 @@ const realApi = {
     post<{ ok: boolean; live: boolean; error?: string }>("/bench/edit", { root, path, line, readonly }),
   /** Where this server is reachable from another device, whether one has
    *  arrived, and which firewall is the likely reason if none has. */
-  remoteStatus: () => get<RemoteStatus>("/remote/status"),
+  remoteStatus: (fresh = false) => get<RemoteStatus>(fresh ? "/remote/status?fresh=1" : "/remote/status"),
+  /** Run `tailscale serve --bg` for the person; failures carry their one fix. */
+  remoteServe: () => post<ServeResult & { status: RemoteStatus }>("/remote/serve", {}),
   /** Cut one device off (or let it back in). Closes the sockets it is holding
    *  as well as refusing what it sends next; only this machine may call it. */
   remoteDevice: (address: string, blocked: boolean) =>
@@ -2150,6 +2168,10 @@ const realApi = {
    *  See shared/notifyPrefs.ts. */
   notifyPrefs: () => get<{ ok: boolean; prefs: NotifyPrefs }>("/notify/prefs"),
   setNotifyPrefs: (prefs: NotifyPrefs) => post<{ ok: boolean; prefs: NotifyPrefs }>("/notify/prefs", prefs),
+  /** Which repositories a review plugin may read the authoring session of
+   *  (`plugins.sessionReads.repos`), and the ones the app has a checkout of to pick from. */
+  sessionReads: () => get<{ ok: boolean; repos: string[]; known: string[] }>("/plugins/session-reads"),
+  setSessionReads: (repos: string[]) => post<{ ok: boolean; repos: string[] }>("/plugins/session-reads", { repos }),
   /** Read marks every device on this server shares. See marksSync.ts. */
   getMarks: (kind?: MarkKind, since?: number) => {
     const q = new URLSearchParams();
@@ -2166,12 +2188,25 @@ const realApi = {
   /** Runs and notes plugins wrote on one pull request. Local only. */
   pluginPrNotes: (repo: string, number: number) =>
     get<PluginPrNotes>(`/plugins/pr-notes?repo=${encodeURIComponent(repo)}&number=${number}`),
+  /** What each pull request's notes add up to: one read for a whole board.
+   *  `heads` is the list's own head per pull request, so `stale` is answered here. */
+  pluginPrNotesSummary: (repo: string, heads: Record<number, string>) =>
+    get<{ ok: boolean; prs: PrNotesSummary[] }>(`/plugins/pr-notes/summary?repo=${encodeURIComponent(repo)}${Object.keys(heads).length ? `&heads=${Object.entries(heads).map(([n, h]) => `${n}:${h}`).join(",")}` : ""}`),
   pluginNoteStatus: (plugin: string, id: string, status: NoteStatus) =>
     post<{ ok: boolean; error?: string }>("/plugins/pr-notes/status", { plugin, id, status }),
-  /** Answer a finding: a reply, a status, or both in one request. `root` is
-   *  the checkout, needed only when the reply is also posted on GitHub. */
-  pluginNoteReply: (plugin: string, id: string, body: { status?: NoteStatus; reply: { text: string; postToGitHub: boolean }; root?: string }) =>
-    post<{ ok: boolean; error?: string; status?: NoteStatus; replies?: NoteReply[]; posted?: boolean; postError?: string }>("/plugins/pr-notes/status", { plugin, id, ...body }),
+  /** Answer a finding: a reply, a status, or both in one request. A reply stays on this machine. */
+  pluginNoteReply: (plugin: string, id: string, body: { status?: NoteStatus; reply: { text: string } }) =>
+    post<{ ok: boolean; error?: string; status?: NoteStatus; replies?: NoteReply[] }>("/plugins/pr-notes/status", { plugin, id, ...body }),
+  /** Publish review: read-only. Builds the comment and finds the one it would edit. */
+  pluginPublishPreview: (body: PublishBody) => post<PublishPreview>("/plugins/pr-notes/publish-preview", body),
+  /** Publish review: the person's click. One plain comment, created or edited. */
+  pluginPublish: (body: PublishBody) => post<{ ok: boolean; error?: string; url?: string; edited?: boolean }>("/plugins/pr-notes/publish", body),
+  /** Approve run / Skip on a run that waits for the person's OK. */
+  pluginRunDecision: (plugin: string, id: string, decision: "approve" | "skip") =>
+    post<{ ok: boolean; error?: string }>("/plugins/pr-run-decision", { plugin, id, decision }),
+  /** A button the plugin declared on its findings. */
+  pluginNoteAction: (plugin: string, id: string, noteId: string) =>
+    post<{ ok: boolean; error?: string }>("/plugins/pr-note-action", { plugin, id, noteId }),
   pluginPrOpen: (repo: string, number: number) =>
     post<{ ok: boolean }>("/plugins/pr-open", { repo, number }),
   pluginPrAction: (plugin: string, id: string, repo: string, number: number) =>
@@ -2814,6 +2849,7 @@ const demoApi: typeof realApi = {
   // which is exactly what it does when a real engine refuses a stream.
   dockerLogStream: async (): Promise<ReadableStream<Uint8Array> | { error: string }> => ({ error: "the demo has no live logs" }),
   updateNotes: (_tag?: string) => D({ ok: false, tag: "", notes: "", source: "", error: "not available in the demo" } as ReleaseNotes),
+  remoteServe: () => D({ ok: false, reason: "failed", message: "Demo.", status: null } as unknown as ServeResult & { status: RemoteStatus }),
   remoteStatus: () => D({ exposed: false, bind: "127.0.0.1", port: 4000, trustLan: false, tokenRequired: false, webUi: true, urls: [], addresses: [], clients: { count: 0, lastAt: null, addresses: [], liveCount: 0 }, devices: [], firewall: null } as RemoteStatus),
   remoteDevice: (_address: string, _blocked: boolean) => D({ ok: false, error: "not available in the demo" }),
   plugins: () => D({ master: true, plugins: [] } as PluginsStatus),
@@ -2827,14 +2863,21 @@ const demoApi: typeof realApi = {
   pluginAction: (_p: string, _panel: string | undefined, _a: UiAction, _v?: Record<string, unknown>) => D({ ok: false, error: "not available in the demo" }),
   notifyPrefs: () => D({ ok: true, prefs: DEFAULT_NOTIFY_PREFS }),
   setNotifyPrefs: (_p: NotifyPrefs) => D({ ok: false, prefs: DEFAULT_NOTIFY_PREFS }),
+  sessionReads: () => D({ ok: true, repos: [] as string[], known: [] as string[] }),
+  setSessionReads: (_r: string[]) => D({ ok: false, repos: [] as string[] }),
   // The demo has no other device to agree with; its marks stay in the page.
   getMarks: (_kind?: MarkKind, _since?: number) => D({ marks: [] as MarkRow[], now: Date.now() }),
   postMarks: (_ops: MarkOp[]) => D({ ok: true, changed: [] as MarkRow[] }),
   pluginSettings: (_name: string) => D({ ok: false, fields: [] as Field[], values: {}, error: "not available in the demo" }),
   pluginSettingsSave: (_name: string, _v: Record<string, unknown>) => D({ ok: false, error: "not available in the demo" }),
   pluginPrNotes: (_repo: string, _n: number) => D({ ok: true, runs: [], notes: [], publishers: {} } as PluginPrNotes),
+  pluginPrNotesSummary: (_repo: string, _h: Record<number, string>) => D({ ok: true, prs: [] as PrNotesSummary[] }),
   pluginNoteStatus: (_p: string, _id: string, _s: NoteStatus) => D({ ok: false, error: "not available in the demo" }),
-  pluginNoteReply: (_p: string, _id: string, _b: { status?: NoteStatus; reply: { text: string; postToGitHub: boolean }; root?: string }) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string; status?: NoteStatus; replies?: NoteReply[]; posted?: boolean; postError?: string }),
+  pluginPublishPreview: (_b: PublishBody) => D({ ok: false, error: "not available in the demo" } as PublishPreview),
+  pluginPublish: (_b: PublishBody) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string; url?: string; edited?: boolean }),
+  pluginNoteReply: (_p: string, _id: string, _b: { status?: NoteStatus; reply: { text: string } }) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string; status?: NoteStatus; replies?: NoteReply[] }),
+  pluginRunDecision: (_p: string, _id: string, _d: "approve" | "skip") => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string }),
+  pluginNoteAction: (_p: string, _id: string, _n: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string }),
   pluginPrOpen: (_repo: string, _n: number) => D({ ok: true }),
   pluginPrAction: (_p: string, _id: string, _repo: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
   pluginUpdate: (_name: string) => D({ ok: false, error: "not available in the demo" } as { ok: false; error: string } | { ok: true; plugin: PublicPlugin; update: PluginUpdateReport }),
@@ -3237,6 +3280,7 @@ const demoApi: typeof realApi = {
   tmuxSettingsSave: (_f: object) => D({ ok: false, error: "not available in the demo" }),
   tmuxReset: () => D({ ok: false, error: "not available in the demo" }),
   tmuxRestoreAction: (_a: string, _m?: string) => D({ ok: false, error: "not available in the demo" }),
+  tmuxLiveWindow: (_r: string, _n: string, _p?: string) => D({ ok: true, window: null }),
   tmuxWindows: (_s: string) => D({ ok: false, windows: [] }),
   tmuxWindowOp: (_o: string, _b: object) => D({ ok: false, error: "not available in the demo" }),
   issuesWork: (_repo?: string) => D(demo.issuesWork()),

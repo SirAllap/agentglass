@@ -13,7 +13,7 @@ import { WORKER_ROLES, MODEL_RE, workerRole, type RoleChoice, type RoleId } from
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, realpathSync, readlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, dirname, relative, sep, delimiter } from "node:path";
-import { worktreeFamily } from "./worktree.ts";
+import { worktreeFamily, worktreeParent, forgetWorktreeFamily } from "./worktree.ts";
 
 /**
  * Resolved per call, and read per path.
@@ -603,7 +603,17 @@ export function inScope(path: string | null | undefined, scope: Scope = workspac
   // The plain prefix test first: it answers every non-worktree case without a
   // subprocess, including the container-folder scope where the family is moot.
   if (roots.some((r) => isWithin(p, r))) return true;
-  return roots.some((root) => worktreeFamily(root).some((r) => isWithin(p, r)));
+  if (roots.some((root) => worktreeFamily(root).some((r) => isWithin(p, r)))) return true;
+  // A worktree cut seconds ago is not in a family listed before it existed, and
+  // a button that cuts one and then opens a window in it used to be refused for
+  // that reason with no word said. The `.git` file is the cheap tell that this
+  // path is a linked worktree at all; only then is git asked again, so a path
+  // that is simply elsewhere never costs the subprocess twice.
+  if (!worktreeParent(p)) return false;
+  return roots.some((root) => {
+    forgetWorktreeFamily(root);
+    return worktreeFamily(root).some((r) => isWithin(p, r));
+  });
 }
 
 /**

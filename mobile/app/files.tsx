@@ -36,6 +36,7 @@ import type { ChangeRow, ChangeRowsResult } from "../../shared/types.ts";
 import { ask } from "../src/lib/api.ts";
 import { useAgentglass } from "../src/state/host-context.tsx";
 import { useRecents } from "../src/state/file-recents.ts";
+import { computerKey } from "../src/lib/hosts.ts";
 import { useKeyboardLift } from "../src/state/keyboard-lift.ts";
 import { usePaletteTick } from "../src/state/use-palette.ts";
 import {
@@ -166,7 +167,7 @@ export default function FilesScreen(): React.ReactNode {
   const readFor = useRef<string | null>(null);
   const [pulling, setPulling] = useState(false);
   const [wrap, setWrap] = useState(false);
-  const [recents, remember] = useRecents(root);
+  const [recents, remember] = useRecents(computerKey(host, root));
   const [focused, setFocused] = useState(false);
   const input = useRef<TextInput>(null);
   const lifted = useKeyboardLift();

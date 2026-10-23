@@ -118,6 +118,7 @@ import { CloseButton } from "./CloseButton.tsx";
 import { HIT, ICON } from "../lib/iconSize.ts";
 import { CheckboxIcon, ClockIcon, CrossIcon } from "../lib/glyphIcons.tsx";
 import { ciOnlyApproved } from "../lib/ciNotifyPref.ts";
+import { reviewGateOn, setReviewGate } from "../lib/reviewGatePref.ts";
 import { AskedAlertLog } from "./AskedAlertLog.tsx";
 import { talkNotify, type TalkNotify } from "../lib/talkNotify.ts";
 import { RETENTION, setUnderstudyEnabled, useUnderstudy } from "./understudy/UnderstudyPanel.tsx";
@@ -2269,6 +2270,7 @@ function NotificationsSection(p: {
   notifyVoice: string; onNotifyVoice: (v: string) => void;
   alarmVoice: string; onAlarmVoice: (v: string) => void;
   ciApproved: boolean; onCiApproved: () => void;
+  reviewGate: boolean; onReviewGate: () => void;
   talkMode: TalkNotify; onTalkMode: (v: TalkNotify) => void;
   sysNotify: SysNotifyMode; notifyCap: NotifyCapability | null;
 }) {
@@ -2359,6 +2361,12 @@ function NotificationsSection(p: {
           hint={p.ciApproved
             ? "A suite finishing on something half-written is a status line; on something approved it is the last thing before merging."
             : "Every verdict, on every pull request of yours — including the ones nobody has looked at yet."} />
+        <Toggle on={p.reviewGate} onClick={p.onReviewGate}
+          agentNever="decides whether a reviewer's findings hold a pull request out of the green lane: an agent that could switch it off could clear its own findings from the board"
+          label="Review findings block merge-ready pull requests"
+          hint={p.reviewGate
+            ? "A pull request with open critical or high findings from a local review of its CURRENT head moves from “Green, ready to land” to Blocked, with the reason on the card. Resolve or dismiss them, or push and review again, and it moves back. A review of an older head never blocks."
+            : "Off: the board files pull requests by GitHub's own facts only. A card with open critical or high findings still shows “Not ready” as a chip and stays where it is."} />
         <Choice<TalkNotify>
           settingId="notifications.talk" label="Conversation: when somebody says something"
           hint={p.talkMode === "everything"
@@ -3848,6 +3856,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
     setLandingState(taskLanding());
     setSourceTick((n) => n + 1);
     setCiApproved(ciOnlyApproved());
+    setReviewGateState(reviewGateOn());
     setTalkMode(talkNotify());
   }, []);
   useEffect(() => { if (open) reread(); }, [open, reread]);
@@ -3969,6 +3978,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
   // Read once into state rather than on every render: it lives in localStorage
   // and the row has to reflect a press immediately.
   const [ciApproved, setCiApproved] = useState(ciOnlyApproved);
+  const [reviewGate, setReviewGateState] = useState(reviewGateOn);
   const [talkMode, setTalkMode] = useState(talkNotify);
   /* Read once and held in state: both live in localStorage, which is not a
      store anything can subscribe to, and the row has to redraw the moment it is
@@ -4791,6 +4801,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                     notifyVoice={notifyVoice} onNotifyVoice={(v) => { setNotifyVoice(v); setNotifyVoiceState(v); }}
                     alarmVoice={alarmVoice} onAlarmVoice={(v) => { setAlarmVoice(v); setAlarmVoiceState(v); }}
                     ciApproved={ciApproved} onCiApproved={() => { const v = !ciApproved; setting("notifications.ciOnlyApproved").set(v); setCiApproved(v); }}
+                    reviewGate={reviewGate} onReviewGate={() => { const v = !reviewGate; setReviewGate(v); setReviewGateState(v); }}
                     talkMode={talkMode} onTalkMode={(v) => { setting("notifications.talk").set(v); setTalkMode(v); }}
                     sysNotify={sysNotify} notifyCap={notifyCap} />
                   )}

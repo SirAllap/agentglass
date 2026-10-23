@@ -11,12 +11,10 @@ export { REPLY_MAX_CHARS };
  *  one "n replies" button instead of unrolling the thread. */
 export const COLLAPSE_OVER = 2;
 
-export interface ReplyDraft { text: string; postToGitHub: boolean }
+export interface ReplyDraft { text: string }
 
-/** The composer when it opens, and again after every use. The GitHub box in
- *  particular never carries over: the one action that leaves the machine is
- *  chosen each time. */
-export const FRESH_DRAFT: ReplyDraft = { text: "", postToGitHub: false };
+/** The composer when it opens, and again after every use. */
+export const FRESH_DRAFT: ReplyDraft = { text: "" };
 
 export function draftState(text: string): { counter: string; over: boolean; empty: boolean; canSend: boolean } {
   const n = text.length;
@@ -36,12 +34,11 @@ export function authorLabel(by: string): string {
   return by === "user" ? "You" : by.startsWith("agent:") ? by.slice("agent:".length) : by;
 }
 
-/** The tags after the author and time: what the reply did, where it went. */
-export function replyTags(r: Pick<NoteReply, "withStatus" | "postedOnGitHub">): string[] {
+/** The tags after the author and time: what the reply did. */
+export function replyTags(r: Pick<NoteReply, "withStatus">): string[] {
   const out: string[] = [];
   if (r.withStatus === "resolved") out.push("resolved with this reply");
   if (r.withStatus === "dismissed") out.push("dismissed with this reply");
-  if (r.postedOnGitHub) out.push("posted on GitHub");
   return out;
 }
 

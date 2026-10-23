@@ -22,6 +22,7 @@
 
 import type { FailureHint } from "./prFailureHint.ts";
 import type { PrSummary } from "../../../shared/types.ts";
+import { gateReason, type GateFacts } from "./prNotesChip.ts";
 
 export type LaneId = "review" | "land" | "blocked" | "others" | "flight";
 
@@ -113,7 +114,7 @@ const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
  * The order of the tests IS the policy, so it is written as a straight sequence
  * rather than a table: read top to bottom and you have read the rules.
  */
-export function fileInLane(p: PrSummary, stake: Stake, hint?: FailureHint | null): Filed {
+export function fileInLane(p: PrSummary, stake: Stake, hint?: FailureHint | null, gate?: GateFacts): Filed {
   const c = p.checks;
   const red = c.failure > 0;
   const running = c.pending > 0;
@@ -237,6 +238,15 @@ export function fileInLane(p: PrSummary, stake: Stake, hint?: FailureHint | null
    * a list buries and a board should shout about.
    */
   if (approved && !red && !running && p.checks.total > 0) {
+    /*
+     * The opt-in gate: a review that covered THIS head left critical or high
+     * findings open, and the person asked the board to believe it. `gate` is
+     * only ever passed when that setting is on (and only for a review that is
+     * not stale — see gateFacts), so a board without it never reaches this
+     * line. It takes a card out of green and nowhere else: a pull request
+     * that was not about to land has nothing to be held back from.
+     */
+    if (gate) return { lane: "blocked", reason: gateReason(gate) };
     return { lane: "land",
       reason: stake.mine
         ? "Approved and green. Nobody has pressed merge — including you."
@@ -384,11 +394,11 @@ export function lanesFor(viewer?: string): Lane[] {
 }
 
 /** The whole board, in lane order, from a list and a way to read your stake. */
-export function board(prs: PrSummary[], stakeOf: (p: PrSummary) => Stake, hintOf?: (p: PrSummary) => FailureHint | null, viewer?: string): Map<LaneId, (PrSummary & { filed: Filed })[]> {
+export function board(prs: PrSummary[], stakeOf: (p: PrSummary) => Stake, hintOf?: (p: PrSummary) => FailureHint | null, viewer?: string, gateOf?: (p: PrSummary) => GateFacts | undefined): Map<LaneId, (PrSummary & { filed: Filed })[]> {
   const out = new Map<LaneId, (PrSummary & { filed: Filed })[]>();
   for (const l of LANES) out.set(l.id, []);
   for (const p of prs) {
-    const f = fileInLane(p, stakeOf(p), hintOf?.(p));
+    const f = fileInLane(p, stakeOf(p), hintOf?.(p), gateOf?.(p));
     const filed = viewer ? { ...f, reason: voice(f.reason, viewer), lane: f.lane === "others" ? "review" as const : f.lane } : f;
     out.get(filed.lane)!.push({ ...p, filed });
   }

@@ -1134,6 +1134,21 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   background: rgba(0, 0, 0, 0.66);
 }
 
+/* The scrolling body of a dialog: a slim bar, and a shade at whichever edge
+   has more to show (the "local" layers travel with the content, the "scroll"
+   ones stay and cover them until the content moves away). */
+.agx-dialog-body {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  overscroll-behavior: contain;
+  background:
+    linear-gradient(var(--surface-card) 30%, transparent) top / 100% 24px no-repeat local,
+    linear-gradient(transparent, var(--surface-card) 70%) bottom / 100% 24px no-repeat local,
+    radial-gradient(farthest-side at 50% 0, rgba(0, 0, 0, .35), transparent) top / 100% 8px no-repeat scroll,
+    radial-gradient(farthest-side at 50% 100%, rgba(0, 0, 0, .35), transparent) bottom / 100% 8px no-repeat scroll;
+}
+.agx-dialog-body:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+
 /* One row of a long, scrolling list — a session's conversation, a diff.
  *
  * `content-visibility: auto` lets the browser skip layout and paint for the
@@ -1922,7 +1937,20 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 .agx-disclosure-caret { display: inline-flex; color: var(--text3); transform: rotate(-90deg); transition: transform 120ms ease; }
 .agx-disclosure[open] > .agx-disclosure-s .agx-disclosure-caret { transform: none; }
 .agx-disclosure-b { margin-top: 4px; padding-left: 16px; color: var(--text3); line-height: 1.5; max-width: 64ch; }
+.agx-disclosure-b.agx-wide { max-width: none; }
 @media (prefers-reduced-motion: reduce) { .agx-disclosure-caret { transition: none; } }
+
+/* What a plugin declares: labels left and values right while the container is
+   wide, stacked once it is not. The container is the card or the dialog body,
+   not the window, so the same block lays itself out in both. */
+.agx-decl { container: agx-decl / inline-size; }
+.agx-decl-grid { display: flex; flex-direction: column; gap: 8px; }
+.agx-decl-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; font-size: 12px; line-height: 1.4; min-width: 0; }
+.agx-decl-label { font-size: 10px; text-transform: uppercase; letter-spacing: .12em; }
+@container agx-decl (min-width: 420px) {
+  .agx-decl-row { grid-template-columns: 80px minmax(0, 1fr); gap: 8px; }
+  .agx-decl-label { padding-top: 4px; }
+}
 
 /* A stacked form: label above, help below, 12px between fields, 480px at
    most — a token field as wide as the card asks for a paragraph. */
@@ -2846,6 +2874,22 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-prose-pane .agx-scroll { overflow-x: hidden; }
 .agx-prose-pane img { max-width: 100%; height: auto; }
 .agx-prose-pane table { display: block; max-width: 100%; overflow-x: auto; }
+/* A Markdown table, as Obsidian reads: every column keeps a floor so a word is never broken to fit, cells wrap at
+   word boundaries, row height follows the content, and the table scrolls sideways inside its own box while the
+   text around it stays at the pane's width. The `.agx-scroll` rules above are for code, which wants to wrap
+   anywhere; a table inside one of them lost every word to a mid-letter break and its overflow to `hidden`.
+   The box is also capped in height: a thirty-row table put its horizontal scrollbar thirty rows below the
+   fold, where nobody found it. Capped, the scrollbar is always at the bottom of what is on screen, and the
+   header sticks to the box, which is now the thing that scrolls. `scrollbar-width: auto` hands the bar back to
+   the 7px `::-webkit-scrollbar` above: the app's thin one is an overlay that fades until the pointer is on it. */
+.agx-prose-pane .agx-md-table { overflow: auto; max-width: 100%; max-height: 70vh; scrollbar-width: auto; }
+.agx-prose-pane .agx-md-table th { position: sticky; top: 0; z-index: 1; background: var(--surface-card, var(--bg2)); }
+.agx-prose-pane .agx-md-table table { display: table; width: 100%; max-width: none; overflow: visible; }
+.agx-prose-pane .agx-md-table td,
+.agx-prose-pane .agx-md-table th { white-space: normal; overflow-wrap: normal; word-break: normal; min-width: 9em; }
+.agx-prose-pane .agx-md-table td[data-narrow],
+.agx-prose-pane .agx-md-table th[data-narrow] { min-width: 0; }
+.agx-prose-pane .agx-md-table code { white-space: normal; overflow-wrap: anywhere; }
 
 /* A row of the finder's columns answers the pointer before it is clicked, as Strata's do. */
 /* What a drag would drop on: a folder row, a column, a place in the sidebar, the Trash. */
@@ -2877,6 +2921,21 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 /* A table never breaks a word to fit: it keeps its words whole and scrolls inside its own box. */
 .agx-strata-md td, .agx-strata-md th { overflow-wrap: normal; word-break: normal; }
 
+/* Text size (View menu) scales the whole Finder, not only the rows. `--fz` is the size over 13 px; every size a
+   Finder file spells as `text-[Npx]` multiplies by it. A class cannot read a variable, so each size used is one
+   line here (finder-table-textsize.test.ts fails when a file uses a size with no line). The menus portal out of
+   the Finder, so they are matched on their own attribute, and MachineFinder sets `--fz` on the root element. */
+:is([data-machine-finder], [data-finder-menu]) .text-\[9\.5px\], [data-finder-menu].text-\[9\.5px\] { font-size: calc(9.5px * var(--fz, 1)); }
+:is([data-machine-finder], [data-finder-menu]) .text-\[10px\], [data-finder-menu].text-\[10px\] { font-size: calc(10px * var(--fz, 1)); }
+:is([data-machine-finder], [data-finder-menu]) .text-\[10\.5px\], [data-finder-menu].text-\[10\.5px\] { font-size: calc(10.5px * var(--fz, 1)); }
+:is([data-machine-finder], [data-finder-menu]) .text-\[11px\], [data-finder-menu].text-\[11px\] { font-size: calc(11px * var(--fz, 1)); }
+:is([data-machine-finder], [data-finder-menu]) .text-\[11\.5px\], [data-finder-menu].text-\[11\.5px\] { font-size: calc(11.5px * var(--fz, 1)); }
+:is([data-machine-finder], [data-finder-menu]) .text-\[12px\], [data-finder-menu].text-\[12px\] { font-size: calc(12px * var(--fz, 1)); }
+:is([data-machine-finder], [data-finder-menu]) .text-\[12\.5px\], [data-finder-menu].text-\[12\.5px\] { font-size: calc(12.5px * var(--fz, 1)); }
+:is([data-machine-finder], [data-finder-menu]) .text-\[13px\], [data-finder-menu].text-\[13px\] { font-size: calc(13px * var(--fz, 1)); }
+:is([data-machine-finder], [data-finder-menu]) .text-\[14px\], [data-finder-menu].text-\[14px\] { font-size: calc(14px * var(--fz, 1)); }
+:is([data-machine-finder], [data-finder-menu]) .text-\[15px\], [data-finder-menu].text-\[15px\] { font-size: calc(15px * var(--fz, 1)); }
+
 /* Strata's chrome is never selectable text: a click on a Devices row painted its label blue. One rule
    for the finder and the menus it portals out of it; a file's text, inputs and the editor opt back in. */
 [data-machine-finder], [data-finder-menu] { user-select: none; -webkit-user-select: none; }
@@ -2894,3 +2953,11 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 @container agx-prbar (max-width: 1499px) {
   .agx-prbar-search { order: 10; flex: 1 1 100% !important; max-width: none !important; }
 }
+
+/* Plugins page: installed cards fill the width, two to a row once there is room for two 560px cards. */
+.agx-plugin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(560px, 100%), 1fr)); gap: 16px; align-items: stretch; }
+.agx-perm > summary::-webkit-details-marker { display: none; }
+.agx-perm-caret { display: inline-block; transition: transform 120ms ease; }
+.agx-perm[open] > summary .agx-perm-caret { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .agx-perm-caret { transition: none; } }
+.agx-market-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr)); gap: 14px; padding: 4px 16px 14px; align-items: stretch; }

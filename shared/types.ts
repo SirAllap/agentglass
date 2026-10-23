@@ -592,6 +592,8 @@ export type PtyServerFrame =
    * terminal that died.
    */
   | { t: "openfail"; error: string }
+  /** The answer to a `cmd: "issue"`: `n` is the request number the client sent. */
+  | { t: "issue"; n?: number; ok: boolean; error?: string; reused?: true }
   /** The shell ended by itself. The socket closes right behind this. */
   | { t: "exit"; code: number | null }
   /** The server is refusing, and saying why — "that pane is gone", a disabled
@@ -651,7 +653,7 @@ export type PtyClientFrame =
   /** Start work on an issue in a window of the user's tmux. `agent` opens the
    *  CLI in it, `yolo` buys exactly one flag, and `title` is data that
    *  `sessionTitle` sanitises before it reaches an argv array. */
-  | { t: "tmux"; cmd: "issue"; cwd: string; name?: string; prompt?: string; agent?: boolean; yolo?: boolean; title?: string; model?: string; effort?: string }
+  | { t: "tmux"; cmd: "issue"; n?: number; cwd: string; name?: string; prompt?: string; agent?: boolean; yolo?: boolean; title?: string; model?: string; effort?: string; reuse?: boolean }
   /** The tab strip's four window commands, plus take-over. Kept in step with
    *  `TmuxAction` in server/src/tmuxctl.ts, which is what runs them. */
   /** `fit` sizes the tmux window to THIS client — see tmuxctl.ts, and the
@@ -3943,6 +3945,8 @@ export interface PrMergeGate {
 }
 
 export interface PrDetail extends PrSummary {
+  /** When the server read this from GitHub (ms). A cached copy keeps its own, so a head on it can be compared with the moment a review finished. */
+  readAt?: number;
   /** The base branch's tip the pull request was last compared against (40 hex).
    *  `headSha` is inherited from the row and is the head's. */
   baseSha?: string;
@@ -4128,6 +4132,18 @@ export interface ReachableAddress {
   secure?: boolean;
   /** A friendlier name than the raw address, e.g. "Tailscale (HTTPS)". */
   label?: string;
+}
+
+/** What "Turn on HTTPS" (`POST /remote/serve`) came back with. Failures carry
+ *  the one action that fixes them: a link to open, a command to copy, or words. */
+export interface ServeResult {
+  ok: boolean;
+  reason?: "not-enabled" | "access-denied" | "no-https" | "absent" | "failed";
+  /** The HTTPS address on success; the page that turns Serve on for `not-enabled`. */
+  url?: string;
+  /** A command for the person to run themselves. Never run by the app. */
+  command?: string;
+  message?: string;
 }
 
 /** The firewall most likely to be dropping traffic, and the fix. Never run by

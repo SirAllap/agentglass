@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import { pinnedByMarket } from "../src/components/PluginsPane.tsx";
 
 const pane = readFileSync(new URL("../src/components/PluginsPane.tsx", import.meta.url), "utf8");
+const CSS = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
 /** The declaration a person approves moved out of the card into its own
  *  component, drawn in both the card and the dialog that asks. The sentences
  *  are held to the same rule wherever they live. */
@@ -78,7 +79,7 @@ describe("what every row shows", () => {
     expect(pane).toContain("{plugin.name}");
     expect(pane).toContain("by {plugin.publisher}");
     expect(pane).toContain("{plugin.description}");
-    expect(pane).toContain("From <span className=\"t-mono\">{formatSource(plugin.source)}</span>");
+    expect(pane).toContain("formatSource(plugin.source)");
     expect(pane).toContain("SCOPE_WORD[plugin.scope]");
   });
 });
@@ -105,13 +106,15 @@ describe("install takes a local path or a git URL, and cannot enable an unreview
 });
 
 describe("a plugin that grows does not drag its neighbour with it", () => {
-  test("installed plugins are stacked rows of one card, not a grid of tiles", () => {
+  test("installed plugins are a grid of cards, and the permissions fold keeps a card's height from depending on its neighbour", () => {
     // Opening one tile's declaration used to make the tile BESIDE it grow to
-    // match, into a tall box with nothing in the bottom two thirds. A row owns
-    // the full width, so there is no beside.
-    expect(pane).toContain('<SettingsCard title="Installed"');
+    // match, into a tall box with nothing in the bottom two thirds. The
+    // declaration is folded by default and the footer is pinned to the bottom
+    // (mt-auto), so a row of cards ends on one line whether or not one is open.
+    expect(pane).toContain('className="agx-plugin-grid"');
+    expect(pane).toContain('className="mt-auto flex items-center');
     expect(pane).not.toContain("gridTemplateColumns");
-    expect(pane).not.toContain("grid gap-3");
+    expect(CSS).toMatch(/\.agx-plugin-grid \{[^}]*minmax\(min\(560px, 100%\), 1fr\)/);
   });
 });
 
@@ -164,7 +167,7 @@ describe("the declaration is a named disclosure inside the plugin's row", () => 
     // showing the declaration on every visit is noise. Inside a row the blocks
     // are flat: the row is already the frame, and a box that holds boxes is the
     // defect the settings sweep counts.
-    expect(pane).toContain('<Disclosure summary="What it can do" defaultOpen={needsReview}>');
+    expect(pane).toContain('<details className="agx-perm ');
     expect(pane).toContain("<PluginDeclaration plugin={plugin} flat />");
   });
 });

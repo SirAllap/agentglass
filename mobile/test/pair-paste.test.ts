@@ -126,7 +126,7 @@ describe.skipIf(!installed)("what the screen is wired to", () => {
     // The bug, in one line. `onChangeText={setTicket}` is what shipped, and it
     // is why pasting the link into the field it belongs in did nothing.
     expect(source).not.toMatch(/onChangeText=\{setTicket\}/);
-    expect(source).toContain("if (!absorb(text)) setTicket(text)");
+    expect(source).toContain("if (!absorb(text)) { setTicket(text); setFromLink(false); }");
     // The address field takes it too: it is the box people paste into by
     // mistake, and refusing it there is another lost two minutes.
     expect(source).toContain("if (!absorb(text)) setOrigin(text)");

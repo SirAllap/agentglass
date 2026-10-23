@@ -26,6 +26,9 @@
  * boolean, exactly as it already does over the tmux socket.
  */
 import { randomBytes } from "node:crypto";
+import { mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { agentKind } from "../../shared/agentKinds.ts";
 
 export interface AgentRequest {
@@ -186,10 +189,68 @@ export function agentArgv(
   // it, which some of these answer and others sit on; a menu entry that opens a
   // CLI to work in has no prompt by definition, and that has to mean "just
   // start" rather than "start and say nothing".
-  if (!req.prompt) return [bin, ...named, ...skip];
-  if (kind.mode === "flag") return [bin, ...named, ...skip, "--prompt", req.prompt];
-  if (kind.mode === "flag-interactive") {
-    return [bin, ...named, ...skip, "--prompt-interactive", req.prompt];
+  const head = [bin, ...named, ...skip];
+  if (!req.prompt) return head;
+  const lead = kind.mode === "flag" ? ["--prompt"] : kind.mode === "flag-interactive" ? ["--prompt-interactive"] : [];
+  return handedOver([...head, ...lead], req.prompt);
+}
+
+/*
+ * A PROMPT THAT FITS ON A COMMAND LINE, AND ONE THAT DOES NOT.
+ *
+ * tmux packs a command into one message and answers `command too long` when
+ * the arguments do not fit: measured on tmux 3.8, 15 KB goes through and 20 KB
+ * does not. A conflict briefing lists every conflicted file twice — once in the
+ * situation, once in the ask — so a merge with a few dozen long paths crosses
+ * it, and the window never opens.
+ *
+ * Over INLINE_MAX the text goes into a file and the command line carries its
+ * path: `sh` reads it, deletes it, and `exec`s the agent with the text as the
+ * last argument, exactly as if it had been typed there. So the agent, its
+ * skill-line parsing and the restore's reading of its argv (tmuxrestore.ts)
+ * all see what they saw before; only tmux's message got short. Chosen over
+ * telling the agent to read a file because that would put the file outside its
+ * working directory, which is a permission prompt in the pane and a skill line
+ * that no longer comes first.
+ *
+ * The file is 0600 in a 0700 directory of the app's state, never in a
+ * checkout, and is gone the moment the shell has it; one nobody started is
+ * swept an hour on. The path is ours (a random name), never the client's.
+ *
+ * Ceiling: an argument cannot exceed 128 KiB on Linux, so the text is cut at
+ * PROMPT_MAX with a line that says so. A request that large is a list of files,
+ * and the agent can ask git for the rest.
+ */
+const INLINE_MAX = 8_000;
+const PROMPT_MAX = 100_000;
+const SPILL_TTL_MS = 3_600_000;
+const FROM_FILE = `f=$1; shift; [ -r "$f" ] || { echo "agentglass: the prompt file $f is gone" >&2; exit 1; }; p=$(cat "$f"; printf .); rm -f "$f"; exec "$@" "\${p%.}"`;
+
+function spillDir(): string {
+  return join(
+    process.env.AGENTGLASS_STATE_DIR || join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "agentglass"),
+    "prompts",
+  );
+}
+
+function handedOver(argv: string[], prompt: string): string[] {
+  if (Buffer.byteLength(prompt) <= INLINE_MAX) return [...argv, prompt];
+  const bytes = Buffer.from(prompt);
+  const text = bytes.length > PROMPT_MAX
+    ? `${bytes.subarray(0, PROMPT_MAX).toString("utf8")}\n\n[briefing cut at ${PROMPT_MAX / 1000} KB: ${bytes.length - PROMPT_MAX} more bytes dropped]`
+    : prompt;
+  try {
+    const dir = spillDir();
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    for (const f of readdirSync(dir)) {
+      try { if (Date.now() - statSync(join(dir, f)).mtimeMs > SPILL_TTL_MS) unlinkSync(join(dir, f)); } catch { /* another sweep got it */ }
+    }
+    const file = join(dir, `${randomBytes(12).toString("base64url")}.txt`);
+    writeFileSync(file, text, { mode: 0o600 });
+    return ["sh", "-c", FROM_FILE, "agentglass-prompt", file, ...argv];
+  } catch {
+    // An unwritable state directory is not a reason to drop the request: send
+    // it inline and let tmux's own answer (now shown to the person) say if it fits.
+    return [...argv, prompt];
   }
-  return [bin, ...named, ...skip, req.prompt];
 }

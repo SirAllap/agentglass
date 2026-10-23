@@ -86,11 +86,14 @@ describe("the provider forgets what it cached when the computer changes", () => 
     return providerSrc.slice(a, b);
   };
   test("pairing a computer clears the cache after saving it", () => {
-    const pair = body("pair: async (next: Host)", "forget: async");
+    const pair = body("pair: async (next: Host", "forget: async");
     expect(pair).toContain("forgetCachedAsks();");
-    expect(pair.indexOf("saveHost(next)")).toBeLessThan(pair.indexOf("forgetCachedAsks();"));
+    expect(pair.indexOf("saveHost(next")).toBeLessThan(pair.indexOf("forgetCachedAsks();"));
   });
   test("forgetting the computer clears it too", () => {
-    expect(body("forget: async (): Promise<void>", "}), [host, ready")).toContain("forgetCachedAsks();");
+    // Through `leave()`, which forgetting the computer in use calls, as does
+    // switching to another one.
+    expect(body("const leave = useCallback(", "const forgetComputer")).toContain("forgetCachedAsks();");
+    expect(body("const forgetComputer = useCallback(", "}, [leave, commit]")).toContain("leave()");
   });
 });

@@ -282,6 +282,10 @@ A plugin declares where it draws, in its manifest, next to its scope:
       { "id": "review", "label": "Local review" },
       { "id": "review-full", "label": "Review from scratch" }
     ],
+    "noteActions": [
+      { "id": "fix", "label": "Fix" },
+      { "id": "ask", "label": "Ask the agent" }
+    ],
     "settings": [
       { "key": "repos", "type": "list", "label": "Repositories" },
       { "key": "model", "type": "select", "label": "Model", "options": ["opus", "sonnet"] }
@@ -296,15 +300,21 @@ into the manifest hash, so a plugin that starts drawing somewhere new is asked
 about again. A manifest with no `contributes` hashes exactly as it did before
 drawing existed, so upgrading the app clears no approval.
 
-Five places a plugin can appear:
+Six places a plugin can appear (and one thing it can ask to read, `reads`, below the table):
 
 | Contribution | Where it shows | What the plugin sends |
 |---|---|---|
 | `panels` | A tab in the **Plugins** view, in the rail's bottom drawer | A tree of nodes (below), redrawn whenever it likes; or, with `"canvas": true`, a live scene changed by operations (see *A live panel*). At most 8, each with an `id`, a `title` of at most 40 characters, and optionally one `icon` from `puzzle`, `review`, `check`, `chart`, `list`, `bell`, `bug`, `book`, `bolt`, `eye` — a word the app maps to its own set, so a plugin ships no image for it |
 | `settings` | A page of its own in **Settings**, under Connections | Nothing: the app draws the fields and stores the values |
 | `prNotes` | Inside a pull request: one entry per pass in the conversation's **Local** lane, and each note under its line in the Files tab | Runs and notes, with a severity, a path and a line |
+| `noteActions` | Extra buttons on each finding **of that plugin**, after Reply, Resolve, Dismiss and Copy. At most 4, a label of at most 24 characters | Nothing to draw: a press is the `note-action` event |
 | `prActions` | A button in every pull request's header, in the plugin's own colour, with the rest of its actions under a caret | Nothing to draw: the button's state is read from the plugin's runs on that pull request |
 | `inboxAnnotations` | A small badge on Inbox rows, and a "Sort: <plugin>" choice in the Inbox's toolbar | A badge, a tip and a number per row (below). It cannot hide a row |
+
+`reads` (at most 2 values, today only `"sessions"`) draws nothing: it asks the
+app for a read of the person's work. The approval screen says so in plain words
+and, being under `contributes`, the manifest hash covers it. What it opens, and
+what keeps it shut, is *The session that wrote a pull request*, below.
 
 Everything goes through the plugin's own channel, `/plugin/self/…`, over its own
 token. That channel is open at any scope, because drawing is not a power over
@@ -314,7 +324,7 @@ plugin cannot draw into another's panel.
 | Route | What it does |
 |---|---|
 | `GET /plugin/self` | Its name, its declared contributions and its settings |
-| `GET /plugin/self/events?wait=25000` | Long poll: clicks, submitted forms, settings changes, a note marked resolved or answered, a pull request opened |
+| `GET /plugin/self/events?wait=25000` | Long poll: clicks, submitted forms, settings changes, a note marked resolved or answered, a pull request opened, a pull request's head or labels changed |
 | `POST /plugin/self/panel` `{id, tree}` | Draw a declared panel |
 | `POST /plugin/self/panel/<id>/ops` `{seq?, ops}` | Change a declared live panel (`canvas: true`) |
 | `POST /plugin/self/options` `{key, options}` | Choices for a `select` it could only find at run time |
@@ -327,7 +337,9 @@ catalogues added, and the settings values the person typed (a `secret` field's
 value is the exception: it is in `secrets.json`, below) — which is why a
 prompt written in a settings box never travels with the plugin.
 | `POST /plugin/self/pr/run` | Start or finish a pass over a pull request |
+| `GET /plugin/self/github?op=…` | Read from GitHub with the machine's `gh` login, for a box that has no keyring. Operations: `user`, `repos`, `pr-list`, `pr-view`, `pr-view-context`, `pr-diff`, `threads`, `compare`, `tarball`. Read only; the token never leaves the server |
 | `POST /plugin/self/pr/notes` `{notes}` | Add or update notes |
+| `POST /plugin/self/pr/notes/reply` `{id, text}` | Answer a finding's thread as the plugin (below) |
 
 **A button in a pull request** (`prActions`, at most five) is not a trigger
 with a spinner. The first one declared is the button and the rest hang off its
@@ -596,12 +608,10 @@ it into account. Removing a plugin removes its notes; disabling it keeps them
 readable. Removing it keeps what was chosen on its settings page, so a reinstall
 comes back configured; the remove dialog (or `--drop-settings`) clears them too.
 
-The one way a note's words leave the machine is a **reply** the person sends with
-*Also post on the pull request on GitHub* ticked (off every time, confirmed once
-more before it goes). The app comments as the person, through the same path the
-pull request view uses for comments — never through the plugin's token, which
-the plugin does not have for this — and the comment starts by saying it answers
-an automated finding. A plugin only ever receives the text.
+The one way a note's words leave the machine is the person pressing
+**Publish review…** (*Publishing a review* below): one comment, built from the
+run, only when they press it. A reply never goes to GitHub, and a plugin only
+ever receives the text.
 
 ### Replies under a finding
 
@@ -611,7 +621,7 @@ per finding; tags and control characters are stripped. Each one is
 
 ```json
 { "id": "r_lq3x9k2a1b4c", "text": "Fixed in 3f9a2c1: the guard now runs before the loop.",
-  "at": 1792190000000, "by": "user", "postedOnGitHub": false, "withStatus": "resolved" }
+  "at": 1792190000000, "by": "user", "withStatus": "resolved" }
 ```
 
 `by` is `"user"`, or `"agent:<name>"` for a reply an agent sent for the person.
@@ -628,11 +638,11 @@ keeps everything it had, so a plugin that ignores them works as before:
   "status": "resolved",
   "at": 1792190000000,
   "reply": { "id": "r_lq3x9k2a1b4c", "text": "Fixed in 3f9a2c1: the guard now runs before the loop.",
-             "at": 1792190000000, "by": "user", "postedOnGitHub": false, "withStatus": "resolved" },
+             "at": 1792190000000, "by": "user", "withStatus": "resolved" },
   "replies": [
-    { "id": "r_lq3x8w0z9y8x", "text": "Checking this one.", "at": 1792189400000, "by": "user", "postedOnGitHub": false },
+    { "id": "r_lq3x8w0z9y8x", "text": "Checking this one.", "at": 1792189400000, "by": "user" },
     { "id": "r_lq3x9k2a1b4c", "text": "Fixed in 3f9a2c1: the guard now runs before the loop.",
-      "at": 1792190000000, "by": "user", "postedOnGitHub": false, "withStatus": "resolved" }
+      "at": 1792190000000, "by": "user", "withStatus": "resolved" }
   ]
 }
 ```
@@ -650,23 +660,365 @@ POST /plugins/pr-notes/status
 { "plugin": "acme-review", "id": "f-df05fe5d61f441",
   "repo": "acme/orbit", "number": 1042,          // optional; if sent, must be the note's own pull request
   "status": "resolved",                          // optional: omit to only reply
-  "reply": { "text": "Fixed in 3f9a2c1.", "postToGitHub": false },
-  "root": "/path/to/a/checkout" }                // only read when postToGitHub is true
-→ { "ok": true, "status": "resolved", "replies": [ … ], "posted": false }
+  "reply": { "text": "Fixed in 3f9a2c1." } }
+→ { "ok": true, "status": "resolved", "replies": [ … ] }
 ```
 
-Send `status`, `reply` or both; both is one request. `postToGitHub: true` needs
-full scope and a `root` that is a checkout of the note's repository; without
-both it is refused and nothing is saved. If GitHub refuses the comment, the
-reply is still kept, `posted` is `false` and `postError` says why; nothing
-retries. An agent that sends the `X-Agentglass-Agent` header is recorded as
+Send `status`, `reply` or both; both is one request. The reply stays on this
+machine; an old request that still sends `postToGitHub` is answered as a plain
+local reply, and a reply stored with the old `postedOnGitHub` flag keeps
+working (the flag is ignored). An agent that sends the `X-Agentglass-Agent` header is recorded as
 `agent:<name>`. `GET /plugins/pr-notes?repo=acme/orbit&number=1042` (read scope)
 returns `replies` inside each note.
+
+### What the board reads: the summary
+
+The board does not open every conversation to draw a card. One read, from the
+same store the notes live in (nothing is asked of GitHub), adds each pull
+request's notes up:
+
+```
+GET /plugins/pr-notes/summary?repo=acme/orbit[&number=1042][&heads=1042:3f9a2c1,1043:b81d0e4]
+→ { "ok": true, "prs": [ {
+      "repo": "acme/orbit", "number": 1042,
+      "open": { "critical": 2, "high": 0, "medium": 1, "low": 0, "info": 0 },
+      "resolved": 3, "dismissed": 1,
+      "lastReviewAt": 1792190000000, "plugins": ["acme-review"],
+      "reviewedSha": "3f9a2c1…", "headSha": "3f9a2c1", "stale": false } ] }
+```
+
+`idea` notes count under `info`. `reviewedSha` is the `sha` of the newest
+finished run (a plugin that writes no runs is read from its notes). `heads`, or
+`head` with `number`, is the pull request's current head as the caller knows
+it; with it `stale` says whether the review covered an older commit, without it
+`headSha` and `stale` are `null`. **Send `sha` on your runs**: a review whose
+head is unknown is never called stale and never holds a pull request.
+A caller's `heads` are hints: the app compares with the newest head IT read
+(and when), and a head read before the review finished says nothing, so `stale`
+is `null` until one fresh read of that pull request (at most one every 3
+seconds) shows a different commit. Same commit means a 7 to 40 hex prefix, case
+ignored.
+
+What the app does with it:
+
+- a chip on each card ("2 critical open", "reviewed · clean", "stale review");
+- "Not ready: n open", only as a chip, where a review of the current head left
+  critical or high findings open;
+- an opt-in setting, **Review findings block merge-ready pull requests**
+  (Settings → Notifications → Pull requests, off by default), that files such a
+  pull request under Blocked with "n open critical findings from local-review"
+  until they are resolved, dismissed or fixed in a new review of the new head.
+  A stale review never blocks. A per-repository override is not there yet.
 
 A worked plugin that uses all four is
 [local-review](https://github.com/SirAllap/agentglass-local-review): it reviews
 your labelled pull requests with the agent you choose, inside a sandbox, and
 keeps the findings in the pull request view.
+
+### Publishing a review
+
+The person can post a local review as **one** plain comment on the pull
+request (**Publish review…**, in the pull request header and the run header).
+Nothing from the local review reaches GitHub before they press **Post
+comment** in that dialog. It is never an approval and never a change request,
+and no plugin token, agent header or door can reach it: both routes below
+answer `403` to them, and the action is listed in `ui.state` under
+`refusedForAgents` with the reason.
+
+By default the comment holds the header (agent, model, commit, cost, date), the
+verdict and the **open** findings. The person ticks anything more: resolved,
+dismissed, their replies, info-level findings. The verdict comes from the
+findings alone: an open critical or high is "needs changes before merge", an
+open medium or low "minor issues open", none "no open findings". Text is
+escaped (no raw HTML, `@name` cannot notify anybody, home directories become
+`~`), a comment over 60,000 characters drops the lowest severities as counts,
+and a finding that looks like it holds a credential stops the publish, naming
+its id and never echoing it. The last line is the marker
+`<!-- agentglass-review:<plugin> -->`: publishing again after a push **edits**
+that comment (found by the marker, written by the signed-in user) instead of
+adding one.
+
+```
+POST /plugins/pr-notes/publish-preview        // read-only: nothing is written anywhere
+{ "plugin": "acme-review", "repo": "acme/orbit", "number": 1042,
+  "root": "/path/to/a/checkout",              // a checkout of that repository
+  "runId": "run-7",                           // optional: default is the latest finished run
+  "options": { "includeHeader": true, "includeOpen": true, "includeResolved": false,
+               "includeDismissed": false, "includeReplies": false, "includeInfo": false } }
+→ { "ok": true, "markdown": "…", "chars": 1284, "openCount": 1, "omitted": 0,
+    "existing": { "commentId": "IC_kwDOabc", "url": "https://github.com/acme/orbit/pull/1042#issuecomment-1" } | null,
+    "stale": false }
+
+POST /plugins/pr-notes/publish                // the person's click
+{ …the same, "markdown": "…" }                // markdown optional: the dialog's edited text
+→ { "ok": true, "url": "https://github.com/acme/orbit/pull/1042#issuecomment-1", "edited": false }
+```
+
+A published run carries `published: { at, url, commit }`, written by the app
+alone and kept when the plugin sends the run again. A failed post keeps
+everything local and answers `400` with the reason; nothing retries.
+
+### Review plugin contract
+
+A plugin that reviews pull requests talks to the app through the routes and
+events below. The contract has a version, `2`, which the app reports as
+`contract` in `GET /plugin/self`; an app from before it reports none, which a
+plugin reads as `1`. Every addition in 2 is optional and tolerant in both
+directions: an old plugin works against a new app unchanged, a new plugin
+against an old app loses only what the old app does not draw, and a field an
+app does not know is ignored, never refused. A plugin that wants to be careful
+asks once (`contract >= 2`) or probes the route: the reply route answers `404`
+on an app without it.
+
+| Item | Direction | Status | The other side must tolerate |
+|---|---|---|---|
+| `POST /plugin/self/pr/run` `{id, repo, number, sha, state, title, summary, meta, startedAt, finishedAt}` | plugin to app | existing | |
+| &nbsp;&nbsp;`agent`, `model` | plugin to app | **new (2)** | An old app drops them; the published comment then shows `-` |
+| &nbsp;&nbsp;`state: "needs-ok"`, `costUsd` | plugin to app | **new (2)** | An old app refuses `needs-ok` (400, names the states it knows) and drops `costUsd` |
+| `POST /plugin/self/pr/notes` `{notes: [{id, severity, title, body, path, line, sha, runId}]}` | plugin to app | existing | |
+| &nbsp;&nbsp;`agreement {k, n}`, `by[]` | plugin to app | **new (2)** | An old app drops them |
+| `note-status` event `{repo, number, id, status, at}` | app to plugin | existing | |
+| &nbsp;&nbsp;`reply`, `replies[]` | app to plugin | existing (*Replies under a finding*) | Absent when there are none |
+| `pr-action`, `pr-open` events | app to plugin | existing | |
+| `pr-changed` event `{type, repo, number, head, labels, added, removed, headChanged, at}` | app to plugin | **new (2)** | Only sent to a running plugin that declares `prNotes`. An older app never sends it: keep the poll you have, and stop only when the event has been seen once. Rules in *When a pull request changes* below |
+| `note-action` event `{id, noteId, repo, number, at}` | app to plugin | **new (2)** | Only sent for an action the manifest declared |
+| `run-approve`, `run-skip` events `{id, repo, number, at}` | app to plugin | **new (2)** | Only sent for a run in `needs-ok` |
+| `POST /plugin/self/pr/notes/reply` `{id, text}` | plugin to app | **new (2)** | `404` on an older app: skip thread answers |
+| `POST /plugin/self/pr/notes/status` `{id, status: "resolved"}` | plugin to app | **new (2)** | `404` on an older app: leave the finding open. `409` when the person set the status, `429` past 60 an hour |
+| `GET /plugins/pr-notes/cost?plugin=&days=` (read scope) | reader to app | **new (2)** | Absent on an older app |
+| Manifest `contributes.noteActions` `[{id, label}]` | plugin to app | **new (2)** | An older app ignores the key and draws no buttons. Declare it under `contributes`, never beside it, so the approval hash covers it |
+| `GET /prs/detail`, `/prs/diff`, `/prs/compare-diff`, `/prs/tree-at`, `/prs/list?label=`, `/prs/rollup`, `/prs/check-failures-cached`, `/prs/failing-tests`, `/prs/check-metrics`, `/prs/codeowners`, `/prs/locate` | plugin to app | existing | `{ok: true, missing}` and `gh:` root refusals handled; fall back to `gh` on an older app |
+| `GET /clickup/task?id=`, `/jira/task` | plugin to app | existing | An absent card is no section, never an error |
+| Manifest `contributes.reads` `["sessions"]` | plugin to app | **new (2)** | At most 2 values, today only `sessions`; an unknown one is refused. An older app ignores the key and `/prs/sessions` does not exist (404). Under `contributes`, so the approval hash covers it |
+| `GET /prs/sessions?root=&number=` (read scope) | plugin to app | **new (2)** | Off twice over, see *The session that wrote a pull request*. `{sessions: []}` when nothing matches; `403`, `422` and `429` below |
+| `GET /plugins/session-reads` (read scope) | plugin to app | **new (2)** | `{repos: [...]}`, the repositories the person allowed, so a settings screen can say "not allowed here" |
+
+#### When a pull request changes
+
+`pr-changed` tells a plugin that a pull request's head or labels moved, so a
+review that starts on a label does not wait for a poll.
+
+```json
+{ "type": "pr-changed", "repo": "acme/orbit", "number": 1042,
+  "head": "0123456789abcdef0123456789abcdef01234567",
+  "labels": ["agentglass-review", "bug"],
+  "added": ["agentglass-review"], "removed": [],
+  "headChanged": true, "at": 1767225600000 }
+```
+
+`head` is the 40-hex commit the pull request points at now, `labels` is the
+whole set after the change, sorted, and `added` / `removed` are the difference
+from what the plugin was last told. The title and body are never in it: ask
+`/prs/detail` for what you need.
+
+How it is delivered, each rule from something measured:
+
+- **Nothing is polled for it.** The app compares what its own reads already
+  carry: the list refresh, the open pull request, and the re-read that follows
+  a label change made in the app. A pull request nobody has loaded is not
+  watched, and a repository the app does not show produces no events.
+- **The first time the app sees a pull request is a baseline, not an event.**
+  Boot reads every open pull request; announcing all of them would wake a
+  reviewer once per card for nothing that happened. After a restart each pull
+  request is a first sight again, so a change made while the app was down is
+  not announced: a plugin that must not miss one still lists on start.
+- **A burst is one event.** Changes within 2 seconds of the first one are sent
+  once, with the final state compared with what the plugin was last told. A
+  change undone inside the window is no event. Labels in a different order are
+  no change.
+- **Bounds.** At most 50 labels, each cut at 100 characters. The event queue
+  is the one every event shares: 200 per plugin, the oldest dropped.
+- **A label changed from the app is heard at once.** Adding or removing a label
+  in the app reads that one pull request back (one detail read, no list read)
+  and the event follows within the coalescing window, not at the next 120 s
+  tick. At most one such read per pull request every 3 seconds.
+- **Forcing a refresh yourself** is `GET /prs/list?force=1`, open to a `read`
+  plugin like the other pull request reads. It costs one list read of GitHub
+  per call, so it is for a plugin's start, not for a loop.
+
+Nothing in this table can post to GitHub. The plugin never holds a write path
+there: the one way a finding's words leave the machine is the person
+publishing the review (*Publishing a review*).
+
+**Who ran the pass.** `agent` (a short name such as `claude`, 40 characters) and
+`model` (a model id or empty, 80) go in the run next to `meta`. Both are kept
+trimmed, on one line, tags and control characters gone, and cut to their limit;
+either may be left out. `meta` stays display text and is never parsed: the
+published comment's table reads `agent`, `model`, `costUsd` and `sha` only, and
+shows `-` for what the run does not carry.
+
+```json
+POST /plugin/self/pr/run
+{ "id": "run-7", "repo": "acme/orbit", "number": 1042, "sha": "3f9a2c1",
+  "state": "done", "title": "Local review", "costUsd": 0.4,
+  "agent": "claude", "model": "claude-sonnet-5-5",
+  "meta": "local-review · $0.40 · 82 s · whole pull request", "startedAt": 1792190000000 }
+```
+
+**A run waiting for the person's OK.** A plugin that estimates a run's cost can
+hold it back when the estimate is over what the person set:
+
+```json
+POST /plugin/self/pr/run
+{ "id": "run-7", "repo": "acme/orbit", "number": 1042, "sha": "3f9a2c1",
+  "state": "needs-ok", "title": "Local review",
+  "summary": "Estimated $2.40, over your $1.00 limit.",
+  "costUsd": 2.4, "startedAt": 1792190000000 }
+```
+
+`costUsd` is a number from 0 to 1000, kept to four decimals; anything else is
+`400` with `run.costUsd must be a number` or `run.costUsd must be between 0 and
+1000`. The run header shows it as a chip (`$2.40`; `<$0.01` for a fraction of a
+cent). A `needs-ok` run shows **Needs your OK** with **Approve run** and
+**Skip**, and a press tells the plugin once:
+
+```json
+{ "type": "run-approve", "id": "run-7", "repo": "acme/orbit", "number": 1042, "at": 1792190100000 }
+{ "type": "run-skip",    "id": "run-7", "repo": "acme/orbit", "number": 1042, "at": 1792190100000 }
+```
+
+The app changes nothing else: moving the run to `running`, `cancelled` or
+`done` is the plugin's, and it does so by posting the run again. The press is
+remembered while the run stays in `needs-ok` (a second press is refused, so no
+second event), and forgotten when the run moves on. A plugin cannot send that
+memory itself.
+
+The cost of every run that carries one is also summed per plugin per UTC day,
+the day the run started, counting a run once however often its cost is
+repeated. It is kept for 90 days, and read-only:
+
+```
+GET /plugins/pr-notes/cost?plugin=acme-review&days=7
+→ { "ok": true, "days": [ { "plugin": "acme-review", "day": "2026-10-17", "usd": 3.1835, "runs": 6 } ] }
+```
+
+`plugin` is optional (all plugins), `days` is 1 to 90 (default 30), newest day
+first. The Usage screen will read it; the route is all there is for now.
+
+**Agreement and authors on a finding.** A reviewer that asks others to confirm
+a finding says how many did, and which agents raised it:
+
+```json
+{ "notes": [ { "id": "f-df05fe5d61f441", "severity": "high",
+  "repo": "acme/orbit", "number": 1042, "path": "src/a.ts", "line": 10,
+  "title": "Guard runs after the loop",
+  "agreement": { "k": 2, "n": 3 }, "by": ["agent-a", "agent-b"] } ] }
+```
+
+The finding shows **2/3 agree** and one small chip per agent. `agreement` takes
+whole numbers with `0 <= k <= n` and `1 <= n <= 20`; `by` takes at most 5
+names of 1 to 40 characters, cleaned like other note text (tags and control
+characters gone, repeats dropped). Anything else is `400` naming the field:
+`note.agreement needs 0 <= k <= n and 1 <= n <= 20`, `note.by holds at most 5
+names`. One bad note refuses the whole request, and none of it is stored.
+
+**A plugin answering a finding.** So that *Ask the agent* can answer the
+person:
+
+```json
+POST /plugin/self/pr/notes/reply
+{ "id": "f-df05fe5d61f441", "text": "The guard now runs before the loop in 3f9a2c1." }
+→ { "ok": true, "replies": [ { "id": "r_lq3x9k2a1b4c", "text": "…", "at": 1792190000000,
+                                "by": "agent:acme-review" } ] }
+```
+
+It is stored in the finding's thread with `by` set to `agent:<plugin name>`,
+shown like any reply, and never sent to GitHub or anywhere else (a
+`postToGitHub` in the body is ignored). The plugin is not told about its own
+reply, so a plugin that answers every `note-status` cannot feed itself. Same
+caps as a person's: 4000 characters, 50 per finding. On top, 30 replies an hour
+per plugin: past it the answer is `429` with `at most 30 replies an hour per
+plugin; try again later`. An unknown finding is `404`, a body that is not
+`{id, text}` is `400`.
+
+**A plugin closing its own finding.** When its Re-check finds the bug fixed:
+
+```json
+POST /plugin/self/pr/notes/status
+{ "id": "f-df05fe5d61f441", "status": "resolved" }
+→ { "ok": true, "status": "resolved" }
+```
+
+Only `open` to `resolved`. The finding is stored as resolved by
+`agent:<plugin name>` with the time, and the card says "resolved by acme-review".
+The person outranks the plugin: a finding whose status the person set (including
+one they reopened) answers `409`, and so does one that is already closed, so
+this can never reopen or overwrite anything. Another plugin's finding is a
+`404`, `dismissed` or `open` as the status is a `400`. Asking again for a
+finding this plugin already resolved is `ok` and changes nothing. The plugin is
+**not** sent a `note-status` event for its own change (a Re-check that runs on
+every status event would feed itself); the window updates at once. 60 changes an
+hour per plugin, past it `429` with `at most 60 status changes an hour per
+plugin; try again later`. The person reopening a finding clears the mark.
+
+**Buttons on a plugin's findings.** `contributes.noteActions` (at most 4, a
+`label` of at most 24 characters, ids as for `prActions`) adds a button per
+action to each finding the plugin wrote, after Reply, Resolve, Dismiss and
+Copy. The approval screen says it ("Buttons on its findings: Fix, Ask the
+agent"), and since it is under `contributes` the manifest hash covers it: a
+plugin that adds a button is asked about again. A press arrives as
+
+```json
+{ "type": "note-action", "id": "fix", "noteId": "f-df05fe5d61f441",
+  "repo": "acme/orbit", "number": 1042, "at": 1792190200000 }
+```
+
+What it does is the plugin's: an action that writes code should be a person's
+press on the plugin's side too, and the app only ever sends this event for a
+declared action on one of that plugin's own findings, while it runs.
+
+**The session that wrote a pull request.** A reviewer who knows what the
+author's agent was asked, and what it said it did, can check the diff against
+both. That is also the most private thing the app holds, so the door is shut by
+default and three separate things must be true before it opens:
+
+1. the manifest declares `"contributes": {"reads": ["sessions"]}` and the person
+   approved it (the screen says *Can read a redacted summary of the agent
+   session that wrote a pull request (only in repositories you allow)*);
+2. the person added the repository to *Settings → Review prompts → Review
+   sessions* (`plugins.sessionReads.repos`, empty by default);
+3. nothing in the brief looks like a secret.
+
+`GET /prs/sessions?root=<owner/name or a checkout>&number=<n>`, with the
+plugin's own token. The head branch comes from what the app already holds for
+the pull request (a pull request it has never shown costs one read, then it is
+held); there is no polling and nothing is sent to GitHub. Sessions are matched
+the way the spend panel matches them: the branch a turn recorded, else the
+branch the checkout it ran in has out now. No checkout of the repository on
+this machine, or no session, is `{"ok": true, "sessions": []}`, never an error.
+
+```json
+{ "ok": true,
+  "sessions": [
+    { "id": "s_3f9a1c0b7d2e4a65",
+      "agent": "claude-code",
+      "startedAt": 1792183000000, "endedAt": 1792190100000,
+      "request": "Export should respect the user's timezone (ORBIT-1042)…",
+      "files": ["src/export/csv.ts", "test/export.test.ts"],
+      "tools": { "Bash": 14, "Edit": 6, "Read": 21 },
+      "summary": "Export now formats dates in the viewer's timezone; added a test …",
+      "truncated": { "request": false, "summary": false, "files": false } } ],
+  "truncated": true }
+```
+
+Newest first, at most 3. `id` is a hash of the session id, not the id. `request`
+is the first thing the person asked and `summary` the agent's last message, each
+cut at 1,500 characters (`truncated.request`, `truncated.summary`); `files` are
+the paths the agent wrote, at most 60, relative to the repository (anything
+outside it, and every home directory, as `~/…`); `tools` counts tool calls by
+kind. Never a transcript, a tool's output or the environment. The top-level
+`truncated` appears only when the whole answer was cut to fit 24 KB (file lists
+shed first, then the oldest sessions). A count of the person's corrections is
+not here: the app does not derive one.
+
+| Status | Body | Meaning |
+|---|---|---|
+| `403` | `{ok: false, error, missing: ["manifest" \| "repository"]}` | One or both permissions are missing; `missing` says which, never what the person has allowed |
+| `422` | `{ok: false, error: "secret-like text found in the session brief", kinds: [...]}` | Something in a session looks like a secret (`github-token`, `api-key`, `slack-token`, `aws-key`, `jwt`, `credential-assignment`, `bearer-token`, `long-token`, `private-key`). The answer is refused whole, never redacted, and the text is never echoed or logged |
+| `429` | `{ok: false, error}` + `Retry-After` | More than 60 answered requests an hour for this plugin |
+| `400` | `{ok: false, error}` | No `root`, or a `number` that is not a pull request number |
+
+A 40- or 64-digit hex run (a commit or a file hash) is not counted as a secret.
 
 ## From the terminal
 

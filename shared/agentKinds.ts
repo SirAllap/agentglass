@@ -492,7 +492,7 @@ export const AGENT_PROVIDERS: Provider[] = [
       hint: "^Ask anything",
       starting: "Update Available|Skip\\s+Confirm",
     },
-    version: { args: ["--version"], pattern: "^(\\d+\\.\\d+\\.\\d+)" },
+    version: { args: ["--version"], pattern: "(?:^|\\s)v?(\\d+\\.\\d+\\.\\d+)" },
     // Its free catalogue answers with no credential (measured on 1.18.32), so
     // an empty list of providers is not "signed out".
     account: { args: ["providers", "list"], signedIn: "[1-9]\\d* credentials?", optional: true },

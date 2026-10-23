@@ -267,6 +267,8 @@ export const THUMB_DEFAULT = 64;
 
 export const TEXT_MIN = 11;
 export const TEXT_MAX = 18;
+/** Text size over the default: 1 at 13 px. The sizes a Finder file spells in px multiply by it (see `--fz` in index.css). */
+export const fzScale = (textSize: number): number => textSize / 13;
 
 export const DEFAULT_PREFS: Prefs = {
   view: "columns", preview: true, density: "compact", textSize: 13, hidden: false, group: false, sizes: true, sidebar: true, rail: false,

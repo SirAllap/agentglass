@@ -124,6 +124,9 @@ export interface ConflictModeProps {
   flash: (ok: boolean, msg: string) => void;
   onAskClaude: () => void;
   onAskClaudeTerminal: () => void;
+  /** Claude is already working in this checkout's window, so the button opens
+   *  its tab instead of starting another. */
+  terminalWindowLive?: boolean;
   onOpenEditor: (rel: string, line: number) => void;
 }
 
@@ -472,7 +475,9 @@ export function ConflictMode(p: ConflictModeProps) {
           */}
         <span className="text-[10.5px] ml-1" style={{ color: "var(--text3)" }}>Hand it to Claude</span>
         <Btn tone="ours" onClick={p.onAskClaudeTerminal}
-          title="Opens a tmux window in this repo with Claude on it, told which side is which and which files are in conflict">▸_ in a terminal</Btn>
+          title={p.terminalWindowLive
+            ? "Claude is already working in this repo's \"conflicts\" window — switch to its tab"
+            : "Opens a tmux window in this repo with Claude on it, told which side is which and which files are in conflict"}>{p.terminalWindowLive ? "▸_ Claude is working · Open tab" : "▸_ in a terminal"}</Btn>
         <button onClick={p.onAskClaude}
           className="text-[10.5px] px-1 shrink-0"
           style={{ color: "var(--text3)", textDecoration: "underline", textUnderlineOffset: 3 }}

@@ -133,6 +133,11 @@ export function worktreeFamily(root: string): string[] {
   return roots;
 }
 
+/** Drop the cached family of `root`, so the next ask lists it again. */
+export function forgetWorktreeFamily(root: string): void {
+  familyCache.delete(root);
+}
+
 /**
  * The main checkout of the repository that owns `root` — the one `git worktree
  * add` was run from — or null when there is none to name: not a repo, or a

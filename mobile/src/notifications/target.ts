@@ -14,16 +14,30 @@
 
 export interface AlertRoute {
   pathname: "/terminal";
-  params?: { pane: string };
+  /** `host` is the computer the pane is on, when the alert said; the terminal
+   *  takes the pane only from that computer's own window list. */
+  params?: { pane: string; host?: string };
 }
 
 /** tmux pane ids are `%` and digits. Anything else is not one. */
 const PANE = /^%\d{1,9}$/;
 
+/** The computer an alert came from, when its data names one in the shape an id
+ *  has. Anything else is ignored rather than switched to: the data comes back
+ *  from the OS, and an id is only ever looked up in the phone's own list. */
+export function alertHost(data: unknown): string | null {
+  if (typeof data !== "object" || data === null) return null;
+  const id = (data as Record<string, unknown>).hostId;
+  return typeof id === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(id) ? id : null;
+}
+
 export function alertRoute(data: unknown): AlertRoute | null {
   if (typeof data !== "object" || data === null) return null;
   const d = data as Record<string, unknown>;
   if (d.kind !== "alert") return null;
-  if (typeof d.pane === "string" && PANE.test(d.pane)) return { pathname: "/terminal", params: { pane: d.pane } };
+  if (typeof d.pane === "string" && PANE.test(d.pane)) {
+    const host = alertHost(data);
+    return { pathname: "/terminal", params: host ? { pane: d.pane, host } : { pane: d.pane } };
+  }
   return { pathname: "/terminal" };
 }

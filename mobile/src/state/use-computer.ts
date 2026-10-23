@@ -32,6 +32,20 @@ export function computerName(said: unknown, origin: string): string {
   return addressName(origin);
 }
 
+/** What a computer last said its name was, if this run has asked it. */
+export function saidName(origin: string): string | undefined {
+  return known.get(origin);
+}
+
+/** Ask a computer its name once and keep it, for the alert of one the phone is
+ *  not looking at, which would otherwise be named by its address. A failed ask
+ *  keeps the address. */
+export async function learnName(host: Host): Promise<void> {
+  if (known.has(host.origin)) return;
+  const answer = await ask<{ computer?: unknown }>(host, "/pair/whoami");
+  if (answer.ok) known.set(host.origin, computerName(answer.value.computer, host.origin));
+}
+
 export function useComputer(host: Host | null): string {
   const origin = host?.origin ?? "";
   const [name, setName] = useState(() => known.get(origin) ?? computerName(null, origin));

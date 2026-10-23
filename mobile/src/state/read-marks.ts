@@ -27,6 +27,9 @@ let seen: Seen = {};
  *  flight — so the socket coming up and a screen opening share one request. */
 let loaded = false;
 let loading: Promise<void> | null = null;
+/** Moves on every switch of computer; see `loadPrMarks`. */
+let epoch = 0;
+let loadingEpoch = 0;
 const listeners = new Set<() => void>();
 
 const set = (next: Seen): void => {
@@ -42,16 +45,24 @@ export function seenNow(): Seen { return seen; }
 export function applyMarks(rows: MarkRow[]): void { set(applyMarkRows(seen, rows)); }
 
 /** Forget everything, on a change of computer: its marks are not this one's. */
-export function resetMarks(): void { loaded = false; set({}); }
+export function resetMarks(): void { loaded = false; epoch++; set({}); }
 
 /** Everything the server holds for pull requests. Once per connection: the
  *  frames keep it current, and a socket that has just come back is exactly when
  *  a frame was missed. */
 export function loadPrMarks(host: Host): Promise<void> {
-  loading ??= ask<{ marks: MarkRow[] }>(host, "/marks?kind=pr").then((answer) => {
-    if (answer.ok && Array.isArray(answer.value.marks)) { applyMarks(answer.value.marks); loaded = true; }
-  }).finally(() => { loading = null; });
-  return loading;
+  // One request in flight per computer: a read that started before a switch
+  // (`resetMarks` moved the epoch) is neither joined by the new computer's call
+  // nor applied when it lands, or the first computer's marks would sit on the
+  // second one and mark its pull requests read.
+  if (loading && loadingEpoch === epoch) return loading;
+  const mine = epoch;
+  loadingEpoch = mine;
+  const request: Promise<void> = ask<{ marks: MarkRow[] }>(host, "/marks?kind=pr").then((answer) => {
+    if (mine === epoch && answer.ok && Array.isArray(answer.value.marks)) { applyMarks(answer.value.marks); loaded = true; }
+  }).finally(() => { if (loading === request) loading = null; });
+  loading = request;
+  return request;
 }
 
 /**

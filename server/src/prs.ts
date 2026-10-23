@@ -16,7 +16,7 @@
 //    named separately from the rest.
 import { ttlRead, forgetReads } from "./ttlread.ts";
 import { singleFlight } from "./singleflight.ts";
-import { heldUntil, noteBody, noteHeaders, noteLimitedBlind, rateView, LIMIT_TEXT } from "./ghlimit.ts";
+import { heldUntil, noteBody, noteField, noteHeaders, noteLimitedBlind, rateView, LIMIT_TEXT } from "./ghlimit.ts";
 import { learnFromRead } from "./checkRuns.ts";
 import { failingTests, refreshFailingTests, type LensSources, type MainRun, type MainJob } from "./ciFailureLens.ts";
 import { readCheckFailures, cachedSummaries, type LogRead, type AnnotationsRead, type OutputRead, type CheckAnnotation } from "./ciFailures.ts";
@@ -45,6 +45,7 @@ import type { ProviderTask } from "../../shared/providers.ts";
 import { cardIdIn } from "../../shared/cardRef.ts";
 import { hasCredential, redacted } from "./credentials.ts";
 import { problemFromSummary, STATUS_SUMMARY_URL, type GithubProblem } from "../../shared/githubStatus.ts";
+import { observePr, claimRefresh } from "./prChanged.ts";
 import { factsOf, unstickLive, NO_WORDS, type Look } from "../../shared/unstick.ts";
 import { hasUrlCredentials } from "../../shared/urlCredentials.ts";
 
@@ -87,6 +88,23 @@ export interface GhResult { code: number; stdout: string; stderr: string }
  * agentglass that never answers again — the same failure mode as the sync git
  * spawns that used to freeze the terminal socket.
  */
+/* A hold taken from a blind failure (the `gh` path prints no headers) lasts to
+   the hourly reset even when the budget is nearly full. `api rate_limit` is
+   free, so while held it is asked at most every 30 s, and a GraphQL budget with
+   requests left lifts the hold. Ceiling: a real secondary limit with budget left
+   is lifted too; the next 403 puts it back. */
+let budgetAskedAt = 0;
+async function budgetIsBack(): Promise<boolean> {
+  const now = Date.now();
+  if (now - budgetAskedAt < 30_000) return false;
+  budgetAskedAt = now;
+  const r = await ghRateLimit();
+  const g = r.budgets?.find((b) => b.id === "graphql");
+  if (!g || g.remaining <= 0) return false;
+  noteField({ limit: g.limit, remaining: g.remaining, resetAt: new Date(g.reset * 1000).toISOString() });
+  return true;
+}
+
 export async function gh(args: string[], cwd?: string, stdin?: string): Promise<GhResult> {
   const bin = ghBin();
   if (!bin) return { code: 127, stdout: "", stderr: "gh not found" };
@@ -95,7 +113,7 @@ export async function gh(args: string[], cwd?: string, stdin?: string): Promise<
      answer says so in GitHub's own words so every caller reads it as the
      limit it is (see graphqlQuotaGone, RATE_LIMITED). */
   if (graphql) {
-    const held = heldUntil();
+    const held = heldUntil() && !(await budgetIsBack()) ? heldUntil() : null;
     if (held) return { code: 1, stdout: "", stderr: `GitHub API rate limit exceeded; no request is sent until ${new Date(held).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` };
   }
   try {
@@ -250,6 +268,39 @@ function knownHeadSha(repoKey: string, number: number): string {
     if (p?.headSha) return p.headSha;
   }
   return "";
+}
+
+/**
+ * The head of a pull request as the app last READ it, and when. Of the cached
+ * detail and the list rows, the newer read wins: the detail is persisted across
+ * restarts, so on its own it can be a push behind the list. `null` when the app
+ * has read neither.
+ */
+export function headRead(slug: string, number: number): { sha: string; at: number } | null {
+  const want = `github.com/${slug}`.toLowerCase();
+  let best: { sha: string; at: number } | null = null;
+  const d = [...detailCache].find(([k]) => k.toLowerCase() === `${want}#${number}`)?.[1];
+  if (d?.detail.headSha) best = { sha: d.detail.headSha, at: d.detail.readAt ?? d.at };
+  for (const [k, e] of listCache) {
+    if (!k.toLowerCase().startsWith(`${want}\u0000`)) continue;
+    const p = e.prs.find((r) => r.number === number);
+    const at = e.okAt ?? e.at;
+    if (p?.headSha && (!best || at > best.at)) best = { sha: p.headSha, at };
+  }
+  return best;
+}
+
+const freshHeadAt = new Map<string, number>();
+/** One targeted read of a pull request's head, at most one per 3 s per pull
+ *  request however many cards ask. Null when GitHub cannot be reached. */
+export async function freshHead(slug: string, number: number): Promise<{ sha: string; at: number } | null> {
+  const k = `${slug.toLowerCase()}#${number}`;
+  const last = freshHeadAt.get(k) ?? 0;
+  if (Date.now() - last >= 3_000) {
+    freshHeadAt.set(k, Date.now());
+    try { await prDetail(`gh:${slug}`, number, true); } catch { /* the cached read stands */ }
+  }
+  return headRead(slug, number);
 }
 
 function knownBranches(repoKey: string, number: number): { base: string; head: string } | null {
@@ -1097,6 +1148,31 @@ type Entry = { at: number; prs: PrSummary[]; loading: boolean; checksPending: bo
   /** When rows were last really read from GitHub (or confirmed unchanged by the probe). `at` also moves on a failed read, so it cannot say how old the rows are. */
   okAt?: number };
 const listCache = new Map<string, Entry>();
+
+/** What the plugins are told about (prChanged.ts): every read that already
+ *  holds a pull request's labels or head hands them over. Open ones only: a
+ *  closed pull request's labels are history. */
+function watchRows(repo: PrRepoId, rows: PrSummary[]): void {
+  for (const r of rows) if (r.state === "OPEN") observePr(repo.nameWithOwner, repo.key, r.number, { head: r.headSha, labels: r.labels?.map((l) => l.name) });
+}
+
+/** A detail read is newer than the list rows it was drawn from: the labels and
+ *  head it carries replace theirs, so the board agrees with the open view
+ *  without a list request. */
+function rowsFromDetail(repo: PrRepoId, d: PrDetail): void {
+  const names = d.labels.map((l) => l.name).sort().join("\u0000");
+  for (const [k, e] of listCache) {
+    if (!k.startsWith(`${repo.key}\u0000`)) continue;
+    const i = e.prs.findIndex((r) => r.number === d.number);
+    if (i < 0) continue;
+    const r = e.prs[i]!;
+    if (r.labels.map((l) => l.name).sort().join("\u0000") === names && (!d.headSha || r.headSha === d.headSha)) continue;
+    const prs = e.prs.slice();
+    prs[i] = { ...r, labels: d.labels.map((l) => ({ name: l.name, color: l.color })), ...(d.headSha ? { headSha: d.headSha } : null) };
+    listCache.set(k, { ...e, prs });
+  }
+}
+
 /** List key -> when its read began. */
 const inflight = new Map<string, number>();
 
@@ -2398,6 +2474,7 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
          * the previous answer stands until a real one replaces it.
          */
         const before = new Map((listCache.get(key)?.prs ?? []).map((p) => [p.number, p]));
+        watchRows(repo, early.rows);
         listCache.set(key, {
           at: Date.now(), okAt: Date.now(), began: readStart, prs: early.rows.map((r) => carryOver(before.get(r.number), r)),
           loading: false, checksPending: true,
@@ -2711,6 +2788,7 @@ function storePage(repo: PrRepoId, filter: PrFilter, state: PrState, key: string
      the CHECKS, and not of a field GitHub failed to send at all. This is
      the write `saveDiskCache` persists, so a blank that gets here outlives
      the session that caused it. */
+  watchRows(repo, page.rows);
   listCache.set(key, {
     at: Date.now(), okAt: Date.now(), began: since, prs: stampRequired(repo, keepNewerDetails(repo, page.rows.map((r) => carryOver(prior.get(r.number), r)), since)),
     loading: false, checksPending: false,
@@ -4223,9 +4301,12 @@ async function readDetail(rootIn: unknown, number: number, repo: PrRepoId, key: 
     },
   };
 
-  detailCache.set(key, { at: Date.now(), detail });
+  detail.readAt = Date.now();
+  detailCache.set(key, { at: detail.readAt, detail });
   saveDetailCache();
   projectDetail(repo, detail);
+  watchRows(repo, [detail]);
+  rowsFromDetail(repo, detail);
   return { ok: true, detail };
 }
 
@@ -4665,6 +4746,13 @@ function writeGuard(rootIn: unknown): PrActionResult | null {
 const listEpoch = new Map<string, number>();
 export async function __invalidate(rootIn: unknown): Promise<void> { const repo = await repoIdFor(rootIn); if (repo) invalidate(repo); }
 
+function dropDetail(repo: PrRepoId, number: number): void {
+  listEpoch.set(repo.key, (listEpoch.get(repo.key) ?? 0) + 1);
+  detailCache.delete(`${repo.key}#${number}`);
+  detailFlights.delete(`${repo.key}#${number}`);
+  forgetReads(`pending\u0000${repo.key}#${number}`);
+}
+
 function invalidate(repo: PrRepoId, number?: number): void {
   listEpoch.set(repo.key, (listEpoch.get(repo.key) ?? 0) + 1);
   for (const k of listCache.keys()) if (k.startsWith(`${repo.key}\u0000`)) listCache.delete(k);
@@ -4675,13 +4763,16 @@ function invalidate(repo: PrRepoId, number?: number): void {
   }
 }
 
-async function runPr(rootIn: unknown, number: number, args: string[], stdin?: string): Promise<PrActionResult> {
+async function runPr(rootIn: unknown, number: number, args: string[], stdin?: string, onlyThisPr = false): Promise<PrActionResult> {
   const g = writeGuard(rootIn); if (g) return g;
   if (!Number.isInteger(number) || number <= 0) return { ok: false, error: "invalid pull request number" };
   const repo = await repoIdFor(rootIn);
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
   const r = await gh([...args, "-R", repo.nameWithOwner], undefined, stdin);
-  invalidate(repo, number);
+  /* `onlyThisPr`: the write changed one pull request's labels, and the caller
+     re-reads that one. Dropping every list of the repository would make the
+     next poll pay for all of them to learn about one. */
+  if (onlyThisPr && r.code === 0) dropDetail(repo, number); else invalidate(repo, number);
   if (r.code !== 0) return { ok: false, error: (r.stderr || r.stdout).trim().split("\n")[0] || "gh failed" };
   // The first line, the same as the error path above. This is shown in a toast
   // — a phone-width one — and some of these commands print a paragraph.
@@ -5152,7 +5243,34 @@ export async function setLabels(rootIn: unknown, number: unknown, add: unknown, 
   for (const l of Array.isArray(add) ? add : []) if (typeof l === "string" && l.trim()) args.push("--add-label", l.trim());
   for (const l of Array.isArray(remove) ? remove : []) if (typeof l === "string" && l.trim()) args.push("--remove-label", l.trim());
   if (args.length === 3) return { ok: false, error: "no labels given" };
-  return runPr(rootIn, Number(number), args);
+  const n = Number(number);
+  const done = await runPr(rootIn, n, args, undefined, true);
+  if (!done.ok) return done;
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return done;
+  /* `gh pr edit` answers with the pull request's URL and nothing else, so the
+     response cannot say what the labels are now. One targeted detail read can:
+     it feeds the change detection (the plugins hear it now, not at the next
+     tick) and rewrites this pull request's row in the cached lists, so no list
+     is read again. A second edit inside the guard window skips the read and
+     patches the cached rows by the names it was given. */
+  if (claimRefresh(repo.key, n)) {
+    await prDetail(rootIn, n, true).catch(() => {});
+  } else {
+    const addNames = (Array.isArray(add) ? add : []).filter((l): l is string => typeof l === "string" && !!l.trim()).map((l) => l.trim());
+    const dropNames = new Set((Array.isArray(remove) ? remove : []).filter((l): l is string => typeof l === "string").map((l) => l.trim()));
+    for (const [k, e] of listCache) {
+      if (!k.startsWith(`${repo.key}\u0000`)) continue;
+      const i = e.prs.findIndex((r) => r.number === n);
+      if (i < 0) continue;
+      const kept = e.prs[i]!.labels.filter((l) => !dropNames.has(l.name));
+      const labels = [...kept, ...addNames.filter((a) => !kept.some((l) => l.name === a)).map((name) => ({ name, color: "" }))];
+      const prs = e.prs.slice();
+      prs[i] = { ...e.prs[i]!, labels };
+      listCache.set(k, { ...e, prs });
+    }
+  }
+  return done;
 }
 
 export async function setReviewers(rootIn: unknown, number: unknown, add: unknown, remove: unknown): Promise<PrActionResult> {
@@ -5337,6 +5455,23 @@ async function syncLocalHead(root: string, number: number): Promise<string> {
  * `--ff-only` on the merge, git refuses rather than moving history sideways.
  */
 export async function fastForwardLocal(root: string, st: PrLocalHead): Promise<string> {
+  // Two syncs into one checkout fight over its HEAD and index ("cannot lock ref
+  // 'HEAD'", measured on four at once), so they take turns. Different checkouts
+  // — the usual case of several pull requests, one worktree each — never wait,
+  // and a branch checked out nowhere has no tree to protect.
+  if (!st.worktree) return fastForwardNow(root, st);
+  const turn = checkoutTurn.get(st.worktree) ?? Promise.resolve();
+  const mine = turn.then(() => fastForwardNow(root, st));
+  const tail = mine.catch(() => "");
+  checkoutTurn.set(st.worktree, tail);
+  try { return await mine; }
+  finally { if (checkoutTurn.get(st.worktree) === tail) checkoutTurn.delete(st.worktree); }
+}
+
+/** The last sync queued on each checkout path; see fastForwardLocal. */
+const checkoutTurn = new Map<string, Promise<string>>();
+
+async function fastForwardNow(root: string, st: PrLocalHead): Promise<string> {
   const up = await upstreamOf(root, st.branch);
   if (!up) return "left your local copy alone — it tracks no remote";
   const fetched = await gitAsync(root, ["fetch", up.remote, up.remoteBranch]);

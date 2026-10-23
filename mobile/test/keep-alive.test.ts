@@ -185,8 +185,12 @@ describe("host-context.tsx", () => {
     expect(hostContext.match(/syncNow\(\)/g)?.length).toBe(2);
   });
 
-  test("stops the service on forget()", () => {
-    expect(hostContext).toMatch(/forget: async \(\): Promise<void> => \{\s*syncKeepAlive\(false\)/);
+  test("stops the service when the last usable computer is forgotten, not before", () => {
+    // Broken on purpose: an unconditional syncKeepAlive(false) in
+    // forgetComputer silences the alerts of every computer still paired the
+    // moment one of them is forgotten.
+    const block = hostContext.match(/const forgetComputer = useCallback[\s\S]*?\}, \[leave, commit\]\);/)?.[0] ?? "";
+    expect(block).toMatch(/if \(!after\.hosts\.some\(\(h\) => !h\.revoked\)\) syncKeepAlive\(false\);/);
   });
 
   test("stops the service on a revoked credential, not just on forget()", () => {
@@ -196,14 +200,21 @@ describe("host-context.tsx", () => {
     // after the pairing was already gone.
     const revokedBlock = hostContext.match(/if \(!gates\.ok && gates\.error === REVOKED\) \{[\s\S]*?\n {4}\}/)?.[0] ?? "";
     expect(revokedBlock).toContain("syncKeepAlive(false)");
+    // Flipped on purpose with the multi-computer list: the revoke used to
+    // forget the only computer; it now MARKS it, and the service stops only
+    // when no usable computer is left, so one removed computer does not
+    // silence the others.
+    expect(revokedBlock).toContain("markRevoked(");
+    expect(revokedBlock).not.toContain("forgetHost");
+    expect(revokedBlock).toMatch(/if \(!next\.hosts\.some\(\(h\) => !h\.revoked\)\) syncKeepAlive\(false\);/);
   });
 
-  test("the ACTIVE-path effect stops the service the moment host goes null", () => {
+  test("the ACTIVE-path effect stops the service the moment host goes null or removed", () => {
     // Broken on purpose: reverting to a plain `if (!host) return;` is exactly
     // the bug above's OTHER path — whatever set `host` to null (forget(),
     // revoke, anything later) left the effect's own cleanup as the only thing
     // that could stop it, and that cleanup does not run syncKeepAlive at all.
-    expect(hostContext).toMatch(/if \(!host\) \{ syncKeepAlive\(false\); return; \}/);
+    expect(hostContext).toMatch(/if \(!host \|\| host\.revoked\) \{\s*(\/\/[^\n]*\s*)*if \(!listRef\.current\.hosts\.some\(\(h\) => !h\.revoked\)\) syncKeepAlive\(false\);\s*return;/);
   });
 
   test("syncNow checks an `alive` flag before acting, cleared on teardown", () => {

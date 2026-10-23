@@ -35,6 +35,7 @@ import { IssuesIcon } from "../../src/nav/icons.tsx";
 import { since } from "../../src/lib/dates.ts";
 import { sumIssueCounts } from "../../src/model/issueCounts.ts";
 import { C, RADIUS, SPACE, T } from "../../src/theme.ts";
+import { ComputerGone } from "../../src/nav/ComputerGone.tsx";
 
 type Filter = "mine" | "open" | "all";
 
@@ -100,7 +101,12 @@ function Row({ issue, now, me, onOpen }: {
   );
 }
 
+/** The screen, behind the card that says so when its computer is gone. */
 export default function IssuesScreen(): React.ReactNode {
+  return <ComputerGone><IssuesScreenBody /></ComputerGone>;
+}
+
+function IssuesScreenBody(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
   const { host, fleet } = useAgentglass();
   const router = useRouter();

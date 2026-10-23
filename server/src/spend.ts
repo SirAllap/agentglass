@@ -121,6 +121,22 @@ export async function checkoutBranches(root: string): Promise<Map<string, string
 }
 
 /**
+ * The branch a directory belongs to, by the longest checkout that contains it
+ * (the reason it has to be the longest is in `attributeSpend`). "" when none.
+ * Shared with the session brief, which must file a session under the same
+ * branch the spend panel does.
+ */
+export function branchResolver(checkouts: Map<string, string>): (dir: string) => string {
+  const nested = [...checkouts.keys()].sort((a, z) => z.length - a.length);
+  return (dir) => {
+    const exact = checkouts.get(dir);
+    if (exact) return exact;
+    const owner = nested.find((c) => isWithin(dir, c));
+    return owner ? checkouts.get(owner)! : "";
+  };
+}
+
+/**
  * The attribution rule itself, kept pure so it can be pinned.
  *
  * Two decisions live here and neither is obvious enough to leave implicit:
@@ -154,13 +170,7 @@ export function attributeSpend(
    * under it, so a plain "first ancestor wins" would file half the worktrees'
    * work under whatever the root has out.
    */
-  const nested = [...checkouts.keys()].sort((a, z) => z.length - a.length);
-  const branchOfDir = (dir: string): string => {
-    const exact = checkouts.get(dir);
-    if (exact) return exact;
-    const owner = nested.find((c) => isWithin(dir, c));
-    return owner ? checkouts.get(owner)! : "";
-  };
+  const branchOfDir = branchResolver(checkouts);
 
   type BranchAcc = { namedUsd: number; inferredUsd: number; lastTs: number; sessions: Set<string>; dirs: Set<string> };
   type DirAcc = { usd: number; lastTs: number; sessions: Set<string> };

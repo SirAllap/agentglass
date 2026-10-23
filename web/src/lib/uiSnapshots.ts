@@ -30,7 +30,7 @@
  * `see` which routes carry the rest.
  */
 import {
-  READ_PANELS, READ_PANELS_LATE, READ_PANELS_NOW, UI_READ_NOT_COVERED, UNTRUSTED_MAX_BYTES,
+  READ_PANELS, READ_PANELS_LATE, READ_PANELS_NOW, UI_READ_NOT_COVERED, UI_REFUSED_FOR_AGENTS, UNTRUSTED_MAX_BYTES,
   type UiSnapshot,
 } from "../../../shared/uiActions.ts";
 import { stripSecrets } from "../../../shared/scrub.ts";
@@ -504,6 +504,7 @@ export function uiState(src: Sources): UiSnapshot {
       view: a.view, open,
       readers: [...READ_PANELS].map((panel) => ({ panel, needsMount: false, asksServer: isLate(panel) })),
       notCovered: Object.keys(UI_READ_NOT_COVERED),
+      refusedForAgents: Object.keys(UI_REFUSED_FOR_AGENTS),
     },
     untrusted: {},
     see: ["ui.read"],

@@ -138,8 +138,8 @@ describe("the session name that gets obeyed", () => {
  */
 test("selecting the new window is opt-in, and the clone does not opt in", () => {
   const pane = readFileSync(new URL("../src/tmuxpane.ts", import.meta.url), "utf8");
-  const at = pane.indexOf("export async function engineWindowRunning");
-  expect(at, "engineWindowRunning moved").toBeGreaterThan(-1);
+  const at = pane.indexOf("export async function engineWindowOutcome");
+  expect(at, "engineWindowOutcome moved").toBeGreaterThan(-1);
   const body = pane.slice(at, pane.indexOf("\n}", pane.indexOf('"new-window"', at)));
   /* `-d` unless the caller asked to be taken there. */
   expect(body).toContain('select ? [] : ["-d"]');
@@ -162,7 +162,7 @@ test("and the buttons a person presses DO opt in", () => {
   /* The other half of the same rule: a window opened because somebody pressed
      something is a window they are waiting to see. */
   const term = readFileSync(new URL("../src/terminal.ts", import.meta.url), "utf8");
-  const calls = [...term.matchAll(/engineWindowRunning\(([^;]*?)\)\s*[;.]/gs)];
+  const calls = [...term.matchAll(/engineWindow(?:Running|Outcome)\(([^;]*?)\)\s*[;.]/gs)];
   expect(calls.length, "the terminal's openers moved").toBeGreaterThan(3);
   for (const m of calls) {
     expect(m[1]!.trimEnd().endsWith("true"), `a person's window must select — ${m[1]!.slice(0, 50)}`).toBe(true);
