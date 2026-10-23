@@ -390,7 +390,13 @@ export function resolvePrograms(
     } catch {
       /* not a symlink, or already gone */
     }
-    for (const candidate of new Set([dirname(found), dirname(real)])) {
+    for (const raw of new Set([dirname(found), dirname(real)])) {
+      // The directory a symlink points at, not the link: bwrap refuses to
+      // mount onto a symlink destination (a manager's `latest`), which killed
+      // the plugin in its first milliseconds with "Can't mount on symlink
+      // destination". The binary is found there just the same.
+      let candidate = raw;
+      try { candidate = realpathSync(raw); } catch { /* gone: refused below or skipped */ }
       if (!isUnder(candidate, realHome)) continue;
       const why = refusalReason(candidate, realHome);
       if (why) {

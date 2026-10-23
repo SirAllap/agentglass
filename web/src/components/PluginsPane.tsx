@@ -16,6 +16,7 @@ import { Market } from "./plugins/Market.tsx";
 import { PluginDeclaration } from "./plugins/PluginDeclaration.tsx";
 import { UnboxedConsent } from "./plugins/UnboxedConsent.tsx";
 import { envHatchNotice } from "../lib/pluginBoxState.ts";
+import { PluginWhyStopped } from "./plugins/PluginWhyStopped.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { useCallback, useEffect, useState, useMemo, useSyncExternalStore } from "react";
@@ -435,6 +436,9 @@ function PluginCard({ plugin, masterOn, envAllowsUnboxed, onChanged, onSettings 
             again and installs the version it lists now; the market tab offers the same when the listing moves on.
           </div>
         )}
+
+        {/* Switched on, nothing running, and the host kept how it ended. */}
+        {plugin.enabled && !running && <PluginWhyStopped plugin={plugin} />}
 
         {/* The re-consent case, drawn so it cannot be mistaken for an ordinary
             disabled plugin: its own colour and its own sentence, above the

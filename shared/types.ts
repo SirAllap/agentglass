@@ -5392,6 +5392,11 @@ export interface PublicPlugin {
   /** The first line bwrap wrote to stderr the last time this plugin's box
    *  died in its opening instant. Set only while nothing is running. */
   lastBoxFailure?: string;
+  /** How the last run ended when it ended within ~10 s of starting: exit code
+   *  or signal, the last lines it wrote to stderr (redacted, at most 2 KB) and
+   *  how long it lived. Kept in memory until the next start; a plugin that ran
+   *  longer has none. Set only while nothing is running. */
+  lastExit?: { code: number | null; signal: string | null; stderrTail: string; afterMs: number };
   /** The other plugins whose key this one can read — see `PublicPlugin` in
    *  server/src/plugins.ts. Present only while it runs outside its box. */
   canReadKeysOf?: string[];

@@ -167,6 +167,16 @@ cleared, a running instance is stopped, and the reviewer is asked again. Every
 update re-asks, a typo fix included: a consent prompt that is only *sometimes*
 honest teaches people to click through it faster than one that always is.
 
+**When a plugin dies at once.** A plugin that starts and exits within about ten
+seconds leaves its reason on `GET /plugins`: `lastExit` is `{ code, signal,
+stderrTail, afterMs }`, with the last 2 KB of what it wrote to stderr (paths and
+anything that looks like a secret redacted). The plugin's card in Settings and
+its not-running panel show it under "Why it stopped", next to `lastBoxFailure`
+when the box itself failed to build. It is held in memory, cleared by the next
+start and by remove, and is not a log: stderr only, only for those first
+seconds, only when the process exits inside them. A plugin that ran longer
+keeps nothing, and nothing it writes after that window is stored or streamed.
+
 ### Updating
 
 `agentglass-plugin update <name>` (and the Update button) goes back to where the
