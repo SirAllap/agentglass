@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { FLASH_MS, flashScript } from "../src/lib/browserDrive.ts";
 import { describe, expect, test } from "bun:test";
 import {
-  LOG_MAX, activityReducer, actionOf, agentLabel, ago, flashPlan, isActVerb, pausedRefusal, type Activity,
+  LOG_MAX, activityReducer, actionOf, agentLabel, ago, flashPlan, isActVerb, lapKeyframes, pausedRefusal, presenceLabel, travelMs, type Activity,
 } from "../src/lib/browserAgentActivity.ts";
 
 const begin = (s: Activity, tab = "t1", agent = "orbit-ci") => activityReducer(s, { type: "begin", tab, agent });
@@ -138,5 +138,46 @@ describe("the log opens from the badge", () => {
   test("a row only ever reads the fields the log stores, never a value", () => {
     expect(badge.includes(".text")).toBe(false);
     expect(badge.includes(".fields")).toBe(false);
+  });
+});
+
+describe("the presence drawn over a driven tab", () => {
+  test("the pointer's words name the element, never what was typed", () => {
+    expect(presenceLabel("type", "Email")).toBe("Typing in Email");
+    expect(presenceLabel("press", "", "Enter")).toBe("Pressing Enter");
+    expect(presenceLabel("click", "")).toBe("Clicking");
+    const sel = flashScript({ kind: "selector", selector: "#email" });
+    // the landing reads a label, a placeholder or visible text — a field's value is never read.
+    // Sliced to the landing's own lines: the shared locator before it reads button values on purpose.
+    const own = sel.slice(sel.indexOf("Where it landed"));
+    expect(own).toContain('e.getAttribute("placeholder")');
+    expect(own).not.toContain(".value");
+  });
+  test("travel grows with distance and stays inside its clamp", () => {
+    expect(travelMs(0, 0)).toBe(260);
+    expect(travelMs(3000, 0)).toBe(680);
+    expect(travelMs(200, 0)).toBeGreaterThan(travelMs(50, 0));
+  });
+  test("the lap stays inside the page on every keyframe, corners included", () => {
+    const W = 1066, H = 560, inset = 7;
+    const kf = lapKeyframes(W, H, inset, 10);
+    expect(kf.length).toBeGreaterThan(8);
+    expect(kf[0]!.offset).toBe(0);
+    expect(kf[kf.length - 1]!.offset).toBe(1);
+    let prev = -1;
+    for (const f of kf) {
+      expect(f.offset).toBeGreaterThanOrEqual(prev);
+      prev = f.offset;
+      const m = f.transform.match(/translate\(([\d.]+)px, ([\d.]+)px\)/);
+      expect(m).not.toBeNull();
+      const [x, y] = [Number(m![1]), Number(m![2])];
+      expect(x).toBeGreaterThanOrEqual(inset - 0.01);
+      expect(x).toBeLessThanOrEqual(W - inset + 0.01);
+      expect(y).toBeGreaterThanOrEqual(inset - 0.01);
+      expect(y).toBeLessThanOrEqual(H - inset + 0.01);
+    }
+  });
+  test("a page too small for the rounded path gets no lap rather than a broken one", () => {
+    expect(lapKeyframes(20, 20)).toEqual([]);
   });
 });

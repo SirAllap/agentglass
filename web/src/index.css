@@ -2961,3 +2961,52 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-perm[open] > summary .agx-perm-caret { transform: rotate(90deg); }
 @media (prefers-reduced-motion: reduce) { .agx-perm-caret { transition: none; } }
 .agx-market-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr)); gap: 14px; padding: 4px 16px 14px; align-items: stretch; }
+
+/*
+ * AGENT PRESENCE over a browser tab (components/browser/AgentPresence.tsx).
+ * The mark's two colours are fixed rather than the theme's primary: the
+ * presence has to read as "agentglass, an agent" on any palette, the same
+ * violet and green the app icon carries.
+ * Cost: the rim, haze and dock are painted once when acting starts; per frame
+ * only the satellite (transform) and the pointer's glide (transform) move.
+ */
+:root { --agx-mark: #8b5cf6; --agx-contact: #10b981; --agx-ease: cubic-bezier(0.23, 1, 0.32, 1); --agx-move: cubic-bezier(0.65, 0, 0.35, 1); }
+.agx-presence { position: absolute; inset: 0; pointer-events: none; z-index: 15; }
+.agx-presence-rim { position: absolute; inset: 0; opacity: 0; transition: opacity 180ms ease-out; }
+.agx-presence-on .agx-presence-rim { opacity: 1; transition: opacity 480ms var(--agx-ease); }
+.agx-presence-rim::before { content: ""; position: absolute; inset: 0; padding: 1px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--agx-mark) 70%, transparent), color-mix(in srgb, var(--agx-mark) 30%, transparent) 45%, color-mix(in srgb, var(--primary) 45%, transparent));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
+.agx-presence-rim::after { content: ""; position: absolute; inset: 0; box-shadow: inset 0 0 14px 0 color-mix(in srgb, var(--agx-mark) 7%, transparent); }
+/* 20px: a 6px contact and a 14px tail, its origin on the head, kept 7px inside the edge by the lap */
+.agx-presence-sat { position: absolute; left: 0; top: 0; width: 20px; height: 6px; margin: -3px 0 0 -17px; transform-origin: 17px 3px; opacity: 0; transition: opacity 180ms ease-out; will-change: transform; }
+.agx-presence-on .agx-presence-sat { opacity: 1; transition: opacity 480ms var(--agx-ease) 120ms; }
+.agx-presence-sat::before { content: ""; position: absolute; left: 0; right: 4px; top: 2px; height: 2px; border-radius: 2px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--agx-contact) 55%, transparent)); }
+.agx-presence-sat::after { content: ""; position: absolute; right: -3px; top: -3px; width: 12px; height: 12px; border-radius: 50%;
+  background: radial-gradient(circle, var(--agx-contact) 0 2.6px, color-mix(in srgb, var(--agx-contact) 20%, transparent) 3.4px, transparent 6px); }
+.agx-presence-ghost { position: absolute; left: 0; top: 0; opacity: 0; transition-property: transform, opacity; transition-timing-function: var(--agx-move), ease-out; will-change: transform; }
+.agx-presence-on .agx-presence-ghost { opacity: 1; }
+.agx-presence-arrow { display: block; width: 20px; height: 20px; filter: drop-shadow(0 1px 1.5px rgba(40, 20, 90, .28)); }
+.agx-presence-label { position: absolute; left: 18px; top: 20px; white-space: nowrap; font-size: 11px; font-weight: 500; line-height: 1; padding: 5px 8px; border-radius: 7px;
+  color: color-mix(in srgb, var(--agx-mark) 70%, var(--text)); background: color-mix(in srgb, var(--bg) 86%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--agx-mark) 22%, transparent), 0 6px 16px -8px rgba(40, 20, 90, .35); }
+.agx-presence-dock { pointer-events: auto; position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; align-items: center; gap: 12px;
+  max-width: calc(100% - 32px); padding: 8px 8px 8px 12px; border-radius: 14px;
+  background: color-mix(in srgb, var(--bg) 88%, transparent); -webkit-backdrop-filter: blur(18px) saturate(170%); backdrop-filter: blur(18px) saturate(170%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent), 0 18px 40px -20px rgba(40, 20, 90, .35);
+  animation: agx-dock-in 360ms var(--agx-ease); }
+@keyframes agx-dock-in { from { opacity: 0; transform: translate(-50%, 8px); filter: blur(2px); } }
+.agx-presence-dock.is-yours { background: color-mix(in srgb, var(--warning) 10%, var(--bg)); }
+.agx-presence-who { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.agx-presence-task { font-size: 12.5px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agx-presence-sub { font-size: 11px; color: var(--text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agx-presence-dock button { flex: none; height: 26px; padding: 0 11px; border-radius: 7px; border: 0; font-size: 12px; font-weight: 500; cursor: pointer;
+  background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text2); transition: transform 120ms var(--agx-ease), background 160ms ease; }
+.agx-presence-dock button:active { transform: scale(.97); }
+.agx-presence-dock button.is-primary { background: var(--text); color: var(--bg); }
+@media (prefers-reduced-motion: reduce) {
+  .agx-presence-ghost { transition-property: opacity; }
+  .agx-presence-dock { animation: none; }
+}
+@media (prefers-reduced-transparency: reduce) { .agx-presence-dock { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; } }

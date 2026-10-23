@@ -113,3 +113,59 @@ export function ago(now: number, at: number): string {
   const s = Math.max(0, Math.round((now - at) / 1000));
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : `${Math.floor(s / 3600)}h`;
 }
+
+/**
+ * How long the presence layer stays up after the last ask ends. An agent works
+ * in bursts with a model call between them; without this the rim would blink
+ * off and on between every two clicks, which reads as nervous, not as held.
+ */
+export const PRESENCE_LINGER_MS = 4000;
+
+const DOING: Record<string, string> = {
+  click: "Clicking", dblclick: "Double-clicking", rightclick: "Right-clicking", check: "Ticking",
+  fill: "Filling", type: "Typing in", select: "Choosing in", press: "Pressing",
+};
+
+/** The few words beside the drawn pointer: what the agent did, to what. A name the page gave the element, never a value. */
+export function presenceLabel(verb: string, name: string, key = ""): string {
+  const doing = DOING[verb] ?? verb;
+  if (verb === "press") return key ? `${doing} ${clip(key, 16)}` : doing;
+  const n = name.trim();
+  return n ? `${doing} ${clip(n, 32)}` : doing;
+}
+
+/** The pointer's travel time: grows with the distance, clamped so a short hop stays quick and a long one never drags. */
+export function travelMs(dx: number, dy: number): number {
+  return Math.round(Math.min(680, Math.max(260, 180 + Math.hypot(dx, dy) * 0.9)));
+}
+
+/**
+ * The satellite's lap round a W x H page, as transform keyframes: a rounded
+ * rectangle `inset` px inside the edge with corners of radius `r`, speed even
+ * all the way round, the contact turning WITH each corner's arc. Inset so the
+ * whole contact and its halo stay on the page; a corner cut straight would
+ * clip it against a rounded container. Starts top-right, where the mark parks
+ * its contact, heading down.
+ */
+export function lapKeyframes(W: number, H: number, inset = 7, r = 10, arcSteps = 6): { offset: number; transform: string }[] {
+  const L = inset, T = inset, R = W - inset, B = H - inset;
+  if (R - L < 2 * r || B - T < 2 * r) return [];
+  type P = { x: number; y: number; a: number };
+  const pts: P[] = [];
+  const line = (x0: number, y0: number, x1: number, y1: number, a: number) => { pts.push({ x: x0, y: y0, a }, { x: x1, y: y1, a }); };
+  const arc = (cx: number, cy: number, from: number) => {
+    for (let k = 1; k < arcSteps; k++) {
+      const t = from + (90 * k) / arcSteps, rad = ((t - 90) * Math.PI) / 180;
+      pts.push({ x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad), a: t });
+    }
+  };
+  line(R, T + r, R, B - r, 90); arc(R - r, B - r, 90);
+  line(R - r, B, L + r, B, 180); arc(L + r, B - r, 180);
+  line(L, B - r, L, T + r, 270); arc(L + r, T + r, 270);
+  line(L + r, T, R - r, T, 360); arc(R - r, T + r, 360);
+  pts.push({ x: R, y: T + r, a: 450 });
+  const d: number[] = [0];
+  for (let k = 1; k < pts.length; k++) d.push(d[k - 1] + Math.hypot(pts[k].x - pts[k - 1].x, pts[k].y - pts[k - 1].y));
+  const total = d[d.length - 1] || 1;
+  return pts.map((p, k) => ({ offset: d[k] / total, transform: `translate(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px) rotate(${p.a.toFixed(1)}deg)` }));
+}

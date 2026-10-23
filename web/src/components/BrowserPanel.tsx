@@ -47,7 +47,8 @@ import { browserNav, clearBrowserNav, subscribeBrowserNav } from "../lib/browser
 import { clientId, serveBrowserAsk, setBrowserAskHandler } from "../lib/browserBus.ts";
 import { activityReducer, actionOf, agentLabel, pausedRefusal, type Activity } from "../lib/browserAgentActivity.ts";
 import { api } from "../lib/api.ts";
-import { forgetAgentZoom, reapplyZoom, applyGuestZoom, setPageZoomer, crossContainerRefusal, mintTakesThePane, notePopup, type GuestZoom, type DrivableWebview } from "../lib/browserDrive.ts";
+import { forgetAgentZoom, reapplyZoom, applyGuestZoom, setPageZoomer, crossContainerRefusal, mintTakesThePane, notePopup, onActLanded, type ActLanding, type GuestZoom, type DrivableWebview } from "../lib/browserDrive.ts";
+import { AgentPresence } from "./browser/AgentPresence.tsx";
 import { onBrowserTabs } from "../lib/browserBus.ts";
 import { COLLECTOR } from "../lib/browserObserve.ts";
 import { PagePicker } from "./browser/PagePicker.tsx";
@@ -572,6 +573,13 @@ export function BrowserView({ active: viewOn, scope }: {
    *  person has taken the tab back. Read by the ask handler through a ref for
    *  the same reason as the lists above. */
   const [acts, dispatchAct] = useReducer(activityReducer, {} as Activity);
+  /* Where each tab's last act landed, for the drawn pointer. One slot in
+     browserDrive, filled while this panel is up. */
+  const [landings, setLandings] = useState<Record<string, ActLanding>>({});
+  useEffect(() => {
+    onActLanded((l) => setLandings((m) => ({ ...m, [l.tab]: l })));
+    return () => onActLanded(null);
+  }, []);
   const actsRef = useRef<Activity>(acts);
   actsRef.current = acts;
   /** §12: did the ask now being served say `--show`? Written by the ask handler
@@ -3045,7 +3053,11 @@ export function BrowserView({ active: viewOn, scope }: {
               : split && t.id === splitId
                 ? { left: `${splitAt * 100}%`, right: 0 }
                 : { left: 0, right: 0, ...(t.id === activeId ? null : { visibility: "hidden" }) }}>
-            <div style={{ width: viewport.width ? `${viewport.width}px` : "100%", height: "100%", maxWidth: "100%" }}>
+            <div style={{ position: "relative", width: viewport.width ? `${viewport.width}px` : "100%", height: "100%", maxWidth: "100%" }}>
+              {acts[t.id] && (
+                <AgentPresence agent={acts[t.id]!} landing={landings[t.id] ?? null}
+                  onToggle={() => dispatchAct({ type: "pause", tab: t.id, paused: !acts[t.id]!.paused })} />
+              )}
               {IS_DEMO ? (
                 <DemoPage url={t.url || BLANK} />
               ) : (
