@@ -209,7 +209,7 @@ export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
       apply: (v) => saved(writeAgentDefaults({ chatMode: v })),
     },
     {
-      id: "chats.deny", page: "hooks", label: "Tools every chat turn is denied", type: "json",
+      id: "chats.deny", page: "hooks", label: "Tools every Claude chat turn is denied (Codex and Antigravity chats take no deny rules)", type: "json",
       read: () => chatDeny(),
       validate: (raw) => {
         const text = Array.isArray(raw) ? raw.map(String).join("\n") : typeof raw === "string" ? raw : null;

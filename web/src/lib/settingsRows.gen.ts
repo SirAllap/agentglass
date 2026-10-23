@@ -62,7 +62,7 @@ export const SETTINGS_ROWS: SettingsRowRaw[] = [
   { pane: "hooks", section: "Gate", label: "Hold what leaves this machine", hint: "A push, a PR, a comment, a merge or a message waits for an answer.", settingId: "hooks.gate" },
   { pane: "hooks", section: "Gate", label: "If nobody answers", hint: "", settingId: "gate.onTimeout" },
   { pane: "hooks", section: "Gate", label: "Who answers", hint: "Held actions show up in the Lantern first.", settingId: "gate.answerer" },
-  { pane: "hooks", section: "New chats", label: "Extra deny rules", hint: "One pattern per line, added to every new chat.", settingId: "chats.deny" },
+  { pane: "hooks", section: "New chats", label: "Extra deny rules", hint: "One pattern per line, added to every new Claude chat. Codex and Antigravity chats do not take deny rules.", settingId: "chats.deny" },
   { pane: "hooks", section: "New chats", label: "How new chats run", hint: "" },
   { pane: "hooks", section: "New chats", label: "Permission mode", hint: "Applies to chats; terminals have their own.", settingId: "chats.mode" },
   { pane: "hooks", section: "New chats", label: "Starts in", hint: "The folder a new chat opens at.", settingId: "chats.startIn" },

@@ -164,13 +164,13 @@ export function NewChatsCard({ open, tmuxEngine, enginePref, onEngine }: {
           <Select value={d.chatMode} align="right" className="agx-select outline-none w-[170px] justify-between"
             options={CHAT_MODES.map((v) => ({ value: v, label: CHAT_MODE_LABEL[v] }))}
             onChange={(v) => void set("chatMode", v as AgentDefaults["chatMode"])} />} />
-      <SettingRow settingId="chats.deny" label="Extra deny rules" hint="One pattern per line, added to every new chat."
+      <SettingRow settingId="chats.deny" label="Extra deny rules" hint="One pattern per line, added to every new Claude chat. Codex and Antigravity chats do not take deny rules."
         status={n ? <StatusBadge tone="off">{n} {n === 1 ? "rule" : "rules"}</StatusBadge> : undefined}
         actions={editing ? undefined : <Button onClick={() => { setDraft(d.chatDeny.join("\n")); setErr(null); setEditing(true); }}>Edit rules</Button>}
         below={editing ? (
           <div className="agx-sform">
             <Field label="Rules" htmlFor="chat-deny" error={err ?? undefined}
-              help={<>Example: <span className="t-mono">Bash(gh pr merge:*)</span>. A rule is checked before the permission mode, on every chat turn.</>}>
+              help={<>Example: <span className="t-mono">Bash(gh pr merge:*)</span>. A rule is checked before the permission mode, on every Claude chat turn.</>}>
               <textarea id="chat-deny" value={draft} onChange={(e) => setDraft(e.target.value)} rows={5} spellCheck={false}
                 aria-describedby={helpIdFor("chat-deny")} className={`t-mono w-full ${INPUT}`} style={INPUT_STYLE} />
             </Field>

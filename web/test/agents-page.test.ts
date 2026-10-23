@@ -92,4 +92,7 @@ describe("what acts on them", () => {
     expect(cards).toContain("JOB_ORDER.map");
     expect(cards).toContain('reviewer: "Reads it adversarially"');
   });
+  test("the deny rules row says which chats take them: only Claude's", () => {
+    expect(cards).toContain("added to every new Claude chat. Codex and Antigravity chats do not take deny rules.");
+  });
 });

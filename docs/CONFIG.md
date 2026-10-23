@@ -225,13 +225,15 @@ looser becomes a request the person approves (see the settings door below).
 the Agents page's own choices (Settings ▸ Agents), all reachable through the
 settings door as `gate.answerer`, `gate.onTimeout`, `chats.startIn`, `chats.mode`
 and `chats.deny`. `gateAnswerer: "orchestrator"` also types one line into the
-chair's seat when the gate holds an outward action or a budget has been passed:
-the chair is told, never asked, and only a person releases a hold.
+chair's seat when the gate holds an outward action: once per hold, never about
+the chair's own calls, with whatever the worker wrote in it quoted as data. The
+chair is told, never asked, and only a person releases a hold.
 `gateOnTimeout: "ask"` repeats the notification at a third and two thirds of the
 wait and then drops the action as before; it never extends the wait, because
 the hook holding the agent stops waiting when its own window ends. `chatDeny`
-is passed as `--disallowedTools` on every chat turn and on every chat pane
-started afterwards. `chatStartIn` (`last` or `open`) and `chatMode` (`inherit`,
+is passed as `--disallowedTools` on every Claude chat turn and on every Claude
+chat pane started afterwards; Codex and Antigravity chats take no deny rules.
+`chatStartIn` (`last` or `open`) and `chatMode` (`inherit`,
 `default`, `acceptEdits` or `plan`) are read by the window when it opens a chat.
 
 > **Pricing is a user-editable default.** Numbers in `pricing.ts` are per 1M
