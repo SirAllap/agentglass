@@ -106,17 +106,17 @@ export function Sidebar({ places, pins, onRemote, here, mode, width, onResize, o
   /** One device: the row opens it, the two 24-px buttons at the end lock and eject (hidden on the rail, where the name is the tooltip). */
   const device = (v: Volume) => {
     const on = !!v.mountPoint && (here === v.mountPoint || here.startsWith(v.mountPoint + "/"));
-    const lock = lockButton(v), eject = releaseButton(v), working = busy?.has(v.id);
+    const lock = lockButton(v), eject = releaseButton(v), inert = !!v.remote, working = busy?.has(v.id) || inert;
     const act = (b: LockButton | ReleaseButton) => (
       <button key={b.label} type="button" title={b.label} aria-label={`${b.label} ${v.name}`} disabled={working} onClick={(e) => { if (activates(e.button, "click")) onVolumeAct?.(v, b.act); }}
-        className="agx-btn flex items-center justify-center rounded-md shrink-0" style={{ width: 24, height: 24, opacity: 0.75 }}>
+        className="agx-btn flex items-center justify-center rounded-md shrink-0" style={{ width: 24, height: 24, opacity: inert ? 0.4 : 0.75, cursor: inert ? "not-allowed" : undefined }}>
         <StrataIcon set="act" name={b.icon} size={ICON.sm} />
       </button>
     );
     return (
-      <div key={v.id} data-device={v.id} className="flex items-center rounded-md" style={{ background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : undefined, paddingRight: rail ? 0 : 2 }}>
-        <button type="button" data-side-row aria-current={on ? "true" : undefined} aria-label={rail ? v.name : undefined} title={rail ? v.name : v.mountPoint ?? undefined} aria-busy={working || undefined} onClick={(e) => { if (activates(e.button, "click")) onVolume?.(v); }}
-          {...menuOf({ kind: "device", volume: v })}
+      <div key={v.id} data-device={v.id} aria-disabled={inert || undefined} className="flex items-center rounded-md" style={{ opacity: inert ? 0.4 : undefined, cursor: inert ? "not-allowed" : undefined, background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : undefined, paddingRight: rail ? 0 : 2 }}>
+        <button type="button" data-side-row aria-current={on ? "true" : undefined} aria-label={rail ? v.name : undefined} title={rail ? v.name : v.mountPoint ?? undefined} aria-busy={(working && !inert) || undefined} disabled={inert} onClick={(e) => { if (activates(e.button, "click")) onVolume?.(v); }}
+          {...(inert ? { onContextMenu: (e: React.MouseEvent) => e.preventDefault() } : menuOf({ kind: "device", volume: v }))}
           className={`agx-btn flex-1 min-w-0 flex items-center ${rail ? "justify-center" : "gap-2 px-2.5"} rounded-md text-left`}
           style={{ minHeight: rail ? 28 : 26, color: on ? "var(--text)" : "var(--text2)", fontWeight: on ? 600 : 400 }}>
           <span className="shrink-0 flex" style={{ color: "var(--primary-ink)" }}><StrataIcon set="act" name={deviceIcon(v)} size={ICON.md} /></span>

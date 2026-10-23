@@ -52,7 +52,9 @@ const finder = await Bun.file(new URL("MachineFinder.tsx", dir)).text();
 
 describe("every sidebar row has its menu", () => {
   test("the place (and pinned folder) and device rows spread the same handlers; a pinned remote is inert and has no menu", () => {
-    expect(sidebar.match(/\{\.\.\.menuOf\(/g)?.length).toBe(2);
+    expect(sidebar.match(/\{\.\.\.menuOf\(/g)?.length).toBe(1);
+    expect(sidebar).toContain('menuOf({ kind: "device", volume: v })');
+    expect(sidebar).toContain("inert = !!v.remote");
     const at = sidebar.indexOf("const remote = (");
     expect(sidebar.slice(at, sidebar.indexOf("const device = (", at))).toContain("disabled");
   });
