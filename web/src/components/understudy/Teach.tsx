@@ -27,7 +27,7 @@ import { Button } from "../workspace/Chrome.tsx";
 import { Empty } from "../git/ui.tsx";
 import { SettingRow } from "../SettingRow.tsx";
 import { useReportNeeds } from "../SettingsPageState.tsx";
-import { Field, SettingsCard, SettingsForm, StatusBadge } from "../SettingsKit.tsx";
+import { Field, ProblemNote, SettingsCard, SettingsForm, StatusBadge } from "../SettingsKit.tsx";
 import { fmtBytes } from "../../lib/goneCleanup.ts";
 import { HIT, ICON } from "../../lib/iconSize.ts";
 import { ClockIcon, ListIcon, PlayIcon } from "../../lib/glyphIcons.tsx";
@@ -121,6 +121,8 @@ export function Teach({ active }: { active: boolean }) {
   const [data, setData] = useState<SourcesBody | null>(null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  /* The read of the sources answered nothing. It used to leave "Reading what is on this machine…" up for good. */
+  const [loadFailed, setLoadFailed] = useState(false);
   const [neverText, setNeverText] = useState("");
   const [addPath, setAddPath] = useState("");
   const [allPrecedents, setAllPrecedents] = useState(false);
@@ -134,13 +136,14 @@ export function Teach({ active }: { active: boolean }) {
   const load = useCallback(async () => {
     try {
       const r = await fetch(SERVER + "/understudy/sources", { headers: authHeaders() });
-      if (!r.ok) return;
+      if (!r.ok) { setLoadFailed(true); return; }
       const b = (await r.json()) as SourcesBody;
       if (b && Array.isArray(b.sources)) {
         setData(b);
+        setLoadFailed(false);
         setNeverText(b.never.join("\n"));
-      }
-    } catch { /* the panel says nothing rather than guessing */ }
+      } else setLoadFailed(true);
+    } catch { setLoadFailed(true); /* nothing is drawn from a read that did not come */ }
   }, []);
 
   useEffect(() => { if (active) void load(); }, [active, load]);
@@ -148,7 +151,13 @@ export function Teach({ active }: { active: boolean }) {
   useReportNeeds("understudy", data && !data.terms.ok ? { count: 1, title: "The private-terms list is missing, so nothing is read yet" } : null);
 
   if (!active) return null;
-  if (!data) return <Empty what="what is on this machine" busy />;
+  if (!data) {
+    return loadFailed
+      ? <ProblemNote title="Could not read what is on this machine" action={<Button onClick={() => { setLoadFailed(false); void load(); }}>Try again</Button>}>
+          The local server did not answer, so nothing here is known. Nothing was changed.
+        </ProblemNote>
+      : <Empty what="what is on this machine" busy />;
+  }
 
   const rules = data.sources.filter((s) => s.kind === "rules");
   const precedents = data.sources.filter((s) => s.kind === "precedents");

@@ -16,7 +16,7 @@ import { setting } from "../lib/settingsRegistry.ts";
 import { DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN, type ClickUpPrefs, type ClickUpStepBlock, type ProviderStatus } from "../../../shared/providers.ts";
 import { DEFAULT_CARD_SKILL_PATTERN } from "../../../shared/cardSkills.ts";
 import { SettingRow, Switch, Toggle } from "./SettingRow.tsx";
-import { EmptyState, Field, SettingsCard, SettingsForm, StatusBadge, helpIdFor } from "./SettingsKit.tsx";
+import { EmptyState, Field, ProblemNote, SettingsCard, SettingsForm, StatusBadge, helpIdFor } from "./SettingsKit.tsx";
 import { useReportProblem } from "./SettingsPageState.tsx";
 import { problemChip } from "../lib/settingsStates.ts";
 import { Button, INPUT, INPUT_STYLE, RefreshButton, Segmented } from "./workspace/Chrome.tsx";
@@ -171,6 +171,8 @@ function DisconnectBar({ onDone }: { onDone: () => void }) {
 
 export function ClickUpPane() {
   const [prefs, setPrefs] = useState<ClickUpPrefs | null>(null);
+  /* The read of the saved settings answered nothing (the server was down). Without this the page said "Reading your settings…" for good. */
+  const [prefsFailed, setPrefsFailed] = useState(false);
   const [writes, setWrites] = useState<boolean | null>(null);
   const [prefix, setPrefix] = useState<string | undefined>(undefined);
   const [connected, setConnected] = useState(true);
@@ -187,7 +189,7 @@ export function ClickUpPane() {
 
   useEffect(() => {
     let live = true;
-    void clickupPrefs().then((p) => { if (live && p) setPrefs(p); });
+    void clickupPrefs().then((p) => { if (!live) return; if (p) setPrefs(p); else setPrefsFailed(true); });
     void clickupSetup().then((s) => { if (live) { setWrites(s.writeEnabled ?? false); setPrefix(s.prefix); setConnected(s.connected); } });
     void api.providers().then((r) => { if (live) setProvider(r.providers.find((x) => x.id === "clickup") ?? null); }).catch(() => undefined);
     return () => { live = false; };
@@ -253,7 +255,19 @@ export function ClickUpPane() {
     setWrites(s.writeEnabled ?? on);
   }, []);
 
-  if (!prefs) return <div className="py-6 text-[11px]" style={{ color: "var(--text3)" }}>Reading your settings…</div>;
+  if (!prefs) {
+    if (prefsFailed && connected) {
+      return (
+        <SettingsCard title="ClickUp" icon={<PlugIcon size={ICON.sm} />} tone="error" status={<StatusBadge tone="err">Not reachable</StatusBadge>}>
+          <ProblemNote title="Could not read your ClickUp settings"
+            action={<Button onClick={() => { setPrefsFailed(false); void clickupPrefs().then((p) => { if (p) setPrefs(p); else setPrefsFailed(true); }); }}>Try again</Button>}>
+            The local server did not answer, so nothing here is known. Nothing was changed.
+          </ProblemNote>
+        </SettingsCard>
+      );
+    }
+    return <div className="py-6 text-[11px]" style={{ color: "var(--text3)" }}>Reading your settings…</div>;
+  }
   const changesOn = writes === true;
   const M = moments(n);
   const live = changesOn ? steps.filter((s) => isActive(s, M[s.kind])) : [];
