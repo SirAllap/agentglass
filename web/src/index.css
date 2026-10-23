@@ -3236,9 +3236,6 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 /* The Orchestration page's "Right now" picture: the main agent, a wire to each job. */
 .agx-flow { display: grid; grid-template-columns: minmax(200px, 220px) minmax(0, 1fr); gap: 40px; align-items: stretch; }
 .agx-flow-roles { display: grid; gap: 12px; }
-/* The page reads as prose with the machine's words in mono, as the approved mock does; the body's mono stays everywhere else. */
-.agx-orch { font-family: var(--font-prose); }
-.agx-orch .t-mono { font-family: var(--font-mono, ui-monospace, monospace); }
 .agx-flow-main, .agx-flow-job { position: relative; }
 .agx-flow-main::after { content: ""; position: absolute; top: 50%; right: -20px; width: 20px; height: 2px; background: var(--border2); }
 .agx-flow-job::after { content: ""; position: absolute; top: 50%; left: -20px; width: 20px; height: 2px; background: var(--border2); }

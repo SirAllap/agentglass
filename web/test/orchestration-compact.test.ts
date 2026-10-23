@@ -172,3 +172,12 @@ describe("the page's own styles", () => {
     expect(/#[0-9a-fA-F]{3,8}\b|rgba?\(/.test(cssSrc.replace(/\/\*[\s\S]*?\*\//g, ""))).toBe(false);
   });
 });
+
+describe("the Orchestration page's font", () => {
+  test("is the app's own monospace like every other settings page: no .agx-orch rule sets a prose family on the page", async () => {
+    const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
+    const rules = [...css.matchAll(/(^|\n)\s*\.agx-orch(?![\w-])[^{]*\{([^}]*)\}/g)].map((m) => m[2]!);
+    expect(rules.length).toBeGreaterThan(0);
+    for (const body of rules) expect(body).not.toMatch(/font-family:\s*var\(--font-prose\)/);
+  });
+});
