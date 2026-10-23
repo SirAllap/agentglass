@@ -714,7 +714,9 @@ export function parseUnifiedDiff(text: string): ParsedFile[] {
   let cur: ParsedFile | null = null;
   let hunk: ParsedHunk | null = null;
 
-  for (const line of (text || "").split(/\r?\n/)) {
+  // The final newline ends the last line; read as a split, it is a blank one, which
+  // the empty-context rule below turns into a phantom row under the last hunk.
+  for (const line of (text || "").replace(/\r?\n$/, "").split(/\r?\n/)) {
     const g = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
     if (g) {
       cur = { path: g[2]!, additions: 0, deletions: 0, hunks: [] };
