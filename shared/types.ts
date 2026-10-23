@@ -4132,6 +4132,18 @@ export interface ReachableAddress {
   label?: string;
 }
 
+/** What "Turn on HTTPS" (`POST /remote/serve`) came back with. Failures carry
+ *  the one action that fixes them: a link to open, a command to copy, or words. */
+export interface ServeResult {
+  ok: boolean;
+  reason?: "not-enabled" | "access-denied" | "no-https" | "absent" | "failed";
+  /** The HTTPS address on success; the page that turns Serve on for `not-enabled`. */
+  url?: string;
+  /** A command for the person to run themselves. Never run by the app. */
+  command?: string;
+  message?: string;
+}
+
 /** The firewall most likely to be dropping traffic, and the fix. Never run by
  *  the app: it prints the command for a human to read and paste. */
 export interface FirewallHint {

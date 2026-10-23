@@ -8,7 +8,7 @@
 // more (see server/src/pairing.ts), so there is nothing left to mask — what
 // the pane shows is an address and only an address.
 import { describe, expect, test } from "bun:test";
-import { pickIndex, readPick, writePick, type PickedAddress } from "../src/lib/remoteLink.ts";
+import { newlySecure, pickIndex, readPick, writePick, type PickedAddress } from "../src/lib/remoteLink.ts";
 
 const lan: PickedAddress = { address: "192.168.1.131", iface: "enp42s0", tailnet: false };
 const tail: PickedAddress = { address: "100.85.155.119", iface: "tailscale0", tailnet: true };
@@ -74,5 +74,16 @@ describe("remembering it", () => {
     // in the pane breaks.
     const throwing = { setItem: () => { throw new Error("denied"); } };
     expect(() => writePick(tail, throwing)).not.toThrow();
+  });
+});
+
+describe("a secure route that shows up while the pane is open", () => {
+  const https: PickedAddress & { secure: boolean } = { address: "box.ts.net", iface: "tailscale", tailnet: true, secure: true };
+  test("is picked, once, after the first look", () => {
+    expect(newlySecure([lan, tail], [https, lan, tail])).toEqual(https);
+    expect(newlySecure([https, lan, tail], [https, lan, tail])).toBeNull();
+  });
+  test("is not picked on the first look, so a saved choice survives a reopen", () => {
+    expect(newlySecure(null, [https, lan])).toBeNull();
   });
 });

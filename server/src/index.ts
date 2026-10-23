@@ -1515,7 +1515,7 @@ import { digest as logDigest } from "./logdigest.ts";
 import { mintTicket, claimTicket, pending as pendingPairings, acceptTicket, rejectTicket, collect as collectPairing, dropTicket, getTicket, MAX_ATTEMPTS } from "./pairing.ts";
 import { buildInfoPaths, updateStatus, viewerStatus, startUpdate, updateLog, releaseNotes } from "./selfupdate.ts";
 import { rateOk } from "./ratelimit.ts";
-import { noteClient, noteSocket, isLoopback, isSelf, isBlocked, blockDevice, remoteStatus, tailnetNames, refreshTailscale, TAILNET_OK_MS, proxiedByTailscaled, loopbackPeerIsOtherUser } from "./remote.ts";
+import { noteClient, noteSocket, isLoopback, isSelf, isBlocked, blockDevice, remoteStatus, tailnetNames, refreshTailscale, refreshTailscaleIfStale, enableServe, TAILNET_OK_MS, proxiedByTailscaled, loopbackPeerIsOtherUser } from "./remote.ts";
 import { parseWindowMs } from "./params.ts";
 import { serveWeb, serveIndex, WEB_UI_ENABLED, distPath } from "./webui.ts";
 import { notifyCapability, subscribeNotifications, notifyWatching, openNote } from "./notifications.ts";
@@ -5188,16 +5188,20 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       }
       return json({ ok: true, address, blocked, closed });
     }
+    const remoteNow = () =>
+      remoteStatus({
+        bind: BIND,
+        port: srv.port ?? PORT,
+        trustLan: TRUST_LAN,
+        token: AUTH_TOKEN,
+        webUi: WEB_UI_ENABLED,
+      });
     if (pathname === "/remote/status") {
-      return json(
-        remoteStatus({
-          bind: BIND,
-          port: srv.port ?? PORT,
-          trustLan: TRUST_LAN,
-          token: AUTH_TOKEN,
-          webUi: WEB_UI_ENABLED,
-        })
-      );
+      // `?fresh=1` is the Remote page asking for a tailnet look no older than
+      // 10 s, so a `tailscale serve` started elsewhere shows up in seconds
+      // instead of at the next 120 s tick.
+      if (url.searchParams.get("fresh")) await refreshTailscaleIfStale(srv.port ?? PORT, 10_000);
+      return json(remoteNow());
     }
     /**
      * --- pairing a device ---
@@ -5219,6 +5223,15 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       return !AUTH_TOKEN || tokenOk(req, url, AUTH_TOKEN);
     };
     const notHere = () => json({ ok: false, error: "only this machine can do that" }, 403);
+
+    // Turn on Tailscale HTTPS for the port this server answers on. Machine-only
+    // like pairing: it changes what the tailnet can reach.
+    if (pathname === "/remote/serve" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      if (!atMachine()) return notHere();
+      const r = await enableServe(srv.port ?? PORT);
+      return json({ ...r, status: remoteNow() });
+    }
 
     if (pathname === "/pair/ticket" && req.method === "POST") {
       if (!atMachine()) return notHere();

@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { SettingRow, Switch } from "./SettingRow.tsx";
 import { CommandLine, SELECT_BOX, EmptyState, SettingsCard, StatusBadge } from "./SettingsKit.tsx";
 import { Select } from "./Select.tsx";
 import { api } from "../lib/api.ts";
 import { IS_DESKTOP, remoteAccessEnabled, setRemoteAccess, revokeRemoteAccess } from "../lib/desktop.ts";
 import { fmtAgo } from "../lib/format.ts";
-import { pickIndex, readPick, writePick, type PickedAddress } from "../lib/remoteLink.ts";
+import { newlySecure, pickIndex, readPick, writePick, type PickedAddress } from "../lib/remoteLink.ts";
 import { PairPanel } from "./PairPanel.tsx";
 import { usePoll } from "../lib/usePoll.ts";
 import type { RemoteStatus, RemoteDevice } from "../../../shared/types.ts";
@@ -68,9 +68,26 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
    */
   const [stalled, setStalled] = useState(false);
 
-  const load = useCallback(() => {
-    api.remoteStatus().then(setSt).catch(() => setSt(null));
+  /* The last list of routes and whether a fresh tailnet look is worth asking
+     for. Refs, because `load` runs from a timer and must not be rebuilt (and
+     the interval with it) on every status. */
+  const lastAddrs = useRef<RemoteStatus["addresses"] | null>(null);
+  const wantFresh = useRef(false);
+  const apply = useCallback((s: RemoteStatus | null) => {
+    setSt(s);
+    if (!s) return;
+    // Fresh probes only while they can change the page: Tailscale is here and
+    // there is no HTTPS route yet. The server caps how often it really asks.
+    wantFresh.current = !!s.tailnet?.installed && !s.addresses.some((a) => a.secure);
+    // An HTTPS route that shows up while the pane is open is the one the
+    // person turned it on for: pick it, instead of leaving the old route.
+    const fresh = newlySecure(lastAddrs.current, s.addresses);
+    lastAddrs.current = s.addresses;
+    if (fresh) { setChosen(fresh); writePick(fresh); }
   }, []);
+  const load = useCallback(() => {
+    api.remoteStatus(wantFresh.current).then(apply).catch(() => setSt(null));
+  }, [apply]);
 
   useEffect(() => {
     if (!open) return;
@@ -237,7 +254,8 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
         <>
           {/* Mounted in both faces so the paired list — the thing that decides
               which face — is never unmounted and re-fetched. */}
-          <PairPanel baseUrl={url} variant={firstRun ? "hero" : "row"} onPaired={setPaired} />
+          <PairPanel baseUrl={url} variant={firstRun ? "hero" : "row"} onPaired={setPaired}
+            canTurnOnHttps={!!st.tailnet?.installed && !st.addresses.some((a) => a.secure)} onStatus={apply} />
 
           <SettingsCard title="Address">
             <SettingRow
