@@ -139,3 +139,68 @@ describe("where the button lives", () => {
     expect(bar).not.toMatch(/prComment|prReview|submitReview|approve/i);
   });
 });
+
+describe("rendered preview", () => {
+  const render = async (md: string) => {
+    const { Md } = await import("../src/components/PrPanel.tsx");
+    return renderToStaticMarkup(React.createElement(Md, { body: md }));
+  };
+  const finding = [
+    "**Summary**", "",
+    "| Severity | Count |", "| --- | --- |", "| critical | 1 |", "",
+    "<details>", "<summary>Guard runs after the loop</summary>", "", "The `check()` call sits below the loop.", "", "> quoted line", "</details>", "",
+    "<details open>", "<summary>Open one</summary>", "", "body", "</details>", "",
+    "<!-- agentglass-review:acme-review -->",
+  ].join("\n");
+
+  test("a table becomes a table, details fold, bold and code render, quote is a quote", async () => {
+    const html = await render(finding);
+    expect(html).toContain("<table");
+    expect(html).toContain("<th");
+    expect(html).toContain("<details");
+    expect(html).toContain("<summary>Guard runs after the loop</summary>");
+    expect(html.match(/<details[^>]*\bopen/g)?.length).toBe(1); // only the one written `<details open>`
+    expect(html).toContain("<strong>Summary</strong>");
+    expect(html).toContain("<code");
+    expect(html).toContain("<blockquote");
+  });
+  test("the hidden marker never shows", async () => {
+    expect(await render(finding)).not.toContain("agentglass-review");
+  });
+  test("a script or javascript: link in a finding body stays inert", async () => {
+    const html = await render("<script>alert(1)</script>\n\n[open](javascript:alert(2))\n\n<img src=x onerror=alert(3)>");
+    expect(html).not.toContain("<script");
+    expect(html).not.toMatch(/href=["']javascript:/i);
+    expect(html).not.toMatch(/<img[^>]*onerror/i);
+  });
+  test("the zero-width break after @ in a mention survives", async () => {
+    const html = await render("ping @​acme-user please");
+    expect(html).toContain("@​acme-user");
+  });
+});
+
+describe("preview and markdown tabs", () => {
+  test("Preview is the default and the tabs are the two views", async () => {
+    const { DEFAULT_PREVIEW_TAB, PREVIEW_TABS, readPreviewTab } = await import("../src/lib/publishReview.ts");
+    expect(DEFAULT_PREVIEW_TAB).toBe("preview");
+    expect(PREVIEW_TABS.map((t) => t.id)).toEqual(["preview", "markdown"]);
+    expect(readPreviewTab()).toBe("preview"); // no sessionStorage here: blocked storage falls back
+  });
+  test("the dialog draws Tabs, renders Preview through Md, and edits only in the Markdown tab", async () => {
+    const s = code(await src("../src/components/plugins/PublishReview.tsx"));
+    expect(s).toContain("<Tabs value={tab} options={PREVIEW_TABS}");
+    expect(s).toContain("useState<PreviewTab>(readPreviewTab)");
+    expect(s).toContain("<Md body={markdown} />");
+    expect(s).toContain('tab === "markdown" ? (');
+    expect(s).toContain("onChange={(e) => p.onText(e.target.value)}");
+    expect(s).toContain("rememberPreviewTab(t)");
+  });
+  test("what is posted is the Markdown tab's text, even after an edit", async () => {
+    const s = code(await src("../src/components/plugins/PublishReview.tsx"));
+    const post = s.slice(s.indexOf("const post = async () => {"));
+    const fn = post.slice(0, post.indexOf("\n  };"));
+    expect(fn).toContain("...(dirty ? { markdown } : {})");
+    // The one textarea writes into the same state the Preview renders from.
+    expect(s).toContain("onText={(t) => { setMarkdown(t); setDirty(true); }}");
+  });
+});

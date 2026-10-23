@@ -135,3 +135,26 @@ export function localOnly(n: Pick<PrNote, "status">, run: Pick<PrRun, "published
   if (n.status === "dismissed") return !o.includeDismissed;
   return false;
 }
+
+/** The dialog's two views of the comment text. Preview is what GitHub will draw; Markdown is the editable source and the only thing posted. */
+export type PreviewTab = "preview" | "markdown";
+export const DEFAULT_PREVIEW_TAB: PreviewTab = "preview";
+export const PREVIEW_TABS: readonly { id: PreviewTab; label: string; title: string }[] = [
+  { id: "preview", label: "Preview", title: "How GitHub will draw the comment" },
+  { id: "markdown", label: "Markdown", title: "The text that is posted; edit it here" },
+];
+/** Who the card's header line speaks for. */
+export const PREVIEW_CARD_LINE = "you will comment";
+
+const TAB_KEY = "agx.publishReview.tab";
+
+/** The tab chosen earlier in this window's session, or Preview. Storage can be blocked; the default then stands. */
+export function readPreviewTab(): PreviewTab {
+  try {
+    const v = sessionStorage.getItem(TAB_KEY);
+    return v === "markdown" || v === "preview" ? v : DEFAULT_PREVIEW_TAB;
+  } catch { return DEFAULT_PREVIEW_TAB; }
+}
+export function rememberPreviewTab(t: PreviewTab): void {
+  try { sessionStorage.setItem(TAB_KEY, t); } catch { /* blocked storage: the choice just is not remembered */ }
+}

@@ -4,13 +4,15 @@ import { ago } from "../../lib/fileRecents.ts";
 import { openExternal } from "../../lib/externalUrl.ts";
 import { ICON } from "../../lib/iconSize.ts";
 import {
-  NOTHING_LEAVES_WARNING, NOTHING_OPEN_WARNING, allTicked, canPost, charCounter, freshOptions, optionRows, postLabel, publishAllOptions, publishButtonState,
-  type PublishButtonState,
+  NOTHING_LEAVES_WARNING, NOTHING_OPEN_WARNING, PREVIEW_CARD_LINE, PREVIEW_TABS, allTicked, canPost, charCounter, freshOptions, optionRows, postLabel, publishAllOptions, publishButtonState,
+  readPreviewTab, rememberPreviewTab,
+  type PreviewTab, type PublishButtonState,
 } from "../../lib/publishReview.ts";
 import type { HeadRead } from "../../../../shared/headCompare.ts";
 import type { PublishOptions } from "../../../../shared/reviewPublish.ts";
 import { Portal } from "../Portal.tsx";
-import { Button, CTRL_H, EDGE, LINE, tintEdge } from "../workspace/Chrome.tsx";
+import { Md, MD_CSS } from "../PrPanel.tsx";
+import { Button, CTRL_H, EDGE, LINE, Tabs, tintEdge } from "../workspace/Chrome.tsx";
 import type { LocalNote, LocalRun } from "./LocalReview.tsx";
 
 /**
@@ -73,7 +75,7 @@ function PublishDialog({ run, notes, root, onClose }: { run: LocalRun; notes: Lo
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [posting, setPosting] = useState(false);
-  const [editing, setEditing] = useState(false);
+  const [tab, setTab] = useState<PreviewTab>(readPreviewTab);
   const [dirty, setDirty] = useState(false);
   const seq = useRef(0);
   const body = { plugin: run.plugin, repo: run.repo, number: run.number, root, runId: run.id };
@@ -112,8 +114,8 @@ function PublishDialog({ run, notes, root, onClose }: { run: LocalRun; notes: Lo
 
   return (
     <PublishDialogView run={run} notes={notes} options={options} markdown={markdown} existing={existing} openN={openN} omitted={omitted}
-      loading={loading} error={error} posting={posting} editing={editing} dirty={dirty}
-      onToggle={toggle} onAll={() => setOptions(publishAllOptions())} onEdit={() => setEditing((v) => !v)}
+      loading={loading} error={error} posting={posting} tab={tab} dirty={dirty}
+      onToggle={toggle} onAll={() => setOptions(publishAllOptions())} onTab={(t) => { setTab(t); rememberPreviewTab(t); }}
       onText={(t) => { setMarkdown(t); setDirty(true); }} onPost={() => void post()} onClose={onClose} />
   );
 }
@@ -126,14 +128,14 @@ export interface PublishDialogViewProps {
   existing: { commentId: string; url: string } | null;
   openN: number | null;
   omitted: number;
-  loading: boolean; error: string | null; posting: boolean; editing: boolean; dirty: boolean;
-  onToggle: (key: keyof PublishOptions) => void; onAll: () => void; onEdit: () => void; onText: (t: string) => void;
+  loading: boolean; error: string | null; posting: boolean; tab: PreviewTab; dirty: boolean;
+  onToggle: (key: keyof PublishOptions) => void; onAll: () => void; onTab: (t: PreviewTab) => void; onText: (t: string) => void;
   onPost: () => void; onClose: () => void;
 }
 
 /** The dialog as a picture of its state; PublishDialog above owns the state. */
 export function PublishDialogView(p: PublishDialogViewProps) {
-  const { run, notes, options, markdown, existing, openN, omitted, loading, error, posting, editing, dirty, onClose } = p;
+  const { run, notes, options, markdown, existing, openN, omitted, loading, error, posting, tab, dirty, onClose } = p;
   const rows = optionRows(notes, options);
   const counter = charCounter(markdown.length);
 
@@ -175,22 +177,28 @@ export function PublishDialogView(p: PublishDialogViewProps) {
               {omitted > 0 && <div className="text-[10.5px] mt-1" style={{ color: "var(--text3)" }}>{omitted} lowest-severity {omitted === 1 ? "finding is" : "findings are"} left out to fit GitHub's size limit.</div>}
               {dirty && <div className="text-[10.5px] mt-1" style={{ color: "var(--text3)" }}>You edited the text. Changing a box rebuilds it and drops the edits.</div>}
               <div className="flex-1" />
-              <div className="text-[10.5px] tabular-nums mt-2" aria-live="polite" style={{ color: counter.over ? "var(--error-ink)" : "var(--text3)" }}>Size {counter.text} characters</div>
             </div>
             <div className="p-3.5 min-w-0 min-h-0 flex flex-col gap-1.5">
-              <div className="flex items-center gap-2 text-[10.5px]" style={{ color: "var(--text3)" }}>
-                <span>Preview · markdown, {editing ? "editing" : "as it will be posted"}</span>
+              <style>{MD_CSS}</style>
+              <div className="flex items-center gap-2" style={{ borderBottom: LINE }}>
+                <Tabs value={tab} options={PREVIEW_TABS} onChange={p.onTab} label="Comment view" panelId="publish-review-panel" />
                 <span className="flex-1" />
-                <Button size="compact" on={editing} onClick={p.onEdit} disabled={loading}>{editing ? "Done editing" : "Edit"}</Button>
+                <span className="text-[10.5px] tabular-nums" aria-live="polite" style={{ color: counter.over ? "var(--error-ink)" : "var(--text3)" }}>Size {counter.text} characters</span>
               </div>
-              {editing ? (
-                <textarea value={markdown} aria-label="Comment text" spellCheck={false}
+              {tab === "markdown" ? (
+                <textarea id="publish-review-panel" role="tabpanel" value={markdown} aria-label="Comment text" spellCheck={false}
                   onChange={(e) => p.onText(e.target.value)}
                   className="flex-1 min-h-0 w-full rounded-md p-2.5 text-[11.5px] leading-relaxed t-mono resize-none"
                   style={{ border: EDGE, background: "var(--surface-base, transparent)", color: "var(--text)" }} />
               ) : (
-                <pre className="flex-1 min-h-0 overflow-auto rounded-md p-2.5 text-[11.5px] leading-relaxed t-mono whitespace-pre-wrap break-words m-0"
-                  style={{ border: EDGE, color: "var(--text2)", opacity: loading ? 0.5 : 1 }}>{markdown}</pre>
+                <div id="publish-review-panel" role="tabpanel" className="flex-1 min-h-0 overflow-auto" style={{ opacity: loading ? 0.5 : 1 }}>
+                  <div className="agx-card rounded-md overflow-hidden" style={{ border: EDGE }}>
+                    <div className="px-3 py-2 text-[11px]" style={{ borderBottom: LINE, color: "var(--text3)" }}>
+                      <b style={{ color: "var(--text)", fontWeight: 500 }}>{PREVIEW_CARD_LINE}</b>
+                    </div>
+                    <div className="px-3 py-2.5 text-[12px]"><Md body={markdown} /></div>
+                  </div>
+                </div>
               )}
               {error && <div className="text-[11px]" role="alert" style={{ color: "var(--error-ink)" }}>{error}</div>}
             </div>

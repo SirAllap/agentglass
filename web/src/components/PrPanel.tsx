@@ -937,7 +937,7 @@ function Block({ b, wiring }: { b: MdBlock; wiring?: TaskWiring }) {
     // the tags came through escaped — the "collapsed" part of a collapsed
     // comment was the one thing that did not work.
     return (
-      <details className="agx-details">
+      <details className="agx-details" open={b.open}>
         <summary>{b.summary}</summary>
         <div>{b.blocks.map((inner, i) => <Block key={i} b={inner} wiring={wiring} />)}</div>
       </details>
