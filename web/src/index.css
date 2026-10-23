@@ -301,20 +301,20 @@
   /* Stable columns (useStableFlow): a grid of 1px rows, every card pinned to its
      own column and row by script, so a card that grows moves nothing but what
      sits under it. */
-  .agx-settings-col { --agx-cols: 1; }
+  .agx-settings-col { --agx-cols: 1; --agx-gap: 18px; }
   @media (min-width: 1180px) { .agx-settings-col { --agx-cols: 2; } }
   @media (min-width: 2300px) { .agx-settings-col { --agx-cols: 3; } }
   .agx-settings-col[data-flow="single"] { --agx-cols: 1; }
   /* The gap under a card is part of its span, so the last one would leave 18px
      of nothing under the page: the column takes it back. */
   .agx-settings-col[data-stable] > .agx-scard { margin-bottom: 0; }
-  .agx-settings-col[data-stable] { margin-bottom: -18px; }
+  .agx-settings-col[data-stable] { margin-bottom: calc(-1 * var(--agx-gap)); }
   .agx-settings-col[data-stable] {
     columns: auto;
     display: grid;
     grid-template-columns: repeat(var(--agx-cols), minmax(0, 1fr));
     grid-auto-rows: 1px;
-    column-gap: 18px;
+    column-gap: var(--agx-gap);
     align-items: start;
   }
 

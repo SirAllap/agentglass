@@ -1,8 +1,10 @@
 import { useLayoutEffect, type RefObject } from "react";
-import { placeFlow } from "../lib/settingsFlow.ts";
+import { GAP, placeFlow } from "../lib/settingsFlow.ts";
 
-/** The space under every card, in the 1px rows of the grid; the column takes the last one back (index.css). */
-const GAP = 18;
+/** The column each card was given the first time it was placed (settingsFlow.ts: balanced, then stable). */
+const COL = new WeakMap<Element, number>();
+/** Cards fill in for a moment after mount (lists load); until then the choice is redone, after it a card keeps its column. */
+const SETTLE_MS = 800;
 
 /**
  * Lays the page's direct children out with `placeFlow`: one grid row per pixel
@@ -14,16 +16,19 @@ export function useStableFlow(ref: RefObject<HTMLElement | null>, deps: readonly
   useLayoutEffect(() => {
     const col = ref.current;
     if (!col) return;
+    let settled = false;
+    const timer = setTimeout(() => { settled = true; place(); }, SETTLE_MS);
     const place = () => {
       const kids = [...col.children] as HTMLElement[];
       const cols = Number(getComputedStyle(col).getPropertyValue("--agx-cols")) || 1;
       const items = kids.map((el) => {
         const cs = getComputedStyle(el);
         const h = el.getBoundingClientRect().height + (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0) + GAP;
-        return { h, wide: !el.classList.contains("agx-scard") || el.classList.contains("agx-scard-wide") };
+        return { h, col: COL.get(el), wide: !el.classList.contains("agx-scard") || el.classList.contains("agx-scard-wide") };
       });
       placeFlow(items, cols).forEach((s, i) => {
         const el = kids[i]!;
+        if (settled && typeof s.col === "number") COL.set(el, s.col);
         el.style.gridColumn = s.col === "all" ? "1 / -1" : String(s.col);
         el.style.gridRow = `${s.row} / span ${s.span}`;
       });
@@ -35,7 +40,7 @@ export function useStableFlow(ref: RefObject<HTMLElement | null>, deps: readonly
     watch();
     const mo = new MutationObserver(() => { watch(); place(); });
     mo.observe(col, { childList: true });
-    return () => { ro.disconnect(); mo.disconnect(); col.removeAttribute("data-stable"); };
+    return () => { clearTimeout(timer); ro.disconnect(); mo.disconnect(); col.removeAttribute("data-stable"); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 }

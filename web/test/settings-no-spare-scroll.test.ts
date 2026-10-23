@@ -15,7 +15,7 @@ test("the index rail shares the content's row instead of spanning spare rows", (
 
 test("nothing is left under the last card: no gap kept by the column, a short bottom pad", () => {
   expect(css).toMatch(/\.agx-settings-col\[data-stable\] > \.agx-scard \{ margin-bottom: 0; \}/);
-  expect(css).toMatch(/\.agx-settings-col\[data-stable\] \{ margin-bottom: -18px; \}/);
+  expect(css).toMatch(/\.agx-settings-col\[data-stable\] \{ margin-bottom: calc\(-1 \* var\(--agx-gap\)\); \}/);
   expect(css).toMatch(/\.agx-settings-page \{ padding: 22px 40px 28px;/);
 });
 

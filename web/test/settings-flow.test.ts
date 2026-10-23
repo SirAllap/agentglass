@@ -1,22 +1,40 @@
 import { describe, expect, test } from "bun:test";
-import { placeFlow } from "../src/lib/settingsFlow.ts";
+import { GAP, placeFlow } from "../src/lib/settingsFlow.ts";
 
 const card = (h: number) => ({ h, wide: false });
 
-describe("placeFlow: stable columns", () => {
-  test("a card's column is its position, not the heights around it", () => {
-    const before = placeFlow([card(100), card(100), card(100), card(100)], 2).map((s) => s.col);
-    // The first card grows (a disclosure opened): nobody changes column.
-    const after = placeFlow([card(900), card(100), card(100), card(100)], 2).map((s) => s.col);
-    expect(before).toEqual([1, 2, 1, 2]);
+/** Place like the hook: remember each card's column the first time and pass it back. */
+function settle(hs: number[], cols: number, memo: (number | undefined)[] = []) {
+  const slots = placeFlow(hs.map((h, i) => ({ h, wide: false, col: memo[i] })), cols);
+  slots.forEach((s, i) => { memo[i] = s.col as number; });
+  return slots;
+}
+
+describe("placeFlow: balanced, then stable columns", () => {
+  test("at mount a tall card gets a column to itself, the short ones share the other", () => {
+    const s = settle([1900, 300, 300, 300, 300], 2);
+    expect(s.map((x) => x.col)).toEqual([1, 2, 2, 2, 2]);
+    // Round robin would have given [1, 2, 1, 2, 1]: 2500 against 600.
+  });
+  test("a card growing later never moves another card to a different column", () => {
+    const memo: (number | undefined)[] = [];
+    const before = settle([100, 400, 100, 100, 250], 2, memo).map((s) => s.col);
+    const after = settle([1500, 400, 100, 100, 250], 2, memo).map((s) => s.col);
     expect(after).toEqual(before);
   });
+  test("a card added later takes the shortest column", () => {
+    const memo: (number | undefined)[] = [];
+    settle([900, 100], 2, memo);
+    expect(settle([900, 100, 200], 2, memo)[2]!.col).toBe(2);
+  });
   test("a card that grows pushes down only what is under it in its own column", () => {
-    const a = placeFlow([card(100), card(100), card(100), card(100)], 2);
-    const b = placeFlow([card(500), card(100), card(100), card(100)], 2);
+    const memo: (number | undefined)[] = [];
+    const a = settle([100, 100, 100, 100], 2, memo);
+    const b = settle([500, 100, 100, 100], 2, memo);
     expect(b[1]).toEqual(a[1]);
     expect(b[3]).toEqual(a[3]);
-    expect(b[2]!.row).toBe(501);
+    expect(b[2]!.row).toBe(a[2]!.row + 400);
+    expect(b[0]!.span).toBe(500);
   });
   test("a wide card spans every column and starts under the tallest", () => {
     const s = placeFlow([card(100), card(300), { h: 50, wide: true }, card(10)], 2);
@@ -34,4 +52,10 @@ test("the page container is wired to the placement", async () => {
   const css = await Bun.file(new URL("../src/index.css", import.meta.url).pathname).text();
   expect(modal).toContain("useStableFlow(colRef,");
   expect(css).toMatch(/\.agx-settings-col\[data-stable\] \{[^}]*display: grid/);
+  // One gap, one number: the span's gap, the grid's column gap and the margin the
+  // column takes back all read the same token.
+  expect(GAP).toBe(18);
+  expect(css).toMatch(/--agx-gap: 18px/);
+  expect(css).toMatch(/\.agx-settings-col\[data-stable\] \{[^}]*column-gap: var\(--agx-gap\)/);
+  expect(css).toMatch(/margin-bottom: calc\(-1 \* var\(--agx-gap\)\)/);
 });
