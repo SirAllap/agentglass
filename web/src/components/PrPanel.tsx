@@ -157,6 +157,7 @@ import { writeBlock } from "../lib/cardWrites.ts";
 import type { ListStatus as CuStatus, ListMember as CuMember, ProviderTask, HandoffUnassign } from "../../../shared/providers.ts";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
 import { HIT, ICON, MIN_BOX } from "../lib/iconSize.ts";
+import { loadUse, recordPicks, withFrequent } from "../lib/personUsage.ts";
 import { ConflictPeek } from "./ConflictPeek.tsx";
 import { EDGE_FADE_PX, edgeMask, stepX, useTabStripScroll } from "../lib/tabStrip.ts";
 import { isTrunkBranch, type Stack } from "../lib/prStack.ts";
@@ -4895,6 +4896,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               facets={facets}
               onQuery={setQuery}
               onSearch={runSearch}
+              people={mentions?.users ?? null}
               pending={wanted.trim() !== serverQuery.trim()}
               searching={listState.loading}
               shown={visiblePrs.length}
@@ -6935,7 +6937,7 @@ function SidebarPeople({ people, empty }: { people: PrReviewer[]; empty: string 
   );
 }
 
-type PickOption = { value: string; label: string; sub?: string; color?: string; avatar?: string };
+type PickOption = { value: string; label: string; sub?: string; color?: string; avatar?: string; section?: string };
 
 /**
  * A GitHub-style chooser: a filter box over a list you tick, instead of a
@@ -7096,10 +7098,14 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
             <div className="px-3 py-3 text-[11px]" style={{ color: "var(--text3)" }}>Loading…</div>
           ) : shown.length === 0 ? (
             <div className="px-3 py-3 text-[11px]" style={{ color: "var(--text3)" }}>No matches.</div>
-          ) : shown.map((o) => {
+          ) : shown.map((o, i) => {
             const on = sel.includes(o.value);
             return (
-              <button key={o.value || "∅"} onClick={() => toggle(o.value)}
+              <Fragment key={o.value || "∅"}>
+              {o.section && o.section !== shown[i - 1]?.section && (
+                <div className="px-2.5 pt-1.5 pb-0.5 text-[10px] uppercase tracking-wide" style={{ color: "var(--text4)" }}>{o.section}</div>
+              )}
+              <button onClick={() => toggle(o.value)}
                 className="agx-mi w-full text-left flex items-center gap-2 px-2.5 py-1.5 text-[11px]"
                 style={{ color: "var(--text2)" }}>
                 <span className="w-3.5 shrink-0 text-center" style={{ color: on ? "var(--primary)" : "transparent" }}><DoneIcon size={ICON.xs} /></span>
@@ -7108,6 +7114,7 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
                 <span className="truncate">{o.label}</span>
                 {o.sub && <span className="truncate text-[10px] shrink-0 ml-auto" style={{ color: "var(--text3)" }}>{o.sub}</span>}
               </button>
+              </Fragment>
             );
           })}
         </div>
@@ -7620,6 +7627,7 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
     // "GitHub first, and the card only if it landed" is true rather than
     // aspirational.
     if (!add.length && !remove.length) return true;
+    if (label === "Reviewers" || label === "Assignees") recordPicks(add);
     return field(patch(d!.number, add, remove), () => fn(add, remove), `${label} did not save`, label.toLowerCase());
   };
 
@@ -7697,13 +7705,13 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
           : ownedBy.size
           ? `Owners first, from ${owns.path ?? "CODEOWNERS"}`
           : "Collaborators on this repository")}
-        options={withoutAuthor([...reviewedOptions, ...rest], d.author)}
+        options={withFrequent(withoutAuthor([...reviewedOptions, ...rest], d.author), loadUse())}
         side={(h) => <ClickUpSide d={d} note={note} {...h} />}
         selected={was} onClose={close} onCommit={commit(was, "Reviewers", reviewersPatch, (add, remove) => api.prReviewers(root, d.number, add, remove))} />;
     } else if (picker.field === "assignees") {
       const was = d.assignees;
       node = <FieldPicker anchor={a} title="Assign people" hint="Up to 10 assignees" multi loading={loading}
-        options={(facets?.assignees ?? []).map((u) => ({ value: u, label: u, avatar: u }))}
+        options={withFrequent((facets?.assignees ?? []).map((u) => ({ value: u, label: u, avatar: u })), loadUse())}
         side={(h) => <ClickUpSide d={d} note={note} {...h} />}
         selected={was} onClose={close} onCommit={commit(was, "Assignees", assigneesPatch, (add, remove) => api.prAssignees(root, d.number, add, remove))} />;
     } else {

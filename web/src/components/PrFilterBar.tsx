@@ -1,4 +1,8 @@
+import { useState } from "react";
 import { FacetMenu } from "./FacetMenu.tsx";
+import { Avatar } from "./Avatar.tsx";
+import { LAYER } from "../lib/layers.ts";
+import { applyPick, atToken, loadUse, recordPicks, suggestPeople } from "../lib/personUsage.ts";
 import { SEARCH_HINT } from "../lib/prSearch.ts";
 import { ICON } from "../lib/iconSize.ts";
 import {
@@ -19,9 +23,12 @@ import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
  * state; it turns clicks into new query strings and hands them up via `onQuery`.
  */
 export function PrFilterBar({
-  query, filters, facets, onQuery, onSearch, pending, searching, shown, total, swept, unread, builder,
+  query, filters, facets, onQuery, onSearch, pending, searching, shown, total, swept, unread, builder, people,
 }: {
   query: string;
+  /** The repository's people, already loaded by the panel. Null while they are
+   *  not: typing "@" then says so instead of asking for them. */
+  people?: string[] | null;
   filters: FilterState;
   facets: FacetView[];
   /** The rule builder, drawn after the pills. Passed in rather than built here
@@ -50,6 +57,20 @@ export function PrFilterBar({
   unread?: { count: number; on: boolean; onToggle: () => void; onMarkAllRead: () => void };
 }) {
   const emit = (next: FilterState) => onQuery(serializeQuery(next));
+
+  /* "@" in the box: the repository's people, from the list the panel already
+     holds. Nothing is requested here, on a keystroke or otherwise. */
+  const [dismissed, setDismissed] = useState("");
+  const [cursor, setCursor] = useState(0);
+  const at = atToken(query);
+  const suggest = at && people ? suggestPeople(people, loadUse(), at.token) : null;
+  const flat = suggest ? [...suggest.frequent, ...suggest.rest] : [];
+  const menuOpen = !!at && dismissed !== query;
+  const pick = (login: string) => {
+    recordPicks([login]);
+    onQuery(applyPick(query, login));
+    setCursor(0);
+  };
 
   // Chips mirror every active token, each with its own removal. Free text is one
   // chip (removing it strips only the words, keeping the facets).
@@ -86,16 +107,54 @@ export function PrFilterBar({
             {swept.done ? `${shown} of ${swept.rows}` : `${shown} of ${swept.rows}…`}
           </span>
         )}
+        <div className="relative flex-1 min-w-0">
         <input
           data-pr-filter-input
           value={query}
-          onChange={(e) => onQuery(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); onSearch(); } }}
+          onChange={(e) => { setCursor(0); onQuery(e.target.value); }}
+          onKeyDown={(e) => {
+            if (menuOpen && flat.length) {
+              if (e.key === "ArrowDown") { e.preventDefault(); setCursor((c) => (c + 1) % flat.length); return; }
+              if (e.key === "ArrowUp") { e.preventDefault(); setCursor((c) => (c - 1 + flat.length) % flat.length); return; }
+              if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); e.stopPropagation(); pick(flat[Math.min(cursor, flat.length - 1)]!); return; }
+            }
+            if (menuOpen && e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setDismissed(query); return; }
+            if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); onSearch(); }
+          }}
+          role="combobox" aria-expanded={menuOpen} aria-autocomplete="list" aria-controls="pr-at-people"
           placeholder={SEARCH_HINT}
           title={SEARCH_HINT}
           spellCheck={false}
-          className={`flex-1 min-w-0 ${INPUT}`}
+          className={`w-full ${INPUT}`}
           style={INPUT_STYLE} />
+        {menuOpen && (
+          <div id="pr-at-people" role="listbox" className="absolute left-0 right-0 top-full mt-1 rounded-lg overflow-y-auto agx-scroll"
+            style={{ zIndex: LAYER.menu, maxHeight: 260, border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", background: "color-mix(in srgb, var(--bg2) 98%, black)", boxShadow: "0 18px 44px -18px rgba(0,0,0,.8)" }}>
+            {!people ? (
+              <div className="px-3 py-2 text-[11px]" style={{ color: "var(--text3)" }}>People are still loading…</div>
+            ) : flat.length === 0 ? (
+              <div className="px-3 py-2 text-[11px]" style={{ color: "var(--text3)" }}>Nobody matches @{at!.token}.</div>
+            ) : (
+              <>
+                {suggest!.frequent.length > 0 && <div className="px-2.5 pt-1.5 pb-0.5 text-[10px] uppercase tracking-wide" style={{ color: "var(--text4)" }}>Frequent</div>}
+                {flat.map((login, i) => (
+                  <div key={login}>
+                    {i === suggest!.frequent.length && suggest!.frequent.length > 0 && <div className="px-2.5 pt-1.5 pb-0.5 text-[10px] uppercase tracking-wide" style={{ color: "var(--text4)" }}>Everyone</div>}
+                    <button role="option" aria-selected={i === cursor}
+                      onMouseDown={(e) => { e.preventDefault(); pick(login); }}
+                      onMouseEnter={() => setCursor(i)}
+                      className="agx-mi w-full text-left flex items-center gap-2 px-2.5 py-1.5 text-[11px]"
+                      style={{ color: "var(--text2)", background: i === cursor ? "color-mix(in srgb, var(--primary) 14%, transparent)" : undefined }}>
+                      <Avatar login={login} size={ICON.md} />
+                      <span className="truncate">{login}</span>
+                    </button>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        )}
+        </div>
         {/*
           * Appears only when there is something to ask for.
           *
