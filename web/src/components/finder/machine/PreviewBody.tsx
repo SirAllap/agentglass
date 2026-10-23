@@ -28,18 +28,23 @@ const note = (children: React.ReactNode, warn = false) => (
   <p className="m-0 mb-2 text-[11px]" style={{ color: warn ? "var(--warning-ink)" : "var(--text3)" }}>{children}</p>
 );
 
-export function PreviewBody({ path, facts, canEdit, root, onEditing }: {
+export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, onTab }: {
   path: string;
   /** The workspace the editor session hangs off (the bench's own key). */
   root: string;
   /** Which file nvim is on while Editing is the open tab, null otherwise: the Finder guards its exits by it. */
   onEditing: (path: string | null) => void;
+  /** The view this file was last on, and where to say it changed. */
+  savedTab?: { path: string; tab: string };
+  onTab: (path: string, tab: string) => void;
   facts: FileFacts;
   canEdit: boolean;
 }) {
   const plan = useMemo(() => previewPlan(facts), [facts]);
-  const [tab, setTab] = useState<PreviewTab>(plan.tabs[0] ?? "Reading");
-  useEffect(() => setTab(plan.tabs[0] ?? "Reading"), [path, plan]);
+  const firstTab = (): PreviewTab => (savedTab && savedTab.path === path && (plan.tabs as string[]).includes(savedTab.tab) ? (savedTab.tab as PreviewTab) : (plan.tabs[0] ?? "Reading"));
+  const [tab, setTabNow] = useState<PreviewTab>(firstTab);
+  const setTab = (t: PreviewTab) => { setTabNow(t); onTab(path, t); };
+  useEffect(() => setTabNow(firstTab()), [path, plan]);
   const [editing, setEditing] = useState(false);
   useEffect(() => setEditing(false), [path]);
   const mayEdit = canEdit && editability(facts);

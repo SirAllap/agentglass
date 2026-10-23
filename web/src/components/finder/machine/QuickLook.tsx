@@ -22,13 +22,15 @@ export function folderSummary(rows: readonly Row[]): string[] {
   return TYPE_GROUPS.filter((g) => n.has(g)).map((g) => `${g.toLowerCase()} ${n.get(g)}`);
 }
 
-export function QuickLook({ path, row, rows, root, onEditing, onBench, onCopy, onClose }: {
+export function QuickLook({ path, row, rows, root, savedTab, onTab, onEditing, onBench, onCopy, onClose }: {
   path: string | null;
   row: Row | null;
   /** The rows of the folder, when `row` is one: what the summary counts. */
   rows: readonly Row[] | null;
   /** The workspace the Editing tab's nvim session hangs off. */
   root: string;
+  savedTab?: { path: string; tab: string };
+  onTab: (path: string, tab: string) => void;
   onEditing: (path: string | null) => void;
   onBench: (path: string, mode: "edit" | "terminal") => void;
   onCopy: (path: string) => void;
@@ -108,7 +110,7 @@ export function QuickLook({ path, row, rows, root, onEditing, onBench, onCopy, o
         ) : !facts ? (
           <p style={{ color: "var(--text3)" }}>Reading…</p>
         ) : (
-          <PreviewBody path={path} facts={facts} canEdit={canEditRow(row)} root={root} onEditing={onEditing} />
+          <PreviewBody path={path} facts={facts} canEdit={canEditRow(row)} root={root} onEditing={onEditing} savedTab={savedTab} onTab={onTab} />
         )}
       </div>
     </div>

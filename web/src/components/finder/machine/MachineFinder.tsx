@@ -28,7 +28,7 @@ import type { DiskPlace } from "../../../../../shared/types.ts";
 import { EDGE, LINE } from "../../workspace/Chrome.tsx";
 import { Column, type Mod } from "./Column.tsx";
 import { AppearanceMenu, FinderSettings, HelpSheet } from "./FinderChrome.tsx";
-import { externalPlace } from "../../../lib/finderMiller.ts";
+import { externalPlace, folderTargetMove } from "../../../lib/finderMiller.ts";
 import { exitDecision, type Exit } from "../../../lib/finderEdit.ts";
 import { FinderPathBar } from "./FinderPathBar.tsx";
 import { FinderSearch } from "./FinderSearch.tsx";
@@ -106,9 +106,12 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   /* Strata folds the sidebar to its icon rail while the path is typed. */
   const [pathEditing, setPathEditing] = useState(false);
   const selRef = useRef(sel); selRef.current = sel;
+  const trailRef = useRef(trail); trailRef.current = trail;
   const [focusCol, setFocusCol] = useState(() => back?.focusCol ?? 0);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [peek, setPeek] = useState(() => back?.peek ?? false);
+  /* Which view (Rendered, Source...) the preview was on, for the file it was on: remembered with the rest of where the finder was. */
+  const [previewTab, setPreviewTab] = useState(() => back?.previewTab);
   const [sidePage, setSidePage] = useState(false);
   const [help, setHelp] = useState(false);
   const [searching, setSearching] = useState(false);
@@ -131,9 +134,9 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const [multi, setMulti] = useState<{ col: number; path: string; choice: Choice } | null>(null);
   const wantFirst = useRef<number | null>(null);
   const snapNow = useRef<() => string>(() => "");
-  snapNow.current = () => writeMachineSnap({ v: 1, trail, sel, focusCol, scroll: scrolls.current, dragged, peek, ...(prevDrag === undefined ? {} : { prevDrag }) });
+  snapNow.current = () => writeMachineSnap({ v: 1, trail, sel, focusCol, scroll: scrolls.current, dragged, peek, ...(prevDrag === undefined ? {} : { prevDrag }), ...(previewTab ? { previewTab } : {}) });
   const save = useCallback(() => { try { localStorage.setItem(SNAP_KEY, snapNow.current()); } catch { /* a private window forgets; the finder still works */ } }, []);
-  useEffect(() => { save(); }, [trail, sel, focusCol, dragged, peek, prevDrag, save]);
+  useEffect(() => { save(); }, [trail, sel, focusCol, dragged, peek, prevDrag, previewTab, save]);
   const scrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onScrollTop = useCallback((path: string, top: number) => {
     scrolls.current[path] = top;
@@ -198,7 +201,11 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
         const at = f.kind === "dir" ? target : parentOf(target);
         if (!at) return;
         seen.current = at;
-        guarded("external", () => { setHist((h) => visit(h, at)); setTrail([at]); setSel([f.kind === "dir" ? externalPlace(at, wantedNow.current ?? null).name : basename(target)]); wantedNow.current = null; setFocusCol(0); setPeek(false); setSidePage(false); })();
+        const file = f.kind === "dir" ? externalPlace(at, wantedNow.current ?? null).name : basename(target);
+        wantedNow.current = null;
+        const move = folderTargetMove(trailRef.current[0]!, at, file);
+        if (move === "stay") return;
+        guarded("external", () => { setHist((h) => visit(h, move.dir)); setTrail([move.dir]); setSel([move.name]); setFocusCol(0); setPeek(false); setSidePage(false); })();
       }).catch(() => { /* not a place yet */ });
     }, 150);
     return () => { live = false; clearTimeout(t); };
@@ -450,7 +457,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
   const previewOnly = !previewInline && peek;
   const lastCol = columns[last];
   const preview = (
-    <QuickLook root={workspace} onEditing={(p) => { editing.current = p; }} path={deepest?.path ?? null} row={deepest?.row ?? null}
+    <QuickLook root={workspace} savedTab={previewTab} onTab={(path, tab) => setPreviewTab({ path, tab })} onEditing={(p) => { editing.current = p; }} path={deepest?.path ?? null} row={deepest?.row ?? null}
       rows={deepest && isFolder(deepest.row) ? (columns[deepest.col + 1]?.state?.rows ?? null) : null}
       onBench={onBench} onCopy={copy} onClose={guarded("preview-close", () => (wide ? setPrefs({ preview: false }) : setPeek(false)))} />
   );

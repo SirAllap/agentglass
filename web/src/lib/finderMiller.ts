@@ -383,3 +383,15 @@ export function externalPlace(start: string, want: { dir: string; name: string }
   const same = !!want && want.dir.replace(/\/+$/, "") === start.replace(/\/+$/, "");
   return { dir: start, name: same ? want!.name : null };
 }
+
+/**
+ * What a folder target does when it arrives. The path field echoes the folder
+ * the finder is already in back as a target (the palette keeps the text it was
+ * given), and on a reopen that echo arrives AFTER the remembered selection was
+ * restored: treating it as a move to a new folder cleared the file and its
+ * preview. A target that names the folder the finder is in changes nothing.
+ */
+export function folderTargetMove(current: string, at: string, file: string | null): "stay" | { dir: string; name: string | null } {
+  const same = current.replace(/\/+$/, "") === at.replace(/\/+$/, "");
+  return same && !file ? "stay" : { dir: at, name: file };
+}

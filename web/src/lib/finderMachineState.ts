@@ -27,6 +27,8 @@ export interface MachineSnap {
   peek: boolean;
   /** The preview panel's dragged width. */
   prevDrag?: number;
+  /** Which view of the selected file the preview was on (Rendered / Source / Tree...), for that file. */
+  previewTab?: { path: string; tab: string };
 }
 
 export const writeMachineSnap = (s: MachineSnap): string => JSON.stringify(s);
@@ -51,6 +53,7 @@ export function readMachineSnap(raw: string | null): MachineSnap | null {
     if (v && typeof v === "object") for (const [k, n] of Object.entries(v)) if (inChain.has(k) && num(n) && ok(n)) out[k] = n;
     return out;
   };
+  const pt = o.previewTab && typeof o.previewTab === "object" ? (o.previewTab as Record<string, unknown>) : null;
   const focusCol = num(o.focusCol) ? Math.min(trail.length - 1, Math.max(0, Math.round(o.focusCol))) : 0;
   return {
     v: 1, trail, sel, focusCol,
@@ -58,5 +61,6 @@ export function readMachineSnap(raw: string | null): MachineSnap | null {
     dragged: byFolder(o.dragged, (n) => n >= 100),
     peek: o.peek === true,
     ...(num(o.prevDrag) && o.prevDrag >= 240 ? { prevDrag: o.prevDrag } : {}),
+    ...(pt && typeof pt.path === "string" && pt.path.startsWith("/") && typeof pt.tab === "string" && pt.tab.length < 40 ? { previewTab: { path: pt.path, tab: pt.tab } } : {}),
   };
 }
