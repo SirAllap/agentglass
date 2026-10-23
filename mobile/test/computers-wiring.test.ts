@@ -4,7 +4,7 @@
  * assertion was broken on purpose and watched go red before it was trusted.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const root = join(import.meta.dir, "..");
@@ -13,7 +13,6 @@ const provider = read("src/state/host-context.tsx");
 const tabsLayout = read("app/(tabs)/_layout.tsx");
 const rootLayout = read("app/_layout.tsx");
 const pair = read("app/pair.tsx");
-const settings = read("app/(tabs)/settings.tsx");
 
 /** From `from` to the next `to` after it, or the test fails loudly. */
 function between(src: string, from: string, to: string): string {
@@ -67,9 +66,9 @@ describe("the provider", () => {
     expect(sw).toContain("leave()");
   });
   test("forgetting the one in use leaves; forgetting another does not", () => {
-    const f = between(provider, "const forgetComputer = useCallback(", "}, [leave]);");
+    const f = between(provider, "const forgetComputer = useCallback(", "}, [leave, commit]);");
     expect(f).toContain("removeHost(");
-    expect(f).toMatch(/if \(id === listRef\.current\.active\) leave\(\);/);
+    expect(f).toMatch(/if \(after\.active !== activeId\.current\) leave\(\);/);
   });
 });
 

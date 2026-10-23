@@ -39,6 +39,7 @@ import { openLive, type LiveHandle, type LiveState } from "../lib/live.ts";
 import { remember, shouldNotify, shouldNotifyTalk } from "../notifications/policy.ts";
 import { alertsDeliverable, raise } from "../notifications/notify.ts";
 import { alertTitle, nameOf } from "../model/computers.ts";
+import { learnName } from "./use-computer.ts";
 import { watchHost, type WatchEvents } from "./watch-host.ts";
 import { keepAliveRunning, loadKeepAlivePref, syncKeepAlive, wantKeepAlive } from "../notifications/keepAlive.ts";
 import { noteChecks, noteTalk } from "./pr-talk.ts";
@@ -134,7 +135,7 @@ type Bridge = {
   onWaiting: (id: string, n: number) => void;
   onGone: (id: string) => void;
   onAlert: (id: string, alert: AlertNote) => void;
-  onRevoked: (id: string) => void;
+  onRevoked: (id: string, token: string) => void;
 };
 
 /**
@@ -149,8 +150,9 @@ function Watcher({ host, bridge }: { host: HostEntry; bridge: Bridge }): null {
       onState: (state) => bridge.onState(host.id, state),
       onWaiting: (n) => bridge.onWaiting(host.id, n),
       onAlert: (alert) => bridge.onAlert(host.id, alert),
-      onRevoked: () => bridge.onRevoked(host.id),
+      onRevoked: () => bridge.onRevoked(host.id, host.token),
     };
+    void learnName(host); // the alert says which computer, not its address
     const stop = watchHost(host, events);
     return () => { stop(); bridge.onGone(host.id); };
     // The entry's name can change under a live socket; only its address and key
@@ -191,10 +193,18 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
      or a switch of `lastUsed` hands out a new object in `list`, and an effect
      keyed on that would tear down and rebuild the socket for nothing. */
   const active = list.hosts.find((h) => h.id === list.active) ?? null;
+  /** Which computer is in front, written WHEN the list is, not when the next
+   *  render happens: two taps inside one frame must each compare with the
+   *  answer of the one before. */
+  const activeId = useRef<string | null>(null);
+  const commit = useCallback((next: HostList): void => {
+    activeId.current = next.active;
+    setList(next);
+  }, []);
   const host = useMemo(
     () => active,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [active?.id, active?.origin, active?.token, active?.revoked],
+    [active?.id, active?.origin, active?.token, active?.revoked, active?.name],
   );
 
   /** What callbacks that outlive a render read, so a rename, a new computer or
@@ -236,13 +246,13 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
       const now = Date.now();
       if (shouldNotify(alert, { foreground: false, lastSeen: seen.current, now, hostId: id }).notify) buzz(from, alert, now);
     },
-    onRevoked: (id: string): void => {
-      void markRevoked(id).then((next) => {
-        setList(next);
+    onRevoked: (id: string, token: string): void => {
+      void markRevoked(id, token).then((next) => {
+        commit(next);
         if (!next.hosts.some((x) => !x.revoked)) syncKeepAlive(false);
-      });
+      }, () => { /* the keystore would not open; the next 401 asks again */ });
     },
-  }), [buzz]);
+  }), [buzz, commit]);
 
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {
@@ -253,7 +263,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
 
   useEffect(() => {
     void (async () => {
-      setList(await loadHosts());
+      commit(await loadHosts());
       setReady(true);
     })();
 
@@ -306,9 +316,16 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
       // phone keep their keys and their alerts. Forgetting here lost the only
       // record of what happened, and with one computer paired sent the phone
       // back to the first-run screen without a word.
-      const next = await markRevoked(which.id);
+      let next: HostList;
+      try {
+        // For the key that got the 401: a re-pair keeps the id, and a late 401
+        // for the old key must not mark the new one.
+        next = await markRevoked(which.id, which.token);
+      } catch {
+        return; // the keystore would not open; the next 401 asks again
+      }
       if (mine !== generation.current) return;
-      setList(next);
+      commit(next);
       setFleet(EMPTY);
       // Stopped explicitly, and only when nothing usable is left: a revoke is
       // usually noticed while the phone is in the background, where the
@@ -377,6 +394,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
       }),
     ));
 
+    if (activeId.current !== which.id) return; // the computer was left while this was in flight
     // One row per pull request however many checkouts answered with it, and
     // `mine` kept over `review` when both did — a pull request you own and were
     // also asked to review is a thing to fix, and the queue should say so.
@@ -385,7 +403,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
 
   /** Who the viewer is, for "is this mine". Asked once per host: it is the
    *  GitHub login the machine is signed in as and it does not change under us. */
-  const loadMe = useCallback(async (which: Host): Promise<void> => {
+  const loadMe = useCallback(async (which: HostEntry): Promise<void> => {
     const answer = await ask<{ providers: { id: string; detail?: string }[] }>(which, "/providers");
     if (!answer.ok) return;
     const github = (answer.value.providers ?? []).find((p) => p.id === "github");
@@ -393,7 +411,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
     // word of it. Parsed rather than plumbed because there is no other route to
     // it, and a wrong answer here only costs the "yours and broken" tagging.
     const login = /as\s+(\S+)/.exec(github?.detail ?? "")?.[1] ?? "";
-    if (login) setFleet((prev) => ({ ...prev, me: login }));
+    if (login && activeId.current === which.id) setFleet((prev) => ({ ...prev, me: login }));
   }, []);
 
   const refresh = useCallback((): void => {
@@ -544,7 +562,12 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
     // `forget()` already calls it directly; this is the backstop for every
     // OTHER way `host` can go null, so there is one place a stray keep-alive
     // cannot survive rather than one per caller.
-    if (!host || host.revoked) { syncKeepAlive(false); return; }
+    if (!host || host.revoked) {
+      // The computer in front being removed is not a reason to stop listening
+      // for the others: the service stays while any usable computer is left.
+      if (!listRef.current.hosts.some((h) => !h.revoked)) syncKeepAlive(false);
+      return;
+    }
     let timer: ReturnType<typeof setInterval> | null = null;
     // Set false in cleanup and checked before every syncKeepAlive call this
     // effect makes. `syncNow` awaits two promises with nothing to cancel them:
@@ -607,11 +630,12 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
   const forgetComputer = useCallback(async (id: string): Promise<void> => {
     const after = await removeHost(id);
     // Only the one in use takes data with it. Forgetting another computer
-    // leaves what is on screen alone.
-    if (id === listRef.current.active) leave();
+    // leaves what is on screen alone; forgetting the one in front hands over to
+    // the next most recent, which is a different computer.
+    if (after.active !== activeId.current) leave();
     if (!after.hosts.some((h) => !h.revoked)) syncKeepAlive(false);
-    setList(after);
-  }, [leave]);
+    commit(after);
+  }, [leave, commit]);
 
   /* Stable, and reading the list through a ref: the screens and the tap
      listener that hold these are not rebuilt on every fleet poll. */
@@ -622,23 +646,23 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
       generation.current++;
       setFleet(EMPTY);
       // Another computer than the one on screen: its colours do not carry over.
-      if (after.active !== listRef.current.active) setDeskTheme(null);
-      setList(after);
+      if (after.active !== activeId.current) setDeskTheme(null);
+      commit(after);
     },
     forget: async (): Promise<void> => {
-      if (listRef.current.active) await forgetComputer(listRef.current.active);
+      if (activeId.current) await forgetComputer(activeId.current);
     },
     switchTo: async (id: string): Promise<void> => {
-      if (id === listRef.current.active) return;
+      if (id === activeId.current) return;
       const after = await setActive(id);
-      leave();
-      setList(after);
+      if (after.active !== activeId.current) leave();
+      commit(after);
     },
     rename: async (id: string, name: string): Promise<void> => {
-      setList(await renameHost(id, name));
+      commit(await renameHost(id, name));
     },
     forgetComputer,
-  }), [leave, forgetComputer]);
+  }), [leave, forgetComputer, commit]);
 
   const value = useMemo<Ctx>(() => ({
     host,

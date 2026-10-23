@@ -189,7 +189,7 @@ describe("host-context.tsx", () => {
     // Broken on purpose: an unconditional syncKeepAlive(false) in
     // forgetComputer silences the alerts of every computer still paired the
     // moment one of them is forgotten.
-    const block = hostContext.match(/const forgetComputer = useCallback[\s\S]*?\}, \[leave\]\);/)?.[0] ?? "";
+    const block = hostContext.match(/const forgetComputer = useCallback[\s\S]*?\}, \[leave, commit\]\);/)?.[0] ?? "";
     expect(block).toMatch(/if \(!after\.hosts\.some\(\(h\) => !h\.revoked\)\) syncKeepAlive\(false\);/);
   });
 
@@ -214,7 +214,7 @@ describe("host-context.tsx", () => {
     // the bug above's OTHER path — whatever set `host` to null (forget(),
     // revoke, anything later) left the effect's own cleanup as the only thing
     // that could stop it, and that cleanup does not run syncKeepAlive at all.
-    expect(hostContext).toMatch(/if \(!host \|\| host\.revoked\) \{ syncKeepAlive\(false\); return; \}/);
+    expect(hostContext).toMatch(/if \(!host \|\| host\.revoked\) \{\s*(\/\/[^\n]*\s*)*if \(!listRef\.current\.hosts\.some\(\(h\) => !h\.revoked\)\) syncKeepAlive\(false\);\s*return;/);
   });
 
   test("syncNow checks an `alive` flag before acting, cleared on teardown", () => {

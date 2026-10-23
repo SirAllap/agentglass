@@ -14,7 +14,9 @@
 
 export interface AlertRoute {
   pathname: "/terminal";
-  params?: { pane: string };
+  /** `host` is the computer the pane is on, when the alert said; the terminal
+   *  takes the pane only from that computer's own window list. */
+  params?: { pane: string; host?: string };
 }
 
 /** tmux pane ids are `%` and digits. Anything else is not one. */
@@ -33,6 +35,9 @@ export function alertRoute(data: unknown): AlertRoute | null {
   if (typeof data !== "object" || data === null) return null;
   const d = data as Record<string, unknown>;
   if (d.kind !== "alert") return null;
-  if (typeof d.pane === "string" && PANE.test(d.pane)) return { pathname: "/terminal", params: { pane: d.pane } };
+  if (typeof d.pane === "string" && PANE.test(d.pane)) {
+    const host = alertHost(data);
+    return { pathname: "/terminal", params: host ? { pane: d.pane, host } : { pane: d.pane } };
+  }
   return { pathname: "/terminal" };
 }

@@ -373,6 +373,6 @@ describe("the desk does not outlive its computer", () => {
     expect(at).toBeGreaterThan(-1);
     expect(src.slice(at, src.indexOf("}, []);", at))).toContain("setDeskTheme(null)");
     const forget = src.indexOf("const forgetComputer = useCallback(");
-    expect(src.slice(forget, src.indexOf("}, [leave]);", forget))).toContain("leave()");
+    expect(src.slice(forget, src.indexOf("}, [leave, commit]);", forget))).toContain("leave()");
   });
 });

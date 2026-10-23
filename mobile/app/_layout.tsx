@@ -53,12 +53,19 @@ function Gate(): React.ReactNode {
   useEffect(() => {
     if (!ready || !host) return;
     return watchAlertTaps(async (data) => {
-      const to = alertRoute(data);
+      let to = alertRoute(data);
       const hostId = alertHost(data);
-      // The computer the alert is about, before the pane on it: a pane id is
-      // only a name on one tmux server. An id not on this phone's list is
-      // dropped, never switched to.
-      if (hostId && hostId !== host.id && tap.current.hosts.some((h) => h.id === hostId)) await tap.current.switchTo(hostId);
+      if (hostId) {
+        // The computer the alert is about, before the pane on it: a pane id is
+        // only a name on one tmux server. One that is gone or removed has no
+        // pane to open on any other computer, so the tap lands on the terminal
+        // without it; and a switch that fails does the same.
+        const there = tap.current.hosts.some((h) => h.id === hostId && !h.revoked);
+        if (!there) to = { pathname: "/terminal" };
+        else if (hostId !== host.id) {
+          try { await tap.current.switchTo(hostId); } catch { to = { pathname: "/terminal" }; }
+        }
+      }
       if (to) router.navigate(to);
     });
   }, [ready, host, router]);

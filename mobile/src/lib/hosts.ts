@@ -93,6 +93,12 @@ function safeParse(raw: string): unknown {
   try { return JSON.parse(raw); } catch { return null; }
 }
 
+function hashOf(text: string): string {
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
 function newId(): string {
   // crypto, not Math.random: the id is no secret, but a scanner rightly calls a
   // PRNG the wrong tool for an identifier. rng.ts (loaded by the root layout)
@@ -137,16 +143,10 @@ function parseList(raw: string): HostList | null {
   }
 }
 
-async function get(key: string): Promise<string | null> {
-  try {
-    return await keystore().getItemAsync(key);
-  } catch {
-    // A keystore that will not open is not an empty one, but the app can do
-    // nothing different about it, and the pairing screen is the right place to
-    // land from both.
-    return null;
-  }
-}
+/** Throws when the keystore will not open. That is NOT an empty keystore: a
+ *  change made from "empty" would write a one-entry list over the tokens of the
+ *  other four, so only `loadHosts` (display) turns it into an empty list. */
+const get = (key: string): Promise<string | null> => keystore().getItemAsync(key);
 
 async function write(list: HostList): Promise<void> {
   const body = JSON.stringify({ v: 1, active: list.active, hosts: list.hosts });
@@ -164,7 +164,10 @@ async function read(): Promise<HostList> {
   }
   // `pairedAt` doubles as the first lastUsed, so the order after a migration
   // is deterministic.
-  const legacy = legacyRaw ? entryFrom(safeParse(legacyRaw), newId()) : null;
+  const parsed = legacyRaw ? safeParse(legacyRaw) as { origin?: string } | null : null;
+  // The id comes from the address while the old key is still the only copy, so
+  // it is the same on every load until the write lands, and Forget can find it.
+  const legacy = parsed ? entryFrom(parsed, `legacy-${hashOf(parsed.origin ?? "")}`) : null;
   if (!legacy) return EMPTY;
   const list = tidy([legacy], legacy.id);
   try {
@@ -190,7 +193,8 @@ function serial<T>(job: () => Promise<T>): Promise<T> {
 
 /** The list as stored, migrating an old install on the way. */
 export function loadHosts(): Promise<HostList> {
-  return serial(read);
+  // For display: a keystore that will not open shows as nothing paired.
+  return serial(read).catch(() => EMPTY);
 }
 
 /** Edit the list under the queue. `edit` returns null for "nothing to change",
@@ -269,11 +273,13 @@ export function removeHost(id: string): Promise<HostList> {
   });
 }
 
-/** The computer answered 401. Marks the entry; the other computers are not
- *  touched, which is why this is not a forget. Marking twice keeps the first
- *  time and writes nothing. */
-export const markRevoked = (id: string): Promise<HostList> =>
-  editOne(id, (t) => (t.revoked ? null : { ...t, revoked: Date.now() }));
+/** The computer answered 401 to `token`. Marks the entry; the other computers
+ *  are not touched, which is why this is not a forget. Marking twice keeps the
+ *  first time and writes nothing. */
+export const markRevoked = (id: string, token: string): Promise<HostList> =>
+  // Only for the key that got the 401: a re-pair keeps the id, and a late 401
+  // for the old key must not mark the new one removed.
+  editOne(id, (t) => (t.revoked || t.token !== token ? null : { ...t, revoked: Date.now() }));
 
 /** A key for state that belongs to one computer: two of them can both have a
  *  checkout at /home/x/orbit, and a tick made on one must not show on the other. */

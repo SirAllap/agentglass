@@ -42,6 +42,7 @@ import { randomnessReady } from "../src/lib/rng.ts";
 import type { Host } from "../src/lib/host.ts";
 import { useAgentglass } from "../src/state/host-context.tsx";
 import { needsAddress } from "../src/model/computers.ts";
+import { MAX_HOSTS } from "../src/lib/hosts.ts";
 import { Btn, Field, Note } from "../src/ui.tsx";
 import { Glyph } from "../src/nav/glyphs.tsx";
 import { BackIcon } from "../src/nav/icons.tsx";
@@ -292,6 +293,12 @@ export default function PairScreen(): React.ReactNode {
      */
     if (where !== origin) setOrigin(where);
     if (!/^\d{6}$/.test(code.trim())) { fail("The code is the six digits on the computer's screen."); return; }
+    // Before the handshake, not after: by then the computer has issued a device
+    // and spent the ticket, and the failure would read as "expired".
+    if (hosts.length >= MAX_HOSTS && !hosts.some((h) => normalizeOrigin(h.origin) === where)) {
+      fail(`This phone can watch at most ${MAX_HOSTS} computers. Forget one to add another.`);
+      return;
+    }
     if (!randomnessReady()) {
       // Said before anything is sent, not after: a key that cannot be
       // generated is not a thing to discover once somebody has typed a code.
@@ -343,7 +350,7 @@ export default function PairScreen(): React.ReactNode {
     setOrigin(where);
     setBusy(false);
     setStep("waiting");
-  }, [origin, code, ticket, label, fail]);
+  }, [origin, code, ticket, label, fail, hosts]);
 
   /*
    * The sixth digit is the end of the form, so it is the end of the typing too.
@@ -601,7 +608,7 @@ export default function PairScreen(): React.ReactNode {
                 <Field
                   label="Link or code from the computer"
                   value={ticket}
-                  onChangeText={(text) => { if (!absorb(text)) setTicket(text); }}
+                  onChangeText={(text) => { if (!absorb(text)) { setTicket(text); setFromLink(false); } }}
                   placeholder="paste the link, or type the code"
                   kind="code"
                 />

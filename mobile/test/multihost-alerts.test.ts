@@ -49,7 +49,7 @@ describe("what the notification says and carries", () => {
     expect(alertHost(null)).toBeNull();
   });
   test("the route is still the pane's, whichever computer it is on", () => {
-    expect(alertRoute({ kind: "alert", pane: "%7", hostId: "a" })).toEqual({ pathname: "/terminal", params: { pane: "%7" } });
+    expect(alertRoute({ kind: "alert", pane: "%7", hostId: "a" })).toEqual({ pathname: "/terminal", params: { pane: "%7", host: "a" } });
   });
   test("raise() puts the id in the notification's data", () => {
     const src = readFileSync(join(import.meta.dir, "../src/notifications/notify.ts"), "utf8");
@@ -68,14 +68,14 @@ describe("where the app handles a tap", () => {
     expect(tap.indexOf("switchTo(")).toBeLessThan(tap.indexOf("router.navigate"));
   });
   test("a computer that is not on the list is ignored, not switched to", () => {
-    expect(root).toMatch(/hosts\.some\(\(h\) => h\.id === (hostId|id)\)/);
+    expect(root).toMatch(/hosts\.some\(\(h\) => h\.id === hostId && !h\.revoked\)/);
   });
 });
 
 describe("the provider's sockets for the computers not in front", () => {
   const src = readFileSync(join(import.meta.dir, "../src/state/host-context.tsx"), "utf8");
   const watcher = src.slice(src.indexOf("function Watcher("), src.indexOf("export function HostProvider"));
-  const bridge = src.slice(src.indexOf("const bridge = useMemo"), src.indexOf("}), [buzz]);"));
+  const bridge = src.slice(src.indexOf("const bridge = useMemo"), src.indexOf("}), [buzz, commit]);"));
   test("start no timer of their own", () => {
     // Broken on purpose: a setInterval here is N computers asking on a clock,
     // for a badge. The only clocks stay in the effects keyed on `host`.

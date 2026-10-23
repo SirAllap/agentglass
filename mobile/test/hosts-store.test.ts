@@ -71,6 +71,16 @@ describe("migrating the single stored record", () => {
     expect(saved.hosts[0].token).toBe("token-1");
   });
 
+  test("while it keeps failing, the migrated computer keeps one id between loads", async () => {
+    // Broken on purpose: a new id per load makes Forget look for an id that no
+    // longer exists, and the tap does nothing.
+    store.set(OLD, JSON.stringify(rec(1)));
+    fault.write = NEW;
+    const first = await hosts.loadHosts();
+    const second = await hosts.loadHosts();
+    expect(second.hosts[0]!.id).toBe(first.hosts[0]!.id);
+  });
+
   test("a failed write leaves the old key where it was", async () => {
     // Broken on purpose: deleting the old key before the new one reads back is
     // exactly how a full keystore turns an upgrade into a re-pair.
@@ -152,6 +162,36 @@ describe("a keystore that cannot be trusted", () => {
     fault.write = NEW;
     await expect(hosts.addHost(rec(2))).rejects.toThrow();
     expect(store.get(NEW)).toBe(before);
+  });
+});
+
+describe("a keystore that hiccups once", () => {
+  test("is not read as an empty list by a change, so nothing is written over the others", async () => {
+    // Broken on purpose: a read that fails and answers "empty" lets the next
+    // add write a one-entry list over four good tokens.
+    for (let n = 1; n <= 3; n++) await hosts.addHost(rec(n));
+    const before = store.get(NEW);
+    fault.read = true;
+    await expect(hosts.addHost(rec(4))).rejects.toThrow();
+    fault.read = false;
+    expect(store.get(NEW)).toBe(before);
+    expect((await hosts.loadHosts()).hosts.length).toBe(3);
+  });
+  test("a revoke mark during it is refused, not turned into an empty list", async () => {
+    const a = (await hosts.addHost(rec(1))).hosts[0]!.id;
+    fault.read = true;
+    await expect(hosts.markRevoked(a, "token-1")).rejects.toThrow();
+  });
+});
+
+describe("a revoke that belongs to an older key", () => {
+  test("does not mark the entry paired again since", async () => {
+    // Broken on purpose: the same id survives a re-pair, so a 401 for the old
+    // key marked the fresh, working one as removed.
+    const a = (await hosts.addHost(rec(1))).hosts[0]!.id;
+    await hosts.addHost({ ...rec(1), token: "fresh" });
+    const list = await hosts.markRevoked(a, "token-1");
+    expect(list.hosts[0]!.revoked).toBeUndefined();
   });
 });
 
@@ -276,7 +316,7 @@ describe("a computer that took this phone off its list", () => {
     // "Removed at the computer" row that says what happened.
     const a = (await hosts.addHost(rec(1))).hosts[0]!.id;
     await hosts.addHost(rec(2));
-    const list = await hosts.markRevoked(a);
+    const list = await hosts.markRevoked(a, "token-1");
     expect(list.hosts.length).toBe(2);
     expect(list.hosts.find((h) => h.id === a)!.revoked).toBeGreaterThan(0);
     expect(list.hosts.find((h) => h.id !== a)!.revoked).toBeUndefined();
@@ -284,13 +324,13 @@ describe("a computer that took this phone off its list", () => {
 
   test("is still there after a reload", async () => {
     const a = (await hosts.addHost(rec(1))).hosts[0]!.id;
-    await hosts.markRevoked(a);
+    await hosts.markRevoked(a, "token-1");
     expect((await hosts.loadHosts()).hosts[0]!.revoked).toBeGreaterThan(0);
   });
 
   test("pairing it again clears the mark and keeps the entry", async () => {
     const a = (await hosts.addHost(rec(1))).hosts[0]!.id;
-    await hosts.markRevoked(a);
+    await hosts.markRevoked(a, "token-1");
     const list = await hosts.addHost({ ...rec(1), token: "fresh" });
     expect(list.hosts.length).toBe(1);
     expect(list.hosts[0]!.id).toBe(a);
@@ -299,10 +339,10 @@ describe("a computer that took this phone off its list", () => {
 
   test("marking one that is gone, or already marked, writes nothing", async () => {
     const a = (await hosts.addHost(rec(1))).hosts[0]!.id;
-    await hosts.markRevoked(a);
+    await hosts.markRevoked(a, "token-1");
     const before = store.get(NEW);
-    await hosts.markRevoked(a);
-    await hosts.markRevoked("nope");
+    await hosts.markRevoked(a, "token-1");
+    await hosts.markRevoked("nope", "x");
     expect(store.get(NEW)).toBe(before);
   });
 });
