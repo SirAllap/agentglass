@@ -260,7 +260,14 @@ describe("the OpenCode lock, as OpenCode merged it", () => {
  * passed for the wrong reason. With the dirs made, 24 of 24 there and here.
  */
 const OPENCODE = Bun.which("opencode");
-describe.skipIf(!OPENCODE)("the OpenCode lock, checked by OpenCode itself when a worker starts", () => {
+/* The check asks `opencode debug agent <name>`, which OpenCode 1.x has and 2.x
+   dropped (2.0.32: `Unknown subcommand "agent"`, and its `debug agents` does
+   not show the lock's rules either). The product fails closed on such a build,
+   so a worker is refused there; what cannot be run is this suite, and it says
+   so by name instead of failing. */
+const OPENCODE_CHECKABLE = !!OPENCODE && (() => { const r = Bun.spawnSync([OPENCODE, "debug", "agent", "--help"], { timeout: 20_000 }); return `${r.stdout}${r.stderr}`.includes("debug agent <name>"); })();
+if (OPENCODE && !OPENCODE_CHECKABLE) console.warn(`skipping the OpenCode lock suite: ${OPENCODE} has no \`debug agent\` (OpenCode 2.x); put a 1.x OpenCode first on PATH to run it`);
+describe.skipIf(!OPENCODE_CHECKABLE)("the OpenCode lock, checked by OpenCode itself when a worker starts", () => {
   const step = story();
   const ROOT = join(tmpdir(), `agx-oc-lock-${process.pid}`);
   const scratch = {
