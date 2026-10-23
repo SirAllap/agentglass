@@ -3023,11 +3023,14 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-isl { position: absolute; left: 12px; right: 12px; top: 12px; bottom: 12px; z-index: 18; color: #f2f0f7; background: rgba(22, 19, 31, .84); border-radius: 20px;
   clip-path: inset(0px calc(50% - 52px) calc(100% - 30px) calc(50% - 52px) round 15px);
   transition: clip-path 380ms cubic-bezier(0.32, 0.72, 0, 1), background 220ms ease, top 300ms cubic-bezier(0.32, 0.72, 0, 1); font-size: 12px; }
-.agx-isl:hover, .agx-isl:focus-within { clip-path: inset(0px calc(50% - 210px) calc(100% - 36px) calc(50% - 210px) round 18px); background: rgba(22, 19, 31, .96); transition-duration: 300ms; }
-.agx-isl.is-yours:hover, .agx-isl.is-yours:focus-within { clip-path: inset(0px calc(50% - 300px) calc(100% - 40px) calc(50% - 300px) round 20px); }
-.agx-isl.is-tucked:not(:hover):not(:focus-within) { clip-path: inset(0px calc(50% - 18px) calc(100% - 14px) calc(50% - 18px) round 0px 0px 8px 8px); background: rgba(22, 19, 31, .55); }
+.agx-isl:not(.is-open):hover, .agx-isl:not(.is-open):focus-within { clip-path: inset(0px calc(50% - 210px) calc(100% - 36px) calc(50% - 210px) round 18px); background: rgba(22, 19, 31, .96); transition-duration: 300ms; }
+.agx-isl.is-yours:not(.is-open):hover, .agx-isl.is-yours:not(.is-open):focus-within { clip-path: inset(0px calc(50% - 300px) calc(100% - 40px) calc(50% - 300px) round 20px); }
+.agx-isl.is-tucked:not(.is-open):not(:hover):not(:focus-within) { clip-path: inset(0px calc(50% - 18px) calc(100% - 14px) calc(50% - 18px) round 0px 0px 8px 8px); background: rgba(22, 19, 31, .55); }
 .agx-isl.is-tucked { top: 0; }
-.agx-isl.is-open { clip-path: inset(0px 0px 0px 0px round 20px); background: #16131f; z-index: 30; animation: agx-isl-bg 320ms ease-out; }
+/* Open beats every size the pill takes on hover or when tucked: a hover rule
+   that won here shrank the open overview under the pointer, which then left
+   it, which grew it again — a loop (measured on the installed app, tab yours). */
+.agx-isl.is-open { clip-path: inset(0px 0px 0px 0px round 20px) !important; background: #16131f !important; top: 12px !important; z-index: 30; animation: agx-isl-bg 320ms ease-out; }
 /* the backdrop fades in behind the page's copy; it never grows out of the pill */
 @keyframes agx-isl-bg { from { background-color: rgba(22, 19, 31, 0); } }
 /* a change of size that must not animate: the overview appears and goes in one frame */
