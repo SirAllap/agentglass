@@ -158,7 +158,8 @@ export function tileChecks(e: EngineReadiness | null, now: number, report: TileC
   const t = e.answers;
   return [
     { state: e.found ? "ok" : "no", label: "Installed", value: e.path ?? "Not on this machine" },
-    { state: a.signedIn === true ? "ok" : a.signedIn === false ? "warn" : "no", label: "Signed in", value: accountText(e).replace(/^Signed in with /, "") },
+    // A warning only where the card itself says Needs sign-in: an engine that answers without an account is "Ready", and a triangle inside a Ready card asks the owner which of the two is true.
+    { state: a.signedIn === true ? "ok" : a.signedIn === false && engineState(e) === "signin" ? "warn" : "no", label: "Signed in", value: accountText(e).replace(/^Signed in with /, "") },
     report,
     { state: roles ? "ok" : "no", label: "Can be used as", value: roles || "Not yet" },
     t.state === "ok" && t.at ? { state: "ok", label: "Last test", value: `${Math.max(1, Math.round((t.ms ?? 0) / 1000))} s, ${agoWords(t.at, now)}` }

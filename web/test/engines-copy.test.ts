@@ -215,7 +215,11 @@ describe("the tiles' words", () => {
     expect(reportingCheck({ found: false, connected: false, seenAt: null }, true, NOW).state).toBe("no");
     expect(reportingCheck(null, false, NOW).value).toBe("…");
     const rows = tileChecks(ready({ account: { signedIn: false } }), NOW, rep);
-    expect(rows.map((r) => [r.label, r.state])).toEqual([["Installed", "ok"], ["Signed in", "warn"], ["Reports here", "ok"], ["Can be used as", "ok"], ["Last test", "no"]]);
+    // Not signed in, and the engine does not need it: a neutral dash, because the card says Ready.
+    expect(rows.map((r) => [r.label, r.state])).toEqual([["Installed", "ok"], ["Signed in", "no"], ["Reports here", "ok"], ["Can be used as", "ok"], ["Last test", "no"]]);
+    // Not signed in and it does: the same row is the warning the card's Needs sign-in badge points at.
+    const need = tileChecks(ready({ account: { signedIn: false }, missing: [{ kind: "login", what: "Not signed in to Orbit.", command: "orbit login" }] }), NOW, rep);
+    expect(need[1]!.state).toBe("warn");
     expect(rows[3]!.value).toBe("worker");
     expect(tileChecks(ready({ answers: { state: "ok", at: NOW - 5000, ms: 2400 } }), NOW, rep)[4]).toEqual({ state: "ok", label: "Last test", value: "2 s, just now" });
     expect(tileChecks(ready({ answers: { state: "failed", error: "No answer" } }), NOW, rep)[4]!.state).toBe("warn");
