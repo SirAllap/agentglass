@@ -37,7 +37,7 @@ export function CustomizeDialog({ paths, names, isDir, onClose }: { paths: reado
           <button key={c.id} aria-label={c.id} aria-pressed={style.color === c.hex} className="agx-btn rounded-full" style={{ ...swatch(style.color === c.hex), background: c.hex }} onClick={() => apply(pick(style, { color: c.hex }))} />
         ))}
         <button aria-label="Another color" className="agx-btn rounded-full grid place-items-center" style={{ ...swatch(false), color: "var(--text3)" }} onClick={() => hex.current?.click()}><StrataIcon set="act" name="plus" size={ICON.sm} /></button>
-        <input ref={hex} type="color" aria-label="Pick a color" className="sr-only" value={style.color ?? "#0090ff"} onChange={(e) => apply(pick(style, { color: e.target.value }))} />
+        <input ref={hex} type="color" aria-label="Pick a color" className="sr-only" value={style.color ?? STYLE_COLORS.find((c) => c.id === "blue")!.hex} onChange={(e) => apply(pick(style, { color: e.target.value }))} />
       </div>
       <div className="text-[10px] uppercase tracking-[0.1em] mt-3 mb-1.5" style={{ color: "var(--text3)" }}>Icon</div>
       <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(8, minmax(0, 1fr))" }}>
