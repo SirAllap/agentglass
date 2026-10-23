@@ -3023,7 +3023,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-isl { position: absolute; left: 12px; right: 12px; top: 12px; bottom: 12px; z-index: 18; color: #f2f0f7; background: rgba(22, 19, 31, .84); border-radius: 20px;
   clip-path: inset(0px calc(50% - 52px) calc(100% - 30px) calc(50% - 52px) round 15px);
   transition: clip-path 380ms cubic-bezier(0.32, 0.72, 0, 1), background 220ms ease, top 300ms cubic-bezier(0.32, 0.72, 0, 1); font-size: 12px; }
-.agx-isl:hover, .agx-isl:focus-within { clip-path: inset(0px calc(50% - 190px) calc(100% - 36px) calc(50% - 190px) round 18px); background: rgba(22, 19, 31, .96); transition-duration: 300ms; }
+.agx-isl:hover, .agx-isl:focus-within { clip-path: inset(0px calc(50% - 210px) calc(100% - 36px) calc(50% - 210px) round 18px); background: rgba(22, 19, 31, .96); transition-duration: 300ms; }
 .agx-isl.is-yours:hover, .agx-isl.is-yours:focus-within { clip-path: inset(0px calc(50% - 300px) calc(100% - 40px) calc(50% - 300px) round 20px); }
 .agx-isl.is-tucked:not(:hover):not(:focus-within) { clip-path: inset(0px calc(50% - 18px) calc(100% - 14px) calc(50% - 18px) round 0px 0px 8px 8px); background: rgba(22, 19, 31, .55); }
 .agx-isl.is-tucked { top: 0; }
@@ -3043,9 +3043,12 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 /* the pill's two faces: a status line while an agent drives, the person's bar otherwise */
 .agx-isl-status, .agx-isl-bar { box-sizing: border-box; position: absolute; left: 50%; top: 0; transform: translateX(-50%); display: flex; align-items: center; opacity: 0; transition: opacity 120ms ease-out; }
 .agx-isl:hover .agx-isl-status, .agx-isl:focus-within .agx-isl-status, .agx-isl:hover .agx-isl-bar, .agx-isl:focus-within .agx-isl-bar { opacity: 1; transition: opacity 180ms ease-out 90ms; }
-.agx-isl-status { width: 380px; height: 36px; gap: 8px; padding: 0 10px 0 12px; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+.agx-isl-status { width: 420px; height: 36px; gap: 8px; padding: 0 10px 0 12px; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; text-align: left; }
 .agx-isl-title { flex: 1; min-width: 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agx-isl-doing { display: flex; align-items: center; gap: 6px; max-width: 55%; font-size: 11px; color: #c4b5fd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* the text is its own box so it can end in an ellipsis; a flex row cannot. The count keeps an 8px gap from it. */
+.agx-isl-doing { display: flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0; max-width: 58%; font-size: 11px; color: #c4b5fd; }
+.agx-isl-doing-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agx-isl-status .agx-isl-num { flex: none; margin-left: 2px; }
 .agx-isl-bar { width: 600px; height: 40px; gap: 2px; padding: 0 8px; }
 .agx-isl-ib { flex: none; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 7px; border: 0; background: none; color: #cfcad9; cursor: pointer; }
 .agx-isl-ib svg { width: 16px; height: 16px; }

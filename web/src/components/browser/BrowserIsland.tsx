@@ -188,7 +188,7 @@ export function BrowserIsland(p: IslandProps) {
               <button type="button" className="agx-isl-status" aria-label="Show every tab" onClick={show}>
                 <LivingMark size={17} style={{ color: "#a78bfa" }} />
                 <span className="agx-isl-title">{active?.title || (active ? host(active.url) : "")}</span>
-                <span className="agx-isl-doing"><span className={"agx-isl-dot " + dot} />{act!.agent} · {p.doing || "working"}</span>
+                <span className="agx-isl-doing"><span className={"agx-isl-dot " + dot} /><span className="agx-isl-doing-t">{act!.agent} · {p.doing || "working"}</span></span>
                 <span className="agx-isl-num">{tabs.length}</span>
               </button>
             )}
