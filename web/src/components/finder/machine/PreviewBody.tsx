@@ -153,7 +153,7 @@ export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, o
         </div>
       )}
       <div className="flex-1 min-h-0 flex flex-col agx-scroll overflow-y-auto overflow-x-hidden px-4 py-3 text-[12px]">
-        <div ref={bodyRef} className="flex-1 min-w-0 min-h-0 flex flex-col" style={wrap ? undefined : { overflowX: "auto" }}>{body}</div>
+        <div ref={bodyRef} data-selectable className="flex-1 min-w-0 min-h-0 flex flex-col" style={wrap ? undefined : { overflowX: "auto" }}>{body}</div>
       </div>
     </>
   );

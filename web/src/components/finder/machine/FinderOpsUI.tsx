@@ -55,7 +55,7 @@ export function ContextMenu({ at, head, groups, onPick, onClose }: {
   return (
     <Portal z={LAYER.menu}>
       <div className="fixed inset-0" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
-      <div ref={el} role="menu" aria-label="File menu" className="fixed rounded-lg text-[12px] shadow-2xl py-1.5"
+      <div ref={el} role="menu" data-finder-menu aria-label="File menu" className="fixed rounded-lg text-[12px] shadow-2xl py-1.5"
         style={{ width: 310, left: pos?.left ?? -9999, top: pos?.top ?? -9999, background: "var(--surface-card)", border: EDGE, color: "var(--text)", maxHeight: "calc(100vh - 16px)", overflowY: "auto" }}>
         {head && (
           <div className="px-3.5 pt-1.5 pb-2" style={{ borderBottom: LINE }}>
@@ -80,7 +80,7 @@ export function ContextMenu({ at, head, groups, onPick, onClose }: {
         ))}
       </div>
       {sub && (
-        <div role="menu" aria-label="Actions" className="fixed rounded-lg text-[12px] shadow-2xl py-1.5"
+        <div role="menu" data-finder-menu aria-label="Actions" className="fixed rounded-lg text-[12px] shadow-2xl py-1.5"
           style={{ width: 260, ...subPlace(sub.rect, 260, sub.items.length * 28 + 12), background: "var(--surface-card)", border: EDGE, color: "var(--text)", maxHeight: "calc(100vh - 16px)", overflowY: "auto" }}>
           {sub.items.map((i) => (
             <button key={i.action ?? i.id} role="menuitem" disabled={i.disabled} title={i.disabled ? i.label : undefined} onClick={() => onPick(i)}

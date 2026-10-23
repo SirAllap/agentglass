@@ -2850,3 +2850,9 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-strata-md th { user-select: none; }
 /* A table never breaks a word to fit: it keeps its words whole and scrolls inside its own box. */
 .agx-strata-md td, .agx-strata-md th { overflow-wrap: normal; word-break: normal; }
+
+/* Strata's chrome is never selectable text: a click on a Devices row painted its label blue. One rule
+   for the finder and the menus it portals out of it; a file's text, inputs and the editor opt back in. */
+[data-machine-finder], [data-finder-menu] { user-select: none; -webkit-user-select: none; }
+[data-machine-finder] :is(input, textarea, [contenteditable], [data-selectable], [data-selectable] *, .xterm, .xterm *) { user-select: text; -webkit-user-select: text; }
+[data-machine-finder] .agx-strata-md th { user-select: none; -webkit-user-select: none; }

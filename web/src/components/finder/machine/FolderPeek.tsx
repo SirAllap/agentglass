@@ -55,7 +55,7 @@ function PeekCard({ at, hidden }: { at: Open; hidden: boolean }) {
   if (!peek) return null;
   return (
     <Portal z={LAYER.menu}>
-      <div ref={el} role="tooltip" aria-label="Folder peek" className="fixed rounded-lg text-[12px] shadow-2xl pointer-events-none overflow-hidden"
+      <div ref={el} role="tooltip" data-finder-menu aria-label="Folder peek" className="fixed rounded-lg text-[12px] shadow-2xl pointer-events-none overflow-hidden"
         style={{ width: PEEK.width, left: pos?.left ?? -9999, top: pos?.top ?? -9999, background: "var(--surface-card)", border: EDGE, color: "var(--text)", transition: "opacity 150ms", opacity: pos ? 1 : 0 }}>
         <div className="flex items-center gap-2 px-3 truncate" style={{ minHeight: 30, borderBottom: LINE, color: "var(--text3)", fontWeight: 600 }}>
           <span className="truncate flex-1">{at.name}</span><span className="tabular-nums text-[11px] shrink-0">{peek.count}</span>
