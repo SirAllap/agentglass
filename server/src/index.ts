@@ -5415,6 +5415,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      * every phone paired.
      */
     if (pathname === "/pair/forget-all" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
       if (!atMachine()) return notHere();
       if (!mayReleaseAHold(req, caller)) return heldPartyBlocked();
       const ids = revokeAllDevices();
