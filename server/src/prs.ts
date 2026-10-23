@@ -16,7 +16,7 @@
 //    named separately from the rest.
 import { ttlRead, forgetReads } from "./ttlread.ts";
 import { singleFlight } from "./singleflight.ts";
-import { heldUntil, noteBody, noteHeaders, noteLimitedBlind, rateView, LIMIT_TEXT } from "./ghlimit.ts";
+import { heldUntil, noteBody, noteField, noteHeaders, noteLimitedBlind, rateView, LIMIT_TEXT } from "./ghlimit.ts";
 import { learnFromRead } from "./checkRuns.ts";
 import { failingTests, refreshFailingTests, type LensSources, type MainRun, type MainJob } from "./ciFailureLens.ts";
 import { readCheckFailures, cachedSummaries, type LogRead, type AnnotationsRead, type OutputRead, type CheckAnnotation } from "./ciFailures.ts";
@@ -88,6 +88,23 @@ export interface GhResult { code: number; stdout: string; stderr: string }
  * agentglass that never answers again — the same failure mode as the sync git
  * spawns that used to freeze the terminal socket.
  */
+/* A hold taken from a blind failure (the `gh` path prints no headers) lasts to
+   the hourly reset even when the budget is nearly full. `api rate_limit` is
+   free, so while held it is asked at most every 30 s, and a GraphQL budget with
+   requests left lifts the hold. Ceiling: a real secondary limit with budget left
+   is lifted too; the next 403 puts it back. */
+let budgetAskedAt = 0;
+async function budgetIsBack(): Promise<boolean> {
+  const now = Date.now();
+  if (now - budgetAskedAt < 30_000) return false;
+  budgetAskedAt = now;
+  const r = await ghRateLimit();
+  const g = r.budgets?.find((b) => b.id === "graphql");
+  if (!g || g.remaining <= 0) return false;
+  noteField({ limit: g.limit, remaining: g.remaining, resetAt: new Date(g.reset * 1000).toISOString() });
+  return true;
+}
+
 export async function gh(args: string[], cwd?: string, stdin?: string): Promise<GhResult> {
   const bin = ghBin();
   if (!bin) return { code: 127, stdout: "", stderr: "gh not found" };
@@ -96,7 +113,7 @@ export async function gh(args: string[], cwd?: string, stdin?: string): Promise<
      answer says so in GitHub's own words so every caller reads it as the
      limit it is (see graphqlQuotaGone, RATE_LIMITED). */
   if (graphql) {
-    const held = heldUntil();
+    const held = heldUntil() && !(await budgetIsBack()) ? heldUntil() : null;
     if (held) return { code: 1, stdout: "", stderr: `GitHub API rate limit exceeded; no request is sent until ${new Date(held).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` };
   }
   try {
