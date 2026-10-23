@@ -45,7 +45,7 @@ import {
 import { VIEWPORTS, type Viewport } from "../lib/browserViewport.ts";
 import { browserNav, clearBrowserNav, subscribeBrowserNav } from "../lib/browserNav.ts";
 import { clientId, serveBrowserAsk, setBrowserAskHandler } from "../lib/browserBus.ts";
-import { activityReducer, actionOf, agentLabel, pausedRefusal, type Activity } from "../lib/browserAgentActivity.ts";
+import { activityReducer, actionOf, agentLabel, pausedRefusal, tabState, type Activity, type TabAgent } from "../lib/browserAgentActivity.ts";
 import { api } from "../lib/api.ts";
 import { forgetAgentZoom, reapplyZoom, applyGuestZoom, setPageZoomer, crossContainerRefusal, mintTakesThePane, notePopup, onActLanded, type ActLanding, type GuestZoom, type DrivableWebview } from "../lib/browserDrive.ts";
 import { AgentPresence } from "./browser/AgentPresence.tsx";
@@ -222,6 +222,19 @@ async function pictureOf(w: { capturePage(): Promise<Shot> } | undefined): Promi
     const url = small.toDataURL();
     return url && url.length > 64 ? url : null;
   } catch { return null; }
+}
+
+/*
+ * A tab an agent is driving, when it is not the one in front, stays painted
+ * BEHIND it instead of hidden. A hidden guest runs no rendering steps at all:
+ * no frames, no idle periods, no resize or intersection observers, and a page
+ * that waits on any of them (GitHub's menus) never opens. Measured: Resources
+ * stayed shut in a background tab and opened in a lane. Only tabs mid-task,
+ * so twenty other tabs cost nothing.
+ */
+function drivenBehind(a: TabAgent | undefined): boolean {
+  const k = tabState(a, undefined, Date.now())?.key;
+  return !!k && k !== "done" && k !== "waiting" && k !== "yours";
 }
 
 export function BrowserView({ active: viewOn, scope }: {
@@ -3122,7 +3135,7 @@ export function BrowserView({ active: viewOn, scope }: {
               ? { left: 0, width: `${splitAt * 100}%` }
               : split && t.id === splitId
                 ? { left: `${splitAt * 100}%`, right: 0 }
-                : { left: 0, right: 0, ...(t.id === activeId ? null : { visibility: "hidden" }) }}>
+                : { left: 0, right: 0, ...(t.id === activeId ? { zIndex: 1 } : drivenBehind(acts[t.id]) ? { zIndex: 0, pointerEvents: "none" as const } : { visibility: "hidden" as const }) }}>
             <div style={{ position: "relative", width: viewport.width ? `${viewport.width}px` : "100%", height: "100%", maxWidth: "100%" }}>
               {acts[t.id] && (
                 <AgentPresence agent={acts[t.id]!} landing={landings[t.id] ?? null} url={t.url} quiet={!classic && islandTucked && t.id === activeId}
