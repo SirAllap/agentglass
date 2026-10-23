@@ -34,6 +34,8 @@ import { Portal } from "../Portal.tsx";
 import { CloseButton } from "../CloseButton.tsx";
 import { LAYER } from "../../lib/layers.ts";
 import { Button, CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS, Chip, EDGE, INPUT, INPUT_STYLE, RefreshButton } from "../workspace/Chrome.tsx";
+import { SettingRow } from "../SettingRow.tsx";
+import { SettingsCard, StatusBadge } from "../SettingsKit.tsx";
 import type { Catalogue, InstallSource } from "../../../../shared/types.ts";
 
 /** The list this project publishes, on its own site, and the same document
@@ -174,39 +176,32 @@ export function Market({ installed, onInstalled }: {
 
   return (
     /*
-     * A settings GROUP, drawn the way every other group on this page is: the
-     * card is the section, the heading sits inside it above a rule, and the
-     * plugins are rows separated by hairlines.
-     *
-     * The first version put bordered cards inside the bordered section, which
-     * index.css names as the thing that makes a settings page look amateur —
-     * "two borders between the eye and the text" — and with one plugin
-     * published it also left a 460px card floating in a 1900px box.
+     * A settings card like every other group on this page: the plugins are its
+     * rows, separated by the one divider. An earlier version put bordered
+     * cards inside a bordered section, which made the page look amateur — two
+     * borders between the eye and the text — and with one plugin published it
+     * also left a 460px card floating in a 1900px box.
      */
-    <div className="agx-settings-section agx-market">
-      <div className="panel-eyebrow flex items-center gap-2.5 flex-wrap">
-        Market
-        {state.kind === "ok" && <span className="chip tabular-nums t-dim">{offered.length}</span>}
-        <div className="ml-auto flex items-center gap-2">
-          {/* Always here, never conditional on how long the list is: a search
-              box that appears once a market grows past some number is a search
-              box nobody learns is there. */}
-          <input value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }}
-            placeholder="Search the market" spellCheck={false}
-            className={`w-[190px] ${INPUT}`}
-            style={INPUT_STYLE} />
-          <RefreshButton onRefresh={() => void load()} busy={state.kind === "loading"}
-            title="Refresh the market" />
-        </div>
-      </div>
+    <SettingsCard title="Market"
+      status={state.kind === "ok" ? <StatusBadge tone="off">{offered.length} available</StatusBadge> : undefined}
+      actions={<RefreshButton onRefresh={() => void load()} busy={state.kind === "loading"}
+        title="Refresh the market" />}>
+      {/* Always here, never conditional on how long the list is: a search box
+          that appears once a market grows past some number is a search box
+          nobody learns is there. */}
+      <SettingRow label="Search the market"
+        below={<input value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }}
+          placeholder="Search the market" aria-label="Search the market" spellCheck={false}
+          className={`max-w-[360px] ${INPUT}`}
+          style={INPUT_STYLE} />} />
 
-      <div className="agx-settings-rows">
-        {/* The types, as a row of their own above the list — the second half
-            of "how do I find one": the box answers "the one that…", these
-            answer "what is there for…". Counted, so a row of them says how
-            big the market is per kind before anything is pressed. */}
-        {state.kind === "ok" && kinds.length > 1 && (
-          <div className="agx-settings-gutter py-3 flex items-center gap-1.5 flex-wrap">
+      {/* The types, as a row of their own above the list — the second half of
+          "how do I find one": the box answers "the one that…", these answer
+          "what is there for…". Counted, so a row of them says how big the
+          market is per kind before anything is pressed. */}
+      {state.kind === "ok" && kinds.length > 1 && (
+        <SettingRow label="Filter by type"
+          below={<div className="flex items-center gap-1.5 flex-wrap">
             <TypeChip on={type === null} onClick={() => { setType(null); setPage(0); }}
               label="All" count={offered.length} />
             {kinds.map((k) => (
@@ -214,48 +209,45 @@ export function Market({ installed, onInstalled }: {
                 onClick={() => { setType(type === k.name ? null : k.name); setPage(0); }}
                 label={k.name} count={k.count} />
             ))}
-          </div>
-        )}
+          </div>} />
+      )}
 
-        {state.kind === "loading" && (
-          <div className="agx-settings-gutter py-5 text-[12px] t-dim">Reading the market…</div>
-        )}
+      {state.kind === "loading" && (
+        <SettingRow label="Reading the market…" status={<StatusBadge tone="checking">Checking</StatusBadge>} />
+      )}
 
-        {state.kind === "error" && (
-          <div className="agx-settings-gutter py-4 text-[12px] flex items-center gap-3 flex-wrap">
-            <span style={{ color: "var(--text2)" }}>The market did not answer: {state.error}</span>
-            <Button className="ml-auto" onClick={() => void load()}>Try again</Button>
-          </div>
-        )}
+      {state.kind === "error" && (
+        <SettingRow label="The market did not answer" status={<StatusBadge tone="err">Unreachable</StatusBadge>}
+          hint={state.error} actions={<Button onClick={() => void load()}>Try again</Button>} />
+      )}
 
-        {state.kind === "ok" && shown.map((entry) => (
-          <Offer key={entry.id} entry={entry} owner={state.catalogue.owner} onInstalled={onInstalled}
-            mode={offerFor(entry, installed(entry.source.url)) ?? "install"}
-            was={(() => { const h = installed(entry.source.url); return h?.kind === "marketplace" ? h.plugin.ref : null; })()} />
-        ))}
+      {state.kind === "ok" && shown.map((entry) => (
+        <Offer key={entry.id} entry={entry} owner={state.catalogue.owner} onInstalled={onInstalled}
+          mode={offerFor(entry, installed(entry.source.url)) ?? "install"}
+          was={(() => { const h = installed(entry.source.url); return h?.kind === "marketplace" ? h.plugin.ref : null; })()} />
+      ))}
 
-        {state.kind === "ok" && found.length === 0 && (
-          <div className="agx-settings-gutter py-5 text-[12px] t-dim">
-            {q.trim() || type
-              ? `Nothing in the market matches ${[q.trim() && `“${q.trim()}”`, type && `“${type}”`].filter(Boolean).join(" and ")}.`
-              : all.length === 0 ? "The market lists nothing yet."
-                : "Everything in the market is installed."}
-          </div>
-        )}
+      {state.kind === "ok" && found.length === 0 && (
+        <SettingRow label={q.trim() || type
+          ? `Nothing in the market matches ${[q.trim() && `“${q.trim()}”`, type && `“${type}”`].filter(Boolean).join(" and ")}.`
+          : all.length === 0 ? "The market lists nothing yet."
+            : "Everything in the market is installed."} />
+      )}
 
-        {state.kind === "ok" && pages > 1 && (
-          <div className="agx-settings-gutter py-3 flex items-center justify-center gap-2 text-[11.5px]">
-            <Button size="compact" onClick={() => setPage(here - 1)} disabled={here === 0}>Previous</Button>
-            <span className="t-dim tabular-nums">{here + 1} of {pages}</span>
-            <Button size="compact" onClick={() => setPage(here + 1)} disabled={here >= pages - 1}>Next</Button>
-          </div>
-        )}
+      {state.kind === "ok" && pages > 1 && (
+        <SettingRow label={<span className="tabular-nums">{here + 1} of {pages}</span>}
+          actions={<>
+            <Button onClick={() => setPage(here - 1)} disabled={here === 0}>Previous</Button>
+            <Button onClick={() => setPage(here + 1)} disabled={here >= pages - 1}>Next</Button>
+          </>} />
+      )}
 
-        {/* Where the list comes from and what it costs to look at it — the
-            footnote of the group rather than a heading above it, because it
-            is the answer to a question asked once. */}
-        {state.kind === "ok" && (
-          <div className="agx-settings-gutter py-3 text-[11.5px] t-dim">
+      {/* Where the list comes from and what it costs to look at it — the
+          footnote of the group rather than a heading above it, because it is
+          the answer to a question asked once. */}
+      {state.kind === "ok" && (
+        <SettingRow label="Where this list comes from"
+          hint={<>
             Read fresh from{" "}
             <a href={MARKET_PAGE} target="_blank" rel="noopener noreferrer"
               className="underline underline-offset-2 hover:opacity-80" style={{ color: "var(--text3)" }}>
@@ -265,10 +257,9 @@ export function Market({ installed, onInstalled }: {
             {/* What the server kept back has to be said, or a market past the
                 cap quietly becomes a shorter market. */}
             {state.catalogue.total > all.length && ` That page lists ${state.catalogue.total}; the first ${all.length} were read.`}
-          </div>
-        )}
-      </div>
-    </div>
+          </>} />
+      )}
+    </SettingsCard>
   );
 }
 
@@ -317,56 +308,48 @@ export function Offer({ entry, owner, onInstalled, mode, was = null }: {
   const tint = tintOf(entry.id);
 
   return (
-    <div className="agx-market-row agx-settings-gutter py-4 flex items-center gap-4">
-      {/* Its initial, not the same puzzle eight times: a list of things to
-          pick from needs its rows to be told apart at a glance, and the one
-          piece of identity a catalogue entry carries is its name. */}
-      <span className="agx-market-tile shrink-0 grid place-items-center rounded-lg text-[15px] font-semibold" style={{
-        width: 36, height: 36, color: tint,
-        background: `color-mix(in srgb, ${tint} 15%, transparent)`,
-        border: `1px solid color-mix(in srgb, ${tint} 32%, transparent)`,
-      }}>{(entry.title || entry.id).trim().charAt(0).toUpperCase()}</span>
-
-      {/* A measure, like the rest of the settings column has: a description
-          set to the full width of a 1500px window is one line of eleven words
-          and one of ninety, and the eye loses the start of the next line. */}
-      <div className="min-w-0 flex-1" style={{ maxWidth: "88ch" }}>
-        <div className="flex items-baseline gap-2 flex-wrap">
-          <span className="text-[13.5px] font-medium" style={{ color: "var(--text)" }}>{entry.title || entry.id}</span>
-          <span className="text-[11.5px] t-dim">by {entry.publisher || owner}</span>
-        </div>
-        {/* Two lines of the plugin's own sentence. The whole of it is on its
-            page once it is installed, and a market row that runs to eight
-            lines is a market you scroll rather than read. */}
-        <p className="m-0 mt-1.5 text-[12px] leading-relaxed" style={{
-          color: "var(--text2)", display: "-webkit-box", WebkitBoxOrient: "vertical",
-          WebkitLineClamp: 2, overflow: "hidden",
-        }}>{entry.description}</p>
+    <>
+    <SettingRow
+      /* Its initial, not the same puzzle eight times: a list of things to pick
+         from needs its rows told apart at a glance, and the one piece of
+         identity a catalogue entry carries is its name. */
+      label={<span className="flex items-center gap-2.5">
+        <span aria-hidden className="agx-market-tile shrink-0 grid place-items-center rounded-lg text-[14px] font-semibold" style={{
+          width: 32, height: 32, color: tint,
+          background: `color-mix(in srgb, ${tint} 15%, transparent)`,
+          border: `1px solid color-mix(in srgb, ${tint} 32%, transparent)`,
+        }}>{(entry.title || entry.id).trim().charAt(0).toUpperCase()}</span>
+        <span className="min-w-0">
+          <span className="block">{entry.title || entry.id}</span>
+          <span className="block text-[11.5px] t-dim">by {entry.publisher || owner}</span>
+        </span>
+      </span>}
+      hint={<>
+        <span className="block">{entry.description}</span>
         {draws.length > 0 && (
           /* Plain dim text with middots, not seven chips on two rows: every
              one of those chips was the same weight as the plugin's name. */
-          <div className="mt-2 text-[11.5px] t-dim">{draws.join(" · ")}</div>
+          <span className="block mt-1">{draws.join(" · ")}</span>
         )}
         {mode === "update" && (
-          <div className="mt-2 text-[11.5px] t-dim">
+          <span className="block mt-1">
             Installed at <span className="t-mono">{was ? was.slice(0, 7) : "its default branch"}</span>; the market lists{" "}
             <span className="t-mono">{(entry.source.ref ?? "").slice(0, 7)}</span>. Updating installs the listed version,
             and asks again if what it declares has changed.
-          </div>
+          </span>
         )}
-        {error && <div className="mt-2 text-[11.5px]" style={{ color: "var(--error-ink)" }}>{error}</div>}
-      </div>
-
-      <div className="shrink-0 flex items-center gap-2">
-        <Button onClick={() => setOpen(true)}>Details</Button>
+        {error && <span className="block mt-1" style={{ color: "var(--error-ink)" }}>{error}</span>}
+      </>}
+      actions={<>
+        <Button onClick={() => setOpen(true)}>Read the listing</Button>
         <Button tone="primary" pending={busy} onClick={install}>
           {busy ? (mode === "update" ? "Updating…" : "Installing…") : (mode === "update" ? "Update" : "Install")}
         </Button>
-      </div>
-
-      <Details entry={entry} owner={owner} tint={tint} repo={repo} open={open} busy={busy}
-        onClose={() => setOpen(false)} onInstall={install} />
-    </div>
+      </>}
+    />
+    <Details entry={entry} owner={owner} tint={tint} repo={repo} open={open} busy={busy}
+      onClose={() => setOpen(false)} onInstall={install} />
+    </>
   );
 }
 
@@ -414,7 +397,7 @@ function Details({ entry, owner, tint, repo, open, busy, onClose, onInstall }: {
               border: `1px solid color-mix(in srgb, ${tint} 32%, transparent)`,
             }}>{(entry.title || entry.id).trim().charAt(0).toUpperCase()}</span>
             <span className="min-w-0">
-              <span className="block text-[14px] font-semibold truncate" style={{ color: "var(--text)" }}>{entry.title || entry.id}</span>
+              <span className="block text-[14px] font-semibold" style={{ color: "var(--text)", overflowWrap: "anywhere" }}>{entry.title || entry.id}</span>
               <span className="block text-[11.5px] t-dim">by {entry.publisher || owner}</span>
             </span>
             <CloseButton onClick={onClose} title="Close" className="ml-auto" />

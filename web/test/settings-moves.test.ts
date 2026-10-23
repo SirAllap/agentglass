@@ -43,9 +43,9 @@ describe("slice 4 moves", () => {
     expect(fn("AgentBrowserPane")).not.toContain("<CookieImport />");
   });
 
-  test("GitHub API budget is a Fold on Budgets, gone from Tools & services", () => {
+  test("GitHub API budget is a closed card on Budgets, gone from Tools & services", () => {
     expect(block("budgets")).toContain("<GhBudget");
-    expect(fn("GhBudget")).toContain('<Fold label="GitHub API budget">');
+    expect(fn("GhBudget")).toContain("fold={{ open: folded || on || !!flash");
     expect(block("connections")).not.toContain("GhBudget");
   });
 
@@ -79,7 +79,7 @@ describe("slice 4 moves", () => {
     expect(rowsOn("terminal")).toContain("Terminal runs on");
     expect(rowsOn("tmux")).not.toContain("Terminal runs on");
     expect(rowsOn("hooks")).toContain("How new chats run");
-    expect(rowsOn("budgets")).toContain("GitHub API budget");
+    expect(rowsOn("budgets")).toContain("How much of your GitHub allowance is left");
     expect(rowsOn("diff")).toContain("Diff syntax theme");
     expect(rowsOn("open")).toEqual([]);
   });

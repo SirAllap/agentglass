@@ -47,7 +47,7 @@ describe("what is shown", () => {
     // It is a file in somebody's home directory. A path that only appears in a
     // `title` is invisible on a touch device and to anybody not hovering — and
     // a check for the bare `{p.configPath}` passes on the tooltips alone.
-    expect(pane).toMatch(/t-mono truncate[^>]*>\{p\.configPath\}</);
+    expect(pane).toMatch(/t-mono break-all[^>]*>\{p\.configPath\}</);
   });
 
   test("but no button for something that is not there", () => {
@@ -55,8 +55,8 @@ describe("what is shown", () => {
     // that never does anything. Matched on the branch rather than on one
     // spelling of it — the row moved onto the shared SettingRow and the old
     // assertion was checking the markup around the decision, not the decision.
-    expect(pane).toMatch(/control=\{state === "missing"/);
-    expect(pane).toMatch(/not found/);
+    expect(pane).toMatch(/actions=\{state === "missing"/);
+    expect(pane).toMatch(/Not found/);
   });
 });
 

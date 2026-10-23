@@ -8,7 +8,8 @@
 import { useEffect, useState } from "react";
 import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import { api } from "../lib/api.ts";
-import { EDGE } from "./workspace/Chrome.tsx";
+import { SettingRow } from "./SettingRow.tsx";
+import { EmptyState } from "./SettingsKit.tsx";
 import { askedState, askedTimeline } from "../lib/askedAudit.ts";
 
 export function AskedAlertLog() {
@@ -18,17 +19,18 @@ export function AskedAlertLog() {
     api.askedAudit().then((r) => { if (!dead) setRows(r?.audit ?? []); }).catch(() => { if (!dead) setRows([]); });
     return () => { dead = true; };
   }, []);
-  if (!rows) return <div className="px-3 py-3 text-[11.5px] t-dim2">Loading…</div>;
-  if (!rows.length) return <div className="px-3 py-3 text-[11.5px] t-dim2">Nothing asked for has fired yet.</div>;
+  if (!rows) return <EmptyState>Loading…</EmptyState>;
+  if (!rows.length) return <EmptyState>Nothing asked for has fired yet.</EmptyState>;
+  // One row per notification, so the card's divider falls between them.
   return (
-    <div className="flex flex-col gap-1 px-1">
+    <>
       {rows.slice(0, 10).map((a) => (
-        <div key={a.id} className="flex flex-col px-2 py-1.5 rounded-lg" style={{ border: EDGE }}>
-          <span className="text-[12px] font-semibold" style={{ color: "var(--text)" }}>{a.payload.title}</span>
-          <span className="text-[11px] t-dim2">{askedState(a)} — {askedTimeline(a)}</span>
-          {a.osError && <span className="text-[11px]" style={{ color: "var(--warning-ink)" }}>Desktop popup not shown: {a.osError}</span>}
-        </div>
+        <SettingRow key={a.id} agentExempt label={a.payload.title}
+          hint={<>
+            {askedState(a)} — {askedTimeline(a)}
+            {a.osError && <span className="block mt-1" style={{ color: "var(--warning-ink)" }}>Desktop popup not shown: {a.osError}</span>}
+          </>} />
       ))}
-    </div>
+    </>
   );
 }

@@ -47,7 +47,7 @@ export const VIEW_IDS = ["dash", "git", "diff", "pr", "tasks", "docker", "term",
  *  the installed plugins and are not a closed set, so they are not here. */
 export const SETTINGS_PAGE_IDS = [
   "prefs", "appearance", "notifications", "rail", "keys", "terminal", "diff", "browser", "tasks", "hooks", "lantern",
-  "understudy", "budgets", "recipes", "review-prompts", "saved-replies", "connections", "clickup", "remote", "plugins",
+  "understudy", "budgets", "recipes", "review-prompts", "saved-replies", "connections", "clickup", "jira", "remote", "plugins",
   "tmux", "privacy", "about", "log", "onboarding",
 ] as const;
 
@@ -312,6 +312,7 @@ export const UI_READ_NOT_COVERED: Readonly<Record<string, string>> = {
   "settings.connections": "credential pane: values are never read through this channel (settings.privacy says only whether ClickUp is set)",
   "settings.remote": "credential pane: values are never read through this channel (settings.privacy says only how many devices are paired)",
   "settings.clickup": "credential pane: values are never read through this channel (settings.privacy says only whether it is set)",
+  "settings.jira": "credential pane: values are never read through this channel",
   "settings.onboarding": "not a setting",
 };
 

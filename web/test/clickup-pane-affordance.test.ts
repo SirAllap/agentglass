@@ -12,6 +12,7 @@ import { HIT } from "../src/lib/iconSize.ts";
 
 const pane = await Bun.file(new URL("../src/components/ClickUpPane.tsx", import.meta.url)).text();
 const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
+const kit = await Bun.file(new URL("../src/components/SettingsKit.tsx", import.meta.url)).text();
 const rule = (sel: string) => new RegExp(`${sel.replace(/[.:>()*]/g, "\\$&")}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? "";
 
 describe("the changes switch", () => {
@@ -33,7 +34,9 @@ describe("the changes switch", () => {
 
 describe("the folding cards", () => {
   test("the header bar is the target, with hover and press from the same tokens as the rest", () => {
-    expect(pane).toContain("agx-settings-head agx-fold");
+    // The folding cards are SettingsCard's `fold`, whose summary is the header.
+    expect(pane).toContain("fold={onToggle ? { open: !!open, onToggle } : undefined}");
+    expect(kit).toContain('<summary className="agx-scard-head agx-fold list-none">');
     expect(rule(".agx-fold")).toContain("cursor: pointer");
     expect(rule(".agx-fold:hover")).toContain("--text");
     expect(rule(".agx-fold:active")).toContain("--text");

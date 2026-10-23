@@ -333,6 +333,52 @@ function Form({ node, ctx }: { node: Extract<UiNode, { type: "form" }>; ctx: Ctx
 }
 
 /**
+ * The control of one non-boolean field, with no label around it: the settings
+ * page puts it under a row of its own, a plugin's form puts it beside or under
+ * the label `FieldRow` draws. One place decides what each field type is.
+ */
+export function FieldControl({ field, value, onChange, onCommit, secretSet, named }: {
+  field: Field; value: unknown; onChange: (v: unknown) => void; onCommit?: (v: unknown) => void; secretSet?: boolean;
+  /** The caller draws the label somewhere that is not a `<label>` around the control, so the control carries its name itself. */
+  named?: boolean;
+}): ReactNode {
+  const name = named ? field.label : undefined;
+  const inputStyle: CSSProperties = { width: "100%" };
+  if (field.type === "multi") {
+    return <MultiPick field={field} value={Array.isArray(value) ? (value as string[]) : []}
+      onChange={(v) => { onChange(v); onCommit?.(v); }} />;
+  }
+  if (field.type === "select") {
+    // In the input's box, full width, like every other field on the page: on
+    // its own the trigger is a bare word and did not read as a control.
+    return (
+      <Select value={typeof value === "string" ? value : ""} placeholder="Choose…" title={name}
+        className="agx-input w-full justify-between"
+        options={(field.options ?? []).map((o) => ({ value: o.value, label: o.label }))}
+        onChange={(v) => { onChange(v); onCommit?.(v); }} />
+    );
+  }
+  if (field.type === "text" || field.type === "list") {
+    const text = field.type === "list" ? (Array.isArray(value) ? value.join("\n") : "") : typeof value === "string" ? value : "";
+    return (
+      <textarea className="agx-input t-mono" aria-label={name} rows={field.type === "list" ? Math.min(8, Math.max(3, text.split("\n").length + 1)) : 5}
+        style={{ ...inputStyle, resize: "vertical" }} placeholder={field.placeholder ?? (field.type === "list" ? "One per line" : "")}
+        value={text}
+        onChange={(e) => onChange(field.type === "list" ? e.target.value.split("\n") : e.target.value)}
+        onBlur={(e) => onCommit?.(field.type === "list" ? e.target.value.split("\n") : e.target.value)} />
+    );
+  }
+  if (field.type === "number") return <NumberInput field={field} value={value} onChange={onChange} onCommit={onCommit} style={inputStyle} />;
+  if (field.type === "secret") return <SecretInput field={field} value={value} isSet={secretSet} onChange={onChange} onCommit={onCommit} style={inputStyle} />;
+  return (
+    <input className="agx-input" style={inputStyle} type="text" placeholder={field.placeholder} aria-label={name}
+      value={value === null || value === undefined ? "" : String(value)}
+      onChange={(e) => onChange(e.target.value)}
+      onBlur={(e) => onCommit?.(e.target.value)} />
+  );
+}
+
+/**
  * One input for one declared field. Shared with the plugin's settings page so
  * a field looks and behaves the same wherever a plugin asks for it.
  */
@@ -377,29 +423,7 @@ export function FieldRow({ field, value, onChange, onCommit, secretSet }: {
       </button>
     );
   }
-  let control: ReactNode;
-  if (field.type === "multi") {
-    control = <MultiPick field={field} value={Array.isArray(value) ? (value as string[]) : []}
-      onChange={(v) => { onChange(v); onCommit?.(v); }} />;
-  } else if (field.type === "select") {
-    // In the input's box, full width, like every other field on the page: on
-    // its own the trigger is a bare word and did not read as a control.
-    control = (
-      <Select value={typeof value === "string" ? value : ""} placeholder="Choose…"
-        className="agx-input w-full justify-between"
-        options={(field.options ?? []).map((o) => ({ value: o.value, label: o.label }))}
-        onChange={(v) => { onChange(v); onCommit?.(v); }} />
-    );
-  } else if (field.type === "text" || field.type === "list") {
-    const text = field.type === "list" ? (Array.isArray(value) ? value.join("\n") : "") : typeof value === "string" ? value : "";
-    control = (
-      <textarea className="agx-input t-mono" rows={field.type === "list" ? Math.min(8, Math.max(3, text.split("\n").length + 1)) : 5}
-        style={{ ...inputStyle, resize: "vertical" }} placeholder={field.placeholder ?? (field.type === "list" ? "One per line" : "")}
-        value={text}
-        onChange={(e) => onChange(field.type === "list" ? e.target.value.split("\n") : e.target.value)}
-        onBlur={(e) => onCommit?.(field.type === "list" ? e.target.value.split("\n") : e.target.value)} />
-    );
-  } else if (field.type === "number") {
+  if (field.type === "number") {
     /* A number is short, and a box the width of the page for "10" is what
        makes a settings page read as a form to fill in rather than a few
        things to set. It sits beside its label instead. */
@@ -411,16 +435,8 @@ export function FieldRow({ field, value, onChange, onCommit, secretSet }: {
         </div>
       </div>
     );
-  } else if (field.type === "secret") {
-    control = <SecretInput field={field} value={value} isSet={secretSet} onChange={onChange} onCommit={onCommit} style={inputStyle} />;
-  } else {
-    control = (
-      <input className="agx-input" style={inputStyle} type="text" placeholder={field.placeholder}
-        value={value === null || value === undefined ? "" : String(value)}
-        onChange={(e) => onChange(e.target.value)}
-        onBlur={(e) => onCommit?.(e.target.value)} />
-    );
   }
+  const control = <FieldControl field={field} value={value} onChange={onChange} onCommit={onCommit} secretSet={secretSet} />;
   /* Short controls sit beside their label; only the ones that need the width
      — a prompt, a list, a picker with a search box — take the row under it.
      A select of one word stretched across the page was what made every field
@@ -457,10 +473,8 @@ function SecretInput({ field, value, isSet, onChange, onCommit, style }: {
     return (
       <div className="flex items-center gap-2">
         <span className="flex-1 text-[11.5px]" style={{ color: "var(--text3)" }}>Set, hidden</span>
-        <button type="button" className="agx-btn rounded px-1.5 py-0.5 text-[10px]" style={{ color: "var(--text2)", border: EDGE }}
-          onClick={() => setReplacing(true)}>Replace</button>
-        <button type="button" className="agx-btn rounded px-1.5 py-0.5 text-[10px]" style={{ color: "var(--text2)", border: EDGE }}
-          onClick={() => onCommit?.("")}>Clear</button>
+        <HouseButton size="compact" onClick={() => setReplacing(true)}>Replace</HouseButton>
+        <HouseButton size="compact" onClick={() => onCommit?.("")}>Clear</HouseButton>
       </div>
     );
   }

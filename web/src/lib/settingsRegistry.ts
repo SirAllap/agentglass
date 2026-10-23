@@ -214,7 +214,7 @@ const ACCENT_IDS = ACCENTS.map((a) => a.id);
 
 const appearance: SettingDef[] = [
   defineSetting({
-    id: "appearance.mode", page: "appearance", section: "", label: "Mode", level: 2, default: "system",
+    id: "appearance.mode", page: "appearance", section: "Theme", label: "Mode", level: 2, default: "system",
     read: () => themeMode(),
     // `desktop` is on offer only where the desktop publishes a palette, like the row.
     validate: accepting((raw) => (raw === "desktop" ? (desktopPaletteName() ? "desktop" : null) : oneOf(MODE_VALUES)(raw)),
@@ -223,14 +223,14 @@ const appearance: SettingDef[] = [
     capture: captureTheme, restore: restoreTheme,
   }),
   defineSetting({
-    id: "appearance.theme", page: "appearance", section: "", label: "Theme", level: 2, default: "graphite",
+    id: "appearance.theme", page: "appearance", section: "Theme", label: "Theme", level: 2, default: "graphite",
     read: () => currentThemeId(),
     validate: oneOf(PALETTE_IDS),
     write: (v) => { chooseTheme(v as string); },
     capture: captureTheme, restore: restoreTheme,
   }),
   defineSetting({
-    id: "appearance.accent", page: "appearance", section: "", label: "Accent", level: 2, default: "",
+    id: "appearance.accent", page: "appearance", section: "Theme", label: "Accent", level: 2, default: "",
     read: () => currentAccent(),
     validate: oneOf(ACCENT_IDS),
     // The pref is stored, then the theme is laid again so the overlay (or its
@@ -399,7 +399,7 @@ const notifications: SettingDef[] = [
 // sessions) and the cookie and history import (credentials).
 const browser: SettingDef[] = [
   defineSetting({
-    id: "browser.searchEngine", page: "browser", section: "", label: "Search engine", level: 2, default: DEFAULT_SEARCH_ENGINE,
+    id: "browser.searchEngine", page: "browser", section: "Where it opens", label: "Search engine", level: 2, default: DEFAULT_SEARCH_ENGINE,
     read: () => searchEngine(), validate: oneOf(Object.keys(SEARCH_ENGINE_LABELS) as SearchEngine[]), write: (v) => setSearchEngine(v as SearchEngine),
   }),
 ];
@@ -483,7 +483,7 @@ export const MIGRATED: Readonly<Record<string, "all" | readonly string[]>> = {
  *  the two lists, so adding a page forces a decision rather than a silent gap. */
 export const NOT_YET_MIGRATED = [
   "prefs", "hooks", "lantern", "understudy", "budgets", "recipes",
-  "review-prompts", "saved-replies", "connections", "remote", "plugins", "tmux", "privacy", "about", "log", "onboarding",
+  "review-prompts", "saved-replies", "connections", "jira", "remote", "plugins", "tmux", "privacy", "about", "log", "onboarding",
 ] as const;
 
 /**
@@ -493,6 +493,7 @@ export const NOT_YET_MIGRATED = [
  */
 export const NOT_EXPOSED_ON_PURPOSE: Readonly<Record<string, string>> = {
   connections: "tokens and credentials of the services the app talks to: an agent never reads or writes them",
+  jira: "the Jira token, the site it is sent to and the switch that lets agentglass write to a card: what the app is allowed to do with the owner's account is the owner's alone (the hand-off rule has its own door, GET/POST /jira/settings)",
   remote: "reaching this machine from outside: who may pair and how is the owner's alone, at any level",
   plugins: "plugin trust and consent: approving what a plugin may do cannot be something another agent does for the owner",
   hooks: "the gate and the hook install decide what an agent may do without asking: no agent edits its own leash",

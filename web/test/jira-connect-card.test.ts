@@ -11,37 +11,28 @@ import { describe, expect, test } from "bun:test";
 const src = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url)).text();
 const api = await Bun.file(new URL("../src/lib/api.ts", import.meta.url)).text();
 
-/** The ProviderCard function, to its own closing brace. */
-const card = (() => {
-  const at = src.indexOf("function ProviderCard(");
-  const end = src.indexOf("\nfunction RequirementsPane(", at);
-  expect(at).toBeGreaterThan(0);
-  expect(end).toBeGreaterThan(at);
-  return src.slice(at, end);
-})();
-const code = card.split("\n").filter((l) => !/^\s*(\/\/|\/?\*|\{\/\*)/.test(l)).join("\n");
+/** Jira's own page: the form lives there now, not in Tools & services. */
+const page = await Bun.file(new URL("../src/components/JiraPane.tsx", import.meta.url)).text();
+const code = page.split("\n").filter((l) => !/^\s*(\/\/|\/?\*|\{\/\*)/.test(l)).join("\n");
 
 describe("the Jira connection form", () => {
   test("the token is typed into a password field and the form is cleared on success", () => {
-    expect(code).toMatch(/<input type="password" value=\{token\}/);
+    expect(code).toMatch(/<input id="jira-token" type="password" value=\{token\}/);
     expect(code).toContain('setToken(""); setEmail(""); setSite("");');
   });
 
   test("Jira connects through its own call and never through the generic token door", () => {
     expect(code).toContain("api.jiraConnect(email.trim(), site.trim(), token.trim())");
-    const generic = code.split("\n").filter((l) => l.includes("api.providerConnect("));
-    expect(generic.length).toBe(1);
-    // That one line is the other branch of the ternary on `isJira`.
-    expect(code.indexOf("api.jiraConnect(")).toBeLessThan(code.indexOf("api.providerConnect("));
-    expect(code).toContain("isJira\n      ? await api.jiraConnect");
+    expect(code).not.toContain("api.providerConnect(");
   });
 
   test("the site is required, the email is not (a personal access token has none)", () => {
-    expect(code).toContain("const ready = !!token.trim() && (!isJira || !!site.trim());");
+    expect(code).toContain("const ready = !!token.trim() && !!site.trim();");
   });
 
   test("the workspace picker is ClickUp's alone", () => {
-    expect(code).toContain('connected && spec.id === "clickup" && (');
+    const card = src.slice(src.indexOf("function ProviderCard("), src.indexOf("\nfunction RequirementsPane("));
+    expect(card).toContain('connected && spec.id === "clickup" && (');
   });
 
   test("the client has a call and a demo twin for each route, and none sends the token anywhere but the body", () => {

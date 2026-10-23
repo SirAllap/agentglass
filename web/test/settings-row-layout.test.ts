@@ -5,7 +5,6 @@
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { hintNeedsFold, HINT_FOLD_WORDS } from "../src/components/SettingRow.tsx";
 import { resetShown } from "../src/lib/settingsModified.ts";
 
 const at = (p: string) => readFileSync(new URL(p, import.meta.url).pathname, "utf8");
@@ -43,30 +42,19 @@ describe("control column", () => {
   });
 });
 
-describe("one-line hint", () => {
-  const words = (n: number) => Array.from({ length: n }, (_, i) => `w${i}`).join(" ");
-  test("13 words fold, 12 do not", () => {
-    expect(HINT_FOLD_WORDS).toBe(12);
-    expect(hintNeedsFold(words(13))).toBe(true);
-    expect(hintNeedsFold(words(12))).toBe(false);
-    expect(hintNeedsFold("")).toBe(false);
-    expect(hintNeedsFold("  spaced   out  ")).toBe(false);
-  });
-  test("the full hint stays in the DOM and the clamp is CSS", () => {
-    expect(css).toMatch(/\.agx-settings-hint-clamp\s*\{[^}]*-webkit-line-clamp:\s*1/);
-    expect(rowCode).toContain("agx-settings-hint-clamp");
-  });
-  test("More is a real button that never sits inside the row's own button or link", () => {
-    const more = fnBody(rowCode, "function HintMore(");
-    expect(more).toContain("<button");
-    expect(more).not.toContain('role="button"');
-    expect(more).toContain("aria-expanded");
-    expect(more).toContain("aria-controls");
+describe("a description is shown whole", () => {
+  test("no fold, no clamp, no More", () => {
+    // It folded past twelve words: 89 descriptions cut mid-sentence and 85
+    // More buttons, measured across the settings pages.
+    expect(rowCode).not.toMatch(/HINT_FOLD_WORDS|hintNeedsFold|HintMore|agx-settings-hint-clamp|agx-settings-more/);
+    expect(css).not.toMatch(/agx-settings-hint-clamp|agx-settings-more/);
     const row = fnBody(rowCode, "export function SettingRow(");
-    // Operable rows draw it as a sibling after the row; plain rows inline.
-    expect(row).toContain("fold && !operable");
-    expect(row).toContain("{body}</button>\n        {more}");
-    expect(row).toContain("{body}</a>{more}");
+    expect(row).toContain('<span className="block text-[12px] t-dim mt-1">{hint}</span>');
+  });
+  test("the stacked and detail slots are never inside a button or a link", () => {
+    const row = fnBody(rowCode, "export function SettingRow(");
+    expect(row).toContain("const stacked = operable ? undefined : below;");
+    expect(row).toContain("const more = operable ? undefined : detail;");
   });
 });
 

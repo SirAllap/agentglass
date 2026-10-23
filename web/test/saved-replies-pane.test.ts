@@ -13,12 +13,12 @@ const src = readFileSync(new URL("../src/components/SavedRepliesPane.tsx", impor
 
 describe("a saved reply's own words", () => {
   test("the list preview reads in the prose face, not the mono default", () => {
-    const preview = src.slice(src.indexOf("Two lines of it"), src.indexOf("</div>\n              </div>"));
+    const preview = src.slice(src.indexOf("The text itself is what a person wrote"), src.indexOf("actions={<Button onClick={() => editRow(r)}"));
     expect(preview).toContain("var(--font-prose)");
   });
 
   test("the box you type it into reads in the prose face too", () => {
-    const box = src.slice(src.indexOf("<textarea value={text}"), src.indexOf("{err &&"));
+    const box = src.slice(src.indexOf("<textarea id=\"saved-reply-text\""), src.indexOf("</Field>", src.indexOf("<textarea id=\"saved-reply-text\"")));
     expect(box).toContain("var(--font-prose)");
     expect(box).not.toContain("var(--diff-font");
   });

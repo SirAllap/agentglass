@@ -17,11 +17,12 @@ import { setting } from "../lib/settingsRegistry.ts";
 import { DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN, type ClickUpPrefs, type ProviderStatus } from "../../../shared/providers.ts";
 import { DEFAULT_CARD_SKILL_PATTERN } from "../../../shared/cardSkills.ts";
 import { SettingRow, Switch, Toggle } from "./SettingRow.tsx";
+import { EmptyState, Field, SettingsCard, SettingsForm, StatusBadge, helpIdFor } from "./SettingsKit.tsx";
 import { Button, INPUT, INPUT_STYLE, LINE, Segmented } from "./workspace/Chrome.tsx";
 import { Dot, StatusPopover, type PanelView } from "./StatusPanel.tsx";
 import { Badge, ListEye, WorkflowMap } from "./WorkflowMap.tsx";
 import { WFM_CSS } from "./workflowMapStyle.ts";
-import { CaretIcon, DoneIcon, EyeIcon, LinkIcon, LockIcon, NoteIcon, PlusIcon, EditIcon, UserIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { DoneIcon, EyeIcon, LinkIcon, LockIcon, NoteIcon, PlusIcon, UserIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { HIT, ICON } from "../lib/iconSize.ts";
 
 const n = CLICKUP.nouns;
@@ -42,13 +43,16 @@ function TextRow({ label, hint, value, fallback = "", placeholder, onSave, id }:
     if (!e) setDraft(null);
   };
   return (
-    <SettingRow label={label} hint={<>{hint}{err && <span className="block mt-1" style={{ color: "var(--error-ink)" }}>{err}</span>}</>}
-      control={
+    /* A text field stacks under its description (see SettingRow's `below`):
+       squeezed into the control column it showed a third of a pattern. */
+    <SettingRow label={label} hint={hint}
+      below={<div className="flex flex-col gap-1.5" style={{ maxWidth: 480 }}>
         <input id={id} value={draft ?? saved} onChange={(e) => setDraft(e.target.value)} onBlur={() => void commit()}
           onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
           aria-label={label} placeholder={placeholder} spellCheck={false} autoComplete="off"
-          className={`w-[220px] ${INPUT}`} style={INPUT_STYLE} />
-      } />
+          className={`w-full ${INPUT}`} style={INPUT_STYLE} />
+        {err && <span role="alert" className="agx-field-e">{err}</span>}
+      </div>} />
   );
 }
 
@@ -68,34 +72,17 @@ export function CardSkillsRow({ connected }: { connected: boolean }) {
   );
 }
 
-/** A section of the page: the grey tray, a header, and what is inside it. `open`/`onToggle` make it a disclosure. */
-function Card({ id, title, right, children, open, onToggle, flush }: { id: string; title: string; right?: ReactNode; children: ReactNode; open?: boolean; onToggle?: (o: boolean) => void; flush?: boolean }) {
-  const head = (<><div className="agx-settings-head-t">{title}</div>{right}</>);
+/** A section of the page: a settings card (SettingsKit). `open`/`onToggle` make its header a disclosure. */
+function Card({ title, status, actions, children, open, onToggle, desc }: { id?: string; title: string; status?: ReactNode; actions?: ReactNode; desc?: ReactNode; children: ReactNode; open?: boolean; onToggle?: (o: boolean) => void }) {
   return (
-    <section className="agx-settings-section" aria-labelledby={id}>
-      {onToggle ? (
-        <details open={open} onToggle={(e) => onToggle((e.target as HTMLDetailsElement).open)}>
-          <summary className="agx-settings-head agx-fold flex items-center gap-4 list-none" id={id}>
-            <span aria-hidden className="flex transition-transform" style={{ transform: open ? "rotate(0deg)" : "rotate(-90deg)", color: "var(--text3)" }}><CaretIcon size={ICON.sm} /></span>
-            {head}
-          </summary>
-          <div className="agx-settings-rows" style={flush ? { padding: 0 } : undefined}>{children}</div>
-        </details>
-      ) : (
-        <>
-          <div className="agx-settings-head flex items-center gap-4 flex-wrap" id={id}>{head}</div>
-          <div className="agx-settings-rows">{children}</div>
-        </>
-      )}
-    </section>
+    <SettingsCard title={title} desc={desc} status={status} actions={actions}
+      fold={onToggle ? { open: !!open, onToggle } : undefined}>
+      {children}
+    </SettingsCard>
   );
 }
 
 const hint = (c: ReactNode, style?: object) => <span className="text-[11px]" style={{ color: "var(--text3)", ...style }}>{c}</span>;
-const micro = (c: ReactNode) => <span className="text-[10px] font-semibold uppercase" style={{ letterSpacing: ".1em", color: "var(--text3)" }}>{c}</span>;
-const Fact = ({ children }: { children: ReactNode }) => (
-  <span className="inline-flex gap-1 items-baseline text-[11px] px-2 py-0.5 rounded-md" style={{ color: "var(--text3)", background: "var(--bg)", boxShadow: "inset 0 0 0 1px var(--surface-line)" }}>{children}</span>
-);
 const Tagged = ({ children }: { children: ReactNode }) => (
   <span className="inline-flex items-center gap-1 px-2 rounded-md text-[11px]" style={{ height: 20, background: "var(--bg)", boxShadow: "inset 0 0 0 1px var(--surface-line)" }}>{children}</span>
 );
@@ -160,55 +147,57 @@ export function ConnectCard({ refused, error, onDone }: { refused: boolean; erro
     [<LockIcon size={ICON.md} />, "Read-only until you say", "Changes are off by default, and each step acts only when its button is pressed."],
     [<PlusIcon size={ICON.md} />, "Your statuses, not ours", `A step moves a ${n.item} to one of your own statuses. None are assumed.`],
   ];
+  /* The page's face before ClickUp is connected: one card, the verdict at its
+     top right, one stacked field and one Connect, the refusal under it, and
+     what connecting does as a list under that — one column, so it reads the
+     same at the window's narrowest. */
   return (
-    <section className="agx-settings-section" aria-label="Connect">
-      <div className="grid gap-6 p-6" style={{ gridTemplateColumns: "minmax(0,1.3fr) minmax(0,1fr)" }}>
-        <div className="flex flex-col gap-4">
-          <div className="flex items-center gap-3">
-            <span aria-hidden className="grid place-items-center rounded-full font-bold text-[15px]" style={{ width: 40, height: 40, background: "var(--surface-inset)" }}>C</span>
-            <div className="flex flex-col gap-0.5">
-              <div className="flex items-center gap-2"><h1 className="m-0 text-[18px] font-bold">{n.name}</h1><Badge tone={refused ? "err" : undefined}>{refused ? "Token refused" : "Not connected"}</Badge></div>
-              {hint("Link it once and a pull request knows its card.")}
-            </div>
-          </div>
-          <div className="flex flex-col gap-2">
-            <label htmlFor="cu-token" className="text-[10px] font-semibold uppercase" style={{ letterSpacing: ".1em", color: "var(--text3)" }}>Personal API token</label>
-            <div className="flex gap-2">
+    <SettingsCard title={n.name} desc="Link it once and a pull request knows its card."
+      status={<StatusBadge tone={refused ? "err" : "off"}>{refused ? "Token refused" : "Not connected"}</StatusBadge>}>
+      <SettingRow agentExempt label="Connect with a token" hint={`${n.name} reads with a personal API token, kept on this machine.`}
+        below={
+          <SettingsForm label={`Connect ${n.name}`} onSubmit={() => void go()}>
+            <Field label="Personal API token" htmlFor="cu-token"
+              help={bad ? undefined : `${n.name} → avatar → Settings → Apps → API token.`}>
               <input id="cu-token" type="password" value={token} placeholder="pk_…" autoComplete="off" spellCheck={false}
-                aria-invalid={bad} aria-describedby="cu-token-h" onChange={(e) => setToken(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void go(); }}
-                className={`flex-1 min-w-0 ${INPUT}`} style={{ ...INPUT_STYLE, ...(bad ? { borderColor: "var(--error)", background: "color-mix(in srgb, var(--error) 11%, var(--bg))" } : null) }} />
-              <Button tone="primary" size="regular" pending={busy} disabled={!token.trim()} onClick={() => void go()}>Connect</Button>
-            </div>
-            {bad
-              ? <div id="cu-token-h" role="alert" className="flex gap-2 items-start text-[13px]" style={{ color: "var(--error-ink)" }}>
-                <span className="shrink-0 mt-0.5"><WarningIcon size={ICON.md} /></span>
-                <span><b>{`${(err ?? error ?? `${n.name} no longer accepts this token`).replace(/[.\s]+$/, "")}.`}</b> {err ? "Copy it again whole, without blanks. Nothing was saved." : "Your steps are kept exactly as they are; they resume once you reconnect."}</span>
+                aria-invalid={bad} aria-describedby={bad ? "cu-token-h" : helpIdFor("cu-token")} onChange={(e) => setToken(e.target.value)}
+                className={`w-full ${INPUT}`} style={{ ...INPUT_STYLE, ...(bad ? { borderColor: "var(--error)", background: "color-mix(in srgb, var(--error) 11%, var(--bg))" } : null) }} />
+            </Field>
+            <div className="agx-field">
+              <div className="agx-sform-actions">
+                <Button type="submit" tone="primary" size="regular" pending={busy} disabled={!token.trim()}>Connect</Button>
               </div>
-              : hint(<span id="cu-token-h">{n.name} → avatar → Settings → Apps → API token.</span>)}
-          </div>
-        </div>
-        <ul className="m-0 p-0 flex flex-col gap-3" style={{ listStyle: "none" }}>
-          {reasons.map(([ic, t, d]) => (
-            <li key={t} className="flex gap-3 items-start">
-              <span aria-hidden className="grid place-items-center rounded-full shrink-0" style={{ width: 24, height: 24, background: "var(--bg)", boxShadow: "inset 0 0 0 1px var(--surface-line)", color: "var(--primary)" }}>{ic}</span>
-              <span className="text-[13px]"><b>{t}</b><br />{hint(d)}</span>
-            </li>
-          ))}
-        </ul>
-      </div>
-    </section>
+              {bad && (
+                <div id="cu-token-h" role="alert" className="flex gap-2 items-start text-[12px]" style={{ color: "var(--error-ink)" }}>
+                  <span className="shrink-0 mt-0.5"><WarningIcon size={ICON.sm} /></span>
+                  <span><b>{`${(err ?? error ?? `${n.name} no longer accepts this token`).replace(/[.\s]+$/, "")}.`}</b> {err ? "Copy it again whole, without blanks. Nothing was saved." : "Your steps are kept exactly as they are; they resume once you reconnect."}</span>
+                </div>
+              )}
+            </div>
+          </SettingsForm>
+        } />
+      <SettingRow agentExempt label="What connecting does" hint="Nothing changes in your workspace until you say so."
+        below={
+          <ul className="m-0 p-0 flex flex-col gap-3" style={{ listStyle: "none" }}>
+            {reasons.map(([ic, t, d]) => (
+              <li key={t} className="flex gap-3 items-start">
+                <span aria-hidden className="grid place-items-center rounded-full shrink-0" style={{ width: HIT, height: HIT, background: "var(--surface-inset)", color: "var(--primary)" }}>{ic}</span>
+                <span className="text-[13px]">{t}<span className="block text-[12px] mt-0.5" style={{ color: "var(--text3)" }}>{d}</span></span>
+              </li>
+            ))}
+          </ul>
+        } />
+    </SettingsCard>
   );
 }
 
 /** The map before ClickUp is connected: there is nothing to draw yet, and Add is not offered. */
 export function WaitingMap() {
   return (
-    <section className="agx-settings-section" aria-label="Workflow map">
-      <div className="agx-settings-head flex items-center gap-4">
-        <div className="flex flex-col gap-0.5 flex-1"><div className="agx-settings-head-t">Workflow map</div>{hint(`Appears once ${n.name} is connected.`)}</div>
-        <Button tone="primary" disabled><PlusIcon size={ICON.xs} /> Add a step</Button>
-      </div>
-    </section>
+    <SettingsCard title="Workflow map" desc="Each step puts one control into agentglass. You build what it does from blocks."
+      actions={<Button tone="primary" disabled><PlusIcon size={ICON.xs} /> Add a step</Button>}>
+      <EmptyState>{`Appears once ${n.name} is connected.`}</EmptyState>
+    </SettingsCard>
   );
 }
 
@@ -311,7 +300,7 @@ export function ClickUpPane() {
 
   if (st === "out" || st === "refused") {
     return (
-      <div className="wfm flex flex-col gap-6">
+      <div className="wfm">
         <style>{WFM_CSS}</style>
         <ConnectCard refused={st === "refused"} error={state.kind === "error" ? state.error : null} onDone={() => { setEpoch((e) => e + 1); reread(); }} />
         <WaitingMap />
@@ -320,83 +309,54 @@ export function ClickUpPane() {
   }
 
   return (
-    <div className="wfm flex flex-col gap-6">
+    <div className="wfm">
       <style>{WFM_CSS}</style>
-      <section className="agx-settings-section" aria-label="Connection">
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-4 p-6">
-          <div className="flex items-center gap-4 min-w-0" style={{ flex: "1 1 280px" }}>
-            <span aria-hidden className="grid place-items-center rounded-full font-bold text-[15px] shrink-0" style={{ width: 40, height: 40, background: "var(--primary)", color: "var(--on-primary)" }}>{(provider?.detail?.match(/as (\S)/)?.[1] ?? "C").toUpperCase()}</span>
-            <div className="flex flex-col gap-0.5 min-w-0">
-              <div className="flex items-center gap-2 flex-wrap"><h1 className="m-0 text-[18px] font-bold">{n.name}</h1><Badge tone="ok">Connected</Badge></div>
-              {provider?.detail && hint(provider.detail)}
-              <div className="flex gap-2 mt-2"><Button size="compact" onClick={() => openSettings("connections")}>Manage connection</Button></div>
-            </div>
-          </div>
-          <div className="flex items-center gap-4 px-4 py-3 rounded-xl" data-guard={changesOn ? "on" : "off"}
-            style={changesOn
-              ? { background: "color-mix(in srgb, var(--warning) 16%, var(--bg))", boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--warning) 55%, transparent)" }
-              : { background: "var(--bg)", boxShadow: "inset 0 0 0 1px var(--surface-line)" }}>
-            <span style={{ color: changesOn ? "var(--warning-ink)" : "var(--text3)" }}>{changesOn ? <EditIcon size={ICON.md} /> : <LockIcon size={ICON.md} />}</span>
-            <div className="flex flex-col gap-0.5" style={{ maxWidth: 340 }}>
-              <b id="cu-changes-l" className="text-[13px]">{changesOn ? `Changes in ${n.name}: on` : "Read-only"}</b>
-              {hint(changesOn ? `Only the steps below can change a ${n.item}, one at a time, when you press their button.` : steps.length ? "agentglass only reads. Turn this on to let the steps below act." : "agentglass only reads. Adding your first step turns this on.")}
-            </div>
-            <button type="button" role="switch" aria-checked={changesOn} aria-labelledby="cu-changes-l" disabled={writes === null}
-              onClick={() => void setChanges(!changesOn)} className="agx-switch-hit inline-flex items-center rounded-full" style={{ minHeight: HIT }}><Switch on={changesOn} /></button>
-          </div>
-        </div>
-      </section>
+      {/* The connection, and the one switch that decides whether anything
+          here can write. The switch is a row like any other: its state is a
+          badge first in the control column, the switch after it, and the
+          warning ink only while changes are on, because that is the state
+          the person has to keep in mind. */}
+      <SettingsCard title={n.name} desc={provider?.detail ?? undefined}
+        status={<StatusBadge tone="ok">Connected</StatusBadge>}
+        actions={<Button onClick={() => openSettings("connections")}>Manage connection</Button>}>
+        <SettingRow label={<span id="cu-changes-l">{`Changes in ${n.name}`}</span>}
+          hint={changesOn ? `Only the steps below can change a ${n.item}, one at a time, when you press their button.` : steps.length ? "agentglass only reads. Turn this on to let the steps below act." : "agentglass only reads. Adding your first step turns this on."}
+          status={<span data-guard={changesOn ? "on" : "off"}><StatusBadge tone={changesOn ? "warn" : "off"}>{changesOn ? "On" : "Read-only"}</StatusBadge></span>}
+          control={<button type="button" role="switch" aria-checked={changesOn} aria-labelledby="cu-changes-l" disabled={writes === null}
+            onClick={() => void setChanges(!changesOn)} className="agx-switch-hit inline-flex items-center rounded-full" style={{ minHeight: HIT }}><Switch on={changesOn} /></button>} />
+      </SettingsCard>
 
-      <Card id="cu-found" title="What we found" open={foundOpen ?? steps.length === 0} onToggle={setFoundOpen} flush
-        right={<>
-          <Badge tone={state.kind === "error" ? "warn" : state.kind === "loading" ? "dim" : "ok"}>{reading ? "Reading your cards…" : state.kind === "loading" ? "Reading…" : state.kind === "error" ? (asOf ? `As of ${ago(asOf)}` : "Not read") : "Read-only"}</Badge>
-          <span className="flex gap-2 flex-wrap ml-auto">
-            {!reading && <Fact><b className="text-[13px]" style={{ color: "var(--text)" }}>{part.counted.length}</b> {n.lists} count</Fact>}
-            {!reading && <Fact><b className="text-[13px]" style={{ color: "var(--text)" }}>{distinct}</b> statuses</Fact>}
-            {part.folded.length > 0 && <Fact><b className="text-[13px]" style={{ color: "var(--text)" }}>{part.folded.length}</b> ignored</Fact>}
-            {prefs.prLinkField && <Fact>PR link <b style={{ color: "var(--text)" }}>{prefs.prLinkField}</b></Fact>}
-            {prefs.swatchField && <Fact>Swatch <b style={{ color: "var(--text)" }}>{prefs.swatchField}</b></Fact>}
-          </span>
-        </>}>
-        <div className="flex items-center gap-3 flex-wrap px-6 pt-4">
-          <span className="text-[13px]"><b>{`${n.lists[0]!.toUpperCase()}${n.lists.slice(1)} that count:`}</b> {countWord(part)}</span>
-          <Button size="compact" aria-haspopup="listbox" aria-expanded={!!countAt} disabled={!units.length} onClick={(e) => setCountAt(countAt ? null : e.currentTarget)}>Change</Button>
-          {hint(chosen ? "You chose these. The rest are ignored, not deleted." : state.kind === "ok" && state.note ? state.note : `Where your ${n.items} live, until you choose.`)}
-        </div>
-        <div className="grid gap-6 p-6" style={{ gridTemplateColumns: "1fr 1fr" }}>
-          <div className="flex flex-col gap-2">
-            {micro(`Your ${n.lists} and their statuses`)}
-            {state.kind === "loading" && !units.length ? hint("reading…")
-              : part.counted.length ? (
-                <ul className="m-0 p-0 flex flex-col gap-2" style={{ listStyle: "none" }}>
-                  {part.counted.map((u) => (
-                    <li key={u.id} className="flex gap-2 items-start">
-                      <span className="flex gap-2 items-center flex-wrap flex-1 min-w-0"><b>{u.name}</b>{hint(`${u.group ? `${u.group} · ` : ""}${u.statuses.length} statuses`)}
-                        <span className="flex gap-1 flex-wrap">{u.statuses.map((s) => <Tagged key={s.status}><Dot type={s.type} color={s.color} />{s.status}</Tagged>)}</span></span>
-                      <ListEye unit={u} nouns={n} onToggle={toggleCounted} blocked={frozen || eyeIds(units, u) === null} />
-                    </li>
-                  ))}
-                </ul>
-              ) : hint(`No ${n.list} counts.`)}
-          </div>
-          <div className="flex flex-col gap-4">
-            <div className="flex flex-col gap-2">
-              {micro("Not used by steps")}
-              {hint(part.folded.length ? `${part.folded.length} ${chosen ? "ignored" : `other ${n.spaces}`} (${part.folded.map((f) => f.unit.name).join(", ")}). Their statuses stay out of the picker until you open them.` : "Nothing is folded away.")}
-            </div>
-            <div className="flex flex-col gap-2">
-              {micro("How we read it")}
-              <div className="flex gap-2 items-baseline flex-wrap text-[13px]">Task ids {prefix ? <><Tagged>{prefix}n</Tagged>{hint("custom ids")}</> : hint("default; a custom prefix is read from the first board you open")}</div>
-              <div className="flex gap-2 items-baseline flex-wrap text-[13px]">PR link {prefs.prLinkField ? <Tagged>{prefs.prLinkField}</Tagged> : hint("a field with “github” in its name")}<Button size="compact" onClick={showAdvanced}>Change</Button></div>
-              <div className="flex gap-2 items-baseline flex-wrap text-[13px]">Swatch {prefs.swatchField ? <Tagged>{prefs.swatchField}</Tagged> : hint("guessed from the field names")}<Button size="compact" onClick={showAdvanced}>Change</Button></div>
-              <div className="flex gap-2 items-baseline flex-wrap text-[13px]">Sprints {prefs.sprintListPattern === DEFAULT_SPRINT_LIST_PATTERN ? hint("lists named like “Sprint 12”, and dated ones") : <><Tagged>{prefs.sprintListPattern}</Tagged>{hint("and dated ones")}</>}<Button size="compact" onClick={showAdvanced}>Change</Button></div>
-            </div>
-            <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: "var(--text3)" }}>
-              {asOf && state.kind === "ok" ? `Read ${ago(asOf)} · cached for 10 min.` : "Nothing needs setting up."}
-              <Button size="compact" onClick={reread} disabled={frozen || state.kind === "loading"}>Re-read</Button>
-            </div>
-          </div>
-        </div>
+      <Card id="cu-found" title="What we found" open={foundOpen ?? steps.length === 0} onToggle={setFoundOpen}
+        desc={reading ? undefined : `${part.counted.length} ${n.lists} count · ${distinct} statuses${part.folded.length ? ` · ${part.folded.length} ignored` : ""}${prefs.prLinkField ? ` · PR link ${prefs.prLinkField}` : ""}${prefs.swatchField ? ` · swatch ${prefs.swatchField}` : ""}`}
+        status={<StatusBadge tone={state.kind === "error" ? "warn" : state.kind === "loading" ? "checking" : "ok"}>{reading ? "Reading your cards" : state.kind === "loading" ? "Reading" : state.kind === "error" ? (asOf ? `As of ${ago(asOf)}` : "Not read") : "Read-only"}</StatusBadge>}>
+        <SettingRow label={`${n.lists[0]!.toUpperCase()}${n.lists.slice(1)} that count`}
+          hint={<>{countWord(part)}<span className="block mt-1">{chosen ? "You chose these. The rest are ignored, not deleted." : state.kind === "ok" && state.note ? state.note : `Where your ${n.items} live, until you choose.`}</span></>}
+          actions={<Button aria-haspopup="listbox" aria-expanded={!!countAt} disabled={!units.length} onClick={(e) => setCountAt(countAt ? null : e.currentTarget)}>Change</Button>} />
+        <SettingRow label={`Your ${n.lists} and their statuses`}
+          below={state.kind === "loading" && !units.length ? hint("reading…")
+            : part.counted.length ? (
+              <ul className="m-0 p-0 flex flex-col gap-2" style={{ listStyle: "none" }}>
+                {part.counted.map((u) => (
+                  <li key={u.id} className="flex gap-2 items-start">
+                    <span className="flex gap-2 items-center flex-wrap flex-1 min-w-0"><b>{u.name}</b>{hint(`${u.group ? `${u.group} · ` : ""}${u.statuses.length} statuses`)}
+                      <span className="flex gap-1 flex-wrap">{u.statuses.map((s) => <Tagged key={s.status}><Dot type={s.type} color={s.color} />{s.status}</Tagged>)}</span></span>
+                    <ListEye unit={u} nouns={n} onToggle={toggleCounted} blocked={frozen || eyeIds(units, u) === null} />
+                  </li>
+                ))}
+              </ul>
+            ) : hint(`No ${n.list} counts.`)} />
+        <SettingRow agentExempt label="Not used by steps"
+          hint={part.folded.length ? `${part.folded.length} ${chosen ? "ignored" : `other ${n.spaces}`} (${part.folded.map((f) => f.unit.name).join(", ")}). Their statuses stay out of the picker until you open them.` : "Nothing is folded away."} />
+        <SettingRow agentExempt label="How we read it"
+          hint={asOf && state.kind === "ok" ? `Read ${ago(asOf)} · cached for 10 min.` : "Nothing needs setting up."}
+          actions={<Button onClick={reread} disabled={frozen || state.kind === "loading"}>Re-read</Button>}
+          below={<div className="flex flex-col gap-2" style={{ maxWidth: 480 }}>
+            <div className="flex gap-2 items-baseline flex-wrap text-[13px]">Task ids {prefix ? <><Tagged>{prefix}n</Tagged>{hint("custom ids")}</> : hint("default; a custom prefix is read from the first board you open")}</div>
+            <div className="flex gap-2 items-baseline flex-wrap text-[13px]">PR link {prefs.prLinkField ? <Tagged>{prefs.prLinkField}</Tagged> : hint("a field with “github” in its name")}</div>
+            <div className="flex gap-2 items-baseline flex-wrap text-[13px]">Swatch {prefs.swatchField ? <Tagged>{prefs.swatchField}</Tagged> : hint("guessed from the field names")}</div>
+            <div className="flex gap-2 items-baseline flex-wrap text-[13px]">Sprints {prefs.sprintListPattern === DEFAULT_SPRINT_LIST_PATTERN ? hint("lists named like “Sprint 12”, and dated ones") : <><Tagged>{prefs.sprintListPattern}</Tagged>{hint("and dated ones")}</>}</div>
+            <span><button type="button" className="agx-textlink text-[12px]" onClick={showAdvanced}>Change these in Advanced</button></span>
+          </div>} />
       </Card>
       {countAt && (
         <StatusPopover anchor={countAt} label={`${n.lists} that count`} onClose={(f) => { setCountAt(null); if (f) countAt.focus(); }}>
@@ -418,16 +378,16 @@ export function ClickUpPane() {
         onToggleCounted={toggleCounted}
         onCountAgain={(u) => { const ids = withCounted(units, u.fromList && u.spaceId ? u.spaceId : u.id, true); if (ids) count(ids); }}
         onRetry={reread} />
-      {note && <div role="alert" className="text-[11px] -mt-4" style={{ color: "var(--error-ink)" }}>{note}</div>}
+      {note && <div role="alert" className="text-[12px] -mt-3 mb-6" style={{ color: "var(--error-ink)" }}>{note}</div>}
 
-      <Card id="cu-shows" title="Where this shows up"
-        right={<><span className="flex-1" />{hint("Hover a step above to see which part of this it adds.")}<Segmented label={`Does the pull request name a ${n.item}?`} value={linked ? "1" : "0"} onChange={(v) => setLinked(v === "1")}
-          options={[{ id: "1", label: "Linked" }, { id: "0", label: "No link" }]} /></>}>
-        <div className="grid gap-6 p-6" style={{ gridTemplateColumns: "repeat(2, minmax(0,1fr))" }}>
+      <Card id="cu-shows" title="Where this shows up" desc="Hover a step above to see which part of this it adds."
+        actions={<Segmented label={`Does the pull request name a ${n.item}?`} value={linked ? "1" : "0"} onChange={(v) => setLinked(v === "1")}
+          options={[{ id: "1", label: "Linked" }, { id: "0", label: "No link" }]} />}>
+        <div className="grid gap-4 agx-settings-x pt-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))" }}>
           <div><PrView steps={live} all={steps} writes={changesOn} hover={hover} linked={linked} /></div>
           <div><CardView writes={changesOn} linked={linked} /></div>
         </div>
-        <div className="px-6 pb-4 text-[11px]" style={{ color: "var(--text3)" }}>
+        <div className="agx-settings-x pt-3 pb-3 text-[12px]" style={{ color: "var(--text3)" }}>
           {live.length ? `Only the steps above show up. Everything else about a ${n.item} stays read-only.`
             : steps.length ? "Changes are off, so no step shows."
             : `No steps: the ${n.item} is shown, nothing writes.`}
@@ -436,7 +396,7 @@ export function ClickUpPane() {
       </Card>
 
       <div ref={advRef}>
-        <Card id="cu-adv" title="Advanced" open={advOpen} onToggle={setAdvOpen}>
+        <Card id="cu-adv" title="Advanced" desc="The fields and patterns the reading above is built on." open={advOpen} onToggle={setAdvOpen}>
           <TextRow label="PR link field" hint="The custom field that holds the pull request link. Empty: any field named github." value={prefs.prLinkField} placeholder="GitHub URL"
             onSave={async (v) => ((await send({ prLinkField: v } as never)) ? null : "That did not save")} />
           <TextRow label="Colour column field" hint="A drop-down shown as a swatch. Empty: guessed from the field names." value={prefs.swatchField} placeholder="Team"

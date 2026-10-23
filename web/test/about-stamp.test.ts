@@ -33,7 +33,8 @@ describe("what the row shows", () => {
     // `9699619+dirty.a3f1c2e` is already unmistakable read carefully. The row is
     // not read carefully — it is glanced at — so it also changes colour.
     expect(pane).toContain("st.info.dirty");
-    expect(pane).toContain("var(--warning)");
+    expect(pane).toContain("var(--warning-ink)");
+    expect(pane).toMatch(/<StatusBadge tone="warn">Uncommitted<\/StatusBadge>/);
   });
 
   test("and says in words what it means, with the files it carries", () => {

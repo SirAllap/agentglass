@@ -29,7 +29,8 @@ describe("re-consent reads as its own thing", () => {
 
   test("its own warning colour, not the ordinary disabled styling", () => {
     expect(pane).toMatch(/reconsent && manifestChanged && \(/);
-    expect(pane).toContain('tone="warning"');
+    expect(pane).toContain('<Note tone="warn">');
+    expect(pane).toMatch(/"Asks again", "warn"/);
   });
 });
 
@@ -67,7 +68,7 @@ describe("a switch on with nothing running is the failure this page catches", ()
        not changed: the page must be able to say "you switched it on and
        nothing is running", which is the failure a plugin screen exists to
        show and the one an `enabled` flag alone cannot. */
-    expect(pane).toMatch(/enabled, not running/);
+    expect(pane).toMatch(/Enabled, not running/);
     expect(pane).toContain("pid ${pid}");
   });
 });
@@ -103,16 +104,14 @@ describe("install takes a local path or a git URL, and cannot enable an unreview
   });
 });
 
-describe("a card that grows does not drag its neighbour with it", () => {
-  test("the installed grid lets each card keep its own height", () => {
-    // Opening one card's declaration made the card BESIDE it grow to match,
-    // into a tall box with nothing in the bottom two thirds. Grid items
-    // stretch to their row by default, and the row is as tall as whatever is
-    // open in it. Measured after the fix on a row of two: 390px closed,
-    // 826px open.
-    const grid = pane.slice(pane.indexOf('gridTemplateColumns: "repeat(auto-fill, minmax(360px'));
-    expect(pane).toContain("grid gap-3 items-start");
-    expect(grid.slice(0, 200)).toContain("minmax(360px, 1fr)");
+describe("a plugin that grows does not drag its neighbour with it", () => {
+  test("installed plugins are stacked rows of one card, not a grid of tiles", () => {
+    // Opening one tile's declaration used to make the tile BESIDE it grow to
+    // match, into a tall box with nothing in the bottom two thirds. A row owns
+    // the full width, so there is no beside.
+    expect(pane).toContain('<SettingsCard title="Installed"');
+    expect(pane).not.toContain("gridTemplateColumns");
+    expect(pane).not.toContain("grid gap-3");
   });
 });
 
@@ -157,20 +156,13 @@ describe("removing a plugin keeps what was typed into its settings", () => {
   });
 });
 
-describe("the declaration fold spans the card", () => {
-  test("its wrapper opens the narrow container query, not the page-wide control column", () => {
-    // Regression: a Fold with no control is the row's only grid item, and
-    // .agx-settings-row always reserves the wide control column's width for
-    // it even with nothing in it (see index.css). Without agx-settings-col
-    // opening the <588px container query, "What it can do" had ~70px to fit
-    // in inside a ~360px card and wrapped one word per line.
-    const foldAt = pane.indexOf('<Fold label="What it can do"');
-    const divAt = pane.lastIndexOf("<div", foldAt);
-    const wrap = pane.slice(divAt, foldAt);
-    expect(wrap).toMatch(/className="[^"]*\bagx-settings-col\b[^"]*"/);
-    // And it is full width: agx-settings-col is an inline-size container,
-    // whose intrinsic width is zero, so in the card's shrink-to-fit box it
-    // collapsed to its longest word and margin-inline:auto centred it.
-    expect(wrap).toMatch(/className="[^"]*\bw-full\b[^"]*"/);
+describe("the declaration is a named disclosure inside the plugin's row", () => {
+  test("it opens by default only while there is a decision to make, and draws no box of its own", () => {
+    // A fresh install or a changed manifest is a decision; once approved,
+    // showing the declaration on every visit is noise. Inside a row the blocks
+    // are flat: the row is already the frame, and a box that holds boxes is the
+    // defect the settings sweep counts.
+    expect(pane).toContain('<Disclosure summary="What it can do" defaultOpen={needsReview}>');
+    expect(pane).toContain("<PluginDeclaration plugin={plugin} flat />");
   });
 });

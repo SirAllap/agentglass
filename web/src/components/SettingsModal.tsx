@@ -30,11 +30,11 @@ import { rememberTrackerChoices } from "../lib/trackerView.ts";
 import { __forgetClickupPrefs } from "../lib/clickupPrefs.ts";
 import { __forgetClickupSpaces } from "../lib/clickupSpaces.ts";
 import { ClickUpPane, CardSkillsRow } from "./ClickUpPane.tsx";
+import { JiraPane } from "./JiraPane.tsx";
 import { __forgetClickupSetup, clickupSetup } from "../lib/clickupSetup.ts";
 import { forgetCards } from "../lib/prCardStore.ts";
 import { checkedLine } from "../lib/providerFreshness.ts";
 import { fmtAgo, minutesAgo } from "../lib/format.ts";
-import { useClipped } from "./TopBarNotes.tsx";
 import type { ActionRecord, GateRecord, UnderstudyClassRow } from "../../../shared/types.ts";
 import { mergeActivity, gateLine, actorLabel, activityDays, type ActivityRow, type ActivityRun } from "../lib/activity.ts";
 import { ingestUpdate } from "../lib/updateStore.ts";
@@ -60,7 +60,7 @@ import {
 } from "./settingsNavIcons.tsx";
 import { resolvePane, openSettings, paneWhenClickupKnown } from "../lib/openSettings.ts";
 import { RunningPanes } from "./RunningPanes.tsx";
-import { ThemePicker } from "./diff/DiffControls.tsx";
+import { THEMES } from "../lib/highlight.ts";
 import { BudgetsPane } from "./BudgetsPane.tsx";
 import { AgentsPane } from "./AgentsPane.tsx";
 import { rendererPref, setRendererPref, type RendererPref } from "../lib/termRenderer.ts";
@@ -113,13 +113,13 @@ import {
 import { AppearancePane } from "./ThemePicker.tsx";
 import { ShellConsole } from "./ShellConsole.tsx";
 import { CloseButton } from "./CloseButton.tsx";
-import { ICON } from "../lib/iconSize.ts";
-import { CheckboxIcon, ClockIcon, CrossIcon, DoneIcon } from "../lib/glyphIcons.tsx";
+import { HIT, ICON } from "../lib/iconSize.ts";
+import { CheckboxIcon, ClockIcon, CrossIcon } from "../lib/glyphIcons.tsx";
 import { ciOnlyApproved } from "../lib/ciNotifyPref.ts";
 import { AskedAlertLog } from "./AskedAlertLog.tsx";
 import { talkNotify, type TalkNotify } from "../lib/talkNotify.ts";
 import { RETENTION, setUnderstudyEnabled, useUnderstudy } from "./understudy/UnderstudyPanel.tsx";
-import { Appearance, closedCount } from "./understudy/Appearance.tsx";
+import { Appearance } from "./understudy/Appearance.tsx";
 import { Teach } from "./understudy/Teach.tsx";
 import { Persona } from "./understudy/persona/Persona.tsx";
 import { setCosmetic, useCosmetic } from "./understudy/persona/cosmeticStore.ts";
@@ -127,7 +127,8 @@ import { emitControl } from "../lib/controlBus.ts";
 import { refreshUnderstudy } from "../lib/understudyStore.ts";
 import { mutedSources, setMuted, sourceLabel, subscribeMuted } from "../lib/notePolicy.ts";
 import { MuteGlyph } from "./TopBarNotes.tsx";
-import { RefreshButton, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
+import { Button, RefreshButton, INPUT, INPUT_STYLE, EDGE, LINE, Segmented } from "./workspace/Chrome.tsx";
+import { SELECT_BOX, EmptyState, Field, LinkButton, SettingsCard, SettingsForm, StatusBadge, helpIdFor, type StatusTone } from "./SettingsKit.tsx";
 import { restoredNote } from "../lib/restoredNote.ts";
 
 /** A heading inside a Section, for a pane that answers the same question about
@@ -186,65 +187,49 @@ interface SetupStep {
   detail?: React.ReactNode;
   /** true done, false not yet, null "we cannot see this from here". */
   done: boolean | null;
-  action?: { label: string; onClick: () => void; busy?: boolean };
+  /** The badge's words: "Done" and "To do" unless a step has better ones. A
+   *  step that is not yet done is the person's turn (warning) unless it says
+   *  `off`: not open, not installed, nothing to be alarmed by. */
+  says?: { done?: string; todo?: string; todoTone?: "warn" | "off" };
+  /** Secondary detail under the description, named for what it holds. */
+  more?: { summary: string; body: React.ReactNode };
+  action?: { label: string; onClick: () => void; busy?: boolean; tone?: "primary" | "danger" };
 }
 
-function SetupCard({ title, steps, note, error }: {
+/**
+ * A checklist as one card: a row per step, its verdict as a badge, the button
+ * that fixes that step beside the badge, and "N of M done" at the head. Rows
+ * that are not steps (a notice, a way back) go in as children.
+ */
+function SetupCard({ title, steps, note, error, actions, children }: {
   title: string; steps: SetupStep[]; note?: string | null; error?: string | null;
+  actions?: React.ReactNode; children?: React.ReactNode;
 }) {
   const known = steps.filter((s) => s.done !== null);
   const done = known.filter((s) => s.done).length;
   const all = known.length > 0 && done === known.length;
   return (
-    <div className="agx-inset mb-5 rounded-xl overflow-hidden" style={{ border: EDGE, background: "var(--surface-card)" }}>
-      <div className="flex items-center gap-3 px-4 py-2.5" style={{ borderBottom: LINE }}>
-        <span className="text-[13.5px] font-medium" style={{ color: "var(--text)" }}>{title}</span>
-        <span className="ml-auto text-[11.5px] tabular-nums px-2 py-0.5 rounded-full"
-          style={all
-            ? { color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 14%, transparent)" }
-            : { color: "var(--text3)", background: "color-mix(in srgb, var(--text) 8%, transparent)" }}>
-          {done} of {known.length} done
-        </span>
-      </div>
-      <ol className="flex flex-col">
-        {steps.map((st, i) => (
-          <li key={st.title} className="grid items-start gap-x-3 px-4 py-3"
-            style={{ gridTemplateColumns: "20px minmax(0,1fr) auto", borderTop: i === 0 ? undefined : LINE }}>
-            <span className="mt-px w-5 h-5 rounded-full grid place-items-center text-[10.5px] tabular-nums shrink-0"
-              style={st.done === true
-                ? { color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 16%, transparent)" }
-                : st.done === false
-                  ? { color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }
-                  : { color: "var(--text4)", background: "color-mix(in srgb, var(--text) 8%, transparent)" }}>
-              {st.done === true ? <DoneIcon size={ICON.xs} /> : i + 1}
-            </span>
-            <span className="min-w-0">
-              <span className="block text-[13px]" style={{ color: "var(--text)" }}>{st.title}</span>
-              {/* mt-1 for the same reason as SettingRow's hint: 2px under
-                  13.5px type reads as one paragraph, not as a label and its
-                  detail. */}
-              {st.detail && <span className="block text-[12px] t-dim mt-1">{st.detail}</span>}
-            </span>
-            <span className="justify-self-end">
-              {st.action
-                ? <button onClick={st.action.onClick} disabled={st.action.busy}
-                    className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-                    style={{ color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)", opacity: st.action.busy ? 0.5 : 1 }}>
-                    {st.action.label}
-                  </button>
-                : st.done === null
-                  ? <span className="text-[11.5px]" style={{ color: "var(--text4)" }}>your turn</span>
-                  : null}
-            </span>
-          </li>
-        ))}
-      </ol>
+    <SettingsCard title={title} actions={actions}
+      status={<StatusBadge tone={all ? "ok" : "off"}>{done} of {known.length} done</StatusBadge>}>
+      {steps.map((st) => (
+        <SettingRow key={st.title} label={st.title} hint={st.detail} detail={st.more}
+          status={st.done === true
+            ? <StatusBadge tone="ok">{st.says?.done ?? "Done"}</StatusBadge>
+            : st.done === false
+              ? <StatusBadge tone={st.says?.todoTone ?? "warn"}>{st.says?.todo ?? "To do"}</StatusBadge>
+              : <StatusBadge tone="off">Your step</StatusBadge>}
+          actions={st.action
+            ? <Button tone={st.action.tone} pending={st.action.busy} onClick={st.action.onClick}>{st.action.label}</Button>
+            : undefined} />
+      ))}
+      {children}
       {(error || note) && (
-        <div className="px-4 py-2 text-[12px]" style={{ color: error ? "var(--error)" : "var(--text2)", borderTop: LINE }}>
+        <div role={error ? "alert" : "status"} className="agx-settings-x pt-2 pb-3 text-[12px]"
+          style={{ color: error ? "var(--error-ink)" : "var(--text2)" }}>
           {error || note}
         </div>
       )}
-    </div>
+    </SettingsCard>
   );
 }
 
@@ -268,16 +253,14 @@ function SourceRow({ id, i, n, onChanged }: {
     <SettingRow settingId={`tasks.source.${id}`} label={s.label} hint={s.what}
       control={
         <span className="flex items-center gap-2.5 justify-self-end">
-          <span className="flex flex-col shrink-0 gap-px">
+          <span className="flex shrink-0 gap-1">
             {([-1, 1] as const).map((by) => (
-              <button key={by}
+              <Button key={by} size="compact" square
                 onClick={() => { moveTaskSource(id, by); onChanged(); }}
                 disabled={by === -1 ? i === 0 : i === n - 1}
-                aria-label={`Move ${s.label} ${by === -1 ? "earlier" : "later"}`}
-                className="agx-btn leading-none px-1 rounded disabled:opacity-25"
-                style={{ color: "var(--text3)", fontSize: 7 }}>
-                {by === -1 ? "▲" : "▼"}
-              </button>
+                label={`Move ${s.label} ${by === -1 ? "earlier" : "later"}`}>
+                {by === -1 ? "↑" : "↓"}
+              </Button>
             ))}
           </span>
           <button role="switch" aria-checked={on} aria-label={s.label}
@@ -302,12 +285,12 @@ function Choice<T extends string>({ label, hint, value, options, onPick, disable
   return (
     <SettingRow label={label} hint={disabled ? disabledHint ?? hint : hint} disabled={disabled} modified={modified} settingId={settingId}
       control={
-        <span className="flex items-center gap-1 rounded-lg p-0.5 justify-self-end"
+        <span className="flex flex-wrap items-center gap-1 rounded-lg p-0.5 justify-self-end max-w-full"
           style={{ background: "color-mix(in srgb, var(--border) 28%, transparent)" }}>
           {options.map((o) => (
             <button key={o.v} onClick={() => onPick(o.v)} disabled={disabled}
               aria-pressed={value === o.v}
-              className="text-[12px] px-2 py-1 rounded-md transition-colors disabled:cursor-not-allowed whitespace-nowrap"
+              className="text-[12px] px-2 h-6 inline-flex items-center rounded-md transition-colors disabled:cursor-not-allowed whitespace-nowrap"
               style={value === o.v
                 ? { background: "var(--primary)", color: "var(--on-primary)" }
                 : { color: "var(--text3)" }}>
@@ -343,12 +326,13 @@ function Stepper({ label, hint, value, onDec, onInc, canDec, canInc, modified, s
   );
 }
 
-/** A dot, not a checkbox: green when the state is already true, nothing to
- *  press either way. Clicking the row still takes you to where it's fixed. */
+/** A badge, not a checkbox: "Done" when the state is already true, a hollow
+ *  "Not yet" otherwise, nothing to press either way. Clicking the row still
+ *  takes you to where it's fixed. */
 function OnboardingMark({ done }: { done: boolean }) {
   return done
-    ? <span className="justify-self-end rounded-full" style={{ width: 6, height: 6, background: "var(--success)" }} />
-    : <span className="justify-self-end text-[11px]" style={{ color: "var(--text4)" }}>Not yet</span>;
+    ? <StatusBadge tone="ok">Done</StatusBadge>
+    : <StatusBadge tone="off">Not yet</StatusBadge>;
 }
 
 function Row({ label, hint, kbd, href, download, onClick }: { label: string; hint: string; kbd?: string; href?: string; download?: string; onClick?: () => void }) {
@@ -358,7 +342,7 @@ function Row({ label, hint, kbd, href, download, onClick }: { label: string; hin
   );
 }
 
-type Pane = "recipes" | "review-prompts" | "saved-replies" | "appearance" | "prefs" | "terminal" | "diff" | "tasks" | "privacy" | "notifications" | "browser" | "rail" | "keys" | "lantern" | "log" | "budgets" | "hooks" | "connections" | "clickup" | "tmux" | "remote" | "plugins" | "understudy" | "about" | "onboarding"
+type Pane = "recipes" | "review-prompts" | "saved-replies" | "appearance" | "prefs" | "terminal" | "diff" | "tasks" | "privacy" | "notifications" | "browser" | "rail" | "keys" | "lantern" | "log" | "budgets" | "hooks" | "connections" | "clickup" | "jira" | "tmux" | "remote" | "plugins" | "understudy" | "about" | "onboarding"
   /** A plugin's own settings page, one per plugin that declares any. */
   | `plugin:${string}`;
 /** "" is a page that is in no group and so not in the nav (see LINK_ONLY).
@@ -503,6 +487,8 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
   /* Only while ClickUp is connected (see `tabs` in the modal): before that there is no
      workspace for a status to mean anything in, and a page for it would be a dead end. */
   { id: "clickup", label: "ClickUp", group: "Connections", kw: "clickup workflow map steps statuses cards tracker hand off qa review menu merge dialog note assigned people sprint swatch spaces subtasks pull request link", what: "How agentglass uses your ClickUp: the steps you add, tied to your own statuses.", icon: ChecklistIcon },
+  /* Always there, unlike ClickUp's: the form that connects Jira lives on this page. */
+  { id: "jira", label: "Jira", group: "Connections", kw: "jira atlassian cloud data center site token email personal access token writes changes projects keys prefixes hand off qa assignee status saved views folders board filter tracker connect disconnect", what: "Your Jira site, what agentglass may change there, and the hand-off to QA.", icon: ChecklistIcon },
   { id: "remote", label: "Remote", group: "Connections", kw: "remote access pair phone tailscale token device", what: "Reach this machine from your phone.", icon: PhoneIcon },
   /* Filed beside Remote rather than under Agents: a plugin is
      someone else's code holding a scoped credential to this server, the
@@ -560,56 +546,49 @@ function BrowserPane() {
   };
 
   return (
-    <Section>
-      <p className="py-3 text-[12px] t-dim">
-        The pages the browser view opens on its own. Everything else — what you have logged into,
-        what you have open — belongs to the page, not to a setting.
-      </p>
-
+    <SettingsCard title="Where it opens"
+      desc="The pages the browser view opens on its own. Everything else — what you have logged into, what you have open — belongs to the page, not to a setting.">
       <SettingRow
-        align="start"
         agentNever="a page the browser opens by itself, with the owner's signed-in sessions: not something an agent points elsewhere"
         label="Home page"
-        hint={<>
-          Where the view opens, and where Home goes. Leave it empty for a blank page.
+        hint="Where the view opens, and where Home goes. Leave it empty for a blank page."
+        below={<>
+          <div className="flex items-center gap-2 max-w-[480px]">
+            <input
+              value={home}
+              onChange={(e) => { setHome(e.target.value); setBad(false); setSaved(false); }}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); save(); } }}
+              placeholder="https://duckduckgo.com"
+              spellCheck={false}
+              aria-label="Home page"
+              aria-invalid={bad || undefined}
+              className={`min-w-0 flex-1 ${INPUT}`}
+              style={{
+                ...INPUT_STYLE,
+                ...(bad ? { border: "1px solid color-mix(in srgb, var(--error) 60%, transparent)" } : {}),
+              }}
+            />
+            <Button onClick={save}>{saved ? "Saved" : "Save"}</Button>
+          </div>
           {bad && (
-            <span className="block mt-1" style={{ color: "var(--error-ink)" }}>
+            <div className="mt-1 text-[12px]" role="alert" style={{ color: "var(--error-ink)" }}>
               That is not an address this will open — it takes http(s), or nothing at all.
-            </span>
+            </div>
           )}
         </>}
-        control={<span className="flex items-center gap-1.5">
-          <input
-            value={home}
-            onChange={(e) => { setHome(e.target.value); setBad(false); setSaved(false); }}
-            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); save(); } }}
-            placeholder="https://duckduckgo.com"
-            spellCheck={false}
-            className={`w-[210px] ${INPUT}`}
-            style={{
-              ...INPUT_STYLE,
-              ...(bad ? { border: "1px solid color-mix(in srgb, var(--error) 60%, transparent)" } : {}),
-            }}
-          />
-          <button onClick={save}
-            className="agx-btn text-[12px] px-2 py-1 rounded"
-            style={{ border: EDGE, color: "var(--text2)" }}>
-            {saved ? "Saved" : "Save"}
-          </button>
-        </span>}
       />
 
       <SettingRow
         settingId="browser.searchEngine" label="Search engine"
         hint="Used when what you type in the address bar is words rather than an address."
-        control={<Select
+        control={<span className="flex justify-end"><Select
           value={engine}
           options={(Object.keys(SEARCH_ENGINE_LABELS) as SearchEngine[]).map((id) => ({ value: id, label: SEARCH_ENGINE_LABELS[id] }))}
           onChange={(v) => { setting("browser.searchEngine").set(v); setEngine(v as SearchEngine); }}
           align="right"
-        />}
+        /></span>}
       />
-    </Section>
+    </SettingsCard>
   );
 }
 
@@ -637,26 +616,32 @@ function RailPane() {
   const [drag, setDrag] = useState<{ id: ViewId; from: RailPlace } | null>(null);
 
   return (
-    <Section title="What is on the rail"
-      desc="Which views get an icon, and whether they sit at the top or the bottom of it.">
-      {/* Twenty views, three drawers, five controls each: the one thing that
+    <>
+      {/* The page's own words first, then one card per drawer. The drawers were
+          eyebrows inside one card, each with a line either side of it; a card
+          each gives the three of them a name and an edge, and the divider
+          falls only between two views. */}
+      <SettingsCard title="What is on the rail"
+        desc="Which views get an icon, and whether they sit at the top or the bottom of it.">
+        <SettingRow
+          agentExempt
+          label="On the rail itself"
+          hint={<><b style={{ color: "var(--text2)" }}>Drag</b> an icon between the groups — a gap opens where it will land — or drop it on the dashed square at the bottom to put it away. <b style={{ color: "var(--text2)" }}>Right-click</b> any icon for the same moves, and <b style={{ color: "var(--text2)" }}>Alt+↑/↓</b> does it from the keyboard.</>}
+          actions={railCustomised() ? <Button onClick={resetRail}>Reset the rail</Button> : undefined}
+        />
+      </SettingsCard>
+
+      {/* Twenty views, three drawers, a few controls each: the one thing that
           makes this readable is that the controls of every view land on the
           same lines, and that is what the row grid is for. The icon rides in
           the label — a column of its own for 20px is how this page ended up
           drawing to a different left edge than the rest of the dialog. */}
-      {/* A Fragment, not a div: the column's padding rule applies to the direct
-          children of a section, so a wrapper here would indent its rows twice —
-          and with five controls on the right, the second indent is enough to
-          push them over the words. Measured it doing exactly that. */}
       {(Object.keys(PLACE_LABEL) as RailPlace[]).map((place) => (
-        <Fragment key={place}>
-          <div className="panel-eyebrow pt-3 pb-1">{PLACE_LABEL[place]}</div>
-          <div className="text-[12px] t-dim pb-1.5">{PLACE_NOTE[place]}</div>
-
+        <SettingsCard key={place} title={PLACE_LABEL[place]} desc={PLACE_NOTE[place]}>
           {rail[place].length === 0 ? (
-            <div className="py-2 text-[12px] t-dim">
+            <EmptyState>
               {place === "hidden" ? "Nothing put away." : "Empty — drag something here, or use the buttons on the right."}
-            </div>
+            </EmptyState>
           ) : rail[place].map((v, i) => {
             const Icon = v.icon;
             const chord = chordFor(v.id);
@@ -668,29 +653,34 @@ function RailPane() {
                * way to do this from a keyboard — but they no longer occupy the
                * row when nobody is looking at it. Hover or focus brings them
                * back, which is the trade the design was drawn with.
+               *
+               * The drag handlers ride on the row itself (`rowProps`), not on
+               * a div around it: a wrapper takes the row out of the card body
+               * and its divider with it.
                */
-              <div key={v.id}
-                draggable
-                onDragStart={(e) => { setDrag({ id: v.id, from: place }); e.dataTransfer.effectAllowed = "move"; }}
-                onDragEnd={() => setDrag(null)}
-                onDragOver={(e) => { if (drag && drag.id !== v.id) e.preventDefault(); }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  if (!drag || drag.id === v.id) return;
-                  // Dropped ONTO a row means "take its place", which is the
-                  // only reading that needs no insertion line to explain it.
-                  moveView(drag.id, place, i);
-                  setDrag(null);
+              <SettingRow key={v.id}
+                rowProps={{
+                  draggable: true,
+                  onDragStart: (e) => { setDrag({ id: v.id, from: place }); e.dataTransfer.effectAllowed = "move"; },
+                  onDragEnd: () => setDrag(null),
+                  onDragOver: (e) => { if (drag && drag.id !== v.id) e.preventDefault(); },
+                  onDrop: (e) => {
+                    e.preventDefault();
+                    if (!drag || drag.id === v.id) return;
+                    // Dropped ONTO a row means "take its place", which is the
+                    // only reading that needs no insertion line to explain it.
+                    moveView(drag.id, place, i);
+                    setDrag(null);
+                  },
+                  style: { opacity: drag?.id === v.id ? 0.4 : 1, cursor: "grab" },
                 }}
-                style={{ opacity: drag?.id === v.id ? 0.4 : 1, cursor: "grab" }}>
-              <SettingRow
                 settingId={`rail.place.${v.id}`}
                 label={<span className="flex items-center gap-2.5 min-w-0">
                   <span className="shrink-0 select-none" style={{ color: "var(--text4)" }} aria-hidden title="Drag to reorder">⠿</span>
                   <span className="shrink-0 grid place-items-center w-5" style={{ color: "var(--text2)" }}><Icon size={ICON.md} /></span>
-                  <span className="truncate">{v.label}</span>
+                  <span className="min-w-0">{v.label}</span>
                 </span>}
-                hint={<span className="block truncate pl-[30px]">{v.hint}</span>}
+                hint={<span className="block pl-[30px]">{v.hint}</span>}
                 /*
                  * Two controls, not five.
                  *
@@ -713,7 +703,7 @@ function RailPane() {
                       group it also decides which number you get. Kept out of
                       sight until wanted: `agx-reveal` is opacity-only, so the
                       row does not change width when they appear. */}
-                  <span className="agx-reveal flex items-center gap-0.5 w-[46px]">
+                  <span className="agx-reveal flex items-center gap-0.5 w-[54px]">
                     {place !== "hidden" && (
                       <>
                         <MiniBtn agentExempt label="Move up" disabled={i === 0} onClick={() => moveView(v.id, place, i - 1)}>↑</MiniBtn>
@@ -733,32 +723,19 @@ function RailPane() {
                   />
                 </span>}
               />
-              </div>
             );
           })}
-        </Fragment>
+        </SettingsCard>
       ))}
-
-      <SettingRow
-        agentExempt
-        label="On the rail itself"
-        hint={<><b style={{ color: "var(--text2)" }}>Drag</b> an icon between the groups — a gap opens where it will land — or drop it on the dashed square at the bottom to put it away. <b style={{ color: "var(--text2)" }}>Right-click</b> any icon for the same moves, and <b style={{ color: "var(--text2)" }}>Alt+↑/↓</b> does it from the keyboard.</>}
-        control={railCustomised()
-          ? <button onClick={resetRail} className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-              style={{ color: "var(--text2)", border: EDGE }}>
-              Reset the rail
-            </button>
-          : undefined}
-      />
-    </Section>
+    </>
   );
 }
 
 function MiniBtn({ label, disabled, onClick, children }: { settingId?: string; agentExempt?: boolean; label: string; disabled?: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button aria-label={label} title={label} disabled={disabled} onClick={onClick}
-      className="w-[20px] h-[20px] grid place-items-center rounded-md text-[11px] hover:bg-white/10"
-      style={{ color: "var(--text2)", opacity: disabled ? 0.25 : 0.8 }}>
+      className="grid place-items-center rounded-md text-[11px] hover:bg-white/10"
+      style={{ width: HIT, height: HIT, color: "var(--text2)", opacity: disabled ? 0.25 : 0.8 }}>
       {children}
     </button>
   );
@@ -796,8 +773,7 @@ function PacePane() {
   const cfg = useSyncExternalStore(subscribePaceConfig, paceConfig, paceConfig);
   const working = cfg.spread === "working";
   return (
-    <>
-      <Group>Plan pace</Group>
+    <SettingsCard title="Plan pace">
       <Choice<PaceConfig["spread"]>
         label="Spread the week's budget over"
         hint="Working hours earn the budget, so the pace marker holds still overnight and at weekends. Every hour is a straight line across the week."
@@ -807,7 +783,7 @@ function PacePane() {
       <SettingRow label="Working days" disabled={!working}
         hint={working && !cfg.workDays.some(Boolean) ? "None ticked: every hour counts, as if Every hour were chosen." : "Days that earn budget."}
         control={
-          <span className="flex items-center gap-1 justify-self-end">
+          <span className="flex flex-wrap items-center gap-1 justify-self-end max-w-full">
             {DAY_NAMES.map((d, i) => (
               <button key={d} disabled={!working} aria-pressed={cfg.workDays[i]}
                 onClick={() => setPaceConfig({ workDays: cfg.workDays.map((x, j) => (j === i ? !x : x)) })}
@@ -841,7 +817,7 @@ function PacePane() {
         value={String(cfg.alertAt) as "80" | "90" | "95"}
         onPick={(v) => setPaceConfig({ alertAt: Number(v) })}
         options={[{ v: "80", label: "80%" }, { v: "90", label: "90%" }, { v: "95", label: "95%" }]} />
-    </>
+    </SettingsCard>
   );
 }
 
@@ -938,7 +914,7 @@ function KeyRow({ id, keyName, capturing, onCapture, error, chord }: {
               : chord.key
                 ? `${chordLabel(chord.key)} opens this, from its position in the top group — click to record your own`
                 : "Only the top group is numbered — click to record a combination for this one"}
-            className="chip text-[11px] tabular-nums min-w-[74px] text-center"
+            className="chip h-[22px] justify-center text-[11px] tabular-nums min-w-[74px] text-center"
             style={chord.capturing
               ? { color: "var(--primary-hover)", borderColor: "color-mix(in srgb, var(--primary) 60%, transparent)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }
               : chord.custom
@@ -955,7 +931,7 @@ function KeyRow({ id, keyName, capturing, onCapture, error, chord }: {
       )}
       <span className="shrink-0 flex items-center gap-1.5">
         <span className="text-[11px] t-dim w-[62px] text-right">{chord ? "dashboard" : "press"}</span>
-        <button onClick={onCapture} className="chip text-[11px] tabular-nums min-w-[74px] text-center"
+        <button onClick={onCapture} className="chip h-[22px] justify-center text-[11px] tabular-nums min-w-[74px] text-center"
           style={capturing
             ? { color: "var(--primary-hover)", borderColor: "color-mix(in srgb, var(--primary) 60%, transparent)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }
             : { color: "var(--text2)" }}>
@@ -1023,27 +999,29 @@ function ActivityPane({ open }: { open: boolean }) {
     return () => { alive = false; };
   }, [open]);
 
-  if (!rows) return <Section title="What this app has done"><div className="px-3 py-3 text-[11.5px] t-dim2">Loading…</div></Section>;
+  if (!rows) return (
+    <SettingsCard title="What this app has done">
+      <SettingRow label="Loading…" status={<StatusBadge tone="checking">Checking</StatusBadge>} />
+    </SettingsCard>
+  );
   if (!rows.length) {
     return (
-      <Section title="What this app has done">
-        <div className="py-3 text-[12.5px] t-dim">
-          Nothing yet. Every write this dashboard performs — staging, discarding, pushing,
-          merging, container actions, gate decisions — is recorded here as it happens.
-        </div>
-      </Section>
+      <SettingsCard title="What this app has done">
+        <SettingRow label="Nothing yet"
+          hint="Every write this dashboard performs — staging, discarding, pushing, merging, container actions, gate decisions — is recorded here as it happens." />
+      </SettingsCard>
     );
   }
 
   return (
-    <Section title="What this app has done"
-      desc="Newest first, kept indefinitely — these are the changes you made, not telemetry. Held tool calls appear here whoever resolved them, including the ones the timeout decided while nobody was looking.">
-      {/* The paragraph that stood here is the card's own description now. As a
-          first ROW it read as the first entry in the log — a line of prose at
-          the top of a list of events, on the same ground and the same rhythm as
-          the events. */}
-      {/* No wrapper: a padded div around the lines would indent them past the
-          column's edge, which every other page sits on. */}
+    <>
+      {/* The paragraph that stood here is a row of its own. As a first line of
+          the list it read as the first entry in the log — prose at the top of
+          a list of events, on the same ground and the same rhythm as them. */}
+      <SettingsCard title="What this app has done">
+        <SettingRow label="Newest first, kept indefinitely"
+          hint="These are the changes you made, not telemetry. Held tool calls appear here whoever resolved them, including the ones the timeout decided while nobody was looking." />
+      </SettingsCard>
       {/*
         RUNS, not one line each.
        *
@@ -1061,22 +1039,21 @@ function ActivityPane({ open }: { open: boolean }) {
         hide the one poll out of twenty that came back an error, which is the
         only line on that screen anybody needs.
       */}
-      {/* A DAY HEADING where the day changes, and the age comes off the rows
-          under it. Every line was carrying its own "2d", which on a screen
-          where twenty lines in a row share a day is the same word printed
-          twenty times and no answer at all to "when was this". Said once, at
-          the boundary, it becomes the thing it was trying to be. */}
+      {/* A CARD PER DAY, and the age comes off the rows in it. Every line was
+          carrying its own "2d", which on a screen where twenty lines in a row
+          share a day is the same word printed twenty times and no answer at
+          all to "when was this". Said once, as the card's title, it becomes
+          the thing it was trying to be. */}
       {activityDays(rows).map(({ day, runs }) => (
-        <Fragment key={day}>
-          <div className="pt-3 pb-1 text-[10.5px] uppercase tracking-[0.12em]" style={{ color: "var(--text4)" }}>{day}</div>
+        <SettingsCard key={day} title={day}>
           {runs.map((run) => (
             run.kind === "gate"
               ? <GateLine key={run.key} g={run.row} />
               : <ActionLine key={run.key} a={run.row} times={run.times} />
           ))}
-        </Fragment>
+        </SettingsCard>
       ))}
-    </Section>
+    </>
   );
 }
 
@@ -1087,7 +1064,7 @@ function Who({ actor, at }: { actor: string; at: number }) {
     /* The clock time, not the age. The day is said once above the group, so
        the useful thing on the row is where in that day it fell — and "2d"
        repeated down a column answered a question nobody was asking twice. */
-    <span className="text-[9.5px] t-dim2 tabular-nums shrink-0 text-right"
+    <span className="text-[11.5px] t-dim tabular-nums whitespace-nowrap"
       title={new Date(at).toLocaleString()}>
       {actor && `${actor} · `}{new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
     </span>
@@ -1104,28 +1081,16 @@ function Who({ actor, at }: { actor: string; at: number }) {
  */
 function ActionLine({ a, times = 1 }: { a: ActionRecord; times?: number }) {
   return (
-    <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 items-baseline py-1.5 rounded-lg agx-hover">
-      <span
-        className="text-[9.5px] font-semibold tabular-nums shrink-0"
-        style={{ color: a.ok ? "var(--text4)" : "var(--error)" }}
-        title={a.ok ? "succeeded" : a.detail || "failed"}
-      >
-        {a.ok ? "·" : <CrossIcon size={ICON.xs} />}
-      </span>
-      <span className="min-w-0">
-        <span className="text-[11.5px]" style={{ color: "var(--text)" }}>{verb(a.action)}</span>
-        {a.target && <span className="text-[11.5px] t-dim"> {a.target}</span>}
-        {times > 1 && (
-          <span className="ml-1.5 text-[10px] px-1.5 rounded-full tabular-nums"
-            title={`${times} of these in a row, newest first`}
-            style={{ color: "var(--text4)", border: EDGE }}>
-            ×{times}
-          </span>
-        )}
-        {!a.ok && a.detail && <span className="block text-[10px] mt-1.5" style={{ color: "var(--error-ink)" }}>{a.detail}</span>}
-      </span>
-      <Who actor={actorLabel({ kind: "action", at: a.at, key: "", row: a })} at={a.at} />
-    </div>
+    <SettingRow
+      label={<>
+        {verb(a.action)}
+        {a.target && <span className="t-dim"> {a.target}</span>}
+        {times > 1 && <span className="t-dim tabular-nums" title={`${times} of these in a row, newest first`}> ×{times}</span>}
+      </>}
+      status={a.ok ? undefined : <StatusBadge tone="err">Failed</StatusBadge>}
+      hint={!a.ok && a.detail ? <span style={{ color: "var(--error-ink)" }}>{a.detail}</span> : undefined}
+      control={<Who actor={actorLabel({ kind: "action", at: a.at, key: "", row: a })} at={a.at} />}
+    />
   );
 }
 
@@ -1141,26 +1106,25 @@ function GateLine({ g }: { g: GateRecord }) {
   const { verb: did, note } = gateLine(g);
   const nobody = g.resolution !== "human";
   return (
-    <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 items-baseline py-1.5 rounded-lg agx-hover">
-      <span
-        className="text-[9.5px] font-semibold tabular-nums shrink-0"
-        style={{ color: nobody ? "var(--warning)" : g.decision === "deny" ? "var(--error)" : "var(--text4)" }}
-        title={g.resolution === "rule" ? "a gate rule decided this" : nobody ? "nobody decided this" : "decided by a person"}
-      >
-        {nobody ? <ClockIcon size={ICON.xs} /> : "·"}
-      </span>
-      <span className="min-w-0">
-        <span className="text-[11.5px]" style={{ color: "var(--text)" }}>{did}</span>
-        <span className="text-[11.5px] t-dim"> {g.tool_name}{g.summary ? ` · ${g.summary}` : ""}</span>
-        {note && <span className="block text-[10px] mt-1.5" style={{ color: "var(--warning-ink)" }}>{note}</span>}
+    <SettingRow
+      label={<>
+        {did}
+        <span className="t-dim"> {g.tool_name}{g.summary ? ` · ${g.summary}` : ""}</span>
+      </>}
+      status={nobody
+        ? <StatusBadge tone="warn">{g.resolution === "rule" ? "A gate rule decided" : "Nobody decided"}</StatusBadge>
+        : g.decision === "deny" ? <StatusBadge tone="err">Denied</StatusBadge>
+        : undefined}
+      hint={(note || (g.resolution === "human" && g.reason)) ? <>
+        {note && <span className="block" style={{ color: "var(--warning-ink)" }}>{note}</span>}
         {/* The reason a person typed, which lives nowhere else: the agent was
             given it and the action log never carried it. */}
         {g.resolution === "human" && g.reason && (
-          <span className="block text-[10px] mt-1.5 t-dim2">“{g.reason}”</span>
+          <span className="block">“{g.reason}”</span>
         )}
-      </span>
-      <Who actor={actorLabel({ kind: "gate", at: g.decided_at ?? 0, key: "", row: g })} at={g.decided_at ?? 0} />
-    </div>
+      </> : undefined}
+      control={<Who actor={actorLabel({ kind: "gate", at: g.decided_at ?? 0, key: "", row: g })} at={g.decided_at ?? 0} />}
+    />
   );
 }
 
@@ -1244,10 +1208,8 @@ function UnderstudyPane({ open, onLeave }: { open: boolean; onLeave: () => void 
        * that decides what the orchestrator knows about you belongs on a
        * settings page and not behind a tab in a scoreboard.
        */}
-      <Section title="What the orchestrator learns from">
-        <Teach active={open} />
-      </Section>
-      <Section title="Keeping score">
+      <Teach active={open} />
+      <SettingsCard title="Keeping score">
         <Toggle
           label="Let the clone watch"
           hint={frame?.halted
@@ -1260,17 +1222,17 @@ function UnderstudyPane({ open, onLeave }: { open: boolean; onLeave: () => void 
               void refreshUnderstudy();
             });
           }} />
-      </Section>
-      {err && <div className="px-3.5 pb-3 text-[12px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
+        {err && <div role="alert" className="agx-settings-x pt-2 pb-3 text-[12px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
+      </SettingsCard>
       <UnderstudyLook classes={frame?.classes ?? []} />
-      <Section title="What it keeps">
+      <SettingsCard title="What it keeps">
         <Row label={`Sealed situations — ${RETENTION.snapshotDays} days`}
           hint="The material it read, kept only long enough to check a prediction against it. Swept on a fixed window of its own, deliberately not on the events retention you set: turning that off must not silently turn this off too." />
         <Row label={`The fact of a write — ${RETENTION.stubDays} days`}
           hint="Route, method and how it answered. Never the request body — there is no column for one." />
         <Row label="The score — kept"
           hint="Decisions and refusals do not expire. They are the score, and a score with holes in it is not a score." />
-      </Section>
+      </SettingsCard>
     </>
   );
 }
@@ -1289,7 +1251,6 @@ function UnderstudyPane({ open, onLeave }: { open: boolean; onLeave: () => void 
  */
 function UnderstudyLook({ classes }: { classes: readonly UnderstudyClassRow[] }) {
   const cos = useCosmetic();
-  const closed = closedCount(classes);
   return (
     /*
      * TWO COLUMNS, and the portrait is the one that stays.
@@ -1324,19 +1285,7 @@ function UnderstudyLook({ classes }: { classes: readonly UnderstudyClassRow[] })
       </aside>
 
       <div className="min-w-0">
-        <div className="agx-settings-section">
-          <div className="agx-settings-head flex items-baseline gap-2">
-            <span className="agx-settings-head-t">How it looks</span>
-            {closed > 0 && <span className="chip t-dim tabular-nums">{closed} closed</span>}
-          </div>
-          <div className="agx-settings-rows">
-            <p className="px-4 py-3 m-0 text-[11.5px]" style={{ color: "var(--text4)" }}>
-              A closed option opens on the same measurement the capabilities do, and the reason beside it is the
-              server's own sentence about that class — never a second rule kept here. Three are sealed and never open.
-            </p>
-            <Appearance value={cos} onChange={setCosmetic} classes={classes} />
-          </div>
-        </div>
+        <Appearance value={cos} onChange={setCosmetic} classes={classes} />
       </div>
     </div>
   );
@@ -1347,62 +1296,43 @@ function UnderstudyLook({ classes }: { classes: readonly UnderstudyClassRow[] })
  * and a dot on this page's nav row, never a notification — an error the server
  * recovered from is not a person's emergency, only a thing worth knowing.
  */
-/** One line of the digest: severity dot, count, message, last seen. The message
- *  holds two lines and opens on a click; the columns are fixed so a wrapped
- *  message never pushes the count or the time out of line. Wrapping is at word
- *  boundaries (`overflow-wrap:anywhere` only breaks a token that is longer than
- *  the line, a path or an address); `break-all` cut "the network" in half.
- *  A row is a button only while its text is actually clamped (or opened): a
- *  short line that fits already shows all it holds, and a pointer and hover
- *  over it promised a click that did nothing. */
+/** One group of the digest as a row: the message whole (it used to fold to two
+ *  lines behind a click, which hid exactly the part that says what failed),
+ *  the severity as a badge, and how many times and when in the description.
+ *  `overflow-wrap:anywhere` breaks only a token longer than the line, a path or
+ *  an address; `break-all` cut "the network" in half. */
 function LogRow({ level, count, text, when }: { level: "error" | "warn"; count: string; text: string; when: string }) {
-  const [open, setOpen] = useState(false);
-  const textRef = useRef<HTMLSpanElement>(null);
-  const clamped = useClipped([textRef], !open, [text]);
-  const clickable = open || clamped;
-  const Row = clickable ? "button" : "div";
   return (
-    <Row
-      {...(clickable
-        ? { type: "button" as const, "aria-expanded": open, title: open ? undefined : "Show the whole line", onClick: () => setOpen((v) => !v) }
-        : {})}
-      className={`${clickable ? "agx-logrow cursor-pointer" : ""} grid items-start gap-x-2 text-left w-full bg-transparent border-0 p-0`}
-      style={{ gridTemplateColumns: "8px 2.25rem minmax(0,1fr) 5rem", color: "var(--text2)", font: "inherit" }}
-    >
-      <span
-        aria-label={level} title={level}
-        className="rounded-full box-border self-start"
-        // Filled = error, ring = warning: the two theme colours can sit close
-        // together, so the shape carries the difference as well as the hue.
-        style={{ width: 7, height: 7, marginTop: "0.42em", ...(level === "error"
-          ? { background: "var(--error)" }
-          : { border: "1.5px solid var(--warning)" }) }}
-      />
-      <span className="tabular-nums text-right">{count}</span>
-      <span ref={textRef} style={{ overflowWrap: "anywhere", ...(open ? {} : { display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }) }}>{text}</span>
-      <span className="text-right t-dim2 tabular-nums whitespace-nowrap">{when}</span>
-    </Row>
+    <SettingRow
+      label={<span style={{ overflowWrap: "anywhere" }}>{text}</span>}
+      status={<StatusBadge tone={level === "error" ? "err" : "warn"}>{level === "error" ? "Error" : "Warning"}</StatusBadge>}
+      hint={`${count} · ${when}`} />
   );
 }
 
 function LogDigestSection({ d }: { d: LogDigest | "failed" | null }) {
   const desc = "Errors and warnings the server logged in the last 24 hours, grouped.";
-  const fold = (body: React.ReactNode) => <Section title="Server log" desc={desc}><Fold label="Server log digest">{body}</Fold></Section>;
-  if (d === "failed") return fold(<div className="px-3 py-2 text-[11px] t-dim2">Could not read the log digest.</div>);
-  if (!d) return fold(<div className="px-3 py-2 text-[11px] t-dim2">Reading…</div>);
+  const [open, setOpen] = useState(false);
   const ago = (t: number) => minutesAgo(t);
-  return fold(
-      <div className="px-3 py-2 flex flex-col gap-1.5 text-[11.5px]" style={{ color: "var(--text2)" }}>
-        {d.crashLoops.map((l) => (
-          <LogRow key={`c-${l.sig}`} level="error" count={`${l.count}×`} text={`${l.example} — inside a minute`} when={ago(l.at)} />
-        ))}
-        {d.spikes.map((sp) => (
-          <LogRow key={`s-${sp.sig}`} level="warn" count={`${sp.recent}×`} text={`${sp.example} — last hour, was ${sp.perHourBefore}/h`} when="last hour" />
-        ))}
-        {d.total === 0
-          ? <div className="t-dim2">Nothing logged in the last 24 hours.</div>
-          : d.groups.map((g) => <LogRow key={g.sig} level={g.level} count={String(g.count)} text={g.example} when={ago(g.last)} />)}
-      </div>
+  const note = (text: string) => <SettingRow label={text} />;
+  return (
+    <SettingsCard title="Server log" desc={desc} fold={{ open, onToggle: setOpen }}>
+      {d === "failed" ? note("Could not read the log digest.")
+        : !d ? note("Reading…")
+        : (
+          <>
+            {d.crashLoops.map((l) => (
+              <LogRow key={`c-${l.sig}`} level="error" count={`${l.count}×`} text={`${l.example} — inside a minute`} when={ago(l.at)} />
+            ))}
+            {d.spikes.map((sp) => (
+              <LogRow key={`s-${sp.sig}`} level="warn" count={`${sp.recent}×`} text={`${sp.example} — last hour, was ${sp.perHourBefore}/h`} when="last hour" />
+            ))}
+            {d.total === 0
+              ? note("Nothing logged in the last 24 hours.")
+              : d.groups.map((g) => <LogRow key={g.sig} level={g.level} count={String(g.count)} text={g.example} when={ago(g.last)} />)}
+          </>
+        )}
+    </SettingsCard>
   );
 }
 
@@ -1456,15 +1386,18 @@ function AboutPane({ open }: { open: boolean }) {
   };
 
   if (stErr) return (
-    <Section title="This build"
+    <SettingsCard title="This build"
       desc="Which version is running, and whether a newer one is out.">
-      <div className="px-3 py-2 text-[11px] flex flex-col gap-1" style={{ color: "var(--text2)" }}>
-        <span>Could not read this build's version.</span>
-        <span className="text-[10px] t-dim2 break-all">{stErr}</span>
-      </div>
-    </Section>
+      <SettingRow label="Could not read this build's version"
+        status={<StatusBadge tone="err">Unavailable</StatusBadge>}
+        hint={<span className="break-all">{stErr}</span>} />
+    </SettingsCard>
   );
-  if (!st) return <Section title="This build"><div className="px-3 py-2 text-[11px] t-dim2">Reading version…</div></Section>;
+  if (!st) return (
+    <SettingsCard title="This build" desc="Which version is running, and whether a newer one is out.">
+      <SettingRow label="Reading version…" status={<StatusBadge tone="checking">Checking</StatusBadge>} />
+    </SettingsCard>
+  );
 
   // The stamp, not the commit. This row rendered `commit.slice(0, 7)` as seven
   // authoritative hex characters for a build packaged from a dirty tree, so it
@@ -1477,7 +1410,7 @@ function AboutPane({ open }: { open: boolean }) {
   const mine = installedNotes(st.info.baseTag, st.info.distance, st.branch);
   return (
     <>
-    <Section title="This build"
+    <SettingsCard title="This build"
       desc="Which version is running, and whether a newer one is out.">
       {/* The build you are running, as a row like any other: what it is on the
           left, and the one thing you can do about it on the right. The notes
@@ -1497,106 +1430,112 @@ function AboutPane({ open }: { open: boolean }) {
           </span>
           {st.info.builtAt && <> · built {new Date(st.info.builtAt).toLocaleString()}</>}
         </>}
-        control={mine
-          ? <button onClick={() => setWant(mine)}
-              className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-              style={{ color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }}>
-              Release notes
-            </button>
+        actions={mine
+          ? <Button tone="primary" onClick={() => setWant(mine)}>Release notes</Button>
           : undefined}
       />
 
-      <div className="px-4 py-2 flex flex-col gap-3">
-
-        {/* Said in words, because the stamp alone is only obvious once you know
-            the convention. The file list is the answer to the question that had
-            no answer today — "whose uncommitted work is in the app I am running"
-            — and it is absent outside the desktop shell on purpose. */}
-        {dirty && (
-          <div className="text-[10.5px] px-2.5 py-2 rounded-lg"
-            style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }}>
-            Built from an uncommitted tree — {st.info.dirtyCount} packaged file(s) differ from{" "}
+      {/* Said in words, because the stamp alone is only obvious once you know
+          the convention. The file list is the answer to the question that had
+          no answer today — "whose uncommitted work is in the app I am running"
+          — and it is absent outside the desktop shell on purpose. */}
+      {dirty && (
+        <SettingRow
+          label="Built from an uncommitted tree"
+          status={<StatusBadge tone="warn">Uncommitted</StatusBadge>}
+          hint={<>
+            {st.info.dirtyCount} packaged file(s) differ from{" "}
             <span className="tabular-nums">{st.info.commit.slice(0, 7)}</span>. No commit reproduces this build.
-            {st.info.dirtyFiles.length > 0 && (
-              <pre className="mt-1 text-[9.5px] whitespace-pre-wrap break-all m-0" style={{ color: "var(--text3)" }}>
+          </>}
+          detail={st.info.dirtyFiles.length > 0 ? {
+            summary: "Files that differ from the commit",
+            body: (
+              <pre className="m-0 text-[11px] whitespace-pre-wrap break-all" style={{ color: "var(--text3)" }}>
                 {st.info.dirtyFiles.slice(0, 8).join("\n")}
                 {st.info.dirtyFiles.length > 8 ? `\n… and ${st.info.dirtyFiles.length - 8} more` : ""}
               </pre>
-            )}
-          </div>
-        )}
+            ),
+          } : undefined}
+        />
+      )}
 
-        {/* The outcome of the previous run, which finished after the app it was
-            updating had already been stopped — so this is the only place it can
-            be reported at all. */}
-        {st.last && (
-          <div className="text-[10.5px] px-2.5 py-2 rounded-lg"
-            style={st.last.ok
-              ? { color: "var(--text2)", background: "color-mix(in srgb, var(--success) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 30%, transparent)" }
-              : { color: "var(--text2)", background: "color-mix(in srgb, var(--error) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 35%, transparent)" }}>
-            Last update {st.last.ok ? "succeeded" : "failed"} — {new Date(st.last.at).toLocaleString()}
-            {!st.last.ok && st.last.tail && (
-              <pre className="mt-1 text-[9.5px] whitespace-pre-wrap break-all m-0" style={{ color: "var(--text3)" }}>
+      {/* The outcome of the previous run, which finished after the app it was
+          updating had already been stopped — so this is the only place it can
+          be reported at all. */}
+      {st.last && (
+        <SettingRow
+          label="Last update"
+          status={<StatusBadge tone={st.last.ok ? "ok" : "err"}>{st.last.ok ? "Succeeded" : "Failed"}</StatusBadge>}
+          hint={new Date(st.last.at).toLocaleString()}
+          detail={!st.last.ok && st.last.tail ? {
+            summary: "Last lines of the update log",
+            body: (
+              <pre className="m-0 text-[11px] whitespace-pre-wrap break-all" style={{ color: "var(--text3)" }}>
                 {st.last.tail.split("~").filter(Boolean).slice(-6).join("\n")}
               </pre>
-            )}
-          </div>
-        )}
+            ),
+          } : undefined}
+        />
+      )}
 
-        {started ? (
-          <div className="text-[11px] px-2.5 py-2 rounded-lg" style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
-            Updating. The app will close and reopen on its own — this window going away is the update working, not crashing.
-          </div>
-        ) : st.blocked ? (
-          <div className="text-[11px] px-2.5 py-2 rounded-lg" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 30%, transparent)" }}>
-            {st.blocked}
-          </div>
-        ) : st.behind === 0 ? (
-          <div className="text-[12px] t-dim">
-            {st.branch ? `Up to date — ${st.branch} is the newest release.` : "Up to date."}
-          </div>
-        ) : (
-          <>
-            <div className="text-[13px]" style={{ color: "var(--text)" }}>
-              {st.branch} is available{st.behind > 1 ? ` — ${st.behind} releases newer than yours` : ""}
-            </div>
-            <div className="flex flex-col gap-0.5 max-h-[220px] overflow-y-auto agx-scroll">
-              {st.incoming.map((c) => (
-                <div key={c.sha} className="flex gap-2 text-[10.5px] min-w-0">
-                  <span className="tabular-nums shrink-0" style={{ color: "var(--primary-hover)" }}>{c.sha}</span>
-                  {c.subject && <span className="truncate t-dim2" title={c.subject}>{c.subject}</span>}
-                </div>
-              ))}
-            </div>
-            {err && <div className="text-[10.5px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
-            {/* The install compiles the release on this machine, so the
-                toolchain has to be here before it starts — said up front
-                rather than left to fail the build and report it in the panel
-                above, after the app has already gone down to restart. */}
-            <div className="agx-inset text-[10.5px] px-2.5 py-1.5 rounded-lg" style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 30%, transparent)" }}>
-              Built on your machine from source — needs <span style={{ color: "var(--warning-ink)" }}>git</span> and <span style={{ color: "var(--warning-ink)" }}>bun</span> installed, and is Linux-only for now.
-            </div>
-            <div className="flex items-center gap-2">
-              <button onClick={run} disabled={busy}
-                className="text-[11.5px] px-3 py-1.5 rounded-lg font-medium"
-                style={{ color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+      {started ? (
+        <SettingRow label="Updating"
+          status={<StatusBadge tone="checking">In progress</StatusBadge>}
+          hint="The app will close and reopen on its own — this window going away is the update working, not crashing." />
+      ) : st.blocked ? (
+        <SettingRow label="Updating is blocked"
+          status={<StatusBadge tone="warn">Blocked</StatusBadge>}
+          hint={st.blocked} />
+      ) : st.behind === 0 ? (
+        <SettingRow label="Up to date"
+          status={<StatusBadge tone="ok">Current</StatusBadge>}
+          hint={st.branch ? `${st.branch} is the newest release.` : undefined} />
+      ) : (
+        <>
+          <SettingRow
+            label={`${st.branch} is available`}
+            status={<StatusBadge tone="warn">Update available</StatusBadge>}
+            hint={st.behind > 1 ? `${st.behind} releases newer than yours.` : "One release newer than yours."}
+            actions={<>
+              <Button tone="ok" onClick={run} disabled={busy}>
                 {busy ? "Starting…" : `Install ${st.branch} & restart`}
-              </button>
+              </Button>
               {/* Read before you install, rather than after the app has
-                  restarted into it. The tag list above says which releases are
+                  restarted into it. The tag list below says which releases are
                   coming; this says what is in them. */}
-              <button onClick={() => setWant({ tag: st.branch, title: "What's in this update" })}
-                className="text-[11.5px] px-3 py-1.5 rounded-lg hover:opacity-80"
-                style={{ color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }}>
+              <Button onClick={() => setWant({ tag: st.branch, title: "What's in this update" })}>
                 What's in {st.branch}
-              </button>
-            </div>
-            <span className="text-[9.5px] t-dim2">
-              Compiles the tagged release in its own clone under ~/.cache, then reinstalls and restarts. Your working checkout is never touched, and only published tags are ever offered — commits pushed after a tag stay out until you tag them.
-            </span>
-          </>
-        )}
-      </div>
+              </Button>
+            </>}
+            below={err ? <div role="alert" className="text-[12px]" style={{ color: "var(--error-ink)" }}>{err}</div> : undefined}
+            detail={st.incoming.length > 0 ? {
+              summary: "Commits in this update",
+              body: (
+                <div className="flex flex-col gap-0.5 max-h-[220px] overflow-y-auto agx-scroll">
+                  {st.incoming.map((c) => (
+                    <div key={c.sha} className="flex gap-2 text-[11px] min-w-0">
+                      <span className="tabular-nums shrink-0" style={{ color: "var(--primary-ink)" }}>{c.sha}</span>
+                      {c.subject && <span className="t-dim2" style={{ overflowWrap: "anywhere" }}>{c.subject}</span>}
+                    </div>
+                  ))}
+                </div>
+              ),
+            } : undefined}
+          />
+          {/* The install compiles the release on this machine, so the
+              toolchain has to be here before it starts — said up front
+              rather than left to fail the build and report it in the panel
+              above, after the app has already gone down to restart. */}
+          <SettingRow
+            label="Built on your machine from source"
+            hint={<>Needs <span style={{ color: "var(--warning-ink)" }}>git</span> and <span style={{ color: "var(--warning-ink)" }}>bun</span> installed, and is Linux-only for now.</>}
+            detail={{
+              summary: "How the update is built",
+              body: "Compiles the tagged release in its own clone under ~/.cache, then reinstalls and restarts. Your working checkout is never touched, and only published tags are ever offered — commits pushed after a tag stay out until you tag them.",
+            }}
+          />
+        </>
+      )}
 
       <ReleaseNotesModal
         open={!!want}
@@ -1611,7 +1550,7 @@ function AboutPane({ open }: { open: boolean }) {
         notes={notes?.notes ?? ""}
         onClose={() => setWant(null)}
       />
-    </Section>
+    </SettingsCard>
     <AboutCredits />
     </>
   );
@@ -1631,11 +1570,11 @@ function AboutPane({ open }: { open: boolean }) {
  */
 function AboutCredits() {
   return (
-    <Section title="Credits">
+    <SettingsCard title="Credits">
       <Row label="Portrait art by Viktor Hahn — CC BY 4.0"
         hint="The pixel-art portrait layers are his work, used under the Creative Commons Attribution 4.0 International licence. They are recoloured at paint time and otherwise unmodified."
         href="https://creativecommons.org/licenses/by/4.0/" />
-    </Section>
+    </SettingsCard>
   );
 }
 
@@ -1761,129 +1700,112 @@ function CookieImport() {
       + " Open the browser and you should be signed in.");
   };
 
-  const Bulk = ({ label, onClick, off }: { agentNever?: string; label: string; onClick: () => void; off?: boolean }) => (
-    <button onClick={onClick} disabled={off}
-      className="agx-btn text-[10px] px-1.5 py-0.5 rounded disabled:opacity-30"
-      style={{ color: "var(--text2)", border: EDGE }}>{label}</button>
+  const Bulk = ({ text, onClick, off }: { text: string; onClick: () => void; off?: boolean }) => (
+    <Button size="compact" onClick={onClick} disabled={off}>{text}</Button>
   );
+  const sourceHint = sources === null
+    ? "Looking at your browsers…"
+    : !sources.length
+      ? "No other browser profiles found on this machine."
+      : "The browser profile the logins are read from.";
 
   return (
-    <div className="px-3 py-2 flex flex-col gap-2 border-t" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
-      <div className="text-[11px]" style={{ color: "var(--text2)" }}>
-        <b>Your logins</b> — a password manager cannot run in this browser (Electron
-        has no place to put its popup), so the way pages behind a login work here is
-        bringing the cookies over. Chrome, Firefox, Zen, Brave and Chromium, including
-        the Chrome-family ones whose values are sealed: their key is asked of your
-        desktop keyring. Everything is chosen to start with; untick what you would
-        rather leave behind. Anyone who can use this window — including an agent
-        driving it — will be signed in to whatever comes across.
-      </div>
+    <SettingsCard title="Your logins"
+      desc="Bring the cookies over from another browser, so pages behind a login work here."
+      actions={current?.readable ? (
+        <>
+          <Button onClick={() => void run("forget")} disabled={busy || !chosen.size}
+            title="Remove these sites' cookies from agentglass's browser. Your own browser is untouched.">
+            Forget them again
+          </Button>
+          <Button tone="primary" onClick={() => void run("import")} disabled={!chosen.size} pending={busy}>
+            {busy ? "Bringing them in…" : `Bring in ${chosen.size} site${chosen.size === 1 ? "" : "s"}`}
+          </Button>
+        </>
+      ) : undefined}>
+      <SettingRow agentExempt label="Import from" hint={sourceHint}
+        detail={{
+          summary: "Why cookies, and what comes across",
+          body: <>
+            A password manager cannot run in this browser (Electron has no place to put its popup), so the way pages
+            behind a login work here is bringing the cookies over. Chrome, Firefox, Zen, Brave and Chromium, including
+            the Chrome-family ones whose values are sealed: their key is asked of your desktop keyring. Everything is
+            chosen to start with; untick what you would rather leave behind. Anyone who can use this window —
+            including an agent driving it — will be signed in to whatever comes across.
+          </>,
+        }}
+        control={sources?.length ? (
+          <span className="flex justify-end">
+            <Select align="right" value={pick} onChange={setPick}
+              options={sources.filter(reachable).map((s) => ({ value: s.id, label: `${s.label}${s.readable ? ` · ${s.sites.length}` : " · locked"}` }))} />
+          </span>
+        ) : undefined}
+        below={current && !current.readable ? (
+          <div className="text-[12px]" role="note" style={{ color: "var(--warning-ink)" }}>{lockedWhy(current)}</div>
+        ) : undefined} />
 
-      {sources === null && <div className="text-[10.5px] t-dim2">Looking at your browsers…</div>}
-      {sources !== null && !sources.length && <div className="text-[10.5px] t-dim2">No other browser profiles found on this machine.</div>}
-
-      {!!sources?.length && (
-        <div className="flex items-center gap-2 flex-wrap">
-          {/* Locked ones are selectable now. They used to be disabled, which
-              left the explanation of the lock attached to a state nobody could
-              reach — so the chip said "locked" and nothing ever said why. */}
-          {sources.filter(reachable).map((s) => (
-            <button key={s.id} onClick={() => setPick(s.id)}
-              className="agx-btn text-[10.5px] px-2 py-1 rounded-lg"
-              title={s.readable ? `${s.rows} cookies across ${s.sites.length} sites` : "Click to see why this one cannot be read"}
-              style={{
-                color: s.id === pick ? "var(--primary-hover)" : "var(--text2)",
-                background: s.id === pick ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent",
-                border: `1px solid color-mix(in srgb, var(--border) ${s.id === pick ? 55 : 30}%, transparent)`,
-                opacity: s.readable ? 1 : 0.6,
-              }}>
-              {s.label}{s.readable ? ` · ${s.sites.length}` : " · locked"}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {current && !current.readable && (
-        <div className="text-[10.5px] px-2.5 py-2 rounded-lg leading-relaxed"
-          style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 25%, transparent)" }}>
-          {lockedWhy(current)}
-        </div>
+      {current?.readable && (
+        <SettingRow agentExempt label="Sites"
+          hint={`${chosen.size} of ${total} chosen. Everything is chosen to start with; untick what you would rather leave behind.`}
+          control={<span className="flex gap-2 justify-end">
+            <Bulk text="All" onClick={() => setChosen(allSites(current.sites))} off={chosen.size === total} />
+            <Bulk text="None" onClick={() => setChosen(new Set())} off={!chosen.size} />
+          </span>}
+          below={
+            <div className="flex flex-col gap-2">
+              <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter sites…" aria-label="Filter sites"
+                className={`w-full max-w-[480px] ${INPUT}`}
+                style={INPUT_STYLE} />
+              {!!filter.trim() && (
+                <div className="flex gap-2">
+                  <Bulk text={`These ${view.matched.length}`} onClick={() => setChosen(addVisible(chosen, view))} />
+                  <Bulk text="Not these" onClick={() => setChosen(dropVisible(chosen, view))} />
+                </div>
+              )}
+              <div className="agx-scroll flex flex-col gap-0.5 overflow-y-auto" style={{ maxHeight: 220 }}>
+                {view.rows.map((s) => {
+                  const on = chosen.has(s.site);
+                  return (
+                    <button key={s.site} onClick={() => setChosen((c) => { const n = new Set(c); if (on) n.delete(s.site); else n.add(s.site); return n; })}
+                      role="checkbox" aria-checked={on}
+                      className="agx-btn agx-hover w-full text-left px-2 rounded flex items-center gap-2 text-[12px]"
+                      style={{ minHeight: HIT, color: "var(--text)" }}>
+                      <span className="flex" style={{ color: on ? "var(--primary-ink)" : "var(--text4)" }}><CheckboxIcon size={ICON.sm} checked={on} /></span>
+                      <span className="flex-1 break-all">{s.site}</span>
+                      <span className="t-dim2 tabular-nums text-[11px]">{s.cookies}</span>
+                    </button>
+                  );
+                })}
+                {/* Not a truncation somebody has to notice: the rows past here are
+                    chosen exactly like the ones above, and the number is the same
+                    information as the wall would have been. */}
+                {view.hidden > 0 && (
+                  <div className="text-[12px] t-dim2 px-2 py-1.5">
+                    and {view.hidden} more site{view.hidden === 1 ? "" : "s"} — they come across too. Filter to find one.
+                  </div>
+                )}
+                {!view.rows.length && <div className="text-[12px] t-dim2 px-2 py-1.5">Nothing matches that.</div>}
+              </div>
+            </div>
+          } />
       )}
 
       {current?.readable && (
         <>
-          <div className="flex items-center gap-2">
-            <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter sites…"
-              className={`flex-1 ${INPUT}`}
-              style={INPUT_STYLE} />
-            <Bulk agentNever="imports the owner's cookies and history from another browser: credentials" label="All" onClick={() => setChosen(allSites(current.sites))} off={chosen.size === total} />
-            <Bulk agentNever="imports the owner's cookies and history from another browser: credentials" label="None" onClick={() => setChosen(new Set())} off={!chosen.size} />
-            {!!filter.trim() && <Bulk label={`These ${view.matched.length}`} onClick={() => setChosen(addVisible(chosen, view))} />}
-            {!!filter.trim() && <Bulk agentNever="imports the owner's cookies and history from another browser: credentials" label="Not these" onClick={() => setChosen(dropVisible(chosen, view))} />}
-            <span className="text-[10px] t-dim2 tabular-nums shrink-0">{chosen.size} of {total}</span>
-          </div>
-          <div className="agx-scroll flex flex-col gap-0.5 overflow-y-auto" style={{ maxHeight: 220 }}>
-            {view.rows.map((s) => {
-              const on = chosen.has(s.site);
-              return (
-                <button key={s.site} onClick={() => setChosen((c) => { const n = new Set(c); if (on) n.delete(s.site); else n.add(s.site); return n; })}
-                  className="agx-btn w-full text-left px-2 py-1 rounded flex items-center gap-2 text-[11px]"
-                  style={{ background: on ? "color-mix(in srgb, var(--primary) 13%, transparent)" : "transparent", color: "var(--text)" }}>
-                  <span className="flex" style={{ color: on ? "var(--primary-hover)" : "var(--text4)" }}><CheckboxIcon size={ICON.sm} checked={on} /></span>
-                  <span className="flex-1 truncate">{s.site}</span>
-                  <span className="t-dim2 tabular-nums text-[10px]">{s.cookies}</span>
-                </button>
-              );
-            })}
-            {/* Not a truncation somebody has to notice: the rows past here are
-                chosen exactly like the ones above, and the number is the same
-                information as the wall would have been. */}
-            {view.hidden > 0 && (
-              <div className="text-[10.5px] t-dim2 px-2 py-1.5">
-                and {view.hidden} more site{view.hidden === 1 ? "" : "s"} — they come across too. Filter to find one.
-              </div>
-            )}
-            {!view.rows.length && <div className="text-[10.5px] t-dim2 px-2 py-1">Nothing matches that.</div>}
-          </div>
+          <Toggle on={wantHistory} onClick={() => { const next = !wantHistory; setWantHistory(next); setImportHistory(next); }}
+            agentNever="imports the owner's cookies and history from another browser: credentials"
+            label="Bring browsing history"
+            hint="So the address bar completes what you type." />
+          <Toggle on={wantBookmarks} onClick={() => { const next = !wantBookmarks; setWantBookmarks(next); setImportBookmarks(next); }}
+            agentNever="imports the owner's cookies and history from another browser: credentials"
+            label="Bring bookmarks"
+            hint="The pages you bookmarked, ranked first in the address bar. Cookies are chosen per site above." />
         </>
       )}
 
-      {err && <div className="text-[10.5px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
-      {note && <div className="text-[10.5px]" style={{ color: "var(--text2)" }}>{note}</div>}
-
-      {current?.readable && (
-        <div className="flex items-center gap-3 flex-wrap text-[11px]" style={{ color: "var(--text2)" }}>
-          <span className="t-dim2">Bring along:</span>
-          <button onClick={() => { const next = !wantHistory; setWantHistory(next); setImportHistory(next); }}
-            className="agx-btn flex items-center gap-1.5 px-1.5 py-0.5 rounded" title="Your browsing history, so the address bar completes what you type.">
-            <span className="flex" style={{ color: wantHistory ? "var(--primary-hover)" : "var(--text4)" }}><CheckboxIcon size={ICON.sm} checked={wantHistory} /></span>
-            <span>browsing history</span>
-          </button>
-          <button onClick={() => { const next = !wantBookmarks; setWantBookmarks(next); setImportBookmarks(next); }}
-            className="agx-btn flex items-center gap-1.5 px-1.5 py-0.5 rounded" title="The pages you bookmarked, ranked first in the address bar.">
-            <span className="flex" style={{ color: wantBookmarks ? "var(--primary-hover)" : "var(--text4)" }}><CheckboxIcon size={ICON.sm} checked={wantBookmarks} /></span>
-            <span>bookmarks</span>
-          </button>
-          <span className="t-dim2 text-[10px]">— cookies are chosen per site above</span>
-        </div>
-      )}
-
-      {current?.readable && (
-        <div className="flex items-center gap-2">
-          <button onClick={() => void run("import")} disabled={busy || !chosen.size}
-            className="agx-btn text-[11px] px-3 py-1.5 rounded-lg font-medium"
-            style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)", opacity: chosen.size ? 1 : 0.5 }}>
-            {busy ? "Bringing them in…" : `Bring in ${chosen.size} site${chosen.size === 1 ? "" : "s"}`}
-          </button>
-          <button onClick={() => void run("forget")} disabled={busy || !chosen.size}
-            className="agx-btn text-[11px] px-3 py-1.5 rounded-lg"
-            style={{ color: "var(--text2)", border: EDGE, opacity: chosen.size ? 1 : 0.5 }}
-            title="Remove these sites' cookies from agentglass's browser. Your own browser is untouched.">
-            Forget them again
-          </button>
-        </div>
-      )}
-    </div>
+      {err && <EmptyState><span role="alert" style={{ color: "var(--error-ink)" }}>{err}</span></EmptyState>}
+      {note && <EmptyState><span role="status">{note}</span></EmptyState>}
+    </SettingsCard>
   );
 }
 
@@ -1912,7 +1834,7 @@ function AgentBrowserPane({ open }: { open: boolean }) {
     load();
   };
 
-  if (!st) return <Section title="Agent browser use"><div className="px-3 py-2 text-[11px] t-dim2">Reading…</div></Section>;
+  if (!st) return <SettingsCard title="Agent browser use"><EmptyState>Reading…</EmptyState></SettingsCard>;
 
   const mono = { color: "var(--text)" };
   /* A Mac has no installer to reinstall: the .dmg carries the CLI inside the
@@ -1933,61 +1855,49 @@ function AgentBrowserPane({ open }: { open: boolean }) {
           : "This build does not carry the skill file, so there is nothing to install";
 
   return (
-    <Section title="Agent browser use">
-      <div className="py-2 flex flex-col gap-2.5">
-        {/* The argument for the feature, which is read once and by somebody
-            deciding whether to bother. The checklist under it is the part you
-            come back to. */}
-        <Fold label="Why an agent needs this rather than curl">
-          An agent fetching a URL from its shell gets the signed-out version of everything that matters,
-          because the session lives in a browser. This one has your sessions in it. Three things have to
-          be true for an agent to use it, and they break independently.
-        </Fold>
-
-        {/* Three independent things, so a checklist rather than a paragraph:
-            the count says how far off you are before you have read a word,
-            and each line carries the button that fixes that line. */}
-        <SetupCard
-          title="Letting an agent drive it"
-          error={err}
-          note={note}
-          steps={[
-            { title: "The command", done: st.cli.state === "installed",
-              detail: <><span className="t-mono text-[11px]" style={mono}>agentglass-browser</span>. {cliSays}</> },
-            { title: "The skill", done: st.skill.state === "current",
-              detail: <>What tells an agent the command exists. {skillSays}</>,
-              action: (st.skill.state === "missing" || st.skill.state === "stale")
-                ? { label: st.skill.state === "stale" ? "Update" : "Install", onClick: () => void install(), busy }
-                : undefined },
-            { title: "A window that can answer", done: st.windows > 0,
-              detail: st.windows > 0
-                ? "The browser view is open in this window."
-                : "The browser view is not open yet. The command opens it itself on first use; until then there is nothing to drive." },
-          ]}
-        />
-
-        <div className="flex items-center gap-2">
-          <button onClick={load} disabled={busy} className="agx-btn text-[11px] px-3 py-1.5 rounded-lg"
-            style={{ color: "var(--text2)", border: EDGE }}>Check again</button>
-        </div>
-
-        {/* Something to paste, because "it is installed" and "I know what to say
-            to it" are different problems and only the first one is solved by a
-            green line. Folded: useful the first time, in the way every time
-            after that. */}
-        <Fold label="Try it — three lines to paste into an agent">
-          <div className="flex flex-col gap-1">
-          {[
-            "Using agentglass-browser, open my dashboard and tell me what is on it.",
-            "With agentglass-browser, go to the staging app, log in with my session, and check the checkout flow.",
-            "Take a screenshot of the open PR page with agentglass-browser and tell me what is failing.",
-          ].map((p) => (
-            <div key={p} className="text-[12px] px-2 py-1 rounded" style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--bg3) 45%, transparent)" }}>{p}</div>
-          ))}
-          </div>
-        </Fold>
-      </div>
-    </Section>
+    /* Three independent things, so a checklist rather than a paragraph: the
+       count says how far off you are before you have read a word, and each
+       line carries the button that fixes that line. The argument for the
+       feature is read once, by somebody deciding whether to bother, so it
+       comes after the verdict. */
+    <SetupCard
+      title="Agent browser use"
+      error={err}
+      note={note}
+      actions={<Button onClick={load} disabled={busy}>Check again</Button>}
+      steps={[
+        { title: "The command", done: st.cli.state === "installed",
+          detail: <><span className="t-mono text-[11px]" style={mono}>agentglass-browser</span>. {cliSays}</> },
+        { title: "The skill", done: st.skill.state === "current",
+          detail: <>What tells an agent the command exists. {skillSays}</>,
+          action: (st.skill.state === "missing" || st.skill.state === "stale")
+            ? { label: st.skill.state === "stale" ? "Update" : "Install", onClick: () => void install(), busy }
+            : undefined },
+        { title: "A window that can answer", done: st.windows > 0, says: { done: "Open", todo: "Not open", todoTone: "off" },
+          detail: st.windows > 0
+            ? "The browser view is open in this window."
+            : "The browser view is not open yet. The command opens it itself on first use; until then there is nothing to drive." },
+      ]}>
+      <SettingRow label="Why an agent needs this rather than curl"
+        hint="An agent fetching a URL from its shell gets the signed-out version of everything that matters, because the session lives in a browser. This one has your sessions in it. Three things have to be true for an agent to use it, and they break independently." />
+      {/* Something to paste, because "it is installed" and "I know what to say
+          to it" are different problems and only the first one is solved by a
+          green line. */}
+      <SettingRow label="Try it"
+        hint="Something to say to an agent once it can drive the browser."
+        detail={{
+          summary: "Three lines to paste into an agent",
+          body: <ul className="flex flex-col gap-1.5 m-0 p-0 list-none">
+            {[
+              "Using agentglass-browser, open my dashboard and tell me what is on it.",
+              "With agentglass-browser, go to the staging app, log in with my session, and check the checkout flow.",
+              "Take a screenshot of the open PR page with agentglass-browser and tell me what is failing.",
+            ].map((p) => (
+              <li key={p} className="text-[12px] px-2 py-1 rounded" style={{ color: "var(--text2)", background: "var(--surface-inset)" }}>{p}</li>
+            ))}
+          </ul>,
+        }} />
+    </SetupCard>
   );
 }
 
@@ -2045,104 +1955,78 @@ function HooksPane({ open }: { open: boolean }) {
     );
   };
 
-  if (!st) return <Section title="Claude Code hooks"><div className="py-2 text-[12px] t-dim">Reading hook state…</div></Section>;
+  if (!st) return <SettingsCard title="Claude Code hooks"><EmptyState>Reading hook state…</EmptyState></SettingsCard>;
+
+  if (!st.bundled) {
+    return (
+      <SettingsCard title="Claude Code hooks">
+        <SettingRow label="The hook scripts are not in this build"
+          hint={<>This build does not carry the hook scripts, so there is nothing to wire. Install from a Release, or run <span className="t-mono">bun run setup</span> in a checkout.</>}
+          status={<StatusBadge tone="warn">Not included</StatusBadge>} />
+      </SettingsCard>
+    );
+  }
 
   return (
-    <Section title="Claude Code hooks">
-      {/* No padding of its own: the column's rule already gives this the left
-          edge, and a padded wrapper around rows indents them twice — measured
-          as a second label edge at 484 the moment the fold went in. */}
-      <div className="py-2 flex flex-col gap-2.5">
+    <>
+      {/* The last step is one only you can take, and there is no way from
+          here to see whether you have. It says so and stays out of the count,
+          rather than sitting there permanently unticked. */}
+      <SetupCard
+        title="Claude Code hooks"
+        error={err}
+        note={note}
+        steps={[
+          { title: "Hook scripts in this build", done: st.bundled, says: { done: "Included" },
+            detail: "Shipped with the app — nothing to fetch." },
+          { title: "Wired into Claude Code", done: st.installed, says: { done: "Wired", todo: "Not wired" },
+            detail: <>Written to <span className="t-mono text-[11px]" style={{ color: "var(--text)" }}>{st.settingsPath}</span>, run under <span className="t-mono text-[11px]">{st.python}</span>.</>,
+            /* What the checklist is FOR, read once, so it sits behind a
+               summary that says what it holds. */
+            more: {
+              summary: "What wiring this changes",
+              body: <>
+                Every Claude Code session streams here live — what ran, what it
+                cost, when it stopped for you. It watches; it never stops a tool
+                call, and its command ends in <span className="t-mono text-[11px]">|| exit 0</span> so that stays true
+                even if the script goes missing. Holding calls is the gate below, which is a separate switch.
+                It edits <span className="t-mono text-[11px]" style={{ color: "var(--text)" }}>{st.settingsPath}</span>,
+                backing it up first, and leaves your other hooks untouched.
+              </>,
+            },
+            action: st.installed
+              ? { label: busy ? "Disabling…" : "Disable hooks", onClick: () => void act("uninstall"), busy, tone: "danger" }
+              : { label: busy ? "Enabling…" : "Enable", onClick: () => void act("install"), busy } },
+          { title: "Start a fresh Claude Code session", done: null,
+            detail: "Sessions already running keep the hooks they started with." },
+        ]}>
+        {/* The forwarder is a python script; the install writes the command
+            but cannot make an interpreter appear. Said up front rather than
+            left to a session that streams nothing and no error anywhere. */}
+        <SettingRow label="Python on your PATH"
+          hint={<>The hooks run under <span className="t-mono">{st.python}</span> — it has to be on your PATH for events to arrive. Takes effect on the next Claude Code session; hooks load at startup.</>} />
+        <SettingRow label="Taking it back out"
+          hint={<>Reversible any time from here, or with <span className="t-mono">python3 hooks/install_hooks.py --uninstall</span> in a checkout. Global (<span className="t-mono">~/.claude</span>), so it covers every project.</>} />
+      </SetupCard>
 
-        {!st.bundled ? (
-          <div className="agx-inset text-[11px] px-2.5 py-2 rounded-lg" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 30%, transparent)" }}>
-            This build does not carry the hook scripts, so there is nothing to wire. Install from a Release, or run <span className="t-mono">bun run setup</span> in a checkout.
-          </div>
-        ) : (
-          <>
-            {/* The last step is one only you can take, and there is no way from
-                here to see whether you have. It says so and stays out of the
-                count, rather than sitting there permanently unticked. */}
-            <SetupCard
-              title="Wiring Claude Code in"
-              error={err}
-              note={note}
-              steps={[
-                { title: "Hook scripts in this build", done: st.bundled,
-                  detail: "Shipped with the app — nothing to fetch." },
-                { title: "Wired into Claude Code", done: st.installed,
-                  detail: <>Written to <span className="t-mono text-[11px]" style={{ color: "var(--text)" }}>{st.settingsPath}</span>, run under <span className="t-mono text-[11px]">{st.python}</span>.</>,
-                  action: st.installed ? undefined : { label: busy ? "Enabling…" : "Enable", onClick: () => void act("install"), busy } },
-                { title: "Start a fresh Claude Code session", done: null,
-                  detail: "Sessions already running keep the hooks they started with." },
-              ]}
-            />
-            {/* AFTER the checklist, not before it: the verdict is what you
-                came for, and what the feature is for is read once. Putting the
-                argument first made the page open on a paragraph. */}
-        {/* What the checklist below is FOR, which is read once. The checklist
-                itself already names the file it writes to, on its own step. */}
-                <Fold label="What wiring this actually changes">
-              Every Claude Code session streams here live — what ran, what it
-              cost, when it stopped for you. It watches; it never stops a tool
-              call, and its command ends in <span className="t-mono text-[11px]">|| exit 0</span> so that stays true
-              even if the script goes missing. Holding calls is the gate below, which is a separate switch.
-              It edits <span className="t-mono text-[11px]" style={{ color: "var(--text)" }}>{st.settingsPath}</span>,
-              backing it up first, and leaves your other hooks untouched.
-                </Fold>
-
-            {/* The gate. Below the forwarder because it is the stronger thing,
-                and read second for the same reason. */}
-            <div className="agx-inset flex flex-col gap-1.5 px-2.5 py-2 rounded-lg"
-              style={{ background: "color-mix(in srgb, var(--primary) 7%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 26%, transparent)" }}>
-              <div className="flex items-center gap-2">
-                <span className="text-[12px]" style={{ color: "var(--text)" }}>
-                  Hold what leaves this machine {st.gate ? "· on" : "· off"}
-                </span>
-                <span className="flex-1" />
-                {!st.gateBundled ? (
-                  <span className="text-[10.5px] t-dim2">not in this build</span>
-                ) : (
-                  <button onClick={() => void gate(!st.gate)} disabled={busy}
-                    className="text-[11.5px] px-3 py-1.5 rounded-lg hover:opacity-80"
-                    style={st.gate
-                      ? { color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 34%, transparent)", opacity: busy ? 0.5 : 1 }
-                      : { color: "var(--text)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
-                    {busy ? "Working…" : st.gate ? "Turn the gate off" : "Turn the gate on"}
-                  </button>
-                )}
-              </div>
-              <span className="text-[10.5px]" style={{ color: "var(--text2)" }}>
-                A push, a pull request, a comment, a review, a merge, a ticket or a message in a channel
-                waits here with the text it would send, and nobody answering means it does not happen.
-                Everything local — writing code, running tests, cutting a worktree — is never held.
-              </span>
-              <span className="text-[9.5px] t-dim2">
-                Until you turn this on, that line is held by each agent remembering it.
-              </span>
-            </div>
-            <div className="flex items-center gap-2 pt-3">
-              {!st.installed ? null : (
-                <button onClick={() => act("uninstall")} disabled={busy}
-                  className="text-[11.5px] px-3 py-1.5 rounded-lg hover:opacity-80"
-                  style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 34%, transparent)", opacity: busy ? 0.5 : 1 }}>
-                  {busy ? "Disabling…" : "Disable hooks"}
-                </button>
-              )}
-            </div>
-            {/* The forwarder is a python script; the install writes the command
-                but cannot make an interpreter appear. Said up front rather than
-                left to a session that streams nothing and no error anywhere. */}
-            <div className="agx-inset text-[10.5px] px-2.5 py-1.5 rounded-lg" style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 30%, transparent)" }}>
-              The hooks run under <span style={{ color: "var(--warning-ink)" }}>{st.python}</span> — it has to be on your PATH for events to arrive. Takes effect on the next Claude Code session; hooks load at startup.
-            </div>
-            <span className="text-[9.5px] t-dim2">
-              Reversible any time from here, or with <span className="t-mono">python3 hooks/install_hooks.py --uninstall</span> in a checkout. Global (<span className="t-mono">~/.claude</span>), so it covers every project.
-            </span>
-          </>
-        )}
-      </div>
-    </Section>
+      {/* The gate. Its own card, below the forwarder, because it is the
+          stronger thing and read second for the same reason. */}
+      <SettingsCard title="Gate" desc="Holds an outward action until somebody decides. A separate switch from the hooks above.">
+        <SettingRow label="Hold what leaves this machine"
+          hint={<>
+            A push, a pull request, a comment, a review, a merge, a ticket or a message in a channel
+            waits here with the text it would send, and nobody answering means it does not happen.
+            Everything local — writing code, running tests, cutting a worktree — is never held.
+            <span className="block mt-1">Until you turn this on, that line is held by each agent remembering it.</span>
+          </>}
+          status={<StatusBadge tone={!st.gateBundled ? "off" : st.gate ? "ok" : "off"}>{!st.gateBundled ? "Not in this build" : st.gate ? "On" : "Off"}</StatusBadge>}
+          actions={st.gateBundled
+            ? <Button tone={st.gate ? "danger" : "primary"} disabled={busy} onClick={() => void gate(!st.gate)}>
+                {busy ? "Working…" : st.gate ? "Turn the gate off" : "Turn the gate on"}
+              </Button>
+            : undefined} />
+      </SettingsCard>
+    </>
   );
 }
 
@@ -2203,9 +2087,9 @@ function LanternSection({ open }: { open: boolean }) {
   const WATCH_STEPS = [5, 10, 15, 30, 60] as const;
   const nearWatch = String(WATCH_STEPS.find((m) => m >= watchMinutes) ?? 60);
   return (
-    <Section title="Lantern"
+    <SettingsCard title="Lantern"
       desc="What the Lantern (the rail's lantern icon) may ask of a session. It never starts, stops or queues anything; this is the one thing it says to an agent.">
-      {err && <div className="text-[11px] px-1" style={{ color: "var(--error-ink)" }}>{err}</div>}
+      {err && <div role="alert" className="agx-settings-x pt-2 pb-3 text-[11px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
       <Toggle on={nudge} onClick={() => save({ nudge: !nudge })}
         label="Ask sessions what they are working on"
         hint="On a prompt, a hooked session may be handed one line asking it to post its task (POST /agents/status). Off, and the Lantern lists sessions by name and pane only." />
@@ -2234,8 +2118,8 @@ function LanternSection({ open }: { open: boolean }) {
         hint="Each card counts it down from the session's last turn: a turn sent while it is warm is the cheap one. Five minutes on most plans; an hour on some."
         options={[{ v: "5", label: "5 min" }, { v: "60", label: "1 hour" }]}
         onPick={(m) => save({ cacheTtlMinutes: Number(m) })} />
-      {note && <div className="text-[11px] px-1" style={{ color: "var(--text3)" }}>{note}</div>}
-    </Section>
+      {note && <div role="status" className="agx-settings-x pt-2 pb-3 text-[11px]" style={{ color: "var(--text3)" }}>{note}</div>}
+    </SettingsCard>
   );
 }
 
@@ -2270,36 +2154,41 @@ function WorkerRolesSection({ open }: { open: boolean }) {
       .catch(() => setNote("Could not save."));
   };
   return (
-    <Section title="Worker roles"
+    <SettingsCard title="Worker roles"
       desc="Which CLI and model a worker started in a role runs on (agentglass-agent start --role). Every role is locked against push, commit, merge and the network clients, in a layer the project's own config cannot loosen (OpenCode's is checked against the project's config at each start, and refused if loosened); a CLI with no such lock is not offered.">
       {WORKER_ROLES.map((r) => {
         const c = roles[r.id];
         if (!c) return null;
+        const mid = `role-model-${r.id}`;
         return (
           <SettingRow key={r.id} label={r.title}
             hint={`${r.what}${r.readOnly ? " File edits are refused too." : ""} Default: ${r.default.provider}, ${r.default.model}.`}
-            control={<span className="flex items-center gap-1.5">
-              {/* One width for the three, so the column reads as a column
-                  rather than three controls hung from their right edge. */}
+            control={
               <Select value={c.provider} align="right"
                 className="rounded-lg px-2 py-1 text-[11px] outline-none w-[128px] justify-between"
                 options={clis.map((p) => ({ value: p.id, label: p.installed ? p.title : `${p.title} (not installed)` }))}
-                onChange={(v) => save(r.id, { provider: v, model: "" })} />
-              <input
-                value={models[r.id] ?? ""}
-                onChange={(e) => setModels((m) => ({ ...m, [r.id]: e.target.value }))}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); save(r.id, { provider: c.provider, model: models[r.id] ?? "" }); } }}
-                onBlur={() => { if ((models[r.id] ?? "") !== c.model) save(r.id, { provider: c.provider, model: models[r.id] ?? "" }); }}
-                placeholder="default model"
-                aria-label={`${r.title} model`}
-                spellCheck={false}
-                className={`t-mono w-[150px] ${INPUT}`}
-                style={INPUT_STYLE} />
-            </span>} />
+                onChange={(v) => save(r.id, { provider: v, model: "" })} />}
+            /* The model is a text field, so it stacks under the description
+               rather than sharing the control column with the CLI choice. */
+            below={
+              <div className="agx-sform">
+                <Field label="Model" htmlFor={mid} help="Handed to the CLI as typed. Empty runs its default model.">
+                  <input id={mid}
+                    value={models[r.id] ?? ""}
+                    onChange={(e) => setModels((m) => ({ ...m, [r.id]: e.target.value }))}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); save(r.id, { provider: c.provider, model: models[r.id] ?? "" }); } }}
+                    onBlur={() => { if ((models[r.id] ?? "") !== c.model) save(r.id, { provider: c.provider, model: models[r.id] ?? "" }); }}
+                    placeholder="default model"
+                    aria-describedby={helpIdFor(mid)}
+                    spellCheck={false}
+                    className={`t-mono w-full ${INPUT}`}
+                    style={INPUT_STYLE} />
+                </Field>
+              </div>} />
         );
       })}
-      {note && <div className="text-[11px] px-1" style={{ color: "var(--text3)" }}>{note}</div>}
-    </Section>
+      {note && <div role="status" className="agx-settings-x pt-2 pb-3 text-[11px]" style={{ color: "var(--text3)" }}>{note}</div>}
+    </SettingsCard>
   );
 }
 
@@ -2339,15 +2228,9 @@ function VoicePicker({ voices, value, onPick, label }: {
     <span className="flex items-center gap-2 shrink-0">
       <Select value={value} onChange={onPick} title={voice.hint} style={{ minWidth: 132 }}
         options={voices.map((v) => ({ value: v.id, label: v.label, hint: v.hint }))} />
-      <button onClick={() => playVoice(voice)} disabled={voice.id === "none"}
+      <Button onClick={() => playVoice(voice)} disabled={voice.id === "none"}
         aria-label={`Play ${label}`}
-        title={voice.id === "none" ? "Nothing to play" : `Play ${voice.label}`}
-        className="text-[11px] px-2 py-1 rounded-lg shrink-0"
-        style={{
-          color: voice.id === "none" ? "var(--text4)" : "var(--text3)",
-          border: EDGE,
-          opacity: voice.id === "none" ? 0.5 : 1,
-        }}>Play</button>
+        title={voice.id === "none" ? "Nothing to play" : `Play ${voice.label}`}>Play</Button>
     </span>
   );
 }
@@ -2388,73 +2271,74 @@ function NotificationsSection(p: {
   );
   return (
     <>
-      <Section title="Interrupt me for"
+      <SettingsCard title="Interrupt me for"
         desc="Whatever is off still shows quietly on the fleet card."
-        headerControl={<span className="flex items-center gap-2 text-[11px] t-dim">Silence all
+        status={err ? <StatusBadge tone="err">{err}</StatusBadge> : undefined}
+        actions={<span className="flex items-center gap-2 text-[11px] t-dim">Silence all
           <SwitchButton on={prefs.none} label="Silence all"
             onClick={() => save({ ...prefs, none: !prefs.none })} /></span>}>
-        {err && <div className="text-[11px] px-1" style={{ color: "var(--error-ink)" }}>{err}</div>}
-        {NOTIFY_KINDS.map((k) => k === "reminders" ? (
-          <SettingRow key={k} label={NOTIFY_KIND_LABEL[k].label}
-            hint={`${NOTIFY_KIND_LABEL[k].desc} Alarm voice: a reminder you set takes the screen and rings until it is answered.`}
-            control={<span className="flex items-center gap-3">
-              {alarmPicker}
-              <SwitchButton on={prefs.kinds[k]} disabled={prefs.none} label={NOTIFY_KIND_LABEL[k].label}
-                onClick={() => setKind(k, !prefs.kinds[k])} />
-            </span>} />
-        ) : (
-          <Toggle key={k} on={prefs.kinds[k]} disabled={prefs.none}
-            onClick={() => setKind(k, !prefs.kinds[k])}
-            agentNever="decides whether an agent blocked on the owner can reach them: notifications are the owner's to silence"
-            label={NOTIFY_KIND_LABEL[k].label} hint={NOTIFY_KIND_LABEL[k].desc} />
+        {NOTIFY_KINDS.map((k) => (
+          <Fragment key={k}>
+            <Toggle on={prefs.kinds[k]} disabled={prefs.none}
+              onClick={() => setKind(k, !prefs.kinds[k])}
+              agentNever="decides whether an agent blocked on the owner can reach them: notifications are the owner's to silence"
+              label={NOTIFY_KIND_LABEL[k].label} hint={NOTIFY_KIND_LABEL[k].desc} />
+            {k === "reminders" && (
+              <SettingRow agentNever="decides whether an agent blocked on the owner can reach them: notifications are the owner's to silence"
+                label="Alarm voice" hint="A reminder you set takes the screen and rings until it is answered."
+                control={alarmPicker} />
+            )}
+          </Fragment>
         ))}
         <Toggle on={own} onClick={() => setAppNotify(!own)}
           agentNever="turning it on asks the browser for permission, which needs the owner's own gesture, and turning it off silences the app's own notices"
           label="agentglass's own notifications"
           hint="Chats finishing, branches falling behind, checks going red. With Quiet on, only what is stopped interrupts either way; this switch decides the rest once Quiet is off. Everything keeps landing in the bell." />
-      </Section>
+      </SettingsCard>
 
-      <Section title="How it reaches you">
-        {NOTIFY_CHANNELS.map((c) => c === "sound" ? (
+      <SettingsCard title="How it reaches you">
+        {NOTIFY_CHANNELS.map((c) => (
           <Fragment key={c}>
-            <SettingRow agentNever="decides whether an agent blocked on the owner can reach them: notifications are the owner's to silence" label={NOTIFY_CHANNEL_LABEL[c].label} hint={NOTIFY_CHANNEL_LABEL[c].desc}
-              control={<span className="flex items-center gap-3">
-                <VoicePicker label="Notifications" voices={NOTIFY_VOICES} value={p.notifyVoice} onPick={p.onNotifyVoice} />
-                <SwitchButton on={prefs.channels[c]} disabled={prefs.none} label={NOTIFY_CHANNEL_LABEL[c].label}
-                  onClick={() => setChannel(c, !prefs.channels[c])} />
-              </span>} />
-            <Toggle on={p.sound} onClick={p.onSound}
-              agentExempt label="Chime this session"
-              hint="A chime when a session errors or needs you. Off at every start; the speaker in the header flips it too." />
+            <Toggle on={prefs.channels[c]} disabled={prefs.none}
+              onClick={() => setChannel(c, !prefs.channels[c])}
+              agentNever="decides whether an agent blocked on the owner can reach them: notifications are the owner's to silence"
+              label={NOTIFY_CHANNEL_LABEL[c].label} hint={NOTIFY_CHANNEL_LABEL[c].desc} />
+            {c === "sound" && (
+              <>
+                <SettingRow agentNever="decides whether an agent blocked on the owner can reach them: notifications are the owner's to silence"
+                  label="Notification sound" hint="Which sound notifications make. Play tries it."
+                  control={<VoicePicker label="Notifications" voices={NOTIFY_VOICES} value={p.notifyVoice} onPick={p.onNotifyVoice} />} />
+                <Toggle on={p.sound} onClick={p.onSound}
+                  agentExempt label="Chime this session"
+                  hint="A chime when a session errors or needs you. Off at every start; the speaker in the header flips it too." />
+              </>
+            )}
           </Fragment>
-        ) : (
-          <Toggle key={c} on={prefs.channels[c]} disabled={prefs.none}
-            onClick={() => setChannel(c, !prefs.channels[c])}
-            agentNever="decides whether an agent blocked on the owner can reach them: notifications are the owner's to silence"
-            label={NOTIFY_CHANNEL_LABEL[c].label} hint={NOTIFY_CHANNEL_LABEL[c].desc} />
         ))}
-        <Fold label={`Quiet mode and muted sources (${mutedList.length} muted)`}>
-          <Toggle on={quiet} onClick={() => setting("notifications.quiet").set(!quiet)}
-            settingId="notifications.quiet" label="Quiet — only what is stopped interrupts"
-            hint="An approval, an agent blocked on a question, a red check on a pull request about to merge: those still pop and ring. Everything else collects in the bell without a sound." />
-          {mutedList.length > 0 && (
-            <SettingRow agentExempt label="Muted" align="start"
-              hint="Not collected. Mute a source from its row in the bell or from a desktop card; unmute it here or from the bell's footer."
-              control={
-                <span className="flex flex-wrap gap-1 justify-end">
-                  {mutedList.map((src) => (
-                    <button key={src} className="chip text-[11px] gap-1" onClick={() => setMuted(src, false)}
-                      title={`Unmute ${sourceLabel(src)}`} aria-label={`Unmute ${sourceLabel(src)}`}>
-                      <MuteGlyph />{sourceLabel(src)}
-                    </button>
-                  ))}
-                </span>
-              } />
-          )}
-        </Fold>
-      </Section>
+        {/* Quiet and the muted sources used to sit behind a fold named for
+            both. A switch that decides what interrupts is a setting to find,
+            not a drawer to open, and a fold's rows could not sit on the
+            card's own divider. */}
+        <Toggle on={quiet} onClick={() => setting("notifications.quiet").set(!quiet)}
+          settingId="notifications.quiet" label="Quiet — only what is stopped interrupts"
+          hint="An approval, an agent blocked on a question, a red check on a pull request about to merge: those still pop and ring. Everything else collects in the bell without a sound." />
+        {mutedList.length > 0 && (
+          <SettingRow agentExempt label="Muted"
+            hint="Not collected. Mute a source from its row in the bell or from a desktop card; unmute it here or from the bell's footer."
+            below={
+              <span className="flex flex-wrap gap-1">
+                {mutedList.map((src) => (
+                  <button key={src} className="chip text-[11px] gap-1" onClick={() => setMuted(src, false)}
+                    title={`Unmute ${sourceLabel(src)}`} aria-label={`Unmute ${sourceLabel(src)}`}>
+                    <MuteGlyph />{sourceLabel(src)}
+                  </button>
+                ))}
+              </span>
+            } />
+        )}
+      </SettingsCard>
 
-      <Section title="Pull requests">
+      <SettingsCard title="Pull requests">
         <Toggle on={p.ciApproved} onClick={p.onCiApproved}
           settingId="notifications.ciOnlyApproved" label="Checks: only when the pull request is approved"
           hint={p.ciApproved
@@ -2474,14 +2358,14 @@ function NotificationsSection(p: {
             { v: "off", label: "Off" },
           ]}
           onPick={p.onTalkMode} />
-      </Section>
+      </SettingsCard>
 
-      <Section title="Asked for, and what became of it"
+      <SettingsCard title="Asked for, and what became of it"
         desc="The notifications you armed, newest first. Quiet: nothing here interrupts.">
         <AskedAlertLog />
-      </Section>
+      </SettingsCard>
 
-      <Section title="From other apps">
+      <SettingsCard title="From other apps">
         <Toggle
           agentNever="reads other applications' notifications into this app: what they say is theirs"
          
@@ -2509,19 +2393,16 @@ function NotificationsSection(p: {
               { v: "full", label: "Full" },
             ]} />
         )}
-      </Section>
+      </SettingsCard>
     </>
   );
 }
 
 function AgentsSection({ open }: { open: boolean }) {
   return (
-    <Section title="Other agents on this machine">
-      {/* No wrapper: the column's padding rule applies to the direct children
-          of a section, so a padded div around rows indents them twice. Rows go
-          straight in. */}
+    <SettingsCard title="Other agents on this machine">
       <AgentsPane open={open} />
-    </Section>
+    </SettingsCard>
   );
 }
 
@@ -2582,8 +2463,16 @@ function DepGrid({ deps, muted }: { deps: DepReport[]; muted?: boolean }) {
   );
 }
 
+/** A dependency's verdict as a badge. Not installed is neutral unless the app
+ *  cannot work without it; "needs setup" is the person's turn. */
+function depTone(d: DepReport): StatusTone {
+  if (d.status === "ok") return "ok";
+  if (d.status === "attention") return "warn";
+  if (d.status === "missing" && d.required) return "err";
+  return "off";
+}
+
 function DepRow({ d, home }: { d: DepReport; home: string }) {
-  const color = statusColor(d);
   const href = externalUrl(d.url);
   const [console, setConsole] = useState(false);
   // Offered only where there is something to do AND a line worth typing. A tool
@@ -2596,64 +2485,41 @@ function DepRow({ d, home }: { d: DepReport; home: string }) {
   // had never opened the terminal panel, which is most people the first time
   // they read this page.
   const canType = !!d.install && d.status !== "ok" && d.status !== "unsupported";
+  const guide = !!href && d.status !== "unsupported" && d.status !== "ok";
   return (
-    <>
-    {/* On the row grid like every other setting, so the install buttons of the
-        twelve dependencies land on one line instead of wherever their own
-        label happened to end. The status dot rides inside the label rather
-        than in a column of its own — a third column for seven pixels is what
-        pushed this page off the dialog's left edge in the first place. */}
+    /* One action per row. Install opens a shell with the command typed in,
+       which finishes the job; when there is no honest one-liner the guide is
+       the action instead. Where there are both, the guide is a link in the
+       description, so the row never carries two buttons for one job. The
+       console opens under the row, which stays on screen above it. */
     <SettingRow
-      align="start"
-      label={<span className="flex items-center gap-2 flex-wrap">
-        <span className="shrink-0 w-[7px] h-[7px] rounded-full" style={{ background: color }} aria-hidden />
+      label={<span className="inline-flex items-baseline gap-2 flex-wrap">
         <span>{d.title}</span>
         <code className="text-[11px] t-mono t-dim">{d.bin}</code>
-        <span className="text-[11px]" style={{ color }}>{STATUS_LABEL[d.status]}</span>
-        {d.status !== "ok" && d.status !== "unsupported" && d.required && (
-          <span className="chip text-[11px]" style={{ color: "var(--error-ink)" }}>needed</span>
-        )}
       </span>}
       hint={<>
         {d.what}
-        {d.detail && d.status !== "ok" && <span className="block mt-0.5" style={{ color }}>{d.detail}</span>}
-        {d.note && d.status !== "ok" && d.status !== "unsupported" && <span className="block mt-0.5">{d.note}</span>}
-      </>}
-      /* Only where there is something to do about it. A row that is already
-         ready does not need a link, and a tool this platform never uses has
-         nothing to install. The console comes first, because it is the one
-         that finishes the job. `>_` rather than "Install": it says a terminal
-         is about to open, which is the thing worth knowing before clicking. */
-      control={(canType || (href && d.status !== "unsupported" && d.status !== "ok"))
-        ? <span className="flex items-center gap-2 justify-end">
-            {canType && (
-              <button onClick={() => setConsole((v) => !v)}
-                className="shrink-0 text-[12px] px-2 py-1 rounded-lg whitespace-nowrap"
-                style={console
-                  ? { color: "var(--text)", background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }
-                  : { color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 34%, transparent)" }}
-                title="Open a shell here with the command typed in — you press Enter">
-                {">_ Install"}
-              </button>
-            )}
-            {href && d.status !== "unsupported" && d.status !== "ok" && (
-              <a href={href} target="_blank" rel="noreferrer noopener"
-                className="shrink-0 text-[12px] px-2 py-1 rounded-lg whitespace-nowrap"
-                style={{ color: canType ? "var(--text3)" : "var(--primary-hover)", border: `1px solid color-mix(in srgb, var(--${canType ? "border" : "primary"}) 34%, transparent)` }}>
-                Install guide
-              </a>
-            )}
+        {d.detail && d.status !== "ok" && <span className="block mt-1">{d.detail}</span>}
+        {d.note && d.status !== "ok" && d.status !== "unsupported" && <span className="block mt-1">{d.note}</span>}
+        {canType && guide && (
+          <span className="block mt-1">
+            <a href={href} target="_blank" rel="noreferrer noopener" className="agx-textlink">Install guide ↗</a>
           </span>
-        : undefined}
+        )}
+      </>}
+      status={<StatusBadge tone={depTone(d)}>{d.status === "missing" && d.required ? "Needed, not installed" : STATUS_LABEL[d.status]}</StatusBadge>}
+      actions={canType
+        ? <Button aria-expanded={console} onClick={() => setConsole((v) => !v)}
+            title="Open a shell here with the command typed in — you press Enter">
+            {console ? "Close shell" : "Install"}
+          </Button>
+        : guide
+          ? <LinkButton href={href!}>Install guide</LinkButton>
+          : undefined}
+      below={console && canType ? <ShellConsole command={d.install!} cwd={home} onClose={() => setConsole(false)} /> : undefined}
     />
-    {/* Expanded in place rather than in a modal: the row you clicked stays on
-        screen above it, so what is being installed and why is still readable
-        while you decide. */}
-    {console && canType && <div className="px-4 pb-2"><ShellConsole command={d.install!} cwd={home} onClose={() => setConsole(false)} /></div>}
-    </>
   );
 }
-
 
 /*
  * Integrations: the services agentglass can be connected to.
@@ -2694,15 +2560,18 @@ function GhBudget({ open }: { open: boolean }) {
   // a subprocess for nothing.
   useEffect(() => { if (open) void load(); }, [open, load]);
 
+  /* Closed until asked for, like the fold it replaces; a search or a deep link
+     opens it, because a result inside a closed card has nothing to land on. */
+  const { on, flash } = useContext(Filter);
+  const [folded, setFolded] = useState(false);
   return (
-    <Section title="GitHub">
-      <Fold label="GitHub API budget">
+    <SettingsCard title="GitHub" desc="The API allowance this app spends, and what is left of it."
+      fold={{ open: folded || on || !!flash, onToggle: setFolded }}>
       <SettingRow
         label="How much of your GitHub allowance is left"
         hint="Every pull request, check and search this app shows spends one. GitHub refills them on a rolling window — 5,000 an hour for REST and GraphQL, 30 a minute for Search, which is the one that runs out first because looking up a card's pull requests is a search."
         control={<RefreshButton onRefresh={() => void load()} busy={busy} title="Refresh the GitHub budget" />}
-      />
-      <div className="py-1">
+        below={<>
         {state && !state.ok && (
           <p className="mt-2 text-[12px]" style={{ color: "var(--text3)" }}>{state.error}</p>
         )}
@@ -2721,6 +2590,7 @@ function GhBudget({ open }: { open: boolean }) {
           // Amber under a quarter, red under a tenth: the point of the bar is
           // to be ignorable until it is not.
           const tint = left < 0.1 ? "var(--error)" : left < 0.25 ? "var(--warning)" : "var(--success)";
+          const ink = left < 0.1 ? "var(--error-ink)" : left < 0.25 ? "var(--warning-ink)" : "var(--success-ink)";
           const mins = Math.max(0, Math.round((b.reset * 1000 - Date.now()) / 60_000));
           return (
             <div key={b.id} className="mt-2">
@@ -2731,7 +2601,7 @@ function GhBudget({ open }: { open: boolean }) {
                   is, and it makes a full bar mean a full tank. */}
               <div className="flex items-baseline gap-2 text-[12px]">
                 <span style={{ color: "var(--text2)" }}>{b.label}</span>
-                <span className="tabular-nums" style={{ color: tint }}>{b.remaining.toLocaleString()} left</span>
+                <span className="tabular-nums" style={{ color: ink }}>{b.remaining.toLocaleString()} left</span>
                 <span className="tabular-nums t-dim">of {b.limit.toLocaleString()}</span>
                 <span className="flex-1" />
                 <span className="t-dim">{b.remaining >= b.limit ? "full" : `back to ${b.limit.toLocaleString()} in ${mins}m`}</span>
@@ -2742,9 +2612,9 @@ function GhBudget({ open }: { open: boolean }) {
             </div>
           );
         })}
-      </div>
-      </Fold>
-    </Section>
+        </>}
+      />
+    </SettingsCard>
   );
 }
 
@@ -2782,13 +2652,11 @@ function PrivacyPane({ open }: { open: boolean }) {
 
   return (
     <>
-      <Section title="Nothing is sent anywhere">
-        <p className="py-3 text-[12.5px]" style={{ color: "var(--text2)" }}>
-          There is no analytics, no crash reporting and no phone-home in this app — so there is nothing
-          to turn off here. What it does with your data, it does on this machine.
-        </p>
-      </Section>
-      <Section title="What is on disk">
+      <SettingsCard title="Nothing is sent anywhere">
+        <SettingRow label="No analytics, no crash reporting, no phone-home"
+          hint="There is nothing to turn off here. What this app does with your data, it does on this machine." />
+      </SettingsCard>
+      <SettingsCard title="What is on disk">
         <Path label="History" value={d?.db ?? ""}
           note="Every event, prompt, tool call and file change, in SQLite. Written owner-only — it holds prompts and command output in cleartext." />
         <Path label="Settings" value={d?.config ?? ""}
@@ -2796,17 +2664,18 @@ function PrivacyPane({ open }: { open: boolean }) {
         <Path label="Credentials" value={d?.credentials ?? ""}
           note="Tokens for the services you connected, mode 0600. They are used by the server and never sent to the browser." />
         {d && (
-          <p className="pb-3 text-[12px] t-dim">
-            History older than {d.retentionDays === 0 ? "— nothing is pruned" : `${d.retentionDays} days is pruned automatically`}.
-            Deleting the file above deletes all of it.
-          </p>
+          <SettingRow label="Retention"
+            hint={<>
+              History older than {d.retentionDays === 0 ? "— nothing is pruned" : `${d.retentionDays} days is pruned automatically`}.
+              Deleting the history file deletes all of it.
+            </>} />
         )}
-      </Section>
-      <Section title="Activity">
+      </SettingsCard>
+      <SettingsCard title="Activity">
         {/* Activity has no nav entry; this row and the palette are its ways in. */}
         <SettingRow label="Activity log" hint="What the app itself has been doing." onClick={() => openSettings("log")} />
-      </Section>
-      <Section title="What does leave this machine">
+      </SettingsCard>
+      <SettingsCard title="What does leave this machine">
         {/* The headline answer is one line and stays open, because it is the
             claim this page exists to make. The enumeration behind it is the
             evidence, and evidence is read when it is doubted. */}
@@ -2815,13 +2684,16 @@ function PrivacyPane({ open }: { open: boolean }) {
           hint={d && d.pairedDevices > 0
             ? `${d.pairedDevices} paired device${d.pairedDevices === 1 ? " can" : "s can"} reach this server — see Remote.`
             : "No device is paired, so nothing can reach this server from outside."}
+          detail={{
+            summary: "Which calls, exactly",
+            body: <>
+              GitHub through <code>gh</code>, {d?.clickup ? "ClickUp through its API, " : ""}and whatever an agent you started
+              decides to do. Avatars are fetched from GitHub. Nothing else leaves, and nothing at all is
+              sent to us — there is no endpoint of ours for it to go to.
+            </>,
+          }}
         />
-        <Fold label="Which calls, exactly">
-          GitHub through <code>gh</code>, {d?.clickup ? "ClickUp through its API, " : ""}and whatever an agent you started
-          decides to do. Avatars are fetched from GitHub. Nothing else leaves, and nothing at all is
-          sent to us — there is no endpoint of ours for it to go to.
-        </Fold>
-      </Section>
+      </SettingsCard>
     </>
   );
 }
@@ -2861,73 +2733,52 @@ function IntegrationsPane({ open }: { open: boolean }) {
 
   const statusOf = (id: string) => status?.find((x) => x.id === id) ?? null;
 
+  /* One card per kind, and each carries its own verdict and the recheck at
+     its top right. It was one "Services" card with two eyebrow headings
+     inside it, which is a group heading drawn as a line of small caps with
+     rules above and below — the shape the settings sweep counted on every
+     page. The provider list is a constant (shared/providers.ts), so both
+     cards draw at once and only the badges wait for the answer. */
   return (
-    <Section title="Services">
-      {/* The same verdict shape as the half above it: what the state is, and
-          the one button that applies to all of it. Two halves of one page
-          answering "what is missing" in one voice. */}
-      <SettingRow
-        label={status
-          ? (() => {
-              const ok = status.filter((x) => x.state === "connected").length;
-              const bad = status.filter((x) => x.state === "error").length;
-              return (
-                <span style={{ color: bad ? "var(--error)" : ok === status.length ? "var(--success)" : "var(--text)" }}>
-                  {bad
-                    ? `${bad} ${bad === 1 ? "service needs" : "services need"} attention`
-                    : `${ok} of ${status.length} connected`}
-                </span>
-              );
-            })()
-          : "Checking what is connected…"}
-        hint="Anything connected here shows up in the panel that uses it — a task provider becomes a tab in Tasks."
-        control={<button onClick={() => void load()} disabled={busy}
-          className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-          style={{ color: "var(--text2)", border: EDGE, opacity: busy ? 0.5 : 1 }}>
-          {busy ? "Checking…" : "Recheck"}
-        </button>}
-      />
-      {/* The list of providers is known without asking anyone — it is a
-          constant in shared/providers.ts. Only their STATE has to be fetched.
-          So the page draws itself immediately and each card fills in, rather
-          than showing one line of "Checking what is connected…" over an empty
-          pane: what you are waiting for is on screen while you wait for it,
-          and the layout does not jump when the answer lands. */}
-      <div className="pb-3">
-        {err && <div className="text-[12px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
-
-        {(["review", "task"] as const).map((kind) => (
-          <Fragment key={kind}>
-            {/* An eyebrow, like every other heading inside a page. It used to be
-                a bold 11.5px line, which is a fourth level of heading in a
-                dialog that already has three. */}
-            <div>
-              <div className="panel-eyebrow pb-0.5" style={{ paddingLeft: 0, paddingRight: 0 }}>
-                {kind === "review" ? "Review providers" : "Task providers"}
-              </div>
-              <div className="text-[12px] t-dim">
-                {kind === "review"
-                  ? "Pull requests, checks and review state."
-                  : "Where the things you owe come from."}
-              </div>
-            </div>
-            {PROVIDERS.filter((p) => p.kind === kind).map((p) => (
+    <>
+      {(["review", "task"] as const).map((kind) => {
+        const specs = PROVIDERS.filter((p) => p.kind === kind);
+        const mine = status?.filter((x) => specs.some((p) => p.id === x.id)) ?? null;
+        const ok = mine?.filter((x) => x.state === "connected").length ?? 0;
+        const bad = mine?.filter((x) => x.state === "error").length ?? 0;
+        const verdict = !mine
+          ? <StatusBadge tone={err ? "err" : "checking"}>{err ? "Not read" : "Checking"}</StatusBadge>
+          : bad
+            ? <StatusBadge tone="err">{bad} {bad === 1 ? "needs" : "need"} attention</StatusBadge>
+            : <StatusBadge tone={ok === mine.length && ok > 0 ? "ok" : "off"}>{ok} of {mine.length} connected</StatusBadge>;
+        return (
+          <SettingsCard key={kind}
+            title={kind === "review" ? "Review providers" : "Task providers"}
+            desc={kind === "review"
+              ? "Pull requests, checks and review state."
+              : "Where the things you owe come from. Each one you connect becomes a tab in Tasks."}
+            status={verdict}
+            actions={<Button pending={busy} onClick={() => void load()}>Recheck</Button>}>
+            {err && <SettingRow label={err} hint="Recheck to try again." />}
+            {specs.map((p) => (
               <ProviderCard key={p.id} spec={p} status={statusOf(p.id)} checking={!status && !err} onChanged={load} />
             ))}
-          </Fragment>
-        ))}
-      </div>
-    </Section>
+          </SettingsCard>
+        );
+      })}
+    </>
   );
 }
 
 /** Four states, four sentences. A boolean here would flatten "installed but
  *  logged out" into "broken", and those need different buttons. */
-const STATE_LOOK: Record<ProviderState, { label: string; fg: string }> = {
-  connected: { label: "Connected", fg: "var(--success)" },
-  "needs-auth": { label: "Not connected", fg: "var(--warning)" },
-  "missing-tool": { label: "Not installed", fg: "var(--text3)" },
-  error: { label: "Needs attention", fg: "var(--error)" },
+const STATE_LOOK: Record<ProviderState, { label: string; tone: StatusTone }> = {
+  connected: { label: "Connected", tone: "ok" },
+  /* Neutral, not a warning: an optional service nobody has connected is not
+     a problem, and amber on every unconnected row is a page that cries wolf. */
+  "needs-auth": { label: "Not connected", tone: "off" },
+  "missing-tool": { label: "Not installed", tone: "off" },
+  error: { label: "Needs attention", tone: "err" },
 };
 
 /*
@@ -2969,10 +2820,6 @@ function ProviderCard({ spec, status, checking, onChanged }: {
   onChanged: () => Promise<void> | void;
 }) {
   const [token, setToken] = useState("");
-  /* Jira signs in with an email and a site as well as the token. Held only
-     until the connect call returns; the token is never shown back. */
-  const [email, setEmail] = useState("");
-  const [site, setSite] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [spaces, setSpaces] = useState<{ id: string; name: string }[] | null>(null);
@@ -2995,210 +2842,164 @@ function ProviderCard({ spec, status, checking, onChanged }: {
   // while the check is still running is a wrong answer that then corrects
   // itself, which is worse than no answer at all — somebody reads it, believes
   // it, and starts pasting a token they did not need.
-  const look = waiting
-    ? { label: "Checking…", fg: "var(--text3)" }
+  const look: { label: string; tone: StatusTone } = waiting
+    ? { label: "Checking", tone: "checking" }
     : STATE_LOOK[status?.state ?? "needs-auth"];
   const connected = status?.state === "connected";
-  const wantsToken = spec.auth === "token";
-  const line = LINE;
+  /* Jira has a page of its own (JiraPane) where it connects and disconnects: here it is a verdict and a way in. */
+  const isJira = spec.id === "jira";
+  const wantsToken = spec.auth === "token" && !isJira;
   /* Empty while the check is still out: a row that has not answered yet has
-     nothing to be stale about, and "Checked at 14:32" beside "Checking…" is a
+     nothing to be stale about, and "Checked at 14:32" beside "Checking" is a
      contradiction on one line. */
   const checked = waiting ? "" : checkedLine(status?.at);
 
-  const isJira = spec.id === "jira";
-  const ready = !!token.trim() && (!isJira || !!site.trim());
+  const ready = !!token.trim();
   const connect = async () => {
     if (!ready) return;
     setBusy(true);
-    const r = isJira
-      ? await api.jiraConnect(email.trim(), site.trim(), token.trim())
-      : await api.providerConnect(spec.id, token.trim());
+    const r = await api.providerConnect(spec.id, token.trim());
     setBusy(false);
     if (!r.ok) { setNote(r.error ?? "That did not work"); return; }
     // Cleared on success and only on success: a refused token is usually one
     // that was pasted short, and retyping it is a chore nobody needs.
-    setToken(""); setEmail(""); setSite(""); setNote(null);
+    setToken(""); setNote(null);
     if (spec.id === "clickup") { __forgetClickupSetup(); __forgetClickupPrefs(); __forgetClickupSpaces(); }
     await onChanged();
   };
+  const changeWorkspace = async () => {
+    const r = await api.providerWorkspaces(spec.id);
+    if (!r.ok) { setNote(r.error ?? "Could not read the workspaces"); return; }
+    setSpaces(r.workspaces ?? []);
+  };
+
+  const ids = `prov-${spec.id}`;
+  // The form: stacked fields, labelled, with the one Connect at the end and
+  // the refusal under it.
+  const form = wantsToken && !connected && !waiting ? (
+    <SettingsForm label={`Connect ${spec.title}`} onSubmit={() => void connect()}>
+      {/* `type=password`, and there is nothing to reveal: the value here is
+          what you are typing, never what is stored. */}
+      <Field label="Personal API token"
+        htmlFor={`${ids}-token`}
+        link={spec.help ? { href: spec.help, text: "How to get one" } : undefined}
+        help={spec.id === "clickup" ? "In ClickUp: your avatar, Settings, Apps. It starts with pk_." : undefined}>
+        <input id={`${ids}-token`} type="password" value={token} onChange={(e) => setToken(e.target.value)}
+          placeholder="Paste the token" spellCheck={false} autoComplete="off"
+          aria-describedby={helpIdFor(`${ids}-token`)}
+          className={`w-full ${INPUT}`} style={INPUT_STYLE} />
+      </Field>
+      <div className="agx-field">
+        <div className="agx-sform-actions">
+          <Button type="submit" tone="primary" pending={busy} disabled={!ready}>Connect</Button>
+        </div>
+        {note && <div role="alert" className="agx-field-e">{note}</div>}
+      </div>
+    </SettingsForm>
+  ) : null;
+
+  /* Disconnecting ClickUp asks first, in the place the action was. */
+  const confirm = spec.id === "clickup" && connected && confirming ? (
+    <div className="flex items-center gap-3 flex-wrap text-[12px] rounded-lg" style={{ color: "var(--text2)" }}>
+      <label className="inline-flex items-center gap-2 cursor-pointer">
+        <SwitchButton on={forgetBoards} onClick={() => setForgetBoards((v) => !v)} label="Forget saved boards too" />
+        <span>Forget saved boards too</span>
+      </label>
+      <span className="flex-1" />
+      <Button disabled={busy} onClick={() => { setConfirming(false); setForgetBoards(false); }}>Cancel</Button>
+      <Button tone="danger" pending={busy}
+        onClick={async () => {
+          setBusy(true); await api.providerDisconnect(spec.id, { forgetBoards }); setBusy(false);
+          // The sidebar's copies of "connected" and of each card are held for a minute.
+          __forgetClickupSetup(); __forgetClickupPrefs(); __forgetClickupSpaces(); forgetCards();
+          setConfirming(false); setForgetBoards(false); setSpaces(null); await onChanged();
+        }}>
+        Disconnect ClickUp
+      </Button>
+    </div>
+  ) : null;
+
+  const workspaces = spaces ? (
+    <div className="flex flex-col gap-0.5 rounded-lg p-1" role="list" aria-label="Workspaces" style={{ background: "var(--surface-inset)", border: LINE }}>
+      {!spaces.length && <div className="text-[12px] px-2 py-1 t-dim2">This token can see no workspaces.</div>}
+      {spaces.map((w) => (
+        <button key={w.id} type="button" role="listitem"
+          onClick={async () => { await api.providerWorkspace(spec.id, w.id, w.name); if (spec.id === "clickup") { __forgetClickupSetup(); __forgetClickupSpaces(); } setSpaces(null); await onChanged(); }}
+          className="agx-hover text-left text-[12px] px-2 rounded-md" style={{ color: "var(--text2)", minHeight: HIT }}>
+          {w.name}
+        </button>
+      ))}
+    </div>
+  ) : null;
+
+  const below = form || confirm || workspaces || (connected && note)
+    ? <div className="flex flex-col gap-3">
+        {form}
+        {confirm}
+        {workspaces}
+        {connected && note && <div role="alert" className="agx-field-e">{note}</div>}
+      </div>
+    : undefined;
 
   return (
     /*
-     * A row, not a card.
+     * One row per provider, in one card per kind: the badges form a column you
+     * can read down in one movement. Everything conditional — the form, the
+     * confirmation, the workspace list — is the row's stacked slot, so a row
+     * with nothing to add is one line of name and one of description, and a
+     * row that grows does it under itself.
      *
-     * These four are four answers to one question — is this connected — and a
-     * card each meant their four state pills sat at four different heights and
-     * four different x. On the dialog's grid the pills form a column you can
-     * read down in one movement, which is the only reason a list of four beats
-     * a paragraph naming them.
-     *
-     * Everything conditional — the token field, the workspace list, the caveat
-     * — hangs UNDER its row rather than inside a box, so a row that has nothing
-     * to add is exactly one line tall.
+     * The badge stays first in the control column in every state, and
+     * Disconnect after it; the confirmation that replaces Disconnect opens
+     * under the row, where the question is asked.
      */
-    <div ref={box} className="agx-provider"
+    <SettingRow
+      rowRef={box}
       /* Still remembered, still for the same reason: the row grows a detail
-         line and, when it is not connected, a button under it. Measured after
+         line and, when it is not connected, a form under it. Measured after
          the card became a row, the page still moved 145px without this. */
-      style={waiting ? { minHeight: rememberedHeights()[spec.id] ?? 56 } : undefined}>
-      <SettingRow
-        align="start"
-        label={spec.title}
-        hint={<>
-          <span className="block">{spec.what}</span>
-          {status?.detail && <span className="block mt-0.5" style={{ color: "var(--text2)" }}>{status.detail}</span>}
-          {/* When that verdict was actually taken. The row above is read from a
-              cache — deliberately, because asking ClickUp live costs ten
-              seconds of its latency for a question the token answers — and a
-              cached verdict drawn with no date claims to be a live one. Said
-              only once the answer is old enough for the difference to matter;
-              see checkedLine. */}
-          {checked && (
-            <span className="block mt-0.5 text-[11px]" style={{ color: "var(--text3)" }}>{checked}</span>
-          )}
-          {/* Half of a provider can be down while the other half looks fine —
-              the ClickUp card bell fails on its own six-minute timer and
-              used to do it in total silence (T27). Warning-coloured rather
-              than error-coloured and UNDER the detail, because it qualifies
-              the verdict instead of being it: a connected row with a broken
-              bell is still connected, and a red row for it would send
-              somebody to reconnect a token that is fine. */}
-          {status?.notice && (
-            <span className="block mt-0.5" style={{ color: "var(--warning-ink)" }}>{status.notice}</span>
-          )}
-          {waiting && <span className="agx-skeleton block mt-1 rounded" style={{ height: 13, maxWidth: 240 }} aria-hidden />}
-        </>}
-        control={<span className="flex items-center gap-2">
-          <span className="text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap"
-            style={{ color: look.fg, background: `color-mix(in srgb, ${look.fg} 12%, transparent)`, border: `1px solid color-mix(in srgb, ${look.fg} 35%, transparent)` }}>
-            {look.label}
-          </span>
-          {!waiting && connected && wantsToken && (
-            <button aria-expanded={spec.id === "clickup" ? confirming : undefined}
-              onClick={async () => {
-                if (spec.id === "clickup") { setConfirming((c) => !c); return; }
-                setBusy(true); await api.providerDisconnect(spec.id); setBusy(false); setSpaces(null); await onChanged();
-              }}
-              className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-              style={{ border: "1px solid color-mix(in srgb, var(--error) 35%, transparent)", color: "var(--error-ink)" }}>
-              Disconnect
-            </button>
-          )}
-        </span>}
-      />
-
-      {/* Nothing below this is offered while the state is unknown: every one of
-          them is an action whose rightness depends on the answer, and offering
-          "Connect" to something already connected is worse than offering
-          nothing for a third of a second. */}
-      {waiting ? null : <div className="pb-2">
-      {/* The standing caveat about a provider — true whether or not you ever
-          connect it, and read once. On the card rather than in the page's flow,
-          so it stays attached to the thing it is about. */}
-      {spec.note && !connected && (
-        <details className="mt-2 text-[12px]">
-          <summary className="cursor-pointer select-none" style={{ color: "var(--text3)" }}>
-            About this one
-          </summary>
-          <div className="mt-1" style={{ color: "var(--text3)" }}>{spec.note}</div>
-        </details>
-      )}
-
-      {spec.id === "clickup" && connected && confirming && (
-        <div className="flex items-center gap-2 mt-2.5 flex-wrap text-[12px]" style={{ color: "var(--text2)" }}>
-          <SwitchButton on={forgetBoards} onClick={() => setForgetBoards((v) => !v)} label="Forget saved boards too" />
-          <span>Forget saved boards too</span>
-          <span className="flex-1" />
-          <button onClick={() => { setConfirming(false); setForgetBoards(false); }} disabled={busy}
-            className="text-[12px] px-2.5 py-1 rounded-lg"
-            style={{ border: EDGE, color: "var(--text2)" }}>
-            Cancel
-          </button>
-          <button disabled={busy}
-            onClick={async () => {
-              setBusy(true); await api.providerDisconnect(spec.id, { forgetBoards }); setBusy(false);
-              // The sidebar's copies of "connected" and of each card are held for a minute.
-              __forgetClickupSetup(); __forgetClickupPrefs(); __forgetClickupSpaces(); forgetCards();
-              setConfirming(false); setForgetBoards(false); setSpaces(null); await onChanged();
-            }}
-            className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-            style={{ border: EDGE, borderColor: "color-mix(in srgb, var(--error) 35%, transparent)",
-              background: "color-mix(in srgb, var(--error) 10%, transparent)", color: "var(--error-ink)", opacity: busy ? 0.5 : 1 }}>
-            Disconnect ClickUp
-          </button>
-        </div>
-      )}
-
-      {wantsToken && !connected && (
-        <div className="flex items-center gap-2 mt-2.5 flex-wrap">
-          {isJira && (
-            <>
-              <input type="text" value={email} onChange={(e) => setEmail(e.target.value)}
-                placeholder="Email or username (none for a personal access token)" spellCheck={false} autoComplete="off" aria-label="Jira email or username"
-                className={`flex-1 min-w-[200px] ${INPUT}`} style={INPUT_STYLE} />
-              <input type="text" value={site} onChange={(e) => setSite(e.target.value)}
-                placeholder="acme.atlassian.net or jira.example.com" spellCheck={false} autoComplete="off" aria-label="Jira site"
-                className={`flex-1 min-w-[200px] ${INPUT}`} style={INPUT_STYLE} />
-            </>
-          )}
-          {/* `type=password`, and there is nothing to reveal: the value here is
-              what you are typing, never what is stored. */}
-          <input type="password" value={token} onChange={(e) => setToken(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") void connect(); }}
-            placeholder="Paste your personal API token" spellCheck={false} autoComplete="off"
-            className={`flex-1 min-w-[200px] ${INPUT}`}
-            style={INPUT_STYLE} />
-          <button onClick={() => void connect()} disabled={busy || !ready}
-            className="text-[11.5px] px-3 py-1.5 rounded-lg"
-            style={{ background: "color-mix(in srgb, var(--primary) 20%, transparent)",
-              border: "1px solid color-mix(in srgb, var(--primary) 48%, transparent)",
-              color: "var(--text)", opacity: busy || !ready ? 0.4 : 1 }}>
-            {busy ? "Checking…" : "Connect"}
-          </button>
-        </div>
-      )}
-
-      {note && <div className="text-[11px] mt-2" style={{ color: "var(--error-ink)" }}>{note}</div>}
-
-      <div className="flex items-center gap-2 flex-wrap">
-        {spec.help && !connected && (
-          <a href={spec.help} target="_blank" rel="noreferrer"
-            className="text-[12px] px-2 py-1 rounded-lg" style={{ border: line, color: "var(--text2)" }}>
-            How to get one ↗
-          </a>
-        )}
+      minHeight={waiting ? rememberedHeights()[spec.id] ?? 56 : undefined}
+      label={spec.title}
+      hint={<>
+        <span className="block">{spec.what}</span>
+        {status?.detail && <span className="block mt-1">{status.detail}</span>}
+        {/* When that verdict was actually taken. The row above is read from a
+            cache — deliberately, because asking ClickUp live costs ten
+            seconds of its latency for a question the token answers — and a
+            cached verdict drawn with no date claims to be a live one. */}
+        {checked && <span className="block mt-1">{checked}</span>}
+        {/* Half of a provider can be down while the other half looks fine —
+            the ClickUp card bell fails on its own six-minute timer. Warning
+            ink and UNDER the detail, because it qualifies the verdict instead
+            of being it: a connected row with a broken bell is still connected. */}
+        {status?.notice && <span className="block mt-1" style={{ color: "var(--warning-ink)" }}>{status.notice}</span>}
         {connected && spec.id === "clickup" && (
-          <button onClick={async () => {
-            const r = await api.providerWorkspaces(spec.id);
-            if (!r.ok) { setNote(r.error ?? "Could not read the workspaces"); return; }
-            setSpaces(r.workspaces ?? []);
-          }} className="text-[12px] px-2 py-1 rounded-lg" style={{ border: line, color: "var(--text2)" }}>
-            Change workspace
-          </button>
+          <span className="block mt-1">
+            <button type="button" className="agx-textlink" onClick={() => void changeWorkspace()}>Change workspace</button>
+            {" · "}
+            <button type="button" className="agx-textlink" onClick={() => openSettings("clickup")}>Workflow and boards</button>
+          </span>
         )}
-      </div>
-
-      </div>}
-
-      {/* The workflow lives on its own page, named after the tracker, which appears once it is connected. */}
-      {spec.id === "clickup" && connected && (
-        <SettingRow label="Workflow and boards" hint="The steps you add to pull requests and cards, tied to your own statuses." onClick={() => openSettings("clickup")} />
-      )}
-
-      {spaces && (
-        <div className="flex flex-col gap-0.5 mt-2.5 rounded-lg p-1" style={{ background: "var(--bg3)", border: line }}>
-          {!spaces.length && <div className="text-[11px] px-2 py-1 t-dim2">This token can see no workspaces.</div>}
-          {spaces.map((w) => (
-            <button key={w.id}
-              onClick={async () => { await api.providerWorkspace(spec.id, w.id, w.name); if (spec.id === "clickup") { __forgetClickupSetup(); __forgetClickupSpaces(); } setSpaces(null); await onChanged(); }}
-              className="text-left text-[11.5px] px-2 py-1 rounded hover:bg-white/5" style={{ color: "var(--text2)" }}>
-              {w.name}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+        {waiting && <span className="agx-skeleton block mt-1 rounded" style={{ height: 13, maxWidth: 240 }} aria-hidden />}
+      </>}
+      /* The standing caveat about a provider — true whether or not you ever
+         connect it, and read once — behind a summary that says what it is. */
+      detail={spec.note && !connected && !waiting && !isJira ? { summary: spec.noteTitle ?? "About the credential", body: spec.note } : undefined}
+      status={<StatusBadge tone={look.tone}>{look.label}</StatusBadge>}
+      actions={isJira && !waiting
+        ? <Button onClick={() => openSettings("jira")}>{connected ? "Manage" : "Set up"}</Button>
+        : !waiting && connected && wantsToken
+        ? <Button tone="danger" aria-expanded={spec.id === "clickup" ? confirming : undefined}
+            disabled={busy || confirming}
+            onClick={async () => {
+              if (spec.id === "clickup") { setConfirming(true); return; }
+              setBusy(true); await api.providerDisconnect(spec.id); setBusy(false); setSpaces(null); await onChanged();
+            }}>
+            Disconnect
+          </Button>
+        : undefined}
+      below={below}
+    />
   );
 }
 
@@ -3243,8 +3044,24 @@ function RequirementsPane({ open }: { open: boolean }) {
   // plus two cached subprocess answers, and nothing outside this pane wants it.
   useEffect(() => { if (open) void load(false); }, [open]);
 
-  if (err) return <Section><div className="py-2 text-[12px]" style={{ color: "var(--error-ink)" }}>{err}</div></Section>;
-  if (!deps) return <Section><div className="py-2 text-[12px] t-dim">Checking this machine…</div></Section>;
+  const recheck = <Button pending={busy} onClick={() => void load(true)}>Recheck</Button>;
+  const desc = <>
+    agentglass drives the tools you already have instead of bundling its own
+    {platform && platform !== "demo" ? <> (<span className="t-mono text-[11px]">{platform}</span>)</> : null}.
+    Install what is missing the way you usually install software here, then recheck.
+  </>;
+  /* The card, its verdict and the recheck are on screen in every state —
+     checking, failed, answered — so nothing moves when the answer lands and
+     the button is always where it was. */
+  if (err || !deps) {
+    return (
+      <SettingsCard title="On this machine" desc={desc}
+        status={<StatusBadge tone={err ? "err" : "checking"}>{err ? "Not checked" : "Checking"}</StatusBadge>}
+        actions={recheck}>
+        <SettingRow label={err ? err : "Checking this machine…"} hint={err ? "Recheck to try again." : undefined} />
+      </SettingsCard>
+    );
+  }
 
   const live = deps.filter((d) => d.status !== "unsupported");
   const idle = deps.filter((d) => d.status === "unsupported");
@@ -3257,51 +3074,21 @@ function RequirementsPane({ open }: { open: boolean }) {
   const wanting = live.filter((d) => d.status === "attention" || (d.status === "missing" && !d.required)).length;
 
   return (
-    <Section title="On this machine">
-      {/* The verdict is the point of the page, so it is the first row and the
-          only one carrying the recheck. It used to be a sentence floated beside
-          a button, under a paragraph, neither of them on the dialog's line. */}
-      <SettingRow
-        label={<span style={{ color: broken ? "var(--error)" : wanting ? "var(--warning)" : "var(--success)" }}>
-          {broken
-            ? `${broken} needed ${broken === 1 ? "tool is" : "tools are"} missing`
-            : wanting
-              ? `Everything needed is here — ${wanting} optional ${wanting === 1 ? "feature is" : "features are"} standing down`
-              : "Everything agentglass looks for is here"}
-        </span>}
-        hint={<>
-          agentglass drives the tools you already have rather than bundling its own. This is what it looks for
-          {platform && platform !== "demo" ? <> on this machine (<span className="t-mono text-[11px]">{platform}</span>)</> : null}.
-          Install whatever is missing however you normally install software here, then recheck.
-        </>}
-        control={<button onClick={() => void load(true)} disabled={busy}
-          className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-          style={{ color: "var(--text2)", border: EDGE, opacity: busy ? 0.5 : 1 }}>
-          {busy ? "Checking…" : "Recheck"}
-        </button>}
-      />
-
-      {/*
-        * Only what wants something from you gets a row.
-        *
-        * Twelve rows of equal weight to say that one tool is missing: measured
-        * at 174 words, of which about 160 were eleven tools reporting that
-        * they are fine. A page you scan for the broken one should not make you
-        * scan. So the ones that need you keep their full row — the status, the
-        * detail, the install button — and the ones that are ready collapse
-        * into a grid behind one line, where a name and a dot are enough.
-        */}
-      {wants.length > 0 && (
-        <>
-          <div className="panel-eyebrow pt-3 pb-1">
-            {wants.length === 1 ? "This one wants something" : "These want something"}
-          </div>
-          {wants.map((d) => <DepRow key={d.id} d={d} home={shellRoot} />)}
-        </>
-      )}
+    /* The verdict is the card's badge and the recheck is its one action, at
+       the top right. Only what wants something gets a row — the status, the
+       detail, the install — and the ones that are ready collapse behind one
+       line, where a name and a dot are enough. */
+    <SettingsCard title="On this machine" desc={desc}
+      status={broken
+        ? <StatusBadge tone="err">{broken} needed {broken === 1 ? "tool" : "tools"} missing</StatusBadge>
+        : wanting
+          ? <StatusBadge tone="warn">{wanting} optional {wanting === 1 ? "feature" : "features"} off</StatusBadge>
+          : <StatusBadge tone="ok">Everything is here</StatusBadge>}
+      actions={recheck}>
+      {wants.map((d) => <DepRow key={d.id} d={d} home={shellRoot} />)}
 
       {ready.length > 0 && (
-        <Fold label={`${ready.length} ready`}
+        <Fold label={wants.length ? `${ready.length} more ready` : `${ready.length} ready`}
           hint="Everything else agentglass looks for, and found.">
           <DepGrid deps={ready} />
         </Fold>
@@ -3313,7 +3100,7 @@ function RequirementsPane({ open }: { open: boolean }) {
           <DepGrid deps={idle} muted />
         </Fold>
       )}
-    </Section>
+    </SettingsCard>
   );
 }
 
@@ -3367,22 +3154,23 @@ function TerminalRunsOn({ open }: { open: boolean }) {
   };
 
   return (
-    <Section title="Terminal runs on">
+    <SettingsCard title="Terminal runs on" desc="The shell a Terminal view starts.">
       <SettingRow
         agentNever="which tmux a shell runs in, held by the server: it changes what runs a shell, so the owner chooses it"
         label="Terminal runs on"
-        hint={<>Where the Terminal view opens a shell. "The engine" gives it the pane engine — agentglass draws the tabs and splits, the prefix set under Pane engine (tmux) applies, and Restore there can bring it back after a reboot; one session per checkout. "This machine's tmux" resumes the session you left in your own tmux, with your own <span className="t-mono text-[11px]">~/.tmux.conf</span>. They are separate servers: switching moves nothing and loses nothing, and whichever you are not using keeps running.</>}
-        control={<select value={terminal} onChange={(e) => saveTerminal(e.target.value)} disabled={busy}
-          className="text-[12px] px-2 py-1 rounded-lg justify-self-end"
-          style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: EDGE }}>
-          <option value="engine">The engine</option>
-          <option value="desk">This machine's tmux</option>
-        </select>}
+        hint="Where the Terminal view opens a shell: on the pane engine, or on the tmux you already run on this machine."
+        detail={{
+          summary: "What each choice does",
+          body: <>"The engine" gives it the pane engine — agentglass draws the tabs and splits, the prefix set under Pane engine (tmux) applies, and Restore there can bring it back after a reboot; one session per checkout. "This machine's tmux" resumes the session you left in your own tmux, with your own <span className="t-mono text-[11px]">~/.tmux.conf</span>. They are separate servers: switching moves nothing and loses nothing, and whichever you are not using keeps running.</>,
+        }}
+        control={<span className="flex justify-end"><Select align="right" value={terminal} onChange={saveTerminal} disabled={busy}
+          options={[{ value: "engine", label: "The engine" }, { value: "desk", label: "This machine's tmux" }]} /></span>}
+        below={(err || note) ? (
+          <div className="text-[12px]" role={err ? "alert" : "status"}
+            style={{ color: err ? "var(--error-ink)" : "var(--success-ink)" }}>{err ?? note}</div>
+        ) : undefined}
       />
-
-      {err && <div className="pt-1 pl-2 text-[12px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
-      {note && <div className="pt-1 pl-2 text-[12px]" style={{ color: "var(--success-ink)" }}>{note}</div>}
-    </Section>
+    </SettingsCard>
   );
 }
 
@@ -3405,6 +3193,8 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
   const [resume, setResume] = useState("lazy");
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  /** The card the last action belongs to, so its answer appears under it and not at the foot of the page. */
+  const [noteAt, setNoteAt] = useState<"engine" | "config" | "restore">("engine");
   const [busy, setBusy] = useState(false);
 
   const load = () => {
@@ -3428,7 +3218,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
   useEffect(() => { if (open) void load(); }, [open]);
 
   const saveSettings = () => {
-    setBusy(true); setNote(null);
+    setBusy(true); setNote(null); setNoteAt("engine");
     api.tmuxSettingsSave({ source, path: source === "custom" ? path : undefined, restore, resume })
       .then((r) => { setNote(r.ok ? "Saved. The binary choice applies to new panes." : r.error ?? "Could not save."); void load(); })
       .catch(() => setErr("Could not save — server unreachable."))
@@ -3436,7 +3226,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
   };
 
   const savePrefix = () => {
-    setBusy(true); setNote(null); setErr(null);
+    setBusy(true); setNote(null); setErr(null); setNoteAt("engine");
     api.tmuxSettingsSave({ prefix })
       .then((r) => {
         if (r.ok) setNote(r.appliedNow
@@ -3450,7 +3240,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
   };
 
   const saveConf = () => {
-    setBusy(true); setNote(null);
+    setBusy(true); setNote(null); setNoteAt("config");
     api.tmuxConfSave(confMode, override)
       .then((r) => {
         if (r.ok) { setNote(r.appliedNow ? "Config accepted by tmux, and applied to the running engine." : "Config accepted by tmux. It applies when the engine next starts."); }
@@ -3468,7 +3258,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
       confirmLabel: "Reset engine",
       danger: true,
     }))) return;
-    setBusy(true); setNote(null);
+    setBusy(true); setNote(null); setNoteAt("engine");
     api.tmuxReset()
       .then((r) => { setNote(r.ok ? "Reset to defaults." : r.error ?? "Reset failed."); void load(); })
       .catch(() => setErr("Could not reset — server unreachable."))
@@ -3476,7 +3266,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
   };
 
   const restoreAction = (action: "capture" | "restore" | "clear") => {
-    setBusy(true); setNote(null);
+    setBusy(true); setNote(null); setNoteAt("restore");
     api.tmuxRestoreAction(action, resume as "lazy" | "all")
       .then((r) => {
         if (r.ok && action === "restore") setNote(restoredNote(r.restored ?? 0));
@@ -3489,54 +3279,57 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
       .finally(() => setBusy(false));
   };
 
-  if (err) return <Section><div className="py-2 text-[12px]" style={{ color: "var(--error-ink)" }}>{err}</div></Section>;
+  if (err) return (
+    <SettingsCard title="Pane engine">
+      <SettingRow label="The tmux settings are unavailable" status={<StatusBadge tone="err">Not read</StatusBadge>} hint={err} />
+    </SettingsCard>
+  );
 
   const cap = st?.capability;
+  const prefixListed = PREFIXES.some((p) => p.value === prefix);
+  const saidHere = (at: typeof noteAt) => note && noteAt === at
+    ? <SettingRow label={<span style={{ color: "var(--success-ink)" }}>{note}</span>} />
+    : null;
   return (
-    <Section title="Pane engine">
-      <SettingRow
-        label={<span style={{ color: cap && !cap.available ? "var(--error)" : cap?.available ? "var(--success)" : undefined }}>
-          {cap?.available ? "Pane engine ready" : "Pane engine unavailable"}
-        </span>}
-        hint={<>
-          The engine runs its own tmux server (its own socket, its own config —
-          your ~/.tmux.conf is never loaded, and neither is your tmux touched).
-          {st?.bin.path ? <> Currently <span className="t-mono text-[11px]">{st.bin.path}</span></> : null}
-          {st?.bin.version ? <> — {st.bin.version}</> : null}
-          {st?.bin.source === "env" ? " (AGENTGLASS_TMUX_PATH override)" : null}
-          {cap && !cap.available ? <> — {cap.reason}</> : null}
-          {st?.broken ? <> <b style={{ color: "var(--error-ink)" }}>{st.brokenReason}</b></> : null}
-        </>}
-        control={st ? <button onClick={resetAll} disabled={busy}
-          className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-          style={{ color: "var(--text2)", border: EDGE, opacity: busy ? 0.5 : 1 }}>
-          Reset tmux to defaults
-        </button> : undefined}
-      />
-
+    <>
+    <SettingsCard title="Pane engine"
+      desc="The engine runs its own tmux server — its own socket, its own config. Your ~/.tmux.conf is never loaded, and neither is your tmux touched."
+      status={!st
+        ? <StatusBadge tone="checking">Checking</StatusBadge>
+        : cap?.available
+          ? <StatusBadge tone="ok">Pane engine ready</StatusBadge>
+          : <StatusBadge tone="err">Pane engine unavailable</StatusBadge>}
+      actions={st ? <Button onClick={resetAll} disabled={busy}>Reset tmux to defaults</Button> : undefined}>
       <SettingRow
         label="tmux binary"
-        hint={<>Which executable the engine spawns. "Auto" prefers the bundled static tmux and falls back to the system one; "Custom" points at your own binary (e.g. a newer tmux). Tabs, splits and status are drawn by agentglass either way.</>}
-        control={<span className="flex items-center gap-2 justify-self-end">
-          <select value={source} onChange={(e) => setSource(e.target.value)} disabled={busy}
-            className="text-[12px] px-2 py-1 rounded-lg"
-            style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: EDGE }}>
-            <option value="auto">Auto (bundled first)</option>
-            <option value="bundled">Bundled</option>
-            <option value="system">System</option>
-            <option value="custom">Custom…</option>
-          </select>
-          {source === "custom" && (
-            <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="/path/to/tmux"
-              className={`w-[180px] ${INPUT}`}
-              style={INPUT_STYLE} />
+        hint={<>
+          <span className="block">Which executable the engine spawns. "Auto" prefers the bundled static tmux and falls back to the system one; "Custom" points at your own binary (e.g. a newer tmux). Tabs, splits and status are drawn by agentglass either way.</span>
+          {(st?.bin.path || st?.bin.version || (cap && !cap.available) || st?.broken) && (
+            <span className="block mt-1">
+              {st?.bin.path ? <>Currently <span className="t-mono text-[11px] break-all">{st.bin.path}</span></> : null}
+              {st?.bin.version ? <> — {st.bin.version}</> : null}
+              {st?.bin.source === "env" ? " (AGENTGLASS_TMUX_PATH override)" : null}
+              {cap && !cap.available ? <> — {cap.reason}</> : null}
+              {st?.broken ? <> <b style={{ color: "var(--error-ink)" }}>{st.brokenReason}</b></> : null}
+            </span>
           )}
-          <button onClick={saveSettings} disabled={busy}
-            className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-            style={{ color: "var(--text2)", border: EDGE, opacity: busy ? 0.5 : 1 }}>
-            Save
-          </button>
-        </span>}
+        </>}
+        control={<Select value={source} onChange={setSource} disabled={busy} align="right" style={SELECT_BOX}
+          options={[
+            { value: "auto", label: "Auto (bundled first)" },
+            { value: "bundled", label: "Bundled" },
+            { value: "system", label: "System" },
+            { value: "custom", label: "Custom…" },
+          ]} />}
+        actions={<Button onClick={saveSettings} disabled={busy}>Save</Button>}
+        below={source === "custom" ? (
+          <SettingsForm label="Custom tmux binary" onSubmit={saveSettings}>
+            <Field label="Path to the binary" htmlFor="tmux-bin-path">
+              <input id="tmux-bin-path" value={path} onChange={(e) => setPath(e.target.value)} placeholder="/path/to/tmux"
+                className={`t-mono ${INPUT}`} style={INPUT_STYLE} />
+            </Field>
+          </SettingsForm>
+        ) : undefined}
       />
 
       {/* The choice itself lives under Terminal, beside the other things that
@@ -3545,11 +3338,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
       <SettingRow
         label="Where a Terminal opens a shell"
         hint="Set under Terminal: on this engine, or on your own tmux."
-        control={<button onClick={onGoTerminal}
-          className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap justify-self-end"
-          style={{ color: "var(--text2)", border: EDGE }}>
-          Open Terminal settings
-        </button>}
+        actions={<Button onClick={onGoTerminal}>Open Terminal settings</Button>}
       />
 
       {/* The one binding everybody changes, as a choice rather than as three
@@ -3559,120 +3348,98 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
       <SettingRow
         label="Prefix key"
         hint={<>The chord that starts every tmux command in these panes — the engine's own, not your tmux's. tmux's default is <span className="t-mono text-[11px]">C-b</span>; pick another if that is taken by something you use. "Custom" takes tmux's spelling: <span className="t-mono text-[11px]">C-a</span>, <span className="t-mono text-[11px]">M-Space</span>, <span className="t-mono text-[11px]">F5</span>. Saving hands it to the running engine, so it applies to the panes already open — no restart.</>}
-        control={<span className="flex items-center gap-2 justify-self-end">
-          <select
-            value={PREFIXES.some((p) => p.value === prefix) ? prefix : "custom"}
-            onChange={(e) => { setPrefixCustom(e.target.value === "custom"); if (e.target.value !== "custom") setPrefix(e.target.value); }}
-            disabled={busy}
-            className="text-[12px] px-2 py-1 rounded-lg"
-            style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: EDGE }}>
-            {PREFIXES.map((p) => <option key={p.value || "default"} value={p.value}>{p.label}</option>)}
-            <option value="custom">Custom…</option>
-          </select>
-          {(prefixCustom || !PREFIXES.some((p) => p.value === prefix)) && (
-            <input value={prefix} onChange={(e) => setPrefix(e.target.value)} placeholder="C-a" spellCheck={false}
-              className={`t-mono w-[90px] ${INPUT}`}
-              style={INPUT_STYLE} />
-          )}
-          <button onClick={savePrefix} disabled={busy}
-            className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-            style={{ color: "var(--text2)", border: EDGE, opacity: busy ? 0.5 : 1 }}>
-            {/* It reloads as well as saves, and a button that only says "Save"
-                over a change that lands immediately is a button people press
-                twice. */}
-            Save &amp; apply
-          </button>
-        </span>}
+        control={<Select value={prefixListed ? prefix : "custom"} disabled={busy} align="right" style={SELECT_BOX}
+          onChange={(v) => { setPrefixCustom(v === "custom"); if (v !== "custom") setPrefix(v); }}
+          options={[...PREFIXES.map((p) => ({ value: p.value, label: p.label })), { value: "custom", label: "Custom…" }]} />}
+        /* It reloads as well as saves, and a button that only says "Save"
+           over a change that lands immediately is a button people press
+           twice. */
+        actions={<Button onClick={savePrefix} disabled={busy}>Save &amp; apply</Button>}
+        below={(prefixCustom || !prefixListed) ? (
+          <SettingsForm label="Custom prefix key" onSubmit={savePrefix}>
+            <Field label="Prefix key, in tmux's spelling" htmlFor="tmux-prefix">
+              <input id="tmux-prefix" value={prefix} onChange={(e) => setPrefix(e.target.value)} placeholder="C-a" spellCheck={false}
+                className={`t-mono ${INPUT}`} style={INPUT_STYLE} />
+            </Field>
+          </SettingsForm>
+        ) : undefined}
       />
+      {saidHere("engine")}
+    </SettingsCard>
 
+    <SettingsCard title="Engine config"
+      desc="Extra config lines for the engine's own server, validated by tmux before they apply. A rejected config leaves the engine off and chat unaffected, and Reset brings it back.">
       <SettingRow
-        label="Engine config"
-        hint={<>Extra config lines for the engine's own server. "Append" runs them after the generated base (the UI's status bar stays off — that line is re-asserted after yours); "Replace" makes your text the whole config. Plugins work by adding their own <span className="t-mono text-[11px]">run-shell</span> line. Validated by tmux before it applies; a rejected config leaves the engine off and chat unaffected, and Reset brings it back.</>}
-        control={undefined}
+        label="Mode"
+        hint={<>"Append" runs your lines after the generated base (the UI's status bar stays off — that line is re-asserted after yours); "Replace" makes your text the whole config.</>}
+        control={<Select value={confMode} onChange={setConfMode} disabled={busy} align="right" style={SELECT_BOX}
+          options={[
+            { value: "append", label: "Append to base" },
+            { value: "replace", label: "Replace everything" },
+          ]} />}
       />
-      <div className="pl-2 pb-2 agx-settings-rows">
-        <SettingRow
-          label="Mode"
-          control={<select value={confMode} onChange={(e) => setConfMode(e.target.value)} disabled={busy}
-            className="text-[12px] px-2 py-1 rounded-lg"
-            style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: EDGE }}>
-            <option value="append">Append to base</option>
-            <option value="replace">Replace everything</option>
-          </select>}
-        />
-        <SettingRow
-          label="Override config"
-          hint="Plain tmux commands, one per line. Your ~/.tmux.conf is never read."
-          control={<span className="flex items-end gap-2 justify-self-end">
-            <textarea value={override} onChange={(e) => setOverride(e.target.value)} spellCheck={false} rows={6} disabled={busy}
-              placeholder={"set -g prefix C-b\nbind-key v split-window -h"}
-              className="text-[11px] t-mono px-2 py-1.5 rounded-lg bg-transparent w-[320px] resize-y"
-              style={{ color: "var(--text2)", border: EDGE }} />
-            <button onClick={saveConf} disabled={busy}
-              className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap shrink-0"
-              style={{ color: "var(--text2)", border: EDGE, opacity: busy ? 0.5 : 1 }}>
-              Validate & apply
-            </button>
-          </span>}
-        />
-      </div>
-
       <SettingRow
-        label="Restore after reboot"
-        hint={<>When the host reboots, the engine's tmux dies with it — this photographs the layout (sessions, tabs, splits, each pane's directory and start command; not what scrolled past) and rebuilds it at the next boot. "Lazy" restores the tree and resumes each agent when you reopen its chat; "All" relaunches every recorded CLI, resuming each conversation. Nothing here touches your own tmux or its resurrect saves.</>}
-        control={<span className="flex items-center gap-2 justify-self-end">
-          <select value={resume} onChange={(e) => setResume(e.target.value)} disabled={busy}
-            className="text-[12px] px-2 py-1 rounded-lg"
-            style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: EDGE, opacity: restore ? 1 : 0.4 }}>
-            <option value="lazy">Lazy resume</option>
-            <option value="all">Resume all</option>
-          </select>
-          <button onClick={() => setRestore(!restore)} disabled={busy}
-            className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-            style={{ color: restore ? "var(--success)" : "var(--text2)", border: EDGE }}>
-            {restore ? "On" : "Off"}
-          </button>
-        </span>}
+        label="Override config"
+        hint={<>Plain tmux commands, one per line. Your ~/.tmux.conf is never read. Plugins work by adding their own <span className="t-mono text-[11px]">run-shell</span> line.</>}
+        below={
+          <SettingsForm label="Override config" onSubmit={saveConf}>
+            <Field label="tmux commands" htmlFor="tmux-override">
+              <textarea id="tmux-override" value={override} onChange={(e) => setOverride(e.target.value)} spellCheck={false} rows={6} disabled={busy}
+                placeholder={"set -g prefix C-b\nbind-key v split-window -h"}
+                className="text-[11px] t-mono px-2 py-1.5 rounded-lg bg-transparent w-full resize-y"
+                style={{ color: "var(--text2)", border: EDGE }} />
+            </Field>
+            <div><Button type="submit" disabled={busy}>Validate &amp; apply</Button></div>
+          </SettingsForm>
+        }
+      />
+      {saidHere("config")}
+    </SettingsCard>
+
+    <SettingsCard title="Restore after reboot">
+      <SettingRow
+        label="Restore the layout"
+        role="switch" ariaChecked={restore}
+        onClick={busy ? undefined : () => setRestore(!restore)}
+        hint="When the host reboots, the engine's tmux dies with it — this photographs the layout (sessions, tabs, splits, each pane's directory and start command; not what scrolled past) and rebuilds it at the next boot. Nothing here touches your own tmux or its resurrect saves."
+        control={<Switch on={restore} busy={busy} />}
+      />
+      <SettingRow
+        label="Resume mode"
+        hint={<>"Lazy" restores the tree and resumes each agent when you reopen its chat; "All" relaunches every recorded CLI, resuming each conversation.</>}
+        control={<Select value={resume} onChange={setResume} disabled={busy || !restore} align="right" style={SELECT_BOX}
+          options={[
+            { value: "lazy", label: "Lazy resume" },
+            { value: "all", label: "Resume all" },
+          ]} />}
       />
       {st?.crashLoop && (
         <SettingRow
           label="Layout left alone"
+          status={<StatusBadge tone="warn">Skipped</StatusBadge>}
           hint={`${st.crashLoop.launches} launches in ten minutes looked like a crash loop, so this start neither restored nor re-captured. Restore it by hand below once the app is stable, or delete ${st.crashLoop.file} to clear this.`}
-          control={<span />}
         />
       )}
       {st?.lastCaptureAt ? (
         <SettingRow
           label="Last layout capture"
           hint={`Taken ${new Date(st.lastCaptureAt).toLocaleString()}. Captures run every minute while the engine is on.`}
-          control={<span className="flex items-center gap-2 justify-self-end">
-            <button onClick={() => restoreAction("capture")} disabled={busy}
-              className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-              style={{ color: "var(--text2)", border: EDGE, opacity: busy ? 0.5 : 1 }}>
-              Capture now
-            </button>
-            <button onClick={() => restoreAction("restore")} disabled={busy}
-              className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-              style={{ color: "var(--text2)", border: EDGE, opacity: busy ? 0.5 : 1 }}>
-              Restore now
-            </button>
-            <button onClick={() => restoreAction("clear")} disabled={busy}
-              className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-              style={{ color: "var(--text2)", border: EDGE, opacity: busy ? 0.5 : 1 }}>
-              Clear
-            </button>
+          below={<span className="flex flex-wrap items-center gap-2">
+            <Button onClick={() => restoreAction("capture")} disabled={busy}>Capture now</Button>
+            <Button onClick={() => restoreAction("restore")} disabled={busy}>Restore now</Button>
+            <Button onClick={() => restoreAction("clear")} disabled={busy}>Clear</Button>
           </span>}
         />
       ) : (
         <SettingRow
           label="Restore state"
           hint="Nothing captured yet — enable Restore and the next sweep photographs the layout."
-          control={undefined}
         />
       )}
-      {note && <div className="pt-1 pl-2 text-[12px]" style={{ color: "var(--success-ink)" }}>{note}</div>}
-      {dialog}
-    </Section>
+      {saidHere("restore")}
+    </SettingsCard>
+    {dialog}
+    </>
   );
 }
 
@@ -3706,15 +3473,16 @@ function CardTrackerSection() {
     setRows((cur) => cur && { ...cur, chosen: r.projects ?? {} });
   };
   return (
-    <Section title="Card tracker" desc="Which tracker a repository's cards live in. Auto reads the id's prefix.">
-      {!rows?.repos.length && <p className="px-3.5 py-2 text-[11px] t-dim2">No repositories to choose for yet.</p>}
+    <SettingsCard title="Card tracker"
+      desc={<>Which tracker a repository's cards live in. Auto reads the id's prefix.
+        {note && <span className="block mt-1" role="alert" style={{ color: "var(--error-ink)" }}>{note}</span>}</>}>
+      {!rows?.repos.length && <EmptyState>No repositories to choose for yet.</EmptyState>}
       {rows?.repos.map((repo) => (
         <Choice<TrackerChoice> key={repo} label={repo} hint="Where a card id in this repository's branches and pull requests is looked up."
           value={rows.chosen[repo.toLowerCase()] ?? "auto"} onPick={(v) => void pick(repo, v)}
           options={[{ v: "auto", label: "Auto" }, { v: "clickup", label: "ClickUp" }, { v: "jira", label: "Jira" }]} />
       ))}
-      {note && <p className="px-3.5 pb-2 text-[11px]" style={{ color: "var(--error-ink)" }}>{note}</p>}
-    </Section>
+    </SettingsCard>
   );
 }
 
@@ -4354,7 +4122,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                 thing" was a literal description of the colour values. The
                 border is at full --surface-line now for the same reason: a
                 seam this important is not a suggestion. */}
-            <aside className="shrink-0 w-[280px] flex flex-col border-r"
+            <aside className="agx-settings-nav shrink-0 flex flex-col border-r"
               style={{ background: "var(--surface-nav)", borderColor: "var(--surface-line)" }}>
               {/* Leaving is a button you press, not an x you hunt for in a
                   corner — and it says where it takes you, because after ten
@@ -4519,7 +4287,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                 them was measure; on a page the column is capped at 760 anyway,
                 so the slack is free and the gap is what stops the title reading
                 as an extension of the nav it sits beside. */}
-            <div ref={contentRef} className="agx-scroll flex-1 min-w-0 overflow-y-auto px-8 pt-8 pb-10">
+            <div ref={contentRef} className="agx-settings-main agx-scroll flex-1 min-w-0 overflow-y-auto pt-8 pb-10">
                   {/*
                     A WIDER COLUMN on the panes that are BOARDS rather than
                     reading.
@@ -4569,8 +4337,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                             </>
                           )}
                       </span>
-                      <button onClick={() => setQ("")} className="justify-self-end text-[12px] px-2.5 py-1 rounded-lg"
-                        style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }}>Show all</button>
+                      <Button className="justify-self-end" onClick={() => setQ("")}>Show all</Button>
                     </div>
                   )}
                   {!ql && (() => {
@@ -4581,19 +4348,18 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                          old row padding sat a clear step to the RIGHT of every
                          heading it governs. It leads the column now.
                        *
-                       * 22px and a rule underneath. At 18px/medium it was two
-                       * and a half points over a row label and read as one
-                       * more line of the page rather than as its name — which
-                       * is how a settings screen ends up feeling like a book
-                       * with no chapter breaks. The rule is the chapter break;
-                       * the space under it is what stops the first card
-                       * reading as part of the heading. */
-                      <div className="pb-6 mb-6 px-1 border-b" style={{ borderColor: "var(--surface-line)" }}>
-                        <div className="flex items-baseline justify-between gap-4">
-                          <div className="text-[22px] font-semibold tracking-[-0.015em]" style={{ color: "var(--text)" }}>{t.label}</div>
+                       * 22px, and no rule under it: the 24px of space before
+                       * the first card is the chapter break. The rule that was
+                       * here was one more line beside a heading, counted on
+                       * every page by the settings sweep. Reset page sits on
+                       * the title's line, at the right, on the pages that can
+                       * have it — a plain button, because it changes nothing
+                       * until it is pressed and what it resets is named. */
+                      <div className="mb-6 px-1">
+                        <div className="flex items-center justify-between gap-4">
+                          <h2 className="m-0 text-[22px] font-semibold tracking-[-0.015em]" style={{ color: "var(--text)" }}>{t.label}</h2>
                           {pageModified(t.id) && (
-                            <button onClick={() => resetPage(t.id)}
-                              className="shrink-0 text-[12px] underline t-dim">Reset page</button>
+                            <Button onClick={() => resetPage(t.id)}>Reset page</Button>
                           )}
                         </div>
                         {/* No measure cap of its own — the column is the cap. At 62ch this broke
@@ -4606,15 +4372,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   })()}
                   {ql && show("appearance") && <PageMatchHeading id="appearance" onOpen={() => { setPane("appearance" as Pane); setQ(""); }} />}
                   {show("appearance") && (
-                  <Section title="Theme"
-                    desc="One palette for the whole cockpit.">
-                    {/* The theme drives everything — app chrome, the terminal's
-                        own palette, and on the desktop it is synced out to tmux
-                        and nvim too. It used to live in the masthead; it belongs
-                        here, where a control this heavy isn't in the way. */}
-                    <p className="py-3 text-[12px] t-dim">One palette for the whole cockpit — chrome, terminal, and (on the desktop) your tmux and nvim follow it.</p>
-                    <AppearancePane key={appearanceNonce} current={theme} onChange={onTheme} onAccent={setAccentState} />
-                  </Section>
+                  <AppearancePane key={appearanceNonce} current={theme} onChange={onTheme} onAccent={setAccentState} />
                   )}
                   {ql && show("terminal") && <PageMatchHeading id="terminal" onOpen={() => { setPane("terminal" as Pane); setQ(""); }} />}
                   {show("terminal") && (<>
@@ -4624,7 +4382,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       and the word separators are not the same subject and were
                       drawn as though they were. Named groups turn "read the
                       page" into "read three headings". */}
-                  <Section title="How it draws"
+                  <SettingsCard title="How it draws"
                     desc="The renderer, the face, and the size of a cell.">
                     {/* GPU (WebGL) is fastest but blanks white on some Linux
                         GPU/compositor stacks; Canvas is the same drawing minus
@@ -4671,29 +4429,28 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                           </span>
                         )}
                       </>}
-                      control={<Select
+                      control={<span className="flex justify-end"><Select
                         align="right"
                         value={termFont}
                         onChange={(v) => { setting("terminal.font").set(v); setTermFontState(v); }}
                         options={TERM_FONTS
                           .filter((f) => f.bundled || fontAvailable(f.family))
                           .map((f) => ({ value: f.id, label: f.name }))}
-                      />}
+                      /></span>}
+                      below={
+                        <div className="rounded-lg px-3 py-2 whitespace-pre overflow-x-auto"
+                          aria-label="How the chosen face looks"
+                          style={{
+                            background: "color-mix(in srgb, var(--bg) 70%, transparent)",
+                            fontFamily: TERM_FONTS.find((f) => f.id === termFont)?.stack || undefined,
+                            fontSize: `${termSize}px`, lineHeight: 1.35, color: "var(--text)",
+                          }}>
+                          {"$ git rebase --continue\n"}
+                          <span style={{ color: "var(--success-ink)" }}>{"+ 0Oo l1I |¦ <>= != -> =~ {}[]()\n"}</span>
+                          <span style={{ color: "var(--text3)" }}>{"  1234567890  .,;:'\"`  ~^*&%$#@"}</span>
+                        </div>
+                      }
                     />
-                    <div className="pt-3.5 pb-3">
-                      <div className="panel-eyebrow pb-1" style={{ paddingLeft: 0, paddingRight: 0 }}>How it looks</div>
-                      <div className="rounded-lg px-3 py-2 whitespace-pre overflow-x-auto"
-                        style={{
-                          background: "color-mix(in srgb, var(--bg) 70%, transparent)",
-                          border: EDGE,
-                          fontFamily: TERM_FONTS.find((f) => f.id === termFont)?.stack || undefined,
-                          fontSize: `${termSize}px`, lineHeight: 1.35, color: "var(--text)",
-                        }}>
-                        {"$ git rebase --continue\n"}
-                        <span style={{ color: "var(--success-ink)" }}>{"+ 0Oo l1I |¦ <>= != -> =~ {}[]()\n"}</span>
-                        <span style={{ color: "var(--text3)" }}>{"  1234567890  .,;:'\"`  ~^*&%$#@"}</span>
-                      </div>
-                    </div>
                     <Stepper
                       settingId="terminal.fontSize"
                       label="Font size"
@@ -4724,9 +4481,9 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       value={termCursor} modified={termCursor !== "block"}
                       onPick={(v) => { setting("terminal.cursor").set(v); setTermCursorState(v); }}
                       options={CURSORS} />
-                  </Section>
+                  </SettingsCard>
 
-                  <Section title="Mouse and clipboard"
+                  <SettingsCard title="Mouse and clipboard"
                     desc="What pointing at a pane does, and what a selection does.">
                     {/* Off by default: focus that moves on its own is the one
                         terminal habit people either keep for life or cannot
@@ -4755,16 +4512,16 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       agentNever="a click then types the clipboard into a live shell: not something an agent switches on for the owner"
                       label="Right-click to paste"
                       hint="Right-click pastes the clipboard into the shell instead of opening the menu. Ctrl+right-click still opens it." />
-                  </Section>
+                  </SettingsCard>
 
-                  <Section title="Bench note"
+                  <SettingsCard title="Bench note"
                     desc="The note tab of the floating bench.">
                     <Choice<NoteEditor> settingId="terminal.noteEditor" label="Note editor" value={noteEd} modified={noteEd !== "builtin"}
                       hint="Neovim opens the same note file in a terminal on the bench. Without nvim installed the built-in editor is used."
                       options={NOTE_EDITORS} onPick={(v) => { setting("terminal.noteEditor").set(v); setNoteEd(v); }} />
-                  </Section>
+                  </SettingsCard>
 
-                  <Section title="Tab groups"
+                  <SettingsCard title="Tab groups"
                     desc="With tmux, the tabs are grouped by the project each window is working in. The group you are in is open; the others fold into a chip that still shows what their agents are doing.">
                     <Toggle on={groupsOn} modified={!groupsOn} onClick={() => { const v = !groupsOn; setting("terminal.tabGroups").set(v); setGroupsOn(v); }}
                       settingId="terminal.tabGroups" label="Group tabs by project"
@@ -4778,17 +4535,17 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       hint={<>A window whose name starts with a prefix goes to that group, whatever folder it runs in. Pairs like <span className="t-mono text-[11px]">agx=agentglass, ops=infra</span>. {parseRules(groupRules).length
                         ? `${parseRules(groupRules).length} ${parseRules(groupRules).length === 1 ? "rule" : "rules"} in use.`
                         : "None yet — windows are grouped by their folder."}</>}
-                      control={
+                      below={
                         <input value={groupRules} onChange={(e) => setGroupRules(e.target.value)}
                           onBlur={() => { setting("terminal.tabGroupRules").set(groupRules); }}
                           onKeyDown={(e) => { if (e.key === "Enter") setting("terminal.tabGroupRules").set(groupRules); }}
                           placeholder="agx=agentglass" spellCheck={false} aria-label="Group-by-name rules"
-                          className={`t-mono w-[200px] justify-self-end ${INPUT}`}
+                          className={`t-mono w-full max-w-[480px] ${INPUT}`}
                           style={INPUT_STYLE} />
                       } />
-                  </Section>
+                  </SettingsCard>
 
-                  <Section title="History and selection"
+                  <SettingsCard title="History and selection"
                     desc="How far back a shell remembers, and what a double-click takes.">
                     {/* Sizes rather than a number box: the cost is memory PER
                         SHELL and this app holds several open at once, so the
@@ -4802,33 +4559,33 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       value={String(scrollback)} modified={scrollback !== DEFAULT_SCROLLBACK}
                       onPick={(v) => { const n = Number(v); setting("terminal.scrollback").set(n); setScrollbackState(n); }}
                       options={SCROLLBACK_SIZES.map((n) => ({ v: String(n), label: n >= 1000 ? `${n / 1000}k` : String(n) }))} />
-                    <div className="px-3.5 py-3">
-                      <div className="flex items-center gap-3">
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-[12.5px]" style={{ color: "var(--text)" }}>Word separators</span>
-                          <span className="block text-[10.5px] t-dim2 mt-0.5">
-                            What a double-click stops at. Take out <code>/</code> — it is not there by default — and a path
-                            selects whole; leave the box empty and a double-click takes the line.
-                          </span>
+                    <SettingRow
+                      settingId="terminal.wordSeparators" label="Word separators"
+                      modified={wordSep !== DEFAULT_WORD_SEPARATORS}
+                      hint={<>
+                        What a double-click stops at. Take out <code>/</code> — it is not there by default — and a path
+                        selects whole; leave the box empty and a double-click takes the line.
+                      </>}
+                      control={
+                        <span className="flex justify-end">
+                          <Button onClick={() => { setting("terminal.wordSeparators").set(DEFAULT_WORD_SEPARATORS); setWordSepState(DEFAULT_WORD_SEPARATORS); }}
+                            disabled={wordSep === DEFAULT_WORD_SEPARATORS}>
+                            Reset
+                          </Button>
                         </span>
-                        <button onClick={() => { setting("terminal.wordSeparators").set(DEFAULT_WORD_SEPARATORS); setWordSepState(DEFAULT_WORD_SEPARATORS); }}
-                          disabled={wordSep === DEFAULT_WORD_SEPARATORS}
-                          className="shrink-0 text-[10.5px] px-2 py-0.5 rounded-lg"
-                          style={{ border: EDGE, color: "var(--text3)", opacity: wordSep === DEFAULT_WORD_SEPARATORS ? 0.4 : 1 }}>
-                          Reset
-                        </button>
-                      </div>
-                      <input value={wordSep} spellCheck={false} maxLength={200}
-                        onChange={(e) => { setWordSepState(e.target.value); setting("terminal.wordSeparators").set(e.target.value); }}
-                        className={`mt-2 w-full ${INPUT}`}
-                        style={{ ...INPUT_STYLE, fontFamily: "ui-monospace, monospace" }} />
-                    </div>
-                  </Section>
+                      }
+                      below={
+                        <input value={wordSep} spellCheck={false} maxLength={200} aria-label="Word separators"
+                          onChange={(e) => { setWordSepState(e.target.value); setting("terminal.wordSeparators").set(e.target.value); }}
+                          className={`w-full max-w-[480px] ${INPUT}`}
+                          style={{ ...INPUT_STYLE, fontFamily: "ui-monospace, monospace" }} />
+                      } />
+                  </SettingsCard>
                   <TerminalRunsOn open={open} />
                   </>)}
                   {ql && show("diff") && <PageMatchHeading id="diff" onOpen={() => { setPane("diff" as Pane); setQ(""); }} />}
                   {show("diff") && (
-                  <Section title="How a diff opens"
+                  <SettingsCard title="How a diff opens"
                     desc="The view you land on, and what happens to a long line.">
                     {/* Defaults, not the live state: the toggle in each panel
                         still wins while you are looking at that diff. Changing
@@ -4848,29 +4605,36 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       settingId="diff.syntaxTheme"
                       label="Diff syntax theme"
                       hint="The colours code takes in a diff. Auto follows the app's light or dark; the toolbar in a diff changes the same setting."
-                      control={<span className="justify-self-end"><ThemePicker value={dTheme} onChange={(v) => { setting("diff.syntaxTheme").set(v); setDThemeState(v); }} /></span>} />
-                  </Section>
+                      control={<span className="flex justify-end"><Select align="right" value={dTheme}
+                        onChange={(v) => { setting("diff.syntaxTheme").set(v); setDThemeState(v); }}
+                        options={[
+                          { value: "auto", label: "Auto (app theme)" },
+                          ...THEMES.map((t) => ({ value: t.id, label: t.label, hint: t.dark ? "Dark" : "Light" })),
+                        ]} /></span>} />
+                  </SettingsCard>
                   )}
                   {ql && show("tasks") && <PageMatchHeading id="tasks" onOpen={() => { setPane("tasks" as Pane); setQ(""); }} />}
                   {show("tasks") && (
                   <>
-                  <Section title="Opens on">
+                  <SettingsCard title="Opens on" desc="Where the Tasks view starts.">
                     {/* There was no setting here before and no default either:
                         the tab was component state initialised to "all", so
                         every visit started over — on the one view that does not
                         include your ClickUp cards. See taskLanding.ts. */}
-                    <Choice<TaskLanding>
+                    <SettingRow
                       settingId="tasks.landing" label="Tasks view opens on"
                       hint="Where the Tasks view lands when you come back to it. “Last used” picks up where you left off; naming a source pins it there whatever you did last. Following a card link from a pull request never changes this."
-                      value={landing}
-                      onPick={(v) => { setting("tasks.landing").set(v); setLandingState(v); }}
-                      options={[
-                        { v: "last", label: "Last used" },
-                        { v: "all", label: "All" },
-                        ...TASK_SOURCES.map((s) => ({ v: s.id as TaskLanding, label: s.label })),
-                      ]} />
-                  </Section>
-                  <Section title="Task sources">
+                      control={<span className="flex justify-end"><Select align="right" value={landing}
+                        onChange={(v) => { setting("tasks.landing").set(v); setLandingState(v as TaskLanding); }}
+                        options={[
+                          { value: "last", label: "Last used" },
+                          { value: "all", label: "All" },
+                          ...TASK_SOURCES.map((s) => ({ value: s.id, label: s.label })),
+                        ]} /></span>} />
+                  </SettingsCard>
+                  <SettingsCard title="Task sources"
+                    desc="Which sources the bar offers, and in what order. One has to stay on, and a source you have not set up is left off by itself — until none is set up, when all of them show, because the bar is then the only place to find them. Connect them under Tools & services."
+                    actions={<Button onClick={() => { resetTaskSourceOrder(); setSourceTick((n) => n + 1); }}>Reset order</Button>}>
                     {/* Order is the row's own, and the arrows move a source
                         through the FULL list rather than the visible one — see
                         moveTaskSource. Arrows rather than dragging: this pane's
@@ -4880,23 +4644,14 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       <SourceRow key={id} id={id} i={i} n={sourceOrder.length}
                         onChanged={() => setSourceTick((n) => n + 1)} />
                     ))}
-                    <p className="px-3.5 pb-3 -mt-1 text-[10px] t-dim2 max-w-[680px]">
-                      One has to stay, and a source you have not set up is left off the bar on its own — until nothing is
-                      set up, when all of them show, because that is when the bar is the only place to find them.
-                      Connecting them lives in Integrations.{" "}
-                      <button onClick={() => { resetTaskSourceOrder(); setSourceTick((n) => n + 1); }}
-                        className="agx-btn underline underline-offset-2" style={{ color: "var(--text3)" }}>
-                        Reset order
-                      </button>
-                    </p>
-                  </Section>
+                  </SettingsCard>
                   <CardTrackerSection />
                   </>
                   )}
                   {ql && show("privacy") && <PageMatchHeading id="privacy" onOpen={() => { setPane("privacy" as Pane); setQ(""); }} />}
                   {show("privacy") && <PrivacyPane open={open} />}
                   {show("privacy") && (
-                  <Section title="Take your data out"
+                  <SettingsCard title="Take your data out"
                     desc="Everything this app has recorded, in a format something else can read.">
                     {/* Scoped like everything else: with a project open these
                         carry that project's rows, not the whole machine's. */}
@@ -4913,7 +4668,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       href={api.exportUrl("json", "daily")} download="agentglass-daily.json" />
                     <Row label="Skills catalog — Markdown" hint="Every skill the fleet has available"
                       href={api.skillsExportUrl()} download="agentglass-skills.md" />
-                  </Section>
+                  </SettingsCard>
                   )}
                   {ql && show("recipes") && <PageMatchHeading id="recipes" onOpen={() => { setPane("recipes" as Pane); setQ(""); }} />}
                   {show("recipes") && <RecipesPane open={open} />}
@@ -4923,7 +4678,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   {show("saved-replies") && <SavedRepliesPane open={open} />}
                   {ql && show("prefs") && <PageMatchHeading id="prefs" onOpen={() => { setPane("prefs" as Pane); setQ(""); }} />}
                   {show("prefs") && (
-                  <Section title="Size and startup"
+                  <SettingsCard title="Size and startup"
                     desc="How big the window is, and what it does when the machine boots.">
                     {/* Desktop only, like launch-at-login: in a browser tab the
                         browser's own zoom already does this, and better. */}
@@ -4962,7 +4717,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       value={h24 ? "24" : "12"}
                       onPick={(v) => { setClock24(v === "24"); setH24(v === "24"); }}
                       options={[{ v: "12", label: "12h" }, { v: "24", label: "24h" }]} />
-                  </Section>
+                  </SettingsCard>
                   )}
 
                   {/* The engine and the memory it costs, together. Both used to
@@ -4971,35 +4726,25 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       window zoom with how a CLI is spawned is a drawer. */}
                   {ql && show("budgets") && <PageMatchHeading id="budgets" onOpen={() => { setPane("budgets" as Pane); setQ(""); }} />}
                   {show("budgets") && (
-                  <Section title="Spending"
-                    desc="A ceiling you set, so the insights stop firing on constants.">
+                  <>
                     {/* A limit you chose, so the spend insights stop firing on
                         constants — which are noise on a project that genuinely
                         costs that and silence on one where a tenth would be
                         alarming. */}
-                    {/* The eyebrow that used to say "Spending budgets" here is
-                        gone: the card it sits in now carries that as its own
-                        heading, and a group titled twice reads as two groups
-                        with nothing in the first. */}
                     <BudgetsPane open={open} />
                     <PacePane />
-                    {/* The consequence of the setting above, made visible.
-                        Panes outlive the app, so "how new chats run" quietly
-                        decides how much memory is resident on this machine an
-                        hour from now, and until this list existed the only
-                        place to see that was a terminal. */}
-                  </Section>
+                  </>
                   )}
                   {show("budgets") && <GhBudget open={open} />}
                   {show("budgets") && (
-                  <Section title="Codex quota">
+                  <SettingsCard title="Codex quota">
                     {/* Says what it costs, because it costs something: this
                         spends a little of the quota it is measuring. */}
                     <Toggle on={usageRefresh}
                       onClick={() => { setUsageRefreshOn(!usageRefresh); setUsageRefreshState(!usageRefresh); }}
                       label="Keep Codex usage current"
                       hint="Runs a minimal Codex turn hourly so the quota reading is not stale — uses a small amount of the quota it measures" />
-                  </Section>
+                  </SettingsCard>
                   )}
 
                   {ql && show("notifications") && <PageMatchHeading id="notifications" onOpen={() => { setPane("notifications" as Pane); setQ(""); }} />}
@@ -5017,7 +4762,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
 
                   {ql && show("browser") && <PageMatchHeading id="browser" onOpen={() => { setPane("browser" as Pane); setQ(""); }} />}
 
-                  {show("browser") && <><BrowserPane /><Section title="Logins"><CookieImport /></Section></>}
+                  {show("browser") && <><BrowserPane /><CookieImport /></>}
 
                   {ql && show("rail") && <PageMatchHeading id="rail" onOpen={() => { setPane("rail" as Pane); setQ(""); }} />}
 
@@ -5026,8 +4771,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   {ql && show("keys") && <PageMatchHeading id="keys" onOpen={() => { setPane("keys" as Pane); setQ(""); }} />}
 
                   {show("keys") && (
-                  <Section title="Keys"
-                    desc="Every binding, grouped by where it works.">
+                  <>
                     {/*
                       * Grouped by WHERE the key works, not listed flat.
                       *
@@ -5069,12 +4813,10 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                             * collide with something you already use, and so the
                             * one that most needs to be movable.
                             */}
-                          <div className="panel-eyebrow pb-1">Even inside a shell</div>
-                          <div className="text-[12px] t-dim pb-1.5">
-                            The terminal gives this one up so it reaches the app. Pick something your
+                          <SettingsCard title="Even inside a shell"
+                            desc={<>The terminal gives this one up so it reaches the app. Pick something your
                             shell does not want — the shipped {chordLabel(APP_CHORD_DEFAULTS["files.palette"])} is
-                            free in bash, tmux and vim; plain Ctrl+P is not.
-                          </div>
+                            free in bash, tmux and vim; plain Ctrl+P is not.</>}>
                           {(Object.keys(APP_CHORD_LABELS) as AppChordId[]).map((id) => (
                             <SettingRow key={id}
                               label={<span onClick={() => { setKeyError(null); setCapturing(null); setCapturingChord(null); setCapturingApp((c) => (c === id ? null : id)); }}
@@ -5088,7 +4830,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                                   title={hasCustomAppChord(id)
                                     ? `${chordLabel(appChordFor(id))} opens this — click to record another`
                                     : `${chordLabel(appChordFor(id))} opens this — click to record your own`}
-                                  className="chip text-[11px] tabular-nums min-w-[110px] text-center"
+                                  className="chip h-[22px] justify-center text-[11px] tabular-nums min-w-[110px] text-center"
                                   style={capturingApp === id
                                     ? { color: "var(--primary-hover)", borderColor: "color-mix(in srgb, var(--primary) 60%, transparent)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }
                                     : hasCustomAppChord(id) ? { color: "var(--primary-hover)" } : { color: "var(--text2)" }}>
@@ -5096,55 +4838,54 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                                 </button>
                               </span>} />
                           ))}
+                          </SettingsCard>
                           {rest.length > 0 && (
-                            <>
-                              <div className="panel-eyebrow pt-4 pb-1">Anywhere</div>
-                              <div className="text-[12px] t-dim pb-1.5">
-                                A held combination, so it cannot be swallowed by whatever has focus.
-                              </div>
+                            <SettingsCard title="Anywhere"
+                              desc="A held combination, so it cannot be swallowed by whatever has focus.">
                               {rest.map(row)}
-                            </>
+                            </SettingsCard>
                           )}
                           {viewIds.length > 0 && (
-                            <>
-                              <div className="panel-eyebrow pt-4 pb-1">Only on the dashboard</div>
-                              <div className="text-[12px] t-dim pb-1.5">
-                                A single key each — inside the workspace every keystroke belongs to a shell.
-                                The second column is the chord that reaches them from in there.
-                              </div>
+                            <SettingsCard title="Only on the dashboard"
+                              desc="A single key each — inside the workspace every keystroke belongs to a shell. The second column is the chord that reaches them from in there.">
                               {viewIds.map(row)}
-                            </>
+                              {/* Says why the rest of the keyboard is not on this list.
+                                  Read once, by somebody wondering why their key was
+                                  refused — so it waits to be asked. */}
+                              <SettingRow agentExempt label="Anywhere and dashboard"
+                                hint="Why some views have two keys and the rest one."
+                                detail={{
+                                  summary: "Why some keys are two columns and others one",
+                                  body: <>
+                                    <p className="m-0 mb-2">
+                                      <b style={{ color: "var(--text)" }}>anywhere</b> — hold any combination you like
+                                      ({MOD_KEY}J, {MOD_KEY}Alt+J, Alt+Shift+J) and it is recorded as held. Left alone it
+                                      follows the view's position in the rail, so reordering keeps it true.
+                                    </p>
+                                    <p className="m-0">
+                                      <b style={{ color: "var(--text)" }}>dashboard</b> — a single key, and only on the
+                                      dashboard: inside the workspace every keystroke belongs to whatever has focus,
+                                      usually a shell. {MOD_KEY}\\, {MOD_KEY}K and {MOD_KEY}[ / {MOD_KEY}] stay put.
+                                    </p>
+                                  </>,
+                                }} />
+                            </SettingsCard>
                           )}
                         </>
                       );
                     })()}
-                    {/* Says why the rest of the keyboard is not on this list.
-                        Read once, by somebody wondering why their key was
-                        refused — so it waits to be asked. */}
-                    <Fold agentExempt label="Why some keys are two columns and others one">
-                      <p className="m-0 mb-2">
-                        <b style={{ color: "var(--text)" }}>anywhere</b> — hold any combination you like
-                        ({MOD_KEY}J, {MOD_KEY}Alt+J, Alt+Shift+J) and it is recorded as held. Left alone it
-                        follows the view's position in the rail, so reordering keeps it true.
-                      </p>
-                      <p className="m-0">
-                        <b style={{ color: "var(--text)" }}>dashboard</b> — a single key, and only on the
-                        dashboard: inside the workspace every keystroke belongs to whatever has focus,
-                        usually a shell. {MOD_KEY}\\, {MOD_KEY}K and {MOD_KEY}[ / {MOD_KEY}] stay put.
-                      </p>
-                    </Fold>
                     {(isCustomised() || chordsCustomised() || appChordsCustomised()) && (
-                      <SettingRow
-                        agentExempt label="Reset to defaults"
-                        hint="Puts every key and every chord back to the shipped one."
-                        control={<button onClick={() => { resetBindings(); resetChords(); resetAppChords(); setKeyError(null); setAppKeyError(null); setCapturing(null); setCapturingChord(null); setCapturingApp(null); }}
-                          className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-                          style={{ color: "var(--text2)", border: EDGE }}>
-                          Reset
-                        </button>}
-                      />
+                      <SettingsCard title="Defaults">
+                        <SettingRow
+                          agentExempt label="Reset to defaults"
+                          hint="Puts every key and every chord back to the shipped one."
+                          actions={<Button onClick={() => { resetBindings(); resetChords(); resetAppChords(); setKeyError(null); setAppKeyError(null); setCapturing(null); setCapturingChord(null); setCapturingApp(null); }}>
+                            Reset
+                          </Button>}
+                        />
+                      </SettingsCard>
                     )}
-                  </Section>
+                  </>
                   )}
 
                   {ql && show("lantern") && <PageMatchHeading id="lantern" onOpen={() => { setPane("lantern" as Pane); setQ(""); }} />}
@@ -5154,20 +4895,17 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   {show("hooks") && <>
                     <HooksPane open={open} />
                     {cu && (
-                      <Section title="Cards" desc="How agent skills relate to the cards of your tracker.">
+                      <SettingsCard title="Cards" desc="How agent skills relate to the cards of your tracker.">
                         <CardSkillsRow connected />
-                      </Section>
+                      </SettingsCard>
                     )}
-                    <Section title="New chats"
+                    <SettingsCard title="New chats"
                       desc="What a chat gets when it starts.">
                       {/* Merged from a separate "Chat" page: this and the tmux
                           binary above answer the same question — what a pane
                           actually runs on — and a person who came here to
                           change the prefix key is the same person who wants
                           to know whether a new chat gets one of these. */}
-                      {/* The "Chats" eyebrow that stood here is gone — the
-                          card's own heading says it, and a group labelled
-                          twice reads as two groups with an empty first. */}
                       <Choice<"server" | "process" | "tmux">
                         label="How new chats run"
                         hint={
@@ -5188,13 +4926,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                           { v: "process", label: "Separate" },
                           { v: "tmux", label: "tmux panes" },
                         ]} />
-                      {tmuxEngine?.available && (
-                        <div className="flex flex-col gap-1.5 pt-1">
-                          <span className="text-[10px] t-dim2 uppercase tracking-wider">Warm CLIs running now</span>
-                          <RunningPanes open={open} />
-                        </div>
-                      )}
-                    </Section>
+                    </SettingsCard>
+                    {tmuxEngine?.available && <RunningPanes open={open} />}
                     {HAS_BROWSER && <AgentBrowserPane open={open} />}
                     <AgentsSection open={open} /><WorkerRolesSection open={open} />
                   </>}
@@ -5210,6 +4943,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   {show("connections") && <><RequirementsPane open={open} /><IntegrationsPane open={open} /></>}
                   {ql && show("clickup") && cu && <PageMatchHeading id="clickup" onOpen={() => { setPane("clickup" as Pane); setQ(""); }} />}
                   {show("clickup") && cu && <ClickUpPane />}
+                  {ql && show("jira") && <PageMatchHeading id="jira" onOpen={() => { setPane("jira" as Pane); setQ(""); }} />}
+                  {show("jira") && <JiraPane tracker={<CardTrackerSection />} />}
 
                   {ql && show("remote") && <PageMatchHeading id="remote" onOpen={() => { setPane("remote" as Pane); setQ(""); }} />}
 
@@ -5225,7 +4960,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   {show("understudy") && <UnderstudyPane open={open} onLeave={onClose} />}
                   {ql && show("onboarding") && <PageMatchHeading id="onboarding" onOpen={() => { setPane("onboarding" as Pane); setQ(""); }} />}
                   {show("onboarding") && onboarding && (
-                  <Section title="What is left to set up"
+                  <SettingsCard title="What is left to set up"
                     desc="Three things, and then this page goes away.">
                     {/* Rows report state, they do not collect it — nothing here
                         is a checkbox, because a box you tick yourself is a
@@ -5234,16 +4969,16 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                     <SettingRow label="An agent is wired in"
                       hint={onboarding.hook ? "Claude Code is hooked into this app." : "Not yet — Claude Code hasn't been wired in."}
                       onClick={() => setPane("hooks")}
-                      control={<OnboardingMark done={onboarding.hook} />} />
+                      status={<OnboardingMark done={onboarding.hook} />} />
                     <SettingRow label="A provider is connected"
                       hint={onboarding.provider ? "At least one of GitHub, GitLab, ClickUp or Taskwarrior is connected." : "Not yet — connect GitHub, GitLab, ClickUp or Taskwarrior."}
                       onClick={() => setPane("connections")}
-                      control={<OnboardingMark done={onboarding.provider} />} />
+                      status={<OnboardingMark done={onboarding.provider} />} />
                     <SettingRow label="The pane engine is ready"
                       hint={onboarding.paneEngine ? "tmux is on PATH and working." : "Not yet — tmux isn't on PATH."}
                       onClick={() => setPane("tmux")}
-                      control={<OnboardingMark done={onboarding.paneEngine} />} />
-                  </Section>
+                      status={<OnboardingMark done={onboarding.paneEngine} />} />
+                  </SettingsCard>
                   )}
                   {ql && show("about") && <PageMatchHeading id="about" onOpen={() => { setPane("about" as Pane); setQ(""); }} />}
                   {show("about") && <><AboutPane open={open} /><LogDigestSection d={logDigest} /></>}

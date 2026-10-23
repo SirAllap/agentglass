@@ -266,11 +266,6 @@
   .agx-settings-rows > * + * {
     border-top: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
   }
-  /* The More under an operable row is a sibling of it (a control inside a
-     switch is not exposed as a button) and is pulled up into the row's padding
-     so the pair reads as one row. The rule above drew a divider between them,
-     which put More on a line of its own. */
-  .agx-settings-rows > .agx-settings-more { border-top: 0; }
 
   /*
    * The measure, on the COLUMN — which is the whole of why the last attempt
@@ -303,13 +298,6 @@
     container-name: agx-settings;
   }
 
-  /* A long hint shows one line and a More control; the words stay in the DOM. */
-  .agx-settings-hint-clamp {
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 1;
-    overflow: hidden;
-  }
 
   /*
    * Two tracks: the words, and a control column every pane shares.
@@ -488,7 +476,6 @@
   text-transform: none;
   color: var(--text);
   padding: 16px 18px 14px;
-  border-bottom: 1px solid var(--surface-line);
 }
 
 /* A drawn surface: tone, edge and lift together, because on a tight ramp the
@@ -600,7 +587,6 @@
   margin-top: 4px;
   color: var(--text4);
 }
-.agx-settings-head + .agx-settings-rows { border-top: 1px solid var(--surface-line); }
 
 /*
  * The look editor: a portrait that stays put while the pickers scroll past it.
@@ -661,6 +647,10 @@
 @container agx-settings (max-width: 720px) {
   .agx-look { grid-template-columns: minmax(0, 1fr); }
   .agx-look-portrait { position: static; }
+  /* Stacked, the portrait is one more card in the column: the same 24px
+     break as between two cards, not the 16px of the two-column gap. */
+  .agx-look { gap: 0; }
+  .agx-look-portrait { margin-bottom: 24px; }
 }
 
 /* A group whose every row was filtered away takes its card with it. The rows
@@ -1828,6 +1818,134 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
  * for the same reason as the rule above: it has to beat a utility class.
  */
 .agx-settings-row > * { min-width: 0; }
+
+/*
+ * The settings kit (components/SettingsKit.tsx, and SettingRow's slots).
+ *
+ * ONE divider: between two rows of the same card, inset to the 18px gutter.
+ * Nothing else here draws a line — not under a page title, not under a card
+ * header, not between a row and what hangs under it. The old box drew a
+ * border-top on every sibling of every wrapper, and measured on every page
+ * that came out as doubled rules, a rule beside each heading and text within
+ * 6px of a line. Its selectors (`.agx-settings-rows > * + *` and the `:has`
+ * pair above) reach only the old class names, so a card built from these is
+ * out of their way.
+ */
+.agx-settings-col .agx-scard {
+  background: var(--surface-card);
+  border: 1px solid var(--surface-line);
+  border-radius: 0.75rem;
+  box-shadow: var(--surface-lift);
+  overflow: hidden;
+  margin-bottom: 24px;
+}
+.agx-scard:has(> .agx-scard-body:empty) { display: none; }
+.agx-scard-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 16px 18px 4px;
+}
+.agx-scard-desc { font-size: 12px; margin-top: 4px; color: var(--text3); }
+/* The title keeps a reading width; when the status and the action do not fit
+   beside it, they wrap under it rather than squeezing it to a word a line. */
+.agx-scard-head > :first-child { flex: 1 1 240px; }
+.agx-scard-body { padding-bottom: 4px; }
+.agx-scard-body > .agx-settings-row { position: relative; }
+/* Fold's opened body is a sibling of its header row: it takes the gutter the
+   old box gave every child, and the row after it still gets its divider. */
+.agx-scard-body > .agx-fold-body { padding-inline: 18px; }
+.agx-scard-body > .agx-settings-row + .agx-settings-row::before,
+.agx-scard-body > .agx-fold-body + .agx-settings-row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 18px;
+  right: 18px;
+  border-top: 1px solid var(--surface-line);
+}
+
+/* The control column when a row carries a status or actions: the badge
+   first, then what acts on it, top-aligned, wrapping under itself rather than
+   pushing the description narrower. */
+.agx-slot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.agx-settings-row > .agx-slot { justify-self: end; }
+/* What stacks under the description spans both columns. Written with the
+   element so it outranks `.agx-settings-row > :last-child`. */
+.agx-settings-row > div.agx-row-below {
+  grid-column: 1 / -1;
+  justify-self: stretch;
+  margin-top: 4px;
+}
+@container agx-settings (max-width: 588px) {
+  .agx-settings-row > .agx-slot { justify-self: start; justify-content: flex-start; }
+}
+
+/* A disclosure named for what it holds. */
+.agx-disclosure { margin-top: 8px; font-size: 12px; }
+.agx-disclosure-s {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  list-style: none;
+  color: var(--text2);
+  border-radius: 4px;
+}
+.agx-disclosure-s::-webkit-details-marker { display: none; }
+.agx-disclosure-s:hover { color: var(--text); }
+.agx-disclosure-s:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.agx-disclosure-caret { display: inline-flex; color: var(--text3); transform: rotate(-90deg); transition: transform 120ms ease; }
+.agx-disclosure[open] > .agx-disclosure-s .agx-disclosure-caret { transform: none; }
+.agx-disclosure-b { margin-top: 4px; padding-left: 16px; color: var(--text3); line-height: 1.5; max-width: 64ch; }
+@media (prefers-reduced-motion: reduce) { .agx-disclosure-caret { transition: none; } }
+
+/* A stacked form: label above, help below, 12px between fields, 480px at
+   most — a token field as wide as the card asks for a paragraph. */
+.agx-sform { display: flex; flex-direction: column; gap: 12px; max-width: 480px; }
+.agx-field { display: flex; flex-direction: column; gap: 6px; }
+.agx-field-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.agx-field-l { font-size: 12px; font-weight: 500; color: var(--text2); }
+.agx-field-link { font-size: 12px; color: var(--primary-ink); text-decoration: underline; text-underline-offset: 2px; white-space: nowrap; }
+.agx-field-h { font-size: 11px; color: var(--text3); }
+.agx-field-e { font-size: 12px; color: var(--error-ink); }
+.agx-sform-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.agx-empty { color: var(--text3); font-size: 12px; }
+/* An action that belongs inside a sentence — "Change workspace" on the line
+   that names the workspace. A real button, drawn as a link. */
+.agx-textlink {
+  color: var(--primary-ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.agx-textlink:hover { color: var(--text); }
+.agx-textlink:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.agx-textlink:disabled { opacity: 0.5; cursor: not-allowed; }
+.agx-scard-head.agx-fold { padding-bottom: 14px; }
+.agx-scard-head.agx-fold::-webkit-details-marker { display: none; }
+details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
+
+/* The settings page's two columns give at a narrow window: the minimum is
+   640px wide, and a 280px nav plus 32px of padding each side left the
+   column 296px — narrower than one control column and its label. */
+.agx-settings-nav { width: 280px; }
+.agx-settings-main { padding-inline: 32px; }
+@media (max-width: 800px) {
+  .agx-settings-nav { width: 216px; }
+  .agx-settings-main { padding-inline: 16px; }
+}
 
 /*
  * A placeholder that says "this is a thing that is arriving".

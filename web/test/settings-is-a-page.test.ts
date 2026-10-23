@@ -24,6 +24,7 @@ const src = readFileSync(new URL("../src/components/SettingsModal.tsx", import.m
  *  asserting the new one — otherwise the paragraph above a fix matches the
  *  thing it says was removed. */
 const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/^\s*\/\/.*$/gm, "");
+const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
 
 describe("settings is a page", () => {
   test("no scrim and no fixed dialog width", () => {
@@ -35,8 +36,12 @@ describe("settings is a page", () => {
     expect(code).toContain('className="fixed inset-0 flex pointer-events-auto"');
   });
 
-  test("the nav is its own column with a fixed width", () => {
-    expect(code).toMatch(/<aside className="shrink-0 w-\[280px\] flex flex-col border-r"/);
+  test("the nav is its own column with a fixed width, narrower at a narrow window", () => {
+    expect(code).toMatch(/<aside className="agx-settings-nav shrink-0 flex flex-col border-r"/);
+    // 280 wide, and 216 under 800px: the window's minimum is 640, where a
+    // 280px nav left the settings column narrower than one row.
+    expect(css).toMatch(/\.agx-settings-nav \{ width: 280px; \}/);
+    expect(css).toMatch(/@media \(max-width: 800px\) \{\s*\.agx-settings-nav \{ width: 216px; \}/);
   });
 });
 
@@ -47,7 +52,7 @@ describe("the way out and the way to search never scroll away", () => {
      silently started slicing the wrong element and reported that the way out
      of settings had been deleted. A landmark test that depends on source
      ORDER is a test that fails on unrelated work. */
-  const at = code.indexOf('<aside className="shrink-0 w-[280px]');
+  const at = code.indexOf('<aside className="agx-settings-nav shrink-0');
   const aside = code.slice(at, code.indexOf("</aside>", at));
 
   test("both sit above the scrolling list", () => {

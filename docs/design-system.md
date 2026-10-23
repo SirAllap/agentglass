@@ -384,6 +384,45 @@ inside can come to overlap text at another width.
   reduced transparency makes the plates near-solid and drops the sheen; more
   contrast makes them solid with a defined ring.
 
+## Settings pages
+
+Every settings page is built from the blocks in
+`web/src/components/SettingsKit.tsx` and `SettingRow`:
+
+- `SettingsCard` — one group: a title, one sentence, and its rows. Its
+  `status` (a `StatusBadge`) and its one action (`actions`: Recheck, Add) sit
+  at the header's top right in every state, loading included. No line under
+  the header. `fold` makes the header a disclosure. Groups inside a card
+  become cards of their own, 24px apart; no eyebrow headings inside a card.
+- `SettingRow` — label 13.5px, description 12px in `--text3`, shown whole
+  (never clamped, no More/Less). The control column is `status` first, then
+  `control` or `actions`. Inline in that column: one switch, segmented set,
+  select, stepper, badge, or at most two buttons. Everything else — a text
+  field, a form, a list, a preview — goes in `below`, which spans the row.
+  `detail` is secondary text behind a `Disclosure`.
+- `StatusBadge` — 22px (`CTRL_H.compact`), a dot and a few words, in a hue's
+  `--*-ink`: `ok`, `warn` (only when the person is needed), `err`, `off`
+  (hollow: not connected, not installed), `checking`.
+- `Disclosure` — a `<details>` whose summary names what it holds ("Where the
+  token is stored"), never "More" or "About this one".
+- `SettingsForm` and `Field` — stacked fields, label above, one line of help
+  under, 480px at most, one primary submit at the end with the error under
+  it. A segmented choice that changes which fields exist comes first. "How
+  to get one ↗" is `Field`'s `link`, on the label's line.
+- `LinkButton` — a link out drawn as a plain `Button`; `agx-textlink` is an
+  action inside a sentence ("Change workspace").
+- `EmptyState` — one sentence for a card with no rows yet; the action that
+  fills it stays in the card header.
+
+One divider: `.agx-scard-body > .agx-settings-row + .agx-settings-row`, inset
+to the 18px gutter. Spacing is 4 · 8 · 12 · 18 · 24; buttons 28px
+(`CTRL_H.regular`), inputs 32px (`INPUT`). Below 800px the settings nav is
+216px and the page gutter 16px, so the 640px window still has a column.
+
+Pages still on the old `Section` box are listed with their counts in
+`web/test/settings-ratchet.txt`; a page that moves keeps its card titles (the
+search index keys rows by them) and goes in the test's `MIGRATED` list.
+
 ## Guards
 
 Every one reads source as text; there is no renderer to mount a view.
@@ -435,6 +474,14 @@ Every one reads source as text; there is no renderer to mount a view.
   anything that did not go through `toneOf`.
 - `layer-owner.test.ts` — fails when a shared menu, picker or dialog stops
   closing when the bench it was opened from is hidden.
+- `settings-page-rules.test.ts` with `settings-ratchet.txt` — reads every
+  settings page's own source (its block in `SettingsModal` and the components
+  it renders, three levels down) and fails when a migrated page has any of
+  the defect classes (the old box, an eyebrow heading, clipped prose, a vague
+  More, a text field in the control column, a hand-rolled `py-1` button, a
+  bare tint as text), when another page's count rises above or falls below
+  its ceiling, when a kit selector draws a border other than the one
+  divider, or when a disclosure's summary is vague.
 - `design-system-doc.test.ts` — fails when a name in the table above is not
   defined in the file it names, or a number there is not its value.
 

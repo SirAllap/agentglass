@@ -20,11 +20,11 @@ const src = (p: string) => readFileSync(join(import.meta.dir, "..", "src", p), "
 
 describe("ClickUp header", () => {
   const pane = src("components/ClickUpPane.tsx");
-  const at = pane.indexOf('aria-label="Connection"');
-  const head = pane.slice(at, at + 400);
+  const at = pane.indexOf("<SettingsCard title={n.name} desc={provider?.detail");
+  const head = pane.slice(at, pane.indexOf("</SettingsCard>", at));
 
-  it("wraps instead of being a two-track grid with an auto column", () => {
-    expect(head).toContain("flex flex-wrap");
+  it("is a settings card, not a two-track grid with an auto column", () => {
+    expect(at).toBeGreaterThan(-1);
     expect(head).not.toContain("gridTemplateColumns");
   });
 });
@@ -43,10 +43,3 @@ describe("workflow map step cards", () => {
   });
 });
 
-describe("More under an operable settings row", () => {
-  it("is not given the divider every other sibling gets", () => {
-    const css = src("index.css");
-    expect(css).toMatch(/\.agx-settings-rows > \.agx-settings-more \{ border-top: 0; \}/);
-    expect(src("components/SettingRow.tsx")).toContain('className="agx-settings-more ');
-  });
-});

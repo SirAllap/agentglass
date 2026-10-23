@@ -10,7 +10,7 @@ import { HIT } from "../src/lib/iconSize.ts";
 const code = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url)).text();
 const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
 
-const asideAt = code.indexOf('<aside className="shrink-0 w-[280px]');
+const asideAt = code.indexOf('<aside className="agx-settings-nav shrink-0');
 const aside = code.slice(asideAt, code.indexOf("</aside>", asideAt));
 const strip = (t: string) => t.replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/^\s*\/[/*].*$/gm, "");
 const open = aside.indexOf("<button onClick={onClose}");

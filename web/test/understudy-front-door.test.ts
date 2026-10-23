@@ -123,15 +123,16 @@ describe("what it knows", () => {
     /* Six lines of dense reasoning sat between a person and the button they
        had just been told to press. All of it correct, none of it answering a
        question anybody had asked yet. */
-    const at = SRC.indexOf("Set this up for me</Chip>");
+    const at = SRC.indexOf('label="Set this up for me"');
+    expect(at).toBeGreaterThan(-1);
     const near = SRC.slice(at, at + 1400);
     expect(near).toContain("Nothing leaves it.");
-    expect(near).toContain("what exactly does it read?");
+    expect(near, "the proof is a named disclosure under the row").toContain('summary: "What exactly it reads"');
   });
 
   test("and the detail is still there for whoever wants it", () => {
     expect(SRC, "folding must not mean deleting the reasoning").toContain("Reading is not the risk");
-    expect(SRC).toContain("{why && (");
+    expect(SRC).toContain("detail={{");
   });
 });
 

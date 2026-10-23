@@ -28,7 +28,9 @@
  */
 import type { CSSProperties } from "react";
 import type { UnderstudyClassRow } from "../../../../shared/types.ts";
-import { Chip, EDGE, LINE } from "../workspace/Chrome.tsx";
+import { Chip, EDGE } from "../workspace/Chrome.tsx";
+import { SettingRow } from "../SettingRow.tsx";
+import { SettingsCard, StatusBadge } from "../SettingsKit.tsx";
 import { wash } from "../git/ui.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import {
@@ -116,16 +118,6 @@ export function closedCount(classes: readonly UnderstudyClassRow[]): number {
 
 type Pick = string | null;
 
-/** The label column of a row. Shared by every kind of row so they line up. */
-function Label({ label, hint }: { label: string; hint?: string }) {
-  return (
-    <span className="min-w-0">
-      <span className="block text-[11.5px]" style={{ color: "var(--text)" }}>{label}</span>
-      {hint && <span className="block text-[10px] mt-1" style={{ color: "var(--text4)" }}>{hint}</span>}
-    </span>
-  );
-}
-
 function OptionRow({ label, hint, value, options, optional, onPick, lockedKey, lockOf }: {
   label: string;
   hint?: string;
@@ -143,9 +135,8 @@ function OptionRow({ label, hint, value, options, optional, onPick, lockedKey, l
     ...options.map((o) => ({ id: o.id as Pick, label: o.label })),
   ];
   return (
-    <div className="agx-settings-row items-start" style={{ gridTemplateColumns: "minmax(0, 120px) minmax(0, 1fr)" }}>
-      <Label label={label} hint={hint} />
-      <span className="flex flex-wrap gap-1 justify-self-stretch">
+    <SettingRow label={label} hint={hint} below={
+      <span className="flex flex-wrap gap-1">
         {all.map((o) => {
           const lock = o.id === null ? null : lockOf(`${lockedKey}:${o.id}`);
           return (
@@ -163,8 +154,7 @@ function OptionRow({ label, hint, value, options, optional, onPick, lockedKey, l
             </Chip>
           );
         })}
-      </span>
-    </div>
+      </span>} />
   );
 }
 
@@ -187,9 +177,8 @@ function SwatchRow({ label, hint, kind, value, onPick, chipFor }: {
 }) {
   const list = SWATCHES[kind];
   return (
-    <div className="agx-settings-row items-start" style={{ gridTemplateColumns: "minmax(0, 120px) minmax(0, 1fr)" }}>
-      <Label label={label} hint={hint} />
-      <span className="flex flex-wrap gap-1.5 justify-self-stretch" role="radiogroup" aria-label={label}>
+    <SettingRow label={label} hint={hint} below={
+      <span className="flex flex-wrap gap-1.5" role="radiogroup" aria-label={label}>
         {list.map((s) => {
           const on = s.id === value;
           const colour = chipFor?.(s) ?? s.chip;   // art, resolved from the swatch
@@ -216,8 +205,7 @@ function SwatchRow({ label, hint, kind, value, onPick, chipFor }: {
             />
           );
         })}
-      </span>
-    </div>
+      </span>} />
   );
 }
 
@@ -230,8 +218,7 @@ function SwatchRow({ label, hint, kind, value, onPick, chipFor }: {
  */
 function Presets({ onPick }: { onPick: (c: Cosmetic) => void }) {
   return (
-    <div className="px-4 pt-3 pb-2">
-      <div className="text-[11.5px] mb-2" style={{ color: "var(--text)" }}>Start from</div>
+    <SettingRow label="Start from" below={
       <div className="flex flex-wrap gap-2">
         {PRESETS.map((p) => {
           const cos = applyPreset(p);
@@ -249,17 +236,7 @@ function Presets({ onPick }: { onPick: (c: Cosmetic) => void }) {
             </button>
           );
         })}
-      </div>
-    </div>
-  );
-}
-
-/** A thin rule with a word on it, between groups of rows. */
-function Group({ title }: { title: string }) {
-  return (
-    <div className="px-4 pt-4 pb-1 text-[10px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>
-      {title}
-    </div>
+      </div>} />
   );
 }
 
@@ -315,20 +292,25 @@ export function Appearance({ value, onChange, classes }: {
   const skin = swatch("skin", value.colors.skin).tones;
   const lipChip = (s: Swatch) => (s.id === NATURAL_LIPS ? skin.dark : s.chip);
 
+  const closed = closedCount(classes);
   return (
-    <div className="agx-settings-col">
-      <Presets onPick={pickPreset} />
+    <>
+      <SettingsCard title="How it looks"
+        status={closed > 0 ? <StatusBadge tone="off">{closed} closed</StatusBadge> : undefined}
+        desc="A closed option opens on the same measurement the capabilities do, and the reason beside it is the server's own sentence about that class — never a second rule kept here. Three are sealed and never open.">
+        <Presets onPick={pickPreset} />
+      </SettingsCard>
 
-      <div className="agx-settings-rows">
-        <Group title="Head" />
+      <SettingsCard title="Head">
         <OptionRow label="Face" value={value.body} options={BODIES} lockedKey="body" lockOf={lockOf}
           onPick={(v) => set({ body: v ?? DEFAULT_COSMETIC.body })} />
         <SwatchRow label="Skin" kind="skin" value={value.colors.skin} onPick={(skin) => paint({ skin })} />
         <OptionRow label="Hair" value={value.hair} options={HAIRSTYLES} lockedKey="hair" lockOf={lockOf}
           onPick={(v) => set({ hair: v ?? DEFAULT_COSMETIC.hair })} />
         <SwatchRow label="Hair colour" kind="hair" value={value.colors.hair} onPick={(hair) => paint({ hair })} />
+      </SettingsCard>
 
-        <Group title="Face" />
+      <SettingsCard title="Face">
         <OptionRow label="Eyes" value={value.eyes} options={EYES} lockedKey="eyes" lockOf={lockOf}
           onPick={(v) => set({ eyes: v ?? DEFAULT_COSMETIC.eyes })} />
         <SwatchRow label="Eye colour" kind="iris" value={value.colors.iris} onPick={(iris) => paint({ iris })} />
@@ -342,8 +324,9 @@ export function Appearance({ value, onChange, classes }: {
           onPick={(lips) => paint({ lips })} chipFor={lipChip} />
         <OptionRow label="Beard" value={value.beard} options={BEARDS} optional lockedKey="beard" lockOf={lockOf}
           onPick={(v) => set({ beard: v })} />
+      </SettingsCard>
 
-        <Group title="Wear" />
+      <SettingsCard title="Wear">
         <OptionRow label="Outfit" value={value.outfit} options={OUTFITS} lockedKey="outfit" lockOf={lockOf}
           onPick={(v) => set({ outfit: v ?? DEFAULT_COSMETIC.outfit })} />
         <SwatchRow label="Cloth" kind="cloth" value={value.colors.cloth1} onPick={(cloth1) => paint({ cloth1 })} />
@@ -357,8 +340,9 @@ export function Appearance({ value, onChange, classes }: {
           onPick={(v) => set({ eyewear: v })} />
         <SwatchRow label="Metal" hint="Frames, a headset, earrings, horn." kind="metal" value={value.colors.metal}
           onPick={(metal) => paint({ metal })} />
+      </SettingsCard>
 
-        <Group title="Extras" />
+      <SettingsCard title="Extras">
         <OptionRow label="Headwear" value={value.headwear} options={HEADWEAR} optional lockedKey="headwear" lockOf={lockOf}
           onPick={(v) => set({ headwear: v })} />
         <OptionRow label="Ears" hint="Worn on top of the head, over the hair — which is why they are visible at all."
@@ -367,23 +351,20 @@ export function Appearance({ value, onChange, classes }: {
         <OptionRow label="Horns" value={value.horns} options={HORNS} optional lockedKey="horns" lockOf={lockOf}
           onPick={(v) => set({ horns: v })} />
 
-        <div className="agx-settings-row items-start" style={{ gridTemplateColumns: "minmax(0, 120px) minmax(0, 1fr)" }}>
-          <Label label="Hair clip" hint="Where the style has somewhere to put one." />
-          <span className="flex flex-wrap gap-1 justify-self-stretch">
+        <SettingRow label="Hair clip" hint="Where the style has somewhere to put one." below={
+          <span className="flex flex-wrap gap-1">
             {[false, true].map((on) => (
               <Chip key={String(on)} on={value.hairDecoration === on} onClick={() => set({ hairDecoration: on })}>
                 {on ? "Clip" : "None"}
               </Chip>
             ))}
-          </span>
-        </div>
+          </span>} />
 
         {/* The three it will never wear. Spans, not disabled buttons: a
             control that can never be operated is not a control, and drawing
             one is how a UI ends up promising something it has to take back. */}
-        <div className="agx-settings-row items-start" style={{ gridTemplateColumns: "minmax(0, 120px) minmax(0, 1fr)" }}>
-          <Label label="Insignia" hint={`Three it will never wear. ${sealedWhy}`} />
-          <span className="flex flex-wrap gap-1 justify-self-stretch">
+        <SettingRow label="Insignia" hint={`Three it will never wear. ${sealedWhy}`} below={
+          <span className="flex flex-wrap gap-1">
             {INSIGNIA.map((i) => (
               <span
                 key={i.id}
@@ -395,9 +376,8 @@ export function Appearance({ value, onChange, classes }: {
                 {i.label}
               </span>
             ))}
-          </span>
-        </div>
-      </div>
+          </span>} />
+      </SettingsCard>
 
       {byReason.length > 0 && (
         /*
@@ -408,16 +388,12 @@ export function Appearance({ value, onChange, classes }: {
          * sentence four times in a column 300px wide. The reason is the
          * server's; how many times it is worth reading is ours.
          */
-        <div className="px-4 py-3 flex flex-col gap-2" style={{ borderTop: LINE }}>
+        <SettingsCard title="Still closed">
           {byReason.map(([why, names]) => (
-            <div key={why} className="text-[10px] leading-relaxed" style={{ color: "var(--text3)" }}>
-              <span style={{ color: "var(--text3)" }}>{names.join(", ")}</span>
-              {" — "}
-              {why}
-            </div>
+            <SettingRow key={why} label={names.join(", ")} hint={why} />
           ))}
-        </div>
+        </SettingsCard>
       )}
-    </div>
+    </>
   );
 }

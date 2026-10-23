@@ -42,7 +42,7 @@ describe("rows in a migrated pane", () => {
     // The credential-bearing rows are among them: if the cookie import or the
     // mirror of other apps' notifications ever gets a def, this says so.
     const never = new Set(SETTINGS_ROWS.filter((x) => x.agentNever).map((x) => x.label));
-    for (const l of ["Home page", "Right-click to paste", "Terminal runs on", "Mirror this machine's notifications", "How much of the message", "All", "None"]) expect(never.has(l), l).toBe(true);
+    for (const l of ["Home page", "Right-click to paste", "Terminal runs on", "Mirror this machine's notifications", "How much of the message", "Bring browsing history", "Bring bookmarks"]) expect(never.has(l), l).toBe(true);
   });
 
   test("every settingId names a def", () => {

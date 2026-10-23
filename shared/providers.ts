@@ -55,6 +55,9 @@ export interface ProviderSpec {
   /** Said on the card before anything is typed. The place to be honest about
    *  what will be stored and where. */
   note?: string;
+  /** The summary the note sits behind, named for what it holds ("Where the
+   *  token is stored"): a reader decides from it whether to open it. */
+  noteTitle?: string;
 }
 
 /**
@@ -66,11 +69,13 @@ export const PROVIDERS: ProviderSpec[] = [
     id: "github", title: "GitHub", kind: "review", auth: "cli", dep: "gh",
     what: "Pull requests, issues, checks and reviews.",
     note: "The `gh` CLI owns this credential — it lives in your system keyring and agentglass never reads or stores it.",
+    noteTitle: "Where the credential lives",
   },
   {
     id: "gitlab", title: "GitLab", kind: "review", auth: "cli", dep: "glab",
     what: "Merge requests and pipelines, once there is a GitLab remote to read them from.",
     note: "Reported here so its absence is visible. Reading merge requests is not built yet — this row tells you whether the tool is ready for when it is.",
+    noteTitle: "What works today",
   },
   {
     id: "taskwarrior", title: "Taskwarrior", kind: "task", auth: "none", dep: "task",
@@ -81,12 +86,14 @@ export const PROVIDERS: ProviderSpec[] = [
     what: "The tasks assigned to you, alongside your local ones.",
     help: "https://developer.clickup.com/docs/authentication",
     note: "A personal API token, from ClickUp's Settings → Apps. It starts with `pk_` and does not expire. Stored on this machine in a file only you can read, and never sent to the browser.",
+    noteTitle: "Where the token is stored",
   },
   {
     id: "jira", title: "Jira", kind: "task", auth: "token",
-    what: "Your Jira Cloud site. Connecting is as far as it goes for now: no cards are read yet.",
+    what: "Your Jira cards next to your local tasks, read from Jira Cloud or from your own Jira Data Center.",
     help: "https://id.atlassian.com/manage-profile/security/api-tokens",
-    note: "Your site (like acme.atlassian.net, or the address of your own Jira) and a token. On Jira Cloud that is your email and an API token from your Atlassian account's security page, which expires at most a year after you make it. On Jira Data Center it is a personal access token from your profile, with no email. Stored on this machine in a file only you can read, and never sent to the browser.",
+    note: "On Jira Cloud it is your email and an API token, which expires at most a year after you make it. On Jira Data Center it is a personal access token from your profile, with no account name. Either way it is stored on this machine in a file only you can read, and never sent to the browser.",
+    noteTitle: "Where the token is stored",
   },
 ];
 

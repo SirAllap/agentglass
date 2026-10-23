@@ -98,6 +98,7 @@ function componentBody(path: string, component: string): string {
 function sectionMarkers(text: string): { at: number; title: string }[] {
   const out: { at: number; title: string }[] = [];
   for (const m of text.matchAll(/<Section\s+title="([^"]*)"/g)) out.push({ at: m.index!, title: m[1]! });
+  for (const m of text.matchAll(/<SettingsCard\b[^>]*?\stitle="([^"]*)"/g)) out.push({ at: m.index!, title: m[1]! });
   for (const m of text.matchAll(/agx-settings-head-t"[^>]*>([^<]{1,80})</g)) out.push({ at: m.index!, title: m[1]!.trim() });
   out.sort((a, b) => a.at - b.at);
   return out;
@@ -158,7 +159,7 @@ function rowsIn(text: string, pane: string): Row[] {
  *  defines under web/src/components, minus the small set of primitives that
  *  are not pages of their own (they are how a ROW draws, not what a pane is
  *  made of). */
-const SKIP_TAGS = new Set(["SettingRow", "Row", "Toggle", "Fold", "Select", "Switch", "Section", "Fragment"]);
+const SKIP_TAGS = new Set(["SettingRow", "Row", "Toggle", "Fold", "Select", "Switch", "Section", "SettingsCard", "Fragment"]);
 function subComponentsIn(text: string): string[] {
   const found = new Set<string>();
   for (const m of text.matchAll(/<([A-Z][A-Za-z0-9]*)\b/g)) {

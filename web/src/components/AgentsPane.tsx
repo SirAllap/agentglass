@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { Fold, SettingRow } from "./SettingRow.tsx";
+import { SettingRow } from "./SettingRow.tsx";
+import { EmptyState, StatusBadge } from "./SettingsKit.tsx";
 import { api } from "../lib/api.ts";
 import { fmtAgo } from "../lib/format.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import type { AgentProbe } from "../../../shared/types.ts";
-import { EDGE } from "./workspace/Chrome.tsx";
+import { Button } from "./workspace/Chrome.tsx";
 
 /**
  * The agents already on this machine, and one button each.
@@ -55,34 +56,25 @@ export function AgentsPane({ open }: { open: boolean }) {
     load();
   };
 
-  if (!agents) return <div className="py-2 text-[12px] t-dim">Looking for agents…</div>;
+  if (!agents) return <EmptyState>Looking for agents…</EmptyState>;
 
   /*
    * One row per agent, on the dialog's own grid rather than in a card of its
    * own. Cards read as a gallery of unrelated things; these are six answers to
    * the same question, and lining their buttons up is what lets you see at a
-   * glance which ones you have not done yet.
+   * glance which ones you have not done yet. The verdict is the badge and the
+   * one thing to do about it sits beside it.
    */
   return (
     <>
       {agents.map((p) => {
         const state = stateOf(p);
-        const tint = state === "live" ? "var(--success)"
-          : state === "waiting" ? "var(--warning)"
-          : state === "ready" ? "var(--primary-hover)" : "var(--text4)";
         return (
-          <SettingRow key={p.id} align="start" disabled={state === "missing"}
-            label={<span className="flex items-center gap-2">
-              <span className="shrink-0 rounded-full" aria-hidden style={{
-                width: 7, height: 7,
-                background: state === "live" ? "var(--success)" : "transparent",
-                border: state === "live" ? "none" : `1px solid ${tint}`,
-              }} />
-              {p.label}
-            </span>}
+          <SettingRow key={p.id} disabled={state === "missing"}
+            label={p.label}
             hint={<>
-              <span className="block" style={{ color: state === "missing" ? "var(--text4)" : tint }}>
-                {state === "live" && `Reporting · last event ${fmtAgo(p.seenAt!)}`}
+              <span className="block">
+                {state === "live" && `Last event ${fmtAgo(p.seenAt!)}`}
                 {/* The state this pane exists for. A written config and an
                     arrived event are different facts, and this is the gap
                     somebody otherwise sits in wondering what they did wrong. */}
@@ -91,36 +83,31 @@ export function AgentsPane({ open }: { open: boolean }) {
                 {state === "missing" && `Not on this machine · ${p.install}`}
               </span>
               {/* Where the change lands, named rather than implied. It is a
-                  file in somebody's home directory. */}
-              {state !== "missing" && <span className="block t-mono truncate mt-1.5">{p.configPath}</span>}
+                  file in somebody's home directory, and shown whole. */}
+              {state !== "missing" && <span className="block t-mono break-all mt-1.5">{p.configPath}</span>}
               {note?.id === p.id && (
                 <span className="block whitespace-pre-wrap mt-1.5"
-                  style={{ color: note.bad ? "var(--error)" : "var(--text3)" }}>{note.text}</span>
+                  style={{ color: note.bad ? "var(--error-ink)" : "var(--text3)" }}>{note.text}</span>
               )}
             </>}
-            control={state === "missing"
-              ? <span className="chip t-dim">not found</span>
-              : <button onClick={() => void connect(p, p.connected)} disabled={busy === p.id}
-                  title={p.connected
-                    ? `Remove the agentglass wiring from ${p.configPath}. The file is backed up first.`
-                    : `Write the agentglass wiring into ${p.configPath}. The file is backed up first, and a config we cannot parse is left alone.`}
-                  className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-                  style={p.connected
-                    ? { color: "var(--text2)", border: EDGE }
-                    : { color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 42%, transparent)" }}>
-                  {busy === p.id ? "…" : p.connected ? "Disconnect" : "Connect"}
-                </button>}
-          />
+            status={<StatusBadge tone={state === "live" ? "ok" : state === "waiting" ? "warn" : "off"}>
+              {state === "live" ? "Reporting" : state === "waiting" ? "Waiting for events" : state === "ready" ? "Not connected" : "Not found"}
+            </StatusBadge>}
+            actions={state === "missing" ? undefined : (
+              <Button onClick={() => void connect(p, p.connected)} disabled={busy === p.id}
+                title={p.connected
+                  ? `Remove the agentglass wiring from ${p.configPath}. The file is backed up first.`
+                  : `Write the agentglass wiring into ${p.configPath}. The file is backed up first, and a config we cannot parse is left alone.`}>
+                {busy === p.id ? "…" : p.connected ? "Disconnect" : "Connect"}
+              </Button>
+            )} />
         );
       })}
 
       {/* The distinction the list depends on, kept where somebody who doubts a
           green row can reach it, and out of the way of somebody who does not. */}
-      <Fold label="What “connected” means here">
-        An event has actually arrived — not that a file was written. Every failure in this list looks
-        like a successful write, which is why the state comes from traffic rather than from the config.
-        Each config is backed up before it is touched, and one this app cannot parse is left alone.
-      </Fold>
+      <SettingRow label="What “connected” means here"
+        hint="An event has actually arrived — not that a file was written. Every failure in this list looks like a successful write, which is why the state comes from traffic rather than from the config. Each config is backed up before it is touched, and one this app cannot parse is left alone." />
     </>
   );
 }

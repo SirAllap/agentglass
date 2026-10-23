@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { api } from "../../lib/api.ts";
 import { Select } from "../Select.tsx";
-import { Chip } from "../workspace/Chrome.tsx";
+import { SettingRow, Toggle } from "../SettingRow.tsx";
+import { EmptyState, SettingsCard, StatusBadge } from "../SettingsKit.tsx";
 import { noteJiraSettings, useJiraSettings } from "../../lib/jiraSettings.ts";
 import { useTrackerSetup } from "../../lib/trackerSetup.ts";
 import type { JiraHandoffRule, JiraProjectChoice } from "../../../../shared/providers.ts";
@@ -17,9 +18,8 @@ const EMPTY: JiraHandoffRule = { to: null, askTo: false, clear: false, askClear:
  * here names a status: the list is the project's own, read from the site when
  * the list is opened (one request, remembered by the server for ten minutes).
  *
- * A self-contained row for the Settings Tasks pane, beside "Card tracker"
- * (`<HandoffSettings />`, no props); it draws nothing while Jira is not
- * connected. Saving writes the local settings
+ * A card for Jira's Settings page (`<HandoffSettings />`, no props); it
+ * draws nothing while Jira is not connected. Saving writes the local settings
  * file only, never Jira.
  */
 export function HandoffSettings() {
@@ -73,51 +73,36 @@ export function HandoffSettings() {
   ];
 
   return (
-    <div className="flex flex-col gap-2 py-2" data-jira-handoff>
-      <div className="flex items-baseline gap-2">
-        <span className="text-[12px]" style={{ color: "var(--text)" }}>Jira hand-off</span>
-        <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>
-          {configured ? `${configured} project${configured === 1 ? "" : "s"} set` : "not set for any project"}
-        </span>
-      </div>
-      <div className="text-[11px]" style={{ color: "var(--text3)" }}>
-        Where a card's hand-off button moves it, and whether it takes the assignee off. Either can ask when it runs instead, starting from what is set here.
-      </div>
-      {projects === null && <div className="text-[11px]" style={{ color: "var(--text3)" }}>Reading the site's projects…</div>}
+    <SettingsCard title="QA hand-off"
+      desc="Where a card's hand-off button moves it, and whether it takes the assignee off. Either can ask when it runs instead, starting from what is set here."
+      status={<StatusBadge tone={configured ? "ok" : "off"}>{configured ? `${configured} ${configured === 1 ? "project" : "projects"} set` : "Not set"}</StatusBadge>}>
+      {projects === null && <EmptyState>Reading the site's projects…</EmptyState>}
+      {projects && !projects.length && !error && <EmptyState>This account sees no projects to set a hand-off for.</EmptyState>}
       {!!projects?.length && (
-        <div className="grid items-center gap-x-3 gap-y-2 text-[11.5px]" style={{ gridTemplateColumns: "max-content minmax(0, 1fr) max-content", color: "var(--text2)" }}>
-          <span>Project</span>
-          <span className="justify-self-start"><Select value={project} title="Project" onChange={setProject}
-            options={projects.map((p) => ({ value: p.key, label: `${p.key} · ${p.name}`, ...(settings?.handoff[p.key] ? { hint: "set" } : null) }))} /></span>
-          <span />
-
-          <span>Moves the card to</span>
-          <Select value={rule.to?.id ?? NONE} title="Hand-off status" onOpen={loadStatuses} busy={saving} disabled={!settings}
-            onChange={(v) => {
-              if (v === NONE) { void save({ ...rule, to: null }); return; }
-              const s = shown.find((x) => x.id === v) ?? (rule.to?.id === v ? rule.to : null);
-              if (s) void save({ ...rule, to: { id: s.id, name: s.name } });
-            }}
-            options={statusOptions} />
-          <Chip pressed={rule.askTo} disabled={frozen} onClick={() => { void save({ ...rule, askTo: !rule.askTo }); }}
-            title={rule.askTo ? "It asks when it runs, starting here. Press to fix it." : "Fix this status, or ask when it runs: the status becomes where the question starts."}>
-            Ask when it runs
-          </Chip>
-
-          <span>Takes the assignee off</span>
-          <span className="justify-self-start">
-            <Chip on={rule.clear} disabled={frozen} onClick={() => { void save({ ...rule, clear: !rule.clear }); }}
-              title="When on, whoever is on the card comes off it as it moves, unless somebody else was put on it meanwhile.">
-              {rule.clear ? "Yes" : "No"}
-            </Chip>
-          </span>
-          <Chip pressed={rule.askClear} disabled={frozen} onClick={() => { void save({ ...rule, askClear: !rule.askClear }); }}
-            title={rule.askClear ? "It asks when it runs, starting here. Press to fix it." : "Fix this, or ask when it runs."}>
-            Ask when it runs
-          </Chip>
-        </div>
+        <>
+          <SettingRow agentExempt label="Project" hint="Each project has its own hand-off."
+            control={<Select value={project} title="Project" onChange={setProject}
+              options={projects.map((p) => ({ value: p.key, label: `${p.key} · ${p.name}`, ...(settings?.handoff[p.key] ? { hint: "set" } : null) }))} />} />
+          <SettingRow agentExempt label="Moves the card to" hint="The project's own statuses. None leaves it to be chosen."
+            control={<Select value={rule.to?.id ?? NONE} title="Hand-off status" onOpen={loadStatuses} busy={saving} disabled={!settings}
+              onChange={(v) => {
+                if (v === NONE) { void save({ ...rule, to: null }); return; }
+                const s = shown.find((x) => x.id === v) ?? (rule.to?.id === v ? rule.to : null);
+                if (s) void save({ ...rule, to: { id: s.id, name: s.name } });
+              }}
+              options={statusOptions} />} />
+          <Toggle agentExempt on={rule.askTo} disabled={frozen} onClick={() => { void save({ ...rule, askTo: !rule.askTo }); }}
+            label="Ask which status when it runs"
+            hint="The status above becomes where the question starts, instead of being fixed." />
+          <Toggle agentExempt on={rule.clear} disabled={frozen} onClick={() => { void save({ ...rule, clear: !rule.clear }); }}
+            label="Take the assignee off"
+            hint="Whoever is on the card comes off it as it moves, unless somebody else was put on it meanwhile." />
+          <Toggle agentExempt on={rule.askClear} disabled={frozen} onClick={() => { void save({ ...rule, askClear: !rule.askClear }); }}
+            label="Ask about the assignee when it runs"
+            hint="Fix the choice above, or be asked each time." />
+        </>
       )}
-      {error && <div className="text-[11px]" role="alert" style={{ color: "var(--error-ink)" }}>{error}</div>}
-    </div>
+      {error && <SettingRow agentExempt label="That did not work" hint={<span role="alert" style={{ color: "var(--error-ink)" }}>{error}</span>} />}
+    </SettingsCard>
   );
 }

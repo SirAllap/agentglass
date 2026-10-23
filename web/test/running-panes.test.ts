@@ -17,7 +17,7 @@ describe("the list of what is running", () => {
   test("never offers to end a pane that is mid-turn", () => {
     // The one action here that loses something. A confirm would not be enough:
     // it appears under the thumb that just tapped, and the agent is working.
-    expect(panel).toContain("{!p.running && (");
+    expect(panel).toContain("actions={p.running ? undefined : (");
   });
 
   test("and asks twice before ending one that is not", () => {

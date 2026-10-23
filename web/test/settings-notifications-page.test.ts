@@ -18,14 +18,14 @@ const budgetsBody = src.slice(src.indexOf('show("budgets") && ('), src.indexOf('
 
 describe("notifications page, rebuilt", () => {
   test("four cards, in order", () => {
-    const at = ["Interrupt me for", "How it reaches you", "Pull requests", "From other apps"].map((t) => notif.indexOf(`<Section title="${t}"`));
+    const at = ["Interrupt me for", "How it reaches you", "Pull requests", "From other apps"].map((t) => notif.indexOf(`<SettingsCard title="${t}"`));
     expect(at.every((n) => n > -1)).toBe(true);
     expect([...at].sort((a, b) => a - b)).toEqual(at);
   });
 
   test("Silence all is the header control of the first card", () => {
-    const head = notif.slice(notif.indexOf('<Section title="Interrupt me for"'), notif.indexOf("</Section>"));
-    expect(head).toContain("headerControl={");
+    const head = notif.slice(notif.indexOf('<SettingsCard title="Interrupt me for"'), notif.indexOf("</SettingsCard>"));
+    expect(head).toContain("actions={");
     expect(head).toContain('label="Silence all"');
     expect(head).toContain("none: !prefs.none");
   });
@@ -38,8 +38,8 @@ describe("notifications page, rebuilt", () => {
     ]) expect(count(notif, l)).toBe(1);
     expect(count(notif, "Only when the pull request is approved") + count(notif, "only when the pull request is approved")).toBe(1);
     expect(count(notif, "When somebody says something") + count(notif, "when somebody says something")).toBe(1);
-    expect(count(notif, "<Fold ")).toBe(1);
-    expect(notif).toContain("Quiet mode and muted sources (${mutedList.length} muted)");
+    // Quiet is a setting to find, not a row behind a fold.
+    expect(count(notif, "<Fold ")).toBe(0);
   });
 
   test("Keep Codex usage current moved to budgets", () => {
@@ -49,7 +49,7 @@ describe("notifications page, rebuilt", () => {
   });
 
   test("the three sound gates keep their keys and paths", async () => {
-    // Voice picker sits in the Sound row, beside the channel switch.
+    // The voice picker is the row under the Sound switch.
     expect(notif).toContain("prefs.channels[c]");
     expect(notif).toContain("NOTIFY_VOICES");
     expect(notif).toContain("p.onSound");

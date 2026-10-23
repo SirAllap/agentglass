@@ -84,7 +84,10 @@ export function surfaces(p: PublicPlugin): Surface[] {
   return out;
 }
 
-export function PluginDeclaration({ plugin }: { plugin: PublicPlugin }) {
+/** `flat`: drawn inside a settings row, which is already the frame. The blocks
+ *  lose their own box and the code lines their border, so a row does not hold a
+ *  box that holds boxes; the approval dialog keeps them. */
+export function PluginDeclaration({ plugin, flat }: { plugin: PublicPlugin; flat?: boolean }) {
   const tint = SCOPE_TINT[plugin.scope];
   const drawn = surfaces(plugin);
   const d = plugin.sandbox ? describeSandbox(plugin.sandbox) : null;
@@ -93,30 +96,31 @@ export function PluginDeclaration({ plugin }: { plugin: PublicPlugin }) {
   const neighbourKey = neighbourKeyWording(plugin);
   return (
     <div className="flex flex-col gap-2.5 min-w-0">
-      <Block icon={<EyeIcon size={ICON.sm} />} tint={tint} head="What it sees" chip={SCOPE_WORD[plugin.scope]}>
+      <Block flat={flat} icon={<EyeIcon size={ICON.sm} />} tint={tint} head="What it sees" chip={SCOPE_WORD[plugin.scope]}>
         <p className="m-0 text-[12px] leading-relaxed" style={{ color: "var(--text2)" }}>{SCOPE_SENTENCE[plugin.scope]}</p>
       </Block>
 
-      <Block icon={<CommandIcon size={ICON.sm} />} tint={boxed ? "var(--primary)" : "var(--warning)"} head="What it runs">
+      <Block flat={flat} icon={<CommandIcon size={ICON.sm} />} tint={boxed ? "var(--primary)" : "var(--warning)"} head="What it runs">
         <p className="m-0 mb-1.5 text-[12px] leading-relaxed" style={{ color: "var(--text2)" }}>{boxed ? BOXED_PROCESS_NOTE : processWillNotStart(box) ? REFUSED_PROCESS_NOTE : PROCESS_WARNING}</p>
         {/* The command, as a command: the one line here that is not prose, and
             the one a reader is most likely to want to recognise. */}
         <code className="block t-mono text-[11.5px] px-2 py-1.5 rounded-md break-all"
-          style={{ color: "var(--text)", background: "var(--surface-inset)", border: EDGE }}>
+          style={{ color: "var(--text)", background: "var(--surface-inset)", border: flat ? undefined : EDGE }}>
           {plugin.entrypoint}
         </code>
       </Block>
 
       {d && box && (
         <Block
+          flat={flat}
           icon={<ShieldIcon size={ICON.sm} />}
           tint={box.tone === "warning" ? "var(--error)" : d.secretCount ? "var(--error)" : "var(--warning)"}
           head="What it asks to be given"
           chip={d.secretCount ? `${d.secretCount} look${d.secretCount === 1 ? "s" : ""} like a login` : "declared"}
         >
           <p className="m-0 mb-1.5 text-[12px] leading-relaxed" style={{ color: box.tone === "warning" ? "var(--error)" : "var(--text2)" }}>{box.text}</p>
-          {box.tone === "warning" && "fix" in box && box.fix && <FixBlock command={box.fix} />}
-          {neighbourKey && <p className="m-0 mb-1.5 text-[12px] leading-relaxed" style={{ color: "var(--error)" }}>{neighbourKey}</p>}
+          {box.tone === "warning" && "fix" in box && box.fix && <FixBlock command={box.fix} flat={flat} />}
+          {neighbourKey && <p className="m-0 mb-1.5 text-[12px] leading-relaxed" style={{ color: "var(--error-ink)" }}>{neighbourKey}</p>}
           {box.tone === "boxed" && box.refused && box.refused.length > 0 && (
             <div className="flex flex-col gap-0.5 mb-1.5">
               {box.refused.map((r) => (
@@ -138,7 +142,7 @@ export function PluginDeclaration({ plugin }: { plugin: PublicPlugin }) {
       )}
 
       {drawn.length > 0 && (
-        <Block icon={<PuzzleIcon size={ICON.sm} />} tint="var(--primary)" head="Where it draws"
+        <Block flat={flat} icon={<PuzzleIcon size={ICON.sm} />} tint="var(--primary)" head="Where it draws"
           chip={`${drawn.length} ${drawn.length === 1 ? "place" : "places"}`}>
           <div className="flex flex-col gap-1">
             {drawn.map((s) => (
@@ -168,11 +172,11 @@ function Row({ label, tint, children }: { label: string; tint?: string; children
 
 /** The one-time fix, as a command to run rather than a paragraph to follow:
  *  copied whole, never retyped from a screenshot of a terminal. */
-function FixBlock({ command }: { command: string }) {
+function FixBlock({ command, flat }: { command: string; flat?: boolean }) {
   return (
     <div className="relative mb-1.5">
       <pre className="m-0 t-mono text-[11px] leading-relaxed px-2 py-1.5 pr-7 rounded-md overflow-x-auto whitespace-pre"
-        style={{ color: "var(--text)", background: "var(--surface-inset)", border: EDGE }}>
+        style={{ color: "var(--text)", background: "var(--surface-inset)", border: flat ? undefined : EDGE }}>
         {command}
       </pre>
       <button type="button" className="agx-btn absolute top-1 right-1 rounded inline-flex items-center justify-center"
@@ -200,11 +204,11 @@ function Grants({ label, grants }: { label: string; grants: SandboxGrant[] }) {
   );
 }
 
-function Block({ icon, tint, head, chip, children }: {
-  icon: ReactNode; tint: string; head: string; chip?: string; children: ReactNode;
+function Block({ icon, tint, head, chip, children, flat }: {
+  icon: ReactNode; tint: string; head: string; chip?: string; children: ReactNode; flat?: boolean;
 }) {
   return (
-    <section className="rounded-lg px-2.5 py-2 min-w-0" style={{
+    <section className={`rounded-lg min-w-0 ${flat ? "" : "px-2.5 py-2"}`} style={flat ? undefined : {
       background: "color-mix(in srgb, var(--border) 10%, transparent)",
       border: EDGE,
     }}>

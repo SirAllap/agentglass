@@ -4,7 +4,7 @@ import { unboxedControl } from "../../lib/pluginBoxState.ts";
 import { api } from "../../lib/api.ts";
 import { ShieldIcon } from "../settingsNavIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
-import { Button, EDGE } from "../workspace/Chrome.tsx";
+import { Button } from "../workspace/Chrome.tsx";
 
 /**
  * The per-plugin consent to run without a box, drawn on the card of the
@@ -21,7 +21,6 @@ export function UnboxedConsent({ plugin, envAllowsAll, onChanged }: {
   if (!control) return null;
 
   const grant = control.kind === "allow";
-  const tint = grant ? "var(--warning)" : "var(--error)";
   const change = async () => {
     setBusy(true);
     setError(null);
@@ -32,17 +31,14 @@ export function UnboxedConsent({ plugin, envAllowsAll, onChanged }: {
   };
 
   return (
-    <div role="group" aria-label="Run without a box" className="mt-1.5 px-3 py-2 rounded-lg" style={{
-      background: `color-mix(in srgb, ${tint} 9%, transparent)`,
-      border: EDGE,
-    }}>
+    <div role="group" aria-label="Run without a box" className="flex flex-col gap-2 min-w-0">
       <div className="flex items-start gap-2 min-w-0">
-        <span className="shrink-0 mt-px flex" style={{ color: tint }}><ShieldIcon size={ICON.sm} /></span>
+        <span className="shrink-0 mt-px flex" style={{ color: grant ? "var(--warning-ink)" : "var(--error-ink)" }}><ShieldIcon size={ICON.sm} /></span>
         <p className="m-0 min-w-0 flex-1 text-[12px] leading-relaxed" style={{ color: "var(--text2)" }}>{control.text}</p>
       </div>
-      <div className="flex items-center justify-end gap-2 mt-1.5">
-        {error && <span className="text-[11px] min-w-0" style={{ color: "var(--error)" }}>{error}</span>}
-        <Button size="compact" tone={grant ? undefined : "danger"} pending={busy} onClick={change}>{control.button}</Button>
+      <div className="flex items-center gap-2">
+        <Button tone={grant ? undefined : "danger"} pending={busy} onClick={change}>{control.button}</Button>
+        {error && <span className="text-[11.5px] min-w-0" style={{ color: "var(--error-ink)" }}>{error}</span>}
       </div>
     </div>
   );

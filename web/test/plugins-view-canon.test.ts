@@ -68,7 +68,7 @@ describe("the plugin panes", () => {
 
   test("an install in flight shows in the button, not in a second control", () => {
     expect(market).toContain('<Button tone="primary" pending={busy}');
-    expect(pane).toContain("<Button pending={busy}");
+    expect(pane).toContain("<Button type=\"submit\" pending={busy}");
   });
 
   test("the way back is a drawn arrow, not a typed one", () => {
