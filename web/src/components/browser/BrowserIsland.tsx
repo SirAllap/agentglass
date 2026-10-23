@@ -26,7 +26,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BrowserTab } from "../../lib/browserTabs.ts";
 import type { Activity } from "../../lib/browserAgentActivity.ts";
-import { ISLAND_LINGER_MS } from "../../lib/browserAgentActivity.ts";
 import { LivingMark } from "../Logo.tsx";
 import { useAgentLive } from "./AgentPresence.tsx";
 import { CloseIcon } from "./icons.tsx";
@@ -75,7 +74,7 @@ export function BrowserIsland(p: IslandProps) {
   const [pics, setPics] = useState<Record<string, string>>({});
   const active = tabs.find((t) => t.id === activeId) ?? null;
   const act = active ? acts[active.id] : undefined;
-  const live = useAgentLive(act, ISLAND_LINGER_MS);
+  const live = useAgentLive(act);
   /* An agent that holds the tab but has stopped acting leaves it to the person:
      the pill gives back the address and the arrows instead of naming a driver
      nobody can see. */

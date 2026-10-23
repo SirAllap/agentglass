@@ -2972,6 +2972,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
  */
 :root { --agx-mark: #8b5cf6; --agx-contact: #10b981; --agx-ease: cubic-bezier(0.23, 1, 0.32, 1); --agx-move: cubic-bezier(0.65, 0, 0.35, 1); }
 .agx-presence { position: absolute; inset: 0; pointer-events: none; z-index: 15; }
+.agx-presence-glass { position: absolute; inset: 0; pointer-events: auto; cursor: default; outline: none; }
 .agx-presence-rim { position: absolute; inset: 0; opacity: 0; transition: opacity 180ms ease-out; }
 .agx-presence-on .agx-presence-rim { opacity: 1; transition: opacity 480ms var(--agx-ease); }
 .agx-presence-rim::before { content: ""; position: absolute; inset: 0; padding: 1px;

@@ -119,12 +119,12 @@ export function ago(now: number, at: number): string {
  * in bursts with a model call between them; without this the rim would blink
  * off and on between every two clicks, which reads as nervous, not as held.
  */
-export const PRESENCE_LINGER_MS = 4000;
-/* The island's shape changes with the driver (the agent's pill is narrower than
-   the person's bar), so it waits out a whole model call before handing the bar
-   back: a think between two clicks often runs past the rim's four seconds, and
-   a pill that changes shape on every one of them reads as broken. */
-export const ISLAND_LINGER_MS = 30_000;
+/* How long after its last act a tab still reads as the agent's: the rim, the
+   dock, the island's pill and the glass all go by this one clock. An agent
+   thinks between two clicks, often for longer than ten seconds, and four
+   seconds (the first value) left a pill saying "thinking" over a page with no
+   rim and no Take over, then changed the island's shape on every think. */
+export const PRESENCE_LINGER_MS = 30_000;
 
 const DOING: Record<string, string> = {
   click: "Clicking", dblclick: "Double-clicking", rightclick: "Right-clicking", check: "Ticking",

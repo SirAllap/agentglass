@@ -8,7 +8,7 @@ describe("island pill", () => {
   // A tab an agent had touched an hour earlier still showed "agent · working"
   // with no rim, no pointer and no Take over on the page.
   test("names a driver only while the page shows one", () => {
-    expect(island).toContain("const live = useAgentLive(act, ISLAND_LINGER_MS);");
+    expect(island).toContain("const live = useAgentLive(act);");
     expect(island).toMatch(/const driving = !!act && !act\.paused && live;/);
     expect(presence).toContain("const live = useAgentLive(agent);");
   });
@@ -16,5 +16,14 @@ describe("island pill", () => {
   // Between two acts the agent's pill said "working" next to a grey dot.
   test("says working only while an act runs", () => {
     expect(island).toContain('{working ? p.doing || "working" : "thinking"}');
+  });
+});
+
+describe("the glass over a driven page", () => {
+  const css = Bun.file(new URL("../src/index.css", import.meta.url));
+  // A person's hover over a page an agent drove opened menus mid-task.
+  test("is up for as long as the island names the agent, and takes the pointer", async () => {
+    expect(presence).toContain('{live && <div className="agx-presence-glass"');
+    expect(await css.text()).toMatch(/\.agx-presence-glass \{[^}]*pointer-events: auto/);
   });
 });
