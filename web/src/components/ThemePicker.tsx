@@ -121,7 +121,8 @@ export function PaletteRows({ current, onChange }: { current: string; onChange: 
     <>
       <Grid items={featured} current={current} onPick={onChange} />
       <SettingRow agentExempt label="More palettes"
-        hint={`${rest.length} more, including ${experimental.length} experimental: the rest of the curated palettes, then the decorative and second-flavour ones kept for tinkering.`}
+        hint={`${rest.length} more, ${experimental.length} of them experimental`}
+        detail={{ summary: "Details", body: "The rest of the curated palettes, then the decorative and second-flavour ones kept for tinkering." }}
         control={<Button aria-expanded={showAll} onClick={() => setShowAll((v) => !v)}>{showAll ? "Hide" : "Show"}</Button>} />
       {showAll && <Grid more items={rest} current={current} onPick={onChange} />}
     </>
@@ -222,11 +223,12 @@ export function AppearancePane({ current, onChange, onAccent }: {
           settingId="appearance.mode"
           wide
           label="Mode"
-          hint={desk && mode === "desktop"
-            ? <>Wearing <b style={{ color: "var(--text3)" }}>{desk.name}</b>, your desktop's theme — it follows when you switch there.</>
+          hint={desk && mode === "desktop" ? <>Wearing {desk.name}, your desktop's theme</> : "System follows your OS's dark or light"}
+          detail={{ summary: "Details", body: desk && mode === "desktop"
+            ? <>It follows when you switch themes on your desktop.</>
             : desk
-              ? <>Your desktop's theme is {desk.name}, one click away. <b style={{ color: "var(--text3)" }}>System</b> follows your OS's dark or light.</>
-              : <>A serious neutral pair. <b style={{ color: "var(--text3)" }}>System</b> follows your OS.</>}
+              ? <>Your desktop's theme is {desk.name}, one click away. <b>System</b> follows your OS's dark or light.</>
+              : <>A serious neutral pair. <b>System</b> follows your OS.</> }}
           control={<span className="inline-flex items-center p-0.5 rounded-lg" role="group" aria-label="Mode"
             style={{ height: CTRL_H.regular, background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: EDGE }}>
             {[...(desk ? [{ m: "desktop" as ThemeMode, label: "" }] : []), ...MODES].map(({ m, label }) => {

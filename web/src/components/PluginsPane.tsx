@@ -88,7 +88,8 @@ function AddPluginCard({ onInstalled, open, setOpen, prefill }: {
   return (
     <SettingRow
       label="Install a plugin"
-      hint="A local folder's absolute path, or a git URL. Copies the folder and reads its manifest — nothing in it runs yet."
+      hint="A local folder or a git URL"
+      detail={{ summary: "Details", body: "A local folder's absolute path, or a git URL. Copies the folder and reads its manifest — nothing in it runs yet." }}
       below={
         <SettingsForm label="Install a plugin" onSubmit={() => void install()}>
           <Field label="Folder path or git URL" htmlFor="plugin-source" error={error}>
@@ -261,9 +262,10 @@ export function PluginsPane({ open, focus }: {
           role="switch"
           ariaChecked={!!master}
           label={master ? "Plugins are switched on" : "Plugins are switched off"}
-          hint={master
+          hint={master ? "Enabled plugins may run" : "Nothing installed runs"}
+          detail={{ summary: "Details", body: master
             ? "Enabled plugins may run. Turning this off stops every one of them immediately."
-            : "Nothing installed runs, no matter what it is enabled to do. Install and review still work."}
+            : "Nothing installed runs, no matter what it is enabled to do. Install and review still work." }}
           control={<Switch on={!!master} busy={busyMaster || master === null} />}
         />
         {masterError && <SettingRow label="The master switch was not changed" status={<StatusBadge tone="err">Failed</StatusBadge>} hint={masterError} />}

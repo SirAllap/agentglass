@@ -15,7 +15,7 @@ import { RecipesPane } from "./RecipesPane.tsx";
 import { ReviewPromptsPane } from "./ReviewPromptsPane.tsx";
 import { SavedRepliesPane } from "./SavedRepliesPane.tsx";
 import { lastTerminalRoot } from "./TerminalPanel.tsx";
-import { Filter, Fold, SettingRow, choiceIsWide, Toggle, Switch } from "./SettingRow.tsx";
+import { Filter, Fold, SettingRow, choiceIsWide, Toggle, Switch, type RowDetail } from "./SettingRow.tsx";
 import { resetShown } from "../lib/settingsModified.ts";
 import { pageScore, absentFor, rowId, type SettingsPage } from "../lib/settingsIndex.ts";
 import { motion, AnimatePresence } from "motion/react";
@@ -89,7 +89,7 @@ import {
   currentScrollback, currentWordSeparators, copyOnSelect, rightClickPaste, currentNoteEditor, NOTE_EDITORS, type NoteEditor,
   setScrollback, setCopyOnSelect, setRightClickPaste,
 } from "../lib/termPrefs.ts";
-import { canZoomIn, canZoomOut, fmtScale, DEFAULT_SCALE } from "../lib/uiScale.ts";
+import { fmtScale, DEFAULT_SCALE, SCALES } from "../lib/uiScale.ts";
 import { currentAccent, setAccentPref } from "../lib/accent.ts";
 import { applyTheme } from "../lib/themes.ts";
 import { setting, subscribeSettings } from "../lib/settingsRegistry.ts";
@@ -142,7 +142,7 @@ import { MuteGlyph } from "./TopBarNotes.tsx";
 import { Button, RefreshButton, INPUT, INPUT_STYLE, EDGE, LINE, Segmented } from "./workspace/Chrome.tsx";
 import { LAUNCH_MODES, LAUNCH_MODE_LABEL, isLaunchMode, parseDenyRules, type LaunchMode } from "../../../shared/launchModes.ts";
 import { setLaunchPermissions } from "../lib/launchMode.ts";
-import { SELECT_BOX, EmptyState, Field, LinkButton, ProblemNote, SaveChip, SettingsCard, SettingsForm, StatusBadge, helpIdFor, type StatusTone } from "./SettingsKit.tsx";
+import { SELECT_BOX, SegControl, EmptyState, Field, LinkButton, ProblemNote, SaveChip, SettingsCard, SettingsForm, StatusBadge, helpIdFor, type StatusTone } from "./SettingsKit.tsx";
 import { PreviewCard, WithPreview } from "./settings/PreviewCard.tsx";
 import { WindowPreview, SidebarPreview, DiffPreview, LanternPreview, BrowserPreview } from "./settings/previews/index.ts";
 import { railItems } from "./settings/previews/MiniApp.tsx";
@@ -293,7 +293,9 @@ function SourceRow({ id, i, n, onChanged }: {
 /** A row of mutually exclusive choices, for a preference with three answers
  *  rather than two. A toggle would have forced "show me their message" and
  *  "just tell me someone wrote" to be the same decision. */
-function Choice<T extends string>({ label, hint, value, options, onPick, disabled, disabledHint, modified, settingId, wide }: {
+function Choice<T extends string>({ label, hint, detail, value, options, onPick, disabled, disabledHint, modified, settingId, wide }: {
+  /** Longer words behind a "Details" link; the hint stays one line. */
+  detail?: RowDetail;
   /** See SettingRow. */
   settingId?: string; agentExempt?: boolean; agentNever?: string;
   label: string; hint: string; value: T; options: { v: T; label: string }[];
@@ -302,18 +304,10 @@ function Choice<T extends string>({ label, hint, value, options, onPick, disable
   wide?: boolean;
 }) {
   return (
-    <SettingRow label={label} hint={disabled ? disabledHint ?? hint : hint} disabled={disabled} modified={modified} settingId={settingId}
+    <SettingRow label={label} hint={disabled ? disabledHint ?? hint : hint} detail={detail} disabled={disabled} modified={modified} settingId={settingId}
       wide={wide ?? choiceIsWide(options.map((o) => o.label))}
       control={
-        <span className="agx-seg">
-          {options.map((o) => (
-            <button key={o.v} onClick={() => onPick(o.v)} disabled={disabled}
-              aria-pressed={value === o.v}
-              className="agx-seg-b disabled:cursor-not-allowed">
-              {o.label}
-            </button>
-          ))}
-        </span>
+        <SegControl label={label} value={value} options={options} onPick={onPick} disabled={disabled} />
       } />
   );
 }
@@ -339,6 +333,30 @@ function Stepper({ label, hint, value, onDec, onInc, canDec, canInc, modified, s
           <button onClick={onInc} disabled={!canInc} className={btn} style={{ border, color: "var(--text2)" }} aria-label="Bigger">+</button>
         </span>
       } />
+  );
+}
+
+/** The window's display size control: the four common rungs as one segmented choice,
+ *  the other six in "Other", so every rung of lib/uiScale.ts stays reachable. */
+const SCALE_QUICK = [0.9, 1, 1.1, 1.25];
+function ScaleControl({ scale, onZoom }: { scale: number; onZoom: (dir: 1 | -1 | 0) => void }) {
+  // The zoom API only nudges one rung at a time; walking to a rung is repeated nudges.
+  const goTo = (v: number) => {
+    const d = SCALES.indexOf(v) - SCALES.indexOf(scale);
+    for (let n = 0; n < Math.abs(d); n++) onZoom(d > 0 ? 1 : -1);
+  };
+  const quick = SCALE_QUICK.includes(scale);
+  return (
+    <span className="flex items-center gap-2 flex-wrap justify-end">
+      <SegControl label="Display size" value={quick ? String(scale) : undefined}
+        options={SCALE_QUICK.map((v) => ({ v: String(v), label: fmtScale(v) }))}
+        onPick={(v) => goTo(Number(v))} />
+      <select aria-label="Other display size" className={INPUT} style={INPUT_STYLE} value={quick ? "" : String(scale)}
+        onChange={(e) => e.target.value && goTo(Number(e.target.value))}>
+        <option value="" disabled>Other…</option>
+        {SCALES.filter((v) => !SCALE_QUICK.includes(v)).map((v) => <option key={v} value={String(v)}>{fmtScale(v)}</option>)}
+      </select>
+    </span>
   );
 }
 
@@ -4740,12 +4758,10 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                     {/* Desktop only, like launch-at-login: in a browser tab the
                         browser's own zoom already does this, and better. */}
                     {IS_DESKTOP && (
-                      <Stepper
-                        label="Display size"
-                        hint={`Scales the whole window, and is remembered. ${MOD_KEY}+ / ${MOD_KEY}− anywhere, ${MOD_KEY}0 to reset — except over a terminal, where the same keys size the terminal instead and leave the window alone.`}
-                        value={fmtScale(scale)} modified={scale !== DEFAULT_SCALE}
-                        onDec={() => onZoom(-1)} onInc={() => onZoom(1)}
-                        canDec={canZoomOut()} canInc={canZoomIn()} />
+                      <SettingRow label="Display size" modified={scale !== DEFAULT_SCALE}
+                        hint="How big everything inside the window is"
+                        detail={{ summary: "Details", body: `Remembered between launches. ${MOD_KEY}+ / ${MOD_KEY}− anywhere, ${MOD_KEY}0 to reset — except over a terminal, where the same keys size the terminal instead and leave the window alone.` }}
+                        control={<ScaleControl scale={scale} onZoom={onZoom} />} />
                     )}
                     <Toggle on={fullscreen} onClick={async () => setFullscreenState(await toggleFullscreen())}
                       label="Fullscreen"
@@ -4762,7 +4778,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                         change shows at the next launch, not this one. */}
                     <Toggle on={splash} modified={!splash} onClick={() => { const v = !splash; setSplashOn(v); setSplash(v); }}
                       label="Launch animation"
-                      hint="Covers the window while the terminal, sessions and git load, then the mark flies to the top bar. Off shows the plain loading screen. From the next launch" />
+                      hint="The cover that plays while the app wakes up"
+                      detail={{ summary: "Details", body: "Covers the window while the terminal, sessions and git load, then the mark flies to the top bar. Off shows the plain loading screen. Takes effect from the next launch." }} />
                     {/* Off is the default and off means nothing is watching:
                         with no client subscribed the server never starts the
                         D-Bus monitor at all. On a machine that cannot do this
@@ -4773,7 +4790,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   <SettingsCard title="Top bar" icon={<SlidersIcon size={ICON.sm} />}>
                     <Choice<"12" | "24">
                       label="Clock"
-                      hint="The top bar shows the time in fullscreen, where the desktop's own clock is hidden"
+                      hint="12 or 24 hours, in fullscreen"
+                      detail={{ summary: "Details", body: "The top bar shows the time in fullscreen, where the desktop's own clock is hidden." }}
                       value={h24 ? "24" : "12"}
                       onPick={(v) => { setClock24(v === "24"); setH24(v === "24"); }}
                       options={[{ v: "12", label: "12h" }, { v: "24", label: "24h" }]} />
@@ -4783,14 +4801,19 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       on, the login step when the app starts with the machine. */}
                   <SettingsCard title="What happens at login" icon={<ChecklistIcon size={ICON.sm} />}
                     desc="In this order, and only the steps you left on.">
+                    {/* In a wrapper, not directly in the card body: a numbered list is read
+                        down the circles, so it has no rule between its steps. */}
+                    <div className="agx-steps">
                     {[
                       ...(autostart ? [["agentglass starts", "when you log in to this machine"]] : []),
                       ...(splash ? [["The launch cover plays", "while the terminal, sessions and git load"]] : []),
                       ["agentglass opens", IS_DESKTOP ? `at the size you picked: ${fmtScale(scale)}` : "in its window"],
                       ["Your panes come back", "where they were, from the last layout capture"],
                     ].map(([name, what], i) => (
-                      <SettingRow key={name} agentExempt label={`${i + 1}. ${name}`} hint={what} />
+                      <SettingRow key={name} agentExempt hint={what}
+                        label={<span className="agx-step"><i aria-hidden>{i + 1}</i>{name}</span>} />
                     ))}
+                    </div>
                   </SettingsCard>
                   </WithPreview>
                   )}

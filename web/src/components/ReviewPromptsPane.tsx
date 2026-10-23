@@ -248,7 +248,8 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
         <SettingRow
           settingId="plugins.sessionReads.repos"
           label="Let review plugins read the authoring session"
-          hint="Shared, for the repositories below only: the first request, the files the agent wrote, how many tools it used, and its closing summary — cut short, with home paths hidden. Never the transcript or any tool output. If anything in it looks like a secret, nothing is shared and the plugin is told why."
+          hint="Shared for the repositories below only, as a short summary"
+          detail={{ summary: "Details", body: "The first request, the files the agent wrote, how many tools it used, and its closing summary — cut short, with home paths hidden. Never the transcript or any tool output. If anything in it looks like a secret, nothing is shared and the plugin is told why." }}
           control={<Select
             align="right"
             style={SELECT_BOX}
