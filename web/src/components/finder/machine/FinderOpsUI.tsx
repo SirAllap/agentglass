@@ -54,6 +54,7 @@ export function ContextMenu({ at, head, groups, onPick, onClose }: {
     if (ro && el.current) ro.observe(el.current);
     return () => ro?.disconnect();
   }, [at]);
+  useEffect(() => { el.current?.focus({ preventScroll: true }); }, []);
   useEffect(() => {
     const on = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onClose(); } };
     window.addEventListener("keydown", on, true);
@@ -62,7 +63,7 @@ export function ContextMenu({ at, head, groups, onPick, onClose }: {
   return (
     <Portal z={LAYER.menu}>
       <div className="fixed inset-0" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
-      <div ref={el} role="menu" data-finder-menu aria-label="File menu" className="fixed rounded-lg text-[12px] shadow-2xl py-1.5"
+      <div ref={el} role="menu" data-finder-menu aria-label="File menu" tabIndex={-1} className="fixed rounded-lg text-[12px] shadow-2xl py-1.5 outline-none"
         style={{ width: 310, left: pos?.left ?? -9999, top: pos?.top ?? -9999, background: "var(--surface-card)", border: EDGE, color: "var(--text)", maxHeight: "calc(100vh - 16px)", overflowY: "auto" }}>
         {head && (
           <div className="px-3.5 pt-1.5 pb-2" style={{ borderBottom: LINE }}>

@@ -4,6 +4,8 @@
  * state anybody else needs. The ceiling is generous and only there so a bad
  * script cannot grow the sidebar without end.
  */
+import type { PinnedPlace } from "../../../shared/types.ts";
+
 export const PIN_KEY = "agentglass.finder.pins";
 export const PIN_MAX = 40;
 
@@ -32,4 +34,12 @@ export function writePins(pins: readonly string[]): string {
 export function togglePin(pins: readonly string[], path: string): string[] {
   if (pins.includes(path)) return pins.filter((p) => p !== path);
   return pins.length >= PIN_MAX ? [...pins] : [...pins, path];
+}
+
+/** The bookmarks as the server will hold them after a toggle, so the sidebar answers before the file is written. A file URI is encoded as the server does. */
+export function toggledPlaces(places: readonly PinnedPlace[], path: string): PinnedPlace[] {
+  const p = path.length > 1 ? path.replace(/\/+$/, "") : path;
+  if (places.some((b) => b.path === p)) return places.filter((b) => b.path !== p);
+  if (places.length >= PIN_MAX) return [...places];
+  return [...places, { uri: "file://" + p.split("/").map(encodeURIComponent).join("/"), label: p.slice(p.lastIndexOf("/") + 1), path: p }];
 }

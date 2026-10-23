@@ -2,15 +2,17 @@
 // every other GTK file manager), not this browser's storage. Pins from before
 // that, kept in this browser, are moved into the file once the desktop app is
 // allowed to write it, and only then forgotten.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../../lib/api.ts";
-import { PIN_KEY, readPins } from "../../../lib/finderPins.ts";
+import { PIN_KEY, readPins, toggledPlaces } from "../../../lib/finderPins.ts";
 import type { PinnedPlace } from "../../../../../shared/types.ts";
 
 const stored = (): string[] => { try { return readPins(localStorage.getItem(PIN_KEY)); } catch { return []; } };
 
 export function useBookmarks(say: (note: string) => void) {
   const [places, setPlaces] = useState<PinnedPlace[]>([]);
+  const held = useRef(places);
+  held.current = places;
   useEffect(() => {
     let live = true;
     void (async () => {
@@ -27,8 +29,11 @@ export function useBookmarks(say: (note: string) => void) {
     })();
     return () => { live = false; };
   }, []);
+  // The sidebar answers at once; the file's own answer replaces it, and a refusal puts the old list back.
   const toggle = useCallback((path: string) => {
-    void api.bookmarkToggle(path).then((r) => { if (r.ok && r.bookmarks) setPlaces(r.bookmarks); else say(r.error || "Could not change the pinned places"); });
+    const before = held.current;
+    setPlaces(toggledPlaces(before, path));
+    void api.bookmarkToggle(path).then((r) => { if (r.ok && r.bookmarks) setPlaces(r.bookmarks); else { setPlaces(before); say(r.error || "Could not change the pinned places"); } });
   }, [say]);
   return { places, pins: places.flatMap((b) => (b.path ? [b.path] : [])), toggle };
 }

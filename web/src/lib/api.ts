@@ -1,3 +1,4 @@
+import { deskGated } from "./deskGate.ts";
 import { forgetShared, sharedRead } from "./sharedRead.ts";
 import type { UiAction, Field, NoteStatus, PluginPanel, PluginPrNotes } from "./pluginTypes.ts";
 import type { ImportedPlace } from "./desktop.ts";
@@ -771,7 +772,7 @@ async function post<T>(path: string, body: unknown, headers: Record<string, stri
   const git = path.startsWith("/git/");
   if (git) forgetShared();
   try {
-    const r = await fetch(SERVER + path, { method: "POST", headers: authHeaders({ "content-type": "application/json", ...headers }), body: JSON.stringify(body) });
+    const r = await fetch(SERVER + path, { method: "POST", headers: authHeaders({ "content-type": "application/json", ...(deskGated(path) ? deskHeader() : {}), ...headers }), body: JSON.stringify(body) });
     return await (r.json() as Promise<T>);
   } finally {
     if (git) forgetShared();

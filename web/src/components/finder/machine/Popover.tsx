@@ -26,6 +26,7 @@ export function Popover({ anchor, onClose, width = 220, children, label }: { anc
     setAt({ left, top });
   }, [anchor, width]);
   // Focus stays in the palette's search box while a menu is open, so Escape never reaches the menu: it is taken here, or it would close the whole finder.
+  useEffect(() => { el.current?.focus({ preventScroll: true }); }, []);
   useEffect(() => {
     const on = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onClose(); } };
     window.addEventListener("keydown", on, true);
@@ -35,8 +36,8 @@ export function Popover({ anchor, onClose, width = 220, children, label }: { anc
   return (
     <Portal z={LAYER.menu}>
       <div className="fixed inset-0" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
-      <div ref={el} role="menu" data-finder-menu aria-label={label} className="fixed rounded-lg text-[12px] shadow-2xl py-1.5"
-        onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}
+      <div ref={el} role="menu" data-finder-menu aria-label={label} className="fixed rounded-lg text-[12px] shadow-2xl py-1.5 outline-none"
+        tabIndex={-1} onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}
         style={{ width, left: at?.left ?? -9999, top: at?.top ?? -9999, background: "var(--surface-card)", border: EDGE, color: "var(--text)", maxHeight: "calc(100vh - 16px)", overflowY: "auto" }}>
         {children}
       </div>
