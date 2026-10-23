@@ -28,7 +28,7 @@ import { safeAbs, repoRootOf, repoRootOfAsync } from "./git.ts";
 import { terminalActive } from "./loopwatch.ts";
 import { inScope, workspaceRoot, terminalDisabledSource, tmuxTerminal, tmuxPrefix, inScopeReal } from "./config.ts";
 import { noteNvimArgv } from "./bench.ts";
-import { engineAttachArgv, engineBenchArgv, engineConsoleArgv, engineWindowRunning, engineSplitRunning, engineSessionName } from "./tmuxpane.ts";
+import { engineAttachArgv, engineBenchArgv, engineConsoleArgv, engineWindowOutcome, engineWindowRunning, engineSplitRunning, engineSessionName } from "./tmuxpane.ts";
 import { confHealth, ensureConf } from "./tmuxconf.ts";
 import { readerSocketPath, readerSessionState, endReaderSession, finderEditSocketPath, BENCH_READER_SLOT, FINDER_EDIT_SLOT } from "./bench.ts";
 import { browseReal } from "./browse.ts";
@@ -2294,9 +2294,9 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
         /* Into the session this client is attached to — see the note on
            `engineWindowRunning`. A button a person pressed opens where they
            are looking, full stop. */
-        void engineWindowRunning(cwd, name, argv, cwd, undefined, here, true).then((w) => { answer(!!w, w ? "" : "the engine would not open a window"); s.tmuxSweep?.(); });
+        void engineWindowOutcome(cwd, name, argv, cwd, undefined, here, true).then((w) => { answer(w.ok, w.ok ? "" : w.reason); s.tmuxSweep?.(); });
       } else {
-        void engineWindowRunning(cwd, name, [], cwd, undefined, here, true).then((w) => { answer(!!w, w ? "" : "the engine would not open a window"); s.tmuxSweep?.(); });
+        void engineWindowOutcome(cwd, name, [], cwd, undefined, here, true).then((w) => { answer(w.ok, w.ok ? "" : w.reason); s.tmuxSweep?.(); });
       }
       return;
     }

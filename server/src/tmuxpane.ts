@@ -408,7 +408,9 @@ export async function listPanes(): Promise<string[]> {
  * Attach-or-create on the session, so the second review of the day lands beside
  * the first rather than starting a server's worth of sessions.
  */
-export async function engineWindowRunning(
+export type EngineWindow = { ok: true; paneId: string; windowId: string } | { ok: false; reason: string };
+
+export async function engineWindowOutcome(
   root: string, name: string, argv: string[], cwd: string = root,
   /*
    * Variables for the new window only, and the reason it is a parameter rather
@@ -461,7 +463,14 @@ export async function engineWindowRunning(
    * resize and the capture are unaffected either way.
    */
   select = false,
-): Promise<{ paneId: string; windowId: string } | null> {
+): Promise<EngineWindow> {
+  /* One place that says no, so the reason is written down the same way for all
+     of them: returned to the button that asked, and logged once so the log and
+     the button cannot disagree. */
+  const fail = (reason: string): EngineWindow => {
+    console.error(`[tmux] engine window "${String(name).slice(0, 64)}" was not opened: ${reason}`);
+    return { ok: false, reason };
+  };
   /*
    * STRICTER THAN `validSessionName`, and only for this parameter.
    *
@@ -480,7 +489,7 @@ export async function engineWindowRunning(
      a phone, and this server is not the one the phone is attached to. */
   const namedSession = typeof into === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(into) && !into.startsWith("agx-phone-") ? into : "";
   const session = namedSession || engineSessionName(root);
-  if (!validSessionName(session)) return null;
+  if (!validSessionName(session)) return fail(`"${session.slice(0, 64)}" is not a session name tmux can take`);
   /* The config, before the first tmux call rather than only on the attach path.
      `tmux()` passes `-f confPath()` whatever the caller is, so a window opened
      before anybody attached ran against a file that might be stale or not there
@@ -512,6 +521,16 @@ export async function engineWindowRunning(
 
   const there = await tmux(["has-session", "-t", `=${session}`]);
   /*
+   * `=session:` for the new window, with the colon, and not the bare name.
+   *
+   * A target with no colon is read as a WINDOW first, and tmux matches window
+   * names by prefix: with a session `orbit` holding a window `orbit-ORBIT-1042`,
+   * `-t orbit` meant that window, and new-window answered `create window
+   * failed: index 1 in use` for every press until the window was closed. The
+   * colon says "this session, next free index"; the `=` says exactly this
+   * session, not one that merely starts with it.
+   */
+  /*
    * THE FIRST WINDOW IS THE RUN, not an empty shell somebody has to close.
    *
    * `new-session -d -s x` with no command opens the user's login shell in a
@@ -533,9 +552,17 @@ export async function engineWindowRunning(
    * with the session is that session's current one already.
    */
   const out = there.ok
-    ? await tmux(["new-window", ...(select ? [] : ["-d"]), "-t", session, ...shape])
+    ? await tmux(["new-window", ...(select ? [] : ["-d"]), "-t", `=${session}:`, ...shape])
     : await tmux(["new-session", "-d", "-s", session, ...shape]);
-  if (!out.ok) return null;
+  if (!out.ok) {
+    const said = out.stderr.replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 200);
+    if (said === "tmux is not installed") return fail("tmux is not installed on this machine");
+    /* The size goes with tmux's own words because the one refusal that depends
+       on it, "command too long", does not say how long. Arguments plus the
+       variables for the window: those are what tmux packs into one message. */
+    const bytes = [...argv, ...Object.entries(env ?? {}).map(([k, v]) => `${k}=${v}`)].reduce((n, a) => n + Buffer.byteLength(a) + 1, 0);
+    return fail(`tmux refused the command: ${said || "it exited without saying why"} (${Math.max(1, Math.ceil(bytes / 1024))} KB)`);
+  }
   /* Write it down straight away rather than waiting for the sweep. A session
      that exists for eight seconds before anything records it is a session a
      reboot in those eight seconds would not bring back — and 2026-08-25 is the
@@ -547,7 +574,18 @@ export async function engineWindowRunning(
   const [paneId = "", windowId = ""] = (out.stdout.split("\n")[0] ?? "").trim().split("\t");
   // Both or neither: tmux printing something this does not recognise is not a
   // reason to hand a caller a string that goes on a command line.
-  return paneId.startsWith("%") && windowId.startsWith("@") ? { paneId, windowId } : null;
+  if (paneId.startsWith("%") && windowId.startsWith("@")) return { ok: true, paneId, windowId };
+  return fail(`tmux opened a window but printed ids this app could not read (${JSON.stringify(out.stdout.trim().slice(0, 60))})`);
+}
+
+/** `engineWindowOutcome` for the callers that only need to know whether there
+ *  is a window: null for every refusal, which is what they all handled before
+ *  there was a reason to give. */
+export async function engineWindowRunning(
+  ...a: Parameters<typeof engineWindowOutcome>
+): Promise<{ paneId: string; windowId: string } | null> {
+  const w = await engineWindowOutcome(...a);
+  return w.ok ? { paneId: w.paneId, windowId: w.windowId } : null;
 }
 
 /**
@@ -576,7 +614,7 @@ export async function engineSplitRunning(
   // Nothing to split. The caller opens a window instead — a refusal here is not
   // a reason to leave a press with no answer.
   if (!there.ok) return null;
-  const out = await tmux(["split-window", "-h", "-P", "-F", "#{pane_id}", "-t", session, "-c", cwd, ...argv]);
+  const out = await tmux(["split-window", "-h", "-P", "-F", "#{pane_id}", "-t", `=${session}:`, "-c", cwd, ...argv]);
   if (!out.ok) return null;
   const paneId = (out.stdout.split("\n")[0] ?? "").trim();
   return paneId.startsWith("%") ? { paneId } : null;

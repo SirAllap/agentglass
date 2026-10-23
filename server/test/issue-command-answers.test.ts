@@ -16,5 +16,5 @@ test("a refused folder is answered with the reason, never dropped", () => {
 });
 
 test("both window openings answer with what the engine did", () => {
-  expect(code.match(/engineWindowRunning\([^\n]*\.then\(\(w\) => \{ answer\(!!w/g)?.length).toBe(2);
+  expect(code.match(/engineWindowOutcome\([^\n]*\.then\(\(w\) => \{ answer\(w\.ok/g)?.length).toBe(2);
 });

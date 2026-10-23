@@ -14,6 +14,9 @@
  * differently on my machine".
  */
 import { afterEach, describe, expect, it } from "bun:test";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { mintAgentTicket, claimAgentTicket, agentArgv, agentBinFor, __clearAgentTickets } from "../src/agentticket.ts";
 import { claudeCode } from "../src/agents/claudecode.ts";
 
@@ -133,5 +136,91 @@ describe("the executable for a kind", () => {
     // function for the rest. Both are Bun.which("claude"); the branch bought
     // nothing, and it is gone.
     expect(agentBinFor("claude")).toBe(claudeCode.bin());
+  });
+});
+
+/*
+ * A prompt too big for tmux's command limit still arrives, whole.
+ *
+ * tmux refuses `new-window` with "command too long" somewhere between 15 and
+ * 20 KB of arguments, and a conflict briefing lists every conflicted file twice
+ * (once in the situation, once in the ask), so a long list crosses it. The
+ * argv then carries a path instead, and the shell that starts the agent reads
+ * the text and removes the file.
+ */
+describe("a prompt over the command limit", () => {
+  const state = mkdtempSync(join(tmpdir(), "agx-spill-"));
+  const prevState = process.env.AGENTGLASS_STATE_DIR;
+  process.env.AGENTGLASS_STATE_DIR = state;
+  afterEach(() => { if (prevState === undefined) delete process.env.AGENTGLASS_STATE_DIR; else process.env.AGENTGLASS_STATE_DIR = prevState; });
+
+  const stub = join(state, "stub-agent");
+  writeFileSync(stub, '#!/bin/sh\nfor a; do last=$a; done\nprintf %s "$last" > "$OUT"\nprintf %s "$#" > "$OUT.n"\n');
+  chmodSync(stub, 0o755);
+
+  const big = (n: number) => ["/resolve-conflicts", "", "Git has left conflicts: `a` 'b' \"c\" $HOME $(x)", ...Array.from({ length: n }, (_, i) => `- src/components/features/billing/plans/[planId]/Plan${i}.vue`), "", ""].join("\n");
+
+  it("leaves a small prompt exactly as it was", () => {
+    process.env.AGENTGLASS_STATE_DIR = state;
+    expect(agentArgv("/bin/claude", { prompt: "go", yolo: false, title: "" }, false)).toEqual(["/bin/claude", "go"]);
+  });
+
+  it("keeps the command line short and the file private", () => {
+    process.env.AGENTGLASS_STATE_DIR = state;
+    const argv = agentArgv(stub, { prompt: big(400), yolo: true, title: "T" }, true);
+    expect(argv[0]).toBe("sh");
+    expect(argv.join("").length).toBeLessThan(2000);
+    const dir = join(state, "prompts");
+    const files = readdirSync(dir);
+    expect(files.length).toBeGreaterThan(0);
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+    expect(statSync(join(dir, files[0]!)).mode & 0o777).toBe(0o600);
+  });
+
+  it("hands the agent the whole text as its last argument, and removes the file", async () => {
+    process.env.AGENTGLASS_STATE_DIR = state;
+    const prompt = big(400);
+    expect(Buffer.byteLength(prompt)).toBeGreaterThan(20_000);
+    const out = join(state, "out");
+    const argv = agentArgv(stub, { prompt, yolo: true, title: "T" }, true);
+    const p = Bun.spawn(argv, { env: { ...process.env, OUT: out }, stdout: "pipe", stderr: "pipe" });
+    expect(await p.exited).toBe(0);
+    expect(readFileSync(out, "utf8")).toBe(prompt);
+    // name flag + name + yolo flag + prompt: the flags before it are untouched.
+    expect(readFileSync(out + ".n", "utf8")).toBe("4");
+    expect(existsSync(argv[4]!)).toBe(false);
+  });
+
+  it("keeps the prompt flag of a CLI that takes it that way", async () => {
+    process.env.AGENTGLASS_STATE_DIR = state;
+    const prompt = big(400);
+    const out = join(state, "out2");
+    const argv = agentArgv(stub, { prompt, yolo: false, title: "", kind: "qwen" }, false);
+    const p = Bun.spawn(argv, { env: { ...process.env, OUT: out }, stdout: "pipe", stderr: "pipe" });
+    expect(await p.exited).toBe(0);
+    expect(readFileSync(out, "utf8")).toBe(prompt);
+    expect(readFileSync(out + ".n", "utf8")).toBe("2");
+  });
+
+  it("cuts a briefing that no argument could carry, and says so", async () => {
+    process.env.AGENTGLASS_STATE_DIR = state;
+    const out = join(state, "out3");
+    const argv = agentArgv(stub, { prompt: "y".repeat(400_000), yolo: false, title: "" }, false);
+    const p = Bun.spawn(argv, { env: { ...process.env, OUT: out }, stdout: "pipe", stderr: "pipe" });
+    expect(await p.exited).toBe(0);
+    const got = readFileSync(out, "utf8");
+    expect(Buffer.byteLength(got)).toBeLessThan(110_000);
+    expect(got).toContain("briefing cut");
+  });
+
+  it("sweeps files nobody started", () => {
+    process.env.AGENTGLASS_STATE_DIR = state;
+    const dir = join(state, "prompts");
+    const old = join(dir, "old.txt");
+    writeFileSync(old, "stale");
+    const long = new Date(Date.now() - 3 * 3600_000);
+    utimesSync(old, long, long);
+    agentArgv(stub, { prompt: big(400), yolo: false, title: "" }, false);
+    expect(existsSync(old)).toBe(false);
   });
 });

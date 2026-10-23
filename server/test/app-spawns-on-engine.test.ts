@@ -35,7 +35,7 @@ describe("where the app opens its windows", () => {
   it("opens them on the engine instead, all three of them", () => {
     /* Review, issue, the phone's plus — and the resume picker, twice: once for
        "in a tab", once as the fallback when there is no window to split. */
-    expect(terminal.match(/engineWindowRunning\(/g)?.length).toBe(6);
+    expect(terminal.match(/engineWindow(?:Running|Outcome)\(/g)?.length).toBe(6);
     // Beside what is on screen, when the picker asks for that.
     expect(terminal).toContain("engineSplitRunning(cwd, cwd, argv)");
     expect(terminal).toContain("`pr-${number}`");
@@ -60,7 +60,7 @@ describe("where the app opens its windows", () => {
 
 describe("the engine's own window opener", () => {
   it("talks only to our socket, through the engine's own helper", () => {
-    const fn = engine.slice(engine.indexOf("export async function engineWindowRunning"), engine.indexOf("export function engineWindowName"));
+    const fn = engine.slice(engine.indexOf("export async function engineWindowOutcome"), engine.indexOf("export function engineWindowName"));
     expect(fn).toContain('await tmux(["has-session", "-t", `=${session}`])');
     expect(fn).toContain('await tmux(["new-session", "-d", "-s", session');
     /* `-d` sits between them now: selecting the new window is opt-in, because a
@@ -84,7 +84,7 @@ describe("the engine's own window opener", () => {
        terminal" and exits non-zero — so the first window opened and every one
        after it returned null. Measured, and held here by name so the flag that
        looks right cannot come back. */
-    const fn = engine.slice(engine.indexOf("export async function engineWindowRunning"), engine.indexOf("export function engineWindowName"));
+    const fn = engine.slice(engine.indexOf("export async function engineWindowOutcome"), engine.indexOf("export function engineWindowName"));
     expect(fn).not.toContain('"new-session", "-A"');
     expect(fn).toContain('"has-session"');
   });
@@ -92,7 +92,7 @@ describe("the engine's own window opener", () => {
   it("returns both ids or neither", () => {
     /* Half an answer is a string that goes on a command line. tmux printing
        something unrecognised is not a reason to pass it along. */
-    const fn = engine.slice(engine.indexOf("export async function engineWindowRunning"));
+    const fn = engine.slice(engine.indexOf("export async function engineWindowOutcome"));
     expect(fn).toContain('paneId.startsWith("%") && windowId.startsWith("@")');
   });
 
