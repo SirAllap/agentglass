@@ -100,7 +100,8 @@ import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge
 import { afterViewed, fileAtFloor, stepFileIndex, verticalScrollerOf } from "../lib/prNav.ts";
 import { buildFileTree, treeOrder, type TreeNode } from "../lib/prFileTree.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
-import { knownLogins, matchedAs, normalizeFree, personIn, searchPool, toServerQuery } from "../lib/prSearch.ts";
+import { knownLogins, matchedAs, normalizeFree, personIn, searchPool, singleLogin, toServerQuery } from "../lib/prSearch.ts";
+import { usePersonBoard } from "../lib/personBoard.ts";
 import { useRowDetails } from "../lib/useRowDetails.ts";
 import { BOARD_ASK_MS, listOutcome, type ListOutcome } from "../lib/boardFace.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
@@ -2952,6 +2953,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const shownPrs = unreadOnly ? unreadPrs : basePrs;
   /* Cards of a search the second pass never reached fill themselves in, in one batched request. */
   const visiblePrs = useRowDetails(root, shownPrs, query.trim().length > 0);
+
   const facets = useMemo(() => buildFacets(prs, filters, facetOpts), [prs, filters, facetOpts]);
 
 
@@ -3045,6 +3047,37 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
      is laid over GitHub's UNKNOWN here, so the badge, the lane and the Failing
      view read one fact. */
   const conflictTick = useSyncExternalStore(onConflict, conflictVersion, () => 0);
+  /*
+   * Another person's board, opened from a search that is about that one login.
+   *
+   * Nothing here is the owner's: the rows are the person's own two lists (see
+   * lib/personBoard.ts for what it costs), the Main/QA/Filters rules are not
+   * applied to them, and the search box is left exactly as it was so "Back to
+   * my board" returns to it. Editing the box into anything else leaves the view.
+   */
+  const [personLogin, setPersonLogin] = useState<string | null>(null);
+  const person = usePersonBoard(root, personLogin);
+  useEffect(() => {
+    if (!personLogin) return;
+    const now = singleLogin(query, new Set([...logins, personLogin.toLowerCase()]));
+    if (now?.toLowerCase() !== personLogin.toLowerCase()) setPersonLogin(null);
+  }, [query, personLogin, logins]);
+  /* The second pass for stragglers, once for both lists, then split back. */
+  const personPool = useMemo(() => {
+    if (person.state.kind !== "ready") return [] as PrSummary[];
+    const by = new Map<number, PrSummary>();
+    for (const p of [...person.state.authored, ...person.state.asked]) if (!by.has(p.number)) by.set(p.number, p);
+    return [...by.values()];
+  }, [person.state]);
+  const personFilled = useRowDetails(root, personPool, personLogin != null);
+  const personLists = useMemo(() => {
+    if (person.state.kind !== "ready") return { mine: [] as PrSummary[], review: [] as PrSummary[] };
+    const byNumber = new Map(personFilled.map((p) => [p.number, withConflict(root, withCard(p, hasTaskProvider))]));
+    const pick = (rows: PrSummary[]) => rows.map((p) => byNumber.get(p.number) ?? p);
+    return { mine: pick(person.state.authored), review: pick(person.state.asked) };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [person.state, personFilled, hasTaskProvider, root, cardTick, conflictTick]);
+
   const boardMineCards = useMemo(
     () => boardMine.map((p) => withConflict(root, withCard(p, hasTaskProvider))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -4936,17 +4969,21 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               <CiMetrics root={projectRoot} repo={repo?.nameWithOwner ?? ""} active={active && selected == null} />
             ) : inboxOn ? (
               <Inbox repo={repo?.nameWithOwner ?? ""} root={projectRoot} prs={prs} onFlash={flash} onUnread={setInboxUnread} active={active && selected == null} />
-            ) : (boardShown || resultsShown) && repo && !listState.needsAuth ? (
+            ) : (boardShown || resultsShown || personLogin) && repo && !listState.needsAuth ? (
               /* The board is the panel's one surface: every pill, facet and
                  search above stays where it was, and a search or the closed
                  and merged ones draw as rows inside it (`results`). */
               <TriageBoard
-                mine={boardMineShown} review={boardReviewShown} unfiltered={boardUnfiltered} view={boardView}
-                others={boardWide ? boardOthersShown : undefined}
-                more={listState.hasNext && listState.cursor 
+                mine={personLogin ? personLists.mine : boardMineShown} review={personLogin ? personLists.review : boardReviewShown}
+                unfiltered={personLogin ? undefined : boardUnfiltered} view={personLogin ? "all" : boardView}
+                viewer={personLogin ?? undefined}
+                person={personLogin ? { onBack: () => setPersonLogin(null), more: person.state.kind === "ready" && person.state.more } : undefined}
+                others={boardWide && !personLogin ? boardOthersShown : undefined}
+                more={!personLogin && listState.hasNext && listState.cursor 
                   ? { loading: listState.loading, onMore: () => { if (listState.cursor) setPages((p) => [...p, listState.cursor!]); } }
                   : undefined}
-                results={resultsShown ? {
+                results={resultsShown && !personLogin ? {
+                  person: answered && singleLogin(query, logins) ? { login: singleLogin(query, logins)!, onView: () => setPersonLogin(singleLogin(query, logins)) } : undefined,
                   title: answered ? `for “${query.trim()}”, every state` : `in the loaded pull requests — press ⏎ to search them all`,
                   why: (p) => matchedAs(p, personIn(query, logins)),
                   rows: visiblePrs,
@@ -4959,7 +4996,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                    copy of this switch and render a second chip for it, so
                    pressing the bar's chip changed a state the board never
                    read. One switch now; the board just reads and writes it. */
-                onlyUnread={unreadOnly} onOnlyUnread={setUnreadOnly}
+                onlyUnread={personLogin ? false : unreadOnly} onOnlyUnread={personLogin ? () => {} : setUnreadOnly}
                 /*
                  * Unknown, on purpose: the repository-wide count was a search
                  * over every open pull request, fetched only to print this
@@ -4973,11 +5010,12 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 pinned={(n) => isPinned(repo.nameWithOwner, n)}
                 onOpen={openPr}
                 onTogglePin={(p) => togglePin(repo.nameWithOwner, p.number, p.title)}
-                onShowTable={() => { setInboxOn(false); setMetricsOn(false); setFilter("all"); setQuery(""); setBoardView("all"); }}
+                onShowTable={() => { setPersonLogin(null); setInboxOn(false); setMetricsOn(false); setFilter("all"); setQuery(""); setBoardView("all"); }}
                 busy={busy}
-                loading={boardLoading || (boardWide && listState.loading && boardOthersCards.length === 0)} settling={boardSettling} acting={actingOn} root={root}
-                failed={boardFailed} hidden={boardHidden}
-                onRetry={() => { boardForce.current = true; setBoardTick((n) => n + 1); }}
+                loading={personLogin ? person.state.kind !== "ready" && person.state.kind !== "failed" : boardLoading || (boardWide && listState.loading && boardOthersCards.length === 0)}
+                settling={personLogin ? false : boardSettling} acting={actingOn} root={root}
+                failed={personLogin ? person.state.kind === "failed" : boardFailed} hidden={personLogin ? 0 : boardHidden}
+                onRetry={personLogin ? person.retry : () => { boardForce.current = true; setBoardTick((n) => n + 1); }}
                 /* `repo.key`, because that is what the conversation's "last
                    looked" marks are written under — see the `key` this panel
                    builds for them. A different spelling of the same repository

@@ -334,12 +334,54 @@ export function fileInLane(p: PrSummary, stake: Stake, hint?: FailureHint | null
   return { lane: "others", reason: "Nothing for you to do — here so it is not invisible." };
 }
 
+/**
+ * Another person's point of view.
+ *
+ * The filing above is written from the owner's chair — "Asked of you", "yours to
+ * fix" — and the policy under it is not about the owner at all: a stake is two
+ * booleans, and whose they are is the caller's business. So a person's board
+ * files with the same rules and only the WORDS are re-voiced, here, in one
+ * table. `viewer` absent is the owner's own board, and nothing below touches it.
+ *
+ * The ceiling: the table covers the sentences `fileInLane` writes today, and
+ * pr-lanes.test.ts files every shape of card and fails if a second-person word
+ * is left in one, so a new sentence cannot slip through unvoiced.
+ */
+export function voice(text: string, viewer?: string): string {
+  if (!viewer) return text;
+  const v = viewer;
+  return text
+    .replace(/\bYou asked for changes\b/g, `${v} asked for changes`)
+    .replace(/\bwere re-requested\b/g, "was re-requested")
+    .replace(/\byou've asked them\b/g, `${v} has asked them`)
+    .replace(/\bnot yours\b/g, `not ${v}'s`)
+    .replace(/\byours to fix\b/g, `${v}'s to fix`)
+    .replace(/\bwhenever you like\b/g, `whenever ${v} likes`)
+    .replace(/\band you can do it\b/g, `and ${v} can do it`)
+    .replace(/\bso your review\b/g, `so ${v}'s review`)
+    .replace(/\b(Asked of|including|not|ball is with|for) you\b/g, `$1 ${v}`);
+}
+
+/** The lanes as a person's board words them; the owner's are `LANES` itself. */
+export function lanesFor(viewer?: string): Lane[] {
+  if (!viewer) return LANES;
+  return LANES.map((l) => ({
+    ...l,
+    label: l.id === "review" ? `Needs ${viewer}'s review` : l.label === "Yours, in flight" ? `${viewer}'s, in flight` : l.label,
+    why: l.id === "review" ? `Somebody asked ${viewer} by name, and nobody else can unblock it.`
+      : l.id === "others" ? `Not ${viewer}'s to move. The only useful action is a poke.`
+      : l.id === "flight" ? `Open by ${viewer} and still moving. Nothing is owed by ${viewer} right now.`
+      : l.why,
+  }));
+}
+
 /** The whole board, in lane order, from a list and a way to read your stake. */
-export function board(prs: PrSummary[], stakeOf: (p: PrSummary) => Stake, hintOf?: (p: PrSummary) => FailureHint | null): Map<LaneId, (PrSummary & { filed: Filed })[]> {
+export function board(prs: PrSummary[], stakeOf: (p: PrSummary) => Stake, hintOf?: (p: PrSummary) => FailureHint | null, viewer?: string): Map<LaneId, (PrSummary & { filed: Filed })[]> {
   const out = new Map<LaneId, (PrSummary & { filed: Filed })[]>();
   for (const l of LANES) out.set(l.id, []);
   for (const p of prs) {
-    const filed = fileInLane(p, stakeOf(p), hintOf?.(p));
+    const f = fileInLane(p, stakeOf(p), hintOf?.(p));
+    const filed = viewer ? { ...f, reason: voice(f.reason, viewer) } : f;
     out.get(filed.lane)!.push({ ...p, filed });
   }
   return out;

@@ -1779,6 +1779,10 @@ const realApi = {
   prRollup: (root: string, number: number, force = false) =>
     get<{ ok: boolean; checks?: PrCheckRollup; error?: string }>(
       `/prs/rollup?${new URLSearchParams({ root, number: String(number), ...(force ? { force: "1" } : {}) })}`),
+  /** One person's open pull requests: what they opened and what they were asked to review. */
+  prPerson: (root: string, login: string, force = false) =>
+    get<{ ok: boolean; login?: string; authored?: PrSummary[]; asked?: PrSummary[]; more?: boolean; error?: string }>(
+      `/prs/person?${new URLSearchParams({ root, login, ...(force ? { force: "1" } : {}) })}`),
   /** The second pass (checks, size, review) for up to 24 pull requests in one request. */
   prRowDetails: (root: string, numbers: number[]) =>
     get<{ ok: boolean; rows: Record<number, Partial<PrSummary>>; error?: string }>(
@@ -3156,6 +3160,7 @@ const demoApi: typeof realApi = {
   }),
   prRollup: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
   prRowDetails: (_r: string, _n: number[]) => D({ ok: true, rows: {} }),
+  prPerson: (_r: string, _l: string, _f?: boolean) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; login?: string; authored?: PrSummary[]; asked?: PrSummary[]; more?: boolean; error?: string }),
   prGithubStatus: () => D({ ok: true, problem: null as GithubProblem | null }),
   prUnstickLook: (_r: string, _n: number, _f?: boolean) => D<Look>({ ok: false, error: "not available in the demo" }),
   prBehind: (_r: string, n: number) => D(n === 461

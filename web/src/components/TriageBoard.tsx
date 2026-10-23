@@ -20,7 +20,7 @@ import { FACES_MAX, eventLine, splitTitle, standing } from "../lib/prCardZones.t
 import { ALWAYS_OPEN, foldable, foldedLanes, setFoldedLanes, walkable } from "../lib/boardPrefs.ts";
 import type { PrSummary } from "../../../shared/types.ts";
 import { staleApproval } from "../../../shared/mergeBlockers.ts";
-import { LANES, LANE_CAP, board as fileAll, fileInLane, suggestedAction, ACTION_LABEL, viewKeeps, viewIsWide, type BoardView, type Filed, type LaneId } from "../lib/prLanes.ts";
+import { LANES, lanesFor, LANE_CAP, board as fileAll, fileInLane, suggestedAction, ACTION_LABEL, viewKeeps, viewIsWide, type BoardView, type Filed, type LaneId } from "../lib/prLanes.ts";
 import { isTrunkBranch, type Stack } from "../lib/prStack.ts";
 import { usePrStacks } from "../lib/usePrStacks.ts";
 import { spineSentence, type Facts } from "../lib/prStackWords.ts";
@@ -75,6 +75,13 @@ const QUIET_DAYS = 30;
  * fixtures hand over empty strings — counting those would put a number on
  * screen whose real meaning is "we could not read it".
  */
+/* `humanReview.mine` is read by the server for the person running this app. On
+   another person's board "you were asked" would name the wrong person, so the
+   flag is dropped and the card names the reviewers instead. */
+function notTheOwners(p: PrSummary): PrSummary {
+  return p.humanReview?.mine ? { ...p, humanReview: { ...p.humanReview, mine: false } } : p;
+}
+
 function quietAWhile(iso: string): boolean {
   const t = Date.parse(iso);
   return Number.isFinite(t) && Date.now() - t > QUIET_DAYS * 86_400_000;
@@ -85,7 +92,7 @@ type Card = PrSummary & { filed: Filed };
 export function TriageBoard({
   mine, review, total, hasTaskProvider, pinned,
   onOpen, onTogglePin, onShowTable, onAct, busy, acting, loading, settling, failed, hidden, onRetry, root, repoKey,
-  onlyUnread, onOnlyUnread, unfiltered, view = "all", others, results, more,
+  onlyUnread, onOnlyUnread, unfiltered, view = "all", others, results, more, viewer, person,
 }: {
   /** The `mine` scope, as the panel already has it. */
   mine: PrSummary[];
@@ -195,7 +202,19 @@ export function TriageBoard({
    * idea and rows already seen should stay.
    */
   more?: { loading: boolean; onMore: () => void };
+  /**
+   * Whose board this is, when it is somebody else's: `mine` is what they opened,
+   * `review` is what they were asked to look at, and every sentence is worded
+   * about them (see `voice` in prLanes.ts). Absent is the owner's own board,
+   * which draws exactly as it did before this prop existed.
+   */
+  viewer?: string;
+  /** Only on a person's board: the way back to the owner's, and whether the
+   *  person has more than the first page of either list. */
+  person?: { onBack: () => void; more: boolean };
   results?: {
+    /** Present when the box is about exactly one login: the button that opens that person's board. */
+    person?: { login: string; onView: () => void };
     /** Why a card is in this search, when the box is about a person: "name: author, reviewer". */
     why?: (p: PrSummary) => string | null;
     title: string;
@@ -256,18 +275,19 @@ export function TriageBoard({
     // De-duplicated by number before filing: a pull request that is both yours
     // and asked of you arrives twice, and would otherwise be drawn twice.
     const by = new Map<number, PrSummary>();
-    for (const p of [...mine, ...review, ...(wide ? others ?? [] : [])]) if (!by.has(p.number)) by.set(p.number, trueChecks(p));
+    for (const p of [...mine, ...review, ...(wide ? others ?? [] : [])]) if (!by.has(p.number)) by.set(p.number, viewer ? notTheOwners(trueChecks(p)) : trueChecks(p));
     const m = new Set(mine.map((p) => p.number));
     const r = new Set(review.map((p) => p.number));
     const filed = fileAll([...by.values()], (p) => ({ mine: m.has(p.number), asked: r.has(p.number) }),
-      (p) => (root && p.checks?.failing?.length ? failureHint(p.checks.failing, (job) => summaryOf(failureKey(root, job))) : null));
+      (p) => (root && p.checks?.failing?.length ? failureHint(p.checks.failing, (job) => summaryOf(failureKey(root, job))) : null),
+      viewer);
     if (view === "all") return filed;
     for (const [id, list] of filed) {
       filed.set(id, list.filter((p) => viewKeeps(view, id, { mine: m.has(p.number), asked: r.has(p.number) }, p)));
     }
     return filed;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mine, review, others, wide, trueChecks, bumpRollup, root, failureTick, knownTick, view]);
+  }, [mine, review, others, wide, trueChecks, bumpRollup, root, failureTick, knownTick, view, viewer]);
 
   const cards = useMemo(() => [...lanes.values()].flat(), [lanes]);
   /* Per repository: this board IS one repository's, so the answer is read off
@@ -337,8 +357,8 @@ export function TriageBoard({
    * template all agree with what is in front of you.
    */
   const cols = useMemo(
-    () => LANES.filter((l) => !l.hideWhenEmpty || (lanes.get(l.id)?.length ?? 0) > 0),
-    [lanes],
+    () => lanesFor(viewer).filter((l) => !l.hideWhenEmpty || (lanes.get(l.id)?.length ?? 0) > 0),
+    [lanes, viewer],
   );
   /*
    * What is being looked for in the cards on screen.
@@ -632,7 +652,13 @@ export function TriageBoard({
         <div className="shrink-0 px-4 pt-2 pb-1.5 flex items-center gap-2 text-[12.5px]">
           <b className="text-[15px] font-semibold tabular-nums">{resultsHeading(results.rows.length)}</b>
           <span className="min-w-0 truncate" style={{ color: "var(--text3)" }} title={results.title}>{results.title}</span>
-          <button onClick={results.onBack} className="agx-btn ml-auto shrink-0 rounded px-2 py-1 text-[10.5px]"
+          {results.person && (
+            <button onClick={results.person.onView} className="agx-btn ml-auto shrink-0 rounded px-2 py-1 text-[10.5px]"
+              style={{ color: "var(--primary-ink)", border: EDGE }}>
+              View {results.person.login}'s board
+            </button>
+          )}
+          <button onClick={results.onBack} className={`agx-btn ${results.person ? "" : "ml-auto "}shrink-0 rounded px-2 py-1 text-[10.5px]`}
             style={{ color: "var(--text2)", border: EDGE }}>
             Back to the board
           </button>
@@ -712,7 +738,7 @@ export function TriageBoard({
             <span className="ml-1">{waiting ? "Reading the two lists this board is made of" : "Could not read the two lists this board is made of"}</span>
             <span className="block text-[11px] mt-2" style={{ color: "var(--text3)" }}>
               {waiting
-                ? "Yours, and the ones you were asked to look at. Until both are in, an empty lane means nothing."
+                ? (viewer ? `${viewer}'s, and the ones ${viewer} was asked to look at. Until both are in, an empty lane means nothing.` : "Yours, and the ones you were asked to look at. Until both are in, an empty lane means nothing.")
                 : "Nothing is claimed about them, not even that they are empty."}
             </span>
           </>
@@ -722,11 +748,12 @@ export function TriageBoard({
             <span className="ml-1">
               {wide
                 ? "open pull requests on this page of the repository"
-                : <>{totalKnown ? `of ${total} open pull requests` : "open pull requests"} want something from you</>}
+                : <>{totalKnown ? `of ${total} open pull requests` : "open pull requests"} want something from {viewer ?? "you"}</>}
             </span>
             <span className="block text-[11px] mt-2" style={{ color: "var(--text3)" }}>
               {wide
                 ? "Yours, the ones you were asked to look at, and the repository's, a page at a time."
+                : viewer ? <>{viewer}'s, and the ones {viewer} was asked to look at{person?.more ? " — the first page of each list" : ""}.</>
                 : <>Yours, and the ones you were asked to look at. The board never shows more than that
               {" — "}
               <button onClick={onShowTable} style={{ color: "var(--primary-ink)" }}>
@@ -737,6 +764,12 @@ export function TriageBoard({
           </>
         )}
         </div>
+        {person && (
+          <button onClick={person.onBack} className="agx-btn shrink-0 rounded px-2 py-1 text-[10.5px]"
+            style={{ color: "var(--text2)", border: EDGE }}>
+            Back to my board
+          </button>
+        )}
         {/*
           * Find, in the board, in the space the summary leaves.
           *

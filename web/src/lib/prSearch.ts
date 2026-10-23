@@ -106,6 +106,18 @@ export function personIn(query: string, logins: ReadonlySet<string> = new Set())
 }
 
 /**
+ * The login a box is about when it is about NOTHING else: one token, a person
+ * qualifier or a known login (what the `@` menu writes). "author:ana fix" is a
+ * search that happens to name somebody, not a request for her board.
+ */
+export function singleLogin(query: string, logins: ReadonlySet<string> = new Set()): string | null {
+  const t = query.trim();
+  if (!t || /\s/.test(t)) return null;
+  const person = personIn(t, logins);
+  return person && /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?$/.test(person) ? person : null;
+}
+
+/**
  * Why a card is in a search for a person, in the words the card would use:
  * every way that login appears on it. Null when none shows on the row (GitHub
  * matched a mention in the description, which a row does not carry).

@@ -2981,6 +2981,37 @@ export async function listPrs(rootIn: unknown, filterIn: unknown, stateIn: unkno
   };
 }
 
+/**
+ * One person's open pull requests, from their point of view: what they opened
+ * and what they were asked to review.
+ *
+ * GitHub search cannot OR across qualifiers (`author:x OR review-requested:x`
+ * answers zero, measured), so this is two searches, run side by side and
+ * merged by number. Cold that is four GraphQL requests (rows + checks for each
+ * search); warm it is none, because the answer is remembered per repository and
+ * login. Nothing polls it: the panel asks once per Enter.
+ *
+ * The ceiling: one page (LIST_PAGE) of each search. `more` says a person has
+ * further pull requests than the board holds.
+ */
+const PERSON_TTL_MS = 120_000;
+export type PersonBoard = { ok: boolean; login?: string; authored?: PrSummary[]; asked?: PrSummary[]; more?: boolean; error?: string };
+export async function personBoard(rootIn: unknown, loginIn: unknown, fresh = false): Promise<PersonBoard> {
+  const login = typeof loginIn === "string" ? loginIn.replace(/^@/, "") : "";
+  // GitHub logins: alphanumerics and single hyphens, plus the `[bot]` suffix.
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?$/.test(login)) return { ok: false, error: "not a GitHub login" };
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
+  return ttlRead<PersonBoard>(`person|${repo.key}|${login.toLowerCase()}`, PERSON_TTL_MS, async () => {
+    const [a, r] = await Promise.all([
+      fetchList(repo, "all", "open", undefined, undefined, `author:${login}`),
+      fetchList(repo, "all", "open", undefined, undefined, `reviewer:${login}`),
+    ]);
+    if (!a || !r) return { ok: false, error: "GitHub did not answer" };
+    return { ok: true, login, authored: a.rows, asked: r.rows, more: a.hasNext || r.hasNext };
+  }, { fresh, keep: (v) => v.ok });
+}
+
 // ---------------------------------------------------------------------------
 // bot noise
 // ---------------------------------------------------------------------------
