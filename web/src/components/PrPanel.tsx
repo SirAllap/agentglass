@@ -19,6 +19,7 @@
 //
 // 4. Nothing waits on the network. `gh` costs a second or more per call and the
 //    server has one thread; every read is a cached answer with its age shown.
+import { withoutAuthor, authorLeftOutHint } from "../lib/reviewerPick.ts";
 import { dataInk } from "../lib/contrast.ts";
 import { onScreen } from "../lib/findScope.ts";
 import { PluginPrActions } from "./plugins/PluginPrActions.tsx";
@@ -7991,12 +7992,12 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
       const rest = people.filter((p) => !reviewedLogins.has(p.value.toLowerCase()));
 
       node = <FieldPicker anchor={a} title="Request reviewers" multi loading={loading}
-        hint={teams.length
+        hint={authorLeftOutHint(d.author, d.viewerDidAuthor, mentions?.users ?? []) ?? (teams.length
           ? `Owners first, from ${owns.path ?? "CODEOWNERS"} · ${teams.join(", ")} — ask a team on GitHub`
           : ownedBy.size
           ? `Owners first, from ${owns.path ?? "CODEOWNERS"}`
-          : "Collaborators on this repository"}
-        options={[...reviewedOptions, ...rest]}
+          : "Collaborators on this repository")}
+        options={withoutAuthor([...reviewedOptions, ...rest], d.author)}
         side={(h) => <ClickUpSide d={d} note={note} {...h} />}
         selected={was} onClose={close} onCommit={commit(was, "Reviewers", reviewersPatch, (add, remove) => api.prReviewers(root, d.number, add, remove))} />;
     } else if (picker.field === "assignees") {

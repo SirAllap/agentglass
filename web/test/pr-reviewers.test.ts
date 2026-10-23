@@ -275,7 +275,7 @@ describe("the reviewer picker leads with past reviewers", () => {
 
   test("the rest of the collaborators keep their current order after the reviewed group", () => {
     expect(fn).toContain("const rest = people.filter((p) => !reviewedLogins.has(p.value.toLowerCase()));");
-    expect(fn).toContain("options={[...reviewedOptions, ...rest]}");
+    expect(fn).toContain("options={withoutAuthor([...reviewedOptions, ...rest], d.author)}");
   });
 });
 

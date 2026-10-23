@@ -5,11 +5,14 @@
  * never polled. Each row opens the pull request inside agentglass, as the
  * board's chip does. Linking one writes to Jira, so the box is there only when
  * the write switch is on; with it off the section says why in one sentence.
- * Ceiling: a link is added by pasting its address, there is no picker over the
+ * Addresses written in the card's description and comments are listed too,
+ * marked as mentions. Ceiling: a mention shows its address and number, with no
+ * title or state (those would cost a request per card); a link is added by
+ * pasting its address, there is no picker over the
  * repository's open pull requests.
  */
 import { useEffect, useState } from "react";
-import { readJiraLinks, addJiraLink, type JiraLinks } from "../../lib/jiraLinks.ts";
+import { readJiraLinks, addJiraLink, withMentions, type JiraLink, type JiraLinks, type LinkWhere } from "../../lib/jiraLinks.ts";
 import { api } from "../../lib/api.ts";
 import { openPr, openPrs, prRefFromUrl } from "../../lib/openPrs.ts";
 import { prAddress } from "../../../../shared/taskref.ts";
@@ -19,6 +22,13 @@ import { HIT } from "../../lib/iconSize.ts";
 
 export const LINKING_OFF = "Linking a pull request writes to Jira, which is switched off. Turn on “Changes in Jira” in the Jira settings.";
 
+/** What a row says about where it came from, so a real link is told from an address somebody wrote. */
+export const WHERE_LABEL: Record<LinkWhere, string> = {
+  link: "linked on the card",
+  comment: "mentioned in a comment",
+  description: "mentioned in the description",
+};
+
 export function openLinked(url: string, number: number): void {
   const ref = prRefFromUrl(url);
   if (ref) openPr(ref.repo, ref.number);
@@ -27,7 +37,7 @@ export function openLinked(url: string, number: number): void {
 
 /** The rows and the box, from what is already known; the data and the writing live in `JiraCardPrs`. */
 export function JiraPrsView({ links, error, writable, said, busy, draft, onDraft, onLink, quiet }: {
-  links: JiraLinks["links"] | null; error: string; writable: boolean; said: string; busy: boolean;
+  links: JiraLink[] | null; error: string; writable: boolean; said: string; busy: boolean;
   draft: string; onDraft: (v: string) => void; onLink: () => void;
   /** The pane already says writes are off; this section then draws no box and no second sentence. */
   quiet?: boolean;
@@ -41,6 +51,7 @@ export function JiraPrsView({ links, error, writable, said, busy, draft, onDraft
       {links?.map((l) => (
         <div key={l.url} className="text-[11px]">
           <CardPrDetailRow p={{ number: l.number, title: l.title, state: "", url: l.url }} onOpen={() => openLinked(l.url, l.number)} trailing={null} />
+          {l.where && <div className="text-[10px] pl-1" style={{ color: "var(--text4)" }}>{WHERE_LABEL[l.where]}</div>}
         </div>
       ))}
       {writable ? (
@@ -60,7 +71,11 @@ export function JiraPrsView({ links, error, writable, said, busy, draft, onDraft
   );
 }
 
-export function JiraCardPrs({ query, writable, quiet }: { query: string; writable: boolean; quiet?: boolean }) {
+export function JiraCardPrs({ query, writable, quiet, mentions }: {
+  query: string; writable: boolean; quiet?: boolean;
+  /** Addresses in the card's own words, from the detail read the pane already made (never a request of this section's own). */
+  mentions?: JiraLink[];
+}) {
   const [v, setV] = useState<JiraLinks | null>(null);
   const [draft, setDraft] = useState("");
   const [said, setSaid] = useState("");
@@ -83,5 +98,5 @@ export function JiraCardPrs({ query, writable, quiet }: { query: string; writabl
     setDraft("");
     setSaid(r.linked ? "Linked on the card." : "Already linked on the card.");
   };
-  return <JiraPrsView links={v?.links ?? null} error={v?.error ?? ""} writable={writable} said={said} busy={busy} draft={draft} onDraft={setDraft} onLink={() => void link()} quiet={quiet} />;
+  return <JiraPrsView links={v ? withMentions(v.links, mentions ?? []) : null} error={v?.error ?? ""} writable={writable} said={said} busy={busy} draft={draft} onDraft={setDraft} onLink={() => void link()} quiet={quiet} />;
 }

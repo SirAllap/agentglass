@@ -9,8 +9,11 @@
  * not on every render.
  */
 import { api } from "./api.ts";
+import { prMentions } from "../../../shared/taskref.ts";
 
-export interface JiraLink { url: string; number: number; title: string; resolved: boolean }
+/** Where a row came from: a real remote link, or an address somebody wrote in the card's words. */
+export type LinkWhere = "link" | "comment" | "description";
+export interface JiraLink { url: string; number: number; title: string; resolved: boolean; where?: LinkWhere }
 export type JiraLinks = { links: JiraLink[]; error: string };
 
 const TTL_MS = 60_000;
@@ -40,3 +43,29 @@ export function addJiraLink(key: string, link: JiraLink): JiraLinks {
 }
 
 export function forgetJiraLinks(): void { held.clear(); pending.clear(); }
+
+/** Most rows the tab will hold: a card quoting a whole release's pull requests is not a list of its own. */
+export const MENTION_CAP = 20;
+
+/**
+ * The pull request addresses written in the card's description and comments,
+ * from the detail read the card pane already made: no request of its own.
+ * Comments are read oldest first as they come; the description wins a tie.
+ */
+export function mentionsOfCard(d: { description: string; comments: { text: string }[] }): JiraLink[] {
+  const out = new Map<string, JiraLink>();
+  const take = (text: string, where: LinkWhere) => {
+    for (const a of prMentions(text)) if (!out.has(a.url)) out.set(a.url, { url: a.url, number: a.number, title: `${a.slug}#${a.number}`, resolved: false, where });
+  };
+  take(d.description, "description");
+  for (const c of d.comments) take(c.text, "comment");
+  return [...out.values()];
+}
+
+/** The card's remote links first (they are never dropped), then the mentions that are not already one, up to the cap. */
+export function withMentions(links: JiraLink[], mentions: JiraLink[]): JiraLink[] {
+  const out: JiraLink[] = links.map((l) => ({ ...l, where: "link" }));
+  const have = new Set(out.map((l) => l.url));
+  for (const m of mentions) if (out.length < MENTION_CAP && !have.has(m.url)) { have.add(m.url); out.push(m); }
+  return out;
+}

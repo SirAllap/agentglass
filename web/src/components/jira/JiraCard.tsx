@@ -12,7 +12,7 @@
  * comments). A comment is one write and the card read back, and that answer
  * replaces the thread, so posting costs no second read here.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
 import { avatarSrc } from "../../lib/avatarSrc.ts";
 import { fmtAgo } from "../../lib/format.ts";
@@ -28,6 +28,7 @@ import { Composer, COMPOSER_MIN } from "../tasks/Composer.tsx";
 import { LINE } from "../workspace/Chrome.tsx";
 import { Spinner } from "../Spinner.tsx";
 import { JiraCardPrs } from "./JiraCardPrs.tsx";
+import { mentionsOfCard } from "../../lib/jiraLinks.ts";
 
 /** The box may grow to this share of the pane, then scrolls inside; the ClickUp card's share. */
 const COMPOSER_SHARE = 0.3;
@@ -103,6 +104,8 @@ export function JiraCard({ t, header, writes, onTask }: {
   const [tab, setTab] = useState<Tab>("card");
   useEffect(() => { setTab("card"); }, [key]);
   const subtasks = detail?.subtasks ?? [];
+  // The pull requests the card's own words name, from the read already made.
+  const mentions = useMemo(() => (detail ? mentionsOfCard(detail) : []), [detail]);
   const view: Tab = tab === "subtasks" && !subtasks.length ? "card" : tab;
 
   /* The composer, pinned under the thread. */
@@ -201,7 +204,7 @@ export function JiraCard({ t, header, writes, onTask }: {
       </div>
 
       <div ref={listRef} className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-5 py-3">
-        {view === "github" && <JiraCardPrs query={key} writable={writes} quiet={!writes} />}
+        {view === "github" && <JiraCardPrs query={key} writable={writes} quiet={!writes} mentions={mentions} />}
         {view === "subtasks" && <SubtaskRows rows={subtasks} />}
         {view === "card" && err && <div className="text-[11px] mb-3" role="alert" style={{ color: "var(--error-ink)" }}>{err}</div>}
         {view === "card" && !detail && !err && <Spinner label="Reading the card…" className="" />}

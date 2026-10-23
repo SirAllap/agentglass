@@ -117,6 +117,7 @@ import {
 import { currentRuns, runById, runActivity, startRun, adoptPane, finishRun } from "./runs.ts";
 import { failed } from "./refused.ts";
 import { trackerProjects, setTrackerChoice } from "./trackerProjects.ts";
+import { holdCard as holdJiraCard } from "./jiraprcards.ts";
 import { ISSUE_KEY, connectJira, jiraStatus, setJiraWrites, jiraWriteEnabled, readIssue, findIssue, mine as jiraMine, searchText as jiraSearchText, withStored as withJira } from "./jira.ts";
 import { movesStored as jiraMoves, moveStored as jiraMove, remoteLinksStored as jiraLinks, linkPullRequestStored as jiraLink } from "./jira.ts";
 import {
@@ -6454,7 +6455,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       return json(r.ok ? { ok: true, task: r.data } : { ok: false, error: r.error });
     }
     if (req.method === "GET" && pathname === "/jira/find") {
-      const r = await withJira((c) => findIssue(c, url.searchParams.get("q") ?? ""));
+      /* One fact, two views: what the panel just read is what the list draws. */
+      const r = await withJira(async (c) => {
+        const found = await findIssue(c, url.searchParams.get("q") ?? "");
+        if (found.ok && found.data) holdJiraCard(c.site, found.data.task);
+        return found;
+      });
       return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error });
     }
     if (req.method === "GET" && (pathname === "/jira/mine" || pathname === "/jira/search")) {

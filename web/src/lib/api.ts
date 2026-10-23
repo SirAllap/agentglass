@@ -355,9 +355,9 @@ let TOKEN: string = (() => {
   }
 })();
 
-/** The desktop app's own key, carried on the two requests only a person may
- *  make — letting a held call go, and accepting a device — where the app started
- *  the server. Empty anywhere but the desktop app. See server/src/desk.ts. */
+/** The desktop app's own key, carried on the requests only a person may
+ *  make — letting a held call go, accepting a device, registering the browser
+ *  window, changing the orchestration policy — where the app started the server. Empty anywhere but the desktop app. See server/src/desk.ts. */
 let DESK_KEY: string = (() => {
   try {
     return (window as unknown as { agentglass?: { deskKey?: string | null } }).agentglass?.deskKey || "";
@@ -1537,10 +1537,12 @@ const realApi = {
     get<{ ok: boolean; error?: string; scope: "project" | "global"; root?: string; overrides: string[]; policy: Policy }>(
       `/orchestration${root ? `?root=${encodeURIComponent(root)}` : ""}`),
   /** Store a whole policy (null removes a project's own). Refused for anything
-   *  but the person's own window or a paired device. */
+   *  but the person's own window or a paired device; where the app started the
+   *  server, the window proves it with the desk key, which the machine token
+   *  every agent holds does not replace. */
   orchestrationSave: (policy: Policy | null, root?: string) =>
     post<{ ok: boolean; error?: string; scope?: "project" | "global"; root?: string; overrides?: string[]; policy?: Policy }>(
-      "/orchestration", { root, policy }),
+      "/orchestration", { root, policy }, deskHeader()),
   /** Which rules are on and why a reading did not change one. Read when the
    *  page opens and after a save: the server settles it on events, not on a clock. */
   orchestrationState: () => get<{ ok: boolean; rules: PolicyRuleState[] }>("/orchestration/state"),

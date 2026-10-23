@@ -28,7 +28,8 @@ import { makeViewTempDir } from "./viewtemp.ts";
 import { inScopeReal, staysIn } from "./config.ts";
 import { recipePromptText } from "./reviewPrompts.ts";
 import { boardHolding, knownStatuses } from "./clickupviews.ts";
-import { boardHolding as jiraBoardHolding, knownKeys as jiraKnownKeys } from "./jiraviews.ts";
+import { boardHolding as jiraBoardHolding } from "./jiraviews.ts";
+import { heldCard as heldJiraCard, readJiraRef, resolveJiraCards, siteKeys } from "./jiraprcards.ts";
 import type {
   PrRepoId, PrSummary, PrBranchSummary, PrDetail, PrListResponse, PrActionResult, PrCheck, PrCheckRollup,
   PrCheckState, PrThread, PrReview, PrComment, PrCommit, PrFile, PrChecklistItem, PrMergeState, CiVerdict,
@@ -1539,29 +1540,32 @@ function clickupCardFor(text: string): PrSummary["card"] | undefined {
 }
 
 /**
- * The same line for a Jira card, from the Jira views cache and nothing else.
+ * The same line for a Jira card, from caches alone: the Jira views and the cards
+ * the list resolved ahead of its rows in one search (`resolveJiraCards`).
  *
  * The key is read against the project keys the cached cards carry, so a branch
  * that merely looks like one (`utf-8`, `release/v2-1409`) is never a card, and
  * a key with one digit or a digit in its prefix is read exactly. Lower case
  * counts in a branch name, which a tool cuts from a title, and not in a title,
- * where it is a word. Keys come from cards already read: a site with no cached
- * board answers nothing, never a request.
+ * where it is a word. Keys come from cards already read, or from the site's
+ * project list once a list has asked for it. This function never makes a request.
  */
 function jiraCardFor(branch: string, title: string): PrSummary["card"] | undefined {
   if (!hasCredential("jira")) return undefined;
   const site = redacted("jira")?.site;
   if (!site) return undefined;
-  let held: ReturnType<typeof jiraBoardHolding> = null;
+  let held: { task: ProviderTask; at: number } | null = null;
   try {
-    const keys = jiraKnownKeys(site);
+    const keys = siteKeys(site);
     if (!keys.length) return undefined;
-    const alt = keys.map((k) => k.replace(/[^A-Z0-9_]/g, "")).filter(Boolean).join("|");
-    const read = (text: string, flags: string): string | undefined =>
-      new RegExp(`(?<![A-Za-z0-9_])(${alt})-(\\d+)(?![A-Za-z0-9_]|-\\d)`, flags).exec(text)?.slice(1, 3).join("-").toUpperCase();
-    const ref = read(branch, "i") ?? read(title, "");
+    const ref = readJiraRef(keys, branch, title);
     if (!ref) return undefined;
-    held = jiraBoardHolding(site, ref, { freshMs: 24 * 60 * 60_000 });
+    /* Two caches, one answer: the saved boards and the cards the list asked for
+       ahead of its rows. The freshest read wins, as it does between the card
+       panel and the list. */
+    const a = jiraBoardHolding(site, ref, { freshMs: 24 * 60 * 60_000 });
+    const b = heldJiraCard(site, ref);
+    held = a && b ? (b.at > a.at ? b : a) : (a ?? b);
   } catch { return undefined; }
   if (!held) return undefined;
   return { ...cardLine(held.task, held.at), tracker: "jira" };
@@ -1828,7 +1832,9 @@ async function fetchList(repo: PrRepoId, filter: PrFilter, state: PrState, after
   const early = barePage(search);
   onRows?.(early);
   const checksRes = await checksP;
-  return { ...early, rows: completeRows(early.rows, checksRes?.data?.search?.nodes ?? [], me) };
+  const checkNodes = checksRes?.data?.search?.nodes ?? [];
+  await resolveJiraCards(checkNodes);
+  return { ...early, rows: completeRows(early.rows, checkNodes, me) };
 }
 
 /** The first pass of a page: rows without their checks. */
@@ -2591,6 +2597,7 @@ function readQueues(repo: PrRepoId): Promise<boolean> {
       const key = cacheKey(repo, filter, "open");
       const prior = new Map((listCache.get(key)?.prs ?? []).map((q) => [q.number, q]));
       const early = barePage(search);
+      await resolveJiraCards(search.nodes ?? []);
       storePage(repo, filter, "open", key, prior, { ...early, rows: completeRows(early.rows, search.nodes ?? [], me) }, probeFp(search), readStart);
     }
     probeCache.set(repo.key, {
