@@ -8,6 +8,12 @@ import {
 const begin = (s: Activity, tab = "t1", agent = "orbit-ci") => activityReducer(s, { type: "begin", tab, agent });
 
 describe("agent activity per tab", () => {
+  test("done marks the tab and the agent's next ask clears it", () => {
+    const d = activityReducer(begin({}), { type: "done", tab: "t1" });
+    expect(d.t1!.done).toBe(true);
+    expect(d.t1!.working).toBe(0);
+    expect(begin(d).t1!.done).toBeUndefined();
+  });
   test("working counts asks in flight and returns to quiet", () => {
     let s = begin(begin({}));
     expect(s.t1!.working).toBe(2);
@@ -225,13 +231,20 @@ describe("where the pointer lands", () => {
 describe("the overview's states", () => {
   const a = (working: number, at = 0, paused = false) => ({ agent: "orbit-ci", working, paused, log: at ? [{ verb: "click", target: "", ok: true, at }] : [], op: "click" });
   // "idle" told nobody the agent had finished.
-  test("an act in flight, then Thinking, then Done", () => {
+  test("an act in flight, then Thinking, then Waiting", () => {
     const now = 1_000_000;
     expect(tabState(a(1), undefined, now)?.word).toBe("Clicking");
     expect(tabState(a(0, now - 1000), undefined, now)?.word).toBe("Thinking");
-    expect(tabState(a(0, now - 60_000), undefined, now)?.word).toBe("Done");
-    expect(tabState(undefined, "orbit-ci", now)?.word).toBe("Done");
+    expect(tabState(a(0, now - 60_000), undefined, now)?.word).toBe("Waiting");
     expect(tabState(undefined, undefined, now)).toBeNull();
+  });
+  test("quiet without `done` is Waiting, `done` is Done, a restored name alone is nothing", () => {
+    const now = 1_000_000;
+    expect(tabState(a(0, now - 60_000), undefined, now)?.word).toBe("Waiting");
+    expect(tabState({ ...a(0, now - 60_000), done: true }, undefined, now)?.word).toBe("Done");
+    expect(tabState({ ...a(1), done: true }, undefined, now)?.word).toBe("Clicking");
+    expect(tabState(undefined, "orbit-ci", now)).toBeNull();
+    expect(boxState([tabState(a(0, now - 60_000), undefined, now), tabState({ ...a(0, now - 60_000), done: true }, undefined, now)])?.word).toBe("Waiting");
   });
   test("the busiest tab speaks for its box", () => {
     const now = 1_000_000;

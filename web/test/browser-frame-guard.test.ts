@@ -7,6 +7,8 @@ function page(frames: boolean) {
   const w: Record<string, unknown> = {
     requestAnimationFrame: (cb: (t: number) => void) => { if (frames) setTimeout(() => cb(performance.now()), 4); else pending.push(cb); return pending.length; },
     cancelAnimationFrame: () => {},
+    requestIdleCallback: (cb: () => void) => { if (frames) setTimeout(cb, 4); return 1; },
+    cancelIdleCallback: () => {},
   };
   new Function("window", "requestAnimationFrame", FRAME_GUARD)(w, w.requestAnimationFrame);
   return w;
@@ -23,6 +25,11 @@ describe("the frame guard", () => {
     (w.requestAnimationFrame as (cb: () => void) => void)(() => { ran = true; });
     await sleep(40);
     expect(ran).toBe(true);
+    // Idle periods come after frames: without frames an idle callback never ran either.
+    let idle = false;
+    (w.requestIdleCallback as (cb: () => void) => void)(() => { idle = true; });
+    await sleep(80);
+    expect(idle).toBe(true);
   });
   // Strict sites check their built-ins: a page that gets frames keeps its own function.
   test("a page on screen is never touched", async () => {

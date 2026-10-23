@@ -24,11 +24,12 @@ const ACT_VERBS = new Set([
 const FLASH_VERBS = new Set(["click", "dblclick", "rightclick", "check", "fill", "type", "press", "select"]);
 
 export interface AgentAction { verb: string; target: string; ok: boolean; at: number }
-export interface TabAgent { agent: string; working: number; paused: boolean; log: AgentAction[]; /** The verb of the last ask begun. */ op?: string }
+export interface TabAgent { agent: string; working: number; paused: boolean; log: AgentAction[]; /** The agent said it is finished, until its next ask. */ done?: boolean; /** The verb of the last ask begun. */ op?: string }
 export type Activity = Record<string, TabAgent>;
 
 export type ActivityEvent =
   | { type: "begin"; tab: string; agent: string; op?: string }
+  | { type: "done"; tab: string }
   | { type: "end"; tab: string; action: AgentAction | null }
   | { type: "pause"; tab: string; paused: boolean }
   | { type: "forget"; tab: string };
@@ -38,6 +39,8 @@ export function activityReducer(state: Activity, ev: ActivityEvent): Activity {
   switch (ev.type) {
     case "begin":
       return { ...state, [ev.tab]: { agent: ev.agent, working: (cur?.working ?? 0) + 1, paused: cur?.paused ?? false, log: cur?.log ?? [], op: ev.op } };
+    case "done":
+      return { ...state, [ev.tab]: { agent: cur?.agent ?? "agent", working: 0, paused: cur?.paused ?? false, log: cur?.log ?? [], done: true, op: cur?.op } };
     case "end": {
       if (!cur) return state;
       const log = ev.action ? [...cur.log, ev.action].slice(-LOG_MAX) : cur.log;
@@ -139,7 +142,7 @@ export function presenceLabel(verb: string, name: string, key = ""): string {
   return n ? `${doing} ${clip(n, 32)}` : doing;
 }
 
-export type AgentStateKey = "clicking" | "typing" | "navigating" | "scrolling" | "pointing" | "reading" | "thinking" | "yours" | "done";
+export type AgentStateKey = "clicking" | "typing" | "navigating" | "scrolling" | "pointing" | "reading" | "thinking" | "yours" | "waiting" | "done";
 
 const STATE_OF: Record<string, AgentStateKey> = {
   click: "clicking", dblclick: "clicking", rightclick: "clicking", check: "clicking", drag: "clicking", upload: "clicking",
@@ -149,7 +152,7 @@ const STATE_OF: Record<string, AgentStateKey> = {
 };
 const STATE_WORD: Record<AgentStateKey, string> = {
   clicking: "Clicking", typing: "Typing", navigating: "Navigating", scrolling: "Scrolling",
-  pointing: "Pointing", reading: "Reading", thinking: "Thinking", yours: "You have it", done: "Done",
+  pointing: "Pointing", reading: "Reading", thinking: "Thinking", yours: "You have it", waiting: "Waiting", done: "Done",
 };
 
 /** One word for what the agent is doing now: a state, not an account of it. Anything that is not an act is a read. */
@@ -174,18 +177,20 @@ export function pointerAt(l: { x: number; y: number; w: number; h: number; vw: n
 /**
  * A tab's state for the overview, where there is no clock per tab: an ask in
  * flight is its act's word, a last act inside the presence's linger is
- * Thinking, and a tab an agent held that has gone quiet since is Done, the
- * word the overview said "idle" for, which told nobody the agent had finished.
+ * Thinking, a tab that has gone quiet is Waiting (silence proves nothing), and
+ * Done only when the agent said so with the `done` verb. A name kept from a
+ * restart with no live activity has no state.
  */
 export function tabState(a: TabAgent | undefined, kept: string | undefined, now: number): { key: AgentStateKey; word: string } | null {
   if (a && (a.paused || a.working > 0)) return agentState(a);
   const last = a?.log[a.log.length - 1]?.at ?? 0;
+  if (a?.done) return { key: "done", word: STATE_WORD.done };
   if (a && now - last < PRESENCE_LINGER_MS) return { key: "thinking", word: STATE_WORD.thinking };
-  return a || kept ? { key: "done", word: STATE_WORD.done } : null;
+  return a ? { key: "waiting", word: STATE_WORD.waiting } : null;
 }
 
 /** The busiest of a container's tabs speaks for the box. */
-const RANK: Record<AgentStateKey, number> = { yours: 5, clicking: 4, typing: 4, navigating: 4, scrolling: 4, pointing: 4, reading: 4, thinking: 2, done: 1 };
+const RANK: Record<AgentStateKey, number> = { yours: 5, clicking: 4, typing: 4, navigating: 4, scrolling: 4, pointing: 4, reading: 4, thinking: 3, waiting: 2, done: 1 };
 export function boxState(states: Array<{ key: AgentStateKey; word: string } | null>): { key: AgentStateKey; word: string } | null {
   return states.reduce<{ key: AgentStateKey; word: string } | null>((best, s) => (s && (!best || RANK[s.key] > RANK[best.key]) ? s : best), null);
 }

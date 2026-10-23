@@ -1059,6 +1059,17 @@ export function BrowserView({ active: viewOn, scope }: {
           return;
         }
       }
+      /* `done` is the agent saying it has finished: it marks the tab and is
+         answered even when the person has taken it over. */
+      if (ask.op === "done") {
+        if (owner) {
+          dispatchAct({ type: "done", tab: owner.id });
+          ask.args.atTab = owner.id;
+          ask.args.atProfile = owner.profile ? profileName(profilesRef.current, owner.profile) : "default";
+        }
+        void serveBrowserAsk(null, ask);
+        return;
+      }
       /* The person has this tab: an agent's ask is answered, not served. Same
          early reply as the refusal above, so it is instant rather than a 45 s
          timeout, and it comes before anything reaches the guest. */

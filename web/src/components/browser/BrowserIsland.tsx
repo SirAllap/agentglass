@@ -245,7 +245,7 @@ export function BrowserIsland(p: IslandProps) {
             </div>
             <div className="agx-isl-boxes">
               {groups.map((g) => (
-                <section key={g.profile} className={"agx-isl-box" + (g.held ? " is-agent" : "") + (g.state && g.state.key !== "done" ? " is-live" : "")} style={{ "--n": g.list.length + 1 } as React.CSSProperties}>
+                <section key={g.profile} className={"agx-isl-box" + (g.held ? " is-agent" : "") + (g.state && g.state.key !== "done" && g.state.key !== "waiting" ? " is-live" : "")} style={{ "--n": g.list.length + 1 } as React.CSSProperties}>
                   <header>
                     <span className="agx-isl-bn">{g.name}</span>
                     <span className="agx-isl-bc">{g.list.length} {g.list.length === 1 ? "tab" : "tabs"}{g.held ? ` · agent on ${g.held}` : ""}</span>
@@ -260,8 +260,8 @@ export function BrowserIsland(p: IslandProps) {
                           className={"agx-isl-card" + (t.id === activeId ? " is-on" : "")}
                           onClick={() => hide(t.id)} onKeyDown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); hide(t.id); } }}>
                           {/* The halo and the satellite ride outside the picture, which clips. */}
-                          <div className={"agx-isl-shot" + (st ? " is-" + (st.key === "done" || st.key === "thinking" || st.key === "yours" ? st.key : "active") : "")}>
-                          {st && st.key !== "done" && <><span className="agx-isl-halo" aria-hidden /><span className="agx-isl-sat" aria-hidden /></>}
+                          <div className={"agx-isl-shot" + (st ? " is-" + (st.key === "waiting" ? "done" : st.key === "done" || st.key === "thinking" || st.key === "yours" ? st.key : "active") : "")}>
+                          {st && st.key !== "done" && st.key !== "waiting" && <><span className="agx-isl-halo" aria-hidden /><span className="agx-isl-sat" aria-hidden /></>}
                           {st?.key === "done" && <span className="agx-isl-done" aria-hidden><StateIcon k="done" /></span>}
                           <div className="agx-isl-thumb">
                             {pics[t.id] ? <img src={pics[t.id]} alt="" /> : <span className="agx-isl-mono">{(t.title || host(t.url) || "?").slice(0, 1).toUpperCase()}{t.asleep && <small>Asleep</small>}</span>}

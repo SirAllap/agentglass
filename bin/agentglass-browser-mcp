@@ -1524,6 +1524,15 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
+        "name": "browser_done",
+        "description": (
+            "Say you are finished with your tab, so the person's overview shows Done instead of "
+            "guessing from your silence. Touches no page; allowed in read-only mode and while the "
+            "person has the tab. Your next verb on the tab marks it as working again."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "browser_forward",
         "description": "Go forward again.",
         "inputSchema": {"type": "object", "properties": {}},

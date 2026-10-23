@@ -1219,7 +1219,7 @@ export interface BrowserAskFrame {
        replaces the current view. */
     | "tabs" | "tab" | "newtab" | "closetab"
     | "console" | "network" | "resize" | "zoom" | "html" | "waitfor" | "observe"
-    | "eval" | "select" | "reload" | "cookies" | "frames"
+    | "eval" | "select" | "reload" | "cookies" | "frames" | "done"
     /* §3's actionability half: click's other verbs, and a whole form as one
        call. See browserDrive.ts's `actionable()` for the gate all but
        focus/blur share. */

@@ -637,6 +637,13 @@ describe("§16 — origins, read-only, audit, redaction", () => {
     }
   });
 
+  test("`done` is not an act: read-only mode lets it through, and it takes no arguments", () => {
+    process.env.AGENTGLASS_BROWSER_READONLY = "1";
+    const p = parseAsk("done", { as: "orbit-ci" });
+    expect("error" in p).toBe(false);
+    if (!("error" in p)) expect(p.ask.op).toBe("done");
+  });
+
   test("a refused open still lands on the audit log", () => {
     process.env.AGENTGLASS_BROWSER_ORIGINS = "localhost:8001";
     parseAsk("open", { url: "https://evil.example/" });

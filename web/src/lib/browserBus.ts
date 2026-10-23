@@ -277,6 +277,12 @@ export async function serveBrowserAsk(el: DrivableWebview | null, ask: BrowserAs
     try { await api.browserResult({ client: clientId(), id: ask.id, ...reply }); } catch { /* already timed out */ }
     return (reply as { ok?: boolean }).ok !== false;
   }
+  /* Touches no page: the panel has already marked the tab, this only answers. */
+  if (ask.op === "done") {
+    const reply = { ok: true, value: { done: true, tab: ask.args.atTab ?? null, profile: ask.args.atProfile ?? null } };
+    try { await api.browserResult({ client: clientId(), id: ask.id, ...reply }); } catch { /* already timed out */ }
+    return true;
+  }
   if (ask.op === "health") {
     const reply = await serveHealth(el);
     try { await api.browserResult({ client: clientId(), id: ask.id, ...reply }); } catch { /* already timed out */ }

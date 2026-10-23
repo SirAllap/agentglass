@@ -2219,8 +2219,22 @@ export const FRAME_GUARD = `(() => {
       return id;
     };
     const caf = function cancelAnimationFrame(id) { const j = jobs.get(id); if (!j) return; jobs.delete(id); cancelReal(j.r); clearTimeout(j.t); };
-    for (const [f, n] of [[raf, "requestAnimationFrame"], [caf, "cancelAnimationFrame"]]) f.toString = () => "function " + n + "() { [native code] }";
+    /* Idle periods come after frames, so without frames requestIdleCallback
+       never runs either (measured: an idle callback still pending after a
+       second while timers ran), and GitHub's menus wait on one. It gets the
+       same race: the browser's idle period or a 50 ms timer. */
+    const ric = window.requestIdleCallback && window.requestIdleCallback.bind(window), cic = window.cancelIdleCallback && window.cancelIdleCallback.bind(window);
+    const idle = new Map(); let nextIdle = 1;
+    const ricw = function requestIdleCallback(cb, opts) {
+      const id = nextIdle++;
+      const go = (d) => { const j = idle.get(id); if (!j) return; idle.delete(id); if (cic) cic(j.r); clearTimeout(j.t); cb(d); };
+      idle.set(id, { r: ric ? ric((d) => go(d), opts) : 0, t: setTimeout(() => go({ didTimeout: true, timeRemaining: () => 0 }), 50) });
+      return id;
+    };
+    const cicw = function cancelIdleCallback(id) { const j = idle.get(id); if (!j) return; idle.delete(id); if (cic) cic(j.r); clearTimeout(j.t); };
+    for (const [f, n] of [[raf, "requestAnimationFrame"], [caf, "cancelAnimationFrame"], [ricw, "requestIdleCallback"], [cicw, "cancelIdleCallback"]]) f.toString = () => "function " + n + "() { [native code] }";
     window.requestAnimationFrame = raf; window.cancelAnimationFrame = caf;
+    window.requestIdleCallback = ricw; window.cancelIdleCallback = cicw;
     Object.defineProperty(window, "__agxFrames", { value: () => starved });
   }, 50);
 })()`;

@@ -3147,6 +3147,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 /* A box's state: the act's word while an agent acts, Thinking between, Done once it went quiet. */
 .agx-isl-state { height: 20px; padding: 0 8px 0 6px; border-radius: 10px; color: #c4b5fd; background: rgba(139, 92, 246, .16); animation: agx-state-in 200ms var(--agx-ease); }
 .agx-isl-state.is-thinking { color: rgba(242, 240, 247, .72); background: rgba(255, 255, 255, .07); }
+.agx-isl-state.is-waiting { color: rgba(242, 240, 247, .72); background: rgba(255, 255, 255, .07); }
 .agx-isl-state.is-done { color: #6ee7b7; background: rgba(16, 185, 129, .14); }
 .agx-isl-state.is-yours { color: #fbbf24; background: rgba(251, 191, 36, .14); }
 .agx-isl-state svg { flex: none; overflow: visible; }

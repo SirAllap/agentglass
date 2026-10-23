@@ -34,6 +34,7 @@ THE VERBS, by what you reach for them for:
                                                   # label= text= placeholder= testid=
   wait        wait · waitfor
   navigate    open · back · forward · reload
+  finished    done                                # when the task is over: the overview shows Done
   tabs        tabs · tab · newtab · closetab · profiles
   identity    whoami · cookies · profiles · session · permissions
               whoami                              # BEFORE anything else: am I
@@ -2490,6 +2491,8 @@ def main():
     p.add_argument("--omit-background", dest="omitBackground", action="store_true", help="capture with transparent background instead of opaque")
     sub.add_parser("back", help="go back in this page's history")
     sub.add_parser("forward", help="go forward again")
+    sub.add_parser("done", help="tell the person's overview you are finished with your tab "
+                                "(touches no page; your next verb marks it working again)")
     p = sub.add_parser("text", help="the text of one element, instead of the whole page")
     p.add_argument("selector")
 
