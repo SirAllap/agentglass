@@ -267,7 +267,10 @@ describe("a pinned install updates by installing the listed version again", () =
   });
 
   test("the same commit listed under another hash is an update, and under the same hash is not", () => {
-    const at = (sha256: string): InstallSource => ({ ...market(NEW), plugin: { url: "https://github.com/acme/orbit", ref: NEW, sha256 } });
+    const at = (sha256: string): InstallSource => ({
+      kind: "marketplace", marketplace: { url: "https://example.com/plugins.json", ref: null, resolvedCommit: NEW },
+      plugin: { url: "https://github.com/acme/orbit", ref: NEW, sha256 },
+    });
     expect(offerFor(listed, at("b".repeat(64)))).toBe("update");
     expect(offerFor(listed, at("a".repeat(64)))).toBeNull();
   });
