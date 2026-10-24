@@ -14,6 +14,10 @@ kept in one place.
 
 ## Released
 
+- **v0.24.1** — **Settings follows the design, and the look of the app is yours to set.**
+  - **Settings.** Every page is redrawn to one structure: cards, rows, chips and icons at the same scale, with help behind Details, and Orchestration as compact rows beside a drawn flow.
+  - **Look.** Density, interface font size, reduce motion and a translucent window (desktop; it needs a compositor that supports one) are settings, and previews on Window and Appearance show the app's own screens.
+  - **Agents and notifications.** Who the gate tells, what happens when nobody answers, the rules new chats are denied, a reviewer worker role and a volume for notifications are settings an agent can read and change through the same door the screen uses.
 - **v0.24.0** — **The browser shows its agents at work, the Machine tab becomes a file manager, and Settings is rebuilt on one kit.**
   - **Browser.** The built-in browser draws what an agent is doing on the page, and the island opens into a map of containers and tabs.
   - **Machine tab.** A file manager with Miller columns, multiple selection, an icons view with thumbnails, history and a preview that reads most kinds of file.
