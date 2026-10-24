@@ -44,7 +44,11 @@ the truth.
 What you can read: `agentglass-ui read <panel>` for view, chat, bench, gates and
 the Settings panes (diff, terminal, browser, notifications, prefs, rail, keys,
 tasks, appearance, understudy, hooks, lantern, budgets, recipes, review-prompts,
-saved-replies, tmux, privacy, plugins, log, about). Panes the server holds ask
+saved-replies, tmux, privacy, plugins, log, about) and `machine.disk` (the disk
+scan and the cleanup plan: free space per disk, and every line with its id, size and
+verdict `safe`, `ask`, `inuse` or `explain`; the ids are under `untrusted`) and `usage.accounts`
+(the accounts a plugin says each provider has: ids and which one is active in
+`state`, the labels and plan names under `untrusted`; never a credential). Panes the server holds ask
 their own route and can take a moment. Recipe steps, prompt and reply text, plugin
 settings and credentials are never in an answer; names and titles are under
 `untrusted`.
@@ -80,6 +84,8 @@ happens when you change it:
   all ("Let my agents change settings without asking", which only the person
   turns on, in Settings > Orchestration > Safety and limits) and publishing the
   machine to the tailnet. You may turn that switch off; you cannot turn it on.
+  `secrets.keyring` is an escalation to turn on and personOnly to turn off (it
+  writes every token back into plain files).
   While the person has it on, an escalation applies at once.
 - **secret**: tokens. Never read, never written, by any route.
 
@@ -96,7 +102,8 @@ no CLI and no MCP tool answers a request for the person.
 1. **Look or open.** Opens a panel or reads state. Nothing changes.
 2. **Change a local setting.** `settings set`, and only for the settings
    `settings list` shows (appearance, diff, rail, the terminal, quiet mode and two
-   pull-request notices, the search engine, what Tasks shows, single-key
+   pull-request notices, the search engine, what Tasks shows, the low-disk
+   warning (`prefs.diskWarn`: 0 or `off`, 5, 10, 15, 20), single-key
    shortcuts, and which ClickUp spaces count for statuses:
    `settings set clickup.statusSpaces.counted 901,902` (`settings list` says each
    setting's `type`; one that stores a string takes digits as text, and `display` is
@@ -117,7 +124,7 @@ no CLI and no MCP tool answers a request for the person.
    one through this channel: a level 3 door only **stages**, opening the dialog
    with its fields filled in, and the person's own click is the effect. There is
    no grant that makes it automatic. It is offered only when the owner has allowed level 3. If the task needs one and no door
-   stages it, say so and let the person do it. Six exist: five on a pull request and one in the Finder. `pr.unstick` (level 3) opens the Unstick dialog and
+   stages it, say so and let the person do it. Eight exist: five on a pull request, one in the Finder, one in the machine panel and one in the usage popover. `pr.unstick` (level 3) opens the Unstick dialog and
    nothing else; never offer it on a pull request that is merely slow, the dialog refuses one that is not stuck.
 
    `finder.op.stage` (op `trash`/`move`/`copy`/`rename`/`new-folder`/`duplicate`, path,
@@ -126,6 +133,25 @@ no CLI and no MCP tool answers a request for the person.
    With or the person's own actions, and `delete` and `empty-trash` are refused
    because they cannot be taken back. Say *I prepared the move; it is yours to
    press*, never that you moved anything.
+
+   `diskclean.stage` (`ids`: line ids from `read machine.disk`, one per line, at
+   most 40) opens Machine > Resources with those lines of the cleanup plan marked as
+   yours. Only lines the scan calls `safe` are kept; the panel says which of yours it
+   dropped and why, and the Clean button removes nothing until the person presses
+   it. Running the clean is not a door at all (the route answers 403 to an agent).
+   `agentglass-ui stage diskclean.stage --arg ids="$(printf 'docker:cache\ncache:uv')"`.
+   Say *I picked these lines in the cleanup plan; it is yours to look at and press*,
+   never that you freed or deleted anything.
+
+   `usage.account.stage` (`provider`, `id`: both from `read usage.accounts`; the
+   account must be in the plugin's list and not the active one, or the server answers
+   409 with a sentence) puts the usage popover in front of the person with that
+   account marked as your proposal. Switching is the person's own press of the chip:
+   `POST /usage/accounts/switch` answers 403 to a plugin, a paired device and any agent
+   (the machine token alone included: it takes the desktop window's own desk key), and no
+   door presses it. A provider whose accounts are
+   managed by its plugin (`managedBy`) cannot be switched from here at all. Say *I
+   proposed switching to that account; it is yours to press*, never that you switched.
 
    The other four are the stage doors: `pr.merge.stage` (repo, number, method, optional subject
    and body), `pr.comment.stage` (repo, number, body), `pr.review.stage` (repo,

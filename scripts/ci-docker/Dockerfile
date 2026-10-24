@@ -1,15 +1,17 @@
-# The runner CI uses, as an image: ubuntu-latest is 24.04, whose apt tmux is
-# 3.4 (built with libutempter) and python3 is 3.12. Bun comes in as a build
-# argument that run.sh reads from ci.yml, so the pin lives in one place.
-FROM ubuntu:24.04
+# The runner CI uses, as an image: ubuntu-latest is ubuntu-26.04 (the
+# "Runner Image" group of a run's "Set up job" log says which), whose apt tmux
+# is 3.6, python3 is 3.14 and coreutils is the uutils multicall binary. Bun
+# comes in as a build argument that run.sh reads from ci.yml, so the pin lives
+# in one place.
+FROM ubuntu:26.04
 ARG BUN_VERSION
 # openssh-client and gnupg: the runner image ships ssh-keygen and gpg, and the signed-tag tests
 # in ci-and-update-hardening.test.ts generate their keys with them.
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      tmux python3 git curl unzip ca-certificates bsdutils util-linux procps sqlite3 lsof psmisc sudo iproute2 gh openssh-client gnupg \
+      tmux python3 git curl unzip ca-certificates bsdutils util-linux procps sqlite3 lsof psmisc sudo iproute2 gh openssh-client gnupg xz-utils \
     && rm -rf /var/lib/apt/lists/*
-# The runner image has Node 20 on PATH; electron/build.mjs and mobile run under it.
-RUN curl -fsSL https://nodejs.org/dist/v20.19.5/node-v20.19.5-linux-x64.tar.gz | tar -xz -C /usr/local --strip-components=1
+# The runner image has Node 24 on PATH; electron/build.mjs and mobile run under it.
+RUN curl -fsSL https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1
 # Non-root `runner` with passwordless sudo, like the hosted runner's job user.
 RUN useradd -m -u 1001 -s /bin/bash runner && echo 'runner ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/runner
 RUN su runner -c 'curl -fsSL https://bun.sh/install | bash -s "bun-v'"${BUN_VERSION:?}"'"'

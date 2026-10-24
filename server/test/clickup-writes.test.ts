@@ -14,6 +14,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as CU from "../src/clickup.ts";
+import { __clearSeen } from "../src/cardStamp.ts";
 import * as C from "../src/credentials.ts";
 import * as CV from "../src/clickupviews.ts";
 
@@ -54,7 +55,7 @@ beforeEach(async () => {
     seen = [];
   }
 });
-afterEach(() => { CU.__reset(); });
+afterEach(() => { __clearSeen(); CU.__reset(); });
 afterAll(() => {
   server.stop(true);
   CU.__setClickUpBase(null);

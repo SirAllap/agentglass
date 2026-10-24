@@ -99,6 +99,7 @@ import { fmtScale, DEFAULT_SCALE, SCALES } from "../lib/uiScale.ts";
 import { currentAccent, setAccentPref } from "../lib/accent.ts";
 import { applyTheme } from "../lib/themes.ts";
 import { setting, subscribeSettings } from "../lib/settingsRegistry.ts";
+import { DISK_WARN_CHOICES, DISK_WARN_DEFAULT, diskWarnPct } from "../lib/diskWarnPref.ts";
 import { autoCheckUpdates } from "../lib/updateCheckPref.ts";
 import { LICENCES } from "../lib/licences.gen.ts";
 import { humanBytes } from "../lib/paletteModel.ts";
@@ -120,7 +121,7 @@ import { setSplashOn, splashOn } from "../lib/splashPref.ts";
 import { usageRefreshOn, setUsageRefreshOn } from "../lib/usageRefreshPref.ts";
 import { paceConfig, setPaceConfig, subscribePaceConfig } from "../lib/paceConfig.ts";
 import { PACE_MIN_MINUTES, type PaceConfig } from "../../../shared/pace.ts";
-import { providerUsage, subscribeProviderUsage } from "../lib/usageStore.ts";
+import { longWindowUsed, providerUsage, subscribeProviderUsage } from "../lib/usageStore.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { bindings, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId,
          chordFor, hasCustomChord, rebindChord, clearChord, resetChords, chordsCustomised, chordFromEvent, chordLabel,
@@ -133,11 +134,12 @@ import {
 import { AppearancePane } from "./ThemePicker.tsx";
 import { ShellConsole } from "./ShellConsole.tsx";
 import { CloseButton } from "./CloseButton.tsx";
+import { keyringRow, credentialsWhere, moveFailed, type KeyringState } from "../lib/keyringRow.ts";
 import "./settingsSplit.css";
 import "./orchestration/orchestration.css";
 import "./settingsGroupB.css";
 import { HIT, ICON } from "../lib/iconSize.ts";
-import { AgentIcon, CheckboxIcon, ClockIcon, CrossIcon, EditIcon, IconLabel, LinkIcon, PlusIcon, RefreshIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { AgentIcon, CheckboxIcon, ClockIcon, CrossIcon, DiskIcon, EditIcon, IconLabel, LinkIcon, PlusIcon, RefreshIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { ciOnlyApproved } from "../lib/ciNotifyPref.ts";
 import { reviewGateOn, setReviewGate } from "../lib/reviewGatePref.ts";
 import { AskedAlertLog } from "./AskedAlertLog.tsx";
@@ -918,9 +920,8 @@ function PacePane() {
 /** The busiest long window of the plan, as a percent: what the page header says ("Weekly 82 %"). */
 function useWeeklyUsage(): { used: number } | null {
   const rows = useSyncExternalStore(subscribeProviderUsage, providerUsage, providerUsage);
-  let used = -1;
-  for (const u of rows ?? []) if (u.available) for (const w of u.windows) if (w.minutes >= PACE_MIN_MINUTES && w.usedPercent > used) used = w.usedPercent;
-  return used < 0 ? null : { used };
+  const used = longWindowUsed(rows, PACE_MIN_MINUTES);
+  return used === null ? null : { used };
 }
 
 /**
@@ -2361,11 +2362,11 @@ function LanternSection({ open }: { open: boolean }) {
  */
 /** A switch that is one control among several in its row, so the row itself
  *  cannot be the button (a Select inside a button is invalid HTML). */
-function SwitchButton({ on, onClick, disabled, label }: { on: boolean; onClick: () => void; disabled?: boolean; label: string }) {
+function SwitchButton({ on, onClick, disabled, busy, label }: { on: boolean; onClick: () => void; disabled?: boolean; busy?: boolean; label: string }) {
   return (
     <button role="switch" aria-checked={on} aria-label={label} onClick={onClick} disabled={disabled}
       className="shrink-0 disabled:opacity-50 disabled:cursor-not-allowed">
-      <Switch on={on} />
+      <Switch on={on} busy={busy} />
     </button>
   );
 }
@@ -2419,6 +2420,22 @@ function NotificationsSection(p: {
   };
   const setKind = (k: NotifyKind, on: boolean) => save({ ...prefs, kinds: { ...prefs.kinds, [k]: on } });
   const setChannel = (c: NotifyChannel, on: boolean) => save({ ...prefs, channels: { ...prefs.channels, [c]: on } });
+  /* The phone is a channel the server keeps (`phone.alerts`), not this window's: read when the page opens. */
+  const [phone, setPhone] = useState<boolean | null>(null);
+  useEffect(() => {
+    let live = true;
+    api.phoneAlerts().then((r) => { if (live && r.ok && typeof r.value === "boolean") setPhone(r.value); }).catch(() => { /* the row stays disabled */ });
+    return () => { live = false; };
+  }, []);
+  const flipPhone = () => {
+    if (phone === null) return;
+    const next = !phone;
+    setPhone(next);
+    setErr(null);
+    api.settingsDoorSet("phone.alerts", next)
+      .then((r) => { if (!r.ok) throw new Error(r.error); })
+      .catch(() => { setPhone(!next); setErr("Could not save."); });
+  };
   const alarmPicker = (
     <VoicePicker label="Reminder alarm" voices={ALARM_VOICES} value={p.alarmVoice} onPick={p.onAlarmVoice} />
   );
@@ -2479,6 +2496,10 @@ function NotificationsSection(p: {
             )}
           </Fragment>
         ))}
+        <Toggle on={phone === true} disabled={phone === null} onClick={flipPhone}
+          settingId="phone.alerts" label="Paired phones"
+          hint={phone === null ? "Checking…" : phone ? "A paired phone raises its own notification for the pull requests you watch and your cards." : "Paired phones stay quiet about watches and cards."}
+          detail={{ summary: "What it covers", body: <>Only what you asked for: a rule on a pull request's bell, or a card you follow. One switch for every paired phone; each phone also needs its own permission in Android. Nothing is sent through anyone's server, so a phone hears it while the app is open or kept connected.</> }} />
         {mutedList.length > 0 && (
           <SettingRow agentExempt label="Muted sources"
             hint="A muted source is not collected."
@@ -2795,9 +2816,10 @@ function GhBudget({ open }: { open: boolean }) {
  * says how long history is kept, and — the part these pages usually skip — is
  * specific about the traffic that DOES leave, which is not none.
  *
- * There is nothing to switch off here, and that is the finding rather than an
- * omission: no analytics, no crash reporting, no phone-home. A toggle that
- * turned off something that was never running would be theatre.
+ * There is nothing to switch off about what leaves the machine, and that is the
+ * finding rather than an omission: no analytics, no crash reporting, no
+ * phone-home. A toggle that turned off something that was never running would be
+ * theatre. The one switch here is about where tokens rest on disk (the keyring).
  */
 function PrivacyPane({ open }: { open: boolean }) {
   const [d, setD] = useState<PrivacyFacts | null>(null);
@@ -2805,12 +2827,39 @@ function PrivacyPane({ open }: { open: boolean }) {
   const [asking, setAsking] = useState<number | null>(null);
   const [erasing, setErasing] = useState<"ask" | "busy" | null>(null);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  /* The keyring row: what the server says, the value a move is heading to while it runs, and why a move did not happen. */
+  const [kr, setKr] = useState<KeyringState | null>(null);
+  const [moving, setMoving] = useState<boolean | null>(null);
+  const [krErr, setKrErr] = useState<string | null>(null);
+  const [checkingAgain, setCheckingAgain] = useState(false);
   const load = useCallback(() => { void api.privacy().then(setD).catch(() => setD(null)); }, []);
+  const loadKeyring = useCallback(() => {
+    void api.keyring().then(setKr).catch(() => setKr({ enabled: false, state: "unavailable", why: "the server did not answer", held: 0 }));
+  }, []);
   useEffect(() => {
     if (!open) return;
     load();
+    loadKeyring();
     void api.actions(3).then((r) => setRecent(r.actions)).catch(() => setRecent([]));
-  }, [open, load]);
+  }, [open, load, loadKeyring]);
+
+  /* A move rewrites every stored token, so it is one request that either finishes or leaves both copies where they were. */
+  const toggleKeyring = async () => {
+    if (!kr) return;
+    const to = !kr.enabled;
+    setMoving(to); setKrErr(null);
+    const r = await api.keyringToggle(to).catch(() => null);
+    setMoving(null);
+    if (!r?.ok) setKrErr(moveFailed(r?.error));
+    loadKeyring();
+  };
+  const checkKeyringAgain = async () => {
+    setCheckingAgain(true);
+    await api.keyringRehydrate().catch(() => null);
+    setCheckingAgain(false);
+    loadKeyring();
+  };
+  const kv = keyringRow(kr, moving);
 
   /* The history kept, and how long: a shorter time deletes what is older at the next hourly sweep, so it asks first. */
   const RETENTION_CHOICES = [{ v: 8, label: "8 days" }, { v: 30, label: "30 days" }, { v: 90, label: "90 days" }, { v: 365, label: "1 year" }, { v: 0, label: "Keep everything" }];
@@ -2843,7 +2892,7 @@ function PrivacyPane({ open }: { open: boolean }) {
   const size = (n: number | null | undefined) => (n === null || n === undefined ? "unknown size" : humanBytes(n));
   const timer = IS_DESKTOP && autoCheckUpdates();
   const DL = <IconLabel icon={<DownloadIcon size={ICON.xs} />}>Download</IconLabel>;
-  useReportSaving("privacy", erasing === "busy");
+  useReportSaving("privacy", erasing === "busy" || moving !== null);
 
   return (
     <>
@@ -2884,8 +2933,20 @@ function PrivacyPane({ open }: { open: boolean }) {
           control={<span className="tabular-nums text-[13px]" style={{ color: "var(--text2)" }}>{size(d?.configBytes)}</span>}
           detail={{ summary: "Where it is, and what it holds", body: <>Your preferences, budgets and the boards you have added.<span className="block mt-1 t-mono break-all">{d?.config || "—"}</span></> }} />
         <SettingRow label="Credentials" hint="tokens of the services you connected"
-          control={<span className="text-[13px]" style={{ color: "var(--text2)" }}>file, owner only</span>}
+          control={<span className="text-[13px]" style={{ color: "var(--text2)" }}>{credentialsWhere(kr)}</span>}
           detail={{ summary: "Where it is, and who reads it", body: <>Tokens for the services you connected, mode 0600. The server uses them and never sends them to the browser.<span className="block mt-1 t-mono break-all">{d?.credentials || "—"}</span></> }} />
+        {/* The badge sits before the switch and "Check again" drops under the words, so the switch is in the same place in every state. */}
+        <SettingRow settingId="secrets.keyring" label="Keep secrets in the system keyring" hint={kv.hint}
+          disabled={kr?.state === "unavailable"}
+          status={kv.badge ? <StatusBadge tone="info">{kv.badge}</StatusBadge> : undefined}
+          actions={<SwitchButton on={kv.on} busy={moving !== null} disabled={kv.disabled} label="Keep secrets in the system keyring" onClick={() => void toggleKeyring()} />}
+          detail={{ summary: "What moves, and what does not", body: <>Turning it on moves the tokens of the services you connected and your plugin keys into the Secret Service (GNOME Keyring, KWallet). Each one is read back and compared before the file copy is blanked. If anything fails, both copies stay where they were. Tokens that other tools own (gh, Claude) are not touched. This protects a copied disk or backup, not a program on this computer: an unlocked keyring hands any secret to any program running as you. What keeps plugins away from your secrets is their box. Linux only. While it is locked, a feature that needs a token says so and waits.</> }}
+          below={kv.checkAgain || krErr ? (
+            <span className="flex flex-wrap items-center gap-2">
+              {kv.checkAgain && <Button pending={checkingAgain} onClick={() => void checkKeyringAgain()}>Check again</Button>}
+              {krErr && <span role="alert" className="text-[12px]" style={{ color: "var(--error-ink)" }}>{krErr}</span>}
+            </span>
+          ) : undefined} />
         {d && (
           <SettingRow settingId="privacy.retentionDays" label="Retention"
             hint={d.retentionFromEnv ? "Set by AGENTGLASS_RETENTION_DAYS where the server started: it wins over this page." : "How long history stays before the daily totals replace it."}
@@ -3902,6 +3963,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
   const [h24, setH24] = useState<boolean>(() => clock24());
   const [splash, setSplash] = useState<boolean>(() => splashOn());
   const [usageRefresh, setUsageRefreshState] = useState<boolean>(() => usageRefreshOn());
+  // Re-read when an agent or an undo changes it, not only when this row is pressed.
+  const diskWarn = useSyncExternalStore(subscribeSettings, diskWarnPct, () => DISK_WARN_DEFAULT);
   const [renderer, setRenderer] = useState<RendererPref>(() => rendererPref());
   const [keys, setKeys] = useState(() => bindings());
   const [capturing, setCapturing] = useState<ActionId | null>(null);
@@ -4967,6 +5030,16 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       label="Codex quota"
                       hint="Keep Codex usage current."
                       detail={{ summary: "Details", body: "Runs a minimal Codex turn hourly so the quota reading is not stale. It uses a small amount of the quota it measures. The same switch is under Usage & budgets." }} />
+                  </SettingsCard>
+
+                  <SettingsCard title="Disk space" icon={<DiskIcon size={ICON.sm} />}>
+                    <Choice<string>
+                      settingId="prefs.diskWarn" label="Warn when free disk is under"
+                      hint="A quiet badge on the machine panel; nothing pops up."
+                      detail={{ summary: "Details", body: "Counted per disk, as a share of its size. Off shows no badge. This only decides when to say so: nothing is deleted by it." }}
+                      value={String(diskWarn)} modified={diskWarn !== DISK_WARN_DEFAULT}
+                      onPick={(v) => { setting("prefs.diskWarn").set(Number(v)); }}
+                      options={DISK_WARN_CHOICES.map((n) => ({ v: String(n), label: n === 0 ? "Off" : `${n} %` }))} />
                   </SettingsCard>
 
                   {/* Only steps that are true: the cover is listed when it is

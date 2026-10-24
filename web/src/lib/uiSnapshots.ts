@@ -34,10 +34,11 @@ import {
   type UiSnapshot,
 } from "../../../shared/uiActions.ts";
 import { stripSecrets } from "../../../shared/scrub.ts";
-import type { PendingGate, ViewId } from "../../../shared/types.ts";
+import type { DiskCleanReport, PendingGate, ViewId } from "../../../shared/types.ts";
 import type { NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 import type { Chat } from "./chatStore.ts";
 import type { BenchState, BenchTab } from "./benchStore.ts";
+import type { AccountsOut } from "../../../shared/pluginAccounts.ts";
 import type {
   PrefsData, RailData, KeysData, TasksData, AppearanceData, UnderstudyData, HooksData, LanternData, BudgetsData, RecipeRow,
   ReviewPromptRow, SavedReplyRow, TmuxData, PrivacyData, PluginsData, LogData, AboutData,
@@ -98,6 +99,8 @@ export interface Sources {
     plugins(): Promise<PluginsData>;
     log(): Promise<LogData>;
     about(): Promise<AboutData>;
+    diskClean(): Promise<DiskCleanReport>;
+    usageAccounts(): Promise<AccountsOut[]>;
   };
 }
 
@@ -200,6 +203,7 @@ const MAX_CHATS = 20;
 const MAX_MESSAGES = 3;
 const MAX_TABS = 40;
 const MAX_GATES = 20;
+const MAX_MOUNTS = 12;
 
 const count = <T>(xs: readonly T[], by: (x: T) => string): Record<string, number> => {
   const out: Record<string, number> = {};
@@ -450,6 +454,53 @@ const about = (a: AboutData): UiSnapshot => {
   };
 };
 
+/**
+ * The disk scan and its plan. A line id is the scan's own spelling (`docker:cache`,
+ * `worktree:/home/acme/code/orbit-fix`), which is a path or a name from the disk and
+ * not an id the app minted, so the ids an agent needs to stage a selection are
+ * under `untrusted` beside the words, and `state` holds the numbers. The plan
+ * (safe lines) comes first so a long list cannot cut it off.
+ */
+const diskClean = (r: DiskCleanReport): UiSnapshot => {
+  const safe = head(r.lines.filter((l) => l.verdict === "safe"));
+  const rest = head(r.lines.filter((l) => l.verdict !== "safe"));
+  const mounts = r.mounts.slice(0, MAX_MOUNTS);
+  const at = new Map(mounts.map((m, n) => [m.mount, n] as const));
+  const row = (l: DiskCleanReport["lines"][number]) => ({ id: l.id, kind: l.kind, verdict: l.verdict, label: l.label, why: l.why, bytes: l.bytes, mount: at.get(l.mount) ?? null });
+  return {
+    state: {
+      lines: r.lines.length, safe: safe.count, safeBytes: r.safeBytes, planShown: safe.shown, keptShown: rest.shown, scannedAt: r.at, problems: r.problems.length,
+      byVerdict: count(r.lines, (l) => l.verdict),
+      mounts: mounts.map((m, n) => ({ n, size: m.size, free: m.free, freePct: m.size > 0 ? Math.round((m.free / m.size) * 1000) / 10 : null, safeBytes: m.safeBytes })),
+    },
+    untrusted: {
+      mounts: mounts.map((m, n) => ({ n, mount: m.mount, source: m.source })),
+      plan: safe.rows.map(row),
+      kept: rest.rows.map(row),
+      problems: r.problems,
+    },
+    see: ["/machine/disk-clean"],
+  };
+};
+
+/**
+ * The accounts a plugin says each provider has. The ids are the plugin's own
+ * short spelling (`acme-a`), which an agent needs to stage a proposal; the words
+ * a person reads (label, plan) and the plugin's name came from outside, so they
+ * are under `untrusted`. No credential is in the list and none can be: the
+ * plugin's whole input is refused when a visible string looks like one.
+ */
+const usageAccounts = (rs: readonly AccountsOut[]): UiSnapshot => ({
+  state: {
+    providers: rs.map((p) => ({
+      provider: p.provider, managedByPlugin: p.managedBy ?? null,
+      accounts: p.accounts.map((a) => ({ id: a.id, active: a.active, storage: a.storage, colour: a.colour })),
+    })),
+  },
+  untrusted: { providers: rs.map((p) => ({ provider: p.provider, plugin: p.plugin, accounts: p.accounts.map((a) => ({ id: a.id, label: a.label, plan: a.plan })) })) },
+  see: ["/usage/accounts"],
+});
+
 /** Panel id to provider. Keyed by READ_PANELS_NOW, so a panel with no provider
  *  is a type error here, and a provider for a panel the registry lacks is one too. */
 export const PROVIDERS: { [P in NowPanel]: (src: Sources) => UiSnapshot } = {
@@ -483,6 +534,8 @@ export const LATE_PROVIDERS: { [P in LatePanel]: (src: Sources) => Promise<UiSna
   "settings.plugins": (s) => s.later.plugins().then((d) => finish(plugins(d))),
   "settings.log": (s) => s.later.log().then((d) => finish(log(d))),
   "settings.about": (s) => s.later.about().then((d) => finish(about(d))),
+  "machine.disk": (s) => s.later.diskClean().then((d) => finish(diskClean(d))),
+  "usage.accounts": (s) => s.later.usageAccounts().then((d) => finish(usageAccounts(d))),
 };
 
 const isLate = (p: ReadPanel): p is LatePanel => (READ_PANELS_LATE as readonly string[]).includes(p);

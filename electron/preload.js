@@ -378,6 +378,16 @@ contextBridge.exposeInMainWorld("agentglass", {
   revealPath: (p) => ipcRenderer.invoke("ag:revealPath", p),
   // A notification press: lift the window first, then the renderer routes.
   raiseWindow: () => ipcRenderer.invoke("ag:raiseWindow"),
+  // macOS only: a notification with buttons, raised by the main process. { ok: false } anywhere else.
+  /** @param {{ title: string, body?: string, urgent?: boolean, tag?: string, labels: string[], closeAfterMs?: number }} req */
+  notify: (req) => ipcRenderer.invoke("ag:notify", req),
+  /** @param {(p: { tag: string, index: number }) => void} fn */
+  onNotifyPress: (fn) => {
+    /** @type {IpcListener} */
+    const h = (_e, payload) => fn(payload);
+    ipcRenderer.on("ag:notifyPress", h);
+    return () => ipcRenderer.removeListener("ag:notifyPress", h);
+  },
   powerStatus: () => ipcRenderer.invoke("ag:powerStatus"),
   /** @param {"on" | "agent" | "off"} mode */
   setPowerMode: (mode) => ipcRenderer.invoke("ag:setPowerMode", mode),

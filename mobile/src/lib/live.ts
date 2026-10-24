@@ -67,6 +67,12 @@ export interface LiveHandle {
    *  comes back to the foreground: the user is looking, so waiting out a
    *  thirty-second timer is the wrong answer even if it is nearly up. */
   wake: () => void;
+  /** Reconnect now IF the socket is down; a socket that is open or already
+   *  connecting is left alone. Called by the keep-alive service's own clock and
+   *  network callback while the app is in the background, where this file's
+   *  `setTimeout` does not run (React Native pauses JS timers there), so the
+   *  backoff above cannot be what brings the socket back. */
+  retry: () => void;
   close: () => void;
 }
 
@@ -204,6 +210,11 @@ export function openLive(host: Host, options: LiveOptions): LiveHandle {
       // Cleared BEFORE the close so `down()` above recognises this socket as
       // superseded when its onclose lands after the new one is up.
       if (socket) { const dead = socket; socket = null; try { dead.close(); } catch { /* already gone */ } }
+      connect();
+    },
+    retry: (): void => {
+      if (closed || socket) return;
+      clearTimer();
       connect();
     },
     close: (): void => {

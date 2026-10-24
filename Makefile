@@ -58,12 +58,12 @@ ci: ## Run everything CI runs, in CI's order — plus headcheck, which only a lo
 	$(MAKE) smoke
 	$(MAKE) perf
 
-# The same jobs on the runner's own image: ubuntu 24.04 (tmux 3.4, python 3.12),
+# The same jobs on the runner's own image: ubuntu 26.04 (tmux 3.6, python 3.14),
 # the bun ci.yml pins, Chrome, a non-root user, no TERM, a fresh checkout of the
 # tree as it is now. `make ci` runs on this machine's tmux and python, which is
 # how a commit passed here and failed there; run this before pushing. Needs
 # Docker; logs go to ~/.cache/agentglass-ci-docker/out.
-ci-docker: ## The CI jobs in a container that is the runner (ubuntu 24.04, pinned bun) — names the step that failed
+ci-docker: ## The CI jobs in a container that is the runner (ubuntu 26.04, pinned bun) — names the step that failed
 	scripts/ci-docker/run.sh
 
 # `npm ci` and not `npm install`, because that is what the CI job runs — which

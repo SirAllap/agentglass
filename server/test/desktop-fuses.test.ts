@@ -124,7 +124,7 @@ describe("what gets packed into app.asar", () => {
   it("keeps `files` an allowlist, so nothing rides along implicitly", () => {
     // Measured on `bun run dist:dir` with electron-builder 26 out of a bun
     // workspace: the asar holds main.js, preload.js, guest-guard.js,
-    // identify-header.js, guest-scrollbar.js, browser-menu.js, power.js, icons/**
+    // identify-header.js, guest-scrollbar.js, browser-menu.js, power.js, notify-mac.js, icons/**
     // and package.json, 1.4MB, and no dependency tree. electron-builder says so
     // out loud while packing ("no node modules returned while searching
     // directories") because bun has no CLI for a dependency tree and it falls
@@ -135,7 +135,7 @@ describe("what gets packed into app.asar", () => {
     // Every file main.js `require`s has to be named here — left out of the
     // asar the app does not start, and the lock is what turns that from a
     // discovery at launch into a red test.
-    expect(new Set(pkg.build.files)).toEqual(new Set(["main.js", "guest-guard.js", "identify-header.js", "guest-scrollbar.js", "egress-guard.js", "browser-menu.js", "power.js", "server-probe.js", "preload.js", "icons/**"]));
+    expect(new Set(pkg.build.files)).toEqual(new Set(["main.js", "guest-guard.js", "identify-header.js", "guest-scrollbar.js", "egress-guard.js", "browser-menu.js", "power.js", "notify-mac.js", "server-probe.js", "preload.js", "icons/**"]));
   });
 });
 

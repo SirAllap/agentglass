@@ -18,6 +18,11 @@
  *               publishes the machine.
  *   secret      never read or written by an agent.
  *
+ * A row may also carry `personOnlyWhen`: one direction of an escalation that is
+ * the person's alone. An agent asking for that direction is refused, with the
+ * row's own sentence, whatever agents.changeWithoutAsking says; the other
+ * direction keeps the class.
+ *
  * `narrows(prev, next)` is true for a change that is safer or cheaper than what
  * it replaces (a gate on, a stricter mode, a longer interval, a list that only
  * loses members). Such a change from an agent applies at once even when the
@@ -33,6 +38,8 @@ export interface ClassRow {
   /** Why it is in that class, for `settings list`. */
   why: string;
   narrows?: (prev: unknown, next: unknown) => boolean;
+  /** The direction no agent may ask for, and the sentence it is refused with. */
+  personOnlyWhen?: { when: (prev: unknown, next: unknown) => boolean; why: string };
 }
 
 /** How long an agent's request waits for the person before it counts as declined. */
@@ -102,6 +109,7 @@ export const SETTING_CLASSES: Readonly<Record<string, ClassRow>> = {
   "notifications.volume": LOW("how loud the app's own sounds and banners are, from silent to loud: it never hides an agent blocked on the person and widens nothing an agent may do"),
   "notifications.ciOnlyApproved": LOW(), "notifications.talk": LOW(),
   "browser.searchEngine": LOW(), "tasks.landing": LOW(),
+  "prefs.diskWarn": LOW("only when the machine panel draws its quiet low-disk badge: it never deletes or notifies"),
   "about.autoCheck": LOW("only whether this window asks the release feed on a timer"), "clickup.statusSpaces.counted": LOW(), "jira.statusUnits.counted": LOW(),
   "plugins.sessionReads.repos": { class: "escalation", why: "lets review plugins read the authoring session of more repositories", narrows: subsetNarrows },
 
@@ -119,6 +127,7 @@ export const SETTING_CLASSES: Readonly<Record<string, ClassRow>> = {
   "gate.answerer": { class: "escalation", why: "who is told when the gate holds an action: the orchestrator is woken for each one, which spends tokens", narrows: (prev, next) => prev === "orchestrator" && next === "me" },
   "gate.onTimeout": LOW("a held action is dropped either way; asking again only repeats the notification inside the same wait"),
   "chats.startIn": LOW(),
+  "phone.alerts": LOW("only whether a paired phone raises its own notification for a watch or a card: the rules, and every alert on the desk, stay as they are"),
   "chats.mode": { class: "escalation", why: `the permission mode a new chat starts in: ${MORE_POWER}`, narrows: chatModeNarrows },
   "chats.deny": { class: "escalation", why: `what every chat turn may never do: ${MORE_POWER}`, narrows: supersetNarrows },
   "plugins.master": { class: "escalation", why: `the switch every plugin runs under: on ${MORE_POWER}`, narrows: offNarrows },
@@ -138,6 +147,12 @@ export const SETTING_CLASSES: Readonly<Record<string, ClassRow>> = {
   "privacy.retentionDays": { class: "personOnly", why: "a shorter time deletes history at the next sweep, which nothing brings back: only the person chooses it" },
   "clickup.writes": { class: "escalation", why: "lets agentglass write to ClickUp with the person's account", narrows: offNarrows },
   "clickup.includeSubtasks": { class: "escalation", why: "a heavier read against a rate-limited token the person also works with", narrows: offNarrows },
+  "secrets.keyring": {
+    class: "escalation",
+    why: "moves every stored token between the files and the system keyring; turning it off is the person's alone",
+    // Off writes every token back into plain files, and no click an agent can skip is enough for that.
+    personOnlyWhen: { when: (_prev, next) => next === false, why: "turning the keyring off moves every stored token back into plain files, so only the person does it, from Settings" },
+  },
   "agents.changeWithoutAsking": { class: "personOnly", why: "decides whether agents are asked at all: only the person turns it on, from Settings", narrows: offNarrows },
   "remote.serve": { class: "personOnly", why: "publishing this machine to the tailnet and pairing devices are the person's, on the Remote page" },
   "jira.token": { class: "secret", why: "a credential" },
@@ -168,10 +183,17 @@ export type Verdict = "apply" | "ask" | "refuse";
 export function agentVerdict(id: string, prev: unknown, next: unknown, trusted: boolean): Verdict {
   const row = classOf(id);
   if (!row || row.class === "secret") return "refuse";
+  if (row.personOnlyWhen?.when(prev, next)) return "refuse";
   const narrows = !!row.narrows && row.narrows(prev, next);
   if (row.class === "low" || narrows) return "apply";
   if (row.class === "personOnly") return "refuse";
   return trusted ? "apply" : "ask";
+}
+
+/** The sentence an agent is refused with: the direction's own when the row has one. */
+export function refusalWhy(id: string, prev: unknown, next: unknown): string {
+  const row = classOf(id);
+  return row?.personOnlyWhen?.when(prev, next) ? row.personOnlyWhen.why : row?.why ?? "";
 }
 
 /** A request as the window shows it: every word of it written by the server. */

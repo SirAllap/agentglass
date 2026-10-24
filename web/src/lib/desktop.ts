@@ -24,6 +24,9 @@ type DesktopBridge = {
   autostartEnabled: () => Promise<boolean>;
   setAutostart: (on: boolean) => Promise<boolean>;
   revealPath?: (p: string) => Promise<{ ok: boolean; error?: string }>;
+  /** macOS only, absent on older shells: a notification with buttons, raised by the main process. `{ ok: false }` anywhere else. */
+  notify?: (req: { title: string; body?: string; urgent?: boolean; tag?: string; labels: string[]; closeAfterMs?: number }) => Promise<{ ok: boolean }>;
+  onNotifyPress?: (fn: (p: { tag: string; index: number }) => void) => () => void;
   /** Restore, show and focus the app's window. Absent on shells built before notifications led somewhere. */
   raiseWindow?: () => Promise<boolean>;
   /** Absent on shells built before the machine could stay awake for an agent. */
@@ -209,6 +212,13 @@ function bridge(): DesktopBridge | null {
 
 /** True when running inside the desktop app rather than a browser tab. */
 export const IS_DESKTOP = bridge() !== null;
+/** The shell's notification half, when this shell has one. See macNotify.ts. */
+export function bridgeNotify(): { notify: NonNullable<DesktopBridge["notify"]>; onPress: NonNullable<DesktopBridge["onNotifyPress"]> } | null {
+  const b = bridge();
+  return b?.notify && b.onNotifyPress ? { notify: b.notify, onPress: b.onNotifyPress } : null;
+}
+export const bridgePlatform = (): string | undefined => bridge()?.platform;
+
 
 export const IS_MAC_DESKTOP = IS_DESKTOP && bridge()?.platform === "darwin";
 

@@ -1,8 +1,15 @@
 <div align="center">
 
-<img src="landing/og.png" alt="agentglass — nothing to alt-tab to: terminal, agents, pull requests, diffs, browser, approvals and phone around one window" width="100%" />
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="landing/shots/11-orchestrator-seat-light.webp">
+  <img src="landing/shots/01-orchestrator-seat-runs-the-workers-dark.webp" alt="the orchestrator seat for the Paz Bakery project: one agent reports that two workers are mid-fix and one is blocked on a permission, with the five things waiting on you, the queue, and the policy for this chair" width="100%" />
+</picture>
 
-**The workspace for your coding agents: their terminals, pull requests, diffs, a browser they can drive and every approval they wait on, in one window on your own machine.**
+**The workspace for your coding agents.** Their terminals, pull requests, diffs, a browser they can drive, and every approval they wait on, in one window on your own machine.
+
+Claude Code, Codex, Gemini CLI and OpenCode keep running where they already run, in tmux. agentglass is where you look at them, answer them and keep them honest. One agent can run the others, and you still decide what ships.
+
+No account, no cloud, no telemetry. MIT.
 
 [![Live demo](https://img.shields.io/badge/▶%20Live%20demo-try%20it%20in%20your%20browser-6366f1?style=for-the-badge)](https://sirallap.github.io/agentglass/demo/)
 [![Download](https://img.shields.io/badge/⬇%20Download-Linux%20·%20macOS%20·%20Windows%20·%20Android-238636?style=for-the-badge)](https://github.com/SirAllap/agentglass/releases/latest)
@@ -40,18 +47,50 @@ interface running in your browser on sample data.
   or a merge is never in their reach, and only you can change the policy. They
   run as you, so it is a lock and not a sandbox: [SECURITY.md](SECURITY.md) says
   where it stops.
+
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="landing/shots/11-orchestrator-seat-light.webp">
+    <img src="landing/shots/01-orchestrator-seat-runs-the-workers-dark.webp" alt="the orchestrator seat for the Paz Bakery project: one agent reports that two workers are mid-fix and one is blocked on a permission, with the five things waiting on you, the queue, and the policy for this chair" width="100%" />
+  </picture>
+
 - **Work in real terminals.** Real tmux panes, your tmux windows as tabs, the
   project's `make` targets and `package.json` scripts one click away.
+
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="landing/shots/14-terminal-split-panes-light.webp">
+    <img src="landing/shots/03-terminal-split-panes-status-dots-dark.webp" alt="tmux windows as tabs with a status dot on each, and two split panes: a test run on the left, an agent's plan and progress on the right" width="100%" />
+  </picture>
+
 - **Answer what is waiting on you.** The **Lantern** leads with who needs you:
   red for an agent stopped on a permission gate, amber for one that finished and
   is waiting for you to type. A tool call you chose to gate is held until you
   allow it, from the desk or the phone, and the queue is on disk, so a crash
   cannot silently allow it.
+
+  <picture>
+    <img src="landing/shots/02-lantern-who-needs-you-dark.webp" alt="the Lantern: agent cards grouped by who needs you now, red for stopped on a permission, amber for finished and waiting on your next prompt" width="100%" />
+  </picture>
+
 - **Read what the agent wrote.** A diff viewer with word-level changes grouped
   by agent and worktree, and a source-control panel to stage hunks, commit,
   branch, stash and resolve conflicts.
+
+  <picture>
+    <img src="landing/shots/05-git-insights-contributors-changelog-dark.webp" alt="git insights over the log: top contributors, the files that changed most, and a generated changelog" width="100%" />
+  </picture>
+
+  <picture>
+    <img src="landing/shots/10-git-log-graph-dark.webp" alt="the git log as a branch graph, with tags, branch labels and authors" width="100%" />
+  </picture>
+
 - **Review pull requests to a verdict.** Checks, conversation, files and an
   inline review composer, without opening a browser tab.
+
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="landing/shots/12-pr-board-light.webp">
+    <img src="landing/shots/04-pr-board-green-blocked-review-dark.webp" alt="the pull request board in columns: needs your review, green and ready to land, blocked on checks" width="100%" />
+  </picture>
+
 - **Give your agents a browser.** A browser panel your agents drive from a CLI
   and an MCP server, already signed in to what you are signed in to.
 - **Keep the rest in view.** Docker containers and logs, listening ports and
@@ -62,6 +101,14 @@ interface running in your browser on sample data.
   changes, at a scope you grant.
 - **Add what is missing.** Plugins are separate processes with a scoped,
   revocable token, installed from an in-app catalogue.
+
+<details>
+<summary><b>More git</b></summary>
+
+<img src="landing/shots/08-git-compare-ahead-behind-dark.webp" alt="comparing main with origin/main: commits ahead and behind, and the files that differ" width="100%" />
+
+<img src="landing/shots/09-git-rebase-plan-dark.webp" alt="a rebase plan to read first: one commit per line with a pick selector, and a Start rebase button" width="100%" />
+</details>
 
 Every view, and what each one is for: [**docs/WORKSPACE.md**](docs/WORKSPACE.md).
 
@@ -223,8 +270,10 @@ forwarder. To adapt it to another agent or harness without forking, start at
 ## About
 
 Built by [**@SirAllap**](https://github.com/SirAllap) (David Pallares).
-Original work — not a fork. Not affiliated with or endorsed by Anthropic;
-"Claude" and "Claude Code" are trademarks of Anthropic.
+The upstream project, with its releases and issues, lives at
+[github.com/SirAllap/agentglass](https://github.com/SirAllap/agentglass).
+Not affiliated with or endorsed by Anthropic; "Claude" and "Claude Code" are
+trademarks of Anthropic.
 
 ## License
 

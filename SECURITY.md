@@ -156,6 +156,14 @@ complement, rather than replace, the private reporting path below.
   that launch's key and refuses a claim the same way. With no app attached, a server started by hand is on the
   `Origin` rule. An agent's lane is likewise only as private as
   `as` is honest: an identity is a claim, not a credential.
+- **Cleaning the disk is the desktop app's own click.** The panel's disk cleanup
+  deletes caches, finished session folders, merged checkouts and Docker images,
+  so `POST /machine/disk-clean/run` asks for the desk key like the routes above
+  and has no `Origin` fallback: a server started by hand with no app attached
+  (no key, no claim) refuses a real clean and answers only a dry run. The same
+  ceiling applies: whatever holds the key, or claims the desk first, can clean.
+  An agent can only stage a plan (`diskclean.stage`); nothing runs until the
+  person confirms it in the window.
 - **The desktop app adopts only a server that proves it holds the token.** A
   server already on its port must answer a fresh random challenge on `/health`
   with an HMAC made with the token and bound to that port; until it does, the
@@ -482,6 +490,19 @@ not stop a backup of your home directory, a synced dotfiles repository, or
 anyone who can already read your files as you. If that matters for a given
 token, prefer a provider with a CLI that uses the system keyring, and scope the
 token narrowly wherever the service lets you.
+
+There is one way to close the gap, and it is yours to choose: **Keep secrets in
+the system keyring** (off by default, Linux Secret Service only). Turned on, the
+tokens in `credentials.json` and the keys in `secrets.json` move into the
+keyring, are read back, and only then are replaced in the files by a marker; a
+keyring that is locked or missing is never answered by writing a secret to a
+file, and the features that need one say "keyring locked". It protects a backup
+of those files, not a program running as you while the keyring is unlocked. An
+agent can ask for it, and the request waits for your click; turning it off is
+refused to agents outright. On a server started by hand, with no desk, "you"
+is the `Origin` rule and its limit (see the desk, above): an agent that holds
+the machine token and forges the app's `Origin` turns it off. Asking for the
+CLI there instead would not help, since every agent shell holds that token too.
 
 The token is never sent to the browser. It goes in through one route, is
 verified against the service before anything is written, and after that the app
@@ -821,6 +842,61 @@ when the plugin is disabled or the process exits. What was approved is a
 fingerprint over the scope and a content hash of every file in the folder, so an
 update that changes the manifest, or changes the code behind an unchanged
 manifest, clears the approval and asks again.
+
+**Inside the box, a second wall: Landlock.** Where the kernel has Landlock and
+util-linux's `setpriv` can apply it (2.40 or later), the plugin is started under
+a ruleset that lets it open exactly what the box mounts: the system folders and
+its own read-only, writable only in `/tmp`, its own data folder, the box's
+empty home and its declared `write` paths. A `read` grant that sits inside home
+inherits home's write right in this layer; the read-only bind is what refuses
+that write. The rules hang on the files the box
+shows, not on the mounts, so they hold where the mount namespace would not: a
+descriptor to a folder outside the box that leaks into it reads nothing through
+`/proc/self/fd`, where bwrap alone would read it. Ceiling: files only. It does
+not limit network connections or signals, a socket the box mounts stays
+connectable, and it is never the only wall — a host that cannot
+build the bwrap box does not get this layer instead. A kernel or `setpriv`
+without it (util-linux before 2.40, or one that lacks a right this layer
+uses) changes nothing about the box, and the plugin panel says so in one
+line.
+
+**A plugin on the host's network is kept off the host's abstract sockets.**
+`network: "internet"` shares the host's network namespace, and with it every
+abstract Unix socket (`@name`) a host program listens on. Where the kernel has
+Landlock's abstract-socket scope (Linux 6.12 or later) and `/usr/bin/python3`
+can apply it, the plugin is started under that scope: a `connect()` to a host
+`@name` is refused, and its network, loopback included, works as before.
+`network: "agentglass"` has its own namespace and does not need it. A kernel
+without the scope changes nothing about the box, and the plugin panel says
+which wall is missing.
+
+**A third wall: a seccomp filter.** bwrap installs it (`--seccomp`) before the
+box's first process starts, so it covers the plugin and everything it starts.
+It is a deny list, not an allow list, so a plugin that worked before still
+works: the syscalls a plugin never needs that reach into another process
+(`ptrace`, `process_vm_readv`/`writev`), load or replace kernel code
+(`*_module`, `kexec_*`, `bpf`), are large, often-exploited surfaces
+(`perf_event_open`, `userfaultfd`, `io_uring_*`, the key calls), rebuild the
+box from inside (`mount` and the new mount API, `pivot_root`, `chroot`,
+`unshare`, `setns`, `clone` with a namespace flag), open a file by handle past
+every path check (`open_by_handle_at`), or belong to the machine (`reboot`,
+`swapon`, the clock) return EPERM. `ioctl` with `TIOCSTI` or `TIOCLINUX` is
+refused too, and `personality` may only ask. A process on a foreign ABI (i386
+on x86_64, arm32 on aarch64) is killed and an x32 call is refused, the two
+usual ways past a list keyed on syscall numbers. `clone3` gets ENOSYS, so the C
+library falls back to `clone`, whose flags the filter can read. The program is
+built by the server (`server/src/seccomp.ts`), x86_64 and aarch64 only, and
+checked against a real box at startup. No table for the architecture, or a
+bwrap that rejects the filter, leaves the box with the other walls, and the
+plugin panel says which wall is missing and why.
+
+What each wall stops, and what none of them does: the **box** decides what
+exists (which folders are mounted, which network namespace); **Landlock** decides
+what may be opened among what exists, and holds when a descriptor leaks in;
+**seccomp** decides which kernel calls may be made at all. None of them limits
+what a plugin does with what it was granted: a plugin with `network:
+"internet"` can send anything it can read to anywhere on the internet, and a
+plugin with a `write` grant can change what is under it.
 
 **A plugin token is its own kind of caller and can never answer a permission
 gate**, whatever scope it declares or was granted. `POST /gate/decide` asks for
@@ -1330,7 +1406,7 @@ value; only an unset variable is the default. What each level means:
   through the `appearance.theme` setting so it leaves the undo chip as well. It reaches only the
   settings the window's registry exposes (Appearance, Diff, Rail, Terminal,
   quiet mode and two pull-request notices, the search engine, what Tasks shows,
-  single-key shortcuts), through the same setter the Settings row calls, and
+  the low-disk warning, single-key shortcuts), through the same setter the Settings row calls, and
   never a secret, a token, a remote-access, plugin-trust, gate or consent
   setting. A name that smells of one of those is level 3 or not exposed, and a
   test fails the build otherwise. It is limited to 30 changes a minute per
@@ -1342,11 +1418,18 @@ value; only an unset variable is the default. What each level means:
   agent prepare something and never perform it, with one exception outside
   `/control`: the Jira card door's `step`, `link`, `edit`, `comment`, `comment-edit`, `comment-delete`, `move`, `subtask`, `relate`, `unrelate`, `weblink`, `unweblink`, `worklog`, `worklog-edit`, `worklog-delete`, `watch`, `vote`, `rank`, `attach` and `unattach`, which perform at level 3
   when the Jira write switch is also on (see "Jira, and the agent door to a
-  card"). Six doors ship, five on one pull
-  request and one in the Finder: `pr.merge.stage` (method, commit subject and body), `pr.comment.stage`
+  card"). Eight doors ship, five on one pull
+  request, one in the Finder, one in the machine panel and one in the usage popover: `pr.merge.stage` (method, commit subject and body), `pr.comment.stage`
   (the text), `pr.review.stage` (verdict and text), `card.move.stage` (the new
   status of the card the pull request carries) and `pr.unstick` (opens the Unstick
-  dialog and does not run it) and `finder.op.stage` (one reversible file operation
+  dialog and does not run it), `diskclean.stage` (lines of the machine panel's disk
+  cleanup plan, marked for the person to look at: it removes nothing, the panel keeps
+  only the lines the scan calls safe, and `POST /machine/disk-clean/run` answers 403 to
+  a plugin, to any agent and to the machine token), `usage.account.stage` (one account of a provider
+  proposed in the usage popover: the server checks it against the list the provider's plugin keeps, and
+  `POST /usage/accounts/switch` answers 403 to a plugin, a paired device, a seat, an understudy and any
+  request without the desktop app's own desk key, so on a hand-started server nobody has claimed it
+  answers 403 to everyone, and the switch is only the person's press) and `finder.op.stage` (one reversible file operation
   on one path: trash, move, copy, rename, new folder or duplicate, with the
   destination or name it needs; `delete` and `empty-trash` cannot be spelled, so
   they are refused, and a name with a `/` is refused too). The Finder opens on the

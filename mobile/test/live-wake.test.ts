@@ -147,3 +147,35 @@ describe("waking the live socket", () => {
     expect(FakeSocket.made).toHaveLength(1);
   });
 });
+
+describe("retry()", () => {
+  // The service's clock and network callback call this while the app is in the
+  // background, where the backoff timer below it never runs. Broken on purpose:
+  // dropping the `socket` guard reopens a second socket on top of a live one.
+  test("opens a new socket when the last one dropped", () => {
+    const { handle } = start();
+    FakeSocket.made[0]!.accept();
+    FakeSocket.made[0]!.dropByPeer();
+    handle.retry();
+    expect(FakeSocket.made.length).toBe(2);
+    handle.close();
+  });
+
+  test("leaves an open or connecting socket alone", () => {
+    const { handle } = start();
+    handle.retry();
+    expect(FakeSocket.made.length).toBe(1);
+    FakeSocket.made[0]!.accept();
+    handle.retry();
+    expect(FakeSocket.made.length).toBe(1);
+    handle.close();
+  });
+
+  test("does nothing after close", () => {
+    const { handle } = start();
+    FakeSocket.made[0]!.dropByPeer();
+    handle.close();
+    handle.retry();
+    expect(FakeSocket.made.length).toBe(1);
+  });
+});

@@ -19,7 +19,8 @@ import { useDeskTheme, usePaletteTick } from "../src/state/use-palette.ts";
 import { UsageProvider } from "../src/state/use-usage.ts";
 import { C, T, currentLook } from "../src/theme.ts";
 import { watchAlertTaps } from "../src/notifications/notify.ts";
-import { alertHost, alertRoute } from "../src/notifications/target.ts";
+import { alertHost, alertRoute, type AlertRoute } from "../src/notifications/target.ts";
+import { answerWatch } from "../src/notifications/watchRuntime.ts";
 
 void SplashScreen.preventAutoHideAsync();
 
@@ -54,19 +55,28 @@ function Gate(): React.ReactNode {
     if (!ready || !host) return;
     return watchAlertTaps(async (data) => {
       let to = alertRoute(data);
+      // False once the tap fell back: the alert on the computer is answered only by opening what it was about.
+      // A watch alert that only reaches the list (no usable checkout) did not open what it was about either.
+      let landed = to?.pathname !== "/prs" || (data as { summary?: unknown } | null)?.summary === true;
       const hostId = alertHost(data);
       if (hostId) {
         // The computer the alert is about, before the pane on it: a pane id is
         // only a name on one tmux server. One that is gone or removed has no
         // pane to open on any other computer, so the tap lands on the terminal
         // without it; and a switch that fails does the same.
+        // A pull request or card is looked up on that computer, so without it the
+        // tap lands on the pull-request list, which is where it can be found.
+        const gone: AlertRoute = to?.pathname === "/terminal" ? { pathname: "/terminal" } : { pathname: "/prs" };
         const there = tap.current.hosts.some((h) => h.id === hostId && !h.revoked);
-        if (!there) to = { pathname: "/terminal" };
+        if (!there) { to = gone; landed = false; }
         else if (hostId !== host.id) {
-          try { await tap.current.switchTo(hostId); } catch { to = { pathname: "/terminal" }; }
+          try { await tap.current.switchTo(hostId); } catch { to = gone; landed = false; }
         }
       }
       if (to) router.navigate(to);
+      // The alert on the computer is answered by this tap; a phone with read-only access is told no and shrugs.
+      const answered = tap.current.hosts.find((h) => h.id === (hostId ?? host.id) && !h.revoked);
+      if (answered && landed) void answerWatch(answered, data);
     });
   }, [ready, host, router]);
 

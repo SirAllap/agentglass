@@ -235,13 +235,14 @@ function suite(flavor: FakeFlavor) {
         }
       });
 
-      test("THE TRAP: a second write guarded by the stamp the person saw is refused after the move", async () => {
+      test("THE TRAP: a second write guarded by the stamp the person saw still lands, because the move only changed the status", async () => {
         // What a client that sequenced the two writes itself would do, with one stamp.
+        // The stamp moved with the first write; the field the second one sets did not.
         const seen = upd("ORBIT-1042");
         expect((await J.moveStored("ORBIT-1042", "22", seen)).ok).toBe(true);
         const second = await J.setAssigneeStored("ORBIT-1042", null, seen);
-        expect(second).toMatchObject({ ok: false, conflict: true });
-        expect(fake.state.issues["ORBIT-1042"]!.assignee).toBe("acc-0001");
+        expect(second.ok).toBe(true);
+        expect(fake.state.issues["ORBIT-1042"]!.assignee).toBeNull();
         // The hand-off's own second precondition is the assignee, so the same two steps land.
         fake.reset();
         fake.requests.length = 0;

@@ -173,6 +173,16 @@ describe("claimPaceAlerts: one decision for every client", () => {
     expect(claim.claimPaceAlerts(rows(95, RESET + 7 * 86_400_000), 90, RESET + 86_400_000)).toHaveLength(1);
   });
 
+  step("a login that is not the active one never claims the provider's alert", () => {
+    usageOn();
+    rmSync(claim.paceAlertedPath(), { force: true });
+    claim.__resetPaceAlerted();
+    // Same provider and window label as the active login's row, so the same key.
+    const other = { ...rows(96)[0], account: { label: "Work B", plan: "max", active: false } };
+    expect(claim.claimPaceAlerts([other], 90, now)).toEqual([]);
+    expect(claim.claimPaceAlerts([{ ...other, account: { ...other.account, active: true } }], 90, now)).toHaveLength(1);
+  });
+
   step("coerceAlertAt keeps to the range", () => {
     expect([claim.coerceAlertAt(80), claim.coerceAlertAt(10), claim.coerceAlertAt("x"), claim.coerceAlertAt(90.5)]).toEqual([80, 90, 90, 90]);
   });

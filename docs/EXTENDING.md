@@ -299,10 +299,18 @@ owner's (it does not say how to move it).
 The levels: 1 looks or opens (kinds `open`, `read`), 2 changes a local setting
 (kind `change`) and 3 **stages** (kind `stage`): a level 3 entry opens a dialog
 with its fields filled in and never calls a route that writes, so the person's
-click is the effect. Five ship that take a pull request or a file (`pr.merge.stage`,
-`pr.comment.stage`, `pr.review.stage`, `card.move.stage`, and `finder.op.stage`, a
+click is the effect. Seven ship that take a pull request, a file, the disk plan or an account (`pr.merge.stage`,
+`pr.comment.stage`, `pr.review.stage`, `card.move.stage`, `finder.op.stage`, a
 Finder confirmation for one reversible file operation: the irreversible `delete`
-and `empty-trash` are not in its `op` enum and stay with the person's own hands):
+and `empty-trash` are not in its `op` enum and stay with the person's own hands,
+and `diskclean.stage`, which marks lines of the machine panel's disk cleanup plan
+for the person to look at: its `ids` are the scan's line ids, one per line, the
+panel keeps only the ones the scan calls `safe`, and the run is the person's press
+of the panel's button, a route that answers 403 to an agent, and `usage.account.stage`,
+which marks one account of a provider in the usage popover as the agent's proposal: the
+server checks the provider and the id against the plugin's list first (409 for an unknown
+or already active one), and the switch is the person's press of the chip, a route that
+answers 403 to a plugin, a paired device and an agent):
 each opens the screen's own dialog filled in, marked as written by the caller, with its
 confirm held back for a second (`agentglass-ui stage <id> --arg k=v`, or the
 `ui_pr_merge_stage`-style MCP tools). Text arguments are the `text` spec:
@@ -371,7 +379,7 @@ and so does `settings.set`, so a value is checked and stored exactly as a click
 would (the def wraps the pref module's own setter). Exposed:
 Appearance (mode, palette, accent, density, interface font size, a translucent window — the desktop app's only, and refused in a browser tab with the reason — and reduce motion), Diff, Rail (which drawer a view sits in, and whether Chat, Lantern and Tasks wear a count), Terminal, four Notifications
 settings (quiet mode, the volume — quiet, normal or loud — checks only when approved, conversation), the browser's
-search engine, Tasks (where it opens, which sources show) and the single-key
+search engine, Tasks (where it opens, which sources show), the low-disk warning (`prefs.diskWarn`: 0 or `off`, 5, 10, 15 or 20 percent free) and the single-key
 shortcuts (`keys.binding.<action>`; a key another action holds is refused in the
 module's words). Any other id answers "not exposed", and some are meant to: the
 notification kinds, channels, voices and "silence all" (they decide whether an
@@ -467,7 +475,9 @@ curl -sS http://localhost:4000/control \
 # one panel: view, chat, bench, gates, and the Settings panes: diff, terminal,
 # browser, notifications, prefs, rail, keys, tasks, appearance, understudy (held
 # by the window) and hooks, lantern, budgets, recipes, review-prompts,
-# saved-replies, tmux, privacy, plugins, log, about (held by the server)
+# saved-replies, tmux, privacy, plugins, log, about (held by the server),
+# machine.disk (the disk scan and cleanup plan, from GET /machine/disk-clean) and
+# usage.accounts (the accounts a plugin says each provider has, from GET /usage/accounts)
 curl -sS http://localhost:4000/control \
   -H "Authorization: Bearer $AGENTGLASS_TOKEN" -H 'content-type: application/json' \
   -d '{"cmd":"ui","do":"ui.read","args":{"panel":"chat"}}'

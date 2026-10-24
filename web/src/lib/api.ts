@@ -3,12 +3,13 @@ import { forgetShared, sharedRead } from "./sharedRead.ts";
 import type { UiAction, Field, NoteReply, NoteStatus, PluginPanel, PluginPrNotes, PrNotesSummary } from "./pluginTypes.ts";
 import type { ImportedPlace } from "./desktop.ts";
 import type { Policy } from "../../../shared/orchestration.ts";
+import type { AccountsOut } from "../../../shared/pluginAccounts.ts";
 import type { SettingRequestView } from "../../../shared/settingClass.ts";
 import { DEFAULT_LAUNCH_DENY, type LaunchMode, type LaunchPermissions } from "../../../shared/launchModes.ts";
 import type { PinnedPlace, PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/types.ts";
 import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, BrowsePage, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, ServeResult, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, EnginesReport, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, OrphanReport, OrphanStopResult, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, VolumeList, NetworkList, RemoteStep, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, PluginUpdateReport, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest, FsBody, FsAnswer, FsJob, FsTrashRow, FsProps, OpenWithList, FinderAction, FinderActionList, MediaFacts } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, BrowsePage, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, ServeResult, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, EnginesReport, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, OrphanReport, OrphanStopResult, DiskCleanReport, DiskCleanRunResult, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, VolumeList, NetworkList, RemoteStep, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, PluginUpdateReport, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest, FsBody, FsAnswer, FsJob, FsTrashRow, FsProps, OpenWithList, FinderAction, FinderActionList, MediaFacts } from "../../../shared/types.ts";
 import type { JiraUnits } from "../../../shared/jiraStatusUnits.ts";
 import type { WorkSend } from "./jiraWorklog.ts";
 import type { CardEdit, CardFact, ProvidersResponse, JiraBlockOutcome, JiraConnectResult, JiraHandoffRule, JiraMoves, JiraPerson, JiraSettings, JiraStep, JiraStepChoice, JiraStepKey, JiraStepPr, JiraSteps, JiraStepsRead, JiraStatus, JiraViews, JiraViewRead, JiraBoardAreas, JiraBoardContext, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, CardDev, CardWebLink, CardEvent, TrackerChoice } from "../../../shared/providers.ts";
@@ -156,6 +157,8 @@ export type RunActivityResult = { ok: boolean; run?: Run; legs: LegActivity[]; e
 
 import { DEPS, type DepsResponse } from "../../../shared/deps.ts";
 import * as demo from "./demo.ts";
+import { latchStage } from "./stageIntent.ts";
+import type { KeyringState } from "./keyringRow.ts";
 
 export const IS_DEMO = demo.IS_DEMO;
 
@@ -1016,6 +1019,9 @@ const realApi = {
     withToken(`${SERVER}/export?format=${fmt}${kind === "daily" ? "&kind=daily" : ""}`),
   skillsExportUrl: (fmt: "md" | "csv" | "json" = "md") => withToken(`${SERVER}/skills/export?format=${fmt}`),
   providerUsage: () => get<ProviderUsage[]>(`/usage/providers`),
+  usageAccounts: () => get<{ ok: boolean; providers: AccountsOut[] }>(`/usage/accounts`),
+  accountSwitch: (provider: string, id: string) => post<{ ok: boolean; plugin?: string; error?: string }>(`/usage/accounts/switch`, { provider, id }),
+  accountManage: (provider: string) => post<{ ok: boolean; plugin?: string; error?: string }>(`/usage/accounts/manage`, { provider }),
   refreshCodexUsage: () => post<{ ok: boolean; error?: string }>(`/usage/codex/refresh`, {}),
   claimPaceAlerts: (alertAt: number) => post<{ ok: boolean; fired: number }>(`/usage/pace-claim`, { alertAt }),
   // usage_since: the epoch the call counts are known from. They are bounded
@@ -1472,6 +1478,10 @@ const realApi = {
   privacy: () => get<PrivacyFacts>("/privacy"),
   privacyRetention: (days: number) => post<{ ok: boolean; error?: string; retentionDays?: number }>("/privacy/retention", { days }),
   privacyErase: () => post<{ ok: boolean; error?: string; events?: number; sessions?: number; days?: number }>("/privacy/erase-history", { confirm: "erase" }),
+  /** The keyring option: on or off, usable now or not, and how many secrets it holds. Counts, never values. */
+  keyring: () => get<KeyringState>("/keyring"),
+  keyringToggle: (enabled: boolean) => post<{ ok: boolean; error?: string }>("/keyring/toggle", { enabled }),
+  keyringRehydrate: () => post<{ ok: boolean; error?: string } & Partial<KeyringState>>("/keyring/rehydrate", {}),
   /** What is left of GitHub's hourly budget — this app is made of `gh` calls. */
   ghRateLimit: () => get<{ ok: boolean; error?: string; budgets?: { id: string; label: string; limit: number; remaining: number; reset: number }[] }>("/prs/rate-limit"),
   providerConnect: (id: string, token: string) =>
@@ -2080,6 +2090,13 @@ const realApi = {
   machineOrphans: (fresh = false) => get<OrphanReport>(`/machine/orphans${fresh ? "?fresh=1" : ""}`),
   /** Stop ONE left-behind pid; refused unless it is flagged right now. */
   machineOrphanStop: (pid: number) => post<OrphanStopResult>("/machine/orphans/stop", { pid }),
+  /** What is eating the disk and what a clean would remove (the `safe` lines).
+   *  Read-only and cached; `fresh` may rescan, never faster than every 30 s. */
+  machineDiskClean: (fresh = false) => get<DiskCleanReport>(`/machine/disk-clean${fresh ? "?fresh=1" : ""}`),
+  /** Remove the safe lines named by `ids` (all of them when omitted). Only a
+   *  person's click is accepted; `dryRun` lists what would go and removes nothing.
+   *  `at` is the scan on screen: the server refuses if that is not the plan it would clean. */
+  machineDiskCleanRun: (ids?: string[], at?: number, dryRun = false) => post<DiskCleanRunResult>("/machine/disk-clean/run", { ids, dryRun, at }),
   /** Where a checkout's disk went, one level down. A `du` walk: seconds on a
    *  repository with a node_modules, so it is asked for, never polled. */
   machineSpace: (root: string) => get<SpaceReport>(`/machine/space?root=${encodeURIComponent(root)}`),
@@ -2510,6 +2527,8 @@ const realApi = {
   /** The person's own change to one of them, from Settings: applied at once. */
   settingsDoorSet: (id: string, value: unknown) =>
     post<{ ok: boolean; applied?: boolean; error?: string }>("/settings/door", { id, value }),
+  /** Whether paired phones raise their own notification for a watch or a card (`phone.alerts`). */
+  phoneAlerts: () => get<{ ok: boolean; value?: unknown }>("/settings/door?id=phone.alerts"),
   /** What agents asked to change and wait for the person on (the settings door). */
   settingsRequests: () => get<{ ok: boolean; requests: SettingRequestView[] }>("/settings/requests"),
   /** The person's answer: carries the desk key (deskGate.ts), as only the person may give it. */
@@ -2674,6 +2693,9 @@ const demoApi: typeof realApi = {
     kind === "daily" ? demo.dailyExportUri(fmt) : demo.eventsExportUri(fmt),
   skillsExportUrl: () => demo.skillsExportUri(),
   providerUsage: () => D(demo.providerUsage() as ProviderUsage[]),
+  usageAccounts: () => D({ ok: true, providers: [] as AccountsOut[] }),
+  accountSwitch: () => D({ ok: false, error: "the demo has no accounts" }),
+  accountManage: () => D({ ok: false, error: "the demo has no accounts" }),
   refreshCodexUsage: () => D({ ok: false, error: "not available in the demo" }),
   claimPaceAlerts: (_alertAt: number) => D({ ok: true, fired: 0 }),
   skills: () => D(demo.skills()),
@@ -3076,6 +3098,7 @@ const demoApi: typeof realApi = {
   launchPermissionsSave: (_p: unknown) => D({ ok: false, error: "not available in the demo", mode: "default" as LaunchMode, deny: [...DEFAULT_LAUNCH_DENY] }),
   settingsRequests: () => D({ ok: true, requests: [] as SettingRequestView[] }),
   settingsRequestDecide: (_id: string, _approve: boolean) => D({ ok: false, error: "not available in the demo" }),
+  phoneAlerts: () => D({ ok: true, value: true }),
   agentsChangeWithoutAsking: () => D({ ok: true, trusted: false }),
   agentsChangeWithoutAskingSave: (_on: boolean) => D({ ok: false, error: "not available in the demo" }),
   prPrompts: () => D({ ok: true, recipes: [] as ReviewRecipe[] }),
@@ -3106,6 +3129,9 @@ const demoApi: typeof realApi = {
   privacy: () => D<PrivacyFacts>({ db: "", dbBytes: null, config: "", configBytes: null, credentials: "", retentionDays: 0, retentionFromEnv: false, pairedDevices: 0, clickup: false, jira: false }),
   privacyRetention: (_d: number) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string; retentionDays?: number }),
   privacyErase: () => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string; events?: number; sessions?: number; days?: number }),
+  keyring: () => D<KeyringState>({ enabled: false, state: "unavailable", why: "not available in the demo", held: 0 }),
+  keyringToggle: (_e: boolean) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string }),
+  keyringRehydrate: () => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string } & Partial<KeyringState>),
   providerConnect: (_i: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
   providerDisconnect: (_i: string, _o?: { forgetBoards?: boolean }) => D({ ok: false, error: "not available in the demo" }),
   providerWorkspaces: (_i: string) => D({ ok: false, error: "not available in the demo" }),
@@ -3357,6 +3383,14 @@ const demoApi: typeof realApi = {
   machineResources: (l = 40) => D(demo.machineResources(l)),
   machineOrphans: (_f = false) => D(demo.machineOrphans()),
   machineOrphanStop: (_p: number) => D({ ok: false, error: "not available in the demo" }),
+  machineDiskClean: (_f = false) => {
+    const v = demo.diskDemoVariant();
+    if (v === "fail") return Promise.reject(new Error("the scan took too long and was stopped"));
+    // An agent preparing a clean: the plan arrives, then the staged request, as it would from the door.
+    if (v === "staged") queueMicrotask(() => latchStage({ id: "diskclean.stage", a: { ids: "docker:cache\nworktree:/home/dev/code/orbit-ORBIT-1042\ndocker:volumes-used" } }, "orbit-helper"));
+    return D(demo.machineDiskClean(v));
+  },
+  machineDiskCleanRun: (ids?: string[], _at?: number, _d = false) => D(demo.machineDiskCleanRun(ids)),
   machineSpace: (r: string) => D(demo.machineSpace(r)),
   machineKill: (_p: number) => D({ ok: false, error: "not available in the demo" }),
   machineLocks: () => D({ locks: [], scanned: 0, error: "not available in the demo" }),

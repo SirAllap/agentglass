@@ -89,6 +89,8 @@ And it mirrors **your machine's own notifications**: agentglass runs fullscreen,
 
 Two switches in **Settings ▸ Notifications**, because there are two sources. **From your desktop** is off by default (it reads every notification you receive) with a second choice of how much to show — who it was from, or the whole message — and a *quiet* mode that keeps collecting without interrupting. **From agentglass** is on, and turning it off silences chats finishing and branches falling behind while still letting anything *held waiting on you* speak. Neither switch stops the bell collecting: silence is about interruption, never about the record.
 
+On macOS the desktop app raises an alert that leads somewhere from its main process, so it can carry action buttons (the same in-app destinations a click goes to, never a deed like re-running a check); Linux and Windows keep the plain click. The macOS buttons are **not yet verified on a real Mac**.
+
 ### 🔬 File changes — a syntax-highlighted diff & review workspace &nbsp;`d`
 
 Every Edit/Write the fleet makes, gathered into one reviewable, chaptered list. **Shiki** syntax highlighting composed with a **word-level** intra-line diff, split or unified, ligatures and a per-diff theme, "reviewed" check-offs — plus one-click **✨ Explain** (a local-Claude walkthrough of the whole change set) and **⎇ Commit…** to turn a review straight into a commit.
@@ -542,6 +544,20 @@ arrives with **no title**, and a buzz with no explanation teaches people to
 ignore the next one. Only an agent that is stopped and waiting on a person gets
 Android's `max`. Making everything urgent is how a channel ends up switched off
 in the system settings, where the app cannot see it and cannot ask again.
+
+**Pull requests and cards.** The watches you arm on a pull request's bell and the
+comments and mentions on your cards reach the phone too, by the same socket and with the same
+rules: the phone adds none. One notification per pull request or card, and a
+later one replaces it. What the phone missed while it was offline comes back as
+**one** summary when the connection returns, not one buzz each. Tapping one opens
+that pull request or card in the app. Closing the alert on the desk takes the
+phone's down; tapping it on the phone closes the desk's (a phone paired with full
+access). **Settings ▸ Notifications ▸ Alerts on this phone** is the switch, and the
+desk shows the same switch as *Paired phones*; it is one setting on the computer
+(`phone.alerts`, readable and changeable through the settings door), so it covers
+every phone paired to it. It has the same ceiling as the rest: nothing arrives
+while the app is killed and **Stay connected in the background** is off, and a
+card that moves in that time is not replayed.
 
 > **There was a Web Push route here, and it is gone.** It woke a locked phone
 > through Google's or Mozilla's push service, with Allow and Deny drawn on the

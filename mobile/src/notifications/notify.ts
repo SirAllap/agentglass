@@ -55,6 +55,7 @@ import Constants, { ExecutionEnvironment } from "expo-constants";
 import { Platform } from "react-native";
 import type { AlertNote } from "../../../shared/types.ts";
 import { importanceOf } from "./policy.ts";
+import type { WatchRaise } from "./watchAlerts.ts";
 
 /**
  * Expo Go, where this module is not merely missing but deliberately removed.
@@ -71,6 +72,10 @@ const IN_EXPO_GO = Constants.executionEnvironment === ExecutionEnvironment.Store
  *  everything — which is a better outcome than uninstalling. */
 const CHANNEL = "agentglass-alerts";
 
+/** Pull requests and cards the person asked to hear about. Its own channel so
+ *  that silencing them in Android's settings does not silence a blocked agent. */
+const WATCH_CHANNEL = "agentglass-watch";
+
 type NotificationsModule = typeof import("expo-notifications");
 
 /** `undefined` until asked, `null` once asked and found missing. The three
@@ -82,6 +87,8 @@ let module: NotificationsModule | null | undefined;
 function load(): NotificationsModule | null {
   if (module !== undefined) return module;
   if (IN_EXPO_GO && Platform.OS === "android") { module = null; return module; }
+  // A suite never reaches the OS: a module is injected (`__setNotificationsModule`) or there is none.
+  if (process.env.NODE_ENV === "test") { module = null; return module; }
   try {
     // `require` rather than a dynamic import: this has to answer synchronously
     // for the callers below, and the failure to catch is a THROW at load time,
@@ -236,6 +243,7 @@ export function __setNotificationsModule(m: NotificationsModule | null | undefin
   setUp = null;
   lastFailure = null;
   warned.clear();
+  warnedWatch.clear();
 }
 
 /** Whether this build can raise one at all. False in Expo Go on Android, where
@@ -282,6 +290,12 @@ function ensureSetUp(): Promise<Delivery> {
           // Distinct from the default so a held gate is recognisable from a
           // pocket without reading it.
           vibrationPattern: [0, 220, 120, 220],
+          lightColor: "#a78bfa",
+        });
+        await N.setNotificationChannelAsync(WATCH_CHANNEL, {
+          name: "Pull requests and cards",
+          description: "A check you were waiting on, a comment, a card of yours that moved.",
+          importance: N.AndroidImportance.DEFAULT,
           lightColor: "#a78bfa",
         });
       }
@@ -419,4 +433,82 @@ export async function raise(alert: AlertNote, hostId?: string): Promise<Delivery
     return record(no("threw", String((e as Error)?.message ?? e)));
   }
   return record({ ok: true });
+}
+
+/**
+ * Show a pull request's or a card's alert.
+ *
+ * `tag` is the notification's identifier, so a later one for the same pull
+ * request or card REPLACES the first instead of stacking under it, and `hostId`
+ * keeps two computers' pull request #12 apart. A failure heading goes to the
+ * louder priority; on Android 8+ the channel decides the rest.
+ */
+export async function raiseWatch(r: WatchRaise, hostId: string, decorate: (title: string) => string = (t) => t): Promise<Delivery> {
+  const can = await watchAlertsDeliverable();
+  if (!can.ok) return noteWatch(can);
+  const N = load();
+  if (!N) return noteWatch(no("unsupported"));
+  try {
+    await N.scheduleNotificationAsync({
+      identifier: `${hostId}:${r.tag}`,
+      content: {
+        title: decorate(r.title),
+        body: r.body,
+        data: { ...r.data, hostId },
+        priority: r.urgent ? N.AndroidNotificationPriority.HIGH : N.AndroidNotificationPriority.DEFAULT,
+      },
+      trigger: Platform.OS === "android" ? { channelId: WATCH_CHANNEL } : null,
+    });
+  } catch (e) {
+    return noteWatch(no("threw", String((e as Error)?.message ?? e)));
+  }
+  return { ok: true };
+}
+
+/**
+ * Whether a watch alert can be drawn: the permission and ITS channel. Not the
+ * agent alerts channel, so silencing one in Android's settings leaves the other
+ * alone, and neither reads the other's failure in Settings.
+ */
+export async function watchAlertsDeliverable(): Promise<Delivery> {
+  const N = load();
+  if (!N) return no("unsupported");
+  const prepared = await ensureSetUp();
+  if (!prepared.ok) return prepared;
+  try {
+    const perm = await N.getPermissionsAsync();
+    if (!perm.granted) return no(perm.canAskAgain === false ? "denied" : "not-asked");
+    if (Platform.OS === "android") {
+      const channel = await N.getNotificationChannelAsync(WATCH_CHANNEL);
+      if (channel && channel.importance === N.AndroidImportance.NONE) return no("channel-off");
+    }
+  } catch (e) {
+    return no("setup-failed", String((e as Error)?.message ?? e));
+  }
+  return { ok: true };
+}
+
+/** A watch alert that could not be drawn is said once per reason, like `record`, but is not the agent card's failure. */
+const warnedWatch = new Set<Blocked>();
+function noteWatch(d: Delivery): Delivery {
+  if (!d.ok && d.why !== SILENT && !warnedWatch.has(d.why)) {
+    warnedWatch.add(d.why);
+    console.warn(`[alerts] watch alert not raised on this phone: ${d.why}${d.detail ? ` — ${d.detail}` : ""}`);
+  }
+  return d;
+}
+
+/** Take down whatever is drawn for a server alert of that computer, because it was closed on another device. */
+export async function dismissWatch(alertId: string, hostId: string): Promise<void> {
+  const N = load();
+  if (!N) return;
+  try {
+    const shown = await N.getPresentedNotificationsAsync();
+    for (const n of shown) {
+      const data = n.request.content.data as { alertId?: unknown; hostId?: unknown } | null;
+      if (data?.alertId === alertId && data.hostId === hostId) await N.dismissNotificationAsync(n.request.identifier);
+    }
+  } catch {
+    // Left in the shade: the person swipes it, which costs one gesture.
+  }
 }

@@ -23,7 +23,7 @@
  *     the window shows a chip saying so (AgentChangeChip). The undo goes through
  *     the same def, so it is also validated.
  *
- * Migrated: Appearance, Diff, Rail, Terminal, the part of Notifications that cannot
+ * Migrated: Appearance, Diff, Rail, Terminal, the disk warning on Window & startup, the part of Notifications that cannot
  * hide a stopped agent, the search engine, what Tasks shows, and the single-key
  * shortcuts. A row an agent must not reach is marked `agentNever="why"` and a
  * whole page left out is in NOT_EXPOSED_ON_PURPOSE with its reason (remote,
@@ -71,6 +71,7 @@ import {
 } from "./themes.ts";
 import { VIEWS, RAIL_PLACES, SHIPPED_RAIL, loadRail, railIds, moveView, saveRail, type RailPlace } from "../components/workspace/views.ts";
 import { autoCheckUpdates, setAutoCheckUpdates, AUTO_CHECK_DEFAULT } from "./updateCheckPref.ts";
+import { diskWarnPct, setDiskWarnPct, DISK_WARN_CHOICES, DISK_WARN_DEFAULT } from "./diskWarnPref.ts";
 import { classOf, NEEDS_APPROVAL, SETTING_CLASSES, type SettingClass } from "../../../shared/settingClass.ts";
 
 export type SettingValue = string | number | boolean;
@@ -560,9 +561,23 @@ const about: SettingDef[] = [
   }),
 ];
 
+// ── window & startup: only the disk warning ─────────────────────────────────
+
+const prefs: SettingDef[] = [
+  defineSetting({
+    id: "prefs.diskWarn", page: "prefs", section: "Disk space", label: "Warn when free disk is under", level: 2, default: DISK_WARN_DEFAULT,
+    read: () => diskWarnPct(),
+    // "off" is the word the row shows for 0, so it is also a word that is taken back.
+    validate: accepting((raw) => { const n = raw === "off" ? 0 : raw; return typeof n === "number" && DISK_WARN_CHOICES.includes(n) ? n : null; },
+      `one of ${DISK_WARN_CHOICES.map((n) => (n === 0 ? "0 (off)" : n)).join(", ")}`),
+    write: (v) => setDiskWarnPct(v as number),
+    display: (v) => (v === 0 ? "off" : `under ${v} % free`),
+  }),
+];
+
 // ── the registry ────────────────────────────────────────────────────────────
 
-export const SETTING_DEFS: readonly SettingDef[] = [...appearance, ...diff, ...terminal, ...terminalMore, ...rail, ...railBadges, ...notifications, ...browser, ...tasks, ...clickup, ...jira, ...reviewSessions, ...keys, ...about];
+export const SETTING_DEFS: readonly SettingDef[] = [...appearance, ...diff, ...terminal, ...terminalMore, ...rail, ...railBadges, ...notifications, ...browser, ...tasks, ...clickup, ...jira, ...reviewSessions, ...keys, ...prefs, ...about];
 
 /** Which panes (and, for Terminal, which groups) have been migrated. A row in
  *  here must carry a settingId or be marked agentExempt; a guard test reads this. */
@@ -581,6 +596,8 @@ export const MIGRATED: Readonly<Record<string, "all" | readonly string[]>> = {
   /* Only the section about what a review plugin may be given; the prompt editor is not a setting yet. */
   "review-prompts": ["Review sessions"],
   keys: "all",
+  /* Only the disk warning: the display size, fullscreen and start at login are the window's own. */
+  prefs: ["Disk space"],
   /* Only the build's own section: the credits and the log digest are not settings. */
   about: ["This build"],
 };
@@ -588,7 +605,7 @@ export const MIGRATED: Readonly<Record<string, "all" | readonly string[]>> = {
 /** The panes with nothing migrated yet. Every Settings page is on exactly one of
  *  the two lists, so adding a page forces a decision rather than a silent gap. */
 export const NOT_YET_MIGRATED = [
-  "prefs", "hooks", "lantern", "understudy", "budgets", "recipes",
+  "hooks", "lantern", "understudy", "budgets", "recipes",
   "saved-replies", "connections", "engines", "orchestration", "remote", "plugins", "tmux", "privacy", "log", "onboarding",
 ] as const;
 

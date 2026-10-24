@@ -302,7 +302,7 @@ into the manifest hash, so a plugin that starts drawing somewhere new is asked
 about again. A manifest with no `contributes` hashes exactly as it did before
 drawing existed, so upgrading the app clears no approval.
 
-Six places a plugin can appear (and one thing it can ask to read, `reads`, below the table):
+Seven places a plugin can appear (and one thing it can ask to read, `reads`, below the table):
 
 | Contribution | Where it shows | What the plugin sends |
 |---|---|---|
@@ -312,6 +312,7 @@ Six places a plugin can appear (and one thing it can ask to read, `reads`, below
 | `noteActions` | Extra buttons on each finding **of that plugin**, after Reply, Resolve, Dismiss and Copy. At most 4, a label of at most 24 characters | Nothing to draw: a press is the `note-action` event |
 | `prActions` | A button in every pull request's header, in the plugin's own colour, with the rest of its actions under a caret | Nothing to draw: the button's state is read from the plugin's runs on that pull request |
 | `inboxAnnotations` | A small badge on Inbox rows, and a "Sort: <plugin>" choice in the Inbox's toolbar | A badge, a tip and a number per row (below). It cannot hide a row |
+| `accounts` | Chips under a provider's name in the usage popover, one per account, with the active one marked | The list of accounts it keeps for that provider (below). The app never gives it a credential and never asks for one |
 
 `reads` (at most 2 values, today only `"sessions"`) draws nothing: it asks the
 app for a read of the person's work. The approval screen says so in plain words
@@ -332,6 +333,7 @@ plugin cannot draw into another's panel.
 | `POST /plugin/self/options` `{key, options}` | Choices for a `select` it could only find at run time |
 | `POST /plugin/self/settings` `{values}` | Fill in its own declared settings — for a box the person edits that has to arrive with something in it |
 | `POST /plugin/self/inbox/annotations` `{items, replace?}` | Badge and order Inbox rows (`inboxAnnotations`) |
+| `POST /plugin/self/accounts` `{provider, accounts}` | Replace the whole list of accounts for one provider it declared (`accounts`) |
 
 `~/.config/agentglass/plugins.json` (mode 0600) is the whole record: what is
 installed and where it came from, the approval on file, the master switch, the
@@ -387,6 +389,62 @@ after the ones it did. Newest first stays the default until the person picks the
 plugin, and nothing here can remove a row, mark one read or change what it
 says: an annotation for an older version of a row (`updatedAt` is not the row's
 last update) is not shown, and the list has the same rows with or without it.
+
+**Keeping the accounts of a provider** (`"accounts": ["anthropic"]`, up to three of
+`anthropic`, `codex`, `antigravity`) is for a plugin that knows which accounts a
+provider has on this machine and which one is in use. It posts the whole list for a
+provider, and the usage popover shows one chip per account. The declaration is under
+`contributes`, so the manifest hash covers it and adding a provider asks the person
+again, and **one plugin holds each provider**: switching a second one on is refused
+with a sentence naming the first.
+
+```json
+{ "provider": "anthropic",
+  "accounts": [
+    { "id": "acme-a", "label": "Acme A", "plan": "max", "colour": "blue", "active": true, "storage": "keyring" },
+    { "id": "acme-b", "label": "Acme B", "plan": "pro", "colour": "violet", "active": false, "storage": "file" } ] }
+```
+
+At most 8 accounts and at most one `active`; an `id` is 1 to 32 of `a-z`, `0-9`, `-`
+and `_`; a `label` is up to 32 characters and a `plan` up to 24, plain text;
+`colour` is one of the accent words (`neutral`, `blue`, `violet`, `green`, `amber`,
+`rose`, `cyan`, `teal`), never a hex; `storage` is `keyring` or `file` (the chip says
+"stored in a file" for the second). The app marks
+the list of the plugin installed as `swapkin` as managed by it (the account tool switches
+them itself) once it has found Swapkin on the machine, the same check as `deferTo` below:
+the chips are then shown and cannot be pressed. A plugin cannot claim that
+in its body; a `managedBy` it sends is not read. A plugin under another name that steps aside
+for Swapkin sends `"deferTo": "swapkin"` next to `provider`: the app then looks for Swapkin
+itself (`swapkin` on the server's PATH, or its data folder, `$SWAPKIN_DIR` or
+`${XDG_DATA_HOME:-~/.local/share}/swapkin`, existing; nothing in it is read) and only if it
+is there marks the list as managed. Otherwise the field is dropped like any unknown one and the
+chips stay pressable. The check runs when the list arrives, so a Swapkin installed later is
+picked up by the plugin's next post. A list is
+**refused whole**, not trimmed, when a visible string looks like a token, a key or an
+email, or contains an invisible or direction-control character, repeats a label (any
+case), or breaks a cap; a field the app does not know is dropped. One plugin keeps
+the list of a provider: a second one's post is refused. The list is kept in
+memory and goes with the plugin when it stops, so it posts again when it starts.
+`GET /usage/accounts` gives a plugin its own list only, and a paired device the
+labels, plans and active flag, without ids.
+
+When the person presses a chip (or "manage") in the desktop window, the plugin gets
+an event it answers by switching and posting the new list:
+
+| Event | When |
+|---|---|
+| `{type: "account.switch", provider, id}` | The person pressed an account that is in the list and is not the active one |
+| `{type: "account.manage", provider}` | The person asked for the plugin's own page |
+
+What the app never does: read or write a credential, switch an account itself, or
+let anything but the person's press in the desktop window cause a switch.
+`POST /usage/accounts/switch` and `/manage` answer 403 to a plugin token (whatever
+its scope), to a paired device, to a seat or an understudy and to any request that
+does not carry the desk key only the desktop app's own window holds (an `Origin`
+alone is a header any process here can write), so a hand-started server nobody has
+claimed answers 403 to every press. An
+agent reads the list with `ui.read usage.accounts` or the `cockpit_accounts` tool and
+can only stage a proposal (`usage.account.stage`) for the person to look at.
 
 **The vocabulary** ([shared/pluginUi.ts](../shared/pluginUi.ts)) is a closed set
 of nodes the app draws with its own parts:

@@ -1,9 +1,15 @@
 {
   "name": "agentglass",
-  "version": "0.24.1",
+  "version": "0.25.0",
   "private": true,
   "description": "Every AI coding agent on your machine, on one screen — live cost, tokens and tool calls across every provider, and a hold on anything dangerous until you say go. From your desk or your phone.",
   "license": "MIT",
+  "author": "David Pallares (https://github.com/SirAllap)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SirAllap/agentglass.git"
+  },
+  "homepage": "https://sirallap.github.io/agentglass/",
   "type": "module",
   "workspaces": ["server", "web", "electron"],
   "scripts": {

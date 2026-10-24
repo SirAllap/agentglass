@@ -7,6 +7,7 @@ import { useModalDialog } from "../lib/focusTrap.ts";
 import { fmtUsd, fmtTokens, fmtEq, eqTitle, typeColor } from "../lib/format.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { subscribeProviderUsage, providerUsage, usageLoaded, usedTextColor, resetLabel, ageLabel } from "../lib/usageStore.ts";
+import { coreRows } from "../lib/accountStore.ts";
 import { panelState } from "./UsageBox.tsx";
 
 const WINDOW_LABELS: [number, string][] = [
@@ -176,7 +177,7 @@ function BarList({
  * `if (!rows) return null` would render as nothing at all.
  */
 function UsageSection() {
-  const rows = useSyncExternalStore(subscribeProviderUsage, providerUsage, () => null);
+  const rows = coreRows(useSyncExternalStore(subscribeProviderUsage, providerUsage, () => null));
   const loaded = useSyncExternalStore(subscribeProviderUsage, usageLoaded, () => false);
   const state = panelState(loaded, rows);
 

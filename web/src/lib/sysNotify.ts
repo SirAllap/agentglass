@@ -5,6 +5,7 @@ import { alertPayload, watchPayload, type NotifyPayload, type NotifyTarget } fro
 import { raiseWindow } from "./desktop.ts";
 import { openExternal } from "./externalUrl.ts";
 import { gotoOfTarget } from "./notifyRoute.ts";
+import { canRaiseInShell, popupEntries, raiseInShell, type PopupEntry } from "./macNotify.ts";
 import { clickupSetup, type ClickUpSetup } from "./clickupSetup.ts";
 
 /**
@@ -711,17 +712,32 @@ export function fireWatchAlert(f: { seq: number; alertId?: string; payload?: Not
   // asked for — it still closes itself (see popup), never pinned.
   if (windowFocused()) return;
   // The tag folds the same fire in two windows into one popup. A popup that cannot be shown says why to the server's log.
-  popup({ title: payload.title, body: payload.line, urgency: 2, dest, tag: `pr-watch-${f.seq}`,
+  popup({ title: payload.title, body: payload.line, urgency: 2, dest, tag: `pr-watch-${f.seq}`, entries: popupEntries(payload),
     onFail: (why) => { if (f.alertId) void api.askedOsFailed(f.alertId, why).catch(() => {}); } });
 }
 
 /** An agent's alert as a popup: the payload words it (no body that only repeats the title) and its pane is where pressing it lands. */
 function popupOf(a: { title: string; body: string; urgency?: 0 | 1 | 2; pane?: string }) {
   const p = alertPayload(a);
-  popup({ title: p.title, body: p.line, urgency: a.urgency, ...(p.target?.kind === "pane" ? { pane: p.target.pane } : {}) });
+  popup({ title: p.title, body: p.line, urgency: a.urgency, entries: popupEntries(p), ...(p.target?.kind === "pane" ? { pane: p.target.pane } : {}) });
 }
 
-function popup(a: { title: string; body: string; urgency?: 0 | 1 | 2; pane?: string; dest?: NonNullable<SystemNote["goto"]>; tag?: string; onFail?: (why: string) => void }) {
+function popup(a: { title: string; body: string; urgency?: 0 | 1 | 2; pane?: string; dest?: NonNullable<SystemNote["goto"]>; tag?: string; entries?: PopupEntry[]; onFail?: (why: string) => void }) {
+  /*
+   * macOS: the shell raises it, because only its Notification carries buttons.
+   * Every other platform falls through to the Web Notification below in the
+   * same tick, exactly as it was; a shell that declines gets the same call
+   * again, without `entries`.
+   */
+  if (a.entries?.length && canRaiseInShell(a.entries.length)) {
+    const { entries, ...rest } = a;
+    void raiseInShell(
+      { title: a.title, body: a.body, urgent: a.urgency === 2, ...(a.tag ? { tag: a.tag } : {}), closeAfterMs: a.urgency === 2 ? BLOCKING_POPUP_MS : POPUP_MS },
+      entries,
+      (e) => { try { window.focus(); } catch { /* not a window we own */ } goto?.(e.dest); },
+    ).then((took) => { if (!took) popup(rest); });
+    return;
+  }
   try {
     if (typeof Notification === "undefined") { a.onFail?.("no Notification API in this window"); return; }
     if (Notification.permission !== "granted") { a.onFail?.(`notification permission is ${Notification.permission}`); return; }

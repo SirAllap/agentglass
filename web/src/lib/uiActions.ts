@@ -163,6 +163,13 @@ export const UI_HANDLERS: { [Id in UiActionId]: Handler<Id> } = {
   // Finder draws the confirmation. A new folder is made in `path`, so that one
   // opens the folder itself; every other operation is on the thing at `path`.
   "finder.op.stage": (a, c) => { latchStage({ id: "finder.op.stage", a }, c.as); openFinderAt(a.path, a.op === "new-folder" ? "dir" : "file"); },
+  // The machine panel's disk cleanup block draws the staged lines on mount (it
+  // drains the mailbox like the Finder does), so the mailbox is filled first. Only
+  // the person's press of the panel's Clean button removes anything.
+  "diskclean.stage": (a, c) => { latchStage({ id: "diskclean.stage", a }, c.as); c.setMachine("resources"); },
+  // The usage popover draws the confirmation for this one (accountStageOf in
+  // lib/stageIntent.ts); only the person's press of its button switches anything.
+  "usage.account.stage": (a, c) => { latchStage({ id: "usage.account.stage", a }, c.as); },
   // Stage: selects the pull request and opens the dialog. The dialog decides for
   // itself whether it qualifies and runs nothing until the owner confirms.
   "pr.unstick": (a, c) => { latchUnstick({ root: a.root, number: a.number }); c.goView("pr"); },

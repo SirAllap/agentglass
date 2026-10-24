@@ -252,3 +252,36 @@ describe("app/(tabs)/settings.tsx", () => {
     expect(settings).toContain("keepAliveRunning()");
   });
 });
+
+describe("background reconnect", () => {
+  // The service is the only thing with a clock in the background: React Native
+  // pauses JS timers there, so live.ts's backoff does not run.
+  test("the service retries from its own clock, capped, and from a network callback", () => {
+    expect(service).toContain("RETRY_MS");
+    expect(service).toMatch(/300_000\)/);
+    expect(service).toContain("registerDefaultNetworkCallback");
+    expect(service).toContain("unregisterNetworkCallback");
+    expect(manifest).toContain("ACCESS_NETWORK_STATE");
+  });
+
+  test("nothing ticks while the socket is up or the service is off", () => {
+    expect(service).toMatch(/if \(offline\) \{ onRetry/);
+    expect(service).toMatch(/instance\?\.let/);
+  });
+
+  test("the same answer twice does not restart the backoff", () => {
+    expect(service).toMatch(/if \(value == offline\) return\n\s+offline = value/);
+  });
+
+  test("the module relays the retry as an event and exposes setOffline", () => {
+    expect(moduleKt).toContain('Events("reconnect")');
+    expect(moduleKt).toContain('Function("setOffline")');
+  });
+
+  test("host-context reports the socket state and retries on the event", () => {
+    // Broken on purpose: `state === "offline"` flips the flag off on every
+    // "connecting", and the service restarts its backoff at 10s each attempt.
+    expect(hostContext).toContain('setLinkOffline(state !== "open")');
+    expect(hostContext).toMatch(/onKeepAliveReconnect\(\(\) => handle\.retry\(\)\)/);
+  });
+});

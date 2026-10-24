@@ -24,11 +24,17 @@
  * protects. 0600 stops another user on this machine. It does NOT stop a backup
  * of your home directory, which is the honest thing to say out loud — and is
  * said out loud, in SECURITY.md.
+ *
+ * The one exception is the person's own choice: with the system keyring switched
+ * on (keyring.ts) the token is not in this file at all, and `token` holds a mark
+ * that `secretFor` resolves. The file then has nothing to back up.
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, unlinkSync } from "node:fs";
+import { closeSync, existsSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
+import { fsyncDir } from "./fsyncDir.ts";
 import type { ProviderId } from "../../shared/providers.ts";
+import { KEYRING_MARK, credentialId, dropValue, exclusive, keyringEnabled, missingSecretWhy, priorValue, putBack, sealValue, unsealed } from "./keyring.ts";
 
 const CRED_PATH = join(
   process.env.XDG_CONFIG_HOME || join(homedir(), ".config"),
@@ -95,17 +101,29 @@ function load(): Store {
 function save(store: Store): void {
   const p = path();
   mkdirSync(dirname(p), { recursive: true });
-  writeFileSync(p, JSON.stringify(store, null, 2) + "\n", { mode: 0o600 });
-  // Enforced separately: `mode` on write does nothing to a file that already
-  // exists, and a file that already exists is the normal case here.
-  chmodSync(p, 0o600);
+  // Beside the file and renamed over it: a crash half way leaves the old file
+  // whole, where a truncating write left JSON `load` reads as "no credentials".
+  const tmp = `${p}.${process.pid}.tmp`;
+  const fd = openSync(tmp, "w", 0o600);
+  try {
+    // Enforced separately: `mode` on open does nothing to a file that already
+    // exists (a stale temp file can), and the final file must be 0600 whatever it was.
+    fchmodSync(fd, 0o600);
+    writeSync(fd, JSON.stringify(store, null, 2) + "\n");
+    // On disk before the rename: otherwise a power cut can leave the new name
+    // over bytes that never landed, and the token is gone with the old file.
+    fsyncSync(fd);
+  } finally { closeSync(fd); }
+  renameSync(tmp, p);
+  fsyncDir(dirname(p));
   cache = store;
 }
 
 /** The secret, for the server's own outbound call. Never hand the result to
  *  anything that serialises. */
 export function secretFor(id: ProviderId): string | null {
-  return load()[id]?.token ?? null;
+  const t = load()[id]?.token;
+  return t === undefined ? null : unsealed(credentialId(id), t);
 }
 
 /** Everything about a credential EXCEPT the secret — the shape a route may
@@ -117,10 +135,75 @@ export function redacted(id: ProviderId): Omit<Credential, "token"> & { present:
   return { ...rest, present: true };
 }
 
-export const hasCredential = (id: ProviderId): boolean => !!load()[id]?.token;
+/** What a feature says when it has no token: `text`, and the keyring's reason
+ *  when the token is there but the keyring cannot hand it over. */
+export function notConnected(id: ProviderId, text: string): string {
+  const why = load()[id]?.token === KEYRING_MARK ? missingSecretWhy() : null;
+  return why && secretFor(id) === null ? `${text} (${why})` : text;
+}
 
+export const hasCredential = (id: ProviderId): boolean => !!secretFor(id);
+
+/** Whether the file holds a token for `id`, a keyring mark included: true while
+ *  the keyring is locked, when `hasCredential` cannot know. */
+export const hasStoredCredential = (id: ProviderId): boolean => !!load()[id]?.token;
+
+/** The plain write. With the keyring on it would put the token in the file, so
+ *  it refuses: `storeCredential` is the one that knows where the token goes. */
 export function setCredential(id: ProviderId, c: Credential): void {
+  if (keyringEnabled()) throw new Error("the keyring is on: a token is stored with storeCredential");
   save({ ...load(), [id]: c });
+}
+
+/** Store a token where the person chose: the keyring first (read back, then the
+ *  file carries a mark), or the file as before. Throws, and changes nothing,
+ *  when the keyring cannot keep it. */
+export function storeCredential(id: ProviderId, c: Credential): Promise<void> {
+  return exclusive(async () => {
+    // The keyring first; the file is read only after, so a change made while
+    // waiting for it is not written over.
+    const item = credentialId(id);
+    const prior = keyringEnabled() ? await priorValue(item) : null;
+    const token = await sealValue(item, c.token);
+    try {
+      save({ ...load(), [id]: { ...c, token } });
+    } catch (e) {
+      // The file refused: the keyring goes back to what the file still points
+      // at, or the new token sits there with nothing referring to it.
+      if (token === KEYRING_MARK) await putBack(item, prior);
+      throw e;
+    }
+  });
+}
+
+/** Take the token out of the keyring before the file forgets it, so a failure
+ *  leaves both. A no-op while the keyring is off. */
+export const dropCredentialSecret = (id: ProviderId): Promise<void> =>
+  exclusive(async () => {
+    const token = load()[id]?.token;
+    if (token) await dropValue(credentialId(id), token);
+  });
+
+/** What the migration needs: each token as the file holds it (a mark or the token). */
+export function secretSlots(): { id: string; value: string }[] {
+  return Object.entries(load()).flatMap(([p, c]) => (c?.token ? [{ id: credentialId(p), value: c.token }] : []));
+}
+
+/** Replace tokens in the file by id and read the file back to see they landed.
+ *  False leaves the file as it was. */
+export function rewriteSecrets(by: ReadonlyMap<string, string>): boolean {
+  const before = load();
+  const next: Store = {};
+  for (const [p, c] of Object.entries(before) as [ProviderId, Credential][]) next[p] = { ...c, token: by.get(credentialId(p)) ?? c.token };
+  try {
+    save(next);
+    cache = undefined;
+    const back = load();
+    if (Object.entries(next).every(([p, c]) => back[p as ProviderId]?.token === c!.token)) return true;
+  } catch { /* fall through to put it back */ }
+  try { save(before); } catch { /* the caller reads the file again */ }
+  cache = undefined;
+  return false;
 }
 
 /** Update the notes on a credential without touching the secret — used after a

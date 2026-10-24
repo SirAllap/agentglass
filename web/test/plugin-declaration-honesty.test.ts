@@ -45,7 +45,7 @@ describe("approval screen", () => {
     // Before the plugin is switched on: the box card says "will run in a box".
     expect(boxWording(base)!.tone).toBe("neutral");
     expect(processIsBoxed(boxWording(base))).toBe(true);
-    expect(processIsBoxed(boxWording({ ...base, sandboxProbe: { ok: true } }))).toBe(true);
+    expect(processIsBoxed(boxWording({ ...base, sandboxProbe: { ok: true, landlock: true, abstractScope: true } }))).toBe(true);
     expect(processIsBoxed(boxWording({ ...base, running: true, boxState: { kind: "boxed" } }))).toBe(true);
     // No box block at all, or a box known to be missing: the warning stays.
     expect(processIsBoxed(boxWording({ ...base, sandbox: undefined }))).toBe(false);

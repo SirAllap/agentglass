@@ -6,9 +6,12 @@
  * become the pane the keyboard is going to, and that pane's process tree has to
  * become an answer. The judgement itself is in panewt.test.ts.
  *
- * The pane holds a copy of `sleep` renamed to one of the agent CLIs, which is
- * exactly what the /proc walk looks for: a process by that name, and the
- * directory it is standing in. Never a real `claude` — see pane-routes.test.ts
+ * The pane holds the test's own runtime, reached through a link named after one
+ * of the agent CLIs, which is exactly what the /proc walk looks for: a process
+ * by that name, and the directory it is standing in. Not a renamed `sleep`:
+ * Ubuntu 26.04's coreutils is one binary that picks the tool by argv[0], so a
+ * copy called `codex` exits with "unknown program" and the window dies before
+ * the route is asked anything. Never a real `claude` — see pane-routes.test.ts
  * for what a test that starts one costs.
  *
  * Everything lives under one TMUX_TMPDIR, the server's included, so the socket
@@ -17,12 +20,13 @@
  * listed first.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
 import { freePort } from "./freePort.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
+import { settled } from "./paneSettled.ts";
 
 let dir = "", base = "", socket = "", window = "", proc: ReturnType<typeof Bun.spawn> | null = null;
 
@@ -43,6 +47,12 @@ const tmux = (...args: string[]) =>
     stdout: "pipe", stderr: "pipe",
   });
 
+/** What the pane runs: the fixture agent, holding still for five minutes. */
+const agentCmd = () => `${join(dir, "codex")} ${join(dir, "hold.js")}`;
+/** The route reads the pane's process; until tmux's child has exec'd, that is tmux itself. */
+const started = (w: string) =>
+  settled(() => new TextDecoder().decode(tmux("display", "-p", "-t", w, "#{pane_current_command}").stdout).trim(), (c) => c === "codex");
+
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "agx-panedirs-"));
   WT = join(dir, "orbit-WEB-1042");
@@ -51,10 +61,11 @@ beforeAll(async () => {
     // A process named after an agent CLI, standing in a known directory. The
     // name is the whole fixture: /proc/<pid>/comm is what the walk matches.
     const fake = join(dir, "codex");
-    copyFileSync("/bin/sleep", fake);
-    chmodSync(fake, 0o755);
-    tmux("new-session", "-d", "-s", "t", "-c", dir, `${fake} 300`);
+    symlinkSync(process.execPath, fake);
+    writeFileSync(join(dir, "hold.js"), "setTimeout(() => {}, 300_000);\n");
+    tmux("new-session", "-d", "-s", "t", "-c", dir, agentCmd());
     window = new TextDecoder().decode(tmux("list-windows", "-F", "#{window_id}").stdout).trim().split("\n")[0] ?? "";
+    await started(window);
   }
 
   const port = await freePort();
@@ -117,8 +128,9 @@ describe("/terminal/pane-dirs", () => {
     // A window of its own: the hook below ties the pane to a transcript for good,
     // and the test above is about a pane nobody has heard from.
     const hooked = new TextDecoder().decode(
-      tmux("new-window", "-d", "-P", "-F", "#{window_id}", "-c", dir, `${join(dir, "codex")} 300`).stdout,
+      tmux("new-window", "-d", "-P", "-F", "#{window_id}", "-c", dir, agentCmd()).stdout,
     ).trim();
+    await started(hooked);
     const transcript = join(dir, "session.jsonl");
     writeFileSync(transcript, JSON.stringify({
       type: "assistant",

@@ -19,6 +19,7 @@ import {
   renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { fsyncDir } from "./fsyncDir.ts";
 import { homedir, tmpdir } from "node:os";
 import { mintPluginToken, revokePluginToken } from "./auth.ts";
 import { dropCanvases } from "./plugin-canvas.ts";
@@ -40,9 +41,10 @@ import { versionAtLeast } from "../../shared/semverLite.ts";
 export { versionAtLeast };
 import {
   hostResolvConfExtraRo, hostSystemPaths, openGrantFds, pluginDataDir, removePluginDataDir, resolveGrants,
-  resolvePrograms, sandboxArgv, sandboxProbe, type SandboxProbe,
+  landlockProbe, openSeccompFd, resolvePrograms, sandboxArgv, sandboxProbe, scopeProbe, seccompNow, seccompProbe, type SandboxProbe,
 } from "./plugin-sandbox.ts";
 import { ensurePluginSocketServer, pluginSocketPath, stopPluginSocketServer } from "./plugin-socket.ts";
+import { KEYRING_MARK, KeyringError, dropValue, exclusive, keyringEnabled, priorValue, putBack, pluginKeyId, reasonOf, sealValue, unlockFirst, unsealed } from "./keyring.ts";
 import { coerceSettings, dropNotesOf, fieldsWithOptions, forgetPlugin, pushEvent, resolveSettings, setLivenessCheck } from "./plugin-ui.ts";
 
 /** What a plugin folder must carry at its root, translated from `orca-plugin.json`
@@ -461,6 +463,9 @@ function migrate(store: Store): Store {
     return held && typeof held === "object" ? secretKeysOf(rec.contributes?.settings).filter((k) => Object.hasOwn(held, k)) : [];
   };
   if (!store.plugins.some((rec) => inRecord(rec).length)) return store;
+  // With the keyring on, moving a key into secrets.json would write it to a
+  // file. It stays where the older build left it until the keyring is off.
+  if (keyringEnabled()) return store;
   const stripped = (rec: PluginRecord): PluginRecord => (inRecord(rec).length ? { ...rec, settings: withoutSecrets(rec.contributes?.settings, rec.settings) } : rec);
   // plugins.json could not be rewritten the last time: its copy is stale
   // (secrets.json may have moved on since), so it is neither moved again nor
@@ -538,6 +543,7 @@ function writeAtomic(p: string, data: unknown): boolean {
     const fd = openSync(tmp, "wx", 0o600);
     try { writeSync(fd, JSON.stringify(data, null, 2) + "\n"); fsyncSync(fd); } finally { closeSync(fd); }
     renameSync(tmp, p);
+    fsyncDir(dirname(p));
     return true;
   } catch {
     try { unlinkSync(tmp); } catch { /* nothing to clean */ }
@@ -600,6 +606,33 @@ function loadSecrets(): Secrets | null {
  *  is asked for again, never a crash on boot. */
 const readSecrets = (): Secrets => loadSecrets() ?? table();
 
+/** What the keyring switch needs: every key as the file holds it (a mark or the key). */
+export function pluginSecretSlots(): { id: string; value: string }[] | null {
+  if (!settleStrip(read()) || !loadSecrets()) return null;
+  return Object.entries(readSecrets()).flatMap(([name, byKey]) => Object.entries(byKey).map(([k, v]) => ({ id: pluginKeyId(name, k), value: v })));
+}
+
+/** Replace keys in `secrets.json` by id and read the file back to see they
+ *  landed. False leaves the file as it was. */
+export function rewritePluginSecrets(by: ReadonlyMap<string, string>): boolean {
+  if (!settleStrip(read())) return false;
+  const before = loadSecrets();
+  if (!before) return false;
+  const next: Secrets = table();
+  for (const [name, byKey] of Object.entries(before)) {
+    const held = table<string>();
+    for (const [k, v] of Object.entries(byKey)) held[k] = by.get(pluginKeyId(name, k)) ?? v;
+    next[name] = held;
+  }
+  const landed = (): boolean => {
+    const back = loadSecrets();
+    return !!back && Object.entries(next).every(([name, byKey]) => Object.entries(byKey).every(([k, v]) => back[name]?.[k] === v));
+  };
+  if (writeAtomic(secretsPath(), next) && landed()) return true;
+  writeAtomic(secretsPath(), before);
+  return false;
+}
+
 /** Set one plugin's keys (none drops its entry) and write the file. */
 function putSecrets(all: Secrets, name: string, held: Record<string, string>): boolean {
   if (Object.keys(held).length) all[name] = held; else delete all[name];
@@ -614,7 +647,8 @@ function secretValuesOf(name: string, fields: Field[] | undefined): Record<strin
   const keys = secretKeysOf(fields);
   if (!keys.length) return {}; // most plugins declare none: no second file to read
   const held = readSecrets()[name] ?? {};
-  return Object.fromEntries(keys.filter((k) => Object.hasOwn(held, k)).map((k) => [k, held[k]]));
+  // A mark with nothing behind it (keyring locked) is a key that is not there.
+  return Object.fromEntries(keys.filter((k) => Object.hasOwn(held, k)).map((k) => [k, unsealed(pluginKeyId(name, k), held[k]!)]).filter(([, v]) => v !== null));
 }
 
 /** A plugin's stored settings with its keys put back, for the readers that hand
@@ -628,8 +662,20 @@ function settingsWithSecrets(rec: PluginRecord): Record<string, unknown> {
  *  when a key that had to go is still on disk: the caller then stops, because
  *  carrying on would hand the old key to whatever is installed next under this
  *  name. */
-function keepSecrets(store: Store, name: string, keys: string[] = []): boolean {
+function keepSecrets(store: Store, name: string, keys: string[] = []): Promise<boolean> {
+  return exclusive(() => keepSecretsNow(store, name, keys));
+}
+async function keepSecretsNow(store: Store, name: string, keys: string[]): Promise<boolean> {
   if (!settleStrip(store)) return false;
+  // The keyring's copy of a key goes before the file's, and before the file is
+  // read for the rewrite (nothing awaits between that read and its write).
+  const stored = loadSecrets()?.[name] ?? {};
+  const gone = Object.keys(stored).filter((k) => !keys.includes(k));
+  try { for (const k of gone) await dropValue(pluginKeyId(name, k), stored[k]); } catch (e) {
+    // A locked keyring is the one refusal the person can fix: the callers say how.
+    if (unlockFirst(e, "")) throw e;
+    return false;
+  }
   const all = loadSecrets();
   if (!all) return false;
   const held = all[name];
@@ -885,6 +931,14 @@ async function buildBoxArgv(
     network = { socketHostPath: pluginSocketPath(), bridgeExec: bridgeExecCommand(), bridgeRo: bridgeExtraRo(bridgeExecCommand()) };
   }
   const opened = openGrantFds({ read: grants.read, write: grants.write }, home);
+  const landlock = landlockProbe();
+  // After the grants, so its child fd is the next one after theirs. A filter
+  // that cannot be opened now leaves this one start with the other walls.
+  const seccomp = seccompProbe();
+  const seccompParentFd = seccomp.ok ? openSeccompFd(seccomp) : null;
+  if (seccomp.ok && seccompParentFd === null) console.warn(`[plugin sandbox] ${rec.name}: starting without the seccomp filter: its file changed or went away`);
+  const seccompFd = seccompParentFd === null ? undefined : 3 + opened.parentFds.length;
+  if (seccompParentFd !== null) opened.parentFds.push(seccompParentFd);
   const argv = sandboxArgv({
     bwrap,
     installDir: rec.installDir,
@@ -899,6 +953,9 @@ async function buildBoxArgv(
     systemDirs,
     network,
     extraRo: boxExtraRo(network),
+    setpriv: landlock.ok ? landlock.setpriv : undefined,
+    scoper: sandbox.network === "agentglass" ? undefined : (() => { const sc = scopeProbe(); return sc.ok ? sc.python : undefined; })(),
+    seccompFd,
   });
   return { argv, parentFds: opened.parentFds, refused: [...grants.refused, ...programs.refused, ...opened.refused] };
 }
@@ -1060,7 +1117,7 @@ async function git(args: string[], cwd: string, timeoutMs: number): Promise<{ ok
   }
 }
 
-export type PublicSandboxProbe = { ok: true } | { ok: false; reason: Extract<SandboxProbe, { ok: false }>["reason"]; detail: string };
+export type PublicSandboxProbe = { ok: true; landlock: boolean; abstractScope: boolean; seccomp: boolean; seccompDetail?: string } | { ok: false; reason: Extract<SandboxProbe, { ok: false }>["reason"]; detail: string };
 
 export type PublicPlugin = PluginRecord & {
   running: boolean;
@@ -1101,7 +1158,9 @@ function withContributes(p: PluginRecord): PluginRecord {
 
 function publicProbe(): PublicSandboxProbe {
   const p = sandboxProbe();
-  return p.ok ? { ok: true } : { ok: false, reason: p.reason, detail: p.detail };
+  if (!p.ok) return { ok: false, reason: p.reason, detail: p.detail };
+  const sc = seccompNow();
+  return { ok: true, landlock: landlockProbe().ok, abstractScope: scopeProbe().ok, seccomp: sc.ok, ...(sc.ok ? {} : { seccompDetail: sc.detail }) };
 }
 
 /** What starting this plugin does on this host — the one decision the start
@@ -1206,13 +1265,15 @@ export function pluginOwnSettings(name: string): Record<string, unknown> {
   return rec ? settingsWithSecrets(rec) : {};
 }
 
+const MARK_REFUSED = "that value is reserved for the keyring and cannot be saved as a key";
+
 /**
  * Save what the person chose, typed by the manifest, and tell the plugin.
  * Merged over what was there, so a form that only shows some fields cannot
  * erase the rest. A secret the caller did not send is left alone; sending an
  * empty string clears it.
  */
-export function setPluginSettings(name: string, raw: unknown): { ok: true; values: Record<string, unknown>; set: string[] } | { ok: false; error: string } {
+export function setPluginSettings(name: string, raw: unknown, filed: Record<string, string> = {}): { ok: true; values: Record<string, unknown>; set: string[] } | { ok: false; error: string } {
   const store = read();
   const rec = store.plugins.find((p) => p.name === name);
   if (!rec) return { ok: false, error: "no such plugin" };
@@ -1222,13 +1283,19 @@ export function setPluginSettings(name: string, raw: unknown): { ok: true; value
   const secretKeys = secretKeysOf(fields);
   const sent = Object.entries(given).filter(([k]) => secretKeys.includes(k));
   if (sent.length) {
+    // The mark is what a file holds in place of a keyring item: saved as a value it
+    // points at an item nobody wrote, and every later move of the switch refuses.
+    if (sent.some(([k, v]) => v === KEYRING_MARK && filed[k] === undefined)) return { ok: false, error: MARK_REFUSED };
+    // With the keyring on, a key reaches this file only as the mark
+    // `savePluginSettings` got back for it; handed a plain one, this refuses.
+    if (keyringEnabled() && sent.some(([k, v]) => v !== "" && filed[k] === undefined)) return { ok: false, error: "the keyring is on: a key is saved with savePluginSettings" };
     if (!settleStrip(store)) return { ok: false, error: "could not save the key" };
     // Secrets first, as the migration does: a crash between the two files can
     // only leave a plain setting unsaved, never a key in the wrong place.
     const all = loadSecrets();
     if (!all) return { ok: false, error: "could not save the key" };
     const held = { ...(all[name] ?? {}) };
-    for (const [k, v] of sent) { if (v === "") delete held[k]; else held[k] = v as string; }
+    for (const [k, v] of sent) { if (v === "") delete held[k]; else held[k] = filed[k] ?? (v as string); }
     if (!putSecrets(all, name, held)) return { ok: false, error: "could not save the key" };
   }
   rec.settings = { ...(rec.settings ?? {}), ...withoutSecrets(fields, given) };
@@ -1238,6 +1305,37 @@ export function setPluginSettings(name: string, raw: unknown): { ok: true; value
   const values = settingsWithSecrets(rec);
   pushEvent(name, { type: "settings", settings: values, at: Date.now() });
   return { ok: true, ...redactSecrets(fields, values) };
+}
+
+/** `setPluginSettings` for the server's own routes: with the keyring on, each
+ *  key goes to the keyring first (and is read back), and the file gets the mark;
+ *  a key cleared leaves the keyring before the file forgets it. A keyring that
+ *  cannot do it refuses the save, and no key is written to a file instead. */
+export function savePluginSettings(name: string, raw: unknown): Promise<ReturnType<typeof setPluginSettings>> {
+  return exclusive(() => savePluginSettingsNow(name, raw));
+}
+async function savePluginSettingsNow(name: string, raw: unknown): Promise<ReturnType<typeof setPluginSettings>> {
+  const fields = read().plugins.find((p) => p.name === name)?.contributes?.settings;
+  if (!fields?.length || !keyringEnabled()) return setPluginSettings(name, raw);
+  const keys = secretKeysOf(fields);
+  const filed: Record<string, string> = {};
+  const prior = new Map<string, string | null>();
+  try {
+    for (const [k, v] of Object.entries(coerceSettings(fields, raw))) {
+      if (!keys.includes(k) || typeof v !== "string") continue;
+      if (v === KEYRING_MARK) throw new Error(MARK_REFUSED);
+      const id = pluginKeyId(name, k);
+      prior.set(id, await priorValue(id));
+      if (v === "") await dropValue(id); else filed[k] = await sealValue(id, v);
+    }
+  } catch (e) {
+    for (const [id, was] of prior) await putBack(id, was);
+    return { ok: false, error: reasonOf(e) };
+  }
+  const r = setPluginSettings(name, raw, filed);
+  // The file refused: the keyring goes back to what the file still points at.
+  if (!r.ok) for (const [id, was] of prior) await putBack(id, was);
+  return r;
 }
 
 /**
@@ -1255,12 +1353,18 @@ export async function resumeEnabledPlugins(): Promise<string[]> {
   const store = read();
   if (!store.master) return [];
   const started: string[] = [];
+  // `enablePlugin` keeps one plugin per provider's accounts; a plugins.json
+  // edited by hand or restored from a backup can say otherwise, and the first
+  // in the file is the one that starts.
+  const held = new Set<string>();
   for (const rec of store.plugins) {
     if (!rec.enabled || !rec.approvedFingerprint || rec.approvedFingerprint !== rec.fingerprint) continue;
     if (blockedEntry(rec.name)) continue;
+    if (rec.contributes?.accounts?.some((p) => held.has(p))) continue;
     try {
       await startProcess(withContributes(rec));
       started.push(rec.name);
+      for (const p of rec.contributes?.accounts ?? []) held.add(p);
     } catch {
       /* one bad plugin must not keep the others down */
     }
@@ -1439,7 +1543,13 @@ async function finishInstall(
   // stored key will be handed over with it. Same semantics as the plain settings
   // an update carries; a line on the consent screen is the next thing after this
   // and is not here.
-  if (!keepSecrets(store, manifest.name, same ? secretKeysOf(manifest.contributes?.settings) : [])) {
+  let dropped = false;
+  try { dropped = await keepSecrets(store, manifest.name, same ? secretKeysOf(manifest.contributes?.settings) : []); } catch (e) {
+    const unlock = unlockFirst(e, "install it");
+    if (!unlock) throw e;
+    return { ok: false, error: unlock };
+  }
+  if (!dropped) {
     return { ok: false, error: "could not drop the old key of a plugin with this name, so nothing was installed" };
   }
   // Belt over braces: `validPluginName` already refused `..`, and this is
@@ -1704,6 +1814,12 @@ export async function enablePlugin(name: string, approved = true): Promise<{ ok:
   if (!store.master) return { ok: false, error: "plugins are switched off — flip the master switch first" };
   const block = blockedEntry(name);
   if (block) return { ok: false, error: `blocked: ${block.reason}${block.link ? ` (${block.link})` : ""}` };
+  // One list of accounts per provider: two plugins each saying which account is
+  // active would fight over the chips, so the second to be switched on is refused.
+  for (const provider of rec.contributes?.accounts ?? []) {
+    const holder = store.plugins.find((p) => p.name !== name && p.enabled && p.contributes?.accounts?.includes(provider));
+    if (holder) return { ok: false, error: `"${holder.name}" already keeps the ${provider} accounts — switch it off first, then switch this one on` };
+  }
   if (!approved && rec.approvedFingerprint !== rec.fingerprint) {
     return {
       ok: false,
@@ -1774,8 +1890,15 @@ export async function disablePlugin(name: string): Promise<boolean> {
 
 /** Throws rather than answer false, which means "no such plugin": a remove that
  *  could not revoke the key is not that. */
-function dropKeyOrThrow(store: Store, name: string): void {
-  if (!keepSecrets(store, name)) throw new Error("could not drop this plugin's key, so nothing was removed");
+async function dropKeyOrThrow(store: Store, name: string): Promise<void> {
+  let dropped = false;
+  try { dropped = await keepSecrets(store, name); } catch (e) {
+    // The same error type, with the way out as its message: the route shows it as it is.
+    const unlock = unlockFirst(e, "remove it");
+    if (unlock) throw new KeyringError("locked", unlock);
+    throw e;
+  }
+  if (!dropped) throw new Error("could not drop this plugin's key, so nothing was removed");
 }
 
 /** Disable and remove: stop the process, revoke its token, delete the
@@ -1792,14 +1915,14 @@ export async function removePlugin(name: string, opts: { dropSettings?: boolean 
     // under that name goes — the command names a plugin, not where it came
     // from.
     if (!opts.dropSettings || !Object.hasOwn(store.keptSettings ?? {}, name)) return false; // `keptSettings["__proto__"]` is not an entry
-    dropKeyOrThrow(store, name);
+    await dropKeyOrThrow(store, name);
     if (!write({ ...store, keptSettings: withoutKey(store.keptSettings, name) })) throw new Error("could not save the removal of the kept settings");
     return true;
   }
   // First, before anything is deleted: a key that cannot be revoked leaves the
   // record, the folder and the name as they were, so nothing installed later
   // under it can be handed the key.
-  dropKeyOrThrow(store, name);
+  await dropKeyOrThrow(store, name);
   await stopRunning(name);
   lastBoxFailure.delete(name);
   lastExit.delete(name);

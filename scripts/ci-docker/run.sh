@@ -15,7 +15,7 @@ out="${AGX_CI_OUT:-${XDG_CACHE_HOME:-$HOME/.cache}/agentglass-ci-docker/out}"
 mkdir -p "$out" && rm -f "$out"/*.log && chmod 777 "$out"
 echo "bun $bun_version · logs in $out"
 # Core dumps off: a tmux test kills its server on purpose and the container's
-# tmux 3.4 aborts on the way down, and each abort went to the host's
+# tmux aborts on the way down, and each abort went to the host's
 # systemd-coredump to be compressed and stored (95 cores in ten days on one
 # machine). The kernel still hands every crash to that helper, so it is still
 # listed by coredumpctl; with the limit at zero it is listed with no core file

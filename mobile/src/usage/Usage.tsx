@@ -25,7 +25,7 @@ import { Pressable, Text, View } from "react-native";
 import Svg, { Circle } from "react-native-svg";
 import type { QuotaWindow } from "../../../shared/types.ts";
 import {
-  ageLabel, planState, quotaTone, remainingOf, resetLabel, tightestWindow, windowName,
+  accountHeading, ageLabel, planState, providerCount, quotaTone, remainingOf, resetLabel, tightestWindow, windowName,
 } from "../model/quota.ts";
 import { useUsage } from "../state/use-usage.ts";
 import { C, RADIUS, SPACE, T, type Palette } from "../theme.ts";
@@ -152,8 +152,10 @@ export function UsageSheet({ open, onClose }: { open: boolean; onClose: () => vo
   const top = tightestWindow(rows);
   /* Only worth naming the provider on each bar when more than one is
      reporting. On a machine with Claude alone, "Claude 5h" on every row is one
-     word of signal and one of furniture. */
+     word of signal and one of furniture. Two logins of one provider are still
+     one provider: the heading over each login's bars tells them apart. */
   const available = (rows ?? []).filter((r) => r.available);
+  const several = providerCount(available) > 1;
   const age = top ? ageLabel(top.observedAt, now) : "";
 
   return (
@@ -176,7 +178,7 @@ export function UsageSheet({ open, onClose }: { open: boolean; onClose: () => vo
               </Text>
               <Text style={{ color: C.text3, fontSize: T.small }}>
                 {[
-                  available.length > 1 ? top.provider : "",
+                  several ? top.provider : "",
                   top.window.resetsAt ? `resets ${resetLabel(top.window.resetsAt, now)}` : "",
                   // The age belongs beside the number it qualifies. The computer
                   // holds an Anthropic reading for fifteen minutes and keeps
@@ -194,18 +196,33 @@ export function UsageSheet({ open, onClose }: { open: boolean; onClose: () => vo
           <View style={{
             backgroundColor: C.bg3, borderRadius: RADIUS.lg, paddingHorizontal: SPACE.lg,
           }}>
-            {available.flatMap((row) => row.windows.map((w, i) => (
-              <View
-                key={`${row.provider}:${w.label}`}
-                style={i > 0 || row !== available[0] ? { borderTopWidth: 1, borderTopColor: C.border } : undefined}
-              >
-                <Meter
-                  label={available.length > 1 ? `${row.label} · ${windowName(w.label)}` : windowName(w.label)}
-                  window={w}
-                  now={now}
-                />
-              </View>
-            )))}
+            {available.map((row, n) => {
+              const heading = accountHeading(row);
+              return (
+                <View
+                  key={`${row.provider}:${row.account?.label ?? ""}`}
+                  style={n > 0 ? { borderTopWidth: 1, borderTopColor: C.border } : undefined}
+                >
+                  {/* Read-only on purpose: switching a login is the desk's.
+                      "active" is a word, so it reads without the colour. */}
+                  {heading ? (
+                    <View style={{ flexDirection: "row", alignItems: "baseline", paddingTop: SPACE.md }}>
+                      <Text style={{ color: C.text2, fontSize: T.small, fontWeight: "600", flex: 1 }} numberOfLines={1}>{heading}</Text>
+                      {row.account?.active ? <Text style={{ color: C.text3, fontSize: T.small }}>active</Text> : null}
+                    </View>
+                  ) : null}
+                  {row.windows.map((w, i) => (
+                    <View key={w.label} style={i > 0 ? { borderTopWidth: 1, borderTopColor: C.border } : undefined}>
+                      <Meter
+                        label={several ? `${row.label} · ${windowName(w.label)}` : windowName(w.label)}
+                        window={w}
+                        now={now}
+                      />
+                    </View>
+                  ))}
+                </View>
+              );
+            })}
           </View>
         ) : null}
 

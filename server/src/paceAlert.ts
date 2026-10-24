@@ -77,7 +77,9 @@ export function claimPaceAlerts(rows: ProviderUsage[], alertAt: number, now = Da
   const seen = read();
   const out: PaceAlert[] = [];
   for (const u of rows) {
-    if (!u.available) continue;
+    // A login that is not the active one shares this row's provider and window
+    // labels, so it would claim the active login's alert key.
+    if (!u.available || u.account?.active === false) continue;
     for (const w of u.windows) {
       if (w.minutes < PACE_MIN_MINUTES || !w.resetsAt) continue;
       const resetsAt = new Date(w.resetsAt).getTime();

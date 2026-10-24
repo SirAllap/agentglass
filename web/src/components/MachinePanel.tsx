@@ -23,6 +23,8 @@ import { requestBrowserNav } from "../lib/browserNav.ts";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
+import { DiskClean } from "./DiskClean.tsx";
+import { publishDiskMounts, useLowDisk } from "../lib/diskClean.ts";
 
 export type MachineTab = "ports" | "resources" | "locks";
 
@@ -46,6 +48,9 @@ export function MachinePanel({ tab, onTab, onClose, onOpenBrowser }: {
    *  on surfaces that have no browser to switch to. */
   onOpenBrowser?: () => void;
 }) {
+  /* One quiet badge, on the tab that holds the disk numbers: no notification,
+     nothing that repeats. It reads whatever the scan or the machine tile last saw. */
+  const lowDisk = useLowDisk();
   return (
     // Above the workspace portal and above the file viewer: this opens from
     // inside the workspace as often as from the dashboard behind it, and a
@@ -69,7 +74,13 @@ export function MachinePanel({ tab, onTab, onClose, onOpenBrowser }: {
           {/* The shared `Tabs`: these swap the whole body, so they are a tab
               list to a screen reader, not three loose buttons in a box. */}
           <div className="ml-2"><Tabs value={tab} onChange={onTab} label="Machine" panelId="machine-tab-body"
-            options={[{ id: "ports", label: "Ports" }, { id: "resources", label: "Resources" }, { id: "locks", label: "Locks" }]} /></div>
+            options={[{ id: "ports", label: "Ports" },
+              { id: "resources", title: lowDisk ?? undefined, label: lowDisk
+                ? <span className="inline-flex items-center gap-1.5">Resources
+                    <span className="rounded-full px-1.5 text-[9.5px] leading-[16px] font-normal" aria-label={lowDisk}
+                      style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}>Low disk</span></span>
+                : "Resources" },
+              { id: "locks", label: "Locks" }]} /></div>
           <CloseButton onClick={onClose} title="Close" style={{ color: "var(--text2)", border: EDGE }} className="agx-btn ml-auto shrink-0 rounded" />
         </div>
         {/* Not a scroller itself: each tab owns its own scrolling, because
@@ -492,7 +503,10 @@ function Resources() {
 
   const load = useCallback(() => {
     api.machineResources()
-      .then((d) => { setData(d); setError(null); })
+      .then((d) => {
+        setData(d); setError(null);
+        publishDiskMounts("tile", d.machine.diskTotal ? [{ mount: "/", size: d.machine.diskTotal, free: d.machine.diskFree }] : null);
+      })
       .catch((e) => setError(String(e)));
   }, []);
 
@@ -608,6 +622,8 @@ function Resources() {
         <MachineStrip m={data.machine} />
 
         <LeftBehind />
+
+        <DiskClean />
 
         <div className="grid px-3.5 py-1 text-[9.5px] uppercase tracking-wider"
           style={{ gridTemplateColumns: COLS, color: "var(--text3)", borderBottom: LINE }}>

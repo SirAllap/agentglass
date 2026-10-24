@@ -15,6 +15,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
+import { settled } from "./paneSettled.ts";
 
 const SOCKET = `agx-enginereuse-${process.pid}`;
 const REAL_SOCKET = process.env.AGENTGLASS_TMUX_SOCKET;
@@ -150,7 +151,7 @@ describe("findLiveWindow, the answer the pull request card reads", () => {
     const w = await engineWindowOutcome(wt, "conflict-1042", ["sleep", "300"], wt, undefined, "orbit-g");
     expect(w).toMatchObject({ ok: true });
     if (!w.ok) return;
-    expect(await findLiveWindow({ root: a, name: "conflict-1042" })).toMatchObject({ windowId: w.windowId });
+    expect(await settled(() => findLiveWindow({ root: a, name: "conflict-1042" }), (x) => x !== null)).toMatchObject({ windowId: w.windowId });
     // A name that merely starts with it is not it.
     expect(await findLiveWindow({ root: a, name: "conflict-104" })).toBeNull();
     // Nor is the same name in a checkout it was not opened for.

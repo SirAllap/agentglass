@@ -13,12 +13,14 @@
  *  - `sandboxArgv` is pure: given every fact already resolved, it is just
  *    argv, and a test can pin its exact shape without a working bwrap.
  */
-import { closeSync, constants as fsConstants, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, rmSync } from "node:fs";
+import { closeSync, constants as fsConstants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   NEVER_MOUNTABLE, NEVER_MOUNTABLE_ROOTS, PERSISTENCE_WRITE_DIRS, PERSISTENCE_WRITE_FILES, type PluginSandbox,
 } from "../../shared/pluginSandbox.ts";
+import { seccompProgram } from "./seccomp.ts";
 
 export type SandboxProbe =
   | { ok: true; bwrap: string }
@@ -105,6 +107,272 @@ export function sandboxProbe(): SandboxProbe {
  *  was set would otherwise stick for the rest of the process. */
 export function __resetSandboxProbe(): void {
   cached = undefined;
+}
+
+/**
+ * The second layer: Landlock, applied inside the bwrap box by util-linux's
+ * `setpriv` (2.40+ has `--landlock-*`), so the plugin process can open only
+ * the paths its box mounts, whichever way it reaches them. Rules hang on the
+ * inodes the box sees, so the walls hold where the mount namespace does not:
+ * measured, a directory descriptor leaked into a bwrap-only box reads a file
+ * outside it through `/proc/self/fd/N/…`, and the same box under these rules
+ * gets EACCES.
+ *
+ * `setpriv` rather than a native helper because Landlock restricts the
+ * calling thread: Bun has no pre-exec hook in `Bun.spawn`, and calling it
+ * from the server (bun:ffi) would lock the server, not the plugin.
+ *
+ * Ceiling: filesystem only. TCP (Landlock ABI 4) and signal scoping (ABI 6)
+ * are not something `setpriv` exposes, and a pathname socket the box mounts
+ * stays connectable. Abstract-socket scoping is `scopeProbe` below.
+ */
+export type LandlockProbe = { ok: true; setpriv: string } | { ok: false; detail: string; timedOut?: boolean };
+
+/** The same trust rule as `TRUSTED_BWRAP`, and one more reason: the box runs
+ *  this path from its own read-only `/usr`, so it has to live there. */
+const TRUSTED_SETPRIV = ["/usr/bin/setpriv", "/bin/setpriv"];
+
+function runLandlockProbe(): LandlockProbe {
+  let setpriv = "/usr/bin/setpriv";
+  if (process.env.NODE_ENV === "test" && process.env.AGENTGLASS_SETPRIV) {
+    setpriv = process.env.AGENTGLASS_SETPRIV;
+  } else {
+    const found = TRUSTED_SETPRIV.find((p) => {
+      try { return TRUSTED_SETPRIV.includes(realpathSync(p)); } catch { return false; }
+    });
+    if (!found) return { ok: false, detail: "setpriv is not installed" };
+    setpriv = realpathSync(found);
+  }
+  const run = (rules: string[]) => {
+    try {
+      return Bun.spawnSync([setpriv, "--landlock-access", "fs", ...rules, "--", "/usr/bin/true"], { stdout: "ignore", stderr: "pipe", timeout: 3000 });
+    } catch {
+      return null;
+    }
+  };
+  // Both halves, because a setpriv that ignored the flags would pass the
+  // first alone: allowed with rules, refused without one. The allowed half
+  // spells every rights string a real start uses: a setpriv that predates
+  // one name (`ioctl-dev` is newer than `--landlock-*` itself) rejects it,
+  // and a probe that only tried `read-file` would pass and then fail every
+  // boxed start.
+  const allowed = run([
+    "--landlock-rule", `path-beneath:${LL_RO_DIR}:/usr`,
+    "--landlock-rule", `path-beneath:${LL_RO_FILE}:/usr/bin/true`,
+    "--landlock-rule", `path-beneath:${LL_DEV}:/dev`,
+    "--landlock-rule", `path-beneath:${LL_RW_FILE}:/dev/null`,
+    "--landlock-rule", `path-beneath:${LL_RW_DIR}:/tmp`,
+  ]);
+  if (allowed?.exitedDueToTimeout) return { ok: false, detail: "setpriv did not finish within 3s", timedOut: true };
+  if (!allowed?.success) {
+    const line = allowed?.stderr?.toString("utf8").split("\n").find((l) => l.trim())?.trim();
+    return { ok: false, detail: line || "setpriv could not apply a Landlock ruleset" };
+  }
+  const refused = run([]);
+  if (!refused || refused.success) return { ok: false, detail: "setpriv ran but Landlock did not refuse anything" };
+  return { ok: true, setpriv };
+}
+
+let landlockCached: LandlockProbe | undefined;
+
+/** Whether this kernel and this setpriv can lay the second layer — cached
+ *  for the process like `sandboxProbe`. Not having it changes nothing about
+ *  the box: the plugin starts exactly as it did before this layer existed. */
+export function landlockProbe(): LandlockProbe {
+  if (landlockCached !== undefined) return landlockCached;
+  const probe = runLandlockProbe();
+  // A busy machine is not a missing feature: a timeout is asked again next time.
+  if (probe.ok || !probe.timedOut) landlockCached = probe;
+  return probe;
+}
+
+export function __resetLandlockProbe(): void {
+  landlockCached = undefined;
+}
+
+const LL_RO_DIR = "read-file,read-dir,execute";
+const LL_RO_FILE = "read-file,execute";
+const LL_RW_DIR = "read-file,read-dir,execute,write-file,remove-dir,remove-file,make-dir,make-reg,make-sym,make-sock,make-fifo,refer,truncate";
+const LL_RW_FILE = "read-file,execute,write-file,truncate";
+const LL_DEV = "read-file,write-file,read-dir,ioctl-dev";
+
+/**
+ * The third wall, for `network: "internet"` only: Landlock's abstract-socket
+ * scope (ABI 6, Linux 6.12+). `--share-net` shares the host's abstract-socket
+ * namespace, so a boxed plugin could `connect()` to any `@name` listener on
+ * the host — measured, a host listener answered a box started by
+ * `sandboxArgv`. Under this scope the same connect is EPERM and HTTPS still
+ * works. `network: "agentglass"` does not need it: `--unshare-net` already
+ * gives the box an abstract namespace of its own.
+ *
+ * Python rather than `setpriv`, which does not expose scopes, and rather than
+ * bun:ffi, for the same reason `setpriv` is used at all: Landlock binds the
+ * calling thread and what it later executes. The script is single-threaded,
+ * applies the scope, then `execvp`s the rest of the argv, which inherits it.
+ * Syscall numbers 444/446 are the same on every Linux architecture.
+ */
+const SCOPE_PY = [
+  "import ctypes,os,struct,sys",
+  "c=ctypes.CDLL(None,use_errno=True);c.syscall.restype=ctypes.c_long",
+  "c.syscall(444,None,0,1)>=6 or sys.exit(3)",
+  "a=ctypes.create_string_buffer(struct.pack('QQQ',0,0,1),24);fd=c.syscall(444,a,24,0)",
+  "fd>=0 and c.prctl(38,1,0,0,0)==0 and c.syscall(446,fd,0)==0 or sys.exit(4)",
+  "os.close(fd);os.execvp(sys.argv[1],sys.argv[1:])",
+].join("\n");
+
+export type ScopeProbe = { ok: true; python: string } | { ok: false; detail: string; timedOut?: boolean };
+
+/** `-I`: no user site, no PYTHON* variables, no script directory on the path. */
+export function scopeArgv(python: string): string[] {
+  return [python, "-I", "-c", SCOPE_PY];
+}
+
+function runScopeProbe(): ScopeProbe {
+  let python: string;
+  if (process.env.NODE_ENV === "test" && process.env.AGENTGLASS_SCOPE_PYTHON) {
+    python = process.env.AGENTGLASS_SCOPE_PYTHON;
+  } else {
+    // The box runs this path from its own read-only `/usr`, like setpriv.
+    try { python = realpathSync("/usr/bin/python3"); } catch { return { ok: false, detail: "python3 is not installed" }; }
+    if (!python.startsWith("/usr/")) return { ok: false, detail: "python3 is not installed under /usr" };
+  }
+  let r: ReturnType<typeof Bun.spawnSync> | null = null;
+  try { r = Bun.spawnSync([...scopeArgv(python), "/usr/bin/true"], { stdout: "ignore", stderr: "ignore", timeout: 3000 }); } catch { /* reported below */ }
+  if (r?.exitedDueToTimeout) return { ok: false, detail: "python3 did not finish within 3s", timedOut: true };
+  if (r?.success) return { ok: true, python };
+  if (r?.exitCode === 3) return { ok: false, detail: "this kernel has no Landlock abstract-socket scoping (Linux 6.12+)" };
+  return { ok: false, detail: "python3 could not apply the Landlock scope" };
+}
+
+let scopeCached: ScopeProbe | undefined;
+
+/** Cached like `landlockProbe`. Not having it changes nothing about the box:
+ *  an `internet` plugin starts exactly as it did before this wall existed. */
+export function scopeProbe(): ScopeProbe {
+  if (scopeCached !== undefined) return scopeCached;
+  const probe = runScopeProbe();
+  if (probe.ok || !probe.timedOut) scopeCached = probe;
+  return probe;
+}
+
+export function __resetScopeProbe(): void {
+  scopeCached = undefined;
+}
+
+/**
+ * The third wall: the seccomp filter from seccomp.ts, which bwrap installs
+ * from a descriptor (`--seccomp FD`) right before it execs the box's first
+ * process, so it covers everything in the box. Written once per process to
+ * a file of the app's own and opened fresh for every start: bwrap reads the
+ * descriptor to its end, and a dup shares that offset with the next spawn.
+ *
+ * Probed with the real bwrap rather than trusted: the box must come up with
+ * `Seccomp: 2` in its own /proc status. Anything short of that — no table
+ * for this arch, a bwrap that rejects the flag, a kernel without seccomp —
+ * and every box runs with the other walls and the panel says this one is
+ * missing; it never stops a plugin from starting.
+ */
+export type SeccompProbe = { ok: true; path: string; program: Uint8Array } | { ok: false; detail: string; timedOut?: boolean };
+
+function runSeccompProbe(): SeccompProbe {
+  const box = sandboxProbe();
+  if (!box.ok) return { ok: false, detail: "there is no box to put it in" };
+  const arch = process.env.NODE_ENV === "test" && process.env.AGENTGLASS_SECCOMP_ARCH ? process.env.AGENTGLASS_SECCOMP_ARCH : process.arch;
+  const program = seccompProgram(arch);
+  if (!program) return { ok: false, detail: `there is no filter for this architecture (${arch})` };
+  // One file per process: two app instances sharing ~/.config each wrote the
+  // one `<arch>.bpf`, so the last writer made the other's content check fail
+  // on every start. Written under a temp name and renamed, never seen half-done.
+  const path = join(pluginsConfigDir(), "plugin-seccomp", `${arch}-${process.pid}-${randomBytes(6).toString("hex")}.bpf`);
+  try {
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    writeFileSync(`${path}.tmp`, program, { mode: 0o600, flag: "wx" });
+    renameSync(`${path}.tmp`, path);
+    process.once("exit", () => { try { rmSync(path, { force: true }); } catch { /* best effort */ } });
+  } catch (e) {
+    return { ok: false, detail: `could not write the filter: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  const probe: SeccompProbe = { ok: true, path, program };
+  const fd = openSeccompFd(probe);
+  if (fd === null) return { ok: false, detail: "could not read the filter back" };
+  let r;
+  try {
+    r = Bun.spawnSync([box.bwrap, "--unshare-all", "--die-with-parent", "--ro-bind", "/", "/", "--proc", "/proc", "--seccomp", "3", "cat", "/proc/self/status"], {
+      stdio: ["ignore", "pipe", "pipe", fd], timeout: 3000,
+    });
+  } catch { /* reported below */ } finally {
+    closeSync(fd);
+  }
+  if (r?.exitedDueToTimeout) return { ok: false, detail: "bwrap did not finish within 3s", timedOut: true };
+  if (r?.success && /^Seccomp:\s+2$/m.test(r.stdout.toString())) return probe;
+  const line = r?.stderr?.toString().split("\n").find((l) => l.trim())?.trim();
+  return { ok: false, detail: line || "bwrap ran but the filter was not in place" };
+}
+
+let seccompCached: SeccompProbe | undefined;
+
+/** Cached like `landlockProbe`, timeouts included. */
+export function seccompProbe(): SeccompProbe {
+  if (seccompCached !== undefined) return seccompCached;
+  const probe = runSeccompProbe();
+  if (probe.ok || !probe.timedOut) seccompCached = probe;
+  return probe;
+}
+
+/** The probe as a start would find it right now: the same `openSeccompFd`
+ *  check that decides whether bwrap is handed the filter, so the panel's
+ *  "on" is never a separate guess. */
+export function seccompNow(): SeccompProbe {
+  const probe = seccompProbe();
+  if (!probe.ok) return probe;
+  const fd = openSeccompFd(probe);
+  if (fd === null) return { ok: false, detail: "the filter file changed or went away" };
+  closeSync(fd);
+  return probe;
+}
+
+export function __resetSeccompProbe(): void {
+  seccompCached = undefined;
+}
+
+/** A fresh descriptor on the filter for one spawn, or null when the file is
+ *  no longer the program this process wrote (read with `pread`, which leaves
+ *  the offset at 0 for bwrap). */
+export function openSeccompFd(probe: Extract<SeccompProbe, { ok: true }>): number | null {
+  let fd: number;
+  try {
+    fd = openSync(probe.path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  } catch {
+    return null;
+  }
+  const buf = new Uint8Array(probe.program.length + 1);
+  const n = readSync(fd, buf, 0, buf.length, 0);
+  if (n === probe.program.length && buf.subarray(0, n).every((b, i) => b === probe.program[i])) return fd;
+  closeSync(fd);
+  return null;
+}
+
+export interface LandlockGrant {
+  path: string;
+  isDir: boolean;
+}
+
+/** `setpriv … --` for exactly what `sandboxArgv` mounts, read-only or
+ *  read-write as each mount is. Ceiling: Landlock rights add up down the
+ *  tree, so a read-only grant mounted under the writable HOME or `/tmp`
+ *  carries their write rights here — what refuses that write is bwrap's
+ *  read-only bind, not this layer. Narrowing HOME would break every program
+ *  that writes `~/.cache` in the box's empty home. A file needs
+ *  file-only rights — `read-dir` on a file is EINVAL and setpriv would fail
+ *  the whole start. Every path here must exist inside the box, or setpriv
+ *  fails: they are all mount points bwrap has just made. */
+export function landlockArgv(setpriv: string, rules: { ro: LandlockGrant[]; rw: LandlockGrant[]; dev: string[] }): string[] {
+  const argv = [setpriv, "--landlock-access", "fs"];
+  for (const g of rules.ro) argv.push("--landlock-rule", `path-beneath:${g.isDir ? LL_RO_DIR : LL_RO_FILE}:${g.path}`);
+  for (const d of rules.dev) argv.push("--landlock-rule", `path-beneath:${LL_DEV}:${d}`);
+  for (const g of rules.rw) argv.push("--landlock-rule", `path-beneath:${g.isDir ? LL_RW_DIR : LL_RW_FILE}:${g.path}`);
+  argv.push("--");
+  return argv;
 }
 
 export interface ResolvedGrant {
@@ -272,6 +540,8 @@ export interface OpenedGrant {
    *  fd `3 + i` in the child, which is what `sandboxArgv` writes into
    *  `--ro-bind-fd`/`--bind-fd`. */
   childFd: number;
+  /** Which Landlock rights fit it (see `landlockArgv`). */
+  isDir: boolean;
 }
 
 /** Linux's `O_PATH`: not in `node:fs`'s `constants` (non-portable), so it is
@@ -333,7 +603,7 @@ export function openGrantFds(
     }
     const childFd = nextChildFd++;
     parentFds.push(fd);
-    return { dest: g.path, childFd };
+    return { dest: g.path, childFd, isDir: fstatSync(fd).isDirectory() };
   };
   const read: OpenedGrant[] = [];
   for (const g of grants.read) {
@@ -460,6 +730,15 @@ export interface SandboxArgvInput {
    *  (`plugins.ts`'s `buildBoxArgv`) builds it right before the spawn that
    *  will use it, the same moment it opens the grant fds. */
   network?: SandboxNetworkAgentglass;
+  /** `landlockProbe().setpriv` when the second layer is available; absent,
+   *  the argv is exactly what it was before that layer existed. */
+  setpriv?: string;
+  /** `scopeProbe().python` when the abstract-socket wall is available; used
+   *  only for `network: "internet"`. Absent, the argv is what it was before. */
+  scoper?: string;
+  /** The child fd of `openSeccompFd`'s descriptor when the third wall is
+   *  available. Absent, the argv is what it was before. */
+  seccompFd?: number;
 }
 
 /** `path` entries that are — or are under — `home`, dropped: the box's PATH
@@ -497,13 +776,14 @@ function hostPathOutsideHome(hostPath: string, home: string): string[] {
  * one (program dirs, home entries dropped) and neither is a secret.
  */
 export function sandboxArgv(input: SandboxArgvInput): string[] {
-  const { bwrap, installDir, dataDir, home, entrypoint, env, sandbox, grants, programDirs, systemLinks, systemDirs, extraRo, network } = input;
+  const { bwrap, installDir, dataDir, home, entrypoint, env, sandbox, grants, programDirs, systemLinks, systemDirs, extraRo, network, setpriv, scoper, seccompFd } = input;
   const agentglassNet = sandbox.network === "agentglass";
   const path = [...hostPathOutsideHome(env.PATH, home), ...programDirs].join(":");
   const argv: string[] = [
     bwrap,
     "--unshare-all", agentglassNet ? "--unshare-net" : "--share-net",
     "--die-with-parent", "--new-session", "--cap-drop", "ALL",
+    ...(seccompFd === undefined ? [] : ["--seccomp", String(seccompFd)]),
     "--setenv", "PATH", path,
     "--setenv", "HOME", home,
     "--setenv", "AGENTGLASS_URL", env.AGENTGLASS_URL,
@@ -526,6 +806,21 @@ export function sandboxArgv(input: SandboxArgvInput): string[] {
   // Not `-try`: a bridge that is missing must fail the start loudly, not leave a box whose entrypoint can never run.
   for (const p of network?.bridgeRo ?? []) argv.push("--ro-bind", p, p);
   argv.push("--chdir", installDir);
+  // Wraps the plugin only, never the bridge in front of it: the bridge is
+  // this app and has to dial the socket the plugin is not given. Not the
+  // bridge's read-only binds either, for the same reason.
+  const dir = (path: string) => ({ path, isDir: true });
+  const plugin = [
+    ...(scoper && !agentglassNet ? scopeArgv(scoper) : []),
+    ...(setpriv
+      ? landlockArgv(setpriv, {
+        ro: [...["/usr", ...systemDirs, ...extraRo, "/proc", installDir, ...programDirs].map(dir), ...grants.read.map((g) => ({ path: g.dest, isDir: g.isDir }))],
+        dev: ["/dev"],
+        rw: [...["/dev/shm", "/tmp", home, dataDir].map(dir), ...grants.write.map((g) => ({ path: g.dest, isDir: g.isDir }))],
+      })
+      : []),
+    "bash", "-c", entrypoint,
+  ];
   if (agentglassNet) {
     if (!network) throw new Error('sandboxArgv: network: "agentglass" needs its network input built first (buildBoxArgv\'s job)');
     // Nothing else under /run: this is the one path a boxed plugin's loopback
@@ -534,9 +829,9 @@ export function sandboxArgv(input: SandboxArgvInput): string[] {
     // writable one let the plugin `chmod` the host's own socket inode.
     argv.push("--ro-bind", network.socketHostPath, PLUGIN_SOCKET_BOX_PATH);
     const port = new URL(env.AGENTGLASS_URL).port || "80";
-    argv.push(...network.bridgeExec, "plugin-bridge", "--listen", `127.0.0.1:${port}`, "--socket", PLUGIN_SOCKET_BOX_PATH, "--", "bash", "-c", entrypoint);
+    argv.push(...network.bridgeExec, "plugin-bridge", "--listen", `127.0.0.1:${port}`, "--socket", PLUGIN_SOCKET_BOX_PATH, "--", ...plugin);
   } else {
-    argv.push("bash", "-c", entrypoint);
+    argv.push(...plugin);
   }
   return argv;
 }

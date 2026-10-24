@@ -254,6 +254,10 @@ export type ProviderUsage = {
   /** Why there is nothing, when there is nothing. Rendered to the user, so it
    *  is a sentence rather than an error code. */
   note?: string;
+  /** Set when a plugin lists several logins for this provider: which one this
+   *  row reads. Label and plan are the plugin's user-chosen words, never an
+   *  email or an id. */
+  account?: { label: string; plan: string; active: boolean };
 };
 
 export interface SkillUsage {
@@ -2117,9 +2121,15 @@ export interface CardNote {
  * `check.match` is a case-insensitive substring of the check's name (or its
  * workflow's), not an exact name: it must work before the check has started and
  * on every matrix variant ("evals (py3.12)"). Ceiling: substring only, no regex.
+ *
+ * `ci-pass.ignore` is the opposite: EXACT check names (`PrCheck.name`, case-sensitive) that never block the
+ * rule, whatever state they are in. A flaky non-required job that is red for a reason that is not the change
+ * would otherwise keep "All CI passed" from ever firing. It lives on the watch, not on a head, so it survives a
+ * push or an Update branch. Ceiling: by name only, so two workflows that both run a job called `lint` are
+ * ignored together.
  */
 export type PrWatchRule =
-  | { type: "ci-pass" }
+  | { type: "ci-pass"; ignore?: string[] }
   | { type: "ci-fail" }
   | { type: "check"; match: string; on: "fail" | "pass" | "either" }
   /** Sticky: comments keep coming, so this one stays on until turned off. */
@@ -4712,6 +4722,68 @@ export interface OrphanStopResult { ok: boolean; error?: string; detail?: string
 export interface SpaceDir { path: string; name: string; bytes: number; reclaimable: boolean }
 export interface SpaceReport { root: string; bytes: number; freeable: number; dirs: SpaceDir[]; error?: string }
 
+/** What a disk-cleanup line is about. `explain` kinds are only ever shown. */
+export type DiskCleanKind =
+  | "docker-images" | "docker-cache" | "docker-containers" | "docker-volumes"
+  | "worktree" | "package-cache" | "claude-temp" | "trash"
+  | "snapshots" | "swapfile" | "logins" | "toolchain" | "tracker" | "memory";
+/** inuse: leave it, it is being used. safe: the plan removes it. ask: a person
+ *  has to look first, never in the plan. explain: shown so the numbers add up,
+ *  never deletable. */
+export type DiskCleanVerdict = "inuse" | "safe" | "ask" | "explain";
+/** The only things a clean can remove. The client never sends one: it sends a
+ *  line id and the server resolves the target from a fresh scan. */
+export type DiskCleanTarget =
+  | { via: "fs"; root: string; path: string }
+  | { via: "worktree"; repo: string; path: string }
+  | { via: "docker"; what: "images" | "cache" }
+  /** Exactly the containers the scan showed: `docker rm` of these ids and nothing else. */
+  | { via: "docker"; what: "containers"; ids: string[] };
+export interface DiskCleanLine {
+  /** Stable between scans, so a click made on one scan finds its line in the next. */
+  id: string;
+  kind: DiskCleanKind;
+  /** The mount point of the disk this lives on (from df). */
+  mount: string;
+  /** What it is, in plain words. */
+  label: string;
+  /** null: could not be measured without root. */
+  bytes: number | null;
+  verdict: DiskCleanVerdict;
+  /** Why that verdict, in plain words. */
+  why: string;
+  /** Set only on a `safe` line. */
+  target: DiskCleanTarget | null;
+}
+export interface DiskCleanMount { mount: string; source: string; size: number; free: number; /** Bytes of `safe` lines living on it. */ safeBytes: number }
+export interface DiskCleanReport {
+  lines: DiskCleanLine[];
+  mounts: DiskCleanMount[];
+  /** Total of the `safe` lines: the plan. */
+  safeBytes: number;
+  at: number;
+  /** Things that could not be read (Docker missing, gh signed out...), in plain words. */
+  problems: string[];
+}
+export interface DiskCleanLineResult {
+  id: string;
+  label: string;
+  /** planned: dry run. needs-sudo: root owns part of it, nothing was escalated. */
+  status: "planned" | "freed" | "nothing" | "needs-sudo" | "refused" | "failed";
+  /** Bytes the disk gained, df before/after on the line's mount; 0 when it did not grow. */
+  freed: number;
+  detail?: string;
+}
+export interface DiskCleanRunResult {
+  ok: boolean;
+  error?: string;
+  dryRun: boolean;
+  lines: DiskCleanLineResult[];
+  /** Free bytes on each mount before the first deletion and after the last. */
+  mounts: { mount: string; before: number; after: number }[];
+  freed: number;
+}
+
 export interface FileEntry {
   name: string;
   rel: string;
@@ -5460,7 +5532,7 @@ export interface PublicPlugin {
    *  declared — see `PublicSandboxProbe` in server/src/plugins.ts. Checked
    *  before a start is ever attempted, so the approval screen can say a box
    *  cannot be built before the person switches the plugin on. */
-  sandboxProbe?: { ok: true } | { ok: false; reason: "missing" | "userns-blocked" | "failed"; detail: string };
+  sandboxProbe?: { ok: true; landlock: boolean; abstractScope: boolean; seccomp?: boolean; seccompDetail?: string } | { ok: false; reason: "missing" | "userns-blocked" | "failed"; detail: string };
   /** What a start does on this host — see `boxPlan` in shared/pluginBoxPlan.ts.
    *  Present only when `sandbox` is declared. The probe alone cannot draw the
    *  screen: it says "missing" on every non-Linux host, where the plugin

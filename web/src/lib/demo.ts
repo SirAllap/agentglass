@@ -14,7 +14,7 @@ import type {
   PrRepoId, PrSummary, PrDetail, PrThread, PrCheck, PrCheckRollup, PrCheckState, PrListResponse,
   UsageDay, UsageHistory, ActionRecord, ProviderUsage,
   IssueRow, IssueDetail, IssuesReport, IssueWork, FileEntry, TreeReport, FindReport,
-  PortsReport, PortEntry, ResourceReport, OrphanReport, ProcEntry, SpaceReport, SpaceDir,
+  PortsReport, PortEntry, ResourceReport, OrphanReport, DiskCleanReport, DiskCleanRunResult, ProcEntry, SpaceReport, SpaceDir,
 } from "../../../shared/types.ts";
 import { modelLabelOf, providerOf } from "./format.ts";
 import { ctxLimitOf } from "./contextWindow.ts";
@@ -1324,6 +1324,64 @@ export function machineOrphans(): OrphanReport {
       ageSec: 6 * 86400 + 15 * 3600, cpu: 45.2, rss: 310 * MB, hot: true, origin: "worktree shop-web", session: null,
       reasons: ["its parent is gone and it averages 45% of a core", "a command that should finish (bun) has been running for 6d15h"],
     }],
+  };
+}
+/** Which face of the disk cleanup block a demo URL asks for (`?disk=empty`): the demo has no server to be slow, empty or broken, so each state is a switch. */
+export type DiskDemo = "plan" | "empty" | "error" | "fail" | "staged";
+export function diskDemoVariant(): DiskDemo {
+  try {
+    const v = new URLSearchParams(location.search).get("disk");
+    return v === "empty" || v === "error" || v === "fail" || v === "staged" ? v : "plan";
+  } catch { return "plan"; }
+}
+export function machineDiskClean(variant: DiskDemo = "plan"): DiskCleanReport {
+  const home = "/", data = "/var/lib/docker";
+  const lines: DiskCleanReport["lines"] = [
+    { id: "docker:images", kind: "docker-images", mount: data, label: "Docker images no container uses", bytes: Math.round(59.4 * GB), verdict: "safe", target: { via: "docker", what: "images" },
+      why: "113 images are not used by any container, running or stopped. They download or rebuild when needed." },
+    { id: "docker:cache", kind: "docker-cache", mount: data, label: "Docker build cache", bytes: Math.round(61.1 * GB), verdict: "safe", target: { via: "docker", what: "cache" },
+      why: "Layers kept from earlier builds. The next build recreates what it needs, a little slower." },
+    { id: "worktree:/home/dev/code/orbit-ORBIT-1042", kind: "worktree", mount: home, label: "Checkout orbit-ORBIT-1042 (feat/orbit-1042)", bytes: Math.round(1.1 * GB), verdict: "safe",
+      target: { via: "worktree", repo: "/home/dev/code/orbit", path: "/home/dev/code/orbit-ORBIT-1042" },
+      why: "Pull request #1042 is merged, nothing is uncommitted and nothing is unpushed. The branch stays in the repository." },
+    { id: "cache:uv", kind: "package-cache", mount: home, label: "uv (Python) download cache", bytes: Math.round(1.8 * GB), verdict: "safe", target: { via: "fs", root: "/home/dev/.cache/uv", path: "/home/dev/.cache/uv" },
+      why: "A download cache. It refills the next time a tool needs something, which costs bandwidth, not data." },
+    { id: "worktree:/home/dev/code/orbit-ORBIT-1050", kind: "worktree", mount: home, label: "Checkout orbit-ORBIT-1050 (feat/orbit-1050)", bytes: Math.round(0.9 * GB), verdict: "ask", target: null,
+      why: "3 files with changes that are not committed." },
+    { id: "docker:containers", kind: "docker-containers", mount: data, label: "Docker containers that stopped", bytes: Math.round(5 * GB), verdict: "ask", target: null,
+      why: "2 containers stopped. dev, pg exited with 0, which is also how a shell you left or a database you stopped ends, and removing one drops what it kept outside a volume. Look first." },
+    { id: "docker:images-used", kind: "docker-images", mount: data, label: "Docker images in use", bytes: Math.round(50.1 * GB), verdict: "inuse", target: null,
+      why: "7 images belong to containers (4 running), so they stay." },
+    { id: "docker:volumes-used", kind: "docker-volumes", mount: data, label: "Docker volumes in use", bytes: Math.round(4.9 * GB), verdict: "inuse", target: null,
+      why: "13 volumes are attached to containers; this is where databases live. Projects with containers: orbit." },
+    { id: "logins-browser", kind: "logins", mount: home, label: "agentglass browser sign-ins and site data", bytes: Math.round(4.3 * GB), verdict: "explain", target: null,
+      why: "Holds the sites you are signed in to. Deleting it signs you out everywhere, so it is yours to decide." },
+  ];
+  // Nothing left to remove: what is not safe stays, so the empty face still has lines to explain.
+  const shown = variant === "empty" ? lines.filter((l) => l.verdict !== "safe") : lines;
+  const safe = shown.filter((l) => l.verdict === "safe");
+  const sum = (m: string) => safe.filter((l) => l.mount === m).reduce((n, l) => n + (l.bytes ?? 0), 0);
+  return {
+    lines: shown, at: Date.now(), safeBytes: sum(home) + sum(data),
+    problems: variant === "error" ? ["Docker is not installed or not running, so its images, build cache and containers are not listed."] : [],
+    mounts: [
+      { mount: home, source: "/dev/mapper/dev_root", size: 224 * GB, free: Math.round(5.1 * GB), safeBytes: sum(home) },
+      { mount: data, source: "/dev/mapper/dev_data", size: 241 * GB, free: Math.round(30 * GB), safeBytes: sum(data) },
+    ],
+  };
+}
+/** What a clean of `ids` would report on the demo machine: every line freed, but the checkout, which root owns part of. */
+export function machineDiskCleanRun(ids: string[] = []): DiskCleanRunResult {
+  const by = new Map(machineDiskClean().lines.map((l) => [l.id, l] as const));
+  const picked = ids.map((id) => by.get(id)).filter((l): l is DiskCleanReport["lines"][number] => !!l && l.verdict === "safe");
+  const lines: DiskCleanRunResult["lines"] = picked.map((l) => l.id === "worktree:/home/dev/code/orbit-ORBIT-1042"
+    ? { id: l.id, label: l.label, status: "needs-sudo", freed: 0 }
+    : { id: l.id, label: l.label, status: "freed", freed: l.bytes ?? 0 });
+  const gained = (m: string) => lines.reduce((n, x) => n + (by.get(x.id)?.mount === m ? x.freed : 0), 0);
+  const base = machineDiskClean().mounts;
+  return {
+    ok: true, dryRun: false, lines, freed: lines.reduce((n, l) => n + l.freed, 0),
+    mounts: base.map((m) => ({ mount: m.mount, before: m.free, after: m.free + gained(m.mount) })),
   };
 }
 export function machineSpace(root = "/home/dev/code/shop-web"): SpaceReport {

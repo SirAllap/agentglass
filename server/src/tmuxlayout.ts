@@ -61,12 +61,28 @@ const free = (v: string): string => `#{s/%/%25/;s/\t/%09/;s/\n/%0A/:${v}}`;
 export const unfree = (s: string | undefined): string =>
   (s ?? "").replace(/%(25|09|0A)/g, (_, h: string) => (h === "25" ? "%" : h === "09" ? "\t" : "\n"));
 
+/*
+ * A WINDOW'S NAME AS TMUX IS ABOUT TO HAVE IT.
+ *
+ * With `automatic-rename` on, tmux renames a window on a later loop than the
+ * exec of its pane, and a detached window, with no client to drive that loop,
+ * keeps `tmux` for a name (measured on tmux 3.6 and 3.8: still `tmux` two
+ * seconds after its pane was running `sleep`). A layout photograph matches
+ * windows by name and directory, so a photograph under `tmux` and the next
+ * under the real name were two windows, and a crash restore built both. The
+ * name is read as tmux computes it — `automatic-rename-format` expanded for
+ * the window, the person's own format if they set one — whenever that option
+ * is on; a window named by hand (`-n`, `rename-window`) has it off and keeps
+ * its name.
+ */
+const WINDOW_NAME = `#{?#{automatic-rename},#{s/%/%25/;s/\t/%09/;s/\n/%0A/;E:automatic-rename-format},${free("window_name")}}`;
+
 /** One window row for a session, or null when the session is gone. */
 export async function listWindows(name: string): Promise<TmuxWindow[]> {
   if (!validSessionName(name)) return [];
   const r = await tmux([
     "list-windows", "-t", `=${name}`,
-    "-F", `#{window_id}\t#{window_index}\t${free("window_name")}\t#{window_active}\t#{window_flags}\t#{window_layout}`,
+    "-F", `#{window_id}\t#{window_index}\t${WINDOW_NAME}\t#{window_active}\t#{window_flags}\t#{window_layout}`,
   ]);
   if (!r.ok) return [];
   return r.stdout.split("\n").filter(Boolean).map((line) => {
@@ -122,7 +138,7 @@ export async function windowTree(name: string): Promise<TmuxWindowDetail[]> {
  */
 export async function allWindowTrees(): Promise<{ trees: Map<string, TmuxWindowDetail[]>; starts: Map<string, string> } | null> {
   const [wr, pr] = await Promise.all([
-    tmux(["list-windows", "-a", "-F", `${free("session_name")}\t#{window_id}\t#{window_index}\t${free("window_name")}\t#{window_active}\t#{window_flags}\t#{window_layout}`]),
+    tmux(["list-windows", "-a", "-F", `${free("session_name")}\t#{window_id}\t#{window_index}\t${WINDOW_NAME}\t#{window_active}\t#{window_flags}\t#{window_layout}`]),
     tmux(["list-panes", "-a", "-F", `${free("session_name")}\t#{window_id}\t#{pane_id}\t#{pane_index}\t#{pane_active}\t${free("pane_current_command")}\t${free("pane_current_path")}\t#{pane_dead}\t#{pane_pid}\t${free("pane_start_command")}`]),
   ]);
   if (!wr.ok || !pr.ok) return null;

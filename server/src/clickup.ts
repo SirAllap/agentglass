@@ -18,12 +18,13 @@
  */
 import { statusSpaces, type CardsRead, type StatusSpaces } from "../../shared/statusSpaces.ts";
 import { singleFlight } from "./singleflight.ts";
+import { facetsOf, judgeStale, noteSeen, type Facet } from "./cardStamp.ts";
 import { cardIdDigits, mentionsCardId } from "../../shared/cardRef.ts";
 import { matchesQuery, mergeRequestNumber, prAddress, readTaskRef } from "../../shared/taskref.ts";
 import * as Index from "./clickupindex.ts";
 import { writesAllowed } from "./clickupviews.ts";
 import { clickupPrefs, matchPref, DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN } from "./clickupPrefs.ts";
-import { secretFor, annotate, redacted, fingerprint } from "./credentials.ts";
+import { secretFor, annotate, redacted, fingerprint, notConnected } from "./credentials.ts";
 import { markdownToDelta, type MentionPerson } from "./clickupDelta.ts";
 import type {
   ListMember, TaskReply, ProviderTask, ClickUpUser, ClickUpWorkspace, ListStatus, ListField, ListPlace, TaskDetail,
@@ -31,6 +32,9 @@ import type {
 
 import type { CallResult, WriteOutcome } from "./trackerTypes.ts";
 import { hasUrlCredentials } from "../../shared/urlCredentials.ts";
+
+/** The line for a call made without a token: with the keyring on and locked, it says so. */
+const notConnectedMsg = (): string => notConnected("clickup", "ClickUp is not connected");
 // Defined in trackerTypes.ts so the Jira client can use them without importing
 // this file; re-exported so no existing importer changes.
 export type { CallResult, WriteOutcome };
@@ -368,9 +372,15 @@ interface RawComment {
   date?: string | number;
 }
 
+/** What a write can set, as the card shows it: the baseline `guardUnchanged` compares against. */
+const facetsOfRaw = (raw: RawTask) =>
+  facetsOf(raw.status?.status ?? "", (raw.assignees ?? []).map((a) => ({ key: String(a.id ?? a.username ?? ""), name: a.username ?? "" })).filter((p) => p.key),
+    raw.priority?.priority);
+
 export function toTask(raw: RawTask, myId?: string): ProviderTask {
   const kind = raw.status?.type;
   const assignees = raw.assignees ?? [];
+  noteSeen(`clickup:${raw.id}`, Number(raw.date_updated) || 0, facetsOfRaw(raw));
   return {
     id: String(raw.id),
     customId: raw.custom_id ? String(raw.custom_id) : undefined,
@@ -698,7 +708,7 @@ async function changedPages(
 
 export async function changedForMe(sinceMs: number): Promise<CallResult<{ tasks: ProviderTask[]; truncated: boolean }>> {
   const token = secretFor("clickup");
-  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!token) return { ok: false, error: notConnectedMsg() };
   const me = redacted("clickup");
   if (!me?.workspaceId || !me.accountId) return { ok: false, error: "No ClickUp workspace chosen yet" };
   const q = new URLSearchParams({
@@ -792,7 +802,7 @@ async function sweepWorkspace(
      workspace it covers, and only this function's callers can act on it. */
 ): Promise<CallResult<SweptTask[]> & { partial?: boolean; reach?: Reach }> {
   const token = secretFor("clickup");
-  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!token) return { ok: false, error: notConnectedMsg() };
   const gen = credGen;
   const me = redacted("clickup");
   if (!me?.workspaceId) return { ok: false, error: "No ClickUp workspace chosen yet" };
@@ -860,7 +870,7 @@ async function sweepWorkspace(
   // search that says so than a minute and an error.
   if (pages.every((r) => !r.ok)) return { ...pages[0]!, data: undefined };
   // Disconnected while the pages were in flight: nothing of them is written down.
-  if (gen !== credGen) return { ok: false, error: "ClickUp is not connected" };
+  if (gen !== credGen) return { ok: false, error: notConnectedMsg() };
   /* "That says so" — and until now nothing did. A sweep missing a page came
      back looking exactly like a complete one, was stored in the cache as
      complete, and answered every question for the next ten minutes from a
@@ -1094,7 +1104,7 @@ export async function searchTasks(q: string, force = false): Promise<CallResult<
  */
 export async function changedOnLists(sinceMs: number, listIds: string[]): Promise<CallResult<{ tasks: ProviderTask[]; truncated: boolean }>> {
   const token = secretFor("clickup");
-  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!token) return { ok: false, error: notConnectedMsg() };
   const me = redacted("clickup");
   /* `accountId` is in the guard because `toTask` needs it to mark a card as
      yours, and an unmarked card reads as somebody else's on every surface. */
@@ -1132,7 +1142,7 @@ export interface CardComment {
 
 export async function commentsOn(taskId: string): Promise<CallResult<{ comments: CardComment[] }>> {
   const token = secretFor("clickup");
-  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!token) return { ok: false, error: notConnectedMsg() };
   const r = await call<{ comments?: RawComment[] }>(`/task/${encodeURIComponent(taskId)}/comment`, token);
   if (!r.ok) return { ...r, data: undefined };
   const comments = (r.data?.comments ?? []).map((c) => ({
@@ -1273,7 +1283,7 @@ export async function clickupTasks(force = false): Promise<ClickUpSnapshot> {
     if (!force && snap && Date.now() - snap.at < TTL_MS) return snap;
     const token = secretFor("clickup");
     if (!token) {
-      snap = { at: Date.now(), tasks: [], more: false, error: "ClickUp is not connected" };
+      snap = { at: Date.now(), tasks: [], more: false, error: notConnectedMsg() };
       return snap;
     }
     const { workspaceId, userId } = await identity(token);
@@ -1287,7 +1297,7 @@ export async function clickupTasks(force = false): Promise<ClickUpSnapshot> {
     const gen = credGen;
     const r = await fetchTasks(token, workspaceId, userId);
     // Disconnected while this was in flight: hand back nothing and keep nothing.
-    if (gen !== credGen) return { at: Date.now(), tasks: [], more: false, error: "ClickUp is not connected" };
+    if (gen !== credGen) return { at: Date.now(), tasks: [], more: false, error: notConnectedMsg() };
     if (!r.ok) {
       // Keep what we had. See ClickUpSnapshot.error.
       snap = {
@@ -2108,8 +2118,12 @@ export const CLICKUP_WRITE_ENABLED = process.env.AGENTGLASS_CLICKUP_WRITE === "1
  * moved since. It is weaker than a fingerprint — two edits inside the same
  * millisecond would slip through — and it catches the case that actually
  * happens, which is somebody moving the card while you had it open.
+ *
+ * `touches` is what the write sets. A stamp that moved under other fields (a
+ * comment, a tag) is not a conflict with it — see `cardStamp.ts`; a write that
+ * names no fields keeps the strict rule.
  */
-async function guardUnchanged(token: string, taskId: string, expectUpdated?: number): Promise<WriteOutcome | null> {
+async function guardUnchanged(token: string, taskId: string, expectUpdated?: number, touches?: readonly Facet[]): Promise<WriteOutcome | null> {
   if (!expectUpdated) return null;
   const r = await call<RawTask>(`/task/${encodeURIComponent(taskId)}`, token);
   // A read that failed says nothing about whether the card moved, so it is not
@@ -2123,7 +2137,11 @@ async function guardUnchanged(token: string, taskId: string, expectUpdated?: num
     };
   }
   const now = Number(r.data?.date_updated) || 0;
-  if (now && now !== expectUpdated) return { ok: false, conflict: true, error: "Somebody changed this card while you had it open — reloaded" };
+  if (now && now !== expectUpdated) {
+    const head = "Somebody changed this card while you had it open — reloaded";
+    const v = touches && r.data ? judgeStale(`clickup:${r.data.id}`, expectUpdated, facetsOfRaw(r.data), touches, head) : { go: false as const, error: head };
+    if (!v.go) return { ok: false, conflict: true, error: v.error };
+  }
   return null;
 }
 
@@ -2160,11 +2178,11 @@ async function putRaw(pathname: string, token: string, body: unknown): Promise<C
 /** Put yourself on a card, or take yourself off it. */
 export async function assignSelf(taskId: string, on: boolean, expectUpdated?: number): Promise<WriteOutcome> {
   const token = secretFor("clickup");
-  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!token) return { ok: false, error: notConnectedMsg() };
   if (!clickupWriteEnabled()) return { ok: false, error: "Writing to ClickUp is switched off" };
   const me = redacted("clickup")?.accountId;
   if (!me) return { ok: false, error: "Do not know which ClickUp account this is" };
-  const refused = await guardUnchanged(token, taskId, expectUpdated);
+  const refused = await guardUnchanged(token, taskId, expectUpdated, ["assignees"]);
   if (refused) return refused;
   const n = Number(me);
   const r = await put(`/task/${encodeURIComponent(taskId)}`, token, {
@@ -2219,7 +2237,7 @@ export function mergeMembers(raw: NonNullable<RawTask["assignees"]>[number][], m
  */
 export async function listMembers(listId: string): Promise<CallResult<{ members: ListMember[] }>> {
   const token = secretFor("clickup");
-  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!token) return { ok: false, error: notConnectedMsg() };
   const me = redacted("clickup")?.accountId;
   /*
    * The list AND the workspace, because the list alone is wrong here.
@@ -2274,7 +2292,7 @@ export async function listMembers(listId: string): Promise<CallResult<{ members:
  */
 export async function workspaceMembers(): Promise<CallResult<{ members: ListMember[] }>> {
   const token = secretFor("clickup");
-  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!token) return { ok: false, error: notConnectedMsg() };
   const me = redacted("clickup");
   const team = await teamOnce(token);
   if (!team.ok) return { ok: false, error: team.error, unauthorised: team.unauthorised };
@@ -2297,10 +2315,10 @@ export async function workspaceMembers(): Promise<CallResult<{ members: ListMemb
  */
 export async function setAssignee(taskId: string, userId: number, on: boolean, expectUpdated?: number): Promise<WriteOutcome> {
   const token = secretFor("clickup");
-  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!token) return { ok: false, error: notConnectedMsg() };
   if (!clickupWriteEnabled()) return { ok: false, error: "Writing to ClickUp is switched off" };
   if (!Number.isFinite(userId)) return { ok: false, error: "That is not a person" };
-  const refused = await guardUnchanged(token, taskId, expectUpdated);
+  const refused = await guardUnchanged(token, taskId, expectUpdated, ["assignees"]);
   if (refused) return refused;
   const r = await put(`/task/${encodeURIComponent(taskId)}`, token, {
     assignees: on ? { add: [userId] } : { rem: [userId] },
@@ -2334,7 +2352,7 @@ export async function setCard(
   expectUpdated?: number,
 ): Promise<WriteOutcome> {
   const token = secretFor("clickup");
-  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!token) return { ok: false, error: notConnectedMsg() };
   if (!clickupWriteEnabled()) return { ok: false, error: "Writing to ClickUp is switched off" };
   const add = (changes.add ?? []).filter((n) => Number.isFinite(n));
   /* "Whoever is pressing", answered here from the connected account: the page
@@ -2350,7 +2368,7 @@ export async function setCard(
   // A no-op is a mistake upstream, not a write: sending one dates somebody
   // else's card for nothing.
   if (!add.length && !rem.length && !status) return { ok: false, error: "nothing to change" };
-  const refused = await guardUnchanged(token, taskId, expectUpdated);
+  const refused = await guardUnchanged(token, taskId, expectUpdated, [...(add.length || rem.length ? ["assignees" as const] : []), ...(status ? ["status" as const] : [])]);
   if (refused) return refused;
   const body: Record<string, unknown> = {};
   if (add.length || rem.length) {
@@ -2365,10 +2383,10 @@ export async function setCard(
 
 export async function setStatus(taskId: string, status: string, expectUpdated?: number): Promise<WriteOutcome> {
   const token = secretFor("clickup");
-  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!token) return { ok: false, error: notConnectedMsg() };
   if (!clickupWriteEnabled()) return { ok: false, error: "Writing to ClickUp is switched off" };
   if (!status.trim()) return { ok: false, error: "no status given" };
-  const refused = await guardUnchanged(token, taskId, expectUpdated);
+  const refused = await guardUnchanged(token, taskId, expectUpdated, ["status"]);
   if (refused) return refused;
   const r = await put(`/task/${encodeURIComponent(taskId)}`, token, { status });
   __reset();
@@ -2395,11 +2413,11 @@ export const PRIORITY_WIRE: Record<string, number> = { urgent: 1, high: 2, norma
 
 export async function setPriority(taskId: string, priority: string | null, expectUpdated?: number): Promise<WriteOutcome> {
   const token = secretFor("clickup");
-  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!token) return { ok: false, error: notConnectedMsg() };
   if (!clickupWriteEnabled()) return { ok: false, error: "Writing to ClickUp is switched off" };
   const wire = !priority ? null : PRIORITY_WIRE[priority];
   if (wire === undefined) return { ok: false, error: "that is not a priority" };
-  const refused = await guardUnchanged(token, taskId, expectUpdated);
+  const refused = await guardUnchanged(token, taskId, expectUpdated, ["priority"]);
   if (refused) return refused;
   const r = await put(`/task/${encodeURIComponent(taskId)}`, token, { priority: wire });
   __reset();
@@ -2421,7 +2439,7 @@ export async function setPriority(taskId: string, priority: string | null, expec
  */
 export async function commentOn(taskId: string, text: string, assignee?: number): Promise<WriteOutcome> {
   const token = secretFor("clickup");
-  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!token) return { ok: false, error: notConnectedMsg() };
   if (!clickupWriteEnabled()) return { ok: false, error: "Writing to ClickUp is switched off" };
   const body = String(text ?? "").trim();
   // An empty comment is a mistake upstream, not a write. It would still bump
@@ -2458,6 +2476,21 @@ export async function commentOn(taskId: string, text: string, assignee?: number)
   } finally { clearTimeout(kill); }
 }
 
+/**
+ * The card as it stands now, for the writes that answer without one.
+ *
+ * A comment moves the card's stamp and ClickUp's answer to it says nothing of
+ * the new one, so the view that wrote it kept the old stamp and the NEXT write
+ * from another view of the same card was refused as somebody else's change. One
+ * read, only after a comment landed — which a person types at a person's pace.
+ */
+export async function readTask(taskId: string): Promise<ProviderTask | null> {
+  const token = secretFor("clickup");
+  if (!token) return null;
+  const r = await call<RawTask>(`/task/${encodeURIComponent(taskId)}`, token);
+  return r.ok && r.data ? toTask(r.data, redacted("clickup")?.accountId) : null;
+}
+
 /* ------------------------------------------------------------- writing --- */
 
 /**
@@ -2477,7 +2510,7 @@ async function send(method: string, pathname: string, body?: unknown): Promise<C
 
 async function sendRaw(method: string, pathname: string, body?: unknown): Promise<CallResult<unknown>> {
   const token = secretFor("clickup");
-  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!token) return { ok: false, error: notConnectedMsg() };
   const ctl = new AbortController();
   const kill = setTimeout(() => ctl.abort(), TIMEOUT_MS);
   try {
@@ -2507,7 +2540,7 @@ async function sendRaw(method: string, pathname: string, body?: unknown): Promis
 /** The two checks every write shares, in the order that makes the message
  *  useful: no token before no permission before a stale card. */
 function writable(): string | null {
-  if (!secretFor("clickup")) return "ClickUp is not connected";
+  if (!secretFor("clickup")) return notConnectedMsg();
   if (!clickupWriteEnabled()) return "Writing to ClickUp is switched off";
   return null;
 }
@@ -2671,7 +2704,7 @@ export async function moveToList(taskId: string, listId: string, fromListId?: st
  */
 export async function sprintLists(taskId: string): Promise<CallResult<{ lists: { id: string; name: string }[]; current: { id: string; name: string } | null }>> {
   const token = secretFor("clickup");
-  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!token) return { ok: false, error: notConnectedMsg() };
   const t = await call<RawTask & { space?: { id?: string } }>(`/task/${encodeURIComponent(taskId)}`, token);
   if (!t.ok) return { ok: false, error: t.error, unauthorised: t.unauthorised };
   const spaceId = String(t.data?.space?.id ?? "");
@@ -2925,7 +2958,7 @@ function withSeen(events: CardEvent[], id: string, customId: string): CardEvent[
 
 export async function taskDetail(askedId: string): Promise<CallResult<TaskDetail>> {
   const token = secretFor("clickup");
-  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!token) return { ok: false, error: notConnectedMsg() };
   /* A link on a workspace with custom ids names the card by its human id
      (ORBIT-1042), and every call below takes the plain one — the comment and
      time-in-status routes do not take the custom-id flag at all. One read
@@ -3220,7 +3253,7 @@ export interface FindOptions { noCustomIds?: boolean }
 
 async function findCardUncached(text: string, knownPrefix: string, o: FindOptions = {}): Promise<CallResult<FoundCard>> {
   const token = secretFor("clickup");
-  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!token) return { ok: false, error: notConnectedMsg() };
   const asked = normaliseCardQuery(text, knownPrefix);
   if (!asked) {
     // "Open a board first" promises a prefix that, on a workspace without
@@ -3576,7 +3609,7 @@ export async function projectPullRequests(
  */
 export async function clickupSpaces(fresh = false): Promise<CallResult<{ spaces: ClickUpSpace[] }>> {
   const token = secretFor("clickup");
-  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!token) return { ok: false, error: notConnectedMsg() };
   const me = redacted("clickup");
   if (!me?.workspaceId) return { ok: false, error: "No ClickUp workspace chosen yet" };
   /* The same answer carries each space's statuses (`statuses[]`, with their
@@ -3642,7 +3675,7 @@ export interface ClickUpFolder {
 
 export async function clickupFolders(spaceId: string): Promise<CallResult<{ folders: ClickUpFolder[] }>> {
   const token = secretFor("clickup");
-  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!token) return { ok: false, error: notConnectedMsg() };
   const id = String(spaceId || "").trim();
   // An id, and only an id: this reaches a URL, and a space id from the UI must
   // not be able to become a path of its own.
@@ -3728,7 +3761,7 @@ export async function clickupFolders(spaceId: string): Promise<CallResult<{ fold
  *  space's worth of folders. */
 export async function clickupFolderLists(folderId: string): Promise<CallResult<{ name: string; lists: { id: string; name: string }[] }>> {
   const token = secretFor("clickup");
-  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!token) return { ok: false, error: notConnectedMsg() };
   const id = String(folderId || "").trim();
   if (!/^[0-9]+$/.test(id)) return { ok: false, error: "not a folder id" };
   const r = await call<{ name?: string; lists?: { id: string; name?: string; archived?: boolean }[] }>(
@@ -3777,7 +3810,7 @@ const taskSpaceCache = new Map<string, string>();
 /** The tags of the space a task lives in, by task id. */
 export async function tagsForTask(taskId: string): Promise<CallResult<string[]>> {
   const token = secretFor("clickup");
-  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!token) return { ok: false, error: notConnectedMsg() };
   let space = taskSpaceCache.get(taskId);
   if (!space) {
     const t = await call<{ space?: { id?: string } }>(`/task/${encodeURIComponent(taskId)}`, token);

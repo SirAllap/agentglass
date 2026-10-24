@@ -60,6 +60,7 @@ const MUTATING = [
   `pathname === "/scratch/image"`,
   `pathname === "/machine/unlock"`,
   `pathname === "/machine/kill"`,
+  `pathname === "/machine/disk-clean/run"`,
   `pathname === "/terminal/panes/focus"`,
   `pathname === "/chat/send"`,
   `pathname === "/chat/pane/close"`,

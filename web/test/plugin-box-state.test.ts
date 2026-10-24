@@ -4,7 +4,7 @@
  * pinned without a renderer.
  */
 import { describe, expect, test } from "bun:test";
-import { boxWording, envHatchNotice, neighbourKeyWording, unboxedControl, USERNS_FIX } from "../src/lib/pluginBoxState.ts";
+import { boxWording, envHatchNotice, neighbourKeyWording, secondLayerNote, unboxedControl, USERNS_FIX } from "../src/lib/pluginBoxState.ts";
 import type { PublicPlugin } from "../../shared/types.ts";
 
 const SANDBOX = { network: "agentglass" as const, read: [], write: [], programs: [] };
@@ -41,13 +41,13 @@ describe("boxWording", () => {
   });
 
   test("not running, host probe is fine, but the last attempt died early: red, with the captured detail", () => {
-    const w = boxWording(plugin({ running: false, sandboxProbe: { ok: true }, lastBoxFailure: "bwrap: setting up mount namespace: Permission denied" }));
+    const w = boxWording(plugin({ running: false, sandboxProbe: { ok: true, landlock: true, abstractScope: true }, lastBoxFailure: "bwrap: setting up mount namespace: Permission denied" }));
     expect(w!.tone).toBe("warning");
     expect(w!.text).toContain("bwrap: setting up mount namespace: Permission denied");
   });
 
   test("not running, host probe ok, no past failure: neutral", () => {
-    const w = boxWording(plugin({ running: false, sandboxProbe: { ok: true } }));
+    const w = boxWording(plugin({ running: false, sandboxProbe: { ok: true, landlock: true, abstractScope: true } }));
     expect(w!.tone).toBe("neutral");
   });
 
@@ -145,12 +145,12 @@ describe("boxWording, platform x probe x plan x running", () => {
 
   test("the box can be built: neutral on any platform, whatever the consent", () => {
     for (const p of [undefined, "box"] as const) {
-      expect(boxWording(plugin({ boxPlan: p, sandboxProbe: { ok: true } }))!.tone).toBe("neutral");
+      expect(boxWording(plugin({ boxPlan: p, sandboxProbe: { ok: true, landlock: true, abstractScope: true } }))!.tone).toBe("neutral");
     }
   });
 
   test("a failure that stopped the last start says it did not start, not that it ran as you", () => {
-    const w = boxWording(plugin({ boxPlan: "box", sandboxProbe: { ok: true }, lastBoxFailure: "bwrap: no" }))!;
+    const w = boxWording(plugin({ boxPlan: "box", sandboxProbe: { ok: true, landlock: true, abstractScope: true }, lastBoxFailure: "bwrap: no" }))!;
     expect(w.text).toContain("bwrap: no");
     expect(w.text).not.toMatch(/ran as you|runs as you/);
   });
@@ -202,5 +202,31 @@ describe("envHatchNotice", () => {
     expect(envHatchNotice(undefined)).toBeNull();
     expect(envHatchNotice(false)).toBeNull();
     expect(envHatchNotice(true)).toMatch(/AGENTGLASS_PLUGINS_UNBOXED=1/);
+  });
+});
+
+describe("secondLayerNote", () => {
+  test("only when the box builds and Landlock does not", () => {
+    expect(secondLayerNote({ sandbox: SANDBOX, sandboxProbe: { ok: true, landlock: false, abstractScope: true } })).toMatch(/Landlock/);
+    expect(secondLayerNote({ sandbox: SANDBOX, sandboxProbe: { ok: true, landlock: true, abstractScope: true } })).toBeNull();
+    expect(secondLayerNote({ sandbox: SANDBOX, sandboxProbe: { ok: false, reason: "missing", detail: "x" } })).toBeNull();
+    expect(secondLayerNote({ sandbox: undefined, sandboxProbe: { ok: true, landlock: false, abstractScope: false } })).toBeNull();
+  });
+
+  test("names the syscall filter when it is missing, with why, and only when the server says so", () => {
+    const sc = (seccomp: boolean | undefined, landlock = true) => secondLayerNote({ sandbox: SANDBOX, sandboxProbe: { ok: true, landlock, abstractScope: true, seccomp, seccompDetail: "there is no filter for this architecture (riscv64)" } });
+    expect(sc(false)).toBe("This system cannot add the syscall filter: there is no filter for this architecture (riscv64).");
+    expect(sc(true)).toBeNull();
+    expect(sc(undefined)).toBeNull();
+    expect(sc(false, false)).toMatch(/Landlock or the syscall filter, so the box is the only wall/);
+    expect(sc(true, false)).toMatch(/the box and the syscall filter are the walls/);
+  });
+
+  /* An internet box shares the host's abstract-socket namespace; without the scope that wall is missing. */
+  test("an internet plugin names the abstract-socket wall when the kernel has no scope for it", () => {
+    const internet = { ...SANDBOX, network: "internet" as const };
+    expect(secondLayerNote({ sandbox: internet, sandboxProbe: { ok: true, landlock: true, abstractScope: false } })).toMatch(/abstract sockets/);
+    expect(secondLayerNote({ sandbox: internet, sandboxProbe: { ok: true, landlock: true, abstractScope: true } })).toBeNull();
+    expect(secondLayerNote({ sandbox: SANDBOX, sandboxProbe: { ok: true, landlock: true, abstractScope: false } })).toBeNull();
   });
 });

@@ -34,6 +34,32 @@ describe("every route the server judges by the desk key sends it", () => {
       expect(idx).toContain(`"${name}`);
     }
   });
+  // Judged by mayPublishReview, which asks for the key whenever the app holds one:
+  // without it the window's own press of the keyring switch became an agent's
+  // request (on) or a 403 (off), and Clean up disk answered 403 to the person.
+  test("the keyring switch, its re-read and the disk clean are on the list", () => {
+    for (const r of ["/keyring/toggle", "/keyring/rehydrate", "/machine/disk-clean/run"]) {
+      expect(deskGated(r)).toBe(true);
+      const at = idx.indexOf(`pathname === "${r}"`);
+      expect(at).toBeGreaterThan(-1);
+      expect(idx.slice(at, idx.indexOf("\n    }\n", at))).toContain("mayPublishReview(req, caller)");
+    }
+    expect(deskGated("/keyring")).toBe(false);
+    expect(deskGated("/machine/disk-clean")).toBe(false);
+  });
+  // The same hole on Data & privacy and the Jira write switches: judged by
+  // mayPublishReview and posted through the shared post without the key, so
+  // the person's erase was a 403 and a retention or write-kind save became an
+  // agent's request. /orchestration sends the key itself (deskHeader()).
+  test("data retention, erase history and the Jira write kinds are on the list", () => {
+    for (const r of ["/privacy/retention", "/privacy/erase-history", "/jira/write-kinds"]) {
+      expect(deskGated(r)).toBe(true);
+      const at = idx.indexOf(`pathname === "${r}"`);
+      expect(at).toBeGreaterThan(-1);
+      expect(idx.slice(at, idx.indexOf("\n    }\n", at))).toContain("mayPublishReview(req, caller)");
+    }
+    expect(api).toMatch(/"\/orchestration", \{ root, policy \}, deskHeader\(\)/);
+  });
   test("a read of the same family does not", () => {
     for (const r of ["/finder/devices", "/finder/network", "/finder/actions", "/finder/openwith?path=/a"]) expect(deskGated(r)).toBe(false);
   });

@@ -136,8 +136,8 @@ here will stop you.
   live. A commit that adds tests may raise a floor; one that removes tests
   lowers it on purpose. Read the line, not the exit code, when it is missing.
 - Before pushing, `make ci-docker`: the CI jobs in a container that is the
-  runner (ubuntu 24.04, tmux 3.4, python 3.12, the bun `ci.yml` pins, Chrome,
-  no `TERM`, a non-root user) on the tree as it is now. It runs every step
+  runner (ubuntu 26.04, tmux 3.6, python 3.14, Node 24, the bun `ci.yml`
+  pins, Chrome, no `TERM`, a non-root user) on the tree as it is now. It runs every step
   and names each one that failed. `make ci` runs on this machine's tmux and
   python, which is how a commit passed here and failed there.
 
@@ -174,6 +174,19 @@ here will stop you.
   private `TMUX_TMPDIR`, `env -u TMUX`, `sleep` as the window command, and
   `kill-server` before restoring `TMUX_TMPDIR`. Never `tmux kill-server`
   without `-L`.
+- A new pane's directory and command are set by tmux's child after the
+  command that made it returns; read at once, it still reports the tmux
+  server's cwd. A test that reads a pane it just made waits for it with
+  `settled()` from `server/test/paneSettled.ts`, never reads once — and that
+  includes a request to a server that reads the pane, and the first layout
+  photograph. A window's automatic name (`tmux` until then) catches up later
+  than the pane's command, so wait for the name too. It is a race on
+  timing: a quick machine can go a hundred runs without losing it, and
+  GitHub's runner loses it.
+- A renamed copy of a coreutils binary is not a fixture: on Ubuntu 26.04
+  coreutils is one binary that picks the tool by `argv[0]`, so `sleep` copied
+  to `codex` exits at once. Link the test's own runtime (`process.execPath`)
+  under the name instead.
 
 ### Editing
 

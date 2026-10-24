@@ -66,6 +66,16 @@ export const LAYER = {
   paletteImage: 10045,
 
   /**
+   * The plan-usage popover under the strip in the title bar.
+   *
+   * It was a literal 10050 in TopBar, one of five panels that happened to pick
+   * the same number. Named so the source guard can hold it: above the picture
+   * and the toast band (10040), below the "waiting on you" panel, which has to
+   * stay readable over it.
+   */
+  usage: 10050,
+
+  /**
    * The "waiting on you" panel under the title-bar chip.
    *
    * Above the workspace's own layers because it is raised from the bar over

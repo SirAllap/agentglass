@@ -34,7 +34,7 @@ import type { HandoffUnassign, JiraBlockOutcome, JiraHandoffRule, JiraStep, Jira
 import { prAddress } from "../../shared/taskref.ts";
 import {
   ISSUE_KEY, NOT_ACCEPTED, NOT_CONNECTED, WRITE_OFF, apiOf, assigneeBody, assignRefusal, badPerson, epoch, handoffMoves, handoffRules, isObj, jiraCall,
-  jiraWriteEnabled, linkPullRequest, movesPath, personId, personName, projectKey, readBefore, readIssue, readSettingsFile, stale, unreadable, storedCreds, str, writeRefusal, writeSettingsKey,
+  jiraWriteEnabled, linkPullRequest, movesPath, personId, personName, projectKey, readBefore, readIssue, readSettingsFile, staleUnless, unreadable, storedCreds, str, writeRefusal, writeSettingsKey,
   type HandoffMove, type HandoffOutcome, type JiraCreds, type JiraResult, type JiraWriteKind,
 } from "./jira.ts";
 import { commentOn } from "./jiraComments.ts";
@@ -253,7 +253,8 @@ async function runStepOnce(creds: JiraCreds, key: string, updated: number, which
   const f = before.f;
   const now = epoch(f.updated);
   if (!now) return unreadable();
-  if (now !== updated) return stale();
+  // A step may move the card and change who has it, so both are held to what the person saw.
+  if (now !== updated) { const no = staleUnless(key, updated, f, ["status", "assignees"]); if (no) return no; }
   const status = isObj(f.status) ? f.status : {};
   const statusName = str(status.name);
   const project = isObj(f.project) ? str(f.project.key) : K.slice(0, K.lastIndexOf("-"));

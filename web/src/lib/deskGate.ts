@@ -15,6 +15,12 @@ export const DESK_GATED: readonly string[] = [
   "/settings/door", "/settings/requests/decide", "/launch-permissions", "/seat/settings", "/seat/change", "/seat/wake",
   "/hooks/gate", "/budgets/set", "/lantern/settings", "/agents/roles", "/plugins/master", "/plugins/enable", "/plugins/allow-unboxed",
   "/plugins/session-reads", "/jira/writes", "/clickup/writes", "/clickup/prefs",
+  // A press of an account chip: only the person in the desktop window, never an agent staging it.
+  "/usage/accounts/switch", "/usage/accounts/manage",
+  // The person's own press of the keyring switch and of Clean up disk (mayPublishReview).
+  "/keyring/toggle", "/keyring/rehydrate", "/machine/disk-clean/run",
+  // Data & privacy and the Jira write switches, judged the same way.
+  "/privacy/retention", "/privacy/erase-history", "/jira/write-kinds",
 ];
 
 export function deskGated(path: string): boolean {

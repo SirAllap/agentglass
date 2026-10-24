@@ -141,6 +141,12 @@ describe.skipIf(!HAVE_PY)("a command, built from what the app offers", () => {
     expect(buildP("pr.comment.stage", null, { repo: "orbit", number: 42, body: "x" }, 3)[1]).toContain("repo must be");
     expect(buildP("pr.comment.stage", null, { repo: "acme/orbit", number: 42, body: "" }, 3)[1]).toContain("body must be");
   });
+  test("the disk cleanup stage carries its ids one per line, and a missing one is named", () => {
+    const given = { ids: "docker:cache\nworktree:/home/acme/code/orbit-fix" };
+    expect(buildP("diskclean.stage", null, given, 3)[0]).toEqual({ cmd: "ui", do: "diskclean.stage", args: given, id: "cli", as: "tester" });
+    expect(buildP("diskclean.stage", null, {}, 3)[1]).toContain("needs ids");
+    expect(buildP("diskclean.stage", null, given, 2)[1]).toContain("not offered");
+  });
   test("a mode on a read or a change is refused, and so is a word that is neither", () => {
     expect(buildP("ui.state", "now", {})[1]).toContain("only an open or a stage has a present mode");
     expect(buildP("settings.open", "soon")[1]).toBe("present is now or quiet");
@@ -267,7 +273,7 @@ describe.skipIf(!HAVE_PY)("the MCP tool list is the registry", () => {
   test("level 3 is the stage entries and only those, and a stage tool says nothing runs by calling it", () => {
     expect(L2.map((a) => a.id)).not.toContain("pr.unstick");
     const staged = L3.filter((a) => a.level === 3);
-    expect(staged.map((a) => a.id).sort()).toEqual(["card.move.stage", "finder.op.stage", "pr.comment.stage", "pr.merge.stage", "pr.review.stage", "pr.unstick"]);
+    expect(staged.map((a) => a.id).sort()).toEqual(["card.move.stage", "diskclean.stage", "finder.op.stage", "pr.comment.stage", "pr.merge.stage", "pr.review.stage", "pr.unstick", "usage.account.stage"]);
     expect(staged.every((a) => a.kind === "stage")).toBe(true);
     const t = tools(L3).find((x) => x.name === "ui_pr_unstick")!;
     expect(Object.keys(t.inputSchema.properties).sort()).toEqual(["now", "number", "root"]);

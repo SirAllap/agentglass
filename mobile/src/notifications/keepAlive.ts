@@ -107,6 +107,8 @@ interface AgxKeepAlive {
   start(): boolean;
   stop(): boolean;
   isRunning(): boolean;
+  setOffline(offline: boolean): void;
+  addListener(event: "reconnect", listener: () => void): { remove(): void };
 }
 
 /** Reset for tests: see notify.ts's __setNotificationsModule for the same
@@ -147,6 +149,31 @@ export function keepAliveAvailable(): boolean {
  */
 export function keepAliveRunning(): boolean {
   return loadModule()?.isRunning() ?? false;
+}
+
+/**
+ * Tell the service whether the live socket is down. While it is, and only
+ * while the service runs, the service asks JS to try again from its own clock
+ * and when Android reports a network (see KeepAliveService.kt for why JS's own
+ * timers cannot). Without the service this does nothing: named ceiling, the
+ * socket then comes back when the app does.
+ */
+export function setLinkOffline(offline: boolean): void {
+  try {
+    loadModule()?.setOffline(offline);
+  } catch {
+    /* An older build without the call: the foreground wake still works. */
+  }
+}
+
+/** Run `cb` each time the service says to retry the live socket. Returns the unsubscribe. */
+export function onKeepAliveReconnect(cb: () => void): () => void {
+  try {
+    const sub = loadModule()?.addListener("reconnect", cb);
+    return () => sub?.remove();
+  } catch {
+    return () => {};
+  }
 }
 
 /**

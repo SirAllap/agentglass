@@ -10,6 +10,8 @@ import { getUsage } from "./usage.ts";
 import { windowLabel } from "../../shared/quota.ts";
 import { codexUsage } from "./codexusage.ts";
 import { probeAgents } from "./agentprobe.ts";
+import { holderOf } from "./accounts.ts";
+import type { AccountsInput } from "../../shared/pluginAccounts.ts";
 
 /**
  * Why Antigravity has no gauge.
@@ -145,12 +147,43 @@ export function installedProviders(probes: AgentProbe[]): Set<ProviderUsage["pro
 }
 
 /**
+ * The rows of one provider once a plugin lists its logins.
+ *
+ * The active login's row is the app's own reading, never the plugin's: the
+ * plugin can know the other logins' numbers, but the one signed in is measured
+ * here, and a plugin that also sends a reading for it is ignored. Each other
+ * login with a reading gets a row of its own, right after, the windows copied
+ * field by field so the pace maths downstream sees what it always saw. A login
+ * with no reading has no row. Without an active login in the list there is no
+ * way to say which one `row` reads, so it goes through unmarked.
+ *
+ * `account` is built here from three fields and nothing else: this answer is
+ * served to a paired phone, and the list also carries ids, colours and where
+ * each login is stored.
+ */
+export function withAccounts(row: ProviderUsage, list: AccountsInput | null | undefined): ProviderUsage[] {
+  const active = list?.accounts.find((a) => a.active);
+  if (!list || !active) return [row];
+  const out: ProviderUsage[] = [{ ...row, account: { label: active.label, plan: active.plan, active: true } }];
+  for (const a of list.accounts) {
+    if (a.active || !a.reading?.windows.length) continue;
+    out.push({
+      provider: row.provider, label: row.label, available: true, plan: a.plan,
+      windows: a.reading.windows.map((w) => ({ label: w.label, minutes: w.minutes, usedPercent: w.usedPercent, resetsAt: w.resetsAt })),
+      account: { label: a.label, plan: a.plan, active: false },
+    });
+  }
+  return out;
+}
+
+/**
  * `seen` is stubbed out: `found` is decided by `Bun.which` alone, so the four
  * `MAX(timestamp)` queries `probeAgents` would otherwise run are work this
  * endpoint has no use for, on a route the dashboard polls every five minutes.
  */
 export async function allProviderUsage(
   probes: AgentProbe[] = probeAgents(undefined, () => null),
+  accountsOf: (provider: string) => AccountsInput | undefined = (p) => holderOf(p)?.list,
 ): Promise<ProviderUsage[]> {
   const show = installedProviders(probes);
   const rows: ProviderUsage[] = [];
@@ -162,5 +195,5 @@ export async function allProviderUsage(
       windows: [], note: ANTIGRAVITY_NOTE,
     });
   }
-  return rows;
+  return rows.flatMap((r) => withAccounts(r, accountsOf(r.provider)));
 }

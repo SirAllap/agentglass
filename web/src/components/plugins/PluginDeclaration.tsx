@@ -5,7 +5,7 @@ import { CommandIcon, PuzzleIcon, ShieldIcon, SlidersIcon } from "../settingsNav
 import { PLUGIN_READ_WORDS } from "../../../../shared/pluginUi.ts";
 import { describeSandbox } from "../../../../shared/pluginSandbox.ts";
 import { foldChips, sandboxSections, type SandboxSection } from "../../lib/pluginDeclarationLayout.ts";
-import { boxWording, neighbourKeyWording, processIsBoxed, processWillNotStart } from "../../lib/pluginBoxState.ts";
+import { boxWording, neighbourKeyWording, processIsBoxed, secondLayerNote, processWillNotStart } from "../../lib/pluginBoxState.ts";
 import { HIT, ICON } from "../../lib/iconSize.ts";
 import { EDGE } from "../workspace/Chrome.tsx";
 
@@ -91,6 +91,13 @@ export function surfaces(p: PublicPlugin): Surface[] {
       where: "next to Reply and Resolve on each finding it wrote; pressing one tells the plugin, never GitHub",
     });
   }
+  for (const provider of c.accounts ?? []) {
+    out.push({
+      icon: <EyeIcon size={ICON.sm} />,
+      what: `Keeps the list of ${provider} accounts`,
+      where: "shown as chips in the usage popover; the app gives it no credential, and a switch only happens when you press it",
+    });
+  }
   for (const read of c.reads ?? []) {
     out.push({
       icon: <EyeIcon size={ICON.sm} />,
@@ -111,6 +118,7 @@ export function PluginDeclaration({ plugin, flat }: { plugin: PublicPlugin; flat
   const box = boxWording(plugin);
   const boxed = processIsBoxed(box);
   const neighbourKey = neighbourKeyWording(plugin);
+  const secondLayer = secondLayerNote(plugin);
   return (
     <div className="agx-decl flex flex-col gap-2.5 min-w-0 w-full">
       <Block flat={flat} icon={<EyeIcon size={ICON.sm} />} tint={tint} head="What it sees" chip={SCOPE_WORD[plugin.scope]}>
@@ -137,6 +145,7 @@ export function PluginDeclaration({ plugin, flat }: { plugin: PublicPlugin; flat
         >
           <p className="m-0 mb-1.5 text-[12px] leading-relaxed" style={{ color: box.tone === "warning" ? "var(--error)" : "var(--text2)" }}>{box.text}</p>
           {box.tone === "warning" && "fix" in box && box.fix && <FixBlock command={box.fix} flat={flat} />}
+          {box.tone !== "warning" && secondLayer && <p className="m-0 mb-1.5 text-[11.5px] leading-snug" style={{ color: "var(--text3)" }}>{secondLayer}</p>}
           {neighbourKey && <p className="m-0 mb-1.5 text-[12px] leading-relaxed" style={{ color: "var(--error-ink)" }}>{neighbourKey}</p>}
           {box.tone === "boxed" && box.refused && box.refused.length > 0 && (
             <div className="flex flex-col gap-0.5 mb-1.5">

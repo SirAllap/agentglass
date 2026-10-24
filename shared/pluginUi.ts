@@ -24,6 +24,7 @@
  * things travel between stages) is the other vocabulary, pluginCanvas.ts.
  */
 import type { PublishOptions } from "./reviewPublish.ts";
+import { validateAccountProviders, type AccountProvider } from "./pluginAccounts.ts";
 
 export type Tone = "default" | "muted" | "accent" | "success" | "warning" | "danger";
 export const TONES: readonly Tone[] = ["default", "muted", "accent", "success", "warning", "danger"];
@@ -888,6 +889,10 @@ export interface Contributes {
   reads?: PluginRead[];
   /** Puts a badge and a sort order on Inbox rows. See `InboxAnnotation`. */
   inboxAnnotations?: boolean;
+  /** The providers whose list of accounts this plugin keeps (shared/pluginAccounts.ts).
+   *  Under `contributes` so the approval hash covers it, and so a second plugin
+   *  naming the same provider is refused at enable. */
+  accounts?: AccountProvider[];
 }
 
 /** Icons a panel may name. A word, mapped to the app's own icon set, so a
@@ -960,6 +965,11 @@ export function validateContributes(raw: unknown): Ok<Contributes> | Err {
       if (typeof r.label !== "string" || !r.label.trim() || r.label.trim().length > NOTE_ACTION_LABEL_MAX) return { ok: false, error: `finding action label must be 1-${NOTE_ACTION_LABEL_MAX} characters` };
       out.noteActions.push({ id: r.id, label: r.label.trim() });
     }
+  }
+  if (c.accounts !== undefined) {
+    const a = validateAccountProviders(c.accounts);
+    if (!a.ok) return a;
+    out.accounts = a.value;
   }
   if (c.reads !== undefined) {
     if (!Array.isArray(c.reads) || c.reads.length > PLUGIN_READS_MAX) return { ok: false, error: `contributes.reads must be a list of at most ${PLUGIN_READS_MAX}` };

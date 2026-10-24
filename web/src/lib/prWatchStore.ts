@@ -5,7 +5,7 @@
  * the detail's header are the same read and cannot disagree.
  */
 import { useSyncExternalStore } from "react";
-import type { PrChecksRead, PrWatch, PrWatchPreset, PrWatchRule, PrWatchState } from "../../../shared/types.ts";
+import type { PrCheck, PrChecksRead, PrWatch, PrWatchPreset, PrWatchRule, PrWatchState } from "../../../shared/types.ts";
 import { api } from "./api.ts";
 
 let state: PrWatchState = { watches: [], presets: [] };
@@ -57,12 +57,34 @@ export const presetOf = (s: PrWatchState, repo: string): PrWatchPreset | undefin
 
 export function ruleLabel(r: PrWatchRule): string {
   switch (r.type) {
-    case "ci-pass": return "All CI passed";
+    case "ci-pass": return r.ignore?.length ? `All CI passed, except ${r.ignore.length}` : "All CI passed";
     case "ci-fail": return "Any check fails (first one)";
     case "comment": return "New comment";
     case "check": return `Check ~${r.match} ${r.on === "fail" ? "fails" : r.on === "pass" ? "passes" : "fails or passes"}`;
   }
 }
+
+/** The checks "All CI passed" does not wait for, from this PR's CI watch: the one waiting, else the last that fired. */
+export function ignoredOf(ws: PrWatch[]): string[] {
+  const ci = ws.filter((w) => w.rule.type === "ci-pass");
+  const w = ci.find((x) => x.active) ?? ci[0];
+  return w?.rule.type === "ci-pass" ? w.rule.ignore ?? [] : [];
+}
+
+/** The ignore list after one chip is pressed: that name goes in, or comes out if it was in. */
+export const toggleIgnored = (ignored: string[], name: string): string[] =>
+  ignored.includes(name) ? ignored.filter((n) => n !== name) : [...ignored, name];
+
+/** The chips to offer: the checks that can hold "All CI passed" back right now (failed, running, cancelled), plus
+ *  whatever is already ignored so it can be taken out again. A green check cannot block, so it is not offered.
+ *  Ceiling: a check that is green now and fails on a re-run has no chip until it does. */
+export function ignorableNames(all: PrCheck[], ignored: string[]): string[] {
+  const blocking = all.filter((c) => !c.done || c.cancelled || c.state === "failure").map((c) => c.name);
+  return [...new Set([...blocking, ...ignored])].sort((a, b) => a.localeCompare(b));
+}
+
+/** "All CI passed" as the person set it: the rule with its ignore list, or the bare rule when nothing is ignored. */
+export const ciPassRule = (ignored: string[]): PrWatchRule => (ignored.length ? { type: "ci-pass", ignore: ignored } : { type: "ci-pass" });
 
 export const sameRule = (a: PrWatchRule, b: PrWatchRule): boolean =>
   a.type === b.type && (a.type !== "check" || (b.type === "check" && a.match.toLowerCase() === b.match.toLowerCase() && a.on === b.on));
@@ -102,7 +124,8 @@ export function watchPhase(ws: PrWatch[]): { kind: "waiting" | "unchanged" | "wa
   return w.head ? { kind: "watching", text: `Watching run on ${short(w.head)}` } : null;
 }
 
-export const firedOk = (w: PrWatch): boolean => !/fail/i.test(w.lastText ?? "");
+/** Only the verdict is read, not what follows the colon: "CI passed: ignoring 1: detect-failures" is a pass. */
+export const firedOk = (w: PrWatch): boolean => !/fail/i.test((w.lastText ?? "").split(":")[0]!);
 
 /** "CI passed · 10:42" — what the button says once a watch has fired; the tick or cross before it is drawn, not typed. */
 export function firedLabel(w: PrWatch): string {

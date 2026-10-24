@@ -20,7 +20,7 @@
  * server (server/test/settings-door.test.ts).
  */
 import { randomBytes } from "node:crypto";
-import { REQUEST_TTL_MS, SETTING_CLASSES, agentVerdict, classOf } from "../../shared/settingClass.ts";
+import { REQUEST_TTL_MS, SETTING_CLASSES, agentVerdict, classOf, refusalWhy } from "../../shared/settingClass.ts";
 
 export type Applied = { ok: true } | { ok: false; error: string };
 
@@ -198,7 +198,7 @@ export function makeDoor(deps: {
       let verdict = person ? "apply" : agentVerdict(id, prev, v.value, deps.trusted());
       // A seat speaks for its own project: what is the whole machine's waits for the person.
       if (verdict === "apply" && !person && confined && !def.scoped && !(id === "orchestration.policy" && root)) verdict = "ask";
-      if (verdict === "refuse") return { ok: false, error: `${id}: ${row.why}. An agent cannot change it, not even by asking`, status: 403 };
+      if (verdict === "refuse") return { ok: false, error: `${id}: ${refusalWhy(id, prev, v.value)}. An agent cannot change it, not even by asking`, status: 403 };
       if (verdict === "ask") {
         const shownNext = def.effective ? def.effective(v.value, root) : v.value;
         const explained = def.explain?.(v.value, root);

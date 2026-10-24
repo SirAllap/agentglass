@@ -173,7 +173,7 @@ async function call(name: string, args: Record<string, unknown> = {}, env: Recor
 }
 
 const READ_TOOLS = [
-  "cockpit_agents", "cockpit_attention", "cockpit_errors", "cockpit_orphans", "cockpit_recent_events",
+  "cockpit_accounts", "cockpit_agents", "cockpit_attention", "cockpit_errors", "cockpit_orphans", "cockpit_recent_events",
   "cockpit_session", "cockpit_sessions", "cockpit_spend", "cockpit_tool_latency",
 ];
 
@@ -192,6 +192,12 @@ describe.skipIf(!HAVE_PY)("the cockpit MCP server", () => {
       expect(t.inputSchema.type, t.name).toBe("object");
       expect(t.annotations?.readOnlyHint, t.name).toBe(true);
     }
+  });
+
+  test("cockpit_accounts answers with the list a plugin keeps, which is none here", async () => {
+    const { data, result } = await call("cockpit_accounts");
+    expect(result.isError).toBeUndefined();
+    expect(data).toEqual({ providers: [] });
   });
 
   test("the binary only ever sends GET to the app", () => {

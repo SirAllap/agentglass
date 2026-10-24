@@ -14,6 +14,7 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, chmodSync
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { story } from "./story.ts";
+import { settled } from "./paneSettled.ts";
 
 const SOCK = `agx-batch-${process.pid}`;
 const ROOT = mkdtempSync(join(tmpdir(), "agxb-"));
@@ -59,6 +60,15 @@ beforeAll(async () => {
     sh(["new-window", "-d", "-t", `=desk${i}`, "-n", "w2", "-c", "/tmp"]);
     sh(["new-window", "-d", "-t", `=desk${i}`, "-n", "w3", "-c", "/tmp", "sleep 600"]);
   }
+  /* Every fixture pane past the fork and in /tmp, and every window renamed after
+     it, before the first photograph. A pane still reading as the tmux binary, or
+     a window still called `tmux` (automatic-rename runs on a later loop than the
+     exec), is a different layout on the next tick: "nothing new" rewrote the
+     file under load on tmux 3.6. */
+  await settled(
+    () => sh(["list-panes", "-a", "-F", "#{window_name} #{pane_current_command} #{pane_current_path}"]).stdout.toString().trim().split("\n"),
+    (rows) => rows.length === SESSIONS * 3 && rows.every((r) => !r.split(" ").slice(0, 2).includes("tmux") && r.endsWith(" /tmp")),
+  );
 });
 
 afterAll(() => {
@@ -177,5 +187,5 @@ step("a layout captured after the change puts the desk back as it was after a po
   expect(r.ok).toBe(true);
   /* Same sessions, the same windows in the same order with the same names, and
      every pane in the directory it was in. */
-  expect(shape()).toEqual(before);
+  expect(await settled(shape, (s) => Bun.deepEquals(s, before))).toEqual(before);
 });

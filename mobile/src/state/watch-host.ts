@@ -8,7 +8,9 @@
  *   - report whether the socket is up, for the dot in the switcher;
  *   - hand over its alerts, which the provider raises with the computer's name;
  *   - count the gates waiting on a person, for the badge — read once when the
- *     socket opens and again when a `gate` frame says the list moved.
+ *     socket opens and again when a `gate` frame says the list moved;
+ *   - hand over the frames about a watched pull request or a card (`onWatch`),
+ *     and say when the socket comes up (`onOpen`), for the watch alerts.
  *
  * It has no timer. The fleet, the pull requests, the marks and the theme are
  * the computer in front's business and are not read here; every other frame is
@@ -18,7 +20,7 @@
  *
  * `deps` is the seam the tests use; the default is the real thing.
  */
-import type { AlertNote, PendingGate } from "../../../shared/types.ts";
+import type { AlertNote, PendingGate, WsFrame } from "../../../shared/types.ts";
 import { ask, REVOKED } from "../lib/api.ts";
 import type { HostEntry } from "../lib/hosts.ts";
 import { openLive, type LiveState } from "../lib/live.ts";
@@ -28,6 +30,9 @@ export interface WatchEvents {
   onWaiting: (gates: number) => void;
   onAlert: (alert: AlertNote) => void;
   onRevoked: () => void;
+  /** The frames watchAlerts.ts cares about, untouched. */
+  onWatch?: (frame: WsFrame) => void;
+  onOpen?: () => void;
 }
 
 export interface WatchDeps {
@@ -65,11 +70,12 @@ export function watchHost(
   const handle = deps.openLive(host, {
     onState: (state) => {
       events.onState(state);
-      if (state === "open") void read();
+      if (state === "open") { void read(); events.onOpen?.(); }
     },
     onFrame: (frame) => {
       if (frame.type === "gate") void read();
       else if (frame.type === "alert" && frame.data) events.onAlert(frame.data as AlertNote);
+      else if (frame.type === "prwatchfire" || frame.type === "card" || frame.type === "askedalert" || frame.type === "askedclosed") events.onWatch?.(frame);
     },
   });
 

@@ -329,7 +329,7 @@ const fixture: Sources = {
   terminal: () => ({ font: "", size: 13, cursor: "block", lineHeight: 1, scrollback: 4000, wordSeparators: " ", copyOnSelect: true, noteEditor: "builtin" }),
   browser: () => ({ home: "https://duckduckgo.com", engine: "duckduckgo", zoomLevel: 0, importHistory: true, importBookmarks: true }),
   notify: () => DEFAULT_NOTIFY_PREFS,
-  prefs: () => ({ scale: 1, clock24: false, splash: true }),
+  prefs: () => ({ scale: 1, clock24: false, splash: true, diskWarnPct: 10 }),
   rail: () => ({ work: ["dash"], utility: [], hidden: [], customised: false }),
   keys: () => ({ bindings: {}, chords: {}, appChords: {}, customised: { bindings: false, chords: false, appChords: false }, customChord: [], customAppChord: [] }),
   tasks: () => ({ landing: "last", order: ["github"], shown: { github: true }, last: null }),
@@ -345,6 +345,8 @@ const fixture: Sources = {
     plugins: async () => ({ master: true, plugins: [] }),
     log: async () => ({ rows: [] }),
     about: async () => ({ version: "0.0.0", commit: "", stamp: "", builtAt: "", baseTag: "", distance: 0, dirty: false, dirtyCount: 0, branch: "", behind: 0, ahead: 0, available: false, blocked: "", incoming: [], digest: null, origin: "" }),
+    diskClean: async () => ({ lines: [], mounts: [], safeBytes: 0, at: 0, problems: [] }),
+    usageAccounts: async () => [],
   },
 };
 

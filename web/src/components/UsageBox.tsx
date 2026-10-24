@@ -4,6 +4,7 @@ import {
   subscribeProviderUsage, providerUsage, usageLoaded,
   usedColor, usedTextColor, resetLabel, ageLabel,
 } from "../lib/usageStore.ts";
+import { coreRows, isCoreRow } from "../lib/accountStore.ts";
 import type { ProviderUsage, QuotaWindow } from "../../../shared/types.ts";
 
 /**
@@ -108,7 +109,8 @@ export function panelState(loaded: boolean, rows: ProviderUsage[] | null): "load
 export function tightestWindow(rows: ProviderUsage[] | null): { provider: string; window: QuotaWindow } | null {
   let best: { provider: string; window: QuotaWindow } | null = null;
   for (const u of rows ?? []) {
-    if (!u.available) continue;
+    // Another login of the same provider is the usage popover's, not a headline.
+    if (!u.available || !isCoreRow(u)) continue;
     for (const w of u.windows) {
       if (!best || w.usedPercent > best.window.usedPercent) best = { provider: u.label, window: w };
     }
@@ -140,7 +142,7 @@ function Headline({ provider, window: w }: { provider: string; window: QuotaWind
 }
 
 export function UsageBox() {
-  const rows = useSyncExternalStore(subscribeProviderUsage, providerUsage, () => null);
+  const rows = coreRows(useSyncExternalStore(subscribeProviderUsage, providerUsage, () => null));
   const loaded = useSyncExternalStore(subscribeProviderUsage, usageLoaded, () => false);
   const state = panelState(loaded, rows);
   const top = tightestWindow(rows);
