@@ -699,6 +699,8 @@ export async function scanDisk(ctx: DiskCtx): Promise<DiskCleanReport> {
 }
 
 let last: { at: number; report: DiskCleanReport } | null = null;
+/** The scan `last` replaced. A screen showing it still asks to clean it; see runDiskClean. */
+let prior: { at: number; report: DiskCleanReport } | null = null;
 let flying: Promise<DiskCleanReport> | null = null;
 /** Bumped by every clean: a scan that started before it describes a disk that is gone and must not be cached. */
 let generation = 0;
@@ -710,7 +712,7 @@ export async function diskCleanReport(fresh: boolean, ctx: DiskCtx = defaultDisk
   if (flying) return flying;
   const gen = generation;
   const p: Promise<DiskCleanReport> = scanDisk({ ...ctx, now: Date.now() })
-    .then((report) => { if (gen === generation) last = { at: Date.now(), report }; return report; })
+    .then((report) => { if (gen === generation) { prior = last; last = { at: Date.now(), report }; } return report; })
     .finally(() => { if (flying === p) flying = null; });
   flying = p;
   return p;
@@ -899,9 +901,12 @@ export async function runDiskClean(idsIn: unknown, opts: { dryRun?: boolean; at?
   try {
     // The scan a person just looked at is the plan they confirmed; a second full one would repeat every GitHub and du call.
     generation++; flying = null;
-    const reuse = last && (seen !== null ? last.report.at === seen && Date.now() - last.at < SCAN_TTL_MS : Date.now() - last.at < SCAN_MIN_RESCAN_MS) ? last : null;
+    // Someone else's fresh GET (an agent, every 30 s) replaces `last` under a person who is still reading the plan; the scan it
+    // replaced stays good for their confirm, inside the same TTL. Each item is still re-checked right before it is removed.
+    const fits = (c: typeof last) => c && (seen !== null ? c.report.at === seen && Date.now() - c.at < SCAN_TTL_MS : c === last && Date.now() - c.at < SCAN_MIN_RESCAN_MS);
+    const reuse = fits(last) ? last : fits(prior) ? prior : null;
     const report = reuse ? reuse.report : await scanDisk({ ...ctx, now: Date.now() });
-    if (!reuse) last = { at: Date.now(), report };
+    if (!reuse) { prior = null; last = { at: Date.now(), report }; }
     if (seen !== null && report.at !== seen) return fail("The disk has changed since this plan was made. Nothing was removed: scan again, look at the new plan, then confirm.");
     const byId = new Map(report.lines.map((l) => [l.id, l]));
     const wanted = ids ?? report.lines.filter((l) => l.verdict === "safe").map((l) => l.id);
@@ -924,7 +929,7 @@ export async function runDiskClean(idsIn: unknown, opts: { dryRun?: boolean; at?
       results.push({ id, label: line.label, status: r.status === "freed" && freed === 0 ? "nothing" : r.status, freed, detail: r.detail });
     }
     // Not after a dry run: nothing changed, and the confirm click that follows reuses this very scan.
-    if (!dryRun) { generation++; flying = null; last = null; }
+    if (!dryRun) { generation++; flying = null; last = null; prior = null; }
     return {
       ok: true, dryRun, lines: results,
       mounts: [...before].map(([mount, b]) => ({ mount, before: b, after: after.get(mount) ?? b })),

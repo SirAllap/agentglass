@@ -33,6 +33,8 @@ function driver(fx: Fixture): string {
     // the confirm carries the scan the person looked at (`at`), or one that is not it
     '  async "scan-then-run-with-its-at"() { const r = await m.diskCleanReport(true, ctx); return m.runDiskClean(["trash"], { at: r.at }, ctx); },',
     '  async "scan-then-run-with-another-at"() { const r = await m.diskCleanReport(true, ctx); return m.runDiskClean(["trash"], { at: r.at - 1 }, ctx); },',
+    // another caller's fresh scan (30 s later) lands while the person reads scan A, then they confirm A
+    '  async "another-scan-lands-then-run-with-the-first-at"() { const a = await m.diskCleanReport(true, ctx); const real = Date.now; Date.now = () => real() + 31_000; try { const b = await m.diskCleanReport(true, ctx); if (b.at === a.at) throw new Error("no second scan"); } finally { Date.now = real; } return m.runDiskClean(["trash"], { at: a.at }, ctx); },',
     '};',
     'const out = mode === "seq" ? await seq[arg]() : mode === "del" ? await m.deleteTarget(JSON.parse(arg), ctx) : mode === "scan" ? await m.scanDisk(ctx) : await m.runDiskClean(arg === "all" ? undefined : JSON.parse(arg), { dryRun: mode === "dry" }, ctx);',
     'process.stdout.write("RESULT " + JSON.stringify(out) + "\\n");',
@@ -470,5 +472,12 @@ describe("the clean acts on the plan the person saw", () => {
     expect(r.error).toContain("scan again");
     expect(r.lines).toEqual([]);
     expect(existsSync(join(home, ".local/share/Trash/files/old.zip"))).toBe(true);
+  });
+
+  test("a scan another caller starts while the person reads does not turn their confirm away", () => {
+    const { fx } = fixture(); const home = fx.home;
+    const r = go<DiskCleanRunResult>(fx, "seq", "another-scan-lands-then-run-with-the-first-at");
+    expect(r.ok).toBe(true);
+    expect(existsSync(join(home, ".local/share/Trash/files/old.zip"))).toBe(false);
   });
 });
