@@ -89,6 +89,8 @@ And it mirrors **your machine's own notifications**: agentglass runs fullscreen,
 
 Two switches in **Settings ▸ Notifications**, because there are two sources. **From your desktop** is off by default (it reads every notification you receive) with a second choice of how much to show — who it was from, or the whole message — and a *quiet* mode that keeps collecting without interrupting. **From agentglass** is on, and turning it off silences chats finishing and branches falling behind while still letting anything *held waiting on you* speak. Neither switch stops the bell collecting: silence is about interruption, never about the record.
 
+On macOS the desktop app raises an alert that leads somewhere from its main process, so it can carry action buttons (the same in-app destinations a click goes to, never a deed like re-running a check); Linux and Windows keep the plain click. The macOS buttons are **not yet verified on a real Mac**.
+
 ### 🔬 File changes — a syntax-highlighted diff & review workspace &nbsp;`d`
 
 Every Edit/Write the fleet makes, gathered into one reviewable, chaptered list. **Shiki** syntax highlighting composed with a **word-level** intra-line diff, split or unified, ligatures and a per-diff theme, "reviewed" check-offs — plus one-click **✨ Explain** (a local-Claude walkthrough of the whole change set) and **⎇ Commit…** to turn a review straight into a commit.

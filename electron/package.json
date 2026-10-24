@@ -45,6 +45,7 @@
       "egress-guard.js",
       "browser-menu.js",
       "power.js",
+      "notify-mac.js",
       "server-probe.js",
       "preload.js",
       "icons/**"

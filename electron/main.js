@@ -20,7 +20,7 @@
 // origin and no port to contend for. Only one instance runs now (see the lock
 // below), but the origin is what makes the store survive a restart.
 
-const { app, BrowserWindow, Menu, WebContentsView, clipboard, dialog, ipcMain, nativeImage, nativeTheme, protocol, screen, session, shell } = require("electron");
+const { app, BrowserWindow, Menu, Notification, WebContentsView, clipboard, dialog, ipcMain, nativeImage, nativeTheme, protocol, screen, session, shell } = require("electron");
 const { spawn } = require("child_process");
 const http = require("http");
 const fs = require("fs");
@@ -160,6 +160,7 @@ function armEgress(partition) {
 }
 const { browserMenuTemplate } = require("./browser-menu.js");
 const power = require("./power.js");
+const notifyMac = require("./notify-mac.js");
 const { probe: probeServer, holdDesk } = require("./server-probe.js");
 
 /*
@@ -3329,6 +3330,37 @@ function registerIpc(win) {
     win.show();
     win.focus();
     return true;
+  });
+
+  /*
+   * A notification with action buttons, macOS only.
+   *
+   * The renderer's own Notification cannot carry buttons there. The press goes
+   * back as an index into the list the renderer kept (see notify-mac.js), after
+   * the window is raised the same way ag:raiseWindow does it. Anywhere else the
+   * answer is { ok: false } and the renderer uses the path it always had.
+   * UNTESTED ON A REAL MAC.
+   */
+  const macNotes = new Map();
+  ipcMain.handle("ag:notify", (e, req) => {
+    if (e.sender !== win.webContents) return { ok: false };
+    if (process.platform !== "darwin" || !Notification.isSupported()) return { ok: false };
+    const tag = typeof req?.tag === "string" ? req.tag.slice(0, 200) : "";
+    // The same tag is the same notification: the older one goes.
+    if (tag) { try { macNotes.get(tag)?.close(); } catch { /* already gone */ } }
+    let n = null;
+    try {
+      n = notifyMac.raise(Notification, req, (index) => {
+        if (tag) macNotes.delete(tag);
+        if (win.isMinimized()) win.restore();
+        win.show();
+        win.focus();
+        if (!win.isDestroyed()) win.webContents.send("ag:notifyPress", { tag, index });
+      });
+    } catch { return { ok: false }; }
+    if (!n) return { ok: false };
+    if (tag) macNotes.set(tag, n);
+    return { ok: true };
   });
 
   /*
