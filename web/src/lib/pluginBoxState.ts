@@ -63,14 +63,20 @@ function unboxedWording(
 }
 
 /** One quiet line when the box builds but this kernel cannot add Landlock on
- *  top of it (see `landlockProbe` in server/src/plugin-sandbox.ts), or, for a
- *  plugin on the host's network, cannot keep it off the host's abstract
- *  sockets (`scopeProbe`). Nothing changes for the plugin, so it is a fact,
- *  not a warning. */
+ *  top of it (see `landlockProbe` in server/src/plugin-sandbox.ts), cannot
+ *  add the seccomp filter (`seccompProbe`), or, for a plugin on the host's
+ *  network, cannot keep it off the host's abstract sockets (`scopeProbe`).
+ *  Nothing changes for the plugin, so it is a fact, not a warning. */
 export function secondLayerNote(plugin: Pick<PublicPlugin, "sandbox" | "sandboxProbe">): string | null {
   if (!plugin.sandbox || !plugin.sandboxProbe?.ok) return null;
-  if (!plugin.sandboxProbe.landlock) return "This system cannot add Landlock, so the box is the only wall around it.";
-  if (plugin.sandbox.network !== "agentglass" && !plugin.sandboxProbe.abstractScope) {
+  const p = plugin.sandboxProbe;
+  // `seccomp` absent is a server from before the filter: it is not named.
+  if (!p.landlock) {
+    if (p.seccomp === false) return "This system cannot add Landlock or the syscall filter, so the box is the only wall around it.";
+    return p.seccomp ? "This system cannot add Landlock, so the box and the syscall filter are the walls around it." : "This system cannot add Landlock, so the box is the only wall around it.";
+  }
+  if (p.seccomp === false) return `This system cannot add the syscall filter${p.seccompDetail ? `: ${p.seccompDetail}` : ""}.`;
+  if (plugin.sandbox.network !== "agentglass" && !p.abstractScope) {
     return "This system cannot keep it off this computer's abstract sockets (Landlock scoping needs Linux 6.12+).";
   }
   return null;

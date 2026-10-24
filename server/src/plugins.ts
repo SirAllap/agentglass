@@ -41,7 +41,7 @@ import { versionAtLeast } from "../../shared/semverLite.ts";
 export { versionAtLeast };
 import {
   hostResolvConfExtraRo, hostSystemPaths, openGrantFds, pluginDataDir, removePluginDataDir, resolveGrants,
-  landlockProbe, resolvePrograms, sandboxArgv, sandboxProbe, scopeProbe, type SandboxProbe,
+  landlockProbe, openSeccompFd, resolvePrograms, sandboxArgv, sandboxProbe, scopeProbe, seccompProbe, type SandboxProbe,
 } from "./plugin-sandbox.ts";
 import { ensurePluginSocketServer, pluginSocketPath, stopPluginSocketServer } from "./plugin-socket.ts";
 import { KEYRING_MARK, KeyringError, dropValue, exclusive, keyringEnabled, priorValue, putBack, pluginKeyId, reasonOf, sealValue, unlockFirst, unsealed } from "./keyring.ts";
@@ -932,6 +932,13 @@ async function buildBoxArgv(
   }
   const opened = openGrantFds({ read: grants.read, write: grants.write }, home);
   const landlock = landlockProbe();
+  // After the grants, so its child fd is the next one after theirs. A filter
+  // that cannot be opened now leaves this one start with the other walls.
+  const seccomp = seccompProbe();
+  const seccompParentFd = seccomp.ok ? openSeccompFd(seccomp) : null;
+  if (seccomp.ok && seccompParentFd === null) console.warn(`[plugin sandbox] ${rec.name}: starting without the seccomp filter: its file changed or went away`);
+  const seccompFd = seccompParentFd === null ? undefined : 3 + opened.parentFds.length;
+  if (seccompParentFd !== null) opened.parentFds.push(seccompParentFd);
   const argv = sandboxArgv({
     bwrap,
     installDir: rec.installDir,
@@ -948,6 +955,7 @@ async function buildBoxArgv(
     extraRo: boxExtraRo(network),
     setpriv: landlock.ok ? landlock.setpriv : undefined,
     scoper: sandbox.network === "agentglass" ? undefined : (() => { const sc = scopeProbe(); return sc.ok ? sc.python : undefined; })(),
+    seccompFd,
   });
   return { argv, parentFds: opened.parentFds, refused: [...grants.refused, ...programs.refused, ...opened.refused] };
 }
@@ -1109,7 +1117,7 @@ async function git(args: string[], cwd: string, timeoutMs: number): Promise<{ ok
   }
 }
 
-export type PublicSandboxProbe = { ok: true; landlock: boolean; abstractScope: boolean } | { ok: false; reason: Extract<SandboxProbe, { ok: false }>["reason"]; detail: string };
+export type PublicSandboxProbe = { ok: true; landlock: boolean; abstractScope: boolean; seccomp: boolean; seccompDetail?: string } | { ok: false; reason: Extract<SandboxProbe, { ok: false }>["reason"]; detail: string };
 
 export type PublicPlugin = PluginRecord & {
   running: boolean;
@@ -1150,7 +1158,9 @@ function withContributes(p: PluginRecord): PluginRecord {
 
 function publicProbe(): PublicSandboxProbe {
   const p = sandboxProbe();
-  return p.ok ? { ok: true, landlock: landlockProbe().ok, abstractScope: scopeProbe().ok } : { ok: false, reason: p.reason, detail: p.detail };
+  if (!p.ok) return { ok: false, reason: p.reason, detail: p.detail };
+  const sc = seccompProbe();
+  return { ok: true, landlock: landlockProbe().ok, abstractScope: scopeProbe().ok, seccomp: sc.ok, ...(sc.ok ? {} : { seccompDetail: sc.detail }) };
 }
 
 /** What starting this plugin does on this host — the one decision the start

@@ -870,6 +870,34 @@ can apply it, the plugin is started under that scope: a `connect()` to a host
 without the scope changes nothing about the box, and the plugin panel says
 which wall is missing.
 
+**A third wall: a seccomp filter.** bwrap installs it (`--seccomp`) before the
+box's first process starts, so it covers the plugin and everything it starts.
+It is a deny list, not an allow list, so a plugin that worked before still
+works: the syscalls a plugin never needs that reach into another process
+(`ptrace`, `process_vm_readv`/`writev`), load or replace kernel code
+(`*_module`, `kexec_*`, `bpf`), are large, often-exploited surfaces
+(`perf_event_open`, `userfaultfd`, `io_uring_*`, the key calls), rebuild the
+box from inside (`mount` and the new mount API, `pivot_root`, `chroot`,
+`unshare`, `setns`, `clone` with a namespace flag), open a file by handle past
+every path check (`open_by_handle_at`), or belong to the machine (`reboot`,
+`swapon`, the clock) return EPERM. `ioctl` with `TIOCSTI` or `TIOCLINUX` is
+refused too, and `personality` may only ask. A process on a foreign ABI (i386
+on x86_64, arm32 on aarch64) is killed and an x32 call is refused, the two
+usual ways past a list keyed on syscall numbers. `clone3` gets ENOSYS, so the C
+library falls back to `clone`, whose flags the filter can read. The program is
+built by the server (`server/src/seccomp.ts`), x86_64 and aarch64 only, and
+checked against a real box at startup. No table for the architecture, or a
+bwrap that rejects the filter, leaves the box with the other walls, and the
+plugin panel says which wall is missing and why.
+
+What each wall stops, and what none of them does: the **box** decides what
+exists (which folders are mounted, which network namespace); **Landlock** decides
+what may be opened among what exists, and holds when a descriptor leaks in;
+**seccomp** decides which kernel calls may be made at all. None of them limits
+what a plugin does with what it was granted: a plugin with `network:
+"internet"` can send anything it can read to anywhere on the internet, and a
+plugin with a `write` grant can change what is under it.
+
 **A plugin token is its own kind of caller and can never answer a permission
 gate**, whatever scope it declares or was granted. `POST /gate/decide` asks for
 a credential no process on this machine could have minted for itself; a plugin's

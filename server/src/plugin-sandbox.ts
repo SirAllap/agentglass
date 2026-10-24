@@ -13,12 +13,13 @@
  *  - `sandboxArgv` is pure: given every fact already resolved, it is just
  *    argv, and a test can pin its exact shape without a working bwrap.
  */
-import { closeSync, constants as fsConstants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, rmSync } from "node:fs";
+import { closeSync, constants as fsConstants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   NEVER_MOUNTABLE, NEVER_MOUNTABLE_ROOTS, PERSISTENCE_WRITE_DIRS, PERSISTENCE_WRITE_FILES, type PluginSandbox,
 } from "../../shared/pluginSandbox.ts";
+import { seccompProgram } from "./seccomp.ts";
 
 export type SandboxProbe =
   | { ok: true; bwrap: string }
@@ -255,6 +256,82 @@ export function scopeProbe(): ScopeProbe {
 
 export function __resetScopeProbe(): void {
   scopeCached = undefined;
+}
+
+/**
+ * The third wall: the seccomp filter from seccomp.ts, which bwrap installs
+ * from a descriptor (`--seccomp FD`) right before it execs the box's first
+ * process, so it covers everything in the box. Written once per process to
+ * a file of the app's own and opened fresh for every start: bwrap reads the
+ * descriptor to its end, and a dup shares that offset with the next spawn.
+ *
+ * Probed with the real bwrap rather than trusted: the box must come up with
+ * `Seccomp: 2` in its own /proc status. Anything short of that — no table
+ * for this arch, a bwrap that rejects the flag, a kernel without seccomp —
+ * and every box runs with the other walls and the panel says this one is
+ * missing; it never stops a plugin from starting.
+ */
+export type SeccompProbe = { ok: true; path: string; program: Uint8Array } | { ok: false; detail: string; timedOut?: boolean };
+
+function runSeccompProbe(): SeccompProbe {
+  const box = sandboxProbe();
+  if (!box.ok) return { ok: false, detail: "there is no box to put it in" };
+  const arch = process.env.NODE_ENV === "test" && process.env.AGENTGLASS_SECCOMP_ARCH ? process.env.AGENTGLASS_SECCOMP_ARCH : process.arch;
+  const program = seccompProgram(arch);
+  if (!program) return { ok: false, detail: `there is no filter for this architecture (${arch})` };
+  const path = join(pluginsConfigDir(), "plugin-seccomp", `${arch}.bpf`);
+  try {
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    writeFileSync(path, program, { mode: 0o600 });
+  } catch (e) {
+    return { ok: false, detail: `could not write the filter: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  const probe: SeccompProbe = { ok: true, path, program };
+  const fd = openSeccompFd(probe);
+  if (fd === null) return { ok: false, detail: "could not read the filter back" };
+  let r;
+  try {
+    r = Bun.spawnSync([box.bwrap, "--unshare-all", "--die-with-parent", "--ro-bind", "/", "/", "--proc", "/proc", "--seccomp", "3", "cat", "/proc/self/status"], {
+      stdio: ["ignore", "pipe", "pipe", fd], timeout: 3000,
+    });
+  } catch { /* reported below */ } finally {
+    closeSync(fd);
+  }
+  if (r?.exitedDueToTimeout) return { ok: false, detail: "bwrap did not finish within 3s", timedOut: true };
+  if (r?.success && /^Seccomp:\s+2$/m.test(r.stdout.toString())) return probe;
+  const line = r?.stderr?.toString().split("\n").find((l) => l.trim())?.trim();
+  return { ok: false, detail: line || "bwrap ran but the filter was not in place" };
+}
+
+let seccompCached: SeccompProbe | undefined;
+
+/** Cached like `landlockProbe`, timeouts included. */
+export function seccompProbe(): SeccompProbe {
+  if (seccompCached !== undefined) return seccompCached;
+  const probe = runSeccompProbe();
+  if (probe.ok || !probe.timedOut) seccompCached = probe;
+  return probe;
+}
+
+export function __resetSeccompProbe(): void {
+  seccompCached = undefined;
+}
+
+/** A fresh descriptor on the filter for one spawn, or null when the file is
+ *  no longer the program this process wrote (read with `pread`, which leaves
+ *  the offset at 0 for bwrap). */
+export function openSeccompFd(probe: Extract<SeccompProbe, { ok: true }>): number | null {
+  let fd: number;
+  try {
+    fd = openSync(probe.path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  } catch {
+    return null;
+  }
+  const buf = new Uint8Array(probe.program.length + 1);
+  const n = readSync(fd, buf, 0, buf.length, 0);
+  if (n === probe.program.length && buf.subarray(0, n).every((b, i) => b === probe.program[i])) return fd;
+  closeSync(fd);
+  return null;
 }
 
 export interface LandlockGrant {
@@ -641,6 +718,9 @@ export interface SandboxArgvInput {
   /** `scopeProbe().python` when the abstract-socket wall is available; used
    *  only for `network: "internet"`. Absent, the argv is what it was before. */
   scoper?: string;
+  /** The child fd of `openSeccompFd`'s descriptor when the third wall is
+   *  available. Absent, the argv is what it was before. */
+  seccompFd?: number;
 }
 
 /** `path` entries that are — or are under — `home`, dropped: the box's PATH
@@ -678,13 +758,14 @@ function hostPathOutsideHome(hostPath: string, home: string): string[] {
  * one (program dirs, home entries dropped) and neither is a secret.
  */
 export function sandboxArgv(input: SandboxArgvInput): string[] {
-  const { bwrap, installDir, dataDir, home, entrypoint, env, sandbox, grants, programDirs, systemLinks, systemDirs, extraRo, network, setpriv, scoper } = input;
+  const { bwrap, installDir, dataDir, home, entrypoint, env, sandbox, grants, programDirs, systemLinks, systemDirs, extraRo, network, setpriv, scoper, seccompFd } = input;
   const agentglassNet = sandbox.network === "agentglass";
   const path = [...hostPathOutsideHome(env.PATH, home), ...programDirs].join(":");
   const argv: string[] = [
     bwrap,
     "--unshare-all", agentglassNet ? "--unshare-net" : "--share-net",
     "--die-with-parent", "--new-session", "--cap-drop", "ALL",
+    ...(seccompFd === undefined ? [] : ["--seccomp", String(seccompFd)]),
     "--setenv", "PATH", path,
     "--setenv", "HOME", home,
     "--setenv", "AGENTGLASS_URL", env.AGENTGLASS_URL,
