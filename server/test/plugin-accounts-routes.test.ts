@@ -18,7 +18,10 @@ import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
 import { story } from "./story.ts";
 import { issueDevice, __resetDevices } from "../src/devices.ts";
+import * as Accounts from "../src/accounts.ts";
 import { accountsList, forgetAccounts, manageRefusal, personMayPress, setAccounts, switchRefusal } from "../src/accounts.ts";
+
+const INDEX_SRC = await Bun.file(new URL("../src/index.ts", import.meta.url)).text();
 
 let dir: string, src: string, base: string, port: number, proc: ReturnType<typeof Bun.spawn> | null = null;
 const MACHINE = "machine-test-token";
@@ -55,6 +58,13 @@ const refused = {
   // Its own token with the desktop's Origin written by hand: the kind is what refuses it.
   switch: (await post("/usage/accounts/switch", { provider: "anthropic", id: "acme-b" }, { Origin: "${DESKTOP}" })).status,
   manage: (await post("/usage/accounts/manage", { provider: "anthropic" }, { Origin: "${DESKTOP}" })).status,
+  // The other doors of the same batch, crossed with the same forgery: the keyring
+  // switch and the disk clean are the person's, and the plugin is not.
+  keyringOn: (await post("/keyring/toggle", { enabled: true }, { Origin: "${DESKTOP}" })).status,
+  keyringOff: (await post("/keyring/toggle", { enabled: false }, { Origin: "${DESKTOP}" })).status,
+  rehydrate: (await post("/keyring/rehydrate", {}, { Origin: "${DESKTOP}" })).status,
+  diskRun: (await post("/machine/disk-clean/run", { ids: [] }, { Origin: "${DESKTOP}" })).status,
+  diskDry: (await post("/machine/disk-clean/run", { ids: [], dryRun: true }, { Origin: "${DESKTOP}" })).status,
 };
 require("fs").writeFileSync("refused.json", JSON.stringify(refused));
 const ok = await post("/plugin/self/accounts", list([a, b]));
@@ -236,6 +246,17 @@ describe("a press of a chip", () => {
     expect(refused.manage).toBe(403);
   });
 
+  step("the keyring switch and the disk clean are not the plugin's either: on waits for the person, nothing else acts", async () => {
+    const refused = readJson("refused.json")!;
+    expect(refused.keyringOn).toBe(202);
+    // Already off, so the door answers "unchanged"; off from on is refused (keyring.test.ts).
+    expect(refused.keyringOff).toBe(200);
+    expect(refused.rehydrate).toBe(403);
+    expect(refused.diskRun).toBe(403);
+    expect(refused.diskDry).toBe(403);
+    expect(((await (await get("/keyring")).json()) as Json).enabled).toBe(false);
+  });
+
   step("is refused to a paired device, even a full one with the desktop's Origin", async () => {
     expect((await press("/usage/accounts/switch", { provider: "anthropic", id: "acme-b" }, phone, DESKTOP)).status).toBe(403);
     expect((await press("/usage/accounts/manage", { provider: "anthropic" }, phone, DESKTOP)).status).toBe(403);
@@ -309,6 +330,21 @@ describe("the store", () => {
     forgetAccounts("p");
   });
   const list = (managedBy?: string) => ({ provider: "anthropic", ...(managedBy ? { managedBy } : {}), accounts: [acct("acme-a", "Acme A", true), acct("acme-b", "Acme B", false)] });
+
+  /* /usage/providers puts each login's label, plan and reading on a row of its own. A plugin reading it was given
+     the logins another plugin listed, which /usage/accounts refuses it. */
+  test("the usage rows show a plugin its own logins only, the person and a device every one", () => {
+    expect(typeof (Accounts as Record<string, unknown>).accountsFor).toBe("function");
+    const { accountsFor } = Accounts as unknown as { accountsFor: (v: unknown) => (p: string) => { accounts: unknown[] } | undefined };
+    setAccounts("p", declared, list());
+    expect(accountsFor({ plugin: "q" })("anthropic")).toBeUndefined();
+    expect(accountsFor({ plugin: "p" })("anthropic")?.accounts).toHaveLength(2);
+    expect(accountsFor("person")("anthropic")?.accounts).toHaveLength(2);
+    expect(accountsFor("device")("anthropic")?.accounts).toHaveLength(2);
+    forgetAccounts("p");
+    const route = INDEX_SRC.slice(INDEX_SRC.indexOf('if (pathname === "/usage/providers")'));
+    expect(route.slice(0, route.indexOf("\n"))).toContain("accountsFor(");
+  });
 
   test("a second post replaces the whole list for the provider", () => {
     expect(setAccounts("p", declared, list()).ok).toBe(true);

@@ -17,6 +17,8 @@ export const DESK_GATED: readonly string[] = [
   "/plugins/session-reads", "/jira/writes", "/clickup/writes", "/clickup/prefs",
   // A press of an account chip: only the person in the desktop window, never an agent staging it.
   "/usage/accounts/switch", "/usage/accounts/manage",
+  // The person's own press of the keyring switch and of Clean up disk (mayPublishReview).
+  "/keyring/toggle", "/keyring/rehydrate", "/machine/disk-clean/run",
 ];
 
 export function deskGated(path: string): boolean {

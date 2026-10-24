@@ -44,7 +44,7 @@ import {
   landlockProbe, resolvePrograms, sandboxArgv, sandboxProbe, type SandboxProbe,
 } from "./plugin-sandbox.ts";
 import { ensurePluginSocketServer, pluginSocketPath, stopPluginSocketServer } from "./plugin-socket.ts";
-import { KeyringError, dropValue, exclusive, keyringEnabled, priorValue, putBack, pluginKeyId, reasonOf, sealValue, unlockFirst, unsealed } from "./keyring.ts";
+import { KEYRING_MARK, KeyringError, dropValue, exclusive, keyringEnabled, priorValue, putBack, pluginKeyId, reasonOf, sealValue, unlockFirst, unsealed } from "./keyring.ts";
 import { coerceSettings, dropNotesOf, fieldsWithOptions, forgetPlugin, pushEvent, resolveSettings, setLivenessCheck } from "./plugin-ui.ts";
 
 /** What a plugin folder must carry at its root, translated from `orca-plugin.json`
@@ -1254,6 +1254,8 @@ export function pluginOwnSettings(name: string): Record<string, unknown> {
   return rec ? settingsWithSecrets(rec) : {};
 }
 
+const MARK_REFUSED = "that value is reserved for the keyring and cannot be saved as a key";
+
 /**
  * Save what the person chose, typed by the manifest, and tell the plugin.
  * Merged over what was there, so a form that only shows some fields cannot
@@ -1270,6 +1272,9 @@ export function setPluginSettings(name: string, raw: unknown, filed: Record<stri
   const secretKeys = secretKeysOf(fields);
   const sent = Object.entries(given).filter(([k]) => secretKeys.includes(k));
   if (sent.length) {
+    // The mark is what a file holds in place of a keyring item: saved as a value it
+    // points at an item nobody wrote, and every later move of the switch refuses.
+    if (sent.some(([k, v]) => v === KEYRING_MARK && filed[k] === undefined)) return { ok: false, error: MARK_REFUSED };
     // With the keyring on, a key reaches this file only as the mark
     // `savePluginSettings` got back for it; handed a plain one, this refuses.
     if (keyringEnabled() && sent.some(([k, v]) => v !== "" && filed[k] === undefined)) return { ok: false, error: "the keyring is on: a key is saved with savePluginSettings" };
@@ -1307,6 +1312,7 @@ async function savePluginSettingsNow(name: string, raw: unknown): Promise<Return
   try {
     for (const [k, v] of Object.entries(coerceSettings(fields, raw))) {
       if (!keys.includes(k) || typeof v !== "string") continue;
+      if (v === KEYRING_MARK) throw new Error(MARK_REFUSED);
       const id = pluginKeyId(name, k);
       prior.set(id, await priorValue(id));
       if (v === "") await dropValue(id); else filed[k] = await sealValue(id, v);

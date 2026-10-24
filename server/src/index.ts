@@ -281,7 +281,7 @@ import { readNotifyPrefs, writeNotifyPrefs } from "./notifyPrefs.ts";
 import { answerSessions, coerceRepos, normalizeRepo, RATE_PER_HOUR, sessionFacts, sessionReadRepos, sessionsGate, setSessionReadRepos, takeSessionsSlot } from "./prsessions.ts";
 import { fetchCatalogue } from "./plugin-catalogue.ts";
 import { annotate, setAnnotations } from "./inbox-annotations.ts";
-import { accountsList, holderOf, manageRefusal, personMayPress, setAccounts, switchRefusal } from "./accounts.ts";
+import { accountsFor, accountsList, holderOf, manageRefusal, personMayPress, setAccounts, switchRefusal } from "./accounts.ts";
 import {
   openStub, settleLedger, recordDecision, recordFence, scorecard,
   setMode, halt, setEnabled, enabled as understudyEnabled, sealSituation,
@@ -3734,7 +3734,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     // Every provider's plan quota in one shape — the dashboard box, the Stats
     // section and the notch all read this one answer. No desktop-only gate:
     // there is no path on disk in the payload and nothing here can act.
-    if (pathname === "/usage/providers") return json(await allProviderUsage());
+    if (pathname === "/usage/providers") { const plugin = caller?.plugin ?? pluginOfRequest(req, url); return json(await allProviderUsage(undefined, accountsFor(plugin ? { plugin } : "person"))); }
     // The accounts a plugin says each provider has, never a credential. A paired
     // device is given how a chip reads and nothing else; a plugin, only its own list.
     if (pathname === "/usage/accounts" && req.method === "GET") {

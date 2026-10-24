@@ -102,6 +102,15 @@ export function accountsList(viewer: AccountsViewer = "person"): AccountsOut[] |
 }
 
 /** The plugin keeping a provider's list, with the list. Server side only: it carries readings. */
+/** The list each provider's usage rows are split by, for one viewer: a plugin is given only the lists it keeps itself,
+ *  the same rule as accountsList. Every login of a list becomes a row with its label (see providerusage withAccounts). */
+export function accountsFor(viewer: AccountsViewer): (provider: string) => AccountsInput | undefined {
+  return (p) => {
+    const h = holderOf(p);
+    return h && (typeof viewer !== "object" || viewer.plugin === h.plugin) ? h.list : undefined;
+  };
+}
+
 export function holderOf(provider: string): { plugin: string; list: AccountsInput } | null {
   if (!isAccountProvider(provider)) return null;
   for (const [plugin, mine] of store) {

@@ -718,3 +718,25 @@ describe("the 0600 files are written durably", () => {
     expect(() => fsyncDir(ROOT)).not.toThrow();
   });
 });
+
+// A plugin writes its own keys (POST /plugin/self/settings). Handed the mark as a
+// value, the file pointed at a keyring item that was never written, and every
+// later move refused with "the keyring does not have it": one plugin kept the
+// person from ever turning the keyring on, or off again.
+describe("the mark is never a value somebody can save", () => {
+  test("with it off: refused, and turning it on still works", async () => {
+    const r = await P.savePluginSettings("orbit-scorer", { apiKey: K.KEYRING_MARK });
+    expect(r.ok).toBe(false);
+    expect(text(P.secretsPath())).toContain(KEY);
+    expect(await S.setKeyringEnabled(true)).toEqual({ ok: true, moved: 2 });
+  });
+
+  test("with it on: refused before the keyring is touched, and turning it off still works", async () => {
+    expect((await S.setKeyringEnabled(true)).ok).toBe(true);
+    const r = await P.savePluginSettings("orbit-scorer", { apiKey: K.KEYRING_MARK });
+    expect(r.ok).toBe(false);
+    expect(fake.items.get("plugin/orbit-scorer/apiKey")).toBe(KEY);
+    expect(await S.setKeyringEnabled(false)).toEqual({ ok: true, moved: 2 });
+    expect(text(P.secretsPath())).toContain(KEY);
+  });
+});
