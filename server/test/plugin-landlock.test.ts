@@ -17,17 +17,20 @@ import { chmodSync, closeSync, mkdirSync, mkdtempSync, openSync, rmSync, writeFi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  __resetLandlockProbe, __resetSandboxProbe, hostResolvConfExtraRo, hostSystemPaths, landlockArgv, landlockProbe,
-  openGrantFds, resolveGrants, sandboxArgv, sandboxProbe, type SandboxArgvInput,
+  __resetLandlockProbe, __resetSandboxProbe, __resetScopeProbe, hostResolvConfExtraRo, hostSystemPaths, landlockArgv, landlockProbe,
+  openGrantFds, resolveGrants, sandboxArgv, sandboxProbe, scopeArgv, scopeProbe, type SandboxArgvInput,
 } from "../src/plugin-sandbox.ts";
 import type { PluginSandbox } from "../../shared/pluginSandbox.ts";
 
 const ORIGINAL_SETPRIV = process.env.AGENTGLASS_SETPRIV;
+const ORIGINAL_SCOPE_PYTHON = process.env.AGENTGLASS_SCOPE_PYTHON;
 const root = mkdtempSync(join(tmpdir(), "agx-landlock-"));
 afterAll(() => {
   rmSync(root, { recursive: true, force: true });
   if (ORIGINAL_SETPRIV === undefined) delete process.env.AGENTGLASS_SETPRIV; else process.env.AGENTGLASS_SETPRIV = ORIGINAL_SETPRIV;
+  if (ORIGINAL_SCOPE_PYTHON === undefined) delete process.env.AGENTGLASS_SCOPE_PYTHON; else process.env.AGENTGLASS_SCOPE_PYTHON = ORIGINAL_SCOPE_PYTHON;
   __resetLandlockProbe();
+  __resetScopeProbe();
   __resetSandboxProbe();
 });
 beforeEach(() => {
@@ -157,6 +160,10 @@ describe("plugins.ts lays the layer", () => {
   });
   test("the public probe carries whether it is there", () => {
     expect(fnBody(pluginsSrc, "function publicProbe(")).toContain("landlock: landlockProbe().ok");
+    expect(fnBody(pluginsSrc, "function publicProbe(")).toContain("abstractScope: scopeProbe().ok");
+  });
+  test("buildBoxArgv hands sandboxArgv the probed python for every box but agentglass's", () => {
+    expect(fnBody(pluginsSrc, "async function buildBoxArgv(")).toMatch(/scoper: sandbox\.network === "agentglass" \? undefined : .*scopeProbe\(\)/);
   });
 });
 
@@ -247,5 +254,87 @@ describe.skipIf(!hostLandlock.ok || !sandboxProbe().ok)("a leaked descriptor ins
     expect(out).toContain("file grant");
     expect(out).not.toContain("fixture key");
     expect(out).toContain("Permission denied");
+  });
+});
+
+describe("the abstract-socket scope", () => {
+  test("goes first around an internet plugin, before setpriv, and not around an agentglass one", () => {
+    const argv = sandboxArgv(input({ setpriv: "/usr/bin/setpriv", scoper: "/usr/bin/python3" }));
+    const at = argv.indexOf("/usr/bin/python3");
+    expect(at).toBeGreaterThan(argv.indexOf("--chdir"));
+    expect(argv.slice(at, at + 4)).toEqual(scopeArgv("/usr/bin/python3"));
+    expect(argv[at + 4]).toBe("/usr/bin/setpriv");
+    const net = sandboxArgv(input({
+      sandbox: { ...SANDBOX, network: "agentglass" }, scoper: "/usr/bin/python3",
+      network: { socketHostPath: "/run/user/1000/agentglass/plugins.sock", bridgeExec: ["/usr/bin/bun", "/opt/agx/bridge.ts"], bridgeRo: [] },
+    }));
+    expect(net).not.toContain("/usr/bin/python3");
+    expect(sandboxArgv(input())).not.toContain("/usr/bin/python3");
+  });
+
+  test("a python that cannot apply it is reported, not trusted", () => {
+    process.env.AGENTGLASS_SCOPE_PYTHON = "/usr/bin/false";
+    __resetScopeProbe();
+    const p = scopeProbe();
+    expect(p.ok).toBe(false);
+    delete process.env.AGENTGLASS_SCOPE_PYTHON;
+    __resetScopeProbe();
+  });
+});
+
+__resetScopeProbe();
+const hostScope = scopeProbe();
+__resetScopeProbe();
+
+/* --share-net shares the host's abstract-socket namespace: a listener on @name outside answered a box. */
+describe.skipIf(!hostScope.ok || !sandboxProbe().ok)("an internet box against a host abstract socket", () => {
+  const b = join(root, "scope");
+  const home = join(b, "home");
+  for (const d of [home, join(b, "install"), join(b, "data")]) mkdirSync(d, { recursive: true });
+  const name = `agx-scope-test-${process.pid}`;
+  const listener = Bun.spawn(["python3", "-I", "-c", [
+    "import socket,sys",
+    "s=socket.socket(socket.AF_UNIX);s.bind('\\0'+sys.argv[1]);s.listen(8);print('up',flush=True)",
+    "while True:",
+    " c,_=s.accept();c.send(b'HOST');c.close()",
+  ].join("\n"), name], { stdout: "pipe", stderr: "ignore" });
+  const tcp = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { open(sk) { sk.write("TCP"); sk.end(); }, data() {} } });
+  afterAll(() => { listener.kill(); tcp.stop(true); });
+  const up = listener.stdout.getReader().read();
+
+  async function run(scoper: string | undefined): Promise<string> {
+    const probe = sandboxProbe();
+    if (!probe.ok) throw new Error("unreachable: skipped without bwrap");
+    await up;
+    const { systemDirs, systemLinks } = hostSystemPaths();
+    const script = [
+      "import socket",
+      "u=socket.socket(socket.AF_UNIX)",
+      "try:",
+      ` u.connect('\\0${name}');print('abstract',u.recv(8))`,
+      "except OSError as e: print('abstract refused',e.errno)",
+      `t=socket.create_connection(('127.0.0.1',${tcp.port}));print('tcp',t.recv(8))`,
+    ].join("\n");
+    const argv = sandboxArgv({
+      bwrap: probe.bwrap, installDir: join(b, "install"), dataDir: join(b, "data"), home,
+      entrypoint: `python3 -I -c "${script}"`,
+      env: { PATH: "/usr/bin:/bin", AGENTGLASS_URL: "http://127.0.0.1:4000" }, sandbox: SANDBOX,
+      grants: { read: [], write: [] }, programDirs: [], systemLinks, systemDirs,
+      extraRo: hostResolvConfExtraRo(), setpriv: hostLandlock.ok ? hostLandlock.setpriv : undefined, scoper,
+    });
+    const p = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe", env: { PATH: "/usr/bin:/bin" } });
+    const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+    await p.exited;
+    return out + err;
+  }
+
+  test("without the scope the box reaches it (the hole this wall closes)", async () => {
+    expect(await run(undefined)).toContain("abstract b'HOST'");
+  });
+
+  test("with the scope the connect is refused and loopback TCP still answers", async () => {
+    const out = await run(hostScope.ok ? hostScope.python : undefined);
+    expect(out).toContain("abstract refused 1");
+    expect(out).toContain("tcp b'TCP'");
   });
 });

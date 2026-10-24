@@ -120,9 +120,9 @@ export function __resetSandboxProbe(): void {
  * calling thread: Bun has no pre-exec hook in `Bun.spawn`, and calling it
  * from the server (bun:ffi) would lock the server, not the plugin.
  *
- * Ceiling: filesystem only. TCP (Landlock ABI 4), abstract-socket and signal
- * scoping (ABI 6) are not something `setpriv` exposes, and a pathname socket
- * the box mounts stays connectable.
+ * Ceiling: filesystem only. TCP (Landlock ABI 4) and signal scoping (ABI 6)
+ * are not something `setpriv` exposes, and a pathname socket the box mounts
+ * stays connectable. Abstract-socket scoping is `scopeProbe` below.
  */
 export type LandlockProbe = { ok: true; setpriv: string } | { ok: false; detail: string; timedOut?: boolean };
 
@@ -193,6 +193,69 @@ const LL_RO_FILE = "read-file,execute";
 const LL_RW_DIR = "read-file,read-dir,execute,write-file,remove-dir,remove-file,make-dir,make-reg,make-sym,make-sock,make-fifo,refer,truncate";
 const LL_RW_FILE = "read-file,execute,write-file,truncate";
 const LL_DEV = "read-file,write-file,read-dir,ioctl-dev";
+
+/**
+ * The third wall, for `network: "internet"` only: Landlock's abstract-socket
+ * scope (ABI 6, Linux 6.12+). `--share-net` shares the host's abstract-socket
+ * namespace, so a boxed plugin could `connect()` to any `@name` listener on
+ * the host — measured, a host listener answered a box started by
+ * `sandboxArgv`. Under this scope the same connect is EPERM and HTTPS still
+ * works. `network: "agentglass"` does not need it: `--unshare-net` already
+ * gives the box an abstract namespace of its own.
+ *
+ * Python rather than `setpriv`, which does not expose scopes, and rather than
+ * bun:ffi, for the same reason `setpriv` is used at all: Landlock binds the
+ * calling thread and what it later executes. The script is single-threaded,
+ * applies the scope, then `execvp`s the rest of the argv, which inherits it.
+ * Syscall numbers 444/446 are the same on every Linux architecture.
+ */
+const SCOPE_PY = [
+  "import ctypes,os,struct,sys",
+  "c=ctypes.CDLL(None,use_errno=True);c.syscall.restype=ctypes.c_long",
+  "c.syscall(444,None,0,1)>=6 or sys.exit(3)",
+  "a=ctypes.create_string_buffer(struct.pack('QQQ',0,0,1),24);fd=c.syscall(444,a,24,0)",
+  "fd>=0 and c.prctl(38,1,0,0,0)==0 and c.syscall(446,fd,0)==0 or sys.exit(4)",
+  "os.close(fd);os.execvp(sys.argv[1],sys.argv[1:])",
+].join("\n");
+
+export type ScopeProbe = { ok: true; python: string } | { ok: false; detail: string; timedOut?: boolean };
+
+/** `-I`: no user site, no PYTHON* variables, no script directory on the path. */
+export function scopeArgv(python: string): string[] {
+  return [python, "-I", "-c", SCOPE_PY];
+}
+
+function runScopeProbe(): ScopeProbe {
+  let python: string;
+  if (process.env.NODE_ENV === "test" && process.env.AGENTGLASS_SCOPE_PYTHON) {
+    python = process.env.AGENTGLASS_SCOPE_PYTHON;
+  } else {
+    // The box runs this path from its own read-only `/usr`, like setpriv.
+    try { python = realpathSync("/usr/bin/python3"); } catch { return { ok: false, detail: "python3 is not installed" }; }
+    if (!python.startsWith("/usr/")) return { ok: false, detail: "python3 is not installed under /usr" };
+  }
+  let r: ReturnType<typeof Bun.spawnSync> | null = null;
+  try { r = Bun.spawnSync([...scopeArgv(python), "/usr/bin/true"], { stdout: "ignore", stderr: "ignore", timeout: 3000 }); } catch { /* reported below */ }
+  if (r?.exitedDueToTimeout) return { ok: false, detail: "python3 did not finish within 3s", timedOut: true };
+  if (r?.success) return { ok: true, python };
+  if (r?.exitCode === 3) return { ok: false, detail: "this kernel has no Landlock abstract-socket scoping (Linux 6.12+)" };
+  return { ok: false, detail: "python3 could not apply the Landlock scope" };
+}
+
+let scopeCached: ScopeProbe | undefined;
+
+/** Cached like `landlockProbe`. Not having it changes nothing about the box:
+ *  an `internet` plugin starts exactly as it did before this wall existed. */
+export function scopeProbe(): ScopeProbe {
+  if (scopeCached !== undefined) return scopeCached;
+  const probe = runScopeProbe();
+  if (probe.ok || !probe.timedOut) scopeCached = probe;
+  return probe;
+}
+
+export function __resetScopeProbe(): void {
+  scopeCached = undefined;
+}
 
 export interface LandlockGrant {
   path: string;
@@ -575,6 +638,9 @@ export interface SandboxArgvInput {
   /** `landlockProbe().setpriv` when the second layer is available; absent,
    *  the argv is exactly what it was before that layer existed. */
   setpriv?: string;
+  /** `scopeProbe().python` when the abstract-socket wall is available; used
+   *  only for `network: "internet"`. Absent, the argv is what it was before. */
+  scoper?: string;
 }
 
 /** `path` entries that are — or are under — `home`, dropped: the box's PATH
@@ -612,7 +678,7 @@ function hostPathOutsideHome(hostPath: string, home: string): string[] {
  * one (program dirs, home entries dropped) and neither is a secret.
  */
 export function sandboxArgv(input: SandboxArgvInput): string[] {
-  const { bwrap, installDir, dataDir, home, entrypoint, env, sandbox, grants, programDirs, systemLinks, systemDirs, extraRo, network, setpriv } = input;
+  const { bwrap, installDir, dataDir, home, entrypoint, env, sandbox, grants, programDirs, systemLinks, systemDirs, extraRo, network, setpriv, scoper } = input;
   const agentglassNet = sandbox.network === "agentglass";
   const path = [...hostPathOutsideHome(env.PATH, home), ...programDirs].join(":");
   const argv: string[] = [
@@ -646,6 +712,7 @@ export function sandboxArgv(input: SandboxArgvInput): string[] {
   // bridge's read-only binds either, for the same reason.
   const dir = (path: string) => ({ path, isDir: true });
   const plugin = [
+    ...(scoper && !agentglassNet ? scopeArgv(scoper) : []),
     ...(setpriv
       ? landlockArgv(setpriv, {
         ro: [...["/usr", ...systemDirs, ...extraRo, "/proc", installDir, ...programDirs].map(dir), ...grants.read.map((g) => ({ path: g.dest, isDir: g.isDir }))],

@@ -498,7 +498,11 @@ keyring, are read back, and only then are replaced in the files by a marker; a
 keyring that is locked or missing is never answered by writing a secret to a
 file, and the features that need one say "keyring locked". It protects a backup
 of those files, not a program running as you while the keyring is unlocked. An
-agent can ask for it, and the request waits for your click.
+agent can ask for it, and the request waits for your click; turning it off is
+refused to agents outright. On a server started by hand, with no desk, "you"
+is the `Origin` rule and its limit (see the desk, above): an agent that holds
+the machine token and forges the app's `Origin` turns it off. Asking for the
+CLI there instead would not help, since every agent shell holds that token too.
 
 The token is never sent to the browser. It goes in through one route, is
 verified against the service before anything is written, and after that the app
@@ -849,12 +853,22 @@ that write. The rules hang on the files the box
 shows, not on the mounts, so they hold where the mount namespace would not: a
 descriptor to a folder outside the box that leaks into it reads nothing through
 `/proc/self/fd`, where bwrap alone would read it. Ceiling: files only. It does
-not limit network connections, signals or abstract sockets, a socket the box
-mounts stays connectable, and it is never the only wall — a host that cannot
+not limit network connections or signals, a socket the box mounts stays
+connectable, and it is never the only wall — a host that cannot
 build the bwrap box does not get this layer instead. A kernel or `setpriv`
 without it (util-linux before 2.40, or one that lacks a right this layer
 uses) changes nothing about the box, and the plugin panel says so in one
 line.
+
+**A plugin on the host's network is kept off the host's abstract sockets.**
+`network: "internet"` shares the host's network namespace, and with it every
+abstract Unix socket (`@name`) a host program listens on. Where the kernel has
+Landlock's abstract-socket scope (Linux 6.12 or later) and `/usr/bin/python3`
+can apply it, the plugin is started under that scope: a `connect()` to a host
+`@name` is refused, and its network, loopback included, works as before.
+`network: "agentglass"` has its own namespace and does not need it. A kernel
+without the scope changes nothing about the box, and the plugin panel says
+which wall is missing.
 
 **A plugin token is its own kind of caller and can never answer a permission
 gate**, whatever scope it declares or was granted. `POST /gate/decide` asks for

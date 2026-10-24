@@ -207,9 +207,17 @@ describe("envHatchNotice", () => {
 
 describe("secondLayerNote", () => {
   test("only when the box builds and Landlock does not", () => {
-    expect(secondLayerNote({ sandbox: SANDBOX, sandboxProbe: { ok: true, landlock: false } })).toMatch(/Landlock/);
-    expect(secondLayerNote({ sandbox: SANDBOX, sandboxProbe: { ok: true, landlock: true } })).toBeNull();
+    expect(secondLayerNote({ sandbox: SANDBOX, sandboxProbe: { ok: true, landlock: false, abstractScope: true } })).toMatch(/Landlock/);
+    expect(secondLayerNote({ sandbox: SANDBOX, sandboxProbe: { ok: true, landlock: true, abstractScope: true } })).toBeNull();
     expect(secondLayerNote({ sandbox: SANDBOX, sandboxProbe: { ok: false, reason: "missing", detail: "x" } })).toBeNull();
-    expect(secondLayerNote({ sandbox: undefined, sandboxProbe: { ok: true, landlock: false } })).toBeNull();
+    expect(secondLayerNote({ sandbox: undefined, sandboxProbe: { ok: true, landlock: false, abstractScope: false } })).toBeNull();
+  });
+
+  /* An internet box shares the host's abstract-socket namespace; without the scope that wall is missing. */
+  test("an internet plugin names the abstract-socket wall when the kernel has no scope for it", () => {
+    const internet = { ...SANDBOX, network: "internet" as const };
+    expect(secondLayerNote({ sandbox: internet, sandboxProbe: { ok: true, landlock: true, abstractScope: false } })).toMatch(/abstract sockets/);
+    expect(secondLayerNote({ sandbox: internet, sandboxProbe: { ok: true, landlock: true, abstractScope: true } })).toBeNull();
+    expect(secondLayerNote({ sandbox: SANDBOX, sandboxProbe: { ok: true, landlock: true, abstractScope: false } })).toBeNull();
   });
 });

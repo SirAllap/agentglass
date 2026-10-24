@@ -41,7 +41,7 @@ import { versionAtLeast } from "../../shared/semverLite.ts";
 export { versionAtLeast };
 import {
   hostResolvConfExtraRo, hostSystemPaths, openGrantFds, pluginDataDir, removePluginDataDir, resolveGrants,
-  landlockProbe, resolvePrograms, sandboxArgv, sandboxProbe, type SandboxProbe,
+  landlockProbe, resolvePrograms, sandboxArgv, sandboxProbe, scopeProbe, type SandboxProbe,
 } from "./plugin-sandbox.ts";
 import { ensurePluginSocketServer, pluginSocketPath, stopPluginSocketServer } from "./plugin-socket.ts";
 import { KEYRING_MARK, KeyringError, dropValue, exclusive, keyringEnabled, priorValue, putBack, pluginKeyId, reasonOf, sealValue, unlockFirst, unsealed } from "./keyring.ts";
@@ -947,6 +947,7 @@ async function buildBoxArgv(
     network,
     extraRo: boxExtraRo(network),
     setpriv: landlock.ok ? landlock.setpriv : undefined,
+    scoper: sandbox.network === "agentglass" ? undefined : (() => { const sc = scopeProbe(); return sc.ok ? sc.python : undefined; })(),
   });
   return { argv, parentFds: opened.parentFds, refused: [...grants.refused, ...programs.refused, ...opened.refused] };
 }
@@ -1108,7 +1109,7 @@ async function git(args: string[], cwd: string, timeoutMs: number): Promise<{ ok
   }
 }
 
-export type PublicSandboxProbe = { ok: true; landlock: boolean } | { ok: false; reason: Extract<SandboxProbe, { ok: false }>["reason"]; detail: string };
+export type PublicSandboxProbe = { ok: true; landlock: boolean; abstractScope: boolean } | { ok: false; reason: Extract<SandboxProbe, { ok: false }>["reason"]; detail: string };
 
 export type PublicPlugin = PluginRecord & {
   running: boolean;
@@ -1149,7 +1150,7 @@ function withContributes(p: PluginRecord): PluginRecord {
 
 function publicProbe(): PublicSandboxProbe {
   const p = sandboxProbe();
-  return p.ok ? { ok: true, landlock: landlockProbe().ok } : { ok: false, reason: p.reason, detail: p.detail };
+  return p.ok ? { ok: true, landlock: landlockProbe().ok, abstractScope: scopeProbe().ok } : { ok: false, reason: p.reason, detail: p.detail };
 }
 
 /** What starting this plugin does on this host — the one decision the start

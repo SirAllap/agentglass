@@ -19,6 +19,8 @@ export const DESK_GATED: readonly string[] = [
   "/usage/accounts/switch", "/usage/accounts/manage",
   // The person's own press of the keyring switch and of Clean up disk (mayPublishReview).
   "/keyring/toggle", "/keyring/rehydrate", "/machine/disk-clean/run",
+  // Data & privacy and the Jira write switches, judged the same way.
+  "/privacy/retention", "/privacy/erase-history", "/jira/write-kinds",
 ];
 
 export function deskGated(path: string): boolean {

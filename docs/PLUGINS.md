@@ -410,8 +410,9 @@ and `_`; a `label` is up to 32 characters and a `plan` up to 24, plain text;
 `colour` is one of the accent words (`neutral`, `blue`, `violet`, `green`, `amber`,
 `rose`, `cyan`, `teal`), never a hex; `storage` is `keyring` or `file` (the chip says
 "stored in a file" for the second). The app marks
-the list of the plugin it knows as `swapkin` as managed by it (the account tool switches
-them itself): the chips are then shown and cannot be pressed. A plugin cannot claim that
+the list of the plugin installed as `swapkin` as managed by it (the account tool switches
+them itself) once it has found Swapkin on the machine, the same check as `deferTo` below:
+the chips are then shown and cannot be pressed. A plugin cannot claim that
 in its body; a `managedBy` it sends is not read. A plugin under another name that steps aside
 for Swapkin sends `"deferTo": "swapkin"` next to `provider`: the app then looks for Swapkin
 itself (`swapkin` on the server's PATH, or its data folder, `$SWAPKIN_DIR` or

@@ -59,10 +59,13 @@ export function setAccounts(
   const was = mine.get(provider)?.accounts.find((a) => a.active)?.id;
   const now = v.value.accounts.find((a) => a.active)?.id;
   if (provider === "anthropic" && was !== undefined && was !== now) clearUsageCache();
-  // Decided here, never from a claim in the body: by who the plugin is, or by
-  // its `deferTo` once the app has found that manager on this machine itself.
+  // Decided here, never from a claim in the body: by the name the plugin is
+  // installed under or by its `deferTo`, and either only once the app has found
+  // that manager on this machine itself. Any manifest can take the name, so the
+  // name alone would put "Managed by" on the chips and lock them.
   const { deferTo, ...rest } = v.value;
-  const managedBy = (ACCOUNT_MANAGERS as readonly string[]).includes(plugin) ? (plugin as AccountManager) : deferTo && swapkinPresent(env) ? deferTo : undefined;
+  const named = (ACCOUNT_MANAGERS as readonly string[]).includes(plugin) ? (plugin as AccountManager) : deferTo;
+  const managedBy = named && swapkinPresent(env) ? named : undefined;
   mine.set(provider, { ...rest, ...(managedBy ? { managedBy } : {}) });
   store.set(plugin, mine);
   return { ok: true, kept: v.value.accounts.length };

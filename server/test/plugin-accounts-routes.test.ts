@@ -354,14 +354,6 @@ describe("the store", () => {
     expect(switchRefusal("anthropic", "acme-b")).toContain("no plugin keeps");
   });
 
-  test("a list kept by the plugin the app knows as swapkin cannot be switched or managed from here", () => {
-    setAccounts("swapkin", declared, list());
-    expect(accountsList("device")[0]?.managedBy).toBe("swapkin");
-    expect(switchRefusal("anthropic", "acme-b")).toContain("managed by swapkin");
-    expect(manageRefusal("anthropic")).toContain("managed by swapkin");
-    forgetAccounts("swapkin");
-  });
-
   test("any other plugin claiming managedBy in its body is not managed: the claim is not read", () => {
     setAccounts("p", declared, list("swapkin"));
     expect(accountsList()[0]?.managedBy).toBeUndefined();
@@ -381,6 +373,25 @@ describe("the store", () => {
       mkdirSync(join(d, "swapkin"));
       return d;
     };
+
+    /* Any manifest can be named swapkin, so the name alone put "Managed by Swapkin" on the chips and
+       locked them. The name now counts only where deferTo does: once the app finds Swapkin itself. */
+    test("a plugin named swapkin on a machine without Swapkin is not managed, and its chips press", () => {
+      setAccounts("swapkin", declared, list(), bare());
+      expect(accountsList()[0]?.managedBy).toBeUndefined();
+      expect(switchRefusal("anthropic", "acme-b")).toBeNull();
+      expect(manageRefusal("anthropic")).toBeNull();
+      forgetAccounts("swapkin");
+    });
+
+    test("the plugin named swapkin, with Swapkin found, cannot be switched or managed from here", () => {
+      const d = withDataDir();
+      setAccounts("swapkin", declared, list(), bare({ SWAPKIN_DIR: join(d, "swapkin") }));
+      expect(accountsList("device")[0]?.managedBy).toBe("swapkin");
+      expect(switchRefusal("anthropic", "acme-b")).toContain("managed by swapkin");
+      expect(manageRefusal("anthropic")).toContain("managed by swapkin");
+      forgetAccounts("swapkin");
+    });
 
     test("a plugin not named swapkin that defers while Swapkin is absent is not managed, and its chips press", () => {
       setAccounts("accounts", declared, body(), bare());
@@ -431,12 +442,6 @@ describe("the store", () => {
         expect(r.ok, label).toBe(false);
       }
       expect(accountsList()).toEqual([]);
-    });
-
-    test("a plugin named swapkin is managed whether or not it defers", () => {
-      setAccounts("swapkin", declared, list(), bare());
-      expect(accountsList()[0]?.managedBy).toBe("swapkin");
-      forgetAccounts("swapkin");
     });
   });
 

@@ -43,7 +43,8 @@ export type AccountStorage = (typeof ACCOUNT_STORAGE)[number];
  * plugin sets: `managedBy` is decided by the app from the name the plugin is
  * installed under (accounts.ts), because a claim in the body would let any
  * plugin put "Managed by <a tool people trust>" on the chips. A body that sends
- * it is read as if it had not.
+ * it is read as if it had not. The name counts only once the app has found the
+ * manager on the machine itself, the same check `deferTo` gets.
  */
 export const ACCOUNT_MANAGERS = ["swapkin"] as const;
 export type AccountManager = (typeof ACCOUNT_MANAGERS)[number];
