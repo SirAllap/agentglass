@@ -43,6 +43,7 @@ import { join } from "node:path";
 const dir = mkdtempSync(join(tmpdir(), "agx-trunc-"));
 const C = await import("../src/credentials.ts");
 const CU = await import("../src/clickup.ts");
+const { __clearSeen } = await import("../src/cardStamp.ts");
 const W = await import("../src/clickupwatch.ts");
 const V = await import("../src/clickupviews.ts");
 
@@ -87,7 +88,7 @@ beforeEach(() => {
   V.__setViewsPath(join(dir, "views.json"));
   W.__setWatchPath(WATCH);
 });
-afterEach(() => { CU.__reset(); CU.__clearSearchCache(); W.__setWatchPath(null); });
+afterEach(() => { __clearSeen(); CU.__reset(); CU.__clearSearchCache(); W.__setWatchPath(null); });
 afterAll(() => {
   server.stop(true);
   CU.__setClickUpBase(null);

@@ -48,6 +48,7 @@ import { isIP } from "node:net";
 import { forgetCached } from "./jiraviews.ts";
 import { cardExtras } from "./jirafields.ts";
 import { webLinksOf } from "./jiraCardRead.ts";
+import { facetsOf, judgeStale, noteSeen, type Facet } from "./cardStamp.ts";
 import type { CardWebLink } from "../../shared/providers.ts";
 import { clearCredential, redacted, secretFor, setCredential } from "./credentials.ts";
 import type { CallResult, WriteOutcome } from "./trackerTypes.ts";
@@ -705,6 +706,15 @@ const initialsOf = (name: string): string =>
 /** Jira writes `2026-01-13T09:00:00.000+0000`; anything unreadable is 0, not NaN. */
 export const epoch = (v: unknown): number => { const t = Date.parse(str(v)); return Number.isFinite(t) ? t : 0; };
 
+/** What a write can set, as the card shows it: the baseline `staleUnless` compares against. */
+const jiraFacets = (f: Record<string, unknown>) => {
+  const who = isObj(f.assignee) ? f.assignee : null;
+  // The id `toTask` calls the person's own: Cloud accountId, Data Center key, then login.
+  const key = who ? str(who.accountId) || str(who.key) || str(who.name) : "";
+  const name = who ? str(who.displayName) || str(who.name) || key : "";
+  return facetsOf(isObj(f.status) ? str(f.status.name) : "", key ? [{ key, name }] : [], null);
+};
+
 export interface TaskContext {
   /** The connection's site, for the card's address. */
   site: string;
@@ -731,6 +741,8 @@ export function toTask(issue: unknown, cx: TaskContext, arrival?: number): Provi
   const whoId = who ? str(who.accountId) || str(who.key) || str(who.name) : "";
   const whoName = who ? str(who.displayName) || str(who.name) || whoId : "";
   const avatars = who && isObj(who.avatarUrls) ? str(who.avatarUrls["48x48"]) : "";
+  // A read that did not ask for the status says nothing about it.
+  if (isObj(f.status)) noteSeen(`jira:${key.toUpperCase()}`, epoch(f.updated), jiraFacets(f));
   const created = epoch(f.created);
   const due = /^\d{4}-\d{2}-\d{2}/.exec(str(f.duedate))?.[0] ?? null;
   const task: ProviderTask = {
@@ -1274,7 +1286,7 @@ export async function moveIssue(creds: JiraCreds, key: string, transitionId: str
   const f = isObj(seen.data) && isObj(seen.data.fields) ? seen.data.fields : {};
   const now = epoch(f.updated);
   if (!now) return unreadable();
-  if (now !== updated) return stale();
+  if (now !== updated) { const no = staleUnless(key, updated, f, ["status"]); if (no) return no; }
 
   // Moves differ by project, issue type and status, so that is the memo's key.
   const status = isObj(f.status) ? f.status : {};
@@ -1507,6 +1519,16 @@ export async function readBefore(creds: JiraCreds, key: string, fields: string):
 export const unreadable = (): WriteOutcome => ({ ok: false, error: "Nothing was changed: could not tell whether the card moved since you opened it. Reload it and try again" });
 export const stale = (): WriteOutcome => ({ ok: false, conflict: true, error: "Somebody changed this card while you had it open, reloaded" });
 
+/**
+ * A stamp that is not the one the person saw: a conflict only when what moved is
+ * a field this write sets (`cardStamp.ts`). A comment, a label or a worklog
+ * moves `updated` too, and used to refuse an assignee change as "somebody".
+ */
+export function staleUnless(key: string, seen: number, f: Record<string, unknown>, touches: readonly Facet[]): WriteOutcome | null {
+  const v = judgeStale(`jira:${key.toUpperCase()}`, seen, jiraFacets(f), touches, stale().error!);
+  return v.go ? null : { ok: false, conflict: true, error: v.error };
+}
+
 /** Why Jira refused an assignee write, in our words. */
 export function assignRefusal(r: JiraResult<unknown>): WriteOutcome {
   if (r.status === 400) return { ok: false, error: "Jira did not take that person: they may not be assignable to this card" };
@@ -1533,7 +1555,7 @@ export async function setAssignee(creds: JiraCreds, key: string, to: string | nu
   if ("stop" in before) return before.stop;
   const now = epoch(before.f.updated);
   if (!now) return unreadable();
-  if (now !== updated) return stale();
+  if (now !== updated) { const no = staleUnless(key, updated, before.f, ["assignees"]); if (no) return no; }
 
   const put = await jiraCall<unknown>(creds, `/rest/api/${apiOf(creds)}/issue/${encodeURIComponent(key)}/assignee`, {
     method: "PUT",
@@ -1686,7 +1708,7 @@ export async function handOff(creds: JiraCreds, key: string, updated: number, ch
   const f = before.f;
   const now = epoch(f.updated);
   if (!now) return unreadable();
-  if (now !== updated) return stale();
+  if (now !== updated) { const no = staleUnless(key, updated, f, ["status", "assignees"]); if (no) return no; }
   const status = isObj(f.status) ? f.status : {};
   const statusName = str(status.name);
   const project = isObj(f.project) ? str(f.project.key) : K.slice(0, K.lastIndexOf("-"));

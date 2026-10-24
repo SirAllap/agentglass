@@ -18,6 +18,7 @@
  */
 import { statusSpaces, type CardsRead, type StatusSpaces } from "../../shared/statusSpaces.ts";
 import { singleFlight } from "./singleflight.ts";
+import { facetsOf, judgeStale, noteSeen, type Facet } from "./cardStamp.ts";
 import { cardIdDigits, mentionsCardId } from "../../shared/cardRef.ts";
 import { matchesQuery, mergeRequestNumber, prAddress, readTaskRef } from "../../shared/taskref.ts";
 import * as Index from "./clickupindex.ts";
@@ -368,9 +369,15 @@ interface RawComment {
   date?: string | number;
 }
 
+/** What a write can set, as the card shows it: the baseline `guardUnchanged` compares against. */
+const facetsOfRaw = (raw: RawTask) =>
+  facetsOf(raw.status?.status ?? "", (raw.assignees ?? []).map((a) => ({ key: String(a.id ?? a.username ?? ""), name: a.username ?? "" })).filter((p) => p.key),
+    raw.priority?.priority);
+
 export function toTask(raw: RawTask, myId?: string): ProviderTask {
   const kind = raw.status?.type;
   const assignees = raw.assignees ?? [];
+  noteSeen(`clickup:${raw.id}`, Number(raw.date_updated) || 0, facetsOfRaw(raw));
   return {
     id: String(raw.id),
     customId: raw.custom_id ? String(raw.custom_id) : undefined,
@@ -2108,8 +2115,12 @@ export const CLICKUP_WRITE_ENABLED = process.env.AGENTGLASS_CLICKUP_WRITE === "1
  * moved since. It is weaker than a fingerprint — two edits inside the same
  * millisecond would slip through — and it catches the case that actually
  * happens, which is somebody moving the card while you had it open.
+ *
+ * `touches` is what the write sets. A stamp that moved under other fields (a
+ * comment, a tag) is not a conflict with it — see `cardStamp.ts`; a write that
+ * names no fields keeps the strict rule.
  */
-async function guardUnchanged(token: string, taskId: string, expectUpdated?: number): Promise<WriteOutcome | null> {
+async function guardUnchanged(token: string, taskId: string, expectUpdated?: number, touches?: readonly Facet[]): Promise<WriteOutcome | null> {
   if (!expectUpdated) return null;
   const r = await call<RawTask>(`/task/${encodeURIComponent(taskId)}`, token);
   // A read that failed says nothing about whether the card moved, so it is not
@@ -2123,7 +2134,11 @@ async function guardUnchanged(token: string, taskId: string, expectUpdated?: num
     };
   }
   const now = Number(r.data?.date_updated) || 0;
-  if (now && now !== expectUpdated) return { ok: false, conflict: true, error: "Somebody changed this card while you had it open — reloaded" };
+  if (now && now !== expectUpdated) {
+    const head = "Somebody changed this card while you had it open — reloaded";
+    const v = touches && r.data ? judgeStale(`clickup:${r.data.id}`, expectUpdated, facetsOfRaw(r.data), touches, head) : { go: false as const, error: head };
+    if (!v.go) return { ok: false, conflict: true, error: v.error };
+  }
   return null;
 }
 
@@ -2164,7 +2179,7 @@ export async function assignSelf(taskId: string, on: boolean, expectUpdated?: nu
   if (!clickupWriteEnabled()) return { ok: false, error: "Writing to ClickUp is switched off" };
   const me = redacted("clickup")?.accountId;
   if (!me) return { ok: false, error: "Do not know which ClickUp account this is" };
-  const refused = await guardUnchanged(token, taskId, expectUpdated);
+  const refused = await guardUnchanged(token, taskId, expectUpdated, ["assignees"]);
   if (refused) return refused;
   const n = Number(me);
   const r = await put(`/task/${encodeURIComponent(taskId)}`, token, {
@@ -2300,7 +2315,7 @@ export async function setAssignee(taskId: string, userId: number, on: boolean, e
   if (!token) return { ok: false, error: "ClickUp is not connected" };
   if (!clickupWriteEnabled()) return { ok: false, error: "Writing to ClickUp is switched off" };
   if (!Number.isFinite(userId)) return { ok: false, error: "That is not a person" };
-  const refused = await guardUnchanged(token, taskId, expectUpdated);
+  const refused = await guardUnchanged(token, taskId, expectUpdated, ["assignees"]);
   if (refused) return refused;
   const r = await put(`/task/${encodeURIComponent(taskId)}`, token, {
     assignees: on ? { add: [userId] } : { rem: [userId] },
@@ -2350,7 +2365,7 @@ export async function setCard(
   // A no-op is a mistake upstream, not a write: sending one dates somebody
   // else's card for nothing.
   if (!add.length && !rem.length && !status) return { ok: false, error: "nothing to change" };
-  const refused = await guardUnchanged(token, taskId, expectUpdated);
+  const refused = await guardUnchanged(token, taskId, expectUpdated, [...(add.length || rem.length ? ["assignees" as const] : []), ...(status ? ["status" as const] : [])]);
   if (refused) return refused;
   const body: Record<string, unknown> = {};
   if (add.length || rem.length) {
@@ -2368,7 +2383,7 @@ export async function setStatus(taskId: string, status: string, expectUpdated?: 
   if (!token) return { ok: false, error: "ClickUp is not connected" };
   if (!clickupWriteEnabled()) return { ok: false, error: "Writing to ClickUp is switched off" };
   if (!status.trim()) return { ok: false, error: "no status given" };
-  const refused = await guardUnchanged(token, taskId, expectUpdated);
+  const refused = await guardUnchanged(token, taskId, expectUpdated, ["status"]);
   if (refused) return refused;
   const r = await put(`/task/${encodeURIComponent(taskId)}`, token, { status });
   __reset();
@@ -2399,7 +2414,7 @@ export async function setPriority(taskId: string, priority: string | null, expec
   if (!clickupWriteEnabled()) return { ok: false, error: "Writing to ClickUp is switched off" };
   const wire = !priority ? null : PRIORITY_WIRE[priority];
   if (wire === undefined) return { ok: false, error: "that is not a priority" };
-  const refused = await guardUnchanged(token, taskId, expectUpdated);
+  const refused = await guardUnchanged(token, taskId, expectUpdated, ["priority"]);
   if (refused) return refused;
   const r = await put(`/task/${encodeURIComponent(taskId)}`, token, { priority: wire });
   __reset();
@@ -2456,6 +2471,21 @@ export async function commentOn(taskId: string, text: string, assignee?: number)
   } catch {
     return { ok: false, error: "Could not reach ClickUp" };
   } finally { clearTimeout(kill); }
+}
+
+/**
+ * The card as it stands now, for the writes that answer without one.
+ *
+ * A comment moves the card's stamp and ClickUp's answer to it says nothing of
+ * the new one, so the view that wrote it kept the old stamp and the NEXT write
+ * from another view of the same card was refused as somebody else's change. One
+ * read, only after a comment landed — which a person types at a person's pace.
+ */
+export async function readTask(taskId: string): Promise<ProviderTask | null> {
+  const token = secretFor("clickup");
+  if (!token) return null;
+  const r = await call<RawTask>(`/task/${encodeURIComponent(taskId)}`, token);
+  return r.ok && r.data ? toTask(r.data, redacted("clickup")?.accountId) : null;
 }
 
 /* ------------------------------------------------------------- writing --- */

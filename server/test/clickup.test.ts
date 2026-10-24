@@ -633,8 +633,9 @@ describe("putting somebody else on a card", () => {
   it("will not overwrite a card somebody else moved first", async () => {
     // Same precondition the status write has: `updated` is checked before the
     // write, so two people on one card is a conflict rather than a race.
+    // Somebody else was put on it: the stamp moved under the field this write sets.
     allow();
-    reply = () => json({ ...TASK, date_updated: "1754399999999" });
+    reply = () => json({ ...TASK, date_updated: "1754399999999", assignees: [{ username: "Bo" }] });
     const r = await CU.setAssignee("abc", 9, true, 1754300000000);
     expect(r.ok).toBe(false);
     expect(r.conflict).toBe(true);
@@ -691,7 +692,7 @@ describe("several changes to one card", () => {
 
   it("still refuses a card somebody else moved first", async () => {
     allow();
-    reply = () => json({ ...TASK, date_updated: "1754399999999" });
+    reply = () => json({ ...TASK, date_updated: "1754399999999", status: { status: "in review", type: "custom" } });
     const r = await CU.setCard("abc", { status: "code review" }, 1754300000000);
     expect(r.ok).toBe(false);
     expect(r.conflict).toBe(true);

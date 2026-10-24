@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ProviderTask } from "../../shared/providers.ts";
 import * as CU from "../src/clickup.ts";
+import { __clearSeen } from "../src/cardStamp.ts";
 import * as C from "../src/credentials.ts";
 import * as CV from "../src/clickupviews.ts";
 
@@ -54,7 +55,7 @@ beforeEach(() => {
   CU.__resetCounts();
   CU.__setCountEvery(0);
 });
-afterEach(() => { CU.__reset(); });
+afterEach(() => { __clearSeen(); CU.__reset(); });
 afterAll(() => {
   server.stop(true);
   CU.__setClickUpBase(null);
