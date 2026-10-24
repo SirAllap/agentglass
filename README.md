@@ -223,8 +223,10 @@ forwarder. To adapt it to another agent or harness without forking, start at
 ## About
 
 Built by [**@SirAllap**](https://github.com/SirAllap) (David Pallares).
-Original work — not a fork. Not affiliated with or endorsed by Anthropic;
-"Claude" and "Claude Code" are trademarks of Anthropic.
+The upstream project, with its releases and issues, lives at
+[github.com/SirAllap/agentglass](https://github.com/SirAllap/agentglass).
+Not affiliated with or endorsed by Anthropic; "Claude" and "Claude Code" are
+trademarks of Anthropic.
 
 ## License
 
