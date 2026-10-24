@@ -14,6 +14,10 @@ kept in one place.
 
 ## Released
 
+- **v0.25.0** — **Clean your disk from the app, keep secrets in the system keyring, and a phone that tells you what needs you.**
+  - **Disk cleanup.** A scan lists what can go (Docker images and build cache, finished containers, worktrees, package caches, temp files, trash); it deletes only what it lists, and asks first.
+  - **Secrets and plugins.** An optional system keyring for tokens and plugin keys, a Landlock layer and a seccomp filter inside the plugin box next to bwrap, and plugins that declare usage accounts.
+  - **Phone and notifications.** Alerts on a paired phone, reconnect in the background, ignore named checks for "All CI passed", and notification buttons on macOS.
 - **v0.24.1** — **Settings follows the design, and the look of the app is yours to set.**
   - **Settings.** Every page is redrawn to one structure: cards, rows, chips and icons at the same scale, with help behind Details, and Orchestration as compact rows beside a drawn flow.
   - **Look.** Density, interface font size, reduce motion and a translucent window (desktop; it needs a compositor that supports one) are settings, and previews on Window and Appearance show the app's own screens.
