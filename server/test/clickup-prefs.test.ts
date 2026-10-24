@@ -172,7 +172,7 @@ describe("the store", () => {
 
   test("the server settles it at start, before the card watch reads anything", () => {
     const index = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
-    const settle = index.indexOf('settleFirstRun(hasCredential("clickup"))');
+    const settle = index.indexOf('settleFirstRun(hasStoredCredential("clickup"))');
     expect(settle).toBeGreaterThan(-1);
     expect(settle).toBeLessThan(index.indexOf("startCardWatch((n) =>"));
   });

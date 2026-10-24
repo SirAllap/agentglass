@@ -111,20 +111,20 @@ export function DiskClean() {
         <span className="min-w-0 flex-1 truncate text-[10.5px]" style={{ color: "var(--text3)" }}>{summary(phase, view.plan.bytes, view.plan.ids.length, report)}</span>
         {canClean && (armed === (staged ? "staged" : "all") ? (
           <>
-            <button type="button" className={BTN} style={{ height: BTN_H, color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 45%, transparent)" }}
+            <button type="button" className={BTN} style={{ height: BTN_H, color: "var(--error-ink)", border: EDGE }}
               onClick={() => void run(target.ids)} autoFocus>{confirmLabel(target.ids.length, target.bytes)}</button>
             <button type="button" className={BTN} style={{ height: BTN_H, color: "var(--text2)", border: EDGE }} onClick={() => setArmed(null)}>Keep</button>
           </>
         ) : (
           <button type="button" className={BTN} disabled={staged !== null && hold} title={staged && hold ? "Read what the agent prepared first" : "Remove everything marked Safe. You confirm next."}
-            style={{ height: BTN_H, color: "var(--success-ink)", border: "1px solid color-mix(in srgb, var(--success) 45%, transparent)", background: "color-mix(in srgb, var(--success) 10%, transparent)" }}
+            style={{ height: BTN_H, color: "var(--success-ink)", border: EDGE, background: "color-mix(in srgb, var(--success) 10%, transparent)" }}
             onClick={() => setArmed(staged ? "staged" : "all")}>
             {staged ? `Clean staged ${fmtBytes(target.bytes)}` : `Clean ${fmtBytes(target.bytes)}`}
           </button>
         ))}
         {running && <span className="shrink-0 text-[10.5px]" style={{ color: "var(--text3)" }} role="status">Removing…</span>}
         <button type="button" className={`${BTN} shrink-0 gap-1`} disabled={scanning || running}
-          style={{ height: BTN_H, ...(scanning ? { color: "var(--text3)", border: EDGE } : { color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }) }}
+          style={{ height: BTN_H, ...(scanning ? { color: "var(--text3)", border: EDGE } : { color: "var(--primary-ink)", border: EDGE, background: "color-mix(in srgb, var(--primary) 12%, transparent)" }) }}
           title="Look at what is on the disks. Reads only; nothing is removed."
           onClick={() => void scan(true)}>
           <RefreshIcon size={ICON.xs} className={scanning ? "animate-spin" : undefined} />
@@ -274,7 +274,7 @@ function LineRow({ l, many, marked, armed, busy, onArm, onKeep, onRun }: {
       <span className="flex justify-end gap-1">
         {cleanable(l) && (armed ? (
           <>
-            <button type="button" className={BTN} style={{ height: BTN_H, color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 45%, transparent)" }}
+            <button type="button" className={BTN} style={{ height: BTN_H, color: "var(--error-ink)", border: EDGE }}
               onClick={onRun} disabled={busy} autoFocus>Remove</button>
             <button type="button" className={BTN} style={{ height: BTN_H, color: "var(--text2)", border: EDGE }} onClick={onKeep}>Keep</button>
           </>

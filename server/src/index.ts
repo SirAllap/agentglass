@@ -122,7 +122,8 @@ const diskCtx = () => defaultDiskCtx({
   repos: knownProjects().map((p) => p.path),
   tmuxSockets: () => tmuxSockets(),
   liveSessions: async () => {
-    const held = paneHeldSessions(withTmuxServer(await listPanes(lastTmuxTarget()?.socket)));
+    const held = paneHeldSessions(withTmuxServer(await singleFlight(`listPanes:${socketPath(lastTmuxTarget()?.socket ?? [])}`,
+      () => listPanes(lastTmuxTarget()?.socket))));
     return liveSessions(recentSessions(), held);
   },
 });
