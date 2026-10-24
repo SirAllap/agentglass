@@ -96,3 +96,32 @@ test("a window photographed before its pane was born is not brought back beside 
   const windows = desk()?.windows ?? [];
   expect(windows.map((w) => `${w.name} ${w.panes.map((p) => p.path).join(",")}`).sort()).toEqual(["w1 /tmp", "w2 /tmp"]);
 });
+
+/*
+ * The same phantom one step later: the pane is born, but tmux renames an
+ * automatically named window on a later loop than the exec, and only once the
+ * pane has done something — a detached `sleep` keeps `tmux` for a name
+ * (measured: still `tmux` seconds after, on tmux 3.6 and 3.8; though not on
+ * every run). Photographed under one name, then again under the name tmux
+ * gave it, it was two windows in one directory. The lag is made certain here
+ * by changing `automatic-rename-format`, which tmux applies on the same later
+ * loop and not when the option is set (measured).
+ */
+test("a window tmux has not renamed yet is photographed under the name tmux will give it", async () => {
+  restore.__resetRestoreSettled();
+  sh(["new-session", "-d", "-s", "desk2", "-n", "w1", "-c", "/tmp", "sleep 600"]);
+  const pane = out(["new-window", "-d", "-t", "=desk2", "-c", "/tmp", "-P", "-F", "#{pane_id}", "sleep 601"]);
+  const born = await settled(() => out(["display-message", "-p", "-t", pane, "#{pane_current_command} #{pane_current_path}"]), (r) => r === "sleep /tmp");
+  expect(born).toBe("sleep /tmp");
+  sh(["set-option", "-w", "-t", pane, "automatic-rename-format", "later"]);
+  const lagging = out(["display-message", "-p", "-t", pane, "#{window_name} #{automatic-rename}"]);
+  expect(lagging).not.toStartWith("later ");
+  expect(lagging).toEndWith(" 1");
+
+  await restore.captureLayout();
+  // What tmux does on its next loop, done by hand: the name follows the format.
+  sh(["rename-window", "-t", pane, "later"]);
+  await restore.captureLayout();
+  const windows = (JSON.parse(readFileSync(layoutFile(), "utf8")) as Shot).sessions.find((s) => s.name === "desk2")?.windows ?? [];
+  expect(windows.map((w) => `${w.name} ${w.panes.map((p) => p.path).join(",")}`).sort()).toEqual(["later /tmp", "w1 /tmp"]);
+});
