@@ -2527,6 +2527,8 @@ const realApi = {
   /** The person's own change to one of them, from Settings: applied at once. */
   settingsDoorSet: (id: string, value: unknown) =>
     post<{ ok: boolean; applied?: boolean; error?: string }>("/settings/door", { id, value }),
+  /** Whether paired phones raise their own notification for a watch or a card (`phone.alerts`). */
+  phoneAlerts: () => get<{ ok: boolean; value?: unknown }>("/settings/door?id=phone.alerts"),
   /** What agents asked to change and wait for the person on (the settings door). */
   settingsRequests: () => get<{ ok: boolean; requests: SettingRequestView[] }>("/settings/requests"),
   /** The person's answer: carries the desk key (deskGate.ts), as only the person may give it. */
@@ -3096,6 +3098,7 @@ const demoApi: typeof realApi = {
   launchPermissionsSave: (_p: unknown) => D({ ok: false, error: "not available in the demo", mode: "default" as LaunchMode, deny: [...DEFAULT_LAUNCH_DENY] }),
   settingsRequests: () => D({ ok: true, requests: [] as SettingRequestView[] }),
   settingsRequestDecide: (_id: string, _approve: boolean) => D({ ok: false, error: "not available in the demo" }),
+  phoneAlerts: () => D({ ok: true, value: true }),
   agentsChangeWithoutAsking: () => D({ ok: true, trusted: false }),
   agentsChangeWithoutAskingSave: (_on: boolean) => D({ ok: false, error: "not available in the demo" }),
   prPrompts: () => D({ ok: true, recipes: [] as ReviewRecipe[] }),

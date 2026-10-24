@@ -99,6 +99,7 @@ export const SETTINGS_ROWS: SettingsRowRaw[] = [
   { pane: "notifications", section: "How it reaches you", label: "Chime this session", hint: "Only this window, until you quit.", agentExempt: true },
   { pane: "notifications", section: "How it reaches you", label: "Muted sources", hint: "A muted source is not collected.", agentExempt: true },
   { pane: "notifications", section: "How it reaches you", label: "Notification sound", hint: "Which sound notifications make.", agentNever: "decides whether an agent blocked on the owner can reach them: notifications are the owner's to silence" },
+  { pane: "notifications", section: "How it reaches you", label: "Paired phones", hint: "", settingId: "phone.alerts" },
   { pane: "notifications", section: "How it reaches you", label: "Volume", hint: "Quiet lets through only what is stopped.", settingId: "notifications.volume" },
   { pane: "notifications", section: "Interrupt me for", label: "Alarm voice", hint: "Spoken when a reminder rings.", agentNever: "decides whether an agent blocked on the owner can reach them: notifications are the owner's to silence" },
   { pane: "notifications", section: "Pull requests", label: "Checks: only when the pull request is approved", hint: "", settingId: "notifications.ciOnlyApproved" },

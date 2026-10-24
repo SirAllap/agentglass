@@ -2420,6 +2420,22 @@ function NotificationsSection(p: {
   };
   const setKind = (k: NotifyKind, on: boolean) => save({ ...prefs, kinds: { ...prefs.kinds, [k]: on } });
   const setChannel = (c: NotifyChannel, on: boolean) => save({ ...prefs, channels: { ...prefs.channels, [c]: on } });
+  /* The phone is a channel the server keeps (`phone.alerts`), not this window's: read when the page opens. */
+  const [phone, setPhone] = useState<boolean | null>(null);
+  useEffect(() => {
+    let live = true;
+    api.phoneAlerts().then((r) => { if (live && r.ok && typeof r.value === "boolean") setPhone(r.value); }).catch(() => { /* the row stays disabled */ });
+    return () => { live = false; };
+  }, []);
+  const flipPhone = () => {
+    if (phone === null) return;
+    const next = !phone;
+    setPhone(next);
+    setErr(null);
+    api.settingsDoorSet("phone.alerts", next)
+      .then((r) => { if (!r.ok) throw new Error(r.error); })
+      .catch(() => { setPhone(!next); setErr("Could not save."); });
+  };
   const alarmPicker = (
     <VoicePicker label="Reminder alarm" voices={ALARM_VOICES} value={p.alarmVoice} onPick={p.onAlarmVoice} />
   );
@@ -2480,6 +2496,10 @@ function NotificationsSection(p: {
             )}
           </Fragment>
         ))}
+        <Toggle on={phone === true} disabled={phone === null} onClick={flipPhone}
+          settingId="phone.alerts" label="Paired phones"
+          hint={phone === null ? "Checking…" : phone ? "A paired phone raises its own notification for the pull requests you watch and your cards." : "Paired phones stay quiet about watches and cards."}
+          detail={{ summary: "What it covers", body: <>Only what you asked for: a rule on a pull request's bell, or a card you follow. One switch for every paired phone; each phone also needs its own permission in Android. Nothing is sent through anyone's server, so a phone hears it while the app is open or kept connected.</> }} />
         {mutedList.length > 0 && (
           <SettingRow agentExempt label="Muted sources"
             hint="A muted source is not collected."

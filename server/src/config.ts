@@ -175,6 +175,9 @@ interface Config {
   /** The person's switch: an agent's escalation applies without a request. Off
    *  unless the person turned it on (shared/settingClass.ts). */
   agentsChangeWithoutAsking?: boolean;
+  /** Whether paired phones raise a notification for a PR watch or a card.
+   *  On unless the person turned it off; one switch for every paired phone. */
+  phoneAlerts?: boolean;
   /** Keep the stored tokens and plugin keys in the system keyring instead of
    *  0600 files. Off unless the person turned it on (server/src/keyringSwitch.ts). */
   secretsKeyring?: boolean;
@@ -1326,6 +1329,15 @@ export function agentsChangeWithoutAsking(): boolean {
 
 export function writeAgentsChangeWithoutAsking(on: boolean): { ok: boolean; persisted: boolean; error?: string } {
   return mergeConfig({ agentsChangeWithoutAsking: on === true }, "agent settings trust");
+}
+
+/** Whether paired phones raise a notification for a watch or a card: only `false` is off. */
+export function phoneAlerts(): boolean {
+  return config().phoneAlerts !== false;
+}
+
+export function writePhoneAlerts(on: boolean): { ok: boolean; persisted: boolean; error?: string } {
+  return mergeConfig({ phoneAlerts: on !== false }, "the phone alerts switch");
 }
 
 /** Whether the secrets agentglass stores live in the system keyring: only `true` is on. */

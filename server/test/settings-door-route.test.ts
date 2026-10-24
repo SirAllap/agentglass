@@ -139,6 +139,15 @@ describe("a narrowing from an agent applies at once", () => {
     const r = await post("/settings/door", { id: "lantern.cacheTtlMinutes", value: 60 }, fromAgent);
     expect(r).toMatchObject({ status: 200, body: { ok: true, applied: true, value: 60 } });
   });
+
+  test("alerts on paired phones: on to begin with, an agent turns it off and on at once, and a string is refused", async () => {
+    expect(await get("/settings/door?id=phone.alerts")).toMatchObject({ ok: true, id: "phone.alerts", value: true });
+    expect(await post("/settings/door", { id: "phone.alerts", value: false }, fromAgent)).toMatchObject({ status: 200, body: { ok: true, applied: true, value: false } });
+    expect(await get("/settings/door?id=phone.alerts")).toMatchObject({ value: false });
+    expect((await post("/settings/door", { id: "phone.alerts", value: "no" }, fromAgent)).status).toBe(400);
+    expect(await post("/settings/door", { id: "phone.alerts", value: true }, fromApp())).toMatchObject({ status: 200, body: { applied: true, value: true } });
+    expect(await get("/settings/door?id=phone.alerts")).toMatchObject({ value: true });
+  });
 });
 
 describe("the Settings pages' own routes hold an agent to the same classes", () => {

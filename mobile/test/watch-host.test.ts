@@ -131,3 +131,31 @@ describe("watching a computer that is not in front", () => {
     expect(r.log.waiting).toEqual([]);
   });
 });
+
+describe("the frames a watch alert needs", () => {
+  test("a watched pull request, a card and an alert's open or close are handed over, nothing else is", async () => {
+    const got: string[] = [];
+    let onFrame!: (f: WsFrame) => void;
+    let opened = 0;
+    const deps = {
+      openLive: (_h: unknown, o: { onFrame: typeof onFrame; onState: (s: string) => void }) => { onFrame = o.onFrame; o.onState("open"); return { wake() {}, close() {} }; },
+      ask: async () => ({ ok: true, value: { gates: [] } }),
+    };
+    const stop = watchHost(host, {
+      onState: () => {}, onWaiting: () => {}, onAlert: () => {}, onRevoked: () => {},
+      onWatch: (f) => got.push(f.type), onOpen: () => { opened++; },
+    }, deps as never);
+    for (const type of ["prwatchfire", "card", "askedalert", "askedclosed", "ci", "prchecks", "talk", "marks"]) onFrame({ type, data: {} } as never);
+    stop();
+    expect(got).toEqual(["prwatchfire", "card", "askedalert", "askedclosed"]);
+    expect(opened).toBe(1);
+  });
+
+  test("a caller that does not ask for them is not bothered", () => {
+    let onFrame!: (f: WsFrame) => void;
+    const deps = { openLive: (_h: unknown, o: { onFrame: typeof onFrame }) => { onFrame = o.onFrame; return { wake() {}, close() {} }; }, ask: async () => ({ ok: true, value: { gates: [] } }) };
+    const stop = watchHost(host, { onState: () => {}, onWaiting: () => {}, onAlert: () => {}, onRevoked: () => {} }, deps as never);
+    expect(() => onFrame({ type: "prwatchfire", data: {} } as never)).not.toThrow();
+    stop();
+  });
+});

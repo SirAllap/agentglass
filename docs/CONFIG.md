@@ -237,6 +237,11 @@ chat pane started afterwards; Codex and Antigravity chats take no deny rules.
 `chatStartIn` (`last` or `open`) and `chatMode` (`inherit`,
 `default`, `acceptEdits` or `plan`) are read by the window when it opens a chat.
 
+`phoneAlerts` (default on; only `false` is off) is whether paired phones raise
+a notification for a pull-request watch or a card, shown in Settings ▸
+Notifications and reachable through the settings door as `phone.alerts`. The
+phone asks it each time it is about to draw one.
+
 > **Pricing is a user-editable default.** Numbers in `pricing.ts` are per 1M
 > tokens and matched against `model_name` by substring. Set
 > `AGENTGLASS_PRICING_REFRESH=1` to prefer validated exact-model rates from

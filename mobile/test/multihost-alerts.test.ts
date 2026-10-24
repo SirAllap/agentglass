@@ -75,7 +75,7 @@ describe("where the app handles a tap", () => {
 describe("the provider's sockets for the computers not in front", () => {
   const src = readFileSync(join(import.meta.dir, "../src/state/host-context.tsx"), "utf8");
   const watcher = src.slice(src.indexOf("function Watcher("), src.indexOf("export function HostProvider"));
-  const bridge = src.slice(src.indexOf("const bridge = useMemo"), src.indexOf("}), [buzz, commit]);"));
+  const bridge = src.slice(src.indexOf("const bridge = useMemo"), src.indexOf("}), [buzz, commit, onWatchFrame, watch, decorate]);"));
   test("start no timer of their own", () => {
     // Broken on purpose: a setInterval here is N computers asking on a clock,
     // for a badge. The only clocks stay in the effects keyed on `host`.

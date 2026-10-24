@@ -543,6 +543,20 @@ ignore the next one. Only an agent that is stopped and waiting on a person gets
 Android's `max`. Making everything urgent is how a channel ends up switched off
 in the system settings, where the app cannot see it and cannot ask again.
 
+**Pull requests and cards.** The watches you arm on a pull request's bell and the
+comments and mentions on your cards reach the phone too, by the same socket and with the same
+rules: the phone adds none. One notification per pull request or card, and a
+later one replaces it. What the phone missed while it was offline comes back as
+**one** summary when the connection returns, not one buzz each. Tapping one opens
+that pull request or card in the app. Closing the alert on the desk takes the
+phone's down; tapping it on the phone closes the desk's (a phone paired with full
+access). **Settings ▸ Notifications ▸ Alerts on this phone** is the switch, and the
+desk shows the same switch as *Paired phones*; it is one setting on the computer
+(`phone.alerts`, readable and changeable through the settings door), so it covers
+every phone paired to it. It has the same ceiling as the rest: nothing arrives
+while the app is killed and **Stay connected in the background** is off, and a
+card that moves in that time is not replayed.
+
 > **There was a Web Push route here, and it is gone.** It woke a locked phone
 > through Google's or Mozilla's push service, with Allow and Deny drawn on the
 > notification — and by the end nothing could subscribe to it: a service worker

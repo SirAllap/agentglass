@@ -19,7 +19,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, AppState, Linking, Pressable, ScrollView, Text, View } from "react-native";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import Constants from "expo-constants";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
@@ -27,13 +27,14 @@ import { since } from "../../src/lib/dates.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { useComputer } from "../../src/state/use-computer.ts";
 import {
-  alertsDeliverable, askForAlerts, blockedText, notificationsSupported, offersOpenSettings, raise,
+  alertsDeliverable, askForAlerts, blockedText, notificationsSupported, offersOpenSettings, raise, watchAlertsDeliverable,
   type Delivery,
 } from "../../src/notifications/notify.ts";
 import {
   keepAliveAvailable, keepAliveRunning, loadKeepAlivePref, saveKeepAlivePref, syncKeepAlive, wantKeepAlive,
 } from "../../src/notifications/keepAlive.ts";
 import { onTalkPref, setTalkPref, talkPref, type TalkPref } from "../../src/notifications/talkPref.ts";
+import { readPhoneAlerts, setPhoneAlerts } from "../../src/notifications/phoneAlertsPref.ts";
 import { Btn, Group, GroupTitle, Note, Row, Sheet, Switch, TAP, useFlash } from "../../src/ui.tsx";
 import { Glyph, type GlyphName } from "../../src/nav/glyphs.tsx";
 import { KeyboardIcon } from "../../src/nav/icons.tsx";
@@ -360,6 +361,36 @@ export default function SettingsScreen(): React.ReactNode {
   const [talk, setTalk] = useState<TalkPref>(talkPref);
   useEffect(() => onTalkPref(() => setTalk(talkPref())), []);
 
+  /* "Alerts on this phone" is the computer's value (phoneAlertsPref.ts), so the
+     desk shows the same switch. null until it answers: the row waits rather than
+     drawing a guess. */
+  const [phoneAlerts, setPhoneAlertsOn] = useState<boolean | null>(null);
+  /* Whether a watch alert can be drawn: the permission and ITS channel, not the agent alerts channel. Asked again
+     whenever the agent card's answer moves (a permission just granted shows here too). */
+  const [watchOk, setWatchOk] = useState<Delivery | null>(null);
+  useEffect(() => { void watchAlertsDeliverable().then(setWatchOk); }, [alerts]);
+  useEffect(() => { setPhoneAlertsOn(null); }, [host]);
+  /* Read again whenever this screen comes into view or the app returns to the front: the desk (or an agent)
+     may have changed it since, and a switch that shows the old value is a switch that lies. */
+  const readPhone = useCallback((): void => {
+    if (host) void readPhoneAlerts(host).then((v) => { if (v !== null) setPhoneAlertsOn(v); });
+  }, [host]);
+  useFocusEffect(readPhone);
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => { if (state === "active") readPhone(); });
+    return () => sub.remove();
+  }, [readPhone]);
+  const mayChangePhone = host?.scope === "full";
+  const flipPhoneAlerts = useCallback((on: boolean): void => {
+    if (!host) return;
+    setPhoneAlertsOn(on);
+    void setPhoneAlerts(host, on).then((r) => {
+      if (r.ok) return;
+      setPhoneAlertsOn(!on);
+      Alert.alert("That was not saved", r.error);
+    });
+  }, [host]);
+
   /* The terminal's preferences are module singletons shared with the pane;
      these are the local mirrors that make this screen repaint. */
   const [cols, setCols] = useState(termColumns);
@@ -502,6 +533,29 @@ export default function SettingsScreen(): React.ReactNode {
             />
           </View>
         </View>
+        <Row
+          title="Alerts on this phone"
+          /* Which pull requests and cards: the ones the person armed or follows,
+             nothing else. One switch for every phone paired to the computer, so
+             a read-only phone says whose it is to change. */
+          sub={!watchOk ? "Checking…"
+            : !watchOk.ok ? blockedText(watchOk.why)
+            : phoneAlerts === null ? "Checking…"
+            : mayChangePhone ? "Your pull request watches and card comments. Same for every paired phone."
+            : "Paired read-only: change it on the computer."}
+          lead={<Lead name="pr" />}
+          checked={watchOk?.ok === true && phoneAlerts === true}
+          trail={<Switch on={watchOk?.ok === true && phoneAlerts === true} disabled={watchOk?.ok === true && (phoneAlerts === null || !mayChangePhone)} />}
+          /* Waiting for an answer, or nothing to press: the OS prompt and Android's settings are the way out of a
+             block, the same as the agent alerts row above; the switch itself is only live once an alert can be drawn. */
+          disabled={asking || !watchOk || !notificationsSupported() || (watchOk.ok && (phoneAlerts === null || !mayChangePhone))}
+          onPress={() => {
+            if (!watchOk) return;
+            if (watchOk.ok) flipPhoneAlerts(phoneAlerts !== true);
+            else if (offersOpenSettings(watchOk.why)) void Linking.openSettings();
+            else void turnOn();
+          }}
+        />
         {alerts && !alerts.ok && offersOpenSettings(alerts.why) ? (
           // Only when Android will no longer show its own prompt — a channel
           // switched off, or a permission refused once already. `not-asked`

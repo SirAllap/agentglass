@@ -41,6 +41,53 @@ describe("alertRoute", () => {
   });
 });
 
+describe("alertRoute for a watch alert", () => {
+  const pr = { kind: "watch", pr: 1042, repo: "acme/orbit", root: "/home/dev/orbit" };
+
+  test("a pull request opens its screen on its checkout", () => {
+    expect(alertRoute(pr)).toEqual({ pathname: "/pr/[number]", params: { number: "1042", root: "/home/dev/orbit" } });
+  });
+
+  test("a card opens its screen", () => {
+    expect(alertRoute({ kind: "watch", card: "86abc12" })).toEqual({ pathname: "/card/[id]", params: { id: "86abc12" } });
+    expect(alertRoute({ kind: "watch", card: "ORBIT-1042" })).toEqual({ pathname: "/card/[id]", params: { id: "ORBIT-1042" } });
+  });
+
+  test("the summary, and a pull request with no usable checkout, open the list", () => {
+    expect(alertRoute({ kind: "watch", summary: true })).toEqual({ pathname: "/prs" });
+    expect(alertRoute({ kind: "watch", pr: 7 })).toEqual({ pathname: "/prs" });
+    expect(alertRoute({ ...pr, root: "relative/dir" })).toEqual({ pathname: "/prs" });
+  });
+
+  test("a number that is not a whole pull request number goes nowhere", () => {
+    for (const n of [0, -1, 1.5, "1042", NaN, Infinity, 1e12, null, [1042], { valueOf: () => 1 }]) {
+      expect(alertRoute({ ...pr, pr: n })).toBeNull();
+    }
+  });
+
+  test("a card id that could be a path or a query is refused", () => {
+    for (const id of ["../pair", "/pair", "a/b", "a?x=1", "a b", "", " ", "x".repeat(65), 7, null, ["a"]]) {
+      expect(alertRoute({ kind: "watch", card: id })).toBeNull();
+    }
+  });
+
+  test("a root with a dot-dot, a newline, a scheme or no leading slash is not carried into the route", () => {
+    for (const root of ["/a/../b", "/a\nb", "file:///etc", "javascript:1", "../x", "", 5, null, "/".padEnd(1100, "a")]) {
+      expect(alertRoute({ ...pr, root })).toEqual({ pathname: "/prs" });
+    }
+  });
+
+  test("the route is built from constants, never from the data's own strings", () => {
+    const to = alertRoute({ ...pr, pathname: "/pair", href: "/pair", params: { number: "1" } });
+    expect(to).toEqual({ pathname: "/pr/[number]", params: { number: "1042", root: "/home/dev/orbit" } });
+    expect(Object.keys(to ?? {})).toEqual(["pathname", "params"]);
+  });
+
+  test("a watch alert that names nothing goes nowhere", () => {
+    expect(alertRoute({ kind: "watch" })).toBeNull();
+  });
+});
+
 const src = (...p: string[]): string => readFileSync(join(import.meta.dir, "..", ...p), "utf8");
 
 describe("the wiring", () => {

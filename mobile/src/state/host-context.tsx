@@ -26,7 +26,7 @@ import {
 } from "react";
 import { AppState, type AppStateStatus } from "react-native";
 import type {
-  AlertNote, GitRepoRef, PendingGate, PrSummary, PrTalkNote,
+  AlertNote, GitRepoRef, PendingGate, PrSummary, PrTalkNote, WsFrame,
 } from "../../../shared/types.ts";
 import { talkBody, talkSummary, talkUrgency } from "../../../shared/talkWords.ts";
 import { dedupePrs, mainCheckouts } from "../model/prRows.ts";
@@ -37,7 +37,8 @@ import {
 } from "../lib/hosts.ts";
 import { openLive, type LiveHandle, type LiveState } from "../lib/live.ts";
 import { remember, shouldNotify, shouldNotifyTalk } from "../notifications/policy.ts";
-import { alertsDeliverable, raise } from "../notifications/notify.ts";
+import { alertsDeliverable, dismissWatch, raise, raiseWatch } from "../notifications/notify.ts";
+import { createWatchAlerts } from "../notifications/watchRuntime.ts";
 import { alertTitle, nameOf } from "../model/computers.ts";
 import { learnName } from "./use-computer.ts";
 import { watchHost, type WatchEvents } from "./watch-host.ts";
@@ -135,6 +136,8 @@ type Bridge = {
   onWaiting: (id: string, n: number) => void;
   onGone: (id: string) => void;
   onAlert: (id: string, alert: AlertNote) => void;
+  onWatch: (id: string, frame: WsFrame) => void;
+  onOpen: (id: string) => void;
   onRevoked: (id: string, token: string) => void;
 };
 
@@ -150,6 +153,8 @@ function Watcher({ host, bridge }: { host: HostEntry; bridge: Bridge }): null {
       onState: (state) => bridge.onState(host.id, state),
       onWaiting: (n) => bridge.onWaiting(host.id, n),
       onAlert: (alert) => bridge.onAlert(host.id, alert),
+      onWatch: (frame) => bridge.onWatch(host.id, frame),
+      onOpen: () => bridge.onOpen(host.id),
       onRevoked: () => bridge.onRevoked(host.id, host.token),
     };
     void learnName(host); // the alert says which computer, not its address
@@ -221,6 +226,22 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
     void raise(titled(from, alert, listRef.current.hosts.length), from.id).then((d) => { if (!d.ok) undo(); });
   }, []);
 
+  /** Pull-request watches and cards, for the computer the frame came from (watchAlerts.ts).
+   *  Stable: the runtime is made once and the rest is read through refs. */
+  const watch = useMemo(() => createWatchAlerts({
+    raise: raiseWatch,
+    dismissAlert: dismissWatch,
+    // Looking at another computer is the case its own socket exists for.
+    foreground: (h) => AppState.currentState === "active" && h.id === activeId.current,
+  }), []);
+  const decorate = useCallback((from: HostEntry) => (title: string): string => alertTitle(title, nameOf(from), listRef.current.hosts.length), []);
+  const onWatchFrame = useCallback((from: HostEntry, frame: WsFrame): void => {
+    if (frame.type === "prwatchfire" && frame.data) void watch.onFire(from, frame.data, decorate(from));
+    else if (frame.type === "card" && frame.data) void watch.onCard(from, frame.data, decorate(from));
+    else if (frame.type === "askedalert" && frame.data) void watch.onAsked(from, frame.data);
+    else if (frame.type === "askedclosed" && frame.data) void watch.onClosed(from, frame.data.id);
+  }, [watch, decorate]);
+
   /** What the sockets of the computers not in front report. Stable, and a
    *  report that changes nothing changes nothing: a reconnect flap or a repeated
    *  count would otherwise re-render the whole tree for no new fact. */
@@ -246,13 +267,21 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
       const now = Date.now();
       if (shouldNotify(alert, { foreground: false, lastSeen: seen.current, now, hostId: id }).notify) buzz(from, alert, now);
     },
+    onWatch: (id: string, frame: WsFrame): void => {
+      const from = listRef.current.hosts.find((h) => h.id === id);
+      if (from) onWatchFrame(from, frame);
+    },
+    onOpen: (id: string): void => {
+      const from = listRef.current.hosts.find((h) => h.id === id);
+      if (from) void watch.catchUp(from, decorate(from));
+    },
     onRevoked: (id: string, token: string): void => {
       void markRevoked(id, token).then((next) => {
         commit(next);
         if (!next.hosts.some((x) => !x.revoked)) syncKeepAlive(false);
       }, () => { /* the keystore would not open; the next 401 asks again */ });
     },
-  }), [buzz, commit]);
+  }), [buzz, commit, onWatchFrame, watch, decorate]);
 
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {
@@ -449,7 +478,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
         setLive(state);
         // A socket that has just come up may have been down for a while, and
         // what it missed is exactly what the queue is made of.
-        if (state === "open") { dirty = true; settle(); void loadPrMarks(host); }
+        if (state === "open") { dirty = true; settle(); void loadPrMarks(host); void watch.catchUp(host, decorate(host)); }
       },
       onFrame: (frame) => {
         /*
@@ -464,6 +493,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
          */
         // A read on another device: the desk, or another phone. See state/read-marks.ts.
         if (frame.type === "marks") applyMarks(frame.data);
+        onWatchFrame(host, frame);
 
         if (frame.type === "alert" && frame.data) {
           const alert = frame.data as AlertNote;
@@ -517,7 +547,8 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
           const note = frame.data as PrTalkNote;
           noteTalk(note);
           const now = Date.now();
-          const verdict = shouldNotifyTalk(note, {
+          // A comment watch has just said this itself; not twice.
+          const verdict = watch.watchToldRecently(host, note.repo, note.number) ? { notify: false } : shouldNotifyTalk(note, {
             pref: talkPref(),
             foreground: AppState.currentState === "active",
             lastSeen: seen.current,
@@ -530,6 +561,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
             // before the await so two notes arriving inside it cannot both
             // pass, rolled back if the OS never actually drew it.
             buzz(host, alert, now);
+            watch.noteTalk(host, note.repo, note.number);
           }
         }
         // The checks of a pull request moved: an open detail re-reads.
@@ -550,7 +582,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
       handle.close();
       liveRef.current = null;
     };
-  }, [host, load, loadPrs, loadMe]);
+  }, [host, load, loadPrs, loadMe, watch, decorate, onWatchFrame]);
 
   // Foreground/background. Both halves matter: stopping the poll is the
   // battery half, and waking the socket is the correctness half — after the OS

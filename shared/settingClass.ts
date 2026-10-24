@@ -127,6 +127,7 @@ export const SETTING_CLASSES: Readonly<Record<string, ClassRow>> = {
   "gate.answerer": { class: "escalation", why: "who is told when the gate holds an action: the orchestrator is woken for each one, which spends tokens", narrows: (prev, next) => prev === "orchestrator" && next === "me" },
   "gate.onTimeout": LOW("a held action is dropped either way; asking again only repeats the notification inside the same wait"),
   "chats.startIn": LOW(),
+  "phone.alerts": LOW("only whether a paired phone raises its own notification for a watch or a card: the rules, and every alert on the desk, stay as they are"),
   "chats.mode": { class: "escalation", why: `the permission mode a new chat starts in: ${MORE_POWER}`, narrows: chatModeNarrows },
   "chats.deny": { class: "escalation", why: `what every chat turn may never do: ${MORE_POWER}`, narrows: supersetNarrows },
   "plugins.master": { class: "escalation", why: `the switch every plugin runs under: on ${MORE_POWER}`, narrows: offNarrows },

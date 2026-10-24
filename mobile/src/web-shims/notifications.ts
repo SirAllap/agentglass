@@ -1,7 +1,7 @@
 /** No-ops that resolve. The interesting path is "permission granted", because
  *  that is the one every other screen is rendered under. */
 export const AndroidImportance = { HIGH: 4, MAX: 5, DEFAULT: 3 };
-export const AndroidNotificationPriority = { MAX: "max", HIGH: "high" };
+export const AndroidNotificationPriority = { MAX: "max", HIGH: "high", DEFAULT: "default" };
 export const IosAuthorizationStatus = { PROVISIONAL: 3 };
 export function setNotificationHandler(_: unknown): void {}
 export async function setNotificationChannelAsync(_: string, __: unknown): Promise<void> {}
@@ -13,3 +13,5 @@ export async function scheduleNotificationAsync(request: unknown): Promise<strin
   console.info("[shim] notification:", JSON.stringify(request));
   return "shim";
 }
+export async function getPresentedNotificationsAsync(): Promise<unknown[]> { return []; }
+export async function dismissNotificationAsync(_: string): Promise<void> {}
