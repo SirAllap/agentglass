@@ -82,6 +82,8 @@ happens when you change it:
   all ("Let my agents change settings without asking", which only the person
   turns on, in Settings > Orchestration > Safety and limits) and publishing the
   machine to the tailnet. You may turn that switch off; you cannot turn it on.
+  `secrets.keyring` is an escalation to turn on and personOnly to turn off (it
+  writes every token back into plain files).
   While the person has it on, an escalation applies at once.
 - **secret**: tokens. Never read, never written, by any route.
 

@@ -50,7 +50,8 @@ import { cardExtras } from "./jirafields.ts";
 import { webLinksOf } from "./jiraCardRead.ts";
 import { facetsOf, judgeStale, noteSeen, type Facet } from "./cardStamp.ts";
 import type { CardWebLink } from "../../shared/providers.ts";
-import { clearCredential, redacted, secretFor, setCredential } from "./credentials.ts";
+import { clearCredential, redacted, secretFor, storeCredential } from "./credentials.ts";
+import { reasonOf } from "./keyring.ts";
 import type { CallResult, WriteOutcome } from "./trackerTypes.ts";
 import { prAddress } from "../../shared/taskref.ts";
 import { moveBody, screenOf } from "./jiraMoveFields.ts";
@@ -1057,10 +1058,14 @@ export async function connectJira(input: JiraConnectInput): Promise<JiraConnectR
   creds.api = server.data.api;
   const me = await whoAmI(creds);
   if (!me.ok || !me.data) return { ok: false, error: me.error ?? "Could not reach Jira" };
-  setCredential("jira", {
-    token, email: creds.email, auth, site: site.site, api: server.data.api, deployment: server.data.deployment,
-    account: me.data.name, accountId: me.data.accountId, verifiedAt: Date.now(),
-  });
+  try {
+    await storeCredential("jira", {
+      token, email: creds.email, auth, site: site.site, api: server.data.api, deployment: server.data.deployment,
+      account: me.data.name, accountId: me.data.accountId, verifiedAt: Date.now(),
+    });
+  } catch (e) {
+    return { ok: false, error: reasonOf(e) };
+  }
   // A hold or a memo from the previous credential says nothing about this one.
   forgetJira();
   // The rows cached by the previous account were read as that account.

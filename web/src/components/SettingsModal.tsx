@@ -134,6 +134,7 @@ import {
 import { AppearancePane } from "./ThemePicker.tsx";
 import { ShellConsole } from "./ShellConsole.tsx";
 import { CloseButton } from "./CloseButton.tsx";
+import { keyringRow, credentialsWhere, moveFailed, type KeyringState } from "../lib/keyringRow.ts";
 import "./settingsSplit.css";
 import "./orchestration/orchestration.css";
 import "./settingsGroupB.css";
@@ -2362,11 +2363,11 @@ function LanternSection({ open }: { open: boolean }) {
  */
 /** A switch that is one control among several in its row, so the row itself
  *  cannot be the button (a Select inside a button is invalid HTML). */
-function SwitchButton({ on, onClick, disabled, label }: { on: boolean; onClick: () => void; disabled?: boolean; label: string }) {
+function SwitchButton({ on, onClick, disabled, busy, label }: { on: boolean; onClick: () => void; disabled?: boolean; busy?: boolean; label: string }) {
   return (
     <button role="switch" aria-checked={on} aria-label={label} onClick={onClick} disabled={disabled}
       className="shrink-0 disabled:opacity-50 disabled:cursor-not-allowed">
-      <Switch on={on} />
+      <Switch on={on} busy={busy} />
     </button>
   );
 }
@@ -2796,9 +2797,10 @@ function GhBudget({ open }: { open: boolean }) {
  * says how long history is kept, and — the part these pages usually skip — is
  * specific about the traffic that DOES leave, which is not none.
  *
- * There is nothing to switch off here, and that is the finding rather than an
- * omission: no analytics, no crash reporting, no phone-home. A toggle that
- * turned off something that was never running would be theatre.
+ * There is nothing to switch off about what leaves the machine, and that is the
+ * finding rather than an omission: no analytics, no crash reporting, no
+ * phone-home. A toggle that turned off something that was never running would be
+ * theatre. The one switch here is about where tokens rest on disk (the keyring).
  */
 function PrivacyPane({ open }: { open: boolean }) {
   const [d, setD] = useState<PrivacyFacts | null>(null);
@@ -2806,12 +2808,39 @@ function PrivacyPane({ open }: { open: boolean }) {
   const [asking, setAsking] = useState<number | null>(null);
   const [erasing, setErasing] = useState<"ask" | "busy" | null>(null);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  /* The keyring row: what the server says, the value a move is heading to while it runs, and why a move did not happen. */
+  const [kr, setKr] = useState<KeyringState | null>(null);
+  const [moving, setMoving] = useState<boolean | null>(null);
+  const [krErr, setKrErr] = useState<string | null>(null);
+  const [checkingAgain, setCheckingAgain] = useState(false);
   const load = useCallback(() => { void api.privacy().then(setD).catch(() => setD(null)); }, []);
+  const loadKeyring = useCallback(() => {
+    void api.keyring().then(setKr).catch(() => setKr({ enabled: false, state: "unavailable", why: "the server did not answer", held: 0 }));
+  }, []);
   useEffect(() => {
     if (!open) return;
     load();
+    loadKeyring();
     void api.actions(3).then((r) => setRecent(r.actions)).catch(() => setRecent([]));
-  }, [open, load]);
+  }, [open, load, loadKeyring]);
+
+  /* A move rewrites every stored token, so it is one request that either finishes or leaves both copies where they were. */
+  const toggleKeyring = async () => {
+    if (!kr) return;
+    const to = !kr.enabled;
+    setMoving(to); setKrErr(null);
+    const r = await api.keyringToggle(to).catch(() => null);
+    setMoving(null);
+    if (!r?.ok) setKrErr(moveFailed(r?.error));
+    loadKeyring();
+  };
+  const checkKeyringAgain = async () => {
+    setCheckingAgain(true);
+    await api.keyringRehydrate().catch(() => null);
+    setCheckingAgain(false);
+    loadKeyring();
+  };
+  const kv = keyringRow(kr, moving);
 
   /* The history kept, and how long: a shorter time deletes what is older at the next hourly sweep, so it asks first. */
   const RETENTION_CHOICES = [{ v: 8, label: "8 days" }, { v: 30, label: "30 days" }, { v: 90, label: "90 days" }, { v: 365, label: "1 year" }, { v: 0, label: "Keep everything" }];
@@ -2844,7 +2873,7 @@ function PrivacyPane({ open }: { open: boolean }) {
   const size = (n: number | null | undefined) => (n === null || n === undefined ? "unknown size" : humanBytes(n));
   const timer = IS_DESKTOP && autoCheckUpdates();
   const DL = <IconLabel icon={<DownloadIcon size={ICON.xs} />}>Download</IconLabel>;
-  useReportSaving("privacy", erasing === "busy");
+  useReportSaving("privacy", erasing === "busy" || moving !== null);
 
   return (
     <>
@@ -2885,8 +2914,20 @@ function PrivacyPane({ open }: { open: boolean }) {
           control={<span className="tabular-nums text-[13px]" style={{ color: "var(--text2)" }}>{size(d?.configBytes)}</span>}
           detail={{ summary: "Where it is, and what it holds", body: <>Your preferences, budgets and the boards you have added.<span className="block mt-1 t-mono break-all">{d?.config || "—"}</span></> }} />
         <SettingRow label="Credentials" hint="tokens of the services you connected"
-          control={<span className="text-[13px]" style={{ color: "var(--text2)" }}>file, owner only</span>}
+          control={<span className="text-[13px]" style={{ color: "var(--text2)" }}>{credentialsWhere(kr)}</span>}
           detail={{ summary: "Where it is, and who reads it", body: <>Tokens for the services you connected, mode 0600. The server uses them and never sends them to the browser.<span className="block mt-1 t-mono break-all">{d?.credentials || "—"}</span></> }} />
+        {/* The badge sits before the switch and "Check again" drops under the words, so the switch is in the same place in every state. */}
+        <SettingRow settingId="secrets.keyring" label="Keep secrets in the system keyring" hint={kv.hint}
+          disabled={kr?.state === "unavailable"}
+          status={kv.badge ? <StatusBadge tone="info">{kv.badge}</StatusBadge> : undefined}
+          actions={<SwitchButton on={kv.on} busy={moving !== null} disabled={kv.disabled} label="Keep secrets in the system keyring" onClick={() => void toggleKeyring()} />}
+          detail={{ summary: "What moves, and what does not", body: <>Turning it on moves the tokens of the services you connected and your plugin keys into the Secret Service (GNOME Keyring, KWallet). Each one is read back and compared before the file copy is blanked. If anything fails, both copies stay where they were. Tokens that other tools own (gh, Claude) are not touched. Linux only. While it is locked, a feature that needs a token says so and waits.</> }}
+          below={kv.checkAgain || krErr ? (
+            <span className="flex flex-wrap items-center gap-2">
+              {kv.checkAgain && <Button pending={checkingAgain} onClick={() => void checkKeyringAgain()}>Check again</Button>}
+              {krErr && <span role="alert" className="text-[12px]" style={{ color: "var(--error-ink)" }}>{krErr}</span>}
+            </span>
+          ) : undefined} />
         {d && (
           <SettingRow settingId="privacy.retentionDays" label="Retention"
             hint={d.retentionFromEnv ? "Set by AGENTGLASS_RETENTION_DAYS where the server started: it wins over this page." : "How long history stays before the daily totals replace it."}

@@ -30,6 +30,8 @@ import { jiraWriteEnabled, jiraWriteKinds, setJiraWrites, setJiraWriteKind, type
 import { clickupWriteEnabled } from "./clickup.ts";
 import { RETENTION_DAYS, setRetentionDays } from "./retention.ts";
 import { setWritesAllowed } from "./clickupviews.ts";
+import { keyringEnabled } from "./keyring.ts";
+import { setKeyringEnabled } from "./keyringSwitch.ts";
 import { clickupPrefs, setClickupPrefs } from "./clickupPrefs.ts";
 import type { Applied, ServerSettingDef } from "./settingsDoor.ts";
 
@@ -267,6 +269,13 @@ export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
       id: "clickup.includeSubtasks", page: "clickup", label: "Subtasks on Assigned to me", type: "boolean",
       read: () => clickupPrefs().assigned.includeSubtasks, validate: bool,
       apply: (v) => { const r = setClickupPrefs({ assigned: { includeSubtasks: v === true } }); return r.ok ? { ok: true } : { ok: false, error: r.error }; },
+    },
+    {
+      id: "secrets.keyring", page: "privacy", label: "Keep secrets in the system keyring", type: "boolean",
+      read: () => keyringEnabled(), validate: bool,
+      /* Moves every stored token between the files and the keyring, so it runs only
+         once the person has approved (settingClass: escalation). Never a value in the answer. */
+      apply: async (v) => { const r = await setKeyringEnabled(v === true); return r.ok ? { ok: true } : { ok: false, error: r.error }; },
     },
     {
       id: "agents.changeWithoutAsking", page: "orchestration", label: "Let my agents change settings without asking", type: "boolean",

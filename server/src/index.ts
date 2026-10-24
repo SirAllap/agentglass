@@ -109,6 +109,8 @@ import { syncTheme, snippetStatus, SNIPPETS, tmuxThemePath, repairTmuxTheme, cur
 import { desktopPalette, desktopLogo, watchDesktopPalette } from "./desktopPalette.ts";
 import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite, mkdtempSync, readdirSync, statSync as fsStat } from "node:fs";
 import { RETENTION_FROM_ENV, setRetentionDays } from "./retention.ts";
+import { keyringStatus, unlockFirst } from "./keyring.ts";
+import { rehydrate, setKeyringEnabled } from "./keyringSwitch.ts";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
 import { listPortsAsync, listResources, spaceFor, killPort } from "./machine.ts";
 import { orphanReport, stopOrphan, startOrphanSampler } from "./orphans.ts";
@@ -266,7 +268,7 @@ import { armedWakeups, evaluate as evaluatePolicy, ruleStates, startPolicyEvalua
 import { resolveToken, healthProof, tokenOk, isIntake, isAuthExempt, callerFor, allowed, mayReadForeignRoot, scopeNeeded, pluginOfRequest, answersFromADevice, deskKeyOk, understudyRequiresToken, UNDERSTUDY_NO_TOKEN_ERROR, mintUnderstudyToken, revokeUnderstudyToken, tokenlessWarning, type Caller, type Origin } from "./auth.ts";
 import {
   listPlugins, masterEnabled, setMaster, installPlugin, installFromCatalogue, updatePlugin, enablePlugin, disablePlugin, removePlugin, setPluginUnboxedConsent, envAllowsUnboxed,
-  contributesOf, isRunning, pluginSettings, pluginOwnSettings, setPluginSettings, resumeEnabledPlugins, stopAllPluginsSync, pluginIcon,
+  contributesOf, isRunning, pluginSettings, pluginOwnSettings, savePluginSettings, resumeEnabledPlugins, stopAllPluginsSync, pluginIcon,
 } from "./plugins.ts";
 import { setPluginSocketHandler, viaPluginSocket } from "./plugin-socket.ts";
 import { CanvasHandle, handleCanvasOps, isCanvasPanel, readBoundedJson, setCanvasResolver } from "./plugin-canvas.ts";
@@ -1511,7 +1513,7 @@ import { understudyRunEnv } from "./understudy-runenv.ts";
 import { recoverAfterRestart, startUnderstudyWatchdog, stopUnderstudyWatchdog, setResumeHook, setGitHook, setFenceHook, setAliveHook, setBunHook, setBusyHook } from "./understudy-watchdog.ts";
 import { openRequests, helpHistory, markAnswered } from "./understudy-help.ts";
 import { scopeAllows, activeDevices, markSeen, revokeDevice, revokeAllDevices, devices, publicDevice, whenStoreTampered, type Scope } from "./devices.ts";
-import { credentialsPath, hasCredential } from "./credentials.ts";
+import { credentialsPath, hasCredential, hasStoredCredential, notConnected } from "./credentials.ts";
 import { startCardWatch, cardForTitle } from "./clickupwatch.ts";
 import * as CardIndex from "./clickupindex.ts";
 import * as AgentBoard from "./agentboard.ts";
@@ -5634,6 +5636,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         const ok = await removePlugin(b.name, { dropSettings: b.dropSettings === true });
         return json({ ok }, ok ? 200 : 404);
       } catch (e) {
+        const unlock = unlockFirst(e, "remove it");
+        if (unlock) return json({ ok: false, error: unlock }, 409);
         return json({ ok: false, error: failed("plugins/remove", e, "the plugin was not removed: its key could not be revoked or the change could not be saved, try again") }, 500);
       }
     }
@@ -5708,7 +5712,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
          */
         const b = await body<{ values?: unknown }>();
         if (!b || !b.values || typeof b.values !== "object") return json({ ok: false, error: "values is required" }, 400);
-        const r = setPluginSettings(self, b.values);
+        const r = await savePluginSettings(self, b.values);
         return json(r, r.ok ? 200 : 400);
       }
       if (pathname === "/plugin/self/pr/run") {
@@ -5881,7 +5885,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       let b: { name?: unknown; values?: unknown };
       try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       if (typeof b.name !== "string") return json({ ok: false, error: "name is required" }, 400);
-      const r = setPluginSettings(b.name, b.values);
+      const r = await savePluginSettings(b.name, b.values);
       return json(r, r.ok ? 200 : 400);
     }
     if (pathname === "/plugins/pr-notes" && req.method === "GET") {
@@ -7397,7 +7401,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const { listViews } = await import("./clickup.ts");
       const { secretFor } = await import("./credentials.ts");
       const token = secretFor("clickup");
-      if (!token) return json({ ok: false, error: "ClickUp is not connected" });
+      if (!token) return json({ ok: false, error: notConnected("clickup", "ClickUp is not connected") });
       const listId = url.searchParams.get("list") || "";
       const r = await listViews(token, listId);
       /* Remembered here rather than trusted from the client later: opening one
@@ -7429,7 +7433,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const { listMeta } = await import("./clickup.ts");
       const token = secretFor("clickup");
       const listId = url.searchParams.get("id") ?? "";
-      if (!token) return json({ ok: false, error: "ClickUp is not connected" });
+      if (!token) return json({ ok: false, error: notConnected("clickup", "ClickUp is not connected") });
       if (!listId) return json({ ok: false, error: "no list asked for" }, 400);
       const r = await listMeta(token, listId);
       return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error }, r.ok ? 200 : 400);
@@ -7529,7 +7533,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       /* Not connected is an answer, not a failed request: 200 like every other
          ClickUp read, so a client reads one status convention and devtools show
          no red line for a machine that never connected. */
-      if (!hasCredential("clickup")) return json({ ok: false, error: "ClickUp is not connected" });
+      if (!hasCredential("clickup")) return json({ ok: false, error: notConnected("clickup", "ClickUp is not connected") });
       const q = url.searchParams.get("q") ?? "";
       const force = url.searchParams.get("force") === "1";
       const r = await searchTasks(q, force);
@@ -7539,7 +7543,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     // the card's own id because a sprint is a list in the CARD's space — there
     // is no workspace-wide answer to ask for.
     if (pathname === "/clickup/sprints") {
-      if (!hasCredential("clickup")) return json({ ok: false, error: "ClickUp is not connected" });
+      if (!hasCredential("clickup")) return json({ ok: false, error: notConnected("clickup", "ClickUp is not connected") });
       const r = await sprintLists(url.searchParams.get("id") ?? "");
       return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error, unauthorised: r.unauthorised }, r.ok ? 200 : 400);
     }
@@ -8615,6 +8619,26 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const asked = url.searchParams.get("root") ?? "";
       const root = prRouteRoot(asked);
       return json(await repoSpend(root));
+    }
+    /* The keyring option: whether it is on, whether the keyring can be used now,
+       and how many secrets this process holds from it. Never which, never what. */
+    if (pathname === "/keyring" && req.method === "GET") return json(await keyringStatus());
+    /* Moves every stored token between the files and the keyring. An agent goes
+       through the settings door and waits for the person (secrets.keyring). */
+    if (pathname === "/keyring/toggle" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      if (typeof b.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
+      if (!mayPublishReview(req, caller)) return viaDoor("/keyring/toggle", "secrets.keyring", b.enabled, b.as);
+      const r = await setKeyringEnabled(b.enabled);
+      return json(r, r.ok ? 200 : 409);
+    }
+    /* Read the keyring again once it has been unlocked, without a restart. */
+    if (pathname === "/keyring/rehydrate" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      if (!mayPublishReview(req, caller)) return json({ ok: false, error: "only the person asks the keyring again" }, 403);
+      await rehydrate();
+      return json({ ok: true, ...(await keyringStatus()) });
     }
     /* Where this app keeps things, and for how long — read by Settings →
        Privacy. Paths, not contents: the page says what is on disk so somebody
@@ -11530,7 +11554,10 @@ setCanvasResolver((plugin, panel) => {
 });
 // Plugins that were on before this server went down come back with fresh
 // tokens. After the listener, so their first request finds a server.
-void resumeEnabledPlugins().then((names) => { if (names.length) console.log(`   Plugins     → ${names.join(", ")}`); });
+// Before the plugins: one that needs a key reads it as it starts. A keyring that
+// is locked or missing does not hold the boot (five seconds at most) and does not
+// stop it; the secrets read as absent and the features say why.
+void rehydrate().catch(() => {}).then(() => resumeEnabledPlugins()).then((names) => { if (names.length) console.log(`   Plugins     → ${names.join(", ")}`); });
 /* And somebody speaking on one. Derived from the same poll — GitHub's
    notifications are an inbox rather than a feed a desktop app can subscribe to —
    with the latch on the server, so a review carrying nine line comments is one
@@ -11573,7 +11600,7 @@ subscribeNotifications((n) => {
 
 /* Before anything reads the settings: who had ClickUp before they existed keeps
    what they had, and who did not starts from the defaults. See settleFirstRun. */
-settleFirstRun(hasCredential("clickup"));
+settleFirstRun(hasStoredCredential("clickup"));
 startCardWatch((n) => broadcast({ type: "card", data: n }));
 /* The same bell for a connected Jira: one search every six minutes, nothing
    at all while Jira is not connected. See jirawatch.ts. */

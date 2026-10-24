@@ -47,6 +47,20 @@ class Writer {
   str(v: string) { const b = Buffer.from(v, "utf8"); this.u32(b.length); this.need(b.length + 1); b.copy(this.buf, this.len); this.len += b.length; this.buf.writeUInt8(0, this.len); this.len += 1; }
   /** SIGNATURE: one length byte instead of four. */
   sig(v: string) { const b = Buffer.from(v, "ascii"); this.byte(b.length); this.need(b.length + 1); b.copy(this.buf, this.len); this.len += b.length; this.buf.writeUInt8(0, this.len); this.len += 1; }
+  bool(v: boolean) { this.u32(v ? 1 : 0); }
+  /** BYTE ARRAY content, written as is. */
+  raw(b: Buffer) { this.need(b.length); b.copy(this.buf, this.len); this.len += b.length; }
+  /** ARRAY: u32 byte length of the elements, padding up to the element's own
+   *  alignment (which is NOT counted in the length), then the elements. The
+   *  length is written last, once `body` has said how long it was. */
+  array(elemAlign: number, body: () => void) {
+    this.u32(0);
+    const at = this.len - 4;
+    this.align(elemAlign);
+    const start = this.len;
+    body();
+    this.buf.writeUInt32LE(this.len - start, at);
+  }
   out(): Buffer { return this.buf.subarray(0, this.len); }
 }
 
@@ -59,6 +73,13 @@ class Reader {
   sig(): string { const n = this.byte(); const s = this.b.toString("ascii", this.pos, this.pos + n); this.pos += n + 1; return s; }
   bytes(n: number): Buffer { const s = this.b.subarray(this.pos, this.pos + n); this.pos += n; return s; }
   get end(): number { return this.b.length; }
+  /** `ao`: a list of object paths. */
+  paths(): string[] {
+    const stop = this.u32() + this.pos;
+    const out: string[] = [];
+    while (this.pos < stop) out.push(this.str());
+    return out;
+  }
 }
 
 /** Header field codes, of the six this needs. */
@@ -111,7 +132,8 @@ function parse(buf: Buffer): { msg: Msg; used: number } | null {
     if (r.pos >= headerEnd) break;
     const code = r.byte();
     const type = r.sig();
-    if (type === "u") replySerial = r.u32();
+    // Only REPLY_SERIAL names the call a reply answers; UNIX_FDS is a 'u' too.
+    if (type === "u") { const v = r.u32(); if (code === F.REPLY_SERIAL) replySerial = v; }
     else if (type === "g") { const v = r.sig(); if (code === F.SIGNATURE) signature = v; }
     else { const v = r.str(); if (code === F.ERROR) error = v; }
   }
@@ -139,7 +161,7 @@ function busPath(): { path: string } | null {
 class Bus {
   private sock: Socket;
   private serial = 1;
-  private queue = new Map<number, (m: Msg) => void>();
+  private queue = new Map<number, (m: Msg | Error) => void>();
   private buf = Buffer.alloc(0);
 
   private constructor(sock: Socket) {
@@ -147,6 +169,9 @@ class Bus {
     sock.on("data", (d: Buffer) => {
       this.buf = Buffer.concat([this.buf, d]);
       for (;;) {
+        // Only little-endian is read. Anything else cannot be framed, so the
+        // connection is dropped rather than read as garbage until a timeout.
+        if (this.buf.length && this.buf[0] !== 0x6c) { this.drain(new Error("unsupported byte order")); this.sock.destroy(); return; }
         const got = parse(this.buf);
         if (!got) break;
         this.buf = this.buf.subarray(got.used);
@@ -154,6 +179,16 @@ class Bus {
         if (done) { this.queue.delete(got.msg.replySerial); done(got.msg); }
       }
     });
+    // A bus that goes away answers nothing: every call waiting on it fails now,
+    // not after its own five seconds each (inside `exclusive`, those add up).
+    sock.on("error", () => this.drain(new Error("the session bus connection failed")));
+    sock.on("close", () => this.drain(new Error("the session bus connection closed")));
+  }
+
+  private drain(why: Error): void {
+    const waiting = [...this.queue.values()];
+    this.queue.clear();
+    for (const done of waiting) done(why);
   }
 
   static async open(): Promise<Bus | null> {
@@ -163,9 +198,10 @@ class Bus {
       // `createConnection(path)` is the unix-socket overload; the typings
       // prefer the TCP one, hence the shape rather than a bare string.
       const s = createConnection({ path: where.path });
-      s.once("connect", () => res(s));
-      s.once("error", () => res(null));
-      setTimeout(() => res(null), 2000);
+      // A connect that comes after the wait would otherwise hold its fd for good.
+      const late = setTimeout(() => { s.destroy(); res(null); }, 2000);
+      s.once("connect", () => { clearTimeout(late); res(s); });
+      s.once("error", () => { clearTimeout(late); res(null); });
     });
     if (!sock) return null;
     // EXTERNAL auth: a leading NUL, then the uid in hex. No SASL round trips
@@ -173,18 +209,19 @@ class Bus {
     const uid = Buffer.from(String(userInfo().uid), "ascii").toString("hex");
     const hello = await new Promise<string>((res) => {
       let acc = "";
+      const wait = setTimeout(() => { sock.off("data", on); res(acc); }, 2000);
       const on = (d: Buffer) => {
         acc += d.toString("ascii");
-        if (acc.includes("\r\n")) { sock.off("data", on); res(acc); }
+        if (acc.includes("\r\n")) { clearTimeout(wait); sock.off("data", on); res(acc); }
       };
       sock.on("data", on);
       sock.write(`\0AUTH EXTERNAL ${uid}\r\n`);
-      setTimeout(() => { sock.off("data", on); res(acc); }, 2000);
     });
     if (!hello.startsWith("OK")) { sock.destroy(); return null; }
     sock.write("BEGIN\r\n");
     const bus = new Bus(sock);
-    await bus.call("/org/freedesktop/DBus", "org.freedesktop.DBus", "Hello", "org.freedesktop.DBus", "", Buffer.alloc(0));
+    try { await bus.call("/org/freedesktop/DBus", "org.freedesktop.DBus", "Hello", "org.freedesktop.DBus", "", Buffer.alloc(0)); }
+    catch { bus.close(); return null; }
     return bus;
   }
 
@@ -192,7 +229,8 @@ class Bus {
     const serial = ++this.serial;
     return new Promise((res, rej) => {
       const timer = setTimeout(() => { this.queue.delete(serial); rej(new Error(`${member} timed out`)); }, 5000);
-      this.queue.set(serial, (m) => { clearTimeout(timer); m.error ? rej(new Error(m.error)) : res(m); });
+      this.queue.set(serial, (m) => { clearTimeout(timer); m instanceof Error ? rej(m) : m.error ? rej(new Error(m.error)) : res(m); });
+      if (this.sock.destroyed) { this.drain(new Error("the session bus connection closed")); return; }
       this.sock.write(frame(serial, path, iface, member, dest, sig, body));
     });
   }
@@ -204,6 +242,7 @@ class Bus {
 
 const SECRETS = "org.freedesktop.secrets";
 const ROOT = "/org/freedesktop/secrets";
+const SVC = "org.freedesktop.Secret.Service";
 
 /**
  * The password an application stored in the keyring, by its attributes.
@@ -293,3 +332,144 @@ function alignTo(len: number, n: number): Buffer {
 export const chromeKeyringAttrs = (application: string): Record<string, string> => ({ application });
 
 void homedir;
+
+/* ------------------------------------------------------- writing, by hand too */
+
+/*
+ * The write side: put, get and drop one item in the DEFAULT collection, for the
+ * option that keeps agentglass's own secrets in the keyring instead of a 0600
+ * file. Same hand-written marshalling, same one-connection-per-operation, and
+ * one rule that the read side above does not need to state: nothing here ever
+ * prompts. A locked collection is reported as locked and left alone, because a
+ * password dialog that appears while a person is pasting a token into a form
+ * is the app asking for something it has no business asking for. Unlocking is
+ * the desktop's job (login does it).
+ *
+ * The ceiling: only the collection the `default` alias points to (gnome-keyring
+ * and KeePassXC's login collection, kwallet's Secret Service bridge). A machine
+ * whose keyring has no default collection is "unavailable", not "create one".
+ */
+
+/** Why an operation could not run: the keyring needs a person, or is not there. */
+export class KeyringError extends Error {
+  constructor(readonly state: "locked" | "unavailable", message: string) { super(message); }
+}
+
+export type KeyringState = "ready" | "locked" | "unavailable";
+
+const COLLECTION = "org.freedesktop.Secret.Collection";
+const ITEM = "org.freedesktop.Secret.Item";
+const PROMPT = "org.freedesktop.Secret.Prompt";
+
+interface Ctx { bus: Bus; session: string; collection: string }
+
+/** One connection with a plain session and an unlocked default collection, or a KeyringError saying which part was missing. */
+async function inDefaultCollection<T>(fn: (c: Ctx) => Promise<T>): Promise<T> {
+  const bus = await Bus.open();
+  if (!bus) throw new KeyringError("unavailable", "no session bus");
+  try {
+    let session = "", collection = "";
+    try {
+      const w1 = new Writer();
+      w1.str("plain");
+      w1.sig("s"); w1.str("");
+      const open = await bus.call(ROOT, SVC, "OpenSession", SECRETS, "sv", w1.out());
+      const r1 = new Reader(open.body);
+      r1.sig(); r1.str();
+      session = r1.str();
+      const w2 = new Writer();
+      w2.str("default");
+      collection = new Reader((await bus.call(ROOT, SVC, "ReadAlias", SECRETS, "s", w2.out())).body).str();
+    } catch {
+      throw new KeyringError("unavailable", "nothing answers as the Secret Service");
+    }
+    if (!session || !collection || collection === "/") throw new KeyringError("unavailable", "the keyring has no default collection");
+    let locked = true;
+    try {
+      const w3 = new Writer();
+      w3.str(COLLECTION); w3.str("Locked");
+      const r3 = new Reader((await bus.call(collection, "org.freedesktop.DBus.Properties", "Get", SECRETS, "ss", w3.out())).body);
+      r3.sig();
+      locked = r3.u32() !== 0;
+    } catch {
+      throw new KeyringError("unavailable", "the default collection does not answer");
+    }
+    if (locked) throw new KeyringError("locked", "the keyring is locked");
+    return await fn({ bus, session, collection });
+  } finally {
+    bus.close();
+  }
+}
+
+/** `a{ss}` */
+function attributes(w: Writer, attrs: Record<string, string>) {
+  w.array(8, () => { for (const [k, v] of Object.entries(attrs)) { w.align(8); w.str(k); w.str(v); } });
+}
+
+/** The body of Collection.CreateItem(a{sv}, (oayays), b): label and attributes
+ *  as variants, the secret in the clear over the plain session, replace on. */
+export function createItemBody(label: string, attrs: Record<string, string>, session: string, value: string): Buffer {
+  const w = new Writer();
+  w.array(8, () => {
+    w.align(8); w.str(`${ITEM}.Label`); w.sig("s"); w.str(label);
+    w.align(8); w.str(`${ITEM}.Attributes`); w.sig("a{ss}"); attributes(w, attrs);
+  });
+  w.align(8); w.str(session);
+  w.array(1, () => {});
+  w.array(1, () => w.raw(Buffer.from(value, "utf8")));
+  w.str("text/plain");
+  w.bool(true);
+  return w.out();
+}
+
+async function search(c: Ctx, attrs: Record<string, string>): Promise<string[]> {
+  const w = new Writer();
+  attributes(w, attrs);
+  return new Reader((await c.bus.call(c.collection, COLLECTION, "SearchItems", SECRETS, "a{ss}", w.out())).body).paths();
+}
+
+/** A method that answers with a prompt path means the desktop wants a person:
+ *  say no to it and report locked. */
+async function noPrompt(c: Ctx, prompt: string): Promise<void> {
+  if (prompt === "/") return;
+  await c.bus.call(prompt, PROMPT, "Dismiss", SECRETS, "", Buffer.alloc(0)).catch(() => {});
+  throw new KeyringError("locked", "the keyring asked for a person");
+}
+
+export async function keyringAvailability(): Promise<KeyringState> {
+  try { await inDefaultCollection(async () => {}); return "ready"; }
+  catch (e) { return e instanceof KeyringError ? e.state : "unavailable"; }
+}
+
+/** Store one secret, replacing the item with the same attributes. */
+export async function keyringPut(attrs: Record<string, string>, label: string, value: string): Promise<void> {
+  await inDefaultCollection(async (c) => {
+    const made = await c.bus.call(c.collection, COLLECTION, "CreateItem", SECRETS, "a{sv}(oayays)b", createItemBody(label, attrs, c.session, value));
+    const r = new Reader(made.body);
+    r.str();
+    await noPrompt(c, r.str());
+  });
+}
+
+/** The secret, or null when no item has these attributes. */
+export async function keyringGet(attrs: Record<string, string>): Promise<string | null> {
+  return inDefaultCollection(async (c) => {
+    const item = (await search(c, attrs))[0];
+    if (!item) return null;
+    const w = new Writer();
+    w.str(c.session);
+    const got = new Reader((await c.bus.call(item, ITEM, "GetSecret", SECRETS, "o", w.out())).body);
+    got.align(8); got.str();
+    got.bytes(got.u32());
+    return got.bytes(got.u32()).toString("utf8");
+  });
+}
+
+/** Delete every item with these attributes; none is not an error. */
+export async function keyringDrop(attrs: Record<string, string>): Promise<void> {
+  await inDefaultCollection(async (c) => {
+    for (const item of await search(c, attrs)) {
+      await noPrompt(c, new Reader((await c.bus.call(item, ITEM, "Delete", SECRETS, "", Buffer.alloc(0))).body).str());
+    }
+  });
+}

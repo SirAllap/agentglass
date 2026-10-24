@@ -491,6 +491,15 @@ anyone who can already read your files as you. If that matters for a given
 token, prefer a provider with a CLI that uses the system keyring, and scope the
 token narrowly wherever the service lets you.
 
+There is one way to close the gap, and it is yours to choose: **Keep secrets in
+the system keyring** (off by default, Linux Secret Service only). Turned on, the
+tokens in `credentials.json` and the keys in `secrets.json` move into the
+keyring, are read back, and only then are replaced in the files by a marker; a
+keyring that is locked or missing is never answered by writing a secret to a
+file, and the features that need one say "keyring locked". It protects a backup
+of those files, not a program running as you while the keyring is unlocked. An
+agent can ask for it, and the request waits for your click.
+
 The token is never sent to the browser. It goes in through one route, is
 verified against the service before anything is written, and after that the app
 answers with a status — who you are, which workspace, how many tasks — and never

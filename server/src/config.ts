@@ -175,6 +175,9 @@ interface Config {
   /** The person's switch: an agent's escalation applies without a request. Off
    *  unless the person turned it on (shared/settingClass.ts). */
   agentsChangeWithoutAsking?: boolean;
+  /** Keep the stored tokens and plugin keys in the system keyring instead of
+   *  0600 files. Off unless the person turned it on (server/src/keyringSwitch.ts). */
+  secretsKeyring?: boolean;
   /** How long the provider keeps a prompt cache warm after a turn, in minutes
    *  — 5 on most plans, 60 on some. The Lantern's cards count it down, since
    *  it decides whether the next turn is cheap now or cheap in five minutes. */
@@ -1323,6 +1326,15 @@ export function agentsChangeWithoutAsking(): boolean {
 
 export function writeAgentsChangeWithoutAsking(on: boolean): { ok: boolean; persisted: boolean; error?: string } {
   return mergeConfig({ agentsChangeWithoutAsking: on === true }, "agent settings trust");
+}
+
+/** Whether the secrets agentglass stores live in the system keyring: only `true` is on. */
+export function secretsKeyring(): boolean {
+  return config().secretsKeyring === true;
+}
+
+export function writeSecretsKeyring(on: boolean): { ok: boolean; persisted: boolean; error?: string } {
+  return mergeConfig({ secretsKeyring: on === true }, "the keyring switch");
 }
 
 /** The launch permissions as stored, with anything unusable dropped. */

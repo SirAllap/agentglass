@@ -130,6 +130,7 @@ export const SETTINGS_ROWS: SettingsRowRaw[] = [
   { pane: "privacy", section: "Take your data out", label: "Skills catalog — Markdown", hint: "Every skill the fleet has available", agentExempt: true },
   { pane: "privacy", section: "What is on disk", label: "Credentials", hint: "tokens of the services you connected" },
   { pane: "privacy", section: "What is on disk", label: "History", hint: "events and sessions" },
+  { pane: "privacy", section: "What is on disk", label: "Keep secrets in the system keyring", hint: "", settingId: "secrets.keyring" },
   { pane: "privacy", section: "What is on disk", label: "Retention", hint: "", settingId: "privacy.retentionDays" },
   { pane: "privacy", section: "What is on disk", label: "Settings", hint: "this window" },
   { pane: "rail", section: "", label: "Count badge", hint: "", settingId: "rail.badge.*" },

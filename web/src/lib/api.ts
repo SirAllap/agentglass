@@ -157,6 +157,7 @@ export type RunActivityResult = { ok: boolean; run?: Run; legs: LegActivity[]; e
 import { DEPS, type DepsResponse } from "../../../shared/deps.ts";
 import * as demo from "./demo.ts";
 import { latchStage } from "./stageIntent.ts";
+import type { KeyringState } from "./keyringRow.ts";
 
 export const IS_DEMO = demo.IS_DEMO;
 
@@ -1473,6 +1474,10 @@ const realApi = {
   privacy: () => get<PrivacyFacts>("/privacy"),
   privacyRetention: (days: number) => post<{ ok: boolean; error?: string; retentionDays?: number }>("/privacy/retention", { days }),
   privacyErase: () => post<{ ok: boolean; error?: string; events?: number; sessions?: number; days?: number }>("/privacy/erase-history", { confirm: "erase" }),
+  /** The keyring option: on or off, usable now or not, and how many secrets it holds. Counts, never values. */
+  keyring: () => get<KeyringState>("/keyring"),
+  keyringToggle: (enabled: boolean) => post<{ ok: boolean; error?: string }>("/keyring/toggle", { enabled }),
+  keyringRehydrate: () => post<{ ok: boolean; error?: string } & Partial<KeyringState>>("/keyring/rehydrate", {}),
   /** What is left of GitHub's hourly budget — this app is made of `gh` calls. */
   ghRateLimit: () => get<{ ok: boolean; error?: string; budgets?: { id: string; label: string; limit: number; remaining: number; reset: number }[] }>("/prs/rate-limit"),
   providerConnect: (id: string, token: string) =>
@@ -3114,6 +3119,9 @@ const demoApi: typeof realApi = {
   privacy: () => D<PrivacyFacts>({ db: "", dbBytes: null, config: "", configBytes: null, credentials: "", retentionDays: 0, retentionFromEnv: false, pairedDevices: 0, clickup: false, jira: false }),
   privacyRetention: (_d: number) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string; retentionDays?: number }),
   privacyErase: () => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string; events?: number; sessions?: number; days?: number }),
+  keyring: () => D<KeyringState>({ enabled: false, state: "unavailable", why: "not available in the demo", held: 0 }),
+  keyringToggle: (_e: boolean) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string }),
+  keyringRehydrate: () => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string } & Partial<KeyringState>),
   providerConnect: (_i: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
   providerDisconnect: (_i: string, _o?: { forgetBoards?: boolean }) => D({ ok: false, error: "not available in the demo" }),
   providerWorkspaces: (_i: string) => D({ ok: false, error: "not available in the demo" }),

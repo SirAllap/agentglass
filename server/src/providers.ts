@@ -15,7 +15,8 @@ import { PROVIDERS, ASSIGNED_VIEW_ID, type ProviderId, type ProviderStatus, type
 import { savedViews, addView, removeView, cachedFor, putCache, setCurrent as setCurrentView, addFolder, savedFolders, forgetCached } from "./clickupviews.ts";
 import { ghCapability } from "./prs.ts";
 import { taskCapability } from "./tasks.ts";
-import { hasCredential, redacted, setCredential, clearCredential } from "./credentials.ts";
+import { hasCredential, redacted, storeCredential, clearCredential, dropCredentialSecret, notConnected } from "./credentials.ts";
+import { reasonOf, unlockFirst } from "./keyring.ts";
 import { whoAmI, workspaces, clickupTasks, clickupCached, forgetAll, credentialGeneration, applyCommentCounts as applyCounts, seedCommentCounts as seedCounts } from "./clickup.ts";
 import { cardWatchTrouble, forgetWatch } from "./clickupwatch.ts";
 import { forget as forgetClickupIndex } from "./clickupindex.ts";
@@ -70,7 +71,7 @@ async function statusOf(id: ProviderId): Promise<ProviderStatus> {
       return { id, state: "connected", detail: cap.reason || "Reading your local store" };
     }
     case "clickup": {
-      if (!hasCredential("clickup")) return { id, state: "needs-auth", detail: "No token yet" };
+      if (!hasCredential("clickup")) return { id, state: "needs-auth", detail: notConnected("clickup", "No token yet") };
       const known = redacted("clickup");
       /*
        * The card watch, which fails on its own schedule and used to fail in
@@ -124,7 +125,7 @@ async function statusOf(id: ProviderId): Promise<ProviderStatus> {
       };
     }
     case "jira": {
-      if (!hasCredential("jira")) return { id, state: "needs-auth", detail: "No token yet" };
+      if (!hasCredential("jira")) return { id, state: "needs-auth", detail: notConnected("jira", "No token yet") };
       // No request: whether the token works is what the last real call
       // found out, and that is kept in memory (see jira.ts).
       if (jiraRefused()) return { id, state: "error", detail: "Jira refused these credentials — connect again" };
@@ -171,14 +172,20 @@ export async function connectProvider(id: ProviderId, token: string): Promise<Co
   }
   const ws = await workspaces(t);
   const first = ws.data?.[0];
-  setCredential(id, {
-    token: t,
-    account: me.data.name,
-    accountId: me.data.id,
-    workspace: first?.name,
-    workspaceId: first?.id,
-    verifiedAt: Date.now(),
-  });
+  try {
+    await storeCredential(id, {
+      token: t,
+      account: me.data.name,
+      accountId: me.data.id,
+      workspace: first?.name,
+      workspaceId: first?.id,
+      verifiedAt: Date.now(),
+    });
+  } catch (e) {
+    // The keyring is on and would not keep it: nothing was stored, and the
+    // token is not written to a file instead.
+    return { ok: false, error: reasonOf(e) };
+  }
   /*
    * Drop the cached list before reporting the new status.
    *
@@ -197,6 +204,9 @@ export async function connectProvider(id: ProviderId, token: string): Promise<Co
 }
 
 export async function disconnectProvider(id: ProviderId, o: { forgetBoards?: boolean } = {}): Promise<ConnectResult> {
+  // The keyring's copy goes first: if it cannot be removed, nothing is, and the
+  // token the person meant to disconnect is not left in the keyring alone.
+  try { await dropCredentialSecret(id); } catch (e) { return { ok: false, error: unlockFirst(e, "disconnect") ?? reasonOf(e), status: await statusOf(id) }; }
   // Jira keeps its own memory (holds, memo, refused latch) beside the credential.
   if (id === "jira") { disconnectJira(); forgetJiraWatch(); } else clearCredential(id);
   // The cached list goes too. Leaving it would show somebody else's tasks after
@@ -222,7 +232,7 @@ export async function providerWorkspaces(id: ProviderId): Promise<{ ok: boolean;
   if (id !== "clickup") return { ok: false, error: "That provider has no workspaces" };
   const { secretFor } = await import("./credentials.ts");
   const token = secretFor("clickup");
-  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!token) return { ok: false, error: notConnected("clickup", "ClickUp is not connected") };
   const r = await workspaces(token);
   return r.ok ? { ok: true, workspaces: r.data } : { ok: false, error: r.error };
 }
@@ -252,7 +262,7 @@ export async function addViewByUrl(url: string): Promise<{ ok: boolean; error?: 
   const { parseViewUrl, viewMeta, listMeta } = await import("./clickup.ts");
   const { secretFor } = await import("./credentials.ts");
   const token = secretFor("clickup");
-  if (!token) return { ok: false, error: "Connect ClickUp first" };
+  if (!token) return { ok: false, error: notConnected("clickup", "Connect ClickUp first") };
 
   const parsed = parseViewUrl(url);
   /*
@@ -351,7 +361,7 @@ export async function addViewByUrl(url: string): Promise<{ ok: boolean; error?: 
 export async function addClickupFolder(folderId: string, spaceName = ""): Promise<{ ok: boolean; error?: string; folder?: SavedFolder }> {
   const { clickupFolderLists } = await import("./clickup.ts");
   const { secretFor } = await import("./credentials.ts");
-  if (!secretFor("clickup")) return { ok: false, error: "Connect ClickUp first" };
+  if (!secretFor("clickup")) return { ok: false, error: notConnected("clickup", "Connect ClickUp first") };
   const id = String(folderId || "").trim();
   if (!/^[0-9]+$/.test(id)) return { ok: false, error: "That is not a folder id" };
 
@@ -547,7 +557,7 @@ export async function readView(viewId: string, force = false): Promise<ViewTasks
   };
 
   const token = secretFor("clickup");
-  if (!token) return shown({ error: "ClickUp is not connected" });
+  if (!token) return shown({ error: notConnected("clickup", "ClickUp is not connected") });
 
   const held = cachedFor(viewId);
   const age = held ? Date.now() - held.at : Number.POSITIVE_INFINITY;
