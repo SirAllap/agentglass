@@ -13,7 +13,7 @@
  *  - `sandboxArgv` is pure: given every fact already resolved, it is just
  *    argv, and a test can pin its exact shape without a working bwrap.
  */
-import { closeSync, constants as fsConstants, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, rmSync } from "node:fs";
+import { closeSync, constants as fsConstants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -105,6 +105,116 @@ export function sandboxProbe(): SandboxProbe {
  *  was set would otherwise stick for the rest of the process. */
 export function __resetSandboxProbe(): void {
   cached = undefined;
+}
+
+/**
+ * The second layer: Landlock, applied inside the bwrap box by util-linux's
+ * `setpriv` (2.40+ has `--landlock-*`), so the plugin process can open only
+ * the paths its box mounts, whichever way it reaches them. Rules hang on the
+ * inodes the box sees, so the walls hold where the mount namespace does not:
+ * measured, a directory descriptor leaked into a bwrap-only box reads a file
+ * outside it through `/proc/self/fd/N/…`, and the same box under these rules
+ * gets EACCES.
+ *
+ * `setpriv` rather than a native helper because Landlock restricts the
+ * calling thread: Bun has no pre-exec hook in `Bun.spawn`, and calling it
+ * from the server (bun:ffi) would lock the server, not the plugin.
+ *
+ * Ceiling: filesystem only. TCP (Landlock ABI 4), abstract-socket and signal
+ * scoping (ABI 6) are not something `setpriv` exposes, and a pathname socket
+ * the box mounts stays connectable.
+ */
+export type LandlockProbe = { ok: true; setpriv: string } | { ok: false; detail: string; timedOut?: boolean };
+
+/** The same trust rule as `TRUSTED_BWRAP`, and one more reason: the box runs
+ *  this path from its own read-only `/usr`, so it has to live there. */
+const TRUSTED_SETPRIV = ["/usr/bin/setpriv", "/bin/setpriv"];
+
+function runLandlockProbe(): LandlockProbe {
+  let setpriv = "/usr/bin/setpriv";
+  if (process.env.NODE_ENV === "test" && process.env.AGENTGLASS_SETPRIV) {
+    setpriv = process.env.AGENTGLASS_SETPRIV;
+  } else {
+    const found = TRUSTED_SETPRIV.find((p) => {
+      try { return TRUSTED_SETPRIV.includes(realpathSync(p)); } catch { return false; }
+    });
+    if (!found) return { ok: false, detail: "setpriv is not installed" };
+    setpriv = realpathSync(found);
+  }
+  const run = (rules: string[]) => {
+    try {
+      return Bun.spawnSync([setpriv, "--landlock-access", "fs", ...rules, "--", "/usr/bin/true"], { stdout: "ignore", stderr: "pipe", timeout: 3000 });
+    } catch {
+      return null;
+    }
+  };
+  // Both halves, because a setpriv that ignored the flags would pass the
+  // first alone: allowed with rules, refused without one. The allowed half
+  // spells every rights string a real start uses: a setpriv that predates
+  // one name (`ioctl-dev` is newer than `--landlock-*` itself) rejects it,
+  // and a probe that only tried `read-file` would pass and then fail every
+  // boxed start.
+  const allowed = run([
+    "--landlock-rule", `path-beneath:${LL_RO_DIR}:/usr`,
+    "--landlock-rule", `path-beneath:${LL_RO_FILE}:/usr/bin/true`,
+    "--landlock-rule", `path-beneath:${LL_DEV}:/dev`,
+    "--landlock-rule", `path-beneath:${LL_RW_FILE}:/dev/null`,
+    "--landlock-rule", `path-beneath:${LL_RW_DIR}:/tmp`,
+  ]);
+  if (allowed?.exitedDueToTimeout) return { ok: false, detail: "setpriv did not finish within 3s", timedOut: true };
+  if (!allowed?.success) {
+    const line = allowed?.stderr?.toString("utf8").split("\n").find((l) => l.trim())?.trim();
+    return { ok: false, detail: line || "setpriv could not apply a Landlock ruleset" };
+  }
+  const refused = run([]);
+  if (!refused || refused.success) return { ok: false, detail: "setpriv ran but Landlock did not refuse anything" };
+  return { ok: true, setpriv };
+}
+
+let landlockCached: LandlockProbe | undefined;
+
+/** Whether this kernel and this setpriv can lay the second layer — cached
+ *  for the process like `sandboxProbe`. Not having it changes nothing about
+ *  the box: the plugin starts exactly as it did before this layer existed. */
+export function landlockProbe(): LandlockProbe {
+  if (landlockCached !== undefined) return landlockCached;
+  const probe = runLandlockProbe();
+  // A busy machine is not a missing feature: a timeout is asked again next time.
+  if (probe.ok || !probe.timedOut) landlockCached = probe;
+  return probe;
+}
+
+export function __resetLandlockProbe(): void {
+  landlockCached = undefined;
+}
+
+const LL_RO_DIR = "read-file,read-dir,execute";
+const LL_RO_FILE = "read-file,execute";
+const LL_RW_DIR = "read-file,read-dir,execute,write-file,remove-dir,remove-file,make-dir,make-reg,make-sym,make-sock,make-fifo,refer,truncate";
+const LL_RW_FILE = "read-file,execute,write-file,truncate";
+const LL_DEV = "read-file,write-file,read-dir,ioctl-dev";
+
+export interface LandlockGrant {
+  path: string;
+  isDir: boolean;
+}
+
+/** `setpriv … --` for exactly what `sandboxArgv` mounts, read-only or
+ *  read-write as each mount is. Ceiling: Landlock rights add up down the
+ *  tree, so a read-only grant mounted under the writable HOME or `/tmp`
+ *  carries their write rights here — what refuses that write is bwrap's
+ *  read-only bind, not this layer. Narrowing HOME would break every program
+ *  that writes `~/.cache` in the box's empty home. A file needs
+ *  file-only rights — `read-dir` on a file is EINVAL and setpriv would fail
+ *  the whole start. Every path here must exist inside the box, or setpriv
+ *  fails: they are all mount points bwrap has just made. */
+export function landlockArgv(setpriv: string, rules: { ro: LandlockGrant[]; rw: LandlockGrant[]; dev: string[] }): string[] {
+  const argv = [setpriv, "--landlock-access", "fs"];
+  for (const g of rules.ro) argv.push("--landlock-rule", `path-beneath:${g.isDir ? LL_RO_DIR : LL_RO_FILE}:${g.path}`);
+  for (const d of rules.dev) argv.push("--landlock-rule", `path-beneath:${LL_DEV}:${d}`);
+  for (const g of rules.rw) argv.push("--landlock-rule", `path-beneath:${g.isDir ? LL_RW_DIR : LL_RW_FILE}:${g.path}`);
+  argv.push("--");
+  return argv;
 }
 
 export interface ResolvedGrant {
@@ -272,6 +382,8 @@ export interface OpenedGrant {
    *  fd `3 + i` in the child, which is what `sandboxArgv` writes into
    *  `--ro-bind-fd`/`--bind-fd`. */
   childFd: number;
+  /** Which Landlock rights fit it (see `landlockArgv`). */
+  isDir: boolean;
 }
 
 /** Linux's `O_PATH`: not in `node:fs`'s `constants` (non-portable), so it is
@@ -333,7 +445,7 @@ export function openGrantFds(
     }
     const childFd = nextChildFd++;
     parentFds.push(fd);
-    return { dest: g.path, childFd };
+    return { dest: g.path, childFd, isDir: fstatSync(fd).isDirectory() };
   };
   const read: OpenedGrant[] = [];
   for (const g of grants.read) {
@@ -460,6 +572,9 @@ export interface SandboxArgvInput {
    *  (`plugins.ts`'s `buildBoxArgv`) builds it right before the spawn that
    *  will use it, the same moment it opens the grant fds. */
   network?: SandboxNetworkAgentglass;
+  /** `landlockProbe().setpriv` when the second layer is available; absent,
+   *  the argv is exactly what it was before that layer existed. */
+  setpriv?: string;
 }
 
 /** `path` entries that are — or are under — `home`, dropped: the box's PATH
@@ -497,7 +612,7 @@ function hostPathOutsideHome(hostPath: string, home: string): string[] {
  * one (program dirs, home entries dropped) and neither is a secret.
  */
 export function sandboxArgv(input: SandboxArgvInput): string[] {
-  const { bwrap, installDir, dataDir, home, entrypoint, env, sandbox, grants, programDirs, systemLinks, systemDirs, extraRo, network } = input;
+  const { bwrap, installDir, dataDir, home, entrypoint, env, sandbox, grants, programDirs, systemLinks, systemDirs, extraRo, network, setpriv } = input;
   const agentglassNet = sandbox.network === "agentglass";
   const path = [...hostPathOutsideHome(env.PATH, home), ...programDirs].join(":");
   const argv: string[] = [
@@ -526,6 +641,20 @@ export function sandboxArgv(input: SandboxArgvInput): string[] {
   // Not `-try`: a bridge that is missing must fail the start loudly, not leave a box whose entrypoint can never run.
   for (const p of network?.bridgeRo ?? []) argv.push("--ro-bind", p, p);
   argv.push("--chdir", installDir);
+  // Wraps the plugin only, never the bridge in front of it: the bridge is
+  // this app and has to dial the socket the plugin is not given. Not the
+  // bridge's read-only binds either, for the same reason.
+  const dir = (path: string) => ({ path, isDir: true });
+  const plugin = [
+    ...(setpriv
+      ? landlockArgv(setpriv, {
+        ro: [...["/usr", ...systemDirs, ...extraRo, "/proc", installDir, ...programDirs].map(dir), ...grants.read.map((g) => ({ path: g.dest, isDir: g.isDir }))],
+        dev: ["/dev"],
+        rw: [...["/dev/shm", "/tmp", home, dataDir].map(dir), ...grants.write.map((g) => ({ path: g.dest, isDir: g.isDir }))],
+      })
+      : []),
+    "bash", "-c", entrypoint,
+  ];
   if (agentglassNet) {
     if (!network) throw new Error('sandboxArgv: network: "agentglass" needs its network input built first (buildBoxArgv\'s job)');
     // Nothing else under /run: this is the one path a boxed plugin's loopback
@@ -534,9 +663,9 @@ export function sandboxArgv(input: SandboxArgvInput): string[] {
     // writable one let the plugin `chmod` the host's own socket inode.
     argv.push("--ro-bind", network.socketHostPath, PLUGIN_SOCKET_BOX_PATH);
     const port = new URL(env.AGENTGLASS_URL).port || "80";
-    argv.push(...network.bridgeExec, "plugin-bridge", "--listen", `127.0.0.1:${port}`, "--socket", PLUGIN_SOCKET_BOX_PATH, "--", "bash", "-c", entrypoint);
+    argv.push(...network.bridgeExec, "plugin-bridge", "--listen", `127.0.0.1:${port}`, "--socket", PLUGIN_SOCKET_BOX_PATH, "--", ...plugin);
   } else {
-    argv.push("bash", "-c", entrypoint);
+    argv.push(...plugin);
   }
   return argv;
 }

@@ -40,7 +40,7 @@ import { versionAtLeast } from "../../shared/semverLite.ts";
 export { versionAtLeast };
 import {
   hostResolvConfExtraRo, hostSystemPaths, openGrantFds, pluginDataDir, removePluginDataDir, resolveGrants,
-  resolvePrograms, sandboxArgv, sandboxProbe, type SandboxProbe,
+  landlockProbe, resolvePrograms, sandboxArgv, sandboxProbe, type SandboxProbe,
 } from "./plugin-sandbox.ts";
 import { ensurePluginSocketServer, pluginSocketPath, stopPluginSocketServer } from "./plugin-socket.ts";
 import { coerceSettings, dropNotesOf, fieldsWithOptions, forgetPlugin, pushEvent, resolveSettings, setLivenessCheck } from "./plugin-ui.ts";
@@ -885,6 +885,7 @@ async function buildBoxArgv(
     network = { socketHostPath: pluginSocketPath(), bridgeExec: bridgeExecCommand(), bridgeRo: bridgeExtraRo(bridgeExecCommand()) };
   }
   const opened = openGrantFds({ read: grants.read, write: grants.write }, home);
+  const landlock = landlockProbe();
   const argv = sandboxArgv({
     bwrap,
     installDir: rec.installDir,
@@ -899,6 +900,7 @@ async function buildBoxArgv(
     systemDirs,
     network,
     extraRo: boxExtraRo(network),
+    setpriv: landlock.ok ? landlock.setpriv : undefined,
   });
   return { argv, parentFds: opened.parentFds, refused: [...grants.refused, ...programs.refused, ...opened.refused] };
 }
@@ -1060,7 +1062,7 @@ async function git(args: string[], cwd: string, timeoutMs: number): Promise<{ ok
   }
 }
 
-export type PublicSandboxProbe = { ok: true } | { ok: false; reason: Extract<SandboxProbe, { ok: false }>["reason"]; detail: string };
+export type PublicSandboxProbe = { ok: true; landlock: boolean } | { ok: false; reason: Extract<SandboxProbe, { ok: false }>["reason"]; detail: string };
 
 export type PublicPlugin = PluginRecord & {
   running: boolean;
@@ -1101,7 +1103,7 @@ function withContributes(p: PluginRecord): PluginRecord {
 
 function publicProbe(): PublicSandboxProbe {
   const p = sandboxProbe();
-  return p.ok ? { ok: true } : { ok: false, reason: p.reason, detail: p.detail };
+  return p.ok ? { ok: true, landlock: landlockProbe().ok } : { ok: false, reason: p.reason, detail: p.detail };
 }
 
 /** What starting this plugin does on this host — the one decision the start

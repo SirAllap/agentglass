@@ -62,6 +62,14 @@ function unboxedWording(
   return { text: `${cause}. It was allowed to run unboxed, so the plugin runs as you.${todo ? ` ${todo}` : ""}`, ...(fix ? { fix } : {}) };
 }
 
+/** One quiet line when the box builds but this kernel cannot add Landlock on
+ *  top of it (see `landlockProbe` in server/src/plugin-sandbox.ts). Nothing
+ *  changes for the plugin, so it is a fact, not a warning. */
+export function secondLayerNote(plugin: Pick<PublicPlugin, "sandbox" | "sandboxProbe">): string | null {
+  if (!plugin.sandbox || !plugin.sandboxProbe?.ok || plugin.sandboxProbe.landlock) return null;
+  return "This system cannot add Landlock, so the box is the only wall around it.";
+}
+
 /**
  * Two moments this has to speak to, and they are not the same claim:
  *

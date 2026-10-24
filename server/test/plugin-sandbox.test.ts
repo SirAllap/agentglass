@@ -91,8 +91,8 @@ function baseInput(over: Partial<SandboxArgvInput> = {}): SandboxArgvInput {
     env: { PATH: "/usr/local/bin:/usr/bin:/home/orbit/.local/bin", AGENTGLASS_URL: "http://127.0.0.1:4000" },
     sandbox: INTERNET_SANDBOX,
     grants: {
-      read: [{ dest: "/home/orbit/.config/orbit-data", childFd: 3 }],
-      write: [{ dest: "/home/orbit/.local/share/orbit-plugin", childFd: 4 }],
+      read: [{ dest: "/home/orbit/.config/orbit-data", childFd: 3, isDir: true }],
+      write: [{ dest: "/home/orbit/.local/share/orbit-plugin", childFd: 4, isDir: true }],
     },
     programDirs: ["/home/orbit/.volta/bin"],
     systemLinks: [{ path: "/bin", target: "usr/bin" }],

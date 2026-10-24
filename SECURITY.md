@@ -830,6 +830,23 @@ fingerprint over the scope and a content hash of every file in the folder, so an
 update that changes the manifest, or changes the code behind an unchanged
 manifest, clears the approval and asks again.
 
+**Inside the box, a second wall: Landlock.** Where the kernel has Landlock and
+util-linux's `setpriv` can apply it (2.40 or later), the plugin is started under
+a ruleset that lets it open exactly what the box mounts: the system folders and
+its own read-only, writable only in `/tmp`, its own data folder, the box's
+empty home and its declared `write` paths. A `read` grant that sits inside home
+inherits home's write right in this layer; the read-only bind is what refuses
+that write. The rules hang on the files the box
+shows, not on the mounts, so they hold where the mount namespace would not: a
+descriptor to a folder outside the box that leaks into it reads nothing through
+`/proc/self/fd`, where bwrap alone would read it. Ceiling: files only. It does
+not limit network connections, signals or abstract sockets, a socket the box
+mounts stays connectable, and it is never the only wall — a host that cannot
+build the bwrap box does not get this layer instead. A kernel or `setpriv`
+without it (util-linux before 2.40, or one that lacks a right this layer
+uses) changes nothing about the box, and the plugin panel says so in one
+line.
+
 **A plugin token is its own kind of caller and can never answer a permission
 gate**, whatever scope it declares or was granted. `POST /gate/decide` asks for
 a credential no process on this machine could have minted for itself; a plugin's

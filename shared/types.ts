@@ -5528,7 +5528,7 @@ export interface PublicPlugin {
    *  declared — see `PublicSandboxProbe` in server/src/plugins.ts. Checked
    *  before a start is ever attempted, so the approval screen can say a box
    *  cannot be built before the person switches the plugin on. */
-  sandboxProbe?: { ok: true } | { ok: false; reason: "missing" | "userns-blocked" | "failed"; detail: string };
+  sandboxProbe?: { ok: true; landlock: boolean } | { ok: false; reason: "missing" | "userns-blocked" | "failed"; detail: string };
   /** What a start does on this host — see `boxPlan` in shared/pluginBoxPlan.ts.
    *  Present only when `sandbox` is declared. The probe alone cannot draw the
    *  screen: it says "missing" on every non-Linux host, where the plugin
