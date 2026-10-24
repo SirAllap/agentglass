@@ -17,6 +17,21 @@ import {
 } from "../../shared/pluginAccounts.ts";
 import type { Contributes } from "../../shared/pluginUi.ts";
 import { clearUsageCache } from "./usage.ts";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+/**
+ * Whether Swapkin is on this machine: `swapkin` on the server's PATH or its data
+ * folder. Existence only, nothing in the folder is read. This is what lets a
+ * plugin that is not named `swapkin` ask to be shown as managed by it
+ * (`deferTo`) without the app taking its word for it. Asked when the list
+ * arrives, so a Swapkin installed later is picked up by the plugin's next post.
+ */
+export function swapkinPresent(env: NodeJS.ProcessEnv = process.env): boolean {
+  const data = env.SWAPKIN_DIR || join(env.XDG_DATA_HOME || join(env.HOME || homedir(), ".local", "share"), "swapkin");
+  return !!Bun.which("swapkin", { PATH: env.PATH ?? "" }) || existsSync(data);
+}
 
 const store = new Map<string, Map<AccountProvider, AccountsInput>>();
 
@@ -25,6 +40,7 @@ export function setAccounts(
   plugin: string,
   c: Contributes,
   raw: unknown,
+  env: NodeJS.ProcessEnv = process.env,
 ): { ok: true; kept: number } | { ok: false; error: string } {
   const v = validateAccounts(raw);
   if (!v.ok) return v;
@@ -43,9 +59,11 @@ export function setAccounts(
   const was = mine.get(provider)?.accounts.find((a) => a.active)?.id;
   const now = v.value.accounts.find((a) => a.active)?.id;
   if (provider === "anthropic" && was !== undefined && was !== now) clearUsageCache();
-  // Decided here, from who the plugin is, never from what it posted.
-  const managedBy = (ACCOUNT_MANAGERS as readonly string[]).includes(plugin) ? (plugin as AccountManager) : undefined;
-  mine.set(provider, { ...v.value, ...(managedBy ? { managedBy } : {}) });
+  // Decided here, never from a claim in the body: by who the plugin is, or by
+  // its `deferTo` once the app has found that manager on this machine itself.
+  const { deferTo, ...rest } = v.value;
+  const managedBy = (ACCOUNT_MANAGERS as readonly string[]).includes(plugin) ? (plugin as AccountManager) : deferTo && swapkinPresent(env) ? deferTo : undefined;
+  mine.set(provider, { ...rest, ...(managedBy ? { managedBy } : {}) });
   store.set(plugin, mine);
   return { ok: true, kept: v.value.accounts.length };
 }

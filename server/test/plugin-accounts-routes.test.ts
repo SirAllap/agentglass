@@ -334,6 +334,76 @@ describe("the store", () => {
     forgetAccounts("p");
   });
 
+  describe("deferTo swapkin: the app checks for Swapkin itself", () => {
+    const dir = mkdtempSync(join(tmpdir(), "agx-defer-"));
+    afterAll(() => rmSync(dir, { recursive: true, force: true }));
+    const body = (over: Record<string, unknown> = {}) => ({ ...list(), deferTo: "swapkin", ...over });
+    // A server environment with no Swapkin on PATH and no data dir for it.
+    const bare = (extra: Record<string, string> = {}) => ({ PATH: join(dir, "no-bin"), HOME: join(dir, "home"), ...extra });
+    const withDataDir = () => {
+      const d = mkdtempSync(join(dir, "data-"));
+      mkdirSync(join(d, "swapkin"));
+      return d;
+    };
+
+    test("a plugin not named swapkin that defers while Swapkin is absent is not managed, and its chips press", () => {
+      setAccounts("accounts", declared, body(), bare());
+      expect(accountsList()[0]?.managedBy).toBeUndefined();
+      expect(accountsList("device")[0]).not.toHaveProperty("managedBy");
+      expect(switchRefusal("anthropic", "acme-b")).toBeNull();
+      expect(manageRefusal("anthropic")).toBeNull();
+      forgetAccounts("accounts");
+    });
+
+    test("with the SWAPKIN_DIR folder present the same body is managed by swapkin, and a switch is refused", () => {
+      const d = withDataDir();
+      setAccounts("accounts", declared, body(), bare({ SWAPKIN_DIR: join(d, "swapkin") }));
+      expect(accountsList()[0]).toMatchObject({ plugin: "accounts", managedBy: "swapkin" });
+      expect(accountsList("device")[0]?.managedBy).toBe("swapkin");
+      expect(switchRefusal("anthropic", "acme-b")).toContain("managed by swapkin");
+      expect(manageRefusal("anthropic")).toContain("managed by swapkin");
+      forgetAccounts("accounts");
+    });
+
+    test("the default folder is under XDG_DATA_HOME, then HOME/.local/share", () => {
+      const d = withDataDir();
+      setAccounts("accounts", declared, body(), bare({ XDG_DATA_HOME: d }));
+      expect(accountsList()[0]?.managedBy).toBe("swapkin");
+      forgetAccounts("accounts");
+      mkdirSync(join(dir, "home", ".local", "share", "swapkin"), { recursive: true });
+      setAccounts("accounts", declared, body(), bare());
+      expect(accountsList()[0]?.managedBy).toBe("swapkin");
+      forgetAccounts("accounts");
+      rmSync(join(dir, "home"), { recursive: true, force: true });
+    });
+
+    test("a swapkin executable on the server PATH counts too", () => {
+      const bin = join(dir, "bin");
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(join(bin, "swapkin"), "#!/bin/sh\n", { mode: 0o755 });
+      setAccounts("accounts", declared, body(), bare({ PATH: bin }));
+      expect(accountsList()[0]?.managedBy).toBe("swapkin");
+      forgetAccounts("accounts");
+    });
+
+    test("deferring does not lift the credential checks: a token-shaped label still refuses the whole list", () => {
+      const d = withDataDir();
+      const env = bare({ SWAPKIN_DIR: join(d, "swapkin") });
+      const bad = (label: string) => body({ accounts: [{ ...acct("acme-a", "Acme A", true), label }] });
+      for (const label of ["sk-" + "a".repeat(24), "me@example.com"]) {
+        const r = setAccounts("accounts", declared, bad(label), env);
+        expect(r.ok, label).toBe(false);
+      }
+      expect(accountsList()).toEqual([]);
+    });
+
+    test("a plugin named swapkin is managed whether or not it defers", () => {
+      setAccounts("swapkin", declared, list(), bare());
+      expect(accountsList()[0]?.managedBy).toBe("swapkin");
+      forgetAccounts("swapkin");
+    });
+  });
+
   test("an undeclared provider is refused and keeps nothing", () => {
     expect(setAccounts("p", { accounts: ["codex"] }, list()).ok).toBe(false);
     expect(setAccounts("p", {}, list()).ok).toBe(false);

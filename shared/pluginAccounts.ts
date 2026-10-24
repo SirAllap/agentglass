@@ -65,6 +65,14 @@ export interface Account {
 export interface AccountsInput {
   provider: AccountProvider;
   managedBy?: AccountManager;
+  /**
+   * A plugin that is not the account manager but steps aside for one may say so.
+   * A request, not a claim: accounts.ts shows "managed by" only once it finds the
+   * manager on this machine itself, so naming one that is not there changes
+   * nothing. Closed to ACCOUNT_MANAGERS; any other value is dropped like an
+   * unknown field. Resolved into `managedBy` there and never kept.
+   */
+  deferTo?: AccountManager;
   accounts: Account[];
 }
 
@@ -190,7 +198,8 @@ export function validateAccounts(raw: unknown): Ok<AccountsInput> | Err {
     accounts.push(r.value);
   }
   if (accounts.filter((a) => a.active).length > 1) return { ok: false, error: "at most one account may be active" };
-  return { ok: true, value: { provider: raw.provider, accounts } };
+  const deferTo = (ACCOUNT_MANAGERS as readonly unknown[]).includes(raw.deferTo) ? (raw.deferTo as AccountManager) : undefined;
+  return { ok: true, value: { provider: raw.provider, ...(deferTo ? { deferTo } : {}), accounts } };
 }
 
 /** `contributes.accounts`: the providers this plugin holds the account list of. Closed, no repeats. */

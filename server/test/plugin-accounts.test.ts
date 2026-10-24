@@ -35,6 +35,16 @@ describe("validateAccounts", () => {
     }
   });
 
+  test("deferTo is a closed field: only \"swapkin\" is read, anything else is dropped like an unknown field", () => {
+    const kept = validateAccounts(input([account()], { deferTo: "swapkin" }));
+    expect(kept.ok && kept.value.deferTo).toBe("swapkin");
+    for (const deferTo of ["acme", "SWAPKIN", "", 1, true, {}, ["swapkin"]]) {
+      const r = validateAccounts(input([account()], { deferTo }));
+      expect(r.ok).toBe(true);
+      expect(r.ok && "deferTo" in r.value).toBe(false);
+    }
+  });
+
   test("a token split across id, label and plan refuses the whole list", () => {
     // 24+ characters in all, none of the three long enough to be caught alone.
     const split = [

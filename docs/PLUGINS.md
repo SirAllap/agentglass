@@ -412,7 +412,13 @@ and `_`; a `label` is up to 32 characters and a `plan` up to 24, plain text;
 "stored in a file" for the second). The app marks
 the list of the plugin it knows as `swapkin` as managed by it (the account tool switches
 them itself): the chips are then shown and cannot be pressed. A plugin cannot claim that
-in its body; a `managedBy` it sends is not read. A list is
+in its body; a `managedBy` it sends is not read. A plugin under another name that steps aside
+for Swapkin sends `"deferTo": "swapkin"` next to `provider`: the app then looks for Swapkin
+itself (`swapkin` on the server's PATH, or its data folder, `$SWAPKIN_DIR` or
+`${XDG_DATA_HOME:-~/.local/share}/swapkin`, existing; nothing in it is read) and only if it
+is there marks the list as managed. Otherwise the field is dropped like any unknown one and the
+chips stay pressable. The check runs when the list arrives, so a Swapkin installed later is
+picked up by the plugin's next post. A list is
 **refused whole**, not trimmed, when a visible string looks like a token, a key or an
 email, or contains an invisible or direction-control character, repeats a label (any
 case), or breaks a cap; a field the app does not know is dropped. One plugin keeps
