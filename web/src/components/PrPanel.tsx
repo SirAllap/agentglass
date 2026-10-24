@@ -703,6 +703,7 @@ ${TL_CSS}
 .agx-inline-add{font-size:10px;padding:1px 6px;border-radius:5px;color:var(--text3);border:1px solid color-mix(in srgb,var(--text) 24%,transparent);transition:color .13s,border-color .13s,background .13s}
 .agx-inline-add:hover:not(:disabled){color:var(--primary);border-color:var(--primary);background:color-mix(in srgb,var(--primary) 10%,transparent)}
 .agx-inline-add:disabled{opacity:.4;cursor:not-allowed}
+.agx-inline-add[aria-pressed="true"]{color:var(--text3);background:var(--surface-inset);text-decoration:line-through}
 /* the viewed switch on a file header — a checkbox does not read as a state you
    are keeping, and "viewed" is state you keep across a whole review */
 .agx-sw{position:relative;width:24px;height:14px;border-radius:8px;flex:none;background:color-mix(in srgb,var(--border) 50%,transparent);transition:background .17s}

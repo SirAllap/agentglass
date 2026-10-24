@@ -147,11 +147,22 @@ const said = (o: Outcome): string => o.on ? `${o.summary} on ${o.on}` : o.summar
 // rules
 // ---------------------------------------------------------------------------
 
+/** How many checks one "All CI passed" may ignore, and how long a name may be. A PR with more red jobs than this has a
+ *  problem an ignore list is not the answer to. */
+export const MAX_IGNORE = 30;
+const MAX_IGNORE_LEN = 200;
+
 /** From the wire: anything that is not a rule this file knows is dropped. */
 export function coerceRule(raw: unknown): PrWatchRule | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
-  if (r.type === "ci-pass" || r.type === "ci-fail" || r.type === "comment") return { type: r.type };
+  if (r.type === "ci-fail" || r.type === "comment") return { type: r.type };
+  if (r.type === "ci-pass") {
+    if (r.ignore === undefined) return { type: "ci-pass" };
+    if (!Array.isArray(r.ignore)) return null; // a list that is not a list is a mistake to say, not to guess at
+    const ignore = [...new Set(r.ignore.flatMap((n) => typeof n === "string" && n.trim() ? [n.trim().slice(0, MAX_IGNORE_LEN)] : []))].slice(0, MAX_IGNORE);
+    return ignore.length ? { type: "ci-pass", ignore } : { type: "ci-pass" };
+  }
   if (r.type === "check") {
     const match = typeof r.match === "string" ? r.match.trim().slice(0, 120) : "";
     const on = r.on === "fail" || r.on === "pass" || r.on === "either" ? r.on : null;
@@ -161,7 +172,9 @@ export function coerceRule(raw: unknown): PrWatchRule | null {
   return null;
 }
 
-const ruleKey = (r: PrWatchRule): string => JSON.stringify(r.type === "check" ? { ...r, match: r.match.toLowerCase() } : r);
+/** What makes two rules the same rule. The ignore list is not part of it: "All CI passed" is one rule per PR, and
+ *  adding it again with another list changes the list (see addWatch). */
+const ruleKey = (r: PrWatchRule): string => JSON.stringify(r.type === "check" ? { ...r, match: r.match.toLowerCase() } : { type: r.type });
 
 const names = (cs: PrCheck[]): string =>
   cs.slice(0, 3).map((c) => c.name).join(", ") + (cs.length > 3 ? ` +${cs.length - 3} more` : "");
@@ -184,8 +197,17 @@ const settled = (c: PrCheck): boolean => c.done && !c.cancelled;
 
 export function evalRule(rule: PrWatchRule, s: Snapshot): Outcome | null {
   switch (rule.type) {
-    case "ci-pass":
-      return s.allDone && s.verdict === "green" && s.all.every(settled) ? { summary: "CI passed", detail: "", ok: true } : null;
+    case "ci-pass": {
+      if (!rule.ignore?.length) return s.allDone && s.verdict === "green" && s.all.every(settled) ? { summary: "CI passed", detail: "", ok: true } : null;
+      /* Judged on the checks that are left. Ignored ones never block, red, running or cancelled. The rollup must have
+         loaded (no checks at all is not green); if EVERY check is ignored nothing is left to wait for and it fires. */
+      const skip = new Set(rule.ignore);
+      if (!s.all.length) return null;
+      const green = (c: PrCheck) => settled(c) && c.state !== "failure";
+      if (!s.all.every((c) => skip.has(c.name) || green(c))) return null;
+      const open = [...new Map(s.all.filter((c) => skip.has(c.name) && !green(c)).map((c) => [c.name, c])).values()];
+      return { summary: "CI passed", detail: open.length ? `ignoring ${open.length}: ${names(open)}` : "", ok: true };
+    }
     case "ci-fail": {
       const bad = s.all.filter(failed);
       return bad.length ? { summary: "CI failed", detail: names(bad), ok: false } : null;
@@ -338,7 +360,9 @@ export function addWatch(i: AddInput, notify = true): { ok: boolean; watch?: PrW
     return { ok: false, error: `at most ${MAX_RULES_PER_PR} rules on one pull request` };
   }
   if (had) {
-    db.run(`UPDATE pr_watch SET active = 1, primed = 0, created = ?, seen = ?, title = ?, root = ? WHERE id = ?`, [Date.now(), Date.now(), title, i.root, had.id]);
+    // Same rule, so the only thing that can differ is the ignore list of "All CI passed": the newest wins.
+    const ruleJson = rule.type === "ci-pass" ? JSON.stringify(rule) : had.rule;
+    db.run(`UPDATE pr_watch SET active = 1, primed = 0, created = ?, seen = ?, title = ?, root = ?, rule = ? WHERE id = ?`, [Date.now(), Date.now(), title, i.root, ruleJson, had.id]);
     if (notify) changed();
     return { ok: true, watch: toWatch({ r: { ...had, active: 1 }, rule }) };
   }
@@ -373,12 +397,22 @@ export function setPreset(repo: string, rulesIn: unknown, auto: boolean): { ok: 
   return { ok: true };
 }
 
-/** The repo's saved rules, put on one PR. One click from the bell. */
+/** What a preset's "All CI passed" ignores, added to what the PR already ignores: applying a default never takes a
+ *  check off a PR's own list. The PR's names come first, so the cap drops the preset's extras, not the PR's choices. */
+function withPrIgnores(pr: { repo: string; number: number }, rule: PrWatchRule): PrWatchRule {
+  if (rule.type !== "ci-pass") return rule;
+  const own = db.query<Row, [string, number]>(`SELECT * FROM pr_watch WHERE repo = ? AND number = ?`).all(pr.repo, pr.number)
+    .flatMap((r) => { const x = ruleOf(r); return x?.type === "ci-pass" ? x.ignore ?? [] : []; });
+  return coerceRule({ type: "ci-pass", ignore: [...own, ...(rule.ignore ?? [])] }) ?? rule;
+}
+
+/** The repo's saved rules, put on one PR. One click from the bell. The ignore list of "All CI passed" is merged with the
+ *  PR's own (see withPrIgnores), where adding the rule by hand replaces it. */
 export function applyPreset(i: Omit<AddInput, "rule">): { ok: boolean; applied: number; error?: string } {
   const p = db.query<{ rules: string }, [string]>(`SELECT rules FROM pr_watch_preset WHERE repo = ?`).get(i.repo);
   if (!p) return { ok: false, applied: 0, error: "no default saved for this repository" };
   let n = 0;
-  for (const rule of presetRules(p.rules)) if (addWatch({ ...i, rule }, false).ok) n++;
+  for (const rule of presetRules(p.rules)) if (addWatch({ ...i, rule: withPrIgnores(i, rule) }, false).ok) n++;
   if (n) changed(); // one broadcast for the whole preset, not one per rule
   return { ok: true, applied: n };
 }

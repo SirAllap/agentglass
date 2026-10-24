@@ -2117,9 +2117,15 @@ export interface CardNote {
  * `check.match` is a case-insensitive substring of the check's name (or its
  * workflow's), not an exact name: it must work before the check has started and
  * on every matrix variant ("evals (py3.12)"). Ceiling: substring only, no regex.
+ *
+ * `ci-pass.ignore` is the opposite: EXACT check names (`PrCheck.name`, case-sensitive) that never block the
+ * rule, whatever state they are in. A flaky non-required job that is red for a reason that is not the change
+ * would otherwise keep "All CI passed" from ever firing. It lives on the watch, not on a head, so it survives a
+ * push or an Update branch. Ceiling: by name only, so two workflows that both run a job called `lint` are
+ * ignored together.
  */
 export type PrWatchRule =
-  | { type: "ci-pass" }
+  | { type: "ci-pass"; ignore?: string[] }
   | { type: "ci-fail" }
   | { type: "check"; match: string; on: "fail" | "pass" | "either" }
   /** Sticky: comments keep coming, so this one stays on until turned off. */

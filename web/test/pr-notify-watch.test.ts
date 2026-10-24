@@ -6,8 +6,8 @@
  * here. Comments are stripped before asserting a word is absent.
  */
 import { describe, expect, it } from "bun:test";
-import type { PrWatch } from "../../shared/types.ts";
-import { bellState, hasActiveWatch, ruleLabel, sameRule, setPrWatchState, watchPhase, watchesOf } from "../src/lib/prWatchStore.ts";
+import type { PrCheck, PrWatch } from "../../shared/types.ts";
+import { bellState, ciPassRule, firedOk, hasActiveWatch, ignorableNames, ignoredOf, ruleLabel, sameRule, setPrWatchState, toggleIgnored, watchPhase, watchesOf } from "../src/lib/prWatchStore.ts";
 
 const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
 const src = async (p: string) => strip(await Bun.file(new URL(p, import.meta.url)).text());
@@ -160,5 +160,102 @@ describe("what the chip says about the run it is watching", () => {
     expect(m).toContain('phase?.kind === "waiting" ? "Waiting for new run"');
     expect(m).toContain("phase.text");
     expect(m).toContain("data-pr-watch-phase");
+  });
+});
+
+describe("All CI passed, ignoring some checks", () => {
+  const chk = (name: string, state: PrCheck["state"], extra: Partial<PrCheck> = {}): PrCheck => ({ name, workflow: "", state, done: state !== "pending", ...extra });
+  const ci = (...ignore: string[]): PrWatch["rule"] => ({ type: "ci-pass", ignore });
+
+  it("the row says how many are ignored, and nothing extra when none are", () => {
+    expect(ruleLabel({ type: "ci-pass" })).toBe("All CI passed");
+    expect(ruleLabel(ci())).toBe("All CI passed");
+    expect(ruleLabel(ci("e2e-flaky"))).toBe("All CI passed, except 1");
+    expect(ruleLabel(ci("a", "b", "c"))).toBe("All CI passed, except 3");
+  });
+  it("it is still the same rule whatever its list, so the row toggles one watch", () => {
+    expect(sameRule({ type: "ci-pass" }, ci("a"))).toBe(true);
+    expect(sameRule(ci("a"), ci("b"))).toBe(true);
+    expect(sameRule(ci("a"), { type: "ci-fail" })).toBe(false);
+  });
+  it("the list on screen is the waiting watch's, else the last one that fired, else empty", () => {
+    expect(ignoredOf([])).toEqual([]);
+    expect(ignoredOf([w({ rule: { type: "comment" } })])).toEqual([]);
+    expect(ignoredOf([w({ rule: ci("old"), active: false }), w({ id: "2", rule: ci("now") })])).toEqual(["now"]);
+    expect(ignoredOf([w({ rule: ci("old"), active: false })])).toEqual(["old"]);
+  });
+  it("pressing a chip puts a name in the list and takes it out again, leaving the others", () => {
+    expect(toggleIgnored([], "a")).toEqual(["a"]);
+    expect(toggleIgnored(["a", "b"], "a")).toEqual(["b"]);
+    expect(toggleIgnored(["a"], "b")).toEqual(["a", "b"]);
+  });
+  it("an empty list is sent as the bare rule, so un-ignoring the last one clears it on the server", () => {
+    expect(ciPassRule([])).toEqual({ type: "ci-pass" });
+    expect(ciPassRule(["a"])).toEqual({ type: "ci-pass", ignore: ["a"] });
+  });
+  it("chips are the checks that can hold it back, once each, plus what is already ignored", () => {
+    const all = [chk("lint", "success"), chk("e2e-flaky", "failure"), chk("build", "pending"), chk("docs", "skipped"),
+      chk("e2e-flaky", "failure", { event: "push" }), chk("deploy-preview", "failure", { cancelled: true })];
+    expect(ignorableNames(all, [])).toEqual(["build", "deploy-preview", "e2e-flaky"]);
+    expect(ignorableNames(all, ["lint", "gone-job"])).toEqual(["build", "deploy-preview", "e2e-flaky", "gone-job", "lint"]);
+    expect(ignorableNames([chk("lint", "success")], [])).toEqual([]);
+  });
+  it("a name with 'fail' in it after the verdict does not turn a pass into a failure", () => {
+    expect(firedOk(w({ lastText: "CI passed on abc1234: ignoring 1: detect-failures" }))).toBe(true);
+    expect(firedOk(w({ lastText: "CI failed on abc1234: lint" }))).toBe(false);
+    expect(firedOk(w({ lastText: "evals failed: evals (py3.13)" }))).toBe(false);
+    expect(firedOk(w({ lastText: "CI passed" }))).toBe(true);
+  });
+  it("the menu draws the chips as pressed toggles in a labelled group, and stays quiet about it when none apply", () => {
+    expect(menu).toContain("aria-pressed={ignored.includes(n)}");
+    expect(menu).toContain('role="group" aria-label="Checks All CI passed does not wait for"');
+    expect(menu).toContain("No failing or running checks to ignore");
+    expect(menu).toContain(">Ignore:</span>"); // the chips say what they are before one is pressed
+    expect(menu).toContain("ciPassRule(ignored)");
+  });
+  it("the chips are written through the same add route, only while the rule is on, and staged otherwise", () => {
+    const at = menu.indexOf("const ignore = (name: string) =>");
+    expect(at).toBeGreaterThan(-1);
+    const i = menu.slice(at, menu.indexOf("\n  };", at)); // to the arrow's own closing brace
+    expect(i).toContain("api.prWatchAdd(root, d.number, d.title, ciPassRule(next))");
+    expect(i).toContain('waiting({ type: "ci-pass" })');
+    expect(i.indexOf("setStaged(next)")).toBeLessThan(i.indexOf("api.prWatchAdd"));
+  });
+  it("applying the default says it keeps the PR's own ignores, and still sends one request", () => {
+    expect(menu).toContain(">Apply default, keep ignores</Button>");
+    expect(menu).toContain("are added to the ones this pull request already ignores");
+    expect(menu).toContain("api.prWatchApply(root, d.number, d.title)");
+    expect(menu).not.toContain("Apply my default");
+  });
+  it("the popover never outgrows a short window: it scrolls inside itself, so the controls at the bottom stay reachable", () => {
+    expect(menu).toMatch(/minWidth: 268, maxHeight: "calc\(100vh - \d+px\)", overflowY: "auto" \}\} data-pr-watch-menu>/);
+  });
+  it("the block is indented under the rule's label and muted while the rule is off, its chips still pressable", () => {
+    expect(menu).toContain('className="flex flex-wrap gap-1 pl-9 pr-1" style={waiting(rule) ? undefined : { opacity: 0.5 }}');
+    expect(menu).toContain('data-pr-watch-ignore={waiting(rule) ? "on" : "off"}');
+    const chip = menu.slice(menu.indexOf('<button key={n} type="button" className="agx-inline-add'), menu.indexOf("</button>", menu.indexOf('<button key={n} type="button" className="agx-inline-add')));
+    expect(chip).not.toContain("disabled"); // muted, not dead
+  });
+  it("an ignored chip wears the eye-off icon in a slot every chip reserves, so a press never changes a chip's width", () => {
+    expect(menu).toContain("EyeOffIcon");
+    expect(menu).toContain('visibility: ignored.includes(n) ? "visible" : "hidden"');
+    expect(menu).toContain("width: ICON.xs, height: ICON.xs");
+    expect(menu).toContain('aria-hidden="true"><EyeOffIcon size={ICON.xs} />'); // the state is said by aria-pressed, not by the picture
+    expect(menu).toContain("aria-pressed={ignored.includes(n)}");
+  });
+  it("the popover is three blocks, one thin divider between each, and the default buttons' divider is not doubled", () => {
+    const dividers = menu.match(/<div style=\{\{ borderTop: LINE, margin: "4px 0" \}\} \/>/g) ?? [];
+    expect(dividers.length).toBe(2);
+    expect(menu.indexOf("borderTop: LINE")).toBeLessThan(menu.indexOf("A specific check</div>"));
+    expect(menu.lastIndexOf("borderTop: LINE")).toBeGreaterThan(menu.indexOf("A specific check</div>"));
+    expect(menu.lastIndexOf("borderTop: LINE")).toBeLessThan(menu.indexOf("Save as my default"));
+  });
+  it("no timer joins the menu, and the pressed chip is styled with the house tokens, not new ones", async () => {
+    expect(menu).not.toMatch(/setInterval|setTimeout/);
+    const css = (await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text()).split("\n").find((l) => l.startsWith('.agx-inline-add[aria-pressed="true"]'))!;
+    expect(css).not.toBeUndefined();
+    expect(css).not.toMatch(/#[0-9a-f]{3,6}|rgb\(|px/i);
+    expect(css).toContain("var(--surface-inset)"); // an ignored chip sits on the muted surface and keeps its strike-through
+    expect(css).toContain("line-through");
   });
 });

@@ -31,9 +31,9 @@ beforeEach(() => {
 
 const chk = (name: string, state: PrCheck["state"], workflow = ""): PrCheck =>
   ({ name, workflow, state, done: state !== "pending" });
-const snap = (all: PrCheck[]) => {
+const snap = (all: PrCheck[], sha?: string) => {
   const allDone = all.length > 0 && all.every((c) => c.done);
-  return { allDone, verdict: allDone ? (all.some((c) => c.state === "failure") ? "red" as const : "green" as const) : null, all };
+  return { allDone, verdict: allDone ? (all.some((c) => c.state === "failure") ? "red" as const : "green" as const) : null, all, ...(sha ? { sha } : null) };
 };
 const ctx = { repo: "acme/orbit", number: 7, root: "/x/orbit", title: "ORBIT-1042 add thing" };
 const add = (rule: unknown, over: Partial<typeof ctx> = {}) => W.addWatch({ ...ctx, ...over, rule });
@@ -444,6 +444,146 @@ describe("presets", () => {
     W.setPreset("acme/orbit", [{ type: "ci-pass" }], true);
     W.setPreset("acme/orbit", [], true);
     expect(W.listWatches().presets.length).toBe(0);
+  });
+});
+
+describe("All CI passed, ignoring some checks", () => {
+  const ci = (...ignore: string[]) => ({ type: "ci-pass" as const, ignore });
+  it("a red check that is ignored does not block, and the verdict names what was ignored", () => {
+    const o = W.evalRule(ci("e2e-flaky"), snap([chk("lint", "success"), chk("e2e-flaky", "failure")]));
+    expect(o?.ok).toBe(true);
+    expect(o?.summary).toBe("CI passed");
+    expect(o?.detail).toBe("ignoring 1: e2e-flaky");
+  });
+  it("a red check that is NOT ignored still blocks, ignoring another one", () => {
+    expect(W.evalRule(ci("e2e-flaky"), snap([chk("lint", "failure"), chk("e2e-flaky", "failure")]))).toBeNull();
+  });
+  it("an ignored check that is still running or was cancelled does not hold it back; a running one that is not ignored does", () => {
+    expect(W.evalRule(ci("e2e-flaky"), snap([chk("lint", "success"), chk("e2e-flaky", "pending")]))?.ok).toBe(true);
+    const cancelled = { ...chk("e2e-flaky", "failure"), cancelled: true };
+    expect(W.evalRule(ci("e2e-flaky"), snap([chk("lint", "success"), cancelled]))?.ok).toBe(true);
+    expect(W.evalRule(ci("e2e-flaky"), snap([chk("lint", "pending"), chk("e2e-flaky", "failure")]))).toBeNull();
+    expect(W.evalRule(ci("e2e-flaky"), snap([{ ...chk("lint", "failure"), cancelled: true }, chk("e2e-flaky", "failure")]))).toBeNull();
+  });
+  it("skipped and neutral are fine, and an ignored check that turned green is not mentioned", () => {
+    const o = W.evalRule(ci("e2e-flaky"), snap([chk("lint", "skipped"), chk("docs", "neutral"), chk("e2e-flaky", "success")]));
+    expect(o?.ok).toBe(true);
+    expect(o?.detail).toBe("");
+  });
+  it("names are exact: another case, or a substring, ignores nothing", () => {
+    expect(W.evalRule(ci("E2E-flaky"), snap([chk("e2e-flaky", "failure")]))).toBeNull();
+    expect(W.evalRule(ci("e2e"), snap([chk("e2e-flaky", "failure")]))).toBeNull();
+  });
+  it("every check ignored: nothing is left to wait for, so it fires once the rollup has loaded; with no rollup it does not", () => {
+    expect(W.evalRule(ci("a", "b"), snap([chk("a", "failure"), chk("b", "pending")]))?.ok).toBe(true);
+    expect(W.evalRule(ci("a"), snap([]))).toBeNull();
+  });
+  it("a long list is cut like the failures are: three names and a count", () => {
+    const o = W.evalRule(ci("a", "b", "c", "d", "e"), snap(["a", "b", "c", "d", "e"].map((n) => chk(n, "failure"))));
+    expect(o?.detail).toBe("ignoring 5: a, b, c +2 more");
+  });
+  it("without an ignore list it is the rule it always was", () => {
+    expect(W.evalRule({ type: "ci-pass", ignore: [] }, snap([chk("a", "success"), chk("b", "failure")]))).toBeNull();
+    expect(W.evalRule({ type: "ci-pass" }, snap([chk("a", "pending")]))).toBeNull();
+  });
+
+  it("coerceRule trims, dedupes, drops empties and non-strings, and caps count and length", () => {
+    expect(W.coerceRule({ type: "ci-pass", ignore: [" a ", "a", "", "  ", 7, null, "b"] })).toEqual({ type: "ci-pass", ignore: ["a", "b"] });
+    expect(W.coerceRule({ type: "ci-pass", ignore: [] })).toEqual({ type: "ci-pass" });
+    expect(W.coerceRule({ type: "ci-pass" })).toEqual({ type: "ci-pass" });
+    const many = W.coerceRule({ type: "ci-pass", ignore: Array.from({ length: W.MAX_IGNORE + 10 }, (_, i) => `job-${i}`) });
+    expect(many?.type === "ci-pass" && many.ignore?.length).toBe(W.MAX_IGNORE);
+    const long = W.coerceRule({ type: "ci-pass", ignore: ["x".repeat(500)] });
+    expect(long?.type === "ci-pass" && long.ignore![0]!.length).toBe(200);
+  });
+  it("an ignore that is not a list is refused, not guessed at", () => {
+    expect(W.coerceRule({ type: "ci-pass", ignore: "e2e-flaky" })).toBeNull();
+    expect(add({ type: "ci-pass", ignore: { a: 1 } }).ok).toBe(false);
+  });
+  it("it is one rule per PR: adding it again with another list changes the list, and with none clears it", () => {
+    add(ci("a")); add(ci("a", "b"));
+    expect(W.listWatches().watches.map((w) => w.rule)).toEqual([ci("a", "b")]);
+    add({ type: "ci-pass" });
+    expect(W.listWatches().watches.map((w) => w.rule)).toEqual([{ type: "ci-pass" }]);
+  });
+  it("the list survives a push and an Update branch: the new head is judged with it, and the fire says verdict first", async () => {
+    add(ci("e2e-flaky"));
+    primed();
+    const { box, read } = reader(snap([chk("lint", "pending"), chk("e2e-flaky", "failure")], "aaaaaaa1"));
+    expect(await W.checkWatches(read)).toBe(0);
+    box.s = snap([chk("lint", "pending"), chk("e2e-flaky", "pending")], "bbbbbbb2"); // a new head: everything runs again
+    expect(await W.checkWatches(read)).toBe(0);
+    expect(W.listWatches().watches[0]!.rule).toEqual(ci("e2e-flaky"));
+    box.s = snap([chk("lint", "success"), chk("e2e-flaky", "failure")], "bbbbbbb2");
+    expect(await W.checkWatches(read)).toBe(1);
+    expect(fired[0]!.summary).toBe("CI passed on bbbbbbb");
+    expect(fired[0]!.payload?.title).toBe("CI passed on bbbbbbb · acme/orbit #7");
+    expect(fired[0]!.payload?.line).toBe("ignoring 1: e2e-flaky");
+    expect(W.listWatches().watches[0]!.lastText).toBe("CI passed on bbbbbbb: ignoring 1: e2e-flaky");
+  });
+  it("a check that is not ignored still stops the fire on the new head", async () => {
+    add(ci("e2e-flaky"));
+    primed();
+    const { read } = reader(snap([chk("lint", "failure"), chk("e2e-flaky", "failure")], "aaaaaaa1"));
+    expect(await W.checkWatches(read)).toBe(0);
+  });
+
+  it("a preset carries the list: saved, applied by hand, and applied to a new PR", () => {
+    W.setPreset("acme/orbit", [ci("e2e-flaky"), { type: "ci-pass" }, { type: "comment" }], true); // two ci-pass are one rule
+    expect(W.listWatches().presets[0]!.rules).toEqual([ci("e2e-flaky"), { type: "comment" }]);
+    expect(W.applyPreset({ ...ctx }).applied).toBe(2);
+    expect(W.listWatches().watches.filter((w) => w.rule.type === "ci-pass").map((w) => w.rule)).toEqual([ci("e2e-flaky")]);
+    W.sawMine("acme/orbit", "/x", [{ number: 1, title: "old" }]); // seed
+    W.sawMine("acme/orbit", "/x", [{ number: 9, title: "new" }]);
+    expect(W.listWatches().watches.find((w) => w.number === 9 && w.rule.type === "ci-pass")!.rule).toEqual(ci("e2e-flaky"));
+  });
+});
+
+describe("a preset applied to a PR adds its ignores to the PR's own", () => {
+  const ci = (...ignore: string[]) => ({ type: "ci-pass" as const, ignore });
+  const own = (n = 7) => W.listWatches().watches.filter((w) => w.number === n && w.rule.type === "ci-pass").map((w) => w.rule);
+  it("PR ignores a, preset ignores b: the PR ends up with both, a first", () => {
+    add(ci("a"));
+    W.setPreset("acme/orbit", [ci("b")], false);
+    W.applyPreset({ ...ctx });
+    expect(own()).toEqual([ci("a", "b")]);
+  });
+  it("a name on both lists is once, and a preset with none leaves the PR's list as it was", () => {
+    add(ci("a", "b"));
+    W.setPreset("acme/orbit", [ci("b", "c")], false);
+    W.applyPreset({ ...ctx });
+    expect(own()).toEqual([ci("a", "b", "c")]);
+    W.setPreset("acme/orbit", [{ type: "ci-pass" }], false);
+    W.applyPreset({ ...ctx });
+    expect(own()).toEqual([ci("a", "b", "c")]);
+  });
+  it("a PR with no list of its own takes the preset's, and a PR that never had the rule gets it", () => {
+    W.setPreset("acme/orbit", [ci("b")], false);
+    add({ type: "ci-pass" });
+    W.applyPreset({ ...ctx });
+    expect(own()).toEqual([ci("b")]);
+    W.applyPreset({ ...ctx, number: 8 });
+    expect(own(8)).toEqual([ci("b")]);
+  });
+  it("the cap still holds, and it is the preset's extras that go, not the PR's choices", () => {
+    const mine = Array.from({ length: W.MAX_IGNORE - 1 }, (_, i) => `own-${i}`);
+    add(ci(...mine));
+    W.setPreset("acme/orbit", [ci("p-1", "p-2", "p-3")], false);
+    W.applyPreset({ ...ctx });
+    const got = own()[0];
+    expect(got?.type === "ci-pass" && got.ignore).toEqual([...mine, "p-1"]);
+  });
+  it("only the preset's rule is merged: adding the rule by hand still replaces the list", () => {
+    add(ci("a"));
+    add(ci("z"));
+    expect(own()).toEqual([ci("z")]);
+  });
+  it("the automatic apply to a PR first seen later merges too", () => {
+    W.setPreset("acme/orbit", [ci("b")], true);
+    W.sawMine("acme/orbit", "/x", [{ number: 1, title: "old" }]); // seed
+    add(ci("a"), { number: 9 }); // armed by hand before the first read of the PR as new
+    W.sawMine("acme/orbit", "/x", [{ number: 9, title: "new" }]);
+    expect(own(9)).toEqual([ci("a", "b")]);
   });
 });
 
