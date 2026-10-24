@@ -3350,7 +3350,7 @@ function registerIpc(win) {
     if (tag) { try { macNotes.get(tag)?.close(); } catch { /* already gone */ } }
     let n = null;
     try {
-      n = notifyMac.raise(Notification, req, (index) => {
+      n = notifyMac.raise(Notification, req, (/** @type {number} */ index) => {
         if (tag) macNotes.delete(tag);
         if (win.isMinimized()) win.restore();
         win.show();

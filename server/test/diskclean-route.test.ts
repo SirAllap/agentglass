@@ -72,7 +72,8 @@ const post = (body: unknown, headers: Record<string, string> = person(), b: Boot
 
 describe("GET /machine/disk-clean", () => {
   test("answers from the fakes: lines with verdicts, the mounts with their free space, and no Docker volume command", async () => {
-    expect(Bun.which("docker")).not.toBeNull();
+    // The shim, not whatever docker this machine has: the runner has none.
+    expect(Bun.which("docker", { PATH: fx.shim })).toBe(join(fx.shim, "docker"));
     const r = await fetch(desk.base + "/machine/disk-clean?fresh=1", { headers: AUTH });
     expect(r.status).toBe(200);
     const rep = (await r.json()) as DiskCleanReport;

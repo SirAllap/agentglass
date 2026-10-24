@@ -115,6 +115,9 @@ describe("the requirements catalogue matches what the app actually runs", () => 
     // the deaths that run no exit hook. Without it the monitor is spawned bare
     // and the exit hook still covers every clean close — nothing stands down.
     setpriv: "the notification monitor spawns bare without it; nothing stands down",
+    // Only asked whether Swapkin is present, to label a plugin's accounts as
+    // managed by it. Without it the label is absent and nothing stands down.
+    swapkin: "only decides a label; accounts work the same without it",
     // The finder's devices list. Without it the list says "udisks is not
     // installed" and every other pane works, so it is an absent feature, not
     // an error worth a row on the requirements page.

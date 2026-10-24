@@ -25,7 +25,7 @@
  * nothing else — this is not a D-Bus library, it is the shortest path to one
  * password.
  */
-import { createConnection, type Socket } from "node:net";
+import { Socket } from "node:net";
 import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
 
@@ -195,13 +195,15 @@ class Bus {
     const where = busPath();
     if (!where) return null;
     const sock = await new Promise<Socket | null>((res) => {
-      // `createConnection(path)` is the unix-socket overload; the typings
-      // prefer the TCP one, hence the shape rather than a bare string.
-      const s = createConnection({ path: where.path });
+      // Listeners first, connect after: with no D-Bus socket (a container, a
+      // CI runner) Bun 1.3.14 emits ENOENT synchronously inside connect(), and
+      // an `error` nobody listens to yet is thrown, which killed the server.
+      const s = new Socket();
       // A connect that comes after the wait would otherwise hold its fd for good.
       const late = setTimeout(() => { s.destroy(); res(null); }, 2000);
       s.once("connect", () => { clearTimeout(late); res(s); });
       s.once("error", () => { clearTimeout(late); res(null); });
+      s.connect({ path: where.path });
     });
     if (!sock) return null;
     // EXTERNAL auth: a leading NUL, then the uid in hex. No SASL round trips
