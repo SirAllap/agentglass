@@ -7,8 +7,12 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 
@@ -50,15 +54,85 @@ class KeepAliveService : Service() {
     @Volatile
     var running: Boolean = false
       private set
+
+    /*
+     * Retry clock for the live socket, in ms between asks while it is down.
+     *
+     * React Native pauses JS timers while the app is in the background, so the
+     * backoff in src/lib/live.ts never fires there: measured on the emulator,
+     * a socket the server dropped sat in CLOSE-WAIT for over two minutes with
+     * no attempt until the app came to the front. This service is alive in the
+     * background, so its clock asks JS to try again. Event first (a network
+     * coming up below asks at once); this is only the fallback for a server
+     * that is down while the network is fine.
+     *
+     * Capped at 5 min: at most 15 attempts in the first hour of an outage
+     * (10s, 40s, 100s, 220s, then every 300s) and 12 an hour after, each one
+     * a single WebSocket upgrade. Nothing runs while the socket is up.
+     */
+    private val RETRY_MS = longArrayOf(10_000, 30_000, 60_000, 120_000, 300_000)
+
+    /** Set by KeepAliveModule: how a retry reaches JS. */
+    @Volatile
+    var onRetry: (() -> Unit)? = null
+
+    @Volatile
+    private var instance: KeepAliveService? = null
+
+    /** JS says the live socket is down (true) or up (false). No-op while the
+     *  service is not running: with the keep-alive off nothing changes. */
+    fun setOffline(offline: Boolean) {
+      instance?.let { s -> s.main.post { s.applyOffline(offline) } }
+    }
+  }
+
+  private val main = Handler(Looper.getMainLooper())
+  private var offline = false
+  private var step = 0
+  private val tick = Runnable { if (offline) { onRetry?.invoke(); arm() } }
+
+  private fun arm() {
+    main.postDelayed(tick, RETRY_MS[minOf(step++, RETRY_MS.size - 1)])
+  }
+
+  private fun applyOffline(value: Boolean) {
+    // Same answer again keeps the backoff where it is: JS reports on every
+    // attempt, and restarting at 10s each time measured as a retry every 10s.
+    if (value == offline) return
+    offline = value
+    step = 0
+    main.removeCallbacks(tick)
+    if (value) arm()
+  }
+
+  // A network coming up is the event to wait for, not the clock: ask at once,
+  // then fall back to the clock from its first step in case that attempt fails.
+  private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+    override fun onAvailable(network: Network) {
+      main.post { if (offline) { main.removeCallbacks(tick); step = 0; onRetry?.invoke(); arm() } }
+    }
   }
 
   override fun onCreate() {
     super.onCreate()
     running = true
+    instance = this
+    try {
+      getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(networkCallback)
+    } catch (e: Exception) {
+      // No callback: the clock above still runs, only slower to notice a network.
+    }
   }
 
   override fun onDestroy() {
     running = false
+    instance = null
+    main.removeCallbacks(tick)
+    try {
+      getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(networkCallback)
+    } catch (e: Exception) {
+      // Never registered.
+    }
     super.onDestroy()
   }
 

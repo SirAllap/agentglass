@@ -31,6 +31,14 @@ class KeepAliveModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("AgxKeepAlive")
 
+    Events("reconnect")
+
+    OnCreate { KeepAliveService.onRetry = { sendEvent("reconnect", emptyMap<String, Any>()) } }
+    OnDestroy { KeepAliveService.onRetry = null }
+
+    // The live socket is down (true) or back (false). See KeepAliveService.RETRY_MS.
+    Function("setOffline") { offline: Boolean -> KeepAliveService.setOffline(offline) }
+
     Function("start") {
       val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
       guarded { ContextCompat.startForegroundService(context, Intent(context, KeepAliveService::class.java)) }

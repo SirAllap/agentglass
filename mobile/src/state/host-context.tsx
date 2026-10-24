@@ -42,7 +42,7 @@ import { createWatchAlerts } from "../notifications/watchRuntime.ts";
 import { alertTitle, nameOf } from "../model/computers.ts";
 import { learnName } from "./use-computer.ts";
 import { watchHost, type WatchEvents } from "./watch-host.ts";
-import { keepAliveRunning, loadKeepAlivePref, syncKeepAlive, wantKeepAlive } from "../notifications/keepAlive.ts";
+import { keepAliveRunning, loadKeepAlivePref, onKeepAliveReconnect, setLinkOffline, syncKeepAlive, wantKeepAlive } from "../notifications/keepAlive.ts";
 import { noteChecks, noteTalk } from "./pr-talk.ts";
 import { talkPref } from "../notifications/talkPref.ts";
 import { applyMarks, loadPrMarks, resetMarks } from "./read-marks.ts";
@@ -476,6 +476,9 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
     const handle = openLive(host, {
       onState: (state) => {
         setLive(state);
+        // "connecting" still counts as down: an attempt that fails must not reset
+        // the service's backoff, which it would by flipping the flag off and on.
+        setLinkOffline(state !== "open");
         // A socket that has just come up may have been down for a while, and
         // what it missed is exactly what the queue is made of.
         if (state === "open") { dirty = true; settle(); void loadPrMarks(host); void watch.catchUp(host, decorate(host)); }
@@ -574,11 +577,14 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
       },
     });
     liveRef.current = handle;
+    const unsubReconnect = onKeepAliveReconnect(() => handle.retry());
     void load(host);
 
     return () => {
       if (timer) clearTimeout(timer);
       clearInterval(slow);
+      unsubReconnect();
+      setLinkOffline(false);
       handle.close();
       liveRef.current = null;
     };
