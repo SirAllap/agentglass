@@ -2,7 +2,11 @@
 /**
  * The share card: landing/og.html rendered to landing/og.png.
  *
- * One picture is the og:image, the twitter:image and the repository's social
+ * This draws og.png. The landing's og:image is now og-orchestrator.png, a
+ * capture of the orchestrator seat, so this card is no longer what a link
+ * unfurls to on the site.
+ *
+ * One picture was the og:image, the twitter:image and the repository's social
  * preview. It used to be a frame of the landing hero, and a frame of an app
  * reads as "a screen full of numbers" at the size a chat shows it. The card
  * names the workspace instead — the tools in orbit around the mark, and a
