@@ -140,11 +140,12 @@ export async function readRecipes(): Promise<RecipeRow[]> {
   }));
 }
 
-export interface ReviewPromptRow { id: string; title: string; group: string; when: string; builtIn: boolean; hidden: boolean; hasSkill: boolean; chars: number }
+export interface ReviewPromptRow { id: string; title: string; group: string; when: string; builtIn: boolean; hidden: boolean; edited: boolean; hasSkill: boolean; chars: number }
 export async function readReviewPrompts(): Promise<ReviewPromptRow[]> {
   const r = await api.prPrompts();
-  return (r.recipes ?? []).map((x) => ({
-    id: x.id, title: x.title, group: String(x.group), when: String(x.when), builtIn: !!x.builtIn, hidden: !!x.hidden,
+  // The hidden built-ins come back as rows of their own: what the page's "N hidden" lists.
+  return [...(r.recipes ?? []), ...(r.hidden ?? [])].map((x) => ({
+    id: x.id, title: x.title, group: String(x.group), when: String(x.when), builtIn: !!x.builtIn, hidden: !!x.hidden, edited: !!x.edited,
     hasSkill: !!x.skill, chars: x.body.length,
   }));
 }

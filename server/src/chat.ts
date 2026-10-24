@@ -12,7 +12,7 @@
 // line carrying text and image content blocks together, which is the only
 // channel structured content has into a `claude -p` run.
 import { safeAbs, repoRootOf, gitCapability } from "./git.ts";
-import { inScopeReal, chatBypassAllowed } from "./config.ts";
+import { inScopeReal, chatBypassAllowed, chatDeny } from "./config.ts";
 import { paneTurnStream, paneEngineCapability } from "./chatpane.ts";
 import type { Scope } from "./devices.ts";
 import { CHAT_EFFORTS } from "../../shared/types.ts";
@@ -389,6 +389,10 @@ export function turnArgv(bin: string, plan: Extract<TurnPlan, { ok: true }>): st
   // undocumented, so a turn with nothing to gain from it keeps the old
   // behaviour byte for byte rather than riding a newer code path for free.
   if (plan.images.length) args.push("--input-format", "stream-json");
+  // The person's extra rules for every chat turn (Settings ▸ Agents ▸ New chats).
+  // One element, ahead of the flag that closes the variadic list, as launchperm.ts does.
+  const deny = chatDeny();
+  if (deny.length) args.push("--disallowedTools", deny.join(" "));
   if (plan.mode === "bypassPermissions") args.push("--dangerously-skip-permissions");
   else args.push("--permission-mode", plan.mode);
   // Only meaningful for the prompting modes — bypass already allows everything.

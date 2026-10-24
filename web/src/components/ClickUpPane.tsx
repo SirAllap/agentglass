@@ -16,10 +16,10 @@ import { setting } from "../lib/settingsRegistry.ts";
 import { DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN, type ClickUpPrefs, type ClickUpStepBlock, type ProviderStatus } from "../../../shared/providers.ts";
 import { DEFAULT_CARD_SKILL_PATTERN } from "../../../shared/cardSkills.ts";
 import { SettingRow, Switch, Toggle } from "./SettingRow.tsx";
-import { EmptyState, Field, SettingsCard, SettingsForm, StatusBadge, helpIdFor } from "./SettingsKit.tsx";
+import { EmptyState, Field, ProblemNote, SettingsCard, SettingsForm, StatusBadge, helpIdFor } from "./SettingsKit.tsx";
 import { useReportProblem } from "./SettingsPageState.tsx";
 import { problemChip } from "../lib/settingsStates.ts";
-import { Button, INPUT, INPUT_STYLE, Segmented } from "./workspace/Chrome.tsx";
+import { Button, INPUT, INPUT_STYLE, RefreshButton, Segmented } from "./workspace/Chrome.tsx";
 import { Dot, StatusPopover, type PanelView } from "./StatusPanel.tsx";
 import { ListEye, WorkflowMap } from "./WorkflowMap.tsx";
 import { WFM_CSS } from "./workflowMapStyle.ts";
@@ -123,8 +123,56 @@ export function WaitingMap({ name = n.name }: { name?: string }) {
   );
 }
 
+/** The minute's allowance, as the last response said it: nothing here asks ClickUp for anything. */
+function RequestBudgetCard({ epoch }: { epoch: number }) {
+  const [b, setB] = useState<{ limit: number; used: number; resetsInSec: number; known: boolean } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => { setBusy(true); void api.clickupBudget().then((r) => { if (r.ok) setB(r); }).catch(() => undefined).finally(() => setBusy(false)); }, []);
+  // On opening the page and on a Re-read, never on a timer: a number nobody is looking at is a request for nothing.
+  useEffect(() => { load(); }, [load, epoch]);
+  const pct = b ? Math.min(100, Math.round((b.used / b.limit) * 100)) : 0;
+  const tone = pct >= 90 ? "var(--error)" : pct >= 70 ? "var(--warning)" : "var(--success)";
+  return (
+    <SettingsCard title="Request budget" icon={<SlidersIcon size={ICON.sm} />} desc={`The tracker allows about ${b?.limit ?? 100} requests a minute per token.`}
+      status={b?.known ? <StatusBadge tone={pct >= 90 ? "err" : pct >= 70 ? "warn" : "ok"}>{pct} % used</StatusBadge> : undefined}>
+      <SettingRow agentExempt label="Last minute" hint="Cached reads do not count."
+        detail={{ summary: "Details", body: <>Read from the allowance ClickUp reported on its last answer, so looking costs nothing. It shows a full minute until this window has made a request, and again once the minute has turned over.</> }}
+        control={<RefreshButton onRefresh={load} busy={busy} title="Read the allowance again" />}
+        below={b && (
+          <span className="agx-btable-bar" role="img" aria-label={`${b.used} of ${b.limit} requests used`}>
+            <span className="agx-btable-track" style={{ flexBasis: 140 }}><span style={{ width: `${pct}%`, background: tone }} /></span>
+            <span className="tabular-nums">{b.used} / {b.limit}</span>
+            {b.known && b.resetsInSec > 0 && <span className="t-dim">resets in {b.resetsInSec} s</span>}
+            {!b.known && <span className="t-dim">no request made yet this minute</span>}
+          </span>
+        )} />
+    </SettingsCard>
+  );
+}
+
+/** Disconnect, asked once: the saved boards are the person's own list and survive. */
+function DisconnectBar({ onDone }: { onDone: () => void }) {
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const go = async () => {
+    setBusy(true);
+    await api.providerDisconnect("clickup", { forgetBoards: false }).catch(() => undefined);
+    __forgetClickupSetup(); __forgetClickupPrefs(); __forgetClickupSpaces();
+    setBusy(false); setAsking(false); onDone();
+  };
+  return (
+    <div className="agx-gb-foot">
+      {asking && <span className="text-[12px] flex-1" style={{ color: "var(--text2)" }}>Your saved boards and steps stay. Reconnect with a token whenever you like.</span>}
+      {asking && <Button disabled={busy} onClick={() => setAsking(false)}>Cancel</Button>}
+      <Button tone="danger" pending={busy} aria-expanded={asking} onClick={() => (asking ? void go() : setAsking(true))}>{asking ? `Disconnect ${n.name}` : "Disconnect"}</Button>
+    </div>
+  );
+}
+
 export function ClickUpPane() {
   const [prefs, setPrefs] = useState<ClickUpPrefs | null>(null);
+  /* The read of the saved settings answered nothing (the server was down). Without this the page said "Reading your settings…" for good. */
+  const [prefsFailed, setPrefsFailed] = useState(false);
   const [writes, setWrites] = useState<boolean | null>(null);
   const [prefix, setPrefix] = useState<string | undefined>(undefined);
   const [connected, setConnected] = useState(true);
@@ -141,7 +189,7 @@ export function ClickUpPane() {
 
   useEffect(() => {
     let live = true;
-    void clickupPrefs().then((p) => { if (live && p) setPrefs(p); });
+    void clickupPrefs().then((p) => { if (!live) return; if (p) setPrefs(p); else setPrefsFailed(true); });
     void clickupSetup().then((s) => { if (live) { setWrites(s.writeEnabled ?? false); setPrefix(s.prefix); setConnected(s.connected); } });
     void api.providers().then((r) => { if (live) setProvider(r.providers.find((x) => x.id === "clickup") ?? null); }).catch(() => undefined);
     return () => { live = false; };
@@ -207,7 +255,17 @@ export function ClickUpPane() {
     setWrites(s.writeEnabled ?? on);
   }, []);
 
-  if (!prefs) return <div className="py-6 text-[11px]" style={{ color: "var(--text3)" }}>Reading your settings…</div>;
+  if (!prefs) {
+    if (prefsFailed && connected) {
+      return (
+        <ProblemNote title="Could not read your ClickUp settings"
+          action={<Button onClick={() => { setPrefsFailed(false); void clickupPrefs().then((p) => { if (p) setPrefs(p); else setPrefsFailed(true); }); }}>Try again</Button>}>
+          The local server did not answer, so nothing here is known. Nothing was changed.
+        </ProblemNote>
+      );
+    }
+    return <div className="py-6 text-[11px]" style={{ color: "var(--text3)" }}>Reading your settings…</div>;
+  }
   const changesOn = writes === true;
   const M = moments(n);
   const live = changesOn ? steps.filter((s) => isActive(s, M[s.kind])) : [];
@@ -239,22 +297,23 @@ export function ClickUpPane() {
       <style>{WFM_CSS}</style>
       {/* The connection, and the one switch that decides whether anything
           here can write. The switch is a row like any other: its state is a
-          badge first in the control column, the switch after it, and the
-          warning ink only while changes are on, because that is the state
-          the person has to keep in mind. */}
+          badge first in the control column, the switch after it, in
+          green while changes are on: amber is for what the person has to do,
+          and a switch they chose is not that. */}
       <SettingsCard title={n.name} icon={<PlugIcon size={ICON.sm} />} desc={provider?.detail ?? undefined}
         status={<StatusBadge tone="ok">Connected</StatusBadge>}
         actions={<Button onClick={() => openSettings("connections")}>Manage connection</Button>}>
         <SettingRow label={<span id="cu-changes-l">{`Changes in ${n.name}`}</span>}
           hint={changesOn ? `Only the steps below can change a ${n.item}, one at a time, when you press their button.` : steps.length ? "agentglass only reads. Turn this on to let the steps below act." : "agentglass only reads. Adding your first step turns this on."}
-          status={<span data-guard={changesOn ? "on" : "off"}><StatusBadge tone={changesOn ? "warn" : "off"}>{changesOn ? "On" : "Read-only"}</StatusBadge></span>}
+          status={<span data-guard={changesOn ? "on" : "off"}><StatusBadge tone={changesOn ? "ok" : "off"}>{changesOn ? "On" : "Read-only"}</StatusBadge></span>}
           control={<button type="button" role="switch" aria-checked={changesOn} aria-labelledby="cu-changes-l" disabled={writes === null}
             onClick={() => void setChanges(!changesOn)} className="agx-switch-hit inline-flex items-center rounded-full" style={{ minHeight: HIT }}><Switch on={changesOn} /></button>} />
+        <DisconnectBar onDone={() => { setEpoch((e) => e + 1); reread(); }} />
       </SettingsCard>
 
       <Card id="cu-found" icon={<SearchIcon size={ICON.sm} />} title="What we found" open={foundOpen ?? steps.length === 0} onToggle={setFoundOpen}
         desc={reading ? undefined : `${part.counted.length} ${n.lists} count · ${distinct} statuses${part.folded.length ? ` · ${part.folded.length} ignored` : ""}${prefs.prLinkField ? ` · PR link ${prefs.prLinkField}` : ""}${prefs.swatchField ? ` · swatch ${prefs.swatchField}` : ""}`}
-        status={<StatusBadge tone={state.kind === "error" ? "warn" : state.kind === "loading" ? "checking" : "ok"}>{reading ? "Reading your cards" : state.kind === "loading" ? "Reading" : state.kind === "error" ? (asOf ? `As of ${ago(asOf)}` : "Not read") : "Read-only"}</StatusBadge>}>
+        status={<StatusBadge tone={state.kind === "error" ? (asOf ? "off" : "warn") : state.kind === "loading" ? "checking" : "ok"}>{reading ? "Reading your cards" : state.kind === "loading" ? "Reading" : state.kind === "error" ? (asOf ? `As of ${ago(asOf)}` : "Not read") : "Read-only"}</StatusBadge>}>
         <SettingRow label={`${n.lists[0]!.toUpperCase()}${n.lists.slice(1)} that count`}
           hint={<>{countWord(part)}<span className="block mt-1">{chosen ? "You chose these. The rest are ignored, not deleted." : state.kind === "ok" && state.note ? state.note : `Where your ${n.items} live, until you choose.`}</span></>}
           actions={<Button aria-haspopup="listbox" aria-expanded={!!countAt} disabled={!units.length} onClick={(e) => setCountAt(countAt ? null : e.currentTarget)}>Change</Button>} />
@@ -320,6 +379,8 @@ export function ClickUpPane() {
           {!linked && ` This pull request names no ${n.item}: no ${n.name} block on it and no Pull requests section on the ${n.item}. Tasks works on its own.`}
         </div>
       </Card>
+
+      <RequestBudgetCard epoch={epoch} />
 
       <div ref={advRef}>
         <Card id="cu-adv" icon={<SlidersIcon size={ICON.sm} />} title="Advanced" desc="The fields and patterns the reading above is built on." open={advOpen} onToggle={setAdvOpen}>

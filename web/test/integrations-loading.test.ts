@@ -18,8 +18,8 @@ const pane = await Bun.file(new URL("../src/components/SettingsModal.tsx", impor
 describe("before the answer arrives", () => {
   it("draws the providers it already knows about", () => {
     // Gated on `status &&`, the whole list waited on a fetch it did not need.
-    expect(pane).not.toContain("{status && PROVIDERS.map");
-    expect(pane).toContain("{PROVIDERS.map((p) => (");
+    expect(pane).not.toContain("{status && PROVIDERS");
+    expect(pane).toContain("{PROVIDERS.filter((p) => shown(p.id)).map((p) => (");
   });
 
   it("says Checking rather than guessing a state", () => {
@@ -38,7 +38,9 @@ describe("before the answer arrives", () => {
     expect(pane).toContain("const form = wantsToken && !connected && !waiting ?");
     expect(pane).toContain("actions={isJira && !waiting");
     expect(pane).toContain("!waiting && connected && wantsToken");
-    expect(pane).toContain("detail={spec.note && !connected && !waiting && !isJira ?");
+    // The standing note sits in the branch drawn only once the answer is in.
+    expect(pane).toContain("{spec.note && !connected && !isJira && (");
+    expect(pane).toContain("{waiting ? (");
   });
 
   it("stands in for itself at the size it will be", () => {
@@ -58,8 +60,8 @@ describe("before the answer arrives", () => {
 
   it("drops the min-height once the answer is in", () => {
     // Left on, it would pin a row that has since grown a line.
-    expect(pane).toMatch(/minHeight=\{waiting \? rememberedHeights\(\)\[spec\.id\] \?\? 56 : undefined\}/);
-    expect(pane).toMatch(/: undefined\}>/);
+    // Only the placeholder row carries it; the rows drawn from the answer have none.
+    expect(pane).toMatch(/\{waiting \? \(\s*<SettingRow agentExempt rowRef=\{box\} minHeight=\{rememberedHeights\(\)\[spec\.id\] \?\? 56\}/);
   });
 });
 

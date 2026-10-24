@@ -16,10 +16,11 @@
  * the old box until they do.
  */
 import { useId, useState, type ReactNode } from "react";
-import { CaretIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { CaretIcon, DoneIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import type { SavePhase } from "../lib/settingsStates.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { Button, CHIP_SURFACE, CHIP_SURFACE_CLS, CTRL_H } from "./workspace/Chrome.tsx";
+import { Ticks } from "./Ticks.tsx";
 
 /**
  * What a card is for. `default` is a group of settings. `decision` is a card
@@ -79,7 +80,7 @@ export function SettingsCard({ title, desc, status, actions, children, label, fo
           <div className="agx-slot">{status}{actions}</div>
         )}
       </div>
-      {desc && <div className="agx-scard-desc">{desc}</div>}
+      {desc && <div className="agx-scard-desc"><Ticks>{desc}</Ticks></div>}
     </>
   ) : null;
   const name = {
@@ -106,6 +107,31 @@ export function SettingsCard({ title, desc, status, actions, children, label, fo
 }
 
 /**
+ * The segmented control: an inset track with the chosen option raised on the
+ * page's ground. For a short, exclusive choice that belongs in a row's control
+ * column: Window's display size, a 12h/24h clock, a preset. `label` names the
+ * question for a screen reader. Not a tab bar: it swaps a value, not a panel.
+ */
+export function SegControl<T extends string>({ value, options, onPick, label, disabled }: {
+  value: T | undefined;
+  options: readonly { v: T; label: ReactNode }[];
+  onPick: (v: T) => void;
+  label: string;
+  disabled?: boolean;
+}) {
+  return (
+    <span className="agx-seg" role="group" aria-label={label}>
+      {options.map((o) => (
+        <button key={o.v} type="button" onClick={() => onPick(o.v)} disabled={disabled}
+          aria-pressed={value === o.v} className="agx-seg-b disabled:cursor-not-allowed">
+          {o.label}
+        </button>
+      ))}
+    </span>
+  );
+}
+
+/**
  * The verdict on one thing, as a chip: a dot and a few words. One family for a
  * row, a card header and the page header alike.
  *
@@ -123,6 +149,35 @@ export function SettingsCard({ title, desc, status, actions, children, label, fo
  * index.css (`.agx-badge`), drawn from the theme's own tokens.
  */
 export type StatusTone = "ok" | "warn" | "err" | "info" | "off" | "checking" | "saving";
+
+/**
+ * The bar at the foot of a card whose edits are held until Save: what state the
+ * draft is in on the left, Cancel and Save on the right. It sits inside the card
+ * body as a band of its own (not a row), so the divider logic ignores it.
+ */
+export function SaveBar({ dirty, canSave = true, busy, onSave, onCancel, note, saveLabel = "Save", extra }: {
+  dirty: boolean; canSave?: boolean; busy?: boolean; onSave: () => void; onCancel: () => void;
+  saveLabel?: string;
+  /** Something that is not part of the draft, kept in the band (a reset). */
+  extra?: ReactNode;
+  /** What to say when there is nothing to save (the last result). */
+  note?: ReactNode;
+}) {
+  // Nothing to save and nothing else to offer: no band (it draws when there is a draft).
+  if (!dirty && !extra) return null;
+  return (
+    <div className="agx-savebar" data-dirty={dirty ? "" : undefined}>
+      {dirty || note
+        ? <span className="agx-savebar-state" role="status"><i aria-hidden />{dirty ? "Not saved yet" : note}</span>
+        : <span />}
+      <span className="flex items-center gap-2">
+        {extra}
+        {dirty && <Button disabled={busy} onClick={onCancel}>Cancel</Button>}
+        {(dirty || !extra) && <Button tone="primary" disabled={busy || !dirty || !canSave} onClick={onSave}>{saveLabel}</Button>}
+      </span>
+    </div>
+  );
+}
 
 export function StatusBadge({ tone, children }: { tone: StatusTone; children: ReactNode }) {
   // The spinner is the house `.agx-spin`; it breathes instead of turning under reduced motion.
@@ -265,6 +320,10 @@ export function LinkButton({ href, children }: { href: string; children: ReactNo
  *  and an edge, at the large control height, the same for every select there. */
 export const SELECT_BOX = { maxWidth: 260 } as const;
 
+/** The class of a Select that fills a form field's width (an editor's Group, Model, Skill): the themed
+ *  kit select, never a native one, whose list and arrow the OS draws. */
+export const FIELD_SELECT = "agx-select w-full justify-between rounded-lg outline-none";
+
 
 
 /**
@@ -285,5 +344,36 @@ export function CommandLine({ command, shown }: { command: string; /** What is d
         style={{ color: "var(--text)", background: "var(--surface-inset)" }}>{shown ?? command}</code>
       <Button onClick={copy}>{copied ? "Copied" : "Copy"}</Button>
     </div>
+  );
+}
+
+/**
+ * One fact about a thing, as a line: a mark that says how it stands (a tick, a
+ * warning, a dash), the name of the fact, and its value at the right. The rows
+ * of a tool or service tile, where "Installed", "Account" and "Checked" are what
+ * the person scans for; a sentence is a SettingRow, not this. The mark is the
+ * tone and nothing else: ok is a tick, warn and err a warning, off a dash.
+ */
+export function CheckRow({ tone, label, value }: { tone: "ok" | "warn" | "err" | "off"; label: ReactNode; value?: ReactNode }) {
+  return (
+    <div className="agx-chk" data-tone={tone}>
+      <span aria-hidden className="agx-chk-m">{tone === "ok" ? <DoneIcon size={ICON.sm} /> : tone === "off" ? "–" : <WarningIcon size={ICON.sm} />}</span>
+      <span className="agx-chk-l">{label}</span>
+      {value !== undefined && value !== "" && <span className="agx-chk-v"><Ticks>{value}</Ticks></span>}
+    </div>
+  );
+}
+
+/**
+ * A link that saves a file, drawn as a plain `Button`: the same height, edge and fill. It does not
+ * open anything or leave the app, so it has no arrow and no new tab: the browser downloads it.
+ */
+export function DownloadButton({ href, download, children }: { href: string; download: string; children: ReactNode }) {
+  return (
+    <a href={href} download={download}
+      className={`agx-btn ${CHIP_SURFACE_CLS} inline-flex items-center justify-center rounded-lg whitespace-nowrap leading-none text-[11px] px-2.5`}
+      style={{ height: CTRL_H.regular, ...CHIP_SURFACE, fontWeight: 500 }}>
+      {children}
+    </a>
   );
 }

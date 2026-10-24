@@ -50,7 +50,7 @@ const AXIS = String.raw`(?:p|px|py|pt|pb|pl|pr|m|mx|my|mt|mb|ml|mr|gap|gap-x|gap
  * and not a rhythm. Rounding them to the scale would misalign the very column
  * they exist to line up with.
  */
-const ALLOWED_ARBITRARY = new Set(["pl-[18px]", "pl-[30px]", "ml-[60px]"]);
+const ALLOWED_ARBITRARY = new Set(["pl-[18px]", "ml-[60px]"]);
 
 /**
  * Off-grid inline spacing that stays, each because the Finder must be

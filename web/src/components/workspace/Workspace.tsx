@@ -24,6 +24,7 @@ import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useSta
 import { createPortal } from "react-dom";
 import { hiddenOnly } from "./hiddenOnly.ts";
 import { ViewRail, type RailPip } from "./ViewRail.tsx";
+import { railBadgesKey, subscribeRailBadges, visiblePips } from "../../lib/railBadges.ts";
 import { pushScope } from "../../lib/findScope.ts";
 import { VIEWS, saveLastView, type ViewId } from "./views.ts";
 import { ViewBoundary } from "./ViewBoundary.tsx";
@@ -138,6 +139,8 @@ export function Workspace({
   const firedReminders = useSyncExternalStore(subscribeReminders, firedCount, firedCount);
   const lanternWaiting = useSyncExternalStore(subscribeLantern, lanternNeed, lanternNeed);
 
+  // A count the person turned off in Settings (Sidebar) is not drawn.
+  useSyncExternalStore(subscribeRailBadges, railBadgesKey, railBadgesKey);
   const pips: Partial<Record<ViewId, RailPip>> = {
     chat: chatWaiting > 0 ? { count: chatWaiting } : {},
     // The lantern lights: how many agents are stopped on a person right now.
@@ -202,9 +205,9 @@ export function Workspace({
   return (
     <div ref={frameRef} tabIndex={-1} className="flex-1 min-h-0 flex outline-none">
       <ViewRail view={view} onSelect={onView} onSkills={onSkills}
-        onSettings={onSettings} onMachine={onMachine} pips={pips} />
+        onSettings={onSettings} onMachine={onMachine} pips={visiblePips(pips)} />
 
-      <div className="relative flex-1 min-w-0">
+      <div className="agx-ws-content relative flex-1 min-w-0">
         {mounted.map((v) => {
           const active = v.id === view;
           return (

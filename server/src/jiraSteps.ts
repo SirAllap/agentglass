@@ -34,8 +34,8 @@ import type { HandoffUnassign, JiraBlockOutcome, JiraHandoffRule, JiraStep, Jira
 import { prAddress } from "../../shared/taskref.ts";
 import {
   ISSUE_KEY, NOT_ACCEPTED, NOT_CONNECTED, WRITE_OFF, apiOf, assigneeBody, assignRefusal, badPerson, epoch, handoffMoves, handoffRules, isObj, jiraCall,
-  jiraWriteEnabled, linkPullRequest, movesPath, personId, personName, projectKey, readBefore, readIssue, readSettingsFile, stale, unreadable, storedCreds, str, writeSettingsKey,
-  type HandoffMove, type HandoffOutcome, type JiraCreds, type JiraResult,
+  jiraWriteEnabled, linkPullRequest, movesPath, personId, personName, projectKey, readBefore, readIssue, readSettingsFile, stale, unreadable, storedCreds, str, writeRefusal, writeSettingsKey,
+  type HandoffMove, type HandoffOutcome, type JiraCreds, type JiraResult, type JiraWriteKind,
 } from "./jira.ts";
 import { commentOn } from "./jiraComments.ts";
 import { bad, isObj as isObject, settle, type Res, type StepGroup } from "./stepSettings.ts";
@@ -230,6 +230,12 @@ async function runStepOnce(creds: JiraCreds, key: string, updated: number, which
   const step = steps[stepKey];
   if (!step.enabled) return { ok: false, error: "That step is switched off: turn it on in Settings" };
   const plan = planOf<string | number>(TRIGGER[stepKey], { enabled: true, statusNames: [], assign: NO_ASSIGN, blocks: step.blocks });
+  // A step is refused whole when a kind it uses is switched off: half a hand-off (moved, then not commented) is the thing to avoid.
+  const KIND_OF: Record<string, JiraWriteKind | undefined> = { move: "move", assign: "assign", unassign: "assign", comment: "comment", link: "link" };
+  for (const t of new Set(step.blocks.map((b) => KIND_OF[b.type]))) {
+    const off = t ? writeRefusal(t) : null;
+    if (off) return { ok: false, error: `${off}, and this step uses it` };
+  }
   const wantsLink = step.blocks.some((b) => b.type === "link");
   if (wantsLink && !pr?.url) return { ok: false, error: "This step links a pull request, and none was given" };
   // A step's comment quotes the address (`{pr_url}`) and only the link block parsed it, so a step with a comment and

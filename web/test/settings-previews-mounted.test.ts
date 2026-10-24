@@ -67,7 +67,7 @@ describe("every page mounts its preview with the props the preview declares", ()
     const modal = read("components/SettingsModal.tsx");
     expect(modal).toContain("<DiffPreview split={dSplit} wrap={dWrap} syntaxTheme={dTheme} />");
     expect(modal).toContain("<LanternPreview watch={watch} everyMin={watchMinutes} wakeMin={cacheTtl} />");
-    expect(modal).toContain("<SidebarPreview items={railItems(rail)}");
+    expect(modal).toContain("<SidebarPreview items={items} selected={v.id} view={liveView} />");
     expect(modal).toContain("fullscreen={fullscreen}");
     expect(modal).toContain("startAtLogin={autostart === true}");
     expect(modal).toContain("launchAnimation={splash}");
@@ -125,10 +125,12 @@ describe("the rail the pictures draw is the rail the person has", () => {
   });
   test("the Rail page highlights the view last touched, through every way of moving one", () => {
     const m = read("components/SettingsModal.tsx");
-    const pane = m.slice(m.indexOf("function RailPane()"), m.indexOf("function MiniBtn"));
-    expect(pane).toContain("selected={touched ?? rail.work[0]?.id ?? \"\"}");
+    const pane = m.slice(m.indexOf("function RailPane()"), m.indexOf("/**\n * A group of settings."));
+    // The picture draws the picked view as the active one, and every way of moving a view picks it.
+    expect(pane).toContain("<SidebarPreview items={items} selected={v.id} view={liveView} />");
     expect(pane).not.toContain("moveView(v.id");
-    expect(pane).toContain("setTouched(v.id); setting(`rail.place.${v.id}`).set(p)");
+    expect(pane).toContain("setPick(v.id); setting(`rail.place.${v.id}`).set(p)");
+    expect(pane).toContain("const move = (id: ViewId, place: RailPlace, to: number) => { setPick(id); moveView(id, place, to); };");
   });
 });
 

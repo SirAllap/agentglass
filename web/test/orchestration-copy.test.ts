@@ -43,7 +43,7 @@ const state = (over: Partial<PolicyRuleState> = {}): PolicyRuleState => ({
 
 const policy = (): Policy => composePolicy(defaultStored(), {
   orchestrator: { engine: "claude", model: "sonnet" },
-  workers: { scout: { engine: "opencode", model: "" }, builder: { engine: "claude", model: "sonnet" }, verifier: { engine: "claude", model: "haiku" } },
+  workers: { scout: { engine: "opencode", model: "" }, builder: { engine: "claude", model: "sonnet" }, reviewer: { engine: "claude", model: "sonnet" }, verifier: { engine: "claude", model: "haiku" } },
 });
 
 describe("the sentence form of each trigger kind", () => {

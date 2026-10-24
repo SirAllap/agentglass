@@ -12,9 +12,9 @@
  */
 import type { ReactNode } from "react";
 import { ICON } from "../lib/iconSize.ts";
-import { IconLabel, PlusIcon } from "../lib/glyphIcons.tsx";
-import { Button, FilterField, Segmented } from "./workspace/Chrome.tsx";
-import { StatusBadge, type StatusTone } from "./SettingsKit.tsx";
+import { IconLabel, PlusIcon, SearchIcon } from "../lib/glyphIcons.tsx";
+import { Button, FilterField } from "./workspace/Chrome.tsx";
+import { SegControl, StatusBadge, type StatusTone } from "./SettingsKit.tsx";
 
 export interface ListEntry {
   id: string;
@@ -46,9 +46,12 @@ export function ListBar<F extends string>({ q, onQ, placeholder, label, filters,
 }) {
   return (
     <div className="agx-le-bar">
-      <FilterField value={q} onChange={onQ} placeholder={placeholder} label={label} className="agx-le-q" />
+      <span className="agx-le-q">
+        <SearchIcon size={ICON.sm} />
+        <FilterField value={q} onChange={onQ} placeholder={placeholder} label={label} />
+      </span>
       {filters && filter !== undefined && onFilter && (
-        <Segmented<F> value={filter} options={filters} onChange={onFilter} label={`Narrow ${label.toLowerCase()}`} />
+        <SegControl<F> value={filter} options={filters.map((f) => ({ v: f.id, label: f.label }))} onPick={onFilter} label={`Narrow ${label.toLowerCase()}`} />
       )}
       <span className="flex-1" />
       {children}

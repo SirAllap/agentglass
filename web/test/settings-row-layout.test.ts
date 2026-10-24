@@ -52,7 +52,7 @@ describe("a description is shown whole", () => {
     expect(rowCode).not.toMatch(/HINT_FOLD_WORDS|hintNeedsFold|HintMore|agx-settings-hint-clamp|agx-settings-more/);
     expect(css).not.toMatch(/agx-settings-hint-clamp|agx-settings-more/);
     const row = fnBody(rowCode, "export function SettingRow(");
-    expect(row).toContain('<span className="agx-row-help">{hint}</span>');
+    expect(row).toContain('<span className="agx-row-help"><Ticks>{hint}</Ticks></span>');
     // The help is one muted, unclamped line under the name, drawn by the class.
     const help = css.match(/\.agx-row-help \{[^}]*\}/)?.[0] ?? "";
     expect(help).toContain("color: var(--text3)");

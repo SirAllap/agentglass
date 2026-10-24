@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { SettingRow } from "./SettingRow.tsx";
 import { ColumnsIcon } from "./settingsNavIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { EmptyState, Field, SettingsCard, SettingsForm, helpIdFor } from "./SettingsKit.tsx";
+import { EmptyState, SettingsCard } from "./SettingsKit.tsx";
+import { Select } from "./Select.tsx";
 import { api } from "../lib/api.ts";
 import { fmtUsd } from "../lib/format.ts";
 import type { GitRepoRef } from "../../../shared/types.ts";
@@ -62,9 +63,10 @@ export function BudgetsPane({ open }: { open: boolean }) {
   const patch = (i: number, over: Partial<Budget>) =>
     void save((rows ?? []).map((b, n) => (n === i ? { ...b, ...over } : b)));
 
-  const card = (children: ReactNode, actions?: ReactNode) => (
-    <SettingsCard title="Spending" icon={<ColumnsIcon size={ICON.sm} />} desc="A ceiling you set, so the insights stop firing on constants." actions={actions}>
+  const card = (children: ReactNode, foot?: ReactNode) => (
+    <SettingsCard title="Spending" icon={<ColumnsIcon size={ICON.sm} />} desc="A ceiling you set, so the insights stop firing on constants.">
       {children}
+      {foot && <div className="agx-gb-foot">{foot}</div>}
     </SettingsCard>
   );
   if (!rows) return card(<EmptyState>Reading budgets…</EmptyState>);
@@ -72,12 +74,11 @@ export function BudgetsPane({ open }: { open: boolean }) {
   const statusFor = (b: Budget) =>
     status.find((s) => s.budget.root === b.root && s.budget.model === b.model && s.budget.period === b.period);
 
-  /* A budget used to be one sentence with four controls in it ("Spend no more
-     than $ [40] [a month] on [repo] [model]"), which at any width but the
-     widest broke across two lines with a select stranded at the end. It is a
-     row now: the sentence says what it is (and where it stands), Remove sits
-     beside it where every row's action sits, and the four choices are stacked
-     fields under it. Add is the card's one action. */
+  /* A budget is a row of a table: the limit, the period, the repository and the
+     model are the four columns, Remove sits where every row's action sits, and
+     the bar under it says how near the ceiling the spend is. Under 560px of
+     card the four fields wrap into two lines (`.agx-btable`). Add is the card's
+     footer, the one action. */
   return card(<>
     {rows.length === 0 && (
       <EmptyState>
@@ -86,81 +87,66 @@ export function BudgetsPane({ open }: { open: boolean }) {
       </EmptyState>
     )}
 
-    {rows.map((b, i) => {
-      const s = statusFor(b);
-      const pct = s ? Math.min(1, s.pct) : 0;
-      const tint = s?.level === "over" ? "var(--error)" : s?.level === "warn" ? "var(--warning)" : "var(--success)";
-      const ink = s?.level === "over" ? "var(--error-ink)" : s?.level === "warn" ? "var(--warning-ink)" : "var(--text3)";
-      const per = b.period === "day" ? "a day" : b.period === "week" ? "a week" : "a month";
-      const id = `budget-${i}`;
-      return (
-        <SettingRow key={i}
-          label={b.limit > 0 ? `Spend no more than $${b.limit} ${per}` : "New budget"}
-          /* The denominator, where the number is. A budget you cannot see
-             yourself approaching is one you only hear about once. */
-          hint={s ? (
-            <span className="block">
-              <span className="block h-1 rounded-full overflow-hidden mt-1.5" style={{ background: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-                <span className="block" style={{ width: `${pct * 100}%`, height: "100%", background: tint }} />
-              </span>
-              <span className="block mt-1" style={{ color: ink }}>
-                {fmtUsd(s.spent)} of {fmtUsd(s.budget.limit)} · {Math.round(s.pct * 100)}%
-                <span className="t-dim"> · {s.fromDay} to {s.toDay}</span>
-              </span>
-            </span>
-          ) : undefined}
-          actions={<Button tone="danger" onClick={() => void save(rows.filter((_, n) => n !== i))}>Remove</Button>}
-          below={
-            <SettingsForm label={`Budget ${i + 1}`} onSubmit={() => { /* saved as it is edited */ }}>
-              <Field label="Limit" htmlFor={`${id}-limit`} help="In dollars. A budget with no amount is not saved.">
-                <input id={`${id}-limit`} aria-describedby={helpIdFor(`${id}-limit`)}
-                  className={`w-32 t-mono ${INPUT}`} style={INPUT_STYLE}
-                  inputMode="decimal"
-                  value={b.limit || ""}
-                  placeholder="40"
+    {rows.length > 0 && (
+      <div className="agx-btable" role="table" aria-label="Budgets">
+        {rows.map((b, i) => {
+          const s = statusFor(b);
+          const pct = s ? Math.min(1, s.pct) : 0;
+          const tint = s?.level === "over" ? "var(--error)" : s?.level === "warn" ? "var(--warning)" : "var(--success)";
+          const ink = s?.level === "over" ? "var(--error-ink)" : s?.level === "warn" ? "var(--warning-ink)" : "var(--text3)";
+          const id = `budget-${i}`;
+          return (
+            <div key={i} className="agx-btable-r" role="row" aria-label={`Budget ${i + 1}`}>
+              <label className="agx-btable-c agx-btable-limit" htmlFor={`${id}-limit`}>
+                <span aria-hidden>$</span>
+                <input id={`${id}-limit`} aria-label="Limit, in dollars" className={`t-mono ${INPUT}`} style={INPUT_STYLE}
+                  inputMode="decimal" value={b.limit || ""} placeholder="40"
                   onChange={(e) => patch(i, { limit: Number(e.target.value.replace(/[^0-9.]/g, "")) || 0 })} />
-              </Field>
-              <Field label="Period" htmlFor={`${id}-period`}>
-                <select id={`${id}-period`} className={`w-40 ${INPUT}`} style={INPUT_STYLE}
-                  value={b.period} onChange={(e) => patch(i, { period: e.target.value as BudgetPeriod })}>
-                  <option value="day">a day</option>
-                  <option value="week">a week</option>
-                  <option value="month">a month</option>
-                </select>
-              </Field>
-              {/* "everything" is the empty root, and it has to stay reachable —
-                  a budget with no checkout is the whole machine's. */}
-              <Field label="Repository" htmlFor={`${id}-repo`} help="Empty is everything this machine works on.">
-                <div id={`${id}-repo`}>
-                  <CheckoutPicker repos={repos} value={b.root}
-                    onPick={(r) => patch(i, { root: r === b.root ? "" : r })}
-                    placeholder="everything" triggerMaxWidth={320} />
-                </div>
-              </Field>
-              <Field label="Model" htmlFor={`${id}-model`}>
-                <select id={`${id}-model`} className={`w-full ${INPUT}`} style={INPUT_STYLE}
-                  value={b.model} onChange={(e) => patch(i, { model: e.target.value })}>
-                  <option value="">any model</option>
-                  {models.map((m) => <option key={m} value={m}>{m}</option>)}
-                  {b.model && !models.includes(b.model) && <option value={b.model}>{b.model}</option>}
-                </select>
-              </Field>
-            </SettingsForm>
-          } />
-      );
-    })}
+              </label>
+              <span className="agx-btable-c agx-btable-period" role="cell">
+                <Select value={b.period} title="Period" onChange={(v) => patch(i, { period: v as BudgetPeriod })}
+                  options={[{ value: "day", label: "a day" }, { value: "week", label: "a week" }, { value: "month", label: "a month" }]} />
+              </span>
+              {/* "everything" is the empty root, and it has to stay reachable — a budget with no checkout is the whole machine's. */}
+              <span className="agx-btable-c agx-btable-repo" role="cell" title="Empty is everything this machine works on.">
+                <CheckoutPicker repos={repos} value={b.root}
+                  onPick={(r) => patch(i, { root: r === b.root ? "" : r })}
+                  placeholder="everything" triggerMaxWidth={200} />
+              </span>
+              <span className="agx-btable-c agx-btable-model" role="cell">
+                <Select value={b.model} title="Model" onChange={(v) => patch(i, { model: v })}
+                  options={[{ value: "", label: "any model" }, ...models.map((m) => ({ value: m, label: m })),
+                    ...(b.model && !models.includes(b.model) ? [{ value: b.model, label: b.model }] : [])]} />
+              </span>
+              <Button tone="danger" onClick={() => void save(rows.filter((_, n) => n !== i))}>Remove</Button>
+              {/* The denominator, where the number is. A budget you cannot see yourself approaching is one you only hear about once. */}
+              {s && (
+                <span className="agx-btable-bar">
+                  <span className="agx-btable-track"><span style={{ width: `${pct * 100}%`, background: tint }} /></span>
+                  <span style={{ color: ink }}>
+                    {fmtUsd(s.spent)} of {fmtUsd(s.budget.limit)} · {Math.round(s.pct * 100)}%
+                    <span className="t-dim"> · {s.fromDay} to {s.toDay}</span>
+                  </span>
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    )}
 
     <SettingRow
       label="How a budget is counted"
-      hint={<>
+      hint="What goes into the number."
+      detail={{ summary: "Details", body: <>
         Counted from the daily rollup as well as live events, so a monthly budget really means a month —
         raw events are only kept for <span className="t-mono">AGENTGLASS_RETENTION_DAYS</span> (8 by
         default). You are warned at 80% rather than only when you cross it.
-      </>} />
+      </> }} />
     {err && <div role="alert" className="agx-settings-x pt-2 pb-3 text-[11px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
   </>,
-  <Button disabled={busy}
+  <Button tone="primary" disabled={busy}
     onClick={() => setRows([...(rows ?? []), { root: "", model: "", limit: 0, period: "month" }])}>
-    Add budget
+    Add a budget
   </Button>);
 }

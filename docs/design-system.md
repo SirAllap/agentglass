@@ -405,9 +405,14 @@ Every settings page is built from the blocks in
     "Delete").
   - `wide` is for a card that is a list, an editor or a table: it spans every
     column of the page flow.
-- `SettingRow` — the name 13.5px semibold in `--text`, the help one muted line
-  in 12px `--text3` under it, shown whole (never clamped, no More/Less). Long
-  text goes in `detail`, a `Disclosure` under the help. The control column is
+- `SettingRow` — the name 13.86px bold in `--text`, the help one muted line
+  in 11.76px `--text3` under it, shown whole (never clamped, no More/Less). Long
+  text goes in `detail` (named "Details"), a `Disclosure` under the help; on a
+  row that is itself a button (a `Toggle`) it is drawn as the next sibling,
+  `.agx-row-more`, so the row keeps one click target. A card is 13px radius with
+  the mockup's soft lower shadow; its header is a 22px icon chip, the title
+  15.96px bold, and the sentence under it 12.04px; the page title is 23.1px bold.
+  The control column is
   `status` first, then `control` or `actions`, as wide as its content and no
   wider; the words keep 14rem, so a control wider than the rest (a three-way
   choice) wraps inside its own track. Inline in that column: one switch,
@@ -416,7 +421,25 @@ Every settings page is built from the blocks in
   spans the row. In a card narrower than 440px the control drops under the
   words. The switch is green when on, the segmented choice raises the chosen
   one on the page's ground, and every select on a settings page is the page's
-  ground with an edge, 32px tall.
+  ground with an edge, 32px tall. Text fields and native selects on a settings
+  page take the page's ground, a visible edge (`--border2`) and the primary as a
+  3px ring on focus. A short exclusive choice in a row (display size, 12h/24h) is
+  `SegControl` from `SettingsKit`; a numbered list (what happens at login) sits
+  in `.agx-steps`, 22px inset circles and no rule between steps.
+- The look preferences (`lib/lookPrefs.ts`) are four attributes on `<html>` that
+  `index.css` reads and nothing else does: `data-density` scales the 8/10/12px
+  vertical padding steps and the Settings rows, `data-ui-font` scales every
+  `text-[Npx]` class and every size the stylesheet sets (written
+  `calc(Npx * var(--agx-fs, 1))`, so a new bare `font-size: Npx` is refused by
+  `look-prefs.test.ts`), `data-translucent` lets `--surface-nav` through, and
+  `data-reduce-motion` ends every animation. Density and font size are written
+  without `html`, so a preview can wear its own value. The Appearance and
+  Window previews are the app's own screens (a Settings page, the Lantern's
+  cards, a diff) in a window laid out at the Display size, never the Dashboard.
+- The nav group hues are five fixed mid-tones, the same in every theme
+  (`--g-general` #6b7bb8, `--g-workspace` #3f9a93, `--g-agents` #d98a6c,
+  `--g-library` #c4982f, `--g-connections` #5c8fc4): used only as a 17% tint, a
+  3px bar on the chosen nav row and a glyph mixed with the text colour.
 - `StatusBadge` — one chip family for a row, a card header and the page
   header: 22px (`CTRL_H.compact`), a dot and a few words, on a tint of the
   hue, in that hue's `--*-ink`: `ok`, `warn` (only when the person is needed),

@@ -25,7 +25,7 @@
  * in a line under the grid rather than dropped silently, so a market that
  * looks empty says why.
  */
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api } from "../../lib/api.ts";
 import { ICON } from "../../lib/iconSize.ts";
 import { externalUrl } from "../../lib/externalUrl.ts";
@@ -33,12 +33,14 @@ import { ExternalIcon } from "../browser/icons.tsx";
 import { Portal } from "../Portal.tsx";
 import { CloseButton } from "../CloseButton.tsx";
 import { LAYER } from "../../lib/layers.ts";
-import { Button, CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS, Chip, EDGE, INPUT, INPUT_STYLE, LINE, RefreshButton } from "../workspace/Chrome.tsx";
+import { Button, CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS, EDGE, tintEdge, INPUT, INPUT_STYLE, LINE, RefreshButton } from "../workspace/Chrome.tsx";
 import { PluginPreview } from "./PluginPreview.tsx";
 import { PLUGIN_CTRL_H } from "../../lib/pluginCard.ts";
-import { EmptyState, StatusBadge } from "../SettingsKit.tsx";
+import { EmptyState, FIELD_SELECT, SegControl, StatusBadge } from "../SettingsKit.tsx";
+import { Select } from "../Select.tsx";
+import { InfoIcon, SearchIcon } from "../../lib/glyphIcons.tsx";
 import { PageHead } from "./PageHead.tsx";
-import type { Catalogue, InstallSource, PublicPlugin } from "../../../../shared/types.ts";
+import type { Catalogue, DeviceScope, InstallSource, PublicPlugin } from "../../../../shared/types.ts";
 
 /** The list this project publishes, on its own site, and the same document
  *  its plugins page is drawn from. */
@@ -64,6 +66,8 @@ const DRAWS_WORD: Record<string, string> = {
  *  grew to that is two dozen cards and a pager, not five hundred cards with
  *  their own state laid out on the thread the settings page scrolls on. */
 const PAGE = 24;
+/** Types drawn in the bar itself; the rest are in the select beside it. */
+const BAR_TYPES = 3;
 
 type Entry = Catalogue["plugins"][number];
 type State =
@@ -115,6 +119,51 @@ export function types(entries: Entry[]): { name: string; count: number }[] {
   for (const e of entries) for (const c of e.categories ?? []) n.set(c, (n.get(c) ?? 0) + 1);
   return [...n].map(([name, count]) => ({ name, count }))
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
+
+/** The words a scope filter and a card use for what a plugin may do. */
+export const SCOPE_LABEL: Record<DeviceScope, string> = { read: "reads only", answer: "can answer", full: "full access" };
+
+/**
+ * The shelf narrowed to one scope. An entry whose listing does not say what it asks for is left out when a
+ * scope is picked: guessing "reads only" for it is the one mistake this filter must not make.
+ */
+export function byScope(entries: Entry[], scope: "any" | DeviceScope): Entry[] {
+  return scope === "any" ? entries : entries.filter((e) => e.scope === scope);
+}
+
+/**
+ * Keep the entries whose listing states this licence. An entry that states none is left out once a
+ * licence is picked, for the same reason as a scope: never guessing "MIT" for a listing that is silent.
+ */
+export function byLicence(entries: Entry[], licence: string): Entry[] {
+  return licence === "" ? entries : entries.filter((e) => e.license === licence);
+}
+
+/** The licences the shelf states, commonest first, so the filter offers only what could match. */
+export function licencesOn(entries: Entry[]): string[] {
+  const n = new Map<string, number>();
+  for (const e of entries) if (e.license) n.set(e.license, (n.get(e.license) ?? 0) + 1);
+  return [...n].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([l]) => l);
+}
+
+/** The scopes the shelf states, so the filter offers only what could match. */
+export function scopesOn(entries: Entry[]): DeviceScope[] {
+  const have = new Set(entries.map((e) => e.scope));
+  return (["read", "answer", "full"] as const).filter((s) => have.has(s));
+}
+
+/**
+ * What a card says before anything is installed: the scope first, then where it draws, at most `max`
+ * of them and the number left over, so a plugin that does six things has a card as tall as one that
+ * does one.
+ */
+export function capabilityChips(entry: Pick<Entry, "scope" | "draws">, max = 3): { chips: { text: string; ok?: boolean }[]; more: number } {
+  const all = [
+    ...(entry.scope ? [{ text: SCOPE_LABEL[entry.scope], ok: entry.scope === "read" }] : []),
+    ...(entry.draws ?? []).map((d) => ({ text: DRAWS_WORD[d] ?? d })),
+  ];
+  return { chips: all.slice(0, max), more: Math.max(0, all.length - max) };
 }
 
 /**
@@ -170,7 +219,22 @@ export function Market({ installed, onInstalled, onLoaded, onSettings }: {
   const [q, setQ] = useState("");
   const [type, setType] = useState<string | null>(null);
   const [sort, setSort] = useState<Sort>("recent");
+  const [scope, setScope] = useState<"any" | DeviceScope>("any");
+  const [licence, setLicence] = useState("");
   const [page, setPage] = useState(0);
+  const search = useRef<HTMLInputElement>(null);
+  /* "/" jumps to the search, the way it does in the pull request list. Not Ctrl K: that is the palette, everywhere. */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+      e.preventDefault();
+      search.current?.focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const load = useCallback(async () => {
     setState({ kind: "loading" });
@@ -185,8 +249,13 @@ export function Market({ installed, onInstalled, onLoaded, onSettings }: {
   const kinds = useMemo(() => types(all), [all]);
   const found = useMemo(() => {
     const byType = type ? all.filter((e) => (e.categories ?? []).includes(type)) : all;
-    return sorted(matching(byType, q), sort);
-  }, [all, q, type, sort]);
+    return sorted(matching(byLicence(byScope(byType, scope), licence), q), sort);
+  }, [all, q, type, sort, scope, licence]);
+  const scopes = useMemo(() => scopesOn(all), [all]);
+  const licences = useMemo(() => licencesOn(all), [all]);
+  // The four commonest types sit in the bar; the rest are one pick away, so no tag the listing has is out of reach.
+  const bar = kinds.slice(0, BAR_TYPES);
+  const rest = kinds.slice(BAR_TYPES);
   const pages = Math.max(1, Math.ceil(found.length / PAGE));
   const here = Math.min(page, pages - 1);
   const shown = found.slice(here * PAGE, here * PAGE + PAGE);
@@ -204,31 +273,38 @@ export function Market({ installed, onInstalled, onLoaded, onSettings }: {
 
       {/* Always here, never conditional on how long the list is: a search box
           that appears once a market grows past some number is a search box
-          nobody learns is there. */}
-      <div className="flex items-center gap-2 flex-wrap mb-3">
-        <input value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }}
-          placeholder="Search plugins, words, publishers" aria-label="Search the market" spellCheck={false}
-          className={`w-[420px] max-w-full ${INPUT}`} style={{ ...INPUT_STYLE, height: PLUGIN_CTRL_H }} />
-        <select value={sort} onChange={(e) => { setSort(e.target.value as Sort); setPage(0); }} aria-label="Sort the market"
-          className={INPUT} style={{ ...INPUT_STYLE, height: PLUGIN_CTRL_H }}>
-          <option value="recent">Recently added</option>
-          <option value="name">Name</option>
-        </select>
+          nobody learns is there. One row: the search, what the plugin may do,
+          the order, and the types — the second half of "how do I find one": the
+          box answers "the one that…", these answer "what is there for…". */}
+      <div className="agx-mbar">
+        <label className="agx-msearch">
+          <SearchIcon size={ICON.sm} />
+          <input ref={search} value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }}
+            placeholder="Search plugins, words, publishers" aria-label="Search the market" spellCheck={false} className={INPUT} style={INPUT_STYLE} />
+          <kbd aria-hidden>/</kbd>
+        </label>
+        <Select title="Scope" className={`${FIELD_SELECT} agx-mselect`} value={scope} onChange={(v) => { setScope(v as typeof scope); setPage(0); }}
+          options={[
+            { value: "any", label: "Any scope" },
+            ...scopes.map((s) => ({ value: s, label: SCOPE_LABEL[s] })),
+          ]} />
+        <Select title="Licence" className={`${FIELD_SELECT} agx-mselect`} value={licence} onChange={(v) => { setLicence(v); setPage(0); }}
+          options={[{ value: "", label: "Any licence" }, ...licences.map((l) => ({ value: l, label: l }))]} />
+        <Select title="Sort the market" className={`${FIELD_SELECT} agx-mselect`} value={sort} onChange={(v) => { setSort(v as Sort); setPage(0); }}
+          options={[{ value: "recent", label: "Recently added" }, { value: "name", label: "Name" }]} />
+        <span className="flex-1" />
+        {state.kind === "ok" && kinds.length > 1 && (
+          <>
+            <SegControl<string> label="Filter by type" value={type ?? ""} onPick={(v) => { setType(v || null); setPage(0); }}
+              options={[{ v: "", label: `All ${all.length}` }, ...bar.map((k) => ({ v: k.name, label: `${k.name} ${k.count}` }))]} />
+            {rest.length > 0 && (
+              <Select title="More types" className={`${FIELD_SELECT} agx-mselect`} value={rest.some((k) => k.name === type) ? type! : ""} placeholder={`${rest.length} more types`}
+                onChange={(v) => { setType(v || null); setPage(0); }}
+                options={rest.map((k) => ({ value: k.name, label: `${k.name} ${k.count}` }))} />
+            )}
+          </>
+        )}
       </div>
-
-      {/* The types, as a row of their own — the second half of "how do I find
-          one": the box answers "the one that…", these answer "what is there
-          for…". Counted, so the row says how big the market is per kind. */}
-      {state.kind === "ok" && kinds.length > 1 && (
-        <div className="flex items-center gap-1.5 flex-wrap mb-3.5" role="group" aria-label="Filter by type">
-          <TypeChip on={type === null} onClick={() => { setType(null); setPage(0); }} label="All" count={all.length} />
-          {kinds.map((k) => (
-            <TypeChip key={k.name} on={type === k.name}
-              onClick={() => { setType(type === k.name ? null : k.name); setPage(0); }}
-              label={k.name} count={k.count} />
-          ))}
-        </div>
-      )}
 
       {state.kind === "loading" && <EmptyState><StatusBadge tone="checking">Checking</StatusBadge> Reading the market…</EmptyState>}
 
@@ -255,8 +331,8 @@ export function Market({ installed, onInstalled, onLoaded, onSettings }: {
       )}
 
       {state.kind === "ok" && found.length === 0 && (
-        <EmptyState>{q.trim() || type
-          ? `Nothing in the market matches ${[q.trim() && `“${q.trim()}”`, type && `“${type}”`].filter(Boolean).join(" and ")}.`
+        <EmptyState>{q.trim() || type || scope !== "any"
+          ? `Nothing in the market matches ${[q.trim() && `“${q.trim()}”`, type && `“${type}”`, scope !== "any" && SCOPE_LABEL[scope]].filter(Boolean).join(" and ")}.`
           : "The market lists nothing yet."}</EmptyState>
       )}
 
@@ -271,8 +347,9 @@ export function Market({ installed, onInstalled, onLoaded, onSettings }: {
       {/* Where the list comes from and what it costs to look at it — the
           footnote of the section rather than a heading above it. */}
       {state.kind === "ok" && (
-        <p className="m-0 mt-3 text-[12px] t-dim">
-          Read fresh from{" "}
+        <p className="agx-pnote">
+          <InfoIcon size={ICON.sm} />
+          <span>Read fresh from{" "}
           <a href={MARKET_PAGE} target="_blank" rel="noopener noreferrer"
             className="underline underline-offset-2 hover:opacity-80" style={{ color: "var(--text3)" }}>
             this project's plugin page
@@ -281,20 +358,10 @@ export function Market({ installed, onInstalled, onLoaded, onSettings }: {
           {/* What the server kept back has to be said, or a market past the
               cap quietly becomes a shorter market. */}
           {state.catalogue.total > all.length && ` That page lists ${state.catalogue.total}; the first ${all.length} were read.`}
+          </span>
         </p>
       )}
     </section>
-  );
-}
-
-/** One type on the filter row. A button, not a label: the whole thing is the
- *  hit area, and the count is inside it so the pair never wraps apart. */
-function TypeChip({ label, count, on, onClick }: { label: string; count: number; on: boolean; onClick: () => void }) {
-  return (
-    <Chip on={on} onClick={onClick}>
-      {label}
-      <span className="tabular-nums" style={{ color: on ? "var(--primary-ink)" : "var(--text4)" }}>{count}</span>
-    </Chip>
   );
 }
 
@@ -330,7 +397,7 @@ export function Offer({ entry, owner, onInstalled, mode, was = null, onSettings 
     else setError(r.error);
   };
 
-  const draws = (entry.draws ?? []).map((d) => DRAWS_WORD[d] ?? d);
+  const caps = capabilityChips(entry);
   const repo = externalUrl(entry.source.url);
   const tint = tintOf(entry.id);
   const ref = entry.source.ref;
@@ -371,18 +438,26 @@ export function Offer({ entry, owner, onInstalled, mode, was = null, onSettings 
       <p className="m-0 text-[12.5px] leading-snug" style={{ color: "var(--text2)", display: "-webkit-box", WebkitLineClamp: 4, WebkitBoxOrient: "vertical", overflow: "hidden" }}
         title={entry.description}>{entry.description}</p>
       {/* Plain tags, not seven chips on two rows: every one of those chips
-          was the same weight as the plugin's name. */}
-      {draws.length > 0 && (
+          was the same weight as the plugin's name. Three at most, then "+N more". */}
+      {(caps.chips.length > 0) && (
         <div className="flex flex-wrap gap-1.5">
-          {draws.map((d) => (
-            <span key={d} className="text-[10.5px] px-1.5 rounded-md inline-flex items-center whitespace-nowrap" style={{ height: 20, color: "var(--text2)", border: EDGE }}>{d}</span>
+          {caps.chips.map((c) => (
+            <span key={c.text} className="text-[10.5px] px-1.5 rounded-md inline-flex items-center whitespace-nowrap"
+              style={{ height: 20, color: c.ok ? "var(--success-ink)" : "var(--text2)", border: c.ok ? tintEdge("var(--success)", 45) : EDGE,
+                background: c.ok ? "color-mix(in srgb, var(--success) 10%, transparent)" : undefined }}>{c.text}</span>
           ))}
+          {caps.more > 0 && <span className="text-[10.5px] inline-flex items-center t-dim" style={{ height: 20 }} title={[...(entry.scope ? [SCOPE_LABEL[entry.scope]] : []), ...(entry.draws ?? []).map((d) => DRAWS_WORD[d] ?? d)].join(", ")}>+{caps.more} more</span>}
         </div>
       )}
       {(ref || entry.sha256) && (
         <div className="flex items-center gap-2 px-3 rounded-lg min-w-0 text-[11px]" style={{ minHeight: 30, background: "var(--surface-inset)", border: EDGE, color: "var(--text2)" }}>
+          {/* Filled when the listing names bytes (a hash the install holds the tree to), hollow when it names only a pointer. */}
+          <span aria-hidden className="agx-pin-dot shrink-0" data-pinned={entry.sha256 ? "true" : undefined}
+            title={entry.sha256 ? "The install refuses files that do not hash to this listing" : "Not pinned to a content hash"} />
           {ref && <span className="t-mono shrink-0" style={{ color: "var(--text)" }} title={ref}>{commit ? commit.slice(0, 7) : ref}</span>}
           {entry.sha256 && <span className="t-mono truncate" title={entry.sha256}>sha256 {entry.sha256.slice(0, 12)}…</span>}
+          <span className="flex-1" />
+          {entry.license && <span className="shrink-0" title="Licence, as the listing states it">{entry.license}</span>}
         </div>
       )}
       <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-[11.5px] t-dim">
@@ -400,13 +475,14 @@ export function Offer({ entry, owner, onInstalled, mode, was = null, onSettings 
       )}
       {error && <p className="m-0 text-[11.5px]" style={{ color: "var(--error-ink)" }}>{error}</p>}
       <div className="flex items-center gap-2 mt-auto pt-0.5">
-        <Button style={{ height: PLUGIN_CTRL_H }} onClick={() => setOpen(true)}>Read the listing</Button>
+        <span className="flex-1" />
+        <button type="button" className="agx-linkbtn" onClick={() => setOpen(true)}>Read the listing</button>
         {mode !== "installed" && (
-          <Button tone="primary" style={{ height: PLUGIN_CTRL_H }} className="ml-auto" pending={busy} onClick={install}>
+          <Button tone="primary" style={{ height: PLUGIN_CTRL_H }} pending={busy} onClick={install}>
             {busy ? (mode === "update" ? "Updating…" : "Installing…") : (mode === "update" ? "Update" : "Install")}
           </Button>
         )}
-        {onSettings && <Button style={{ height: PLUGIN_CTRL_H }} className={mode === "installed" ? "ml-auto" : ""} onClick={onSettings}>Settings</Button>}
+        {onSettings && <Button style={{ height: PLUGIN_CTRL_H }} onClick={onSettings}>Settings</Button>}
       </div>
       </div>
     </article>
@@ -490,6 +566,14 @@ function Details({ entry, owner, tint, repo, open, busy, onClose, onInstall }: {
                     }}>{c}</span>
                   ))}
                 </div>
+              </Field>
+            )}
+
+            {(entry.scope || entry.license) && (
+              <Field label="Scope and licence">
+                <span className="text-[12px]" style={{ color: "var(--text2)" }}>
+                  {[entry.scope && `${SCOPE_LABEL[entry.scope]}, as its listing says`, entry.license && `licence ${entry.license}`].filter(Boolean).join(" · ")}
+                </span>
               </Field>
             )}
 

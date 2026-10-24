@@ -134,9 +134,12 @@ describe("a pane the server holds is read from its own route, by name", () => {
   });
 
   it("review prompts: the title and the size of the prompt, not its text", async () => {
-    patch("prPrompts", async () => ({ ok: true, recipes: [sneak({ id: "p1", title: "Resolve", body: `use ${CRED}`, skill: "/pr-resolve {number}", group: "review", when: "open", builtIn: true, hidden: false })] }));
+    patch("prPrompts", async () => ({ ok: true, recipes: [sneak({ id: "p1", title: "Resolve", body: `use ${CRED}`, skill: "/pr-resolve {number}", group: "review", when: "open", builtIn: true, hidden: false, edited: true })], hidden: [sneak({ id: "p2", title: "Gone", body: "x", group: "review", when: "open", builtIn: true, hidden: true })] }));
     const r = await P.readReviewPrompts();
-    expect(r).toEqual([{ id: "p1", title: "Resolve", group: "review", when: "open", builtIn: true, hidden: false, hasSkill: true, chars: 4 + CRED.length }]);
+    expect(r).toEqual([
+      { id: "p1", title: "Resolve", group: "review", when: "open", builtIn: true, hidden: false, edited: true, hasSkill: true, chars: 4 + CRED.length },
+      { id: "p2", title: "Gone", group: "review", when: "open", builtIn: true, hidden: true, edited: false, hasSkill: false, chars: 1 },
+    ]);
   });
 
   it("saved replies: the title and the length, not the reply", async () => {

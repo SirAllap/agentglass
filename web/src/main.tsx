@@ -12,6 +12,7 @@ import { ticketFromUrl, clearTicketFromUrl } from "./lib/pairing.ts";
 import { followServerChanges } from "./lib/desktop.ts";
 import { applyTheme, initialTheme, watchThemeStorage, watchSystemTheme, watchDesktopPalette } from "./lib/themes.ts";
 import { restoreScale } from "./lib/uiScale.ts";
+import { watchLook } from "./lib/lookPrefs.ts";
 import "./index.css";
 import "./fonts.ts"; // bundled monospace faces — see fonts.ts
 
@@ -29,6 +30,7 @@ watchDesktopPalette();
 // on every start. Fire-and-forget: it resolves a tick later and the window
 // reflows into it, which is far less jarring than blocking the first paint.
 restoreScale();
+watchLook();
 
 /*
  * There is one application now.

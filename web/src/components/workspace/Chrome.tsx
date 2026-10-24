@@ -422,7 +422,7 @@ export function ScopeChip({ label, kind, trailing = "none", on, onClick, title, 
   const safe = href ? externalUrl(href) : undefined;
   return safe
     ? <a href={safe} target="_blank" rel="noreferrer" title={title} className={cls} style={style}>{inner}</a>
-    : <button onClick={onClick} title={title} className={cls} style={style}>{inner}</button>;
+    : <button type="button" onClick={onClick} title={title} className={cls} style={style}>{inner}</button>;
 }
 
 /**
@@ -443,6 +443,7 @@ export function IconChip({ onClick, title, children, on, expanded, hasPopup, siz
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       title={title}
       {...(expanded !== undefined ? { "aria-expanded": expanded } : {})}
@@ -563,11 +564,13 @@ export function Button({
   const pad = square ? "" : size === "compact" ? "px-2" : "px-2.5";
   return (
     <button
+      type="button"
       {...rest}
       disabled={disabled || pending}
       title={pending ? "Working…" : title ?? label}
       aria-label={label}
       aria-busy={pending || undefined}
+      data-tone={tint || on !== undefined ? undefined : tone}
       className={`agx-btn ${CHIP_SURFACE_CLS} inline-flex items-center justify-center gap-1 rounded-lg whitespace-nowrap leading-none disabled:opacity-40 ${text} ${pad} ${className}`}
       style={{
         height: h, minWidth: square ? h : undefined, width: square ? h : undefined,

@@ -37,7 +37,7 @@ const stored = () => JSON.stringify((JSON.parse(readFileSync(join(dir, "agentgla
 const oc = [{ engine: "opencode", model: "" }];
 const cl = [{ engine: "claude", model: "" }];
 const ALWAYS = [{ kind: "always" }] as const;
-const every = (c: typeof oc) => ({ scout: c, builder: c, verifier: c });
+const every = (c: typeof oc) => ({ scout: c, builder: c, reviewer: c, verifier: c });
 const RULES = {
   "claude-orchestrates": { id: "preset-claude-orchestrates", name: "Quick setup: Claude Code orchestrates", enabled: true, when: ALWAYS, workers: every(oc) },
   "all-on-claude": { id: "preset-all-on-claude", name: "Quick setup: all workers on Claude Code", enabled: true, when: ALWAYS, workers: every(cl) },

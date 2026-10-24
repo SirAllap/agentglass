@@ -16,6 +16,7 @@
  * act is done), and page zoom other than 100 % puts it off by the zoom factor.
  */
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { reducedMotion } from "../../lib/lookPrefs.ts";
 import type { AgentStateKey, Steady, TabAgent } from "../../lib/browserAgentActivity.ts";
 import { PRESENCE_LINGER_MS, STATE_HOLD_MS, glassHeld, pageOf, STEADY_INIT, agentState, isActVerb, stateOf, steadyStep, lapKeyframes, lookAt, pointerAt, presenceLabel, travelMs, labelFit } from "../../lib/browserAgentActivity.ts";
 import type { ActLanding } from "../../lib/browserDrive.ts";
@@ -27,7 +28,7 @@ export const GLASS_QUIET_MS = 10_000;
 
 /** Verbs that move the page without being acts in the log's sense, and so raise the glass too. */
 const MOVES = new Set(["open", "scroll", "hover"]);
-const calmNow = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+const calmNow = () => reducedMotion();
 
 /* Up while the agent works, and for a beat after: an agent works in bursts
    with a model call between them, and a rim that blinks between every two

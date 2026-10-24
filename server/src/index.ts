@@ -22,6 +22,7 @@ import {
   exportRows,
   pruneOldRows,
   reclaimFreePages,
+  eraseHistory,
   trimWal,
   RETENTION_DAYS,
   dbPath,
@@ -106,7 +107,8 @@ import { singleFlight, inflightCount } from "./singleflight.ts";
 import { openInEditor, editorTarget, editorCapability, HAS_NVIM } from "./editor.ts";
 import { syncTheme, snippetStatus, SNIPPETS, tmuxThemePath, repairTmuxTheme, currentTheme, automatedThemeClient } from "./themesync.ts";
 import { desktopPalette, desktopLogo, watchDesktopPalette } from "./desktopPalette.ts";
-import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite, mkdtempSync, readdirSync } from "node:fs";
+import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite, mkdtempSync, readdirSync, statSync as fsStat } from "node:fs";
+import { RETENTION_FROM_ENV, setRetentionDays } from "./retention.ts";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
 import { listPortsAsync, listResources, spaceFor, killPort } from "./machine.ts";
 import { orphanReport, stopOrphan, startOrphanSampler } from "./orphans.ts";
@@ -121,7 +123,7 @@ import { currentRuns, runById, runActivity, startRun, adoptPane, finishRun } fro
 import { failed } from "./refused.ts";
 import { trackerProjects, setTrackerChoice } from "./trackerProjects.ts";
 import { holdCard as holdJiraCard } from "./jiraprcards.ts";
-import { ISSUE_KEY, connectJira, jiraStatus, setJiraWrites, jiraWriteEnabled, readIssue, findIssue, mine as jiraMine, searchText as jiraSearchText, withStored as withJira } from "./jira.ts";
+import { ISSUE_KEY, JIRA_WRITE_KINDS, connectJira, jiraStatus, setJiraWrites, setJiraWriteKind, jiraWriteKinds, jiraWriteEnabled, type JiraWriteKind, readIssue, findIssue, mine as jiraMine, searchText as jiraSearchText, withStored as withJira } from "./jira.ts";
 import { ACTIVITY_KINDS, activityStored as jiraActivity, type ActivityKind } from "./jiraActivity.ts";
 import { devStored as jiraDev } from "./jiraDev.ts";
 import { movesStored as jiraMoves, moveStored as jiraMove, remoteLinksStored as jiraLinks, remoteLinksAllStored as jiraLinksAll, linkPullRequestStored as jiraLink } from "./jira.ts";
@@ -223,7 +225,8 @@ import {
   windowTree, newWindow, splitPane, killWindow, killPane as killLayoutPane, selectWindow, selectPane,
   renameWindow, resizePane,
 } from "./tmuxlayout.ts";
-import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings, lanternNudge, lanternWatch, lanternWatchMinutes, cacheTtlMinutes, lanternNudgeMinutes, writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, seatWakeHours, writeSeatSettings, launchMode, launchDeny, writeLaunchPermissions, workerRoles, writeWorkerRole, inScopeReal, agentsChangeWithoutAsking } from "./config.ts";
+import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings, lanternNudge, lanternWatch, lanternWatchMinutes, cacheTtlMinutes, lanternNudgeMinutes, writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, seatWakeHours, writeSeatSettings, launchMode, launchDeny, writeLaunchPermissions, workerRoles, writeWorkerRole, inScopeReal, agentsChangeWithoutAsking, gateAnswerer, gateOnTimeout } from "./config.ts";
+import { tellChair } from "./gatechair.ts";
 import { claudeModels } from "./claudemodels.ts";
 import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
 import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
@@ -3811,11 +3814,18 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const hold = out
         ? [outwardLine(out), out.text ? `“${out.text.replace(/\s+/g, " ").trim().slice(0, 240)}”` : ""].filter(Boolean).join(" · ")
         : budgetHoldFor(greq.session_id, gateFailClosed(), cwd);
+      /* "Who answers" and "If nobody answers" (Settings ▸ Agents ▸ Gate). The chair is TOLD, never
+         asked to decide: a held call is released by the person alone. Only an OUTWARD hold, once:
+         a budget hold is every call of every session, the chair's own included, and each line
+         would start a chair turn (gatechair.ts). The ask-again rounds go to the person only. */
+      const tell = !!out && gateAnswerer() === "orchestrator";
+      if (tell) void tellChair(cwd, greq.session_id, greq.tool_name, outwardLine({ ...out!, target: undefined }), [out!.target, out!.text].filter(Boolean).join(" · "));
       const decision = await submitGate(
         greq,
         Math.min(GATE_MAX_MS, Number(b.timeout_ms) || 60_000),
         hold,
         out ? true : undefined,
+        out && gateOnTimeout() === "ask" ? () => {} : undefined,
       );
       return json(decision);
     }
@@ -6852,6 +6862,15 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       setJiraWrites(b.on);
       return json({ ok: true, writes: jiraWriteEnabled() });
     }
+    if (pathname === "/jira/write-kinds" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const kind = (JIRA_WRITE_KINDS as readonly string[]).includes(String(b.kind)) ? b.kind as JiraWriteKind : null;
+      if (!kind || typeof b.on !== "boolean") return json({ ok: false, error: "kind is move, comment, link or assign, and on is true or false" }, 400);
+      if (!mayPublishReview(req, caller)) return viaDoor("/jira/write-kinds", `jira.writes.${kind}`, b.on, b.as);
+      setJiraWriteKind(kind, b.on);
+      return json({ ok: true, writeKinds: jiraWriteKinds() });
+    }
     /*
      * Moving a card. The list is a read, answered 200 like the other Jira reads
      * (an empty list carries the sentence "You cannot move ..."). The move is a
@@ -7210,8 +7229,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       return json(r, r.ok ? 200 : 400);
     }
     if (pathname === "/pr-prompts") {
-      const { reviewRecipes } = await import("./reviewPrompts.ts");
-      return json({ ok: true, recipes: reviewRecipes() });
+      const { reviewRecipes, hiddenRecipes } = await import("./reviewPrompts.ts");
+      return json({ ok: true, recipes: reviewRecipes(), hidden: hiddenRecipes() });
     }
     /* Ahead of the /pr-prompts/ family below, whose prefix would answer
        "not found" for it. What the conflict button says, and which model it opens on. POST because
@@ -7530,6 +7549,11 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/clickup/tags") {
       const r = await tagsForTask(url.searchParams.get("id") ?? "");
       return json(r.ok ? { ok: true, tags: r.data ?? [] } : { ok: false, error: r.error });
+    }
+    // How much of ClickUp's per-minute allowance the last minute spent: read from the last response, asks ClickUp for nothing.
+    if (pathname === "/clickup/budget") {
+      const { budgetView, rateBudget } = await import("./clickup.ts");
+      return json({ ok: true, ...budgetView(rateBudget()) });
     }
     // How this workspace uses ClickUp. A POST is a partial update, validated as a
     // whole: anything refused writes nothing and says which setting and why.
@@ -8565,15 +8589,40 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     /* Where this app keeps things, and for how long — read by Settings →
        Privacy. Paths, not contents: the page says what is on disk so somebody
        can go and look, and nothing here reads a credential to display it. */
+    if (pathname === "/privacy/retention" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      if (typeof b.days !== "number") return json({ ok: false, error: "days must be a number" }, 400);
+      if (!mayPublishReview(req, caller)) return viaDoor("/privacy/retention", "privacy.retentionDays", b.days, b.as);
+      const r = setRetentionDays(b.days);
+      return json(r.ok ? { ok: true, retentionDays: RETENTION_DAYS } : r, r.ok ? 200 : 400);
+    }
+    /* The red button on Data & privacy. Never through the settings door: an agent does not decide what the
+       person's history is worth, and there is no undo. The body must say so in so many words. */
+    if (pathname === "/privacy/erase-history" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      if (!mayPublishReview(req, caller)) return json({ ok: false, error: "only the person at the window erases history" }, 403);
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      if (b.confirm !== "erase") return json({ ok: false, error: "send confirm: \"erase\" to erase the history" }, 400);
+      const r = eraseHistory();
+      reclaimFreePages();
+      noteAction(clientIp, "/privacy/erase-history", { events: r.events, sessions: r.sessions, days: r.days }, { ok: true }, asActor(caller));
+      return json({ ok: true, ...r });
+    }
     if (pathname === "/privacy") {
+      const size = (p: string): number | null => { try { return fsStat(p).size; } catch { return null; } };
       return json({
         db: dbPath(),
+        dbBytes: size(dbPath()),
         config: configPath(),
+        configBytes: size(configPath()),
         credentials: credentialsPath(),
+        retentionFromEnv: RETENTION_FROM_ENV,
         retentionDays: RETENTION_DAYS,
         pairedDevices: devices().length,
         // So the page names only the services this machine actually talks to.
         clickup: hasCredential("clickup"),
+        jira: hasCredential("jira"),
       });
     }
     if (pathname === "/prs/list") {
@@ -9771,7 +9820,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
             return say({ ok: false, error: `${name} is a seat's name, and no worker is started under one` }, 403);
           }
           if (b.role === undefined) {
-            return say({ ok: false, error: "a seat starts workers with --role (scout, builder or verifier): the role's envelope is what keeps a worker inside the policy, so a start without one is refused" }, 400);
+            return say({ ok: false, error: "a seat starts workers with --role (scout, builder, reviewer or verifier): the role's envelope is what keeps a worker inside the policy, so a start without one is refused" }, 400);
           }
           if (!cwd || !seatMayUse(seatRoot, cwd)) {
             return say({ ok: false, error: `that directory is not inside ${basename(seatRoot)}'s own tree or worktrees, and a seat starts workers only there` }, 400);

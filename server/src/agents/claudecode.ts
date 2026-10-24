@@ -110,6 +110,9 @@ export const claudeCode: PaneAgent = {
      * tool — there, a subagent that stalls is a thing he can see and stop.
      */
     if (spec.unattended) argv.push("--disallowed-tools", "Task");
+    /* One element, and before the mode flag that closes the variadic list: a
+       rule list left open would swallow whatever follows it as more tools. */
+    if (spec.deny?.length) argv.push("--disallowedTools", spec.deny.join(" "));
     if (spec.mode === "bypassPermissions") argv.push("--dangerously-skip-permissions");
     else argv.push("--permission-mode", spec.mode);
     return argv;

@@ -163,6 +163,17 @@ export function usePins(root: string): string[] {
   );
 }
 
+/** Every repo's pins at once, for a page that lists commands from several (Settings › Commands). */
+export function usePinMap(): Readonly<Record<string, string[]>> {
+  return useSyncExternalStore(
+    useCallback((cb: () => void) => { subs.add(cb); return () => { subs.delete(cb); }; }, []),
+    useCallback(() => pinned, []),
+    useCallback(() => ({}), []),
+  );
+}
+
+export const MAX_COMMAND_PINS = MAX_PINS;
+
 // --- the command list --------------------------------------------------------
 
 /**

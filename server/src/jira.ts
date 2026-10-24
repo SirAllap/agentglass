@@ -1060,7 +1060,7 @@ export async function connectJira(input: JiraConnectInput): Promise<JiraConnectR
 export async function jiraStatus(): Promise<JiraStatus> {
   const creds = storedCreds();
   const known = redacted("jira");
-  const off = { connected: false, site: null, kind: null, auth: null, api: null, deployment: null, account: null, prefixes: [], writes: jiraWriteEnabled() };
+  const off = { connected: false, site: null, kind: null, auth: null, api: null, deployment: null, account: null, prefixes: [], writes: jiraWriteEnabled(), writeKinds: jiraWriteKinds() };
   if (!creds) return off;
   const parsed = parseSite(creds.site);
   // Optional: a status read must not queue behind, or add to, a rate limit.
@@ -1075,6 +1075,7 @@ export async function jiraStatus(): Promise<JiraStatus> {
     account: known?.account ?? null,
     prefixes: p.ok && p.data ? p.data.keys : [],
     writes: jiraWriteEnabled(),
+    writeKinds: jiraWriteKinds(),
   };
 }
 
@@ -1132,6 +1133,33 @@ export function jiraWriteEnabled(): boolean {
 
 export function setJiraWrites(on: boolean): void {
   writeSettingsKey("writes", on);
+}
+
+/**
+ * What writing may do, one kind at a time, once writing is on at all.
+ *
+ * Everything is allowed until it is switched off here, so a file written before this
+ * existed behaves as it did. The master switch still decides first: a kind that is
+ * on does nothing while writing is off.
+ */
+export const JIRA_WRITE_KINDS = ["move", "comment", "link", "assign"] as const;
+export type JiraWriteKind = (typeof JIRA_WRITE_KINDS)[number];
+const KIND_WORDS: Record<JiraWriteKind, string> = { move: "Moving cards", comment: "Commenting on a card", link: "Linking a pull request", assign: "Assigning a person" };
+
+export function jiraWriteKinds(): Record<JiraWriteKind, boolean> {
+  const raw = readSettingsFile().writeKinds;
+  const o = isObj(raw) ? raw : {};
+  return Object.fromEntries(JIRA_WRITE_KINDS.map((k) => [k, o[k] !== false])) as Record<JiraWriteKind, boolean>;
+}
+
+export function setJiraWriteKind(kind: JiraWriteKind, on: boolean): void {
+  writeSettingsKey("writeKinds", { ...jiraWriteKinds(), [kind]: on });
+}
+
+/** Why a write of this kind may not go ahead, in our words, or null when it may. */
+export function writeRefusal(kind: JiraWriteKind): string | null {
+  if (!jiraWriteEnabled()) return WRITE_OFF;
+  return jiraWriteKinds()[kind] ? null : `${KIND_WORDS[kind]} is switched off in Settings`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1229,7 +1257,8 @@ export const NOT_ACCEPTED = "Jira did not accept that move. The card may have mo
  * card "after" it.
  */
 export async function moveIssue(creds: JiraCreds, key: string, transitionId: string, updated: number, fields?: unknown): Promise<WriteOutcome> {
-  if (!jiraWriteEnabled()) return { ok: false, error: WRITE_OFF };
+  const off = writeRefusal("move");
+  if (off) return { ok: false, error: off };
   if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
   if (!/^\d{1,10}$/.test(transitionId)) return { ok: false, error: "That is not one of this card's moves" };
   // A write with nothing to compare against would go out unchecked.
@@ -1357,7 +1386,8 @@ const TITLE_MAX = 200;
  * Ceiling: the title and state on the link are written once and not refreshed.
  */
 export async function linkPullRequest(creds: JiraCreds, key: string, address: string, title = ""): Promise<LinkOutcome> {
-  if (!jiraWriteEnabled()) return { ok: false, error: WRITE_OFF };
+  const off = writeRefusal("link");
+  if (off) return { ok: false, error: off };
   if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
   const pr = prAddress(address);
   if (!pr) return { ok: false, error: "That is not a pull request address" };
@@ -1493,7 +1523,8 @@ export function assignRefusal(r: JiraResult<unknown>): WriteOutcome {
  * between the check and the PUT is one round trip; that is the ceiling.
  */
 export async function setAssignee(creds: JiraCreds, key: string, to: string | null, updated: number): Promise<WriteOutcome> {
-  if (!jiraWriteEnabled()) return { ok: false, error: WRITE_OFF };
+  const off = writeRefusal("assign");
+  if (off) return { ok: false, error: off };
   if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
   const bad = badPerson(to);
   if (bad) return { ok: false, error: bad };
@@ -1641,7 +1672,8 @@ export interface HandoffChoice {
 export type HandoffOutcome = WriteOutcome & { moved?: ProviderTask; /** What each block of a step did; a step run says it, the older hand-off does not. */ blocks?: JiraBlockOutcome[] };
 
 export async function handOff(creds: JiraCreds, key: string, updated: number, choice: HandoffChoice = {}): Promise<HandoffOutcome> {
-  if (!jiraWriteEnabled()) return { ok: false, error: WRITE_OFF };
+  const off = writeRefusal("move");
+  if (off) return { ok: false, error: off };
   if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
   if (!Number.isFinite(updated) || updated <= 0) return { ok: false, error: "Nothing was changed: reload the card and try again" };
   if (choice.to !== undefined && !STATUS_ID.test(choice.to)) return { ok: false, error: "That is not one of the project's statuses" };
@@ -1660,7 +1692,10 @@ export async function handOff(creds: JiraCreds, key: string, updated: number, ch
   const project = isObj(f.project) ? str(f.project.key) : K.slice(0, K.lastIndexOf("-"));
   const rule = handoffRules()[project];
   const toId = choice.to ?? rule?.to?.id;
-  const clear = choice.clear ?? rule?.clear ?? false;
+  const wantClear = choice.clear ?? rule?.clear ?? false;
+  // "Assign a person" off: the card is moved and the assignee is left on it, as jiraSteps.ts refuses the unassign kind.
+  const clearOff = wantClear ? writeRefusal("assign") : null;
+  const clear = wantClear && !clearOff;
   if (!toId) return { ok: false, error: `No hand-off is set for ${project}: choose where it goes in Settings` };
   const was = personId(f.assignee);
   const wasName = personName(f.assignee);
@@ -1683,7 +1718,8 @@ export async function handOff(creds: JiraCreds, key: string, updated: number, ch
     r.status === 409 ? { ok: false, conflict: true, error: "Somebody changed this card while you were moving it, reloaded" }
       : r.status === 400 ? { ok: false, error: NOT_ACCEPTED }
         : { ok: false, unauthorised: r.unauthorised, error: r.error };
-  const readBack = async (partial?: string): Promise<HandoffOutcome> => {
+  const readBack = async (said?: string): Promise<HandoffOutcome> => {
+    const partial = [said, clearOff && was ? `${wasName} was left on it: ${clearOff}` : ""].filter(Boolean).join(". ") || undefined;
     const back = await readIssue(creds, key, { fresh: true });
     if (!back.ok || !back.data) {
       // Enough of the card for the watch to know the move was ours.

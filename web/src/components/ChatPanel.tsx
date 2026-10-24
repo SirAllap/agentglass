@@ -24,6 +24,7 @@ import { useDialogs } from "./ConfirmDialog.tsx";
 import { buildRows } from "../lib/toolTree.ts";
 import { chatToMarkdown } from "../lib/chatTranscript.ts";
 import { busyElsewhere, setActiveTurns } from "../lib/chatStore.ts";
+import { chatDefaults, loadDefaults } from "../lib/agentDefaults.ts";
 import { tidyPaneScreen } from "../lib/paneScreen.ts";
 import { quickSkills, pinnedSkills, togglePinnedSkill } from "../lib/quickSkills.ts";
 import { fmtTime } from "../lib/format.ts";
@@ -805,6 +806,9 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   useEffect(() => { if (open) readActiveTurns(); }, [open, readActiveTurns]);
   usePoll(open, readActiveTurns, 3000);
   const [defaultCwd, setDefaultCwd] = useState<string>(() => { try { return localStorage.getItem(CWD_KEY) || ""; } catch { return ""; } });
+  // What a new chat starts with (Settings ▸ Agents ▸ New chats): refreshed when the panel opens, so a change made
+  // from another window or by an agent applies to the next chat without a restart.
+  useEffect(() => { if (open) void loadDefaults(); }, [open]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   // Skills are already usable — `claude -p` keeps slash commands on unless
@@ -982,7 +986,8 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   const add = useCallback((seed?: string) => {
     // `workspace` last: a scoped instance always has one, so the only way to
     // reach "" now is a machine with no repo at all.
-    const cwd = active?.cwd || defaultCwd || repos[0]?.root || workspace || "";
+    // Settings ▸ Agents ▸ New chats ▸ "Starts in": the open project first, or the last one used.
+    const cwd = (chatDefaults().chatStartIn === "open" ? workspace : null) || active?.cwd || defaultCwd || repos[0]?.root || workspace || "";
     // A chat with no directory cannot run — `claude` needs somewhere to start —
     // so it used to appear in the list as "no repo" and fail at the first
     // message. Before the repos call resolves every one of those fallbacks is
@@ -998,7 +1003,8 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     const c = newChat(
       cwd,
       sameAgent ? active!.model : AGENTS[agent].defaultModel,
-      sameAgent ? active!.mode : AGENTS[agent].defaultMode,
+      // "Permission mode" (Settings ▸ Agents): a Claude chat starts in it unless it is "like the open chat".
+      agent === "claude" && chatDefaults().chatMode !== "inherit" ? chatDefaults().chatMode : sameAgent ? active!.mode : AGENTS[agent].defaultMode,
       undefined,
       agent,
     );

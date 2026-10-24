@@ -69,6 +69,10 @@ describe("steps", () => {
     expect(html).toContain(">only me<");
     expect(html).toContain("Changes on");
   });
+  test("Changes on is not amber: amber means the person has to do something, and a switch they chose is not that", () => {
+    expect(html).toMatch(/data-tone="ok"><i aria-hidden="true"><\/i>Changes on/);
+    expect(draw(prefs(), { changesOn: false })).toMatch(/data-tone="off"><i aria-hidden="true"><\/i>Changes off/);
+  });
   test("a step says which lists have its status in one pill, and the lists that lack it are one press away", () => {
     expect(html).toContain('aria-label="Coverage: Engineering only. Show per-list detail"');
     expect(html).toContain("Engineering only");
@@ -257,5 +261,18 @@ describe("the eye on a list", () => {
     const html = render([u("1", "Orbit"), u("2", "Sales")], null as never);
     expect(eyes(html).length).toBe(0);
     expect(html).toContain('class="shrink-0" style="width:26px;margin-right:6px"');
+  });
+});
+
+describe("the ClickUp page's chips", () => {
+  const pane = Bun.file(new URL("../src/components/ClickUpPane.tsx", import.meta.url)).text();
+  test("the writes chip is green while on, and a read that fell back to the last answer is neutral, not amber", async () => {
+    const src = await pane;
+    expect(src).toContain('<StatusBadge tone={changesOn ? "ok" : "off"}>{changesOn ? "On" : "Read-only"}</StatusBadge>');
+    expect(src).toContain('state.kind === "error" ? (asOf ? "off" : "warn")');
+  });
+  test("the Jira page's writes chip follows the same rule", async () => {
+    const src = await Bun.file(new URL("../src/components/jira/JiraSettingsView.tsx", import.meta.url)).text();
+    expect(src).toContain('<StatusBadge tone={changesOn ? "ok" : "off"}>{changesOn ? "On" : "Read-only"}</StatusBadge>');
   });
 });

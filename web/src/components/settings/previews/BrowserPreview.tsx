@@ -22,7 +22,7 @@ export function BrowserPreview({ home, searchEngine }: BrowserPreviewProps) {
           <span style={{ color: "var(--text4)" }}>‹</span>
           <span data-url className="flex-1 min-w-0 truncate" style={{ padding: "0.4em 0.9em", borderRadius: "999px", background: "var(--surface-inset)", color: "var(--text2)", fontFamily: "var(--font-mono, monospace)", fontSize: "0.9em" }}>{url}</span>
         </div>
-        <div className="flex flex-col items-center" style={{ padding: "3em 1em", gap: "1em", color: "var(--text3)" }}>
+        <div className="flex flex-col items-center justify-center" style={{ padding: "3em 1em", gap: "1em", color: "var(--text3)", minHeight: "26em" }}>
           <b style={{ color: "var(--text)", fontSize: "1.6em" }}>Orbit</b>
           <span data-search style={{ padding: "0.7em 1.6em", borderRadius: "999px", background: "var(--surface-card)", border: "0.08em solid var(--surface-line)", minWidth: "60%", textAlign: "center" }}>{searchPlaceholder(searchEngine)}</span>
           <span style={{ fontSize: "0.85em" }}>{home.trim() ? "Home opens here" : "Home is a blank page"}</span>

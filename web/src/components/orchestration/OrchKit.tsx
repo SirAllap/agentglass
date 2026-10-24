@@ -41,3 +41,26 @@ export function Eyebrow({ children }: { children: ReactNode }) {
 /** The rule between two things on a card. */
 export const RULE = LINE;
 export const tint = tintEdge;
+
+/**
+ * A pill track with one white thumb: the compact "pick one of a few" control
+ * of the Orchestration page (a preset, a project). Buttons, not a select,
+ * because every choice is in view; `aria-pressed` carries the state, never the
+ * fill alone. An option may be disabled and say why in its title.
+ */
+export function OrchSeg<T extends string>({ value, options, onChange, label, disabled }: {
+  value: T | "";
+  options: readonly { id: T; label: ReactNode; title?: string; disabled?: boolean; own?: boolean }[];
+  onChange: (id: T) => void;
+  label: string;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="agx-orch-seg" role="group" aria-label={label}>
+      {options.map((o) => (
+        <button key={o.id} type="button" aria-pressed={value === o.id} title={o.title} data-own={o.own ? "" : undefined}
+          disabled={disabled || o.disabled} onClick={() => onChange(o.id)}>{o.label}</button>
+      ))}
+    </div>
+  );
+}

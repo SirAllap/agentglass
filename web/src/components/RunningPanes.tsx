@@ -6,7 +6,7 @@ import { usePoll } from "../lib/usePoll.ts";
 import type { ChatPane } from "../../../shared/types.ts";
 import { Button } from "./workspace/Chrome.tsx";
 import { SettingRow } from "./SettingRow.tsx";
-import { EmptyState, SettingsCard, StatusBadge } from "./SettingsKit.tsx";
+import { SettingsCard, StatusBadge } from "./SettingsKit.tsx";
 
 /**
  * What is actually running, and what belongs to nothing.
@@ -63,11 +63,9 @@ export function RunningPanes({ open }: { open: boolean }) {
     <SettingsCard title="Warm CLIs running now" status={status} desc={desc}>{children}</SettingsCard>
   );
 
-  if (!panes) return card(<EmptyState>Looking…</EmptyState>);
-
-  if (!panes.length) {
-    return card(<EmptyState>Nothing is running. A chat on the pane engine starts one on its first turn.</EmptyState>);
-  }
+  /* A card that says "nothing is running" on a page of settings is noise: it
+     appears when there is something to end. */
+  if (!panes?.length) return null;
 
   const orphans = panes.filter((p) => p.orphan).length;
 

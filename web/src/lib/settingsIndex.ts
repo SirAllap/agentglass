@@ -115,6 +115,9 @@ function tier(haystack: string, needle: string, exact: number, prefix: number, s
   return 0;
 }
 
+/** Added when a row's whole label is the query: small next to a tier, enough to settle a tie. */
+const LABEL_IS_QUERY = 50;
+
 /** A flat contains-or-not score, for the fields that get one tier rather
  *  than three (a hint, a section title, a page's kw bag). */
 function flat(haystack: string, needle: string, value: number): number {
@@ -182,6 +185,8 @@ export function searchSettings(ql: string, pages: SettingsPage[]): RowResult[] {
       if (synonym) viaSynonym = true;
     }
     if (!ok) continue;
+    // The row named by the whole query beats one that merely contains it ("Font size" over "Interface font size").
+    if (row.label.toLowerCase() === words.join(" ")) total += LABEL_IS_QUERY;
     out.push({ pane: row.pane, section: row.section, label: row.label, row: rowId(row.label), score: total, viaSynonym });
   }
 
@@ -224,7 +229,7 @@ export function pageScore(page: SettingsPage, ql: string): number {
   if (!ql.trim()) return 0;
   const rows = SETTINGS_ROWS.filter((r) => r.pane === page.id);
   const words = ql.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  let total = 0;
+  let total = rows.some((r) => r.label.toLowerCase() === words.join(" ")) ? LABEL_IS_QUERY : 0;
   for (const w of words) {
     let best = bestOverSynonyms(w, (word) => Math.max(
       flat(page.label.toLowerCase(), word, 900),

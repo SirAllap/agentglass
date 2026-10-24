@@ -9,8 +9,11 @@ import { useEffect, useState } from "react";
 import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import { api } from "../lib/api.ts";
 import { SettingRow } from "./SettingRow.tsx";
-import { EmptyState } from "./SettingsKit.tsx";
+import { EmptyState, StatusBadge } from "./SettingsKit.tsx";
 import { askedState, askedTimeline } from "../lib/askedAudit.ts";
+
+const STATE_WORD = { waiting: "Waiting", opened: "Opened", closed: "Closed" } as const;
+const STATE_TONE = { waiting: "info", opened: "ok", closed: "off" } as const;
 
 export function AskedAlertLog() {
   const [rows, setRows] = useState<AskedAlert[] | null>(null);
@@ -26,8 +29,9 @@ export function AskedAlertLog() {
     <>
       {rows.slice(0, 10).map((a) => (
         <SettingRow key={a.id} agentExempt label={a.payload.title}
+          status={<StatusBadge tone={STATE_TONE[askedState(a)]}>{STATE_WORD[askedState(a)]}</StatusBadge>}
           hint={<>
-            {askedState(a)} — {askedTimeline(a)}
+            {askedTimeline(a)}
             {a.osError && <span className="block mt-1" style={{ color: "var(--warning-ink)" }}>Desktop popup not shown: {a.osError}</span>}
           </>} />
       ))}

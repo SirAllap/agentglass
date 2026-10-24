@@ -114,9 +114,12 @@ describe("a plugin that grows does not drag its neighbour with it", () => {
     expect(pane).toContain('className="agx-plugin-grid"');
     expect(pane).toContain('className="mt-auto flex items-center');
     expect(pane).not.toContain("gridTemplateColumns");
-    // 440 and not wider: every card opens on a 16:9 picture, and in one column
-    // of a 1065px page that picture alone was 600px tall.
-    expect(CSS).toMatch(/\.agx-plugin-grid \{[^}]*minmax\(min\(440px, 100%\), 1fr\)/);
+    // Columns by the page's own width, not auto-fit: every card opens on a 16:9
+    // picture, and in one column of a 1065px page that picture alone was 600px
+    // tall. One column under 760px, two from there, three from 1500px, so a wide
+    // screen is filled with cards and not capped at the width of two.
+    expect(CSS).toMatch(/@container agx-settings \(min-width: 760px\) \{ \.agx-plugin-grid \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
+    expect(CSS).toMatch(/@container agx-settings \(min-width: 1500px\) \{ \.agx-plugin-grid \{ grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
   });
 });
 
@@ -171,5 +174,13 @@ describe("the declaration is a named disclosure inside the plugin's row", () => 
     // defect the settings sweep counts.
     expect(pane).toContain('<details className="agx-perm ');
     expect(pane).toContain("<PluginDeclaration plugin={plugin} flat />");
+  });
+});
+
+describe("Install a plugin is the page header's action", () => {
+  test("published by the list, withdrawn on a plugin's own settings, and not a second button in the Installed row", () => {
+    expect(pane).toContain('useReportHead("plugins", showing && here ? null : { action: { label: "Install a plugin" } }, () => setInstalling(true));');
+    const installed = pane.slice(pane.indexOf('<PageHead title="Installed"'), pane.indexOf("</PageHead>"));
+    expect(installed).not.toContain("Install a plugin");
   });
 });

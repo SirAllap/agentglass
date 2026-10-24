@@ -4125,6 +4125,8 @@ export interface HookSetupStatus {
   /** The interpreter the wired command uses (python3, or py on Windows). The
    *  hooks run under it; the install itself does not. */
   python: string;
+  /** What that interpreter says it is ("3.12"), or null when it does not answer: not on PATH. */
+  pythonVersion?: string | null;
 }
 
 export interface HookSetupResult {
@@ -5247,6 +5249,8 @@ export interface ReviewRecipe {
   /** A built-in the user deleted. Kept as a tombstone, or the catalogue would
    *  hand it straight back on the next start. */
   hidden?: boolean;
+  /** A built-in whose saved wording differs from the one that ships. */
+  edited?: boolean;
   /** Sort order inside a group, ascending. Absent means "where the catalogue
    *  put it". */
   rank?: number;
@@ -5324,6 +5328,8 @@ export interface ReviewRecipeContext {
 export interface ReviewRecipesResponse {
   ok: boolean;
   recipes?: ReviewRecipe[];
+  /** The built-ins the person hid, as they ship: what "N hidden" lists. */
+  hidden?: ReviewRecipe[];
   error?: string;
 }
 
@@ -5497,6 +5503,10 @@ export interface CataloguePlugin {
   added?: string;
   minApp?: string;
   preview?: string;
+  /** What the plugin may do once it runs, as its manifest says: the shelf's filter, not a grant. */
+  scope?: DeviceScope;
+  /** The licence identifier its author wrote. */
+  license?: string;
 }
 
 /** A fetched catalogue document. Mirrors `Catalogue` in

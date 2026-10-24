@@ -184,7 +184,7 @@
        7.25px cap against 6.59px at 10px. And 0.2em of tracking against a 6px
        glyph advance is a 33% gap between letters, which is what made this read
        as s p a c e d  l e t t e r s rather than as a word. */
-    font-size: 11px;
+    font-size: calc(11px * var(--agx-fs, 1));
     letter-spacing: 0.14em;
     text-transform: uppercase;
     color: color-mix(in srgb, var(--primary) 85%, var(--text));
@@ -217,7 +217,7 @@
     pointer-events: none;
   }
   .chip {
-    font-size: 10px;
+    font-size: calc(10px * var(--agx-fs, 1));
     padding: 1px 6px;
     border-radius: 6px;
     border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
@@ -489,7 +489,7 @@
  * one standing where a group heading stands gets promoted.
  */
 .agx-settings-col .agx-settings-section > .panel-eyebrow {
-  font-size: 15px;
+  font-size: calc(15px * var(--agx-fs, 1));
   font-weight: 650;
   line-height: 1.25;
   letter-spacing: -0.01em;
@@ -590,7 +590,7 @@
    * things it governs, so the eye can skip the rows and read only the
    * headings when it is hunting.
    */
-  font-size: 15px;
+  font-size: calc(15px * var(--agx-fs, 1));
   font-weight: 650;
   line-height: 1.25;
   letter-spacing: -0.01em;
@@ -603,7 +603,7 @@
    * — one step off body text — leaves the pair reading as two lines of the
    * same paragraph, which is exactly what it looked like.
    */
-  font-size: 12px;
+  font-size: calc(12px * var(--agx-fs, 1));
   margin-top: 4px;
   color: var(--text4);
 }
@@ -745,7 +745,7 @@
    `checking` have no hue: a hollow dot on a hairline. */
 .agx-badge {
   display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 10px; border-radius: 99px;
-  font-size: 11.5px; font-weight: 600; line-height: 1; white-space: nowrap; flex: none;
+  font-size: calc(11.5px * var(--agx-fs, 1)); font-weight: 600; line-height: 1; white-space: nowrap; flex: none;
 }
 .agx-badge > i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
 .agx-badge[data-tone="ok"] { background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--success-ink); }
@@ -757,8 +757,8 @@
 
 /* A row's name and its help: the name is the heavier of the two and in the
    full ink, the help one muted line under it. */
-.agx-row-name { display: block; font-size: 13.5px; font-weight: 650; color: var(--text); }
-.agx-row-help { display: block; margin-top: 4px; font-size: 12px; line-height: 1.42; color: var(--text3); max-width: 64ch; }
+.agx-row-name { display: block; font-size: calc(13.86px * var(--agx-fs, 1)); font-weight: 750; color: var(--text); }
+.agx-row-help { display: block; margin-top: 1px; font-size: calc(11.76px * var(--agx-fs, 1)); line-height: 1.42; color: var(--text3); max-width: 64ch; }
 
 /* The switch: on is the success colour, off a tint of the text on the page, the
    knob the page's own ground (white on a light theme, dark on a dark one, which
@@ -784,15 +784,30 @@
    control height, whichever way the page wrote it. The edge is a border (not a
    shadow) because an open select recolours its border. */
 .agx-settings-col .agx-select {
-  min-height: 32px; padding: 0 10px; font-size: 12px; border-radius: 8px; color: var(--text);
+  min-height: 32px; padding: 0 10px; font-size: calc(12px * var(--agx-fs, 1)); border-radius: 8px; color: var(--text);
   background: var(--bg); border: 1px solid var(--border);
 }
 .agx-settings-col .agx-select:hover:not(:disabled) { border-color: var(--text3); }
+/* Text fields and native selects on a settings page: the page's ground inside a
+   visible edge, and the primary as a ring on focus. The kit's INPUT paints an inset
+   fill and a 14% edge (right for a toolbar, too faint on a card), and sets them
+   inline, so only !important reaches them. A select drops the OS arrow for one chevron. */
+.agx-settings-col :is(select, textarea, input:not([type]), input:is([type="text"], [type="search"], [type="url"], [type="number"], [type="password"], [type="email"])) {
+  background-color: var(--bg) !important; border: 1px solid var(--border2) !important; border-radius: 8px;
+}
+.agx-settings-col :is(select, textarea, input:not([type]), input:is([type="text"], [type="search"], [type="url"], [type="number"], [type="password"], [type="email"])):focus-visible {
+  border-color: var(--primary) !important; box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 22%, transparent);
+}
+.agx-settings-col select:not([multiple]) {
+  appearance: none; padding-right: 28px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none' stroke='%23888' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 10px center;
+}
 /* The segmented choice: an inset track, the chosen one raised on the page's ground. */
 .agx-seg { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 2px; border-radius: 9px; background: var(--surface-inset); max-width: 100%; }
 .agx-seg-b {
   display: inline-flex; align-items: center; height: 24px; padding: 0 12px; border: 0; border-radius: 7px; background: none;
-  font-size: 12px; color: var(--text3); white-space: nowrap; cursor: pointer; transition: background-color 120ms, color 120ms;
+  font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); white-space: nowrap; cursor: pointer; transition: background-color 120ms, color 120ms;
 }
 .agx-seg-b:hover:not(:disabled):not([aria-pressed="true"]) { color: var(--text); }
 .agx-seg-b[aria-pressed="true"] { background: var(--bg); color: var(--text); font-weight: 650; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18); }
@@ -1166,7 +1181,7 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   white-space: nowrap;
   padding: 4px 8px;
   border-radius: 7px;
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--agx-fs, 1));
   color: var(--text2);
   background: color-mix(in srgb, var(--bg) 96%, var(--bg2));
   border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent);
@@ -1492,7 +1507,7 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   min-height: 26px;
   padding: 4px 10px;
   border-radius: 8px;
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--agx-fs, 1));
   color: var(--text3);
   cursor: pointer;
   transition: background 0.12s ease, color 0.12s ease;
@@ -1502,7 +1517,7 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   color: var(--text);
 }
 .agx-note-body {
-  font-size: 11px;
+  font-size: calc(11px * var(--agx-fs, 1));
   line-height: 1.5;
   color: var(--text3);
   white-space: pre-wrap;
@@ -1559,7 +1574,7 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 /* Really a control, so here a pointer and a hover fill are honest rather than
    misleading. */
 .agx-note-btn {
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--agx-fs, 1));
   line-height: 1;
   padding: 4px 8px;
   border-radius: 6px;
@@ -1592,7 +1607,7 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
    under the message rather than in the corner with the row's controls. */
 .agx-note-link {
   margin-top: 6px;
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--agx-fs, 1));
   line-height: 1;
   padding: 6px 8px;
   border-radius: 6px;
@@ -1678,20 +1693,20 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   background: color-mix(in srgb, var(--panel) 80%, transparent);
   border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
 }
-.pair-mark { font-size: 26px; line-height: 1; }
-.pair-h1 { font-size: 19px; font-weight: 600; color: var(--text); margin: 0; }
-.pair-p { font-size: 13px; line-height: 1.5; color: var(--text2); margin: 0; }
+.pair-mark { font-size: calc(26px * var(--agx-fs, 1)); line-height: 1; }
+.pair-h1 { font-size: calc(19px * var(--agx-fs, 1)); font-weight: 600; color: var(--text); margin: 0; }
+.pair-p { font-size: calc(13px * var(--agx-fs, 1)); line-height: 1.5; color: var(--text2); margin: 0; }
 .pair-bad { color: var(--error-ink); }
-.pair-hint { font-size: 11px; line-height: 1.45; color: var(--text3); }
+.pair-hint { font-size: calc(11px * var(--agx-fs, 1)); line-height: 1.45; color: var(--text3); }
 .pair-label {
-  font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+  font-size: calc(10px * var(--agx-fs, 1)); text-transform: uppercase; letter-spacing: 0.06em;
   color: var(--text3); margin-top: 6px;
 }
 .pair-input {
   width: 100%;
   /* 16px is the threshold below which iOS Safari zooms the viewport on focus,
      which on this screen scrolls the code you are copying out of view. */
-  font-size: 16px;
+  font-size: calc(16px * var(--agx-fs, 1));
   padding: 12px 12px;
   border-radius: 10px;
   color: var(--text);
@@ -1701,7 +1716,7 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 .pair-input:focus { outline: none; border-color: color-mix(in srgb, var(--primary) 55%, transparent); }
 .pair-code {
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 30px; letter-spacing: 0.28em; text-align: center;
+  font-size: calc(30px * var(--agx-fs, 1)); letter-spacing: 0.28em; text-align: center;
   padding: 12px 8px;
 }
 /* At this size the browser's default placeholder contrast is not enough: the
@@ -1712,14 +1727,14 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   margin-top: 6px;
   min-height: 46px;
   border-radius: 12px;
-  font-size: 14px; font-weight: 600;
+  font-size: calc(14px * var(--agx-fs, 1)); font-weight: 600;
   color: var(--on-primary);
   background: var(--primary);
   border: 1px solid color-mix(in srgb, var(--primary) 70%, transparent);
 }
 .pair-go:disabled { opacity: 0.45; }
 .pair-err {
-  font-size: 12px; line-height: 1.45;
+  font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.45;
   color: var(--error-ink);
   padding: 8px 10px; border-radius: 9px;
   background: color-mix(in srgb, var(--error) 10%, transparent);
@@ -1781,7 +1796,7 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
  */
 .agx-cu-body {
   font-family: var(--font-prose);
-  font-size: 13px;
+  font-size: calc(13px * var(--agx-fs, 1));
   line-height: 1.72;
   color: var(--text2);
 }
@@ -1814,31 +1829,31 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
  */
 .agx-cu-body :is(h1, h2, h3, h4) { color: var(--text); font-weight: 650; }
 .agx-cu-body :is(h1, h2) {
-  font-size: 15px; margin: 26px 0 10px; padding-bottom: 6px;
+  font-size: calc(15px * var(--agx-fs, 1)); margin: 26px 0 10px; padding-bottom: 6px;
   border-bottom: 1px solid color-mix(in srgb, var(--text) 11%, transparent);
 }
-.agx-cu-body :is(h3, h4) { font-size: 13.5px; margin: 20px 0 8px; }
+.agx-cu-body :is(h3, h4) { font-size: calc(13.5px * var(--agx-fs, 1)); margin: 20px 0 8px; }
 .agx-cu-body :is(h1, h2, h3, h4):first-child { margin-top: 0; }
 /* Paragraphs apart, not stacked. ClickUp renders a full blank line between
    them and it is most of why the same words read as separated there. */
 .agx-cu-body p { margin: 12px 0; }
 .agx-cu-body p:first-child { margin-top: 0; }
 .agx-cu-body p:last-child { margin-bottom: 0; }
-.agx-cu-body li { font-size: 13px; line-height: 1.72; margin: 6px 0; }
-.agx-cu-body code { font-size: 11px; overflow-wrap: anywhere; }
-.agx-cu-body pre { overflow-x: auto; font-size: 11px; }
+.agx-cu-body li { font-size: calc(13px * var(--agx-fs, 1)); line-height: 1.72; margin: 6px 0; }
+.agx-cu-body code { font-size: calc(11px * var(--agx-fs, 1)); overflow-wrap: anywhere; }
+.agx-cu-body pre { overflow-x: auto; font-size: calc(11px * var(--agx-fs, 1)); }
 /* Inside a highlighted block every token carries its own colour; the wrapper
    must not tint them, and the chip styling of INLINE code must not apply. */
 .agx-cu-body pre code { color: inherit; background: none; padding: 0; }
-.agx-cu-body table { display: block; overflow-x: auto; font-size: 11px; }
+.agx-cu-body table { display: block; overflow-x: auto; font-size: calc(11px * var(--agx-fs, 1)); }
 .agx-cu-body ul, .agx-cu-body ol { padding-left: 20px; margin: 10px 0; }
 /* A comment already sits in its own boxed card, so it does not need the rule
    under its headings or the full paragraph gap to read as separate. */
-.agx-cu-note { font-size: 11.5px; }
-.agx-cu-note p, .agx-cu-note li { font-size: 11.5px; }
+.agx-cu-note { font-size: calc(11.5px * var(--agx-fs, 1)); }
+.agx-cu-note p, .agx-cu-note li { font-size: calc(11.5px * var(--agx-fs, 1)); }
 .agx-cu-note p { margin: 6px 0; }
-.agx-cu-note :is(h1, h2) { font-size: 12px; margin: 12px 0 6px; padding-bottom: 0; border-bottom: 0; }
-.agx-cu-note :is(h3, h4) { font-size: 11.5px; margin: 10px 0 4px; }
+.agx-cu-note :is(h1, h2) { font-size: calc(12px * var(--agx-fs, 1)); margin: 12px 0 6px; padding-bottom: 0; border-bottom: 0; }
+.agx-cu-note :is(h3, h4) { font-size: calc(11.5px * var(--agx-fs, 1)); margin: 10px 0 4px; }
 
 /*
  * One left edge for the whole settings column.
@@ -1930,8 +1945,8 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 .agx-settings-col .agx-scard {
   background: var(--surface-card);
   border: 1px solid var(--surface-line);
-  border-radius: 0.75rem;
-  box-shadow: var(--surface-lift);
+  border-radius: 13px;
+  box-shadow: 0 1px 2px rgba(60, 40, 30, 0.05), 0 12px 26px -20px var(--shadow);
   overflow: hidden;
   position: relative;
   /* A card is one piece of the flow: it never splits across two columns, and
@@ -1978,15 +1993,15 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 /* The header: an icon chip, the title, the verdict and the one action on a
    line, and the sentence under it. The line below the header is the first
    row's divider (further down), not a border of the header. */
-.agx-scard-head { padding: 14px 18px 10px; }
+.agx-scard-head { padding: 14px 18px 6px; }
 .agx-scard-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
-.agx-scard-top > .agx-settings-head-t { flex: 1 1 10rem; min-width: 0; }
+.agx-scard-top > .agx-settings-head-t { flex: 1 1 10rem; min-width: 0; font-size: calc(15.96px * var(--agx-fs, 1)); font-weight: 800; letter-spacing: -0.005em; }
 .agx-scard-ic {
-  width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; flex: none;
+  width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center; flex: none;
   background: color-mix(in srgb, var(--hue, var(--text3)) 17%, transparent);
   color: color-mix(in srgb, var(--hue, var(--text3)) 78%, var(--text));
 }
-.agx-scard-desc { font-size: 12px; margin-top: 6px; color: var(--text3); }
+.agx-scard-desc { font-size: calc(12.04px * var(--agx-fs, 1)); margin-top: 2px; color: var(--text3); }
 .agx-scard-body { padding-bottom: 0; }
 .agx-scard-body > .agx-settings-row { position: relative; }
 .agx-settings-row:hover { background: color-mix(in srgb, var(--text) 3%, transparent); }
@@ -1997,6 +2012,7 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
    header and its first row. */
 .agx-scard-body > .agx-settings-row + .agx-settings-row::before,
 .agx-scard-body > .agx-fold-body + .agx-settings-row::before,
+.agx-scard-body > .agx-row-more + .agx-settings-row::before,
 .agx-scard-head + .agx-scard-body > .agx-settings-row:first-child::before {
   content: "";
   position: absolute;
@@ -2031,7 +2047,50 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 
 /* A disclosure named for what it holds: a quiet line with a caret, and what
    it holds in an inset panel when it is open. */
-.agx-disclosure { margin-top: 6px; font-size: 12px; }
+/* The numbered steps of a list: a 22px inset circle and the step in bold; the rows
+   sit in a wrapper, so the card's between-rows rule never reaches them. */
+.agx-steps { padding: 2px 0 8px; }
+.agx-step { display: inline-flex; align-items: center; gap: 10px; }
+.agx-step > i {
+  width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; flex: none;
+  background: var(--surface-inset); font-style: normal; font-size: calc(12px * var(--agx-fs, 1)); font-weight: 700; color: var(--text2);
+}
+.agx-steps .agx-row-help { margin-left: 32px; }
+.agx-steps .agx-settings-row { padding-block: 8px; }
+/* The Details of a row that is a button: under it, on the row's own edge, hugging its help. */
+.agx-row-more { padding: 0 18px 10px; margin-top: -6px; }
+.agx-row-more > .agx-disclosure { margin-top: 0; }
+/* The column heads of a table drawn from rows: small caps over the words and over the control. */
+.agx-table-head {
+  display: flex; justify-content: space-between; padding: 8px 18px 4px; border-top: 1px solid var(--surface-line);
+  font-size: calc(10px * var(--agx-fs, 1)); letter-spacing: 0.08em; text-transform: uppercase; color: var(--text3);
+}
+/* The bar at the foot of a card whose edits wait for Save. */
+.agx-savebar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 10px 18px; background: var(--surface-inset); border-top: 1px solid var(--surface-line);
+  font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3);
+}
+.agx-savebar-state { display: inline-flex; align-items: center; gap: 8px; }
+.agx-savebar-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--text4); }
+.agx-savebar[data-dirty] .agx-savebar-state { color: var(--text2); }
+.agx-savebar[data-dirty] .agx-savebar-state i { background: var(--warning); }
+/* A shortcut as keycaps: one cap per key, joined by a plus. The group is the button that starts recording. */
+.agx-keycaps { display: inline-flex; align-items: center; gap: 4px; background: none; border: 0; padding: 0; cursor: pointer; font: inherit; }
+.agx-keycaps kbd {
+  display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; box-sizing: border-box;
+  border: 1px solid var(--border2); border-radius: 5px; background: var(--surface-card);
+  font: inherit; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text2); font-variant-numeric: tabular-nums;
+}
+.agx-keycaps-plus { font-size: calc(10px * var(--agx-fs, 1)); color: var(--text4); }
+.agx-keycaps:hover kbd { border-color: var(--text3); }
+.agx-keycaps[data-custom] kbd { color: var(--primary-hover); }
+.agx-keycaps[data-faint] { opacity: 0.55; }
+.agx-keycaps[data-active] kbd {
+  color: var(--primary-hover); border-color: color-mix(in srgb, var(--primary) 60%, transparent);
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+}
+.agx-disclosure { margin-top: 4px; font-size: calc(11.76px * var(--agx-fs, 1)); }
 .agx-disclosure-s {
   display: inline-flex;
   align-items: center;
@@ -2039,7 +2098,7 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   cursor: pointer;
   list-style: none;
   color: var(--text4);
-  font-size: 11.5px;
+  font-size: calc(11.2px * var(--agx-fs, 1));
   border-radius: 4px;
 }
 .agx-disclosure-s::-webkit-details-marker { display: none; }
@@ -2059,8 +2118,8 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
    not the window, so the same block lays itself out in both. */
 .agx-decl { container: agx-decl / inline-size; }
 .agx-decl-grid { display: flex; flex-direction: column; gap: 8px; }
-.agx-decl-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; font-size: 12px; line-height: 1.4; min-width: 0; }
-.agx-decl-label { font-size: 10px; text-transform: uppercase; letter-spacing: .12em; }
+.agx-decl-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.4; min-width: 0; }
+.agx-decl-label { font-size: calc(10px * var(--agx-fs, 1)); text-transform: uppercase; letter-spacing: .12em; }
 @container agx-decl (min-width: 420px) {
   .agx-decl-row { grid-template-columns: 80px minmax(0, 1fr); gap: 8px; }
   .agx-decl-label { padding-top: 4px; }
@@ -2077,13 +2136,13 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 }
 .agx-field { display: flex; flex-direction: column; gap: 6px; }
 .agx-field-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.agx-field-l { font-size: 12px; font-weight: 500; color: var(--text2); }
-.agx-field-link { font-size: 12px; color: var(--primary-ink); text-decoration: underline; text-underline-offset: 2px; white-space: nowrap; }
-.agx-field-h { font-size: 11px; color: var(--text3); }
-.agx-field-e { font-size: 12px; color: var(--error-ink); }
+.agx-field-l { font-size: calc(12px * var(--agx-fs, 1)); font-weight: 500; color: var(--text2); }
+.agx-field-link { font-size: calc(12px * var(--agx-fs, 1)); color: var(--primary-ink); text-decoration: underline; text-underline-offset: 2px; white-space: nowrap; }
+.agx-field-h { font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); }
+.agx-field-e { font-size: calc(12px * var(--agx-fs, 1)); color: var(--error-ink); }
 .agx-sform-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
-.agx-empty { color: var(--text3); font-size: 12px; }
+.agx-empty { color: var(--text3); font-size: calc(12px * var(--agx-fs, 1)); }
 /* An action that belongs inside a sentence — "Change workspace" on the line
    that names the workspace. A real button, drawn as a link. */
 .agx-textlink {
@@ -2114,15 +2173,15 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
  */
 .agx-settings-shell {
   --nav-w: 292px;
-  /* One hue per nav group, tinted with color-mix wherever it is used. Derived
-     from the theme's own status colours, never fixed hex: every theme (the
-     Omarchy-synced one included) tunes those to read on its own background, so
-     the hues do too. */
-  --g-general: var(--info);
-  --g-workspace: var(--success);
-  --g-agents: color-mix(in srgb, var(--error) 55%, var(--warning));
-  --g-library: var(--warning);
-  --g-connections: color-mix(in srgb, var(--info) 60%, var(--error));
+  /* One hue per nav group, tinted with color-mix wherever it is used. The five
+     are fixed mid-tones (the approved mockup's), the same in every theme: they
+     only ever appear as a 17% tint, a 3px bar and a chip glyph mixed with the
+     text colour, which reads on a light ground and a dark one alike. */
+  --g-general: #6b7bb8;
+  --g-workspace: #3f9a93;
+  --g-agents: #d98a6c;
+  --g-library: #c4982f;
+  --g-connections: #5c8fc4;
   --g-system: var(--text4);
 }
 @media (min-width: 2200px) { .agx-settings-shell { --nav-w: 320px; } }
@@ -2140,14 +2199,14 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
   background: var(--bg); border: 1px solid var(--border); color: var(--text3); cursor: text;
 }
 .agx-sp-box input, .agx-sp-box input:focus, .agx-sp-box input:focus-visible {
-  flex: 1; min-width: 0; background: none; border: 0; outline: 0; box-shadow: none; color: var(--text); font-size: 13px; padding: 0;
+  flex: 1; min-width: 0; background: none; border: 0; outline: 0; box-shadow: none; color: var(--text); font-size: calc(13px * var(--agx-fs, 1)); padding: 0;
 }
 .agx-sp-box input::placeholder { color: var(--text3); }
 /* The ring itself is the house one (a bare input hands it to its container, see bg-transparent above). */
 .agx-sp-box:focus-within, .agx-sp-box[data-open] { border-color: var(--primary); }
 .agx-sp-box[data-open] { box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 22%, transparent); }
 .agx-sp-box kbd, .agx-sp-keys kbd {
-  font: inherit; font-size: 10.5px; border: 1px solid var(--border); border-radius: 5px; padding: 0 4px;
+  font: inherit; font-size: calc(10.5px * var(--agx-fs, 1)); border: 1px solid var(--border); border-radius: 5px; padding: 0 4px;
   color: var(--text3); background: var(--surface-card);
 }
 
@@ -2162,7 +2221,7 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
   background: color-mix(in srgb, var(--hue) 17%, transparent);
   color: color-mix(in srgb, var(--hue) 78%, var(--text));
 }
-.agx-sn-gn { flex: 1; font-weight: 700; font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--text2); }
+.agx-sn-gn { flex: 1; font-weight: 700; font-size: calc(11px * var(--agx-fs, 1)); letter-spacing: 0.09em; text-transform: uppercase; color: var(--text2); }
 .agx-sn-caret { display: flex; color: var(--text4); transition: transform 150ms; }
 .agx-sn-grp[data-shut] .agx-sn-caret { transform: rotate(-90deg); }
 .agx-sn-roll { display: none; gap: 4px; }
@@ -2171,34 +2230,36 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
 .agx-sn-items { margin-left: 20px; border-left: 1px solid var(--surface-line); padding-left: 6px; }
 .agx-sn-it {
   display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border-radius: 8px; border: 0;
-  background: none; color: var(--text2); cursor: pointer; font-size: 13px; text-align: left; position: relative;
+  background: none; color: var(--text2); cursor: pointer; font-size: calc(13px * var(--agx-fs, 1)); text-align: left; position: relative;
   transition: background-color 120ms;
 }
 .agx-sn-it:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
 .agx-sn-it[data-on] { background: color-mix(in srgb, var(--hue) 16%, transparent); color: var(--text); font-weight: 600; }
+/* The 3px hue bar sits on the group's rule, 7px left of the row (6 of padding + the 1px rule). */
+.agx-sn-it[data-on]::before { content: ""; position: absolute; left: -7px; top: 6px; bottom: 6px; width: 3px; border-radius: 3px; background: var(--hue); }
 .agx-sn-ic { display: flex; flex: none; color: color-mix(in srgb, var(--hue) 70%, var(--text)); }
 .agx-sn-it[data-on] .agx-sn-ic { color: color-mix(in srgb, var(--hue) 92%, var(--text)); }
 .agx-sn-lbl { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.agx-sn-meta { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text3); }
+.agx-sn-meta { display: flex; align-items: center; gap: 4px; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); }
 .agx-sn-dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--text4); }
 .agx-sn-dot[data-state="on"] { background: var(--success); }
 .agx-sn-dot[data-state="needs"] { background: var(--warning); }
 .agx-sn-dot[data-state="off"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text4); }
 .agx-sn-cnt {
-  min-width: 20px; text-align: center; border-radius: 99px; padding: 0 6px; font-size: 11px; font-weight: 700; line-height: 18px;
+  min-width: 20px; text-align: center; border-radius: 99px; padding: 0 6px; font-size: calc(11px * var(--agx-fs, 1)); font-weight: 700; line-height: 18px;
   background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning-ink);
 }
 .agx-sn-cnt[data-tone="info"] { background: color-mix(in srgb, var(--info) 16%, transparent); color: var(--info-ink); }
 .agx-sn-pin {
   display: flex; align-items: center; gap: 8px; width: 100%; margin: 2px 0 6px; padding: 8px 10px; border-radius: 8px;
-  font-size: 13px; text-align: left; color: var(--text2); background: none; border: 1px solid var(--surface-line); cursor: pointer;
+  font-size: calc(13px * var(--agx-fs, 1)); text-align: left; color: var(--text2); background: none; border: 1px solid var(--surface-line); cursor: pointer;
 }
 .agx-sn-pin[data-on] { background: color-mix(in srgb, var(--primary) 15%, transparent); color: var(--text); border-color: transparent; }
-.agx-sn-pin-n { margin-left: auto; font-size: 11px; color: var(--text4); font-variant-numeric: tabular-nums; }
+.agx-sn-pin-n { margin-left: auto; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text4); font-variant-numeric: tabular-nums; }
 .agx-sn-sys { border-top: 1px solid var(--surface-line); padding: 6px 10px; }
 .agx-sn-sys .agx-sn-items { margin-left: 0; border: 0; padding: 0; }
 .agx-sn-legend {
-  display: flex; gap: 12px; padding: 8px 14px 10px; border-top: 1px solid var(--surface-line); font-size: 11px; color: var(--text3);
+  display: flex; gap: 12px; padding: 8px 14px 10px; border-top: 1px solid var(--surface-line); font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3);
 }
 .agx-sn-legend span { display: flex; align-items: center; gap: 4px; }
 .agx-sn-it:focus-visible, .agx-sn-gh:focus-visible, .agx-sn-pin:focus-visible, .agx-toc a:focus-visible, .agx-sp-seg button:focus-visible {
@@ -2212,15 +2273,15 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
   max-height: calc(100% - 24px); display: flex; flex-direction: column; background: var(--bg);
   border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 30px 70px -20px var(--shadow);
 }
-.agx-sp-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--surface-line); color: var(--text3); font-size: 12px; }
+.agx-sp-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--surface-line); color: var(--text3); font-size: calc(12px * var(--agx-fs, 1)); }
 .agx-sp-head b { flex: 1; min-width: 0; color: var(--text); font-weight: 600; }
 .agx-sp-also { color: var(--text4); font-weight: 400; }
 .agx-sp-seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--surface-inset); }
-.agx-sp-seg button { border: 0; background: none; padding: 2px 8px; border-radius: 6px; font-size: 12px; color: var(--text3); cursor: pointer; white-space: nowrap; }
+.agx-sp-seg button { border: 0; background: none; padding: 2px 8px; border-radius: 6px; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); cursor: pointer; white-space: nowrap; }
 .agx-sp-seg button[aria-pressed="true"] { background: var(--bg); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); }
 .agx-sp-list { overflow: auto; padding: 4px 0 6px; }
 .agx-sp-pg {
-  display: flex; align-items: center; gap: 8px; padding: 10px 16px 4px; font-size: 11px; letter-spacing: 0.08em;
+  display: flex; align-items: center; gap: 8px; padding: 10px 16px 4px; font-size: calc(11px * var(--agx-fs, 1)); letter-spacing: 0.08em;
   text-transform: uppercase; color: var(--text2); font-weight: 700;
 }
 .agx-sp-pg span:not(.agx-sp-ci) { font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--text3); }
@@ -2230,16 +2291,16 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
 }
 .agx-sp-hit { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 8px 16px 8px 48px; cursor: pointer; align-items: center; }
 .agx-sp-hit[data-sel] { background: color-mix(in srgb, var(--primary) 16%, transparent); box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--primary) 55%, transparent); }
-.agx-sp-n { font-weight: 600; font-size: 13px; color: var(--text); }
+.agx-sp-n { font-weight: 600; font-size: calc(13px * var(--agx-fs, 1)); color: var(--text); }
 .agx-sp-tag {
-  margin-left: 8px; padding: 0 6px; border-radius: 5px; font-size: 10.5px; font-weight: 500; color: var(--text3);
+  margin-left: 8px; padding: 0 6px; border-radius: 5px; font-size: calc(10.5px * var(--agx-fs, 1)); font-weight: 500; color: var(--text3);
   border: 1px solid var(--border); background: var(--surface-card);
 }
-.agx-sp-h { grid-column: 1; color: var(--text3); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agx-sp-h { grid-column: 1; color: var(--text3); font-size: calc(12px * var(--agx-fs, 1)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .agx-sp-w { grid-row: 1 / span 2; grid-column: 2; color: var(--text4); display: flex; }
 .agx-sp-hit mark { background: color-mix(in srgb, var(--primary) 34%, transparent); color: inherit; border-radius: 3px; }
 .agx-sp-none { margin: 14px; padding: 30px; text-align: center; color: var(--text3); border: 1px dashed var(--border); border-radius: 12px; }
-.agx-sp-keys { display: flex; gap: 16px; padding: 8px 16px; border-top: 1px solid var(--surface-line); color: var(--text3); font-size: 11px; }
+.agx-sp-keys { display: flex; gap: 16px; padding: 8px 16px; border-top: 1px solid var(--surface-line); color: var(--text3); font-size: calc(11px * var(--agx-fs, 1)); }
 .agx-sp-keys span { display: flex; gap: 4px; align-items: center; }
 
 /* the page header */
@@ -2247,26 +2308,26 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
   position: sticky; top: 0; z-index: 5; padding: 18px 40px 14px; border-bottom: 1px solid var(--surface-line);
   background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(8px);
 }
-.agx-ph-crumb { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text3); }
+.agx-ph-crumb { display: flex; align-items: center; gap: 6px; font-size: calc(11.48px * var(--agx-fs, 1)); color: var(--text3); }
 .agx-ph-crumb i { width: 8px; height: 8px; border-radius: 3px; background: var(--hue); display: inline-block; }
 .agx-ph-row { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; margin-top: 6px; }
 .agx-ph-pic {
-  width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; flex: none;
+  width: 32px; height: 32px; border-radius: 11px; display: grid; place-items: center; flex: none;
   background: color-mix(in srgb, var(--hue) 18%, transparent); color: color-mix(in srgb, var(--hue) 78%, var(--text));
 }
-.agx-ph-title { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.015em; color: var(--text); }
+.agx-ph-title { margin: 0; font-size: calc(23.1px * var(--agx-fs, 1)); font-weight: 700; letter-spacing: -0.01em; color: var(--text); }
 .agx-ph-chips { display: flex; gap: 6px; align-items: center; }
 .agx-ph-sp { flex: 1; }
-.agx-ph-sum { margin: 4px 0 0; color: var(--text3); font-size: 13px; max-width: 90ch; }
+.agx-ph-sum { margin: 4px 0 0; color: var(--text3); font-size: calc(14px * var(--agx-fs, 1)); max-width: 90ch; }
 
 /* the page under the header: its cards, and the index beside or above them */
 .agx-settings-page { padding: 22px 40px 28px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-items: start; }
 .agx-settings-page .agx-scard, .agx-settings-page .agx-settings-section { scroll-margin-top: calc(var(--agx-ph-h, 112px) + 16px); }
 .agx-toc { display: flex; flex-wrap: wrap; gap: 6px; position: sticky; top: calc(var(--agx-ph-h, 112px) + 12px); z-index: 4; }
-.agx-toc-lab { display: none; font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--text3); font-weight: 700; margin: 0 0 8px; }
+.agx-toc-lab { display: none; font-size: calc(11px * var(--agx-fs, 1)); letter-spacing: 0.09em; text-transform: uppercase; color: var(--text3); font-weight: 700; margin: 0 0 8px; }
 .agx-toc a {
   display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text2);
-  border-radius: 99px; padding: 4px 10px; font-size: 12.5px; text-decoration: none; cursor: pointer;
+  border-radius: 99px; padding: 4px 10px; font-size: calc(12.5px * var(--agx-fs, 1)); text-decoration: none; cursor: pointer;
 }
 .agx-toc a:hover { border-color: var(--text2); }
 .agx-toc a[aria-current] { background: var(--text); color: var(--bg); border-color: var(--text); }
@@ -2749,7 +2810,7 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
 .agx-input {
   padding: .375rem .5rem;
   border-radius: .5rem;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--agx-fs, 1));
   background: var(--surface-inset);
   border: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
   color: var(--text);
@@ -2788,7 +2849,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
    * glyph, and inheriting the row's 10.5px would make it neither. */
   min-width: 20px;
   min-height: 20px;
-  font-size: 15px;
+  font-size: calc(15px * var(--agx-fs, 1));
   transition: opacity 140ms ease, color 140ms ease;
 }
 .agx-work-item:hover .agx-work-x,
@@ -2803,7 +2864,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
   border-radius: 4px;
   padding: 0 4px;
   font: inherit;
-  font-size: 10px;
+  font-size: calc(10px * var(--agx-fs, 1));
   color: var(--text3);
 }
 
@@ -2860,10 +2921,10 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-tb > div { padding: .55rem .85rem; border-right: 1px solid color-mix(in srgb, var(--border) 55%, transparent); }
 .agx-tb > div:last-child { border-right: 0; }
 .agx-tb > div.on { background: color-mix(in srgb, var(--primary) 9%, transparent); box-shadow: inset 0 2px 0 var(--primary); }
-.agx-tb-k { font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--text4); }
+.agx-tb-k { font-size: calc(9.5px * var(--agx-fs, 1)); letter-spacing: .14em; text-transform: uppercase; color: var(--text4); }
 .agx-tb > div.on .agx-tb-k { color: var(--primary); }
-.agx-tb-v { font-size: 13.5px; font-weight: 600; margin-top: .1rem; color: var(--text); letter-spacing: -.01em; }
-.agx-tb-v small { font-weight: 400; color: var(--text3); font-size: 11.5px; }
+.agx-tb-v { font-size: calc(13.5px * var(--agx-fs, 1)); font-weight: 600; margin-top: .1rem; color: var(--text); letter-spacing: -.01em; }
+.agx-tb-v small { font-weight: 400; color: var(--text3); font-size: calc(11.5px * var(--agx-fs, 1)); }
 
 /* A revision cloud: the scalloped outline a drawing puts around anything
  * altered since the last issue. Drawn AROUND the row rather than filling it,
@@ -2904,7 +2965,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-revtag {
   display: inline-grid; place-items: center; width: 20px; height: 20px;
   transform: rotate(45deg); border: 1.5px solid var(--error); color: var(--error-ink);
-  font-size: 9.5px; font-weight: 700; flex: 0 0 auto;
+  font-size: calc(9.5px * var(--agx-fs, 1)); font-weight: 700; flex: 0 0 auto;
 }
 .agx-revtag > span { transform: rotate(-45deg); }
 
@@ -2912,7 +2973,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
    carries what `failed` does not: the sheet is kept, it is simply not to be
    built from. */
 .agx-stamp {
-  font-size: 9px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+  font-size: calc(9px * var(--agx-fs, 1)); font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
   padding: .12rem .3rem; border: 1px solid currentColor; flex: 0 0 auto; line-height: 1.3;
 }
 
@@ -2987,7 +3048,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
   grid-template-columns: minmax(0, 1fr);
   grid-template-areas: "id" "tt" "st" "ev";
 }
-.agx-prc-id { grid-area: id; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; min-height: 20px; white-space: nowrap; color: var(--text3); font-size: 10.5px; }
+.agx-prc-id { grid-area: id; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; min-height: 20px; white-space: nowrap; color: var(--text3); font-size: calc(10.5px * var(--agx-fs, 1)); }
 .agx-prc-title { grid-area: tt; align-self: start; min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 /* The three buttons of the group say they are buttons on a mouse: a tint and a
    ring that sit ON TOP of whatever the state painted (the green of a copy, the
@@ -3036,7 +3097,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-trk {
   position: relative; display: inline-flex; align-items: center; gap: 2px 8px; flex: none; min-width: 0;
   flex-wrap: wrap; justify-content: flex-end; max-width: 100%;
-  min-height: 28px; margin-left: auto; padding: 2px 4px 2px 8px; font-size: 10px; white-space: nowrap;
+  min-height: 28px; margin-left: auto; padding: 2px 4px 2px 8px; font-size: calc(10px * var(--agx-fs, 1)); white-space: nowrap;
   color: var(--text3); border-radius: 7px;
   border: 1px solid color-mix(in srgb, var(--accent, var(--primary)) 26%, transparent);
   background: color-mix(in srgb, var(--accent, var(--primary)) 8%, var(--surface-card));
@@ -3062,7 +3123,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-trk-cp[data-copied] { color: var(--success); background: color-mix(in srgb, var(--success) 16%, transparent); }
 .agx-trk-tip {
   display: none; position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); z-index: 5;
-  padding: 4px 8px; border-radius: 6px; font-size: 10px; white-space: nowrap; pointer-events: none;
+  padding: 4px 8px; border-radius: 6px; font-size: calc(10px * var(--agx-fs, 1)); white-space: nowrap; pointer-events: none;
   background: var(--text); color: var(--bg); box-shadow: 0 4px 12px -4px rgba(0, 0, 0, .4);
 }
 /* The last button's tip hangs from its right edge: centred, it would leave the
@@ -3099,11 +3160,11 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-stk-b {
   --c: var(--primary); --ci: var(--primary-ink);
   flex: 1 1 0; min-height: 20px; display: grid; place-items: center; border-radius: 4px;
-  font-size: 9.5px; font-weight: 700; line-height: 1; letter-spacing: -0.2px; color: var(--ci);
+  font-size: calc(9.5px * var(--agx-fs, 1)); font-weight: 700; line-height: 1; letter-spacing: -0.2px; color: var(--ci);
   background: color-mix(in srgb, var(--c) 12%, transparent);
   box-shadow: inset 0 0 0 1px var(--c);
 }
-.agx-stk-fork .agx-stk-b { font-size: 8.5px; letter-spacing: -0.4px; }
+.agx-stk-fork .agx-stk-b { font-size: calc(8.5px * var(--agx-fs, 1)); letter-spacing: -0.4px; }
 .agx-stk-b[data-k="cur"] { background: var(--c); color: var(--on-primary); }
 .agx-stk-b[data-k="off"] { background: transparent; box-shadow: none; outline: 1px dashed var(--text3); outline-offset: -1px; color: var(--text2); }
 .agx-stk-b[data-k="merged"] { --c: var(--primary); background: color-mix(in srgb, var(--c) 28%, transparent); }
@@ -3111,7 +3172,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-stk-b[data-k="missing"] { --c: var(--warning); --ci: var(--warning-ink); background: color-mix(in srgb, var(--c) 14%, transparent); box-shadow: none; outline: 1px dashed var(--c); outline-offset: -1px; }
 .agx-stk[data-warn] .agx-stk-b[data-k="cur"] { --c: var(--warning); color: var(--bg); }
 .agx-stk[data-warn] .agx-stk-b[data-k="off"] { outline-color: var(--warning); color: var(--warning-ink); }
-.agx-stk-gap { flex: none; height: 16px; display: grid; place-items: center; font-size: 9px; font-weight: 700; line-height: 1; color: var(--text2); }
+.agx-stk-gap { flex: none; height: 16px; display: grid; place-items: center; font-size: calc(9px * var(--agx-fs, 1)); font-weight: 700; line-height: 1; color: var(--text2); }
 /* Pointer-over a token outlines the base card it names: an outline, so nothing moves. */
 .agx-stk-card[data-lit] { position: relative; }
 /* An outline sits outside the card and the lane's scroll box cut it off; a ring drawn inside, over the rows, cannot be clipped and hides nothing of the content. */
@@ -3121,7 +3182,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
   all: unset; box-sizing: border-box; cursor: pointer;
   --c: var(--primary); --ci: var(--primary-ink);
   display: inline-flex; align-items: center; gap: 6px; padding: 0 6px; border-radius: 6px;
-  max-width: 210px; overflow: hidden; white-space: nowrap; font-size: 10.5px; color: var(--ci);
+  max-width: 210px; overflow: hidden; white-space: nowrap; font-size: calc(10.5px * var(--agx-fs, 1)); color: var(--ci);
   background: color-mix(in srgb, var(--c) 10%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 45%, transparent);
 }
@@ -3148,7 +3209,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 45%, transparent);
 }
 .agx-stk-c[data-broken] { --c: var(--warning); --ci: var(--warning-ink); }
-.agx-stk-c > button { all: unset; box-sizing: border-box; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; color: var(--ci); font-size: 11px; }
+.agx-stk-c > button { all: unset; box-sizing: border-box; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; color: var(--ci); font-size: calc(11px * var(--agx-fs, 1)); }
 .agx-stk-c > button:hover:not([disabled]) { background: color-mix(in srgb, var(--c) 18%, transparent); }
 .agx-stk-c > button:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 .agx-stk-c > button[disabled] { cursor: default; opacity: 0.45; }
@@ -3161,12 +3222,12 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 
 /* The ladder behind the identifier. */
 .agx-stk-lad { width: 480px; max-width: calc(100vw - 32px); padding: 8px; }
-.agx-stk-row { display: grid; grid-template-columns: 20px 1fr auto; gap: 8px; padding: 6px 4px; border-radius: 6px; align-items: start; font-size: 11px; position: relative; }
+.agx-stk-row { display: grid; grid-template-columns: 20px 1fr auto; gap: 8px; padding: 6px 4px; border-radius: 6px; align-items: start; font-size: calc(11px * var(--agx-fs, 1)); position: relative; }
 .agx-stk-row[data-me] { background: color-mix(in srgb, var(--primary) 12%, transparent); }
 .agx-stk-rail { position: relative; display: grid; justify-items: center; align-self: stretch; }
 .agx-stk-row:not(:last-child) .agx-stk-rail::after { content: ""; position: absolute; left: 50%; top: 22px; bottom: -12px; width: 2px; margin-left: -1px; background: color-mix(in srgb, var(--text) 22%, transparent); }
 .agx-stk-rail .agx-stk-b { width: 20px; flex: none; position: relative; z-index: 1; }
-.agx-stk-trunk { position: relative; z-index: 1; height: 16px; max-width: 44px; padding: 0 2px; display: grid; place-items: center; border-radius: 3px; font-size: 8px; text-transform: uppercase; line-height: 1; color: var(--text3); background: var(--surface-card); box-shadow: inset 0 0 0 1px var(--surface-line); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agx-stk-trunk { position: relative; z-index: 1; height: 16px; max-width: 44px; padding: 0 2px; display: grid; place-items: center; border-radius: 3px; font-size: calc(8px * var(--agx-fs, 1)); text-transform: uppercase; line-height: 1; color: var(--text3); background: var(--surface-card); box-shadow: inset 0 0 0 1px var(--surface-line); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* The glyph on a step row that is waiting on Jira: still when motion is reduced, the row's word says it. */
 @keyframes agx-step-turn { to { transform: rotate(360deg); } }
@@ -3175,9 +3236,6 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 /* The Orchestration page's "Right now" picture: the main agent, a wire to each job. */
 .agx-flow { display: grid; grid-template-columns: minmax(200px, 220px) minmax(0, 1fr); gap: 40px; align-items: stretch; }
 .agx-flow-roles { display: grid; gap: 12px; }
-/* The page reads as prose with the machine's words in mono, as the approved mock does; the body's mono stays everywhere else. */
-.agx-orch { font-family: var(--font-prose); }
-.agx-orch .t-mono { font-family: var(--font-mono, ui-monospace, monospace); }
 .agx-flow-main, .agx-flow-job { position: relative; }
 .agx-flow-main::after { content: ""; position: absolute; top: 50%; right: -20px; width: 20px; height: 2px; background: var(--border2); }
 .agx-flow-job::after { content: ""; position: absolute; top: 50%; left: -20px; width: 20px; height: 2px; background: var(--border2); }
@@ -3285,8 +3343,19 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 }
 
 /* Plugins page: installed cards fill the width, two to a row once there is room for two 560px cards. */
-.agx-plugin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(440px, 100%), 1fr)); gap: 16px; align-items: stretch; }
-.agx-plugin-add { background: transparent; border: 1px dashed var(--surface-line); color: var(--text2); transition: background-color 120ms ease, border-color 120ms ease; }
+/* Cards in the width there is: one under 760px of page, two from there, three on a wide screen. */
+.agx-plugin-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: stretch; }
+@container agx-settings (min-width: 760px) { .agx-plugin-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container agx-settings (min-width: 1500px) { .agx-plugin-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.agx-plugin-add {
+  grid-column: 1 / -1; display: flex; align-items: center; justify-content: center; gap: 8px 14px; flex-wrap: wrap; padding: 16px; border-radius: 13px; cursor: pointer;
+  background: transparent; border: 1px dashed var(--surface-line); color: var(--text2); font: inherit; transition: background-color 120ms ease, border-color 120ms ease;
+}
+.agx-plugin-add b { font-size: calc(14px * var(--agx-fs, 1)); color: var(--text); }
+.agx-plugin-add span { font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); max-width: 34ch; }
+@container agx-settings (min-width: 1500px) {
+  .agx-plugin-add { grid-column: auto; flex-direction: column; min-height: 200px; text-align: center; }
+}
 .agx-plugin-add:hover { background: var(--surface-card); border-color: color-mix(in srgb, var(--primary) 45%, var(--surface-line)); }
 .agx-perm > summary::-webkit-details-marker { display: none; }
 .agx-perm-caret { display: inline-block; transition: transform 120ms ease; }
@@ -3322,7 +3391,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-presence-on .agx-presence-ghost { opacity: 1; }
 .agx-presence-on .agx-presence-ghost.is-stale { opacity: 0; }
 .agx-presence-arrow { display: block; width: 20px; height: 20px; filter: drop-shadow(0 1px 1.5px rgba(40, 20, 90, .28)); }
-.agx-presence-label { position: absolute; left: 18px; top: 20px; white-space: nowrap; font-size: 11px; font-weight: 500; line-height: 1; padding: 4px 8px; border-radius: 7px;
+.agx-presence-label { position: absolute; left: 18px; top: 20px; white-space: nowrap; font-size: calc(11px * var(--agx-fs, 1)); font-weight: 500; line-height: 1; padding: 4px 8px; border-radius: 7px;
   color: color-mix(in srgb, var(--agx-mark) 70%, var(--text)); background: color-mix(in srgb, var(--bg) 86%, transparent);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--agx-mark) 22%, transparent), 0 6px 16px -8px rgba(40, 20, 90, .35); }
 /* The dock: the island's own glass, so the agent's two places on the page read
@@ -3339,10 +3408,10 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-presence-mark { flex: none; transition: color 300ms var(--agx-out); }
 .agx-presence-dock.is-yours { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 0 0 1px color-mix(in srgb, var(--agx-dock-yours) 45%, transparent), 0 18px 40px -18px rgba(40, 20, 90, .55); --agx-dock-mark: var(--agx-dock-yours); }
 .agx-presence-who { display: flex; flex-direction: column; gap: 4px; min-width: 112px; }
-.agx-presence-task { font-size: 12.5px; font-weight: 600; letter-spacing: -.005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agx-presence-task { font-size: calc(12.5px * var(--agx-fs, 1)); font-weight: 600; letter-spacing: -.005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* As wide as the longest word, so the dock and Take over stay put as the state changes. */
 .agx-presence-state { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; height: 20px; padding: 0 8px 0 6px; border-radius: 10px;
-  font-size: 11px; font-weight: 500; letter-spacing: .01em; color: #c4b5fd; background: color-mix(in srgb, var(--agx-mark) 18%, transparent);
+  font-size: calc(11px * var(--agx-fs, 1)); font-weight: 500; letter-spacing: .01em; color: #c4b5fd; background: color-mix(in srgb, var(--agx-mark) 18%, transparent);
   transition: background-color 280ms ease-out, color 280ms ease-out; }
 .agx-presence-dock.is-thinking .agx-presence-state, .agx-presence-dock.is-waiting .agx-presence-state, .agx-presence-dock.is-working .agx-presence-state { color: rgba(242, 240, 247, .72); background: rgba(255, 255, 255, .08); }
 .agx-presence-dock.is-yours .agx-presence-state { color: var(--agx-dock-yours); background: color-mix(in srgb, var(--agx-dock-yours) 16%, transparent); }
@@ -3371,7 +3440,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-sw-lay.is-out { animation: agx-sw-out 200ms var(--agx-out) both; pointer-events: none; }
 @keyframes agx-sw-in { from { opacity: 0; filter: blur(3px); transform: translateY(5px); } }
 @keyframes agx-sw-out { to { opacity: 0; filter: blur(3px); transform: translateY(-5px); } }
-.agx-presence-dock button { flex: none; display: inline-flex; align-items: center; height: 40px; padding: 0 16px 0 10px; border-radius: 16px; border: 0; cursor: pointer; font: inherit; font-size: 13px; font-weight: 700; letter-spacing: -.005em;
+.agx-presence-dock button { flex: none; display: inline-flex; align-items: center; height: 40px; padding: 0 16px 0 10px; border-radius: 16px; border: 0; cursor: pointer; font: inherit; font-size: calc(13px * var(--agx-fs, 1)); font-weight: 700; letter-spacing: -.005em;
   background: var(--agx-dock-take); color: #2a1700; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .35), 0 6px 16px -8px rgba(245, 158, 11, .8);
   transition: transform 150ms var(--agx-ease), background-color 280ms ease-out, box-shadow 280ms ease-out, color 280ms ease-out; }
 .agx-presence-dock button:hover { background: #fbbf24; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), 0 8px 22px -6px rgba(245, 158, 11, .95); }
@@ -3428,7 +3497,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
   /* collapsing waits 700 ms: a pointer that slips off the pill for a moment
      finds it still open when it comes back (hover intent). 250 ms closed it
      under a hand that overshot the counter by a few pixels. */
-  transition: clip-path 300ms cubic-bezier(0.32, 0.72, 0, 1) 700ms, background 220ms ease 700ms, top 300ms cubic-bezier(0.32, 0.72, 0, 1) 700ms; font-size: 12px; }
+  transition: clip-path 300ms cubic-bezier(0.32, 0.72, 0, 1) 700ms, background 220ms ease 700ms, top 300ms cubic-bezier(0.32, 0.72, 0, 1) 700ms; font-size: calc(12px * var(--agx-fs, 1)); }
 .agx-isl:not(.is-open):is(:hover, .is-peek), .agx-isl:not(.is-open):focus-within { clip-path: inset(0px calc(50% - 210px) calc(100% - 36px) calc(50% - 210px) round 18px); background: rgba(22, 19, 31, .96); transition-duration: 300ms; transition-delay: 0ms; }
 .agx-isl.is-yours:not(.is-open):is(:hover, .is-peek), .agx-isl.is-yours:not(.is-open):focus-within { clip-path: inset(0px calc(50% - 300px) calc(100% - 40px) calc(50% - 300px) round 20px); }
 .agx-isl.is-tucked:not(.is-open):not(:hover):not(.is-peek):not(:focus-within) { clip-path: inset(0px calc(50% - 18px) calc(100% - 14px) calc(50% - 18px) round 0px 0px 8px 8px); background: rgba(22, 19, 31, .55); }
@@ -3494,7 +3563,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-isl.is-tucked:not(:hover):not(.is-peek):not(:focus-within) .agx-isl-tuck { opacity: 1; }
 .agx-isl.is-tucked:not(:hover):not(.is-peek):not(:focus-within) .agx-isl-compact,
 .agx-isl:not(.is-open):is(:hover, .is-peek) .agx-isl-compact, .agx-isl:not(.is-open):focus-within .agx-isl-compact { opacity: 0; transition-delay: 0ms; transition-duration: 80ms; }
-.agx-isl-num { font-weight: 600; font-size: 11px; font-variant-numeric: tabular-nums; color: #fff; }
+.agx-isl-num { font-weight: 600; font-size: calc(11px * var(--agx-fs, 1)); font-variant-numeric: tabular-nums; color: #fff; }
 .agx-isl-dot { width: 6px; height: 6px; border-radius: 50%; background: #6b6578; flex: none; }
 .agx-isl-dot.is-working { background: #34d399; box-shadow: 0 0 0 3px rgba(52, 211, 153, .22); }
 .agx-isl-dot.is-taken { background: #f5c76b; box-shadow: 0 0 0 3px rgba(245, 199, 107, .22); }
@@ -3507,7 +3576,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-isl-status { width: 420px; height: 36px; gap: 8px; padding: 0 10px 0 12px; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; text-align: left; }
 .agx-isl-title { flex: 1; min-width: 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* the text is its own box so it can end in an ellipsis; a flex row cannot. The count keeps an 8px gap from it. */
-.agx-isl-doing { display: flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0; max-width: 58%; font-size: 11px; color: #c4b5fd; }
+.agx-isl-doing { display: flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0; max-width: 58%; font-size: calc(11px * var(--agx-fs, 1)); color: #c4b5fd; }
 .agx-isl-doing-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agx-isl-status .agx-isl-num { flex: none; margin-left: 2px; }
 .agx-isl-bar { width: 600px; height: 40px; gap: 2px; padding: 0 8px; }
@@ -3517,9 +3586,9 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-isl-ib:disabled { opacity: .35; cursor: default; }
 .agx-isl-addr { flex: 1; min-width: 0; height: 28px; margin: 0 6px; border: 0; border-radius: 14px; padding: 0 12px; text-align: left; font: inherit; color: #f2f0f7; background: rgba(255, 255, 255, .08); cursor: text; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The way into the overview, so a target a hand finds without aiming: the bar's full height less its padding. */
-.agx-isl-count { flex: none; min-width: 40px; height: 30px; margin-left: 2px; padding: 0 12px; border: 0; border-radius: 15px; background: rgba(167, 139, 250, .2); color: #fff; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; cursor: pointer; transition: background 140ms ease; }
+.agx-isl-count { flex: none; min-width: 40px; height: 30px; margin-left: 2px; padding: 0 12px; border: 0; border-radius: 15px; background: rgba(167, 139, 250, .2); color: #fff; font-size: calc(13px * var(--agx-fs, 1)); font-weight: 600; font-variant-numeric: tabular-nums; cursor: pointer; transition: background 140ms ease; }
 .agx-isl-count:hover { background: rgba(167, 139, 250, .34); }
-.agx-isl-hand { flex: none; height: 26px; margin-left: 8px; padding: 0 12px; border: 0; border-radius: 13px; background: #f5c76b; color: #2a1d00; font-weight: 600; font-size: 11.5px; cursor: pointer; }
+.agx-isl-hand { flex: none; height: 26px; margin-left: 8px; padding: 0 12px; border: 0; border-radius: 13px; background: #f5c76b; color: #2a1d00; font-weight: 600; font-size: calc(11.5px * var(--agx-fs, 1)); cursor: pointer; }
 .agx-isl-hand:active, .agx-isl-count:active, .agx-isl-ib:active:not(:disabled) { transform: scale(.96); }
 /* the overview */
 /* the overview is clipped to the same shape as it grows and shrinks, so the
@@ -3540,12 +3609,12 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-isl.is-shown .agx-isl-box { opacity: 1; transform: none; transition: opacity 160ms ease-out calc(10ms + var(--i, 0) * 28ms), transform 290ms var(--agx-spring) calc(10ms + var(--i, 0) * 28ms), translate 260ms cubic-bezier(0.23, 1, 0.32, 1); }
 .agx-isl-head { position: absolute; left: 0; right: 0; top: 18px; z-index: 2; display: flex; justify-content: center; pointer-events: none; }
 .agx-isl-sum, .agx-isl-away { pointer-events: auto; background: color-mix(in srgb, var(--bg) 62%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent), 0 1px 2px rgba(30, 20, 60, .08), 0 8px 20px -8px rgba(30, 20, 60, .18); }
-.agx-isl-sum { margin: 0; height: 32px; padding: 0 16px; display: flex; align-items: center; gap: 8px; white-space: nowrap; border-radius: 16px; font-size: 12px; color: var(--text2); }
+.agx-isl-sum { margin: 0; height: 32px; padding: 0 16px; display: flex; align-items: center; gap: 8px; white-space: nowrap; border-radius: 16px; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text2); }
 .agx-isl-sum strong { color: var(--text); font-weight: 600; }
 .agx-isl-sum i { color: color-mix(in srgb, var(--text2) 55%, transparent); font-style: normal; }
 .agx-isl-away { position: absolute; right: 18px; top: 0; width: 32px; height: 32px; border-radius: 16px; }
 .agx-isl-mc .agx-isl-away:hover:not(:disabled) { background: color-mix(in srgb, var(--bg) 90%, transparent); }
-.agx-isl-hint { position: absolute; left: 0; right: 0; bottom: 20px; margin: 0; text-align: center; font-size: 11px; color: color-mix(in srgb, var(--text2) 55%, transparent); pointer-events: none; }
+.agx-isl-hint { position: absolute; left: 0; right: 0; bottom: 20px; margin: 0; text-align: center; font-size: calc(11px * var(--agx-fs, 1)); color: color-mix(in srgb, var(--text2) 55%, transparent); pointer-events: none; }
 /* the archipelago: islands wrap and sit centred, vertically too while they are few */
 .agx-isl-boxes { flex: 1; overflow: auto; padding: 76px 90px 44px; display: flex; flex-wrap: wrap; justify-content: center; align-content: center; align-content: safe center; gap: 30px 34px; }
 .agx-isl-box { position: relative; top: var(--dy, 0px); min-width: 236px; max-width: 100%; padding: 12px 14px 14px; border-radius: 24px; box-sizing: border-box;
@@ -3554,10 +3623,10 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
   box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 8%, transparent), 0 1px 1px rgba(30, 20, 60, .06), 0 8px 16px -4px rgba(30, 20, 60, .10), 0 26px 50px -14px rgba(30, 20, 60, .22); }
 .agx-isl-box:hover { translate: 0 -3px; }
 .agx-isl-box header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
-.agx-isl-bn { font-weight: 600; font-size: 12.5px; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agx-isl-bc { font-size: 11px; margin-right: 6px; color: color-mix(in srgb, var(--text2) 70%, transparent); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.agx-isl-bn { font-weight: 600; font-size: calc(12.5px * var(--agx-fs, 1)); color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agx-isl-bc { font-size: calc(11px * var(--agx-fs, 1)); margin-right: 6px; color: color-mix(in srgb, var(--text2) 70%, transparent); font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* A box's state chip: the act's word while an agent acts, Thinking between, Done once it went quiet. */
-.agx-isl-state { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px 0 6px; border-radius: 11px; font-size: 11px; font-weight: 600; white-space: nowrap; color: var(--ink-agent); background: rgba(139, 92, 246, .14); animation: agx-state-in 200ms var(--agx-ease); }
+.agx-isl-state { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px 0 6px; border-radius: 11px; font-size: calc(11px * var(--agx-fs, 1)); font-weight: 600; white-space: nowrap; color: var(--ink-agent); background: rgba(139, 92, 246, .14); animation: agx-state-in 200ms var(--agx-ease); }
 .agx-isl-state svg { flex: none; overflow: visible; width: 12px; height: 12px; }
 .agx-isl-state.is-waiting { color: var(--text2); background: color-mix(in srgb, var(--text) 8%, transparent); }
 .agx-isl-state.is-done { color: var(--ink-ok); background: rgba(16, 185, 129, .16); }
@@ -3595,19 +3664,19 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-isl-card.is-on:not(.is-driven) .agx-isl-thumb { box-shadow: 0 0 0 2px var(--ink-you), 0 2px 6px -2px rgba(30, 20, 60, .22); }
 .agx-isl-card.is-dim .agx-isl-thumb, .agx-isl-card.is-dim .agx-isl-cap { opacity: .55; }
 .agx-isl-drv { position: absolute; left: 5px; top: 5px; z-index: 1; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 11px; color: #fff; background: var(--ink-agent); box-shadow: 0 1px 4px rgba(30, 20, 60, .4); }
-.agx-isl-tag { align-self: flex-start; max-width: 100%; box-sizing: border-box; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 8px; border-radius: 8px; font-size: 10.5px; font-weight: 700; line-height: 1.4; }
+.agx-isl-tag { align-self: flex-start; max-width: 100%; box-sizing: border-box; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 8px; border-radius: 8px; font-size: calc(10.5px * var(--agx-fs, 1)); font-weight: 700; line-height: 1.4; }
 .agx-isl-tag.is-agent { color: #fff; background: var(--ink-agent); }
 .agx-isl-tag.is-you { color: var(--text); background: color-mix(in srgb, var(--ink-you) 28%, transparent); }
 @media (prefers-reduced-motion: reduce) { .agx-isl-card.is-driven .agx-isl-thumb { animation: none; } }
 .agx-isl-card:focus-visible .agx-isl-thumb { outline: 2px solid var(--ring); outline-offset: 3px; }
 @media (hover: hover) and (pointer: fine) { .agx-isl-card:hover .agx-isl-thumb { transform: translateY(-1px); box-shadow: 0 0 0 1.5px color-mix(in srgb, #8b5cf6 60%, transparent), 0 6px 14px -4px rgba(30, 20, 60, .25); } }
-.agx-isl-mono { position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: 6px; font-size: 16px; font-weight: 600; color: var(--text2); }
-.agx-isl-mono small { font-size: 11px; font-weight: 400; color: color-mix(in srgb, var(--text2) 85%, transparent); }
+.agx-isl-mono { position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: 6px; font-size: calc(16px * var(--agx-fs, 1)); font-weight: 600; color: var(--text2); }
+.agx-isl-mono small { font-size: calc(11px * var(--agx-fs, 1)); font-weight: 400; color: color-mix(in srgb, var(--text2) 85%, transparent); }
 .agx-isl-x { position: absolute; top: 5px; right: 5px; width: 20px; height: 20px; padding: 0; border-radius: 10px; border: 0; display: grid; place-items: center; line-height: 1; color: #fff; background: rgba(29, 26, 39, .72); opacity: 0; transform: scale(.9); cursor: pointer; transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1), transform 140ms cubic-bezier(0.23, 1, 0.32, 1); }
 .agx-isl-x svg { width: 9px; height: 9px; }
 .agx-isl-card:hover .agx-isl-x, .agx-isl-card:focus-visible .agx-isl-x, .agx-isl-x:focus-visible { opacity: 1; transform: none; }
 .agx-isl-x:hover { background: #e5484d; }
-.agx-isl-cap { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 10.5px; color: color-mix(in srgb, var(--text2) 85%, transparent); }
+.agx-isl-cap { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: calc(10.5px * var(--agx-fs, 1)); color: color-mix(in srgb, var(--text2) 85%, transparent); }
 .agx-isl-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* the owner: violet for a tab an agent holds, amber for one that is yours */
 .agx-isl-who { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--ink-you); }
@@ -3626,10 +3695,10 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-isl-boxes.is-dense .agx-isl-add { margin-top: 18px; }
 .agx-isl-boxes.is-dense .agx-isl-row > .agx-isl-add:only-child { margin-top: 0; }
 .agx-isl-head { gap: 10px; align-items: center; }
-.agx-isl-find { pointer-events: auto; width: 240px; height: 32px; padding: 0 14px; border: 0; border-radius: 16px; font: inherit; font-size: 12px; color: var(--text); background: color-mix(in srgb, var(--bg) 62%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent), 0 1px 2px rgba(30, 20, 60, .08); outline: none; }
+.agx-isl-find { pointer-events: auto; width: 240px; height: 32px; padding: 0 14px; border: 0; border-radius: 16px; font: inherit; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text); background: color-mix(in srgb, var(--bg) 62%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent), 0 1px 2px rgba(30, 20, 60, .08); outline: none; }
 .agx-isl-find:focus-visible { box-shadow: inset 0 0 0 2px var(--ring); }
 .agx-isl-find::placeholder { color: color-mix(in srgb, var(--text2) 60%, transparent); }
-.agx-isl-none { width: 100%; margin: 0; text-align: center; font-size: 12px; color: var(--text2); }
+.agx-isl-none { width: 100%; margin: 0; text-align: center; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text2); }
 .agx-isl-mc { --ring: color-mix(in srgb, #a78bfa 72%, var(--text)); --ink-agent: color-mix(in srgb, #8b5cf6 62%, var(--text)); --ink-ok: color-mix(in srgb, #10b981 58%, var(--text)); --ink-you: color-mix(in srgb, #f59e0b 62%, var(--text)); color: var(--text); }
 .agx-isl-mc .agx-isl-ib { color: var(--text2); }
 .agx-isl-mc .agx-isl-ib:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 10%, transparent); }
@@ -3645,7 +3714,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 /* The island's ⋯ menu. Its own rules, apart from the capsule's: dark glass in
    the island's colours, rows of 30 px, and an entrance that grows from the
    button (not for a keyboard open). */
-.agx-isl-menu { position: fixed; z-index: 41; min-width: 244px; padding: 6px; border-radius: 14px; color: #f2f0f7; font-size: 12px;
+.agx-isl-menu { position: fixed; z-index: 41; min-width: 244px; padding: 6px; border-radius: 14px; color: #f2f0f7; font-size: calc(12px * var(--agx-fs, 1));
   background: rgba(22, 19, 31, .92); box-shadow: 0 0 0 1px rgba(255, 255, 255, .08), 0 18px 40px -16px rgba(0, 0, 0, .65);
   transform-origin: calc(100% - 14px) 0; }
 .agx-isl-menu.is-anim { animation: agx-isl-menu-in 140ms ease-out; }
@@ -3657,7 +3726,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-isl-menu-ic { display: grid; place-items: center; flex: none; color: rgba(242, 240, 247, .62); }
 .agx-isl-menu-row:hover .agx-isl-menu-ic, .agx-isl-menu-row:focus-visible .agx-isl-menu-ic { color: #d8ccff; }
 .agx-isl-menu-t { flex: 1; white-space: nowrap; }
-.agx-isl-menu-k { font: inherit; font-size: 10.5px; color: rgba(242, 240, 247, .42); }
+.agx-isl-menu-k { font: inherit; font-size: calc(10.5px * var(--agx-fs, 1)); color: rgba(242, 240, 247, .42); }
 .agx-isl-menu-rule { height: 1px; margin: 4px 6px; background: rgba(255, 255, 255, .08); }
 
 /*
@@ -3666,7 +3735,9 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
  * theme; the picked entry carries the page's hue on its left edge.
  */
 .agx-le-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 0 0 14px; column-span: all; }
-.agx-le-bar .agx-le-q { flex: 0 1 340px; min-width: 200px; }
+.agx-le-bar .agx-le-q { position: relative; flex: 1 1 200px; max-width: 340px; min-width: 180px; display: flex; }
+.agx-le-q > svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text3); pointer-events: none; }
+.agx-le-q > input { width: 100%; padding-left: 30px !important; }
 .agx-le { display: grid; grid-template-columns: minmax(300px, 430px) minmax(0, 1fr); gap: 18px; align-items: start; column-span: all; }
 @container agx-settings (max-width: 760px) { .agx-le { grid-template-columns: minmax(0, 1fr); } }
 .agx-le-list, .agx-le-ed {
@@ -3675,8 +3746,8 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 }
 .agx-le-lg { display: flex; align-items: center; gap: 8px; padding: 10px 14px 8px; border-top: 1px solid var(--surface-line); }
 .agx-le-list > :first-child > .agx-le-lg { border-top: 0; }
-.agx-le-lg b { flex: 1; font-size: 11px; font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text2); }
-.agx-le-n { font-size: 11px; color: var(--text3); }
+.agx-le-lg b { flex: 1; font-size: calc(11px * var(--agx-fs, 1)); font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text2); }
+.agx-le-n { font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); }
 .agx-le-add { display: grid; place-items: center; width: 24px; height: 24px; border: 0; border-radius: 6px; background: none; color: var(--text3); cursor: pointer; }
 .agx-le-add:hover { color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); }
 .agx-le-li {
@@ -3687,16 +3758,40 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-le-li:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
 .agx-le-li[aria-current="true"] { background: color-mix(in srgb, var(--hue, var(--primary)) 14%, transparent); }
 .agx-le-li[aria-current="true"]::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--hue, var(--primary)); }
-.agx-le-t { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 650; min-width: 0; }
-.agx-le-s { font-size: 11.5px; color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agx-le-tag { font-size: 10px; font-weight: 500; padding: 0 6px; border-radius: 5px; color: var(--text3); box-shadow: inset 0 0 0 1px var(--surface-line); }
-.agx-le-empty { padding: 10px 16px 14px; font-size: 12px; color: var(--text3); }
+.agx-le-t { display: flex; align-items: center; gap: 8px; font-size: calc(13px * var(--agx-fs, 1)); font-weight: 650; min-width: 0; overflow-wrap: anywhere; }
+.agx-le-s { font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agx-le-tag { font-size: calc(10px * var(--agx-fs, 1)); font-weight: 500; padding: 0 6px; border-radius: 5px; color: var(--text3); box-shadow: inset 0 0 0 1px var(--surface-line); }
+.agx-le-empty { padding: 10px 16px 14px; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); }
 .agx-le-eh { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 14px 20px; border-bottom: 1px solid var(--surface-line); }
-.agx-le-et { margin: 0; font-size: 15px; font-weight: 650; color: var(--text); }
+.agx-le-et { margin: 0; font-size: calc(15px * var(--agx-fs, 1)); font-weight: 650; color: var(--text); min-width: 0; overflow-wrap: anywhere; }
 .agx-le-ed .agx-sform { gap: 0; }
+/* The editor of a prompt: fields beside the prompt when the card is wide enough for both, the prompt on top when it is not. */
+.agx-le-ed { container: agx-ed / inline-size; }
+.agx-le-eb { display: flex; flex-direction: column; }
+.agx-le-ep { order: -1; display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 16px 20px; }
+.agx-le-ef { display: flex; flex-direction: column; gap: 14px; padding: 16px 20px; border-top: 1px solid var(--surface-line); }
+@container agx-ed (min-width: 940px) {
+  .agx-le-eb { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); }
+  .agx-le-ep { order: 0; }
+  .agx-le-ef { border-top: 0; border-right: 1px solid var(--surface-line); }
+}
+.agx-le-pl { font-size: calc(13px * var(--agx-fs, 1)); font-weight: 650; color: var(--text); }
+.agx-le-vars { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); }
+.agx-le-vars button { border: 0; border-radius: 6px; padding: 2px 8px; font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text); cursor: pointer; background: var(--surface-inset); }
+.agx-le-vars button:hover { background: color-mix(in srgb, var(--text) 12%, var(--surface-inset)); }
+.agx-le-count { font-variant-numeric: tabular-nums; }
+.agx-le-ta { width: 100%; min-height: 340px; resize: vertical; padding: 12px 14px; border-radius: 9px; font-size: calc(13px * var(--agx-fs, 1)); line-height: 1.55; color: var(--text); outline: none; }
+@container agx-ed (max-width: 939px) { .agx-le-ta { min-height: 240px; } }
+.agx-le-help { margin: 0; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); }
+.agx-le-pv { max-height: 150px; overflow: auto; border: 1px dashed var(--border2); border-radius: 9px; padding: 10px 14px; font-size: calc(12.5px * var(--agx-fs, 1)); line-height: 1.5; color: var(--text2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.agx-le-pv > b { color: var(--text); }
+.agx-le-pv mark { background: none; color: var(--primary-ink, var(--primary)); font-weight: 650; }
+.agx-le-pv-none { color: var(--text3); }
+.agx-le-chipb { border: 0; background: none; padding: 0; cursor: pointer; border-radius: 999px; }
+.agx-le-bar .agx-le-kind { width: auto; min-width: 128px; }
 .agx-le-body { display: flex; flex-direction: column; gap: 14px; padding: 16px 20px; }
 .agx-le-foot {
-  display: flex; align-items: center; gap: 10px; padding: 12px 20px; font-size: 12px; color: var(--text3);
+  display: flex; align-items: center; gap: 10px; padding: 12px 20px; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3);
   border-top: 1px solid var(--surface-line); background: color-mix(in srgb, var(--surface-inset) 55%, transparent);
 }
 .agx-le-foot > i { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
@@ -3719,8 +3814,8 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-problem { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 10px 12px; background: color-mix(in srgb, var(--error) 9%, transparent); }
 .agx-problem-ic { display: flex; flex: none; margin-top: 1px; color: var(--error-ink); }
 .agx-problem-b { flex: 1 1 14rem; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.agx-problem-b b { font-size: 13.5px; font-weight: 650; color: var(--error-ink); }
-.agx-problem-b span { font-size: 12px; line-height: 1.45; color: var(--text2); overflow-wrap: anywhere; }
+.agx-problem-b b { font-size: calc(13.5px * var(--agx-fs, 1)); font-weight: 650; color: var(--error-ink); }
+.agx-problem-b span { font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.45; color: var(--text2); overflow-wrap: anywhere; }
 .agx-save:empty { display: none; }
 .agx-badge > .agx-spin { flex: none; }
 .agx-le-foot > .agx-spin { flex: none; }
@@ -3730,10 +3825,190 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
   background: color-mix(in srgb, var(--hue, var(--primary)) 16%, transparent);
   color: color-mix(in srgb, var(--hue, var(--primary)) 80%, var(--text));
 }
-.agx-le-blank h3 { margin: 0; font-size: 15px; font-weight: 650; color: var(--text); }
-.agx-le-blank p { margin: 0; max-width: 46ch; font-size: 12.5px; line-height: 1.5; color: var(--text3); }
+.agx-le-blank h3 { margin: 0; font-size: calc(15px * var(--agx-fs, 1)); font-weight: 650; color: var(--text); }
+.agx-le-blank p { margin: 0; max-width: 46ch; font-size: calc(12.5px * var(--agx-fs, 1)); line-height: 1.5; color: var(--text3); }
 /* The nav dot of a page that failed (red) stays on the icon rail, where every other mark is folded away. */
 .agx-sn-dot[data-state="err"] { background: var(--error); }
 @media (max-width: 1100px) {
   .agx-sn-meta[data-keep] { display: flex; position: absolute; top: 4px; right: 6px; }
 }
+
+/*
+ * The look preferences (lib/lookPrefs.ts): four attributes on <html>, read here
+ * and nowhere else. Density and font size are written `[data-...]` without `html`,
+ * so a live preview can wear its own value (settings/previews/LiveWindow.tsx). A chosen value is an attribute; the default is none, so the
+ * stylesheet above is what a person who never opened Appearance sees.
+ *
+ * DENSITY scales the vertical air of rows and cards: the 8, 10 and 12 px
+ * padding steps (py-2, py-2.5, py-3) and the Settings row and card head. A
+ * control with a fixed height keeps it, and the 6 px steps (buttons, chips)
+ * stay, so a compact window is not a window of squashed buttons.
+ */
+[data-density="compact"] { --agx-density: 0.75; }
+[data-density="roomy"] { --agx-density: 1.35; }
+[data-density] [class~="py-2"] { padding-block: calc(0.5rem * var(--agx-density)); }
+[data-density] [class~="py-2.5"] { padding-block: calc(0.625rem * var(--agx-density)); }
+[data-density] [class~="py-3"] { padding-block: calc(0.75rem * var(--agx-density)); }
+[data-density] .agx-settings-row { padding-block: calc(12px * var(--agx-density)); }
+[data-density] .agx-scard-head { padding-top: calc(14px * var(--agx-density)); }
+[data-density] .agx-note-row { padding-block: calc(12px * var(--agx-density)); }
+
+/*
+ * INTERFACE FONT SIZE scales the text a class sets (`text-[11px]` is 716 of the
+ * ~2,000 sizes in the app). --agx-fs is size / 13, the size the app is drawn at.
+ * One rule per size in use; a new size has to be listed to follow (the test
+ * lists them from the source). The sizes the stylesheet sets itself, in a class such as the
+ * Settings kit's, are written `calc(12px * var(--agx-fs, 1))` and
+ * follow the same way. Inline sizes, icons and the terminal stay.
+ */
+html[data-ui-font] body { font-size: calc(13px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[7px]"] { font-size: calc(7px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[8px]"] { font-size: calc(8px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[8.5px]"] { font-size: calc(8.5px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[9px]"] { font-size: calc(9px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[9.5px]"] { font-size: calc(9.5px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[10px]"] { font-size: calc(10px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[10.5px]"] { font-size: calc(10.5px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[11px]"] { font-size: calc(11px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[11.5px]"] { font-size: calc(11.5px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[12px]"] { font-size: calc(12px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[12.5px]"] { font-size: calc(12.5px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[13px]"] { font-size: calc(13px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[13.5px]"] { font-size: calc(13.5px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[14px]"] { font-size: calc(14px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[15px]"] { font-size: calc(15px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[15.5px]"] { font-size: calc(15.5px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[16px]"] { font-size: calc(16px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[17px]"] { font-size: calc(17px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[18px]"] { font-size: calc(18px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[20px]"] { font-size: calc(20px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[22px]"] { font-size: calc(22px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[23px]"] { font-size: calc(23px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[28px]"] { font-size: calc(28px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[30px]"] { font-size: calc(30px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[32px]"] { font-size: calc(32px * var(--agx-fs)); }
+
+/*
+ * TRANSLUCENT: the rail, the top bar and the settings nav (all --surface-nav)
+ * let the desktop through; the content keeps its own ground. The window has to
+ * be see-through for any of it to show (the shell does that), which is why the
+ * setting is only on offer in the desktop app.
+ */
+html[data-translucent] { --surface-nav: color-mix(in srgb, var(--bg2) 58%, transparent); }
+html[data-translucent] body { background-color: transparent; }
+html[data-translucent] .agx-ws-content { background-color: var(--bg); }
+
+/*
+ * REDUCE MOTION: every animation and transition ends at once, except the
+ * spinner and the working turn, which breathe instead (as under the OS setting)
+ * because a spinner that does not move reads as a frozen window.
+ */
+html[data-reduce-motion] *, html[data-reduce-motion] *::before, html[data-reduce-motion] *::after {
+  animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important; scroll-behavior: auto !important;
+}
+html[data-reduce-motion] .agx-spin, html[data-reduce-motion] .agx-turn {
+  animation: agx-breathe 1.6s ease-in-out infinite !important;
+}
+html[data-reduce-motion] #ag-cover * { animation: none !important; }
+
+/*
+ * Appearance: the palette tiles and the accent circles. A tile is a ground and a
+ * card colour side by side with the name under it; the chosen one wears the
+ * theme's primary as its edge and a soft ring. The first accent circle is half
+ * the text colour and half the ground ("Theme": no override), so it reads as
+ * neither colour; the seven after it are the colours themselves.
+ */
+.agx-theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); gap: 8px; }
+.agx-theme-tile {
+  display: flex; flex-direction: column; gap: 6px; padding: 6px 6px 8px; border-radius: 11px;
+  border: 2px solid var(--surface-line); background: var(--bg); color: var(--text2); cursor: pointer;
+  transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+.agx-theme-tile:hover { border-color: var(--border2); transform: translateY(-1px); }
+.agx-theme-tile[aria-pressed="true"] { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 22%, transparent); color: var(--text); }
+.agx-theme-tile:focus-visible, .agx-accent-dot:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.agx-theme-sw { display: flex; height: 3.2rem; border-radius: 7px; overflow: hidden; box-shadow: inset 0 0 0 1px var(--surface-line); }
+.agx-theme-sw > i { flex: 1; }
+.agx-theme-name { font-size: calc(12px * var(--agx-fs, 1)); font-weight: 650; text-align: center; line-height: 1.2; }
+.agx-accent-dot {
+  width: 33px; height: 33px; border-radius: 50%; border: 0; padding: 0; cursor: pointer;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent);
+  transition: transform 120ms ease;
+}
+.agx-accent-dot:hover { transform: scale(1.08); }
+.agx-accent-dot[data-theme-dot] { background: linear-gradient(90deg, var(--text) 50%, var(--bg) 50%); box-shadow: inset 0 0 0 1px var(--border2); }
+.agx-accent-dot[aria-pressed="true"] { outline: 2.5px solid var(--text); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .agx-theme-tile, .agx-accent-dot { transition: none; transform: none; } }
+
+/* ── engine tiles: one tile per CLI, a checklist, a foot of actions ──
+   Equal-height rows (the grid stretches), two columns on a laptop, three on a wide screen. A tile
+   that needs the person gets an amber edge along its top, like a decision card. */
+.agx-tiles-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 0 0 14px; }
+.agx-tiles { display: grid; grid-template-columns: 1fr; gap: 18px; align-items: stretch; }
+@container agx-settings (min-width: 760px) { .agx-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container agx-settings (min-width: 1500px) { .agx-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.agx-tile {
+  position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 12px; padding: 16px 18px;
+  background: var(--surface-card); border: 1px solid var(--surface-line); border-radius: 13px;
+  box-shadow: 0 1px 2px rgba(60, 40, 30, 0.05), 0 12px 26px -20px var(--shadow);
+}
+.agx-tile[data-attn]::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 3px; background: var(--warning); }
+.agx-tile[data-none] { background: transparent; border-style: dashed; box-shadow: none; }
+.agx-tile-h { display: flex; align-items: center; gap: 12px; }
+.agx-tile-logo { display: grid; place-items: center; flex: none; width: 40px; height: 40px; border-radius: 11px; color: #fff; font-size: calc(17px * var(--agx-fs, 1)); font-weight: 800; }
+.agx-tile-id { flex: 1; min-width: 0; }
+.agx-tile-id h3 { margin: 0; font-size: calc(17px * var(--agx-fs, 1)); font-weight: 700; color: var(--text); }
+.agx-tile-id small { display: block; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); }
+.agx-ck-list { display: flex; flex-direction: column; }
+.agx-ck { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid color-mix(in srgb, var(--surface-line) 75%, transparent); font-size: calc(13px * var(--agx-fs, 1)); color: var(--text); }
+.agx-ck-i { display: flex; flex: none; }
+.agx-ck[data-state="ok"] .agx-ck-i { color: var(--success); }
+.agx-ck[data-state="warn"] .agx-ck-i { color: var(--warning); }
+.agx-ck[data-state="no"] .agx-ck-i { color: var(--text4); }
+.agx-ck > span:nth-child(2) { flex: none; }
+.agx-ck em { flex: 1; min-width: 0; text-align: right; font-style: normal; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agx-tile-fix { display: flex; flex-direction: column; gap: 6px; font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.5; color: var(--text2); }
+.agx-tile-fix p { margin: 0; }
+.agx-tile-fix .agx-tile-hint { color: var(--text3); }
+.agx-tile-f { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: auto; }
+.agx-tile-more { display: inline-flex; align-items: center; gap: 4px; border: 0; background: none; padding: 4px 6px; border-radius: 6px; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); cursor: pointer; }
+.agx-tile-more:hover { color: var(--text); }
+.agx-tile-more[aria-expanded="true"] svg { transform: rotate(180deg); }
+/* While a tile is opened its neighbours keep their own height: equal rows are for the collapsed page, and stretching a closed tile to the height of an open one leaves a hole in it. */
+.agx-tiles:has(.agx-tile-d) { align-items: start; }
+.agx-tile-d { margin: 0 -18px -16px; border-top: 1px solid var(--surface-line); background: color-mix(in srgb, var(--surface-inset) 40%, transparent); }
+.agx-tile-add { align-items: stretch; justify-content: center; min-height: 200px; }
+.agx-tile-addb { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; flex: 1; border: 0; background: none; color: var(--text3); cursor: pointer; font: inherit; }
+.agx-tile-addb b { font-size: calc(14px * var(--agx-fs, 1)); color: var(--text); }
+.agx-tile-addb span { max-width: 28ch; text-align: center; font-size: calc(12px * var(--agx-fs, 1)); }
+.agx-tile-addb:hover { color: var(--text); }
+.agx-tiles-host { display: flex; gap: 8px; align-items: flex-start; margin: 14px 2px 0; font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.5; color: var(--text3); }
+.agx-tiles-host svg { flex: none; margin-top: 2px; }
+
+/* ── plugins: the count pill, the market's bar and its notes ── */
+.agx-tag { display: inline-flex; align-items: center; height: 22px; padding: 0 10px; border: 1px solid var(--surface-line); border-radius: 999px; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text2); }
+.agx-mbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 0 0 14px; }
+.agx-msearch { position: relative; display: flex; align-items: center; flex: 1 1 420px; max-width: 640px; }
+.agx-msearch > svg { position: absolute; left: 10px; color: var(--text3); pointer-events: none; }
+.agx-msearch > input { width: 100%; padding-left: 30px !important; padding-right: 44px !important; height: 32px; }
+.agx-msearch > kbd { position: absolute; right: 8px; padding: 0 6px; border: 1px solid var(--surface-line); border-radius: 5px; font: inherit; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); pointer-events: none; }
+.agx-mselect { width: auto; min-width: 144px; }
+.agx-pin-dot { width: 8px; height: 8px; border-radius: 50%; border: 2px solid var(--text4); }
+.agx-pin-dot[data-pinned] { border-color: var(--success); background: var(--success); }
+.agx-linkbtn { border: 0; background: none; padding: 4px 6px; border-radius: 6px; font: inherit; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text2); cursor: pointer; }
+.agx-linkbtn:hover { color: var(--text); background: color-mix(in srgb, var(--text) 7%, transparent); }
+.agx-pnote { display: flex; gap: 8px; align-items: flex-start; margin: 14px 2px 0; font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.5; color: var(--text3); }
+.agx-pnote > svg { flex: none; margin-top: 2px; }
+
+/* A backticked word in a hint or a status line (`Ticks`): code, drawn as code. The fill is the inset surface the segmented controls sit on, so it follows the theme. */
+.agx-ticks { padding: 0 4px; border-radius: 4px; background: var(--surface-inset); color: var(--text2); font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.94em; }
+
+/* The nav's "Skip to the page": out of sight until the keyboard lands on it (see SettingsNav). */
+.agx-skip { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; padding: 0; }
+.agx-skip:focus-visible { position: static; width: auto; height: auto; clip-path: none; margin: 6px 12px 0; padding: 6px 10px; border-radius: 8px; background: var(--surface-inset); color: var(--text); font-size: calc(12px * var(--agx-fs, 1)); text-align: left; }
+.agx-settings-main:focus { outline: none; }
+
+/* A filled primary button is the same blue as the focus ring, so a ring drawn inside it vanished (measured on
+   "Turn the gate on": focus-visible matched, nothing to see). Outside the edge instead, 2px clear of it. */
+.agx-btn[data-tone="primary"]:focus-visible { outline-offset: 2px; }

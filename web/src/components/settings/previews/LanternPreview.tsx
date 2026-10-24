@@ -21,12 +21,11 @@ const demo = (now: number): LanternRow[] => [
     facts: { model: "claude-haiku-4-5", tools: 9, errors: 0, turns: 3, cost: 0.02, lastSeen: now - MIN, lastTool: { name: "Read", what: "src/net/reconnect.ts", at: now - MIN } } },
 ];
 
-/** The real Lantern card on invented agents: the line under the title and the cache clock follow the settings. */
-export function LanternPreview({ watch, everyMin, wakeMin }: LanternPreviewProps) {
+/** The Lantern's own cards on invented agents, with no frame: what a live window shows for this view. */
+export function LanternDemo({ watch, everyMin, wakeMin }: LanternPreviewProps) {
   const now = Date.now();
   const rows = demo(now);
   return (
-    <PreviewBox label="The Lantern">
       <div data-preview="lantern" className="flex flex-col gap-2 min-w-0 rounded-lg p-3" style={{ background: "var(--bg)" }}>
         <div className="flex flex-wrap items-baseline gap-x-3 text-[12px]">
           <b style={{ color: "var(--error)" }}>1 agent needs you</b>
@@ -35,6 +34,14 @@ export function LanternPreview({ watch, everyMin, wakeMin }: LanternPreviewProps
         </div>
         {rows.map((r) => <AgentCard key={r.name} r={r} cacheTtlMs={wakeMin * MIN} />)}
       </div>
+  );
+}
+
+/** The real Lantern card on invented agents: the line under the title and the cache clock follow the settings. */
+export function LanternPreview(p: LanternPreviewProps) {
+  return (
+    <PreviewBox label="The Lantern">
+      <LanternDemo {...p} />
       <PreviewNote>The Lantern's own cards on invented agents.</PreviewNote>
     </PreviewBox>
   );

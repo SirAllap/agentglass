@@ -27,6 +27,17 @@ describe("validateCatalogue", () => {
     expect(c.plugins[0]!.id).toBe("someone.watcher");
   });
 
+  test("scope and licence are kept when well formed and dropped, not guessed, when not", () => {
+    const c = validateCatalogue({ ...okCatalogue, plugins: [
+      { ...okPlugin, scope: "read", license: " MIT " },
+      { ...okPlugin, id: "someone.b", scope: "root", license: "<script>" },
+    ] });
+    if (typeof c === "string") throw new Error(c);
+    expect(c.plugins[0]).toMatchObject({ scope: "read", license: "MIT" });
+    expect(c.plugins[1]!.scope).toBeUndefined();
+    expect(c.plugins[1]!.license).toBeUndefined();
+  });
+
   test("a catalogue longer than the cap says how long it really was", () => {
     /* A shelf that silently shows the first five hundred of three thousand is
        a shelf that lies about what is on it — and the window draws the

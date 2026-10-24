@@ -367,6 +367,8 @@ contextBridge.exposeInMainWorld("agentglass", {
   isFullscreen: () => ipcRenderer.invoke("ag:isFullscreen"),
   /** @param {number} factor */
   setZoom: (factor) => ipcRenderer.invoke("ag:setZoom", factor),
+  /** @param {boolean} on */
+  setTranslucent: (on) => ipcRenderer.invoke("ag:setTranslucent", on),
   autostartEnabled: () => ipcRenderer.invoke("ag:autostartEnabled"),
   /** @param {boolean} on */
   setAutostart: (on) => ipcRenderer.invoke("ag:setAutostart", on),

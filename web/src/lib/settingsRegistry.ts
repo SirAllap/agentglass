@@ -42,6 +42,11 @@ import {
   currentTermCursor, setTermCursor, fontAvailable, type CursorStyle,
 } from "./termPrefs.ts";
 import { ACCENTS, currentAccent, setAccentPref } from "./accent.ts";
+import {
+  DENSITIES, DEFAULT_DENSITY, UI_FONT_SIZES, DEFAULT_UI_FONT, densityPref, setDensityPref, uiFontPref, setUiFontPref,
+  translucentPref, setTranslucentPref, reduceMotionPref, setReduceMotionPref, type Density,
+} from "./lookPrefs.ts";
+import { translucentSupported } from "./desktop.ts";
 import { focusFollowsMouse, setFocusFollowsMouse } from "./termFocusPref.ts";
 import { paneActionsMode, setPaneActionsMode } from "./paneActionsPref.ts";
 import { tabGroupsOn, setTabGroupsOn, tabGroupRulesText, setTabGroupRulesText } from "./tabGroups.ts";
@@ -49,7 +54,8 @@ import {
   copyOnSelect, setCopyOnSelect, currentNoteEditor, setNoteEditor, NOTE_EDITORS, currentScrollback, setScrollback,
   SCROLLBACK_SIZES, DEFAULT_SCROLLBACK, currentWordSeparators, setWordSeparators, DEFAULT_WORD_SEPARATORS, type NoteEditor,
 } from "./termPrefs.ts";
-import { notifyQuiet, setNotifyQuiet } from "./sysNotify.ts";
+import { COUNTED_VIEWS, railBadgeOn, setRailBadge } from "./railBadges.ts";
+import { notifyQuiet, setNotifyQuiet, appNotify, setAppNotify } from "./sysNotify.ts";
 import { ciOnlyApproved, setCiOnlyApproved, CI_ONLY_APPROVED_DEFAULT } from "./ciNotifyPref.ts";
 import { talkNotify, setTalkNotify, TALK_NOTIFY_DEFAULT, type TalkNotify } from "./talkNotify.ts";
 import { searchEngine, setSearchEngine } from "./browserPrefs.ts";
@@ -64,7 +70,8 @@ import {
   THEMES, applyTheme, applyThemeMode, chooseTheme, themeMode, desktopPaletteName, type ThemeMode,
 } from "./themes.ts";
 import { VIEWS, RAIL_PLACES, SHIPPED_RAIL, loadRail, railIds, moveView, saveRail, type RailPlace } from "../components/workspace/views.ts";
-import { classOf, NEEDS_APPROVAL, type SettingClass } from "../../../shared/settingClass.ts";
+import { autoCheckUpdates, setAutoCheckUpdates, AUTO_CHECK_DEFAULT } from "./updateCheckPref.ts";
+import { classOf, NEEDS_APPROVAL, SETTING_CLASSES, type SettingClass } from "../../../shared/settingClass.ts";
 
 export type SettingValue = string | number | boolean;
 
@@ -240,6 +247,30 @@ const appearance: SettingDef[] = [
     // removal, for "Theme") lands: the picker has always done both.
     write: (v) => { setAccentPref(v as string); applyTheme(currentThemeId()); },
   }),
+  defineSetting({
+    id: "appearance.density", page: "appearance", section: "Density & type", label: "Density", level: 2, default: DEFAULT_DENSITY,
+    read: () => densityPref(), validate: oneOf(DENSITIES), write: (v) => setDensityPref(v as Density),
+  }),
+  defineSetting({
+    id: "appearance.fontSize", page: "appearance", section: "Density & type", label: "Interface font size", level: 2, default: DEFAULT_UI_FONT,
+    read: () => uiFontPref(),
+    validate: accepting((raw) => (typeof raw === "number" && UI_FONT_SIZES.includes(raw) ? raw : null), `one of ${UI_FONT_SIZES.join(", ")}`),
+    write: (v) => setUiFontPref(v as number),
+    display: (v) => `${v} px`,
+  }),
+  defineSetting({
+    id: "appearance.translucent", page: "appearance", section: "Density & type", label: "Translucent window", level: 2, default: false,
+    read: () => translucentPref(),
+    // Where the window cannot see through (a browser tab), only off is a value: an agent hears why.
+    validate: accepting((raw) => (typeof raw === "boolean" && (!raw || translucentSupported()) ? raw : null),
+      () => (translucentSupported() ? "true or false" : "false (only the desktop app can show the desktop through its window)")),
+    write: (v) => setTranslucentPref(v as boolean),
+  }),
+  defineSetting({
+    id: "appearance.reduceMotion", page: "appearance", section: "Density & type", label: "Reduce motion", level: 2, default: false,
+    // What is in force: until somebody chooses, the system's own setting.
+    read: () => reduceMotionPref(), validate: bool, write: (v) => setReduceMotionPref(v as boolean),
+  }),
 ];
 
 // ── diff ────────────────────────────────────────────────────────────────────
@@ -324,6 +355,12 @@ const rail: SettingDef[] = VIEWS.map((v) => defineSetting({
   restore: (t) => saveRail(t as ReturnType<typeof railIds>),
 }));
 
+// One per view that wears a count on the rail (lib/railBadges.ts).
+const railBadges: SettingDef[] = (Object.keys(COUNTED_VIEWS) as (keyof typeof COUNTED_VIEWS)[]).map((id) => defineSetting({
+  id: `rail.badge.${id}`, page: "rail", section: "What is on the rail", label: `${VIEWS.find((v) => v.id === id)?.label ?? id}: count badge`, level: 2, default: true,
+  read: () => railBadgeOn(id), validate: bool, write: (v) => setRailBadge(id, v as boolean),
+}));
+
 // ── terminal: the rest of the pane ──────────────────────────────────────────
 
 const MOUSE = "Mouse and clipboard";
@@ -385,6 +422,15 @@ const notifications: SettingDef[] = [
   defineSetting({
     id: "notifications.quiet", page: "notifications", section: "How it reaches you", label: "Quiet — only what is stopped interrupts", level: 2, default: true,
     read: () => notifyQuiet(), validate: bool, write: (v) => setNotifyQuiet(v as boolean),
+  }),
+  // The two switches under one word. Quiet is `notifications.quiet`; with it off,
+  // "agentglass's own notifications" (chats finishing, branches behind, checks going
+  // red) decides whether the rest interrupts: off is Normal, on is Loud.
+  defineSetting({
+    id: "notifications.volume", page: "notifications", section: "How it reaches you", label: "Volume", level: 2, default: "quiet",
+    read: () => (notifyQuiet() ? "quiet" : appNotify() ? "loud" : "normal"),
+    validate: oneOf(["quiet", "normal", "loud"] as const),
+    write: (v) => { setNotifyQuiet(v === "quiet"); if (v !== "quiet") setAppNotify(v === "loud"); },
   }),
   defineSetting({
     id: "notifications.ciOnlyApproved", page: "notifications", section: "Pull requests", label: "Checks: only when the pull request is approved", level: 2,
@@ -505,9 +551,18 @@ const keys: SettingDef[] = (Object.keys(KEY_LABELS) as ActionId[]).map((a) => de
   write: (v) => { const r = rebind(a, v as string); if (!r.ok) return r.error; },
 }));
 
+// ── about: whether the window looks for a release by itself ─────────────────
+
+const about: SettingDef[] = [
+  defineSetting({
+    id: "about.autoCheck", page: "about", section: "This build", label: "Look for a newer release by itself", level: 2, default: AUTO_CHECK_DEFAULT,
+    read: () => autoCheckUpdates(), validate: bool, write: (v) => setAutoCheckUpdates(v as boolean),
+  }),
+];
+
 // ── the registry ────────────────────────────────────────────────────────────
 
-export const SETTING_DEFS: readonly SettingDef[] = [...appearance, ...diff, ...terminal, ...terminalMore, ...rail, ...notifications, ...browser, ...tasks, ...clickup, ...jira, ...reviewSessions, ...keys];
+export const SETTING_DEFS: readonly SettingDef[] = [...appearance, ...diff, ...terminal, ...terminalMore, ...rail, ...railBadges, ...notifications, ...browser, ...tasks, ...clickup, ...jira, ...reviewSessions, ...keys, ...about];
 
 /** Which panes (and, for Terminal, which groups) have been migrated. A row in
  *  here must carry a settingId or be marked agentExempt; a guard test reads this. */
@@ -526,13 +581,15 @@ export const MIGRATED: Readonly<Record<string, "all" | readonly string[]>> = {
   /* Only the section about what a review plugin may be given; the prompt editor is not a setting yet. */
   "review-prompts": ["Review sessions"],
   keys: "all",
+  /* Only the build's own section: the credits and the log digest are not settings. */
+  about: ["This build"],
 };
 
 /** The panes with nothing migrated yet. Every Settings page is on exactly one of
  *  the two lists, so adding a page forces a decision rather than a silent gap. */
 export const NOT_YET_MIGRATED = [
   "prefs", "hooks", "lantern", "understudy", "budgets", "recipes",
-  "saved-replies", "connections", "engines", "orchestration", "remote", "plugins", "tmux", "privacy", "about", "log", "onboarding",
+  "saved-replies", "connections", "engines", "orchestration", "remote", "plugins", "tmux", "privacy", "log", "onboarding",
 ] as const;
 
 /**
@@ -582,6 +639,8 @@ export function isMigrated(pane: string, section: string): boolean {
 /** A settingId on a row may name a family (`rail.place.*`) when the row draws
  *  one control per member; it is valid when at least one def has the prefix. */
 export function settingIdResolves(id: string, defs: readonly SettingDef[] = SETTING_DEFS): boolean {
+  // A server setting (server/src/serverSettings.ts) has no def in the window; its class row is the proof it exists.
+  if (Object.hasOwn(SETTING_CLASSES, id)) return true;
   return id.endsWith(".*") ? defs.some((d) => d.id.startsWith(id.slice(0, -1))) : defs.some((d) => d.id === id);
 }
 

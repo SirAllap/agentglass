@@ -47,6 +47,13 @@ test("whoever picked System while it meant the desktop is moved across once", ()
   expect(code).toMatch(/localStorage\.setItem\(MOVED_KEY, "1"\)/);
 });
 
+test("a wide logotype is not drawn at label size: the segment says the name", async () => {
+  const { markReadsAtLabelSize } = await import("../src/lib/markSize.ts");
+  expect(markReadsAtLabelSize('<svg viewBox="0 0 1215 285"><path d="M0 0"/></svg>')).toBe(false);
+  expect(markReadsAtLabelSize('<svg viewBox="0 0 24 24"><path d="M0 0"/></svg>')).toBe(true);
+  expect(markReadsAtLabelSize("<svg><path/></svg>")).toBe(false);
+});
+
 test("the desktop's mark is served from the machine, never shipped", async () => {
   const server = await Bun.file(new URL("../../server/src/desktopPalette.ts", import.meta.url)).text();
   expect(server).toMatch(/logo\.svg/);

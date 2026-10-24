@@ -25,7 +25,7 @@ const UNITS: JiraUnit[] = [
   { id: "DOCS", name: "Orbit docs", cards: 1, statuses: [{ status: "Drafting", type: "open" }, { status: "Peer check", type: "open" }, { status: "Published", type: "done" }] },
   { id: "OPS", name: "Orbit ops", counted: false, statuses: [{ status: "Waiting", type: "open" }, { status: "Closed out", type: "done" }] },
 ];
-const STATUS: JiraStatus = { connected: true, site: "acme.example", kind: "cloud", auth: "basic", api: 3, deployment: "cloud", account: "Ada Test", prefixes: ["ORBIT"], writes: false };
+const STATUS: JiraStatus = { connected: true, site: "acme.example", kind: "cloud", auth: "basic", api: 3, deployment: "cloud", account: "Ada Test", prefixes: ["ORBIT"], writes: false, writeKinds: { move: true, comment: true, link: true, assign: true } };
 const off = { enabled: false, blocks: [] };
 const STEPS: JiraSteps = {
   handoff: { enabled: true, blocks: [{ type: "move", statusNames: ["Peer check"] }, { type: "link" }] },
@@ -35,15 +35,24 @@ const STEPS: JiraSteps = {
 const view = (o: Partial<JiraViewProps> = {}) =>
   renderToStaticMarkup(React.createElement(JiraSettingsView, {
     status: STATUS, writes: false, steps: STEPS, overrides: [], units: { kind: "ok", units: UNITS, at: Date.now(), counted: [] }, views: { views: 2, folders: 0 }, note: null,
-    onWrites() {}, onSteps: async () => true, onReread() {}, onClearOverride() {}, onOpenTab() {}, onDisconnect() {}, ...o,
+    onWrites() {}, onWriteKind() {}, onReplace() {}, onSteps: async () => true, onReread() {}, onClearOverride() {}, onOpenTab() {}, onDisconnect() {}, ...o,
   } as JiraViewProps));
 
 const asSpaces = (u: JiraUnit[]): MapSpace[] => u.filter((x) => x.counted !== false).map((x) => ({ id: x.id, name: x.name, statuses: x.statuses }));
 
 describe("the Jira page, drawn from handed-in settings", () => {
+  test("write permissions: four kinds, each its own switch bound to its setting, and a kind that is off draws off", () => {
+    const html = view({ status: { ...STATUS, writeKinds: { move: true, comment: false, link: true, assign: true } } });
+    for (const k of ["move", "comment", "link", "assign"]) expect(html).toContain(`data-setting-id="jira.writes.${k}"`);
+    for (const t of ["Move cards between steps", "Comment on a card", "Link a pull request to its card", "Assign a person"]) expect(html).toContain(t);
+    // Three on, one off: the switches say so by aria-checked, in the order the page lists them.
+    const row = (id: string) => html.match(new RegExp(`<button[^>]*data-setting-id="${id.replace(/\./g, "\\.")}"[^>]*>`))?.[0].match(/aria-checked="(true|false)"/)?.[1];
+    expect(["move", "comment", "link", "assign"].map((k) => row(`jira.writes.${k}`))).toEqual(["true", "false", "true", "true"]);
+  });
+
   test("it has the cards the plan names, and no per-project hand-off card", () => {
     const html = view();
-    for (const t of ["Changes in Jira", "What we found", "Workflow map", "Where this shows up", "Advanced", "Saved views and folders", "Disconnect"]) expect(html).toContain(t);
+    for (const t of ["Changes in Jira", "What we found", "Workflow map", "Where this shows up", "Advanced", "Saved views and folders", "Write permissions", "Disconnect"]) expect(html).toContain(t);
     expect(html).not.toContain("QA hand-off");
   });
 
@@ -168,7 +177,7 @@ describe("the map has the room it needs", () => {
   test("Jira's page is as wide as ClickUp's, or the statuses fall under the steps and no line is drawn to them", async () => {
     const modal = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url)).text();
     const wide = modal.slice(modal.indexOf("const WIDE_PANES"), modal.indexOf("]);", modal.indexOf("const WIDE_PANES")));
-    expect(wide).toContain('["jira", "1100px"]');
-    expect(wide).toContain('["clickup", "1100px"]');
+    expect(wide).toContain('["jira", "1900px"]');
+    expect(wide).toContain('["clickup", "1900px"]');
   });
 });

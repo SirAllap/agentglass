@@ -109,7 +109,30 @@ describe("the promises SECURITY.md makes about retention", () => {
       "db.ts:understudy_shifts",
       "db.ts:understudy_snapshots",
       "db.ts:understudy_work",
-    ]);
+      /* Erase local history (Settings > Data & privacy, db.ts eraseHistory): the person's own
+         button, behind a typed confirmation and never an agent's. It deletes the same settled
+         rows the sweep ages out, with no cutoff, plus the roll-up; so each of these appears a
+         second time, and daily_rollup once. */
+      "db.ts:events",
+      "db.ts:events_fts",
+      "db.ts:sessions",
+      "db.ts:gates",
+      "db.ts:reminders",
+      "db.ts:agent_schedule",
+      "db.ts:named_agent",
+      "db.ts:seat_line",
+      "db.ts:seat_need",
+      "db.ts:seat_report",
+      "db.ts:understudy_acts",
+      "db.ts:understudy_asked",
+      "db.ts:understudy_help",
+      "db.ts:understudy_ledger",
+      "db.ts:understudy_proposals",
+      "db.ts:understudy_shifts",
+      "db.ts:understudy_snapshots",
+      "db.ts:understudy_work",
+      "db.ts:daily_rollup",
+    ].sort());
     // …and all eight are inside pruneOldRows, bounded by a cutoff.
     const prune = src.slice(src.indexOf("export function pruneOldRows"));
     const body = prune.slice(0, prune.indexOf("\n}\n"));
@@ -174,9 +197,15 @@ describe("the promises SECURITY.md makes about retention", () => {
     // kept for years, and the one whose contents outlive the rows they came
     // from — so a DELETE against it would silently shorten every long-window
     // number in the product.
-    for (const f of ["db.ts", "index.ts"]) {
-      expect(read(`server/src/${f}`)).not.toMatch(/DELETE\s+FROM\s+daily_rollup/i);
-    }
+    // Save the person's own Erase local history button (eraseHistory), which forgets
+    // the roll-up with the events it summarises: a summary of rows that no longer
+    // exist would be history that was asked to be forgotten.
+    const dbSrc = read("server/src/db.ts");
+    const at = dbSrc.indexOf("export function eraseHistory(");
+    const withoutErase = dbSrc.slice(0, at) + dbSrc.slice(dbSrc.indexOf("\n}\n", at));
+    expect(at).toBeGreaterThan(0);
+    expect(withoutErase).not.toMatch(/DELETE\s+FROM\s+daily_rollup/i);
+    expect(read("server/src/index.ts")).not.toMatch(/DELETE\s+FROM\s+daily_rollup/i);
   });
 
   test("no route removes recorded data", () => {

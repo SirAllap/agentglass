@@ -143,7 +143,10 @@ function rowsIn(text: string, pane: string): Row[] {
     // from the tag's opening to the label, nothing past it to mistake for the
     // next row's.
     const tagText = before.slice(tagMatch.index!);
-    const settingId = tagText.match(/\bsettingId="([^"]{1,80})"/)?.[1];
+    // A row that draws one control per member of a family names it with a template
+    // (`rail.place.${v.id}`): indexed as the family, `rail.place.*`.
+    const family = tagText.match(/\bsettingId=\{`([A-Za-z0-9.]+\.)\$\{[^}`]+\}`\}/)?.[1];
+    const settingId = tagText.match(/\bsettingId="([^"]{1,80})"/)?.[1] ?? (family ? `${family}*` : undefined);
     const agentExempt = /\bagentExempt\b/.test(tagText);
     // A row an agent must not reach, with the reason on the row itself.
     const agentNever = tagText.match(/\bagentNever="([^"]{1,240})"/)?.[1];
@@ -170,7 +173,7 @@ function subComponentsIn(text: string): string[] {
 }
 
 /** Panes whose container hands what it reads to a view that draws the rows. Opt-in: following every pane two levels adds rows to pages nobody asked about. */
-const DEEP_PANES = new Set(["jira"]);
+const DEEP_PANES = new Set(["jira", "hooks"]);
 
 function rowsForPane(pane: string, block: string, seenComponents: Set<string>, depth = 0): Row[] {
   const rows = rowsIn(block, pane);

@@ -23,6 +23,7 @@ import { mkdirSync } from "node:fs";
 import type { PaneAgent } from "./paneagent.ts";
 import { claudeCode, claudeHome, projectSlug } from "./agents/claudecode.ts";
 import { stat } from "node:fs/promises";
+import { chatDeny } from "./config.ts";
 import { costUsd } from "./pricing.ts";
 import { agentProvider, type ScreenFacet } from "../../shared/agentKinds.ts";
 import {
@@ -255,7 +256,7 @@ async function ensurePane(
   }
 
   const fresh = (await sizeOf(transcriptFor(cwd, sessionId))) === 0;
-  const argv = agent.argv({ sessionId, cwd, model, effort, mode, fresh });
+  const argv = agent.argv({ sessionId, cwd, model, effort, mode, fresh, deny: chatDeny() });
 
   const started = await startPane(sessionId, cwd, argv);
   if (!started.ok) return { ok: false, error: started.stderr.trim() || "could not start the tmux pane" };

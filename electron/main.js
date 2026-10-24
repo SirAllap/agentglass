@@ -991,7 +991,7 @@ const CSP = [
      together by the test named above — edit the splash without rehashing it and
      the window comes up blank, which is precisely the failure the test spends
      its time preventing. */
-  "script-src 'self' 'sha256-LTSYKIPWk5E2YWobubSHeR9emFHS7dbREE6rvHplVZM=' 'sha256-WoyIdsXRXsB6KXPWR0pkumt+r5WqeyVOTWuslDXPNb8='",
+  "script-src 'self' 'sha256-Cs8xB/EBjGIfW5TqtUN1MiqdMbDK66ARHxAm3JE004w=' 'sha256-WoyIdsXRXsB6KXPWR0pkumt+r5WqeyVOTWuslDXPNb8='",
   "style-src 'self' 'unsafe-inline'",
   /* The two hosts this app really draws pictures from, named rather than left to
      the enforcing header below — which would otherwise blank every avatar in the
@@ -3297,6 +3297,22 @@ function registerIpc(win) {
   ipcMain.handle("ag:setFullscreen", (_e, on) => { win.setFullScreen(!!on); return win.isFullScreen(); });
   ipcMain.handle("ag:isFullscreen", () => win.isFullScreen());
   ipcMain.handle("ag:setZoom", (_e, f) => { win.webContents.setZoomFactor(f); return f; });
+  /* The see-through sidebar. macOS and Windows take it on a live window
+     (vibrancy, acrylic). On Linux a window is transparent or it is not from the
+     moment it is created, so the choice is kept in a file createWindow reads and
+     takes effect at the next launch: `live: false` says so, and the page says it.
+     Not exercised on a real compositor from the sandbox that wrote it. */
+  ipcMain.handle("ag:setTranslucent", (_e, on) => {
+    const want = !!on;
+    try {
+      if (want) fs.writeFileSync(translucentFile(), "1"); else fs.rmSync(translucentFile(), { force: true });
+    } catch { /* the choice still applies to this run where it can */ }
+    try {
+      if (process.platform === "darwin") { win.setVibrancy(want ? "sidebar" : null); return { ok: true, live: true }; }
+      if (process.platform === "win32" && typeof win.setBackgroundMaterial === "function") { win.setBackgroundMaterial(want ? "acrylic" : "none"); return { ok: true, live: true }; }
+    } catch { return { ok: false, live: false }; }
+    return { ok: true, live: false };
+  });
 
   ipcMain.handle("ag:autostartEnabled", () => autostartEnabled());
   ipcMain.handle("ag:setAutostart", (_e, on) => setAutostart(!!on));
@@ -4279,6 +4295,10 @@ function destroyLaneHost(id) {
   return true;
 }
 
+/** The flag the see-through sidebar leaves for the next launch (see ag:setTranslucent). */
+const translucentFile = () => path.join(app.getPath("userData"), "translucent");
+const translucentWanted = () => { try { return fs.existsSync(translucentFile()); } catch { return false; } };
+
 function createWindow() {
   const st = readWindowState();
   const place = onSomeDisplay(st, screen) ? { x: st.x, y: st.y } : {};
@@ -4297,6 +4317,8 @@ function createWindow() {
     // Until a theme has been painted once: the ground a first run opens on,
     // Graphite's or Porcelain's by the OS, as the page's own first run does.
     backgroundColor: ground || (nativeTheme.shouldUseDarkColors ? "#1e1e1e" : "#ffffff"),
+    // A Linux window is transparent from its creation or never (see ag:setTranslucent).
+    ...(process.platform === "linux" && translucentWanted() ? { transparent: true, backgroundColor: "#00000000" } : {}),
     title: "agentglass",
     autoHideMenuBar: true,
     /*

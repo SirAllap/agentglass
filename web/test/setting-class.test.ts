@@ -126,3 +126,22 @@ describe("agentVerdict", () => {
     expect(n("orchestration.policy", {}, {})).toBe(false);
   });
 });
+
+describe("what a class row says it is for", () => {
+  it("the volume row does not borrow the quiet row's reason: volume can also be raised, and is low because it widens nothing an agent may do", () => {
+    const why = classOf("notifications.volume")!.why;
+    expect(why).not.toBe(classOf("notifications.quiet")!.why);
+    expect(why).toContain("loud");
+  });
+});
+
+describe("the desktop bridge's doc comments", () => {
+  it("setWindowZoom's comment sits on setWindowZoom, not on the translucency helpers inserted above it", async () => {
+    const src = await Bun.file(new URL("../src/lib/desktop.ts", import.meta.url)).text();
+    const doc = src.indexOf("Resolves to the factor applied");
+    const fn = src.indexOf("export async function setWindowZoom(");
+    const between = src.slice(src.indexOf("*/", doc), fn);
+    expect(doc).toBeGreaterThan(0);
+    expect(between).not.toContain("export ");
+  });
+});

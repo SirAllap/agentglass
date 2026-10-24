@@ -82,6 +82,21 @@ const LIST_TIMEOUT_MS = 25_000;
 let budget: { remaining: number; resetAt: number } | null = null;
 export const rateBudget = (): { remaining: number; resetAt: number } | null => budget;
 
+/** ClickUp's own figure for most plans, per token per minute. */
+export const REQUEST_LIMIT = 100;
+
+/**
+ * The budget as the settings page says it: how many of the minute's requests are spent.
+ *
+ * Read from what the last response carried, so it asks ClickUp for nothing. A reading
+ * whose window has turned over, or none yet, is a full minute left. Cached reads never
+ * reach ClickUp and so never move it.
+ */
+export function budgetView(b: { remaining: number; resetAt: number } | null, now = Date.now(), limit = REQUEST_LIMIT): { limit: number; used: number; resetsInSec: number; known: boolean } {
+  if (!b || now >= b.resetAt) return { limit, used: 0, resetsInSec: 0, known: false };
+  return { limit, used: Math.min(limit, Math.max(0, limit - b.remaining)), resetsInSec: Math.ceil((b.resetAt - now) / 1000), known: true };
+}
+
 /** Anything under this and we stop making optional calls until the window
  *  turns over. Five, not one: a poll and a click can race, and the click is
  *  the one that must not be the request that gets refused. */

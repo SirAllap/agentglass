@@ -432,8 +432,10 @@ Everything below is on your machine and nowhere else. There is no account, no
 sync, and no upload — the hooks refuse to post anywhere but this host (see
 `AGENTGLASS_ALLOW_REMOTE` above). But it is worth saying plainly what lands on
 disk, because **nothing in the app deletes it** on its own: there is no route,
-no button and no menu item that removes recorded history, and the only sweep is
-the retention window below. Four routes remove a row *you* asked the app to
+no button and no menu item that removes recorded history, save one that only a
+person can press: Erase local history on Data & privacy, behind a typed
+confirmation and refused to every agent. Otherwise the only sweep is the
+retention window below. Four routes remove a row *you* asked the app to
 hold for you, and nothing else: `POST /understudy/work/unask` takes one task
 back out of the Clone's queue; `POST /agents/status` with `done: true` drops a
 session's own "what it is working on" line, and only when the same session that

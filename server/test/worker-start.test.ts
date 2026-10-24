@@ -167,7 +167,7 @@ const FLEET = [ready("claude"), ready("opencode"), ready("hermes", false, "Herme
 const base = (builderChoice: EngineChoice): Policy =>
   composePolicy(defaultStored(), {
     orchestrator: { engine: "claude", model: "opus" },
-    workers: { scout: { engine: "claude", model: "haiku" }, builder: builderChoice, verifier: { engine: "claude", model: "haiku" } },
+    workers: { scout: { engine: "claude", model: "haiku" }, builder: builderChoice, reviewer: { engine: "claude", model: "sonnet" }, verifier: { engine: "claude", model: "haiku" } },
   });
 const withRule = (p: Policy, rule: Partial<PolicyRule>): Policy => ({
   ...p, rules: [{ id: "r1", name: "Plan nearly used", when: [{ kind: "always" }], enabled: true, ...rule } as PolicyRule],
@@ -415,5 +415,5 @@ describe("the wrapper around a turn", () => {
 });
 
 test("every role is covered above", () => {
-  expect(WORKER_ROLES.map((r) => r.id)).toEqual(["scout", "builder", "verifier"]);
+  expect(WORKER_ROLES.map((r) => r.id)).toEqual(["scout", "builder", "reviewer", "verifier"]);
 });

@@ -908,6 +908,12 @@ export interface SeatTask {
   takenAt: number | null; takenBy: string; doneAt: number | null; outcome: string; attempts: number;
 }
 
+/** What Data & privacy says about where the data is and for how long (server GET /privacy). */
+export interface PrivacyFacts {
+  db: string; dbBytes: number | null; config: string; configBytes: number | null; credentials: string;
+  retentionDays: number; retentionFromEnv: boolean; pairedDevices: number; clickup: boolean; jira: boolean;
+}
+
 const realApi = {
   recent: (limit = 300) => get<WatchEvent[]>(`/events/recent?limit=${limit}`),
   /** Where the machine's agents are sitting, in tmux terms. Asked on demand —
@@ -1463,7 +1469,9 @@ const realApi = {
      and nothing here ever receives one back — the responses carry a status. */
   providers: () => get<ProvidersResponse>("/providers"),
   /** Where this app keeps things, and for how long. Paths, never contents. */
-  privacy: () => get<{ db: string; config: string; credentials: string; retentionDays: number; pairedDevices: number; clickup: boolean }>("/privacy"),
+  privacy: () => get<PrivacyFacts>("/privacy"),
+  privacyRetention: (days: number) => post<{ ok: boolean; error?: string; retentionDays?: number }>("/privacy/retention", { days }),
+  privacyErase: () => post<{ ok: boolean; error?: string; events?: number; sessions?: number; days?: number }>("/privacy/erase-history", { confirm: "erase" }),
   /** What is left of GitHub's hourly budget — this app is made of `gh` calls. */
   ghRateLimit: () => get<{ ok: boolean; error?: string; budgets?: { id: string; label: string; limit: number; remaining: number; reset: number }[] }>("/prs/rate-limit"),
   providerConnect: (id: string, token: string) =>
@@ -1480,6 +1488,7 @@ const realApi = {
     post<JiraConnectResult>("/jira/connect", { email, site, token }),
   jiraStatus: () => get<JiraStatus>("/jira/status"),
   jiraWrites: (on: boolean) => post<{ ok: boolean; error?: string; writes?: boolean }>("/jira/writes", { on }),
+  jiraWriteKind: (kind: "move" | "comment" | "link" | "assign", on: boolean) => post<{ ok: boolean; error?: string; writeKinds?: Record<"move" | "comment" | "link" | "assign", boolean> }>("/jira/write-kinds", { kind, on }),
   /** The pull requests that name a Jira card, by its key. Same answer as `clickupPrs`. */
   jiraPrs: (key: string, root = "") =>
     get<{ ok: boolean; prs: CardPr[]; error?: string }>(`/jira/prs?${new URLSearchParams({ key, root })}`),
@@ -1707,6 +1716,7 @@ const realApi = {
     post<{ ok: boolean }>("/clickup/card-note", n).catch(() => ({ ok: false })),
   clickupSetWrites: (on: boolean) => post<{ ok: boolean }>("/clickup/writes", { on }),
   /** How this workspace uses ClickUp (hand-off, review, field names, patterns). */
+  clickupBudget: () => get<{ ok: boolean; limit: number; used: number; resetsInSec: number; known: boolean }>("/clickup/budget"),
   clickupPrefs: () => get<{ ok: boolean; prefs?: ClickUpPrefs }>("/clickup/prefs"),
   /** A partial update; a refusal comes back as `error`, with nothing saved. */
   clickupSetPrefs: (patch: DeepPartial<ClickUpPrefs>) =>
@@ -2495,6 +2505,11 @@ const realApi = {
   launchPermissions: () => get<{ ok: boolean } & LaunchPermissions>("/launch-permissions"),
   launchPermissionsSave: (p: { mode?: LaunchMode; deny?: string }) =>
     post<{ ok: boolean; error?: string } & LaunchPermissions>("/launch-permissions", p),
+  /** Every server setting the settings door holds, with its value (the Agents page reads its own five from it). */
+  settingsDoor: () => get<{ ok: boolean; settings: { id: string; value?: unknown }[] }>("/settings/door"),
+  /** The person's own change to one of them, from Settings: applied at once. */
+  settingsDoorSet: (id: string, value: unknown) =>
+    post<{ ok: boolean; applied?: boolean; error?: string }>("/settings/door", { id, value }),
   /** What agents asked to change and wait for the person on (the settings door). */
   settingsRequests: () => get<{ ok: boolean; requests: SettingRequestView[] }>("/settings/requests"),
   /** The person's answer: carries the desk key (deskGate.ts), as only the person may give it. */
@@ -3056,6 +3071,8 @@ const demoApi: typeof realApi = {
   prUnstickReopen: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" } as PrActionResult),
   prReviewPrompt: (_r: string, _n: number, _recipe?: string, _card?: string) => D({ ok: false, error: "not available in the demo" }),
   launchPermissions: () => D({ ok: true, mode: "default" as LaunchMode, deny: [...DEFAULT_LAUNCH_DENY] }),
+  settingsDoor: () => D({ ok: true, settings: [] as { id: string; value?: unknown }[] }),
+  settingsDoorSet: (_id: string, _value: unknown) => D({ ok: false, error: "not available in the demo" }),
   launchPermissionsSave: (_p: unknown) => D({ ok: false, error: "not available in the demo", mode: "default" as LaunchMode, deny: [...DEFAULT_LAUNCH_DENY] }),
   settingsRequests: () => D({ ok: true, requests: [] as SettingRequestView[] }),
   settingsRequestDecide: (_id: string, _approve: boolean) => D({ ok: false, error: "not available in the demo" }),
@@ -3086,14 +3103,17 @@ const demoApi: typeof realApi = {
   taskBulk: (_u: string[], _a: string, _v: string | null, _f?: string) => D({ ok: false, error: "not available in the demo" }),
   providers: () => D({ providers: [] }),
   ghRateLimit: () => D({ ok: false, error: "not available in the demo" }),
-  privacy: () => D({ db: "", config: "", credentials: "", retentionDays: 0, pairedDevices: 0, clickup: false }),
+  privacy: () => D<PrivacyFacts>({ db: "", dbBytes: null, config: "", configBytes: null, credentials: "", retentionDays: 0, retentionFromEnv: false, pairedDevices: 0, clickup: false, jira: false }),
+  privacyRetention: (_d: number) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string; retentionDays?: number }),
+  privacyErase: () => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string; events?: number; sessions?: number; days?: number }),
   providerConnect: (_i: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
   providerDisconnect: (_i: string, _o?: { forgetBoards?: boolean }) => D({ ok: false, error: "not available in the demo" }),
   providerWorkspaces: (_i: string) => D({ ok: false, error: "not available in the demo" }),
   providerWorkspace: (_i: string, _w: string, _n: string) => D({ ok: false, error: "not available in the demo" }),
   jiraConnect: (_e: string, _s: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
-  jiraStatus: () => D({ connected: false, site: null, kind: null, auth: null, api: null, deployment: null, account: null, prefixes: [], writes: false }),
+  jiraStatus: () => D({ connected: false, site: null, kind: null, auth: null, api: null, deployment: null, account: null, prefixes: [], writes: false, writeKinds: { move: true, comment: true, link: true, assign: true } }),
   jiraWrites: (_o: boolean) => D({ ok: false, error: "not available in the demo" }),
+  jiraWriteKind: (_k: string, _o: boolean) => D({ ok: false, error: "not available in the demo" }),
   jiraPrs: (_k: string, _r?: string) => D({ ok: true, prs: [] }),
   jiraLinks: (_k: string) => D({ ok: true, links: [] as { url: string; number: number; title: string; resolved: boolean }[] }),
   jiraDev: (_i: string) => D({ ok: true, dev: null as CardDev | null }),
@@ -3187,7 +3207,7 @@ const demoApi: typeof realApi = {
   seatWakeSave: (_h: number) => D({ ok: false, error: "not available in the demo" }),
   workerRoles: () => D({
     ok: true,
-    roles: { scout: { provider: "opencode", model: "" }, builder: { provider: "claude", model: "sonnet" }, verifier: { provider: "claude", model: "haiku" } },
+    roles: { scout: { provider: "opencode", model: "" }, builder: { provider: "claude", model: "sonnet" }, reviewer: { provider: "claude", model: "sonnet" }, verifier: { provider: "claude", model: "haiku" } },
     providers: [{ id: "claude", title: "Claude Code", installed: true }, { id: "opencode", title: "OpenCode", installed: true }, { id: "qwen", title: "Qwen Code", installed: false }],
   }),
   workerRoleSave: (_r: string, _p: string, _m: string) => D({ ok: false, error: "not available in the demo", roles: {} }),
@@ -3199,6 +3219,7 @@ const demoApi: typeof realApi = {
         workers: {
           scout: { value: [{ engine: "opencode", model: "" }], ask: false },
           builder: { value: [{ engine: "claude", model: "sonnet" }], ask: false },
+          reviewer: { value: [{ engine: "claude", model: "sonnet" }], ask: false },
           verifier: { value: [{ engine: "claude", model: "haiku" }], ask: false },
         },
       },
@@ -3217,6 +3238,7 @@ const demoApi: typeof realApi = {
   clickupCardForNote: () => D({ card: null }),
   clickupFileNote: () => D({ ok: false }),
   clickupSetWrites: (_o: boolean) => D({ ok: false }),
+  clickupBudget: () => D({ ok: true, limit: 100, used: 0, resetsInSec: 0, known: false }),
   clickupPrefs: () => D<{ ok: boolean; prefs?: ClickUpPrefs }>({ ok: false }),
   clickupSetPrefs: (_p: DeepPartial<ClickUpPrefs>) => D<{ ok: boolean; error?: string; prefs?: ClickUpPrefs }>({ ok: false, error: "the demo is read-only" }),
   clickupView: (_i?: string, _f?: boolean) => D({ tasks: [], statuses: [], fields: [], at: 0 }),

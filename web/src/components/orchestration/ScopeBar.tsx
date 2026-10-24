@@ -1,6 +1,7 @@
-import { useContext, useEffect, useRef } from "react";
+import { useContext, useEffect, useRef, type ReactNode } from "react";
 import { Filter } from "../SettingRow.tsx";
-import { Button, Chip, LINE } from "../workspace/Chrome.tsx";
+import { Button, LINE } from "../workspace/Chrome.tsx";
+import { OrchSeg } from "./OrchKit.tsx";
 import { OWN_LEGEND, OWN_SETTING, scopeSentence } from "./orchestrationCopy.ts";
 
 const baseName = (root: string) => root.split("/").filter(Boolean).pop() ?? root;
@@ -20,7 +21,7 @@ const baseName = (root: string) => root.split("/").filter(Boolean).pop() ?? root
  * under the bar and not behind it; the height is measured when the bar
  * changes size, never on a timer.
  */
-export function ScopeBar({ root, projects, overrides, inherited, busy, note, onRoot, onScope }: {
+export function ScopeBar({ root, projects, overrides, inherited, busy, note, saved, onRoot, onScope }: {
   root: string;
   projects: string[];
   /** The projects that have a setting of their own. */
@@ -29,6 +30,8 @@ export function ScopeBar({ root, projects, overrides, inherited, busy, note, onR
   busy: boolean;
   /** The server's sentence when the last change was refused. */
   note: string | undefined;
+  /** The chip that says whether what is on screen is saved, beside the choice. */
+  saved?: ReactNode;
   onRoot: (root: string) => void;
   /** true: give the project its own setting; false: back to the general one. */
   onScope: (override: boolean) => void;
@@ -47,7 +50,7 @@ export function ScopeBar({ root, projects, overrides, inherited, busy, note, onR
   const options = [
     { id: "", label: "All projects", title: "The setting every project without its own uses" },
     ...projects.map((r) => (overrides.includes(r)
-      ? { id: r, label: <><span aria-hidden className="inline-block rounded-full mr-1.5 align-middle" style={{ width: 8, height: 8, background: "currentColor", opacity: root === r ? 1 : 0.9, boxShadow: "none" }} data-own-dot />{baseName(r)}</>, title: `${r} — ${OWN_SETTING}` }
+      ? { id: r, own: true, label: <><span aria-hidden className="agx-orch-own" data-own-dot />{baseName(r)}</>, title: `${r} \u2014 ${OWN_SETTING}` }
       : { id: r, label: baseName(r), title: r })),
   ];
   const sentence = scopeSentence(root, inherited, baseName(root));
@@ -55,16 +58,13 @@ export function ScopeBar({ root, projects, overrides, inherited, busy, note, onR
   return (
     <div ref={bar} data-scope-bar className="sticky z-10 grid gap-1.5 pt-2 pb-2.5 mb-4 agx-settings-x"
       style={{ top: "var(--agx-ph-h, 0px)", background: "var(--bg)", borderBottom: LINE }}>
-      {/* Segmented's chips, but allowed to run onto a second line: the list grows with the person's projects. */}
-      <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Settings for">
-        <span className="text-[10px]" style={{ color: "var(--text3)" }}>Settings for</span>
-        {options.map((o) => <Chip key={o.id} on={root === o.id} resting onClick={() => onRoot(o.id)} title={o.title} className="t-mono"
-          style={root === o.id ? { background: "var(--primary)", color: "var(--on-primary)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--primary)" } : undefined}>{o.label}</Chip>)}
+      <div className="flex flex-wrap items-center gap-2">
+        <OrchSeg label="Settings for" value={root} options={options} onChange={onRoot} />
+        {saved}
       </div>
       <div className="flex items-center justify-between gap-3">
         <p className="m-0 min-w-0 text-[12px]" style={{ color: "var(--text3)" }} aria-live="polite">
-          <span aria-hidden className="inline-block rounded-full mr-1 align-middle" style={{ width: 8, height: 8, background: "var(--info)" }} />
-          {OWN_LEGEND} Showing <b style={{ color: "var(--text)" }}>{sentence.showing}</b>{sentence.tail}
+          {overrides.length > 0 && <><span aria-hidden className="agx-orch-own" />{OWN_LEGEND} </>}Showing <b style={{ color: "var(--text)" }}>{sentence.showing}</b>{sentence.tail}
         </p>
         {root !== "" && (
           <Button disabled={busy} className="shrink-0" onClick={() => onScope(inherited)}>{inherited ? "Set for this project" : "Use the general setting"}</Button>)}

@@ -13,7 +13,7 @@
 import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Offer, WhatIsCloned, matching, offerFor, sorted, tintOf, types } from "../src/components/plugins/Market.tsx";
+import { Offer, WhatIsCloned, byLicence, byScope, capabilityChips, licencesOn, matching, offerFor, scopesOn, sorted, tintOf, types } from "../src/components/plugins/Market.tsx";
 import type { Catalogue, InstallSource } from "../../shared/types.ts";
 import { domOf } from "./htmlAttrs.ts";
 
@@ -311,5 +311,51 @@ describe("a pinned install updates by installing the listed version again", () =
   test("and the details say that is how a pinned install updates", () => {
     const html = renderToStaticMarkup(React.createElement(WhatIsCloned, { entry: listed }));
     expect(html).toContain("install it again from here");
+  });
+});
+
+describe("the shelf's scope filter and its cards' capability chips", () => {
+  const shelf = [
+    entry({ id: "a", scope: "read", draws: ["panel"] }),
+    entry({ id: "b", scope: "full" }),
+    entry({ id: "c" }),
+  ];
+
+  test("picking a scope leaves out what does not say it, rather than guessing", () => {
+    expect(byScope(shelf, "any")).toHaveLength(3);
+    expect(byScope(shelf, "read").map((e) => e.id)).toEqual(["a"]);
+    expect(byScope(shelf, "answer")).toEqual([]);
+  });
+
+  test("picking a licence leaves out a listing that states none, and the filter offers the commonest first", () => {
+    const lic = [entry({ id: "a", license: "MIT" }), entry({ id: "b", license: "Apache-2.0" }), entry({ id: "c", license: "MIT" }), entry({ id: "d" })];
+    expect(byLicence(lic, "")).toHaveLength(4);
+    expect(byLicence(lic, "MIT").map((e) => e.id)).toEqual(["a", "c"]);
+    expect(byLicence(lic, "GPL-3.0")).toEqual([]);
+    expect(licencesOn(lic)).toEqual(["MIT", "Apache-2.0"]);
+    expect(licencesOn([entry({ id: "d" })])).toEqual([]);
+  });
+
+  test("the filter offers only scopes some listing states, in the order of how much they allow", () => {
+    expect(scopesOn(shelf)).toEqual(["read", "full"]);
+    expect(scopesOn([entry({ id: "c" })])).toEqual([]);
+  });
+
+  test("a card shows three chips at most, scope first, and says how many are left", () => {
+    const c = capabilityChips({ scope: "read", draws: ["panel", "settings", "pr-notes", "pr-button"] });
+    expect(c.chips.map((x) => x.text)).toEqual(["reads only", "adds a panel", "settings page"]);
+    expect(c.chips[0]!.ok).toBe(true);
+    expect(c.more).toBe(2);
+    expect(capabilityChips({ draws: ["panel"] })).toEqual({ chips: [{ text: "adds a panel" }], more: 0 });
+    expect(capabilityChips({})).toEqual({ chips: [], more: 0 });
+  });
+
+  test("the market's search is reached with / and never with Ctrl K, which is the palette", () => {
+    expect(code(market)).toContain('e.key !== "/"');
+    expect(code(market)).not.toMatch(/Ctrl K|key === "k"/);
+  });
+
+  test("a licence shows on the card only when the listing states one", () => {
+    expect(code(market)).toContain("{entry.license && <span");
   });
 });

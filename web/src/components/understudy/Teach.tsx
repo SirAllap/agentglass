@@ -27,13 +27,14 @@ import { Button } from "../workspace/Chrome.tsx";
 import { Empty } from "../git/ui.tsx";
 import { SettingRow } from "../SettingRow.tsx";
 import { useReportNeeds } from "../SettingsPageState.tsx";
-import { Field, SettingsCard, SettingsForm, StatusBadge } from "../SettingsKit.tsx";
+import { Field, ProblemNote, SettingsCard, SettingsForm, StatusBadge } from "../SettingsKit.tsx";
 import { fmtBytes } from "../../lib/goneCleanup.ts";
 import { HIT, ICON } from "../../lib/iconSize.ts";
 import { ClockIcon, ListIcon, PlayIcon } from "../../lib/glyphIcons.tsx";
 import { ChecklistIcon, FolderIcon, ShieldIcon } from "../settingsNavIcons.tsx";
 import { UnderstudyIcon } from "../workspace/icons.tsx";
 import { INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
+import { fileCount } from "../../lib/fileCount.ts";
 
 interface SourcesBody {
   sources: UnderstudySource[];
@@ -120,6 +121,8 @@ export function Teach({ active }: { active: boolean }) {
   const [data, setData] = useState<SourcesBody | null>(null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  /* The read of the sources answered nothing. It used to leave "Reading what is on this machine…" up for good. */
+  const [loadFailed, setLoadFailed] = useState(false);
   const [neverText, setNeverText] = useState("");
   const [addPath, setAddPath] = useState("");
   const [allPrecedents, setAllPrecedents] = useState(false);
@@ -133,13 +136,14 @@ export function Teach({ active }: { active: boolean }) {
   const load = useCallback(async () => {
     try {
       const r = await fetch(SERVER + "/understudy/sources", { headers: authHeaders() });
-      if (!r.ok) return;
+      if (!r.ok) { setLoadFailed(true); return; }
       const b = (await r.json()) as SourcesBody;
       if (b && Array.isArray(b.sources)) {
         setData(b);
+        setLoadFailed(false);
         setNeverText(b.never.join("\n"));
-      }
-    } catch { /* the panel says nothing rather than guessing */ }
+      } else setLoadFailed(true);
+    } catch { setLoadFailed(true); /* nothing is drawn from a read that did not come */ }
   }, []);
 
   useEffect(() => { if (active) void load(); }, [active, load]);
@@ -147,7 +151,13 @@ export function Teach({ active }: { active: boolean }) {
   useReportNeeds("understudy", data && !data.terms.ok ? { count: 1, title: "The private-terms list is missing, so nothing is read yet" } : null);
 
   if (!active) return null;
-  if (!data) return <Empty what="what is on this machine" busy />;
+  if (!data) {
+    return loadFailed
+      ? <ProblemNote title="Could not read what is on this machine" action={<Button onClick={() => { setLoadFailed(false); void load(); }}>Try again</Button>}>
+          The local server did not answer, so nothing here is known. Nothing was changed.
+        </ProblemNote>
+      : <Empty what="what is on this machine" busy />;
+  }
 
   const rules = data.sources.filter((s) => s.kind === "rules");
   const precedents = data.sources.filter((s) => s.kind === "precedents");
@@ -242,7 +252,7 @@ export function Teach({ active }: { active: boolean }) {
     );
     const hint = s.found ? (
       <>
-        <span className="block tabular-nums">{s.files.toLocaleString()} files · {fmtBytes(s.bytes)}</span>
+        <span className="block tabular-nums">{fileCount(s.files)} · {fmtBytes(s.bytes)}</span>
         {s.bytes > 0 && (
           <span aria-hidden className="block mt-1.5"
             style={{
@@ -296,12 +306,12 @@ export function Teach({ active }: { active: boolean }) {
       {!data.terms.ok && (
         <SettingsCard title="Private-terms list" status={<StatusBadge tone="err">Missing</StatusBadge>}>
           <SettingRow label="It will not read anything yet"
-            hint={<>
+            hint="There is no private-terms list, and without one it refuses rather than guess."
+            detail={{ summary: "Why, and how to fix it", body: <>
               There is no private-terms list at <span className="t-mono break-all">{data.terms.path}</span>. That list is what stops a private name reaching a
-              file it should not, and without it this cannot tell "checked, clean" from "could not check" — so it refuses
-              rather than guessing. Create the file (one name, word or pattern per line; <span className="t-mono">AGENTGLASS_PRIVATE_TERMS</span> points
+              file it should not, and without it this cannot tell "checked, clean" from "could not check". Create the file (one name, word or pattern per line; <span className="t-mono">AGENTGLASS_PRIVATE_TERMS</span> points
               it elsewhere), or say so here if this machine genuinely has nothing to protect.
-            </>}
+            </> }}
             actions={
               <Button tone="danger" disabled={busy || allowedCount === 0}
                 onClick={() => void learn(true)}
@@ -347,9 +357,10 @@ export function Teach({ active }: { active: boolean }) {
         status={<StatusBadge tone={stepTone(!step1Active, step1Active)}>
           {stepWord(!step1Active, step1Active, `${data.never.length} word${data.never.length === 1 ? "" : "s"}`)}
         </StatusBadge>}
-        desc="Step 1. The only control here that can prevent something rather than undo it.">
+        desc="Step 1. The one control here that prevents something rather than undoes it.">
         <SettingRow label="Words it must never read"
-          hint="One per line. Anything with these words in its path or its text is not read — not skimmed, not stored, not summarised. Plain words rather than patterns, on purpose: you should be able to predict this exactly."
+          hint="One per line. Anything with these words in its path or its text is not read."
+          detail={{ summary: "What not read means", body: <>Not skimmed, not stored, not summarised. Plain words rather than patterns, on purpose: you should be able to predict this exactly.</> }}
           below={
             <div className="flex flex-col gap-1.5" style={{ maxWidth: 480 }}>
               <textarea
@@ -373,12 +384,15 @@ export function Teach({ active }: { active: boolean }) {
         status={<StatusBadge tone={stepTone(allowedCount > 0, step2Active)}>
           {stepWord(allowedCount > 0, step2Active, `${allowedCount} ticked`)}
         </StatusBadge>}
-        desc="Step 2. Rules — you saying what you do. Deliberate, written for an audience, and the highest-quality material here. These become the policy it reads before every prediction.">
+        desc="Step 2. What you wrote down you do: the policy it reads before every prediction.">
         {rules.map((s) => <Source key={s.id} s={s} />)}
       </SettingsCard>
 
       <SettingsCard title="What you actually did" icon={<ClockIcon size={ICON.sm} />}
-        desc="Precedents — the record, not the intent. Messier and far larger. A rule says “never main”; a precedent says what you actually did on a Tuesday when the base had moved. Only precedents can make a prediction yours rather than merely sensible. One row per project rather than one switch, because each project is filed separately — and which side of that line a project sits on decides where its rows may ever be used, not whether they may be read.">
+        desc="Precedents: the record, not the intent. One row per project.">
+        <SettingRow agentExempt label="Why a row per project"
+          hint="A rule says “never main”; a precedent says what you did on a Tuesday when the base had moved."
+          detail={{ summary: "Rules and precedents", body: <>Precedents are messier and far larger, and only they can make a prediction yours rather than merely sensible. Each project is filed separately, and which side of that line a project sits on decides where its rows may ever be used, not whether they may be read.</> }} />
         {shownPrecedents.map((s) => <Source key={s.id} s={s} />)}
         {precedents.length > PRECEDENT_ROWS && (
           <div className="agx-settings-x py-2">
@@ -422,7 +436,7 @@ export function Teach({ active }: { active: boolean }) {
             ? "Nothing is allowed yet, so there is nothing to read."
             : read
               ? <>{data.learned
-                    ? `Read ${data.learned.filesRead.toLocaleString()} files at ${when(data.learned.at)}`
+                    ? `Read ${fileCount(data.learned.filesRead)} at ${when(data.learned.at)}`
                     : `Last read ${when(data.policy!.at)}`} —{" "}
                   <b style={{ fontWeight: 400, color: "var(--text)" }}>{(data.policy?.rules ?? 0).toLocaleString()} rules</b>,{" "}
                   <b style={{ fontWeight: 400, color: "var(--text)" }}>{data.banked.toLocaleString()} precedents</b>
@@ -441,7 +455,7 @@ export function Teach({ active }: { active: boolean }) {
 
       {(data.learned || data.policy) && (
         <SettingsCard title="What it knows now" icon={<ListIcon size={ICON.sm} />}
-          desc="The rules are compiled into files you can open and argue with. What it believes about you should never be something you have to query a database to find out.">
+          desc="The rules are compiled into files you can open and argue with.">
           <SettingRow rowRef={receipt} label="Rules" control={<span className="tabular-nums text-[15px]">{data.policy?.rules ?? 0}</span>} />
           <SettingRow label="Precedents" control={<span className="tabular-nums text-[15px]">{data.banked.toLocaleString()}</span>} />
           {/*
@@ -472,7 +486,7 @@ export function Teach({ active }: { active: boolean }) {
                column was reading as "this source gave almost nothing". */
             <SettingRow label="What each source added this time"
               hint={<>
-                Read {data.learned.filesRead.toLocaleString()} files. Counts are what each source added{" "}
+                Read {fileCount(data.learned.filesRead)}. Counts are what each source added{" "}
                 <em>this time</em> — a passage already banked is recognised, not stored twice, so a second
                 run over unchanged files reports little and is not doing less.{" "}
                 {data.learned.quarantined > 0

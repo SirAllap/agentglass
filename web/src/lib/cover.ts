@@ -259,7 +259,12 @@ function handoff(why: "ready" | "cap" | "continue") {
   if (!cover) { finish(null, null); return; }
   cover.classList.add("agc-leaving");
   const target = landing();
-  const still = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  // The attribute web/index.html sets before the first frame (the choice, else the system's
+  // setting), or the system's setting unless somebody chose "off" in Appearance.
+  let off = false;
+  try { off = localStorage.getItem("agentglass-reduce-motion") === "0"; } catch { /* no storage */ }
+  const still = !!doc!.documentElement.hasAttribute?.("data-reduce-motion")
+    || (!off && typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches);
   // Whatever goes wrong in the motion, the cover still comes down: a cover
   // stuck over a live app, taking no clicks, is the one outcome not allowed.
   try {

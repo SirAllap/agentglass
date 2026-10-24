@@ -15,17 +15,20 @@ import type { Budget } from "../../shared/types.ts";
 import { validatePolicy } from "../../shared/orchestration.ts";
 import { isLaunchMode, parseDenyRules } from "../../shared/launchModes.ts";
 import { WORKER_ROLES } from "../../shared/workerRoles.ts";
+import { GATE_ANSWERERS, GATE_ON_TIMEOUT, CHAT_START_IN, CHAT_MODES, isOneOf } from "../../shared/agentDefaults.ts";
 import {
   launchMode, launchDeny, writeLaunchPermissions, seatWakeHours, writeSeatSettings, workerRoles, writeWorkerRole,
   readBudgets, writeBudgets, policyRoots, lanternNudge, lanternNudgeMinutes, lanternWatch, lanternWatchMinutes, cacheTtlMinutes,
+  gateAnswerer, gateOnTimeout, chatStartIn, chatMode, chatDeny, writeAgentDefaults,
   writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, agentsChangeWithoutAsking, writeAgentsChangeWithoutAsking,
 } from "./config.ts";
 import { readPolicy, writePolicy } from "./orchestration.ts";
 import * as Seat from "./seat.ts";
 import { hookStatus, applyGate } from "./hooksetup.ts";
 import { masterEnabled, setMaster, listPlugins, enablePlugin, disablePlugin, setPluginUnboxedConsent } from "./plugins.ts";
-import { jiraWriteEnabled, setJiraWrites } from "./jira.ts";
+import { jiraWriteEnabled, jiraWriteKinds, setJiraWrites, setJiraWriteKind, type JiraWriteKind } from "./jira.ts";
 import { clickupWriteEnabled } from "./clickup.ts";
+import { RETENTION_DAYS, setRetentionDays } from "./retention.ts";
 import { setWritesAllowed } from "./clickupviews.ts";
 import { clickupPrefs, setClickupPrefs } from "./clickupPrefs.ts";
 import type { Applied, ServerSettingDef } from "./settingsDoor.ts";
@@ -88,6 +91,10 @@ export interface ServerSettingsEnv {
   /** Told after the orchestration policy changes: its switches and the chairs settle again. */
   policyChanged(): void;
 }
+
+/** One kind of Jira write, as its own switch under the master one (server/src/jira.ts, writeRefusal). */
+const jiraKindSetting = (d: { id: string; kind: JiraWriteKind; label: string }): ServerSettingDef =>
+  ({ id: d.id, page: "jira", label: d.label, type: "boolean", read: () => jiraWriteKinds()[d.kind], validate: bool, apply: (v) => done(() => setJiraWriteKind(d.kind, v === true)) });
 
 export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
   const seat = (root?: string) => (root ? Seat.seatRow(root) : null);
@@ -178,6 +185,41 @@ export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
       apply: (v) => { if (!hookStatus().gateBundled) return { ok: false, error: "this build ships no gate" }; const r = applyGate(v ? "install" : "uninstall"); return r.ok ? { ok: true } : { ok: false, error: (r as { error?: string }).error ?? "the gate did not change" }; },
     },
     {
+      id: "gate.answerer", page: "hooks", label: "Who is told when the gate holds an action (me, or me and the orchestrator)", type: "string",
+      read: () => gateAnswerer(),
+      validate: (raw) => (isOneOf(GATE_ANSWERERS, raw) ? { value: raw } : { error: "me or orchestrator" }),
+      apply: (v) => saved(writeAgentDefaults({ gateAnswerer: v })),
+    },
+    {
+      id: "gate.onTimeout", page: "hooks", label: "What a held action does when nobody answers (drop, or ask again first)", type: "string",
+      read: () => gateOnTimeout(),
+      validate: (raw) => (isOneOf(GATE_ON_TIMEOUT, raw) ? { value: raw } : { error: "drop or ask" }),
+      apply: (v) => saved(writeAgentDefaults({ gateOnTimeout: v })),
+    },
+    {
+      id: "chats.startIn", page: "hooks", label: "Where a new chat opens (the last project, or the open one)", type: "string",
+      read: () => chatStartIn(),
+      validate: (raw) => (isOneOf(CHAT_START_IN, raw) ? { value: raw } : { error: "last or open" }),
+      apply: (v) => saved(writeAgentDefaults({ chatStartIn: v })),
+    },
+    {
+      id: "chats.mode", page: "hooks", label: "Permission mode a new chat starts in", type: "string",
+      read: () => chatMode(),
+      validate: (raw) => (isOneOf(CHAT_MODES, raw) ? { value: raw } : { error: "inherit, default, acceptEdits or plan" }),
+      apply: (v) => saved(writeAgentDefaults({ chatMode: v })),
+    },
+    {
+      id: "chats.deny", page: "hooks", label: "Tools every Claude chat turn is denied (Codex and Antigravity chats take no deny rules)", type: "json",
+      read: () => chatDeny(),
+      validate: (raw) => {
+        const text = Array.isArray(raw) ? raw.map(String).join("\n") : typeof raw === "string" ? raw : null;
+        if (text === null) return { error: "a list of rules" };
+        const p = parseDenyRules(text);
+        return p.bad.length ? { error: `not a rule: ${p.bad[0]}` } : { value: p.rules };
+      },
+      apply: (v) => saved(writeAgentDefaults({ chatDeny: v })),
+    },
+    {
       id: "plugins.master", page: "plugins", label: "Plugins (the master switch)", type: "boolean",
       read: () => masterEnabled(), validate: bool,
       apply: (v) => done(() => setMaster(v === true)),
@@ -210,6 +252,16 @@ export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
     { id: "lantern.watchMinutes", page: "lantern", label: "Minutes between the orchestrator's wakes", type: "number", read: () => lanternWatchMinutes(), validate: minutes(LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN), apply: (v) => saved(writeLanternSettings({ lanternWatchMinutes: Number(v) })) },
     { id: "lantern.cacheTtlMinutes", page: "lantern", label: "Prompt cache window, minutes", type: "number", read: () => cacheTtlMinutes(), validate: minutes(1, 120), apply: (v) => saved(writeLanternSettings({ cacheTtlMinutes: Number(v) })) },
     { id: "jira.writes", page: "jira", label: "Let agentglass write to Jira", type: "boolean", read: () => jiraWriteEnabled(), validate: bool, apply: (v) => done(() => setJiraWrites(v === true)) },
+    jiraKindSetting({ id: "jira.writes.move", kind: "move", label: "Move cards between steps" }),
+    jiraKindSetting({ id: "jira.writes.comment", kind: "comment", label: "Comment on a card" }),
+    jiraKindSetting({ id: "jira.writes.link", kind: "link", label: "Link a pull request to its card" }),
+    jiraKindSetting({ id: "jira.writes.assign", kind: "assign", label: "Assign a person" }),
+    {
+      id: "privacy.retentionDays", page: "privacy", label: "How long history is kept", type: "number",
+      read: () => RETENTION_DAYS,
+      validate: (raw) => (typeof raw === "number" && Number.isInteger(raw) && raw >= 0 && raw <= 3650 ? { value: raw } : { error: "a whole number of days, 0 to 3650 (0 keeps everything)" }),
+      apply: (v) => saved(setRetentionDays(Number(v))),
+    },
     { id: "clickup.writes", page: "clickup", label: "Let agentglass write to ClickUp", type: "boolean", read: () => clickupWriteEnabled(), validate: bool, apply: (v) => done(() => setWritesAllowed(v === true)) },
     {
       id: "clickup.includeSubtasks", page: "clickup", label: "Subtasks on Assigned to me", type: "boolean",

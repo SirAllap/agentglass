@@ -18,7 +18,7 @@ const ready = (id: string, ok: boolean): EngineReadiness => ({
 });
 
 const w = { engine: "opencode", model: "opencode/big-pickle" };
-const policy = (chair: string) => composePolicy(defaultStored(), { orchestrator: { engine: chair, model: "m" }, workers: { scout: w, builder: w, verifier: w } });
+const policy = (chair: string) => composePolicy(defaultStored(), { orchestrator: { engine: chair, model: "m" }, workers: { scout: w, builder: w, reviewer: w, verifier: w } });
 const none = { on: () => false };
 
 function harness() {

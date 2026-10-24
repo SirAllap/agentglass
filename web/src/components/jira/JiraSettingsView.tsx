@@ -6,7 +6,7 @@ import { triggerOf } from "../../lib/stepBlocksView.ts";
 import { allStatuses, isActive, moments, resolveImplicit, withCounted, type MapSpace, type StepKind } from "../../lib/workflowMap.ts";
 import { eyeIds, partitionUnits } from "../../lib/workflowLayout.ts";
 import type { UnitsState } from "../../lib/jiraUnits.ts";
-import { SettingRow, Switch } from "../SettingRow.tsx";
+import { SettingRow, Switch, Toggle } from "../SettingRow.tsx";
 import { SettingsCard, StatusBadge } from "../SettingsKit.tsx";
 import { Button, Segmented } from "../workspace/Chrome.tsx";
 import { Dot, StatusPopover, type PanelView } from "../StatusPanel.tsx";
@@ -17,10 +17,18 @@ import { setting } from "../../lib/settingsRegistry.ts";
 import { HIT, ICON } from "../../lib/iconSize.ts";
 import { ColumnsIcon, PlugIcon, SearchIcon, ServerIcon, ShieldIcon, SlidersIcon } from "../settingsNavIcons.tsx";
 
+export type WriteKind = keyof JiraStatus["writeKinds"];
+/** What each kind of write is, in the order the page lists them; the words are the card's own. */
+const WRITE_KINDS: { kind: WriteKind; label: string; hint: string }[] = [
+  { kind: "move", label: "Move cards between steps", hint: "A step or a hand-off moves the card to one of your statuses." },
+  { kind: "comment", label: "Comment on a card", hint: "Posts, edits and deletes your own comments." },
+  { kind: "link", label: "Link a pull request to its card", hint: "Adds the pull request as a link on the card." },
+  { kind: "assign", label: "Assign a person", hint: "Puts a person on the card or takes them off." },
+];
+
 const n = JIRA.nouns;
 
 const Value = ({ children }: { children: ReactNode }) => <span className="text-[13px]">{children}</span>;
-const runsOn = (s: JiraStatus): string => (s.deployment === "cloud" || (!s.deployment && s.kind === "cloud") ? "Jira Cloud" : "Jira Data Center");
 const signIn = (s: JiraStatus): string => (s.auth === "bearer" ? "Personal access token" : "Account and token");
 
 /** What the page is handed: everything it draws, and what a press asks for. Nothing in here reaches the network. */
@@ -39,6 +47,10 @@ export interface JiraViewProps {
   /** The per-project tracker choice, drawn between the map and the saved views. */
   tracker?: ReactNode;
   onWrites: (on: boolean) => void;
+  /** One kind of write, under the master switch. */
+  onWriteKind: (kind: WriteKind, on: boolean) => void;
+  /** Sign in again with another token (the form comes back in this page's place). */
+  onReplace: () => void;
   /** Save a change to the steps; resolves false when it did not save. */
   onSteps: (patch: StepsPatch) => Promise<boolean>;
   onReread: () => void;
@@ -96,14 +108,32 @@ export function JiraSettingsView(p: JiraViewProps) {
     <div className="wfm">
       <style>{WFM_CSS}</style>
       {/* The connection, and the one switch that decides whether anything here can write. */}
-      <SettingsCard title={n.name} icon={<PlugIcon size={ICON.sm} />} desc={p.status.account ? `Signed in as ${p.status.account}. ${p.status.site ?? ""}`.trim() : p.status.site ?? undefined}
+      <SettingsCard title={n.name} icon={<PlugIcon size={ICON.sm} />} desc="Link it once and a pull request knows its card."
         status={<StatusBadge tone="ok">Connected</StatusBadge>}>
+        <SettingRow agentExempt label="Jira type" hint="Where the site runs." control={<Value>{p.status.kind === "cloud" ? "Cloud" : "Data Center"}</Value>} />
+        <SettingRow agentExempt label="Site" control={<Value><span className="t-mono">{p.status.site}</span></Value>} />
+        {p.status.account && <SettingRow agentExempt label="Signed in as" hint={signIn(p.status)} control={<Value>{p.status.account}</Value>} />}
+        <SettingRow agentExempt label="Token" hint="Kept on this machine in a file only you can read, never shown again."
+          control={<span className="flex items-center gap-2"><StatusBadge tone="ok">Stored</StatusBadge><Button onClick={p.onReplace}>Replace</Button></span>} />
+        {/* The one switch that decides whether anything here can write; the kinds under it narrow it. */}
         <SettingRow agentExempt label={<span id="jira-changes-l">{`Changes in ${n.name}`}</span>}
           hint={changesOn ? `Only the steps below can change a ${n.item}, one at a time, when you press their button.` : steps.length ? "agentglass only reads. Turn this on to let the steps below act." : "agentglass only reads. Add a step below, then turn this on to let it act."}
-          status={<span data-guard={changesOn ? "on" : "off"}><StatusBadge tone={changesOn ? "warn" : "off"}>{changesOn ? "On" : "Read-only"}</StatusBadge></span>}
+          status={<span data-guard={changesOn ? "on" : "off"}><StatusBadge tone={changesOn ? "ok" : "off"}>{changesOn ? "On" : "Read-only"}</StatusBadge></span>}
           control={<button type="button" role="switch" aria-checked={changesOn} aria-labelledby="jira-changes-l" disabled={p.writesBusy}
             onClick={() => p.onWrites(!changesOn)} className="agx-switch-hit inline-flex items-center rounded-full" style={{ minHeight: HIT }}><Switch on={changesOn} busy={p.writesBusy} /></button>} />
         {p.note && <SettingRow agentExempt label="That did not work" hint={<span role="alert" style={{ color: "var(--error-ink)" }}>{p.note}</span>} />}
+        <SettingRow agentExempt label="Disconnect Jira" hint="Removes the token from this machine. Nothing changes in Jira."
+          actions={<Button tone="danger" pending={p.busy} onClick={p.onDisconnect}>Disconnect</Button>} />
+      </SettingsCard>
+
+      {/* Nothing is written until the master switch is on; under it, each kind of write is its own. */}
+      <SettingsCard title={"Write permissions"} icon={<ShieldIcon size={ICON.sm} />} desc="Nothing is written until you allow it, one kind at a time."
+        status={changesOn ? undefined : <StatusBadge tone="off">Read-only</StatusBadge>}>
+        {WRITE_KINDS.map((w) => (
+          <Toggle key={w.kind} on={p.status.writeKinds[w.kind]} disabled={p.writesBusy} onClick={() => p.onWriteKind(w.kind, !p.status.writeKinds[w.kind])}
+            settingId={`jira.writes.${w.kind}`} label={w.label}
+            hint={changesOn ? w.hint : `${w.hint} Off while changes are off.`} />
+        ))}
       </SettingsCard>
 
       <Card id="jira-found" icon={<SearchIcon size={ICON.sm} />} title="What we found" open={foundOpen ?? steps.length === 0} onToggle={setFoundOpen}
@@ -171,10 +201,7 @@ export function JiraSettingsView(p: JiraViewProps) {
       </SettingsCard>
 
       <div ref={advRef}>
-        <Card id="jira-adv" icon={<SlidersIcon size={ICON.sm} />} title="Advanced" desc="The site this reads, and the older per-project rules." open={advOpen} onToggle={setAdvOpen}>
-          <SettingRow agentExempt label="Site" control={<Value>{p.status.site}</Value>} />
-          <SettingRow agentExempt label="Runs on" control={<Value>{runsOn(p.status)}</Value>} />
-          <SettingRow agentExempt label="Signs in with" control={<Value>{signIn(p.status)}</Value>} />
+        <Card id="jira-adv" icon={<SlidersIcon size={ICON.sm} />} title="Advanced" desc="The older per-project rules." open={advOpen} onToggle={setAdvOpen}>
           <SettingRow agentExempt label="Projects with their own hand-off"
             hint={p.overrides.length ? `Before steps there was one hand-off rule per project. These ${p.overrides.length === 1 ? "project keeps its" : "projects keep their"} own until you clear it or save the hand-off step.` : "None: the hand-off step applies to every project."}
             below={p.overrides.length ? (
@@ -188,10 +215,6 @@ export function JiraSettingsView(p: JiraViewProps) {
         </Card>
       </div>
 
-      <SettingsCard title="Disconnect" tone="danger" icon={<ShieldIcon size={ICON.sm} />}>
-        <SettingRow agentExempt label="Disconnect Jira" hint="Removes the token from this machine. Nothing changes in Jira."
-          actions={<Button tone="danger" pending={p.busy} onClick={p.onDisconnect}>Disconnect</Button>} />
-      </SettingsCard>
     </div>
   );
 }

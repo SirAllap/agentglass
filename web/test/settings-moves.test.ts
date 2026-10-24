@@ -29,8 +29,10 @@ describe("slice 4 moves", () => {
     expect(fn("TerminalRunsOn")).toContain("api.tmuxSettingsSave({ terminal: mode })");
   });
 
-  test("How new chats run is on Agents, not tmux", () => {
-    expect(block("hooks")).toContain('label="How new chats run"');
+  test("How new chats run is on Agents, not tmux", async () => {
+    const cards = await Bun.file(new URL("../src/components/agents/AgentsCards.tsx", import.meta.url)).text();
+    expect(block("hooks")).toContain("<NewChatsCard");
+    expect(cards).toContain('label="How new chats run"');
     expect(block("tmux")).not.toContain("How new chats run");
     expect(block("hooks")).toContain("setChatEnginePref(next)");
   });

@@ -22,7 +22,7 @@ function rowBefore(text: string, label: string): string {
 
 describe("launch permissions in Settings", () => {
   test("both rows are out of an agent's reach", () => {
-    expect(rowBefore(modal, "Permission mode for terminals agentglass opens")).toContain("agentNever=");
+    expect(rowBefore(modal, "Permission mode")).toContain("agentNever=");
     expect(rowBefore(modal, "Always deny")).toContain("agentNever=");
   });
 });

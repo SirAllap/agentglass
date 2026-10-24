@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
-import { applyHooks, applyGate, healGateCommand, hookStatus, hooksDir, hookCommand, _internal } from "../src/hooksetup.ts";
+import { applyHooks, applyGate, healGateCommand, hookStatus, hooksDir, hookCommand, pythonVersion, _internal } from "../src/hooksetup.ts";
 
 const { doInstall, doUninstall, isOurs, EVENTS, MARKER, gateCommand } = _internal;
 
@@ -385,5 +385,21 @@ describe("golden parity with install_hooks.py --gate", () => {
     applyGate("uninstall");
     expect(JSON.parse(readFileSync(join(proj, ".claude", "settings.json"), "utf8"))).toEqual(readSettings());
     rmSync(proj, { recursive: true, force: true });
+  });
+});
+
+describe("the interpreter's version, for the Agents page's chip", () => {
+  test("is the major.minor it prints, asked once a minute per interpreter", () => {
+    let asked = 0;
+    const run = () => { asked++; return "Python 3.12.4\n"; };
+    expect(pythonVersion("python3-example", 1_000, run)).toBe("3.12");
+    expect(pythonVersion("python3-example", 30_000, run)).toBe("3.12");
+    expect(asked).toBe(1);
+    expect(pythonVersion("python3-example", 70_000, run)).toBe("3.12");
+    expect(asked).toBe(2);
+  });
+  test("one that does not answer is null, not a guess", () => {
+    expect(pythonVersion("py-missing", 1_000_000, () => "")).toBeNull();
+    expect(pythonVersion("py-throws", 1_000_000, () => { throw new Error("ENOENT"); })).toBeNull();
   });
 });

@@ -31,6 +31,8 @@ interface Pending extends PendingGate {
   // hook re-attaches — it is still pending, still decidable, still in the queue.
   resolve?: (d: GateOutcome) => void;
   timer: ReturnType<typeof setTimeout>;
+  /** The "ask again" notifications still to come, cleared the moment it resolves. */
+  reminders?: ReturnType<typeof setTimeout>[];
 }
 
 // The gate is fail-open by design: a timeout (or an unreachable server) never
@@ -116,6 +118,7 @@ function finish(
   const w = waiters.get(id);
   if (w) {
     clearTimeout(w.timer);
+    for (const t of w.reminders ?? []) clearTimeout(t);
     waiters.delete(id);
   }
   resolveGateRow(id, out.decision, out.reason, resolution, Date.now(), by);
@@ -181,6 +184,11 @@ export function submitGate(
   /** Hold this ONE request closed when nobody answers, whatever the machine's
    *  default is. The route sets it for outward actions; see outward.ts. */
   failClosed?: boolean,
+  /** "Ask again" (Settings ▸ Agents ▸ Gate): while nobody answers, notify twice more, at a third and
+   *  two thirds of the wait, then let the timeout drop it as before. Always INSIDE the original window:
+   *  the hook that holds the agent stops waiting when its own window ends, and a hold that outlived it
+   *  would be released unseen. The callback is how the route tells the orchestrator too. */
+  askAgain?: (round: 1 | 2) => void,
 ): Promise<GateOutcome> {
   // Floor the timeout: a negative value (a repo-local settings.json can set
   // AGENTGLASS_GATE_TIMEOUT=-1) makes setTimeout fire immediately, turning the
@@ -223,7 +231,23 @@ export function submitGate(
     // given at 200 characters — a shell command long enough to fill that would
     // push the whole reason off the lock screen, which is the one surface it
     // had to survive on.
-    pushGate(where, tool_name, budget ? (summary ? `${budget} · ${summary}` : budget) : summary, pane ?? undefined);
+    const line = budget ? (summary ? `${budget} · ${summary}` : budget) : summary;
+    pushGate(where, tool_name, line, pane ?? undefined);
+    if (askAgain) {
+      const w = waiters.get(id)!;
+      // A different line each time: pushGate's own dedupe would swallow an identical one.
+      w.reminders = ([1, 2] as const).map((n) => {
+        // A plain comparison, not Math.min: it is the bound the analyser reads as one.
+        const at = Math.floor((wait * n) / 3);
+        const t = setTimeout(() => {
+          if (!waiters.has(id)) return;
+          pushGate(where, tool_name, `Still waiting (${n} of 2) · ${line}`, pane ?? undefined);
+          try { askAgain(n); } catch { /* a callback that throws must not touch the hold */ }
+        }, at > GATE_MAX_MS ? GATE_MAX_MS : at);
+        (t as any).unref?.();
+        return t;
+      });
+    }
     onChange();
   });
 }

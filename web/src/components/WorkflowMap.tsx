@@ -431,7 +431,7 @@ export function WorkflowMap(p: MapProps) {
         <div className="agx-slot">
           {frozen
             ? <StatusBadge tone="warn">Paused: token refused</StatusBadge>
-            : <StatusBadge tone={changesOn ? "warn" : "off"}>{changesOn ? "Changes on" : "Changes off"}</StatusBadge>}
+            : <StatusBadge tone={changesOn ? "ok" : "off"}>{changesOn ? "Changes on" : "Changes off"}</StatusBadge>}
           <Button tone="primary" data-add="" aria-expanded={composer} disabled={loading || frozen}
             onClick={() => { setComposer((c) => !c); setFocusNext(composer ? "[data-add]" : "[data-mom]"); }}>
             <PlusIcon size={ICON.xs} /> Add a step

@@ -23,7 +23,8 @@ export function useStableFlow(ref: RefObject<HTMLElement | null>, deps: readonly
       const cols = Number(getComputedStyle(col).getPropertyValue("--agx-cols")) || 1;
       const items = kids.map((el) => {
         const cs = getComputedStyle(el);
-        const h = el.getBoundingClientRect().height + (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0) + GAP;
+        /* offsetHeight, in layout pixels like the grid's 1px rows: the page is `zoom`ed on a wide screen and the rect is in zoomed pixels, which left every card 10% more rows than it is tall. */
+        const h = el.offsetHeight + (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0) + GAP;
         return { h, col: COL.get(el), wide: !el.classList.contains("agx-scard") || el.classList.contains("agx-scard-wide") };
       });
       placeFlow(items, cols).forEach((s, i) => {

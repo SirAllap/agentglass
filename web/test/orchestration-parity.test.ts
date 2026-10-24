@@ -30,7 +30,7 @@ const engine = (id: string): EngineReadiness => ({
 });
 const base = (): Policy => composePolicy(defaultStored(), {
   orchestrator: { engine: "claude", model: "sonnet" },
-  workers: { scout: { engine: "opencode", model: "" }, builder: { engine: "claude", model: "sonnet" }, verifier: { engine: "claude", model: "haiku" } },
+  workers: { scout: { engine: "opencode", model: "" }, builder: { engine: "claude", model: "sonnet" }, reviewer: { engine: "claude", model: "sonnet" }, verifier: { engine: "claude", model: "haiku" } },
 });
 const night: PolicyRule = { id: "quiet-nights", name: "Quiet nights", enabled: true, when: [{ kind: "hours", days: [1, 2, 3, 4, 5], from: "22:00", to: "07:00" }], workers: { builder: [{ engine: "opencode", model: "" }] } };
 const view = (o: Partial<OrchestrationViewProps> = {}) =>
@@ -40,17 +40,18 @@ const view = (o: Partial<OrchestrationViewProps> = {}) =>
   } as OrchestrationViewProps));
 const count = (html: string, needle: string) => html.split(needle).length - 1;
 
-describe("the four cards of the editor", () => {
+describe("the five cards of the editor", () => {
   const html = view();
-  test("Quick setup, Fine-tune, Switch things automatically, Safety and limits, in that order, beside the flow", () => {
-    const heads = ["Quick setup", "Fine-tune who does what", "Switch things automatically", "Safety and limits"];
-    let at = html.indexOf('class="agx-split-main"');
+  test("Quick setup, Fine-tune, Switch things automatically, Always refused, Safety and limits, in that order, then the save bar, beside the flow", () => {
+    const heads = ["Quick setup", "Fine-tune who does what", "Switch things automatically", "Always refused", "Safety and limits"];
+    let at = html.indexOf('agx-split-main');
     expect(at).toBeGreaterThan(-1);
     for (const h of heads) {
       const n = html.indexOf(`>${h}<`, at);
       expect(n, h).toBeGreaterThan(at);
       at = n;
     }
+    expect(html.indexOf("data-savebar")).toBeGreaterThan(at);
     expect(html.indexOf('data-flow="right-now"')).toBeGreaterThan(html.indexOf('class="agx-split-side"'));
   });
   test("the old unnumbered cards are gone", () => {
@@ -58,19 +59,22 @@ describe("the four cards of the editor", () => {
   });
 });
 
-describe("Fine-tune is one card the picture opens", () => {
-  test("closed, it holds one sentence and no per-role fallback rows", () => {
+describe("Fine-tune is four rows, and the picture or a row's Details opens the rest", () => {
+  test("closed, each job is a row with its engine in a select on the right, and no per-role fallback rows", () => {
     const html = view();
-    expect(html).toContain("Press “Change” on a role in the flow. The tiles open right here.");
+    for (const w of ["main agent", "scouts", "builders", "verifiers"]) expect(html).toContain(`aria-label="Engine for the ${w}"`);
+    for (const r of ["Orchestrator", "Scout", "Builder", "Verifier"]) expect(html).toContain(`<span class="agx-row-name">${r}</span>`);
+    expect(count(html, ">Details</button>")).toBeGreaterThanOrEqual(4);
     expect(html).not.toContain("is not available");
     expect(count(html, "Add a fallback rule")).toBe(0);
-    expect(count(html, "Ask when it runs")).toBe(0);
+    // The one "Ask when it runs" closed is the gate's switch under Always refused; a job's own chip is in its details.
+    expect(count(html, "Ask when it runs")).toBe(1);
   });
   test("a job's Change opens its tiles, its model, Ask when it runs and its fallback inside the card", () => {
     const html = view({ openPicker: "builder" });
     expect(html).toContain('aria-label="Engine for the builders"');
     expect(html).toContain('aria-label="Model for the builders"');
-    expect(count(html, "Ask when it runs")).toBe(1);
+    expect(count(html, "Ask when it runs")).toBe(2);
     expect(count(html, "Add a fallback rule")).toBe(1);
     expect(html).toContain("If builders are not available:");
     expect(html).toContain(">Done<");
@@ -114,17 +118,16 @@ describe("the project line and the picture's legend", () => {
     expect(html).toContain("has its own setting · the others follow “All projects”.");
     expect(html).toContain("data-own-dot");
   });
-  test("the legend names the four states once, and the Because line offers the setups while nothing is on", () => {
+  test("the Because line offers the setups while nothing is on", () => {
     const html = view();
-    for (const w of ["Ready", "Not installed", "Not signed in", "Limit hit"]) expect(html.slice(html.indexOf('data-flow="legend"'))).toContain(w);
-    expect(html).toContain("Pick a setup below");
-    expect(view({ policy: { ...base(), rules: [{ ...night, when: [{ kind: "always" }] }] }, states: [{ scope: "global", ruleId: "quiet-nights", name: "", active: true, since: 0, reading: "", readingAt: 0, holding: "" } as PolicyRuleState] })).not.toContain("Pick a setup below");
+    expect(html).toContain(">Pick a setup</button>");
+    expect(view({ policy: { ...base(), rules: [{ ...night, when: [{ kind: "always" }] }] }, states: [{ scope: "global", ruleId: "quiet-nights", name: "", active: true, since: 0, reading: "", readingAt: 0, holding: "" } as PolicyRuleState] })).not.toContain(">Pick a setup</button>");
   });
   test("an engine whose plan reads 0% left is Limit hit on its tile", () => {
     const st = (reading: string) => [{ scope: "global", ruleId: "x", name: "", active: false, since: 0, reading, readingAt: 1, holding: "" }] as PolicyRuleState[];
     expect([...limitedEngines(st("Claude weekly 0% left"), "global")]).toEqual(["claude"]);
     expect([...limitedEngines(st("Claude weekly 62% left"), "global")]).toEqual([]);
-    expect(view({ states: st("Claude weekly 0% left") })).toContain("Limit hit</span>");
+    expect(view({ states: st("Claude weekly 0% left") })).toContain(">Limit hit</text>");
   });
 });
 

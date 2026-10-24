@@ -83,10 +83,13 @@ export function reviewRecipes(): ReviewRecipe[] {
     const mine = stored.get(b.id);
     stored.delete(b.id);
     if (mine?.hidden) return;
+    const merged = mine ? { title: mine.title || b.title, body: mine.body ?? b.body, skill: mine.skill, group: mine.group || b.group, when: mine.when || b.when, model: mine.model, effort: mine.effort, permissionMode: mine.permissionMode } : null;
     out.push({
       ...b,
-      ...(mine ? { title: mine.title || b.title, body: mine.body ?? b.body, skill: mine.skill, group: mine.group || b.group, when: mine.when || b.when, model: mine.model, effort: mine.effort } : {}),
+      ...merged,
       builtIn: true,
+      /* Saved over the catalogue AND different from it: a save that changed nothing is not an edit. */
+      ...(merged && EDITABLE.some((k) => (merged[k] || undefined) !== (b[k] || undefined)) ? { edited: true } : {}),
       rank: mine?.rank ?? i,
     });
   });
@@ -100,6 +103,15 @@ export function reviewRecipes(): ReviewRecipe[] {
 
   const g = (r: ReviewRecipe) => Math.max(0, GROUPS.indexOf(r.group));
   return out.sort((a, b) => g(a) - g(b) || (a.rank ?? 0) - (b.rank ?? 0) || a.title.localeCompare(b.title));
+}
+
+/** The fields an edit can change, which is what makes a built-in "Edited". */
+const EDITABLE = ["title", "body", "skill", "group", "when", "model", "effort", "permissionMode"] as const;
+
+/** The built-ins the person hid: Settings lists them so they can be offered again. */
+export function hiddenRecipes(): ReviewRecipe[] {
+  const gone = new Set(load().prompts.filter((p) => p.hidden).map((p) => p.id));
+  return BUILT_IN_RECIPES.filter((b) => gone.has(b.id)).map((b) => ({ ...b, builtIn: true, hidden: true }));
 }
 
 /** One by id, already merged. Null when it was deleted or never existed — the

@@ -38,6 +38,12 @@ export interface CataloguePlugin {
    *  thing looks like is read before one that describes it. Drawn by the
    *  website only: the app never fetches a stranger's image. */
   preview?: string;
+  /** What the plugin may do to the app once it runs, copied from its manifest so the shelf can be
+   *  filtered by it ("reads only") before anybody installs anything. The install reads the manifest
+   *  itself and grants nothing from this field: it is the label on the box, not the lock. */
+  scope?: "read" | "answer" | "full";
+  /** The licence, as the identifier the author wrote (`MIT`, `Apache-2.0`): shown on the card, never interpreted. */
+  license?: string;
 }
 
 export interface Catalogue {
@@ -96,6 +102,8 @@ function validateCataloguePlugin(raw: unknown): CataloguePlugin | null {
     ...(short(p.added, 40) ? { added: short(p.added, 40) } : {}),
     ...(typeof p.minApp === "string" && /^\d{1,4}(\.\d{1,4}){0,2}$/.test(p.minApp) ? { minApp: p.minApp } : {}),
     ...(typeof p.preview === "string" && /^https:\/\/[^\s"'<>]{4,512}$/.test(p.preview) ? { preview: p.preview } : {}),
+    ...(p.scope === "read" || p.scope === "answer" || p.scope === "full" ? { scope: p.scope } : {}),
+    ...(typeof p.license === "string" && /^[\w.+() -]{1,40}$/.test(p.license.trim()) ? { license: p.license.trim() } : {}),
   };
 }
 
