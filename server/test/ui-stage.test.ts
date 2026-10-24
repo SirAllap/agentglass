@@ -6,7 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   UI_ACTIONS, describeUiActions, levelRefusal, parseUi, plainText, presentOf, repoName,
-  STAGE_BODY_MAX, STAGE_SUBJECT_MAX, type UiActionDef,
+  STAGE_BODY_MAX, STAGE_SUBJECT_MAX, DISK_STAGE_MAX_IDS, DISK_STAGE_ID_MAX, diskStageIds, UI_REFUSED_FOR_AGENTS, READ_PANELS_LATE, type UiActionDef,
 } from "../../shared/uiActions.ts";
 
 const STAGES = ["pr.merge.stage", "pr.comment.stage", "pr.review.stage", "card.move.stage"] as const;
@@ -22,12 +22,14 @@ const parse = (id: string, args: unknown, level: 1 | 2 | 3 = 3) => parseUi(UI_AC
 const UNSTICK = "pr.unstick" as const;
 /** The sixth is the Finder's own: no pull request in its arguments, so it has its own describe below. */
 const FINDER = "finder.op.stage" as const;
+/** The seventh is the machine panel's disk cleanup: one `ids` text, its own describe at the end. */
+const DISK = "diskclean.stage" as const;
 
 describe("the stage doors", () => {
-  test("exactly these four, pr.unstick (own file) and finder.op.stage (below), are level 3, every one a stage, and nothing else is level 3", () => {
+  test("exactly these four, pr.unstick (own file), finder.op.stage and diskclean.stage (below), are level 3, every one a stage, and nothing else is level 3", () => {
     const l3 = Object.entries(UI_ACTIONS).filter(([, d]) => d.level === 3).map(([id]) => id).sort();
-    expect(l3).toEqual([...STAGES, UNSTICK, FINDER].sort());
-    for (const id of [...STAGES, UNSTICK, FINDER]) expect((UI_ACTIONS[id] as UiActionDef).kind, id).toBe("stage");
+    expect(l3).toEqual([...STAGES, UNSTICK, FINDER, DISK].sort());
+    for (const id of [...STAGES, UNSTICK, FINDER, DISK]) expect((UI_ACTIONS[id] as UiActionDef).kind, id).toBe("stage");
   });
 
   for (const id of STAGES) {
@@ -62,9 +64,9 @@ describe("the stage doors", () => {
     });
   }
 
-  test("the listing at level 2 has no stage door and at level 3 has all four, and Unstick", () => {
+  test("the listing at level 2 has no stage door and at level 3 has all four, Unstick, the Finder's and the disk's", () => {
     expect(describeUiActions(UI_ACTIONS, 2).filter((d) => d.kind === "stage")).toEqual([]);
-    expect(describeUiActions(UI_ACTIONS, 3).filter((d) => d.kind === "stage").map((d) => d.id).sort()).toEqual([...STAGES, UNSTICK, FINDER].sort());
+    expect(describeUiActions(UI_ACTIONS, 3).filter((d) => d.kind === "stage").map((d) => d.id).sort()).toEqual([...STAGES, UNSTICK, FINDER, DISK].sort());
   });
 
   test("merge: only the three methods; subject is one line", () => {
@@ -205,5 +207,61 @@ describe("finder.op.stage", () => {
     const row = describeUiActions(UI_ACTIONS, 3).find((x) => x.id === FINDER)!;
     expect(row.kind).toBe("stage");
     expect(row.surface).toContain("nothing runs until the person presses");
+  });
+});
+
+describe("diskclean.stage", () => {
+  const f = (args: unknown, level: 1 | 2 | 3 = 3) => parse(DISK, args, level);
+  const good = { ids: "docker:cache\nworktree:/home/acme/code/orbit-fix\ncache:uv" };
+
+  test("is refused below level 3 and runs at 3, with the ids kept one per line", () => {
+    expect(f(good, 1)).toBeNull();
+    expect(f(good, 2)).toBeNull();
+    expect(f(good)).toMatchObject({ cmd: "ui", do: DISK, args: good });
+  });
+
+  test("a stray blank line, a trailing newline and spaces around an id are tidied, not carried", () => {
+    expect(f({ ids: "  docker:cache \n\ncache:uv\n" })?.args).toEqual({ ids: "docker:cache\ncache:uv" });
+  });
+
+  test("nothing, only blanks, a repeated id, too many ids and a too long id are refused", () => {
+    expect(f({})).toBeNull();
+    for (const ids of ["", "  \n \n", "docker:cache\ndocker:cache", 7, null]) expect(f({ ids }), JSON.stringify(ids)).toBeNull();
+    const many = (n: number) => Array.from({ length: n }, (_, i) => `cache:c${i}`).join("\n");
+    expect(f({ ids: many(DISK_STAGE_MAX_IDS) })).not.toBeNull();
+    expect(f({ ids: many(DISK_STAGE_MAX_IDS + 1) })).toBeNull();
+    expect(f({ ids: "x".repeat(DISK_STAGE_ID_MAX) })).not.toBeNull();
+    expect(f({ ids: "x".repeat(DISK_STAGE_ID_MAX + 1) })).toBeNull();
+  });
+
+  test("hidden characters and a comment that hides are refused like any staged text", () => {
+    for (const ids of ["docker:cache\u202Ehidden", "docker:cache <!-- x -->", "docker:cache\n\n\ncache:uv", "docker:cache\u0000"]) expect(f({ ids }), JSON.stringify(ids)).toBeNull();
+  });
+
+  test("an argument the door does not name is dropped", () => {
+    expect(f({ ...good, run: true, dryRun: false })?.args).toEqual(good);
+  });
+
+  test("diskStageIds is the one reader of the text", () => {
+    expect(diskStageIds(good.ids)).toEqual(["docker:cache", "worktree:/home/acme/code/orbit-fix", "cache:uv"]);
+    expect(diskStageIds("")).toBeNull();
+    expect(diskStageIds(undefined)).toBeNull();
+  });
+
+  test("describes itself as a stage that removes nothing", () => {
+    const row = describeUiActions(UI_ACTIONS, 3).find((x) => x.id === DISK)!;
+    expect(row.kind).toBe("stage");
+    expect(row.level).toBe(3);
+    expect(row.surface).toContain("nothing is removed until the person presses");
+  });
+
+  test("running the clean is not a door: it is listed as refused for agents, and is no registry entry", () => {
+    expect(UI_REFUSED_FOR_AGENTS["diskclean.run"]).toContain("403");
+    expect(Object.keys(UI_ACTIONS)).not.toContain("diskclean.run");
+    expect(Object.keys(UI_ACTIONS).filter((id) => id.startsWith("diskclean."))).toEqual([DISK]);
+  });
+
+  test("the scan and plan are read through ui.read machine.disk, a pane the server holds", () => {
+    expect(READ_PANELS_LATE).toContain("machine.disk");
   });
 });

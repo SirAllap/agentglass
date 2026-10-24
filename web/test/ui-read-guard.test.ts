@@ -139,7 +139,7 @@ describe("the pane readers (paneState.ts)", () => {
   // agent can cause by asking, which is a decision to make with eyes open.
   const READ_ROUTES = [
     "hooksStatus", "lanternSettings", "seatWake", "budgets", "recipes", "prPrompts", "savedReplies", "tmuxStatus", "privacy",
-    "plugins", "actions", "updateStatus", "logDigest",
+    "plugins", "actions", "updateStatus", "logDigest", "machineDiskClean",
   ];
 
   it("calls only read routes", () => {

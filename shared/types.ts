@@ -4718,6 +4718,68 @@ export interface OrphanStopResult { ok: boolean; error?: string; detail?: string
 export interface SpaceDir { path: string; name: string; bytes: number; reclaimable: boolean }
 export interface SpaceReport { root: string; bytes: number; freeable: number; dirs: SpaceDir[]; error?: string }
 
+/** What a disk-cleanup line is about. `explain` kinds are only ever shown. */
+export type DiskCleanKind =
+  | "docker-images" | "docker-cache" | "docker-containers" | "docker-volumes"
+  | "worktree" | "package-cache" | "claude-temp" | "trash"
+  | "snapshots" | "swapfile" | "logins" | "toolchain" | "tracker" | "memory";
+/** inuse: leave it, it is being used. safe: the plan removes it. ask: a person
+ *  has to look first, never in the plan. explain: shown so the numbers add up,
+ *  never deletable. */
+export type DiskCleanVerdict = "inuse" | "safe" | "ask" | "explain";
+/** The only things a clean can remove. The client never sends one: it sends a
+ *  line id and the server resolves the target from a fresh scan. */
+export type DiskCleanTarget =
+  | { via: "fs"; root: string; path: string }
+  | { via: "worktree"; repo: string; path: string }
+  | { via: "docker"; what: "images" | "cache" }
+  /** Exactly the containers the scan showed: `docker rm` of these ids and nothing else. */
+  | { via: "docker"; what: "containers"; ids: string[] };
+export interface DiskCleanLine {
+  /** Stable between scans, so a click made on one scan finds its line in the next. */
+  id: string;
+  kind: DiskCleanKind;
+  /** The mount point of the disk this lives on (from df). */
+  mount: string;
+  /** What it is, in plain words. */
+  label: string;
+  /** null: could not be measured without root. */
+  bytes: number | null;
+  verdict: DiskCleanVerdict;
+  /** Why that verdict, in plain words. */
+  why: string;
+  /** Set only on a `safe` line. */
+  target: DiskCleanTarget | null;
+}
+export interface DiskCleanMount { mount: string; source: string; size: number; free: number; /** Bytes of `safe` lines living on it. */ safeBytes: number }
+export interface DiskCleanReport {
+  lines: DiskCleanLine[];
+  mounts: DiskCleanMount[];
+  /** Total of the `safe` lines: the plan. */
+  safeBytes: number;
+  at: number;
+  /** Things that could not be read (Docker missing, gh signed out...), in plain words. */
+  problems: string[];
+}
+export interface DiskCleanLineResult {
+  id: string;
+  label: string;
+  /** planned: dry run. needs-sudo: root owns part of it, nothing was escalated. */
+  status: "planned" | "freed" | "nothing" | "needs-sudo" | "refused" | "failed";
+  /** Bytes the disk gained, df before/after on the line's mount; 0 when it did not grow. */
+  freed: number;
+  detail?: string;
+}
+export interface DiskCleanRunResult {
+  ok: boolean;
+  error?: string;
+  dryRun: boolean;
+  lines: DiskCleanLineResult[];
+  /** Free bytes on each mount before the first deletion and after the last. */
+  mounts: { mount: string; before: number; after: number }[];
+  freed: number;
+}
+
 export interface FileEntry {
   name: string;
   rel: string;

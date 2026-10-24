@@ -109,6 +109,7 @@ export const SETTINGS_ROWS: SettingsRowRaw[] = [
   { pane: "onboarding", section: "What is left to set up", label: "The pane engine is ready", hint: "" },
   { pane: "plugins", section: "", label: "The master switch was not changed", hint: "" },
   { pane: "plugins", section: "", label: "Unboxed plugins are allowed here", hint: "" },
+  { pane: "prefs", section: "Disk space", label: "Warn when free disk is under", hint: "A quiet badge on the machine panel; nothing pops up.", settingId: "prefs.diskWarn" },
   { pane: "prefs", section: "Size and startup", label: "Display size", hint: "How big everything inside the window is." },
   { pane: "prefs", section: "Size and startup", label: "Fullscreen", hint: "Hide the window frame — F11 anywhere." },
   { pane: "prefs", section: "Size and startup", label: "Launch animation", hint: "The cover that plays while the app wakes up." },

@@ -8,7 +8,7 @@ import { DEFAULT_LAUNCH_DENY, type LaunchMode, type LaunchPermissions } from "..
 import type { PinnedPlace, PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/types.ts";
 import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, BrowsePage, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, ServeResult, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, EnginesReport, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, OrphanReport, OrphanStopResult, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, VolumeList, NetworkList, RemoteStep, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, PluginUpdateReport, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest, FsBody, FsAnswer, FsJob, FsTrashRow, FsProps, OpenWithList, FinderAction, FinderActionList, MediaFacts } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, BrowsePage, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, ServeResult, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, EnginesReport, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, OrphanReport, OrphanStopResult, DiskCleanReport, DiskCleanRunResult, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, VolumeList, NetworkList, RemoteStep, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, PluginUpdateReport, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest, FsBody, FsAnswer, FsJob, FsTrashRow, FsProps, OpenWithList, FinderAction, FinderActionList, MediaFacts } from "../../../shared/types.ts";
 import type { JiraUnits } from "../../../shared/jiraStatusUnits.ts";
 import type { WorkSend } from "./jiraWorklog.ts";
 import type { CardEdit, CardFact, ProvidersResponse, JiraBlockOutcome, JiraConnectResult, JiraHandoffRule, JiraMoves, JiraPerson, JiraSettings, JiraStep, JiraStepChoice, JiraStepKey, JiraStepPr, JiraSteps, JiraStepsRead, JiraStatus, JiraViews, JiraViewRead, JiraBoardAreas, JiraBoardContext, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, CardDev, CardWebLink, CardEvent, TrackerChoice } from "../../../shared/providers.ts";
@@ -156,6 +156,7 @@ export type RunActivityResult = { ok: boolean; run?: Run; legs: LegActivity[]; e
 
 import { DEPS, type DepsResponse } from "../../../shared/deps.ts";
 import * as demo from "./demo.ts";
+import { latchStage } from "./stageIntent.ts";
 
 export const IS_DEMO = demo.IS_DEMO;
 
@@ -2080,6 +2081,13 @@ const realApi = {
   machineOrphans: (fresh = false) => get<OrphanReport>(`/machine/orphans${fresh ? "?fresh=1" : ""}`),
   /** Stop ONE left-behind pid; refused unless it is flagged right now. */
   machineOrphanStop: (pid: number) => post<OrphanStopResult>("/machine/orphans/stop", { pid }),
+  /** What is eating the disk and what a clean would remove (the `safe` lines).
+   *  Read-only and cached; `fresh` may rescan, never faster than every 30 s. */
+  machineDiskClean: (fresh = false) => get<DiskCleanReport>(`/machine/disk-clean${fresh ? "?fresh=1" : ""}`),
+  /** Remove the safe lines named by `ids` (all of them when omitted). Only a
+   *  person's click is accepted; `dryRun` lists what would go and removes nothing.
+   *  `at` is the scan on screen: the server refuses if that is not the plan it would clean. */
+  machineDiskCleanRun: (ids?: string[], at?: number, dryRun = false) => post<DiskCleanRunResult>("/machine/disk-clean/run", { ids, dryRun, at }),
   /** Where a checkout's disk went, one level down. A `du` walk: seconds on a
    *  repository with a node_modules, so it is asked for, never polled. */
   machineSpace: (root: string) => get<SpaceReport>(`/machine/space?root=${encodeURIComponent(root)}`),
@@ -3357,6 +3365,14 @@ const demoApi: typeof realApi = {
   machineResources: (l = 40) => D(demo.machineResources(l)),
   machineOrphans: (_f = false) => D(demo.machineOrphans()),
   machineOrphanStop: (_p: number) => D({ ok: false, error: "not available in the demo" }),
+  machineDiskClean: (_f = false) => {
+    const v = demo.diskDemoVariant();
+    if (v === "fail") return Promise.reject(new Error("the scan took too long and was stopped"));
+    // An agent preparing a clean: the plan arrives, then the staged request, as it would from the door.
+    if (v === "staged") queueMicrotask(() => latchStage({ id: "diskclean.stage", a: { ids: "docker:cache\nworktree:/home/dev/code/orbit-ORBIT-1042\ndocker:volumes-used" } }, "orbit-helper"));
+    return D(demo.machineDiskClean(v));
+  },
+  machineDiskCleanRun: (ids?: string[], _at?: number, _d = false) => D(demo.machineDiskCleanRun(ids)),
   machineSpace: (r: string) => D(demo.machineSpace(r)),
   machineKill: (_p: number) => D({ ok: false, error: "not available in the demo" }),
   machineLocks: () => D({ locks: [], scanned: 0, error: "not available in the demo" }),

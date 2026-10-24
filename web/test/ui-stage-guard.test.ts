@@ -164,7 +164,7 @@ describe("every prepared dialog says who wrote it and holds its confirm back", (
 });
 
 describe("the modules a staged request travels through reach no network", () => {
-  for (const f of ["lib/stageIntent.ts", "lib/stagePlan.ts", "lib/stageHold.ts", "lib/prJump.ts", "lib/finderStage.ts"]) {
+  for (const f of ["lib/stageIntent.ts", "lib/stagePlan.ts", "lib/stageHold.ts", "lib/prJump.ts", "lib/finderStage.ts", "lib/diskStage.ts"]) {
     it(`${f} does not fetch, post or import the api`, () => {
       const s = code(read(f));
       expect(s).not.toMatch(/\bfetch\s*\(|\bpost\s*[<(]|XMLHttpRequest|sendBeacon|new WebSocket|from "\.\/api\.ts"|\bapi\./);

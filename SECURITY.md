@@ -156,6 +156,14 @@ complement, rather than replace, the private reporting path below.
   that launch's key and refuses a claim the same way. With no app attached, a server started by hand is on the
   `Origin` rule. An agent's lane is likewise only as private as
   `as` is honest: an identity is a claim, not a credential.
+- **Cleaning the disk is the desktop app's own click.** The panel's disk cleanup
+  deletes caches, finished session folders, merged checkouts and Docker images,
+  so `POST /machine/disk-clean/run` asks for the desk key like the routes above
+  and has no `Origin` fallback: a server started by hand with no app attached
+  (no key, no claim) refuses a real clean and answers only a dry run. The same
+  ceiling applies: whatever holds the key, or claims the desk first, can clean.
+  An agent can only stage a plan (`diskclean.stage`); nothing runs until the
+  person confirms it in the window.
 - **The desktop app adopts only a server that proves it holds the token.** A
   server already on its port must answer a fresh random challenge on `/health`
   with an HMAC made with the token and bound to that port; until it does, the
@@ -1330,7 +1338,7 @@ value; only an unset variable is the default. What each level means:
   through the `appearance.theme` setting so it leaves the undo chip as well. It reaches only the
   settings the window's registry exposes (Appearance, Diff, Rail, Terminal,
   quiet mode and two pull-request notices, the search engine, what Tasks shows,
-  single-key shortcuts), through the same setter the Settings row calls, and
+  the low-disk warning, single-key shortcuts), through the same setter the Settings row calls, and
   never a secret, a token, a remote-access, plugin-trust, gate or consent
   setting. A name that smells of one of those is level 3 or not exposed, and a
   test fails the build otherwise. It is limited to 30 changes a minute per
@@ -1342,11 +1350,14 @@ value; only an unset variable is the default. What each level means:
   agent prepare something and never perform it, with one exception outside
   `/control`: the Jira card door's `step`, `link`, `edit`, `comment`, `comment-edit`, `comment-delete`, `move`, `subtask`, `relate`, `unrelate`, `weblink`, `unweblink`, `worklog`, `worklog-edit`, `worklog-delete`, `watch`, `vote`, `rank`, `attach` and `unattach`, which perform at level 3
   when the Jira write switch is also on (see "Jira, and the agent door to a
-  card"). Six doors ship, five on one pull
-  request and one in the Finder: `pr.merge.stage` (method, commit subject and body), `pr.comment.stage`
+  card"). Seven doors ship, five on one pull
+  request, one in the Finder and one in the machine panel: `pr.merge.stage` (method, commit subject and body), `pr.comment.stage`
   (the text), `pr.review.stage` (verdict and text), `card.move.stage` (the new
   status of the card the pull request carries) and `pr.unstick` (opens the Unstick
-  dialog and does not run it) and `finder.op.stage` (one reversible file operation
+  dialog and does not run it), `diskclean.stage` (lines of the machine panel's disk
+  cleanup plan, marked for the person to look at: it removes nothing, the panel keeps
+  only the lines the scan calls safe, and `POST /machine/disk-clean/run` answers 403 to
+  a plugin, to any agent and to the machine token) and `finder.op.stage` (one reversible file operation
   on one path: trash, move, copy, rename, new folder or duplicate, with the
   destination or name it needs; `delete` and `empty-trash` cannot be spelled, so
   they are refused, and a name with a `/` is refused too). The Finder opens on the

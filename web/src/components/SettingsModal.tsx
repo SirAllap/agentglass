@@ -99,6 +99,7 @@ import { fmtScale, DEFAULT_SCALE, SCALES } from "../lib/uiScale.ts";
 import { currentAccent, setAccentPref } from "../lib/accent.ts";
 import { applyTheme } from "../lib/themes.ts";
 import { setting, subscribeSettings } from "../lib/settingsRegistry.ts";
+import { DISK_WARN_CHOICES, DISK_WARN_DEFAULT, diskWarnPct } from "../lib/diskWarnPref.ts";
 import { autoCheckUpdates } from "../lib/updateCheckPref.ts";
 import { LICENCES } from "../lib/licences.gen.ts";
 import { humanBytes } from "../lib/paletteModel.ts";
@@ -137,7 +138,7 @@ import "./settingsSplit.css";
 import "./orchestration/orchestration.css";
 import "./settingsGroupB.css";
 import { HIT, ICON } from "../lib/iconSize.ts";
-import { AgentIcon, CheckboxIcon, ClockIcon, CrossIcon, EditIcon, IconLabel, LinkIcon, PlusIcon, RefreshIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { AgentIcon, CheckboxIcon, ClockIcon, CrossIcon, DiskIcon, EditIcon, IconLabel, LinkIcon, PlusIcon, RefreshIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { ciOnlyApproved } from "../lib/ciNotifyPref.ts";
 import { reviewGateOn, setReviewGate } from "../lib/reviewGatePref.ts";
 import { AskedAlertLog } from "./AskedAlertLog.tsx";
@@ -3902,6 +3903,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
   const [h24, setH24] = useState<boolean>(() => clock24());
   const [splash, setSplash] = useState<boolean>(() => splashOn());
   const [usageRefresh, setUsageRefreshState] = useState<boolean>(() => usageRefreshOn());
+  // Re-read when an agent or an undo changes it, not only when this row is pressed.
+  const diskWarn = useSyncExternalStore(subscribeSettings, diskWarnPct, () => DISK_WARN_DEFAULT);
   const [renderer, setRenderer] = useState<RendererPref>(() => rendererPref());
   const [keys, setKeys] = useState(() => bindings());
   const [capturing, setCapturing] = useState<ActionId | null>(null);
@@ -4967,6 +4970,16 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       label="Codex quota"
                       hint="Keep Codex usage current."
                       detail={{ summary: "Details", body: "Runs a minimal Codex turn hourly so the quota reading is not stale. It uses a small amount of the quota it measures. The same switch is under Usage & budgets." }} />
+                  </SettingsCard>
+
+                  <SettingsCard title="Disk space" icon={<DiskIcon size={ICON.sm} />}>
+                    <Choice<string>
+                      settingId="prefs.diskWarn" label="Warn when free disk is under"
+                      hint="A quiet badge on the machine panel; nothing pops up."
+                      detail={{ summary: "Details", body: "Counted per disk, as a share of its size. Off shows no badge. This only decides when to say so: nothing is deleted by it." }}
+                      value={String(diskWarn)} modified={diskWarn !== DISK_WARN_DEFAULT}
+                      onPick={(v) => { setting("prefs.diskWarn").set(Number(v)); }}
+                      options={DISK_WARN_CHOICES.map((n) => ({ v: String(n), label: n === 0 ? "Off" : `${n} %` }))} />
                   </SettingsCard>
 
                   {/* Only steps that are true: the cover is listed when it is

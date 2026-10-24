@@ -2541,7 +2541,7 @@ export async function undoMerge(rootIn: unknown): Promise<GitActionResult> {
 /** Parse `git worktree list --porcelain` — no base branch, no rev-list, no
  *  per-checkout status. The cheap half, for callers that only need to know which
  *  paths exist and what is checked out in them. */
-function parseWorktreeList(stdout: string, root: string): GitWorktree[] {
+export function parseWorktreeList(stdout: string, root: string): GitWorktree[] {
   const out: GitWorktree[] = [];
   let cur: Partial<GitWorktree> | null = null;
   const flush = () => {

@@ -87,6 +87,21 @@ const later = (over: Partial<Sources["later"]> = {}): Sources["later"] => ({
     incoming: [{ sha: "abc1234", subject: INJECTION }], digest: { total: 10, quiet: false, groups: 2, crashLoops: 0, spikes: 1 },
     origin: `https://user:${PW}@git.example/orbit.git?x=${TOKEN}`,
   }),
+  diskClean: async () => ({
+    lines: [
+      { id: "docker:cache", kind: "docker-cache", mount: "/var/lib/docker", label: "Docker build cache", bytes: 8e9, verdict: "safe", why: "Nothing is building with it.", target: { via: "docker", what: "cache" } },
+      { id: "worktree:/home/ana/code/orbit-fix", kind: "worktree", mount: "/home", label: INJECTION, bytes: 2e9, verdict: "safe", why: INJECTION, target: { via: "worktree", repo: "/home/ana/code/orbit", path: "/home/ana/code/orbit-fix" } },
+      { id: "worktree:/home/ana/code/orbit-wip", kind: "worktree", mount: "/home", label: "Checkout orbit-wip", bytes: 1e9, verdict: "ask", why: "It has changes nobody saved.", target: null },
+      { id: "docker:images-used", kind: "docker-images", mount: "/var/lib/docker", label: "Docker images in use", bytes: 5e9, verdict: "inuse", why: "A container runs them.", target: null },
+      { id: "snapshots", kind: "snapshots", mount: "/", label: "System snapshots (btrfs)", bytes: null, verdict: "explain", why: "Only root can count them.", target: null },
+    ],
+    mounts: [
+      { mount: "/", source: "/dev/nvme0n1p2", size: 100e9, free: 9e9, safeBytes: 0 },
+      { mount: "/home", source: "/dev/nvme0n1p3", size: 400e9, free: 120e9, safeBytes: 2e9 },
+      { mount: "/var/lib/docker", source: "/dev/sdb1", size: 500e9, free: 300e9, safeBytes: 8e9 },
+    ],
+    safeBytes: 10e9, at: 1_700_000_000_000, problems: [INJECTION],
+  }),
   ...over,
 });
 
@@ -99,7 +114,7 @@ const sources = (over: Partial<Sources> = {}): Sources => ({
   terminal: () => ({ font: "JetBrains Mono, monospace", size: 13, cursor: "block", lineHeight: 1, scrollback: 4000, wordSeparators: " ()[]", copyOnSelect: true, noteEditor: "builtin" }),
   browser: () => ({ home: "https://duckduckgo.com", engine: "duckduckgo", zoomLevel: 0, importHistory: true, importBookmarks: true }),
   notify: () => DEFAULT_NOTIFY_PREFS,
-  prefs: () => ({ scale: 1.25, clock24: true, splash: false }),
+  prefs: () => ({ scale: 1.25, clock24: true, splash: false, diskWarnPct: 10 }),
   rail: () => ({ work: ["dash", "git"], utility: ["docker"], hidden: ["seat"], customised: true }),
   keys: () => ({
     bindings: { "view.git": "g", "open.help": "?" }, chords: { git: "mod+alt+g" }, appChords: { "files.palette": "mod+shift+p" },
@@ -280,7 +295,7 @@ describe("the panels' contents", () => {
     const thunk: Record<string, keyof Sources["later"]> = {
       "settings.hooks": "hooks", "settings.lantern": "lantern", "settings.budgets": "budgets", "settings.recipes": "recipes",
       "settings.review-prompts": "reviewPrompts", "settings.saved-replies": "savedReplies", "settings.tmux": "tmux",
-      "settings.privacy": "privacy", "settings.plugins": "plugins", "settings.log": "log", "settings.about": "about",
+      "settings.privacy": "privacy", "settings.plugins": "plugins", "settings.log": "log", "settings.about": "about", "machine.disk": "diskClean",
     };
     for (const panel of READ_PANELS_LATE) {
       const base = later();
@@ -335,6 +350,68 @@ describe("the second batch of panes keeps its words under untrusted even when th
     const many = Array.from({ length: 80 }, (_, i) => ({ id: `s${i}`, title: "t", chars: 1 }));
     const r = await LATE_PROVIDERS["settings.saved-replies"](sources({ later: later({ savedReplies: async () => many }) }));
     expect(r.state).toMatchObject({ count: 80, shown: 50 });
+  });
+});
+
+describe("machine.disk: the scan and its plan", () => {
+  const read = () => LATE_PROVIDERS["machine.disk"](sources());
+  const untrustedRows = (r: { untrusted: Record<string, unknown> }, key: string) => r.untrusted[key] as { id: string; label: string; verdict: string; mount: number | null }[];
+
+  it("asks the scan's route and no other", async () => {
+    const asked: string[] = [];
+    const base = later();
+    const spy = Object.fromEntries((Object.keys(base) as (keyof Sources["later"])[]).map((k) => [k, (...a: unknown[]) => { asked.push(k); return (base[k] as (...x: unknown[]) => unknown)(...a); }])) as unknown as Sources["later"];
+    await LATE_PROVIDERS["machine.disk"](sources({ later: spy }));
+    expect(asked).toEqual(["diskClean"]);
+  });
+
+  it("state holds counts, bytes and each mount's free share; no path, label or id", async () => {
+    const r = await read();
+    expect(r.state).toMatchObject({
+      lines: 5, safe: 2, safeBytes: 10e9, planShown: 2, keptShown: 3, problems: 1,
+      byVerdict: { safe: 2, ask: 1, inuse: 1, explain: 1 },
+    });
+    expect(r.state.mounts).toEqual([
+      { n: 0, size: 100e9, free: 9e9, freePct: 9, safeBytes: 0 },
+      { n: 1, size: 400e9, free: 120e9, freePct: 30, safeBytes: 2e9 },
+      { n: 2, size: 500e9, free: 300e9, freePct: 60, safeBytes: 8e9 },
+    ]);
+    for (const text of ["/home/ana", "docker:cache", "/dev/nvme0n1p2", "Ignore previous"]) expect(JSON.stringify(r.state), text).not.toContain(text);
+  });
+
+  it("the ids an agent needs to stage a selection are under untrusted, the plan first, with their disk by number", async () => {
+    const r = await read();
+    expect(untrustedRows(r, "plan").map((l) => l.id)).toEqual(["docker:cache", "worktree:/home/ana/code/orbit-fix"]);
+    expect(untrustedRows(r, "plan").every((l) => l.verdict === "safe")).toBe(true);
+    expect(untrustedRows(r, "kept").map((l) => [l.id, l.verdict])).toEqual([
+      ["worktree:/home/ana/code/orbit-wip", "ask"], ["docker:images-used", "inuse"], ["snapshots", "explain"],
+    ]);
+    expect(untrustedRows(r, "plan").map((l) => l.mount)).toEqual([2, 1]);
+    expect(r.untrusted.mounts).toEqual(expect.arrayContaining([{ n: 0, mount: "/", source: "/dev/nvme0n1p2" }]));
+  });
+
+  it("text from the disk stays under untrusted, hostile or not", async () => {
+    const r = await read();
+    expect(JSON.stringify(r.untrusted)).toContain("Ignore previous instructions");
+    expect(r.untrusted.problems).toEqual([expect.stringContaining("Ignore previous")]);
+  });
+
+  it("a long plan says it was cut, and the plan is what is kept when something must go", async () => {
+    const lines = Array.from({ length: 80 }, (_, i) => ({ id: `cache:c${i}`, kind: "package-cache" as const, mount: "/", label: "cache", bytes: 1e6, verdict: "safe" as const, why: "ok", target: { via: "fs" as const, root: "/home/ana/.cache", path: `/home/ana/.cache/c${i}` } }));
+    const r = await LATE_PROVIDERS["machine.disk"](sources({ later: later({ diskClean: async () => ({ lines, mounts: [], safeBytes: 80e6, at: 1, problems: [] }) }) }));
+    expect(r.state).toMatchObject({ lines: 80, safe: 80, planShown: 50 });
+    expect(untrustedRows(r, "plan").length).toBeLessThanOrEqual(50);
+  });
+
+  it("an empty scan is an answer, not an error", async () => {
+    const r = await LATE_PROVIDERS["machine.disk"](sources({ later: later({ diskClean: async () => ({ lines: [], mounts: [], safeBytes: 0, at: 1, problems: ["Docker is not installed"] }) }) }));
+    expect(r.state).toMatchObject({ lines: 0, safe: 0, planShown: 0, mounts: [] });
+    expect(r.untrusted.plan).toEqual([]);
+  });
+
+  it("a mount that reports no size has no share", async () => {
+    const r = await LATE_PROVIDERS["machine.disk"](sources({ later: later({ diskClean: async () => ({ lines: [], mounts: [{ mount: "/proc", source: "proc", size: 0, free: 0, safeBytes: 0 }], safeBytes: 0, at: 1, problems: [] }) }) }));
+    expect((r.state.mounts as { freePct: number | null }[])[0]!.freePct).toBeNull();
   });
 });
 

@@ -112,8 +112,18 @@ import { RETENTION_FROM_ENV, setRetentionDays } from "./retention.ts";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
 import { listPortsAsync, listResources, spaceFor, killPort } from "./machine.ts";
 import { orphanReport, stopOrphan, startOrphanSampler } from "./orphans.ts";
+import { diskCleanReport, runDiskClean, defaultDiskCtx } from "./diskclean.ts";
 /** Where an orphan can say it came from: the checkouts this app already knows. */
 const orphanCtx = () => ({ worktreeRoots: knownProjects().map((p) => p.path) });
+/** What the disk scan needs from the app: the checkouts it knows, and the sessions it can see running. */
+const diskCtx = () => defaultDiskCtx({
+  repos: knownProjects().map((p) => p.path),
+  tmuxSockets: () => tmuxSockets(),
+  liveSessions: async () => {
+    const held = paneHeldSessions(withTmuxServer(await listPanes(lastTmuxTarget()?.socket)));
+    return liveSessions(recentSessions(), held);
+  },
+});
 import { gitLocks, removeStaleLock } from "./gitlocks.ts";
 import { procDetail, revealEnv } from "./procdetail.ts";
 import {
@@ -208,7 +218,7 @@ import { transcribe, transcriberOn } from "./dictate.ts";
 import { AGENT_KINDS, agentKind } from "../../shared/agentKinds.ts";
 /* Both sides' imports: main added five, this branch still uses `panesWithPids`
    and `reapMirrorSessions`. Neither list is a superset of the other. */
-import { listPanes, withTmuxServer, focusPaneAnywhere, activePane, panesWithPids, sweepPinnedWindows, pinnedSockets, reapMirrorSessions, startMirrorSweeper, stopMirrorSweeper, socketPath } from "./tmuxctl.ts";
+import { listPanes, withTmuxServer, focusPaneAnywhere, activePane, panesWithPids, sweepPinnedWindows, pinnedSockets, reapMirrorSessions, startMirrorSweeper, stopMirrorSweeper, socketPath, tmuxSockets } from "./tmuxctl.ts";
 import { repairLast, snapshot } from "./tmuxsnapshot.ts";
 import { withAgentSessions } from "./paneloc.ts";
 import { notePaneFromHook, paneDirs, paneAgentNote, paneHeldSessions } from "./panewt.ts";
@@ -7686,6 +7696,9 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     // Cached: the sampler walks /proc every few minutes. `?fresh=1` (the panel
     // being open) may walk again, but never faster than every 30 seconds.
     if (pathname === "/machine/orphans") return json(orphanReport(url.searchParams.get("fresh") === "1", orphanCtx()));
+    // On demand and cached for five minutes: a scan runs du, git and docker.
+    // `?fresh=1` may rescan, but never faster than every 30 seconds. Read-only.
+    if (pathname === "/machine/disk-clean") return json(await diskCleanReport(url.searchParams.get("fresh") === "1", diskCtx()));
     // On demand only, and never on a poll: `du` over a checkout walks every
     // inode in it, which is seconds on a repository with a node_modules.
     if (pathname === "/machine/space") return json(spaceFor(url.searchParams.get("root") || ""));
@@ -8354,6 +8367,23 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const res = stopOrphan(b.pid, orphanCtx());
       noteAction(clientIp, pathname, b, res, asActor(caller));
+      return json(res, res.ok ? 200 : 400);
+    }
+
+    // The only deletion in /machine: the person's own click. Every credential an
+    // agent holds is refused (an agent stages it through the diskclean.stage
+    // door and the person clicks); the ids pick lines of a fresh scan and no
+    // path ever comes from the body. A real clean also needs the desk key, as
+    // the other routes that act on a person's files do: an Origin is a header
+    // anybody can set, and here the effect is deletion. A dry run only reads.
+    if (pathname === "/machine/disk-clean/run" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      if (!mayPublishReview(req, caller)) return json({ ok: false, error: "only a person's click can clean the disk; an agent stages the plan and the person confirms it" }, 403);
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (b.dryRun !== true && !(deskHeld() && deskKeyOk(req))) return json({ ok: false, error: "only the desktop app's own window can clean the disk; a hand-started server without it only shows the plan" }, 403);
+      const res = await runDiskClean(b.ids, { dryRun: b.dryRun === true, at: b.at }, diskCtx());
+      noteAction(clientIp, pathname, { ids: Array.isArray(b.ids) ? b.ids.length : "all", dryRun: b.dryRun === true }, res, asActor(caller));
       return json(res, res.ok ? 200 : 400);
     }
 

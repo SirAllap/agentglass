@@ -74,6 +74,27 @@ export const FINDER_NAME_MAX = 255;
 export const FINDER_STAGE_NEEDS: Readonly<Record<FinderStageOp, "dest" | "name" | null>> = {
   trash: null, duplicate: null, move: "dest", copy: "dest", rename: "name", "new-folder": "name",
 };
+/** The most lines of the disk plan one stage may name, and the longest line id (a checkout's path is the longest). */
+export const DISK_STAGE_MAX_IDS = 40;
+export const DISK_STAGE_ID_MAX = 512;
+/**
+ * The line ids of a disk cleanup stage, one per line of the `ids` text: the
+ * registry has no list argument, and the ids are the scan's own spelling
+ * (`docker:cache`, `worktree:/home/acme/code/orbit-fix`), so a newline is the one
+ * separator no id can hold. Blank lines are ignored; null when nothing is left,
+ * when there are too many, when one is too long, or when one is named twice.
+ */
+export function diskStageIds(text: unknown): string[] | null {
+  if (typeof text !== "string") return null;
+  const ids = text.split("\n").map((s) => s.trim()).filter(Boolean);
+  if (ids.length < 1 || ids.length > DISK_STAGE_MAX_IDS || new Set(ids).size !== ids.length) return null;
+  return ids.every((id) => id.length <= DISK_STAGE_ID_MAX) ? ids : null;
+}
+const diskStageOk = (a: Record<string, unknown>): Record<string, unknown> | null => {
+  const ids = diskStageIds(a.ids);
+  return ids ? { ids: ids.join("\n") } : null;
+};
+
 /**
  * What `ui.read` can be asked about. Each one has exactly one provider in
  * web/src/lib/uiSnapshots.ts, keyed by these ids, so a panel named here with no
@@ -90,6 +111,7 @@ export const READ_PANELS_NOW = [
 export const READ_PANELS_LATE = [
   "settings.hooks", "settings.lantern", "settings.budgets", "settings.recipes", "settings.review-prompts",
   "settings.saved-replies", "settings.tmux", "settings.privacy", "settings.plugins", "settings.log", "settings.about",
+  "machine.disk",
 ] as const;
 export const READ_PANELS = [...READ_PANELS_NOW, ...READ_PANELS_LATE] as const;
 
@@ -317,6 +339,17 @@ export const UI_ACTIONS = {
     args: { repo: { t: "repo" }, number: PR_NUMBER, status: { t: "text", max: 80, line: true } },
     refine: prNumberOk,
   }),
+  // The disk cleanup block of the machine panel. Which lines may go is the scan's
+  // verdict, not this door's: the panel keeps only the ids that are `safe` in the
+  // scan it is showing, says which it dropped and why, and the server's run route
+  // refuses any other id again. The run itself is the person's press of the
+  // panel's own button (UI_REFUSED_FOR_AGENTS, "diskclean.run").
+  "diskclean.stage": def({
+    level: 3, kind: "stage",
+    surface: "the disk cleanup plan of the machine panel, with the chosen lines (ids from `ui.read machine.disk`, one per line) marked as yours; only lines the scan calls safe are kept, and nothing is removed until the person presses the panel's Clean button",
+    args: { ids: { t: "text", max: DISK_STAGE_MAX_IDS * (DISK_STAGE_ID_MAX + 1) } },
+    refine: diskStageOk,
+  }),
   "finder.op.stage": def({
     modals: ["finder/machine/FinderOpsUI.tsx"], level: 3, kind: "stage",
     surface: "the Finder's confirmation for one reversible file operation (trash, move, copy, rename, new folder, duplicate) on one path, with the paths named (nothing runs until the person presses the button)",
@@ -343,6 +376,7 @@ export const isReadAction = (id: string): boolean => (UI_READ_IDS as readonly st
  * a `stage` entry: a test holds the two lists apart.
  */
 export const UI_REFUSED_FOR_AGENTS: Readonly<Record<string, string>> = {
+  "diskclean.run": "Clean up disk removes Docker data, checkouts and caches from this machine, so it is the person's own press of the machine panel's button: POST /machine/disk-clean/run answers 403 to a plugin, to any agent and to the machine token, and no door presses it. An agent can read the scan and the plan (ui.read machine.disk) and stage a selection (diskclean.stage) for the person to look at",
   "pr.review.publish": "Publish review posts one comment on GitHub as the person, so it is their own click in the dialog and nothing else: the route answers 403 to a plugin, to any agent and to the machine token, and the dialog cannot be staged or pressed through a door. An agent can read the review's findings; the person decides what leaves the machine",
 };
 

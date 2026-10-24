@@ -17,7 +17,7 @@ import { homePage, searchEngine, zoomLevel, importHistory, importBookmarks } fro
 import { getNotifyPrefs } from "./notifyPrefsStore.ts";
 import {
   readPrefs, readRail, readKeys, readTasks, readAppearance, readUnderstudy, readHooks, readLantern, readBudgets, readRecipes,
-  readReviewPrompts, readSavedReplies, readTmux, readPrivacy, readPlugins, readLog, readAbout,
+  readReviewPrompts, readSavedReplies, readTmux, readPrivacy, readPlugins, readLog, readAbout, readDiskClean,
 } from "./paneState.ts";
 
 export const liveSources = (app: () => AppSlice): Sources => ({
@@ -40,6 +40,6 @@ export const liveSources = (app: () => AppSlice): Sources => ({
   understudy: readUnderstudy,
   later: {
     hooks: readHooks, lantern: readLantern, budgets: readBudgets, recipes: readRecipes, reviewPrompts: readReviewPrompts,
-    savedReplies: readSavedReplies, tmux: readTmux, privacy: readPrivacy, plugins: readPlugins, log: readLog, about: readAbout,
+    savedReplies: readSavedReplies, tmux: readTmux, privacy: readPrivacy, plugins: readPlugins, log: readLog, about: readAbout, diskClean: readDiskClean,
   },
 });
