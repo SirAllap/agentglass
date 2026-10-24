@@ -2920,7 +2920,7 @@ function PrivacyPane({ open }: { open: boolean }) {
           disabled={kr?.state === "unavailable"}
           status={kv.badge ? <StatusBadge tone="info">{kv.badge}</StatusBadge> : undefined}
           actions={<SwitchButton on={kv.on} busy={moving !== null} disabled={kv.disabled} label="Keep secrets in the system keyring" onClick={() => void toggleKeyring()} />}
-          detail={{ summary: "What moves, and what does not", body: <>Turning it on moves the tokens of the services you connected and your plugin keys into the Secret Service (GNOME Keyring, KWallet). Each one is read back and compared before the file copy is blanked. If anything fails, both copies stay where they were. Tokens that other tools own (gh, Claude) are not touched. Linux only. While it is locked, a feature that needs a token says so and waits.</> }}
+          detail={{ summary: "What moves, and what does not", body: <>Turning it on moves the tokens of the services you connected and your plugin keys into the Secret Service (GNOME Keyring, KWallet). Each one is read back and compared before the file copy is blanked. If anything fails, both copies stay where they were. Tokens that other tools own (gh, Claude) are not touched. This protects a copied disk or backup, not a program on this computer: an unlocked keyring hands any secret to any program running as you. What keeps plugins away from your secrets is their box. Linux only. While it is locked, a feature that needs a token says so and waits.</> }}
           below={kv.checkAgain || krErr ? (
             <span className="flex flex-wrap items-center gap-2">
               {kv.checkAgain && <Button pending={checkingAgain} onClick={() => void checkKeyringAgain()}>Check again</Button>}
