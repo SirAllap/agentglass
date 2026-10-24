@@ -580,13 +580,6 @@ export function isForeground(found: Omit<AgentUnder, "startedAt"> & { startedAt?
 const isKeepAlive = (argv: readonly string[]): boolean =>
   argv.length === 2 && ((argv[0] || "").split("/").pop() || "") === "sleep" && argv[1] === "86400";
 
-/** A pane forked a moment ago still carries the tmux server's own argv until
- *  it execs — measured: photographed right after `new-window`, the pane read
- *  as the tmux binary with the server's arguments. Not a command anybody
- *  ran, and the next sweep sees the real one. */
-const bornYet = (argv: readonly string[]): boolean =>
-  (argv[0] || "").split("/").pop() !== ((resolveTmuxBin() || "tmux").split("/").pop() || "tmux");
-
 /**
  * Whether an argument of a running CLI was a prompt, remembered per process.
  *
@@ -848,14 +841,44 @@ async function captureOnce(now: number): Promise<RestoreState | null> {
   /* Read once per sweep: a prompt verdict can only change when this does. */
   const newestPrompt = newestPromptId();
   const previous = lastShot?.engine === engine ? lastShot : null;
+  /*
+   * A PANE NOT BORN YET IS NOT PHOTOGRAPHED, AND NEITHER IS ITS SESSION.
+   *
+   * tmux forks the pane and sets its directory and command in the child; the
+   * `new-window` that made it has already returned. Until the child execs it
+   * is a copy of the tmux server: the server's argv, the server's cwd for a
+   * path, `tmux` for a command (measured). Photographed then, before the desk
+   * is whole, it was kept beside the right photograph that came next — the
+   * windows are matched by name and directory, and it had neither — and a
+   * crash restore built an extra window where the app was started. The
+   * exec is milliseconds away, so the desk is asked again for a moment; a
+   * session still holding one after that is left as the last photograph had
+   * it, which the merge already does for a session it did not see, and the
+   * next sweep sees the real pane.
+   * Told by the server's own argv, not the binary's name: a tmux reached
+   * through a wrapper (`AGENTGLASS_TMUX_PATH`) is named after the wrapper
+   * and runs as the binary it execs. A pane that runs a tmux client of its
+   * own is born, and is photographed as a shell (`tmuxName` below), as
+   * before.
+   */
+  const serverArgv = engine ? argvOf(Number(engine.split(".")[0])).join(" ") : "";
+  const tmuxName = (serverArgv.split(" ")[0] || resolveTmuxBin() || "tmux").split("/").pop() || "tmux";
+  const unborn = (p: { command: string; pid?: number }): boolean =>
+    !!serverArgv && p.command === tmuxName && !!p.pid && argvOf(p.pid).join(" ") === serverArgv;
   const sessions: CapturedSession[] = [];
   /* The whole desk in two calls (`allWindowTrees`); asked one session at a
      time only when tmux did not answer the batch. */
-  const batch = await allWindowTrees();
+  let batch = await allWindowTrees();
+  const anyUnborn = () => !!batch && [...batch.trees.values()].some((ws) => ws.some((w) => w.panes.some(unborn)));
+  for (let i = 0; i < 20 && anyUnborn(); i++) {
+    await new Promise((r) => setTimeout(r, 25));
+    batch = await allWindowTrees();
+  }
   for (const name of names) {
     if (!validSessionName(name)) continue;
     if (isEphemeralSession(name)) continue;
     const windows = batch ? batch.trees.get(name) ?? [] : await windowTree(name);
+    if (windows.some((w) => w.panes.some(unborn))) continue;
     const out: CapturedWindow[] = [];
     for (const w of windows) {
       const panes: CapturedPane[] = [];
@@ -999,7 +1022,7 @@ async function captureOnce(now: number): Promise<RestoreState | null> {
           : !wrapped ? clean(argvOf(pid))
           : !under && SHELLS.has(p.command) ? clean(childPidsOf(pid).slice(0, 1).flatMap((c) => argvOf(c))) : [];
         const startArgv = under ? withoutPromptFlags(under.name, under.argv)
-          : bornYet(root) && !isBareShell(root) && !isKeepAlive(root) && !root.some((a) => a.includes(KEPT_MARK)) ? root : [];
+          : (root[0] || "").split("/").pop() !== tmuxName && !isBareShell(root) && !isKeepAlive(root) && !root.some((a) => a.includes(KEPT_MARK)) ? root : [];
         panes.push({ ...p, startCommand: wrapped ? "" : startCommand, ...(startArgv.length ? { startArgv } : {}) });
       }
       if (panes.length) out.push({ ...w, panes });
