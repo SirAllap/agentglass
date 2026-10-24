@@ -177,8 +177,16 @@ here will stop you.
 - A new pane's directory and command are set by tmux's child after the
   command that made it returns; read at once, it still reports the tmux
   server's cwd. A test that reads a pane it just made waits for it with
-  `settled()` from `server/test/paneSettled.ts`, never reads once. The CI
-  replica does not hit this race; GitHub's runner does.
+  `settled()` from `server/test/paneSettled.ts`, never reads once — and that
+  includes a request to a server that reads the pane, and the first layout
+  photograph. A window's automatic name (`tmux` until then) catches up later
+  than the pane's command, so wait for the name too. The CI replica
+  (ubuntu 24.04, tmux 3.4) does not hit this race; GitHub's `ubuntu-latest`
+  (26.04, tmux 3.6) does.
+- A renamed copy of a coreutils binary is not a fixture: on Ubuntu 26.04
+  coreutils is one binary that picks the tool by `argv[0]`, so `sleep` copied
+  to `codex` exits at once. Link the test's own runtime (`process.execPath`)
+  under the name instead.
 
 ### Editing
 
