@@ -13,7 +13,8 @@
  *  - `sandboxArgv` is pure: given every fact already resolved, it is just
  *    argv, and a test can pin its exact shape without a working bwrap.
  */
-import { closeSync, constants as fsConstants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants as fsConstants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -279,10 +280,15 @@ function runSeccompProbe(): SeccompProbe {
   const arch = process.env.NODE_ENV === "test" && process.env.AGENTGLASS_SECCOMP_ARCH ? process.env.AGENTGLASS_SECCOMP_ARCH : process.arch;
   const program = seccompProgram(arch);
   if (!program) return { ok: false, detail: `there is no filter for this architecture (${arch})` };
-  const path = join(pluginsConfigDir(), "plugin-seccomp", `${arch}.bpf`);
+  // One file per process: two app instances sharing ~/.config each wrote the
+  // one `<arch>.bpf`, so the last writer made the other's content check fail
+  // on every start. Written under a temp name and renamed, never seen half-done.
+  const path = join(pluginsConfigDir(), "plugin-seccomp", `${arch}-${process.pid}-${randomBytes(6).toString("hex")}.bpf`);
   try {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    writeFileSync(path, program, { mode: 0o600 });
+    writeFileSync(`${path}.tmp`, program, { mode: 0o600, flag: "wx" });
+    renameSync(`${path}.tmp`, path);
+    process.once("exit", () => { try { rmSync(path, { force: true }); } catch { /* best effort */ } });
   } catch (e) {
     return { ok: false, detail: `could not write the filter: ${e instanceof Error ? e.message : String(e)}` };
   }
@@ -310,6 +316,18 @@ export function seccompProbe(): SeccompProbe {
   if (seccompCached !== undefined) return seccompCached;
   const probe = runSeccompProbe();
   if (probe.ok || !probe.timedOut) seccompCached = probe;
+  return probe;
+}
+
+/** The probe as a start would find it right now: the same `openSeccompFd`
+ *  check that decides whether bwrap is handed the filter, so the panel's
+ *  "on" is never a separate guess. */
+export function seccompNow(): SeccompProbe {
+  const probe = seccompProbe();
+  if (!probe.ok) return probe;
+  const fd = openSeccompFd(probe);
+  if (fd === null) return { ok: false, detail: "the filter file changed or went away" };
+  closeSync(fd);
   return probe;
 }
 

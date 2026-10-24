@@ -13,11 +13,11 @@
  *    (files, threads, a child process, loopback TCP) still runs.
  */
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, closeSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  __resetSandboxProbe, __resetSeccompProbe, hostResolvConfExtraRo, hostSystemPaths, openSeccompFd, sandboxArgv, sandboxProbe, seccompProbe,
+  __resetSandboxProbe, __resetSeccompProbe, hostResolvConfExtraRo, hostSystemPaths, openSeccompFd, sandboxArgv, sandboxProbe, seccompNow, seccompProbe,
   type SandboxArgvInput,
 } from "../src/plugin-sandbox.ts";
 import { ARCHES, RET_ALLOW, RET_ENOSYS, RET_EPERM, RET_KILL_PROCESS, seccompProgram } from "../src/seccomp.ts";
@@ -139,7 +139,8 @@ test("buildBoxArgv puts the filter's fd after the grants' and hands it over; the
   expect(body.indexOf("3 + opened.parentFds.length")).toBeLessThan(body.indexOf("opened.parentFds.push(seccompParentFd)"));
   expect(body).toContain("seccompFd,");
   const pub = pluginsSrc.slice(pluginsSrc.indexOf("function publicProbe("));
-  expect(pub.slice(0, pub.indexOf("\n}\n"))).toContain("seccomp: sc.ok");
+  expect(pub.slice(0, pub.indexOf("\n}\n"))).toContain("seccomp: sc.ok")
+  expect(pub.slice(0, pub.indexOf("\n}\n"))).toContain("seccompNow()");
 });
 
 __resetSandboxProbe();
@@ -187,6 +188,24 @@ describe("seccompProbe falls back and says why", () => {
     writeFileSync(p.path, new Uint8Array(p.program.length));
     expect(openSeccompFd(p)).toBeNull();
   });
+
+  test.skipIf(!hostBox.ok)("two instances sharing a config dir do not touch each other's filter; the panel follows a vanished file", () => {
+    const a = seccompProbe();
+    __resetSeccompProbe();
+    const b = seccompProbe();
+    expect(a.ok && b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+    expect(a.path).not.toBe(b.path);
+    const fd = openSeccompFd(a);
+    expect(fd).not.toBeNull();
+    closeSync(fd!);
+    expect(statSync(b.path).mode & 0o777).toBe(0o600);
+    expect(seccompNow()).toMatchObject({ ok: true });
+    rmSync(b.path);
+    const gone = seccompNow();
+    expect(gone.ok).toBe(false);
+    expect(openSeccompFd(b)).toBeNull();
+  });
 });
 
 __resetSeccompProbe();
@@ -221,8 +240,11 @@ print("data", open(os.environ["AGENTGLASS_PLUGIN_DATA"] + "/state").read(), flus
 print("tcp", socket.create_connection(("127.0.0.1", int(sys.argv[3]))).recv(8), flush=True)
 `;
 
-describe.skipIf(!hostFilter?.ok || !ARCHES[process.arch])("inside the real box", () => {
+// Gated on the box and the arch, never on the probe under test: a probe that
+// breaks must turn this red, not skip it.
+describe.skipIf(!hostBox.ok || !ARCHES[process.arch])("inside the real box", () => {
   const t = ARCHES[process.arch]!;
+  test("the probe works here", () => { expect(hostFilter).toMatchObject({ ok: true }); });
   const b = join(root, "box");
   const home = join(b, "home");
   for (const d of [home, join(b, "install"), join(b, "data")]) mkdirSync(d, { recursive: true });

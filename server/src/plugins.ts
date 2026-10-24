@@ -41,7 +41,7 @@ import { versionAtLeast } from "../../shared/semverLite.ts";
 export { versionAtLeast };
 import {
   hostResolvConfExtraRo, hostSystemPaths, openGrantFds, pluginDataDir, removePluginDataDir, resolveGrants,
-  landlockProbe, openSeccompFd, resolvePrograms, sandboxArgv, sandboxProbe, scopeProbe, seccompProbe, type SandboxProbe,
+  landlockProbe, openSeccompFd, resolvePrograms, sandboxArgv, sandboxProbe, scopeProbe, seccompNow, seccompProbe, type SandboxProbe,
 } from "./plugin-sandbox.ts";
 import { ensurePluginSocketServer, pluginSocketPath, stopPluginSocketServer } from "./plugin-socket.ts";
 import { KEYRING_MARK, KeyringError, dropValue, exclusive, keyringEnabled, priorValue, putBack, pluginKeyId, reasonOf, sealValue, unlockFirst, unsealed } from "./keyring.ts";
@@ -1159,7 +1159,7 @@ function withContributes(p: PluginRecord): PluginRecord {
 function publicProbe(): PublicSandboxProbe {
   const p = sandboxProbe();
   if (!p.ok) return { ok: false, reason: p.reason, detail: p.detail };
-  const sc = seccompProbe();
+  const sc = seccompNow();
   return { ok: true, landlock: landlockProbe().ok, abstractScope: scopeProbe().ok, seccomp: sc.ok, ...(sc.ok ? {} : { seccompDetail: sc.detail }) };
 }
 
