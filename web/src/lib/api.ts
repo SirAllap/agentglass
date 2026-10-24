@@ -3,6 +3,7 @@ import { forgetShared, sharedRead } from "./sharedRead.ts";
 import type { UiAction, Field, NoteReply, NoteStatus, PluginPanel, PluginPrNotes, PrNotesSummary } from "./pluginTypes.ts";
 import type { ImportedPlace } from "./desktop.ts";
 import type { Policy } from "../../../shared/orchestration.ts";
+import type { AccountsOut } from "../../../shared/pluginAccounts.ts";
 import type { SettingRequestView } from "../../../shared/settingClass.ts";
 import { DEFAULT_LAUNCH_DENY, type LaunchMode, type LaunchPermissions } from "../../../shared/launchModes.ts";
 import type { PinnedPlace, PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/types.ts";
@@ -1018,6 +1019,9 @@ const realApi = {
     withToken(`${SERVER}/export?format=${fmt}${kind === "daily" ? "&kind=daily" : ""}`),
   skillsExportUrl: (fmt: "md" | "csv" | "json" = "md") => withToken(`${SERVER}/skills/export?format=${fmt}`),
   providerUsage: () => get<ProviderUsage[]>(`/usage/providers`),
+  usageAccounts: () => get<{ ok: boolean; providers: AccountsOut[] }>(`/usage/accounts`),
+  accountSwitch: (provider: string, id: string) => post<{ ok: boolean; plugin?: string; error?: string }>(`/usage/accounts/switch`, { provider, id }),
+  accountManage: (provider: string) => post<{ ok: boolean; plugin?: string; error?: string }>(`/usage/accounts/manage`, { provider }),
   refreshCodexUsage: () => post<{ ok: boolean; error?: string }>(`/usage/codex/refresh`, {}),
   claimPaceAlerts: (alertAt: number) => post<{ ok: boolean; fired: number }>(`/usage/pace-claim`, { alertAt }),
   // usage_since: the epoch the call counts are known from. They are bounded
@@ -2687,6 +2691,9 @@ const demoApi: typeof realApi = {
     kind === "daily" ? demo.dailyExportUri(fmt) : demo.eventsExportUri(fmt),
   skillsExportUrl: () => demo.skillsExportUri(),
   providerUsage: () => D(demo.providerUsage() as ProviderUsage[]),
+  usageAccounts: () => D({ ok: true, providers: [] as AccountsOut[] }),
+  accountSwitch: () => D({ ok: false, error: "the demo has no accounts" }),
+  accountManage: () => D({ ok: false, error: "the demo has no accounts" }),
   refreshCodexUsage: () => D({ ok: false, error: "not available in the demo" }),
   claimPaceAlerts: (_alertAt: number) => D({ ok: true, fired: 0 }),
   skills: () => D(demo.skills()),

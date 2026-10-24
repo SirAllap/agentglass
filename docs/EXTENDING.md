@@ -299,14 +299,18 @@ owner's (it does not say how to move it).
 The levels: 1 looks or opens (kinds `open`, `read`), 2 changes a local setting
 (kind `change`) and 3 **stages** (kind `stage`): a level 3 entry opens a dialog
 with its fields filled in and never calls a route that writes, so the person's
-click is the effect. Six ship that take a pull request, a file or the disk plan (`pr.merge.stage`,
+click is the effect. Seven ship that take a pull request, a file, the disk plan or an account (`pr.merge.stage`,
 `pr.comment.stage`, `pr.review.stage`, `card.move.stage`, `finder.op.stage`, a
 Finder confirmation for one reversible file operation: the irreversible `delete`
 and `empty-trash` are not in its `op` enum and stay with the person's own hands,
 and `diskclean.stage`, which marks lines of the machine panel's disk cleanup plan
 for the person to look at: its `ids` are the scan's line ids, one per line, the
 panel keeps only the ones the scan calls `safe`, and the run is the person's press
-of the panel's button, a route that answers 403 to an agent):
+of the panel's button, a route that answers 403 to an agent, and `usage.account.stage`,
+which marks one account of a provider in the usage popover as the agent's proposal: the
+server checks the provider and the id against the plugin's list first (409 for an unknown
+or already active one), and the switch is the person's press of the chip, a route that
+answers 403 to a plugin, a paired device and an agent):
 each opens the screen's own dialog filled in, marked as written by the caller, with its
 confirm held back for a second (`agentglass-ui stage <id> --arg k=v`, or the
 `ui_pr_merge_stage`-style MCP tools). Text arguments are the `text` spec:
@@ -471,8 +475,9 @@ curl -sS http://localhost:4000/control \
 # one panel: view, chat, bench, gates, and the Settings panes: diff, terminal,
 # browser, notifications, prefs, rail, keys, tasks, appearance, understudy (held
 # by the window) and hooks, lantern, budgets, recipes, review-prompts,
-# saved-replies, tmux, privacy, plugins, log, about (held by the server), and
-# machine.disk (the disk scan and cleanup plan, from GET /machine/disk-clean)
+# saved-replies, tmux, privacy, plugins, log, about (held by the server),
+# machine.disk (the disk scan and cleanup plan, from GET /machine/disk-clean) and
+# usage.accounts (the accounts a plugin says each provider has, from GET /usage/accounts)
 curl -sS http://localhost:4000/control \
   -H "Authorization: Bearer $AGENTGLASS_TOKEN" -H 'content-type: application/json' \
   -d '{"cmd":"ui","do":"ui.read","args":{"panel":"chat"}}'

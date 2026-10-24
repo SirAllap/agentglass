@@ -121,7 +121,7 @@ import { setSplashOn, splashOn } from "../lib/splashPref.ts";
 import { usageRefreshOn, setUsageRefreshOn } from "../lib/usageRefreshPref.ts";
 import { paceConfig, setPaceConfig, subscribePaceConfig } from "../lib/paceConfig.ts";
 import { PACE_MIN_MINUTES, type PaceConfig } from "../../../shared/pace.ts";
-import { providerUsage, subscribeProviderUsage } from "../lib/usageStore.ts";
+import { longWindowUsed, providerUsage, subscribeProviderUsage } from "../lib/usageStore.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { bindings, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId,
          chordFor, hasCustomChord, rebindChord, clearChord, resetChords, chordsCustomised, chordFromEvent, chordLabel,
@@ -920,9 +920,8 @@ function PacePane() {
 /** The busiest long window of the plan, as a percent: what the page header says ("Weekly 82 %"). */
 function useWeeklyUsage(): { used: number } | null {
   const rows = useSyncExternalStore(subscribeProviderUsage, providerUsage, providerUsage);
-  let used = -1;
-  for (const u of rows ?? []) if (u.available) for (const w of u.windows) if (w.minutes >= PACE_MIN_MINUTES && w.usedPercent > used) used = w.usedPercent;
-  return used < 0 ? null : { used };
+  const used = longWindowUsed(rows, PACE_MIN_MINUTES);
+  return used === null ? null : { used };
 }
 
 /**

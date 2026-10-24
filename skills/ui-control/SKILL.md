@@ -46,7 +46,9 @@ the Settings panes (diff, terminal, browser, notifications, prefs, rail, keys,
 tasks, appearance, understudy, hooks, lantern, budgets, recipes, review-prompts,
 saved-replies, tmux, privacy, plugins, log, about) and `machine.disk` (the disk
 scan and the cleanup plan: free space per disk, and every line with its id, size and
-verdict `safe`, `ask`, `inuse` or `explain`; the ids are under `untrusted`). Panes the server holds ask
+verdict `safe`, `ask`, `inuse` or `explain`; the ids are under `untrusted`) and `usage.accounts`
+(the accounts a plugin says each provider has: ids and which one is active in
+`state`, the labels and plan names under `untrusted`; never a credential). Panes the server holds ask
 their own route and can take a moment. Recipe steps, prompt and reply text, plugin
 settings and credentials are never in an answer; names and titles are under
 `untrusted`.
@@ -122,7 +124,7 @@ no CLI and no MCP tool answers a request for the person.
    one through this channel: a level 3 door only **stages**, opening the dialog
    with its fields filled in, and the person's own click is the effect. There is
    no grant that makes it automatic. It is offered only when the owner has allowed level 3. If the task needs one and no door
-   stages it, say so and let the person do it. Seven exist: five on a pull request, one in the Finder and one in the machine panel. `pr.unstick` (level 3) opens the Unstick dialog and
+   stages it, say so and let the person do it. Eight exist: five on a pull request, one in the Finder, one in the machine panel and one in the usage popover. `pr.unstick` (level 3) opens the Unstick dialog and
    nothing else; never offer it on a pull request that is merely slow, the dialog refuses one that is not stuck.
 
    `finder.op.stage` (op `trash`/`move`/`copy`/`rename`/`new-folder`/`duplicate`, path,
@@ -140,6 +142,16 @@ no CLI and no MCP tool answers a request for the person.
    `agentglass-ui stage diskclean.stage --arg ids="$(printf 'docker:cache\ncache:uv')"`.
    Say *I picked these lines in the cleanup plan; it is yours to look at and press*,
    never that you freed or deleted anything.
+
+   `usage.account.stage` (`provider`, `id`: both from `read usage.accounts`; the
+   account must be in the plugin's list and not the active one, or the server answers
+   409 with a sentence) puts the usage popover in front of the person with that
+   account marked as your proposal. Switching is the person's own press of the chip:
+   `POST /usage/accounts/switch` answers 403 to a plugin, a paired device and any agent
+   (the machine token alone included: it takes the desktop window's own desk key), and no
+   door presses it. A provider whose accounts are
+   managed by its plugin (`managedBy`) cannot be switched from here at all. Say *I
+   proposed switching to that account; it is yours to press*, never that you switched.
 
    The other four are the stage doors: `pr.merge.stage` (repo, number, method, optional subject
    and body), `pr.comment.stage` (repo, number, body), `pr.review.stage` (repo,

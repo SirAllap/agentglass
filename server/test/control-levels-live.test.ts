@@ -175,7 +175,7 @@ describe("a level 2 write against a server started at each level", () => {
     for (const b of bodies) expect((await post(s, b)).status, b.do).toBe(200);
     for (const b of bodies) expect(w.frames.some((f) => f.data?.do === b.do && (f.data?.args?.number === 42 || f.data?.args?.path === "/home/acme/notes.txt" || f.data?.args?.ids === "docker:cache\ncache:uv")), b.do).toBe(true);
     const ids = (await actions(s)).actions.map((x) => x.id);
-    expect(ids.filter((id) => id.endsWith(".stage")).sort()).toEqual(["card.move.stage", "diskclean.stage", "finder.op.stage", "pr.comment.stage", "pr.merge.stage", "pr.review.stage"]);
+    expect(ids.filter((id) => id.endsWith(".stage")).sort()).toEqual(["card.move.stage", "diskclean.stage", "finder.op.stage", "pr.comment.stage", "pr.merge.stage", "pr.review.stage", "usage.account.stage"]);
     // Arguments outside the closed shapes are a 400, not a frame: hidden text, a comment that hides, a number that is not one.
     const before = w.frames.length;
     for (const bad of [

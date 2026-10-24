@@ -49,7 +49,7 @@ import { noteAction, actorOf, type ActorSource } from "./actions.ts";
 import { getSkills, catalogMarkdown, catalogCsv, usageSince } from "./skills.ts";
 import { getInsights } from "./insights.ts";
 import { getCollisions } from "./collisions.ts";
-import { getUsage, ingestStatusline } from "./usage.ts";
+import { getUsage, ingestStatusline, syncLogin } from "./usage.ts";
 import { chooseModel, type UsageNow, type Choice } from "./understudy-model.ts";
 import { allProviderUsage } from "./providerusage.ts";
 import { claimPaceAlerts, coerceAlertAt } from "./paceAlert.ts";
@@ -281,6 +281,7 @@ import { readNotifyPrefs, writeNotifyPrefs } from "./notifyPrefs.ts";
 import { answerSessions, coerceRepos, normalizeRepo, RATE_PER_HOUR, sessionFacts, sessionReadRepos, sessionsGate, setSessionReadRepos, takeSessionsSlot } from "./prsessions.ts";
 import { fetchCatalogue } from "./plugin-catalogue.ts";
 import { annotate, setAnnotations } from "./inbox-annotations.ts";
+import { accountsList, holderOf, manageRefusal, personMayPress, setAccounts, switchRefusal } from "./accounts.ts";
 import {
   openStub, settleLedger, recordDecision, recordFence, scorecard,
   setMode, halt, setEnabled, enabled as understudyEnabled, sealSituation,
@@ -3734,6 +3735,30 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     // section and the notch all read this one answer. No desktop-only gate:
     // there is no path on disk in the payload and nothing here can act.
     if (pathname === "/usage/providers") return json(await allProviderUsage());
+    // The accounts a plugin says each provider has, never a credential. A paired
+    // device is given how a chip reads and nothing else; a plugin, only its own list.
+    if (pathname === "/usage/accounts" && req.method === "GET") {
+      const plugin = caller?.plugin ?? pluginOfRequest(req, url);
+      return json({ ok: true, providers: accountsList(caller?.kind === "device" ? "device" : plugin ? { plugin } : "person") });
+    }
+    /*
+     * A press of an account chip, passed on to the plugin that keeps the list.
+     * Only the person in the desktop window: a plugin token is refused by its
+     * KIND (a manifest may say scope "full" and a plugin may write any Origin it
+     * likes), and so is a paired device. The plugin does the switching; this
+     * route only tells it the person asked.
+     */
+    if ((pathname === "/usage/accounts/switch" || pathname === "/usage/accounts/manage") && req.method === "POST") {
+      if (!personMayPress(caller, desktopOnly(req), deskHeld(), deskKeyOk(req))) return csrfBlocked();
+      let b: { provider?: unknown; id?: unknown } = {};
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const switching = pathname.endsWith("/switch");
+      const no = switching ? switchRefusal(b.provider, b.id) : manageRefusal(b.provider);
+      if (no) return json({ ok: false, error: no }, 409);
+      const to = holderOf(b.provider as string)!.plugin;
+      pushEvent(to, switching ? { type: "account.switch", provider: b.provider as string, id: b.id as string, at: Date.now() } : { type: "account.manage", provider: b.provider as string, at: Date.now() });
+      return json({ ok: true, plugin: to });
+    }
     // A client asks whether a long window has newly reached its alert level.
     // The server decides and remembers, once for every client, and tells them
     // all by frame; the answer here is only how many it raised.
@@ -3768,6 +3793,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // `used: false` is a real answer, not a failure: most payloads carry no
       // rate_limits at all (the CLI only sends them for subscriber sessions,
       // and only after the first response of the session).
+      await syncLogin();
       return json({ ok: true, used: ingestStatusline(body) });
     }
 
@@ -4038,6 +4064,13 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
           noteAction(clientIp, `/control/${no.id}`, { ...(refusedAs ? { as: refusedAs } : {}), ...(row.suppressed ? { refused: row.suppressed } : {}) }, { ok: false, error: "level" }, refusedWho);
         }
         return json({ ok: false, error: no.error, level: CONTROL.level }, 403);
+      }
+      // A proposal to switch to an account that is not in the plugin's list, or is
+      // already the active one, is told so here and never put in front of the person.
+      if (cmd.cmd === "ui" && cmd.do === "usage.account.stage") {
+        const a = cmd.args as { provider: string; id: string };
+        const no = switchRefusal(a.provider, a.id);
+        if (no) return json({ ok: false, error: no }, 409);
       }
       /*
        * Delivery, said truthfully. The command rides the same sockets every
@@ -5693,6 +5726,10 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         const b = await body<{ items?: unknown; replace?: unknown }>();
         if (!b) return json({ ok: false, error: "invalid json" }, 400);
         const r = setAnnotations(self, c, b);
+        return json(r, r.ok ? 200 : 400);
+      }
+      if (pathname === "/plugin/self/accounts") {
+        const r = setAccounts(self, c, await body<unknown>());
         return json(r, r.ok ? 200 : 400);
       }
       if (pathname === "/plugin/self/settings" && req.method === "POST") {

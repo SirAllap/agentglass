@@ -21,7 +21,9 @@ export type PrStaged =
 export type FinderStaged = { id: "finder.op.stage"; a: UiArgs<"finder.op.stage"> };
 /** The one the machine panel takes: lines of the disk cleanup plan to look at. */
 export type DiskStaged = { id: "diskclean.stage"; a: UiArgs<"diskclean.stage"> };
-export type Staged = PrStaged | FinderStaged | DiskStaged;
+/** The one the usage popover takes: an account of a provider the agent proposes to switch to. */
+export type AccountStaged = { id: "usage.account.stage"; a: UiArgs<"usage.account.stage"> };
+export type Staged = PrStaged | FinderStaged | DiskStaged | AccountStaged;
 
 /** What the panel receives: the draft, the name the caller stamped on it (an
  *  untrusted label: any caller picks its own), and a rising number so asking
@@ -29,6 +31,16 @@ export type Staged = PrStaged | FinderStaged | DiskStaged;
 export type StageRequest = Staged & { by: string; n: number; at: number };
 
 export type PrStageRequest = PrStaged & { by: string; n: number; at: number };
+
+export type AccountStageRequest = AccountStaged & { by: string; n: number; at: number };
+
+/**
+ * The seam for the account chips: the request if it is a proposal to switch
+ * account, null for none or another screen's (the mailbox is shared). The popover
+ * reads this, shows a confirmation naming `by`, and only the person's press of
+ * its button calls POST /usage/accounts/switch. Nothing in this file does.
+ */
+export const accountStageOf = (r: StageRequest | null): AccountStageRequest | null => (r?.id === "usage.account.stage" ? r : null);
 
 /** Long enough for a pull request to be located and read; short enough that a
  *  request nobody was there for does not open at the next unrelated visit. */

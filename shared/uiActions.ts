@@ -24,6 +24,7 @@
  * window it lands in. That is the handler's business, and it calls the seam
  * the UI itself uses.
  */
+import { ACCOUNT_ID_RE, ACCOUNT_PROVIDERS } from "./pluginAccounts.ts";
 
 /*
  * Every view the rail can hold. The 0.8 redesign made the dashboard a view and
@@ -111,7 +112,7 @@ export const READ_PANELS_NOW = [
 export const READ_PANELS_LATE = [
   "settings.hooks", "settings.lantern", "settings.budgets", "settings.recipes", "settings.review-prompts",
   "settings.saved-replies", "settings.tmux", "settings.privacy", "settings.plugins", "settings.log", "settings.about",
-  "machine.disk",
+  "machine.disk", "usage.accounts",
 ] as const;
 export const READ_PANELS = [...READ_PANELS_NOW, ...READ_PANELS_LATE] as const;
 
@@ -350,6 +351,16 @@ export const UI_ACTIONS = {
     args: { ids: { t: "text", max: DISK_STAGE_MAX_IDS * (DISK_STAGE_ID_MAX + 1) } },
     refine: diskStageOk,
   }),
+  // The usage popover's account chips. Which accounts exist is the holder plugin's
+  // list, which only the server has, so the server checks provider and id against it
+  // before this reaches a window (POST /control); the shape is checked here. The
+  // switch itself is the person's press of the chip (UI_REFUSED_FOR_AGENTS).
+  "usage.account.stage": def({
+    level: 3, kind: "stage",
+    surface: "the usage popover with one account of a provider (ids from `ui.read usage.accounts`) marked as the one you propose to switch to; nothing switches until the person presses it there",
+    args: { provider: { t: "enum", values: ACCOUNT_PROVIDERS }, id: { t: "slug", max: 32 } },
+    refine: (a) => (ACCOUNT_ID_RE.test(a.id as string) ? a : null),
+  }),
   "finder.op.stage": def({
     modals: ["finder/machine/FinderOpsUI.tsx"], level: 3, kind: "stage",
     surface: "the Finder's confirmation for one reversible file operation (trash, move, copy, rename, new folder, duplicate) on one path, with the paths named (nothing runs until the person presses the button)",
@@ -377,6 +388,7 @@ export const isReadAction = (id: string): boolean => (UI_READ_IDS as readonly st
  */
 export const UI_REFUSED_FOR_AGENTS: Readonly<Record<string, string>> = {
   "diskclean.run": "Clean up disk removes Docker data, checkouts and caches from this machine, so it is the person's own press of the machine panel's button: POST /machine/disk-clean/run answers 403 to a plugin, to any agent and to the machine token, and no door presses it. An agent can read the scan and the plan (ui.read machine.disk) and stage a selection (diskclean.stage) for the person to look at",
+  "usage.account.switch": "Switching the account a provider uses changes whose quota every agent on this machine spends from, so it is the person's own press of a chip in the usage popover: POST /usage/accounts/switch answers 403 to a plugin, to a paired device, to a seat, to an understudy and to the machine token without the desk key only the desktop window holds, and no door presses it. An agent can read the accounts (ui.read usage.accounts, cockpit_accounts) and stage a proposal (usage.account.stage) for the person to look at",
   "pr.review.publish": "Publish review posts one comment on GitHub as the person, so it is their own click in the dialog and nothing else: the route answers 403 to a plugin, to any agent and to the machine token, and the dialog cannot be staged or pressed through a door. An agent can read the review's findings; the person decides what leaves the machine",
 };
 

@@ -45,11 +45,14 @@ export function remainingOf(window: QuotaWindow): number {
  *
  * Ties go to the window already found, which keeps the headline still while two
  * windows sit at the same percentage instead of swapping on every poll.
+ *
+ * A login the computer lists but is not signed in as is not in the running: the
+ * headline answers "can I start a long one" with the account that would run it.
  */
 export function tightestWindow(rows: ProviderUsage[] | null): TightWindow | null {
   let best: TightWindow | null = null;
   for (const row of rows ?? []) {
-    if (!row.available) continue;
+    if (!row.available || row.account?.active === false) continue;
     for (const window of row.windows) {
       if (!best || window.usedPercent > best.window.usedPercent) {
         best = { provider: row.label, window, observedAt: row.observedAt };
@@ -141,4 +144,18 @@ export function windowName(label: string): string {
   if (/^5h$/i.test(label)) return "5-hour";
   if (/^weekly$/i.test(label)) return "Weekly";
   return label;
+}
+
+/** The heading over one login's bars: "Work A · max". Null for a row that is
+ *  not one of several logins. The id and storage never reach the phone. */
+export function accountHeading(row: ProviderUsage): string | null {
+  const a = row.account;
+  if (!a) return null;
+  return [a.label, a.plan].filter(Boolean).join(" · ");
+}
+
+/** How many providers are reporting, as opposed to how many rows: two logins
+ *  of one provider are still one provider to name on a bar. */
+export function providerCount(rows: ProviderUsage[]): number {
+  return new Set(rows.map((r) => r.provider)).size;
 }

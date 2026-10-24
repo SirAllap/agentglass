@@ -3,6 +3,8 @@ import type { ProviderUsage } from "../../../shared/types.ts";
 import { usageRefreshOn, shouldRefresh } from "./usageRefreshPref.ts";
 import { recordSnapshot } from "./paceSamples.ts";
 import { checkPaceAlerts } from "./paceAlert.ts";
+import { isCoreRow, onActiveChanged, refreshAccounts } from "./accountStore.ts";
+import { HOLD_MAX_MS, retryDelay, settleHold, startHold, type Hold } from "./usageHold.ts";
 
 /**
  * Plan quota for every provider, polled once for the whole app.
@@ -24,16 +26,96 @@ let poller: ReturnType<typeof setInterval> | null = null;
  *  earned a 429 that made the meters vanish entirely. */
 const EVERY_MS = 5 * 60_000;
 
-/** Everything that wants to see a fresh reading, so a new poll site cannot skip one. */
-function onSnapshot(next: ProviderUsage[]): void {
-  recordSnapshot(next);
-  checkPaceAlerts(next);
+/** Everything that wants to see a fresh reading, so a new poll site cannot skip one.
+ *  `accounts: false` for a reading asked because the accounts just changed: it
+ *  must not ask them again, or each answer would start the next lap. */
+function onSnapshot(next: ProviderUsage[], accounts = true): void {
+  // Rows that read another login of a provider are the popover's, not the
+  // strip's: sampled under the same provider|window key they would be mixed
+  // into the active account's pace history.
+  const core = next.filter(isCoreRow);
+  recordSnapshot(core);
+  checkPaceAlerts(core);
+  hold = settleHold(hold, next, Date.now());
+  // The accounts ride the same poll rather than owning a timer.
+  if (accounts) void refreshAccounts();
+}
+
+/*
+ * A switch changes whose quota the core reads: ask for the readings now, not at
+ * the next poll. The plugin decides when `active` changes, and a list that
+ * flipped back and forth would otherwise send every flip to a server that
+ * answers each with a real read of a rate-limited endpoint. So at most one in
+ * the window, and the flips inside it share one read when it ends.
+ */
+const ACTIVE_REFRESH_MS = 30_000;
+let activeRefreshAt = 0;
+let activeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+let activeRefreshPending = false;
+function refreshForActiveChange(): void {
+  const wait = activeRefreshAt + ACTIVE_REFRESH_MS - Date.now();
+  if (wait > 0) {
+    if (activeRefreshPending) return;
+    activeRefreshPending = true;
+    activeRefreshTimer = setTimeout(() => { activeRefreshPending = false; refreshForActiveChange(); }, wait);
+    return;
+  }
+  activeRefreshAt = Date.now();
+  void refreshProviderUsage({ accounts: false });
+}
+
+/*
+ * The late reading. Right after a switch the server has dropped the old
+ * login's numbers and may not have the new login's yet, so the strip would
+ * vanish until the next poll. What was on screen stays, marked as old (see
+ * usageHold.ts, `heldRows`), and the window asks again a few times quickly
+ * instead of waiting five minutes: 2 s, 4 s, 8 s after the switch, each only
+ * while something is still held. The server keeps its own backoff and its
+ * one-read-a-minute floor, so these asks cost it nothing it would not have.
+ */
+let hold: Hold = new Map();
+let retryAttempt = 0;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleRetry(): void {
+  const wait = retryDelay(hold, retryAttempt);
+  if (wait === null) return;
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    retryAttempt++;
+    void refreshProviderUsage({ accounts: false }).finally(scheduleRetry);
+  }, wait);
+}
+function onSwitched(): void {
+  // Taken before the refresh below replaces the snapshot, which is the point.
+  for (const [p, h] of startHold(snapshot, Date.now())) hold.set(p, h);
+  retryAttempt = 0;
+  if (retryTimer !== null) clearTimeout(retryTimer);
+  retryTimer = null;
+  scheduleRetry();
+  refreshForActiveChange();
+}
+onActiveChanged(onSwitched);
+
+/** The previous login's rows still standing in for the new login's, for one provider or for all. */
+export function heldRows(provider?: string): ProviderUsage[] {
+  const now = Date.now();
+  return [...hold].filter(([p, h]) => (!provider || p === provider) && now - h.at < HOLD_MAX_MS).map(([, h]) => h.row);
 }
 
 export const providerUsage = (): ProviderUsage[] | null => snapshot;
 
+/** The busiest window of at least `minMinutes`, as a percent, over the logins in use; null when no provider reports one. */
+export function longWindowUsed(rows: ProviderUsage[] | null, minMinutes: number): number | null {
+  let used = -1;
+  for (const u of rows ?? []) {
+    if (!u.available || !isCoreRow(u)) continue;
+    for (const w of u.windows) if (w.minutes >= minMinutes && w.usedPercent > used) used = w.usedPercent;
+  }
+  return used < 0 ? null : used;
+}
+
 export const usageOf = (p: ProviderUsage["provider"]): ProviderUsage | null =>
-  snapshot?.find((u) => u.provider === p) ?? null;
+  snapshot?.find((u) => u.provider === p && isCoreRow(u)) ?? null;
 
 /**
  * Whose quota to show when nothing says whose it should be.
@@ -52,7 +134,7 @@ export function busiestOf(rows: ProviderUsage[] | null): ProviderUsage | null {
   let best: ProviderUsage | null = null;
   let top = -1;
   for (const u of rows ?? []) {
-    if (!u.available) continue;
+    if (!u.available || !isCoreRow(u)) continue;
     for (const w of u.windows) if (w.usedPercent > top) { top = w.usedPercent; best = u; }
   }
   return best;
@@ -94,10 +176,10 @@ export function subscribeProviderUsage(fn: () => void): () => void {
  * last good answer standing. A meter that blinks out is worse than one that is
  * a few minutes old, and the age is already on screen.
  */
-export async function refreshProviderUsage(): Promise<void> {
+export async function refreshProviderUsage(opts: { accounts?: boolean } = {}): Promise<void> {
   try {
     snapshot = await api.providerUsage();
-    onSnapshot(snapshot);
+    onSnapshot(snapshot, opts.accounts !== false);
   } catch { /* offline — keep what we have */ } finally {
     firstFetchDone = true;
     for (const l of listeners) l();
@@ -211,5 +293,13 @@ export function __resetUsageStore(): void {
   snapshot = null;
   firstFetchDone = false;
   lastPing = 0;
+  activeRefreshAt = 0;
+  activeRefreshPending = false;
+  if (activeRefreshTimer !== null) clearTimeout(activeRefreshTimer);
+  activeRefreshTimer = null;
+  hold = new Map();
+  retryAttempt = 0;
+  if (retryTimer !== null) clearTimeout(retryTimer);
+  retryTimer = null;
   if (poller) { clearInterval(poller); poller = null; }
 }

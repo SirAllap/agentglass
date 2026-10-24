@@ -15,6 +15,8 @@ export const DESK_GATED: readonly string[] = [
   "/settings/door", "/settings/requests/decide", "/launch-permissions", "/seat/settings", "/seat/change", "/seat/wake",
   "/hooks/gate", "/budgets/set", "/lantern/settings", "/agents/roles", "/plugins/master", "/plugins/enable", "/plugins/allow-unboxed",
   "/plugins/session-reads", "/jira/writes", "/clickup/writes", "/clickup/prefs",
+  // A press of an account chip: only the person in the desktop window, never an agent staging it.
+  "/usage/accounts/switch", "/usage/accounts/manage",
 ];
 
 export function deskGated(path: string): boolean {

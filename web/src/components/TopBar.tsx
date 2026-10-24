@@ -19,10 +19,11 @@ import type { ProviderUsage } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { api } from "../lib/api.ts";
-import { subscribeProviderUsage, usageOf, busiestOf, providerUsage, resetShort, resetLabel, usedColor, usedTextColor, ageLabel, refreshProviderUsage } from "../lib/usageStore.ts";
+import { subscribeProviderUsage, usageOf, busiestOf, providerUsage, heldRows, resetShort, resetLabel, usedColor, usedTextColor, ageLabel, refreshProviderUsage } from "../lib/usageStore.ts";
 import { providerInContext } from "../lib/providerContext.ts";
 import { windowLabel } from "../../../shared/quota.ts";
 import { stalenessLabel } from "../lib/usageAge.ts";
+import { heldAgeLabel, stripRow } from "../lib/usageHold.ts";
 import { paceConfig, subscribePaceConfig } from "../lib/paceConfig.ts";
 import { OLD_READING_MS, windowPace } from "../lib/usagePace.ts";
 import { warmDayStrip } from "../lib/dayStrip.ts";
@@ -40,6 +41,10 @@ import { useAmbientNotes, NoteToast, NotifyBell } from "./TopBarNotes.tsx";
 import { NeedsPopover, type NeedsItem } from "./NeedsPopover.tsx";
 import { needsStaysOpen } from "../lib/needsPanel.ts";
 import { ICON, MIN_BOX } from "../lib/iconSize.ts";
+import { LAYER } from "../lib/layers.ts";
+import { AccountChips, AccountKeyBar, useAccountPanel } from "./AccountChips.tsx";
+import { accountStageOf, peekStage, subscribeStage } from "../lib/stageIntent.ts";
+import { onProposal } from "../lib/accountKeys.ts";
 import { GearIcon } from "./workspace/icons.tsx";
 import { openSettings } from "../lib/openSettings.ts";
 import { appChordFor, chordLabel } from "../lib/keybindings.ts";
@@ -290,22 +295,30 @@ function Meter({ pct, tint }: { pct: number; tint: string }) {
  * with the space for it, "Wed 3:00 PM" is more use than "2d 1h" when you are
  * deciding whether to wait.
  */
-function PlanPanel({ u, age, at, onClose, onRefresh, busy }: {
-  u: ProviderUsage; age: string | null; at: { top: number; right: number };
-  onClose: () => void; onRefresh: () => void; busy: boolean;
+function PlanPanel({ u: strip, age: stripAge, at, onClose, onEscape, onRefresh, busy }: {
+  u: ProviderUsage; age: string | null; at: { top: number; right: number; staged?: true };
+  onClose: () => void; onEscape: () => void; onRefresh: () => void; busy: boolean;
 }) {
-  const windows = [...u.windows].sort((a, b) => a.minutes - b.minutes);
+  const acc = useAccountPanel(strip, onClose, onEscape, !at.staged);
+  // The provider the chips moved to, if any, and whether the bars belong to an
+  // account that is not the one in use: its pace history and day chart are the
+  // core's, so they are drawn only for the active one.
+  const u = acc.header;
+  const other = acc.show && !acc.atCore;
+  const shown = other ? acc.row : u;
+  const age = u === strip && !other ? stripAge : null;
+  const windows = [...(shown?.windows ?? [])].sort((a, b) => a.minutes - b.minutes);
   const cfg = useSyncExternalStore(subscribePaceConfig, paceConfig, paceConfig);
   // Read once per open: a panel that re-ticked its own clock would move the
   // numbers under the eye, and it is closed again within seconds.
   const [now] = useState(() => Date.now());
   return (
-    <Portal z={10050}>
+    <Portal z={LAYER.usage}>
       {/* The scrim is what closes it. A panel this small does not deserve a
           key handler of its own and a click anywhere else is what everybody
-          already tries. */}
-      <div className="fixed inset-0" onClick={onClose} style={{ background: "transparent" }} />
-      <div className="fixed flex flex-col rounded-xl overflow-hidden"
+          already tries. Closed like Escape, so focus goes back to the strip. */}
+      <div className="fixed inset-0" onClick={onEscape} style={{ background: "transparent" }} />
+      <div {...acc.rootProps} className="fixed flex flex-col rounded-xl overflow-hidden outline-none"
         style={{
           top: at.top, right: at.right, width: 300,
           background: "var(--surface-card)",
@@ -314,9 +327,9 @@ function PlanPanel({ u, age, at, onClose, onRefresh, busy }: {
         }}>
         <div className="flex items-center gap-2 px-3 py-2.5" style={{ borderBottom: LINE }}>
           <span className="text-[12.5px] font-semibold" style={{ color: "var(--text)" }}>{u.label}</span>
-          {u.plan && <span className="chip text-[10px] t-dim">{u.plan}</span>}
+          {(acc.show ? acc.cand!.plan : u.plan) && <span className="chip text-[10px] t-dim">{acc.show ? acc.cand!.plan : u.plan}</span>}
           <span className="ml-auto text-[10px]" style={{ color: age ? "var(--warning)" : "var(--text4)" }}>
-            {age ? `last read ${age} ago` : ageLabel(u.observedAt)}
+            {age ? `last read ${age} ago` : ageLabel(shown?.observedAt)}
           </span>
           <button type="button" onClick={() => { onClose(); openSettings("budgets"); }} aria-label="Usage settings…" title="Usage settings…"
                 className="shrink-0 grid place-items-center rounded hover:bg-white/10"
@@ -324,10 +337,12 @@ function PlanPanel({ u, age, at, onClose, onRefresh, busy }: {
           <RefreshButton onRefresh={onRefresh} busy={busy} title="Read the plan again" />
         </div>
 
+        <AccountChips p={acc} />
+
         <div className="flex flex-col gap-3 px-3 py-3">
           {windows.map((w) => {
             const reset = resetLabel(w.resetsAt);
-            const wp = windowPace(u.provider, w, now, cfg);
+            const wp = other ? null : windowPace(u.provider, w, now, cfg);
             return (
               <div key={w.label}>
                 <div className="flex items-baseline gap-2">
@@ -347,15 +362,16 @@ function PlanPanel({ u, age, at, onClose, onRefresh, busy }: {
                     Resets {reset}
                   </span>
                 )}
-                {wp && <PaceLines wp={wp} now={now} cfg={cfg} oldReading={u.observedAt != null && now - u.observedAt > OLD_READING_MS} />}
+                {wp && <PaceLines wp={wp} now={now} cfg={cfg} oldReading={shown?.observedAt != null && now - shown.observedAt > OLD_READING_MS} />}
               </div>
             );
           })}
           {!windows.length && (
-            <span className="text-[11.5px]" style={{ color: "var(--text4)" }}>This provider reports no windows.</span>
+            <span className="text-[11.5px]" style={{ color: "var(--text4)" }}>{other ? "No reading yet for this account." : "This provider reports no windows."}</span>
           )}
-          <DayStrip provider={u.provider} />
+          {!other && <DayStrip provider={u.provider} />}
         </div>
+        <AccountKeyBar p={acc} />
       </div>
     </Portal>
   );
@@ -570,7 +586,7 @@ export function TopBar({
      panel pinned to it in the layout would move every time a percentage did.
      Same trick the notification panel uses, and for the same reason. */
   const planBtn = useRef<HTMLButtonElement | null>(null);
-  const [planAt, setPlanAt] = useState<{ top: number; right: number } | null>(null);
+  const [planAt, setPlanAt] = useState<{ top: number; right: number; staged?: true } | null>(null);
   const openPlan = useCallback(() => {
     warmDayStrip().catch(() => {});
     setPlanAt((was) => {
@@ -579,13 +595,33 @@ export function TopBar({
       return r ? { top: Math.round(r.bottom + 6), right: Math.round(window.innerWidth - r.right) } : null;
     });
   }, []);
+  // An agent's proposal to switch account: the popover is where it is drawn, so open it.
+  // Seen once per request, so closing it is not undone by the next render.
+  const seenProposal = useRef(0);
+  const hasRow = useRef(false);
+  useEffect(() => subscribeStage(() => {
+    const r = accountStageOf(peekStage());
+    if (!r) return;
+    const d = onProposal(seenProposal.current, r.n, hasRow.current);
+    seenProposal.current = d.seen;
+    if (!d.open) return;
+    setPlanAt((was) => {
+      if (was) return was;
+      const b = planBtn.current?.getBoundingClientRect();
+      return b ? { top: Math.round(b.bottom + 6), right: Math.round(window.innerWidth - b.right), staged: true } : null;
+    });
+  }), []);
   const ctx = providerInContext(focusedAgent, filterProvider);
   /* No context is not "no quota". `providerInContext` answers null whenever no
      chat is focused and the filter names no provider — on the dashboard, in the
      terminal, in a browser tab — and the meters simply stopped being drawn.
      Reported as "sometimes it does not appear at all"; it was never about the
      plan, it was about where you happened to be standing. */
-  const u = (ctx ? usageOf(ctx) : null) ?? (ctx ? null : busiestOf(providerUsage()));
+  const live = (ctx ? usageOf(ctx) : null) ?? (ctx ? null : busiestOf(providerUsage()));
+  // Just after a switch the new login may have no reading yet; the strip keeps
+  // the previous one, marked old, rather than vanishing (usageHold.ts).
+  const { u, held } = stripRow(live, heldRows(ctx ?? undefined));
+  hasRow.current = !!u;
   // The popover's day chart is answered before the popover exists; see dayStrip.ts.
   const planProvider = u?.provider;
   useEffect(() => { if (planProvider === "anthropic") warmDayStrip().catch(() => {}); }, [planProvider]);
@@ -600,7 +636,7 @@ export function TopBar({
   // re-renders this strip every minute, so this stays current without a timer.
   // Codex's reading only moves when a turn runs, so it can be days old and the
   // age is the whole difference between a number and a lie.
-  const age = u?.available && u.observedAt ? stalenessLabel(u.observedAt) : null;
+  const age = !u?.available ? null : held ? heldAgeLabel(u.observedAt, Date.now()) : u.observedAt ? stalenessLabel(u.observedAt) : null;
 
   const alarm = !!needs?.count;
 
@@ -835,7 +871,8 @@ export function TopBar({
         <NotifyBell noDrag={NO_DRAG} onGoto={onNoteGoto} />
         {u && planAt && (
           <PlanPanel u={u} age={age} at={planAt} busy={refreshing}
-            onRefresh={refreshUsage} onClose={() => setPlanAt(null)} />
+            onRefresh={refreshUsage} onClose={() => setPlanAt(null)}
+            onEscape={() => { setPlanAt(null); planBtn.current?.focus(); }} />
         )}
         {/* An update is worth noticing on the way past, never worth pulling the
             eye off a running fleet. */}

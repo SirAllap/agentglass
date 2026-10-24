@@ -18,6 +18,7 @@
  * outside it files under `untrusted`.
  */
 import type { DiskCleanReport, ViewId } from "../../../shared/types.ts";
+import type { AccountsOut } from "../../../shared/pluginAccounts.ts";
 import { api } from "./api.ts";
 import { currentScale } from "./uiScale.ts";
 import { clock24 } from "./clockPref.ts";
@@ -207,6 +208,9 @@ export async function readLog(): Promise<LogData> {
 
 /** The cached scan (the server rescans no more often than every few minutes); the panel's own Rescan is what asks for a fresh one. */
 export const readDiskClean = (): Promise<DiskCleanReport> => api.machineDiskClean(false);
+
+/** The accounts a plugin says each provider has (GET /usage/accounts): the same answer the usage popover draws chips from. */
+export const readUsageAccounts = (): Promise<AccountsOut[]> => api.usageAccounts().then((r) => r.providers);
 
 export interface AboutData {
   version: string; commit: string; stamp: string; builtAt: string; baseTag: string; distance: number; dirty: boolean; dirtyCount: number;

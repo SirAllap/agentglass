@@ -4114,8 +4114,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   };
   useEffect(() => {
     const r = stageReq;
-    // The Finder's and the machine panel's requests wait in the same mailbox for their own screens.
-    if (!r || r.id === "finder.op.stage" || r.id === "diskclean.stage" || !detail || !repo) return;
+    // The Finder's, the machine panel's and the usage popover's requests wait in the same mailbox for their own screens.
+    if (!r || r.id === "finder.op.stage" || r.id === "diskclean.stage" || r.id === "usage.account.stage" || !detail || !repo) return;
     // Only for the pull request it named, and only while this view is the one on
     // screen with nothing else being asked: a dialog opened under the terminal, or
     // in place of a question the person is answering, is somebody else's moment.

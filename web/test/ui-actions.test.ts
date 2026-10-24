@@ -346,6 +346,7 @@ const fixture: Sources = {
     log: async () => ({ rows: [] }),
     about: async () => ({ version: "0.0.0", commit: "", stamp: "", builtAt: "", baseTag: "", distance: 0, dirty: false, dirtyCount: 0, branch: "", behind: 0, ahead: 0, available: false, blocked: "", incoming: [], digest: null, origin: "" }),
     diskClean: async () => ({ lines: [], mounts: [], safeBytes: 0, at: 0, problems: [] }),
+    usageAccounts: async () => [],
   },
 };
 

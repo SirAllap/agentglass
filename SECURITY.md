@@ -1376,14 +1376,18 @@ value; only an unset variable is the default. What each level means:
   agent prepare something and never perform it, with one exception outside
   `/control`: the Jira card door's `step`, `link`, `edit`, `comment`, `comment-edit`, `comment-delete`, `move`, `subtask`, `relate`, `unrelate`, `weblink`, `unweblink`, `worklog`, `worklog-edit`, `worklog-delete`, `watch`, `vote`, `rank`, `attach` and `unattach`, which perform at level 3
   when the Jira write switch is also on (see "Jira, and the agent door to a
-  card"). Seven doors ship, five on one pull
-  request, one in the Finder and one in the machine panel: `pr.merge.stage` (method, commit subject and body), `pr.comment.stage`
+  card"). Eight doors ship, five on one pull
+  request, one in the Finder, one in the machine panel and one in the usage popover: `pr.merge.stage` (method, commit subject and body), `pr.comment.stage`
   (the text), `pr.review.stage` (verdict and text), `card.move.stage` (the new
   status of the card the pull request carries) and `pr.unstick` (opens the Unstick
   dialog and does not run it), `diskclean.stage` (lines of the machine panel's disk
   cleanup plan, marked for the person to look at: it removes nothing, the panel keeps
   only the lines the scan calls safe, and `POST /machine/disk-clean/run` answers 403 to
-  a plugin, to any agent and to the machine token) and `finder.op.stage` (one reversible file operation
+  a plugin, to any agent and to the machine token), `usage.account.stage` (one account of a provider
+  proposed in the usage popover: the server checks it against the list the provider's plugin keeps, and
+  `POST /usage/accounts/switch` answers 403 to a plugin, a paired device, a seat, an understudy and any
+  request without the desktop app's own desk key, so on a hand-started server nobody has claimed it
+  answers 403 to everyone, and the switch is only the person's press) and `finder.op.stage` (one reversible file operation
   on one path: trash, move, copy, rename, new folder or duplicate, with the
   destination or name it needs; `delete` and `empty-trash` cannot be spelled, so
   they are refused, and a name with a `/` is refused too). The Finder opens on the

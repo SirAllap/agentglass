@@ -38,6 +38,7 @@ import type { DiskCleanReport, PendingGate, ViewId } from "../../../shared/types
 import type { NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 import type { Chat } from "./chatStore.ts";
 import type { BenchState, BenchTab } from "./benchStore.ts";
+import type { AccountsOut } from "../../../shared/pluginAccounts.ts";
 import type {
   PrefsData, RailData, KeysData, TasksData, AppearanceData, UnderstudyData, HooksData, LanternData, BudgetsData, RecipeRow,
   ReviewPromptRow, SavedReplyRow, TmuxData, PrivacyData, PluginsData, LogData, AboutData,
@@ -99,6 +100,7 @@ export interface Sources {
     log(): Promise<LogData>;
     about(): Promise<AboutData>;
     diskClean(): Promise<DiskCleanReport>;
+    usageAccounts(): Promise<AccountsOut[]>;
   };
 }
 
@@ -481,6 +483,24 @@ const diskClean = (r: DiskCleanReport): UiSnapshot => {
   };
 };
 
+/**
+ * The accounts a plugin says each provider has. The ids are the plugin's own
+ * short spelling (`acme-a`), which an agent needs to stage a proposal; the words
+ * a person reads (label, plan) and the plugin's name came from outside, so they
+ * are under `untrusted`. No credential is in the list and none can be: the
+ * plugin's whole input is refused when a visible string looks like one.
+ */
+const usageAccounts = (rs: readonly AccountsOut[]): UiSnapshot => ({
+  state: {
+    providers: rs.map((p) => ({
+      provider: p.provider, managedByPlugin: p.managedBy ?? null,
+      accounts: p.accounts.map((a) => ({ id: a.id, active: a.active, storage: a.storage, colour: a.colour })),
+    })),
+  },
+  untrusted: { providers: rs.map((p) => ({ provider: p.provider, plugin: p.plugin, accounts: p.accounts.map((a) => ({ id: a.id, label: a.label, plan: a.plan })) })) },
+  see: ["/usage/accounts"],
+});
+
 /** Panel id to provider. Keyed by READ_PANELS_NOW, so a panel with no provider
  *  is a type error here, and a provider for a panel the registry lacks is one too. */
 export const PROVIDERS: { [P in NowPanel]: (src: Sources) => UiSnapshot } = {
@@ -515,6 +535,7 @@ export const LATE_PROVIDERS: { [P in LatePanel]: (src: Sources) => Promise<UiSna
   "settings.log": (s) => s.later.log().then((d) => finish(log(d))),
   "settings.about": (s) => s.later.about().then((d) => finish(about(d))),
   "machine.disk": (s) => s.later.diskClean().then((d) => finish(diskClean(d))),
+  "usage.accounts": (s) => s.later.usageAccounts().then((d) => finish(usageAccounts(d))),
 };
 
 const isLate = (p: ReadPanel): p is LatePanel => (READ_PANELS_LATE as readonly string[]).includes(p);

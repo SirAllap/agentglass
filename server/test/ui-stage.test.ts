@@ -24,12 +24,14 @@ const UNSTICK = "pr.unstick" as const;
 const FINDER = "finder.op.stage" as const;
 /** The seventh is the machine panel's disk cleanup: one `ids` text, its own describe at the end. */
 const DISK = "diskclean.stage" as const;
+/** The eighth is the usage popover's account chip: a provider and an account id, its own describe at the end. */
+const ACCOUNT = "usage.account.stage" as const;
 
 describe("the stage doors", () => {
-  test("exactly these four, pr.unstick (own file), finder.op.stage and diskclean.stage (below), are level 3, every one a stage, and nothing else is level 3", () => {
+  test("exactly these four, pr.unstick (own file), finder.op.stage, diskclean.stage and usage.account.stage (below), are level 3, every one a stage, and nothing else is level 3", () => {
     const l3 = Object.entries(UI_ACTIONS).filter(([, d]) => d.level === 3).map(([id]) => id).sort();
-    expect(l3).toEqual([...STAGES, UNSTICK, FINDER, DISK].sort());
-    for (const id of [...STAGES, UNSTICK, FINDER, DISK]) expect((UI_ACTIONS[id] as UiActionDef).kind, id).toBe("stage");
+    expect(l3).toEqual([...STAGES, UNSTICK, FINDER, DISK, ACCOUNT].sort());
+    for (const id of [...STAGES, UNSTICK, FINDER, DISK, ACCOUNT]) expect((UI_ACTIONS[id] as UiActionDef).kind, id).toBe("stage");
   });
 
   for (const id of STAGES) {
@@ -66,7 +68,7 @@ describe("the stage doors", () => {
 
   test("the listing at level 2 has no stage door and at level 3 has all four, Unstick, the Finder's and the disk's", () => {
     expect(describeUiActions(UI_ACTIONS, 2).filter((d) => d.kind === "stage")).toEqual([]);
-    expect(describeUiActions(UI_ACTIONS, 3).filter((d) => d.kind === "stage").map((d) => d.id).sort()).toEqual([...STAGES, UNSTICK, FINDER, DISK].sort());
+    expect(describeUiActions(UI_ACTIONS, 3).filter((d) => d.kind === "stage").map((d) => d.id).sort()).toEqual([...STAGES, UNSTICK, FINDER, DISK, ACCOUNT].sort());
   });
 
   test("merge: only the three methods; subject is one line", () => {
@@ -263,5 +265,39 @@ describe("diskclean.stage", () => {
 
   test("the scan and plan are read through ui.read machine.disk, a pane the server holds", () => {
     expect(READ_PANELS_LATE).toContain("machine.disk");
+  });
+});
+
+describe("usage.account.stage", () => {
+  const f = (args: unknown, level: 1 | 2 | 3 = 3) => parse(ACCOUNT, args, level);
+  const good = { provider: "anthropic", id: "acme-b" };
+
+  test("is refused below level 3 and runs at 3", () => {
+    expect(f(good, 1)).toBeNull();
+    expect(f(good, 2)).toBeNull();
+    expect(f(good)).toMatchObject({ cmd: "ui", do: ACCOUNT, args: good });
+  });
+
+  test("a provider the app does not know, an id that is not an account spelling, and a missing argument are refused", () => {
+    for (const provider of ["gemini", "", 1, null]) expect(f({ ...good, provider }), String(provider)).toBeNull();
+    for (const id of ["Acme", "-acme", "a b", "a".repeat(33), "acme/b", "..", "", 1]) expect(f({ ...good, id }), String(id)).toBeNull();
+    expect(f({ provider: "anthropic" })).toBeNull();
+    expect(f({ id: "acme-b" })).toBeNull();
+  });
+
+  test("an argument the door does not name is dropped", () => {
+    expect(f({ ...good, token: "x", storage: "file" })?.args).toEqual(good);
+  });
+
+  test("describes itself as a stage that switches nothing", () => {
+    const row = describeUiActions(UI_ACTIONS, 3).find((x) => x.id === ACCOUNT)!;
+    expect(row.kind).toBe("stage");
+    expect(row.surface).toContain("nothing switches until the person presses");
+  });
+
+  test("the switch itself is not a door: it is listed as refused for agents, and the accounts are read through ui.read usage.accounts", () => {
+    expect(UI_REFUSED_FOR_AGENTS["usage.account.switch"]).toContain("403");
+    expect(Object.keys(UI_ACTIONS).filter((id) => id.startsWith("usage.account."))).toEqual([ACCOUNT]);
+    expect(READ_PANELS_LATE).toContain("usage.accounts");
   });
 });

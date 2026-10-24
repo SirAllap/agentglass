@@ -30,6 +30,7 @@ import { pluginsConfigDir } from "./plugins.ts";
 import type { PrChangedEvent } from "./prChanged.ts";
 import { headNeedsRead, reviewStale, type HeadRead } from "../../shared/headCompare.ts";
 import { forgetAnnotations } from "./inbox-annotations.ts";
+import { forgetAccounts } from "./accounts.ts";
 import { dropCanvases } from "./plugin-canvas.ts";
 
 export type PluginUiFrame =
@@ -124,7 +125,11 @@ export type PluginEvent =
   | PrChangedEvent
   | { type: "pr-action"; id: string; repo: string; number: number; at: number }
   | { type: "note-action"; id: string; noteId: string; repo: string; number: number; at: number }
-  | { type: "run-approve" | "run-skip"; id: string; repo: string; number: number; at: number };
+  | { type: "run-approve" | "run-skip"; id: string; repo: string; number: number; at: number }
+  /** The person pressed a chip in the usage popover (only the desktop window can). */
+  | { type: "account.switch"; provider: string; id: string; at: number }
+  /** The person asked for the plugin's own page for the accounts of a provider. */
+  | { type: "account.manage"; provider: string; at: number };
 
 const MAX_QUEUE = 200;
 const queues = new Map<string, PluginEvent[]>();
@@ -168,6 +173,7 @@ export function forgetPlugin(plugin: string): void {
   panels.delete(plugin);
   options.delete(plugin);
   forgetAnnotations(plugin);
+  forgetAccounts(plugin);
   dropCanvases(plugin);
   queues.delete(plugin);
   for (const w of waiters.get(plugin) ?? []) w();

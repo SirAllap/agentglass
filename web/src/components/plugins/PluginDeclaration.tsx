@@ -91,6 +91,13 @@ export function surfaces(p: PublicPlugin): Surface[] {
       where: "next to Reply and Resolve on each finding it wrote; pressing one tells the plugin, never GitHub",
     });
   }
+  for (const provider of c.accounts ?? []) {
+    out.push({
+      icon: <EyeIcon size={ICON.sm} />,
+      what: `Keeps the list of ${provider} accounts`,
+      where: "shown as chips in the usage popover; the app gives it no credential, and a switch only happens when you press it",
+    });
+  }
   for (const read of c.reads ?? []) {
     out.push({
       icon: <EyeIcon size={ICON.sm} />,

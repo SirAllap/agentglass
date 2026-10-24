@@ -121,3 +121,40 @@ describe("tightestWindow", () => {
     expect(top?.window.usedPercent).toBe(0);
   });
 });
+
+/*
+ * A provider with several logins has one row per login, all with the provider's
+ * name. The boxes show the provider, so they show the login in use; another
+ * login's 98 % is for the popover's chips, and must not be this panel's headline
+ * nor a second row with the same key.
+ */
+describe("a provider with several logins", () => {
+  const rows: ProviderUsage[] = [
+    { provider: "anthropic", label: "Claude", available: true, windows: [win("5h", 20)], account: { label: "Acme A", plan: "max", active: true } },
+    { provider: "anthropic", label: "Claude", available: true, windows: [win("5h", 98)], account: { label: "Acme B", plan: "pro", active: false } },
+    { provider: "codex", label: "Codex", available: true, windows: [win("5h", 30)] },
+  ];
+
+  test("the headline ignores another login's window", () => {
+    expect(tightestWindow(rows)?.window.usedPercent).toBe(30);
+  });
+
+  test("the boxes list the login in use, once per provider, so the row key is unique", async () => {
+    const { coreRows } = await import("../src/lib/accountStore.ts");
+    const shown = coreRows(rows)!;
+    expect(shown.map((r) => r.provider)).toEqual(["anthropic", "codex"]);
+    expect(new Set(shown.map((r) => r.provider)).size).toBe(shown.length);
+    expect(coreRows(null)).toBeNull();
+  });
+
+  test("the long-window percent the Settings header says is the login in use's", async () => {
+    const { longWindowUsed } = await import("../src/lib/usageStore.ts");
+    const long = (u: number) => ({ label: "7d", minutes: 10080, usedPercent: u, resetsAt: null });
+    const two: ProviderUsage[] = [
+      { ...rows[0]!, windows: [long(40)] },
+      { ...rows[1]!, windows: [long(98)] },
+    ];
+    expect(longWindowUsed(two, 1440)).toBe(40);
+    expect(longWindowUsed(null, 1440)).toBeNull();
+  });
+});

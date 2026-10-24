@@ -273,7 +273,7 @@ describe.skipIf(!HAVE_PY)("the MCP tool list is the registry", () => {
   test("level 3 is the stage entries and only those, and a stage tool says nothing runs by calling it", () => {
     expect(L2.map((a) => a.id)).not.toContain("pr.unstick");
     const staged = L3.filter((a) => a.level === 3);
-    expect(staged.map((a) => a.id).sort()).toEqual(["card.move.stage", "diskclean.stage", "finder.op.stage", "pr.comment.stage", "pr.merge.stage", "pr.review.stage", "pr.unstick"]);
+    expect(staged.map((a) => a.id).sort()).toEqual(["card.move.stage", "diskclean.stage", "finder.op.stage", "pr.comment.stage", "pr.merge.stage", "pr.review.stage", "pr.unstick", "usage.account.stage"]);
     expect(staged.every((a) => a.kind === "stage")).toBe(true);
     const t = tools(L3).find((x) => x.name === "ui_pr_unstick")!;
     expect(Object.keys(t.inputSchema.properties).sort()).toEqual(["now", "number", "root"]);

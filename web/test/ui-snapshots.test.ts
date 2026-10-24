@@ -102,6 +102,13 @@ const later = (over: Partial<Sources["later"]> = {}): Sources["later"] => ({
     ],
     safeBytes: 10e9, at: 1_700_000_000_000, problems: [INJECTION],
   }),
+  usageAccounts: async () => [{
+    provider: "anthropic", plugin: INJECTION,
+    accounts: [
+      { id: "acme-a", label: INJECTION, plan: "max", colour: "blue", active: true, storage: "keyring" },
+      { id: "acme-b", label: "Acme B", plan: "pro", colour: "violet", active: false, storage: "file" },
+    ],
+  }],
   ...over,
 });
 
@@ -295,7 +302,7 @@ describe("the panels' contents", () => {
     const thunk: Record<string, keyof Sources["later"]> = {
       "settings.hooks": "hooks", "settings.lantern": "lantern", "settings.budgets": "budgets", "settings.recipes": "recipes",
       "settings.review-prompts": "reviewPrompts", "settings.saved-replies": "savedReplies", "settings.tmux": "tmux",
-      "settings.privacy": "privacy", "settings.plugins": "plugins", "settings.log": "log", "settings.about": "about", "machine.disk": "diskClean",
+      "settings.privacy": "privacy", "settings.plugins": "plugins", "settings.log": "log", "settings.about": "about", "machine.disk": "diskClean", "usage.accounts": "usageAccounts",
     };
     for (const panel of READ_PANELS_LATE) {
       const base = later();
@@ -412,6 +419,29 @@ describe("machine.disk: the scan and its plan", () => {
   it("a mount that reports no size has no share", async () => {
     const r = await LATE_PROVIDERS["machine.disk"](sources({ later: later({ diskClean: async () => ({ lines: [], mounts: [{ mount: "/proc", source: "proc", size: 0, free: 0, safeBytes: 0 }], safeBytes: 0, at: 1, problems: [] }) }) }));
     expect((r.state.mounts as { freePct: number | null }[])[0]!.freePct).toBeNull();
+  });
+});
+
+describe("usage.accounts: the accounts a plugin says a provider has", () => {
+  const read = () => LATE_PROVIDERS["usage.accounts"](sources());
+
+  it("state holds the ids and the flags; the words and the plugin's name are untrusted", async () => {
+    const r = await read();
+    expect(r.state.providers).toEqual([{
+      provider: "anthropic", managedByPlugin: null,
+      accounts: [
+        { id: "acme-a", active: true, storage: "keyring", colour: "blue" },
+        { id: "acme-b", active: false, storage: "file", colour: "violet" },
+      ],
+    }]);
+    expect(JSON.stringify(r.state)).not.toContain("Ignore previous");
+    expect(JSON.stringify(r.untrusted)).toContain("Ignore previous instructions");
+    expect(r.see).toEqual(["/usage/accounts"]);
+  });
+
+  it("an empty list is an answer", async () => {
+    const r = await LATE_PROVIDERS["usage.accounts"](sources({ later: later({ usageAccounts: async () => [] }) }));
+    expect(r.state).toEqual({ providers: [] });
   });
 });
 

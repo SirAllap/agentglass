@@ -5,6 +5,7 @@
 // This uses an unofficial endpoint (the one Claude Code's `/usage` calls). It may
 // change; failures degrade gracefully to { available: false }.
 import { homedir, tmpdir } from "os";
+import { unlink } from "fs/promises";
 import { failed } from "./refused.ts";
 import { join } from "path";
 import { usageRead } from "./usageevents.ts";
@@ -19,6 +20,21 @@ const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
  *  get that file whether or not it was the first through the door. */
 function credPath(): string {
   return process.env.CLAUDE_CREDENTIALS || join(homedir(), ".claude", ".credentials.json");
+}
+
+/** Claude Code's own config, for ONE field of it: `oauthAccount.accountUuid`.
+ *
+ *  `CLAUDE_CONFIG_JSON` names it outright (the seam a test uses); otherwise it
+ *  is `$CLAUDE_CONFIG_DIR/.claude.json` or `~/.claude.json`, as Claude Code
+ *  resolves it. Resolved per call, never at import. Under `bun test` only an
+ *  injected path inside the scratch directory is ever read, so no suite opens
+ *  the developer's own config. */
+function claudeConfigPath(): string | null {
+  const injected = process.env.CLAUDE_CONFIG_JSON;
+  if (process.env.NODE_ENV === "test") return injected && injected.startsWith(tmpdir()) ? injected : null;
+  if (injected) return injected;
+  const dir = process.env.CLAUDE_CONFIG_DIR;
+  return dir ? join(dir, ".claude.json") : join(homedir(), ".claude.json");
 }
 
 export interface UsageWindow {
@@ -144,9 +160,15 @@ async function restoreLastGood(): Promise<void> {
   restored = true;
   if (offLimits()) return;
   try {
-    const j = (await Bun.file(lastGoodPath()).json()) as UsagePayload;
-    // Anything hand-edited or half-written is simply not a reading.
-    if (j?.available === true && typeof j.fetched_at === "number" && (j.five_hour || j.seven_day)) {
+    const j = (await Bun.file(lastGoodPath()).json()) as UsagePayload & { loginKey?: string };
+    // Anything hand-edited or half-written is simply not a reading. So is one
+    // taken under another login: a switch made while the server was down (a
+    // reinstall, a restart) is not seen by the stat comparison, which starts
+    // from nothing, and the old login's numbers would come back as the stale
+    // fallback for up to a day. A file that carries no key predates this check
+    // and is not trusted either.
+    if (j?.available === true && typeof j.fetched_at === "number" && (j.five_hour || j.seven_day)
+      && j.loginKey === await credentialsKey()) {
       lastGood = {
         available: true, five_hour: j.five_hour, seven_day: j.seven_day,
         // Rebuilt field by field rather than spread, so a file written by a
@@ -158,11 +180,18 @@ async function restoreLastGood(): Promise<void> {
   } catch { /* no file yet, or nonsense in it: start blind, as before. */ }
 }
 
+/** Writes and removals of the file, one after another: an unlink issued before
+ *  a fetch persisted its reading could otherwise finish after the write and
+ *  delete the new login's reading. */
+let disk: Promise<unknown> = Promise.resolve();
+
 /** Fire and forget. A reading that fails to persist is worth less on the next
- *  boot, which is not worth failing a request over. */
+ *  boot, which is not worth failing a request over. The login it was read
+ *  under goes with it. */
 function persistLastGood(u: UsagePayload): void {
   if (offLimits()) return;
-  Bun.write(lastGoodPath(), JSON.stringify(u)).catch(() => {});
+  const body = JSON.stringify({ ...u, loginKey: credKey });
+  disk = disk.then(() => Bun.write(lastGoodPath(), body)).catch(() => {});
 }
 
 /**
@@ -180,7 +209,122 @@ export function __test_forgetEverything(): void {
   failures = 0;
   retryAfterMs = 0;
   restored = false;
+  credKey = null;
+  loginId = null;
+  loginDropped = false;
+  loginFetchAt = 0;
 }
+
+/**
+ * The readings belong to whichever login the credentials file held when they
+ * were taken. A plugin that switches accounts rewrites that file, and without
+ * this the old login's numbers are served for up to fifteen minutes (a day, if
+ * the new login is rate-limited and the old reading is "stale but kept") under
+ * the new login's name. The key is the file's mtime and size, from a stat: the
+ * token is never read for it.
+ *
+ * Under `bun test` with no `CLAUDE_CREDENTIALS` the path would be the
+ * developer's own `~/.claude`, so there is no key at all.
+ */
+let credKey: string | null = null;
+async function credentialsKey(): Promise<string> {
+  if (process.env.NODE_ENV === "test" && !process.env.CLAUDE_CREDENTIALS) return "test";
+  try {
+    const s = await Bun.file(credPath()).stat();
+    return `${s.mtimeMs}:${s.size}`;
+  } catch { return "missing"; }
+}
+
+/**
+ * A read caused by a login change waits at least this long after the previous
+ * one. A plugin decides when `active` flips, so without a floor a list that
+ * flipped a, b, a, b would send every flip to an endpoint that answers 429 to a
+ * third call inside four minutes.
+ */
+const LOGIN_GAP = 60_000;
+/** The next read is for a login that is not the one the cache was taken under. */
+let loginDropped = false;
+/** When the last read caused by a login change was made. */
+let loginFetchAt = 0;
+
+/**
+ * A plugin saying the login changed: drop what was read for the previous one,
+ * on disk too, or a restart would bring the old login's numbers back.
+ *
+ * The backoff stays. A 429 is the endpoint's answer about this machine's
+ * budget, and a switch that a plugin can trigger at will must not be a way to
+ * spend it: `failures`, `retryAfterMs` and `lastFetchAt` are left as they were,
+ * and `getUsage` holds the next read to them.
+ */
+export function clearUsageCache(): void {
+  cache = null;
+  cacheAt = 0;
+  lastGood = null;
+  loginDropped = true;
+  if (!offLimits()) disk = disk.then(() => unlink(lastGoodPath())).catch(() => {});
+}
+
+/**
+ * The credentials file changed under us. That is a switch, or Claude Code
+ * renewing the token of the SAME login (any session may, every few hours, and
+ * the stat cannot tell the two apart; the token is never read for it). So only
+ * the cached reading goes, to be read again; the last good one stays as the
+ * fallback, or a renewal during a 429 spell would blank the meters. A switch
+ * the plugin reports goes through `clearUsageCache` and takes that too. The
+ * ceiling: a login changed by hand while the endpoint is refusing shows the old
+ * login's last numbers until it answers.
+ */
+function loginMayHaveChanged(): void {
+  if (cache?.available && !cache.error) { cache = null; cacheAt = 0; }
+  loginDropped = true;
+}
+
+/**
+ * Who the login is, from the one non-secret field Claude Code keeps for it. It
+ * is what tells a renewal of the SAME login (any session rewrites the
+ * credentials every few hours) from a login changed by hand. Memory only: it is
+ * never persisted, logged, served or put in an error, and nothing else of the
+ * config survives this function: the file is parsed, one string is picked, and
+ * the rest goes out of scope with it.
+ */
+let loginId: string | null = null;
+async function accountUuid(): Promise<string | null> {
+  const p = claudeConfigPath();
+  if (!p) return null;
+  try {
+    const u = (JSON.parse(await Bun.file(p).text()) as any)?.oauthAccount?.accountUuid;
+    return typeof u === "string" && u ? u : null;
+  } catch { return null; }
+}
+export function __test_loginIdentity(): string | null { return loginId; }
+
+async function dropIfLoginChanged(): Promise<void> {
+  const k = await credentialsKey();
+  const first = credKey === null;
+  const changed = !first && credKey !== k;
+  credKey = k;
+  if (!first && !changed) return;
+  const id = await accountUuid();
+  // A different person's uuid is a different login, whatever the endpoint says
+  // now: their last good reading goes too, backoff stays (clearUsageCache). A
+  // file that cannot be read or names no one leaves the old rule in force.
+  // The ceiling: the config is read when the credentials file moves, so a
+  // login that rewrites the config after the credentials is seen as a renewal.
+  const other = changed && id !== null && loginId !== null && id !== loginId;
+  if (id !== null) loginId = id;
+  if (other) clearUsageCache();
+  else if (changed) loginMayHaveChanged();
+}
+
+/**
+ * Whether the statusline feed may be taken as the current login's. Called by
+ * the route before `ingestStatusline`, which stays synchronous.
+ *
+ * The ceiling: where the credentials live in the keyring (macOS) the file never
+ * moves, so a session still on the old login keeps feeding its numbers until a
+ * plugin reports the switch.
+ */
+export const syncLogin = dropIfLoginChanged;
 
 /** Carries the status through the throw, so a failure is classified from what
  *  the server said rather than pattern-matched back out of a message. */
@@ -365,6 +509,7 @@ export function ingestStatusline(raw: unknown, now: number = Date.now()): boolea
  */
 export async function peekUsage(): Promise<UsagePayload | null> {
   await restoreLastGood();
+  await dropIfLoginChanged();
   return cache ?? lastGood;
 }
 
@@ -377,6 +522,7 @@ export async function getUsage(now: number = Date.now()): Promise<UsagePayload> 
   // Before the first attempt, so a process that boots into a burst of 429s
   // still has yesterday's answer rather than no answer.
   await restoreLastGood();
+  await dropIfLoginChanged();
   const backoff = Math.max(
     retryAfterMs,
     Math.min(ERROR_TTL_MAX, ERROR_TTL * 2 ** Math.max(0, failures - 1)),
@@ -398,10 +544,22 @@ export async function getUsage(now: number = Date.now()): Promise<UsagePayload> 
   const overdue = now - lastFetchAt >= POLL_FLOOR;
   if (cache && now - cacheAt < ttl && !overdue) return cache;
 
+  // The reading was dropped for a login change. What a login change may not do
+  // is skip the backoff, or ask more often than LOGIN_GAP.
+  if (!cache && loginDropped && lastFetchAt
+    && ((failures > 0 && now - lastFetchAt < backoff) || now - loginFetchAt < LOGIN_GAP)) {
+    return degrade(now, "waiting to read the new login", null);
+  }
+  if (loginDropped) { loginDropped = false; loginFetchAt = now; }
+
   // Stamped on the attempt, not on success: a run of 429s must not have the
   // floor firing at every caller on the way past.
   lastFetchAt = now;
 
+  // The login this read starts under, taken before the token is: the token is
+  // read and the answer awaited, and a switch in between must not leave the old
+  // login's numbers under the new login's key.
+  const startedUnder = credKey;
   const t = await token();
   if (!t) {
     cache = degrade(now, "no credentials", null);
@@ -417,6 +575,9 @@ export async function getUsage(now: number = Date.now()): Promise<UsagePayload> 
       },
       signal: AbortSignal.timeout(8000),
     });
+    // Not stored, not persisted, and no failure counted: the next call sees the
+    // new key and reads again.
+    if (await credentialsKey() !== startedUnder) return degrade(now, "the login changed while reading", null);
     if (!r.ok) {
       // A 429 usually carries how long to wait. Believing it beats guessing,
       // and ignoring it is how a client earns a longer ban.

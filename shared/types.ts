@@ -254,6 +254,10 @@ export type ProviderUsage = {
   /** Why there is nothing, when there is nothing. Rendered to the user, so it
    *  is a sentence rather than an error code. */
   note?: string;
+  /** Set when a plugin lists several logins for this provider: which one this
+   *  row reads. Label and plan are the plugin's user-chosen words, never an
+   *  email or an id. */
+  account?: { label: string; plan: string; active: boolean };
 };
 
 export interface SkillUsage {

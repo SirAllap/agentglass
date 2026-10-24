@@ -1336,12 +1336,18 @@ export async function resumeEnabledPlugins(): Promise<string[]> {
   const store = read();
   if (!store.master) return [];
   const started: string[] = [];
+  // `enablePlugin` keeps one plugin per provider's accounts; a plugins.json
+  // edited by hand or restored from a backup can say otherwise, and the first
+  // in the file is the one that starts.
+  const held = new Set<string>();
   for (const rec of store.plugins) {
     if (!rec.enabled || !rec.approvedFingerprint || rec.approvedFingerprint !== rec.fingerprint) continue;
     if (blockedEntry(rec.name)) continue;
+    if (rec.contributes?.accounts?.some((p) => held.has(p))) continue;
     try {
       await startProcess(withContributes(rec));
       started.push(rec.name);
+      for (const p of rec.contributes?.accounts ?? []) held.add(p);
     } catch {
       /* one bad plugin must not keep the others down */
     }
@@ -1791,6 +1797,12 @@ export async function enablePlugin(name: string, approved = true): Promise<{ ok:
   if (!store.master) return { ok: false, error: "plugins are switched off — flip the master switch first" };
   const block = blockedEntry(name);
   if (block) return { ok: false, error: `blocked: ${block.reason}${block.link ? ` (${block.link})` : ""}` };
+  // One list of accounts per provider: two plugins each saying which account is
+  // active would fight over the chips, so the second to be switched on is refused.
+  for (const provider of rec.contributes?.accounts ?? []) {
+    const holder = store.plugins.find((p) => p.name !== name && p.enabled && p.contributes?.accounts?.includes(provider));
+    if (holder) return { ok: false, error: `"${holder.name}" already keeps the ${provider} accounts — switch it off first, then switch this one on` };
+  }
   if (!approved && rec.approvedFingerprint !== rec.fingerprint) {
     return {
       ok: false,
