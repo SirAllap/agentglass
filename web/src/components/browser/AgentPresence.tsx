@@ -213,7 +213,7 @@ export function AgentPresence({ agent, landing, url = "", onToggle, quiet = fals
           <div className="agx-presence-who">
             <span className="agx-presence-task" title={`${agent.agent} (this agent's container name)`}>{agent.agent}</span>
             {/* Always there: a dock whose chip comes and goes changes size under the person's hand. */}
-            <span className="agx-presence-state"><Swap k={state.key} min={86}><StateIcon k={state.key} />{state.word}</Swap></span>
+            <span className="agx-presence-state"><Swap k={state.key}><StateIcon k={state.key} />{state.word}</Swap></span>
           </div>
           <button type="button" className={agent.paused ? "is-back" : ""} onClick={onToggle} aria-label={agent.paused ? "Hand back" : "Take over"}>
             <Swap k={agent.paused ? "back" : "take"}>{agent.paused ? <><SparkGlyph />Hand back</> : <><AlienGlyph />Take over</>}</Swap>
@@ -228,7 +228,7 @@ export function AgentPresence({ agent, landing, url = "", onToggle, quiet = fals
    one rises in, the old one lifts out, and the host's width follows the new one,
    so what sits beside it slides rather than jumps. Transform, opacity, blur and
    width only; the out layer is aria-hidden so a reader hears one word. */
-function Swap({ k, min = 0, children }: { k: string; min?: number; children: ReactNode }) {
+function Swap({ k, children }: { k: string; children: ReactNode }) {
   const [st, setSt] = useState<{ k: string; node: ReactNode; old: { k: string; node: ReactNode } | null }>({ k, node: children, old: null });
   if (st.k !== k) setSt({ k, node: children, old: { k: st.k, node: st.node } });
   useEffect(() => {
@@ -238,7 +238,19 @@ function Swap({ k, min = 0, children }: { k: string; min?: number; children: Rea
   }, [st.old]);
   const cur = useRef<HTMLSpanElement | null>(null);
   const [w, setW] = useState<number | undefined>(undefined);
-  useLayoutEffect(() => { if (cur.current) setW(Math.max(cur.current.offsetWidth, min)); }, [st.k, min]);
+  // Measured again whenever the layer's size changes, not once per word: a dock
+  // mounted in a hidden panel measured 0 and stayed a 26 px button with its label
+  // spilling out, and a font-size change left the label 11 px wider than its host.
+  useLayoutEffect(() => {
+    const el = cur.current;
+    if (!el) return;
+    // The used width, fractional and before transforms: offsetWidth rounds, and left the chip's word up to 1 px over.
+    const fit = () => setW(Math.ceil(parseFloat(getComputedStyle(el).width)));
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [st.k]);
   return (
     <span className="agx-sw" style={{ width: w }}>
       {st.old && <span key={"o" + st.old.k} className="agx-sw-lay is-out" aria-hidden>{st.old.node}</span>}

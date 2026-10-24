@@ -3433,7 +3433,9 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 @keyframes agx-st-dot { 0%, 60%, 100% { opacity: .35; } 30% { opacity: 1; } }
 /* A word or icon that changes crosses over (Swap in AgentPresence.tsx): the host's width follows the new layer. */
 .agx-sw { position: relative; display: block; flex: none; align-self: stretch; transition: width 260ms var(--agx-out); }
-.agx-presence-state .agx-sw { height: 20px; }
+/* The chip's floor is its longest word, "You have it": 6.8em of text at the chip's size beside the 14 px icon and its
+   6 px gap, so it grows with the interface font size and no state word pushes Take over. A fixed 86 px moved it at 14 and 15 px. */
+.agx-presence-state .agx-sw { height: 20px; min-width: calc(6.8em + 20px); }
 .agx-sw-lay { position: absolute; left: 0; top: 0; bottom: 0; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .agx-presence-dock button .agx-sw-lay { gap: 8px; }
 .agx-sw-lay.is-in { animation: agx-sw-in 260ms var(--agx-out) both; }

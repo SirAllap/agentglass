@@ -196,7 +196,7 @@ describe("an island's +", () => {
 describe("the dock keeps one footprint", () => {
   // A chip that came and went made the capsule shrink and sag with the state.
   test("the chip is always drawn, and a changing word crosses over instead of swapping", () => {
-    expect(presence).toContain('<span className="agx-presence-state"><Swap k={state.key} min={86}>');
+    expect(presence).toContain('<span className="agx-presence-state"><Swap k={state.key}>');
     expect(presence).not.toMatch(/\?\s*<span className="agx-presence-state"/);
     expect(presence).toContain('<Swap k={agent.paused ? "back" : "take"}>');
     expect(presence).toContain('className="agx-sw-lay is-out" aria-hidden');
@@ -268,5 +268,27 @@ describe("mission control: many containers", () => {
     expect(island).toContain('className="agx-isl-find"');
     expect(island).toContain('{busyAgents === agents.length ? "working"');
     expect(css).toMatch(/\.agx-isl-boxes\.is-dense \.agx-isl-thumb \{ height: 64px; \}/);
+  });
+});
+
+/* The dock's Take over and state chip are a Swap: a host whose width is set from
+   the word inside it. Measured once per word, a dock that mounted in a hidden
+   panel kept width 0 (a 26 px button, the label outside it) and a font-size
+   change left the label 11 px past its host, until the word next changed. */
+describe("dock crossfade width", () => {
+  const from = presence.indexOf("function Swap(");
+  const swap = presence.slice(from, presence.indexOf("\n}\n", from));
+
+  test("the host follows every size change of its word, not one measurement", () => {
+    expect(from).toBeGreaterThan(-1);
+    expect(swap).toContain("new ResizeObserver(fit)");
+    expect(swap).toContain("ro.observe(el)");
+    expect(swap).not.toContain("offsetWidth");
+  });
+
+  test("the chip's floor grows with the font size, so no state word moves Take over", async () => {
+    const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
+    expect(css).toMatch(/\.agx-presence-state \.agx-sw \{ height: 20px; min-width: calc\([\d.]+em \+ 20px\); \}/);
+    expect(presence).not.toContain("min={");
   });
 });
