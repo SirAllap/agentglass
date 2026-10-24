@@ -2,6 +2,7 @@ import { test, expect, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { settled } from "./paneSettled.ts";
 
 /*
  * A window of four panes comes back with its panes in the order it had.
@@ -67,7 +68,8 @@ for (const mode of ["lazy", "all"] as const) {
       expect(r.ok).toBe(true);
       last = r.stdout.trim();
     }
-    const before = await dirsOf(s);
+    const same = (want: (string | undefined)[]) => (got: (string | undefined)[]) => got.join("\n") === want.join("\n");
+    const before = await settled(() => dirsOf(s), same(DIRS));
     expect(before).toEqual(DIRS);
 
     await restore.captureLayout(Date.now());
@@ -75,6 +77,6 @@ for (const mode of ["lazy", "all"] as const) {
     const r = await restore.restoreLayout(mode);
     expect(r.ok).toBe(true);
 
-    expect(await dirsOf(s)).toEqual(before);
+    expect(await settled(() => dirsOf(s), same(before))).toEqual(before);
   });
 }

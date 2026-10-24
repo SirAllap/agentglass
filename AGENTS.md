@@ -174,6 +174,11 @@ here will stop you.
   private `TMUX_TMPDIR`, `env -u TMUX`, `sleep` as the window command, and
   `kill-server` before restoring `TMUX_TMPDIR`. Never `tmux kill-server`
   without `-L`.
+- A new pane's directory and command are set by tmux's child after the
+  command that made it returns; read at once, it still reports the tmux
+  server's cwd. A test that reads a pane it just made waits for it with
+  `settled()` from `server/test/paneSettled.ts`, never reads once. The CI
+  replica does not hit this race; GitHub's runner does.
 
 ### Editing
 
