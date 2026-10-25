@@ -98,6 +98,7 @@ type DesktopBridge = {
   registerInitScript?: (name: string, source: string, guestId?: number) => Promise<{ ok: boolean; error?: string }>;
   /** Absent on shells built before §5 — the DevTools protocol, relayed whole. */
   cdp?: (method: string, params?: unknown, guestId?: number) => Promise<{ ok: boolean; result?: unknown; error?: string }>;
+  browserInput?: (req: BrowserInputReq, guestId: number) => Promise<{ ok: boolean; sent?: number; error?: string }>;
   /** The PERSON's zoom — `webContents.setZoomFactor` in the shell, which scales
    *  the page inside the box it has. Omit the factor to read. */
   zoom?: (factor?: number, guestId?: number) => Promise<{ ok: boolean; factor?: number; percent?: number; error?: string }>;
@@ -524,6 +525,19 @@ export async function browserCdp(
   if (!b?.cdp) return { ok: false, error: "this shell has no DevTools protocol relay" };
   try {
     return await b.cdp(method, params, guestId);
+  } catch { return { ok: false, error: "the shell did not answer" }; }
+}
+
+/** A click at a point, a key or text, as the shell sends it. */
+export interface BrowserInputReq { op: "click" | "dblclick" | "hover" | "key" | "text"; x?: number; y?: number; key?: string; text?: string }
+
+/** Trusted input to one tab: events the page sees with `isTrusted` true,
+ *  where a script's are false. The measurement is in electron/trusted-input.js. */
+export async function browserInput(req: BrowserInputReq, guestId: number): Promise<{ ok: boolean; error?: string }> {
+  const b = bridge();
+  if (!b?.browserInput) return { ok: false, error: "this shell cannot send input to a page" };
+  try {
+    return await b.browserInput(req, guestId);
   } catch { return { ok: false, error: "the shell did not answer" }; }
 }
 

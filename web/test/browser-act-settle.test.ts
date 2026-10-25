@@ -163,9 +163,12 @@ describe("a click waits for what it caused", () => {
   test("the mutation counter is on before the click, so the click's own change is counted", async () => {
     const el = guest();
     await click(el);
+    // On in the gate, before anything presses: the trusted press goes
+    // through the shell after it, and the script path's PRESS runs later still.
     const act = el.ran[0]!;
     expect(act.indexOf("new MutationObserver")).toBeGreaterThan(-1);
-    expect(act.indexOf("new MutationObserver")).toBeLessThan(act.indexOf(String.raw`mouse("click"`));
+    expect(act).not.toContain(String.raw`mouse("click"`);
+    expect(el.ran.findIndex((c) => c.includes(String.raw`mouse("click"`))).toBeGreaterThan(0);
     // childList and text only: a style attribute animating every frame would never be quiet.
     expect(act).toContain("childList: true, characterData: true }");
     expect(act).not.toContain("attributes: true");

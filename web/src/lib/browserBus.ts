@@ -1,6 +1,6 @@
 import type { BrowserAskFrame } from "../../../shared/types.ts";
 import { api } from "./api.ts";
-import { captureBrowser, registerBrowserInitScript, browserCdp, browserCdpEvents, applySessionSettings, browserDevtools, browserDevtoolsClose, browserDevtoolsShot, browserDevtoolsPanel, browserDevtoolsZoom, setGuestOwner } from "./desktop.ts";
+import { captureBrowser, registerBrowserInitScript, browserCdp, browserInput, browserCdpEvents, applySessionSettings, browserDevtools, browserDevtoolsClose, browserDevtoolsShot, browserDevtoolsPanel, browserDevtoolsZoom, setGuestOwner } from "./desktop.ts";
 import { runBrowserAsk, type DrivableWebview } from "./browserDrive.ts";
 import { whilePainting } from "./panePainting.ts";
 import { diagnosisScript } from "./browserObserve.ts";
@@ -447,6 +447,14 @@ export async function serveBrowserAsk(el: DrivableWebview | null, ask: BrowserAs
             default:
               return { ok: false, error: `unknown inspector action ${req.action}` };
           }
+        },
+        /* Trusted input, to the addressed tab for the same reason as the
+           relay above. A tab whose id is not known yet gets the script path,
+           and the answer says `trusted: false`. */
+        (req) => {
+          const guest = guestIdOf(el);
+          if (guest == null) return Promise.resolve({ ok: false, error: "could not work out which tab this is" });
+          return browserInput(req, guest);
         }))
     : { ok: false, error: "the browser view is not open in this window" };
   const withDiagnosis = await attachDiagnosis(el, ask.op, reply);

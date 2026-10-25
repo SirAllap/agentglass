@@ -163,7 +163,9 @@ describe("driving a page", () => {
   test("typing goes through the native setter, or a framework discards it", async () => {
     const el = fakeGuest();
     await runBrowserAsk(el, ask("type", { selector: "#q", text: "hola" }));
-    const code = el.ran[0]!;
+    // The script path: what runs when the shell's trusted keys do not arrive,
+    // and with no shell here they never do.
+    const code = el.ran.find((c) => c.includes("getOwnPropertyDescriptor")) ?? "";
     expect(code).toContain("getOwnPropertyDescriptor");
     expect(code).toContain(`new Event("input"`);
     expect(code).toContain(`"hola"`);
@@ -174,7 +176,7 @@ describe("driving a page", () => {
   test("and submits when told to", async () => {
     const el = fakeGuest();
     const r = await runBrowserAsk(el, ask("type", { selector: "#q", text: "hola", submit: true }));
-    expect(el.ran[0]).toContain("requestSubmit");
+    expect(el.ran.some((c) => c.includes("requestSubmit"))).toBe(true);
     expect((r.value as any).submitted).toBe(true);
   });
 
@@ -324,7 +326,9 @@ describe("driving a page", () => {
 
   test("a selector that matches nothing yet is looked for again until it does", async () => {
     let n = 0;
-    const el = fakeGuest((c) => (c.includes("__got") && !c.includes("data-agx-flash") && ++n < 3 ? { kind: "none" } : { kind: "ok" }));
+    // Counted on the gate's lookup, the one that arms for the trusted press:
+    // the script path's own lookup afterwards is not a retry.
+    const el = fakeGuest((c) => (c.includes("window.__agxIn = st") && ++n < 3 ? { kind: "none" } : { kind: "ok" }));
     const r = await runBrowserAsk(el, ask("click", { selector: ".save" }));
     expect(r.ok).toBe(true);
     expect(n).toBe(3);
@@ -468,7 +472,7 @@ describe("driving a page", () => {
     const el = fakeGuest(() => ({ kind: "ok", applied: "edit", prevented: false, on: "#q" }));
     await runBrowserAsk(el, ask("press", { key: "Escape" }));
     expect(el.keys, "the shell's keyboard does not reach a guest").toEqual([]);
-    const src = el.ran[0] ?? "";
+    const src = el.ran.find((c) => c.includes("KeyboardEvent")) ?? "";
     expect(src).toContain("KeyboardEvent");
     expect(src).toContain('send("keydown")');
     expect(src).toContain('send("keyup")');
@@ -595,7 +599,7 @@ describe("driving a page", () => {
   test("and the effect a synthetic key does not have is applied by hand", async () => {
     const el = fakeGuest(() => ({ kind: "ok", applied: "edit", prevented: false, on: "#q" }));
     const r = await runBrowserAsk(el, ask("press", { key: "Backspace" }));
-    const src = el.ran[0] ?? "";
+    const src = el.ran.find((c) => c.includes("KeyboardEvent")) ?? "";
     // The editing keys a form actually needs, and the input event a framework
     // listens for — a value assigned behind React's back snaps straight back.
     expect(src).toContain("deleteContentBackward");
@@ -617,7 +621,7 @@ describe("driving a page", () => {
   test("Enter carries the legacy keyCode a page may still test for", async () => {
     const el = fakeGuest(() => ({ kind: "ok", applied: "none", prevented: false, on: "input" }));
     await runBrowserAsk(el, ask("press", { key: "Enter" }));
-    const src = el.ran[0] ?? "";
+    const src = el.ran.find((c) => c.includes("KeyboardEvent")) ?? "";
     expect(src).toContain("keyCode: LEGACY[name]");
     expect(src).toContain("init.which = init.keyCode");
     expect(src).toMatch(/Enter":\s*13/);
@@ -2408,4 +2412,40 @@ describe("a page that does not load", () => {
     expect(m).toContain("does not resolve");
     expect(loadFailure("ERR_SOMETHING_NEW (-999)")).toBe("ERR_SOMETHING_NEW (-999)");
   });
+});
+
+/*
+ * Sent through the shell but not confirmed by the page — a page busy past the
+ * confirmation window, or one that stops the event before our listener — is
+ * NOT a reason to act again in the page: the trusted events already went out
+ * and will land, and a second press of "Post" is a second post.
+ */
+describe("an act the shell sent is never done again by script", () => {
+  const busy = (code: string) => {
+    if (code.includes("const st = window.__agxIn;")) return { got: 0, want: 1 };
+    if (code.includes("typeable: true")) return { kind: "ok", typeable: true, secret: false, had: true };
+    if (code.includes("return { t0, on:")) return { t0: 1, on: "#q" };
+    return { kind: "ok", t0: 1, at: { x: 10, y: 10 } };
+  };
+  const sent: unknown[] = [];
+  const input = async (req: unknown) => { sent.push(req); return { ok: true }; };
+  const cases: Array<[string, Record<string, unknown>, string]> = [
+    ["click", { selector: "#post" }, String.raw`mouse("click"`],
+    ["dblclick", { selector: "#post" }, `new MouseEvent("dblclick"`],
+    ["type", { selector: "#q", text: "hola", submit: true }, "getOwnPropertyDescriptor"],
+    ["press", { key: "Enter" }, "KeyboardEvent"],
+  ];
+  for (const [op, args, script] of cases) {
+    test(`${op}: answered trusted and unconfirmed, the script path not run`, async () => {
+      sent.length = 0;
+      const el = fakeGuest(busy);
+      (el as unknown as { isLoading: () => boolean }).isLoading = () => false;
+      const r = await runBrowserAsk(el, ask(op, args), undefined, undefined, undefined, undefined, undefined, undefined, undefined, input as never);
+      expect(sent.length).toBeGreaterThan(0);
+      expect(el.ran.some((c) => c.includes(script)), `${op} acted twice`).toBe(false);
+      expect(r.ok).toBe(true);
+      expect((r.value as { trusted?: boolean }).trusted).toBe(true);
+      expect((r.value as { confirmed?: boolean }).confirmed).toBe(false);
+    }, 8000);
+  }
 });

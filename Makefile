@@ -79,6 +79,9 @@ mobile-test: ## Install and check the phone app exactly as CI's mobile job does 
 smoke: build ## Boot the production bundle in headless Chrome — fails on a blank screen or any console error
 	trap 'kill 0' INT TERM; bun scripts/smoke.ts
 
+trusted-input: ## The acting verbs against a page that believes only isTrusted, in a window never shown (needs a display; AGX_ELECTRON=<binary>)
+	bun scripts/trusted-input.ts
+
 perf: ## Check the server still answers while it works — fails if the event loop (and so the terminal) stalls
 	trap 'kill 0' INT TERM; bun scripts/perfbudget.ts
 
@@ -259,5 +262,5 @@ desktop-open: ## Open the desktop app scoped to a project — make desktop-open 
 	@test -n "$(DIR)" || { echo "usage: make desktop-open DIR=/path/to/repo" >&2; exit 1; }
 	AGENTGLASS_PROJECT="$(DIR)" ~/.local/share/agentglass-desktop/agentglass
 
-.PHONY: help install dev server web build test ci ci-docker mobile-test smoke perf soak loadtest agx-bench lint typecheck headcheck start setup setup-undo connect connect-undo connect-opencode connect-opencode-undo demo-feed assets \
+.PHONY: help install dev server web build test ci ci-docker mobile-test smoke trusted-input perf soak loadtest agx-bench lint typecheck headcheck start setup setup-undo connect connect-undo connect-opencode connect-opencode-undo demo-feed assets \
         desktop desktop-dev desktop-dist desktop-dist-linux desktop-install desktop-update desktop-open

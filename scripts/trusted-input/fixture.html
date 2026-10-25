@@ -1,0 +1,37 @@
+<!doctype html>
+<!-- A page that believes only a person: every handler here acts on
+     event.isTrusted and nothing else, the way a site that defends against
+     bots does. A script's click, a synthetic key or a native setter leaves
+     it exactly as it was. -->
+<html><head><meta charset="utf-8"><title>trusted fixture</title></head>
+<body style="margin:0;font:14px sans-serif">
+<button id="go" style="position:absolute;left:20px;top:20px">Post</button>
+<button id="dbl" style="position:absolute;left:120px;top:20px">Twice</button>
+<span id="hov" style="position:absolute;left:220px;top:20px">Hover me</span>
+<div id="host" style="position:absolute;left:20px;top:60px"></div>
+<div id="ed" contenteditable="true" style="position:absolute;left:20px;top:110px;width:300px;height:24px;border:1px solid #888">draft</div>
+<form id="f" style="position:absolute;left:20px;top:150px">
+  <input id="who" value=""> <input id="mail" type="email" value="">
+</form>
+<iframe id="fr" style="position:absolute;left:20px;top:200px;width:200px;height:60px;border:0"
+  srcdoc="<button id=inner style='margin:10px'>Inner</button><script>inner.addEventListener('click',e=>{if(e.isTrusted)parent.seen.push('inner')})</script>"></iframe>
+<script>
+window.seen = [];
+/* Every chord the page received, so a chord the app keeps for itself shows. */
+addEventListener("keydown", (e) => { if (e.isTrusted && e.ctrlKey) seen.push("chord:" + e.key.toLowerCase()); }, true);
+const trusted = (name) => (e) => { if (e.isTrusted) seen.push(name); };
+go.addEventListener("click", trusted("go"));
+dbl.addEventListener("dblclick", trusted("dbl"));
+hov.addEventListener("mouseover", trusted("hov"));
+const root = host.attachShadow({ mode: "open" });
+root.innerHTML = '<button id="add">Add</button>';
+root.getElementById("add").addEventListener("click", trusted("add"));
+/* An editor that refuses any edit not preceded by a key a person pressed:
+   the shape of the defence a rich-text composer has. */
+window.keys = { ed: 0, who: 0, mail: 0 };
+for (const el of [ed, who, mail]) {
+  el.addEventListener("keydown", (e) => { if (e.isTrusted) keys[el.id]++; });
+  el.addEventListener("beforeinput", (e) => { if (!e.isTrusted || keys[el.id] === 0) e.preventDefault(); });
+}
+</script>
+</body></html>
