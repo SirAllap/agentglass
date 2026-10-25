@@ -18,7 +18,8 @@ describe("real input", () => {
   test("only click carries a user gesture; the point acts run plain", () => {
     const click = body('      case "click": {');
     expect(click).toContain("withFocus(el, cdp");
-    expect(click).toMatch(/\), true\)\)/);
+    // On the script path, PRESS with the gesture; the trusted press has a real one.
+    expect(click).toMatch(/\$\{PRESS\}.*, true\) as/);
     const point = body('      case "dblclick":');
     expect(point).not.toContain("withFocus(");
     expect(point).not.toMatch(/\), true\)/);
@@ -52,6 +53,48 @@ describe("real input", () => {
   test("html --clean blanks the value of a hidden or password input", async () => {
     const clean = await Bun.file(new URL("../src/lib/browserCleanHtml.ts", import.meta.url)).text();
     expect(clean).toMatch(/a\.name === "value" && \/\^\(hidden\|password\)\$\/i/);
+  });
+
+  /* Trusted first, the script path only when the page saw nothing arrive.
+     The behaviour is proven by scripts/trusted-input.ts against a page that
+     believes only isTrusted; this pins the order it depends on. */
+  test("each pointer act and each key goes through the shell before the script path", () => {
+    const before = (from: string, script: string) => {
+      const s = body(from);
+      const shell = s.indexOf("viaShell(el, input");
+      expect(shell, from).toBeGreaterThan(-1);
+      expect(s.indexOf(script), from).toBeGreaterThan(shell);
+    };
+    before('      case "click": {', "${PRESS}");
+    before('      case "dblclick":', "${dispatch} return");
+    before('      case "type": {', 'execCommand("insertText"');
+    before('      case "press": {', 'send("keydown")');
+    expect(body('      case "dblclick":')).toContain('const real = ask.op === "dblclick" || ask.op === "hover";');
+  });
+
+  test("the script path runs only when the shell sent nothing, so an act is never done twice", () => {
+    for (const from of ['      case "click": {', '      case "dblclick":', '      case "type": {', '      case "press": {']) {
+      expect(body(from)).toContain("if (via.sent)");
+      expect(body(from)).not.toContain("via.got > 0)");
+    }
+  });
+
+  test("a right-click stays in the page: a real one opens the shell's own menu", () => {
+    const point = body('      case "dblclick":');
+    expect(point).not.toMatch(/real = [^;]*rightclick/);
+  });
+
+  test("the app's focus is put back after the act, to what had it", () => {
+    const a = SRC.indexOf("function restoreHostFocus(");
+    const fn = SRC.slice(a, SRC.indexOf("\n}\n", a));
+    expect(fn).toContain("document.activeElement !== el");
+    expect(fn).toContain("b.focus(");
+    const v = SRC.indexOf("async function viaShell(");
+    const via = SRC.slice(v, SRC.indexOf("\n}\n", v));
+    // Right after the send, before the confirmation poll: while the pane holds
+    // the app's focus, the person's keys go to the page.
+    expect(via.indexOf("restoreHostFocus(el, before)")).toBeGreaterThan(-1);
+    expect(via.indexOf("restoreHostFocus(el, before)")).toBeLessThan(via.indexOf("READ_ARMED"));
   });
 
   test("the raw cdp verb still refuses Input.*", () => {

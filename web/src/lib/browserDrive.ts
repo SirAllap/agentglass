@@ -158,7 +158,9 @@ export interface DrivableWebview {
   /* `sendInputEvent` was here, and it is GONE. It sent a real key — to the
      widget that has the keyboard focus, which an embedded page never is, so
      the key landed in the app's own window and the page saw nothing. See the
-     press case for the measurement. Nothing in this file may use it again. */
+     press case for the measurement. Nothing in this file may use it again.
+     Trusted input goes through the shell's `sendInputEvent` on the guest's
+     own webContents instead, which does reach it — see `viaShell`. */
   getURL(): string;
   getTitle(): string;
   /** `userGesture` runs the script "as if by a user": the frame gets a
@@ -1670,6 +1672,134 @@ export async function withFocus<T>(
   }
 }
 
+/** A click at a point, a key or text, as the shell sends it (electron/trusted-input.js). */
+export type TrustedInputReq = { op: "click" | "dblclick" | "hover" | "key" | "text"; x?: number; y?: number; key?: string; text?: string };
+export type TrustedInput = (req: TrustedInputReq) => Promise<{ ok: boolean; error?: string }>;
+
+/*
+ * TRUSTED INPUT, and what it replaced.
+ *
+ * Every act used to be made in the page — `dispatchEvent`, `execCommand`, a
+ * native setter — and a page reads `event.isTrusted === false` off all of
+ * them. A site that defends against bots ignores such a click: measured, a
+ * "Post" button answered `clicked` and nothing happened. The shell's
+ * `sendInputEvent` on the guest is input the page cannot tell from a
+ * person's (the measurement is in electron/trusted-input.js).
+ *
+ * The page half stays here: find the element, gate it, scroll it in, work
+ * out the point — and ARM a counter for the trusted events the act should
+ * cause, so delivery is confirmed by the page instead of assumed. The
+ * script path runs only when the shell could not send at all: once a trusted
+ * event has gone out it WILL land, and acting again in the page would press
+ * "Post" twice. Sent but not confirmed answers `confirmed: false` instead.
+ */
+
+/** The centre of `e` in the TOP page's viewport, which is what the shell's
+ *  input takes: a same-origin frame adds its own offset. Clamped like PRESS.
+ *  Runs inside a `resolveOne` body, after the gate scrolled `e` in. */
+const POINT = `(() => {
+  const r = e.getBoundingClientRect();
+  const w0 = (e.ownerDocument && e.ownerDocument.defaultView) || window;
+  let x = Math.min(Math.max(r.left + r.width / 2, 0), (w0.innerWidth || innerWidth) - 1);
+  let y = Math.min(Math.max(r.top + r.height / 2, 0), (w0.innerHeight || innerHeight) - 1);
+  for (let w = w0; w.frameElement; w = w.parent) {
+    const f = w.frameElement, b = f.getBoundingClientRect();
+    x += b.left + f.clientLeft; y += b.top + f.clientTop;
+  }
+  /* A frame scrolled half out of the top page puts its point outside it. */
+  return { x: Math.min(Math.max(x, 0), innerWidth - 1), y: Math.min(Math.max(y, 0), innerHeight - 1) };
+})()`;
+
+/** Counts the next `n` TRUSTED `type` events in `e`'s window. One at a time:
+ *  arming again replaces the last. Runs inside a `resolveOne` body. */
+const arm = (type: string, n: number | string) => `(() => {
+  if (window.__agxIn && window.__agxIn.off) window.__agxIn.off();
+  const w = (e.ownerDocument && e.ownerDocument.defaultView) || window;
+  const st = { want: ${n}, got: 0, first: null, off: () => {} };
+  window.__agxIn = st;
+  /* A window that takes no listeners counts nothing, so nothing is confirmed. */
+  if (typeof w.addEventListener !== "function") return;
+  const on = (ev) => { if (!ev.isTrusted) return; if (!st.first) st.first = ev; if (++st.got >= st.want) st.off(); };
+  st.off = () => w.removeEventListener(${JSON.stringify(type)}, on, true);
+  w.addEventListener(${JSON.stringify(type)}, on, true);
+})()`;
+
+const READ_ARMED = `(() => {
+  const st = window.__agxIn;
+  if (!st) return { gone: true };
+  return { got: st.got, want: st.want, prevented: !!(st.first && st.first.defaultPrevented) };
+})()`;
+const DISARM = `(() => { if (window.__agxIn && window.__agxIn.off) window.__agxIn.off(); window.__agxIn = undefined; })()`;
+
+/**
+ * Sends `req` through the shell and waits for the armed counter. `trusted` is
+ * what the page saw, not what was sent: a page that went away under the act
+ * (a click that navigated) counts, because the act is what took it away.
+ * `got` is how many arrived, so a caller never repeats an act half of which
+ * already landed.
+ */
+async function viaShell(
+  el: DrivableWebview, input: TrustedInput, reqs: TrustedInputReq | TrustedInputReq[],
+): Promise<{ trusted: boolean; sent: boolean; got: number; prevented?: boolean; error?: string }> {
+  const before = typeof document === "undefined" ? null : document.activeElement;
+  const list = Array.isArray(reqs) ? reqs : [reqs];
+  let sent: { ok: boolean; error?: string } = { ok: false, error: "nothing to send" };
+  let any = false;
+  for (const req of list) {
+    sent = await input(req).catch((err: unknown) => ({ ok: false, error: String(err) }));
+    if (!sent.ok) break;
+    any = true;
+  }
+  /* Now, not after the confirmation poll: while the <webview> holds the app's
+     focus, what the person types in the app goes to the page. */
+  restoreHostFocus(el, before);
+  type Armed = { gone?: boolean; got?: number; want?: number; prevented?: boolean };
+  let seen: Armed | null = null;
+  if (sent.ok) {
+    const until = Date.now() + 1500 + 5 * list.reduce((n, r) => n + [...String(r.text ?? "")].length, 0);
+    for (;;) {
+      /* Bounded: Electron holds a script until a loading page stops, and a
+         click that navigated to one that never does would hold the act with
+         it. Still loading at the bound means the act took the page away. */
+      const read = await Promise.race([
+        el.executeJavaScript(READ_ARMED).catch(() => ({ gone: true })) as Promise<Armed | null>,
+        new Promise<"late">((r) => setTimeout(() => r("late"), Math.max(50, until - Date.now()))),
+      ]);
+      if (read === "late") { seen = el.isLoading?.() !== false ? { gone: true } : seen; break; }
+      seen = read;
+      if (!seen || seen.gone || (seen.got ?? 0) >= (seen.want ?? 1) || Date.now() > until) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  }
+  /* Not awaited, for the same reason: on a page still loading it would wait. */
+  void el.executeJavaScript(DISARM).catch(() => {});
+  const got = seen?.gone ? 1 : seen?.got ?? 0;
+  return { trusted: sent.ok && got > 0, sent: any, got, prevented: seen?.prevented, ...(sent.ok ? {} : { error: (sent as { error?: string }).error }) };
+}
+
+/** Sent through the shell but no event confirmed by the page: said, never retried. */
+const unconfirmed = (via: { got: number }) => (via.got > 0 ? {} : { confirmed: false });
+
+/**
+ * A real press focuses what it lands on, and in the APP that is the <webview>
+ * element: measured, an input the person was typing into in the app's own
+ * window lost the focus to the pane on the first trusted click. So it is put
+ * back — to what had it, or to nothing if nothing did — unless the pane had
+ * it already, which means the person is in this tab and nothing was taken.
+ * Twice, because the app hears about the move a moment after the page does.
+ */
+function restoreHostFocus(el: object, before: Element | null): void {
+  if (typeof document === "undefined" || before === el) return;
+  const put = () => {
+    if (document.activeElement !== el) return;
+    const b = before as HTMLElement | null;
+    if (b && b !== document.body && b.isConnected && typeof b.focus === "function") b.focus({ preventScroll: true });
+    else (el as { blur?: () => void }).blur?.();
+  };
+  put();
+  setTimeout(put, 60);
+}
+
 /**
  * `handoff`: the page, given to the person for what an agent must not do — a
  * CAPTCHA, a 2FA code, a consent.
@@ -2360,6 +2490,10 @@ async function runVerb(
   inspector: (req: { action: string; panel?: string; level?: number }) =>
     Promise<{ ok: boolean; png?: string; panel?: string; level?: number; via?: string; error?: string }> =
     async () => ({ ok: false, error: "this shell has no inspector" }),
+  /** Trusted input to this tab, through the shell: what a page sees with
+   *  `isTrusted` true. Injected like the rest; without it every act takes the
+   *  script path and says `trusted: false`. */
+  input: TrustedInput = async () => ({ ok: false, error: "this shell cannot send input to a page" }),
 ): Promise<{ ok: boolean; value?: unknown; error?: string }> {
   /* Two spellings of one argument. `sel` is the parsed locator ONE looks up
      (an id, a locator or CSS); `css` is the CSS an id stands for, for the few
@@ -2774,14 +2908,27 @@ async function runVerb(
         // WHAT is wrong rather than landing on the wrong thing in silence.
         const before = el.getURL();
         const watch = watchNavigation(el);
-        const hit = await withFocus(el, cdp, () => untilFound(() => el.executeJavaScript(resolveOne(sel,
-          `return (${actionable()}).then((r) => {
-             if (!r.ok) return { kind: "blocked", reason: r.reason };
-             const t0 = ${MUTATIONS_ON};
-             ${PRESS};
-             return { kind: "ok", t0 };
-           });`, false, true,
-        ), true))).catch((err: unknown) => { watch.dispose(); throw err; }) as { kind: string; reason?: string; t0?: number } | boolean;
+        /* Trusted first: the gate, then a real press at the element's centre
+           through the shell, confirmed by the pointerdown the page receives.
+           Only when the shell could not send does PRESS run in the page —
+           with a user gesture, as before — and the answer says
+           `trusted: false`; sent and unconfirmed is never pressed twice. */
+        const hit = await withFocus(el, cdp, async () => {
+          const found = await untilFound(() => el.executeJavaScript(resolveOne(sel,
+            `return (${actionable()}).then((r) => {
+               if (!r.ok) return { kind: "blocked", reason: r.reason };
+               const t0 = ${MUTATIONS_ON};
+               ${arm("pointerdown", 1)};
+               return { kind: "ok", t0, at: ${POINT} };
+             });`, false, true,
+          ))) as { kind: string; reason?: string; t0?: number; at?: { x: number; y: number } } | boolean;
+          if (!found || (found as { kind: string }).kind !== "ok") return found;
+          const f = found as { kind: string; t0?: number; at: { x: number; y: number } };
+          const via = await viaShell(el, input, { op: "click", ...f.at });
+          if (via.sent) return { ...f, trusted: true, ...unconfirmed(via) };
+          const pressed = await el.executeJavaScript(resolveOne(sel, `${PRESS}; return { kind: "ok" };`, false, true), true) as { kind: string } | boolean;
+          return pressed && (pressed as { kind: string }).kind === "ok" ? { ...f, trusted: false } : pressed;
+        }).catch((err: unknown) => { watch.dispose(); throw err; }) as { kind: string; reason?: string; t0?: number; trusted?: boolean } | boolean;
         if (!hit || (hit as { kind: string }).kind !== "ok") {
           watch.dispose();
           return { ok: false, error: actionError(String(ask.args.selector ?? ""), hit as never) };
@@ -2794,7 +2941,7 @@ async function runVerb(
         // `settleAfterAct` for how long "after" is.
         const t0 = Number((hit as { t0?: number }).t0) || Date.now();
         const effect = await settleAfterAct(el, watch, before, t0);
-        return { ok: true, value: { clicked: ask.args.selector, url: el.getURL(), title: el.getTitle(), effect } };
+        return { ok: true, value: { clicked: ask.args.selector, trusted: (hit as { trusted?: boolean }).trusted === true, ...((hit as { confirmed?: boolean }).confirmed === false ? { confirmed: false } : {}), url: el.getURL(), title: el.getTitle(), effect } };
       }
 
       case "dblclick":
@@ -2821,21 +2968,37 @@ async function runVerb(
                  if (set && set.set) set.set.call(e, wantOn); else e.checked = wantOn;
                  e.dispatchEvent(new Event("input", { bubbles: true }));
                  e.dispatchEvent(new Event("change", { bubbles: true }));`;
-        /* No user activation and no emulated focus here: a hover, a right-click or a
-           checkbox must not be able to open a window or write the clipboard, which
-           a real one never grants a page. `click` alone carries a gesture. */
+        /* No user activation and no emulated focus on the SCRIPT path: a hover, a
+           right-click or a checkbox must not be able to open a window or write the
+           clipboard. Through the shell a double-click is a real one and does grant
+           activation, as a person's would (so do `type` and `press`); a hover
+           does not, because a mouse move never does. */
+        /* A double-click and a hover go through the shell first, like
+           `click`: trusted, and confirmed by the event the page receives. A
+           right-click does not — a real one opens the shell's own context
+           menu, a window an agent has no business opening — and `check` sets
+           a state rather than pressing a point. */
+        const real = ask.op === "dblclick" || ask.op === "hover";
         const hit = await untilFound(() => el.executeJavaScript(resolveOne(sel,
           `return (${actionable()}).then((r) => {
              if (!r.ok) return { kind: "blocked", reason: r.reason };
-             ${dispatch}
+             ${real ? arm(ask.op === "hover" ? "mousemove" : "dblclick", 1) : dispatch}
              const b = e.getBoundingClientRect();
-             return { kind: "ok", x: b.x + b.width / 2, y: b.y + b.height / 2 };
+             return { kind: "ok", x: b.x + b.width / 2, y: b.y + b.height / 2, at: ${POINT} };
            });`, false, true,
-        ))) as { kind: string; reason?: string; x?: number; y?: number } | boolean;
+        ))) as { kind: string; reason?: string; x?: number; y?: number; at?: { x: number; y: number } } | boolean;
         if (!hit || (hit as { kind: string }).kind !== "ok") {
           return { ok: false, error: actionError(String(ask.args.selector ?? ""), hit as never) };
         }
-        /* A hover is also a REAL pointer move, through the debugger: it is the
+        if (real) {
+          const via = await viaShell(el, input, { op: ask.op as "dblclick" | "hover", ...(hit as { at: { x: number; y: number } }).at });
+          if (via.sent) return { ok: true, value: { [ask.op]: ask.args.selector, trusted: true, ...unconfirmed(via) } };
+          const done = await el.executeJavaScript(resolveOne(sel, `${dispatch} return { kind: "ok" };`, false, true)) as { kind: string } | boolean;
+          if (!done || (done as { kind: string }).kind !== "ok") {
+            return { ok: false, error: actionError(String(ask.args.selector ?? ""), done as never) };
+          }
+        }
+        /* On the script path a hover is also a REAL pointer move, through the debugger: it is the
            only route that makes :hover match and gives the page a trusted
            mousemove, which a menu that opens on hover listens for. Measured on
            a page nobody was looking at: the synthetic mouseover leaves :hover
@@ -2845,7 +3008,7 @@ async function runVerb(
           const h = hit as { x: number; y: number };
           await cdp("Input.dispatchMouseEvent", { type: "mouseMoved", x: h.x, y: h.y }).catch(() => {});
         }
-        return { ok: true, value: { [ask.op]: ask.args.selector } };
+        return { ok: true, value: { [ask.op]: ask.args.selector, trusted: false } };
       }
 
       case "focus":
@@ -2860,67 +3023,76 @@ async function runVerb(
       }
 
       case "fill": {
-        // A whole form as one call: the same native-setter path `type` uses,
-        // one field at a time, inside a single round trip instead of one per
-        // field — and a failure says WHICH field, since "some of the form
-        // filled" is not an answer an agent can act on.
+        // A whole form as one call, and a failure says WHICH field, since
+        // "some of the form filled" is not an answer an agent can act on.
+        // Each field is a `type`: trusted keys through the shell where the
+        // field takes text, the native setter where it does not (a select, a
+        // date) or where the shell's input did not arrive.
         const fields = (ask.args.fields ?? {}) as Record<string, string>;
         const pairs = Object.entries(fields).map(([s, v]) => `[${jsLit(s)}, ${locatorLit(s)}, ${jsLit(v)}]`).join(", ");
         /* Every field is found before any is written, so a field that is not
            there yet is waited for (untilFound) without typing into the ones
            before it twice. */
-        const result = await untilFound(() => el.executeJavaScript(
+        const found = await untilFound(() => el.executeJavaScript(
           `(() => {
-             const pairs = [${pairs}];
-             const filled = [], secret = [], changed = {};
              const one = ${ONE};
-             const found = [];
-             for (const [fsel, spec] of pairs) {
+             for (const [fsel, spec] of [${pairs}]) {
                const got = one(spec, false, ${readIdSeq()}, true);
                if (got.kind !== "ok") return { ...got, selector: fsel };
-               found.push(got.e);
              }
-             for (let i = 0; pairs.length > i; i++) {
-               const [fsel, , text] = pairs[i];
-               const fe = found[i];
-               fe.focus();
-               const proto = (${VALUE_PROTO})(fe);
-               const set = Object.getOwnPropertyDescriptor(proto, "value");
-               if (set && set.set) set.set.call(fe, text); else fe.value = text;
-               fe.dispatchEvent(new Event("input", { bubbles: true }));
-               fe.dispatchEvent(new Event("change", { bubbles: true }));
-               filled.push(fsel);
-               /* The same verdict type reaches, for the same reason: only this
-                  side can see that the node is a password field, and the
-                  relay redacts by what it is told here. */
-               const hush = fe.type === "password" || /(^|\\s)(current|new)-password|one-time-code/.test(fe.autocomplete || "");
-               if (hush) secret.push(fsel);
-               /* Read back: a mask, a maxlength or a framework that reverts
-                  is what an agent used to spend an observe finding out. Only
-                  a field the page changed is named, and by the KIND of
-                  change, never the value: a key typed into a plain text
-                  field is a secret this side cannot recognise. */
-               const now = String(fe.value);
+             return { kind: "ok" };
+           })()`,
+        )) as { kind: string; selector?: string; message?: string; count?: number; samples?: string[] };
+        if (found?.kind !== "ok") {
+          const badSel = found?.selector ?? "";
+          /* Nothing was written (every field is found first), so there is no
+             secret to name on a refusal. */
+          return { ok: false, error: `could not fill ${badSel} — ${selectorError(badSel, found as never)}` };
+        }
+        const filled: string[] = [], secret: string[] = [];
+        let trusted = true;
+        for (const [fsel, text] of Object.entries(fields)) {
+          const one = await runVerb(el, { ...ask, op: "type", args: { selector: fsel, text } } as BrowserAskFrame,
+            captureFromShell, revive, registerInitScript, cdp, cdpEvents, applySessionSettings, inspector, input);
+          if (!one.ok) {
+            return { ok: false, error: `could not fill ${fsel}${filled.length ? ` (after filling ${filled.join(", ")})` : ""} — ${one.error}` };
+          }
+          const v = one.value as { secretField?: boolean; trusted?: boolean };
+          filled.push(fsel);
+          /* The same verdict type reaches, for the same reason: only the page
+             side can see that the node is a password field, and the relay
+             redacts by what it is told here. */
+          if (v.secretField) secret.push(fsel);
+          if (!v.trusted) trusted = false;
+        }
+        /* Read back: a mask, a maxlength or a framework that reverts is what
+           an agent used to spend an observe finding out. Only a field the
+           page changed is named, and by the KIND of change, never the value:
+           a key typed into a plain text field is a secret this side cannot
+           recognise. */
+        const changed = await el.executeJavaScript(
+          `(() => {
+             const one = ${ONE};
+             const changed = {};
+             for (const [fsel, spec, text] of [${pairs}]) {
+               const got = one(spec, false, ${readIdSeq()}, true);
+               if (got.kind !== "ok") continue;
+               const fe = got.e;
+               const now = String("value" in fe ? fe.value : fe.textContent);
                if (now !== text) {
                  changed[fsel] = !now ? "emptied" : text.startsWith(now) ? "cut short"
                    : now.includes(text) ? "reformatted" : "replaced";
                }
              }
-             return { kind: "ok", filled, secret, changed };
+             return changed;
            })()`,
-        )) as { kind: string; selector?: string; message?: string; count?: number; samples?: string[]; filled?: string[]; secret?: string[]; changed?: Record<string, string> };
-        if (result?.kind !== "ok") {
-          const badSel = result?.selector ?? "";
-          /* Nothing was written (every field is found first), so there is no
-             secret to name on a refusal. */
-          return { ok: false, error: `could not fill ${badSel} — ${selectorError(badSel, result as never)}` };
-        }
+        ).catch(() => ({})) as Record<string, string>;
         return {
           ok: true,
           value: {
-            filled: result.filled,
-            ...(result.secret?.length ? { secretFields: result.secret } : {}),
-            ...(result.changed && Object.keys(result.changed).length ? { changedByPage: result.changed } : {}),
+            filled, trusted,
+            ...(secret.length ? { secretFields: secret } : {}),
+            ...(changed && Object.keys(changed).length ? { changedByPage: changed } : {}),
           },
         };
       }
@@ -2930,10 +3102,43 @@ async function runVerb(
            page believes it is unfocused leaves it without a caret, and the
            debugger's insertText then lands nowhere. Measured. */
         return await withFocus(el, cdp, async () => {
-          const text = jsLit(String(ask.args.text ?? ""));
+          const raw = String(ask.args.text ?? "");
+          const text = jsLit(raw);
           const submit = ask.args.submit === true;
           const before = el.getURL();
           const watch = watchNavigation(el);
+          /* Trusted first: focus the field, select what is in it, and type
+             over the selection one key at a time through the shell — the
+             same keys a person's keyboard sends, so an editor that only
+             believes trusted input (Lexical, ProseMirror) takes them. Empty
+             text is a Backspace over the selection; submit is a real Enter. */
+          const typed = await untilFound(() => el.executeJavaScript(resolveOne(sel,
+            `e.focus();
+             const secret = e.type === "password"
+               || /(^|\\s)(current|new)-password|one-time-code/.test(e.autocomplete || "");
+             const rich = e.isContentEditable && !("value" in e);
+             const typeable = rich || e.tagName === "TEXTAREA"
+               || (e.tagName === "INPUT" && /^(text|search|email|url|tel|password|number)$/.test(e.type));
+             if (!typeable) return { kind: "ok", typeable: false };
+             if (rich) { const s = window.getSelection(); if (s) s.selectAllChildren(e); }
+             else { try { e.select(); } catch (e2) { /* a type with no selection */ } }
+             const had = rich ? !!e.textContent : !!e.value;
+             ${arm("keyup", `(${[...raw].length} || (had ? 1 : 0)) + ${submit ? 1 : 0}`)};
+             return { kind: "ok", typeable: true, secret, had };`, false, true,
+          )).catch((err: unknown) => { watch.dispose(); throw err; })) as { kind: string; typeable?: boolean; secret?: boolean; had?: boolean } | boolean;
+          if (typed && (typed as { kind: string }).kind === "ok" && (typed as { typeable?: boolean }).typeable) {
+            const t = typed as { secret?: boolean; had?: boolean };
+            const keys: TrustedInputReq[] = [];
+            if (raw) keys.push({ op: "text", text: raw });
+            else if (t.had) keys.push({ op: "key", key: "Backspace" });
+            if (submit) keys.push({ op: "key", key: "Enter" });
+            const via = keys.length ? await viaShell(el, input, keys)
+              : await el.executeJavaScript(DISARM).then(() => ({ got: 1, sent: true, trusted: true }), () => ({ got: 1, sent: true, trusted: true }));
+            if (via.sent) {
+              if (submit) await settleAfterAct(el, watch, before, Date.now()); else watch.dispose();
+              return { ok: true, value: { typed: ask.args.selector, submitted: submit, trusted: true, ...unconfirmed(via), secretField: t.secret === true } };
+            }
+          }
           const hit = await untilFound(() => el.executeJavaScript(resolveOne(sel,
             `e.focus();
                /* A rich-text editor (contenteditable, no value property) has no
@@ -2987,7 +3192,7 @@ async function runVerb(
           return {
             ok: true,
             value: {
-              typed: ask.args.selector, submitted: submit,
+              typed: ask.args.selector, submitted: submit, trusted: false,
               /* Carried back so the relay redacts the argument it logged. The
                  value itself never crosses back — only the fact about it. */
               secretField: (hit as { secret?: boolean }).secret === true,
@@ -4726,9 +4931,44 @@ async function runVerb(
          * move a caret or delete a character, in any browser, by design. A
          * page that calls preventDefault is obeyed: `prevented` says so, and
          * nothing is applied.
+         *
+         * THAT WAS THE FALLBACK, and still is. A key now goes first through
+         * the shell's `sendInputEvent` on this guest, which is not the
+         * DevTools route measured above: it reaches the guest's focused
+         * element whatever holds the app's focus, trusted, and the browser
+         * applies the editing itself — Ctrl+A then Backspace empties a
+         * contenteditable, which the hand-applied path leaves to the page.
+         * Confirmed by the keydown the page receives. Only when the shell
+         * could not send does the script path below run and say
+         * `trusted: false`; a key sent and unconfirmed is not pressed again.
          */
         const before = el.getURL();
         const watch = watchNavigation(el);
+        const armed = await el.executeJavaScript(`(() => {
+          let e = document.activeElement || document.body;
+          for (;;) {
+            const inner = e.shadowRoot && e.shadowRoot.activeElement
+              || (e.contentDocument && e.contentDocument.activeElement);
+            if (!inner || inner === e) break;
+            e = inner;
+          }
+          const t0 = ${MUTATIONS_ON};
+          ${arm("keydown", 1)};
+          return { t0, on: e.id ? "#" + e.id : (e.tagName || "").toLowerCase() };
+        })()`).catch(() => null) as { t0?: number; on?: string } | null;
+        if (armed) {
+          const via = await viaShell(el, input, { op: "key", key });
+          if (via.sent) {
+            const effect = await settleAfterAct(el, watch, before, Number(armed.t0) || Date.now());
+            return {
+              ok: true,
+              value: {
+                pressed: key, on: armed.on, applied: "native", prevented: !!via.prevented, trusted: true, ...unconfirmed(via),
+                url: el.getURL(), title: el.getTitle(), effect,
+              },
+            };
+          }
+        }
         const r = await el.executeJavaScript(`(() => {
           const t0 = ${MUTATIONS_ON};
           const spec = ${jsLit(key)};
@@ -4846,7 +5086,7 @@ async function runVerb(
         return {
           ok: true,
           value: {
-            pressed: key, on: r?.on, applied: r?.applied, prevented: !!r?.prevented,
+            pressed: key, on: r?.on, applied: r?.applied, prevented: !!r?.prevented, trusted: false,
             url: el.getURL(), title: el.getTitle(), effect,
           },
         };

@@ -324,6 +324,10 @@ contextBridge.exposeInMainWorld("agentglass", {
      arrived since the last drain instead of sending a command. */
   /** @param {string} method @param {unknown} [params] @param {number} [guestId] */
   cdp: (method, params, guestId) => ipcRenderer.invoke("ag:browserCdp", { method, params, guestId }),
+  /** Trusted input to one tab — a click at a point, a key, text. See
+   *  trusted-input.js. `{ ok, sent?, error? }`.
+   *  @param {{ op: string, x?: number, y?: number, key?: string, text?: string }} req @param {number} guestId */
+  browserInput: (req, guestId) => ipcRenderer.invoke("ag:browserInput", { ...req, guestId }),
   /* The PERSON's zoom: `webContents.setZoomFactor` in the main process, which
      scales the page inside the box it has. Not the agent's `zoom` verb, which
      emulates a viewport — see the note on the handler. Omit `factor` to read. */

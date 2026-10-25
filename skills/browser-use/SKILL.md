@@ -226,14 +226,25 @@ value, and each call runs one tool.
 
 ## The things worth knowing before you start
 
-Acts are as close to a person as a page can tell without lying. `click`
-runs with a user activation and the page believing it has focus for the length
-of the act, so a clipboard write or a popup a click is allowed to make works.
-That is a real grant: a hostile page can use it to write the person's clipboard
-or open a window, so click only what the task needs. `hover`, `dblclick`,
-`rightclick` and `check` carry no activation. `hover` also moves a real pointer,
-so `:hover` matches. Events you cause from a script are still `isTrusted:
-false`; nothing here fakes that. `type` reaches rich editors (contenteditable).
+Acts are real input. `click`, `dblclick`, `hover`, `type`, `press` and `fill`
+reach the page as a person's mouse and keyboard would — `event.isTrusted` is
+true — so a site that ignores scripted clicks (a composer's "Post", a button
+in a shadow root, an editor built on Lexical) takes them. It works on a tab
+nobody is looking at, and the person's focus in the app stays where it was.
+The answer says `"trusted": true`; `"trusted": false` means the shell could
+not deliver it and the act ran as a script in the page instead, which such a
+site may ignore. `"confirmed": false` next to `"trusted": true` means the
+input was sent but the page did not show it arriving in time (a busy page):
+`observe` before repeating it, because it is never repeated for you — a second
+"Post" is worse than a slow one. A click, a double-click, a typed key and a
+press are real user activation, so a clipboard write or a popup the page is
+allowed to make works — a hostile page can use that too, so act only on what
+the task needs. A chord the app owns (`Control+w`, `Control+t`, `Control+l`,
+Escape) reaches the page and nothing else: it never closes, opens or focuses
+anything in the app. `press Control+a` then `press Backspace` empties a
+rich editor; `type` replaces what a field holds, key by key.
+`rightclick`, `check` and `drag` still run in the page (`isTrusted: false`): a
+real right-click would open the app's own menu.
 `handoff` ends only on the person's own click on its Done button, on `--until`
 (a selector, or a path judged on the URL's pathname, never its query), or on a
 navigation (`navigated`); a page cannot end it by itself.

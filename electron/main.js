@@ -32,6 +32,7 @@ const {
   BROWSER_PARTITION, isBrowserPartition, ephemeralPartition, safeGuestUrl, applyGuestGuard, mayAttachOnMainWindow, permissionVerdict, permissionPrompt, uniqueSavePath,
 } = require("./guest-guard.js");
 const { startEgressProxy, literalRefusal, EGRESS_ENV } = require("./egress-guard.js");
+const { sendInput, isAgentInput } = require("./trusted-input.js");
 /* S9: the honest "an agent is driving this" header — see identify-header.js
    for the decision and which origins count. */
 const { IDENTIFY_HEADER, shouldIdentify, createOwnerBook } = require("./identify-header.js");
@@ -2278,6 +2279,19 @@ function registerIpc(win) {
     }
   });
 
+  /* Trusted input for the acting verbs: a click or a key the page sees with
+     isTrusted true, on the tab the caller named. The why, and what was
+     measured, is in trusted-input.js. Only a guest we know is accepted — the
+     same rule, and the same reason, as the DevTools relay below. */
+  ipcMain.handle("ag:browserInput", async (_e, req) => {
+    /* The app's window or a lane's: a lane drives its own hidden tab. */
+    if (_e.sender !== win.webContents && !isLaneHost(_e.sender)) return { ok: false, error: "only the app's own window sends input" };
+    const wanted = Number(req && req.guestId);
+    const guest = Number.isFinite(wanted) && wanted > 0 ? browserGuestById(wanted) : null;
+    if (!guest || guest.isDestroyed()) return { ok: false, error: "that tab is not a browser pane in this window" };
+    try { return sendInput(guest, req); } catch (err) { return { ok: false, error: err instanceof Error ? err.message : String(err) }; }
+  });
+
   ipcMain.handle("ag:browserCdp", async (_e, req) => {
     /*
      * THE TAB THE CALLER NAMED, not whichever one is in front.
@@ -3712,6 +3726,9 @@ function guardWebviews(win, opts = {}) {
     });
     guest.on("before-input-event", (event, input) => {
       if (input.type !== "keyDown") return;
+      /* An agent's key is the PAGE's: none of the chords below — closing a
+         tab, opening one, taking the app's focus — is the agent's to press. */
+      if (isAgentInput(guest)) return;
       const mod = process.platform === "darwin" ? input.meta : input.control;
       // The keyboard half of the same thing. Kept with the zoom rather than
       // with the chords below: these are not forwarded to the app, they are

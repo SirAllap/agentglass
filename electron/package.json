@@ -43,6 +43,7 @@
       "identify-header.js",
       "guest-scrollbar.js",
       "egress-guard.js",
+      "trusted-input.js",
       "browser-menu.js",
       "power.js",
       "notify-mac.js",
