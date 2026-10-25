@@ -289,6 +289,13 @@ function noteSuppressed(socket: string[], writes: string[][]): void {
   }
 }
 
+/** A long-lived control client is a client attaching: it is held to the same
+ *  doors as a command (observe-only promises nothing this process runs changes
+ *  your tmux, and an attach changes `session_attached`). */
+export function sidecarAllowed(socket: string[]): boolean {
+  return !observeOnly() && !tmuxRefused(socket, ["list-sessions"]);
+}
+
 /** The doors every tmux command passes before it runs, in order; true is a refusal. */
 function tmuxRefused(socket: string[], args: string[]): boolean {
   /*
@@ -365,7 +372,7 @@ function tmuxRefused(socket: string[], args: string[]): boolean {
 }
 
 /** The locale floor described on `tmux` below: an existing setting is kept. */
-function tmuxEnv(): Record<string, string | undefined> {
+export function tmuxEnv(): Record<string, string | undefined> {
   return process.env.LC_ALL || process.env.LANG || process.env.LC_CTYPE
     ? process.env
     : { ...process.env, LC_ALL: "C.UTF-8" };
@@ -2453,7 +2460,15 @@ export function tmuxSockets(known?: string[]): string[][] {
  * one set of windows, and a client on any of them is a client on all of them.
  */
 export const ATTACHED_FORMAT =
-  "#{session_name}\t#{session_attached}\t#{session_group_attached}";
+  "#{session_name}\t#{session_attached}\t#{session_group_attached}\t#{session_group}";
+
+/* The tab strip's sidecar (tmuxwatch.ts) is a control client on the session a
+   real client is on, and `session_attached` counts it. Its rows come back in
+   the same answer, in the same spawn, under an empty first field (which
+   `attachedFrom` already skipped as a session without a name), and are taken
+   off the counts there. */
+const CONTROL_FORMAT = "\t#{session_name}\t#{client_control_mode}";
+export const ATTACHED_ARGV = ["list-sessions", "-F", ATTACHED_FORMAT, ";", "list-clients", "-F", CONTROL_FORMAT];
 
 /**
  * Which of those rows means "somebody is looking", split out from the call so
@@ -2465,32 +2480,49 @@ export const ATTACHED_FORMAT =
  * neither is a reason to skip the row — only a reason not to count it.
  */
 export function attachedFrom(out: string): Set<string> {
-  const live = new Set<string>();
+  const rows: { name: string; count: number; group: number; grouped: string }[] = [];
+  const control = new Map<string, number>();
   for (const line of out.split("\n")) {
-    const [name, count, group] = line.split("\t");
+    const f = line.split("\t");
+    if (f[0] === "" && f.length === 3) {
+      if (f[2] === "1") control.set(f[1], (control.get(f[1]) ?? 0) + 1);
+      continue;
+    }
+    const [name, count, group, grouped] = f;
     if (!name) continue;
-    const some = (n?: string) => !!n && n !== "0";
-    if (some(count) || some(group)) live.add(name);
+    rows.push({ name, count: Number(count) || 0, group: Number(group) || 0, grouped: grouped ?? "" });
+  }
+  // Control clients on any member of a group are clients of the whole group.
+  const inGroup = new Map<string, number>();
+  for (const r of rows) if (r.grouped) inGroup.set(r.grouped, (inGroup.get(r.grouped) ?? 0) + (control.get(r.name) ?? 0));
+  const live = new Set<string>();
+  for (const r of rows) {
+    const mine = r.count - (control.get(r.name) ?? 0);
+    const group = r.group - (r.grouped ? inGroup.get(r.grouped) ?? 0 : 0);
+    if (mine > 0 || group > 0) live.add(r.name);
   }
   return live;
 }
 
 function attachedSessions(socket: string[]): Set<string> {
-  const out = tmux(socket, ["list-sessions", "-F", ATTACHED_FORMAT]);
+  const out = tmux(socket, ATTACHED_ARGV);
   return out === null ? new Set() : attachedFrom(out);
 }
 
-const NESTED_FORMAT = "#{client_session}\t#{client_termname}";
+/* `client_control_mode` is last: a control client (the tab strip's sidecar, see
+   tmuxwatch.ts) has no tty and reports a tmux TERM, so unmarked it reads as a
+   nested client and turns a session someone works in into a popup. */
+const NESTED_FORMAT = "#{client_session}\t#{client_termname}\t#{client_control_mode}";
 
 /** `list-clients -F NESTED_FORMAT` read as the sessions shown only inside another. */
-function nestedFrom(clients: string | null): Set<string> {
+export function nestedFrom(clients: string | null): Set<string> {
   if (clients === null) return new Set();
 
   const outer = new Set<string>();
   const nested = new Set<string>();
   for (const line of clients.split("\n")) {
-    const [session, term] = line.split("\t");
-    if (!session) continue;
+    const [session, term, control] = line.split("\t");
+    if (!session || control === "1") continue;
     // `screen` as well as `tmux`: the same nesting, an older multiplexer.
     if (/^(tmux|screen)/.test(term ?? "")) nested.add(session);
     else outer.add(session);
@@ -2663,7 +2695,7 @@ export async function listPanes(known?: string[]): Promise<PaneWireRow[]> {
     const [out, clients, sessions] = await Promise.all([
       tmuxAsync(socket, ["list-panes", "-a", "-F", PANE_FORMAT]),
       tmuxAsync(socket, ["list-clients", "-F", NESTED_FORMAT]),
-      tmuxAsync(socket, ["list-sessions", "-F", ATTACHED_FORMAT]),
+      tmuxAsync(socket, ATTACHED_ARGV),
     ]);
     return paneRowsOn(socket, ours, mine, out, clients, sessions);
   });
@@ -2687,7 +2719,7 @@ export function listPanesSync(known?: string[]): PaneWireRow[] {
     if (!out) return [];
     return paneRowsOn(socket, ours, mine, out,
       tmux(socket, ["list-clients", "-F", NESTED_FORMAT]),
-      tmux(socket, ["list-sessions", "-F", ATTACHED_FORMAT]));
+      tmux(socket, ATTACHED_ARGV));
   });
 }
 

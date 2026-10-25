@@ -324,6 +324,13 @@ type Session = {
    *  redraws) shows in the tab strip without waiting out the poll. Cleared on
    *  close like the poll. */
   tmuxNudge?: ReturnType<typeof setTimeout> | null;
+  /** The control-mode sidecar that pushes this session's tab changes (see
+   *  tmuxwatch.ts), the session it is on, and the one-shot that coalesces a
+   *  burst of its notifications into a sweep. Engine only. Released on close:
+   *  a sidecar left attached keeps the session reading as attached. */
+  tmuxWatch?: SessionWatch | null;
+  tmuxWatchOn?: string | null;
+  tmuxPush?: ReturnType<typeof setTimeout> | null;
   /** The tmux client in this shell, once one is found. Survives a session
    *  switch, which is the whole reason it is kept apart from the target. */
   tmuxClient?: TmuxClient | null;
@@ -509,6 +516,7 @@ function killGroup(s: Session, sigNum: number) {
 import { findTmuxBelow } from "./procchildren.ts";
 import { recall, remember, SETTLE_MS } from "./tmuxmemory.ts";
 import { deskAttachArgv } from "./tmuxctl.ts";
+import { watchSession, QUIET_SWEEPS, SLOW_MS, HEARTBEAT_MS, type SessionWatch, type WatchEvent } from "./tmuxwatch.ts";
 import { forgetSession } from "./tmuxrestore.ts";
 import { setLocked, lockedSessions } from "./tmuxlock.ts";
 import { focusPaneAnywhere, switchClientToSession, killSessionByName, resolveClient, readFrameCached, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, healPrefix, paneCwd, selectPane, attachArgvFor, restoreWindows, endPhoneSession, phoneWindows, fitWindow, reclaimPinnedWindow, windowSize, socketPath, scrollPhonePane, leaveCopyMode, remountPhoneClient, isPhoneSession, phonesAttached, redrawClient, sessionNameOf, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
@@ -1188,6 +1196,7 @@ export function ptyOpen(ws: PtyWs) {
         session.tmux = null;
         session.tmuxPrefix = [];
         session.tmuxStatusHiddenOn = null;
+        syncWatch(null);
         sent = "";
         ctl(ws, { t: "tmux", active: false, windows: [], panes: [] });
         return;
@@ -1234,7 +1243,11 @@ export function ptyOpen(ws: PtyWs) {
     // call; multiplied by session count and the 500ms tick it is the known
     // per-open-pane cost of this sweep, for whoever measures idle CPU next.
     const frame = session.tmuxClient ? readFrameCached(session.tmuxClient, 450, notBefore) : null;
+    // Our client is gone (or tmux did not answer): a sidecar left on its
+    // session would keep the session reading as attached.
+    if (!frame) syncWatch(null);
     if (frame) {
+      syncWatch(frame.target.session);
       lastTarget = frame.target;
       // And on disk, so the next run knows where you were. Cheap enough to do
       // on every frame: it is one small write and only when the target changed.
@@ -1520,6 +1533,45 @@ export function ptyOpen(ws: PtyWs) {
      call is the very answer it is trying to replace — see readFrameCached. */
   session.tmuxSweep = () => sweep(Date.now());
   /*
+   * PUSH, on the app's own tmux. A control-mode sidecar on the session this
+   * panel is showing (tmuxwatch.ts) tells us the moment a tab moves, so the
+   * sweep runs then and the timer below drops to a 30 s net. When the sidecar
+   * is down — tmux older than 3.2, it died, the socket is gone — `alive()` is
+   * false and the timer is the 500 ms / 2 s poll it always was; going down
+   * re-arms it at once rather than at the end of a 30 s wait.
+   *
+   * Engine only: the sidecar is a client of the session, and a person's own
+   * tmux config has hooks that would run for it.
+   */
+  const PUSH_MS = 25;
+  const onWatch = (ev: WatchEvent) => {
+    if (session.closed) return;
+    if (ev === "down") {
+      if (session.tmuxPoll) clearTimeout(session.tmuxPoll);
+      quiet = 0;
+      arm();
+      return;
+    }
+    if (ev !== "change" || session.tmuxPush || session.clientHidden) return;
+    // A burst (a layout change is several notifications) is one sweep, read
+    // after the first of them.
+    const from = Date.now();
+    session.tmuxPush = setTimeout(() => {
+      session.tmuxPush = null;
+      if (!session.closed && !session.clientHidden) sweep(from);
+    }, PUSH_MS);
+  };
+  function syncWatch(name: string | null) {
+    if (!session.onEngine || name === (session.tmuxWatchOn ?? null)) return;
+    session.tmuxWatch?.release();
+    session.tmuxWatch = null;
+    session.tmuxWatchOn = null;
+    if (!name || !session.tmuxClient) return;
+    // Set even when refused, so a refusal is not asked again every tick.
+    session.tmuxWatchOn = name;
+    session.tmuxWatch = watchSession(session.tmuxClient.socket, name, onWatch);
+  }
+  /*
    * How often to look.
    *
    * Two seconds was chosen for "has tmux appeared", where being a beat late
@@ -1540,13 +1592,12 @@ export function ptyOpen(ws: PtyWs) {
    * within SLOW_MS instead of half a second. Detecting tmux arriving still uses
    * the fast rate, since nothing is known yet.
    */
-  const QUIET_SWEEPS = 10;
-  const SLOW_MS = 2000;
   let quiet = 0;
   let seen = sent;
   const arm = () => {
     if (session.closed) return;
-    const wait = quiet >= QUIET_SWEEPS && (session.tmux || session.onEngine) ? SLOW_MS : 500;
+    // With the sidecar up tmux says when a tab moved; the timer is only a net.
+    const wait = session.tmuxWatch?.alive() ? HEARTBEAT_MS : quiet >= QUIET_SWEEPS && (session.tmux || session.onEngine) ? SLOW_MS : 500;
     session.tmuxPoll = setTimeout(() => {
       if (!session.clientHidden) sweep();
       if (sent !== seen) { seen = sent; quiet = 0; } else quiet++;
@@ -2546,6 +2597,8 @@ function cleanup(ws: PtyWs, s: Session) {
   if (s.editorSocketId) { dropEditorSocket(s.editorSocketId); s.editorSocketId = null; }
   if (s.tmuxPoll) { clearTimeout(s.tmuxPoll); s.tmuxPoll = null; }
   if (s.tmuxNudge) { clearTimeout(s.tmuxNudge); s.tmuxNudge = null; }
+  if (s.tmuxPush) { clearTimeout(s.tmuxPush); s.tmuxPush = null; }
+  if (s.tmuxWatch) { s.tmuxWatch.release(); s.tmuxWatch = null; s.tmuxWatchOn = null; }
   // Give the status line back before letting go. The panel borrowed it; a
   // session left with `status off` after the panel closed looks broken in the
   // user's real terminal, and nothing there would point back at us.
