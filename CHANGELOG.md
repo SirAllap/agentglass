@@ -14,6 +14,10 @@ kept in one place.
 
 ## Released
 
+- **v0.26.0** — **The agent's clicks and typing count as a person's, and tmux tabs appear at once.**
+  - **Real input in the built-in browser.** click, double-click, hover, type, press and fill reach the page as real input, so sites that ignore scripted events work, and the agent's keys never fire the app's own shortcuts. Right-click, drag and pinch-zoom are still scripted.
+  - **Tabs without polling.** A tmux control-mode sidecar pushes window changes, so a new tab shows at once and an idle panel asks tmux 120 times an hour instead of 1800; the poll remains the fallback.
+  - **CI stability.** A browser test no longer races its own server.
 - **v0.25.0** — **Clean your disk from the app, keep secrets in the system keyring, and a phone that tells you what needs you.**
   - **Disk cleanup.** A scan lists what can go (Docker images and build cache, finished containers, worktrees, package caches, temp files, trash); it deletes only what it lists, and asks first.
   - **Secrets and plugins.** An optional system keyring for tokens and plugin keys, a Landlock layer and a seccomp filter inside the plugin box next to bwrap, and plugins that declare usage accounts.
