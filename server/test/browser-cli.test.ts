@@ -79,6 +79,30 @@ afterAll(() => {
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* fine */ }
 });
 
+/** Tell the server whether this window can drive a browser, and wait until
+ *  its count says so. The POST is an intake sink: when the server cannot place
+ *  the other end of a loopback socket in /proc (no row for it in the table it
+ *  read) it answers 401 and counts nothing. A dropped answer plus a blind sleep
+ *  left a window uncounted, or still counted after being told off, with nothing
+ *  in the failure to say so; now a registration that does not take is retried
+ *  and, failing that, named. */
+async function register(on: boolean) {
+  let seen = "";
+  for (let i = 0; i < 20; i++) {
+    const r = await fetch(base + "/browser/ready", {
+      method: "POST",
+      headers: { "content-type": "application/json", Origin: base },
+      body: JSON.stringify({ client: CLIENT, on }),
+    }).catch((e) => new Response(String(e), { status: 0 }));
+    const said = await r.text();
+    const st = await fetch(base + "/browser-use/status").then((x) => x.json()).catch(() => null) as { windows?: number } | null;
+    if (r.ok && ((st?.windows ?? 0) > 0) === on) return;
+    seen = `${r.status} ${said.slice(0, 120)} windows=${st?.windows}`;
+    await Bun.sleep(100);
+  }
+  throw new Error(`/browser/ready on=${on} never took effect: ${seen}`);
+}
+
 /** A window on the socket, answering from `answers`. Connected per test, so the
  *  "no window at all" case is a test that simply does not call this. */
 async function openWindow() {
@@ -107,21 +131,12 @@ async function openWindow() {
   });
   // A window that can drive a browser says so; the server sends asks to nobody
   // otherwise. Same call the panel makes when it mounts.
-  await fetch(base + "/browser/ready", {
-    method: "POST",
-    headers: { "content-type": "application/json", Origin: base },
-    body: JSON.stringify({ client: CLIENT, on: true }),
-  });
-  await Bun.sleep(150);
+  await register(true);
 }
 
 async function closeWindow(unregister = false) {
   if (unregister) {
-    await fetch(base + "/browser/ready", {
-      method: "POST",
-      headers: { "content-type": "application/json", Origin: base },
-      body: JSON.stringify({ client: CLIENT, on: false }),
-    }).catch(() => {});
+    await register(false).catch(() => {});
   }
   try { ws?.close(); } catch { /* fine */ }
   ws = null;
@@ -320,7 +335,8 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     asked = []; askedArgs = [];
     answers = { click: { ok: true, value: { clicked: "x", url: "u", title: "t" } } };
     const loc = 'role=button[name="Save changes"]';
-    expect((await cli("click", loc)).code).toBe(0);
+    const c = await cli("click", loc);
+    expect(c.code, c.err).toBe(0);
     expect(verbArgs()).toEqual({ selector: loc });
     asked = []; askedArgs = [];
     const d = await cli("do", "click text=Save changes");
@@ -397,14 +413,10 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     // how to open a pane and not how to open a window — stopped instead of
     // retrying, and every verb failed against a perfectly healthy app.
     await openWindow();
-    await fetch(base + "/browser/ready", {
-      method: "POST",
-      headers: { "content-type": "application/json", Origin: base },
-      body: JSON.stringify({ client: CLIENT, on: false }),
-    });
+    await register(false);
     controls = [];
     const r = await cli("read");
-    expect(r.code).toBe(1);
+    expect(r.code, r.err).toBe(1);
     expect(r.err).toContain("view is not open");
     /*
      * AND IT LEFT THE SCREEN ALONE.
@@ -437,11 +449,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
      * a hang.
      */
     await openWindow();
-    await fetch(base + "/browser/ready", {
-      method: "POST",
-      headers: { "content-type": "application/json", Origin: base },
-      body: JSON.stringify({ client: CLIENT, on: false }),
-    });
+    await register(false);
     const began = Date.now();
     const r = await cli("read");
     expect(r.code).toBe(1);
