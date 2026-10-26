@@ -28,6 +28,13 @@ using it is signed in to, and two ways to drive it:
   from the running app. Rules in
   [skills/ui-control/SKILL.md](skills/ui-control/SKILL.md).
 
+- The project's agent rules — what every agent here may do, must ask first,
+  or may never do — live in agentglass, not in any agent's memory. Read them
+  with `agentglass-ui rules list`; a rule told to you in chat is written with
+  `agentglass-ui rules set`, where a stricter one applies at once and a looser
+  one waits for the person. Every Claude Code and OpenCode session is checked
+  against them before each tool call.
+
 What to know before the first call, all of it in
 [skills/browser-use/SKILL.md](skills/browser-use/SKILL.md):
 

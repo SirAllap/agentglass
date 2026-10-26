@@ -70,6 +70,11 @@ day. Give it `assign` when its reports have been true.
 No level can push, open a pull request, comment, merge, or reach anything
 outside the machine.
 
+What the agents in the project may do is the project's rule list, not the
+chair's memory: `agentglass-ui rules list` reads it, and a rule the person
+tells the chair in chat is written with `agentglass-ui rules set` (stricter
+applies at once, looser waits for the person). See the ui-control skill.
+
 ## Asking it things
 
 ```bash
