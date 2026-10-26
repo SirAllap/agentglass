@@ -248,7 +248,7 @@ import { workspaceRoot, workspaceRoots, setWorkspaceRoot, setWorkspaceRoots, inS
 import { cloneProject, createProject } from "./projectadd.ts";
 import { budgetStatus } from "./budget.ts";
 import type { Budget } from "../../shared/types.ts";
-import { hookStatus, applyHooks, applyGate, hooksDir, hookPython, healGateCommand } from "./hooksetup.ts";
+import { hookStatus, applyHooks, applyGate, hooksDir, hookPython, healGateCommand, gateInstalled } from "./hooksetup.ts";
 import { probeAgents, probeEngines, testEngine, ROSTER } from "./agentprobe.ts";
 import { join as joinPath, resolve as resolvePath, basename } from "node:path";
 import { hostname } from "node:os";
@@ -650,6 +650,12 @@ const settingsDoor = makeDoor({
   changed: () => broadcast({ type: "settings-requests" }),
 });
 setRulesDoor(settingsDoor);
+/** gateInstalled() reads ~/.claude/settings.json; the rules check asks it on every tool call. */
+let gateSeen = { at: 0, on: false };
+const gateInstalledCached = (): boolean => {
+  if (Date.now() - gateSeen.at > 10_000) gateSeen = { at: Date.now(), on: (() => { try { return gateInstalled(); } catch { return false; } })() };
+  return gateSeen.on;
+};
 
 /** A window's own name for itself (its `hello`) to its latest socket, which is
  *  how a browser ask reaches one window instead of all of them. */
@@ -2798,6 +2804,11 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        */
       const rule = gateRuleFor(greq.tool_name, cwd);
       if (rule.kind === "deny") return json(denyByRule(greq, rule.reason));
+      // The agent rules (agentRulesStore.ts) first: a "never" is answered now, and an
+      // "ask" is held for the person even when a gate rule would let it through.
+      let ruled: ReturnType<typeof rulesCheck> | null = null;
+      try { ruled = cwd.startsWith("/") ? rulesCheck(cwd, greq.tool_name, ti) : null; } catch { ruled = null; }
+      if (ruled?.decision === "never") return json(denyByRule(greq, ruled.reason ?? "an agentglass rule says never"));
       // The one exception: an outward match made only by a generic MCP verb
       // (`create_entities` on a memory store) is released by an allow rule
       // that names that exact tool. A prefix never saw the tool it would be
@@ -2805,7 +2816,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // Written to history like a denial, unless it is the harness fetching a
       // tool's schema — no rule made that call, and it would be one row per
       // deferred tool in every session.
-      if (rule.kind === "allow" && (!out || (out.generic && rule.exact))) {
+      if (rule.kind === "allow" && ruled?.decision !== "ask" && (!out || (out.generic && rule.exact))) {
         return json(rule.meta ? { decision: "allow", reason: "" } : allowByRule(greq));
       }
       const hold = out
@@ -7906,7 +7917,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const tool = url.searchParams.get("tool") ?? "";
       if (!root.startsWith("/") || !/^[A-Za-z][A-Za-z0-9_-]{0,99}$/.test(tool)) return json({ ok: false, error: "root: an absolute path; tool: a tool name" }, 400);
       try {
-        return json({ ok: true, ...rulesCheck(root, tool, (url.searchParams.get("input") ?? "").slice(0, 8000)) });
+        // `gated`: the gate hook is installed and holds an "ask" itself, so the forwarder stays quiet on one.
+        return json({ ok: true, ...rulesCheck(root, tool, (url.searchParams.get("input") ?? "").slice(0, 8000)), gated: gateInstalledCached() });
       } catch (e) {
         // A broken store must not become a decision: the hook reads an error as "no rule".
         return json({ ok: false, decision: "unknown", error: String(e).slice(0, 200) }, 500);

@@ -120,7 +120,7 @@ export function primaryInput(input: unknown): string {
   }
   if (!v || typeof v !== "object") return typeof v === "string" ? v : "";
   const o = v as Record<string, unknown>;
-  for (const k of ["command", "file_path", "notebook_path", "path", "url", "pattern"]) {
+  for (const k of ["command", "file_path", "filePath", "notebook_path", "path", "url", "pattern"]) {
     if (typeof o[k] === "string") return o[k] as string;
   }
   return "";

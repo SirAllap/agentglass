@@ -17,6 +17,8 @@ import argparse
 import json
 import os
 import sys
+import urllib.error
+import urllib.parse
 import urllib.request
 
 DEFAULT_SERVER = os.environ.get("AGENTGLASS_SERVER", "http://127.0.0.1:4000")
@@ -71,6 +73,46 @@ def read_transcript(path):
     except OSError:
         pass
     return chat, model
+
+
+RULES_TIMEOUT = 2
+
+
+def rules_verdict(server, headers, payload):
+    """("deny"|"ask", reason) when an agentglass rule decides this call, else None.
+
+    "never" denies. "ask" asks the person in Claude Code's own prompt, unless
+    the gate hook is installed: it holds an "ask" in agentglass itself, and two
+    prompts for one call is one too many. Anything else passes. An unreachable
+    server passes too, and says so on stderr: a stopped app must not stop every
+    agent on the machine.
+    """
+    cwd = payload.get("cwd") or os.getcwd()
+    tool = payload.get("tool_name") or ""
+    if not tool or not cwd.startswith("/"):
+        return None
+    q = urllib.parse.urlencode({
+        "root": cwd,
+        "tool": tool,
+        "input": json.dumps(payload.get("tool_input") or {})[:8000],
+    })
+    try:
+        req = urllib.request.Request(server.rstrip("/") + "/agent-rules/check?" + q, headers=headers, method="GET")
+        with urllib.request.urlopen(req, timeout=RULES_TIMEOUT) as resp:
+            out = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        print(f"[agentglass] rules check answered {e.code}; this call was not checked", file=sys.stderr)
+        return None
+    except Exception as e:
+        print(f"[agentglass] rules check skipped, server unreachable ({e}); this call was not checked", file=sys.stderr)
+        return None
+    decision = out.get("decision")
+    reason = out.get("reason") or "an agentglass rule for this project"
+    if decision == "never":
+        return ("deny", reason + " Do not retry it or work around it; ask the person if it has to happen.")
+    if decision == "ask" and not out.get("gated"):
+        return ("ask", reason)
+    return None
 
 
 def main():
@@ -151,6 +193,11 @@ def main():
     token = os.environ.get("AGENTGLASS_TOKEN", "").strip()
     if token:
         headers["Authorization"] = "Bearer " + token
+    # THE AGENT RULES, before anything else is sent: a "never" the person set
+    # for this project blocks the call here, in a session agentglass never
+    # launched. Asked first so the block is not late behind the ingest post.
+    verdict = rules_verdict(server, headers, payload) if event_type == "PreToolUse" else None
+
     req = urllib.request.Request(
         server.rstrip("/") + "/ingest",
         data=data,
@@ -179,6 +226,13 @@ def main():
                 print(remind.strip())
         except Exception:
             pass  # a reminder that cannot be read must never cost the event it rode in on
+
+    if verdict:
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": verdict[0],
+            "permissionDecisionReason": verdict[1],
+        }}))
 
     # Pass hook input straight through so we don't interfere with the hook chain.
     sys.exit(0)
