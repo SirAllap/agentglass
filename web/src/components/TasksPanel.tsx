@@ -14,7 +14,7 @@ import { putCard } from "../lib/prCardStore.ts";
 import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { Fragment, type CSSProperties, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { BlockedIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DotIcon, IconLabel, KeyboardIcon, LockIcon, MonitorIcon, NoteIcon, PlusIcon, RefreshIcon, SearchIcon } from "../lib/glyphIcons.tsx";
+import { BlockedIcon, CheckboxIcon, CircleIcon, ClockIcon, CopyIcon, CrossIcon, DoneIcon, DotIcon, IconLabel, KeyboardIcon, LockIcon, NoteIcon, PlusIcon, RefreshIcon, SearchIcon } from "../lib/glyphIcons.tsx";
 import { pickCardPr, mergedInk, isRelated, type CardPr } from "../lib/cardPrPick.ts";
 import { CardPrChip, CardPrDetailRow, LINK_ROW } from "./CardPrChip.tsx";
 import { cardPrsOf, onCardPrs, cardPrVersion, widestCardPrChip } from "../lib/cardPrStore.ts";
@@ -65,7 +65,9 @@ import { Spinner } from "./Spinner.tsx";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { openSettings } from "../lib/openSettings.ts";
 import { useFindScope } from "../lib/findScope.ts";
-import { handoffTo, setHandoffTo, type HandoffTo } from "../lib/handoffTo.ts";
+import { useHandoffEngines, opensIn } from "../lib/handoffEngines.ts";
+import type { SendOpts } from "../lib/sendOptions.ts";
+import { PromptOptions } from "./PromptOptions.tsx";
 import { sendToTerminal, sentNote } from "../lib/sendToTerminal.ts";
 import { openPrs, openPr, prRefFromUrl } from "../lib/openPrs.ts";
 import { otherGithubLinks } from "../../../shared/githubLinks.ts";
@@ -108,7 +110,7 @@ const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%,
  * what makes putting it away possible.
  */
 const MODES: { id: StartMode; label: string; hint: string }[] = [
-  { id: "claude", label: "Worktree + Claude", hint: "Cuts the worktree and opens a tmux window with Claude in it, the prompt written and not sent" },
+  { id: "claude", label: "Worktree + terminal", hint: "Cuts the worktree and opens a tmux window with your agent in it, the prompt written and not sent" },
   { id: "shell", label: "Worktree + shell", hint: "The same worktree and window, with your shell instead of an agent" },
   { id: "worktree", label: "Just the worktree", hint: "Cuts it and points the app at it. Nothing is opened" },
   { id: "plan", label: "Plan it first", hint: "A read-only pass over the issue. The worktree is cut anyway, so the plan has somewhere to land" },
@@ -2280,12 +2282,8 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
     const cwd = rootForTask(t.list, repos, here);
     if (!cwd) { setNote({ ok: false, text: "No checkout to hand this to — no repo matches that list" }); return; }
     const text = `${t.customId || t.id} — ${t.title}`;
-    if (handoffTo() === "term") {
-      void requestTermIssue(cwd, windowName(t), text, true, false, t.title)
-        .then((done) => setNote(done.ok ? { ok: true, text: `${t.customId || t.id} handed to a pane` } : { ok: false, text: `Not handed over: ${done.error}` }));
-    } else {
-      void sendToTerminal(cwd, text, t.title.slice(0, 60)).then((done) => setNote(sentNote(done, t.customId || t.id)));
-    }
+    void requestTermIssue(cwd, windowName(t), text, true, false, t.title)
+      .then((done) => setNote(done.ok ? { ok: true, text: `${t.customId || t.id} handed to a pane` } : { ok: false, text: `Not handed over: ${done.error}` }));
   }, [repos, here]);
 
   const picked = [...tasks, ...looked].find((t) => t.id === sel) ?? null;
@@ -5046,7 +5044,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
           )}
           {onHand && (
             <MenuItem onClick={() => { onHand(t); setMenu(null); }}>
-              Hand to Claude <span style={{ color: "var(--text4)" }}>· the whole card</span>
+              Send to terminal <span style={{ color: "var(--text4)" }}>· the whole card</span>
             </MenuItem>
           )}
         </ContextMenu>
@@ -5596,8 +5594,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
   // and disown any answer still on its way.
   useEffect(() => { setWhoOpen(false); setMembers(null); setMembersBusy(false); asked.current = null; }, [t.id]);
   const [askOpen, setAskOpen] = useState(false);
-  /** Where a hand-off goes. Read once and kept, so the pills reflect it. */
-  const [to, setTo] = useState<HandoffTo>(handoffTo);
+  const engines = useHandoffEngines();
   const [copied, setCopied] = useState<"human" | "raw" | "url" | "title" | null>(null);
   /*
    * Which half of the card you are reading.
@@ -5887,9 +5884,9 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
             full scroll away. In the sticky band, so they follow the card. */}
         <div className="flex items-center gap-1.5 flex-wrap pb-1.5 mb-1.5" style={{ borderBottom: LINE }}>
         <div className="relative">
-          <button onClick={() => setAskOpen((o) => !o)} className="text-[10.5px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
+          <button onClick={() => setAskOpen((o) => !o)} title={opensIn(engines)} className="text-[10.5px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
             style={{ border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", color: "var(--warning-ink)" }}>
-            Hand to Claude ▾
+            Send to terminal ▾
           </button>
           {askOpen && (
             <div className="agx-scroll absolute left-0 top-full mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col overflow-y-auto"
@@ -5915,14 +5912,14 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                     // which of the others take a card. See namedForIt.
                     const firstOther = !namedForIt(sk, cuPrefs?.cardSkillPattern) && (i === 0 || namedForIt(shown[i - 1]!, cuPrefs?.cardSkillPattern));
                     const modes = skillModes(sk.argument_hint);
-                    const run = (mode?: string) => {
+                    const run = (mode?: string, o: SendOpts = {}) => {
                       setAskOpen(false);
                       const cwd = rootForTask(t.list, repos, here);
                       if (!cwd) { onNote("No checkout to run it in — give the board's list a project name that matches a repo"); return; }
-                      const cmd = skillCommand(sk.name, t) + (mode ? ` ${mode}` : "");
+                      const cmd = o.prompt ?? (skillCommand(sk.name, t) + (mode ? ` ${mode}` : ""));
                       // A tmux window with the agent already running it, which
                       // is the gesture the issues panel uses.
-                      void requestTermIssue(cwd, windowName(t), cmd, true, yolo, t.title)
+                      void requestTermIssue(cwd, windowName(t), cmd, true, yolo, t.title, "", "", false, o.kind ?? "", o.mode)
                         .then((done) => onNote(done.ok ? `${cmd}${yolo ? " · permissions off" : ""} — opening a window` : `Not started: ${done.error}`));
                     };
                     return (
@@ -5932,7 +5929,8 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                           style={{ color: "var(--text4)", borderTop: LINE }}>Also mention ClickUp</div>
                       )}
                       <div className="px-2.5 py-1.5 hover:bg-white/5">
-                        <button className="text-left w-full" title={sk.description} onClick={() => run()}>
+                        <div className="flex items-center gap-1">
+                        <button className="text-left flex-1 min-w-0" title={sk.description} onClick={() => run()}>
                           <div style={{ color: "var(--warning-ink)" }}>
                             /{sk.name.replace(/^\//, "")} <span style={{ color: "var(--text3)" }}>{t.customId || t.id}</span>
                           </div>
@@ -5940,6 +5938,8 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                             <div className="text-[9.5px] line-clamp-2" style={{ color: "var(--text4)" }}>{sk.description}</div>
                           )}
                         </button>
+                        <PromptOptions label={`/${sk.name.replace(/^\//, "")}`} loadPrompt={async () => skillCommand(sk.name, t)} onSend={(o) => run(undefined, o)} />
+                        </div>
                         {/* The gears the skill itself advertises. Parsed from
                             its own invocation line, so a skill that grows a
                             third mode grows a third button here for free. */}
@@ -5967,37 +5967,26 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                   Or hand it over to write your own
                 </span>
                 <span className="flex-1" />
-                {/* Where it lands. Sits with the rows it governs rather than in
-                    Settings: it is the kind of choice you change because of what
-                    you are about to do, not once a year. */}
-                {(["chat", "term"] as const).map((d) => (
-                  <button key={d} onClick={(e) => { e.stopPropagation(); setHandoffTo(d); setTo(d); }}
-                    title={d === "chat" ? "Open it in the app's chat" : "Open it in a tmux pane, like a skill"}
-                    className="text-[10px] px-1.5 py-0.5 rounded"
-                    style={to === d
-                      ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
-                      : { border: EDGE, color: "var(--text4)" }}>
-                    {d === "chat" ? <IconLabel icon={<CommentIcon size={ICON.xs} />}>chat</IconLabel> : <IconLabel icon={<MonitorIcon size={ICON.xs} />}>pane</IconLabel>}
-                  </button>
-                ))}
               </div>
-              {HANDOFFS.map((h) => (
-                <button key={h.id} className="text-left px-2.5 py-1.5 hover:bg-white/5"
-                  style={{ color: "var(--text2)" }}
-                  onClick={() => {
-                    setAskOpen(false);
-                    const cwd = rootForTask(t.list, repos, here);
-                    if (!cwd) { onNote("No checkout to hand this to"); return; }
-                    const text = h.build(t, full?.description ?? "");
-                    // The same two destinations a skill offers, through the same
-                    // two paths — nothing new is invented here.
-                    if (to === "term") { void requestTermIssue(cwd, windowName(t), text, true, yolo, t.title).then((done) => onNote(done.ok ? `${t.customId || t.id} handed to a pane` : `Not handed over: ${done.error}`)); }
-                    else { void sendToTerminal(cwd, text, t.title.slice(0, 60)).then((done) => onNote(sentNote(done, t.customId || t.id).text)); }
-                  }}>
-                  <div>{h.label}</div>
-                  <div className="text-[9.5px]" style={{ color: "var(--text4)" }}>{h.hint}</div>
-                </button>
-              ))}
+              {HANDOFFS.map((h) => {
+                const send = (o: SendOpts = {}) => {
+                  setAskOpen(false);
+                  const cwd = rootForTask(t.list, repos, here);
+                  if (!cwd) { onNote("No checkout to hand this to"); return; }
+                  const text = o.prompt ?? h.build(t, full?.description ?? "");
+                  void requestTermIssue(cwd, windowName(t), text, true, yolo, t.title, "", "", false, o.kind ?? "", o.mode)
+                    .then((done) => onNote(done.ok ? `${t.customId || t.id} handed to a pane` : `Not handed over: ${done.error}`));
+                };
+                return (
+                  <div key={h.id} className="flex items-center gap-1 pr-1 hover:bg-white/5">
+                    <button className="text-left px-2.5 py-1.5 flex-1 min-w-0" style={{ color: "var(--text2)" }} onClick={() => send()}>
+                      <div>{h.label}</div>
+                      <div className="text-[9.5px]" style={{ color: "var(--text4)" }}>{h.hint}</div>
+                    </button>
+                    <PromptOptions label={h.label} loadPrompt={async () => h.build(t, full?.description ?? "")} onSend={send} />
+                  </div>
+                );
+              })}
               {/* Applies to a skill run, which spawns an agent — not to the
                   hand-offs above, which only put text in a composer. Sticky,
                   because whoever wants it once usually wants it all afternoon,
@@ -6030,7 +6019,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
             title={t.url}>{copied === "url" ? <span className="inline-flex items-center gap-1">copied<DoneIcon size={ICON.xs} /></span> : "Copy URL"}</button>
         )}
         {/* Open and Refresh share the far right corner: Copy PROJ id / Copy
-            URL stay grouped with Hand to Claude on the left, and the spacer
+            URL stay grouped with Send to terminal on the left, and the spacer
             goes before Open rather than before Refresh, so the two rightmost
             controls travel together — refresh is always the last control on
             a toolbar (see the board's own bar, Git, Docker, Lantern). */}
@@ -7036,8 +7025,8 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
        * The quiet half of a comment's actions.
        *
        * ClickUp puts eight things behind a `…` on every comment; four of them
-       * are AI features we have a better answer to (the card's own Hand to
-       * Claude) and two are notification settings that belong in ClickUp. These
+       * are AI features we have a better answer to (the card's own Send to
+       * terminal) and two are notification settings that belong in ClickUp. These
        * three are the ones that do work here — and every one of them is a thing
        * he does by hand today: copying a link to a comment to paste in a PR,
        * copying its text into a prompt, and moving a triage write-up from a
@@ -8282,8 +8271,8 @@ function TaskDetail({ t, today, reminder, onCancel, writable, onToggleNote, onSh
           )}
           {onChat && (
             <button onClick={onChat} className="text-[10.5px] px-2 py-1 rounded-lg"
-              style={{ border: EDGE, color: "var(--text2)" }} title="c — the prompt waits in the composer, unsent">
-              Ask Claude
+              style={{ border: EDGE, color: "var(--text2)" }} title="c — starts your agent in a terminal with this task as its prompt">
+              Send to terminal
             </button>
           )}
         </div>

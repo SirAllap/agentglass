@@ -2087,6 +2087,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (!TERMINAL_ENABLED) return json({ error: "terminal is disabled" }, 403);
       const data: PtyWsData & { ip?: string | null; deviceId?: string | null } = {
         kind: "pty",
+        worker: presentedWorker(req),
         local: peer.source === "socket" && !!clientIp && isLoopback(clientIp) && sinkFrom === "loopback",
         deviceId: caller?.device?.id ?? null,
         root: url.searchParams.get("root") || "",

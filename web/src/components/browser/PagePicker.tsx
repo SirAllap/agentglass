@@ -165,7 +165,7 @@ export function PagePicker({ view, url, title, mode, onNote, onDone }: {
     try {
       const prompt = pageFeedbackPrompt({ url, title, intent, ask, element: picked });
       requestTermIssue(cwd, feedbackWindowName(url), prompt, true);
-      onNote(`Handed to Claude in a tmux window — "${feedbackWindowName(url)}", in ${cwd.split("/").pop()}`);
+      onNote(`Sent to a terminal window — "${feedbackWindowName(url)}", in ${cwd.split("/").pop()}`);
       onDone();
     } finally { setSending(false); }
   };
@@ -222,7 +222,7 @@ export function PagePicker({ view, url, title, mode, onNote, onDone }: {
 
         <div className="flex items-center gap-2">
           <Button size="compact" tone="primary" className="flex-1" onClick={() => void hand()} disabled={sending}>
-            <IconLabel icon={<TerminalIcon size={ICON.xs} />}>Hand it to Claude</IconLabel>
+            <IconLabel icon={<TerminalIcon size={ICON.xs} />}>Send to terminal</IconLabel>
           </Button>
           <Button size="compact" onClick={onDone}>Cancel</Button>
         </div>

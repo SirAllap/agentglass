@@ -2881,7 +2881,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const review = useSyncExternalStore(subscribeTermReview, termReview, termReview);
   useEffect(() => {
     if (!review || !socketLive) return;
-    tmuxCmd({ cmd: "review", root: review.root, number: review.number, recipe: review.recipe, card: review.card, ...(review.mode ? { mode: review.mode } : {}) });
+    tmuxCmd({ cmd: "review", root: review.root, number: review.number, recipe: review.recipe, card: review.card, ...(review.mode ? { mode: review.mode } : {}), ...(review.kind ? { kind: review.kind } : {}) });
     clearTermReview();
   }, [review, socketLive, tmuxCmd]);
 
@@ -2901,7 +2901,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     // slot is cleared here: a second press must not be blocked waiting on the
     // first one's answer.
     lastIssue.current = issue;
-    tmuxCmd({ cmd: "issue", n: issue.n, cwd: issue.cwd, name: issue.name, prompt: issue.prompt, agent: issue.agent, yolo: issue.yolo, title: issue.title, model: issue.model, effort: issue.effort, reuse: issue.reuse, kind: issue.kind });
+    tmuxCmd({ cmd: "issue", n: issue.n, cwd: issue.cwd, name: issue.name, prompt: issue.prompt, agent: issue.agent, yolo: issue.yolo, title: issue.title, model: issue.model, effort: issue.effort, reuse: issue.reuse, kind: issue.kind, ...(issue.mode ? { mode: issue.mode } : {}) });
     clearTermIssue();
   }, [issue, socketLive, tmuxCmd]);
 

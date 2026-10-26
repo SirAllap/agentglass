@@ -15,7 +15,7 @@
  * understudy, the judge), whose modes are part of what they are.
  */
 import { agentProvider } from "../../shared/agentKinds.ts";
-import { isLaunchMode, type LaunchMode } from "../../shared/launchModes.ts";
+import { isLaunchMode, LAUNCH_MODES, type LaunchMode } from "../../shared/launchModes.ts";
 import { launchDeny, launchFlagOverrides, launchMode } from "./config.ts";
 import { supportsFlag } from "./agents/launch.ts";
 
@@ -27,8 +27,12 @@ export interface LaunchPerm { mode: LaunchMode; deny: string[] }
  * global setting. The deny list is always the global one: an item can loosen
  * how often it is asked, never what it may not do.
  */
-export function launchPerm(override?: unknown, yolo?: boolean): LaunchPerm {
-  const mode = isLaunchMode(override) ? override : yolo === true ? "bypassPermissions" : launchMode();
+export function launchPerm(override?: unknown, yolo?: boolean, byAgent = false): LaunchPerm {
+  const global = launchMode();
+  let mode = isLaunchMode(override) ? override : yolo === true ? "bypassPermissions" : global;
+  // An agent asking for a looser mode than the person's setting is an escalation, the
+  // same as at the settings door: it gets the setting. Stricter is always fine.
+  if (byAgent && LAUNCH_MODES.indexOf(mode) > LAUNCH_MODES.indexOf(global)) mode = global;
   return { mode, deny: launchDeny() };
 }
 

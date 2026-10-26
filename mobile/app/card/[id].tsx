@@ -846,7 +846,7 @@ export default function CardScreen(): React.ReactNode {
           <View style={{ flexDirection: "row", gap: SPACE.sm }}>
             <Btn label="Comment" disabled={!mayComment.can} style={{ flex: 1 }} onPress={() => setCommenting(true)} />
             <Btn
-              label="Start with Claude"
+              label="Send to terminal"
               tone="primary"
               style={{ flex: 1.6 }}
               onPress={() => { setFind(""); setPicking(true); }}

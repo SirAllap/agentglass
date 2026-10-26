@@ -15,7 +15,7 @@
  * way to the whole thing on GitHub is at the bottom rather than the top.
  *
  * ── the button that matters ───────────────────────────────────────────────
- * "Hand to Claude" is why any of this exists. It does NOT post a prompt: it
+ * "Send to terminal" is why any of this exists. It does NOT post a prompt: it
  * puts `{cmd:"review", number, root, recipe}` on the terminal's socket, the
  * server looks that recipe id up in its own catalogue, builds the text, opens
  * a tmux window running the agent, and switches the pane. The socket carries an

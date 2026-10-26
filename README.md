@@ -144,7 +144,7 @@ down without each one.
 
 It is not damaged — the build is not signed yet, and Gatekeeper says that about
 anything unsigned. Once: `xattr -dr com.apple.quarantine /Applications/agentglass.app`.
-Signing and notarization are the first item on the roadmap.
+Signing and notarization are not done yet.
 </details>
 
 <details>
@@ -178,31 +178,6 @@ root names the ignored paths every worktree agentglass cuts should carry in.
 **The terminal has two keyboard tricks.** `Ctrl+Shift+Space` letters the paths,
 links, hashes and ids on a pane's screen so one key pastes one back. And
 selecting something in a pane offers to ask the agent in that pane about it.
-
-## 🗺 Roadmap
-
-Themes, not dates. The living version is the issue tracker; the
-[`help wanted`](https://github.com/SirAllap/agentglass/labels/help%20wanted)
-label is where to start.
-
-**Now**
-- Lead with a verdict: a one-line strip of what's running, what's stuck and what needs you; the Lantern already covers the rest — [#42](https://github.com/SirAllap/agentglass/issues/42)
-- Signing and notarization for the macOS build, so Gatekeeper stops calling it damaged
-- Warn when parallel agents collide on shared runtime the diff cannot see — [#118](https://github.com/SirAllap/agentglass/issues/118)
-
-**Next**
-- A gate that can hold by rule — a tool allowlist beside the spend threshold that already works — [#109](https://github.com/SirAllap/agentglass/issues/109)
-- Per-project gate policies and hook profiles — [#14](https://github.com/SirAllap/agentglass/issues/14)
-- Let an agent query the cockpit over MCP: what is running, what it costs, what is held — [#296](https://github.com/SirAllap/agentglass/issues/296)
-- Verify the Windows build on real hardware — [#231](https://github.com/SirAllap/agentglass/issues/231)
-
-**Later / exploring**
-- Review a local diff in place and send the whole review as one prompt — [#294](https://github.com/SirAllap/agentglass/issues/294)
-- An API panel to exercise the endpoints the fleet is building — [#170](https://github.com/SirAllap/agentglass/issues/170)
-- A decision log mined from transcripts — [#13](https://github.com/SirAllap/agentglass/issues/13)
-
-Shipped so far, newest first: [**CHANGELOG.md**](CHANGELOG.md) and the
-[releases](https://github.com/SirAllap/agentglass/releases).
 
 ## 💬 Community
 

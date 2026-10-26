@@ -188,7 +188,7 @@ export function MarkupLayer({ view, url, onNote, onDone }: {
         "is wrong. Find where each one is produced in the source and make the change.",
         "Explain anything you had to decide. Do not commit — leave it for me to review.",
       ].join("\n"), true);
-      onNote(`Handed to Claude in a tmux window, with the image at ${saved.path.split("/").pop()}`);
+      onNote(`Sent to a terminal window, with the image at ${saved.path.split("/").pop()}`);
       onDone();
     } catch { onNote("The markup could not be handed over"); }
     finally { setBusy(false); }
@@ -245,7 +245,7 @@ export function MarkupLayer({ view, url, onNote, onDone }: {
               title="Which checkout the agent works in" triggerMaxWidth={180} />
           )}
           <Button onClick={() => void hand()} disabled={busy || !state.shapes.length} size="compact" tone="primary">
-            <IconLabel icon={<TerminalIcon size={ICON.xs} />}>Hand it to Claude</IconLabel>
+            <IconLabel icon={<TerminalIcon size={ICON.xs} />}>Send to terminal</IconLabel>
           </Button>
           <Button onClick={() => void copy()} disabled={busy || !state.shapes.length} size="compact">
             Copy it

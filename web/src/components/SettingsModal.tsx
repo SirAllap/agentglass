@@ -539,7 +539,7 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
   /* Filed under the work rather than under the pull-request panel: these are
      prompts an agent is given, and the panel is only where the button happens
      to be. */
-  { id: "review-prompts", label: "Review prompts", group: "Library", kw: "review prompts pr pull request claude menu skill re-review reviewer wording edit", what: "What Review with Claude offers, and the words it sends.", icon: ReviewIcon },
+  { id: "review-prompts", label: "Review prompts", group: "Library", kw: "review prompts pr pull request claude menu skill re-review reviewer wording edit", what: "What the review menu offers, and the words it sends.", icon: ReviewIcon },
   { id: "saved-replies", label: "Saved replies", group: "Library", kw: "saved replies canned comment pr pull request review wording snippet template", what: "The sentences you write over and over on other people's pull requests.", icon: QuoteIcon },
   /* Filed with what you keep and reuse, last in Library: a plugin is
      someone else's code holding a scoped credential to this server — install,
@@ -3436,7 +3436,7 @@ function LaunchPermissionsCard({ open }: { open: boolean }) {
         hint="Applies to every terminal that starts an agent."
         detail={{
           summary: "What each mode does",
-          body: <>This covers Review with Claude, a hand-off, an issue, a resumed session and a Command that runs claude; a review prompt or a Command can choose its own in its editor. Ask is Claude Code's own default: it asks before a tool it has not been allowed. Auto lets it decide what is safe to run. Accept edits runs file edits without asking. Bypass runs everything without asking — a tab in another mode than your other agents holds what is sent to it until somebody answers in it.</>,
+          body: <>This covers the Review menu, a hand-off, an issue, a resumed session and a Command that runs claude; a review prompt or a Command can choose its own in its editor. Ask is Claude Code's own default: it asks before a tool it has not been allowed. Auto lets it decide what is safe to run. Accept edits runs file edits without asking. Bypass runs everything without asking — a tab in another mode than your other agents holds what is sent to it until somebody answers in it.</>,
         }}
         wide
         control={<SegControl label="Permission mode" value={mode} disabled={busy}

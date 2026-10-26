@@ -19,7 +19,9 @@
 //
 // 4. Nothing waits on the network. `gh` costs a second or more per call and the
 //    server has one thread; every read is a cached answer with its age shown.
-import { LAUNCH_MODES, LAUNCH_MODE_LABEL, type LaunchMode } from "../../../shared/launchModes.ts";
+import type { SendOpts } from "../lib/sendOptions.ts";
+import { PromptOptions } from "./PromptOptions.tsx";
+import { useHandoffEngines, opensIn, agentName } from "../lib/handoffEngines.ts";
 import { reducedMotion } from "../lib/lookPrefs.ts";
 import { LaunchModeBadge } from "./LaunchMode.tsx";
 import { withoutAuthor, authorLeftOutHint } from "../lib/reviewerPick.ts";
@@ -1653,7 +1655,7 @@ export function PrView({ active, onReviewInTerminal, jumpTo }: {
   /** An errand another panel sent us on — see lib/openPrs.ts. */
   jumpTo?: import("../lib/openPrs.ts").PrJump | null;
   /** Hand the review to the user's own tmux instead of to a one-off window. */
-  onReviewInTerminal?: (root: string, number: number, recipe?: string, card?: string, mode?: LaunchMode) => void;
+  onReviewInTerminal?: (root: string, number: number, recipe?: string, card?: string, opts?: SendOpts) => void;
 }) {
   const { ask, askText, open: askOpen, dialog } = useDialogs();
   const { askMerge, open: mergeOpen, dialog: mergeDialog } = useMergeDialog();
@@ -5153,7 +5155,7 @@ export function PrView({ active, onReviewInTerminal, jumpTo }: {
                 d={d} busy={busy || !!mergeWork} local={local} onShowLocal={showLocal} stackUi={stackUi} onOpenPr={openPr}
                 onEditTitle={doEditTitle} onDraft={() => { void field(draftPatch(d.number, !d.isDraft), () => api.prDraft(root, d.number, !d.isDraft), d.isDraft ? "Mark ready failed" : "Convert to draft failed", "draft"); }}
                 onClose={doClose} onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
-                onReviewInTerminal={onReviewInTerminal && d && !readOnly ? (recipe, mode) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "", mode) : undefined}
+                onReviewInTerminal={onReviewInTerminal && d && !readOnly ? (recipe, opts) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "", opts) : undefined}
                 condensed={condensed}
                 onLabels={doLabels} onReviewers={askReviewers} onNudge={doNudge}
                 onEditField={fieldPicker.open}
@@ -5286,7 +5288,7 @@ export function PrView({ active, onReviewInTerminal, jumpTo }: {
                           onEditRequest={() => setEditingBody(true)}
                           onToggleTask={doToggleTask}
                           onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
-                          onReviewInTerminal={onReviewInTerminal && d && !readOnly ? (recipe, mode) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "", mode) : undefined}
+                          onReviewInTerminal={onReviewInTerminal && d && !readOnly ? (recipe, opts) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "", opts) : undefined}
                           onMerge={doMerge} onClose={doClose} onAskReview={askReviewers}
                           method={mergeMethod} onMethod={setMergeMethod}
                           onUpdateBranch={doUpdateBranch}
@@ -5650,6 +5652,7 @@ function ConflictActions({ root, number, branch, base, repo, title, disabled }: 
   const [busy, setBusy] = useState<"" | "open" | "claude">("");
   const [err, setErr] = useState("");
   const [note, setNote] = useState("");
+  const engines = useHandoffEngines();
   /* Read from the engine, not remembered here: a second press used to start a
      second Claude on the same merge in the same checkout. */
   const windowName = `conflict-${number}`;
@@ -5686,7 +5689,7 @@ function ConflictActions({ root, number, branch, base, repo, title, disabled }: 
       {live ? (
         <Btn onClick={() => { void openLiveWindow(live); }} disabled={disabled} primary
           title={`Claude is already working on this merge in ${live.path.split("/").pop()}. Switch to its tab instead of starting a second one.`}>
-          <SparkleIcon size={ICON.xs} />Claude is working in {windowName} · Open tab
+          <SparkleIcon size={ICON.xs} />{agentName(engines)} is working in {windowName} · Open tab
         </Btn>
       ) : (
       <Btn onClick={async () => {
@@ -5720,8 +5723,8 @@ function ConflictActions({ root, number, branch, base, repo, title, disabled }: 
             : `Claude is on it in a tmux window — "${windowName}", in ${p.root.split("/").pop()}`);
           else setErr(`Claude was not started: ${done.error}`);
         }} disabled={disabled || !!busy} primary
-        title={`Open a tmux window in that worktree with Claude, told which side is which and which files are in conflict.`}>
-        {busy === "claude" ? "Preparing…" : <><SparkleIcon size={ICON.xs} />Hand to Claude in a terminal</>}
+        title={`${opensIn(engines)} in that worktree, told which side is which and which files are in conflict.`}>
+        {busy === "claude" ? "Preparing…" : <><SparkleIcon size={ICON.xs} />Send to terminal</>}
       </Btn>
       )}
       {/* On its own line, full width. Squeezed between the buttons it pushed
@@ -5768,7 +5771,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
   onLocalReview: (recipe?: string) => void;
   /** The terminal half of the same choice. Absent where there is no terminal —
    *  the phone — and the button then behaves as it always did. */
-  onReviewInTerminal?: (recipe?: string, mode?: LaunchMode) => void; onMerge: (method: MergeMethod) => void; onClose: () => void;
+  onReviewInTerminal?: (recipe?: string, opts?: SendOpts) => void; onMerge: (method: MergeMethod) => void; onClose: () => void;
   onRerun: () => void; onAutoMerge: () => void; onCancelAutoMerge: () => void; onDraft: () => void; onGoThreads: () => void;
   /** Take me to that review inside this panel, by the node id of its row —
    *  falling back to `url` outside when this panel has no row for it. */
@@ -6348,7 +6351,8 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
             alphabets — twice, because the first fix only reached one of
             them. */}
         <ReviewMenu d={d} canTerm={!!onReviewInTerminal}
-          onPick={(recipe, where, mode) => (where === "term" ? onReviewInTerminal?.(recipe, mode) : onLocalReview(recipe))} />
+          loadPrompt={(recipe) => api.prReviewPrompt(root, d.number, recipe, cardRef(d)?.label ?? "").then((r) => (r.ok && r.prompt ? r.prompt : null), () => null)}
+          onPick={(recipe, where, opts) => (where === "term" ? onReviewInTerminal?.(recipe, opts) : onLocalReview(recipe))} />
         <PluginPrActions number={d.number} local={local} onShowLocal={onShowLocal} root={root} head={{ sha: d.headSha, at: d.readAt }} />
         {/* The panel's own Btn, like its neighbour. A hand-rolled anchor with
             its own padding beside a Btn is two heights in a row of two. */}
@@ -6692,47 +6696,29 @@ const MenuHead = ({ children }: { children: React.ReactNode }) => (
  * one it would start in. The quiet badge says when a prompt's own mode differs
  * from the global one.
  */
-function ReviewItem({ r, ink, canTerm, close, onPick }: {
+function ReviewItem({ r, ink, canTerm, close, onPick, loadPrompt }: {
   r: ReviewRecipe; ink: string; canTerm: boolean; close: () => void;
-  onPick: (recipe: string, where: "term" | "local", mode?: LaunchMode) => void;
+  onPick: (recipe: string, where: "term" | "local", opts?: SendOpts) => void;
+  /** The prepared text of this prompt for this pull request, for "Edit prompt before sending". */
+  loadPrompt: (recipe: string) => Promise<string | null>;
 }) {
-  const [more, setMore] = useState(false);
-  const run = (where: "term" | "local", mode?: LaunchMode) => { close(); onPick(r.id, where, mode); };
-  const sub = "agx-mi w-full flex items-center gap-2 pl-6 pr-3 py-1 text-[11px] cursor-pointer";
-  // Only the row's own key press: Enter on the ⋮ inside it bubbles here too, and
-  // would run the prompt instead of opening its other ways.
+  const run = (where: "term" | "local", opts?: SendOpts) => { close(); onPick(r.id, where, opts); };
+  // Only the row's own key press: Enter on the "⋯" inside it bubbles here too, and
+  // would run the prompt instead of opening its options.
   const key = (fn: () => void) => (e: React.KeyboardEvent) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); fn(); } };
   return (
-    <>
-      <div role="menuitem" tabIndex={0}
-        onClick={() => run(canTerm ? "term" : "local")}
-        onKeyDown={key(() => run(canTerm ? "term" : "local"))}
-        title={r.skill || r.title}
-        className="agx-mi w-full flex items-center gap-2 px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: ink }}>
-        <span className="min-w-0 truncate flex-1">
-          {r.skill && <span style={{ color: "var(--primary-ink)" }}>/ </span>}
-          {r.title}
-        </span>
-        <LaunchModeBadge mode={r.permissionMode} />
-        <button onClick={(e) => { e.stopPropagation(); setMore((m) => !m); }} title="More ways to run it"
-          aria-expanded={more} aria-label="More ways to run it"
-          className="ml-auto inline-flex items-center justify-center rounded hover:bg-white/10 shrink-0"
-          style={{ width: 20, height: 20, color: "var(--text3)" }}>
-          <span className="text-[13px] leading-none">&#8942;</span>
-        </button>
-      </div>
-      {more && (
-        <div role="group" aria-label={`Ways to run ${r.title}`}>
-          {canTerm && <>
-            <div className="pl-6 pr-3 pt-1 text-[10px]" style={{ color: "var(--text4)" }}>Run with…</div>
-            {LAUNCH_MODES.map((m) => (
-              <div key={m} role="menuitem" tabIndex={0} className={sub} style={{ color: "var(--text2)" }}
-                onClick={() => run("term", m)} onKeyDown={key(() => run("term", m))}>{LAUNCH_MODE_LABEL[m]}</div>
-            ))}
-          </>}
-        </div>
-      )}
-    </>
+    <div role="menuitem" tabIndex={0}
+      onClick={() => run(canTerm ? "term" : "local")}
+      onKeyDown={key(() => run(canTerm ? "term" : "local"))}
+      title={r.skill || r.title}
+      className="agx-mi w-full flex items-center gap-2 px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: ink }}>
+      <span className="min-w-0 truncate flex-1">
+        {r.skill && <span style={{ color: "var(--primary-ink)" }}>/ </span>}
+        {r.title}
+      </span>
+      <LaunchModeBadge mode={r.permissionMode} />
+      {canTerm && <PromptOptions label={r.title} loadPrompt={() => loadPrompt(r.id)} onSend={(o) => run("term", o)} />}
+    </div>
   );
 }
 
@@ -6801,7 +6787,7 @@ const GROUP_LABEL: Record<ReviewRecipeGroup, string> = {
 const PING_RECIPE = "ready-for-review";
 
 /**
- * "Review with Claude", with the whole catalogue behind it.
+ * "Review with <engine>", with the whole catalogue behind it.
  *
  * Every prompt is always here, and the situation only decides which one is
  * printed at the top under "Suggested". That is the whole design decision: the
@@ -6813,15 +6799,18 @@ const PING_RECIPE = "ready-for-review";
  * The row runs the prompt in a terminal: a real agent in tmux you can attach to
  * and keep working in.
  */
-function ReviewMenu({ d, onPick, canTerm, primary = true }: {
+function ReviewMenu({ d, onPick, loadPrompt, canTerm, primary = true }: {
   d: PrDetail;
-  onPick: (recipe: string, where: "term" | "local", mode?: LaunchMode) => void;
+  onPick: (recipe: string, where: "term" | "local", opts?: SendOpts) => void;
+  /** The prepared text of a prompt for this pull request. */
+  loadPrompt: (recipe: string) => Promise<string | null>;
   /** False in a window with no terminal view to send it to — the row then hands
    *  the review over from here ("local") rather than doing nothing. */
   canTerm: boolean;
   primary?: boolean;
 }) {
   const recipes = useReviewRecipes();
+  const engines = useHandoffEngines();
   const suggested = useMemo(() => {
     const mine = [...d.reviews].reverse().find((r) => r.viewerDidAuthor && r.state !== "PENDING");
     const head = d.commits.length ? d.commits[d.commits.length - 1]!.oid : "";
@@ -6840,7 +6829,7 @@ function ReviewMenu({ d, onPick, canTerm, primary = true }: {
   const groups: ReviewRecipeGroup[] = ["reviewing", "focused", "mine"];
 
   return (
-    <Menu label={<><SparkleIcon size={ICON.xs} />Review with Claude<CaretIcon /></>} title="Review this pull request" primary={primary}>
+    <Menu label={<><SparkleIcon size={ICON.xs} />Review with {agentName(engines)}<CaretIcon /></>} title="Review this pull request" primary={primary}>
       {(close) => (
         <div style={{ maxHeight: "min(62vh, 520px)", overflowY: "auto" }}>
           {/* The suggestion keeps the shape the button had before: a named
@@ -6852,7 +6841,7 @@ function ReviewMenu({ d, onPick, canTerm, primary = true }: {
                   destination lines it used to be: one shape to learn, and the
                   suggestion is a prompt like the rest — it is just the one this
                   pull request calls for. */}
-              <ReviewItem r={top} ink="var(--text)" canTerm={canTerm} close={close} onPick={onPick} />
+              <ReviewItem r={top} ink="var(--text)" canTerm={canTerm} close={close} onPick={onPick} loadPrompt={loadPrompt} />
             </>
           )}
           {groups.map((g) => {
@@ -6868,7 +6857,7 @@ function ReviewMenu({ d, onPick, canTerm, primary = true }: {
                      nothing at all. And it runs in a terminal, because that is
                      where a review belongs — a real agent in tmux that survives
                      this app, which you can attach to and keep working in. */
-                  <ReviewItem key={r.id} r={r} ink="var(--text2)" canTerm={canTerm} close={close} onPick={onPick} />
+                  <ReviewItem key={r.id} r={r} ink="var(--text2)" canTerm={canTerm} close={close} onPick={onPick} loadPrompt={loadPrompt} />
                 ))}
               </Fragment>
             );
@@ -8766,7 +8755,7 @@ function Masthead({ root, repo, d, busy, local, stackUi, onOpenPr, onShowLocal, 
   localHead?: PrLocalHead | null;
   onEditTitle: () => void; onDraft: () => void; onClose: () => void; onLocalReview: (recipe?: string) => void;
   /** Absent when the workspace has no terminal to send it to. */
-  onReviewInTerminal?: (recipe?: string, mode?: LaunchMode) => void;
+  onReviewInTerminal?: (recipe?: string, opts?: SendOpts) => void;
   /** Scrolled past the top: the metadata folds away and the title stays. */
   condensed?: boolean;
   /** The typed dialog behind the overflow menu; the inline ＋ buttons use the
@@ -8909,7 +8898,8 @@ function Masthead({ root, repo, d, busy, local, stackUi, onOpenPr, onShowLocal, 
             attached in a tab beside your shells, which survives a restart of
             this app and is where the work continues after the review. */}
         <ReviewMenu d={d} canTerm={!!onReviewInTerminal}
-          onPick={(recipe, where, mode) => (where === "term" ? onReviewInTerminal?.(recipe, mode) : onLocalReview(recipe))} />
+          loadPrompt={(recipe) => api.prReviewPrompt(root, d.number, recipe, cardRef(d)?.label ?? "").then((r) => (r.ok && r.prompt ? r.prompt : null), () => null)}
+          onPick={(recipe, where, opts) => (where === "term" ? onReviewInTerminal?.(recipe, opts) : onLocalReview(recipe))} />
         <PluginPrActions number={d.number} local={local} onShowLocal={onShowLocal} root={root} head={{ sha: d.headSha, at: d.readAt }} />
         {/* Out of the overflow, because it is the most-pressed thing in it.
             "Open on GitHub" is what you reach for whenever this panel does not
@@ -12952,7 +12942,7 @@ export function Checks({ d, root, jobs, prRefs, onRerun, onRerunJobs, onAsk, bus
         {expanded && (
           <div className="flex items-center gap-1.5 flex-wrap px-2.5 pb-2 pt-0.5">
             {k.title && <span className="w-full" style={{ color: "var(--error-ink)" }}>{k.title}</span>}
-            {onAsk && <Btn onClick={() => onAsk(k)} primary small title="Check the pull request out locally and hand the failure to Claude"><SparkleIcon size={ICON.xs} />Ask Claude why</Btn>}
+            {onAsk && <Btn onClick={() => onAsk(k)} primary small title="Check the pull request out locally and send the failure to your agent in a terminal"><SparkleIcon size={ICON.xs} />Ask your agent why</Btn>}
             <Btn onClick={onRerun} disabled={busy} small pending={busyWhat === "Re-run checks"} title="Re-run every failing check on this pull request"><RefreshIcon size={ICON.xs} />Re-run failed</Btn>
             {/* GitHub offers all three, and "the whole run failed again for one
                 job" is exactly when you want the single-job one. */}
