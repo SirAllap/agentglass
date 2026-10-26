@@ -143,6 +143,30 @@ def tools_from_actions(actions):
     return tools
 
 
+_ROOT = {"type": "string", "description": 'the project\'s absolute path (default: this server\'s directory), or "*" for every project'}
+RULES_TOOLS = [
+    {"name": "ui_rules_list", "description": "The agent rules for a project: what every agent here may do (allow), must ask first (ask) or may never do (never), the base set every project shares, suggestions and the change history. A rule the person tells you in chat belongs here, never in your private memory.",
+     "inputSchema": {"type": "object", "properties": {"root": _ROOT}, "additionalProperties": False}},
+    {"name": "ui_rules_suggest", "description": "The actions first seen in a project that have no rule yet.",
+     "inputSchema": {"type": "object", "properties": {"root": _ROOT}, "additionalProperties": False}},
+    {"name": "ui_rules_set", "description": "Write a rule the person told you in chat. Stricter than what is in force applies at once; looser waits for the person on the approval card and changes nothing until they answer.",
+     "inputSchema": {"type": "object", "properties": {
+         "match": {"type": "string", "description": "a tool pattern, e.g. Bash(git push:*), Edit, mcp__orbit__deploy"},
+         "setting": {"type": "string", "enum": ["allow", "ask", "never"]},
+         "action": {"type": "string", "description": "a readable key, e.g. git.push (default: made from the pattern)"},
+         "root": _ROOT}, "required": ["match", "setting"], "additionalProperties": False}},
+]
+
+
+def run_rules(name, args):
+    root = args.get("root") if isinstance(args.get("root"), str) else os.getcwd()
+    if name == "ui_rules_set":
+        if not isinstance(args.get("match"), str) or args.get("setting") not in ("allow", "ask", "never"):
+            return _wrap({"ok": False, "error": "match: a tool pattern; setting: allow, ask or never"})
+        return _wrap(UI.rules_set(root, args["match"], args["setting"], AS, args.get("action") if isinstance(args.get("action"), str) else None))
+    return _wrap(UI.rules_list(root, only_suggested=name == "ui_rules_suggest"))
+
+
 def jira_tools(level=3):
     """The card verbs (POST /jira/door/<verb>): fixed by the server's route and not by the registry, so they are
     listed from the one table the CLI keeps, and a test holds that table equal to the server's own list of verbs.
@@ -205,6 +229,8 @@ def run(name, args):
     if isinstance(name, str) and name.startswith("ui_jira_") and name[len("ui_jira_"):] in UI.JIRA_VERBS:
         return run_jira_tool(name, args)
     given0 = dict(args) if isinstance(args, dict) else {}
+    if name in ("ui_rules_list", "ui_rules_suggest", "ui_rules_set"):
+        return run_rules(name, given0)
     # The settings verbs reach the server's settings as well as the window's (agentglass-ui does the routing).
     if name == "ui_settings_list":
         return _wrap(UI.settings_list(AS))
@@ -261,7 +287,7 @@ def handle_message(msg):
         actions, level, why = _registry()
         if why:
             return T.make_reply(msg_id, error={"code": -32603, "message": why})
-        return T.make_reply(msg_id, {"tools": tools_from_actions(actions) + jira_tools(level)})
+        return T.make_reply(msg_id, {"tools": tools_from_actions(actions) + jira_tools(level) + RULES_TOOLS})
     if method == "tools/call":
         params = msg.get("params")
         if not isinstance(params, dict):
