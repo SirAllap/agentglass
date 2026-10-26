@@ -357,7 +357,7 @@ export function Market({ installed, onInstalled, onLoaded, onSettings }: {
           Nothing installs until you choose it, and a plugin you already have is marked, not hidden.
           {/* What the server kept back has to be said, or a market past the
               cap quietly becomes a shorter market. */}
-          {state.catalogue.total > all.length && ` That page lists ${state.catalogue.total}; the first ${all.length} were read.`}
+          {state.catalogue.skipped > 0 && ` That page lists ${state.catalogue.total}; ${state.catalogue.skipped} could not be read.`}
           </span>
         </p>
       )}

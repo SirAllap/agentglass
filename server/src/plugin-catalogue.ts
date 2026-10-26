@@ -54,6 +54,8 @@ export interface Catalogue {
    *  listed more than the cap. A shelf that silently shows the first five
    *  hundred of three thousand is a shelf that lies about what is on it. */
   total: number;
+  /** Entries that were looked at and refused (or cut by the cap): `total` minus what came back. */
+  skipped: number;
 }
 
 const CONTROL_CHARS = /[\x00-\x1f\x7f]/;
@@ -77,7 +79,7 @@ function validateCataloguePlugin(raw: unknown): CataloguePlugin | null {
   if (pluginGitUrlError(url) !== null) return null;
   const ref = (src as Record<string, unknown>).ref ?? null;
   if (pluginRefError(ref) !== null) return null;
-  if (typeof p.description !== "string" || !p.description.trim() || p.description.length > MAX_TEXT) return null;
+  if (typeof p.description !== "string" || !p.description.trim()) return null; // too long is cut below, not a reason to lose the entry
   // Malformed is dropped, not ignored: ignoring it would install the entry
   // with no hash to hold it to, which is the unpinned install it asked not
   // to be.
@@ -128,7 +130,7 @@ export function validateCatalogue(raw: unknown): Catalogue | string {
   if (typeof c.owner !== "string" || !c.owner.trim() || c.owner.length > 200) return "catalogue owner must be 1-200 characters";
   if (!Array.isArray(c.plugins)) return "catalogue plugins must be an array";
   const plugins = c.plugins.slice(0, MAX_PLUGINS).map(validateCataloguePlugin).filter((p): p is CataloguePlugin => p !== null);
-  return { name: c.name.trim(), owner: c.owner.trim().slice(0, 200), plugins, total: c.plugins.length };
+  return { name: c.name.trim(), owner: c.owner.trim().slice(0, 200), plugins, total: c.plugins.length, skipped: c.plugins.length - plugins.length };
 }
 
 const FETCH_TIMEOUT_MS = 15_000;

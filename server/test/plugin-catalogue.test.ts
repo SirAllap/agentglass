@@ -58,6 +58,21 @@ describe("validateCatalogue", () => {
     expect(c.total).toBe(2);
   });
 
+  test("a description past the limit is cut and kept, and an invalid entry is counted as skipped", () => {
+    /* A real listing's description ran to 556 characters and the whole entry
+       vanished from the market, which then claimed it had read "the first 3". */
+    const long = "Keeps two logins side by side and switches between them from the usage popover. ".repeat(7).slice(0, 556);
+    const c = validateCatalogue({ ...okCatalogue, plugins: [
+      { ...okPlugin, id: "orbit.accounts", description: long },
+      { ...okPlugin, id: "orbit.broken", source: { kind: "git", url: "ftp://example.com/x", ref: "v1" } },
+    ] });
+    if (typeof c === "string") throw new Error(c);
+    expect(c.plugins.map((p) => p.id)).toEqual(["orbit.accounts"]);
+    expect(c.plugins[0]!.description).toHaveLength(500);
+    expect(c.total).toBe(2);
+    expect(c.skipped).toBe(1);
+  });
+
   test("not an object is refused", () => {
     expect(validateCatalogue(null)).toContain("object");
     expect(validateCatalogue([1, 2])).toContain("object");
