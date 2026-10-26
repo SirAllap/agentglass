@@ -146,11 +146,10 @@ const get = (base: string, route: string, root: string, cred: string) =>
 
 describe("the /git/ reads that take a root", () => {
   test("the list pulled from source is the one this was written against", () => {
-    // Twenty-nine at the time of writing. A drop means the pattern stopped
+    // Twenty-eight at the time of writing. A drop means the pattern stopped
     // matching and the tests below are testing nothing.
-    expect(ROUTES.length).toBeGreaterThanOrEqual(29);
+    expect(ROUTES.length).toBeGreaterThanOrEqual(28);
     expect(ROUTES).toContain("/git/log");
-    expect(ROUTES).toContain("/git/head");
   });
 
   test("a read key gets 403 on every one for a repo elsewhere under home", async () => {

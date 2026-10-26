@@ -57,11 +57,6 @@ describe("About: the licences are the build's own", () => {
     expect([...LICENCES].map((l) => l.name)).toEqual([...LICENCES].map((l) => l.name).sort((a, b) => a.localeCompare(b)));
   });
 
-  test("the portrait art credit stays a row of its own, whatever the card around it", () => {
-    const credits = fn(modal, "function AboutCredits(", "Turn Claude Code's event forwarder");
-    expect(credits).toContain("Portrait art by Viktor Hahn — CC BY 4.0");
-    expect(credits).toContain("https://creativecommons.org/licenses/by/4.0/");
-  });
 });
 
 describe("Data & privacy", () => {

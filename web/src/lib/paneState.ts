@@ -17,7 +17,7 @@
  * are the contract uiSnapshots.ts turns into an answer; strings that came from
  * outside it files under `untrusted`.
  */
-import type { DiskCleanReport, ViewId } from "../../../shared/types.ts";
+import type { DiskCleanReport, UsageOpens, ViewId } from "../../../shared/types.ts";
 import type { AccountsOut } from "../../../shared/pluginAccounts.ts";
 import { api } from "./api.ts";
 import { currentScale } from "./uiScale.ts";
@@ -36,7 +36,6 @@ import { orderedTaskSources, taskSourceShown, TASK_SOURCES } from "./taskSources
 import { getUnderstudy } from "./understudyStore.ts";
 import { paceConfig } from "./paceConfig.ts";
 import { usageRefreshOn } from "./usageRefreshPref.ts";
-import { chatEnginePref } from "./chatEnginePref.ts";
 import { diskWarnPct } from "./diskWarnPref.ts";
 
 // ── held by the window ──────────────────────────────────────────────────────
@@ -100,13 +99,13 @@ export function readUnderstudy(): UnderstudyData | null {
 // ── held by the server ──────────────────────────────────────────────────────
 
 export interface HooksData {
-  installed: boolean; bundled: boolean; gate: boolean; gateBundled: boolean; python: string; settingsPath: string; engine: string;
+  installed: boolean; bundled: boolean; gate: boolean; gateBundled: boolean; python: string; settingsPath: string;
 }
 export async function readHooks(): Promise<HooksData> {
   const h = await api.hooksStatus();
   return {
     installed: h.installed, bundled: h.bundled, gate: h.gate, gateBundled: h.gateBundled,
-    python: h.python, settingsPath: h.settingsPath, engine: String(chatEnginePref() ?? "default"),
+    python: h.python, settingsPath: h.settingsPath,
   };
 }
 
@@ -211,6 +210,9 @@ export const readDiskClean = (): Promise<DiskCleanReport> => api.machineDiskClea
 
 /** The accounts a plugin says each provider has (GET /usage/accounts): the same answer the usage popover draws chips from. */
 export const readUsageAccounts = (): Promise<AccountsOut[]> => api.usageAccounts().then((r) => r.providers);
+
+/** The local count of what gets opened (GET /usage/opens): the same answer the About page's table draws. */
+export const readUsageOpens = (): Promise<UsageOpens> => api.usageOpens();
 
 export interface AboutData {
   version: string; commit: string; stamp: string; builtAt: string; baseTag: string; distance: number; dirty: boolean; dirtyCount: number;

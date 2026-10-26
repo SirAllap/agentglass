@@ -70,8 +70,6 @@ describe("nothing adds up token classes by hand", () => {
      */
     const derive = readFileSync(join(SRC, "lib/derive.ts"), "utf8");
     expect(derive).toContain("e.input_tokens + e.cache_read_tokens + e.cache_creation_tokens");
-    const chat = readFileSync(join(SRC, "lib/chatStore.ts"), "utf8");
-    expect(chat).toMatch(/contextTokens/);
   });
 });
 

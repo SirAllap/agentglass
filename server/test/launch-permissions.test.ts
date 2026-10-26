@@ -133,12 +133,11 @@ function callAt(text: string, at: number): string {
 const OWN_FLAGS: Record<string, string> = {
   "launchperm.ts": "the helper",
   "agentops.ts": "the list of flags a caller may NOT pass",
-  "agents/claudecode.ts": "the chat pane engine: the composer picks its mode",
-  "chat.ts": "the chat's `claude -p`: the composer picks its mode",
+  "agents/claudecode.ts": "the pane engine: the caller picks its mode",
   "agents/headless.ts": "an unattended one-shot with no terminal",
   "understudy-judge.ts": "an unattended one-shot with no terminal",
   "index.ts": "runAgentIn, an unattended `claude -p` with no terminal",
-  "antigravity.ts": "another vendor's chat engine",
+  "antigravity.ts": "another vendor's engine",
 };
 
 /** Files that resolve an agent binary, and how each one launches it. */
@@ -147,8 +146,7 @@ const LOOKS_UP_A_BIN: Record<string, string> = {
   "terminal.ts": "every terminal path: agentArgv or launchFlags",
   "agentops.ts": "named agents: namedAgentArgv",
   "tmuxrestore.ts": "replays a saved launch after a reboot, flags as they were",
-  "agents/claudecode.ts": "the chat pane engine",
-  "chat.ts": "the chat",
+  "agents/claudecode.ts": "the pane engine",
   "understudy-judge.ts": "unattended one-shot",
   "walkthrough.ts": "unattended one-shot",
   "index.ts": "runAgentIn (one-shot) and a list of what is installed",

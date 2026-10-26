@@ -12,14 +12,12 @@
  * disagree because there is one table.
  *
  * ── one table for every place that says "which agent" ────────────────────
- * It used to be four: this menu, the chat panel's roster in
- * web/src/lib/agents.ts, the requirements panel's ROSTER in
+ * It used to be several: this menu, the requirements panel's ROSTER in
  * server/src/agentprobe.ts, and a run leg's SPELLINGS in
  * server/src/agents/launch.ts. They disagreed — the menu had OpenCode and not
- * Antigravity, the roster the other way round, the chat panel neither Gemini
- * nor OpenCode — and adding a CLI meant finding all four. Now a provider is one
- * row, and each of those places is a facet of it: `tab` for this menu,
- * `probe` for the roster, `run` for a run's legs, `chat` for the chat panel.
+ * Antigravity, the roster the other way round — and adding a CLI meant finding
+ * all of them. Now a provider is one row, and each of those places is a facet
+ * of it: `tab` for this menu, `probe` for the roster, `run` for a run's legs.
  * A row without a facet is simply not offered there, which is the same
  * membership each list had before.
  *
@@ -106,19 +104,6 @@ export interface ProbeFacet {
   match: string;
   install: string;
   connects: string;
-}
-
-/** Everything that differs between the CLIs the chat panel drives — the
- *  comments on each field are on `AgentSpec` in web/src/lib/agents.ts. */
-export interface ChatFacet {
-  label: string;
-  defaultModel: string;
-  defaultMode: string;
-  bypassMode: string;
-  canAttach: boolean;
-  hasTranscript: boolean;
-  hasEffort: boolean;
-  canPane: boolean;
 }
 
 /**
@@ -274,7 +259,6 @@ export interface Provider extends AgentKind {
   lock?: LockSpelling;
   probe?: ProbeFacet;
   run?: RunSpelling;
-  chat?: ChatFacet;
   version?: VersionFacet;
   account?: AccountFacet;
   headless?: HeadlessFacet;
@@ -324,12 +308,6 @@ export const AGENT_PROVIDERS: Provider[] = [
     envelope: { via: "settings-flag" },
     // chatpane.ts builds Claude's NEEDS_YOU_RE and RUNNING_RE from these two.
     screen: { needsYou: "Esc to cancel|Enter to confirm|to use this session only", running: "esc to interrupt" },
-    chat: {
-      label: "Claude",
-      defaultModel: "claude-opus-5", defaultMode: "default",
-      bypassMode: "bypassPermissions", canAttach: true, hasTranscript: true,
-      hasEffort: true, canPane: true,
-    },
   },
   {
     // Google's agentic CLI, and a separate product from the Gemini CLI below —
@@ -338,7 +316,7 @@ export const AGENT_PROVIDERS: Provider[] = [
     // the other. Not on the tab menu: nothing has launched it in a pane yet.
     id: "antigravity",
     title: "Antigravity",
-    what: "Google's agentic CLI, driven by the chat panel.",
+    what: "Google's agentic CLI.",
     bin: "agy",
     mode: "argv",
     tab: false,
@@ -350,7 +328,7 @@ export const AGENT_PROVIDERS: Provider[] = [
       configPath: "",
       match: "antigravity",
       install: "https://antigravity.google/docs/cli",
-      connects: "the chat panel, which turns its own turns into events",
+      connects: "nothing: it exports no hooks or telemetry to connect",
     },
     // antigravity.ts:antigravityArgs, same spelling as Claude's by that CLI's
     // own choice. Its `-p` is the print-and-exit form the chat panel drives and
@@ -361,15 +339,6 @@ export const AGENT_PROVIDERS: Provider[] = [
     // measured, so there is no account command and no envelope to state.
     version: { args: ["--version"], pattern: "(\\d+\\.\\d+\\.\\d+)" },
     headless: { argv: "antigravity", form: '-p "<prompt>" --output-format stream-json --model <model>', resume: "--conversation" },
-    chat: {
-      // Its four modes happen to line up with Claude's, which is a property of
-      // the CLI rather than a mapping imposed here. Keep in step with
-      // DEFAULT_MODE in server/src/antigravity.ts.
-      label: "Antigravity",
-      defaultModel: "gemini-3.6-flash-medium", defaultMode: "request-review",
-      bypassMode: "always-proceed", canAttach: false, hasTranscript: false,
-      hasEffort: false, canPane: false,
-    },
   },
   {
     // Nous Research's agent CLI. Stream-first chat panel only — no pane engine,
@@ -377,7 +346,7 @@ export const AGENT_PROVIDERS: Provider[] = [
     // pane yet, and the thin path is deliberately Antigravity-shaped.
     id: "hermes",
     title: "Hermes",
-    what: "Nous Research agent CLI, driven by the chat panel.",
+    what: "Nous Research agent CLI.",
     bin: "hermes",
     mode: "flag", // prompt via --query=<text>
     tab: false,
@@ -387,7 +356,7 @@ export const AGENT_PROVIDERS: Provider[] = [
       configPath: "", // do not write ~/.hermes/config.yaml from the browser
       match: "hermes",
       install: "https://hermes-agent.nousresearch.com/docs/",
-      connects: "the chat panel, which turns its own turns into events",
+      connects: "nothing: it exports no hooks or telemetry to connect",
     },
     // 0.21.4 is the first with `chat --format stream-json` (docs/CONFIG.md);
     // 0.21.0 exits on the unknown flag. The deny list is the person's own
@@ -400,18 +369,6 @@ export const AGENT_PROVIDERS: Provider[] = [
     account: { args: ["status"], signedIn: "✓ logged in" },
     headless: { argv: "hermes", form: "chat --query=<prompt> --format stream-json --no-restore-cwd --max-turns <n>", resume: "--resume", ceilings: { turns: "--max-turns", seconds: "--run-budget" } },
     envelope: { via: "own-config", check: { args: ["approvals", "test", "--", "git", "push", "origin", "main"], exit: 3 } },
-    chat: {
-      label: "Hermes",
-      // Fallback when config.yaml is unread; /hermes/enabled prefers the
-      // configured model.default. Keep in step with FALLBACK in hermes.ts.
-      defaultModel: "anthropic/claude-sonnet-4",
-      defaultMode: "default",       // Hermes vocabulary — no extra flag
-      bypassMode: "yolo",           // maps to --yolo when chatBypassAllowed
-      canAttach: false,
-      hasTranscript: false,         // no /hermes/transcript until export is measured
-      hasEffort: false,
-      canPane: false,
-    },
   },
   {
     id: "codex",
@@ -438,15 +395,6 @@ export const AGENT_PROVIDERS: Provider[] = [
     // `-a` is a flag of `codex` itself, before `exec`; `codex exec -a` is refused.
     headless: { argv: "codex", form: 'exec --json -s <sandbox> "<prompt>"', resume: "exec resume" },
     envelope: { via: "sandbox-flags" },
-    chat: {
-      // The mode is its sandbox rather than a permission policy, so the two
-      // vocabularies stay apart. Keep in step with DEFAULT_SANDBOX in
-      // server/src/codex.ts.
-      label: "Codex",
-      defaultModel: "gpt-5.6-sol", defaultMode: "read-only",
-      bypassMode: "full-access", canAttach: false, hasTranscript: true,
-      hasEffort: false, canPane: false,
-    },
   },
   {
     id: "gemini",

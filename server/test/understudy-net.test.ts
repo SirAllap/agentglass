@@ -136,26 +136,6 @@ describe("what the net records", () => {
     expect(rows[0]!.actor).toBe("local");
   });
 
-  step("a route that answers outside the json helper leaves the status NULL, and that is the record saying so", async () => {
-    /*
-     * `/chat/send` returns a Response built inside chat.ts — a stream on the
-     * happy path, and on this one a refusal from `planTurn`, which never
-     * touches the per-request `json` helper. So its stub is opened and never
-     * settled.
-     *
-     * This is asserted rather than papered over because the alternative is
-     * worse in both directions: settling it here would require the net to guess
-     * a status it does not have, and leaving it undocumented would let somebody
-     * read NULL as "the row was lost". NULL means "answered outside the json
-     * helper", and the most consequential POST in the app is one of those.
-     */
-    const res = await post("/chat/send", {});
-    expect(res.ok).toBe(false);
-    const rows = ledgerFor("/chat/send");
-    expect(rows.length).toBe(1);
-    expect(rows[0]!.status).toBe(null);
-  });
-
   step("a read is not a write", async () => {
     // The net is POST-only. A ledger with the dashboard's own polling in it is
     // a ledger nobody ever scrolls to the bottom of.

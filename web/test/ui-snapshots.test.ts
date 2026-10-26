@@ -14,7 +14,6 @@ import type { PendingGate } from "../../shared/types.ts";
 import {
   PROVIDERS, LATE_PROVIDERS, readPanel, uiState, finish, bound, notMounted, plainUrl, isSecretName, type Sources, type AppSlice,
 } from "../src/lib/uiSnapshots.ts";
-import type { Chat } from "../src/lib/chatStore.ts";
 import type { BenchState } from "../src/lib/benchStore.ts";
 
 // The credential is built apart so no single line spells out a whole login URL; the string is unchanged.
@@ -29,13 +28,6 @@ const app = (over: Partial<AppSlice> = {}): AppSlice => ({
   modals: { settings: false, palette: true, help: false, stats: false, skills: false, search: false, finder: false, windows: false, projectPicker: false, machine: "ports" },
   selectedEvent: null, session: null, peek: null, finderPath: null, ...over,
 });
-
-const chat = (over: Partial<Chat> = {}): Chat => ({
-  id: "chat-1", cwd: "/home/ana/code/orbit", agent: "claude", model: "opus[1m]", mode: "default", title: "Fix the flaky test",
-  messages: [{ role: "user", text: "please fix it", tools: [], ts: 1 }, { role: "assistant", text: INJECTION, tools: [], ts: 2 }],
-  sessionId: "sess-abc", sending: false, draft: "", attachments: [], queued: [], createdAt: 10, abort: null, unread: true,
-  attention: "none", ...over,
-} as Chat);
 
 const bench = (over: Partial<BenchState> = {}): BenchState => ({
   open: true, grown: false, zoom: 1, geom: { x: 1, y: 2, w: 3, h: 4 }, fab: { x: 5, y: 6 }, root: "/home/ana/code/orbit",
@@ -59,7 +51,7 @@ const gate = (over: Partial<PendingGate> = {}): PendingGate => ({
 // hostile ones, so a provider that files a string under `state` is caught by the
 // ordinary cases and not only by a test written for it.
 const later = (over: Partial<Sources["later"]> = {}): Sources["later"] => ({
-  hooks: async () => ({ installed: true, bundled: true, gate: false, gateBundled: true, python: INJECTION, settingsPath: "/home/ana/.claude/settings.json", engine: "tmux" }),
+  hooks: async () => ({ installed: true, bundled: true, gate: false, gateBundled: true, python: INJECTION, settingsPath: "/home/ana/.claude/settings.json" }),
   lantern: async () => ({ nudge: true, minutes: 20, watch: false, watchMinutes: 10, cacheTtlMinutes: 5, wakeHours: 4 }),
   budgets: async () => ({
     rows: [{ root: "/home/ana/code/orbit", model: INJECTION, limit: 25, period: "week", spent: 7.5, pct: 0.3, level: "ok" }],
@@ -109,12 +101,15 @@ const later = (over: Partial<Sources["later"]> = {}): Sources["later"] => ({
       { id: "acme-b", label: "Acme B", plan: "pro", colour: "violet", active: false, storage: "file" },
     ],
   }],
+  usageOpens: async () => ({
+    since: "2026-10-20",
+    opens: [{ id: "view:git", count: 9, last: "2026-10-24" }, { id: "settings:about", count: 2, last: "2026-10-21" }],
+  }),
   ...over,
 });
 
 const sources = (over: Partial<Sources> = {}): Sources => ({
   app: () => app(),
-  chats: () => ({ list: [chat()], activeId: "chat-1" }),
   bench: () => bench(),
   gates: () => [gate()],
   diff: () => ({ split: true, wrap: false, noWhitespace: false, theme: "auto" }),
@@ -156,7 +151,6 @@ describe("every panel answers in two buckets", () => {
     it(`${panel}: no string in state looks like outside text, even with hostile fixtures`, async () => {
       const hostile = sources({
         app: () => app({ theme: INJECTION, filter: { app: INJECTION, type: "x y", provider: "" }, selectedEvent: { id: "7", type: INJECTION, app: INJECTION } }),
-        chats: () => ({ list: [chat({ title: INJECTION, model: INJECTION, cwd: INJECTION })], activeId: INJECTION }),
       });
       for (const [path, s] of strings((await readPanel(panel, hostile)).state)) {
         expect(s === "" || s === "[moved to untrusted]" || ID.test(s), `${panel} state.${path} = ${JSON.stringify(s)}`).toBe(true);
@@ -166,16 +160,6 @@ describe("every panel answers in two buckets", () => {
 });
 
 describe("outside text lands under untrusted, and only there", () => {
-  it("a chat title, a message and a path are untrusted, not state", () => {
-    const r = PROVIDERS.chat(sources());
-    expect(JSON.stringify(r.state)).not.toContain("Fix the flaky test");
-    expect(JSON.stringify(r.state)).not.toContain("Ignore previous");
-    expect(JSON.stringify(r.state)).not.toContain("/home/ana");
-    const u = r.untrusted.chats as { title: string; lastMessages: { text: string }[] }[];
-    expect(u[0]!.title).toBe("Fix the flaky test");
-    expect(u[0]!.lastMessages.at(-1)!.text).toContain("Ignore previous instructions");
-  });
-
   it("bench tab titles, paths and roots are untrusted; kinds and counts are state", () => {
     const r = PROVIDERS.bench(sources());
     expect(r.state).toMatchObject({ open: true, tabs: 3, roots: 1, kinds: { term: 1, web: 1, file: 1 }, activeKind: "web" });
@@ -239,20 +223,6 @@ describe("secrets never come out as values", () => {
 });
 
 describe("untrusted has a size", () => {
-  it("a long message is clipped", () => {
-    const r = PROVIDERS.chat(sources({ chats: () => ({ list: [chat({ messages: [{ role: "assistant", text: "long message ".repeat(4000), tools: [], ts: 1 }] })], activeId: "chat-1" }) }));
-    const text = (r.untrusted.chats as { lastMessages: { text: string }[] }[])[0]!.lastMessages[0]!.text;
-    expect(text.length).toBeLessThan(700);
-  });
-
-  it("a snapshot of many chats stays under the cap and says it was cut", () => {
-    const many = Array.from({ length: 200 }, (_, i) => chat({ id: `c${i}`, title: "title words ".repeat(40), messages: Array.from({ length: 8 }, () => ({ role: "user" as const, text: "message words ".repeat(30), tools: [], ts: 1 })) }));
-    const r = PROVIDERS.chat(sources({ chats: () => ({ list: many, activeId: "c1" }) }));
-    expect(JSON.stringify(r.untrusted).length).toBeLessThanOrEqual(UNTRUSTED_MAX_BYTES);
-    expect(r.state.count).toBe(200);
-    expect(r.state.shown).toBe(20);
-  });
-
   it("bound() keeps whole keys and a list's prefix, and names what it dropped", () => {
     const u = { a: "x".repeat(100), list: Array.from({ length: 50 }, (_, i) => ({ i, pad: "p".repeat(200) })), tail: "y".repeat(5000) };  // bound() is applied after the text is cleaned, so blobs are fine here
     const r = bound(u, 2000);
@@ -271,12 +241,6 @@ describe("untrusted has a size", () => {
 });
 
 describe("the panels' contents", () => {
-  it("chat: per-chat flags and counts as state", () => {
-    const r = PROVIDERS.chat(sources({ chats: () => ({ list: [chat({ sending: true, queued: [{ id: "q", text: "later", images: [] }], draft: "half typed", panePinned: true })], activeId: "chat-1" }) }));
-    expect(r.state.chats).toEqual([expect.objectContaining({ id: "chat-1", agent: "claude", model: "opus[1m]", sending: true, unread: true, queued: 1, messages: 2, hasDraft: true, hasSession: true, panePinned: true, attention: "none" })]);
-    expect(JSON.stringify(r.state)).not.toContain("sess-abc");
-  });
-
   it("settings panes report their values from the getters they were given", () => {
     expect(PROVIDERS["settings.diff"](sources()).state).toEqual({ split: true, wrap: false, noWhitespace: false, syntaxTheme: "auto" });
     expect(PROVIDERS["settings.terminal"](sources()).state).toMatchObject({ size: 13, cursor: "block", scrollback: 4000, copyOnSelect: true, noteEditor: "builtin" });
@@ -288,7 +252,7 @@ describe("the panels' contents", () => {
     const boom = () => { throw new Error("read a store it does not own"); };
     const only = (name: keyof Sources) => Object.fromEntries((Object.keys(sources()) as (keyof Sources)[]).filter((k) => k !== name).map((k) => [k, boom])) as Partial<Sources>;
     const owner: Record<string, keyof Sources> = {
-      view: "app", chat: "chats", bench: "bench", gates: "gates", "settings.diff": "diff", "settings.terminal": "terminal", "settings.browser": "browser", "settings.notifications": "notify",
+      view: "app", bench: "bench", gates: "gates", "settings.diff": "diff", "settings.terminal": "terminal", "settings.browser": "browser", "settings.notifications": "notify",
       "settings.prefs": "prefs", "settings.rail": "rail", "settings.keys": "keys", "settings.tasks": "tasks", "settings.appearance": "appearance", "settings.understudy": "understudy",
     };
     // appearance also names the theme, which is App's own state.
@@ -302,7 +266,7 @@ describe("the panels' contents", () => {
     const thunk: Record<string, keyof Sources["later"]> = {
       "settings.hooks": "hooks", "settings.lantern": "lantern", "settings.budgets": "budgets", "settings.recipes": "recipes",
       "settings.review-prompts": "reviewPrompts", "settings.saved-replies": "savedReplies", "settings.tmux": "tmux",
-      "settings.privacy": "privacy", "settings.plugins": "plugins", "settings.log": "log", "settings.about": "about", "machine.disk": "diskClean", "usage.accounts": "usageAccounts",
+      "settings.privacy": "privacy", "settings.plugins": "plugins", "settings.log": "log", "settings.about": "about", "machine.disk": "diskClean", "usage.accounts": "usageAccounts", usage: "usageOpens",
     };
     for (const panel of READ_PANELS_LATE) {
       const base = later();
@@ -314,7 +278,7 @@ describe("the panels' contents", () => {
   });
 
   it("notMounted says so and shows nothing", () => {
-    expect(notMounted("chat")).toEqual({ state: { mounted: false, hint: "open it quietly", panel: "chat" }, untrusted: {} });
+    expect(notMounted("bench")).toEqual({ state: { mounted: false, hint: "open it quietly", panel: "bench" }, untrusted: {} });
   });
 });
 
@@ -442,6 +406,31 @@ describe("usage.accounts: the accounts a plugin says a provider has", () => {
   it("an empty list is an answer", async () => {
     const r = await LATE_PROVIDERS["usage.accounts"](sources({ later: later({ usageAccounts: async () => [] }) }));
     expect(r.state).toEqual({ providers: [] });
+  });
+});
+
+describe("usage: what gets opened here", () => {
+  it("is all state, because every string in it is an id the window minted or a date", async () => {
+    const r = await LATE_PROVIDERS.usage(sources());
+    expect(r.state).toEqual({
+      since: "2026-10-20", ids: 2, total: 11, shown: 2,
+      opens: [{ id: "view:git", count: 9, last: "2026-10-24" }, { id: "settings:about", count: 2, last: "2026-10-21" }],
+    });
+    expect(r.untrusted).toEqual({});
+    expect(r.see).toEqual(["/usage/opens"]);
+  });
+
+  it("a long table is cut at sixty and says how many there are", async () => {
+    const opens = Array.from({ length: 80 }, (_, i) => ({ id: `panel:p${i}`, count: 80 - i, last: "2026-10-24" }));
+    const r = await LATE_PROVIDERS.usage(sources({ later: later({ usageOpens: async () => ({ since: "2026-10-20", opens }) }) }));
+    expect(r.state.ids).toBe(80);
+    expect(r.state.shown).toBe(60);
+    expect((r.state.opens as unknown[]).length).toBe(60);
+  });
+
+  it("an empty table is an answer", async () => {
+    const r = await LATE_PROVIDERS.usage(sources({ later: later({ usageOpens: async () => ({ since: "2026-10-20", opens: [] }) }) }));
+    expect(r.state).toMatchObject({ ids: 0, total: 0, shown: 0, opens: [] });
   });
 });
 

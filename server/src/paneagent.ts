@@ -60,7 +60,7 @@ export interface LaunchSpec {
   /** Nobody is watching this one. Changes what the CLI is allowed to do — see
    *  the note beside `--disallowed-tools` in agents/claudecode.ts. */
   unattended?: boolean;
-  /** Rules this launch may never use, from Settings ▸ Agents ▸ New chats. Only a chat sets it. */
+  /** Rules this launch may never use (Settings ▸ Terminal ▸ launch permissions). */
   deny?: string[];
 }
 

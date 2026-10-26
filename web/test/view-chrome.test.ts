@@ -30,7 +30,7 @@ const read = (f: string) => readFileSync(join(COMPONENTS, f), "utf8");
 /** The files that draw a workspace view's own chrome. */
 const VIEWS = [
   "PrPanel.tsx", "TasksPanel.tsx", "GitPanel.tsx", "DockerPanel.tsx",
-  "TerminalPanel.tsx", "FilesPanel.tsx", "ChatPanel.tsx", "BrowserPanel.tsx",
+  "TerminalPanel.tsx", "FilesPanel.tsx", "BrowserPanel.tsx",
   "diff/DiffPage.tsx", "understudy/UnderstudyPanel.tsx",
   // The git view's own pieces, which are chrome by any other name: they draw
   // the buttons on every row of four sections.
@@ -74,9 +74,7 @@ const SIZES = new Set(["text-[10px]", "text-[10.5px]", "text-[11px]"]);
  */
 const EXEMPT: { file: string; match: string; why: string }[] = [
   { file: "TasksPanel.tsx", match: "onClick={onAdd}", why: "the submit of the comment box, sized against the box" },
-  { file: "ChatPanel.tsx", match: 'active?.sending ? "Queue ↵"', why: "the submit of the chat composer, sized against the composer" },
   { file: "PrPanel.tsx", match: "onClick={copyNumber}", why: "the PR number inside a 14px title line — it is sized against the heading it sits in, not against a toolbar" },
-  { file: "ChatPanel.tsx", match: "pointer-events-auto mb-2", why: "a floating badge over the transcript, not a control in the chrome — a full radius is what tells it apart from the toolbar" },
 ];
 
 /** Every `<button>` whose class list looks like a chip: rounded, with padding. */
@@ -143,8 +141,6 @@ function chipButtons(src: string, exempt: string[] = []): { line: number; cls: s
  * omitted: the next person to widen `VIEWS` should know what widening it costs.
  */
 const KNOWN: { file: string; cls: string; what: string }[] = [
-  { file: "ChatPanel.tsx", cls: "mt-1.5 text-[10px] px-2 py-0.5 rounded-full", what: "the fold's cost" },
-  { file: "ChatPanel.tsx", cls: "text-[11.5px]", what: "a chip a size off the ladder" },
   { file: "PrPanel.tsx", cls: "agx-btn text-[10px] px-1.5 py-0.5 rounded-full", what: "the reaction chips" },
   { file: "PrPanel.tsx", cls: "agx-btn text-[10.5px] px-2 py-0.5 rounded-full", what: "reviewer and base pickers" },
   { file: "TasksPanel.tsx", cls: "rounded-full", what: "ten chips across its two bars" },

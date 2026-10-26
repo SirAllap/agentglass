@@ -232,7 +232,7 @@ describe("the universal net", () => {
   });
 
   test("a fence outlives the stub sweep, which is why it is its own kind", () => {
-    const id = u.recordFence("/chat/send", "POST");
+    const id = u.recordFence("/terminal/tmux/windows", "POST");
     const row = u.__ledgerRow(id)!;
     expect(row.kind).toBe("fence");
     expect(row.actor).toBe("understudy");
@@ -246,7 +246,7 @@ describe("off means no rows", () => {
     expect(u.openStub({ route: "/git/merge", method: "POST", actor: "local" })).toBe(0);
     expect(u.sealSituation("C1", { subject: "feat/orbit-off", body: "anything" })).toBe(0);
     expect(u.recordDecision("C1", { subject: "feat/orbit-off", actual: {}, provenance: "typed" })).toBe(0);
-    expect(u.recordFence("/chat/send", "POST")).toBe(0);
+    expect(u.recordFence("/terminal/tmux/windows", "POST")).toBe(0);
     expect(rows("C1", "feat/orbit-off")).toBe(0);
     u.setEnabled(true);
   });

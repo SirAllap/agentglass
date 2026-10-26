@@ -23,7 +23,8 @@ function sources(dir: string, out: string[] = []): string[] {
   }
   return out;
 }
-const ALL = sources(SRC).map((f) => readFileSync(f, "utf8")).join("\n");
+// The agent CLIs are looked up by the agent table (`Bun.which(spec.bin)` in agentticket.ts), so the table is part of "the code".
+const ALL = [...sources(SRC), join(import.meta.dir, "..", "..", "shared", "agentKinds.ts")].map((f) => readFileSync(f, "utf8")).join("\n");
 
 /** Binaries the server spawns or probes for, read out of the code itself. */
 function spawned(): Set<string> {
@@ -146,13 +147,13 @@ describe("the requirements catalogue matches what the app actually runs", () => 
   });
 
   test("the agent CLIs are listed, because each is a whole engine", () => {
-    // The gap this test was written for. `codex` and `agy` are chat engines
+    // The gap this test was written for. `codex`, `agy` and `hermes` are engines
     // beside Claude Code: absent, the engine is simply not offered, which is
     // exactly the shape `task` has and the reason `task` earned its row.
     for (const id of ["codex", "agy", "hermes"]) {
       const d = DEPS.find((x) => x.id === id);
       expect(d?.required).toBe(false);
-      expect(ALL).toContain(`Bun.which("${d?.bin}")`);
+      expect(ALL).toContain(`bin: "${d?.bin}"`);
     }
   });
 

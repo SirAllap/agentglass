@@ -83,10 +83,10 @@ export interface UnderstudyClass {
    * The routes the class is seen at.
    *
    * Documentation, not a lookup table, and deliberately not exposed as
-   * `classFor(route)`. Two classes share `/chat/send` — launching an agent (C7)
-   * and handing an agent a reviewer's requested changes (C5) — so a route-to-
-   * class map would have to guess, and it would guess wrong at exactly the
-   * route that matters most. The call site knows which decision it is making
+   * `classFor(route)`. Two classes can share a route — launching an agent (C7)
+   * and handing an agent a reviewer's requested changes (C5) both start one —
+   * so a route-to-class map would have to guess, and it would guess wrong at
+   * exactly the route that matters most. The call site knows which decision it is making
    * and names its class; this list is here so a person can find the call sites.
    */
   routes: readonly string[];
@@ -139,7 +139,7 @@ export const CLASSES: readonly UnderstudyClass[] = [
     id: "C5",
     label: "applying what a reviewer asked for",
     lock: "earn",
-    routes: ["/prs/review-with", "/prs/apply-suggestion", "/chat/send"],
+    routes: ["/prs/review-with", "/prs/apply-suggestion"],
     trigger: "",
   },
   {
@@ -153,7 +153,7 @@ export const CLASSES: readonly UnderstudyClass[] = [
     id: "C7",
     label: "launching an agent",
     lock: "earn",
-    routes: ["/chat/send", "/chat/attach"],
+    routes: [],
     trigger: "",
   },
   {
@@ -354,15 +354,7 @@ interface Store {
 
 /* ────────────────────────────────────── posture ─────────────────────────── */
 
-
-
 const rung = (x: UnderstudyStance): number => STANCES.indexOf(x);
-
-
-
-
-
-
 
 /* ──────────────────────────────── consent and the never list ────────────── */
 
@@ -583,90 +575,6 @@ function wouldMatchEverything(name: string, checkouts: string[] = []): boolean {
   return banned.has(n);
 }
 
-/**
- * Point the fence at a project, or refuse.
- *
- * Returns the name in force afterwards, which is the OLD one when the new one
- * was refused — a caller that assumes its value took hold would otherwise
- * report a fence it does not have.
- */
-export function setOpenProject(name: string, checkouts: string[] = []): string {
-  const want = name.trim().slice(0, 100);
-  if (wouldMatchEverything(want, checkouts)) return openProjectName();
-  const st = load();
-  st.openProject = want;
-  save(st);
-  return openProjectName();
-}
-
-/**
- * WHY IT HAS NOWHERE TO WORK, in the words of whatever is actually wrong.
- *
- * The banner said "It has nowhere to work, so it will decline every task" and
- * stopped there. Measured this morning the answer was: the app had been
- * relaunched by its own installer, so the server process started outside any
- * checkout, and discovery — which is telemetry, work done THROUGH the app —
- * had never seen the project either, because it is worked from a terminal.
- * Nothing on the screen said so, and the one control offered ("Pick a
- * checkout") was built from that same empty discovery, so the way out was not
- * in the application at all.
- *
- * Pure, and takes the three facts the caller already has, so the sentence can
- * be settled without a filesystem: the fence, the checkout the server runs
- * from, and the projects this machine has opened.
- *
- * Null when the setup itself is fine — the caller only asks once the allowed
- * list came back empty, and null there means the fence named something real
- * that then failed `isOpenProjectPath`, which is the fence doing its job and
- * not a fault to print.
- */
-export function nowhereReason(s: {
-  /** The fence, as `openProjectName()` returns it. */
-  project: string;
-  /** The checkout the server process runs from, or null when it is not in one. */
-  here: string | null;
-  /** The projects this machine has opened, as paths. */
-  known: string[];
-}): { why: string; fix: string } | null {
-  const project = s.project.trim();
-  if (!project) {
-    return {
-      why: "No project is named, so nothing is inside the fence.",
-      fix: "Name the project it may work in.",
-    };
-  }
-
-  /* Neither route found anything: not the checkout the server runs from, not a
-     project somebody has opened here. This is the morning that prompted the
-     line, and it is the only one whose fix is outside this screen. */
-  const candidates = [...(s.here ? [s.here] : []), ...s.known];
-  if (candidates.length === 0) {
-    return {
-      why: "The server was started outside a git checkout and no project has been opened in this app, so discovery had nowhere to look.",
-      fix: `Open ${project} in this app, or start the server from inside the checkout.`,
-    };
-  }
-
-  /* Something was found — it is simply not called what the fence says. The
-     names are printed because a bare text field with no list of what is valid
-     is the complaint the project list was added for. */
-  const leaves = candidates.map((p) => p.split("/").filter(Boolean).pop() ?? "").filter(Boolean);
-  if (!leaves.some((leaf) => project === leaf || project.startsWith(`${leaf}-`))) {
-    const seen = Array.from(new Set(leaves)).slice(0, 6);
-    return {
-      why: `Nothing on this machine is called "${project}". It has: ${seen.join(", ")}.`,
-      fix: "Name one of those instead.",
-    };
-  }
-
-  return null;
-}
-
-/** Whether a name is one this will accept, so a route can say why it did not. */
-export function openProjectNameAllowed(name: string, checkouts: string[] = []): boolean {
-  return !wouldMatchEverything(name.trim().slice(0, 100), checkouts);
-}
-
 /** Is this path part of the open project, or one of its worktrees? */
 export function isOpenProjectPath(path: string): boolean {
   const name = openProjectName();
@@ -827,7 +735,6 @@ export function setEnabled(b: boolean): void {
 function recording(): boolean {
   return enabled() && !halted;
 }
-
 
 // ---------------------------------------------------------------------------
 // Hashing, and canonical categorical values.
@@ -1812,25 +1719,6 @@ export function halt(): number {
   save({ ...s, modes });
   halted = true;
   return dropped;
-}
-
-/*
- * Whether something stopped it.
- *
- * Read by the frame — and, since the day the understudy learned to act, by the
- * actuator too. It had existed for months gating nothing but the RECORDING,
- * which made the emergency stop a great deal less than it looked: pressing halt
- * wound back what a shift had done, and then the next shift carried on acting,
- * because the only thing consulting this was the code that writes ledger rows.
- *
- * A stop the following thirty seconds can walk around is not a stop.
- *
- * See the field's comment in shared/types.ts for why it is not folded into
- * `enabled`, and note that switching the feature on is what lifts it — an
- * explicit sentence rather than a timer.
- */
-export function isHalted(): boolean {
-  return halted;
 }
 
 // ---------------------------------------------------------------------------

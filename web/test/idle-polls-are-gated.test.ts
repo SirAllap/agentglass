@@ -43,15 +43,11 @@ describe("the dashboard's own polls", () => {
 });
 
 describe("panels found still holding a bare interval", () => {
-  // ChatPanel's "which sessions are mid-turn" poll predated usePoll and was
-  // never moved over: twenty requests a minute for a chat tab nobody was
-  // looking at. RunningPanes, the old AgentsPane, PluginsPane, CommandLog and
-  // RemoteAccessPane gated on `open` but still ran their own `setInterval`,
+  // The old AgentsPane, PluginsPane, CommandLog and RemoteAccessPane gated on
+  // `open` but still ran their own `setInterval`,
   // so they stopped when the panel closed but not when the window lost focus
   // — the same half of the fix Alerts and Sessions already had above.
   test.each([
-    "components/ChatPanel.tsx",
-    "components/RunningPanes.tsx",
     "components/PluginsPane.tsx",
     "components/CommandLog.tsx",
     "components/RemoteAccessPane.tsx",
@@ -88,7 +84,6 @@ describe("the fixed-rate polls of five seconds or less that were still ungated",
     ["components/DockerPanel.tsx", ["usePoll(active, loadOverview, 5000)", "usePoll(active && view === \"containers\", loadStats, 5000)"]],
     ["components/Header.tsx", ["usePoll(true, () => { void powerStatus()"]],
     ["components/PairPanel.tsx", ["usePoll(true, poll, 2000)"]],
-    ["components/understudy/Work.tsx", ["usePoll(active && working, () => { void load(); }, 6000)"]],
   ] as const)("%s", async (rel, calls) => {
     const text = await src(rel);
     for (const c of calls) expect(text).toContain(c);

@@ -351,7 +351,7 @@ export function tmuxVersion(bin: string): string | null {
 /** Full status for the settings panel and the degraded-reason paths. */
 export function tmuxBinStatus(): TmuxBinStatus {
   if (process.platform === "win32") {
-    return { available: false, source: "none", path: "", version: null, reason: "tmux chat panes need a Unix shell — not available on Windows" };
+    return { available: false, source: "none", path: "", version: null, reason: "tmux needs a Unix shell — not available on Windows" };
   }
   const envPath = process.env[ENV_OVERRIDE];
   if (envPath && !usable(envPath)) {

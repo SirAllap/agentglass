@@ -5,8 +5,7 @@ import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { edge, wash } from "./git/ui.tsx";
 import { whatWaits } from "../lib/seatWaiting.ts";
 import { api, type SeatAnswer, type SeatTask, type SeatFieldRow, type SeatReportRow } from "../lib/api.ts";
-import { Persona } from "./understudy/persona/Persona.tsx";
-import { useCosmetic } from "./understudy/persona/cosmeticStore.ts";
+import { SeatIcon } from "./workspace/icons.tsx";
 import { INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 /**
@@ -89,8 +88,8 @@ function Pulse({ pulse, tone }: { pulse: number[]; tone: string }) {
 
 /** The countdown to the floor, drawn round the face. Not a badge: the gap
  *  itself is the information. */
-function Dial({ live, wokenAt, floorHours, cos }: {
-  live: boolean; wokenAt: number | null; floorHours: number; cos: ReturnType<typeof useCosmetic>;
+function Dial({ live, wokenAt, floorHours }: {
+  live: boolean; wokenAt: number | null; floorHours: number;
 }) {
   const span = Math.max(1, floorHours) * HOUR;
   const left = wokenAt ? Math.max(0, span - (Date.now() - wokenAt)) : span;
@@ -111,7 +110,7 @@ function Dial({ live, wokenAt, floorHours, cos }: {
       </svg>
       <div className="absolute rounded-full overflow-hidden flex items-center justify-center"
         style={{ inset: 6, background: "var(--bg3)", opacity: live ? 1 : 0.45, filter: live ? undefined : "grayscale(0.6)" }}>
-        <Persona px={54} cos={cos} label={live ? "The orchestrator" : "The empty seat"} />
+        <span style={{ color: live ? "var(--text)" : "var(--text4)" }} role="img" aria-label={live ? "The orchestrator" : "The empty seat"}><SeatIcon size={30} seated={live} /></span>
       </div>
       {live && (
         <span aria-hidden className="absolute rounded-full"
@@ -136,7 +135,6 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
      panel and a broken panel are drawn identically, and there is nothing on
      screen that tells them apart. */
   const [checkedAt, setCheckedAt] = useState(0);
-  const cos = useCosmetic();
 
   const load = useCallback(async () => {
     try {
@@ -259,7 +257,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
           {/* ── what it said, and the work ─────────────────────────── */}
           <div className="flex flex-col gap-5 px-5 py-4 min-w-0 min-h-0 overflow-y-auto agx-scroll" style={{ borderRight: LINE }}>
             <div className="flex gap-3.5 items-start">
-              <Dial live={live} wokenAt={data?.wokenAt ?? null} floorHours={data?.floorHours ?? 4} cos={cos} />
+              <Dial live={live} wokenAt={data?.wokenAt ?? null} floorHours={data?.floorHours ?? 4} />
               <div className="flex flex-col gap-1.5 min-w-0 pt-0.5">
                 <p className="text-[15.5px] leading-snug max-w-[92ch]"
                   style={{ color: unread ? "var(--warning)" : seat?.lastLine ? "var(--text)" : "var(--text4)" }}>

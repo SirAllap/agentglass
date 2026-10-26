@@ -290,9 +290,9 @@ export interface Caller {
    * way to say that would be a fourth `Scope` sitting under `read`, and it is
    * the wrong one. RANK in devices.ts is a *total order* and every check asks
    * "is this at least X", so a new value has to be placed somewhere on that
-   * line — and anything placed above `read` inherits ANSWER_POST, which
-   * contains `/chat/send`: the single route the understudy must never hold,
-   * because holding it means speaking as him into a running agent. Placing it
+   * line — and anything placed above `read` inherits ANSWER_POST, which holds
+   * the gate decision: a route the understudy must never hold, because holding
+   * it means answering as him on a running agent. Placing it
    * below `read` fails the other way round: it could not GET anything, and
    * looking is the entire job.
    *
@@ -543,9 +543,8 @@ const FULL_GET = new Set([
  * What a phone is for.
  *
  * `/gate/decide` is the reason a phone exists at all: an agent is stopped and a
- * person says go. The chat routes are the same act by other means — replying to
- * a session that is already running, which is what "answer" means. Starting new
- * sessions, the terminal, git write and docker are not here.
+ * person says go. Starting new sessions, the terminal, git write and docker are
+ * not here.
  *
  * `/push/subscribe`, `/push/unsubscribe` and `/push/test` were also here, for a
  * device managing its own notifications. Web Push is gone — a phone now hears
@@ -556,8 +555,6 @@ const FULL_GET = new Set([
  */
 const ANSWER_POST = new Set([
   "/gate/decide",
-  "/chat/send",
-  "/chat/pane/key",
   // "I have read this". Moves a badge on the other devices and nothing else:
   // no agent, no repository and nothing on GitHub hears about it. A read-scope
   // credential still only GETs it.
@@ -589,9 +586,9 @@ export function scopeNeeded(method: string, pathname: string): Scope {
  * turn the scoreboard off, which is a property worth keeping when the next
  * route is proposed.
  *
- * `/chat/send` and `/terminal/tmux/windows` are the two names that are
+ * `/gate/decide` and `/terminal/tmux/windows` are the two names that are
  * deliberately *not* here, and understudy-allowlist.test.ts asserts both by
- * name rather than by rule. The first is speaking as him into a running agent;
+ * name rather than by rule. The first is answering as him on a running agent;
  * the second reshapes the person's desk out from under them. Something that can do either
  * has stopped being a watcher, so on the day somebody adds "just let it reply",
  * the failing test is the conversation that should happen first.
@@ -643,7 +640,7 @@ export const UNDERSTUDY_NO_TOKEN_ERROR =
  * one. No token means nothing downstream ever learns *who* is asking, which
  * means `understudyAllows` never runs, which means the understudy is not
  * narrowed on such a box: it is simply absent, and every request arrives as an
- * unidentified local caller with the run of the server, `/chat/send` included.
+ * unidentified local caller with the run of the server, `/gate/decide` included.
  * The allowlist would sit in this file looking exactly as correct as it does
  * now and hold nothing at all.
  *

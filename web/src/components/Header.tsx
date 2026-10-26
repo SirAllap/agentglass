@@ -9,10 +9,8 @@ import { IS_MAC_DESKTOP, powerReadout, powerStatus, setPowerMode, type PowerMode
 import { usePoll } from "../lib/usePoll.ts";
 import { Logo } from "./Logo.tsx";
 import { Select } from "./Select.tsx";
-import { subscribe as subscribeChats, attentionCount } from "../lib/chatStore.ts";
 import { WorkspaceIcon } from "./workspace/icons.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { sharedPhase } from "../lib/sharedPhase.ts";
 import { CrossIcon, HomeIcon, SparkleIcon } from "../lib/glyphIcons.tsx";
 import { EDGE, LINE } from "./workspace/Chrome.tsx";
 
@@ -229,9 +227,6 @@ export function Header({
   onOpenProject: () => void;
 }) {
   const live = conn === "open";
-  // Subscribed rather than polled: a reply arriving is exactly when this can
-  // change, and the store already notifies on it.
-  const waiting = useSyncExternalStore(subscribeChats, attentionCount, attentionCount);
   const unauth = conn === "unauthorized";
   const pillColor = live ? "var(--success)" : unauth ? "var(--error)" : "var(--warning)";
   const hasFilter = filter.app || filter.type || filter.provider;
@@ -344,35 +339,24 @@ export function Header({
         <button onClick={onOpenPalette} className="h-8 hidden sm:flex items-center gap-1.5 px-2.5 rounded-lg text-[11px]" style={selStyle}>
           <span>{MOD_KEY}K</span><span className="hidden sm:inline t-dim2">Search</span>
         </button>
-        {/* One button where there were five (git/diff/docker/term/chat).
+        {/* One button where there were four (git/diff/docker/term).
             They were the app's whole purpose and yet each one opened its own
             modal, so moving between them meant closing and reopening — the
             rail inside the workspace does that switching now, for free.
             The letter keys still deep-link straight to a view, so this button
-            only serves the mouse.
-            It also inherits the chat button's attention state: a reply that
-            landed while you were elsewhere has to be visible from the
-            dashboard, and this is the only door left. */}
+            only serves the mouse. */}
         <button
           onClick={onOpenWorkspace}
-          title={waiting
-            ? `Workspace — ${waiting} chat${waiting === 1 ? "" : "s"} replied while you were elsewhere (${MOD_KEY}\\)`
-            : `Workspace — git, diff, docker, terminal, chat (${MOD_KEY}\\)`}
+          title={`Workspace — git, diff, docker, terminal (${MOD_KEY}\\)`}
           className="h-8 flex items-center gap-1.5 px-2.5 rounded-lg text-[11px] font-semibold"
           style={{
-            color: waiting ? "var(--success)" : "var(--primary-hover)",
-            background: `color-mix(in srgb, ${waiting ? "var(--success)" : "var(--primary)"} 18%, transparent)`,
-            border: `1px solid color-mix(in srgb, ${waiting ? "var(--success)" : "var(--primary)"} ${waiting ? 70 : 50}%, transparent)`,
-            animation: waiting ? "agx-attention 1.8s ease-in-out infinite" : undefined,
-            animationDelay: waiting ? sharedPhase(1800) : undefined,
+            color: "var(--primary-hover)",
+            background: "color-mix(in srgb, var(--primary) 18%, transparent)",
+            border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)",
           }}
         >
           <WorkspaceIcon />
           <span className="hidden sm:inline">Workspace</span>
-          {waiting > 0 && (
-            <span className="tabular-nums px-1 rounded-full text-[9.5px]"
-              style={{ background: "color-mix(in srgb, var(--success) 30%, transparent)" }}>{waiting}</span>
-          )}
         </button>
         <PowerModeButton />
         {/* Skills demoted to a plain icon */}

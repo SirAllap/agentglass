@@ -13,8 +13,7 @@
  * launched by had gone. `taskkill /T` is the equivalent that does exist:
  * `/T` walks the tree, `/F` does not ask twice.
  *
- * One place rather than three, because it was written three times — chat.ts,
- * codex.ts, antigravity.ts, each with the same comment about the group and the
+ * One place rather than three, because it was written three times — each with the same comment about the group and the
  * same Windows hole underneath it.
  */
 

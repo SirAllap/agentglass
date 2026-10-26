@@ -2,8 +2,6 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { frameToEvent as agyEvent, newFrameContext as agyCtx } from "../src/antigravity.ts";
-import { frameToEvent as hermesEvent, newFrameContext as hermesCtx } from "../src/hermes.ts";
 import {
   FAKE_ENGINES, OPENCODE_BAD_MODEL, RATE_LIMITED, SIGNED_OUT, frames, installFakeEngines, readCalls,
   type FakeEngineId, type FakeFleet,
@@ -181,28 +179,13 @@ describe("a turn that never ends can be stopped by its process group", () => {
 });
 
 describe("the frame shapes are the ones the server reads", () => {
-  const parse = (engine: FakeEngineId) => frames(engine).map((l) => JSON.parse(l) as Record<string, unknown>);
-
-  test("Hermes: an init and a result make a SessionStart and a Turn complete", () => {
-    const ctx = hermesCtx("/work/orbit");
-    const kinds = parse("hermes").map((f) => hermesEvent(f, ctx)?.hook_event_type ?? null);
-    expect(kinds).toEqual(["SessionStart", null, "Turn complete"]);
-  });
-
-  test("Antigravity: an init and a result make a SessionStart and a Turn complete", () => {
-    const ctx = agyCtx("/work/orbit");
-    const kinds = parse("agy").map((f) => agyEvent(f, ctx)?.hook_event_type ?? null);
-    expect(kinds[0]).toBe("SessionStart");
-    expect(kinds[kinds.length - 1]).toBe("Turn complete");
-  });
-
   test("Codex: the first frame is the thread.started the server greps for", () => {
     const first = frames("codex")[0];
     expect(first).toContain("thread.started");
     expect(JSON.parse(first).thread_id).toMatch(/^[0-9a-f-]{36}$/);
   });
 
-  test("Claude: the session id sits where chat.ts reads it", () => {
+  test("Claude: the session id sits where the session scanner reads it", () => {
     const m = /"session_id"\s*:\s*"([0-9a-fA-F-]{8,})"/.exec(frames("claude")[0]);
     expect(m).not.toBeNull();
   });

@@ -56,8 +56,6 @@ are:
   you run the **server yourself** on a shared box, that is on you: set
   `AGENTGLASS_TOKEN`. Either way, consider disabling the
   capability surfaces you don't use: `AGENTGLASS_TERMINAL_DISABLED=1`, `AGENTGLASS_FS_BROWSE_DISABLED=1`,
-  `AGENTGLASS_CHAT_DISABLED=1`, `AGENTGLASS_CODEX_DISABLED=1`,
-  `AGENTGLASS_ANTIGRAVITY_DISABLED=1`, `AGENTGLASS_HERMES_DISABLED=1`,
   `AGENTGLASS_GIT_WRITE_DISABLED=1`,
   `AGENTGLASS_DOCKER_WRITE_DISABLED=1`.
 - **⚠️ Exposing it to a network is a three-part deliberate act.** `AGENTGLASS_BIND=0.0.0.0`
@@ -69,17 +67,11 @@ are:
   If a device still can't reach it, the host firewall is dropping the packets:
   the panel names it and prints the command that opens the port to your subnet
   only. Tailnet (Tailscale) addresses count as private under `TRUST_LAN` too.
-- **⚠️ Browser-driven autonomy is opt-in.** The Chat panel's unattended modes —
-  `bypassPermissions` for Claude (`claude --dangerously-skip-permissions`),
-  `full-access` for Codex (`codex --dangerously-bypass-approvals-and-sandbox`)
-  and `always-proceed` for Antigravity (`agy --dangerously-skip-permissions`) —
-  are honored only when `AGENTGLASS_CHAT_BYPASS=1`. One opt-in covers all three,
-  since it is the same decision. Without it Claude is downgraded to a prompting
-  default, Codex to its read-only sandbox, and Antigravity to asking. **Hermes**
-  is not offered at all without it: single-query Hermes has no mode that asks
-  first (it runs `execute_code` on its own and refuses only its
-  dangerous-pattern list; `--yolo` runs those too), so the opt-in covers the
-  whole engine rather than one of its modes.
+- **⚠️ Unattended agents are opt-in.** The unattended modes of the agents the
+  app starts — `bypassPermissions` for Claude
+  (`claude --dangerously-skip-permissions`) and the like — are honored only when
+  `AGENTGLASS_CHAT_BYPASS=1` (or `chatBypass` in config.json). Without it a
+  launch is downgraded to a prompting default.
 - **Your data stays local.** Events live in a local SQLite file, written
   owner-only (`0700` dir, `0600` file) on POSIX; on Windows, which has no POSIX
   mode bits, it falls back to your account's default ACL. Outbound calls are few and all of them are yours to
@@ -113,7 +105,7 @@ are:
 | `AGENTGLASS_DB` | `~/.local/share/agentglass/agentglass.db` | SQLite file path. The default lives under `$XDG_DATA_HOME` (or `~/.local/share`), created `0700`. An `agentglass.db` **in the working directory** is never opened. When the data dir has no database yet it is copied there once (with its `-wal`; the original is left untouched and the copy is refused if it does not pass `quick_check`); otherwise the app shows a notice with both paths and the `mv` that would switch them, and the server logs the same once at startup. Only an installed app opens the default: a run from source (`bun run dev`, `bun -e`, a headless `bun run src/index.ts`) or a binary built inside a checkout (`electron/staging`, `electron/dist`) refuses to start until it is told where its database is — this variable, or `AGENTGLASS_STATE_DIR`. Naming the default path here opens it on purpose. A database written by a newer release that an older one cannot read is refused with "the database is newer than this app" instead of an SQLite error. A second server on the same file runs with its transcript scanner disabled (see the claim above), so it will not corrupt anything, but it also will not scan. |
 | `AGENTGLASS_DB_CLAIM` | `1` | `0` → do not claim the database file at boot, and do not stand the scanner down when someone else holds it. The escape hatch for the case where the claim itself is in the way; leaving it on is what keeps two processes from double-counting events, tokens and cost. |
 | `AGENTGLASS_ROOT` | — | Scope the whole cockpit to one project (repo + worktrees) or a folder of projects. Unset = every project on the machine. Also set by passing a directory to the desktop app; the in-app **project picker** sets/clears the same scope at runtime and persists it as `root` in the config file (note: the env var, when set, wins again on the next launch). |
-| `AGENTGLASS_REPO_DIRS` | — | Colon-separated folders your projects live in: the project picker lists the git repos under them and nothing else, and the git / terminal / chat panels are held to them. Also `repoDirs` in the config file, which the picker's **Add a folder** writes; this variable wins over it. |
+| `AGENTGLASS_REPO_DIRS` | — | Colon-separated folders your projects live in: the project picker lists the git repos under them and nothing else, and the git / terminal panels are held to them. Also `repoDirs` in the config file, which the picker's **Add a folder** writes; this variable wins over it. |
 | `AGENTGLASS_PROJECTS_DIR` | `~/.claude/projects` | Root the transcript scanner reads Claude Code session logs from. Several roots can be listed, separated by the platform's `PATH` delimiter (`:` on Linux/macOS, `;` on Windows). |
 | `AGENTGLASS_SCAN_INTERVAL_MS` | `3000` | Transcript scan poll interval (min 500). |
 | `AGENTGLASS_SCAN_DISABLED` | — | `1` → turn off the machine-wide transcript scanner (rely on hooks / OTel only). |
@@ -167,18 +159,13 @@ are:
 | `AGENTGLASS_AUTOFETCH_SECONDS` | `60` | How often the git panel fetches in the background. |
 | `AGENTGLASS_GIT_TIMEOUT_SECONDS` | `120` | Ceiling on a single git subprocess. |
 | `AGENTGLASS_FS_BROWSE_DISABLED` | — | `1` → disable directory completion in the project picker (`/fs/complete`), the file browser (`/files/*`, `/browse`, `/preview/*`, `/disk/*`) and every `/git/*` read that names a repository — the git panel reads a working tree too. Separate from the terminal switch on purpose: disabling the shell should not leave the directory tree readable. |
-| `AGENTGLASS_CHAT_DISABLED` | — | `1` → disable the **Chat** panel (no `claude` sessions can be started from the browser). |
-| `AGENTGLASS_CLAUDE_MODELS` | — | Path to the Claude model catalogue, overriding the copy in the checkout. See **Which models the Chat panel offers**. |
-| `AGENTGLASS_CODEX_DISABLED` | — | `1` → disable the **Codex** agent in the Chat panel, leaving Claude chat available. Codex is offered whenever a `codex` executable is on the server's `PATH`. |
-| `AGENTGLASS_ANTIGRAVITY_DISABLED` | — | `1` → disable the **Antigravity** agent in the Chat panel, leaving the other two available. Antigravity is offered whenever an `agy` executable is on the server's `PATH`. Independent of the Gemini CLI, which is a different product and is not driven from the chat panel at all. |
-| `AGENTGLASS_HERMES` | `hermes` on `PATH` | Path to the **Hermes Agent** executable the Chat panel drives. Used when the file exists; otherwise `hermes` is looked up on the server's `PATH`. |
-| `AGENTGLASS_HERMES_DISABLED` | — | `1` → disable the **Hermes** agent in the Chat panel. Even without it, Hermes is offered only when `AGENTGLASS_CHAT_BYPASS` (or `chatBypass` in config.json) is on, because it runs code without asking in both of its modes. |
-| `AGENTGLASS_HERMES_HOME` | `$HERMES_HOME`, else `~/.hermes` | The Hermes home agentglass reads, and pins the child's `HERMES_HOME` to: `config.yaml` for the model dropdown, `state.db` for the resume check. A root with a sticky `active_profile` resolves to `profiles/<name>`, as `hermes` does; a home anywhere under `~/.hermes` follows the `active_profile` of `~/.hermes` itself. Read-only; agentglass never writes there. |
-| `CODEX_HOME` | `~/.codex` | Codex's own override for where it keeps its state. agentglass reads the model cache and the rollout history (resumed-thread transcripts) from there. |
-| `AGENTGLASS_CHAT_BYPASS` | — | `1` → allow the Chat panel's unattended modes: `bypassPermissions` for Claude (`--dangerously-skip-permissions`), `full-access` for Codex (`--dangerously-bypass-approvals-and-sandbox`) and `always-proceed` for Antigravity (`--dangerously-skip-permissions`), and the Hermes agent as a whole (both of its modes run code without asking; `yolo` adds `--yolo`). Off by default; one opt-in covers all four, since it is the same decision. |
-| `AGENTGLASS_CHAT_ENGINE` | `process` | `tmux` → new chats run as a live `claude` in a pane on agentglass's own tmux server instead of one `claude -p` per turn. Faster per turn (the CLI's session start is paid once, not every message) and the session is attachable from your own terminal; costs a warm CLI (~380MB, growing with use) for as long as the chat is warm. Per-chat in **Settings → Preferences → How new chats run**. |
+| `AGENTGLASS_CLAUDE_MODELS` | — | Path to the Claude model catalogue, overriding the copy in the checkout. See **Claude model catalogue** in WORKSPACE.md. |
+| `AGENTGLASS_CODEX_DISABLED` | — | `1` → treat Codex as absent, even with a `codex` executable on the server's `PATH`. |
+| `AGENTGLASS_HERMES_HOME` | `$HERMES_HOME`, else `~/.hermes` | The Hermes home agentglass reads for the resume check (`state.db`). A root with a sticky `active_profile` resolves to `profiles/<name>`, as `hermes` does; a home anywhere under `~/.hermes` follows the `active_profile` of `~/.hermes` itself. Read-only; agentglass never writes there. |
+| `CODEX_HOME` | `~/.codex` | Codex's own override for where it keeps its state. agentglass reads the model cache and the rollout history from there. |
+| `AGENTGLASS_CHAT_BYPASS` | — | `1` → allow the unattended modes of the agents the app starts: `bypassPermissions` for Claude (`--dangerously-skip-permissions`) and the like, Off by default. The same switch is `chatBypass` in config.json. |
 | `AGENTGLASS_TMUX_SOCKET` | `agentglass` | Socket name for that server (`tmux -L <name>`). It is always launched with a config of our own (`-f`), never your `~/.tmux.conf` — otherwise tpm/resurrect/continuum would come with it and continuum's autosave would overwrite your own saved layout in the shared `~/.tmux/resurrect/`. Theme live reload also names this socket explicitly; it never sources the generated palette into your default tmux server. |
-| `AGENTGLASS_TMUX_IDLE_MINUTES` | `30` | Minutes a chat pane may sit unused before its CLI is reclaimed. The next turn resumes the session transparently (one slower turn). `0` disables eviction and keeps every warm chat resident. |
+| `AGENTGLASS_TMUX_IDLE_MINUTES` | `30` | Minutes an agent pane may sit unused before its CLI is reclaimed. `0` disables eviction and keeps every warm pane resident. |
 | `AGENTGLASS_COMMIT_DISABLED` | — | `1` → disable the diff viewer's **Commit…** composer. |
 | `AGENTGLASS_GATE_TIMEOUT` | `300` | Seconds the `PreToolUse` gate hook waits for an approve/deny before auto-allowing. |
 | `AGENTGLASS_GATE_FAILCLOSED` | — | `1` → a gate timeout (server) or an unreachable control plane (hook) **denies** the tool call instead of allowing it. Off by default (fail-open — never block agents by accident). |
@@ -190,7 +177,7 @@ are:
 | `CLAUDE_CONFIG_JSON` | `$CLAUDE_CONFIG_DIR/.claude.json`, else `~/.claude.json` | Claude Code's config, read for one field (`oauthAccount.accountUuid`) so a renewed token is told from a different login. Held in memory only; nothing else of the file is kept. |
 
 **Scope is a boundary, not just a filter.** With a project open, git writes, the
-terminal and chat are all refused outside it — the same rule that decides what the
+terminal are all refused outside it — the same rule that decides what the
 dashboard shows. This is a *behaviour* boundary, not cosmetic: with a project
 open, opening the app on `~/code` and then jumping to `/tmp` in the terminal is
 refused, and git writes outside the root are blocked — on their own, by the
@@ -217,25 +204,20 @@ opens starts Claude Code with — the Review with Claude menu, a hand-off, an
 issue start, a resumed session, a run's legs, a Command whose step starts
 `claude`. A fresh install asks (`default`) and denies `Bash(gh pr merge:*)` and
 `Bash(gh release:*)`. A review prompt or a Command can name its own mode. The
-chat and the unattended one-shots keep their own. `GET /launch-permissions`
+unattended one-shots keep their own. `GET /launch-permissions`
 reads them; `POST` writes them for the person. From an agent (a named worker
 included) a stricter mode or a longer deny list applies at once, and anything
 looser becomes a request the person approves (see the settings door below).
 
-`gateAnswerer`, `gateOnTimeout`, `chatStartIn`, `chatMode` and `chatDeny` are
-the Agents page's own choices (Settings ▸ Agents), all reachable through the
-settings door as `gate.answerer`, `gate.onTimeout`, `chats.startIn`, `chats.mode`
-and `chats.deny`. `gateAnswerer: "orchestrator"` also types one line into the
+`gateAnswerer` and `gateOnTimeout` are the Agents page's own choices
+(Settings ▸ Agents), both reachable through the settings door as
+`gate.answerer` and `gate.onTimeout`. `gateAnswerer: "orchestrator"` also types one line into the
 chair's seat when the gate holds an outward action: once per hold, never about
 the chair's own calls, with whatever the worker wrote in it quoted as data. The
 chair is told, never asked, and only a person releases a hold.
 `gateOnTimeout: "ask"` repeats the notification at a third and two thirds of the
 wait and then drops the action as before; it never extends the wait, because
-the hook holding the agent stops waiting when its own window ends. `chatDeny`
-is passed as `--disallowedTools` on every Claude chat turn and on every Claude
-chat pane started afterwards; Codex and Antigravity chats take no deny rules.
-`chatStartIn` (`last` or `open`) and `chatMode` (`inherit`,
-`default`, `acceptEdits` or `plan`) are read by the window when it opens a chat.
+the hook holding the agent stops waiting when its own window ends.
 
 `phoneAlerts` (default on; only `false` is off) is whether paired phones raise
 a notification for a pull-request watch or a card, shown in Settings ▸
@@ -292,7 +274,6 @@ that nothing the code reads goes unnamed. None is required.
 
 | var | default |
 |---|---|
-| `AGENTGLASS_CHAT_STARTUP_TIMEOUT_MS`, `AGENTGLASS_CODEX_STARTUP_TIMEOUT_MS`, `AGENTGLASS_ANTIGRAVITY_STARTUP_TIMEOUT_MS`, `AGENTGLASS_HERMES_STARTUP_TIMEOUT_MS` | `20000`, `20000`, `30000`, `30000` — how long a chat CLI may take to show its prompt |
 | `AGENTGLASS_PANE_READY_TIMEOUT_MS`, `AGENTGLASS_PANE_PASTE_TIMEOUT_MS` | `45000`, `10000` — a seated agent's pane coming up, and a paste being taken |
 | `AGENTGLASS_REPO_CACHE_MS` | `15000` — how long the repository list is trusted before it is walked again |
 | `AGENTGLASS_PRESSURE_WINDOW_MS`, `AGENTGLASS_LOOPWATCH_SIZE` | `10000`, `200` — the loop watcher's window and how many samples it keeps |
@@ -361,6 +342,7 @@ Every route is behind the token and the origin/Host gates described in [Security
 | `GET /sessions?limit=` · `/session?id=` · `/agent/sessions?root=` | Session rollups; one session in full; resumable agent sessions for a repo, joined with the live panes. |
 | `GET /stats?window=` · `/insights` · `/search?q=` | The analytics summary; derived warnings (loops, fast burn, failure rate); full-text search over prompts, commands, file paths, search patterns, notifications, final answers and errors (not tool output). |
 | `GET /usage` · `/usage/daily?days=` · `/usage/providers` · `POST /usage/codex/refresh` | Plan-limit windows; daily totals across the retention seam (rollup + live events); every provider's quota; a Codex quota refresh (spends a little quota, so opt-in). |
+| `GET` · `POST /usage/opens` | **Local-only.** How often each view, Settings page and modal was opened on this machine, most opened first, with the date of the last open. The window posts a batch at most every 15 seconds and when it is hidden; nothing polls. It lives in `usage-opens.json` in the state dir (`AGENTGLASS_STATE_DIR`), holds ids such as `view:git` and counts and dates only, is never sent anywhere, and has no setting: delete the file to start again. Read it from Settings ▸ About, or `agentglass-ui read usage`. |
 | `POST /statusline` | A live Claude Code session hands over its plan-limit windows. Authenticated like any route, not an intake sink. |
 | `GET /skills` | Skills and commands scanned from `~/.claude` and `$AGENTGLASS_CODE_DIR/*/.claude`, joined with recorded usage. |
 | `GET /changes?limit=` · `POST /walkthrough` | Recent Edit/Write diff hunks for the Diff view; the AI **Explain** walkthrough of a set of diffs (the one route that sends code to a model). |
@@ -372,10 +354,6 @@ Every route is behind the token and the origin/Host gates described in [Security
 | `GET /update/{status,log}` · `POST /update/run` | The running version, the newest release tag, and building it. **Desktop-shell origin only** — the one route that executes arbitrary code. |
 | `WS /terminal/pty?root=&cols=&rows=` · `GET /terminal/commands?root=` | A real PTY shell in a checkout; Makefile targets and `package.json` scripts by folder. Off on Windows, by `terminalDisabled`, or by `AGENTGLASS_TERMINAL_DISABLED` — `commands` says which. |
 | `GET /terminal/{panes,pane-dirs,agents,tab-hints,tmux-status,tmux/windows}` · `POST /terminal/{panes/focus,agent,dictate,image,tmux-conf,tmux-settings,tmux-reset,tmux-restore,tmux/windows}` | The engine's panes, agent kinds, tmux health; focus a pane, mint an agent ticket (cwd in scope, `yolo` only if Settings allow), dictate, stash an image (≤ 8 MB), write/reset tmux config, restore the layout, window ops. |
-| `GET /chat/{enabled,attach,panes,active}` · `POST /chat/{send,pane/close,pane/pin,pane/key}` | Drive a local `claude` session (streamed JSONL) — **gated** by `AGENTGLASS_CHAT_DISABLED`. `send` takes `engine` (`process` \| `tmux`); `pane/key` sends one allowed key into a prompt. |
-| `GET /codex/{enabled,transcript?id=}` · `POST /codex/send` | The same for a local `codex` (`codex exec --json`, `resume` for follow-ups) — **gated** by `AGENTGLASS_CODEX_DISABLED`. The transcript is read from `$CODEX_HOME/sessions`. |
-| `GET /antigravity/enabled` · `POST /antigravity/send` | The same for a local `agy` (`--conversation` for follow-ups) — **gated** by `AGENTGLASS_ANTIGRAVITY_DISABLED`. Its turns are also turned into events, since it reports to nothing else. |
-| `GET /hermes/enabled` · `POST /hermes/send` | The same for a local `hermes` (`hermes chat --query=<text> --format stream-json`, `--resume <id>` for follow-ups) — **gated** by `AGENTGLASS_HERMES_DISABLED` and by the chat bypass opt-in, and scoped like `/chat/send`. Needs Hermes Agent 0.21.4 (release v2026.9.21) or later, the first with `--format stream-json`; an older `hermes` exits on the unknown flag and the panel shows its error. The child gets no `AGENTGLASS_TOKEN` (which removes the free copy, not the reach: it runs as the same user, who can read the token file, and a tokenless loopback install needs none), no inherited `HERMES_YOLO_MODE`, `_HERMES_GATEWAY` or `HERMES_*_SESSION`, and `TERMINAL_CWD` set to the checked directory. A prompt with a NUL byte, or over 120 KB as UTF-8, is refused with a 400 or 413 rather than reaching the command line. A resume is refused when Hermes's own `state.db` row (or a compression continuation of it) records another directory, or Bypass while the turn is not Bypass, since `hermes --resume` restores both whatever its flags say. Its turns are also turned into events, since it reports to nothing else. Frame fields follow upstream `hermes_cli/stream_json.py` at [`aa75d37`](https://github.com/NousResearch/hermes-agent/blob/aa75d3724f8fa8e4b21cb77057af73bfe2e35213/hermes_cli/stream_json.py); the resume behaviour was read at [`e0550c9`](https://github.com/NousResearch/hermes-agent/blob/e0550c97bbd916cd5ff8fa0450e6291c31921b94/hermes_cli/cli_agent_setup_mixin.py); at `aa75d37` it is the same, with `_restore_session_state` in `cli_agent_setup_mixin.py` calling `_restore_session_cwd` and `_restore_session_yolo` from `hermes_cli/cli_session_mixin.py`. |
 | `GET /prs/{capability,list,detail,diff,commit-diff,compare-diff,tree-at,inbox,rollup,counts,for-branch,for-head,behind,spend,codeowners,check-jobs,job-log,conflict-files,…}` | Pull requests through `gh`, per repository: the list for a tab, one PR in full, diffs, the inbox, check rollups, job logs, a conflict preview. Cached. |
 | `GET /prs/detail` · `GET /prs/list` · `GET /prs/compare-diff` | Three reads a plugin that reviews pull requests leans on. `detail` carries `headSha` and `baseSha` (full 40-character oids, from the same GraphQL node; no extra request). `list` takes `label=<name>`, repeatable: the rows carry every label given (GitHub ANDs repeated `label:` qualifiers, case-insensitively), with the page, total and cursor of the filtered list; each label set is its own cache entry, one search cold and none warm. `compare-diff?root&number&from=<sha>&to=<sha>` is the unified diff between two commits of the pull request's head history, read from the local checkout (`gh:` roots have none and are refused): `from` and `to` are 7–40 hex characters and must be ancestors of the head, otherwise `ok:false`; a commit the clone does not hold comes back as `{ok:true, missing:"<sha>"}` and nothing is fetched; binary files appear as git's "Binary files differ" line; a diff over 6 MB is refused whole. It adds no GitHub request beyond the detail read. `GET /prs/tree-at?root&sha[&number]` is the other kind of read: a commit's files as a tar (`application/x-tar`, headers `x-tree-sha` with the full oid and `x-tree-files` with the file count), for a reviewer that needs the code of a pull request's head without calling `gh`. `root` must be a local checkout inside the open project (a `gh:` root is refused with "not a git checkout", a checkout outside it with "that checkout is outside the open project"); `sha` is 7–40 hex and must be a commit that checkout holds (otherwise `{ok:true, missing:"<sha>"}`, nothing is fetched); with `number`, it must also be part of that pull request, an ancestor of its head. Files are read from git's objects with no filter, nothing is written to the checkout, and a temp folder lives only until the stream ends. A submodule is an empty directory, a symlink pointing outside the tree is left out, binary files are kept. Caps, each named in its error (HTTP 400): 256 MB in all, 32 MB per file, 20 000 files, 60 s. One git process per call and no GitHub request when `number` is left out; with it, the detail read the other routes share. |
 | `POST /prs/{review,review-with,line-comment,apply-suggestion,comment*,reply,thread-resolved,react,edit,labels,assignees,milestone,reviewers,draft,update-branch,rerun*,merge,close,inbox/act,conflict,…}` | Pull-request actions — **gated** by `AGENTGLASS_GIT_WRITE_DISABLED` and the scope, recorded. `conflict` cuts a worktree and merges the PR into it locally. |
@@ -398,7 +376,6 @@ Every route is behind the token and the origin/Host gates described in [Security
 | `GET /preview/{facts,raw,page}?path=` · `POST /preview/open` · `POST /preview/reveal` | File metadata, raw bytes (own CSP, `nosniff`, `no-store`), an .html file as an inert page for a browser tab (`sandbox`, no scripts, no network), hand the file to the desktop opener, and show a file or folder in the file manager (a file shows the folder that holds it; both are judged). The real, symlink-resolved path is what is judged and read. |
 | `GET /editor/{capability,target,where}` · `POST /editor/open` | Which editor would open a path, the cursor in an nvim this server started, and opening a file at a line — **gated** by `AGENTGLASS_EDITOR_DISABLED`. |
 | `GET /machine/{ports,resources,space,locks,process?pid=}` · `POST /machine/{kill,unlock,env}` | What is listening and who started it; load with the fleet's processes broken out; stale `index.lock` files; one process with secrets masked. `kill`/`unlock` recorded; `env` reveals one masked value, **desktop-origin only**. |
-| `GET /runs?root=` · `/run/activity?id=` | Multi-checkout runs, including legs this app did not start, and each leg's activity by directory. |
 | `GET /recipes?root=` · `/recipes/render` · `POST /recipes/{save,remove}` | Saved command lines and what a recipe *would* run. Nothing here executes anything. |
 | `GET /hooks/status` · `POST /hooks/{install,uninstall}` · `POST /agents/connect` | Whether the Claude Code hooks are wired into `~/.claude/settings.json`, and wiring or removing them; connect one agent from the roster (hooks or OTel, with a scrubbed env). What **Settings ▸ Hooks** calls. |
 | `GET /dependencies?force=1` · `GET /browser-use/status` · `POST /browser-use/install` | Every outside tool probed for the Requirements pane; whether an agent could drive the built-in browser and what is missing; install that skill. |
@@ -417,9 +394,8 @@ Every route is behind the token and the origin/Host gates described in [Security
 | `GET` · `POST /agents/schedule` · `POST /agents/schedule/cancel` | **Scheduled starts** — `{name, cwd, when, prompt?, yolo?, kind?}`, `when` as `08:00`, `2026-09-06 08:00` or `+30m`. The named-agent rules are checked when written and again when it fires. The machine must be awake. |
 | `POST /agents/handoff` · `GET /agents/working` | Hand a session's conversation to another agent as a brief (`{session, kind}`), seated on the floating bench; whether anything is working — what the desktop's `agent` power mode polls. |
 | `GET /bench/{note,live}?root=` · `POST /bench/{note,edit,end}` | The floating bench: a per-checkout note (empty text deletes it), which slots still run, open a file in the checkout's editor, end one slot's tmux session (`{root, slot}`). |
-| `GET /understudy/{sources,shift,standing,scorecard,help,ask,work/next,work/ask,work/watch}` | The **Clone**: what it may learn from and its consent state, the running shift and caps, the header counts, the agreement scorecard, open questions, the queue and what is in flight. |
-| `POST /understudy/{enable,mode,judge,halt,open-project,allow,never,recommend,propose-scope,learn,source/*,shift/start,shift/stop,help/answered}` | Turn it on (**desktop-origin only**, token required), set a mode, toggle the judge, halt, choose sources, open and close a shift. `learn` alone opens files and refuses without a private-terms list. |
-| `POST /understudy/work/{ask,unask,run,loop,discard}` | Queue a task or take it back; cut a worktree and seat an agent (needs a running shift with actions left, a repo in the open project); chain runs; delete a worktree the runs table recorded, once its run has finished. |
+| `GET /understudy/{sources,scorecard,ask,work/ask}` | The **Clone**: what it may read and the sources it offers, the score card, a recall for a situation, and (`work/ask`) the checkouts a scheduled start may run in. |
+| `POST /understudy/{enable,mode,judge,halt,allow,never,recommend,propose-scope,learn,source/*}` | Switch it on or off, set a class's mode, judge a situation, halt it, and curate what it learns from. **Desktop-shell origin only** for the switches that widen it. |
 | `GET /plugins` · `/plugins/catalogue?url=` · `POST /plugins/{install,install-from-catalogue,update,enable,disable,remove,master}` | Installed plugins and the master switch; browse a catalogue (`https://` only); install, update, enable, disable, remove. Nothing runs at install; writes need `full`. See [docs/PLUGINS.md](PLUGINS.md). |
 | `POST /browser/<verb>` · `GET /browser/{audit,places,places/all}` · `POST /browser/{places,places/forget,visit}` | The relay the browser CLIs drive the built-in browser through (acting verbs off under `AGENTGLASS_BROWSER_READONLY=1`); an audit of every op, secrets redacted; imported history, and forgetting it. |
 | `GET /pair/state` · `POST /pair/{ticket,cancel,accept,reject,forget}` · `GET /pair/{info,collect,whoami}` · `POST /pair/claim` | Pairing a phone. The desk's half (invite, accept at a scope, revoke) is **at-machine only**; the phone's half is credential-free by design. See SECURITY.md, *Pairing a device*. |
@@ -616,15 +592,14 @@ over plain `http://` to any host that is not this machine.
                                                        │      ├─ gitwork.ts      live working tree (lazygit)
                                                        │      ├─ docker.ts       live containers (lazydocker)
                                                        │      ├─ terminal.ts     real PTY shells over WS (+ make/script catalog)
-                                                       │      ├─ chat.ts         drive local `claude` sessions (stream-json)
-                                                       │      ├─ issues.ts       GitHub issues via gh, start one as a worktree
+                                                       │                                                       │      ├─ issues.ts       GitHub issues via gh, start one as a worktree
                                                        │      ├─ files.ts        checkout tree, filename & content search
                                                        │      ├─ machine.ts       listening ports, CPU/mem/disk, per-repo space
                                                        │      ├─ gate.ts         approve/deny control plane
                                                        │      ├─ walkthrough.ts  local-Claude "Explain" of a diff set
                                                        │      ├─ lantern*.ts     the board of every agent, and the watch
                                                        │      ├─ agentops.ts     named agents + agentschedule.ts (starts on a clock)
-                                                       │      ├─ understudy-*.ts the Clone: queue, shifts, worktrees, env fence, judge
+                                                       │      ├─ understudy-*.ts the Clone: sources, bank, score, judge
                                                        │      ├─ plugins.ts      install / review / enable, a scoped token per plugin
                                                        │      ├─ browserdrive.ts the relay the browser CLIs drive the built-in browser through
                                                        │      └─ WS /stream ─┐

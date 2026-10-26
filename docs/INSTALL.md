@@ -182,14 +182,14 @@ Linux distributions, so how you install software is yours to know.
 | Tool | Why | Without it |
 | --- | --- | --- |
 | [git](https://git-scm.com/downloads) | Source control, file changes, pull requests, worktrees; the terminal uses it to decide where to open | Those panels stay empty and the terminal cannot open in a repo |
-| [Claude Code CLI](https://docs.claude.com/en/docs/claude-code/setup) | The chat panel runs `claude`: every turn, the pane engine, Review with Claude, the walkthrough | No chatting from the app. Sessions still appear: the transcript scanner reads `~/.claude/projects` regardless |
+| [Claude Code CLI](https://docs.claude.com/en/docs/claude-code/setup) | Terminal agents run `claude`, and so do Review with Claude and the walkthrough | No starting Claude from the app. Sessions still appear: the transcript scanner reads `~/.claude/projects` regardless |
 | [Python 3](https://www.python.org/downloads/) | Runs the hook forwarder, and backs the terminal's pseudo-terminal | Hooks stay wired and fail on every event, so nothing streams live and nothing says why. The terminal still opens, in a mode where full-screen programs do not render. Windows hooks use `py` or `python` |
 
 **Per feature**
 
 | Tool | Gives you | Without it |
 | --- | --- | --- |
-| [tmux](https://github.com/tmux/tmux/wiki/Installing) | Chats as live panes you can attach to, your tmux windows as tabs, theme sync | Chats run one process per turn instead: slower to start, nothing left running |
+| [tmux](https://github.com/tmux/tmux/wiki/Installing) | Agents as live panes you can attach to, your tmux windows as tabs, theme sync | The terminal opens a plain shell instead and agents are not held in panes |
 | [GitHub CLI](https://cli.github.com) | The whole pull-requests panel | No PRs. It also has to be logged in (`gh auth login`), which is the step people miss |
 | [Docker](https://docs.docker.com/get-started/get-docker/) | Containers, images, volumes, logs | No docker panel. The daemon has to be running, not just the CLI installed |
 | [Neovim](https://neovim.io) | Sending a file to a live editor, theme sync | The app hands you a command to paste instead |
@@ -205,7 +205,7 @@ Linux distributions, so how you install software is yours to know.
   version on your machine, so it wants `git`, [Bun](https://bun.sh) and a
   working build toolchain. It is opt-in and never automatic.
 
-**On Windows**, the terminal, tmux chat panes, the notification mirror and
+**On Windows**, the terminal, tmux agent panes, the notification mirror and
 self-update are off by design rather than broken: they need a POSIX
 pseudo-terminal, a Unix shell and a D-Bus session respectively. Everything else,
 including the transcript scanner and the git and PR panels, works.
@@ -315,7 +315,7 @@ only while something is working, polled from `GET /agents/working` every 20
 seconds) and **Off** (normal system sleep) — and the choice is saved to
 `~/.config/agentglass/power.json`. The default is **Agent**, the one mode that
 costs nothing when nothing is working. "Working" is judged from live state, not
-from what an agent last said: a chat pane mid-turn, a Clone run still running
+from what an agent last said: a Clone run still running
 (staled out after two hours, so a run killed mid-task cannot hold the lid), a
 hook that fired in the last ten minutes from any session on the machine — the
 ones in your own terminals included — or a named agent whose pane still exists.

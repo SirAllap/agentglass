@@ -165,10 +165,6 @@ export function TerminalIcon({ size = ICON.md }: P) {
   );
 }
 
-export function ChatIcon({ size = ICON.md }: P) {
-  return <svg {...svg} viewBox="1.16 1.16 21.69 21.69" strokeWidth={1.81} width={size} height={size}><path d="M20 4H4v12h5v4l5-4h6z" /></svg>;
-}
-
 /**
  * Two of you, and the second one is drawn as a dotted line.
  *

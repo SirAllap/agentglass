@@ -2,13 +2,12 @@
 //
 // What can go wrong here is all text: a snippet that quotes the wrong lines, a
 // comment that loses its code when the agent edits the file, a prompt whose
-// fence is closed early by the code it quotes, or a review handed to a chat in
-// some other checkout. Pure functions, no DOM.
+// fence is closed early by the code it quotes. Pure functions, no DOM.
 import { test, expect } from "bun:test";
 import type { DiffHunk } from "../../shared/types.ts";
 import {
-  addComment, anchorLabel, captureSnippet, chatForTree, checkAtSend, clearReview, composeReview, editComment,
-  isStale, removeComment, reviewFor, sanitizeReviews, setFrame, withDraft, type ReviewComment,
+  addComment, anchorLabel, captureSnippet, checkAtSend, clearReview, composeReview, editComment,
+  isStale, removeComment, reviewFor, sanitizeReviews, setFrame, type ReviewComment,
 } from "../src/lib/diffReview.ts";
 
 const PAGE = await Bun.file(new URL("../src/components/diff/DiffPage.tsx", import.meta.url)).text();
@@ -164,47 +163,6 @@ test("a file whose diff cannot be fetched is warned about as unchecked, not pass
 test("nothing stale anywhere means nothing to warn about", async () => {
   const c = comment({ id: "c1", snippet: captureSnippet(hunks, "RIGHT", 11, 11) });
   expect((await checkAtSend([c], async () => hunks)).files).toEqual([]);
-});
-
-const chat = (id: string, cwd: string, lastTs: number | null, createdAt = 0) =>
-  ({ id, cwd, createdAt, messages: lastTs == null ? [] : [{ ts: lastTs }] });
-
-test("the chat that last spoke in the tree gets the review", () => {
-  const got = chatForTree([
-    chat("other", "/code/orbit-api", 900),
-    chat("old", "/code/orbit", 100),
-    chat("new", "/code/orbit/", 500),
-    chat("fresh", "/code/orbit", null, 999),
-  ], "/code/orbit");
-  expect(got?.id).toBe("new");
-});
-
-test("a clean worktree nested under the checkout never receives its review", () => {
-  // The worktree has nothing uncommitted, so no list of changed files knows it
-  // is a checkout; its agent spoke last. The review is still the outer tree's.
-  const chats = [chat("main", "/code/orbit", 1), chat("nested", "/code/orbit/.worktrees/feat", 9)];
-  expect(chatForTree(chats, "/code/orbit")?.id).toBe("main");
-  expect(chatForTree(chats, "/code/orbit/.worktrees/feat")?.id).toBe("nested");
-  expect(chatForTree([chat("nested", "/code/orbit/.worktrees/feat", 9)], "/code/orbit")).toBeUndefined();
-});
-
-test("a chat in a folder below the root is not taken for the tree's agent", () => {
-  // It could be a nested checkout nobody has listed; a new chat at the root is
-  // the safe answer, a review in the wrong tree is not.
-  expect(chatForTree([chat("sub", "/code/orbit/web", 9)], "/code/orbit")).toBeUndefined();
-});
-
-test("a sibling checkout whose name starts the same is not in the tree", () => {
-  expect(chatForTree([chat("sib", "/code/orbit-v2", 1)], "/code/orbit")).toBeUndefined();
-});
-
-test("a fresh tab in the tree is used when nobody has spoken there", () => {
-  expect(chatForTree([chat("fresh", "/code/orbit", null)], "/code/orbit")?.id).toBe("fresh");
-});
-
-test("the review goes under a half-written draft, never over it", () => {
-  expect(withDraft("", "R")).toBe("R");
-  expect(withDraft("also check the tests  \n", "R")).toBe("also check the tests\n\nR");
 });
 
 // --- the store ---------------------------------------------------------------

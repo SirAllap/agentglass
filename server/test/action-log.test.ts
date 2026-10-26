@@ -125,13 +125,11 @@ describe("nothing writes without being recorded", () => {
     // Each family ends in a single `if (res) return json(res, …)`. Find them
     // all and require noteAction on the same line.
     const returns = index.split("\n").filter((l) => /if \(res\) .*return json\(res/.test(l));
-    // Five: git, docker, pull requests, issues, runs. The number is a tripwire,
+    // Four: git, docker, pull requests, issues. The number is a tripwire,
     // not a fact about the code — when it moves, the job is to confirm the new
-    // family records rather than to edit this line and move on. It moved to five
-    // when the run routes landed, and the run switch was checked by hand at
-    // index.ts:3220 before this number was touched: it carries noteAction like
-    // the other four.
-    expect(returns.length, "the write switches were restructured — re-check this guard").toBe(5);
+    // family records rather than to edit this line and move on. It was five
+    // while the run routes existed.
+    expect(returns.length, "the write switches were restructured — re-check this guard").toBe(4);
     for (const line of returns) {
       expect(line, "a write family answers without recording").toContain("noteAction(");
     }
@@ -145,19 +143,6 @@ describe("nothing writes without being recorded", () => {
     // Read before deciding, or the row is already resolved and the line loses
     // the only part worth keeping.
     expect(handler.indexOf("getGate(")).toBeLessThan(handler.indexOf("decideGate("));
-  });
-
-  step("a chat launch is recorded, and its prompt is not", () => {
-    // #299 names chat-initiated runs. What is auditable is that somebody
-    // started an agent in a checkout; the prompt is already in the transcript
-    // and in `events`, and a second copy in a table nothing prunes is a copy
-    // nobody asked for.
-    const at = index.indexOf('pathname === "/chat/send"');
-    expect(at).toBeGreaterThan(-1);
-    const handler = index.slice(at, index.indexOf("\n    }", at));
-    expect(handler).toContain("noteAction(");
-    expect(handler, "the prompt must not reach the audit log").not.toMatch(/noteAction\([^)]*b\.message/s);
-    expect(targetOf("/chat/send", { root: "/home/you/code/shop-api", name: "opus" })).toBe("shop-api · opus");
   });
 
   step("/control is recorded by door and verdict, and the values it named are not", () => {

@@ -189,7 +189,7 @@ describe("what a paired phone can do", () => {
     expect(why.needs).toBe("full");
     expect(why.error).toContain("/prs/merge");
 
-    for (const path of ["/git/push", "/git/reset", "/docker/rm", "/chat/attach"]) {
+    for (const path of ["/git/push", "/git/reset", "/docker/rm", "/terminal/tmux/windows"]) {
       expect((await post(path, { root: dir }, token)).status, path).toBe(403);
     }
   });

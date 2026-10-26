@@ -26,7 +26,7 @@ const read = (f: string) => readFileSync(new URL(`../src/${f}`, import.meta.url)
 /** Every call to `engineWindowRunning`, with the file it is in. */
 function callSites(): { file: string; text: string }[] {
   const out: { file: string; text: string }[] = [];
-  for (const f of ["terminal.ts", "index.ts", "runs.ts", "understudy-pane.ts"]) {
+  for (const f of ["terminal.ts", "index.ts"]) {
     const src = read(f);
     for (let at = src.indexOf("engineWindowRunning("); at > -1; at = src.indexOf("engineWindowRunning(", at + 1)) {
       if (src.slice(Math.max(0, at - 40), at).includes("export async function")) continue;
@@ -60,11 +60,9 @@ function topLevelArgs(call: string): string[] {
 
 describe("who gets a session of their own", () => {
   test("every button a person presses opens in the session they are on", () => {
-    /* The clone's own paths, by file and by the window name it uses — not by
-       a word appearing anywhere in the call, which put `runs.ts` on the wrong
-       side of the line. */
+    /* Anything the machine opens for itself, by the window name it uses. */
     const isClone = (c: { file: string; text: string }) =>
-      c.file === "runs.ts" || c.file === "understudy-pane.ts" || /understudy:/.test(c.text);
+      /understudy:/.test(c.text);
     const theirs = callSites().filter((c) => !isClone(c));
     expect(theirs.length, "the button call sites moved").toBeGreaterThanOrEqual(3);
     for (const c of theirs) {
@@ -76,18 +74,6 @@ describe("who gets a session of their own", () => {
     }
   });
 
-  test("and the clone's own runs still get one to themselves", () => {
-    /* The exception, and the only one: these are started by the machine, not
-       by a press, and putting them on the strip fills it with windows nobody
-       opened. */
-    const clone = callSites().filter((c) =>
-      c.file === "runs.ts" || c.file === "understudy-pane.ts" || /understudy:/.test(c.text));
-    expect(clone.length, "the clone opens its runs through this too").toBeGreaterThanOrEqual(1);
-    for (const c of clone) {
-      expect(topLevelArgs(c.text).length, "a clone run must not land in somebody's working session")
-        .toBeLessThan(6);
-    }
-  });
 
   test("the parameter is optional, so the clone's path needs no change", () => {
     const src = read("tmuxpane.ts");
@@ -148,7 +134,7 @@ test("selecting the new window is opt-in, and the clone does not opt in", () => 
      `/terminal/open-shell` — a person pressing the empty state's own button,
      not a run the machine started, so it is excluded here and checked with
      the other button calls below instead. */
-  for (const f of ["../src/understudy-pane.ts", "../src/index.ts", "../src/runs.ts"]) {
+  for (const f of ["../src/index.ts"]) {
     const src = readFileSync(new URL(f, import.meta.url), "utf8");
     for (const m of src.matchAll(/engineWindowRunning\(([^;]*?)\)\s*[;,)]/gs)) {
       const args = m[1]!;

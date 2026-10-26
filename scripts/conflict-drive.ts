@@ -220,22 +220,13 @@ await drive("merge", async (cdp, shot, repo) => {
   const doneT = await text(cdp);
   check("every file resolved", /5 of 5 files resolved/.test(doneT), (doneT.match(/\d+ of \d+ files? resolved/) || [])[0]);
 
-  // The handoffs. Both of these reported as broken by somebody using them: the
-  // terminal one did its whole job in silence, and the chat one opened a blank
-  // chat because it set the stored id and stopped there — the chat panel keeps
-  // its own selection and reads that id only at mount.
+  // The handoff. It was reported as broken by somebody using it: it did its
+  // whole job in silence.
   check("the terminal handoff says it happened", await clickText(cdp, "/in a terminal/"));
   await Bun.sleep(900);
   const toastT = await text(cdp);
   check("and names where it went", /tmux window/.test(toastT), (toastT.match(/Claude is on it[^\n]*/) || [])[0]);
 
-  check("the chat handoff is offered as the lesser option", await clickText(cdp, "/in the chat/"));
-  await Bun.sleep(1600);
-  const chatT = await text(cdp);
-  check("the chat it opens is the seeded one", /Resolve merge conflicts/.test(chatT),
-    (chatT.match(/new chat|Resolve merge conflicts/) || [])[0]);
-  check("with the briefing already in the box", await cdp.ev(
-    `!![...document.querySelectorAll('textarea')].find(e=>/conflicted|mid-merge/i.test(e.value||""))`));
   // Back to the conflict screen for the rest of the run. By the rail's own
   // aria-label: its buttons carry no text, and the `title` is a hint sentence
   // that has been reworded before.

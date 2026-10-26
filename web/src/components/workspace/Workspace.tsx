@@ -28,7 +28,6 @@ import { railBadgesKey, subscribeRailBadges, visiblePips } from "../../lib/railB
 import { pushScope } from "../../lib/findScope.ts";
 import { VIEWS, saveLastView, type ViewId } from "./views.ts";
 import { ViewBoundary } from "./ViewBoundary.tsx";
-import { subscribe as subscribeChats, attentionCount, listChats, newChat, requestChatFocus, seedChat, setActiveChatId, update as updateChat } from "../../lib/chatStore.ts";
 import { FilesView } from "../FilesPanel.tsx";
 import { TasksView } from "../TasksPanel.tsx";
 import { subscribeReminders, firedCount } from "../../lib/reminderStore.ts";
@@ -38,7 +37,6 @@ import { DiffPage } from "../diff/DiffPage.tsx";
 import { PrView } from "../PrPanel.tsx";
 import { DockerView } from "../DockerPanel.tsx";
 import { TermView } from "../TerminalPanel.tsx";
-import { ChatView } from "../ChatPanel.tsx";
 import { BrowserView } from "../BrowserPanel.tsx";
 import { LanternView } from "../LanternView.tsx";
 import { SeatView } from "../SeatView.tsx";
@@ -55,14 +53,14 @@ import { LAYER } from "../../lib/layers.ts";
  *
  * Everything else is free when it is not on screen — that is the contract this
  * shell exists for. These two are the deliberate exceptions and they are not an
- * oversight: a terminal holds a pty and a chat holds a stream, and unmounting
- * either would kill a session nobody asked to end. The cost is real, and it is
+ * oversight: a terminal holds a pty, and unmounting it would kill a session
+ * nobody asked to end. The cost is real, and it is
  * the price of them being sessions rather than screens.
  */
 /*
  * Mounted whether or not anybody has been there.
  *
- * The terminal and the chat because they hold a live session. The BROWSER for a
+ * The terminal because it holds a live session. The BROWSER for a
  * different reason: it is the only view an AGENT drives, and until its panel is
  * mounted nothing can answer one — so the first `agentglass-browser` call of a
  * session was answered with "the view is not open", which the CLI fixes by
@@ -70,7 +68,7 @@ import { LAYER } from "../../lib/layers.ts";
  * nothing until it is looked at: its tabs come back asleep, and a sleeping tab
  * is a name and an address with no guest behind it.
  */
-const KEEP_RUNNING = new Set<ViewId>(["term", "chat", "browser"]);
+const KEEP_RUNNING = new Set<ViewId>(["term", "browser"]);
 
 /*
  * There is no fleet column here, and there was one for about an hour.
@@ -85,16 +83,15 @@ const KEEP_RUNNING = new Set<ViewId>(["term", "chat", "browser"]);
  */
 
 export function Workspace({
-  view, onView, onSkills, onSettings, onMachine, chatFocusId, dashboard, prJump, cardJump, issueJump,
+  view, onView, onSkills, onSettings, onMachine, dashboard, prJump, cardJump, issueJump,
 }: {
   view: ViewId;
   onView: (v: ViewId) => void;
   onSkills: () => void;
   onSettings: () => void;
   onMachine: (tab: "ports" | "resources") => void;
-  chatFocusId?: string | null;
   /** The dashboard is a view like any other, but its data lives at the root
-   *  (the live socket feeds the chat store too), so it arrives already built
+   *  (the live socket feeds it), so it arrives already built
    *  and is handed its own `active` here like everything else. */
   dashboard: (active: boolean) => React.ReactNode;
   /** A pull-request errand another panel sent — see lib/openPrs.ts. */
@@ -103,26 +100,12 @@ export function Workspace({
   cardJump?: import("../../lib/openCard.ts").CardJump | null;
   issueJump?: import("../../lib/openIssue.ts").IssueJump | null;
 }) {
-  const openChat = useCallback(() => onView("chat"), [onView]);
   /* Held, not inlined. The hidden views are behind a memo that compares props
      by identity, and a fresh arrow on every render of this component makes that
      comparison fail for all seven of them — which is the memo doing nothing at
-     all. Same shape as `openChat` above for the same reason. */
+     all. */
   const openBrowser = useCallback(() => onView("browser"), [onView]);
   const openLantern = useCallback(() => onView("lantern"), [onView]);
-
-  /**
-   * Start a chat already pointed at a directory, with a prompt waiting.
-   *
-   * The prompt lands in the composer rather than being sent: a review is a real
-   * Claude run that costs real tokens, and it should not begin because you
-   * clicked a button one pane over. A seeded tab that was never sent is reused
-   * rather than duplicated — clicking twice means "show me that again".
-   */
-  const openChatWith = useCallback((cwd: string, prompt: string, title: string) => {
-    seedChat(cwd, prompt, title);
-    onView("chat");
-  }, [onView]);
 
   /** Send a pull request review to a window on the ENGINE, and go there to
    *  watch it. It used to go to the user's own tmux, and refused outright when
@@ -135,14 +118,12 @@ export function Workspace({
   }, [onView]);
 
   const frameRef = useRef<HTMLDivElement>(null);
-  const chatWaiting = useSyncExternalStore(subscribeChats, attentionCount, attentionCount);
   const firedReminders = useSyncExternalStore(subscribeReminders, firedCount, firedCount);
   const lanternWaiting = useSyncExternalStore(subscribeLantern, lanternNeed, lanternNeed);
 
   // A count the person turned off in Settings (Sidebar) is not drawn.
   useSyncExternalStore(subscribeRailBadges, railBadgesKey, railBadgesKey);
   const pips: Partial<Record<ViewId, RailPip>> = {
-    chat: chatWaiting > 0 ? { count: chatWaiting } : {},
     // The lantern lights: how many agents are stopped on a person right now.
     // Not how many agents there are — twenty working is a normal afternoon.
     lantern: lanternWaiting > 0 ? { count: lanternWaiting } : {},
@@ -232,14 +213,14 @@ export function Workspace({
               <ViewBoundary label={v.label}>
                 {v.id === "dash"
                   ? dashboard(active)
-                  : <Body id={v.id} active={active} openChat={openChat}
-                      openBrowser={openBrowser} openLantern={openLantern} chatFocusId={chatFocusId} />}
+                  : <Body id={v.id} active={active}
+                      openBrowser={openBrowser} openLantern={openLantern} />}
               </ViewBoundary>
             </ViewBox>
           );
         })}
         {BOARDS.filter((k) => visited.has(k)).map((k) => (
-          <BoardInstance key={k} kind={k} openChatWith={openChatWith} reviewInTerminal={reviewInTerminal} openBrowser={openBrowser}
+          <BoardInstance key={k} kind={k} reviewInTerminal={reviewInTerminal} openBrowser={openBrowser}
             prJump={prJump} cardJump={cardJump} issueJump={issueJump} />
         ))}
       </div>
@@ -290,34 +271,31 @@ function ViewBox({ active, children }: { active: boolean; children: React.ReactN
 
 /** The non-dashboard views, and the props each one wants. Split out so the map
  *  above stays about mounting rather than about plumbing. */
-function BodyImpl({ id, active, openChat, openBrowser, openLantern, chatFocusId }: {
+function BodyImpl({ id, active, openBrowser, openLantern }: {
   id: ViewId; active: boolean;
-  openChat: () => void;
   openLantern: () => void;
   /** Bring the browser view forward — the Docker panel asks for it when you
    *  open a container's port, so a dev server lands in a tab of this app
    *  instead of somewhere else. */
   openBrowser: () => void;
-  chatFocusId?: string | null;
 }) {
   switch (id) {
     case "files": return <BoardSlot kind="files" place="rail" visible={active} />;
     /* The two boards are not drawn here: this is one of the two places they
        can be shown, and the board itself is rendered once, below. */
     case "tasks": return <BoardSlot kind="tasks" place="rail" visible={active} />;
-    case "git": return <GitView active={active} onOpenChat={openChat} />;
+    case "git": return <GitView active={active} />;
     case "diff": return <DiffPage active={active} />;
     case "pr": return <BoardSlot kind="pr" place="rail" visible={active} />;
     case "docker": return <DockerView active={active} onOpenBrowser={openBrowser} />;
     case "term": return <TermView active={active} />;
-    case "chat": return <ChatView active={active} focusId={chatFocusId} />;
     case "browser": return <BrowserView active={active} />;
     /* One errand, and only one: the Lantern is the field this post reads, so
        the seat carries a way across to it rather than drawing the board a
        second time. */
     case "seat": return <SeatView onLantern={openLantern} />;
-    /* Its chat is a tab on the floating bench, not a seeded Chat view — see
-       lanternAsk.ts. Nothing to hand it. */
+    /* Its chat is a tab on the floating bench — see lanternAsk.ts. Nothing to
+       hand it. */
     case "lantern": return <LanternView active={active} />;
     case "plugins": return <PluginsView active={active} />;
     default: return null;
@@ -360,7 +338,6 @@ function BoardInstance({ kind, ...props }: Omit<BoardBodyProps, "active">) {
 
 interface BoardBodyProps {
   kind: BoardKind; active: boolean;
-  openChatWith: (cwd: string, prompt: string, title: string) => void;
   openBrowser: () => void;
   reviewInTerminal: (root: string, number: number, recipe?: string, card?: string) => void;
   prJump?: import("../../lib/openPrs.ts").PrJump | null;
@@ -368,11 +345,11 @@ interface BoardBodyProps {
   issueJump?: import("../../lib/openIssue.ts").IssueJump | null;
 }
 
-function BoardBodyImpl({ kind, active, openChatWith, openBrowser, reviewInTerminal, prJump, cardJump, issueJump }: BoardBodyProps) {
+function BoardBodyImpl({ kind, active, openBrowser, reviewInTerminal, prJump, cardJump, issueJump }: BoardBodyProps) {
   if (kind === "files") return <FilesView active={active} />;
   return kind === "pr"
-    ? <PrView active={active} onOpenChatWith={openChatWith} onReviewInTerminal={reviewInTerminal} jumpTo={prJump} />
-    : <TasksView active={active} onOpenChatWith={openChatWith} onOpenBrowser={openBrowser} cardJump={cardJump} issueJump={issueJump} />;
+    ? <PrView active={active} onReviewInTerminal={reviewInTerminal} jumpTo={prJump} />
+    : <TasksView active={active} onOpenBrowser={openBrowser} cardJump={cardJump} issueJump={issueJump} />;
 }
 
 const BoardBody = memo(BoardBodyImpl, hiddenOnly);

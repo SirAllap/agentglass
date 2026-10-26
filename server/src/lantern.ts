@@ -14,7 +14,6 @@
 import { existsSync } from "node:fs";
 import { tmux } from "./tmuxpane.ts";
 import * as AgentBoard from "./agentboard.ts";
-import * as Work from "./understudy-work.ts";
 import { recentPaneAgents } from "./panewt.ts";
 import { db, sessionNames, latestWaits, sessionRoles, setSessionRole, sessionsWhosePromptStarts } from "./db.ts";
 import { pendingGates } from "./gate.ts";
@@ -192,9 +191,6 @@ export async function boardNow(): Promise<LanternCard[]> {
       return { paneId, name, cwd, dead };
     }).filter((x) => x.paneId.startsWith("%") && x.dead !== "1").map(({ dead: _d, ...x }) => x))
     .catch(() => [] as { paneId: string; name: string; cwd: string }[]);
-  const runs = Work.runningRuns().map((r) => ({
-    title: r.title, worktree: r.worktree, branch: r.branch, startedAt: r.startedAt,
-  }));
 
   /*
    * GIT IS ASKED IN THE REPOSITORY THE ROW IS ACTUALLY IN.
@@ -214,7 +210,7 @@ export async function boardNow(): Promise<LanternCard[]> {
   /* The hooks' panes too: a session that never posted a status still runs
      somewhere, and without its checkout here its branch reads as nothing. */
   const hooks = recentPaneAgents({});
-  const claimed = [...AgentBoard.board(), ...runs.map((r) => ({ worktree: r.worktree })), ...hooks.map((h) => ({ worktree: h.cwd }))]
+  const claimed = [...AgentBoard.board(), ...hooks.map((h) => ({ worktree: h.cwd }))]
     .map((a) => (a.worktree ?? "").trim()).filter(Boolean);
   const trees: { path: string; branch: string }[] = [];
   const landedBy: Record<string, { landed: boolean; into: string }> = {};
@@ -297,7 +293,7 @@ export async function boardNow(): Promise<LanternCard[]> {
      this on — see seatpanes.ts — and the cost of missing it was the seat being
      woken every hour by a finding about itself. */
   const chairs = seatPanes();
-  const rows: LanternCard[] = AgentBoard.placed(AgentBoard.merged({ said, hooks, panes, trees, runs, landedBy, names, waiting, gone }), { chairs: seatRoots(), owned: liveOwned() }).map((r) => {
+  const rows: LanternCard[] = AgentBoard.placed(AgentBoard.merged({ said, hooks, panes, trees, landedBy, names, waiting, gone }), { chairs: seatRoots(), owned: liveOwned() }).map((r) => {
     /* The two readers of this board, set aside the same way: the Lantern's
        chat and the project's seat. Neither is somebody's work, and a "needs
        you" on either is a person mid-conversation with it. */

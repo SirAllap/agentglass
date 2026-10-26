@@ -17,7 +17,6 @@ import { UI_ACTIONS, parseArgs, uiOf, type UiActionId, type UiArgs, type UiReply
 import type { ControlCmd, ViewId } from "../../../shared/types.ts";
 import { openSettings } from "./openSettings.ts";
 import { openFinderAt } from "./finderTarget.ts";
-import { latchChatIntent } from "./chatIntent.ts";
 import { latchGitModal } from "./gitModalIntent.ts";
 import { latchViewModal } from "./viewModalIntent.ts";
 import { latchStage } from "./stageIntent.ts";
@@ -108,9 +107,6 @@ export const UI_HANDLERS: { [Id in UiActionId]: Handler<Id> } = {
   "esc.peel": (_a, c) => c.peel(),
   "panel.open": (a, c) => c.panel(a.what),
   "finder.open": (a) => openFinderAt(a.path, a.kind),
-  // Latch before opening: the panel drains the mailbox on mount, so this works
-  // whether or not the chat view is already up.
-  "chat.new": (_a, c) => { latchChatIntent("new"); c.goView("chat"); },
   // Through the appearance.theme setting, as the Settings row does, so a palette
   // change from an agent is validated the same way, leaves the undo chip, and the
   // window repaints itself on the setting's own announcement.

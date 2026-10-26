@@ -3,7 +3,7 @@
  *
  * The pull request panel already has line comments that collect into a pending
  * review; this is the same shape for the working tree, where the recipient is an
- * agent in a chat rather than GitHub. So the review ends as TEXT: every comment
+ * agent in a terminal window rather than GitHub. So the review ends as TEXT: every comment
  * becomes `path:line`, the code it was about, and what was said — the agent is
  * never left finding the code from a description of it.
  *
@@ -14,7 +14,7 @@
  * that line now is worse than no review.
  *
  * Kept by checkout root, in localStorage: a review is a thing you build up over a
- * few files and several minutes, and navigating to the chat to look something up
+ * few files and several minutes, and navigating to the terminal to look something up
  * must not throw it away. Per browser, like the read ticks beside it — this is a
  * draft, not a record.
  */
@@ -170,40 +170,6 @@ export function composeReview(root: string, review: Review, stale: ReadonlySet<s
   });
   if (review.outro.trim()) parts.push(review.outro.trim());
   return parts.join("\n\n");
-}
-
-/**
- * Which chat is "the agent working in that tree".
- *
- * A chat whose directory IS the checkout root — not one somewhere under it.
- * `.worktrees/` lives under the root it was cut from, and a prefix test hands
- * the review to the agent in the worktree, which then edits the wrong tree. A
- * list of known checkouts to exclude does not close that: the one this view has
- * is built from changed files, so a worktree whose agent has committed
- * everything is in no list, and that agent is the one that spoke last.
- *
- * The ceiling, chosen: a chat opened in a folder below the root is not found,
- * and the caller starts a new chat at the root. Telling that folder from a
- * nested checkout needs the filesystem; a spare tab is cheap, a review in the
- * wrong tree is not.
- *
- * One that has already said something beats a fresh tab, and among those the one
- * that spoke last — that is the conversation that made these changes.
- * `undefined` means nobody is working there, and the caller starts a chat for it.
- */
-export function chatForTree<T extends { cwd: string; createdAt: number; messages: { ts: number }[] }>(
-  chats: readonly T[], root: string,
-): T | undefined {
-  const bare = (p: string) => (p.length > 1 ? p.replace(/\/+$/, "") : p);
-  const last = (c: T) => c.messages[c.messages.length - 1]?.ts ?? c.createdAt;
-  return chats
-    .filter((c) => bare(c.cwd) === bare(root))
-    .sort((a, b) => Number(b.messages.length > 0) - Number(a.messages.length > 0) || last(b) - last(a))[0];
-}
-
-/** Put the review below whatever is already in a composer, never over it. */
-export function withDraft(draft: string, prompt: string): string {
-  return draft.trim() ? `${draft.replace(/\s+$/, "")}\n\n${prompt}` : prompt;
 }
 
 // --- the store ---------------------------------------------------------------

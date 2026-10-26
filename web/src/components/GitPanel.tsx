@@ -32,7 +32,6 @@ import { useDialogs } from "./ConfirmDialog.tsx";
 import { api, IS_DEMO } from "../lib/api.ts";
 import { refusalFinal, useCoverHold } from "../lib/cover.ts";
 import { subscribeGitChanged } from "../lib/gitBus.ts";
-import { seedChat } from "../lib/chatStore.ts";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import { worktreeTag } from "../lib/worktree.ts";
@@ -825,7 +824,7 @@ function GitToast({ toast, floating }: { toast: { ok: boolean; msg: string }; fl
   );
 }
 
-export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: () => void }) {
+export function GitView({ active }: { active: boolean }) {
   /** A modal asked for through /control while this view is not on screen. The
    *  view then loads its checkout and lists as if it were open, for as long as
    *  the modal is up, and nothing else: the person stays on the view they were
@@ -1051,14 +1050,10 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   };
 
   /**
-   * The same conflict, in a terminal instead of the chat.
+   * Hand the conflict to an agent in a terminal.
    *
-   * Two places the same work can happen, and it is not a setting: the chat
-   * renders from the transcript and keeps the pane out of sight; a tmux window
-   * gives you the session itself, attached, beside your other shells — where
-   * you can watch it edit and take the keyboard off it. Which you want depends
-   * on whether you intend to watch or to join in, which is the same choice the
-   * pull request panel already offers for a review.
+   * A tmux window gives you the session itself, attached, beside your other
+   * shells — where you can watch it edit and take the keyboard off it.
    */
   // The prompt is fetched first and can take a moment; without this a second
   // press in that window opened a second tab.
@@ -1081,25 +1076,6 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     else flash(false, `Claude was not started: ${done.error}`);
   };
 
-  /**
-   * The same handoff, in the chat pane instead.
-   *
-   * Deliberately the lesser of the two: the terminal gives you the session
-   * itself, attached, where you can watch it edit and take the keyboard off it.
-   *
-   * Goes through seedChat() rather than assembling the tab here. This function
-   * used to do it by hand and left out the one call that matters — the chat
-   * panel keeps its own selection in component state and reads the stored id
-   * only at mount — so the prompt landed in a tab nobody was looking at and the
-   * chat opened blank. It looked exactly like the button doing nothing.
-   */
-  const askClaude = async () => {
-    if (handing.current) return;
-    handing.current = true;
-    const h = await conflictPrompt().finally(() => { handing.current = false; });
-    seedChat(root, h.prompt, "Resolve merge conflicts");
-    onOpenChat?.();
-  };
   // Only the branches whose upstream is gone — the merged-and-tidied ones. Off
   // by default: it's a cleanup mode, not a way to read the branch list.
   const [onlyGone, setOnlyGone] = useState(false);
@@ -2877,7 +2853,6 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     act={act}
                     ask={ask}
                     flash={flash}
-                    onAskClaude={askClaude}
                     onAskClaudeTerminal={askClaudeInTerminal}
                     terminalWindowLive={!!conflictWindow}
                     onOpenEditor={(relPath, line) => {
@@ -3126,13 +3101,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         title={conflicts.length ? "resolve every file first" : "commit the merge"}>continue</button>
                       {conflicts.length > 0 && (
                         <>
-                          <button onClick={askClaude}
-                            className="text-[10.5px] px-2 py-0.5 rounded-lg whitespace-nowrap"
-                            style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
-                            title="Open a chat in this repo, asking Claude to resolve them"><IconLabel icon={<SparkleIcon size={ICON.xs} />}>ask claude</IconLabel></button>
-                          {/* The other half of the same choice — see
-                              askClaudeInTerminal. A tmux window in this repo,
-                              attached, beside your own shells. */}
+                          {/* A tmux window in this repo, attached, beside your own
+                              shells — see askClaudeInTerminal. */}
                           <button onClick={askClaudeInTerminal}
                             className="text-[10.5px] px-2 py-0.5 rounded-lg whitespace-nowrap"
                             style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}

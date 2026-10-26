@@ -50,7 +50,7 @@ const ago = (t: number) => {
 };
 
 const GO_LABEL: Record<NonNullable<SystemNote["goto"]>["kind"], string> = {
-  pr: "Open PR", pane: "Open terminal", card: "Open card", chat: "Open chat", git: "Open Git", settings: "Open Settings", file: "Open file",
+  pr: "Open PR", pane: "Open terminal", card: "Open card", git: "Open Git", settings: "Open Settings", file: "Open file",
 };
 
 /** Just the host, so the button can say where it goes rather than showing a

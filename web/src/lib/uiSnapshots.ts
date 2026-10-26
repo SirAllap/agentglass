@@ -2,7 +2,7 @@
  * What `ui.state` and `ui.read` answer with: one provider per panel, each a pure
  * function of plain data, so a test feeds it a fixture and no renderer is needed.
  *
- * Providers read what the STORES and pref modules hold (chatStore, benchStore,
+ * Providers read what the STORES and pref modules hold (benchStore,
  * gateStore, diffPrefs, termPrefs…), never component state and never the DOM, so
  * a panel that is not mounted still answers. The gathering lives in
  * uiSnapshotSources.ts; nothing in this file imports a store at runtime.
@@ -11,7 +11,7 @@
  *
  *  1. Two buckets. `state` holds only what the app minted or the owner picked
  *     from a closed set (booleans, numbers, ids, enum words). Every string that
- *     came from outside (a chat message, a tab title, a path, a URL, a pull
+ *     came from outside (a tab title, a path, a URL, a pull
  *     request title, a command a gate is holding) goes under `untrusted`, which
  *     the agent reads as data and never obeys. A string in `state` that does not
  *     look like an id is moved to `untrusted._moved` by `finish`, so a provider
@@ -36,9 +36,9 @@ import {
 import { stripSecrets } from "../../../shared/scrub.ts";
 import type { DiskCleanReport, PendingGate, ViewId } from "../../../shared/types.ts";
 import type { NotifyPrefs } from "../../../shared/notifyPrefs.ts";
-import type { Chat } from "./chatStore.ts";
 import type { BenchState, BenchTab } from "./benchStore.ts";
 import type { AccountsOut } from "../../../shared/pluginAccounts.ts";
+import type { UsageOpens } from "../../../shared/types.ts";
 import type {
   PrefsData, RailData, KeysData, TasksData, AppearanceData, UnderstudyData, HooksData, LanternData, BudgetsData, RecipeRow,
   ReviewPromptRow, SavedReplyRow, TmuxData, PrivacyData, PluginsData, LogData, AboutData,
@@ -69,7 +69,6 @@ export interface AppSlice {
 /** Thunks, so a provider reads only the stores it names. */
 export interface Sources {
   app(): AppSlice;
-  chats(): { list: readonly Chat[]; activeId: string };
   bench(): BenchState;
   gates(): readonly PendingGate[];
   diff(): { split: boolean; wrap: boolean; noWhitespace: boolean; theme: string };
@@ -101,6 +100,7 @@ export interface Sources {
     about(): Promise<AboutData>;
     diskClean(): Promise<DiskCleanReport>;
     usageAccounts(): Promise<AccountsOut[]>;
+    usageOpens(): Promise<UsageOpens>;
   };
 }
 
@@ -199,8 +199,6 @@ export const notMounted = (panel: string): UiSnapshot => ({
 
 // ── providers ───────────────────────────────────────────────────────────────
 
-const MAX_CHATS = 20;
-const MAX_MESSAGES = 3;
 const MAX_TABS = 40;
 const MAX_GATES = 20;
 const MAX_MOUNTS = 12;
@@ -226,31 +224,6 @@ const view = (src: Sources): UiSnapshot => {
       peek: a.peek?.path ?? null, finderPath: a.finderPath,
     },
     see: ["/workspaces", "/stats"],
-  };
-};
-
-const chat = (src: Sources): UiSnapshot => {
-  const { list, activeId } = src.chats();
-  const shown = list.slice(-MAX_CHATS);
-  return {
-    state: {
-      count: list.length, shown: shown.length, activeId,
-      chats: shown.map((c) => ({
-        id: c.id, agent: c.agent, model: c.model, mode: c.mode, effort: c.effort ?? null, engine: c.engine ?? null,
-        sending: c.sending, unread: c.unread, attention: c.attention, messages: c.messages.length,
-        queued: c.queued.length, attachments: c.attachments.length, hasDraft: c.draft.length > 0,
-        hasSession: c.sessionId.length > 0, setupNeeded: !!c.setupNeeded, panePinned: !!c.panePinned,
-        createdAt: c.createdAt, contextSize: c.usage?.contextTokens ?? 0, costUsd: c.usage?.costUsd ?? 0,
-      })),
-    },
-    untrusted: {
-      chats: shown.map((c) => ({
-        id: c.id, title: c.title, cwd: c.cwd, blockedTool: c.blockedTool ?? null,
-        setupNeeded: c.setupNeeded ?? null, draft: c.draft,
-        lastMessages: c.messages.slice(-MAX_MESSAGES).map((m) => ({ role: m.role, ts: m.ts, text: m.text, tools: m.tools.length })),
-      })),
-    },
-    see: ["/sessions"],
   };
 };
 
@@ -367,7 +340,7 @@ const head = <T>(xs: readonly T[]): { rows: T[]; count: number; shown: number } 
 };
 
 const hooks = (h: HooksData): UiSnapshot => ({
-  state: { installed: h.installed, bundled: h.bundled, gate: h.gate, gateBundled: h.gateBundled, engine: h.engine },
+  state: { installed: h.installed, bundled: h.bundled, gate: h.gate, gateBundled: h.gateBundled },
   untrusted: { python: h.python, settingsPath: h.settingsPath },
   see: ["/hooks/status"],
 });
@@ -501,11 +474,26 @@ const usageAccounts = (rs: readonly AccountsOut[]): UiSnapshot => ({
   see: ["/usage/accounts"],
 });
 
+/**
+ * What gets opened here, most opened first. Every string is an id the window
+ * minted (`view:git`) or a date, so all of it is state; none of it is text from
+ * outside. Capped, since the table has an id per door.
+ */
+const MAX_OPENS = 60;
+const usage = (u: UsageOpens): UiSnapshot => ({
+  state: {
+    since: u.since, ids: u.opens.length, total: u.opens.reduce((n, o) => n + o.count, 0),
+    shown: Math.min(MAX_OPENS, u.opens.length),
+    opens: u.opens.slice(0, MAX_OPENS).map((o) => ({ id: o.id, count: o.count, last: o.last })),
+  },
+  untrusted: {},
+  see: ["/usage/opens"],
+});
+
 /** Panel id to provider. Keyed by READ_PANELS_NOW, so a panel with no provider
  *  is a type error here, and a provider for a panel the registry lacks is one too. */
 export const PROVIDERS: { [P in NowPanel]: (src: Sources) => UiSnapshot } = {
   view: (s) => finish(view(s)),
-  chat: (s) => finish(chat(s)),
   bench: (s) => finish(bench(s)),
   gates: (s) => finish(gates(s)),
   "settings.diff": (s) => finish(diff(s)),
@@ -536,6 +524,7 @@ export const LATE_PROVIDERS: { [P in LatePanel]: (src: Sources) => Promise<UiSna
   "settings.about": (s) => s.later.about().then((d) => finish(about(d))),
   "machine.disk": (s) => s.later.diskClean().then((d) => finish(diskClean(d))),
   "usage.accounts": (s) => s.later.usageAccounts().then((d) => finish(usageAccounts(d))),
+  usage: (s) => s.later.usageOpens().then((d) => finish(usage(d))),
 };
 
 const isLate = (p: ReadPanel): p is LatePanel => (READ_PANELS_LATE as readonly string[]).includes(p);

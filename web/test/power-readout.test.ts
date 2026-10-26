@@ -13,7 +13,7 @@ import { powerReadout, type PowerStatus } from "../src/lib/desktop.ts";
 
 const linuxHeld = { sleep: "block-weak", lid: true, display: true, app: false } as const;
 const linux = { platform: "linux" } as const;
-const none = { chats: 0, runs: 0, hooked: 0, named: 0 };
+const none = { hooked: 0, named: 0 };
 
 describe("powerReadout", () => {
   test("off is normal sleep, and holds nothing", () => {
@@ -23,10 +23,9 @@ describe("powerReadout", () => {
   });
 
   test("agent mode at work says what is working, and what is held", () => {
-    const s: PowerStatus = { ...linux, mode: "agent", awake: true, working: true, why: { ...none, chats: 1, hooked: 2 }, locks: linuxHeld, inhibitMissing: false };
+    const s: PowerStatus = { ...linux, mode: "agent", awake: true, working: true, why: { ...none, hooked: 2 }, locks: linuxHeld, inhibitMissing: false };
     const r = powerReadout(s);
     expect(r.tone).toBe("held");
-    expect(r.title).toContain("1 chat mid-turn");
     expect(r.title).toContain("2 agents active in the last 10 minutes");
     expect(r.title).toContain("the lid switch");
     expect(r.title, "the person's own suspend is not blocked, and the button says so").toContain("your own suspend still goes through");

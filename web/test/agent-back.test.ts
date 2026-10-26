@@ -13,8 +13,8 @@ beforeEach(() => back.reset());
 
 describe("when the offer appears", () => {
   it("an armed door that moved the view offers the way back, with the name", () => {
-    const s = noteView(arm(EMPTY, "chat", "orchestrator-agx", 1000), "git", 1500);
-    expect(s.offer).toEqual({ from: "chat", to: "git", as: "orchestrator-agx", at: 1500 });
+    const s = noteView(arm(EMPTY, "term", "orchestrator-agx", 1000), "git", 1500);
+    expect(s.offer).toEqual({ from: "term", to: "git", as: "orchestrator-agx", at: 1500 });
     expect(s.armed).toBeNull();
   });
 
@@ -23,30 +23,30 @@ describe("when the offer appears", () => {
   });
 
   it("an arm that went stale is not an agent's switch: the person's own click gets no chip", () => {
-    const s = noteView(arm(EMPTY, "chat", undefined, 1000), "git", 1000 + ARM_MS + 1);
+    const s = noteView(arm(EMPTY, "term", undefined, 1000), "git", 1000 + ARM_MS + 1);
     expect(s.offer).toBeNull();
   });
 
   it("a door that left the person where they were offers nothing, and drops a standing offer", () => {
-    const s0 = noteView(arm(EMPTY, "chat", "a", 0), "git", 10);
-    const s1 = noteView(arm(s0, "git", "a", 20), "chat", 30);
+    const s0 = noteView(arm(EMPTY, "term", "a", 0), "git", 10);
+    const s1 = noteView(arm(s0, "git", "a", 20), "term", 30);
     expect(s1.offer).toBeNull();
   });
 
   it("the person leaving the agent's view by hand takes the offer with them", () => {
-    const s0 = noteView(arm(EMPTY, "chat", "a", 0), "git", 10);
+    const s0 = noteView(arm(EMPTY, "term", "a", 0), "git", 10);
     expect(noteView(s0, "files", 10_000).offer).toBeNull();
     expect(noteView(s0, "git", 10_000).offer).toEqual(s0.offer); // a re-render on the same view keeps it
   });
 
   it("a second switch keeps the first place, not the agent's first view", () => {
-    const s0 = noteView(arm(EMPTY, "chat", "a", 0), "git", 10);
+    const s0 = noteView(arm(EMPTY, "term", "a", 0), "git", 10);
     const s1 = noteView(arm(s0, "git", "a", 20), "files", 30);
-    expect(s1.offer).toMatchObject({ from: "chat", to: "files" });
+    expect(s1.offer).toMatchObject({ from: "term", to: "files" });
   });
 
   it("an offer is live for a minute and then is not", () => {
-    const o = { from: "chat", to: "git", at: 0 } as const;
+    const o = { from: "term", to: "git", at: 0 } as const;
     expect(live(o, BACK_MS - 1)).toBe(o);
     expect(live(o, BACK_MS)).toBeNull();
     expect(live(null, 0)).toBeNull();
@@ -55,9 +55,9 @@ describe("when the offer appears", () => {
 
 describe("the store", () => {
   it("dismiss drops the offer without touching the arm", () => {
-    back.arm("chat", "a", 0);
+    back.arm("term", "a", 0);
     back.noteView("git", 5);
-    expect(back.offer()?.from).toBe("chat");
+    expect(back.offer()?.from).toBe("term");
     back.dismiss();
     expect(back.offer()).toBeNull();
   });

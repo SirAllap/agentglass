@@ -122,8 +122,7 @@ nothing new has to be kept in step with the route table.
   `/plugins/settings` and `/plugins/panels`, which are another plugin's settings
   and another plugin's screen. A plugin reads and writes its own through
   `/plugin/self/…` at any scope.
-- **`answer`** — everything `read` gets, plus replying to a session that is
-  running now, an open chat pane (`/chat/send`, `/chat/pane/key`). It does **not** include
+- **`answer`** — everything `read` gets, plus marking things read (`/marks`). It does **not** include
   releasing a permission gate — see the next paragraph.
 - **`full`** — everything this machine can do: a terminal, git writes, Docker
   control, merging pull requests, installing other plugins.

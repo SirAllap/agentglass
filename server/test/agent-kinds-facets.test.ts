@@ -18,8 +18,8 @@ describe("the table keeps its shape", () => {
 });
 
 describe("version", () => {
-  test("every provider with a tab or a chat driver can be asked for its version", () => {
-    for (const p of AGENT_PROVIDERS.filter((x) => x.tab || x.chat)) {
+  test("every provider with a tab can be asked for its version", () => {
+    for (const p of AGENT_PROVIDERS.filter((x) => x.tab)) {
       expect(p.version, p.id).toBeDefined();
       expect(p.version!.args.length, p.id).toBeGreaterThan(0);
     }

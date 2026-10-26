@@ -30,8 +30,6 @@ import { warmDayStrip } from "../lib/dayStrip.ts";
 import { NO_DRAG } from "../lib/dragRegion.ts";
 import { DayStrip, PaceLines, PaceMarker } from "./PlanPace.tsx";
 import { metersMustHide } from "../lib/topbarFit.ts";
-import { subscribe as subscribeChats, listChats, getActiveChatId, getChat } from "../lib/chatStore.ts";
-import type { AgentKind } from "../lib/agents.ts";
 import { subscribeSessions, liveSessionCount } from "./TerminalPanel.tsx";
 import { clock24, subscribeClock24 } from "../lib/clockPref.ts";
 import { updateAvailable, subscribeUpdate, updateState } from "../lib/updateStore.ts";
@@ -443,7 +441,7 @@ function PlanMeter({ tag, pct, age, dim, hideUnder }: {
 
 export function TopBar({
   workspace, workspaces, onOpenProject, onOpenPalette, onOpenFiles, quiet, needs,
-  needsList, onNeedChat, onNeedApprove, onNeedProject, onNeedTerminal, onNoteGoto,
+  needsList, onNeedApprove, onNeedProject, onNeedTerminal, onNoteGoto,
   filterProvider = "",
 }: {
   /** `undefined` means "not asked yet" — distinct from null, which is a real
@@ -471,7 +469,6 @@ export function TopBar({
   needs: { count: number; label: string; because: string } | null;
   /** All of them, with what can honestly be done about each — see NeedsPopover. */
   needsList: NeedsItem[];
-  onNeedChat: (chatId: string) => void;
   onNeedApprove: () => void;
   onNeedProject: (root: string) => void;
   onNeedTerminal: () => void;
@@ -480,8 +477,7 @@ export function TopBar({
    *  it. See SystemNote["goto"]. */
   onNoteGoto: (g: NonNullable<SystemNote["goto"]>) => void;
   /** The dashboard's provider filter, which decides whose plan the meters
-   *  show when no chat is focused. Wired to the focused chat's agent in the
-   *  commit after this one. */
+   *  show. */
   filterProvider?: string;
 }) {
   const time = useMinuteClock();
@@ -489,7 +485,6 @@ export function TopBar({
   // An older server answers with `workspace` alone; that one project is the list.
   const open = workspaces?.length ? workspaces : workspace ? [workspace] : [];
   const shells = useSyncExternalStore(subscribeSessions, liveSessionCount, liveSessionCount);
-  const waiting = useSyncExternalStore(subscribeChats, () => listChats().reduce((n, c) => n + (c.attention !== "none" ? 1 : 0), 0), () => 0);
   const upd = useSyncExternalStore(subscribeUpdate, updateState, updateState);
   const { note, behind, ahead } = useAmbientNotes();
   const chip = useRef<HTMLButtonElement>(null);
@@ -562,18 +557,9 @@ export function TopBar({
     return () => ro.disconnect();
   });
 
-  // One gauge, for the provider in context — the agent whose chat is focused,
-  // or failing that whatever the dashboard is filtered to. The strip is a
+  // One gauge, for the provider the dashboard is filtered to. The strip is a
   // glance, so three providers' meters here would be two too many; the
   // dashboard box and Stats are where all of them are listed side by side.
-  //
-  // Which chat is focused is read straight from chatStore rather than taken as
-  // a prop: that is the one place the live answer exists, kept current by the
-  // chat panel's own tab switching. The dashboard's filter is the fallback for
-  // when no chat is focused at all — and it is usually empty exactly while you
-  // are deep in a chat, which is why the filter alone was not enough.
-  const activeId = useSyncExternalStore(subscribeChats, getActiveChatId, () => "");
-  const focusedAgent: AgentKind | null = getChat(activeId)?.agent ?? null;
   const [, bumpUsage] = useState(0);
   useEffect(() => subscribeProviderUsage(() => bumpUsage((n) => n + 1)), []);
   const [refreshing, setRefreshing] = useState(false);
@@ -611,9 +597,9 @@ export function TopBar({
       return b ? { top: Math.round(b.bottom + 6), right: Math.round(window.innerWidth - b.right), staged: true } : null;
     });
   }), []);
-  const ctx = providerInContext(focusedAgent, filterProvider);
-  /* No context is not "no quota". `providerInContext` answers null whenever no
-     chat is focused and the filter names no provider — on the dashboard, in the
+  const ctx = providerInContext(filterProvider);
+  /* No context is not "no quota". `providerInContext` answers null whenever the
+     filter names no provider — on the dashboard, in the
      terminal, in a browser tab — and the meters simply stopped being drawn.
      Reported as "sometimes it does not appear at all"; it was never about the
      plan, it was about where you happened to be standing. */
@@ -708,16 +694,7 @@ export function TopBar({
         * that branch already carries it where you are deciding about it. Up here
         * they were a permanent ticker on a bar whose middle is deliberately
         * empty so that the ONE thing that wants you has somewhere to appear.
-        *
-        * `chats` stays: it is the only one of the four that is about something
-        * that happened while you were elsewhere, which is what a strip along the
-        * top is for.
         */}
-      {waiting > 0 && (
-        <Item cap="chats" dim={quiet} title="Chats that replied while you were elsewhere">
-          <b className="text-[10.5px] tabular-nums" style={{ color: "var(--success-ink)" }}>{waiting}</b>
-        </Item>
-      )}
 
       {/* ── the middle: nothing, until something wants you ─────────── */}
       {/* Absolutely centred rather than a flex remainder between two groups of
@@ -780,7 +757,6 @@ export function TopBar({
         open={needsOpen && alarm}
         items={needsList}
         onClose={() => setNeedsOpen(false)}
-        onChat={(id) => { setNeedsOpen(false); onNeedChat(id); }}
         onApprove={() => { setNeedsOpen(false); onNeedApprove(); }}
         onProject={(root) => { setNeedsOpen(false); onNeedProject(root); }}
         onTerminal={() => { setNeedsOpen(false); onNeedTerminal(); }}

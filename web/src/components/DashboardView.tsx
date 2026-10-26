@@ -27,7 +27,6 @@ import { Feed } from "./Feed.tsx";
 import { CostByModel } from "./CostByModel.tsx";
 import { Latency } from "./Latency.tsx";
 import { Sessions } from "./Sessions.tsx";
-import { MissionTimeline } from "./MissionTimeline.tsx";
 import { UsageBox } from "./UsageBox.tsx";
 import { FleetVerdictStrip, useFleetVerdict } from "./FleetVerdictStrip.tsx";
 import { Select } from "./Select.tsx";
@@ -168,7 +167,7 @@ export function DashboardView({
           </div>
         </div>
 
-        {/* Money row and timeline share one grid so the Usage box can span
+        {/* The money row shares one grid so the Usage box can span
             both. The columns line up with the cockpit above: Usage under
             Fleet, Cost and Latency under the middle column, Sessions under
             Alerts. */}
@@ -187,7 +186,6 @@ export function DashboardView({
           <div className="xl:col-span-3 min-w-0 min-h-0 h-[196px] xl:h-[196px]"><CostByModel stats={stats} /></div>
           <div className="xl:col-span-3 min-w-0 min-h-0 h-[196px] xl:h-[196px]"><Latency stats={stats} /></div>
           <div className="xl:col-span-3 min-w-0 min-h-0 h-[196px] xl:h-[196px]"><Sessions provider={filter.provider} active={active} /></div>
-          <div className="xl:col-span-9 min-w-0 min-h-0 h-[140px] xl:h-[140px]"><MissionTimeline stats={stats} /></div>
         </div>
       </div>
     </div>

@@ -89,14 +89,6 @@ export type SystemNote = {
      */
     | { kind: "pane"; pane: string }
     /**
-     * A chat of this app's own, by id.
-     *
-     * "Blocked — needs Bash" and "Turn finished" are about a conversation that
-     * is one click away, and both arrived pointing nowhere. The id was in hand
-     * at the moment the note was made and simply not passed.
-     */
-    | { kind: "chat"; id: string }
-    /**
      * A section of Settings.
      *
      * For the notes whose body is already an instruction to go there. The
@@ -929,9 +921,6 @@ function supersede(list: SystemNote[], next: SystemNote): SystemNote[] {
   if (!g) return list;
   if (g.kind === "git") {
     return list.filter((n) => !(n.goto?.kind === "git" && n.goto.repo === g.repo && n.goto.branch === g.branch));
-  }
-  if (g.kind === "chat") {
-    return list.filter((n) => !(n.goto?.kind === "chat" && n.goto.id === g.id && n.summary === next.summary));
   }
   if (g.kind === "pane") {
     // A pane that keeps failing is one situation, not eighty rows.

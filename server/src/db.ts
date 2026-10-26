@@ -1352,7 +1352,7 @@ CREATE TABLE IF NOT EXISTS understudy_asked (
   /* The file this task owes, when what it owes is a file rather than a commit.
      Nullable: most tasks owe a commit and this does not apply to them. See the
      ALTER below for databases that predate it, and the check in
-     understudy-loop.ts for why it exists. */
+     the ALTER below for why it exists. */
   deliverable TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_understudy_sealed ON understudy_ledger(sealed_at);
@@ -3277,10 +3277,9 @@ export function getRecent(limit = 300, provider?: string): WatchEvent[] {
  * output — accounted for 150 KB of that on their own. The feed only ever reads
  * a handful of short fields back out of a payload (labels.ts, derive.ts): a
  * command, a path, a query, a message. Nothing on first paint reads the full
- * body of a 30 KB file write; a chat pane resuming mid-turn (chatStore.ts,
- * applyLiveEvent) does read a tool's real output, but for exactly the same
- * reason a human reading it would want a preview, not a wall of text — the
- * fold UI already collapses anything this long. Capped, not dropped: unlike
+ * body of a 30 KB file write; a session view reading a tool's real output wants a
+ * preview, not a wall of text — the fold UI already collapses anything this
+ * long. Capped, not dropped: unlike
  * the fields the client never reads, this one occasionally is.
  */
 const PAYLOAD_STRING_CAP = 4000;

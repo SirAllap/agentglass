@@ -2,8 +2,8 @@
 // leaving the view you were working in.
 //
 // The chip used to be a button that took you somewhere. First to the dashboard,
-// which showed the same alert in a panel; then to the session, which for a chat
-// meant the chat and for everything else meant SessionModal — a post-mortem
+// which showed the same alert in a panel; then to the session, which meant
+// SessionModal — a post-mortem
 // headed WHAT IT DID, with counts of events and tools and money spent. That
 // screen answers "what did this session do". The question on the strip is "what
 // does it want now", and a read-only summary covering the terminal you were
@@ -43,8 +43,6 @@ export type NeedsItem = {
   project: string | null;
   /** The project's display name, when it is not the one currently scoped. */
   otherProject: string | null;
-  /** An in-app chat that can answer it, when there is one. */
-  chatId: string | null;
   /** A permission hold the dashboard can approve. */
   gated: boolean;
 };
@@ -71,21 +69,20 @@ function Action({ children, onClick, primary }: { children: React.ReactNode; onC
   );
 }
 
-function Row({ it, exact, hits, onChat, onApprove, onProject, onPane }: {
+function Row({ it, exact, hits, onApprove, onProject, onPane }: {
   it: NeedsItem;
   /** The pane this very session reported being in, when it did. */
   exact: AgentPane | null;
   /** Panes running an agent in this session's directory. One is a button; more
    *  than one is a fact worth stating and not a choice worth guessing. */
   hits: AgentPane[];
-  onChat: (chatId: string) => void;
   onApprove: () => void;
   onProject: (root: string) => void;
   onPane: (p: AgentPane) => void;
 }) {
   const tint = it.level === "error" ? "var(--error)" : "var(--warning)";
   const pane = exact ?? (hits.length === 1 ? hits[0]! : null);
-  const actionable = !!it.chatId || it.gated || !!it.otherProject || !!pane || hits.length > 0;
+  const actionable = it.gated || !!it.otherProject || !!pane || hits.length > 0;
   return (
     <div className="agx-note-row">
       <div className="flex items-center gap-2 mb-1">
@@ -110,14 +107,13 @@ function Row({ it, exact, hits, onChat, onApprove, onProject, onPane }: {
         <div className="text-[10px] mt-1 font-mono truncate" style={{ color: "var(--text4)" }} title={it.cwd}>{short(it.cwd)}</div>
       )}
       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-        {it.chatId && <Action primary onClick={() => onChat(it.chatId!)}>Open its chat</Action>}
-        {it.gated && <Action primary={!it.chatId} onClick={onApprove}>Approve it</Action>}
+        {it.gated && <Action primary onClick={onApprove}>Approve it</Action>}
         {/* The one that answers the original complaint: the agent is in a tmux
             pane, and now the app knows which. It moves tmux to it and shows the
             terminal, so you land on the prompt that is waiting rather than on a
             summary of what it did. */}
         {pane && (
-          <Action primary={!it.chatId && !it.gated} onClick={() => onPane(pane)}>
+          <Action primary={!it.gated} onClick={() => onPane(pane)}>
             Go to its pane · {pane.windowName || pane.windowIndex}
           </Action>
         )}
@@ -159,7 +155,7 @@ function Row({ it, exact, hits, onChat, onApprove, onProject, onPane }: {
  * clips its own overflow — it has to, or a long project name pushes the clock
  * off the end — and a panel drawn inside it would be sliced off at 30px.
  */
-export function NeedsPopover({ anchorRef, avoidRef, open, items, onClose, onChat, onApprove, onProject, onTerminal }: {
+export function NeedsPopover({ anchorRef, avoidRef, open, items, onClose, onApprove, onProject, onTerminal }: {
   anchorRef: React.RefObject<HTMLElement | null>;
   /** The bar's right-hand group — the plan usage lives there, and the panel
    *  ends before it. */
@@ -167,7 +163,6 @@ export function NeedsPopover({ anchorRef, avoidRef, open, items, onClose, onChat
   open: boolean;
   items: NeedsItem[];
   onClose: () => void;
-  onChat: (chatId: string) => void;
   onApprove: () => void;
   onProject: (root: string) => void;
   /** Show the terminal, once tmux has been moved to the pane. */
@@ -257,7 +252,7 @@ export function NeedsPopover({ anchorRef, avoidRef, open, items, onClose, onChat
             const { exact, hits } = paneChoices(panes, it);
             return (
               <Row key={it.key} it={it} exact={exact} hits={hits}
-                onChat={onChat} onApprove={onApprove} onProject={onProject} onPane={goPane} />
+                onApprove={onApprove} onProject={onProject} onPane={goPane} />
             );
           })}
         </div>

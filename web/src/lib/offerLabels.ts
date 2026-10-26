@@ -26,7 +26,6 @@ export const OFFER_LABELS: Labels = {
   "workspace.toggle": () => "the workspace",
   "panel.open": (a) => `${words(a.what)}`,
   "finder.open": (a) => `the file finder on ${base(a.path)}`,
-  "chat.new": () => "a new chat",
   "settings.open": (a) => `Settings > ${words(a.page)}${a.row ? ` > ${words(a.row)}` : ""}`,
   "machine.open": (a) => `Machine > ${words(a.tab)}`,
   "project.picker": () => "the project picker",

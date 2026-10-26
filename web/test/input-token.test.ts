@@ -93,8 +93,6 @@ const ALLOWED: { file: string; marker: string; why: string }[] = [
 
   { file: "BrowserPanel.tsx", marker: "value={renaming.name}",
     why: "inline rename of a folder in a 20px tree row; INPUT's 32px height and fill would break the row" },
-  { file: "ChatPanel.tsx", marker: "onBlur={commit}",
-    why: "inline rename of a chat's title, typed over the title text itself; INPUT's 32px height would break the row" },
   { file: "BrowserPanel.tsx", marker: 'data-agx-omni="1"',
     why: "the omnibox and its suggestion list share the popover's one border" },
 
@@ -130,12 +128,6 @@ const ALLOWED: { file: string; marker: string; why: string }[] = [
   { file: "FinderCustomize.tsx", marker: 'aria-label="Pick a color"',
     why: "sr-only native colour input opened from a swatch button; it is never seen, so there is no look to share" },
 
-  { file: "understudy/Ask.tsx", marker: 'className="agx-input flex-1 min-w-0"',
-    why: "shares `.agx-input` with this screen's other fields" },
-  { file: "understudy/Work.tsx", marker: "ref={taskBox}",
-    why: "fused to the select beside it into one segmented control (shared corner radii, no gap); not a standalone input" },
-  { file: "understudy/Work.tsx", marker: 'className="agx-input flex-1 min-w-[220px]"',
-    why: "shares `.agx-input` with this screen's other fields" },
 ];
 
 function isAllowed(file: string, tag: string): string | undefined {

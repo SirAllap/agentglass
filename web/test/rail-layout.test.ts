@@ -59,9 +59,9 @@ describe("rail layout", () => {
     expect(ids(r.work).slice(0, 2)).toEqual(["term", "git"]);
     expect(ids(r.work)).toContain("diff");
     expect(ids(r.work)).toContain("pr");
-    // dash and chat ship at the bottom, and that is where they turn up.
+    // dash and lantern ship at the bottom, and that is where they turn up.
     expect(ids(r.utility)).toContain("dash");
-    expect(ids(r.utility)).toContain("chat");
+    expect(ids(r.utility)).toContain("lantern");
     // Nothing arrives hidden that was not SHIPPED hidden: a view nobody has
     // had the chance to reject should not be put away for them, but a view
     // this version stopped giving a seat to (the Clone) starts in the back
@@ -76,11 +76,11 @@ describe("rail layout", () => {
   it("carries over a flat order from the old scheme, split by shipped drawer", async () => {
     // The layout key supersedes this one, but an order somebody already dragged
     // into shape still says which view they reach for first, and that survives.
-    store.set("agentglass.workspace.order", JSON.stringify(["chat", "term", "git"]));
+    store.set("agentglass.workspace.order", JSON.stringify(["lantern", "term", "git"]));
     const v = await load();
     const r = v.loadRail();
     expect(ids(r.work).slice(0, 2)).toEqual(["term", "git"]);
-    expect(ids(r.utility)[0]).toBe("chat");
+    expect(ids(r.utility)[0]).toBe("lantern");
     expect(ids(r.hidden)).toEqual(ids(v.SHIPPED_RAIL.hidden));
     expect(ids(r.work).length + ids(r.utility).length + ids(r.hidden).length).toBe(v.VIEWS.length);
   });
@@ -116,12 +116,12 @@ describe("rail layout", () => {
     // Every view named, because one left out is appended to its shipped drawer
     // — correct behaviour (see the test above), and it would quietly extend the
     // numbered list past what this test thinks it set up.
-    const rest = v.VIEW_IDS.filter((id: string) => !["git", "diff", "term", "chat"].includes(id));
-    v.saveRail({ work: ["git", "diff"], utility: ["term"], hidden: ["chat", ...rest] });
+    const rest = v.VIEW_IDS.filter((id: string) => !["git", "diff", "term", "lantern"].includes(id));
+    v.saveRail({ work: ["git", "diff"], utility: ["term"], hidden: ["lantern", ...rest] });
     expect(v.workIds()).toEqual(["git", "diff"]);
     expect(v.visibleIds()).toEqual(["git", "diff", "term"]);
     expect(v.isVisibleView("term")).toBe(true);
-    expect(v.isVisibleView("chat")).toBe(false);
+    expect(v.isVisibleView("lantern")).toBe(false);
   });
 
   it("projects a move without writing one", async () => {

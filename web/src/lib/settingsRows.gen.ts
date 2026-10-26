@@ -62,10 +62,6 @@ export const SETTINGS_ROWS: SettingsRowRaw[] = [
   { pane: "hooks", section: "Gate", label: "Hold what leaves this machine", hint: "A push, a PR, a comment, a merge or a message waits for an answer.", settingId: "hooks.gate" },
   { pane: "hooks", section: "Gate", label: "If nobody answers", hint: "", settingId: "gate.onTimeout" },
   { pane: "hooks", section: "Gate", label: "Who answers", hint: "Held actions show up in the Lantern first.", settingId: "gate.answerer" },
-  { pane: "hooks", section: "New chats", label: "Extra deny rules", hint: "One pattern per line, added to every new Claude chat. Codex and Antigravity chats do not take deny rules.", settingId: "chats.deny" },
-  { pane: "hooks", section: "New chats", label: "How new chats run", hint: "" },
-  { pane: "hooks", section: "New chats", label: "Permission mode", hint: "Applies to chats; terminals have their own.", settingId: "chats.mode" },
-  { pane: "hooks", section: "New chats", label: "Starts in", hint: "The folder a new chat opens at.", settingId: "chats.startIn" },
   { pane: "jira", section: "", label: "Connect with a token", hint: "", agentExempt: true },
   { pane: "jira", section: "", label: "Disconnect Jira", hint: "Removes the token from this machine. Nothing changes in Jira.", agentExempt: true },
   { pane: "jira", section: "", label: "How we read it", hint: "", agentExempt: true },
@@ -183,7 +179,6 @@ export const SETTINGS_ROWS: SettingsRowRaw[] = [
   { pane: "tmux", section: "Restore after reboot", label: "Restore state", hint: "Nothing captured yet. Turn on Restore and the next sweep photographs the layout." },
   { pane: "tmux", section: "Restore after reboot", label: "Restore the layout", hint: "Windows, panes and their folders." },
   { pane: "tmux", section: "Restore after reboot", label: "Resume mode", hint: "What an agent pane does when it comes back." },
-  { pane: "understudy", section: "How it looks", label: "Customise the face", hint: "Start from one of the faces, then change what is not you.", agentExempt: true },
   { pane: "understudy", section: "Keeping score", label: "Let the clone watch", hint: "" },
   { pane: "understudy", section: "Keeping score", label: "What it keeps", hint: "Only the decision and its context, never the code.", agentExempt: true },
 ];

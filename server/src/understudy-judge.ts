@@ -234,12 +234,12 @@ export async function judge(
  * tool call.
  *
  * So each call gets a directory of its own, mode 0700, under this app's state
- * dir — the same base understudy-pane.ts uses for the clone's config — made
+ * dir — the app's own base for private directories — made
  * with mkdtemp so two judgements never share one, and removed when the answer
  * is in. Nothing else can write there and nothing is there to read.
  *
  * `CLAUDE_CONFIG_DIR` is pointed at a private directory too, for the reason
- * understudy-pane.ts measured: a real config carries fourteen kinds of hook,
+ * measured earlier: a real config carries fourteen kinds of hook,
  * every one of which fired on a run that is not a conversation with him. NOT
  * an empty one, though — the credential lives in that directory, and an
  * empty config dir on an install signed in through the browser is a judge

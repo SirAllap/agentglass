@@ -29,14 +29,6 @@ describe("slice 4 moves", () => {
     expect(fn("TerminalRunsOn")).toContain("api.tmuxSettingsSave({ terminal: mode })");
   });
 
-  test("How new chats run is on Agents, not tmux", async () => {
-    const cards = await Bun.file(new URL("../src/components/agents/AgentsCards.tsx", import.meta.url)).text();
-    expect(block("hooks")).toContain("<NewChatsCard");
-    expect(cards).toContain('label="How new chats run"');
-    expect(block("tmux")).not.toContain("How new chats run");
-    expect(block("hooks")).toContain("setChatEnginePref(next)");
-  });
-
   test("Agent browser use is on Agents behind HAS_BROWSER; Browser keeps logins", () => {
     expect(block("hooks")).toContain("browser={HAS_BROWSER ? <AgentBrowserPane");
     expect(block("browser")).not.toContain("AgentBrowserPane");
@@ -81,7 +73,6 @@ describe("slice 4 moves", () => {
   test("the generated index is fresh", () => {
     expect(rowsOn("terminal")).toContain("Terminal runs on");
     expect(rowsOn("tmux")).not.toContain("Terminal runs on");
-    expect(rowsOn("hooks")).toContain("How new chats run");
     expect(rowsOn("budgets")).toContain("How much of your GitHub allowance is left");
     expect(rowsOn("diff")).toContain("Diff syntax theme");
     expect(rowsOn("open")).toEqual([]);

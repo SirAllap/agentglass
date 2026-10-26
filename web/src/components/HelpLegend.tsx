@@ -84,7 +84,6 @@ export function HelpLegend({ open, onClose }: { open: boolean; onClose: () => vo
                   <span><kbd className="chip">p</kbd> Pull requests</span>
                   <span><kbd className="chip">o</kbd> Docker</span>
                   <span><kbd className="chip">t</kbd> Terminal</span>
-                  <span><kbd className="chip">c</kbd> Chat</span>
                   <span><kbd className="chip">{MOD_KEY}[</kbd> <kbd className="chip">{MOD_KEY}]</kbd> Cycle views</span>
                   {/* The distinction that actually bites: bare letters are
                       swallowed by the shell and the composer, the ⌘ pair never

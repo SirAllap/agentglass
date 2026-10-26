@@ -37,8 +37,6 @@ const VIEWS: Record<string, string> = {
 const VIA_COMPONENT: Record<string, string> = {
   "Tasks": "TasksPanel.tsx",
   "Files": "FilesPanel.tsx",
-  "Chats": "ChatPanel.tsx",
-  "Clone": "understudy/UnderstudyPanel.tsx",
 };
 
 const read = (f: string) => Bun.file(new URL(`../src/components/${f}`, import.meta.url)).text();

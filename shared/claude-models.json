@@ -1,6 +1,6 @@
 {
   "_comment": [
-    "The models the Chat panel offers for Claude Code.",
+    "The models agentglass offers for Claude Code.",
     "",
     "Data, not code: edit this file and the dropdown follows on the next request —",
     "no rebuild, no restart. Claude Code publishes no model list of its own (there",

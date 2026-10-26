@@ -83,31 +83,6 @@ test("the attach command names our socket, not the user's default server", () =>
   expect(cmd).toContain("attach -t 6f1c9b52-0000-4000-8000-0123456789ab");
 });
 
-test("a turn with no attachments is pasted exactly as typed", () => {
-  // Nothing may be added to a plain prompt: the text that reaches the model has
-  // to be the text the user wrote.
-  expect(mod.panePrompt("hello", [])).toBe("hello");
-  expect(mod.panePrompt("/help is literal here\nsecond line", [])).toBe("/help is literal here\nsecond line");
-});
-
-test("attachments are named on their own lines, under the user's own words", () => {
-  const out = mod.panePrompt("what is wrong here?", ["/tmp/a.png"]);
-  expect(out.startsWith("what is wrong here?")).toBe(true);
-  expect(out).toContain("/tmp/a.png");
-  // Singular vs plural, because the sentence is read by the model and a wrong
-  // plural is a wrong instruction about how many files to open.
-  expect(out).toContain("Attached image (read it");
-  const two = mod.panePrompt("compare", ["/tmp/a.png", "/tmp/b.png"]);
-  expect(two).toContain("Attached images (read them");
-  expect(two).toContain("/tmp/b.png");
-});
-
-test("an image with no text still produces a prompt that says what to do", () => {
-  const out = mod.panePrompt("", ["/tmp/only.png"]);
-  expect(out.startsWith("Attached image")).toBe(true);
-  expect(out).toContain("/tmp/only.png");
-});
-
 test("eviction leaves a pane it has never seen before alone", async () => {
   // The sweeper must not kill a pane simply because it has no record of it —
   // after a server restart every live chat looks exactly like that, and killing

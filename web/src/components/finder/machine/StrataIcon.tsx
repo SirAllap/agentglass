@@ -1,6 +1,6 @@
 // Strata's own drawings, inline so a theme can recolour them. The glob is inside a function:
 // `import.meta.glob` is a Vite macro and hooks-module-scope.test.ts imports every module under
-// web/src in bun, where it does not exist (see understudy/persona/layers.ts).
+// web/src in bun, where it does not exist (the glob must stay inside a function).
 import { useMemo, useSyncExternalStore } from "react";
 import { ICON } from "../../../lib/iconSize.ts";
 import { iconSvg, strataIconFor } from "../../../lib/strataIcons.ts";

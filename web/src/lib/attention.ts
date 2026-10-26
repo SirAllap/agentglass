@@ -1,18 +1,15 @@
 // One answer to "what needs me right now".
 //
-// The question was being answered in three places that never spoke to each
-// other: chats tracked their own attention state, deriveAlerts() read the live
-// event stream, and the alerts panel polled the control plane for pending
-// gates. Each was right about its own corner and blind to the rest — most
-// visibly, the panel literally titled "What needs you" had no idea a chat could
-// be blocked on a tool it wasn't allowed to run.
+// The question was being answered in two places that never spoke to each
+// other: deriveAlerts() read the live event stream and the alerts panel polled
+// the control plane for pending gates. Each was right about its own corner and
+// blind to the rest.
 //
 // This merges all of them into one list with one shape, so the panel and the
 // header badge can never disagree about the count.
 
 import type { PendingGate, Insight } from "../../../shared/types.ts";
 import type { Alert, AgentCard } from "./derive.ts";
-import type { Chat } from "./chatStore.ts";
 
 /** Ordered by how much it wants you, not by what produced it. */
 export type AttentionLevel = "blocking" | "error" | "warn";
@@ -21,12 +18,12 @@ export interface AttentionItem {
   id: string;
   level: AttentionLevel;
   /** Which mechanism raised it — for the icon and for grouping in the panel. */
-  source: "gate" | "chat" | "agent" | "insight" | "reminder";
+  source: "gate" | "agent" | "insight" | "reminder";
   text: string;
   ts: number;
-  /** The session or chat this is about, when there is one, so the UI can offer
+  /** The session this is about, when there is one, so the UI can offer
    *  to open it rather than just describe it. */
-  target?: { kind: "session" | "chat"; id: string; app?: string };
+  target?: { kind: "session"; id: string; app?: string };
 }
 
 const LEVEL_RANK: Record<AttentionLevel, number> = { blocking: 0, error: 1, warn: 2 };
@@ -39,7 +36,6 @@ export interface AttentionInput {
   reminders?: { id: string; title: string; firedAt: number | null }[];
   insights: Insight[];
   alerts: Alert[];
-  chats: Chat[];
   agents: AgentCard[];
 }
 
@@ -50,7 +46,7 @@ export interface AttentionInput {
  * alone, which lets a stale error from an hour ago outrank an agent that just
  * stopped to ask you something — the exact inversion this ordering fixes.
  */
-export function collectAttention({ gates, insights, alerts, chats, agents, reminders }: AttentionInput): AttentionItem[] {
+export function collectAttention({ gates, insights, alerts, agents, reminders }: AttentionInput): AttentionItem[] {
   const out: AttentionItem[] = [];
 
   // A reminder that has fired is something you asked to be told, and has not
@@ -71,21 +67,6 @@ export function collectAttention({ gates, insights, alerts, chats, agents, remin
       ts: g.created,
       target: g.session_id ? { kind: "session", id: g.session_id, app: g.source_app } : undefined,
     });
-  }
-
-  // A chat that hit a tool it may not run has given up on it and will not
-  // proceed. Nothing but you resolves that.
-  for (const c of chats) {
-    if (c.attention === "blocked") {
-      out.push({
-        id: "chat:" + c.id,
-        level: "blocking",
-        source: "chat",
-        text: c.blockedTool ? `${c.title}: ${c.blockedTool} was refused` : `${c.title} is blocked`,
-        ts: c.messages[c.messages.length - 1]?.ts ?? c.createdAt,
-        target: { kind: "chat", id: c.id },
-      });
-    }
   }
 
   // Finished, but on a question. The status ladder demotes these to idle so

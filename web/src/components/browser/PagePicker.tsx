@@ -13,7 +13,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { installPick, readPick, removePick, hidePickChrome, showPickChrome, type PickMode } from "../../lib/pagePickScript.ts";
 import { elementForClipboard, feedbackWindowName, pageFeedbackPrompt, parsePick, type Intent, type PickedElement } from "../../lib/pageRef.ts";
 import { requestTermIssue } from "../../lib/termIssue.ts";
-import { seedChat } from "../../lib/chatStore.ts";
 import { api } from "../../lib/api.ts";
 import type { GitRepoRef } from "../../../../shared/types.ts";
 import { CheckoutPicker } from "../CheckoutPicker.tsx";
@@ -158,20 +157,15 @@ export function PagePicker({ view, url, title, mode, onNote, onDone }: {
     return () => { live = false; clearInterval(timer); };
   }, [view, picked, feedback, url, onNote, onDone, shoot]);
 
-  const hand = async (where: "terminal" | "chat") => {
+  const hand = async () => {
     if (!picked) return;
     const cwd = repo || repos[0]?.root;
     if (!cwd) { onNote("No repository is open for an agent to work in"); return; }
     setSending(true);
     try {
       const prompt = pageFeedbackPrompt({ url, title, intent, ask, element: picked });
-      if (where === "terminal") {
-        requestTermIssue(cwd, feedbackWindowName(url), prompt, true);
-        onNote(`Handed to Claude in a tmux window — "${feedbackWindowName(url)}", in ${cwd.split("/").pop()}`);
-      } else {
-        seedChat(cwd, prompt, intent === "change" ? "Change something on a page" : "A question about a page");
-        onNote("Waiting for you in the chat");
-      }
+      requestTermIssue(cwd, feedbackWindowName(url), prompt, true);
+      onNote(`Handed to Claude in a tmux window — "${feedbackWindowName(url)}", in ${cwd.split("/").pop()}`);
       onDone();
     } finally { setSending(false); }
   };
@@ -208,7 +202,7 @@ export function PagePicker({ view, url, title, mode, onNote, onDone }: {
         <textarea ref={box} value={ask} onChange={(e) => setAsk(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Escape") { e.preventDefault(); onDone(); }
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void hand("terminal"); }
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void hand(); }
           }}
           rows={3} spellCheck={false}
           placeholder="What should the agent change here?"
@@ -226,13 +220,10 @@ export function PagePicker({ view, url, title, mode, onNote, onDone }: {
             title="Which checkout the agent works in" triggerMaxWidth={200} />
         )}
 
-        {/* Terminal first, chat as the lesser option — the same order and the
-            same reason as the conflict handoff. */}
         <div className="flex items-center gap-2">
-          <Button size="compact" tone="primary" className="flex-1" onClick={() => void hand("terminal")} disabled={sending}>
+          <Button size="compact" tone="primary" className="flex-1" onClick={() => void hand()} disabled={sending}>
             <IconLabel icon={<TerminalIcon size={ICON.xs} />}>Hand it to Claude</IconLabel>
           </Button>
-          <Button size="compact" onClick={() => void hand("chat")} disabled={sending}>In the chat</Button>
           <Button size="compact" onClick={onDone}>Cancel</Button>
         </div>
       </div>

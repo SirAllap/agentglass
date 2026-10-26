@@ -50,7 +50,6 @@ import { getSkills, catalogMarkdown, catalogCsv, usageSince } from "./skills.ts"
 import { getInsights } from "./insights.ts";
 import { getCollisions } from "./collisions.ts";
 import { getUsage, ingestStatusline, syncLogin } from "./usage.ts";
-import { chooseModel, type UsageNow, type Choice } from "./understudy-model.ts";
 import { allProviderUsage } from "./providerusage.ts";
 import { claimPaceAlerts, coerceAlertAt } from "./paceAlert.ts";
 import { refreshCodexUsage } from "./codexusage.ts";
@@ -107,7 +106,7 @@ import { singleFlight, inflightCount } from "./singleflight.ts";
 import { openInEditor, editorTarget, editorCapability, HAS_NVIM } from "./editor.ts";
 import { syncTheme, snippetStatus, SNIPPETS, tmuxThemePath, repairTmuxTheme, currentTheme, automatedThemeClient } from "./themesync.ts";
 import { desktopPalette, desktopLogo, watchDesktopPalette } from "./desktopPalette.ts";
-import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite, mkdtempSync, readdirSync, statSync as fsStat } from "node:fs";
+import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite, readdirSync, statSync as fsStat } from "node:fs";
 import { RETENTION_FROM_ENV, setRetentionDays } from "./retention.ts";
 import { keyringStatus, unlockFirst } from "./keyring.ts";
 import { rehydrate, setKeyringEnabled } from "./keyringSwitch.ts";
@@ -132,7 +131,6 @@ import { procDetail, revealEnv } from "./procdetail.ts";
 import {
   listIssues, issueCounts, issueDetail, issuePullRequests, startIssue, finishIssue, claimIssue, commentIssue, setIssueState, currentWork,
 } from "./issues.ts";
-import { currentRuns, runById, runActivity, startRun, adoptPane, finishRun } from "./runs.ts";
 import { failed } from "./refused.ts";
 import { trackerProjects, setTrackerChoice } from "./trackerProjects.ts";
 import { holdCard as holdJiraCard } from "./jiraprcards.ts";
@@ -229,8 +227,6 @@ import { treeAuthors, liveSessions, recentSessions, editsBy } from "./sharedtree
 import { paneStatus } from "./agentdone.ts";
 import { windowRepo } from "./windowrepo.ts";
 import { takeSpawnSlot } from "./spawncap.ts";
-import { chatSend, activeTurns, turnActive, sentTurnTo, turnSenderKey, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
-import { paneEngineCapability, attachCommand, validPaneName, screenNeedsYou } from "./chatpane.ts";
 import { tmuxBinStatus, tmuxSocket, engineSocketArgs } from "./tmuxbin.ts";
 import { applyTmuxConf, resetTmuxConf, confHealth, ensureConf, sweepStaleConfs } from "./tmuxconf.ts";
 import { captureLayout, restoreLayout, clearRestoreState, lastCaptureAt, startRestoreSweeper, noteLaunch, forgetSession, noteCrashLoop, crashLoopStatus, launchesPath, captureLayoutSync } from "./tmuxrestore.ts";
@@ -241,13 +237,10 @@ import {
 import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings, lanternNudge, lanternWatch, lanternWatchMinutes, cacheTtlMinutes, lanternNudgeMinutes, writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, seatWakeHours, writeSeatSettings, launchMode, launchDeny, writeLaunchPermissions, workerRoles, writeWorkerRole, inScopeReal, agentsChangeWithoutAsking, gateAnswerer, gateOnTimeout } from "./config.ts";
 import { tellChair } from "./gatechair.ts";
 import { claudeModels } from "./claudemodels.ts";
-import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
-import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
-import { hermesStream, hermesModels, HERMES_ENABLED, hermesBypassAllowed } from "./hermes.ts";
-import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs, reloadEngineConf, tmuxCapability, engineWindowRunning, engineSessionName, tmux, validSessionName } from "./tmuxpane.ts";
+import { readOpens, recordOpens } from "./usageopens.ts";
+import { startPaneSweeper, reloadEngineConf, engineWindowRunning, engineSessionName, validSessionName } from "./tmuxpane.ts";
 import { findLiveWindow } from "./livewindow.ts";
-import { takeLease, endLease, leaseHeld, reapLeases } from "./panelease.ts";
-import { runAgentInteractivePane } from "./understudy-pane.ts";
+import { reapLeases } from "./panelease.ts";
 import { startScanner, ownsSession, knownProjects, projectsKnownAtStart, resyncScope, scanningEnabled } from "./transcripts.ts";
 import { conflictPrompt } from "./conflictPrompt.ts";
 import { workspaceRoot, workspaceRoots, setWorkspaceRoot, setWorkspaceRoots, inScope, sessionInScope, chatBypassAllowed, readBudgets, writeBudgets, hiddenProjects, setProjectHidden, setRepoDir, configuredRepoDirs, panelRepoDirs, configPath, repoDirsUnstated, seedRepoDirs, fileRoots } from "./config.ts";
@@ -257,7 +250,7 @@ import type { Budget } from "../../shared/types.ts";
 import { hookStatus, applyHooks, applyGate, hooksDir, hookPython, healGateCommand } from "./hooksetup.ts";
 import { probeAgents, probeEngines, testEngine, ROSTER } from "./agentprobe.ts";
 import { join as joinPath, resolve as resolvePath, basename } from "node:path";
-import { hostname, tmpdir } from "node:os";
+import { hostname } from "node:os";
 import { privateHost, resolvePeer, originOf, guardedFetch, hostsOnly } from "./net.ts";
 import { DESK_HEADER, claimDesk, deskHeld } from "./desk.ts";
 import { readPolicy, writePolicy } from "./orchestration.ts";
@@ -266,7 +259,7 @@ import { serverSettingDefs, cleanBudgets } from "./serverSettings.ts";
 import { agentVerdict, classOf, NEEDS_APPROVAL } from "../../shared/settingClass.ts";
 import { policyEngaged, startThroughPolicy, promptHeadless, startedByOf, settled, seatMayUse, workersAfterRestart, chairsAgain } from "./agents/policystart.ts";
 import { armedWakeups, evaluate as evaluatePolicy, ruleStates, startPolicyEvaluator } from "./orchpolicy.ts";
-import { resolveToken, healthProof, tokenOk, isIntake, isAuthExempt, callerFor, allowed, mayReadForeignRoot, scopeNeeded, pluginOfRequest, answersFromADevice, deskKeyOk, understudyRequiresToken, UNDERSTUDY_NO_TOKEN_ERROR, mintUnderstudyToken, revokeUnderstudyToken, tokenlessWarning, type Caller, type Origin } from "./auth.ts";
+import { resolveToken, healthProof, tokenOk, isIntake, isAuthExempt, callerFor, allowed, mayReadForeignRoot, scopeNeeded, pluginOfRequest, answersFromADevice, deskKeyOk, understudyRequiresToken, UNDERSTUDY_NO_TOKEN_ERROR, tokenlessWarning, type Caller, type Origin } from "./auth.ts";
 import {
   listPlugins, masterEnabled, setMaster, installPlugin, installFromCatalogue, updatePlugin, enablePlugin, disablePlugin, removePlugin, setPluginUnboxedConsent, envAllowsUnboxed,
   contributesOf, isRunning, pluginSettings, pluginOwnSettings, savePluginSettings, resumeEnabledPlugins, stopAllPluginsSync, pluginIcon,
@@ -287,9 +280,8 @@ import {
   setMode, halt, setEnabled, enabled as understudyEnabled, sealSituation,
   consent, setAllowed, addExtraSource, SourceRefused, removeExtraSource, setNever, termsStatus,
   precedentCount, precedentsByClass,
-  proposeScope, setProposeScope, quarantinedEver, openProjectNameAllowed,
-  judgeEnabled, setJudge, isOpenProjectPath, OPEN_PARTITION, openProjectName, setOpenProject,
-  nowhereReason,
+  setProposeScope, quarantinedEver,
+  judgeEnabled, setJudge, isOpenProjectPath, OPEN_PARTITION, openProjectName,
   bankByPartition, refileBank,
 } from "./understudy.ts";
 import { listSources } from "./understudy-sources.ts";
@@ -303,14 +295,6 @@ onPrChanged((ev) => deliverPrChanged(ev, listPlugins().map((p) => ({ name: p.nam
  *  knowledge the bank may no longer match. */
 let lastUnderstudyLearn: import("./understudy-ingest.ts").IngestResult | null = null;
 
-/* ── what the work loop is allowed to do ────────────────────────────────────
- *
- * The three capabilities, defined here and handed down, so that
- * `understudy-loop.ts` can reach neither a shell nor a repository on its own.
- * Everything it does, it does through something this file decided to give it —
- * the same shape as the actuator's runner and for the same reason: a module
- * that can start a process is a module every fence has to be re-argued around.
- */
 
 /**
  * Which checkout on this machine is owner/name. The open project first, then
@@ -469,13 +453,6 @@ async function openProjectRepos(): Promise<string[]> {
   return roots.filter((r) => isOpenProjectPath(r) && fsExists(r));
 }
 
-async function runGitIn(args: string[], cwd: string): Promise<{ ok: boolean; out: string }> {
-  const p = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
-  const out = await new Response(p.stdout).text();
-  const errText = await new Response(p.stderr).text();
-  return { ok: (await p.exited) === 0, out: (out + errText).slice(0, 4000) };
-}
-
 /*
  * His own agent, with his own tools, inside one worktree.
  *
@@ -485,1035 +462,11 @@ async function runGitIn(args: string[], cwd: string): Promise<{ ok: boolean; out
  * task and thrown away if it goes wrong. Isolation is doing the work that a
  * permission dialogue would otherwise have to.
  */
-/*
- * THE RUN, IN A PANE SOMEBODY CAN WATCH.
- *
- * A task is an agent with a shell for up to twenty-five minutes, and until now
- * it was a hidden `Bun.spawn`: the screen said "this takes as long as the task
- * does" and nothing else moved until it was over. You could not see which file
- * it was in, what it had tried, or whether it was stuck — the difference
- * between watching popcorn being made and being handed a bag.
- *
- * So the work happens in a tmux window in the project's own engine session,
- * which is the same machinery every other pane in this application already
- * uses: it can be watched, scrolled, interrupted, and typed into.
- *
- * THE PIECES THAT ARE NOT OBVIOUS.
- *
- * The prompt goes in a FILE. It is thousands of characters of rules and
- * precedents, and a command line has a length limit that varies by kernel; a
- * brief that grows past it would fail as something unrelated.
- *
- * `tee` rather than a redirect, because both things are wanted at once: the
- * pane is for the person and the file is for the outcome row.
- *
- * `PIPESTATUS[0]` rather than `$?`. Through a pipe, `$?` is tee's exit code,
- * which is zero whatever the agent did — the run would be recorded as finished
- * no matter how it ended. That is bash-only, hence bash rather than sh.
- *
- * The exit code lands in a FILE, and that file is the signal the run is over.
- * A window is gone the moment its command ends, so waiting on the window is a
- * race with reading it.
- *
- * Returns null when there is no tmux, or when the window could not be opened,
- * and the caller falls back to the hidden spawn. Watching is worth a lot and
- * it is not worth being the reason nothing runs.
- */
-/*
- * The pane's formatter, carried with the run rather than found on disk.
- * Kept verbatim from scripts/understudy-watch.py, which is where it is read
- * and edited; a test holds the two in step.
- */
-const WATCH_PY = `#!/usr/bin/env python3
-"""
-Turn the agent's event stream into something worth watching.
-
-\`claude -p\` prints nothing at all until it is finished, so a pane running it is
-a blank rectangle for the length of the task — which is the opposite of the
-point. \`--output-format stream-json --verbose\` does emit as it goes, but it
-emits JSON: measured at roughly two hundred characters a line, most of it
-identifiers. Watching that tells you the process is alive and nothing else.
-
-So the stream goes through here on its way to the pane. One short line per
-event, in the order things happened: which tool, on which file, and the first
-words of anything it says. The raw stream is teed to a file untouched, because
-the run's recorded outcome has to be the agent's own words rather than this
-summary of them.
-
-Deliberately not pretty. It is a counter you glance at to see whether it is
-reading, editing, or stuck on the same file for ten minutes.
-"""
-import json
-import re
-import sys
-
-
-def tail(path: str, keep: int = 60) -> str:
-    """The END of a path, which is the part that differs between two of them."""
-    return path if len(path) <= keep else "…" + path[-(keep - 1):]
-
-
-def head(cmd: str, keep: int = 110) -> str:
-    """
-    The START of a command, which is the opposite rule and the right one.
-
-    A path is identified by its last segment; a command is identified by its
-    first word. Cutting commands from the left produced fourteen rows reading
-    \`Bash …ass-understudy-the-tracker-fence-does-no\`, which is the middle of a
-    directory name and tells you nothing about what it ran.
-    """
-    return cmd if len(cmd) <= keep else cmd[:keep - 1] + "…"
-
-
-# What a shell command is actually doing, in the order these are tried.
-# Deliberately a short list: the point is to recognise the handful of things a
-# coding agent does over and over, not to parse shell.
-SHELL_MEANS = [
-    (re.compile(r"\\b(bun|npm|yarn|pnpm)\\s+(run\\s+)?test\\b"), "running the tests"),
-    (re.compile(r"\\btsc\\b|\\btypecheck\\b"), "checking the types"),
-    (re.compile(r"\\bgit\\s+(commit)\\b"), "committing"),
-    (re.compile(r"\\bgit\\s+(diff|show)\\b"), "reading its own changes"),
-    (re.compile(r"\\bgit\\s+(status)\\b"), "checking what it has changed"),
-    (re.compile(r"\\bgit\\s+(checkout|restore|reset)\\b"), "undoing something"),
-    (re.compile(r"\\b(grep|rg|ag)\\b"), None),          # handled with its pattern
-    (re.compile(r"\\b(cat|head|tail|sed -n|less)\\b"), None),
-    (re.compile(r"\\b(find|ls)\\b"), "looking around the files"),
-    (re.compile(r"\\b(mkdir|cp|mv|rm)\\b"), "moving files about"),
-    (re.compile(r"\\bmake\\b"), "running make"),
-]
-
-QUOTED = re.compile(r"""["']([^"']{2,60})["']""")
-
-
-def file_in(cmd: str) -> str:
-    """The likeliest filename in a command, for the ones that read or search."""
-    for word in reversed(cmd.split()):
-        # No backtick in this set on purpose: this file is embedded verbatim
-        # inside a TypeScript template literal, and a backtick followed by a
-        # semicolon here ended that literal early when the copy was made.
-        base = word.strip("\\"';|&()")
-        if "/" in base or re.search(r"\\.[a-z]{2,4}$", base):
-            return tail(base, 40)
-    return ""
-
-
-def shell_means(cmd: str) -> str:
-    """A sentence for a command, or the command's first word if none fits."""
-    for pattern, said in SHELL_MEANS:
-        if not pattern.search(cmd):
-            continue
-        if said:
-            return said
-        if pattern.pattern.startswith(r"\\b(grep"):
-            found = QUOTED.search(cmd)
-            where = file_in(cmd)
-            what = f'looking for "{found.group(1)}"' if found else "searching"
-            return f"{what} in {where}" if where else what
-        where = file_in(cmd)
-        return f"reading {where}" if where else "reading a file"
-    first = cmd.split()[0] if cmd.split() else "something"
-    return f"running {tail(first, 20)}"
-
-
-# The tools an agent uses most, said as a person would say them.
-TOOL_MEANS = {
-    "Read": "reading", "Write": "writing", "Edit": "editing",
-    "NotebookEdit": "editing", "Glob": "finding", "Grep": "looking for",
-    "TodoWrite": "planning", "Task": "asking another agent", "WebFetch": "fetching a page",
-}
-
-
-def describe(ev: dict) -> str | None:
-    kind = ev.get("type")
-
-    if kind == "assistant":
-        out = []
-        for block in ev.get("message", {}).get("content", []) or []:
-            if block.get("type") == "text":
-                said = " ".join((block.get("text") or "").split())
-                # Its own words, marked and kept whole-ish: this is the line
-                # that says WHY, and everything else is only what it touched.
-                if said:
-                    out.append("\\n▸ " + said[:220])
-            elif block.get("type") == "tool_use":
-                name = block.get("name", "?")
-                arg = block.get("input", {}) or {}
-                path = arg.get("file_path") or arg.get("path")
-                cmd = arg.get("command")
-                pattern = arg.get("pattern")
-                if name == "Bash" and cmd:
-                    out.append("   " + shell_means(" ".join(str(cmd).split())))
-                elif path:
-                    verb = TOOL_MEANS.get(name, name.lower())
-                    out.append(f"   {verb} {tail(' '.join(str(path).split()), 50)}")
-                elif pattern:
-                    verb = TOOL_MEANS.get(name, name.lower())
-                    out.append(f'   {verb} "{head(" ".join(str(pattern).split()), 50)}"')
-                else:
-                    out.append("   " + TOOL_MEANS.get(name, name.lower()))
-        return "\\n".join(out) if out else None
-
-    if kind == "user":
-        # Tool results: only whether it worked, never the body. A file's
-        # contents scrolling past hides the thing you were watching for.
-        for block in ev.get("message", {}).get("content", []) or []:
-            if block.get("type") == "tool_result" and block.get("is_error"):
-                return "   ↳ that did not work"
-        return None
-
-    if kind == "rate_limit_event":
-        """
-        The one event that explains a run stopping for no visible reason.
-
-        A run of the understudy died after thirty minutes with 782KB of work
-        and nothing committed. Nothing on screen said why: the pane simply
-        stopped. This was in the stream all along and the formatter dropped it,
-        which is the worst thing a formatter can do with the only line that
-        answers "what happened".
-        """
-        info = ev.get("rate_limit_info", {}) or {}
-        why = info.get("overageDisabledReason") or info.get("overageStatus") or ""
-        kind_of = info.get("rateLimitType") or "usage"
-        when = info.get("resetsAt")
-        at = ""
-        if isinstance(when, (int, float)):
-            import time as _t
-            at = _t.strftime(" — resets %H:%M", _t.localtime(when))
-        return f"\\n! {kind_of} limit reached ({why}){at}"
-
-    if kind == "result":
-        cost = ev.get("total_cost_usd")
-        turns = ev.get("num_turns")
-        bits = [b for b in (f"{turns} steps" if turns else "",
-                            f"\${cost:.2f}" if isinstance(cost, (int, float)) else "") if b]
-        return f"\\n— finished ({', '.join(bits)})" if bits else "\\n— finished"
-
-    return None
-
-
-def main() -> int:
-    for raw in sys.stdin:
-        raw = raw.strip()
-        if not raw:
-            continue
-        try:
-            ev = json.loads(raw)
-        except json.JSONDecodeError:
-            # Not everything on this stream is an event: hooks and the runtime
-            # write plain lines too, and dropping them would hide a crash.
-            print(raw[:160], flush=True)
-            continue
-        line = describe(ev)
-        if line:
-            print(line, flush=True)
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
-`;
-
-/**
- * How often the run loop asks whether the agent's window is still there.
- *
- * Every ask is a tmux subprocess, and the thing it detects — an agent that
- * died — does not need one-second resolution. Five seconds turns a
- * forty-five-minute wait on a corpse into a five-second one, which is the whole
- * of the improvement; going finer buys nothing and costs a process per second
- * per concurrent run.
- */
-const AGENT_LIVENESS_MS = 5_000;
-
-/*
- * What was on screen when a run ended badly.
- *
- * Run 18 produced three transcript events in forty-five minutes and then timed
- * out, and the outcome could say nothing about why, because the transcript is
- * the only thing it read and the transcript was empty. Whatever the agent was
- * actually doing — sitting at a prompt, printing an error the event stream
- * never carries, waiting on something — was on the screen of its own window,
- * and nobody looked.
- *
- * Only on a bad ending. A run that finished has its answer, and the pane
- * underneath it is noise.
- */
-async function paneTail(windowId: string): Promise<string> {
-  const r = await tmux(["capture-pane", "-p", "-t", windowId]);
-  const text = r.ok ? r.stdout.trimEnd() : "";
-  return text ? `\n--- what its window had on screen ---\n${text.split("\n").slice(-40).join("\n")}` : "";
-}
-
-async function runAgentInPane(p: {
-  cwd: string; root: string; label: string; argv: string[];
-  prompt: string; env: Record<string, string>; timeoutMs: number;
-  onPane?: (paneId: string) => void;
-  /*
-   * Told WHY there is no pane, rather than falling back in silence.
-   *
-   * Measured the first time this ran for real: an over-long TMUX_TMPDIR pushed
-   * the socket path past the 108 bytes a unix socket allows, tmux refused with
-   * "File name too long", and the run carried on perfectly well in a hidden
-   * spawn. Which is the right behaviour — being watchable is not worth being
-   * the reason nothing runs — but the screen simply showed no pane, and there
-   * was nothing anywhere to say the difference between "no pane yet" and "no
-   * pane ever". A silent fallback on the one feature whose entire point is
-   * being able to watch is the wrong kind of quiet.
-   */
-  onNoPane?: (why: string) => void;
-}): Promise<{ ok: boolean; out: string } | null> {
-  const can = tmuxCapability();
-  if (!can.available) { p.onNoPane?.(can.reason || "tmux is not available"); return null; }
-
-  const box = mkdtempSync(joinPath(tmpdir(), "agx-understudy-"));
-  const promptPath = joinPath(box, "brief.txt");
-  const outPath = joinPath(box, "transcript.txt");
-  const rcPath = joinPath(box, "exit-code");
-  await Bun.write(promptPath, p.prompt);
-
-  const q = (v: string) => `'${v.replaceAll("'", "'\\''")}'`;
-  /*
-   * THE PANE WAS EMPTY, and that was the whole feature not working.
-   *
-   * Measured: `claude -p` prints nothing at all until it finishes, so a pane
-   * running it is a blank rectangle for the length of the task. Watching an
-   * empty box is not better than watching a sentence that says "this takes as
-   * long as it takes".
-   *
-   * `--output-format stream-json --verbose` does emit as it goes. It emits
-   * JSON — around two hundred characters a line, mostly identifiers — so it
-   * goes through a formatter on the way to the screen: one short line per
-   * event, which tool and which file.
-   *
-   * The RAW stream is teed out first, untouched. The recorded outcome has to
-   * be the agent's own words, not this summary of them; the formatter is for
-   * the person standing at the counter.
-   */
-  const watchArgv = [...p.argv, "--output-format", "stream-json", "--verbose"];
-  /*
-   * THE FORMATTER IS WRITTEN OUT, not pointed at.
-   *
-   * It was resolved with `import.meta.url` against `../../scripts/`, which is
-   * right in a checkout and wrong everywhere else: from the installed bundle
-   * that path resolves to `/scripts/understudy-watch.py`, and the pane's first
-   * and only line was
-   *
-   *     python3: can't open file '/scripts/understudy-watch.py'
-   *
-   * Found by installing the app and watching a run — it worked in the tree it
-   * was written in, which is the class of bug a test in that same tree cannot
-   * see. A file the run carries with it has no opinion about how the server
-   * was installed.
-   */
-  const fmt = joinPath(box, "watch.py");
-  await Bun.write(fmt, WATCH_PY);
-  const line =
-    `${watchArgv.map(q).join(" ")} < ${q(promptPath)} 2>&1 | tee ${q(outPath)} | python3 ${q(fmt)}; ` +
-    `echo \${PIPESTATUS[0]} > ${q(rcPath)}`;
-
-  /*
-   * THE MACHINE TOKEN OUT OF THE ENGINE'S ENVIRONMENT, before the agent runs.
-   *
-   * The agent is handed a minted READ-ONLY credential through `-e`, and that
-   * override works: measured, the variable inside its window is the minted
-   * one. But the tmux SERVER carries the environment it was started with, and
-   * on this machine that includes `AGENTGLASS_TOKEN` — the machine token, with
-   * every write route open to it.
-   *
-   * The agent has bash. `tmux -L agentglass show-environment -g
-   * AGENTGLASS_TOKEN` returns it, verified against the real socket. So the
-   * fence around what the understudy may do was one command away from being
-   * irrelevant, and the careful `-e` was protecting a window while the door
-   * beside it stood open.
-   *
-   * Unset globally rather than trusted not to be asked. It is only read when a
-   * new pane inherits it, and every pane this application opens is given what
-   * it needs explicitly — the panes a person opens get their environment from
-   * their own shell.
-   */
-  await tmux(["set-environment", "-g", "-u", "AGENTGLASS_TOKEN"]);
-
-  const win = await engineWindowRunning(
-    p.root, `understudy: ${p.label}`.slice(0, 60), ["bash", "-c", line], p.cwd, p.env,
-  );
-  if (!win) {
-    // The engine session could not be opened or the window refused. The socket
-    // path being too long lands here rather than in the capability check.
-    p.onNoPane?.("tmux would not open a window for it");
-    return null;
-  }
-
-  /*
-   * WIDE, BECAUSE 80 COLUMNS IS WHERE EVERY LINE WAS BEING CUT.
-   *
-   * A window opened with no client attached is 80x24, and the panel showed
-   * fourteen rows of `Bash …ass-understudy-the-tracker-fence-does-no` — the
-   * tool's name, then the middle of a command. Reported as "tiny, and none of it
-   * can be made out", and the font size was the smaller half of it.
-   *
-   * Set on THIS WINDOW rather than on the session: `window-size` is a window
-   * option, and putting `manual` on a session pins every window in it — which
-   * has already once shrunk seven of somebody's real ones. Failures are
-   * ignored on purpose; a narrow pane is worse than a wide one and better than
-   * no run.
-   */
-  await tmux(["set-window-option", "-t", win.windowId, "window-size", "manual"]);
-  await tmux(["resize-window", "-t", win.windowId, "-x", "200", "-y", "50"]);
-
-  /*
-   * THE WINDOW IS LEASED, and that is what closes it.
-   *
-   * A `-p` run ends by itself: the command exits and tmux takes the window with
-   * it, so the only path that had to kill anything was the timeout below. That
-   * stops being true the moment the pane holds an interactive CLI, which is the
-   * next thing to go in here — an agent that stays at its prompt is a window
-   * nothing ends, and nothing sweeps it either, because `evictIdlePanes`
-   * enumerates sessions and this is a window inside one.
-   *
-   * Leasing it now rather than with that change, because the rule the lease
-   * exists for is the same either way and it is easier to trust when it is not
-   * also new: the only window this can ever close is one it stamped itself.
-   * See panelease.ts for why a name or an age would not do.
-   */
-  await takeLease(win.windowId, `understudy: ${p.label}`);
-
-  p.onPane?.(win.paneId);
-
-  try {
-    /*
-     * WAITING FOR AN AGENT THAT IS STILL THERE.
-     *
-     * This used to poll for the exit-code file and nothing else, so the only
-     * thing that could end a wait early was the agent finishing. An agent that
-     * DIED — window killed, tmux restarted, the shell inside it gone — wrote no
-     * rc file, and the loop sat on it for the whole forty-five minute budget
-     * before recording a timeout. Measured: a run spent thirty-five minutes
-     * "running" with no process anywhere on the machine, no file touched in its
-     * worktree, and nothing to tell anyone until the clock ran out.
-     *
-     * The window is the signal, and the lease already knows how to ask: the
-     * stamp we wrote is on that window or it is not. Asking every five seconds
-     * rather than every second because it is a subprocess per ask and the thing
-     * being detected does not need one-second resolution.
-     *
-     * The rc file is re-checked AFTER the window comes back gone, never before:
-     * an agent that finishes writes rc and then its window closes, and those two
-     * are not simultaneous. Checking in that order is what stops a normal ending
-     * being reported as a death.
-     */
-    const started = Date.now();
-    const deadline = started + p.timeoutMs;
-    let died = false;
-    let nextLivenessCheck = Date.now() + AGENT_LIVENESS_MS;
-    /*
-     * How long the transcript has been silent, carried into whatever ending
-     * this run gets. It does not decide anything — an agent thinking hard
-     * between tool calls writes nothing for minutes and is working perfectly —
-     * but "it ran out of time" and "it ran out of time and had written nothing
-     * for forty of those minutes" are different reports, and only the second
-     * one is diagnosable.
-     */
-    let lastSize = -1;
-    let lastGrew = started;
-    while (Date.now() < deadline) {
-      if (fsExists(rcPath)) break;
-      await new Promise((r) => setTimeout(r, 1000));
-      if (Date.now() < nextLivenessCheck) continue;
-      nextLivenessCheck = Date.now() + AGENT_LIVENESS_MS;
-      const size = fsExists(outPath) ? Bun.file(outPath).size : 0;
-      if (size !== lastSize) { lastSize = size; lastGrew = Date.now(); }
-      if (await leaseHeld(win.windowId)) continue;
-      if (fsExists(rcPath)) break;
-      died = true;
-      break;
-    }
-    const silentFor = Math.round((Date.now() - lastGrew) / 1000);
-    const silence = silentFor >= 60 ? `, after ${Math.round(silentFor / 60)}min with nothing written to its transcript` : "";
-
-    const out = fsExists(outPath) ? await Bun.file(outPath).text() : "";
-    if (died) {
-      /* The transcript is worth more than the sentence: whatever the agent got
-         through before it went is in there, and a run that died at minute two
-         with an empty one is a different problem from a run that died at minute
-         thirty with 400KB. */
-      const ran = Math.round((Date.now() - started) / 1000);
-      return { ok: false, out: `${out}\n--- its window is gone: the agent died after ${ran}s${silence}, and nothing was left running ---${await paneTail(win.windowId)}`.trim().slice(-8000) };
-    }
-    if (!fsExists(rcPath)) {
-      // Out of time. The window goes rather than being left, because an agent
-      // still typing into a worktree nobody is waiting for is worse than no
-      // transcript — the run is already recorded as failed either way. The
-      // `finally` does it, so the path that throws on the way here ends the
-      // same way this one does.
-      /* Captured BEFORE the `finally` closes the window — on a timeout it is
-         still there, and it is the only place the reason can be. */
-      const screen = await paneTail(win.windowId);
-      return { ok: false, out: `${out}\n--- it ran out of time and was stopped${silence} ---${screen}`.trim().slice(-8000) };
-    }
-    const code = Number.parseInt((await Bun.file(rcPath).text()).trim(), 10);
-    return { ok: code === 0 && out.trim().length > 0, out: finalWords(out) };
-  } finally {
-    // Every ending, including the ones nobody wrote a branch for. A window that
-    // already closed itself is the common case and costs one refused lookup.
-    await endLease(win.windowId);
-  }
-}
-
-/**
- * The agent's answer, pulled back out of its event stream.
- *
- * The transcript on disk is now one JSON object per line, and the outcome a
- * person reads has to be the words rather than the envelope. The last `result`
- * event carries them; anything else means the stream did not get that far, and
- * then the raw tail is more use than an empty string — it is where a crash is.
- */
-function finalWords(stream: string): string {
-  const lines = stream.trim().split("\n");
-
-  /*
-   * A RUN CUT OFF BY A USAGE LIMIT, which otherwise records as a blank
-   * failure.
-   *
-   * Measured: a run worked for thirty minutes, produced 782KB of transcript,
-   * and stopped mid-sentence. The reason was in the stream — a
-   * `rate_limit_event` saying the five-hour window had no credit left — and
-   * the outcome said nothing at all, because there was no `result` event to
-   * find. Half an hour of work, and the row could not say why it ended.
-   *
-   * Read before the result, and separately: a limit reached part-way through
-   * is the thing worth reporting even when the run went on to finish.
-   */
-  let limited = "";
-  for (const line of lines) {
-    if (!line.includes("rate_limit_event")) continue;
-    try {
-      const ev = JSON.parse(line) as {
-        type?: string;
-        rate_limit_info?: { rateLimitType?: string; overageDisabledReason?: string; resetsAt?: number };
-      };
-      if (ev.type !== "rate_limit_event") continue;
-      const i = ev.rate_limit_info ?? {};
-      const when = typeof i.resetsAt === "number"
-        ? new Date(i.resetsAt * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
-        : "";
-      limited = `--- stopped by the ${i.rateLimitType ?? "usage"} limit`
-        + `${i.overageDisabledReason ? ` (${i.overageDisabledReason})` : ""}`
-        + `${when ? `, resets ${when}` : ""} ---`;
-    } catch { /* a line that mentions it without being one */ }
-  }
-
-  for (let i = lines.length - 1; i >= 0; i--) {
-    try {
-      const ev = JSON.parse(lines[i]!) as { type?: string; result?: string };
-      if (ev.type === "result" && typeof ev.result === "string") {
-        return `${limited ? `${limited}\n` : ""}${ev.result}`.slice(-8000);
-      }
-    } catch { /* not every line on that stream is an event */ }
-  }
-  // No result event at all: it did not get to the end. Say so, and say why if
-  // the stream knows — a tail of raw JSON answers nothing.
-  const why = limited || "--- it stopped before finishing, and left no closing message ---";
-  return `${why}\n${stream.slice(-4000)}`.slice(-8000);
-}
-
-/**
- * The plan limits as percentages left, or null when they cannot be read.
- *
- * `getUsage` reports utilisation; what a decision needs is what is LEFT, and
- * the seven-day window is the one that runs out — the five-hour one refills
- * while you sleep. Failure is null rather than an optimistic 100: a chooser
- * that cannot see the meter must not spend as though it were full.
- */
-async function usageNow(): Promise<UsageNow | null> {
-  try {
-    const u = await getUsage();
-    if (!u?.available) return null;
-    const week = u.seven_day?.remaining;
-    const hour = u.five_hour?.remaining;
-    if (typeof week !== "number") return null;
-    return { weekRemaining: week, hourRemaining: typeof hour === "number" ? hour : 100 };
-  } catch {
-    return null;
-  }
-}
-
-/*
- * Which run is in which pane, right now.
- *
- * In memory rather than in the row, on purpose. A live pane exists only while
- * this process does — a server that restarts leaves no pane behind it to point
- * at — so a column would be a value that is wrong more often than right, and it
- * would need a migration to say so.
- *
- * Cleared when the run ends, so the tab offers to show you something that is
- * still there.
- */
-const watching = new Map<number, { paneId?: string; why?: string }>();
-/**
- * The window a run is in, asked of tmux rather than remembered.
- *
- * The map is in this process, and this process restarts — every reinstall, and
- * any crash. The RUN does not: it is an agent in a tmux window that outlives
- * the server entirely, so a restart left a task visibly `running` with no way
- * to watch it, which is exactly when somebody wants to look.
- *
- * Matched on the window name, which is `understudy: <title>` truncated to
- * sixty characters — set when the window was opened, by this same code. Not a
- * guess: nothing else on that socket is named that way.
- */
-async function paneOfRun(title: string): Promise<string> {
-  const want = `understudy: ${title}`.slice(0, 60);
-  const r = await tmux(["list-windows", "-a", "-F", "#{pane_id}\t#{window_name}"]);
-  if (!r.ok) return "";
-  for (const line of r.stdout.split("\n")) {
-    const [paneId = "", name = ""] = line.split("\t");
-    if (name && paneId.startsWith("%") && name === want) return paneId;
-  }
-  return "";
-}
-
-export function watchingPanes(): { runId: number; paneId?: string; why?: string }[] {
-  /*
-   * Filtered by the ROW, not by a delete somewhere else.
-   *
-   * A pane is worth offering only while its run is still going, and the row
-   * already knows that — `finishRun` writes the state whichever way the run
-   * ended, including the paths that throw. Clearing the map by hand at each of
-   * those exits is the kind of bookkeeping that is right until somebody adds a
-   * fourth way to finish, and then silently points at a pane that closed an
-   * hour ago.
-   */
-  const live = new Set(Work.runs(50).filter((r) => r.state === "running").map((r) => r.id));
-  for (const id of [...watching.keys()]) if (!live.has(id)) watching.delete(id);
-  return [...watching].map(([runId, v]) => ({ runId, ...v }));
-}
-const nowWatching = (runId: number | null, paneId: string) => {
-  if (!runId) return;
-  watching.set(runId, { paneId });
-  /* And on the row, because this map dies with the process while the run does
-     not — and because a pane id is the only handle on that window that a
-     rename cannot break. */
-  Work.rememberPane(runId, paneId);
-};
-
-/**
- * What is watchable right now, memory first and tmux for the rest.
- *
- * A server that has just restarted remembers nothing, and the answer is on the
- * tmux socket. Recovered entries are put back in the map so the next call is
- * the cheap one.
- */
-async function watchedNow(): Promise<{ runId: number; paneId?: string; why?: string }[]> {
-  const known = watchingPanes();
-  const seen = new Set(known.map((w) => w.runId));
-  const out = [...known];
-  for (const r of Work.runs(50)) {
-    if (r.state !== "running" || seen.has(r.id)) continue;
-    const paneId = await paneOfRun(r.title);
-    if (!paneId) continue;
-    watching.set(r.id, { paneId });
-    out.push({ runId: r.id, paneId });
-  }
-  return out;
-}
-/** No pane, and the sentence saying why — so the screen can tell you. */
-const noPane = (runId: number | null, why: string) => { if (runId) watching.set(runId, { why }); };
-
-async function runAgentIn(
-  cwd: string, prompt: string, timeoutMs: number,
-  show?: {
-    root: string; label: string;
-    /*
-     * The body of the card, for the thing choosing the model.
-     *
-     * `label` is the title and the title alone. His cards are a short title
-     * with the substance underneath it — the part that says whether this is a
-     * rename or an audit — and until this existed that part went to the brief
-     * and was withheld from `chooseModel`.
-     */
-    detail?: string;
-    onPane?: (paneId: string) => void;
-    onNoPane?: (why: string) => void;
-    /** Which model and effort this run got, and why — recorded on the row. */
-    onModel?: (c: Choice) => void;
-  },
-): Promise<{ ok: boolean; out: string }> {
-  const bin = Bun.which("claude");
-  if (!bin) return { ok: false, out: "no local claude CLI" };
-
-  /*
-   * THE MODEL AND THE EFFORT, chosen instead of defaulted.
-   *
-   * Every run before this launched with no `--model`, so a two-line rename and
-   * a whole-feature audit both went to the account's default — the most
-   * expensive model there is, out of a weekly allowance shared with the person
-   * whose account it is.
-   *
-   * The task asks for a tier and the REMAINING BUDGET can only lower it. That
-   * asymmetry is the design: a mechanical edit is never promoted because the
-   * week is young, and a hard one is demoted when it is nearly over. Fable is
-   * never launched at all — not a quality judgement, it is the allowance he
-   * needs for his own work.
-   *
-   * A usage reading that fails is not a reason to spend as if the week were
-   * full: `chooseModel` caps at sonnet when it cannot see the meter.
-   */
-  const usage = show ? await usageNow() : null;
-  const pick = chooseModel({ title: show?.label ?? "", detail: show?.detail ?? "", usage });
-  show?.onModel?.(pick);
-
-  /*
-   * `Monitor` IS REMOVED, not merely discouraged. This is a one-shot `-p`
-   * process: the turn that runs is the only turn there is, nothing survives
-   * it, and no notification a background job fires later has anywhere to
-   * land. Six runs on this machine reached for it anyway — "waiting for the
-   * Monitor notification", "I'll pick back up when the monitor fires" — and
-   * spent their entire turn on a promise the harness could never keep. The
-   * character check below now catches the run that happens regardless, but
-   * catching it after the fact is the second line, not the first: taking the
-   * tool away is cheaper than detecting what it was used for, the same
-   * reasoning that keeps this agent from committing on his behalf. `Bash`
-   * stays — git and the test suite need it — so `run_in_background` is still
-   * technically reachable, but with no `Monitor` to report back to it a run
-   * that backgrounds something has no honest story left to tell about it.
-   */
-  const argv = [bin, "-p", "--dangerously-skip-permissions",
-    "--disallowedTools", "Monitor",
-    "--model", pick.model, "--effort", pick.effort];
-
-  /*
-   * A READ-ONLY CREDENTIAL, and swapping it in is a fence rather than a
-   * feature.
-   *
-   * The environment it inherits carries `AGENTGLASS_TOKEN` — the machine token,
-   * `full` scope, every write route in the application open to it. So until
-   * this line, an agent that thought to curl its own server could push a
-   * branch, merge a pull request or write to the task tracker, and the careful
-   * wording in its brief was the only thing standing in the way.
-   *
-   * It gets a minted one instead: the understudy's principal, every GET
-   * answered and every write refused by `understudyAllows`. That is also what
-   * gives it the views that were asked for — the panel, the diff, the branch list —
-   * because a view is a route once you have no screen to look at.
-   *
-   * Minted per run and revoked in `finally`, so a credential never outlives the
-   * work it was made for.
-   */
-  const readToken = mintUnderstudyToken();
-
-  try {
-    if (show) {
-      /*
-       * Only the two variables that differ from what the window would inherit
-       * anyway. Handing the whole environment to `-e` would put every variable
-       * this server holds onto a tmux command line, which is the opposite of
-       * why the credential is passed this way at all.
-       */
-      /*
-       * THE INTERACTIVE PANE FIRST, and it is a rung above `runAgentInPane`
-       * rather than a replacement for it.
-       *
-       * `runAgentInPane` still launches `-p` — one shot, model fixed at
-       * launch. This opens the same shape of window and runs the real CLI in
-       * it, so a run can be told mid-task to change model or effort the way
-       * he does, and drop back to `-p` only where the interactive pane itself
-       * could not be opened at all — no tmux, no window. Once a window opens
-       * it commits to it: `runAgentInteractivePane` returns null only in
-       * that one case, never after it has leased a pane and started typing
-       * into it, so this never opens two windows for one run.
-       */
-      /* The same fence on all three ladders. It is built once per run so the
-         empty `gh` config is the same directory whichever one starts. */
-      const fenced = understudyRunEnv(cwd);
-
-      const interactive = await runAgentInteractivePane({
-        cwd, root: show.root, label: show.label, model: pick.model, effort: pick.effort,
-        prompt, timeoutMs,
-        env: { ...fenced, AGENTGLASS_TOKEN: readToken, AGENTGLASS_READ_TOKEN: readToken },
-        onPane: show.onPane,
-      });
-      if (interactive) return interactive;
-
-      const watched = await runAgentInPane({
-        cwd, root: show.root, label: show.label, argv, prompt, timeoutMs,
-        env: { ...fenced, AGENTGLASS_TOKEN: readToken, AGENTGLASS_READ_TOKEN: readToken },
-        onPane: show.onPane,
-        onNoPane: show.onNoPane,
-      });
-      // Null means no tmux, or a window that would not open. Fall through to
-      // the hidden run: being watchable is worth a great deal and it is not
-      // worth being the reason nothing runs at all.
-      if (watched) return watched;
-    }
-
-    /* The hidden ladder inherits the server's whole environment, which is the
-       one that carries the user's `gh` and ssh: the fence goes on last so it
-       wins over what it is overriding. */
-    const env = { ...process.env, ...understudyRunEnv(cwd), AGENTGLASS_TOKEN: readToken, AGENTGLASS_READ_TOKEN: readToken };
-    const p = Bun.spawn(argv, {
-      cwd,
-      stdin: new TextEncoder().encode(prompt),
-      stdout: "pipe",
-      // Captured rather than discarded: a run that dies — a missing credential,
-      // a crash, a CLI that refuses — says so HERE and writes nothing to
-      // stdout. Thrown away, those runs recorded a failure with an empty
-      // reason, which is the one row somebody actually wants to read.
-      stderr: "pipe",
-      env,
-    });
-    /*
-     * MEASURED ON THE FIRST REAL CHAINED RUN, which came back as a failure
-     * with an empty reason after exactly 25.0 minutes.
-     *
-     * The agent had done the work — the right two files, staged, with comments
-     * in his own idiom — and the timeout killed it before it committed. What
-     * was recorded was `failed` and a blank outcome, so from the screen it was
-     * indistinguishable from an agent that sat there doing nothing.
-     *
-     * `claude -p` writes to a PIPE, and a pipe buffers: nothing is flushed
-     * until it finishes, so killing it loses the entire transcript. In a pane
-     * it writes to a tty and prints as it goes, which is one more reason the
-     * watched path is the better one — but this path has to be honest about
-     * what happened rather than silent.
-     */
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      try { p.kill(); } catch { /* already gone */ }
-    }, timeoutMs);
-    try {
-      // Concurrently, for the same reason as the test runner: whichever pipe is
-      // not being read is the one that fills and stops the process.
-      const [out, err] = await Promise.all([
-        new Response(p.stdout).text(),
-        new Response(p.stderr).text(),
-      ]);
-      const code = await p.exited;
-      if (timedOut) {
-        const mins = Math.round(timeoutMs / 60_000);
-        return {
-          ok: false,
-          out: [
-            out.trim(),
-            err.trim(),
-            `--- it was still going after ${mins} minutes and was stopped ---`,
-            "Anything it had written is in the worktree; a pipe holds its output",
-            "until the process ends, so there may be no transcript above this line.",
-          ].filter(Boolean).join("\n").slice(-8000),
-        };
-      }
-      const ok = code === 0 && out.trim().length > 0;
-      // Only on failure. A successful run's stderr is progress chatter, and
-      // appending it would bury the transcript the outcome is there to hold.
-      const said = ok || !err.trim() ? out : `${out}\n--- it also said ---\n${err}`.trim();
-      return { ok, out: said.slice(0, 8000) };
-    } finally {
-      clearTimeout(timer);
-    }
-  } finally {
-    // In `finally` rather than after the return, so a run that throws or times
-    // out does not leave a live credential behind. That is the whole reason it
-    // is minted per run instead of once at boot.
-    revokeUnderstudyToken(readToken);
-  }
-}
-
-/*
- * The verdict, and it is his test command rather than a guess at one.
- *
- * "Compiling is not evidence" is his sentence, said after a session reported
- * success on a build nobody had run. So the suite decides, and the agent's own
- * confidence counts for nothing against it.
- */
-/**
- * The names of the tests that failed, pulled out before the tail throws them away.
- *
- * `bun test` prints its failures as it goes and its summary at the end, and the
- * report kept only the last 4000 characters — which is the per-file listing and
- * the counts. So a run came back saying "1 fail" and nothing whatever about
- * WHICH, and finding out meant re-running the whole suite by hand. Twice in one
- * afternoon.
- */
-function failedTestNames(output: string): string[] {
-  return [...output.matchAll(/^\(fail\) .*$/gm)].map((m) => m[0]!.trim());
-}
-
-/**
- * One suite run, both streams, both at once.
- *
- * `bun test` writes its verdict to STDERR — its stdout carries the version
- * banner and nothing else, so reading stdout alone recorded that banner as what
- * the tests said, for every run, under the words "what the TESTS said, not what
- * the agent claimed".
- *
- * And reading them in sequence can HANG. An unread pipe fills, a process
- * blocking on a full stderr never exits, and `p.exited` waits for a program
- * that is waiting for us — until the timeout kills a run that had already
- * finished. A suite this size writes far more than a pipe buffer holds.
- */
-/**
- * The suites the verdict runs, in CI's order and with CI's arguments.
- *
- * It ran ONE of them, without its argument, and both halves of that cost a run.
- *
- *   - `web` was missing. Measured on the deliveries since 2026-08-20, 30 of 63
- *     touched `web/`: a task that broke the dashboard could come back `done`
- *     because nothing the verdict ran could see it. web is already a bun
- *     workspace and costs about 32 seconds.
- *   - `--timeout 20000` was missing, and CI's own comment says why it is there:
- *     several tests here brush the 5 s default. Without it the verdict
- *     manufactures reds, and the retry below then files them as flakes — a
- *     configuration mistake wearing the costume of a flaky suite.
- *
- * `mobile` stays out on purpose: it needs `npm ci` and generated artifacts a
- * fresh worktree does not have, and its own tests skip with a reason there.
- */
-const VERDICT_SUITES: readonly { dir: string; args: readonly string[] }[] = [
-  { dir: "server", args: ["--timeout", "20000"] },
-  { dir: "web", args: [] },
-];
-
-async function runSuiteOnce(cwd: string, timeoutMs: number, suite: { dir: string; args: readonly string[] } = VERDICT_SUITES[0]!): Promise<{ ok: boolean; out: string }> {
-  /* An absolute path, not the bare word: the packaged app's PATH is whatever
-     the launcher handed it, and a missing `bun` arrived as an ENOENT from
-     inside a run that then read as a failed task. See bunbin.ts. */
-  const bun = bunBin();
-  if (!bun) return { ok: false, out: NO_BUN() };
-  const p = Bun.spawn([bun, "test", ...suite.args], { cwd: `${cwd}/${suite.dir}`, stdout: "pipe", stderr: "pipe" });
-  const timer = setTimeout(() => { try { p.kill(); } catch { /* already gone */ } }, timeoutMs);
-  /*
-   * BOTH STREAMS, AND BOTH AT ONCE. Two separate bugs met here.
-   *
-   * `bun test` writes its verdict to STDERR. Its stdout carries the version
-   * banner and nothing else, so reading stdout alone recorded this as what the
-   * tests said, for every run:
-   *
-   *     bun test v1.3.9 (…)
-   *
-   * The tab prints that under the words "what the TESTS said, not what the
-   * agent claimed", which is the promise the whole loop rests on.
-   *
-   * And reading them in sequence can HANG. An unread pipe fills, a process
-   * blocking on a full stderr never exits, and `p.exited` waits for a program
-   * that is waiting for us — until the timeout kills a run that had already
-   * finished. A suite this size writes far more than a pipe buffer holds.
-   */
-  const [outText, errText] = await Promise.all([
-    new Response(p.stdout).text(),
-    new Response(p.stderr).text(),
-  ]);
-  const code = await p.exited;
-  clearTimeout(timer);
-  // The verdict first, because it is the last thing bun writes and the first
-  // thing a person looks for.
-  const both = `${errText.trim()}\n${outText.trim()}`.trim();
-  return { ok: code === 0, out: both };
-}
-
-/**
- * ONE RED DOES NOT STOP THE QUEUE UNTIL IT HAS BEEN ASKED TWICE.
- *
- * The tmux tests share one socket and the server behind it is single-threaded,
- * so under load a couple of them lose a race that has nothing to do with the
- * change under test. A shift stops on ONE failure — deliberately, and it is the
- * right rule — which means a flake does not cost a run, it costs the whole
- * queue until a person comes back and looks.
- *
- * Measured on three separate runs in one afternoon: each reported a red, and
- * each was green on a second pass in the same worktree with nothing changed.
- * Every one of those cost the queue the rest of the hour.
- *
- * So a red is asked again, once, and only a red twice is a failure. The retry
- * is never silent: a run that went green the second time says so and names
- * what failed the first time, because "this suite has a flake in it" is
- * something worth seeing, and a retry nobody is told about is how a real
- * intermittent bug gets to hide for months.
- *
- * The cost is bounded and paid only when something is already wrong: a red run
- * can now take two budgets instead of one. The suite is about four minutes and
- * the budget is ten, so a genuine failure is reported in roughly eight rather
- * than four — against a flake costing the rest of the shift, that is cheap.
- */
-/**
- * Dependencies into a freshly cut worktree, before the agent is asked to work.
- *
- * `git worktree add` links no `node_modules`, and everything a verdict depends
- * on — `bun test`, `tsc` — needs them. About 70ms off the shared cache.
- */
-async function runInstallIn(cwd: string, timeoutMs: number): Promise<{ ok: boolean; out: string }> {
-  const bun = bunBin();
-  if (!bun) return { ok: false, out: NO_BUN() };
-  const p = Bun.spawn([bun, "install"], { cwd, stdout: "pipe", stderr: "pipe" });
-  let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; try { p.kill(); } catch { /* already gone */ } }, timeoutMs);
-  const [out, err] = await Promise.all([
-    new Response(p.stdout).text(),
-    new Response(p.stderr).text(),
-  ]);
-  const code = await p.exited;
-  clearTimeout(timer);
-  if (timedOut) {
-    const mins = Math.round(timeoutMs / 60_000);
-    return {
-      ok: false,
-      out: [err.trim(), out.trim(), `--- it was still going after ${mins} minutes and was stopped ---`]
-        .filter(Boolean).join("\n").slice(-2000),
-    };
-  }
-  return { ok: code === 0, out: `${err.trim()}\n${out.trim()}`.trim().slice(-2000) };
-}
-
-/**
- * Every suite in `VERDICT_SUITES`, stopping at the first that stays red.
- *
- * Stopping early is deliberate: a red server suite tells the agent what to fix,
- * and running web afterwards only buys a second wall of output underneath the
- * answer. `timeoutMs` bounds ONE spawn, not the sequence, so adding a suite
- * does not shorten the time any of them get.
- */
-async function runTestsIn(cwd: string, timeoutMs: number): Promise<{ ok: boolean; out: string }> {
-  const parts: string[] = [];
-  for (const suite of VERDICT_SUITES) {
-    const r = await runOneSuiteWithRetry(cwd, timeoutMs, suite);
-    parts.push(`--- ${suite.dir} ---\n${r.out}`);
-    if (!r.ok) return { ok: false, out: parts.join("\n\n") };
-  }
-  return { ok: true, out: parts.join("\n\n") };
-}
-
-async function runOneSuiteWithRetry(cwd: string, timeoutMs: number, suite: { dir: string; args: readonly string[] }): Promise<{ ok: boolean; out: string }> {
-  const first = await runSuiteOnce(cwd, timeoutMs, suite);
-  const names = failedTestNames(first.out);
-  const named = names.length ? `\n\nwhat failed:\n${names.slice(0, 20).join("\n")}` : "";
-  if (first.ok) return { ok: true, out: first.out.slice(-4000) };
-
-  const second = await runSuiteOnce(cwd, timeoutMs, suite);
-  if (!second.ok) {
-    /* Red twice. Whichever names the second run produced are the ones that
-       reproduce, so those are the ones worth carrying. */
-    const twice = failedTestNames(second.out);
-    const stuck = twice.length ? `\n\nwhat failed (and failed again):\n${twice.slice(0, 20).join("\n")}` : named;
-    return { ok: false, out: `${second.out.slice(-4000)}${stuck}` };
-  }
-  return {
-    ok: true,
-    out: `${second.out.slice(-4000)}\n\n--- the first run of this suite was red and the second was green, unchanged. Treated as a flake, and the queue kept going. ---${named}`,
-  };
-}
 import { ingest, IngestRefused, policySummary } from "./understudy-ingest.ts";
 import { predictSealed } from "./understudy-predict.ts";
-import { ask, compiledRules } from "./understudy-ask.ts";
-import * as Shift from "./understudy-shift.ts";
+import { ask } from "./understudy-ask.ts";
 import { judge, JUDGE_AVAILABLE } from "./understudy-judge.ts";
-import * as Work from "./understudy-work.ts";
 import { anyWorking, workingWhy } from "./agentworking.ts";
-import * as Loop from "./understudy-loop.ts";
-// Registers the readers. Imported for the side effect, which is the whole
-// point of a source: it announces itself rather than being wired in by hand.
-import * as Sources from "./understudy-sources-work.ts";
-import { bunBin, NO_BUN } from "./bunbin.ts";
-import { understudyRunEnv } from "./understudy-runenv.ts";
-import { recoverAfterRestart, startUnderstudyWatchdog, stopUnderstudyWatchdog, setResumeHook, setGitHook, setFenceHook, setAliveHook, setBunHook, setBusyHook } from "./understudy-watchdog.ts";
-import { openRequests, helpHistory, markAnswered } from "./understudy-help.ts";
 import { scopeAllows, activeDevices, markSeen, revokeDevice, revokeAllDevices, devices, publicDevice, whenStoreTampered, type Scope } from "./devices.ts";
 import { credentialsPath, hasCredential, hasStoredCredential, notConnected } from "./credentials.ts";
 import { startCardWatch, cardForTitle } from "./clickupwatch.ts";
@@ -2473,9 +1426,9 @@ function understudyBlind(pathname: string): boolean {
  * Which class a write on the git and pull-request chokepoints belongs to.
  *
  * Local to this file and NOT a `classFor(route)` in understudy.ts, for the
- * reason written on `UnderstudyClass.routes`: `/chat/send` is both C5 and C7,
- * so a general route-to-class map has to guess at exactly the route that
- * matters most. Every name below is unambiguous — a merge is a merge — which is
+ * reason written on `UnderstudyClass.routes`: one route can serve two
+ * classes, so a general route-to-class map has to guess at exactly the route
+ * that matters most. Every name below is unambiguous — a merge is a merge — which is
  * why a map is honest here and dishonest there.
  */
 const UNDERSTUDY_CLASS_OF: Record<string, string> = {
@@ -2662,18 +1615,6 @@ setInterval(pushOpenTools, OPEN_TOOL_TICK_MS).unref?.();
 
 /** Normalize → persist → broadcast → alert. Shared by /ingest and /v1/traces. */
 function ingestBody(body: IngestBody) {
-  // Codex's OTel records say everything about a turn except where it ran, so a
-  // cockpit scoped to a project — the default — filtered every one of them out
-  // and OpenAI never appeared in the provider list. The panel knows the
-  // directory because it launched the turn; this is where that is handed back.
-  //
-  // Only fills a gap, never overwrites: an agent that reports its own location
-  // is the better source, and this must not relabel it.
-  const payload = (body.payload ?? {}) as Record<string, unknown>;
-  if (!payload.cwd && !payload.project_path && body.session_id) {
-    const known = codexCwd(String(body.session_id));
-    if (known) body = { ...body, payload: { ...payload, cwd: known.cwd, project_path: known.root } };
-  }
   const n = normalize(body);
   // Live seam only: a skewed sender's clock must not decide which time window
   // its events land in. Backfill inserts elsewhere and keeps its real times.
@@ -3664,7 +2605,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // runs it. Refusing plainly beats spawning connect_otel.py with an id it
       // has never heard of and returning whatever that prints.
       if (agent.via === "chat") {
-        return json({ ok: false, error: `${agent.label} needs no connecting — it reports through the chat panel that runs it`, agents: probeAgents() }, 400);
+        return json({ ok: false, error: `${agent.label} needs no connecting — there is nothing to wire`, agents: probeAgents() }, 400);
       }
 
       const dir = hooksDir();
@@ -3735,6 +2676,19 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     // section and the notch all read this one answer. No desktop-only gate:
     // there is no path on disk in the payload and nothing here can act.
     if (pathname === "/usage/providers") { const plugin = caller?.plugin ?? pluginOfRequest(req, url); return json(await allProviderUsage(undefined, accountsFor(plugin ? { plugin } : "person"))); }
+    // What the person opens, counted on this machine only (usageopens.ts): the
+    // window posts its batches here and the About page and `ui.read usage` read
+    // them back. A write to one small file in the state dir, so the strict gate.
+    if (pathname === "/usage/opens") {
+      if (req.method === "GET") return json(readOpens());
+      if (req.method === "POST") {
+        if (!trustedCaller(req, from)) return csrfBlocked();
+        let b: any = {};
+        try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+        const r = recordOpens(b?.opens);
+        return json(r, r.ok ? 200 : 400);
+      }
+    }
     // The accounts a plugin says each provider has, never a credential. A paired
     // device is given how a chip reads and nothing else; a plugin, only its own list.
     if (pathname === "/usage/accounts" && req.method === "GET") {
@@ -3938,12 +2892,6 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // the line worth keeping is what was held, not the uuid it was held
       // under. "denied Bash · rm -rf build" is an audit line; a uuid is not.
       const held = getGate(String(b.id));
-      // The device that sent this session its last turn does not also let that
-      // turn's tool call through: that is one phone asking for a command and
-      // approving it, with nobody else in the loop. See noteTurnSender.
-      if (decision === "allow" && held && sentTurnTo(held.session_id, turnSenderKey(caller))) {
-        return json({ ok: false, error: "this device sent that session its turn — another device or the desk has to allow it" }, 403);
-      }
       // "Who approved that" is the question #299 opens with, and a gate is the
       // one write with a stopped agent on the other end of it. Resolved once
       // and handed to both writers, so the gate row and the log line cannot
@@ -4413,475 +3361,11 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      * request against a work repository, and a setting like that should
      * be a thing somebody did, not a field that rode along with something else.
      */
-    /*
-     * The shift: handing over for a stated while.
-     *
-     * GET reports what is running and what has run; POST opens or ends one.
-     * There is no route that EXTENDS a shift, on purpose — a stand-in that can
-     * lengthen its own shift is not standing in, and adding one later should
-     * feel like the change that it is.
-     */
-    if (pathname === "/understudy/shift" && req.method === "GET") {
-      const live = Shift.current();
-      return json({
-        ok: true,
-        current: live,
-        recent: Shift.recent(8),
-        maxMs: Shift.MAX_SHIFT_MS,
-        maxActions: Shift.MAX_SHIFT_ACTIONS,
-        /* Asleep until the agent's session comes back, when it is. */
-        hold: Work.heldUntil(),
-      });
-    }
-    if (pathname === "/understudy/shift/start" && req.method === "POST") {
-      if (!trustedCaller(req, from)) return csrfBlocked();
-      let b: { goal?: string; minutes?: number; maxActions?: number } = {};
-      try { b = await req.json() as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
-      const r = Shift.start(String(b.goal ?? ""), Number(b.minutes ?? 30), Number(b.maxActions ?? 5));
-      if (!r.ok) return json({ ok: false, error: r.error }, 409);
-      /*
-       * NO SCAN ON THE WAY IN, and removing it is the point rather than a
-       * simplification.
-       *
-       * Opening a shift used to walk every checkout looking for work and draft
-       * proposals from it. That queue has never held a single row — so the
-       * scan filled nothing, and the repository's own measurement puts it at
-       * 18.2 SECONDS across twelve checkouts. Handing over to the clone paid
-       * that, every time, for a screen nobody could see.
-       *
-       * The work loop finds its own work, through `nextTask`, at the moment it
-       * is about to do some.
-       */
-      return json({ ok: true, shift: Shift.current() ?? r.shift });
-    }
-    /*
-     * What it did on its own, and the button that takes it back.
-     *
-     * This is the first screen anybody opens after leaving it running, so the
-     * list and the undo are one route apart deliberately: seeing what happened
-     * and being able to reverse it should never be two separate journeys.
-     */
-    /*
-     * What HEAD points at, and it exists for exactly one caller.
-     *
-     * The commit undo is a soft reset to the parent the clone committed on top
-     * of. That is exact only while the clone's commit is still the top one:
-     * once somebody has committed after it, resetting to that parent takes the
-     * newer work with it — a reversal eating the thing it was meant to protect.
-     *
-     * So the undo checks first, and checking needs a way to ask. A read-only
-     * route rather than a git call inside `understudy-act.ts`, because that file
-     * deliberately runs nothing: every fence it lives behind depends on it
-     * reaching git only through a request somebody authorised.
-     */
-    if (pathname === "/git/head" && req.method === "GET") {
-      const root = url.searchParams.get("root") || "";
-      // From the worktree list, which is where the short sha of a checkout
-      // already lives — rather than adding a second way to ask git the same
-      // question and a second thing to keep in step.
-      const wts = await gitWorktrees(root);
-      const here = wts.find((w) => w.path === root) ?? wts.find((w) => w.current) ?? null;
-      return json({ ok: !!here, head: here?.head ?? "", branch: here?.branch ?? "" });
-    }
-    /*
-     * THE WORK LOOP — take a task, cut a worktree, put an agent in it.
-     *
-     * Everything else in this feature measures. This is the part he actually
-     * asked for: leave it working on the issues for a while. The isolation is
-     * the worktree, which is what makes it defensible to hand the agent every
-     * tool he has — a run that goes wrong costs a directory.
-     *
-     * The repositories are the ones already discovered and then filtered to the
-     * open project. The person's decision, and for a good reason:
-     * prove it where a mistake costs a worktree rather than the real repository.
-     */
-    if (pathname === "/understudy/work/next" && req.method === "GET") {
-      const repos = await openProjectRepos();
-      const item = await Work.nextTask({ repos });
-      // The list is capped at twenty; the tally is not, because "how much has it
-      // finished" is a question about the shift and not about the last screenful.
-      return json({
-        ok: true, item, repos, sources: Work.sources(),
-        runs: Work.runs(20), tally: Work.runsSoFar(),
-        // The panes worth walking over to, if any run is still going. Asked
-        // of tmux for anything this process does not remember — it restarts,
-        // the runs do not.
-        watching: await watchedNow(),
-      });
-    }
-
-    /*
-     * What it knows, and what it has done. Two counts and nothing else.
-     *
-     * The header used to carry the agreement percentage, the countdown to the
-     * next rung and the trust rail — all of which ranked the thirteen decision
-     * classes, of which twelve had never held a sample. These are the two
-     * questions the loop can actually answer: how much of him it has to work
-     * from, and how much it has finished.
-     *
-     * Four COUNTs against tables already indexed, so it is cheap enough for a
-     * header that redraws whenever the panel does. Deliberately NOT part of
-     * /understudy/work/next, which asks every source what it is holding — that
-     * one reaches the network, and a header must not.
-     */
-    /*
-     * What it is stuck on, and what it needs from you.
-     *
-     * A loop that stops quietly is worse than one that stops loudly, and until
-     * this endpoint existed there was no way to see the difference from
-     * outside: 26 of 108 runs ended having delivered nothing, and not one of
-     * them said what it needed. An open row here is a question waiting on a
-     * person, oldest work first in the queue and newest question first here.
-     */
-    if (pathname === "/understudy/help" && req.method === "GET") {
-      return json({ ok: true, open: openRequests(), history: helpHistory(30) });
-    }
-
-    /* A person has dealt with one. The row stays as history — what it asked for
-       and how long it waited is the record of where the loop needs a hand. */
-    if (pathname === "/understudy/help/answered" && req.method === "POST") {
-      if (!trustedCaller(req, from)) return csrfBlocked();
-      const body = await req.json().catch(() => ({})) as { id?: number };
-      const id = Number(body?.id);
-      if (!Number.isFinite(id) || id <= 0) return json({ ok: false, error: "which question?" }, 400);
-      markAnswered(id);
-      return json({ ok: true });
-    }
-
-    if (pathname === "/understudy/standing" && req.method === "GET") {
-      const tally = Work.runsSoFar();
-      return json({
-        ok: true,
-        precedents: precedentCount(),
-        rules: compiledRules().length,
-        done: tally.done,
-        failed: tally.failed,
-        /* How many questions are waiting on a person. Carried here rather than
-           on a route of its own because the header already asks for this one on
-           every open, and a count nobody fetches is a raised hand nobody sees. */
-        stuck: openRequests().length,
-      });
-    }
-
-    /*
-     * The counter you watch the popcorn over.
-     *
-     * A run is up to twenty-five minutes of an agent with a shell, and the tab
-     * used to show one fixed sentence for all of it. This returns what is on
-     * the pane right now, so the panel can draw the work as it happens instead
-     * of describing it afterwards.
-     *
-     * Only a pane this server opened for a run that is still going. The id is
-     * pinned to tmux's own shape rather than escaped — it goes on a command
-     * line, and `-t` accepts far more than pane ids, so anything else here
-     * would be choosing a target somebody else named.
-     */
-    if (pathname === "/understudy/work/watch" && req.method === "GET") {
-      const pane = url.searchParams.get("pane") ?? "";
-      if (!/^%\d{1,9}$/.test(pane)) return json({ ok: false, error: "not a pane id" }, 400);
-      // Recovered too, not just remembered: the guard and the list have to
-      // agree, or a pane the panel was just handed is refused when it asks.
-      if (!(await watchedNow()).some((w) => w.paneId === pane)) {
-        return json({ ok: false, error: "not a pane this is working in" }, 404);
-      }
-      const r = await tmux(["capture-pane", "-p", "-t", pane]);
-      /*
-       * Trailing blank lines trimmed. `capture-pane` returns the whole pane —
-       * fifty rows now that the window is resized — so a run that has printed
-       * eight lines comes back as eight lines and forty-two empty ones. On
-       * screen that is a box mostly full of nothing with a scrollbar sitting
-       * in the middle of it, which is what "it has a weird scroll" was.
-       */
-      const text = r.ok ? r.stdout.replace(/\s+$/, "").slice(-6000) : "";
-      return json({ ok: r.ok, text, error: r.ok ? undefined : "the pane has gone" });
-    }
-
-    if (pathname === "/understudy/work/run" && req.method === "POST") {
-      if (!trustedCaller(req, from)) return csrfBlocked();
-      const repos = await openProjectRepos();
-      if (!repos.length) return json({ ok: false, error: "no open-project checkout to work in" }, 409);
-      const item = await Work.nextTask({ repos });
-      if (!item) return json({ ok: false, error: "nothing to work on right now" }, 404);
-
-      /*
-       * A TASK WITHOUT A REPOSITORY IS NOT WORK THIS CAN DO, and the first
-       * version of this line said `item.repo || repos[0]` — take whatever is
-       * first if the task does not say.
-       *
-       * Found by running it: the top task on a real machine was a card from a
-       * work tracker, and a card carries no checkout. With one open-project
-       * repository present that fallback would have cut a worktree in agentglass
-       * and set an agent to work on somebody else's ticket inside it. Not a
-       * leak — nothing would have reached a work repository — but a
-       * confident, wrong, and completely wasted run, and the kind that erodes
-       * trust faster than a failure does.
-       *
-       * A card can only say WHAT to do. Which checkout it belongs in is a fact
-       * nobody has told this yet, so it declines and says so.
-       */
-      if (!item.repo) {
-        return json({
-          ok: false,
-          error: `"${item.title}" does not say which checkout it belongs in, and guessing would be worse than waiting`,
-          item,
-        }, 409);
-      }
-      if (!repos.includes(item.repo)) {
-        return json({ ok: false, error: `${item.repo} is outside what it may work in today`, item }, 403);
-      }
-
-      /*
-       * A SHIFT IS REQUIRED HERE TOO, and the asymmetry it replaces was real.
-       *
-       * The chained loop demanded one and this route did not, so a single task
-       * ran with no wall, no budget and no stop rules — and it did, on the first
-       * live task: the shift failed to open because one was already running,
-       * and the work went ahead regardless. It happened to be fine. It was
-       * still an unbounded run, and "one task" is not a limit when the task is
-       * an agent with a shell and twenty-five minutes.
-       *
-       * The budget is charged before the work rather than after, so a run that
-       * never returns has still been paid for. Charging on completion means a
-       * hung agent costs nothing and the next request starts another.
-       */
-      const shift = Shift.current();
-      if (!shift || shift.state !== "running") {
-        return json({ ok: false, error: "hand over first — a run with no shift has no limit on it" }, 409);
-      }
-      if (shift.actionsLeft <= 0) {
-        return json({ ok: false, error: "it used everything it was given" }, 409);
-      }
-      Shift.countAction(shift.id);
-
-      const res = await Loop.workOne({
-        item,
-        repo: item.repo,
-        shiftId: shift.id,
-        agent: runAgentIn,
-        install: runInstallIn,
-        usage: await usageNow(),
-        onPane: nowWatching,
-        onNoPane: noPane,
-        git: runGitIn,
-        verify: runTestsIn,
-        // So the agent can read the same views he does — see the brief.
-        api: { url: `http://127.0.0.1:${PORT}` },
-      });
-      return json({ ok: res.ok, run: res });
-    }
-
-    /*
-     * Handing it a task directly.
-     *
-     * The other two sources cannot say WHICH CHECKOUT — a card never carries
-     * one — so on a quiet day the loop correctly declines everything. This is
-     * the queue he fills himself, and it is also the honest way to watch the
-     * thing work for the first time: give it something small, read what came
-     * back, decide whether to give it something bigger.
-     */
-    if (pathname === "/understudy/work/ask" && req.method === "POST") {
-      if (!trustedCaller(req, from)) return csrfBlocked();
-      let ab: { title?: string; detail?: string; repo?: string } = {};
-      try { ab = await req.json() as typeof ab; } catch { return json({ ok: false, error: "invalid json" }, 400); }
-      const title = String(ab.title ?? "").trim();
-      const repo = String(ab.repo ?? "").trim();
-      if (!title) return json({ ok: false, error: "what should it do?" }, 400);
-      // The checkout is checked HERE rather than when the task is picked up: a
-      // row naming somewhere out of scope is a disappointment scheduled for
-      // later, and saying so now costs nothing.
-      const allowed = await openProjectRepos();
-      if (!allowed.includes(repo)) {
-        return json({ ok: false, error: `it may only work in: ${allowed.join(", ") || "(nothing today)"}`, allowed }, 403);
-      }
-      // A second row with the same title in the same checkout is duplicate
-      // work waiting to be worked twice, not a second instruction — refuse it
-      // and say which row it already has, rather than writing another.
-      const dupe = Sources.pendingDuplicate(title, repo);
-      if (dupe) {
-        return json({
-          ok: false,
-          error: `already queued as #${dupe} — same title, same checkout`,
-          id: dupe,
-        }, 409);
-      }
-      const id = Sources.ask({ title, detail: String(ab.detail ?? ""), repo });
-      return id ? json({ ok: true, id, queued: Sources.asked() }) : json({ ok: false, error: "could not queue it" }, 500);
-    }
-
-    /*
-     * Which project is the open one.
-     *
-     * It was a constant naming this application, which put one person's project
-     * name into logic in a public repository and defined everything else as
-     * "not that". Both halves are facts about one machine, not about the
-     * software. The default is the checkout this server runs from, so nobody
-     * has to set it — and pointing the loop elsewhere is now something somebody
-     * does here rather than in a diff.
-     */
-    if (pathname === "/understudy/open-project" && req.method === "POST") {
-      if (!trustedCaller(req, from)) return csrfBlocked();
-      let ob: { name?: string } = {};
-      try { ob = await req.json() as typeof ob; } catch { return json({ ok: false, error: "invalid json" }, 400); }
-      /*
-       * Refused with a reason rather than silently ignored. `you`, `code`
-       * or `home` are segments of the path every repository on this machine
-       * lives under, and the matcher is a segment test — so any of them puts
-       * the whole disk inside the fence.
-       */
-      const asked = String(ob.name ?? "");
-      // The known checkouts, so "the folder projects live in" is answered from
-      // this machine rather than assumed to be $HOME.
-      const known = knownProjects().map((p) => p.path);
-      if (!openProjectNameAllowed(asked, known)) {
-        return json({
-          ok: false,
-          error: `"${asked.slice(0, 40)}" would match every repository on this machine — name the project, not a folder above it`,
-          openProject: openProjectName(),
-        }, 400);
-      }
-      const name = setOpenProject(asked, known);
-      return json({ ok: true, openProject: name, repos: await openProjectRepos() });
-    }
-
+    // The checkouts a scheduled start may run in: the Lantern's schedule dialog
+    // reads this.
     if (pathname === "/understudy/work/ask" && req.method === "GET") {
-      /* Resolved once: the fence, the project list and the checkout list are
-         three readings of the same discovery, and calling it three times is
-         three filesystem walks for one answer. */
-      const roots = await openProjectRepos();
-      return json({
-        ok: true,
-        queued: Sources.asked(),
-        allowed: roots,
-        openProject: openProjectName(),
-        /*
-         * WHY THE LIST ABOVE IS EMPTY, when it is.
-         *
-         * The panel printed "It has nowhere to work, so it will decline every
-         * task" and never said why — and this morning the why was that the app
-         * had been relaunched by its own installer, so the server started
-         * outside any checkout and discovery found nothing. The reply already
-         * knew that; it just kept it to itself. Only asked when there is
-         * nothing allowed: a reason for a working setup is noise.
-         */
-        reason: roots.length === 0
-          ? nowhereReason({
-              project: openProjectName(),
-              here: repoRootOf(process.cwd()),
-              known: knownProjects().map((p) => p.path),
-            })
-          : null,
-        /*
-         * THE PROJECTS THIS MACHINE HAS ACTUALLY SEEN, so the fence stops being
-         * a bare text field.
-         *
-         * Meeting that field, you typed a name with no list of what was valid,
-         * no sense of what existed, and a name matching everything was refused
-         * by a rule you could not see.
-         *
-         * Derived from the checkouts discovery already found: the last path
-         * segment of each root, minus its worktree suffixes, deduplicated. Not
-         * a filesystem scan — the same source the fence itself resolves
-         * against, so nothing appears here that could not be chosen.
-         */
-        projects: (() => {
-          const seen = new Map<string, number>();
-          for (const root of roots) {
-            const leaf = root.split("/").filter(Boolean).pop() ?? "";
-            /* `agentglass-understudy` and `agentglass-unread` are checkouts OF
-               `agentglass`; the fence names the project, not the worktree. */
-            const name = leaf.split("-")[0] || leaf;
-            if (name) seen.set(name, (seen.get(name) ?? 0) + 1);
-          }
-          return [...seen].map(([name, checkouts]) => ({ name, checkouts }));
-        })(),
-        /*
-         * THE OTHER HALF OF THE FENCE, and it had no way of being read.
-         *
-         * `open-only` keeps the task-tracker sources silent; `everywhere` lets
-         * them offer work. There was a route to SET it and none to ask, so the
-         * switch that decides whether the clone reaches somebody's work
-         * could not be seen in the application at all — only changed with curl.
-         * A fence whose position is invisible is one nobody can trust, and this
-         * is the position people most want to check before walking away.
-         */
-        scope: proposeScope(),
-      });
+      return json({ ok: true, allowed: await openProjectRepos() });
     }
-
-    if (pathname === "/understudy/work/unask" && req.method === "POST") {
-      if (!trustedCaller(req, from)) return csrfBlocked();
-      let ub: { id?: number } = {};
-      try { ub = await req.json() as typeof ub; } catch { return json({ ok: false, error: "invalid json" }, 400); }
-      Sources.unask(Number(ub.id || 0));
-      return json({ ok: true, queued: Sources.asked() });
-    }
-
-    /*
-     * Keep working until there is nothing left.
-     *
-     * His actual sentence: "if we run out of work, look for more where we
-     * usually look for it". The single-task route above is one step of this;
-     * this is the loop, and it requires a running shift because a shift is the
-     * thing that bounds how long and how much.
-     *
-     * `keepGoing` is asked FRESH each round rather than captured once — a shift
-     * can be halted between two tasks and the loop has to find that out, which
-     * is the difference between a stop button and a decoration.
-     */
-    if (pathname === "/understudy/work/loop" && req.method === "POST") {
-      if (!trustedCaller(req, from)) return csrfBlocked();
-      const started = await startWorkLoop();
-      if (!started.ok) return json(started, 409);
-      return json(started);
-    }
-
-    if (pathname === "/understudy/work/discard" && req.method === "POST") {
-      if (!trustedCaller(req, from)) return csrfBlocked();
-      let wb: { worktree?: string; repo?: string } = {};
-      try { wb = await req.json() as typeof wb; } catch { return json({ ok: false, error: "invalid json" }, 400); }
-      /*
-       * ONLY A WORKTREE THIS SERVER CUT, and the path is checked against the
-       * runs table rather than trusted.
-       *
-       * `discardRun` finishes with `rm(path, { recursive: true, force: true })`
-       * and the path arrived in the request body. Nothing looked at it — so
-       * any directory on the machine was a valid argument to a route whose
-       * job is deleting one, and being same-origin was the only thing in the
-       * way.
-       *
-       * The run also has to be finished. Deleting the worktree of a run still
-       * in flight pulls the ground out from under an agent mid-edit, and the
-       * row would go on claiming to be working in a directory that is gone.
-       */
-      const asked = String(wb.worktree ?? "");
-      const owner = Work.runOwning(asked);
-      if (!owner) return json({ ok: false, error: "not a worktree this made" }, 404);
-      if (owner.state === "running") {
-        return json({ ok: false, error: "that run is still going — stop it first" }, 409);
-      }
-      // Its own recorded repository, not one the caller supplies: the pair has
-      // to be the pair this server wrote, or the check above proves nothing.
-      /* Its branch goes with it, or the same task can never be cut again: the
-         branch name is a hash of the item, so an orphan makes every future
-         attempt fail with "already exists". `-d` inside refuses to delete work
-         nobody merged. */
-      const gone = await Loop.discardRun(owner.worktree, owner.repo, runGitIn, owner.branch);
-      return json({ ok: gone });
-    }
-
-    if (pathname === "/understudy/shift/stop" && req.method === "POST") {
-      if (!trustedCaller(req, from)) return csrfBlocked();
-      const cur = Shift.current();
-      if (!cur) return json({ ok: false, error: "nothing is running" }, 404);
-      Shift.stop(cur.id, "you ended it", "done");
-      return json({ ok: true, shift: Shift.recent(1)[0] ?? null });
-    }
-    /*
-     * The judge's switch, on its own route like the propose scope — because
-     * this one decides whether his material is sent to a model while he is not
-     * watching, and that should be an act rather than a field riding along in
-     * some larger body.
-     */
     if (pathname === "/understudy/judge" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       let jb: { on?: boolean } = {};
@@ -4914,24 +3398,6 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // No body, no arguments, no confirmation. A stop that needs a well-formed
       // request is a stop that can fail to arrive.
       const dropped = halt();
-
-      /*
-       * HALT STOPS IT. What it already did is a worktree, not an act to undo.
-       *
-       * This used to unwind a table of reversible acts, and the safety seal it
-       * answered read "halt mid-sequence puts everything back". That table has
-       * never held a row, so the unwinding never ran — but the promise is not
-       * missing, it moved: the work happens in a DISPOSABLE WORKTREE, and
-       * putting everything back is removing a directory. That is why the agent
-       * can be handed every tool in the first place.
-       *
-       * Which is also why halting does not delete anything here. A stopped run
-       * leaves its worktree exactly where it is, because that directory is the
-       * only copy of whatever it had done, and throwing it away is a decision
-       * somebody makes after reading it — `/understudy/work/discard`.
-       */
-      const running = Shift.current();
-      if (running) Shift.stop(running.id, "you halted it");
 
       broadcast({ type: "understudy", data: scorecard() });
       return json({ ok: true, dropped });
@@ -6739,20 +5205,6 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     }
     if (pathname === "/issues/work") return json({ work: currentWork(url.searchParams.get("repo") || undefined) });
 
-    // --- runs ---
-    /* One prompt, several checkouts, tracked as one thing — including the legs
-       this app never started. See runs.ts for why adoption is the half worth
-       building and fan-out is not. */
-    if (pathname === "/runs") return json({ runs: currentRuns(url.searchParams.get("root") || undefined) });
-    /* What each leg has produced, grouped by the directories the legs ran in.
-       Its own route rather than a field on the list: it is a database query per
-       run, and the list is what a panel paints first. */
-    if (pathname === "/run/activity") {
-      const run = runById(url.searchParams.get("id"));
-      if (!run) return json({ ok: false, error: "no such run" }, 404);
-      return json({ ok: true, run, legs: runActivity(run) });
-    }
-
     // --- tasks (taskwarrior-backed, read-only) ---
     /*
      * The integrations pane, and the one route that receives a secret.
@@ -8316,41 +6768,6 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         case "/issues/claim": res = await claimIssue(root, b.number, b.comment); break;
         case "/issues/comment": res = await commentIssue(root, b.number, b.body); break;
         case "/issues/state": res = await setIssueState(root, b.number, b.close === true); break;
-        default: res = null;
-      }
-      if (res) { noteAction(clientIp, pathname, b, res, asActor(caller)); return json(res, res.ok ? 200 : 400); }
-    }
-
-    /*
-     * The three writes a run has.
-     *
-     * Gated and recorded like every other write on this surface, and behind
-     * TERMINAL_ENABLED on top — `/run/start` opens tmux windows running an
-     * agent, which is the same capability `/terminal/agent` guards that way. A
-     * server with the terminal turned off must not have a second door to it.
-     *
-     * `yolo` goes through the same permission the chat engines do rather than
-     * arriving as a parameter, so a socket cannot buy a flag the config
-     * refuses — and it is folded in per leg here, because that is where a run
-     * would otherwise smuggle it past the check.
-     */
-    if (pathname.startsWith("/run/") && req.method === "POST") {
-      if (!trustedCaller(req, from)) return csrfBlocked();
-      if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
-      let b: any = {};
-      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
-      let res: { ok: boolean; error?: string; detail?: string } | null = null;
-      switch (pathname) {
-        case "/run/start": {
-          const bypass = chatBypassAllowed();
-          const legs = Array.isArray(b.legs)
-            ? b.legs.map((l: any) => ({ agent: l?.agent, from: l?.from, yolo: l?.yolo === true && bypass }))
-            : b.legs;
-          res = await startRun(b.root, b.prompt, legs);
-          break;
-        }
-        case "/run/adopt": res = await adoptPane(b.id, b.pane, b.agent); break;
-        case "/run/finish": res = await finishRun(b.id, b.winner, b.force === true); break;
         default: res = null;
       }
       if (res) { noteAction(clientIp, pathname, b, res, asActor(caller)); return json(res, res.ok ? 200 : 400); }
@@ -10288,8 +8705,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const name = String(b.session ?? "");
       if (!validSessionName(name)) return json({ ok: false, error: "invalid session" }, 400);
       // A new window or pane runs a command (a shell when argv is empty), which
-      // is the terminal by another door: refused while it is switched off, as
-      // /run/start is. Closing, selecting and renaming run nothing and stay.
+      // is the terminal by another door: refused while it is switched off.
+      // Closing, selecting and renaming run nothing and stay.
       const starts = b.op === "new" || b.op === "split";
       if (starts && !TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
       // A directory is only for a window or pane that STARTS somewhere. Closing
@@ -10334,225 +8751,6 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       return body(await singleFlight(`cmds:${root}`, async () => JSON.stringify(await projectCommands(root))));
     }
 
-    // --- multi-chat: drive claude sessions from the browser ---
-    // `bypass` rides along so the mode picker can stop offering a mode the
-    // server would silently downgrade — the downgrade itself stays server-side.
-    // `tmuxEngine` tells the UI whether the pane engine can be offered at all,
-    // and says why not in the same breath — "tmux is not installed" and "not on
-    // Windows" need different words, and a toggle that silently does nothing is
-    // worse than one that explains itself.
-    if (pathname === "/chat/enabled") {
-      const pane = paneEngineCapability();
-      return json({
-        enabled: CHAT_ENABLED,
-        bypass: CHAT_BYPASS_ALLOWED,
-        // Claude's list now arrives the same way Codex's and Antigravity's do,
-        // so the panel has one path for all three instead of a table compiled
-        // into the bundle for one of them. Read from shared/claude-models.json,
-        // filtered to what has not reached its shutdown date.
-        models: claudeModels(),
-        tmuxEngine: { available: pane.available, reason: pane.reason, defaultOn: CHAT_ENGINE_DEFAULT === "tmux" },
-      });
-    }
-    if (pathname === "/chat/send" && req.method === "POST") {
-      if (!trustedCaller(req, from)) return csrfBlocked();
-      let b: any = {};
-      try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
-      // The launch, not the turn. chatSend returns a stream rather than an
-      // outcome, and the auditable fact is that somebody started an agent in a
-      // checkout through this cockpit — what it then does is gated and lands in
-      // the events table on its own.
-      //
-      // The prompt is deliberately not kept here. It is already in the
-      // transcript and in `events`, and a second copy in an append-only table
-      // that nothing prunes is a copy nobody asked for.
-      noteAction(clientIp, "/chat/send",
-        { root: b.cwd, name: b.model }, { ok: true }, asActor(caller));
-      // What the turn may be is the caller's business, not the body's: a device
-      // paired for "answer" gets the prompting default, no pre-approved tools,
-      // and has to name a session that already exists — see scopedTurn in
-      // chat.ts for the argv that came out of trusting the body instead.
-      //
-      // A null caller is the machine. The gate above only runs when a token is
-      // configured, and with none configured this server refuses to bind
-      // anything but loopback (resolveToken), so there is nobody else it could
-      // be — and no device credentials exist in that world to be narrower than
-      // it.
-      const scope = caller?.scope ?? "full";
-      // Is the session it names running now — a turn in flight, or a chat pane
-      // still open? Asked only of a caller it can refuse, so the desk's turns
-      // never wait on a tmux round trip.
-      const rid = typeof b.resumeId === "string" ? b.resumeId : "";
-      const live = scope !== "full" && validPaneName(rid) && (turnActive(rid) || await paneAlive(rid));
-      const sender = turnSenderKey(caller);
-      // A turn is pasted into the pane's input, and when the pane is showing a
-      // permission prompt the paste lands on the prompt instead: a "1" there is
-      // an approval. The sender may not answer its own prompt through the
-      // keys route, so it may not through this one either.
-      if (live && sentTurnTo(rid, sender) && screenNeedsYou(await capturePane(rid))) {
-        return json({ error: "that chat is asking to run a tool it was sent — another device or the desk has to answer it" }, 403);
-      }
-      return chatSend(b, scope, live, sender);
-    }
-    // The command that hands a chat to the user's own terminal. Server-side
-    // because the socket name and flags are the engine's business, and a string
-    // the UI assembled itself would drift the first time either changed.
-    // Closing a chat gives its warm CLI back. Safe because it destroys nothing:
-    // the conversation is on disk in the transcript, and resuming relaunches the
-    // pane with `--resume`. Without this the ~380MB sits there until the idle
-    // sweeper notices, half an hour after you said you were done with it.
-    if (pathname === "/chat/pane/close" && req.method === "POST") {
-      if (!trustedCaller(req, from)) return csrfBlocked();
-      let b: any = {};
-      try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
-      const id = typeof b.session === "string" ? b.session : "";
-      if (!validPaneName(id)) return json({ error: "invalid session id" }, 400);
-      const was = await paneAlive(id);
-      if (was) await killPane(id);
-      forgetPane(id);
-      return json({ killed: was });
-    }
-    /**
-     * Keep this chat's pane, however long you are away.
-     *
-     * Eviction is right for the common case and wrong for the one conversation
-     * you are living in — see `pinned` in tmuxpane.ts. Only about idleness:
-     * closing the chat still releases the pane, because closing is an explicit
-     * "done".
-     */
-    if (pathname === "/chat/pane/pin" && req.method === "POST") {
-      if (!trustedCaller(req, from)) return csrfBlocked();
-      let b: any = {};
-      try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
-      const id = typeof b.session === "string" ? b.session : "";
-      if (!validPaneName(id)) return json({ error: "invalid session id" }, 400);
-      const on = b.pinned !== false;
-      pinPane(id, on);
-      return json({ ok: true, session: id, pinned: on });
-    }
-
-    /**
-     * What is actually running, and which of it belongs to nothing.
-     *
-     * Panes outlive the app: quit or crash and the sessions are still there,
-     * each holding several hundred megabytes. The only way to see that was
-     * `tmux -L agentglass ls` in a terminal, and the only way to clean up was
-     * `kill-session` by hand.
-     *
-     * `orphan` is decided here rather than in tmuxpane.ts, because it is a
-     * question about *chats* and that module knows only about panes: a pane is
-     * an orphan when no chat this server is tracking points at it. `open` is
-     * the set the caller says it has on screen — the client knows which chats
-     * are open, and the server does not, so a pane belonging to a chat in
-     * another window must not be reported as abandoned.
-     */
-    if (pathname === "/chat/panes") {
-      const open = (url.searchParams.get("open") || "").split(",").map((s) => s.trim()).filter(Boolean);
-      return json({
-        // The judgement is in tmuxpane.ts and pure — see classifyPanes. It was
-        // three lines here, which made it reachable only through a machine with
-        // tmux genuinely running.
-        panes: classifyPanes(await panes(), open, activeTurns()),
-        // So the UI can say "reclaimed after 30 minutes" rather than guessing,
-        // and can say "eviction is off" when somebody has turned it off.
-        idleEvictMs: idleEvictMs(),
-      });
-    }
-
-    // Answer an interactive prompt without leaving the chat. The pane already
-    // takes Enter and Escape from us; arrows are the rest of what a picker
-    // needs, and sending them here beats telling someone to open a terminal to
-    // move a cursor one step.
-    if (pathname === "/chat/pane/key" && req.method === "POST") {
-      if (!trustedCaller(req, from)) return csrfBlocked();
-      let b: any = {};
-      try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
-      const id = typeof b.session === "string" ? b.session : "";
-      if (!validPaneName(id)) return json({ error: "invalid session id" }, 400);
-      if (!sendableKey(b.key)) return json({ error: "key not allowed" }, 400);
-      // The pane's own permission prompt is the gate's second door: when the
-      // hook falls back, a keystroke here is the approval. The same device may
-      // not send a session its turn and then answer the prompt it raised.
-      // Escape stays open to it: it cancels the prompt, the pane's deny.
-      if (b.key !== "Escape" && sentTurnTo(id, turnSenderKey(caller))) return json({ error: "this device sent that chat its turn — another device or the desk has to answer its prompt" }, 403);
-      if (!(await paneAlive(id))) return json({ error: "that chat's pane is gone" }, 409);
-      const r = await sendKey(id, b.key);
-      if (!r.ok) return json({ error: r.stderr.trim() || "could not send the key" }, 500);
-      // Hand back what the pane shows now, so the chat can redraw the prompt
-      // the keystroke just moved rather than guessing at it.
-      return json({ screen: await capturePane(id) });
-    }
-    if (pathname === "/chat/attach") {
-      const id = url.searchParams.get("session") || "";
-      const pane = paneEngineCapability();
-      if (!pane.available) return json({ error: pane.reason }, 400);
-      if (!validPaneName(id)) return json({ error: "invalid session id" }, 400);
-      return json({ command: attachCommand(id), live: await paneAlive(id) });
-    }
-
-    // --- multi-chat: the same panel, driving codex instead ---
-    // `models` comes back with `enabled` rather than from a route of its own:
-    // the panel needs both to draw a single dropdown, and asking twice would
-    // let it render a model picker for a CLI that turns out not to be there.
-    if (pathname === "/codex/enabled") {
-      return json({ enabled: CODEX_ENABLED(), bypass: CODEX_BYPASS_ALLOWED, models: CODEX_ENABLED() ? codexModels() : [] });
-    }
-    if (pathname === "/codex/send" && req.method === "POST") {
-      if (!trustedCaller(req, from)) return csrfBlocked();
-      let b: any = {};
-      try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
-      // Same reasoning as /chat/send: the launch is the auditable fact, not the
-      // turn, and the prompt is already in Codex's own rollout.
-      noteAction(clientIp, "/codex/send",
-        { root: b.cwd, name: b.model }, { ok: true }, asActor(caller));
-      return codexStream(b.cwd, b.message, b.model, b.resumeId, b.mode, b.images);
-    }
-    // What a Codex thread said, for a chat adopting it from the fleet. The
-    // OTel stream carries tool calls but no prose, so this reads Codex's own
-    // rollout — see codexTranscript(). Single-flighted like /session: several
-    // panels opening the same thread should read the file once.
-    if (pathname === "/codex/transcript") {
-      const id = url.searchParams.get("id") || "";
-      return body(await singleFlight(`codex:${id}`, async () => JSON.stringify({ timeline: codexTranscript(id) })));
-    }
-
-    // --- multi-chat: the same panel, driving google antigravity ---
-    // No /antigravity/transcript to match the two above: Antigravity keeps each
-    // conversation as a SQLite database of protobuf blobs on an undocumented
-    // internal schema, so there is nothing here that could be read without
-    // guessing at it — see server/src/antigravity.ts.
-    if (pathname === "/antigravity/enabled") {
-      return json({ enabled: ANTIGRAVITY_ENABLED(), bypass: ANTIGRAVITY_BYPASS_ALLOWED, models: ANTIGRAVITY_ENABLED() ? await antigravityModels() : [] });
-    }
-    if (pathname === "/antigravity/send" && req.method === "POST") {
-      if (!trustedCaller(req, from)) return csrfBlocked();
-      let b: any = {};
-      try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
-      noteAction(clientIp, "/antigravity/send",
-        { root: b.cwd, name: b.model }, { ok: true }, asActor(caller));
-      // `ingestBody` is handed in rather than imported by antigravity.ts, which
-      // would be a cycle. It is also what puts an Antigravity chat on the radar
-      // at all: unlike Claude (hooks) and Codex (OTel), this CLI reports to
-      // nobody, so its own frames are the only source there is.
-      return antigravityStream(b.cwd, b.message, b.model, b.resumeId, b.mode, b.images, ingestBody);
-    }
-
-    // --- multi-chat: the same panel, driving Hermes Agent ---
-    // No /hermes/transcript in the thin PR: hasTranscript stays false until a
-    // stable export path is measured. Like Antigravity, Hermes exports neither
-    // hooks nor OTel, so frames of a turn started here are teed into ingestBody.
-    if (pathname === "/hermes/enabled") {
-      return json({ enabled: HERMES_ENABLED(), bypass: hermesBypassAllowed(), models: HERMES_ENABLED() ? hermesModels() : [] });
-    }
-    if (pathname === "/hermes/send" && req.method === "POST") {
-      if (!trustedCaller(req, from)) return csrfBlocked();
-      let b: any = {};
-      try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
-      noteAction(clientIp, "/hermes/send",
-        { root: b.cwd, name: b.model }, { ok: true }, asActor(caller));
-      return hermesStream(b.cwd, b.message, b.model, b.resumeId, b.mode, b.images, ingestBody);
-    }
-
     // --- LLM walkthrough: AI-authored review itinerary for the changes ---
     if (pathname === "/walkthrough" && req.method === "POST") {
       // Spawns the `claude` CLI, or spends an API key. It executes and it
@@ -10569,13 +8767,6 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         return json({ available: true, reviewFocus: "", files: [], error: failed("walkthrough", e, "the walkthrough could not be written") });
       }
     }
-    // Which sessions have a turn running right now. Read by any surface before
-    // it sends: a message into a session that is mid-turn interrupts it and is
-    // lost, and nothing else a client can poll answers this — the transcript
-    // arrives late and "seen recently" is equally true of a session that
-    // finished ten seconds ago. Deliberately outside the session cache: it
-    // changes on process lifetimes, not on events.
-    if (pathname === "/chat/active") return json({ ids: activeTurns() });
     // Whether an agent is working right now, anywhere — what the desktop
     // shell's "keep the machine awake while an agent works" mode polls.
     if (pathname === "/agents/working") {
@@ -10762,11 +8953,9 @@ const server = Bun.serve<WsData>({
   maxRequestBodySize: 32 * 1024 * 1024,
   // Bun closes a connection that has been quiet for `idleTimeout` seconds, and
   // the default is 10 — which counts the gaps *inside* a streaming response, not
-  // just an idle socket. A chat turn is silent for as long as the model thinks
-  // or a tool runs, so the default cut `/chat/send` off mid-turn and the browser
-  // reported only a generic fetch failure. 255 is the maximum Bun accepts; it is
-  // still not long enough on its own for a slow turn, so `chat.ts` also sends a
-  // periodic keepalive to keep the gaps under it.
+  // just an idle socket. A streamed response is silent for as long as the
+  // work behind it runs, so the default cut it off mid-stream and the browser
+  // reported only a generic fetch failure. 255 is the maximum Bun accepts.
   idleTimeout: 255,
   fetch: handleServerRequest,
 
@@ -11068,90 +9257,6 @@ void reapLeases();
    close frame never triggered that — so a mirror it opened can still be
    sitting there, unattached, verified against its own stamp before anything
    here touches it. */
-/**
- * The work loop, as something that can be started twice.
- *
- * It used to live only inside its route, which meant the ONLY way back to work
- * was a person pressing the button. Measured: a server restart killed two runs,
- * the tasks were correctly put back on the queue, and then the shift sat
- * `running` with three tasks waiting and nothing running for forty minutes,
- * saying nothing. The watchdog can call this now — see `setResumeHook`.
- */
-/*
- * ONE LOOP AT A TIME.
- *
- * There was no guard, and the watchdog's only "already working" test is
- * `Work.runningRuns()` — which is empty for the whole window between cutting a
- * worktree and writing the run row, and `runInstallIn` sits inside that window
- * with no timeout at all. So a second loop could start, take the same untaken
- * item, be refused with "already exists", and hand its worktree to the barren
- * sweep — which is the directory the FIRST loop was about to run an agent in.
- *
- * A refusal rather than a queue: two loops is never the intent, and the caller
- * that gets this back (the watchdog) reads it as "busy", not as a try spent.
- */
-let loopInFlight: Promise<{ ok: boolean; error?: string; [k: string]: unknown }> | null = null;
-
-async function startWorkLoop(): Promise<{ ok: boolean; error?: string; [k: string]: unknown }> {
-  if (loopInFlight) return { ok: false, error: "a loop is already running", busy: true };
-  const started = runWorkLoop();
-  loopInFlight = started;
-  try { return await started; } finally { loopInFlight = null; }
-}
-
-async function runWorkLoop(): Promise<{ ok: boolean; error?: string; [k: string]: unknown }> {
-  const loopRepos = await openProjectRepos();
-  if (!loopRepos.length) return ({ ok: false, error: "no open-project checkout to work in" });
-  const open = Shift.current();
-  if (!open || open.state !== "running") {
-    return ({ ok: false, error: "hand over first — a loop with no shift has no limit on it" });
-  }
-  const looped = await Loop.workUntilDone({
-    repos: loopRepos,
-    shiftId: open.id,
-    keepGoing: (lastFailed) => {
-      const live = Shift.current();
-      if (!live || live.state !== "running") return { go: false, why: live?.stoppedReason || "the shift ended" };
-      /*
-       * THE SHIFT'S OWN RULES, rather than two of them copied here.
-       *
-       * This used to re-check "still running" and "actions left" by hand,
-       * which are two of the five `shouldStop` knows — so the loop ran past
-       * a shift that had timed out, past a failed round, and past a pile of
-       * failed worktrees nobody had read. `shouldStop` was exported,
-       * tested, and called by nothing but the scanner that has been
-       * removed; a stop rule with no caller is a comment.
-       */
-      const s = Shift.shouldStop(live, { lastFailed });
-      return s.stop ? { go: false, why: s.reason } : { go: true, why: "" };
-    },
-    next: async () => {
-      /*
-       * The action is charged where the run BEGINS, not here.
-       *
-       * This spent one of the shift's actions the moment a task was selected —
-       * before the fence check, before the worktree was cut, before a row
-       * existed. With the panel's default of four, four selections that never
-       * became runs ended the shift reporting that it had used everything it
-       * was given, having done nothing at all. `countAction` now sits beside
-       * `beginRun` in the loop, so what is counted is work that started.
-       */
-      return await Work.nextTask({ repos: loopRepos });
-    },
-    countAction: () => Shift.countAction(open.id),
-    agent: runAgentIn,
-    install: runInstallIn,
-    usage: await usageNow(),
-    onPane: nowWatching,
-    onNoPane: noPane,
-    git: runGitIn,
-    verify: runTestsIn,
-    // So the agent can read the same views he does — see the brief.
-    api: { url: `http://127.0.0.1:${PORT}` },
-  });
-
-  return { ok: true, ...looped };
-}
 
 reapMirrorSessions();
 /* And the tmux confs an isolated instance used to leave behind — one per probe
@@ -11169,73 +9274,6 @@ reapMirrorSessions();
    `claude --resume` inside every one — 525 MCP processes and 13 GB. */
 startMirrorSweeper(engineSocketArgs());
 
-/*
- * Runs left `running` by a server that is no longer here.
- *
- * Whatever was awaiting them lived in the previous process, so nothing will
- * ever write their result. Two of them sat at `running` for 75 and 41 minutes
- * with no agent alive — work in flight on the screen, and invisible to the
- * shift's stop rules, which count what finished and what broke.
- */
-{
-  /* Not just marked abandoned — PUT BACK. Six runs were lost this way, and each
-     one was a task he had queued that nothing would ever pick up again, because
-     the queue had already marked it taken. Installing a build cost a shift. */
-  const recovered = await recoverAfterRestart();
-  for (const r of recovered) {
-    if (r.askedForHelp) {
-      console.log(`   Understudy  → "${r.title}" has now died ${r.attempts} times — it is waiting on you, not being retried`);
-    } else if (r.requeued) {
-      console.log(`   Understudy  → "${r.title}" was interrupted by the restart; back on the queue (try ${r.attempts + 1})`);
-    } else {
-      console.log(`   Understudy  → "${r.title}" abandoned: the server it was running under is gone`);
-    }
-  }
-}
-/* How the watchdog gets work moving again without a person pressing anything.
-   A slot rather than an import, because the loop closes over a dozen of this
-   file's own helpers and reaching for it from the watchdog would be a module
-   cycle — which this app has already paid for once, with a black window. */
-setResumeHook(() => startWorkLoop());
-/* And how it clears up after a run that ended with nothing in it — the same
-   slot pattern, for the same reason: git runs where the server's own helpers
-   are, and reaching for them from the watchdog would be a module cycle. */
-setGitHook(runGitIn);
-/* And whether `bun` is reachable, so a run abandoned before its first commit
-   can be told apart from one whose branch was actually merged and deleted —
-   see the note beside `setBunHook`. */
-setBunHook(bunBin);
-/* And where it may cut, so the watchdog can tell "nothing is picking this up"
-   from "this was queued for somewhere I am not allowed to go" — two sentences
-   with two different fixes, which used to be one sentence with neither. */
-setFenceHook(() => openProjectRepos());
-/* Whether a run's agent is still there, answered by the same window-name match
-   the watch route uses. `paneOfRun` returns "" when tmux cannot be reached at
-   all, which would read as "every agent is dead" — so an unreachable socket is
-   reported as ALIVE and the rows are left alone. */
-setBusyHook(Loop.busyWorktree);
-setAliveHook(async (title, paneId) => {
-  /*
-   * THE PANE, AND THE NAME ONLY AS A FALLBACK.
-   *
-   * This asked tmux for a window called `understudy: <title>`, and a window
-   * name is not an identity: tmux renames one when the program inside sets a
-   * title. The moment that match failed, a working agent was read as gone, its
-   * row was ended, and the empty-worktree sweep deleted the directory out from
-   * under it — the run then died of `ENOENT … posix_spawn 'bun'` sixteen
-   * minutes in, blaming a program that was there all along.
-   *
-   * A pane id is written down when the run starts and survives every rename.
-   * The name match stays for rows from before this existed, and an unreadable
-   * tmux still answers ALIVE: declaring a live agent dead is the expensive
-   * mistake, not the other way round.
-   */
-  const r = await tmux(["list-panes", "-a", "-F", "#{pane_id}"]);
-  if (!r.ok) return true;
-  if (paneId) return r.stdout.split("\n").some((l) => l.trim() === paneId);
-  return !!(await paneOfRun(title));
-});
-startUnderstudyWatchdog();
 startPolicyEvaluator();
 // A gate installed before its command tested for the script would deny every
 // tool call once the script moved. Not in tests: they would rewrite the real file.
@@ -11353,7 +9391,6 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
     /* Before the terminals: a sweep firing while the process is on its way out
        would put a task back on the queue that this shutdown is not going to
        work, and the next boot's own recovery covers exactly that case. */
-    stopUnderstudyWatchdog();
     stopMirrorSweeper();
     stopAllPluginsSync();
     flushPluginNotes();

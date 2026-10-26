@@ -116,23 +116,9 @@ describe("nothing private is written down", () => {
     }
   });
 
-  test("the matcher is a segment test, not a substring one", async () => {
-    const U = await import("../src/understudy.ts");
-    U.setOpenProject("thing");
-    // The project, and its worktrees, which are the project's name plus a suffix.
-    expect(U.isOpenProjectPath("/home/dev/code/thing")).toBe(true);
-    expect(U.isOpenProjectPath("/home/dev/code/thing-feature")).toBe(true);
-    expect(U.isOpenProjectPath("/home/dev/code/thing/server")).toBe(true);
-    // And NOT something that merely contains the letters. This is the whole
-    // reason it is a segment test: `thingamabob-private` is somebody else's.
-    expect(U.isOpenProjectPath("/home/dev/code/thingamabob-private")).toBe(false);
-    expect(U.isOpenProjectPath("/home/dev/code/something")).toBe(false);
-    U.setOpenProject("");
-  });
 
   test("with no setting it derives from where the server runs", async () => {
     const U = await import("../src/understudy.ts");
-    U.setOpenProject("");
     // Never empty on a real install, and never a guess: it is the checkout this
     // server runs from, with any worktree suffix removed.
     expect(U.openProjectName().length).toBeGreaterThan(0);
@@ -152,7 +138,6 @@ describe("nothing private is written down", () => {
      */
     const U = await import("../src/understudy.ts");
     const { repoRootOf } = await import("../src/git.ts");
-    U.setOpenProject("");
     const started = process.cwd();
     const root = repoRootOf(started);
     expect(root, "this suite runs inside a checkout").toBeTruthy();

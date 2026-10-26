@@ -258,7 +258,7 @@ request is accepted and defaulting to `answer`:
 | Level | What it can do |
 |---|---|
 | `read` | Every GET but the desk's private ones (the terminal, browsing history, plugin settings, desktop notifications), plus the POSTs that only read. Approves nothing, sends nothing. |
-| `answer` | The above, plus `/gate/decide` and replying to a session that is running now — an open chat pane, not any session id it can read. It cannot allow a tool call in a session it sent the turn to: another device or the desk has to. |
+| `answer` | The above, plus `/gate/decide` and `/marks`. |
 | `full` | Everything the machine can do: the terminal, git write, Docker, merging pull requests. |
 
 Enforcement is **deny by default**: anything that changes state and is not named
@@ -443,16 +443,15 @@ disk, because **nothing in the app deletes it** on its own: there is no route,
 no button and no menu item that removes recorded history, save one that only a
 person can press: Erase local history on Data & privacy, behind a typed
 confirmation and refused to every agent. Otherwise the only sweep is the
-retention window below. Four routes remove a row *you* asked the app to
-hold for you, and nothing else: `POST /understudy/work/unask` takes one task
-back out of the Clone's queue; `POST /agents/status` with `done: true` drops a
+retention window below. Three routes remove a row *you* asked the app to
+hold for you, and nothing else: `POST /agents/status` with `done: true` drops a
 session's own "what it is working on" line, and only when the same session that
 wrote it asks; `POST /agents/forget` drops such a line by name whoever wrote it
 — the Lantern's clear button, authenticated like every other route (so, on a
 loopback-only install with no token, open to local callers like the rest), for
 a session that ended without saying so; and `POST /bench/note` with empty text
 deletes that checkout's bench note, a file of its own under the data directory.
-None of the four touches an event, a session or a decision.
+None of the three touches an event, a session or a decision.
 
 One route is named as if it did: `/browser/places/forget` throws away the
 browsing history you imported from your own browser. That history is kept in
@@ -623,7 +622,7 @@ agentglass is a tool you point at your own machine, so the boundary is
 provenance, not symptom. **A surface you deliberately opened, doing something
 to the machine you opened it on, is the tool working.** In particular:
 
-- The terminal, the chat panes and the Docker controls run **as you**, with your
+- The terminal and the Docker controls run **as you**, with your
   permissions. Filling the disk, killing a process, removing your own container
   or running a destructive command through them is not a vulnerability — it is
   the capability, and each one has a switch in the table below.
@@ -950,29 +949,11 @@ IPv6 address (`::ffff:127.0.0.1` and `::ffff:7f00:1` alike, NAT64 and 6to4
 too), and the connection is made to the address that was checked rather than to
 a second lookup of the name.
 
-## The Clone, unattended
+## The Clone
 
-The Clone (the *understudy* in the code and the routes) takes a task from a
-queue, cuts a worktree of its own, seats an agent in it and lets the tests
-decide. It never pushes. Because nobody is watching while it works, what the
-agent inherits is fenced rather than trusted.
-
-**The environment fence** (`server/src/understudy-runenv.ts`) builds the run's
-environment by copying the server's and blanking, by name, `GH_TOKEN`,
-`GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `SSH_AUTH_SOCK`, `AGENTGLASS_WEBHOOK` and
-`AGENTGLASS_TOKEN`, then every variable whose name matches `*_TOKEN`, `*_KEY`,
-`*_API_KEY`, `*_SECRET`, `*_PASSWORD`, `*_PASS`, `*_CREDENTIAL(S)`, `AWS_*`,
-`AZURE_*`, `GOOGLE_APPLICATION*`, `OPENAI_*`, `CLICKUP*`, `SLACK_*`, `DISCORD_*`,
-`NPM_TOKEN`, `PYPI*` or `DOCKER_*` (case-insensitive). The one exception is
-`ANTHROPIC_API_KEY`, which is the key the fenced CLI itself spends. `gh` is
-pointed at an empty, run-private config directory, git's credential helper is
-emptied and every `https://`, `git@` and `ssh://` push URL is rewritten to an
-address that does not resolve, so a push cannot succeed even if the agent tries
-one. Into that fenced environment the run receives **one credential of its
-own**: a per-run token (`AGENTGLASS_TOKEN` and `AGENTGLASS_READ_TOKEN` both name
-it) minted for the run and revoked when it ends, graded not by scope but by a
-short positive allowlist — every read, and only the writes the Clone owns; it
-can neither release a gate nor start a session.
+The Clone (the *understudy* in the code and the routes) records how you decide and
+answers "what did this person decide before?". It acts on nothing: it has no
+shift, takes no task and starts no agent.
 
 **The private-terms gate** keeps the material the Clone learns from
 (`POST /understudy/learn`: notes, transcripts, shell history, rules) and the
@@ -1367,7 +1348,6 @@ the full list and defaults:
 | Knob | Turns off |
 |---|---|
 | `AGENTGLASS_TERMINAL_DISABLED` | PTY shells (also `"terminalDisabled"` in `config.json`; always off on Windows) |
-| `AGENTGLASS_CHAT_DISABLED` | starting `claude` sessions from the browser |
 | `AGENTGLASS_GIT_WRITE_DISABLED` | git mutations **and** every pull-request action |
 | `AGENTGLASS_DOCKER_WRITE_DISABLED` | container start/stop/restart/rm |
 | `AGENTGLASS_COMMIT_DISABLED` | the diff viewer's commit composer |
@@ -1392,8 +1372,8 @@ the other. A variable that is set to something unreadable (`0`, `off`, an empty
 string) fails closed to level 1 and the server says so once at start, naming the
 value; only an unset variable is the default. What each level means:
 
-- **Nav-only verbs, unchanged.** The older `view`, `open`, `workspace`, `esc`
-  and `chat new` spellings, and every other level-1 door (look or open), grant
+- **Nav-only verbs, unchanged.** The older `view`, `open`, `workspace` and `esc`
+  spellings, and every other level-1 door (look or open), grant
   no capability the keyboard does not already have. Every door is an entry in a
   closed registry, an unknown id is refused, and each command leaves one line in
   the action log, the door and not the value it named. They are the same
@@ -1521,7 +1501,7 @@ nothing. A server started by hand with a bare `bun run src/index.ts` is still
 bun's default and reads one; the supported starts do not.
 
 Beyond the knobs, **scope is itself a boundary**: with a project open, git
-writes and git reads, the terminal, chat, pull-request actions and editor opens
+writes and git reads, the terminal, pull-request actions and editor opens
 are all refused outside it.
 
 **Git never takes a command from a repository it merely found.** Every git call
