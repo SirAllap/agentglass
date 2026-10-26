@@ -16,6 +16,7 @@ import { attention } from "../../shared/fieldRules.ts";
 import { __setLanternRows, lanternNeed, refreshLantern, lanternRows, lanternFailed, lanternKnown, groupLantern } from "../src/lib/lanternStore.ts";
 import { api } from "../src/lib/api.ts";
 import type { LanternRow } from "../src/components/LanternView.tsx";
+import { sortField } from "../src/lib/agentsScreen.ts";
 
 const now = 1_800_000_000_000;
 const min = 60_000;
@@ -308,14 +309,16 @@ test("the store: a failure before any good read is no answer, after one it is th
   expect(lanternKnown()).toBe(false);
 });
 
-test("the Lantern view's \"needs you\" group is the same rule the strip counts by", () => {
+test("the Agents screen's \"waiting on you\" group is the same rule the strip counts by", () => {
   // A clause that opens the view has to find there the rows it counted. The
-  // view groups through groupLantern, so the rule is asserted there, on rows.
-  const view = code(viewSrc);
-  expect(view).toContain("= groupLantern(rows ?? []);");
+  // screen sorts through `attention`, the strip's own rule, so it is asserted
+  // on rows, and on the source naming it.
+  expect(code(viewSrc)).toContain('attention(r, now) === "blocked"');
   const rows = [blocked("a-web"), blocked("b-docs", "gate"), waitedFor("c-api", 3 * 60 * min), blocked("d-seat", "permission", { role: "orchestrator" }), blocked("e-lantern", "permission", { role: "lantern" })];
   expect(groupLantern(rows).need.map((r) => r.name)).toEqual(rows.filter((r) => attention(r, now) === "blocked").map((r) => r.name));
   expect(groupLantern(rows).need.length).toBe(fleetVerdict(rows, now)!.counts.need);
+  /* The screen sets the Lantern's chat and the coordinator aside as work, so it counts the same blockages minus them. */
+  expect(sortField(rows as never, now).blocked.map((r) => r.name)).toEqual(["a-web", "b-docs"]);
 });
 
-const viewSrc = await src("../src/components/LanternView.tsx");
+const viewSrc = await src("../src/lib/agentsScreen.ts");

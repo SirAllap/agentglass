@@ -86,6 +86,30 @@ async function postEvent(body) {
   }
 }
 
+/**
+ * The agent rules' verdict for one call (GET /agent-rules/check), or null.
+ * OpenCode's tool names are lower case (`bash`, `edit`); the rules speak Claude
+ * Code's (`Bash`, `Edit`). A plugin cannot open a prompt, so an "ask" is refused
+ * with the reason, which is the stricter of the two things it could do. An
+ * unreachable server passes, said once on stderr.
+ */
+async function rulesVerdict(tool, args, dir) {
+  if (!dir || !dir.startsWith("/") || !isAllowedServer(SERVER, process.env.AGENTGLASS_ALLOW_REMOTE === "1")) return null;
+  const name = String(tool || "");
+  const claudeName = name ? name[0].toUpperCase() + name.slice(1) : "";
+  if (!/^[A-Za-z][A-Za-z0-9_-]{0,99}$/.test(claudeName)) return null;
+  const q = new URLSearchParams({ root: dir, tool: claudeName, input: JSON.stringify(args ?? {}).slice(0, 8000) });
+  try {
+    const res = await fetch(`${SERVER}/agent-rules/check?${q}`, { signal: AbortSignal.timeout(2000) });
+    if (!res.ok) return null;
+    const out = await res.json();
+    return out.decision === "never" || out.decision === "ask" ? out : null;
+  } catch (e) {
+    console.error(`[agentglass] rules check skipped, server unreachable (${e?.message ?? e}); this call was not checked`);
+    return null;
+  }
+}
+
 function sourceAppFromDir(dir) {
   if (!dir) return "opencode";
   const parts = dir.replace(/\\/g, "/").split("/");
@@ -163,12 +187,17 @@ export const AgentGlassPlugin = async ({ directory, worktree }) => {
       };
       if (worktree || directory) payload.project_path = worktree || directory;
 
+      const verdict = await rulesVerdict(tool, output?.args, directory || worktree);
       await postEvent({
         source_app: sourceApp,
         session_id: sessionID || "unknown",
         hook_event_type: "PreToolUse",
         payload,
       });
+      // Throwing is how an OpenCode plugin refuses a tool call.
+      if (verdict) {
+        throw new Error(`${verdict.reason || "An agentglass rule for this project"}${verdict.decision === "ask" ? " It needs the person: ask them first." : " Do not retry it or work around it."}`);
+      }
     },
 
     "tool.execute.after": async (

@@ -234,6 +234,7 @@ import {
   windowTree, newWindow, splitPane, killWindow, killPane as killLayoutPane, selectWindow, selectPane,
   renameWindow, resizePane,
 } from "./tmuxlayout.ts";
+import { answer as answerRule, check as rulesCheck, ruleRoot as rulesRoot, setRule, setRulesDoor, view as rulesView, writeLaunchBase } from "./agentRulesStore.ts";
 import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings, lanternNudge, lanternWatch, lanternWatchMinutes, cacheTtlMinutes, lanternNudgeMinutes, writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, seatWakeHours, writeSeatSettings, launchMode, launchDeny, writeLaunchPermissions, launchFlagOverrides, writeLaunchFlagOverrides, workerRoles, writeWorkerRole, inScopeReal, agentsChangeWithoutAsking, gateAnswerer, gateOnTimeout } from "./config.ts";
 import { tellChair } from "./gatechair.ts";
 import { claudeModels } from "./claudemodels.ts";
@@ -247,7 +248,7 @@ import { workspaceRoot, workspaceRoots, setWorkspaceRoot, setWorkspaceRoots, inS
 import { cloneProject, createProject } from "./projectadd.ts";
 import { budgetStatus } from "./budget.ts";
 import type { Budget } from "../../shared/types.ts";
-import { hookStatus, applyHooks, applyGate, hooksDir, hookPython, healGateCommand } from "./hooksetup.ts";
+import { hookStatus, applyHooks, applyGate, hooksDir, hookPython, healGateCommand, gateInstalled } from "./hooksetup.ts";
 import { probeAgents, probeEngines, testEngine, ROSTER } from "./agentprobe.ts";
 import { join as joinPath, resolve as resolvePath, basename } from "node:path";
 import { hostname } from "node:os";
@@ -479,6 +480,7 @@ import { readDoctrine, writeDoctrine } from "./seatdoctrine.ts";
 import { readBrief, writeBrief } from "./seatbrief.ts";
 import * as SeatQueue from "./seatqueue.ts";
 import * as SeatInbox from "./seatreport.ts";
+import { withPulse } from "./seatpulse.ts";
 import * as SeatNeeds from "./seatneed.ts";
 import * as SeatWake from "./seatwake.ts";
 import { recall } from "./seatmemory.ts";
@@ -648,6 +650,14 @@ const settingsDoor = makeDoor({
   applyWindow: grantedWindowSet,
   changed: () => broadcast({ type: "settings-requests" }),
 });
+setRulesDoor(settingsDoor);
+/** gateInstalled() reads ~/.claude/settings.json; the rules check asks it on every tool call. */
+let gateSeen = { at: 0, on: false };
+const gateInstalledCached = (): boolean => {
+  if (Date.now() - gateSeen.at > 10_000) gateSeen = { at: Date.now(), on: (() => { try { return gateInstalled(); } catch { return false; } })() };
+  return gateSeen.on;
+};
+
 /** A window's own name for itself (its `hello`) to its latest socket, which is
  *  how a browser ask reaches one window instead of all of them. */
 const browserSockets = new Map<string, ServerWebSocket<WsData>>();
@@ -2470,7 +2480,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/agents/board") {
       /* Every source at once — see lantern.ts, which the terminal's "Ask
          about the field" reads too, so the view and the chat cannot disagree. */
-      return json({ ok: true, agents: await boardNow(), chairs: await Seat.chairsNow(), watch: lastLook(), cacheTtlMinutes: cacheTtlMinutes() });
+      return json({ ok: true, agents: withPulse(await boardNow()), chairs: await Seat.chairsNow(), watch: lastLook(), cacheTtlMinutes: cacheTtlMinutes() });
     }
     if (pathname === "/agents/status" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
@@ -2795,6 +2805,11 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        */
       const rule = gateRuleFor(greq.tool_name, cwd);
       if (rule.kind === "deny") return json(denyByRule(greq, rule.reason));
+      // The agent rules (agentRulesStore.ts) first: a "never" is answered now, and an
+      // "ask" is held for the person even when a gate rule would let it through.
+      let ruled: ReturnType<typeof rulesCheck> | null = null;
+      try { ruled = cwd.startsWith("/") ? rulesCheck(cwd, greq.tool_name, ti) : null; } catch { ruled = null; }
+      if (ruled?.decision === "never") return json(denyByRule(greq, ruled.reason ?? "an agentglass rule says never"));
       // The one exception: an outward match made only by a generic MCP verb
       // (`create_entities` on a memory store) is released by an allow rule
       // that names that exact tool. A prefix never saw the tool it would be
@@ -2802,7 +2817,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // Written to history like a denial, unless it is the harness fetching a
       // tool's schema — no rule made that call, and it would be one row per
       // deferred tool in every session.
-      if (rule.kind === "allow" && (!out || (out.generic && rule.exact))) {
+      if (rule.kind === "allow" && ruled?.decision !== "ask" && (!out || (out.generic && rule.exact))) {
         return json(rule.meta ? { decision: "allow", reason: "" } : allowByRule(greq));
       }
       const hold = out
@@ -7889,8 +7904,56 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         noteAction(clientIp, "/launch-permissions", {}, off ? auditOf(off) : { ok: true }, asActor(caller));
         return doorMany(rs, { mode: launchMode(), deny: launchDeny() });
       }
-      const r = writeLaunchPermissions(b);
+      const r = writeLaunchBase(b);
       return json({ ...r, mode: launchMode(), deny: launchDeny() }, r.ok ? 200 : 400);
+    }
+    /*
+     * THE AGENT RULES (agentRulesStore.ts): one list per project, plus the base
+     * set every project shares, that every agent obeys wherever it started.
+     * `check` is the hooks' question before each tool call; it also files the
+     * quiet first-seen suggestion. A seat reads and writes its own project only.
+     */
+    if (pathname === "/agent-rules/check" && req.method === "GET") {
+      const root = url.searchParams.get("root") ?? "";
+      const tool = url.searchParams.get("tool") ?? "";
+      if (!root.startsWith("/") || !/^[A-Za-z][A-Za-z0-9_-]{0,99}$/.test(tool)) return json({ ok: false, error: "root: an absolute path; tool: a tool name" }, 400);
+      try {
+        // `gated`: the gate hook is installed and holds an "ask" itself, so the forwarder stays quiet on one.
+        return json({ ok: true, ...rulesCheck(root, tool, (url.searchParams.get("input") ?? "").slice(0, 8000)), gated: gateInstalledCached() });
+      } catch (e) {
+        // A broken store must not become a decision: the hook reads an error as "no rule".
+        return json({ ok: false, decision: "unknown", error: failed("agent-rules/check", e, "the rules could not be read") }, 500);
+      }
+    }
+    if (pathname === "/agent-rules" && req.method === "GET") {
+      const own = caller?.principal === "seat" ? caller.seat?.root : undefined;
+      const root = url.searchParams.get("root") ?? own ?? "";
+      if (!(root === "*" || root.startsWith("/"))) return json({ ok: false, error: 'root: a project\'s absolute path, or "*"' }, 400);
+      if (own && rulesRoot(root) !== rulesRoot(own) && root !== "*") return json({ ok: false, error: "a seat reads its own project's rules" }, 403);
+      return json({ ok: true, ...rulesView(root) });
+    }
+    if (pathname === "/agent-rules" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { root?: unknown; action?: unknown; match?: unknown; setting?: unknown; source?: unknown; mode?: unknown; as?: unknown } = {};
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const person = mayPublishReview(req, caller);
+      if (!person && !controlWriteLimit.hit(actorOf(clientIp, asActor(caller)))) return json({ ok: false, error: "too many changes from this caller; slow down" }, 429);
+      const own = caller?.principal === "seat" ? caller.seat?.root : undefined;
+      if (own && (typeof b.root !== "string" || rulesRoot(b.root) !== rulesRoot(own))) return json({ ok: false, error: "a seat writes its own project's rules; every project's waits for the person" }, 403);
+      const r = await setRule(b, { person, by: askerOf(req, caller, b.as) });
+      noteAction(clientIp, "/agent-rules", { ...(r.ok ? { rule: r.write.rule.id, queued: !r.write.applied } : {}) }, r.ok ? (r.write.applied ? { ok: true } : { ok: false, error: "waiting for the person" }) : { ok: false, error: r.error }, asActor(caller));
+      return r.ok ? json({ ok: true, ...r.write }, r.write.applied ? 200 : 202) : json({ ok: false, error: r.error }, r.status);
+    }
+    {
+      const m = /^\/agent-rules\/(ar_[0-9a-f]{18})\/answer$/.exec(pathname);
+      if (m && req.method === "POST") {
+        if (!trustedCaller(req, from)) return csrfBlocked();
+        let b: { setting?: unknown; dismiss?: unknown } = {};
+        try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+        const r = answerRule(m[1]!, b, mayPublishReview(req, caller));
+        noteAction(clientIp, "/agent-rules/answer", { rule: m[1] }, r.ok ? { ok: true } : { ok: false, error: r.error }, asActor(caller));
+        return r.ok ? json({ ok: true, ...r.write }) : json({ ok: false, error: r.error }, r.status);
+      }
     }
     /* Each engine's flags per permission mode: the built-in ones from the engine table, and the person's own words over them. */
     if (pathname === "/launch-flags" && req.method === "GET") {
@@ -7976,7 +8039,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/seat" && req.method === "GET") {
       const gate = readGate();
       if ("error" in gate) return json({ ok: false, error: gate.error }, gate.status);
-      return json({ ok: true, ...(await Seat.seatStatus(gate.root)), doctrineText: readDoctrine(gate.root).text, tasks: SeatQueue.tasksFor(gate.root), needs: SeatNeeds.needsFor(gate.root), lines: Seat.seatLines(gate.root), floorHours: seatWakeHours(), models: claudeModels(), defaultModel: Seat.defaultSeatModel() });
+      return json({ ok: true, ...(await Seat.seatStatus(gate.root)), doctrineText: readDoctrine(gate.root).text, tasks: SeatQueue.tasksFor(gate.root), needs: SeatNeeds.needsFor(gate.root), lines: Seat.seatLines(gate.root), quiet: Seat.quietCounts(gate.root), floorHours: seatWakeHours(), models: claudeModels(), defaultModel: Seat.defaultSeatModel() });
     }
     if (pathname.startsWith("/seat/") && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
@@ -8061,6 +8124,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        * draining it in one call rather than reading five messages. Both are
        * allowed at every power level: reporting and reading are not acts.
        */
+      /* A person clearing blockers nobody can answer any more (the Agents
+         screen's "stale" line). The words stay in the record; see resolveReports. */
+      if (verb === "report/dismiss") {
+        const ids = Array.isArray(b.ids) ? b.ids.filter((x): x is number => typeof x === "number") : [];
+        return json({ ok: true, dismissed: SeatInbox.resolveReports(root, ids) });
+      }
       if (verb === "report") {
         const r = SeatInbox.addReport({ root, agent: String(b.agent ?? ""), session: String(b.session ?? ""), text: String(b.text ?? "") });
         /*

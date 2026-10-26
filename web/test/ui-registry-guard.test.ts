@@ -137,7 +137,7 @@ const chordsInRegistry = new Set(Object.values(UI_ACTIONS as Record<string, UiAc
 
 describe("every surface the app enumerates is an agent door or a decided exception", () => {
   it("the guard reads what it thinks it reads", () => {
-    expect(railIds.length).toBeGreaterThanOrEqual(12);
+    expect(railIds.length).toBeGreaterThanOrEqual(11);
     expect(settingsPageIds.length).toBeGreaterThanOrEqual(23);
     expect(chordIds.length).toBeGreaterThanOrEqual(7);
   });

@@ -59,9 +59,9 @@ describe("rail layout", () => {
     expect(ids(r.work).slice(0, 2)).toEqual(["term", "git"]);
     expect(ids(r.work)).toContain("diff");
     expect(ids(r.work)).toContain("pr");
-    // dash and lantern ship at the bottom, and that is where they turn up.
+    // dash and agents ship at the bottom, and that is where they turn up.
     expect(ids(r.utility)).toContain("dash");
-    expect(ids(r.utility)).toContain("lantern");
+    expect(ids(r.utility)).toContain("agents");
     // Nothing arrives hidden that was not SHIPPED hidden: a view nobody has
     // had the chance to reject should not be put away for them, but a view
     // this version stopped giving a seat to (the Clone) starts in the back
@@ -76,11 +76,11 @@ describe("rail layout", () => {
   it("carries over a flat order from the old scheme, split by shipped drawer", async () => {
     // The layout key supersedes this one, but an order somebody already dragged
     // into shape still says which view they reach for first, and that survives.
-    store.set("agentglass.workspace.order", JSON.stringify(["lantern", "term", "git"]));
+    store.set("agentglass.workspace.order", JSON.stringify(["agents", "term", "git"]));
     const v = await load();
     const r = v.loadRail();
     expect(ids(r.work).slice(0, 2)).toEqual(["term", "git"]);
-    expect(ids(r.utility)[0]).toBe("lantern");
+    expect(ids(r.utility)[0]).toBe("agents");
     expect(ids(r.hidden)).toEqual(ids(v.SHIPPED_RAIL.hidden));
     expect(ids(r.work).length + ids(r.utility).length + ids(r.hidden).length).toBe(v.VIEWS.length);
   });
@@ -116,12 +116,12 @@ describe("rail layout", () => {
     // Every view named, because one left out is appended to its shipped drawer
     // — correct behaviour (see the test above), and it would quietly extend the
     // numbered list past what this test thinks it set up.
-    const rest = v.VIEW_IDS.filter((id: string) => !["git", "diff", "term", "lantern"].includes(id));
-    v.saveRail({ work: ["git", "diff"], utility: ["term"], hidden: ["lantern", ...rest] });
+    const rest = v.VIEW_IDS.filter((id: string) => !["git", "diff", "term", "agents"].includes(id));
+    v.saveRail({ work: ["git", "diff"], utility: ["term"], hidden: ["agents", ...rest] });
     expect(v.workIds()).toEqual(["git", "diff"]);
     expect(v.visibleIds()).toEqual(["git", "diff", "term"]);
     expect(v.isVisibleView("term")).toBe(true);
-    expect(v.isVisibleView("lantern")).toBe(false);
+    expect(v.isVisibleView("agents")).toBe(false);
   });
 
   it("projects a move without writing one", async () => {
@@ -153,5 +153,31 @@ describe("rail layout", () => {
     v.resetRail();
     expect(v.railCustomised()).toBe(false);
     expect(store.get("agentglass.workspace.rail")).toBeUndefined();
+  });
+});
+
+/*
+ * A LAYOUT SAVED WHEN THE LANTERN AND THE CHAIR WERE TWO VIEWS.
+ *
+ * The rail layout, the old flat order and the last view were all stored by
+ * view id. Their old ids are names for the one Agents view now, so a layout
+ * saved last month still draws it, once, where the person had put it.
+ */
+describe("a rail saved with the old view names", () => {
+  it("both old ids land on the one Agents view, once, in the drawer they were in", async () => {
+    store.clear();
+    store.set("agentglass.workspace.rail", JSON.stringify({ work: ["git", "seat"], utility: ["dash", "lantern"], hidden: [] }));
+    const v = await load();
+    const r = v.loadRail();
+    const ids = (a: { id: string }[]) => a.map((x) => x.id);
+    expect(ids(r.work).slice(0, 2)).toEqual(["git", "agents"]);
+    expect([...ids(r.work), ...ids(r.utility), ...ids(r.hidden)].filter((x) => x === "agents")).toHaveLength(1);
+  });
+  it("the last view named by an old id reopens on the Agents view", async () => {
+    store.clear();
+    store.set("agentglass.workspace.view", "lantern");
+    store.set("agentglass.workspace.rail", JSON.stringify({ work: ["git", "agents"], utility: [], hidden: [] }));
+    const v = await load();
+    expect(v.loadLastView()).toBe("agents");
   });
 });

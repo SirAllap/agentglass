@@ -1,18 +1,16 @@
 /*
- * SCHEDULED STARTS, on the Lantern — "at 08:00 start this agent, with this
- * prompt, in this checkout", and the list of what is waiting and what fired.
+ * SCHEDULED STARTS, on the Agents screen — "at 08:00 start this agent, with
+ * this prompt, in this checkout".
  *
  * The board is where you look to see who is working; this is where you say
- * who will be. A small dialog (name, checkout, when, prompt, yolo), and under
- * the field a quiet section of the schedules: waiting ones with a Cancel,
- * fired ones with what happened — the pane it started in, or why it did not.
- * Same cards as the agents', smaller: one design, not a second one.
+ * who will be. A small dialog (name, checkout, when, prompt, yolo). The ones
+ * that are waiting are rows of "Up next" with a Cancel, and one that will
+ * never fire is a line of "Clean up".
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
-import { fmtAgo } from "../lib/format.ts";
 import { wash } from "./git/ui.tsx";
 import { ClockIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
@@ -23,8 +21,6 @@ export interface AgentSchedule {
   due: number; created: number; firedAt: number | null; cancelledAt: number | null; result: string;
 }
 
-const here = (p: string) => p.replace(/\/+$/, "").split("/").pop() ?? p;
-const clock = (t: number) => new Date(t).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
 
 /** The dialog. `checkouts` are the open project's, offered as a list; a path
  *  typed by hand is allowed too and the server decides if it is in scope. */
@@ -133,44 +129,5 @@ export function ScheduleDialog({ open, checkouts, onClose, onAdded }: {
         </Portal>
       )}
     </AnimatePresence>
-  );
-}
-
-/** The list under the field: waiting first, then what fired and how. */
-export function ScheduledSection({ items, onCancel }: { items: AgentSchedule[]; onCancel: (id: string) => void }) {
-  if (!items.length) return null;
-  const waiting = items.filter((s) => !s.firedAt);
-  const fired = items.filter((s) => s.firedAt).slice(0, 6);
-  return (
-    <section data-lantern-scheduled className="flex flex-col gap-2">
-      <div className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>
-        Scheduled · {waiting.length}{fired.length ? ` · ${fired.length} fired` : ""}
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12, alignItems: "start" }}>
-        {[...waiting, ...fired].map((s) => {
-          const ok = s.firedAt && s.result.startsWith("started");
-          const tone = !s.firedAt ? "var(--primary)" : ok ? "var(--success)" : "var(--error)";
-          return (
-            <div key={s.id} className="agx-card agx-lantern-card flex flex-col gap-1.5 p-3.5 min-w-0">
-              <div className="flex items-center gap-2 min-w-0">
-                <span aria-hidden className="shrink-0 rounded-full" style={{ width: 8, height: 8, background: tone }} />
-                <span className="text-[12.5px] font-semibold truncate" style={{ color: "var(--text)" }} title={s.name}>{s.name}</span>
-                <span className="ml-auto shrink-0 text-[10.5px] tabular-nums" style={{ color: tone }} title={new Date(s.due).toLocaleString()}>
-                  {s.firedAt ? `fired ${fmtAgo(s.firedAt)} ago` : clock(s.due)}
-                </span>
-              </div>
-              <div className="text-[10.5px] truncate" style={{ color: "var(--text4)" }} title={s.cwd}>{here(s.cwd)}{s.yolo ? " · skips permission prompts" : ""}{s.kind !== "claude" ? ` · ${s.kind}` : ""}</div>
-              {s.prompt && <div className="text-[11px] line-clamp-2" style={{ color: "var(--text3)" }} title={s.prompt}>{s.prompt}</div>}
-              {s.firedAt && <div className="text-[10.5px]" style={{ color: ok ? "var(--text3)" : "var(--error)" }}>{s.result}</div>}
-              {!s.firedAt && (
-                <div className="flex justify-end pt-1" style={{ borderTop: LINE }}>
-                  <button type="button" onClick={() => onCancel(s.id)} className="agx-btn text-[10.5px] px-2 py-0.5 rounded-md" style={{ color: "var(--text3)", border: EDGE }} title="Cancel this schedule">Cancel</button>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </section>
   );
 }

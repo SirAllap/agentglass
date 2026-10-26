@@ -1160,7 +1160,7 @@ export type Liveness = "working" | "stuck" | "lost" | "unknown";
  * *type*; the UI (web/src/components/workspace/views.ts) attaches the icons,
  * labels and hotkeys and re-exports this so both sides name one set.
  */
-export type ViewId = "dash" | "git" | "diff" | "pr" | "docker" | "term" | "browser" | "files" | "tasks" | "lantern" | "seat" | "plugins";
+export type ViewId = "dash" | "git" | "diff" | "pr" | "docker" | "term" | "browser" | "files" | "tasks" | "agents" | "plugins";
 
 /**
  * A UI-navigation command from an external controller (a Stream Deck, a phone),
@@ -1170,7 +1170,7 @@ export type ViewId = "dash" | "git" | "diff" | "pr" | "docker" | "term" | "brows
  * ride the same read-only socket the dashboard already holds.
  */
 export type ControlCmd =
-  | { cmd: "view"; to: ViewId }
+  | { cmd: "view"; to: ViewId | "lantern" | "seat" | "chair" | "orchestrator" }
   | { cmd: "workspace"; open?: boolean }
   | { cmd: "esc" }
   | { cmd: "open"; what: "stats" | "skills" | "search" | "help" | "palette" }

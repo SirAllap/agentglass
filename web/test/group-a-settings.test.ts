@@ -62,21 +62,21 @@ describe("notifications.volume", () => {
 
 describe("rail count badges", () => {
   it("one def per view that wears a count, and no other", () => {
-    expect(Object.keys(badges.COUNTED_VIEWS).sort()).toEqual(["lantern", "tasks"]);
+    expect(Object.keys(badges.COUNTED_VIEWS).sort()).toEqual(["agents", "tasks"]);
     for (const id of Object.keys(badges.COUNTED_VIEWS)) {
       expect(def(`rail.badge.${id}`).page).toBe("rail");
       expect(def(`rail.badge.${id}`).get()).toBe(true);
     }
     expect(R.SETTING_DEFS.some((d) => d.id === "rail.badge.git")).toBe(false);
-    expect(classOf("rail.badge.lantern")?.class).toBe("low");
+    expect(classOf("rail.badge.agents")?.class).toBe("low");
   });
   it("turning one off hides that view's count and no other", () => {
-    expect(def("rail.badge.lantern").set(false).ok).toBe(true);
-    expect(badges.railBadgeOn("lantern")).toBe(false);
+    expect(def("rail.badge.agents").set(false).ok).toBe(true);
+    expect(badges.railBadgeOn("agents")).toBe(false);
     expect(badges.railBadgeOn("tasks")).toBe(true);
-    const shown = badges.visiblePips({ tasks: { count: 2 }, lantern: { count: 3 } });
+    const shown = badges.visiblePips({ tasks: { count: 2 }, agents: { count: 3 } });
     expect(shown.tasks).toEqual({ count: 2 });
-    expect(shown.lantern).toEqual({});
+    expect(shown.agents).toEqual({});
     expect(badges.railBadgesCustomised()).toBe(true);
   });
   it("is remembered, and Reset puts every count back", () => {

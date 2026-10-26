@@ -239,3 +239,38 @@ describe("what counts as blocked", () => {
     expect(R.unreadWorthWaking(ROOT)).toBe(1);
   });
 });
+
+/*
+ * A BLOCKER NOBODY CAN ANSWER ANY MORE.
+ *
+ * The Agents screen folds reports past their week into one line, and a person
+ * can dismiss the stale blockers. Dismissing clears the two fields that make a
+ * report a claim on the present; what the agent wrote stays in `raw`.
+ */
+describe("old reports and dismissing a blocker", () => {
+  const DAY = 86_400_000;
+  const NOW = 1_800_000_000_000;
+  test("only reports older than a week are counted as old", () => {
+    R.addReport({ root: ROOT, agent: "builder-1", text: "STATE retry fixed\nBLOCKED nothing\nNEED nothing", now: NOW - 42 * DAY });
+    R.addReport({ root: ROOT, agent: "docs-4", text: "STATE guide drafted\nBLOCKED nothing\nNEED nothing", now: NOW - 8 * DAY });
+    R.addReport({ root: ROOT, agent: "scout-2", text: "STATE reading\nBLOCKED nothing\nNEED nothing", now: NOW - 6 * DAY });
+    expect(R.oldReportCount(ROOT, NOW)).toBe(2);
+    expect(R.oldReportCount("/home/a/code/ledger", NOW)).toBe(0);
+  });
+
+  test("dismissing clears the blocker, keeps the words, and touches only that project", () => {
+    R.addReport({ root: ROOT, agent: "builder-1", text: "STATE stuck\nBLOCKED the container is down\nNEED a restart", now: NOW - 42 * DAY });
+    R.addReport({ root: "/home/a/code/ledger", agent: "docs-4", text: "STATE stuck\nBLOCKED waiting on CI\nNEED nothing", now: NOW - 42 * DAY });
+    const [old] = R.recentReports(ROOT, 5);
+    expect(R.resolveReports(ROOT, [old!.id])).toBe(1);
+    const [after] = R.recentReports(ROOT, 5);
+    expect(after!.blocked).toBe("");
+    expect(after!.need).toBe("");
+    expect(after!.raw).toContain("the container is down");
+    expect(R.worthWaking(after!)).toBe(false);
+    /* The other project's report is not reachable through this project's root. */
+    const [other] = R.recentReports("/home/a/code/ledger", 5);
+    R.resolveReports(ROOT, [other!.id]);
+    expect(R.recentReports("/home/a/code/ledger", 5)[0]!.blocked).toBe("waiting on CI");
+  });
+});

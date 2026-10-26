@@ -1,6 +1,6 @@
 ---
 name: ui-control
-description: Open a panel in agentglass's own window, read what is open, or read and change one of its settings. Use when the person asks you to "show me" a Settings page, the machine panel, the bench, a Git modal or a file in agentglass; when you need to know what they are looking at, what is on the bench, or what a setting is set to; or when they ask you to change an agentglass setting (theme, accent, density, interface font size, reduce motion, diff layout, terminal font, rail order). Also a Jira card: read it, list its moves, run a configured step, link a pull request. Not for pages inside the built-in browser (that is browser-use).
+description: Open a panel in agentglass's own window, read what is open, or read and change one of its settings. Use when the person asks you to "show me" a Settings page, the machine panel, the bench, a Git modal or a file in agentglass; when you need to know what they are looking at, what is on the bench, or what a setting is set to; or when they ask you to change an agentglass setting (theme, accent, density, interface font size, reduce motion, diff layout, terminal font, rail order). Also the project's agent rules: read them, or write one the person told you in chat. Also a Jira card: read it, list its moves, run a configured step, link a pull request. Not for pages inside the built-in browser (that is browser-use).
 ---
 
 # Driving agentglass's own screen
@@ -34,7 +34,7 @@ What you can open: every view and Settings page, one plugin's own page
 bench, a file in the viewer, the Git modals (insights, bisect, the git palette,
 compare, blame, and the rebase editor, which only draws the plan), one event or
 session the window holds (`event.open`, `session.open`), the running version's
-release notes (`whatsnew.open`), the Lantern schedule dialog, the Terminal's
+release notes (`whatsnew.open`), the Agents screen's schedule and Change-the-coordinator dialogs, the Terminal's
 Resume list, and what the pane chords open for the focused terminal pane
 (`pane.open`). Opening only shows: starting a rebase, saving a schedule,
 resuming a session is the person's click. Not doors, on purpose: the people
@@ -97,6 +97,32 @@ A setting held per project takes `--root` (`settings set seat.powers speak --roo
 the Settings pages use answer the same way (`POST /orchestration`, `/launch-permissions`,
 `/seat/settings`, `/seat/change`): 202 with the request instead of a 403. No route,
 no CLI and no MCP tool answers a request for the person.
+
+## The project's agent rules
+
+What an agent may do in a project lives in one list, in agentglass, and every
+agent obeys it wherever it was started: a run agentglass launched gets it as
+flags, and a Claude Code or OpenCode session started anywhere else is checked
+by the hook before each tool call (`GET /agent-rules/check`). Codex and Gemini
+have no hook: only the permission mode reaches them.
+
+    agentglass-ui rules list                       # base set, this project's rules, suggestions, history
+    agentglass-ui rules suggest                    # actions first seen here with no rule yet
+    agentglass-ui rules set 'Bash(git push:*)' ask --as <name>
+    agentglass-ui rules set 'Bash(npm publish:*)' never --root '*' --as <name>
+
+The MCP twin has `ui_rules_list`, `ui_rules_suggest` and `ui_rules_set`.
+Each rule is `allow`, `ask` or `never`; when two match, the stricter wins. A
+rule stricter than what is in force applies at once; a looser one waits for
+the person on the approval card and changes nothing until they answer.
+
+The person sees and changes the same list on the Agents screen, in the section
+"What your agents may do": one card per project, a click on Allow, Ask me or
+Never writes through the routes above, and a suggestion is answered (or
+dismissed) there by the person alone.
+
+**A rule the person tells you in chat goes here, never into your private
+memory.** Memory is read by one agent; this list is obeyed by all of them.
 
 ## The three levels
 

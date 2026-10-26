@@ -11,6 +11,7 @@
  * reassembled by hand out of a head and a list nobody else could see.
  */
 import type { SeatFieldRow, SeatNeed, SeatReportRow, SeatTask } from "./api.ts";
+import { isStale } from "./agentsStale.ts";
 
 export interface Waiting {
   /**
@@ -41,6 +42,13 @@ export interface Waiting {
   /** A queued task that has already defeated two agents. A third go is not the
    *  answer; a person is. */
   beaten: SeatTask[];
+  /**
+   * CLAIMS PAST THEIR WEEK. A blocker or an ask that nobody answered in seven
+   * days is history, not something waiting: it leaves the five kinds above and
+   * is drawn as one folded line. Kept here, and counted, because "nothing is
+   * waiting" and "three things went stale" are different sentences.
+   */
+  stale: { reports: SeatReportRow[]; needs: SeatNeed[] };
   count: number;
 }
 
@@ -59,17 +67,23 @@ const reachable = (field: SeatFieldRow[], name: string): boolean =>
  * be lost if nobody says it, then the cheap ones.
  */
 export function whatWaits(
-  field: SeatFieldRow[], reports: SeatReportRow[], tasks: SeatTask[], needs: SeatNeed[] = [], maxAttempts = 2,
+  field: SeatFieldRow[], reports: SeatReportRow[], tasks: SeatTask[], needs: SeatNeed[] = [], maxAttempts = 2, now = Date.now(),
 ): Waiting {
-  const ready = needs.filter((n) => !n.doneAt);
+  const open = needs.filter((n) => !n.doneAt);
+  const ready = open.filter((n) => !isStale(n.created, now));
   const stopped = field.filter((r) => !r.gone && r.needsYou);
   /* A report counts once, by which of the two it is: an agent that is here and
-     asking, or an agent that asked and left. */
-  const asked = reports.filter((r) => (r.blocked || r.need) && reachable(field, r.agent));
-  const orphaned = reports.filter((r) => r.blocked && !reachable(field, r.agent));
+     asking, or an agent that asked and left. And only while it is a live
+     claim: the first version read no age at all, so on a quiet project the
+     eight newest reports WERE the forty-two-day-old ones and a blocker from
+     last month sat in "waiting on you" until somebody pressed Done. */
+  const claims = reports.filter((r) => r.blocked || r.need);
+  const asked = claims.filter((r) => !isStale(r.at, now) && reachable(field, r.agent));
+  const orphaned = claims.filter((r) => r.blocked && !isStale(r.at, now) && !reachable(field, r.agent));
+  const stale = { reports: claims.filter((r) => isStale(r.at, now)), needs: open.filter((n) => isStale(n.created, now)) };
   const beaten = tasks.filter((t) => !t.doneAt && !t.takenAt && t.attempts >= maxAttempts);
   return {
-    ready, asked, orphaned, stopped, beaten,
+    ready, asked, orphaned, stopped, beaten, stale,
     count: ready.length + asked.length + orphaned.length + stopped.length + beaten.length,
   };
 }

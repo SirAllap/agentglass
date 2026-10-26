@@ -132,7 +132,7 @@ import {
   anchorId, bootstrapSince, clearSeen, foldedIdx, markAllSeen, newKeys, newSince, onSeenChange, readSeen,
   reviewSpeaks, writeSeen, type NewAtom,
 } from "../lib/prNew.ts";
-import { unreadOf } from "../lib/prUnread.ts";
+import { unreadOf, unreadSwitchHolds } from "../lib/prUnread.ts";
 import { quoteReply } from "../lib/prQuote.ts";
 import { sinceRange, sinceTitle } from "../lib/prSinceReview.ts";
 import { withoutWhitespace } from "../lib/diffNoWhitespace.ts";
@@ -2984,7 +2984,6 @@ export function PrView({ active, onReviewInTerminal, jumpTo }: {
   );
   /* Turned off by itself when it would select nothing: a filter with no answers is a
      table that looks empty for a reason nobody can see. */
-  useEffect(() => { if (unreadOnly && !unreadPrs.length) setUnreadOnly(false); }, [unreadOnly, unreadPrs.length]);
   const shownPrs = unreadOnly ? unreadPrs : basePrs;
   /* Cards of a search the second pass never reached fill themselves in, in one batched request. */
   const visiblePrs = useRowDetails(root, shownPrs, query.trim().length > 0);
@@ -3181,6 +3180,18 @@ export function PrView({ active, onReviewInTerminal, jumpTo }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [boardReviewCards, rules, repo?.key, seenMarks],
   );
+  /* The switch lets go when the surface in front of you has nothing unread. The
+     table counts its own pool; the board draws other pools (yours, asked of you,
+     the rest), so on the board the count is theirs — see unreadSwitchHolds. */
+  const boardUnreadCount = useMemo(() => {
+    const n = new Set<number>();
+    for (const p of [...boardMineShown, ...boardReviewShown, ...boardOthersShown]) if (unreadOf(p, repo?.key, seenMarks)) n.add(p.number);
+    return n.size;
+  }, [boardMineShown, boardReviewShown, boardOthersShown, repo?.key, seenMarks]);
+  const unreadInFront = boardShown ? boardUnreadCount : unreadPrs.length;
+  useEffect(() => {
+    if (!personLogin && !unreadSwitchHolds(unreadOnly, unreadInFront)) setUnreadOnly(false);
+  }, [unreadOnly, unreadInFront, personLogin]);
   /* The Open item's number is the cards the board draws: the same pools, the
      same rules, a pull request that is both yours and asked of you counted once. */
   const boardOpenCount = useMemo(() => {

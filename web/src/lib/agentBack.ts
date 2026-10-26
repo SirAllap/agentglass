@@ -22,7 +22,7 @@ import type { UiActionId } from "../../../shared/uiActions.ts";
  *  table as text and fails when a handler that calls `goView(` is not here. */
 export const VIEW_SWITCHERS: readonly UiActionId[] = [
   "view.open", "workspace.toggle", "pane.open",
-  "lantern.schedule", "terminal.resume",
+  "lantern.schedule", "agents.change", "terminal.resume",
   "pr.merge.stage", "pr.comment.stage", "pr.review.stage", "card.move.stage",
   "pr.unstick",
 ];

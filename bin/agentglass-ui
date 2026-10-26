@@ -478,6 +478,30 @@ def settings_set(id, value, as_name=None, root=None):
     return door_explain(status, ans)
 
 
+def rules_list(root, only_suggested=False):
+    """The project's rules (GET /agent-rules): base, learned, suggested, history."""
+    status, body = http("/agent-rules?" + urllib.parse.urlencode({"root": root}))
+    if status != 200 or not isinstance(body, dict) or not body.get("ok"):
+        if status == 404:
+            return {"ok": False, "error": "this agentglass is older than the agent rules: update the app (it has no GET /agent-rules)"}
+        return {"ok": False, "error": explain(status, body)["error"]}
+    if only_suggested:
+        return {"ok": True, "root": body.get("root"), "value": body.get("suggested", [])}
+    return {"ok": True, "value": {k: body[k] for k in ("root", "mode", "base", "learned", "suggested", "history") if k in body}}
+
+
+def rules_set(root, match, setting, as_name=None, action=None, source="chat"):
+    """One rule told in chat. Stricter than what is in force applies now; looser waits for the person."""
+    body = {"root": root, "match": match, "setting": setting, "source": source,
+            **({"action": action} if action else {}), **({"as": as_name} if as_name else {})}
+    status, ans = http("/agent-rules", body, timeout=30, origin=False)
+    if status in (200, 202) and isinstance(ans, dict) and ans.get("ok"):
+        r = ans.get("rule") or {}
+        note = "applied" if ans.get("applied") else "waits for the person (approval card); nothing changed yet"
+        return {"ok": True, "applied": bool(ans.get("applied")), "rule": r, "note": note}
+    return {"ok": False, "error": explain(status, ans)["error"]}
+
+
 def settings_requests():
     status, body = http("/settings/requests")
     if status == 200 and isinstance(body, dict) and isinstance(body.get("requests"), list):
@@ -717,6 +741,17 @@ def main(argv=None):
                 q.add_argument(k, help=why)
             else:
                 q.add_argument("--" + k.replace("_", "-"), dest=k, default=None, required=(required and k == "updated"), help=why)
+    p = sub.add_parser("rules", help="the project's agent rules: what every agent here may do, ask first, or never do")
+    rs = p.add_subparsers(dest="rverb", required=True)
+    for name, why in (("list", "the rules in force here, the base set, suggestions and the change history"),
+                      ("suggest", "the actions first seen here that have no rule yet")):
+        q = rs.add_parser(name, help=why)
+        q.add_argument("--root", default=None, help='the project (default: this directory\'s), or "*" for every project')
+    q = rs.add_parser("set", help="write a rule told in chat: stricter applies at once, looser waits for the person")
+    q.add_argument("match", help="a tool pattern, e.g. 'Bash(git push:*)', 'Edit', 'mcp__orbit__deploy'")
+    q.add_argument("setting", choices=("allow", "ask", "never"))
+    q.add_argument("--root", default=None, help='the project (default: this directory\'s), or "*" for every project')
+    q.add_argument("--action", default=None, help="a readable key, e.g. git.push (default: made from the pattern)")
     p = sub.add_parser("settings", help="list, read or change the settings an agent may touch")
     ss = p.add_subparsers(dest="verb", required=True)
     ss.add_parser("list", help="every setting, the window's and the server's, with its class; and the requests waiting for the person")
@@ -768,6 +803,11 @@ def main(argv=None):
             typed[k] = v
         present = "now" if a.now else "quiet" if a.quiet else None
         return emit(run_door(a.id, typed, a.as_name, listing, present))
+    if a.cmd == "rules":
+        root = a.root or os.getcwd()
+        if a.rverb == "set":
+            return emit(rules_set(root, a.match, a.setting, a.as_name, a.action))
+        return emit(rules_list(root, only_suggested=a.rverb == "suggest"))
     if a.verb == "list":
         return emit(settings_list(a.as_name))
     if a.verb == "requests":

@@ -10,7 +10,7 @@ import type { ViewId } from "../components/workspace/views.ts";
  * starts counted.
  */
 export const COUNTED_VIEWS: Partial<Record<ViewId, string>> = {
-  lantern: "Agents stopped on you.",
+  agents: "Agents stopped on you.",
   tasks: "Reminders that fired.",
 };
 

@@ -81,14 +81,14 @@ describe("the view asks for nothing new", () => {
     } finally { api.agentBoard = real; __setLanternRows(null); }
   });
 
-  test("the view has the same two clocks it had and no call of its own for the chairs", async () => {
-    const src = await Bun.file(new URL("../src/components/LanternView.tsx", import.meta.url)).text();
-    const view = src.slice(src.indexOf("export function LanternView("));
-    expect((view.match(/setInterval\(/g) ?? []).length).toBe(2);
+  test("the screen takes the chairs from the board's own answer and keeps its clocks in one hook", async () => {
+    const view = await Bun.file(new URL("../src/components/agents/AgentsView.tsx", import.meta.url)).text();
+    const hook = await Bun.file(new URL("../src/components/agents/useAgents.ts", import.meta.url)).text();
+    expect(view).toContain("lanternChairs");
     expect(view).not.toContain("api.seat(");
-    const block = src.slice(src.indexOf("function ChairBlock("), src.indexOf("export function LanternView("));
-    expect(block).not.toMatch(/setInterval|setTimeout|useEffect/);
-    expect(block.match(/api\.\w+/g)).toEqual(["api.seatChange"]);
+    /* The four sources and the clock that ages them: nothing else polls. */
+    expect((hook.match(/setInterval\(/g) ?? []).length).toBe(4);
+    expect((view.match(/setInterval\(/g) ?? []).length).toBe(1);
   });
 
   test("a chair that is in its seat is never told its orchestrator is gone", async () => {

@@ -60,6 +60,12 @@ const EXCLUDED_TYPE = /type=["']?(checkbox|radio|range|hidden|file)\b/;
  * reformatting.
  */
 const ALLOWED: { file: string; marker: string; why: string }[] = [
+  { file: "AgentsSections.tsx", marker: 'placeholder="Add a task for the coordinator"',
+    why: "the field is the last row of the Up next card: the row's rule and the plus icon are its border, as the other rows' are" },
+
+  { file: "AgentsSections.tsx", marker: 'placeholder="done when…"',
+    why: "it sits inside the same queue row as the task field, sharing that row's rule rather than drawing a box of its own" },
+
   { file: "FilesPanel.tsx", marker: 'placeholder={mode === "names" ? "Find a file by name…"',
     why: "icon and a clear button share the pill's one border with the input; moving it onto the input would put them outside it" },
 

@@ -3,7 +3,7 @@
  * it, what needs a person — and what does the one notification say.
  */
 import { describe, expect, test } from "bun:test";
-import { findings, notice, FORGOTTEN_AFTER_MS } from "../src/lanternwatch.ts";
+import { findings, notice, notifies, FORGOTTEN_AFTER_MS } from "../src/lanternwatch.ts";
 import type { BoardRow } from "../src/agentboard.ts";
 import type { NamedAgent } from "../src/agentops.ts";
 import { attention } from "../../shared/fieldRules.ts";
@@ -232,3 +232,30 @@ describe("the watch flags what the shared rule flags", () => {
 });
 
 const watchSrc = await Bun.file(new URL("../src/lanternwatch.ts", import.meta.url)).text();
+
+describe("what reaches the desktop notification", () => {
+  const H = 3_600_000;
+  test("only an agent blocked on the person notifies; a turn left, forgotten work and a gone window stay in the view", () => {
+    const rows = [
+      row({ name: "c-web", state: "waiting", needsYou: { kind: "permission", why: "", since: NOW - 60_000 } }),
+      row({ name: "d-docs", state: "waiting", needsYou: { kind: "gate", why: "", since: NOW - 60_000 } }),
+      row({ name: "f-stale", state: "waiting", needsYou: { kind: "input", why: "", since: NOW - 3 * H } }),
+      row({ name: "g-migrate", doing: "migrate the orbit tables", saidAt: NOW - 90 * 60_000 }),
+    ];
+    const f = findings({ rows, namedNow: [], namedBefore: [named("z")], now: NOW });
+    expect(f.map((x) => `${x.name}:${x.kind}${x.left ? ":left" : ""}`).sort()).toEqual(["c-web:waiting", "d-docs:waiting", "f-stale:waiting:left", "g-migrate:forgotten", "z:gone"]);
+    expect(f.filter(notifies).map((x) => x.name).sort()).toEqual(["c-web", "d-docs"]);
+    expect(notice(f.filter(notifies))!.title).toBe("🔦 Lantern: 2 need you");
+  });
+
+  test("a look with nothing blocked sends nothing", () => {
+    const rows = [row({ name: "f-stale", state: "waiting", needsYou: { kind: "input", why: "", since: NOW - 3 * H } })];
+    expect(notice(findings({ rows, namedNow: [], namedBefore: [named("z")], now: NOW }).filter(notifies))).toBeNull();
+  });
+
+  test("tick hands the notification only what notifies", () => {
+    const body = watchSrc.slice(watchSrc.indexOf("export async function tick("));
+    const code = body.slice(0, body.indexOf("\n}\n") + 2).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+    expect(code).toContain("pushLanternFindings(f.filter(notifies)");
+  });
+});

@@ -154,6 +154,14 @@ export function lastLook(): { at: number; flagged: number; every: number; on: bo
   return last ? { at: last.at, flagged: last.findings.length, every: lanternWatchMinutes(), on: lanternWatch() } : { at: 0, flagged: 0, every: lanternWatchMinutes(), on: lanternWatch() };
 }
 
+/**
+ * Which findings reach the notification: only an agent blocked on the person
+ * (a permission or a gate). A turn nobody came back to, quiet claimed work and
+ * a window that is gone stay in the view and still wake a seat, but a desktop
+ * alert for each one every look is how a person learns to ignore the real one.
+ */
+export const notifies = (f: Finding): boolean => f.kind === "waiting" && !f.left;
+
 export async function tick(now = Date.now()): Promise<Finding[]> {
   if (ticking) return last?.findings ?? [];
   ticking = true;
@@ -165,7 +173,7 @@ export async function tick(now = Date.now()): Promise<Finding[]> {
     const f = findings({ rows, namedNow, namedBefore, now });
     namedBefore = namedNow;
     last = { at: now, findings: f };
-    pushLanternFindings(f, notice, now);
+    pushLanternFindings(f.filter(notifies), notice, now);
     /* The seat rides this look rather than keeping a clock of its own: the
        board has just been read, and whether anything a person cares about
        changed is already known here for free. See seatwake.ts. */

@@ -1261,7 +1261,7 @@ export default function App() {
             startedAt={startedAt} epm={epm}
             onSelectEvent={setSelected}
             onSelectSession={setSessionView}
-            onOpenLantern={() => goView("lantern")}
+            onOpenLantern={() => goView("agents")}
           />
           </LazyPanel>
         )}

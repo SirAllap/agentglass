@@ -268,7 +268,12 @@ describe("Claude Code hook payloads", () => {
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
-      async fetch(req) { resolveBody(await req.json() as Record<string, unknown>); return new Response("ok"); },
+      // The forwarder asks the agent rules first on a PreToolUse; only the /ingest post is the body under test.
+      async fetch(req) {
+        if (new URL(req.url).pathname !== "/ingest") return Response.json({ ok: true, decision: "unknown" });
+        resolveBody(await req.json() as Record<string, unknown>);
+        return new Response("ok");
+      },
     });
     try {
       const proc = Bun.spawn([

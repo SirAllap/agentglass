@@ -693,6 +693,9 @@ export interface SeatAnswer {
   field: SeatFieldRow[];
   /** What it said, newest first, and when it was last woken. */
   lines: { line: string; at: number }[];
+  /** What the Agents screen folds into one line: reports past their week and
+   *  the rounds that only said "nothing changed". Counts, not the rows. */
+  quiet?: { oldReports: number; routine: number };
   wokenAt: number | null;
   floorHours: number;
   /** The seat's own pane, as text, when somebody is in it. */
@@ -1515,6 +1518,21 @@ const realApi = {
   /** A decision the seat asked for has been taken, or no longer matters. */
   seatNeedSettled: (root: string, id: string, outcome = "") =>
     post<{ ok: boolean; error?: string }>("/seat/need/finish", { root, id, outcome }),
+  /** Make a session that is already running the project's coordinator. */
+  seatAdopt: (root: string, session: string, pane: string, powers?: string) =>
+    post<{ ok: boolean; already?: boolean; error?: string }>("/seat/adopt", { root, session, pane, powers }),
+  /** Clear blockers nobody can answer any more; the words stay in the record. */
+  seatReportDismiss: (root: string, ids: number[]) =>
+    post<{ ok: boolean; dismissed?: number; error?: string }>("/seat/report/dismiss", { root, ids }),
+  /** One project's rules, and the base set every project shares. */
+  agentRules: (root: string) =>
+    get<{ ok: boolean; error?: string } & Partial<import("../../../shared/agentRules.ts").AgentRulesView>>(`/agent-rules?root=${encodeURIComponent(root)}`),
+  /** A person's rule: stricter and looser both apply at once for them. */
+  agentRuleSet: (f: import("../../../shared/agentRules.ts").RuleRequest) =>
+    post<{ ok: boolean; error?: string; applied?: boolean; waitsForPerson?: boolean }>("/agent-rules", f),
+  /** A suggestion made a rule (`setting`) or put away for good (`dismiss`): only the person answers. */
+  agentRuleAnswer: (id: string, a: { setting: import("../../../shared/agentRules.ts").RuleSetting } | { dismiss: true }) =>
+    post<{ ok: boolean; error?: string }>(`/agent-rules/${encodeURIComponent(id)}/answer`, a),
   /** One message, every live agent — or the named ones. Every outcome comes
    *  back: a partial send read as a success leaves somebody waiting for an
    *  instruction that never arrived. */
@@ -2940,6 +2958,11 @@ const demoApi: typeof realApi = {
   seatTaskDrop: (_r: string, _i: string) => D({ ok: false, error: "not available in the demo" }),
   seatNeedSettled: (_r: string, _i: string, _o?: string) => D({ ok: false, error: "not available in the demo" }),
   agentsBroadcast: (_t: string, _n?: string[]) => D({ ok: false, error: "not available in the demo" }),
+  seatAdopt: (_r: string, _s: string, _p: string, _w?: string) => D({ ok: false, error: "not available in the demo" }),
+  seatReportDismiss: (_r: string, _i: number[]) => D({ ok: false, error: "not available in the demo" }),
+  agentRules: (_r: string) => D({ ok: false, error: "not available in the demo" }),
+  agentRuleSet: (_f: import("../../../shared/agentRules.ts").RuleRequest) => D({ ok: false, error: "not available in the demo" }),
+  agentRuleAnswer: (_id: string, _a: { setting: import("../../../shared/agentRules.ts").RuleSetting } | { dismiss: true }) => D({ ok: false, error: "not available in the demo" }),
   seatWake: () => D({ ok: true, hours: 4 }),
   seatWakeSave: (_h: number) => D({ ok: false, error: "not available in the demo" }),
   workerRoles: () => D({

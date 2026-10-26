@@ -6,6 +6,11 @@ carries its own notes, the desktop installers and the phone's `.apk`.
 
 ## Released
 
+- **v0.27.0** — **One Agents screen, one rule list per project, and no more chat view.**
+  - **One Agents screen.** It replaces the Lantern and the chair. The chat view and the Understudy are gone.
+  - **Rules that learn.** Each project has one rule list that every agent obeys, and it learns from what you tell it. It now also applies to sessions you start yourself through the hook: a "never" rule blocks there too, not only in launched runs. Merging and releasing start as "never", as before for launched runs. This is a behaviour change.
+  - **Engines.** "Send to terminal" opens the engine you set, and each engine has its own permission modes.
+  - **Smaller fixes.** The plugin market keeps long listings, PR watch can ignore any check, agent clicks reach a hidden browser view, and the unread chip lights the board again.
 - **v0.26.0** — **The agent's clicks and typing count as a person's, and tmux tabs appear at once.**
   - **Real input in the built-in browser.** click, double-click, hover, type, press and fill reach the page as real input, so sites that ignore scripted events work, and the agent's keys never fire the app's own shortcuts. Right-click, drag and pinch-zoom are still scripted.
   - **Tabs without polling.** A tmux control-mode sidecar pushes window changes, so a new tab shows at once and an idle panel asks tmux 120 times an hour instead of 1800; the poll remains the fallback.
