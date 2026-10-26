@@ -20,7 +20,8 @@
  * target), and it goes back to hidden even when the capture throws.
  */
 import { describe, expect, test } from "bun:test";
-import { paneOf, whilePainting } from "../src/lib/panePainting.ts";
+import { paintOnDemand, paneOf, whilePainting } from "../src/lib/panePainting.ts";
+import { readFileSync } from "node:fs";
 
 type Style = { visibility: string; opacity: string; pointerEvents: string };
 function fakePane(visibility = "hidden") {
@@ -116,5 +117,73 @@ describe("a guest inside a hidden TAB", () => {
     await whilePainting(guest, async () => "png", now);
     expect(paneStyle.opacity, "no warm-up, no restore, nothing touched").toBe("");
     expect(tabStyle.opacity).toBe("");
+  });
+});
+
+/*
+ * Trusted input is dropped by a pane that is not painting — measured on an
+ * isolated build with the terminal in front: `click` and `type` were sent,
+ * the page logged no event at all, and the answer still said `clicked`. So an
+ * acting verb lights the pane on its first send and keeps it lit until it has
+ * answered, when the page has confirmed what arrived.
+ */
+describe("a verb that sends input lights the pane first", () => {
+  test("lit from the first send until release, once", async () => {
+    const { guest, paneStyle, tabStyle } = fakeTabInPane();
+    let waits = 0;
+    const lit = paintOnDemand(guest, { wait: async () => { waits++; } });
+    expect(paneStyle.visibility, "nothing is lit before anything is sent").toBe("hidden");
+    const seen: string[] = [];
+    for (const n of [1, 2]) await lit.run(async () => { seen.push(`${n}:${paneStyle.visibility}/${tabStyle.visibility}/${tabStyle.opacity}`); });
+    expect(seen).toEqual(["1:visible/visible/0", "2:visible/visible/0"]);
+    expect(waits, "one warm-up per verb, not per key").toBe(1);
+    expect(tabStyle.pointerEvents).toBe("none");
+    await lit.release();
+    expect(paneStyle.visibility).toBe("hidden");
+    expect(tabStyle.visibility).toBe("hidden");
+    expect(tabStyle.opacity).toBe("");
+  });
+
+  test("a verb that never sends pays nothing and touches nothing", async () => {
+    const { guest, paneStyle } = fakeTabInPane();
+    let waits = 0;
+    const lit = paintOnDemand(guest, { wait: async () => { waits++; } });
+    await lit.release();
+    expect(waits).toBe(0);
+    expect(paneStyle.visibility).toBe("hidden");
+    expect(paneStyle.opacity).toBe("");
+  });
+
+  test("a style somebody else changed while lit is not written over", async () => {
+    /* A tab an agent starts driving is restyled by React mid-verb: its own
+       `visibility` goes. Putting "hidden" back over that left it dark after it
+       came to the front. */
+    const { guest, tabStyle } = fakeTabInPane("visible", "hidden");
+    const lit = paintOnDemand(guest, now);
+    await lit.run(async () => { tabStyle.visibility = ""; });
+    await lit.release();
+    expect(tabStyle.visibility).toBe("");
+  });
+
+  test("two verbs on two tabs share the pane: the first to answer does not put it out", async () => {
+    const pane = { style: { visibility: "hidden", opacity: "", pointerEvents: "" }, parentElement: null } as unknown as HTMLElement;
+    const guestIn = () => ({ style: { visibility: "", opacity: "", pointerEvents: "" }, parentElement: pane,
+      closest: (sel: string) => (sel === "[data-agx-viewbox]" ? pane : null) }) as unknown as Element;
+    const a = paintOnDemand(guestIn(), now), b = paintOnDemand(guestIn(), now);
+    await a.run(async () => {});
+    await b.run(async () => {});
+    await a.release();
+    expect(pane.style.visibility, "b is still sending").toBe("visible");
+    await b.release();
+    expect(pane.style.visibility).toBe("hidden");
+    expect(pane.style.opacity).toBe("");
+  });
+
+  test("the bus sends every trusted input through it, and releases after the answer", () => {
+    const src = readFileSync(new URL("../src/lib/browserBus.ts", import.meta.url), "utf8")
+      .split("\n").filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l)).join("\n");
+    expect(src).toContain("return lit.run(() => browserInput(req, guest));");
+    expect(src).not.toMatch(/return browserInput\(req, guest\)/);
+    expect(src).toContain(".finally(lit.release)");
   });
 });
