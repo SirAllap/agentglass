@@ -14,9 +14,10 @@
  * Not here, on purpose: the unattended one-shots (headless.ts, the
  * understudy, the judge), whose modes are part of what they are.
  */
-import { agentKind } from "../../shared/agentKinds.ts";
+import { agentProvider } from "../../shared/agentKinds.ts";
 import { isLaunchMode, type LaunchMode } from "../../shared/launchModes.ts";
-import { launchDeny, launchMode } from "./config.ts";
+import { launchDeny, launchFlagOverrides, launchMode } from "./config.ts";
+import { supportsFlag } from "./agents/launch.ts";
 
 export interface LaunchPerm { mode: LaunchMode; deny: string[] }
 
@@ -40,14 +41,21 @@ export function launchPerm(override?: unknown, yolo?: boolean): LaunchPerm {
  * is read as more tools — a prompt placed after it would be denied rather than
  * asked. `--permission-mode` after it closes the list.
  *
- * Any other CLI has neither flag. Bypass becomes its own skip flag where the
- * table has one; every other mode is that CLI's default, and the deny list is
- * not passed, because there is nothing to pass it to.
+ * Any other CLI has neither flag, so the deny list is not passed. Its mode is
+ * the engine table's `modeFlags` (shared/agentKinds.ts), or the person's own
+ * words for it (Settings, Agent engines). A mode with no entry is that CLI's
+ * default. A flag the installed binary does not list drops the whole mode: a
+ * half-applied sandbox is worse than none, and a usage error closes the window.
  */
-export function launchFlags(kindId: string, perm: LaunchPerm): string[] {
+export function modeFlags(kindId: string, mode: LaunchMode): string[] {
+  return launchFlagOverrides()[kindId]?.[mode] ?? agentProvider(kindId)?.modeFlags?.[mode] ?? [];
+}
+
+export function launchFlags(kindId: string, perm: LaunchPerm, knows: (bin: string, flag: string) => boolean = supportsFlag): string[] {
   if (kindId === "claude") {
     return [...(perm.deny.length ? ["--disallowedTools", perm.deny.join(" ")] : []), "--permission-mode", perm.mode];
   }
-  const flag = agentKind(kindId)?.yoloFlag;
-  return perm.mode === "bypassPermissions" && flag ? [flag] : [];
+  const kind = agentProvider(kindId);
+  const argv = modeFlags(kindId, perm.mode);
+  return kind && argv.every((w) => !w.startsWith("-") || knows(kind.bin, w)) ? argv : [];
 }

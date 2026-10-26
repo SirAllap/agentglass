@@ -35,6 +35,8 @@
  * running one by its process name.
  */
 
+import type { LaunchMode } from "./launchModes.ts";
+
 /** How a prompt reaches the CLI on its command line. */
 export type PromptMode =
   /** Last positional argument: `claude "do the thing"`. */
@@ -60,6 +62,15 @@ export interface AgentKind {
   yoloFlag?: string;
   /** The flag that names a session before its first turn, where supported. */
   nameFlag?: string;
+  /**
+   * The argv that starts this CLI in each launch mode (shared/launchModes.ts),
+   * read off its own `--help` or its docs, never guessed. A mode that is absent
+   * has no equivalent: the CLI starts in its own default, which is the honest
+   * answer and not an error. `server/src/launchperm.ts` reads it, a person's
+   * override of it wins, and a flag the installed binary does not list drops
+   * the whole mode rather than open a window on a usage error.
+   */
+  modeFlags?: Partial<Record<LaunchMode, string[]>>;
 }
 
 /** How a run leg spells a CLI's words when a window opens running it —
@@ -348,6 +359,8 @@ export const AGENT_PROVIDERS: Provider[] = [
     title: "Hermes",
     what: "Nous Research agent CLI.",
     bin: "hermes",
+    // Hermes 0.21.5 `hermes --help`: --yolo is its only approval flag.
+    modeFlags: { bypassPermissions: ["--yolo"] },
     mode: "flag", // prompt via --query=<text>
     tab: false,
     probe: {
@@ -375,6 +388,15 @@ export const AGENT_PROVIDERS: Provider[] = [
     title: "Codex",
     what: "OpenAI's CLI, in a pane of its own.",
     bin: "codex",
+    // codex-cli 0.163.0 `codex --help`: -s/--sandbox, -a/--ask-for-approval
+    // (on-request, never), --approve-for-me, --dangerously-bypass-approvals-and-sandbox.
+    // No acceptEdits: no combination asks before a shell command while it lets edits
+    // through (workspace-write + on-request runs shell inside the sandbox unasked), and
+    // a looser mode than the one named is never mapped.
+    modeFlags: {
+      auto: ["--approve-for-me"],
+      bypassPermissions: ["--dangerously-bypass-approvals-and-sandbox"],
+    },
     mode: "argv",
     tab: true,
     probe: {
@@ -401,6 +423,13 @@ export const AGENT_PROVIDERS: Provider[] = [
     title: "Gemini",
     what: "Google's CLI. Opens with the prompt seeded rather than answered.",
     bin: "gemini",
+    // Not installed here. geminicli.com/docs/reference/configuration: --approval-mode
+    // takes default, auto_edit or yolo (plan is a settings key, not a flag value).
+    modeFlags: {
+      default: ["--approval-mode", "default"],
+      acceptEdits: ["--approval-mode", "auto_edit"],
+      bypassPermissions: ["--approval-mode", "yolo"],
+    },
     mode: "flag-interactive",
     tab: true,
     probe: {
@@ -423,6 +452,9 @@ export const AGENT_PROVIDERS: Provider[] = [
     title: "OpenCode",
     what: "Takes the prompt on a flag and picks its own model.",
     bin: "opencode",
+    // opencode 2.0.32 `opencode --help`: --auto, "auto-approve permissions that are
+    // not explicitly denied". That is bypass, not a classifier, so only bypass maps.
+    modeFlags: { bypassPermissions: ["--auto"] },
     mode: "flag",
     tab: true,
     modelFlag: "--model",
@@ -457,6 +489,16 @@ export const AGENT_PROVIDERS: Provider[] = [
     title: "Qwen Code",
     what: "Qwen's CLI. Opens with the prompt seeded rather than answered.",
     bin: "qwen",
+    // qwenlm.github.io/qwen-code-docs/en/users/features/approval-mode: the modes are plan,
+    // default, auto-edit, auto and yolo. Installed qwen 0.21.15: `--help` does NOT list
+    // --approval-mode, but the option is in its source with exactly those choices. The
+    // launch check reads --help, so here every qwen mode falls back to its own default.
+    modeFlags: {
+      default: ["--approval-mode", "default"],
+      acceptEdits: ["--approval-mode", "auto-edit"],
+      auto: ["--approval-mode", "auto"],
+      bypassPermissions: ["--approval-mode", "yolo"],
+    },
     mode: "flag-interactive",
     tab: true,
     modelFlag: "--model",

@@ -11,6 +11,7 @@ import { openSettings } from "../../lib/openSettings.ts";
 import { homeShort } from "../../lib/pluginDeclarationLayout.ts";
 import { engineProviders, type Provider } from "../../../../shared/agentKinds.ts";
 import type { AgentProbe, EngineReadiness, EnginesReport } from "../../../../shared/types.ts";
+import { LaunchFlagsRows } from "./LaunchFlagsRows.tsx";
 import { ReportingRow } from "./ReportingRow.tsx";
 import {
   accountText, actionOf, badgeOf, credentialNote, engineCounts, engineState, firstRow, logoOf, reportingCheck, roleBadge,
@@ -167,6 +168,7 @@ function EngineTile({ p, e, now, reporting, reportingLoaded, busy, note, onReche
           {reporting
             ? <ReportingRow p={reporting} busy={busy} note={note} onConnect={onConnect} />
             : !reportingLoaded && <SettingRow label="Reports to agentglass" status={<StatusBadge tone="checking">Checking</StatusBadge>} />}
+          {p.id !== "claude" && <LaunchFlagsRows kind={p.id} title={p.title} />}
           <SettingRow label="Hook settings" hint={`The wiring for ${p.title} is written on the Agents page.`}
             actions={<Button onClick={() => openSettings("hooks")}>Open settings</Button>} />
         </div>

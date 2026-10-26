@@ -113,6 +113,7 @@ export const SETTING_CLASSES: Readonly<Record<string, ClassRow>> = {
   "orchestration.policy": { class: "escalation", why: `which engine and model every worker and the chair run on, and when that changes: ${COST}` },
   "agents.role.*": { class: "escalation", why: `the engine and model a worker role starts with: ${COST}` },
   "launch.mode": { class: "escalation", why: `the permission mode every agent the app starts runs in: ${MORE_POWER}`, narrows: modeNarrows },
+  "launch.flags.*": { class: "escalation", why: `the flags an engine starts with in each permission mode, typed by hand: ${MORE_POWER}` },
   "launch.deny": { class: "escalation", why: `what every agent the app starts may never do: ${MORE_POWER}`, narrows: supersetNarrows },
   "seat.model": { class: "escalation", why: `the chair's model: ${COST}` },
   "seat.kind": { class: "escalation", why: `the chair's engine: ${COST}` },

@@ -12,7 +12,7 @@ export const DESK_GATED: readonly string[] = [
   // The settings an agent's change waits on the person for: the person's own save
   // and answer carry the key, so the server does not read them as an agent's
   // (index.ts mayPublishReview, the settings door).
-  "/settings/door", "/settings/requests/decide", "/launch-permissions", "/seat/settings", "/seat/change", "/seat/wake",
+  "/settings/door", "/settings/requests/decide", "/launch-permissions", "/launch-flags", "/seat/settings", "/seat/change", "/seat/wake",
   "/hooks/gate", "/budgets/set", "/lantern/settings", "/agents/roles", "/plugins/master", "/plugins/enable", "/plugins/allow-unboxed",
   "/plugins/session-reads", "/jira/writes", "/clickup/writes", "/clickup/prefs",
   // A press of an account chip: only the person in the desktop window, never an agent staging it.

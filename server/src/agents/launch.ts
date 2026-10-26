@@ -98,11 +98,12 @@ export function supportsFlag(bin: string, flag: string): boolean {
   if (cached !== undefined) return cached;
   let ok = false;
   try {
-    const r = Bun.spawnSync([bin, "--help"], { stdout: "pipe", stderr: "pipe" });
+    const r = Bun.spawnSync([bin, "--help"], { stdout: "pipe", stderr: "pipe", timeout: 3000 });
     // Help text is written for people, so the flag can be followed by a comma,
     // a space, an `=` or the end of a line. A word boundary is enough, and
     // anchoring on more would start reporting a supported flag as missing.
-    ok = new RegExp(`${flag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(
+    // A --help that hangs is killed, and what it printed so far is not an answer.
+    if (!r.exitedDueToTimeout) ok = new RegExp(`${flag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(
       r.stdout.toString() + r.stderr.toString(),
     );
   } catch { /* an unreadable binary is one that does not take the flag */ }
