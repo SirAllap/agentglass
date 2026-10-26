@@ -35,3 +35,11 @@ export function unreadOf(
 ): Unread | null {
   return unreadWith(pr, repoKey, seen);
 }
+
+/** Whether the "only unread" switch may stay on: it lets go when nothing is
+ *  unread in the surface being looked at, since an empty selection reads as a
+ *  broken screen. `inFront` counts that surface's own cards, not another
+ *  surface's: the board and the table draw different pools. */
+export function unreadSwitchHolds(on: boolean, inFront: number): boolean {
+  return on && inFront > 0;
+}
