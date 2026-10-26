@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import type { PrCheck, PrWatch } from "../../shared/types.ts";
-import { bellState, ciPassRule, firedOk, hasActiveWatch, ignorableNames, ignoredOf, ruleLabel, sameRule, setPrWatchState, toggleIgnored, watchPhase, watchesOf } from "../src/lib/prWatchStore.ts";
+import { bellState, ciPassRule, firedOk, hasActiveWatch, ignorableNames, ignoredOf, moreIgnorableNames, ruleLabel, sameRule, setPrWatchState, toggleIgnored, watchPhase, watchesOf } from "../src/lib/prWatchStore.ts";
 
 const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
 const src = async (p: string) => strip(await Bun.file(new URL(p, import.meta.url)).text());
@@ -193,12 +193,21 @@ describe("All CI passed, ignoring some checks", () => {
     expect(ciPassRule([])).toEqual({ type: "ci-pass" });
     expect(ciPassRule(["a"])).toEqual({ type: "ci-pass", ignore: ["a"] });
   });
-  it("chips are the checks that can hold it back, once each, plus what is already ignored", () => {
+  it("chips up front are the checks that can hold it back, once each, plus what is already ignored", () => {
     const all = [chk("lint", "success"), chk("e2e-flaky", "failure"), chk("build", "pending"), chk("docs", "skipped"),
       chk("e2e-flaky", "failure", { event: "push" }), chk("deploy-preview", "failure", { cancelled: true })];
     expect(ignorableNames(all, [])).toEqual(["build", "deploy-preview", "e2e-flaky"]);
     expect(ignorableNames(all, ["lint", "gone-job"])).toEqual(["build", "deploy-preview", "e2e-flaky", "gone-job", "lint"]);
     expect(ignorableNames([chk("lint", "success")], [])).toEqual([]);
+  });
+  it("'+N more' holds the rest, so up front plus more is every check name the PR has", () => {
+    const all = [chk("lint", "success"), chk("e2e-flaky", "failure"), chk("build", "pending"), chk("docs", "skipped"),
+      chk("e2e-flaky", "failure", { event: "push" }), chk("deploy-preview", "failure", { cancelled: true })];
+    expect(moreIgnorableNames(all, [])).toEqual(["docs", "lint"]);
+    expect(moreIgnorableNames(all, ["lint"])).toEqual(["docs"]);
+    expect([...ignorableNames(all, []), ...moreIgnorableNames(all, [])].sort()).toEqual([...new Set(all.map((c) => c.name))].sort());
+    expect(moreIgnorableNames([chk("lint", "success")], [])).toEqual(["lint"]); // nothing failing: only the chip
+    expect(moreIgnorableNames([], [])).toEqual([]);
   });
   it("a name with 'fail' in it after the verdict does not turn a pass into a failure", () => {
     expect(firedOk(w({ lastText: "CI passed on abc1234: ignoring 1: detect-failures" }))).toBe(true);
@@ -209,7 +218,7 @@ describe("All CI passed, ignoring some checks", () => {
   it("the menu draws the chips as pressed toggles in a labelled group, and stays quiet about it when none apply", () => {
     expect(menu).toContain("aria-pressed={ignored.includes(n)}");
     expect(menu).toContain('role="group" aria-label="Checks All CI passed does not wait for"');
-    expect(menu).toContain("No failing or running checks to ignore");
+    expect(menu).toContain("No checks on this pull request yet");
     expect(menu).toContain(">Ignore:</span>"); // the chips say what they are before one is pressed
     expect(menu).toContain("ciPassRule(ignored)");
   });

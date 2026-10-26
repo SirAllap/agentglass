@@ -5357,6 +5357,8 @@ export interface Catalogue {
   /** What the document listed, which is more than `plugins` when it listed
    *  more than the server's cap. */
   total: number;
+  /** Entries listed but not returned: refused as invalid, or past the cap. */
+  skipped: number;
 }
 
 /** What the server's own error log says, folded into what is worth a look. */

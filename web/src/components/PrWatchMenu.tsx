@@ -16,7 +16,7 @@ import { api } from "../lib/api.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { suggestCheckNames } from "../lib/prWatchSuggest.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
-import { bellState, ciPassRule, firedLabel, firedOk, ignorableNames, ignoredOf, markFireSeen, useFireSeen, presetOf, ruleLabel, sameRule, toggleIgnored, usePrWatchState, watchPhase, watchesOf } from "../lib/prWatchStore.ts";
+import { bellState, ciPassRule, firedLabel, firedOk, ignorableNames, ignoredOf, moreIgnorableNames, markFireSeen, useFireSeen, presetOf, ruleLabel, sameRule, toggleIgnored, usePrWatchState, watchPhase, watchesOf } from "../lib/prWatchStore.ts";
 import { Select } from "./Select.tsx";
 import { BellIcon } from "./settingsNavIcons.tsx";
 import { CrossIcon, DoneIcon, EyeOffIcon } from "../lib/glyphIcons.tsx";
@@ -60,6 +60,7 @@ export function PrWatchMenu({ root, repo, d }: {
   const fail = (r: { ok: boolean; error?: string }) => setErr(r.ok ? "" : r.error ?? "could not save that");
   /* The ignore list as the person has it on screen: what they pressed, until the server's own copy says the same.
      Pressing a chip while "All CI passed" is off only stages it; turning the row on sends it. */
+  const [moreOpen, setMoreOpen] = useState(false);
   const [staged, setStaged] = useState<string[] | null>(null);
   const serverIgnored = ignoredOf(mine);
   const ignored = staged ?? serverIgnored;
@@ -83,6 +84,8 @@ export function PrWatchMenu({ root, repo, d }: {
   const checkRules = live.filter((w) => w.rule.type === "check");
   const names = suggestCheckNames(d.checksAll, match);
   const chips = ignorableNames(d.checksAll, ignored);
+  const more = moreIgnorableNames(d.checksAll, ignored);
+  const shownChips = moreOpen ? [...chips, ...more] : chips;
   const current = live.map((w) => w.rule);
 
   const phase = watchPhase(mine);
@@ -111,21 +114,27 @@ export function PrWatchMenu({ root, repo, d }: {
               <Row on={!!waiting(rule)} onToggle={() => void toggle(rule)}>
                 {ruleLabel(rule.type === "ci-pass" ? ciPassRule(ignored) : rule)}{hint && <span className="block text-[10px]" style={{ color: "var(--text3)" }}>{hint}</span>}
               </Row>
-              {rule.type === "ci-pass" && (chips.length ? (
+              {rule.type === "ci-pass" && (chips.length || more.length ? (
                 /* Indented under the row's label (switch 24 + gap 8 + its px-1) so it reads as part of that rule, and
                    muted while the rule is off: the chips still work, they are staged until the row is turned on. */
                 <div className="flex flex-wrap gap-1 pl-9 pr-1" style={waiting(rule) ? undefined : { opacity: 0.5 }} role="group" aria-label="Checks All CI passed does not wait for" data-pr-watch-ignore={waiting(rule) ? "on" : "off"}>
                   <span className="text-[10px] self-center" style={{ color: "var(--text3)" }}>Ignore:</span>
-                  {chips.map((n) => (
+                  {shownChips.map((n) => (
                     <button key={n} type="button" className="agx-inline-add inline-flex items-center gap-1" aria-pressed={ignored.includes(n)} onClick={() => ignore(n)}
                       title={ignored.includes(n) ? `Ignored: press to wait for ${n} again` : `Press to stop waiting for ${n}`}>
                       {/* The slot is always there, so pressing a chip never changes its width and nothing beside it jumps. */}
                       <span className="shrink-0 inline-flex" style={{ width: ICON.xs, height: ICON.xs, visibility: ignored.includes(n) ? "visible" : "hidden" }} aria-hidden="true"><EyeOffIcon size={ICON.xs} /></span>{n}
                     </button>
                   ))}
+                  {more.length > 0 && (
+                    <button type="button" className="agx-inline-add inline-flex items-center gap-1" aria-expanded={moreOpen} onClick={() => setMoreOpen(!moreOpen)}
+                      title={moreOpen ? "Show fewer checks" : "Show every check on this pull request"}>
+                      {moreOpen ? "Fewer" : `+${more.length} more`}
+                    </button>
+                  )}
                 </div>
               ) : (
-                <div className="pl-9 pr-1 text-[10px]" style={{ color: "var(--text3)", ...(waiting(rule) ? null : { opacity: 0.5 }) }} data-pr-watch-ignore={waiting(rule) ? "on" : "off"}>No failing or running checks to ignore</div>
+                <div className="pl-9 pr-1 text-[10px]" style={{ color: "var(--text3)", ...(waiting(rule) ? null : { opacity: 0.5 }) }} data-pr-watch-ignore={waiting(rule) ? "on" : "off"}>No checks on this pull request yet</div>
               ))}
             </Fragment>
           ))}

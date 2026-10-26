@@ -11,7 +11,7 @@ import type { Catalogue, PublicPlugin } from "../../shared/types.ts";
 const src = (f: string) => readFileSync(new URL(`../src/components/${f}`, import.meta.url), "utf8");
 
 const entry = { id: "orbit-notes", source: { kind: "git" as const, url: "https://github.com/acme/orbit-notes.git", ref: null }, description: "d", categories: [], preview: "https://raw.githubusercontent.com/acme/orbit-notes/main/preview.png" };
-const catalogue: Catalogue = { name: "acme", owner: "acme", plugins: [entry], total: 1 };
+const catalogue: Catalogue = { name: "acme", owner: "acme", plugins: [entry], total: 1, skipped: 0 };
 const market = { kind: "marketplace", marketplace: { url: "https://example.test/plugins.json" }, plugin: { url: "https://github.com/acme/orbit-notes/", ref: null } };
 const plugin = (source: unknown) => ({ source }) as PublicPlugin;
 
