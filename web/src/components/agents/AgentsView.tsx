@@ -226,7 +226,7 @@ export function AgentsView({ active }: { active: boolean }) {
             {all
               ? <ProjectCoordinators projects={d.projects} chairs={chairs} onPick={(r) => { d.setScope(r); setChange({ root: r, first: "new" }); }} onChanged={d.reload} />
               : <CoordinatorCard root={root} seat={seat} onChange={() => setChange({ root, first: coord === "none" ? "mine" : "new" })} onChanged={d.reload} />}
-            <UpNext seat={seat} schedules={d.schedules} onCancel={cancelSchedule} showEmpty={!all} />
+            <UpNext seat={seat} schedules={d.schedules} onCancel={cancelSchedule} showEmpty={!all} onSchedule={() => setScheduling(true)} root={root} canAdd={!all && coord !== "none"} onChanged={d.reload} />
             <CleanUpSection clean={clean} onChanged={d.reload} />
           </div>
         </div>

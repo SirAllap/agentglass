@@ -443,14 +443,36 @@ export function WorkingSection({ working, idle, gone, hidden, hiddenDetail, onCh
 
 /* ── up next ──────────────────────────────────────────────────────────── */
 
-/*
- * The approved design draws the queue and nothing to put on it by hand: the
- * coordinator fills it in. Putting a task on it is the `agentglass-agent task`
- * door and opening the schedule dialog is the `lantern.schedule` door, so
- * neither is drawn here.
- */
-export function UpNext({ seat, schedules, onCancel, showEmpty }: {
-  seat: SeatAnswer | null; schedules: AgentSchedule[]; onCancel: (id: string) => void; showEmpty: boolean;
+/** Last row of the queue, drawn as a queue row: Enter puts the task on the coordinator's list (the `agentglass-agent task` door, same route). "Done when" shows once there is a title. */
+function AddTaskRow({ root, onChanged }: { root: string; onChanged: () => void }) {
+  const [title, setTitle] = useState("");
+  const [proof, setProof] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  return (
+    <form className="qr qadd" onSubmit={(e) => {
+      e.preventDefault();
+      const t = title.trim();
+      if (!t || busy) return;
+      setBusy(true); setErr("");
+      void api.seatTaskAdd(root, t, proof.trim()).then((r) => { if (r.ok) { setTitle(""); setProof(""); } else setErr(r.error ?? "could not add it"); })
+        .catch(() => setErr("could not add it")).finally(() => { setBusy(false); onChanged(); });
+    }}>
+      <span className="s"><Ph name="plus" size={18} /></span>
+      <div className="ti">
+        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Add a task for the coordinator" aria-label="Add a task for the coordinator" disabled={busy} />
+        {title.trim() && <input value={proof} onChange={(e) => setProof(e.target.value)} placeholder="done when…" aria-label="Done when" disabled={busy} className="pf" />}
+        {err && <span className="err-line" role="alert">{err}</span>}
+      </div>
+      {/* a form with two text fields only submits on Enter when it has a submit button */}
+      <button type="submit" hidden aria-hidden tabIndex={-1} />
+    </form>
+  );
+}
+
+export function UpNext({ seat, schedules, onCancel, showEmpty, onSchedule, root, canAdd, onChanged }: {
+  seat: SeatAnswer | null; schedules: AgentSchedule[]; onCancel: (id: string) => void; showEmpty: boolean; onSchedule: () => void;
+  root: string; canAdd: boolean; onChanged: () => void;
 }) {
   const tasks = (seat?.tasks ?? []).filter((t) => !t.doneAt);
   const started = tasks.filter((t) => t.takenAt).length;
@@ -458,12 +480,15 @@ export function UpNext({ seat, schedules, onCancel, showEmpty }: {
   const later = schedules.filter((s) => !s.firedAt && !isDeadSchedule(s));
   const total = tasks.length + later.length;
   if (!showEmpty && total === 0) return null;
+  const addRow = canAdd && root ? <AddTaskRow root={root} onChanged={onChanged} /> : null;
   return (
     <div>
-      <SectionHead title="Up next" count={total} hint={total ? `${started} of ${total} started` : undefined} />
+      <SectionHead title="Up next" count={total} hint={total ? `${started} of ${total} started` : undefined}>
+        <button type="button" className="btn sm quiet" onClick={onSchedule} title="Schedule an agent: start one later, at a clock time, a date-time, or after a delay">Schedule…</button>
+      </SectionHead>
       <SubLine src="from the coordinator" icon="robot" notify="quiet" />
       {total === 0
-        ? <Empty icon="list-checks" title="The queue is empty">The coordinator fills this in.</Empty>
+        ? <><Empty icon="list-checks" title="The queue is empty">The coordinator fills this in.</Empty>{addRow && <div className="card">{addRow}</div>}</>
         : (
           <>
             <div className="seg4" style={{ gridTemplateColumns: `repeat(${shown.length + later.length}, 1fr)` }}>
@@ -487,6 +512,7 @@ export function UpNext({ seat, schedules, onCancel, showEmpty }: {
                   <button type="button" className="btn sm quiet" onClick={() => onCancel(s.id)} title="Cancel this scheduled start">Cancel</button>
                 </div>
               ))}
+              {addRow}
             </div>
           </>
         )}

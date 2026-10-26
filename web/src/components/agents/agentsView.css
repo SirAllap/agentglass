@@ -64,6 +64,7 @@
 .agv .sh h2 { font-size: 14px; font-weight: 700; }
 .agv .sh .sp, .agv .ask .t .sp, .agv .coord .h .sp, .agv .fold .sp { flex: 1; }
 .agv .sh .hint { color: var(--text3); font-size: 12px; display: flex; align-items: center; gap: 6px; }
+.agv .sh .btn.quiet { margin-right: -6px; }
 .agv .cnt { font-size: 11.5px; min-width: 20px; height: 20px; padding: 0 7px; border-radius: 99px; display: inline-flex; align-items: center; justify-content: center; background: var(--bg3); color: var(--text2); font-weight: 700; }
 .agv .cnt.err { background: var(--error); color: var(--bg); } .agv .cnt.ok { background: var(--success); color: var(--bg); } .agv .cnt.warn { background: var(--warning); color: var(--bg); }
 .agv .agv-chip { font-size: 11.5px; padding: 0 8px; height: 22px; border-radius: 99px; display: inline-flex; align-items: center; gap: 6px; background: var(--bg3); color: var(--text2); font-weight: 600; white-space: nowrap; }
@@ -171,6 +172,11 @@
 .agv .qr .ti { font-family: var(--agv-prose); font-size: 13.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .agv .av { width: 24px; height: 24px; border-radius: 50%; background: var(--primary); color: var(--on-primary); font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
 .agv .av.free { background: transparent; border: 1px dashed var(--border2); color: var(--text4); }
+.agv .qadd .ti { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; overflow: visible; }
+.agv .qadd input { font: inherit; font-size: 13.5px; flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text); padding: 0; outline: 0; }
+.agv .qadd input::placeholder { color: var(--text4); }
+.agv .qadd input.pf { font-size: 12.5px; color: var(--text3); }
+.agv .qadd:focus-within .s { color: var(--text3); }
 /* clean up */
 .agv .lo { padding: 13px 14px 13px; border-top: 1px solid var(--border); display: grid; gap: 10px; }
 .agv .lo:first-child { border-top: 0; }
