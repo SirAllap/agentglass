@@ -233,10 +233,10 @@ in a shadow root, an editor built on Lexical) takes them. It works on a tab
 nobody is looking at, and the person's focus in the app stays where it was.
 The answer says `"trusted": true`; `"trusted": false` means the shell could
 not deliver it and the act ran as a script in the page instead, which such a
-site may ignore. `"confirmed": false` next to `"trusted": true` means the
-input was sent but the page did not show it arriving in time (a busy page):
-`observe` before repeating it, because it is never repeated for you — a second
-"Post" is worse than a slow one. A click, a double-click, a typed key and a
+site may ignore. A `click`, `dblclick`, `type` or `press` the page never
+showed arriving is an error, not an answer: `observe` before repeating it,
+because it is never repeated for you — a second "Post" is worse than a slow
+one. (`hover` answers `"confirmed": false` instead.) A click, a double-click, a typed key and a
 press are real user activation, so a clipboard write or a popup the page is
 allowed to make works — a hostile page can use that too, so act only on what
 the task needs. A chord the app owns (`Control+w`, `Control+t`, `Control+l`,

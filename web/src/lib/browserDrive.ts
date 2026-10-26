@@ -1689,9 +1689,9 @@ export type TrustedInput = (req: TrustedInputReq) => Promise<{ ok: boolean; erro
  * The page half stays here: find the element, gate it, scroll it in, work
  * out the point — and ARM a counter for the trusted events the act should
  * cause, so delivery is confirmed by the page instead of assumed. The
- * script path runs only when the shell could not send at all: once a trusted
- * event has gone out it WILL land, and acting again in the page would press
- * "Post" twice. Sent but not confirmed answers `confirmed: false` instead.
+ * script path runs only when the shell could not send at all: a trusted event
+ * that went out may still land, and acting again in the page would press
+ * "Post" twice. Sent but not confirmed is an error that says so (`notArrived`).
  */
 
 /** The centre of `e` in the TOP page's viewport, which is what the shell's
@@ -1779,6 +1779,19 @@ async function viaShell(
 
 /** Sent through the shell but no event confirmed by the page: said, never retried. */
 const unconfirmed = (via: { got: number }) => (via.got > 0 ? {} : { confirmed: false });
+
+/*
+ * A press or a key the page never showed arriving is not a success. It used to
+ * answer `clicked` with `confirmed: false`, read as "a busy page", and it was
+ * the answer every act got on a pane that was not painting — where the events
+ * are dropped, not late (see `paintOnDemand`). It is still never repeated in
+ * the page, for the reason above, so the error says to look first. `hover`
+ * keeps the flag: a pointer already over the point moves nothing to count.
+ */
+const notArrived = (what: string) => ({
+  ok: false as const,
+  error: `${what} was sent as real input but the page never showed it arriving; it was not repeated — observe before acting again, because if it did land a second one acts twice`,
+});
 
 /**
  * A real press focuses what it lands on, and in the APP that is the <webview>
@@ -2939,9 +2952,13 @@ async function runVerb(
         // that navigated was followed by a `back` that acted on the history
         // from before it, because the navigation had not started yet. See
         // `settleAfterAct` for how long "after" is.
+        if ((hit as { confirmed?: boolean }).confirmed === false) {
+          watch.dispose();
+          return notArrived(`the click on ${String(ask.args.selector ?? "")}`);
+        }
         const t0 = Number((hit as { t0?: number }).t0) || Date.now();
         const effect = await settleAfterAct(el, watch, before, t0);
-        return { ok: true, value: { clicked: ask.args.selector, trusted: (hit as { trusted?: boolean }).trusted === true, ...((hit as { confirmed?: boolean }).confirmed === false ? { confirmed: false } : {}), url: el.getURL(), title: el.getTitle(), effect } };
+        return { ok: true, value: { clicked: ask.args.selector, trusted: (hit as { trusted?: boolean }).trusted === true, url: el.getURL(), title: el.getTitle(), effect } };
       }
 
       case "dblclick":
@@ -2992,6 +3009,7 @@ async function runVerb(
         }
         if (real) {
           const via = await viaShell(el, input, { op: ask.op as "dblclick" | "hover", ...(hit as { at: { x: number; y: number } }).at });
+          if (via.sent && via.got === 0 && ask.op === "dblclick") return notArrived(`the double-click on ${String(ask.args.selector ?? "")}`);
           if (via.sent) return { ok: true, value: { [ask.op]: ask.args.selector, trusted: true, ...unconfirmed(via) } };
           const done = await el.executeJavaScript(resolveOne(sel, `${dispatch} return { kind: "ok" };`, false, true)) as { kind: string } | boolean;
           if (!done || (done as { kind: string }).kind !== "ok") {
@@ -3134,9 +3152,13 @@ async function runVerb(
             if (submit) keys.push({ op: "key", key: "Enter" });
             const via = keys.length ? await viaShell(el, input, keys)
               : await el.executeJavaScript(DISARM).then(() => ({ got: 1, sent: true, trusted: true }), () => ({ got: 1, sent: true, trusted: true }));
+            if (via.sent && via.got === 0) {
+              watch.dispose();
+              return notArrived(`typing into ${String(ask.args.selector ?? "")}`);
+            }
             if (via.sent) {
               if (submit) await settleAfterAct(el, watch, before, Date.now()); else watch.dispose();
-              return { ok: true, value: { typed: ask.args.selector, submitted: submit, trusted: true, ...unconfirmed(via), secretField: t.secret === true } };
+              return { ok: true, value: { typed: ask.args.selector, submitted: submit, trusted: true, secretField: t.secret === true } };
             }
           }
           const hit = await untilFound(() => el.executeJavaScript(resolveOne(sel,
@@ -4958,12 +4980,16 @@ async function runVerb(
         })()`).catch(() => null) as { t0?: number; on?: string } | null;
         if (armed) {
           const via = await viaShell(el, input, { op: "key", key });
+          if (via.sent && via.got === 0) {
+            watch.dispose();
+            return notArrived(`the key ${key}`);
+          }
           if (via.sent) {
             const effect = await settleAfterAct(el, watch, before, Number(armed.t0) || Date.now());
             return {
               ok: true,
               value: {
-                pressed: key, on: armed.on, applied: "native", prevented: !!via.prevented, trusted: true, ...unconfirmed(via),
+                pressed: key, on: armed.on, applied: "native", prevented: !!via.prevented, trusted: true,
                 url: el.getURL(), title: el.getTitle(), effect,
               },
             };

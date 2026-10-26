@@ -13,8 +13,12 @@
  *   delivers keys to the widget that holds the focus, which is the APP's
  *   window: the page got nothing and the app's input got "keydown:Z".
  * - `sendInputEvent` here reaches the guest it is called on — keys, text,
- *   Ctrl+A and Backspace included — trusted, on a pane hidden with
- *   `visibility`, and the app's focused input kept the focus and saw nothing.
+ *   Ctrl+A and Backspace included — trusted, and the app's focused input
+ *   kept the focus and saw nothing. Not on a pane that is not painting: in
+ *   the app, with the browser view behind another, every event was dropped
+ *   (measured), so the renderer lights the pane first — `paintOnDemand` in
+ *   web/src/lib/panePainting.ts. This file's harness runs in a window that
+ *   is never shown, where the drop does not happen.
  *
  * Mouse events do move the app's focus onto the <webview> element (a real
  * press focuses what it lands on); the renderer puts it back — see

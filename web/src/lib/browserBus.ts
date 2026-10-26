@@ -2,7 +2,7 @@ import type { BrowserAskFrame } from "../../../shared/types.ts";
 import { api } from "./api.ts";
 import { captureBrowser, registerBrowserInitScript, browserCdp, browserInput, browserCdpEvents, applySessionSettings, browserDevtools, browserDevtoolsClose, browserDevtoolsShot, browserDevtoolsPanel, browserDevtoolsZoom, setGuestOwner } from "./desktop.ts";
 import { runBrowserAsk, type DrivableWebview } from "./browserDrive.ts";
-import { whilePainting } from "./panePainting.ts";
+import { paintOnDemand, whilePainting } from "./panePainting.ts";
 import { diagnosisScript } from "./browserObserve.ts";
 
 /**
@@ -308,6 +308,9 @@ export async function serveBrowserAsk(el: DrivableWebview | null, ask: BrowserAs
      rather than inside the shell, which cannot reach the element's pane. */
   const paint = <T,>(run: () => Promise<T>) =>
     ask.op === "shot" ? whilePainting(el as unknown as Element, run) : run();
+  /* Trusted input is dropped on a pane that is not painting: lit on the
+     verb's first send, put out when it has answered. See `paintOnDemand`. */
+  const lit = paintOnDemand(el as unknown as Element);
   const reply = el
     /* The capture is told WHICH guest, because the shell would otherwise take
        whichever tab is in front — and with two agents that is not the same
@@ -454,8 +457,8 @@ export async function serveBrowserAsk(el: DrivableWebview | null, ask: BrowserAs
         (req) => {
           const guest = guestIdOf(el);
           if (guest == null) return Promise.resolve({ ok: false, error: "could not work out which tab this is" });
-          return browserInput(req, guest);
-        }))
+          return lit.run(() => browserInput(req, guest));
+        }).finally(lit.release))
     : { ok: false, error: "the browser view is not open in this window" };
   const withDiagnosis = await attachDiagnosis(el, ask.op, reply);
   try { await api.browserResult({ client: clientId(), id: ask.id, ...withDiagnosis }); } catch { /* the ask has already timed out */ }
