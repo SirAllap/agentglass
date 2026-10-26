@@ -75,12 +75,18 @@ export function ignoredOf(ws: PrWatch[]): string[] {
 export const toggleIgnored = (ignored: string[], name: string): string[] =>
   ignored.includes(name) ? ignored.filter((n) => n !== name) : [...ignored, name];
 
-/** The chips to offer: the checks that can hold "All CI passed" back right now (failed, running, cancelled), plus
- *  whatever is already ignored so it can be taken out again. A green check cannot block, so it is not offered.
- *  Ceiling: a check that is green now and fails on a re-run has no chip until it does. */
+/** The chips shown up front: the checks that can hold "All CI passed" back right now (failed, running, cancelled),
+ *  plus whatever is already ignored so it can be taken out again. */
 export function ignorableNames(all: PrCheck[], ignored: string[]): string[] {
   const blocking = all.filter((c) => !c.done || c.cancelled || c.state === "failure").map((c) => c.name);
   return [...new Set([...blocking, ...ignored])].sort((a, b) => a.localeCompare(b));
+}
+
+/** The rest of the PR's check names, behind "+N more": a green check runs again on the next push, so it can be
+ *  ignored ahead of time. Together with ignorableNames this is every name the PR has. */
+export function moreIgnorableNames(all: PrCheck[], ignored: string[]): string[] {
+  const shown = new Set(ignorableNames(all, ignored));
+  return [...new Set(all.map((c) => c.name))].filter((n) => !shown.has(n)).sort((a, b) => a.localeCompare(b));
 }
 
 /** "All CI passed" as the person set it: the rule with its ignore list, or the bare rule when nothing is ignored. */
