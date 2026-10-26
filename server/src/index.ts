@@ -7921,7 +7921,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         return json({ ok: true, ...rulesCheck(root, tool, (url.searchParams.get("input") ?? "").slice(0, 8000)), gated: gateInstalledCached() });
       } catch (e) {
         // A broken store must not become a decision: the hook reads an error as "no rule".
-        return json({ ok: false, decision: "unknown", error: String(e).slice(0, 200) }, 500);
+        return json({ ok: false, decision: "unknown", error: failed("agent-rules/check", e, "the rules could not be read") }, 500);
       }
     }
     if (pathname === "/agent-rules" && req.method === "GET") {
