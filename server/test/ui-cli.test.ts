@@ -502,7 +502,7 @@ describe.skipIf(!HAVE_PY)("against a running app", () => {
     const listed = (await reply(2)).result.tools as { name: string }[];
     // The registry's doors, then the card verbs: those are a route's, not the registry's (see jira-door-routes.test.ts).
     // This server is at the level it starts with, so the verbs that change a Jira site are not on the list.
-    expect(listed.map((t) => t.name)).toEqual([...names2(L2), ...DOOR_VERBS.filter((v) => !isActing(v)).map((v) => `ui_jira_${v}`)]);
+    expect(listed.map((t) => t.name)).toEqual([...names2(L2), ...DOOR_VERBS.filter((v) => !isActing(v)).map((v) => `ui_jira_${v}`), "ui_rules_list", "ui_rules_suggest", "ui_rules_set"]);
     send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "ui_settings_open", arguments: { page: "diff", row: "wrap-long-lines" } } });
     const called = await reply(3);
     expect(called.result.isError).toBeUndefined();

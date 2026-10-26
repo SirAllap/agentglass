@@ -216,7 +216,10 @@ export function ruleFor(tool: string, input: unknown): { action: string; match: 
   if (tool !== "Bash") return { action: tool.toLowerCase(), match: tool };
   const seg = shellSegments(primaryInput(input))[0];
   if (!seg) return null;
-  const words = seg.split(/\s+/).filter((w) => /^[A-Za-z0-9_.@+-]{1,60}$/.test(w)).slice(0, 2);
+  // The first two words as written: a word that is not plain (a path, a quote) ends the rule there, it is never skipped to reach the next.
+  const words = seg.split(/\s+/).slice(0, 2);
+  const plain = words.findIndex((w) => !/^[A-Za-z0-9_.@+-]{1,60}$/.test(w));
+  if (plain >= 0) words.length = plain;
   if (words.length === 0 || QUIET_WORDS.has(words[0])) return null;
   // A second word that is a flag or a path is not a subcommand.
   const keep = words.length === 2 && /^[a-z][a-z0-9-]*$/.test(words[1]) ? words : words.slice(0, 1);
