@@ -297,6 +297,10 @@ def main():
     p.add_argument("--as", dest="who", help="your name (default: $AGENTGLASS_AGENT_NAME, else the tmux window)")
     p.add_argument("--project", help="the project (default: the current directory)")
 
+    p = sub.add_parser("dismiss", help="clear stale blockers from the project's tray (their words stay in the record); ids come from `inbox --peek`")
+    p.add_argument("ids", help="comma-separated report ids")
+    p.add_argument("--project", help="the project (default: the current directory)")
+
     p = sub.add_parser("field", help="who is working in this project, what state, and since when — a few lines")
     p.add_argument("--project", help="the project (default: the current directory)")
     p.add_argument("--json", action="store_true", help="the rows as JSON instead of the readout")
@@ -394,6 +398,12 @@ def main():
         # as, then the tmux window you are in, then the checkout you are in.
         who = a.who or os.environ.get("AGENTGLASS_AGENT_NAME") or os.environ.get("TMUX_WINDOW_NAME") or os.path.basename(root)
         return emit(call("/seat/report", {"root": root, "agent": who, "text": text}, timeout=30))
+    if a.cmd == "dismiss":
+        root = os.path.abspath(os.path.expanduser(a.project)) if a.project else os.getcwd()
+        ids = [int(x) for x in a.ids.split(",") if x.strip().isdigit()]
+        if not ids:
+            return emit({"ok": False, "error": "no report ids: pass them comma-separated"})
+        return emit(call("/seat/report/dismiss", {"root": root, "ids": ids}, timeout=30))
     if a.cmd == "field":
         root = os.path.abspath(os.path.expanduser(a.project)) if a.project else os.getcwd()
         q = urllib.parse.urlencode({"root": root, **({"format": "json"} if a.json else {})})

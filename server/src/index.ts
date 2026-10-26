@@ -480,6 +480,7 @@ import { readDoctrine, writeDoctrine } from "./seatdoctrine.ts";
 import { readBrief, writeBrief } from "./seatbrief.ts";
 import * as SeatQueue from "./seatqueue.ts";
 import * as SeatInbox from "./seatreport.ts";
+import { withPulse } from "./seatpulse.ts";
 import * as SeatNeeds from "./seatneed.ts";
 import * as SeatWake from "./seatwake.ts";
 import { recall } from "./seatmemory.ts";
@@ -2479,7 +2480,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/agents/board") {
       /* Every source at once — see lantern.ts, which the terminal's "Ask
          about the field" reads too, so the view and the chat cannot disagree. */
-      return json({ ok: true, agents: await boardNow(), chairs: await Seat.chairsNow(), watch: lastLook(), cacheTtlMinutes: cacheTtlMinutes() });
+      return json({ ok: true, agents: withPulse(await boardNow()), chairs: await Seat.chairsNow(), watch: lastLook(), cacheTtlMinutes: cacheTtlMinutes() });
     }
     if (pathname === "/agents/status" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
@@ -8038,7 +8039,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/seat" && req.method === "GET") {
       const gate = readGate();
       if ("error" in gate) return json({ ok: false, error: gate.error }, gate.status);
-      return json({ ok: true, ...(await Seat.seatStatus(gate.root)), doctrineText: readDoctrine(gate.root).text, tasks: SeatQueue.tasksFor(gate.root), needs: SeatNeeds.needsFor(gate.root), lines: Seat.seatLines(gate.root), floorHours: seatWakeHours(), models: claudeModels(), defaultModel: Seat.defaultSeatModel() });
+      return json({ ok: true, ...(await Seat.seatStatus(gate.root)), doctrineText: readDoctrine(gate.root).text, tasks: SeatQueue.tasksFor(gate.root), needs: SeatNeeds.needsFor(gate.root), lines: Seat.seatLines(gate.root), quiet: Seat.quietCounts(gate.root), floorHours: seatWakeHours(), models: claudeModels(), defaultModel: Seat.defaultSeatModel() });
     }
     if (pathname.startsWith("/seat/") && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
@@ -8123,6 +8124,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        * draining it in one call rather than reading five messages. Both are
        * allowed at every power level: reporting and reading are not acts.
        */
+      /* A person clearing blockers nobody can answer any more (the Agents
+         screen's "stale" line). The words stay in the record; see resolveReports. */
+      if (verb === "report/dismiss") {
+        const ids = Array.isArray(b.ids) ? b.ids.filter((x): x is number => typeof x === "number") : [];
+        return json({ ok: true, dismissed: SeatInbox.resolveReports(root, ids) });
+      }
       if (verb === "report") {
         const r = SeatInbox.addReport({ root, agent: String(b.agent ?? ""), session: String(b.session ?? ""), text: String(b.text ?? "") });
         /*

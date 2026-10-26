@@ -1,8 +1,9 @@
 import type { ComponentType } from "react";
 import type { ViewId } from "../../../../shared/types.ts";
-import { GitIcon, DiffIcon, DockerIcon, TerminalIcon, PrIcon, BrowserIcon, FilesIcon, DashIcon, IssuesIcon, LanternIcon, SeatIcon, PluginsIcon } from "./icons.tsx";
+import { GitIcon, DiffIcon, DockerIcon, TerminalIcon, PrIcon, BrowserIcon, FilesIcon, DashIcon, IssuesIcon, LanternIcon, PluginsIcon } from "./icons.tsx";
 import { HAS_BROWSER } from "../../lib/desktop.ts";
 import { IS_DEMO } from "../../lib/demo.ts";
+import { canonView } from "../../../../shared/uiActions.ts";
 
 /** Re-exported from shared so the server (POST /control validation) and the UI
  *  name one set of views. */
@@ -78,20 +79,14 @@ export const VIEWS: ViewDef[] = [
    * Appended, same reason as the two above it. Bottom drawer because it is a
    * thing you go and LOOK at — and the one view whose icon comes to you: it
    * lights with a count when an agent is stopped on you, from wherever you
-   * are. It was a tab inside Clone called "Crew", which is where nobody found
-   * it and a name that meant nothing: "it makes no sense to me… something outside
-   * the clone, since it is not only about the clone".
+   * are.
+   *
+   * One screen where there were two. The Lantern (what every agent is doing)
+   * and the project's chair (who is minding it) answered halves of one
+   * question and listed the same agents twice. Their old names still open this
+   * one: see VIEW_ALIASES in shared/uiActions.ts.
    */
-  { id: "lantern", label: "Lantern", key: "l", icon: LanternIcon, hint: "Who needs you, what every agent is working on, and the way there — it never acts on its own", group: "utility" },
-  /*
-   * Appended last, for the same reason as the three above it, and next to the
-   * Lantern on purpose: the Lantern is the field and never acts; this is the
-   * post that reads it, and it is the one view that CAN be given hands. Two
-   * views rather than one card because "what is happening" and "who is minding
-   * it" are different questions, and a screen answering both answers neither
-   * first.
-   */
-  { id: "seat", label: "Orchestrator", key: "s", icon: SeatIcon, hint: "Who is minding this project: the seat, its last word, and the rules it was seated with", group: "utility" },
+  { id: "agents", label: "Agents", key: "l", icon: LanternIcon, hint: "Who is working, who needs you, what is left behind, and who is minding the project", group: "utility" },
   // Appended, same reason as every entry above it: a number already in
   // somebody's fingers is not renumbered. Bottom drawer, because it is where
   // plugins draw rather than a place you work in by default.
@@ -177,7 +172,9 @@ function buildRail(): RailLayout {
     const out: ViewDef[] = [];
     if (!Array.isArray(raw)) return out;
     for (const id of raw) {
-      const v = byId.get(id as ViewId);
+      /* A layout saved when the Lantern and the chair were two views names
+         them by their old ids: both land on the one view that replaced them. */
+      const v = byId.get(canonView(String(id)) as ViewId);
       if (v && !taken.has(v.id)) { taken.add(v.id); out.push(v); }
     }
     return out;
@@ -305,7 +302,7 @@ const LAST_VIEW_KEY = "agentglass.workspace.view";
  *  longer draws would be a workspace with nothing selected. */
 export function loadLastView(): ViewId {
   try {
-    const v = localStorage.getItem(LAST_VIEW_KEY);
+    const v = canonView(localStorage.getItem(LAST_VIEW_KEY) ?? "");
     if (isViewId(v) && isVisibleView(v)) return v;
   } catch { /* private mode / disabled storage */ }
   return isVisibleView("git") ? "git" : (visibleIds()[0] ?? "git");

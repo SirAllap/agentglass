@@ -71,3 +71,10 @@ export function movingNow(pulse: number[] | undefined, tail = 2): boolean {
   if (!pulse) return false;
   return pulse.slice(-tail).some((n) => n > 0);
 }
+
+/** The board's rows with their last hour attached, for the Agents screen: one
+ *  query for the whole field, and a row with no session keeps none. */
+export function withPulse<T extends { session?: string }>(rows: T[], now = Date.now()): (T & { pulse?: number[] })[] {
+  const by = pulses(rows.map((r) => r.session ?? ""), now);
+  return rows.map((r) => (r.session && by.has(r.session) ? { ...r, pulse: by.get(r.session)! } : r));
+}

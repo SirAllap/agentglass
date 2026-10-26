@@ -47,7 +47,7 @@ function ctx() {
 }
 const ui = (id: string, args: Record<string, unknown> = {}) => ({ cmd: "ui", do: id, args }) as unknown as ControlCmd;
 
-beforeEach(() => { __resetBench(); clearPeek(); takeGitModal(); takeViewModal("lantern.schedule"); takeViewModal("terminal.resume"); });
+beforeEach(() => { __resetBench(); clearPeek(); takeGitModal(); takeViewModal("lantern.schedule"); takeViewModal("agents.change"); takeViewModal("terminal.resume"); });
 afterEach(() => { onOpenSettings(null); });
 
 describe("runControl — one handler for both spellings", () => {
@@ -248,7 +248,22 @@ describe("the doors of the second batch", () => {
     expect(takeViewModal("lantern.schedule")).toBe(true);
     runControl(ui("terminal.resume"), k.c);
     expect(takeViewModal("terminal.resume")).toBe(true);
-    expect(k.calls).toEqual([["goView", "lantern"], ["goView", "term"]]);
+    expect(k.calls).toEqual([["goView", "agents"], ["goView", "term"]]);
+  });
+
+  it("the Change-the-coordinator dialog latches for the Agents view and brings it up", () => {
+    const k = ctx();
+    runControl(ui("agents.change"), k.c);
+    expect(takeViewModal("agents.change")).toBe(true);
+    expect(k.calls).toEqual([["goView", "agents"]]);
+  });
+
+  it("the old names of the Lantern and the chair open the Agents view", () => {
+    for (const to of ["lantern", "seat", "chair", "orchestrator", "agents"]) {
+      const k = ctx();
+      runControl(ui("view.open", { to }), k.c);
+      expect(k.calls).toEqual([["goView", "agents"]]);
+    }
   });
 });
 

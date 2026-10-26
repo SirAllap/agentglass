@@ -28,10 +28,12 @@ describe("the views drain what a door latched", () => {
     expect(drain).toContain('m.which === "palette") setPaletteOpen(true)');
   });
 
-  it("the Lantern view opens its schedule dialog and does nothing else with it", () => {
-    const lantern = src("components/LanternView.tsx");
-    const drain = body(lantern, 'takeViewModal("lantern.schedule")', "subscribeViewModal(run)");
+  it("the Agents screen opens its schedule dialog and its Change dialog, and does nothing else with the latch", () => {
+    const agents = src("components/agents/AgentsView.tsx");
+    const drain = body(agents, 'takeViewModal("lantern.schedule")', "subscribeViewModal(run)");
     expect(drain).toContain("setScheduling(true)");
+    expect(drain).toContain('takeViewModal("agents.change")');
+    expect(drain).toContain("setChange(");
   });
 
   it("the Terminal opens its menu first, and the Sessions list takes the request", () => {

@@ -34,7 +34,7 @@ What you can open: every view and Settings page, one plugin's own page
 bench, a file in the viewer, the Git modals (insights, bisect, the git palette,
 compare, blame, and the rebase editor, which only draws the plan), one event or
 session the window holds (`event.open`, `session.open`), the running version's
-release notes (`whatsnew.open`), the Lantern schedule dialog, the Terminal's
+release notes (`whatsnew.open`), the Agents screen's schedule and Change-the-coordinator dialogs, the Terminal's
 Resume list, and what the pane chords open for the focused terminal pane
 (`pane.open`). Opening only shows: starting a rebase, saving a schedule,
 resuming a session is the person's click. Not doors, on purpose: the people
@@ -115,6 +115,11 @@ The MCP twin has `ui_rules_list`, `ui_rules_suggest` and `ui_rules_set`.
 Each rule is `allow`, `ask` or `never`; when two match, the stricter wins. A
 rule stricter than what is in force applies at once; a looser one waits for
 the person on the approval card and changes nothing until they answer.
+
+The person sees and changes the same list on the Agents screen, in the section
+"What your agents may do": one card per project, a click on Allow, Ask me or
+Never writes through the routes above, and a suggestion is answered (or
+dismissed) there by the person alone.
 
 **A rule the person tells you in chat goes here, never into your private
 memory.** Memory is read by one agent; this list is obeyed by all of them.

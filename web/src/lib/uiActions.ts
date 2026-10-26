@@ -13,7 +13,7 @@
  * phone, a tab with another project): every seam here is a no-op with nothing
  * listening, which is why none of these throws.
  */
-import { UI_ACTIONS, parseArgs, uiOf, type UiActionId, type UiArgs, type UiReply } from "../../../shared/uiActions.ts";
+import { UI_ACTIONS, canonView, parseArgs, uiOf, type UiActionId, type UiArgs, type UiReply } from "../../../shared/uiActions.ts";
 import type { ControlCmd, ViewId } from "../../../shared/types.ts";
 import { openSettings } from "./openSettings.ts";
 import { openFinderAt } from "./finderTarget.ts";
@@ -102,7 +102,7 @@ const paneCheckout = (c: UiCtx): { root?: string } => {
 };
 
 export const UI_HANDLERS: { [Id in UiActionId]: Handler<Id> } = {
-  "view.open": (a, c) => c.goView(a.to),
+  "view.open": (a, c) => c.goView(canonView(a.to) as ViewId),
   "workspace.toggle": (_a, c) => c.workspace(),
   "esc.peel": (_a, c) => c.peel(),
   "panel.open": (a, c) => c.panel(a.what),
@@ -140,7 +140,8 @@ export const UI_HANDLERS: { [Id in UiActionId]: Handler<Id> } = {
   "event.open": async (a, c) => { if (!(await c.openEvent(a.id))) throw new Error("no recent event has that id"); },
   "session.open": (a, c) => c.openSession(a.id, a.app),
   "whatsnew.open": () => showWhatsNew(),
-  "lantern.schedule": (_a, c) => { latchViewModal("lantern.schedule"); c.goView("lantern"); },
+  "lantern.schedule": (_a, c) => { latchViewModal("lantern.schedule"); c.goView("agents"); },
+  "agents.change": (_a, c) => { latchViewModal("agents.change"); c.goView("agents"); },
   "terminal.resume": (_a, c) => { latchViewModal("terminal.resume"); c.goView("term"); },
   "settings.plugin": (a) => openSettings(`plugin:${a.name}`),
   // The chords' own seam. The chord lets the key fall through when nothing

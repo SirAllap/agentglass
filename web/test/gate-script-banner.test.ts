@@ -8,7 +8,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { GateScriptView } from "../src/components/GateScriptBanner.tsx";
 
-const lantern = await Bun.file(new URL("../src/components/LanternView.tsx", import.meta.url).pathname).text();
+const lantern = await Bun.file(new URL("../src/components/agents/AgentsView.tsx", import.meta.url).pathname).text();
 const banner = await Bun.file(new URL("../src/components/GateScriptBanner.tsx", import.meta.url).pathname).text();
 
 describe("the gate-script warning", () => {
@@ -30,7 +30,7 @@ describe("the gate-script warning", () => {
     expect(html).toContain("not bundled with this build");
   });
 
-  test("the Lantern renders it, and it reads the status the server computes", () => {
+  test("the Agents screen renders it, and it reads the status the server computes", () => {
     expect(lantern).toMatch(/<GateScriptBanner active=\{active\} \/>/);
     expect(banner).toContain("gateScriptMissing");
     expect(banner).toContain("api.hooksStatus()");

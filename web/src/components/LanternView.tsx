@@ -1,49 +1,25 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useState } from "react";
 import { fmtAgo, since as agoSentence } from "../lib/format.ts";
-import { jumpToPane } from "../lib/paneJump.ts";
-import { subscribeLantern, lanternRows, lanternChairs, lanternFailed, lanternWatch, lanternCacheTtlMs, refreshLantern, groupLantern } from "../lib/lanternStore.ts";
-import { nestUnderChairs, type ChairGroup } from "../lib/lanternChairs.ts";
-import { choiceLabel, originLine, type Origin } from "../../../shared/orchestration.ts";
-import { askLantern, hasLanternTab } from "../lib/lanternAsk.ts";
-import { subscribeBench } from "../lib/benchStore.ts";
-import { ViewHeader } from "./workspace/ViewHeader.tsx";
+import { originLine, type Origin } from "../../../shared/orchestration.ts";
 import { wash } from "./git/ui.tsx";
 import { modelLabelOf } from "../../../shared/models.ts";
-import { subscribeViewModal, takeViewModal } from "../lib/viewModalIntent.ts";
-import { ScheduleDialog, ScheduledSection, type AgentSchedule } from "./LanternSchedule.tsx";
 import { handOff } from "../lib/lanternAsk.ts";
-import { api } from "../lib/api.ts";
-import { ClockIcon, IconLabel } from "../lib/glyphIcons.tsx";
-import { RefreshButton, EDGE, LINE } from "./workspace/Chrome.tsx";
+import { LINE } from "./workspace/Chrome.tsx";
 import { ICON, MIN_BOX } from "../lib/iconSize.ts";
-import { GearIcon } from "./workspace/icons.tsx";
-import { openSettings } from "../lib/openSettings.ts";
 import { CloseButton } from "./CloseButton.tsx";
-import { forgottenPorts, type Forgotten } from "../lib/portsForgotten.ts";
-import GateScriptBanner from "./GateScriptBanner.tsx";
 
 /**
- * THE LANTERN. Who needs you, what every agent is working on, and the way there.
+ * THE LANTERN'S ROWS. What the board says about one agent, and the card that
+ * draws one.
  *
- * Translated from Herdr's Lantern plugin — "the herd is in the field; Lantern
- * illuminates who needs you and what they are working toward" — with the one
- * difference that matters: its board is a chat you ask, and this is a screen
- * that answers before you ask. The first line is the whole point. Nobody is
- * stopped on you: a calm sentence and nothing shouting. Somebody is: their
- * card, in red or amber, with why, for how long, and a button that goes there.
- * The rail's icon carries the same number, so you find out from any view.
- *
- * It was a tab inside Clone called "Crew" — where nobody found it, under a
- * name that meant nothing ("it makes no sense to me"), drawn as eighteen
- * identical rows of which sixteen were idle and the two that mattered looked
- * the same as the rest. This orders Lantern's way — stopped on you, then
- * moving, then quiet — and folds the quiet ones behind their count.
- *
- * Deliberately not here, and it is not an oversight: no button starts, stops
- * or queues anything. Lantern's `prompt.md` routes "open X with Codex" and
- * "close that tab" through a mutate gate because Herdr has no other surface
- * for those verbs; this app does (Chat, the tab strip, the Clone's Work tab),
- * and two places that command the same thing is how a run gets lost.
+ * The Lantern was a screen of its own: who needs you, what every agent is
+ * working on, and the way there. It is one screen with the project's chair now
+ * (components/agents/AgentsView.tsx), which draws the same rows as a table.
+ * What stays here is what other places still import: the row's shape, the
+ * chair's, the watch's, and `AgentCard`, which the Settings preview of the
+ * Lantern draws. The card is a record of every fact the board keeps about an
+ * agent: a card with nothing to say on a line leaves the line out rather than
+ * drawing a dash.
  */
 export interface LanternRow {
   name: string;
@@ -92,6 +68,8 @@ export interface LanternRow {
     lastAsk?: { text: string; at: number };
     permissionMode?: string;
   };
+  /** The last hour of tool calls, twelve five-minute counts, oldest first. */
+  pulse?: number[];
   /** Its checkout, as git sees it — see GitFacts on the server. */
   git?: { dirty: number; ahead: number; lastCommit?: { subject: string; at: number }; at: number };
 }
@@ -102,6 +80,8 @@ export interface LanternChair {
   root: string; name: string; kind: string; model: string;
   next: { engine: string; model: string } | null;
   handedOff: boolean;
+  /** The person's own session, adopted into the chair. */
+  adopted?: boolean;
 }
 
 /** What the watch last found, riding on the board's answer. */
@@ -399,313 +379,3 @@ export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r:
 export function NeedsYouCard(p: { r: LanternRow; onJump?: (paneId: string) => void }) { return <AgentCard {...p} />; }
 export function LanternLine(p: { r: LanternRow; onJump?: (paneId: string) => void; quiet?: boolean }) { return <AgentCard {...p} />; }
 
-const GRID: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 14, alignItems: "start" };
-
-/**
- * A chair and the workers that answer to it.
- *
- * The workers sit under the chair's card, indented on a rule, so whose they are
- * is read off the shape. One that is stopped on a person is not here (see
- * lanternChairs.ts); the chair says how many of its own are drawn above.
- *
- * "Next in the chair" appears only when the policy resolves to a different
- * engine than the one sitting. It never changes anything by itself: the
- * person says when. The button is in the same place whether it can act or not;
- * until the orchestrator has written down what it knows, it is off and says why.
- */
-function ChairBlock({ g, info, onJump, cacheTtlMs, onChanged }: {
-  g: ChairGroup; info?: LanternChair; onJump: (p: string) => void; cacheTtlMs?: number; onChanged: () => void;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-  const change = async () => {
-    if (!info) return;
-    setBusy(true); setErr("");
-    const r = await api.seatChange(info.root).catch((e) => ({ ok: false, error: String(e) }));
-    setBusy(false);
-    if (!r.ok) setErr(r.error ?? "could not change the chair");
-    onChanged();
-  };
-  return (
-    <div className="flex flex-col gap-2" data-lantern-chair={g.chair.chairOf}>
-      {/* The width of one card in the grid below, so a chair is not a banner. */}
-      <div style={{ width: "min(100%, 520px)" }} className="flex flex-col gap-2">
-      <AgentCard r={g.chair} onJump={onJump} cacheTtlMs={cacheTtlMs} />
-      {info?.next && (
-        <div className="flex items-center gap-3 min-w-0 text-[11px] pl-4" style={{ color: "var(--text3)" }} data-lantern-next>
-          <span className="min-w-0">
-            Next in the chair: <strong style={{ color: "var(--text2)", fontWeight: 600 }}>{choiceLabel(info.next)}</strong>, when you say so.
-            {!info.handedOff && <span style={{ color: "var(--text4)" }}> {info.name} has not written its hand-off yet.</span>}
-          </span>
-          <button type="button" onClick={() => { void change(); }} disabled={busy || !info.handedOff}
-            className="agx-btn ml-auto shrink-0 text-[10.5px] px-2 py-0.5 rounded disabled:opacity-50" style={{ color: "var(--text)", border: EDGE, minHeight: MIN_BOX }}
-            title={info.handedOff ? "Stand this orchestrator down and seat the next engine, which starts from the brief and the doctrine on disk" : "Ask the orchestrator to update its brief and doctrine first; the next one starts from them"}>
-            {busy ? "Changing…" : "Change now"}
-          </button>
-        </div>
-      )}
-      {err && <div className="text-[10.5px] pl-4" style={{ color: "var(--error-ink)" }} role="alert">{err}</div>}
-      </div>
-      {(g.workers.length > 0 || g.above > 0) && (
-        <div className="flex flex-col gap-2 pl-4 ml-3" style={{ borderLeft: LINE }}>
-          {g.above > 0 && <div className="text-[10.5px]" style={{ color: "var(--text4)" }}>{g.above} more {g.above === 1 ? "needs" : "need"} you, above</div>}
-          {g.workers.length > 0 && (
-            <div style={GRID}>
-              {g.workers.map((w) => <AgentCard key={w.paneId ?? w.name} r={w} onJump={onJump} quiet cacheTtlMs={cacheTtlMs} />)}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-
-export function LanternView({ active }: { active: boolean }) {
-  const all = useSyncExternalStore((l) => subscribeLantern(l, active), lanternRows, lanternRows);
-  const failed = useSyncExternalStore((l) => subscribeLantern(l, false), lanternFailed, lanternFailed);
-  const watch = useSyncExternalStore((l) => subscribeLantern(l, false), lanternWatch, lanternWatch);
-  const cacheTtlMs = useSyncExternalStore((l) => subscribeLantern(l, false), lanternCacheTtlMs, lanternCacheTtlMs);
-  const [showIdle, setShowIdle] = useState(false);
-  const [showGone, setShowGone] = useState(false);
-  const [asking, setAsking] = useState<string | null>(null);
-  /* Scheduled starts: read with the view, refreshed after a change. */
-  const [schedules, setSchedules] = useState<AgentSchedule[]>([]);
-  const [checkouts, setCheckouts] = useState<string[]>([]);
-  const [scheduling, setScheduling] = useState(false);
-  // The dialog asked for through the registry (lib/viewModalIntent.ts).
-  useEffect(() => {
-    const run = () => { if (takeViewModal("lantern.schedule")) setScheduling(true); };
-    run();
-    return subscribeViewModal(run);
-  }, []);
-  /* The agent CLIs on this machine, for the cards' hand-off. Read once per open. */
-  const [kinds, setKinds] = useState<{ id: string; title: string }[]>([]);
-  useEffect(() => {
-    if (!active) return;
-    api.agentKinds().then((r) => setKinds((r.agents ?? []).filter((a) => a.installed).map((a) => ({ id: a.id, title: a.title })))).catch(() => {});
-  }, [active]);
-  const readSchedules = useCallback(() => {
-    api.agentSchedules().then((r) => { if (r.ok && r.result) setSchedules(r.result.schedules); }).catch(() => {});
-  }, []);
-  useEffect(() => {
-    if (!active) return;
-    readSchedules();
-    api.agentCheckouts().then((r) => setCheckouts(r.allowed ?? [])).catch(() => {});
-    const t = setInterval(readSchedules, 30_000);
-    return () => clearInterval(t);
-  }, [active, readSchedules]);
-  /* Servers nobody seems to be using. Read with the view, like the schedules. */
-  const [forgotten, setForgotten] = useState<Forgotten[]>([]);
-  useEffect(() => {
-    if (!active) return;
-    const read = () => { api.machinePorts().then((r) => setForgotten(forgottenPorts(r.ports))).catch(() => {}); };
-    read();
-    const t = setInterval(read, 60_000);
-    return () => clearInterval(t);
-  }, [active]);
-  const cancelSchedule = useCallback((id: string) => { void api.agentUnschedule(id).then(readSchedules).catch(() => {}); }, [readSchedules]);
-  const jump = useCallback((paneId: string) => { jumpToPane(paneId); }, []);
-  /* A person taking a line off the board; the field is re-read so the card
-     goes with it rather than lingering until the next poll. */
-  const clear = useCallback((name: string) => { void api.agentForget(name).then(() => refreshLantern()).catch(() => {}); }, []);
-  /* The session, on the floating bench — over this view, and from any other.
-     See lanternAsk.ts. */
-  const ask = useCallback(async () => {
-    setAsking("opening…");
-    const r = await askLantern();
-    setAsking(r.ok ? null : r.error ?? "could not open");
-  }, []);
-
-  /* The observer is not on the field it observes: the Lantern's own session is
-     set aside, never counted, never "needs you". */
-  const rows = all?.filter((r) => r.role !== "lantern") ?? null;
-  /* "Back to the session" only while the bench actually holds its tab — the
-     board's row for a chat that was just ended lingers a few minutes. */
-  const lanternOpen = useSyncExternalStore(subscribeBench, hasLanternTab, hasLanternTab);
-  /* Two kinds of "needs you", and only one of them is urgent. A permission
-     or a held gate is an agent that CANNOT go on without you — red, counted
-     on the rail. A turn that ended is an agent that finished and is waiting
-     for whatever you say next — amber, its own group, not a number on the
-     rail: every session that ever answers you would otherwise be red until
-     you typed again. */
-  const seatedChairs = useSyncExternalStore((l) => subscribeLantern(l, false), lanternChairs, lanternChairs);
-  /* Counts are over every row, nested or not; the sections below are over what
-     is NOT drawn under a chair. A worker stopped on a person is never nested,
-     so "needs you" is the same number either way. */
-  const counts = groupLantern(rows ?? []);
-  const { chairs: nested, rest } = nestUnderChairs(rows ?? []);
-  const { need, finished, working, idle, gone } = groupLantern(rest);
-
-  return (
-    <div className="flex flex-col h-full min-h-0">
-      <ViewHeader label="Lantern"
-        actions={
-          <>
-            {failed && <span className="text-[10.5px]" style={{ color: "var(--warning-ink)" }} title="The last read failed; this is the previous answer">stale</span>}
-            <RefreshButton onRefresh={() => { void refreshLantern(); }} title="Read the field again now" />
-            <button type="button" onClick={() => openSettings("lantern")} aria-label="Lantern settings…" title="Lantern settings…"
-                className="shrink-0 grid place-items-center rounded hover:bg-white/10"
-                style={{ width: MIN_BOX, height: MIN_BOX, color: "var(--text3)" }}><GearIcon size={ICON.xs} /></button>
-            {rows && (
-              <button type="button" onClick={() => setScheduling(true)}
-                className="agx-btn text-[10.5px] px-2 py-0.5 rounded" style={{ color: "var(--text3)", border: EDGE }}
-                title="Start an agent later: at a clock time, a date-time, or after a delay"><IconLabel icon={<ClockIcon size={ICON.xs} />}>Schedule…</IconLabel></button>
-            )}
-            {rows && (
-              <button type="button" onClick={() => { void ask(); }} disabled={asking === "opening…"}
-                className="agx-btn text-[10.5px] px-2 py-0.5 rounded disabled:opacity-60" style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
-                title="A session on the floating bench that opens with this field as its first message — ask in your own words. Ctrl+Alt+A brings it back from any view.">
-                {asking === "opening…" ? "Opening…" : lanternOpen ? "Back to the session" : "Ask about the agents"}
-              </button>
-            )}
-            {asking && asking !== "opening…" && <span className="text-[10.5px]" style={{ color: "var(--error-ink)" }}>{asking}</span>}
-          </>
-        }>
-        {/*
-         * THE FIRST LINE IS THE ANSWER. Lantern's opening sentence: who needs
-         * you, then the size of the field. Calm when nobody does — a screen
-         * that shouts about sixteen idle agents is a screen you stop opening.
-         */}
-        <span className="text-[12px]" style={{ color: need.length ? "var(--error)" : "var(--text2)" }}>
-          {rows === null ? "reading the agents…"
-            : need.length ? `${need.length} agent${need.length === 1 ? "" : "s"} need${need.length === 1 ? "s" : ""} you`
-            : rows.length ? "Nobody needs you right now"
-            : "Nobody is around"}
-        </span>
-        {finished.length > 0 && (
-          <span className="text-[10.5px]" style={{ color: "var(--warning-ink)" }} title="Turns that ended and are waiting for whatever you say next">
-            {finished.length} finished, waiting for you
-          </span>
-        )}
-        {rows !== null && rows.length > 0 && (
-          <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>
-            {counts.working.length} working · {counts.idle.length} idle{counts.gone.length ? ` · ${counts.gone.length} gone` : ""}
-          </span>
-        )}
-        {/* The watch's one line: that it looks, how often, and what the last
-            look found — so "nothing" is a fact with a time on it. */}
-        {watch && (
-          <span className="text-[10.5px]" style={{ color: "var(--text4)" }}
-            title={watch.on ? "The field is re-read on this clock and one notification goes out when something needs you (Settings → Agents → Lantern)" : "Turn the watch on in Settings → Agents → Lantern"}>
-            {watch.on
-              ? watch.at ? `· watched every ${watch.every} min — last look ${fmtAgo(watch.at)} ago${watch.flagged ? `, ${watch.flagged} flagged` : ", nothing flagged"}` : `· watched every ${watch.every} min`
-              : "· watch off"}
-          </span>
-        )}
-      </ViewHeader>
-
-      <div className="flex-1 min-h-0 overflow-y-auto agx-scroll px-5 py-4 flex flex-col gap-6" style={{ background: "var(--bg)" }}>
-        <GateScriptBanner active={active} />
-        {rows !== null && rows.length === 0 && (
-          <div className="text-[11.5px] max-w-[70ch]" style={{ color: "var(--text3)" }}>
-            An agent appears here when its hooks are wired (Settings → Agents), when it says what it is
-            doing — <code>POST /agents/status</code>, which the Lantern reminder asks for. Nothing is inferred from a window being open: a screen that guesses is a
-            screen that lies.
-          </div>
-        )}
-
-        {need.length > 0 && (
-          <section className="flex flex-col gap-2">
-            <div className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--error-ink)" }}>Needs you · {need.length}</div>
-            <div style={GRID}>
-              {need.map((r) => <AgentCard key={r.paneId ?? r.name} r={r} onJump={jump} cacheTtlMs={cacheTtlMs} kinds={kinds} />)}
-            </div>
-          </section>
-        )}
-
-        {finished.length > 0 && (
-          <section className="flex flex-col gap-2">
-            <div className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--warning-ink)" }}>Finished · waiting for you · {finished.length}</div>
-            <div style={GRID}>
-              {finished.map((r) => <AgentCard key={r.paneId ?? r.name} r={r} onJump={jump} cacheTtlMs={cacheTtlMs} kinds={kinds} />)}
-            </div>
-          </section>
-        )}
-
-        {nested.length > 0 && (
-          <section data-lantern-chairs className="flex flex-col gap-4">
-            {nested.map((g) => (
-              <ChairBlock key={g.chair.chairOf} g={g} info={seatedChairs.find((c) => c.root === g.chair.chairOf)}
-                onJump={jump} cacheTtlMs={cacheTtlMs} onChanged={() => { void refreshLantern(); }} />
-            ))}
-          </section>
-        )}
-
-        {working.length > 0 && (
-          <section className="flex flex-col gap-2">
-            <div className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Working · {working.length}</div>
-            <div style={GRID}>
-              {working.map((r) => <AgentCard key={r.paneId ?? r.name} r={r} onJump={jump} cacheTtlMs={cacheTtlMs} kinds={kinds} />)}
-            </div>
-          </section>
-        )}
-
-        <ScheduledSection items={schedules} onCancel={cancelSchedule} />
-
-        {forgotten.length > 0 && (
-          <section data-lantern-ports className="flex flex-col gap-1.5">
-            {/* Quiet on purpose: no colour, no count on the rail. A server left
-                running is worth seeing when you look, not worth a tap on the
-                shoulder — only an agent stopped on you does that. */}
-            <div className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}
-              title="Servers of yours that look forgotten. Stop them in Machine › Ports; nothing is stopped for you.">
-              Forgotten servers · {forgotten.length}
-            </div>
-            <div className="flex flex-col">
-              {forgotten.map(({ port: p, why }) => (
-                <div key={`${p.pid}:${p.port}`} className="flex items-baseline gap-2 text-[11px] min-w-0 py-0.5" style={{ color: "var(--text3)" }}>
-                  <span className="tabular-nums shrink-0" style={{ color: "var(--text2)" }}>{p.port}</span>
-                  <span className="shrink-0">{p.proc ?? "—"}</span>
-                  <span className="truncate min-w-0" style={{ color: "var(--text4)" }} title={p.dir ?? p.cwd ?? ""}>
-                    {(p.dir ?? p.cwd ?? "").split("/").filter(Boolean).pop() ?? ""}
-                  </span>
-                  <span className="ml-auto shrink-0" style={{ color: "var(--text4)" }}>{why.join(" · ")}</span>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-
-        {idle.length > 0 && (
-          <section className="flex flex-col gap-2">
-            {/* Folded by default: on a real machine sixteen of eighteen rows
-                were idle, and a grid that is mostly the quiet ones is the grid
-                the two that matter disappear into. The count stays visible;
-                the cards are one press away, and smaller when they come. */}
-            <button type="button" onClick={() => setShowIdle((v) => !v)} aria-expanded={showIdle}
-              className="agx-btn text-[9.5px] uppercase tracking-[0.14em] inline-flex items-center gap-1.5 self-start" style={{ color: "var(--text4)" }}>
-              <span aria-hidden style={{ display: "inline-block", transform: showIdle ? "none" : "rotate(-90deg)" }}>▾</span>
-              Idle · {idle.length}
-            </button>
-            {showIdle && (
-              <div style={{ ...GRID, gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
-                {idle.map((r) => <AgentCard key={r.paneId ?? r.name} r={r} onJump={jump} onClear={clear} quiet cacheTtlMs={cacheTtlMs} />)}
-              </div>
-            )}
-          </section>
-        )}
-
-        {gone.length > 0 && (
-          <section className="flex flex-col gap-2">
-            {/* Names, not agents: no pane on this machine and quiet for hours.
-                Folded like the idle ones, and each card can be cleared — this
-                is the fold that used to be twenty idle cards. */}
-            <button type="button" onClick={() => setShowGone((v) => !v)} aria-expanded={showGone}
-              className="agx-btn text-[9.5px] uppercase tracking-[0.14em] inline-flex items-center gap-1.5 self-start" style={{ color: "var(--text4)" }}
-              title="No pane on this machine and quiet for hours: a name, not somebody to talk to. Clear the ones you are done with.">
-              <span aria-hidden style={{ display: "inline-block", transform: showGone ? "none" : "rotate(-90deg)" }}>▾</span>
-              Gone · {gone.length}
-            </button>
-            {showGone && (
-              <div style={{ ...GRID, gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
-                {gone.map((r) => <AgentCard key={r.paneId ?? r.name} r={r} onJump={jump} onClear={clear} quiet cacheTtlMs={cacheTtlMs} />)}
-              </div>
-            )}
-          </section>
-        )}
-      </div>
-      <ScheduleDialog open={scheduling} checkouts={checkouts} onClose={() => setScheduling(false)} onAdded={readSchedules} />
-    </div>
-  );
-}

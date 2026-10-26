@@ -16,27 +16,30 @@ const settings = read("src/components/SettingsModal.tsx");
 const api = read("src/lib/api.ts");
 const workspace = read("src/components/workspace/Workspace.tsx");
 const understudy = read("src/components/understudy/UnderstudyPanel.tsx");
-const view = read("src/components/LanternView.tsx");
+const view = read("src/components/agents/AgentsView.tsx") + read("src/components/agents/useAgents.ts");
+const sections = read("src/components/agents/AgentsSections.tsx");
 const app = read("src/App.tsx");
 
 describe("in the rail", () => {
   test("is a view of its own, in the bottom drawer, on a letter nobody else has", () => {
-    const v = VIEWS.find((x) => x.id === "lantern");
+    const v = VIEWS.find((x) => x.id === "agents");
     expect(v, "not registered").toBeDefined();
     expect(v!.group).toBe("utility");
-    expect(v!.label).toBe("Lantern");
-    expect(LETTER_TO_VIEW[v!.key]).toBe("lantern");
+    expect(v!.label).toBe("Agents");
+    expect(LETTER_TO_VIEW[v!.key]).toBe("agents");
+    /* One icon where there were two: the old ids are names for it, not views. */
+    expect(VIEWS.some((x) => (x.id as string) === "lantern" || (x.id as string) === "seat")).toBe(false);
     expect(VIEWS.filter((x) => x.key === v!.key)).toHaveLength(1);
   });
 
   test("its icon lights with how many need you, fed by the one store the view reads too", () => {
-    expect(workspace).toContain("lantern: lanternWaiting > 0 ? { count: lanternWaiting } : {}");
+    expect(workspace).toContain("agents: lanternWaiting > 0 ? { count: lanternWaiting } : {}");
     expect(workspace).toContain("useSyncExternalStore(subscribeLantern, lanternNeed, lanternNeed)");
     expect(view).toContain("subscribeLantern(l, active)");
   });
 
   test("and it is mounted", () => {
-    expect(workspace).toContain('case "lantern": return <LanternView active={active}');
+    expect(workspace).toContain('case "agents": return <AgentsView active={active}');
   });
 });
 
@@ -53,7 +56,7 @@ describe("Ask about the field", () => {
     // Not the Chat view (hidden from his rail; it landed on Git) and not the
     // Terminal view (leaves the board behind): the bench floats over whatever
     // view you are in and its tab is a tmux session that outlives the window.
-    expect(view).toContain('import { askLantern, hasLanternTab } from "../lib/lanternAsk.ts";');
+    expect(view).toContain('import { askLantern, hasLanternTab } from "../../lib/lanternAsk.ts";');
     expect(view).toContain("const r = await askLantern();");
     const ask = read("src/lib/lanternAsk.ts");
     expect(ask).toContain('addTab(root, { kind: "agent", slot, title: LANTERN_TAB_TITLE, agent: r.ticket });');
@@ -86,8 +89,8 @@ describe("Ask about the field", () => {
 
 describe("Go", () => {
   test("goes through the registry App fills — the same resolver a notification uses", () => {
-    expect(view).toContain('import { jumpToPane } from "../lib/paneJump.ts";');
-    expect(view).not.toContain("sysNotify");
+    expect(sections).toContain('import { jumpToPane } from "../../lib/paneJump.ts";');
+    expect(sections).not.toContain("sysNotify");
     expect(app).toContain("setPaneJump((pane) => { void goFromNote({ kind: \"pane\", pane }); })");
   });
 });

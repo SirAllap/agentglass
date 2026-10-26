@@ -220,9 +220,9 @@ export function ruleFor(tool: string, input: unknown): { action: string; match: 
   const words = seg.split(/\s+/).slice(0, 2);
   const plain = words.findIndex((w) => !/^[A-Za-z0-9_.@+-]{1,60}$/.test(w));
   if (plain >= 0) words.length = plain;
-  if (words.length === 0 || QUIET_WORDS.has(words[0])) return null;
+  if (words.length === 0 || QUIET_WORDS.has(words[0]!)) return null;
   // A second word that is a flag or a path is not a subcommand.
-  const keep = words.length === 2 && /^[a-z][a-z0-9-]*$/.test(words[1]) ? words : words.slice(0, 1);
+  const keep = words.length === 2 && /^[a-z][a-z0-9-]*$/.test(words[1]!) ? words : words.slice(0, 1);
   return { action: `bash.${keep.join(".")}`, match: `Bash(${keep.join(" ")}:*)` };
 }
 

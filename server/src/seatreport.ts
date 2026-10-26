@@ -165,6 +165,29 @@ export const unreadReports = (root: string, limit = 20): SeatReport[] => unreadQ
 export const recentReports = (root: string, limit = 8): SeatReport[] => recentQ.all(root, Math.max(1, Math.min(100, limit))).map(toReport);
 export const unreadCount = (root: string): number => countQ.get(root)?.n ?? 0;
 
+/** How long a report stays a live claim. The same 7 days the tmux memory uses
+ *  for "stale": past it, a blocker is history and the screen folds it. */
+export const STALE_REPORT_MS = 7 * 86_400_000;
+const oldQ = db.query<{ n: number }, [string, number]>(`SELECT COUNT(*) AS n FROM seat_report WHERE root = ? AND at < ?`);
+/** Reports older than a week, for the screen's "N old reports" line. The newest
+ *  eight come with the answer; the rest of the history is only a number. */
+export const oldReportCount = (root: string, now = Date.now()): number => oldQ.get(root, now - STALE_REPORT_MS)?.n ?? 0;
+
+/*
+ * DISMISSING A STALE BLOCKER.
+ *
+ * A report is what an agent wrote and stays as written (`raw`); what makes it
+ * a claim on the present are the parsed `blocked` and `need` fields. Dismissing
+ * clears those two on the named rows, so a blocker nobody can answer any more
+ * stops counting without the record being deleted.
+ */
+const resolveQ = db.query<never, [number, string]>(`UPDATE seat_report SET blocked = '', need = '' WHERE id = ? AND root = ?`);
+export function resolveReports(root: string, ids: number[]): number {
+  let n = 0;
+  for (const id of ids) if (Number.isInteger(id)) { resolveQ.run(id, root); n++; }
+  return n;
+}
+
 /*
  * HOW MANY UNREAD REPORTS ARE WORTH A TURN.
  *

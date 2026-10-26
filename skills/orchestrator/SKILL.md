@@ -141,7 +141,7 @@ exit code. The result says `{engine, model, because, envelope}`; read `because`.
   person set to ask. `because` then says which engine it moved off. A failure on a
   later turn, or after work began, is never moved: you get a report and decide.
 - **The chair can change engine, and not by itself.** When the policy names another
-  engine for your chair, the row gets a `next` and the Lantern offers **Change now**
+  engine for your chair, the row gets a `next` and the Agents screen's **Change** dialog offers it
   to the person. A running chair is never swapped by a rule: the person chooses the
   moment, you write your hand-off first, and the new seat is woken on it.
 - **Yours only.** You can prompt, read, key and stop the agents you own: the workers
@@ -160,7 +160,7 @@ exit code. The result says `{engine, model, because, envelope}`; read `because`.
 
 ## The queue
 
-Work is added from the Orchestrator view, and every item carries **what would
+Work is added from the Agents screen, and every item carries **what would
 prove it done** — a test, a file, an output. An item with no stated proof is
 allowed and drawn as missing, because a made-up proof is worse than an
 admitted absence. An item that has beaten two agents stops being handed out

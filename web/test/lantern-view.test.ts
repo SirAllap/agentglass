@@ -1,22 +1,14 @@
 /*
- * THE LANTERN, RENDERED.
+ * THE LANTERN'S CARD, RENDERED.
  *
- * Translated from Herdr's Lantern: the first line is who needs you, a card per
- * agent stopped on you with why and the way there, the quiet ones folded. What
- * is pinned here is what the screen says in each state — because the previous
- * version of this surface said the same thing in every state, which is how it
- * came to be called "0 util".
- *
- * `useSyncExternalStore` renders on the server from the store's snapshot, so
- * the whole view can be drawn here with a board of our choosing.
+ * What one agent's card says: who, why it is stopped, what it is doing, what
+ * git has, the numbers. The screen that lists them is the Agents screen
+ * (agents-view.test.ts); the card is still drawn by the Settings preview.
  */
 import { describe, expect, test } from "bun:test";
 import React from "react";
-import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
-import { LanternView, LanternLine, NeedsYouCard, AgentCard, type LanternRow } from "../src/components/LanternView.tsx";
-import { __setLanternRows } from "../src/lib/lanternStore.ts";
-import { addTab, __resetBench } from "../src/lib/benchStore.ts";
+import { LanternLine, NeedsYouCard, AgentCard, type LanternRow } from "../src/components/LanternView.tsx";
 
 const NOW = Date.now();
 const row = (over: Partial<LanternRow> = {}): LanternRow => ({
@@ -28,42 +20,6 @@ const waiting = (kind: "permission" | "input" | "gate", over: Partial<LanternRow
   needsYou: { kind, why: kind === "input" ? "Claude is waiting for your input" : "Claude needs your permission to use Bash", since: NOW - 5 * 60_000 },
   ...over,
 });
-const view = (rows: LanternRow[] | null) => {
-  __setLanternRows(rows);
-  return renderToStaticMarkup(React.createElement(LanternView, { active: true }));
-};
-
-describe("the first line", () => {
-  test("says nobody needs you, calmly, when nobody does", () => {
-    const html = view([row(), row({ name: "quiet", state: "idle", paneId: "%5" })]);
-    expect(html).toContain("Nobody needs you right now");
-    expect(html).toContain("1 working · 1 idle");
-    expect(html).not.toContain("data-lantern-need");
-  });
-
-  test("says how many need you — a blockage — and, apart, how many finished and wait for you", () => {
-    const html = view([waiting("permission"), waiting("input", { name: "two", paneId: "%6" }), row({ name: "busy", paneId: "%7" })]);
-    expect(html).toContain("1 agent needs you");
-    expect(html).toContain("1 finished, waiting for you");
-    expect(html).toContain("Finished · waiting for you · 1");
-    expect((html.match(/data-lantern-need/g) ?? []).length).toBe(2);
-    // Two blockages count as two.
-    expect(view([waiting("permission"), waiting("gate", { name: "two", paneId: "%6" })])).toContain("2 agents need you");
-  });
-
-  test("and says the field is empty rather than drawing an empty table", () => {
-    const html = view([]);
-    expect(html).toContain("Nobody is around");
-    expect(html).toContain("POST /agents/status");
-  });
-
-  test("while reading, says so — and nothing else pretends to be an answer", () => {
-    const html = view(null);
-    expect(html).toContain("reading the agents");
-    expect(html).not.toContain("Nobody");
-  });
-});
-
 describe("an agent stopped on you", () => {
   test("gets a card: why, for how long, and Go", () => {
     const html = renderToStaticMarkup(React.createElement(NeedsYouCard, { r: waiting("permission"), onJump: () => {} }));
@@ -79,20 +35,6 @@ describe("an agent stopped on you", () => {
     const input = renderToStaticMarkup(React.createElement(NeedsYouCard, { r: waiting("input") }));
     expect(input).toContain("waiting for your next prompt");
     expect(input).not.toContain("var(--error)");
-  });
-
-  test("comes first, above every working row", () => {
-    const html = view([row({ name: "busy-first-in-data" }), waiting("permission", { name: "stopped", paneId: "%9" })]);
-    expect(html.indexOf("stopped")).toBeLessThan(html.indexOf("busy-first-in-data"));
-  });
-});
-
-describe("the quiet ones", () => {
-  test("are folded behind their count, and the working ones are not", () => {
-    const html = view([row({ name: "busy" }), row({ name: "asleep-one", state: "idle", paneId: "%5" }), row({ name: "asleep-two", state: "idle", paneId: "%6" })]);
-    expect(html).toContain("Idle · 2");
-    expect(html).toContain("busy");
-    expect(html).not.toContain("asleep-one");
   });
 });
 
@@ -154,20 +96,6 @@ describe("the cards", () => {
     const r = rich(); r.git = { dirty: 0, ahead: 0, lastCommit: { subject: "Merge pull request #1", at: Date.now() }, at: Date.now() };
     expect(renderToStaticMarkup(React.createElement(AgentCard, { r }))).not.toContain("Merge pull request");
   });
-  test("the Lantern's own session is set aside: not counted, not listed, and the header says the chat is open", () => {
-    __setLanternRows([
-      { name: "Lantern", from: "seen", state: "idle", role: "lantern", paneId: "%1" },
-      { name: "busy", from: "seen", state: "working", paneId: "%2" },
-    ]);
-    const html = renderToStaticMarkup(React.createElement(LanternView, { active: true }));
-    expect(html).toContain("1 working · 0 idle");
-    expect(html).not.toContain('title="Lantern"');
-    // The label follows the BENCH, not the board: a row for a chat just ended lingers.
-    expect(html).toContain("Ask about the agents");
-    addTab("/w", { kind: "agent", slot: 3, title: "lantern", agent: "t" });
-    expect(renderToStaticMarkup(React.createElement(LanternView, { active: true }))).toContain("Back to the session");
-    __resetBench();
-  });
 });
 
 describe("the prompt cache, counted down", () => {
@@ -182,32 +110,3 @@ describe("the prompt cache, counted down", () => {
     expect(none).not.toContain("cache");
   });
 });
-
-describe("scheduled starts", () => {
-  test("the section lists waiting ones with a Cancel and fired ones with what happened; nothing draws for none", async () => {
-    const { ScheduledSection } = await import("../src/components/LanternSchedule.tsx");
-    const now = Date.now();
-    const items = [
-      { id: "a", name: "nightly", cwd: "/w/orbit", kind: "claude", prompt: "run it", yolo: true, due: now + 3_600_000, created: now, firedAt: null, cancelledAt: null, result: "" },
-      { id: "b", name: "morning", cwd: "/w/orbit", kind: "claude", prompt: "", yolo: false, due: now - 3_600_000, created: now - 7_200_000, firedAt: now - 3_600_000, cancelledAt: null, result: "started as morning in pane %31" },
-      { id: "c", name: "broken", cwd: "/w/gone", kind: "claude", prompt: "", yolo: false, due: now - 60_000, created: now - 7_200_000, firedAt: now - 60_000, cancelledAt: null, result: "did not start: its checkout is no longer in the open project" },
-    ];
-    const html = renderToStaticMarkup(React.createElement(ScheduledSection, { items, onCancel: () => {} }));
-    expect(html).toContain("Scheduled · 1 · 2 fired");
-    expect(html).toContain("nightly");
-    expect(html).toContain("run it");
-    expect(html).toContain("· skips permission prompts");
-    expect(html).toContain("started as morning in pane %31");
-    expect(html).toContain("no longer in the open project");
-    expect((html.match(/>Cancel</g) ?? []).length, "only the waiting one can be cancelled").toBe(1);
-    expect(renderToStaticMarkup(React.createElement(ScheduledSection, { items: [], onCancel: () => {} }))).toBe("");
-  });
-  test("the Lantern offers the dialog from its header and reads the schedules through the api", () => {
-    const view = readFileSync(new URL("../src/components/LanternView.tsx", import.meta.url), "utf8");
-    expect(view).toContain(">Schedule…</IconLabel>");
-    expect(view).toContain("api.agentSchedules()");
-    expect(view).toContain("<ScheduledSection items={schedules} onCancel={cancelSchedule} />");
-    expect(view).toContain("<ScheduleDialog open={scheduling}");
-  });
-});
-

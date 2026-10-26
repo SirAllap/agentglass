@@ -34,15 +34,29 @@ import { ACCOUNT_ID_RE, ACCOUNT_PROVIDERS } from "./pluginAccounts.ts";
  * needs that view mounted before anything can answer it, and the alternative was
  * telling the agent to ask a human to click a tab.
  *
- * `seat` (the understudy) is on the list for the ORDINARY reason rather than a
- * special one, and it is worth saying so out loud because the view sounds like it
- * should be an exception: it is a scorecard of decisions a stand-in would have
- * made, it acts on nothing, and everything it shows already rides the same
- * read-only socket. A view the keyboard reaches with one key and /control
- * answers 400 for is the drift a closed list exists to make visible. A retired
- * view (`understudy` left the rail on 2026-09-08) leaves this list with it.
+ * `agents` is the one screen that replaced the Lantern and the project's chair
+ * (see VIEW_ALIASES): who is working, who needs you, what is left behind and who
+ * is minding the project. A retired view (`understudy` left the rail on
+ * 2026-09-08) leaves this list with it, and a renamed one stays reachable by its
+ * old name through the aliases.
  */
-export const VIEW_IDS = ["dash", "git", "diff", "pr", "tasks", "docker", "term", "browser", "files", "lantern", "seat", "plugins"] as const;
+export const VIEW_IDS = ["dash", "git", "diff", "pr", "tasks", "docker", "term", "browser", "files", "agents", "plugins"] as const;
+
+/**
+ * THE NAMES THE AGENTS SCREEN HAD BEFORE IT WAS ONE SCREEN.
+ *
+ * The Lantern and the project's chair (the seat, the orchestrator) became one
+ * view, and every door that opened either one by name keeps working: an agent
+ * that runs `agentglass-ui open lantern`, a script that POSTs `{"cmd":"view",
+ * "to":"seat"}`, a rail layout saved last month. Each old name is accepted
+ * where a view is named and means "agents"; `canonView` is the one place that
+ * says so. The list is closed on purpose, like VIEW_IDS: an alias nobody
+ * wrote down here is a 400, not a guess.
+ */
+export const VIEW_ALIASES = { lantern: "agents", seat: "agents", chair: "agents", orchestrator: "agents" } as const;
+export const VIEW_NAMES = [...VIEW_IDS, ...(Object.keys(VIEW_ALIASES) as (keyof typeof VIEW_ALIASES)[])] as const;
+/** A view's name as the rail knows it: an old name is mapped, anything else passes through. */
+export const canonView = (name: string): string => (VIEW_ALIASES as Record<string, string>)[name] ?? name;
 
 /** The pages Settings can be opened on. `plugin:<name>` pages come and go with
  *  the installed plugins and are not a closed set, so they are not here. */
@@ -219,7 +233,7 @@ const finderStageOk = (a: Record<string, unknown>): Record<string, unknown> | nu
 const prNumberOk = (a: Record<string, unknown>): Record<string, unknown> | null => ((a.number as number) >= 1 ? a : null);
 
 export const UI_ACTIONS = {
-  "view.open": def({ level: 1, kind: "open", surface: "a workspace view", legacy: { cmd: "view" }, args: { to: { t: "enum", values: VIEW_IDS } } }),
+  "view.open": def({ level: 1, kind: "open", surface: "a workspace view", legacy: { cmd: "view" }, args: { to: { t: "enum", values: VIEW_NAMES } } }),
   "workspace.toggle": def({
     level: 1, kind: "open", surface: "the workspace (last view that was not the dashboard)", legacy: { cmd: "workspace" },
     args: { open: { t: "bool", optional: true } },
@@ -283,7 +297,9 @@ export const UI_ACTIONS = {
   }),
   "whatsnew.open": def({ modals: ["ReleaseNotesModal.tsx"], level: 1, kind: "open", surface: "the release notes of the running version, without marking them seen", args: {} }),
   // The dialog creates a schedule only when the owner submits it.
-  "lantern.schedule": def({ modals: ["LanternSchedule.tsx"], level: 1, kind: "open", surface: "the Lantern schedule dialog (empty; a schedule exists only once the owner submits it)", args: {} }),
+  "lantern.schedule": def({ modals: ["LanternSchedule.tsx"], level: 1, kind: "open", surface: "the Agents screen's schedule dialog (empty; a schedule exists only once the owner submits it)", args: {} }),
+  // The dialog changes nothing until the owner presses "Make it the coordinator" (or "Start a coordinator").
+  "agents.change": def({ modals: ["agents/CoordinatorCard.tsx"], level: 1, kind: "open", surface: "the Change the coordinator dialog of the Agents screen, on the project it is looking at", args: {} }),
   "terminal.resume": def({ modals: ["ResumeSessions.tsx"], level: 1, kind: "open", surface: "the Resume sessions list of the Terminal view (resuming is the owner's click)", args: {} }),
   "settings.plugin": def({
     level: 1, kind: "open", surface: "Settings on one plugin's own page (a plugin that is not installed answers with its page saying so)",

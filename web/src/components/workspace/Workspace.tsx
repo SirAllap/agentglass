@@ -37,8 +37,7 @@ import { PrView } from "../PrPanel.tsx";
 import { DockerView } from "../DockerPanel.tsx";
 import { TermView } from "../TerminalPanel.tsx";
 import { BrowserView } from "../BrowserPanel.tsx";
-import { LanternView } from "../LanternView.tsx";
-import { SeatView } from "../SeatView.tsx";
+import { AgentsView } from "../agents/AgentsView.tsx";
 import { subscribeLantern, lanternNeed } from "../../lib/lanternStore.ts";
 import { requestTermReview } from "../../lib/termReview.ts";
 import { requestTermIssue } from "../../lib/termIssue.ts";
@@ -106,7 +105,6 @@ export function Workspace({
      comparison fail for all seven of them — which is the memo doing nothing at
      all. */
   const openBrowser = useCallback(() => onView("browser"), [onView]);
-  const openLantern = useCallback(() => onView("lantern"), [onView]);
 
   /** Send a pull request review to a window on the ENGINE, and go there to
    *  watch it. It used to go to the user's own tmux, and refused outright when
@@ -130,7 +128,7 @@ export function Workspace({
   const pips: Partial<Record<ViewId, RailPip>> = {
     // The lantern lights: how many agents are stopped on a person right now.
     // Not how many agents there are — twenty working is a normal afternoon.
-    lantern: lanternWaiting > 0 ? { count: lanternWaiting } : {},
+    agents: lanternWaiting > 0 ? { count: lanternWaiting } : {},
     // No dot on the terminal. It lit whenever any shell was open, which is
     // always, so it said nothing — and it sat off-centre on the icon.
     // The count of things shouting at you, not the size of your backlog: a
@@ -218,7 +216,7 @@ export function Workspace({
                 {v.id === "dash"
                   ? dashboard(active)
                   : <Body id={v.id} active={active}
-                      openBrowser={openBrowser} openLantern={openLantern} />}
+                      openBrowser={openBrowser} />}
               </ViewBoundary>
             </ViewBox>
           );
@@ -275,9 +273,8 @@ function ViewBox({ active, children }: { active: boolean; children: React.ReactN
 
 /** The non-dashboard views, and the props each one wants. Split out so the map
  *  above stays about mounting rather than about plumbing. */
-function BodyImpl({ id, active, openBrowser, openLantern }: {
+function BodyImpl({ id, active, openBrowser }: {
   id: ViewId; active: boolean;
-  openLantern: () => void;
   /** Bring the browser view forward — the Docker panel asks for it when you
    *  open a container's port, so a dev server lands in a tab of this app
    *  instead of somewhere else. */
@@ -294,13 +291,9 @@ function BodyImpl({ id, active, openBrowser, openLantern }: {
     case "docker": return <DockerView active={active} onOpenBrowser={openBrowser} />;
     case "term": return <TermView active={active} />;
     case "browser": return <BrowserView active={active} />;
-    /* One errand, and only one: the Lantern is the field this post reads, so
-       the seat carries a way across to it rather than drawing the board a
-       second time. */
-    case "seat": return <SeatView onLantern={openLantern} />;
-    /* Its chat is a tab on the floating bench — see lanternAsk.ts. Nothing to
-       hand it. */
-    case "lantern": return <LanternView active={active} />;
+    /* The Lantern and the project's chair, as one screen. Its chat is a tab on
+       the floating bench — see lanternAsk.ts. Nothing to hand it. */
+    case "agents": return <AgentsView active={active} />;
     case "plugins": return <PluginsView active={active} />;
     default: return null;
   }

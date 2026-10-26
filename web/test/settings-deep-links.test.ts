@@ -6,7 +6,6 @@ const files = {
   diff: await read("diff/DiffControls.tsx"),
   bell: await read("TopBarNotes.tsx"),
   usage: await read("TopBar.tsx"),
-  lantern: await read("LanternView.tsx"),
   modal: await read("SettingsModal.tsx"),
   preset: await read("diff/PresetDiff.tsx"),
   git: await read("GitPanel.tsx"),
@@ -18,7 +17,6 @@ describe("panels link to their settings", () => {
     ["terminal", "terminal"],
     ["bell", "notifications"],
     ["usage", "budgets"],
-    ["lantern", "lantern"],
     ["diff", "diff"],
   ] as const)("%s opens the %s page from a gear", (k, pane) => {
     const s = code(files[k]);

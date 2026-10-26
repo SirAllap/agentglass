@@ -52,7 +52,7 @@ import { screenReaderFor } from "./chatpane.ts";
 import { agentProvider } from "../../shared/agentKinds.ts";
 import { SEAT_PROMPT_MARK } from "./seatmark.ts";
 import { queueReadout } from "./seatqueue.ts";
-import { inboxReadout, recentReports, unreadCount, type SeatReport } from "./seatreport.ts";
+import { inboxReadout, oldReportCount, recentReports, unreadCount, type SeatReport } from "./seatreport.ts";
 import { needReadout } from "./seatneed.ts";
 import { BUCKETS, pulses } from "./seatpulse.ts";
 import { lastWoken } from "./seatwoken.ts";
@@ -566,6 +566,14 @@ export function seatSays(root: string, line: string, now = Date.now()): { ok: tr
   saidRow.run(text, now, root);
   keepLine.run(root, text, now);
   return { ok: true };
+}
+
+const routineQ = db.query<{ n: number }, [string]>(
+  `SELECT COUNT(*) AS n FROM seat_line WHERE root = ? AND line LIKE '(looked at %so nobody was woken)'`);
+/** What the screen folds into one line: reports past their week, and the
+ *  rounds that only say "looked, nothing changed" (seatwake.ts). Counts only. */
+export function quietCounts(root: string, now = Date.now()): { oldReports: number; routine: number } {
+  return { oldReports: oldReportCount(root, now), routine: routineQ.get(root)?.n ?? 0 };
 }
 
 /** What it said, newest first. The view's "its day". */
