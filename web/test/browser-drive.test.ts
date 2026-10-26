@@ -2416,9 +2416,11 @@ describe("a page that does not load", () => {
 
 /*
  * Sent through the shell but not confirmed by the page — a page busy past the
- * confirmation window, or one that stops the event before our listener — is
- * NOT a reason to act again in the page: the trusted events already went out
- * and will land, and a second press of "Post" is a second post.
+ * confirmation window, one that stops the event before our listener, or a pane
+ * that was not painting and dropped it — is NOT a reason to act again in the
+ * page: a second press of "Post" is a second post. Nor is it a success: the
+ * answer used to be `clicked` with `confirmed: false`, which is what every act
+ * on a hidden browser view got while the page received nothing at all.
  */
 describe("an act the shell sent is never done again by script", () => {
   const busy = (code: string) => {
@@ -2436,16 +2438,16 @@ describe("an act the shell sent is never done again by script", () => {
     ["press", { key: "Enter" }, "KeyboardEvent"],
   ];
   for (const [op, args, script] of cases) {
-    test(`${op}: answered trusted and unconfirmed, the script path not run`, async () => {
+    test(`${op}: an error that says to observe, the script path not run`, async () => {
       sent.length = 0;
       const el = fakeGuest(busy);
       (el as unknown as { isLoading: () => boolean }).isLoading = () => false;
       const r = await runBrowserAsk(el, ask(op, args), undefined, undefined, undefined, undefined, undefined, undefined, undefined, input as never);
       expect(sent.length).toBeGreaterThan(0);
       expect(el.ran.some((c) => c.includes(script)), `${op} acted twice`).toBe(false);
-      expect(r.ok).toBe(true);
-      expect((r.value as { trusted?: boolean }).trusted).toBe(true);
-      expect((r.value as { confirmed?: boolean }).confirmed).toBe(false);
+      expect(r.ok).toBe(false);
+      expect(r.error).toContain("never showed it arriving");
+      expect(r.error).toContain("observe before acting again");
     }, 8000);
   }
 });
