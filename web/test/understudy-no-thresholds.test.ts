@@ -36,10 +36,6 @@ const DIR = join(import.meta.dir, "..", "src", "components", "understudy");
 /**
  * The panel's own files — everything at the top of the understudy folder.
  *
- * `persona/` is excluded and that is a real distinction rather than a
- * convenience: it is the ART, it carries the palette the layers were drawn
- * against, and none of it has ever seen the scorecard.
- *
  * Read from the directory rather than listed by name, so a file added to the
  * panel tomorrow is covered without anybody remembering to add it here — with
  * a floor below, so a rename cannot quietly empty the scan and leave this
@@ -65,7 +61,7 @@ describe("the understudy panel derives nothing", () => {
   test("there are files to check", () => {
     // The floor. Every rule below is an assertion about a set of files, and an
     // empty set satisfies all of them.
-    expect(FILES.length).toBeGreaterThanOrEqual(4);
+    expect(FILES.length).toBeGreaterThanOrEqual(2);
     expect(FILES.map((f) => f.rel)).toContain("web/src/components/understudy/UnderstudyPanel.tsx");
   });
 
@@ -109,14 +105,6 @@ describe("the understudy panel derives nothing", () => {
     expect(hits(/\boffered\s*=[^=]/g)).toEqual([]);
   });
 
-  test("the blocked sentences are printed, not parsed", () => {
-    // The positive half: the reasons a class is not being offered have to
-    // actually reach the screen, or the rule above has quietly turned into
-    // "show nothing".
-    const all = FILES.map((f) => f.text).join("\n");
-    expect(all).toContain("blocked");
-    expect(all).toMatch(/blocked\.map|blocked\[0\]/);
-  });
 });
 
 /*

@@ -120,12 +120,12 @@ export const DEPS: DepSpec[] = [
   },
   {
     id: "claude", bin: "claude", title: "Claude Code CLI", required: true,
-    what: "The chat panel runs it: every turn, the tmux pane engine, Review with Claude, and the walkthrough.",
+    what: "Terminal agents run it, and so do Review with Claude and the walkthrough.",
     // Moved host: the old docs.claude.com path 301s here. A link that redirects
     // still works and still rots — this one was found pointing at the old host
     // while reading the page for the install line below.
     url: "https://code.claude.com/docs/en/setup",
-    note: "agentglass reads Claude Code's own transcripts either way, so sessions still show up without it. Only chatting from the app needs the CLI.",
+    note: "agentglass reads Claude Code's own transcripts either way, so sessions still show up without it. Only starting agents from the app needs the CLI.",
     // The native installer, which is what the setup page presents as the
     // recommended method on macOS, Linux and WSL. Not a package: there are
     // signed apt/dnf/apk repositories, but each is a key plus a repository plus
@@ -142,10 +142,10 @@ export const DEPS: DepSpec[] = [
   },
   {
     id: "tmux", bin: "tmux", title: "tmux", required: false,
-    what: "Runs each chat as a live pane you can attach to from your own terminal, shows your tmux windows as tabs in the terminal panel, and takes the app's theme.",
+    what: "Runs each agent as a live pane you can attach to from your own terminal, shows your tmux windows as tabs in the terminal panel, and takes the app's theme.",
     url: "https://github.com/tmux/tmux/wiki/Installing",
     platforms: ["linux", "darwin"],
-    note: "Without it chats still run, one process per turn, which is slower to start but costs nothing while idle.",
+    note: "Without it the terminal panel opens a plain shell and agents are not held in panes.",
     pkg: { apt: "tmux", dnf: "tmux", pacman: "tmux", zypper: "tmux", apk: "tmux", brew: "tmux" },
   },
   {
@@ -190,19 +190,19 @@ export const DEPS: DepSpec[] = [
   },
   {
     id: "codex", bin: "codex", title: "Codex CLI", required: false,
-    what: "Runs chats on OpenAI's Codex instead of Claude, as a second engine in the same panel.",
+    what: "Runs worker agents on OpenAI's Codex, and its usage is read through it.",
     url: "https://developers.openai.com/codex/cli",
-    note: "One of three agent CLIs this app can drive. Missing simply means the engine is not offered.",
+    note: "One of the agent CLIs this app can drive. Missing simply means the engine is not offered.",
   },
   {
     id: "agy", bin: "agy", title: "Antigravity CLI", required: false,
-    what: "Runs chats on Antigravity, as a third engine alongside Claude Code and Codex.",
+    what: "Runs worker agents on Antigravity.",
     url: "https://antigravity.google",
     note: "Like Codex, its absence removes an option and nothing else.",
   },
   {
     id: "hermes", bin: "hermes", title: "Hermes Agent CLI", required: false,
-    what: "Runs chats on Hermes Agent, as a fourth engine alongside Claude Code, Codex and Antigravity.",
+    what: "Runs worker agents on Hermes Agent.",
     url: "https://hermes-agent.nousresearch.com/docs/",
     note: "Like Codex and Antigravity, its absence removes an option and nothing else.",
   },
@@ -214,13 +214,13 @@ export const DEPS: DepSpec[] = [
   },
   {
     id: "setsid", bin: "setsid", title: "setsid (util-linux)", required: false,
-    what: "Gives every shell and chat its own process group, so closing one takes its children with it.",
+    what: "Gives every shell its own process group, so closing one takes its children with it.",
     url: "https://github.com/util-linux/util-linux",
     // Used wherever it is found, not only on Linux: the terminal prepends it
     // whenever `Bun.which` turns one up. macOS simply does not ship one, which
     // is why a Mac shows this row as absent rather than as not applicable.
     platforms: ["linux", "darwin"],
-    note: "Without it a closed terminal or chat can leave background processes behind. macOS does not ship it.",
+    note: "Without it a closed terminal can leave background processes behind. macOS does not ship it.",
     pkg: { apt: "util-linux", dnf: "util-linux", pacman: "util-linux", zypper: "util-linux", apk: "util-linux" },
   },
   {

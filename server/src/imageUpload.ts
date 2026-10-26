@@ -15,7 +15,26 @@
  * left, so garbage input silently becomes a short, valid-looking buffer
  * instead of an error.
  */
-import { sniffMediaType } from "./chat.ts";
+
+/** Sniff the real media type from the leading bytes.
+ *
+ *  The client's declared type is a label, not evidence — a `image/png` claim
+ *  over a payload that is something else entirely would still be forwarded
+ *  verbatim to the model. These signatures are a few bytes each, so checking is
+ *  cheap enough to do unconditionally, and it is what makes the declared type
+ *  trustworthy rather than merely allowlisted. */
+export function sniffMediaType(b: Uint8Array): "image/png" | "image/jpeg" | "image/gif" | "image/webp" | null {
+  const at = (i: number) => b[i];
+  if (b.length >= 8 && at(0) === 0x89 && at(1) === 0x50 && at(2) === 0x4e && at(3) === 0x47
+    && at(4) === 0x0d && at(5) === 0x0a && at(6) === 0x1a && at(7) === 0x0a) return "image/png";
+  if (b.length >= 3 && at(0) === 0xff && at(1) === 0xd8 && at(2) === 0xff) return "image/jpeg";
+  // "GIF87a" / "GIF89a" — the version digit differs, the rest does not.
+  if (b.length >= 6 && at(0) === 0x47 && at(1) === 0x49 && at(2) === 0x46 && at(3) === 0x38) return "image/gif";
+  // WebP is a RIFF container: "RIFF" <4-byte size> "WEBP".
+  if (b.length >= 12 && at(0) === 0x52 && at(1) === 0x49 && at(2) === 0x46 && at(3) === 0x46
+    && at(8) === 0x57 && at(9) === 0x45 && at(10) === 0x42 && at(11) === 0x50) return "image/webp";
+  return null;
+}
 
 // A flat character class, not a repeated group: `(?:[A-Za-z0-9+/]{4})*`
 // against an 11-million-character string (the base64 of an 8MB image) hits
@@ -30,8 +49,7 @@ export type ImageUploadResult =
 
 const MAX_BYTES = 8 * 1024 * 1024;
 
-/** Extension for each type `sniffMediaType` (chat.ts) can name — the one
- *  signature table this server keeps, rather than a second copy here. */
+/** Extension for each type `sniffMediaType` can name. */
 const EXT: Record<string, string> = { "image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp" };
 
 /**

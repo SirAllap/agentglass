@@ -22,7 +22,7 @@ moment you open the dashboard, and new sessions tail in live (deduped against
 the hooks, so nothing is double-counted).
 
 Want to focus? **Scope the whole cockpit to the projects you are working on** —
-only those repos (and their worktrees) show up, and their git / terminal / chat
+only those repos (and their worktrees) show up, and their git / terminal
 panels, diffs, and spend are all you see. The natural way is the **in-app
 project picker**, and the **⌂ name in the header** switches it any time.
 
@@ -67,13 +67,13 @@ wins over the file), or by hand:
 
 ## More than a dashboard — a workspace
 
-Watching is only half of it. agentglass grew a set of **lazygit / lazydocker-style panels** — plus a real terminal, a Claude chat, GitHub issues and a file browser — that live right in the app, so you can go from *seeing* what the fleet did to *acting* on it without leaving the tab. Keyboard-driven, and they wear the same 22 themes.
+Watching is only half of it. agentglass grew a set of **lazygit / lazydocker-style panels** — plus a real terminal, GitHub issues and a file browser — that live right in the app, so you can go from *seeing* what the fleet did to *acting* on it without leaving the tab. Keyboard-driven, and they wear the same 22 themes.
 
 The 0.8 redesign made the workspace **the whole window** rather than a modal over the dashboard. A **rail** down the left switches between the views, and the dashboard — the cockpit above — is now the first of them, one key away whenever you want it back. Every view has the same fixed-height title bar and the same list width, so switching changes the panel and nothing else moves.
 
-The rail carries **Dashboard** `1`, **Git** `g`, **Diff** `d`, **Pull requests** `p`, **Tasks** `i`, **Docker** `o`, **Terminal** `t`, **Chat** `c`, a **Browser** `b` where the build has one, **Files** `e`, **Clone** `u` and **Lantern** `l`. Drag it to reorder — put the terminal at the bottom if that is where your thumb goes — and the numbered shortcuts follow your arrangement, so the tooltips never start lying. Drag the seam beside any list to resize it; every view shares that width, and it is remembered.
+The rail carries **Dashboard** `1`, **Git** `g`, **Diff** `d`, **Pull requests** `p`, **Tasks** `i`, **Docker** `o`, **Terminal** `t`, a **Browser** `b` where the build has one, **Files** `e`, and **Lantern** `l`. Drag it to reorder — put the terminal at the bottom if that is where your thumb goes — and the numbered shortcuts follow your arrangement, so the tooltips never start lying. Drag the seam beside any list to resize it; every view shares that width, and it is remembered.
 
-**Two kinds of shortcut, because they answer different questions.** On the dashboard, bare letters jump straight to a view — `g` `d` `p` `i` `o` `t` `c` `e` `u` `l`. Inside any other view every keystroke belongs to whatever has focus, usually a shell, so navigation there carries a modifier: `Ctrl+1`…`Ctrl+N` walk the rail in order, `Ctrl+[` / `Ctrl+]` cycle it, and `Ctrl+\` (`⌘\`) toggles between the dashboard and the last view you were in. Both sets are rebindable in **Settings ▸ Shortcuts**, and the modified one takes any combination you like — `Ctrl+Alt+J` is recorded exactly as you hold it.
+**Two kinds of shortcut, because they answer different questions.** On the dashboard, bare letters jump straight to a view — `g` `d` `p` `i` `o` `t` `e` `l`. Inside any other view every keystroke belongs to whatever has focus, usually a shell, so navigation there carries a modifier: `Ctrl+1`…`Ctrl+N` walk the rail in order, `Ctrl+[` / `Ctrl+]` cycle it, and `Ctrl+\` (`⌘\`) toggles between the dashboard and the last view you were in. Both sets are rebindable in **Settings ▸ Shortcuts**, and the modified one takes any combination you like — `Ctrl+Alt+J` is recorded exactly as you hold it.
 
 ![settings — every shortcut, rebindable, with the key that works anywhere beside the one that works on the dashboard](../.github/assets/settings-shortcuts.png)
 
@@ -83,11 +83,11 @@ The rail carries **Dashboard** `1`, **Git** `g`, **Diff** `d`, **Pull requests**
 
 A strip across the top of the window, always visible, whatever view you are in.
 
-It carries what you would otherwise go looking for — commits **to push** and **to pull**, live **shells**, chats **waiting** on you, your Anthropic **5-hour and weekly plan meters**, a clock — plus a **bell** with everything that has happened while you were elsewhere, and one lane in the middle for the thing that just did.
+It carries what you would otherwise go looking for — commits **to push** and **to pull**, live **shells**, your Anthropic **5-hour and weekly plan meters**, a clock — plus a **bell** with everything that has happened while you were elsewhere, and one lane in the middle for the thing that just did.
 
 And it mirrors **your machine's own notifications**: agentglass runs fullscreen, so the Slack banner your desktop draws is behind the app that is covering it. Those arrive as **cards** over the top-right corner — sender, message, and the link if the message carried one — and then wait in the bell. A copy, never an interception: your desktop still shows its own, and agentglass never becomes the notification daemon. Capability-probed on the server, so a platform without a notification bus says so instead of offering a switch that does nothing.
 
-Two switches in **Settings ▸ Notifications**, because there are two sources. **From your desktop** is off by default (it reads every notification you receive) with a second choice of how much to show — who it was from, or the whole message — and a *quiet* mode that keeps collecting without interrupting. **From agentglass** is on, and turning it off silences chats finishing and branches falling behind while still letting anything *held waiting on you* speak. Neither switch stops the bell collecting: silence is about interruption, never about the record.
+Two switches in **Settings ▸ Notifications**, because there are two sources. **From your desktop** is off by default (it reads every notification you receive) with a second choice of how much to show — who it was from, or the whole message — and a *quiet* mode that keeps collecting without interrupting. **From agentglass** is on, and turning it off silences branches falling behind while still letting anything *held waiting on you* speak. Neither switch stops the bell collecting: silence is about interruption, never about the record.
 
 On macOS the desktop app raises an alert that leads somewhere from its main process, so it can carry action buttons (the same in-app destinations a click goes to, never a deed like re-running a check); Linux and Windows keep the plain click. The macOS buttons are **not yet verified on a real Mac**.
 
@@ -137,7 +137,7 @@ Open one and it has **overview · conversation · commits · files · checks · 
 
 **Reviews work the way GitHub's do.** Line comments queue as drafts (a `pending` chip counts them) and go up together as one review — approve, request changes or comment — so a half-finished review never lands in someone's inbox a line at a time. Threads belong to the review that opened them, are anchored to the code they are about, link out when you do want the browser, and the app declines to let you approve your own pull request.
 
-**A PR's overview is also where you act on it.** It leads with whether the thing can land and what is stopping it, each blocker linking to the tab that would fix it. Squash-and-merge (pinned to the head SHA, so a push you have not seen makes GitHub refuse; optionally deleting the branch), enable auto-merge, close, update the branch from base, convert to or from draft, re-run failed checks — merges and closes behind a confirm dialog. The description is **editable in place**, with Write and Preview, and any checklist in it gets a progress bar. And **Review with Claude**: it opens the chat panel on this project with the review prompt already written, pinned to the PR's head SHA and pointed at `gh pr diff` for the change itself. It writes nothing — no fetch, no checkout, no directory left in your repository — and the prompt waits in the composer rather than sending itself, so the run starts when you say so. Same trick behind **Ask Claude why** on a failing check, which hands over the job that broke instead of the whole diff.
+**A PR's overview is also where you act on it.** It leads with whether the thing can land and what is stopping it, each blocker linking to the tab that would fix it. Squash-and-merge (pinned to the head SHA, so a push you have not seen makes GitHub refuse; optionally deleting the branch), enable auto-merge, close, update the branch from base, convert to or from draft, re-run failed checks — merges and closes behind a confirm dialog. The description is **editable in place**, with Write and Preview, and any checklist in it gets a progress bar. And **Review with Claude**: it opens a terminal window on this project with the review prompt already written, pinned to the PR's head SHA and pointed at `gh pr diff` for the change itself. It writes nothing — no fetch, no checkout, no directory left in your repository — and the prompt waits in the composer rather than sending itself, so the run starts when you say so. Same trick behind **Ask Claude why** on a failing check, which hands over the job that broke instead of the whole diff.
 
 Check results notify you only for the pull requests you have a stake in — the ones you authored (**mine**) and the ones waiting on your review. Browsing **all** shows every PR's check state but never pushes a notification, and each PR notifies once per verdict however many checks it runs.
 
@@ -201,22 +201,13 @@ Electron window compositor rather than xterm.
 
 ![terminal panel](../.github/assets/terminal.png)
 
-### 💬 Chat — drive Claude, Codex and Antigravity sessions from the browser &nbsp;`c`
+### Claude model catalogue
 
-Multi-chat against your **local `claude`, `codex` or `agy` CLI**: pick a repo/worktree,
-a model, and a permission mode (plan → default / acceptEdits → bypass), then converse —
-replies stream in, tool calls appear as chips, and follow-ups resume the same
-session. Sessions you start here show up in the fleet like any other agent.
+Claude Code publishes no model list at all — there is no `claude models`
+subcommand, no `--list-models`, and nothing cached on disk — so its catalogue
+lives in [`shared/claude-models.json`](../shared/claude-models.json).
 
-#### Which models the Chat panel offers
-
-Every list is the CLI's own answer rather than a table in this repo. Codex reads
-its `models_cache.json`; Antigravity answers `agy models`. Claude Code publishes
-no list at all — there is no `claude models` subcommand, no `--list-models`, and
-nothing cached on disk — so its catalogue lives in
-[`shared/claude-models.json`](../shared/claude-models.json).
-
-It is **data, not code**: edit that file and the dropdown follows on the next
+It is **data, not code**: edit that file and the model pickers follow on the next
 request. No rebuild, no restart.
 
 ```json
@@ -225,7 +216,7 @@ request. No rebuild, no restart.
 ```
 
 A model is offered until its `scheduled_shutdown_date` has passed — that date is
-the last day it appears, so it drops out the day after, and the panel stops
+the last day it appears, so it drops out the day after, and the seat picker stops
 offering retired models without anyone editing anything. `status` is recorded for
 the reader and is deliberately *not* a filter: a `superseded` model still answers
 until it is actually retired, and hiding it early would remove a choice that
@@ -238,106 +229,15 @@ or point `AGENTGLASS_CLAUDE_MODELS` at a file. Ids are validated against the sam
 expression that guards the spawn, so an entry that could not be sent is never
 offered.
 
-#### A second agent: OpenAI Codex
-
-The same panel drives **`codex`** as well. When both CLIs are on the machine an
-agent picker appears next to the repo — it is switchable until the chat has a
-thread, then frozen, because a resume id belongs to the CLI that minted it and
-there is no meaning to handing a live conversation from one to the other.
-
-Codex brings its own vocabulary rather than borrowing Claude's. Its modes are
-filesystem sandboxes (**Read-only**, **Write in this repo**, **⚡ Full access**)
-instead of per-tool permissions, so there is no allowlist box for a Codex chat —
-it decides at the filesystem boundary, not per tool call. The model list is read
-from Codex's own `models_cache.json`, so it follows whatever your CLI currently
-offers instead of a table in this repo that goes stale on every release. Pasted
-and dropped images are Claude-only: `codex exec` takes images as file paths
-rather than content blocks, so the panel says so instead of dropping them
-silently.
-
-A Codex chat shows **tokens but no cost and no context meter**. `codex exec`
-reports neither a price nor a per-turn prompt size, and a bar drawn at 0 / 400k
-would be a claim about a session we know nothing about. Its token counts are
-cumulative for the whole thread rather than per turn, so they are assigned
-rather than added up — and its input count includes the cached part, which is
-subtracted back out so the "In" row means the same thing for both agents.
-
-Install and authenticate the Codex CLI separately, then make sure the `codex`
-executable is on the server's `PATH` when agentglass starts. The chat panel uses
-`codex exec --json` for new turns and `codex exec resume` for follow-ups; it does
-not replace the CLI's own login or configuration. Set `CODEX_HOME` when Codex
-keeps its state somewhere other than `~/.codex` — the model cache and rollout
-history are read from that location. To turn off the Codex integration while
-leaving Claude chat available, set `AGENTGLASS_CODEX_DISABLED=1` before starting
-the server.
-
-#### A third agent: Google Antigravity
-
-The panel drives **`agy`** as well — Google's agentic CLI, and a **separate
-product from the Gemini CLI**: a separate binary with separate state, whose
-model list spans Anthropic and open-weight models as well as Google's. Wiring
-one does nothing for the other, and the Gemini CLI keeps its own OpenTelemetry
-route onto the radar unchanged.
-
-Its four modes line up with Claude's — **Ask**, **Plan**, **Auto-accept edits**,
-**⚡ Bypass** — because it really does decide per tool call rather than by
-drawing a line around the filesystem. The model list comes from `agy models`, so
-it follows whatever your CLI currently offers. Like Codex, it takes images as
-file paths rather than content blocks, so pasted images are refused with a
-sentence instead of being dropped.
-
-Two honest gaps, both consequences of Antigravity exporting no telemetry of its
-own:
-
-- **Only chats started here appear in the fleet.** Claude reports through hooks
-  and Codex through OpenTelemetry; Antigravity reports through neither, so
-  agentglass turns the frames of the turns *it* runs into events. An `agy` you
-  ran in a terminal stays invisible.
-- **There is no ↩ resume for it, and no cost or context meter.** Antigravity
-  keeps each conversation as a SQLite database of protobuf blobs on an
-  undocumented internal schema, so there is no history to replay; and the stream
-  reports neither a price nor a context window. Tokens are shown, because those
-  it does report.
-
-Install and authenticate the CLI separately, and make sure `agy` is on the
-server's `PATH` when agentglass starts. To turn it off while leaving the other
-two, set `AGENTGLASS_ANTIGRAVITY_DISABLED=1`.
-
-**↩ resume** picks up a session that already exists — including one you started
-in a terminal — with its full context intact, and opens it against the CLI that
-created it. Sessions that are still running are listed but can't be picked: a
-session has a single owner, and a second writer on the same transcript corrupts
-its history. For Codex the replayed history comes from its rollout in
-`$CODEX_HOME/sessions` (`~/.codex/sessions` by default), since the OpenTelemetry
-stream that puts Codex on the radar carries tool calls but none of the words.
-
-**What a session shows:** the conversation is a **timeline**, not only a chat
-log. Tool runs interleave with messages, each tool card carries the head of its
-output (so a failing test is distinguishable from a passing one without leaving
-the panel), and **subagents** report the parent's session id, so their tool
-calls nest under the `Task` call that spawned them and fold away behind a
-`… +N tool uses` toggle. Images are sent to the model as image blocks; other
-files are quoted into the message. Type `/` in the composer to list and insert
-skills/commands (slash commands are enabled in `-p`, they just weren't
-discoverable).
-
----
-
-![chat panel](../.github/assets/chat.png)
-
----
-
 ### 📁 Files — browse and search a checkout, and open a file to edit &nbsp;`e`
 
 A file tree for any checkout the fleet has touched, one level at a time so a repo with a `node_modules` in it stays cheap to walk. Two searches, because they are two questions: **Names** finds the file called X, **Contents** finds the code that says X. Open a file and it comes up in the app's own editor — the same one the diff viewer and the pull-request panel use — to read, or to edit and save.
 
 ![files — a checkout's tree, with name and content search](../.github/assets/files.png)
 
-### 🧬 Clone — a stand-in that works a queue in its own worktrees &nbsp;`u`
+### 🧬 Knowledge — what the Clone has learned from how you decide
 
-The Clone takes one task at a time from a queue you fill (or from the sources you point it at), cuts a **worktree of its own** off the current tip, seats an agent in it with a brief, lets the tests decide, and leaves the result on disk — a branch with commits, or a note saying why not. Nothing is ever pushed. It runs in **shifts** you open and close, with a cap on minutes and on tasks; the Work tab shows the queue, the run in flight, the pane to watch it in, and its hand raised when it needs a person.
-
-Three things it learned the hard way. A run whose agent goes **quiet** — no new output, no transcript — is warned at ten minutes and stopped at twenty, not left to burn its whole budget. When the agent's **session limit** is hit, the Clone reads the hour the CLI announces, sleeps until then ("Asleep until 15:00" on the Work tab) and picks the work up on its own. And a fresh worktree is **seeded** with what git leaves out: `bun install` runs before the brief, and a `.worktreeinclude` at the repository root names the ignored files (`.env`, local settings) to copy in.
+Not a view: **Settings ▸ Agents ▸ Knowledge**. The Clone records how you decide (allow or deny a tool, merge or not) and answers "what did this person decide before?" for the orchestrator, with a score card of how often its answer would have matched yours. You choose what it may read and what it must never see; it reads nothing until you do, and refuses to read at all without a private-terms list.
 
 ### 🔦 Lantern — who needs you, what every agent is on, and the way there &nbsp;`l`
 
@@ -591,7 +491,6 @@ Most agent dashboards show a live event feed and forget everything on refresh. a
 | 🌿 **Source control** | lazygit in the cockpit: stage, hunk-stage, commit, branch, stash, push/pull — live on any repo the fleet touched (write-gated). |
 | 🐳 **Docker** | lazydocker in the cockpit: containers by compose project, live stats, a log viewer, start/stop/restart (write-gated). |
 | ▶ **Real terminal** | A true PTY shell (your login shell) per repo/worktree over a WebSocket — persistent sessions, plus a described, ready-to-run list of every Makefile target & package script across the whole project, grouped by folder. |
-| 💬 **Claude chat** | Drive local Claude Code sessions from the browser — model + permission-mode picker, streamed replies, resumable sessions that appear in the fleet. |
 | 💰 **Cost & tokens** | Per-event, per-session, per-model USD from a tunable pricing table (input / output / cache-write / cache-read). |
 | ⏱️ **Tool latency** | `PreToolUse`→`PostToolUse` pairing → real p50 / p95 / max per tool. |
 | 📊 **Persistent analytics** | SQLite-backed. `/stats` over any time window survives reloads and restarts. |
@@ -599,7 +498,7 @@ Most agent dashboards show a live event feed and forget everything on refresh. a
 | 🤖 **Per-model breakdown** | Cost & token split across every model — Claude, GPT, Gemini, and more — from a tunable pricing table. |
 | 🧵 **Session lifecycle** | Timeline of every session: start→end, duration, tokens, cost. |
 | 📈 **Anthropic plan usage** | 5-hour + weekly plan-limit meters — shown only when you're viewing Anthropic (the one provider with a usage API), on wide screens. |
-| ⌨ **Command palette + shortcuts** | `Ctrl-K` to filter, switch theme, change window, export; `d` diffs · `g` git · `p` pull requests · `i` tasks · `o` Docker · `t` terminal · `c` chat · `e` files · `u` Clone · `l` Lantern · `k` skills · `s` stats · `/` search; click any event for full details; click an agent to filter to it. |
+| ⌨ **Command palette + shortcuts** | `Ctrl-K` to filter, switch theme, change window, export; `d` diffs · `g` git · `p` pull requests · `i` tasks · `o` Docker · `t` terminal · `e` files · `l` Lantern · `k` skills · `s` stats · `/` search; click any event for full details; click an agent to filter to it. |
 | 🎨 **22 themes** | 11 dark palettes (Midnight Purple, Forest, Ember, Nord, …), each with a light twin — instant switch, remembered. |
 | 🔔 **Alerts** | A held gate reaches whatever is attached: the notch in the cockpit, a **native OS notification** on the desktop, and a paired phone over its own live socket — plus webhook (Slack/Discord), `notify-send` on a headless box and an optional in-app chime. |
 | 💰 **Budgets** | *"No more than $40 a month on this repository."* Per-project and per-model, warned at 80% rather than only when you cross it, counted from the daily rollup as well as live events so a monthly budget really means a month. Settings ▸ Preferences. |

@@ -243,11 +243,11 @@ describe("On this page", () => {
     const t = tocItems([
       { title: "Claude Code hooks", tone: "ok" },
       { title: "Gate", tone: "warn" },
-      { title: "New chats", tone: null },
+      { title: "Worker roles", tone: null },
       { title: "Lost", tone: "checking" },
       { title: "", tone: "ok" },
     ]);
-    expect(t.map((x) => [x.label, x.dot])).toEqual([["Claude Code hooks", "ok"], ["Gate", "warn"], ["New chats", null], ["Lost", null]]);
+    expect(t.map((x) => [x.label, x.dot])).toEqual([["Claude Code hooks", "ok"], ["Gate", "warn"], ["Worker roles", null], ["Lost", null]]);
     expect(t[0]!.id).toBe("c-claude-code-hooks");
   });
 

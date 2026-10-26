@@ -57,6 +57,9 @@ import { StatsModal } from "./components/StatsModal.tsx";
 import { SkillsModal } from "./components/SkillsModal.tsx";
 import { Workspace } from "./components/workspace/Workspace.tsx";
 import { VIEW_IDS, visibleIds, isVisibleView, moveView, loadRail, subscribeRail, SHIPPED_RAIL, loadLastView, type ViewId } from "./components/workspace/views.ts";
+import { sessionCwd } from "./lib/worktree.ts";
+import { resumeInTerminal } from "./lib/sendToTerminal.ts";
+import { useUsageOpens } from "./lib/usageOpens.ts";
 import ServerBanner from "./components/ServerBanner.tsx";
 import GitMissingBanner from "./components/GitMissingBanner.tsx";
 import DbNoticeBanner from "./components/DbNoticeBanner.tsx";
@@ -76,8 +79,6 @@ import { runBootRecipes } from "./components/RecipesPane.tsx";
 import { onOpenPrs, onOpenPr } from "./lib/openPrs.ts";
 import { onOpenCard, openCard } from "./lib/openCard.ts";
 import { onOpenIssue } from "./lib/openIssue.ts";
-import { newChat, chatResuming, applyLiveEvent } from "./lib/chatStore.ts";
-import { sessionCwd } from "./lib/worktree.ts";
 import { SearchModal } from "./components/SearchModal.tsx";
 import { SettingsModal } from "./components/SettingsModal.tsx";
 import { MachinePanel, type MachineTab } from "./components/MachinePanel.tsx";
@@ -270,7 +271,6 @@ export default function App() {
    *  the dashboard header and the workspace rail open the same panel, and a
    *  second copy would be a second poll of /proc. */
   const [machine, setMachine] = useState<MachineTab | null>(null);
-  const [chatFocus, setChatFocus] = useState<string | undefined>(undefined);
   const [searchOpen, setSearchOpen] = useState(false);
   const [sessionView, setSessionView] = useState<{ id: string; app: string } | null>(null);
   const [sound, setSound] = useState(false);
@@ -327,6 +327,11 @@ export default function App() {
     filesOpen || windowsOpen || peek !== null;
   const anyPanelOpenRef = useRef(anyPanelOpen);
   anyPanelOpenRef.current = anyPanelOpen;
+  // The local count of what gets opened (lib/usageOpens.ts): views and modals here, Settings pages in the modal.
+  useUsageOpens({
+    view: wsView, palette: paletteOpen, help: helpOpen, stats: statsOpen, skills: skillsOpen, search: searchOpen,
+    finder: filesOpen, windows: windowsOpen, projectPicker: projectOpen, session: sessionView !== null, machine,
+  });
   // Read by the keydown handler, which subscribes once with an empty dep array
   // — a render value captured there would be the one from the mount.
   const filesOpenRef = useRef(filesOpen);
@@ -369,9 +374,7 @@ export default function App() {
   // thread to itself, and uncovering flushes it in one go.
   //
   // Only for a modal, and never merely because the dashboard is not the view
-  // on screen: the chat panel is a live view fed by these very events, the
-  // fleet spine reads them in every view, and holding them would freeze a
-  // streaming answer mid-word.
+  // on screen: the fleet spine reads them in every view.
   const { events, conn, lastEvent, openTools } = useLive(anyPanelOpen);
   // Read marks shared with the other devices on this server. Started here and
   // not in useLive, which a lane host also runs and which has no badges to
@@ -394,30 +397,6 @@ export default function App() {
     bootFired.current = true;
     runBootRecipes();
   }, [conn]);
-  // The live socket is the app's only real-time source, and until now the chat
-  // panel was the one view that never saw it — a resumed session sat frozen on
-  // whatever had been true when you opened it while the agent kept working.
-  // This is the whole subscription: the store decides which chat, if any, each
-  // event belongs to, and ignores everything else.
-  //
-  // Only the events past the high-water mark. `events` is a rolling buffer of
-  // two thousand and every socket flush replaces the array, so handing the
-  // whole thing to the store each time meant re-walking all of it — and the
-  // store's own "seen" guard doesn't help, because it only records events that
-  // matched an open chat. With no chat open, which is most of the time, nothing
-  // was ever marked and every flush paid for all two thousand. That work lands
-  // on the same thread that draws the terminal, which is where it showed up:
-  // sluggish output and dropped keystrokes.
-  const appliedThrough = useRef(0);
-  useEffect(() => {
-    let high = appliedThrough.current;
-    for (const e of events) {
-      if (e.id <= appliedThrough.current) continue;
-      applyLiveEvent(e);
-      if (e.id > high) high = e.id;
-    }
-    appliedThrough.current = high;
-  }, [events]);
 
   // Which folder is this cockpit about? Ask once on first open when nothing is
   // scoped yet — picking a project up front is what gives the terminal, git
@@ -651,14 +630,13 @@ export default function App() {
    * Everything that is waiting on you, with what can honestly be done about it.
    *
    * The chip used to be a button that went somewhere: first the dashboard, then
-   * the session — a chat when one existed, and SessionModal otherwise. That last
-   * fallback is the one that had to go. SessionModal is a post-mortem headed
+   * the session, which was SessionModal. That fallback is the one that had to go. SessionModal is a post-mortem headed
    * WHAT IT DID; it cannot answer "waiting for your input", so clicking an alarm
    * covered the terminal you were working in with a read-only summary and left
    * you no better off.
    *
    * So the chip opens a panel instead, and this is what it reads. An action is
-   * listed only when it exists: a chat that can carry the reply, a gate the
+   * listed only when it exists: a gate the
    * dashboard can approve, a project this alert belongs to that is not the one
    * you have open. When none of them do, the panel says so and names the
    * directory, which is the useful half of what a destination would have done.
@@ -681,16 +659,11 @@ export default function App() {
         cwd: who?.cwd ?? project,
         project,
         otherProject: other,
-        chatId: sessionId ? (chatResuming(sessionId)?.id ?? null) : null,
         gated: !!sessionId && gates.some((g) => g.session_id === sessionId),
       };
     });
   }, [notifyingAlerts, agents, workspaces, gates]);
 
-  const openChatFor = useCallback((chatId: string) => {
-    setChatFocus(chatId);
-    goView("chat");
-  }, [goView]);
   /** The Approve buttons live on the dashboard's "What needs you" — the one
    *  place in the app that can actually let a held tool call through. */
   const approveOnDash = useCallback(() => { goView("dash"); }, [goView]);
@@ -920,8 +893,7 @@ export default function App() {
 
       // Escape closes open panels, regardless of where focus rests. The real
       // terminal owns Escape while its shell is focused (vim, fzf, Ctrl+R…), so
-      // leave xterm alone. Chat handles its own Escape locally (see ChatPanel)
-      // because a focused textarea can swallow it before it reaches here.
+      // leave xterm alone.
       if (e.key === "Escape") {
         if ((e.target as HTMLElement)?.closest?.(".xterm")) return;
         /*
@@ -1190,7 +1162,6 @@ export default function App() {
      * true now instead of replaying what was true then.
      */
     // Both of these already had a way in and simply were not being handed one.
-    if (g.kind === "chat") { openChatFor(g.id); return; }
     if (g.kind === "settings") { openSettings(g.pane as never); return; }
     // A document: Files, switched to the checkout it lives in, with the folder it is in opened.
     if (g.kind === "file") {
@@ -1218,7 +1189,7 @@ export default function App() {
         ?? (g.branch ? repos.find((r) => r.branch === g.branch) : undefined);
       if (hit) requestWorktreeJump({ view: "git", root: hit.root });
     } catch { /* the view is already open; it just keeps its own scope */ }
-  }, [goView, openChatFor]);
+  }, [goView]);
 
   // The notification and the bell row lead to the same place, because they are
   // the same news arriving twice.
@@ -1246,11 +1217,10 @@ export default function App() {
         // saying all of it, and a strip repeating it is what made the old notch
         // feel like decoration.
         quiet={dashActive}
-        // Whose plan the meters show, when no chat is focused to answer it.
+        // Whose plan the meters show.
         filterProvider={filter.provider}
         needs={needs}
         needsList={needsList}
-        onNeedChat={openChatFor}
         onNeedApprove={approveOnDash}
         onNeedProject={switchProject}
         onNeedTerminal={() => goView("term")}
@@ -1267,10 +1237,10 @@ export default function App() {
         cardJump={cardJump}
         issueJump={issueJump}
         // goView, not the bare setter. Workspace uses this for every "open X"
-        // a panel offers — a chat seeded from Tasks, a review from a pull
-        // request, the Lantern's "Ask about the field" — and a bare
-        // setWsView("chat") on a rail where Chat is hidden is corrected by the
-        // effect above to the first visible view. Measured: with Chat hidden,
+        // a panel offers — a review from a pull request, the Lantern's
+        // "Ask about the field" — and a bare setWsView("lantern") on a rail
+        // where Lantern is hidden is corrected by the effect above to the first
+        // visible view. Measured: with the Lantern hidden,
         // "Ask about the field" landed on Git's Changes tab, and so would every
         // other of those buttons. goView brings the hidden view back first,
         // which is the only honest answer to "open it".
@@ -1278,7 +1248,6 @@ export default function App() {
         onSkills={() => setSkillsOpen(true)}
         onSettings={() => setSettingsOpen(true)}
         onMachine={setMachine}
-        chatFocusId={chatFocus}
         dashboard={(active) => (
           <LazyPanel label="The dashboard">
           <DashboardView
@@ -1323,7 +1292,7 @@ export default function App() {
           gone — its bank became the orchestrator's memory — so it lands on the
           Lantern, which is where an agent stopped on a person actually shows,
           with a Go button onto its pane. */}
-      <AlarmCard onOpenTasks={() => goView("tasks")} onOpenDeputy={() => goView("lantern")} />
+      <AlarmCard onOpenTasks={() => goView("tasks")} />
 
       {/* The bench: a window and a loose button, over every view. Mounted at
           the shell for the same reason the palette is — it is reached from a
@@ -1445,15 +1414,7 @@ export default function App() {
           // repo root would land on the wrong branch with none of its work.
           const cwd = sessionCwd(s);
           if (!cwd) return;
-          // Reuse an open tab for the same session rather than starting a
-          // second one: two chats resuming one id would both write to it.
-          const existing = chatResuming(s.session_id);
-          const chat = existing ?? newChat(cwd, s.model_name || undefined, undefined, {
-            sessionId: s.session_id,
-            title: s.summary?.slice(0, 40) || `${s.source_app}:${s.session_id.slice(0, 8)}`,
-          });
-          setChatFocus(chat.id);
-          goView("chat");
+          void resumeInTerminal(cwd, s.session_id);
         }}
       />
       <CommandPalette
@@ -1472,7 +1433,6 @@ export default function App() {
         onPr={() => goView("pr")}
         onDocker={() => goView("docker")}
         onTerminal={() => goView("term")}
-        onChat={() => goView("chat")}
         onSearch={() => setSearchOpen(true)}
         onClear={clearFilters}
         onZoom={zoom}

@@ -66,6 +66,7 @@ import { requestTermIssue } from "../lib/termIssue.ts";
 import { openSettings } from "../lib/openSettings.ts";
 import { useFindScope } from "../lib/findScope.ts";
 import { handoffTo, setHandoffTo, type HandoffTo } from "../lib/handoffTo.ts";
+import { sendToTerminal, sentNote } from "../lib/sendToTerminal.ts";
 import { openPrs, openPr, prRefFromUrl } from "../lib/openPrs.ts";
 import { otherGithubLinks } from "../../../shared/githubLinks.ts";
 import { requestBrowserNav } from "../lib/browserNav.ts";
@@ -160,9 +161,8 @@ function sinceWords(ms: number): string {
   return `the last ${Math.round(hours / 24)} days`;
 }
 
-export function TasksView({ active, onOpenChatWith, onOpenBrowser, cardJump, issueJump }: {
+export function TasksView({ active, onOpenBrowser, cardJump, issueJump }: {
   active: boolean;
-  onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
   /** Switch to the browser view; a link that is not a card or a pull request opens there. */
   onOpenBrowser?: () => void;
   /** A pull request asking for the card it came from — see lib/openCard.ts.
@@ -298,12 +298,12 @@ export function TasksView({ active, onOpenChatWith, onOpenBrowser, cardJump, iss
             title="Which repository's issues" />
         )}
       </ViewHeader>
-      {source === "local" ? <LocalBody active={active} repos={repos} here={root} onOpenChatWith={onOpenChatWith} />
-      : source === "clickup" ? <ClickUpBody active={active} repos={repos} here={root} onOpenChatWith={onOpenChatWith} onOpenBrowser={onOpenBrowser} jump={cardJump?.tracker === "jira" ? null : cardJump} />
+      {source === "local" ? <LocalBody active={active} repos={repos} here={root} />
+      : source === "clickup" ? <ClickUpBody active={active} repos={repos} here={root} onOpenBrowser={onOpenBrowser} jump={cardJump?.tracker === "jira" ? null : cardJump} />
       /* Same body, other source. The key keeps the two apart: both are this
          component in the same place, and without it a switch of tab would hand
          ClickUp's state to Jira. */
-      : source === "jira" ? <ClickUpBody key="jira" active={active} repos={repos} here={root} onOpenChatWith={onOpenChatWith} onOpenBrowser={onOpenBrowser} jump={cardJump?.tracker === "jira" ? cardJump : null} source={JIRA_BOARD} />
+      : source === "jira" ? <ClickUpBody key="jira" active={active} repos={repos} here={root} onOpenBrowser={onOpenBrowser} jump={cardJump?.tracker === "jira" ? cardJump : null} source={JIRA_BOARD} />
       : (
         <div className="flex flex-col flex-1 min-h-0">
           {source === "all" && <NowBand onChanged={() => {}} />}
@@ -874,13 +874,12 @@ const todayStr = () => {
  * the list behind it knows its own statuses, which is what makes a status
  * picker possible without guessing.
  */
-function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump, source = CLICKUP_BOARD }: {
+function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKUP_BOARD }: {
   active: boolean;
   /** Where boards, cards and writes come from. ClickUp unless a body is given another. */
   source?: BoardSource;
   repos: GitRepoRef[];
   here: string;
-  onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
   onOpenBrowser?: () => void;
   /** "Show me this card" — from the pull-request masthead. See lib/openCard.ts. */
   jump?: CardJump | null;
@@ -2284,9 +2283,10 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
     if (handoffTo() === "term") {
       void requestTermIssue(cwd, windowName(t), text, true, false, t.title)
         .then((done) => setNote(done.ok ? { ok: true, text: `${t.customId || t.id} handed to a pane` } : { ok: false, text: `Not handed over: ${done.error}` }));
-    } else if (onOpenChatWith) onOpenChatWith(cwd, text, t.title.slice(0, 60));
-    else setNote({ ok: false, text: "Chat is not available here" });
-  }, [repos, here, onOpenChatWith]);
+    } else {
+      void sendToTerminal(cwd, text, t.title.slice(0, 60)).then((done) => setNote(sentNote(done, t.customId || t.id)));
+    }
+  }, [repos, here]);
 
   const picked = [...tasks, ...looked].find((t) => t.id === sel) ?? null;
 
@@ -2576,7 +2576,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump,
     : picked
     ? <CardDetail t={picked} today={today} statuses={cardStatuses} fields={cardFields} place={cardPlaceShown}
     writable={boards.writeEnabled} repos={repos} here={here}
-    onOpenChatWith={onOpenChatWith}
+   
     onOpenBrowser={onOpenBrowser}
     wide={wide}
     byId={byId} onGo={(id) => setSel(id)} boardPeople={boardPeople}
@@ -5424,14 +5424,13 @@ function CardHop({ list, id, onGo }: { list: ProviderTask[]; id: string; onGo: (
 /** A card as a read of it answered: partial until the first answer is in. */
 type CardRead = Partial<TaskDetail> & { ok?: boolean; error?: string };
 
-function CardDetail({ t, today, statuses, fields, place, writable, repos, here, onOpenChatWith, onOpenBrowser, onApply, saving, skills, onNote, onFresh, wide, byId, onGo, onOpenList, boardPeople, nav, onClose }: {
+function CardDetail({ t, today, statuses, fields, place, writable, repos, here, onOpenBrowser, onApply, saving, skills, onNote, onFresh, wide, byId, onGo, onOpenList, boardPeople, nav, onClose }: {
   t: ProviderTask; today: string;
   statuses: ListStatus[]; fields: ListField[];
   /** Space / Folder / List, for the card in hand. */
   place?: ListPlace;
   writable: boolean;
   repos: GitRepoRef[]; here: string;
-  onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
   onOpenBrowser?: () => void;
   /**
    * Apply one field, now.
@@ -5993,7 +5992,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                     // The same two destinations a skill offers, through the same
                     // two paths — nothing new is invented here.
                     if (to === "term") { void requestTermIssue(cwd, windowName(t), text, true, yolo, t.title).then((done) => onNote(done.ok ? `${t.customId || t.id} handed to a pane` : `Not handed over: ${done.error}`)); }
-                    else onOpenChatWith?.(cwd, text, t.title.slice(0, 60));
+                    else { void sendToTerminal(cwd, text, t.title.slice(0, 60)).then((done) => onNote(sentNote(done, t.customId || t.id).text)); }
                   }}>
                   <div>{h.label}</div>
                   <div className="text-[9.5px]" style={{ color: "var(--text4)" }}>{h.hint}</div>
@@ -7209,12 +7208,11 @@ function LocalEmpty({ cap, done }: { cap: TaskCapability; done: number }) {
     : <>Nothing here yet.</>);
 }
 
-function LocalBody({ active, repos, here, onOpenChatWith }: {
+function LocalBody({ active, repos, here }: {
   active: boolean;
   repos: GitRepoRef[];
   /** The checkout the header is pointed at — what "here" means everywhere else. */
   here: string;
-  onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
 }) {
   const { data, reload } = useLocalTasks(active);
   const [sel, setSel] = useState<string | null>(null);
@@ -7380,9 +7378,8 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
       void requestTermIssue(cwd, name, "", false).then((done) => { if (!done.ok) setNote({ ok: false, text: `No shell opened: ${done.error}` }); });
       return;
     }
-    if (!onOpenChatWith) { setNote({ ok: false, text: "Chat is not available here" }); return; }
-    onOpenChatWith(cwd, taskPrompt(t), t.description.slice(0, 60));
-  }, [repos, here, onOpenChatWith]);
+    void sendToTerminal(cwd, taskPrompt(t), t.description.slice(0, 60)).then((done) => setNote(sentNote(done, "The task")));
+  }, [repos, here]);
 
   const onKey = useCallback((e: React.KeyboardEvent) => {
     // Asked of the element the key went to, not of one input we happen to know
@@ -7616,7 +7613,7 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
           projects={picker.projects} tags={picker.tags}
           onEdit={(patch) => { void write(() => api.taskEdit(picked.uuid, lineWith(picked, patch), picked.tags, fp)); }}
           onShell={() => openFor(picked, "shell")}
-          onChat={onOpenChatWith ? () => openFor(picked, "chat") : undefined}
+          onChat={() => openFor(picked, "chat")}
           onToggleNote={(oldText, newText) => { void write(() => api.taskNote(picked.uuid, oldText, newText, fp)); }}
           onCancel={async () => { const r = byTask[picked.uuid]; if (r) { await api.reminderCancel(r.id); await nudgeReminders(); reload(); } }} /> : (
           <div className="text-center p-5" style={{ color: "var(--text3)" }}>Pick a task.</div>

@@ -326,35 +326,6 @@ export function pushGate(agent: string, tool: string, summary: string, pane?: st
  * list behind the bell. Reported exactly that way: "it is an alarm I set
  * myself, it has to be more intrusive".
  */
-/**
- * The understudy cannot go on, and needs a person.
- *
- * Urgency 2, and the reason is the same one written above `pushReminder`:
- * freedesktop keeps a CRITICAL notification on screen until it is dismissed
- * instead of expiring it in a few seconds. This is not news — it is a machine
- * that has STOPPED and will stay stopped until somebody looks, which is the
- * exact shape `pushGate` uses for an approval. Anything quieter and the clone
- * spends the night idle while its report sits behind a bell nobody opened.
- *
- * One call rather than a delivery path of its own, so it inherits the webhook,
- * the native notification while a window is open, and `notify-send` when none
- * is. A parallel path is the bug this file already fixed once.
- */
-export function pushUnderstudyStuck(what: string, question: string, tried: string) {
-  if (shouldSend(`understudy:${what}`)) {
-    deliver(
-      "🙋 The deputy is stuck",
-      `${question} Tried: ${tried}.`.slice(0, 300),
-      2,
-      /* Where to go, so the alert that says a machine is waiting also takes
-         you to the screen where you can answer it. */
-      "understudy",
-      { kind: "understudy", source: "understudy" },
-      "autopilot",
-    );
-  }
-}
-
 /** A scheduled start reporting how it went. Named for the Lantern because it
  *  used to share its channel; the watch itself goes through
  *  `pushLanternFindings` below. */

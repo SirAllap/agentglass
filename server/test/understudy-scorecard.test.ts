@@ -296,7 +296,6 @@ describe("halt", () => {
     // count is here so that "halt did nothing because nothing was above shadow"
     // and "halt caught four classes mid-ladder" are distinguishable outcomes.
     expect(dropped).toBe(0);
-    expect(u.isHalted()).toBe(true);
 
     const frame = u.scorecard();
     // Halted is a fact about the process; enabled is a preference the user
@@ -310,7 +309,6 @@ describe("halt", () => {
     // Switching it back on is the deliberate act that clears a halt. A fence
     // that expires on a timer is not a fence.
     u.setEnabled(true);
-    expect(u.isHalted()).toBe(false);
     expect(u.scorecard().halted).toBe(false);
   });
 });

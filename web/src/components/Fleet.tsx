@@ -5,9 +5,7 @@ import { riskChip, riskTitle } from "../lib/riskView.ts";
 import { motion, AnimatePresence } from "motion/react";
 import { stuckBecause, type AgentCard, type AgentOutcome } from "../lib/derive.ts";
 import { Panel } from "./Panel.tsx";
-import { fmtUsd, fmtTokens, fmtEq, eqTitle, fmtAgo, modelLabelOf } from "../lib/format.ts";
-import { RunLanes, legDirs } from "./RunLane.tsx";
-import { runsOf, subscribeRuns, watchRuns } from "../lib/runStore.ts";
+import { fmtUsd, fmtEq, eqTitle, fmtAgo, modelLabelOf } from "../lib/format.ts";
 import { api } from "../lib/api.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import { collisionChip, collisionTitle, collisionsFor } from "../lib/collisions.ts";
@@ -326,30 +324,6 @@ export function Fleet({ agents, activeApp, onSelect, active = true }: { agents: 
   useEffect(() => { if (active) loadCollisions(); /* eslint-disable-line react-hooks/exhaustive-deps */ }, [active]);
   usePoll(active, loadCollisions, 15_000);
 
-  /*
-   * The runs on this machine, and the sessions they have claimed.
-   *
-   * Every run rather than this project's: Fleet is the machine-wide wall — its
-   * own heading is "Every agent session" — and asking `/runs` for one root
-   * would need a root this component is never given. The route takes an empty
-   * root to mean all of them.
-   *
-   * The store is a module and not a hook, for the reason it says so itself: no
-   * suite in this project has a DOM. So it is subscribed to the way the PR
-   * board subscribes to its own stores, with one bump.
-   */
-  const [, bumpRuns] = useState(0);
-  useEffect(() => subscribeRuns(() => bumpRuns((n) => n + 1)), []);
-  useEffect(() => watchRuns(""), []);
-  // The store's `error` is read and not shown, deliberately. A read that fails
-  // after one has succeeded keeps the lanes on screen with stale numbers, which
-  // is right; a read that fails FIRST is indistinguishable from having no runs,
-  // and the likeliest cause of it is a server too old to have the route — which
-  // would put "could not read the runs" on the dashboard of somebody who has
-  // never started one, forever.
-  const runs = runsOf("").runs;
-  const claimed = useMemo(() => legDirs(runs), [runs]);
-
   // Git branch per checkout — joined from the cheap repos list, not a poll of
   // every session. Shared-cwd set is computed once for the whole fleet.
   const [, bumpBranches] = useState(0);
@@ -361,10 +335,6 @@ export function Fleet({ agents, activeApp, onSelect, active = true }: { agents: 
   const groups = useMemo(() => {
     const by = new Map<string, AgentCard[]>();
     for (const a of agents) {
-      // A session that is a leg of a run is drawn in that run's lane instead.
-      // The same card in both places would be one agent that looks like two,
-      // moving in step, and a person counting the wall would count it twice.
-      if (a.cwd && claimed.has(a.cwd)) continue;
       const g = by.get(a.source_app) ?? [];
       g.push(a);
       by.set(a.source_app, g);
@@ -383,7 +353,7 @@ export function Fleet({ agents, activeApp, onSelect, active = true }: { agents: 
         return { app, list, live, subs, lastSeen: Math.max(...list.map((a) => a.lastSeen)) };
       })
       .sort((a, b) => b.live - a.live || b.lastSeen - a.lastSeen);
-  }, [agents, claimed]);
+  }, [agents]);
 
   // A fully-idle group with several sessions collapses by default to cut clutter.
   const isCollapsed = (app: string, live: number, size: number) => overrides[app] ?? (live === 0 && size > 2);
@@ -399,37 +369,14 @@ export function Fleet({ agents, activeApp, onSelect, active = true }: { agents: 
             Filtering: {activeApp}
           </span>
         ) : (
-          // The run count is here because a lane takes rows OUT of the project
-          // groups: without it, three sessions in one run read as "3 live · 0
-          // projects", which is true and looks broken.
           <span className="text-[10px] t-dim2">
             {agents.length} live · {groups.length} projects
-            {runs.length > 0 && ` · ${runs.length} run${runs.length === 1 ? "" : "s"}`}
           </span>
         )
       }
     >
       <div className="overflow-auto h-full space-y-2.5 pr-1">
-        {/* Runs first. A run is the thing somebody came here to watch, and its
-            legs are the rows the groups below no longer hold. */}
-        <RunLanes
-          runs={runs}
-          cards={agents}
-          renderCard={(a) => (
-            <SessionCard
-              key={a.key} a={a}
-              selected={!!activeApp && a.source_app === activeApp}
-              onSelect={onSelect}
-              collisions={collisions}
-              branch={branchForCwd(workingTreeOf(a), branches)}
-              shared={isSharedCwd(workingTreeOf(a), sharedCwds)}
-            />
-          )}
-        />
-        {/* An adopted leg can have no session card at all — that is the normal
-            state of a vendor whose events this machine does not collect — so a
-            lane on screen is enough for this panel not to be empty. */}
-        {agents.length === 0 && runs.length === 0 && <div className="t-dim2 text-[12px] text-center py-8 shimmer rounded-lg">Waiting for agents…</div>}
+        {agents.length === 0 && <div className="t-dim2 text-[12px] text-center py-8 shimmer rounded-lg">Waiting for agents…</div>}
         {groups.map(({ app, list, live, subs }) => {
           const collapsed = isCollapsed(app, live, list.length);
           const def = live === 0 && list.length > 2;

@@ -7,7 +7,7 @@ import { UI_ACTIONS, parseUi, parseArgs, argsRefusal } from "../../shared/uiActi
 
 describe("parseControlCmd — view", () => {
   test("accepts every real view id", () => {
-    for (const to of ["dash", "git", "diff", "pr", "tasks", "docker", "term", "chat", "browser", "files", "lantern", "seat"]) {
+    for (const to of ["dash", "git", "diff", "pr", "tasks", "docker", "term", "browser", "files", "lantern", "seat"]) {
       expect(parseControlCmd({ cmd: "view", to })).toEqual({ cmd: "view", to } as never);
     }
   });
@@ -126,16 +126,9 @@ describe("parseControlCmd — zoom", () => {
   });
 });
 
-describe("parseControlCmd — chat", () => {
-  test("accepts the one chat verb", () => {
-    expect(parseControlCmd({ cmd: "chat", do: "new" })).toEqual({ cmd: "chat", do: "new" });
-  });
-
-  test("rejects every verb outside the closed set", () => {
-    for (const d of ["", "compact", "send", "/compact", "delete", 1, null, undefined, {}]) {
-      expect(parseControlCmd({ cmd: "chat", do: d })).toBeNull();
-    }
-    expect(parseControlCmd({ cmd: "chat" })).toBeNull();
+describe("parseControlCmd — removed verbs", () => {
+  test("the chat verb went with the chat view", () => {
+    expect(parseControlCmd({ cmd: "chat", do: "new" })).toBeNull();
   });
 });
 
@@ -269,7 +262,6 @@ describe("parseControlCmd — the old spellings are registry entries", () => {
       [{ cmd: "view", to: "git" }, { cmd: "ui", do: "view.open", args: { to: "git" } }],
       [{ cmd: "open", what: "help" }, { cmd: "ui", do: "panel.open", args: { what: "help" } }],
       [{ cmd: "open", what: "finder", path: "/a/b" }, { cmd: "ui", do: "finder.open", args: { path: "/a/b" } }],
-      [{ cmd: "chat", do: "new" }, { cmd: "ui", do: "chat.new", args: {} }],
       [{ cmd: "zoom", dir: -1 }, { cmd: "ui", do: "zoom.step", args: { dir: -1 } }],
       [{ cmd: "theme", name: "nord" }, { cmd: "ui", do: "theme.set", args: { name: "nord" } }],
       [{ cmd: "esc" }, { cmd: "ui", do: "esc.peel", args: {} }],

@@ -3,12 +3,10 @@ import { collectAttention, type AttentionInput } from "../src/lib/attention.ts";
 
 const NOW = 1_700_000_000_000;
 const input = (over: Partial<AttentionInput> = {}): AttentionInput =>
-  ({ gates: [], insights: [], alerts: [], chats: [], agents: [], ...over } as AttentionInput);
+  ({ gates: [], insights: [], alerts: [], agents: [], ...over } as AttentionInput);
 
 const gate = (id: string, over = {}) =>
   ({ id, source_app: "orbit", session_id: "s-" + id, tool_name: "Bash", summary: "", created: NOW, ...over }) as any;
-const chat = (id: string, over = {}) =>
-  ({ id, title: "chat " + id, attention: "blocked", blockedTool: "Write", messages: [], createdAt: NOW, ...over }) as any;
 const agent = (key: string, over = {}) =>
   ({ key, session_id: "sess-" + key, source_app: "orbit", status: "idle", outcome: "unanswered", lastSeen: NOW, ...over }) as any;
 
@@ -21,20 +19,6 @@ test("a held tool call is collected as blocking", () => {
   expect(item.level).toBe("blocking");
   expect(item.source).toBe("gate");
   expect(item.target).toEqual({ kind: "session", id: "s-g1", app: "orbit" });
-});
-
-// The gap this whole module exists to close: the panel named "What needs you"
-// had no idea a chat could be blocked.
-test("a blocked chat appears, and names the tool that was refused", () => {
-  const [item] = collectAttention(input({ chats: [chat("c1")] }));
-  expect(item.source).toBe("chat");
-  expect(item.level).toBe("blocking");
-  expect(item.text).toContain("Write");
-});
-
-test("a chat that isn't blocked is not collected", () => {
-  expect(collectAttention(input({ chats: [chat("c1", { attention: "done" })] }))).toEqual([]);
-  expect(collectAttention(input({ chats: [chat("c1", { attention: "none" })] }))).toEqual([]);
 });
 
 test("a session that stopped on an unanswered question is collected", () => {

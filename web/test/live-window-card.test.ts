@@ -12,6 +12,7 @@ const read = (p: string) => Bun.file(new URL(p, import.meta.url)).text();
 const hook = await read("../src/lib/liveWindow.ts");
 const pr = await read("../src/components/PrPanel.tsx");
 const git = await read("../src/components/GitPanel.tsx");
+const sendTo = await read("../src/lib/sendToTerminal.ts");
 const term = await read("../src/components/TerminalPanel.tsx");
 const termIssueSrc = await read("../src/lib/termIssue.ts");
 const code = (s: string) => s.split("\n").filter((l) => !/^\s*(\/\*|\*|\/\/)/.test(l)).join("\n");
@@ -90,11 +91,13 @@ describe("reuse is asked for, never the default", () => {
      a name that does not stand for ONE piece of work must not reuse. */
   const issue = code(termIssueSrc);
   test("requestTermIssue does not reuse unless told to", () => {
-    expect(issue).toContain('effort = "", reuse = false)');
+    expect(issue).toContain(`effort = "", reuse = false, kind = "")`);
   });
   test("the handoffs whose window is one piece of work ask for it", () => {
     expect(code(pr)).toContain('h.model, h.effort, true)');
-    expect(code(pr)).toContain('requestTermIssue(r.cwd, `check-${detail.number}`, prompt, true, false, "", "", "", true)');
+    // The check goes through the shared helper, which is what asks for reuse (and starts the default engine).
+    expect(code(pr)).toContain('sendToTerminal(r.cwd, prompt, `check-${detail.number}`)');
+    expect(sendTo).toContain('requestTermIssue(cwd, windowNameFor(title), prompt, true, false, title, "", "", true,');
     expect(code(git)).toContain('h.model, h.effort, true)');
   });
   test("the socket carries it", () => {

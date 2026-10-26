@@ -50,7 +50,6 @@ const LABELS: Record<string, string> = {
   reminder: "Reminders",
   devices: "Paired devices",
   schedule: "Scheduled starts",
-  chat: "Chats",
   git: "Branches behind",
   ci: "Checks",
   pr: "PR conversation",
@@ -70,7 +69,7 @@ export function sourceLabel(source: string): string {
 
 /** The filter a source sits under in the panel. */
 export type Lane = "agents" | "work" | "desktop";
-const AGENT_SOURCES = new Set(["gate", "agents", "lantern", "errors", "understudy", "chat", "schedule"]);
+const AGENT_SOURCES = new Set(["gate", "agents", "lantern", "errors", "understudy", "schedule"]);
 export function laneOf(source: string): Lane {
   if (isDesktop(source)) return "desktop";
   return AGENT_SOURCES.has(source) ? "agents" : "work";

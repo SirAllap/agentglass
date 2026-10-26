@@ -630,7 +630,7 @@ export interface PowerStatus {
   working: boolean;
   /** The server's reasons for `working`, by source. Null from a server that
    *  does not send them; absent on a shell from before. */
-  why?: { chats: number; runs: number; hooked: number; named: number } | null;
+  why?: { hooked: number; named: number } | null;
   /** What is held now: the logind sleep lock's mode (null when none is
    *  held), the lid switch, the screen, and on a Mac App Nap. */
   locks?: { sleep: string | null; lid: boolean; display: boolean; app: boolean };
@@ -661,8 +661,6 @@ export function powerReadout(s: PowerStatus): { tone: "held" | "idle" | "warn"; 
   if (!s.awake) return { tone: "idle", title: `${s.mode === "agent" ? "Agent mode — idle, nothing is working" : "Always awake, not held yet"}. ${click}` };
   const w = s.why;
   const reasons = w ? [
-    w.chats ? plural(w.chats, "chat") + " mid-turn" : "",
-    w.runs ? plural(w.runs, "run") + " in progress" : "",
     w.hooked ? plural(w.hooked, "agent") + " active in the last 10 minutes" : "",
     w.named ? plural(w.named, "named agent") + " running" : "",
   ].filter(Boolean) : [];

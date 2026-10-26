@@ -67,10 +67,6 @@ const supersetNarrows = (prev: unknown, next: unknown) => { const n = new Set(it
 const MODE_RANK: Record<string, number> = { default: 0, acceptEdits: 1, auto: 2, bypassPermissions: 3 };
 const modeNarrows = (prev: unknown, next: unknown) =>
   typeof prev === "string" && typeof next === "string" && prev in MODE_RANK && next in MODE_RANK && MODE_RANK[next]! < MODE_RANK[prev]!;
-/** New-chat modes from strictest to loosest; "inherit" takes whatever the open chat has, so it counts as the loosest. */
-const CHAT_MODE_RANK: Record<string, number> = { plan: 0, default: 1, acceptEdits: 2, inherit: 3 };
-const chatModeNarrows = (prev: unknown, next: unknown) =>
-  typeof prev === "string" && typeof next === "string" && prev in CHAT_MODE_RANK && next in CHAT_MODE_RANK && CHAT_MODE_RANK[next]! < CHAT_MODE_RANK[prev]!;
 const POWER_RANK: Record<string, number> = { speak: 0, nudge: 1, assign: 2 };
 const powerNarrows = (prev: unknown, next: unknown) =>
   typeof prev === "string" && typeof next === "string" && prev in POWER_RANK && next in POWER_RANK && POWER_RANK[next]! < POWER_RANK[prev]!;
@@ -126,10 +122,7 @@ export const SETTING_CLASSES: Readonly<Record<string, ClassRow>> = {
   "hooks.gate": { class: "escalation", why: `the gate holds a tool call until a person decides: off ${MORE_POWER}`, narrows: onNarrows },
   "gate.answerer": { class: "escalation", why: "who is told when the gate holds an action: the orchestrator is woken for each one, which spends tokens", narrows: (prev, next) => prev === "orchestrator" && next === "me" },
   "gate.onTimeout": LOW("a held action is dropped either way; asking again only repeats the notification inside the same wait"),
-  "chats.startIn": LOW(),
   "phone.alerts": LOW("only whether a paired phone raises its own notification for a watch or a card: the rules, and every alert on the desk, stay as they are"),
-  "chats.mode": { class: "escalation", why: `the permission mode a new chat starts in: ${MORE_POWER}`, narrows: chatModeNarrows },
-  "chats.deny": { class: "escalation", why: `what every chat turn may never do: ${MORE_POWER}`, narrows: supersetNarrows },
   "plugins.master": { class: "escalation", why: `the switch every plugin runs under: on ${MORE_POWER}`, narrows: offNarrows },
   "plugin.*.enabled": { class: "escalation", why: `runs a plugin with what its manifest declares: on ${MORE_POWER}`, narrows: offNarrows },
   "plugin.*.unboxed": { class: "escalation", why: `lets a plugin run outside its box: on ${MORE_POWER}`, narrows: offNarrows },

@@ -87,7 +87,7 @@ describe("deny by default", () => {
     // Reads wearing POST, because their argument is a filesystem path.
     "/git/status",
     // What a phone is for: answering something that is already asked.
-    "/gate/decide", "/chat/send", "/chat/pane/key",
+    "/gate/decide",
     // Saying something has been read, which moves a badge on the other devices
     // and nothing else.
     "/marks",
@@ -142,7 +142,7 @@ describe("the ones that would be a shell", () => {
   });
 
   test("named individually as well, because these are the ones that hurt", () => {
-    for (const r of ["/git/discard", "/git/reset", "/git/push", "/prs/merge", "/prs/close", "/docker/rm", "/update/run", "/chat/attach", "/control", "/editor/open"]) {
+    for (const r of ["/git/discard", "/git/reset", "/git/push", "/prs/merge", "/prs/close", "/docker/rm", "/update/run", "/terminal/tmux/windows", "/control", "/editor/open"]) {
       expect(scopeNeeded("POST", r), r).toBe("full");
     }
   });
@@ -161,13 +161,13 @@ describe("what each level can actually do", () => {
     expect(allowed(c, "GET", "/gate/pending")).toBe(true);
     expect(allowed(c, "POST", "/git/status")).toBe(true);
     expect(allowed(c, "POST", "/gate/decide")).toBe(false);
-    expect(allowed(c, "POST", "/chat/send")).toBe(false);
+    expect(allowed(c, "POST", "/marks")).toBe(false);
   });
 
   test("an answering device unblocks agents, and operates nothing", () => {
     const c = caller("answer");
     expect(allowed(c, "POST", "/gate/decide")).toBe(true);
-    expect(allowed(c, "POST", "/chat/send")).toBe(true);
+    expect(allowed(c, "POST", "/marks")).toBe(true);
     expect(allowed(c, "GET", "/sessions")).toBe(true);
     expect(allowed(c, "POST", "/prs/merge")).toBe(false);
     expect(allowed(c, "POST", "/git/push")).toBe(false);

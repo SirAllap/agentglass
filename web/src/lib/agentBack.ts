@@ -2,7 +2,7 @@
  * The way back from a view an agent switched to.
  *
  * `view.open`, `pane.open` and `workspace.toggle` replace the whole window, and
- * the person loses the chat where the agent keeps talking. Nothing about the
+ * the person loses the terminal where the agent keeps talking. Nothing about the
  * switch is wrong (they asked to be shown), but nothing marked the way back
  * either, so this holds one offer: where the person was, where the agent put
  * them, and who. The chip (components/AgentBackChip.tsx) shows it, and one click
@@ -21,7 +21,7 @@ import type { UiActionId } from "../../../shared/uiActions.ts";
 /** The doors that can replace the whole view. A guard test reads the handler
  *  table as text and fails when a handler that calls `goView(` is not here. */
 export const VIEW_SWITCHERS: readonly UiActionId[] = [
-  "view.open", "workspace.toggle", "pane.open", "chat.new",
+  "view.open", "workspace.toggle", "pane.open",
   "lantern.schedule", "terminal.resume",
   "pr.merge.stage", "pr.comment.stage", "pr.review.stage", "card.move.stage",
   "pr.unstick",

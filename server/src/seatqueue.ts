@@ -2,9 +2,8 @@
  * THE SEAT'S QUEUE — the work a project's orchestrator has been asked to see
  * done, and who is carrying each piece.
  *
- * Small on purpose. This is NOT a second work loop: the clone already has one
- * (understudy-work.ts) with sources, scoring and worktrees, and two things
- * that decide what to work on is how a run gets lost. This is a list a person
+ * Small on purpose. This is NOT a work loop: nothing here picks the work up by itself, and
+ * two things that decide what to work on is how a run gets lost. This is a list a person
  * writes and a seat hands out — the seat picks who, opens the agent, and the
  * queue records that it did.
  *

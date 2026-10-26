@@ -58,13 +58,13 @@ describe("the provider table", () => {
       id: "antigravity", label: "Google Antigravity", bin: "agy", via: "chat",
       configPath: "", match: "antigravity",
       install: "https://antigravity.google/docs/cli",
-      connects: "the chat panel, which turns its own turns into events",
+      connects: "nothing: it exports no hooks or telemetry to connect",
     });
     expect(rows["hermes"]).toEqual({
       id: "hermes", label: "Hermes Agent", bin: "hermes", via: "chat",
       configPath: "", match: "hermes",
       install: "https://hermes-agent.nousresearch.com/docs/",
-      connects: "the chat panel, which turns its own turns into events",
+      connects: "nothing: it exports no hooks or telemetry to connect",
     });
     const { configPath: claudePath, ...claude } = rows["claude-code"]!;
     expect(claude).toEqual({

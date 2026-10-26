@@ -28,7 +28,6 @@
  * decision would be the whole feature's worst mistake.
  */
 import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { runs as workRuns } from "./understudy-work.ts";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import type { UnderstudySource } from "../../shared/types.ts";
@@ -265,34 +264,11 @@ function candidates(): Candidate[] {
     }
   } catch { /* no projects dir is a normal, empty answer */ }
 
-  /*
-   * THE CLONE'S OWN SESSIONS ARE NOT MATERIAL TO LEARN FROM.
-   *
-   * Every run cuts a worktree, and every session in it leaves a transcript
-   * project of its own — so each finished task added another "Transcripts — …"
-   * row to this list, waiting to be ticked. Tick them and the bank fills with
-   * the understudy's words instead of his, which is the one thing it must not
-   * hold: it exists to answer how HE decides, and a copy of a copy is not that.
-   *
-   * Recognised from the runs table rather than guessed from the name. The
-   * worktree path of every run it has ever made is recorded, and the transcript
-   * project for a directory is that path with the separators flattened — so
-   * this is a lookup, not a pattern that will mistake somebody's real project
-   * for one of these.
-   */
-  const mine = new Set(
-    workRuns(200)
-      .map((r) => r.worktree)
-      .filter(Boolean)
-      .map((w) => w.replace(/[/.]/g, "-")),
-  );
-
   // Transcripts last, and per project for the same reason.
   try {
     for (const dir of readdirSync(projects)) {
       const p = join(projects, dir);
       if (!statSync(p).isDirectory()) continue;
-      if (mine.has(dir)) continue;
       out.push({
         id: `transcripts:${dir}`,
         label: `Transcripts — ${prettyProject(dir)}`,

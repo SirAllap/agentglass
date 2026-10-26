@@ -42,7 +42,7 @@ import { ACCOUNT_ID_RE, ACCOUNT_PROVIDERS } from "./pluginAccounts.ts";
  * answers 400 for is the drift a closed list exists to make visible. A retired
  * view (`understudy` left the rail on 2026-09-08) leaves this list with it.
  */
-export const VIEW_IDS = ["dash", "git", "diff", "pr", "tasks", "docker", "term", "chat", "browser", "files", "lantern", "seat", "plugins"] as const;
+export const VIEW_IDS = ["dash", "git", "diff", "pr", "tasks", "docker", "term", "browser", "files", "lantern", "seat", "plugins"] as const;
 
 /** The pages Settings can be opened on. `plugin:<name>` pages come and go with
  *  the installed plugins and are not a closed set, so they are not here. */
@@ -106,13 +106,13 @@ const diskStageOk = (a: Record<string, unknown>): Record<string, unknown> | null
  * The panes no reader describes are listed by UI_READ_NOT_COVERED, with the reason.
  */
 export const READ_PANELS_NOW = [
-  "view", "chat", "bench", "gates", "settings.diff", "settings.terminal", "settings.browser", "settings.notifications",
+  "view", "bench", "gates", "settings.diff", "settings.terminal", "settings.browser", "settings.notifications",
   "settings.prefs", "settings.rail", "settings.keys", "settings.tasks", "settings.appearance", "settings.understudy",
 ] as const;
 export const READ_PANELS_LATE = [
   "settings.hooks", "settings.lantern", "settings.budgets", "settings.recipes", "settings.review-prompts",
   "settings.saved-replies", "settings.tmux", "settings.privacy", "settings.plugins", "settings.log", "settings.about",
-  "machine.disk", "usage.accounts",
+  "machine.disk", "usage.accounts", "usage",
 ] as const;
 export const READ_PANELS = [...READ_PANELS_NOW, ...READ_PANELS_LATE] as const;
 
@@ -230,9 +230,6 @@ export const UI_ACTIONS = {
     level: 1, kind: "open", surface: "the file finder on one absolute path", legacy: { cmd: "open", pin: { what: "finder" } }, chords: ["files.palette"],
     args: { path: { t: "abspath" }, kind: { t: "pathKind", of: "path" } },
   }),
-  // One verb, not a free string: the ones that want to join it, compacting and
-  // sending, reach into a real conversation.
-  "chat.new": def({ level: 1, kind: "open", surface: "a new chat tab", legacy: { cmd: "chat", pin: { do: "new" } }, args: {} }),
   // A palette and a zoom persist (localStorage), which is the effect of a level 2
   // change, so both sit at level 2: refused at level 1 and under READONLY, and
   // counted by the same per-caller write limit. theme.set goes through the

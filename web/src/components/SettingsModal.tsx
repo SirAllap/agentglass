@@ -51,7 +51,8 @@ import { installedNotes, type NotesTarget } from "../lib/whatsNew.ts";
 import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESKTOP, IS_MAC_DESKTOP, HAS_BROWSER } from "../lib/desktop.ts";
 import { overlayOpen } from "../lib/overlays.ts";
 import { Select } from "./Select.tsx";
-import { GateCard, NewChatsCard, WorkerRolesCard } from "./agents/AgentsCards.tsx";
+import { GateCard, WorkerRolesCard } from "./agents/AgentsCards.tsx";
+import { noteOpen } from "../lib/usageOpens.ts";
 import { WORKER_ROLES } from "../../../shared/workerRoles.ts";
 import { ALARM_VOICES, NOTIFY_VOICES, findVoice, playVoice, type Voice } from "../lib/sounds.ts";
 import { alarmVoiceId, setAlarmVoice } from "../lib/alarm.ts";
@@ -74,7 +75,6 @@ import { SettingsToc } from "./SettingsToc.tsx";
 import { NO_FACTS, NO_MARK, groupByName, groupSearch, headerChips, hueVar, connectionsNeeding, navMarks, withNeeds, withProblems, type HeaderChip, type MatchIn, type NavFacts, type PageNeed, type PageProblem } from "../lib/settingsNav.ts";
 import { applyProblem, SAVED_MS } from "../lib/settingsStates.ts";
 import { PageState, useReportHead, useReportProblem, useReportSaving, useSavePhase, type PageHead, type PageStateSink } from "./SettingsPageState.tsx";
-import { RunningPanes } from "./RunningPanes.tsx";
 import { THEMES } from "../lib/highlight.ts";
 import { BudgetsPane } from "./BudgetsPane.tsx";
 import { EnginesPane } from "./engines/EnginesPane.tsx";
@@ -105,7 +105,7 @@ import { LICENCES } from "../lib/licences.gen.ts";
 import { humanBytes } from "../lib/paletteModel.ts";
 import { MOD_KEY } from "../lib/format.ts";
 import { externalUrl } from "../lib/externalUrl.ts";
-import type { UpdateStatus, ReleaseNotes, HookSetupStatus, BrowserUseStatus, LogDigest } from "../../../shared/types.ts";
+import type { UpdateStatus, ReleaseNotes, HookSetupStatus, BrowserUseStatus, LogDigest, UsageOpens } from "../../../shared/types.ts";
 import {
   sysNotifyMode, setSysNotifyMode, setSysNotifyOn, subscribeSysNotifyMode,
   notifyVoiceId, setNotifyVoice,
@@ -113,8 +113,6 @@ import {
   appNotify, subscribeAppNotify,
   type SysNotifyMode, type NotifyCapability,
 } from "../lib/sysNotify.ts";
-import { chatEnginePref, setChatEnginePref, type ChatEnginePref } from "../lib/chatEnginePref.ts";
-import type { TmuxEngineInfo } from "../../../shared/types.ts";
 import type { DepReport, DepStatus } from "../../../shared/deps.ts";
 import { clock24, setClock24 } from "../lib/clockPref.ts";
 import { setSplashOn, splashOn } from "../lib/splashPref.ts";
@@ -145,10 +143,7 @@ import { reviewGateOn, setReviewGate } from "../lib/reviewGatePref.ts";
 import { AskedAlertLog } from "./AskedAlertLog.tsx";
 import { talkNotify, type TalkNotify } from "../lib/talkNotify.ts";
 import { RETENTION, setUnderstudyEnabled, useUnderstudy } from "./understudy/UnderstudyPanel.tsx";
-import { Appearance } from "./understudy/Appearance.tsx";
 import { Teach } from "./understudy/Teach.tsx";
-import { Persona } from "./understudy/persona/Persona.tsx";
-import { setCosmetic, useCosmetic } from "./understudy/persona/cosmeticStore.ts";
 import { emitControl } from "../lib/controlBus.ts";
 import { refreshUnderstudy } from "../lib/understudyStore.ts";
 import { mutedSources, setMuted, sourceLabel, subscribeMuted } from "../lib/notePolicy.ts";
@@ -405,13 +400,6 @@ function OnboardingMark({ done }: { done: boolean }) {
     : <StatusBadge tone="off">Not yet</StatusBadge>;
 }
 
-function Row({ label, hint, kbd, href, download, onClick }: { label: string; hint: string; kbd?: string; href?: string; download?: string; onClick?: () => void }) {
-  return (
-    <SettingRow label={label} hint={hint} href={href} download={download} onClick={href ? undefined : onClick}
-      control={kbd ? <kbd className="chip text-[11px] t-dim justify-self-end">{kbd}</kbd> : undefined} />
-  );
-}
-
 type Pane = "recipes" | "review-prompts" | "saved-replies" | "appearance" | "prefs" | "terminal" | "diff" | "tasks" | "privacy" | "notifications" | "browser" | "rail" | "keys" | "lantern" | "log" | "budgets" | "hooks" | "connections" | "engines" | "orchestration" | "clickup" | "jira" | "tmux" | "remote" | "plugins" | "understudy" | "about" | "onboarding"
   /** A plugin's own settings page, one per plugin that declares any. */
   | `plugin:${string}`;
@@ -521,10 +509,10 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
   { id: "keys", label: "Shortcuts", group: "General", kw: "keyboard keys bindings shortcut chord rebind reset to defaults columns some others", what: "Every key and chord, by where it works. Rebind one and the app warns before it takes a key twice.", icon: KeyboardIcon },
   { id: "terminal", label: "Terminal", group: "Workspace", kw: "terminal launch permissions permission mode ask auto accept edits bypass yolo deny disallowed tools font size cursor typography monospace face renderer gpu focus follows mouse hover pane sloppy scrollback copy on select right-click paste line height tab tabs group groups grouping project name rules prefix runs on engine own tmux shell", what: "How terminals draw, what pointing does, and what an agent may do the moment a terminal launches it.", icon: TerminalIcon },
   /* Its own page, not a block inside Tools & services: it is the engine
-     every pane and every chat runs on, with a binary, a config and a restore of
+     every pane runs on, with a binary, a config and a restore of
      its own — three settings deep is not a row in a list of "is it installed".
      Filed beside Terminal, the view that runs on it. */
-  { id: "tmux", label: "Pane engine", group: "Workspace", kw: "tmux panes engine pane prefix key binary bundled config override restore reboot layout resume socket status bar chat warm cli claude", what: "The engine under every terminal tab: which tmux, how it is configured, and what survives a reboot.", icon: PanesIcon },
+  { id: "tmux", label: "Pane engine", group: "Workspace", kw: "tmux panes engine pane prefix key binary bundled config override restore reboot layout resume socket status bar warm cli claude", what: "The engine under every terminal tab: which tmux, how it is configured, and what survives a reboot.", icon: PanesIcon },
   { id: "diff", label: "Diff", group: "Workspace", kw: "diff split side by side inline unified wrap word wrap changes review default view wrap long lines syntax theme colours", what: "The view you land on, and what happens to a long line.", icon: DiffIcon },
   // Only where there is a browser to configure. A settings tab for something
   // that is not there reads as a broken feature rather than one that doesn't apply.
@@ -537,7 +525,7 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
   // setting is filed under the thing it configures.
   ...(HAS_BROWSER ? [{ id: "browser" as const, label: "Browser", group: "Workspace" as const, kw: "browser web page zoom login cookies import chrome firefox zen profile home search engine", what: "Where the built-in browser starts, and how to bring in the logins you already have.", icon: BrowserIcon }] : []),
   { id: "tasks", label: "Tasks", group: "Workspace", kw: "tasks sources github issues local taskwarrior clickup hide show providers view opens on", what: "Where the Tasks view starts, which trackers feed it, and how a branch finds its card.", icon: ChecklistIcon },
-  { id: "hooks", label: "Agents", group: "Agents", kw: "agents hooks claude code install setup worker roles scout builder reviewer verifier lock model gate who answers nobody answers starts in permission mode deny rules opencode qwen how new chats run warm panes browser agent skill drive", what: "Wire Claude Code into the app, decide how new chats run, and which CLI each worker role uses.", icon: PlugIcon },
+  { id: "hooks", label: "Agents", group: "Agents", kw: "agents hooks claude code install setup worker roles scout builder reviewer verifier lock model gate who answers nobody answers opencode qwen browser agent skill drive", what: "Wire Claude Code into the app, decide who answers the gate, and which CLI each worker role uses.", icon: PlugIcon },
   { id: "engines", label: "Agent engines", group: "Agents", kw: "engine engines provider hermes opencode codex gemini antigravity claude model version minimum signed in sign-in login orchestrator worker role ready test recheck installed update reporting connect events", what: "Every agent CLI on this machine, what it can do inside agentglass, and what is left to wire.", icon: ChipIcon },
   { id: "orchestration", label: "Orchestration", group: "Agents", kw: "orchestration orchestrator main agent chair policy rule rules worker workers scout builder verifier engine model fallback chain ask when it runs usage weekly 5h plan hours budget ceiling envelope network commit write limits retries minutes per turn project override", what: "Which engine runs a project's main agent and does its work, the rules that change that for a while, and what a worker may do.", icon: FlowIcon },
   { id: "lantern", label: "Lantern", group: "Agents", kw: "lantern reminder status what doing needs you ask sessions working on interval orchestrator seat wake floor chair post", what: "What the Lantern may ask of a session, and how often it looks.", icon: LanternIcon },
@@ -545,7 +533,7 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
      both defensible: it is a store of what you did, and it is a thing that
      watches agents work. It is here because the question people arrive with is
      "what is that face in the rail", and the face is about the work. */
-  { id: "understudy", label: "Knowledge", group: "Agents", kw: "knowledge clone learn sources teach precedents decisions bank recall exclusions never see private terms consent portrait persona art look how it looks scorecard watch score", what: "Where the orchestrator learns how you decide — what it may read, what it must never see, and the face it wears.", status: true, icon: UnderstudyIcon },
+  { id: "understudy", label: "Knowledge", group: "Agents", kw: "knowledge clone learn sources teach precedents decisions bank recall exclusions never see private terms consent scorecard watch score", what: "Where the orchestrator learns how you decide — what it may read, and what it must never see.", status: true, icon: UnderstudyIcon },
   { id: "budgets", label: "Usage & budgets", group: "Agents", kw: "usage pace plan budget spend cost limit money threshold codex usage current quota github api rate limit search remaining", what: "Budgets, plan pace, the Codex usage refresh and the GitHub API budget.", icon: BudgetIcon },
   { id: "recipes", label: "Commands", group: "Library", kw: "commands recipes custom script make run shortcut alias task saved own", what: "Commands you keep, with the parts that change asked for when you run them.", icon: CommandIcon },
   /* Filed under the work rather than under the pull-request panel: these are
@@ -581,13 +569,13 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
   { id: "jira", label: "Jira", group: "Connections", kw: "jira atlassian cloud data center site token email personal access token writes changes projects keys prefixes hand off qa assignee status saved views folders board filter tracker connect disconnect", what: "Your Jira site, what agentglass may change there, and the steps a pull request can run on a card.", icon: DiamondIcon },
   { id: "remote", label: "Remote", group: "Connections", kw: "remote access pair phone tailscale token device", what: "Reach this machine from your phone.", icon: PhoneIcon },
   { id: "privacy", label: "Data & privacy", group: "System", kw: "export download data json csv daily totals markdown events skills catalog take out privacy telemetry data local storage retention database credentials tokens tracking analytics who sees", what: "Where your data is, what leaves this machine, and how to take it out.", icon: ShieldIcon },
-  { id: "about", label: "About", group: "System", kw: "about version update release notes changelog credit attribution licence license portrait art", what: "Version, release notes, updates and the third-party licences this build carries.", icon: InfoIcon },
+  { id: "about", label: "About", group: "System", kw: "about version update release notes changelog credit attribution licence license", what: "Version, release notes, updates and the third-party licences this build carries.", icon: InfoIcon },
   { id: "log", label: "Activity", group: "", kw: "activity log history events feed", what: "What the app itself has been doing.", status: true, icon: PulseIcon },
   /* Three things, not the eight a checklist usually lists, because three is
      what the app can actually tell without asking you to swear to it: an
      agent wired in, a provider connected, and the pane engine on PATH are
      each one read away (a settings file, a token, a binary). Whether you
-     have opened a project, run a chat, or read the docs are not — those are
+     have opened a project, run an agent, or read the docs are not — those are
      either true the moment the app can run at all, or true only if you say
      so, and a step nobody can fail is not a step. Eight-minus-three lies
      would have been worse than three honest ones. */
@@ -679,7 +667,7 @@ function BrowserPane({ children }: { children?: React.ReactNode }) {
 
 const PLACE_LABEL: Record<RailPlace, string> = { work: "Top of the rail", utility: "Bottom of the rail", hidden: "Not on the rail" };
 /** The counts the preview wears while a view's count badge is on: invented, one to a view. */
-const DEMO_COUNT: Record<string, number> = { chat: 2, lantern: 1, tasks: 3 };
+const DEMO_COUNT: Record<string, number> = { lantern: 1, tasks: 3 };
 
 /**
  * The rail's layout: the views in their three places, and the one picked.
@@ -1229,7 +1217,6 @@ const VERBS: Record<string, string> = {
   "/prs/unstick-close": "closed (unstick) pull request", "/prs/unstick-reopen": "reopened (unstick) pull request",
   "/prs/review": "reviewed", "/prs/comment": "commented on",
   "/prs/rerun": "re-ran the checks on", "/prs/draft": "changed draft state of",
-  "/chat/send": "started a chat in",
 };
 
 function verb(action: string): string {
@@ -1246,15 +1233,7 @@ function verb(action: string): string {
  * The understudy's own page: the master switch, and what it keeps and for how
  * long.
  *
- * Small on purpose. Everything that is a JUDGEMENT — which class stands where,
- * what is in the way of it, what it may never do — is in the view, because it
- * needs the scorecard beside it to mean anything. What is left here is what a
- * settings page is for: the one switch and the facts about storage.
- *
- * The art credit that used to live here moved to the About page — it is a
- * licence obligation, not an understudy setting, and it was only filed here
- * because that is where the portrait art was built. NOTICE.md's pointer moved
- * with it.
+ * Small on purpose: the one switch, the score card and the facts about storage.
  */
 /** The score, by kind of decision: how often the clone would have answered as the person did. Only decisions the
  *  person typed or clicked are scored (see UnderstudyClassRow.n), and a kind with none is said once, not drawn. */
@@ -1286,7 +1265,6 @@ function ScoreCard({ frame }: { frame: UnderstudyFrame | null }) {
 function UnderstudyPane({ open, onLeave }: { open: boolean; onLeave: () => void }) {
   const frame = useUnderstudy();
   const [err, setErr] = useState<string | null>(null);
-  const [lookOpen, setLookOpen] = useState(false);
 
   // The switch has to show the server's answer, not this dialog's guess: it is
   // refused outright when the server has no auth token (there would be no
@@ -1329,68 +1307,7 @@ function UnderstudyPane({ open, onLeave }: { open: boolean; onLeave: () => void 
       {/* What it learns from lives on this page, not behind a tab in a
           scoreboard: it decides what the orchestrator knows about you. */}
       <Teach active={open} />
-      {/* The look editor is nine screens of pickers: closed until asked for, and drawn OUTSIDE a card when open, because a
-          card clips its corners with overflow hidden and the portrait could no longer stick (see UnderstudyLook). */}
-      <SettingsCard title="How it looks" icon={<UnderstudyIcon size={ICON.sm} />} desc="The face the clone wears, here and in its own view.">
-        <SettingRow agentExempt label="Customise the face" hint="Start from one of the faces, then change what is not you."
-          actions={<Button aria-expanded={lookOpen} onClick={() => setLookOpen((v) => !v)}>{lookOpen ? "Hide the look editor" : "Show the look editor"}</Button>} />
-      </SettingsCard>
-      {lookOpen && <UnderstudyLook classes={frame?.classes ?? []} />}
     </>
-  );
-}
-
-/**
- * The face, and everything that changes it.
- *
- * The portrait sticks to the top of the pane while the rows scroll under it,
- * because a picker whose result you cannot see while you use it is the one
- * thing a picker must never be — every pick in the first version meant
- * scrolling back up to find out what it did. 192px is twice the art's native
- * size, the largest exact multiple that leaves the rows room beside it.
- *
- * The rows and the portrait read the same store as the understudy view, so
- * there is no Save and nothing to apply: a pick is on both faces at once.
- */
-function UnderstudyLook({ classes }: { classes: readonly UnderstudyClassRow[] }) {
-  const cos = useCosmetic();
-  return (
-    /*
-     * TWO COLUMNS, and the portrait is the one that stays.
-     *
-     * "I need the clone anchored, so that when I change the look I can see it
-     * without scrolling up and down every time" — and he is right: the pickers
-     * run to nine screens of hair, eyes, brows, nose and mouth, so with the
-     * face at the top every single pick was a scroll up, a look, and a scroll
-     * back down.
-     *
-     * It was sticky once and I took it out, because the way it was built could
-     * not work: it was a child of the rows box INSIDE the card, and a card
-     * clips its corners with `overflow: hidden`, which makes it a scroll
-     * container that never scrolls — so the portrait stuck to a box it was
-     * already inside and stopped moving at all. What it did on the way there
-     * was shear the preset tiles in half against an edge with no rule and no
-     * shadow.
-     *
-     * So the portrait comes OUT of the card. It is its own column, and the
-     * thing it sticks to is the settings scroller — the one element on this
-     * screen that actually scrolls. Nothing between them clips.
-     */
-    <div className="agx-look">
-      <aside className="agx-look-portrait">
-        <div className="agx-card p-3.5 flex flex-col items-center gap-3">
-          <Persona px={200} cos={cos} label="The clone" />
-          <div className="text-[12px] leading-relaxed" style={{ color: "var(--text3)" }}>
-            What the clone wears. Start from one of the faces beside this and change what is not you;
-            every pick lands here the moment you make it, and in the view.
-          </div>
-        </div>
-      </aside>
-
-      <div className="min-w-0">
-        <Appearance value={cos} onChange={setCosmetic} classes={classes} />
-      </div>
-    </div>
   );
 }
 
@@ -1438,6 +1355,35 @@ function LogDigestSection({ d }: { d: LogDigest | "failed" | null }) {
             {d.total === 0
               ? note("Nothing logged in the last 24 hours.")
               : d.groups.map((g) => <LogRow key={g.sig} level={g.level} count={String(g.count)} text={g.example} when={ago(g.last)} />)}
+          </>
+        )}
+    </SettingsCard>
+  );
+}
+
+/** How often each door of the app was opened on this machine (lib/usageOpens.ts): a table, local only. */
+function OpensSection({ open }: { open: boolean }) {
+  const [d, setD] = useState<UsageOpens | "failed" | null>(null);
+  const [folded, setFolded] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    api.usageOpens().then((r) => { if (live) setD(r); }).catch(() => { if (live) setD("failed"); });
+    return () => { live = false; };
+  }, [open]);
+  const note = (text: string) => <SettingRow label={text} />;
+  const rows = d && d !== "failed" ? d.opens.slice(0, 40) : [];
+  return (
+    <SettingsCard title="What you open" icon={<ChecklistIcon />}
+      desc="How often each view, Settings page and modal was opened on this machine, to see what is never used. It is counted here and never leaves it."
+      fold={{ open: folded, onToggle: setFolded }}>
+      {d === "failed" ? note("Could not read the count.")
+        : !d ? note("Reading…")
+        : !rows.length ? note("Nothing counted yet.")
+        : (
+          <>
+            {note(`Counting since ${d.since}.`)}
+            {rows.map((o) => <SettingRow key={o.id} label={o.id} hint={`last opened ${o.last}`} status={<StatusBadge tone="off">{o.count}×</StatusBadge>} />)}
           </>
         )}
     </SettingsCard>
@@ -1693,18 +1639,7 @@ function AboutPane({ open }: { open: boolean }) {
   );
 }
 
-/**
- * THIS ROW IS NOT DECORATION. The understudy's pixel-art portrait layers are
- * CC BY 4.0 by Viktor Hahn and are compiled into the application binary — a
- * NOTICE file at the root of a source repository is invisible to anybody
- * actually running it, so this row is where the licence obligation is
- * actually discharged. NOTICE.md says so in as many words, and names this
- * page. Do not remove it.
- *
- * It lives on About rather than on Understudy, where it was built: About is
- * where a version, a changelog and a licence are expected to be, and the
- * understudy is not the only thing in this app wearing that art any more.
- */
+/** The packages this build is made of, with the licence each declares. */
 function AboutCredits() {
   const [all, setAll] = useState(false);
   const shown = LICENCES.slice(0, 6);
@@ -1722,9 +1657,6 @@ function AboutCredits() {
           </div>
         }
         actions={LICENCES.length > shown.length ? <Button aria-expanded={all} onClick={() => setAll((v) => !v)}>{all ? "Show fewer" : `View all ${LICENCES.length}`}</Button> : undefined} />
-      <Row label="Portrait art by Viktor Hahn — CC BY 4.0"
-        hint="The pixel-art portrait layers are his work, used under the Creative Commons Attribution 4.0 International licence. They are recoloured at paint time and otherwise unmodified."
-        href="https://creativecommons.org/licenses/by/4.0/" />
     </SettingsCard>
   );
 }
@@ -2070,12 +2002,12 @@ function AgentBrowserPane({ open }: { open: boolean }) {
 }
 
 /** The Agents page: the hooks and the gate beside it, the cards the modal hands
- *  in (new chats, browser, card skills), the worker roles, and one danger zone
+ *  in (browser, card skills), the worker roles, and one danger zone
  *  that holds both ways back — which is why the hooks state lives here and not
  *  in the card, and why the cards come in as slots: the flow fills columns in
  *  order, so the danger zone has to be drawn after every card it follows. */
-function AgentsPage({ open, chats, panes, browser, skills }: {
-  open: boolean; chats: React.ReactNode; panes: React.ReactNode; browser: React.ReactNode; skills: React.ReactNode;
+function AgentsPage({ open, browser, skills }: {
+  open: boolean; browser: React.ReactNode; skills: React.ReactNode;
 }) {
   const [resetTick, setResetTick] = useState(0);
   const [armed, setArmed] = useState(false);
@@ -2206,8 +2138,6 @@ function AgentsPage({ open, chats, panes, browser, skills }: {
   return (
     <>
       {hooksCards}
-      {chats}
-      {panes}
       {browser}
       {skills}
       <WorkerRolesCard open={open} resetTick={resetTick} onEngines={() => openSettings("engines")} />
@@ -2471,8 +2401,8 @@ function NotificationsSection(p: {
           hint="Quiet lets through only what is stopped."
           detail={{ summary: "What each level lets through", body: <>
             Quiet: an approval, an agent blocked on a question, a red check on a pull request about to merge still pop and ring;
-            everything else collects in the bell without a sound. Normal: the same, and agentglass's own notices (chats finishing,
-            branches falling behind, checks going red) still only land in the bell. Loud: those interrupt too.
+            everything else collects in the bell without a sound. Normal: the same, and agentglass's own notices (branches falling
+            behind, checks going red) still only land in the bell. Loud: those interrupt too.
           </> }}
           value={quiet ? "quiet" : own ? "loud" : "normal"} modified={!quiet}
           onPick={(v) => { if (v === "quiet") setting("notifications.quiet").set(true); else setting("notifications.volume").set(v); }}
@@ -3678,7 +3608,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
   const resetAll = async () => {
     if (!(await ask({
       title: "Reset the tmux engine to defaults?",
-      body: "Your override config is cleared and the engine's own tmux server restarts.\nChat conversations are unaffected.",
+      body: "Your override config is cleared and the engine's own tmux server restarts.\nYour agents' conversations are unaffected.",
       confirmLabel: "Reset engine",
       danger: true,
     }))) return;
@@ -3822,7 +3752,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
       <SettingRow
         label="Resume mode"
         hint="What an agent pane does when it comes back."
-        detail={{ summary: "Details", body: <>"Lazy" restores the tree and resumes each agent when you reopen its chat; "All" relaunches every recorded CLI, resuming each conversation.</> }}
+        detail={{ summary: "Details", body: <>"Lazy" restores the tree and resumes each agent when you reopen its pane; "All" relaunches every recorded CLI, resuming each conversation.</> }}
         control={<Select value={resume} onChange={(v) => savePaneField({ resume: v === "all" ? "all" : "lazy" }, "Resume mode")} disabled={busy || !restore} align="right" style={SELECT_BOX}
           options={[
             { value: "lazy", label: "Lazy resume" },
@@ -4006,6 +3936,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
     return TABS[0]!.id;
   });
   useEffect(() => { try { localStorage.setItem(LAST_PANE_KEY, pane); } catch { /* ignore */ } }, [pane]);
+  // Each time a page is on screen, once (lib/usageOpens.ts). A plugin's page is one id: its name is not ours to record.
+  useEffect(() => { if (open) noteOpen(`settings:${pane.startsWith("plugin:") ? "plugin" : pane}`); }, [open, pane]);
   // Somebody asked for a specific pane. Overrides the remembered one for this
   // opening only — the next plain open still lands where you left it.
   useEffect(() => {
@@ -4450,17 +4382,6 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
     ask();
     return () => { dead = true; if (timer) clearTimeout(timer); };
   }, [open]);
-  const [enginePref, setEnginePref] = useState<ChatEnginePref>(() => chatEnginePref());
-  // Asked while the modal is open rather than at startup: it is a subprocess
-  // probe on the server, and nothing outside this row needs the answer.
-  const [tmuxEngine, setTmuxEngine] = useState<TmuxEngineInfo | null>(null);
-  useEffect(() => {
-    if (!open) return;
-    void api.chatEnabled()
-      .then((r) => setTmuxEngine(r.tmuxEngine ?? { available: false, reason: "this server is too old to run chats in panes", defaultOn: false }))
-      .catch(() => setTmuxEngine({ available: false, reason: "the agentglass server did not answer", defaultOn: false }));
-  }, [open]);
-
   /*
    * ESCAPE ONCE SAYS SO, ESCAPE AGAIN LEAVES.
    *
@@ -5240,11 +5161,6 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
 
                   {show("hooks") && (
                   <AgentsPage open={open}
-                    chats={
-                    <NewChatsCard open={open} tmuxEngine={tmuxEngine} enginePref={enginePref}
-                      onEngine={(next) => { setChatEnginePref(next); setEnginePref(next); }} />
-                    }
-                    panes={tmuxEngine?.available ? <RunningPanes open={open} /> : null}
                     browser={HAS_BROWSER ? <AgentBrowserPane open={open} /> : null}
                     skills={cu ? (
                       <SettingsCard title="Card skills" icon={<ChecklistIcon size={ICON.sm} />} desc="How agent skills relate to the cards of your tracker.">
@@ -5302,7 +5218,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   </SettingsCard>
                   )}
                   {ql && show("about") && <PageMatchHeading id="about" onOpen={() => { setPane("about" as Pane); setQ(""); }} />}
-                  {show("about") && <><AboutPane open={open} /><LogDigestSection d={logDigest} /></>}
+                  {show("about") && <><AboutPane open={open} /><LogDigestSection d={logDigest} /><OpensSection open={open} /></>}
                   </Filter.Provider>
                   </PageState.Provider>
                   </div>

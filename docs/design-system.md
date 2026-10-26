@@ -181,7 +181,7 @@ Reach for these before writing a `<button>`, an `<input>` or a colour:
 - Borders are `EDGE` or `LINE`; fills are `--surface-*`; tinted text is a
   `--*-ink`; a stacking order is a `LAYER` entry.
 - A conversation or history is the `agx-tl` timeline in `Chrome.tsx`, used by
-  `PrPanel.tsx`, `TasksPanel.tsx` and `ChatPanel.tsx`, not a new list of
+  `PrPanel.tsx` and `TasksPanel.tsx`, not a new list of
   bordered cards.
 
 A view that needs something these cannot express adds it to `Chrome.tsx`,

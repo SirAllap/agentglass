@@ -154,7 +154,7 @@ describe("the cards", () => {
     const r = rich(); r.git = { dirty: 0, ahead: 0, lastCommit: { subject: "Merge pull request #1", at: Date.now() }, at: Date.now() };
     expect(renderToStaticMarkup(React.createElement(AgentCard, { r }))).not.toContain("Merge pull request");
   });
-  test("the Lantern's own chat is set aside: not counted, not listed, and the header says the chat is open", () => {
+  test("the Lantern's own session is set aside: not counted, not listed, and the header says the chat is open", () => {
     __setLanternRows([
       { name: "Lantern", from: "seen", state: "idle", role: "lantern", paneId: "%1" },
       { name: "busy", from: "seen", state: "working", paneId: "%2" },
@@ -165,7 +165,7 @@ describe("the cards", () => {
     // The label follows the BENCH, not the board: a row for a chat just ended lingers.
     expect(html).toContain("Ask about the agents");
     addTab("/w", { kind: "agent", slot: 3, title: "lantern", agent: "t" });
-    expect(renderToStaticMarkup(React.createElement(LanternView, { active: true }))).toContain("Back to the chat");
+    expect(renderToStaticMarkup(React.createElement(LanternView, { active: true }))).toContain("Back to the session");
     __resetBench();
   });
 });

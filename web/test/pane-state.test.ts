@@ -75,7 +75,7 @@ describe("the panes the window holds read the pref modules the rows call", () =>
 
   it("keys name every view and app chord, and flag only what was changed", () => {
     const k = P.readKeys();
-    expect(Object.keys(k.chords).sort()).toEqual([...(["dash", "git", "diff", "pr", "tasks", "docker", "term", "chat", "browser", "files", "lantern", "seat", "plugins"])].sort());
+    expect(Object.keys(k.chords).sort()).toEqual([...(["dash", "git", "diff", "pr", "tasks", "docker", "term", "browser", "files", "lantern", "seat", "plugins"])].sort());
     expect(Object.keys(k.appChords).length).toBeGreaterThanOrEqual(7);
     expect(k.customised).toEqual({ bindings: false, chords: false, appChords: false });
     keybindings.rebindChord("git", "mod+alt+g");
@@ -103,10 +103,10 @@ describe("the panes the window holds read the pref modules the rows call", () =>
 describe("a pane the server holds is read from its own route, by name", () => {
   const sneak = <T extends object>(o: T): T => ({ ...o, sneaky: LEAK }) as T;
 
-  it("hooks: the status and the engine, no more", async () => {
+  it("hooks: the status, no more", async () => {
     patch("hooksStatus", async () => sneak({ installed: true, gate: true, gateBundled: true, bundled: true, settingsPath: "/home/ana/.claude/settings.json", python: "python3" }));
     const r = await P.readHooks();
-    expect(Object.keys(r).sort()).toEqual(["bundled", "engine", "gate", "gateBundled", "installed", "python", "settingsPath"]);
+    expect(Object.keys(r).sort()).toEqual(["bundled", "gate", "gateBundled", "installed", "python", "settingsPath"]);
     expect(JSON.stringify(r)).not.toContain(LEAK);
   });
 

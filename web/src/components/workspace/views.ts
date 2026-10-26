@@ -1,6 +1,6 @@
 import type { ComponentType } from "react";
 import type { ViewId } from "../../../../shared/types.ts";
-import { GitIcon, DiffIcon, DockerIcon, TerminalIcon, ChatIcon, PrIcon, BrowserIcon, FilesIcon, DashIcon, IssuesIcon, LanternIcon, SeatIcon, PluginsIcon } from "./icons.tsx";
+import { GitIcon, DiffIcon, DockerIcon, TerminalIcon, PrIcon, BrowserIcon, FilesIcon, DashIcon, IssuesIcon, LanternIcon, SeatIcon, PluginsIcon } from "./icons.tsx";
 import { HAS_BROWSER } from "../../lib/desktop.ts";
 import { IS_DEMO } from "../../lib/demo.ts";
 
@@ -58,7 +58,6 @@ export const VIEWS: ViewDef[] = [
   { id: "tasks", label: "Tasks", key: "i", icon: IssuesIcon, hint: "Everything you owe — GitHub issues and your own list, in one place" },
   { id: "docker", label: "Docker", key: "o", icon: DockerIcon, hint: "Containers, logs, stats & actions" },
   { id: "term", label: "Term", key: "t", icon: TerminalIcon, hint: "A real shell in any repo/worktree" },
-  { id: "chat", label: "Chat", key: "c", icon: ChatIcon, hint: "Drive a Claude session in any repo/worktree", group: "utility" },
   ...(HAS_BROWSER || IS_DEMO
     ? [{ id: "browser" as const, label: "Browser", key: "b", icon: BrowserIcon, hint: "A page, without leaving the app", group: "utility" as const }]
     : []),
@@ -275,7 +274,7 @@ export const railCustomised = () => !sameRail(railIds(loadRail()), railIds(SHIPP
  * The top drawer, and the only thing ⌘1..⌘9 index into.
  *
  * The numbers belong to the work drawer alone. Down at the bottom they were
- * numbering the wrong things: the dashboard, a web page and a chat sat among
+ * numbering the wrong things: the dashboard and a web page sat among
  * settings and ports, none of which has ever had a number, and a ⌘6 that opens
  * a browser reads as an accident of list position rather than a shortcut
  * anybody chose. Moving a view down there now takes its number away, which is

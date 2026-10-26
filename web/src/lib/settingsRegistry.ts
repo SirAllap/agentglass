@@ -425,7 +425,7 @@ const notifications: SettingDef[] = [
     read: () => notifyQuiet(), validate: bool, write: (v) => setNotifyQuiet(v as boolean),
   }),
   // The two switches under one word. Quiet is `notifications.quiet`; with it off,
-  // "agentglass's own notifications" (chats finishing, branches behind, checks going
+  // "agentglass's own notifications" (branches behind, checks going
   // red) decides whether the rest interrupts: off is Normal, on is Loud.
   defineSetting({
     id: "notifications.volume", page: "notifications", section: "How it reaches you", label: "Volume", level: 2, default: "quiet",

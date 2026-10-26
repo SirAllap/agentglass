@@ -19,7 +19,7 @@ import { liveReminders, nudgeReminders, subscribeReminders } from "../lib/remind
 import { LAYER } from "../lib/layers.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { ClockIcon, HandIcon } from "../lib/glyphIcons.tsx";
+import { ClockIcon } from "../lib/glyphIcons.tsx";
 import { EDGE } from "./workspace/Chrome.tsx";
 
 /** How long "later" is. Ten minutes is the snooze every clock on earth defaults
@@ -27,7 +27,7 @@ import { EDGE } from "./workspace/Chrome.tsx";
 const SNOOZE_MIN = 10;
 
 export function AlarmCard(
-  { onOpenTasks, onOpenDeputy }: { onOpenTasks?: () => void; onOpenDeputy?: () => void },
+  { onOpenTasks }: { onOpenTasks?: () => void },
 ) {
   const alarm = useSyncExternalStore(subscribeAlarm, alarmNow, alarmNow);
   /* Subscribing to the reminders as well, for the alarm that fired while the app
@@ -51,8 +51,6 @@ export function AlarmCard(
 
   if (!alarm) return null;
 
-  const deputy = alarm.kind === "deputy";
-
   const answer = async (fn: () => Promise<unknown>) => {
     if (busy) return;
     setBusy(true);
@@ -65,7 +63,7 @@ export function AlarmCard(
   return (
     <div
       role="alertdialog" aria-live="assertive"
-      aria-label={`${deputy ? "Clone" : "Reminder"}: ${alarm.title}`}
+      aria-label={`Reminder: ${alarm.title}`}
       className="fixed rounded-xl overflow-hidden"
       style={{
         top: 56, right: 16, width: 340, zIndex: LAYER.alarm,
@@ -81,8 +79,8 @@ export function AlarmCard(
 
       <div className="p-3.5 flex flex-col gap-2.5">
         <div className="flex items-center gap-2">
-          <span aria-hidden className="flex" style={{ color: "var(--warning-ink)" }}>{deputy ? <HandIcon size={ICON.md} /> : <ClockIcon size={ICON.md} />}</span>
-          <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--warning-ink)" }}>{deputy ? "Clone" : "Reminder"}</span>
+          <span aria-hidden className="flex" style={{ color: "var(--warning-ink)" }}><ClockIcon size={ICON.md} /></span>
+          <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--warning-ink)" }}>Reminder</span>
           <span className="text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>{alarm.when}</span>
           {/* Closing the card is not answering it: the reminder stays live and
               the list still shows it. Anything else would make the reflex that
@@ -92,38 +90,6 @@ export function AlarmCard(
 
         <p className="text-[13px] leading-snug" style={{ color: "var(--text)", overflowWrap: "anywhere" }}>{alarm.title}</p>
 
-        {/*
-          * THE DEPUTY IS NOT A REMINDER, and every control here was a
-          * reminder's. `Done` called `reminderAck` with an id no reminder has,
-          * `Snooze` was meaningless for a machine that is stopped, and "Open
-          * the task →" went to a ClickUp card. Three reports, the last of them
-          * "Que cojones".
-          *
-          * What it needs is one control that takes you to it, because that is
-          * the only place the question can be answered.
-          */}
-        {deputy ? (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => { stopRinging(); clearAlarm(); onOpenDeputy?.(); }}
-              className="text-[11px] px-2 py-1 rounded-lg"
-              style={{
-                background: "color-mix(in srgb, var(--primary) 20%, transparent)",
-                border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)",
-                color: "var(--text)",
-              }}
-            >Go to the clone →</button>
-            <button
-              onClick={() => { stopRinging(); clearAlarm(); }}
-              className="text-[11px] px-2 py-1 rounded-lg"
-              style={{
-                background: "color-mix(in srgb, var(--bg3) 55%, transparent)",
-                border: EDGE,
-                color: "var(--text3)",
-              }}
-            >Later</button>
-          </div>
-        ) : (
         <div className="flex items-center gap-2">
           <button
             onClick={() => void answer(() => api.reminderAck(alarm.id))}
@@ -153,7 +119,6 @@ export function AlarmCard(
             >Open the task →</button>
           )}
         </div>
-        )}
       </div>
     </div>
   );

@@ -1,11 +1,9 @@
 /*
  * Where a snapshot's data comes from in the running window: the stores and the
  * pref modules, read when asked and never subscribed to. Kept apart from
- * uiSnapshots.ts so the providers stay pure and a test never has to load a store
- * (chatStore pulls in the API client and its persistence).
+ * uiSnapshots.ts so the providers stay pure and a test never has to load a store.
  */
 import type { Sources, AppSlice } from "./uiSnapshots.ts";
-import { listChats, getActiveChatId } from "./chatStore.ts";
 import { benchState } from "./benchStore.ts";
 import { listGates } from "./gateStore.ts";
 import { diffSplit, diffWrap, diffNoWhitespace, diffThemePref } from "./diffPrefs.ts";
@@ -17,12 +15,11 @@ import { homePage, searchEngine, zoomLevel, importHistory, importBookmarks } fro
 import { getNotifyPrefs } from "./notifyPrefsStore.ts";
 import {
   readPrefs, readRail, readKeys, readTasks, readAppearance, readUnderstudy, readHooks, readLantern, readBudgets, readRecipes,
-  readReviewPrompts, readSavedReplies, readTmux, readPrivacy, readPlugins, readLog, readAbout, readDiskClean, readUsageAccounts,
+  readReviewPrompts, readSavedReplies, readTmux, readPrivacy, readPlugins, readLog, readAbout, readDiskClean, readUsageAccounts, readUsageOpens,
 } from "./paneState.ts";
 
 export const liveSources = (app: () => AppSlice): Sources => ({
   app,
-  chats: () => ({ list: listChats(), activeId: getActiveChatId() }),
   bench: benchState,
   gates: listGates,
   diff: () => ({ split: diffSplit(), wrap: diffWrap(), noWhitespace: diffNoWhitespace(), theme: diffThemePref() }),
@@ -40,6 +37,6 @@ export const liveSources = (app: () => AppSlice): Sources => ({
   understudy: readUnderstudy,
   later: {
     hooks: readHooks, lantern: readLantern, budgets: readBudgets, recipes: readRecipes, reviewPrompts: readReviewPrompts,
-    savedReplies: readSavedReplies, tmux: readTmux, privacy: readPrivacy, plugins: readPlugins, log: readLog, about: readAbout, diskClean: readDiskClean, usageAccounts: readUsageAccounts,
+    savedReplies: readSavedReplies, tmux: readTmux, privacy: readPrivacy, plugins: readPlugins, log: readLog, about: readAbout, diskClean: readDiskClean, usageAccounts: readUsageAccounts, usageOpens: readUsageOpens,
   },
 });

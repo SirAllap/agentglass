@@ -169,8 +169,6 @@ export function targetOf(pathname: string, b: Record<string, unknown>): string {
   if (pathname.startsWith("/control/")) return [b.as ? `as ${named(b.as)}` : "", named(b.setting), named(b.present), b.queued ? "queued" : "", b.refused ? `+${named(b.refused)} refused` : ""].filter(Boolean).join(" · ");
   // The agent door to a Jira card: who asked, and for a verb that changes the card, which card (an id the site minted, never its words).
   if (pathname.startsWith("/jira/door/")) return [b.as ? `as ${named(b.as)}` : "", named(b.key)].filter(Boolean).join(" · ");
-  // A chat launch: where it runs and on what. Never the prompt — see index.ts.
-  if (pathname === "/chat/send") return clip([repo, named(b.name)].filter(Boolean).join(" · "));
   if (pathname.startsWith("/prs/")) {
     const num = named(b.number);
     return clip([repo, num && `#${num}`].filter(Boolean).join(" "));

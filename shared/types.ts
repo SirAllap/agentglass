@@ -658,7 +658,7 @@ export type PtyClientFrame =
   /** Start work on an issue in a window of the user's tmux. `agent` opens the
    *  CLI in it, `yolo` buys exactly one flag, and `title` is data that
    *  `sessionTitle` sanitises before it reaches an argv array. */
-  | { t: "tmux"; cmd: "issue"; n?: number; cwd: string; name?: string; prompt?: string; agent?: boolean; yolo?: boolean; mode?: LaunchMode; title?: string; model?: string; effort?: string; reuse?: boolean }
+  | { t: "tmux"; cmd: "issue"; n?: number; cwd: string; name?: string; prompt?: string; agent?: boolean; yolo?: boolean; mode?: LaunchMode; title?: string; model?: string; effort?: string; kind?: string; reuse?: boolean }
   /** The tab strip's four window commands, plus take-over. Kept in step with
    *  `TmuxAction` in server/src/tmuxctl.ts, which is what runs them. */
   /** `fit` sizes the tmux window to THIS client — see tmuxctl.ts, and the
@@ -1160,7 +1160,7 @@ export type Liveness = "working" | "stuck" | "lost" | "unknown";
  * *type*; the UI (web/src/components/workspace/views.ts) attaches the icons,
  * labels and hotkeys and re-exports this so both sides name one set.
  */
-export type ViewId = "dash" | "git" | "diff" | "pr" | "docker" | "term" | "chat" | "browser" | "files" | "tasks" | "lantern" | "seat" | "plugins";
+export type ViewId = "dash" | "git" | "diff" | "pr" | "docker" | "term" | "browser" | "files" | "tasks" | "lantern" | "seat" | "plugins";
 
 /**
  * A UI-navigation command from an external controller (a Stream Deck, a phone),
@@ -1181,9 +1181,6 @@ export type ControlCmd =
   | { cmd: "open"; what: "finder"; path: string; kind: "file" | "dir" }
   | { cmd: "theme"; dir?: 1 | -1; name?: string }
   | { cmd: "zoom"; dir: 1 | -1 | 0 }
-  /** Drive the chat view itself. Unlike the rest, this one needs the chat panel
-   *  mounted to run — see web/src/lib/chatIntent.ts. */
-  | { cmd: "chat"; do: "new" }
   /** Any door in shared/uiActions.ts, by id. The older spellings above are
    *  aliases of entries there; this is the general one. */
   | UiCmd;
@@ -1755,147 +1752,6 @@ export interface UnderstudyProposal {
   decidedAt: number | null;
   decidedBy: string;
   result: string;
-}
-
-/*
- * A shift: the understudy standing in, for a bounded while.
- *
- * The limits are fixed when the person hands over, not consulted as it goes —
- * an end time, a budget of actions, a scope. And why it stopped is recorded,
- * because the first question on coming back is "what did it do and why did it
- * quit", and a shift that cannot answer the second half is unauditable.
- */
-export interface UnderstudyShift {
-  id: number;
-  goal: string;
-  startedAt: number;
-  endsAt: number;
-  maxActions: number;
-  actions: number;
-  state: "running" | "done" | "stopped";
-  stoppedAt: number | null;
-  stoppedReason: string;
-  scope: string;
-  msLeft: number;
-  actionsLeft: number;
-}
-
-/*
- * Something it did on its own, and how to put it back.
- *
- * The undo recipe is recorded at the moment of acting rather than derived when
- * somebody asks for it — a repository moves on, and a reversal worked out later
- * is a guess about a world that has changed since.
- */
-export interface UnderstudyAct {
-  id: number;
-  shiftId: number;
-  proposalId: number | null;
-  cls: string;
-  title: string;
-  repo: string;
-  at: number;
-  ok: boolean;
-  result: string;
-  undoKind: string;
-  undoArg: Record<string, unknown>;
-  undoneAt: number | null;
-  /** In words, for somebody reading what happened while they were out. */
-  undoSays: string;
-}
-
-/*
- * One task the work loop took on, start to finish.
- *
- * DECLARED HERE rather than in the server module that writes it, because the
- * panel draws these rows and a shape copied into a second file is a shape that
- * drifts. `server/src/understudy-work.ts` imports this one.
- */
-export interface UnderstudyWorkRun {
-  id: number;
-  shiftId: number | null;
-  source: string;
-  itemId: string;
-  title: string;
-  repo: string;
-  /** The disposable checkout it worked in. A failed run leaves it on disk on
-   *  purpose, so this is where somebody goes to look. */
-  worktree: string;
-  branch: string;
-  /** What its branch pointed at the last time anything looked, so a branch that
-   *  is later merged and DELETED can still be recognised as landed work rather
-   *  than as a task nobody ever started. */
-  tipSha?: string;
-  /** The tmux pane its agent is in. The handle used to be the window's NAME,
-   *  and tmux renames a window when the program inside sets a title — one
-   *  failed match and a working run was declared dead. */
-  paneId?: string;
-  startedAt: number;
-  finishedAt: number | null;
-  /** `uncommitted`: the tests passed on the working tree but nothing was
-   *  committed — the exact shape of a run that finished and then sat waiting
-   *  for a background process instead of stopping to record what it did. The
-   *  work is not lost (the worktree is kept, same as `failed`); it is just
-   *  not on the branch yet.
-   *  `empty`: the other half of that same failure. No commit, a clean tree
-   *  (there was never anything to be uncommitted), and its own last words did
-   *  not argue for that being correct — the shape of a run that stopped after
-   *  "investigating" and never came back. Not `failed`: nothing went wrong.
-   *  Not `done`: nothing was delivered. Kept distinct so a person sees it
-   *  instead of a queue that reads it as success. */
-  state: "running" | "done" | "failed" | "abandoned" | "uncommitted" | "empty";
-  /** What the tests said, verdict first. Not what the agent claimed. */
-  outcome: string;
-}
-
-/** Something a source is offering. Empty `repo` means nobody has said which
- *  checkout it belongs in, which is a refusal rather than a default. */
-export interface UnderstudyWorkItem {
-  id: string;
-  source: string;
-  title: string;
-  detail: string;
-  repo: string;
-  weight: number;
-  url?: string;
-  /**
-   * The file this task owes, when what it owes is a file rather than a commit.
-   *
-   * A run that writes code is judged by the tests and by whether it committed.
-   * A study, a design, an audit legitimately touches nothing in the repository,
-   * so both of those pass on a run that produced nothing at all — measured on
-   * the task-provider design run, which sat waiting on two subagents that never
-   * returned, wrote no file, and recorded itself as `done`.
-   */
-  deliverable?: string;
-}
-
-/** A row on the queue he fills by hand — the only source that can say which
- *  checkout the work belongs in. */
-/**
- * The understudy asking a person for something.
- *
- * The measured failure this exists for is silence: of 108 runs, 26 ended having
- * delivered nothing and not one of them said what it needed. An open row is a
- * question still waiting; `tried` is what it already attempted, so an answer
- * does not have to begin by reconstructing the attempt.
- */
-export interface UnderstudyHelp {
-  id: number;
-  runId: number | null;
-  title: string;
-  question: string;
-  tried: string;
-  repo: string;
-  at: number;
-  answeredAt: number | null;
-}
-
-export interface UnderstudyAsked {
-  id: number;
-  title: string;
-  detail: string;
-  repo: string;
 }
 
 /** The one frame a `/stream` client sends: its own name, so the server can
@@ -2897,59 +2753,6 @@ export interface WalkthroughResult {
   withheld?: string[];
 }
 
-// --- chat attachments (images pasted into the composer) ----------------------
-/** An image attached to a chat turn, carried inline as base64.
- *
- *  The browser has no path the server could read, so the bytes travel in the
- *  JSON body rather than as a file reference. `data` is unpadded-or-padded
- *  standard base64 with no `data:` URI prefix — the server strips the prefix on
- *  the way in so the field holds only what a Claude image block wants. */
-export interface ChatImage {
-  mediaType: ChatImageMediaType;
-  data: string; // base64, no `data:image/png;base64,` prefix
-}
-/** The media types a chat attachment may declare. This mirrors the set the
- *  `claude` CLI itself accepts for image blocks, so anything outside it would be
- *  rejected downstream anyway. */
-export type ChatImageMediaType = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
-
-/** How a chat's turns are actually run.
- *
- *  `process` — one `claude -p` per turn. Nothing is left running between turns,
- *              so an idle chat costs nothing, and every turn pays the CLI's full
- *              session start (measured 2.9-3.8s on a machine with MCP servers).
- *  `tmux`    — one interactive `claude` per chat, alive in a pane on agentglass's
- *              own tmux server. The start-up cost is paid once (same turn
- *              measured at 1.2-1.4s), and because the pane is a real tmux
- *              session the user can attach and carry on in their own terminal.
- *              The trade is memory: a warm CLI is ~380MB and grows with use. */
-export type ChatEngine = "process" | "tmux";
-
-/** How hard the model is asked to think, lowest first.
- *
- *  The order is the whole point: this is a dial, not a set of unrelated
- *  choices, and everything that renders it — the meter in the chat header —
- *  reads the position from this array rather than carrying its own copy.
- *
- *  Taken from the CLI's own `/effort` picker. `ultracode` sits past `max` and
- *  is described there as "xhigh + workflows", so it is last rather than
- *  alphabetical. */
-export const CHAT_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultracode"] as const;
-export type ChatEffort = (typeof CHAT_EFFORTS)[number];
-
-/** Whether the pane engine can be offered here, and why not when it cannot.
- *
- *  The reason is carried rather than derived in the UI because the two causes
- *  need different words — "tmux is not installed" is a thing the user can fix,
- *  "not on Windows" is not. */
-export interface TmuxEngineInfo {
-  available: boolean;
-  reason: string;
-  /** The server's own default, so the toggle can show what happens if the user
-   *  never touches it. */
-  defaultOn: boolean;
-}
-
 // --- in-browser terminal (real PTY shell per repo/worktree) ------------------
 /** A ready-to-run project command surfaced in the terminal panel. */
 export interface ProjectCommand {
@@ -2981,22 +2784,13 @@ export interface AgentModel {
   label: string; // the CLI's own display name, or the slug when it has none
 }
 
-/** What the chat panel needs to decide whether to offer a CLI at all, and what
- *  to put in its model dropdown if it does. Both travel together because the
- *  panel cannot usefully draw one without the other. */
-export interface AgentCliStatus {
-  enabled: boolean;  // the binary is on PATH and not disabled by env
-  bypass?: boolean;  // the operator opted into the unattended mode
-  models: AgentModel[];
-}
-
-/** Named for the agents that use them. The shapes are identical — what differs
- *  is where the list comes from, which is each server module's business — so
- *  these stay aliases rather than three copies drifting apart. */
+/** Named for the agent that uses it. */
 export type CodexModel = AgentModel;
-export type CodexStatus = AgentCliStatus;
-export type AntigravityModel = AgentModel;
-export type AntigravityStatus = AgentCliStatus;
+
+/** One door of the app and how often it was opened here (GET /usage/opens). */
+export interface UsageOpenRow { id: string; count: number; last: string }
+/** The local count of what gets opened, most opened first; `since` is the day the count began. */
+export interface UsageOpens { since: string; opens: UsageOpenRow[] }
 
 /** Whether `git` is on this machine at all. `available: false` is a first-class
  *  UI state — the git/diff/PR panels and the terminal all need git — not an
@@ -4417,34 +4211,6 @@ export interface BudgetStatus {
    *  is the useful number and "100%" would hide how far past it went. */
   pct: number;
   level: "ok" | "warn" | "over";
-}
-
-/**
- * A warm CLI held in a tmux pane, and what is known about it.
- *
- * Each is several hundred megabytes — that is the price of skipping the MCP
- * re-init a fresh turn pays — so "what is running" is a question with a number
- * attached to it, and until now the only place to ask it was a terminal.
- */
-export interface ChatPane {
-  /** The chat's session id, which is also the pane's name. */
-  name: string;
-  /** When this server last ran a turn in it. Null for a pane it has never
-   *  served — a leftover from a previous run, or something started by hand. */
-  lastUsedAt: number | null;
-  /** Exempt from idle eviction until unpinned or closed. */
-  pinned: boolean;
-  /** Mid-turn at this instant. Never an orphan, and never safe to end. */
-  running: boolean;
-  /** No chat this client has open, and no turn in flight, points at it. */
-  orphan: boolean;
-}
-
-export interface ChatPaneList {
-  panes: ChatPane[];
-  /** How long a pane may sit unused before it is reclaimed. 0 means eviction
-   *  is switched off, which is a thing the UI has to say rather than imply. */
-  idleEvictMs: number;
 }
 
 /** Whether another device can reach this server, and whether one ever has. */

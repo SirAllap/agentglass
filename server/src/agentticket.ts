@@ -79,6 +79,27 @@ export function agentBinFor(kind: string): string | null {
 }
 
 /**
+ * The command line for a prompt handed to the person's engine from a button:
+ * the agent table's id (absent is `how.defaultKind`, the person's default engine), checked against the
+ * table because it picks an executable, then the same builder every other
+ * launch uses. Model and effort are Claude's flags and are passed for Claude
+ * only; another CLI's `--model` takes different values.
+ */
+export function issueArgv(
+  req: { kind?: unknown; prompt: string; yolo: boolean; title: string; perm?: LaunchPerm; model?: unknown; effort?: unknown },
+  how: { canName: (bin: string) => boolean; modelFlags: (model: unknown, effort: unknown) => string[]; defaultKind: string },
+): { ok: true; argv: string[]; kind: string } | { ok: false; error: string } {
+  // No button picks an engine by itself: one that names none gets the person's default.
+  const kind = typeof req.kind === "string" && req.kind && agentKind(req.kind) ? req.kind : agentKind(how.defaultKind) ? how.defaultKind : "claude";
+  const bin = agentBinFor(kind);
+  if (!bin) return { ok: false, error: `${agentKind(kind)?.title ?? kind} is not installed here` };
+  const claude = kind === "claude";
+  const argv = agentArgv(bin, { prompt: req.prompt, yolo: req.yolo, title: req.title, perm: req.perm, ...(claude ? {} : { kind }) },
+    claude && how.canName(bin), claude ? how.modelFlags(req.model, req.effort) : []);
+  return { ok: true, argv, kind };
+}
+
+/**
  * Short, because a ticket is not a secret worth keeping — it is a nonce that
  * lives for seconds behind an endpoint that already required a token to mint.
  * Long enough that guessing one inside its lifetime is not a thing to think

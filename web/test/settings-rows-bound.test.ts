@@ -61,7 +61,7 @@ describe("server settings on pages the window has not migrated", () => {
   const server = readFileSync(new URL("../../server/src/serverSettings.ts", import.meta.url), "utf8");
   const ids = [...server.matchAll(/id: "([A-Za-z.]+)", page: "(hooks|privacy)"/g)].map((m) => m[1]!);
 
-  test("there are some", () => { expect(ids.length).toBeGreaterThanOrEqual(7); });
+  test("there are some", () => { expect(ids.length).toBeGreaterThanOrEqual(4); });
 
   test("each is reached by a row", () => {
     const linked = new Set(SETTINGS_ROWS.map((r) => r.settingId));

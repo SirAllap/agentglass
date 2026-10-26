@@ -41,11 +41,9 @@ describe("the allowlist itself", () => {
 });
 
 describe("the two names that must never appear on it", () => {
-  test("/chat/send — speaking as him into an agent that is already running", () => {
-    expect(UNDERSTUDY_POST.has("/chat/send")).toBe(false);
-    expect(understudyAllows("POST", "/chat/send")).toBe(false);
-    // And the neighbour that does the same thing one keystroke at a time.
-    expect(understudyAllows("POST", "/chat/pane/key")).toBe(false);
+  test("/gate/decide — answering as him on an agent that is already running", () => {
+    expect(UNDERSTUDY_POST.has("/gate/decide")).toBe(false);
+    expect(understudyAllows("POST", "/gate/decide")).toBe(false);
   });
 
   test("/terminal/tmux/windows — reshaping his desk out from under him", () => {
@@ -67,7 +65,7 @@ describe("the acts it is not for", () => {
       "/git/push", "/git/commit", "/git/reset", "/git/discard", "/git/worktree/add",
       "/prs/merge", "/prs/close", "/prs/comment",
       "/clickup/task", "/clickup/comment", "/clickup/status", "/clickup/write",
-      "/control", "/chat/attach", "/editor/open", "/docker/rm", "/update/run",
+      "/control", "/editor/open", "/docker/rm", "/update/run",
     ]) {
       expect(understudyAllows("POST", r), `${r} is reachable by the understudy`).toBe(false);
     }

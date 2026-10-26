@@ -56,6 +56,10 @@ export type TermIssue = {
    *  work (`conflict-1042`): a different prompt to the same name would be
    *  dropped, which is why it is asked for and not the default. */
   reuse?: boolean;
+  /** Continue this Claude session instead of starting a prompt: `cwd` is where it ran. */
+  resumeId?: string;
+  /** The agent CLI to start, an id of shared/agentKinds.ts. Absent is Claude. */
+  kind?: string;
   n: number;
 };
 
@@ -106,9 +110,9 @@ export function resolveTermIssue(n: number, r: IssueResult): void {
  *  UNTAKEN_MS with the request still here nobody is listening (it is taken
  *  back, so it cannot start an agent hours later when a terminal opens), and
  *  after UNANSWERED_MS with it sent the server did not reply. */
-export function requestTermIssue(cwd: string, name: string, prompt: string, agent: boolean, yolo = false, title = "", model = "", effort = "", reuse = false): Promise<IssueResult> {
+export function requestTermIssue(cwd: string, name: string, prompt: string, agent: boolean, yolo = false, title = "", model = "", effort = "", reuse = false, kind = ""): Promise<IssueResult> {
   const n = ++lastN;
-  pending = { cwd, name, prompt, agent, yolo, title, model, effort, reuse, n };
+  pending = { cwd, name, prompt, agent, yolo, title, model, effort, reuse, ...(kind ? { kind } : {}), n };
   const answered = new Promise<IssueResult>((res) => { waiting.set(n, res); });
   subs.forEach((f) => f());
   /* A view is mounted the first time it is shown, so a person who never opened
@@ -124,6 +128,22 @@ export function requestTermIssue(cwd: string, name: string, prompt: string, agen
     resolveTermIssue(n, { ok: false, error: "the Terminal view is not open, so nothing could start it — open Terminal and press the button again" });
   }, UNTAKEN_MS);
   setTimeout(() => resolveTermIssue(n, { ok: false, error: "the terminal did not answer — check the Terminal view before pressing again" }), UNANSWERED_MS);
+  return answered;
+}
+
+/** Continue a session from its transcript, in a window of its own (the terminal's `resume`). */
+export function requestTermResume(cwd: string, id: string): Promise<IssueResult> {
+  const n = ++lastN;
+  pending = { cwd, name: "", prompt: "", agent: true, yolo: false, title: "", model: "", effort: "", reuse: false, resumeId: id, n };
+  const answered = new Promise<IssueResult>((res) => { waiting.set(n, res); });
+  subs.forEach((f) => f());
+  setTimeout(() => { if (pending?.n === n) requestWorktreeJump({ view: "term" }); }, TAKE_NUDGE_MS);
+  setTimeout(() => {
+    if (pending?.n !== n) return;
+    pending = null;
+    subs.forEach((f) => f());
+    resolveTermIssue(n, { ok: false, error: "the Terminal view is not open, so nothing could resume it — open Terminal and press the button again" });
+  }, UNTAKEN_MS);
   return answered;
 }
 

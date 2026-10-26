@@ -273,7 +273,7 @@ const byText = async (re: string, wait = 1800) => {
   return ok;
 };
 
-for (const v of ["Git", "Diff", "Pull requests", "Tasks", "Docker", "Term", "Files", "Dashboard", "Chat", "Ports", "Resources"]) {
+for (const v of ["Git", "Diff", "Pull requests", "Tasks", "Docker", "Term", "Files", "Dashboard", "Ports", "Resources"]) {
   if (await byLabel(v, 3000)) await scan(`view:${v}`, true);
 }
 await byLabel("Git", 2500);

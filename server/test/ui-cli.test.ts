@@ -411,10 +411,10 @@ describe.skipIf(!HAVE_PY)("against a running app", () => {
 
   test("a read reaches the window and its answer comes back; the log names the caller and not the value", async () => {
     const w = await window_((d) => ({ ok: true, applied: true, value: { state: { open: d.do }, untrusted: {} } }));
-    const r = await cli("--as", "orbit-agent", "read", "chat");
+    const r = await cli("--as", "orbit-agent", "read", "bench");
     expect(r.code).toBe(0);
     expect(r.out).toEqual({ ok: true, applied: true, value: { state: { open: "ui.read" }, untrusted: {} } });
-    expect(w.seen[0]).toEqual({ cmd: "ui", do: "ui.read", args: { panel: "chat" } });
+    expect(w.seen[0]).toEqual({ cmd: "ui", do: "ui.read", args: { panel: "bench" } });
     const log = await (await fetch(base + "/actions?limit=50")).json() as { actions: { action: string; target: string }[] };
     expect(log.actions.find((a) => a.action === "/control/ui.read")?.target).toBe("as orbit-agent");
     w.close();
@@ -465,7 +465,7 @@ describe.skipIf(!HAVE_PY)("against a running app", () => {
 
   test("--now and --quiet together, or on a read, are a usage mistake", async () => {
     expect((await cli("open", "--now", "--quiet", "view.open")).code).toBe(2);
-    expect((await cli("read", "--now", "chat")).code).toBe(2);
+    expect((await cli("read", "--now", "bench")).code).toBe(2);
   });
 
   test("a window that refuses keeps its words, exit 1", async () => {

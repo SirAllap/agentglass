@@ -78,14 +78,6 @@ describe("the end of a turn", () => {
       expect(claudeCode.isTurnEnd(entry), JSON.stringify(entry)).toBe(false);
     }
   });
-
-  test("and the engine asks the agent rather than matching a string itself", () => {
-    // The coupling this whole change exists to remove. A `turn_duration` left
-    // in chatpane.ts would mean a second agent silently never finishes a turn.
-    const engine = code("chatpane.ts");
-    expect(engine).not.toContain("turn_duration");
-    expect(engine).toContain("agent.isTurnEnd(o)");
-  });
 });
 
 describe("starting and resuming", () => {
@@ -114,14 +106,6 @@ describe("starting and resuming", () => {
     expect(normal).toContain("--permission-mode");
     expect(normal).toContain("acceptEdits");
     expect(normal).not.toContain("--dangerously-skip-permissions");
-  });
-
-  test("and the engine builds no argv of its own", () => {
-    const engine = code("chatpane.ts");
-    expect(engine).toContain("agent.argv({");
-    for (const flag of ["--resume", "--session-id", "--permission-mode", "--dangerously-skip-permissions"]) {
-      expect(engine, `${flag} is still hard-coded in the engine`).not.toContain(flag);
-    }
   });
 });
 

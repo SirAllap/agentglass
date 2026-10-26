@@ -36,7 +36,7 @@ on. There are two tmux servers in play:
   `agentglass` (`server/src/tmuxbin.ts:90`, overridable with
   `AGENTGLASS_TMUX_SOCKET`). `server/src/tmuxpane.ts` drives it and never
   passes a socket at all: every command it issues is hard-wired to `-L
-  agentglass`. That is where a chat pane lives, and it is why the app can give
+  agentglass`. That is where the app's panes live, and it is why the app can give
   you panes on a machine where you run no tmux of your own.
 
 `tmuxpane.ts` is deliberately **not** behind the switch. It creates and kills
@@ -101,8 +101,7 @@ change tmux state on a socket that may be yours. Grouped by what they can reach.
   anywhere in the server, and the only `send-keys` aimed at your socket carry a
   copy-mode movement (`scroll-up`, `scroll-down`, `cancel`) — never text, never
   a command line. The `send-keys` that do carry keystrokes go through
-  `tmuxpane.ts`'s wrapper — from that file, from `understudy-pane.ts` (the
-  clone's own pane) and from `agentops.ts` (the named agents a script seats,
+  `tmuxpane.ts`'s wrapper — from that file and from `agentops.ts` (the named agents a script seats,
   where a script may press one of a short list of named keys) — and that
   wrapper is hard-wired to our own socket.
 - It does not touch a tmux server it has no mark in, during the periodic sweep.

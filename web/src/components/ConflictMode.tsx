@@ -122,7 +122,6 @@ export interface ConflictModeProps {
   act: (fn: () => Promise<GitActionResult>, okMsg?: string, label?: string) => Promise<boolean>;
   ask: (o: { title: string; body: string; confirmLabel: string; danger?: boolean }) => Promise<boolean>;
   flash: (ok: boolean, msg: string) => void;
-  onAskClaude: () => void;
   onAskClaudeTerminal: () => void;
   /** Claude is already working in this checkout's window, so the button opens
    *  its tab instead of starting another. */
@@ -462,26 +461,13 @@ export function ConflictMode(p: ConflictModeProps) {
             void p.act(() => api.gitMergeAbort(root), "merge aborted", "abort");
           }}
           title="Throw it away and put the tree back exactly as it was">Abandon</Btn>
-        {/*
-          * One action, two places — and they used to read as two unrelated
-          * buttons, which is why "Hand to Claude" and "In a terminal" both got
-          * pressed to find out what the difference was.
-          *
-          * The terminal is the one that leads. It gives you the session itself,
-          * attached, beside your own shells, where you can watch it edit and
-          * take the keyboard off it. The chat pane renders from a transcript
-          * and shows you less; it stays because sometimes that is what you
-          * want, not because it is an equal choice.
-          */}
+        {/* The terminal gives you the session itself, attached, beside your own
+            shells, where you can watch it edit and take the keyboard off it. */}
         <span className="text-[10.5px] ml-1" style={{ color: "var(--text3)" }}>Hand it to Claude</span>
         <Btn tone="ours" onClick={p.onAskClaudeTerminal}
           title={p.terminalWindowLive
             ? "Claude is already working in this repo's \"conflicts\" window — switch to its tab"
             : "Opens a tmux window in this repo with Claude on it, told which side is which and which files are in conflict"}>{p.terminalWindowLive ? "▸_ Claude is working · Open tab" : "▸_ in a terminal"}</Btn>
-        <button onClick={p.onAskClaude}
-          className="text-[10.5px] px-1 shrink-0"
-          style={{ color: "var(--text3)", textDecoration: "underline", textUnderlineOffset: 3 }}
-          title="The same handoff in the chat pane instead — it renders from the transcript, so you see less of what it is doing">in the chat</button>
         <div className="ml-auto flex items-center gap-2">
           {left > 0
             ? <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>{left} file{left === 1 ? "" : "s"} still to resolve</span>

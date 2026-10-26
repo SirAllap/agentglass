@@ -96,9 +96,9 @@ describe("a read", () => {
 
   test("waits for the window's answer and hands it to the caller, with no id needed", async () => {
     const w = await window_();
-    const asked = post({ cmd: "ui", do: "ui.read", args: { panel: "chat" } });
+    const asked = post({ cmd: "ui", do: "ui.read", args: { panel: "bench" } });
     const rid = await ridOf(w);
-    expect(w.frames[0]!.data).toEqual({ cmd: "ui", do: "ui.read", args: { panel: "chat" } });
+    expect(w.frames[0]!.data).toEqual({ cmd: "ui", do: "ui.read", args: { panel: "bench" } });
     const value = { state: { count: 0 }, untrusted: {} };
     expect(await (await result({ rid, ok: true, applied: true, value })).json()).toEqual({ ok: true, known: true });
     const r = await asked;

@@ -100,20 +100,11 @@ for exe in "$SRC/agentglass" "$SRC/resources/agentglass-server"; do
   esac
 done
 
-# THE DEPUTY IS MID-RUN? THEN NOT NOW.
-#
-# The check itself lives in appctl.sh, next to the other things this script
-# asks about the machine, because it is driven by tests: the version that lived
-# here counted with a `grep -o` pipeline, and grep's "matched nothing" exit
-# aborted the install under `set -e` whenever no run was going — the refusal
-# fired when it was safe and stayed quiet when it did.
-#
 # shellcheck source=appctl.sh
 . "$HERE/appctl.sh"
-# Before the deputy check and the stop, so a queued install asks both questions
-# about the machine as it is when its turn comes. See take_install_lock.
+# Before the stop, so a queued install asks about the machine as it is when its
+# turn comes. See take_install_lock.
 take_install_lock || exit 1
-refuse_if_deputy_busy || exit 1
 
 # A running instance holds these files open, and `rm -rf` under it leaves the
 # app alive on deleted inodes — it keeps running the old code and its sidecar

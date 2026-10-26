@@ -26,7 +26,7 @@ import { CONFLICT_EFFORTS, CONFLICT_MODELS } from "../../shared/types.ts";
 import type { ProjectCommand, TerminalCommands, TerminalDisabledReason, TmuxWindow, PtyServerFrame, PtyClientMessage } from "../../shared/types.ts";
 import { safeAbs, repoRootOf, repoRootOfAsync } from "./git.ts";
 import { terminalActive } from "./loopwatch.ts";
-import { inScope, workspaceRoot, terminalDisabledSource, tmuxTerminal, tmuxPrefix, inScopeReal } from "./config.ts";
+import { inScope, workspaceRoot, terminalDisabledSource, tmuxTerminal, tmuxPrefix, inScopeReal, workerRoles } from "./config.ts";
 import { noteNvimArgv } from "./bench.ts";
 import { engineAttachArgv, engineBenchArgv, engineConsoleArgv, engineWindowOutcome, engineWindowRunning, engineSplitRunning, engineSessionName } from "./tmuxpane.ts";
 import { confHealth, ensureConf } from "./tmuxconf.ts";
@@ -525,7 +525,7 @@ import { worstStatus } from "../../shared/windowStatus.ts";
 import { windowRepo } from "./windowrepo.ts";
 import { prepareReviewPrompt } from "./prs.ts";
 import { claudeCode, supportsSessionName } from "./agents/claudecode.ts";
-import { agentArgv, agentBinFor, claimAgentTicket } from "./agentticket.ts";
+import { agentArgv, agentBinFor, claimAgentTicket, issueArgv } from "./agentticket.ts";
 import { launchFlags, launchPerm } from "./launchperm.ts";
 import { isLaunchMode } from "../../shared/launchModes.ts";
 import { reviewRecipe } from "./reviewPrompts.ts";
@@ -2216,17 +2216,17 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
            never travels on this socket. */
         const plan = await prepareReviewPrompt(root, number, typeof msg.recipe === "string" ? msg.recipe : "", typeof msg.card === "string" ? msg.card : "");
         if (!plan.ok) return;
-        const bin = claudeCode.bin();
-        if (!bin) return;
-        // The prompt as a single argument. Claude Code takes a positional
-        // prompt and submits it, so the window opens with the review already
-        // running rather than with something typed that nobody pressed return
-        // on — and which CLIs do that, and which need a flag instead, is the
-        // question agents/launch.ts holds the table for.
-        const opened = await engineWindowRunning(plan.cwd, `pr-${number}`,
+        // The prompt as a single argument: the CLI takes a positional prompt and
+        // submits it, so the window opens with the review already running. Which
+        // CLI is the person's default engine (issueArgv), and which of them take
+        // the prompt that way is what agents/launch.ts holds the table for.
+        const built = issueArgv({ prompt: plan.prompt, yolo: false, title: "",
           // A one-off "Run with…" wins over the prompt's own mode, which wins
           // over the global one.
-          agentArgv(bin, { prompt: plan.prompt, yolo: false, title: "", perm: launchPerm(isLaunchMode(msg.mode) ? msg.mode : reviewRecipe(typeof msg.recipe === "string" ? msg.recipe : "")?.permissionMode) }, supportsSessionName(bin)),
+          perm: launchPerm(isLaunchMode(msg.mode) ? msg.mode : reviewRecipe(typeof msg.recipe === "string" ? msg.recipe : "")?.permissionMode) },
+          { canName: supportsSessionName, modelFlags, defaultKind: workerRoles().builder.provider });
+        if (!built.ok) return;
+        const opened = await engineWindowRunning(plan.cwd, `pr-${number}`, built.argv,
           plan.cwd, undefined, lastTmuxTarget()?.session ?? "", true);
         /*
          * And then go there.
@@ -2324,7 +2324,8 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
         provenance: "clicked",
       });
       if (msg.agent === true && prompt) {
-        const bin = claudeCode.bin();
+        /* Which CLI: the person's default engine, as an id of the agent table or
+           Claude, checked in issueArgv because the value picks an executable. */
         /*
          * What runs is decided HERE, not by the client.
          *
@@ -2344,7 +2345,9 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
         // the same division as `--name`: an allowlist, so a socket reachable from
         // the UI still cannot pass an arbitrary argument. Claude only — another
         // CLI's `--model` takes different values.
-        const argv = agentArgv(bin, { prompt, yolo: msg.yolo === true, title, perm: launchPerm(msg.mode, msg.yolo === true) }, supportsSessionName(bin), modelFlags(msg.model, msg.effort));
+        const built = issueArgv({ kind: msg.kind, prompt, yolo: msg.yolo === true, title, perm: launchPerm(msg.mode, msg.yolo === true), model: msg.model, effort: msg.effort }, { canName: supportsSessionName, modelFlags, defaultKind: workerRoles().builder.provider });
+        if (!built.ok) { answer(false, built.error); return; }
+        const argv = built.argv;
         // `reuse` is the caller's to ask for: a live window with this exact name
         // in this checkout is selected instead of a second one being started
         // beside it, and the prompt is NOT sent again — right for a name that

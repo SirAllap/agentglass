@@ -29,7 +29,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { api } from "../lib/api.ts";
-import { subscribe as subscribeChats, listChats } from "../lib/chatStore.ts";
 import { subscribeGitChanged } from "../lib/gitBus.ts";
 import { pollWhileLooking } from "../lib/usePoll.ts";
 import { notesWorthyRepos } from "../lib/gitNote.ts";
@@ -100,8 +99,8 @@ function BellGlyph(p: React.SVGProps<SVGSVGElement>) {
  * Watch the stores worth interrupting for and turn *transitions* into notes.
  *
  * Only transitions, never standing state: it seeds its last-seen maps on the
- * first pass without emitting, so starting the app with three already-finished
- * chats does not fire three stale toasts. Standing state belongs in the bar's
+ * first pass without emitting, so starting the app with three already-blocked
+ * agents does not fire three stale toasts. Standing state belongs in the bar's
  * own readings; a toast means "this just happened, while you were looking away".
  *
  * It also returns the two git readings the notch used to carry, which have no
@@ -141,37 +140,6 @@ export function useAmbientNotes(): { note: Note | null; behind: number; ahead: n
     setNote(next);
     setTimeout(() => advance(), NOTE_MS);
   };
-
-  // Chat transitions: none -> done / blocked.
-  useEffect(() => {
-    const seen = new Map<string, string>();
-    let first = true;
-    const read = () => {
-      for (const c of listChats()) {
-        const prev = seen.get(c.id) ?? "none";
-        seen.set(c.id, c.attention);
-        if (first || c.attention === prev || c.attention === "none") continue;
-        if (c.attention === "blocked") {
-          // Blocked, not merely finished: the chat cannot continue without you.
-          push({ id: `${c.id}-b-${c.messages.length}`, kind: "blocked", color: "var(--error-ink)", title: c.title || "Chat", sub: c.blockedTool ? `Needs "${c.blockedTool}"` : "Waiting on you", urgent: true });
-          // The summary differs from the "Turn finished" one on purpose.
-          // `supersede` keys a chat note on id + summary, so while both said
-          // just the chat title, a turn ending QUIETLY DELETED the urgent
-          // "Blocked" row above it — the one note in this loop he had to act on.
-          recordNote({ app: "chat", summary: `${c.title || "Chat"} — blocked`, body: c.blockedTool ? `Blocked — needs "${c.blockedTool}"` : "Blocked — waiting on you", urgency: 2, goto: { kind: "chat", id: c.id } });
-        } else if (c.attention === "done") {
-          push({ id: `${c.id}-d-${c.messages.length}`, kind: "done", color: "var(--success-ink)", title: c.title || "Chat", sub: "Turn finished" });
-          // Silent, and it always should have been: a turn that ended is not a
-          // task. The chat's own green dot says the same thing without a sound,
-          // and with nine sessions this is the highest-volume note in the app.
-          recordNote({ app: "chat", summary: c.title || "Chat", body: "Turn finished", urgency: 0, goto: { kind: "chat", id: c.id } });
-        }
-      }
-      first = false;
-    };
-    read();
-    return subscribeChats(read);
-  }, []);
 
   // A tool call held at the gate. The most interrupting thing here, because an
   // agent is stopped until it is answered, and unlike everything else it cannot
@@ -430,7 +398,7 @@ function HistoryRow({ n, onGone, onGoto, onMute }: {
    *  because `gates` no longer has it. See gateStore.ts's gateForNote. */
   const gates = useSyncExternalStore(subscribeGates, listGates, listGates);
   const gate = gateForNote(n, gates);
-  /** The destinations that are neither git nor a card: a pane, a chat, a
+  /** The destinations that are neither git nor a card: a pane, a
    *  settings page, a pull request. Each gets the same named button the other
    *  two have, because "click the row" is no longer a way to reach anything. */
   /** The app this came from, when it is one we can open. */
@@ -440,7 +408,6 @@ function HistoryRow({ n, onGone, onGoto, onMute }: {
     if (!g || g.kind === "git" || g.kind === "card") return null;
     if (g.kind === "pr") return { label: `${g.repo}#${g.number}`, title: `Open ${g.repo}#${g.number}` };
     if (g.kind === "pane") return { label: "The terminal", title: "Go to the pane this is about" };
-    if (g.kind === "chat") return { label: "The chat", title: "Open the conversation this is about" };
     if (g.kind === "file") return { label: "The file", title: `Open ${g.path} in Files` };
     return { label: "Settings", title: `Open Settings · ${g.pane}` };
   })();
@@ -637,7 +604,7 @@ type LaneFilter = "all" | "urgent" | Lane;
 const LANES: { id: LaneFilter; label: string; hint: string }[] = [
   { id: "all", label: "All", hint: "Everything collected" },
   { id: "urgent", label: "Needs you", hint: "Only what is stopped until you act" },
-  { id: "agents", label: "Agents", hint: "Approvals, the Lantern, agents asking or failing, chats" },
+  { id: "agents", label: "Agents", hint: "Approvals, the Lantern, agents asking or failing" },
   { id: "work", label: "Work", hint: "Branches, checks, pull requests, cards, updates" },
   { id: "desktop", label: "Desktop", hint: "Mirrored from this machine's own notifications" },
 ];
@@ -879,7 +846,7 @@ export function NotifyBell({ noDrag, onGoto }: {
               // "nothing has happened", and they call for opposite actions.
               <div className="px-3 py-4 text-[11px] flex flex-col gap-2.5" style={{ color: "var(--text3)" }}>
                 <span>
-                  Nothing yet. Chats that finish, agents that block and branches that fall
+                  Nothing yet. Agents that block and branches that fall
                   behind land here{mirroring ? " — your desktop's own notifications too." : "."}
                 </span>
                 {/* The switch, where you notice it is off.

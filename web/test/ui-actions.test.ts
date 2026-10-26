@@ -14,7 +14,6 @@ import type { ControlCmd } from "../../shared/types.ts";
 import type { UiCtx } from "../src/lib/uiActions.ts";
 import { onOpenSettings } from "../src/lib/openSettings.ts";
 import { onFinderAt, type FinderTarget } from "../src/lib/finderTarget.ts";
-import { peekChatIntent, takeChatIntent } from "../src/lib/chatIntent.ts";
 import { takeGitModal, latchGitModal, GIT_MODAL_TTL_MS } from "../src/lib/gitModalIntent.ts";
 import { benchState, __resetBench } from "../src/lib/benchStore.ts";
 import { clearPeek, peekRequest } from "../src/lib/openPeek.ts";
@@ -48,7 +47,7 @@ function ctx() {
 }
 const ui = (id: string, args: Record<string, unknown> = {}) => ({ cmd: "ui", do: id, args }) as unknown as ControlCmd;
 
-beforeEach(() => { __resetBench(); clearPeek(); takeChatIntent(); takeGitModal(); takeViewModal("lantern.schedule"); takeViewModal("terminal.resume"); });
+beforeEach(() => { __resetBench(); clearPeek(); takeGitModal(); takeViewModal("lantern.schedule"); takeViewModal("terminal.resume"); });
 afterEach(() => { onOpenSettings(null); });
 
 describe("runControl — one handler for both spellings", () => {
@@ -89,13 +88,6 @@ describe("runControl — one handler for both spellings", () => {
     expect(writable(2)).toBeGreaterThan(20);
     expect(writable(3)).toBe(writable(2));
     expect(writable(undefined)).toBe(writable(2));
-  });
-
-  it("a chat command latches the intent and then opens the view", () => {
-    const k = ctx();
-    runControl({ cmd: "chat", do: "new" }, k.c);
-    expect(peekChatIntent()).toBe("new");
-    expect(k.calls).toEqual([["goView", "chat"]]);
   });
 
   it("a frame that names no door, or an unknown one, runs nothing", () => {
@@ -319,12 +311,12 @@ describe("the table", () => {
 /* ── reads ───────────────────────────────────────────────────────────────── */
 
 const slice: AppSlice = {
-  view: "chat", theme: "graphite", scale: 1, workspace: null, windowMs: 1, filter: { app: "", type: "", provider: "" },
+  view: "git", theme: "graphite", scale: 1, workspace: null, windowMs: 1, filter: { app: "", type: "", provider: "" },
   modals: { settings: false, palette: false, help: false, stats: false, skills: false, search: false, finder: false, windows: false, projectPicker: false, machine: null },
   selectedEvent: null, session: null, peek: null, finderPath: null,
 };
 const fixture: Sources = {
-  app: () => slice, chats: () => ({ list: [], activeId: "" }), bench: () => benchState(), gates: () => [],
+  app: () => slice, bench: () => benchState(), gates: () => [],
   diff: () => ({ split: true, wrap: false, noWhitespace: false, theme: "auto" }),
   terminal: () => ({ font: "", size: 13, cursor: "block", lineHeight: 1, scrollback: 4000, wordSeparators: " ", copyOnSelect: true, noteEditor: "builtin" }),
   browser: () => ({ home: "https://duckduckgo.com", engine: "duckduckgo", zoomLevel: 0, importHistory: true, importBookmarks: true }),
@@ -336,7 +328,7 @@ const fixture: Sources = {
   appearance: () => ({ mode: "dark", accent: "", desktopPalette: null }),
   understudy: () => null,
   later: {
-    hooks: async () => ({ installed: false, bundled: false, gate: false, gateBundled: false, python: "python3", settingsPath: "", engine: "default" }),
+    hooks: async () => ({ installed: false, bundled: false, gate: false, gateBundled: false, python: "python3", settingsPath: "" }),
     lantern: async () => ({ nudge: false, minutes: 20, watch: false, watchMinutes: 10, cacheTtlMinutes: 5, wakeHours: null }),
     budgets: async () => ({ rows: [], models: 0, pace: { spread: "working", workDays: [], workStart: 9, workEnd: 18, rollover: true, burnWindowHours: 3, alertAt: 90, timeZone: "UTC" }, usageRefresh: false }),
     recipes: async () => [], reviewPrompts: async () => [], savedReplies: async () => [],
@@ -347,6 +339,7 @@ const fixture: Sources = {
     about: async () => ({ version: "0.0.0", commit: "", stamp: "", builtAt: "", baseTag: "", distance: 0, dirty: false, dirtyCount: 0, branch: "", behind: 0, ahead: 0, available: false, blocked: "", incoming: [], digest: null, origin: "" }),
     diskClean: async () => ({ lines: [], mounts: [], safeBytes: 0, at: 0, problems: [] }),
     usageAccounts: async () => [],
+    usageOpens: async () => ({ since: "2026-10-20", opens: [] }),
   },
 };
 
@@ -391,7 +384,7 @@ describe("controlReply — what the window answers", () => {
     expect(k.calls).toEqual([]);
   });
 
-  it("a read raises nothing: no setting is opened, no view changes, no chat or git intent is latched, the bench stays shut", async () => {
+  it("a read raises nothing: no setting is opened, no view changes, no git intent is latched, the bench stays shut", async () => {
     const k = ctx();
     k.c.sources = fixture;
     let opened = 0;
@@ -401,7 +394,6 @@ describe("controlReply — what the window answers", () => {
     expect(opened).toBe(0);
     expect(k.calls).toEqual([]);
     expect(benchState().open).toBe(false);
-    expect(takeChatIntent()).toBeNull();
     expect(takeGitModal()).toBeNull();
     expect(peekRequest()).toBeNull();
   });
@@ -421,8 +413,8 @@ describe("controlReply — what the window answers", () => {
   it("a window that cannot describe itself says so, and a throwing handler is an error and not a crash", () => {
     const k = ctx();
     expect(controlReply(ui("ui.state"), k.c)).toEqual({ ok: false, applied: false, error: "this window cannot describe itself" });
-    k.c.sources = { ...fixture, chats: () => { throw new Error("store exploded"); } };
-    expect(controlReply(ui("ui.read", { panel: "chat" }), k.c)).toEqual({ ok: false, applied: false, error: "store exploded" });
+    k.c.sources = { ...fixture, bench: () => { throw new Error("store exploded"); } };
+    expect(controlReply(ui("ui.read", { panel: "bench" }), k.c)).toEqual({ ok: false, applied: false, error: "store exploded" });
   });
 
   it("the reply survives the wire: JSON in, the same JSON out", () => {

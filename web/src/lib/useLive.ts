@@ -300,28 +300,6 @@ export function useLive(paused = false): LiveData {
         void nudgeReminders();
         return;
       }
-      if (frame.type === "alert" && frame.data?.kind === "understudy") {
-        /*
-         * THE CLONE IS STOPPED AND NEEDS A PERSON.
-         *
-         * Same treatment as an alarm, for the same reason: a machine that has
-         * stopped and will stay stopped until somebody looks has failed at the
-         * only job it had if its report arrives as another grey row. It takes
-         * the screen AND goes out as an OS notification at critical urgency, so
-         * it survives the window being behind something else — or closed.
-         *
-         * "It should warn me somehow… but not the usual notifications."
-         */
-        raiseAlarm({
-          id: `deputy-${Date.now()}`,
-          kind: "deputy",
-          title: frame.data.title.replace(/^🙋\s*/, ""),
-          when: frame.data.body,
-          at: Date.now(),
-        });
-        fireDesktopAlert(frame.data);
-        return;
-      }
       if (frame.type === "alert") {
         // agentglass's own push alert (gate hold, permission wait, tool error),
         // opted into on the server. Raise it as a native OS notification — the

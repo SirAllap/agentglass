@@ -131,11 +131,11 @@ async function terminalContract(): Promise<void> {
 /**
  * Can this platform launch a CLI installed the way npm installs one? (#195)
  *
- * `chat.ts` finds its CLI with `Bun.which("claude")` and launches it with
+ * The agent launcher finds its CLI with `Bun.which("claude")` and launches it with
  * `Bun.spawn`, and on Windows an npm install lands as a `claude.cmd` shim
  * rather than an executable — so both steps were open questions that could not
- * be answered from a Linux machine, and a wrong answer means the chat panel is
- * dead at the first turn rather than degraded. This asks the same two questions
+ * be answered from a Linux machine, and a wrong answer means agent launches are
+ * dead at the first start rather than degraded. This asks the same two questions
  * of a shim we write ourselves, through the same two functions.
  *
  * It runs everywhere: on POSIX the shim is a `#!/bin/sh` script, which keeps

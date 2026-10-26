@@ -2890,11 +2890,18 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const issue = useSyncExternalStore(subscribeTermIssue, termIssue, termIssue);
   useEffect(() => {
     if (!issue || !socketLive) return;
+    if (issue.resumeId) {
+      // The server's `resume` has no answer of its own; a refusal arrives as `openfail`.
+      tmuxCmd({ cmd: "resume", id: issue.resumeId, cwd: issue.cwd, split: false, yolo: false });
+      resolveTermIssue(issue.n, { ok: true });
+      clearTermIssue();
+      return;
+    }
     // Remembered before it is sent, because the fallback below needs it and the
     // slot is cleared here: a second press must not be blocked waiting on the
     // first one's answer.
     lastIssue.current = issue;
-    tmuxCmd({ cmd: "issue", n: issue.n, cwd: issue.cwd, name: issue.name, prompt: issue.prompt, agent: issue.agent, yolo: issue.yolo, title: issue.title, model: issue.model, effort: issue.effort, reuse: issue.reuse });
+    tmuxCmd({ cmd: "issue", n: issue.n, cwd: issue.cwd, name: issue.name, prompt: issue.prompt, agent: issue.agent, yolo: issue.yolo, title: issue.title, model: issue.model, effort: issue.effort, reuse: issue.reuse, kind: issue.kind });
     clearTermIssue();
   }, [issue, socketLive, tmuxCmd]);
 

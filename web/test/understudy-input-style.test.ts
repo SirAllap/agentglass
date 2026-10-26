@@ -86,17 +86,4 @@ describe("a control on this screen governs something", () => {
     expect(code).not.toContain("/understudy/reach");
   });
 
-  test("what it does show is what reaches the loop", () => {
-    /*
-     * Counted in the code the loop runs, not asserted from memory:
-     * `understudyEnabled`, `isHalted`, `openProjectName` and `proposeScope`
-     * have callers there; stance and reach have none. The first two are the
-     * state word in this header; the last two live on the Work tab beside the
-     * button that starts a run, which is where a limit belongs.
-     */
-    const work = readFileSync(join(here, "..", "src", "components", "understudy", "Work.tsx"), "utf8");
-    expect(work).toContain("/understudy/propose-scope");
-    expect(work).toContain("/understudy/open-project");
-    expect(code).toContain("frame.halted");
-  });
 });

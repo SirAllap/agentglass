@@ -3,15 +3,13 @@ import type { ViewId } from "../components/workspace/views.ts";
 /**
  * The count a rail icon wears, and whether the person wants it.
  *
- * Only three views carry a number today, each the count of things that want
- * the person (not the size of a backlog): chats that replied while they were
- * elsewhere, agents stopped on them, reminders that fired. Pull requests carry
- * none, and no row is drawn for a view that has no number to hide. The choice is
+ * Only two views carry a number today, each the count of things that want
+ * the person (not the size of a backlog): agents stopped on them, reminders
+ * that fired. Pull requests carry none, and no row is drawn for a view that has no number to hide. The choice is
  * stored as the list of views whose count is hidden, so a view added later
  * starts counted.
  */
 export const COUNTED_VIEWS: Partial<Record<ViewId, string>> = {
-  chat: "Chats that replied while you were elsewhere.",
   lantern: "Agents stopped on you.",
   tasks: "Reminders that fired.",
 };

@@ -31,7 +31,7 @@ import { PublishReview } from "./plugins/PublishReview.tsx";
 import { latestRun } from "../lib/publishReview.ts";
 import { useLocalNotes, groupByRun, RunCard, NoteCard, LocalMark, LocalStrip, sortNotes, type LocalNotes, type LocalNote } from "./plugins/LocalReview.tsx";
 import { createContext, Fragment, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
-import { handoffTo } from "../lib/handoffTo.ts";
+import { sendToTerminal, sentNote } from "../lib/sendToTerminal.ts";
 import { isBackButton } from "../lib/mouseBack.ts";
 import { onAppBack } from "../lib/desktop.ts";
 import { requestTermIssue } from "../lib/termIssue.ts";
@@ -1648,12 +1648,11 @@ function Pill({ on, label, icon, dot, count, countTint, title, onClick }: {
 // panel
 // ---------------------------------------------------------------------------
 
-export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
+export function PrView({ active, onReviewInTerminal, jumpTo }: {
   active: boolean;
   /** An errand another panel sent us on — see lib/openPrs.ts. */
   jumpTo?: import("../lib/openPrs.ts").PrJump | null;
-  onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
-  /** Hand the review to the user's own tmux instead of to the chat. */
+  /** Hand the review to the user's own tmux instead of to a one-off window. */
   onReviewInTerminal?: (root: string, number: number, recipe?: string, card?: string, mode?: LaunchMode) => void;
 }) {
   const { ask, askText, open: askOpen, dialog } = useDialogs();
@@ -4192,7 +4191,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   };
 
   /**
-   * Hand a pull request to the chat.
+   * Hand a pull request to Claude in a terminal window.
    *
    * Takes a number so a list row can do it without opening the pull request
    * first — the review prompt is built server-side from the number alone, so
@@ -4213,8 +4212,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       const card = detail ? cardRef(detail)?.label ?? "" : "";
       const r = await api.prReviewPrompt(root, num, recipe, card);
       if (!r.ok || !r.cwd || !r.prompt) { flash(false, r.error || "Could not prepare the review"); return; }
-      if (onOpenChatWith) { onOpenChatWith(r.cwd, r.prompt, `Review #${num}`); flash(true, `#${num} is waiting in chat`); }
-      else flash(false, "The chat is not available here");
+      const done = await sendToTerminal(r.cwd, r.prompt, `Review #${num}`);
+      const n = sentNote(done, `#${num}`);
+      flash(n.ok, n.text);
     } catch (e) { flash(false, String(e)); }
     finally { setBusy(false); }
   };
@@ -4364,24 +4364,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     else flash(false, r.error ?? "Could not reach the clipboard");
   };
 
-  /** Hand a failing check to the chat pointed at this project, with the job that
-   *  broke named, so the answer is written against the code that failed rather
-   *  than a guess from the name of the job. */
-  /*
-   * The last one that decided for you.
-   *
-   * A failing check is exactly the case where the terminal is often the right
-   * place — you are about to read a log, try a command, and try it again — so
-   * sending it to the chat without asking was the wrong default for the wrong
-   * reason: it was simply the only path wired in.
-   *
-   * `to` is the same preference the ClickUp hand-off uses, read here rather
-   * than duplicated, so choosing once covers both.
-   */
-  const askClaudeAboutCheck = async (check: PrCheck, where?: "chat" | "term") => {
+  /** Hand a failing check to a terminal window pointed at this project, with the
+   *  job that broke named, so the answer is written against the code that failed
+   *  rather than a guess from the name of the job. */
+  const askClaudeAboutCheck = async (check: PrCheck) => {
     if (!detail) return;
-    const to = where ?? handoffTo();
-    if (to === "chat" && !onOpenChatWith) return;
     setBusy(true);
     try {
       const r = await api.prReviewPrompt(root, detail.number);
@@ -4392,14 +4379,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
         `Read the change with:  gh pr diff ${detail.number}\n\n` +
         `This working directory is the same project, but not the pull request. Work out why the job is failing and propose the fix. Do not change any files yet.` +
         (check.url ? `\n\nThe run is at ${check.url}.` : "");
-      if (to === "term") {
-        const done = await requestTermIssue(r.cwd, `check-${detail.number}`, prompt, true, false, "", "", "", true);
-        if (done.ok) flash(true, done.reused ? `#${detail.number} already has its tab open — switched to it` : `#${detail.number} is waiting in a pane`);
-        else flash(false, `Not started: ${done.error}`);
-      } else {
-        onOpenChatWith!(r.cwd, prompt, `Check on #${detail.number}`);
-        flash(true, `#${detail.number} is waiting in chat`);
-      }
+      const done = await sendToTerminal(r.cwd, prompt, `check-${detail.number}`);
+      const n = sentNote(done, `#${detail.number}`);
+      flash(n.ok, n.text);
     } catch (e) { flash(false, String(e)); }
     finally { setBusy(false); }
   };
@@ -5604,7 +5586,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                     prRefs={{ repo: repo?.nameWithOwner ?? "", titleOf: (n) => prs.find((p) => p.number === n)?.title, changed: { paths: d.files.map((f) => f.path), complete: !d.truncated?.files } }}
                     onRerun={() => act("Re-run checks", () => api.prRerun(root, d.number))}
                     onRerunJobs={(what, id) => act("Re-run", () => api.prRerunJobs(root, what, id))}
-                    onAsk={onOpenChatWith ? (k) => askClaudeAboutCheck(k) : undefined}
+                    onAsk={(k) => askClaudeAboutCheck(k)}
                   />
                 )}
 
@@ -6698,31 +6680,24 @@ const MenuHead = ({ children }: { children: React.ReactNode }) => (
 );
 
 /**
- * One prompt in the Review menu, and the chat as an afterthought on a row that
- * is already a button.
+ * One prompt in the Review menu.
  *
- * It was two icons — a terminal and a chat — on a row whose TITLE did a third
- * thing. Reported straight away: pressing the row anywhere but exactly on the
- * `>_` "sends me to the terminal and then nothing happens". A row with three
- * targets and no obvious one is a row you have to aim at, and the whole point
- * of the menu is picking a prompt, not picking a pane.
+ * The whole row runs it, in a terminal — see ReviewMenu: a row with several
+ * targets is a row you have to aim at, and the point of the menu is picking a
+ * prompt, not a pane. Reported once as pressing the row anywhere but exactly on
+ * its icon "sends me to the terminal and then nothing happens".
  *
- * So the row runs it in a terminal — see ReviewMenu — and this is the one
- * exception, kept because the chat pane is genuinely the quicker read
- * sometimes. `stopPropagation`, or it would fire the row's terminal underneath
- * it.
- *
- * The ⋮ now opens the other ways to run it, under the row rather than as a second floating
- * menu inside a scrolling one — in the chat instead, or once in another
- * permission mode than the one it would start in. The quiet badge says when a
- * prompt's own mode differs from the global one.
+ * The ⋮ opens the other ways to run it, under the row rather than as a second
+ * floating menu inside a scrolling one: once in another permission mode than the
+ * one it would start in. The quiet badge says when a prompt's own mode differs
+ * from the global one.
  */
 function ReviewItem({ r, ink, canTerm, close, onPick }: {
   r: ReviewRecipe; ink: string; canTerm: boolean; close: () => void;
-  onPick: (recipe: string, where: "term" | "chat", mode?: LaunchMode) => void;
+  onPick: (recipe: string, where: "term" | "local", mode?: LaunchMode) => void;
 }) {
   const [more, setMore] = useState(false);
-  const run = (where: "term" | "chat", mode?: LaunchMode) => { close(); onPick(r.id, where, mode); };
+  const run = (where: "term" | "local", mode?: LaunchMode) => { close(); onPick(r.id, where, mode); };
   const sub = "agx-mi w-full flex items-center gap-2 pl-6 pr-3 py-1 text-[11px] cursor-pointer";
   // Only the row's own key press: Enter on the ⋮ inside it bubbles here too, and
   // would run the prompt instead of opening its other ways.
@@ -6730,8 +6705,8 @@ function ReviewItem({ r, ink, canTerm, close, onPick }: {
   return (
     <>
       <div role="menuitem" tabIndex={0}
-        onClick={() => run(canTerm ? "term" : "chat")}
-        onKeyDown={key(() => run(canTerm ? "term" : "chat"))}
+        onClick={() => run(canTerm ? "term" : "local")}
+        onKeyDown={key(() => run(canTerm ? "term" : "local"))}
         title={r.skill || r.title}
         className="agx-mi w-full flex items-center gap-2 px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: ink }}>
         <span className="min-w-0 truncate flex-1">
@@ -6748,8 +6723,6 @@ function ReviewItem({ r, ink, canTerm, close, onPick }: {
       </div>
       {more && (
         <div role="group" aria-label={`Ways to run ${r.title}`}>
-          <div role="menuitem" tabIndex={0} className={sub} style={{ color: "var(--text2)" }}
-            onClick={() => run("chat")} onKeyDown={key(() => run("chat"))}>In the chat pane instead</div>
           {canTerm && <>
             <div className="pl-6 pr-3 pt-1 text-[10px]" style={{ color: "var(--text4)" }}>Run with…</div>
             {LAUNCH_MODES.map((m) => (
@@ -6837,16 +6810,14 @@ const PING_RECIPE = "ready-for-review";
  * prompts GitHub's fields did not ask for would have hidden the one that was
  * wanted.
  *
- * Both destinations on every row, rather than a remembered default: a terminal
- * window and a chat pane are not the same thing badly — the terminal is a real
- * agent in tmux you can attach to and keep working in, the chat is the quicker
- * read — and which one you want depends on the prompt you just picked.
+ * The row runs the prompt in a terminal: a real agent in tmux you can attach to
+ * and keep working in.
  */
 function ReviewMenu({ d, onPick, canTerm, primary = true }: {
   d: PrDetail;
-  onPick: (recipe: string, where: "term" | "chat", mode?: LaunchMode) => void;
-  /** False in a window with no terminal to send it to — the row then offers
-   *  the chat alone rather than a button that quietly does nothing. */
+  onPick: (recipe: string, where: "term" | "local", mode?: LaunchMode) => void;
+  /** False in a window with no terminal view to send it to — the row then hands
+   *  the review over from here ("local") rather than doing nothing. */
   canTerm: boolean;
   primary?: boolean;
 }) {
@@ -8934,17 +8905,9 @@ function Masthead({ root, repo, d, busy, local, stackUi, onOpenPr, onShowLocal, 
             agent instead of to a browser tab — and it was three clicks deep
             behind a ⋯ that also holds "Close pull request". Beside the menu
             rather than inside it. */}
-        {/* Two places the same review can happen, and they are not a setting:
-            the chat renders from the transcript and keeps the pane out of
-            sight, the terminal gives you the session itself, attached, in a tab
-            beside your shells. Which one you want depends on whether you intend
-            to watch or to join in. */}
-        {/* A terminal first, and the chat last, in both copies — see
-            ReviewMenu. The chat pane is a second home for a conversation that
-            already has one: a real agent in a real tmux window, which survives
-            a restart of this app and is where the work continues after the
-            review. The chat is kept because it is occasionally the quicker
-            read, not because it is the better place to send somebody. */}
+        {/* The review runs in a terminal: a real agent in a real tmux window,
+            attached in a tab beside your shells, which survives a restart of
+            this app and is where the work continues after the review. */}
         <ReviewMenu d={d} canTerm={!!onReviewInTerminal}
           onPick={(recipe, where, mode) => (where === "term" ? onReviewInTerminal?.(recipe, mode) : onLocalReview(recipe))} />
         <PluginPrActions number={d.number} local={local} onShowLocal={onShowLocal} root={root} head={{ sha: d.headSha, at: d.readAt }} />

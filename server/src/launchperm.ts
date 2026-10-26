@@ -11,8 +11,7 @@
  * (agentticket.ts) or `launchFlags`; server/test/launch-helper-guard.test.ts
  * fails when one does not.
  *
- * Not here, on purpose: the chat (chat.ts, chatpane.ts), which has its own mode
- * picker in the composer, and the unattended one-shots (headless.ts, the
+ * Not here, on purpose: the unattended one-shots (headless.ts, the
  * understudy, the judge), whose modes are part of what they are.
  */
 import { agentKind } from "../../shared/agentKinds.ts";

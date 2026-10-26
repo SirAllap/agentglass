@@ -4,7 +4,6 @@ import { BoltIcon, ClockIcon, CrossIcon, DiskIcon, DoneIcon, FireIcon, HandIcon,
 import { motion, AnimatePresence } from "motion/react";
 import type { Alert, AgentCard } from "../lib/derive.ts";
 import { collectAttention } from "../lib/attention.ts";
-import { listChats, subscribe as subscribeChats } from "../lib/chatStore.ts";
 import { listGates, subscribeGates, answerGate } from "../lib/gateStore.ts";
 import type { Insight, PendingGate, GateRecord } from "../../../shared/types.ts";
 import { Panel } from "./Panel.tsx";
@@ -126,16 +125,13 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump, active = true }
   /*
    * One list, one count.
    *
-   * This used to add up its own three sources, which meant the panel titled
-   * "What needs you" could say "2 open" while the header's chat badge said 3 —
-   * both right about their own corner, and neither about the whole. Now both
-   * read the same selector, so they cannot disagree, and a chat blocked on a
-   * refused tool finally shows up in the panel named for exactly that.
+   * This used to add up its own sources, which meant the panel titled
+   * "What needs you" and the header badge could disagree. Now both read the
+   * same selector, so they cannot.
    */
-  const chats = useSyncExternalStore(subscribeChats, listChats, listChats);
   const attention = useMemo(
-    () => collectAttention({ gates, insights, alerts, chats, agents }),
-    [gates, insights, alerts, chats, agents],
+    () => collectAttention({ gates, insights, alerts, agents }),
+    [gates, insights, alerts, agents],
   );
   const openCount = attention.length;
   const empty = openCount === 0 && insights.length === 0 && autoResolved.length === 0;

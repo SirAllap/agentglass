@@ -31,8 +31,7 @@ interface running in your browser on sample data.
 
 - **Run your agents.** It attaches to the sessions already open in tmux, and it
   can start them: a task or a GitHub issue becomes a worktree, a branch and an
-  agent working in it, several at once without colliding. Chat with Claude,
-  Codex or Antigravity from a panel, or hand a conversation from one to another.
+  agent working in it, several at once without colliding.
 - **Seat an orchestrator.** One agent per project keeps the field in view and
   hands work to workers under a policy you set in Settings: which engine sits
   in the chair, which ones do the work, what a worker may touch, and the rules
@@ -132,7 +131,7 @@ to a model. [SECURITY.md](SECURITY.md) lists every switch.
 <summary><b>What do I actually need installed?</b></summary>
 
 **Needed:** git, the Claude Code CLI, and Python 3.
-**Per feature:** tmux (chats as live panes, your tmux windows as tabs, theme
+**Per feature:** tmux (agents as live panes, your tmux windows as tabs, theme
 sync), the GitHub CLI (the pull-requests panel — and logged in, which is the
 step people miss), Docker (containers, images, volumes, logs).
 
@@ -201,7 +200,6 @@ label is where to start.
 - Review a local diff in place and send the whole review as one prompt — [#294](https://github.com/SirAllap/agentglass/issues/294)
 - An API panel to exercise the endpoints the fleet is building — [#170](https://github.com/SirAllap/agentglass/issues/170)
 - A decision log mined from transcripts — [#13](https://github.com/SirAllap/agentglass/issues/13)
-- Voice input in chat — [#92](https://github.com/SirAllap/agentglass/issues/92)
 
 Shipped so far, newest first: [**CHANGELOG.md**](CHANGELOG.md) and the
 [releases](https://github.com/SirAllap/agentglass/releases).
@@ -232,7 +230,5 @@ trademarks of Anthropic.
 
 MIT © 2026 David Pallares — see [LICENSE](LICENSE).
 
-One bundled set of artwork is not MIT: the portrait layers the Understudy draws
-are CC BY 4.0, which asks for attribution rather than permission.
-[**NOTICE.md**](NOTICE.md) is where that is discharged, and it is the only
-reason this repository has a NOTICE at all.
+The icons the file manager borrows from Strata carry their own notices in
+[**NOTICE.md**](NOTICE.md).

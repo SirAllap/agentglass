@@ -1,4 +1,4 @@
-// The models the Chat panel offers for Claude Code.
+// The models agentglass offers for Claude Code.
 //
 // The other two agents are asked: Codex keeps a `models_cache.json` it refreshes
 // itself, and Antigravity answers `agy models`. Claude Code publishes neither —
@@ -18,7 +18,7 @@
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { homedir } from "node:os";
-import { MODEL_RE } from "./chat.ts";
+import { MODEL_RE } from "./agentids.ts";
 import type { AgentModel } from "../../shared/types.ts";
 
 /** What one row of the catalogue may say. Everything except `id` is optional so
@@ -101,7 +101,7 @@ export function parseCatalog(raw: string, today = todayStamp()): AgentModel[] {
   for (const r of rows as Row[]) {
     if (!r || typeof r !== "object") continue;
     const id = typeof r.id === "string" ? r.id.trim() : "";
-    // The same expression guards the spawn in chat.ts, so an id that would be
+    // The same expression guards the spawn (agentids.ts), so an id that would be
     // refused there is not offered here — a dropdown entry that cannot be sent
     // is worse than one that is missing.
     if (!id || seen.has(id) || !MODEL_RE.test(id)) continue;

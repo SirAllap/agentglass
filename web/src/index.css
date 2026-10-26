@@ -609,19 +609,6 @@
 }
 
 /*
- * The look editor: a portrait that stays put while the pickers scroll past it.
- *
- * `position: sticky` on the aside, and the scroller it resolves against is the
- * settings column's own — which is the whole reason the portrait had to leave
- * the card. A card clips its corners, `overflow: hidden` makes it a scroll
- * container, and a sticky child of a container that never scrolls never moves.
- *
- * `align-items: start` on the grid, because a grid item stretches to the row
- * by default and a stretched item is full height — and an element that is
- * already as tall as its track has nowhere to stick TO. This is the one
- * declaration that silently turns the whole thing off.
- */
-/*
  * A LIST COLUMN beside a reading surface.
  *
  * Git, Diff and the preset diff each put a file list to the left of the thing
@@ -647,30 +634,6 @@
 
 .agx-sidelist {
   background: var(--surface-nav);
-}
-
-.agx-look {
-  display: grid;
-  grid-template-columns: 264px minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
-}
-.agx-look-portrait {
-  position: sticky;
-  /* Clear of the top edge, so the card does not sit flush against the scroll
-     boundary and read as clipped. */
-  top: 8px;
-}
-/* Below this the two columns cost more than the anchoring earns: a 264px
-   portrait beside a picker grid leaves the chips three to a row. It stacks,
-   and the portrait goes back to being the first thing you see. */
-@container agx-settings (max-width: 720px) {
-  .agx-look { grid-template-columns: minmax(0, 1fr); }
-  .agx-look-portrait { position: static; }
-  /* Stacked, the portrait is one more card in the column: the same 24px
-     break as between two cards, not the 16px of the two-column gap. */
-  .agx-look { gap: 0; }
-  .agx-look-portrait { margin-bottom: 24px; }
 }
 
 /* A group whose every row was filtered away takes its card with it. The rows

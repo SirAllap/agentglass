@@ -64,7 +64,7 @@ describe("who a plugin token is", () => {
     const t = mintPluginToken("answer", "watcher");
     const c = callerFor(...at(t), "machine-token")!;
     expect(allowed(c, "GET", "/sessions")).toBe(true);
-    expect(allowed(c, "POST", "/chat/send")).toBe(true);
+    expect(allowed(c, "POST", "/marks")).toBe(true);
     expect(allowed(c, "POST", "/terminal/tmux/windows")).toBe(false);
     revokePluginToken(t);
   });

@@ -25,7 +25,7 @@ const PICKER = "CheckoutPicker.tsx";
 
 /** Everything that draws a checkout chooser, and must do it through the one. */
 const USERS = [
-  "GitPanel.tsx", "FilesPanel.tsx", "ChatPanel.tsx", "TerminalPanel.tsx",
+  "GitPanel.tsx", "FilesPanel.tsx", "TerminalPanel.tsx",
   "MachinePanel.tsx", "RecipesPane.tsx", "BudgetsPane.tsx",
   // Both read one repository's remote, and under "All repos/projects" that
   // was whichever sorted first, with nothing on screen to move it.

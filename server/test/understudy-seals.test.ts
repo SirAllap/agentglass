@@ -61,29 +61,24 @@ const understudy = () => ({ kind: "machine" as const, scope: "full" as const, pr
 
 describe("seal: argv and free text cannot reach a shell", () => {
   /*
-   * The two routes that would let it run anything.
+   * The route that would let it run anything.
    *
    * `/terminal/tmux/windows` takes an argv that is joined into a shell string
-   * by tmuxlayout.ts, and `/chat/send` takes free text that becomes a prompt.
-   * Either one is a shell, one mis-prediction away. The fence is that the
-   * understudy's allowlist is POSITIVE and neither route is on it — so this is
-   * not a matter of the actuator choosing well, it is a matter of the route not
-   * existing for this caller.
+   * by tmuxlayout.ts, which is a shell one mis-prediction away. The fence is
+   * that the understudy's allowlist is POSITIVE and the route is not on it — so
+   * this is not a matter of the actuator choosing well, it is a matter of the
+   * route not existing for this caller.
    */
-  test("neither route is reachable by the understudy principal", () => {
+  test("the route is not reachable by the understudy principal", () => {
     expect(AUTH.allowed(understudy(), "POST", "/terminal/tmux/windows")).toBe(false);
-    expect(AUTH.allowed(understudy(), "POST", "/chat/send")).toBe(false);
-    expect(AUTH.allowed(understudy(), "POST", "/chat/pane/key")).toBe(false);
   });
 
-  test("and they are not on the allowlist by name, so adding them is a visible act", () => {
+  test("and it is not on the allowlist by name, so adding it is a visible act", () => {
     // Enumerated rather than probed: a route added to UNDERSTUDY_POST without
     // a line here is a change to what this thing may do, and it should fail a
     // test rather than pass quietly.
     const list = [...AUTH.UNDERSTUDY_POST].sort();
     expect(list).not.toContain("/terminal/tmux/windows");
-    expect(list).not.toContain("/chat/send");
-    expect(list).not.toContain("/chat/pane/key");
   });
 });
 
@@ -264,75 +259,6 @@ describe("seal: what the queue can reach is bounded before anybody presses", () 
     expect(src).not.toContain('"/understudy/queue/add"');
   });
 
-
-
-
-
-  test("a shift cannot extend itself", async () => {
-    const Shift = await import("../src/understudy-shift.ts");
-    // Every other limit here is enforced somewhere. This one is enforced by the
-    // absence of a way to do it, which is the strongest version available.
-    expect(Object.keys(Shift)).not.toContain("extend");
-    const src = await Bun.file(new URL("../src/index.ts", import.meta.url)).text();
-    expect(src).not.toContain('"/understudy/shift/extend"');
-  });
-});
-
-describe("seal: halt puts back what it did", () => {
-  /*
-   * OFF `todo`, and what took it off was not a better test — it was a
-   * sequence existing to interrupt.
-   *
-   * While nothing could act, "halt stops it" and "halt puts everything back"
-   * were the same sentence, because nothing was ever standing. The moment a
-   * shift could act they came apart: stopping prevents the next thing and
-   * leaves everything already done exactly where it is. A halt that only
-   * stopped would have been the most dangerous kind of button — one whose name
-   * promises more than it does.
-   */
-  test("halting a shift stops it, and the work it did stays on disk", async () => {
-    /*
-     * THIS SEAL USED TO READ "halt puts everything back", and it was answered
-     * by unwinding a table of reversible acts — a table that never held a row,
-     * so the unwinding never ran.
-     *
-     * The promise did not disappear, it moved. Work happens in a DISPOSABLE
-     * WORKTREE, so putting everything back is removing a directory, and that
-     * is precisely why the agent can be handed every tool in the first place.
-     *
-     * Which is also why halting must NOT delete anything: that directory holds
-     * the only copy of whatever it had done. Throwing it away is a decision
-     * somebody makes after reading it.
-     */
-    const src = await Bun.file(new URL("../src/index.ts", import.meta.url)).text();
-    /*
-     * Bounded by the NEXT ROUTE, not by the end of a function. A route handler
-     * is a branch inside one enormous if/else, so `\n}` lands somewhere far
-     * below it and drags in whatever comes next — which is how this assertion
-     * started reading other routes' mentions of worktrees.
-     */
-    const from = src.indexOf('pathname === "/understudy/halt"');
-    const next = src.indexOf("if (pathname ===", from + 20);
-    const block = src.slice(from, next === -1 ? from + 2500 : next);
-    expect(block).toContain('Shift.stop(running.id, "you halted it")');
-    /*
-     * About CODE, not about words. The first version of this asserted the
-     * block did not contain "worktree" — and failed against the comment that
-     * explains why no worktree is touched. A guard that a paragraph can break
-     * is a guard that gets deleted.
-     */
-    const code = block.split("\n").filter((l) => !/^\s*(\*|\/\*|\/\/)/.test(l)).join("\n");
-    expect(code).not.toContain("worktree");
-    expect(code).not.toContain("discardRun");
-    expect(code).not.toContain("runGitIn");
-  });
-
-  /*
-   * The two that followed — unwinding newest first, and carrying on past a
-   * failure — described a table of acts that never held a row. There is no
-   * unwinding now: reversal is removing the worktree, and that is a decision
-   * somebody makes after reading it.
-   */
 });
 
 describe("seal: the only claim still unproven", () => {

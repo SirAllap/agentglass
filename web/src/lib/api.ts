@@ -9,7 +9,7 @@ import { DEFAULT_LAUNCH_DENY, type LaunchMode, type LaunchPermissions } from "..
 import type { PinnedPlace, PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/types.ts";
 import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, BrowsePage, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, ServeResult, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, EnginesReport, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, OrphanReport, OrphanStopResult, DiskCleanReport, DiskCleanRunResult, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, VolumeList, NetworkList, RemoteStep, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, PluginUpdateReport, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest, FsBody, FsAnswer, FsJob, FsTrashRow, FsProps, OpenWithList, FinderAction, FinderActionList, MediaFacts } from "../../../shared/types.ts";
+import type { WatchEvent, UsageOpens, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, BrowsePage, FileFacts, FileGitFacts, TerminalCommands, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, RemoteStatus, ServeResult, PairState, PairedDevice, DeviceScope, Budget, BudgetStatus, AgentProbe, EnginesReport, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, OrphanReport, OrphanStopResult, DiskCleanReport, DiskCleanRunResult, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, VolumeList, NetworkList, RemoteStep, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, PluginUpdateReport, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest, FsBody, FsAnswer, FsJob, FsTrashRow, FsProps, OpenWithList, FinderAction, FinderActionList, MediaFacts } from "../../../shared/types.ts";
 import type { JiraUnits } from "../../../shared/jiraStatusUnits.ts";
 import type { WorkSend } from "./jiraWorklog.ts";
 import type { CardEdit, CardFact, ProvidersResponse, JiraBlockOutcome, JiraConnectResult, JiraHandoffRule, JiraMoves, JiraPerson, JiraSettings, JiraStep, JiraStepChoice, JiraStepKey, JiraStepPr, JiraSteps, JiraStepsRead, JiraStatus, JiraViews, JiraViewRead, JiraBoardAreas, JiraBoardContext, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, CardDev, CardWebLink, CardEvent, TrackerChoice } from "../../../shared/providers.ts";
@@ -67,93 +67,6 @@ export type RepoSpend = {
   branches: BranchSpend[];
   worktrees: { dir: string; branch: string | null; usd: number; sessions: number; lastTs: number }[];
 };
-
-/* One prompt, several checkouts, tracked as one thing — see server/src/runs.ts,
-   which is where these shapes are decided and where the reasoning for each
-   field is written. Mirrored here rather than moved to shared/types.ts for the
-   same reason BranchSpend above is mirrored from server/src/spend.ts: the web
-   never imports from server/, and the alternative is editing a server module
-   that this change has no other business in. The server is the author; if a
-   field is added there and not here, this file is simply blind to it, which is
-   the failure mode a duplicated type has and it is a quiet one. */
-
-/** Where a leg is in its life. `gone` is the one nobody decided: the worktree
- *  is not on disk any more, and the leg stays visible saying so rather than
- *  vanishing out of a comparison. */
-/** Mirrors server/src/runs.ts. `released` is an adopted leg handed back —
- *  the run has let go and the checkout is untouched. */
-export type LegState = "running" | "won" | "lost" | "gone" | "released";
-/** Who started it. The whole point of the feature is that both appear in one
- *  run — `adopted` is a pane the user opened by hand, in a checkout this app
- *  never cut, possibly running another vendor's agent. */
-export type LegOrigin = "spawned" | "adopted";
-
-export type RunLeg = {
-  /** The checkout this leg works in. The join key for everything stored. */
-  worktree: string;
-  /** What is checked out there, or `(detached)` — an adopted pane is under no
-   *  obligation to be on a branch. */
-  branch: string;
-  /** Roster id of the agent. Empty when nothing on this machine could tell,
-   *  which is honest and must be drawn as "unknown", never guessed at. */
-  agent: string;
-  /** The tmux pane it is in. Empty for a spawned leg whose window would not
-   *  open — recorded rather than silently missing. */
-  paneId: string;
-  state: LegState;
-  origin: LegOrigin;
-  startedAt: number;
-};
-
-export type Run = {
-  id: string;
-  /** The repository the run is about. Every leg is a checkout of it. */
-  root: string;
-  prompt: string;
-  legs: RunLeg[];
-  startedAt: number;
-};
-
-/** One vendor's share of a leg's bill, derived from the model each event
- *  carried rather than from what anybody said they were running. */
-export type ProviderSpend = { provider: string; events: number; costUsd: number };
-
-/** What one leg has actually produced. Its own request, not a field on the run
- *  list: it is a database query per leg, and the list is what a panel paints
- *  first. */
-export type LegActivity = {
-  worktree: string;
-  branch: string;
-  agent: string;
-  origin: LegOrigin;
-  state: LegState;
-  sessions: number;
-  events: number;
-  toolCalls: number;
-  errors: number;
-  costUsd: number;
-  /** Usually one row; more than one when a session changed model mid-way, which
-   *  a single number cannot say. */
-  providers: ProviderSpend[];
-  /** Epoch millis of the last event seen there, or 0 for a leg that has not
-   *  produced one yet. */
-  lastSeen: number;
-};
-
-/** What `/run/start` answers. `detail` carries the legs that did not open, on a
- *  run that otherwise did — a partial start is still a run. */
-export type RunStartResult = { ok: boolean; run?: Run; error?: string; detail?: string };
-/** `/run/adopt` also hands back the leg it just attached, which is the row the
- *  caller wants to scroll to. `ok` with a `detail` means the pane was already
- *  in this run — a second press is somebody making sure, not a fault. */
-export type RunAdoptResult = RunStartResult & { leg?: RunLeg };
-/** `/run/finish` refuses a teardown over uncommitted work and names it in
- *  `dirty`, so the refusal can be shown as a list rather than a sentence. */
-export type RunFinishResult = RunStartResult & { dirty?: string[] };
-
-/** What `/run/activity` answers. `legs` is empty on every failure path, so a
- *  caller can draw the list without a null check and read `error` beside it. */
-export type RunActivityResult = { ok: boolean; run?: Run; legs: LegActivity[]; error?: string };
 
 import { DEPS, type DepsResponse } from "../../../shared/deps.ts";
 import * as demo from "./demo.ts";
@@ -412,79 +325,6 @@ export const hasToken = (): boolean => !!TOKEN;
  * copy in IndexedDB. The worker is gone with Web Push, and so is the only
  * reason this module ever exported the secret rather than a header carrying it.
  */
-
-/** Why a chat turn ended early.
- *
- *  `refused` — the server answered and declined; `detail` is its reason.
- *  `unreachable` — the request never got a response at all.
- *  `dropped` — the turn was accepted and the connection died partway through.
- *
- *  The distinction is the whole point: a dropped turn may still be running in
- *  the background, so the advice is to go look, whereas a refusal is over and
- *  the reason is already known. Neither is recoverable from the raw fetch error,
- *  which under WebKitGTK is the same opaque "TypeError: Load failed" either way. */
-export type ChatStreamFailure = "refused" | "unreachable" | "dropped";
-
-export class ChatStreamError extends Error {
-  constructor(readonly kind: ChatStreamFailure, readonly detail = "", readonly status = 0) {
-    super(
-      kind === "refused"
-        ? `the server refused this turn${status ? ` (${status})` : ""}${detail ? `: ${detail}` : ""}`
-        : kind === "unreachable"
-          ? `can't reach the agentglass server at ${SERVER} — it may not be running`
-          : "the connection to the agentglass server dropped mid-turn — it may have restarted (reinstalling replaces the running server). The turn itself may still be going; check the session in the fleet view before resending",
-    );
-    this.name = "ChatStreamError";
-  }
-}
-
-/**
- * POST a turn and read the ndjson stream it answers with, a frame at a time.
- *
- * Shared by both agents because none of this is agent-specific: the framing,
- * the three ways a turn can fail, and the reader are properties of how the
- * server streams a subprocess, not of which subprocess it streamed. What the
- * frames *mean* diverges completely, and that lives in the two parsers above
- * the store.
- */
-async function turnStream(
-  path: string,
-  payload: Record<string, unknown>,
-  onEvent: (o: Record<string, unknown>) => void,
-  signal?: AbortSignal,
-): Promise<void> {
-  let res: Response;
-  // A fetch that throws before a response has arrived never reached the
-  // server, which is a different problem from one that dies mid-turn — the
-  // turn has not started, so there is nothing running to go back to.
-  try {
-    res = await fetch(SERVER + path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(payload), signal });
-  } catch (e) {
-    if (e instanceof DOMException && e.name === "AbortError") throw e;
-    throw new ChatStreamError("unreachable", "");
-  }
-  // A refusal — chat disabled, out of scope, a bad directory — comes back as
-  // plain text with a 4xx, not ndjson. Without this it fell into the reader
-  // below, failed to parse as JSON, and was skipped line by line, so the user
-  // was told nothing at all about why their turn did not run.
-  if (!res.ok) throw new ChatStreamError("refused", (await res.text().catch(() => "")).trim(), res.status);
-  if (!res.body) { try { onEvent(JSON.parse(await res.text())); } catch { /* non-json */ } return; }
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buf = "";
-  const flush = (line: string) => { const t = line.trim(); if (t) { try { onEvent(JSON.parse(t)); } catch { /* skip */ } } };
-  try {
-    for (;;) { const { done, value } = await reader.read(); if (done) break; buf += dec.decode(value, { stream: true }); let nl; while ((nl = buf.indexOf("\n")) >= 0) { flush(buf.slice(0, nl)); buf = buf.slice(nl + 1); } }
-  } catch (e) {
-    // The turn was accepted and then the connection died under it. The raw
-    // error is opaque (a bare "TypeError: Load failed" or similar, depending
-    // on the engine) and says nothing about what happened — the cause is
-    // named here instead, where it is known.
-    if (e instanceof DOMException && e.name === "AbortError") throw e;
-    throw new ChatStreamError("dropped", "");
-  }
-  flush(buf);
-}
 
 /** Tell an auth failure apart from a plain outage. A browser WebSocket can't
  *  read the 401 that rejects its upgrade, so a socket that closes before it ever
@@ -1020,6 +860,8 @@ const realApi = {
   skillsExportUrl: (fmt: "md" | "csv" | "json" = "md") => withToken(`${SERVER}/skills/export?format=${fmt}`),
   providerUsage: () => get<ProviderUsage[]>(`/usage/providers`),
   usageAccounts: () => get<{ ok: boolean; providers: AccountsOut[] }>(`/usage/accounts`),
+  /** The local count of what gets opened; the window's own batches go to it from lib/usageOpens.ts. */
+  usageOpens: () => get<UsageOpens>(`/usage/opens`),
   accountSwitch: (provider: string, id: string) => post<{ ok: boolean; plugin?: string; error?: string }>(`/usage/accounts/switch`, { provider, id }),
   accountManage: (provider: string) => post<{ ok: boolean; plugin?: string; error?: string }>(`/usage/accounts/manage`, { provider }),
   refreshCodexUsage: () => post<{ ok: boolean; error?: string }>(`/usage/codex/refresh`, {}),
@@ -1030,9 +872,6 @@ const realApi = {
   skills: () => get<{ skills: SkillInfo[]; usage_since?: number; generated_at: number }>(`/skills`),
   changes: (limit = 200) => get<{ changes: FileChange[]; project?: string | null }>(`/changes?limit=${limit}`),
   session: (id: string) => get<SessionDetail>(`/session?id=${encodeURIComponent(id)}`),
-  /** Sessions with a turn running right now. The only honest answer to "can I
-   *  send to this without interrupting it" — see server/src/chat.ts. */
-  chatActive: () => get<{ ids: string[] }>(`/chat/active`),
   insights: () => get<{ insights: Insight[] }>(`/insights`),
   collisions: () => get<{ collisions: Collision[] }>(`/collisions`),
   search: (q: string, opts?: { since?: number; provider?: string }) => {
@@ -2031,54 +1870,6 @@ const realApi = {
   issueState: (root: string, number: number, close: boolean) =>
     post<IssueActionResult>("/issues/state", { root, number, close }),
 
-  // --- runs: one prompt, several checkouts, one comparison ---
-  /** Every run of this repository, with each leg already checked against the
-   *  disk it claims to be on — the server does that reconciliation on read, so
-   *  a leg whose worktree somebody deleted by hand comes back `gone` rather
-   *  than as a row pointing at nothing. Cheap: a JSON file and a `stat` per
-   *  leg, no git and no database. */
-  runs: (root = "") => get<{ runs: Run[] }>(`/runs?root=${encodeURIComponent(root)}`),
-  /**
-   * What each leg has produced, and what it cost.
-   *
-   * Written out rather than handed to `get` because the interesting failure has
-   * a body: a run that no longer exists answers 404 with the server's own "no
-   * such run", and `get` would throw that away and report the status. The
-   * distinction matters here more than elsewhere — a run can be finished from
-   * another window while this panel is open, and "that run is over" is a
-   * different thing to put on screen than "the server is not answering". Same
-   * shape as previewBlob and dockerLogStream, which read their refusals for the
-   * same reason.
-   */
-  runActivity: async (id: string): Promise<RunActivityResult> => {
-    try {
-      const r = await fetch(`${SERVER}/run/activity?id=${encodeURIComponent(id)}`, { headers: authHeaders() });
-      const body = await r.json().catch(() => null) as Partial<RunActivityResult> | null;
-      if (!r.ok || !body?.ok) {
-        return { ok: false, legs: [], error: body?.error ?? `the server refused it (${r.status})` };
-      }
-      return { ok: true, run: body.run, legs: body.legs ?? [], error: undefined };
-    } catch (e) {
-      return { ok: false, legs: [], error: (e as Error)?.message || String(e) };
-    }
-  },
-  /** Cut a checkout per leg and open a pane running the agent in each. Capped
-   *  at 8 legs by the server; `yolo` is asked for, not granted — the server
-   *  folds it through the same permission the chat engines use. */
-  runStart: (root: string, prompt: string, legs: { agent: string; from?: string; yolo?: boolean }[]) =>
-    post<RunStartResult>("/run/start", { root, prompt, legs }),
-  /** Attach a pane this app never started. The capability nothing that spawns
-   *  its own terminals can offer, and retroactive: the events that pane has
-   *  already produced are filed under the directory it ran in, so adopting it
-   *  starts looking rather than starts collecting. */
-  runAdopt: (id: string, pane: string, agent = "") =>
-    post<RunAdoptResult>("/run/adopt", { id, pane, agent }),
-  /** Call it: one leg won, the rest lost. Only the legs this app CUT are torn
-   *  down — an adopted pane is somebody else's afternoon and is left exactly
-   *  where it is. Refused over uncommitted work unless told twice. */
-  runFinish: (id: string, winner = "", force = false) =>
-    post<RunFinishResult>("/run/finish", { id, winner, force }),
-
   // --- what this machine is doing: ports, processes, disk ---
   /** Every listening TCP socket, with the process behind the ones we own. */
   machinePorts: () => get<PortsReport>("/machine/ports"),
@@ -2558,60 +2349,6 @@ const realApi = {
 
   // --- in-browser terminal: ready-to-run project commands (make + scripts) ---
   terminalCommands: (root: string) => get<TerminalCommands>(`/terminal/commands?root=${encodeURIComponent(root)}`),
-  // --- multi-chat: drive a claude session from the browser ---
-  // `models` rides along for the same reason it does on the other two agents:
-  // the panel cannot usefully draw a model picker without knowing what the CLI
-  // will accept, and asking twice would let it render one for a CLI that turns
-  // out not to be there. Claude's list is data on the server
-  // (shared/claude-models.json) rather than a table compiled in here.
-  chatEnabled: () => get<{ enabled: boolean; bypass?: boolean; models?: AgentModel[]; tmuxEngine?: TmuxEngineInfo }>("/chat/enabled"),
-  /** The command that hands a chat to the user's own terminal, and whether its
-   *  pane is up right now. Assembled server-side so the socket name never has to
-   *  be duplicated here. */
-  chatAttach: (session: string) => get<{ command: string; live: boolean }>(`/chat/attach?session=${encodeURIComponent(session)}`),
-  /** Give a chat's warm CLI back. Destroys no conversation — the transcript
-   *  stays on disk and resuming relaunches the pane with `--resume`. */
-  chatPaneClose: (session: string) => post<{ killed: boolean }>("/chat/pane/close", { session }),
-  /** Press one key in a chat's pane, and get back what it shows afterwards.
-   *  Only navigation and the two answers a prompt takes — the server keeps its
-   *  own allowlist, since this reaches a live terminal running an agent. */
-  chatPaneKey: (session: string, key: string) => post<{ screen: string }>("/chat/pane/key", { session, key }),
-  /** Exempt this chat's pane from idle eviction. About idleness only — closing
-   *  the chat still releases the pane. */
-  chatPanePin: (session: string, pinned: boolean) =>
-    post<{ ok: boolean; session: string; pinned: boolean }>("/chat/pane/pin", { session, pinned }),
-  /** Every pane on this machine, with which of them belongs to nothing. `open`
-   *  is the chats this client has on screen — the server does not know, and a
-   *  pane belonging to a chat in another window is not an orphan. */
-  chatPanes: (open: string[]) =>
-    get<ChatPaneList>(`/chat/panes?open=${encodeURIComponent(open.join(","))}`),
-  chatStream: (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[]; engine?: ChatEngine; effort?: ChatEffort }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) =>
-    turnStream("/chat/send", payload, onEvent, signal),
-
-  // --- multi-chat: the same panel, driving codex instead ---
-  // Codex takes neither an allowlist nor pasted images, so its payload is the
-  // Claude one minus the two things it has no equivalent for.
-  codexEnabled: () => get<CodexStatus>("/codex/enabled"),
-  // What a codex thread said, read from Codex's own rollout on disk. The OTel
-  // stream that puts Codex on the radar carries tool calls but no prose, so this
-  // is the only source for a resumed thread's history — see codexTranscript().
-  codexTranscript: (id: string) => get<{ timeline: SessionDetail["timeline"] }>(`/codex/transcript?id=${encodeURIComponent(id)}`),
-  codexStream: (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) =>
-    turnStream("/codex/send", payload, onEvent, signal),
-
-  // --- multi-chat: the same panel, driving google antigravity ---
-  // No transcript call to match the other two: Antigravity keeps a conversation
-  // as protobuf inside SQLite, so there is nothing readable to ask for.
-  antigravityEnabled: () => get<AgentCliStatus>("/antigravity/enabled"),
-  antigravityStream: (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) =>
-    turnStream("/antigravity/send", payload, onEvent, signal),
-
-  // --- multi-chat: the same panel, driving Hermes Agent ---
-  // No transcript call in the thin PR (hasTranscript: false).
-  hermesEnabled: () => get<AgentCliStatus>("/hermes/enabled"),
-  hermesStream: (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) =>
-    turnStream("/hermes/send", payload, onEvent, signal),
-
   dockerStart: (id: string) => post<DockerActionResult>("/docker/start", { id }),
   dockerStop: (id: string) => post<DockerActionResult>("/docker/stop", { id }),
   dockerRestart: (id: string) => post<DockerActionResult>("/docker/restart", { id }),
@@ -2694,6 +2431,7 @@ const demoApi: typeof realApi = {
   skillsExportUrl: () => demo.skillsExportUri(),
   providerUsage: () => D(demo.providerUsage() as ProviderUsage[]),
   usageAccounts: () => D({ ok: true, providers: [] as AccountsOut[] }),
+  usageOpens: () => D({ since: "", opens: [] } as UsageOpens),
   accountSwitch: () => D({ ok: false, error: "the demo has no accounts" }),
   accountManage: () => D({ ok: false, error: "the demo has no accounts" }),
   refreshCodexUsage: () => D({ ok: false, error: "not available in the demo" }),
@@ -2702,7 +2440,6 @@ const demoApi: typeof realApi = {
   changes: () => D(demo.changes()),
   session: (id: string) => D(demo.session(id)),
   // Nothing spawns anything in the demo, so nothing is ever mid-turn.
-  chatActive: () => D({ ids: [] as string[] }),
   insights: () => D(demo.insights()),
   // The demo has no processes and no checkouts to share anything between.
   collisions: () => D({ collisions: [] as Collision[] }),
@@ -2971,38 +2708,6 @@ const demoApi: typeof realApi = {
   dockerInspect: (_id: string) => D({ ok: false, env: [] as string[], config: "", error: "not available in the demo" }),
   dockerTop: (_id: string) => D({ ok: false, text: "", error: "not available in the demo" }),
   terminalCommands: (_root: string) => D({ enabled: false, make: [], scripts: [] } as TerminalCommands),
-  chatEnabled: () => D({ enabled: false, models: [] as AgentModel[], tmuxEngine: { available: false, reason: "the demo runs no local processes", defaultOn: false } }),
-  chatAttach: (_session: string) => D({ command: "", live: false }),
-  chatPaneClose: (_session: string) => D({ killed: false }),
-  chatPaneKey: (_session: string, _key: string) => D({ screen: "" }),
-  chatPanePin: (_session: string, pinned: boolean) => D({ ok: false, session: "", pinned }),
-  // The demo runs no processes, so there is nothing to list and nothing to
-  // reclaim. An empty list is the truth here rather than a placeholder.
-  chatPanes: (_open: string[]) => D({ panes: [], idleEvictMs: 0 } as ChatPaneList),
-  chatStream: async (_payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[]; engine?: ChatEngine; effort?: ChatEffort }, onEvent: (o: Record<string, unknown>) => void) => {
-    onEvent({ type: "system", subtype: "init", session_id: "demo" });
-    onEvent({ type: "assistant", message: { content: [{ type: "text", text: "(chat is disabled in the demo — run agentglass locally to drive real Claude sessions)" }] } });
-    onEvent({ type: "result", result: "" });
-  },
-  codexEnabled: () => D({ enabled: false, models: [] } as CodexStatus),
-  codexTranscript: (_id: string) => D({ timeline: [] as SessionDetail["timeline"] }),
-  codexStream: async (_payload: { cwd: string; message: string; model: string; mode: string; resumeId: string }, onEvent: (o: Record<string, unknown>) => void) => {
-    onEvent({ type: "thread.started", thread_id: "demo" });
-    onEvent({ type: "item.completed", item: { id: "item_0", type: "agent_message", text: "(chat is disabled in the demo — run agentglass locally to drive real Codex sessions)" } });
-    onEvent({ type: "turn.completed", usage: {} });
-  },
-  antigravityEnabled: () => D({ enabled: false, models: [] } as AgentCliStatus),
-  antigravityStream: async (_payload: { cwd: string; message: string; model: string; mode: string; resumeId: string }, onEvent: (o: Record<string, unknown>) => void) => {
-    onEvent({ event: "init", conversation_id: "demo-0000-0000-0000-demodemodemo", init: { model: "demo" } });
-    onEvent({ event: "step_update", step_update: { step_index: 0, state: "DONE", step_type: "agent_response", text_delta: "(chat is disabled in the demo — run agentglass locally to drive real Antigravity sessions)" } });
-    onEvent({ event: "result", result: { status: "SUCCESS", usage: {} } });
-  },
-  hermesEnabled: () => D({ enabled: false, models: [] } as AgentCliStatus),
-  hermesStream: async (_payload: { cwd: string; message: string; model: string; mode: string; resumeId: string }, onEvent: (o: Record<string, unknown>) => void) => {
-    onEvent({ type: "system", subtype: "init", session_id: "20260101_000000_abcdef", model: "demo" });
-    onEvent({ type: "text", text: "(chat is disabled in the demo — run agentglass locally to drive real Hermes sessions)" });
-    onEvent({ type: "result", session_id: "20260101_000000_abcdef", exit_code: 0, tokens: {} });
-  },
   dockerStart: (_id: string) => D(demo.dockerActionUnavailable()),
   dockerStop: (_id: string) => D(demo.dockerActionUnavailable()),
   dockerRestart: (_id: string) => D(demo.dockerActionUnavailable()),
@@ -3367,15 +3072,6 @@ const demoApi: typeof realApi = {
   issueClaim: (_r: string, _n: number, _c?: string) => D({ ok: false, error: "not available in the demo" }),
   issueComment: (_r: string, _n: number, _b: string) => D({ ok: false, error: "not available in the demo" }),
   issueState: (_r: string, _n: number, _c: boolean) => D({ ok: false, error: "not available in the demo" }),
-  /* No runs in the demo, and an empty list is the honest answer rather than a
-     refusal: nobody has started one. It is also the day-one state of the real
-     thing, so whatever the panel draws here is what a new user sees. */
-  runs: (_root = "") => D({ runs: [] as Run[] }),
-  runActivity: (_id: string) => D({ ok: false, legs: [] as LegActivity[], error: "not available in the demo" }),
-  runStart: (_r: string, _p: string, _l: { agent: string; from?: string; yolo?: boolean }[]) =>
-    D({ ok: false, error: "not available in the demo" }),
-  runAdopt: (_i: string, _p: string, _a?: string) => D({ ok: false, error: "not available in the demo" }),
-  runFinish: (_i: string, _w?: string, _f?: boolean) => D({ ok: false, error: "not available in the demo" }),
   // Fabricated, like the rest of the demo: a fictional dev machine with the
   // Acme Shop services listening and a plausible load. Clearly a showcase, not
   // this machine — the demo ships to GitHub Pages with no server behind it.

@@ -47,7 +47,7 @@ import GateScriptBanner from "./GateScriptBanner.tsx";
  */
 export interface LanternRow {
   name: string;
-  /** The Lantern's own chat, when it is on the field: shown aside, never
+  /** The Lantern's own session, when it is on the field: shown aside, never
    *  counted. Or the project's seat, which the view counts like any agent.
    *  The server's BoardRow.role, both values. */
   role?: "lantern" | "orchestrator";
@@ -264,7 +264,7 @@ export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r:
         <div className="flex-1 min-w-0 flex flex-col gap-0.5">
           <div className="flex items-center gap-2 min-w-0">
             <span className={`${quiet ? "text-[12px]" : "text-[13.5px]"} font-semibold truncate`} style={{ color: w || r.state === "working" ? "var(--text)" : "var(--text2)" }} title={r.name}>{r.name}</span>
-            {r.role === "lantern" && <Pill tone="var(--text4)" title="The Lantern's own chat">lantern</Pill>}
+            {r.role === "lantern" && <Pill tone="var(--text4)" title="The Lantern's own session">lantern</Pill>}
             <span className="ml-auto shrink-0 flex items-center gap-1.5">
               {!w && <Pill tone={tone} title={r.state === "working" ? "something ran in the last ten minutes" : "nothing has run for ten minutes"}>{r.state}</Pill>}
               {model && <Pill tone="var(--text3)" title={f?.model}>{model}</Pill>}
@@ -509,7 +509,7 @@ export function LanternView({ active }: { active: boolean }) {
   /* A person taking a line off the board; the field is re-read so the card
      goes with it rather than lingering until the next poll. */
   const clear = useCallback((name: string) => { void api.agentForget(name).then(() => refreshLantern()).catch(() => {}); }, []);
-  /* The chat, on the floating bench — over this view, and from any other.
+  /* The session, on the floating bench — over this view, and from any other.
      See lanternAsk.ts. */
   const ask = useCallback(async () => {
     setAsking("opening…");
@@ -517,10 +517,10 @@ export function LanternView({ active }: { active: boolean }) {
     setAsking(r.ok ? null : r.error ?? "could not open");
   }, []);
 
-  /* The observer is not on the field it observes: the Lantern's own chat is
+  /* The observer is not on the field it observes: the Lantern's own session is
      set aside, never counted, never "needs you". */
   const rows = all?.filter((r) => r.role !== "lantern") ?? null;
-  /* "Back to the chat" only while the bench actually holds its tab — the
+  /* "Back to the session" only while the bench actually holds its tab — the
      board's row for a chat that was just ended lingers a few minutes. */
   const lanternOpen = useSyncExternalStore(subscribeBench, hasLanternTab, hasLanternTab);
   /* Two kinds of "needs you", and only one of them is urgent. A permission
@@ -555,8 +555,8 @@ export function LanternView({ active }: { active: boolean }) {
             {rows && (
               <button type="button" onClick={() => { void ask(); }} disabled={asking === "opening…"}
                 className="agx-btn text-[10.5px] px-2 py-0.5 rounded disabled:opacity-60" style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
-                title="A chat on the floating bench that opens with this field as its first message — ask in your own words. Ctrl+Alt+A brings it back from any view.">
-                {asking === "opening…" ? "Opening…" : lanternOpen ? "Back to the chat" : "Ask about the agents"}
+                title="A session on the floating bench that opens with this field as its first message — ask in your own words. Ctrl+Alt+A brings it back from any view.">
+                {asking === "opening…" ? "Opening…" : lanternOpen ? "Back to the session" : "Ask about the agents"}
               </button>
             )}
             {asking && asking !== "opening…" && <span className="text-[10.5px]" style={{ color: "var(--error-ink)" }}>{asking}</span>}
@@ -600,8 +600,7 @@ export function LanternView({ active }: { active: boolean }) {
         {rows !== null && rows.length === 0 && (
           <div className="text-[11.5px] max-w-[70ch]" style={{ color: "var(--text3)" }}>
             An agent appears here when its hooks are wired (Settings → Agents), when it says what it is
-            doing — <code>POST /agents/status</code>, which the Lantern reminder asks for — or when the
-            Clone starts a run. Nothing is inferred from a window being open: a screen that guesses is a
+            doing — <code>POST /agents/status</code>, which the Lantern reminder asks for. Nothing is inferred from a window being open: a screen that guesses is a
             screen that lies.
           </div>
         )}

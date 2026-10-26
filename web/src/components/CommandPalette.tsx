@@ -32,7 +32,6 @@ export function CommandPalette({
   onPr,
   onDocker,
   onTerminal,
-  onChat,
   onSearch,
   onClear,
   onZoom,
@@ -52,7 +51,6 @@ export function CommandPalette({
   onPr: () => void;
   onDocker: () => void;
   onTerminal: () => void;
-  onChat: () => void;
   onSearch: () => void;
   onClear: () => void;
   onZoom: (dir: 1 | -1 | 0) => void;
@@ -70,7 +68,6 @@ export function CommandPalette({
     list.push({ id: "pr", group: "View", label: "Pull requests — review PRs without leaving for the browser", run: () => onPr() });
     list.push({ id: "docker", group: "View", label: "Docker — containers, logs, stats & actions", run: () => onDocker() });
     list.push({ id: "terminal", group: "View", label: "Terminal — a real shell in any repo/worktree", run: () => onTerminal() });
-    list.push({ id: "chat", group: "View", label: "Chat — drive a Claude session in a repo/worktree", run: () => onChat() });
     list.push({ id: "stats", group: "View", label: "Show statistics — skills, tools, apps", run: () => onStats() });
     // Settings used to carry a page of links to these; the palette is where they live now.
     list.push({ id: "help", group: "View", label: "Legend & shortcuts — what the colours mean, every key binding", run: () => onHelp() });
@@ -95,7 +92,7 @@ export function CommandPalette({
     // retention window — see /export?kind=daily.
     list.push({ id: "daily-csv", group: "Export", label: "Download daily totals (CSV)", run: () => window.open(api.exportUrl("csv", "daily")) });
     return list;
-  }, [apps, types, onFilter, onWindow, onTheme, onStats, onHelp, onSkills, onChanges, onGit, onPr, onDocker, onTerminal, onChat, onSearch, onClear, onZoom]);
+  }, [apps, types, onFilter, onWindow, onTheme, onStats, onHelp, onSkills, onChanges, onGit, onPr, onDocker, onTerminal, onSearch, onClear, onZoom]);
 
   const filtered = useMemo(
     () => (q ? cmds.filter((c) => (c.group + " " + c.label).toLowerCase().includes(q.toLowerCase())) : cmds),

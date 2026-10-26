@@ -14,7 +14,6 @@ import { allOpen, autoPick, clickScope, firstRun, initialTicks, openFolders, inO
 // Comment lines out, so a sentence about the gate cannot stand in for the gate.
 const APP = (await Bun.file(new URL("../src/App.tsx", import.meta.url)).text())
   .split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
-const CHAT = await Bun.file(new URL("../src/components/ChatPanel.tsx", import.meta.url)).text();
 const PICKER = (await Bun.file(new URL("../src/components/ProjectPicker.tsx", import.meta.url)).text())
   .split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
 
@@ -114,9 +113,6 @@ describe("what belongs to the open projects", () => {
   });
   test("nothing open keeps everything", () => {
     expect(inOpenProjects(DOCS, [])).toBe(true);
-  });
-  test("the chat list filters by every open project, not the first", () => {
-    expect(CHAT).toContain("allChats.filter((c) => inOpenProjects(c.cwd, workspaces))");
   });
 });
 

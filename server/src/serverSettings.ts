@@ -15,11 +15,11 @@ import type { Budget } from "../../shared/types.ts";
 import { validatePolicy } from "../../shared/orchestration.ts";
 import { isLaunchMode, parseDenyRules } from "../../shared/launchModes.ts";
 import { WORKER_ROLES } from "../../shared/workerRoles.ts";
-import { GATE_ANSWERERS, GATE_ON_TIMEOUT, CHAT_START_IN, CHAT_MODES, isOneOf } from "../../shared/agentDefaults.ts";
+import { GATE_ANSWERERS, GATE_ON_TIMEOUT, isOneOf } from "../../shared/agentDefaults.ts";
 import {
   launchMode, launchDeny, writeLaunchPermissions, seatWakeHours, writeSeatSettings, workerRoles, writeWorkerRole,
   readBudgets, writeBudgets, policyRoots, lanternNudge, lanternNudgeMinutes, lanternWatch, lanternWatchMinutes, cacheTtlMinutes,
-  gateAnswerer, gateOnTimeout, chatStartIn, chatMode, chatDeny, writeAgentDefaults,
+  gateAnswerer, gateOnTimeout, writeAgentDefaults,
   writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, agentsChangeWithoutAsking, writeAgentsChangeWithoutAsking, phoneAlerts, writePhoneAlerts,
 } from "./config.ts";
 import { readPolicy, writePolicy } from "./orchestration.ts";
@@ -197,29 +197,6 @@ export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
       read: () => gateOnTimeout(),
       validate: (raw) => (isOneOf(GATE_ON_TIMEOUT, raw) ? { value: raw } : { error: "drop or ask" }),
       apply: (v) => saved(writeAgentDefaults({ gateOnTimeout: v })),
-    },
-    {
-      id: "chats.startIn", page: "hooks", label: "Where a new chat opens (the last project, or the open one)", type: "string",
-      read: () => chatStartIn(),
-      validate: (raw) => (isOneOf(CHAT_START_IN, raw) ? { value: raw } : { error: "last or open" }),
-      apply: (v) => saved(writeAgentDefaults({ chatStartIn: v })),
-    },
-    {
-      id: "chats.mode", page: "hooks", label: "Permission mode a new chat starts in", type: "string",
-      read: () => chatMode(),
-      validate: (raw) => (isOneOf(CHAT_MODES, raw) ? { value: raw } : { error: "inherit, default, acceptEdits or plan" }),
-      apply: (v) => saved(writeAgentDefaults({ chatMode: v })),
-    },
-    {
-      id: "chats.deny", page: "hooks", label: "Tools every Claude chat turn is denied (Codex and Antigravity chats take no deny rules)", type: "json",
-      read: () => chatDeny(),
-      validate: (raw) => {
-        const text = Array.isArray(raw) ? raw.map(String).join("\n") : typeof raw === "string" ? raw : null;
-        if (text === null) return { error: "a list of rules" };
-        const p = parseDenyRules(text);
-        return p.bad.length ? { error: `not a rule: ${p.bad[0]}` } : { value: p.rules };
-      },
-      apply: (v) => saved(writeAgentDefaults({ chatDeny: v })),
     },
     {
       id: "plugins.master", page: "plugins", label: "Plugins (the master switch)", type: "boolean",

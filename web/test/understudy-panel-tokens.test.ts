@@ -12,11 +12,6 @@
  * `wash(token, pct)` and `edge(pct)` for a tint of one, and the `Tone` scale
  * from `git/ui.tsx` where a row is carrying a status. Nothing else.
  *
- * THE ART IS THE EXCEPTION AND IT IS NOT IN HERE. `persona/` holds the portrait
- * layers and the Endesga 32 palette they were drawn against; the understudy's
- * skin does not turn blue when you pick the blue theme, any more than a
- * photograph on a desk changes colour when you repaint the wall. That folder is
- * excluded by name, which is what makes it a decision instead of an oversight.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
@@ -63,7 +58,7 @@ const COLOUR_PROP = /\b(?:color|background|backgroundColor|borderColor|borderTop
 
 describe("the understudy panel is drawn in theme tokens", () => {
   test("there are files to check", () => {
-    expect(FILES.length).toBeGreaterThanOrEqual(4);
+    expect(FILES.length).toBeGreaterThanOrEqual(2);
     expect(FILES.map((f) => f.rel)).toContain("web/src/components/understudy/UnderstudyPanel.tsx");
   });
 
@@ -123,7 +118,8 @@ describe("the understudy panel is drawn in theme tokens", () => {
     // check above by saying nothing, and this panel has no such file — so if
     // one appears, somebody has moved the colours somewhere this suite is not
     // looking.
-    for (const { rel, text } of FILES) {
+    // UnderstudyPanel.tsx is state and calls now (the view that drew it is gone).
+    for (const { rel, text } of FILES.filter((f) => !f.rel.endsWith("UnderstudyPanel.tsx"))) {
       expect(text.includes("var(--") || text.includes("wash(") || text.includes("edge("), `${rel} paints nothing`).toBe(true);
     }
   });

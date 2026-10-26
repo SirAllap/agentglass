@@ -301,7 +301,7 @@ export function tmuxSync(args: string[]): TmuxResult {
  *  already stands down there, and a half-working chat engine is worse than an
  *  honestly absent one. */
 export function tmuxCapability(): { available: boolean; reason: string } {
-  if (process.platform === "win32") return { available: false, reason: "tmux chat panes need a Unix shell — not available on Windows" };
+  if (process.platform === "win32") return { available: false, reason: "tmux needs a Unix shell — not available on Windows" };
   if (!resolveTmuxBin()) return { available: false, reason: "tmux is not installed — install it, or use the bundled binary from the settings panel" };
   const health = confHealth();
   if (!health.ok) return { available: false, reason: health.reason };
@@ -867,8 +867,8 @@ export const isPinned = (name: string): boolean => pinned.has(name);
  *
  * `lastUsedAt` is null for a pane this process has never served a turn for,
  * which is exactly the shape of an orphan from a previous run. Whether it *is*
- * one also depends on which chats are open, which this module does not know —
- * so that judgement is left to the caller (see /chat/panes).
+ * one depends on what is open, which this module does not know — so that
+ * judgement is left to the caller.
  */
 export interface PaneInfo {
   name: string;

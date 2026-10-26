@@ -51,15 +51,13 @@ function device(scope: Scope): Caller {
 const understudy = (scope: Scope = "full"): Caller => ({ ...device(scope), principal: "understudy" });
 
 describe("the understudy, holding the widest credential there is", () => {
-  test("cannot speak as him into a running agent", () => {
+  test("cannot answer as him on a running agent", () => {
     const u = understudy();
-    expect(allowed(u, "POST", "/chat/send")).toBe(false);
-    expect(allowed(u, "POST", "/chat/pane/key")).toBe(false);
-    expect(allowed(u, "POST", "/chat/attach")).toBe(false);
+    expect(allowed(u, "POST", "/gate/decide")).toBe(false);
     // …and the scope it is carrying would have said yes to every one of them,
     // which is the whole point of the principal being checked first.
     expect(u.scope).toBe("full");
-    expect(scopeNeeded("POST", "/chat/send")).toBe("answer");
+    expect(scopeNeeded("POST", "/gate/decide")).toBe("answer");
   });
 
   test("cannot reshape his desk", () => {
@@ -112,7 +110,6 @@ describe("and nobody else moved", () => {
     const phone = device("answer");
     expect(phone.principal).toBeUndefined();
     expect(allowed(phone, "POST", "/gate/decide")).toBe(true);
-    expect(allowed(phone, "POST", "/chat/send")).toBe(true);
     expect(answersFromADevice(phone)).toBe(true);
     // …and is still stopped everywhere it was stopped before.
     expect(allowed(phone, "POST", "/git/push")).toBe(false);
@@ -138,7 +135,7 @@ describe("and nobody else moved", () => {
     const machine = callerFor(req, url, MACHINE)!;
     expect(machine).toEqual({ kind: "machine", scope: "full" });
     expect(machine.principal).toBeUndefined();
-    expect(allowed(machine, "POST", "/chat/send")).toBe(true);
+    expect(allowed(machine, "POST", "/gate/decide")).toBe(true);
     expect(answersFromADevice(machine)).toBe(false); // still not a device; unchanged
   });
 });
