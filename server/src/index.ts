@@ -234,6 +234,7 @@ import {
   windowTree, newWindow, splitPane, killWindow, killPane as killLayoutPane, selectWindow, selectPane,
   renameWindow, resizePane,
 } from "./tmuxlayout.ts";
+import { answer as answerRule, check as rulesCheck, ruleRoot as rulesRoot, setRule, setRulesDoor, view as rulesView, writeLaunchBase } from "./agentRulesStore.ts";
 import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings, lanternNudge, lanternWatch, lanternWatchMinutes, cacheTtlMinutes, lanternNudgeMinutes, writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, seatWakeHours, writeSeatSettings, launchMode, launchDeny, writeLaunchPermissions, launchFlagOverrides, writeLaunchFlagOverrides, workerRoles, writeWorkerRole, inScopeReal, agentsChangeWithoutAsking, gateAnswerer, gateOnTimeout } from "./config.ts";
 import { tellChair } from "./gatechair.ts";
 import { claudeModels } from "./claudemodels.ts";
@@ -648,6 +649,8 @@ const settingsDoor = makeDoor({
   applyWindow: grantedWindowSet,
   changed: () => broadcast({ type: "settings-requests" }),
 });
+setRulesDoor(settingsDoor);
+
 /** A window's own name for itself (its `hello`) to its latest socket, which is
  *  how a browser ask reaches one window instead of all of them. */
 const browserSockets = new Map<string, ServerWebSocket<WsData>>();
@@ -7889,8 +7892,55 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         noteAction(clientIp, "/launch-permissions", {}, off ? auditOf(off) : { ok: true }, asActor(caller));
         return doorMany(rs, { mode: launchMode(), deny: launchDeny() });
       }
-      const r = writeLaunchPermissions(b);
+      const r = writeLaunchBase(b);
       return json({ ...r, mode: launchMode(), deny: launchDeny() }, r.ok ? 200 : 400);
+    }
+    /*
+     * THE AGENT RULES (agentRulesStore.ts): one list per project, plus the base
+     * set every project shares, that every agent obeys wherever it started.
+     * `check` is the hooks' question before each tool call; it also files the
+     * quiet first-seen suggestion. A seat reads and writes its own project only.
+     */
+    if (pathname === "/agent-rules/check" && req.method === "GET") {
+      const root = url.searchParams.get("root") ?? "";
+      const tool = url.searchParams.get("tool") ?? "";
+      if (!root.startsWith("/") || !/^[A-Za-z][A-Za-z0-9_-]{0,99}$/.test(tool)) return json({ ok: false, error: "root: an absolute path; tool: a tool name" }, 400);
+      try {
+        return json({ ok: true, ...rulesCheck(root, tool, (url.searchParams.get("input") ?? "").slice(0, 8000)) });
+      } catch (e) {
+        // A broken store must not become a decision: the hook reads an error as "no rule".
+        return json({ ok: false, decision: "unknown", error: String(e).slice(0, 200) }, 500);
+      }
+    }
+    if (pathname === "/agent-rules" && req.method === "GET") {
+      const own = caller?.principal === "seat" ? caller.seat?.root : undefined;
+      const root = url.searchParams.get("root") ?? own ?? "";
+      if (!(root === "*" || root.startsWith("/"))) return json({ ok: false, error: 'root: a project\'s absolute path, or "*"' }, 400);
+      if (own && rulesRoot(root) !== rulesRoot(own) && root !== "*") return json({ ok: false, error: "a seat reads its own project's rules" }, 403);
+      return json({ ok: true, ...rulesView(root) });
+    }
+    if (pathname === "/agent-rules" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { root?: unknown; action?: unknown; match?: unknown; setting?: unknown; source?: unknown; mode?: unknown; as?: unknown } = {};
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const person = mayPublishReview(req, caller);
+      if (!person && !controlWriteLimit.hit(actorOf(clientIp, asActor(caller)))) return json({ ok: false, error: "too many changes from this caller; slow down" }, 429);
+      const own = caller?.principal === "seat" ? caller.seat?.root : undefined;
+      if (own && (typeof b.root !== "string" || rulesRoot(b.root) !== rulesRoot(own))) return json({ ok: false, error: "a seat writes its own project's rules; every project's waits for the person" }, 403);
+      const r = await setRule(b, { person, by: askerOf(req, caller, b.as) });
+      noteAction(clientIp, "/agent-rules", { ...(r.ok ? { rule: r.write.rule.id, queued: !r.write.applied } : {}) }, r.ok ? (r.write.applied ? { ok: true } : { ok: false, error: "waiting for the person" }) : { ok: false, error: r.error }, asActor(caller));
+      return r.ok ? json({ ok: true, ...r.write }, r.write.applied ? 200 : 202) : json({ ok: false, error: r.error }, r.status);
+    }
+    {
+      const m = /^\/agent-rules\/(ar_[0-9a-f]{18})\/answer$/.exec(pathname);
+      if (m && req.method === "POST") {
+        if (!trustedCaller(req, from)) return csrfBlocked();
+        let b: { setting?: unknown; dismiss?: unknown } = {};
+        try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+        const r = answerRule(m[1]!, b, mayPublishReview(req, caller));
+        noteAction(clientIp, "/agent-rules/answer", { rule: m[1] }, r.ok ? { ok: true } : { ok: false, error: r.error }, asActor(caller));
+        return r.ok ? json({ ok: true, ...r.write }) : json({ ok: false, error: r.error }, r.status);
+      }
     }
     /* Each engine's flags per permission mode: the built-in ones from the engine table, and the person's own words over them. */
     if (pathname === "/launch-flags" && req.method === "GET") {

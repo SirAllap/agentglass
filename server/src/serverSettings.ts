@@ -12,13 +12,14 @@
  * still changed only on their own pages.
  */
 import type { Budget } from "../../shared/types.ts";
+import { writeLaunchBase } from "./agentRulesStore.ts";
 import { validatePolicy } from "../../shared/orchestration.ts";
 import { isLaunchMode, parseDenyRules, parseFlagLine } from "../../shared/launchModes.ts";
 import { AGENT_PROVIDERS } from "../../shared/agentKinds.ts";
 import { WORKER_ROLES } from "../../shared/workerRoles.ts";
 import { GATE_ANSWERERS, GATE_ON_TIMEOUT, isOneOf } from "../../shared/agentDefaults.ts";
 import {
-  launchMode, launchDeny, writeLaunchPermissions, launchFlagOverrides, writeLaunchFlagOverrides, seatWakeHours, writeSeatSettings, workerRoles, writeWorkerRole,
+  launchMode, launchDeny, launchFlagOverrides, writeLaunchFlagOverrides, seatWakeHours, writeSeatSettings, workerRoles, writeWorkerRole,
   readBudgets, writeBudgets, policyRoots, lanternNudge, lanternNudgeMinutes, lanternWatch, lanternWatchMinutes, cacheTtlMinutes,
   gateAnswerer, gateOnTimeout, writeAgentDefaults,
   writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, agentsChangeWithoutAsking, writeAgentsChangeWithoutAsking, phoneAlerts, writePhoneAlerts,
@@ -128,7 +129,7 @@ export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
       id: "launch.mode", page: "terminal", label: "Permission mode agents launch in", type: "string",
       read: () => launchMode(),
       validate: (raw) => (isLaunchMode(raw) ? { value: raw } : { error: "default, acceptEdits, auto or bypassPermissions" }),
-      apply: (v) => saved(writeLaunchPermissions({ mode: v })),
+      apply: (v) => saved(writeLaunchBase({ mode: v })),
     },
     ...AGENT_PROVIDERS.filter((k) => k.id !== "claude").map((k): ServerSettingDef => ({
       id: `launch.flags.${k.id}`, page: "engines", label: `${k.title}: launch flags per permission mode`, type: "json",
@@ -155,7 +156,7 @@ export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
         const p = parseDenyRules(text);
         return p.bad.length ? { error: `not a rule: ${p.bad[0]}` } : { value: p.rules };
       },
-      apply: (v) => saved(writeLaunchPermissions({ deny: v })),
+      apply: (v) => saved(writeLaunchBase({ deny: v })),
     },
     {
       id: "seat.model", page: "orchestration", label: "The chair's model", scoped: true, type: "string",

@@ -63,8 +63,11 @@ export interface SettingRequest {
   diff: string[];
   at: number;
   expires: number;
-  /** Who applies it: a server setting, or the window's registry (index.ts relays it). */
-  where: "server" | "window";
+  /** Who applies it: a server setting, the window's registry (index.ts relays it),
+   *  or a store with its own records (the agent rules), which hands its own apply. */
+  where: "server" | "window" | "external";
+  /** Only for `external`: what approving does. */
+  applyExternal?: () => Applied | Promise<Applied>;
 }
 
 export type DoorAnswer =
@@ -135,6 +138,14 @@ export interface Door {
    * request holds the value the window validated; `apply` is index.ts relaying it back.
    */
   askForWindow(id: string, label: string, prev: unknown, value: unknown, who: string): DoorAnswer;
+  /**
+   * A looser change a store holds itself (an agent rule): it waits on the same
+   * card as a setting, and approving it runs `apply`. `key` names the change, so
+   * a newer ask for the same key replaces the older one, and `drop(key)` takes
+   * the card down once the store answered it another way.
+   */
+  askExternal(r: { setting: string; label: string; key: string; root?: string; who: string; diff: string[]; apply: () => Applied | Promise<Applied> }): DoorAnswer;
+  drop(key: string): void;
   /** One setting's value, never a secret's. */
   value(id: string, root?: string): { value: unknown } | { error: string };
   pending(): PublicRequest[];
@@ -175,7 +186,7 @@ export function makeDoor(deps: {
     if (!r.diff) return { ok: false, error: `${r.setting}: ${TOO_BIG}`, status: 413 };
     prune();
     // A newer ask for the same setting from the same caller replaces the older one.
-    for (const [k, x] of requests) if (x.setting === r.setting && x.root === r.root && x.who === r.who) requests.delete(k);
+    for (const [k, x] of requests) if (x.setting === r.setting && x.root === r.root && x.who === r.who && (x.where !== "external" || x.prev === r.prev)) requests.delete(k);
     if (requests.size >= MAX_PENDING) return { ok: false, error: `${MAX_PENDING} requests are already waiting for the person; wait for an answer`, status: 429 };
     const req: SettingRequest = { ...r, diff: r.diff, id: `sr_${randomBytes(12).toString("hex")}`, at: now(), expires: now() + REQUEST_TTL_MS };
     requests.set(req.id, req);
@@ -215,6 +226,14 @@ export function makeDoor(deps: {
       if (!row || row.class !== "escalation" || defOf(id)) return { ok: false, error: `${id} is not a window setting that waits for the person`, status: 400 };
       return queue({ setting: id, label, who, prev, value, diff: diffLines({ label }, prev, value), where: "window" });
     },
+    askExternal({ setting, label, key, root, who, diff, apply }) {
+      return queue({ setting, label, ...(root ? { root } : {}), who: `${who}`, prev: key, value: key, diff: diff.slice(0, MAX_LINES), where: "external", applyExternal: apply });
+    },
+    drop(key) {
+      let gone = false;
+      for (const [k, r] of requests) if (r.where === "external" && r.prev === key) { requests.delete(k); gone = true; }
+      if (gone) deps.changed();
+    },
     value(id, root) {
       const def = defOf(id);
       const row = classOf(id);
@@ -236,6 +255,10 @@ export function makeDoor(deps: {
       requests.delete(r.id);
       deps.changed();
       if (!approve) return { ok: true, applied: false, setting: r.setting };
+      if (r.where === "external") {
+        const a = await r.applyExternal!();
+        return a.ok ? { ok: true, applied: true, setting: r.setting } : { ok: false, error: a.error, status: 409 };
+      }
       if (r.where === "window") {
         // The window applies it only while it still holds what the card was read against.
         const a = await deps.applyWindow(r.setting, r.value, r.prev);
