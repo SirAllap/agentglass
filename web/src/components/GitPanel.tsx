@@ -3107,8 +3107,8 @@ export function GitView({ active }: { active: boolean }) {
                             className="text-[10.5px] px-2 py-0.5 rounded-lg whitespace-nowrap"
                             style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
                             title={conflictWindow
-                              ? "Claude is already working in the \"conflicts\" window of this repo — switch to its tab"
-                              : "Open a tmux window in this repo with Claude on it, told which side is which"}>{conflictWindow ? "▸_ Claude is working · Open tab" : "▸_ in a terminal"}</button>
+                              ? "Your agent is already working in the \"conflicts\" window of this repo — switch to its tab"
+                              : "Open a tmux window in this repo with your agent on it, told which side is which"}>{conflictWindow ? "▸_ Agent is working · Open tab" : "▸_ in a terminal"}</button>
                         </>
                       )}
                     </div>

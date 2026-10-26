@@ -216,7 +216,7 @@ test("the tray is keyed by checkout, so an armed Discard does not carry to anoth
 
 test("Send review opens a terminal with an agent already on it, not a chat draft", () => {
   // Option (1): the same move conflict resolution already makes
-  // (PrPanel.tsx's "Hand to Claude in a terminal", requestTermIssue) — a NEW
+  // (PrPanel.tsx's "Send to terminal", requestTermIssue) — a NEW
   // tmux window, in the checkout's own worktree, with an agent started on the
   // composed review. It used to park the review as an unsent draft in
   // whichever chat was open in the tree; that composer step is gone.

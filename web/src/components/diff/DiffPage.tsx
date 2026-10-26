@@ -243,7 +243,7 @@ export function DiffPage({ active, onClose }: {
     const label = `review-${(selected?.branch || root.split("/").pop() || "checkout").replace(/[^a-zA-Z0-9_-]/g, "-")}`;
     /* A NEW tmux window with an agent already working on it, in the worktree
        the review is about — the same move conflict resolution already makes
-       (PrPanel.tsx's "Hand to Claude in a terminal"). Never into whatever
+       (PrPanel.tsx's "Send to terminal"). Never into whatever
        chat happens to be open in this tree: a chat is its own conversation,
        and a review is a fresh ask, not a reply slipped into one already in
        progress. */

@@ -133,6 +133,8 @@ const TMUX_BAR_HEAL_BUDGET = 3;
 const REMOUNT_FAILS_BEFORE_QUIET = 3;
 const REMOUNT_QUIET_MS = 60_000;
 export type PtyWsData = { kind: "pty"; root: string; cols: number; rows: number;
+  /** The agent that opened this socket (x-agentglass-agent), or none for the person. A per-run permission mode it asks for cannot be looser than the setting (launchPerm). */
+  worker?: string | null;
   /** The caller is this machine's own loopback: a dotted file under home is then a file it may edit, as it may read it in the Finder. */
   local?: boolean;
   /** A file to open in an editor instead of dropping to a shell. A PATH, never
@@ -2126,12 +2128,13 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
            what a session-targeting tmux command takes. Anything else (no
            phone attach, or the id no longer resolves) keeps the old answer. */
         const into = (at && sessionNameOf(target.socket, at.sessionId)) || lastTmuxTarget()?.session || "";
+        const fromWorker = !!(ws.data as PtyWsData).worker;
         /* A person pressed something and is waiting to see it: select. */
         const opened = await engineWindowRunning(root, name, bin
           // The flag is the SPEC's, never the client's, and only where the CLI
           // has one: passing Claude's to Codex is an unknown option and an
           // immediate exit.
-          ? [bin, ...launchFlags(kind, launchPerm(msg.mode, msg.yolo === true))]
+          ? [bin, ...launchFlags(kind, launchPerm(msg.mode, msg.yolo === true, fromWorker))]
           // No agent on this machine is not a reason to open nothing: a shell
           // in the right project is still most of what was asked for, and the
           // same answer `cmd:"issue"` gives.
@@ -2220,10 +2223,10 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
         // submits it, so the window opens with the review already running. Which
         // CLI is the person's default engine (issueArgv), and which of them take
         // the prompt that way is what agents/launch.ts holds the table for.
-        const built = issueArgv({ prompt: plan.prompt, yolo: false, title: "",
+        const built = issueArgv({ kind: msg.kind, prompt: plan.prompt, yolo: false, title: "",
           // A one-off "Run with…" wins over the prompt's own mode, which wins
           // over the global one.
-          perm: launchPerm(isLaunchMode(msg.mode) ? msg.mode : reviewRecipe(typeof msg.recipe === "string" ? msg.recipe : "")?.permissionMode) },
+          perm: launchPerm(isLaunchMode(msg.mode) ? msg.mode : reviewRecipe(typeof msg.recipe === "string" ? msg.recipe : "")?.permissionMode, false, !!(ws.data as PtyWsData).worker) },
           { canName: supportsSessionName, modelFlags, defaultKind: workerRoles().builder.provider });
         if (!built.ok) return;
         const opened = await engineWindowRunning(plan.cwd, `pr-${number}`, built.argv,
@@ -2345,7 +2348,7 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
         // the same division as `--name`: an allowlist, so a socket reachable from
         // the UI still cannot pass an arbitrary argument. Claude only — another
         // CLI's `--model` takes different values.
-        const built = issueArgv({ kind: msg.kind, prompt, yolo: msg.yolo === true, title, perm: launchPerm(msg.mode, msg.yolo === true), model: msg.model, effort: msg.effort }, { canName: supportsSessionName, modelFlags, defaultKind: workerRoles().builder.provider });
+        const built = issueArgv({ kind: msg.kind, prompt, yolo: msg.yolo === true, title, perm: launchPerm(msg.mode, msg.yolo === true, !!(ws.data as PtyWsData).worker), model: msg.model, effort: msg.effort }, { canName: supportsSessionName, modelFlags, defaultKind: workerRoles().builder.provider });
         if (!built.ok) { answer(false, built.error); return; }
         const argv = built.argv;
         // `reuse` is the caller's to ask for: a live window with this exact name
@@ -2392,7 +2395,7 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
       }
       // The server's argv, not the client's: the binary, `--resume` and the one
       // flag the picker is allowed to ask for.
-      const argv = [bin, "--resume", id, ...launchFlags("claude", launchPerm(msg.mode, msg.yolo === true))];
+      const argv = [bin, "--resume", id, ...launchFlags("claude", launchPerm(msg.mode, msg.yolo === true, !!(ws.data as PtyWsData).worker))];
       const name = basename(cwd) || "resume";
       /*
        * C7 again — resuming is launching — below every refusal on this path (a

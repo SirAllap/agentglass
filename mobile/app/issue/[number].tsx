@@ -399,7 +399,7 @@ export default function IssueScreen(): React.ReactNode {
             ) : null
           ) : (
             <Btn
-              label="Start with Claude"
+              label="Send to terminal"
               tone="primary"
               style={{ flex: 1.6, ...BAR_BTN }}
               busy={starting}

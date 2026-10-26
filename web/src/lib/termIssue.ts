@@ -12,6 +12,7 @@
 // arbitrary string.
 
 import { requestWorktreeJump } from "./worktreeJump.ts";
+import type { LaunchMode } from "../../../shared/launchModes.ts";
 
 export type TermIssue = {
   /** The worktree the window opens in. */
@@ -60,6 +61,9 @@ export type TermIssue = {
   resumeId?: string;
   /** The agent CLI to start, an id of shared/agentKinds.ts. Absent is Claude. */
   kind?: string;
+  /** A one-off permission mode for this run, over the person's setting. The
+   *  server turns it into the engine's own flags (launchperm.ts). */
+  mode?: LaunchMode;
   n: number;
 };
 
@@ -110,9 +114,9 @@ export function resolveTermIssue(n: number, r: IssueResult): void {
  *  UNTAKEN_MS with the request still here nobody is listening (it is taken
  *  back, so it cannot start an agent hours later when a terminal opens), and
  *  after UNANSWERED_MS with it sent the server did not reply. */
-export function requestTermIssue(cwd: string, name: string, prompt: string, agent: boolean, yolo = false, title = "", model = "", effort = "", reuse = false, kind = ""): Promise<IssueResult> {
+export function requestTermIssue(cwd: string, name: string, prompt: string, agent: boolean, yolo = false, title = "", model = "", effort = "", reuse = false, kind = "", mode?: LaunchMode): Promise<IssueResult> {
   const n = ++lastN;
-  pending = { cwd, name, prompt, agent, yolo, title, model, effort, reuse, ...(kind ? { kind } : {}), n };
+  pending = { cwd, name, prompt, agent, yolo, title, model, effort, reuse, ...(kind ? { kind } : {}), ...(mode ? { mode } : {}), n };
   const answered = new Promise<IssueResult>((res) => { waiting.set(n, res); });
   subs.forEach((f) => f());
   /* A view is mounted the first time it is shown, so a person who never opened

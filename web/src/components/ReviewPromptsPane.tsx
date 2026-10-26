@@ -1,5 +1,5 @@
 /*
- * The "Review with Claude" menu, as a page you can edit.
+ * The review menu ("Review with <engine>"), as a page you can edit.
  *
  * The menu behind that button used to be two prompts chosen for you. It is a
  * catalogue now, and the reason it is EDITABLE rather than merely longer is
@@ -47,14 +47,14 @@ const GROUPS: { id: ReviewRecipeGroup; label: string; what: string }[] = [
   /* Not a review, and here anyway: what you say to a colleague is as personal
      as how you ask for one, it must survive an update of this app, and it must
      not live in its repository. Same file, same editor, same Reset. It is not
-     offered in the "Review with Claude" menu — that menu lists the three groups
+     offered in the review menu — that menu lists the three groups
      above by name — it is what the Ping button sends. */
   { id: "telling", label: "Telling somebody", what: "Asking for a review in chat, rather than reading one." },
-  /* Also not a review: what "Hand to Claude in a terminal" says on a pull
+  /* Also not a review: what "Send to terminal" says on a pull
      request that conflicts. One per project when a project needs its own
      ("regenerate the lockfile, never merge it by hand"), and the model it opens
      on is chosen from the conflict unless you pin one here. */
-  { id: "conflicts", label: "Merge conflicts", what: "What Claude is told when you hand it a conflict — for every project, or one." },
+  { id: "conflicts", label: "Merge conflicts", what: "What your agent is told when you send it a conflict — for every project, or one." },
 ];
 
 /** What each situation means, in the words the menu would use. Shown beside the
@@ -260,7 +260,7 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
           nothing="Nothing matches."
           blank={count === 0 && !hiddenList.length ? {
             icon: <ReviewIcon size={ICON.xl} />, title: "No review prompts",
-            text: "Every built-in was hidden and none of yours is saved, so the Review with Claude button has nothing to offer. Make one.",
+            text: "Every built-in was hidden and none of yours is saved, so the review button has nothing to offer. Make one.",
             action: <NewButton onClick={() => setEditing(blank("reviewing"))}>New prompt</NewButton>,
           } : undefined}
           sections={[
@@ -357,7 +357,7 @@ function Editor({ r, saved, skills, projects, presets, busy, onChange, onSave, o
         ...(!r.id ? [{ tone: "info" as const, text: "Draft" }] : []),
       ]}
       actions={<>
-        {onOffer && <Button tone="primary" onClick={onOffer} title="Put it back in the Review with Claude menu">Offer again</Button>}
+        {onOffer && <Button tone="primary" onClick={onOffer} title="Put it back in the review menu">Offer again</Button>}
         {onDrop && (
           <Button tone={r.builtIn ? "plain" : "danger"} onClick={onDrop} title={r.builtIn ? "Take it out of the menu" : "Delete it"}>
             {r.builtIn ? "Hide" : "Delete"}

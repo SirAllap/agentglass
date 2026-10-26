@@ -209,6 +209,27 @@ reads them; `POST` writes them for the person. From an agent (a named worker
 included) a stricter mode or a longer deny list applies at once, and anything
 looser becomes a request the person approves (see the settings door below).
 
+`launchFlagOverrides` (`{ "<engine>": { "<mode>": ["--flag", "value"] } }`) is
+what each other engine is started with in each of those modes. The built-in
+mapping, read off each CLI's own `--help` or docs, is below; a mode with no
+entry starts the CLI in its own default. A flag the installed binary does not
+list drops the whole mode. A person can type their own words over any cell in
+Settings ▸ Agent engines ▸ Details (an empty line means no flags, "Reset to
+default" removes the override); a word may hold only letters, digits and
+`_ - . , : = @ + %`, at most 12 words, and no flag that points at config, a directory or a command (`-c`, `--config`, `--cd`, `--add-dir`, `--profile`, `--mcp-*`, …). Claude Code is not editable: its mode is `--permission-mode` itself. `GET /launch-flags` reads them,
+`POST /launch-flags` writes one engine's, and an agent's change goes through
+the settings door as `launch.flags.<engine>` and waits for the person.
+
+| Engine | `default` | `acceptEdits` | `auto` | `bypassPermissions` | Source |
+| --- | --- | --- | --- | --- | --- |
+| Claude Code | `--permission-mode default` | `--permission-mode acceptEdits` | `--permission-mode auto` | `--permission-mode bypassPermissions` | `claude --help` |
+| Codex | none | none (no combination asks before a shell command while letting edits through) | `--approve-for-me` | `--dangerously-bypass-approvals-and-sandbox` | `codex --help`, 0.163.0 |
+| OpenCode | none | none | none (`--auto` approves everything not denied, which is bypass) | `--auto` | `opencode --help`, 2.0.32 |
+| Hermes | none | none | none | `--yolo` | `hermes --help`, 0.21.5 |
+| Gemini CLI | `--approval-mode default` | `--approval-mode auto_edit` | none | `--approval-mode yolo` | [docs](https://geminicli.com/docs/reference/configuration/), not installed here |
+| Qwen Code | `--approval-mode default` | `--approval-mode auto-edit` | `--approval-mode auto` | `--approval-mode yolo` | [docs](https://qwenlm.github.io/qwen-code-docs/en/users/features/approval-mode/); in 0.21.15's source but not in its `--help`, so the launch check drops it and Qwen starts in its default |
+| Antigravity | none | none | none | none | only third-party guides list its flags |
+
 `gateAnswerer` and `gateOnTimeout` are the Agents page's own choices
 (Settings ▸ Agents), both reachable through the settings door as
 `gate.answerer` and `gate.onTimeout`. `gateAnswerer: "orchestrator"` also types one line into the

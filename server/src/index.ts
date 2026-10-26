@@ -216,7 +216,7 @@ import { agentBinFor, mintAgentTicket } from "./agentticket.ts";
 import { makeViewTempDir } from "./viewtemp.ts";
 import { decodeImage } from "./imageUpload.ts";
 import { transcribe, transcriberOn } from "./dictate.ts";
-import { AGENT_KINDS, agentKind } from "../../shared/agentKinds.ts";
+import { AGENT_KINDS, AGENT_PROVIDERS, agentKind } from "../../shared/agentKinds.ts";
 /* Both sides' imports: main added five, this branch still uses `panesWithPids`
    and `reapMirrorSessions`. Neither list is a superset of the other. */
 import { listPanes, withTmuxServer, focusPaneAnywhere, activePane, panesWithPids, sweepPinnedWindows, pinnedSockets, reapMirrorSessions, startMirrorSweeper, stopMirrorSweeper, socketPath, tmuxSockets } from "./tmuxctl.ts";
@@ -234,7 +234,7 @@ import {
   windowTree, newWindow, splitPane, killWindow, killPane as killLayoutPane, selectWindow, selectPane,
   renameWindow, resizePane,
 } from "./tmuxlayout.ts";
-import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings, lanternNudge, lanternWatch, lanternWatchMinutes, cacheTtlMinutes, lanternNudgeMinutes, writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, seatWakeHours, writeSeatSettings, launchMode, launchDeny, writeLaunchPermissions, workerRoles, writeWorkerRole, inScopeReal, agentsChangeWithoutAsking, gateAnswerer, gateOnTimeout } from "./config.ts";
+import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings, lanternNudge, lanternWatch, lanternWatchMinutes, cacheTtlMinutes, lanternNudgeMinutes, writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, seatWakeHours, writeSeatSettings, launchMode, launchDeny, writeLaunchPermissions, launchFlagOverrides, writeLaunchFlagOverrides, workerRoles, writeWorkerRole, inScopeReal, agentsChangeWithoutAsking, gateAnswerer, gateOnTimeout } from "./config.ts";
 import { tellChair } from "./gatechair.ts";
 import { claudeModels } from "./claudemodels.ts";
 import { readOpens, recordOpens } from "./usageopens.ts";
@@ -2087,6 +2087,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (!TERMINAL_ENABLED) return json({ error: "terminal is disabled" }, 403);
       const data: PtyWsData & { ip?: string | null; deviceId?: string | null } = {
         kind: "pty",
+        worker: presentedWorker(req),
         local: peer.source === "socket" && !!clientIp && isLoopback(clientIp) && sinkFrom === "loopback",
         deviceId: caller?.device?.id ?? null,
         root: url.searchParams.get("root") || "",
@@ -7890,6 +7891,17 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       }
       const r = writeLaunchPermissions(b);
       return json({ ...r, mode: launchMode(), deny: launchDeny() }, r.ok ? 200 : 400);
+    }
+    /* Each engine's flags per permission mode: the built-in ones from the engine table, and the person's own words over them. */
+    if (pathname === "/launch-flags" && req.method === "GET") {
+      return json({ ok: true, overrides: launchFlagOverrides(), builtin: Object.fromEntries(AGENT_PROVIDERS.map((k) => [k.id, k.modeFlags ?? {}])) });
+    }
+    if (pathname === "/launch-flags" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { kind?: unknown; modes?: unknown; as?: unknown }; try { b = (await req.json()) as typeof b; } catch { b = {}; }
+      if (!mayPublishReview(req, caller)) return viaDoor("/launch-flags", `launch.flags.${String(b.kind)}`, b.modes, b.as);
+      const r = writeLaunchFlagOverrides(String(b.kind), b.modes);
+      return json({ ...r, overrides: launchFlagOverrides() }, r.ok ? 200 : 400);
     }
     if (pathname === "/seat/wake" && req.method === "GET") return json({ ok: true, hours: seatWakeHours() });
     if (pathname === "/seat/wake" && req.method === "POST") {

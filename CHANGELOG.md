@@ -4,14 +4,6 @@ Every release, read end to end. The record of record is the
 [releases page](https://github.com/SirAllap/agentglass/releases) — each tag
 carries its own notes, the desktop installers and the phone's `.apk`.
 
-## Where this is going
-
-The [Roadmap in the README](README.md#-roadmap), and the discussion behind it in
-[#172](https://github.com/SirAllap/agentglass/issues/172). It used to be copied
-here as well, and the two fell apart: the copy never gained the items added to
-the README, and the README never carried two open ones from the copy. One list,
-kept in one place.
-
 ## Released
 
 - **v0.26.0** — **The agent's clicks and typing count as a person's, and tmux tabs appear at once.**

@@ -9,7 +9,7 @@
 import type { Budget, GateRule } from "../../shared/types.ts";
 import { agentProvider } from "../../shared/agentKinds.ts";
 import { validateStored, type StoredPolicy } from "../../shared/orchestration.ts";
-import { DEFAULT_LAUNCH_DENY, isLaunchMode, parseDenyRules, type LaunchMode } from "../../shared/launchModes.ts";
+import { DEFAULT_LAUNCH_DENY, isLaunchMode, parseDenyRules, parseFlagLine, type FlagOverrides, type LaunchMode } from "../../shared/launchModes.ts";
 import { GATE_ANSWERERS, GATE_ON_TIMEOUT, isOneOf, type GateAnswerer, type GateOnTimeout } from "../../shared/agentDefaults.ts";
 import { WORKER_ROLES, MODEL_RE, workerRole, type RoleChoice, type RoleId } from "../../shared/workerRoles.ts";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, realpathSync, readlinkSync } from "node:fs";
@@ -164,6 +164,8 @@ interface Config {
   /** Tools denied on every launch, one rule each. Absent means the shipped
    *  pair; an empty list is a person having cleared it. */
   launchDeny?: string[];
+  /** A person's own flags per engine and mode (launchperm.ts); a missing mode keeps the built-in ones. */
+  launchFlagOverrides?: FlagOverrides;
   /** Who is told first when the gate holds an outward action, what happens when
    *  nobody answers. See shared/agentDefaults.ts. */
   gateAnswerer?: string;
@@ -1355,6 +1357,39 @@ export function launchDeny(): string[] {
   const raw = config().launchDeny;
   if (!Array.isArray(raw)) return [...DEFAULT_LAUNCH_DENY];
   return parseDenyRules(raw.filter((x): x is string => typeof x === "string").join("\n")).rules;
+}
+
+/** The overrides as stored, with anything that is not a plain argv dropped. */
+export function launchFlagOverrides(): FlagOverrides {
+  const raw = config().launchFlagOverrides;
+  const out: FlagOverrides = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const [kind, modes] of Object.entries(raw)) {
+    if (!modes || typeof modes !== "object") continue;
+    for (const [mode, argv] of Object.entries(modes)) {
+      if (!isLaunchMode(mode) || !Array.isArray(argv)) continue;
+      const p = parseFlagLine(argv.filter((x): x is string => typeof x === "string").join(" "));
+      if (p.ok) (out[kind] ??= {})[mode] = p.argv;
+    }
+  }
+  return out;
+}
+
+/** One engine's overrides replace its stored ones whole; `{}` is "Reset to default". Unknown engines and bad words refuse the write. */
+export function writeLaunchFlagOverrides(kind: string, modes: unknown): { ok: boolean; persisted: boolean; error?: string } {
+  if (kind === "claude") return { ok: false, persisted: false, error: "Claude Code's mode is --permission-mode itself, not a flag you retype" };
+  if (!agentProvider(kind)) return { ok: false, persisted: false, error: "not an engine" };
+  if (!modes || typeof modes !== "object" || Array.isArray(modes)) return { ok: false, persisted: false, error: "an object of mode: flags" };
+  const next: Partial<Record<LaunchMode, string[]>> = {};
+  for (const [mode, v] of Object.entries(modes)) {
+    if (!isLaunchMode(mode)) return { ok: false, persisted: false, error: `not a permission mode: ${mode.slice(0, 20)}` };
+    const p = parseFlagLine(Array.isArray(v) ? v.map(String).join(" ") : typeof v === "string" ? v : "\n");
+    if (!p.ok) return { ok: false, persisted: false, error: `${mode}: ${p.error}` };
+    next[mode] = p.argv;
+  }
+  const all = { ...launchFlagOverrides() };
+  if (Object.keys(next).length) all[kind] = next; else delete all[kind];
+  return mergeConfig({ launchFlagOverrides: all }, "launch flags");
 }
 
 /** A rule that does not parse refuses the whole write: half a deny list saved

@@ -13,11 +13,12 @@
  */
 import type { Budget } from "../../shared/types.ts";
 import { validatePolicy } from "../../shared/orchestration.ts";
-import { isLaunchMode, parseDenyRules } from "../../shared/launchModes.ts";
+import { isLaunchMode, parseDenyRules, parseFlagLine } from "../../shared/launchModes.ts";
+import { AGENT_PROVIDERS } from "../../shared/agentKinds.ts";
 import { WORKER_ROLES } from "../../shared/workerRoles.ts";
 import { GATE_ANSWERERS, GATE_ON_TIMEOUT, isOneOf } from "../../shared/agentDefaults.ts";
 import {
-  launchMode, launchDeny, writeLaunchPermissions, seatWakeHours, writeSeatSettings, workerRoles, writeWorkerRole,
+  launchMode, launchDeny, writeLaunchPermissions, launchFlagOverrides, writeLaunchFlagOverrides, seatWakeHours, writeSeatSettings, workerRoles, writeWorkerRole,
   readBudgets, writeBudgets, policyRoots, lanternNudge, lanternNudgeMinutes, lanternWatch, lanternWatchMinutes, cacheTtlMinutes,
   gateAnswerer, gateOnTimeout, writeAgentDefaults,
   writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, agentsChangeWithoutAsking, writeAgentsChangeWithoutAsking, phoneAlerts, writePhoneAlerts,
@@ -129,6 +130,22 @@ export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
       validate: (raw) => (isLaunchMode(raw) ? { value: raw } : { error: "default, acceptEdits, auto or bypassPermissions" }),
       apply: (v) => saved(writeLaunchPermissions({ mode: v })),
     },
+    ...AGENT_PROVIDERS.filter((k) => k.id !== "claude").map((k): ServerSettingDef => ({
+      id: `launch.flags.${k.id}`, page: "engines", label: `${k.title}: launch flags per permission mode`, type: "json",
+      read: () => launchFlagOverrides()[k.id] ?? {},
+      validate: (raw) => {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { error: "an object of mode: flags" };
+        const out: Record<string, string[]> = {};
+        for (const [mode, v] of Object.entries(raw)) {
+          const p = isLaunchMode(mode) ? parseFlagLine(Array.isArray(v) ? v.map(String).join(" ") : typeof v === "string" ? v : "\n") : null;
+          if (!p) return { error: `not a permission mode: ${mode.slice(0, 20)}` };
+          if (!p.ok) return { error: `${mode}: ${p.error}` };
+          out[mode] = p.argv;
+        }
+        return { value: out };
+      },
+      apply: (v) => saved(writeLaunchFlagOverrides(k.id, v)),
+    })),
     {
       id: "launch.deny", page: "terminal", label: "Tools every launched agent is denied", type: "json",
       read: () => launchDeny(),

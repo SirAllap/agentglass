@@ -18,7 +18,6 @@
 // opened does not exist yet. On a fresh window that is one view rather than
 // eight, and the dashboard — fourteen panels and a poll every four seconds — is
 // not among them until you ask for it.
-import type { LaunchMode } from "../../../../shared/launchModes.ts";
 import { PluginsView } from "../plugins/PluginsView.tsx";
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
@@ -42,6 +41,8 @@ import { LanternView } from "../LanternView.tsx";
 import { SeatView } from "../SeatView.tsx";
 import { subscribeLantern, lanternNeed } from "../../lib/lanternStore.ts";
 import { requestTermReview } from "../../lib/termReview.ts";
+import { requestTermIssue } from "../../lib/termIssue.ts";
+import type { SendOpts } from "../../lib/sendOptions.ts";
 import { benchWants, boardActive, boardNode, boardPlace, subscribeBoards, type BoardKind } from "../../lib/boardHost.ts";
 import { BoardSlot } from "./BoardSlot.tsx";
 import { PortalFloor } from "../Portal.tsx";
@@ -112,8 +113,11 @@ export function Workspace({
    *  their shell was not inside one — see terminal.ts's `review` handler.
    *  Left as a request rather than called directly: the terminal view owns the
    *  socket, and may not be mounted when the button is pressed. */
-  const reviewInTerminal = useCallback((root: string, number: number, recipe = "", card = "", mode?: LaunchMode) => {
-    requestTermReview(root, number, recipe, card, mode);
+  const reviewInTerminal = useCallback((root: string, number: number, recipe = "", card = "", opts: SendOpts = {}) => {
+    // An edited prompt cannot ride the review message (the recipe id travels, never
+    // the text), so it goes the way every other prompt does: as an issue window.
+    if (opts.prompt) void requestTermIssue(root, `pr-${number}`, opts.prompt, true, false, "", "", "", true, opts.kind ?? "", opts.mode);
+    else requestTermReview(root, number, recipe, card, opts.mode, opts.kind);
     onView("term");
   }, [onView]);
 

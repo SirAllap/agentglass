@@ -463,11 +463,11 @@ export function ConflictMode(p: ConflictModeProps) {
           title="Throw it away and put the tree back exactly as it was">Abandon</Btn>
         {/* The terminal gives you the session itself, attached, beside your own
             shells, where you can watch it edit and take the keyboard off it. */}
-        <span className="text-[10.5px] ml-1" style={{ color: "var(--text3)" }}>Hand it to Claude</span>
+        <span className="text-[10.5px] ml-1" style={{ color: "var(--text3)" }}>Send to terminal</span>
         <Btn tone="ours" onClick={p.onAskClaudeTerminal}
           title={p.terminalWindowLive
-            ? "Claude is already working in this repo's \"conflicts\" window — switch to its tab"
-            : "Opens a tmux window in this repo with Claude on it, told which side is which and which files are in conflict"}>{p.terminalWindowLive ? "▸_ Claude is working · Open tab" : "▸_ in a terminal"}</Btn>
+            ? "Your agent is already working in this repo's \"conflicts\" window — switch to its tab"
+            : "Opens a tmux window in this repo with your agent on it, told which side is which and which files are in conflict"}>{p.terminalWindowLive ? "▸_ Agent is working · Open tab" : "▸_ in a terminal"}</Btn>
         <div className="ml-auto flex items-center gap-2">
           {left > 0
             ? <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>{left} file{left === 1 ? "" : "s"} still to resolve</span>

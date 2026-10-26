@@ -242,8 +242,8 @@ xattr -dr com.apple.quarantine /Applications/agentglass.app
 ```
 
 Right-click → Open does **not** clear this specific "damaged" variant on Apple
-Silicon; only the command above does. Signing and notarization are on the
-roadmap (they can run in CI on a macOS runner, so no Mac hardware is needed).
+Silicon; only the command above does. Signing and notarization are not done
+yet (they can run in CI on a macOS runner, so no Mac hardware is needed).
 For background, see Apple's [Safely open apps on your
 Mac](https://support.apple.com/en-us/102445).
 

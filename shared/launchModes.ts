@@ -61,3 +61,32 @@ export function parseDenyRules(text: string): { rules: string[]; bad: string[] }
 
 /** What `GET /launch-permissions` answers. */
 export interface LaunchPermissions { mode: LaunchMode; deny: string[] }
+
+/**
+ * One mode's flags for one CLI, as a person types them: a line of words.
+ *
+ * They go to the CLI as argv, never through a shell, but a saved Command types
+ * its line into one, so a word may hold none of the characters a shell reads:
+ * letters, digits and `_ - . , : = @ + %` only (no `/`, so no path). A flag longer than 100
+ * characters or a line of more than 12 words is not a launch flag.
+ */
+const FLAG_WORD = /^[A-Za-z0-9_.,:=@+%-]{1,100}$/;
+/**
+ * A person keeps flags, not config: a flag that points the CLI at other config,
+ * another directory or a command to run (`-c key=value` is TOML in Codex and can
+ * start any binary) turns a launch flag into code execution. Refused by name,
+ * `=` form and attached short form included.
+ */
+const NOT_A_LAUNCH_FLAG = /^(-[cCp]|--?(config|profile|cd|cwd|add-dir|settings|setting-sources|mcp[\w-]*|plugin[\w-]*|env|exec|command|cmd|shell|hooks?[\w-]*|dir|directory|file|path|home|model-provider|provider)(?==|$))/i;
+export const FLAG_WORDS_MAX = 12;
+
+export function parseFlagLine(line: string): { ok: true; argv: string[] } | { ok: false; error: string } {
+  if (/[\r\n]/.test(line)) return { ok: false, error: "one line, no line breaks" };
+  const argv = line.trim().split(/\s+/).filter(Boolean);
+  if (argv.length > FLAG_WORDS_MAX) return { ok: false, error: `more than ${FLAG_WORDS_MAX} words` };
+  const bad = argv.find((w) => !FLAG_WORD.test(w) || NOT_A_LAUNCH_FLAG.test(w));
+  return bad === undefined ? { ok: true, argv } : { ok: false, error: `not a plain flag word: ${bad.slice(0, 20)}` };
+}
+
+/** Per engine, per mode: the flags a person typed over the built-in ones. */
+export type FlagOverrides = Record<string, Partial<Record<LaunchMode, string[]>>>;

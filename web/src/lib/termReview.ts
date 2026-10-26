@@ -14,7 +14,9 @@ export type TermReview = { root: string; number: number; n: number;
   /** The tracker id the panel read off the branch, for the prompt that checks
    *  a pull request against its card. */
   card?: string;
-  mode?: LaunchMode };
+  mode?: LaunchMode;
+  /** A one-off engine for this review, an id of shared/agentKinds.ts; absent is the default engine. */
+  kind?: string };
 
 let pending: TermReview | null = null;
 const subs = new Set<() => void>();
@@ -30,8 +32,8 @@ export function termReview(): TermReview | null { return pending; }
  *  requests. Without it, reviewing #219, closing the window and asking again
  *  would be indistinguishable from the request already served. */
 /** `mode` is a one-off "Run with…" from the menu; absent, the prompt's own or the global one. */
-export function requestTermReview(root: string, number: number, recipe = "", card = "", mode?: LaunchMode): void {
-  pending = { root, number, n: (pending?.n ?? 0) + 1, recipe, card, ...(mode ? { mode } : {}) };
+export function requestTermReview(root: string, number: number, recipe = "", card = "", mode?: LaunchMode, kind = ""): void {
+  pending = { root, number, n: (pending?.n ?? 0) + 1, recipe, card, ...(mode ? { mode } : {}), ...(kind ? { kind } : {}) };
   subs.forEach((f) => f());
 }
 

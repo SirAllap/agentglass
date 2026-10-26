@@ -28,12 +28,13 @@ describe("launch permissions in Settings", () => {
 });
 
 describe("Run with… in the Review menu", () => {
-  test("every mode is offered and runs in the terminal with it", () => {
+  test("every mode the engine has a flag for is offered and runs in the terminal with it", async () => {
     const at = pr.indexOf("function ReviewItem(");
     expect(at).toBeGreaterThan(0);
     const body = pr.slice(at, pr.indexOf("\n}\n", at));
-    expect(body).toContain("LAUNCH_MODES.map");
-    expect(body).toContain('run("term", m)');
+    expect(body).toContain('onSend={(o) => run("term", o)}');
+    const opts = await Bun.file(new URL("../src/components/PromptOptions.tsx", import.meta.url).pathname).text();
+    expect(opts).toContain("modes.map((m) => <MenuItem key={m} onClick={() => send({ mode: m })}>");
   });
 
   test("the mode travels with the request to the socket", () => {

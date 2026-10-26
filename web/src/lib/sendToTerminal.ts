@@ -13,6 +13,7 @@
  * requestTermIssue directly and the review socket included, so none of them can
  * start Claude by itself.
  */
+import type { LaunchMode } from "../../../shared/launchModes.ts";
 import { requestTermIssue, requestTermResume, type IssueResult } from "./termIssue.ts";
 
 /** A tmux window name for one piece of work: letters, digits, dashes, bounded. */
@@ -21,9 +22,9 @@ export function windowNameFor(title: string): string {
 }
 
 /** Start (or reuse) a session of the default engine in `cwd` with `prompt`. `title` names the work and the window. */
-export async function sendToTerminal(cwd: string, prompt: string, title: string, kind?: string): Promise<IssueResult> {
+export async function sendToTerminal(cwd: string, prompt: string, title: string, kind?: string, mode?: LaunchMode): Promise<IssueResult> {
   // No engine named: the server starts the person's default (agentticket.ts issueArgv).
-  return requestTermIssue(cwd, windowNameFor(title), prompt, true, false, title, "", "", true, kind ?? "");
+  return requestTermIssue(cwd, windowNameFor(title), prompt, true, false, title, "", "", true, kind ?? "", mode);
 }
 
 /** Continue a Claude session from its transcript in a window of its own (only Claude has this). */

@@ -91,7 +91,7 @@ describe("reuse is asked for, never the default", () => {
      a name that does not stand for ONE piece of work must not reuse. */
   const issue = code(termIssueSrc);
   test("requestTermIssue does not reuse unless told to", () => {
-    expect(issue).toContain(`effort = "", reuse = false, kind = "")`);
+    expect(issue).toContain(`effort = "", reuse = false, kind = "", mode?: LaunchMode)`);
   });
   test("the handoffs whose window is one piece of work ask for it", () => {
     expect(code(pr)).toContain('h.model, h.effort, true)');

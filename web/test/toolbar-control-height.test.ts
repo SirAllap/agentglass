@@ -36,10 +36,10 @@ describe("header/toolbar controls share the refresh button's height", () => {
 
   it("Tasks card modal action bar: no bare py-1 buttons and refresh sits last", async () => {
     const src = await read("/TasksPanel.tsx");
-    // Scoped to the action bar itself (Hand to Claude .. RefreshButton), not
+    // Scoped to the action bar itself (Send to terminal .. RefreshButton), not
     // the whole file — `px-2 py-1 rounded-lg` is a legitimate shape for an
     // unrelated row action elsewhere in this very large component.
-    const start = src.indexOf("Hand to Claude ▾");
+    const start = src.indexOf("Send to terminal ▾");
     const bar = src.slice(start, src.indexOf("RefreshButton onRefresh", start));
     expect(bar).not.toContain('px-2 py-1 rounded-lg"');
     // Refresh follows a `flex-1` spacer, so it is pushed to the bar's far end.

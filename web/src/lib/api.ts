@@ -2313,6 +2313,10 @@ const realApi = {
   launchPermissions: () => get<{ ok: boolean } & LaunchPermissions>("/launch-permissions"),
   launchPermissionsSave: (p: { mode?: LaunchMode; deny?: string }) =>
     post<{ ok: boolean; error?: string } & LaunchPermissions>("/launch-permissions", p),
+  /** Each engine's flags per permission mode: the built-in ones and the person's own over them. */
+  launchFlags: () => get<{ ok: boolean; overrides: Record<string, Record<string, string[]>>; builtin: Record<string, Record<string, string[]>> }>("/launch-flags"),
+  launchFlagsSave: (kind: string, modes: Record<string, string>) =>
+    post<{ ok: boolean; error?: string; overrides: Record<string, Record<string, string[]>> }>("/launch-flags", { kind, modes }),
   /** Every server setting the settings door holds, with its value (the Agents page reads its own five from it). */
   settingsDoor: () => get<{ ok: boolean; settings: { id: string; value?: unknown }[] }>("/settings/door"),
   /** The person's own change to one of them, from Settings: applied at once. */
@@ -2800,6 +2804,8 @@ const demoApi: typeof realApi = {
   launchPermissions: () => D({ ok: true, mode: "default" as LaunchMode, deny: [...DEFAULT_LAUNCH_DENY] }),
   settingsDoor: () => D({ ok: true, settings: [] as { id: string; value?: unknown }[] }),
   settingsDoorSet: (_id: string, _value: unknown) => D({ ok: false, error: "not available in the demo" }),
+  launchFlags: () => D({ ok: true, overrides: {} as Record<string, Record<string, string[]>>, builtin: {} as Record<string, Record<string, string[]>> }),
+  launchFlagsSave: (_k: string, _m: unknown) => D({ ok: false, error: "not available in the demo", overrides: {} as Record<string, Record<string, string[]>> }),
   launchPermissionsSave: (_p: unknown) => D({ ok: false, error: "not available in the demo", mode: "default" as LaunchMode, deny: [...DEFAULT_LAUNCH_DENY] }),
   settingsRequests: () => D({ ok: true, requests: [] as SettingRequestView[] }),
   settingsRequestDecide: (_id: string, _approve: boolean) => D({ ok: false, error: "not available in the demo" }),
