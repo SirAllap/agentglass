@@ -23,8 +23,11 @@ beforeAll(() => {
         });
       }
       if (url.pathname === "/plugins/settings" && req.method === "POST") {
-        saved.push(await req.json());
-        return Response.json({ ok: true });
+        const body = (await req.json()) as { name?: string };
+        saved.push(body);
+        // A refused save: the answer is what the CLI prints, and it must not carry the key.
+        if (body.name === "orbit-refused") return Response.json({ ok: false, error: "could not save the key" }, { status: 400 });
+        return Response.json({ ok: true, values: { apiKey: null, mode: "live" }, set: ["apiKey"] });
       }
       return new Response("not found", { status: 404 });
     },
@@ -60,5 +63,23 @@ describe("agentglass-plugin settings with a secret", () => {
     saved.length = 0;
     await run(["settings", "orbit-scorer", "mode=live"]);
     expect(saved).toEqual([{ name: "orbit-scorer", values: { mode: "live" } }]);
+  });
+
+  test("never prints the key it read, on a save or on a refusal", async () => {
+    for (const name of ["orbit-scorer", "orbit-refused"]) {
+      const r = await run(["settings", name, "apiKey=-"], KEY + "\n");
+      expect(r.out, `${name}: the answer echoed the key`).not.toContain(KEY);
+    }
+  });
+
+  // CodeQL (py/clear-text-logging-sensitive-data) treats the answer of a
+  // function named for a secret as a secret, and everything the CLI computes
+  // ends in print(). The one such name allowed is the token reader, which
+  // only fills the Authorization header.
+  test("no function in the CLI is named for a secret except the token reader", async () => {
+    const src = await Bun.file(CLI).text();
+    const names = [...src.matchAll(/^\s*def ([A-Za-z_][A-Za-z0-9_]*)\(/gm)].map((m) => m[1]);
+    expect(names.length).toBeGreaterThan(10);
+    expect(names.filter((n) => /secret|passw|token|credential|key/i.test(n))).toEqual(["token"]);
   });
 });
