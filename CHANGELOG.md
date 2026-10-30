@@ -6,16 +6,14 @@ carries its own notes, the desktop installers and the phone's `.apk`.
 
 ## Unreleased
 
-- **Automatic cleanup shows itself.** While a merged PR is being cleaned a small chip in the window bar reads "Cleaning 3 of 10" (+ the PRs waiting), with a thin progress line; it is gone when idle and opens the Agents view. The Automatic option in Settings now says what it does: background, one PR at a time, resumes after a restart, what it removes and what it leaves alone.
-- **The Files view is gone; the Finder replaces it.** `agentglass-ui open files` now says so and points at the Finder, a notification about a file opens the Finder on it, and a saved rail order that still names Files is ignored. Git status marks in the tree and editing inside the app are not carried over: the Finder sends a file to nvim on the bench.
-
 ## Released
 
+- **v1.0.0** — **The first stable release: a Starboard dashboard, agents that fly a plan, and a computer you can see and clean.**
+  - **Starboard and the Lantern.** A dashboard with a spend sparkline, a 5 h quota tile, a clock and life signs for subagents and background shells. The "Stalled?" tile and its limits (subagent 10 minutes, shell 30 minutes, stalled 20 minutes) are estimates shown as a hint, not a measurement.
+  - **Flight plan and Polaris.** Agents write, preflight and launch a plan with their own credential and a person says Go. Polaris keeps pull requests moving and is off until you turn it on.
+  - **Boards and the machine.** One card and one filter language across the Jira tree, GitHub and ClickUp, closed cards with Clean up and Clean up all, and Docker, disk and machine panels.
+  - **Smaller changes.** Automatic cleanup shows a "Cleaning 3 of 10" chip in the window bar, and the Finder replaces the Files view.
 - **v0.27.0** — **One Agents screen, one rule list per project, and no more chat view.**
-  - **One Agents screen.** It replaces the Lantern and the chair. The chat view and the Understudy are gone.
-  - **Rules that learn.** Each project has one rule list that every agent obeys, and it learns from what you tell it. It now also applies to sessions you start yourself through the hook: a "never" rule blocks there too, not only in launched runs. Merging and releasing start as "never", as before for launched runs. This is a behaviour change.
-  - **Engines.** "Send to terminal" opens the engine you set, and each engine has its own permission modes.
-  - **Smaller fixes.** The plugin market keeps long listings, PR watch can ignore any check, agent clicks reach a hidden browser view, and the unread chip lights the board again.
 - **v0.26.0** — **The agent's clicks and typing count as a person's, and tmux tabs appear at once.**
   - **Real input in the built-in browser.** click, double-click, hover, type, press and fill reach the page as real input, so sites that ignore scripted events work, and the agent's keys never fire the app's own shortcuts. Right-click, drag and pinch-zoom are still scripted.
   - **Tabs without polling.** A tmux control-mode sidecar pushes window changes, so a new tab shows at once and an idle panel asks tmux 120 times an hour instead of 1800; the poll remains the fallback.
