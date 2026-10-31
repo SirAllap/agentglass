@@ -1,0 +1,218 @@
+/*
+ * FLIGHT PLAN SETTINGS, PILOT AND SAFEGUARDS.
+ *
+ * Lives inside `.fpv` and takes its tokens (--fp-*, --surface-*, the house
+ * colours). The four actor hues below are the only colours of its own, defined
+ * once; every tint and ink is mixed from them and from the theme's own text, so
+ * a dark theme gets the same structure. Controls are 28px, as the rest of this
+ * view's controls are (seg 24 + 2px track either side).
+ *
+ * Motion is transform and opacity only, 120-200 ms ease-out. A keyboard action
+ * does not animate, and reduced motion removes all of it. Layout changes by
+ * width use container queries, so the tab stacks when ITS pane is narrow, not
+ * only when the window is.
+ */
+.fpv .ps {
+  --ps-you: #7a4fb5; --ps-coord: #2f7d8a; --ps-pre: #3b66b0; --ps-build: #c27a2c;
+  --ps-auto: color-mix(in srgb, var(--ps-coord) 38%, black);
+  --ps-you-ink: color-mix(in srgb, var(--ps-you) 62%, var(--text));
+  --ps-coord-ink: color-mix(in srgb, var(--ps-coord) 62%, var(--text));
+  --ps-pre-ink: color-mix(in srgb, var(--ps-pre) 62%, var(--text));
+  --ps-build-ink: color-mix(in srgb, var(--ps-build) 62%, var(--text));
+  --ps-ease: var(--fp-ease, cubic-bezier(.23, 1, .32, 1));
+  --ps-hit: 28px;
+  --ps-on: #fff; /* ink on a filled actor hue */
+  container: ps / inline-size;
+}
+.fpv .ps-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.fpv .ps-col { display: grid; gap: 16px; min-width: 0; }
+@container ps (max-width: 760px) { .fpv .ps-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* the actor hues, by name, for dots, tiles and legend */
+.fpv .ps [data-actor="person"] { --a: var(--ps-you); --a-ink: var(--ps-you-ink); }
+.fpv .ps [data-actor="coordinator"] { --a: var(--ps-coord); --a-ink: var(--ps-coord-ink); }
+.fpv .ps [data-actor="reviewer"] { --a: var(--ps-pre); --a-ink: var(--ps-pre-ink); }
+.fpv .ps [data-actor="builder"] { --a: var(--ps-build); --a-ink: var(--ps-build-ink); }
+
+/* card */
+.fpv .ps-card { container: card / inline-size; background: var(--surface-card); border: 1px solid var(--fp-line); border-radius: 13px; box-shadow: var(--fp-lift); overflow: hidden; }
+.fpv .ps-ch { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 10px; padding: 13px 18px 11px; }
+.fpv .ps-ci { width: 26px; height: 26px; border-radius: 8px; background: var(--surface-inset); color: var(--text2); display: grid; place-items: center; flex: none; }
+.fpv .ps-ch > div { min-width: 0; flex: 1 1 13rem; }
+.fpv .ps-ch h4 { margin: 0; font-size: 13.8px; font-weight: 700; line-height: 1.35; }
+.fpv .ps-ch p { margin: 2px 0 0; font-size: 11.7px; color: var(--text3); max-width: 62ch; }
+.fpv .ps-badge { display: inline-flex; align-items: center; gap: 6px; flex: none; margin-left: auto; border-radius: 7px; padding: 1px 9px; font-size: 10.9px; font-weight: 650; white-space: nowrap; background: var(--surface-inset); color: var(--text2); }
+.fpv .ps-badge[data-tone="seat"] { background: color-mix(in srgb, var(--ps-coord) 14%, var(--bg)); color: var(--ps-coord-ink); }
+.fpv .ps-badge[data-tone="seat"]::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.fpv .ps-badge[data-tone="none"] { background: none; border: 1px dashed var(--border2); color: var(--text3); }
+
+/* row */
+.fpv .ps-row { display: grid; grid-template-columns: minmax(11rem, 1fr) auto; gap: 6px 22px; align-items: center; padding: 11px 18px; border-top: 1px solid var(--fp-line); background: var(--bg); }
+.fpv .ps-t { font-weight: 650; font-size: 12.6px; }
+.fpv .ps-s { color: var(--text3); font-size: 11.3px; margin-top: 1px; display: flex; gap: 5px; align-items: baseline; flex-wrap: wrap; }
+.fpv .ps-s b { color: var(--text); font-weight: 650; }
+.fpv .ps-s[data-tone="error"] { color: var(--fp-err-t); }
+.fpv .ps-s[data-tone="lock"] { color: var(--ps-you-ink); font-weight: 600; }
+.fpv .ps-s[data-tone="wait"] { color: var(--fp-warn-t); }
+.fpv .ps-rc { display: flex; justify-content: flex-end; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fpv .ps-row[data-saving] .ps-rc { opacity: .6; }
+@container card (max-width: 460px) { .fpv .ps-row { grid-template-columns: minmax(0, 1fr); } .fpv .ps-rc { justify-content: flex-start; } }
+.fpv .ps-lock { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; color: var(--ps-you-ink); white-space: nowrap; }
+
+/* budget meter: scaleX, so the fill never animates layout */
+.fpv .ps-bar { margin-top: 6px; width: min(220px, 100%); height: 6px; border-radius: 4px; background: var(--surface-inset); overflow: hidden; }
+.fpv .ps-bar i { display: block; height: 100%; border-radius: 4px; background: var(--ps-coord); transform-origin: left; transform: scaleX(var(--p, 0)); transition: transform .2s var(--ps-ease); }
+.fpv .ps-bar[data-tone="warn"] i { background: var(--warning); }
+.fpv .ps-bar[data-tone="full"] i { background: var(--error); }
+
+/* controls */
+.fpv .ps :is(input, select, button, label) { font: inherit; }
+.fpv .ps .ps-in { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; outline: none !important; }
+.fpv .ps .ps-in:disabled { cursor: default; }
+
+.fpv .ps-seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 9px; background: var(--surface-inset); }
+.fpv .ps-seg-o { position: relative; display: inline-flex; align-items: center; height: 24px; padding: 0 12px; border-radius: 7px; font-size: 12px; color: var(--text3); white-space: nowrap; cursor: pointer; }
+.fpv .ps-seg-o::before { content: ""; position: absolute; inset: 0; border-radius: 7px; background: var(--bg); box-shadow: 0 1px 2px var(--shadow); opacity: 0; transition: opacity .12s var(--ps-ease); }
+.fpv .ps-seg-o > span { position: relative; }
+.fpv .ps-seg-o:has(:checked) { color: var(--text); font-weight: 650; }
+.fpv .ps-seg-o:has(:checked)::before { opacity: 1; }
+
+.fpv .ps-chk { position: relative; display: inline-flex; align-items: center; gap: 7px; height: var(--ps-hit); padding: 0 10px; border: 1px solid var(--border2); border-radius: 8px; background: var(--bg); font-size: 12px; color: var(--text3); cursor: pointer; white-space: nowrap; transition: transform .16s var(--ps-ease); }
+.fpv .ps-chk:has(:checked) { color: var(--text); }
+.fpv .ps-box { width: 14px; height: 14px; border-radius: 4px; border: 1.5px solid var(--border2); display: grid; place-items: center; position: relative; flex: none; }
+.fpv .ps-box::before { content: ""; position: absolute; inset: -1.5px; border-radius: 4px; background: var(--success); opacity: 0; transition: opacity .12s var(--ps-ease); }
+.fpv .ps-box svg { position: relative; color: var(--bg); opacity: 0; transform: scale(.6); transition: opacity .12s var(--ps-ease), transform .16s var(--ps-ease); }
+.fpv .ps-chk:has(:checked) .ps-box::before, .fpv .ps-chk:has(:checked) .ps-box svg { opacity: 1; }
+.fpv .ps-chk:has(:checked) .ps-box svg { transform: none; }
+
+.fpv .ps-tog { position: relative; width: 38px; height: 22px; padding: 0; border: 0; border-radius: 99px; background: var(--border2); cursor: pointer; flex: none; transition: transform .16s var(--ps-ease); }
+.fpv .ps-tog::before { content: ""; position: absolute; inset: 0; border-radius: 99px; background: var(--success); opacity: 0; transition: opacity .15s var(--ps-ease); }
+.fpv .ps-tog::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--bg); box-shadow: 0 1px 2px var(--shadow); transition: transform .18s var(--ps-ease); }
+.fpv .ps-tog[aria-checked="true"]::before { opacity: 1; }
+.fpv .ps-tog[aria-checked="true"]::after { transform: translateX(16px); }
+.fpv .ps-tog:disabled { cursor: default; }
+
+.fpv .ps .sel { height: var(--ps-hit); }
+.fpv .ps-usd { display: inline-flex; align-items: center; gap: 4px; height: var(--ps-hit); width: 96px; padding: 0 10px; border: 1px solid var(--border2); border-radius: 8px; background: var(--bg); color: var(--text3); font-size: 12px; }
+.fpv .ps-usd input { flex: 1; min-width: 0; width: 100%; height: 100%; padding: 0; border: 0; border-radius: 0; background: none; color: var(--text); outline: none !important; font-size: 12px; font-variant-numeric: tabular-nums; }
+.fpv .ps-usd[data-bad] { border-color: var(--error); }
+.fpv .ps-usd:has(input:focus-visible), .fpv .ps .sel:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+
+/* hover, press: pointer only, fill and ink, nothing under the pointer moves */
+@media (hover: hover) and (pointer: fine) {
+  .fpv .ps-seg-o:not(:has(:checked)):not(:has(:disabled)):hover { color: var(--text); }
+  .fpv .ps-chk:not(:has(:disabled)):hover, .fpv .ps-usd:not(:has(:disabled)):hover, .fpv .ps .sel:not(:disabled):hover { border-color: var(--text4); }
+  .fpv .ps-tog:not(:disabled):hover { filter: brightness(1.12); }
+  .fpv .ps-chk:not(:has(:disabled)):active:not(:has(:focus-visible)), .fpv .ps-tog:not(:disabled):active:not(:focus-visible) { transform: scale(.97); }
+}
+.fpv .ps-chk:has(:disabled), .fpv .ps-tog:disabled, .fpv .ps-usd:has(:disabled), .fpv .ps .sel:disabled { opacity: .55; cursor: default; }
+.fpv .ps-seg:has(:disabled) { opacity: .55; }
+.fpv .ps-tog:focus-visible { border-radius: 99px; }
+.fpv .ps-chk:has(.ps-in:focus-visible) { outline: 2px solid var(--primary); outline-offset: -2px; }
+.fpv .ps-seg-o:has(.ps-in:focus-visible) { outline: 2px solid var(--primary); outline-offset: -2px; }
+
+/* who flies */
+.fpv .ps-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 2px 18px 14px; }
+@container card (max-width: 560px) { .fpv .ps-modes { grid-template-columns: minmax(0, 1fr); } .fpv .ps-gated[data-void] { display: none; } }
+.fpv .ps-mode { --c: var(--a); position: relative; display: grid; grid-template-rows: auto 1fr auto auto; gap: 7px; padding: 11px 13px 12px; border: 1px solid var(--fp-line); border-radius: 11px; background: var(--bg); cursor: pointer; transition: transform .16s var(--ps-ease); }
+.fpv .ps-mode[data-pilot="autopilot"] { --a: var(--ps-coord); }
+.fpv .ps-mode::after { content: ""; position: absolute; inset: -1px; border-radius: 11px; pointer-events: none; opacity: 0; border: 1px solid var(--c); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 16%, transparent), var(--fp-lift); transition: opacity .16s var(--ps-ease); }
+.fpv .ps-mode:has(:checked)::after { opacity: 1; }
+.fpv .ps-mode:has(.ps-in:focus-visible) { outline: 2px solid var(--primary); outline-offset: 2px; }
+.fpv .ps-top { display: flex; align-items: center; gap: 8px; }
+.fpv .ps-top b { font-size: 13px; }
+.fpv .ps-tile { width: 22px; height: 22px; border-radius: 7px; background: var(--c); color: var(--ps-on); display: grid; place-items: center; flex: none; }
+.fpv .ps-mode[data-pilot="autopilot"] .ps-tile { background: var(--ps-auto); }
+.fpv .ps-radio { margin-left: auto; width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--border2); position: relative; flex: none; }
+.fpv .ps-radio::after { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--c); transform: scale(0); transition: transform .16s var(--ps-ease); }
+.fpv .ps-mode:has(:checked) .ps-radio { border-color: var(--c); }
+.fpv .ps-mode:has(:checked) .ps-radio::after { transform: scale(1); }
+.fpv .ps-mode p { margin: 0; font-size: 11.7px; color: var(--text2); }
+.fpv .ps-now { border-top: 1px dashed var(--border2); padding-top: 7px; font-size: 11px; color: var(--text3); min-height: 38px; }
+.fpv .ps-now em { font-style: normal; font-weight: 700; letter-spacing: .04em; margin-right: 4px; }
+.fpv .ps-now b { color: var(--text); font-weight: 650; }
+.fpv .ps-gated { display: inline-flex; align-items: center; gap: 5px; font-size: 10.9px; font-weight: 600; color: var(--ps-you-ink); }
+.fpv .ps-gated[data-void] { visibility: hidden; }
+@media (hover: hover) and (pointer: fine) {
+  .fpv .ps-mode:not(:has(:checked)):not(:has(:disabled)):hover { border-color: var(--border2); }
+  .fpv .ps-mode:not(:has(:disabled)):active:not(:has(:focus-visible)) { transform: scale(.985); }
+}
+.fpv .ps-mode:has(:disabled) { cursor: default; }
+.fpv .ps-summary { margin: 0 18px 14px; padding: 10px 14px; border: 1px solid var(--fp-line); border-radius: 10px; background: var(--bg); font-size: 12px; color: var(--text2); min-height: calc(4.35em + 22px); }
+.fpv .ps-summary b { color: var(--text); font-weight: 700; }
+
+/* the eight stations */
+.fpv .ps-lanes { position: relative; list-style: none; margin: 0; padding: 4px 18px 0; display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 6px 0; text-align: center; }
+.fpv .ps-lanes::before { content: ""; position: absolute; top: 18px; left: calc(18px + 6.25%); right: calc(18px + 6.25%); height: 2px; background: var(--border2); }
+.fpv .ps-st { position: relative; display: grid; justify-items: center; gap: 3px; min-width: 0; }
+.fpv .ps-dot { position: relative; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-card); border: 1.5px solid var(--a); color: var(--a-ink); }
+.fpv .ps-st[data-gate] .ps-dot { background: var(--a); color: var(--ps-on); }
+.fpv .ps-st[data-gate][data-actor="coordinator"] .ps-dot { background: var(--ps-auto); border-color: var(--ps-auto); }
+.fpv .ps-nm { font-size: 11px; font-weight: 700; }
+.fpv .ps-by { font-size: 10.4px; font-weight: 600; color: var(--a-ink); overflow-wrap: anywhere; }
+@container card (max-width: 520px) {
+  .fpv .ps-lanes { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 0; }
+  .fpv .ps-lanes::before { display: none; }
+}
+.fpv .ps-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 12px 18px 14px; font-size: 11px; color: var(--text3); }
+.fpv .ps-key { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; color: var(--a-ink); }
+.fpv .ps-key::before { content: ""; width: 8px; height: 8px; border-radius: 3px; background: var(--a); }
+
+/* the builder never */
+.fpv .ps-never { list-style: none; margin: 0; padding: 2px 18px 14px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+@container card (max-width: 420px) { .fpv .ps-never { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.fpv .ps-never li { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid var(--fp-line); border-radius: 8px; background: var(--bg); font-size: 11.5px; color: var(--text2); min-width: 0; }
+.fpv .ps-never svg { color: var(--fp-err-t); }
+.fpv .ps-foot { padding: 10px 18px 14px; display: grid; gap: 4px; }
+.fpv .ps-foot p { margin: 0; font-size: 11px; line-height: 1.4; color: var(--text3); overflow-wrap: anywhere; }
+.fpv .ps-never-note { margin: 0; padding: 10px 18px 12px; font-size: 11px; line-height: 1.4; color: var(--text3); }
+.fpv .ps-never-note + .ps-never-note { padding-top: 0; }
+
+.fpv .ps-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* loading and failed reads: same layout, values held back */
+.fpv .ps[data-loading] .ps-rc, .fpv .ps[data-loading] .ps-now, .fpv .ps[data-loading] .ps-modes { pointer-events: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .fpv .ps[data-loading] :is(.ps-rc, .ps-now, .ps-top b, .ps-bar) { animation: ps-pulse 1.2s ease-in-out infinite alternate; }
+  @keyframes ps-pulse { from { opacity: .35; } to { opacity: .7; } }
+}
+.fpv .ps[data-loading] :is(.ps-rc, .ps-now) { opacity: .45; }
+.fpv .ps[data-fail] :is(.ps-rc, .ps-modes) { opacity: .45; pointer-events: none; }
+.fpv .ps-fail { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; }
+.fpv .ps-fail .err-note { flex: 1; margin: 0; }
+
+/* a keyboard action does not animate; reduced motion removes the rest */
+.fpv .ps :has(> .ps-in:focus-visible), .fpv .ps :has(> .ps-in:focus-visible) *, .fpv .ps-tog:focus-visible, .fpv .ps-tog:focus-visible::before, .fpv .ps-tog:focus-visible::after { transition: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  .fpv .ps *, .fpv .ps *::before, .fpv .ps *::after { transition: none !important; animation: none !important; }
+}
+
+/* ------------------------------------------------------ the Projects card */
+.fpv .ps-prjs { grid-column: 1 / -1; }
+.fpv .ps-prj-list { display: grid; }
+.fpv .ps-prj-empty { margin: 0; padding: 11px 18px; font-size: 11.7px; color: var(--text3); border-top: 1px solid var(--fp-line); }
+.fpv .ps-prj { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 18px; padding: 8px 18px; border-top: 1px solid var(--fp-line); background: var(--bg); }
+.fpv .ps-prj[data-sel] { background: color-mix(in srgb, var(--ps-coord) 7%, var(--bg)); box-shadow: inset 3px 0 0 var(--ps-coord); }
+.fpv .ps-prj-pick { display: grid; grid-template-columns: minmax(8rem, 1.2fr) auto minmax(6rem, 1fr) minmax(7rem, auto) minmax(7rem, 1fr); align-items: center; gap: 4px 14px; min-height: var(--ps-hit); padding: 4px 0; text-align: left; background: none; border: 0; color: inherit; cursor: pointer; min-width: 0; border-radius: 8px; }
+.fpv .ps-prj-pick > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fpv .ps-prj-pick > .pv-badge { overflow: visible; justify-self: start; }
+.fpv .ps-prj-nm { font-weight: 650; font-size: 12.6px; }
+.fpv .ps-prj-seat, .fpv .ps-prj-wait, .fpv .ps-prj-sum { font-size: 11.3px; color: var(--text3); display: inline-flex; align-items: center; gap: 5px; }
+.fpv .ps-prj-seat[data-none] { color: var(--ps-you-ink); font-weight: 600; }
+.fpv .ps-prj-mom { display: inline-flex; gap: 4px; }
+.fpv .ps-mom { height: var(--ps-hit); padding: 0 10px; border-radius: 8px; border: 1px solid var(--border2); background: var(--bg); font-size: 11.7px; color: var(--text3); cursor: pointer; white-space: nowrap; }
+.fpv .ps-mom[aria-pressed="true"] { color: var(--text); border-color: var(--ps-coord); background: color-mix(in srgb, var(--ps-coord) 12%, var(--bg)); }
+.fpv .ps-mom:not([data-own]) { border-style: dashed; }
+.fpv .ps-mom:disabled { cursor: default; opacity: .6; }
+.fpv .ps-prj-note { margin: 0; padding: 10px 18px 12px; font-size: 11px; line-height: 1.4; color: var(--text3); border-top: 1px solid var(--fp-line); }
+.fpv .ps-prj-note[data-tone="error"] { color: var(--fp-err-t); }
+.fpv .ps-prj-note[data-tone="wait"] { color: var(--fp-warn-t); }
+@container card (max-width: 760px) {
+  .fpv .ps-prj { grid-template-columns: minmax(0, 1fr); }
+  .fpv .ps-prj-pick { grid-template-columns: minmax(0, 1fr) auto; }
+  .fpv .ps-prj-sum { display: none; }
+}
+@container card (max-width: 460px) { .fpv .ps-prj-pick { grid-template-columns: minmax(0, 1fr); } .fpv .ps-prj-mom { flex-wrap: wrap; } }
+.fpv .ps-onoff { min-width: 44px; margin-right: 6px; font-weight: 650; border-style: solid; }
+.fpv .ps-onoff[data-on] { color: var(--ps-coord-ink); border-color: var(--ps-coord); border-style: solid; background: color-mix(in srgb, var(--ps-coord) 12%, var(--bg)); }
+.fpv .ps-prj-off { margin-left: 0; justify-self: start; }

@@ -139,8 +139,10 @@ describe("opening a view a panel asks for", () => {
   test("Workspace is handed goView, which un-hides before it switches", () => {
     expect(app).toContain("view={wsView} onView={goView}");
     expect(app).not.toContain("onView={setWsView}");
-    const go = app.slice(app.indexOf("const goView = useCallback"), app.indexOf("const goView = useCallback") + 200);
+    const at = app.indexOf("const goView = useCallback");
+    const go = app.slice(at, app.indexOf("}, []);", at));
     expect(go).toContain('if (!isVisibleView(v)) moveView(v, "work");');
+    expect(go.indexOf("moveView(v")).toBeLessThan(go.indexOf("setWsView(v)"));
   });
 });
 

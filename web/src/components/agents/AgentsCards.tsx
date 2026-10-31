@@ -19,8 +19,8 @@ import { WORKER_ROLES, type RoleId } from "../../../../shared/workerRoles.ts";
 import type { HookSetupStatus } from "../../../../shared/types.ts";
 import { Select } from "../Select.tsx";
 import { SettingRow } from "../SettingRow.tsx";
-import { Field, SegControl, SettingsCard, StatusBadge, helpIdFor } from "../SettingsKit.tsx";
-import { Button, INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
+import { Field, SettingsCard, StatusBadge, helpIdFor } from "../SettingsKit.tsx";
+import { Button, INPUT, INPUT_STYLE, Segmented } from "../workspace/Chrome.tsx";
 import { ShieldIcon, PlugIcon } from "../settingsNavIcons.tsx";
 import { useReportSaving } from "../SettingsPageState.tsx";
 import { JOB_ORDER } from "../orchestration/orchestrationCopy.ts";
@@ -101,9 +101,9 @@ export function GateCard({ st, busy, onGate, open }: { st: HookSetupStatus; busy
           </>,
         }}
         control={
-          <SegControl label="If nobody answers" value={d.gateOnTimeout}
-            options={GATE_ON_TIMEOUT.map((v) => ({ v, label: GATE_ON_TIMEOUT_LABEL[v] }))}
-            onPick={(v) => void set("gateOnTimeout", v)} />} />
+          <Segmented track label="If nobody answers" value={d.gateOnTimeout}
+            options={GATE_ON_TIMEOUT.map((v) => ({ id: v, label: GATE_ON_TIMEOUT_LABEL[v] }))}
+            onChange={(v) => void set("gateOnTimeout", v)} />} />
       <Note text={note} />
     </SettingsCard>
   );

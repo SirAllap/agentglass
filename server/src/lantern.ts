@@ -12,10 +12,11 @@
  * assembly would be two boards that could disagree.
  */
 import { existsSync } from "node:fs";
+import { projectRootOf } from "./git.ts";
 import { tmux } from "./tmuxpane.ts";
 import * as AgentBoard from "./agentboard.ts";
 import { recentPaneAgents } from "./panewt.ts";
-import { db, sessionNames, latestWaits, sessionRoles, setSessionRole, sessionsWhosePromptStarts } from "./db.ts";
+import { db, sessionNames, latestWaits, openToolCalls, sessionRoles, setSessionRole, sessionsWhosePromptStarts } from "./db.ts";
 import { pendingGates } from "./gate.ts";
 import { lanternWatchMinutes } from "./config.ts";
 
@@ -30,7 +31,7 @@ import { LANTERN_PROMPT_MARK } from "./lanternmark.ts";
 import { isSeatSession } from "./seatrole.ts";
 import { seatPanes, seatRoots } from "./seatpanes.ts";
 import { liveOwned } from "./agentops.ts";
-import { attention, isGone, type Attention } from "../../shared/fieldRules.ts";
+import { attention, isGone, isStalled, type Attention } from "../../shared/fieldRules.ts";
 export { LANTERN_PROMPT_MARK };
 
 /** Sessions that are the Lantern's own chat. Persisted (session_role) and
@@ -94,6 +95,9 @@ export interface GitFacts {
 export type LanternCard = AgentBoard.BoardRow & {
   facts?: SessionFacts;
   git?: GitFacts;
+  /** The project its worktree rolls up to, so a screen can list a project that has
+   *  live sessions without knowing how checkouts fold into one. */
+  project?: string;
   /** A name that is not somebody you can talk to — see `isGone`. Marked here
    *  so the view folds it the way the readout does: one rule, both screens. */
   gone?: true;
@@ -102,6 +106,14 @@ export type LanternCard = AgentBoard.BoardRow & {
    *  this codebase (the cockpit MCP) filters on it instead of writing the
    *  rule again. Absent when it asks nothing. */
   attention?: Attention;
+  /** A call is still open under the session — see `FieldRow.alive`. */
+  alive?: true;
+  /** ms of the newest life sign (see `FieldRow.lastLifeSign`). */
+  lastLifeSign?: number;
+  /** A prompt or tool came after the last Stop. */
+  turnOpen?: boolean;
+  /** Claimed work, turn open, silent 20 min — `isStalled`. */
+  stalled?: true;
 };
 
 /** What one tool call was doing, from its input, in a person's words. */
@@ -158,6 +170,57 @@ export function sessionFacts(ids: string[]): Map<string, SessionFacts> {
   return out;
 }
 
+/*
+ * LIFE SIGNS THE OPEN-TOOL LIST DOES NOT SEE.
+ *
+ * Measured on a real database (183k tool events): 119k carry an `agent_id`
+ * (a subagent's own calls), 3.6k SubagentStop, no SubagentStart at all, so a
+ * subagent is "alive" when its calls are recent and no SubagentStop followed.
+ * A background shell shows once, as a PostToolUse whose tool_input has
+ * run_in_background and whose tool_response names a backgroundTaskId; only a
+ * TaskStop ends it from our side. Nothing reports a shell finishing, so it is
+ * alive for `SHELL_CAP_MS` and then no more: a shell that outlives the cap
+ * reads as quiet. Pane output age is not here: no reader of it exists.
+ */
+export const SUBAGENT_LIVE_MS = 10 * 60_000;
+export const SHELL_CAP_MS = 30 * 60_000;
+export interface LifeSigns { subagent?: number; shell?: number; lastStop?: number }
+const lifeQ = () => ({
+  sub: db.query<{ session_id: string; t: number }, [string, number]>(
+    `SELECT e.session_id, MAX(e.timestamp) AS t FROM events e
+      WHERE e.session_id IN (SELECT value FROM json_each(?1)) AND e.timestamp > ?2
+        AND e.agent_id IS NOT NULL AND e.agent_id != '' AND e.hook_event_type IN ('PreToolUse','PostToolUse')
+        AND NOT EXISTS (SELECT 1 FROM events s WHERE s.session_id = e.session_id AND s.agent_id = e.agent_id
+                          AND s.hook_event_type = 'SubagentStop' AND s.id > e.id)
+      GROUP BY e.session_id`),
+  shell: db.query<{ session_id: string; t: number }, [string, number]>(
+    `SELECT e.session_id, MAX(e.timestamp) AS t FROM events e
+      WHERE e.session_id IN (SELECT value FROM json_each(?1)) AND e.timestamp > ?2
+        AND e.hook_event_type = 'PostToolUse' AND e.tool_name = 'Bash' AND e.payload LIKE '%"run_in_background":true%'
+        AND NOT EXISTS (SELECT 1 FROM events s WHERE s.session_id = e.session_id AND s.tool_name = 'TaskStop'
+                          AND s.hook_event_type = 'PostToolUse' AND s.id > e.id
+                          AND json_extract(s.payload, '$.tool_input.task_id') = json_extract(e.payload, '$.tool_response.backgroundTaskId'))
+      GROUP BY e.session_id`),
+  stop: db.query<{ session_id: string; t: number }, [string]>(
+    `SELECT session_id, MAX(timestamp) AS t FROM events
+      WHERE hook_event_type = 'Stop' AND (agent_id IS NULL OR agent_id = '') AND session_id IN (SELECT value FROM json_each(?1))
+      GROUP BY session_id`),
+});
+let lifeQueries: ReturnType<typeof lifeQ> | null = null;
+
+export function lifeSigns(ids: string[], now: number): Map<string, LifeSigns> {
+  const out = new Map<string, LifeSigns>();
+  const want = [...new Set(ids.filter(Boolean))];
+  if (!want.length) return out;
+  const q = (lifeQueries ??= lifeQ());
+  const arg = JSON.stringify(want);
+  const at = (id: string) => out.get(id) ?? (out.set(id, {}), out.get(id)!);
+  for (const r of q.sub.all(arg, now - SUBAGENT_LIVE_MS)) at(r.session_id).subagent = r.t;
+  for (const r of q.shell.all(arg, now - SHELL_CAP_MS)) at(r.session_id).shell = r.t;
+  for (const r of q.stop.all(arg)) at(r.session_id).lastStop = r.t;
+  return out;
+}
+
 /* Git per worktree, remembered for half a minute: the view reads every five
    seconds while it is open, and a `git status` on a large checkout is not
    free — eight worktrees at five seconds would be the board's whole budget. */
@@ -180,6 +243,13 @@ async function gitFactsFor(path: string, base: string, now: number): Promise<Git
   gitCache.set(path, facts);
   return facts;
 }
+
+/* One git call per worktree path for the life of the process: a checkout does not change project. */
+const projectOfWorktree = new Map<string, string | null>();
+const projectFor = (wt: string): string | null => {
+  if (!projectOfWorktree.has(wt)) projectOfWorktree.set(wt, projectRootOf(wt));
+  return projectOfWorktree.get(wt) ?? null;
+};
 
 export async function boardNow(): Promise<LanternCard[]> {
   /* A dead pane — the engine keeps one whose command failed — is not a pane
@@ -312,16 +382,30 @@ export async function boardNow(): Promise<LanternCard[]> {
     const into = branch && landedBy[branch]?.into;
     gitBy.set(wt, await gitFactsFor(wt, into && into !== branch ? into : "", now));
   }
+  /* A session whose own turn is idle but has a call still open (a subagent,
+     a long tool) is working. Without this it read as forgotten work. */
+  const life = lifeSigns(rows.map((r) => r.session ?? ""), now);
+  const openBy = new Set(openToolCalls().map((c) => c.session_id));
   for (const r of rows) {
     const f = r.session ? facts.get(r.session) : undefined;
     if (f) r.facts = f;
+    const l = r.session ? life.get(r.session) : undefined;
+    if (r.session && (openBy.has(r.session) || l?.subagent || l?.shell)) r.alive = true;
+    const sign = Math.max(f?.lastTool?.at ?? 0, f?.lastAsk?.at ?? 0, l?.subagent ?? 0, l?.shell ?? 0);
+    if (sign) {
+      r.lastLifeSign = sign;
+      r.turnOpen = sign > (l?.lastStop ?? 0);
+    }
     const g = r.worktree ? gitBy.get(r.worktree) : undefined;
     if (g) r.git = g;
+    const project = r.worktree ? projectFor(r.worktree) : null;
+    if (project) r.project = project;
     /* The readout collapsed these onto one line from the start; the view went
        on drawing every one of them as an idle agent. Marked once, here. */
     if (!r.role && isGone(r, now)) r.gone = true;
     const a = attention(r, now);
     if (a) r.attention = a;
+    if (isStalled(r, now)) r.stalled = true;
   }
   return rows;
 }

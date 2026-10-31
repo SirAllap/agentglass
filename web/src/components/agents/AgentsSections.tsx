@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
-import { api, type SeatAnswer } from "../../lib/api.ts";
+import { api, type SeatAnswer, type SeatTask } from "../../lib/api.ts";
+import { openFlightPlan } from "../../lib/flightPlanNav.ts";
 import { fmtAgo } from "../../lib/format.ts";
 import { jumpToPane } from "../../lib/paneJump.ts";
 import { Ph, type PhName } from "./phosphor.tsx";
@@ -12,6 +13,9 @@ import { stackShares, isDeadSchedule, type CleanGroup, type CleanKind } from "..
 import type { AgentSchedule } from "../LanternSchedule.tsx";
 import type { StaleLine } from "../../lib/agentsStale.ts";
 import type { LanternRow } from "../LanternView.tsx";
+import type { HkRow } from "../../lib/housekeeping.ts";
+import { cleanupCardView } from "../../lib/cleanupCard.ts";
+import { CleanupAskCard } from "../CleanupAskCard.tsx";
 
 /*
  * THE SECTIONS OF THE AGENTS SCREEN, drawn from decisions made in
@@ -215,7 +219,7 @@ function WaitCard({ item, root, seat, now, onChanged }: { item: WaitItem; root: 
     const settle = (outcome: string) => run("settle", () => api.seatNeedSettled(root, n.id, outcome));
     return (
       <div className="card ask q"><div className="rail" /><div className="in">
-        {head("chat-circle-text", "Coordinator")}
+        {head("chat-circle-text", "Orchestrator")}
         <div className="what"><Question text={n.text} /></div>
         {(n.cost || n.proof) && <div className="mut" style={{ fontSize: 12 }}>{[n.cost && `costs ${n.cost}`, n.proof && `settled when ${n.proof}`].filter(Boolean).join(" · ")}</div>}
         <div className="acts">
@@ -235,13 +239,13 @@ function WaitCard({ item, root, seat, now, onChanged }: { item: WaitItem; root: 
               const r = await api.agentsBroadcast(t, [seat.agent!.name]);
               const sent = r.result?.sent.some((x) => x.outcome === "sent" || x.outcome === "queued");
               /* `missing`: the route types only into agents agentglass started. An adopted session is the person's own, so the answer goes in its terminal. */
-              if (!r.ok || !sent) return { ok: false, error: r.error ?? (r.result?.missing.length ? "agentglass types only into agents it started, and this coordinator is your own session: answer it in its terminal" : "the coordinator's window did not take it") };
+              if (!r.ok || !sent) return { ok: false, error: r.error ?? (r.result?.missing.length ? "agentglass types only into agents it started, and this orchestrator is your own session: answer it in its terminal" : "the orchestrator's window did not take it") };
               const s = await api.seatNeedSettled(root, n.id, `answered: ${t}`);
               if (s.ok) { setText(""); setReplying(false); }
               return s;
             });
           }}>
-            <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Answer the coordinator" aria-label="Answer the coordinator" className={`flex-1 min-w-0 ${INPUT}`} style={INPUT_STYLE} />
+            <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Answer the orchestrator" aria-label="Answer the orchestrator" className={`flex-1 min-w-0 ${INPUT}`} style={INPUT_STYLE} />
             <button type="submit" className="btn" disabled={!text.trim() || !!busy}>Send</button>
           </form>
         )}
@@ -253,6 +257,8 @@ function WaitCard({ item, root, seat, now, onChanged }: { item: WaitItem; root: 
   if (item.kind === "rule") {
     const r = item.request;
     const d = item.diff;
+    const ask = cleanupCardView(r, now);
+    if (ask) return <CleanupAskCard r={r} view={ask} busy={!!busy} error={err || null} onAnswer={(approve) => void run(approve ? "allow" : "keep", () => api.settingsRequestDecide(r.id, approve))} />;
     return (
       <div className="card ask q"><div className="rail" /><div className="in">
         {head("lock-key", item.name, <span className="agv-chip warn">{d ? "asks to loosen a rule" : "asks to change a setting"}</span>)}
@@ -295,8 +301,10 @@ function WaitCard({ item, root, seat, now, onChanged }: { item: WaitItem; root: 
   );
 }
 
-export function WaitingSection({ items, root, seat, now, stale, onChanged }: {
+export function WaitingSection({ items, root, seat, now, stale, onChanged, extra, extraCount = 0 }: {
   items: WaitItem[]; root: string; seat: SeatAnswer | null; now: number; stale: StaleLine | null; onChanged: () => void;
+  /** Rows that wait on the person and are not agent hooks (Polaris), with how many they are. */
+  extra?: ReactNode; extraCount?: number;
 }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -316,11 +324,12 @@ export function WaitingSection({ items, root, seat, now, stale, onChanged }: {
   };
   return (
     <div>
-      <SectionHead title="Waiting on you" count={items.length} tone={blockedNow ? "err" : "warn"} />
+      <SectionHead title="Waiting on you" count={items.length + extraCount} tone={blockedNow ? "err" : "warn"} />
       <SubLine src="from agent hooks" icon="plugs-connected" notify="now" />
-      {items.length === 0
+      {items.length + extraCount === 0
         ? <Empty icon="check-circle" title="Nothing is blocked on you">When an agent needs a permission, it shows here and notifies you. Nothing else does.</Empty>
         : items.map((i) => <WaitCard key={i.key} item={i} root={root} seat={seat} now={now} onChanged={onChanged} />)}
+      {extra}
       {stale && (
         <div className="fold">
           <Ph name="eye-slash" size={15} /><b>{stale.count} stale</b>
@@ -397,7 +406,7 @@ export function WorkingSection({ working, idle, gone, hidden, hiddenDetail, onCh
       <SectionHead title="Working" count={working.length} tone="ok" />
       <SubLine src="from hooks and tmux panes" icon="terminal-window" notify="quiet" />
       {working.length === 0
-        ? <Empty icon="terminal-window" title="No agents yet">Start a Claude session in tmux, or let the coordinator start some.</Empty>
+        ? <Empty icon="terminal-window" title="No agents yet">Start a Claude session in tmux, or let the orchestrator start some.</Empty>
         : <Table rows={working} spend={spend} />}
       {idle.length > 0 && (
         <>
@@ -460,7 +469,7 @@ function AddTaskRow({ root, onChanged }: { root: string; onChanged: () => void }
     }}>
       <span className="s"><Ph name="plus" size={18} /></span>
       <div className="ti">
-        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Add a task for the coordinator" aria-label="Add a task for the coordinator" disabled={busy} />
+        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Add a task for the orchestrator" aria-label="Add a task for the orchestrator" disabled={busy} />
         {title.trim() && <input value={proof} onChange={(e) => setProof(e.target.value)} placeholder="done when…" aria-label="Done when" disabled={busy} className="pf" />}
         {err && <span className="err-line" role="alert">{err}</span>}
       </div>
@@ -470,25 +479,41 @@ function AddTaskRow({ root, onChanged }: { root: string; onChanged: () => void }
   );
 }
 
+/** A finished task and where its Preflight stands. The chip opens the Flight plan; no buttons here. */
+function PreflightRow({ t }: { t: SeatTask }) {
+  const f = t.preflight!;
+  return (
+    <div className="qr">
+      <span className="s"><Ph name="check" size={18} /></span>
+      <div className="ti" title={t.title}>{t.title}</div>
+      <button type="button" className={`agv-chip ${f.status === "failed" ? "err" : f.status === "pending" ? "info" : "ok"}`} onClick={() => openFlightPlan({ tab: "history" })}
+        title="Open it in Flight plan">{f.status === "checked" ? "Checked by Preflight" : f.status === "pending" ? "Preflight reading" : "Preflight failed"}</button>
+      {f.openFindings > 0 && <button type="button" className="agv-chip warn" onClick={() => openFlightPlan({ tab: "history" })}>{f.openFindings} open {f.openFindings === 1 ? "finding" : "findings"}</button>}
+    </div>
+  );
+}
+
 export function UpNext({ seat, schedules, onCancel, showEmpty, onSchedule, root, canAdd, onChanged }: {
   seat: SeatAnswer | null; schedules: AgentSchedule[]; onCancel: (id: string) => void; showEmpty: boolean; onSchedule: () => void;
   root: string; canAdd: boolean; onChanged: () => void;
 }) {
   const tasks = (seat?.tasks ?? []).filter((t) => !t.doneAt);
+  /* A finished task a Preflight looked at keeps one row for a day, with its chip: the way into the review. */
+  const checked = (seat?.tasks ?? []).filter((t) => t.doneAt && t.preflight && Date.now() - t.doneAt < 86_400_000).slice(0, 4);
   const started = tasks.filter((t) => t.takenAt).length;
   const shown = tasks.slice(0, 8);
   const later = schedules.filter((s) => !s.firedAt && !isDeadSchedule(s));
   const total = tasks.length + later.length;
-  if (!showEmpty && total === 0) return null;
+  if (!showEmpty && total === 0 && checked.length === 0) return null;
   const addRow = canAdd && root ? <AddTaskRow root={root} onChanged={onChanged} /> : null;
   return (
     <div>
       <SectionHead title="Up next" count={total} hint={total ? `${started} of ${total} started` : undefined}>
         <button type="button" className="btn sm quiet" onClick={onSchedule} title="Schedule an agent: start one later, at a clock time, a date-time, or after a delay">Schedule…</button>
       </SectionHead>
-      <SubLine src="from the coordinator" icon="robot" notify="quiet" />
+      <SubLine src="from the orchestrator" icon="robot" notify="quiet" />
       {total === 0
-        ? <><Empty icon="list-checks" title="The queue is empty">The coordinator fills this in.</Empty>{addRow && <div className="card">{addRow}</div>}</>
+        ? <><Empty icon="list-checks" title="The queue is empty">The orchestrator fills this in.</Empty>{addRow && <div className="card">{addRow}</div>}</>
         : (
           <>
             <div className="seg4" style={{ gridTemplateColumns: `repeat(${shown.length + later.length}, 1fr)` }}>
@@ -505,6 +530,7 @@ export function UpNext({ seat, schedules, onCancel, showEmpty, onSchedule, root,
                     : <span className="av free" title="Nobody has it yet"><Ph name="arrow-right" size={12} /></span>}
                 </div>
               ))}
+              {checked.map((t) => <PreflightRow key={t.id} t={t} />)}
               {later.map((s) => (
                 <div className="qr" key={s.id}>
                   <span className="s"><Ph name="clock" size={18} /></span>
@@ -524,7 +550,7 @@ export function UpNext({ seat, schedules, onCancel, showEmpty, onSchedule, root,
 
 const GROUP_ICON: Record<CleanKind, PhName> = { "left-behind": "hard-drives", duplicates: "copy", idle: "clock", schedule: "calendar-x" };
 
-function CleanGroupRow({ g, onChanged }: { g: CleanGroup; onChanged: () => void }) {
+function CleanGroupRow({ g, onChanged, onKeep }: { g: CleanGroup; onChanged: () => void; onKeep: (key: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const act = async () => {
@@ -558,7 +584,13 @@ function CleanGroupRow({ g, onChanged }: { g: CleanGroup; onChanged: () => void 
       </div>
       <div className="t2">
         {g.chips.length > 0
-          ? <div className="ports">{g.chips.map((c, i) => <span key={i} className="port" title={c.title}>{c.label}</span>)}{g.more > 0 && <span className="port more">+{g.more}</span>}</div>
+          ? <div className="ports">{g.chips.map((c, i) => (
+            <span key={i} className="port" title={c.title}>
+              {c.label}
+              <button type="button" className="keep" title="Keep: never list this server here again" aria-label={`Keep ${c.label}`} onClick={() => onKeep(c.key)}
+                style={{ marginLeft: 4, padding: 0, border: 0, background: "none", color: "inherit", cursor: "pointer", font: "inherit", opacity: 0.7 }}>keep</button>
+            </span>
+          ))}{g.more > 0 && <span className="port more">+{g.more}</span>}</div>
           : <span />}
         {days !== null && (
           <div className="agebar" title={`oldest: ${days} days`}>
@@ -572,14 +604,57 @@ function CleanGroupRow({ g, onChanged }: { g: CleanGroup; onChanged: () => void 
   );
 }
 
-export function CleanUpSection({ clean, onChanged }: { clean: { groups: CleanGroup[]; total: number }; onChanged: () => void }) {
+export function CleanUpSection({ clean, onChanged, onKeep }: { clean: { groups: CleanGroup[]; total: number }; onChanged: () => void; onKeep: (key: string) => void }) {
   return (
     <div>
       <SectionHead title="Clean up" count={clean.total} tone="warn" />
-      <SubLine src="from a scan of running processes" icon="magnifying-glass" notify="quiet" />
+      <SubLine src="from a scan of running processes, in the scope above" icon="magnifying-glass" notify="quiet" />
       {clean.groups.length === 0
         ? <Empty icon="broom" title="Nothing left running">Forgotten servers and dead schedules appear here.</Empty>
-        : <div className="card">{clean.groups.map((g) => <CleanGroupRow key={`${g.kind}-${g.scheduleIds[0] ?? ""}`} g={g} onChanged={onChanged} />)}</div>}
+        : <div className="card">{clean.groups.map((g) => <CleanGroupRow key={`${g.kind}-${g.scheduleIds[0] ?? ""}`} g={g} onChanged={onChanged} onKeep={onKeep} />)}</div>}
+    </div>
+  );
+}
+
+/**
+ * What the automatic cleanup after a merge is doing: one calm row per pull
+ * request, changed in place ("Cleaning ORBIT-1042..." then "ORBIT-1042 cleaned,
+ * 6.2 GB freed"). Not "needs you": it never raises the waiting count, never
+ * pops up, and draws nothing at all when there is nothing to say.
+ */
+/** How many cleanup rows show before "Show more". */
+const HK_SHOWN = 5;
+
+export function HousekeepingSection({ rows }: { rows: HkRow[] }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const [all, setAll] = useState(false);
+  if (!rows.length) return null;
+  // A busy day of merges is a screenful of identical "cleaned" rows: the newest few say it, the rest are one click away.
+  const shown = all ? rows : rows.slice(0, HK_SHOWN);
+  return (
+    <div>
+      <SectionHead title="Housekeeping" count={rows.length > HK_SHOWN ? rows.length : undefined} />
+      <SubLine src="after a PR is merged, on this machine in every project" icon="broom" notify="quiet" />
+      <div className="card hk">
+        {shown.map((r) => (
+          <div key={r.key} className={`hk-row ${r.tone}${r.fresh ? " fresh" : ""}`}>
+            <span className="hk-tile">{r.tone === "run" ? <Ph name="arrows-clockwise" size={14} /> : <Ph name={r.tone === "ok" ? "check" : "warning-circle"} size={14} />}</span>
+            <div className="hk-tx"><b>{r.title}</b><span>{r.sub}</span></div>
+            <div className="hk-rt">
+              {r.badge && <span className="hk-badge">{r.badge}</span>}
+              {r.tone !== "run" && r.lines.length > 0 && (
+                <button type="button" className="hk-link" aria-expanded={open === r.key} onClick={() => setOpen(open === r.key ? null : r.key)}>Details</button>
+              )}
+            </div>
+            {open === r.key && <ul className="hk-lines">{r.lines.map((l, i) => <li key={i}>{l}</li>)}</ul>}
+          </div>
+        ))}
+        {rows.length > HK_SHOWN && (
+          <button type="button" className="hk-link" style={{ padding: "8px 12px", textAlign: "left" }} aria-expanded={all} onClick={() => setAll(!all)}>
+            {all ? "Show fewer" : `Show ${rows.length - HK_SHOWN} more`}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

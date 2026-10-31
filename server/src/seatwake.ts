@@ -24,6 +24,7 @@ import { inScope, seatWakeHours } from "./config.ts";
 import type { Finding } from "./lanternwatch.ts";
 import { everySeat, seatSays, seated } from "./seat.ts";
 import { screenReaderFor } from "./chatpane.ts";
+import { parkNotice, takeNotices } from "./seatnotice.ts";
 import { addNeed, openNeeds } from "./seatneed.ts";
 import { releaseVanished } from "./seatqueue.ts";
 import { unreadWorthWaking } from "./seatreport.ts";
@@ -87,6 +88,7 @@ export async function wakeSeats(f: Finding[], deps: WakeDeps = {}): Promise<stri
     /* A row with `ended_at` set is a project whose chair is empty. Its
        settings are kept; nobody is in it to wake. */
     if (s.endedAt !== null) continue;
+    if (!deps.prompt) await flushNotices(s.root).catch(() => {});
     /* Whose field this is. A seat for one repository woken because an agent in
        another one stopped would spend a turn reporting on work that is none of
        its business — and, with powers, offer to unstick it. */
@@ -238,7 +240,7 @@ function aliveNames(): string[] {
  * adopted session is running in.
  */
 export async function promptSeat(root: string, text: string, deps: {
-  seated?: typeof seated; prompt?: typeof AgentOps.promptAgent;
+  seated?: typeof seated; prompt?: typeof AgentOps.promptAgent; screen?: typeof AgentOps.screenOf;
 } = {}): Promise<void> {
   const a = await (deps.seated ?? seated)(root);
   /* Gone means the person closed the chair or the machine restarted; the row
@@ -252,7 +254,24 @@ export async function promptSeat(root: string, text: string, deps: {
     if (!openNeeds(root).some((n) => n.text === text)) addNeed({ root, text, cost: "one click" });
     return;
   }
+  /* THE PERSON'S BOX COMES FIRST. A notice pasted over a half-typed sentence
+     goes out glued to it as one message, so text in the box, or a turn in
+     flight, parks the notice (seatnotice.ts) instead of typing. */
+  const reader = screenReaderFor(a.kind)!;
+  const screen = await (deps.screen ?? AgentOps.screenOf)(a.paneId);
+  if (screen !== null && ((reader.inputBox(screen) ?? "").trim() !== "" || reader.running(screen))) {
+    parkNotice(a.paneId, text);
+    return;
+  }
   await (deps.prompt ?? AgentOps.promptAgent)(a.paneId, text, 10_000, a.kind);
+}
+
+/** Types what was parked for a seat whose box has since emptied. Anything
+ *  still blocked parks itself again inside `promptSeat`. */
+export async function flushNotices(root: string, deps: Parameters<typeof promptSeat>[2] = {}): Promise<void> {
+  const a = await (deps.seated ?? seated)(root);
+  if (!a) return;
+  for (const t of takeNotices(a.paneId)) await promptSeat(root, t, deps);
 }
 
 export function __resetSeatWake(): void { __resetWoken(); }

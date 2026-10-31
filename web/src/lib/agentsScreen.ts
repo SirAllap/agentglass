@@ -193,7 +193,7 @@ export function waitingItems(p: {
 /** The waiting card's thin rows: the oldest three, with who and how long. */
 export function waitingMini(items: readonly WaitItem[], now = Date.now()): { name: string; age: string; pct: number; tone: "err" | "warn" }[] {
   return items.slice(0, 3).map((i) => ({
-    name: i.kind === "coordinator" ? "coordinator" : i.kind === "task" ? "queue" : i.name,
+    name: i.kind === "coordinator" ? "orchestrator" : i.kind === "task" ? "queue" : i.name,
     age: ageShort(now - i.since), pct: agePct(now - i.since), tone: toneOfWait(i.kind),
   }));
 }

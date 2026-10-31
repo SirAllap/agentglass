@@ -99,3 +99,13 @@ describe("the hook says what the session is", () => {
     expect(index).toContain('title: "Lantern", kind: "claude", role: "lantern" }');
   });
 });
+
+describe("parked notices", () => {
+  test.skipIf(!python)("the hook prints them on a prompt and on no other event", async () => {
+    const server = serve({ ok: true, notices: ["Preflight finished: 2 findings"] });
+    const prompt = await run(server, "UserPromptSubmit", { AGENTGLASS_NO_STATUS_NUDGE: "1" });
+    expect(prompt.stdout.trim()).toBe("Preflight finished: 2 findings");
+    const stop = await run(server, "Stop");
+    expect(stop.stdout.trim()).toBe("");
+  });
+});

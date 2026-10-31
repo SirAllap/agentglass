@@ -4,7 +4,7 @@ import { originLine, type Origin } from "../../../shared/orchestration.ts";
 import { wash } from "./git/ui.tsx";
 import { modelLabelOf } from "../../../shared/models.ts";
 import { handOff } from "../lib/lanternAsk.ts";
-import { LINE } from "./workspace/Chrome.tsx";
+import { LINE, Badge, Button } from "./workspace/Chrome.tsx";
 import { ICON, MIN_BOX } from "../lib/iconSize.ts";
 import { CloseButton } from "./CloseButton.tsx";
 
@@ -36,9 +36,13 @@ export interface LanternRow {
   /** On the orchestrator's own row: the project it sits for. */
   chairOf?: string;
   doing?: string;
+  /** The server's `alive`: a pane that is still doing something (an open tool call) though its state reads idle. */
+  alive?: true;
   saidAt?: number;
   startedAt?: number;
   worktree?: string;
+  /** The project its worktree rolls up to. */
+  project?: string;
   branch?: string;
   left?: string;
   paneId?: string;
@@ -148,12 +152,10 @@ function Where({ r }: { r: LanternRow }) {
 function Go({ paneId, onJump, big }: { paneId?: string; onJump?: (p: string) => void; big?: boolean }) {
   if (!paneId || !onJump) return null;
   return (
-    <button type="button" onClick={(e) => { e.stopPropagation(); onJump(paneId); }}
-      title={`Go to ${paneId}`}
-      className={`agx-btn shrink-0 rounded-md inline-flex items-center gap-1 ${big ? "px-3 py-1.5 text-[12px] font-medium" : "px-2.5 py-1 text-[11px]"}`}
-      style={{ color: "var(--text)", background: wash("--primary", big ? 26 : 16), border: `1px solid ${wash("--primary", big ? 55 : 40)}` }}>
+    <Button tint="var(--primary)" size={big ? "regular" : "compact"} className="shrink-0"
+      onClick={(e) => { e.stopPropagation(); onJump(paneId); }} title={`Go to ${paneId}`}>
       Go <span aria-hidden>→</span>
-    </button>
+    </Button>
   );
 }
 
@@ -169,17 +171,6 @@ function Fact({ n, word, tone, title }: { n: string | number; word: string; tone
     <span className="inline-flex items-baseline gap-1 tabular-nums" title={title} style={{ color: tone ?? "var(--text3)" }}>
       <span className="font-medium" style={{ color: tone ?? "var(--text2)" }}>{n}</span>
       <span>{word}</span>
-    </span>
-  );
-}
-
-/** A small chip in the house style: a wash of its tone, never a solid block. */
-function Pill({ children, tone, title }: { children: React.ReactNode; tone: string; title?: string }) {
-  const c = tone.startsWith("var(") ? tone.slice(4, -1) : "";
-  return (
-    <span title={title} className="shrink-0 inline-flex items-center rounded-full px-1.5 py-px text-[9.5px] leading-[14px] uppercase tracking-[0.08em]"
-      style={{ color: tone, background: c ? wash(c, 12) : "transparent", border: `1px solid ${c ? wash(c, 28) : tone}` }}>
-      {children}
     </span>
   );
 }
@@ -209,12 +200,10 @@ function HandOff({ session, kinds }: { session: string; kinds: { id: string; tit
     <span className="inline-flex items-center gap-1" title="Hand this conversation to another agent: a brief of the task, the last turns and the files touched, as its first message">
       <span className="text-[9.5px] uppercase tracking-[0.1em]" style={{ color: "var(--text4)" }}>hand off</span>
       {kinds.map((k) => (
-        <button key={k.id} type="button" disabled={busy !== null}
-          onClick={async (e) => { e.stopPropagation(); setBusy(k.id); setErr(null); const r = await handOff(session, k.id); setBusy(null); if (!r.ok) setErr(r.error ?? "failed"); }}
-          className="agx-btn rounded-full px-1.5 text-[9.5px] leading-[14px] uppercase tracking-[0.08em] disabled:opacity-50"
-          style={{ color: "var(--text3)", background: wash("--text", 6), border: `1px solid ${wash("--text", 18)}` }}>
+        <Button key={k.id} size="compact" disabled={busy !== null}
+          onClick={async (e) => { e.stopPropagation(); setBusy(k.id); setErr(null); const r = await handOff(session, k.id); setBusy(null); if (!r.ok) setErr(r.error ?? "failed"); }}>
           {busy === k.id ? "…" : k.title.replace(/ Code$/, "")}
-        </button>
+        </Button>
       ))}
       {err && <span className="text-[10px]" style={{ color: "var(--error-ink)" }}>{err}</span>}
     </span>
@@ -244,10 +233,10 @@ export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r:
         <div className="flex-1 min-w-0 flex flex-col gap-0.5">
           <div className="flex items-center gap-2 min-w-0">
             <span className={`${quiet ? "text-[12px]" : "text-[13.5px]"} font-semibold truncate`} style={{ color: w || r.state === "working" ? "var(--text)" : "var(--text2)" }} title={r.name}>{r.name}</span>
-            {r.role === "lantern" && <Pill tone="var(--text4)" title="The Lantern's own session">lantern</Pill>}
+            {r.role === "lantern" && <Badge outlined tight tint="var(--text4)" title="The Lantern's own session">lantern</Badge>}
             <span className="ml-auto shrink-0 flex items-center gap-1.5">
-              {!w && <Pill tone={tone} title={r.state === "working" ? "something ran in the last ten minutes" : "nothing has run for ten minutes"}>{r.state}</Pill>}
-              {model && <Pill tone="var(--text3)" title={f?.model}>{model}</Pill>}
+              {!w && <Badge outlined tight tint={tone} title={r.state === "working" ? "something ran in the last ten minutes" : "nothing has run for ten minutes"}>{r.state}</Badge>}
+              {model && <Badge outlined tight tint="var(--text3)" title={f?.model}>{model}</Badge>}
               {since ? <span className="text-[10.5px] tabular-nums" style={{ color: "var(--text4)" }} title={new Date(since).toLocaleString()}>{fmtAgo(since)}</span> : null}
               {/* A line a person can take off the board, whoever posted it.
                   Only a said line: a seen row is a hook's sighting and leaves
@@ -361,7 +350,7 @@ export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r:
           {f && f.turns > 0 && <Fact n={count(f.turns)} word={f.turns === 1 ? "turn" : "turns"} />}
           {f && f.errors > 0 && <Fact n={f.errors} word={f.errors === 1 ? "error" : "errors"} tone="var(--warning)" />}
           {f && f.cost > 0 && <Fact n={money(f.cost)} word="" title="what this session has cost so far" />}
-          {f?.permissionMode === "bypassPermissions" && <Pill tone="var(--warning)" title="running with permission prompts off">yolo</Pill>}
+          {f?.permissionMode === "bypassPermissions" && <Badge outlined tight tint="var(--warning)" title="running with permission prompts off">yolo</Badge>}
           {cache && !quiet && (cache.warm
             ? <span className="tabular-nums" style={{ color: "var(--success-ink)" }} title="The prompt cache is still warm: a turn sent now is the cheap one (Settings → Agents → Lantern sets the window)">cache {mmss(cache.leftMs)}</span>
             : <span style={{ color: "var(--text4)" }} title="The prompt cache has gone cold: the next turn pays to rebuild it">cache cold</span>)}
