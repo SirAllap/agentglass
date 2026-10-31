@@ -7,7 +7,7 @@
 // and deleting the file starts the count again.
 //
 // Ids are the window's own short names (`view:git`, `settings:about`,
-// `panel:stats`), never a path, a title or anything the person typed: the shape
+// `panel:skills`), never a path, a title or anything the person typed: the shape
 // is checked here as well, so a caller cannot put text of its own in the file.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -15,7 +15,8 @@ import { dirname, join } from "node:path";
 import type { UsageOpens } from "../../shared/types.ts";
 
 
-const ID_RE = /^[a-z0-9][a-z0-9._:-]{0,63}$/;
+// Camel case is allowed: a view id is `flightPlan`, and a batch with one refused id is refused whole.
+const ID_RE = /^[a-z0-9][a-zA-Z0-9._:-]{0,63}$/;
 /** More distinct ids than the app has doors, so a full table is a bug rather than a use. */
 const MAX_IDS = 500;
 /** One window's batch is a few seconds of clicking; a bigger count is not one. */
@@ -83,6 +84,9 @@ export function recordOpens(batch: unknown, now = new Date()): { ok: true; recor
   if (entries.length) save(t);
   return { ok: true, recorded };
 }
+
+/** One use counted by the server itself (a plan created, a Go said), under an id it mints. */
+export const noteUse = (id: string): void => { recordOpens({ [id]: 1 }); };
 
 /** Most opened first, ties by the most recent. */
 export function readOpens(now = new Date()): UsageOpens {

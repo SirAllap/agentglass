@@ -10,9 +10,9 @@ import { HOLD_MAX_MS, retryDelay, settleHold, startHold, type Hold } from "./usa
  * Plan quota for every provider, polled once for the whole app.
  *
  * A module store rather than a hook: the answer belongs to the app, not to
- * whichever gauge happens to be mounted. Three surfaces read this now — the
- * dashboard box, the Stats modal and the notch — and a per-component fetch
- * would mean three timers racing an endpoint that talks to a rate-limited API
+ * whichever gauge happens to be mounted. Several surfaces read this — the
+ * dashboard box, the top bar and the notch — and a per-component fetch
+ * would mean several timers racing an endpoint that talks to a rate-limited API
  * on our behalf.
  */
 

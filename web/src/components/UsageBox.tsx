@@ -4,8 +4,10 @@ import {
   subscribeProviderUsage, providerUsage, usageLoaded,
   usedColor, usedTextColor, resetLabel, ageLabel,
 } from "../lib/usageStore.ts";
+import { DIVIDER, Entry } from "./workspace/Chrome.tsx";
 import { coreRows, isCoreRow } from "../lib/accountStore.ts";
 import type { ProviderUsage, QuotaWindow } from "../../../shared/types.ts";
+import { Badge } from "./workspace/Chrome.tsx";
 
 /**
  * Plan quota for every provider the cockpit can drive.
@@ -45,20 +47,13 @@ function Meter({ label, used, resets }: { label: string; used: number; resets: s
   );
 }
 
-// Tailwind's `divide-y` sets border-top-width on children via `& > * + *`, but
-// never touches border-color — Preflight resets border-color to currentColor
-// on every element and it isn't inherited, so a parent's inline colour never
-// reaches the divider. Each row after the first carries its own explicit
-// border instead, which is provably correct regardless of Tailwind config.
-const DIVIDER = "1px solid color-mix(in srgb, var(--border) 30%, transparent)";
-
-function Row({ u, first }: { u: ProviderUsage; first: boolean }) {
+function UsageRow({ u, first }: { u: ProviderUsage; first: boolean }) {
   const age = ageLabel(u.observedAt);
   return (
-    <div className="flex flex-col gap-1.5 py-2.5" style={first ? undefined : { borderTop: DIVIDER }}>
+    <Entry first={first} className="flex flex-col gap-1.5">
       <div className="flex items-baseline gap-2 min-w-0">
         <span className="text-[11.5px] font-medium truncate" style={{ color: "var(--text)" }}>{u.label}</span>
-        {u.plan && <span className="chip shrink-0 text-[9px] uppercase tracking-wide">{u.plan}</span>}
+        {u.plan && <Badge outlined tint="var(--text3)" fill="var(--text)" wash={6}>{u.plan}</Badge>}
         {/* The age belongs next to the number it qualifies, not in a tooltip:
             a weeks-old Codex reading looks exactly like a fresh one. */}
         {u.available && age && <span className="ml-auto text-[9.5px] t-dim2 shrink-0">{age}</span>}
@@ -74,7 +69,7 @@ function Row({ u, first }: { u: ProviderUsage; first: boolean }) {
           : <span className="text-[10px] t-dim2 leading-snug">No quota windows reported.</span>)
         // Same bug, other branch: unavailable with no note would render an empty line.
         : <span className="text-[10px] t-dim2 leading-snug">{u.note ?? "No usage note provided."}</span>}
-    </div>
+    </Entry>
   );
 }
 
@@ -148,7 +143,7 @@ export function UsageBox() {
   const top = tightestWindow(rows);
 
   return (
-    <Panel eyebrow="Usage" title="Plan quota" right={<span className="text-[10px] t-dim2">By provider</span>}>
+    <Panel eyebrow="Plan quota" title="Plan quota" right={<span className="text-[10px] t-dim2">By provider</span>}>
       <div className="h-full min-h-0 flex flex-col">
         {state === "loading" && <span className="text-[11px] t-dim2 py-2">Reading plan quota…</span>}
         {state === "unreachable" && <span className="text-[11px] t-dim2 py-2">Could not reach the server for plan quota.</span>}
@@ -159,7 +154,7 @@ export function UsageBox() {
             reports them — so this panel sizes to whatever it is given and the
             grid cell around it grows to match. A quota you have to scroll to
             find is a quota you will not look at. */}
-        {rows && rows.map((u, i) => <Row key={u.provider} u={u} first={i === 0} />)}
+        {rows && rows.map((u, i) => <UsageRow key={u.provider} u={u} first={i === 0} />)}
       </div>
     </Panel>
   );
