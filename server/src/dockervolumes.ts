@@ -28,26 +28,10 @@ async function run(args: string[], timeoutMs: number): Promise<{ code: number; s
   }
 }
 
-/**
- * Docker's human sizes back to bytes: `1.9GB`, `318MB`, `0B`, `1.317GB`.
- *
- * Its units are decimal (GB, not GiB) whatever the tool that prints them says,
- * so this uses 1000s. Being consistent with `docker system df` matters more
- * than being right about SI: the two numbers sit next to each other on screen.
- */
-export function parseSize(text: string | null | undefined): number | null {
-  const m = /^\s*([\d.]+)\s*([KMGTP]?i?)B?\s*$/i.exec(String(text ?? ""));
-  if (!m) return null;
-  const n = Number(m[1]);
-  if (!Number.isFinite(n)) return null;
-  const unit = (m[2] ?? "").toUpperCase().replace("I", "");
-  const mult = { "": 1, K: 1e3, M: 1e6, G: 1e9, T: 1e12, P: 1e15 }[unit];
-  return mult ? Math.round(n * mult) : null;
-}
-
-/* The formatting lives in shared/dockerSize.ts: the panel prints these too,
-   and two roundings that disagree make one of them look wrong. */
-export { humanSize } from "../../shared/dockerSize.ts";
+/* Formatting and parsing live in shared/dockerSize.ts: the panel prints and
+   reads these too, and two roundings that disagree make one of them look wrong. */
+import { parseSize } from "../../shared/dockerSize.ts";
+export { humanSize, parseSize } from "../../shared/dockerSize.ts";
 
 export interface VolumeUsage { name: string; bytes: number | null; links: number }
 export interface DiskUsage {

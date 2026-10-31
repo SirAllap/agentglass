@@ -16,6 +16,7 @@ const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
 const code = (src: string) => src.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
 const block = code(read("components/DiskClean.tsx"));
 const panel = code(read("components/MachinePanel.tsx"));
+const resources = code(read("components/machine/Resources.tsx"));
 
 /** The text of `async function`-style arrow `const run = async (...) => {` up to its closing brace at the same indent. */
 function body(src: string, start: string): string {
@@ -28,12 +29,9 @@ function body(src: string, start: string): string {
 }
 
 describe("the lists keep to the tab's one scroll", () => {
-  // Measured at 1440x900, 1280x800 and 900 wide: the tab scrolls as a whole and each list scrolls inside a CEILING, so both end flush at their
-  // last element. A fixed `height` on a list would leave a band under a short one; a ceiling cannot.
-  it("the plan list and the report list are bounded by maxHeight, never a fixed height", () => {
-    const lists = [...block.matchAll(/<div className="overflow-y-auto" style=\{\{([^}]*)\}\}/g)].map((m) => m[1]!);
-    expect(lists.length).toBe(2);
-    for (const st of lists) { expect(st).toMatch(/maxHeight: "min\(44vh, 440px\)"/); expect(st).not.toMatch(/(^|[ ,])height:|minHeight/); }
+  // The groups grow to their rows and the Resources column scrolls as a whole; a list with its own scroller would nest one scroll in another.
+  it("no list inside the block has a scroller or a height of its own", () => {
+    expect(block).not.toMatch(/overflow-y-auto|maxHeight|overflowY/);
   });
   it("the block puts no scroller of its own around itself: the tab's scroller carries it", () => {
     expect(block).not.toMatch(/<section[^>]*overflow/);
@@ -95,8 +93,8 @@ describe("a plan an agent staged", () => {
 
 describe("the machine panel", () => {
   it("mounts the block inside the Resources scroller, after the left-behind list", () => {
-    expect(panel.indexOf("<LeftBehind />")).toBeGreaterThan(-1);
-    expect(panel.indexOf("<DiskClean />")).toBeGreaterThan(panel.indexOf("<LeftBehind />"));
+    expect(resources.indexOf("<LeftBehind")).toBeGreaterThan(-1);
+    expect(resources.indexOf("<DiskClean />")).toBeGreaterThan(resources.indexOf("<LeftBehind"));
   });
   it("puts one badge on the Resources tab, from the setting and what was last seen, with the sentence as its name", () => {
     expect(panel).toContain("const lowDisk = useLowDisk()");
@@ -107,6 +105,7 @@ describe("the machine panel", () => {
     expect(read("lib/diskClean.ts")).not.toMatch(/notify|Notification|toast/i);
   });
   it("the machine tile feeds the badge before anyone scans", () => {
-    expect(panel).toContain('publishDiskMounts("tile"');
+    expect(resources).toContain("publishMachineDisk(d.machine)");
+    expect(read("lib/diskClean.ts")).toContain('publishDiskMounts("tile"');
   });
 });

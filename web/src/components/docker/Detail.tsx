@@ -1,65 +1,41 @@
 /*
- * One container, without the tab row.
- *
- * The tabs were five buttons, four of which hid a fact you needed while looking
- * at the fifth: the image, the ports, how long it has been up, whether its
- * health check is failing — all of that lived behind "Info", which is to say
- * behind a click, which is to say nowhere.
- *
- * So the facts are the header, always, and the log is the body, always. Env,
- * config and processes become sections that open UNDER the log rather than
- * instead of it: what you want while reading `docker inspect` is usually the
- * log line that made you open it.
+ * One container, open: the head (state, name, its one action, Shell), the red
+ * line that says why it needs you, four stat cards, then the log as the body
+ * and four folds under it. The folds open UNDER the log rather than instead of
+ * it: what you want while reading `docker inspect` is usually the log line that
+ * made you open it.
  */
 import { useState } from "react";
 import type { DockerContainer, DockerEnvRow, DockerStat } from "../../../../shared/types.ts";
 import { api } from "../../lib/api.ts";
-import { CODE_FONT_STYLE } from "../diff/DiffLines.tsx";
+import { envRows, envSummary, topTree } from "../../lib/dockerDetail.ts";
+import { CaretIcon, SearchIcon } from "../../lib/glyphIcons.tsx";
+import { ICON } from "../../lib/iconSize.ts";
 import { Select } from "../Select.tsx";
+import { BAR_INPUT, Button, EDGE, INPUT_STYLE } from "../workspace/Chrome.tsx";
+import { DetailBar, type BarProps } from "./DetailBar.tsx";
+import { FactCards, WhyLine } from "./DetailFacts.tsx";
 import { LogView } from "./LogView.tsx";
-import { healthLabel, healthTint, ownerTitle, portLabel, portUrl } from "../../lib/dockerRow.ts";
-import { INPUT, INPUT_STYLE, EDGE } from "../workspace/Chrome.tsx";
 
 export type DetailSection = "env" | "config" | "top" | "compare";
 
-const STATE_TINT: Record<string, string> = {
-  running: "var(--success)", exited: "var(--text3)", paused: "var(--warning)",
-  restarting: "var(--warning)", created: "var(--info)", dead: "var(--error)", removing: "var(--error)",
-};
-
-/** A fact in the header strip: a dim label and the value, on one line. */
-function Fact({ label, children, title }: { label: string; children: React.ReactNode; title?: string }) {
-  return (
-    <span className="flex items-center gap-1 min-w-0 shrink-0" title={title}>
-      <span className="text-[9px] uppercase tracking-wider t-dim2">{label}</span>
-      <span className="text-[10px] truncate" style={{ color: "var(--text2)" }}>{children}</span>
-    </span>
-  );
-}
-
-/** One collapsible section under the log. Closed sections cost nothing: their
- *  content is not fetched until they are opened. */
-function Section({ id, label, count, open, onToggle, children }: {
-  id: DetailSection; label: string; count?: number; open: boolean;
-  onToggle: (id: DetailSection) => void; children: React.ReactNode;
+/** One fold under the log. A closed fold costs nothing: its content is not fetched until it opens. */
+function Fold({ id, label, note, open, onToggle, children }: {
+  id: DetailSection; label: string; note?: string; open: boolean; onToggle: (id: DetailSection) => void; children: React.ReactNode;
 }) {
   return (
-    <div className="shrink-0 border-t" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-      <button onClick={() => onToggle(id)} aria-expanded={open}
-        className="w-full flex items-center gap-2 px-4 py-1 text-left min-h-[24px]">
-        <span className="text-[10px] t-dim2 w-3">{open ? "▾" : "▸"}</span>
-        <span className="text-[10px] uppercase tracking-wider" style={{ color: open ? "var(--text)" : "var(--text3)" }}>{label}</span>
-        {count != null && <span className="text-[10px] t-dim2 tabular-nums">{count}</span>}
+    <div className="dk-acc" data-open={open}>
+      <button type="button" onClick={() => onToggle(id)} aria-expanded={open}>
+        <CaretIcon size={ICON.sm} />{label}{note ? <span className="n">{note}</span> : null}
       </button>
-      {/* Bounded: a 4,000-line `docker inspect` must not push the log off the
-          screen just because somebody glanced at it. */}
-      {open && <div className="agx-scroll overflow-auto px-4 pb-2" style={{ maxHeight: "38vh" }}>{children}</div>}
+      {/* Bounded in CSS: a 4,000-line `docker inspect` must not push the log off the screen. */}
+      {open && <div className="ab">{children}</div>}
     </div>
   );
 }
 
 export function Detail({
-  c, stat, env, config, top, error, writeEnabled, tail, onTail, onExec, onOpenPort, open, onToggle, others,
+  c, stat, env, config, top, error, readOnly, tail, onTail, onOpenPort, open, onToggle, others, bar,
 }: {
   c: DockerContainer;
   stat?: DockerStat;
@@ -67,158 +43,99 @@ export function Detail({
   config: string | null;
   top: string | null;
   error: string | null;
-  writeEnabled: boolean;
+  readOnly: boolean;
   tail: number;
   onTail: (n: number) => void;
-  onExec: () => void;
   onOpenPort: (url: string) => void;
   open: Record<DetailSection, boolean>;
   onToggle: (id: DetailSection) => void;
   /** Every other container on screen, for "why does yours start and mine not". */
   others: DockerContainer[];
+  bar: BarProps;
 }) {
-  const [envQ, setEnvQ] = useState("");
-  const health = healthLabel(c);
-  const tint = healthTint(c.health);
-  const shownEnv = env?.filter((line) => !envQ.trim() || line.toLowerCase().includes(envQ.trim().toLowerCase())) ?? null;
-
+  const [errorTick, setErrorTick] = useState(0);
+  const procs = top ? topTree(top) : null;
   return (
     <>
-      <div className="px-4 py-2 border-b shrink-0 flex flex-col gap-1" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-        <div className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full shrink-0" style={{ background: STATE_TINT[c.state] ?? "var(--text3)" }} />
-          <span className="text-[12px] font-medium truncate" style={{ color: "var(--text)" }} title={c.name}>{c.name}</span>
-          {health && tint && (
-            <span className="text-[9.5px] px-1.5 py-0.5 rounded-md shrink-0"
-              title={c.healthError ?? undefined}
-              style={{ color: tint, border: `1px solid color-mix(in srgb, ${tint} 40%, transparent)`, background: `color-mix(in srgb, ${tint} 10%, transparent)` }}>
-              {health}
-            </span>
-          )}
-          {c.owner && (
-            <span className="text-[9.5px] px-1.5 py-0.5 rounded-md shrink-0" title={ownerTitle(c.owner)}
-              style={c.owner.foreign
-                ? { color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }
-                : { color: "var(--text3)", border: EDGE }}>
-              {c.owner.worktree}{c.owner.branch ? ` · ${c.owner.branch}` : ""}
-            </span>
-          )}
-          <div className="ml-auto flex items-center gap-1 shrink-0">
-            {/* Runs in the console already docked below, in the same shell you
-                would have typed it into. A second, container-only terminal
-                would be a second set of bugs for no extra reach. */}
-            {writeEnabled && c.state === "running" && (
-              <button onClick={onExec} className="text-[10px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
-                style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}
-                title={`Open a shell inside ${c.name}`}>Exec</button>
-            )}
-            <Select value={String(tail)} onChange={(v) => onTail(Number(v))} align="right"
-              className="text-[10px] px-2.5 min-h-[28px] rounded-lg outline-none"
-              style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", color: "var(--text2)", border: EDGE }}
-              options={[100, 200, 400, 1000, 2000].map((n) => ({ value: String(n), label: `${n} lines` }))} />
-          </div>
-        </div>
-
-        {/* The facts that used to be behind the "Info" tab. Every one of them
-            is something you check WHILE reading the log, which is exactly what
-            a tab makes impossible. */}
-        <div className="flex items-center gap-x-3 gap-y-1 flex-wrap min-w-0">
-          <Fact label="image" title={c.image}>{c.image}</Fact>
-          <Fact label="up" title={c.startedAt ? `started ${c.startedAt}` : c.status}>{c.uptime || c.status}</Fact>
-          {!!c.restarts && (
-            <Fact label="restarts" title="Docker has restarted this container this many times since it was created">
-              <span style={{ color: "var(--warning-ink)" }}>{c.restarts}</span>
-            </Fact>
-          )}
-          {stat && c.state === "running" && (
-            <Fact label="cpu / mem" title={`memory ${stat.mem}% (${stat.memUsage})`}>{stat.cpu.toFixed(1)}% · {stat.mem.toFixed(0)}%</Fact>
-          )}
-          {c.portList?.length ? (
-            <span className="flex items-center gap-1 min-w-0 flex-wrap">
-              <span className="text-[9px] uppercase tracking-wider t-dim2">ports</span>
-              {c.portList.map((p, i) => {
-                const url = portUrl(p);
-                return url ? (
-                  <button key={i} onClick={() => onOpenPort(url)} title={`Open ${url}`}
-                    className="text-[9.5px] px-1.5 py-0.5 rounded-md min-h-[20px]"
-                    style={{ color: "var(--info-ink)", border: "1px solid color-mix(in srgb, var(--info) 40%, transparent)", background: "color-mix(in srgb, var(--info) 8%, transparent)" }}>
-                    {portLabel(p)} ↗
-                  </button>
-                ) : (
-                  <span key={i} className="text-[9.5px] px-1.5 py-0.5 rounded-md" title={p.host === null ? "Exposed by the image, not published to the host" : "Published, but not a web port"}
-                    style={{ color: "var(--text3)", border: EDGE }}>
-                    {portLabel(p)}
-                  </span>
-                );
-              })}
-            </span>
-          ) : null}
-        </div>
-
-        {/* The probe's own words, where they belong: next to the state they
-            explain. Reading this used to mean going to `docker inspect`. */}
-        {c.health === "unhealthy" && c.healthError && (
-          <div className="text-[10px] truncate" style={{ color: "var(--error-ink)" }} title={c.healthError}>{c.healthError}</div>
-        )}
+      <div className="dk-head">
+        <DetailBar c={c} bar={{ ...bar, readOnly }} />
+        <WhyLine c={c} onShowLog={() => setErrorTick((n) => n + 1)} />
+        <FactCards c={c} stat={stat} onOpenPort={onOpenPort} />
       </div>
 
-      <LogView key={c.id} id={c.id} tail={tail} running={c.state === "running"} />
+      <LogView key={`log-${c.id}`} id={c.id} tail={tail} onTail={onTail} running={(c.state || "").toLowerCase() === "running"} errorTick={errorTick} />
 
-      <Section id="env" label="Environment" count={env?.length} open={open.env} onToggle={onToggle}>
-        {env === null ? (
-          <div className="text-[11px] t-dim2 py-2">{error ?? "reading…"}</div>
-        ) : (
-          <>
-            <input value={envQ} onChange={(e) => setEnvQ(e.target.value)} placeholder="find a variable"
-              className={`w-full max-w-[280px] my-1 ${INPUT}`}
-              style={INPUT_STYLE} />
-            <div className="text-[11px] leading-[1.6]" style={CODE_FONT_STYLE}>
-              {shownEnv!.map((line, i) => {
-                const eq = line.indexOf("=");
-                const k = eq < 0 ? line : line.slice(0, eq);
-                const v = eq < 0 ? "" : line.slice(eq + 1);
-                return (
-                  <div key={i} className="flex gap-2 min-w-0">
-                    <span className="shrink-0" style={{ color: "var(--text3)" }}>{k}</span>
-                    <span className="min-w-0 break-all" style={{ color: "var(--text2)" }}>{v}</span>
-                  </div>
-                );
-              })}
-              {!shownEnv!.length && <div className="t-dim2 py-1">nothing matches</div>}
-            </div>
-          </>
-        )}
-      </Section>
-
-      <Section id="config" label="Inspect" open={open.config} onToggle={onToggle}>
-        <pre className="text-[10.5px] leading-[1.5] whitespace-pre-wrap break-all" style={{ ...CODE_FONT_STYLE, color: "var(--text2)" }}>
-          {config ?? error ?? "reading…"}
-        </pre>
-      </Section>
-
-      <Section id="compare" label="Compare environment" open={open.compare} onToggle={onToggle}>
-        <EnvCompare c={c} others={others} />
-      </Section>
-
-      <Section id="top" label="Processes" open={open.top} onToggle={onToggle}>
-        <pre className="text-[10.5px] leading-[1.5] whitespace-pre" style={{ ...CODE_FONT_STYLE, color: "var(--text2)" }}>
-          {top ?? error ?? (c.state === "running" ? "reading…" : "the container is not running")}
-        </pre>
-      </Section>
+      <div className="dk-folds" key={`folds-${c.id}`}>
+        <Fold id="env" label="Environment" note={env ? envSummary(env) : undefined} open={open.env} onToggle={onToggle}>
+          {env === null ? <div className="dk-mut">{error ?? "reading…"}</div> : <EnvList env={env} />}
+        </Fold>
+        <Fold id="compare" label="Compare environment with another worktree" note={open.compare ? undefined : "pick a container"} open={open.compare} onToggle={onToggle}>
+          <EnvCompare c={c} others={others} />
+        </Fold>
+        <Fold id="top" label="Processes" note={procs ? String(procs.length) : undefined} open={open.top} onToggle={onToggle}>
+          {procs ? (
+            <table className="dk-tbl">
+              <thead><tr><th>PID</th><th>User</th><th className="r">CPU</th><th>Command</th></tr></thead>
+              <tbody>
+                {procs.map((p) => (
+                  <tr key={p.pid}>
+                    <td>{p.pid}</td><td>{p.user}</td><td className="r">{p.cpu}</td>
+                    <td style={{ paddingLeft: 10 + p.depth * 14 }}>{p.cmd}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : <pre className="dk-json">{top ?? error ?? ((c.state || "").toLowerCase() === "running" ? "reading…" : "the container is not running")}</pre>}
+        </Fold>
+        <Fold id="config" label="Inspect" note="raw JSON" open={open.config} onToggle={onToggle}>
+          <pre className="dk-json">{config ?? error ?? "reading…"}</pre>
+        </Fold>
+      </div>
     </>
   );
 }
 
+/** The variables, with the secrets hidden until asked: the screen is the thing that gets screenshotted. */
+function EnvList({ env }: { env: string[] }) {
+  const [q, setQ] = useState("");
+  const [shown, setShown] = useState<Record<string, true>>({});
+  const rows = envRows(env, q);
+  return (
+    <>
+      <div style={{ position: "relative", maxWidth: 260 }}>
+        <span style={{ position: "absolute", left: 9, top: 7, color: "var(--text3)", pointerEvents: "none" }}><SearchIcon size={ICON.sm} /></span>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a variable" aria-label="Find a variable"
+          spellCheck={false} autoComplete="off" className={`w-full ${BAR_INPUT}`} style={{ ...INPUT_STYLE, paddingLeft: 28 }} />
+      </div>
+      <div className="dk-kv">
+        {rows.map((r) => {
+          const hide = r.secret && !shown[r.key];
+          return (
+            <span key={r.key} style={{ display: "contents" }}>
+              <span className="k" title={r.key}>{r.key}</span>
+              <span className="v" data-mask={hide || undefined}>
+                {hide
+                  ? <button type="button" className="dk-lk" onClick={() => setShown((s) => ({ ...s, [r.key]: true }))}
+                    title="Hidden because it looks like a secret. Click to reveal it.">•••••••• <u>show</u></button>
+                  : r.value}
+              </span>
+            </span>
+          );
+        })}
+      </div>
+      {!rows.length && <div className="dk-mut">No variable matches.</div>}
+    </>
+  );
+}
 
 /**
  * "It works on mine."
  *
  * Two containers, one list of what differs. The comparison happens on the
- * server precisely so that credential values never reach this component — a
- * diff view is exactly the surface that ends up in a screenshot, and an
- * environment is the densest pile of secrets on the machine. A masked row still
- * says whether it changed, because "the token differs" is very often the whole
- * answer.
+ * server so credential values never reach this component: an environment is the
+ * densest pile of secrets on the machine and a diff is what ends up in a
+ * screenshot. A masked row still says whether it changed, because "the token
+ * differs" is very often the whole answer.
  */
 function EnvCompare({ c, others }: { c: DockerContainer; others: DockerContainer[] }) {
   const [against, setAgainst] = useState("");
@@ -226,7 +143,6 @@ function EnvCompare({ c, others }: { c: DockerContainer; others: DockerContainer
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [allRows, setAllRows] = useState(false);
-
   const candidates = others.filter((o) => o.id !== c.id);
 
   const compare = async (id: string) => {
@@ -239,52 +155,48 @@ function EnvCompare({ c, others }: { c: DockerContainer; others: DockerContainer
     if (r.ok && r.rows) setRows(r.rows); else setErr(r.error ?? "could not compare");
   };
 
+  if (!candidates.length) return <div className="dk-mut">There is no other container to compare with.</div>;
   const differ = rows?.filter((r) => r.change !== "same") ?? [];
-  const shown = allRows ? rows ?? [] : differ;
+  const list = allRows ? rows ?? [] : differ;
+  const sign = (r: DockerEnvRow) => (r.change === "only-a" ? "◀" : r.change === "only-b" ? "▶" : r.change === "changed" ? "≠" : "=");
+  const cell = (r: DockerEnvRow, v: string | undefined) => (r.masked ? "••••••••" : v || "—");
 
   return (
-    <div className="py-1 flex flex-col gap-1.5">
-      <div className="flex items-center gap-2">
-        <Select value={against} onChange={compare}
-          className="text-[10px] px-1.5 py-0.5 rounded outline-none max-w-[240px]"
-          style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", color: "var(--text2)", border: EDGE }}
+    <>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <Select value={against} onChange={compare} title="Compare with"
+          className="text-[11px] px-2.5 min-h-[28px] rounded-lg outline-none max-w-[260px]"
+          style={{ background: "var(--surface-inset)", color: "var(--text2)", border: EDGE }}
           options={[{ value: "", label: "compare with…" }, ...candidates.map((o) => ({
             value: o.id,
-            // The worktree is the thing that makes two identically-named
-            // containers tellable apart, which is the whole case for this.
+            // The worktree is what tells two identically named containers apart.
             label: `${o.name}${o.owner ? ` · ${o.owner.worktree}` : ""}`,
           }))]} />
-        {busy && <span className="text-[10px] t-dim2">reading both…</span>}
+        {busy && <span className="dk-mut">reading both…</span>}
         {rows && (
-          <span className="text-[10px] t-dim2">
-            {differ.length} of {rows.length} differ
-            <button onClick={() => setAllRows((v) => !v)} className="ml-2 min-h-[20px]" style={{ color: "var(--primary-hover)" }}>
-              {allRows ? "only the differences" : "show all"}
-            </button>
-          </span>
+          <>
+            <span className="dk-mut">{differ.length} of {rows.length} differ</span>
+            <Button size="compact" tone="quiet" onClick={() => setAllRows((v) => !v)}>{allRows ? "only the differences" : "show all"}</Button>
+          </>
         )}
       </div>
-
-      {err && <div className="text-[10.5px]" style={{ color: "var(--warning-ink)" }}>{err}</div>}
-      {rows && !differ.length && <div className="text-[10.5px] t-dim2">Identical, variable for variable.</div>}
-
-      {shown.map((r) => (
-        <div key={r.name} className="flex gap-2 text-[10.5px] min-w-0" style={CODE_FONT_STYLE}>
-          <span className="w-4 shrink-0" style={{ color: r.change === "changed" ? "var(--warning)" : r.change === "same" ? "var(--text4)" : "var(--info)" }}>
-            {r.change === "only-a" ? "◀" : r.change === "only-b" ? "▶" : r.change === "changed" ? "≠" : "="}
-          </span>
-          <span className="w-56 shrink-0 truncate" style={{ color: "var(--text3)" }} title={r.name}>{r.name}</span>
-          <span className="min-w-0 break-all" style={{ color: "var(--text2)" }}>
-            {r.masked
-              /* Compared, not shown. The state still travels; the value never
-                 does. */
-              ? <span className="t-dim2">{r.change === "same" ? "•••• identical" : "•••• differs"}</span>
-              : r.change === "changed"
-                ? <><span style={{ color: "var(--error-ink)" }}>{r.a || "∅"}</span> → <span style={{ color: "var(--success-ink)" }}>{r.b || "∅"}</span></>
-                : <span>{r.a ?? r.b}</span>}
-          </span>
-        </div>
-      ))}
-    </div>
+      {err && <div className="dk-mut" style={{ color: "var(--warning-ink)" }}>{err}</div>}
+      {rows && !differ.length && !allRows && <div className="dk-mut">Identical, variable for variable.</div>}
+      {rows && list.length > 0 && (
+        <>
+          <div className="dk-dfr">
+            {list.map((r) => (
+              <span key={r.name} style={{ display: "contents" }}>
+                <span className="sg" data-c={r.change} title={r.change}>{sign(r)}</span>
+                <span className="dk-mut">{r.name}</span>
+                <span className="mono" title={r.masked ? (r.change === "same" ? "identical" : "differs") : undefined}>{cell(r, r.a)}</span>
+                <span className="mono">{cell(r, r.b)}</span>
+              </span>
+            ))}
+          </div>
+          <div className="dk-mut" style={{ fontSize: 10.5 }}>Secret values are compared on the server and never sent here.</div>
+        </>
+      )}
+    </>
   );
 }

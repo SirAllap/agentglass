@@ -14,7 +14,7 @@
 // the thread pool, not on the server's loop. A non-blocking one answered
 // EAGAIN to the stream and delivered nothing.
 import { dlopen, FFIType, ptr } from "bun:ffi";
-import { closeSync, createReadStream } from "node:fs";
+import { createReadStream } from "node:fs";
 
 /** Names only: a folder gained or lost an entry, or moved. Content changes are not events here. */
 const MASK = 0x100 /* create */ | 0x200 /* delete */ | 0x40 /* moved from */ | 0x80 /* moved to */ | 0x400 /* self deleted */ | 0x800 /* self moved */;
@@ -56,7 +56,7 @@ export function openWatcher(onEvents: (events: WatchEvent[]) => void): Watcher |
     const fd = c.inotify_init1(0);
     if (fd < 0) return null;
     let carry: Buffer | null = null;
-    const stream = createReadStream("", { fd, autoClose: false, highWaterMark: 64 * 1024 } as never);
+    const stream = createReadStream("", { fd, highWaterMark: 64 * 1024 } as never);
     stream.on("data", (chunk: string | Buffer) => {
       const r = parseEvents(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk), carry);
       carry = r.rest;
@@ -65,7 +65,7 @@ export function openWatcher(onEvents: (events: WatchEvent[]) => void): Watcher |
     stream.on("error", () => { /* a closed descriptor ends the stream; nothing to report */ });
     return {
       add: (path) => c.inotify_add_watch(fd, ptr(Buffer.from(path + "\0")), MASK),
-      close: () => { stream.destroy(); try { closeSync(fd); } catch { /* already gone */ } },
+      close: () => { stream.destroy(); },
     };
   } catch { return null; }
 }

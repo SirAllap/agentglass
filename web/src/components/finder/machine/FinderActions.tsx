@@ -10,6 +10,7 @@ import { blankAction, formOf, fromForm, listText, slugify, whenSummary, type Act
 import type { FinderAction } from "../../../../../shared/types.ts";
 import { HIT, ICON } from "../../../lib/iconSize.ts";
 import { EDGE, INPUT, INPUT_STYLE, LINE } from "../../workspace/Chrome.tsx";
+import { Field } from "../../SettingsKit.tsx";
 import { StrataIcon } from "./StrataIcon.tsx";
 import { ConfirmDialog } from "./FinderOpsUI.tsx";
 
@@ -26,14 +27,6 @@ function Switch({ on, label, onClick }: { on: boolean; label: string; onClick: (
     </button>
   );
 }
-
-const Field = ({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) => (
-  <label className="block mb-3">
-    <span className="block text-[12px]">{label}</span>
-    {hint && <span className="block text-[11px] mb-1" style={{ color: "var(--text3)" }}>{hint}</span>}
-    {children}
-  </label>
-);
 
 type Tab = "general" | "script" | "behavior";
 
@@ -69,26 +62,26 @@ function Editor({ start, create, onClose, onSaved }: { start: FinderAction; crea
       <div className="p-3">
         {tab === "general" && (
           <>
-            <Field label="Name"><input className={`${INPUT} w-full`} style={INPUT_STYLE} value={a.name} maxLength={64} spellCheck={false} onChange={(e) => set({ name: e.target.value })} placeholder="Resize image" /></Field>
-            <Field label="Description"><input className={`${INPUT} w-full`} style={INPUT_STYLE} value={a.description} maxLength={300} onChange={(e) => set({ description: e.target.value })} /></Field>
-            <Field label="Icon">
-              <span className="flex flex-wrap gap-1.5 mt-1">
+            <Field label="Name" htmlFor="fa-name"><input id="fa-name" className={`${INPUT} w-full`} style={INPUT_STYLE} value={a.name} maxLength={64} spellCheck={false} onChange={(e) => set({ name: e.target.value })} placeholder="Resize image" /></Field>
+            <Field label="Description" htmlFor="fa-description"><input id="fa-description" className={`${INPUT} w-full`} style={INPUT_STYLE} value={a.description} maxLength={300} onChange={(e) => set({ description: e.target.value })} /></Field>
+            <Field label="Icon" htmlFor="fa-icon">
+              <span role="group" aria-label="Icon" className="flex flex-wrap gap-1.5 mt-1">
                 {ICONS.map((n) => (
-                  <button key={n} aria-label={n} aria-pressed={a.icon === n} onClick={() => set({ icon: n })} className="agx-btn rounded-md grid place-items-center" style={{ width: HIT, height: HIT, border: EDGE, color: "var(--primary-ink)", background: a.icon === n ? "color-mix(in srgb, var(--primary) 18%, transparent)" : undefined }}><StrataIcon set="act" name={n} size={ICON.sm} /></button>
+                  <button key={n} id={n === ICONS[0] ? "fa-icon" : undefined} aria-label={n} aria-pressed={a.icon === n} onClick={() => set({ icon: n })} className="agx-btn rounded-md grid place-items-center" style={{ width: HIT, height: HIT, border: EDGE, color: "var(--primary-ink)", background: a.icon === n ? "color-mix(in srgb, var(--primary) 18%, transparent)" : undefined }}><StrataIcon set="act" name={n} size={ICON.sm} /></button>
                 ))}
               </span>
             </Field>
             <div className="flex items-center gap-3 mb-1"><Switch on={a.enabled} label="Enabled" onClick={() => set({ enabled: !a.enabled })} /><span>Enabled</span></div>
-            <Field label="Where it appears" hint="Under one Actions entry, or directly in the menu.">
-              <select className={INPUT} style={INPUT_STYLE} value={a.menu} onChange={(e) => set({ menu: e.target.value as "submenu" | "top" })}><option value="submenu">In the Actions submenu</option><option value="top">At the top of the menu</option></select>
+            <Field label="Where it appears" htmlFor="fa-where-it-appears" hint="Under one Actions entry, or directly in the menu.">
+              <select id="fa-where-it-appears" className={INPUT} style={INPUT_STYLE} value={a.menu} onChange={(e) => set({ menu: e.target.value as "submenu" | "top" })}><option value="submenu">In the Actions submenu</option><option value="top">At the top of the menu</option></select>
             </Field>
-            {create && <Field label="Id" hint="Names its folder. Lowercase letters, digits, dots, dashes."><input className={`${INPUT} w-full`} style={INPUT_STYLE} value={form.id || slugify(a.name)} spellCheck={false} onChange={(e) => setForm({ ...form, id: e.target.value })} /></Field>}
+            {create && <Field label="Id" htmlFor="fa-id" hint="Names its folder. Lowercase letters, digits, dots, dashes."><input id="fa-id" className={`${INPUT} w-full`} style={INPUT_STYLE} value={form.id || slugify(a.name)} spellCheck={false} onChange={(e) => setForm({ ...form, id: e.target.value })} /></Field>}
           </>
         )}
         {tab === "script" && (
           <>
-            <Field label="Runs with">
-              <select className={INPUT} style={INPUT_STYLE} value={a.run.runtime} onChange={(e) => {
+            <Field label="Runs with" htmlFor="fa-runs-with">
+              <select id="fa-runs-with" className={INPUT} style={INPUT_STYLE} value={a.run.runtime} onChange={(e) => {
                 const rt = e.target.value as FinderAction["run"]["runtime"];
                 run({ runtime: rt, entrypoint: rt === "bash" ? "action.sh" : "action.py" });
                 if (rt !== "command" && (script === SCRIPT_STARTER.python || script === SCRIPT_STARTER.bash)) setScript(SCRIPT_STARTER[rt]);
@@ -96,33 +89,33 @@ function Editor({ start, create, onClose, onSaved }: { start: FinderAction; crea
             </Field>
             {a.run.runtime === "command" ? (
               <>
-                <Field label="Program" hint="Found on PATH, or an absolute path."><input className={`${INPUT} w-full`} style={INPUT_STYLE} value={a.run.program} spellCheck={false} onChange={(e) => run({ program: e.target.value })} placeholder="sha256sum" /></Field>
-                <Field label="Arguments" hint="One per line. {path}, {paths} and {parent} stand for the selection. With none, the selection follows after --."><textarea className={`${INPUT} w-full`} style={{ ...INPUT_STYLE, minHeight: 80 }} value={a.run.args.join("\n")} spellCheck={false} onChange={(e) => run({ args: e.target.value.split("\n").filter((x) => x !== "") })} /></Field>
+                <Field label="Program" htmlFor="fa-program" hint="Found on PATH, or an absolute path."><input id="fa-program" className={`${INPUT} w-full`} style={INPUT_STYLE} value={a.run.program} spellCheck={false} onChange={(e) => run({ program: e.target.value })} placeholder="sha256sum" /></Field>
+                <Field label="Arguments" htmlFor="fa-arguments" hint="One per line. {path}, {paths} and {parent} stand for the selection. With none, the selection follows after --."><textarea id="fa-arguments" className={`${INPUT} w-full`} style={{ ...INPUT_STYLE, minHeight: 80 }} value={a.run.args.join("\n")} spellCheck={false} onChange={(e) => run({ args: e.target.value.split("\n").filter((x) => x !== "") })} /></Field>
               </>
             ) : (
-              <Field label="Script" hint="Runs as your user. The selection arrives as arguments after --, never through a shell line."><textarea className={`${INPUT} w-full font-mono`} style={{ ...INPUT_STYLE, minHeight: 200 }} value={script} spellCheck={false} onChange={(e) => setScript(e.target.value)} /></Field>
+              <Field label="Script" htmlFor="fa-script" hint="Runs as your user. The selection arrives as arguments after --, never through a shell line."><textarea id="fa-script" className={`${INPUT} w-full font-mono`} style={{ ...INPUT_STYLE, minHeight: 200 }} value={script} spellCheck={false} onChange={(e) => setScript(e.target.value)} /></Field>
             )}
           </>
         )}
         {tab === "behavior" && (
           <>
-            <Field label="Shows for">
-              <select className={INPUT} style={INPUT_STYLE} value={form.kinds} onChange={(e) => setForm({ ...form, kinds: e.target.value as ActionForm["kinds"] })}><option value="both">Files and folders</option><option value="file">Files only</option><option value="folder">Folders only</option></select>
+            <Field label="Shows for" htmlFor="fa-shows-for">
+              <select id="fa-shows-for" className={INPUT} style={INPUT_STYLE} value={form.kinds} onChange={(e) => setForm({ ...form, kinds: e.target.value as ActionForm["kinds"] })}><option value="both">Files and folders</option><option value="file">Files only</option><option value="folder">Folders only</option></select>
             </Field>
-            <Field label="File extensions" hint="Separated by commas; none means any."><input className={`${INPUT} w-full`} style={INPUT_STYLE} value={form.extensions} spellCheck={false} onChange={(e) => setForm({ ...form, extensions: e.target.value })} placeholder="png, jpg" /></Field>
-            <Field label="File types" hint="Like image/* or application/pdf."><input className={`${INPUT} w-full`} style={INPUT_STYLE} value={form.mime} spellCheck={false} onChange={(e) => setForm({ ...form, mime: e.target.value })} /></Field>
+            <Field label="File extensions" htmlFor="fa-file-extensions" hint="Separated by commas; none means any."><input id="fa-file-extensions" className={`${INPUT} w-full`} style={INPUT_STYLE} value={form.extensions} spellCheck={false} onChange={(e) => setForm({ ...form, extensions: e.target.value })} placeholder="png, jpg" /></Field>
+            <Field label="File types" htmlFor="fa-file-types" hint="Like image/* or application/pdf."><input id="fa-file-types" className={`${INPUT} w-full`} style={INPUT_STYLE} value={form.mime} spellCheck={false} onChange={(e) => setForm({ ...form, mime: e.target.value })} /></Field>
             <div className="flex gap-3">
-              <Field label="At least"><input type="number" min={0} className={`${INPUT} w-24`} style={INPUT_STYLE} value={a.when.min_items} onChange={(e) => setA({ ...a, when: { ...a.when, min_items: Math.max(0, Number(e.target.value) || 0) } })} /></Field>
-              <Field label="At most"><input type="number" min={0} className={`${INPUT} w-24`} style={INPUT_STYLE} value={form.maxItems} onChange={(e) => setForm({ ...form, maxItems: e.target.value })} placeholder="any" /></Field>
+              <Field label="At least" htmlFor="fa-at-least"><input id="fa-at-least" type="number" min={0} className={`${INPUT} w-24`} style={INPUT_STYLE} value={a.when.min_items} onChange={(e) => setA({ ...a, when: { ...a.when, min_items: Math.max(0, Number(e.target.value) || 0) } })} /></Field>
+              <Field label="At most" htmlFor="fa-at-most"><input id="fa-at-most" type="number" min={0} className={`${INPUT} w-24`} style={INPUT_STYLE} value={form.maxItems} onChange={(e) => setForm({ ...form, maxItems: e.target.value })} placeholder="any" /></Field>
             </div>
-            <Field label="Selection">
-              <select className={INPUT} style={INPUT_STYLE} value={a.run.mode} onChange={(e) => run({ mode: e.target.value as "whole-selection" | "per-item" })}><option value="whole-selection">Run once on the whole selection</option><option value="per-item">Run once per item</option></select>
+            <Field label="Selection" htmlFor="fa-selection">
+              <select id="fa-selection" className={INPUT} style={INPUT_STYLE} value={a.run.mode} onChange={(e) => run({ mode: e.target.value as "whole-selection" | "per-item" })}><option value="whole-selection">Run once on the whole selection</option><option value="per-item">Run once per item</option></select>
             </Field>
-            <Field label="If one fails">
-              <select className={INPUT} style={INPUT_STYLE} value={a.run.on_error} onChange={(e) => run({ on_error: e.target.value as "continue" | "stop" })}><option value="continue">Keep going</option><option value="stop">Stop</option></select>
+            <Field label="If one fails" htmlFor="fa-if-one-fails">
+              <select id="fa-if-one-fails" className={INPUT} style={INPUT_STYLE} value={a.run.on_error} onChange={(e) => run({ on_error: e.target.value as "continue" | "stop" })}><option value="continue">Keep going</option><option value="stop">Stop</option></select>
             </Field>
-            <Field label="Working folder">
-              <select className={INPUT} style={INPUT_STYLE} value={a.run.working_directory} onChange={(e) => run({ working_directory: e.target.value as "parent" | "home" | "action" })}><option value="parent">The folder of the selection</option><option value="home">Home</option><option value="action">The action's own folder</option></select>
+            <Field label="Working folder" htmlFor="fa-working-folder">
+              <select id="fa-working-folder" className={INPUT} style={INPUT_STYLE} value={a.run.working_directory} onChange={(e) => run({ working_directory: e.target.value as "parent" | "home" | "action" })}><option value="parent">The folder of the selection</option><option value="home">Home</option><option value="action">The action's own folder</option></select>
             </Field>
             <div className="flex items-center gap-3"><Switch on={a.run.confirm} label="Ask before running" onClick={() => run({ confirm: !a.run.confirm })} /><span>Ask before running</span></div>
           </>

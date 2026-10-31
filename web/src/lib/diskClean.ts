@@ -14,6 +14,7 @@ import { DISK_WARN_DEFAULT, diskWarnPct, freePct, lowDiskMounts } from "./diskWa
 /** Decimal, like the "N GB free" tile at the top of the same panel and like `df -H`. */
 export function fmtBytes(n: number | null): string {
   if (n === null) return "unknown";
+  if (n >= 1e12) return `${(n / 1e12).toFixed(n >= 1e13 ? 0 : 1).replace(/\.0$/, "")} TB`;
   if (n >= 1e9) return `${(n / 1e9).toFixed(n >= 1e11 ? 0 : 1)} GB`;
   return `${Math.max(1, Math.round(n / 1e6))} MB`;
 }
@@ -56,7 +57,7 @@ export function phaseOf(s: { report: DiskCleanReport | null; scanning: boolean; 
 
 /** What a button that has been pressed once says. Named, so nobody confirms what they did not read. */
 export function confirmLabel(n: number, bytes: number): string {
-  return `Remove ${n} item${n === 1 ? "" : "s"} (${fmtBytes(bytes)})`;
+  return `Yes, remove ${n} item${n === 1 ? "" : "s"} (${fmtBytes(bytes)})`;
 }
 
 const STATUS: Record<DiskCleanLineResult["status"], { label: string; tone: Tone }> = {
@@ -117,6 +118,10 @@ const currentMounts = (): Mounts => sources.get("scan") ?? sources.get("tile") ?
 export function publishDiskMounts(from: "scan" | "tile", mounts: Mounts | null): void {
   if (mounts === null) sources.delete(from); else sources.set(from, mounts);
   for (const f of subs) f();
+}
+/** The machine tile's one mount, "/" read from the dials' own numbers; none when the host would not say. */
+export function publishMachineDisk(m: { diskTotal: number; diskFree: number }): void {
+  publishDiskMounts("tile", m.diskTotal ? [{ mount: "/", size: m.diskTotal, free: m.diskFree }] : null);
 }
 const subscribeBoth = (fn: () => void): (() => void) => {
   subs.add(fn);

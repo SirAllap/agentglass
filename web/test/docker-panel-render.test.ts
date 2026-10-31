@@ -17,11 +17,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { DockerContainer } from "../../shared/types.ts";
 import { DockerView } from "../src/components/DockerPanel.tsx";
 import { Detail } from "../src/components/docker/Detail.tsx";
-import { Disk } from "../src/components/docker/Disk.tsx";
 import { LogView } from "../src/components/docker/LogView.tsx";
-import { Volumes } from "../src/components/docker/Volumes.tsx";
 
 const draw = (el: React.ReactElement) => renderToStaticMarkup(el);
+const bar = {
+  step: { i: 2, n: 5, prev: "a", next: "c" }, showStep: true, readOnly: false, busy: false,
+  onStep: () => {}, onVerb: () => {}, onMenuPick: () => {},
+};
+const folds = { env: false, config: false, top: false, compare: false };
 
 const container = (over: Partial<DockerContainer> = {}): DockerContainer => ({
   id: "a1b2c3d4e5f6", name: "orbit-app", image: "orbit-django:dev", state: "running",
@@ -54,15 +57,15 @@ describe("the pieces the view is made of", () => {
   test("the detail, with a container that has everything", () => {
     const html = draw(React.createElement(Detail, {
       c: container(), stat: undefined, env: null, config: null, top: null, error: null,
-      writeEnabled: true, tail: 200, onTail: () => {}, onExec: () => {}, onOpenPort: () => {},
-      open: { env: false, config: false, top: false, compare: false }, onToggle: () => {},
+      readOnly: false, tail: 200, onTail: () => {}, onOpenPort: () => {}, bar,
+      open: folds, onToggle: () => {},
       others: [container({ id: "ffffffffffff", name: "orbit-app-2" })],
     }));
     expect(html).toContain("orbit-app");
     // The facts that used to hide behind the "Info" tab have to be in the
     // first paint, since that is the whole point of removing the tabs.
     expect(html).toContain("orbit-django:dev");
-    expect(html).toContain("Up 4 hours");
+    expect(html).toContain("4 hours");
     expect(html).toContain("orbit-1042");
   });
 
@@ -74,39 +77,48 @@ describe("the pieces the view is made of", () => {
       project: null, service: null, workingDir: null, runningFor: "", size: "",
     };
     expect(() => draw(React.createElement(Detail, {
-      c: bare, env: null, config: null, top: null, error: null, writeEnabled: false,
-      tail: 200, onTail: () => {}, onExec: () => {}, onOpenPort: () => {},
-      open: { env: false, config: false, top: false, compare: false }, onToggle: () => {}, others: [],
+      c: bare, env: null, config: null, top: null, error: null, readOnly: true,
+      tail: 200, onTail: () => {}, onOpenPort: () => {}, bar,
+      open: folds, onToggle: () => {}, others: [],
     }))).not.toThrow();
   });
 
   test("the log view, with no stream open", () => {
-    const html = draw(React.createElement(LogView, { id: "abc123", tail: 200, running: true }));
-    // "live" is the claim it makes before a single byte arrives; the filters
+    const html = draw(React.createElement(LogView, { id: "abc123", tail: 200, onTail: () => {}, running: true }));
+    // "Live" is the claim it makes before a single byte arrives; the filters
     // are what make a wall of lines readable.
-    expect(html).toContain("live");
-    expect(html).toContain("error");
+    expect(html).toContain("Live");
+    expect(html).toContain("Errors");
+    expect(html).toContain("Find in log");
   });
 
-  test("the volumes table, empty and populated", () => {
-    expect(() => draw(React.createElement(Volumes, { volumes: [] }))).not.toThrow();
-    const html = draw(React.createElement(Volumes, {
-      volumes: [{
-        name: "frontend", driver: "local",
-        worktrees: ["orbit-1042", "orbit-2210"],
-        lastWrite: { worktree: "orbit-2210", branch: "b", at: "2026-08-16T18:40:00Z", via: "install-keypad" },
-      }],
-    }));
-    expect(html).toContain("frontend");
-    // The fact that explains a bundle you did not build.
-    expect(html).toContain("2 worktrees");
+  test("a sick container shows the red line with its way into the log, a healthy one does not", () => {
+    const props = { stat: undefined, env: null, config: null, top: null, error: null, readOnly: false, tail: 200, onTail: () => {}, onOpenPort: () => {}, bar, open: folds, onToggle: () => {}, others: [] };
+    const sick = draw(React.createElement(Detail, { ...props, c: container({ health: "unhealthy", healthFailures: 3, healthError: "GET /healthz answers 502" }) }));
+    expect(sick).toContain("Health check failing 3 times in a row:");
+    expect(sick).toContain("Show in log");
+    expect(draw(React.createElement(Detail, { ...props, c: container() }))).not.toContain("Show in log");
   });
 
-  test("the disk view, before its numbers arrive", () => {
-    const html = draw(React.createElement(Disk, {
-      writeEnabled: true, ask: async () => false, onDone: () => {},
+  test("the head: the one action, Shell, the step in the list layout and not in split", () => {
+    const props = { stat: undefined, env: null, config: null, top: null, error: null, readOnly: false, tail: 200, onTail: () => {}, onOpenPort: () => {}, open: folds, onToggle: () => {}, others: [] };
+    const html = draw(React.createElement(Detail, { ...props, c: container(), bar }));
+    expect(html).toContain("Restart");
+    expect(html).toContain("Shell");
+    expect(html).toContain("2 / 5");
+    expect(draw(React.createElement(Detail, { ...props, c: container(), bar: { ...bar, showStep: false } }))).not.toContain("2 / 5");
+    expect(draw(React.createElement(Detail, { ...props, c: container({ state: "paused", status: "Up 1 hour (Paused)" }), bar }))).toContain("Resume");
+  });
+
+  test("the four cards read the live stats, and the folds are all there", () => {
+    const html = draw(React.createElement(Detail, {
+      c: container(), stat: { id: "a1b2c3d4e5f6", cpu: 61.2, mem: 41.6, memUsage: "416MiB / 1GiB", netIO: "", blockIO: "", pids: 4 },
+      env: null, config: null, top: null, error: null, readOnly: false, tail: 200, onTail: () => {}, onOpenPort: () => {},
+      open: folds, onToggle: () => {}, others: [], bar,
     }));
-    expect(html.length).toBeGreaterThan(20);
+    expect(html).toContain("61.2 %");
+    expect(html).toContain("416MiB of 1GiB");
+    for (const w of ["Environment", "Compare environment with another worktree", "Processes", "Inspect"]) expect(html).toContain(w);
   });
 });
 

@@ -17,6 +17,7 @@
  */
 import { dockerBin } from "./docker.ts";
 import { parseSize } from "./dockervolumes.ts";
+import { isNodeModulesVolume } from "../../shared/dockerVolume.ts";
 
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:@-]*$/;
 
@@ -104,4 +105,33 @@ export async function removeImages(refs: string[]): Promise<PruneResult> {
     removed,
     ...(failed.length ? { error: failed.join("; ") } : {}),
   };
+}
+
+const BUILT_IN_NETWORKS = new Set(["bridge", "host", "none"]);
+
+/**
+ * Remove one network of the user's. Docker itself refuses one that still has
+ * containers attached, so no check of ours can race a container joining.
+ */
+export async function removeNetwork(name: string): Promise<PruneResult> {
+  if (BUILT_IN_NETWORKS.has(name)) return { ok: false, freed: null, removed: [], error: `${name} is built in: Docker needs it and cannot remove it` };
+  if (!ID_RE.test(name)) return { ok: false, freed: null, removed: [], error: "not a network name" };
+  const r = await run(["network", "rm", name], 30_000);
+  if (r.code !== 0) return { ok: false, freed: null, removed: [], error: (r.stderr.trim().split("\n")[0] || "docker refused").replace(/^Error response from daemon: /, "") };
+  return { ok: true, freed: null, removed: [name] };
+}
+
+/**
+ * Remove one node_modules volume (the next install rebuilds it). Any other
+ * volume is data that exists nowhere else, so it is refused here and not only
+ * in the view. No `-f`: docker still refuses a volume a container holds.
+ * Not `volume prune`, which takes every worktree's at once.
+ */
+export async function removeVolume(name: string): Promise<PruneResult> {
+  if (!ID_RE.test(name) || !isNodeModulesVolume(name)) {
+    return { ok: false, freed: null, removed: [], error: "Data volumes are never removed from here: use docker volume rm if you are sure" };
+  }
+  const r = await run(["volume", "rm", name], 30_000);
+  if (r.code !== 0) return { ok: false, freed: null, removed: [], error: (r.stderr.trim().split("\n")[0] || "docker refused").replace(/^Error response from daemon: /, "") };
+  return { ok: true, freed: null, removed: [name] };
 }

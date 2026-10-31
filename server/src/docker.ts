@@ -7,7 +7,7 @@
 import { basename } from "node:path";
 import { projectKey, inProject, type ProjectKey } from "../../shared/projectKey.ts";
 import type {
-  DockerContainer, DockerStat, DockerImage, DockerVolume, DockerNetwork,
+  DockerContainer, DockerStat, DockerImage, DockerVolume, DockerNetwork, DockerNetworkMember,
   DockerOverview, DockerScope, DockerActionResult, DockerCapability,
   DockerDisk, DockerVolumeDetail,
 } from "../../shared/types.ts";
@@ -396,9 +396,10 @@ export function parsePsLine(line: string): ScopedContainer | null {
   };
 }
 
-async function containers(): Promise<ScopedContainer[]> {
+/** `null` when `ps` itself failed: an empty list is a fact, a failed `ps` is a daemon that went away. */
+async function containers(): Promise<ScopedContainer[] | null> {
   const r = await dockerAsync(["ps", "--all", "--no-trunc", "--format", PS_FORMAT]);
-  if (r.code !== 0) return [];
+  if (r.code !== 0) return null;
   return r.stdout.split("\n").map(parsePsLine).filter((c): c is ScopedContainer => !!c);
 }
 
@@ -437,10 +438,33 @@ async function volumes(): Promise<DockerVolume[]> {
   });
 }
 
+/** Subnet and attached containers per network, keyed by the 12-char id, out of
+ *  one `docker network inspect`. Garbage in is an empty map: the rows then
+ *  carry no `members` and the panel says it does not know. */
+export function parseNetworkInspect(stdout: string): Map<string, { subnet: string | null; members: DockerNetworkMember[] }> {
+  const out = new Map<string, { subnet: string | null; members: DockerNetworkMember[] }>();
+  let parsed: unknown;
+  try { parsed = JSON.parse(stdout); } catch { return out; }
+  if (!Array.isArray(parsed)) return out;
+  for (const n of parsed as Record<string, any>[]) {
+    const id = String(n?.Id ?? "").slice(0, 12);
+    if (!id) continue;
+    const cfg = Array.isArray(n.IPAM?.Config) ? n.IPAM.Config.find((c: any) => typeof c?.Subnet === "string") : undefined;
+    const members = Object.entries((n.Containers ?? {}) as Record<string, { Name?: string }>)
+      .map(([cid, c]) => ({ id: cid.slice(0, 12), name: String(c?.Name ?? "") }));
+    out.set(id, { subnet: cfg ? String(cfg.Subnet) : null, members });
+  }
+  return out;
+}
+
 async function networks(): Promise<DockerNetwork[]> {
   const r = await dockerAsync(["network", "ls", "--format", "{{json .}}"]);
   if (r.code !== 0) return [];
-  return jsonLines(r.stdout).map((n) => ({ id: (n.ID || "").slice(0, 12), name: n.Name || "", driver: n.Driver || "", scope: n.Scope || "" }));
+  const rows = jsonLines(r.stdout).map((n) => ({ id: (n.ID || "").slice(0, 12), name: n.Name || "", driver: n.Driver || "", scope: n.Scope || "" }));
+  if (!rows.length) return rows;
+  const detail = await dockerAsync(["network", "inspect", ...rows.map((n) => n.id).filter((id) => ID_RE.test(id))]);
+  const by = detail.code === 0 ? parseNetworkInspect(detail.stdout) : new Map();
+  return rows.map((n) => ({ ...n, ...(by.get(n.id) ?? {}) }));
 }
 
 // The panel polls the overview every few seconds. Four CLI round-trips run
@@ -460,6 +484,37 @@ const OVERVIEW_CACHE_MS = 5_500;
 // next two seconds looks like the switch didn't take.
 let overviewCache: { at: number; root: string; data: DockerOverview } | null = null;
 
+/** The next overview asks the daemon: an event just said the cached one is old. */
+export function invalidateOverview(): void { overviewCache = null; }
+
+/** The overview of a daemon that does not answer: the three reasons it can say, and how long to believe it. */
+function downOverview(root: string, inconclusive: boolean): DockerOverview {
+  const down: DockerOverview = {
+    available: false, writeEnabled: DOCKER_WRITE_ENABLED, version: null,
+    containers: [], images: [], volumes: [], networks: [],
+    // Say which of the THREE it is. The daemon message must not be shown for a
+    // machine that has no docker at all — that binary-absent case is checked
+    // first, so "is the daemon running?" only ever names a daemon we actually
+    // tried to reach. Then the old split: a refusal is a fact, a timeout is
+    // only us running out of patience (which used to send the user to
+    // `systemctl status` for nothing, on a machine where docker was fine).
+    error: !dockerBin()
+      ? "Docker isn't installed — the docker CLI isn't on your PATH"
+      : inconclusive
+        ? "no answer from docker yet — still trying"
+        : "docker not available (is the daemon running?)",
+    at: Date.now(),
+    // The same split the error message makes, in a field the UI can act on:
+    // "still trying" is a spinner, "down" is a message with a fix in it.
+    freshness: inconclusive ? "retrying" : "down",
+  };
+  // A guess is not worth caching for as long as a fact. Holding an
+  // inconclusive verdict for the full window is what kept the error on screen
+  // long after the daemon answered.
+  if (!inconclusive) overviewCache = { at: Date.now(), root, data: down };
+  return down;
+}
+
 export async function overview(fresh = false): Promise<DockerOverview> {
   // The whole scope, not its first project: opening a second one beside it
   // has to change which containers are this cockpit's.
@@ -471,37 +526,17 @@ export async function overview(fresh = false): Promise<DockerOverview> {
     return { ...overviewCache.data, freshness: "stale" };
   }
   const { version, inconclusive } = await probeDaemon();
-  if (!version) {
-    const down: DockerOverview = {
-      available: false, writeEnabled: DOCKER_WRITE_ENABLED, version: null,
-      containers: [], images: [], volumes: [], networks: [],
-      // Say which of the THREE it is. The daemon message must not be shown for a
-      // machine that has no docker at all — that binary-absent case is checked
-      // first, so "is the daemon running?" only ever names a daemon we actually
-      // tried to reach. Then the old split: a refusal is a fact, a timeout is
-      // only us running out of patience (which used to send the user to
-      // `systemctl status` for nothing, on a machine where docker was fine).
-      error: !dockerBin()
-        ? "Docker isn't installed — the docker CLI isn't on your PATH"
-        : inconclusive
-          ? "no answer from docker yet — still trying"
-          : "docker not available (is the daemon running?)",
-      at: Date.now(),
-      // The same split the error message makes, in a field the UI can act on:
-      // "still trying" is a spinner, "down" is a message with a fix in it.
-      freshness: inconclusive ? "retrying" : "down",
-    };
-    // A guess is not worth caching for as long as a fact. Holding an
-    // inconclusive verdict for the full window is what kept the error on screen
-    // long after the daemon answered.
-    if (!inconclusive) overviewCache = { at: Date.now(), root, data: down };
-    return down;
-  }
+  if (!version) return downOverview(root, inconclusive);
   const started = Date.now();
   // Idempotent, and only from here: the ledger fills itself while somebody is
   // looking at Docker, and costs one `docker events` process for the machine.
   startVolumeWatch();
   const [c, i, v, n] = await Promise.all([containers(), images(), volumes(), networks()]);
+  // The daemon answered `version` inside its liveness window and then stopped
+  // answering `ps`: that is down, not "no containers". Served as an empty
+  // available overview it wiped the last good state off the screen for up to
+  // fifteen seconds, which is the opposite of dimming it under a banner.
+  if (!c) { cachedVersion = null; return downOverview(root, false); }
   // Only containers are scoped. Images, volumes and networks are host-global
   // resources shared between projects — an image layer isn't "owned" by the
   // checkout that happened to build it — so filtering them would hide things
@@ -596,6 +631,17 @@ async function enrich(list: DockerContainer[]): Promise<DockerContainer[]> {
 
 const pct = (s?: string) => { const n = parseFloat((s || "").replace("%", "")); return Number.isFinite(n) ? n : 0; };
 
+/** One `docker stats --format {{json .}}` row, as the panel shows it. */
+export const statFromRow = (s: Record<string, string>): DockerStat => ({
+  id: (s.ID || "").slice(0, 12),
+  cpu: pct(s.CPUPerc),
+  mem: pct(s.MemPerc),
+  memUsage: s.MemUsage || "",
+  netIO: s.NetIO || "",
+  blockIO: s.BlockIO || "",
+  pids: parseInt(s.PIDs || "0", 10) || 0,
+});
+
 let statsCache: { at: number; key: string; data: DockerStat[] } | null = null;
 /** Long enough that a 5s poll never lands on a cold cache twice in a row. */
 const STATS_TTL_MS = 5500;
@@ -636,15 +682,7 @@ export async function stats(ids?: string[]): Promise<DockerStat[]> {
   // costs one extra round-trip on a rare race and keeps the panel populated,
   // which beats blanking every gauge until the next poll.
   if (r.code !== 0) return targets ? stats() : [];
-  const data = jsonLines(r.stdout).map((s) => ({
-    id: (s.ID || "").slice(0, 12),
-    cpu: pct(s.CPUPerc),
-    mem: pct(s.MemPerc),
-    memUsage: s.MemUsage || "",
-    netIO: s.NetIO || "",
-    blockIO: s.BlockIO || "",
-    pids: parseInt(s.PIDs || "0", 10) || 0,
-  }));
+  const data = jsonLines(r.stdout).map(statFromRow);
   statsCache = { at: Date.now(), key, data };
   return data;
 }
@@ -691,6 +729,8 @@ async function action(verb: string, id: string, extra: string[] = []): Promise<D
 export const startContainer = (id: string) => action("start", id);
 export const stopContainer = (id: string) => action("stop", id);
 export const restartContainer = (id: string) => action("restart", id);
+// `docker start` refuses a paused container ("try unpause instead"); Resume is its own verb.
+export const unpauseContainer = (id: string) => action("unpause", id);
 export const removeContainer = (id: string) => action("rm", id); // non-force: fails if running (stop first)
 
 /**

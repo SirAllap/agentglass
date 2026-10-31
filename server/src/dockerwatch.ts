@@ -105,6 +105,11 @@ trap 'kill $child $reader 2>/dev/null; exit 0' TERM INT
 wait $child
 kill $reader 2>/dev/null`;
 
+/** A long-lived docker command that cannot outlive this process (the script above). */
+export function spawnWatched(bin: string, args: string[]): ReturnType<typeof Bun.spawn> {
+  return Bun.spawn(["sh", "-c", WATCH_SCRIPT, "sh", bin, ...args], { stdin: "pipe", stdout: "pipe", stderr: "ignore" });
+}
+
 let proc: ReturnType<typeof Bun.spawn> | null = null;
 let stopping = false;
 let restartAt = 0;
@@ -126,10 +131,7 @@ export function startVolumeWatch(): void {
   if (!bin) return;
 
   try {
-    proc = Bun.spawn(["sh", "-c", WATCH_SCRIPT, "sh", bin,
-      "events", "--filter", "type=container", "--filter", "event=die", "--format", "{{json .}}"], {
-      stdin: "pipe", stdout: "pipe", stderr: "ignore",
-    });
+    proc = spawnWatched(bin, ["events", "--filter", "type=container", "--filter", "event=die", "--format", "{{json .}}"]);
   } catch {
     // No daemon, no permission, no docker: try again later, say nothing. This
     // is a nicety, not a feature anybody is waiting on.

@@ -63,8 +63,13 @@ interface Twinnable { mine: boolean; pid: number | null; proc: string | null; di
  * `python` servers over one directory are, and so are two `vite`s in one
  * checkout. A pid on two addresses (v4 and v6) is one listener, not two.
  * What it cannot see: the same directory served by different programs.
+ *
+ * One program with child processes is one app: a browser's zygote and renderers
+ * inherit the parent's listener and show up as extra pids on the same port. A
+ * pid whose ancestor (by `parentOf`) is in the same set is that ancestor's
+ * child, not a twin; without `parentOf` every pid counts.
  */
-export function duplicatePids(rows: readonly Twinnable[]): Set<number> {
+export function duplicatePids(rows: readonly Twinnable[], parentOf: (pid: number) => number | null = () => null): Set<number> {
   const by = new Map<string, Set<number>>();
   for (const r of rows) {
     if (!r.mine || r.pid == null || !r.dir || !r.proc) continue;
@@ -72,7 +77,14 @@ export function duplicatePids(rows: readonly Twinnable[]): Set<number> {
     (by.get(key) ?? by.set(key, new Set()).get(key)!).add(r.pid);
   }
   const out = new Set<number>();
-  for (const pids of by.values()) if (pids.size > 1) for (const p of pids) out.add(p);
+  for (const pids of by.values()) {
+    const roots = [...pids].filter((p) => {
+      let cur = parentOf(p);
+      for (let depth = 0; cur != null && cur > 1 && depth < 16; depth++, cur = parentOf(cur)) if (pids.has(cur)) return false;
+      return true;
+    });
+    if (roots.length > 1) for (const p of roots) out.add(p);
+  }
   return out;
 }
 
