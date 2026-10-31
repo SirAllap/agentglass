@@ -164,7 +164,7 @@ async function main() {
     // is drag-reorderable and persisted — and it gained the pull-request view
     // in the middle, which silently turned Ctrl+3 from Docker into PRs. Two
     // README assets were captured under the wrong name because of it. An id cannot drift.
-    const views = ["git", "diff", "pr", "tasks", "files", "docker"];
+    const views = ["git", "diff", "pr", "tasks", "docker"];
     await key(cdp, "\\", { ctrlKey: true });
     await until(cdp, `document.querySelector('[role="tablist"][aria-label="Workspace views"]')`, "the workspace");
     await Bun.sleep(1200);

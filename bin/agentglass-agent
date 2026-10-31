@@ -54,6 +54,7 @@ Environment:
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -88,19 +89,70 @@ def _server_or_die(url):
     sys.exit(2)
 
 
-SERVER = _server_or_die(os.environ.get("AGENTGLASS_SERVER", "http://localhost:4000").rstrip("/"))
+def _default_server(host):
+    """http://<host>:<port> of the running server. The port is the one it wrote
+    at bind (next to the token file), because the app moves to another port when
+    4000 is taken and the AGENTGLASS_PORT an agent pane inherits can be stale;
+    then AGENTGLASS_PORT, then 4000. No probe: a hook cannot pay a round trip."""
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    port = ""
+    try:
+        with open(os.path.join(base, "agentglass", "port"), encoding="utf-8") as f:
+            port = f.read().strip()
+    except OSError:
+        pass
+    if not (port.isdigit() and 0 < int(port) < 65536):
+        port = os.environ.get("AGENTGLASS_PORT", "").strip()
+    if not (port.isdigit() and 0 < int(port) < 65536):
+        port = "4000"
+    return f"http://{host}:{port}"
 
 
-def token():
-    t = os.environ.get("AGENTGLASS_TOKEN", "").strip()
-    if t:
-        return t
+SERVER = _server_or_die((os.environ.get("AGENTGLASS_SERVER") or _default_server("localhost")).rstrip("/"))
+
+
+def _token_file():
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
     try:
         with open(os.path.join(base, "agentglass", "token"), encoding="utf-8") as f:
             return f.read().strip()
     except OSError:
         return ""
+
+
+def token():
+    return os.environ.get("AGENTGLASS_TOKEN", "").strip() or _token_file()
+
+
+def urlopen_fresh(req, timeout):
+    """urlopen with the token; after a 401, once more with the token file's
+    value when it is not the one just refused. A pane keeps the token it was
+    opened with, and a reinstall mints a new one, so a long session's every
+    call answered 401 until somebody opened a new pane.
+
+    Only 401: a 403 means the credential was accepted and the act refused, and
+    the machine token from the file would turn that refusal into a yes. Never
+    from a minted, scoped credential (a seat's `st_`, a clone's `us_`, a
+    plugin's `pg_`) or in a seat's pane: the file holds the machine's token,
+    and falling back to it would hand the caller powers it was never given.
+    shortcut: a machine token that happens to start with two lowercase letters
+    and `_` (about 1 in 400) gets no retry, which fails safe. The same text is
+    in agentglass-ui, agentglass-agent and agentglass-browser-mcp, and
+    server/test/bin-token-retry.test.ts holds the copies equal."""
+    sent = token()
+    if sent:
+        req.add_header("Authorization", f"Bearer {sent}")
+    try:
+        return urllib.request.urlopen(req, timeout=timeout)
+    except urllib.error.HTTPError as e:
+        if e.code != 401 or os.environ.get("AGENTGLASS_SEAT") or re.match(r"[a-z]{2}_", sent):
+            raise
+        fresh = _token_file()
+        if not fresh or fresh == sent:
+            raise
+        e.close()
+        req.add_header("Authorization", f"Bearer {fresh}")
+        return urllib.request.urlopen(req, timeout=timeout)
 
 
 def call(path, body=None, method="POST", timeout=630):
@@ -115,11 +167,8 @@ def call(path, body=None, method="POST", timeout=630):
     me = os.environ.get("AGENTGLASS_AGENT_NAME", "").strip()
     if me:
         req.add_header("X-Agentglass-Agent", me)
-    t = token()
-    if t:
-        req.add_header("Authorization", f"Bearer {t}")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urlopen_fresh(req, timeout) as r:
             return json.loads(r.read() or b"{}")
     except urllib.error.HTTPError as e:
         try:
@@ -139,11 +188,8 @@ def text_call(path, timeout=30):
     them.
     """
     req = urllib.request.Request(f"{SERVER}{path}", method="GET", headers={"Origin": SERVER})
-    t = token()
-    if t:
-        req.add_header("Authorization", f"Bearer {t}")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urlopen_fresh(req, timeout) as r:
             return True, r.read().decode("utf-8", "replace").rstrip()
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", "replace").strip()

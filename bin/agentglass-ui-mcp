@@ -158,6 +158,96 @@ RULES_TOOLS = [
 ]
 
 
+_FP_ID = {"type": "string", "description": "a run id (pf_...)"}
+_FPP_ID = {"type": "string", "description": "a flight plan id (fp_...)"}
+FLIGHT_TOOLS = [
+    {"name": "ui_flight_plan_list", "description": "Preflight runs (a review of a plan or a result by a reader with no context), newest first.",
+     "inputSchema": {"type": "object", "properties": {"state": {"type": "string", "enum": ["awaiting-go", "running", "done", "failed", "declined"]}, "root": _ROOT}, "additionalProperties": False}},
+    {"name": "ui_flight_plan_show", "description": "One Preflight run with its certificate and findings. " + UNTRUSTED,
+     "inputSchema": {"type": "object", "properties": {"id": _FP_ID}, "required": ["id"], "additionalProperties": False}},
+    {"name": "ui_flight_plan_run", "description": "Run a Preflight now over these files (the first is the material; or a pull request of the project), plus optional mockups. Costs tokens, up to the project's cap. Returns the run id; read it with ui_flight_plan_show.",
+     "inputSchema": {"type": "object", "properties": {
+         "files": {"type": "array", "items": {"type": "string"}, "description": "absolute or relative paths"},
+         "mockups": {"type": "array", "items": {"type": "string"}, "description": "mockup files (.png .jpg .webp .html) the reviewer reads next to the plan"},
+         "pr": {"type": "integer", "minimum": 1}, "root": _ROOT,
+         "moment": {"type": "string", "enum": ["before-launch", "task-done", "pr", "manual"], "description": "manual (default) always runs; the others run only when the project's reviews list them"}},
+      "additionalProperties": False}},
+    {"name": "ui_flight_plan_go", "description": "Let a Preflight that waits (state awaiting-go) start. The person's call: the server refuses an agent.",
+     "inputSchema": {"type": "object", "properties": {"id": _FP_ID}, "required": ["id"], "additionalProperties": False}},
+    {"name": "ui_flight_plan_no_go", "description": "Decline a Preflight that waits. The person's call: the server refuses an agent.",
+     "inputSchema": {"type": "object", "properties": {"id": _FP_ID}, "required": ["id"], "additionalProperties": False}},
+    {"name": "ui_flight_plan_resolve", "description": "Answer one finding of a run: fix, contest, ask or dismiss (contest and dismiss need a note); none clears it. Only the person or the project's orchestrator seat answers a finding: anyone else is refused with the server's sentence, so tell the seat what you found.",
+     "inputSchema": {"type": "object", "properties": {"id": _FP_ID, "finding": {"type": "string", "pattern": "^F[0-9]{1,3}$"},
+                     "action": {"type": "string", "enum": ["fix", "contest", "ask", "dismiss", "none"]}, "note": {"type": "string"}},
+                     "required": ["id", "finding", "action"], "additionalProperties": False}},
+    {"name": "ui_flight_plan_plan_new", "description": "Start a flight plan for a request: a draft until a plan is saved. Returns the plan id. Go, No-go and Launch are the person's, or the coordinator's in Autopilot.",
+     "inputSchema": {"type": "object", "properties": {"request": {"type": "string", "description": "what should be built, in the person's words"}, "title": {"type": "string"},
+                     "visual": {"type": "boolean", "description": "visual requests need a mockup before Go"}, "size": {"type": "string", "enum": ["S", "M", "L"]}, "task": {"type": "string"}, "root": _ROOT}, "required": ["request"], "additionalProperties": False}},
+    {"name": "ui_flight_plan_plan_list", "description": "Flight plans, newest first, without their text.",
+     "inputSchema": {"type": "object", "properties": {"state": {"type": "string", "enum": ["draft", "ready", "go", "no-go", "launched"]}, "root": _ROOT}, "additionalProperties": False}},
+    {"name": "ui_flight_plan_plan_show", "description": "One flight plan with its Preflight run and its open findings (advisory: they never hold Go). " + UNTRUSTED,
+     "inputSchema": {"type": "object", "properties": {"id": _FPP_ID}, "required": ["id"], "additionalProperties": False}},
+    {"name": "ui_flight_plan_plan_set", "description": "Save the plan (Markdown text), the title or the visual flag. A plan that was at Go goes back to ready.",
+     "inputSchema": {"type": "object", "properties": {"id": _FPP_ID, "plan_md": {"type": "string"}, "title": {"type": "string"}, "visual": {"type": "boolean"}, "size": {"type": "string", "enum": ["S", "M", "L"]}}, "required": ["id"], "additionalProperties": False}},
+    {"name": "ui_flight_plan_plan_mockup", "description": "Attach the mockups (.png .jpg .webp .html under the home folder): the whole list, replacing the last.",
+     "inputSchema": {"type": "object", "properties": {"id": _FPP_ID, "paths": {"type": "array", "items": {"type": "string"}, "minItems": 1}}, "required": ["id", "paths"], "additionalProperties": False}},
+    {"name": "ui_flight_plan_plan_preflight", "description": "A Preflight over the plan and its mockups (an S plan gets none). Costs tokens, up to the project's cap.",
+     "inputSchema": {"type": "object", "properties": {"id": _FPP_ID}, "required": ["id"], "additionalProperties": False}},
+    {"name": "ui_flight_plan_plan_go", "description": "Say Go to a plan, which launches its builder. The coordinator's only in Autopilot, not held, with no stop rule firing (an Ask finding, a large or sensitive plan, an open blocker, the budget); otherwise the server refuses in one sentence and the person decides.",
+     "inputSchema": {"type": "object", "properties": {"id": _FPP_ID}, "required": ["id"], "additionalProperties": False}},
+    {"name": "ui_flight_plan_plan_no_go", "description": "Say No-go to a plan, with the reason that goes back to the author.",
+     "inputSchema": {"type": "object", "properties": {"id": _FPP_ID, "reason": {"type": "string"}}, "required": ["id", "reason"], "additionalProperties": False}},
+    {"name": "ui_flight_plan_plan_launch", "description": "Launch the builder of a plan at Go (same rules as Go). A launch waits its turn behind the builders already flying.",
+     "inputSchema": {"type": "object", "properties": {"id": _FPP_ID}, "required": ["id"], "additionalProperties": False}},
+    {"name": "ui_flight_plan_plan_ask", "description": "Raise the ONE question a plan waits on, merging every Ask finding into it: one sentence, 2-3 choices (your recommendation first). The person answers; you are woken with the answer.",
+     "inputSchema": {"type": "object", "properties": {"id": _FPP_ID, "question": {"type": "string"}, "choices": {"type": "array", "items": {"type": "string"}, "maxItems": 4},
+                     "reason": {"type": "string", "enum": ["ask-finding", "builder-blocked", "sensitive-diff"]},
+                     "detail": {"type": "string", "description": "what the person needs to know to choose"}, "recommended": {"type": "integer", "minimum": 1, "description": "which choice you recommend (1 = the first)"}}, "required": ["id", "question"], "additionalProperties": False}},
+    {"name": "ui_flight_plan_plan_answer", "description": "The person's answer to a plan's question. The server refuses an agent.",
+     "inputSchema": {"type": "object", "properties": {"id": _FPP_ID, "answer": {"type": "string"}}, "required": ["id", "answer"], "additionalProperties": False}},
+    {"name": "ui_flight_plan_plan_integrate_check", "description": "Before you bring a launched builder's work in (merge into the local main, install): refuses with the reason when its real diff touches auth, migrations, secrets, payments, CI or a dependency. Raise the one question then.",
+     "inputSchema": {"type": "object", "properties": {"id": _FPP_ID}, "required": ["id"], "additionalProperties": False}},
+    {"name": "ui_flight_plan_plan_report", "description": "A launched builder's line of progress for the Flight plan view: one line, and optionally which step of how many.",
+     "inputSchema": {"type": "object", "properties": {"id": _FPP_ID, "line": {"type": "string"}, "step": {"type": "integer", "minimum": 0}, "of": {"type": "integer", "minimum": 0}}, "required": ["id", "line"], "additionalProperties": False}},
+    {"name": "ui_flight_plan_hold", "description": "Hold a project's flight plans: no new Go, launches frozen, each builder told to stop at its next safe point. You may hold yourself; only the person resumes.",
+     "inputSchema": {"type": "object", "properties": {"root": _ROOT}, "additionalProperties": False}},
+    {"name": "ui_flight_plan_resume", "description": "Let a held project fly again. The person's call: the server refuses an agent.",
+     "inputSchema": {"type": "object", "properties": {"root": _ROOT}, "additionalProperties": False}},
+]
+
+
+def run_flight(name, args):
+    from types import SimpleNamespace as NS
+    verb = name[len("ui_flight_plan_"):].replace("_", "-")
+    if verb.startswith("plan-"):
+        return run_flight_plan(verb[len("plan-"):], args)
+    root = args.get("root") if isinstance(args.get("root"), str) else None
+    a = NS(state=args.get("state"), root=root, id=args.get("id"), finding=args.get("finding"), action=args.get("action"), note=args.get("note"),
+           files=[f for f in args.get("files") or [] if isinstance(f, str)], mockup=[m for m in args.get("mockups") or [] if isinstance(m, str)],
+           pr=args.get("pr") if isinstance(args.get("pr"), int) else None, moment=args.get("moment") or "manual")
+    if verb in ("show", "go", "no-go", "resolve") and not isinstance(a.id, str):
+        return _wrap({"ok": False, "error": "id: a run id"})
+    if verb == "run" and not a.files and not a.pr:
+        return _wrap({"ok": False, "error": "files: at least one path, or pr"})
+    return _wrap(UI.flight_plan(verb, a, AS))
+
+
+def run_flight_plan(pverb, args):
+    """The plan's own verbs, through the CLI's one code path."""
+    from types import SimpleNamespace as NS
+    s = lambda k: args.get(k) if isinstance(args.get(k), str) else None
+    a = NS(pverb=pverb, id=s("id"), request=s("request"), title=s("title"), task=s("task"), size=s("size"), root=s("root"), state=s("state"), file=None, plan_md=s("plan_md"),
+           visual=args.get("visual") if isinstance(args.get("visual"), bool) else None, paths=[p for p in args.get("paths") or [] if isinstance(p, str)],
+           reason=s("reason"), question=s("question"), choice=[c for c in args.get("choices") or [] if isinstance(c, str)], answer=s("answer"),
+           detail=s("detail"), recommend=args.get("recommended") if isinstance(args.get("recommended"), int) else None, line=s("line"),
+           step=args.get("step") if isinstance(args.get("step"), int) else None, of=args.get("of") if isinstance(args.get("of"), int) else None)
+    if pverb == "new" and not a.request:
+        return _wrap({"ok": False, "error": "request: what should be built"})
+    if pverb in ("show", "set", "mockup", "preflight", "go", "no-go", "launch", "ask", "answer", "report", "integrate-check") and not a.id:
+        return _wrap({"ok": False, "error": "id: a flight plan id"})
+    return _wrap(UI.flight_plan("plan", a, AS))
+
+
 def run_rules(name, args):
     root = args.get("root") if isinstance(args.get("root"), str) else os.getcwd()
     if name == "ui_rules_set":
@@ -231,6 +321,8 @@ def run(name, args):
     given0 = dict(args) if isinstance(args, dict) else {}
     if name in ("ui_rules_list", "ui_rules_suggest", "ui_rules_set"):
         return run_rules(name, given0)
+    if name in {t["name"] for t in FLIGHT_TOOLS}:
+        return run_flight(name, given0)
     # The settings verbs reach the server's settings as well as the window's (agentglass-ui does the routing).
     if name == "ui_settings_list":
         return _wrap(UI.settings_list(AS))
@@ -287,7 +379,7 @@ def handle_message(msg):
         actions, level, why = _registry()
         if why:
             return T.make_reply(msg_id, error={"code": -32603, "message": why})
-        return T.make_reply(msg_id, {"tools": tools_from_actions(actions) + jira_tools(level) + RULES_TOOLS})
+        return T.make_reply(msg_id, {"tools": tools_from_actions(actions) + jira_tools(level) + RULES_TOOLS + FLIGHT_TOOLS})
     if method == "tools/call":
         params = msg.get("params")
         if not isinstance(params, dict):
@@ -310,7 +402,7 @@ def main(argv=None):
         allow = list(args.allow_host) + os.environ.get("AGENTGLASS_UI_MCP_ALLOW_HOSTS", "").split(",")
         return T._run_http(bind, expose=args.expose, allow_hosts=allow, handle=handle_message, name=NAME,
                            token_env="AGENTGLASS_UI_MCP_TOKEN",
-                           distinct_from=("AGENTGLASS_TOKEN", "AGENTGLASS_MCP_TOKEN", "AGENTGLASS_COCKPIT_TOKEN"),
+                           distinct_from=("AGENTGLASS_TOKEN", "AGENTGLASS_MCP_TOKEN", "AGENTGLASS_COCKPIT_TOKEN", "AGENTGLASS_FLIGHTPLAN_MCP_TOKEN"),
                            opens="the app's own screen: panels and settings", expose_env="AGENTGLASS_UI_MCP_EXPOSE")
     return T._serve_stdio(handle_message)
 

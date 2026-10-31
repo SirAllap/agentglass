@@ -63,7 +63,16 @@ if [ -n "$agx_now" ] && [ -f "$agx_stamp" ]; then
   fi
 fi
 
-agx_server="${AGENTGLASS_SERVER:-http://127.0.0.1:${AGENTGLASS_PORT:-4000}}"
+# The port the running server wrote at bind, before AGENTGLASS_PORT: the app
+# moves off 4000 when it is taken and a pane inherits a stale AGENTGLASS_PORT.
+agx_port=
+agx_port_file="${XDG_CONFIG_HOME:-$HOME/.config}/agentglass/port"
+if [ -r "$agx_port_file" ]; then
+  # read fails on a last line with no newline but still fills the variable
+  IFS= read -r agx_port < "$agx_port_file" 2>/dev/null || :
+fi
+case "$agx_port" in ''|*[!0-9]*) agx_port="${AGENTGLASS_PORT:-4000}" ;; esac
+agx_server="${AGENTGLASS_SERVER:-http://127.0.0.1:$agx_port}"
 agx_token="$AGENTGLASS_TOKEN"
 if [ -z "$agx_token" ]; then
   # The token file rather than the environment: a status line inherits the

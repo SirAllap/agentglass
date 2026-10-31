@@ -1,3 +1,3 @@
-server 11424
-web 10596
-mobile 1780
+server 12353
+web 14157
+mobile 1821

@@ -186,30 +186,191 @@ const GRANTED_PERMISSIONS = new Set(["fullscreen", "clipboard-sanitized-write", 
 /**
  * What to do with a permission request, given who is asking.
  *
- * The allowlist above is the floor. On top of it, the tab a PERSON has in
- * front may be asked about the microphone, the camera and notifications — a
- * call or a chat site he uses by hand needs them — and the answer is his, made
- * in a native dialog the page cannot draw or click. A lane, and any tab that
- * is not in front, is an agent's: it is refused, never asked, because a dialog
- * an agent's page can raise is a dialog an agent's page can wait out.
+ * The allowlist above is the floor. On top of it, the microphone, the camera
+ * and notifications — what a call, a chat or a dev server under test needs —
+ * go to whoever the tab belongs to, and nobody else:
+ *
+ *   - the PERSON's own tab (one they opened in the window, or typed an address
+ *     into), when it is the one on screen, is asked in a native dialog the
+ *     page cannot draw or click; their tab in the background is refused;
+ *   - every other tab — an agent's, a lane, or one whose opener is not known
+ *     yet — is HELD, never put to the person: the agent finds it pending in
+ *     its next answer and says grant or deny itself, and nobody answering
+ *     denies it. Measured: an agent's freshly opened tab was "the front tab"
+ *     to this process until the renderer said otherwise, and its microphone
+ *     request reached the person as a dialog whose own text said agents'
+ *     tabs are never asked. Being in front is not owning.
+ *
  * Clipboard reads, HID, serial, USB, screen capture, location and everything
- * this does not name stay refused for everyone; the dialog is not a way to
- * widen them.
+ * this does not name stay refused for everyone; neither the dialog nor an
+ * agent's answer is a way to widen them.
  * @param {unknown} permission
- * @param {{ frontTab?: boolean, lane?: boolean, mediaTypes?: unknown }} ctx
- * @returns {{ verdict: "allow" | "deny" | "ask", what?: string }} */
+ * @param {{ frontTab?: boolean, lane?: boolean, person?: boolean, mediaTypes?: unknown }} ctx
+ * @returns {{ verdict: "allow" | "deny" | "ask" | "hold", what?: string, needs?: string[] }} */
 function permissionVerdict(permission, ctx) {
   if (permissionAllowed(permission)) return { verdict: "allow" };
-  const person = !!ctx && ctx.frontTab === true && ctx.lane !== true;
-  if (!person) return { verdict: "deny" };
-  if (permission === "notifications") return { verdict: "ask", what: "notifications" };
-  if (permission === "media") {
-    const types = Array.isArray(ctx.mediaTypes) ? ctx.mediaTypes : [];
-    const mic = types.includes("audio");
-    const cam = types.includes("video");
-    if (mic || cam) return { verdict: "ask", what: mic && cam ? "microphone and camera" : mic ? "microphone" : "camera" };
+  /** @type {string[]} */
+  let needs = [];
+  if (permission === "notifications") needs = ["notifications"];
+  else if (permission === "media") {
+    const types = ctx && Array.isArray(ctx.mediaTypes) ? ctx.mediaTypes : [];
+    if (types.includes("audio")) needs.push("microphone");
+    if (types.includes("video")) needs.push("camera");
   }
-  return { verdict: "deny" };
+  if (needs.length === 0) return { verdict: "deny" };
+  const what = needs.join(" and ");
+  const person = !!ctx && ctx.person === true && ctx.lane !== true;
+  if (!person) return { verdict: "hold", what, needs };
+  return ctx.frontTab === true ? { verdict: "ask", what } : { verdict: "deny" };
+}
+
+/**
+ * Whose a tab is, for the policy above, once `event` has happened.
+ *
+ * Set by who OPENED it, from its first moment: the window when the person
+ * opened it, an agent's ask (named or `--shared`) when an agent did, and the
+ * opener's owner for a page a tab opened as a window. After that only two
+ * things move it: ANY agent ask that acts on it takes it — named or
+ * `--shared`, on the person's own tab too, because with several agents at
+ * once the person cannot know which of them a request is for — and the
+ * person typing an address into it takes it back. Looking at a tab, or
+ * clicking it in the strip, is not owning it.
+ * @param {"person" | "agent" | undefined} current
+ * @param {{ kind: "opened", by: unknown } | { kind: "popup", opener: unknown } | { kind: "driven" } | { kind: "typed" }} event
+ * @returns {"person" | "agent" | undefined} */
+function holderAfter(current, event) {
+  const who = (/** @type {unknown} */ v) => (v === "person" || v === "agent" ? v : undefined);
+  if (!event) return current;
+  if (event.kind === "opened") return who(event.by) ?? current;
+  if (event.kind === "popup") return who(event.opener);
+  if (event.kind === "driven") return "agent";
+  if (event.kind === "typed") return "person";
+  return current;
+}
+
+/** What an agent may grant or deny on its own tab: the three things the
+ *  policy above holds for it, and nothing it refuses outright. */
+const AGENT_ANSWERABLE = new Set(["microphone", "camera", "notifications"]);
+
+/**
+ * The agents' side of the permission policy: requests held for an agent to
+ * answer, and the answers it gave, per container (a Session) and origin.
+ *
+ * An answer is remembered for that container and origin until the app closes,
+ * like the person's own — a page that got the microphone asks the check
+ * handler again later, and a "no" there would take it back. A request nobody
+ * answers within `timeoutMs` is DENIED and that denial is not remembered, so
+ * the agent can still grant it for the next try. Timers and the clock are
+ * passed in so a test can run it without waiting.
+ *
+ * shortcut: answers live in memory only, gone when the app closes; persist
+ * them per container if an agent ever needs a grant to survive a restart.
+ * @template S
+ * @param {{ timeoutMs?: number, now?: () => number,
+ *   setTimer?: (fn: () => void, ms: number) => unknown, clearTimer?: (t: unknown) => void }} [opts] */
+function createPermissionDesk(opts = {}) {
+  const timeoutMs = opts.timeoutMs ?? 30_000;
+  const now = opts.now ?? Date.now;
+  const setTimer = opts.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
+  const clearTimer = opts.clearTimer ?? ((t) => clearTimeout(/** @type {any} */ (t)));
+  /** @type {WeakMap<object, Map<string, boolean>>} */
+  const answers = new WeakMap();
+  /** @typedef {{ guest: number, store: object, origin: string, needs: string[], since: number, timer: unknown, done: (ok: boolean) => void }} Held */
+  /** @type {Set<Held>} */
+  const held = new Set();
+  const key = (/** @type {string} */ origin, /** @type {string} */ what) => `${origin}\u0000${what}`;
+  const book = (/** @type {object} */ store) => {
+    let m = answers.get(store);
+    if (!m) { m = new Map(); answers.set(store, m); }
+    return m;
+  };
+  /** true / false when every need has an answer, undefined while one is missing.
+   *  @param {object} store @param {string} origin @param {string[]} needs */
+  const decided = (store, origin, needs) => {
+    const m = book(store);
+    if (needs.some((n) => m.get(key(origin, n)) === false)) return false;
+    return needs.every((n) => m.get(key(origin, n)) === true) ? true : undefined;
+  };
+  /** @param {Held} h @param {boolean} ok */
+  const settle = (h, ok) => {
+    if (!held.delete(h)) return;
+    clearTimer(h.timer);
+    h.done(ok);
+  };
+  return {
+    /** A request from an agent's tab: answered at once when the agent already
+     *  answered it for this container and origin, otherwise held.
+     *  @param {number} guest @param {object} store @param {string} origin
+     *  @param {string[]} needs @param {(ok: boolean) => void} done */
+    hold(guest, store, origin, needs, done) {
+      const known = decided(store, origin, needs);
+      if (known !== undefined) return done(known);
+      /** @type {Held} */
+      const h = { guest, store, origin, needs, since: now(), timer: null, done };
+      h.timer = setTimer(() => settle(h, false), timeoutMs);
+      held.add(h);
+    },
+    /** The synchronous check: only a grant the agent gave counts.
+     *  @param {object} store @param {string} origin @param {string[]} needs */
+    allowed: (store, origin, needs) => decided(store, origin, needs) === true,
+    /** The agent's answer. Without `origin` it is for what this tab is
+     *  waiting on; with one it is a grant or a refusal ahead of the ask.
+     *  @param {number} guest @param {object} store @param {string[]} what
+     *  @param {boolean} allow @param {string} [origin]
+     *  @returns {{ error: string } | { answered: string[], origins: string[], settled: number }} */
+    answer(guest, store, what, allow, origin) {
+      const bad = what.filter((w) => !AGENT_ANSWERABLE.has(w));
+      if (what.length === 0 || bad.length) {
+        return { error: `${bad.join(", ") || "nothing"} cannot be answered here — microphone, camera and notifications can` };
+      }
+      const mine = [...held].filter((h) => h.guest === guest && h.store === store && h.needs.some((n) => what.includes(n)));
+      const origins = origin ? [origin] : [...new Set(mine.map((h) => h.origin))];
+      if (origins.length === 0) return { error: "nothing is waiting on this tab — name the site with --origin to answer ahead of the ask" };
+      for (const o of origins) for (const w of what) book(store).set(key(o, w), allow);
+      let settled = 0;
+      for (const h of held) {
+        if (h.store !== store || !origins.includes(h.origin)) continue;
+        const v = decided(store, h.origin, h.needs);
+        if (v !== undefined) { settle(h, v); settled++; }
+      }
+      return { answered: what, origins, settled };
+    },
+    /** What a tab is waiting on, and what its container has been told.
+     *  @param {number} guest @param {object} store */
+    list(guest, store) {
+      const t = now();
+      const pending = [...held].filter((h) => h.guest === guest && h.store === store).map((h) => ({
+        what: h.needs.join(" and "), origin: h.origin,
+        deniedInMs: Math.max(0, timeoutMs - (t - h.since)),
+      }));
+      const answered = [...book(store)].map(([k, allow]) => {
+        const [origin, what] = k.split("\u0000");
+        return { origin, what, allow };
+      });
+      return { pending, answered };
+    },
+    /** Takes a tab's held requests off the desk, unanswered, for the
+     *  person's dialog once the tab turns out to be theirs.
+     *  @param {number} guest */
+    handOver(guest) {
+      const out = [];
+      for (const h of held) {
+        if (h.guest !== guest) continue;
+        held.delete(h); clearTimer(h.timer);
+        out.push({ origin: h.origin, needs: h.needs, done: h.done });
+      }
+      return out;
+    },
+    /** A tab that closed takes its held requests with it, refused.
+     *  @param {number} guest */
+    drop(guest) { for (const h of held) if (h.guest === guest) settle(h, false); },
+  };
+}
+
+/** The sentence an agent reads in its next answer for each held request. */
+function pendingPermissionNote(/** @type {{ what: string, origin: string, deniedInMs: number }} */ p) {
+  return `pending permission: ${p.what} for ${p.origin} — answer with \`permission grant|deny ${p.what.split(" and ").join(" ")}\` `
+    + `within ${Math.ceil(p.deniedInMs / 1000)}s, or it is denied`;
 }
 
 /** The dialog's question: the site's own host and the thing asked for. The
@@ -254,6 +415,9 @@ module.exports = {
   applyGuestGuard,
   permissionAllowed,
   permissionVerdict,
+  holderAfter,
+  createPermissionDesk,
+  pendingPermissionNote,
   permissionPrompt,
   uniqueSavePath,
 };

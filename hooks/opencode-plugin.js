@@ -5,10 +5,14 @@
 // Manual:   cp hooks/opencode-plugin.js ~/.config/opencode/plugins/agentglass.js
 //
 // Env:
-//   AGENTGLASS_SERVER        server base url (default http://127.0.0.1:4000)
+//   AGENTGLASS_SERVER        server base url (default: the port the running server wrote, else AGENTGLASS_PORT, else 4000)
 //   AGENTGLASS_URL           deprecated alias for AGENTGLASS_SERVER
 //   AGENTGLASS_ALLOW_REMOTE  set to 1 to allow a non-local server
 //   AGENTGLASS_INTERNAL      set to skip (prevents re-ingestion loops)
+
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 export function normalizeServer(url) {
   return url.replace(/\/+$/, "");
@@ -34,9 +38,24 @@ export function preferIpv4(url) {
   }
 }
 
+/**
+ * The port the running server wrote at bind (next to the token file), then
+ * AGENTGLASS_PORT, then 4000. The app moves to another port when 4000 is taken
+ * and the AGENTGLASS_PORT an agent pane inherits can be stale; no probe, since
+ * an event must not pay a round trip.
+ */
+export function localPort(env = process.env) {
+  const ok = (v) => /^\d+$/.test(v) && Number(v) > 0 && Number(v) < 65536;
+  const base = env.XDG_CONFIG_HOME || join(env.HOME || homedir(), ".config");
+  let port = "";
+  try { port = readFileSync(join(base, "agentglass", "port"), "utf8").trim(); } catch { /* none written */ }
+  if (!ok(port)) port = String(env.AGENTGLASS_PORT || "").trim();
+  return ok(port) ? port : "4000";
+}
+
 export function resolveServer(env = process.env) {
   return preferIpv4(normalizeServer(
-    env.AGENTGLASS_SERVER || env.AGENTGLASS_URL || "http://127.0.0.1:4000",
+    env.AGENTGLASS_SERVER || env.AGENTGLASS_URL || `http://127.0.0.1:${localPort(env)}`,
   ));
 }
 
