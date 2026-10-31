@@ -61,11 +61,11 @@ describe("runControl — one handler for both spellings", () => {
 
   it("every old body still reaches the state App owns", () => {
     const k = ctx();
-    runControl({ cmd: "open", what: "stats" }, k.c);
+    runControl({ cmd: "open", what: "skills" }, k.c);
     runControl({ cmd: "esc" }, k.c);
     runControl({ cmd: "workspace" }, k.c);
     runControl({ cmd: "zoom", dir: -1 }, k.c);
-    expect(k.calls).toEqual([["panel", "stats"], ["peel"], ["workspace"], ["zoom", -1]]);
+    expect(k.calls).toEqual([["panel", "skills"], ["peel"], ["workspace"], ["zoom", -1]]);
   });
 
   it("theme.set goes through the appearance.theme setting, so it answers with what it replaced and an undo", () => {
@@ -251,7 +251,7 @@ describe("the doors of the second batch", () => {
     expect(k.calls).toEqual([["goView", "agents"], ["goView", "term"]]);
   });
 
-  it("the Change-the-coordinator dialog latches for the Agents view and brings it up", () => {
+  it("the Change-the-orchestrator dialog latches for the Agents view and brings it up", () => {
     const k = ctx();
     runControl(ui("agents.change"), k.c);
     expect(takeViewModal("agents.change")).toBe(true);
@@ -327,7 +327,7 @@ describe("the table", () => {
 
 const slice: AppSlice = {
   view: "git", theme: "graphite", scale: 1, workspace: null, windowMs: 1, filter: { app: "", type: "", provider: "" },
-  modals: { settings: false, palette: false, help: false, stats: false, skills: false, search: false, finder: false, windows: false, projectPicker: false, machine: null },
+  modals: { settings: false, palette: false, help: false, skills: false, finder: false, windows: false, projectPicker: false, machine: null },
   selectedEvent: null, session: null, peek: null, finderPath: null,
 };
 const fixture: Sources = {

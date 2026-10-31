@@ -64,20 +64,20 @@ beforeEach(() => {
 describe("workspace chords", () => {
   it("falls back to top-drawer position when nothing is bound", async () => {
     const k = await load();
-    rail(["git", "diff", "docker", "term", "files"]);
+    rail(["git", "diff", "docker", "term", "tasks"]);
     expect(k.chordFor("git")).toBe("mod+1");
-    expect(k.chordFor("files")).toBe("mod+5");
+    expect(k.chordFor("tasks")).toBe("mod+5");
     expect(k.viewForChord("mod+3")).toBe("docker");
   });
 
   it("gives no number to a view outside the top drawer", async () => {
     const k = await load();
-    rail(["git", "diff"], ["files", "dash"]);
+    rail(["git", "diff"], ["tasks", "dash"]);
     expect(k.chordFor("git")).toBe("mod+1");
     expect(k.chordFor("diff")).toBe("mod+2");
     // The bottom drawer is not numbered, and the digit past the end is dead
     // rather than falling through to whatever is down there.
-    expect(k.chordFor("files")).toBe("");
+    expect(k.chordFor("tasks")).toBe("");
     expect(k.chordFor("dash")).toBe("");
     expect(k.viewForChord("mod+3")).toBe(null);
     expect(k.viewForChord("mod+4")).toBe(null);
@@ -116,22 +116,22 @@ describe("workspace chords", () => {
 
   it("takes a chord with modifiers and dispatches on it", async () => {
     const k = await load();
-    rail(["git", "diff", "docker", "term", "files"]);
+    rail(["git", "diff", "docker", "term", "tasks"]);
     // Any chord nothing ships on: Ctrl+Alt+J is the window switcher's.
-    expect(k.rebindChord("files", "mod+alt+y")).toEqual({ ok: true });
-    expect(k.viewForChord("mod+alt+y")).toBe("files");
-    expect(k.chordFor("files")).toBe("mod+alt+y");
-    expect(k.hasCustomChord("files")).toBe(true);
+    expect(k.rebindChord("tasks", "mod+alt+y")).toEqual({ ok: true });
+    expect(k.viewForChord("mod+alt+y")).toBe("tasks");
+    expect(k.chordFor("tasks")).toBe("mod+alt+y");
+    expect(k.hasCustomChord("tasks")).toBe(true);
   });
 
   it("lets the bottom drawer be given a key by hand", async () => {
     // Losing the number is the point; losing the ability to reach it at all
     // would be a different, worse change.
     const k = await load();
-    rail(["git", "diff"], ["files"]);
-    expect(k.rebindChord("files", "mod+alt+c")).toEqual({ ok: true });
-    expect(k.chordFor("files")).toBe("mod+alt+c");
-    expect(k.viewForChord("mod+alt+c")).toBe("files");
+    rail(["git", "diff"], ["tasks"]);
+    expect(k.rebindChord("tasks", "mod+alt+c")).toEqual({ ok: true });
+    expect(k.chordFor("tasks")).toBe("mod+alt+c");
+    expect(k.viewForChord("mod+alt+c")).toBe("tasks");
   });
 
   it("still answers for a hidden view somebody bound by hand", async () => {
@@ -146,61 +146,61 @@ describe("workspace chords", () => {
 
   it("refuses a key held with no modifier at all", async () => {
     const k = await load();
-    rail(["git", "diff", "files"]);
-    const r = k.rebindChord("files", "j");
+    rail(["git", "diff", "tasks"]);
+    const r = k.rebindChord("tasks", "j");
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain("modifier");
   });
 
   it("follows a reorder rather than the shipped list", async () => {
     const k = await load();
-    rail(["files", "git", "diff", "docker", "term"]);
-    expect(k.chordFor("files")).toBe("mod+1");
+    rail(["tasks", "git", "diff", "docker", "term"]);
+    expect(k.chordFor("tasks")).toBe("mod+1");
   });
 
   it("lets a custom chord win over a position that wants the same key", async () => {
     const k = await load();
-    rail(["git", "diff", "docker", "term", "files"]);
+    rail(["git", "diff", "docker", "term", "tasks"]);
     // "2" is diff's position; asking for it explicitly has to be refused while
     // diff is still there to answer it.
-    expect(k.rebindChord("files", "mod+2").ok).toBe(false);
-    rail(["git", "docker", "term", "files", "diff"]);
-    expect(k.rebindChord("files", "mod+2").ok).toBe(false); // docker is 2nd now
+    expect(k.rebindChord("tasks", "mod+2").ok).toBe(false);
+    rail(["git", "docker", "term", "tasks", "diff"]);
+    expect(k.rebindChord("tasks", "mod+2").ok).toBe(false); // docker is 2nd now
   });
 
   it("binds a letter and resolves it ahead of the digits", async () => {
     const k = await load();
-    rail(["git", "diff", "docker", "term", "files"]);
-    expect(k.rebindChord("files", "mod+c")).toEqual({ ok: true });
-    expect(k.chordFor("files")).toBe("mod+c");
-    expect(k.viewForChord("mod+c")).toBe("files");
+    rail(["git", "diff", "docker", "term", "tasks"]);
+    expect(k.rebindChord("tasks", "mod+c")).toEqual({ ok: true });
+    expect(k.chordFor("tasks")).toBe("mod+c");
+    expect(k.viewForChord("mod+c")).toBe("tasks");
     // chat has left position 5, and nothing else is there, so the digit is dead.
     expect(k.viewForChord("mod+5")).toBe(null);
   });
 
   it("refuses a key the app itself owns", async () => {
     const k = await load();
-    rail(["git", "diff", "docker", "term", "files"]);
+    rail(["git", "diff", "docker", "term", "tasks"]);
     for (const bad of ["mod+k", "mod+\\", "mod+[", "mod+]", "mod+0", "mod+-", "mod+="]) {
-      expect(k.rebindChord("files", bad).ok).toBe(false);
+      expect(k.rebindChord("tasks", bad).ok).toBe(false);
     }
-    expect(k.chordFor("files")).toBe("mod+5");
+    expect(k.chordFor("tasks")).toBe("mod+5");
   });
 
   it("refuses a key another view already answers to, and says which", async () => {
     const k = await load();
-    rail(["git", "diff", "docker", "term", "files"]);
-    k.rebindChord("files", "mod+c");
+    rail(["git", "diff", "docker", "term", "tasks"]);
+    k.rebindChord("tasks", "mod+c");
     const r = k.rebindChord("term", "mod+c");
     expect(r.ok).toBe(false);
-    // The label, not the id: "already opens files" is a sentence about a
-    // variable name, and the dialog it lands in says "Files" everywhere else.
-    if (!r.ok) expect(r.error).toContain("Files");
+    // The label, not the id: "already opens tasks" is a sentence about a
+    // variable name, and the dialog it lands in says "Tasks" everywhere else.
+    if (!r.ok) expect(r.error).toContain("Tasks");
   });
 
   it("survives a reload and can be cleared back to positional", async () => {
     const k = await load();
-    rail(["git", "diff", "docker", "term", "files"]);
+    rail(["git", "diff", "docker", "term", "tasks"]);
     k.rebindChord("term", "mod+alt+y");
     const k2 = await load();
     expect(k2.chordFor("term")).toBe("mod+alt+y");
@@ -214,7 +214,7 @@ describe("workspace chords", () => {
   it("ignores a corrupt store rather than losing every shortcut", async () => {
     store.set("agentglass.chords", "{{{");
     const k = await load();
-    rail(["git", "diff", "docker", "term", "files"]);
+    rail(["git", "diff", "docker", "term", "tasks"]);
     expect(k.chordFor("git")).toBe("mod+1");
   });
 

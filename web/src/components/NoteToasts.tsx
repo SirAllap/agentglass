@@ -25,6 +25,7 @@ import { Chevron, useClipped } from "./TopBarNotes.tsx";
 import { Portal } from "./Portal.tsx";
 import { TOP_BAR_H } from "./TopBar.tsx";
 import { CloseButton } from "./CloseButton.tsx";
+import { Card } from "./workspace/Chrome.tsx";
 import { canMute, mutedSources, setMuted, sourceLabel, sourceOf, subscribeMuted } from "../lib/notePolicy.ts";
 
 /** How long an ordinary card holds the corner. Long enough to read two lines of
@@ -83,7 +84,10 @@ function AppMark({ app, urgent }: { app: string; urgent: boolean }) {
   );
 }
 
-function Card({ n, onGone, onGoto }: {
+/** The kit's Card, animated: a toast is a card with its own surface, not a copy of one. */
+const MCard = motion.create(Card);
+
+function Toast({ n, onGone, onGoto }: {
   n: SystemNote;
   onGone: () => void;
   onGoto: (g: NonNullable<SystemNote["goto"]>) => void;
@@ -114,8 +118,9 @@ function Card({ n, onGone, onGoto }: {
   const go = n.goto ? () => { onGone(); onGoto(n.goto!); } : null;
 
   return (
-    <motion.div
+    <MCard
       layout
+      compact
       initial={{ opacity: 0, x: 24, scale: 0.97 }}
       animate={{ opacity: 1, x: 0, scale: 1 }}
       exit={{ opacity: 0, x: 24, scale: 0.97, transition: { duration: 0.16 } }}
@@ -126,7 +131,7 @@ function Card({ n, onGone, onGoto }: {
       onMouseLeave={() => setHeld(false)}
       onClick={go ?? undefined}
       role={go ? "button" : undefined}
-      className="flex flex-col gap-1.5 rounded-xl px-3 py-2.5"
+      className="flex flex-col gap-1.5"
       style={{
         width: 360,
         cursor: go ? "pointer" : "default",
@@ -196,7 +201,7 @@ function Card({ n, onGone, onGoto }: {
           </button>
         )}
       </span>
-    </motion.div>
+    </MCard>
   );
 }
 
@@ -242,7 +247,7 @@ export function NoteToasts({ onGoto }: {
             <div key={key} style={{ pointerEvents: "auto" }}>
               {/* Only the card goes; `dismissNote` (which drops it from the
                   bell's list too) is deliberately never called from here. */}
-              <Card n={n} onGone={() => drop(key)} onGoto={onGoto} />
+              <Toast n={n} onGone={() => drop(key)} onGoto={onGoto} />
             </div>
           ))}
         </AnimatePresence>

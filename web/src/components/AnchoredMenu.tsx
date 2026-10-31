@@ -21,12 +21,13 @@ import { Portal } from "./Portal.tsx";
 import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { LAYER } from "../lib/layers.ts";
 import { menuEventGuards } from "../lib/menuEvents.ts";
+import { isMenuKey, menuIndex } from "../lib/menuNav.ts";
 import { placeMenu, type Placement } from "../lib/menuPlacement.ts";
 import { EDGE } from "./workspace/Chrome.tsx";
 
 const ITEMS = '[role="menuitem"]:not(:disabled)';
 
-export function AnchoredMenu({ anchor, align = "right", minWidth = 216, placeKey, focus, onClose, children }: {
+export function AnchoredMenu({ anchor, align = "right", minWidth = 216, placeKey, focus, keepTab, plain, maxHeight, onClose, children }: {
   anchor: RefObject<HTMLElement | null>;
   align?: "left" | "right";
   minWidth?: number;
@@ -34,6 +35,12 @@ export function AnchoredMenu({ anchor, align = "right", minWidth = 216, placeKey
   placeKey?: string | number;
   /** What takes focus when it opens, when that is not the first item (a search box over the list). */
   focus?: string;
+  /** A form lives in here: Tab moves between its fields instead of closing the menu. */
+  keepTab?: boolean;
+  /** The page's own surface instead of the card tint: the Terminal's popovers sit on the pane and say so. */
+  plain?: boolean;
+  /** A ceiling under the window's own: a long list scrolls inside it. */
+  maxHeight?: number;
   onClose: () => void;
   children: ReactNode;
 }) {
@@ -67,15 +74,15 @@ export function AnchoredMenu({ anchor, align = "right", minWidth = 216, placeKey
     const close = () => onClose();
     const key = (e: KeyboardEvent) => {
       if (e.key === "Escape") { e.stopPropagation(); e.preventDefault(); onClose(); anchor.current?.querySelector<HTMLElement>("button")?.focus(); return; }
-      if (e.key === "Tab") { onClose(); return; }
-      if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Home" && e.key !== "End") return;
+      if (e.key === "Tab") { if (!keepTab) onClose(); return; }
+      if (!isMenuKey(e.key)) return;
+      // Home and End belong to a text box the person is typing in.
+      if ((e.key === "Home" || e.key === "End") && e.target instanceof HTMLInputElement) return;
       const items = Array.from(ref.current?.querySelectorAll<HTMLElement>(ITEMS) ?? []);
       if (!items.length) return;
       e.preventDefault();
       e.stopPropagation();
-      const at = items.indexOf(document.activeElement as HTMLElement);
-      const next = e.key === "Home" ? 0 : e.key === "End" ? items.length - 1
-        : e.key === "ArrowDown" ? (at + 1) % items.length : (at <= 0 ? items.length - 1 : at - 1);
+      const next = menuIndex(items.indexOf(document.activeElement as HTMLElement), e.key, items.length);
       items[next]!.focus();
     };
     window.addEventListener("keydown", key, true);
@@ -86,7 +93,7 @@ export function AnchoredMenu({ anchor, align = "right", minWidth = 216, placeKey
       window.removeEventListener("blur", close);
       window.removeEventListener("resize", close);
     };
-  }, [onClose, anchor]);
+  }, [onClose, anchor, keepTab]);
 
   return (
     <Portal z={LAYER.menu}>
@@ -100,9 +107,9 @@ export function AnchoredMenu({ anchor, align = "right", minWidth = 216, placeKey
           className="fixed p-1 rounded-xl flex flex-col gap-px overflow-y-auto agw-noscrollbar"
           style={{
             top: pos?.top ?? 0, left: pos?.left ?? 0, minWidth,
-            maxHeight: pos?.maxHeight, zIndex: 9999,
+            maxHeight: maxHeight && pos?.maxHeight ? Math.min(maxHeight, pos.maxHeight) : maxHeight ?? pos?.maxHeight, zIndex: 9999,
             visibility: pos ? "visible" : "hidden",
-            background: "var(--surface-card)",
+            background: plain ? "var(--bg)" : "var(--surface-card)",
             border: EDGE,
             boxShadow: "var(--surface-lift), 0 18px 44px -14px var(--shadow)",
           }}>

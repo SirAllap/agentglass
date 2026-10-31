@@ -8,10 +8,11 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { LAUNCH_MODES } from "../../shared/launchModes.ts";
 import type { AgentRule } from "../../shared/agentRules.ts";
 import {
   LEARNED_SHOWN, agoWords, baseOrder, baseSummary, blockedBy, ruleCode, ruleIcon, ruleTitle, ruleTotals, ruleWhen, rowRequest, sourceChip,
-  isUnder, splitLearned, suggestionPhrase, titleOfMatch, WEEK,
+  MODE_CHOICES, pickerProjects, isUnder, splitLearned, suggestionPhrase, titleOfMatch, WEEK,
 } from "../src/lib/agentRulesView.ts";
 
 const NOW = Date.parse("2026-10-26T12:00:00Z");
@@ -227,8 +228,46 @@ describe("the section's controls", () => {
   test("a card's list and the strip come from the pure decisions, not from a second copy", () => {
     expect(SECTION).toContain("growthBars(view.weekly, view.base.length, view.learned.length)");
     expect(SECTION).toContain("splitLearned(view.learned, now)");
-    expect(SECTION).toContain("baseOrder(view.base)");
+    expect(SECTION).toContain("baseOrder(base)");
     expect(SECTION).toContain("blockedBy(rule, root, held, nameOf)");
     expect(SECTION).toContain("isUnder(w, root)");
+  });
+});
+
+describe("the permission mode control", () => {
+  // The base rule held bypassPermissions and the control drew Ask / Auto / Edits with none lit.
+  test("every launch mode has a button, so the value in force is always lit", () => {
+    expect(MODE_CHOICES.map((c) => c.mode).sort()).toEqual([...LAUNCH_MODES].sort());
+  });
+});
+
+describe("the project picker", () => {
+  // The cockpit was open on one project; agents were running in a second and it could not be picked.
+  test("a project with live sessions is listed beside the open one, once", () => {
+    const rows = [{ project: ORBIT }, { project: "/home/dev/code/acme/relay" }, { project: "/home/dev/code/acme/relay" }];
+    expect(pickerProjects([ORBIT], [], rows)).toEqual([ORBIT, "/home/dev/code/acme/relay"]);
+  });
+  test("a gone session or one with no project adds nothing", () => {
+    expect(pickerProjects([ORBIT], [], [{ project: "/x/old", gone: true }, {}])).toEqual([ORBIT]);
+  });
+});
+
+describe("the base rules are global, and the page has no dead band", () => {
+  const card = SECTION.slice(SECTION.indexOf("function ProjectCard("));
+  const view = readFileSync(join(import.meta.dir, "..", "src", "components", "agents", "AgentsView.tsx"), "utf8");
+  test("a project card never draws the base set; one block above the cards does", () => {
+    expect(card).not.toContain("baseOrder(");
+    expect(SECTION.split("baseOrder(").length - 1).toBe(1); // the one global block (the import has no paren)
+    expect(SECTION).toContain("Base rules, the same in every project");
+    expect(SECTION).toContain("Applies to every project, including ones not listed below");
+  });
+  test("a learned rule over a base action is one row with a chip", () => {
+    expect(card).toContain("overrides: view.base.some((b) => b.action === l.rule.action)");
+    expect(SECTION).toContain("overrides the base rule");
+  });
+  test("the rules section sits in the left column under Working, not below both columns", () => {
+    const left = view.slice(view.indexOf('<div className="cols">'), view.indexOf('<div className="cols">', view.indexOf('<div className="cols">') + 1));
+    expect(left).toContain('className="rules-slot"');
+    expect(view.slice(view.indexOf("</div>\n        </div>\n\n        {!all"))).not.toContain("rules(false)");
   });
 });

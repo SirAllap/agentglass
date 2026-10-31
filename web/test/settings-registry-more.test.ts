@@ -42,7 +42,7 @@ const keybindings = await import("../src/lib/keybindings.ts");
 const def = (id: string) => R.SETTING_DEFS.find((d) => d.id === id)!;
 const snapshot = () => JSON.stringify([...store].sort());
 const fresh = (fn: () => void) => { store.clear(); fn(); return snapshot(); };
-const NEW = ["terminal.focusFollowsMouse", "terminal.paneBar", "terminal.copyOnSelect", "terminal.noteEditor", "terminal.tabGroups", "terminal.tabGroupRules", "terminal.scrollback", "terminal.wordSeparators", "notifications.quiet", "notifications.ciOnlyApproved", "notifications.talk", "browser.searchEngine", "tasks.landing", "tasks.source.github", "tasks.source.local", "tasks.source.clickup"];
+const NEW = ["terminal.focusFollowsMouse", "terminal.paneBar", "terminal.paneBarMarker", "terminal.copyOnSelect", "terminal.noteEditor", "terminal.tabGroups", "terminal.tabGroupRules", "terminal.scrollback", "terminal.wordSeparators", "notifications.quiet", "notifications.ciOnlyApproved", "notifications.talk", "browser.searchEngine", "tasks.landing", "tasks.source.github", "tasks.source.local", "tasks.source.clickup"];
 
 beforeEach(() => { store.clear(); sources.__forgetTaskSources(); keybindings.resetBindings(); });
 // The shared keybindings module keeps the rebound key past this file.
@@ -51,7 +51,8 @@ afterAll(() => { keybindings.resetBindings(); });
 describe("a def stores what the pref module's own setter stores", () => {
   const cases: [string, unknown, () => void][] = [
     ["terminal.focusFollowsMouse", true, () => focusPref.setFocusFollowsMouse(true)],
-    ["terminal.paneBar", false, () => paneActions.setPaneActionsMode("off")],
+    ["terminal.paneBar", "always", () => paneActions.setPaneActionsMode("always")],
+    ["terminal.paneBarMarker", "arrow", () => paneActions.setPaneMarker("arrow")],
     ["terminal.copyOnSelect", false, () => termPrefs.setCopyOnSelect(false)],
     ["terminal.noteEditor", "nvim", () => termPrefs.setNoteEditor("nvim")],
     ["terminal.tabGroups", false, () => tabGroups.setTabGroupsOn(false)],
@@ -85,7 +86,8 @@ describe("a def stores what the pref module's own setter stores", () => {
 describe("a value that is not valid is refused and stores nothing", () => {
   const bad: [string, unknown[]][] = [
     ["terminal.focusFollowsMouse", ["true", 1, null]],
-    ["terminal.paneBar", ["hover", "off", 0]],
+    ["terminal.paneBar", ["hover", false, 0, "Off"]],
+    ["terminal.paneBarMarker", ["Arrow", "dot", true]],
     ["terminal.noteEditor", ["emacs", true, ""]],
     ["terminal.scrollback", [5000, "4000", 0, null]],
     ["terminal.wordSeparators", ["x".repeat(201), 5, null]],

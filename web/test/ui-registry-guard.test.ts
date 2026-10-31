@@ -47,11 +47,26 @@ const NOT_AGENT_DOOR: {
 } = {
   views: {},
   settingsPages: {},
-  chords: {},
+  chords: {
+    "windows.waiting": "the owner's keyboard shortcut to the next window waiting on them; an agent reads what waits (agent panes) and moves focus with the focus-pane door, so no new verb stands behind it",
+    "terminal.newshell": "the owner's keyboard shortcut for a new tmux window; an agent opens one through the terminal door (`tmux new`), the same command the strip's + sends",
+  },
   dialogs: {
+    "CleanupDialog.tsx": "the dry run of one merged PR's local leftovers, opened from the PR view or the merge dialog's tick. An agent reads the same plan with `agentglass-cleanup <pr>` and its run raises the approval card (cleanup.run) that only the person answers, so no door stages this dialog",
+    "flightPlan/CardPopover.tsx": "The one card that asks the person over the Flying view (a question from the orchestrator, or Go): answering and Go are the person's alone; an agent reads what waits with `agentglass-ui flight-plan`, and the orchestrator's question reaches it through the engine, not through a window",
+    "flightPlan/Composer.tsx": "New flight plan: a form over the Flight plan view (an agent opens the view with view.open and starts a plan with `agentglass-ui flight-plan plan new`; Go, No-go and Launch are the person's alone)",
     "plugins/PublishReview.tsx": "Publish review posts one comment on GitHub as the person; it is their own click and is refused for agents (UI_REFUSED_FOR_AGENTS), so no door stages it",
     "PromptOptions.tsx": "the ⋯ on a prompt row: engine, permission mode and prompt text for ONE send; an agent sends a prompt through the terminal door with those same arguments, so no row of it is a verb of its own",
+    "tasks/TaskDialog.tsx": "the shell the Local and GitHub sources draw their short forms in (New task, Local keys, Finish issue); the work a form does is reachable through the tasks and issues verbs, so no door stages it",
+    "jira/list/JiraDock.tsx": "the card pane beside the Jira list: it shows one card the Jira door already reads and moves (agentglass-ui jira card, moves, run a step), and every control in it is the card's own existing write, so no verb stands behind it",
+    "jira/list/SearchSheet.tsx": "the results sheet under the Jira list's search box: it lists what the site search returns and opens a card in the pane; an agent reads a card through agentglass-ui jira, so nothing in it is a verb",
+    "terminal/GoList.tsx": "the Go list under the Terminal strip's project chip: a picker over windows the strip already shows. An agent reads the same windows (agent panes) and moves focus with the focus-pane door, so no row of it is a verb of its own",
+    "terminal/CloseLayer.tsx": "the question a person answers before an agent window is stopped by a tab close, and the Reopen toast that follows: a person's own click on their own strip; an agent has no tab to close here",
+    "terminal/PeekCard.tsx": "the card over a hovered strip tab: a tooltip with no pointer events that hides on any input; an agent reads the same facts (agent panes), so nothing in it is a verb",
+    "PrCard.tsx": "the stack popover opened from a board card's stack chip: it lists the same stack rows the pull request views and the PR search already return; an agent reads the stack from the pull request data, so no row of it is a verb",
+    "TipHost.tsx": "the one tooltip, drawn above whatever the pointer rests on: it says what the target already says and has no pointer events, so nothing in it is a verb",
     "Portal.tsx": "the portal primitive every dialog draws through, not a dialog itself",
+    "git/GitToast.tsx": "the Git panel flash message when the view is off screen: a toast, not a question; an agent reads the same result from the action it ran",
     "browser/IslandMenu.tsx": "the browser island's ⋯ menu: a popover of the person's own bar; every row is a browser verb an agent already has through agentglass-browser",
     "AgentChangeChip.tsx": OUTPUT,
     "AskedBanners.tsx": OUTPUT,
@@ -63,9 +78,7 @@ const NOT_AGENT_DOOR: {
     "BasePicker.tsx": POPOVER,
     "ContextMenu.tsx": POPOVER,
     "AnchoredMenu.tsx": POPOVER,
-    "FacetMenu.tsx": POPOVER,
     "Select.tsx": POPOVER,
-    "FilterPresets.tsx": POPOVER,
     "tasks/FilterBuilder.tsx": POPOVER,
     "tasks/EmojiPicker.tsx": POPOVER,
     "diff/PresetDiff.tsx": POPOVER,
@@ -75,6 +88,7 @@ const NOT_AGENT_DOOR: {
     "TopBar.tsx": POPOVER,
     "BrowserPanel.tsx": POPOVER,
     "PrPanel.tsx": POPOVER,
+    "workspace/PeoplePicker.tsx": POPOVER,
     "TasksPanel.tsx": POPOVER,
     "workspace/Workspace.tsx": POPOVER,
     "PeoplePick.tsx": "choosing a person writes an assignment or a reviewer request, and it opens only from a card or a pull request it is about: there is no state of its own to show",
@@ -82,7 +96,6 @@ const NOT_AGENT_DOOR: {
     "jira/JiraMoveForm.tsx": "the form a Jira move opens when its screen asks for fields, opened by picking that move in the status list: the agent's door is `agentglass-ui jira move --fields` (POST /jira/door/move, the same check, route and write gate as the form), and `jira moves` lists each screen",
     "jira/JiraStepDialog.tsx": "the confirmation a Jira step asks before it writes, opened from the step button on one card: the agent's door is `agentglass-ui jira step` (POST /jira/step, same route and same write gate as the press), and opening the dialog alone would only show a plan the agent already reads from GET /jira/steps",
     "orchestration/RuleForm.tsx": "the editor of one condition, opened by Edit or Add on the Orchestration page, which an agent opens and reads: what it writes is the policy, and only a person may write that (the route refuses an agent), so the editor has no door of its own",
-    "CommitModal.tsx": "no mount site outside itself (measured): dead code, not a surface",
   },
 };
 
@@ -94,7 +107,7 @@ const railIds = (() => {
   const to = viewsSrc.indexOf("export const VIEW_IDS");
   expect(from).toBeGreaterThan(-1);
   expect(to).toBeGreaterThan(from);
-  return [...viewsSrc.slice(from, to).matchAll(/\bid:\s*"([a-z]+)"/g)].map((x) => x[1]!);
+  return [...viewsSrc.slice(from, to).matchAll(/\bid:\s*"([a-zA-Z]+)"/g)].map((x) => x[1]!);
 })();
 
 const settingsSrc = read("web/src/components/SettingsModal.tsx");

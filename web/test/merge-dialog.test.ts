@@ -297,3 +297,81 @@ describe("the warning does not take the button away", () => {
     expect(dead(confirm(html, "Rebase and merge"))).toBe(false);
   });
 });
+
+/*
+ * The redesigned dialog: the three-way strategy, the subject's budget, the cleanup card.
+ * Each of these was drawn by hand first and then pinned here, so a refactor that
+ * flattens one back into a wall of text goes red.
+ */
+const dialogSource = await Bun.file(new URL("../src/components/MergeDialog.tsx", import.meta.url)).text();
+const mergeCleanupSource = await Bun.file(new URL("../src/lib/mergeCleanup.ts", import.meta.url)).text();
+
+describe("the strategy choice and the footer", () => {
+  test("all three strategies are shown and only the chosen one is raised", () => {
+    const html = render({ method: "squash" });
+    for (const label of ["Create a merge commit", "Squash and merge", "Rebase and merge"]) expect(html).toContain(label);
+    expect(html.match(/aria-current="true"/g)?.length).toBe(1);
+    expect(html).toMatch(/aria-current="true"[^>]*data-method="squash"|data-method="squash"[^>]*aria-current="true"/);
+  });
+
+  test("the cards are the control: radios, disabled when the repository does not allow them, and the choice carries the method", () => {
+    const html = render({ method: "squash", allowed: ["squash", "rebase"] });
+    expect(html.match(/role="radio"/g)?.length).toBe(3);
+    expect(html).toMatch(/<button[^>]*data-method="merge"[^>]*disabled|<button[^>]*disabled[^>]*data-method="merge"/);
+    expect(dialogSource).toContain("onClick={() => pickMethod(m)}");
+    expect(dialogSource).toMatch(/return \{\s*method,\s*subject:/);
+    expect(dialogSource).not.toContain("Change the method from the merge button");
+  });
+
+  test("the primary button is named after the strategy", () => {
+    expect(render({ method: "merge" })).toContain("Create merge commit");
+    expect(render({ method: "rebase" })).toContain("Rebase and merge");
+  });
+
+  test("the footer carries the quiet keyboard hints", () => {
+    const html = render();
+    expect(html).toContain("confirms");
+    expect(html).toContain("cancels");
+  });
+});
+
+describe("the subject's budget", () => {
+  test("the counter warns past 72 and says why it matters", () => {
+    expect(dialogSource).toContain("const SUBJECT_SOFT = 72;");
+    expect(dialogSource).toContain("const subjectLong = subjectLen > SUBJECT_SOFT;");
+    expect(dialogSource).toContain('data-warn={subjectLong ? "" : undefined}');
+    expect(render()).toContain("Why it matters");
+  });
+
+  test("the subject is a textarea that grows, never a clipped single line", () => {
+    expect(dialogSource).toContain("<textarea");
+    expect(dialogSource).toContain("el.style.height = `${el.scrollHeight");
+  });
+
+  test("an empty extended description is collapsed behind a link", () => {
+    expect(render({ method: "merge" })).toContain("Add an extended description");
+  });
+});
+
+describe("the cleanup card", () => {
+  test("shows the kinds the project includes as chips, and only those", () => {
+    const html = render({ offerCleanup: true, cleanupKinds: ["docker", "branch"] });
+    expect(html).toContain("Docker");
+    expect(html).toContain("Branch");
+    expect(html).not.toContain("Evidence");
+  });
+
+  test("names what is held back and why", () => {
+    const html = render({ offerCleanup: true, cleanupKinds: ["worktree"], cleanupHeld: [{ title: "Worktree has changes", why: "Two files are not committed." }] });
+    expect(html).toContain("Held back: Worktree has changes");
+    expect(html).toContain("Two files are not committed.");
+  });
+
+  test("is not drawn when cleanup is not offered at merge", () => {
+    expect(render({ offerCleanup: false, cleanupKinds: ["docker"] })).not.toContain("Docker");
+  });
+
+  test("the preview never lists the open PR as a reason to hold back", () => {
+    expect(mergeCleanupSource).toContain('b.kind !== "pr-open"');
+  });
+});

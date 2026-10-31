@@ -26,7 +26,11 @@ import { CloseButton } from "./CloseButton.tsx";
 import { paneChoices } from "../lib/panePick.ts";
 import { LAYER } from "../lib/layers.ts";
 import { NEEDS_PANEL_W, needsPanelLeft } from "../lib/needsPanel.ts";
-import { EDGE, LINE } from "./workspace/Chrome.tsx";
+import { Button, EDGE, LINE, NoteRow } from "./workspace/Chrome.tsx";
+import { openFlightPlan } from "../lib/flightPlanNav.ts";
+import { needsLabel } from "../lib/flightPilot.ts";
+import { HandIcon } from "../lib/glyphIcons.tsx";
+import { ICON } from "../lib/iconSize.ts";
 
 export type NeedsItem = {
   /** The agent card key this was raised from. Stable enough for a list key. */
@@ -45,6 +49,10 @@ export type NeedsItem = {
   otherProject: string | null;
   /** A permission hold the dashboard can approve. */
   gated: boolean;
+  /** A flight plan awaiting Go, or one with a question: the row opens the card that asks. */
+  plan?: string;
+  /** The coordinator's question, as a Lantern-style row with an Answer. */
+  ask?: boolean;
 };
 
 /** `/home/me/code/x` reads as noise; `~/code/x` reads as a place. The browser
@@ -56,20 +64,10 @@ const short = (p: string): string => {
 };
 
 function Action({ children, onClick, primary }: { children: React.ReactNode; onClick: () => void; primary?: boolean }) {
-  return (
-    <button
-      onClick={onClick}
-      className="text-[10px] px-2 py-1 rounded"
-      style={{
-        color: primary ? "var(--on-primary)" : "var(--text2)",
-        background: primary ? "var(--primary)" : "transparent",
-        border: `1px solid ${primary ? "var(--primary)" : "var(--border2)"}`,
-      }}
-    >{children}</button>
-  );
+  return <Button size="compact" tone={primary ? "primary" : "plain"} onClick={onClick}>{children}</Button>;
 }
 
-function Row({ it, exact, hits, onApprove, onProject, onPane }: {
+function NeedRow({ it, exact, hits, onApprove, onProject, onPane, onPlan }: {
   it: NeedsItem;
   /** The pane this very session reported being in, when it did. */
   exact: AgentPane | null;
@@ -79,14 +77,18 @@ function Row({ it, exact, hits, onApprove, onProject, onPane }: {
   onApprove: () => void;
   onProject: (root: string) => void;
   onPane: (p: AgentPane) => void;
+  /** Open a flight plan from its row; the panel closes behind it. */
+  onPlan: (id: string) => void;
 }) {
   const tint = it.level === "error" ? "var(--error)" : "var(--warning)";
   const pane = exact ?? (hits.length === 1 ? hits[0]! : null);
-  const actionable = it.gated || !!it.otherProject || !!pane || hits.length > 0;
+  const actionable = !!it.plan || it.gated || !!it.otherProject || !!pane || hits.length > 0;
   return (
-    <div className="agx-note-row">
+    <NoteRow tint={it.ask ? "var(--primary)" : undefined}>
       <div className="flex items-center gap-2 mb-1">
-        <span className="rounded-full shrink-0" style={{ width: 6, height: 6, background: tint }} />
+        {it.ask
+          ? <span className="shrink-0" style={{ color: "var(--primary)", display: "inline-flex" }}><HandIcon size={ICON.sm} /></span>
+          : <span className="rounded-full shrink-0" style={{ width: 6, height: 6, background: tint }} />}
         <span className="text-[11.5px] font-semibold truncate" style={{ color: "var(--text)" }}>{it.label}</span>
         {/* Which project it belongs to, and only when that is NOT the one you
             have open. A cockpit watches every project at once, so an alert from
@@ -107,6 +109,7 @@ function Row({ it, exact, hits, onApprove, onProject, onPane }: {
         <div className="text-[10px] mt-1 font-mono truncate" style={{ color: "var(--text4)" }} title={it.cwd}>{short(it.cwd)}</div>
       )}
       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+        {it.plan && <Action primary onClick={() => onPlan(it.plan!)}>{it.ask ? "Answer" : "Review Go"}</Action>}
         {it.gated && <Action primary onClick={onApprove}>Approve it</Action>}
         {/* The one that answers the original complaint: the agent is in a tmux
             pane, and now the app knows which. It moves tmux to it and shows the
@@ -144,7 +147,7 @@ function Row({ it, exact, hits, onApprove, onProject, onPane }: {
           </span>
         )}
       </div>
-    </div>
+    </NoteRow>
   );
 }
 
@@ -229,6 +232,9 @@ export function NeedsPopover({ anchorRef, avoidRef, open, items, onClose, onAppr
   }, [open, place, onClose, anchorRef]);
 
   if (!open || !at || !items.length) return null;
+  /* Only flights in the list: say it the way the chip does ("needs you · 1 question"); with an agent among them, the plain heading. */
+  const asks = items.filter((i) => i.ask).length, goes = items.filter((i) => i.plan && !i.ask).length;
+  const heading = asks + goes === items.length ? needsLabel(asks, goes) : "waiting on you";
   return (
     <Portal z={LAYER.needs}>
       <div
@@ -243,7 +249,7 @@ export function NeedsPopover({ anchorRef, avoidRef, open, items, onClose, onAppr
         }}
       >
         <div className="flex items-center gap-2 px-2.5 py-1.5" style={{ borderBottom: LINE }}>
-          <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>waiting on you</span>
+          <span className="text-[10px] tracking-wider" style={{ color: "var(--text3)" }}>{heading}</span>
           <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>{items.length}</span>
           <CloseButton onClick={onClose} title="Close (Esc)" className="agx-note-btn ml-auto" />
         </div>
@@ -251,8 +257,9 @@ export function NeedsPopover({ anchorRef, avoidRef, open, items, onClose, onAppr
           {items.map((it) => {
             const { exact, hits } = paneChoices(panes, it);
             return (
-              <Row key={it.key} it={it} exact={exact} hits={hits}
-                onApprove={onApprove} onProject={onProject} onPane={goPane} />
+              <NeedRow key={it.key} it={it} exact={exact} hits={hits}
+                onApprove={onApprove} onProject={onProject} onPane={goPane}
+                onPlan={(id) => { openFlightPlan({ card: id }); onClose(); }} />
             );
           })}
         </div>

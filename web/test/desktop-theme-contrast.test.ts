@@ -125,7 +125,7 @@ describe("desktop themes, as painted", () => {
     // so legible wherever the page is. Held here per theme, at the same 4.5:1
     // floor, so a theme with a thin --bg/--text pair cannot slip through.
     const css = await Bun.file(new URL("../src/index.css", import.meta.url).pathname).text();
-    const rule = css.match(/\.agx-seg-b\[aria-pressed="true"\] \{[^}]*\}/)?.[0] ?? "";
+    const rule = css.match(/\.agx-seg-b\[aria-pressed="true"\](?:, \.agx-seg-b\[aria-selected="true"\])?(?:, \.agx-seg-b\[aria-checked="true"\])? \{[^}]*\}/)?.[0] ?? "";
     expect(rule).toContain("background: var(--bg)");
     expect(rule).toContain("color: var(--text)");
     const src = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url)).text();

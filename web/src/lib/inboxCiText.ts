@@ -50,3 +50,25 @@ export function inboxCiLine(
   if (hint) return { text: hint.title, tail: hint.more > 0 ? ` +${hint.more} more` : "" };
   return { text: mine.slice(0, 2).map((c) => c.name).join(", "), tail: `${mine.length > 2 ? ` +${mine.length - 2} more` : ""} failing` };
 }
+
+/**
+ * The dot on a row: how the pull request behind it stands in CI right now,
+ * from the pull requests the panel has loaded. Null when there is nothing to
+ * say — another repository (the panel loaded this one's), an issue, or a pull
+ * request that is not loaded. A failing check wins over a pending one, which
+ * wins over green; a pull request with no checks has no dot.
+ */
+export function inboxCiState(
+  item: Pick<InboxItem, "type" | "title" | "repo" | "number">,
+  prs: Pick<PrSummary, "number" | "headRefName" | "checks">[],
+  repo: string,
+): "ok" | "bad" | "run" | null {
+  if (item.repo !== repo) return null;
+  const suite = item.type === "CheckSuite" ? parseSuiteTitle(item.title) : null;
+  const pr = item.type === "PullRequest" && item.number != null
+    ? prs.find((p) => p.number === item.number)
+    : suite ? prs.find((p) => p.headRefName === suite.branch) : undefined;
+  const c = pr?.checks;
+  if (!c || !c.total) return null;
+  return c.failure > 0 ? "bad" : c.pending > 0 ? "run" : "ok";
+}

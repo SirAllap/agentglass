@@ -177,7 +177,7 @@ describe("the component", () => {
   });
 
   test("engines that are not installed are tiles of their own, behind the same filter", () => {
-    expect(code).toContain('{ v: "absent", label: `Not installed ${counts.absent}` }');
+    expect(code).toContain('{ id: "absent", label: `Not installed ${counts.absent}` }');
     expect(code).toContain("<AddCli />");
   });
 

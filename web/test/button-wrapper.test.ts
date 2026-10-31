@@ -17,7 +17,6 @@ const src = (p: string) => Bun.file(new URL(`../src/components/${p}`, import.met
 const FILES = {
   "PrPanel.tsx": await src("PrPanel.tsx"),
   "git/ui.tsx": await src("git/ui.tsx"),
-  "DockerPanel.tsx": await src("DockerPanel.tsx"),
   "BrowserPanel.tsx": await src("BrowserPanel.tsx"),
   "workspace/Chrome.tsx": await src("workspace/Chrome.tsx"),
 } as const;
@@ -38,13 +37,20 @@ function body(file: keyof typeof FILES, signature: string): string {
 }
 
 const WRAPPERS: [keyof typeof FILES, string][] = [
-  ["PrPanel.tsx", "export function Btn("],
   ["git/ui.tsx", "export function RowAction("],
-  ["DockerPanel.tsx", "function DockerAction("],
   ["BrowserPanel.tsx", "function SideTool("],
 ];
 
-describe("the four button wrappers render through Button", () => {
+describe("the button wrappers render through Button", () => {
+  it("PrPanel.tsx has no wrapper of its own: it draws the kit's Button directly", () => {
+    // The fourth wrapper, `Btn`, only renamed Button's props; its uses are Button now.
+    const code = stripComments(FILES["PrPanel.tsx"]);
+    expect(code).not.toMatch(/function Btn\(/);
+    expect(code).not.toMatch(/<Btn[\s>]/);
+    expect(code).toMatch(/<Button[\s>]/);
+    expect(FILES["PrPanel.tsx"]).toMatch(/import \{[^}]*\bButton\b[^}]*\} from "[^"]*Chrome\.tsx"/);
+  });
+
   for (const [file, sig] of WRAPPERS) {
     it(`${file} ${sig.replace(/\($/, "")}`, () => {
       const b = body(file, sig);
@@ -61,7 +67,7 @@ describe("the four button wrappers render through Button", () => {
     expect(b).not.toMatch(/\brounded(-md|-sm)?\b(?!-)/);
   });
 
-  it("the PR Files toolbar is one row at one height: every Btn in it is small", () => {
+  it("the PR Files toolbar is one row at one height: every Button in it is compact", () => {
     const text = FILES["PrPanel.tsx"];
     const from = text.indexOf('placeholder="Filter files…"');
     const to = text.indexOf('"Collapse all"', from);
@@ -69,8 +75,8 @@ describe("the four button wrappers render through Button", () => {
     expect(to).toBeGreaterThan(from);
     const row = text.slice(from, to);
     // An arrow function's `=>` is not the end of the tag.
-    const btns = row.match(/<Btn\b(?:=>|[^>])*>/g) ?? [];
+    const btns = row.match(/<Button\b(?:=>|[^>])*>/g) ?? [];
     expect(btns.length).toBeGreaterThanOrEqual(6);
-    for (const b of btns) expect(b).toMatch(/\bsmall\b/);
+    for (const b of btns) expect(b).toMatch(/size="compact"/);
   });
 });

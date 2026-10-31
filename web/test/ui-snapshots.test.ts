@@ -25,12 +25,12 @@ const TOKEN = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8";
 const app = (over: Partial<AppSlice> = {}): AppSlice => ({
   view: "git", theme: "graphite", scale: 1.1, workspace: "/home/ana/code/orbit", windowMs: 3_600_000,
   filter: { app: "", type: "", provider: "" },
-  modals: { settings: false, palette: true, help: false, stats: false, skills: false, search: false, finder: false, windows: false, projectPicker: false, machine: "ports" },
+  modals: { settings: false, palette: true, help: false, skills: false, finder: false, windows: false, projectPicker: false, machine: "ports" },
   selectedEvent: null, session: null, peek: null, finderPath: null, ...over,
 });
 
 const bench = (over: Partial<BenchState> = {}): BenchState => ({
-  open: true, grown: false, zoom: 1, geom: { x: 1, y: 2, w: 3, h: 4 }, fab: { x: 5, y: 6 }, root: "/home/ana/code/orbit",
+  open: true, grown: false, zoom: 1, geom: { x: 1, y: 2, w: 3, h: 4 }, fab: { x: 5, y: 6 }, fabMode: "always", root: "/home/ana/code/orbit",
   byRoot: {
     "/home/ana/code/orbit": {
       active: "t2",

@@ -12,7 +12,7 @@ import { Select } from "./Select.tsx";
 import { WorkspaceIcon } from "./workspace/icons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { CrossIcon, HomeIcon, SparkleIcon } from "../lib/glyphIcons.tsx";
-import { EDGE, LINE } from "./workspace/Chrome.tsx";
+import { Button, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 // Sessions whose model never resolved carry the "unknown" provider value; it
 // stays lowercase everywhere it is compared (server sentinel, providerOf), but
@@ -35,23 +35,6 @@ const WINDOWS = [
 const selStyle = { background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: EDGE, color: "var(--text2)" };
 
 const svg = { width: 15, height: 15, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
-
-function IconBtn({ title, active, onClick, children }: { title: string; active?: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      title={title}
-      onClick={onClick}
-      className="h-8 w-8 grid place-items-center rounded-lg transition-colors"
-      style={{
-        border: EDGE,
-        background: active ? "color-mix(in srgb, var(--primary) 20%, transparent)" : "color-mix(in srgb, var(--bg3) 30%, transparent)",
-        color: active ? "var(--primary-hover)" : "var(--text3)",
-      }}
-    >
-      {children}
-    </button>
-  );
-}
 
 /** A moon becoming a sun-with-rays as it wakes — the ladder On/Agent/Off draws. */
 function PowerIcon({ size = ICON.sm }: { size?: number }) {
@@ -360,12 +343,12 @@ export function Header({
         </button>
         <PowerModeButton />
         {/* Skills demoted to a plain icon */}
-        <IconBtn title="Skills explorer — browse every available skill (k)" onClick={onOpenSkills}><SkillsIcon /></IconBtn>
+        <Button square title="Skills explorer — browse every available skill (k)" onClick={onOpenSkills}><SkillsIcon /></Button>
         {/* Ports and resources sit next to settings, and the workspace rail
             repeats exactly these three in the same order — so "where do I look
             at the machine" has one answer wherever you happen to be. */}
-        <IconBtn title="Ports — what is listening, and which checkout started it" onClick={() => onOpenMachine("ports")}><PortsIcon /></IconBtn>
-        <IconBtn title="Resources — CPU, memory and disk, by checkout" onClick={() => onOpenMachine("resources")}><ResourcesIcon /></IconBtn>
+        <Button square title="Ports — what is listening, and which checkout started it" onClick={() => onOpenMachine("ports")}><PortsIcon /></Button>
+        <Button square title="Resources — CPU, memory and disk, by checkout" onClick={() => onOpenMachine("resources")}><ResourcesIcon /></Button>
         <MoreMenu onOpen={onOpenSettings} />
       </div>
     </header>

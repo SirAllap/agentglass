@@ -29,6 +29,7 @@ const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
 const typesSrc = read("shared/types.ts");
 const viewsSrc = read("web/src/components/workspace/views.ts");
 const workspaceSrc = read("web/src/components/workspace/Workspace.tsx");
+const appSrc = read("web/src/App.tsx");
 const registrySrc = read("shared/uiActions.ts");
 const iconsSrc = read("web/src/components/workspace/icons.tsx");
 const settingsSrc = read("web/src/components/SettingsModal.tsx");
@@ -38,7 +39,7 @@ const teachSrc = read("web/src/components/understudy/Teach.tsx");
 const unionIds = (() => {
   const m = /export type ViewId =([^;]+);/.exec(typesSrc);
   expect(m).not.toBeNull();
-  return [...m![1].matchAll(/"([a-z]+)"/g)].map((x) => x[1]!);
+  return [...m![1].matchAll(/"([a-zA-Z]+)"/g)].map((x) => x[1]!);
 })();
 
 /** The `VIEWS` list, up to the export that follows it. `browser` is spelled
@@ -49,21 +50,21 @@ const railIds = (() => {
   const to = viewsSrc.indexOf("export const VIEW_IDS");
   expect(from).toBeGreaterThan(-1);
   expect(to).toBeGreaterThan(from);
-  return [...viewsSrc.slice(from, to).matchAll(/\bid:\s*"([a-z]+)"/g)].map((x) => x[1]!);
+  return [...viewsSrc.slice(from, to).matchAll(/\bid:\s*"([a-zA-Z]+)"/g)].map((x) => x[1]!);
 })();
 
 /** The arms of `BodyImpl`'s switch — what Workspace actually renders. */
 const bodyIds = (() => {
   const at = workspaceSrc.indexOf("function BodyImpl");
   expect(at).toBeGreaterThan(-1);
-  return [...workspaceSrc.slice(at).matchAll(/case "([a-z]+)":/g)].map((x) => x[1]!);
+  return [...workspaceSrc.slice(at).matchAll(/case "([a-zA-Z]+)":/g)].map((x) => x[1]!);
 })();
 
 /** The server's allowlist. */
 const controlIds = (() => {
   const m = /export const VIEW_IDS = \[([^\]]*)\]/.exec(registrySrc);
   expect(m).not.toBeNull();
-  return [...m![1].matchAll(/"([a-z]+)"/g)].map((x) => x[1]!);
+  return [...m![1].matchAll(/"([a-zA-Z]+)"/g)].map((x) => x[1]!);
 })();
 
 /**
@@ -77,6 +78,7 @@ const controlIds = (() => {
  */
 const BODY_EXEMPT: Record<string, string> = {
   dash: "rendered from the `dashboard` prop in the map above Body, because its data is built at the root",
+  skills: "a rail entry that opens the catalog dialog, not a pane: goView in App answers it before any body is chosen",
 };
 
 describe("the Clone view is retired, and left nothing dangling", () => {
@@ -139,6 +141,8 @@ describe("the four lists agree", () => {
     // The exemption is only true while the map still does it — a `dash` that
     // quietly stopped being rendered would otherwise pass this file forever.
     expect(workspaceSrc).toContain('v.id === "dash"');
+    // Same for `skills`: App must still open the dialog instead of switching to a bodyless view.
+    expect(appSrc).toContain('if (v === "skills") { setSkillsOpen(true); return; }');
   });
 
   it("every view is reachable through POST /control", () => {

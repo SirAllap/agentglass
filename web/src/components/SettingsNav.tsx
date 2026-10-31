@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react";
 import { ICON } from "../lib/iconSize.ts";
+import { LINE } from "./workspace/Chrome.tsx";
 import {
   NAV_SHUT_KEY, buildNav, groupByName, hueVar, legendStates, openGroupOf, parseShut, serializeShut,
   type NavGroupId, type NavPageIn, type NavSection, type PageMark,
@@ -83,20 +84,21 @@ export function SettingsNav({ pages, marks, current, onGo, onClose, pinned, sear
   return (
     <aside className="agx-settings-nav shrink-0 flex flex-col border-r"
       style={{ background: "var(--surface-nav)", borderColor: "var(--surface-line)" }}>
-      {/* Leaving is a button you press, not an x you hunt for in a corner, and
-          it says where it takes you. The row IS the button: it was a button
-          the size of its text inside a padded bar, so only the arrow and the
-          words answered the pointer. Full width, no padding around it, and
-          the only things that change on hover and press are its fill and its
-          ink, so nothing under the pointer moves. */}
+      {/* Leaving is a button you press, and it says where it takes you. It is a real
+          button (border, radius, fill) that spans the sidebar with air on both sides,
+          so the target is the shape you see: as a bare full-bleed row, the pointer
+          answered in places the eye did not mark. Hover and press change fill and
+          ink only, so nothing under the pointer moves. */}
+      <div className="agx-sn-backwrap shrink-0">
       <button onClick={onClose} type="button"
-        className="agx-navback agx-sn-back shrink-0 w-full flex items-center gap-2 px-4 text-[13px] text-left"
-        style={{ color: "var(--text3)", minHeight: 44 }}>
+        className="agx-navback agx-sn-back w-full flex items-center gap-2 px-3 rounded-lg text-[13px] text-left"
+        style={{ color: "var(--text2)", minHeight: 40, border: LINE }}>
         <svg width={ICON.sm} height={ICON.sm} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
           <path d="M19 12H5" /><path d="m12 19-7-7 7-7" />
         </svg>
         <span>Back to app</span>
       </button>
+      </div>
       <div className="agx-sn-top shrink-0">{search}</div>
       {/* Twenty-eight nav buttons sit between the search box and the page: measured, 27 to 40 Tab presses
           before the first control of any page. The first stop after the search is this, and it only shows

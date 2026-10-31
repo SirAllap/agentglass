@@ -138,7 +138,7 @@ describe("what waits on a person", () => {
     ];
     expect(waitingItems({ ...none, blocked: rows }).map((i) => (i as { name: string }).name)).toEqual(["builder-1", "docs-4"]);
   });
-  test("the blocked agent leads, then the oldest ask first: coordinator, then the rule request", () => {
+  test("the blocked agent leads, then the oldest ask first: orchestrator, then the rule request", () => {
     const items = waitingItems({ ...none, blocked, gates: [gate], needs: [need], requests: [request] });
     expect(items.map((i) => i.kind)).toEqual(["permission", "coordinator", "rule"]);
   });
@@ -158,11 +158,11 @@ describe("what waits on a person", () => {
     expect(items.map((i) => i.kind)).toEqual(["task", "report", "report"]);
     expect((items[1] as { text: string }).text).toContain("no longer here");
   });
-  test("the card's thin rows: the oldest three, the coordinator by that name, blocked red and the rest amber", () => {
+  test("the card's thin rows: the oldest three, the orchestrator by that name, blocked red and the rest amber", () => {
     const items = waitingItems({ ...none, blocked, gates: [gate], needs: [need], requests: [request] });
     expect(waitingMini(items, NOW)).toEqual([
       { name: "builder-1", age: "3m", pct: 2, tone: "err" },
-      { name: "coordinator", age: "2h", pct: 50, tone: "warn" },
+      { name: "orchestrator", age: "2h", pct: 50, tone: "warn" },
       { name: "docs-4", age: "1m", pct: 2, tone: "warn" },
     ]);
   });

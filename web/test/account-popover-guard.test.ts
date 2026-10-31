@@ -106,7 +106,7 @@ describe("every consumer of the provider rows", () => {
   });
 
   it("list one row per provider, from the core rows", async () => {
-    for (const f of ["components/UsageBox.tsx", "components/StatsModal.tsx"]) {
+    for (const f of ["components/UsageBox.tsx"]) {
       const src = code(await read(f));
       expect(src, f).toMatch(/coreRows\(useSyncExternalStore\(subscribeProviderUsage, providerUsage/);
     }

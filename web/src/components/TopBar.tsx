@@ -34,10 +34,12 @@ import { subscribeSessions, liveSessionCount } from "./TerminalPanel.tsx";
 import { clock24, subscribeClock24 } from "../lib/clockPref.ts";
 import { updateAvailable, subscribeUpdate, updateState } from "../lib/updateStore.ts";
 import { IS_MAC_DESKTOP, WINDOW_CONTROLS } from "../lib/desktop.ts";
+import { CleanupChip } from "./CleanupChip.tsx";
 import { LivingMark } from "./Logo.tsx";
 import { useAmbientNotes, NoteToast, NotifyBell } from "./TopBarNotes.tsx";
 import { NeedsPopover, type NeedsItem } from "./NeedsPopover.tsx";
-import { needsStaysOpen } from "../lib/needsPanel.ts";
+import { openFlightPlan } from "../lib/flightPlanNav.ts";
+import { chipGoesToPlan, needsStaysOpen } from "../lib/needsPanel.ts";
 import { ICON, MIN_BOX } from "../lib/iconSize.ts";
 import { LAYER } from "../lib/layers.ts";
 import { AccountChips, AccountKeyBar, useAccountPanel } from "./AccountChips.tsx";
@@ -47,7 +49,7 @@ import { GearIcon } from "./workspace/icons.tsx";
 import { openSettings } from "../lib/openSettings.ts";
 import { appChordFor, chordLabel } from "../lib/keybindings.ts";
 import { FolderIcon, SearchIcon } from "../lib/glyphIcons.tsx";
-import { scopeLabel, scopeTitle } from "../lib/projectPick.ts";
+import { scopeAria, scopeLabel, scopeTitle } from "../lib/projectPick.ts";
 import { RefreshButton, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 export const TOP_BAR_H = 30;
@@ -441,7 +443,7 @@ function PlanMeter({ tag, pct, age, dim, hideUnder }: {
 
 export function TopBar({
   workspace, workspaces, onOpenProject, onOpenPalette, onOpenFiles, quiet, needs,
-  needsList, onNeedApprove, onNeedProject, onNeedTerminal, onNoteGoto,
+  needsList, onNeedApprove, onNeedProject, onNeedTerminal, onNoteGoto, onOpenLantern,
   filterProvider = "",
 }: {
   /** `undefined` means "not asked yet" — distinct from null, which is a real
@@ -466,7 +468,7 @@ export function TopBar({
    */
   quiet?: boolean;
   /** Something wants you: how many, which one, WHAT FOR, and where it lives. */
-  needs: { count: number; label: string; because: string } | null;
+  needs: { count: number; label: string; because: string; plan?: string } | null;
   /** All of them, with what can honestly be done about each — see NeedsPopover. */
   needsList: NeedsItem[];
   onNeedApprove: () => void;
@@ -476,6 +478,7 @@ export function TopBar({
   /** Where a notification points — a pull request, or a checkout with work in
    *  it. See SystemNote["goto"]. */
   onNoteGoto: (g: NonNullable<SystemNote["goto"]>) => void;
+  onOpenLantern: () => void;
   /** The dashboard's provider filter, which decides whose plan the meters
    *  show. */
   filterProvider?: string;
@@ -664,7 +667,7 @@ export function TopBar({
           edge, a hover state and a pressable surface — and the open project
           carries the weight, since "which project am I in" is the one thing
           this corner exists to answer. */}
-      <button onClick={onOpenProject} className="agx-btn flex items-center gap-1.5 shrink-0 min-w-0 rounded-md pl-1.5 pr-1"
+      <button onClick={onOpenProject} aria-label={scopeAria(open, workspace)} className="agx-btn flex items-center gap-1.5 shrink-0 min-w-0 rounded-md pl-1.5 pr-1"
         title={workspace ? `${scopeTitle(open)}\nClick to switch project` : workspace === null ? "Every repo on this machine — click to open projects" : "Reading the open project…"}
         style={{
           ...NO_DRAG,
@@ -712,6 +715,8 @@ export function TopBar({
       <div ref={slotRef} data-topbar-slot className="absolute left-1/2 -translate-x-1/2 flex items-center" style={{ top: 0, bottom: 0 }}>
         {alarm ? (
           <button ref={chip} onClick={() => {
+              /* One plan waiting for Go is the whole reason: the chip goes straight to it. Several are a list, and the arrow below is only drawn where a list opens. */
+              if (chipGoesToPlan(needs, needsList.length)) { openFlightPlan({ card: needs!.plan }); return; }
               needsFor.current = needsList.map((n) => n.key);
               setNeedsOpen((v) => !v);
             }}
@@ -745,7 +750,7 @@ export function TopBar({
                 screen you could not answer from; the chip opens a panel over
                 itself now and moves nothing, so a glyph promising travel would
                 be the same lie in a smaller font. */}
-            <span className="text-[10px] opacity-75 shrink-0">{needsOpen ? "▴" : "▾"}</span>
+            {!chipGoesToPlan(needs, needsList.length) && <span className="text-[10px] opacity-75 shrink-0">{needsOpen ? "▴" : "▾"}</span>}
           </button>
         ) : (
           <NoteToast note={note} />
@@ -834,6 +839,8 @@ export function TopBar({
             Finder
           </span>
         </button>
+        {/* Automatic cleanup at work; nothing here when it is idle. */}
+        <CleanupChip noDrag={NO_DRAG} onOpen={onOpenLantern} />
         {/* Only in fullscreen. Windowed, the desktop already has a clock two
             centimetres away and a second one is furniture; fullscreen is
             exactly when that one is gone, which is when this earns its place.

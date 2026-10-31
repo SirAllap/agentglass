@@ -107,11 +107,11 @@ describe("the banner", () => {
   it("only the newest is a full card: the older ones fold to one compact row so the stack stays short", () => {
     const s = strip(src);
     expect(s).toContain("i === 0 ? <Banner");
-    expect(s).toContain(": <Row key={a.id}");
+    expect(s).toContain(": <CompactAlert key={a.id}");
     expect(s).toContain("const ROW_H = 36;");
     expect(s).toContain("height: ROW_H");
     // the row keeps what is needed to act and nothing else: no facts, no secondary, no line
-    const row = s.slice(s.indexOf("function Row("), s.indexOf("function Banner("));
+    const row = s.slice(s.indexOf("function CompactAlert("), s.indexOf("function Banner("));
     expect(row).toContain("closeAsked(a.id, true); openTarget(to)");
     expect(row).not.toMatch(/facts|secondaryAction|payload\.line/);
   });
@@ -120,9 +120,11 @@ describe("the banner", () => {
     expect(s).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
     expect(s).not.toMatch(/rgba?\(/);
     for (const t of ["var(--success)", "var(--error)", "var(--success-ink)", "var(--error-ink)", "var(--surface-card)", "EDGE"]) expect(s).toContain(t);
-    expect(s).toContain('background: ink, color: "var(--bg)"'); // contrast measured on every theme: see the component
+    // The verdict button is the kit's Button filled with the ink (`solid`: label in --bg); contrast measured on every theme: see the component.
+    expect(s).toContain("tint={ink} solid");
+    const kit = await_(new URL("../src/components/workspace/Chrome.tsx", import.meta.url));
+    expect(kit).toContain('color: "var(--bg)", background: tint');
     expect(s).toContain("ICON.lg");
-    expect(s).toContain("HIT");
     expect(s).toContain("<CloseButton");
   });
   it("the re-run is a deed that reports its failure on the card instead of closing it", () => {

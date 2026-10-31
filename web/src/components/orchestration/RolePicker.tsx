@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+import { api } from "../../lib/api.ts";
 import { Chip, INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
 import type { EngineChoice } from "../../../../shared/orchestration.ts";
 import type { EngineReadiness } from "../../../../shared/types.ts";
@@ -8,7 +10,8 @@ import { DEFAULT_MODEL, pickEngine, pickModel } from "./orchestrationCopy.ts";
  * One job's choice, as two steps of tiles: the engine, then its model. Each
  * press saves at once (the page shows what it saved, with Undo), so there is no
  * Save here. The main agent's models are the ones the open main agent offers;
- * a worker's model stays a word typed in, kept when the field loses focus.
+ * a worker's model is typed in (kept when the field loses focus) with the
+ * engine's own models offered as suggestions, read once when the engine changes.
  */
 export function RolePicker({ id, role, word, current, readiness, lock, models, modelNote, disabled, onPick }: {
   id: string;
@@ -25,6 +28,7 @@ export function RolePicker({ id, role, word, current, readiness, lock, models, m
   disabled: boolean;
   onPick: (c: EngineChoice) => void;
 }) {
+  const suggestions = useEngineModels(models ? "" : current.engine);
   return (
     <div className="grid gap-3" data-picker={id}>
       <div className="grid gap-2">
@@ -42,14 +46,30 @@ export function RolePicker({ id, role, word, current, readiness, lock, models, m
             ))}
           </div>
         ) : (
-          <input defaultValue={current.model} key={`${id}:${current.engine}:${current.model}`} spellCheck={false} placeholder="its default model"
+          <input defaultValue={current.model} key={`${id}:${current.engine}:${current.model}`} spellCheck={false} placeholder="its default model" list={`${id}-models`}
             aria-label={`Model for the ${word}`} disabled={disabled}
             onBlur={(e) => { const c = pickModel(current, e.target.value.trim()); if (c) onPick(c); }}
             onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLInputElement).blur(); } }}
             className={`t-mono ${INPUT}`} style={{ ...INPUT_STYLE, width: 260 }} />
         )}
+        {!models && suggestions.length > 0 && (
+          <datalist id={`${id}-models`}>{suggestions.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}</datalist>
+        )}
         {modelNote && <p className="m-0 text-[12px]" style={{ color: "var(--text3)" }}>{modelNote}</p>}
       </div>
     </div>
   );
+}
+
+/** The engine's models; a failure or an engine with none is an empty list. */
+function useEngineModels(engine: string): { id: string; label: string }[] {
+  const [list, setList] = useState<{ id: string; label: string }[]>([]);
+  useEffect(() => {
+    setList([]);
+    if (!engine) return;
+    let live = true;
+    api.engineModels(engine).then((r) => { if (live) setList(r.models ?? []); }, () => {});
+    return () => { live = false; };
+  }, [engine]);
+  return list;
 }

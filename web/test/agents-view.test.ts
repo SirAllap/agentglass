@@ -49,7 +49,7 @@ describe("what the three cards say", () => {
     expect(html).toContain("1 idle");
   });
 
-  test("the Lantern's own chat and the coordinator are not work on the board", () => {
+  test("the Lantern's own chat and the orchestrator are not work on the board", () => {
     const html = screen([row(), row({ name: "Lantern", role: "lantern", paneId: "%1" }), row({ name: "orbit-lead", role: "orchestrator", paneId: "%2" })]);
     expect(html).toContain('<div class="num">1</div><div><div class="lab">working</div>');
     expect(html).not.toContain(">Lantern<");
@@ -89,7 +89,7 @@ describe("the empty states", () => {
   test("nothing on the machine: the first-run steps, and each section says what it is waiting for", () => {
     const html = screen([]);
     expect(html).toContain("Start any Claude session in tmux");
-    expect(html).toContain("Pick a coordinator for this project");
+    expect(html).toContain("Pick an orchestrator for this project");
     expect(html).toContain("Nothing is blocked on you");
     expect(html).toContain("No agents yet");
     expect(html).toContain("Nothing left running");

@@ -46,8 +46,13 @@ describe("the header refresh control is drawn once", () => {
     // visible text, and the first version of this pattern missed exactly that
     // one in the plugins pane.
     const label = />\s*Refresh(?:ing)?\u2026?\s*</;
+    // One deliberate second look: the empty board's own call to action, drawn
+    // by the design as an icon plus the word, because the header's icon is out
+    // of sight when a person is reading "Quiet is good".
+    const emptyCta = /<RefreshIcon size=\{ICON\.sm\} \/>Refresh<\/Button>/;
     for (const [f, src] of sources) {
-      expect(stripComments(src)).not.toMatch(label);
+      const code = stripComments(src);
+      expect(f.endsWith("TriageBoard.tsx") ? code.replace(emptyCta, "") : code).not.toMatch(label);
     }
   });
 

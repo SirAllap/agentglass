@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 /*
- * Five overlays (command palette, search, legend, statistics, skills) were
+ * Three overlays (command palette, legend, skills) were
  * plain divs: a screen reader announced nothing, Tab walked out into the page
  * behind the scrim, and closing left the focus nowhere. They now spread
  * useModalDialog on their panel. Source-level lock, same reasoning as
@@ -14,9 +14,7 @@ const trap = read("../src/lib/focusTrap.ts");
 
 const OVERLAYS: Array<[string, string, string]> = [
   ["CommandPalette", "Command palette", "initial={{ opacity: 0, scale: 0.96, y: -12 }}"],
-  ["SearchModal", "Search", "initial={{ opacity: 0, scale: 0.97, y: -10 }}"],
   ["HelpLegend", "Legend and shortcuts", "initial={{ opacity: 0, scale: 0.95, y: 12 }}"],
-  ["StatsModal", "Statistics", "initial={{ opacity: 0, scale: 0.985 }}"],
   ["SkillsModal", "Skills explorer", "initial={{ opacity: 0, scale: 0.95, y: 14 }}"],
 ];
 
@@ -60,8 +58,8 @@ describe("the five overlays use it without changing how they close", () => {
     });
     test(`${name}: scrim click still closes and the pointer-events structure is intact`, () => {
       expect(src).toMatch(/className="fixed inset-0[^"]*"[^>]*onClick=\{onClose\}/);
-      if (name !== "StatsModal") expect(src).toContain("pointer-events-none");
-      if (name !== "StatsModal") expect(src).toContain("pointer-events-auto");
+      expect(src).toContain("pointer-events-none");
+      expect(src).toContain("pointer-events-auto");
     });
   }
 });

@@ -159,7 +159,7 @@ const METRICS: Record<string, (src: string) => number> = {
 };
 
 /** Held at zero: the pages already built from the kit. */
-const MIGRATED = ["connections", "engines", "orchestration", "clickup", "jira", "prefs", "appearance", "notifications", "rail", "keys", "terminal", "diff", "tasks", "browser", "lantern", "understudy", "review-prompts", "saved-replies", "about", "privacy", "tmux", "plugins", "remote", "log", "onboarding"];
+const MIGRATED = ["connections", "engines", "orchestration", "clickup", "jira", "prefs", "appearance", "notifications", "rail", "keys", "terminal", "diff", "tasks", "browser", "lantern", "understudy", "review-prompts", "saved-replies", "about", "privacy", "tmux", "plugins", "remote", "log", "onboarding", "git"];
 
 const RATCHET_PATH = join(import.meta.dir, "settings-ratchet.txt");
 const ceilings = new Map<string, number>();
@@ -280,11 +280,12 @@ describe("the shared blocks", () => {
     // A 480px cap left every form a strip inside a card twice its width.
     expect(css).toMatch(/\.agx-sform \{ display: flex; flex-direction: column; gap: 12px; \}/);
     // The controls fill the field; the rule sits in a layer so `w-[96px]` still wins.
-    expect(css).toMatch(/@layer components \{\s*\.agx-field > :where\(input:not\([^)]*\), select, textarea\) \{ width: 100%; \}/);
+    expect(css).toMatch(/@layer components \{\s*\.agx-field > :where\(input:not\([^)]*\), textarea\) \{ width: 100%; \}/);
+    // A select is its natural width unless the field is `block` (kit-grow.test.ts holds that rule).
     expect(css).toMatch(/\.agx-field \{ display: flex; flex-direction: column; gap: 6px; \}/);
     const field = kit.slice(kit.indexOf("export function Field("));
     expect(field.indexOf("<label")).toBeLessThan(field.indexOf("{children}"));
-    expect(field.indexOf("{children}")).toBeLessThan(field.indexOf("agx-field-h"));
+    expect(field.indexOf("{children}")).toBeLessThan(field.indexOf("id={helpId}"));
   });
   test("the column is a flow that fills the page; only a board is capped, and by the page", () => {
     // It was capped at 1120px against the nav, which left the index rail a

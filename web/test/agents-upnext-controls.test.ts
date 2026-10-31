@@ -13,7 +13,7 @@ const addRow = sections.slice(sections.indexOf("function AddTaskRow("), sections
 test("the add row is a queue row that posts the title and the done-when through seatTaskAdd", () => {
   expect(addRow).toContain('className="qr qadd"');
   expect(addRow).toContain('name="plus"');
-  expect(addRow).toContain("Add a task for the coordinator");
+  expect(addRow).toContain("Add a task for the orchestrator");
   expect(addRow).toContain("api.seatTaskAdd(root, t, proof.trim())");
   expect(addRow).toMatch(/title\.trim\(\) && <input[\s\S]*?done when…/);
 });

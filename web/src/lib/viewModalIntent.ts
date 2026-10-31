@@ -12,7 +12,7 @@
  * schedule when the owner submits it; the resume list resumes a session when the
  * owner picks one.
  */
-export type ViewModal = "lantern.schedule" | "agents.change" | "terminal.resume";
+export type ViewModal = "lantern.schedule" | "agents.change" | "terminal.resume" | "terminal.sessions";
 
 /** Long enough for the view to mount; short enough that a request nobody was
  *  there for does not fire at the next unrelated visit. */

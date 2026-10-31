@@ -57,7 +57,7 @@ describe("slice 4 moves", () => {
   test("Opening files is gone, and its links are in the palette and Help", async () => {
     expect(src).not.toContain('id: "open"');
     expect(SETTINGS_PAGES.some((p) => p.id === "open")).toBe(false);
-    expect(palette).toContain('id: "stats"');
+    expect(palette).not.toContain('id: "stats"');
     expect(palette).toContain('id: "help"');
     const help = await Bun.file(new URL("../src/components/HelpLegend.tsx", import.meta.url)).text();
     expect(help).toContain("Command palette");

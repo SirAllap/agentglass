@@ -69,6 +69,7 @@ type DesktopBridge = {
   /** Absent on shells built before the browser could zoom. */
   onBrowserZoom?: (fn: (level: number) => void) => () => void;
   onBrowserOpenTab?: (fn: (url: string, opener?: number) => void) => () => void;
+  onBrowserGuestAttached?: (fn: (guestId: number) => void) => () => void;
   /** Absent on shells built before the browser had its own keyboard. */
   onBrowserKey?: (fn: (key: string, guest?: number) => void) => () => void;
   onBrowserSearch?: (fn: (text: string) => void) => () => void;
@@ -79,12 +80,14 @@ type DesktopBridge = {
   browserDevtoolsZoom?: (req: { guest: number; level: number }) => Promise<{ ok: boolean; level?: number }>;
   browserDevtoolsShot?: (req: { guest: number }) => Promise<{ ok: boolean; png?: string; via?: string; error?: string }>;
   browserDevtoolsPanel?: (req: { guest: number; panel: string }) => Promise<{ ok: boolean; panel?: string; via?: string; error?: string }>;
+  browserPermission?: (req: BrowserPermissionReq) => Promise<{ ok: boolean; value?: unknown; error?: string }>;
   onDevtoolsZoom?: (fn: (at: { guest: number; level: number }) => void) => () => void;
   /** Absent on shells built before the inspector could be opened from a CLI. */
   onDevtoolsOpen?: (fn: (at: { guest: number; open: boolean }) => void) => () => void;
   onAppBack?: (fn: (at: { back: boolean }) => void) => () => void;
   onBrowserInspect?: (fn: (at: { x: number; y: number }) => void) => () => void;
   setActiveBrowserGuest?: (id: number) => Promise<boolean>;
+  browserShown?: (at: { guest: number; webviews: number; tab: string; asleep: boolean }) => Promise<{ painted: boolean }>;
   browserPlaces?: (req: { source: string }) => Promise<{ ok: boolean; places?: ImportedPlace[]; error?: string }>;
   /** Absent on shells built before a sidebar could be imported. */
   browserShelfRead?: (source: string) => Promise<{ ok: boolean; shelf?: unknown; error?: string }>;
@@ -107,6 +110,7 @@ type DesktopBridge = {
   sessionSettings?: (req: Record<string, unknown>) => Promise<{ ok: boolean; applied?: string[]; error?: string; value?: unknown }>;
   /** S9: absent on shells built before the identity header existed. */
   setGuestOwner?: (guestId: number, owner: string, person?: boolean) => void;
+  setGuestOpener?: (guestId: number, by: "person" | "agent" | "typed" | "popup", from?: number) => void;
   /** All absent on shells built before cookie import existed. */
   cookieSources?: () => Promise<CookieSourcesReply>;
   importCookies?: (req: { source: string; sites: string[] }) => Promise<CookieImportReply>;
@@ -342,6 +346,18 @@ export async function browserDevtoolsPanel(guest: number, panel: string): Promis
   catch (e) { return { ok: false, error: String(e instanceof Error ? e.message : e) }; }
 }
 
+export type BrowserPermissionReq = { guestId: number; op: "list" | "grant" | "deny"; what?: string[]; origin?: string };
+export type PendingPermission = { what: string; origin: string; deniedInMs: number };
+
+/** What an agent's tab is holding for it to answer, or its answer — see
+ *  `createPermissionDesk` in electron/guest-guard.js. */
+export async function browserPermission(req: BrowserPermissionReq): Promise<{ ok: boolean; value?: unknown; error?: string }> {
+  const b = bridge();
+  if (!b?.browserPermission) return { ok: false, error: "this shell cannot answer a page's permission requests" };
+  try { return await b.browserPermission(req); }
+  catch (e) { return { ok: false, error: String(e instanceof Error ? e.message : e) }; }
+}
+
 export function onDevtoolsZoom(fn: (at: { guest: number; level: number }) => void): () => void {
   const b = bridge();
   return b?.onDevtoolsZoom ? b.onDevtoolsZoom(fn) : () => {};
@@ -399,6 +415,12 @@ export function onBrowserInspect(fn: (at: { x: number; y: number }) => void): ()
  * a tab. A no-op unsubscribe on an older shell, so the caller can wire it
  * unconditionally.
  */
+/** Main's word that a guest of this window attached — see `sayOpener`. */
+export function onBrowserGuestAttached(fn: (guestId: number) => void): () => void {
+  const b = bridge();
+  return b?.onBrowserGuestAttached ? b.onBrowserGuestAttached(fn) : () => {};
+}
+
 export function onBrowserOpenTab(fn: (url: string, opener?: number) => void): () => void {
   const b = bridge();
   return b?.onBrowserOpenTab ? b.onBrowserOpenTab(fn) : () => {};
@@ -438,6 +460,12 @@ export async function browserShelfRead(source: string): Promise<{ ok: boolean; s
   if (!b?.browserShelfRead) return { ok: false, error: "this shell cannot read another browser's sidebar" };
   try { return await b.browserShelfRead(source) as { ok: boolean; shelf?: ImportedShelf; error?: string }; }
   catch (e) { return { ok: false, error: String(e) }; }
+}
+
+/** The Browser view was shown again: the shell repaints the guest, logs the
+ *  moment, and says whether it had painted. Null on an older shell. */
+export async function browserShown(at: { guest: number; webviews: number; tab: string; asleep: boolean }): Promise<{ painted: boolean } | null> {
+  try { return (await bridge()?.browserShown?.(at)) ?? null; } catch { return null; }
 }
 
 export function setActiveBrowserGuest(id: number): void {
@@ -593,6 +621,12 @@ export async function applySessionSettings(req: Record<string, unknown>): Promis
  *  no-op on a shell that predates it, same as every other bridge call here. */
 export function setGuestOwner(guestId: number, owner: string, person?: boolean): void {
   try { bridge()?.setGuestOwner?.(guestId, owner, person); } catch { /* nothing to push to */ }
+}
+
+/** Who opened a guest, for whose its permission requests are — see
+ *  `holderAfter` in electron/guest-guard.js. */
+export function setGuestOpener(guestId: number, by: "person" | "agent" | "typed" | "popup", from?: number): void {
+  try { bridge()?.setGuestOpener?.(guestId, by, from); } catch { /* nothing to push to */ }
 }
 
 /** Whether the app is set to launch at login. Null when not applicable (a

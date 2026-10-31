@@ -1,11 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { motion, AnimatePresence } from "motion/react";
 import type { WorktreeLeftovers, LeftoverEntry } from "../../../shared/types.ts";
-import { Portal } from "./Portal.tsx";
+import { GitDialog, RefStrip } from "./GitDialog.tsx";
 import { preselected, fmtBytes, rescueKey, rescuePicks } from "../lib/goneCleanup.ts";
 import { DoneIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { EDGE, LINE } from "./workspace/Chrome.tsx";
 
 /**
  * The last thing between somebody's notes and `rm -rf`.
@@ -118,93 +116,67 @@ export function RescueModal({ reports, progress, onCancel, onConfirm }: {
 
   const nothingToOffer = rows.every((r) => r.kind !== "entry");
 
+  const count = reports.length;
+  const confirmLabel = totals.n ? `Keep ${totals.n} & remove` : "Remove, keep nothing";
   return (
-    <Portal>
-      <AnimatePresence>
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-          className="fixed inset-0 agx-scrim" style={{ zIndex: 10002 }} onClick={onCancel} />
-        <div className="fixed inset-0 flex items-center justify-center p-6 pointer-events-none" style={{ zIndex: 10003 }}>
-          <motion.div
-            initial={{ opacity: 0, scale: 0.98, y: 6 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.98 }}
-            className="pointer-events-auto w-full max-w-[760px] max-h-[80vh] flex flex-col rounded-xl overflow-hidden"
-            style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}
-          >
-            <div className="px-4 py-3" style={{ borderBottom: LINE }}>
-              <div className="text-[13px] font-medium" style={{ color: "var(--text)" }}>
-                Keep anything before removing {reports.length} worktree{reports.length === 1 ? "" : "s"}?
-              </div>
-              <div className="text-[11px] mt-1" style={{ color: "var(--text3)" }}>
-                Ticked files are copied into the main checkout at the same path, then the worktrees are removed.
-                Nothing already there is overwritten.
-              </div>
-            </div>
-
-            <div ref={listRef} className="agx-scroll overflow-y-auto overflow-x-hidden flex-1 px-2 py-2" style={{ opacity: working ? 0.45 : 1, pointerEvents: working ? "none" : "auto" }}>
-              {nothingToOffer && (
-                <div className="px-3 py-6 text-[11.5px] text-center" style={{ color: "var(--text3)" }}>
-                  Nothing unique in these checkouts — everything in them is either a cache or already in the main checkout.
-                </div>
-              )}
-              {rows.map((r, i) => r.kind === "head" ? (
-                <div key={`h${i}`} className="px-2 pt-3 pb-1 text-[11px] font-medium flex items-baseline gap-2" style={{ color: "var(--text2)" }}>
-                  <span>{groupOf(r.report.path)}</span>
-                  <span className="text-[10px]" style={{ color: "var(--text3)" }}>
-                    {r.report.identical > 0 && `${r.report.identical} already in the main checkout`}
-                    {r.report.identical > 0 && r.report.skipped > 0 && " · "}
-                    {r.report.skipped > 0 && `${r.report.skipped} rebuildable`}
-                    {r.report.more > 0 && ` · ${r.report.more} more not shown`}
-                  </span>
-                </div>
-              ) : (
-                (() => {
-                  const k = keyOf(r.report, r.entry);
-                  const ticked = on.has(k);
-                  const risky = r.entry.vsMain === "differs";
-                  return (
-                    <button key={k} data-cur={i === cur ? "1" : undefined} onClick={() => { setCur(i); toggle(k); }}
-                      className="w-full flex items-center gap-2 px-2 py-1 rounded-md text-left"
-                      style={{ background: i === cur ? "color-mix(in srgb, var(--primary) 14%, transparent)" : "transparent" }}>
-                      <Tick on={ticked} dim={risky} />
-                      <span className="text-[11.5px] truncate" style={{ color: ticked ? "var(--text)" : "var(--text3)" }}>{r.entry.path}</span>
-                      {risky && (
-                        <span className="text-[10px] px-1 rounded shrink-0" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 15%, transparent)" }}>
-                          Overwrites the main checkout
-                        </span>
-                      )}
-                      <span className="ml-auto text-[10px] tabular-nums shrink-0" style={{ color: "var(--text3)" }}>{fmtBytes(r.entry.bytes)}</span>
-                    </button>
-                  );
-                })()
-              ))}
-            </div>
-
-            <div className="px-4 py-2.5 flex items-center gap-3" style={{ borderTop: LINE }}>
-              {working ? (
-                <>
-                  <span className="inline-block w-3 h-3 rounded-full shrink-0" style={{ border: "2px solid color-mix(in srgb, var(--primary) 35%, transparent)", borderTopColor: "var(--primary)", animation: "agx-spin 0.7s linear infinite" }} />
-                  <style>{"@keyframes agx-spin{to{transform:rotate(360deg)}}"}</style>
-                  <span className="text-[11.5px]" style={{ color: "var(--text2)" }}>{progress}…</span>
-                  <span className="ml-auto text-[10.5px]" style={{ color: "var(--text3)" }}>This can take a few seconds</span>
-                </>
-              ) : (
-              <>
-              <span className="text-[11px]" style={{ color: "var(--text3)" }}>
-                <span className="t-dim2">j/k</span> move · <span className="t-dim2">space</span> toggle · <span className="t-dim2">a</span> all · <span className="t-dim2">n</span> none
-              </span>
-              <span className="ml-auto text-[11px] tabular-nums" style={{ color: totals.differs ? "var(--warning)" : "var(--text2)" }}>
-                {totals.n} selected · {fmtBytes(totals.bytes)}
-                {totals.differs > 0 && ` · ${totals.differs} would overwrite`}
-              </span>
-              <button onClick={onCancel} className="text-[11px] px-2.5 py-1 rounded" style={{ color: "var(--text2)", border: EDGE }}>Cancel</button>
-              <button onClick={submit} className="text-[11px] px-2.5 py-1 rounded font-medium" style={{ color: "var(--on-primary)", background: "var(--primary)" }}>
-                {totals.n ? `Keep ${totals.n} & remove` : "Remove, keep nothing"}
-              </button>
-              </>
-              )}
-            </div>
-          </motion.div>
+    <GitDialog
+      title={`Keep anything before removing ${count} worktree${count === 1 ? "" : "s"}?`}
+      subtitle="Ticked files are copied into the main checkout at the same path, then the worktrees are removed. Nothing already there is overwritten."
+      tone="warn" width={760} flush ownKeys
+      cancelLabel="Cancel" confirmLabel={confirmLabel} onConfirm={submit} onClose={onCancel}
+      initialFocus="none"
+      reason={`${totals.n} selected · ${fmtBytes(totals.bytes)}${totals.differs > 0 ? ` · ${totals.differs} would overwrite` : ""}`}
+      working={working ? (
+        <>
+          <span className="inline-block w-3 h-3 rounded-full shrink-0 motion-safe:animate-spin" style={{ border: "2px solid color-mix(in srgb, var(--primary) 35%, transparent)", borderTopColor: "var(--primary)" }} />
+          <span className="text-[11.5px] shrink-0" style={{ color: "var(--text2)" }}>{progress}…</span>
+        </>
+      ) : undefined}
+    >
+      <div className="px-4">
+        <RefStrip head={reports.map((r) => groupOf(r.path)).join(", ")} base="main checkout" tone="warn" />
+      </div>
+      <div ref={listRef} className="agx-scroll overflow-y-auto overflow-x-hidden px-2.5" style={{ opacity: working ? 0.45 : 1, pointerEvents: working ? "none" : "auto" }}>
+      {nothingToOffer && (
+        <div className="px-3 py-6 text-[11.5px] text-center" style={{ color: "var(--text3)" }}>
+          Nothing unique in these checkouts — everything in them is either a cache or already in the main checkout.
         </div>
-      </AnimatePresence>
-    </Portal>
+      )}
+      {rows.map((r, i) => r.kind === "head" ? (
+        <div key={`h${i}`} className="px-2 pt-3 pb-1 text-[11px] font-medium flex items-baseline gap-2" style={{ color: "var(--text2)" }}>
+          <span>{groupOf(r.report.path)}</span>
+          <span className="text-[10px]" style={{ color: "var(--text3)" }}>
+            {r.report.identical > 0 && `${r.report.identical} already in the main checkout`}
+            {r.report.identical > 0 && r.report.skipped > 0 && " · "}
+            {r.report.skipped > 0 && `${r.report.skipped} rebuildable`}
+            {r.report.more > 0 && ` · ${r.report.more} more not shown`}
+          </span>
+        </div>
+      ) : (
+        (() => {
+          const k = keyOf(r.report, r.entry);
+          const ticked = on.has(k);
+          const risky = r.entry.vsMain === "differs";
+          return (
+            <button key={k} data-cur={i === cur ? "1" : undefined} onClick={() => { setCur(i); toggle(k); }}
+              className="w-full flex items-center gap-2 px-2 py-1 rounded-md text-left"
+              style={{ background: i === cur ? "color-mix(in srgb, var(--primary) 14%, transparent)" : "transparent" }}>
+              <Tick on={ticked} dim={risky} />
+              <span className="text-[11.5px] truncate" style={{ color: ticked ? "var(--text)" : "var(--text3)" }}>{r.entry.path}</span>
+              {risky && (
+                <span className="text-[10px] px-1 rounded shrink-0" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 15%, transparent)" }}>
+                  Overwrites the main checkout
+                </span>
+              )}
+              <span className="ml-auto text-[10px] tabular-nums shrink-0" style={{ color: "var(--text3)" }}>{fmtBytes(r.entry.bytes)}</span>
+            </button>
+          );
+        })()
+      ))}
+      </div>
+      <div className="px-4 pb-3.5 text-[11px]" style={{ color: "var(--text3)" }}>
+        <span className="t-dim2">j/k</span> move · <span className="t-dim2">space</span> toggle · <span className="t-dim2">a</span> all · <span className="t-dim2">n</span> none · <span className="t-dim2">enter</span> go
+      </div>
+    </GitDialog>
   );
 }

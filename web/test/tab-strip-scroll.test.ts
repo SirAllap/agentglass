@@ -11,7 +11,8 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { edgeMask, overflowEdges, revealX, wheelToX } from "../src/lib/tabStrip.ts";
 
-const src = readFileSync(new URL("../src/components/TerminalPanel.tsx", import.meta.url).pathname, "utf8");
+const src = readFileSync(new URL("../src/components/terminal/TermStrip.tsx", import.meta.url).pathname, "utf8");
+const tabSrc = readFileSync(new URL("../src/components/terminal/WindowTab.tsx", import.meta.url).pathname, "utf8");
 
 const wide = { scrollWidth: 1800, clientWidth: 900 };
 
@@ -92,11 +93,11 @@ describe("the strip uses it", () => {
   });
 
   test("tabs are addressable by window id, so the hook can find the lit one", () => {
-    expect(src).toContain("data-window={w.id}");
+    expect(tabSrc).toContain("data-window={w.id}");
   });
 
-  test("names are cut with an ellipsis and the full name is in the tooltip", () => {
-    expect(src).toContain("max-w-[16ch] truncate");
-    expect(src).toMatch(/title=\{`\$\{w\.name \|\| "shell"\} — window \$\{w\.index\}/);
+  test("names are cut with an ellipsis and the full name is on the peek card, which wraps it", () => {
+    expect(tabSrc).toContain("max-w-[16ch] truncate");
+    expect(readFileSync(new URL("../src/components/terminal/PeekCard.tsx", import.meta.url), "utf8")).toContain("break-all font-semibold text-[12px]");
   });
 });

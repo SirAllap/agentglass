@@ -149,67 +149,79 @@ describe("preferences", () => {
 });
 
 describe("the strip draws them", () => {
-  test("flat when grouping is off or there is one group", () => {
-    expect(panel).toContain("if (!tabGroups) return tmuxWindows.map(renderTab);");
-    expect(panel).toContain("return worthGrouping(gs) ? gs : null;");
+  // The drawing moved out of the panel into terminal/ (TermStrip, WindowTab,
+  // ProjectChip, GoList): same behaviours, new place. Which groups, in what
+  // order, with which numbers is lib/stripZones.ts and lib/goList.ts, tested there.
+  const dir = (f: string) => readFileSync(new URL(`../src/components/terminal/${f}`, import.meta.url).pathname, "utf8");
+  const strip = dir("TermStrip.tsx");
+  const chip = dir("ProjectChip.tsx");
+  const goList = dir("GoList.tsx");
+
+  test("flat when grouping is off: one project named after the session", () => {
+    expect(panel).toContain("if (!groupsOn) return [{ key: sessionKey, label: sessionLabel");
+    // The strip is told whether projects exist; off, no labels, keep switches or project menu.
+    expect(panel).toContain("projects={groupsOn}");
+    // Pin is offered on every strip (flat ones say "Pin first"); the project menu only with projects.
+    expect(strip).toContain('{w.pinned ? "Unpin" : projects ? "Pin first in its project" : "Pin first"}');
+    expect(strip).toContain("{projects && (");
   });
 
-  test("the group you are in and the kept-open ones are open; the rest are chips", () => {
-    expect(panel).toContain("if (here || keptOpen.has(g.key)) return (");
-    expect(panel).toContain("{g.marks.slice(0, 3).map((m) => <StatusMark key={m} status={m} />)}");
+  test("the project you are in and the kept-open ones are open; the rest live in the Go list", () => {
+    expect(strip).toContain("stripZones({ groups, current: p.activeGroup, kept, locked: lockedSession })");
+    expect(goList).toContain("Keep in strip");
+    expect(goList).toContain("onToggleKept");
   });
 
-  test("a chip names its count and its states in words, not only in colour", () => {
-    expect(panel).toMatch(/aria-label=\{`\$\{g\.label\}, \$\{g\.windows\.length\}/);
+  test("the project chip names its count in words, not only in a number", () => {
+    expect(chip).toMatch(/aria-label=\{`\$\{name\}, \$\{count\} \$\{count === 1 \? "window" : "windows"\}/);
   });
 
-  test("folded chips sit outside the scrolling row, so an open group cannot push them off screen", () => {
-    const scroller = panel.indexOf("<div ref={tabStrip.ref}");
-    const chips = panel.indexOf(".map(renderChip)");
-    expect(scroller).toBeGreaterThan(-1);
-    expect(chips).toBeGreaterThan(scroller);
-    // Between the scroller and the bar's right end, and in neither.
-    expect(panel.slice(scroller, chips)).not.toContain("{barRight}");
-    const between = panel.slice(scroller, chips);
-    expect(between.lastIndexOf("{tabGroups && tabGroups.some(")).toBeGreaterThan(between.lastIndexOf("Use tmux's bar"));
-    expect(panel.indexOf("{barRight}</div>", chips)).toBeGreaterThan(chips);
+  test("the Go list is a popover over the strip, so an open project cannot push anything off screen", () => {
+    expect(goList).toContain("Portal");
+    expect(goList).toContain("NO_DRAG");
+    // No folded-chips column left in the row.
+    expect(strip).not.toContain("max-w-[45%]");
+    expect(panel).not.toContain("renderChip");
   });
 
-  test("Shift+click keeps a group open; a click lists it", () => {
-    expect(panel).toContain("if (e.shiftKey) { toggleKeptOpen(g.key); return; }");
-    expect(panel).toContain("setGroupMenu({ key: g.key");
+  test("Shift+click is gone: keeping a project open is a switch in the Go list, or the project menu", () => {
+    expect(panel).not.toContain("e.shiftKey) { toggleKeptOpen");
+    expect(strip).toContain("p.onToggleKept(g.key)");
   });
 
-  test("dropping a tab on a group or on another group's tab sets @agx-group, and moves nothing", () => {
-    expect(panel).toContain('tmuxCmd({ cmd: "group", window: from, name: g.label })');
-    const at = panel.indexOf("if (to && groupOfWindow.get(from)?.key !== to.key) {");
+  test("dropping a tab on a project label or on another project's tab sets @agx-group, and moves nothing", () => {
+    expect(strip).toContain('cmd({ cmd: "group", window: from, name: g.label })');
+    const at = strip.indexOf("if (projects && to && groupOfWindow.get(from)?.key !== to.key) {");
     expect(at).toBeGreaterThan(-1);
-    const end = panel.indexOf('tmuxCmd({ cmd: "move", window: from, name: String(w.index) });', at);
+    const end = strip.indexOf('cmd({ cmd: "move", window: from, name: String(w.index) });', at);
     expect(end).toBeGreaterThan(at);
-    const branch = panel.slice(at, end);
-    expect(branch).toContain('tmuxCmd({ cmd: "group", window: from, name: to.label });');
+    const branch = strip.slice(at, end);
+    expect(branch).toContain('cmd({ cmd: "group", window: from, name: to.label });');
     expect(branch).toContain("return;");
   });
 
-  test("a menu whose group or window has gone is closed, not left to pop back up", () => {
-    expect(panel).toContain("if (tabMenu && !tmuxWindows.some((w) => w.id === tabMenu.id)) setTabMenu(null);");
+  test("a menu whose project or window has gone is closed, not left to pop back up", () => {
+    expect(strip).toContain("if (tabMenu && !windows.some((w) => w.id === tabMenu.id)) setTabMenu(null);");
+    expect(strip).toContain("if (projMenu && !groups.some((g) => g.key === projMenu.key)) setProjMenu(null);");
   });
 
-  test("the chips are capped, so many projects cannot squeeze the open tabs to nothing", () => {
-    expect(panel).toContain('className="min-w-0 max-w-[45%] flex items-center gap-1 pl-2 overflow-x-auto agw-noscrollbar"');
+  test("a tab's menu pins it and moves it between projects", () => {
+    expect(strip).toContain('cmd({ cmd: "pin", window: w.id, after: !w.pinned })');
+    expect(strip).toContain('cmd({ cmd: "group", window: w.id })');
   });
 
-  test("a tab's menu pins it and moves it between groups", () => {
-    expect(panel).toContain('tmuxCmd({ cmd: "pin", window: w.id, after: !w.pinned })');
-    expect(panel).toContain('tmuxCmd({ cmd: "group", window: w.id })');
+  test("a project's menu renames it, keeps it open, empties it into Other, closes it", () => {
+    expect(strip).toContain("Rename project");
+    expect(strip).toContain("Keep open in the strip");
+    expect(strip).toContain('name: "Other"');
+    expect(strip).toContain("Close all windows");
   });
 
-  test("folding does not animate", () => {
-    const at = panel.indexOf("const renderChip = (g: TabGroup) => {");
-    expect(at).toBeGreaterThan(-1);
-    const block = panel.slice(at, panel.indexOf("\n  };\n", at));
-    expect(block).not.toContain("motion.");
-    expect(block).not.toContain("animation");
+  test("the tabs slide 160 ms on a project change, and not at all with reduced motion", () => {
+    expect(strip).toContain("agx-strip-swap");
+    const css = readFileSync(new URL("../src/index.css", import.meta.url).pathname, "utf8");
+    expect(css).toContain("animation: agx-strip-swap 160ms");
+    expect(css).toMatch(/prefers-reduced-motion[\s\S]*\.agx-strip-swap > \* \{ animation: none; \}/);
   });
 
   test("Settings can switch it off and hold the name rules", () => {

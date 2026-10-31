@@ -30,7 +30,7 @@ const read = (f: string) => readFileSync(join(COMPONENTS, f), "utf8");
 /** The files that draw a workspace view's own chrome. */
 const VIEWS = [
   "PrPanel.tsx", "TasksPanel.tsx", "GitPanel.tsx", "DockerPanel.tsx",
-  "TerminalPanel.tsx", "FilesPanel.tsx", "BrowserPanel.tsx",
+  "TerminalPanel.tsx", "BrowserPanel.tsx",
   "diff/DiffPage.tsx", "understudy/UnderstudyPanel.tsx",
   // The git view's own pieces, which are chrome by any other name: they draw
   // the buttons on every row of four sections.
@@ -74,6 +74,7 @@ const SIZES = new Set(["text-[10px]", "text-[10.5px]", "text-[11px]"]);
  */
 const EXEMPT: { file: string; match: string; why: string }[] = [
   { file: "TasksPanel.tsx", match: "onClick={onAdd}", why: "the submit of the comment box, sized against the box" },
+  { file: "PrPanel.tsx", match: "data-merge-button", why: "the dock's Merge pull request is the surface's one primary action: 30px like the mockup's prime hit, sized against the 54px dock band, not a chip" },
   { file: "PrPanel.tsx", match: "onClick={copyNumber}", why: "the PR number inside a 14px title line — it is sized against the heading it sits in, not against a toolbar" },
 ];
 
@@ -231,7 +232,7 @@ describe("the chip a view puts in its chrome", () => {
        costs 2px of padding plus 2px of border on every edge. */
     const chrome = read("workspace/Chrome.tsx");
     const at = chrome.indexOf("export function Segmented");
-    const body = chrome.slice(at, at + 900);
+    const body = chrome.slice(at, chrome.indexOf("\n}\n", at));
     // gap-1.5 and not gap-1: 4px between two 28px targets is inside the
     // distance a pointer slips, and this set is the primary navigation of a
     // view. The rule being pinned is that the GROUP has no box of its own.
@@ -279,8 +280,13 @@ describe("the frozen list", () => {
     // The guard on the guard. A regex that stopped matching would make every
     // assertion above pass over nothing — which is exactly what it did.
     const seen = VIEWS.reduce((n, v) => n + chipButtons(read(v)).length, 0);
-    // 123 at the time of writing, against the 80 the broken scan could see
-    // across the whole component tree.
-    expect(seen, "chip-shaped buttons found across the views").toBeGreaterThan(100);
+    // 100 on main, 97 once the Git header's own buttons moved to GitHeader.tsx, which draws
+    // them from one shared constant, 86 on the tree after the Git dock work;
+    // the broken scan could see 80 across the whole component tree. 77 once the terminal, bench
+    // and browser toolbars drew from the kit's Button, which is what this count measures going down;
+    // 69 once the Log's pick bar, toolbar and frames drew from the kit's Button too.
+    // 50 once the Tasks sources (Local, GitHub) drew their chips, segments and buttons from the kit.
+    // 45 once the Tasks board toolbar, rail and card drew the same from the kit.
+    expect(seen, "chip-shaped buttons found across the views").toBeGreaterThan(40);
   });
 });

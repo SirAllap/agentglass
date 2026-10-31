@@ -128,8 +128,10 @@ describe("the handler is the guard, the DOM only shows it", () => {
     expect(run).toMatch(/if \(res\.ok\) markLanded\(detail\.number, res\.mergedBy\)/);
     expect(fnBody("const markLanded = (n: number, by?: string) =>")).toMatch(/setDetail[\s\S]*setPrs\(gone\); setBoardMine\(gone\); setBoardReview\(gone\)/);
   });
-  it("the board's own merge does the same", () => {
-    expect(code).toMatch(/const res = await api\.prMerge\(root, p\.number, mergeMethod, \{ headSha: p\.headSha \}\);\s*if \(res\.ok\) markLanded\(p\.number, res\.mergedBy\)/);
+  it("the board no longer merges on its own: a card's merge runs the dialog's path, which is the one that writes the landing", () => {
+    const onAct = fnBody("onAct={(p, what) =>");
+    expect(onAct).not.toContain("api.prMerge");
+    expect(code).toContain("case \"merge\": void doMerge(mergeMethod); break;");
   });
   it("every list read passes through the tombstone, and a stale OPEN detail is refused", () => {
     expect((code.match(/openLists\(holdEdits\(/g) ?? []).length).toBe(3);
@@ -138,11 +140,11 @@ describe("the handler is the guard, the DOM only shows it", () => {
 });
 
 describe("everything on the merge row is locked while it runs", () => {
-  const overview = fnBody("function Overview(");
-  it("Merge, the method menu, update branch, close, draft and merge-when-green all read the lock", () => {
-    expect(overview).toMatch(/disabled=\{busy \|\| !!mergeWork \|\| !!refusal/);
-    expect(overview).toMatch(/title="Merge method"\s*disabled=\{busy \|\| !!mergeWork\}/);
-    for (const label of ["Merge when green", "Close", "To draft"]) expect(overview).toContain(label);
+  const overview = fnBody("function MergeScope(");
+  it("Merge, the method menu, update branch, close and draft all read the lock", () => {
+    expect(overview).toMatch(/const mergeDisabled = busy \|\| !!mergeWork \|\| !!refusal/);
+    expect(overview).toMatch(/title=\{`Merge method: \$\{MERGE_LABEL\[method\]\}`\}\s*disabled=\{busy \|\| !!mergeWork\}/);
+    for (const label of ["Close", "To draft"]) expect(overview).toContain(label);
     expect(code).toMatch(/<Overview\s+d=\{d\} root=\{root\} busy=\{busy \|\| !!mergeWork\}/);
   });
   it("the button says Merging… while it runs", () => {

@@ -137,7 +137,9 @@ describe("what a press costs", () => {
     expect(body.match(/api\.clickupCard\(/g)?.length).toBe(1);
     expect(body.indexOf("api.clickupCard(")).toBeLessThan(body.indexOf("sendExtras(task.id, extraItems)"));
     expect(panel).toContain("const sendMergeExtras = async () =>");
-    expect(panel).toContain("const ex = r.ok && menuExtras.length ? await sendExtras(card.id, menuExtras) : null;");
+    const picker = await read("components/PrAskPicker.tsx");
+    expect(picker).toContain("const ex = await sendExtras(task0.id, sd.extraItems).catch(() => null);");
+    expect(picker.indexOf("api.clickupCard(")).toBeLessThan(picker.indexOf("sendExtras(task0.id, sd.extraItems)"));
   });
   test("the writes are the ones behind 'Changes in ClickUp': the routes refuse when it is off", async () => {
     const src = await Bun.file(new URL("../../server/src/clickup.ts", import.meta.url).pathname).text();

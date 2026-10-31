@@ -33,7 +33,8 @@ describe("Checks tab", () => {
     expect(html).toContain("1/1 required passed");
     expect(html).toContain("13 skipped checks");
     expect(html).toContain("Nothing needs you");
-    expect(html).not.toContain("Needs attention");
+    // The toolbar toggle of that name is always drawn; what a green PR lacks is the pinned section.
+    expect(html).not.toMatch(/\d+ checks? failing/);
   });
 
   test("a failing check is pinned above the workflow cards with its own words", () => {

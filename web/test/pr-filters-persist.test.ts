@@ -100,38 +100,27 @@ describe("the panel actually reads and writes the rules it builds", () => {
   const src = readFileSync(new URL("../src/components/PrPanel.tsx", import.meta.url), "utf8");
   const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
 
-  test("filters have their own storage key, in the app's convention", () => {
-    expect(code).toContain('const FILTERS_KEY = "agentglass.pr.filters"');
+  test("the live filter is the store's, per repository (nameWithOwner), not a map of the panel's own", () => {
+    expect(code).toContain("const repoSlug = repo?.nameWithOwner ?? null;");
+    expect(code).toContain("usePrFilter(repoSlug)");
+    expect(code).not.toContain("loadMap<unknown>(FILTERS_KEY)");
+    expect(code).not.toContain("saveMap(FILTERS_KEY");
   });
 
-  test("the map is loaded from storage, per repository, on mount", () => {
-    expect(code).toContain("useState<Record<string, unknown>>(() => loadMap<unknown>(FILTERS_KEY))");
+  test("the old flat key is read once by the store, which imports it through lanesFromFlat", () => {
+    const store = readFileSync(new URL("../src/lib/prBoardFilterStore.ts", import.meta.url), "utf8");
+    expect(store).toContain('LEGACY_FILTERS_KEY = "agentglass.pr.filters"');
+    expect(store).toContain("lanesFromFlat(flat.join, flat.rules)");
   });
 
-  test("the builder's rules are read through the validator, keyed by repo.key", () => {
-    expect(code).toContain("readFilterSet(filterMap[repo.key])");
+  test("the deck and the empty board write through the history-keeping setter, not the bare one", () => {
+    // `setLaneFilterRaw` skips the one step back that Undo returns to.
+    expect(code).toContain("<PrFilterDeck filter={laneFilter} onChange={setLaneFilter}");
+    expect(code).toContain("onChange={setLaneFilter} onOpen={setEditingRule}");
+    expect(code).not.toContain("onChange={setLaneFilterRaw}");
   });
 
-  test("switching repositories reloads that repository's own rules", () => {
-    // Not just read once at mount: kept in step with the repo the panel is
-    // actually showing.
-    expect(code).toMatch(/useEffect\(\(\) => \{\s*setRulesRaw\(repo \? readFilterSet\(filterMap\[repo\.key\]\) : EMPTY_RULES\);/);
-    expect(code).toContain("}, [repo?.key]);");
-  });
-
-  test("a change is written back under this repository's own key", () => {
-    expect(code).toContain("[repo.key]: next");
-    expect(code).toContain("saveMap(FILTERS_KEY, nextMap);");
-  });
-
-  test("the builder is wired to the persisting setter, not the bare one", () => {
-    // `FilterBuilder`'s "Clear all" calls this same `onChange` with the empty
-    // set — if it reached `setRulesRaw` directly, a cleared board would look
-    // clear and come back full after a restart.
-    // While a global search runs the builder edits the search's own rules (the
-    // board's filters stay untouched); otherwise it is the persisting setter.
-    expect(code).toContain("onChange={setActiveRules}");
-    expect(code).toContain("const setActiveRules = searchingNow ? setSearchRules : setRules;");
-    expect(code).not.toContain("onChange={setRulesRaw}");
+  test("a search ignores the board's rules", () => {
+    expect(code).toContain("const activeLanes = searchingNow ? EMPTY_LANES : laneFilter;");
   });
 });

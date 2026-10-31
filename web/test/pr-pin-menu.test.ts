@@ -17,6 +17,8 @@ const panel = await Bun.file(new URL("../src/components/PrPanel.tsx", import.met
 /** Comments out, so a word in prose does not satisfy or fail a guard. */
 const code = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
 
+const list = code(await Bun.file(new URL("../src/components/PinList.tsx", import.meta.url)).text());
+
 /** The menu's own source, to its closing brace. */
 const menu = (() => {
   const a = panel.indexOf("function PinMenu(");
@@ -102,23 +104,32 @@ describe("the pin menu in source", () => {
 
   it("opens an anchored menu 420px wide whose list scrolls on its own", () => {
     expect(menu).toContain("<AnchoredMenu");
-    expect(panel).toContain("const PIN_MENU_W = 420;");
-    expect(menu).toContain("overflow-y-auto");
-    expect(menu).toContain("maxHeight: 336");
+    expect(list).toContain("export const PIN_MENU_W = 420;");
+    expect(list).toContain("overflow-y-auto");
+    expect(list).toContain("maxHeight: 336");
   });
 
   it("the filter box appears past eight pins", () => {
-    expect(panel).toContain("const PIN_FILTER_FROM = 8;");
-    expect(menu).toContain("pinned.length > PIN_FILTER_FROM");
-    expect(menu).toContain("filterPins(pinned, q)");
+    expect(list).toContain("export const PIN_FILTER_FROM = 8;");
+    expect(list).toContain("pins.length > PIN_FILTER_FROM");
+    expect(list).toContain("filterPins(pins, q)");
   });
 
   it("a row opens the pull request and the x unpins without closing the menu", () => {
-    expect(menu).toContain("onOpen(p.number)");
-    expect(menu).toContain("aria-label={`Unpin #${p.number}`}");
-    expect(menu).toContain("togglePin(p.repo, p.number, p.title)");
-    const unpin = menu.slice(menu.indexOf("togglePin(p.repo"));
+    expect(list).toContain("onClick={() => onOpen(p)}");
+    expect(list).toContain("aria-label={`Unpin #${p.number}`}");
+    expect(list).toContain("togglePin(p.repo, p.number, p.title)");
+    const unpin = list.slice(list.indexOf("togglePin(p.repo"));
     expect(unpin.slice(0, unpin.indexOf("</button>"))).not.toContain("close()");
+  });
+
+  it("the Terminal bar opens the very same list, not a copy", async () => {
+    // The button moved out of TerminalPanel into the strip's own file; the list
+    // it opens is still PinList itself.
+    const strip = await Bun.file(new URL("../src/components/terminal/StripButtons.tsx", import.meta.url)).text();
+    expect(code(strip)).toContain("<PinList ");
+    expect(menu).toContain("<PinList ");
+    expect(code(strip)).not.toContain("PinStateIcon");
   });
 
   it("closes itself when the last pin goes", () => {

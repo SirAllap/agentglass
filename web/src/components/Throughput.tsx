@@ -29,7 +29,7 @@ export function Throughput({ events }: { events: WatchEvent[] }) {
         </div>
       }
     >
-      <div className="h-full w-full min-h-[120px] relative">
+      <div className="h-full w-full min-h-[48px] relative">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={data} margin={{ top: 6, right: 0, left: 0, bottom: 0 }}>
             <defs>

@@ -12,8 +12,8 @@ const bar = code(read("../src/components/PrFilterBar.tsx"));
 const css = read("../src/index.css");
 
 describe("the pull-request list header is one bar", () => {
-  it("the header wraps in the list view and keeps its fixed height in the detail view", () => {
-    expect(panel).toContain('selected == null ? "agx-prbar flex-wrap gap-y-1.5" : ""');
+  it("the header wraps in the list view (docked included) and keeps its fixed height in full screen", () => {
+    expect(panel).toContain('layout.listBar ? "agx-prbar flex-wrap gap-y-1.5" : ""');
     expect(panel).toContain('{ ...viewHeaderStyle, height: "auto", maxHeight: "none"');
   });
 
@@ -34,13 +34,13 @@ describe("the pull-request list header is one bar", () => {
   });
 
   it("the search says one short thing in the box and the whole syntax in a popover", () => {
-    expect(bar).toContain("scoped ? scoped.placeholder : SEARCH_PLACEHOLDER");
-    expect(bar).toContain("focused && !menuOpen && !scoped");
+    expect(bar).toContain("searchPlaceholder(repo)");
+    expect(bar).toContain("focused && !menuOpen && !panelOpen");
   });
 
-  it("Sort and Save left the bar for the \"⋯\" menu; the builder has no button of its own", () => {
+  it("Sort and Save left the bar for the \"⋯\" menu; the views bar is the one control the bar is handed", () => {
     expect(bar).not.toContain("FacetMenu");
-    expect(panel).toContain("<FilterBuilder bare");
+    expect(panel).toContain("<PrViewsBar api={viewsApi}");
   });
 
   it("under 1500px the search takes a line of its own and the controls keep their places", () => {

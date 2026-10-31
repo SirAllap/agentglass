@@ -144,7 +144,7 @@ const saveRef = (root: string, ref: string) => {
 };
 
 export function FilePalette({
-  open, onClose, onOpenFile, onBench, onRevealDir, onOpenBrowser, target,
+  open, onClose, onOpenFile, onBench, onOpenBrowser, target,
 }: {
   open: boolean;
   /** Somewhere to be when it opens: a path clicked in a terminal. Each new `n`
@@ -157,8 +157,6 @@ export function FilePalette({
   onOpenFile: (root: string, rel: string, branch: string, ref?: string) => void | Promise<void>;
   /** A file on disk, on the bench. */
   onBench: (open: BenchOpen) => void;
-  /** A folder is a place: go to Files and walk the tree there. */
-  onRevealDir: (root: string, dir: string) => void;
   /** Show an address in the app's own browser. Absent where there is none, and
    *  the system's default opener takes the file instead. */
   onOpenBrowser?: (url: string) => void;
@@ -659,11 +657,10 @@ export function FilePalette({
     /*
      * On the machine tab a folder is not somewhere to GO.
      *
-     * Everywhere else a folder opens the Files view at that path, and the Files
-     * view is bounded by the open project — pointing it at ~/Documents would
-     * come back refused, which is a dead row wearing a name. So here a folder
-     * narrows the search to itself, which is what picking one meant anyway:
-     * "in there".
+     * Everywhere else a folder is browsed into, bounded by the open project —
+     * pointing that at ~/Documents would come back refused, which is a dead row
+     * wearing a name. So here a folder narrows the search to itself, which is
+     * what picking one meant anyway: "in there".
      */
     if (tab === "machine") {
       if (!place) return;
@@ -688,9 +685,6 @@ export function FilePalette({
     }
     if (!root) return;
     if (row.kind === "dir") {
-      // ⌘⏎ still hands it to the Files view, which is a different thing to
-      // want: that one is a place to work, this is a look inside.
-      if (secondary) { onRevealDir(root, row.rel); onClose(); return; }
       setBrowsePath(`${root.replace(/\/+$/, "")}/${row.rel}`);
       setQ(""); inputRef.current?.focus();
       return;
@@ -703,7 +697,7 @@ export function FilePalette({
     if (!ref) remember(root, row.rel);
     if (secondary) { benchRow(row); return; }
     if (!click) focusViewer();
-  }, [tab, at, place, root, ref, onRevealDir, onClose, viewRows, viewImage, jump, benchRow, focusViewer]);
+  }, [tab, at, place, root, ref, onClose, viewRows, viewImage, jump, benchRow, focusViewer]);
 
   const onKey = (e: React.KeyboardEvent) => {
     // The viewer owns the keys while it is up — it listens on window, first.
@@ -746,8 +740,8 @@ export function FilePalette({
       }
       return;
     }
-    // ⌘⏎ / ctrl+⏎ is the second thing a row can do: the editor for a picture,
-    // the Files view for a folder. One key, one meaning — "not the obvious one".
+    // ⌘⏎ / ctrl+⏎ is the second thing a row can do: the editor for a picture.
+    // One key, one meaning — "not the obvious one".
     if (e.key === "Enter") { e.preventDefault(); openRow(shown[cursor], e.metaKey || e.ctrlKey); return; }
     if (e.key === "Escape") {
       e.preventDefault(); e.stopPropagation();

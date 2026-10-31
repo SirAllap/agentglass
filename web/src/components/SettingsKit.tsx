@@ -19,7 +19,7 @@ import { useId, useState, type ReactNode } from "react";
 import { CaretIcon, DoneIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import type { SavePhase } from "../lib/settingsStates.ts";
 import { ICON } from "../lib/iconSize.ts";
-import { Button, CHIP_SURFACE, CHIP_SURFACE_CLS, CTRL_H } from "./workspace/Chrome.tsx";
+import { Button } from "./workspace/Chrome.tsx";
 import { Ticks } from "./Ticks.tsx";
 
 /**
@@ -103,31 +103,6 @@ export function SettingsCard({ title, desc, status, actions, children, label, fo
       {head && <div className="agx-scard-head">{head}</div>}
       <div className="agx-scard-body">{children}</div>
     </section>
-  );
-}
-
-/**
- * The segmented control: an inset track with the chosen option raised on the
- * page's ground. For a short, exclusive choice that belongs in a row's control
- * column: Window's display size, a 12h/24h clock, a preset. `label` names the
- * question for a screen reader. Not a tab bar: it swaps a value, not a panel.
- */
-export function SegControl<T extends string>({ value, options, onPick, label, disabled }: {
-  value: T | undefined;
-  options: readonly { v: T; label: ReactNode }[];
-  onPick: (v: T) => void;
-  label: string;
-  disabled?: boolean;
-}) {
-  return (
-    <span className="agx-seg" role="group" aria-label={label}>
-      {options.map((o) => (
-        <button key={o.v} type="button" onClick={() => onPick(o.v)} disabled={disabled}
-          aria-pressed={value === o.v} className="agx-seg-b disabled:cursor-not-allowed">
-          {o.label}
-        </button>
-      ))}
-    </span>
   );
 }
 
@@ -262,9 +237,13 @@ export function SettingsForm({ onSubmit, children, label }: {
  * on the label's line. `error` replaces nothing — it is added under the help
  * and announced.
  */
-export function Field({ label, help, link, error, children, htmlFor }: {
+export function Field({ label, help, hint, block, link, error, children, htmlFor }: {
   label: string;
   help?: ReactNode;
+  /** The line that answers "what do I put here" ABOVE the control, as the Finder, Merge and Machine forms had it: read before typing. `help` stays below. */
+  hint?: ReactNode;
+  /** The control fills the field's width. Without it a select is its natural width and an input still fills (see index.css). */
+  block?: boolean;
   link?: { href: string; text: string };
   error?: string | null;
   /** The control. It must carry `id={htmlFor}` so the label names it. */
@@ -273,13 +252,14 @@ export function Field({ label, help, link, error, children, htmlFor }: {
 }) {
   const helpId = `${htmlFor}-help`;
   return (
-    <div className="agx-field">
+    <div className="agx-field" data-block={block || undefined}>
       <div className="agx-field-top">
         <label htmlFor={htmlFor} className="agx-field-l">{label}</label>
         {link && (
           <a href={link.href} target="_blank" rel="noreferrer" className="agx-field-link">{link.text} ↗</a>
         )}
       </div>
+      {hint && <div className="agx-field-h">{hint}</div>}
       {children}
       {help && <div id={helpId} className="agx-field-h">{help}</div>}
       {error && <div role="alert" className="agx-field-e">{error}</div>}
@@ -304,14 +284,8 @@ export function EmptyState({ children }: { children: ReactNode }) {
  * edge and fill, so a row's one action looks the same whether it runs here
  * or opens a page. The arrow says it opens elsewhere.
  */
-export function LinkButton({ href, children }: { href: string; children: ReactNode }) {
-  return (
-    <a href={href} target="_blank" rel="noreferrer noopener"
-      className={`agx-btn ${CHIP_SURFACE_CLS} inline-flex items-center justify-center rounded-lg whitespace-nowrap leading-none text-[11px] px-2.5`}
-      style={{ height: CTRL_H.regular, ...CHIP_SURFACE, fontWeight: 500 }}>
-      {children} ↗
-    </a>
-  );
+export function LinkButton({ href, children, quiet }: { href: string; children: ReactNode; /** No fill or edge: for a toolbar, where a box per link is noise. */ quiet?: boolean }) {
+  return <Button href={href} tone={quiet ? "quiet" : "plain"}>{children} ↗</Button>;
 }
 
 /** A Select wide enough for its longest option: the default trigger caps at
@@ -369,11 +343,5 @@ export function CheckRow({ tone, label, value }: { tone: "ok" | "warn" | "err" |
  * open anything or leave the app, so it has no arrow and no new tab: the browser downloads it.
  */
 export function DownloadButton({ href, download, children }: { href: string; download: string; children: ReactNode }) {
-  return (
-    <a href={href} download={download}
-      className={`agx-btn ${CHIP_SURFACE_CLS} inline-flex items-center justify-center rounded-lg whitespace-nowrap leading-none text-[11px] px-2.5`}
-      style={{ height: CTRL_H.regular, ...CHIP_SURFACE, fontWeight: 500 }}>
-      {children}
-    </a>
-  );
+  return <Button href={href} download={download}>{children}</Button>;
 }

@@ -408,7 +408,7 @@ function HistoryRow({ n, onGone, onGoto, onMute }: {
     if (!g || g.kind === "git" || g.kind === "card") return null;
     if (g.kind === "pr") return { label: `${g.repo}#${g.number}`, title: `Open ${g.repo}#${g.number}` };
     if (g.kind === "pane") return { label: "The terminal", title: "Go to the pane this is about" };
-    if (g.kind === "file") return { label: "The file", title: `Open ${g.path} in Files` };
+    if (g.kind === "file") return { label: "The file", title: `Open ${g.path} in the Finder` };
     return { label: "Settings", title: `Open Settings · ${g.pane}` };
   })();
   /*

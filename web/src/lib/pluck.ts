@@ -16,7 +16,7 @@
  * printed; de-duplicated, because a path an agent edits appears eight times.
  */
 
-export type PluckKind = "path" | "url" | "hash" | "uuid" | "ref";
+export type PluckKind = "path" | "url" | "hash" | "uuid" | "ref" | "card";
 export interface Pluck { text: string; kind: PluckKind; row: number }
 
 /** One logical line per row-run: wrapped continuations joined to their head. */
@@ -34,9 +34,16 @@ const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\
 const HASH_RE = /\b[0-9a-f]{7,40}\b/g;
 /** Absolute, home-relative or explicitly relative paths, and bare
  *  `dir/file.ext(:line(:col))` shapes — the way tools print them. */
-const PATH_RE = /(?:~|\.{1,2})?\/[\w.@+-][\w.@+\-/]*(?::\d+(?::\d+)?)?|\b[\w.@+-]+(?:\/[\w.@+-]+)+\.[A-Za-z0-9]{1,8}(?::\d+(?::\d+)?)?/g;
+const PATH_RE = /(?<![\w.@+-])(?:~|\.{1,2})?\/[\w.@+-][\w.@+\-/]*(?::\d+(?::\d+)?)?|\b[\w.@+-]+(?:\/[\w.@+-]+)+\.[A-Za-z0-9]{1,8}(?::\d+(?::\d+)?)?/g;
 /** Branch-ish refs: `feat/…`, `fix/…`, `origin/…`. */
 const REF_RE = /\b(?:feat|fix|chore|docs|test|refactor|origin|release|hotfix)\/[\w.\-/]+/g;
+
+/** A tracker card's id as people say it: `ORBIT-1042`. Letters then a dash then digits, with a bound on each
+ *  so `UTF-8` and `SHA-256` (digits that are not a card) need the letters to be 2+ and the number to be 1-6 long. */
+const CARD_RE = /\b[A-Z][A-Z0-9]{1,9}-\d{1,6}\b/g;
+
+/** Names that have the shape of a card id and are not one. */
+const NOT_A_CARD = /^(?:UTF|SHA|MD|ISO|RFC|TLS|SSL|AES|RSA|CVE|HTTP|X|ES)-?\d/;
 
 const trimEnd = (s: string) => s.replace(/[.,;:)\]}'"`]+$/, "");
 
@@ -64,6 +71,7 @@ export function pluckTokens(rows: { text: string; wrapped: boolean }[], max = 26
       add(t, "path", row);
     }
     for (const m of rest.matchAll(REF_RE)) add(m[0]!, "ref", row);
+    for (const m of rest.matchAll(CARD_RE)) if (!NOT_A_CARD.test(m[0]!)) add(m[0]!, "card", row);
     /* And the ids blanked before the hashes: a UUID's first block is eight
        hex digits, which is exactly what a short commit hash looks like. */
     const noIds = rest.replace(UUID_RE, (m) => " ".repeat(m.length));

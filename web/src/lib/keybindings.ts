@@ -16,30 +16,25 @@ import { VIEWS, workIds, type ViewId } from "../components/workspace/views.ts";
 export type ActionId =
   | `view.${ViewId}`
   | "open.help"
-  | "open.stats"
-  | "open.skills"
-  | "open.search";
+  | "open.skills";
 
 export type Binding = { id: ActionId; label: string; hint: string; key: string };
 
-/** Defaults come from VIEWS so the rail, the palette and this cannot drift. */
+/** Defaults come from VIEWS so the rail, the palette and this cannot drift.
+ *  A modal entry (Skills) has no view.* binding: `open.skills` is its key. */
 export const DEFAULTS: Record<ActionId, string> = {
-  ...(Object.fromEntries(VIEWS.map((v) => [`view.${v.id}`, v.key])) as Record<`view.${ViewId}`, string>),
+  ...(Object.fromEntries(VIEWS.filter((v) => !v.modal).map((v) => [`view.${v.id}`, v.key])) as Record<`view.${ViewId}`, string>),
   "open.help": "?",
-  "open.stats": "s",
   "open.skills": "k",
-  "open.search": "/",
 };
 
 /** A key row's name on the Shortcuts page: the group is already the card's title. */
 export const keyRowName = (id: ActionId): string => LABELS[id].label.replace(/^Workspace — /, "");
 
 export const LABELS: Record<ActionId, { label: string; hint: string }> = {
-  ...(Object.fromEntries(VIEWS.map((v) => [`view.${v.id}`, { label: `Workspace — ${v.label}`, hint: v.hint }])) as Record<`view.${ViewId}`, { label: string; hint: string }>),
+  ...(Object.fromEntries(VIEWS.filter((v) => !v.modal).map((v) => [`view.${v.id}`, { label: `Workspace — ${v.label}`, hint: v.hint }])) as Record<`view.${ViewId}`, { label: string; hint: string }>),
   "open.help": { label: "Legend & shortcuts", hint: "what the colours mean, and every key binding" },
-  "open.stats": { label: "Statistics", hint: "totals, tool latency and cost breakdowns" },
   "open.skills": { label: "Skills catalog", hint: "every skill the fleet has available" },
-  "open.search": { label: "Search", hint: "find a session, a file or an error" },
 };
 
 const KEY = "agentglass.keybindings";
@@ -318,7 +313,7 @@ function persistChords() {
  * else's. If it collides with something in your shell you must be able to move
  * it, and that is a preference, not a fault.
  */
-export type AppChordId = "files.palette" | "bench.toggle" | "pane.git" | "pane.diff" | "pane.pr" | "pane.card" | "windows.switcher";
+export type AppChordId = "files.palette" | "bench.toggle" | "pane.git" | "pane.diff" | "pane.pr" | "pane.card" | "windows.switcher" | "windows.waiting" | "terminal.newshell";
 
 /**
  * Ctrl+Shift+P, not Ctrl+P — the same reasoning as isFindChord in termKeys.ts.
@@ -381,6 +376,16 @@ export const APP_CHORD_DEFAULTS: Record<AppChordId, string> = {
    * that is pressed all day; it is rebindable for whoever uses either.
    */
   "windows.switcher": "mod+alt+j",
+  /*
+   * Ctrl+Alt+N: the window waiting for you, then the next one. Alt is what keeps
+   * it out of the shell's way, as with the other Ctrl+Alt chords here.
+   */
+  "windows.waiting": "mod+alt+n",
+  /*
+   * Ctrl+Shift+T, the new-tab key of every terminal that has tabs. Plain Ctrl+T
+   * is readline's transpose-chars, so the shifted form, like find and pluck.
+   */
+  "terminal.newshell": "mod+shift+t",
 };
 
 export const APP_CHORD_LABELS: Record<AppChordId, { label: string; hint: string }> = {
@@ -411,6 +416,14 @@ export const APP_CHORD_LABELS: Record<AppChordId, { label: string; hint: string 
   "windows.switcher": {
     label: "Go to a window",
     hint: "Every tmux window, the ones waiting for you first.",
+  },
+  "windows.waiting": {
+    label: "Jump to the window that needs you",
+    hint: "The next window waiting on you, in any project.",
+  },
+  "terminal.newshell": {
+    label: "New terminal window",
+    hint: "A new tmux window in the terminal.",
   },
 };
 

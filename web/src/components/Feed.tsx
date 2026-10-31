@@ -8,7 +8,7 @@ import { fmtTime, fmtMs, fmtUsd, agentKey, hashColor } from "../lib/format.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { ChartIcon, CopyIcon, CrossIcon, ExpandIcon, IconLabel } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, EDGE, Badge, Button } from "./workspace/Chrome.tsx";
 
 type Category = "all" | "tools" | "chat" | "alerts";
 
@@ -122,17 +122,17 @@ function EventRowInner({ row, onSelect, compact }: { row: Row; onSelect?: (e: Wa
       )}
       <span className="shrink-0 font-medium" style={{ color: f.color }}>{f.verb}</span>
       {e.tool_name && (
-        <span className="chip shrink-0" style={{ color: "var(--info-ink)", background: "color-mix(in srgb, var(--info) 10%, transparent)" }}>{e.tool_name}</span>
+        <Badge outlined tint="var(--info-ink)" fill="var(--info)">{e.tool_name}</Badge>
       )}
-      {d && <span className="truncate min-w-0" style={{ color: "var(--text2)" }} title={d}>{d}</span>}
+      {d && <span className="truncate min-w-0" style={{ color: "var(--text2)" }} data-tip={d}>{d}</span>}
       {running && <span className="shrink-0 t-dim2 animate-pulse">…</span>}
       {count > 1 && (
-        <span className="chip shrink-0" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>×{count}</span>
+        <Badge outlined tint="var(--warning-ink)" fill="var(--warning)">×{count}</Badge>
       )}
       {e.duration_ms != null && <span className="t-dim2 shrink-0">{fmtMs(e.duration_ms)}</span>}
       {e.cost_usd > 0 && <span className="shrink-0" style={{ color: "var(--success-ink)" }}>{fmtUsd(e.cost_usd)}</span>}
       {/* in a lane the column header already names the agent — the per-row tag is noise there */}
-      {!compact && <span className="ml-auto shrink-0 truncate max-w-[120px]" style={{ color: `color-mix(in srgb, ${aColor} 75%, var(--text4))` }} title={aKey}>{aKey}</span>}
+      {!compact && <span className="ml-auto shrink-0 truncate max-w-[120px]" style={{ color: `color-mix(in srgb, ${aColor} 75%, var(--text4))` }} data-tip={aKey}>{aKey}</span>}
     </motion.div>
   );
 }
@@ -173,7 +173,7 @@ function Lane({ aKey, rows, onSelect }: { aKey: string; rows: Row[]; onSelect?: 
     <div className="flex flex-col min-w-0 min-h-0 rounded-lg" style={{ border: EDGE, background: "color-mix(in srgb, var(--bg3) 88%, var(--bg))" }}>
       <div className="flex items-center gap-1.5 px-2 py-1.5 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
         <span className="h-2 w-2 rounded-full shrink-0" style={{ background: color, boxShadow: `0 0 6px ${color}` }} />
-        <span className="text-[10.5px] font-medium truncate" style={{ color: `color-mix(in srgb, ${color} 75%, var(--text))` }} title={aKey}>{aKey}</span>
+        <span className="text-[10.5px] font-medium truncate" style={{ color: `color-mix(in srgb, ${color} 75%, var(--text))` }} data-tip={aKey}>{aKey}</span>
         <span className="ml-auto text-[9.5px] t-dim2 tabular-nums shrink-0">{rows.length}</span>
       </div>
       <div ref={ref} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-1 py-0.5">
@@ -303,23 +303,19 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
       <span aria-hidden className="flex"><CopyIcon size={ICON.xs} /></span>
       <span className="font-semibold">Filtered</span>
       {filter.app && (
-        <span className="chip" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 22%, transparent)", borderColor: "color-mix(in srgb, var(--primary) 55%, transparent)" }}>
+        <Badge outlined tint="var(--primary-hover)" fill="var(--primary)" wash={22}>
           App: {filter.app}
-        </span>
+        </Badge>
       )}
       {filter.type && (
-        <span className="chip" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 22%, transparent)", borderColor: "color-mix(in srgb, var(--primary) 55%, transparent)" }}>
+        <Badge outlined tint="var(--primary-hover)" fill="var(--primary)" wash={22}>
           Event: {filter.type}
-        </span>
+        </Badge>
       )}
       <span className="t-dim2 tabular-nums">· {rows.length} shown</span>
-      <button
-        onClick={onClearFilter}
-        className="ml-auto flex items-center gap-1 rounded-md px-2 py-0.5 font-semibold cursor-pointer"
-        style={{ color: "var(--on-primary)", background: "var(--primary)" }}
-      >
-        <span className="inline-flex items-center gap-1">Clear<CrossIcon size={ICON.xs} /></span>
-      </button>
+      <Button tone="primary" size="compact" className="ml-auto" onClick={onClearFilter}>
+        Clear<CrossIcon size={ICON.xs} />
+      </Button>
     </div>
   );
 
@@ -330,37 +326,18 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search events — type to filter (regex ok, e.g. tool.*fail)"
+            placeholder="Filter events"
+            title="Type to filter events. Regex works, e.g. tool.*fail"
             className={`flex-1 min-w-0 ${INPUT}`}
             style={INPUT_STYLE}
           />
           <div className="flex gap-1 shrink-0">
             {CATS.map((c) => (
-              <button
-                key={c.key}
-                onClick={() => setCat(c.key)}
-                className="chip cursor-pointer"
-                style={
-                  cat === c.key
-                    ? { color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", borderColor: "color-mix(in srgb, var(--primary) 50%, transparent)" }
-                    : { color: "var(--text4)" }
-                }
-              >
-                {c.label}
-              </button>
+              <Button key={c.key} size="compact" on={cat === c.key} aria-pressed={cat === c.key} onClick={() => setCat(c.key)}>{c.label}</Button>
             ))}
-            <button
-              onClick={() => setLanes((l) => !l)}
-              title="One column per session — parallel sessions get their own lane"
-              className="chip cursor-pointer"
-              style={
-                lanes
-                  ? { color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", borderColor: "color-mix(in srgb, var(--primary) 50%, transparent)" }
-                  : { color: "var(--text4)" }
-              }
-            >
+            <Button size="compact" on={lanes} aria-pressed={lanes} onClick={() => setLanes((l) => !l)} title="One column per session — parallel sessions get their own lane">
               <IconLabel icon={<ChartIcon size={ICON.xs} />}>Lanes</IconLabel>
-            </button>
+            </Button>
           </div>
         </div>
         {lanes ? (
@@ -393,14 +370,9 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
         right={
           <div className="flex items-center gap-2.5">
             {!full && followToggle}
-            <button
-              title="Fullscreen — expand the live feed (Esc closes)"
-              onClick={() => setFull(true)}
-              className="chip cursor-pointer"
-              style={{ color: "var(--text3)" }}
-            >
+            <Button tone="quiet" size="compact" title="Fullscreen — expand the live feed (Esc closes)" onClick={() => setFull(true)}>
               <IconLabel icon={<ExpandIcon size={ICON.xs} />}>Expand</IconLabel>
-            </button>
+            </Button>
           </div>
         }
       >
@@ -428,7 +400,7 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
                 >
                   <div className="flex items-center justify-between px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                     <div>
-                      <div className="panel-eyebrow">Live</div>
+                      <div className="panel-eyebrow">Live events</div>
                       <div className="panel-title">Live events</div>
                     </div>
                     <div className="flex items-center gap-3">
