@@ -55,3 +55,22 @@ test("split rows drop the marker and keep the pair aligned", () => {
   // The added side is line 2 of the new file, not 3.
   expect(out[1]!.r!.num).toBe(2);
 });
+
+test("a binary file's word comes from its status, not its +/- counts (always 0)", async () => {
+  const { binaryWord } = await import("../src/lib/changeRows.ts");
+  expect(binaryWord("modified")).toBe("changed");
+  expect(binaryWord("added")).toBe("added");
+  expect(binaryWord("untracked")).toBe("added");
+  expect(binaryWord("deleted")).toBe("deleted");
+});
+
+test("a diff asked for by path alone carries the rename's old path", async () => {
+  const { oldPathFor } = await import("../src/lib/changeRows.ts");
+  const rows = [
+    { repoRoot: "/w/orbit", path: "new.ts", oldPath: "old.ts" },
+    { repoRoot: "/w/orbit", path: "same.ts" },
+  ] as never;
+  expect(oldPathFor(rows, "/w/orbit", "new.ts")).toBe("old.ts");
+  expect(oldPathFor(rows, "/w/orbit", "same.ts")).toBeUndefined();
+  expect(oldPathFor(rows, "/w/other", "new.ts")).toBeUndefined();
+});

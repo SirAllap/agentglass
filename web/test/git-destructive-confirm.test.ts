@@ -37,12 +37,20 @@ describe("destructive git actions ask first", () => {
     const askAt = body.indexOf("await ask(");
     expect(askAt).toBeGreaterThan(-1);
     expect(body).toContain("danger: true");
-    expect(body.indexOf("api.gitMergeAbort(")).toBeGreaterThan(askAt);
+    // A bisect has nothing to lose and ends before the question; the abort that
+    // follows the question is the last call, and it is the only other one.
+    const calls = [...body.matchAll(/api\.gitMergeAbort\(/g)].map((m) => m.index!);
+    expect(calls.length).toBe(2);
+    expect(body.slice(0, calls[0])).toMatch(/mergeState === "bisecting"\) \{ void act\(\(\) => $/);
+    expect(calls[0]).toBeLessThan(askAt);
+    expect(calls[1]).toBeGreaterThan(askAt);
     expect(body).toContain("api.gitMergeSession(");
   });
 
   test("the abort button calls abortMerge, not the api directly", () => {
-    expect(src).toMatch(/onClick=\{abortMerge\}/);
+    // The strip's button gets it as onAbort and fires it with onClick={onAbort}.
+    expect(src).toMatch(/<StateBanner [^>]*onAbort=\{abortMerge\}/);
+    expect(readFileSync(new URL("../src/components/GitHeader.tsx", import.meta.url), "utf8")).toMatch(/data-banner-abort onClick=\{onAbort\}/);
     expect(src).not.toMatch(/onClick=\{\(\) => act\(\(\) => api\.gitMergeAbort/);
   });
 

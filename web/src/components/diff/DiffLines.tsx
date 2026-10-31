@@ -561,7 +561,10 @@ export function UnifiedDiff({ c, hunks, wrap, hunkAction, rowAfter, onPick, canP
 /* The scrolling panes below are size containers (`container-type: inline-size`)
    so a card under a line can be as wide as the pane you SEE rather than as wide
    as the code, which is wider whenever one line is long: `100cqw` is the pane. */
-export function SplitDiff({ c, hunks, wrap, rowAfter, onPick, canPick, sel, gapRow }: DiffProps) {
+/** The hunk header's height when it carries buttons (an 18px button plus padding). */
+const HUNK_BAR_H = 24;
+
+export function SplitDiff({ c, hunks, wrap, hunkAction, rowAfter, onPick, canPick, sel, gapRow }: DiffProps & { hunkAction?: (hunkIndex: number) => ReactNode }) {
   const source = hunks ?? c?.hunks ?? NO_HUNKS;
   const built = useMemo(() => source.map((h) => ({ h, rows: splitRows(h) })), [source]);
   const gw = useMemo(() => gutterWidth(source.reduce((n, h) => Math.max(n, h.oldStart + h.oldLines, h.newStart + h.newLines), 0)), [source]);
@@ -602,8 +605,16 @@ export function SplitDiff({ c, hunks, wrap, rowAfter, onPick, canPick, sel, gapR
     {built.map(({ h, rows }, hi) => (
       <div key={hi}>
         {gapAt(which, hi)}
-        <div data-hunk className="z-10 py-0.5 t-dim2 whitespace-pre" style={{ position: "var(--agx-hunk-pos, sticky)" as CSSProperties["position"], top: "var(--agx-hunk-top, 0px)", background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
-          <span className="sticky left-0 inline-block px-3">@@ -{h.oldStart},{h.oldLines} +{h.newStart},{h.newLines} @@</span>
+        <div data-hunk className="z-10 py-0.5 t-dim2 whitespace-pre" style={{ minHeight: hunkAction ? HUNK_BAR_H : undefined, position: "var(--agx-hunk-pos, sticky)" as CSSProperties["position"], top: "var(--agx-hunk-top, 0px)", background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
+          {/* A flex row as wide as the pane (100cqw: the scroller is a size container),
+              so the title truncates and the buttons are never pushed past the edge. */}
+          <span className="sticky left-0 flex items-center gap-3 px-3 box-border" style={{ width: "100cqw" }}>
+            <span className="min-w-0 flex-1 truncate">@@ -{h.oldStart},{h.oldLines} +{h.newStart},{h.newLines} @@</span>
+            {/* Operable on the right column only. The left header has the same
+                min-height (HUNK_BAR_H) instead of an invisible copy of the
+                buttons, so the two rows match with one set in the DOM. */}
+            {hunkAction && which === "r" && <span className="shrink-0">{hunkAction(hi)}</span>}
+          </span>
         </div>
         {rows.map((row, ri) => {
           const cell = which === "l" ? row.l : row.r;
@@ -643,8 +654,9 @@ export function SplitDiff({ c, hunks, wrap, rowAfter, onPick, canPick, sel, gapR
         {built.map(({ h, rows }, hi) => (
           <div key={hi}>
             {gapRow?.(hi)}
-            <div data-hunk className="z-10 px-3 py-0.5 t-dim2 whitespace-pre" style={{ position: "var(--agx-hunk-pos, sticky)" as CSSProperties["position"], top: "var(--agx-hunk-top, 0px)", background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
-              @@ -{h.oldStart},{h.oldLines} +{h.newStart},{h.newLines} @@
+            <div data-hunk className="z-10 px-3 py-0.5 t-dim2 whitespace-pre inline-flex items-center gap-3 w-full" style={{ position: "var(--agx-hunk-pos, sticky)" as CSSProperties["position"], top: "var(--agx-hunk-top, 0px)", background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
+              <span>@@ -{h.oldStart},{h.oldLines} +{h.newStart},{h.newLines} @@</span>
+              {hunkAction && hunkAction(hi)}
             </div>
             <div className="grid" style={{ gridTemplateColumns: `${gw} minmax(0,1fr) ${gw} minmax(0,1fr)` }}>
               {rows.map((row, ri) => {

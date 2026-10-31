@@ -252,11 +252,14 @@ async function ignoredSet(root: string, paths: string[]): Promise<Set<string>> {
   /* `--no-index` is the whole point: without it, check-ignore answers nothing
      for a TRACKED path, and a tracked path matching .gitignore is exactly the
      case worth flagging — a file that was force-added. Paths go as arguments
-     rather than on stdin because gitAsync spawns without one. */
-  const r = await gitAsync(root, ["check-ignore", "--no-index", "-z", "--", ...paths.slice(0, 500)]);
+     rather than on stdin because gitAsync spawns without one — which is also why
+     there is no `-z`: git refuses it without `--stdin`, and answers nothing.
+     shortcut: a path with a newline or a quote comes back c-quoted and is not
+     flagged; upgrade when gitAsync can feed stdin. */
+  const r = await gitAsync(root, ["-c", "core.quotePath=false", "check-ignore", "--no-index", "--", ...paths.slice(0, 500)]);
   // Exit 1 means "none of them", which is the ordinary answer and not an error.
   if (!r.stdout) return new Set();
-  return new Set(r.stdout.split("\0").filter(Boolean));
+  return new Set(r.stdout.split("\n").filter(Boolean));
 }
 
 /**
@@ -409,6 +412,21 @@ function sigOf(root: string, path: string, mode: Mode, commit: string): string {
 }
 
 /**
+ * The pathspecs of one file's diff.
+ *
+ * A rename's old path rides along as a second pathspec. Limited to the new
+ * path alone, git has no old side to pair it with and reports the whole file
+ * as added — twelve lines of "+" for a move that changed nothing. The old path
+ * came off the wire: it must resolve inside the repository and cannot look like
+ * an option or pathspec magic (`:(top)`), or it falls back to the new path
+ * alone. The diffs that use this also run with literal pathspecs.
+ */
+export function diffSpecs(root: string, path: string, oldPath: string): string[] {
+  const ok = oldPath && !/^[-:]/.test(oldPath) && resolve(root, oldPath).startsWith(root + sep);
+  return ok ? ["-M", "--", oldPath, path] : ["--", path];
+}
+
+/**
  * The diff of one file, which is the only diff anybody is reading.
  *
  * Working mode diffs against HEAD rather than running the staged and unstaged
@@ -416,7 +434,7 @@ function sigOf(root: string, path: string, mode: Mode, commit: string): string {
  * last commit", and splitting that in two is a staging question, which the Git
  * panel is for.
  */
-export async function fileDiff(rootIn: string, path: string, mode: Mode): Promise<FileDiff> {
+export async function fileDiff(rootIn: string, path: string, mode: Mode, oldPath = ""): Promise<FileDiff> {
   const root = rootIn;
   const key = `${root}\0${path}`;
   const abs = resolve(root, path);
@@ -425,13 +443,14 @@ export async function fileDiff(rootIn: string, path: string, mode: Mode): Promis
   if (abs !== root && !abs.startsWith(root + sep)) {
     return { key, sig: "", hunks: [], truncated: false, binary: false, error: "path outside the repository" };
   }
+  const specs = diffSpecs(root, path, oldPath);
 
   if (mode === "committed") {
     const head = (await gitAsync(root, ["rev-list", "--no-merges", "--max-count=1", "HEAD"])).stdout.trim();
     if (!head) return { key, sig: "", hunks: [], truncated: false, binary: false, error: "no commits" };
     const parent = await gitAsync(root, ["rev-parse", "--verify", "--quiet", `${head}^`]);
     const from = parent.stdout.trim() ? `${head}^` : EMPTY_TREE;
-    const r = await gitAsync(root, ["-c", "core.quotePath=false", "diff", from, head, "--", path]);
+    const r = await gitAsync(root, ["-c", "core.quotePath=false", "-c", "core.literalPathspecs=true", "diff", from, head, ...specs]);
     return finish(key, sigOf(root, path, mode, head), r.stdout, r.code, r.stderr);
   }
 
@@ -453,7 +472,7 @@ export async function fileDiff(rootIn: string, path: string, mode: Mode): Promis
     const u = untrackedDiff(abs);
     return { key, sig: sigOf(root, path, mode, ""), ...u };
   }
-  const r = await gitAsync(root, ["-c", "core.quotePath=false", "diff", "HEAD", "--", path]);
+  const r = await gitAsync(root, ["-c", "core.quotePath=false", "-c", "core.literalPathspecs=true", "diff", "HEAD", ...specs]);
   return finish(key, sigOf(root, path, mode, ""), r.stdout, r.code, r.stderr);
 }
 

@@ -50,6 +50,16 @@ const SAFETY_MS = 15_000;
  *  its id did not depend on content, editing a file with the view open changed
  *  nothing on screen — the list, the numbers and the diff all stayed as they
  *  were until it was closed and reopened. */
+/** What happened to a binary file. Its +/- counts are always 0, so they say nothing. */
+export function binaryWord(status: ChangeRow["status"]): string {
+  return status === "added" || status === "untracked" ? "added" : status === "deleted" ? "deleted" : "changed";
+}
+
+/** The rename source of a listed file, so a diff asked for by path alone still pairs it. */
+export function oldPathFor(rows: readonly ChangeRow[], root: string, path: string): string | undefined {
+  return rows.find((r) => r.repoRoot === root && r.path === path)?.oldPath;
+}
+
 export function rowsDiffer(a: ChangeRow[], b: ChangeRow[]): boolean {
   if (a.length !== b.length) return true;
   for (let i = 0; i < a.length; i++) {
@@ -154,7 +164,7 @@ export function useFileDiff(row: ChangeRow | null, mode: DiffMode): DiffState {
     const cached = bodies.get(cacheKey) ?? null;
     setState({ diff: cached, loading: !cached, error: null, for: cacheKey });
 
-    api.gitFileDiff(row.repoRoot, row.path, mode)
+    api.gitFileDiff(row.repoRoot, row.path, mode, row.oldPath)
       .then((d) => {
         if (gone) return;
         if (bodies.size > CACHE_MAX) bodies.clear();
@@ -311,6 +321,22 @@ export function totalsOf(rows: ChangeRow[], reviewed: ReadonlySet<string>): { fi
 }
 
 /** Convenience for the page: the row a key points at, or null. */
+/** The first file after `fromKey` (wrapping round the end) that is not ticked as
+ *  read, in the order the list shows them; null when every file is read. The file
+ *  you are on is considered last, so pressing it on the only unread file stays put. */
+export function nextUnread(flat: readonly ChangeRow[], fromKey: string | null, reviewed: ReadonlySet<string>): ChangeRow | null {
+  if (!flat.length) return null;
+  const at = flat.findIndex((r) => r.key === fromKey);
+  for (let k = 1; k <= flat.length; k++) {
+    const r = flat[(at + k + flat.length) % flat.length]!;
+    if (!reviewed.has(reviewKeyOf(r))) return r;
+  }
+  return null;
+}
+
+export const unreadCount = (rows: readonly ChangeRow[], reviewed: ReadonlySet<string>): number =>
+  rows.reduce((n, r) => n + (reviewed.has(reviewKeyOf(r)) ? 0 : 1), 0);
+
 export function rowByKey(rows: ChangeRow[], key: string | null): ChangeRow | null {
   if (!key) return null;
   return rows.find((r) => r.key === key) ?? null;

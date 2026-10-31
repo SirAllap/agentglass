@@ -28,28 +28,29 @@ import type { ChangeRow } from "../../../../shared/types.ts";
 import {
   diffStateKey, filterRows, groupRows, reviewKeyOf, rowByKey, statusWord, totalsOf, useChangeRows, useFileDiff,
   visibleRows, whenLabel, type DiffMode, type DiffState, type GroupBy, type RowGroup,
+  binaryWord, oldPathFor, nextUnread, unreadCount,
 } from "../../lib/changeRows.ts";
 import { useIncremental } from "../../lib/useIncremental.ts";
 import { openPeek } from "../../lib/openPeek.ts";
 import { groupHunks } from "../../lib/changeGroups.ts";
 import { useSidebarWidth } from "../../lib/sidebarWidth.ts";
 import { SidebarGrip } from "../SidebarGrip.tsx";
-import { CloseButton } from "../CloseButton.tsx";
-import { ICON } from "../../lib/iconSize.ts";
-import { CHIP_ICON, Chip, FilterField, IconChip, Segmented, EDGE } from "../workspace/Chrome.tsx";
+import { HIT, ICON } from "../../lib/iconSize.ts";
+import { Badge, Button, CHIP_ICON, FilterField, IconChip, Segmented, LINE } from "../workspace/Chrome.tsx";
 import { viewHeaderClass, viewHeaderStyle } from "../workspace/ViewHeader.tsx";
 import { diffSplit, diffWrap, setDiffSplit, setDiffWrap, diffNoWhitespace, setDiffNoWhitespace } from "../../lib/diffPrefs.ts";
 import { subscribeWorktreeJump, worktreeJump, requestWorktreeJump } from "../../lib/worktreeJump.ts";
 import { hunkChanges, hunkWithoutWhitespace } from "../../lib/diffNoWhitespace.ts";
 import { useDiffHighlight, HiliteCtx } from "../../lib/diffHighlight.ts";
+import { DiffToolbar } from "./DiffToolbar.tsx";
 import { api } from "../../lib/api.ts";
 import { SplitDiff, UnifiedDiff, SCROLLBAR_CSS, SPLIT_SEL_CSS, LINEBTN_CSS, type LinePick, type LineSel } from "./DiffLines.tsx";
-import { CommentBox, CommentCard, ReviewTray } from "./DiffReview.tsx";
+import { CommentBox, CommentCard, ReviewTray, type SendOutcome } from "./DiffReview.tsx";
 import {
   addComment, anchorLabel, captureSnippet, checkAtSend, clearReview, composeReview, editComment, isStale,
-  removeComment, reviewFor, setFrame, subscribeReviews, type Review, type ReviewComment, type StaleFile,
+  removeComment, reviewFor, setFrame, settleReview, subscribeReviews, type Review, type ReviewComment, type StaleFile,
 } from "../../lib/diffReview.ts";
-import { requestTermIssue, subscribeTermIssue, termIssue } from "../../lib/termIssue.ts";
+import { requestTermIssue } from "../../lib/termIssue.ts";
 import { AgentIcon, FileIcon, IconLabel } from "../../lib/glyphIcons.tsx";
 import { authorsIndex, headingAuthors, rowAuthorsTitle, sectionAuthors } from "../../lib/treeAuthors.ts";
 
@@ -71,9 +72,7 @@ const read = <T,>(key: string, fallback: T, parse: (raw: string) => T): T => {
 };
 const write = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* private mode */ } };
 
-export function DiffPage({ active, onClose }: {
-  active: boolean; onClose?: () => void;
-}) {
+export function DiffPage({ active }: { active: boolean }) {
   const [mode, setMode] = useState<DiffMode>(() => read(K_MODE, "working", (r) => (r === "committed" ? "committed" : "working")));
   const [groupBy, setGroupBy] = useState<GroupBy>(() =>
     read(K_GROUP, "worktree", (r) => (r === "time" || r === "folder" ? (r as GroupBy) : "worktree")));
@@ -219,26 +218,14 @@ export function DiffPage({ active, onClose }: {
   const [checking, setChecking] = useState(false);
   const checked = check && check.review === review ? check : null;
 
-  /** The review's own request, still sitting in the termIssue slot — the
-   *  send has been asked for but not yet confirmed. Cleared, and the review
-   *  with it, only once TerminalPanel's effect actually consumes it: see the
-   *  confirmation effect below. */
-  const [sendingTo, setSendingTo] = useState<{ root: string; n: number; label: string } | null>(null);
-  const liveIssue = useSyncExternalStore(subscribeTermIssue, termIssue, termIssue);
-  useEffect(() => {
-    if (!sendingTo) return;
-    // Sent the moment the slot no longer holds this request: TerminalPanel's
-    // effect clears it (clearTermIssue) right after tmuxCmd({ cmd: "issue" })
-    // runs — which only happens once a terminal pane exists and its socket is
-    // live. Until then the review stays: clearing it the instant
-    // requestTermIssue was called dropped it silently with no pane open, and
-    // a reload before one opened lost it for good.
-    if (liveIssue?.n === sendingTo.n) return;
-    clearReview(sendingTo.root);
-    setSendingTo(null);
-  }, [liveIssue, sendingTo]);
+  /** Where the review's terminal request stands, said in the tray. The review is
+   *  never cleared by it: the slot empties the moment the request is sent, so
+   *  clearing on it dropped the review for a window that never opened (no agent
+   *  CLI, a refusing server) with no word of why — and clearing on the ok answer
+   *  left nothing to send again when the agent did not start. */
+  const [sendingTo, setSendingTo] = useState<(SendOutcome & { root: string }) | null>(null);
 
-  const deliver = useCallback((stale: ReadonlySet<string>) => {
+  const deliver = useCallback(async (stale: ReadonlySet<string>) => {
     const prompt = composeReview(root, review, stale);
     const label = `review-${(selected?.branch || root.split("/").pop() || "checkout").replace(/[^a-zA-Z0-9_-]/g, "-")}`;
     /* A NEW tmux window with an agent already working on it, in the worktree
@@ -247,28 +234,32 @@ export function DiffPage({ active, onClose }: {
        chat happens to be open in this tree: a chat is its own conversation,
        and a review is a fresh ask, not a reply slipped into one already in
        progress. */
-    requestTermIssue(root, label, prompt, true);
+    const answered = requestTermIssue(root, label, prompt, true);
     // It opens somewhere you are not looking, and this used to do its whole
     // job in silence — the review vanished and nothing on screen said where
     // it went. Bring the terminal view forward, the same handoff
     // GitPanel/PrPanel already make for conflicts.
     requestWorktreeJump({ view: "term" });
     setCheck(null);
-    setSendingTo({ root, n: termIssue()?.n ?? 0, label });
+    const where = root.split("/").pop() ?? root;
+    setSendingTo({ root, label, where, state: "waiting" });
+    const done = await settleReview(answered);
+    // Keyed by root, so an answer for a checkout no longer on screen is not shown on this one.
+    setSendingTo({ root, label, where, state: done.ok ? "sent" : "failed", ...(done.ok ? {} : { error: done.error }) });
   }, [root, review, selected?.branch]);
 
   const sendReview = useCallback(async () => {
-    if (!root || !review.comments.length || checking) return;
-    if (checked) { deliver(checked.stale); return; }
+    if (!root || !review.comments.length || checking || sendingTo?.state === "waiting") return;
+    if (checked) { void deliver(checked.stale); return; }
     setChecking(true);
-    const got = await checkAtSend(review.comments, (path, mode) => api.gitFileDiff(root, path, mode).then((d) => d.hunks))
+    const got = await checkAtSend(review.comments, (path, mode) => api.gitFileDiff(root, path, mode, oldPathFor(rows, root, path)).then((d) => d.hunks))
       .finally(() => setChecking(false));
     /* Edited, sent from another window or switched away from while the diffs
        were in flight: this press no longer means this review. */
     if (reviewFor(root) !== review) return;
     if (got.files.length) setCheck({ review, ...got });
-    else deliver(got.stale);
-  }, [root, review, checking, checked, deliver]);
+    else void deliver(got.stale);
+  }, [root, review, checking, checked, deliver, sendingTo?.state, rows]);
   /* What the tray marks stale: the file on screen, live, plus whatever the last
      send check found in the others. */
   const trayStale = useMemo(
@@ -304,6 +295,12 @@ export function DiffPage({ active, onClose }: {
     if (next) setSelKey(next.key);
   }, [flat, selected]);
 
+  const goNextUnread = useCallback(() => {
+    const next = nextUnread(flat, selected?.key ?? null, reviewed);
+    if (next) setSelKey(next.key);
+  }, [flat, selected, reviewed]);
+  const unread = useMemo(() => unreadCount(shown, reviewed), [shown, reviewed]);
+
   useEffect(() => {
     if (!active) return;
     const onKey = (e: KeyboardEvent) => {
@@ -314,11 +311,12 @@ export function DiffPage({ active, onClose }: {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "j" || e.key === "ArrowDown") { e.preventDefault(); step(1); }
       else if (e.key === "k" || e.key === "ArrowUp") { e.preventDefault(); step(-1); }
+      else if (e.key === "n") { e.preventDefault(); goNextUnread(); }
       else if (e.key === " " && selected) { e.preventDefault(); toggleReviewed(selected); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, step, selected, toggleReviewed]);
+  }, [active, step, goNextUnread, selected, toggleReviewed]);
 
   // Keep the selected row in view when the keyboard moved it, and only then:
   // scrolling on every render fights the mouse.
@@ -336,52 +334,46 @@ export function DiffPage({ active, onClose }: {
           * The one decision that changes what the list IS, in words and at a
           * legible size. It used to be two of eleven identical 9.5px chips.
           */}
-        <Segmented value={mode} options={MODES} onChange={setMode} label="What the list shows" />
+        <Segmented value={mode} options={MODES} onChange={setMode} label="What the list shows" track />
 
-        <span className="text-[11px] tabular-nums truncate" style={{ color: "var(--text3)" }}>
-          {loading && !rows.length ? "reading git…" : (
+        <span className="flex items-center gap-2.5 text-[11.5px] tabular-nums truncate" style={{ color: "var(--text2)" }}>
+          {loading && !rows.length ? <span style={{ color: "var(--text3)" }}>reading git…</span> : (
             <>
-              {totals.files} {totals.files === 1 ? "file" : "files"}
-              {" · "}<span style={{ color: "var(--success-ink)" }}>+{totals.add}</span>
-              {" "}<span style={{ color: "var(--error-ink)" }}>−{totals.del}</span>
-              {totals.done > 0 && <span style={{ color: "var(--text4)" }}>{" · "}{totals.done} read</span>}
+              <span><b>{totals.files}</b> {totals.files === 1 ? "file" : "files"}</span>
+              <span style={{ color: "var(--success-ink)" }}>+{totals.add}</span>
+              <span style={{ color: "var(--error-ink)" }}>−{totals.del}</span>
+              <span aria-hidden className="w-px h-3.5" style={{ background: "var(--surface-line)" }} />
+              {/* An object, not only a number: how far through the list you are. */}
+              <span className="inline-flex items-center gap-1.5" style={{ color: "var(--text3)" }}>
+                <span role="progressbar" aria-label="Files read" aria-valuemin={0} aria-valuemax={totals.files} aria-valuenow={totals.done}
+                  className="block overflow-hidden rounded-full" style={{ width: 46, height: 4, background: "var(--bg3)" }}>
+                  <span className="block h-full" style={{ width: `${totals.files ? (totals.done / totals.files) * 100 : 0}%`, background: "var(--success)" }} />
+                </span>
+                {totals.done} read
+              </span>
             </>
           )}
         </span>
-
-        <div className="ml-auto flex items-center gap-2 relative">
-          {/* What git's `-w` does, applied to the diff on screen. The COUNTS in the
-              list beside it stay git's own: they come from a status walk that never
-              reads a patch, and re-reading forty diffs to correct a number nobody is
-              looking at is not a trade worth making. Said in the tooltip. */}
-          <Chip on={noWs} onClick={() => { setNoWs(!noWs); setDiffNoWhitespace(!noWs); }}
-            title={noWs
-              ? "Ignoring whitespace in the diff below — a line that only changed its indentation is drawn as unchanged. The counts in the list are still git's own."
-              : "Ignore whitespace — fold a line that only changed its indentation back into context"}>Ignore space</Chip>
-          <Chip on={split} onClick={() => { setSplit(!split); setDiffSplit(!split); }} title="Side by side">Split</Chip>
-          <Chip on={wrap} onClick={() => { setWrap(!wrap); setDiffWrap(!wrap); }} title="Wrap long lines">Wrap</Chip>
-          <IconChip on={menu} onClick={() => setMenu((v) => !v)} title="List options" expanded={menu} hasPopup>
-            <svg width={CHIP_ICON} height={CHIP_ICON} viewBox="0 0 16 16" fill="currentColor" aria-hidden>
-              <circle cx="8" cy="3.2" r="1.3" /><circle cx="8" cy="8" r="1.3" /><circle cx="8" cy="12.8" r="1.3" />
-            </svg>
-          </IconChip>
-          {menu && (
-            <Menu
-              groupBy={groupBy} onGroupBy={(g) => { setGroupBy(g); setMenu(false); }}
-              showIgnored={showIgnored} onShowIgnored={() => setShowIgnored((v) => !v)} hiddenIgnored={hiddenIgnored}
-              showOutside={showOutside} onShowOutside={() => setShowOutside((v) => !v)} hiddenOutside={hiddenOutside}
-              onClose={() => setMenu(false)}
-            />
-          )}
-          {onClose && <CloseButton onClick={onClose} />}
-        </div>
       </div>
 
       <div className="flex-1 min-h-0 flex">
         <div className="shrink-0 flex flex-col min-h-0 agx-sidelist" style={{ width: sidebarW }}>
-          <div className="px-3 py-2 shrink-0">
-            <FilterField value={q} onChange={setQ} className="w-full"
+          <div className="px-2 py-2 shrink-0 flex items-center gap-1.5 relative">
+            <FilterField value={q} onChange={setQ} className="min-w-0 flex-1"
               placeholder="Filter by file, folder or branch…" label="Filter the list" />
+            <IconChip on={menu} onClick={() => setMenu((v) => !v)} title="List options" expanded={menu} hasPopup>
+              <svg width={CHIP_ICON} height={CHIP_ICON} viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+                <circle cx="8" cy="3.2" r="1.3" /><circle cx="8" cy="8" r="1.3" /><circle cx="8" cy="12.8" r="1.3" />
+              </svg>
+            </IconChip>
+            {menu && (
+              <Menu
+                groupBy={groupBy} onGroupBy={(g) => { setGroupBy(g); setMenu(false); }}
+                showIgnored={showIgnored} onShowIgnored={() => setShowIgnored((v) => !v)} hiddenIgnored={hiddenIgnored}
+                showOutside={showOutside} onShowOutside={() => setShowOutside((v) => !v)} hiddenOutside={hiddenOutside}
+                onClose={() => setMenu(false)}
+              />
+            )}
           </div>
 
           <List
@@ -412,36 +404,46 @@ export function DiffPage({ active, onClose }: {
               : q ? (
                 <>
                   {mode === "committed" ? "Nothing committed matches that filter" : "Nothing uncommitted matches that filter"}
-                  <button onClick={() => setMode(mode === "committed" ? "working" : "committed")}
-                    className="agx-btn block mx-auto mt-2 px-2 py-1 rounded text-[11px]"
-                    title={`Keep the filter and look at ${mode === "committed" ? "what is uncommitted" : "the last commit"} instead`}
-                    style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>
+                  <Button className="mt-2" onClick={() => setMode(mode === "committed" ? "working" : "committed")}
+                    title={`Keep the filter and look at ${mode === "committed" ? "what is uncommitted" : "the last commit"} instead`}>
                     Look in {mode === "committed" ? "Uncommitted" : "Last commit"} →
-                  </button>
+                  </Button>
                 </>
               )
               : mode === "committed" ? "No commits in the checkouts in scope"
               : "Nothing uncommitted anywhere"}
             notice={notices({ truncated, failed, hiddenIgnored, hiddenOutside, showIgnored, showOutside })}
           />
+
+          {/* Where you are in the reading, and the way to the next file you have
+              not ticked: the list is walked in order with j/k, and the unread ones
+              are what is left to do. */}
+          <div className="shrink-0 flex items-center gap-2 px-2 py-2 text-[11px]" style={{ borderTop: LINE }}>
+            <span className="flex-1 truncate" style={{ color: "var(--text3)" }}>
+              {shown.length ? `${unread} unread of ${shown.length}` : ""}
+            </span>
+            <Button disabled={!unread} onClick={goNextUnread} title="Next file you have not marked read (n)">Next unread ↓</Button>
+          </div>
         </div>
 
         <SidebarGrip />
 
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
           {selected
-            ? <Body row={selected} state={body} split={split} wrap={wrap} noWs={noWs} mode={mode}
+            ? <Body row={selected} state={body} mode={mode}
+                split={split} onSplit={(v) => { setSplit(v); setDiffSplit(v); }}
+                wrap={wrap} onWrap={(v) => { setWrap(v); setDiffWrap(v); }}
+                noWs={noWs} onNoWs={(v) => { setNoWs(v); setDiffNoWhitespace(v); }}
+                at={flat.length ? `${Math.max(0, flat.findIndex((r) => r.key === selected.key)) + 1} / ${flat.length}` : ""}
+                onStep={step}
                 comments={review.comments} staleIds={staleIds} jumpTo={jumpTo} onJumped={jumped} />
-            : <Blank>Nothing selected</Blank>}
-          {sendingTo && sendingTo.root === root && (
-            <div className="px-4 py-1 text-[11px]" style={{ color: "var(--text3)" }}>
-              Claude is on it in a tmux window — "{sendingTo.label}", in {root.split("/").pop()}
-            </div>
-          )}
+            : <Blank title="Nothing selected" icon="doc">The diff of the file you pick shows here.</Blank>}
           {root && review.comments.length > 0 && (
             <ReviewTray key={root} where={selected?.branch || root} review={review} staleIds={trayStale}
               staleFiles={checked?.files ?? null} checking={checking}
               target="a terminal in this checkout"
+              outcome={sendingTo && sendingTo.root === root ? sendingTo : null}
+              onShowWindow={() => requestWorktreeJump({ view: "term" })}
               onFrame={(f) => setFrame(root, f)} onJump={jump}
               onRemove={(id) => removeComment(root, id)}
               onSend={() => void sendReview()} onDiscard={() => clearReview(root)} />
@@ -509,7 +511,7 @@ function Menu({
     <div
       ref={box} role="menu"
       className="absolute right-0 rounded-lg py-1.5 agx-menu"
-      style={{ top: 30, minWidth: 240, boxShadow: "0 10px 30px rgba(0,0,0,0.38)", zIndex: 60 }}
+      style={{ top: 40, minWidth: 240, boxShadow: "0 10px 30px rgba(0,0,0,0.38)", zIndex: 60 }}
     >
       <p className="px-3 pt-1 pb-1.5 text-[10px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>Group</p>
       {GROUPS.map((g) => (
@@ -583,45 +585,49 @@ function List({
   const inc = useIncremental(groups, groupBy);
 
   return (
-    <div ref={ref} onScroll={inc.onScroll} className="agx-scroll flex-1 min-h-0 overflow-y-auto px-2 pb-3">
+    <div ref={ref} onScroll={inc.onScroll} className="agx-scroll flex-1 min-h-0 overflow-y-auto pb-3">
       {!groups.length && <p className="text-center py-10 text-[12px]" style={{ color: "var(--text4)" }}>{empty}</p>}
       {inc.rows.map((g) => {
         const by = sectionAuthors(who, groupBy, g.key);
         const h = by ? headingAuthors(by, g.rows.filter((r) => who.byRow.has(r.key)).length) : null;
         return (
-          <section key={g.key} className="mb-1">
+          <section key={g.key}>
             <button
               onClick={() => onToggleSection(g.key)}
               aria-expanded={!collapsed.has(g.key)}
-              className="w-full flex items-center gap-1.5 px-1.5 py-1.5 rounded-md hover:bg-white/5 text-left"
+              className="w-full flex items-start gap-1 pl-1.5 pr-2.5 py-1.5 text-left"
+              style={{ borderBottom: LINE }}
             >
-              <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" aria-hidden className="shrink-0"
-                style={{ color: "var(--text4)", transform: collapsed.has(g.key) ? "rotate(-90deg)" : "none", transition: "transform .12s" }}>
+              <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" aria-hidden className="shrink-0 mt-1"
+                style={{ color: "var(--text3)", transform: collapsed.has(g.key) ? "rotate(-90deg)" : "none", transition: "transform .12s" }}>
                 <path d="M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
-              <span className="text-[11.5px] font-medium truncate" style={{ color: "var(--text)" }}>{g.label}</span>
-              {g.sub && <span className="text-[10px] truncate shrink" style={{ color: "var(--text4)" }}>{g.sub}</span>}
-              {h && (
-                /* Takes only the room that is left (a zero basis), so it never
-                   squeezes the branch: that is what the section is called, and
-                   "feat/…" beside a whole sentence was the first render of this. */
-                <span className={h.shared ? "text-[9.5px] px-1 rounded shrink-0" : "text-[10px] truncate min-w-0"} title={h.title}
-                  style={h.shared
-                    ? { color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 15%, transparent)" }
-                    : { color: "var(--text3)", flex: "1 1 0" }}>
-                  {h.text}
+              <span className="min-w-0 flex-1 flex flex-col gap-px">
+                {/* The branch is line 1 and never shrinks (capped, so a very long one
+                    still truncates); what the commit said takes the ellipsis on line 2. */}
+                <span className="flex items-baseline gap-2 min-w-0">
+                  <span className="text-[12px] font-semibold truncate shrink-0 max-w-[85%]" style={{ color: "var(--text)" }}>{g.label}</span>
+                  {h && (
+                    <span className={h.shared ? "text-[9.5px] px-1 rounded shrink-0" : "text-[10px] truncate min-w-0"} title={h.title}
+                      style={h.shared
+                        ? { color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 15%, transparent)" }
+                        : { color: "var(--text3)", flex: "1 1 0" }}>
+                      {h.text}
+                    </span>
+                  )}
                 </span>
-              )}
-              <span className="ml-auto shrink-0 text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>
+                {g.sub && <span className="text-[10.5px] truncate" style={{ color: "var(--text3)" }}>{g.sub}</span>}
+              </span>
+              <span className="shrink-0 pt-0.5 text-[10.5px] tabular-nums" style={{ color: "var(--text3)" }}>
                 {g.rows.length}
                 {"  "}<span style={{ color: "var(--success-ink)" }}>+{g.add}</span>
                 {" "}<span style={{ color: "var(--error-ink)" }}>−{g.del}</span>
               </span>
             </button>
             {!collapsed.has(g.key) && (
-              <div className="pl-3">
+              <div>
                 {g.rows.map((r) => (
-                  <Row
+                  <FileRow
                     key={r.key} r={r}
                     selected={r.key === selKey}
                     reviewed={reviewed.has(reviewKeyOf(r))}
@@ -658,7 +664,7 @@ const STATUS_STYLE: Record<ChangeRow["status"], { c: string; ch: string }> = {
   typechange: { c: "var(--warning)", ch: "T" },
 };
 
-function Row({ r, selected, reviewed, onSelect, onToggleReviewed, authors }: {
+function FileRow({ r, selected, reviewed, onSelect, onToggleReviewed, authors }: {
   r: ChangeRow; selected: boolean; reviewed: boolean; onSelect: () => void; onToggleReviewed: () => void;
   /** Set when more than one live session edited this file. */
   authors?: string[];
@@ -673,75 +679,91 @@ function Row({ r, selected, reviewed, onSelect, onToggleReviewed, authors }: {
       data-sel={selected ? "1" : undefined}
       role="button" tabIndex={-1}
       onClick={onSelect}
-      className="w-full flex items-center gap-2 px-2 py-1 rounded-md cursor-default"
-      style={{ background: selected ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent" }}
-      onMouseEnter={(e) => { if (!selected) e.currentTarget.style.background = "color-mix(in srgb, var(--bg3) 45%, transparent)"; }}
+      title={r.path}
+      className="w-full flex items-center gap-2 pl-3 pr-1.5 py-1.5 cursor-default"
+      style={{
+        minHeight: 46,
+        background: selected ? "color-mix(in srgb, var(--primary) 9%, var(--bg))" : "transparent",
+        boxShadow: selected ? "inset 2px 0 0 var(--primary)" : undefined,
+      }}
+      onMouseEnter={(e) => { if (!selected) e.currentTarget.style.background = "color-mix(in srgb, var(--text) 4.5%, transparent)"; }}
       onMouseLeave={(e) => { if (!selected) e.currentTarget.style.background = "transparent"; }}
     >
-      <span aria-hidden className="shrink-0 text-[10px] font-semibold tabular-nums" style={{ color: s.c, width: 10 }}>{s.ch}</span>
+      <StatusLetter r={r} />
 
-      <span className="min-w-0 flex-1 flex items-baseline gap-1.5">
-        <span className="text-[11.5px] truncate" style={{ color: reviewed ? "var(--text3)" : "var(--text)" }}>{name}</span>
-        {dir && <span className="text-[10px] truncate shrink" style={{ color: "var(--text4)" }}>{dir}</span>}
-        {word && (
-          <span className="text-[9.5px] px-1 rounded shrink-0" style={{ color: s.c, background: `color-mix(in srgb, ${s.c} 15%, transparent)` }}>{word}</span>
-        )}
-        {r.staged !== "none" && (
-          <span className="text-[9.5px] px-1 rounded shrink-0" title={r.staged === "partial" ? "Partly staged" : "Staged"}
-            style={{ color: "var(--text3)", background: "color-mix(in srgb, var(--text) 10%, transparent)" }}>
-            {r.staged === "partial" ? "part staged" : "staged"}
-          </span>
-        )}
-        {/* An agent glyph and a count, not a word: the row is narrow and the
-            file name is what it is for. The tooltip names them — in every
-            grouping, since a day or a folder has no "shared" heading above to
-            explain the colour. */}
-        {authors && (
-          <span className="text-[9.5px] px-1 rounded shrink-0 inline-flex items-center gap-0.5" title={rowAuthorsTitle(authors)}
-            aria-label={`${authors.length} authors`}
-            style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 15%, transparent)" }}>
-            <AgentIcon size={ICON.xs} />{authors.length}
-          </span>
-        )}
+      {/* The name is line 1 and may wrap to a second line rather than be cut:
+          two files whose names share a prefix were indistinguishable truncated.
+          Folder, tags and age are line 2. */}
+      <span className="min-w-0 flex-1 flex flex-col gap-0.5">
+        <span className="text-[12px] font-semibold leading-[1.3]"
+          style={{ color: reviewed ? "var(--text3)" : "var(--text)", overflowWrap: "anywhere", textDecoration: r.status === "deleted" ? "line-through" : undefined }}>{name}</span>
+        <span className="flex items-center gap-1.5 min-w-0 text-[10.5px]" style={{ color: "var(--text3)" }}>
+          <span className="truncate min-w-0" style={{ flex: "0 1 auto" }}>{dir || "(root)"}</span>
+          {word && <Badge tint={s.c} wash={15} tight>{word}</Badge>}
+          {r.staged !== "none" && (
+            <Badge tint="var(--text3)" fill="var(--text)" tight title={r.staged === "partial" ? "Partly staged" : "Staged"}>
+              {r.staged === "partial" ? "part staged" : "staged"}
+            </Badge>
+          )}
+          {/* An agent glyph and a count, not a word: the row is narrow. The tooltip
+              names them — in every grouping, since a day or a folder has no "shared"
+              heading above to explain the colour. */}
+          {authors && (
+            <Badge tint="var(--warning-ink)" fill="var(--warning)" wash={15} tight title={rowAuthorsTitle(authors)}>
+              <span aria-label={`${authors.length} authors`} className="inline-flex items-center gap-0.5"><AgentIcon size={ICON.xs} />{authors.length}</span>
+            </Badge>
+          )}
+          {/* When it changed — the reason this rebuild exists, and shown only
+              because the row no longer carries the time of the request. */}
+          <span className="ml-auto shrink-0 tabular-nums">{whenLabel(r.changedAt)}</span>
+        </span>
       </span>
 
-      {/* When it changed. The whole reason this rebuild exists — and the reason
-          it can be shown at all is that the row no longer carries the time of
-          the request. */}
-      <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>{whenLabel(r.changedAt)}</span>
-
-      <span className="shrink-0 text-[10px] tabular-nums" style={{ minWidth: 62, textAlign: "right" }}>
-        {r.additions > 0 && <span style={{ color: "var(--success-ink)" }}>+{r.additions}</span>}
-        {r.deletions > 0 && <span style={{ color: "var(--error-ink)" }}> −{r.deletions}</span>}
+      <span className="shrink-0 text-[10.5px] tabular-nums text-right leading-[1.35]" style={{ minWidth: 34 }}>
+        {r.additions > 0 && <span className="block" style={{ color: "var(--success-ink)" }}>+{r.additions}</span>}
+        {r.deletions > 0 && <span className="block" style={{ color: "var(--error-ink)" }}>−{r.deletions}</span>}
       </span>
 
       <button
         onClick={(e) => { e.stopPropagation(); onToggleReviewed(); }}
         title={reviewed ? "Mark as not read" : "Mark as read"}
         aria-pressed={reviewed}
-        className="shrink-0 inline-flex items-center justify-center rounded-full"
-        style={{
-          width: 20, height: 20,
-          color: reviewed ? "var(--success)" : "var(--text4)",
-        }}
+        className="shrink-0 inline-flex items-center justify-center rounded-lg"
+        style={{ width: HIT, height: HIT, color: reviewed ? "var(--success)" : "var(--text4)" }}
       >
-        <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" aria-hidden>
-          <circle cx="6" cy="6" r="5" stroke="currentColor" strokeWidth="1.2" opacity={reviewed ? 1 : 0.5} />
-          {reviewed && <path d="M3.6 6.2l1.7 1.7 3.1-3.4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />}
+        <svg width={16} height={16} viewBox="0 0 16 16" fill="none" aria-hidden>
+          <circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.4" fill={reviewed ? "currentColor" : "none"} opacity={reviewed ? 1 : 0.6} />
+          {reviewed && <path d="M5 8.3l2 2 4-4.4" stroke="var(--bg)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />}
         </svg>
       </button>
     </div>
   );
 }
 
+/** A is added, M modified, D deleted, R renamed: a letter on a wash, so the
+ *  kind of change is never carried by colour alone. */
+function StatusLetter({ r, size = 18 }: { r: ChangeRow; size?: number }) {
+  const s = STATUS_STYLE[r.status];
+  return (
+    <span aria-hidden title={statusWord(r) || r.status} className="shrink-0 inline-flex items-center justify-center rounded-md font-bold"
+      style={{
+        width: size, height: size, fontSize: size > 18 ? 11 : 10, color: s.c,
+        background: `color-mix(in srgb, ${s.c} 13%, transparent)`, boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${s.c} 30%, transparent)`,
+      }}>{s.ch}</span>
+  );
+}
+
 /* ── the diff ─────────────────────────────────────────────────────────────── */
 
-function Body({ row, state, split, wrap, noWs, mode, comments, staleIds, jumpTo, onJumped }: {
+function Body({ row, state, mode, split, onSplit, wrap, onWrap, noWs, onNoWs, at, onStep, comments, staleIds, jumpTo, onJumped }: {
   row: ChangeRow;
   state: DiffState;
-  split: boolean; wrap: boolean;
+  split: boolean; onSplit: (v: boolean) => void;
+  wrap: boolean; onWrap: (v: boolean) => void;
   /** Fold whitespace-only changes into context — see diffNoWhitespace.ts. */
-  noWs: boolean;
+  noWs: boolean; onNoWs: (v: boolean) => void;
+  /** "3 / 12": where this file is in the list, and the buttons to walk it. */
+  at: string; onStep: (dir: 1 | -1) => void;
   mode: DiffMode;
   /** The pending review for this file's checkout — every file's, filtered here. */
   comments: ReviewComment[];
@@ -750,7 +772,7 @@ function Body({ row, state, split, wrap, noWs, mode, comments, staleIds, jumpTo,
   jumpTo: { c: ReviewComment; root: string } | null;
   onJumped: () => void;
 }) {
-  const { hilite } = useDiffHighlight(row.path);
+  const { hilite, themePref, setThemePref, bold, setBold, hiliteError } = useDiffHighlight(row.path);
   const [copied, setCopied] = useState(false);
   const raw = state.diff?.hunks ?? [];
   /* A hunk that held nothing but whitespace is dropped rather than drawn empty; when
@@ -894,12 +916,32 @@ function Body({ row, state, split, wrap, noWs, mode, comments, staleIds, jumpTo,
 
   return (
     <>
-      <div className="flex items-center gap-2 px-4 py-2 shrink-0 border-b" style={{ borderColor: "color-mix(in srgb, var(--border) 35%, transparent)" }}>
-        <div className="min-w-0">
-          <p className="text-[12px] truncate" style={{ color: "var(--text)" }}>{row.path}</p>
-          <p className="text-[10px] truncate" style={{ color: "var(--text4)" }}>
-            {row.branch || row.repoRoot}
-            {row.oldPath && <> · renamed from <span style={{ color: "var(--text3)" }}>{row.oldPath}</span></>}
+      {/* The six diff controls live here, once, shared with the commit modal; the list's
+          own controls (filter, grouping) live with the list. */}
+      <div className="shrink-0 flex items-center gap-1.5 px-3" style={{ height: 44, borderBottom: LINE }}>
+        <DiffToolbar split={split} onSplit={onSplit} wrap={wrap} onWrap={onWrap} noWs={noWs} onNoWs={onNoWs}
+          bold={bold} onBold={setBold} themePref={themePref} onTheme={setThemePref} themeError={hiliteError} />
+        <span className="flex-1" />
+        <span className="text-[11px] tabular-nums" style={{ color: "var(--text3)" }}>{at}</span>
+        <Button square tone="quiet" label="Previous file (k)" title="Previous file (k)" onClick={() => onStep(-1)}>
+          <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" aria-hidden><path d="M2.5 7.5L6 4l3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
+        </Button>
+        <Button square tone="quiet" label="Next file (j)" title="Next file (j)" onClick={() => onStep(1)}>
+          <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" aria-hidden><path d="M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
+        </Button>
+      </div>
+
+      <div className="flex items-center gap-2.5 px-3.5 py-2.5 shrink-0" style={{ borderBottom: LINE, background: "var(--surface-card)" }}>
+        <StatusLetter r={row} size={22} />
+        <div className="min-w-0 flex-1">
+          <p className="flex flex-wrap items-center gap-2 text-[13px] font-semibold" style={{ color: "var(--text)" }}>
+            <span style={{ overflowWrap: "anywhere" }}>{row.path.slice(row.path.lastIndexOf("/") + 1)}</span>
+            {statusWord(row) && <Badge tint={STATUS_STYLE[row.status].c} wash={15} tight>{statusWord(row)}</Badge>}
+            {row.branch && <Badge tint="var(--text3)" tight>{row.branch}</Badge>}
+          </p>
+          <p className="mt-0.5 text-[11px] truncate" style={{ color: "var(--text3)" }} title={`${row.repoRoot}/${row.path}`}>
+            {row.path}
+            {row.oldPath && <> · renamed from {row.oldPath}</>}
             {row.commit && <> · {row.commit.subject}</>}
             {" · "}{whenLabel(row.changedAt)}
           </p>
@@ -910,35 +952,31 @@ function Body({ row, state, split, wrap, noWs, mode, comments, staleIds, jumpTo,
             The line is the first hunk's, not line 1: opening a 900-line file
             you came to BECAUSE of a diff and landing at the top means scrolling
             back to where you already were. */}
-        <button onClick={openFile} title="Open it here, at its first change"
-          className="ml-auto shrink-0 px-2 py-1 rounded-md text-[10.5px] flex items-center gap-1"
-          style={{ color: "var(--text3)", border: EDGE }}>
+        <Button onClick={openFile} disabled={row.status === "deleted"} title="Open it here, at its first change">
           <IconLabel icon={<FileIcon size={ICON.xs} />}>Open</IconLabel>
-        </button>
-        <button onClick={copy} title="Copy the full path"
-          className="shrink-0 px-2 py-1 rounded-md text-[10.5px]"
-          style={{ color: copied ? "var(--success)" : "var(--text3)", border: EDGE }}>
-          {copied ? "Copied" : "Copy path"}
-        </button>
+        </Button>
+        <Button onClick={copy} tint={copied ? "var(--success)" : undefined} title="Copy the full path">{copied ? "Copied" : "Copy path"}</Button>
       </div>
 
-
       <div ref={scroller} className="agx-scroll flex-1 min-h-0 overflow-auto">
-        {state.loading && !state.diff && <Blank>Reading the diff…</Blank>}
+        {state.loading && !state.diff && <Blank title="Reading the diff…" icon="doc" />}
         {/* Every one of these was a blank pane reading "0 hunks" before. A file
             the view cannot show is a thing to SAY, not an empty box. */}
-        {!state.loading && state.error && <Blank tone="error">{state.error}</Blank>}
-        {state.diff?.binary && <Blank>Binary file — {row.additions || row.deletions ? "changed" : "added"}, nothing to show as text</Blank>}
+        {!state.loading && state.error && <Blank tone="error" title="This file could not be read" icon="info">{state.error}</Blank>}
+        {state.diff?.binary && <Blank title={`Binary file, ${binaryWord(row.status)}`} icon="img">Git cannot show lines for {row.path.slice(row.path.lastIndexOf("/") + 1)}.</Blank>}
         {!state.diff?.binary && !state.error && !hunks.length && !state.loading && (
-          <Blank>
-            {/* "No textual change" would be a lie here: there IS one, and it is being
-                ignored on purpose. A file that empties because of a toggle has to name
-                the toggle, or the reader goes looking for what went wrong. */}
-            {allWs ? "Only whitespace changed in this file — turn off Ignore space to see it"
-              : row.status === "renamed" ? `Renamed from ${row.oldPath ?? "somewhere"} — the contents did not change`
-              : row.tooBig ? "Too large to diff"
-              : "No textual change"}
-          </Blank>
+          /* "No textual change" would be a lie here: there IS one, and it is being
+             ignored on purpose. A file that empties because of a toggle has to name
+             the toggle, or the reader goes looking for what went wrong. */
+          allWs ? (
+            <Blank title="Only whitespace changed" icon="info">
+              Nothing to show with Ignore space on.
+              <Button className="mt-1" onClick={() => onNoWs(false)}>Show the whitespace changes</Button>
+            </Blank>
+          ) : row.status === "renamed" ? (
+            <Blank title="Renamed, contents did not change" icon="doc">{row.oldPath ?? "somewhere"} → {row.path}</Blank>
+          ) : row.tooBig ? <Blank title="Too large to diff" icon="doc">Open the file to read it.</Blank>
+          : <Blank title="No textual change" icon="doc">Mode or timestamps only.</Blank>
         )}
         {hunks.length > 0 && (
           <HiliteCtx.Provider value={hilite}>
@@ -957,10 +995,21 @@ function Body({ row, state, split, wrap, noWs, mode, comments, staleIds, jumpTo,
   );
 }
 
-function Blank({ children, tone }: { children: React.ReactNode; tone?: "error" }) {
+function Blank({ title, icon, tone, children }: { title: string; icon: "doc" | "info" | "img"; tone?: "error"; children?: React.ReactNode }) {
   return (
     <div className="h-full flex items-center justify-center p-8">
-      <p className="text-[12px] text-center" style={{ color: tone === "error" ? "var(--error)" : "var(--text4)" }}>{children}</p>
+      <div className="max-w-[440px] flex flex-col items-center gap-2.5 text-center text-[12px]" style={{ color: tone === "error" ? "var(--error)" : "var(--text3)" }}>
+        <span aria-hidden className="flex items-center justify-center rounded-xl"
+          style={{ width: 46, height: 46, background: "var(--surface-inset)", boxShadow: "inset 0 0 0 1px var(--surface-line)" }}>
+          <svg width={22} height={22} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            {icon === "doc" && <path d="M4 1.5h5l3.5 3.5v9H4ZM9 1.5V5h3.5" />}
+            {icon === "info" && <><circle cx="8" cy="8" r="6" /><path d="M8 7.5V11M8 5v.2" /></>}
+            {icon === "img" && <><rect x="2" y="3" width="12" height="10" rx="1.5" /><circle cx="6" cy="7" r="1.2" /><path d="M2.5 12l4-3.5 3 2.5 2-1.5 2 2" /></>}
+          </svg>
+        </span>
+        <b className="text-[13px]" style={{ color: tone === "error" ? "var(--error)" : "var(--text)" }}>{title}</b>
+        {children && <span className="flex flex-col items-center gap-1.5">{children}</span>}
+      </div>
     </div>
   );
 }

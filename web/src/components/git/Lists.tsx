@@ -16,14 +16,19 @@
  * replaced the drawing, not the plumbing.
  */
 import { Fragment, useMemo, useState, type ReactNode } from "react";
-import { GRAPH_H, GRAPH_PAD, LANE_W, graphWidth, laneColour, laneX, layoutGraph, linkPath, type GraphRow } from "../../lib/gitGraph.ts";
+import { layoutGraph, type GraphRow } from "../../lib/gitGraph.ts";
+import { MiniGraph } from "./MiniGraph.tsx";
+import { CommitAvatar } from "./CommitAvatar.tsx";
+import { RefChips } from "./RefChips.tsx";
+import { shortAgo } from "../../lib/gitLogView.ts";
 import type {
   GitBranch, GitTag, GitStash, GitWorktree, GitRemote, GitRemoteBranch,
   GitSubmodule, GitReflogEntry,
 } from "../../../../shared/types.ts";
-import { Row, Chip, RowAction, GroupHead, Empty, TickBox, wash, type Tone } from "./ui.tsx";
-import { primaryAction, actionsFor, grouped, groupByPrefix, type GitKind, type GitRowState } from "../../lib/gitActions.ts";
-import { BranchIcon, IconLabel } from "../../lib/glyphIcons.tsx";
+import { Row, Chip, RowAction, GroupHead, Empty, TickBox, Tile, Drift, wash, INSPECTOR_RULE, type Tone } from "./ui.tsx";
+import { branchDrift, type BranchSection } from "../../lib/gitBranchList.ts";
+import { primaryAction, actionsFor, grouped, type GitKind, type GitRowState } from "../../lib/gitActions.ts";
+import { BranchIcon, DoneIcon, FolderIcon, PinIcon, IconLabel } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 
 export interface ListRow {
@@ -43,19 +48,33 @@ export interface ListRow {
   /** Drawn instead of the name when a row wants more than a string. */
   title?: ReactNode;
   /** Drawn outside the card, full height — the commit graph. */
-  gutter?: ReactNode;
+  gutter?: ReactNode | ((cursor: boolean) => ReactNode);
   /** `line` for the log: see `Row`. */
-  variant?: "card" | "line";
+  variant?: "card" | "line" | "item";
+  /** The log: the commit is in the pick set, and its number in graph order. */
+  picked?: boolean;
+  pickMark?: number;
+  /** `item` rows: the leading tick and tile, the right-edge arrows, and a step back for finished ones. */
+  lead?: ReactNode;
+  trail?: ReactNode;
+  dim?: boolean;
 }
 
-export function List({ rows, cursor, onCursor, onMenu, busy, what, group, disabled, measure }: {
+export function List({ rows, cursor, onCursor, onMenu, busy, what, sections, aboveList, disabled, measure, inspector, flush }: {
   rows: ListRow[];
   cursor: number;
   onCursor: (i: number) => void;
   onMenu: (row: ListRow, x: number, y: number) => void;
   busy?: boolean;
   what: string;
-  group?: boolean;
+  /**
+   * Contiguous runs of `rows`, in order, each under its own heading. A foldable
+   * one can be shut; the one holding the cursor opens by itself, so the
+   * keyboard never lands on a row nobody can see.
+   */
+  sections?: BranchSection[];
+  /** Drawn at the top of the scrolling list, above the first heading (a notice). */
+  aboveList?: ReactNode;
   disabled?: boolean;
   /**
    * How wide the list is allowed to be.
@@ -66,12 +85,26 @@ export function List({ rows, cursor, onCursor, onMenu, busy, what, group, disabl
    * acme/ORBIT-1042-cove…" — with 700px of window sitting empty beside it.
    */
   measure?: number;
+  /**
+   * Log and Reflog: the picked row's inspector takes the right-hand side, and
+   * the row carries no button of its own. What can be done lives in the dock
+   * under the list; the row's right-click menu stays.
+   */
+  inspector?: (index: number) => ReactNode;
+  /** The log: the list takes the width the inspector leaves, edge to edge, instead of a centred reading measure. */
+  flush?: boolean;
 }) {
-  const [folded, setFolded] = useState<Set<string>>(new Set());
-  const groups = useMemo(
-    () => (group ? groupByPrefix(rows, (r) => r.name) : [{ prefix: "", rows }]),
-    [group, rows],
-  );
+  // Sections the person toggled away from how they start.
+  const [flipped, setFlipped] = useState<Set<string>>(new Set());
+  const plan = useMemo(() => {
+    let at = 0;
+    return (sections ?? [{ id: "", label: "", foldable: false, startsFolded: false, size: rows.length } as BranchSection]).map((s) => {
+      const part = { s, from: at, to: at + s.size };
+      at += s.size;
+      return part;
+    });
+  }, [sections, rows.length]);
+  const folded = (id: string, startsFolded: boolean, holdsCursor: boolean) => startsFolded !== flipped.has(id) && !holdsCursor;
 
   if (!rows.length) return <Empty what={what} busy={busy} />;
 
@@ -81,31 +114,36 @@ export function List({ rows, cursor, onCursor, onMenu, busy, what, group, disabl
     // Centred as a pair rather than pinned left: on a 2000px window the list
     // plus its detail come to ~1300, and letting the remaining 700 sit on one
     // side is what made the old view feel like a form in the corner of a page.
-    <div className="flex-1 min-h-0 flex w-full mx-auto" style={{ maxWidth: 1480 }}>
+    <div className={`flex-1 min-h-0 flex w-full ${flush ? "" : "mx-auto"}`} style={flush ? undefined : { maxWidth: 1480 }}>
       {/* The list keeps a reading measure — a card is a name and a sentence,
           and a 1900px sentence is not read, it is scanned past — and the width
           left over goes to the detail pane rather than to blank card. */}
-      <div className="agx-scroll flex-1 min-w-0 overflow-y-auto px-3 pb-4" style={{ maxWidth: measure ?? 860 }}>
-      {groups.map((g) => (
-        <Fragment key={g.prefix || "(no prefix)"}>
-          {group && groups.length > 1 && (
+      <div className={flush ? "agx-scroll flex-1 min-w-0 overflow-y-auto p-2 flex flex-col gap-0.5" : "agx-scroll flex-1 min-w-0 overflow-y-auto px-3 pb-4"}
+        style={flush ? { borderRight: INSPECTOR_RULE } : { maxWidth: measure ?? 860 }}>
+      {aboveList}
+      {plan.map(({ s: sec, from, to }) => {
+        const shut = sec.foldable && folded(sec.id, sec.startsFolded, cursor >= from && cursor < to);
+        return (
+        <Fragment key={sec.id || "(all)"}>
+          {sections && (
             <GroupHead
-              label={g.prefix ? `${g.prefix}/` : "no prefix"}
-              count={g.rows.length}
-              folded={folded.has(g.prefix)}
-              onToggle={() => setFolded((prev) => {
+              label={sec.label} raw={sec.raw}
+              count={sec.foldable && shut ? undefined : sec.id === "recent" ? sec.size : undefined}
+              note={shut ? <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>{sec.size} folded</span> : undefined}
+              folded={shut}
+              onToggle={sec.foldable ? () => setFlipped((prev) => {
                 const next = new Set(prev);
-                next.has(g.prefix) ? next.delete(g.prefix) : next.add(g.prefix);
+                next.has(sec.id) ? next.delete(sec.id) : next.add(sec.id);
                 return next;
-              })}
+              }) : undefined}
             />
           )}
-          {!folded.has(g.prefix) && g.rows.map((r) => {
-            const i = rows.indexOf(r);
-            const primary = disabled ? null : primaryAction(r.kind, r.name, r.state);
+          {!shut && rows.slice(from, to).map((r, k) => {
+            const i = from + k;
+            const primary = disabled || inspector ? null : primaryAction(r.kind, r.name, r.state);
             return (
               <Row key={r.key} rail={r.rail} title={r.title ?? r.name} chips={r.chips} facts={r.facts}
-                gutter={r.gutter} variant={r.variant}
+                gutter={r.gutter} variant={r.variant} lead={r.lead} trail={r.trail} dim={r.dim} picked={r.picked} pickMark={r.pickMark}
                 selected={i === cursor} current={r.current} title2={r.name}
                 onClick={() => onCursor(i)}
                 onContextMenu={(e) => { e.preventDefault(); onCursor(i); onMenu(r, e.clientX, e.clientY); }}
@@ -118,7 +156,8 @@ export function List({ rows, cursor, onCursor, onMenu, busy, what, group, disabl
             );
           })}
         </Fragment>
-      ))}
+        );
+      })}
       </div>
       {/*
         The right half, which is where all that empty space was going.
@@ -130,7 +169,7 @@ export function List({ rows, cursor, onCursor, onMenu, busy, what, group, disabl
         action set as named buttons — the same catalogue the right-click shows,
         because there is finally room to show it without hiding it.
       */}
-      {active && <Detail row={active} disabled={disabled} />}
+      {active && (inspector ? inspector(Math.min(cursor, rows.length - 1)) : <Detail row={active} disabled={disabled} />)}
     </div>
   );
 }
@@ -142,7 +181,7 @@ function Detail({ row, disabled }: { row: ListRow; disabled?: boolean }) {
     // and saying so with depth means the eye stops treating the whole pane as
     // one very wide list.
     <aside className="agx-scroll hidden lg:flex flex-col gap-4 flex-1 min-w-0 max-w-[28rem] overflow-y-auto px-5 py-4"
-      style={{ borderLeft: `1px solid ${wash("--text", 8)}`, background: wash("--bg2", 40) }}>
+      style={{ borderLeft: INSPECTOR_RULE, background: wash("--bg2", 40) }}>
       <div>
         <div className="text-[10px] uppercase tracking-[0.11em] mb-1" style={{ color: "var(--text3)" }}>{row.kind}</div>
         <div className="text-[15px] font-medium break-all"
@@ -194,6 +233,7 @@ export function branchRows(
     current: string;
     worktreeOf: (name: string) => GitWorktree | undefined;
     root: string;
+    trunk?: string | null;
     picked: Set<string>;
     onPick: (name: string) => void;
     run: (id: string, b: GitBranch) => void;
@@ -209,41 +249,50 @@ export function branchRows(
       current: isCurrent, gone: t.gone, ahead: t.ahead, behind: t.behind,
       upstream: !!b.upstream, elsewhere, merged: b.mergedIntoTrunk === true,
     };
-    // The rail answers "what is up with this one" before you read anything:
-    // red is gone, amber is behind, green is ahead, blue is where you are.
-    const rail: Tone = t.gone ? "bad" : isCurrent ? "accent" : t.behind > 0 ? "warn" : t.ahead > 0 ? "good" : "neutral";
+    const merged = b.mergedIntoTrunk === true && !t.gone && !isCurrent;
+    const drift = branchDrift(b, ctx.trunk, t);
+    // The tile says what the branch IS in one colour: where you are, done with,
+    // or ordinary. Chips below say the rest in words.
+    const tone = isCurrent ? "var(--primary)" : merged ? "var(--success)" : t.gone ? "var(--error)" : "var(--text3)";
+    // The third fact is the one that answers "where": the folder it is held in,
+    // what a branch you are on tracks, or whose it is.
+    const third = elsewhere ? `../${wt!.path.split("/").pop()}` : isCurrent ? b.upstream ?? undefined : b.author;
     return {
-      key: b.name, kind: "branch", name: b.name, state, rail, current: isCurrent,
+      key: b.name, kind: "branch", name: b.name, state, current: isCurrent, variant: "item" as const, dim: merged,
       run: (id) => ctx.run(id, b),
-      title: (
-        <span className="flex items-center gap-2 min-w-0">
-          <span className={`shrink-0 ${ctx.picked.size ? "" : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"} transition-opacity`}>
+      lead: (
+        <>
+          {/* Always drawn, as the mockup does: a bulk action starts from an empty box you can see.
+              The branch you are on has none, since it cannot be deleted. */}
+          {!isCurrent && (
             <TickBox on={ctx.picked.has(b.name)} onClick={() => ctx.onPick(b.name)}
               title={ctx.picked.has(b.name) ? "Untick" : "Tick for a bulk action"} />
-          </span>
-          <span className="truncate">{b.name}</span>
-        </span>
-      ),
-      chips: (
-        <>
-          {isCurrent && <Chip tone="accent">on this</Chip>}
-          {t.gone && <Chip tone="bad" title="its remote branch no longer exists">gone</Chip>}
-          {t.ahead > 0 && <Chip tone="good">↑{t.ahead}</Chip>}
-          {t.behind > 0 && <Chip tone="warn">↓{t.behind}</Chip>}
-          {b.mergedIntoTrunk === true && !t.gone && <Chip>merged</Chip>}
-          {elsewhere && <Chip tone="accent" title={wt!.path}>in {wt!.path.split("/").pop()}</Chip>}
+          )}
+          <Tile tone={tone}><BranchIcon size={ICON.xs} /></Tile>
         </>
       ),
-      facts: [b.date, b.subject, b.upstream ?? "no upstream"],
+      trail: <Drift ahead={drift.ahead} behind={drift.behind}
+        title={drift.vs === "trunk" ? `${drift.ahead} only here, ${drift.behind} only on ${ctx.trunk ?? "the trunk"}` : `${drift.ahead} to push, ${drift.behind} to pull`} />,
+      title: b.name,
+      chips: (
+        <>
+          {isCurrent && <Chip tone="accent"><IconLabel icon={<PinIcon size={ICON.xs} />}>here</IconLabel></Chip>}
+          {t.gone && <Chip tone="bad" title="its remote branch no longer exists">gone</Chip>}
+          {elsewhere && <Chip title={wt!.path}><IconLabel icon={<FolderIcon size={ICON.xs} />}>in a worktree</IconLabel></Chip>}
+          {!b.upstream && <Chip tone="warn">no upstream</Chip>}
+          {merged && <Chip tone="good"><IconLabel icon={<DoneIcon size={ICON.xs} />}>merged</IconLabel></Chip>}
+        </>
+      ),
+      facts: [b.subject, b.date, third],
     };
   });
 }
 
-export function tagRows(tags: GitTag[], run: (id: string, t: GitTag) => void): ListRow[] {
+export function tagRows(tags: GitTag[], run: (id: string, t: GitTag) => void, extra?: (name: string) => ReactNode): ListRow[] {
   return tags.map((t) => ({
     key: t.name, kind: "tag", name: t.name, state: {}, rail: "neutral",
     run: (id) => run(id, t),
-    chips: t.annotated ? <Chip tone="accent">annotated</Chip> : undefined,
+    chips: <>{t.annotated ? <Chip tone="accent">annotated</Chip> : <Chip>lightweight</Chip>}{extra?.(t.name)}</>,
     facts: [t.date, t.hash, t.subject],
   }));
 }
@@ -340,107 +389,46 @@ export function reflogRows(entries: GitReflogEntry[], run: (id: string, e: GitRe
  */
 export function commitRows(
   lines: { hash?: string; graph: string; parents?: string[]; subject?: string; refs?: string; author?: string; date?: string }[],
-  ctx: { picked: ReadonlySet<string>; run: (id: string, hash: string, subject: string) => void },
+  ctx: {
+    picked: ReadonlySet<string>;
+    /** The apply-order number of each picked commit, oldest first. */
+    numbers?: ReadonlyMap<string, number> | null;
+    run: (id: string, hash: string, subject: string) => void;
+    /** Lanes laid out over the WHOLE log, by hash: a search leaves gaps in the
+     *  list, and lanes laid out over the gaps would draw a different graph. */
+    layout?: ReadonlyMap<string, GraphRow>;
+    /** The selected commit a search put back at the top although it does not match. */
+    pinned?: string | null;
+    /** Remote names, to tell `origin/fix/login` from a local `fix/login`. */
+    remotes?: readonly string[];
+  },
 ): ListRow[] {
   const commits = lines.filter((l) => !!l.hash);
-  const graph = layoutGraph(commits.map((l) => ({ hash: l.hash!, parents: l.parents ?? [] })));
-  const width = graphWidth(graph);
+  const graph = ctx.layout
+    ? commits.map((l) => ctx.layout!.get(l.hash!))
+    : layoutGraph(commits.map((l) => ({ hash: l.hash!, parents: l.parents ?? [] })));
   return commits.map((l, i) => ({
-    key: `${l.hash}-${i}`, kind: "commit", name: l.hash!, state: {},
+    key: `${l.hash}-${i}`, kind: "commit", name: l.hash!, state: { inLog: true },
     variant: "line" as const,
-    gutter: <GraphCell row={graph[i]} width={width} selected={ctx.picked.has(l.hash!)} />,
+    // The pinned row is out of its place in the history: lanes drawn for it would join its neighbours.
+    gutter: (cursor: boolean) => <MiniGraph row={l.hash === ctx.pinned ? undefined : graph[i]} selected={cursor} />,
+    picked: ctx.picked.has(l.hash!),
+    pickMark: ctx.numbers?.get(l.hash!),
     run: (id) => ctx.run(id, l.hash!, l.subject ?? ""),
-    title: <span className="truncate" style={{ fontFamily: "var(--font-sans)" }}>{l.subject}</span>,
-    /* `clip`, and capped: this is the one chip in the app whose text is not a
-       word but a list of branch names, and on a busy commit it is longer than
-       the subject it sits beside. Uncapped it ate the row and drew itself
-       over the date and the author. */
-    chips: l.refs
-      ? <span className="chip-ref"><Chip tone="good" clip title={l.refs}>{l.refs}</Chip></span>
-      : undefined,
-    facts: [l.date, l.hash, l.author],
+    title: <span title={l.subject} style={{ fontFamily: "var(--font-sans)" }}>{l.subject}</span>,
+    /* The refs come BEFORE the subject, one chip each, in a cluster capped at 45% of the row
+       (`.chip-ref`): this is the one place whose text is a list of branch names, and on a busy
+       commit it is longer than the subject it sits beside. */
+    chips: (l.refs || l.hash === ctx.pinned || (l.parents?.length ?? 0) > 1) ? (
+      <>
+        {l.hash === ctx.pinned && <Chip tone="warn">selected, not matching</Chip>}
+        <RefChips refs={l.refs} merge={(l.parents?.length ?? 0) > 1} remotes={ctx.remotes} />
+      </>
+    ) : undefined,
+    facts: [
+      <CommitAvatar key="by" author={l.author} size={ICON.lg} />,
+      <span key="t" title={l.date}>{shortAgo(l.date)}</span>,
+      <span key="h" style={{ color: "var(--text4)" }}>{l.hash}</span>,
+    ],
   }));
-}
-
-/**
- * One row of the graph, drawn.
- *
- * A fixed-height SVG per row rather than one tall canvas beside the list: the
- * rows are a virtualised, foldable list whose heights are decided by their own
- * content, and a single drawing beside them would have to be told about every
- * one of those decisions to stay aligned. Per row it cannot drift.
- *
- * The curve is deliberate. A merge drawn as two straight segments meeting at a
- * corner reads as a right-angle pipe — which is what the ASCII was — and the
- * whole point of drawing this is that a branch should look like it leaves and
- * comes back.
- */
-function GraphCell({ row, width, selected }: { row?: GraphRow; width: number; selected?: boolean }) {
-  if (!row) return <span className="shrink-0" style={{ width }} />;
-  const cap = Math.max(0, Math.floor((width - GRAPH_PAD) / LANE_W) - 1);
-  const dotLane = Math.min(row.dot, cap);
-  const dotX = laneX(dotLane);
-  const colour = laneColour(row.dot);
-  return (
-    /*
-     * A box that RESERVES its width, holding a drawing that fills its height.
-     *
-     * Both halves matter, and the first was missing once: the SVG is positioned
-     * absolutely (so it can be as tall as whatever the row turns out to be), and
-     * an absolutely positioned child gives its parent no width at all — so the
-     * column collapsed and the graph was drawn across the commit subjects.
-     *
-     * `preserveAspectRatio="none"` is the other half: a row's height comes from
-     * its own content and from the app's UI scale, so a drawing with a fixed
-     * pixel height would leave a gap between one row's lines and the next's.
-     * Stretched, the lanes meet exactly — a bezier stretched is still a bezier.
-     */
-    <span className="relative block shrink-0 h-full" style={{ width }}>
-      <svg width={width} viewBox={`0 0 ${width} ${GRAPH_H}`} preserveAspectRatio="none" aria-hidden
-        className="absolute inset-0" style={{ width, height: "100%" }}>
-        {row.links.map((l, i) => {
-          // Lanes past the cap are clipped at the edge on purpose: it says
-          // "there is more going on here" without letting forty branches eat
-          // the message.
-          if (l.from > cap && l.to > cap) return null;
-          /* THIS row's own line is drawn full strength and a touch thicker;
-             every other branch passing through is dimmed to less than half.
-             That answers how hard it is to follow a line to its commit: on a screen
-             with ten lanes, all of them the same weight, there is nothing
-             joining a line to the commit it belongs to. */
-          const mine = l.from === dotLane || l.to === dotLane;
-          return <path key={i} d={linkPath(l, cap)} fill="none" stroke={laneColour(l.lane)}
-            strokeWidth={mine ? 2 : 1.25} vectorEffect="non-scaling-stroke" strokeLinecap="round"
-            opacity={mine ? 0.95 : 0.34} />;
-        })}
-      </svg>
-
-      {/*
-        * The dot, and the run from the dot to the text — both in HTML rather
-        * than in the SVG above.
-        *
-        * The SVG's user space is stretched vertically to fill the row, so a
-        * circle drawn in it comes out an ellipse: that is what the dot had
-        * become, a flat pink smear a third the height it should be. Nothing
-        * inside a non-uniformly scaled viewport escapes that, `transform-box`
-        * included. An HTML element sits outside the scaling entirely, so it is
-        * round, and `top: 50%` puts it exactly on the row's centre line — which
-        * is where the subject's own text sits.
-        */}
-      <span aria-hidden className="absolute" style={{
-        left: dotX + 7, right: 0, top: "50%", height: 1, transform: "translateY(-50%)",
-        background: `linear-gradient(to right, color-mix(in srgb, ${colour} 75%, transparent), transparent 92%)`,
-      }} />
-      <span aria-hidden className="absolute rounded-full" style={{
-        left: dotX, top: "50%", transform: "translate(-50%, -50%)",
-        width: row.merge ? 9 : 8, height: row.merge ? 9 : 8,
-        // Hollow for a merge: the one commit whose content is not its own.
-        background: row.merge ? "var(--surface-card)" : colour,
-        border: `2px solid ${colour}`,
-        // The selected row's dot gets a halo rather than a bigger size, so the
-        // lane it sits in does not appear to move when you walk the list.
-        boxShadow: selected ? `0 0 0 3px color-mix(in srgb, ${colour} 30%, transparent)` : "none",
-      }} />
-    </span>
-  );
 }

@@ -150,3 +150,18 @@ export async function conflictHandoff(
     model: r.model, effort: r.effort, why: r.why,
   };
 }
+
+/** The sentence after "N more files": what carries them in. A cherry-pick or a
+ *  revert is not a merge, and saying so named the wrong operation on screen. */
+export function carriedLine(state: string | undefined, n: number): string {
+  const one = n === 1;
+  if (state === "rebasing") return `${one ? "is" : "are"} replayed with this commit without conflicting.`;
+  const what = state === "cherry-picking" ? "commit" : state === "reverting" ? "revert" : "merge";
+  return `${one ? "comes" : "come"} in with this ${what} without conflicting.`;
+}
+
+/** What the stopped operation is called on the screen. A revert or a
+ *  cherry-pick used to read "merge" because that was the only other word. */
+export function opNoun(state: string | undefined): string {
+  return state === "rebasing" ? "rebase" : state === "reverting" ? "revert" : state === "cherry-picking" ? "cherry-pick" : "merge";
+}

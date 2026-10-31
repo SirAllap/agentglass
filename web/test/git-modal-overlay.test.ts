@@ -81,7 +81,9 @@ describe("the Git view serves them while hidden", () => {
   });
 
   it("the toast floats when the view is hidden, since it answers what the palette ran", () => {
-    expect(git).toContain("<Portal z={LAYER.palette}><GitToast toast={toast} floating /></Portal>");
+    // The Portal lives inside GitToast, so the panel draws no overlay of its own.
+    expect(git).toContain("<GitToast toast={toast} floating />");
+    expect(src("components/git/GitToast.tsx")).toContain("<Portal z={LAYER.palette}>");
   });
 
   it("Workspace mounts the view hidden for a request, and does not show it", () => {
@@ -97,11 +99,15 @@ describe("the Git view serves them while hidden", () => {
 describe("the way out", () => {
   const COMPONENTS = ["Insights", "Bisect", "Compare", "Blame", "Rebase"];
 
-  it("every Git modal closes on Escape through the one hook", () => {
+  it("every Git modal closes on Escape through the one frame", () => {
     for (const m of COMPONENTS) {
       const t = stripComments(src(`components/${m}Modal.tsx`));
-      expect(t, m).toContain("useEscapeClose(onClose);");
+      expect(t, m).toContain("<GitDialog");
+      expect(t, m).toContain("onClose={onClose}");
     }
+    const frame = stripComments(src("components/GitDialog.tsx"));
+    expect(frame).toContain('e.key === "Escape"');
+    expect(frame).toContain("e.stopPropagation();");
   });
 
   it("the hook listens in the bubble phase and keeps the key from the panel behind", () => {

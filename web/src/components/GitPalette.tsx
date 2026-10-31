@@ -17,8 +17,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Portal } from "./Portal.tsx";
 import { LAYER } from "../lib/layers.ts";
-import { matchPalette, paletteEntries, type GitKind, type GitRowState } from "../lib/gitActions.ts";
-import { INPUT, INPUT_STYLE, LINE } from "./workspace/Chrome.tsx";
+import { matchPalette, onePerObject, paletteEntries, type GitKind, type GitRowState } from "../lib/gitActions.ts";
+import { INPUT, INPUT_STYLE, LINE, ListRow } from "./workspace/Chrome.tsx";
 
 export interface PaletteRow {
   kind: GitKind;
@@ -35,7 +35,7 @@ export function GitPalette({ rows, onClose }: { rows: PaletteRow[]; onClose: () 
   const inputRef = useRef<HTMLInputElement>(null);
 
   const entries = useMemo(() => paletteEntries(rows), [rows]);
-  const hits = useMemo(() => matchPalette(entries, q).slice(0, 40), [entries, q]);
+  const hits = useMemo(() => (q.trim() ? matchPalette(entries, q) : onePerObject(entries)).slice(0, 40), [entries, q]);
   // The cursor is an index into a list that changes under it as you type.
   // Clamping on render rather than on change is what keeps Enter honest when
   // the last keystroke shortened the list.
@@ -43,28 +43,13 @@ export function GitPalette({ rows, onClose }: { rows: PaletteRow[]; onClose: () 
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
-  /*
-   * A destructive action asks twice, here as well as in the menu.
-   *
-   * The right-click menu already required a confirm before anything
-   * irreversible; the palette ran the same action on one Enter. That gap is
-   * worse than it sounds, because the list REORDERS as you type — `setCursor(0)`
-   * on every keystroke, and the pointer moving across the list sets the cursor
-   * too — so "del" followed by Enter fires whatever landed in row 0, which may
-   * be a delete on a branch you were not looking at.
-   *
-   * The second Enter is on the same row: the item turns into "Press again to
-   * <label>", and any other key or a change to the query takes it back. Not a
-   * dialog, because a palette is a keyboard surface and a modal over a modal is
-   * how people learn to hit Enter twice without reading.
-   */
-  const [arming, setArming] = useState<string | null>(null);
-
+  // No arming step here: a destructive action's handler asks once, in a
+  // GitDialog that starts on Cancel and ignores Enter, which is what the
+  // old second-Enter row used to guard against (the list reorders as you type, so
+  // "del" then Enter could land on a row you were not looking at).
   const runAt = (i: number) => {
     const hit = hits[i];
     if (!hit) return;
-    const key = `${hit.kind}-${hit.name}-${hit.action.id}`;
-    if (hit.action.danger && arming !== key) { setArming(key); return; }
     onClose();
     const row = rows.find((r) => r.kind === hit.kind && r.name === hit.name);
     row?.run(hit.action.id);
@@ -85,15 +70,12 @@ export function GitPalette({ rows, onClose }: { rows: PaletteRow[]; onClose: () 
           boxShadow: "0 30px 70px -20px rgba(0,0,0,.8)",
         }}
         onKeyDown={(e) => {
-          // Anything that is not the confirming Enter disarms: an armed row must
-          // not survive a change of mind.
-          if (e.key !== "Enter") setArming(null);
           if (e.key === "Escape") { e.stopPropagation(); onClose(); }
           else if (e.key === "ArrowDown") { e.preventDefault(); setCursor(Math.min(at + 1, hits.length - 1)); }
           else if (e.key === "ArrowUp") { e.preventDefault(); setCursor(Math.max(at - 1, 0)); }
           else if (e.key === "Enter") { e.preventDefault(); runAt(at); }
         }}>
-        <input ref={inputRef} value={q} onChange={(e) => { setQ(e.target.value); setCursor(0); setArming(null); }}
+        <input ref={inputRef} value={q} onChange={(e) => { setQ(e.target.value); setCursor(0); }}
           placeholder="branch, tag, stash, worktree — or what you want to do to one"
           className={INPUT}
           style={{ ...INPUT_STYLE, fontFamily: "var(--font-mono, ui-monospace, monospace)" }} />
@@ -104,20 +86,15 @@ export function GitPalette({ rows, onClose }: { rows: PaletteRow[]; onClose: () 
             </div>
           )}
           {hits.map((h, i) => (
-            <button key={`${h.kind}-${h.name}-${h.action.id}`}
-              onMouseEnter={() => { setCursor(i); setArming(null); }} onClick={() => runAt(i)}
-              className="w-full text-left px-3 py-1.5 flex items-center gap-2"
-              style={{ background: i === at ? "color-mix(in srgb, var(--primary) 14%, transparent)" : "transparent" }}>
-              <span className="text-[9px] uppercase tracking-wider shrink-0 w-16" style={{ color: "var(--text3)" }}>{h.kind}</span>
-              <span className="text-[11.5px] shrink-0" style={{ color: h.action.danger ? "var(--error)" : "var(--text)" }}>
-                {arming === `${h.kind}-${h.name}-${h.action.id}` ? `Press again to ${h.action.label.toLowerCase()}` : h.action.label}
-              </span>
-              <span className="text-[11px] min-w-0 truncate" style={{ color: "var(--text2)", fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>{h.name}</span>
-              {h.action.command && i === at && (
-                <span className="ml-auto text-[9.5px] shrink-0 truncate max-w-[45%]"
-                  style={{ color: "var(--text3)", fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>{h.action.command}</span>
-              )}
-            </button>
+            <ListRow key={`${h.kind}-${h.name}-${h.action.id}`} hot={i === at}
+              onMouseEnter={() => setCursor(i)} onClick={() => runAt(i)}
+              leading={<span className="text-[9px] uppercase tracking-wider block w-16" style={{ color: "var(--text3)" }}>{h.kind}</span>}
+              trailing={h.action.command && i === at
+                ? <span className="text-[9.5px] truncate" style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>{h.action.command}</span>
+                : undefined}>
+              <span className="text-[11.5px]" style={{ color: h.action.danger ? "var(--error)" : "var(--text)" }}>{h.action.label}</span>{" "}
+              <span className="text-[11px]" style={{ color: "var(--text2)", fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>{h.name}</span>
+            </ListRow>
           ))}
         </div>
         <div className="px-3 py-1.5 text-[9.5px] flex gap-3"
