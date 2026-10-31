@@ -9,11 +9,11 @@
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { CopyIcon, DoneIcon } from "../lib/glyphIcons.tsx";
-import { ICON } from "../lib/iconSize.ts";
+import { HIT, ICON } from "../lib/iconSize.ts";
 import { externalUrl } from "../lib/externalUrl.ts";
 import { EDGE, LINE, RefreshButton } from "./workspace/Chrome.tsx";
 
-export const EYEBROW = "text-[8.5px] uppercase tracking-[0.18em]";
+export const EYEBROW = "text-[10px] uppercase tracking-[0.18em]";
 const ID_CHIP = "text-[10px] px-1.5 py-0.5 rounded-md leading-[1.35] whitespace-nowrap";
 const BAR_BTN = "text-[10.5px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg";
 
@@ -41,16 +41,18 @@ const Done = () => <span className="inline-flex items-center gap-1">copied<DoneI
  * Above the card: what you reach for after reading it. The hand-off sits first on the left (a tracker that
  * may not write passes nothing), then the two copies and the tracker's marks; Open and Refresh share the far right corner.
  */
-export function CardActionBar({ id, url, handoff, marks, copied, onCopy, onRefresh, refreshing }: {
+export function CardActionBar({ id, url, handoff, marks, extra, copied, onCopy, onRefresh, refreshing }: {
   id: string; url: string; handoff?: ReactNode;
   /** The tracker's own marks on the card (watching, votes), after the copies; a tracker with none passes nothing. */
   marks?: ReactNode;
+  /** One more control of the app's own, after the tracker's marks. */
+  extra?: ReactNode;
   copied: Copied | null; onCopy: (value: string, which: Copied) => void;
   onRefresh: () => void; refreshing: boolean;
 }) {
   const open = externalUrl(url);
   return (
-    <div className="flex items-center gap-1.5 flex-wrap pb-1.5" style={{ borderBottom: LINE }} role="toolbar" aria-label="Card actions">
+    <div className="flex items-center gap-1.5 flex-wrap pb-1.5" role="toolbar" aria-label="Card actions">
       {handoff}
       <button onClick={() => onCopy(id, "id")} className={BAR_BTN} style={{ border: LINE, color: "var(--text2)" }}>
         {copied === "id" ? <Done /> : `Copy ${id.replace(/-\d+$/, "") === id ? "id" : `${id.replace(/-\d+$/, "")} id`}`}
@@ -61,6 +63,7 @@ export function CardActionBar({ id, url, handoff, marks, copied, onCopy, onRefre
         </button>
       )}
       {marks}
+      {extra}
       <span className="flex-1" />
       {open && <a href={open} target="_blank" rel="noreferrer" className={BAR_BTN} style={{ border: LINE, color: "var(--text2)" }}>Open ↗</a>}
       <RefreshButton onRefresh={onRefresh} busy={refreshing} title="Read this card again" />
@@ -69,11 +72,13 @@ export function CardActionBar({ id, url, handoff, marks, copied, onCopy, onRefre
 }
 
 /** The key as a chip that copies itself, and the badge for a card that is yours. */
-export function CardChips({ id, copied, onCopy, mine, extra }: {
+export function CardChips({ id, copied, onCopy, mine, extra, trail }: {
   id: string; copied: Copied | null; onCopy: (value: string, which: Copied) => void; mine?: boolean; extra?: ReactNode;
+  /** What sits at the far end of the row: the card hop and the close button. */
+  trail?: ReactNode;
 }) {
   return (
-    <div className="flex items-center gap-1.5 flex-wrap">
+    <div className="flex items-center gap-1.5 flex-wrap" style={{ minHeight: HIT }}>
       <button onClick={() => onCopy(id, "id")} className={`${ID_CHIP} tabular-nums`}
         style={{ color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}
         title={`Copy ${id}: the id for a branch, a commit or a colleague`}>
@@ -84,6 +89,7 @@ export function CardChips({ id, copied, onCopy, mine, extra }: {
         <span className={`${ID_CHIP} tracking-[0.08em]`}
           style={{ color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 15%, transparent)" }}>YOURS</span>
       )}
+      {trail && <span className="ml-auto flex items-center gap-1.5 shrink-0">{trail}</span>}
     </div>
   );
 }
@@ -112,18 +118,19 @@ export function CardTitle({ title, copied, onCopy, children }: {
   );
 }
 
-/** A strip of tabs: a lit pill and an underline for the one you are on, a count where there is something to count, and no rule above or below. */
+/** The card's tab strip: sentence case, a 2px underline on the one you are on, a count after the name, one hairline under the strip. */
 export function CardTabs<Id extends string>({ tabs, active, onPick }: {
   tabs: readonly { id: Id; label: string; count?: number }[]; active: Id; onPick: (id: Id) => void;
 }) {
   return (
-    <div className="flex items-center gap-1 flex-wrap" role="tablist" aria-label="Card sections">
+    <div className="flex items-center gap-1.5 flex-wrap mt-2.5" role="tablist" aria-label="Card sections" style={{ borderBottom: LINE }}>
       {tabs.map((t) => (
         <button key={t.id} role="tab" aria-selected={active === t.id} aria-current={active === t.id ? "page" : undefined} onClick={() => onPick(t.id)}
-          className="agx-btn text-[10px] uppercase tracking-[0.14em] px-2.5 py-1.5 rounded-t-md whitespace-nowrap"
+          className="agx-btn text-[11.5px] px-2.5 -mb-px rounded-t-md inline-flex items-center gap-1.5 whitespace-nowrap"
           style={{
+            height: 30, fontWeight: active === t.id ? 650 : 400,
             color: active === t.id ? "var(--text)" : "var(--text3)",
-            background: active === t.id ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent",
+            background: "transparent",
             borderBottom: `2px solid ${active === t.id ? "var(--primary)" : "transparent"}`,
           }}>
           {t.label}{t.count ? ` ${t.count}` : ""}
@@ -136,9 +143,9 @@ export function CardTabs<Id extends string>({ tabs, active, onPick }: {
 /** A label above its value: in a narrow pane the other shape leaves the value a few words. */
 export function CardField({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="min-w-0">
-      <div className={`${EYEBROW} mb-1.5 truncate`} style={{ color: "var(--text4)" }} title={label}>{label}</div>
-      <div className="text-[11.5px] leading-normal break-words">{children}</div>
+    <div className="agx-lrow min-w-0">
+      <div className="truncate" title={label}>{label}</div>
+      <div className="text-[11.5px] leading-normal break-words min-w-0">{children}</div>
     </div>
   );
 }
@@ -146,8 +153,7 @@ export function CardField({ label, children }: { label: string; children: ReactN
 /** The framed band of what is read at a glance: each child is a `CardBandField`. */
 export function CardBand({ children }: { children: ReactNode }) {
   return (
-    <div className="rounded-lg px-3 py-2.5 flex flex-wrap items-start"
-      style={{ gap: "14px 20px", background: "color-mix(in srgb, var(--text) 4%, transparent)", border: EDGE }}>
+    <div className="flex flex-col" style={{ gap: 6 }}>
       {children}
     </div>
   );
@@ -155,8 +161,8 @@ export function CardBand({ children }: { children: ReactNode }) {
 
 export function CardBandField({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex flex-col gap-1 min-w-0" style={{ maxWidth: 210 }}>
-      <span className={`${EYEBROW} truncate`} style={{ color: "var(--text4)" }} title={label}>{label}</span>
+    <div className="agx-lrow min-w-0">
+      <span className="truncate" title={label}>{label}</span>
       <span className="min-w-0">{children}</span>
     </div>
   );

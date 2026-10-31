@@ -152,7 +152,7 @@ describe("the screens, as source", () => {
   test("the Jira card has the status, the person and the hand-off, and a write is folded back into the board's list", () => {
     const s = code("components/JiraTasks.tsx") + code("components/jira/JiraFacts.tsx");
     // A move's new stamp reaches the card, or the next write from it is a conflict.
-    expect(s).toContain("<TrackerStatusPick tracker={TRACKERS.jira} task={t} query={query} onSaid={setSaid} onTask={onTask} />");
+    expect(s).toContain("<TrackerStatusPick tracker={TRACKERS.jira} task={t} query={key} onSaid={setSaid} onTask={onTask} chip={26} />");
     expect(s).toContain("<TrackerPeoplePick tracker={TRACKERS.jira}");
     expect(s).toContain("<TrackerHandOffButton tracker={TRACKERS.jira}");
     expect(s).toContain("<JiraHead t={t} writable={writable} onTask={onTask}");

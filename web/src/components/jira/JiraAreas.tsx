@@ -14,7 +14,7 @@ import { CloseButton } from "../CloseButton.tsx";
 import { GROUP_BY, barSegments, railTitle, rowText, type AreaRow, type GroupBy, type GroupPref, type ThenBy } from "../../lib/jiraAreas.ts";
 import { epicTone, sprintLine } from "../../lib/jiraBoardContext.ts";
 import type { JiraBoardSprint } from "../../../../shared/providers.ts";
-import { Segmented, EDGE } from "../workspace/Chrome.tsx";
+import { Segmented } from "../workspace/Chrome.tsx";
 import { Select } from "../Select.tsx";
 
 /** What the rail's Sprints entry and an Area are called when picked: an epic's key, or this. */
@@ -26,12 +26,14 @@ const TEXT_W = 52;
 const BAR_MIN = 30;
 const LEGEND: readonly [string, string][] = [["var(--success)", "done"], ["var(--warning)", "open in the sprint"], ["var(--text4)", "other open"]];
 
-const CAPTION = "text-[8.5px] uppercase tracking-[0.18em] px-3 pt-3 pb-1";
+const CAPTION = "text-[10px] uppercase tracking-[0.08em] px-3 pt-3 pb-1";
 const row = (on: boolean) => ({
   // minHeight, never height: an epic title wraps to two lines and a fixed row lets the second line print over the next row.
   minHeight: HIT, height: "auto", paddingBlock: 4, marginInline: 4, paddingLeft: 12, paddingRight: 8, borderRadius: 6, cursor: "pointer",
   fontSize: 12, fontWeight: on ? 600 : 400, color: on ? "var(--text)" : "var(--text2)",
-  background: on ? "color-mix(in srgb, var(--primary) 10%, transparent)" : undefined,
+  // The lit row is the rail's own: a neutral fill and a bar on its left edge, the same as a list row above.
+  background: on ? "color-mix(in srgb, var(--text) 9%, transparent)" : undefined,
+  boxShadow: on ? "inset 2px 0 0 var(--primary), inset 0 0 0 1px color-mix(in srgb, var(--text) 8%, transparent)" : undefined,
 } as const);
 
 /** The rail's Areas and Sprints entries, under the project they belong to. */
@@ -74,7 +76,7 @@ export function JiraAreaRail({ project, areas, sprint, now, points, sel, onPick,
     );
   };
   return (
-    <div role="group" aria-label={`${project} areas`} data-testid="jira-areas-rail" style={{ borderTop: EDGE, marginTop: 8 }}>
+    <div role="group" aria-label={`${project} areas`} data-testid="jira-areas-rail">
       <div className={CAPTION} style={{ color: "var(--text4)" }}>{project} · Areas</div>
       {state === "loading" && !areas.length && <div className="px-3 py-1 text-[11px]" style={{ color: "var(--text3)" }}>Reading the areas…</div>}
       {state === "error" && !areas.length && <div className="px-3 py-1 text-[11px]" style={{ color: "var(--error-ink)" }}>Could not read the areas.</div>}
@@ -95,7 +97,7 @@ export function JiraAreaRail({ project, areas, sprint, now, points, sel, onPick,
           <div className={CAPTION} style={{ color: "var(--text4)" }}>Sprints</div>
           <button onClick={() => onPick(sel === SPRINTS ? null : SPRINTS)} aria-pressed={sel === SPRINTS} data-testid="jira-sprints-entry"
             className="agx-rail-row text-left flex flex-col justify-center"
-            style={{ ...row(sel === SPRINTS), height: "auto", paddingBlock: 6, marginInline: 8, border: EDGE }}>
+            style={{ ...row(sel === SPRINTS), height: "auto", paddingBlock: 4 }}>
             <span className="flex items-center gap-2 min-w-0"><span className="truncate flex-1">{sprint.name}</span><span style={{ color: "var(--text3)", fontSize: 10.5 }}>active</span></span>
             <span className="tabular-nums" style={{ color: "var(--text3)", fontSize: 10.5, fontWeight: 400 }}>
               {[line?.range, points ? `${points.todo} / ${points.doing} / ${points.done} pts` : ""].filter(Boolean).join(" · ")}
@@ -159,11 +161,11 @@ export function JiraGroupControl({ pref, onPref, hasAreas }: { pref: GroupPref; 
     : [{ value: "none", label: "Nothing" }, { value: "status", label: "Status" }];
   return (
     <span className="inline-flex items-center gap-2" data-testid="jira-group-control">
-      <span className="text-[8.5px] uppercase tracking-[0.18em]" style={{ color: "var(--text4)" }}>Group</span>
+      <span className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--text4)" }}>Group</span>
       <Select value={pref.by} title="Group the cards by"
         options={bys.map((g) => ({ value: g.id, label: g.label }))}
         onChange={(v) => onPref({ by: v as GroupBy, split: "none" })} />
-      <span className="text-[8.5px] uppercase tracking-[0.18em]" style={{ color: "var(--text4)" }}>Then</span>
+      <span className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--text4)" }}>Then</span>
       <Select value={pref.split} title="Then split each group by"
         options={thens.map((t) => ({ value: t.value, label: t.label }))}
         onChange={(v) => onPref({ ...pref, split: v as ThenBy })} />

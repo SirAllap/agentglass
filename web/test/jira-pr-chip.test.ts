@@ -18,12 +18,14 @@ const pr = (card: PrSummary["card"], title = "ORBIT-1042: Retry the export"): Pr
 } as PrSummary);
 
 describe("a Jira card on the board", () => {
-  test("is drawn by the shared chip row, and the board has no second one", () => {
+  test("is drawn by the one ticket row, and the board has no second one", () => {
     const board = read("src/components/TriageBoard.tsx");
-    expect(board).toContain("<CardTracker ");
+    const card = read("src/components/PrCard.tsx");
     expect(board).toContain("withCard(p, hasTaskProvider).card");
-    expect(read("src/components/CardTracker.tsx")).toContain("<CardChip ");
+    expect(board).toContain("<PrCard ");
+    expect(card, "the ticket row reads the card's own id, whichever tracker it is").toContain("cv.tracker === \"card\"");
     expect(board.includes("tracker === \"jira\""), "no Jira-only chip on the board").toBe(false);
+    expect(card.includes("tracker === \"jira\""), "no Jira-only chip on the card").toBe(false);
   });
 
   test("is left as the server drew it, with no request to ClickUp", () => {

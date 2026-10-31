@@ -19,6 +19,7 @@ import "@xterm/xterm/css/xterm.css";
 import { FitAddon } from "@xterm/addon-fit";
 import { Portal } from "./Portal.tsx";
 import { LAYER } from "../lib/layers.ts";
+import { usePopoverKeys } from "../lib/focusTrap.ts";
 import { termShown, termInputGuard } from "../lib/termInputGuard.ts";
 import { ptyWsUrl, IS_DEMO } from "../lib/api.ts";
 import { showFile } from "../lib/benchStore.ts";
@@ -366,6 +367,10 @@ export function PeekFile({ peek, onClose, topPx }: {
   }, [editorId]);
 
   const canRender = READABLE.test(peek.path);
+  /* `gh:owner/name` is a repository read from GitHub with no directory behind
+     it (see the pull request panel's read-only strip): the file itself is a
+     temp copy that reads fine, but anything that needs a working folder has none. */
+  const noCheckout = peek.root.startsWith("gh:");
   /* A ref has no file on disk, so there is nothing for an editor to open. Held
      as its own name because it is the reason for several decisions below. */
   const atRef = !!peek.ref;
@@ -374,6 +379,10 @@ export function PeekFile({ peek, onClose, topPx }: {
      face and drew nothing — a dead panel, which is the thing the demo's terminal
      and browser each had to be talked out of being. */
   const [reading, setReading] = useState(canRender || !!peek.ref || IS_DEMO);
+  /* Reading is a page like any other, so it takes focus, closes on Esc and walks with the arrows. The editor is not:
+     Esc and Tab belong to the editor it hosts, and `:q` is the way out of it. */
+  const dialogRef = useRef<HTMLDivElement>(null);
+  usePopoverKeys(dialogRef, onClose, reading);
   const [text, setText] = useState<string | null>(null);
   const [textErr, setTextErr] = useState<string | null>(null);
   const [truncated, setTruncated] = useState(false);
@@ -639,7 +648,7 @@ export function PeekFile({ peek, onClose, topPx }: {
           the button are the ways out that do not collide. */}
       <div className="fixed inset-0" style={{ zIndex: 9998, background: "color-mix(in srgb, var(--bg) 62%, transparent)" }}
         onClick={onClose} />
-      <div role="dialog" aria-label={`${peek.edit ? "Editing" : "Viewing"} ${peek.path}`}
+      <div ref={dialogRef} role="dialog" aria-label={`${peek.edit ? "Editing" : "Viewing"} ${peek.path}`}
         className="fixed rounded-xl overflow-hidden flex flex-col"
         style={{
           zIndex: 9999, top: topPx === undefined ? "6vh" : topPx, bottom: "6vh", left: "8vw", right: "8vw",
@@ -787,6 +796,7 @@ export function PeekFile({ peek, onClose, topPx }: {
             * still read-only, because that is what a copy of a commit is.
             */}
           <button
+            disabled={noCheckout}
             onClick={() => {
               showFile(peek.root, peek.path, {
                 line: peek.line,
@@ -796,8 +806,10 @@ export function PeekFile({ peek, onClose, topPx }: {
               });
               onClose();
             }}
-            title="Open this file on the bench — it stays open there when you leave this view"
-            className={`agx-btn shrink-0 text-[10px] px-2 py-0.5 rounded ${canRender || atRef ? "" : "ml-auto"}`}
+            title={noCheckout
+              ? "This repository is only on GitHub here, so the bench has no folder to work in. Clone it and add it as a project to open files on the bench."
+              : "Open this file on the bench — it stays open there when you leave this view"}
+            className={`agx-btn shrink-0 text-[10px] px-2 py-0.5 rounded ${canRender || atRef ? "" : "ml-auto"} ${noCheckout ? "opacity-50 cursor-not-allowed" : ""}`}
             style={{ color: "var(--text2)", border: EDGE }}>
             To the bench
           </button>

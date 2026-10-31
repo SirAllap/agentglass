@@ -111,7 +111,7 @@ describe("the Jira card pane", () => {
     // The header wrapper now also holds the edit note's reserved line; it is still one fixed block above the scroller.
     const header = src.indexOf('<div className="shrink-0" style={{ background: "var(--bg)" }}>');
     const scroller = src.indexOf('<div ref={listRef} className="agx-scroll flex-1 min-h-0 overflow-y-auto');
-    const foot = src.indexOf('<div className="shrink-0 px-4 pt-2 pb-3" style={{ borderTop: LINE }}>');
+    const foot = src.indexOf('<div className="shrink-0" data-dock="comment" style={{ borderTop: LINE, padding: "8px 16px 12px" }}>');
     const box = src.indexOf("<Composer value={say}");
     expect(header).toBeGreaterThan(0);
     expect(scroller).toBeGreaterThan(header);

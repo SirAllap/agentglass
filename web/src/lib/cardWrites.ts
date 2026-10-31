@@ -55,6 +55,18 @@ export function writeBlock(setup: { writeEnabled?: boolean } | null | undefined)
   return setup?.writeEnabled === false ? WRITES_OFF : null;
 }
 
+export const JIRA_WRITES_OFF = "Changes to Jira are off. Turn them on in Tasks.";
+
+/** The same, for a card whose tracker is known: Jira has its own switch, and
+ *  reading the ClickUp one told a Jira card that ClickUp was off. */
+export function cardWriteBlock(
+  kind: "jira" | "clickup" | null,
+  clickup: { writeEnabled?: boolean } | null | undefined,
+  jira: { writes?: boolean } | null | undefined,
+): string | null {
+  return kind === "jira" ? (jira?.writes === false ? JIRA_WRITES_OFF : null) : writeBlock(clickup);
+}
+
 export interface WriteResult {
   ok: boolean;
   error?: string;

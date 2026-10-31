@@ -60,7 +60,7 @@ describe("drawn", () => {
   const view = (links: JiraLink[]) => renderToStaticMarkup(React.createElement(JiraPrsView, { links, error: "", writable: false, said: "", busy: false, draft: "", onDraft() {}, onLink() {} }));
   test("a pull request row says its state, who wrote it, where it goes and who approved", () => {
     const html = view(withDev([link(7)], [pr(7, { state: "MERGED", author: "Ada Example", from: "feature/ORBIT-1042", into: "main", reviewers: [{ name: "Bo Sample", approved: true }] })]));
-    for (const said of ["MERGED", "by Ada Example", "feature/ORBIT-1042 into main", "1 of 1 approved"]) expect(html).toContain(said);
+    for (const said of ["MERGED", "by Ada Example", "feature/ORBIT-1042 → main", "1 of 1 approved"]) expect(html).toContain(said);
   });
   test("a row only the tool knows says so", () => {
     expect(view(withDev([], [pr(8)]))).toContain("known to the development tool");

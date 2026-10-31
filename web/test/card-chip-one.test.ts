@@ -16,7 +16,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 const read = (p: string) => readFileSync(new URL("../" + p, import.meta.url), "utf8");
-const SURFACES = ["src/components/CardTracker.tsx", "src/components/PrPanel.tsx"];
+const SURFACES = ["src/components/PrPanel.tsx"];
 
 describe("the tracker card's chip", () => {
   test("has one definition, in the shared module", () => {
@@ -101,33 +101,25 @@ describe("the tracker card's chip", () => {
  *   the status  drawn as coloured uppercase text here and as a bordered chip in
  *               the tasks view, from the same workspace colour.
  */
-describe("the card's people and status", () => {
-  /* The block lives in its own component now: the card's identity line only
-     places it. */
-  const board = read("src/components/CardTracker.tsx");
+describe("the card's status", () => {
+  /* The board card draws the tracker's status as a tag in its ticket row,
+     from the same workspace colour the tasks view uses. */
+  const card = read("src/components/PrCard.tsx");
 
-  test("the face comes from the tracker, not from GitHub", () => {
-    expect(board, "the tracker hands over the photo, the initials and the colour")
-      .toContain("<CardFace ");
-    expect(board, "a GitHub avatar cannot draw a tracker person").not.toContain("<Avatar login=");
+  test("a GitHub avatar never stands in for a tracker person", () => {
+    expect(card, "the tracker's people are named in the ticket's tooltip, not drawn as GitHub logins")
+      .not.toContain("<Avatar login={card");
   });
 
-  test("and it is the shared one, so a third surface cannot invent a fourth", () => {
-    expect(read("src/lib/priority.tsx")).toContain("export function CardFace(");
-  });
-
-  test("the status is the app's own chip", () => {
-    /* `StatusPill` is where that shape already lives — the tasks view has used
-       it all along. */
-    expect(board, "the board draws the status through the app's own chip")
-      .toMatch(/<StatusPill status=\{(shown|card|p\.card)\.status\}/);
+  test("the status is drawn from the tracker's own colour", () => {
+    expect(card).toContain("dataInk(card.statusColor)");
   });
 
   test("and it dims rather than lying when the reading is old", () => {
     // The boards are refreshed when somebody opens the tasks view, not on a
     // timer, so a reading can be hours stale.
-    expect(board).toContain("dim={stale}");
-    expect(board, "the tooltip says WAS, never IS").toContain("The card was in");
+    expect(card).toContain("data-stale={stale");
+    expect(card, "the tooltip says WAS, never IS").toContain("The card was in");
   });
 });
 

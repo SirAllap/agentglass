@@ -81,7 +81,7 @@ describe("connecting", () => {
   test("a refused token says why, in the sentence the plan fixes, and stores nothing", async () => {
     const r = await J.connectJira({ ...GOOD, token: "not-the-token" });
     expect(r).toEqual({ ok: false, error: J.JIRA_REFUSED });
-    expect(r.error).toContain("expired, been revoked or been blocked by your organisation");
+    expect(r.error).toContain("revoked or blocked by your organisation");
     expect(C.hasCredential("jira")).toBe(false);
     expect(existsSync(credFile) ? readFileSync(credFile, "utf8") : "").not.toContain("not-the-token");
   });

@@ -12,14 +12,16 @@
  * comments). A comment is one write and the card read back, and that answer
  * replaces the thread, so posting costs no second read here.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { api } from "../../lib/api.ts";
+import { tipAttr } from "../../lib/tip.ts";
 import { putCard } from "../../lib/prCardStore.ts";
 import { TRACKERS } from "../../lib/trackerApi.ts";
 import { OfferedPeople } from "../../lib/trackerComment.ts";
 import type { Mentionable } from "../../lib/mentions.ts";
 import type { CardDev, ProviderTask, TaskDetail } from "../../../../shared/providers.ts";
 import { Composer, COMPOSER_MIN } from "../tasks/Composer.tsx";
+import { useDockIntent, type DockWhat } from "./list/menus/dockIntent.ts";
 import { EDGE, LINE } from "../workspace/Chrome.tsx";
 import { readJiraLinks, setJiraWeb, type JiraLinks } from "../../lib/jiraLinks.ts";
 import { JiraProps } from "./JiraFacts.tsx";
@@ -35,8 +37,9 @@ import { JiraDescription } from "./JiraDescription.tsx";
 import { LinkedBlock, SubtasksBlock, WebLinksBlock, type JoinAct } from "./JiraJoins.tsx";
 import { madeLink, webAddress } from "../../lib/jiraJoins.ts";
 import { AttachmentsBlock, type FileAct } from "./JiraFiles.tsx";
-import { LinkedSection, Section, SubtasksSection, WebLinksSection } from "./JiraSections.tsx";
-import { Spinner } from "../Spinner.tsx";
+import { LinkedSection, JiraSection, SubtasksSection, WebLinksSection } from "./JiraSections.tsx";
+import { BoardEmpty, BoardSkeleton, CARD_BARS, StateButton, WarnIcon } from "../tasks/BoardState.tsx";
+import { DOCK_CSS } from "./DockParts.tsx";
 import { JiraCardPrs } from "./JiraCardPrs.tsx";
 import { JiraDevLists } from "./JiraDev.tsx";
 import { countsLine, readJiraDev } from "../../lib/jiraDev.ts";
@@ -47,16 +50,35 @@ const COMPOSER_SHARE = 0.3;
 /** Typing after `@` asks Jira once the keys have paused this long. */
 const PEOPLE_WAIT_MS = 250;
 
+type CardTab = "card" | "activity" | "files" | "github";
+
 type Row = Mentionable & { initials?: string; avatar?: string };
 
-export function JiraCard({ t, header, writes, onTask }: {
+/** The card's tab strip, the house segmented track: a count after the name, the one you are on lifted. */
+function DockTabs({ tabs, active, onPick }: { tabs: readonly { id: CardTab; label: string; count?: number }[]; active: CardTab; onPick: (id: CardTab) => void }) {
+  return (
+    <div className="agx-seg" role="tablist" aria-label="Card sections">
+      {tabs.map((x) => (
+        <button key={x.id} type="button" role="tab" aria-selected={active === x.id} onClick={() => onPick(x.id)} className="agx-seg-b">
+          {x.label}{x.count ? <span className="tabular-nums" style={{ color: "var(--text3)", marginLeft: 6 }}>{x.count}</span> : null}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function JiraCard({ t, header, writes, onTask, onAllow, onSubtaskMenu }: {
   t: ProviderTask;
   /** What stays above the tabs, given how to re-read this card. */
-  header: (r: { onRefresh: () => void; refreshing: boolean; ed: JiraEditUi; follow: JiraFollowUi }) => React.ReactNode;
+  header: (r: { onRefresh: () => void; refreshing: boolean; ed: JiraEditUi; follow: JiraFollowUi; onTask: (task: ProviderTask) => void }) => React.ReactNode;
   /** Whether writing to Jira is switched on; off draws a line instead of the box. */
   writes: boolean;
   /** The card as a fresher read or a write left it, for the list beside this. */
   onTask: (task: ProviderTask) => void;
+  /** Ask to turn changes on, from the note at the top of the Card tab. */
+  onAllow?: () => void;
+  /** A right-click on a sub-task row: the list's own menu for it (slot S3). */
+  onSubtaskMenu?: (e: MouseEvent, sub: ProviderTask) => void;
 }) {
   const key = t.customId ?? t.id;
   const [detail, setDetail] = useState<TaskDetail | null>(null);
@@ -83,6 +105,8 @@ export function JiraCard({ t, header, writes, onTask }: {
   }, [read]);
 
   useEffect(() => { setDetail(null); setMore(0); setErr(""); void read(); }, [read]);
+  // A move or assign from the header, the menu or a tile answers with the card as it is now; the tiles read `detail.task`, so it takes that too or the next write sends the old stamp and conflicts.
+  const took = useCallback((task: ProviderTask) => { setDetail((d) => (d ? { ...d, task } : d)); onTaskRef.current(task); }, []);
 
   /* A change to the card's Details: one request, whose answer is the card with its Details, so nothing is read again. */
   const editing = useJiraEdit({
@@ -119,6 +143,28 @@ export function JiraCard({ t, header, writes, onTask }: {
   const mentions = useMemo(() => (detail ? mentionsOfCard(detail) : []), [detail]);
 
   /* The composer, pinned under the thread. `replyTo` is the comment its next send answers. */
+  const [tab, setTab] = useState<CardTab>("card");
+  const nComments = detail?.comments.length ?? t.comments ?? 0;
+  const nFiles = detail?.attachments?.length ?? 0;
+  const tabs = [
+    { id: "card" as const, label: "Card" },
+    { id: "activity" as const, label: "Activity", count: nComments },
+    ...(nFiles || writes ? [{ id: "files" as const, label: "Files", count: nFiles }] : []),
+    { id: "github" as const, label: "GitHub" },
+  ];
+  useEffect(() => { setTab("card"); }, [key]);
+  /* A right-click "Move to / Assign to / Comment" lands here: the tab that has the control, then the control itself once it is drawn. */
+  const [land, setLand] = useState<DockWhat | null>(null);
+  useDockIntent(t.id, (what) => { setTab(what === "comment" ? "activity" : "card"); setLand(what); });
+  useEffect(() => {
+    if (!land) return;
+    const at = document.querySelector<HTMLElement>(`[data-slot="dock"] [data-dock="${land}"]`);
+    if (!at) return;
+    setLand(null);
+    if (land === "comment") at.querySelector<HTMLElement>("textarea")?.focus();
+    else (at.matches("button") ? at : at.querySelector<HTMLElement>("button"))?.click();
+  }, [land, tab, detail]);
+
   const [replyTo, setReplyTo] = useState<{ id: string; who: string } | null>(null);
   const [say, setSay] = useState("");
   const [saying, setSaying] = useState(false);
@@ -303,27 +349,42 @@ export function JiraCard({ t, header, writes, onTask }: {
 
   return (
     <div ref={paneRef} className="flex flex-col flex-1 min-w-0 min-h-0">
+      <style>{DOCK_CSS}</style>
       <div className="shrink-0" style={{ background: "var(--bg)" }}>
-        {header({ onRefresh: refresh, refreshing, ed, follow })}
+        {header({ onRefresh: refresh, refreshing, ed, follow, onTask: took })}
+        <div style={{ padding: "12px 16px 8px" }}><DockTabs tabs={tabs} active={tab} onPick={setTab} /></div>
         {/* No height is held for what a change says: an empty reserve was a 34 px blank band under every title. The note takes its line only while there is one, and the header sits above the scroll, so no control moves. */}
         <EditNote note={editing.note} busy={!!editing.busy} onUndo={editing.undo} onClose={editing.clear} />
       </div>
-      <div ref={listRef} className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 py-3">
-        {err && <div className="text-[11px] mb-3" role="alert" style={{ color: "var(--error-ink)" }}>{err}</div>}
-        {!detail && !err && <Spinner label="Reading the card…" className="" />}
-        <JiraProps t={detail?.task ?? t} writable={writes} onTask={onTask} facts={detail?.facts} ed={ed} />
-        {detail && (
+      <div ref={listRef} className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col" style={{ padding: "4px 16px 16px", gap: 16 }}>
+        {err && detail && <div className="text-[11px] mb-3" role="alert" style={{ color: "var(--error-ink)" }}>{err}</div>}
+        {err && !detail && (
+          <BoardEmpty tone="error" icon={<WarnIcon />} title="Could not read this card" body={<>{err}<br />The id is kept so you can still copy it.</>}>
+            <StateButton primary onClick={refresh}>Try now</StateButton>
+            <StateButton onClick={() => void navigator.clipboard?.writeText(key).catch(() => undefined)}>Copy id</StateButton>
+          </BoardEmpty>
+        )}
+        {!detail && !err && <BoardSkeleton label="Reading the card…" widths={CARD_BARS} dots={false} />}
+        {tab === "card" && <JiraProps t={detail?.task ?? t} writable={writes} onTask={took} facts={detail?.facts} ed={ed} onAllow={onAllow} />}
+        {detail && tab === "card" && (
           <>
             <JiraDescription text={detail.description} edit={detail.edit} writes={writes} url={t.url} busy={editing.busy === "description"}
               onSave={(md) => { const step = stepFor("description", { value: md }, ed.now); return step ? editing.run(step) : Promise.resolve(false); }} />
-            <AttachmentsBlock files={detail.attachments ?? []} card={key} writable={writes} act={fileAct} />
-            {writes ? <SubtasksBlock rows={detail.subtasks} parent={detail.task} writable act={joinAct} /> : <SubtasksSection rows={detail.subtasks} />}
+            {writes ? <SubtasksBlock rows={detail.subtasks} parent={detail.task} writable act={joinAct} onMenu={onSubtaskMenu} /> : <SubtasksSection rows={detail.subtasks} onMenu={onSubtaskMenu} />}
             {writes ? <LinkedBlock linked={detail.linked ?? []} card={key} writable act={joinAct} /> : <LinkedSection linked={detail.linked ?? []} />}
             {writes ? <WebLinksBlock links={links ? links.web : null} error={links?.error ?? ""} writable card={key} act={joinAct} /> : <WebLinksSection links={links ? links.web : null} error={links?.error ?? ""} />}
-            <Section id="development" title="Development" aside={dev ? <span className="truncate" title="What the development tool connected to this site holds for the card">{countsLine(dev.counts)}</span> : undefined}>
-              <JiraCardPrs query={key} writable={writes} quiet={!writes} mentions={mentions} dev={dev} />
-              <JiraDevLists dev={dev} />
-            </Section>
+          </>
+        )}
+        {detail && tab === "files" && <AttachmentsBlock files={detail.attachments ?? []} card={key} writable={writes} act={fileAct} />}
+        {detail && tab === "github" && (
+          <JiraSection id="development" title="Development" bare>
+            {dev && <div className="text-[10.5px] truncate" style={{ color: "var(--text3)" }} data-tip={tipAttr("What the development tool connected to this site holds for the card")}>{countsLine(dev.counts)}</div>}
+            <JiraCardPrs query={key} writable={writes} quiet={!writes} mentions={mentions} dev={dev} />
+            <JiraDevLists dev={dev} />
+          </JiraSection>
+        )}
+        {detail && tab === "activity" && (
+          <>
             <JiraActivity cardKey={key} act={act} comments={detail.comments} moreComments={more} worklog={detail.events ?? []} worklogMore={detail.worklogMore ?? 0} tracking={detail.tracking} work={writes && detail.tracking ? work : undefined}
               onMoreComments={(page, left) => { setDetail((d) => (d ? { ...d, comments: [...d.comments, ...page] } : d)); setMore(left); }} />
           </>
@@ -331,11 +392,11 @@ export function JiraCard({ t, header, writes, onTask }: {
       </div>
 
       {/* With writes off the pane has said so once, above; there is no box and no second sentence here. */}
-      {writes && <div className="shrink-0 px-4 pt-2 pb-3" style={{ borderTop: LINE }}>
+      {writes && tab === "activity" && <div className="shrink-0" data-dock="comment" style={{ borderTop: LINE, padding: "8px 16px 12px" }}>
         {replyTo && (
           <div className="flex items-center gap-2 mb-1 text-[10.5px] min-w-0" style={{ color: "var(--text3)" }}>
-            <span className="min-w-0 truncate" title="Your comment goes in their thread">Replying to {replyTo.who}</span>
-            <button className="agx-btn shrink-0 rounded-md px-1.5 py-0.5" onClick={() => setReplyTo(null)} style={{ color: "var(--text2)", border: EDGE }} title="Add it as a comment of its own, not in their thread">Cancel reply</button>
+            <span className="min-w-0 truncate" data-tip={tipAttr("Your comment goes in their thread")}>Replying to {replyTo.who}</span>
+            <button className="agx-btn shrink-0 rounded-md px-1.5 py-0.5" onClick={() => setReplyTo(null)} style={{ color: "var(--text2)", border: EDGE }} data-tip={tipAttr("Add it as a comment of its own, not in their thread")}>Cancel reply</button>
           </div>
         )}
         <Composer value={say} growTo={sayCap} onChange={(v) => { setSay(v); setSayErr(""); }} busy={saying}

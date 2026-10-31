@@ -230,7 +230,7 @@ export function removeView(id: string): void {
   const { [id]: _gone, ...rest } = s.cache;
   const views = s.views.filter((v) => v.id !== id);
   save({
-    views, cache: rest,
+    ...s, views, cache: rest,
     current: s.current === id ? views[0]?.id : s.current,
   });
 }

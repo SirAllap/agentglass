@@ -70,8 +70,13 @@ const HOLD_CAP_S = 60;
 /** A read 429 is retried once when Jira says to wait this long or less. */
 const RETRY_MAX_S = 10;
 
+/** Where a scoped API token is accepted: the Atlassian gateway, one path per site. */
+export const JIRA_GATEWAY_HOST = "api.atlassian.com";
+const gatewayOrigin = (cloudId: string): string => `https://${JIRA_GATEWAY_HOST}/ex/jira/${cloudId}`;
+const CLOUD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export const JIRA_REFUSED =
-  "Jira refused these credentials: the token may have expired, been revoked or been blocked by your organisation. Make a new one.";
+  "Jira refused these credentials. Check the email and the token. A token made with scopes needs the read scopes for Jira, and a token that was revoked or blocked by your organisation needs a new one.";
 
 // ---------------------------------------------------------------------------
 // test and operator seams
@@ -182,6 +187,8 @@ export interface JiraCreds {
   /** The account name or email for `basic`; not used by `bearer`. */
   email?: string;
   api?: 2 | 3;
+  /** Set when the site only answers through the Atlassian gateway (a scoped token); every call then goes there. */
+  cloudId?: string;
 }
 
 /** The stored credential, whole, for the server's own call. Never serialise it. */
@@ -191,7 +198,7 @@ export function storedCreds(): JiraCreds | null {
   if (!token || !r?.site) return null;
   const auth: JiraAuth = r.auth ?? "basic";
   if (auth === "basic" && !r.email) return null;
-  return { site: r.site, token, auth, email: r.email, api: r.api };
+  return { site: r.site, token, auth, email: r.email, api: r.api, cloudId: r.cloudId };
 }
 
 let holdUntil = 0;
@@ -226,7 +233,7 @@ export function forgetJira(): void {
 }
 
 /** A key part for a credential that is not the credential. */
-const fingerprintOf = (c: JiraCreds): string => `${c.site}|${c.auth}|${c.email ?? ""}|${Bun.hash(c.token).toString(36)}`;
+const fingerprintOf = (c: JiraCreds): string => `${c.site}|${c.cloudId ?? ""}|${c.auth}|${c.email ?? ""}|${Bun.hash(c.token).toString(36)}`;
 
 /** The card a path is about, for the sentence: `/rest/api/3/issue/ORBIT-1042/...`. */
 const subjectOf = (pathname: string): string | null => /\/issue\/([A-Z][A-Z0-9_]*-\d+)(?:[/?]|$)/.exec(pathname)?.[1] ?? null;
@@ -285,7 +292,7 @@ async function callOnce<T>(creds: JiraCreds, pathname: string, o: CallOpts): Pro
   if (!site.ok) return { ok: false, error: site.error };
   if (o.optional && Date.now() < holdUntil) return { ok: false, throttled: true, error: holdSentence };
 
-  const origin = baseOverride ?? `https://${site.site}`;
+  const origin = baseOverride ?? (creds.cloudId ? gatewayOrigin(creds.cloudId) : `https://${site.site}`);
   const url = `${origin}${pathname}`;
   const headers: Record<string, string> = {
     Authorization: creds.auth === "bearer"
@@ -306,7 +313,7 @@ async function callOnce<T>(creds: JiraCreds, pathname: string, o: CallOpts): Pro
     if (baseOverride) return { res: await fetch(url, { ...init, redirect: "manual" }) };
     // The same host and port, over https, on every hop: a redirect to another
     // tenant (or any other host) would carry this person's credentials there.
-    const hostPort = site.site.split("/")[0]!;
+    const hostPort = creds.cloudId ? JIRA_GATEWAY_HOST : site.site.split("/")[0]!;
     const allow = (u: URL): string | null =>
       u.protocol !== "https:" ? "fetched over https only"
         : u.host.toLowerCase() === hostPort ? null : "Jira redirected the request to another host";
@@ -386,7 +393,7 @@ async function callOnce<T>(creds: JiraCreds, pathname: string, o: CallOpts): Pro
 export async function jiraFetch(creds: JiraCreds, pathname: string, o: { range?: string | null; timeoutMs: number; signal?: AbortSignal }): Promise<{ res: Response } | { error: string }> {
   const site = parseSite(creds.site);
   if (!site.ok) return { error: site.error };
-  const origin = baseOverride ?? `https://${site.site}`;
+  const origin = baseOverride ?? (creds.cloudId ? gatewayOrigin(creds.cloudId) : `https://${site.site}`);
   const auth = creds.auth === "bearer"
     ? `Bearer ${creds.token}`
     : `Basic ${Buffer.from(`${creds.email ?? ""}:${creds.token}`).toString("base64")}`;
@@ -411,7 +418,7 @@ export async function jiraFetch(creds: JiraCreds, pathname: string, o: { range?:
       }
       return { res };
     }
-    const hostPort = site.site.split("/")[0]!;
+    const hostPort = creds.cloudId ? JIRA_GATEWAY_HOST : site.site.split("/")[0]!;
     const hops = siteThenNamedHost(hostPort, JIRA_MEDIA_HOST, headers, forward);
     const g = await guardedFetch(`${origin}${pathname}`, { signal, headers }, hops.allow, { refuses: refusesAddress, initFor: hops.initFor, ...guardOpts });
     // The refusal names a host, never the address; it is still turned into our sentence here.
@@ -890,7 +897,7 @@ export async function searchJql(creds: JiraCreds, jql: string, o: { pages?: numb
     const points = pointsField(ids, o.board.points);
     // The kind, the parent and the flag are three more fields in the one search, never a request each.
     const flag = ids?.flag;
-    fields = [...CARD_FIELDS, ...(sprint ? [sprint] : []), ...(points ? [points] : []), ...(flag ? [flag] : []), "issuetype", "parent", "issuelinks", "subtasks", ...(searchComments ? ["comment"] : [])];
+    fields = [...CARD_FIELDS, ...(sprint ? [sprint] : []), ...(points ? [points] : []), ...(flag ? [flag] : []), "issuetype", "parent", "components", "issuelinks", "subtasks", ...(searchComments ? ["comment"] : [])];
     ask = { sprint, points, flag };
   }
   const cx = base.then((c): TaskContext => (ask ? { ...c, fields: ask } : c));
@@ -1020,6 +1027,18 @@ const EMAIL = /^[^\s@:]+@[^\s@:]+\.[^\s@:]+$/;
 /** On a custom host the "email" may be a plain username. */
 const USERNAME = /^[^\s:\u0000-\u001f\u007f]{1,254}$/;
 
+/** A Cloud site's id from its public `/_edge/tenant_info`, or null when it cannot be had or is not an id. */
+async function tenantCloudId(host: string): Promise<string | null> {
+  const allow = (u: URL): string | null =>
+    u.protocol === "https:" && u.host.toLowerCase() === host ? null : "Jira redirected the request to another host";
+  try {
+    const g = await guardedFetch(`https://${host}/_edge/tenant_info`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(TIMEOUT_MS) }, allow, { refuses: refusesAddress, ...guardOpts });
+    if (!g.res?.ok) { void g.res?.body?.cancel(); return null; }
+    const id = ((await g.res.json()) as { cloudId?: unknown })?.cloudId;
+    return typeof id === "string" && CLOUD_ID.test(id) ? id.toLowerCase() : null;
+  } catch { return null; }
+}
+
 export interface JiraConnectInput { email?: unknown; site?: unknown; token?: unknown; auth?: unknown }
 
 /**
@@ -1053,14 +1072,19 @@ export async function connectJira(input: JiraConnectInput): Promise<JiraConnectR
   if (token.length > MAX_TOKEN || /[\s\u0000-\u001f\u007f]/.test(token)) return { ok: false, error: "That does not look like a token" };
 
   const creds: JiraCreds = { site: site.site, token, auth, email: auth === "basic" ? email : undefined };
-  const server = await detectServer(creds);
+  let server = await detectServer(creds);
+  if (!server.ok && server.unauthorised && auth === "basic" && site.kind === "cloud" && !baseOverride) {
+    // A scoped token is refused at the site and accepted at the gateway. A Cloud site is Cloud on REST 3 whatever it says, so `/myself` below is the proof.
+    const cloudId = await tenantCloudId(site.host);
+    if (cloudId) { creds.cloudId = cloudId; server = { ok: true, data: { deployment: "cloud", api: 3 } }; }
+  }
   if (!server.ok || !server.data) return { ok: false, error: server.error ?? "Could not reach Jira" };
   creds.api = server.data.api;
   const me = await whoAmI(creds);
   if (!me.ok || !me.data) return { ok: false, error: me.error ?? "Could not reach Jira" };
   try {
     await storeCredential("jira", {
-      token, email: creds.email, auth, site: site.site, api: server.data.api, deployment: server.data.deployment,
+      token, email: creds.email, auth, site: site.site, api: server.data.api, deployment: server.data.deployment, cloudId: creds.cloudId,
       account: me.data.name, accountId: me.data.accountId, verifiedAt: Date.now(),
     });
   } catch (e) {
@@ -1465,7 +1489,7 @@ const PERSON_KEY = /^[^\s\u0000-\u001f\u007f]{1,255}$/;
 export const personId = (u: unknown): string => (isObj(u) ? str(u.accountId) || str(u.key) || str(u.name) : "");
 export const personName = (u: unknown): string => (isObj(u) ? str(u.displayName) || str(u.name) || personId(u) : "");
 
-function toPerson(u: unknown, v: 2 | 3): JiraPerson | null {
+export function toPerson(u: unknown, v: 2 | 3): JiraPerson | null {
   if (!isObj(u) || u.active === false) return null;
   const key = v === 3 ? str(u.accountId) : str(u.name);
   if (!key || !PERSON_KEY.test(key)) return null;

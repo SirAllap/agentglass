@@ -20,7 +20,7 @@ describe("dragging the card pane", () => {
 
   it("keeps the width in pixels, not as a flag", () => {
     expect(src).toContain("const [cardW, setCardW] = useState");
-    expect(src).toContain("style={{ width: cardW,");
+    expect(src).toContain("width: cardW,");
   });
 
   it("remembers it for the whole app rather than per board", () => {

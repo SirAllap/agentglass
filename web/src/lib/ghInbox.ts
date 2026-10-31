@@ -62,6 +62,30 @@ const REASONS: Record<string, string> = {
 
 export const reasonLabel = (reason: string): string => REASONS[reason] ?? reason.replace(/_/g, " ");
 
+/** The word on a row's tag: the name of the filter chip that would list it, so the tag and the chip say the same thing. */
+export function tagLabel(reason: string): string {
+  return FACETS.find((f) => f.reasons.includes(reason) && f.id !== "participating" && f.id !== "team")?.label ?? reasonLabel(reason);
+}
+
+const SENTENCE: Record<string, string> = {
+  review_requested: "Asked for your review",
+  mention: "You were mentioned",
+  team_mention: "Your team was mentioned",
+  assign: "You were assigned",
+  author: "Activity on your pull request",
+  comment: "New comment",
+  subscribed: "Activity on a thread you watch",
+  manual: "Activity on a thread you follow",
+  state_change: "Opened or closed",
+  ci_activity: "A check finished",
+};
+
+/** The quiet line under a title when nothing richer is known: what happened, in a sentence, not where. */
+export const reasonSentence = (reason: string): string => SENTENCE[reason] ?? reasonLabel(reason);
+
+/** The chips drawn at rest. The rest of the facets wait in the "More" menu, and one that is on is drawn too, so the list is never narrowed by something that cannot be seen. */
+export const CHIP_FACETS = ["review", "mentioned", "ci", "assigned", "subscribed"];
+
 /*
  * Your turn: what waits on the person, as opposed to what merely happened.
  *
@@ -95,27 +119,6 @@ export function turnLine(t: InboxTurn): { by: string; text: string } {
  *  inbox is open, so it is the whole of what it promises. */
 export const unreadCount = (items: InboxItem[]): number => items.filter((n) => n.unread).length;
 
-/**
- * Group rows by day, newest first, the way a mail client does.
- *
- * Not by repository: the question this list answers is "what happened while I
- * was away", which is a question about time. The repository is a chip.
- */
-export function byDay(items: InboxItem[], now = Date.now()): { label: string; items: InboxItem[] }[] {
-  const day = (ms: number) => new Date(ms).toDateString();
-  const today = day(now);
-  const yesterday = day(now - 86_400_000);
-  const out: { label: string; items: InboxItem[] }[] = [];
-  for (const n of items) {
-    const d = day(n.at);
-    const label = d === today ? "Today" : d === yesterday ? "Yesterday" : new Date(n.at).toLocaleDateString([], { day: "numeric", month: "short" });
-    const last = out[out.length - 1];
-    if (last && last.label === label) last.items.push(n);
-    else out.push({ label, items: [n] });
-  }
-  return out;
-}
-
 /*
  * The named filters, which are GitHub's own left rail.
  *
@@ -134,18 +137,21 @@ export interface InboxFacet {
   hint: string;
 }
 
+/** The mockup's six reason chips first, then the two GitHub filters it does not draw (Team mentioned, Participating): dropping them would drop a question the inbox could answer. */
 export const FACETS: InboxFacet[] = [
-  { id: "assigned", label: "Assigned", reasons: ["assign"], hint: "Put on you by somebody" },
-  { id: "participating", label: "Participating", reasons: ["author", "comment", "mention", "team_mention", "assign", "review_requested", "manual"], hint: "Threads you are in, not merely watching" },
-  { id: "mentioned", label: "Mentioned", reasons: ["mention"], hint: "Somebody wrote your name" },
-  { id: "team", label: "Team mentioned", reasons: ["team_mention"], hint: "Somebody wrote your team's name" },
   { id: "review", label: "Review requested", reasons: ["review_requested"], hint: "Somebody asked you to look" },
+  { id: "mentioned", label: "Mentioned", reasons: ["mention"], hint: "Somebody wrote your name" },
+  { id: "ci", label: "CI", reasons: ["ci_activity"], hint: "A workflow run you are watching finished" },
+  { id: "assigned", label: "Assigned", reasons: ["assign"], hint: "Put on you by somebody" },
+  { id: "subscribed", label: "Subscribed", reasons: ["subscribed", "manual"], hint: "Threads you are watching without being in them" },
+  { id: "team", label: "Team mentioned", reasons: ["team_mention"], hint: "Somebody wrote your team's name" },
+  { id: "participating", label: "Participating", reasons: ["author", "comment", "mention", "team_mention", "assign", "review_requested", "manual"], hint: "Threads you are in, not merely watching" },
 ];
 
-/** "All reasons" and the five named filters as chips, each with the number of rows it would leave. */
+/** "Everything" and the named filters as chips, each with the number of rows it would leave. */
 export function reasonChips(items: InboxItem[]): { id: string; label: string; hint: string; n: number }[] {
   return [
-    { id: "", label: "All reasons", hint: "Every reason", n: items.length },
+    { id: "", label: "Everything", hint: "Every reason", n: items.length },
     ...FACETS.map((f) => ({ id: f.id, label: f.label, hint: f.hint, n: items.filter((n) => inFacet(n, f.id)).length })),
   ];
 }
@@ -209,4 +215,47 @@ export function orderByAnnotation(items: InboxItem[], plugin: string): InboxItem
     if ((ka === undefined) !== (kb === undefined)) return ka === undefined ? 1 : -1;
     return b.at - a.at;
   });
+}
+
+/*
+ * How a row looks: the tile on its left says what kind of thing woke it (a
+ * review, a mention, a run) in the tone of the reason, so a column of rows can
+ * be read by colour before any word.
+ */
+export type RowIcon = "pr" | "issue" | "ci" | "comment" | "review";
+export type RowToneName = "info" | "bad" | "warn" | "muted";
+
+export function rowLook(n: Pick<InboxItem, "type" | "reason">): { icon: RowIcon; tone: RowToneName } {
+  /* The design tints the tag by what is asked: review amber, mention red, assigned blue, CI orange, the rest grey. */
+  const tone: RowToneName =
+    n.reason === "assign" ? "info"
+    : n.reason === "mention" || n.reason === "team_mention" ? "bad"
+    : n.reason === "review_requested" || n.reason === "ci_activity" ? "warn"
+    : "muted";
+  const icon: RowIcon =
+    n.type === "CheckSuite" ? "ci"
+    : n.reason === "review_requested" ? "review"
+    : n.reason === "mention" || n.reason === "team_mention" || n.reason === "comment" ? "comment"
+    : n.type === "Issue" ? "issue"
+    : "pr";
+  return { icon, tone };
+}
+
+/** What the list area shows. A refused read with nothing to show is an error, not an empty inbox: "Inbox zero" over a rate-limit answer would be a lie. */
+export function inboxScreen(loaded: number | null, err: string, shown: number): "loading" | "error" | "empty" | "rows" {
+  if (loaded === null) return err ? "error" : "loading";
+  if (err && loaded === 0) return "error";
+  return shown ? "rows" : "empty";
+}
+
+/** The words of an empty list. `clear` is set when the filter box is what emptied it, so the screen offers to clear it. */
+export function emptyCopy(o: { shelf: string; repo: string; query: string; reason: boolean; unreadOnly: boolean }): { title: string; sentence: string; clear: boolean; ghost: boolean } {
+  const q = o.query.trim();
+  if (q) return { title: `Nothing matches \u201c${q}\u201d`, sentence: "Try fewer words, a repository or a #number.", clear: true, ghost: false };
+  if (o.shelf === "turn") return { title: "Nothing waits on you", sentence: "Review requests, mentions, changes requested and people writing on your pull requests land here.", clear: false, ghost: false };
+  if (o.shelf === "saved") return { title: "Nothing saved yet", sentence: "Save a notification and it stays here, on this machine.", clear: false, ghost: false };
+  if (o.shelf === "done") return { title: "Nothing finished yet", sentence: "What you finish leaves the inbox and waits here.", clear: false, ghost: false };
+  if (o.reason) return { title: "Nothing for this reason", sentence: "Press Everything to see the rest.", clear: false, ghost: false };
+  if (o.unreadOnly) return { title: "Nothing unread", sentence: "Every notification here has been read.", clear: false, ghost: false };
+  return { title: "Inbox zero", sentence: `GitHub notifications for ${o.repo || "this repository"} land here.`, clear: false, ghost: true };
 }

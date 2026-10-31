@@ -25,7 +25,7 @@ import type { CardAttachment } from "../../../../shared/providers.ts";
 import { addedSaid, checkUpload, dragHasFiles, droppedFiles, withAddresses } from "../../lib/jiraFiles.ts";
 import { CardFiles } from "../CardFiles.tsx";
 import { Aside, Ask, type Said } from "./JiraJoins.tsx";
-import { Section } from "./JiraSections.tsx";
+import { JiraSection } from "./JiraSections.tsx";
 
 /** What the pane gives the files to change the card with; each says why it did not land, or null. */
 export interface FileAct {
@@ -82,7 +82,7 @@ export function AttachmentsBlock({ files, card, writable, act }: { files: CardAt
       onDragLeave={() => { if (writable && --depth.current <= 0) { depth.current = 0; setOver(false); } }}
       onDrop={(e) => { if (!writable || !dragHasFiles(e.dataTransfer)) return; e.preventDefault(); depth.current = 0; setOver(false); void addAll(droppedFiles(e.dataTransfer)); }}
       style={{ outline: over ? "1.5px dashed var(--primary)" : "1.5px dashed transparent", outlineOffset: 4, borderRadius: 6 }}>
-      <Section id="attachments" title="Attachments" count={files.length || undefined}
+      <JiraSection id="attachments" title="Attachments" count={files.length || undefined}
         aside={<Aside plain={adding ? <span role="status" className="truncate min-w-0" title={adding}>Adding {adding}…</span> : null} said={said} onSaid={setSaid}
           open={false} onToggle={() => { if (!adding) pick.current?.click(); }} label="Add a file" canAdd={writable} />}>
         {writable && <input ref={pick} type="file" multiple hidden aria-label="Choose files to add" onChange={(e) => { const l = Array.from(e.target.files ?? []); e.target.value = ""; void addAll(l); }} />}
@@ -97,7 +97,7 @@ export function AttachmentsBlock({ files, card, writable, act }: { files: CardAt
           </Ask>
           </div>
         )}
-      </Section>
+      </JiraSection>
       {over && (
         <div className="absolute inset-0 grid place-items-center pointer-events-none rounded-md text-[11px]"
           style={{ background: "color-mix(in srgb, var(--bg) 78%, transparent)", color: "var(--text)" }} aria-hidden>

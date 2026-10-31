@@ -19,7 +19,7 @@
  * still being used.
  */
 import { describe, expect, it } from "bun:test";
-import { CardWrites, type WriteResult } from "../src/lib/cardWrites.ts";
+import { CardWrites, cardWriteBlock, JIRA_WRITES_OFF, WRITES_OFF, type WriteResult } from "../src/lib/cardWrites.ts";
 import type { ProviderTask } from "../../shared/providers.ts";
 
 const card = (id: string, updated: number, over: Partial<ProviderTask> = {}): ProviderTask => ({
@@ -188,5 +188,34 @@ describe("a fresh read of the board", () => {
     q.reset();
     await q.run({ id: "c1", key: "b", readAt: 400, done: "", go: async (s) => { sent.push(s); return { ok: true, task: card("c1", 500) }; } });
     expect(sent).toEqual([100, 400]);
+  });
+});
+
+describe("which switch blocks a card's controls", () => {
+  // A Jira card was told "Changes to ClickUp are off" with Jira writes on,
+  // because the picker read the ClickUp setup for every card.
+  it("a Jira card reads the Jira switch and says Jira", () => {
+    expect(cardWriteBlock("jira", { writeEnabled: false }, { writes: true })).toBeNull();
+    expect(cardWriteBlock("jira", { writeEnabled: true }, { writes: false })).toBe(JIRA_WRITES_OFF);
+    expect(JIRA_WRITES_OFF).toContain("Jira");
+  });
+  it("a ClickUp card reads the ClickUp switch", () => {
+    expect(cardWriteBlock("clickup", { writeEnabled: false }, { writes: true })).toBe(WRITES_OFF);
+    expect(cardWriteBlock("clickup", { writeEnabled: true }, { writes: false })).toBeNull();
+  });
+  it("an unread switch blocks nothing, as before", () => {
+    expect(cardWriteBlock("jira", null, null)).toBeNull();
+    expect(cardWriteBlock(null, null, null)).toBeNull();
+  });
+});
+
+describe("the picker asks by the card's tracker", () => {
+  it("usePrCardSide takes the block from cardWriteBlock, after the kind is known", async () => {
+    const src = await Bun.file(new URL("../src/components/PrAskPicker.tsx", import.meta.url)).text();
+    const a = src.indexOf("export function usePrCardSide(");
+    const body = src.slice(a, src.indexOf("\n}\n", a));
+    expect(body).toContain("cardWriteBlock(kind, setup, jiraSettings)");
+    expect(body.indexOf("const kind")).toBeLessThan(body.indexOf("cardWriteBlock("));
+    expect(body).not.toContain("writeBlock(setup)");
   });
 });

@@ -74,8 +74,11 @@ const render = (props: Record<string, unknown> = {}): string =>
 describe("the three empty-looking screens", () => {
   it("loading: a skeleton and no claim", () => {
     const html = render({ loading: true });
-    expect(html).toContain("Reading the two lists");
+    // Cards drawn as bars in every lane, the lane counts as "…", and none of the sentences that claim an answer.
+    expect(html).toContain('aria-busy="true"');
+    expect(html).toContain("agx-sk");
     expect(html).not.toContain("Nothing wants anything");
+    expect(html).not.toContain("Quiet is good");
   });
   it("failed: says it failed, offers a retry, claims no zeros", () => {
     const html = render({ failed: true, onRetry: () => {} });
@@ -87,14 +90,14 @@ describe("the three empty-looking screens", () => {
   });
   it("filtered: names the filters and the number they hid", () => {
     const html = render({ hidden: 7 });
-    expect(html).toContain("Your filters hide");
+    expect(html).toContain("Your rules hide every pull request on this board");
     expect(html).toContain("7 came in");
     expect(html).not.toContain("this is an answer");
   });
   it("empty: the answer, only when the load finished and nothing is hidden", () => {
     const html = render({});
-    expect(html).toContain("Nothing wants anything from you.");
-    expect(html).toContain("this is an answer, not a wait");
+    expect(html).toContain("No open pull requests");
+    expect(html).toContain("Quiet is good");
   });
 });
 

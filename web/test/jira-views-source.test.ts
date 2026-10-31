@@ -54,7 +54,7 @@ describe("what it asks, and when", () => {
   test("the pick lists are read when opened, and a search waits for the typing to pause", () => {
     const f = fn(add, "AddBar");
     expect(f).toContain('if (mode !== "pick") return;');
-    expect(f).toContain('if (mode !== "project" || projects) return;');
+    expect(f).toContain('if (mode !== "space") return;');
     expect(f).toContain("SEARCH_WAIT_MS");
     const wait = Number(/export const SEARCH_WAIT_MS = (\d+)/.exec(add)![1]);
     expect(wait).toBeGreaterThanOrEqual(300);

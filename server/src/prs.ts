@@ -106,7 +106,7 @@ async function budgetIsBack(): Promise<boolean> {
   return true;
 }
 
-export async function gh(args: string[], cwd?: string, stdin?: string): Promise<GhResult> {
+export async function gh(args: string[], cwd?: string, stdin?: string, timeoutMs = GH_TIMEOUT_MS): Promise<GhResult> {
   const bin = ghBin();
   if (!bin) return { code: 127, stdout: "", stderr: "gh not found" };
   const graphql = args[0] === "api" && args[1] === "graphql";
@@ -125,7 +125,7 @@ export async function gh(args: string[], cwd?: string, stdin?: string): Promise<
       stderr: "pipe",
       env: { ...process.env, GH_PROMPT_DISABLED: "1", NO_COLOR: "1" },
     });
-    const timer = setTimeout(() => { try { proc.kill(); } catch { /* already gone */ } }, GH_TIMEOUT_MS);
+    const timer = setTimeout(() => { try { proc.kill(); } catch { /* already gone */ } }, timeoutMs);
     const [stdout, stderr, code] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
@@ -520,7 +520,7 @@ export async function prRollup(rootIn: unknown, numberIn: unknown, fresh = false
     const r2 = rollupChecks(normalised);
     // The commit named in this same response, not the cached one: a push since the list read would file these runs under the old commit.
     learnFromRead(repo.key, number, pr?.commits?.nodes?.[0]?.commit?.oid ?? "", r2.all);
-    if (Number(ctxs?.totalCount ?? 0) <= raw.length) projectChecks(repo, number, r2.rollup, r2.all, began);
+    if (Number(ctxs?.totalCount ?? 0) <= raw.length) projectChecks(repo, number, r2.rollup, r2.all, began, pr?.commits?.nodes?.[0]?.commit?.oid ?? "");
     return { ok: true, checks: r2.rollup, all: r2.all, state: typeof pr?.state === "string" ? pr.state : undefined, sha: pr?.commits?.nodes?.[0]?.commit?.oid || undefined, truncated: Number(ctxs?.totalCount ?? 0) > raw.length };
   }, { fresh, keep: (v) => v.ok });
 }
@@ -802,7 +802,9 @@ const idInflight = new Map<string, Promise<PrRepoId | null>>();
  * request against). For those the identity is in the name itself, so reads work
  * from it — they are GraphQL by owner and name, and `gh` is told `-R` — while
  * everything that needs a working tree or a write is refused, in a sentence
- * (`prWriteRefusal`), and `safeAbs` refuses the prefix so no path-taking
+ * (`prWriteRefusal`) — except the writes that are only a call to GitHub
+ * (`writeGuard(root, true)`: merge, close, labels, comments…), which `gh -R`
+ * makes without a checkout — and `safeAbs` refuses the prefix so no path-taking
  * function can be handed the server's own repository by mistake.
  *
  * github.com only: a GitHub Enterprise host is not in the name, so a
@@ -1043,6 +1045,18 @@ export function noteCi(repo: PrRepoId, pr: PrSummary): void {
  * count that goes down then up announces the same remark twice.
  */
 const talkLatch = new Map<string, number>();
+/** Pull requests an open list showed last time and no longer shows: merged, closed, or moved to another queue. The listener asks what happened. */
+const goneListeners = new Set<(repoKey: string, numbers: number[]) => void>();
+/** A complete open page is the whole queue: what the last read held and this one does not has ended or moved. A page with a next page, or a merged/closed list, says nothing. */
+export function prsGone(state: PrState, hasNext: boolean, before: number[], rows: readonly { number: number }[]): number[] {
+  if (state !== "open" || hasNext) return [];
+  const now = new Set(rows.map((r) => r.number));
+  return before.filter((n) => !now.has(n));
+}
+export function subscribePrsGone(fn: (repoKey: string, numbers: number[]) => void): () => void {
+  goneListeners.add(fn);
+  return () => { goneListeners.delete(fn); };
+}
 const talkListeners = new Set<(n: PrTalkNote) => void>();
 /** Every remark list a poll reads, before the latch decides whether it is news: a persisted watch keeps its
  *  own memory of what it has seen (prNotifyWatch.ts) and must not depend on this process's. */
@@ -1162,15 +1176,17 @@ function watchRows(repo: PrRepoId, rows: PrSummary[]): void {
  *  head it carries replace theirs, so the board agrees with the open view
  *  without a list request. */
 function rowsFromDetail(repo: PrRepoId, d: PrDetail): void {
+  // Only a head whose checks are its own: a row pairs its head with its checks.
+  const head = d.headSha && (!d.checksSha || d.checksSha === d.headSha) ? d.headSha : undefined;
   const names = d.labels.map((l) => l.name).sort().join("\u0000");
   for (const [k, e] of listCache) {
     if (!k.startsWith(`${repo.key}\u0000`)) continue;
     const i = e.prs.findIndex((r) => r.number === d.number);
     if (i < 0) continue;
     const r = e.prs[i]!;
-    if (r.labels.map((l) => l.name).sort().join("\u0000") === names && (!d.headSha || r.headSha === d.headSha)) continue;
+    if (r.labels.map((l) => l.name).sort().join("\u0000") === names && (!head || r.headSha === head)) continue;
     const prs = e.prs.slice();
-    prs[i] = { ...r, labels: d.labels.map((l) => ({ name: l.name, color: l.color })), ...(d.headSha ? { headSha: d.headSha } : null) };
+    prs[i] = { ...r, labels: d.labels.map((l) => ({ name: l.name, color: l.color })), ...(head ? { headSha: head } : null) };
     listCache.set(k, { ...e, prs });
   }
 }
@@ -2399,6 +2415,8 @@ export function afterFlight<T>(follows: Map<string, Promise<T>>, key: string, fl
   return p;
 }
 
+const LIST_UNREAD = "GitHub did not answer, so this list could not be read. Try again in a moment.";
+
 /** Refresh behind the response. Never awaited by a request handler. */
 function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: string, query?: string, force = false): void {
   const key = cacheKey(repo, filter, state, after, query);
@@ -2447,7 +2465,8 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
             return;
           }
         }
-        if (!(await readQueues(repo))) listCache.set(key, keep({ at: Date.now(), loading: false, checksPending: false }));
+        /* The same rule as the plain list below: with nothing cached, an empty answer reads as "no pull requests", so it says it could not read. */
+        if (!(await readQueues(repo))) listCache.set(key, keep({ at: Date.now(), loading: false, checksPending: false, ...(prev?.prs.length ? null : { error: LIST_UNREAD }) }));
         return;
       }
 
@@ -2494,7 +2513,7 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
         // reads as a repository with no pull requests, so it says it could not read.
         listCache.set(key, keep({
           at: Date.now(), loading: false, checksPending: false,
-          ...(prev?.prs.length ? null : { error: "GitHub did not answer, so this list could not be read. Try again in a moment." }),
+          ...(prev?.prs.length ? null : { error: LIST_UNREAD }),
         }));
         return;
       }
@@ -2540,7 +2559,11 @@ export function projectDetailOnRow(row: PrSummary, d: PrDetail): PrSummary {
   const patch: Record<string, unknown> = {};
   const r = row as unknown as Record<string, unknown>;
   const src = d as unknown as Record<string, unknown>;
+  /* A detail whose checks are of another commit than its head must not hand
+     either to a row: the board would pair the new head with the old checks. */
+  const pair = !d.headSha || !d.checksSha || d.headSha === d.checksSha;
   for (const k of SHARED_FIELDS) {
+    if (!pair && (k === "checks" || k === "headSha")) continue;
     if (src[k] !== undefined && JSON.stringify(r[k]) !== JSON.stringify(src[k])) patch[k] = src[k];
   }
   if (d.mergeable !== "UNKNOWN" && d.mergeable !== row.mergeable) patch.mergeable = d.mergeable;
@@ -2557,7 +2580,9 @@ export function projectRowOnDetail(d: PrDetail, row: PrSummary): PrDetail {
   if (row.updatedAt > d.updatedAt) {
     const r = row as unknown as Record<string, unknown>;
     const dd = d as unknown as Record<string, unknown>;
-    for (const k of SHARED_FIELDS) if (r[k] !== undefined && JSON.stringify(dd[k]) !== JSON.stringify(r[k])) patch[k] = r[k];
+    /* Not `checks` or `headSha`: a row's pair is its rollup commit, which can trail
+       the head the detail's merge state was read at. Those come from detail reads. */
+    for (const k of SHARED_FIELDS) if (k !== "checks" && k !== "headSha" && r[k] !== undefined && JSON.stringify(dd[k]) !== JSON.stringify(r[k])) patch[k] = r[k];
     if (row.mergeable !== "UNKNOWN" && row.mergeable !== d.mergeable) patch.mergeable = row.mergeable;
   } else if (d.mergeable === "UNKNOWN" && row.mergeable !== "UNKNOWN") patch.mergeable = row.mergeable;
   return Object.keys(patch).length ? { ...d, ...patch } as PrDetail : d;
@@ -2624,18 +2649,21 @@ function keepNewerDetails(repo: PrRepoId, rows: PrSummary[], since: number, now 
  * Ceiling, named: only reads that hold every check (not truncated at 100).
  * The board's own second pass (`refreshChecks`) still writes rows alone.
  */
-export function projectChecks(repo: PrRepoId, number: number, checks: PrCheckRollup, all: PrCheck[], began: number): void {
+export function projectChecks(repo: PrRepoId, number: number, checks: PrCheckRollup, all: PrCheck[], began: number, sha = ""): void {
   const dk = `${repo.key}#${number}`;
   const hit = detailCache.get(dk);
-  if (hit && hit.at <= began) {
+  /* Checks of another commit than the detail's head are not its checks: the head
+     moved, so the entry goes and the next open reads the pull request again. */
+  if (hit && sha && hit.detail.headSha && !hit.detail.headSha.startsWith(sha) && !sha.startsWith(hit.detail.headSha)) detailCache.delete(dk);
+  else if (hit && hit.at <= began) {
     const req = new Map((hit.detail.checksAll ?? []).map((c) => [checkKey(c.workflow, c.name), c.required]));
     const marked = all.map((c) => (req.get(checkKey(c.workflow, c.name)) === undefined ? c : { ...c, required: req.get(checkKey(c.workflow, c.name)) }));
-    detailCache.set(dk, { ...hit, detail: { ...hit.detail, checks, checksAll: marked } });
+    detailCache.set(dk, { ...hit, detail: { ...hit.detail, checks, checksAll: marked, ...(sha ? { checksSha: sha } : null) } });
   }
   for (const [k, e] of listCache) {
     if (!k.startsWith(`${repo.key}\u0000`) || !e.prs.some((r) => r.number === number)) continue;
     if (e.at > began) continue;
-    listCache.set(k, { ...e, prs: e.prs.map((r) => (r.number === number ? { ...r, checks, checksLoaded: true } : r)) });
+    listCache.set(k, { ...e, prs: e.prs.map((r) => (r.number === number ? { ...r, checks, checksLoaded: true, ...(sha ? { headSha: sha } : null) } : r)) });
   }
 }
 
@@ -2796,6 +2824,13 @@ function storePage(repo: PrRepoId, filter: PrFilter, state: PrState, key: string
      the write `saveDiskCache` persists, so a blank that gets here outlives
      the session that caused it. */
   watchRows(repo, page.rows);
+  if (goneListeners.size) {
+    const gone = prsGone(state, page.hasNext, [...prior.keys()], page.rows);
+    /* An empty list is still a tick: the listener sweeps merged PRs it never saw leave the queue (cleanupAuto.sweepOld, hourly). */
+    /* What left the open queue was merged or closed: the Closed lists of this repo are stale now, not in two minutes. */
+    if (gone.length) for (const [k, e] of listCache) if (k !== key && k.startsWith(`${repo.key}\u0000`)) listCache.set(k, { ...e, at: 0 });
+    if (gone.length || (state === "open" && !page.hasNext)) for (const fn of goneListeners) { try { fn(repo.nameWithOwner, gone); } catch { /* a listener must not break the poll */ } }
+  }
   listCache.set(key, {
     at: Date.now(), okAt: Date.now(), began: since, prs: stampRequired(repo, keepNewerDetails(repo, page.rows.map((r) => carryOver(prior.get(r.number), r)), since)),
     loading: false, checksPending: false,
@@ -3159,7 +3194,7 @@ export async function listPrs(rootIn: unknown, filterIn: unknown, stateIn: unkno
   return {
     ok: true,
     repo,
-    prs,
+    prs: markPushed(repo.key, prs, cur?.at ?? 0),
     fetchedAt: cur?.at ?? 0,
     // Only a read that succeeded is data: a failed one advances `at` to stop the re-polling.
     dataAt: cur?.okAt ?? 0,
@@ -3997,6 +4032,32 @@ async function graphqlQuotaGone(cwd?: string): Promise<string | null> {
   return `GitHub's API quota for this account is used up — it comes back at ${at} (in ${mins} min)`;
 }
 
+/** Rows whose branch a session pushed to, stamped with the push and when the list was read: the board files a card by it (shared/prFreshness.ts). */
+export function markPushed(repoKey: string, rows: PrSummary[], at: number): PrSummary[] {
+  if (!pushedHeads.size) return rows;
+  return rows.map((r) => { const push = pushedHeads.get(`${repoKey}\u0000${r.headRefName}`); return push ? { ...r, pushSeen: push, readAt: at } : r; });
+}
+const pushedHeads = new Map<string, { sha: string; at: number }>();
+export function __peekPushed(key: string): { sha: string; at: number } | undefined { return pushedHeads.get(key); }
+/** A session pushed `branch` from this checkout, at `at`. */
+export async function notePushed(rootIn: unknown, branch: string, sha: string, at: number): Promise<void> {
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return;
+  pushedHeads.set(`${repo.key}\u0000${branch}`, { sha, at });
+  /* What was read of the old head (checks, threads, merge state) goes with it: the
+     list is dropped by the caller, the detail is per pull request. */
+  for (const [k, e] of detailCache) if (k.startsWith(`${repo.key}#`) && e.detail.headRefName === branch) { detailCache.delete(k); detailFlights.delete(k); }
+}
+
+/** `prDetail` with the push this machine last made to the branch, if any, for the panel's freshness check. */
+export async function prDetailSeen(rootIn: unknown, numberIn: unknown, force = false): ReturnType<typeof prDetail> {
+  const r = await prDetail(rootIn, numberIn, force);
+  if (!r.ok || !r.detail) return r;
+  const repo = await repoIdFor(rootIn);
+  const push = repo && pushedHeads.get(`${repo.key}\u0000${r.detail.headRefName}`);
+  return push ? { ...r, detail: { ...r.detail, pushSeen: push } } : r;
+}
+
 export async function prDetail(rootIn: unknown, numberIn: unknown, force = false): Promise<{ ok: boolean; detail?: PrDetail; error?: string; stale?: boolean }> {
   const number = Number(numberIn);
   if (!Number.isInteger(number) || number <= 0) return { ok: false, error: "invalid pull request number" };
@@ -4209,6 +4270,7 @@ async function readDetail(rootIn: unknown, number: number, repo: PrRepoId, key: 
     // once GitHub cuts the connection at 100.
     ...(typeof p.headRefOid === "string" && p.headRefOid ? { headSha: p.headRefOid } : null),
     ...(typeof p.baseRefOid === "string" && p.baseRefOid ? { baseSha: p.baseRefOid } : null),
+    ...(p.statusCheckRollup?.nodes?.[0]?.commit?.oid ? { checksSha: p.statusCheckRollup.nodes[0].commit.oid } : null),
     url: p.url || "",
     updatedAt: p.updatedAt || "",
     reviewDecision: p.reviewDecision || null,
@@ -4417,6 +4479,21 @@ function keepDiff(key: string, text: string): void {
  * failure and not something a retry fixes.
  */
 const DIFF_TOO_BIG = /exceeded the maximum number of lines|too_large|HTTP 406/i;
+
+/**
+ * One review comment by its numeric id, for a link whose comment is not among
+ * the threads the detail carries (GitHub caps those at 80). `line` is null once
+ * the code under the comment has changed; `originalLine` is where it was.
+ */
+export async function reviewComment(rootIn: unknown, idIn: unknown): Promise<{ ok: boolean; comment?: { path: string; line: number | null; originalLine: number | null; inReplyToId: number | null }; error?: string }> {
+  const id = Number(idIn);
+  if (!Number.isSafeInteger(id) || id <= 0) return { ok: false, error: "invalid comment id" };
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
+  const c = await ghJson<{ path?: string; line?: number | null; original_line?: number | null; in_reply_to_id?: number | null }>(["api", `repos/${repo.nameWithOwner}/pulls/comments/${id}`]);
+  if (!c || typeof c.path !== "string") return { ok: false, error: "comment not found" };
+  return { ok: true, comment: { path: c.path, line: c.line ?? null, originalLine: c.original_line ?? null, inReplyToId: c.in_reply_to_id ?? null } };
+}
 
 /**
  * The same diff, rebuilt one file at a time.
@@ -4740,9 +4817,13 @@ export function assetReply(res: Response): Response {
 // writes
 // ---------------------------------------------------------------------------
 
-function writeGuard(rootIn: unknown): PrActionResult | null {
-  const foreign = prWriteRefusal(rootIn); if (foreign) return foreign;
+/** `apiOnly`: the write is a call to GitHub (`gh ... -R owner/name`, `gh api`) and
+ *  never touches a working tree, so a checkout-less `gh:` root may make it. The
+ *  rest (apply suggestion, unstick) keep the refusal. */
+function writeGuard(rootIn: unknown, apiOnly = false): PrActionResult | null {
+  if (!apiOnly) { const foreign = prWriteRefusal(rootIn); if (foreign) return foreign; }
   if (!WRITE_ENABLED) return { ok: false, error: "writes are disabled (AGENTGLASS_GIT_WRITE_DISABLED=1)" };
+  if (foreignOf(rootIn)) return null;
   const abs = safeAbs(rootIn);
   const root = abs ? repoRootOf(abs) : null;
   if (!root) return { ok: false, error: "not a git repository" };
@@ -4753,6 +4834,10 @@ function writeGuard(rootIn: unknown): PrActionResult | null {
 /** Bumped by every write: a list read that began before it must not be kept. */
 const listEpoch = new Map<string, number>();
 export async function __invalidate(rootIn: unknown): Promise<void> { const repo = await repoIdFor(rootIn); if (repo) invalidate(repo); }
+
+/** Forget what was read of this repository's pull requests: something outside the
+ *  app (a push from a session) changed them, and the next read should ask GitHub. */
+export const invalidateRepoReads = __invalidate;
 
 function dropDetail(repo: PrRepoId, number: number): void {
   listEpoch.set(repo.key, (listEpoch.get(repo.key) ?? 0) + 1);
@@ -4772,7 +4857,7 @@ function invalidate(repo: PrRepoId, number?: number): void {
 }
 
 async function runPr(rootIn: unknown, number: number, args: string[], stdin?: string, onlyThisPr = false): Promise<PrActionResult> {
-  const g = writeGuard(rootIn); if (g) return g;
+  const g = writeGuard(rootIn, true); if (g) return g;
   if (!Number.isInteger(number) || number <= 0) return { ok: false, error: "invalid pull request number" };
   const repo = await repoIdFor(rootIn);
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
@@ -4818,7 +4903,7 @@ export async function addComment(rootIn: unknown, number: unknown, body: unknown
  * review conversation lives.
  */
 export async function replyToThread(rootIn: unknown, number: unknown, commentId: unknown, body: unknown): Promise<PrActionResult> {
-  const g = writeGuard(rootIn); if (g) return g;
+  const g = writeGuard(rootIn, true); if (g) return g;
   const n = Number(number), cid = Number(commentId);
   const text = String(body ?? "").trim();
   if (!Number.isInteger(n) || !Number.isInteger(cid)) return { ok: false, error: "invalid thread" };
@@ -4870,7 +4955,7 @@ export function nodeIdOk(id: unknown): id is string {
  * empty and the feature looks impossible.
  */
 export async function setThreadResolved(rootIn: unknown, threadId: unknown, resolved: unknown): Promise<PrActionResult> {
-  const g = writeGuard(rootIn); if (g) return g;
+  const g = writeGuard(rootIn, true); if (g) return g;
   const id = String(threadId || "");
   if (!nodeIdOk(id)) return { ok: false, error: "invalid thread id" };
   const want = resolved !== false && resolved !== "false";
@@ -4899,7 +4984,7 @@ const REACTIONS = ["THUMBS_UP", "THUMBS_DOWN", "LAUGH", "HOORAY", "CONFUSED", "H
  * which REST could not express here either.
  */
 export async function react(rootIn: unknown, nodeId: unknown, content: unknown, on: unknown = true): Promise<PrActionResult> {
-  const g = writeGuard(rootIn); if (g) return g;
+  const g = writeGuard(rootIn, true); if (g) return g;
   const id = String(nodeId || "");
   const c = String(content || "THUMBS_UP").toUpperCase();
   if (!nodeIdOk(id)) return { ok: false, error: "invalid comment" };
@@ -4919,7 +5004,7 @@ export async function react(rootIn: unknown, nodeId: unknown, content: unknown, 
 
 /** Edit your own comment. The PR body goes through `editPr`, not here. */
 export async function editComment(rootIn: unknown, nodeId: unknown, body: unknown, kind: unknown = "issue"): Promise<PrActionResult> {
-  const g = writeGuard(rootIn); if (g) return g;
+  const g = writeGuard(rootIn, true); if (g) return g;
   const id = String(nodeId || "");
   const text = String(body ?? "");
   if (!nodeIdOk(id)) return { ok: false, error: "invalid comment" };
@@ -4940,7 +5025,7 @@ export async function editComment(rootIn: unknown, nodeId: unknown, body: unknow
 
 /** Delete your own comment. */
 export async function deleteComment(rootIn: unknown, nodeId: unknown, kind: unknown = "issue"): Promise<PrActionResult> {
-  const g = writeGuard(rootIn); if (g) return g;
+  const g = writeGuard(rootIn, true); if (g) return g;
   const id = String(nodeId || "");
   if (!nodeIdOk(id)) return { ok: false, error: "invalid comment" };
   const review = kind === "review";
@@ -4973,7 +5058,7 @@ export type HideReason = "OUTDATED" | "OFF_TOPIC" | "RESOLVED" | "DUPLICATE" | "
 const HIDE_REASONS: HideReason[] = ["OUTDATED", "OFF_TOPIC", "RESOLVED", "DUPLICATE", "SPAM", "ABUSE"];
 
 export async function hideComment(rootIn: unknown, nodeId: unknown, reason: unknown = "OUTDATED"): Promise<PrActionResult> {
-  const g = writeGuard(rootIn); if (g) return g;
+  const g = writeGuard(rootIn, true); if (g) return g;
   const id = String(nodeId || "");
   if (!nodeIdOk(id)) return { ok: false, error: "invalid comment" };
   const why = String(reason || "OUTDATED").toUpperCase() as HideReason;
@@ -4992,7 +5077,7 @@ export async function hideComment(rootIn: unknown, nodeId: unknown, reason: unkn
 /** And put it back. The same subject id, and no reason to give: unhiding is not a
  *  judgement about the content. */
 export async function unhideComment(rootIn: unknown, nodeId: unknown): Promise<PrActionResult> {
-  const g = writeGuard(rootIn); if (g) return g;
+  const g = writeGuard(rootIn, true); if (g) return g;
   const id = String(nodeId || "");
   if (!nodeIdOk(id)) return { ok: false, error: "invalid comment" };
   const mutation = `mutation($id:ID!){unminimizeComment(input:{subjectId:$id}){unminimizedComment{isMinimized}}}`;
@@ -5230,7 +5315,7 @@ export async function applySuggestion(rootIn: unknown, numberIn: unknown, args: 
 }
 
 export async function setFileViewed(rootIn: unknown, prNodeId: unknown, path: unknown, viewed: unknown): Promise<PrActionResult> {
-  const g = writeGuard(rootIn); if (g) return g;
+  const g = writeGuard(rootIn, true); if (g) return g;
   const id = String(prNodeId || "");
   const p = String(path || "");
   if (!nodeIdOk(id) || !p) return { ok: false, error: "invalid file" };
@@ -5840,7 +5925,7 @@ export async function checkJobs(rootIn: unknown, number: unknown): Promise<{ ok:
 
 /** Re-run everything, only what failed, or one job. */
 export async function rerunJobs(rootIn: unknown, what: unknown, id: unknown): Promise<PrActionResult> {
-  const g = writeGuard(rootIn); if (g) return g;
+  const g = writeGuard(rootIn, true); if (g) return g;
   const repo = await repoIdFor(rootIn);
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
   const target = String(id ?? "");
@@ -5857,7 +5942,7 @@ export async function rerunJobs(rootIn: unknown, what: unknown, id: unknown): Pr
 }
 
 export async function rerunFailedChecks(rootIn: unknown, number: unknown): Promise<PrActionResult> {
-  const g = writeGuard(rootIn); if (g) return g;
+  const g = writeGuard(rootIn, true); if (g) return g;
   const n = Number(number);
   const repo = await repoIdFor(rootIn);
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
@@ -6442,7 +6527,7 @@ export async function commitDiff(rootIn: unknown, shaIn: unknown): Promise<{ ok:
 export async function addLineComment(rootIn: unknown, numberIn: unknown, c: {
   path?: unknown; line?: unknown; startLine?: unknown; side?: unknown; body?: unknown;
 }): Promise<PrActionResult> {
-  const g = writeGuard(rootIn); if (g) return g;
+  const g = writeGuard(rootIn, true); if (g) return g;
   const n = Number(numberIn);
   if (!Number.isInteger(n) || n <= 0) return { ok: false, error: "invalid pull request number" };
   const path = typeof c.path === "string" ? c.path : "";
@@ -6564,7 +6649,7 @@ const PENDING_TTL_MS = 20_000;
 export async function submitReviewWith(
   rootIn: unknown, numberIn: unknown, verb: unknown, body: unknown, commentsIn: unknown,
 ): Promise<PrActionResult> {
-  const g = writeGuard(rootIn); if (g) return g;
+  const g = writeGuard(rootIn, true); if (g) return g;
   const n = Number(numberIn);
   if (!Number.isInteger(n) || n <= 0) return { ok: false, error: "invalid pull request number" };
   const event = verb === "approve" ? "APPROVE" : verb === "request_changes" ? "REQUEST_CHANGES" : verb === "comment" ? "COMMENT" : null;

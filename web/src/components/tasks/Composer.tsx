@@ -23,7 +23,7 @@ import { Markdown } from "../../lib/markdown.tsx";
 import { bold, bullet, checklist, code, fence, heading, insertText, italic, link, newline, ordered, quote, strike, table, type Sel } from "../../lib/mdEditor.ts";
 import { pushRecent, readRecent, writeRecent } from "../../lib/emojiData.ts";
 import { insertMention, matchPeople, mentionQuery, menuPlacement, MENU_MAX, type Mentionable } from "../../lib/mentions.ts";
-import { EDGE, LINE } from "../workspace/Chrome.tsx";
+import { Button, EDGE, LINE, ListRow, Textarea } from "../workspace/Chrome.tsx";
 import { EmojiPicker } from "./EmojiPicker.tsx";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
@@ -209,23 +209,22 @@ export function Composer({ value, onChange, onSend, onCancel, busy, placeholder,
           <span key={gi} className="flex items-center gap-0.5">
             {gi > 0 && <span aria-hidden className="mx-1 self-stretch my-1" style={{ width: 1, background: "color-mix(in srgb, var(--text) 12%, transparent)" }} />}
             {group.map((t) => (
-              <button key={t.id} type="button" title={t.title} aria-label={t.title} disabled={busy || preview}
+              <Button key={t.id} square size="compact" tone="quiet" title={t.title} label={t.title} disabled={busy || preview}
                 /* Never a submit: inside a form this toolbar would post the
                    comment on every press. And `onMouseDown` prevented, or the
                    textarea loses its selection before the handler reads it. */
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => run(t.run)}
-                className="agx-btn inline-flex items-center justify-center rounded"
-                style={{ width: 24, height: 24, color: "var(--text3)", ...t.style }}>
+                style={t.style}>
                 <Ink d={t.d} text={t.text} />
-              </button>
+              </Button>
             ))}
           </span>
         ))}
         {/* The mention, as a button too: the chord is `@` and it is not
             discoverable, which is exactly what a toolbar is for. */}
         <span aria-hidden className="mx-1 self-stretch my-1" style={{ width: 1, background: "color-mix(in srgb, var(--text) 12%, transparent)" }} />
-        <button type="button" title="Mention somebody  (@)" aria-label="Mention somebody" disabled={busy || preview}
+        <Button square size="compact" tone="quiet" title="Mention somebody  (@)" label="Mention somebody" disabled={busy || preview}
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => {
             const el = box.current;
@@ -237,24 +236,22 @@ export function Composer({ value, onChange, onSend, onCancel, busy, placeholder,
             setCaret({ start: cut + pad.length + 1, end: cut + pad.length + 1 });
             sniff(next, cut + pad.length + 1);
           }}
-          className="agx-btn inline-flex items-center justify-center rounded"
-          style={{ width: 24, height: 24, color: "var(--text3)" }}>
+          >
           <Ink text="@" />
-        </button>
-        <button type="button" title="Add emoji" aria-label="Add emoji" aria-haspopup="dialog" aria-expanded={!!emojiAt}
+        </Button>
+        <Button square size="compact" tone="quiet" on={!!emojiAt} title="Add emoji" label="Add emoji" aria-haspopup="dialog" aria-expanded={!!emojiAt}
           disabled={busy || preview}
           onMouseDown={(e) => e.preventDefault()}
           onClick={(e) => { const b = e.currentTarget; setEmojiAt((cur) => (cur ? null : b)); }}
-          className="agx-btn inline-flex items-center justify-center rounded"
-          style={{ width: 24, height: 24, color: emojiAt ? "var(--info)" : "var(--text3)" }}>
+          >
           <Ink d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM8 14s1.5 2 4 2 4-2 4-2M9 9.5h.01M15 9.5h.01" />
-        </button>
+        </Button>
         <span className="flex-1" />
-        <button type="button" className="agx-btn rounded px-2 text-[10.5px]" style={{ height: 24, color: preview ? "var(--info)" : "var(--text3)" }}
+        <Button size="compact" tone="quiet" on={preview}
           title={preview ? "Back to writing" : "See it the way the card will"}
           onClick={() => setPreview((v) => !v)}>
           {preview ? "Write" : "Preview"}
-        </button>
+        </Button>
       </div>
 
       {preview
@@ -264,7 +261,7 @@ export function Composer({ value, onChange, onSend, onCancel, busy, placeholder,
               ? <Markdown text={value} />
               : <span style={{ color: "var(--text4)" }}>Nothing to preview yet.</span>}
           </div>
-        : <textarea ref={box} value={value} autoFocus={autoFocus} disabled={busy} placeholder={placeholder}
+        : <Textarea textareaRef={box} value={value} autoFocus={autoFocus} disabled={busy} placeholder={placeholder}
             onChange={(e) => { onChange(e.target.value); sniff(e.target.value, e.target.selectionStart); }}
             onClick={(e) => sniff(value, e.currentTarget.selectionStart)}
             onBlur={() => setAt(null)}
@@ -297,8 +294,9 @@ export function Composer({ value, onChange, onSend, onCancel, busy, placeholder,
                  behind it and close the card with a comment half-written. */
               if (e.key === "Escape" && onCancel) { e.preventDefault(); e.stopPropagation(); onCancel(); }
             }}
-            className={`agx-scroll px-2.5 py-2 text-[11.5px] outline-none ${growTo == null ? "resize-y" : "resize-none"}`}
-            style={{ background: "transparent", color: "var(--text)", minHeight: growTo == null ? 84 : COMPOSER_MIN, fontFamily: "inherit" }} />}
+            className={`agx-scroll text-[11.5px] ${growTo == null ? "resize-y" : "resize-none"}`}
+            /* The box's frame is the shell's: the kit's fill, edge and corners would draw a second box inside it. */
+            style={{ background: "transparent", border: 0, borderRadius: 0, minHeight: growTo == null ? 84 : COMPOSER_MIN, fontFamily: "inherit" }} />}
 
       {/* The people menu. Anchored under the box rather than at the caret: a
           textarea gives no caret coordinates without measuring a mirror of
@@ -313,19 +311,19 @@ export function Composer({ value, onChange, onSend, onCancel, busy, placeholder,
           {!people && <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>Reading who is on this list…</div>}
           {people && !rows.length && <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>Nobody matches that.</div>}
           {rows.map((p, i) => (
-            <button key={p.id} type="button"
+            <ListRow key={p.id} hot={i === pick}
               onMouseDown={(e) => { e.preventDefault(); take(p.name); }}
               onMouseEnter={() => setPick(i)}
-              className="w-full text-left px-2 py-1.5 flex items-center gap-2 text-[11px]"
-              style={{ background: i === pick ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent", color: "var(--text2)" }}>
-              <span className="shrink-0 grid place-items-center rounded-full text-[9px]"
-                style={{ width: 18, height: 18, background: p.color ?? "color-mix(in srgb, var(--text) 14%, transparent)", color: "#fff" }}>
-                {p.avatar
-                  ? <img src={avatarSrc(p.avatar)} alt="" width={18} height={18} style={{ borderRadius: "50%" }} onError={(e) => { e.currentTarget.style.display = "none"; }} />
-                  : (p.initials || p.name.slice(0, 2)).toUpperCase()}
-              </span>
-              <span className="truncate">{p.name}</span>
-            </button>
+              leading={
+                <span className="shrink-0 grid place-items-center rounded-full text-[9px]"
+                  style={{ width: 18, height: 18, background: p.color ?? "color-mix(in srgb, var(--text) 14%, transparent)", color: "#fff" }}>
+                  {p.avatar
+                    ? <img src={avatarSrc(p.avatar)} alt="" width={18} height={18} style={{ borderRadius: "50%" }} onError={(e) => { e.currentTarget.style.display = "none"; }} />
+                    : (p.initials || p.name.slice(0, 2)).toUpperCase()}
+                </span>
+              }>
+              {p.name}
+            </ListRow>
           ))}
         </div>
       )}
@@ -341,19 +339,12 @@ export function Composer({ value, onChange, onSend, onCancel, busy, placeholder,
         </span>
         <span className="flex-1" />
         {onCancel && (
-          <button type="button" className="agx-btn rounded px-2 text-[10.5px]" style={{ height: 24, color: "var(--text3)" }}
-            onClick={onCancel} disabled={busy}>Cancel</button>
+          <Button size="compact" tone="quiet" onClick={onCancel} disabled={busy}>Cancel</Button>
         )}
-        <button type="button" className="agx-btn rounded px-2.5 text-[10.5px] font-medium" disabled={busy || !value.trim()}
-          style={{
-            height: 24,
-            color: value.trim() ? "var(--primary-hover, var(--primary))" : "var(--text4)",
-            border: `1px solid color-mix(in srgb, var(--primary) ${value.trim() ? 45 : 15}%, transparent)`,
-            background: value.trim() ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent",
-          }}
-          onClick={onSend}>
+        <Button size="compact" tone={value.trim() ? "plain" : "quiet"} tint={value.trim() ? "var(--primary-hover, var(--primary))" : undefined}
+          disabled={busy || !value.trim()} onClick={onSend}>
           {busy ? "Sending…" : sendLabel}
-        </button>
+        </Button>
       </div>
     </div>
   );

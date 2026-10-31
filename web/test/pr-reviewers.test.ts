@@ -261,22 +261,20 @@ describe("the verdict, as a sentence", () => {
  * re-asking matters most, so it leads even the other past reviewers.
  */
 describe("the reviewer picker leads with past reviewers", () => {
-  const panel = readSrc(new URL("../src/components/PrPanel.tsx", import.meta.url), "utf8");
-  const fn = panel.slice(panel.indexOf("function usePrFieldPicker("), panel.indexOf("function CardStatusPick("));
+  /* The order itself is pinned on the pure function in pr-people-source.test.ts
+     (askedOrder); here, that the picker is fed by it and by the same roster the
+     sidebar reads, with the time of the last commit that makes an approval stale. */
+  const ask = readSrc(new URL("../src/components/PrAskPicker.tsx", import.meta.url), "utf8");
 
-  test("a stale approval sorts before every other past reviewer", () => {
-    expect(fn).toContain("staleApproved");
-    expect(fn).toContain("const reviewed = [...byRecent(staleApproved), ...byRecent(otherPast)];");
+  test("the picker's asked group comes from the roster, with the last commit as the staleness line", () => {
+    expect(ask).toContain("const roster = useMemo(() => reviewerRoster(d), [d]);");
+    expect(ask).toContain("const lastCommitAt = d.commits.length ? d.commits[d.commits.length - 1]!.committedAt : undefined;");
+    expect(ask).toContain("askSource({");
   });
 
-  test("each past reviewer carries their last verdict as a muted hint", () => {
-    expect(fn).toContain("sub: `${mark.said}${r.at ? ` ${ago(r.at)}` : \"\"}`");
-  });
-
-  test("the rest of the collaborators keep their current order after the reviewed group", () => {
-    expect(fn).toContain("const rest = people.filter((p) => !reviewedLogins.has(p.value.toLowerCase()));");
-    // Most-used people lead (the "Frequent" section), the rest keep this order.
-    expect(fn).toContain("options={withFrequent(withoutAuthor([...reviewedOptions, ...rest], d.author), loadUse())}");
+  test("the people the repository suggests are read from CODEOWNERS and from habit, not typed", () => {
+    expect(ask).toContain("owners: ownersOf(source.owners.rules,");
+    expect(ask).toContain("use: loadUse(),");
   });
 });
 
@@ -362,9 +360,9 @@ describe("the Overview and the board agree", () => {
     const fn = historyFn();
     expect(fn).toContain("onGoReview(e.nodeId, e.url!)");
     expect(fn).toContain("onGoReview(e.replaced!.nodeId, e.replaced!.url!)");
-    expect(fn).toContain("hover:bg-white/5");
-    expect(fn).toContain('<Chip text="Asked again"');
-    expect(fn).toContain("<Chip text={REVIEW_ROUND[e.state].word}");
+    expect(fn).toContain('<Button size="compact" tone="quiet"');
+    expect(fn).toContain(">ASKED AGAIN</Badge>");
+    expect(fn).toContain("{String(REVIEW_ROUND[e.state].word).toUpperCase()}</Badge>");
   });
 
   test("the review history is a flat section on the rows around it, and its rows wrap in a side panel", () => {

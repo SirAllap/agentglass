@@ -13,14 +13,14 @@
  * A web link opens in the app when it is something the app shows (a pull
  * request, a card) and in the browser otherwise.
  */
-import { useState, type ReactNode } from "react";
+import { useState, type MouseEvent, type ReactNode } from "react";
 import { followLink } from "../../lib/linkRouter.ts";
 import { ICON } from "../../lib/iconSize.ts";
 import { openCard } from "../../lib/openCard.ts";
 import { prioLook, Flag } from "../../lib/priority.tsx";
 import type { CardLinked, CardWebLink, ProviderTask } from "../../../../shared/providers.ts";
-import { StatusPill } from "../StatusPill.tsx";
 import { LINE } from "../workspace/Chrome.tsx";
+import { StateChip } from "./DockParts.tsx";
 
 const KEY = "agx.jira.sectionsShut";
 
@@ -36,20 +36,27 @@ function remember(id: string, shut: boolean): void {
   } catch { /* a private window: the section stays as it is on screen */ }
 }
 
-/** A titled block that opens and shuts; `aside` sits on the title's right (a count of a different kind, a control). */
-export function Section({ id, title, count, aside, children }: { id: string; title: string; count?: number | string; aside?: ReactNode; children: ReactNode }) {
+/**
+ * A block of the card: a quiet sentence-case heading (11 / 600) with its count, an optional aside after it and a meter at the far
+ * end, folded by the chevron; whether it is shut is remembered per browser. The blocks of a tab sit 16 apart (the tab's own gap).
+ */
+export function JiraSection({ id, title, count, aside, meter, bare, children }: { id: string; title: string; count?: number | string; aside?: ReactNode; meter?: ReactNode; bare?: boolean; children: ReactNode }) {
   const [shut, setShut] = useState(() => shutSet().has(id));
+  /* A section that is a whole tab of the card has the tab for its heading. */
+  if (bare) return <div className="min-w-0">{children}</div>;
   return (
-    <section className="mb-5 min-w-0" aria-label={title}>
-      <div className="flex items-center gap-2 mb-1.5 min-w-0">
-        <button onClick={() => { remember(id, !shut); setShut(!shut); }} aria-expanded={!shut}
-          className="agx-btn flex items-center gap-1.5 shrink-0 text-[10px] uppercase tracking-wide" style={{ color: "var(--text3)" }}>
+    <section className="min-w-0 flex flex-col" style={{ gap: 8 }} aria-label={title}>
+      <div className="flex items-center min-w-0" style={{ gap: 8, minHeight: 22, fontSize: 11, color: "var(--text3)" }}>
+        <button type="button" aria-expanded={!shut} onClick={() => { remember(id, !shut); setShut(!shut); }}
+          className="agx-btn min-w-0 flex items-center rounded-md font-semibold" style={{ gap: 4, color: "inherit" }}>
           <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden
-            style={{ transform: shut ? "rotate(-90deg)" : "none", transition: "transform 120ms" }}><path d="m6 9 6 6 6-6" /></svg>
+            className="shrink-0" style={{ transform: shut ? "rotate(-90deg)" : "none", transition: "transform 120ms" }}><path d="m6 9 6 6 6-6" /></svg>
           <span className="truncate">{title}</span>
-          {count !== undefined && count !== "" && <span className="tabular-nums" style={{ color: "var(--text4)" }}>{count}</span>}
         </button>
-        {aside && <span className="ml-auto min-w-0 flex justify-end text-[10px]" style={{ color: "var(--text4)" }}>{aside}</span>}
+        {count != null && count !== "" && <span className="tabular-nums" style={{ color: "var(--text4)" }}>{count}</span>}
+        {aside != null && <span className="min-w-0" style={{ color: "var(--text4)" }}>{aside}</span>}
+        <span className="flex-1" />
+        {meter}
       </div>
       {!shut && children}
     </section>
@@ -58,34 +65,41 @@ export function Section({ id, title, count, aside, children }: { id: string; tit
 
 /** The kind of card, as a small coloured mark; the colours are the house's, not Atlassian's. */
 const TYPE_TONE: Record<string, string> = { epic: "--primary", story: "--success", bug: "--error", task: "--info", subtask: "--text3", "sub-task": "--text3" };
-export function TypeMark({ type }: { type?: string }) {
+export function TypeMark({ type, size }: { type?: string; size?: number }) {
   if (!type) return null;
   const tone = TYPE_TONE[type.toLowerCase()] ?? "--text3";
+  /* `size` is the dock's tile (20 on a row, 22 in the header): a ring and a rounder corner; without it the small mark every list uses. */
+  const box = size ?? ICON.sm;
   return (
-    <span title={type} aria-label={type} className="shrink-0 inline-flex items-center justify-center text-[8.5px] font-semibold rounded"
-      style={{ width: ICON.sm, height: ICON.sm, color: `var(${tone})`, background: `color-mix(in srgb, var(${tone}) 16%, transparent)` }}>
+    <span title={type} aria-label={type} className="shrink-0 inline-flex items-center justify-center text-[10px] font-semibold"
+      style={{
+        width: box, height: box, borderRadius: size ? (size > 20 ? 7 : 6) : 4, color: `var(${tone})`, background: `color-mix(in srgb, var(${tone}) ${size ? 14 : 16}%, transparent)`,
+        ...(size ? { boxShadow: `inset 0 0 0 1px color-mix(in srgb, var(${tone}) 30%, transparent)` } : null),
+      }}>
       {type[0]!.toUpperCase()}
     </span>
   );
 }
 
 /**
- * One card in a list: its kind, key, title, priority and status; a click on the row opens the card in the app.
- * `tail` replaces the status mark where the row has a control for it (a sub-task's own status), and `after` sits at
- * the row's end, outside the button that opens the card (a remove control): a control inside a button is not a control.
+ * One card in a list, drawn as a tile: its kind, key, title, priority and a state chip; a click on the row opens the card in the
+ * app, a right click asks for the row's menu when the list has one. `tail` replaces the state chip where the row has a control
+ * for it (a sub-task's own status), and `after` sits at the row's end, outside the button that opens the card (a remove control):
+ * a control inside a button is not a control.
  */
-export function CardRow({ t, title, tail, after }: { t: ProviderTask; title?: string; tail?: ReactNode; after?: ReactNode }) {
+export function CardRow({ t, title, tail, after, note, onMenu }: { t: ProviderTask; title?: string; tail?: ReactNode; after?: ReactNode; note?: string; onMenu?: (e: MouseEvent, t: ProviderTask) => void }) {
   const k = t.customId ?? t.id;
   const done = t.statusKind === "done";
   return (
-    <div className="flex items-center gap-2 min-w-0 w-full" style={{ borderBottom: LINE }}>
+    <div className={`agx-dk-mini${done ? " agx-dk-done" : ""}`} onContextMenu={onMenu ? (e) => { e.preventDefault(); onMenu(e, t); } : undefined}>
       <button onClick={() => openCard(k, k, "jira")} title={title ?? `Open ${k}`}
-        className="agx-btn flex items-center gap-2 min-w-0 flex-1 text-left text-[11px] py-1.5">
-        <TypeMark type={t.issueType} />
-        <span className="tabular-nums shrink-0" style={{ color: "var(--text3)", textDecoration: done ? "line-through" : undefined }}>{k}</span>
-        <span className="flex-1 min-w-0 truncate" style={{ color: done ? "var(--text3)" : "var(--text)" }}>{t.title}</span>
+        className="agx-btn flex items-center min-w-0 flex-1 text-left self-stretch" style={{ gap: 8 }}>
+        <TypeMark type={t.issueType} size={20} />
+        <span className="agx-dk-k tabular-nums shrink-0">{k}</span>
+        <span className="agx-dk-t flex-1 min-w-0 truncate">{t.title}</span>
         {t.priority && <span className="shrink-0 inline-flex" title={prioLook(t.priority).label}><Flag c={prioLook(t.priority).c} on /></span>}
-        {tail === undefined && <StatusPill status={t.status} color={t.statusColor} dim={done} />}
+        {note && <span className="shrink-0 text-[10.5px]" style={{ color: "var(--text4)" }}>{note}</span>}
+        {tail === undefined && <StateChip status={t.status} color={t.statusColor || undefined} done={done} />}
       </button>
       {tail}
       {after}
@@ -93,27 +107,26 @@ export function CardRow({ t, title, tail, after }: { t: ProviderTask; title?: st
   );
 }
 
-/** Jira's progress line for sub-tasks: how much of the bar is done. */
+/** How much of the sub-tasks is done: a 96 wide meter that sits at the end of the section's heading. */
 export function Progress({ rows }: { rows: ProviderTask[] }) {
   const done = rows.filter((r) => r.statusKind === "done").length;
   const pct = Math.round((done / rows.length) * 100);
   return (
-    <div className="h-1 rounded-full mb-1.5 overflow-hidden" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`${pct}% of the subtasks are done`}
-      style={{ background: "color-mix(in srgb, var(--text) 10%, transparent)" }}>
-      <div className="h-full rounded-full" style={{ width: `${pct}%`, background: "var(--success)" }} />
+    <div className="rounded-full overflow-hidden shrink-0" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`${pct}% of the subtasks are done`}
+      style={{ width: 96, height: 4, background: "color-mix(in srgb, var(--text) 14%, transparent)" }}>
+      <div className="h-full" style={{ width: `${pct}%`, background: "var(--success)" }} />
     </div>
   );
 }
 
 /** Subtasks with Jira's progress line: how many are done of how many there are. */
-export function SubtasksSection({ rows }: { rows: ProviderTask[] }) {
+export function SubtasksSection({ rows, onMenu }: { rows: ProviderTask[]; onMenu?: (e: MouseEvent, t: ProviderTask) => void }) {
   if (!rows.length) return null;
   const done = rows.filter((r) => r.statusKind === "done").length;
   return (
-    <Section id="subtasks" title="Subtasks" count={rows.length} aside={`${done} of ${rows.length} done`}>
-      <Progress rows={rows} />
-      <div className="flex flex-col">{rows.map((s) => <CardRow key={s.id} t={s} />)}</div>
-    </Section>
+    <JiraSection id="subtasks" title="Subtasks" aside={`${done} of ${rows.length} done`} meter={<Progress rows={rows} />}>
+      <div className="agx-dk-stack">{rows.map((s) => <CardRow key={s.id} t={s} onMenu={onMenu} />)}</div>
+    </JiraSection>
   );
 }
 
@@ -130,14 +143,11 @@ export function groupLinked(linked: CardLinked[]): { phrase: string; rows: CardL
 export function LinkedSection({ linked }: { linked: CardLinked[] }) {
   if (!linked.length) return null;
   return (
-    <Section id="linked" title="Linked work items" count={linked.length}>
-      {groupLinked(linked).map((g) => (
-        <div key={g.phrase} className="mb-1.5">
-          <div className="text-[10px] mt-1 -mb-0.5" style={{ color: "var(--text4)" }}>{g.phrase}</div>
-          {g.rows.map((l) => <CardRow key={l.id} t={l.task} title={`${l.type}: ${g.phrase} ${l.task.customId ?? l.task.id}`} />)}
-        </div>
-      ))}
-    </Section>
+    <JiraSection id="linked" title="Linked work items" count={linked.length}>
+      <div className="agx-dk-stack">
+        {groupLinked(linked).flatMap((g) => g.rows.map((l) => <CardRow key={l.id} t={l.task} note={g.phrase} title={`${l.type}: ${g.phrase} ${l.task.customId ?? l.task.id}`} />))}
+      </div>
+    </JiraSection>
   );
 }
 
@@ -147,7 +157,7 @@ export function WebLinksSection({ links, error }: { links: CardWebLink[] | null;
   if (links === null) return null;
   if (!links.length && !error) return null;
   return (
-    <Section id="weblinks" title="Web links" count={links.length || undefined}>
+    <JiraSection id="weblinks" title="Web links" count={links.length || undefined}>
       {error && <div className="text-[10.5px] mb-1" role="status" style={{ color: "var(--warning-ink)" }}>{error}</div>}
       <div className="flex flex-col">
         {links.map((l) => (
@@ -160,6 +170,6 @@ export function WebLinksSection({ links, error }: { links: CardWebLink[] | null;
           </button>
         ))}
       </div>
-    </Section>
+    </JiraSection>
   );
 }

@@ -166,9 +166,9 @@ describe("the page is in the settings index", () => {
   beforeAll(async () => {
     reg = await import("../src/lib/settingsRegistry.ts");
   });
-  test("the one setting on it is a def an agent can read, bound to its row; the connection and the switch are not", () => {
+  test("the settings on it are defs an agent can read, bound to its row; the connection and the switch are not", () => {
     expect(rows.find((r) => r.settingId === "jira.statusUnits.counted")?.label).toBe("Projects that count");
-    expect(reg.SETTING_DEFS.filter((d) => d.page === "jira").map((d) => d.id)).toEqual(["jira.statusUnits.counted"]);
+    expect(reg.SETTING_DEFS.filter((d) => d.page === "jira").map((d) => d.id)).toEqual(["jira.statusUnits.counted", "jira.tree.shapes"]);
     expect(reg.isMigrated("jira", "")).toBe(true);
   });
 });

@@ -14,8 +14,11 @@ import { allOpen, autoPick, clickScope, firstRun, initialTicks, openFolders, inO
 // Comment lines out, so a sentence about the gate cannot stand in for the gate.
 const APP = (await Bun.file(new URL("../src/App.tsx", import.meta.url)).text())
   .split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
-const PICKER = (await Bun.file(new URL("../src/components/ProjectPicker.tsx", import.meta.url)).text())
-  .split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+const strip = (t: string) => t.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+const DIR = "../src/components/projects/";
+const STATE = strip(await Bun.file(new URL(DIR + "useProjectsModal.ts", import.meta.url)).text());
+const SHELL = strip(await Bun.file(new URL(DIR + "ProjectsModal.tsx", import.meta.url)).text());
+const RAIL = strip(await Bun.file(new URL(DIR + "Rail.tsx", import.meta.url)).text());
 
 const ORBIT = "/home/dev/code/orbit";
 const LANDER = "/home/dev/code/lander";
@@ -60,7 +63,7 @@ describe("what a click on one row opens", () => {
     expect(clickScope(ORBIT, [ORBIT])).toBeNull();
   });
   test("the row asks the rule", () => {
-    expect(PICKER).toContain("const choose = (root: string) => { const next = clickScope(root, workspaces); if (next) void openScope(next); else close(); };");
+    expect(STATE).toContain("const choose = (root: string) => { const next = clickScope(root, workspaces); if (next) void openScope(next); else close(); };");
   });
 });
 
@@ -76,8 +79,8 @@ describe("an open folder that is not one project", () => {
     // The same project spelled with a trailing slash is that project's row.
     expect(openFolders([ORBIT + "/"], [{ root: ORBIT }])).toEqual([]);
   });
-  test("gets a row of its own, marked open, unless 'All projects' already says it", () => {
-    expect(PICKER).toMatch(/!allOpen\(workspaces, roots\) && openFolders\(workspaces, repos\)\.map\(\(w\) => \(\s*<Row key=\{w\} current icon=\{<FolderIcon/);
+  test("gets a group of its own, marked Not on your list, so it stays on the list", async () => {
+    expect(strip(await Bun.file(new URL("../src/lib/projectsView.ts", import.meta.url)).text())).toContain("Not on your list");
   });
 });
 
@@ -150,8 +153,8 @@ describe("the first run's screen", () => {
     expect(firstRun([], [], false, null)).toBe(false);
   });
   test("the screen asks the rule rather than keeping its own copy", () => {
-    expect(PICKER).toContain("const isFirstRun = firstRun(repos, roots, scanned, known ? workspaces : null);");
-    expect(APP).toContain("<ProjectPicker open={projectOpen} workspaces={workspaces} known={workspace !== undefined}");
+    expect(SHELL).toContain("const isFirstRun = firstRun(repos, roots, false, known ? workspaces : null);");
+    expect(APP).toContain("<ProjectsModal open={projectOpen} workspaces={workspaces} known={workspace !== undefined}");
   });
 });
 
@@ -184,7 +187,7 @@ describe("the first run waits for an answer", () => {
     expect(APP).toMatch(/\.catch\(\((?:e)?\) => \{\s*if \(!live\) return;\s*setAwaitingPick\(false\);/);
   });
   test("closing the picker, either way, lets the views in", () => {
-    expect(APP).toMatch(/<ProjectPicker [^>]*onClose=\{\(\) => \{ setProjectOpen\(false\); setAwaitingPick\(false\); \}\}/);
+    expect(APP).toMatch(/<ProjectsModal [^>]*onClose=\{\(\) => \{ setProjectOpen\(false\); setAwaitingPick\(false\); \}\}/);
   });
 });
 
@@ -193,16 +196,16 @@ describe("the whole machine", () => {
   // purpose, and once they opened anything the picker had no way back to it
   // but a hand edit of config.json.
   test("is a row of its own, open when nothing is — once that is known", () => {
-    expect(PICKER).toMatch(/<Row current=\{known && !workspaces\.length\} icon=\{<MonitorIcon size=\{ICON\.sm\} \/>\} title="Every project on this machine"/);
+    expect(SHELL).toContain("const scopeMachine = known && !workspaces.length;");
   });
   test("choosing it sends no projects at all", () => {
-    expect(PICKER).toContain('title="Every project on this machine"');
-    expect(PICKER).toMatch(/title="Every project on this machine"[^>]*onClick=\{\(\) => void openScope\(\[\]\)\}/);
+    expect(RAIL).toContain("No scope: every project on this machine");
+    expect(SHELL).toContain("onScope={(machine) => void m.openScope(machine ? [] : folders)}");
   });
   test("an empty choice is not dropped as 'nothing changed' on its way", () => {
     // nextScope answers null for an empty list, so that unticking the last box
     // is not a request for the machine; the row has to get past that check.
-    expect(PICKER).toContain("if (list.length ? !nextScope(list, workspaces) : known && !workspaces.length) { onClose(); return; }");
+    expect(STATE).toContain("if (list.length ? !nextScope(list, workspaces) : !workspaces.length) { onClose(); return; }");
   });
 });
 
@@ -210,18 +213,18 @@ describe("the picker's plumbing", () => {
   test("a long list of folders scrolls on its own instead of pushing the projects out", () => {
     // An upgrade seeds one folder per project the app knew, which on a busy
     // machine is dozens, and the list sits in the picker's fixed footer.
-    expect(PICKER).toMatch(/<div className="agx-scroll flex flex-col mb-2 overflow-y-auto" style=\{\{ maxHeight: FOLDERS_MAX_PX \}\}>\s*\{roots\.map/);
+    expect(RAIL).toMatch(/agx-scroll flex flex-col gap-0\.5 overflow-y-auto min-h-0" style=\{\{ maxHeight: 240 \}\}/);
   });
   test("a folder that opens its one project is not added a second time, as that project", () => {
     // openScope checked what to add against this render's folders, which did
     // not have the new one yet; the project inside it went in as a folder too.
-    expect(PICKER).toContain("if (only) void openScope([only], r.roots);");
+    expect(STATE).toContain("if (only) void openScope([only], r.roots);");
   });
   test("only the newest read of the list draws it", () => {
-    expect(PICKER).toMatch(/const n = \+\+loadSeq\.current;/);
-    expect(PICKER).toMatch(/if \(n === loadSeq\.current\) \{ setRepos\(repos\);/);
+    expect(STATE).toMatch(/const n = \+\+loadSeq\.current;/);
+    expect(STATE).toMatch(/if \(n === loadSeq\.current\) \{ setRepos\(all\);/);
   });
   test("a folder saved while the environment overrides the list says so, both ways", () => {
-    expect(PICKER.match(/if \(r\.note\) setError\(r\.note\);/g)?.length).toBe(2);
+    expect(STATE.match(/if \(r\.note\) setError\(r\.note\);/g)?.length).toBe(2);
   });
 });

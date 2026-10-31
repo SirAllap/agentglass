@@ -21,14 +21,14 @@ export function GroupHead({ label, count, points, folded, onToggle, first }: {
     <button onClick={onToggle}
       aria-expanded={!folded}
       title={folded ? "Show these" : "Hide these"}
-      className="agx-group-head w-full flex items-center py-2 text-left hover:bg-white/5"
-      style={{ borderTop: first ? undefined : LINE }}>
+      className="agx-group-head w-full flex items-center text-left hover:bg-white/5"
+      style={{ borderTop: first ? undefined : LINE, minHeight: 32 }}>
       <span className="agx-stick-group flex items-center gap-2">
       {/* A drawn chevron, not a text glyph. `▸` at a readable size renders as a
           speck in this font, and the thing it controls is a section of the
           board. This is a real 20px target with a stroke somebody can see. */}
       <span aria-hidden className="inline-flex items-center justify-center shrink-0"
-        style={{ width: 20, height: 20, borderRadius: 6, background: "color-mix(in srgb, var(--text) 6%, transparent)" }}>
+        style={{ width: 20, height: 20, borderRadius: 6 }}>
         <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none"
           style={{ transform: folded ? "none" : "rotate(90deg)", transition: "transform 120ms ease" }}>
           <path d="M4 2.5 L8.5 6 L4 9.5" stroke="var(--text2)" strokeWidth="1.8"
@@ -37,13 +37,14 @@ export function GroupHead({ label, count, points, folded, onToggle, first }: {
       </span>
       {label}
       <span className="text-[10.5px] tabular-nums" style={{ color: "var(--text3)" }}>{count}</span>
-      {points != null && points > 0 && (
-        <span className="text-[10.5px] tabular-nums" style={{ color: "var(--text4)" }}>· {points} pts</span>
-      )}
       {folded && (
         <span className="text-[10px]" style={{ color: "var(--text4)" }}>· hidden</span>
       )}
       </span>
+      {/* The group's points on the right, where the Pts column is, as the mockup draws them. */}
+      {points != null && points > 0 && (
+        <span className="ml-auto pr-4 text-[10.5px] tabular-nums" style={{ color: "var(--text4)" }}>{points} pts</span>
+      )}
     </button>
   );
 }

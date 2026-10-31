@@ -89,7 +89,7 @@ describe("where it is wired", () => {
 
   test("the readers keep their calls; the setup they are handed is what changed", () => {
     // These literals are what the older card tests pin; ownership rides on the setup, not on new arguments.
-    expect(pr).toContain("const ref = useMemo(() => mergeCardRef(d, setup), [d.headRefName, d.title, d.body, setup]);");
+    expect(pr).toContain("const ref = useMemo(() => mergeCardRefOrRow(d, setup), [d.headRefName, d.title, d.body, d.card, setup]);");
     expect(pr).toContain("const go = chipAction(ref, setup);");
     expect(term).toContain("chipAction(ref, cuSetup)");
   });
@@ -102,7 +102,8 @@ describe("where it is wired", () => {
   });
 
   test("a Jira card is not looked up in ClickUp for its colour", () => {
-    expect(term).toContain('if (setup.ownerOf && setup.ownerOf(ref, true).owner !== "clickup") { setPrio(null); return; }');
+    // The card is asked for only when ClickUp owns it: Jira's is never looked up there.
+    expect(term).toContain('const gated = !!ref && !!setup?.connected && !(setup.ownerOf && setup.ownerOf(ref, true).owner !== "clickup");');
   });
 
   test("Settings draws the choice only when both trackers are connected", () => {

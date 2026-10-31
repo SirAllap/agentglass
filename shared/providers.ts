@@ -483,6 +483,8 @@ export interface ProviderTask {
   /** How many subtasks it has, so a card with hidden work says so. */
   subtasks?: number;
   /** The card this one sits under, when it has one (a Jira subtask's parent, a story's epic). Read on a card's own read, not on a board's. */
+  /** The components the card is filed under, by name; absent when the read did not ask for them. */
+  components?: string[];
   parent?: { key: string; title: string; /** What the parent is ("Epic"), on a board read. */ type?: string };
   /** A flag raised on the card (Jira's Impediment): a board row says so. */
   flagged?: boolean;

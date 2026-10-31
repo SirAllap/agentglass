@@ -20,7 +20,7 @@ import { reasonOf, unlockFirst } from "./keyring.ts";
 import { whoAmI, workspaces, clickupTasks, clickupCached, forgetAll, credentialGeneration, applyCommentCounts as applyCounts, seedCommentCounts as seedCounts } from "./clickup.ts";
 import { cardWatchTrouble, forgetWatch } from "./clickupwatch.ts";
 import { forget as forgetClickupIndex } from "./clickupindex.ts";
-import { disconnectJira, jiraRefused } from "./jira.ts";
+import { disconnectJira, jiraRefused, storedCreds as jiraCreds } from "./jira.ts";
 import { forgetJiraWatch } from "./jirawatch.ts";
 
 const found = (bin: string): boolean => !!Bun.which(bin);
@@ -125,7 +125,8 @@ async function statusOf(id: ProviderId): Promise<ProviderStatus> {
       };
     }
     case "jira": {
-      if (!hasCredential("jira")) return { id, state: "needs-auth", detail: notConnected("jira", "No token yet") };
+      // The same test /jira/status answers by (jira.ts storedCreds): a token with no site or, on basic auth, no email can make no call, and one card must not say Connected while the other says Not connected.
+      if (!jiraCreds()) return { id, state: "needs-auth", detail: notConnected("jira", hasCredential("jira") ? "Connect again" : "No token yet") };
       // No request: whether the token works is what the last real call
       // found out, and that is kept in memory (see jira.ts).
       if (jiraRefused()) return { id, state: "error", detail: "Jira refused these credentials — connect again" };

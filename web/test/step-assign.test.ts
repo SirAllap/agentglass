@@ -247,7 +247,8 @@ describe("the places that press it", () => {
     expect(dialog).toContain("const plan = moves ? stepChanges(");
   });
   test("the review menu adds nobody when the status is left where it is", async () => {
-    const panel = await read("components/PrPanel.tsx");
-    expect(panel).toContain("const ensuredKey = (stepOn && (!moveOn || movesStatus) ? ensureIds(ensure, members) : []).join(\",\");");
+    const picker = await read("components/PrAskPicker.tsx");
+    expect(picker).toContain("const ensuredNow = side.moveOn && !(statusPick && statusPick !== now) ? [] : side.ensured;");
+    expect(picker).toContain("if (!stepOn) return [];");
   });
 });

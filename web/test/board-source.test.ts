@@ -47,7 +47,7 @@ describe("the board body", () => {
   });
 
   test("takes its source as a prop and defaults to ClickUp's", () => {
-    expect(body).toContain("source = CLICKUP_BOARD }");
+    expect(body).toContain("source = CLICKUP_BOARD, onWrites }");
     expect(body).toContain("source?: BoardSource;");
   });
 
