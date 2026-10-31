@@ -17,7 +17,10 @@ export interface SchedulePart { id: string; name: string; due: number; firedAt: 
 
 export type CleanKind = "left-behind" | "duplicates" | "idle" | "schedule";
 
-export interface CleanChip { label: string; title: string }
+/** `key` is the server's identity for Keep: program + folder + port, never the pid. */
+export interface CleanChip { label: string; title: string; key: string }
+
+export const keepKey = (p: Forgotten["port"]): string => `${p.proc ?? ""}\0${p.dir ?? p.cwd ?? ""}\0${p.port}`;
 
 export interface CleanGroup {
   kind: CleanKind;
@@ -49,6 +52,7 @@ const oldestDays = (secs: (number | null)[]): number | null => {
 const chip = (p: Forgotten["port"], n = 1): CleanChip => ({
   label: `:${p.port}${n > 1 ? ` x${n}` : ""}`,
   title: [p.proc, p.dir ?? p.cwd].filter(Boolean).join(" in "),
+  key: keepKey(p),
 });
 
 function cap(chips: CleanChip[]): { chips: CleanChip[]; more: number } {
@@ -59,7 +63,9 @@ function cap(chips: CleanChip[]): { chips: CleanChip[]; more: number } {
 export const isDeadSchedule = (s: SchedulePart, now = Date.now()): boolean =>
   !s.firedAt && now - s.due > DEAD_SCHEDULE_AFTER_MS;
 
-export function groupCleanup(forgotten: readonly Forgotten[], schedules: readonly SchedulePart[], now = Date.now()): { groups: CleanGroup[]; total: number } {
+export function groupCleanup(
+  forgotten: readonly Forgotten[], schedules: readonly SchedulePart[], now = Date.now(), kept: ReadonlySet<string> = new Set(),
+): { groups: CleanGroup[]; total: number } {
   const left: Forgotten[] = [];
   const dup: Forgotten[] = [];
   const idle: Forgotten[] = [];
@@ -67,9 +73,12 @@ export function groupCleanup(forgotten: readonly Forgotten[], schedules: readonl
      gone (nothing it does can matter), else it is a copy of another server,
      else it is only idle. */
   for (const f of forgotten) {
+    if (kept.has(keepKey(f.port))) continue;
     if (f.port.cwdGone || f.port.tmpLeftover) left.push(f);
     else if (f.port.duplicate) dup.push(f);
-    else idle.push(f);
+    /* Idle is only a verdict on what an agent started: a server nobody
+       connects to is the whole point of a memory server or a file gallery. */
+    else if (f.port.fromAgent) idle.push(f);
   }
   const groups: CleanGroup[] = [];
 

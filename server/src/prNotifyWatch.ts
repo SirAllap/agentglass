@@ -339,7 +339,7 @@ export function shareChecks(repo: string, number: number, s: Snapshot): void {
   if (sentChecks.get(k) === sig) return;
   sentChecks.set(k, sig);
   if (sentChecks.size > 500) sentChecks.delete(sentChecks.keys().next().value!);
-  for (const fn of checksListeners) { try { fn({ repo, number, checks: s.checks, all: s.all }); } catch { /* a listener must not break the tick */ } }
+  for (const fn of checksListeners) { try { fn({ repo, number, checks: s.checks, all: s.all, ...(s.sha ? { sha: s.sha } : null) }); } catch { /* a listener must not break the tick */ } }
 }
 export function subscribeWatchFire(fn: (f: PrWatchFire) => void): () => void { fireListeners.add(fn); return () => { fireListeners.delete(fn); }; }
 const changed = () => { for (const fn of changeListeners) { try { fn(); } catch { /* a listener must not break a write */ } } };
@@ -386,7 +386,8 @@ export function setPreset(repo: string, rulesIn: unknown, auto: boolean): { ok: 
   if (!repo) return { ok: false, error: "which repository?" };
   const rules = (Array.isArray(rulesIn) ? rulesIn : []).map(coerceRule).filter((r): r is PrWatchRule => !!r)
     .filter((r, i, all) => all.findIndex((x) => ruleKey(x) === ruleKey(r)) === i).slice(0, MAX_RULES_PER_PR);
-  if (!rules.length) {
+  /* No rules and auto off is no default. No rules and auto ON is a real one: "new PRs start with nothing". */
+  if (!rules.length && !auto) {
     db.run(`DELETE FROM pr_watch_preset WHERE repo = ?`, [repo]);
   } else {
     db.run(`INSERT INTO pr_watch_preset (repo, rules, auto) VALUES (?, ?, ?)

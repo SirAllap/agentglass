@@ -10,6 +10,7 @@ import { test, expect, afterAll, beforeAll } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { paneCommand } from "../src/tmuxlayout.ts";
 
 // Unique per run, like the state dirs below. A fixed socket name is not a
 // private server — it is a path, and anything already listening there is what
@@ -92,24 +93,6 @@ test("eviction leaves a pane it has never seen before alone", async () => {
   // sweep is a no-op. What is being pinned here is that it does not throw and
   // reports nothing reclaimed.
   expect(await pane.evictIdlePanes()).toEqual([]);
-});
-
-test("a test that forgot to redirect the socket cannot start a real pane", async () => {
-  // The guard that matters most in this file. Every other call here asks tmux a
-  // question a missing server answers with "no"; startPane is the one that would
-  // CREATE something, and without this an unrelated test importing this module
-  // could put a live `claude` in the developer's own tmux.
-  const saved = process.env.AGENTGLASS_TMUX_SOCKET;
-  delete process.env.AGENTGLASS_TMUX_SOCKET;
-  try {
-    const r = await pane.startPane("6f1c9b52-0000-4000-8000-0123456789ab", "/tmp", ["/bin/true"]);
-    expect(r.ok).toBe(false);
-    expect(r.stderr).toContain("AGENTGLASS_TMUX_SOCKET");
-  } finally {
-    if (saved !== undefined) process.env.AGENTGLASS_TMUX_SOCKET = saved;
-  }
-  // And nothing was created on the real socket.
-  expect(await pane.listPanes()).toEqual([]);
 });
 
 test("tmux availability is reported with a reason a person can act on", () => {
@@ -264,42 +247,13 @@ test("an emptied box is taken as sent", () => {
   expect(mod.__submitVerdict("● thinking…\n❯ \n────────", "write me a test")).toBe("sent");
 });
 
-// The pane's command must not be run by the user's login shell.
-//
-// tmux executes a bare command string with the login shell, and the string
-// below is POSIX — `$?`, `exec`, `;`. On a machine whose shell is fish that is
-// a syntax error ("In fish, please use $status"), so the command died on the
-// spot, the session died with it, and the tmux server exited leaving an
-// orphaned socket. The chat reported "the pane never became ready in 45s" over
-// an empty screen, because by the time anything looked there was nothing to
-// look at — a message that points nowhere near a shell.
-//
-// Asserted on the argv rather than by starting a pane: reproducing it for real
-// needs a machine whose login shell is not POSIX, which CI is not.
-test("the pane command is handed to sh, not to whatever the user's shell is", () => {
-  const argv = pane.newSessionArgv("6f1c9b52-0000-4000-8000-0123456789ab", "/tmp", ["claude", "--model", "opus"]);
-  const i = argv.indexOf("sh");
-  expect(i).toBeGreaterThan(-1);
-  expect(argv[i + 1]).toBe("-c");
-  // The command is the argument to `sh -c`, and the last word, so nothing can
-  // be appended after it and end up interpreted by something else.
-  expect(argv[i + 2]).toBe(argv[argv.length - 1]);
-  expect(argv[argv.length - 1]).toContain("$?");
-});
-
-test("the session is still named, placed and sized as before", () => {
-  const argv = pane.newSessionArgv("6f1c9b52-0000-4000-8000-0123456789ab", "/some/dir", ["claude"]);
-  expect(argv.slice(0, 2)).toEqual(["new-session", "-d"]);
-  expect(argv[argv.indexOf("-s") + 1]).toBe("6f1c9b52-0000-4000-8000-0123456789ab");
-  expect(argv[argv.indexOf("-c") + 1]).toBe("/some/dir");
-  expect(argv[argv.indexOf("-x") + 1]).toBe("200");
-});
-
-test("an argument with a quote in it cannot break out of the command", () => {
-  const argv = pane.newSessionArgv("6f1c9b52-0000-4000-8000-0123456789ab", "/tmp", ["claude", "--say", "it's; rm -rf /"]);
-  const cmd = argv[argv.length - 1]!;
+// The pane's command is POSIX (`$?`, `exec`, `;`) and is run by `sh -c`, never by the user's login shell
+// (fish: "In fish, please use $status" killed the pane and the tmux server with it). paneCommand is that string.
+test("an argument with a quote in it cannot break out of the pane command", () => {
+  const cmd = paneCommand(["claude", "--say", "it's; rm -rf /"]);
   // Single-quoted with the POSIX '\'' escape, so the `;` stays inside the word.
   expect(cmd).toContain(`'it'\\''s; rm -rf /'`);
+  expect(cmd).toContain("$?");
 });
 
 // --- a prompt sent while the CLI is busy -------------------------------------

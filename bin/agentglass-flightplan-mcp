@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""A flight plan, end to end, as an MCP server: write the plan, attach its
+mockups, run the Preflight, answer its findings, and Go, No-go and Launch where
+the server lets the caller.
+
+Eleven tools, each one verb of `agentglass-ui flight-plan`, called through that
+CLI's own code (loaded as a module, by way of agentglass-ui-mcp, whose schemas
+these are), so the routes and the arguments are written once:
+
+    plan_new      flight-plan plan new        start a plan for a request
+    plan_set      flight-plan plan set        save the plan's Markdown, title, size, visual flag
+    plan_mockup   flight-plan plan mockup     attach the mockups (the whole list)
+    preflight     flight-plan plan preflight  a review by a reader with no context; costs tokens
+    show          flight-plan plan show       the plan, its Preflight run and its open findings
+    status        flight-plan show            the Preflight run: its state, certificate and findings
+    resolve       flight-plan resolve         answer one finding (the person or the seat only)
+    go            flight-plan plan go         Go: the person's, or the seat's in Autopilot
+    no_go         flight-plan plan no-go      No-go, with the reason for the author
+    launch        flight-plan plan launch     launch the builder of a plan at Go
+    list          flight-plan plan list       the plans, newest first
+
+The other verbs of the CLI are in NOT_HERE below with the reason, and a test
+holds the two lists together against the CLI's own parser.
+
+Nothing is decided here. The credential is the caller's: AGENTGLASS_TOKEN, or
+the token file when it is unset, the same as `agentglass-ui` (and its one retry
+after a 401). This server holds no token of its own toward the app, so it can
+never do more than that credential may; the server says who may Go and why
+not, and its sentence comes back as the tool's error, word for word.
+
+Transport is stdio (`claude mcp add agentglass-flightplan -- agentglass-flightplan-mcp`)
+or Streamable HTTP (`--http [HOST:]PORT`), the browser MCP server's transport:
+loopback unless --expose, a bearer of its own (AGENTGLASS_FLIGHTPLAN_MCP_TOKEN),
+refused if it equals any other endpoint's token.
+
+Environment:
+    AGENTGLASS_SERVER                default http://localhost:4000
+    AGENTGLASS_TOKEN                 read from ~/.config/agentglass/token when unset
+    AGENTGLASS_UI_AS                 the name every call is stamped with (default "mcp")
+    AGENTGLASS_FLIGHTPLAN_MCP_HTTP   [HOST:]PORT — serve over Streamable HTTP instead of stdio
+    AGENTGLASS_FLIGHTPLAN_MCP_TOKEN  that endpoint's Bearer token (32+ chars); minted and printed when unset
+    AGENTGLASS_FLIGHTPLAN_MCP_EXPOSE 1 — the same opt-in as --expose
+"""
+import importlib.machinery
+import importlib.util
+import json
+import os
+import sys
+
+
+def _load(file, modname):
+    """A sibling bin file as a module, as agentglass-ui-mcp loads its own."""
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), file)
+    loader = importlib.machinery.SourceFileLoader(modname, path)
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    mod = importlib.util.module_from_spec(spec)
+    sys.dont_write_bytecode = True
+    try:
+        loader.exec_module(mod)
+    except Exception as e:  # noqa: BLE001 — SystemExit (a refused AGENTGLASS_SERVER) passes through
+        print(f"agentglass-flightplan-mcp: cannot load {file}: {type(e).__name__}: "
+              f"{str(e).splitlines()[0] if str(e) else ''}", file=sys.stderr)
+        sys.exit(2)
+    return mod
+
+
+UM = _load("agentglass-ui-mcp", "agentglass_ui_mcp")
+T = UM.T
+SERVER = T.SERVER
+NAME = "agentglass-flightplan"
+VERSION = "1.0.0"
+
+# tool -> the `agentglass-ui flight-plan` verb it is.
+TOOLS = {
+    "plan_new": "plan new", "plan_set": "plan set", "plan_mockup": "plan mockup",
+    "preflight": "plan preflight", "show": "plan show", "status": "show", "resolve": "resolve",
+    "go": "plan go", "no_go": "plan no-go", "launch": "plan launch", "list": "plan list",
+}
+# The CLI's other verbs, and why an agent driving one plan has no tool for them here.
+# All of them are in agentglass-ui-mcp as ui_flight_plan_*.
+NOT_HERE = {
+    "list": "the Preflight runs of every plan and project: `status` reads the one a plan has",
+    "run": "a Preflight over loose files or a pull request, not over a plan",
+    "go": "a Go on a Preflight run that waits, the person's alone",
+    "no-go": "a No-go on a Preflight run that waits, the person's alone",
+    "hold": "holds every plan of a project: an orchestrator's call",
+    "resume": "the person's alone",
+    "plan ask": "the one question to the person: an orchestrator's, through agentglass-ui",
+    "plan answer": "the person's answer: the server refuses an agent",
+    "plan report": "a launched builder's progress line, from the builder's own pane",
+    "plan integrate-check": "before bringing a builder's work in: an orchestrator's call",
+}
+
+
+def _ui_tool(verb):
+    return "ui_flight_plan_" + verb.replace(" ", "_").replace("-", "_")
+
+
+def tools():
+    """The schemas agentglass-ui-mcp already gives these verbs, under this server's names."""
+    by = {t["name"]: t for t in UM.FLIGHT_TOOLS}
+    return [dict(by[_ui_tool(verb)], name=name) for name, verb in TOOLS.items()]
+
+
+def run(name, args):
+    verb = TOOLS.get(name) if isinstance(name, str) else None
+    if verb is None:
+        return {"content": [{"type": "text", "text": f"no tool {name!r}; this server has " + ", ".join(TOOLS)}], "isError": True}
+    out = UM.run(_ui_tool(verb), dict(args) if isinstance(args, dict) else {})
+    if out.get("isError"):
+        # A refusal is the server's own sentence, not a JSON wrapper around it.
+        try:
+            said = json.loads(out["content"][0]["text"]).get("error")
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+            said = None
+        if isinstance(said, str) and said:
+            return {"content": [{"type": "text", "text": said}], "isError": True}
+    return out
+
+
+def handle_message(msg):
+    if not isinstance(msg, dict):
+        return None
+    method = msg.get("method")
+    msg_id = msg.get("id")
+    if msg_id is None:
+        return None
+    if method == "initialize":
+        return T.make_reply(msg_id, {
+            "protocolVersion": T.PROTOCOL,
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": NAME, "version": VERSION},
+            "instructions": (
+                "A flight plan end to end: plan_new, plan_set (the plan's Markdown), plan_mockup for a visual plan, "
+                "preflight, then status until the run is done, resolve every finding, and ask the person for Go. "
+                "resolve is the person's or the orchestrator seat's: anyone else brings the findings to the seat. "
+                "go, no_go and launch are the person's, or the orchestrator seat's in a project set to Autopilot: "
+                "anyone else is refused, and the refusal is the server's own sentence; do not work around it. "
+                + UM.UNTRUSTED),
+        })
+    if method == "tools/list":
+        return T.make_reply(msg_id, {"tools": tools()})
+    if method == "tools/call":
+        params = msg.get("params")
+        if not isinstance(params, dict):
+            return T.make_reply(msg_id, error={"code": -32602, "message": "params is an object with a name"})
+        return T.make_reply(msg_id, run(params.get("name", ""), params.get("arguments") or {}))
+    if method == "ping":
+        return T.make_reply(msg_id, {})
+    return T.make_reply(msg_id, error={"code": -32601, "message": f"method not found: {method}"})
+
+
+def main(argv=None):
+    import argparse
+    ap = argparse.ArgumentParser(prog="agentglass-flightplan-mcp", add_help=False)
+    ap.add_argument("--http", metavar="[HOST:]PORT")
+    ap.add_argument("--expose", action="store_true")
+    ap.add_argument("--allow-host", action="append", default=[], metavar="NAME")
+    args, _ = ap.parse_known_args(argv)
+    bind = args.http or os.environ.get("AGENTGLASS_FLIGHTPLAN_MCP_HTTP")
+    if bind:
+        allow = list(args.allow_host) + os.environ.get("AGENTGLASS_FLIGHTPLAN_MCP_ALLOW_HOSTS", "").split(",")
+        return T._run_http(bind, expose=args.expose, allow_hosts=allow, handle=handle_message, name=NAME,
+                           token_env="AGENTGLASS_FLIGHTPLAN_MCP_TOKEN",
+                           distinct_from=("AGENTGLASS_TOKEN", "AGENTGLASS_MCP_TOKEN", "AGENTGLASS_COCKPIT_TOKEN", "AGENTGLASS_UI_MCP_TOKEN"),
+                           opens="a project's flight plans", expose_env="AGENTGLASS_FLIGHTPLAN_MCP_EXPOSE")
+    return T._serve_stdio(handle_message)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (BrokenPipeError, KeyboardInterrupt):
+        sys.exit(0)

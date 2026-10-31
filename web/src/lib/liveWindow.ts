@@ -9,7 +9,9 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { api } from "./api.ts";
 import { requestWorktreeJump } from "./worktreeJump.ts";
 
-export type LiveWindow = { session: string; windowId: string; paneId: string; name: string; path: string };
+export type LiveWindow = { session: string; windowId: string; paneId: string; name: string; path: string;
+  /** The agent in it has ended its turn: the window is open, nobody is editing. */
+  idle?: true };
 
 let tick = 0;
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -26,14 +28,18 @@ export function noteWindowsChanged(): void {
  *  because a frame also goes out for a status change and that is no reason to
  *  ask again. */
 let lastSet = "";
-export function noteWindowSet(windows: { id: string; name: string }[]): void {
-  const key = windows.map((w) => `${w.id}:${w.name}`).join("|");
+export function noteWindowSet(windows: { id: string; name: string; status?: string }[]): void {
+  // The agent's status is part of it: an agent that stops working releases the
+  // lock without its window closing, and a status frame is the only event there is.
+  const key = windows.map((w) => `${w.id}:${w.name}:${w.status ?? ""}`).join("|");
   if (key === lastSet) return;
   lastSet = key;
   noteWindowsChanged();
 }
 
-function subscribe(fn: () => void): () => void {
+/** Ask to be told, once per burst, when the set of windows or a window's status
+ *  changed, and when the app regains focus. */
+export function subscribe(fn: () => void): () => void {
   if (!subs.size && typeof window !== "undefined") {
     window.addEventListener("focus", noteWindowsChanged);
     document.addEventListener("visibilitychange", noteWindowsChanged);
@@ -71,4 +77,18 @@ export function useLiveWindow(root: string, name: string, path?: string): LiveWi
 export async function openLiveWindow(w: LiveWindow): Promise<void> {
   await api.tmuxWindowOp("select-window", { session: w.session, windowId: w.windowId }).catch(() => undefined);
   requestWorktreeJump({ view: "term" });
+}
+
+/** After a handoff the terminal answered: take the person to the agent's tab,
+ *  whether it was just started or was already there. A refusal stays where it
+ *  is, so the error is read next to the button. No window found (the strip has
+ *  not caught up) still brings the Terminal forward. */
+export async function followHandoff(
+  done: { ok: boolean }, find: () => Promise<LiveWindow | null>,
+  open: (w: LiveWindow) => Promise<void> = openLiveWindow,
+  jump: () => void = () => requestWorktreeJump({ view: "term" }),
+): Promise<void> {
+  if (!done.ok) return;
+  const w = await find().catch(() => null);
+  if (w) await open(w); else jump();
 }

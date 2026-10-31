@@ -102,12 +102,12 @@ describe("showing a board", () => {
     expect(again.tabsFor(A).map((t) => t.kind)).toEqual(["pr", "tasks"]);
   });
 
-  it("the files board is a bench kind, and survives a reload", async () => {
+  it("a saved tab of the retired files board is dropped on load, the rest survive", async () => {
+    store.set("agentglass.bench.v1", JSON.stringify({
+      byRoot: { [A]: { active: "x", tabs: [{ id: "x", kind: "files", slot: 0, title: "Files" }, { id: "y", kind: "pr", slot: 0, title: "Pull requests" }] } },
+    }));
     const b = await load();
-    expect(b.showBoard(A, "files").title).toBe("Files");
-    expect(b.showBoard(A, "files").id).toBe(b.showBoard(A, "files").id);
-    const again = await load();
-    expect(again.tabsFor(A).map((t) => t.kind)).toEqual(["files"]);
+    expect(b.tabsFor(A).map((t) => t.kind)).toEqual(["pr"]);
   });
 });
 

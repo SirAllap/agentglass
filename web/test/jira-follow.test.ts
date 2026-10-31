@@ -101,9 +101,10 @@ describe("the markup keeps the house rules", () => {
     expect(c).toMatch(/width: ICON\.xs, height: ICON\.xs/);
   });
   test("the bar draws them after the copies, in the slot the tracker fills", () => {
-    expect(code(chrome)).toMatch(/\{marks\}\s*<span className="flex-1" \/>/);
-    expect(code(facts)).toContain("marks={follow ? <JiraFollow");
-    expect(code(card)).toContain("follow })}");
+    expect(code(chrome)).toMatch(/\{marks\}\s*\{extra\}\s*<span className="flex-1" \/>/);
+    expect(code(facts)).toContain("{follow && <JiraWatch ui={follow}");
+    expect(code(facts)).toContain("{follow && <JiraVote ui={follow}");
+    expect(code(card)).toContain("follow, onTask: took })}");
   });
 });
 

@@ -9,25 +9,34 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
-const panel = readFileSync(new URL("../src/components/TerminalPanel.tsx", import.meta.url).pathname, "utf8");
+const src = (f: string) => readFileSync(new URL(`../src/components/${f}`, import.meta.url).pathname, "utf8");
+const panel = src("TerminalPanel.tsx");
+const tab = src("terminal/WindowTab.tsx");
+const strip = src("terminal/TermStrip.tsx");
 const mark = readFileSync(new URL("../src/components/terminal/StatusMark.tsx", import.meta.url).pathname, "utf8");
 
 describe("the tab's mark", () => {
-  test("drawn from the window's status, before the name, and not for idle", () => {
-    expect(panel).toContain('{w.status && w.status !== "idle" && <StatusMark status={w.status} />}');
-    const at = panel.indexOf("<StatusMark status={w.status} />");
+  test("one mark, from the window's status, before the name, and none for idle", () => {
+    // What counts as a mark is lib/windowMark.ts (tested there); the strip only feeds it.
+    expect(strip).toContain("mark={tabMark(w)}");
+    expect(strip).toContain("dead: w.dead, exitCode: w.exit, restored: w.restored, wasRunning: w.was");
+    expect(tab).toContain("{mark.mark && <WindowMarkIcon mark={mark.mark} label={mark.title} />}");
     // Before the name, so every name stays where it was whatever the state.
-    expect(panel.indexOf('{w.name || "shell"}', at)).toBeGreaterThan(at);
+    const at = tab.indexOf("<WindowMarkIcon");
+    expect(tab.indexOf('{w.name || "shell"}', at)).toBeGreaterThan(at);
   });
 
   test("the green name is gone — one signal for one fact", () => {
-    expect(panel).not.toContain("w.agentDone");
-    expect(panel).not.toContain('color: "var(--success, #98c379)", fontWeight: 600');
+    for (const s of [panel, tab, strip]) {
+      expect(s).not.toContain("w.agentDone");
+      expect(s).not.toContain('color: "var(--success, #98c379)", fontWeight: 600');
+    }
   });
 
-  test("the state is in words too: the tooltip and the mark's label", () => {
-    expect(panel).toContain("agent ${STATUS_WORDS[w.status]}");
-    expect(mark).toContain("aria-label={title ?? STATUS_WORDS[status]}");
+  test("the state is in words too: the tab's label, and no native title over the peek card", () => {
+    expect(tab).not.toMatch(/\btitle=\{`\$\{w\.name/);
+    expect(tab).toContain("aria-label={mark.label}");
+    expect(src("terminal/WindowMarkIcon.tsx")).toContain("aria-label={label}");
   });
 
   test("every state has its own outline, not only its own colour", () => {

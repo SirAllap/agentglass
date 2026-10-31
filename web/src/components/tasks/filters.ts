@@ -60,6 +60,9 @@ export interface FieldSpec {
 
 /** The values one card has for one field. A list, because a card has several
  *  tags and several assignees, and "is" on a multi-valued field means "has". */
+/** A Jira card's epic is its parent when that parent is one; a sub-task's parent is a card, not an epic. */
+const epicOf = (t: ProviderTask): boolean => !!t.parent && (!t.parent.type || t.parent.type === "Epic");
+
 export function valuesOf(t: ProviderTask, key: string): string[] {
   if (key === "status") return [t.status];
   if (key === "tags") return t.tags;
@@ -67,6 +70,8 @@ export function valuesOf(t: ProviderTask, key: string): string[] {
   if (key === "assignee") return t.assignees;
   if (key === "sprint") return t.sprint ? [t.sprint] : [];
   if (key === "list") return t.list ? [t.list] : [];
+  if (key === "component") return t.components ?? [];
+  if (key === "epic") return epicOf(t) ? [t.parent!.key] : [];
   if (key.startsWith("cf:")) {
     const want = key.slice(3);
     return (t.custom ?? []).filter((c) => c.name === want && c.value).map((c) => c.value);
@@ -109,6 +114,9 @@ export function fieldsOf(tasks: ProviderTask[]): FieldSpec[] {
   push("assignee", "Assignee", bag((t) => t.assignees.map((x) => ({ value: x }))));
   push("sprint", "Sprint", bag((t) => (t.sprint ? [{ value: t.sprint }] : [])));
   push("list", "List", bag((t) => (t.list ? [{ value: t.list }] : [])));
+  // Jira's two grouping axes: a card in two components is in both, and an epic is named by its key and title.
+  push("component", "Component", bag((t) => (t.components ?? []).map((x) => ({ value: x }))));
+  push("epic", "Epic", bag((t) => (epicOf(t) ? [{ value: t.parent!.key, label: `${t.parent!.key} ${t.parent!.title}`.trim() }] : [])));
 
   /* Every custom field that has values, named as the workspace names it. The
      "(DO NOT EDIT!!!)" kind of parenthesis is a note to whoever maintains the

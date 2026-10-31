@@ -62,7 +62,7 @@ describe("the plugin panes", () => {
   });
 
   test("the market's type filter is the kit's segmented control, not a pill", () => {
-    expect(market).toContain("<SegControl");
+    expect(market).toContain("<Segmented");
     expect(market).not.toContain("rounded-full whitespace-nowrap");
   });
 

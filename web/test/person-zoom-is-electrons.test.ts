@@ -77,14 +77,15 @@ describe("and the verb says what it actually is", () => {
    * There are two now, and a help string describing the OTHER one is how an
    * agent picks the wrong tool and reports success.
    */
-  test("the CLI does not claim to be the person's zoom", () => {
+  test("the CLI says it is the page zoom, not a viewport override", () => {
     const cli = read("../../bin/agentglass-browser");
     const at = cli.indexOf('sub.add_parser("zoom"');
     expect(at).toBeGreaterThan(0);
     const help = cli.slice(at, cli.indexOf('sub.add_parser("html"', at));
-    expect(help).not.toContain("the one Ctrl+ and Ctrl- move");
-    expect(help).toContain("device metrics override");
-    expect(help).toContain("layout VIEWPORT");
+    /* The agent's zoom IS the page zoom now; a metrics override left the
+       panel half empty, so the help must not describe one. */
+    expect(help).toContain("Ctrl+");
+    expect(help).not.toContain("layout VIEWPORT");
   });
 
   test("and neither does the server", () => {

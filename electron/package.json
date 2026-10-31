@@ -42,6 +42,7 @@
       "guest-guard.js",
       "identify-header.js",
       "guest-scrollbar.js",
+      "show-log.js",
       "egress-guard.js",
       "trusted-input.js",
       "browser-menu.js",

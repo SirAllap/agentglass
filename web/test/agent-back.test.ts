@@ -35,14 +35,14 @@ describe("when the offer appears", () => {
 
   it("the person leaving the agent's view by hand takes the offer with them", () => {
     const s0 = noteView(arm(EMPTY, "term", "a", 0), "git", 10);
-    expect(noteView(s0, "files", 10_000).offer).toBeNull();
+    expect(noteView(s0, "tasks", 10_000).offer).toBeNull();
     expect(noteView(s0, "git", 10_000).offer).toEqual(s0.offer); // a re-render on the same view keeps it
   });
 
   it("a second switch keeps the first place, not the agent's first view", () => {
     const s0 = noteView(arm(EMPTY, "term", "a", 0), "git", 10);
-    const s1 = noteView(arm(s0, "git", "a", 20), "files", 30);
-    expect(s1.offer).toMatchObject({ from: "term", to: "files" });
+    const s1 = noteView(arm(s0, "git", "a", 20), "tasks", 30);
+    expect(s1.offer).toMatchObject({ from: "term", to: "tasks" });
   });
 
   it("an offer is live for a minute and then is not", () => {

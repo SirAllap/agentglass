@@ -29,16 +29,9 @@ describe("the dashboard's own polls", () => {
     expect(text).not.toContain("setInterval(");
   });
 
-  test("Sessions polls through usePoll and holds no interval of its own", async () => {
-    const text = await src("components/Sessions.tsx");
-    expect(text).toContain("usePoll(active");
-    expect(text).not.toContain("setInterval(");
-  });
-
-  test("the dashboard hands both of them its own active flag", async () => {
-    const text = await src("components/DashboardView.tsx");
+  test("Starboard hands Alerts its own active flag", async () => {
+    const text = await src("components/StarboardView.tsx");
     expect(text).toContain("<Alerts alerts={alerts} agents={agents} active={active}");
-    expect(text).toContain("<Sessions provider={filter.provider} active={active} />");
   });
 });
 
@@ -72,7 +65,7 @@ describe("the pull request panel's git poll", () => {
 });
 
 describe("the fixed-rate polls of five seconds or less that were still ungated", () => {
-  // Docker's overview and stats (5s), the power button (5s), the pairing state
+  // The power button (5s), the pairing state
   // (2s) and the understudy's work list (6s) ran a raw interval, so they kept
   // asking a second monitor's worth of nobody. They go through usePoll now,
   // which also refreshes the instant the window is back. Left out on purpose:
@@ -81,7 +74,6 @@ describe("the fixed-rate polls of five seconds or less that were still ungated",
   // in PeekFile, which must keep running while the app is unfocused because
   // the editor it follows is another window.
   test.each([
-    ["components/DockerPanel.tsx", ["usePoll(active, loadOverview, 5000)", "usePoll(active && view === \"containers\", loadStats, 5000)"]],
     ["components/Header.tsx", ["usePoll(true, () => { void powerStatus()"]],
     ["components/PairPanel.tsx", ["usePoll(true, poll, 2000)"]],
   ] as const)("%s", async (rel, calls) => {
@@ -107,21 +99,6 @@ describe("the top bar's behind-upstream poll", () => {
     expect(effect).toContain("}, 90_000)");
     expect(effect).toContain("subscribeGitChanged(");
     expect(effect).not.toContain("setInterval(");
-  });
-});
-
-describe("the ports list's poll", () => {
-  // 1,490 requests an hour at 2.5 s, each an `ss -p` walk of the socket table.
-  // The other two Machine tabs keep 2.5 s: the CPU column is a rate and needs
-  // two close samples, the ports list does not.
-  test("ports poll every ten seconds while the others keep POLL_MS", async () => {
-    const text = await src("components/MachinePanel.tsx");
-    expect(text).toContain("const PORTS_POLL_MS = 10_000;");
-    const at = text.indexOf("function Ports(");
-    const body = text.slice(at, text.indexOf("\nfunction ", at + 1));
-    expect(body).toContain("usePoll(true, load, PORTS_POLL_MS);");
-    expect(body).not.toContain("POLL_MS);\n  usePoll");
-    expect(text.split("usePoll(true, load, POLL_MS);").length - 1).toBe(2);
   });
 });
 

@@ -325,6 +325,55 @@ export function claimAgentZoom(el: object, factor: number): void {
   agentZoom.set(el, factor);
 }
 
+/** The shell's page zoom (`webContents.setZoomFactor`): absolute, and scales the
+ *  page inside the box it has. Registered by the panel, because this module
+ *  does not import the desktop bridge. */
+export type ShellZoom = (factor: number | undefined, guestId: number | undefined)
+  => Promise<{ ok: true; factor: number; percent: number } | { ok: false; error: string }>;
+let shellZoom: ShellZoom | null = null;
+export function setShellZoom(fn: ShellZoom | null): void { shellZoom = fn; }
+
+/** The pane's zoom as it was before an agent's first `zoom` on the tab, so the
+ *  agent's letting go gives the person their own back. */
+const agentZoomWas = new WeakMap<object, number>();
+
+/**
+ * An agent's `zoom`: the page zoom, never a device-metrics override.
+ *
+ * MEASURED: `zoom 1.4` answered 1.75 on a pane the person had at 1.25. The
+ * override was laid on top of the pane's own zoom, then narrowed the layout
+ * viewport while the `<webview>` kept its box, so the page came back small in
+ * a corner and stayed there. `setZoomFactor` is absolute, so the factor the
+ * agent asked for is the factor it gets, and the receipt names the pane's own
+ * zoom when it differs. Null when this shell has no such door.
+ */
+async function agentPageZoom(
+  el: DrivableWebview, factorAsked: number | null,
+): Promise<{ ok: true; value: GuestZoom & { was?: number } } | { ok: false; error: string } | null> {
+  if (!shellZoom) return null;
+  let gid: number | undefined;
+  try { gid = el.getWebContentsId?.(); } catch { return null; }
+  if (gid === undefined) return null;
+  if (factorAsked !== null && !(factorAsked > 0.1 && factorAsked <= 5)) {
+    return { ok: false, error: "zoom takes a factor between 0.1 and 5 — 1 is a page at its own size" };
+  }
+  const before = await shellZoom(undefined, gid);
+  if (!before.ok) return null;
+  if (factorAsked !== null && !agentZoomWas.has(el)) agentZoomWas.set(el, before.factor);
+  const r = factorAsked === null ? before : await shellZoom(factorAsked, gid);
+  if (!r.ok) return { ok: false, error: `could not zoom: ${r.error}` };
+  let pane = { width: 0, height: 0 };
+  try {
+    const box = (el as unknown as { getBoundingClientRect?: () => DOMRect }).getBoundingClientRect?.();
+    if (box) pane = { width: Math.round(box.width), height: Math.round(box.height) };
+  } catch { /* the element went away mid-zoom */ }
+  const was = agentZoomWas.get(el);
+  return {
+    ok: true,
+    value: { factor: r.factor, percent: r.percent, pane, ...(was !== undefined && was !== r.factor ? { was } : {}) },
+  };
+}
+
 /** What a caller needs of a guest to zoom it: run a snippet in the page, and
  *  reach that page's DevTools session. Both are already injected everywhere
  *  this is used; naming them keeps this testable without Electron. */
@@ -341,6 +390,17 @@ export interface GuestZoom {
    *  numbers are about different-sized panes. */
   pane: { width: number; height: number };
 }
+
+/** The page's size and dpr once style and layout have run: two frames, the
+ *  first before the next paint and the second after the one that includes it.
+ *  A page nobody is painting (a tab in the back, a window on another
+ *  workspace) gets no frames at all, and `resize` waited on them forever —
+ *  measured — so a timer answers for it. */
+const MEASURE_AFTER_LAYOUT = `new Promise((res) => {
+  const read = () => res(JSON.stringify({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio }));
+  requestAnimationFrame(() => requestAnimationFrame(read));
+  setTimeout(read, 250);
+})`;
 
 /**
  * Zoom a guest, the only way that takes effect.
@@ -370,6 +430,8 @@ export async function applyGuestZoom(
      had in its first form, one layer up. */
   const clear = await cdp("Emulation.clearDeviceMetricsOverride");
   if (!clear.ok) return { ok: false, error: `this shell cannot zoom a page: ${clear.error || "no DevTools relay"}` };
+  /* The clear above took an agent's viewport with it. */
+  noteViewport(el, null);
 
   /*
    * MEASURED AFTER THE LAYOUT, NOT AFTER THE REQUEST.
@@ -385,9 +447,7 @@ export async function applyGuestZoom(
    * A fixed sleep would have been a guess at a machine's speed; this waits for
    * the thing itself.
    */
-  const measure = `new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(() => res(
-    JSON.stringify({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio })
-  ))))`;
+  const measure = MEASURE_AFTER_LAYOUT;
   const nat = await el.executeJavaScript(measure) as string;
   const base = JSON.parse(nat || "{}") as { w?: number; h?: number; dpr?: number };
   const natW = Math.max(1, Math.round(base.w ?? 0)), natH = Math.max(1, Math.round(base.h ?? 0));
@@ -489,7 +549,92 @@ export function currentPageZoomer(): ((dir: 1 | -1 | 0) => Promise<GuestZoom | n
  *  tab an agent had set. Whoever is in front wins — and after this the tab is
  *  an ordinary one again, following the window level as it always did. */
 export function forgetAgentZoom(el: object | null | undefined): void {
-  if (el) agentZoom.delete(el);
+  if (!el) return;
+  agentZoom.delete(el);
+  agentZoomWas.delete(el);
+}
+
+/*
+ * AN AGENT'S VIEWPORT IS LETTERBOXED, NEVER A SMALL PAGE IN A CORNER.
+ *
+ * `resize` and `emulate --width/--height` are a device-metrics override, and
+ * Chromium draws one from the top-left of the guest. Left at that, a 1440x790
+ * viewport in a 2000x1050 pane came out as a page in the corner with the rest
+ * white, and nothing took it off after the agent's `done`. So the drawing is
+ * scaled to fit the pane (`scale` below), the panel shrinks the guest to the
+ * drawn box and centres it with a frame, and the override is cleared when the
+ * agent lets go of the tab.
+ *
+ * Measured on Electron 43 at a window scale of 1.6, with `scale` passed: the
+ * drawn box is `width * scale * windowDpr` device pixels whatever the
+ * deviceScaleFactor is (a 390x844 phone at dsf 3 drew 258x560, not 3x that).
+ * So the fit is taken against the pane in CSS pixels, and the page's own dpr
+ * stays free for `emulate --scale`.
+ */
+/** Where an agent's viewport is drawn, as fractions of the pane's width and height. */
+export interface ViewportBox { w: number; h: number }
+const agentViewport = new WeakMap<object, ViewportBox>();
+const viewportListeners = new Set<(el: object, box: ViewportBox | null) => void>();
+
+/** The panel's ear: called with the box when an agent sets a viewport on a
+ *  guest, and with null when it is cleared. */
+export function onAgentViewport(fn: (el: object, box: ViewportBox | null) => void): () => void {
+  viewportListeners.add(fn);
+  return () => { viewportListeners.delete(fn); };
+}
+function noteViewport(el: object, box: ViewportBox | null): void {
+  if (box) agentViewport.set(el, box); else if (!agentViewport.delete(el)) return;
+  for (const fn of viewportListeners) fn(el, box);
+}
+
+/** Fits a `width` x `height` viewport into a pane of `pane` CSS pixels:
+ *  never enlarged, never cropped, aspect kept. */
+export function fitViewport(pane: { w: number; h: number }, width: number, height: number): { scale: number; box: ViewportBox } {
+  const scale = Math.min(1, pane.w / width, pane.h / height);
+  return { scale, box: { w: Math.min(1, (width * scale) / pane.w), h: Math.min(1, (height * scale) / pane.h) } };
+}
+
+/** The page's size and dpr with nothing overriding them, read after layout. */
+async function naturalSize(el: ZoomableGuest, cdp: ZoomCdp): Promise<{ ok: true; w: number; h: number; dpr: number } | { ok: false; error: string }> {
+  const clear = await cdp("Emulation.clearDeviceMetricsOverride");
+  if (!clear.ok) return { ok: false, error: clear.error || "no DevTools relay" };
+  const nat = JSON.parse(await el.executeJavaScript(MEASURE_AFTER_LAYOUT) as string || "{}") as { w?: number; h?: number; dpr?: number };
+  return { ok: true, w: Math.max(1, Math.round(nat.w ?? 0)), h: Math.max(1, Math.round(nat.h ?? 0)), dpr: nat.dpr && nat.dpr > 0 ? nat.dpr : 1 };
+}
+
+/** Lays the page out at `width` x `height` CSS pixels and draws it fitted
+ *  into the pane. `dpr` is the page's devicePixelRatio; left out, the
+ *  window's own. */
+export async function setAgentViewport(
+  el: ZoomableGuest, cdp: ZoomCdp, width: number, height: number, opts: { dpr?: number; mobile?: boolean } = {},
+): Promise<{ ok: true; scale: number } | { ok: false; error: string }> {
+  const nat = await naturalSize(el, cdp);
+  if (!nat.ok) return nat;
+  const { scale, box } = fitViewport(nat, width, height);
+  const r = await cdp("Emulation.setDeviceMetricsOverride", {
+    width, height, deviceScaleFactor: opts.dpr && opts.dpr > 0 ? opts.dpr : nat.dpr, mobile: opts.mobile === true, scale,
+  });
+  if (!r.ok) return { ok: false, error: r.error || "the DevTools protocol refused it" };
+  agentZoom.delete(el);
+  noteViewport(el, box);
+  return { ok: true, scale };
+}
+
+/** Gives a tab back its whole pane. Only a tab an agent set a viewport on is
+ *  touched, so a zoom (an override that fills the pane) is not wiped by it. */
+export async function clearAgentViewport(el: object | null | undefined, cdp: ZoomCdp): Promise<void> {
+  if (!el || !agentViewport.has(el)) return;
+  noteViewport(el, null);
+  const was = agentZoomWas.get(el);
+  if (was !== undefined) {
+    agentZoomWas.delete(el);
+    agentZoom.delete(el);
+    let gid: number | undefined;
+    try { gid = (el as DrivableWebview).getWebContentsId?.(); } catch { /* not attached */ }
+    if (shellZoom && gid !== undefined) await shellZoom(was, gid).catch(() => {});
+  }
+  await cdp("Emulation.clearDeviceMetricsOverride");
+  await cdp("Emulation.setTouchEmulationEnabled", { enabled: false, maxTouchPoints: 0 });
 }
 
 /**
@@ -3565,11 +3710,15 @@ async function runVerb(
           r.ok ? (applied.push(what), null) : { ok: false as const, error: r.error || `could not set ${what}` };
 
         if (a.width !== undefined || a.height !== undefined || a.scale !== undefined || a.mobile !== undefined) {
-          const bad = fail(await cdp("Emulation.setDeviceMetricsOverride", {
-            width: Number(a.width ?? 0), height: Number(a.height ?? 0),
-            deviceScaleFactor: Number(a.scale ?? 0), mobile: a.mobile === true,
-          }), "device metrics");
-          if (bad) return bad;
+          /* Fitted into the pane and letterboxed, never drawn in its corner;
+             a size left out is the page's own. */
+          const nat = JSON.parse(await el.executeJavaScript(
+            `JSON.stringify({ w: window.innerWidth, h: window.innerHeight })`,
+          ) as string || "{}") as { w?: number; h?: number };
+          const vp = await setAgentViewport(el, cdp,
+            Math.max(1, Number(a.width ?? 0) || nat.w || 1), Math.max(1, Number(a.height ?? 0) || nat.h || 1),
+            { dpr: Number(a.scale ?? 0), mobile: a.mobile === true });
+          const bad = fail(vp, "device metrics");
           if (a.mobile !== undefined) {
             /* Touch is a separate override, and a "mobile" viewport without it
                is a phone-shaped desktop: hover menus still open, :active never
@@ -3634,6 +3783,7 @@ async function runVerb(
              wrong answer that arrives hours later in an unrelated run. */
           await cdp("Emulation.clearDeviceMetricsOverride", {});
           await cdp("Emulation.setTouchEmulationEnabled", { enabled: false, maxTouchPoints: 0 });
+          await clearAgentViewport(el, cdp);
           await cdp("Emulation.setEmulatedMedia", { features: [] });
           await cdp("Emulation.setEmulatedVisionDeficiency", { type: "none" });
           await cdp("Emulation.clearGeolocationOverride", {});
@@ -4859,13 +5009,21 @@ async function runVerb(
         /* No factor is a READ: match a screen rather than guess at it. Done as
            a zoom of 1 through the same call, so reading and setting cannot
            disagree about what the page is at. */
-        const r = await applyGuestZoom(el, factorAsked ?? 1, cdp);
-        if (!r.ok) return r;
-        /* The tab is claimed by the agent that sized it — see `reapplyZoom`.
-           Only a `zoom` that SET something claims it: reading the zoom back is
-           how an agent matches a screen, not a claim on the tab. */
-        if (factorAsked !== null) claimAgentZoom(el, factorAsked);
-        return { ok: true, value: r.value };
+        const viaShell = await agentPageZoom(el, factorAsked);
+        if (viaShell) {
+          if (!viaShell.ok) return viaShell;
+          if (factorAsked !== null) {
+            claimAgentZoom(el, factorAsked);
+            /* A full-pane "box", so the agent's letting go (done, Take over,
+               idle, a forgotten tab) runs `clearAgentViewport` and gives the
+               person their zoom back. It draws exactly as no box does. */
+            noteViewport(el, { w: 1, h: 1 });
+          }
+          return { ok: true, value: viaShell.value };
+        }
+        /* No shell door (a browser tab, the demo): a device-metrics zoom leaves
+           the pane half empty, so there is no zoom rather than that one. */
+        return { ok: false, error: "zoom needs the desktop app: the page zoom Ctrl+ and Ctrl- move is not reachable here" };
       }
       case "resize": {
         /* A viewport of your own. A modal that covers the column you came to
@@ -4873,6 +5031,7 @@ async function runVerb(
            the same page should be the same size when they are going into the
            same GIF. */
         const w = Number(ask.args.width), h = Number(ask.args.height);
+        if (!(w > 0 && h > 0)) return { ok: false, error: "resize takes a width and a height in CSS pixels, both above 0" };
         /*
          * THE METRICS, not a lie told to `window.innerWidth`.
          *
@@ -4884,18 +5043,12 @@ async function runVerb(
          * the same page should be the same size" is the opposite of what it
          * promises.
          */
-        /* In the embedder's pixels, like the zoom above: a window at 140%
-           divides them again before the page sees them, so 390 asked for came
-           out as 279. The page's own dpr with no override is that scale. */
-        const scale0 = Number(await el.executeJavaScript(`window.devicePixelRatio`)) || 1;
-        const r = await cdp("Emulation.setDeviceMetricsOverride", {
-          width: Math.max(1, Math.round(w * scale0)),
-          height: Math.max(1, Math.round(h * scale0)),
-          deviceScaleFactor: 1,
-          mobile: false,
-        });
+        /* Taken literally, like the zoom above: multiplying by the window's
+           scale first laid a 1440 asked for out at 2304 on a window at 1.6
+           (measured), and drew it in the pane's corner. */
+        const r = await setAgentViewport(el, cdp, Math.max(1, Math.round(w)), Math.max(1, Math.round(h)));
         if (!r.ok) {
-          return { ok: false, error: `could not resize the page: ${r.error || "this shell has no DevTools relay"}` };
+          return { ok: false, error: `could not resize the page: ${r.error}` };
         }
         /* Measured from the page, because the override can be refused or
            clamped and an agent framing a capture needs the real number. */

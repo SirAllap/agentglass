@@ -331,3 +331,45 @@ describe("a chair whose screen cannot be read", () => {
     expect(typed).toEqual(["%9"]);
   });
 });
+
+describe("a notice never lands on what the person is typing", () => {
+  const root = "/home/orbit/work/typing";
+  const sitting = async () => ({ name: "orchestrator", kind: "claude", cwd: root, paneId: "%41", windowId: "", startedAt: 1, endedAt: null });
+  const boxWith = (t: string) => async () => `some output\n\n❯ ${t}\n`;
+
+  test("text in the box parks the notice and types nothing; an empty box types as before", async () => {
+    const { promptSeat, flushNotices } = await import("../src/seatwake.ts");
+    const { pendingNotices, takeNotices } = await import("../src/seatnotice.ts");
+    takeNotices("%41");
+    const typed: string[] = [];
+    const prompt = (async (_p: string, t: string) => { typed.push(t); return "sent"; }) as never;
+    const busy = { seated: sitting as never, prompt, screen: boxWith("half a sent") as never };
+    await promptSeat(root, "Preflight finished", busy);
+    await promptSeat(root, "Preflight finished", busy);
+    expect(typed).toEqual([]);
+    expect(pendingNotices("%41")).toEqual(["Preflight finished"]);
+
+    // still blocked: the flush puts it back, nothing typed
+    await flushNotices(root, busy);
+    expect(typed).toEqual([]);
+    expect(pendingNotices("%41")).toEqual(["Preflight finished"]);
+
+    // the box emptied: it is typed and the inbox is clear
+    await flushNotices(root, { ...busy, screen: boxWith("") as never });
+    expect(typed).toEqual(["Preflight finished"]);
+    expect(pendingNotices("%41")).toEqual([]);
+
+    await promptSeat(root, "Go", { ...busy, screen: boxWith("") as never });
+    expect(typed).toEqual(["Preflight finished", "Go"]);
+  });
+
+  test("the inbox is capped, oldest dropped", async () => {
+    const { parkNotice, pendingNotices, takeNotices } = await import("../src/seatnotice.ts");
+    takeNotices("%42");
+    for (let i = 0; i < 12; i++) parkNotice("%42", `n${i}`, i);
+    const got = pendingNotices("%42");
+    expect(got.length).toBe(8);
+    expect(got[0]).toBe("n4");
+    takeNotices("%42");
+  });
+});

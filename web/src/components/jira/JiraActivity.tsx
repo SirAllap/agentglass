@@ -23,6 +23,7 @@
  * be. The All tab draws a reply in time order with the name it answers, not
  * nested.
  */
+import { tipAttr } from "../../lib/tip.ts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
 import { fmtAgo } from "../../lib/format.ts";
@@ -31,12 +32,11 @@ import { ACTIVITY_TABS, allRows, eventsFor, needsHistory, type ActivityTab } fro
 import { answeredBy, threadsOf } from "../../lib/jiraThreads.ts";
 import type { CardEvent, TaskDetail } from "../../../../shared/providers.ts";
 import { EventRun } from "../CardEventRun.tsx";
-import { CardTabs } from "../CardChrome.tsx";
 import { CommentAction } from "../tasks/CardEdit.tsx";
 import { Spinner } from "../Spinner.tsx";
 import { ICON } from "../../lib/iconSize.ts";
-import { EDGE } from "../workspace/Chrome.tsx";
-import { Section } from "./JiraSections.tsx";
+import { Button, EDGE, Segmented, Textarea } from "../workspace/Chrome.tsx";
+import { JiraSection } from "./JiraSections.tsx";
 import { Author } from "./Author.tsx";
 import { WorklogPanel } from "./JiraWorklog.tsx";
 import type { JiraWorkUi } from "./useJiraWork.ts";
@@ -62,7 +62,7 @@ const JTL_CSS = `
 .agx-jtl .agx-av{position:absolute;left:-${FACE + GAP}px;top:0;display:flex}
 .agx-jtl .agx-card{position:relative;background:var(--surface-card)}
 .agx-jtl .agx-node{position:absolute;left:${RAIL - 10}px;top:3px;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:9px;background:var(--bg);border:2px solid var(--surface-line);z-index:1}
-.agx-jtl .agx-tiny{position:relative;display:flex;flex-wrap:wrap;align-items:flex-start;column-gap:7px;font-size:10.5px;color:var(--text3);padding:4px 0 4px ${INDENT}px;min-height:26px}
+.agx-jtl .agx-tiny{position:relative;display:flex;flex-wrap:wrap;align-items:flex-start;column-gap:6px;font-size:10.5px;color:var(--text3);padding:4px 0 4px ${INDENT}px;min-height:26px}
 .agx-jtl .agx-tiny>span:last-child{flex:0 0 100%;font-size:9.5px}
 .agx-jtl .agx-tiny b{color:var(--text2);font-weight:500}
 `;
@@ -119,14 +119,14 @@ function CommentCard({ c, act, root, answers }: { c: Comment; act?: CommentAct; 
   };
 
   return (
-    <div className="agx-card rounded-lg px-3 py-2 min-w-0" style={{ border: EDGE }}>
+    <div className="agx-card rounded-xl min-w-0" style={{ border: EDGE, padding: "8px 12px" }}>
       <div className="text-[10.5px] mb-1 flex items-center gap-x-1 flex-wrap">
         <span className="font-semibold" style={{ color: "var(--text2)" }}>{c.who}</span>
-        {c.at > 0 && <span style={{ color: "var(--text4)" }} title={new Date(c.at).toLocaleString()}>{" · "}{fmtAgo(c.at)} ago</span>}
-        {c.edited && <span style={{ color: "var(--text4)" }} title="Changed after it was written">{" · "}edited</span>}
+        {c.at > 0 && <span style={{ color: "var(--text4)" }} data-tip={tipAttr(new Date(c.at).toLocaleString())}>{" · "}{fmtAgo(c.at)} ago</span>}
+        {c.edited && <span style={{ color: "var(--text4)" }} data-tip={tipAttr("Changed after it was written")}>{" · "}edited</span>}
         {answers && <span style={{ color: "var(--text4)" }}>{" · "}replying to {answers}</span>}
         {c.restricted && (
-          <span className="inline-flex items-center gap-1 rounded px-1" style={{ color: "var(--warning-ink)", border: EDGE }} title={`Only ${c.restricted} can see this comment`}>
+          <span className="inline-flex items-center gap-1 rounded px-1" style={{ color: "var(--warning-ink)", border: EDGE }} data-tip={tipAttr(`Only ${c.restricted} can see this comment`)}>
             <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d={LOCK} /></svg>
             Restricted to {c.restricted}
           </span>
@@ -134,18 +134,17 @@ function CommentCard({ c, act, root, answers }: { c: Comment; act?: CommentAct; 
       </div>
       {mode === "edit" ? (
         <div className="flex flex-col gap-1.5">
-          <textarea value={draft} autoFocus rows={4} disabled={busy} aria-label="Change this comment"
+          <Textarea value={draft} autoFocus rows={4} disabled={busy} aria-label="Change this comment"
             onChange={(e) => { setDraft(e.target.value); setErr(""); }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void save(); }
               // Escape closes the box and nothing else: it must not reach the pane behind it.
               if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setMode("read"); setErr(""); }
             }}
-            className="w-full text-[11.5px] rounded px-2 py-1.5 outline-none resize-y"
-            style={{ background: "var(--bg)", color: "var(--text)", border: EDGE, minHeight: 64 }} />
+            className="w-full" style={{ minHeight: 64 }} />
           <div className="flex items-center gap-2 text-[10.5px]">
-            <button className="agx-btn rounded-md px-2 py-0.5" disabled={busy} onClick={() => void save()} style={{ color: "var(--text)", border: EDGE }}>{busy ? "Saving…" : "Save"}</button>
-            <button className="agx-btn rounded-md px-2 py-0.5" disabled={busy} onClick={() => { setMode("read"); setErr(""); }} style={{ color: "var(--text3)" }}>Cancel</button>
+            <Button size="compact" disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : "Save"}</Button>
+            <Button size="compact" tone="quiet" disabled={busy} onClick={() => { setMode("read"); setErr(""); }}>Cancel</Button>
             <span style={{ color: "var(--text4)" }}>Markdown · Ctrl+Enter saves</span>
           </div>
         </div>
@@ -172,8 +171,8 @@ function CommentCard({ c, act, root, answers }: { c: Comment; act?: CommentAct; 
       {act && mode === "delete" && (
         <div className="flex items-center gap-2 mt-1.5 text-[10.5px] flex-wrap" role="alertdialog" aria-label="Delete this comment?">
           <span style={{ color: "var(--text2)" }}>Delete this comment for good? Jira cannot bring it back.</span>
-          <button className="agx-btn rounded-md px-2 py-0.5" disabled={busy} onClick={() => void drop()} style={{ color: "var(--error-ink)", border: EDGE }}>{busy ? "Deleting…" : "Delete"}</button>
-          <button className="agx-btn rounded-md px-2 py-0.5" disabled={busy} onClick={() => { setMode("read"); setErr(""); }} style={{ color: "var(--text3)" }}>Keep it</button>
+          <Button size="compact" tone="danger" disabled={busy} onClick={() => void drop()}>{busy ? "Deleting…" : "Delete"}</Button>
+          <Button size="compact" tone="quiet" disabled={busy} onClick={() => { setMode("read"); setErr(""); }}>Keep it</Button>
         </div>
       )}
     </div>
@@ -216,7 +215,6 @@ const EMPTY: Record<ActivityTab, string> = {
   all: "Nothing has happened on this card yet.", comments: "No comments yet.", history: "No changes yet.", worklog: "No time has been logged.",
 };
 
-const MORE_BTN = "agx-btn text-[10.5px] px-2.5 py-1 rounded-lg";
 
 export function JiraActivity({ cardKey, comments, moreComments, onMoreComments, worklog, worklogMore, act, tracking, work }: {
   cardKey: string;
@@ -295,9 +293,9 @@ export function JiraActivity({ cardKey, comments, moreComments, onMoreComments, 
 
   const moreCommentsBar = moreComments > 0 && (
     <div className="mt-1 mb-2 flex items-center gap-2 text-[10.5px]" style={{ color: "var(--text3)" }}>
-      <button onClick={() => void loadMoreComments()} disabled={moreBusy} className={MORE_BTN} style={{ border: EDGE, color: "var(--text2)" }}>
+      <Button size="compact" onClick={() => void loadMoreComments()} disabled={moreBusy}>
         {moreBusy ? "Reading…" : `Show ${moreComments} more ${moreComments === 1 ? "comment" : "comments"}`}
-      </button>
+      </Button>
       {moreError && <span role="alert" style={{ color: "var(--error-ink)" }}>{moreError}</span>}
     </div>
   );
@@ -308,13 +306,13 @@ export function JiraActivity({ cardKey, comments, moreComments, onMoreComments, 
       {history.phase === "error" && (
         <div className="text-[10.5px] my-2 flex items-center gap-2" role="alert" style={{ color: "var(--error-ink)" }}>
           <span>{history.error}</span>
-          <button onClick={() => void loadHistory(history.events.length ? history.next ?? 0 : 0)} className={MORE_BTN} style={{ border: EDGE, color: "var(--text2)" }}>Try again</button>
+          <Button size="compact" onClick={() => void loadHistory(history.events.length ? history.next ?? 0 : 0)}>Try again</Button>
         </div>
       )}
       {history.phase === "ok" && history.next !== undefined && (
-        <button onClick={() => void loadHistory(history.next!)} className={`${MORE_BTN} my-2`} style={{ border: EDGE, color: "var(--text2)" }}>
+        <Button size="compact" className="my-2" onClick={() => void loadHistory(history.next!)}>
           Show {Math.min(100, Math.max(0, history.total - history.events.length))} earlier changes
-        </button>
+        </Button>
       )}
       {history.phase === "ok" && history.next === undefined && history.total > history.events.length && (
         <div className="text-[10.5px] my-2" style={{ color: "var(--text3)" }}>
@@ -326,9 +324,9 @@ export function JiraActivity({ cardKey, comments, moreComments, onMoreComments, 
 
   const logBar = logLeft > 0 && (
     <div className="my-2 flex items-center gap-2 text-[10.5px]">
-      <button onClick={() => void loadMoreLog()} disabled={extraLog.busy} className={MORE_BTN} style={{ border: EDGE, color: "var(--text2)" }}>
+      <Button size="compact" onClick={() => void loadMoreLog()} disabled={extraLog.busy}>
         {extraLog.busy ? "Reading…" : `Show ${logLeft} more ${logLeft === 1 ? "entry" : "entries"}`}
-      </button>
+      </Button>
       {extraLog.error && <span role="alert" style={{ color: "var(--error-ink)" }}>{extraLog.error}</span>}
     </div>
   );
@@ -386,19 +384,18 @@ export function JiraActivity({ cardKey, comments, moreComments, onMoreComments, 
   }
 
   return (
-    <Section id="activity" title="Activity">
+    <JiraSection id="activity" title="Activity" bare>
       <style>{JTL_CSS}</style>
       {/* The strip stays under the pane's top while the thread scrolls under it. */}
       <div className="sticky top-0 z-[2] -mx-4 px-4 pb-1.5 mb-2" style={{ background: "var(--bg)" }}>
-        <CardTabs tabs={tabs} active={tab} onPick={setTab} />
+        <Segmented track label="What to show" value={tab} onChange={setTab} options={tabs.map((x) => ({ id: x.id, label: x.count ? `${x.label} ${x.count}` : x.label }))} />
         <div className="flex justify-end mt-1">
-          <button onClick={flip} aria-pressed={newest} title="Switch between oldest and newest first"
-            className="agx-btn shrink-0 text-[10px] px-2 py-0.5 rounded-md" style={{ border: EDGE, color: "var(--text3)" }}>
+          <Button size="compact" onClick={flip} aria-pressed={newest} data-tip={tipAttr("Switch between oldest and newest first")} className="shrink-0">
             {newest ? "Newest first" : "Oldest first"}
-          </button>
+          </Button>
         </div>
       </div>
       {body}
-    </Section>
+    </JiraSection>
   );
 }

@@ -90,6 +90,6 @@ describe("dialog structure", () => {
   });
   test("focus lands on confirm unless Cancel or the field should take it", () => {
     expect(DIALOG).toMatch(/cancelRef\.current\?\.focus\(\); else if \(!pending\.input\) confirmRef\.current\?\.focus\(\)/);
-    expect(DIALOG).toContain("ref={confirmRef}");
+    expect(DIALOG).toContain("buttonRef={confirmRef}");
   });
 });

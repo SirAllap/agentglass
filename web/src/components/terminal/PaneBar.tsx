@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
-import { ICON } from "../../lib/iconSize.ts";
-import { EDGE } from "../workspace/Chrome.tsx";
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
+import { HIT, ICON } from "../../lib/iconSize.ts";
+import { EDGE, LINE } from "../workspace/Chrome.tsx";
+import { barKey, branchLabel, chipNameChars, chipParts, pillNameChars, STRIP_H, type ChecksView, type ChipKind, type PaneBarMode, type ReviewState } from "../../lib/paneChip.ts";
+import { PaneChipStatus, type PaneChipStatusCard, type PaneChipStatusPr } from "./PaneChipStatus.tsx";
+import type { PaneMarker } from "../../lib/paneActionsPref.ts";
 
 /*
  * One bar per pane, hidden under the pane's own bottom edge.
@@ -58,22 +61,38 @@ export const BAR_MIN_W = 210;
 export interface PaneBarProps {
   /** The pane's bottom edge and width, in the slot's coordinates — paneFoot. */
   foot: { left: number; top: number; width: number };
+  /** How the bar shows up. The thin line is the default for a machine that already had one. */
+  mode?: Exclude<PaneBarMode, "off">;
+  /** What the edge looks like: the line, or a small chevron tab. */
+  marker?: PaneMarker;
   /** The pointer is in the seam's zone right now. */
   near: boolean;
+  /** What this pane is: a worktree, a repo's main checkout, somewhere else, or nothing. */
+  kind?: ChipKind;
+  /** The repository's name, for a main checkout. */
+  repo?: string;
   /** The branch this pane is working in. */
   branch: string;
   /** How many files are uncommitted. */
   dirty: number;
-  /** The pull request, when the branch has one. Absent means no button: a
-   *  control that is always refused is worse than no control. */
-  pr?: { number: number; title: string; changes: boolean } | null;
-  /** The card, same rule. */
-  card?: { label: string; prio: string | null; inApp: boolean } | null;
+  ahead?: number;
+  behind?: number;
+  /** The pull request, when the branch has one; its checks, review and the card
+   *  are drawn by PaneChipStatus (the one boundary — see that file). */
+  pr?: PaneChipStatusPr | null;
+  checks?: ChecksView;
+  review?: ReviewState;
+  reviewWord?: string;
+  card?: PaneChipStatusCard | null;
   /** There is no worktree to name — the read is still out, or it came back
    *  with nothing. The seam is drawn either way (a pane that shows nothing at
    *  all is indistinguishable from a broken feature) and the bar says which of
    *  the two it is. */
   note?: string;
+  /** The read is still out: the bar says so with a skeleton in place of the parts. */
+  loading?: boolean;
+  /** A checkout outside this project: the way to its own. */
+  noteAction?: { label: string; onClick: () => void };
   /** A tmux popup is up over this terminal, and nothing of ours is drawn while
    *  it is — seam included.
    *
@@ -95,17 +114,22 @@ export interface PaneBarProps {
    *  it is WHICH branch was copied, which is the part you cannot check without
    *  pasting it somewhere. */
   flash?: number;
+  /** Summary only: out of the way of the last line (see pillPlacement). */
+  pill?: { lift: boolean; translucent: boolean };
+  /** The pointer or the keyboard reached the pull request: read its checks (once; the store holds them for a minute). */
+  onPrReach?: () => void;
   onDown: (e: ReactMouseEvent) => void;
   onGit: () => void;
   onDiff: () => void;
   onPr?: () => void;
   onCard?: () => void;
   onCopy: () => void;
+  /** Esc inside the bar: the terminal gets the keyboard back. */
+  onEscape?: () => void;
   /** Something is selected in the pane: offer to ask the agent there about it. */
   ask?: { lines: number; onAsk: () => void } | null;
 }
 
-/** Priority → the colour the card wears, the same four the card panel uses. */
 /*
  * ONE COLOUR FOR THIS STRIP, and it is the one the person picked.
  *
@@ -113,17 +137,12 @@ export interface PaneBarProps {
  * and a four-stop rainbow under all of it. None of those were saying anything —
  * the palette's `--info`, `--success` and `--warning` are the words for a link,
  * a pass and a caution, and spending them on chrome is how a warning stops
- * being read as one. The tracker's own priority colour is the exception: that
- * one is a fact about the card rather than a decoration.
+ * being read as one. What colour is left says ONE thing each: the pull request
+ * icon is the pull request's state, the checks disc is the checks, the review
+ * mark is the review, the card's flag is its priority and the base under it
+ * the status. A failing run is drawn once, on the disc.
  */
 const ACCENT = "var(--accent, var(--primary))";
-
-const PRIO: Record<string, string> = {
-  urgent: "var(--error)",
-  high: "var(--warning)",
-  normal: "var(--info)",
-  low: "var(--text3)",
-};
 
 const PLATE = {
   // Opaque, not frosted: this sits over a terminal that repaints constantly,
@@ -146,8 +165,47 @@ export function midCut(name: string, chars: number, tail = 16): string {
   return name.slice(0, chars - tail - 1) + "…" + name.slice(-tail);
 }
 
+// ── the glyphs: the mockup's, on its 24px grid ──────────────────────────────
+
+const G = {
+  branch: <><path d="M6 3v12" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" /></>,
+  home: <><path d="M3 10.5 12 3l9 7.5V21H3z" /><path d="M9 21v-6h6v6" /></>,
+  out: <><path d="M14 4h6v6" /><path d="M20 4 11 13" /><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" /></>,
+  folder: <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
+  copy: <><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" /></>,
+  check: <path d="M20 6 9 17l-5-5" />,
+  diff: <><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" /><path d="M14 3v6h6" /><path d="M12 12v6M9 15h6" /></>,
+  open: <><circle cx="6" cy="6" r="3" /><circle cx="18" cy="18" r="3" /><path d="M6 9v12" /><path d="M13 6h3a2 2 0 0 1 2 2v7" /></>,
+  draft: <><circle cx="6" cy="6" r="3" /><circle cx="18" cy="18" r="3" /><path d="M6 9v12" /><path d="M18 11v1M18 6v1" /></>,
+  merged: <><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><path d="M6 21V9a9 9 0 0 0 9 9" /></>,
+  closed: <><circle cx="6" cy="6" r="3" /><circle cx="18" cy="18" r="3" /><path d="M6 9v12" /><path d="M16 4l4 4M20 4l-4 4" /></>,
+  plus: <path d="M12 5v14M5 12h14" />,
+  flag: <><path d="M4 22V4" /><path d="M4 4h13l-2 4 2 4H4" /></>,
+  chev: <path d="m9 18 6-6-6-6" />,
+  changes: <><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /></>,
+  wait: <circle cx="12" cy="12" r="4.5" />,
+};
+
+function Glyph({ g, size = ICON.sm, sw = 2 }: { g: keyof typeof G; size?: number; sw?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" aria-hidden className="shrink-0">
+      {G[g]}
+    </svg>
+  );
+}
+
+const STOP = "data-chip-stop";
+
+/** The pill's branch: the card id greyed while the whole name fits, else cut to the room there is. */
+function PillBranch({ p }: { p: PaneBarProps }) {
+  const l = branchLabel(p.branch, p.card?.id, pillNameChars(p.foot.width, !!p.pr, p.dirty > 0));
+  return <>{l.pre && <span style={{ color: "var(--text4)" }}>{l.pre}</span>}{l.text}</>;
+}
+
 export function PaneBar(p: PaneBarProps) {
-  const [held, setHeld] = useState(false);
+  const [hov, setHov] = useState(false);
+  const [foc, setFoc] = useState(false);
+  const held = hov || foc;
   /* `linger` is the grace period and nothing else: whether the bar is up is
      derived, not stored, so the first paint after the pointer arrives already
      has it up. A stored `on` set from an effect is one frame late — and in a
@@ -156,9 +214,13 @@ export function PaneBar(p: PaneBarProps) {
   const [shout, setShout] = useState(false);
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rowRef = useRef<HTMLDivElement | null>(null);
 
+  const mode = p.mode ?? "edge";
+  const kind: ChipKind = p.kind ?? "worktree";
   const want = p.near || held;
-  const on = want || linger || shout;
+  const pinned = mode === "always";
+  const on = pinned || want || linger || shout;
 
   /* The keyboard's copy, answered. There is no toast over a terminal in this
      app and a line written into the shell would be a line in somebody's command
@@ -183,27 +245,149 @@ export function PaneBar(p: PaneBarProps) {
 
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 
-  // How much name the plate can show: the buttons beside it are fixed, so what
-  // is left is what the branch gets.
-  const chips = 30 + (p.dirty > 0 ? 46 : 0) + (p.pr ? 74 : 0) + (p.card ? 108 : 0);
-  const room = Math.max(60, Math.min(p.foot.width - 24, 620) - chips - 66);
-  const label = midCut(p.branch, Math.max(10, Math.floor(room / 7)));
-
   /* Nothing at all while a popup is up — after the hooks, never before them:
      a component that returns early past a `useState` is the black window this
      app has already shipped once. */
   if (p.blocked) return null;
 
-  const icon = (d: string, size: number = ICON.xs) => (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d={d} />
-    </svg>
+  const { parts, words } = chipParts({
+    kind, hasPr: !!p.pr, hasCard: !!p.card, ahead: p.ahead ?? 0, behind: p.behind ?? 0, width: p.foot.width,
+  });
+  const has = (x: (typeof parts)[number]) => parts.includes(x);
+  const label = branchLabel(p.branch, p.card?.id, chipNameChars(p.foot.width, parts, words));
+
+  /* The bar is ONE tab stop (Ctrl+Shift+B puts the keyboard on it) and the
+     arrows walk the rest; Esc gives the keyboard back to the terminal. */
+  const stops = () => [...(rowRef.current?.querySelectorAll<HTMLElement>(`[${STOP}]`) ?? [])];
+  const onKey = (e: ReactKeyboardEvent) => {
+    const list = stops();
+    const act = barKey(e.key, list.indexOf(document.activeElement as HTMLElement), list.length);
+    if (!act) return;
+    e.preventDefault();
+    if ("escape" in act) { (document.activeElement as HTMLElement | null)?.blur?.(); p.onEscape?.(); return; }
+    list[act.focus]?.focus();
+  };
+
+  const stop = (i: number) => ({ [STOP]: "", tabIndex: i === 0 ? 0 : -1 });
+  let n = 0;
+  const btn = "agx-btn shrink-0 flex items-center rounded-md text-[11px]";
+  const H = { height: HIT } as const;
+
+  const body = (() => {
+    if (p.loading) {
+      return (<>
+        <span className="shrink-0 grid place-items-center rounded-md" style={{ width: 22, height: 22, color: "var(--text4)" }}><Glyph g="branch" size={ICON.xs} /></span>
+        <span className="min-w-0 flex-1 truncate px-1.5 text-[11px]" style={{ color: "var(--text4)" }}>Reading this pane…</span>
+      </>);
+    }
+    if (kind === "outside" || kind === "none" || p.note) {
+      return (<>
+        <span className="shrink-0 grid place-items-center rounded-md" style={{ width: 22, height: 22, color: kind === "outside" ? "var(--warning)" : "var(--text4)", background: kind === "outside" ? "color-mix(in srgb, var(--warning) 12%, transparent)" : "transparent" }}>
+          <Glyph g={kind === "outside" ? "out" : "folder"} size={ICON.xs} />
+        </span>
+        <span className="min-w-0 flex-1 truncate px-1.5 text-[11px]" style={{ color: "var(--text3)" }} title={p.note}>{p.note}</span>
+        {p.noteAction && (
+          <button {...stop(n++)} onClick={p.noteAction.onClick} className={`${btn} gap-1 px-1.5`} style={{ ...H, color: "var(--text2)" }}>
+            <Glyph g="chev" size={ICON.xs} /><span>{p.noteAction.label}</span>
+          </button>
+        )}
+      </>);
+    }
+    const main = kind === "main";
+    const full = `${main && p.repo ? `${p.repo} · ` : ""}${p.branch}`;
+    return (<>
+      <span className="shrink-0 grid place-items-center rounded-md" title={main ? `Main checkout of ${p.repo ?? "this repository"}` : "Worktree"}
+        style={{ width: 22, height: 22, color: main ? "var(--text2)" : ACCENT, background: main ? "color-mix(in srgb, var(--text) 7%, transparent)" : `color-mix(in srgb, ${ACCENT} 14%, transparent)` }}>
+        <Glyph g={main ? "home" : "branch"} size={ICON.xs} />
+      </span>
+      <button
+        {...stop(n++)}
+        onClick={(e) => { if (e.shiftKey) { p.onCopy(); setCopied(true); setTimeout(() => setCopied(false), 900); } else p.onGit(); }}
+        title={`${full}\nclick: Source control · shift+click: copy`}
+        className="agx-btn min-w-0 flex-1 justify-start flex items-center rounded-md px-1.5 text-[11px] overflow-hidden whitespace-nowrap"
+        style={{ ...H, color: "var(--text)" }}
+      >
+        {main
+          ? <><span style={{ color: "var(--text3)" }}>{p.repo}</span><span style={{ color: "var(--text4)" }}> · </span>{p.branch}</>
+          : <>{label.pre && <span style={{ color: "var(--text4)" }}>{label.pre}</span>}{label.text}</>}
+      </button>
+      {has("copy") && (
+        <button {...stop(n++)} onClick={() => { p.onCopy(); setCopied(true); setTimeout(() => setCopied(false), 900); }}
+          title="Copy branch name" aria-label="Copy branch name"
+          className={`${btn} justify-center`}
+          style={{ width: 22, height: 22, color: copied || shout ? "var(--success)" : "var(--text3)" }}
+        ><Glyph g={copied || shout ? "check" : "copy"} /></button>
+      )}
+      {has("sep") && <span aria-hidden className="shrink-0" style={{ width: 1, height: 16, margin: "0 2px", background: "color-mix(in srgb, var(--text) 12%, transparent)" }} />}
+      {has("sync") && (
+        <button {...stop(n++)} onClick={p.onGit} title={`${p.ahead || 0} to push · ${p.behind || 0} to pull — opens Source control`}
+          className={`${btn} gap-1.5 px-1.5 tabular-nums`} style={{ ...H, color: "var(--text3)" }}>
+          {(p.ahead ?? 0) > 0 && <span style={{ color: "var(--text2)" }}>↑{p.ahead}</span>}
+          {(p.behind ?? 0) > 0 && <span style={{ color: "var(--warning)" }}>↓{p.behind}</span>}
+        </button>
+      )}
+      {(has("card") || has("pr")) && (
+        <PaneChipStatus
+          pr={p.pr ?? null} checks={p.checks ?? { state: "none-read-yet", passed: 0, total: 0, failing: [] }} review={p.review ?? "none"} reviewWord={p.reviewWord}
+          card={has("card") ? p.card ?? null : null} behind={p.behind} worktree={kind === "worktree"} words={words}
+          stop={() => stop(n++)} onPr={p.onPr ?? (() => {})} onCard={p.onCard ?? (() => {})} onNew={p.onGit} onReach={p.onPrReach ?? (() => {})} />
+      )}
+      <button {...stop(n++)} onClick={p.onDiff}
+        title={p.dirty > 0 ? `${p.dirty} changed file${p.dirty === 1 ? "" : "s"} — open them in File changes` : "Open this checkout in File changes"}
+        className={`${btn} gap-1.5 px-1.5 tabular-nums`} style={{ ...H, color: p.dirty > 0 ? "var(--warning)" : "var(--text3)" }}>
+        <Glyph g="diff" />
+        {p.dirty > 0 && <span className="font-semibold">{p.dirty}</span>}
+        {words && <span>Diff</span>}
+      </button>
+    </>);
+  })();
+
+  const row = (
+    <div ref={rowRef} role="toolbar" aria-label="Pane bar (Ctrl+Shift+B)" onKeyDown={onKey}
+      onFocus={() => setFoc(true)} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFoc(false); }}
+      className="flex items-center gap-1 min-w-0 w-full">
+      {body}
+      {p.ask && (
+        <button
+          onClick={p.ask.onAsk}
+          title={`Ask the agent in this pane about the ${p.ask.lines === 1 ? "selected line" : `${p.ask.lines} selected lines`}`}
+          className="agx-btn shrink-0 flex items-center gap-1.5 rounded px-2 text-[11px] font-medium"
+          style={{ height: 22, color: "var(--text)", background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
+        >
+          <Glyph g="chev" size={ICON.xs} />
+          Ask about this
+        </button>
+      )}
+    </div>
   );
+
+  /* ── Always open: the strip lives in the room the slot kept for it ───── */
+  if (pinned) {
+    return (
+      <div data-pane-bar data-open="1" data-mode="always" onMouseDown={p.onDown}
+        className="absolute flex items-center px-1.5"
+        style={{
+          left: p.foot.left, width: p.foot.width, top: p.foot.top - STRIP_H.always, height: STRIP_H.always, zIndex: 12,
+          background: "color-mix(in srgb, var(--surface-card) 55%, var(--bg))",
+          borderTop: LINE,
+        }}>
+        {/* The chip is a plate of its own inside the strip, as in every other mode. */}
+        <div className="flex items-center rounded-lg px-1 w-full" style={{ height: 28, background: "var(--surface-card)", border: EDGE }}>
+          {row}
+        </div>
+      </div>
+    );
+  }
+
+
+  const summary = mode === "summary";
+  const pillOp = p.pill?.translucent ? (p.pill.lift ? 0.8 : 0.55) : 1;
 
   return (
     <>
       {/* The seam. Decorative on purpose — see the note at the top: at rest this
           pane's bottom rows behave exactly as they did before the feature. */}
+      {!summary && p.marker !== "arrow" && (
       <div
         data-pane-seam
         aria-hidden
@@ -224,7 +408,57 @@ export function PaneBar(p: PaneBarProps) {
           opacity: on ? 0 : p.near ? 1 : 0.5,
           transition: "opacity .14s ease",
         }}
-      />
+      />)}
+      {!summary && p.marker === "arrow" && (
+        <div data-pane-arrow aria-hidden className="absolute pointer-events-none grid place-items-center"
+          style={{
+            left: p.foot.left + p.foot.width / 2 - (p.near ? 19 : 15), top: p.foot.top - (p.near ? 15 : 11), width: p.near ? 38 : 30, height: p.near ? 15 : 11,
+            borderRadius: "6px 6px 0 0", zIndex: 11, color: ACCENT,
+            background: `color-mix(in srgb, ${ACCENT} ${p.near ? 26 : 16}%, var(--surface-card))`,
+            border: EDGE, borderBottom: 0,
+            opacity: on ? 0 : 1, transition: "opacity .14s ease, width .15s ease, height .15s ease",
+          }}>
+          <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" style={{ transform: "rotate(-90deg)" }}>{G.chev}</svg>
+        </div>
+      )}
+      {/* Summary: a pill at the pane's bottom right and a soft fade behind it
+          only. No band, no reserved row: the last line stays readable on its
+          left, and where it would run under the pill the pill steps up. */}
+      {summary && (<>
+        <div aria-hidden className="absolute pointer-events-none" style={{
+          left: p.foot.left + p.foot.width - 260, top: p.foot.top - 34, width: 260, height: 34, zIndex: 11,
+          background: "radial-gradient(ellipse 100% 100% at 100% 100%, color-mix(in srgb, var(--bg) 94%, transparent) 0 46%, transparent 100%)",
+          opacity: on ? 0 : pillOp, transition: "opacity .14s ease",
+        }} />
+        <button
+          data-pane-pill
+          onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+          onFocus={() => setFoc(true)} onBlur={() => setFoc(false)}
+          onMouseDown={p.onDown}
+          onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); (e.currentTarget as HTMLElement).blur(); p.onEscape?.(); } }}
+          aria-label={`Pane bar: ${p.branch}. Ctrl+Shift+B focuses it; Enter opens the full bar.`}
+          className="agx-btn absolute flex items-center gap-1.5 rounded-md text-[11px]"
+          style={{
+            left: p.foot.left + p.foot.width - 8, top: p.foot.top - 5 - 22 - (p.pill?.lift ? 26 : 0), height: 22, zIndex: 11,
+            transform: "translateX(-100%)", padding: "0 8px 0 4px", color: "var(--text2)", maxWidth: Math.max(60, p.foot.width - 16),
+            background: "color-mix(in srgb, var(--bg) 90%, var(--bg3))",
+            boxShadow: "0 0 0 1px color-mix(in srgb, var(--text) 11%, transparent), 0 1px 2px rgba(0,0,0,.08)",
+            opacity: on ? 0 : pillOp, pointerEvents: on ? "none" : "auto", transition: "opacity .14s ease, top .18s cubic-bezier(.23,1,.32,1)",
+          }}>
+          <span className="grid place-items-center rounded" style={{ width: 16, height: 16, color: kind === "main" ? "var(--text2)" : kind === "outside" ? "var(--warning)" : ACCENT, background: kind === "main" ? "color-mix(in srgb, var(--text) 7%, transparent)" : `color-mix(in srgb, ${kind === "outside" ? "var(--warning)" : ACCENT} 14%, transparent)` }}>
+            <Glyph g={kind === "main" ? "home" : kind === "outside" ? "out" : kind === "none" ? "folder" : "branch"} size={ICON.xs} />
+          </span>
+          <span className="truncate">
+            {p.loading ? "…" : kind === "main" ? `${p.repo ?? ""} · ${p.branch}` : kind === "worktree" ? <PillBranch p={p} /> : p.note}
+          </span>
+          {p.pr && <span className="flex items-center gap-1 tabular-nums" style={{ color: "var(--text3)" }}>
+            {p.pr.state === "merged" ? <Glyph g="merged" size={ICON.xs} />
+              : <span className="rounded-full" style={{ width: 6, height: 6, background: p.checks?.state === "failing" ? "var(--error)" : p.pr.state === "draft" ? "var(--text3)" : "var(--success)" }} />}
+            #{p.pr.number}
+          </span>}
+          {p.dirty > 0 && <span style={{ color: "var(--warning)" }}>±{p.dirty}</span>}
+        </button>
+      </>)}
       {/*
         * A row the width of the pane, and the plate centred inside it.
         *
@@ -246,7 +480,7 @@ export function PaneBar(p: PaneBarProps) {
         */}
       <div
         aria-hidden={!on}
-        className="absolute flex justify-center"
+        className={`absolute flex ${summary ? "justify-end" : "justify-center"}`}
         style={{
           left: p.foot.left,
           width: p.foot.width,
@@ -259,12 +493,14 @@ export function PaneBar(p: PaneBarProps) {
         data-pane-bar
         data-open={on ? "1" : "0"}
         onMouseDown={p.onDown}
-        onMouseEnter={() => setHeld(true)}
-        onMouseLeave={() => setHeld(false)}
-        className="flex items-center gap-1.5 rounded-xl px-2 leading-none"
+        onMouseEnter={() => setHov(true)}
+        onMouseLeave={() => setHov(false)}
+        className="flex items-center rounded-xl px-1 leading-none"
         style={{
           height: BAR_H,
           maxWidth: Math.max(0, p.foot.width - 16),
+          width: summary ? Math.min(560, p.foot.width - 16) : undefined,
+          marginRight: summary ? 8 : undefined,
           ...PLATE,
           // Pushed back down under the pane's edge when it is not wanted.
           // `translateY` rather than `top`, so it is one composited transform.
@@ -275,92 +511,7 @@ export function PaneBar(p: PaneBarProps) {
             ? "transform .2s cubic-bezier(.16,.9,.3,1), opacity .12s ease"
             : "transform .16s cubic-bezier(.4,0,.7,.3), opacity .1s ease",
         }}>
-        {p.note ? (
-          <span className="px-1 text-[11px]" style={{ color: "var(--text3)" }}>{p.note}</span>
-        ) : (<>
-        <span
-          className="shrink-0 text-[9px] leading-none px-1.5 py-1 rounded"
-          style={{ color: ACCENT, background: `color-mix(in srgb, ${ACCENT} 16%, transparent)`, border: `1px solid color-mix(in srgb, ${ACCENT} 32%, transparent)` }}
-        >WT</span>
-        <button
-          onClick={p.onGit}
-          title={`${p.branch}\nOpen its Source control`}
-          className="agx-btn min-w-0 shrink truncate rounded px-1 text-[11px] font-medium"
-          style={{ color: "var(--text)" }}
-        >{label}</button>
-        <button
-          onClick={() => { p.onCopy(); setCopied(true); setTimeout(() => setCopied(false), 900); }}
-          title="Copy branch name"
-          className="agx-btn shrink-0 grid place-items-center rounded"
-          style={{ width: 22, height: 22, color: copied || shout ? "var(--success, #98c379)" : "var(--text3)", border: EDGE }}
-        >{copied || shout
-          ? icon("M3 8.4l3.4 3.4L13 4.6", ICON.sm)
-          : (
-            <svg width={ICON.sm} height={ICON.sm} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <rect x="5.4" y="5.4" width="8" height="8" rx="1.6" />
-              <path d="M10.6 5.4V4a1.6 1.6 0 0 0-1.6-1.6H4A1.6 1.6 0 0 0 2.4 4v5a1.6 1.6 0 0 0 1.6 1.6h1.4" />
-            </svg>
-          )}</button>
-        {p.ask && (
-          <button
-            onClick={p.ask.onAsk}
-            title={`Ask the agent in this pane about the ${p.ask.lines === 1 ? "selected line" : `${p.ask.lines} selected lines`}`}
-            className="agx-btn shrink-0 flex items-center gap-1.5 rounded px-2 text-[11px] font-medium"
-            style={{ height: 22, color: "var(--text)", background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
-          >
-            <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" /><path d="M5.5 7h5" />
-            </svg>
-            Ask about this
-          </button>
-        )}
-        <span aria-hidden className="shrink-0 self-stretch my-1.5" style={{ width: 1, background: "color-mix(in srgb, var(--border) 55%, transparent)" }} />
-        <button
-          onClick={p.onDiff}
-          title={p.dirty > 0
-            ? `${p.dirty} changed file${p.dirty === 1 ? "" : "s"} — open them in File changes`
-            : "Open this checkout in File changes"}
-          className="agx-btn shrink-0 flex items-center gap-1.5 rounded px-2 text-[11px] tabular-nums"
-          style={{ height: 22, color: p.dirty > 0 ? "var(--warning)" : "var(--text2)", border: `1px solid color-mix(in srgb, ${p.dirty > 0 ? "var(--warning)" : "var(--border)"} 45%, transparent)` }}
-        >
-          <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-            <path d="M3.6 1.8h5l4 4v8.4h-9z" /><path d="M8.6 1.8v4h4" /><path d="M5.9 9h4.4M8.1 6.8v4.4" />
-          </svg>
-          {p.dirty > 0 ? p.dirty : "Diff"}
-        </button>
-        {p.pr && p.onPr && (
-          <button
-            onClick={p.onPr}
-            title={`#${p.pr.number} ${p.pr.title}\nOpen it in Pull requests`}
-            className="agx-btn shrink-0 flex items-center gap-1.5 rounded px-2 text-[11px] tabular-nums"
-            style={{ height: 22, color: ACCENT, border: `1px solid color-mix(in srgb, ${ACCENT} 45%, transparent)` }}
-          >
-            <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <circle cx="4.2" cy="3.6" r="1.7" /><circle cx="4.2" cy="12.4" r="1.7" /><path d="M4.2 5.3v5.4" />
-              <circle cx="11.8" cy="12.4" r="1.7" /><path d="M11.8 10.7V6.6a2 2 0 0 0-2-2H7.3" /><path d="M8.9 3 7.2 4.6 8.9 6.2" />
-            </svg>
-            #{p.pr.number}
-            {/* Changes requested is the one review state that is about YOU, so
-                it is the only one drawn — as a dot, not a word. */}
-            {p.pr.changes && <span className="rounded-full" style={{ width: 5, height: 5, background: "var(--error)" }} />}
-          </button>
-        )}
-        {p.card && p.onCard && (
-          <button
-            onClick={p.onCard}
-            title={`${p.card.label}${p.card.prio ? ` · ${p.card.prio}` : ""}\n${p.card.inApp ? "Open it in Tasks" : "Open it in the tracker"}`}
-            className="agx-btn shrink-0 flex items-center gap-1.5 rounded px-2 text-[11px]"
-            style={{ height: 22, color: PRIO[p.card.prio ?? ""] ?? ACCENT, border: `1px solid color-mix(in srgb, ${PRIO[p.card.prio ?? ""] ?? ACCENT} 45%, transparent)` }}
-          >
-            {/* The priority IS the icon: a flag in the colour the tracker gives
-                it, which is the one thing about a card you read at a glance. */}
-            <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 16 16" fill="currentColor" aria-hidden>
-              <path d="M4 2.2a.7.7 0 0 1 1.4 0v.6h6.1c.5 0 .8.6.5 1L10.7 6l1.3 2.2c.3.4 0 1-.5 1H5.4v4.6a.7.7 0 0 1-1.4 0z" />
-            </svg>
-            {p.card.label}
-          </button>
-        )}
-        </>)}
+        {row}
       </div>
       </div>
     </>

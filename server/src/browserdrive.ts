@@ -692,6 +692,9 @@ export function resetContainerLedger(): void {
   try { rmSync(ledgerFile(), { force: true }); } catch { /* never existed */ }
 }
 
+/** What an agent may answer for its own tab — guest-guard.js's AGENT_ANSWERABLE. */
+const AGENT_PERMISSIONS: ReadonlySet<string> = new Set(["microphone", "camera", "notifications"]);
+
 /** `AGENTGLASS_BROWSER_READONLY=1` — observing stays open, acting is refused.
  *  Read on every call for the same reason as `allowedOrigins`. */
 function readonlyMode(): boolean {
@@ -754,6 +757,8 @@ function isActing(op: BrowserOp, args: Record<string, unknown>): boolean {
      `settings set` changes it — read-only mode has to tell those apart the
      same way it tells `cookies --set` from a plain read of the jar. */
   if (op === "settings") return args.action === "set";
+  /* Listing what a tab holds only looks; answering it acts. */
+  if (op === "permission") return args.list !== true;
   /* `profiles` lists, and listing observes. `--make` writes a container and
      `--drop` closes every tab in one and clears its login — the verb this
      file builds an ownership guard around, and it sat in the observing set
@@ -2155,6 +2160,26 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
       break;
     }
     case "permission": {
+      /* The agent's answer to a request its own tab is holding (`grant` /
+         `deny`), or the list of what is held and answered. Main decides
+         whether the tab is the agent's; this only checks the shape. */
+      if (b.list === true) { args.list = true; break; }
+      if (b.answer !== undefined) {
+        if (b.answer !== "grant" && b.answer !== "deny") return { error: "answer must be grant or deny" };
+        const what = b.permissions;
+        if (!Array.isArray(what) || what.length === 0 || what.some((x) => typeof x !== "string" || !AGENT_PERMISSIONS.has(x))) {
+          return { error: "answer names microphone, camera or notifications — nothing else is an agent's to grant" };
+        }
+        if (b.origin !== undefined) {
+          let host = "";
+          try { const u = new URL(String(b.origin)); if (/^https?:$/.test(u.protocol)) host = u.port ? `${u.hostname}:${u.port}` : u.hostname; } catch { /* checked below */ }
+          const list = allowedOrigins();
+          if (!host || !originAllowed(host, list)) return { error: `origin ${String(b.origin)} must be a full http(s) origin in AGENTGLASS_BROWSER_ORIGINS (${list.join(", ")})` };
+          args.origin = b.origin;
+        }
+        args.answer = b.answer; args.permissions = what;
+        break;
+      }
       if (typeof b.origin !== "string" || !/^https?:\/\//.test(b.origin)) {
         return { error: "origin must be a full http(s) origin" };
       }

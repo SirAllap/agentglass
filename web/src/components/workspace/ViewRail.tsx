@@ -3,8 +3,8 @@ import {
   VIEWS, SHIPPED_RAIL, loadRail, saveRail, subscribeRail, railIds, withMove, moveView,
   type RailPlace, type ViewDef, type ViewId,
 } from "./views.ts";
+import { getRailTips, subscribeRailTips } from "../../lib/railTips.ts";
 import { chordFor, chordLabel, chords, subscribeBindings } from "../../lib/keybindings.ts";
-import { SkillsIcon } from "./icons.tsx";
 import { PortsIcon, ResourcesIcon } from "../Header.tsx";
 import { ContextMenu as RailMenu, MenuItem } from "../ContextMenu.tsx";
 import { ICON } from "../../lib/iconSize.ts";
@@ -108,6 +108,7 @@ export function ViewRail({
   // Re-render when a shortcut is rebound, so the tooltips keep telling the
   // truth. chordFor reads the store itself; this only supplies the signal.
   useSyncExternalStore(subscribeBindings, chords, () => EMPTY_CHORDS);
+  const tips = useSyncExternalStore(subscribeRailTips, getRailTips, getRailTips);
 
   const [dragId, setDragId] = useState<ViewId | null>(null);
   // Set one tick after the drag starts, never in the handler itself: the
@@ -190,7 +191,7 @@ export function ViewRail({
       return;
     }
     e.preventDefault();
-    const cycle = [...base.work, ...base.utility];
+    const cycle = [...base.work, ...base.utility].filter((id) => !BY_ID.get(id)?.modal);
     if (!cycle.length) return;
     const i = cycle.indexOf(view);
     const n = cycle[(i + (dir === 1 ? 1 : cycle.length - 1) + cycle.length) % cycle.length]!;
@@ -201,7 +202,7 @@ export function ViewRail({
   /** One rail button. Shared by both drawers so a tooltip, a pip or a drag
    *  handle can never exist in one and not the other. */
   const tab = (v: ViewDef) => {
-    const on = v.id === view;
+    const on = !v.modal && v.id === view;
     const pip = pips?.[v.id];
     const Icon = v.icon;
     const chord = chordFor(v.id);
@@ -219,7 +220,7 @@ export function ViewRail({
         aria-selected={on}
         aria-label={v.label}
         tabIndex={on ? 0 : -1}
-        onClick={() => onSelect(v.id)}
+        onClick={() => (v.modal ? onSkills() : onSelect(v.id))}
         onContextMenu={(e) => { e.preventDefault(); setRestoreAt(null); setMenu({ id: v.id, x: e.clientX, y: e.clientY }); }}
         // Drag to rearrange. HTML5 dnd rather than pointer maths: the browser
         // already handles the pickup, the drag image and the drop, and the only
@@ -234,13 +235,16 @@ export function ViewRail({
           setTimeout(() => setLifted(true), 0);
         }}
         onDragEnd={endDrag}
-        className={`${dragging ? "" : "agw-tip "}relative h-11 w-full grid place-items-center rounded-lg transition-colors`}
+        className={`${dragging ? "" : "agw-tip "}relative h-11 min-h-6 shrink w-full grid place-items-center rounded-lg transition-colors`}
         // The modifier binding, not the bare letter. Inside the workspace the
         // letters no longer navigate — they belong to whatever has focus,
         // usually a shell — and a tooltip advertising a key that does nothing
         // is worse than no tooltip. Which is also why the bottom drawer shows
         // none: down there a view has no number, by design.
-        data-tip={chord ? `${v.label} · ${chordLabel(chord)}` : v.label}
+        data-tip={chord ? `${tips[v.id] ?? v.label} · ${chordLabel(chord)}` : (tips[v.id] ?? v.label)}
+        // Fetches what the tooltip adds (a count); hover and focus share one request.
+        onPointerEnter={v.warmTip}
+        onFocus={v.warmTip}
         // No box any more. At 16px the glyph needed a tinted panel behind it
         // to be findable; at 22 it carries the state itself, and the box was a
         // second shape competing with the only one that matters. The inactive
@@ -341,7 +345,7 @@ export function ViewRail({
           "put it at the bottom of the top group", and a container sized to its
           contents would have quietly refused. */}
       <div
-        className="flex-1 min-h-0 flex flex-col gap-1"
+        className="flex-auto min-h-0 flex flex-col gap-1"
         onDragOver={(e) => overDrawer(e, "work")}
         onDrop={commit}
       >
@@ -349,7 +353,7 @@ export function ViewRail({
       </div>
 
       <div
-        className="pt-2 flex flex-col gap-1"
+        className="pt-2 min-h-0 flex flex-col gap-1"
         style={{ borderTop: "1px solid color-mix(in srgb, var(--primary) 10%, transparent)" }}
         onDragOver={(e) => overDrawer(e, "utility")}
         onDrop={commit}
@@ -367,11 +371,13 @@ export function ViewRail({
         {dragging && !base.utility.length && !at(slot, "utility", 0) && <div className="h-6" />}
       </div>
 
-      {/* `shrink-0`: this cluster is the way back — Ports, Resources, Settings —
-          and it is the one thing on the rail that must never be the part that
-          gets pushed off the bottom. Reported from a short window: the
-          Resources button "looks cutoff". */}
-      <div className="shrink-0 flex flex-col gap-1">
+      {/* This cluster is the way back — Ports, Resources, Settings — and must
+          never be pushed off the bottom: a short window cut Resources off. It
+          once held its size (`shrink-0`) and the work drawer, which could shrink
+          to nothing, painted over the views under it; now every group and every
+          button gives way together, down to a 24 px floor (the icon is 22), so
+          at 520 px nothing overlaps (measured: 5 overlaps before, 0 after). */}
+      <div className="min-h-0 flex flex-col gap-1">
         {/* A second hairline, because everything below is not a view at all:
             these open OVER whatever you are in and hand it straight back. A
             divider is the cheapest way to say "these do not change where you
@@ -419,7 +425,7 @@ export function ViewRail({
             data-tip={dragging
               ? "Drop to take it off the rail — it comes back from here"
               : `Hidden views · ${hiddenViews.length} put away`}
-            className="agw-tip relative h-10 min-h-[30px] shrink w-full grid place-items-center rounded-lg transition-colors"
+            className="agw-tip relative h-10 min-h-6 shrink w-full grid place-items-center rounded-lg transition-colors"
             style={{
               color: aimingHidden ? "var(--error)" : restoreAt ? "var(--primary-hover)" : "var(--text4)",
               // Only while something is in the air. A dashed outline the rest of
@@ -445,7 +451,7 @@ export function ViewRail({
           onClick={() => onMachine("ports")}
           aria-label="Ports"
           data-tip="Ports · what is listening, and from which checkout"
-          className="agw-tip relative h-10 min-h-[30px] shrink w-full grid place-items-center rounded-lg transition-colors"
+          className="agw-tip relative h-10 min-h-6 shrink w-full grid place-items-center rounded-lg transition-colors"
           style={{ color: "var(--text4)" }}
         >
           <PortsIcon size={ICON.rail} />
@@ -454,7 +460,7 @@ export function ViewRail({
           onClick={() => onMachine("resources")}
           aria-label="Resources"
           data-tip="Resources · CPU, memory and disk, by checkout"
-          className="agw-tip relative h-10 min-h-[30px] shrink w-full grid place-items-center rounded-lg transition-colors"
+          className="agw-tip relative h-10 min-h-6 shrink w-full grid place-items-center rounded-lg transition-colors"
           style={{ color: "var(--text4)" }}
         >
           <ResourcesIcon size={ICON.rail} />
@@ -468,22 +474,10 @@ export function ViewRail({
           onClick={onSettings}
           aria-label="Settings"
           data-tip="Settings · preferences, exports, shortcuts"
-          className="agw-tip relative h-10 min-h-[30px] shrink w-full grid place-items-center rounded-lg transition-colors"
+          className="agw-tip relative h-10 min-h-6 shrink w-full grid place-items-center rounded-lg transition-colors"
           style={{ color: "var(--text4)" }}
         >
           <RailGear size={ICON.rail} />
-        </button>
-        {/* The catalog is reference, not a view: it opens over the workspace and
-            hands it straight back, so it belongs down here with close rather
-            than among the tabs, where it would imply state you can return to. */}
-        <button
-          onClick={onSkills}
-          aria-label="Skills catalog"
-          data-tip="Skills catalog · what this fleet can do"
-          className="agw-tip relative h-10 min-h-[30px] shrink w-full grid place-items-center rounded-lg transition-colors"
-          style={{ color: "var(--text4)" }}
-        >
-          <SkillsIcon size={ICON.rail} />
         </button>
       </div>
 

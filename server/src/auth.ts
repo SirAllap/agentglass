@@ -393,9 +393,26 @@ const SEAT_POST_NUDGE = new Set([
    business. Deciding who exists is the assigning half of the job. */
 const SEAT_POST_ASSIGN = new Set(["/agents/named/start", "/agents/named/stop", "/agents/named/keys", "/agents/named/enlist", "/agents/named/own"]);
 
+/*
+ * The coordinator's part in a flight plan: write the plan, answer its findings,
+ * raise the one question, hold itself, and in Autopilot say Go. The wall lets
+ * these through and the routes decide (index.ts): its own project only, the
+ * pilot, the hold, the stop rules. Left out on purpose: `…/answer` and
+ * `/flight-plan/resume`, which are the person's, a raw Preflight over any file
+ * (`/flight-plan/preflight`) and a run's Go (`/flight-plan/runs/:id/go`). Go and
+ * Launch start an agent, so they also need the power to assign.
+ */
+const FP_PLAN = /^\/flight-plan\/plans\/fp_[0-9a-f]{16}$/;
+const FP_PLAN_VERB = /^\/flight-plan\/plans\/fp_[0-9a-f]{16}\/(preflight|no-go|ask|report|integrate-check)$/;
+const FP_PLAN_STARTS = /^\/flight-plan\/plans\/fp_[0-9a-f]{16}\/(go|launch)$/;
+const FP_FINDING = /^\/flight-plan\/runs\/pf_[0-9a-f]{16}\/findings\/F\d{1,3}$/;
+
 export function seatAllows(powers: "speak" | "nudge" | "assign", method: string, pathname: string): boolean {
   if (method === "GET" || method === "HEAD") return !FULL_GET.has(pathname);
+  if (method === "PATCH") return FP_PLAN.test(pathname);
   if (method !== "POST") return false;
+  if (pathname === "/flight-plan/plans" || pathname === "/flight-plan/hold" || FP_PLAN_VERB.test(pathname) || FP_FINDING.test(pathname)) return true;
+  if (FP_PLAN_STARTS.test(pathname)) return powers === "assign";
   /* Saying its line and asking the bank are not acts: allowed at every level.
      Seating another orchestrator is NOT on this list at any level — a seat
      that could open seats is a seat that can spend without a ceiling. */

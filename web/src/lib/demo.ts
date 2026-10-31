@@ -8,12 +8,12 @@
 // company, repo, skill or ticket name in here.
 import type {
   WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, Insight,
-  SearchHit, PendingGate, SessionDetail, RepoStatus, CommitResult,
+  PendingGate, SessionDetail, RepoStatus, CommitResult,
   WalkthroughResult, WalkthroughInputFile, GitRepoRef, WorkingTree, GitFileChange, GitActionResult,
   GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, DockerOverview, DockerStat, DockerActionResult,
   PrRepoId, PrSummary, PrDetail, PrThread, PrCheck, PrCheckRollup, PrCheckState, PrListResponse,
   UsageDay, UsageHistory, ActionRecord, ProviderUsage,
-  IssueRow, IssueDetail, IssuesReport, IssueWork, FileEntry, TreeReport, FindReport,
+  IssueRow, IssueDetail, IssuesReport, IssueWork,
   PortsReport, PortEntry, ResourceReport, OrphanReport, DiskCleanReport, DiskCleanRunResult, ProcEntry, SpaceReport, SpaceDir,
 } from "../../../shared/types.ts";
 import { modelLabelOf, providerOf } from "./format.ts";
@@ -467,17 +467,17 @@ export function gitLog(): { commits: GitCommit[] } {
     c("c40d918", "feat: wire the new checkout route into the router", "3 days ago", "tag: v1.2.0"),
   ] };
 }
-export function gitCommitDiff(_hash: string): { changes: FileChange[] } {
+export function gitCommitDiff(_hash: string): { changes: GitFileChange[] } {
   return { changes: [{
     id: 1, timestamp: Date.now(), source_app: "git", session_id: "commit", tool: "git",
-    file_path: "/home/you/code/shop-api/src/pay.ts", additions: 2, deletions: 1,
+    file_path: "/home/you/code/shop-api/src/pay.ts", additions: 2, deletions: 1, status: "modified", staged: false, binary: false,
     hunks: [{ oldStart: 10, oldLines: 3, newStart: 10, newLines: 4, lines: [" function pay(cart: Cart) {", "-  return cart.total;", "+  const t = Math.max(0, cart.total);", "+  return t;", " }"] }],
   }] };
 }
 export function gitStashes(): { stashes: GitStash[] } {
   return { stashes: [
-    { index: 0, ref: "stash@{0}", message: "WIP on feat/git-panel: experiment with split view" },
-    { index: 1, ref: "stash@{1}", message: "On main: quick spike" },
+    { index: 0, ref: "stash@{0}", message: "WIP on feat/git-panel: experiment with split view", hash: "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678" },
+    { index: 1, ref: "stash@{1}", message: "On main: quick spike", hash: "b2c3d4e5f60718293a4b5c6d7e8f9012345678a1" },
   ] };
 }
 
@@ -553,17 +553,6 @@ export function insights(): { insights: Insight[] } {
     { id: "spend1", severity: "bad", kind: "spend", title: "Burning fast · $88.30 in 15m", detail: "this session is spending quickly", session: "shop-web:7a3f21c9", ts: Date.now() - 120_000 },
     { id: "burn", severity: "info", kind: "burn", title: "Spend velocity · $91.65/hr", detail: "281k tokens in the last hour", session: null, ts: Date.now() },
   ] };
-}
-
-export function search(q: string, _opts?: { since?: number; provider?: string }): { hits: SearchHit[] } {
-  if (!q.trim()) return { hits: [] };
-  const now = Date.now();
-  return { hits: Array.from({ length: 12 }, (_, i) => {
-    const s = pick(SESSIONS);
-    const cmd = pick(BASHES);
-    const hi = cmd.replace(new RegExp(q, "ig"), (m) => `${m}`);
-    return { id: 8000 - i, timestamp: now - i * 60_000, source_app: s.app, session_id: s.sid, hook_event_type: i % 2 ? "PostToolUse" : "PreToolUse", tool_name: "Bash", cost_usd: 0, duration_ms: rint(60, 900), snippet: `${s.app} · Bash · ${hi}` };
-  }) };
 }
 
 export function session(id: string): SessionDetail {
@@ -1207,17 +1196,7 @@ export function issuesWork(): { work: IssueWork[] } {
   return { work: ISSUES.map((i) => i.work).filter((w): w is IssueWork => !!w) };
 }
 
-// --- Files: a checkout's tree, fabricated for the demo ---------------------
-export function filesTree(rel = ""): TreeReport {
-  const e = (name: string, dir: boolean, status?: string, size?: number): FileEntry => ({ name, rel: rel ? `${rel}/${name}` : name, dir, status, size });
-  const T: Record<string, FileEntry[]> = {
-    "": [e("src", true), e("public", true), e("tests", true), e("package.json", false, "M", 1240), e("README.md", false, undefined, 3810), e("tsconfig.json", false, undefined, 410), e("vite.config.ts", false, undefined, 690), e(".gitignore", false, undefined, 120)],
-    "src": [e("components", true), e("lib", true), e("routes", true), e("App.tsx", false, "M", 4102), e("main.tsx", false, undefined, 620), e("index.css", false, "?", 1840)],
-    "src/components": [e("Cart.tsx", false, "M", 5211), e("Checkout.tsx", false, "A", 3980), e("ProductCard.tsx", false, undefined, 2140), e("Header.tsx", false, undefined, 1180)],
-    "src/lib": [e("pricing.ts", false, "M", 2960), e("api.ts", false, undefined, 5320), e("format.ts", false, undefined, 880)],
-  };
-  return { ok: true, root: "/home/dev/code/shop-web", rel, entries: T[rel] ?? T[""] };
-}
+// --- Files: one file of a checkout, fabricated for the demo -----------------
 /**
  * A markdown document, so the demo can show the viewer at all.
  *
@@ -1260,24 +1239,6 @@ export function filesRead(rel: string): { ok: boolean; rel: string; text: string
     "- Decide whether the legacy plan mapping stays for another release.",
   ].join("\n");
   return { ok: true, rel, text, bytes: text.length };
-}
-
-export function filesFind(q: string): FindReport {
-  const all = ["src/components/Cart.tsx", "src/components/Checkout.tsx", "src/lib/pricing.ts", "src/routes/checkout.ts", "package.json", "README.md"];
-  // Folders too, and derived the same way the git fallback derives them: every
-  // prefix of every path. A demo that answered with files only would be showing
-  // a search this app no longer has.
-  const dirsAll = [...new Set(all.flatMap((f) => {
-    const parts = f.split("/");
-    return parts.slice(0, -1).map((_, n) => parts.slice(0, n + 1).join("/"));
-  }))].sort();
-  const t = q.trim().toLowerCase();
-  return {
-    ok: true,
-    files: t ? all.filter((f) => f.toLowerCase().includes(t)) : all,
-    dirs: t ? dirsAll.filter((d) => d.toLowerCase().includes(t)) : dirsAll,
-    truncated: false, via: "demo",
-  };
 }
 
 // --- Ports: what is listening on this (fictional) dev machine ---------------

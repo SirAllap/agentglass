@@ -55,7 +55,7 @@ describe("what waits, with an age", () => {
     expect(w.stale.reports).toHaveLength(0);
   });
 
-  test("a fresh ask from a live agent waits; an old ask from the coordinator is stale", () => {
+  test("a fresh ask from a live agent waits; an old ask from the orchestrator is stale", () => {
     const w = whatWaits(field, [old, fresh], [], [need("n1", NOW - 3_600_000), need("n2", NOW - 20 * DAY)], 2, NOW);
     expect(w.asked.map((r) => r.id)).toEqual([2]);
     expect(w.ready.map((n) => n.id)).toEqual(["n1"]);

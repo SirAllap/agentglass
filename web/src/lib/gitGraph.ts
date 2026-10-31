@@ -149,9 +149,11 @@ export function layoutGraph(commits: { hash: string; parents: string[] }[]): Gra
    which is a graph drawn in no colour at all. Seen exactly that way in a
    screenshot of this component against a stale stylesheet: the lines vanished
    and the dots went grey. */
+/* Lane 0 is the trunk and draws in the text colour, the way the approved Log does;
+   the next two are its blue and green, then the rest of the ramp. */
 export const LANE_COLOURS = [
-  "var(--graph-1, #6ea8fe)", "var(--graph-2, #f78fb3)", "var(--graph-3, #5fd4a4)", "var(--graph-4, #e8b463)",
-  "var(--graph-5, #b39ddb)", "var(--graph-6, #4fc3d9)", "var(--graph-7, #f2937a)", "var(--graph-8, #a3c76d)",
+  "var(--text)", "var(--graph-1, #6ea8fe)", "var(--graph-3, #5fd4a4)", "var(--graph-4, #e8b463)",
+  "var(--graph-2, #f78fb3)", "var(--graph-5, #b39ddb)", "var(--graph-6, #4fc3d9)", "var(--graph-7, #f2937a)",
 ] as const;
 
 export const laneColour = (lane: number): string => LANE_COLOURS[lane % LANE_COLOURS.length]!;
@@ -165,7 +167,7 @@ export const laneColour = (lane: number): string => LANE_COLOURS[lane % LANE_COL
  * clipped at the edge, which says "there is more going on here" without letting
  * it eat the commit message.
  */
-export const LANE_W = 12;
+export const LANE_W = 14;
 export const MAX_LANES = 8;
 
 /**
@@ -176,7 +178,7 @@ export const MAX_LANES = 8;
  * half by the edge of its own column. Visible only once the thing was drawn to
  * pixels and looked at.
  */
-export const GRAPH_PAD = 6;
+export const GRAPH_PAD = 5;
 
 export function graphWidth(rows: GraphRow[]): number {
   const lanes = Math.min(MAX_LANES, rows.reduce((n, r) => Math.max(n, r.width), 1));

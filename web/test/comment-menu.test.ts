@@ -120,7 +120,10 @@ describe("the menu is drawn outside the card", () => {
 describe("keyboard", () => {
   const body = code(ANCHORED);
   test("arrows, Home, End, Escape and Tab are handled in the capture phase", () => {
-    for (const k of ['"ArrowDown"', '"ArrowUp"', '"Home"', '"End"', '"Escape"', '"Tab"']) expect(body).toContain(k);
+    // The four movement keys live in lib/menuNav.ts, shared with ContextMenu; the menu calls them.
+    expect(body).toContain("isMenuKey(e.key)");
+    for (const k of ['"ArrowDown"', '"ArrowUp"', '"Home"', '"End"']) expect(src("lib", "menuNav.ts")).toContain(k);
+    for (const k of ['"Escape"', '"Tab"']) expect(body).toContain(k);
     expect(body).toContain('addEventListener("keydown", key, true)');
   });
   test("opens on the first row and hands focus back to the trigger on Escape", () => {

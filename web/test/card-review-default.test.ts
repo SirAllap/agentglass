@@ -58,26 +58,23 @@ describe("cardNoteText", () => {
 });
 
 const src = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url).pathname).text();
+const picker = await Bun.file(new URL("../src/components/PrAskPicker.tsx", import.meta.url).pathname).text();
 const slice = (open: string, close: string) => { const a = src.indexOf(open); return src.slice(a, src.indexOf(close, a)); };
 
 describe("the sidebar gates on the settings", () => {
   test("the review preselect is reviewStatus with the saved names, not an inline regex", () => {
-    const body = slice("function ClickUpSide(", "\ntype Facets");
-    expect(body).toContain("reviewStatus(st, t.status, rp.move.names)");
-    expect(body).not.toContain("/review/i");
+    expect(picker).toContain("reviewStatus(meta.statuses, status, names)");
+    expect(picker).not.toContain("/review/i");
   });
-  test("the move item is a step: preselected only when added, its Status block absent otherwise", () => {
-    const body = slice("function ClickUpSide(", "\ntype Facets");
-    expect(body).toContain('prefs?.review.enabled && rp?.move && (rp.move.names.length > 0 || rp.move.fallback) ? reviewStatus(');
-    expect(body).toContain("const moveOn = stepOn && !!menuPlan?.move;");
-    expect(body).toContain("{moveOn && (");
-    expect(body).toContain("if (!ref || (!stepOn && !assignReviewer)) return null;");
+  test("the move item is a step: preselected only when added, never when the token cannot write", () => {
+    expect(picker).toContain("const moveOn = stepOn && !!menuPlan?.move;");
+    expect(picker).toContain("const preferred = !blocked && moveOn && (names.length > 0 || menuPlan?.move?.fallback) ? reviewStatus(");
+    /* The card half is always drawn when a tracker is connected; Settings only choose what it starts as. */
+    expect(picker).toContain("defaults: { status: preferred, mirror: assignReviewer }");
   });
-  test("putting people on the card needs assignReviewer, and unknown reads as off", () => {
-    const body = slice("function ClickUpSide(", "\ntype Facets");
-    expect(body).toContain("reviewPrefs?.assignReviewer === true");
-    expect(body).toContain("const base = assignReviewer ? on : was;");
-    expect(body).toContain("{assignReviewer && (");
+  test("putting people on the card by default needs assignReviewer, and unknown reads as off", () => {
+    expect(picker).toContain("reviewPrefs?.assignReviewer === true");
+    expect(picker).toContain("const mirror = mirrorSet ?? (handOver ? true : side.defaults.mirror);");
   });
   test("the note button needs noteOnCard, and unknown reads as off", () => {
     const body = slice("function CardFacts(", "\n/** Who the note is for");

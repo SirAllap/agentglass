@@ -12,7 +12,9 @@ describe("a control inside a settings form does not submit it", () => {
   test("the Select trigger and its options are type=button", () => {
     const trigger = select.slice(select.indexOf('role="combobox"') - 260, select.indexOf('role="combobox"'));
     expect(trigger).toContain('type="button"');
-    expect(select).toContain('<button type="button" key={o.value}');
+    // The options are the kit's ListRow, which is type=button itself.
+    expect(select).toContain("<ListRow key={o.value}");
+    expect(chrome.slice(chrome.indexOf("export function ListRow("))).toContain('type="button"');
   });
   test("Button defaults to type=button and lets a caller pass submit", () => {
     const at = chrome.indexOf("{...rest}\n      disabled={disabled || pending}");

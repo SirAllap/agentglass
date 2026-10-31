@@ -20,7 +20,8 @@
  * cannot express should add it HERE, where the next view will find it.
  */
 
-import type { ButtonHTMLAttributes, CSSProperties, KeyboardEvent, ReactNode } from "react";
+import { forwardRef } from "react";
+import type { ButtonHTMLAttributes, CSSProperties, HTMLAttributes, KeyboardEvent, ReactNode, Ref, TextareaHTMLAttributes } from "react";
 import { externalUrl } from "../../lib/externalUrl.ts";
 import { HIT, ICON } from "../../lib/iconSize.ts";
 import { DoneIcon, RefreshIcon } from "../../lib/glyphIcons.tsx";
@@ -39,8 +40,12 @@ import { DoneIcon, RefreshIcon } from "../../lib/glyphIcons.tsx";
  * level would make the two files' load order decide which one sees the other
  * half-initialized. The value cannot drift — `edge()` is one string template,
  * checked by the slice-1 guard test.
+ *
+ * `strip` (24) is the Terminal strip's: a 32px bar with a 4px margin above and
+ * below each control, the mockup's own measurement. `compact` is a row's and
+ * `regular` a view header's; neither fits in 32 without touching the edge.
  */
-export const CTRL_H = { compact: 22, regular: 28, large: 32 } as const;
+export const CTRL_H = { compact: 22, strip: 24, hit: HIT, regular: 28, large: 32 } as const;
 export const EDGE = "1px solid color-mix(in srgb, var(--text) 14%, transparent)";
 
 /**
@@ -84,7 +89,21 @@ export const tintEdge = (hue: string, pct: number): string => `1px solid color-m
  * and is why these were reported as easy to miss with the mouse. 28 is the
  * repo's own HIT constant rounded to the type.
  */
+/**
+ * THE radius of a button, chip, pill, icon control and text input: Tailwind's
+ * `rounded-lg`, 8px. `CHIP`, `BAR_CTRL`, `INPUT`, `Button` and `IconChip` each
+ * spell it in their own class list (a test reads those lists against this
+ * value), and every new kit part takes it from here. A card, a panel and a
+ * dialog are one step up, `rounded-xl`.
+ */
+export const CTRL_RADIUS = "rounded-lg";
 export const CHIP = "agx-chip text-[11px] px-2.5 min-h-[28px] inline-flex items-center gap-1.5 rounded-lg whitespace-nowrap transition-colors";
+/**
+ * `CHIP` at `CTRL_H.compact` (22): a filter row inside a dialog, where forty
+ * category chips at 28px would take the list's room. The same rung `Button`'s
+ * `compact` size uses, so a compact chip and a compact button share a row.
+ */
+export const CHIP_COMPACT = "agx-chip text-[10.5px] px-2 min-h-[22px] inline-flex items-center gap-1.5 rounded-lg whitespace-nowrap transition-colors";
 
 /**
  * The fill and hairline a control carries when it is not a toggle.
@@ -216,12 +235,19 @@ type ChipProps = {
    * only in `title`, which most readers never announce.
    */
   ariaLabel?: string;
+  /**
+   * One tab of a strip that swaps a view: `role="tab"` and `aria-selected` in place of
+   * `aria-pressed`, which a tab does not have.
+   */
+  tab?: boolean;
+  /** 22px instead of 28: a filter row in a dialog (`CHIP_COMPACT`). */
+  compact?: boolean;
   className?: string;
   style?: CSSProperties;
 };
 
 export function Chip({
-  on, onClick, title, children, pressed, disabled, resting, primary, danger, ariaLabel,
+  on, onClick, title, children, pressed, disabled, resting, primary, danger, ariaLabel, tab, compact,
   className = "", style,
 }: ChipProps) {
   const hasState = pressed !== undefined || on !== undefined;
@@ -245,8 +271,8 @@ export function Chip({
       title={title}
       aria-label={ariaLabel}
       disabled={disabled}
-      {...(hasState ? { "aria-pressed": !!(pressed ?? on) } : {})}
-      className={`${CHIP}${danger ? " agx-chip-danger" : ""} ${className}`.trim()}
+      {...(tab ? { role: "tab", "aria-selected": !!on } : hasState ? { "aria-pressed": !!(pressed ?? on) } : {})}
+      className={`${compact ? CHIP_COMPACT : CHIP}${danger ? " agx-chip-danger" : ""} ${className}`.trim()}
       // `cursor` and not only `opacity`: Tailwind's preflight sets
       // `button { cursor: pointer }` unconditionally, so a disabled chip kept
       // promising a click it could not honour, and two files in the understudy
@@ -259,6 +285,40 @@ export function Chip({
 }
 
 /**
+ * A status word: a label, not a control. Small, round, coloured by `tint` (any
+ * CSS colour) and nothing else on its row is allowed that colour.
+ *
+ * Three copies had grown apart: the git card's `Chip` (flat wash, `py-px`),
+ * Docker's `RowChip` and the volumes `Chip` (the same wash plus a 40% edge,
+ * `py-0.5`). They are this now; `outlined` is the second look and the padding
+ * follows it so neither moves a pixel. Not a `Chip`: it has no height to share
+ * with a button, because a label that grew to 28px would be a button.
+ *
+ * `clip`: the text is arbitrary (a commit's refs, a branch), not a status
+ * word, so the badge gives up its `shrink-0` and ellipsizes. A badge that will
+ * not shrink in a flex row does not get clipped by it: it overflows and paints
+ * over its neighbour. `onClick` makes it clickable without making it a button;
+ * the click does not reach the row under it.
+ */
+export function Badge({ tint, fill = tint, wash = 10, outlined, tight, clip, onClick, title, children }: {
+  tint: string; /** The wash's colour when it is not the text's (a grey label on a `--text` wash). */ fill?: string; wash?: number; outlined?: boolean; /** `leading-none`: a line box of the glyphs alone, for a row that pins its own height. */ tight?: boolean; clip?: boolean; onClick?: () => void; title?: string; children: ReactNode;
+}) {
+  return (
+    <span
+      title={title}
+      onClick={onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined}
+      className={`text-[9.5px]${tight ? " leading-none" : ""} ${outlined ? "py-0.5" : "py-px"} px-1.5 rounded-md whitespace-nowrap ${clip ? "min-w-0 truncate" : "shrink-0"}${onClick ? " cursor-pointer" : ""}`}
+      style={{
+        color: tint,
+        background: `color-mix(in srgb, ${fill} ${wash}%, transparent)`,
+        ...(outlined ? { border: tintEdge(tint, 40) } : null),
+      }}>
+      {children}
+    </span>
+  );
+}
+
+/**
  * A set of chips where exactly one is on — "Uncommitted / Last commit",
  * "Board / Needs my review / Mine".
  *
@@ -267,20 +327,41 @@ export function Chip({
  * the chips doing the same job in the panel next door. The tint says which one
  * is on; a box around the group says nothing the tint has not already said.
  */
-export function Segmented<T extends string>({ value, options, onChange, label }: {
-  value: T;
+export function Segmented<T extends string>({ value, options, onChange, label, track, disabled, compact }: {
+  value: T | undefined;
   options: readonly { id: T; label: ReactNode; title?: string }[];
   onChange: (v: T) => void;
   /** For screen readers — the question the set answers. */
   label: string;
+  /**
+   * The second look: an inset track with the chosen option raised on the page's ground (`.agx-seg`
+   * in index.css), for a short exclusive choice in a settings row's control column. The bars keep
+   * the plain row of chips above. One component, two skins; the track is 28px outer (24 + 2 + 2).
+   */
+  track?: boolean;
+  disabled?: boolean;
+  /** Its chips at `CHIP_COMPACT` (22). Ignored with `track`. */
+  compact?: boolean;
 }) {
+  if (track) {
+    return (
+      <span className="agx-seg" role="group" aria-label={label}>
+        {options.map((o) => (
+          <button key={o.id} type="button" title={o.title} onClick={() => onChange(o.id)} disabled={disabled}
+            aria-pressed={value === o.id} className="agx-seg-b disabled:cursor-not-allowed">
+            {o.label}
+          </button>
+        ))}
+      </span>
+    );
+  }
   return (
     // gap-1.5, not gap-1: four transparent labels 4px apart was the primary
     // navigation of a whole view, and 4px is inside the distance a pointer
     // slips between two 28px targets.
     <div className="flex items-center gap-1.5 shrink-0" role="group" aria-label={label}>
       {options.map((o) => (
-        <Chip key={o.id} on={value === o.id} resting onClick={() => onChange(o.id)} title={o.title}>{o.label}</Chip>
+        <Chip key={o.id} on={value === o.id} resting compact={compact} disabled={disabled} onClick={() => onChange(o.id)} title={o.title}>{o.label}</Chip>
       ))}
     </div>
   );
@@ -432,11 +513,20 @@ export function ScopeChip({ label, kind, trailing = "none", on, onClick, title, 
  * reason `CloseButton` exists and is the size it is. A view that hand-rolls 24
  * is both slightly wrong and slightly different, which is the worse half.
  */
-export function IconChip({ onClick, title, children, on, expanded, hasPopup, size = HIT }: {
+export function IconChip({ onClick, title, label, children, on, bare, disabled, expanded, hasPopup, size = HIT }: {
   onClick: () => void;
   title: string;
+  /** The accessible name when it is not the tooltip (a tooltip may carry a hint the name should not). */
+  label?: string;
   children: ReactNode;
   on?: boolean;
+  /**
+   * No chrome at rest: transparent, no edge, the caption ink. The hover tint is
+   * `agx-chip`'s, so the glyph answers the pointer without a box around it at
+   * rest. This is the look 80 hand-painted icon buttons shared.
+   */
+  bare?: boolean;
+  disabled?: boolean;
   expanded?: boolean;
   hasPopup?: boolean;
   size?: number;
@@ -446,10 +536,12 @@ export function IconChip({ onClick, title, children, on, expanded, hasPopup, siz
       type="button"
       onClick={onClick}
       title={title}
+      aria-label={label ?? title}
+      disabled={disabled}
       {...(expanded !== undefined ? { "aria-expanded": expanded } : {})}
       {...(hasPopup ? { "aria-haspopup": "menu" as const } : {})}
-      className="inline-flex items-center justify-center rounded-lg transition-colors shrink-0"
-      style={{ width: size, height: size, ...chipTone(!!on) }}
+      className={`${bare ? "agx-chip " : ""}inline-flex items-center justify-center ${CTRL_RADIUS} transition-colors shrink-0 disabled:opacity-40`}
+      style={{ width: size, height: size, ...chipTone(!!on), ...(bare && !on ? { color: "var(--text2)" } : null) }}
     >
       {children}
     </button>
@@ -474,12 +566,12 @@ export function IconButton(props: Omit<Parameters<typeof IconChip>[0], "size">) 
   return <IconChip {...props} size={CTRL_H.regular} />;
 }
 
-export type ButtonTone = "plain" | "primary" | "danger" | "ok" | "warn";
+export type ButtonTone = "plain" | "quiet" | "primary" | "danger" | "ok" | "warn";
 
 const TONE_INK: Record<ButtonTone, string> = {
-  plain: "var(--text)", primary: "var(--on-primary)", danger: "var(--error-ink)", ok: "var(--success-ink)", warn: "var(--warning-ink)",
+  plain: "var(--text)", quiet: "var(--text2)", primary: "var(--on-primary)", danger: "var(--error-ink)", ok: "var(--success-ink)", warn: "var(--warning-ink)",
 };
-const TONE_HUE: Record<Exclude<ButtonTone, "plain">, string> = {
+const TONE_HUE: Record<Exclude<ButtonTone, "plain" | "quiet">, string> = {
   primary: "var(--primary)", danger: "var(--error)", ok: "var(--success)", warn: "var(--warning)",
 };
 
@@ -494,8 +586,10 @@ const TONE_HUE: Record<Exclude<ButtonTone, "plain">, string> = {
  * and radius. They are thin wrappers over this now and keep their own prop
  * names; the shape is decided here.
  *
- * `size`: `compact` (22) for a row, a card or a sub-toolbar, `regular` (28)
- * for a view header, the same rung as `CHIP` and `RefreshButton`.
+ * `size`: `compact` (22) for a row, a card or a sub-toolbar, `hit` (26, the house's
+ * square target) for the buttons on a board card, `regular` (28) for a view
+ * header, the same rung as `CHIP` and `RefreshButton`, `strip` (24)
+ * for the Terminal's 32px strip.
  *
  * `tone`: a plain button's label is `--text`, not `--text2` — `--text2` is the
  * tier for labels BESIDE things, and a control read at the contrast of a
@@ -506,7 +600,10 @@ const TONE_HUE: Record<Exclude<ButtonTone, "plain">, string> = {
  * (update-branch merges the base in), matching Source Control's sync colour.
  * `primary` is filled and carries the weight: on a neutral theme `--primary`
  * is a grey, so the label's weight says which is which as well. `tint` is an
- * arbitrary colour for a caller whose tones are its own (Docker's start/stop).
+ * arbitrary colour for a caller whose tones are its own (Docker's start/stop);
+ * with `solid` it is filled with that colour and the label is the page
+ * background, the verdict button of an alert banner (kit-level: the banner
+ * drew this by hand at 24 and 28px, and no tone is filled with a caller's ink).
  *
  * `on` makes it a toggle instead: transparent until pressed, `chipTone` when
  * pressed, no border — the tint IS the state, as in `IconChip`.
@@ -531,54 +628,81 @@ const TONE_HUE: Record<Exclude<ButtonTone, "plain">, string> = {
  * caller that needs more passes its own handlers through.
  */
 export function Button({
-  size = "regular", tone = "plain", tint, on, square, pending, label,
+  size = "regular", tone = "plain", tint, solid, on, square, pending, label, href, download, buttonRef,
   children, disabled, title, className = "", style, ...rest
 }: Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children"> & {
-  size?: "compact" | "regular";
+  /** Draws an `<a>` in the same shape: a link that leaves the app (new tab, with a ↗ the caller writes)
+   *  or, with `download`, saves a file. Everything else on this list is for a `<button>`. */
+  href?: string;
+  download?: string;
+  size?: "compact" | "strip" | "hit" | "regular";
   tone?: ButtonTone;
   /** A colour of the caller's own, in place of a tone. */
   tint?: string;
+  /** With `tint`: filled with it, label in `--bg`, not washed. */
+  solid?: boolean;
   /** A toggle: transparent until on. */
   on?: boolean;
   /** Icon-only: as wide as it is tall. */
   square?: boolean;
   pending?: boolean;
+  /** The `<button>` itself, for a dialog that puts the focus on Cancel or the confirm action. React 18 does not pass `ref` to a function component. */
+  buttonRef?: Ref<HTMLButtonElement>;
   /** The accessible name, for an icon-only button. Also the tooltip unless `title` says otherwise. */
   label?: string;
   children: ReactNode;
 }) {
   const h = CTRL_H[size];
-  const hue = tint ?? (tone === "plain" ? undefined : TONE_HUE[tone]);
+  const hue = tint ?? (tone === "plain" || tone === "quiet" ? undefined : TONE_HUE[tone]);
   const skin: CSSProperties = on !== undefined
     ? chipTone(on)
+    : tint && solid
+      ? { color: "var(--bg)", background: tint, border: tintEdge(tint, 100) }
     : tint
       ? { color: tint, background: `color-mix(in srgb, ${tint} 8%, transparent)`, border: tintEdge(tint, 32) }
       : tone === "plain"
         ? CHIP_SURFACE
-        : {
+        : tone === "quiet"
+          // Transparent with the edge kept as an invisible 1px, so a quiet button is the same size as a plain one.
+          ? { color: TONE_INK.quiet, background: "transparent", border: tintEdge("var(--text)", 0) }
+          : {
           color: TONE_INK[tone],
           background: tone === "primary" ? hue : `color-mix(in srgb, ${hue} ${tone === "warn" ? 16 : 8}%, transparent)`,
           border: tintEdge(hue!, tone === "primary" ? 100 : tone === "warn" ? 55 : 85),
         };
   const text = size === "compact" ? "text-[10.5px]" : "text-[11px]";
   const pad = square ? "" : size === "compact" ? "px-2" : "px-2.5";
+  const quiet = tone === "quiet" && !tint && on === undefined;
+  const shape = `agx-btn ${quiet ? "agx-chip " : ""}${CHIP_SURFACE_CLS} inline-flex items-center justify-center gap-1 rounded-lg whitespace-nowrap leading-none disabled:opacity-40 ${text} ${pad} ${className}`;
+  const look: CSSProperties = {
+    height: h, minWidth: square ? h : undefined, width: square ? h : undefined,
+    ...skin,
+    cursor: disabled ? "not-allowed" : "pointer",
+    fontWeight: tone === "primary" || (tint && solid) ? 600 : 500,
+    ...style,
+  };
+  if (href !== undefined) {
+    return (
+      <a href={download === undefined ? externalUrl(href) : href} download={download} title={title ?? label} aria-label={label}
+        {...(download === undefined ? { target: "_blank", rel: "noreferrer noopener" } : null)}
+        className={shape} style={look}>
+        {children}
+      </a>
+    );
+  }
   return (
     <button
       type="button"
       {...rest}
       disabled={disabled || pending}
-      title={pending ? "Working…" : title ?? label}
+      /* A button that carries `data-tip` is explained by the one tooltip (TipHost), never by a native title as well. */
+      title={"data-tip" in rest ? undefined : pending ? "Working…" : title ?? label}
       aria-label={label}
       aria-busy={pending || undefined}
       data-tone={tint || on !== undefined ? undefined : tone}
-      className={`agx-btn ${CHIP_SURFACE_CLS} inline-flex items-center justify-center gap-1 rounded-lg whitespace-nowrap leading-none disabled:opacity-40 ${text} ${pad} ${className}`}
-      style={{
-        height: h, minWidth: square ? h : undefined, width: square ? h : undefined,
-        ...skin,
-        cursor: disabled ? "not-allowed" : "pointer",
-        fontWeight: tone === "primary" ? 600 : 500,
-        ...style,
-      }}
+      ref={buttonRef}
+      className={shape}
+      style={look}
     >
       {pending && (
         <span className="agx-spin mr-0.5 shrink-0" aria-hidden
@@ -677,6 +801,220 @@ export function FilterField({ value, onChange, placeholder, label, className = "
  * writes down and the one most often broken.
  */
 export const GROUP_HEADING = "px-1.5 pt-3 pb-1 text-[10px] uppercase tracking-wider";
+
+/**
+ * A full-width selectable row: a picker's option, a palette hit, a file in a
+ * list. 104 raw copies drew this by hand; the hover tint is `agx-chip`'s and the
+ * current row is the one pressed tint, so a list reads as one control.
+ *
+ * `leading` is a mark before the label, `trailing` a slot at the right edge (a
+ * count, a shortcut, a tick). The label truncates; a row never grows a second
+ * line by itself. Label and trailing both shrink when the row is too narrow, the
+ * longer one first: a "Nobody" with a sentence of hint after it kept its hint
+ * and lost its own name ("N…") when the trailing slot could not shrink.
+ *
+ * `sub` is the one line under the label (a path, "local · trunk", the branch a
+ * checkout is on). It is what turned this from a menu item into a picker row,
+ * so the pieces that come with it are decided here and not by each picker: the
+ * label steps up to 12px and `--text` (it is the identity, the sub is the
+ * detail), the sub is 10.5px `--text3`, the gap after a `leading` tile opens to
+ * 10px, and the row keeps 6px above and below so a 28px tile never touches the
+ * hover tint. The pickers drew this by hand, each at its own padding.
+ *
+ * `roomy` is that same step without a second line, for a row whose `leading` is
+ * a 28px tile and whose label is alone beside it.
+ *
+ * `hot` is the keyboard cursor, a step lighter than `current` (14% against 18%;
+ * it was 8% until the palettes moved onto this row, where the cursor was drawn
+ * at 14 and 18% and 8% read as no cursor on the neutral themes), so the row the
+ * arrows are on and the row that is chosen read as two things. Anything else a
+ * picker needs on the button (`role="option"`, `aria-selected`, a mouse-enter
+ * that moves the cursor) goes through as it is.
+ */
+export function ListRow({ children, onClick, current, hot, disabled, leading, trailing, sub, roomy, title, className = "", style, ...rest }: Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children" | "title" | "style"> & {
+  children: ReactNode;
+  onClick?: () => void;
+  /** The row the list is on now: the pressed tint, and `aria-current`. */
+  current?: boolean;
+  /** The row the arrow keys are on. */
+  hot?: boolean;
+  disabled?: boolean;
+  leading?: ReactNode;
+  trailing?: ReactNode;
+  sub?: ReactNode;
+  roomy?: boolean;
+  title?: string;
+  className?: string;
+  style?: CSSProperties;
+}) {
+  const two = sub != null || !!roomy;
+  return (
+    <button
+      type="button"
+      {...rest}
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-current={current || undefined}
+      className={`agx-chip flex w-full min-w-0 items-center ${two ? "gap-2.5 py-1.5" : "gap-1.5"} px-2.5 text-left text-[11px] ${CTRL_RADIUS} transition-colors disabled:opacity-40 ${className}`.trim()}
+      style={{
+        minHeight: CTRL_H.regular,
+        ...chipTone(!!current),
+        ...(hot && !current ? { background: "color-mix(in srgb, var(--primary) 14%, transparent)" } : null),
+        color: current || two ? "var(--text)" : "var(--text2)",
+        ...style,
+      }}
+    >
+      {leading != null && <span className="shrink-0 inline-flex" aria-hidden>{leading}</span>}
+      {two
+        ? (
+          <span className="min-w-0 flex-[0_1_auto]">
+            <span className="block truncate text-[12px] font-medium">{children}</span>
+            {sub != null && <span className="block truncate text-[10.5px]" style={{ color: "var(--text3)" }}>{sub}</span>}
+          </span>
+        )
+        : <span className="min-w-0 flex-[0_1_auto] truncate">{children}</span>}
+      {trailing != null && <span className={`ml-auto min-w-0 overflow-hidden whitespace-nowrap inline-flex items-center gap-1.5 ${two ? "" : "pl-1.5"}`} style={{ color: "var(--text3)" }}>{trailing}</span>}
+    </button>
+  );
+}
+
+export const TEXTAREA =
+  `text-[12px] px-2.5 py-1.5 min-h-[64px] resize-y ${CTRL_RADIUS} bg-[var(--surface-inset)] text-[var(--text)] ` +
+  "placeholder:text-[var(--text3)] outline-none transition-colors";
+
+/** `textareaRef` is the `<textarea>` itself, as `buttonRef` is `Button`'s: React 18 does not hand a `ref` to a function component. */
+export function Textarea({ className = "", style, textareaRef, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement> & { textareaRef?: Ref<HTMLTextAreaElement> }) {
+  return <textarea {...rest} ref={textareaRef} className={`${TEXTAREA} ${className}`.trim()} style={{ ...INPUT_STYLE, ...style }} />;
+}
+
+/** A native checkbox and its label as one target, in the house accent. */
+export function Checkbox({ checked, onChange, children, disabled, id }: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  children: ReactNode;
+  disabled?: boolean;
+  id?: string;
+}) {
+  return (
+    <label className="inline-flex items-center gap-2 text-[12px]" style={{ color: "var(--text2)", opacity: disabled ? 0.5 : 1, cursor: disabled ? "not-allowed" : "pointer" }}>
+      <input id={id} type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} style={{ accentColor: "var(--primary)" }} />
+      {children}
+    </label>
+  );
+}
+
+/** One option of a radio group; `name` ties the group together. */
+export function Radio({ checked, onChange, name, children, disabled }: {
+  checked: boolean;
+  onChange: () => void;
+  name: string;
+  children: ReactNode;
+  disabled?: boolean;
+}) {
+  return (
+    <label className="inline-flex items-center gap-2 text-[12px]" style={{ color: "var(--text2)", opacity: disabled ? 0.5 : 1, cursor: disabled ? "not-allowed" : "pointer" }}>
+      <input type="radio" name={name} checked={checked} disabled={disabled} onChange={onChange} style={{ accentColor: "var(--primary)" }} />
+      {children}
+    </label>
+  );
+}
+
+/**
+ * A titled block: the heading (`GROUP_HEADING`'s type, at the block's own left
+ * edge), an `aside` at its right (a count, a bulk action), then the content.
+ * Six views drew this themselves with six paddings.
+ *
+ * `fold`: the block opens and shuts (a Jira card's sections). The title becomes
+ * a button with a chevron and `aria-expanded`, `count` sits after it in the
+ * dimmer ink, and the content is not drawn while shut. Whether it is shut is the
+ * caller's: this holds no state and no storage, so a view that remembers it
+ * per browser does so beside the call, not in the kit.
+ */
+export function Section({ title, aside, count, fold, children, className = "" }: {
+  title: ReactNode;
+  aside?: ReactNode;
+  /** A number after the title; only with `fold` it is part of the toggle. */
+  count?: ReactNode;
+  fold?: { shut: boolean; onToggle: () => void };
+  children: ReactNode;
+  className?: string;
+}) {
+  const label = typeof title === "string" ? title : undefined;
+  return (
+    <section className={className} aria-label={fold ? label : undefined}>
+      <div className="flex items-center justify-between gap-2 pt-3 pb-1 text-[10px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>
+        {fold
+          ? (
+            <button type="button" onClick={fold.onToggle} aria-expanded={!fold.shut}
+              className="agx-btn m-0 min-w-0 flex items-center gap-1.5 text-[10px] uppercase tracking-wider" style={{ color: "inherit" }}>
+              <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden
+                className="shrink-0" style={{ transform: fold.shut ? "rotate(-90deg)" : "none", transition: "transform 120ms" }}><path d="m6 9 6 6 6-6" /></svg>
+              <span className="truncate">{title}</span>
+              {count != null && count !== "" && <span className="tabular-nums" style={{ color: "var(--text4)" }}>{count}</span>}
+            </button>
+          )
+          : <h3 className="m-0 min-w-0 truncate text-[10px] font-normal uppercase tracking-wider">{title}{count != null && count !== "" && <span className="tabular-nums" style={{ color: "var(--text4)" }}> {count}</span>}</h3>}
+        {aside != null && <div className="shrink-0 normal-case tracking-normal" style={fold ? { color: "var(--text4)" } : undefined}>{aside}</div>}
+      </div>
+      {!fold?.shut && children}
+    </section>
+  );
+}
+
+/**
+ * A raised block: the card level (`--surface-card`), the hairline, the lift,
+ * one step rounder than a control (`rounded-xl`). Settings has `SettingsCard`;
+ * this is the one for every other view.
+ *
+ * `compact` is the padding of a notification (12 / 10px) instead of a panel's
+ * 16. It takes a ref and any div attribute (`role`, handlers) so a banner or a
+ * toast that animates (`motion.create(Card)`) is this card and not a copy of it;
+ * a caller that needs a different surface (a translucent toast, a verdict-tinted
+ * edge) passes `style`, which wins.
+ */
+export const Card = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement> & { compact?: boolean }>(function Card(
+  { children, className = "", style, compact, ...rest }, ref,
+) {
+  return (
+    <div {...rest} ref={ref} className={`min-w-0 rounded-xl ${compact ? "px-3 py-2.5" : "p-4"} ${className}`.trim()}
+      style={{ background: "var(--surface-card)", border: LINE, boxShadow: "var(--surface-lift)", ...style }}>
+      {children}
+    </div>
+  );
+});
+
+/** The hairline between blocks of a divided list. */
+export const DIVIDER = "1px solid color-mix(in srgb, var(--border) 30%, transparent)";
+
+/**
+ * One block of a divided list that is not a button: a hairline above every
+ * block but the first. `divide-y` sets the width and never the colour (Preflight
+ * resets `border-color` to `currentColor` and a parent's inline colour does not
+ * reach it), so each block carries its own explicit border. The usage panel's
+ * provider blocks drew this by hand.
+ */
+export function Entry({ first, children, className = "" }: { first?: boolean; children: ReactNode; className?: string }) {
+  return (
+    <div className={`py-2.5 ${className}`.trim()}
+      style={first ? undefined : { borderTop: DIVIDER }}>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * A row of the notification lists (the bell's and the needs popover's): the
+ * `agx-note-row` skin, with `tint` for a row that is waiting on an answer.
+ */
+export function NoteRow({ tint, children, className = "", ...rest }: HTMLAttributes<HTMLDivElement> & { tint?: string }) {
+  return (
+    <div {...rest} className={`agx-note-row ${className}`.trim()}
+      style={tint ? { background: `color-mix(in srgb, ${tint} 8%, transparent)` } : undefined}>
+      {children}
+    </div>
+  );
+}
 
 /* The conversation's geometry, GitHub's: a big avatar outside the card, a rail
    running a little way into the card column with the small events sitting on

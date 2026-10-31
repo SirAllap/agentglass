@@ -184,7 +184,7 @@ describe("where the branch chip goes", () => {
     const src = await Bun.file(new URL("../src/components/GitPanel.tsx", import.meta.url)).text();
     expect(src).toContain("const prChip = chipTarget(prRepo, branchPr)");
 
-    const start = src.indexOf(`{prChip.kind === "open" && (`);
+    const start = src.indexOf(`const slotPr = prChip.kind === "open" ? (`);
     expect(start).toBeGreaterThan(-1);
     const button = src.slice(start, src.indexOf("</button>", start));
     expect(button).toContain("openPr(prChip.repo, prChip.pr.number)");

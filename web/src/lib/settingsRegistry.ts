@@ -48,7 +48,8 @@ import {
 } from "./lookPrefs.ts";
 import { translucentSupported } from "./desktop.ts";
 import { focusFollowsMouse, setFocusFollowsMouse } from "./termFocusPref.ts";
-import { paneActionsMode, setPaneActionsMode } from "./paneActionsPref.ts";
+import { paneActionsMode, setPaneActionsMode, paneMarker, setPaneMarker, type PaneMarker } from "./paneActionsPref.ts";
+import { PANE_BAR_MODES, type PaneBarMode } from "./paneChip.ts";
 import { tabGroupsOn, setTabGroupsOn, tabGroupRulesText, setTabGroupRulesText } from "./tabGroups.ts";
 import {
   copyOnSelect, setCopyOnSelect, currentNoteEditor, setNoteEditor, NOTE_EDITORS, currentScrollback, setScrollback,
@@ -62,9 +63,12 @@ import { searchEngine, setSearchEngine } from "./browserPrefs.ts";
 import { DEFAULT_SEARCH_ENGINE, SEARCH_ENGINE_LABELS, type SearchEngine } from "./browserUrl.ts";
 import { countedSpacesNow, countedSpacesText, setCountedSpaces } from "./clickupPrefs.ts";
 import { countedUnitsNow, setCountedUnits } from "./jiraUnits.ts";
+import { treeShapesNow, setTreeShapes } from "./useJiraTree.ts";
+import { parseShapes, shapesText, SHAPES } from "./jiraTree.ts";
 import { sessionReadReposNow, setSessionReadRepos } from "./sessionReads.ts";
 import { taskLanding, setTaskLanding, type TaskLanding } from "./taskLanding.ts";
 import { TASK_SOURCES, taskSourceShown, setTaskSourceShown, shownTaskSources, type TaskSourceId } from "./taskSources.ts";
+import { benchState, setBenchFabMode, FAB_MODES, type FabMode } from "./benchStore.ts";
 import { bindings, rebind, DEFAULTS as DEFAULT_BINDINGS, LABELS as KEY_LABELS, type ActionId } from "./keybindings.ts";
 import {
   THEMES, applyTheme, applyThemeMode, chooseTheme, themeMode, desktopPaletteName, type ThemeMode,
@@ -377,9 +381,13 @@ const terminalMore: SettingDef[] = [
     read: () => focusFollowsMouse(), validate: bool, write: (v) => setFocusFollowsMouse(v as boolean),
   }),
   defineSetting({
-    id: "terminal.paneBar", page: "terminal", section: MOUSE, label: "Bar on a pane", level: 2, default: true,
-    // The pref module stores "hover" or "off"; the row is a switch, so the def is one too.
-    read: () => paneActionsMode() !== "off", validate: bool, write: (v) => setPaneActionsMode(v ? "hover" : "off"),
+    id: "terminal.paneBar", page: "terminal", section: MOUSE, label: "Pane bar", level: 2, default: "summary",
+    // The default is "summary" for a machine with no history; a machine that already had state reads "edge" (see paneActionsPref).
+    read: () => paneActionsMode(), validate: oneOf(PANE_BAR_MODES), write: (v) => setPaneActionsMode(v as PaneBarMode),
+  }),
+  defineSetting({
+    id: "terminal.paneBarMarker", page: "terminal", section: MOUSE, label: "Edge line marker", level: 2, default: "line",
+    read: () => paneMarker(), validate: oneOf(["line", "arrow"] as const), write: (v) => setPaneMarker(v as PaneMarker),
   }),
   defineSetting({
     id: "terminal.copyOnSelect", page: "terminal", section: MOUSE, label: "Copy on select", level: 2, default: true,
@@ -388,6 +396,10 @@ const terminalMore: SettingDef[] = [
   defineSetting({
     id: "terminal.noteEditor", page: "terminal", section: "Bench note", label: "Note editor", level: 2, default: "builtin",
     read: () => currentNoteEditor(), validate: oneOf(NOTE_EDITORS.map((e) => e.v) as NoteEditor[]), write: (v) => setNoteEditor(v as NoteEditor),
+  }),
+  defineSetting({
+    id: "terminal.benchButton", page: "terminal", section: "Bench note", label: "Floating button", level: 2, default: "always",
+    read: () => benchState().fabMode, validate: oneOf(FAB_MODES), write: (v) => setBenchFabMode(v as FabMode),
   }),
   defineSetting({
     id: "terminal.tabGroups", page: "terminal", section: TABS, label: "Group tabs by project", level: 2, default: true,
@@ -506,6 +518,12 @@ const projectKeys = accepting((raw: unknown): string | null => {
   return [...new Set(keys)].join(",");
 }, "comma-separated project keys (capitals, digits, underscore; up to 200), or \"\" for none");
 
+/** `INF:epics,ORB:flat`, "" for every space as it was: one pair is a project key and how its tree is laid out. */
+const treeShapes = accepting((raw: unknown): string | null => {
+  const m = typeof raw === "string" ? parseShapes(raw) : null;
+  return m ? shapesText(m) : null;
+}, `comma-separated KEY:shape pairs, shape one of ${SHAPES.map((x) => x.id).join(", ")} (e.g. INF:epics,ORB:flat), or "" for every space as it was`);
+
 const jira: SettingDef[] = [
   defineSetting({
     id: "jira.statusUnits.counted", page: "jira", section: "", label: "Projects that count for statuses", level: 2, default: "",
@@ -513,6 +531,13 @@ const jira: SettingDef[] = [
     // The local settings file only; the pick is re-answered from what the server holds, and Jira is asked for nothing.
     write: (v) => { void setCountedUnits(splitIds(v)); },
     display: (v) => (splitIds(v).join(", ") || "where your cards live"),
+  }),
+  defineSetting({
+    id: "jira.tree.shapes", page: "jira", section: "", label: "How each space's tree is laid out", level: 2, default: "",
+    read: () => treeShapesNow(), validate: treeShapes,
+    // This window's sidebar only; Jira is asked for nothing.
+    write: (v) => { setTreeShapes(parseShapes(v as string) ?? {}); },
+    display: (v) => (v ? String(v).replace(/,/g, ", ") : "components, then epics, in every space"),
   }),
 ];
 
@@ -606,7 +631,7 @@ export const MIGRATED: Readonly<Record<string, "all" | readonly string[]>> = {
  *  the two lists, so adding a page forces a decision rather than a silent gap. */
 export const NOT_YET_MIGRATED = [
   "hooks", "lantern", "understudy", "budgets", "recipes",
-  "saved-replies", "connections", "engines", "orchestration", "remote", "plugins", "tmux", "privacy", "log", "onboarding",
+  "saved-replies", "connections", "engines", "orchestration", "git", "remote", "plugins", "tmux", "privacy", "log", "onboarding",
 ] as const;
 
 /**

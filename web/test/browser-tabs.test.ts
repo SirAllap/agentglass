@@ -396,6 +396,6 @@ describe("the popup is wired from the page to the panel", () => {
     expect(read("../../electron/preload.js")).toContain("fn(String(url), typeof opener === \"number\" ? opener : undefined)");
     const panel = read("../src/components/BrowserPanel.tsx");
     expect(panel).toContain("popupHome(tabsRef.current, idOf, opener, activeId)");
-    expect(panel).toContain("open(url, home.from, home.profile, undefined, (id) => notePopup(opener, id, url), home.partition)");
+    expect(panel).toContain("open(url, home.from, home.profile, undefined, (id) => { if (opener !== undefined) openedBy.set(id, opener); else openedBy.delete(id); notePopup(opener, id, url); }, home.partition)");
   });
 });

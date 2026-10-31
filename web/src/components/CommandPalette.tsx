@@ -6,7 +6,8 @@ import { IS_DESKTOP } from "../lib/desktop.ts";
 import { useModalDialog } from "../lib/focusTrap.ts";
 import { api } from "../lib/api.ts";
 import { openSettings } from "../lib/openSettings.ts";
-import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
+import { openFlightPlan } from "../lib/flightPlanNav.ts";
+import { INPUT, INPUT_STYLE, EDGE, ListRow } from "./workspace/Chrome.tsx";
 
 interface Cmd {
   id: string;
@@ -24,7 +25,6 @@ export function CommandPalette({
   onFilter,
   onWindow,
   onTheme,
-  onStats,
   onHelp,
   onSkills,
   onChanges,
@@ -32,7 +32,6 @@ export function CommandPalette({
   onPr,
   onDocker,
   onTerminal,
-  onSearch,
   onClear,
   onZoom,
 }: {
@@ -43,7 +42,6 @@ export function CommandPalette({
   onFilter: (f: { app?: string; type?: string }) => void;
   onWindow: (ms: number) => void;
   onTheme: (id: string) => void;
-  onStats: () => void;
   onHelp: () => void;
   onSkills: () => void;
   onChanges: () => void;
@@ -51,7 +49,6 @@ export function CommandPalette({
   onPr: () => void;
   onDocker: () => void;
   onTerminal: () => void;
-  onSearch: () => void;
   onClear: () => void;
   onZoom: (dir: 1 | -1 | 0) => void;
 }) {
@@ -61,18 +58,20 @@ export function CommandPalette({
 
   const cmds = useMemo<Cmd[]>(() => {
     const list: Cmd[] = [];
-    list.push({ id: "search", group: "View", label: "Search all history — prompts, commands, outputs", run: () => onSearch() });
     list.push({ id: "skills", group: "View", label: "Browse skills — every available skill & command", run: () => onSkills() });
     list.push({ id: "changes", group: "View", label: "File changes — every diff the fleet made", run: () => onChanges() });
     list.push({ id: "git", group: "View", label: "Source control — stage, commit, push/pull the working tree", run: () => onGit() });
     list.push({ id: "pr", group: "View", label: "Pull requests — review PRs without leaving for the browser", run: () => onPr() });
     list.push({ id: "docker", group: "View", label: "Docker — containers, logs, stats & actions", run: () => onDocker() });
     list.push({ id: "terminal", group: "View", label: "Terminal — a real shell in any repo/worktree", run: () => onTerminal() });
-    list.push({ id: "stats", group: "View", label: "Show statistics — skills, tools, apps", run: () => onStats() });
     // Settings used to carry a page of links to these; the palette is where they live now.
     list.push({ id: "help", group: "View", label: "Legend & shortcuts — what the colours mean, every key binding", run: () => onHelp() });
     // Activity has no place in the settings nav; this and a row on Data & privacy open it.
     list.push({ id: "activity-log", group: "View", label: "Activity log — what the app itself has been doing", run: () => openSettings("log") });
+    // Flight plan has no rail icon: the palette is a permanent way in, beside the chip, the Agents link and Settings.
+    list.push({ id: "flight-plan", group: "View", label: "Open Flight plan — a fresh reviewer reads every plan before Launch", run: () => openFlightPlan() });
+    list.push({ id: "flight-plan-new", group: "Action", label: "New flight plan — type a request, pick project and size", run: () => openFlightPlan({ compose: {} }) });
+    list.push({ id: "flight-plan-settings", group: "Settings", label: "Flight plan settings — moments, model, cost cap", run: () => openFlightPlan({ tab: "settings" }) });
     list.push({ id: "clear", group: "Filter", label: "Clear all filters", run: () => onClear() });
     // Discoverability more than convenience — the keys are faster once you know
     // them, but nothing on screen would ever have told you they exist.
@@ -92,7 +91,7 @@ export function CommandPalette({
     // retention window — see /export?kind=daily.
     list.push({ id: "daily-csv", group: "Export", label: "Download daily totals (CSV)", run: () => window.open(api.exportUrl("csv", "daily")) });
     return list;
-  }, [apps, types, onFilter, onWindow, onTheme, onStats, onHelp, onSkills, onChanges, onGit, onPr, onDocker, onTerminal, onSearch, onClear, onZoom]);
+  }, [apps, types, onFilter, onWindow, onTheme, onHelp, onSkills, onChanges, onGit, onPr, onDocker, onTerminal, onClear, onZoom]);
 
   const filtered = useMemo(
     () => (q ? cmds.filter((c) => (c.group + " " + c.label).toLowerCase().includes(q.toLowerCase())) : cmds),
@@ -146,16 +145,11 @@ export function CommandPalette({
               />
               <div className="max-h-[52vh] overflow-auto py-1">
                 {filtered.map((c, i) => (
-                  <button
-                    key={c.id}
-                    onMouseEnter={() => setSel(i)}
-                    onClick={() => act(c)}
-                    className="w-full flex items-center justify-between px-4 py-2 text-left text-[12px]"
-                    style={{ background: i === sel ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent" }}
-                  >
-                    <span style={{ color: "var(--text2)" }}>{c.label}</span>
-                    <span className="text-[10px] t-dim2">{c.group}</span>
-                  </button>
+                  <ListRow key={c.id} hot={i === sel} style={{ minHeight: 34 }}
+                    trailing={<span className="text-[10px] t-dim2">{c.group}</span>}
+                    onMouseEnter={() => setSel(i)} onClick={() => act(c)}>
+                    {c.label}
+                  </ListRow>
                 ))}
                 {filtered.length === 0 && <div className="px-4 py-6 text-center t-dim2 text-[12px]">No commands</div>}
               </div>

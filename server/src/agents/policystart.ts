@@ -30,6 +30,7 @@ import { chainFor, envelopeWithin, resolve, type RuleFacts } from "../../../shar
 import type { EngineReadiness } from "../../../shared/types.ts";
 import * as AgentOps from "../agentops.ts";
 import { headlessRefusal, headlessTurn, prepareRun, runFiles, turnResult, wrapped } from "./headless.ts";
+import { guardTurn, stopServe, type Serve } from "./opencodeserve.ts";
 import { firstTurnFailure, type FirstTurnFailure } from "./failures.ts";
 import { arm } from "./ceilings.ts";
 import { toldRoots, watchChair } from "./noplan.ts";
@@ -89,6 +90,19 @@ export function startThroughPolicy(p: Parameters<typeof startNow>[0]): Promise<A
   return inTurn(p.seatRoot, p.name, () => startNow(p));
 }
 
+/** `startAgent` for a turn that may carry a private OpenCode server: the lock was checked there, and
+ *  the server goes with the start if the start does not happen. */
+async function startGuarded(a: Parameters<typeof AgentOps.startAgent>[0], serve: Serve | null): ReturnType<typeof AgentOps.startAgent> {
+  let started = false;
+  try {
+    const r = await AgentOps.startAgent(serve ? { ...a, lockVerified: true } : a);
+    started = r.ok || r.error === "died"; // a worker that died at launch ran its wrapper, which stops the server too
+    return r;
+  } finally {
+    if (!started) stopServe(serve);
+  }
+}
+
 async function startNow(p: {
   root: string; /** Whose policy: the seat's project, or the one the directory belongs to. */ policyRoot: string;
   name: string; cwd: string; prompt: string; body: Record<string, unknown>;
@@ -133,12 +147,14 @@ async function startNow(p: {
   if (had?.seatRoot && p.seatRoot && had.seatRoot !== p.seatRoot) {
     return refuse(`${p.name} belongs to the seat of ${basename(had.seatRoot)}, not to yours (${basename(p.seatRoot)}). Ask that seat, or the person.`, 403);
   }
+  const g = await guardTurn(plan.choice.engine, bin, p.cwd, turn);
+  if (!g.ok) return refuse(g.error);
   const files = prepareRun(p.name, p.prompt, turn.stdin);
-  const r = await AgentOps.startAgent({
-    root: p.root, name: p.name, cwd: p.cwd, kind: plan.choice.engine, exactArgv: wrapped(files, turn.argv),
-    env: turn.env, keep: true, lockedRole: true, yoloAllowed: false,
+  const r = await startGuarded({
+    root: p.root, name: p.name, cwd: p.cwd, kind: plan.choice.engine, exactArgv: wrapped(files, g.turn.argv),
+    env: g.turn.env, keep: true, lockedRole: true, yoloAllowed: false,
     owner: { seatRoot: p.seatRoot, model: plan.choice.model, startedBy: { ...plan.startedBy, turnMinutes: view.policy.limits.turnMinutes }, resumeId: turn.sessionId ?? null },
-  });
+  }, g.serve);
   if (!r.ok) {
     if (r.error === "exists") return { status: 409, body: { ok: false, error: "an agent by that name is still running", result: { agent: r.agent } } };
     if (r.error === "lock-loosened") return refuse(`this directory's OpenCode config loosens the worker's lock, so it was not started: ${r.detail}`);
@@ -217,12 +233,14 @@ async function resumeTurn(asked: AgentOps.NamedAgent, text: string): Promise<Ans
   if (!turn.ok) return refuse(turn.error);
   // The finished turn's tab is still open under this name; it goes before the next opens.
   if (await AgentOps.keptTabOf(a)) await AgentOps.stopAgent(a, Date.now(), true);
+  const g = await guardTurn(by.engine, bin, cwd, turn);
+  if (!g.ok) return refuse(g.error);
   const files = prepareRun(a.name, text, turn.stdin);
-  const r = await AgentOps.startAgent({
-    root: a.seatRoot ?? cwd, name: a.name, cwd, kind: by.engine, exactArgv: wrapped(files, turn.argv),
-    env: turn.env, keep: true, lockedRole: true, yoloAllowed: false,
+  const r = await startGuarded({
+    root: a.seatRoot ?? cwd, name: a.name, cwd, kind: by.engine, exactArgv: wrapped(files, g.turn.argv),
+    env: g.turn.env, keep: true, lockedRole: true, yoloAllowed: false,
     owner: { seatRoot: a.seatRoot ?? null, model: by.model, startedBy: nextTurn(by, view.policy.limits.turnMinutes), resumeId: resume },
-  });
+  }, g.serve);
   if (!r.ok) return refuse(`the next turn could not start: ${r.error}`);
   armWorker(AgentOps.agentNamed(a.name) ?? a, view.policy.limits.turnMinutes);
   return { status: 200, body: { ok: true, result: { name: a.name, outcome: "sent", resumed: resume, ...(turn.partly ? { partly: turn.partly } : {}) } } };
@@ -406,12 +424,14 @@ async function switchEngine(a: AgentOps.NamedAgent, by: StartedBy, why: FirstTur
     retries: (by.retries ?? 0) + 1, from: by.engine, turnMinutes: view.policy.limits.turnMinutes,
     because: [...by.because, `${engineTitle(by.engine)} ${WHY[why]}, so the next engine in the chain took over`],
   };
+  const g = await guardTurn(next.choice.engine, bin, cwd, turn);
+  if (!g.ok) return g.error;
   const files = prepareRun(a.name, prompt, turn.stdin);
-  const r = await AgentOps.startAgent({
-    root: a.seatRoot ?? cwd, name: a.name, cwd, kind: next.choice.engine, exactArgv: wrapped(files, turn.argv),
-    env: turn.env, keep: true, lockedRole: true, yoloAllowed: false,
+  const r = await startGuarded({
+    root: a.seatRoot ?? cwd, name: a.name, cwd, kind: next.choice.engine, exactArgv: wrapped(files, g.turn.argv),
+    env: g.turn.env, keep: true, lockedRole: true, yoloAllowed: false,
     owner: { seatRoot: a.seatRoot ?? null, model, startedBy: stamp, resumeId: turn.sessionId ?? null },
-  });
+  }, g.serve);
   /* An engine that fails at launch is `died` here: its row is written and
      ended all the same, and its wrapper has left the status, so it is armed
      like any other and its own failure is read by the same path (a second

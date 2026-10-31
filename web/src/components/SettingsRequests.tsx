@@ -11,9 +11,11 @@
  * goes when the server says so.
  */
 import { useState, useSyncExternalStore } from "react";
-import { settingsRequests, answerSettingsRequest } from "../lib/settingsRequests.ts";
+import { settingsRequests, settingsRefusals, answerSettingsRequest, type SettingRefusal } from "../lib/settingsRequests.ts";
 import { AGENT_BTN, AGENT_CARD } from "./AgentOffers.tsx";
 import { HIT } from "../lib/iconSize.ts";
+import { cleanupCardView } from "../lib/cleanupCard.ts";
+import { CleanupAskCard } from "./CleanupAskCard.tsx";
 import type { SettingRequestView } from "../../../shared/settingClass.ts";
 
 const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -23,10 +25,12 @@ function RequestCard({ r }: { r: SettingRequestView }) {
   const [error, setError] = useState<string | null>(null);
   const answer = async (approve: boolean) => {
     setBusy(true);
-    setError(await answerSettingsRequest(r.id, approve));
+    setError(await answerSettingsRequest(r.id, approve, { who: r.who, title: r.diff[0] ?? r.setting }));
     setBusy(false);
   };
   const [title, ...lines] = r.diff;
+  const ask = cleanupCardView(r, Date.now());
+  if (ask) return <CleanupAskCard corner r={r} view={ask} busy={busy} error={error} onAnswer={(a) => void answer(a)} />;
   return (
     <div className="rounded-xl text-left" data-settings-request={r.setting} style={{ ...AGENT_CARD, padding: "12px 14px" }} role="alertdialog" aria-label={`${r.who} asks to change ${r.label}`}>
       <div className="text-[13.5px] font-semibold" style={{ color: "var(--text)", overflowWrap: "anywhere" }}>{r.who} asks to change a setting</div>
@@ -42,6 +46,22 @@ function RequestCard({ r }: { r: SettingRequestView }) {
   );
 }
 
+export function useSettingsRefusals(): readonly SettingRefusal[] {
+  return useSyncExternalStore(settingsRefusals.subscribe, settingsRefusals.list, () => []);
+}
+
+/** What the server said when it refused an answer whose card is already gone. Stays until dismissed. */
+function RefusalCard({ x }: { x: SettingRefusal }) {
+  return (
+    <div className="rounded-xl text-left" data-settings-refusal={x.id} role="alert" style={{ ...AGENT_CARD, padding: "12px 14px" }}>
+      <div className="text-[13.5px] font-semibold" style={{ color: "var(--error-ink)" }}>{x.approve ? "Not applied" : "Not declined"}</div>
+      {x.title && <div className="text-[12px] mt-1" style={{ color: "var(--text2)", overflowWrap: "anywhere" }}>{x.who ? `${x.who}: ` : ""}{x.title}</div>}
+      <div className="text-[12px] mt-1" style={{ color: "var(--text)", overflowWrap: "anywhere" }}>{x.error}</div>
+      <button onClick={() => settingsRefusals.dismiss(x.id)} className="agx-btn text-[12px] mt-2 px-2.5 rounded-lg" style={{ minHeight: HIT, color: "var(--text2)" }}>Dismiss</button>
+    </div>
+  );
+}
+
 export function useSettingsRequests(): readonly SettingRequestView[] {
   return useSyncExternalStore(settingsRequests.subscribe, settingsRequests.list, () => []);
 }
@@ -50,8 +70,10 @@ export function useSettingsRequests(): readonly SettingRequestView[] {
  *  Answering one brings the next up. */
 export function SettingsRequestsList({ requests, max }: { requests: readonly SettingRequestView[]; max: number }) {
   const more = requests.length - max;
+  const refused = useSettingsRefusals();
   return (
     <>
+      {refused.map((x) => <RefusalCard key={x.id} x={x} />)}
       {requests.slice(0, max).map((r) => <RequestCard key={r.id} r={r} />)}
       {more > 0 && <div className="text-[12px] rounded-xl" style={{ ...AGENT_CARD, padding: "8px 14px", color: "var(--text3)" }}>{more} more {more === 1 ? "request waits" : "requests wait"} behind these</div>}
     </>

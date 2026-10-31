@@ -1,5 +1,6 @@
 /*
- * Every test file gets the AGENTGLASS_* environment it started with, back.
+ * Every test file gets the AGENTGLASS_* environment (and TMUX_TMPDIR / TMUX) it
+ * started with, back.
  *
  * `bun test` runs every file in one process, so a file that assigns
  * `process.env.AGENTGLASS_ROOT` and never puts it back hands the next file a
@@ -19,7 +20,7 @@
  * Why not one root `afterAll` in a preload: measured on Bun 1.3.9, a hook
  * registered by a preload runs once for the whole run, not once per file.
  *
- * Its ceiling: only AGENTGLASS_* is restored. HOME, PATH and the XDG bases are
+ * Its ceiling: only AGENTGLASS_*, TMUX_TMPDIR and TMUX are restored. HOME, PATH and the XDG bases are
  * isolation.ts's; a global that is not an environment variable is the file's.
  */
 import { plugin } from "bun";

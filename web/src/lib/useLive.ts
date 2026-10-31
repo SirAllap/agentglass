@@ -3,15 +3,18 @@ import type { WatchEvent, WsFrame, WsClientHello, OpenToolCall } from "../../../
 import { WS_URL, IS_DEMO, hasToken, probeAuth, whenServerUp } from "./api.ts";
 import * as demo from "./demo.ts";
 import { gitChanged } from "./gitBus.ts";
+import { notifyFlightPlanChanged } from "./flightPlanWaiting.ts";
 import { volumesChanged } from "./finderVolumes.ts";
 import { desktopPaletteMoved } from "./themes.ts";
 import { emitControl } from "./controlBus.ts";
 import { settingsRequestsChanged } from "./settingsRequests.ts";
+import { housekeepingChanged } from "./housekeepingStore.ts";
 import { clientId, emitBrowserAsk } from "./browserBus.ts";
 import { emitUnderstudy } from "./understudyBus.ts";
 import { emitPlugin } from "./pluginBus.ts";
 import { showAsked, closedElsewhere, restoreAsked } from "./askedBanners.ts";
 import { recordNote, fireDesktopAlert, firePopupOnly, fireWatchAlert, deliverPendingWatchFires } from "./sysNotify.ts";
+import { publishPolarisChanged } from "./polarisLive.ts";
 import { setPrWatchState, publishChecksRead, hasActiveWatch, reloadPrWatches } from "./prWatchStore.ts";
 import { pollGatesNow } from "./gateStore.ts";
 import { ciShouldNotify } from "./ciNotifyPref.ts";
@@ -171,6 +174,7 @@ export function useLive(paused = false): LiveData {
       setConn("open");
       // A request asked for while this socket was down announced itself to nobody.
       void settingsRequestsChanged();
+      void housekeepingChanged();
       // Name this window, so a browser ask is addressed to it and not broadcast.
       try { ws.send(JSON.stringify({ type: "hello", clientId: clientId(), browser: true } satisfies WsClientHello)); } catch { /* closing */ }
       // Marks that moved elsewhere while this socket was down were broadcast to
@@ -235,6 +239,11 @@ export function useLive(paused = false): LiveData {
       if (frame.type === "settings-requests") {
         // An agent asked for a setting, or a request was answered or expired: only a pointer.
         void settingsRequestsChanged();
+        return;
+      }
+      if (frame.type === "cleanup-auto") {
+        // The automatic cleanup moved a step: only a pointer, the rows are re-read.
+        void housekeepingChanged();
         return;
       }
       if (frame.type === "control") {
@@ -409,6 +418,9 @@ export function useLive(paused = false): LiveData {
         return;
       }
       if (frame.type === "gate") { void pollGatesNow(); return; }
+      if (frame.type === "polaris") { publishPolarisChanged(); return; }
+      // A plan, a hold, a question or a Preflight run changed. No payload.
+      if (frame.type === "flight-plan") { notifyFlightPlanChanged(); return; }
       if (frame.type === "initial") {
         // A socket that just (re)opened may have missed a change while it was down.
         void pollGatesNow();

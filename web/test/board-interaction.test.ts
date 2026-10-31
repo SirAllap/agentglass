@@ -94,8 +94,9 @@ describe("the board's wiring", () => {
     expect(heading).toContain("onClick={canFold ? () => toggleFold(l.id, all.length) : undefined}");
     expect(heading).toContain("agx-lane-bar");
   });
-  test("the info icon, the sort control and the arrow do not fold twice", () => {
-    expect(heading).toMatch(/role="note" onClick=\{\(e\) => e\.stopPropagation\(\)\}/);
+  test("the lane's sentence is an info tooltip in the bar, never a wrapped line under it, so every lane's first card starts at one height; the sort control and the fold button do not fold twice", () => {
+    expect(heading).toContain("data-tip={tipAttr(l.why)}");
+    expect(bare).not.toContain("agx-pl-help");
     // The sort icon is its own component, and its button stops the click before the bar sees it.
     expect(bare).toMatch(/function SortButton[\s\S]*?onClick=\{\(e\) => \{ e\.stopPropagation\(\); setOpen/);
     expect(heading).toContain("<SortButton");

@@ -7,7 +7,7 @@
  * and this sits on a settings-dark surface among chips. See `filters.ts` for
  * what a rule is and why the join is one switch for the whole set.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Portal } from "../Portal.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { useCloseWithOwner } from "../../lib/layerOwner.ts";
@@ -16,7 +16,7 @@ import type { ProviderTask } from "../../../../shared/providers.ts";
 
 import { StatusPill } from "../StatusPill.tsx";
 import { DoneIcon } from "../../lib/glyphIcons.tsx";
-import { INPUT, INPUT_STYLE, EDGE } from "../workspace/Chrome.tsx";
+import { Button, IconButton, INPUT, INPUT_STYLE, EDGE, ListRow, tintEdge } from "../workspace/Chrome.tsx";
 
 /** The panel's narrowest, shared by the box and by the clamp that keeps it on
  *  screen — two places that must not drift apart. */
@@ -76,15 +76,14 @@ function Pick({ label, muted, children, width, lead }: {
   const ref = useAway<HTMLSpanElement>(open, () => setOpen(false));
   return (
     <span ref={ref} className="relative inline-flex">
-      <button onClick={() => setOpen((v) => !v)}
-        className="text-[11.5px] px-2 py-1 rounded-lg flex items-center gap-1.5 whitespace-nowrap"
+      <Button onClick={() => setOpen((v) => !v)} aria-expanded={open}
         style={{
+          justifyContent: "flex-start",
           /* Open reads as open: the border takes the accent and the caret
              turns over. Without it, three controls in a row give no sign of
              which one the menu below belongs to. */
-          border: open ? "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" : EDGE,
-          color: muted ? "var(--text4)" : "var(--text)",
-          background: "var(--bg)", minWidth: width,
+          ...(open ? { border: tintEdge("var(--primary)", 45) } : null),
+          color: muted ? "var(--text4)" : "var(--text)", minWidth: width,
         }}>
         {lead}
         <span className="truncate max-w-[200px]">{label}</span>
@@ -95,9 +94,9 @@ function Pick({ label, muted, children, width, lead }: {
           className="shrink-0 ml-auto" style={{ color: "var(--text4)", transform: open ? "rotate(180deg)" : undefined }}>
           <path d="m6 9 6 6 6-6" />
         </svg>
-      </button>
+      </Button>
       {open && (
-        <span className="absolute z-10 top-full left-0 mt-1 rounded-lg overflow-hidden flex flex-col"
+        <span className="absolute z-10 top-full left-0 mt-1 p-1 rounded-lg overflow-hidden flex flex-col"
           style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 18px 40px -22px var(--shadow)", minWidth: 220 }}>
           {children(() => setOpen(false))}
         </span>
@@ -130,20 +129,26 @@ function Menu({ items, onPick, selected, current }: {
         {shown.map((i) => {
           const on = selected ? selected.includes(i.value) : i.value === current;
           return (
-            <button key={i.value} onClick={() => onPick(i.value)}
-              className="text-[11.5px] px-2.5 py-1.5 text-left flex items-center gap-2 agx-hover"
-              style={{ color: on ? "var(--text)" : "var(--text2)" }}>
-              {/* A BOX when several can be on, a TICK when only one can. The
+            <ListRow key={i.value} onClick={() => onPick(i.value)} current={!selected && on}
+              style={{ color: on ? "var(--text)" : "var(--text2)" }}
+              /* A BOX when several can be on, a TICK when only one can. The
                   shape is the affordance: a checkbox next to a single-choice
-                  list invites you to try to pick two. */}
-              {selected && (
+                  list invites you to try to pick two. */
+              leading={selected ? (
                 <span className="shrink-0 grid place-items-center rounded" style={{
                   width: 13, height: 13,
                   border: on ? "1px solid var(--primary)" : edge(45),
                   background: on ? "var(--primary)" : "transparent",
                   color: "var(--on-primary)", fontSize: 9, lineHeight: "13px",
                 }}>{on ? <DoneIcon size={ICON.xs} /> : null}</span>
-              )}
+              ) : undefined}
+              trailing={!selected && on ? (
+                <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}
+                  strokeLinecap="round" strokeLinejoin="round" aria-hidden
+                  className="shrink-0" style={{ color: "var(--primary-ink)" }}>
+                  <path d="M20 6 9 17l-5-5" />
+                </svg>
+              ) : undefined}>
               {/* AS THE CHIP IT STANDS FOR, not a dot beside a word.
                   A tracker status is a coloured pill everywhere else in this
                   app — on the card, in the picker that changes it — and a list
@@ -153,14 +158,7 @@ function Menu({ items, onPick, selected, current }: {
               {i.color
                 ? <StatusPill status={i.label} color={i.color} dim={!on} />
                 : <span className="truncate">{i.label}</span>}
-              {!selected && on && (
-                <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}
-                  strokeLinecap="round" strokeLinejoin="round" aria-hidden
-                  className="ml-auto shrink-0" style={{ color: "var(--primary-ink)" }}>
-                  <path d="M20 6 9 17l-5-5" />
-                </svg>
-              )}
-            </button>
+            </ListRow>
           );
         })}
         {!shown.length && <span className="text-[11.5px] px-2.5 py-2" style={{ color: "var(--text4)" }}>Nothing matches.</span>}
@@ -237,14 +235,14 @@ function RuleRow({ fields, rule, onChange, onDrop }: {
           panel, and ✕ in a panel that also has a way out reads as the way out.
           Its own SVG rather than a glyph — a bare character has no accessible
           name and a hit area the size of itself. */}
-      <button onClick={onDrop} title="Remove this row" aria-label="Remove this row"
-        className="shrink-0 ml-auto grid place-items-center rounded agx-hover"
-        style={{ width: 22, height: 22, color: "var(--text4)" }}>
-        <svg width={ICON.sm} height={ICON.sm} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
-          strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-          <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" />
-        </svg>
-      </button>
+      <span className="shrink-0 ml-auto">
+        <IconButton bare onClick={onDrop} title="Remove this row">
+          <svg width={ICON.sm} height={ICON.sm} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
+            strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" />
+          </svg>
+        </IconButton>
+      </span>
     </span>
   );
 }
@@ -258,8 +256,10 @@ function RuleRow({ fields, rule, onChange, onDrop }: {
  * and the honest way to give it one is to hand it the fields rather than to
  * write a second one that drifts from this by a pixel a month.
  */
-export function FilterBuilder({ fields, value, onChange, openSignal, bare }: {
+export function FilterBuilder({ fields, value, onChange, openSignal, bare, trigger }: {
   fields: FieldSpec[]; value: FilterSet; onChange: (f: FilterSet) => void;
+  /** A host that draws its own trigger (the Jira list's 28 high control) takes the anchor and the toggle; the panel still hangs under it. */
+  trigger?: (t: { ref: RefObject<HTMLButtonElement>; toggle: () => void; open: boolean; count: number }) => ReactNode;
   /** No button: a host that opens the panel from a menu of its own (`openSignal`)
    *  has no use for a second trigger. The panel hangs off an empty anchor in its place. */
   bare?: boolean;
@@ -307,17 +307,12 @@ export function FilterBuilder({ fields, value, onChange, openSignal, bare }: {
 
   return (
     <span ref={ref} className="relative inline-flex shrink-0">
-      {bare ? <span ref={anchor} aria-hidden /> : <button ref={btn} onClick={toggle}
+      {bare ? <span ref={anchor} aria-hidden /> : trigger ? trigger({ ref: btn, toggle, open, count: n }) : <Button buttonRef={btn} onClick={toggle}
         title="Build a filter — field, is or is not, values"
-        className="text-[11.5px] px-2 py-1 rounded-lg flex items-center gap-1.5 whitespace-nowrap"
-        style={{
-          border: n ? "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" : EDGE,
-          color: n ? "var(--text)" : "var(--text3)",
-          background: n ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent",
-        }}>
+        style={n ? { border: tintEdge("var(--primary)", 45), color: "var(--text)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" } : { color: "var(--text3)", background: "transparent" }}>
         <span>Filters</span>
         {n > 0 && <span className="tabular-nums text-[10px]" style={{ color: "var(--primary-ink)" }}>{n}</span>}
-      </button>}
+      </Button>}
 
       {open && at && (
         <Portal z={10040}>
@@ -364,15 +359,9 @@ export function FilterBuilder({ fields, value, onChange, openSignal, bare }: {
               ))}
               </span>
               <span className="flex items-center gap-2 pt-1">
-                <button onClick={() => set([...value.rules, newRule()])}
-                  className="text-[11.5px] px-2 py-1 rounded-lg"
-                  style={{ border: EDGE, color: "var(--text2)" }}>+ Add filter</button>
+                <Button onClick={() => set([...value.rules, newRule()])}>+ Add filter</Button>
                 {value.rules.length > 0 && (
-                  <button onClick={() => onChange(EMPTY)}
-                    className="ml-auto text-[11.5px] px-2 py-1 rounded-lg"
-                    style={{ border: "1px solid color-mix(in srgb, var(--error) 30%, transparent)", color: "var(--error-ink)" }}>
-                    Clear all
-                  </button>
+                  <Button tone="danger" className="ml-auto" onClick={() => onChange(EMPTY)}>Clear all</Button>
                 )}
               </span>
             </>

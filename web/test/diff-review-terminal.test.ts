@@ -25,7 +25,7 @@ const between = (from: string, to: string): string => {
   return src.slice(a, b);
 };
 
-const deliver = between("const deliver = useCallback((stale: ReadonlySet<string>) => {", "const sendReview = useCallback");
+const deliver = between("const deliver = useCallback(async (stale: ReadonlySet<string>) => {", "const sendReview = useCallback");
 
 describe("deliver() sends the review to a terminal, not a chat", () => {
   test("calls requestTermIssue with the checkout's own root", () => {

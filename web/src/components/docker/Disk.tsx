@@ -1,170 +1,195 @@
 /*
  * Where the disk went, and what is safe to take back.
  *
- * Docker's own answer to this is `docker system df`, which is four numbers and
- * no advice. The advice is the whole point: on a machine like this one the
- * piles are wildly different in what they cost to lose, and a panel that offers
- * them as three identical buttons is worse than no panel — it makes a reclaim
- * that costs one slower build look exactly like one that hands every worktree a
- * cold install.
+ * Docker's own answer is `docker system df`, which is four numbers and no
+ * advice. The advice is the point: the piles differ wildly in what they cost to
+ * lose, and three identical buttons make a reclaim that costs one slower build
+ * look the same as one that hands every worktree a cold install.
  *
- * So every button here says what it takes and what that costs, and the
- * dangerous one is not a button at all: it is a sentence explaining why, with
- * the command, for somebody who has decided anyway.
+ * So every card says what it takes and what that costs, the confirm happens in
+ * the card (the button turns red: "Yes, free 3.0 GB"), and the dangerous one is
+ * not a button at all: "Volumes stay" is a sentence with the command, for
+ * somebody who has decided anyway. Every figure comes out of `diskMath`.
  */
-import { useCallback, useEffect, useState } from "react";
-import type { DockerDisk } from "../../../../shared/types.ts";
+import { useState } from "react";
+import type { DockerImage } from "../../../../shared/types.ts";
+import { humanSize } from "../../../../shared/dockerSize.ts";
 import { api } from "../../lib/api.ts";
-import { humanSize } from "../../lib/dockerVolumeView.ts";
+import { BUILD_CACHE_BUDGET, diskMath } from "../../lib/dockerDisk.ts";
+import { stripeWidths, type ReclaimKey } from "../../lib/dockerResourceUi.ts";
+import { sinceLabel } from "../../lib/dockerVolumeView.ts";
+import { READ_ONLY_REASON } from "../../lib/dockerState.ts";
+import { BranchIcon, RefreshIcon, WarningIcon } from "../../lib/glyphIcons.tsx";
+import { ICON } from "../../lib/iconSize.ts";
+import type { DiskState } from "../../lib/useDiskData.ts";
+import { useEscapeClose } from "../../lib/useDismiss.ts";
+import { Button } from "../workspace/Chrome.tsx";
+import { BroomIcon, CylinderIcon, LayersIcon } from "./DockerIcons.tsx";
+import { Square } from "./Glyphs.tsx";
 
-const SLICES: { key: keyof Pick<DockerDisk, "images" | "containers" | "volumes" | "buildCache">; label: string; tint: string }[] = [
-  { key: "images", label: "images", tint: "var(--primary)" },
-  { key: "volumes", label: "volumes", tint: "var(--phone)" },
-  { key: "buildCache", label: "build cache", tint: "var(--warning)" },
-  { key: "containers", label: "containers", tint: "var(--text3)" },
-];
+const TINT: Record<string, string> = { images: "var(--info)", cache: "var(--warning)", volumes: "var(--merged)", containers: "var(--success)" };
+const LABEL: Record<string, string> = { images: "Images", cache: "Build cache", volumes: "Volumes", containers: "Containers" };
+const SEG_TINT = (k: string) => (k.startsWith("cache") ? TINT.cache! : k === "volumes" ? TINT.volumes! : k === "containers" ? TINT.containers! : TINT.images!);
+/** Reclaim card key to the stripe it shrinks. */
+const STRIPE: Record<ReclaimKey, string> = { cache: "cache-over", orph: "orphans", dang: "dangling" };
+const MINI_MAX = 14;
 
-export function Disk({ writeEnabled, ask, onDone }: {
-  writeEnabled: boolean;
-  ask: (o: { title: string; body?: string; confirmLabel?: string; danger?: boolean }) => Promise<boolean>;
-  onDone: (ok: boolean, msg: string) => void;
+const tone = (v: string) => ({ "--tone": v }) as React.CSSProperties;
+const tint = (v: string) => ({ "--tint": v }) as React.CSSProperties;
+
+/** Mounted only while a confirm is open, so Esc means "keep it" exactly then. */
+function Armed({ yes, onYes, onNo }: { yes: string; onYes: () => void; onNo: () => void }) {
+  useEscapeClose(onNo);
+  return (<>
+    <Button tint="var(--error)" solid autoFocus onClick={onYes}>{yes}</Button>
+    <Button tone="plain" onClick={onNo}>Keep</Button>
+  </>);
+}
+
+export function Disk({ state, images, writeEnabled, flash }: {
+  state: DiskState; images: DockerImage[]; writeEnabled: boolean; flash: (ok: boolean, msg: string) => void;
 }) {
-  const [d, setD] = useState<(DockerDisk & { error?: string }) | null>(null);
-  /* What is running, in words. A boolean was enough to disable the buttons and
-     not enough to tell anybody why: removing 25 images is 25 sequential
-     `docker image rm` calls and takes the better part of a minute, during which
-     the old figures are still on screen. Dimmed buttons and stale numbers read
-     exactly like a click that did nothing. */
-  const [busy, setBusy] = useState<string | null>(null);
+  const { d, error, measure } = state;
+  const [armed, setArmed] = useState<ReclaimKey | null>(null);
+  /* What is running. Removing 25 images is 25 sequential `docker image rm`
+     calls and can take the better part of a minute, during which the old
+     figures are still on screen: a dimmed button reads exactly like a click
+     that did nothing, so the card says what it is doing and the striped part
+     of the bar shrinks. */
+  const [busy, setBusy] = useState<ReclaimKey | null>(null);
+  const [showOrph, setShowOrph] = useState(false);
 
-  const load = useCallback(async (force = false) => {
-    setD(await api.dockerDisk(force).catch((e) => ({ error: String(e) } as DockerDisk & { error?: string })));
-  }, []);
+  if (!d && !error) {
+    return (
+      <div className="dk-dsk" aria-busy="true" aria-label="Measuring the disk">
+        <span className="dk-xe" style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12 }}>
+          <span className="dk-spin" style={{ display: "inline-flex" }}><RefreshIcon size={ICON.sm} /></span>Measuring… <small>this can take a few seconds on a big disk</small>
+        </span>
+        <i className="dk-sk" style={{ width: "100%", height: 60 }} /><i className="dk-sk" style={{ width: "100%", height: 22 }} />
+        <div className="dk-choices"><i className="dk-sk" style={{ height: 110 }} /><i className="dk-sk" style={{ height: 110 }} /><i className="dk-sk" style={{ height: 110 }} /></div>
+      </div>
+    );
+  }
+  if (!d) {
+    return (
+      <div className="dk-dsk" role="alert">
+        <div className="dk-hnote"><WarningIcon size={ICON.md} /><div><b>Could not read the disk figures.</b><br />docker system df: {error}</div></div>
+        <div><Button onClick={() => void measure(true)}><RefreshIcon size={ICON.sm} />Try again</Button></div>
+      </div>
+    );
+  }
 
-  // Once, on opening. `system df -v` makes the daemon walk every layer on the
-  // machine: it is a number you read, not one you watch.
-  useEffect(() => { void load(); }, [load]);
+  const m = diskMath(d, images);
+  const readOnly = !writeEnabled;
+  const widths = stripeWidths(m, busy);
+  const aria = m.legend.map((l) => `${LABEL[l.key]} ${humanSize(l.bytes)}${l.canGo ? `, of which ${humanSize(l.canGo)} can go` : ""}`).join(". ");
+  const [cache, orph, dang] = m.cards;
+  const gaugeMax = Math.max(d.buildCache, BUILD_CACHE_BUDGET);
 
-  const total = d && !d.error ? d.images + d.volumes + d.buildCache + d.containers : 0;
-  const orphanBytes = (d?.orphans ?? []).reduce((n, o) => n + (o.bytes ?? 0), 0);
-
-  /** The budget the cache is kept under. Measured: everything touched in the
-   *  last few days fits well inside it, and what does not fit is what has not
-   *  been used in months. */
-  const BUDGET = 60_000_000_000;
-
-  const capCache = async () => {
-    const over = d && !d.error ? Math.max(0, d.buildCache - BUDGET) : 0;
-    const ok = await ask({
-      title: `Keep the build cache under ${humanSize(BUDGET)}?`,
-      // The consequence, in the words of what it costs — not "are you sure".
-      body: `About ${humanSize(over)} goes, oldest-used first. Nothing breaks: the next build that would have reused one of those layers is slower, once. `
-        + "Everything you have built with recently stays, and no image, volume or container is touched.",
-      confirmLabel: "Keep it under",
-    });
-    if (!ok) return;
-    setBusy(`pruning the build cache down to ${humanSize(BUDGET)}…`);
-    const r = await api.dockerPruneCache(BUDGET);
-    setBusy(null);
-    onDone(r.ok, r.ok ? (r.output || "pruned") : (r.error || "docker refused"));
-    void load(true);
+  const run = async (key: ReclaimKey) => {
+    setArmed(null); setBusy(key);
+    try {
+      const r = key === "cache" ? await api.dockerPruneCache(BUILD_CACHE_BUDGET)
+        : await api.dockerRemoveImages(key === "orph" ? d.orphans.map((o) => o.tag) : m.danglingIds);
+      flash(r.ok, r.ok ? (r.output || (key === "cache" ? "Build cache trimmed" : "Images removed")) : (r.error || "Docker refused"));
+      // Held until the new figures are in, so the bar does not spring back to the old ones.
+      await measure(true);
+    } catch (e) { flash(false, String(e)); }
+    finally { setBusy(null); }
   };
 
-  const dropOrphans = async () => {
-    if (!d?.orphans.length) return;
-    const ok = await ask({
-      title: `Remove ${d.orphans.length} image${d.orphans.length === 1 ? "" : "s"} from worktrees that are gone?`,
-      body: `${d.orphans.map((o) => o.tag).slice(0, 6).join(", ")}${d.orphans.length > 6 ? `, and ${d.orphans.length - 6} more` : ""}. `
-        + `About ${humanSize(orphanBytes)}. Each was built for a checkout that no longer exists on this machine, and nothing is using them — `
-        + "rebuilding one means checking that branch out again.",
-      confirmLabel: "Remove them",
-      danger: true,
-    });
-    if (!ok) return;
-    setBusy(`removing ${d.orphans.length} image${d.orphans.length === 1 ? "" : "s"}, one at a time…`);
-    const r = await api.dockerRemoveImages(d.orphans.map((o) => o.tag));
-    setBusy(null);
-    onDone(r.ok, r.ok ? (r.output || "removed") : (r.error || "docker refused"));
-    void load(true);
+  const slot = (key: ReclaimKey, card: (typeof m.cards)[number], yes: string) => {
+    if (busy === key) return <><Button disabled pending>Working…</Button><span className="dk-xe">the numbers refresh when it is done</span></>;
+    if (card.none) return <Button tint="var(--success)" solid disabled>Nothing to free</Button>;
+    if (armed === key) return <Armed yes={yes} onYes={() => void run(key)} onNo={() => setArmed(null)} />;
+    return <Button tint="var(--success)" solid disabled={readOnly || !!busy} title={readOnly ? READ_ONLY_REASON : undefined} onClick={() => setArmed(key)}>{card.label}</Button>;
   };
-
-  if (!d) return <div className="flex-1 grid place-items-center t-dim2 text-[12px]"><span className="agx-spin" aria-hidden="true" /></div>;
-  if (d.error) return <div className="flex-1 grid place-items-center t-dim2 text-[12px] px-6 text-center">{d.error}</div>;
+  const plural = (n: number) => `${n} image${n === 1 ? "" : "s"}`;
+  const minis = (n: number) => n === 0 ? <span className="dk-xe">none</span> : (
+    <span className="dk-mini">
+      {Array.from({ length: Math.min(n, MINI_MAX) }, (_, i) => <Square key={i} kind="stop" small />)}
+      {n > MINI_MAX && <span className="dk-xe">+{n - MINI_MAX}</span>}
+    </span>
+  );
 
   return (
-    <div className="agx-scroll flex-1 min-h-0 overflow-auto p-4 flex flex-col gap-4">
-      <div>
-        <div className="flex items-baseline gap-2 mb-1.5">
-          <span className="text-[12px]" style={{ color: "var(--text)" }}>{humanSize(total)}</span>
-          <span className="text-[10px] t-dim2">on this machine</span>
-          {d.reclaimable > 0 && (
-            <span className="text-[10px] ml-auto" style={{ color: "var(--success-ink)" }}>{humanSize(d.reclaimable)} reclaimable</span>
-          )}
+    <div className="dk-dsk">
+      {error && <div className="dk-note" style={tint("var(--warning)")}><WarningIcon size={ICON.md} /><span>The last measure failed ({error}); these figures are from before.</span></div>}
+      <div className="dk-diskobj">
+        <div className="h">
+          <b>{humanSize(m.total)}</b>
+          <span>Docker uses on this machine · measured {sinceLabel(new Date(d.at).toISOString())}</span>
+          <span className="back" style={tint("var(--text3)")}>{m.back > 0 ? <><i className="dk-stp" />{m.backText}</> : m.backText}</span>
         </div>
-        <div className="h-2 rounded-full overflow-hidden flex" style={{ background: "var(--bg3)" }}>
-          {SLICES.map((s) => {
-            const w = total ? (d[s.key] / total) * 100 : 0;
-            return w > 0.2 ? <i key={s.key} title={`${s.label}: ${humanSize(d[s.key])}`} style={{ width: `${w}%`, background: s.tint }} /> : null;
-          })}
+        <div className="dk-stackbar" role="img" aria-label={aria}>
+          {widths.map((w) => (
+            <i key={w.key} data-go={w.stripe || undefined} style={{ ...tint(SEG_TINT(w.key)), width: `${w.pct}%` }} title={w.stripe ? `${humanSize(w.bytes)} can go` : undefined} />
+          ))}
         </div>
-        <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-[10px]" style={{ color: "var(--text3)" }}>
-          {SLICES.map((s) => (
-            <span key={s.key} className="flex items-center gap-1.5">
-              <i className="w-2 h-2 rounded-full" style={{ background: s.tint }} />
-              {s.label} <span className="tabular-nums" style={{ color: "var(--text2)" }}>{humanSize(d[s.key])}</span>
-            </span>
+        <div className="dk-legend">
+          {m.legend.map((l) => (
+            <div className="dk-lg" key={l.key}>
+              <i style={tint(TINT[l.key]!)} />
+              <div>{LABEL[l.key]}<small>{humanSize(l.bytes)}{l.canGo ? ` · ${humanSize(l.canGo)} can go` : l.note ? ` · ${l.note}` : ""}</small></div>
+            </div>
           ))}
         </div>
       </div>
 
-      <div className="flex flex-col gap-2">
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] uppercase tracking-wider t-dim2">Reclaim</span>
-          {busy && (
-            <span className="flex items-center gap-1.5 text-[10px]" style={{ color: "var(--primary-hover)" }}>
-              <span className="agx-spin" aria-hidden="true" />
-              {busy}
-              {/* Said out loud because docker gives no progress of its own and
-                  the figures above stay stale until it finishes. */}
-              <span className="t-dim2">the numbers below refresh when it is done</span>
-            </span>
-          )}
+      <div className="dk-choices">
+        <div className="dk-choice" data-busy={busy === "cache" || undefined}>
+          <span className="dk-tile" style={tone("var(--warning)")}><LayersIcon size={ICON.lg} /></span>
+          <div style={{ minWidth: 0 }}>
+            <h4>Keep the build cache under {humanSize(BUILD_CACHE_BUDGET)}</h4>
+            <p>{busy === "cache" ? `Pruning the build cache down to ${humanSize(BUILD_CACHE_BUDGET)}…`
+              : m.underBudget ? `${humanSize(d.buildCache)} in cache: already under the budget.`
+              : "Least recently used goes first. The next build is slower; nothing else changes."}</p>
+            <div className="now">NOW <span className="dk-gauge" data-ok={m.underBudget || undefined}><i style={{ width: `${(d.buildCache / gaugeMax) * 100}%` }} /><u style={{ left: `${(BUILD_CACHE_BUDGET / gaugeMax) * 100}%` }} /></span> {humanSize(d.buildCache)}{m.cacheOver ? <> · <b>frees {humanSize(m.cacheOver)}</b></> : null}</div>
+            <div className="go">{slot("cache", cache!, `Yes, free ${humanSize(m.cacheOver)}`)}</div>
+          </div>
         </div>
 
-        <button onClick={capCache} disabled={!writeEnabled || !!busy || d.buildCache <= BUDGET}
-          className="text-left px-3 py-2 rounded-lg disabled:opacity-40"
-          style={{ border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", background: "color-mix(in srgb, var(--primary) 7%, transparent)" }}>
-          <span className="text-[11.5px]" style={{ color: "var(--primary-hover)" }}>
-            Keep the build cache under {humanSize(BUDGET)}
-          </span>
-          <span className="block text-[10px] t-dim2">
-            {d.buildCache > BUDGET
-              ? `${humanSize(d.buildCache - BUDGET)} goes, least recently used first. One build is slower; nothing else changes.`
-              : `${humanSize(d.buildCache)} in cache — already under the budget.`}
-          </span>
-        </button>
+        <div className="dk-choice" data-busy={busy === "orph" || undefined}>
+          <span className="dk-tile" style={tone("var(--text2)")}><BranchIcon size={ICON.lg} /></span>
+          <div style={{ minWidth: 0 }}>
+            <h4>Remove images from worktrees that are gone</h4>
+            <p>{busy === "orph" ? "Removing the images…"
+              : m.orphanCount ? `${plural(m.orphanCount)} built by checkouts that were removed since. Nothing running uses ${m.orphanCount === 1 ? "it" : "them"}.`
+              : "No images are left over from removed worktrees."}</p>
+            <div className="now">NOW {minis(m.orphanCount)} {plural(m.orphanCount)}{m.orphanBytes ? <> · <b>frees {humanSize(m.orphanBytes)}</b></> : null}</div>
+            <div className="go">
+              {slot("orph", orph!, `Yes, remove ${plural(m.orphanCount)}`)}
+              {m.orphanCount > 0 && armed !== "orph" && busy !== "orph" && (
+                <Button tone="quiet" aria-expanded={showOrph} onClick={() => setShowOrph((v) => !v)}>{showOrph ? "Hide them" : "Show them"}</Button>
+              )}
+            </div>
+            {showOrph && m.orphanCount > 0 && <div className="dk-tags">{m.orphanTags.map((t) => <code key={t}>{t}</code>)}</div>}
+          </div>
+        </div>
 
-        {d.orphans.length > 0 && (
-          <button onClick={dropOrphans} disabled={!writeEnabled || !!busy}
-            className="text-left px-3 py-2 rounded-lg disabled:opacity-40"
-            style={{ border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)", background: "color-mix(in srgb, var(--warning) 7%, transparent)" }}>
-            <span className="text-[11.5px]" style={{ color: "var(--warning-ink)" }}>
-              {d.orphans.length} image{d.orphans.length === 1 ? "" : "s"} from worktrees that are gone · {humanSize(orphanBytes)}
-            </span>
-            <span className="block text-[10px] t-dim2 break-all">{d.orphans.map((o) => o.tag).slice(0, 4).join(", ")}{d.orphans.length > 4 ? "…" : ""}</span>
-          </button>
-        )}
+        <div className="dk-choice" data-busy={busy === "dang" || undefined}>
+          <span className="dk-tile" style={tone("var(--text3)")}><BroomIcon size={ICON.lg} /></span>
+          <div style={{ minWidth: 0 }}>
+            <h4>Remove dangling images</h4>
+            <p>{busy === "dang" ? "Removing the images…"
+              : m.danglingCount ? `${m.danglingCount} untagged image${m.danglingCount === 1 ? "" : "s"} left behind by rebuilds. No tag points to ${m.danglingCount === 1 ? "it" : "them"}.`
+              : "No untagged images are left behind."}</p>
+            <div className="now">NOW {minis(m.danglingCount)} {plural(m.danglingCount)}{m.danglingBytes ? <> · <b>frees {humanSize(m.danglingBytes)}</b></> : null}</div>
+            <div className="go">{slot("dang", dang!, `Yes, remove ${plural(m.danglingCount)}`)}</div>
+          </div>
+        </div>
 
-        {/* Not a button, on purpose. This is the one everybody reaches for and
+        {/* Not a button, on purpose: this is the one everybody reaches for and
             the one that costs other people their afternoon. */}
-        <div className="px-3 py-2 rounded-lg text-[10px]" style={{ border: "1px dashed color-mix(in srgb, var(--border) 60%, transparent)", color: "var(--text3)" }}>
-          <span style={{ color: "var(--text2)" }}>No “prune volumes” button here.</span> It frees a few gigabytes and takes every
-          <code className="mx-1" style={{ color: "var(--text2)" }}>node_modules</code> volume with it — a cold install for every worktree on this machine, all at once.
-          If you have decided anyway: <code style={{ color: "var(--text2)" }}>docker volume prune</code>.
+        <div className="dk-choice" data-quiet>
+          <span className="dk-tile" style={tone("var(--text3)")}><CylinderIcon size={ICON.lg} /></span>
+          <div>
+            <h4 style={{ fontWeight: 500 }}>Volumes stay</h4>
+            <p>No “prune volumes” button here. It frees a few gigabytes and takes every <code>node_modules</code> volume with it, a cold install for every worktree on this machine at once. If you have decided anyway: <code>docker volume prune</code>.</p>
+          </div>
         </div>
-
-        {!writeEnabled && <span className="text-[10px] t-dim2">This instance is read-only, so the buttons are off.</span>}
       </div>
+      {readOnly && <span className="dk-xe">This instance is read-only, so the buttons are off.</span>}
     </div>
   );
 }

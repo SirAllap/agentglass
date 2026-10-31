@@ -73,3 +73,28 @@ step("a session that is merely not running is still kept", async () => {
   await restore.captureLayout();
   expect(layout(), "an unplanned disappearance is not a decision").toEqual(["alsoend", "keepme"]);
 });
+
+/*
+ * THE OTHER WAY BACK: THE TERMINAL'S OWN ATTACH.
+ *
+ * With the restore file clean, an ended worktree session still returned at
+ * every start, empty and with the panel on it: a plain terminal on the engine
+ * opens `new-session -A -s <checkout>`, and `-A` creates what is not there.
+ * The decision is read from disk, so it holds for a process that never saw
+ * the end — which is what a restart is.
+ */
+const sessionIn = (argv: string[] | null): string => argv![argv!.lastIndexOf("-s") + 1]!;
+
+step("a restarted terminal does not make an ended session again", async () => {
+  const { plainEngineArgv } = await import("../src/terminal.ts");
+  expect(live()).not.toContain("endme");
+  expect(sessionIn(plainEngineArgv("/home/me/code/endme")), "the ended name must not be created").not.toBe("endme");
+  expect(sessionIn(plainEngineArgv("/home/me/code/endme")), "it lands where the person was").toBe("keepme");
+});
+
+step("a session that went without being ended still opens by its own name", async () => {
+  /* `alsoend` went without `forgetSession` — a crash, as far as anyone knows. */
+  const { plainEngineArgv } = await import("../src/terminal.ts");
+  expect(sessionIn(plainEngineArgv("/home/me/code/alsoend"))).toBe("alsoend");
+  expect(sessionIn(plainEngineArgv("/home/me/code/keepme"))).toBe("keepme");
+});

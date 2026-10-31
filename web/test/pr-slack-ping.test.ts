@@ -78,7 +78,7 @@ describe("pinging somebody about a pull request", () => {
   it("does not prefill the box for Slack — that message is the agent's to write", () => {
     // On the card the box IS the note and keeps its default. Prefilling it for
     // Slack put this app's English into somebody's DM.
-    const btn = src.slice(src.indexOf('setOpen(!open)'), src.indexOf("Ping in chat"));
+    const btn = src.slice(src.indexOf('setOpen(!open)'), src.indexOf("Ask in chat"));
     expect(btn).toContain('setMsg("")');
     expect(btn).not.toContain("defaultPing");
   });

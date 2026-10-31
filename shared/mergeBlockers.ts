@@ -65,6 +65,8 @@ export interface BlockerInput {
   githubProblem?: GithubProblem | null;
   /** The branch ref on GitHub is not the pull request's head. */
   prLagging?: boolean;
+  /** Set by `trustHead`: the reading is not about the commit the pull request is on. */
+  checking?: { sha: string };
 }
 
 /** What to say while GitHub has not decided mergeability. Updating a branch
@@ -242,7 +244,9 @@ export function mergeBlockers(i: BlockerInput): MergeBlocker[] {
     });
   }
 
-  if (i.mergeState === "UNKNOWN" && !conflicted && !i.isDraft) {
+  if (i.checking) {
+    out.push({ kind: "computing", weight: "waits", title: `Checking the new head… ${i.checking.sha}`, detail: "The checks and the merge state on screen belong to an older commit. They are being read again for this one." });
+  } else if (i.mergeState === "UNKNOWN" && !conflicted && !i.isDraft) {
     out.push({ kind: "computing", weight: "waits", title: computingTitle(i.stuckMin, i.prLagging), detail: computingDetail(i.behind, i.stuckMin, i.githubProblem, i.prLagging) });
   }
 

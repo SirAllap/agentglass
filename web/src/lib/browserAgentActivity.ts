@@ -226,6 +226,17 @@ export const STATE_HOLD_MS = 4000;
  *  script that ended without saying `done` left its tab "Waiting" for good, and the
  *  count in Mission Control kept the agent. Ten minutes outlasts any model call. */
 export const IDLE_RELEASE_MS = 10 * 60_000;
+/** Does an agent's fixed viewport on this tab end now? It does once the agent
+ *  has let go — `done`, the person's Take over, the tab forgotten, or ten
+ *  minutes without an ask, which is also where a session that ended without
+ *  saying so lands. Never mid-ask. */
+export function viewportReleased(a: TabAgent | undefined, now: number): boolean {
+  if (!a || a.paused) return true;
+  if (a.working > 0) return false;
+  if (a.done) return true;
+  const last = a.lastAt ?? a.log[a.log.length - 1]?.at ?? 0;
+  return !!last && now - last > IDLE_RELEASE_MS;
+}
 export function tabState(a: TabAgent | undefined, kept: string | undefined, now: number): { key: AgentStateKey; word: string } | null {
   if (a && (a.paused || a.working > 0)) return agentState(a);
   /* The last ask of any kind, not the last act: an agent reading between clicks

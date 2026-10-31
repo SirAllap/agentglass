@@ -23,7 +23,7 @@ import { Button, INPUT, INPUT_STYLE, RefreshButton, Segmented } from "./workspac
 import { Dot, StatusPopover, type PanelView } from "./StatusPanel.tsx";
 import { ListEye, WorkflowMap } from "./WorkflowMap.tsx";
 import { WFM_CSS } from "./workflowMapStyle.ts";
-import { Card, CountedPicker, CardView, PrView, TextRow, Tagged, ago, hint } from "./TrackerMapParts.tsx";
+import { CountedPicker, CardView, PrView, TextRow, Tagged, ago, hint } from "./TrackerMapParts.tsx";
 import { EyeIcon, LockIcon, PlusIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { HIT, ICON } from "../lib/iconSize.ts";
 import { ColumnsIcon, PlugIcon, SearchIcon, SlidersIcon } from "./settingsNavIcons.tsx";
@@ -311,7 +311,7 @@ export function ClickUpPane() {
         <DisconnectBar onDone={() => { setEpoch((e) => e + 1); reread(); }} />
       </SettingsCard>
 
-      <Card id="cu-found" icon={<SearchIcon size={ICON.sm} />} title="What we found" open={foundOpen ?? steps.length === 0} onToggle={setFoundOpen}
+      <SettingsCard icon={<SearchIcon size={ICON.sm} />} title="What we found" fold={{ open: foundOpen ?? steps.length === 0, onToggle: setFoundOpen }}
         desc={reading ? undefined : `${part.counted.length} ${n.lists} count · ${distinct} statuses${part.folded.length ? ` · ${part.folded.length} ignored` : ""}${prefs.prLinkField ? ` · PR link ${prefs.prLinkField}` : ""}${prefs.swatchField ? ` · swatch ${prefs.swatchField}` : ""}`}
         status={<StatusBadge tone={state.kind === "error" ? (asOf ? "off" : "warn") : state.kind === "loading" ? "checking" : "ok"}>{reading ? "Reading your cards" : state.kind === "loading" ? "Reading" : state.kind === "error" ? (asOf ? `As of ${ago(asOf)}` : "Not read") : "Read-only"}</StatusBadge>}>
         <SettingRow label={`${n.lists[0]!.toUpperCase()}${n.lists.slice(1)} that count`}
@@ -342,7 +342,7 @@ export function ClickUpPane() {
             <div className="flex gap-2 items-baseline flex-wrap text-[13px]">Sprints {prefs.sprintListPattern === DEFAULT_SPRINT_LIST_PATTERN ? hint("lists named like “Sprint 12”, and dated ones") : <><Tagged>{prefs.sprintListPattern}</Tagged>{hint("and dated ones")}</>}</div>
             <span><button type="button" className="agx-textlink text-[12px]" onClick={showAdvanced}>Change these in Advanced</button></span>
           </div>} />
-      </Card>
+      </SettingsCard>
       {countAt && (
         <StatusPopover anchor={countAt} label={`${n.lists} that count`} onClose={(f) => { setCountAt(null); if (f) countAt.focus(); }}>
           <CountedPicker n={n} units={units} chosen={chosen} onChange={count} onReset={() => count([])} onClose={() => { setCountAt(null); countAt.focus(); }} />
@@ -365,7 +365,7 @@ export function ClickUpPane() {
         onRetry={reread} />
       {note && <div role="alert" className="text-[12px] -mt-3 mb-6" style={{ color: "var(--error-ink)" }}>{note}</div>}
 
-      <Card id="cu-shows" icon={<ColumnsIcon size={ICON.sm} />} title="Where this shows up" desc="Hover a step above to see which part of this it adds."
+      <SettingsCard icon={<ColumnsIcon size={ICON.sm} />} title="Where this shows up" desc="Hover a step above to see which part of this it adds."
         actions={<Segmented label={`Does the pull request name a ${n.item}?`} value={linked ? "1" : "0"} onChange={(v) => setLinked(v === "1")}
           options={[{ id: "1", label: "Linked" }, { id: "0", label: "No link" }]} />}>
         <div className="grid gap-4 agx-settings-x pt-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))" }}>
@@ -378,12 +378,12 @@ export function ClickUpPane() {
             : `No steps: the ${n.item} is shown, nothing writes.`}
           {!linked && ` This pull request names no ${n.item}: no ${n.name} block on it and no Pull requests section on the ${n.item}. Tasks works on its own.`}
         </div>
-      </Card>
+      </SettingsCard>
 
       <RequestBudgetCard epoch={epoch} />
 
       <div ref={advRef}>
-        <Card id="cu-adv" icon={<SlidersIcon size={ICON.sm} />} title="Advanced" desc="The fields and patterns the reading above is built on." open={advOpen} onToggle={setAdvOpen}>
+        <SettingsCard icon={<SlidersIcon size={ICON.sm} />} title="Advanced" desc="The fields and patterns the reading above is built on." fold={{ open: !!advOpen, onToggle: setAdvOpen }}>
           <TextRow label="PR link field" hint="The custom field that holds the pull request link. Empty: any field named github." value={prefs.prLinkField} placeholder="GitHub URL"
             onSave={async (v) => ((await send({ prLinkField: v } as never)) ? null : "That did not save")} />
           <TextRow label="Colour column field" hint="A drop-down shown as a swatch. Empty: guessed from the field names." value={prefs.swatchField} placeholder="Team"
@@ -394,7 +394,7 @@ export function ClickUpPane() {
             onSave={async (v) => patternSave(await api.clickupSetPrefs({ readOnlyFieldPattern: v }), setPrefs)} />
           <Toggle on={prefs.assigned.includeSubtasks} onClick={() => { void send({ assigned: { includeSubtasks: !prefs.assigned.includeSubtasks } } as never); }}
             agentNever="changes how heavy the shared ClickUp read is against a rate-limited token the owner also works with, so it is the owner's to turn on" label="Subtasks on Assigned to me" hint="Slower: the workspace read can take twice as long." />
-        </Card>
+        </SettingsCard>
       </div>
     </div>
   );

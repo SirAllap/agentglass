@@ -45,3 +45,43 @@ export function useModalDialog(open: boolean, label: string) {
   }, [open]);
   return { ref, role: "dialog" as const, "aria-modal": true as const, "aria-label": label, tabIndex: -1 };
 }
+
+const BUTTONS = "button:not(:disabled), [role='option']:not([aria-disabled='true'])";
+const FIRST = `${BUTTONS}, [href], input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex='-1'])`;
+
+/**
+ * What a floating menu portalled to the end of the body owes a keyboard: focus on its first control
+ * when it opens (unless something inside took it, like an autofocused field), the arrow keys
+ * between its buttons, Escape to close it, and focus back to its opener when it goes. Without it the
+ * menu is only reachable by tabbing the whole page. A text field keeps its own Escape and arrows.
+ */
+export function usePopoverKeys(root: RefObject<HTMLElement | null>, onClose: () => void, on = true) {
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    const el = root.current;
+    if (!on || !el) return;
+    const opener = document.activeElement as HTMLElement | null;
+    if (!el.contains(document.activeElement)) {
+      const first = el.querySelector<HTMLElement>(FIRST);
+      first?.focus();
+      /* A name to replace, as the mockup draws the save and rename boxes: typing starts over. */
+      if (first instanceof HTMLInputElement) first.select();
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (!el.contains(document.activeElement)) return;
+      const field = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target as HTMLElement).tagName);
+      if (e.key === "Escape" && !field) { e.stopPropagation(); e.preventDefault(); close.current(); return; }
+      const dir = e.key === "ArrowDown" || e.key === "ArrowRight" ? 1 : e.key === "ArrowUp" || e.key === "ArrowLeft" ? -1 : 0;
+      if (!dir) return;
+      const t = e.target as HTMLElement;
+      if (field) return;
+      const all = [...el.querySelectorAll<HTMLElement>(BUTTONS)];
+      if (!all.length) return;
+      e.preventDefault();
+      all[(all.indexOf(t) + dir + all.length) % all.length]!.focus();
+    };
+    el.addEventListener("keydown", onKey);
+    return () => { el.removeEventListener("keydown", onKey); if (opener?.isConnected) opener.focus(); };
+  }, [root, on]);
+}

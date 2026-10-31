@@ -172,7 +172,7 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump, active = true }
                 <span className="text-[11.5px] font-semibold" style={{ color: "var(--text)" }}>Approve {g.tool_name}?</span>
                 <span className="ml-auto text-[9.5px] t-dim2">{g.source_app}:{g.session_id.slice(0, 8)}</span>
               </div>
-              <div className="text-[10.5px] t-dim mt-1 mb-2 break-all line-clamp-2" title={g.summary} style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+              <div className="text-[10.5px] t-dim mt-1 mb-2 break-all line-clamp-2" data-tip={g.summary} style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
                 {g.summary || "(No details)"}
               </div>
               <div className="flex gap-2">
@@ -204,7 +204,7 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump, active = true }
                 key={g.id}
                 className="flex items-start gap-2 rounded-xl px-2.5 py-1.5 mb-1.5"
                 style={{ background: "color-mix(in srgb, var(--text4) 10%, transparent)", border: "1px dashed color-mix(in srgb, var(--text4) 45%, transparent)" }}
-                title={g.summary}
+                data-tip={g.summary}
               >
                 <span className="shrink-0 t-dim2 flex">{g.decision === "deny" ? <CrossIcon size={ICON.xs} /> : <DoneIcon size={ICON.xs} />}</span>
                 <div className="min-w-0 flex-1">
@@ -270,7 +270,7 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump, active = true }
                     <span className="shrink-0 flex" style={{ color }}>{KIND_ICON[i.kind]}</span>
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-[11.5px] font-medium" style={{ color: "var(--text2)" }}>{i.title}</div>
-                      <div className="text-[10px] truncate mt-1" style={{ color: "var(--text2)" }} title={i.detail}>{i.detail}</div>
+                      <div className="text-[10px] truncate mt-1" style={{ color: "var(--text2)" }} data-tip={i.detail}>{i.detail}</div>
                       {i.session && <div className="text-[9.5px] mt-1" style={{ color: "var(--text4)" }}>{i.session}</div>}
                     </div>
                   </motion.div>

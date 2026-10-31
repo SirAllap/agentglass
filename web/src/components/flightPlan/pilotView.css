@@ -1,0 +1,317 @@
+/*
+ * FLIGHT PLAN, THE FLYING VIEW: the status strip, the flight rows and the one
+ * card that asks the person (a question, or Go).
+ *
+ * Under `.fpv .pv`, which is also `.ps`: the four actor hues are the Settings
+ * tab's (pilotSettings.css defines them once, on `.ps`, and a `data-actor`
+ * attribute sets --a and --a-ink from them), so a station here is the same
+ * colour as its dot there. Tokens are the view's (--fp-*, --surface-*, the house
+ * colours); sizes are the view's: 26 for a button (HIT), 28 for a field, icons
+ * from ICON. Nothing here sets a colour of its own except the held strip's red
+ * and the autopilot badge, both mixed from the theme.
+ *
+ * Motion is transform and opacity, 120-200 ms ease-out, never a keyframe: the
+ * stripes of a current station do not run. A keyboard action does not animate
+ * (the rows set data-still), and reduced motion removes all of it.
+ */
+.fpv .pv {
+  --pv-ease: var(--fp-ease, cubic-bezier(.23, 1, .32, 1));
+  --pv-hit: 26px;
+  --pv-field: 28px;
+  --pv-ask: color-mix(in srgb, var(--ps-you) 45%, var(--fp-line));
+}
+.fpv .pv .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* buttons: the view's .btn at 26, with the roles this view needs */
+.fpv .pv .btn { height: var(--pv-hit); padding: 0 11px; font-size: 12px; transition: transform .14s var(--pv-ease), border-color .15s, background-color .15s; }
+.fpv .pv .btn.field { height: var(--pv-field); }
+.fpv .pv .btn[data-big] { height: 34px; padding: 0 16px; font-size: 12.6px; }
+.fpv .pv .btn.hold { color: var(--fp-err-t); border-color: color-mix(in srgb, var(--error) 45%, var(--border2)); }
+.fpv .pv .btn.answer { color: var(--ps-you-ink); border-color: var(--ps-you); }
+.fpv .pv .btn.ghost { background: none; box-shadow: none; border-color: transparent; color: var(--text2); }
+@media (hover: hover) and (pointer: fine) {
+  .fpv .pv .btn.hold:hover:not(:disabled) { background: var(--fp-err-bg); border-color: var(--error); }
+  .fpv .pv .btn.answer:hover:not(:disabled) { background: color-mix(in srgb, var(--ps-you) 10%, var(--bg)); }
+  .fpv .pv .btn.ghost:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 6%, transparent); border-color: transparent; }
+}
+.fpv .pv .btn.ghost:disabled, .fpv .pv .btn.answer:disabled { background: none; }
+
+/* the tab: the strip on top, the rows (or the open plan) filling the rest */
+.fpv .pv-body { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; min-width: 0; }
+.fpv .pv-body > .cols, .fpv .pv-flights { min-height: 0; overflow: auto; scrollbar-gutter: stable; }
+
+/* ----------------------------------------------- the state of a flight */
+/* One tile per row and one in the detail: icon + word say the state, the hue repeats who is next. Hollow and dashed unless real work runs. */
+.fpv .pv-state { --h: var(--text3); --h-ink: var(--text2); display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "tile w" "tile s"; column-gap: 8px; align-items: center; align-content: center; min-width: 0; height: 44px; padding: 0 8px 0 6px; border-radius: 9px; border: 1px dashed var(--h); background: none; color: var(--h-ink); box-sizing: border-box; }
+.fpv .pv-state[data-tone="you"] { --h: var(--ps-you); --h-ink: var(--ps-you-ink); }
+.fpv .pv-state[data-tone="orchestrator"] { --h: var(--ps-coord); --h-ink: var(--ps-coord-ink); }
+.fpv .pv-state[data-tone="preflight"] { --h: var(--ps-pre); --h-ink: var(--ps-pre-ink); }
+.fpv .pv-state[data-tone="builder"] { --h: var(--ps-build); --h-ink: var(--ps-build-ink); }
+.fpv .pv-state[data-tone="landed"] { --h: var(--success); --h-ink: var(--fp-ok-t); }
+.fpv .pv-state[data-tone="stopped"] { --h: var(--error); --h-ink: var(--fp-err-t); }
+.fpv .pv-state .st-ico { position: relative; grid-area: tile; width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; border: 1px dashed var(--h); color: var(--h); }
+.fpv .pv-state .w { grid-area: w; font-size: 11.6px; font-weight: 700; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fpv .pv-state .s { grid-area: s; font-size: 10.2px; line-height: 1.15; color: var(--text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fpv .pv-state[data-running] { border-style: solid; background: color-mix(in srgb, var(--h) 11%, var(--bg)); }
+.fpv .pv-state[data-running] .st-ico { border-style: solid; background: var(--h); color: var(--ps-on, #fff); }
+.fpv .pv-state[data-sid="held"] { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--h) 8%, transparent) 0 6px, transparent 6px 12px); }
+.fpv .pv-state[data-detail] { height: auto; min-height: 56px; padding: 8px 14px 8px 10px; grid-template-areas: "tile w"; }
+.fpv .pv-state[data-detail] .st-ico { width: 34px; height: 34px; border-radius: 10px; }
+.fpv .pv-state[data-detail] .w { font-size: 15px; white-space: normal; }
+/* what, next, last report: three fixed lines, so a missing report is a dotted gap and not a missing box */
+.fpv .pv-now b, .fpv .pv-now .nx, .fpv .pv-now .rp { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fpv .pv-now .nx, .fpv .pv-now .rp { font-size: 11.2px; color: var(--text3); margin-top: 1px; }
+.fpv .pv-now em { font-style: normal; font-size: 9.2px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text4); margin-right: 6px; }
+.fpv .pv-now .nx i, .fpv .pv-status .facts i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; background: var(--text3); vertical-align: 1px; }
+.fpv .pv-now .nx i[data-tone="you"], .fpv .pv-status i[data-tone="you"] { background: var(--ps-you); }
+.fpv .pv-now .nx i[data-tone="orchestrator"], .fpv .pv-status i[data-tone="orchestrator"] { background: var(--ps-coord); }
+.fpv .pv-now .nx i[data-tone="preflight"], .fpv .pv-status i[data-tone="preflight"] { background: var(--ps-pre); }
+.fpv .pv-now .nx i[data-tone="builder"], .fpv .pv-status i[data-tone="builder"] { background: var(--ps-build); }
+.fpv .pv-now .nx i[data-tone="nobody"], .fpv .pv-status i[data-tone="nobody"] { background: none; box-shadow: inset 0 0 0 1.5px var(--text3); }
+.fpv .pv-now .rp.gap { border-bottom: 1px dotted var(--border2); width: max-content; max-width: 100%; }
+.fpv .pv-row .slots { display: inline-flex; gap: 6px; align-items: center; min-width: 0; }
+.fpv .pv-row .slot { font: inherit; font-size: 10.6px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 1px solid var(--border2); border-radius: 6px; padding: 0 6px; background: none; color: var(--text2); cursor: pointer; position: relative; z-index: 1; }
+.fpv .pv-row .slot:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+
+/* the detail's status block: the same state, the same three facts, in full sentences */
+.fpv .pv-status { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: start; margin: 0 0 14px; padding: 14px 16px; border: 1px dashed var(--border2); border-radius: 12px; background: var(--surface-card); }
+.fpv .pv-status[data-sid="building"], .fpv .pv-status[data-sid="writing"], .fpv .pv-status[data-sid="preflight"], .fpv .pv-status[data-sid="checking"] { border-style: solid; border-color: var(--fp-line); }
+.fpv .pv-status .since { font-size: 11.2px; color: var(--text3); }
+.fpv .pv-status .say { margin: 2px 0 10px; font-size: 12.6px; color: var(--text); overflow-wrap: anywhere; }
+.fpv .pv-status .facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.fpv .pv-status .facts > div { border: 1px solid var(--fp-line); border-radius: 9px; padding: 6px 10px; min-width: 0; background: var(--bg); }
+.fpv .pv-status .facts > div.gap { border-style: dotted; }
+.fpv .pv-status .facts em { display: block; font-style: normal; font-size: 9.4px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text4); }
+.fpv .pv-status .facts span { display: block; font-size: 12px; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@container ps (max-width: 640px) { .fpv .pv-status .facts { grid-template-columns: 1fr; } }
+.fpv .pv-facts { margin: 12px 0 0; padding: 12px 14px; border: 1px solid var(--fp-line); border-radius: 12px; background: var(--surface-card); }
+.fpv .pv-facts h5 { margin: 0 0 6px; font-size: 10.4px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text3); }
+.fpv .pv-facts dl { margin: 0; display: grid; gap: 4px; }
+.fpv .pv-facts dl > div { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; font-size: 11.8px; }
+.fpv .pv-facts dt { color: var(--text3); }
+.fpv .pv-facts dd { margin: 0; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fpv .pv-facts dd[data-bad] { color: var(--fp-err-t); font-weight: 700; }
+
+/* ------------------------------------------------------------ the strip */
+.fpv .pv-strip {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 18px;
+  block-size: 66px; padding: 0 22px; border-bottom: 1px solid var(--fp-line); background: var(--bg);
+}
+.fpv .pv-strip[data-mode="held"] { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--error) 6%, var(--bg)) 0 12px, color-mix(in srgb, var(--error) 12%, var(--bg)) 12px 24px); }
+.fpv .pv-badge {
+  display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px 0 6px; border-radius: 9px; border: 1px solid transparent;
+  font-weight: 700; font-size: 12.6px; white-space: nowrap; --b: var(--ps-coord); --b-ink: var(--ps-coord-ink);
+  background: color-mix(in srgb, var(--b) 12%, var(--bg)); color: var(--b-ink); border-color: color-mix(in srgb, var(--b) 28%, transparent);
+}
+.fpv .pv-badge .pv-tile { width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; background: var(--b); color: #fff; }
+.fpv .pv-badge[data-mode="manual"] { --b: var(--ps-you); --b-ink: var(--ps-you-ink); }
+.fpv .pv-badge[data-mode="autopilot"] { background: var(--ps-auto); border-color: var(--ps-auto); color: #e6f6f6; }
+.fpv .pv-badge[data-mode="autopilot"] .pv-tile { background: #3fb3b8; }
+.fpv .pv-badge[data-mode="held"] { background: color-mix(in srgb, var(--error) 52%, black); border-color: transparent; color: #fde8e4; }
+.fpv .pv-badge[data-mode="held"] .pv-tile { background: var(--error); }
+.fpv .pv-say { font-size: 12.4px; color: var(--text2); min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.fpv .pv-say strong { color: var(--text); }
+.fpv .pv-say .bad { color: var(--fp-err-t); }
+.fpv .pv-acts { display: flex; align-items: center; gap: 16px; }
+.fpv .pv-meters { display: flex; gap: 16px; }
+.fpv .pv-strip[data-mode="held"] .pv-meters { display: none; }
+.fpv .pv-meter { display: grid; gap: 3px; min-width: 150px; }
+.fpv .pv-meter .lab { display: flex; justify-content: space-between; gap: 10px; font-size: 10.7px; color: var(--text3); }
+.fpv .pv-meter .lab b { color: var(--text); font-weight: 600; }
+.fpv .pv-bar { height: 6px; border-radius: 4px; background: var(--surface-inset); overflow: hidden; }
+.fpv .pv-bar i { display: block; height: 100%; width: 100%; border-radius: 4px; background: var(--ps-coord); transform-origin: left; transform: scaleX(var(--p, 0)); transition: transform .2s var(--pv-ease); }
+.fpv .pv-bar[data-tone="warn"] i { background: var(--warning); }
+.fpv .pv-bar[data-tone="full"] i { background: var(--error); }
+.fpv .pv-meter[data-unknown] .lab b { color: var(--text4); }
+.fpv .pv-btnwrap { display: flex; gap: 8px; align-items: center; justify-content: flex-end; min-width: 0; }
+
+/* a medium strip keeps the sentence whole: the week's meter steps aside (it is in Settings), the day's stays */
+@container ps (min-width: 761px) and (max-width: 1100px) { .fpv .pv-meters .pv-meter:nth-child(2) { display: none; } }
+/* narrow strip: badge, sentence, then the meters and the button; the height is fixed here too */
+@container ps (max-width: 760px) {
+  .fpv .pv-strip { grid-template-columns: minmax(0, 1fr); grid-template-rows: 30px 36px 28px; align-content: center; gap: 6px; block-size: 128px; padding: 0 16px; }
+  .fpv .pv-acts { gap: 12px; justify-content: space-between; }
+  .fpv .pv-strip[data-mode="held"] .pv-meters { display: flex; visibility: hidden; }
+  .fpv .pv-meters { gap: 12px; min-width: 0; flex: 1; }
+  .fpv .pv-meter { min-width: 0; flex: 1; max-width: 170px; }
+  .fpv .pv-say { font-size: 12px; }
+}
+
+/* -------------------------------------------------------------- the rows */
+.fpv .pv-flights { padding: 16px 22px 28px; display: grid; gap: 10px; align-content: start; container: fl / inline-size; }
+.fpv .pv-gh { display: flex; align-items: center; gap: 8px; margin: 8px 0 0; font-size: 10.4px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--text3); }
+.fpv .pv-gh:first-child { margin-top: 0; }
+.fpv .pv-gh .n { color: var(--text4); font-weight: 600; }
+.fpv .pv-gh[data-actor] { color: var(--a-ink); }
+.fpv .pv-gh .tail { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--text3); }
+.fpv .pv-gh button { font: inherit; color: inherit; background: none; border: 0; padding: 0; text-transform: inherit; letter-spacing: inherit; display: inherit; align-items: center; gap: 8px; cursor: pointer; border-radius: 5px; }
+@media (hover: hover) and (pointer: fine) { .fpv .pv-gh button:hover .tail { color: var(--text); text-decoration: underline; } }
+.fpv .pv-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+
+.fpv .pv-row {
+  position: relative; display: grid; gap: 8px 20px; align-items: center; padding: 12px 16px; background: var(--surface-card);
+  border: 1px solid var(--fp-line); border-radius: 12px; box-shadow: var(--fp-lift);
+  grid-template-columns: 172px minmax(0, 1.3fr) minmax(200px, 270px) minmax(0, 1.3fr) minmax(96px, 150px);
+  transition: border-color .15s, opacity .16s var(--pv-ease);
+}
+.fpv .pv-row[data-state="enter"], .fpv .pv-row[data-state="out"] { opacity: 0; }
+.fpv .pv-row[data-state="out"] { pointer-events: none; }
+.fpv .pv-flights[data-still] .pv-row { transition: none; }
+.fpv .pv-row[data-wait] { border-color: var(--pv-ask); }
+.fpv .pv-row[data-wait][data-ask] { box-shadow: 0 0 0 3px color-mix(in srgb, var(--ps-you) 12%, transparent), var(--fp-lift); }
+@media (hover: hover) and (pointer: fine) { .fpv .pv-row:hover { border-color: var(--border2); } .fpv .pv-row[data-wait]:hover { border-color: var(--ps-you); } }
+.fpv .pv-row:has(.pv-open:focus-visible) { outline: 2px solid var(--primary); outline-offset: 2px; }
+.fpv .pv-row > :last-child { justify-self: end; }
+.fpv .pv-open { all: unset; display: block; width: 100%; min-width: 0; overflow: hidden; cursor: pointer; }
+.fpv .pv-open::after { content: ""; position: absolute; inset: 0; border-radius: 12px; }
+.fpv .pv-open:focus-visible { outline: none; }
+.fpv .pv-row .t { font-weight: 700; font-size: 13.1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fpv .pv-row .m { font-size: 11.2px; color: var(--text3); display: flex; gap: 8px; align-items: center; margin-top: 1px; min-width: 0; }
+.fpv .pv-row .m > span:not(.size) { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fpv .pv-row .m b { font-weight: 600; color: var(--ps-build-ink); }
+.fpv .pv-row .size { border: 1px solid var(--border2); border-radius: 5px; padding: 0 5px; font-size: 10.2px; font-weight: 700; color: var(--text2); }
+.fpv .pv-now { font-size: 12.2px; color: var(--text2); min-width: 0; }
+.fpv .pv-now b { color: var(--text); font-weight: 700; display: block; }
+.fpv .pv-now .sub { font-size: 11.2px; color: var(--text3); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.fpv .pv-row .btn, .fpv .pv-row .pv-handled { position: relative; z-index: 1; }
+/* inline-block, not flex: only a block container draws the ellipsis */
+.fpv .pv-handled { white-space: nowrap; display: inline-block; line-height: calc(var(--pv-hit) - 2px); height: var(--pv-hit); box-sizing: border-box; padding: 0 8px; border: 1px dashed var(--border2); border-radius: 7px; font-size: 11.2px; color: var(--text3); max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.fpv .pv-handled b { color: var(--fp-ok-t); font-weight: 600; }
+
+/* the six stations, each coloured by who did it */
+.fpv .pv-track { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 3px; align-items: start; margin: 0; padding: 0; list-style: none; }
+.fpv .pv-st { display: grid; gap: 4px; justify-items: center; min-width: 0; --a: var(--ps-coord); }
+.fpv .pv-st i { display: block; width: 100%; height: 6px; border-radius: 3px; background: var(--surface-inset); box-sizing: border-box; }
+.fpv .pv-st span { font-size: 9.4px; letter-spacing: .03em; color: var(--text3); text-transform: uppercase; white-space: nowrap; }
+.fpv .pv-st[data-state="done"] i { background: var(--a); }
+.fpv .pv-st[data-state="current"] i { background: repeating-linear-gradient(90deg, var(--a) 0 6px, color-mix(in srgb, var(--a) 45%, var(--bg)) 6px 12px); }
+.fpv .pv-st[data-state="waiting"] i { background: none; border: 1.5px dashed var(--a); height: 7px; margin-top: -.5px; }
+.fpv .pv-st[data-ask] i { background: color-mix(in srgb, var(--a) 10%, transparent); }
+.fpv .pv-st[data-state="current"] span, .fpv .pv-st[data-state="waiting"] span { color: var(--text); font-weight: 700; }
+.fpv .pv-st[data-state="parked"] i, .fpv .pv-st[data-state="held"] i { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--text3) 38%, transparent) 0 3px, transparent 3px 6px); border: 1px dashed var(--text3); height: 7px; margin-top: -.5px; }
+.fpv .pv-st[data-state="dead"] i { background: none; border: 1.5px dashed var(--error); height: 7px; margin-top: -.5px; }
+.fpv .pv-st[data-state="parked"] span, .fpv .pv-st[data-state="dead"] span, .fpv .pv-st[data-state="held"] span { color: var(--text); font-weight: 700; }
+.fpv .pv-st[data-state="skipped"] i { opacity: .5; }
+.fpv .pv-st[data-state="skipped"] i { background: none; height: 1px; margin-top: 3px; border-top: 1.5px dotted var(--border2); }
+
+/* rows narrower than 1000: title and action on top, the stations and the line under them */
+@container fl (max-width: 1000px) {
+  .fpv .pv-row { grid-template-columns: 172px minmax(0, 1fr) auto; grid-template-areas: "badge title act" "track track track" "now now now"; }
+  .fpv .pv-row > :nth-child(1) { grid-area: badge; }
+  .fpv .pv-row > :nth-child(2) { grid-area: title; }
+  .fpv .pv-row > :nth-child(3) { grid-area: track; }
+  .fpv .pv-row > :nth-child(4) { grid-area: now; }
+  .fpv .pv-row > :nth-child(5) { grid-area: act; }
+}
+
+/* empty and loading */
+.fpv .pv-empty { display: grid; justify-items: center; gap: 6px; padding: 44px 20px 50px; text-align: center; }
+.fpv .pv-empty h4 { margin: 12px 0 0; font-size: 16.4px; font-weight: 700; }
+.fpv .pv-empty p { margin: 0 0 10px; color: var(--text3); max-width: 52ch; }
+.fpv .pv-empty .arc { color: var(--text4); }
+.fpv .pv-skel { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(220px, 300px) minmax(0, 1fr); gap: 20px; align-items: center; padding: 14px 16px; background: var(--surface-card); border: 1px solid var(--fp-line); border-radius: 12px; }
+.fpv .pv-skel > div { display: grid; gap: 8px; }
+@container fl (max-width: 1000px) { .fpv .pv-skel { grid-template-columns: minmax(0, 1fr); } }
+
+/* ------------------------------------------------------- the card (GoCard) */
+.fpv .gc {
+  container: gc / inline-size; background: var(--surface-card); border: 1px solid var(--fp-line); border-radius: 14px; overflow: hidden;
+  box-shadow: var(--fp-lift-lg); --k: var(--ps-you); --k-ink: var(--ps-you-ink);
+}
+.fpv .gc[data-v="question"] { border-color: color-mix(in srgb, var(--ps-you) 40%, var(--fp-line)); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ps-you) 9%, transparent), var(--fp-lift-lg); }
+.fpv .gc[data-v="go"] { --k: var(--success); --k-ink: var(--fp-ok-t); border-color: color-mix(in srgb, var(--success) 45%, var(--fp-line)); box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 9%, transparent), var(--fp-lift-lg); }
+.fpv .gc[data-v="answered"], .fpv .gc[data-v="decided"] { --k: var(--ps-coord); --k-ink: var(--ps-coord-ink); }
+.fpv .gc-h { display: flex; align-items: center; gap: 10px; padding: 14px 18px 0; }
+.fpv .gc-tile { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; flex: none; background: var(--k); color: #fff; }
+.fpv .gc-h > div { min-width: 0; flex: 1; }
+.fpv .gc-t { font-weight: 700; font-size: 12.2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fpv .gc-from { font-size: 11.2px; color: var(--text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fpv .gc-from b { color: var(--ps-coord-ink); font-weight: 600; }
+.fpv .gc-badge { display: inline-flex; align-items: center; gap: 5px; border-radius: 6px; padding: 1px 8px; font-size: 10.7px; font-weight: 600; white-space: nowrap; background: color-mix(in srgb, var(--k) 14%, var(--bg)); color: var(--k-ink); }
+.fpv .gc-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.fpv .gc-x { all: unset; display: grid; place-items: center; width: var(--pv-hit); height: var(--pv-hit); border-radius: 7px; color: var(--text3); cursor: pointer; flex: none; transition: transform .14s var(--pv-ease), background-color .15s; }
+.fpv .gc-x:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.fpv .gc-x:active { transform: scale(.97); }
+@media (hover: hover) and (pointer: fine) { .fpv .gc-x:hover { background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); } }
+.fpv .gc h3 { margin: 10px 18px 4px; font-size: 15.4px; font-weight: 700; line-height: 1.35; letter-spacing: -.005em; text-wrap: balance; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; overflow-wrap: anywhere; }
+.fpv .gc-ctx { margin: 0 18px; color: var(--text2); font-size: 12.2px; max-width: 78ch; overflow-wrap: anywhere; }
+.fpv .gc-quote { margin: 8px 18px 16px; color: var(--text2); font-size: 12.2px; overflow-wrap: anywhere; }
+
+.fpv .gc form { display: contents; }
+.fpv .gc-choices { display: grid; grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr)); gap: 10px; padding: 16px 18px 14px; margin: 0; border: 0; min-width: 0; }
+.fpv .gc-ch { position: relative; display: grid; gap: 4px; align-content: start; padding: 11px 13px; border: 1px solid var(--fp-line); border-radius: 11px; background: var(--bg); cursor: pointer; transition: transform .14s var(--pv-ease), border-color .15s, background-color .15s; }
+.fpv .gc-ch input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.fpv .gc-ch b { font-size: 12.6px; }
+.fpv .gc-ch span { font-size: 11.2px; color: var(--text3); }
+.fpv .gc-ch[data-rec] { border-color: color-mix(in srgb, var(--ps-coord) 55%, var(--fp-line)); background: color-mix(in srgb, var(--ps-coord) 10%, var(--bg)); }
+.fpv .gc-ch:has(input:checked) { border-color: var(--ps-you); box-shadow: 0 0 0 1px var(--ps-you); }
+.fpv .gc-ch:has(input:focus-visible) { outline: 2px solid var(--primary); outline-offset: 2px; }
+.fpv .gc-ch:has(input:disabled) { opacity: .6; cursor: default; }
+.fpv .gc-ch:has(input:disabled) input { cursor: default; }
+.fpv .gc-ch:active:not(:has(input:disabled)) { transform: scale(.97); }
+@media (hover: hover) and (pointer: fine) { .fpv .gc-ch:hover:not(:has(input:disabled)) { border-color: var(--ps-you); } }
+.fpv .gc-rec { position: absolute; top: -9px; right: 10px; font-size: 9.8px; font-weight: 700; background: var(--ps-coord); color: #fff; border-radius: 5px; padding: 1px 6px; }
+.fpv .gc-ch .gc-rec { color: #fff; }
+
+.fpv .gc-free { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 18px 14px; align-items: center; }
+.fpv .gc[data-v="go"] .gc-free { padding-top: 14px; }
+.fpv .gc-free .btn { flex: none; }
+.fpv .gc-free .btn.go[data-big] { min-width: 84px; justify-content: center; }
+.fpv .gc-free input { flex: 1 1 140px; min-width: 0; height: var(--pv-field); border: 1px solid var(--border2); border-radius: 8px; padding: 0 10px; font: inherit; font-size: 12.2px; background: var(--bg); color: var(--text); transition: border-color .15s; }
+.fpv .gc-free input::placeholder { color: var(--text4); text-overflow: ellipsis; }
+.fpv .gc-free input:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; border-color: var(--primary); }
+.fpv .gc-free input:disabled { opacity: .6; }
+/* The Go card keeps this line even when empty, so a launch error appears without moving the footer. */
+.fpv .gc[data-v="go"] .gc-err { min-height: 1.4em; }
+.fpv .gc-err { margin: 0 18px 12px; font-size: 11.2px; line-height: 1.4; color: var(--fp-err-t); overflow-wrap: anywhere; }
+.fpv .gc-f { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 8px 18px; min-height: 42px; border-top: 1px solid var(--fp-line); background: var(--surface-nav); font-size: 11.2px; color: var(--text3); }
+.fpv .gc-f .ok { color: var(--fp-ok-t); display: inline-flex; }
+.fpv .gc-f .sp { margin-left: auto; display: flex; gap: 6px; }
+.fpv .gc-link { all: unset; color: var(--text2); text-decoration: underline; cursor: pointer; border-radius: 4px; }
+.fpv .gc-link:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+@media (hover: hover) and (pointer: fine) { .fpv .gc-link:hover { color: var(--text); } }
+
+@container gc (max-width: 520px) {
+  .fpv .gc-choices { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .fpv .gc-free input { flex-basis: 100%; }
+  .fpv .gc-f .sp { margin-left: 0; flex-basis: 100%; }
+  .fpv .gc-ch b { font-size: 12.2px; }
+}
+
+/* the card as a popover over the view */
+.fpv .pv-scrim { position: absolute; inset: 0; z-index: 5; background: rgba(0, 0, 0, .35); display: grid; place-items: start center; padding: 10vh 12px 0; overflow: auto; }
+.fpv .pv-pop { width: min(640px, 100%); }
+.fpv .pv-scrim .gc { box-shadow: var(--fp-lift-lg); }
+.fpv .pv-scrim .gc[data-v="question"] { box-shadow: 0 0 0 4px color-mix(in srgb, var(--ps-you) 14%, transparent), var(--fp-lift-lg); }
+@media (prefers-reduced-motion: no-preference) {
+  .fpv .pv-scrim { transition: opacity .16s var(--pv-ease); }
+  .fpv .pv-scrim[data-state="enter"] { opacity: 0; }
+  .fpv .pv-scrim[data-still] { transition: none; }
+}
+
+/* the findings the coordinator already handled */
+.fpv .pv-handledbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 0 18px 12px; font-size: 11.7px; color: var(--text2); }
+.fpv .pv-handledbar .pv-handled { font: inherit; font-size: 11.2px; cursor: pointer; background: none; color: var(--text2); transition: transform .14s var(--pv-ease), border-color .15s; }
+.fpv .pv-handledbar .pv-handled:active { transform: scale(.97); }
+.fpv .pv-handledbar .pv-handled:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+@media (hover: hover) and (pointer: fine) { .fpv .pv-handledbar .pv-handled:hover { border-color: var(--text4); } }
+.fpv .f[data-ro] .acts { display: none; }
+
+/* the detail's way back */
+.fpv .pv-back { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 10px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .fpv .pv *, .fpv .pv *::before, .fpv .pv *::after, .fpv .gc, .fpv .gc * { transition: none !important; }
+  /* a press shows by colour, not by a scale */
+  .fpv .btn:active, .fpv .gc-ch:active, .fpv .gc-x:active, .fpv .pv-handledbar .pv-handled:active, .fpv .act:active { transform: none !important; }
+}
+
+/* ------------------------------------------------- several projects at once */
+.fpv .pv-body[data-grouped] { grid-template-rows: minmax(0, 1fr); }
+.fpv .pv-groups { min-height: 0; overflow: auto; scrollbar-gutter: stable; display: grid; gap: 22px; align-content: start; padding: 0 0 28px; }
+.fpv .pv-proj { display: grid; min-width: 0; }
+.fpv .pv-proj-h { display: flex; align-items: center; gap: 8px; margin: 0; padding: 14px 22px 10px; font-size: 12.6px; font-weight: 700; color: var(--text); }
+.fpv .pv-proj-h svg { color: var(--text3); flex: none; }
+.fpv .pv-proj-h .n { color: var(--text3); font-weight: 600; font-size: 11.3px; }
+.fpv .pv-proj .pv-strip { border-top: 1px solid var(--fp-line); }
+.fpv .pv-groups .pv-flights { overflow: visible; padding-bottom: 0; }

@@ -56,7 +56,7 @@ export function openPrs(query: string, scope: PrScope = "open"): void {
  *  go to the place somebody named me and flash it — the inbox knows THAT you
  *  were mentioned and nothing about where, which is the half that made a
  *  mention notification end at the top of a forty-entry conversation. */
-export interface PrOpen { repo: string; number: number; mention?: boolean; focus?: "local"; fallback?: string; n?: number }
+export interface PrOpen { repo: string; number: number; mention?: boolean; focus?: "local"; fallback?: string; anchor?: string; n?: number }
 
 let exact: ((j: PrOpen) => void) | null = null;
 
@@ -65,7 +65,7 @@ export function onOpenPr(fn: ((j: PrOpen) => void) | null): () => void {
   return () => { if (exact === fn) exact = null; };
 }
 
-export function openPr(repo: string, number: number, opts: { mention?: boolean; focus?: "local"; fallback?: string } = {}): void {
+export function openPr(repo: string, number: number, opts: { mention?: boolean; focus?: "local"; fallback?: string; anchor?: string } = {}): void {
   // `n` rises so asking for the same pull request twice arrives twice: pressing
   // the same inbox row again should jump to the mention again.
   exact?.({ repo, number, ...opts, n: ++seq });
@@ -90,4 +90,15 @@ export function prRefFromUrl(url: string | undefined | null): { repo: string; nu
   if (!m) return null;
   const number = Number(m[3]);
   return Number.isSafeInteger(number) && number > 0 ? { repo: `${m[1]}/${m[2]}`, number } : null;
+}
+
+/**
+ * The comment a pull request URL points at, as GitHub spells it in the fragment:
+ * `discussion_r<id>` (a line comment), `issuecomment-<id>` (a conversation
+ * comment) or `pullrequestreview-<id>`. Null for no fragment or any other one
+ * (`#diff-…`, `#r2`): those open the pull request as before.
+ */
+export function prAnchorFromUrl(url: string | undefined | null): string | null {
+  const m = /#(discussion_r\d+|issuecomment-\d+|pullrequestreview-\d+)$/.exec((url ?? "").trim());
+  return m ? m[1] : null;
 }

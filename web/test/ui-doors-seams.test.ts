@@ -36,12 +36,11 @@ describe("the views drain what a door latched", () => {
     expect(drain).toContain("setChange(");
   });
 
-  it("the Terminal opens its menu first, and the Sessions list takes the request", () => {
-    const term = src("components/TerminalPanel.tsx");
-    expect(body(term, 'peekViewModal("terminal.resume")', "subscribeViewModal(run)")).toContain("setOpen(true)");
-    // The menu only PEEKS: taking it there would spend the request before the child mounts.
-    expect(term).not.toContain('takeViewModal("terminal.resume")');
-    expect(body(src("components/ResumeSessions.tsx"), 'takeViewModal("terminal.resume")', "subscribeViewModal(run)")).toContain("setOpen(true)");
+  it("the + menu hosts the Resume list and takes its request; the strip takes the sessions dialog's", () => {
+    const plus = src("components/terminal/PlusButton.tsx");
+    expect(body(plus, 'takeViewModal("terminal.resume")', "subscribeViewModal(run)")).toContain("setResume(true)");
+    const strip = src("components/terminal/TermStrip.tsx");
+    expect(body(strip, 'takeViewModal("terminal.sessions")', "subscribeViewModal(run)")).toContain("setManageOpen(true)");
   });
 });
 

@@ -3,7 +3,7 @@ import { listMembers } from "../lib/listMembers.ts";
 import { PeoplePick } from "./PeoplePick.tsx";
 import { CaretIcon, DoneIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { EDGE, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { EDGE, ListRow } from "./workspace/Chrome.tsx";
 import { AUTHOR_IS_MEMBER, type ListMember } from "../../../shared/providers.ts";
 import { avatarSrc } from "../lib/avatarSrc.ts";
 import type { Ensure, PrAuthor } from "../lib/stepAssign.ts";
@@ -106,11 +106,11 @@ export function AssignPicker({ state, disabled, label = "Assign to", nobody = "l
           face={(m) => <Face m={m} />}
           onPick={(m) => setPick(togglePick(pick, m))}
           onClose={close}
-          footer={<button type="button" className="w-full text-left px-2 py-1.5 hover:bg-white/5 flex items-center gap-2 text-[11.5px]" style={{ color: pick.length === 0 ? "var(--success)" : "var(--text2)" }}
-            onClick={() => { setPick([]); close(); }}>
-            <span className="flex-1">Nobody</span><span className="text-[10px]" style={{ color: "var(--text3)" }}>{nobody}</span>
-            {pick.length === 0 ? <DoneIcon size={ICON.xs} /> : null}
-          </button>} />
+          footer={<ListRow onClick={() => { setPick([]); close(); }}
+            sub={nobody}
+            trailing={pick.length === 0 ? <DoneIcon size={ICON.xs} /> : undefined}>
+            <span style={{ color: pick.length === 0 ? "var(--success)" : undefined }}>Nobody</span>
+          </ListRow>} />
       )}
     </span>
   );

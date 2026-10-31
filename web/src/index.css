@@ -717,6 +717,13 @@
 .agx-badge[data-tone="info"] { background: color-mix(in srgb, var(--info) 14%, transparent); color: var(--info-ink); }
 .agx-badge[data-tone="off"], .agx-badge[data-tone="checking"] { box-shadow: inset 0 0 0 1px var(--surface-line); color: var(--text3); }
 .agx-badge[data-tone="off"] > i { background: transparent; box-shadow: inset 0 0 0 1.5px currentColor; }
+/* A badge that is also the way to put it away (the 1.0 note): the same chip,
+   pressed to the page's own ground so a button never reads as a verdict. */
+button.agx-badge {
+  border: 0; cursor: pointer; background: var(--surface-inset);
+  box-shadow: inset 0 0 0 1px var(--surface-line); color: var(--text2);
+}
+button.agx-badge:hover { background: color-mix(in srgb, var(--text) 8%, var(--surface-inset)); }
 
 /* A row's name and its help: the name is the heavier of the two and in the
    full ink, the help one muted line under it. */
@@ -768,12 +775,17 @@
 }
 /* The segmented choice: an inset track, the chosen one raised on the page's ground. */
 .agx-seg { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 2px; border-radius: 9px; background: var(--surface-inset); max-width: 100%; }
+/* One row of equal halves, for a track in a narrow column (the projects rail). */
+.agx-seg-rail > span { display: flex; width: 100%; }
+.agx-seg-rail .agx-seg { display: flex; flex-wrap: nowrap; width: 100%; }
+.agx-seg-rail .agx-seg-b { flex: 1 1 0; min-width: 0; justify-content: center; padding: 0 6px; }
 .agx-seg-b {
   display: inline-flex; align-items: center; height: 24px; padding: 0 12px; border: 0; border-radius: 7px; background: none;
   font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); white-space: nowrap; cursor: pointer; transition: background-color 120ms, color 120ms;
 }
-.agx-seg-b:hover:not(:disabled):not([aria-pressed="true"]) { color: var(--text); }
-.agx-seg-b[aria-pressed="true"] { background: var(--bg); color: var(--text); font-weight: 650; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18); }
+.agx-seg-b:hover:not(:disabled):not([aria-pressed="true"]):not([aria-selected="true"]):not([aria-checked="true"]) { color: var(--text); }
+.agx-seg-b[aria-pressed="true"], .agx-seg-b[aria-selected="true"], .agx-seg-b[aria-checked="true"] { background: var(--bg); color: var(--text); font-weight: 650; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18); }
+.agx-seg-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent, var(--primary)); }
 @media (prefers-reduced-motion: reduce) { .agx-switch, .agx-switch-knob, .agx-seg-b { transition: none; } }
 /* A switch is 20px tall; its button is padded to the house hit size and answers
    hover and press on its own track, not on the padding around it. */
@@ -783,7 +795,8 @@
 .agx-switch-hit:active:not(:disabled) > span { filter: brightness(0.82); }
 /* A row that is a button, edge to edge: Settings' "Back to app". Fill and ink
    only, so nothing under the pointer moves between rest, hover and press. */
-.agx-navback { transition: background-color 120ms, color 120ms; cursor: pointer; }
+.agx-navback { transition: background-color 120ms, color 120ms; cursor: pointer; background: color-mix(in srgb, var(--text) 4%, transparent); }
+.agx-sn-backwrap { padding: 12px 12px 10px; }
 .agx-navback:hover { background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); }
 .agx-navback:active { background: color-mix(in srgb, var(--text) 13%, transparent); color: var(--text); }
 /* A tab is not a chip: it has no fill of its own, so the hover IS the surface. */
@@ -822,18 +835,6 @@
   100% { background-position: -200% 0; }
 }
 
-/* Gentle "alive" drift for the stats glass widgets. Runs on the compositor
-   (transform only) so it's cheap and — unlike a JS animation loop — never
-   restarts when React re-renders. Per-widget tilt/phase set via CSS vars. */
-@keyframes agw-float {
-  0%, 100% { transform: translateY(0) rotate(var(--tilt, 0deg)); }
-  50% { transform: translateY(calc(var(--fy, 7px) * -1)) rotate(calc(var(--tilt, 0deg) + 0.4deg)); }
-}
-.agw-float {
-  animation: agw-float var(--dur, 8s) ease-in-out infinite;
-  animation-delay: var(--delay, 0s);
-  will-change: transform;
-}
 @keyframes sweep {
   to { transform: rotate(360deg); }
 }
@@ -850,7 +851,6 @@
    when the tab is backgrounded (belt-and-suspenders over the browser's own
    throttling). Keeps the app at ~0% CPU when it isn't being looked at. */
 @media (prefers-reduced-motion: reduce) {
-  .agw-float { animation: none; transform: rotate(var(--tilt, 0deg)); }
   .rdr-sweep, .shimmer { animation: none !important; }
   [style*="ping-ring"] { animation: none !important; }
 }
@@ -862,10 +862,8 @@
    actual work, uses 8%. Disabling the loops outright took the same page from
    76% to 16% in WebKitGTK. */
 :root[data-idle="1"] .rdr-sweep,
-:root[data-idle="1"] .agw-float,
 :root[data-idle="1"] .shimmer,
 :root[data-ws="1"] .rdr-sweep,
-:root[data-ws="1"] .agw-float,
 :root[data-ws="1"] .shimmer {
   animation-play-state: paused !important;
 }
@@ -1127,8 +1125,8 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 /* Workspace rail.
  *
  * The rail is icon-only, so the tooltip is not decoration — it is the only
- * place the view's name exists. The delay keeps it from strobing as the
- * pointer crosses the rail on its way somewhere else. */
+ * place the view's name exists. It is drawn by the one tooltip host from
+ * `data-tip`; this class only tints the button under the pointer. */
 .agw-tip:hover {
   background: color-mix(in srgb, var(--primary) 10%, transparent) !important;
   color: var(--text2) !important;
@@ -1136,32 +1134,6 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 .agw-tip[aria-selected="true"]:hover {
   background: color-mix(in srgb, var(--primary) 22%, transparent) !important;
   color: var(--primary-hover) !important;
-}
-.agw-tip::after {
-  content: attr(data-tip);
-  position: absolute;
-  left: calc(100% + 10px);
-  white-space: nowrap;
-  padding: 4px 8px;
-  border-radius: 7px;
-  font-size: calc(10.5px * var(--agx-fs, 1));
-  color: var(--text2);
-  background: color-mix(in srgb, var(--bg) 96%, var(--bg2));
-  border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent);
-  box-shadow: 0 12px 30px -18px #000;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateX(-3px);
-  transition: opacity 0.12s ease 0.25s, transform 0.12s ease 0.25s;
-  z-index: 5;
-}
-.agw-tip:hover::after,
-.agw-tip:focus-visible::after {
-  opacity: 1;
-  transform: translateX(0);
-}
-@media (prefers-reduced-motion: reduce) {
-  .agw-tip::after { transition: opacity 0.12s ease 0.25s; transform: none; }
 }
 
 /* The dim behind a modal.
@@ -1391,6 +1363,12 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
    Sized by the caller where it is not 11px: `style={{ width, height }}` on the
    element, which is how the fill-the-pane loader gets its 22. */
 @keyframes agx-spin { to { transform: rotate(360deg); } }
+/* The people picker grows out of the corner it was opened from: ease-out, 160 ms, none when motion is reduced. */
+/* A child never shrinks inside the dialog: at its max-height the summary line shrank to its min-height and its second line spilled over Cancel and Done. The dialog scrolls instead. */
+.agx-pp > * { flex-shrink: 0; }
+.agx-pp { transform-origin: top right; animation: agx-pp-in 160ms cubic-bezier(0.23, 1, 0.32, 1); }
+@keyframes agx-pp-in { from { opacity: 0; transform: scale(0.97); } }
+@media (prefers-reduced-motion: reduce) { .agx-pp { animation: none; } }
 .agx-spin {
   display: inline-block;
   width: 11px;
@@ -2095,9 +2073,15 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 /* A control fills its field, which fills its card. In the components layer, so a
    field that wants a short box (a port, a count) still says so with `w-[96px]`. */
 @layer components {
-  .agx-field > :where(input:not([type=checkbox], [type=radio], [type=range], [type=color]), select, textarea) { width: 100%; }
+  .agx-field > :where(input:not([type=checkbox], [type=radio], [type=range], [type=color]), textarea) { width: 100%; }
+  .agx-field[data-block] > select { width: 100%; }
 }
+/* A select is as wide as its longest option unless the field is `block`. */
+.agx-field:not([data-block]) > :where(select, .agx-select) { align-self: flex-start; }
 .agx-field { display: flex; flex-direction: column; gap: 6px; }
+/* 12px between fields wherever they sit; .agx-sform already spaces its children with gap. */
+.agx-field:not(:last-child) { margin-bottom: 12px; }
+.agx-sform > .agx-field { margin-bottom: 0; }
 .agx-field-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .agx-field-l { font-size: calc(12px * var(--agx-fs, 1)); font-weight: 500; color: var(--text2); }
 .agx-field-link { font-size: calc(12px * var(--agx-fs, 1)); color: var(--primary-ink); text-decoration: underline; text-underline-offset: 2px; white-space: nowrap; }
@@ -2321,6 +2305,7 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
 @media (max-width: 1100px) {
   .agx-sn-back span, .agx-sp-box kbd, .agx-sn-gn, .agx-sn-caret, .agx-sn-lbl, .agx-sn-meta, .agx-sn-legend, .agx-sn-pin { display: none; }
   .agx-sn-back { justify-content: center; padding-inline: 0; min-height: 36px; }
+  .agx-sn-backwrap { padding: 8px 8px 8px; }
   /* The box is an icon in the rail; its input stays in the tree (a hidden one cannot take focus) and
      opens beside it while it has the caret. */
   .agx-sp-box { justify-content: center; padding: 8px; position: relative; }
@@ -2614,7 +2599,12 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
    `min-[1180px]:flex` does not. So the number lives here, in plain CSS, where it
    can be read and where it cannot silently fail to exist. */
 .agx-rail { display: none; }
-@media (min-width: 1180px) { .agx-rail { display: flex; } }
+/* 1180 is the width of the PANE that holds the diff, not of the window. A
+   viewport query kept the rail in a 620px dock on a 2560px screen and left the
+   diff about 100px; measured at 2560x1357. The row is the container, so the
+   maximized dock (2500px) still shows the rail and the default dock folds it. */
+.agx-files { container: agx-files / inline-size; }
+@container agx-files (min-width: 1180px) { .agx-rail { display: flex; } }
 
 /* The one-screen review is three columns, and the mockup says how they behave:
 
@@ -2659,7 +2649,9 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
    with it. Reported as "that odd scroll pushes the file list upwards". The
    percentage resolves now because the row it sits in is a flex
    child with a definite height — see `flex-1 min-h-0` on it. */
-.agx-tree3 { width: 250px; max-height: var(--agx-tree-max, 60vh); overflow-y: auto; }
+.agx-tree3 { width: 230px; max-height: var(--agx-tree-max, 60vh); overflow-y: auto; }
+/* The mockup narrows the Files tree at 760px of detail; the band is measured on the body (prDock.detailBand), not the viewport. */
+#pr-tab-body[data-band="narrow"] .agx-tree3 { width: 170px; }
 @media (max-width: 1179px) { .agx-tree3 { width: 200px; } }
 
 /* The git cards.
@@ -2764,7 +2756,7 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
  * reported as "it feels like it has no room to breathe", which is exactly what a text box
  * with no padding looks like next to text that has some.
  *
- * The shape is the one CompareModal and SearchModal already use, so this is
+ * The shape is the one CompareModal already uses, so this is
  * the existing house style given a name rather than a new one invented for a
  * single panel. Kept as a class instead of copied inline because it appears in
  * a dozen places across two files, and a dozen copies is a dozen chances for
@@ -2993,118 +2985,168 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
   [data-canvas-loop] { animation: none; }
 }
 
+
+.agx-pc-tag {
+  flex: none; display: inline-flex; align-items: center; gap: 2px; height: 16px; padding: 0 6px; border-radius: 999px;
+  font-size: calc(9.5px * var(--agx-fs, 1)); white-space: nowrap;
+  color: var(--text3); border: 1px solid color-mix(in srgb, var(--text3) 30%, transparent);
+}
+.agx-pc-tag[data-tone="warn"] { color: var(--warning-ink); background: color-mix(in srgb, var(--warning) 12%, transparent); border-color: color-mix(in srgb, var(--warning) 30%, transparent); }
+.agx-pc-tag[data-tone="bad"] { color: var(--error-ink); background: color-mix(in srgb, var(--error) 12%, transparent); border-color: color-mix(in srgb, var(--error) 35%, transparent); }
+/* A saved view in the row under the top bar: a chip, its Alt+n index, a dot while it is changed. The chosen one is ink. */
+.agx-vchip {
+  position: relative; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 8px; flex: none;
+  font-size: calc(12px * var(--agx-fs, 1)); font-weight: 500; white-space: nowrap; color: var(--text2); background: transparent;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent); transition: background-color 120ms, color 120ms;
+}
+.agx-vchip:hover { color: var(--text); background: var(--surface-inset); }
+.agx-vchip[aria-pressed="true"] { color: var(--bg); background: var(--text); box-shadow: none; }
+.agx-vchip-k { font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(10px * var(--agx-fs, 1)); opacity: .6; }
+.agx-vchip-dirty { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent, var(--primary)); }
+@media (prefers-reduced-motion: reduce) { .agx-vchip { transition: none; } }
 /*
- * THE PULL-REQUEST CARD'S LAYOUT.
- *
- * A lane is anywhere from 268px to well over a thousand. The card measures
- * ITSELF (a container, not the viewport — the lane's width is what changes, and
- * it changes with the window, the fold state and the number of lanes).
- *
- * Narrow: identity line, then the title, then where it stands, what happened
- * last, and the footer. Past 760px the standing zone and the footer become a
- * right column. The number, the link and the pin sit together on the identity
- * line at every width, so the title keeps the whole of the left.
+ * The block under the top bar (the mockup's #sub): the saved views, then the
+ * rules, on one wash with one rule under them. The rules row is a chip per
+ * rule (a small-caps lane word in the lane's colour, the rule, an x), the dashed
+ * box you type a new one into, and the totals at the far end.
  */
-.agx-prc { container-type: inline-size; container-name: agx-prc; }
-.agx-prc-main {
-  display: grid; align-items: center; gap: 4px 8px; padding: 8px 14px;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-areas: "id" "tt" "st" "ev";
+.agx-subbar { flex: none; background: color-mix(in srgb, var(--text) 3%, var(--bg)); border-bottom: 1px solid var(--surface-line); }
+.agx-drow { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 4px 12px; min-height: 38px; min-width: 0; }
+.agx-drow-sep { flex: none; width: 1px; height: 16px; background: var(--surface-line); margin: 0 2px; }
+.agx-drow-l { font-size: calc(11px * var(--agx-fs, 1)); font-weight: 600; color: var(--text3); white-space: nowrap; }
+.agx-rchip {
+  --c: var(--info);
+  display: inline-flex; align-items: center; flex: none; height: 24px; padding: 0 4px 0 8px; gap: 6px; border-radius: 7px; white-space: nowrap;
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text); background: var(--surface-card);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 38%, transparent);
 }
-.agx-prc-id { grid-area: id; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; min-height: 20px; white-space: nowrap; color: var(--text3); font-size: calc(10.5px * var(--agx-fs, 1)); }
-.agx-prc-title { grid-area: tt; align-self: start; min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
-/* The three buttons of the group say they are buttons on a mouse: a tint and a
-   ring that sit ON TOP of whatever the state painted (the green of a copy, the
-   tint of a pin), as shadows, because the state is an inline style and a
-   background here would lose to it. */
-.agx-prc-cp { cursor: pointer; }
-.agx-prc-cp:hover {
-  box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--primary) 14%, transparent),
-    0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent);
+.agx-rchip[data-lane="hide"] { --c: var(--error); }
+.agx-rchip:hover { background: color-mix(in srgb, var(--c) 5%, var(--surface-card)); }
+.agx-rchip[data-wall] { box-shadow: inset 0 0 0 1px var(--error), 0 0 0 3px color-mix(in srgb, var(--error) 18%, transparent); }
+.agx-rchip-l { font-family: inherit; font-size: calc(10px * var(--agx-fs, 1)); font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--c); }
+.agx-rchip-main { display: inline-flex; align-items: center; gap: 6px; min-width: 0; height: 100%; }
+.agx-rchip-x { display: grid; place-items: center; flex: none; width: 18px; height: 18px; border-radius: 5px; color: var(--text3); }
+.agx-rchip-x:hover { background: var(--surface-inset); color: var(--text); }
+.agx-addrule {
+  display: flex; align-items: center; flex: 1; gap: 6px; min-width: 150px; max-width: 340px; height: 24px; padding: 0 4px 0 6px; border-radius: 7px;
+  border: 1px dashed color-mix(in srgb, var(--text) 24%, transparent); color: var(--text4); cursor: text;
 }
-/* The link and the pin: the number chip's height (CHIP_H + 2) on a mouse, HIT on
-   a touch screen. Both come from the card as --ib and --ib-hit. */
-.agx-prc-ib { width: var(--ib); height: var(--ib); }
-@media (hover: none) and (pointer: coarse) {
-  .agx-prc-ib { width: var(--ib-hit); height: var(--ib-hit); }
+.agx-addrule:focus-within { border-style: solid; border-color: color-mix(in srgb, var(--text) 40%, transparent); background: var(--bg); }
+.agx-addrule[data-err] { border-color: var(--error); }
+.agx-addrule input { flex: 1; min-width: 0; font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text); }
+.agx-cnt { flex: none; padding: 4px 8px; border-radius: 6px; white-space: nowrap; font-size: calc(10.5px * var(--agx-fs, 1)); font-weight: 600; color: var(--text3); background: var(--surface-inset); }
+/* The banner over a search or a person's board: an info wash and ring, a sentence, and the way back at its end. */
+.agx-banner {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; font-size: calc(12px * var(--agx-fs, 1)); color: var(--info-ink, var(--info));
+  background: color-mix(in srgb, var(--info) 7%, var(--bg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--info) 24%, transparent);
 }
-.agx-prc-stand { grid-area: st; min-width: 0; }
-.agx-prc-event { grid-area: ev; }
-@container agx-prc (min-width: 760px) {
-  .agx-prc-main {
-    grid-template-columns: minmax(0, 1fr) 352px;
-    grid-template-areas: "id st" "tt st" "ev st";
-    column-gap: 8px;
-  }
-  .agx-prc-title { -webkit-line-clamp: 2; }
-  .agx-prc-stand { margin-left: 12px; }
+.agx-banner[data-tone="warn"] {
+  color: var(--warning-ink, var(--warning));
+  background: color-mix(in srgb, var(--warning) 8%, var(--bg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning) 28%, transparent);
 }
+/* An empty answer: a tile, a title, a sentence, then its actions. */
+.agx-blank { display: grid; place-items: center; padding: 24px; }
+.agx-blank > div { display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: 420px; text-align: center; }
+.agx-blank-t { font-size: calc(14px * var(--agx-fs, 1)); font-weight: 600; line-height: 1.3; color: var(--text); }
+.agx-blank-s { font-size: calc(12.5px * var(--agx-fs, 1)); line-height: 1.5; color: var(--text3); }
+.agx-ghostrows { display: flex; flex-direction: column; gap: 6px; width: 280px; margin: 2px 0 6px; }
+.agx-ghostrows i { display: block; height: 28px; border-radius: 8px; border: 1px dashed color-mix(in srgb, var(--text) 18%, transparent); }
+.agx-blank-tile {
+  display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; color: var(--tone, var(--text3));
+  background: color-mix(in srgb, var(--tone, var(--text)) 10%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone, var(--text)) 28%, transparent);
+}
+.agx-blank > .agx-notice { display: block; width: min(600px, 100%); max-width: none; gap: 0; padding: 0; text-align: left; border-radius: 12px; overflow: hidden; background: var(--surface-card); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone) 24%, transparent); }
+.agx-notice-head { display: grid; grid-template-columns: 36px 1fr; gap: 10px; padding: 14px 14px 10px; }
+.agx-notice-pre { margin: 0 14px; padding: 8px 10px; border-radius: 8px; white-space: pre-wrap; font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(11px * var(--agx-fs, 1)); line-height: 1.55; color: var(--error-ink); background: color-mix(in srgb, var(--tone) 5%, var(--bg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone) 12%, transparent); }
+.agx-notice-act { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 12px 14px; }
+.agx-notice-note { font-size: calc(11px * var(--agx-fs, 1)); color: var(--text4); }
+/* A search, person or closed-list result: a row, not a card. The tile carries the state, the rest is one line of who and when. */
+.agx-srow {
+  /* The route column is fit-content(45%), not auto: an auto track grows to its content before the title's 1fr is shared out, and beside the dock the title column was left a word wide. */
+  display: grid; grid-template-columns: 22px minmax(0, 1fr) fit-content(45%) auto; gap: 12px; align-items: center;
+  padding: 8px 12px; border-radius: 10px; background: var(--bg); cursor: pointer;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent), var(--surface-lift);
+  transition: box-shadow .16s cubic-bezier(.23, 1, .32, 1);
+}
+/* Beside the docked detail the list is ~400px: the route and tags drop under the title instead of taking its column, and the age rides on the title's line. Asked of the results box, which is the list's own width. */
+[data-results] { container: agx-res / inline-size; }
+@container agx-res (max-width: 560px) {
+  .agx-srow { grid-template-columns: 22px minmax(0, 1fr) auto; row-gap: 6px; }
+  .agx-srow > :nth-child(3) { grid-column: 2 / -1; flex-wrap: wrap; }
+  .agx-srow > :nth-child(3):empty { display: none; }
+  .agx-srow > :nth-child(4) { grid-column: 3; grid-row: 1; }
+}
+@media (hover: hover) { .agx-srow:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--info) 50%, transparent); } }
+.agx-srow:focus-visible { outline: 2px solid var(--accent, var(--primary)); outline-offset: 2px; }
+.agx-srow[data-selected] { box-shadow: inset 0 0 0 1.5px var(--accent, var(--primary)); }
+.agx-srow-tile {
+  display: grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 12%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone) 28%, transparent);
+}
+.agx-srow-tt { font-size: calc(12.5px * var(--agx-fs, 1)); font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The route chips in a row carry the branch glyph, and the base is one blue whatever it is (the mockup's .srow). */
+.agx-srow .agx-pc-src, .agx-srow .agx-pc-dest { display: inline-flex; align-items: center; gap: 4px; }
+.agx-srow .agx-pc-dest { color: var(--info); background: color-mix(in srgb, var(--info) 10%, transparent); border-color: color-mix(in srgb, var(--info) 28%, transparent); }
+.agx-srow-ss { display: flex; gap: 8px; align-items: center; min-width: 0; margin-top: 4px; font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); }
+@media (prefers-reduced-motion: reduce) { .agx-srow { transition: none; } }
+/* The Closed list: the board's own cards, a day at a time, as many to a row as fit (the detail docked leaves one). */
+.agx-cl-grid { display: grid; grid-template-columns: repeat(auto-fill, 336px); gap: 12px; align-items: start; }
+.agx-cl-day { display: flex; align-items: baseline; gap: 8px; margin: 10px 2px 6px; font-size: calc(11px * var(--agx-fs, 1)); font-weight: 600; color: var(--text3); }
+.agx-cl-day > :last-child { font-weight: 400; color: var(--text4); }
+/* The Inbox view (the mockup's .irow, .pickbar) and the CI view (.tile2, .box, .crow). */
+.agx-vchip[data-sm] { height: 24px; }
+.agx-irow {
+  position: relative; display: grid; grid-template-columns: 18px 22px minmax(0, 1fr) auto auto; gap: 10px; align-items: center;
+  min-height: 50px; padding: 6px 12px; border-radius: 10px; cursor: pointer;
+}
+.agx-irow:hover, .agx-irow:focus-within { background: color-mix(in srgb, var(--text) 4%, transparent); }
+.agx-irow[data-ghost] { opacity: .62; }
+.agx-irow-tt { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: calc(12.5px * var(--agx-fs, 1)); font-weight: 500; color: var(--text); }
+.agx-irow[data-unread] .agx-irow-tt { font-weight: 700; }
+.agx-irow-ss { display: flex; gap: 6px; min-width: 0; margin-top: 2px; font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text3); }
+.agx-udot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent, var(--primary)); }
+.agx-irow-acts { display: flex; gap: 2px; }
+/* The 16px box that picks a row: drawn, not a native checkbox, so it is the same on every theme. */
+.agx-itick {
+  display: grid; place-items: center; flex: none; width: 16px; height: 16px; border-radius: 4px; color: var(--on-primary);
+  border: 1.5px solid color-mix(in srgb, var(--text) 26%, transparent); background: var(--surface-card);
+}
+.agx-itick[aria-checked="true"] { background: var(--primary); border-color: var(--primary); }
+.agx-pickbar {
+  flex: none; display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 12px; border-top: 1px solid var(--surface-line);
+  background: color-mix(in srgb, var(--info) 6%, var(--bg)); font-size: calc(12px * var(--agx-fs, 1)); color: var(--text2);
+}
+/* Five tiles: auto-fit keeps them in one row while 150px each fits, and wraps evenly after that instead of leaving one alone on a second row. */
+.agx-tiles2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.agx-tile2 {
+  min-width: 0; padding: 12px 14px; border: 0; border-radius: 12px; text-align: left; cursor: pointer; background: var(--surface-card);
+  display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent);
+}
+.agx-tile2:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 55%, transparent); }
+.agx-tile2[aria-pressed="true"] { box-shadow: inset 0 0 0 1.5px var(--c); background: color-mix(in srgb, var(--c) 4%, var(--surface-card)); }
+.agx-tile2-k { font-size: calc(10.5px * var(--agx-fs, 1)); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text3); }
+.agx-tile2-v { font-size: calc(24px * var(--agx-fs, 1)); font-weight: 700; line-height: 1.2; letter-spacing: -.02em; font-variant-numeric: tabular-nums; color: var(--ink); }
+/* The line wraps rather than ends in an ellipsis: "+11 vs last week" is the half of it that matters. */
+.agx-tile2-d { font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); overflow-wrap: anywhere; }
+.agx-cibox { border-radius: 12px; background: var(--surface-card); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent), var(--surface-lift); }
+.agx-cibox-h {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 12px 12px 0 0; background: var(--surface-inset);
+  border-bottom: 1px solid var(--surface-line); font-size: calc(12px * var(--agx-fs, 1)); font-weight: 600; color: var(--text2); white-space: nowrap;
+}
+.agx-cirow { grid-template-columns: minmax(150px, 1fr) 56px 64px 84px; }
+.agx-cibox-h small { font-size: inherit; font-weight: 400; color: var(--text4); }
+
+
+.agx-pc-route { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; min-width: 0; min-height: 20px; font-size: calc(10.5px * var(--agx-fs, 1)); color: var(--text3); }
+.agx-pc-src { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 6px; border-radius: 6px; background: var(--surface-inset); border: 1px solid var(--surface-line); color: var(--text2); }
+/* The destination is never cut: a stacked branch with a long ticket in its name is exactly the one you could not read. */
+.agx-pc-dest { flex: none; white-space: nowrap; padding: 1px 6px; border-radius: 6px; color: var(--warning-ink); background: color-mix(in srgb, var(--warning) 12%, transparent); border: 1px solid color-mix(in srgb, var(--warning) 30%, transparent); }
+.agx-pc-dest[data-trunk] { color: var(--info); background: color-mix(in srgb, var(--info) 10%, transparent); border-color: color-mix(in srgb, var(--info) 28%, transparent); }
+
 
 /*
- * THE TRACKER BLOCK on the identity line (CardTracker.tsx).
- *
- * 28px tall on one row: the 26px controls the house sizes its buttons at, and
- * a pixel of edge either side. `margin-left: auto` pushes it to the end of the
- * line, and when the line is too full for it the line wraps and the block takes
- * its own, still at the end — the status inside it does not shrink to make
- * room. In a lane too narrow for the block even alone (a 270px lane against a
- * block that is ~340px with its faces) the block itself wraps onto a second
- * row: measured, `flex: none` without this overflowed the card sideways.
- *
- * The copy buttons live in `.agx-trk-fz`, a box at least as wide as the two
- * (three, with an address) of them. They are invisible at rest and replace the faces in that same box on
- * pointer-over or focus-within, so reaching for one moves nothing. Keyboard
- * focus reaches them while they are invisible, and focus-within then shows
- * them. Without a hover (coarse pointer) they take an inline slot instead.
- */
-.agx-trk {
-  position: relative; display: inline-flex; align-items: center; gap: 2px 8px; flex: none; min-width: 0;
-  flex-wrap: wrap; justify-content: flex-end; max-width: 100%;
-  min-height: 28px; margin-left: auto; padding: 2px 4px 2px 8px; font-size: calc(10px * var(--agx-fs, 1)); white-space: nowrap;
-  color: var(--text3); border-radius: 7px;
-  border: 1px solid color-mix(in srgb, var(--accent, var(--primary)) 26%, transparent);
-  background: color-mix(in srgb, var(--accent, var(--primary)) 8%, var(--surface-card));
-}
-/* A tracker repository whose pull request has no card: the same box, nothing in it that is a brand. */
-.agx-trk[data-quiet] { background: transparent; border-color: transparent; }
-/* The id is a button, and says so: the underline and the stronger tint are the
-   only thing on the card that promises a click goes somewhere inside the app.
-   `!important` because the chip paints its own tint inline, from the priority. */
-.agx-trk-id:hover { text-decoration: underline; text-underline-offset: 2px;
-  background: color-mix(in srgb, currentColor 22%, transparent) !important;
-  border-color: color-mix(in srgb, currentColor 70%, transparent) !important; }
-.agx-trk-fz { position: relative; display: inline-flex; align-items: center; justify-content: flex-end; min-width: 56px; flex: none; }
-/* Three buttons are 78px, not 56: a card that has an address widens its box to
-   fit them, so they never spill left over the status. */
-.agx-trk-fz[data-wide] { min-width: 78px; }
-.agx-trk-faces { display: inline-flex; align-items: center; transition: opacity .12s; }
-.agx-trk-ovl { position: absolute; inset: 0; display: flex; align-items: center; justify-content: flex-end; opacity: 0; pointer-events: none; transition: opacity .12s; }
-.agx-trk:is(:hover, :focus-within) .agx-trk-faces { opacity: 0; }
-.agx-trk:is(:hover, :focus-within) .agx-trk-ovl { opacity: 1; pointer-events: auto; }
-.agx-trk-cp { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: none; border-radius: 6px; color: var(--text3); }
-.agx-trk-cp:hover { color: var(--text); background: color-mix(in srgb, var(--accent, var(--primary)) 14%, transparent); }
-.agx-trk-cp[data-copied] { color: var(--success); background: color-mix(in srgb, var(--success) 16%, transparent); }
-.agx-trk-tip {
-  display: none; position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); z-index: 5;
-  padding: 4px 8px; border-radius: 6px; font-size: calc(10px * var(--agx-fs, 1)); white-space: nowrap; pointer-events: none;
-  background: var(--text); color: var(--bg); box-shadow: 0 4px 12px -4px rgba(0, 0, 0, .4);
-}
-/* The last button's tip hangs from its right edge: centred, it would leave the
-   card. Whichever button is last: a card without a title or an address ends on
-   the id, and its tip would leave the card just the same. */
-.agx-trk-cp:last-child .agx-trk-tip { left: auto; right: 0; transform: none; }
-.agx-trk-cp:is(:hover, :focus-visible) .agx-trk-tip, .agx-trk-cp[data-copied] .agx-trk-tip { display: block; }
-@media (hover: none) and (pointer: coarse) {
-  .agx-trk-fz, .agx-trk-fz[data-wide] { min-width: 0; gap: 4px; }
-  .agx-trk-ovl { position: static; opacity: 1; pointer-events: auto; }
-  .agx-trk-faces { opacity: 1 !important; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .agx-trk-faces, .agx-trk-ovl { transition: none; }
-}
-
-/*
- * Stacked pull requests: the spine on a board card, the token that names the
+ * Stacked pull requests: the spine of the stack marks, the token that names the
  * base, and the three-slot control in a pull request's header.
  *
  * Rings are `box-shadow: inset`, a dashed outline is an `outline`, so the
@@ -3112,9 +3154,6 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
  * ink) and never the only signal: every mark has a word, a number or a drawn
  * glyph, and a sentence behind it.
  */
-.agx-stk-card { position: relative; }
-/* The spine lives in the card's own left padding; the content makes room. */
-.agx-stk-card .agx-prc-main, .agx-stk-card .agx-stk-band { padding-left: 26px; }
 .agx-stk {
   position: absolute; left: 5px; top: 5px; bottom: 5px; width: 16px; z-index: 1;
   display: flex; flex-direction: column; gap: 2px;
@@ -3136,15 +3175,12 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-stk[data-warn] .agx-stk-b[data-k="cur"] { --c: var(--warning); color: var(--bg); }
 .agx-stk[data-warn] .agx-stk-b[data-k="off"] { outline-color: var(--warning); color: var(--warning-ink); }
 .agx-stk-gap { flex: none; height: 16px; display: grid; place-items: center; font-size: calc(9px * var(--agx-fs, 1)); font-weight: 700; line-height: 1; color: var(--text2); }
-/* Pointer-over a token outlines the base card it names: an outline, so nothing moves. */
-.agx-stk-card[data-lit] { position: relative; }
-/* An outline sits outside the card and the lane's scroll box cut it off; a ring drawn inside, over the rows, cannot be clipped and hides nothing of the content. */
-.agx-stk-card[data-lit]::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 5; box-shadow: inset 0 0 0 2px var(--primary); }
+
 
 .agx-stk-t {
   all: unset; box-sizing: border-box; cursor: pointer;
   --c: var(--primary); --ci: var(--primary-ink);
-  display: inline-flex; align-items: center; gap: 6px; padding: 0 6px; border-radius: 6px;
+  display: inline-flex; align-items: center; gap: 6px; padding: 0 6px; border-radius: 6px; flex: none; /* never squeezed by the branch beside it: the branch truncates first */
   max-width: 210px; overflow: hidden; white-space: nowrap; font-size: calc(10.5px * var(--agx-fs, 1)); color: var(--ci);
   background: color-mix(in srgb, var(--c) 10%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 45%, transparent);
@@ -3378,6 +3414,9 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
   transition: background-color 280ms ease-out, color 280ms ease-out; }
 .agx-presence-dock.is-thinking .agx-presence-state, .agx-presence-dock.is-waiting .agx-presence-state, .agx-presence-dock.is-working .agx-presence-state { color: rgba(242, 240, 247, .72); background: rgba(255, 255, 255, .08); }
 .agx-presence-dock.is-yours .agx-presence-state { color: var(--agx-dock-yours); background: color-mix(in srgb, var(--agx-dock-yours) 16%, transparent); }
+/* Yours: the person is using the page, so the dock steps back from what it covers until the pointer comes to it. */
+.agx-presence-dock.is-yours:not(:hover):not(:focus-within) { opacity: .45; }
+.agx-presence-dock.is-yours { transition: box-shadow 300ms var(--agx-out), opacity 200ms ease-out; }
 .agx-presence-state svg { flex: none; overflow: visible; }
 .agx-st-ring { transform-origin: 6px 5.5px; animation: agx-st-ring 900ms ease-out infinite; }
 @keyframes agx-st-ring { from { opacity: .9; transform: scale(.3); } to { opacity: 0; transform: scale(1); } }
@@ -3395,16 +3434,22 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-st-dot:nth-child(3) { animation-delay: .3s; }
 @keyframes agx-st-dot { 0%, 60%, 100% { opacity: .35; } 30% { opacity: 1; } }
 /* A word or icon that changes crosses over (Swap in AgentPresence.tsx): the host's width follows the new layer. */
-.agx-sw { position: relative; display: block; flex: none; align-self: stretch; transition: width 260ms var(--agx-out); }
+/* Not `.agx-sw`: PrPanel's viewed switch owns that name, and once its stylesheet was mounted every dock word
+   got a 14 px dark strip at its top and a knob over its icon. web/test/agent-dock-classes.test.ts keeps them apart. */
+.agx-swap { position: relative; display: block; flex: none; align-self: stretch; transition: width 260ms var(--agx-out); }
 /* The chip's floor is its longest word, "You have it": 6.8em of text at the chip's size beside the 14 px icon and its
    6 px gap, so it grows with the interface font size and no state word pushes Take over. A fixed 86 px moved it at 14 and 15 px. */
-.agx-presence-state .agx-sw { height: 20px; min-width: calc(6.8em + 20px); }
-.agx-sw-lay { position: absolute; left: 0; top: 0; bottom: 0; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-.agx-presence-dock button .agx-sw-lay { gap: 8px; }
-.agx-sw-lay.is-in { animation: agx-sw-in 260ms var(--agx-out) both; }
-.agx-sw-lay.is-out { animation: agx-sw-out 200ms var(--agx-out) both; pointer-events: none; }
-@keyframes agx-sw-in { from { opacity: 0; filter: blur(3px); transform: translateY(5px); } }
-@keyframes agx-sw-out { to { opacity: 0; filter: blur(3px); transform: translateY(-5px); } }
+.agx-presence-state .agx-swap { height: 20px; min-width: calc(6.8em + 20px); }
+.agx-swap-lay { position: absolute; left: 0; top: 0; bottom: 0; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.agx-presence-dock button .agx-swap-lay { gap: 8px; }
+.agx-swap-lay.is-in { animation: agx-swap-in 260ms var(--agx-out) both; }
+.agx-swap-lay.is-out { animation: agx-swap-out 200ms var(--agx-out) both; pointer-events: none; }
+@keyframes agx-swap-in { from { opacity: 0; filter: blur(3px); transform: translateY(5px); } }
+@keyframes agx-swap-out { to { opacity: 0; filter: blur(3px); transform: translateY(-5px); } }
+/* The Terminal strip's tabs, when the project changes: they slide in from the
+   left over 160 ms. Not for a window change inside a project. */
+.agx-strip-swap > * { animation: agx-strip-swap 160ms var(--agx-out) both; }
+@keyframes agx-strip-swap { from { opacity: 0; transform: translateX(-4px); } }
 .agx-presence-dock button { flex: none; display: inline-flex; align-items: center; height: 40px; padding: 0 16px 0 10px; border-radius: 16px; border: 0; cursor: pointer; font: inherit; font-size: calc(13px * var(--agx-fs, 1)); font-weight: 700; letter-spacing: -.005em;
   background: var(--agx-dock-take); color: #2a1700; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .35), 0 6px 16px -8px rgba(245, 158, 11, .8);
   transition: transform 150ms var(--agx-ease), background-color 280ms ease-out, box-shadow 280ms ease-out, color 280ms ease-out; }
@@ -3438,8 +3483,9 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 @media (prefers-reduced-motion: reduce) {
   .agx-presence-ghost { transition-property: opacity; }
   .agx-presence-dock, .agx-presence-state, .agx-presence-state *, .agx-presence-dock button * { animation: none; }
-  .agx-sw { transition-duration: 1ms; }
-  .agx-sw-lay.is-out { opacity: 0; }
+  .agx-swap { transition-duration: 1ms; }
+  .agx-swap-lay.is-out { opacity: 0; }
+  .agx-strip-swap > * { animation: none; }
   .agx-al-head, .agx-al-eyes { transform: none; transition: none; }
 }
 @media (prefers-reduced-transparency: reduce) { .agx-presence-dock { background: #16131f; } }
@@ -3977,3 +4023,973 @@ html[data-reduce-motion] #ag-cover * { animation: none !important; }
 /* A filled primary button is the same blue as the focus ring, so a ring drawn inside it vanished (measured on
    "Turn the gate on": focus-visible matched, nothing to see). Outside the edge instead, 2px clear of it. */
 .agx-btn[data-tone="primary"]:focus-visible { outline-offset: 2px; }
+
+/* Pane chip, right-hand segment ("Halo"): the pull request icon wears its checks
+   as a ring, review is a badge clipped on it, the whole capsule is tinted with
+   the pull request's state. Tokens only, so every theme gets its own contrast. */
+.agx-ps-card { height: 26px; display: inline-flex; align-items: center; gap: 6px; padding: 0 6px 0 4px; border-radius: 7px; line-height: 1; color: var(--text2); white-space: nowrap; flex: none; }
+.agx-ps-card:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+.agx-ps-tile { width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; background: color-mix(in srgb, var(--sc) 15%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sc) 30%, transparent); }
+.agx-ps-tile svg { width: 12px; height: 12px; }
+.agx-halo { height: 26px; width: 94px; display: inline-flex; align-items: center; gap: 6px; padding: 0 8px 0 4px; border-radius: 13px; flex: none; line-height: 1; color: var(--text);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--sc) 5%, var(--bg)), color-mix(in srgb, var(--sc) 11%, var(--surface-card)));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sc) 24%, transparent), inset 0 1px 0 color-mix(in srgb, var(--bg) 70%, transparent), 0 1px 2px -1px color-mix(in srgb, var(--sc) 40%, transparent);
+  transition: transform 140ms cubic-bezier(.23, 1, .32, 1); }
+.agx-halo:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sc) 40%, transparent), inset 0 1px 0 color-mix(in srgb, var(--bg) 70%, transparent), 0 2px 6px -2px color-mix(in srgb, var(--sc) 45%, transparent); }
+.agx-halo:active { transform: scale(.97); }
+.agx-halo[data-frozen] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sc) 20%, transparent), inset 0 1px 0 color-mix(in srgb, var(--bg) 70%, transparent); }
+.agx-halo-ring { position: relative; width: 22px; height: 22px; flex: none; border-radius: 50%; background: var(--bg); box-shadow: 0 1px 1.5px rgba(0, 0, 0, .08); }
+.agx-halo-ring > svg.r { position: absolute; inset: 0; width: 22px; height: 22px; transform: rotate(-90deg); }
+.agx-halo-trk { fill: none; stroke: color-mix(in srgb, var(--text) 8%, transparent); }
+.agx-halo-arc { fill: none; stroke-linecap: round; }
+.agx-halo-pi { position: absolute; inset: 0; display: grid; place-items: center; color: var(--sc); }
+.agx-halo-pi svg { width: 12px; height: 12px; display: block; }
+.agx-halo-spin { position: absolute; inset: 0; animation: agx-chip-spin 1.8s linear infinite; }
+.agx-halo-spin svg { width: 22px; height: 22px; }
+.agx-halo-rv { position: absolute; right: -3px; bottom: -3px; width: 11px; height: 11px; border-radius: 50%; display: grid; place-items: center; box-shadow: 0 0 0 1.5px var(--surface-card); color: var(--surface-card); }
+.agx-halo-rv svg { width: 7px; height: 7px; }
+.agx-halo-tail { margin-left: auto; min-width: 14px; text-align: right; }
+.agx-halo-cnt { display: inline-flex; align-items: center; height: 15px; padding: 0 4px; border-radius: 5px; font-weight: 700; color: var(--error-ink, var(--error)); background: color-mix(in srgb, var(--error) 7%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--error) 30%, transparent); }
+@keyframes agx-chip-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .agx-halo-spin { animation: none; } }
+
+/* Pane chip: the PR hover card opens from its trigger. */
+@keyframes agx-chip-card { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { [style*="agx-chip-card"] { animation: none !important; } }
+
+/*
+ * The Notify popover (PrWatchMenu): three cards, then the run as one picture, a
+ * square per check. Sizes are the approved mockup's; colours are the theme's
+ * (--primary is the accent, --success/--warning/--error the run states).
+ */
+.pw-pop {
+  position: absolute; right: 0; width: min(420px, calc(100vw - 24px)); display: flex; flex-direction: column; z-index: 50;
+  background: var(--bg); border: 1px solid color-mix(in srgb, var(--text) 14%, transparent); border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 24px 48px -20px rgba(0, 0, 0, 0.45); overflow: hidden; color: var(--text2);
+  font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.4; transform-origin: top right; animation: pw-in 200ms var(--agx-out);
+}
+.pw-pop[data-up] { transform-origin: bottom right; }
+@keyframes pw-in { from { opacity: 0; transform: scale(0.97) translateY(-4px); filter: blur(2px); } }
+.pw-body {
+  position: relative; flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin;
+  scrollbar-color: var(--border2) transparent; padding: 14px 14px 12px;
+}
+.pw-q { display: flex; align-items: baseline; gap: 8px; margin: 0 2px 10px; font-size: calc(15px * var(--agx-fs, 1)); line-height: 1.25; font-weight: 600; color: var(--text); letter-spacing: -0.01em; }
+.pw-q small { margin-left: auto; font-weight: 500; font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(10.5px * var(--agx-fs, 1)); line-height: 1; color: var(--text4); letter-spacing: 0; }
+.pw-cards { display: flex; flex-direction: column; gap: 6px; }
+.pw-card {
+  position: relative; display: flex; gap: 10px; align-items: flex-start; width: 100%; padding: 10px 12px 10px 10px; text-align: left; font: inherit; color: inherit;
+  border-radius: 11px; border: 1px solid color-mix(in srgb, var(--text) 14%, transparent); background: var(--bg); cursor: pointer;
+  transition: border-color 180ms, box-shadow 250ms var(--agx-out), background 180ms;
+}
+.pw-card:hover { border-color: color-mix(in srgb, var(--text) 26%, transparent); }
+.pw-card[aria-checked="true"] {
+  border-color: color-mix(in srgb, var(--primary) 55%, transparent); background: color-mix(in srgb, var(--primary) 5%, var(--bg));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent), 0 8px 22px -14px color-mix(in srgb, var(--primary) 55%, transparent);
+}
+.pw-ic { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; flex: none; background: var(--bg2); color: var(--text3); transition: background 180ms, color 180ms; }
+.pw-card[aria-checked="true"] .pw-ic { background: color-mix(in srgb, var(--hue) 14%, var(--bg)); color: var(--hue); }
+.pw-tx { flex: 1; min-width: 0; }
+.pw-tt { display: block; font-size: calc(13px * var(--agx-fs, 1)); line-height: 1.25; font-weight: 600; color: var(--text); }
+.pw-ex { display: block; margin-top: 2px; font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text3); }
+.pw-now { display: flex; align-items: center; gap: 6px; margin-top: 6px; min-width: 0; font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(11px * var(--agx-fs, 1)); line-height: 1.2; color: var(--text2); }
+.pw-now > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.pw-lbl { font-weight: 600; font-family: var(--font-sans, system-ui); font-size: calc(9.5px * var(--agx-fs, 1)); line-height: 1; letter-spacing: 0.04em; color: var(--text4); text-transform: uppercase; }
+.pw-tick { flex: none; width: 20px; height: 20px; margin-top: 4px; display: grid; place-items: center; border-radius: 50%; border: 1.5px solid var(--border2); color: var(--on-primary); transition: background 180ms, border-color 180ms; }
+.pw-tick svg { opacity: 0; transform: scale(0.5); transition: opacity 150ms, transform 220ms var(--agx-out); }
+.pw-card[aria-checked="true"] .pw-tick { background: var(--primary); border-color: var(--primary); }
+.pw-card[aria-checked="true"] .pw-tick svg { opacity: 1; transform: none; }
+.pw-meter { display: flex; flex: none; width: 84px; height: 5px; gap: 1px; border-radius: 3px; overflow: hidden; background: var(--bg3); }
+.pw-meter i { display: block; height: 100%; }
+/* A short window: the explanation goes, the live line stays. */
+.pw-pop[data-tight] .pw-card { padding: 8px 10px 8px 8px; align-items: center; }
+.pw-pop[data-tight] .pw-ex { display: none; }
+.pw-pop[data-tight] .pw-now { margin-top: 4px; }
+.pw-pop[data-tight] .pw-ic { width: 26px; height: 26px; }
+.pw-pop[data-tight] .pw-tick { margin-top: 0; }
+.pw-pop[data-tight] .pw-q { margin-bottom: 8px; }
+
+.pw-run { margin-top: 14px; padding: 12px 12px 10px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--text) 8%, transparent); background: linear-gradient(180deg, var(--bg2), var(--bg)); }
+.pw-runh { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.pw-runh b { flex: none; white-space: nowrap; font-size: calc(12.5px * var(--agx-fs, 1)); line-height: 1.2; font-weight: 600; color: var(--text); }
+.pw-meta { color: var(--text3); font-size: calc(11.5px * var(--agx-fs, 1)); }
+.pw-map { display: flex; flex-wrap: wrap; gap: 10px 14px; }
+.pw-fam { display: flex; flex-direction: column; gap: 4px; border-radius: 8px; padding: 4px 4px 4px; margin: -4px -4px -4px; transition: background 150ms; }
+.pw-fam:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+.pw-fn { display: flex; align-items: baseline; gap: 4px; align-self: flex-start; padding: 0; border: 0; background: none; cursor: pointer; white-space: nowrap; font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(11px * var(--agx-fs, 1)); line-height: 1; color: var(--text2); }
+.pw-fn i { font-style: normal; font-size: calc(10px * var(--agx-fs, 1)); color: var(--text4); }
+.pw-fam[data-off] .pw-fn { color: var(--text4); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--text) 30%, transparent); }
+.pw-dots { display: flex; flex-wrap: wrap; gap: 4px; max-width: var(--w, 360px); }
+.pw-d { position: relative; display: inline-block; flex: none; width: 12px; height: 12px; padding: 0; border: 0; border-radius: 3.5px; background: var(--success); cursor: pointer; transition: transform 150ms var(--agx-out), opacity 200ms, box-shadow 200ms; }
+.pw-d:hover { transform: scale(1.25); z-index: 2; }
+.pw-d:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.pw-d[data-s="fail"] { background: var(--error); }
+.pw-d[data-s="run"] { background: color-mix(in srgb, var(--warning) 30%, var(--bg)); box-shadow: inset 0 0 0 1.5px var(--warning); animation: pw-breathe 1.6s ease-in-out infinite; }
+.pw-d[data-s="queue"] { background: var(--bg4); }
+.pw-d[data-s="skip"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--border2); }
+.pw-d[data-off] { opacity: 0.22; }
+.pw-d[data-off][data-s="fail"] { opacity: 0.35; }
+.pw-d[data-watch] { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--primary); }
+.pw-d[data-req]::before { content: ""; position: absolute; top: -2px; right: -2px; width: 5px; height: 5px; border-radius: 50%; background: var(--error); box-shadow: 0 0 0 1.5px var(--bg); }
+.pw-bub .pw-req { margin: -4px 0 6px; opacity: 1; color: var(--warning); }
+.pw-d[data-dim] { opacity: 0.12; }
+.pw-d[data-sel] { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--text); transform: scale(1.2); z-index: 2; }
+@keyframes pw-breathe { 50% { box-shadow: inset 0 0 0 1.5px var(--warning), 0 0 0 3px color-mix(in srgb, var(--warning) 18%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .pw-d[data-s="run"], .pw-pop { animation: none; } }
+.pw-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; padding-top: 8px; border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent); font-size: calc(10.5px * var(--agx-fs, 1)); color: var(--text3); }
+.pw-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.pw-legend .pw-d { width: 9px; height: 9px; border-radius: 2.5px; cursor: default; animation: none; }
+.pw-legend .pw-d:hover { transform: none; }
+
+.pw-bub {
+  position: absolute; z-index: 5; width: 256px; padding: 8px 8px 6px 10px; border-radius: 10px; font-size: calc(11.5px * var(--agx-fs, 1));
+  background: var(--text); color: var(--bg); box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.45); animation: pw-in 160ms var(--agx-out);
+}
+.pw-bub::after { content: ""; position: absolute; top: -5px; left: var(--ax, 20px); width: 10px; height: 10px; background: var(--text); transform: rotate(45deg); border-radius: 2px; }
+.pw-bn { padding-right: 2px; font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(11px * var(--agx-fs, 1)); line-height: 1.35; word-break: break-word; }
+.pw-bs { margin: 2px 0 6px; font-size: calc(10.5px * var(--agx-fs, 1)); opacity: 0.7; }
+.pw-bub button { display: flex; align-items: center; gap: 8px; width: 100%; margin-left: -4px; padding: 4px 6px; border: 0; border-radius: 6px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.pw-bub button:hover, .pw-bub button:focus-visible { background: color-mix(in srgb, var(--bg) 14%, transparent); outline: none; }
+.pw-bx { flex: none; width: 14px; height: 14px; display: grid; place-items: center; border-radius: 4px; border: 1.5px solid color-mix(in srgb, var(--bg) 55%, transparent); }
+.pw-bx svg { opacity: 0; }
+.pw-bub button[aria-checked="true"] .pw-bx { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+.pw-bub button[aria-checked="true"] .pw-bx svg { opacity: 1; }
+
+.pw-sug { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 8px 10px 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--primary) 8%, var(--bg)); border: 1px solid color-mix(in srgb, var(--primary) 25%, transparent); }
+.pw-spark { flex: none; width: 24px; height: 24px; display: grid; place-items: center; border-radius: 7px; background: color-mix(in srgb, var(--primary) 16%, var(--bg)); color: var(--primary); }
+.pw-st { flex: 1; min-width: 0; font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text2); }
+.pw-st b { font-weight: 600; color: var(--text); }
+.pw-st span { display: block; margin-top: 1px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(10.5px * var(--agx-fs, 1)); line-height: 1.4; color: var(--text3); }
+.pw-done { display: flex; align-items: center; gap: 6px; margin-top: 12px; font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text3); }
+.pw-done svg { flex: none; color: var(--success); }
+.pw-link { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 4px; border: 0; background: none; border-radius: 6px; font: inherit; font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text3); cursor: pointer; }
+.pw-link:hover { color: var(--text); }
+.pw-link[data-end] { margin-left: auto; }
+
+.pw-search { display: flex; align-items: center; gap: 6px; height: 28px; margin-top: 10px; padding: 0 8px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--text) 14%, transparent); background: var(--bg); color: var(--text4); }
+.pw-search:focus-within { border-color: color-mix(in srgb, var(--primary) 55%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent); }
+.pw-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(12px * var(--agx-fs, 1)); line-height: 1; color: var(--text); }
+/* The label already draws the focus ring (:focus-within above); the global :focus-visible rule is `!important`, so the bare `outline: 0` lost and a second ring was painted around the text. */
+.pw-search input:focus-visible { outline: 0 !important; }
+.pw-search input::placeholder { color: var(--text4); font-family: inherit; }
+.pw-search .pw-n { font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(10.5px * var(--agx-fs, 1)); line-height: 1; color: var(--text4); }
+.pw-hits { display: flex; flex-direction: column; gap: 1px; margin-top: 6px; }
+.pw-row { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 4px 0 6px; border-radius: 7px; }
+.pw-row:hover { background: var(--bg2); }
+.pw-row .pw-d { width: 9px; height: 9px; border-radius: 2.5px; cursor: default; }
+.pw-row .pw-d:hover { transform: none; }
+.pw-hn { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(11.5px * var(--agx-fs, 1)); line-height: 1; color: var(--text); }
+.pw-hn mark { border-radius: 2px; background: color-mix(in srgb, var(--warning) 40%, transparent); color: inherit; }
+.pw-hn .pw-rest { color: var(--text4); }
+.pw-chip { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 6px; border-radius: 6px; border: 1px solid color-mix(in srgb, var(--text) 8%, transparent); background: var(--bg); font-size: calc(10.5px * var(--agx-fs, 1)); line-height: 1; font-weight: 500; color: var(--text3); cursor: pointer; white-space: nowrap; }
+.pw-chip:hover { color: var(--text); border-color: var(--border2); }
+.pw-chip[aria-pressed="true"] { color: var(--text); background: var(--bg3); border-color: transparent; }
+.pw-chip[data-al][aria-pressed="true"] { background: color-mix(in srgb, var(--primary) 14%, var(--bg)); color: var(--primary); }
+.pw-more { display: flex; align-items: center; gap: 6px; padding: 4px 6px 0; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); }
+.pw-empty { padding: 12px 6px 4px; text-align: center; font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text3); }
+.pw-empty b { display: block; margin-bottom: 2px; color: var(--text); }
+.pw-name { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding: 8px 8px; border-radius: 9px; border: 1px dashed var(--border2); font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text2); }
+.pw-name svg { flex: none; color: var(--primary); }
+.pw-name code { padding: 2px 4px; border-radius: 4px; background: var(--bg3); font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(11px * var(--agx-fs, 1)); line-height: 1; }
+.pw-foot { flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 12px 8px 14px; border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent); background: var(--bg2); }
+.pw-foot > span { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); }
+.pw-foot b { font-weight: 500; color: var(--text2); }
+.pw-sw { position: relative; flex: none; width: 26px; height: 15px; padding: 0; border: 0; border-radius: 9px; background: var(--bg4); cursor: pointer; transition: background 150ms; }
+.pw-sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; border-radius: 50%; background: var(--bg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); transition: transform 180ms var(--agx-out); }
+.pw-sw[aria-checked="true"] { background: var(--primary); }
+.pw-sw[aria-checked="true"]::after { transform: translateX(11px); }
+.pw-sw:disabled { opacity: 0.5; cursor: default; }
+.pw-sw:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+/* A card field as the mockup draws it: the label on the left in a fixed column, the
+   value beside it. Label text is sentence case and quiet, not an eyebrow. */
+.agx-lrow { display: grid; grid-template-columns: 92px minmax(0, 1fr); align-items: center; gap: 6px 10px; min-height: 28px; }
+.agx-lrow > :first-child { font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text3); text-transform: none; letter-spacing: 0; }
+
+/* The board's table is drawn flat, as the mockup has it: rows and groups carry the
+   structure, not a rule between every pair of columns. */
+.agx-flat .agx-colrule::before { display: none; }
+.agx-flat .agx-stick, .agx-flat .agx-stick-head { box-shadow: none; }
+
+/* The terminal's overlays. The peek card and the Latest-output pill arrive
+   with a short lift and nothing else; a card that opened warm (one was just
+   up) skips it, so moving along the strip does not replay it. */
+@keyframes agx-peek-in { from { opacity: 0; transform: translateY(-3px) scale(.985); } }
+@keyframes agx-pill-in { from { opacity: 0; transform: translate(-50%, 6px); } }
+@media (prefers-reduced-motion: reduce) {
+  @keyframes agx-peek-in { from { opacity: 0; } }
+  @keyframes agx-pill-in { from { opacity: 0; } }
+}
+
+/* A card or pill arriving over the Terminal's pane: rises 4 px as it fades in. */
+.agx-card-in { animation: agx-card-in 160ms var(--agx-out) both; }
+@keyframes agx-card-in { from { opacity: 0; transform: translateY(4px); } }
+/* Same, after a beat: "Connecting to tmux" must not flash on a reconnect that takes a blink. */
+.agx-card-late { animation: agx-card-in 160ms var(--agx-out) 250ms both; }
+@media (prefers-reduced-motion: reduce) { .agx-card-in, .agx-card-late { animation: none; } }
+
+/*
+ * THE CARD MENU (PrCardMenu.tsx). 270px, a heading, groups split by rules, and
+ * "N more" folding the rest in place. An entry that is off stays in the list,
+ * dimmed, with its reason as its second line.
+ */
+.agx-pcm { position: relative; display: flex; flex-direction: column; min-height: 0; max-height: inherit; }
+/* Fixed above the list: the pull request's number and title, never scrolled away. */
+.agx-pcm-head {
+  flex: none; padding: 12px 16px 8px; border-bottom: 1px solid var(--surface-line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: calc(11.5px * var(--agx-fs, 1)); font-weight: 600; color: var(--text2);
+}
+/* The list scrolls here; the native bar is hidden, the drawn one sits in the right gutter. */
+.agx-pcm-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px 16px 6px 6px; scrollbar-width: none; }
+.agx-pcm-scroll::-webkit-scrollbar { display: none; }
+.agx-pcm-sbt { position: absolute; right: 4px; width: 8px; border-radius: 4px; background: color-mix(in srgb, var(--text) 7%, transparent); z-index: 3; touch-action: none; }
+.agx-pcm-sbh { position: absolute; left: 0; right: 0; border-radius: 4px; background: color-mix(in srgb, var(--text) 34%, transparent); cursor: grab; touch-action: none; }
+.agx-pcm-sbh:hover, .agx-pcm-sbh[data-drag] { background: color-mix(in srgb, var(--text) 55%, transparent); }
+.agx-pcm-sbh[data-drag] { cursor: grabbing; }
+/* Soft fades where there is more to scroll to. */
+.agx-pcm[data-more-t]::before, .agx-pcm[data-more-b]::after { content: ""; position: absolute; left: 0; right: 14px; height: 26px; pointer-events: none; z-index: 2; }
+.agx-pcm[data-more-t]::before { top: 36px; background: linear-gradient(var(--bg), transparent); }
+.agx-pcm[data-more-b]::after { bottom: 0; background: linear-gradient(transparent, var(--bg) 85%); }
+.agx-pcm-h { padding: 6px 10px 2px; font-size: calc(10.5px * var(--agx-fs, 1)); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text4); }
+.agx-pcm-rule { height: 1px; margin: 2px 2px; background: var(--surface-line); }
+.agx-pcm-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 26px; padding: 2px 8px; border-radius: 6px; text-align: left;
+  color: var(--text2); font-size: calc(12.5px * var(--agx-fs, 1)); transition: background-color .12s ease;
+}
+.agx-pcm-item:hover, .agx-pcm-item:focus-visible { background: var(--bg2); outline: none; color: var(--text); }
+.agx-pcm-item:focus-visible { box-shadow: inset 0 0 0 1.5px var(--accent, var(--primary)); }
+/* The first entry: an accent tint, the icon in the accent, the label bold. */
+.agx-pcm-item[data-strong] { color: var(--text); background: color-mix(in srgb, var(--accent, var(--primary)) 8%, transparent); }
+.agx-pcm-item[data-strong] .agx-pcm-ico { color: var(--accent, var(--primary)); }
+.agx-pcm-item[data-strong] .agx-pcm-lbl { font-weight: 600; }
+.agx-pcm-item[data-more] { color: var(--text3); }
+.agx-pcm-item[data-danger] { color: var(--error); }
+.agx-pcm-item[aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
+.agx-pcm-item[aria-disabled="true"]:hover { background: transparent; }
+.agx-pcm-ico { flex: none; display: grid; place-items: center; width: 16px; color: var(--text3); }
+.agx-pcm-item[data-danger] .agx-pcm-ico { color: var(--error); }
+.agx-pcm-txt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.agx-pcm-lbl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agx-pcm-sub { font-size: calc(10.5px * var(--agx-fs, 1)); font-weight: 400; color: var(--text3); }
+.agx-pcm-key { flex: none; margin-left: auto; font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(10.5px * var(--agx-fs, 1)); color: var(--text4); }
+.agx-pcm-more { margin-left: 14px; border-left: 2px solid var(--border); animation: agx-pcm-in .16s cubic-bezier(.23, 1, .32, 1); }
+@keyframes agx-pcm-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .agx-pcm-more { animation: none; }
+}
+/* The row a right-click menu is about keeps a hover wash and a ring while the menu is open (the list menus set data-ctx). */
+[data-ctx] { background: color-mix(in srgb, var(--text) 6%, transparent) !important; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent) !important; }
+
+/*
+ * A LANE of the board: 12px radius, a wash of the panel's second surface and a
+ * 6% ring, so five columns read as five containers and not as a table. The
+ * heading is a tile in the lane's colour, the name, the count in mono, then the
+ * two square controls; the lane's sentence sits under it on one line.
+ */
+.agx-pl {
+  /* Air each side of the card, the width of the vertical bar, and the room a selected card's 4px ring needs above it. */
+  --lane-pad: 8px; --lane-sb: 7px; --lane-ring: 6px;
+  border-radius: 12px; min-width: 0;
+  background: color-mix(in srgb, var(--bg2) 70%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 6%, transparent);
+}
+.agx-pl-head { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 10px 8px; font-size: calc(12px * var(--agx-fs, 1)); border-radius: 12px 12px 0 0; }
+.agx-pl-tile {
+  flex: none; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 6px;
+  background: color-mix(in srgb, var(--lane) 12%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lane) 28%, transparent);
+}
+.agx-pl-hid {
+  display: flex; align-items: center; gap: 8px; margin: 0 8px 8px; padding: 4px 8px; min-width: 0; border-radius: 8px;
+  font-size: calc(10.5px * var(--agx-fs, 1)); color: var(--text3); border: 1px dashed color-mix(in srgb, var(--text) 22%, transparent);
+}
+.agx-pl-peek { flex: none; margin-left: auto; font-size: calc(10.5px * var(--agx-fs, 1)); font-weight: 600; color: var(--accent, var(--primary)); }
+.agx-pl-peek:hover { text-decoration: underline; text-underline-offset: 2px; }
+.agx-pl-foot { display: flex; align-items: center; gap: 6px; flex: none; padding: 6px 10px; border-top: 1px solid var(--surface-line); font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); }
+/* A lane never scrolls sideways: only the board does, lane to lane. The bar's room is reserved NEXT TO the right air, not
+   out of it: the selected ring and the hover outline spread 4px past the card, and the bar used to sit on them (1px of air).
+   Air + card + air + bar is the lane's width exactly (359px) with or without a bar. The bar is 7px, measured: `scrollbar-width: thin`
+   wins over the ::-webkit-scrollbar width in Chrome, and a 6px budget left the card 1px short of its air. */
+.agx-pl > .overflow-y-auto {
+  overflow-x: hidden; scrollbar-gutter: stable;
+  padding-top: var(--lane-ring); padding-left: var(--lane-pad); padding-right: var(--lane-pad);
+}
+.agx-pl > .overflow-y-auto::-webkit-scrollbar { width: var(--lane-sb); }
+
+/* The board's own tools (unread toggle, "n of m", find) float over the lanes' bottom right: no row of their own. */
+.agx-pl-tools {
+  position: absolute; right: 16px; bottom: 12px; display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 10px;
+  background: var(--surface-card); box-shadow: var(--surface-lift), inset 0 0 0 1px var(--surface-line);
+}
+
+/* Loading: the shape of a card, drawn in bars. The shimmer is the mockup's
+   (1.3s, 200% wide) and stops for people who asked for less motion. */
+.agx-prc-sk {
+  display: flex; flex-direction: column; gap: 8px; padding: 12px; margin-bottom: 8px;
+  width: 336px; flex: none; box-sizing: border-box;
+  background: var(--surface-card); border: 1px solid var(--surface-line);
+  border-radius: 3px 14px 3px 14px; box-shadow: var(--surface-lift);
+}
+.agx-sk {
+  display: block; border-radius: 6px;
+  background: linear-gradient(90deg, var(--surface-inset) 25%, color-mix(in srgb, var(--surface-inset) 55%, var(--surface-card)) 50%, var(--surface-inset) 75%);
+  background-size: 200% 100%; animation: agx-sk 1.3s linear infinite;
+}
+@keyframes agx-sk { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .agx-sk { animation: none; } }
+
+/*
+ * THE PULL-REQUEST CARD, direction "Facet" (components/PrCard.tsx).
+ *
+ * 336px, min = max, never shrinks: a smaller window scrolls the board sideways
+ * instead of squeezing the card. Corners 3/14/3/14 (the cut), a 28px verdict
+ * strip washed in the card's own colour `--st`, a 64px ring column, three cells
+ * with the same cut at 3/8/3/8, an event line, one footer row. Hover, selected
+ * and keyboard focus draw their ring in `--st` on ::after, above the strip, so
+ * the strip never hides it; the chain a stack chip lights keeps the accent,
+ * which means something else.
+ */
+.agx-cd {
+  --f: var(--agx-fs, 1);
+  --st: var(--text4);
+  position: relative; display: flex; flex-direction: column; flex: none;
+  width: 336px; min-width: 336px; max-width: 336px; margin-bottom: 8px;
+  /* A card sits one step above its lane (the lane is --surface-card at 70%): measured on porcelain, the card was #f5f5f5 on a lane of #f8f8f8, darker than the ground it lies on. */
+  background: oklch(from var(--surface-card) calc(l + 0.03) c h); border-radius: 3px 14px 3px 14px; cursor: pointer; outline: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent), 0 1px 2px color-mix(in srgb, var(--shadow) 40%, transparent);
+  transition: box-shadow .14s ease, transform .14s cubic-bezier(.23, 1, .32, 1), opacity .12s ease, filter .12s ease;
+}
+.agx-cd::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 4;
+  box-shadow: inset 0 0 0 0 transparent; transition: box-shadow .14s ease;
+}
+.agx-cd[data-tone="ok"] { --st: var(--success); }
+.agx-cd[data-tone="bad"] { --st: var(--error); }
+.agx-cd[data-tone="run"] { --st: var(--warning); }
+.agx-cd[data-tone="info"] { --st: var(--info); }
+.agx-cd[data-tone="merged"] { --st: var(--merged); }
+.agx-cd[data-tone="mute"] { --st: var(--text3); }
+@media (hover: hover) {
+  .agx-cd:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent), 0 6px 16px -10px var(--shadow); }
+  .agx-cd:hover::after { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--st) 65%, transparent); }
+}
+.agx-cd:focus-visible, .agx-cd[data-selected] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent), 0 0 0 4px color-mix(in srgb, var(--st) 20%, transparent), 0 10px 22px -10px color-mix(in srgb, var(--st) 60%, transparent);
+}
+.agx-cd:focus-visible::after, .agx-cd[data-selected]::after { box-shadow: inset 0 0 0 2px var(--st); }
+.agx-cd[data-chain] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent), 0 0 0 3px color-mix(in srgb, var(--accent, var(--primary)) 30%, transparent); }
+.agx-cd[data-chain]::after { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent, var(--primary)) 70%, transparent); }
+.agx-cd[data-chain="me"] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent), 0 0 0 4px color-mix(in srgb, var(--accent, var(--primary)) 28%, transparent), 0 8px 18px -10px color-mix(in srgb, var(--accent, var(--primary)) 50%, transparent); }
+.agx-cd[data-chain="me"]::after { box-shadow: inset 0 0 0 2.5px var(--accent, var(--primary)); }
+.agx-cd[data-busy] { cursor: progress; }
+.agx-cd[data-dim] { opacity: .32; filter: saturate(.25); }
+@media (prefers-reduced-motion: reduce) { .agx-cd, .agx-cd::after { transition: none; } }
+
+.agx-cd-unread {
+  position: absolute; left: 3px; top: 11px; z-index: 5; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent, var(--primary)); box-shadow: 0 0 0 1.5px var(--surface-card);
+}
+.agx-cd-h {
+  /* The face (20px + its 3px ring) is centred 16px from the top and the right: the card's 14px corner arc and the ring share a centre, so the gap to the curve is even. */
+  display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 6px 0 10px; min-width: 0; border-radius: 3px 14px 0 0;
+  color: var(--st); font-size: calc(11.5px * var(--f)); font-weight: 600; line-height: 1;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--st) 12%, transparent), color-mix(in srgb, var(--st) 4%, transparent));
+}
+.agx-cd-v { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agx-cd-sk { display: inline-block; width: 130px; height: 8px; border-radius: 3px; background: color-mix(in srgb, var(--text) 12%, transparent); }
+/* A tag in the strip, the ticket row or the event line: a count, a status, a label. */
+.agx-cd-tag {
+  flex: none; display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 6px; border-radius: 5px; white-space: nowrap;
+  font-size: calc(10.5px * var(--f)); font-weight: 500; line-height: 1; max-width: 150px;
+  color: var(--c, var(--text3)); background: color-mix(in srgb, var(--c, var(--text)) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c, var(--text)) 22%, transparent);
+}
+.agx-cd-tag > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.agx-cd-tag b { font: inherit; flex: none; }
+.agx-cd-sk-chip {
+  flex: none; display: inline-flex; align-items: center; gap: 3px; height: 20px; padding: 0 6px 0 5px; margin-left: 2px; border-radius: 3px 8px 3px 8px;
+  color: var(--st); background: var(--surface-card); font: 700 calc(10.5px * var(--f))/1 var(--font-mono, ui-monospace, monospace);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--st) 38%, transparent); cursor: pointer;
+}
+.agx-cd-sk-chip:hover, .agx-cd-sk-chip:focus-visible { background: color-mix(in srgb, var(--st) 10%, var(--surface-card)); outline: none; }
+.agx-cd-faces { display: flex; align-items: center; flex: none; }
+.agx-cd-faces > * { margin-left: -4px; }
+.agx-cd-faces > :first-child { margin-left: 0; }
+
+.agx-cd-body { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 10px; padding: 9px 10px 0; align-items: start; }
+.agx-cd-ring { position: relative; width: 64px; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.agx-cd-ring svg.agx-cd-svg { width: 56px; height: 56px; display: block; }
+.agx-cd-ring-i { position: absolute; left: 50%; top: 28px; transform: translate(-50%, -50%); color: var(--st); display: block; height: 25px; }
+.agx-cd-rc { font: 600 calc(10.5px * var(--f))/1 var(--font-mono, ui-monospace, monospace); color: var(--text2); white-space: nowrap; }
+.agx-cd-rs { font-size: calc(10px * var(--f)); line-height: 1; color: var(--text3); white-space: nowrap; }
+.agx-cd-seg-run { animation: agx-breathe 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .agx-cd-seg-run { animation: none; } }
+.agx-cd-main { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.agx-cd-t {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere;
+  font-size: calc(13px * var(--f)); font-weight: 600; line-height: 1.35; color: var(--text);
+}
+.agx-cd-n { margin-right: 5px; padding: 0; border-radius: 4px; font: 500 calc(11px * var(--f)) var(--font-mono, ui-monospace, monospace); color: var(--text3); }
+.agx-cd-n:hover { color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
+.agx-cd-n[data-copied] { color: var(--success); }
+
+.agx-cd-m { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.agx-cd-m-l { display: flex; align-items: center; gap: 5px; min-width: 0; flex: 1 1 auto; }
+.agx-cd-tk {
+  display: inline-flex; align-items: center; gap: 4px; min-width: 0; height: 22px; padding: 0 2px; border-radius: 5px;
+  font: calc(11px * var(--f)) var(--font-mono, ui-monospace, monospace); color: var(--text2); white-space: nowrap;
+}
+.agx-cd-tk > svg { color: var(--info); flex: none; }
+button.agx-cd-tk:hover { color: var(--text); background: color-mix(in srgb, var(--text) 6%, transparent); text-decoration: underline; }
+.agx-cd-tk[data-none] { height: 18px; padding: 0 6px; font-family: inherit; color: var(--text4); border: 1px dashed var(--border2, var(--border)); }
+.agx-cd-tk[data-none] > svg { color: var(--text4); }
+.agx-cd-cc {
+  display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: none;
+  color: var(--text3); cursor: pointer; flex: none;
+}
+.agx-cd-cc:hover, .agx-cd-cc:focus-visible { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); outline: none; }
+.agx-cd-cc[data-ok] { color: var(--success); }
+.agx-cd-ccs { display: flex; align-items: center; margin-left: auto; flex: none; }
+/* Crowded row: the status shows, the copy buttons replace it while the pointer is on the row. */
+.agx-cd-m[data-crowded] { position: relative; }
+.agx-cd-m[data-crowded] > .agx-cd-ccs { position: absolute; right: 0; top: 50%; transform: translateY(-50%); opacity: 0; pointer-events: none; }
+.agx-cd-m[data-crowded]:hover > .agx-cd-ccs, .agx-cd-m[data-crowded]:focus-within > .agx-cd-ccs { opacity: 1; pointer-events: auto; }
+.agx-cd-m[data-crowded]:hover .agx-cd-tag, .agx-cd-m[data-crowded]:focus-within .agx-cd-tag { opacity: 0; }
+
+.agx-cd-route { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.agx-cd-chip {
+  display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 6px; border-radius: 6px; flex: none; white-space: nowrap;
+  font: calc(11px * var(--f))/1 var(--font-mono, ui-monospace, monospace); color: var(--c, var(--text2)); background: var(--surface-card);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c, var(--text)) 24%, transparent);
+}
+.agx-cd-chip[data-src] { --c: var(--text3); flex: 0 1 auto; min-width: 72px; overflow: hidden; }
+.agx-cd-chip[data-src] > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.agx-cd-chip[data-dest] { --c: var(--info); max-width: 52%; overflow: hidden; text-overflow: ellipsis; }
+.agx-cd-chip[data-pr] { max-width: none; background: color-mix(in srgb, var(--info) 7%, var(--surface-card)); cursor: pointer; }
+.agx-cd-arr { flex: none; color: var(--text4); display: flex; }
+
+.agx-cd-cells { display: grid; grid-template-columns: 1.15fr 1fr 1fr; gap: 5px; padding: 8px 10px 0; }
+.agx-cd-cell {
+  --tc: var(--text3); display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 5px 7px 6px; border-radius: 3px 8px 3px 8px;
+  background: color-mix(in srgb, var(--tc) 8%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tc) 24%, transparent);
+}
+.agx-cd-cell[data-tone="ok"] { --tc: var(--success); }
+.agx-cd-cell[data-tone="bad"] { --tc: var(--error); }
+.agx-cd-cell[data-tone="run"] { --tc: var(--warning); }
+.agx-cd-cell[data-tone="info"] { --tc: var(--info); }
+.agx-cd-cell[data-tone="merged"] { --tc: var(--merged); }
+.agx-cd-cell[data-tone="mute"] { --tc: var(--text3); }
+.agx-cd-lb { font-size: calc(10.5px * var(--f)); font-weight: 500; line-height: 1; color: var(--text3); }
+.agx-cd-vl { font-size: calc(11.5px * var(--f)); font-weight: 600; line-height: 1.2; color: var(--tc); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agx-cd-cell[data-tone="mute"] .agx-cd-vl { color: var(--text2); }
+.agx-cd-rowv { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.agx-cd-add { color: var(--success); } .agx-cd-del { color: var(--error); }
+.agx-cd-db { display: flex; height: 4px; border-radius: 2px; overflow: hidden; background: var(--bg4, var(--bg3)); }
+.agx-cd-db > i:first-child { background: var(--success); } .agx-cd-db > i:last-child { background: var(--error); }
+
+.agx-cd-evl { display: flex; align-items: center; gap: 8px; padding: 6px 10px 0; min-width: 0; font-size: calc(10.5px * var(--f)); line-height: 1.2; color: var(--text3); }
+.agx-cd-et { flex: 1 1 auto; min-width: 0; display: flex; white-space: nowrap; }
+.agx-cd-ett { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.agx-cd-eta { flex: none; padding-left: .3em; }
+.agx-cd-evl > .agx-cd-tag:first-of-type { margin-left: auto; }
+.agx-cd-evl > .agx-cd-tag + .agx-cd-tag { margin-left: 0; }
+
+/* The board's card at its own 336 width, 12 apart; its 8px bottom margin is the board's lane rhythm, so the row gap is 4 here. */
+.agx-cd-chip > svg { flex: none; }
+/* A finished card's line about this computer: quiet when clean, a tinted band when something is left, a bar while it is removed. */
+.agx-cd-lf { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding: 0 12px; min-height: 40px; min-width: 0; border-top: 1px solid var(--surface-line); font-size: calc(11.5px * var(--f)); line-height: 1.2; color: var(--text3); }
+.agx-cd-lf > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agx-cd-lf svg { flex: none; }
+.agx-cd-lf[data-tone="some"], .agx-cd-lf[data-tone="run"] { color: var(--primary-ink, var(--primary)); font-weight: 600; background: color-mix(in srgb, var(--primary) 6%, transparent); }
+.agx-cd-lf-bar { flex: none; width: 120px; height: 5px; border-radius: 3px; background: color-mix(in srgb, var(--primary) 22%, transparent); position: relative; overflow: hidden; }
+.agx-cd-lf-bar::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 40%; border-radius: 3px; background: var(--primary); animation: agx-cd-lf-run 1.1s ease-in-out infinite alternate; }
+@keyframes agx-cd-lf-run { to { transform: translateX(150%); } }
+@media (prefers-reduced-motion: reduce) { .agx-cd-lf-bar::after { animation: none; width: 100%; } }
+.agx-cd-f { display: flex; align-items: center; gap: 6px; margin-top: 7px; padding: 7px; /* 7px each side: the 7px button radius is the 14px corner minus the inset, so the first button follows the curve */ min-width: 0; border-top: 1px solid var(--surface-line); }
+.agx-cd-lf + .agx-cd-f { margin-top: 0; }
+.agx-cd-f-l { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1 1 auto; }
+.agx-cd-f .agx-btn { flex: none; border-radius: 7px; } /* one radius for the footer's whole row, the card page's 7: the squares were the kit's 8 beside a 7 primary */
+/* The mockup's footer buttons are 12px / 500 with a 7px corner and 8px sides; the kit's hit size is 11px / 600 / 8px / 10px. Measured per state, so only the card's text buttons are tuned. */
+.agx-cd-f-l .agx-btn { font-size: calc(12px * var(--f)); font-weight: 500; padding-inline: 8px; gap: 6px; }
+.agx-cd-f .agx-btn:active:not(:disabled) { transform: scale(.97); }
+.agx-cd-utd { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-size: calc(11px * var(--f)); color: var(--text4); }
+.agx-cd-icb { display: flex; gap: 6px; flex: none; }
+.agx-cd-btnw { position: relative; display: inline-flex; }
+.agx-cd-copied {
+  position: absolute; bottom: calc(100% + 6px); right: -6px; padding: 6px 8px; border-radius: 6px; pointer-events: none; white-space: nowrap; z-index: 20;
+  font-size: calc(11px * var(--f)); font-weight: 500; line-height: 1; background: var(--tip-bg); color: var(--tip-ink);
+}
+
+/* A stack the board shows beside itself: the rail of numbered nodes outside the cards, one per member, in the member's own colour. */
+.agx-cd-rail { position: relative; margin-left: 26px; margin-bottom: 8px; }
+.agx-cd-gut { margin-left: 26px; }
+.agx-cd-rail > .agx-cd { margin-bottom: 0; }
+.agx-cd-node {
+  position: absolute; left: -26px; top: 5px; z-index: 1; width: 18px; height: 18px; border-radius: 50%; text-align: center;
+  background: var(--surface-card); color: var(--st, var(--text3)); font: 700 9.5px/18px var(--font-mono, ui-monospace, monospace);
+  box-shadow: inset 0 0 0 2px var(--st, var(--text3)), 0 0 0 3px var(--bg2);
+}
+.agx-cd-node[data-me] { background: var(--st, var(--text3)); color: var(--bg); }
+.agx-cd-rail[data-down]::before { content: ""; position: absolute; left: -18px; top: 14px; bottom: -8px; width: 2px; background: var(--border2, var(--border)); }
+.agx-cd-rail[data-down] { margin-bottom: 8px; }
+.agx-cd-rail[data-down] > .agx-cd { margin-bottom: 0; }
+
+/* The chain a stack chip opens: one row per member, bottom first. */
+.agx-skpop {
+  position: absolute; z-index: 6; right: 6px; top: 34px; width: 312px; max-height: 340px; overflow: auto; padding: 8px;
+  background: var(--surface-card); border-radius: 3px 14px 3px 14px; cursor: default; overscroll-behavior: contain; scrollbar-width: thin;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 8%, transparent), 0 14px 30px -12px var(--shadow);
+}
+.agx-skpop-h { padding: 2px 6px 6px; font-size: calc(12px * var(--agx-fs, 1)); font-weight: 600; color: var(--text); }
+.agx-skpop-h small { display: block; margin-top: 1px; font-size: calc(11px * var(--agx-fs, 1)); font-weight: 400; color: var(--text3); }
+.agx-skpop-r {
+  display: flex; align-items: center; gap: 7px; width: 100%; padding: 5px 6px; border-radius: 3px 8px 3px 8px; text-align: left;
+  font-size: calc(12px * var(--agx-fs, 1)); color: var(--text2);
+}
+.agx-skpop-r:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
+.agx-skpop-r[data-me] { background: color-mix(in srgb, var(--accent, var(--primary)) 11%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent, var(--primary)) 40%, transparent); }
+.agx-skpop-r[data-gone] { opacity: .55; }
+.agx-skpop-nd { display: inline-grid; place-items: center; width: 18px; height: 18px; flex: none; border-radius: 50%; background: var(--c, var(--text3)); color: var(--bg); font: 700 10px/1 var(--font-sans, inherit); }
+.agx-skpop-n { flex: none; font: calc(11px * var(--agx-fs, 1)) var(--font-mono, ui-monospace, monospace); color: var(--text3); }
+.agx-skpop-tt { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agx-skpop-w { flex: none; font-size: calc(11px * var(--agx-fs, 1)); font-weight: 600; color: var(--c, var(--text3)); }
+
+/* THE ONE TOOLTIP (components/TipHost.tsx). The same dark card in both themes. */
+:root { --tip-bg: #1b1b1f; --tip-ink: #f1f1f3; }
+.agx-tip {
+  position: fixed; width: 272px; max-width: calc(100vw - 16px); box-sizing: border-box; padding: 11px 13px 10px; pointer-events: none;
+  border-radius: 3px 12px 3px 12px; background: var(--tip-bg); color: var(--tip-ink); font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.4;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--tip-ink) 7%, transparent), 0 14px 30px -10px rgba(0, 0, 0, .5);
+  opacity: 0; transform: translateY(3px); transition: opacity .12s ease-out, transform .12s ease-out;
+}
+.agx-tip[data-on] { opacity: 1; transform: none; }
+.agx-tip[data-instant] { transition: none; }
+@media (prefers-reduced-motion: reduce) { .agx-tip { transition: none; transform: none; } }
+.agx-tip-1 { display: flex; align-items: center; gap: 8px; }
+.agx-tip-1 b { font-size: calc(13px * var(--agx-fs, 1)); font-weight: 600; color: #fff; }
+.agx-tip-1 b[data-mono] { font-family: var(--font-mono, ui-monospace, monospace); }
+.agx-tip-m { font: calc(11px * var(--agx-fs, 1)) var(--font-mono, ui-monospace, monospace); color: color-mix(in srgb, var(--tip-ink) 62%, transparent); }
+.agx-tip-tg {
+  margin-left: auto; padding: 2px 7px; border-radius: 3px 7px 3px 7px; letter-spacing: .02em; background: color-mix(in srgb, var(--tip-ink) 10%, transparent);
+  font: 600 calc(10px * var(--agx-fs, 1)) var(--font-mono, ui-monospace, monospace);
+}
+.agx-tip-2 { margin-top: 6px; color: color-mix(in srgb, var(--tip-ink) 86%, transparent); }
+.agx-tip-dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; vertical-align: 0; }
+.agx-tip-pl { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.agx-tip-pl span {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px 2px 6px; border-radius: 3px 8px 3px 8px; font-weight: 600;
+  background: color-mix(in srgb, var(--tip-ink) 10%, transparent); font-size: calc(11px * var(--agx-fs, 1));
+}
+.agx-tip-3 {
+  display: flex; align-items: center; gap: 8px; margin-top: 9px; padding-top: 8px; font-size: calc(11.5px * var(--agx-fs, 1));
+  border-top: 1px solid color-mix(in srgb, var(--tip-ink) 10%, transparent); color: color-mix(in srgb, var(--tip-ink) 70%, transparent);
+}
+.agx-tip-3 kbd { flex: none; padding: 2px 6px; border-radius: 3px 6px 3px 6px; background: color-mix(in srgb, var(--tip-ink) 10%, transparent); font: 600 calc(10px * var(--agx-fs, 1)) var(--font-mono, ui-monospace, monospace); color: var(--tip-ink); }
+.agx-tip-r { margin-left: auto; color: color-mix(in srgb, var(--tip-ink) 52%, transparent); }
+
+/* People on a card: a face with a ring in the colour of what they said. */
+.agx-cd-face {
+  --r: var(--text4); position: relative; display: inline-flex; flex: none; border-radius: 50%; margin-left: -4px; font-weight: 600;
+  box-shadow: 0 0 0 1.5px var(--r), 0 0 0 3px var(--surface-card);
+}
+.agx-cd-faces > .agx-cd-face:first-child, .agx-cd-rowv .agx-cd-faces { margin-left: 0; }
+.agx-cd-rowv .agx-cd-face { margin-left: -3px; box-shadow: 0 0 0 1.5px var(--r), 0 0 0 2.5px var(--surface-card); }
+.agx-cd-rowv .agx-cd-faces > .agx-cd-face:first-child { margin-left: 0; }
+.agx-cd-face[data-state="again"] { --r: var(--warning); }
+.agx-cd-face[data-state="approved"] { --r: var(--success); }
+.agx-cd-face[data-state="changes"] { --r: var(--error); }
+.agx-cd-face[data-state="await"] { --r: var(--border2, var(--border)); }
+.agx-cd-face-t { display: grid; place-items: center; width: 100%; height: 100%; border-radius: 50%; color: var(--text2); background: color-mix(in srgb, var(--primary) 24%, transparent); }
+.agx-cd-face-more { align-items: center; justify-content: center; padding: 0 4px; box-sizing: border-box; font-size: calc(9.5px * var(--f, 1)); color: var(--text2); background: var(--bg4, var(--bg3)); --r: transparent; }
+.agx-cd-pre { font-weight: 500; color: var(--text3); }
+.agx-cd-cg { display: inline-flex; align-items: center; gap: 5px; min-width: 0; flex: none; }
+.agx-cd-odd { flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--warning); }
+.agx-cd-tag[data-stale] { opacity: .6; }
+button.agx-cd-tag { cursor: pointer; }
+button.agx-cd-tag:hover, button.agx-cd-tag:focus-visible { background: color-mix(in srgb, var(--c, var(--text)) 16%, transparent); outline: none; }
+.agx-cd-chip[data-dest][data-off-trunk] { --c: var(--warning); }
+button.agx-cd-chip { cursor: pointer; }
+button.agx-cd-chip:hover, button.agx-cd-chip:focus-visible { background: color-mix(in srgb, var(--info) 14%, var(--surface-card)); outline: none; }
+.agx-cd-cell-btn { text-align: left; border: 0; font: inherit; cursor: pointer; }
+.agx-cd-cell-btn:hover, .agx-cd-cell-btn:focus-visible { background: color-mix(in srgb, var(--tc) 14%, transparent); outline: none; }
+.agx-cd[data-lit] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent), 0 0 0 3px color-mix(in srgb, var(--accent, var(--primary)) 30%, transparent); }
+.agx-cd[data-lit]::after { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent, var(--primary)) 70%, transparent); }
+.agx-cd-rail[data-tone="ok"] { --st: var(--success); }
+.agx-cd-rail[data-tone="bad"] { --st: var(--error); }
+.agx-cd-rail[data-tone="run"] { --st: var(--warning); }
+.agx-cd-rail[data-tone="info"] { --st: var(--info); }
+.agx-cd-rail[data-tone="merged"] { --st: var(--merged); }
+.agx-cd-rail[data-tone="mute"] { --st: var(--text3); }
+
+/* The grip on the docked pull-request detail's left edge: 8px to aim at, a 2px line drawn only on hover, focus or while dragging.
+   No transition on the width it moves: the edge is under the pointer. */
+.agx-prgrip { position: absolute; top: 0; bottom: 0; left: -4px; width: 8px; z-index: 6; cursor: col-resize; touch-action: none; outline: none; }
+.agx-prgrip::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; border-radius: 1px;
+  background: transparent; transition: background 0.12s ease;
+}
+.agx-prgrip:hover::after, .agx-prgrip:focus-visible::after, .agx-prgrip[data-dragging]::after {
+  background: color-mix(in srgb, var(--primary) 55%, transparent);
+}
+@media (prefers-reduced-motion: reduce) { .agx-prgrip::after { transition: none; } }
+
+/* Automatic cleanup, in the window bar while it runs: the Finder button's
+   height and ground, a hairline of progress along its floor. */
+.agx-topbar-clean {
+  position: relative;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.agx-topbar-clean:hover {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+}
+.agx-topbar-clean:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--primary) 55%, transparent);
+  outline-offset: 1px;
+}
+.agx-topbar-clean > i {
+  position: absolute; left: 0; bottom: 0; height: 2px;
+  background: var(--primary-ink);
+  transition: width 240ms ease;
+}
+@media (prefers-reduced-motion: reduce) { .agx-topbar-clean > i { transition: none; } }
+
+/* Jira list: lanes and rows (S2). Spacing steps 2 4 6 8 12 16 24 (10 only as a control's inline padding); colours are tokens. */
+.agx-jl-scroll {
+  flex: 1; min-height: 0; overflow: auto; padding: 0 24px;
+  --jl-cols: 22px minmax(280px, 2fr) minmax(160px, 1fr) 120px 96px 96px 48px;
+}
+/* The captions live in the scroller and stick to its top, so they share the rows' width to the pixel, scrollbar or none. */
+.agx-jl-caps { position: sticky; top: 0; z-index: 2; padding-bottom: 12px; background: var(--bg); }
+.agx-jl-capsin {
+  display: grid; grid-template-columns: var(--jl-cols); column-gap: 12px; align-items: center;
+  height: 22px; margin: 0 8px; padding: 0 12px;
+  font-size: calc(10.5px * var(--agx-fs, 1)); letter-spacing: 0.04em; text-transform: uppercase; color: var(--text4);
+}
+.agx-jl-capsin .pts { text-align: right; }
+.agx-jl-lane {
+  margin-bottom: 12px; border-radius: 12px;
+  background: color-mix(in srgb, var(--bg2) 70%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 6%, transparent);
+}
+.agx-jl-lane.is-sub { margin: 0 0 8px; }
+.agx-jl-head {
+  display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 8px 0 10px;
+  border-radius: 12px 12px 0 0; cursor: pointer; user-select: none; min-width: 0;
+}
+.agx-jl-lane[data-folded] > .agx-jl-head { border-radius: 12px; }
+.agx-jl-head:hover { background: color-mix(in srgb, var(--t, var(--text3)) 8%, transparent); }
+.agx-jl-twist {
+  display: grid; place-items: center; flex: none; width: 20px; height: 20px; border-radius: 6px; color: var(--text2);
+  background: transparent; transition: transform 0.12s ease;
+}
+.agx-jl-lane[data-folded] > .agx-jl-head .agx-jl-twist { transform: rotate(-90deg); }
+@media (prefers-reduced-motion: reduce) { .agx-jl-twist { transition: none; } }
+.agx-jl-tile {
+  flex: none; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 6px;
+  color: color-mix(in srgb, var(--t, var(--text3)) 60%, var(--text)); background: color-mix(in srgb, var(--t, var(--text3)) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--t, var(--text3)) 30%, transparent);
+  font-weight: 700; font-size: calc(9.5px * var(--agx-fs, 1)); line-height: 1; font-family: var(--font-mono);
+}
+.agx-jl-tile.lg { width: 22px; height: 22px; border-radius: 7px; }
+.agx-jl-name { min-width: 0; font-size: calc(12px * var(--agx-fs, 1)); font-weight: 600; color: var(--text); }
+.agx-jl-count {
+  flex: none; display: inline-grid; place-items: center; height: 26px; min-width: 26px; padding: 0 6px; border-radius: 8px;
+  font-size: calc(11px * var(--agx-fs, 1)); font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--t, var(--text3)) 60%, var(--text)); background: color-mix(in srgb, var(--t, var(--text3)) 14%, transparent);
+}
+.agx-jl-pts { flex: none; font-size: calc(10.5px * var(--agx-fs, 1)); color: var(--text4); font-variant-numeric: tabular-nums; }
+.agx-jl-gap { flex: 1; }
+.agx-jl-body { padding: 0 8px 2px; }
+.agx-jl-lane[data-folded] > .agx-jl-body { display: none; }
+.agx-jl-lane > .agx-jl-body > .agx-jl-lane { margin-top: 6px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 4%, transparent); }
+
+.agx-jl-row {
+  position: relative; display: grid; grid-template-columns: var(--jl-cols); column-gap: 12px; align-items: center;
+  min-height: 52px; margin-bottom: 6px; padding: 6px 12px; border-radius: 10px; background: var(--bg); cursor: pointer;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent), var(--surface-lift);
+}
+.agx-jl-row:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--info) 50%, transparent); }
+.agx-jl-row[data-ctx] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--info) 50%, transparent); }
+.agx-jl-row[aria-selected="true"] { box-shadow: inset 0 0 0 1.5px var(--primary); }
+.agx-jl-row:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.agx-jl-row[data-edge="top"]::before, .agx-jl-row[data-edge="bottom"]::after {
+  content: ""; position: absolute; left: 0; right: 0; height: 2px; border-radius: 2px; background: var(--primary); pointer-events: none;
+}
+.agx-jl-row[data-edge="top"]::before { top: -4px; }
+.agx-jl-row[data-edge="bottom"]::after { bottom: -4px; }
+.agx-jl-row[draggable="true"]:active { cursor: grabbing; }
+.agx-jl-row.is-sub .agx-jl-main { padding-left: 24px; position: relative; }
+.agx-jl-elbow { position: absolute; left: 4px; top: 4px; color: var(--text4); }
+.agx-jl-main { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.agx-jl-title {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+  font-weight: 600; font-size: calc(13px * var(--agx-fs, 1)); line-height: 1.35; font-family: var(--font-prose); color: var(--text);
+}
+.agx-jl-row[data-done] .agx-jl-title { color: var(--text3); font-weight: 500; }
+.agx-jl-trunc { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agx-jl-meta {
+  display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden;
+  font-size: calc(11px * var(--agx-fs, 1)); line-height: 1.2; font-family: var(--font-mono); color: var(--text3);
+}
+.agx-jl-meta > * { flex: none; }
+.agx-jl-meta .k { color: var(--text3); font-variant-numeric: tabular-nums; }
+.agx-jl-meta .m { display: inline-flex; align-items: center; gap: 4px; font-size: calc(10.5px * var(--agx-fs, 1)); color: var(--text4); }
+.agx-jl-meta .blk { display: inline-flex; align-items: center; gap: 4px; color: var(--warning-ink); }
+.agx-jl-meta .tg { color: var(--text4); }
+.agx-jl-cell {
+  min-width: 0; display: flex; align-items: center; gap: 6px; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3);
+}
+.agx-jl-cell.epic { color: var(--text2); }
+.agx-jl-cell.due[data-tone="late"] { color: var(--error-ink); }
+.agx-jl-cell.due[data-tone="today"] { color: var(--warning-ink); }
+.agx-jl-cell.pts { justify-content: flex-end; color: var(--text4); font-variant-numeric: tabular-nums; }
+.agx-jl-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--d, var(--text4)); }
+.agx-jl-pr {
+  display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px; border-radius: 6px; max-width: 100%;
+  font-size: calc(10.5px * var(--agx-fs, 1)); white-space: nowrap; color: var(--c); background: color-mix(in srgb, var(--c) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 28%, transparent); opacity: 0.55;
+}
+.agx-jl-row:hover .agx-jl-pr, .agx-jl-row[aria-selected="true"] .agx-jl-pr, .agx-jl-pr:focus-visible { opacity: 1; }
+.agx-jl-pr:hover { background: color-mix(in srgb, var(--c) 18%, transparent); }
+.agx-jl-pr:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.agx-jl-stack { display: inline-flex; align-items: center; padding-left: 4px; }
+.agx-jl-stack > * { margin-left: -4px; }
+.agx-jl-stack .more { margin-left: 4px; font-size: calc(10px * var(--agx-fs, 1)); color: var(--text4); }
+.agx-jl-face {
+  --r: transparent; flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; overflow: hidden;
+  font-weight: 600; font-size: calc(8px * var(--agx-fs, 1)); line-height: 1; font-family: var(--font-mono); letter-spacing: -0.04em; color: var(--text2);
+  background: color-mix(in srgb, var(--c, var(--primary)) 28%, var(--bg));
+  box-shadow: 0 0 0 1.5px var(--r), 0 0 0 2.5px var(--bg);
+}
+.agx-jl-face[data-me] { --r: var(--success); }
+.agx-jl-face img { width: 100%; height: 100%; object-fit: cover; }
+.agx-jl-ghost {
+  position: absolute; right: 2px; top: 50%; margin-top: -10px; display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; color: var(--text3);
+  background: transparent; opacity: 0;
+}
+.agx-jl-row:hover .agx-jl-ghost, .agx-jl-ghost:focus-visible { opacity: 1; }
+.agx-jl-ghost:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
+.agx-jl-more {
+  display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; height: 40px; margin: 4px 0 8px;
+  border-radius: 10px; background: transparent; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text2);
+  border: 1px dashed color-mix(in srgb, var(--text) 24%, transparent);
+}
+.agx-jl-more:hover { background: color-mix(in srgb, var(--text) 5%, transparent); color: var(--text); }
+.agx-jl-more small { font-size: calc(10.5px * var(--agx-fs, 1)); color: var(--text4); }
+.agx-jl-lane-empty { padding: 8px 12px 12px; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text4); }
+
+.agx-jl-skrow { display: flex; align-items: center; gap: 12px; height: 52px; margin-bottom: 6px; padding: 0 12px; border-radius: 10px; background: var(--bg); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 8%, transparent); }
+.agx-jl-skrow .two { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.agx-jl-skrow b { display: block; height: 12px; border-radius: 6px; }
+.agx-jl-skrow .tile { flex: none; width: 22px; height: 22px; border-radius: 7px; }
+
+.agx-jl-ld { flex: none; height: 2px; margin: 0 24px; border-radius: 2px; overflow: hidden; background: color-mix(in srgb, var(--primary) 8%, transparent); }
+.agx-jl-ld i { display: block; width: 30%; height: 100%; border-radius: 2px; background: var(--primary); animation: agx-jl-slide 1.2s ease-in-out infinite; }
+@keyframes agx-jl-slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+@media (prefers-reduced-motion: reduce) { .agx-jl-ld i { animation: none; } }
+.agx-jl-note {
+  display: flex; align-items: center; gap: 8px; margin: 0 24px; padding: 8px 12px; border-radius: 8px; flex: none;
+  font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--c); background: color-mix(in srgb, var(--c) 9%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 22%, transparent);
+}
+.agx-jl-note[data-tone="warn"] { --c: var(--warning-ink); }
+.agx-jl-note[data-tone="err"] { --c: var(--error-ink); }
+.agx-jl-note[data-tone="info"] { --c: var(--info-ink); }
+.agx-jl-note > span { flex: 1; min-width: 0; }
+
+.agx-jl-empty {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
+  gap: 8px; min-height: 320px; padding: 24px; color: var(--text3);
+}
+.agx-jl-empty .ico {
+  display: grid; place-items: center; width: 48px; height: 48px; border-radius: 14px; color: var(--text3);
+  background: color-mix(in srgb, var(--text) 6%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 8%, transparent);
+}
+.agx-jl-empty[data-bad] .ico { color: var(--error-ink); background: color-mix(in srgb, var(--error) 10%, transparent); }
+.agx-jl-empty b { font-size: calc(13px * var(--agx-fs, 1)); color: var(--text); }
+.agx-jl-empty p { max-width: 46ch; font-size: calc(11.5px * var(--agx-fs, 1)); }
+.agx-jl-empty .acts { display: flex; gap: 6px; margin-top: 4px; }
+
+/* Starboard hover cards: provenance rows and the trust badge (TipHost + lib/tip.ts). */
+.agx-tip-tr { margin-left: auto; padding: 2px 8px; border-radius: 99px; font: 600 calc(9.5px * var(--agx-fs, 1)) var(--font-mono, ui-monospace, monospace); letter-spacing: .06em; text-transform: uppercase; background: color-mix(in srgb, var(--tip-ink) 12%, transparent); }
+.agx-tip-tr[data-trust="measured"] { color: #6ee7a0; }
+.agx-tip-tr[data-trust="estimated"] { color: #fbbf5c; }
+.agx-tip-tr[data-trust="proposed"] { color: #93b0f5; outline: 1px dashed #93b0f5; outline-offset: -1px; }
+.agx-tip-dl { display: grid; grid-template-columns: 4.2em 1fr; gap: 4px 8px; margin: 8px 0 0; }
+.agx-tip-dl dt { font: 600 calc(9.5px * var(--agx-fs, 1)) var(--font-mono, ui-monospace, monospace); letter-spacing: .06em; text-transform: uppercase; color: color-mix(in srgb, var(--tip-ink) 55%, transparent); padding-top: 2px; }
+.agx-tip-dl dd { margin: 0; color: color-mix(in srgb, var(--tip-ink) 86%, transparent); }
+.agx-tip-dl[data-rows] { grid-template-columns: max-content 1fr; column-gap: 10px; }
+.agx-tip-1 > .agx-tip-m, .agx-tip-1 > .agx-tip-tg { white-space: nowrap; flex-shrink: 0; }
+.agx-tip-need { margin-top: 8px; padding: 5px 8px; border-radius: 6px; border: 1px dashed #93b0f5; color: #b9ccf8; }
+
+/* ===== Starboard (components/StarboardView.tsx) =====
+   Three levels chosen by the view's own width: md under 1700px, lg to 2300px, xl above.
+   Sizes in em off one --sb-u, so one design serves three widths (as the mockup does). */
+.sb { container-type: inline-size; container-name: sb; overflow: auto; }
+.sb-screen { --sb-u: .8; --sb-g: 11px; --sb-p: 14px; font-size: calc(13px * var(--sb-u)); height: 100%; min-height: 640px; box-sizing: border-box; display: grid; gap: var(--sb-g); padding: var(--sb-p);
+  min-width: 1100px; background: var(--bg);
+  grid-template-columns: minmax(250px, 340px) 1fr minmax(300px, 400px); grid-template-rows: 42px 84px minmax(0, 1.5fr) minmax(0, 1fr);
+  grid-template-areas: "head head head" "kpi kpi kpi" "crew orrery right" "crew feed bot"; }
+.sb-screen > * { min-width: 0; min-height: 0; }
+@container sb (min-width: 1700px) {
+  .sb-screen { --sb-u: .93; --sb-g: 14px; --sb-p: 20px; grid-template-columns: 440px 1fr 450px; grid-template-rows: 48px 100px minmax(0, 1fr) 300px;
+    grid-template-columns: 440px 1fr 450px;
+    grid-template-areas: "head head head" "kpi kpi kpi" "crew orrery right" "feed feed bot"; }
+}
+@container sb (min-width: 2300px) {
+  .sb-screen { --sb-u: 1.18; --sb-g: 18px; --sb-p: 26px; grid-template-columns: 600px 1fr 600px; grid-template-rows: 56px 128px minmax(0, 1fr) 376px; }
+}
+/* An explained thing shows its tip and nothing else: no custom cursor and no dashed ring on hover. Both appeared on every panel, row and word and flickered while the tip waited. Keyboard focus keeps its ring. */
+.sb [data-tip]:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.sb-head { grid-area: head; display: flex; align-items: center; gap: 1.2em; }
+.sb-brand { display: flex; align-items: center; gap: .8em; }
+.sb-mark { width: 2.7em; height: 2.7em; border-radius: .8em; border: 1px solid var(--surface-line); background: var(--surface-card); box-shadow: var(--surface-lift); display: grid; place-items: center; color: var(--text); }
+.sb-brand h1 { margin: 0; font: 650 1.5em/1 var(--font-sans, system-ui); letter-spacing: -.01em; color: var(--text); }
+.sb-brand small { display: block; font: .85em var(--font-mono, ui-monospace, monospace); color: var(--text3); margin-top: .3em; }
+.sb-verdict { flex: 1; display: flex; justify-content: center; gap: .6em; }
+.sb-chip { display: inline-flex; align-items: center; gap: .5em; height: 2.2em; padding: 0 .95em; border-radius: 99px; border: 1px solid var(--surface-line); background: var(--surface-card); color: var(--text2); white-space: nowrap; }
+.sb-chip b { font: 600 1em var(--font-mono, ui-monospace, monospace); color: var(--text); }
+.sb-controls { display: flex; align-items: center; gap: .6em; min-width: 0; }
+.sb-seg { display: inline-flex; gap: 2px; }
+/* A window was chosen and its numbers are on the way: the old ones stay, dimmed, and the chosen button breathes until they land. */
+.sb[data-busy] :is(.sb-kpi, .sb-tools, .sb-cost) { opacity: .55; transition: opacity .15s ease; }
+.sb :is(.sb-kpi, .sb-tools, .sb-cost) { transition: opacity .15s ease; }
+.sb-seg [data-wait] { animation: sb-wait 1s ease-in-out infinite; }
+@keyframes sb-wait { 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .sb-seg [data-wait] { animation: none; } }
+.sb-dot { width: .62em; height: .62em; border-radius: 50%; display: inline-block; flex: none; background: var(--text4); }
+.sb-dot[data-s="ok"] { background: var(--success); } .sb-dot[data-s="warn"] { background: var(--warning); }
+.sb-tm { width: .62em; height: .62em; border-radius: 50%; display: inline-block; flex: none; }
+.sb-tm[data-m="m"] { background: var(--success); }
+.sb-tm[data-m="e"] { border: .13em solid var(--warning); background: linear-gradient(90deg, var(--warning) 50%, transparent 50%); }
+.sb-tm[data-m="p"] { border: .13em dashed var(--info); }
+.sb-kpi { grid-area: kpi; display: grid; gap: var(--sb-g); grid-template-columns: 1.7fr; grid-auto-columns: 1fr; grid-auto-flow: column; }
+.sb-kpi [data-opt] { display: none; }
+@container sb (min-width: 1700px) { .sb-bot { grid-template-columns: none; grid-template-rows: 1.25fr 1fr; } .sb-kpi { grid-template-columns: 2.1fr; } .sb-kpi [data-opt] { display: flex; } }
+.sb-tile { position: relative; background: var(--surface-card); border: 1px solid var(--surface-line); border-radius: .95em; box-shadow: var(--surface-lift); padding: .75em .95em; display: flex; flex-direction: column; justify-content: space-between; overflow: hidden; min-width: 0; }
+.sb-tile[data-warn] { background: color-mix(in srgb, var(--warning) 9%, var(--surface-card)); border-color: color-mix(in srgb, var(--warning) 40%, transparent); }
+.sb-tile[data-bad] .sb-n { color: var(--error-ink); }
+.sb-tile[data-proposed] { border-style: dashed; border-color: var(--info); }
+.sb-t { font: 600 .72em/1 var(--font-mono, ui-monospace, monospace); letter-spacing: .14em; text-transform: uppercase; color: var(--text3); display: flex; align-items: center; gap: .5em; }
+.sb-n { font: 600 2.15em/1 var(--font-sans, system-ui); letter-spacing: -.02em; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text); }
+.sb-tile[data-hero] .sb-n { font-size: 2.6em; }
+.sb-s { font: .8em var(--font-mono, ui-monospace, monospace); color: var(--text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sb .sb-slot > .panel .panel-eyebrow { display: flex; align-items: center; gap: .6em; }
+.sb .sb-slot[data-glyph] > .panel .panel-eyebrow::before { content: ""; width: 16px; height: 16px; flex: none; background: var(--text3); -webkit-mask: var(--sb-gl) center / contain no-repeat; mask: var(--sb-gl) center / contain no-repeat; }
+.sb-slot[data-glyph="alerts"] { --sb-gl: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 13 8 2.6 13.5 13Z'/%3E%3Cpath d='M8 7v3'/%3E%3C/svg%3E"); }
+.sb-slot[data-glyph="live"] { --sb-gl: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1.5 8.5h3l1.6-5 3 9.5 1.8-4.5h3.6'/%3E%3C/svg%3E"); }
+.sb-slot[data-glyph="thru"] { --sb-gl: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 8c1.6-3.2 2.8-3.2 4 0s2.4 3.2 4 0 2.4-3.2 4 0'/%3E%3C/svg%3E"); }
+.sb-slot[data-glyph="quota"] { --sb-gl: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='8' cy='8' r='6'/%3E%3Cpath d='M8 4.6V8l2.4 1.6'/%3E%3C/svg%3E"); }
+.sb-clock { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.15; min-width: 5.5em; flex: none; }
+.sb-clock b { font: 600 1.35em var(--font-mono, ui-monospace, monospace); letter-spacing: .02em; font-variant-numeric: tabular-nums; color: var(--text); }
+.sb-clock span { font: .78em var(--font-mono, ui-monospace, monospace); color: var(--text3); white-space: nowrap; }
+.sb-n small { font-size: .5em; margin-left: .1em; color: var(--text3); }
+.sb-spark { position: absolute; right: .8em; bottom: .7em; width: 38%; height: 46%; pointer-events: none; }
+.sb-spark path { fill: none; stroke: var(--primary); stroke-width: 1.8; vector-effect: non-scaling-stroke; stroke-linecap: round; stroke-linejoin: round; }
+.sb-tile[data-spark] .sb-s { max-width: 58%; }
+.sb-panel { position: relative; background: var(--surface-card); border: 1px solid var(--surface-line); border-radius: .95em; box-shadow: var(--surface-lift); display: flex; flex-direction: column; overflow: hidden; }
+.sb-panel[data-area="crew"] { grid-area: crew; } .sb-panel[data-area="orrery"] { grid-area: orrery; }
+.sb-ph { display: flex; align-items: center; gap: .6em; padding: .8em 1em .55em; flex: none; }
+.sb-ph h2 { margin: 0; white-space: nowrap; font: 600 .8em/1 var(--font-mono, ui-monospace, monospace); letter-spacing: .14em; text-transform: uppercase; color: var(--text2); }
+.sb-sp { flex: 1; } .sb-meta { font: .85em var(--font-mono, ui-monospace, monospace); color: var(--text3); white-space: nowrap; }
+.sb-pb { flex: 1; min-height: 0; padding: .1em 1em 1em; display: flex; }
+.sb-empty { flex: 1; display: grid; place-items: center; text-align: center; padding: 1em; border: 1px dashed var(--surface-line); border-radius: .7em; color: var(--text3); }
+.sb-right { grid-area: right; display: grid; gap: var(--sb-g); grid-template-rows: auto minmax(8em, 1fr) minmax(0, auto); min-height: 0; }
+.sb-feed { grid-area: feed; } .sb-bot { grid-area: bot; display: grid; gap: var(--sb-g); min-height: 0; grid-template-columns: 1fr 1fr; }
+.sb-bot { grid-template-columns: 1fr; } .sb-bot > :nth-child(1), .sb-right > .sb-slot { display: none; }
+@container sb (min-width: 1700px) { .sb-bot > :nth-child(1), .sb-right > .sb-slot { display: grid; } }
+.sb-slot { min-width: 0; min-height: 0; display: grid; }
+.sb .sb-slot > .panel { background: var(--surface-card); border: 1px solid var(--surface-line); border-radius: .95em; box-shadow: var(--surface-lift); }
+.sb .sb-slot > .panel > .panel-h { align-items: center; padding: .8em 1em .55em; }
+.sb .sb-slot > .panel .panel-eyebrow { font: 600 .8em/1 var(--font-mono, ui-monospace, monospace); letter-spacing: .14em; color: var(--text2); }
+.sb .sb-slot > .panel .panel-title { display: none; }
+.sb-slot > * { min-height: 0; }
+.sb-glyph { display: flex; color: var(--text3); }
+.sb-pb:has(> .sb-crew, > .sb-tools, > .sb-needs, > .sb-cost) { flex-direction: column; overflow: auto; }
+.sb-panel[data-area="orrery"] .sb-pb { padding: 0; }
+.sb-crew { display: flex; flex-direction: column; gap: .55em; flex: 1; min-height: 0; overflow: auto; }
+.sb-card { position: relative; flex: 1 0 5.6em; max-height: 9em; border: 1px solid var(--surface-line); border-radius: .8em; padding: .6em .8em .7em 1.05em; background: var(--surface-card); display: grid; gap: .25em; align-content: center; min-width: 0; }
+.sb-card::before { content: ""; position: absolute; left: 0; top: .5em; bottom: .5em; width: .28em; border-radius: 0 .2em .2em 0; background: var(--text4); }
+.sb-card[data-st="working"]::before { background: var(--success); }
+.sb-card[data-st="ask"]::before { background: var(--warning); }
+.sb-card[data-st="ask"] { border-color: color-mix(in srgb, var(--warning) 40%, transparent); background: color-mix(in srgb, var(--warning) 8%, var(--surface-card)); }
+.sb-card[data-st="done"] { opacity: .8; }
+.sb-r1 { display: flex; align-items: center; gap: .5em; min-width: 0; }
+.sb-nm { flex: 1 1 auto; min-width: 6em; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.sb-pill { font: 600 .7em var(--font-mono, ui-monospace, monospace); padding: .2em .55em; border-radius: 99px; border: 1px solid var(--surface-line); background: var(--bg2); color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 8em; flex: 0 1 auto; min-width: 0; }
+.sb-pill[data-k="model"] { flex: none; }
+.sb-age { margin-left: auto; font: .8em var(--font-mono, ui-monospace, monospace); color: var(--text3); white-space: nowrap; }
+.sb-doing { font: .84em var(--font-mono, ui-monospace, monospace); color: var(--text2); overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
+.sb-card[data-st="ask"] .sb-doing { color: var(--warning-ink); font-weight: 600; }
+.sb-r3 { display: flex; align-items: flex-end; gap: .9em; font: .78em var(--font-mono, ui-monospace, monospace); color: var(--text3); }
+.sb-r3 b { color: var(--text); font-weight: 600; } .sb-r3 [data-bad] { color: var(--error-ink); } .sb-r3 [data-bad] b { color: var(--error-ink); }
+.sb-mini { display: flex; align-items: flex-end; gap: 1px; height: 1.9em; margin-left: auto; width: 9em; }
+.sb-mini i { flex: 1; background: var(--success); opacity: .7; border-radius: 1px; min-height: 2px; }
+.sb-card[data-st="ask"] .sb-mini i { background: var(--warning); } .sb-card[data-st="quiet"] .sb-mini i, .sb-card[data-st="done"] .sb-mini i { background: var(--text4); }
+@container sb (max-width: 1699px) { .sb-mini { display: none; } }
+.sb-ctx { height: .28em; border-radius: 99px; background: var(--bg3); position: relative; overflow: hidden; }
+.sb-ctx i { position: absolute; inset: 0 auto 0 0; background: color-mix(in srgb, var(--text) 55%, var(--bg)); border-radius: inherit; }
+.sb-ctx[data-hot] i { background: var(--warning); }
+.sb-dot[data-s="off"] { background: var(--text4); } .sb-dot[data-ring] { background: transparent; border: .13em solid var(--text4); box-sizing: border-box; }
+.sb-orrery { flex: 1; width: 100%; min-height: 0; position: relative; }
+.sb-orrery > svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.sb-bs { fill: var(--text3); }
+.sb-orrery text { font-family: var(--font-mono, ui-monospace, monospace); }
+.sb-ring { fill: none; stroke: color-mix(in srgb, var(--text) 13%, transparent); }
+.sb-rl { fill: var(--surface-card); stroke: var(--surface-line); } .sb-rt { fill: var(--text3); }
+.sb-core { fill: var(--surface-card); stroke: var(--surface-line); }
+.sb-core-n { font: 600 46px var(--font-sans, system-ui); fill: var(--text); } .sb-core-l { letter-spacing: .12em; fill: var(--text3); }
+.sb-disc { fill: var(--bg3); stroke: var(--text4); stroke-width: 2; }
+.sb-body[data-st="working"] .sb-disc { fill: color-mix(in srgb, var(--success) 14%, var(--surface-card)); stroke: color-mix(in srgb, var(--success) 40%, transparent); }
+.sb-body[data-st="ask"] .sb-disc { fill: color-mix(in srgb, var(--warning) 14%, var(--surface-card)); stroke: var(--warning); stroke-width: 3; }
+.sb-body[data-st="quiet"] .sb-disc { fill: var(--surface-card); stroke-dasharray: 3 4; }
+.sb-bn { font-weight: 600; fill: var(--text); } .sb-body[data-st="done"] .sb-bn { fill: var(--text3); }
+/* The generic .sb [data-tip] ring (0,3,0) beat the plain .sb-body rule and drew a box around the whole <g>, halo and labels included, which grows with a working body. */
+.sb-body { cursor: default; } .sb .sb-body[data-tip]:focus-visible { outline: none; } .sb-body:focus-visible .sb-disc { stroke: var(--primary); stroke-width: 4; }
+.sb-halo, .sb-spin { fill: none; stroke: var(--success); stroke-width: 1.5; transform-box: fill-box; transform-origin: center; }
+.sb-spin { stroke-width: 3.2; stroke-linecap: round; animation: sb-spin 5s linear infinite; }
+.sb-halo { animation: sb-halo 2.4s ease-out infinite; }
+@keyframes sb-spin { to { transform: rotate(360deg); } }
+@keyframes sb-halo { 0% { opacity: .55; transform: scale(1); } 100% { opacity: 0; transform: scale(1.9); } }
+@media (prefers-reduced-motion: reduce) { .sb-spin, .sb-halo { animation: none; } .sb-halo { display: none; } }
+html[data-reduce-motion] .sb-spin, html[data-reduce-motion] .sb-halo { animation: none; }
+.sb-needs { display: flex; flex-direction: column; gap: .5em; }
+.sb-need { display: grid; grid-template-columns: 1fr auto; gap: .1em .8em; align-items: center; padding: .6em .75em; border-radius: .75em; border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent); background: color-mix(in srgb, var(--warning) 8%, var(--surface-card)); }
+.sb-need > :last-child { grid-row: 1 / 3; grid-column: 2; }
+.sb-nt { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.sb-ns { font: .82em var(--font-mono, ui-monospace, monospace); color: var(--text3); }
+.sb-tools { display: flex; flex-direction: column; gap: .55em; flex: 1; min-width: 0; }
+.sb-wcn { font: .78em var(--font-mono, ui-monospace, monospace); color: var(--text3); }
+.sb-mixbar { display: flex; height: .95em; border-radius: 99px; overflow: hidden; border: 1px solid var(--surface-line); }
+.sb-mixbar i { display: block; }
+.sb-legend { display: flex; flex-wrap: wrap; gap: .3em .9em; font: .8em var(--font-mono, ui-monospace, monospace); color: var(--text2); }
+.sb-legend span { display: inline-flex; align-items: center; gap: .4em; } .sb-legend i { width: .7em; height: .7em; border-radius: 2px; }
+.sb-wc { display: grid; grid-template-columns: 5.4em 1fr 9em; gap: .6em; align-items: center; font: .8em var(--font-mono, ui-monospace, monospace); color: var(--text2); }
+.sb-wn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-tr { height: .5em; border-radius: 99px; background: var(--bg3); position: relative; }
+.sb-tr i { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: color-mix(in srgb, var(--text) 70%, var(--bg)); }
+.sb-tr b { position: absolute; top: -.2em; bottom: -.2em; width: .22em; border-radius: 2px; background: var(--primary); }
+.sb-wv { text-align: right; color: var(--text3); } .sb-wv em { font-style: normal; color: var(--text); }
+.sb-cost { display: flex; gap: 1em; align-items: center; flex: 1; min-height: 0; }
+.sb-cost svg { width: 5.4em; height: 5.4em; flex: none; }
+.sb-donut-n { font: 600 11px var(--font-sans, system-ui); fill: var(--text); } .sb-donut-l { font: 5.5px var(--font-mono, ui-monospace, monospace); fill: var(--text3); }
+.sb-costrows { flex: 1; min-width: 0; display: grid; gap: .35em; font: .85em var(--font-mono, ui-monospace, monospace); }
+.sb-costrows > div { display: grid; grid-template-columns: .7em minmax(0, 1fr) auto auto; gap: .5em; align-items: center; color: var(--text2); }
+.sb-costrows i { width: .7em; height: .7em; border-radius: 50%; } .sb-costrows b { color: var(--text); font-weight: 600; } .sb-costrows small { color: var(--text3); text-align: right; }
+.sb-costrows u { text-decoration: none; color: var(--warning-ink); margin-left: .3em; }
+
+/* The quota panel is text and sizes to its content, which the grid cell cannot always hold: scroll inside, never cut. The throughput panel is a chart: a chart is never scrolled, it gets the height that is left. */
+.sb-slot[data-glyph="quota"] > .panel > .panel-h + div { overflow-y: auto; }
+.sb-slot[data-glyph="thru"] > .panel > .panel-h + div { min-height: 0; overflow: hidden; }
+/* Below the grid's own minimum (1100) the three columns used to run off the right edge. Two columns instead, stacked in the order they read; the page scrolls down, never sideways. */
+@container sb (max-width: 1099px) {
+  .sb-screen { min-width: 0; height: auto; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto auto 460px 340px 380px 300px;
+    grid-template-areas: "head head" "kpi kpi" "crew right" "orrery orrery" "feed feed" "bot bot"; }
+  .sb-head { flex-wrap: wrap; row-gap: .6em; }
+  .sb-verdict { flex: 1 1 auto; justify-content: flex-start; }
+  .sb-controls { flex-wrap: wrap; }
+  .sb-kpi { grid-auto-flow: row; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: 84px; }
+}

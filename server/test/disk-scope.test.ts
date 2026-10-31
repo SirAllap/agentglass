@@ -13,7 +13,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { diskAllows, diskFind, diskPlaces, diskRoots, diskWalk } from "../src/disk.ts";
+import { diskAllows, diskFind, diskGrep, diskPlaces, diskRoots, diskWalk } from "../src/disk.ts";
 import { fileText, fileTree } from "../src/files.ts";
 
 const HOME0 = process.env.HOME;
@@ -56,6 +56,17 @@ afterAll(() => {
   if (ROOTS0 === undefined) delete process.env.AGENTGLASS_DISK_ROOTS; else process.env.AGENTGLASS_DISK_ROOTS = ROOTS0;
   rmSync(home, { recursive: true, force: true });
   rmSync(outside, { recursive: true, force: true });
+});
+
+describe("searching inside files", () => {
+  // `-I` is "skip binary files" to grep and "no file names" to ripgrep: with it
+  // every hit came back without its path and the parser dropped all of them.
+  test("finds text that is in a file, with its path and line", () => {
+    writeFileSync(join(docs, "notes.txt"), "first\nthe lantern is lit\n");
+    const r = diskGrep(docs, "lantern");
+    expect(r.ok).toBe(true);
+    expect(r.hits.map((h) => [basename(h.rel), h.line])).toEqual([["notes.txt", 2]]);
+  });
 });
 
 describe("what the machine search may touch", () => {

@@ -52,7 +52,9 @@ export interface Harness {
    *  nothing done (`limit`), or after a tool call (`work`). Null: back to answering. */
   mode(engine: "opencode" | "claude", how: "limit" | "work" | null): void;
   /** A tab somebody opened by hand in `dir`, running the TUI stub: its pane id. */
-  handTab(dir: string): Promise<string>;
+  handTab(dir: string, window?: string): Promise<string>;
+  /** Close a tab opened by `handTab`, as a relaunch does to the old one. */
+  closeTab(pane: string): Promise<void>;
   /** A tab whose TUI is stopped on a permission dialog, as Claude Code draws
    *  one: the pane id, and what answers it (a line read from the pane). */
   dialogTab(dir: string): Promise<{ pane: string; answered(): boolean }>;
@@ -193,8 +195,11 @@ sleep 300
     ran: (engine) => { try { return readFileSync(join(logs, `ran-${engine}`), "utf8").split("\n").filter(Boolean).length; } catch { return 0; } },
     mode: (engine, how) => { if (how) writeFileSync(join(logs, `mode-${engine}`), how); else rmSync(join(logs, `mode-${engine}`), { force: true }); },
     slow: (on) => { if (on) writeFileSync(join(logs, "slow"), ""); else rmSync(join(logs, "slow"), { force: true }); },
-    handTab: async (dir) => {
-      const p = Bun.spawn(["tmux", "-L", SOCKET, ...TMUX_ISOLATED, "new-session", "-d", "-P", "-F", "#{pane_id}", "-c", dir, join(fakes, "claude")],
+    closeTab: async (pane) => {
+      await Bun.spawn(["tmux", "-L", SOCKET, ...TMUX_ISOLATED, "kill-pane", "-t", pane], { env: { ...process.env, TMUX_TMPDIR: TMUX_TEST_TMPDIR, TMUX: "" }, stdout: "ignore", stderr: "ignore" }).exited;
+    },
+    handTab: async (dir, window) => {
+      const p = Bun.spawn(["tmux", "-L", SOCKET, ...TMUX_ISOLATED, "new-session", "-d", "-P", "-F", "#{pane_id}", "-c", dir, ...(window ? ["-n", window] : []), join(fakes, "claude")],
         { env: { ...process.env, TMUX_TMPDIR: TMUX_TEST_TMPDIR, TMUX: "" }, stdout: "pipe", stderr: "ignore" });
       const pane = (await new Response(p.stdout).text()).trim();
       if (await p.exited !== 0 || !pane) throw new Error("the hand-opened tab did not open");

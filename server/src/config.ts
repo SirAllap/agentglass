@@ -9,6 +9,7 @@
 import type { Budget, GateRule } from "../../shared/types.ts";
 import { agentProvider } from "../../shared/agentKinds.ts";
 import { validateStored, type StoredPolicy } from "../../shared/orchestration.ts";
+import { resolvePolaris, validateStoredPolaris, type StoredPolaris } from "../../shared/polaris.ts";
 import { DEFAULT_LAUNCH_DENY, isLaunchMode, parseDenyRules, parseFlagLine, type FlagOverrides, type LaunchMode } from "../../shared/launchModes.ts";
 import { GATE_ANSWERERS, GATE_ON_TIMEOUT, isOneOf, type GateAnswerer, type GateOnTimeout } from "../../shared/agentDefaults.ts";
 import { WORKER_ROLES, MODEL_RE, workerRole, type RoleChoice, type RoleId } from "../../shared/workerRoles.ts";
@@ -190,6 +191,9 @@ interface Config {
    *  does not already hold: rules, the ceiling, defaults, limits and the
    *  "ask" flags. `projects` is keyed by the checkout root, like budgets. */
   orchestration?: { global?: unknown; projects?: Record<string, unknown> };
+  /** Polaris, the pull request abilities (shared/polaris.ts). What a scope set,
+   *  keyed like `orchestration`; a door it leaves out reads the next layer. */
+  polaris?: { global?: unknown; projects?: Record<string, unknown> };
 }
 
 function load(path: string): Config {
@@ -1510,4 +1514,38 @@ export function writeStoredPolicy(root: string | undefined, stored: StoredPolicy
     if (stored) projects[root] = stored; else delete projects[root];
     return { orchestration: { ...cur, projects } };
   }, "the orchestration policy");
+}
+
+/** What one scope wrote down for Polaris, or null. An unusable entry reads as absent, like a policy. */
+export function readStoredPolaris(root?: string): StoredPolaris | null {
+  const o = config().polaris;
+  const raw = root ? o?.projects?.[root] : o?.global;
+  if (raw === undefined) return null;
+  const v = validateStoredPolaris(raw);
+  if (!v.ok) {
+    console.error(`[config] ignoring the polaris settings for ${root ?? "global"}: ${v.error}`);
+    return null;
+  }
+  return v.value;
+}
+
+/** Roots the sweep looks at: those with a layer of their own, and every open project when the global layer is on. */
+export const polarisRoots = (): string[] =>
+  [...new Set([...Object.keys(config().polaris?.projects ?? {}), ...(readStoredPolaris()?.enabled ? workspaceRoots() : [])])];
+
+/** The settings in force for a project: per door its own value, else the global one, else the safe default. */
+export function readPolaris(root?: string) {
+  return resolvePolaris(readStoredPolaris(), root ? readStoredPolaris(root) : null);
+}
+
+/** Write one scope's Polaris settings, or drop a project's with null. Same writer as the policy. */
+export function writePolaris(root: string | undefined, stored: StoredPolaris | null): { ok: boolean; persisted: boolean; error?: string } {
+  if (!root && !stored) return { ok: false, persisted: false, error: "the global Polaris settings cannot be removed, only changed" };
+  return mergeConfig((existing) => {
+    const cur = (existing.polaris ?? {}) as { global?: unknown; projects?: Record<string, unknown> };
+    if (!root) return { polaris: { ...cur, global: stored } };
+    const projects = { ...(cur.projects ?? {}) };
+    if (stored) projects[root] = stored; else delete projects[root];
+    return { polaris: { ...cur, projects } };
+  }, "the Polaris settings");
 }

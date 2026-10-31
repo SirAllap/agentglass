@@ -14,10 +14,10 @@ const gridStart = src.indexOf("const cuGrid = (");
 const gridEnd = src.indexOf('.join(" ");', gridStart) + '.join(" ");'.length;
 const gridSrc = src.slice(gridStart, gridEnd).replace(/: boolean/g, "");
 // eslint-disable-next-line no-new-func
-const cuGrid: (a: boolean, b: boolean, c: boolean, d: boolean, e: boolean) => string =
+const cuGrid: (a: boolean, b: boolean, c: boolean, d: boolean, e: boolean, pr?: number, who?: number, pts?: boolean, cmts?: boolean, showPr?: boolean) => string =
   new Function(`${gridSrc}\nreturn cuGrid;`)();
 
-const headStart = src.indexOf("${EYEBROW} sticky top-0");
+const headStart = src.indexOf("text-[11.5px] font-semibold sticky top-0");
 const head = src.slice(headStart, src.indexOf("</div>", headStart));
 const rowStart = src.indexOf('<div role="row" tabIndex={0}');
 const row = src.slice(rowStart, src.indexOf("{menu && (", rowStart));
@@ -28,17 +28,25 @@ describe("the ClickUp table", () => {
     expect(cuGrid(true, true, true, true, false).split(" ").length).toBe(9);
   });
 
+  it("leaves out the PR track when the table is narrow", () => {
+    const wide = cuGrid(true, false, false, false, false).split(" ");
+    const narrow = cuGrid(true, false, false, false, false, 92, 50, true, true, false).split(" ");
+    expect(narrow.length).toBe(wide.length - 1);
+    expect(narrow).not.toContain("92px");
+  });
+
   it("draws no per-row open link", () => {
     expect(row).not.toContain("target=\"_blank\"");
     expect(row).not.toContain("↗</a>");
   });
 
   it("puts one rule on every column boundary, in heading and rows, and none twice", () => {
-    // Task|PR is the frozen Task cell's own edge; Who, Squad, Sprint, Cmts,
-    // Due, Est, Pts each draw the one on their left. PR draws none: a second
+    // Task|PR is the frozen Task cell's own edge; Who, Squad, Sprint,
+    // Due, Est, Pts each draw the one on their left (the comment count is
+    // inside the task cell now, so it has no column). PR draws none: a second
     // line there was the double rule between TASK and PR.
-    expect((head.match(/agx-colrule/g) ?? []).length).toBe(7);
-    expect((row.match(/agx-colrule/g) ?? []).length).toBe(7);
+    expect((head.match(/agx-colrule/g) ?? []).length).toBe(6);
+    expect((row.match(/agx-colrule/g) ?? []).length).toBe(6);
     expect(head).toMatch(/<span className="text-center" style=\{COL_RULE\}>PR<\/span>/);
     expect(row).not.toMatch(/agx-colrule[^\n]*\n[^\n]*prPick/);
   });
@@ -46,7 +54,7 @@ describe("the ClickUp table", () => {
   it("gives heading and rows one grid, one gap and one right inset", () => {
     expect(head).toContain("gridTemplateColumns: grid, gap: 16");
     expect(row).toContain("gridTemplateColumns: grid, gap: 16");
-    expect(src).toContain("`pr-4 ${EYEBROW} sticky top-0");
+    expect(src).toContain("pr-4 text-[11.5px] font-semibold sticky top-0");
     expect(row).toMatch(/className="agx-row [^"]*\bpr-4\b/);
     // the rows carry no vertical padding of their own: the cells do, so a
     // rule stretches the full height of the row

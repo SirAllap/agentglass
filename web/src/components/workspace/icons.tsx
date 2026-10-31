@@ -26,31 +26,12 @@ export function IssuesIcon({ size = ICON.md }: P) {
   );
 }
 
-/** Four panes: the shape of a dashboard since the first one. */
+/** Starboard's star: a four-point sparkle with long rays and four short diagonal ticks (eight rays), the same mark as the hover pointer. */
 export function DashIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>
-      <rect x="3" y="3" width="7.5" height="7.5" rx="1.4" />
-      <rect x="13.5" y="3" width="7.5" height="4.5" rx="1.4" />
-      <rect x="13.5" y="10.5" width="7.5" height="10.5" rx="1.4" />
-      <rect x="3" y="13.5" width="7.5" height="7.5" rx="1.4" />
-    </svg>
-  );
-}
-
-/**
- * A folder — and it is a folder because Diff is now a page.
- *
- * This was a page with a turned corner, which is the clearest way to say
- * "file" there is. It stopped being available the moment the diff glyph became
- * a document: a rail with two icons meaning "a file" is a rail with neither.
- * A folder is what the view actually opens on anyway — a checkout you browse.
- */
-export function FilesIcon({ size = ICON.md }: P) {
-  return (
-    <svg {...svg} width={size} height={size}>
-      <path d="M3 6.6a2 2 0 0 1 2-2h3.5l2 2.6H19a2 2 0 0 1 2 2v9.2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-      <path d="M3 9.7h18" />
+      <path d="M12 2.5c.7 4.6 2.9 6.8 7.5 9.5-4.6 2.7-6.8 4.9-7.5 9.5-.7-4.6-2.9-6.8-7.5-9.5C9.1 9.3 11.3 7.1 12 2.5z" />
+      <path d="M19.2 4.8l-1.3 1.3M4.8 19.2l1.3-1.3M4.8 4.8l1.3 1.3M19.2 19.2l-1.3-1.3" strokeWidth={1.6} />
     </svg>
   );
 }
@@ -261,6 +242,21 @@ export function LanternIcon({ size = ICON.md }: P) {
   );
 }
 
+/** An alien head: the Agents entry on the rail. Big rounded head tapering to
+ *  the chin, two slanted filled eyes — space-themed like the rest of the app and
+ *  the one rail glyph nobody reads as another view. Drawn in the house stroke
+ *  (2 on the 24 grid); the eyes are filled at 1.2 so they keep their slant at
+ *  26 px. Ceiling: no antenna, it did not survive the rail's size. */
+export function AgentsIcon({ size = ICON.md }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <path d="M12 3.5c-4.6 0-7.8 3.1-7.8 7.3 0 4.3 3.2 7.3 5.5 8.9.9.6 3.7.6 4.6 0 2.3-1.6 5.5-4.6 5.5-8.9 0-4.2-3.2-7.3-7.8-7.3z" />
+      <path d="M7.4 10.2c1.7.1 2.9.9 3.4 2-1.7.1-3-.5-3.4-2z" fill="currentColor" strokeWidth={1.2} />
+      <path d="M16.6 10.2c-1.7.1-2.9.9-3.4 2 1.7.1 3-.5 3.4-2z" fill="currentColor" strokeWidth={1.2} />
+    </svg>
+  );
+}
+
 /** A gear: settings and configuration. The line icon every "⚙" in the app
  *  becomes — the emoji draws in colour on some systems and matches nothing. */
 export function GearIcon({ size = ICON.md }: P) {
@@ -277,6 +273,18 @@ export function PluginsIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>
       <path d="M5 7.2h3.7a2.3 2.3 0 1 1 4.6 0H17v3.7a2.3 2.3 0 1 1 0 4.6v3.7h-3.7a2.3 2.3 0 1 0-4.6 0H5v-3.7a2.3 2.3 0 1 0 0-4.6z" />
+    </svg>
+  );
+}
+
+/** A small aircraft, nose up: a plan that has not left the ground yet. The
+ *  Flight plan view's own glyph, drawn in the approved design. */
+export function FlightPlanIcon({ size = ICON.md }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <path d="M12 3c3 2.5 4.5 6 4.5 10l2.5 2.5V19l-4-1.5h-6L5 19v-3.5L7.5 13c0-4 1.5-7.5 4.5-10z" />
+      <circle cx="12" cy="10" r="1.6" />
+      <path d="M10.5 19.5l1.5 2 1.5-2" />
     </svg>
   );
 }

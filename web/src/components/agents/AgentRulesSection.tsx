@@ -1,3 +1,4 @@
+import { GlobeIcon } from "../browser/icons.tsx";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
 import { MODE_ACTION, type AgentRule, type AgentRulesView, type RuleSetting } from "../../../../shared/agentRules.ts";
@@ -45,7 +46,7 @@ interface Props {
 
 export function AgentRulesSection({ root, projects, who, gates, active, now, compact }: Props) {
   const all = root === "";
-  const roots = useMemo(() => (all ? [...projects] : [root, ...projects.filter((p) => p !== root)]), [all, root, projects]);
+  const roots = useMemo(() => (all ? [...projects] : [root]), [all, root, projects]);
   const [views, setViews] = useState<Record<string, AgentRulesView>>({});
   const [error, setError] = useState("");
   const [review, setReview] = useState(false);
@@ -106,7 +107,7 @@ export function AgentRulesSection({ root, projects, who, gates, active, now, com
       <div className="learnhow">
         <span className="lab"><Ph name="sparkle" size={16} />Where a rule comes from</span>
         <div className="st"><span className="sc chat"><Ph name="chat-circle-text" size={13} />you said it in chat</span><span>You tell an agent in chat. It writes the rule at once.</span></div>
-        <div className="st"><span className="sc first"><Ph name="sparkle" size={13} />seen for the first time</span><span>An agent does something no rule covers. You get a suggestion.</span></div>
+        <div className="st"><span className="sc first"><Ph name="sparkle" size={13} />seen for the first time</span><span>An agent had to ask you for something no rule covers. You get a suggestion.</span></div>
         <div className="st"><span className="sc always"><Ph name="check-circle" size={13} />you pressed Always allow here</span><span>You click Always allow here. The click becomes a rule.</span></div>
       </div>
       <div className="legend rules">
@@ -121,18 +122,36 @@ export function AgentRulesSection({ root, projects, who, gates, active, now, com
   );
 }
 
+/* The base set is global: drawn once, above the project cards, never inside one. */
+/* The base set is global: drawn once, above the project cards, never inside one. */
+function BaseCard({ base, now, reload }: { base: AgentRulesView["base"]; now: number; reload: () => Promise<void> }) {
+  const { err, row } = useRuleRows(now, reload);
+  return (
+    <div className="pcard base" data-agent-rules-base>
+      <div className="grp"><GlobeIcon size={14} />Base rules, the same in every project<span className="cnt">{base.length}</span><span className="sp" /><span className="m">tiny on purpose</span></div>
+      <div className="older" style={{ borderTop: 0 }}>Applies to every project, including ones not listed below</div>
+      {baseOrder(base).map((rule) => row(rule, { base: true }))}
+      {err && <div className="err-line" role="alert" style={{ padding: "8px 18px" }}>{err}</div>}
+    </div>
+  );
+}
+
 function Cards({ roots, views, all, single, who, gates, now, reload }: {
   roots: string[]; views: Record<string, AgentRulesView>; all: boolean; single?: boolean;
   who: Props["who"]; gates: readonly HeldCall[]; now: number; reload: () => Promise<void>;
 }) {
   const shown = roots.filter((r) => views[r]);
+  const base = shown[0] ? views[shown[0]]!.base : null;
   return (
+    <>
+    {base && <div style={{ marginBottom: 20 }}><BaseCard base={base} now={now} reload={reload} /></div>}
     <div className="pcards" style={single ? { gridTemplateColumns: "minmax(0, 1fr)" } : undefined}>
-      {shown.map((r, i) => (
-        <ProjectCard key={r} root={r} view={views[r]!} tag={all ? null : i === 0 ? "this project" : "another project"}
+      {shown.map((r) => (
+        <ProjectCard key={r} root={r} view={views[r]!} tag={all ? null : "this project"}
           who={who} gates={gates} now={now} reload={reload} />
       ))}
     </div>
+    </>
   );
 }
 
@@ -144,28 +163,15 @@ function Tri({ value, label, busy, onPick }: { value: RuleSetting | null; label:
   return (
     <div className="tri" role="group" aria-label={label}>
       {SETTINGS.map((o) => (
-        <button key={o.v} type="button" className={value === o.v ? `on ${o.tone}` : ""} aria-pressed={value === o.v} disabled={busy} onClick={() => value !== o.v && onPick(o.v)}>{o.word}</button>
+        <button key={o.v} type="button" className={value === o.v ? `on t-${o.tone}` : ""} aria-pressed={value === o.v} disabled={busy} onClick={() => value !== o.v && onPick(o.v)}>{o.word}</button>
       ))}
     </div>
   );
 }
 
-function ProjectCard({ root, view, tag, who, gates, now, reload }: {
-  root: string; view: AgentRulesView; tag: "this project" | "another project" | null;
-  who: Props["who"]; gates: readonly HeldCall[]; now: number; reload: () => Promise<void>;
-}) {
+function useRuleRows(now: number, reload: () => Promise<void>) {
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
-  const [older, setOlder] = useState(false);
-  const label = projectLabel(root);
-  const totals = ruleTotals(view);
-  const bars = growthBars(view.weekly, view.base.length, view.learned.length);
-  /* Only the calls held in this project can be waiting on one of its suggestions. */
-  const held = gates.filter((g) => { const w = who(g.session_id)?.worktree; return !!w && isUnder(w, root); });
-  const nameOf = (session: string) => who(session)?.name;
-  const { shown, older: rest } = splitLearned(view.learned, now);
-  const listed = older ? [...shown, ...rest] : shown;
-
   const run = async (id: string, fn: () => Promise<{ ok: boolean; error?: string; waitsForPerson?: boolean }>) => {
     setBusy(id); setErr("");
     try {
@@ -179,7 +185,7 @@ function ProjectCard({ root, view, tag, who, gates, now, reload }: {
   const answer = (rule: AgentRule, a: { setting: RuleSetting } | { dismiss: true }) => run(rule.id, () => api.agentRuleAnswer(rule.id, a));
   const setMode = (mode: LaunchMode) => run(MODE_ACTION, () => api.agentRuleSet({ root: "*", action: MODE_ACTION, match: "", setting: mode === "default" ? "ask" : "allow", mode }));
 
-  const row = (rule: AgentRule, opts: { fresh?: boolean; base?: boolean }) => {
+  const row = (rule: AgentRule, opts: { fresh?: boolean; base?: boolean; overrides?: boolean }) => {
     const chip = sourceChip(rule, opts.base);
     const mode = rule.action === MODE_ACTION;
     return (
@@ -189,6 +195,7 @@ function ProjectCard({ root, view, tag, who, gates, now, reload }: {
           <div className="l1">
             <b>{ruleTitle(rule)}</b><code>{ruleCode(rule)}</code>
             {opts.fresh && <span className="fresh-t">learned this week</span>}
+            {opts.overrides && <span className="agv-chip info">overrides the base rule</span>}
           </div>
           <div className="l2"><span className={`sc ${chip.kind === "plain" ? "" : chip.kind}`}><Ph name={chip.icon} size={13} />{chip.label}</span><span>{ruleWhen(rule, now, opts.base)}</span></div>
         </div>
@@ -196,7 +203,7 @@ function ProjectCard({ root, view, tag, who, gates, now, reload }: {
           ? (
             <div className="tri" role="group" aria-label="Permission mode">
               {MODE_CHOICES.map((c) => (
-                <button key={c.mode} type="button" className={rule.mode === c.mode ? `on ${c.mode === "default" ? "ask" : "allow"}` : ""} aria-pressed={rule.mode === c.mode}
+                <button key={c.mode} type="button" className={rule.mode === c.mode ? `on t-${c.mode === "default" ? "ask" : "allow"}` : ""} aria-pressed={rule.mode === c.mode}
                   disabled={busy === MODE_ACTION} onClick={() => rule.mode !== c.mode && void setMode(c.mode)}>{c.word}</button>
               ))}
             </div>
@@ -206,8 +213,27 @@ function ProjectCard({ root, view, tag, who, gates, now, reload }: {
     );
   };
 
+  return { busy, err, run, answer, row };
+}
+
+function ProjectCard({ root, view, tag, who, gates, now, reload }: {
+  root: string; view: AgentRulesView; tag: "this project" | null;
+  who: Props["who"]; gates: readonly HeldCall[]; now: number; reload: () => Promise<void>;
+}) {
+  const [older, setOlder] = useState(false);
+  const label = projectLabel(root);
+  const totals = ruleTotals(view);
+  const bars = growthBars(view.weekly, view.base.length, view.learned.length);
+  /* Only the calls held in this project can be waiting on one of its suggestions. */
+  /* Only the calls held in this project can be waiting on one of its suggestions. */
+  const held = gates.filter((g) => { const w = who(g.session_id)?.worktree; return !!w && isUnder(w, root); });
+  const nameOf = (session: string) => who(session)?.name;
+  const { shown, older: rest } = splitLearned(view.learned, now);
+  const listed = older ? [...shown, ...rest] : shown;
+
+  const { busy, err, answer, row } = useRuleRows(now, reload);
   return (
-    <div className={`pcard${tag === "another project" ? " other" : ""}`} data-agent-rules-project={root}>
+    <div className="pcard" data-agent-rules-project={root}>
       <div className="ph">
         <div>
           <div className="nm"><Ph name="folder-simple" size={17} />{label}{tag && <span className={`agv-chip${tag === "this project" ? " info" : ""}`}>{tag}</span>}</div>
@@ -259,7 +285,7 @@ function ProjectCard({ root, view, tag, who, gates, now, reload }: {
 
       <div className="grp"><Ph name="list-checks" size={14} />Learned in this project<span className="cnt">{view.learned.length}</span><span className="sp" /><span className="m">newest first</span></div>
       {view.learned.length === 0 && <div className="older">Nothing learned yet</div>}
-      {listed.map((l) => row(l.rule, { fresh: l.fresh }))}
+      {listed.map((l) => row(l.rule, { fresh: l.fresh, overrides: view.base.some((b) => b.action === l.rule.action) }))}
       {rest.length > 0 && (
         <div className="older">
           <Ph name="eye-slash" size={15} /><b>{rest.length}</b> older learned rules<span style={{ flex: 1 }} />
@@ -267,8 +293,6 @@ function ProjectCard({ root, view, tag, who, gates, now, reload }: {
         </div>
       )}
 
-      <div className="grp"><Ph name="circle-dashed" size={14} />Base, the same everywhere<span className="sp" /><span className="m">tiny on purpose</span></div>
-      {baseOrder(view.base).map((rule) => row(rule, { base: true }))}
       {err && <div className="err-line" role="alert" style={{ padding: "8px 18px" }}>{err}</div>}
     </div>
   );

@@ -29,7 +29,7 @@ import { AgentBackChip, useBackOffer } from "./AgentBackChip.tsx";
 import type { ViewId } from "../../../shared/types.ts";
 import { offers } from "../lib/agentOffers.ts";
 import { changeText, chipLeftMs, CHIP_BOTTOM } from "../lib/quietPresent.ts";
-import { SettingsRequestsList, useSettingsRequests } from "./SettingsRequests.tsx";
+import { SettingsRequestsList, useSettingsRefusals, useSettingsRequests } from "./SettingsRequests.tsx";
 
 export function AgentChangeChip({ onBack }: { onBack: (v: ViewId) => void }) {
   const log = useSyncExternalStore(settings.subscribeChanges, settings.changes, () => []);
@@ -44,7 +44,8 @@ export function AgentChangeChip({ onBack }: { onBack: (v: ViewId) => void }) {
   const held = useSyncExternalStore(offers.subscribe, () => offers.list().length, () => 0);
   const backed = useBackOffer();
   const asked = useSettingsRequests();
-  if (!c && !held && !backed && !asked.length) return null;
+  const refused = useSettingsRefusals();
+  if (!c && !held && !backed && !asked.length && !refused.length) return null;
   return (
     <Portal z={LAYER.settingsDialog}>
     {/* One corner for everything an agent says: the opens it is waiting to show

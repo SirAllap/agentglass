@@ -22,6 +22,7 @@ import { latchViewModal } from "./viewModalIntent.ts";
 import { latchStage } from "./stageIntent.ts";
 import { requestPrJump } from "./prJump.ts";
 import { latchUnstick } from "./unstickIntent.ts";
+import { filterGet, filterSet, viewsDelete, viewsList, viewsSave } from "./prFilterDoor.ts";
 import { showWhatsNew } from "./whatsNew.ts";
 import { toggleBench, showFile, showBoard } from "./benchStore.ts";
 import { openPeek } from "./openPeek.ts";
@@ -143,6 +144,7 @@ export const UI_HANDLERS: { [Id in UiActionId]: Handler<Id> } = {
   "lantern.schedule": (_a, c) => { latchViewModal("lantern.schedule"); c.goView("agents"); },
   "agents.change": (_a, c) => { latchViewModal("agents.change"); c.goView("agents"); },
   "terminal.resume": (_a, c) => { latchViewModal("terminal.resume"); c.goView("term"); },
+  "terminal.sessions": (_a, c) => { latchViewModal("terminal.sessions"); c.goView("term"); },
   "settings.plugin": (a) => openSettings(`plugin:${a.name}`),
   // The chords' own seam. The chord lets the key fall through when nothing
   // answers; an agent is told instead, since silence reads as success.
@@ -170,6 +172,13 @@ export const UI_HANDLERS: { [Id in UiActionId]: Handler<Id> } = {
   // Stage: selects the pull request and opens the dialog. The dialog decides for
   // itself whether it qualifies and runs nothing until the owner confirms.
   "pr.unstick": (a, c) => { latchUnstick({ root: a.root, number: a.number }); c.goView("pr"); },
+  // The board's filter and saved views. They go through the stores the panel
+  // reads (lib/prFilterDoor.ts); nothing opens, so the panel need not be mounted.
+  "pr.filter.get": (a) => filterGet(a.repo),
+  "pr.filter.set": (a) => filterSet(a.repo, a),
+  "pr.views.list": (a) => viewsList(a.repo),
+  "pr.views.save": (a) => viewsSave(a.repo, a.name, a.filter),
+  "pr.views.delete": (a) => viewsDelete(a.repo, a.name),
   // Reads: stores and pref modules only, nothing is shown, raised or focused.
   "ui.state": (_a, c) => uiState(sourcesOf(c)),
   "ui.read": (a, c) => readPanel(a.panel, sourcesOf(c)),

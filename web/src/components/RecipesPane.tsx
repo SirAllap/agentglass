@@ -17,7 +17,7 @@ import { api } from "../lib/api.ts";
 import { retryLoad } from "../lib/retryLoad.ts";
 import type { Recipe, RecipeParam, GitRepoRef } from "../../../shared/types.ts";
 import { consoleRoot, runInConsole } from "./TerminalPanel.tsx";
-import { Field, SegControl, SettingsCard, SettingsForm, helpIdFor } from "./SettingsKit.tsx";
+import { Field, SettingsCard, SettingsForm, helpIdFor } from "./SettingsKit.tsx";
 import { Select } from "./Select.tsx";
 import { Switch } from "./SettingRow.tsx";
 import { MAX_COMMAND_PINS, RECIPE, togglePin, usePinMap } from "./CommandBar.tsx";
@@ -28,7 +28,7 @@ import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { IconLabel, PlusIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { CloseIcon } from "./CloseButton.tsx";
-import { Button, INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
+import { Button, INPUT, INPUT_STYLE, EDGE, Segmented } from "./workspace/Chrome.tsx";
 import { LaunchModeBadge, LaunchModeSelect } from "./LaunchMode.tsx";
 
 /** Same test as the server's (recipes.ts withLaunchFlags): a step whose first word is `claude`. */
@@ -223,9 +223,9 @@ function Editor({ r, saved, repos, busy, pinned, pinRoot, onChange, onSave, onDr
 
             <Field label="Where it applies" htmlFor={f("scope")}>
               <div id={f("scope")}>
-                <SegControl<Recipe["scope"]> label="Where it applies" value={r.scope}
-                  options={[{ v: "global", label: "Everywhere" }, { v: "repo", label: "One repository" }]}
-                  onPick={(scope) => set({ scope, repo: scope === "global" ? undefined : (r.repo || repos[0]?.root) })} />
+                <Segmented<Recipe["scope"]> track label="Where it applies" value={r.scope}
+                  options={[{ id: "global", label: "Everywhere" }, { id: "repo", label: "One repository" }]}
+                  onChange={(scope) => set({ scope, repo: scope === "global" ? undefined : (r.repo || repos[0]?.root) })} />
               </div>
             </Field>
             {r.scope === "repo" && (

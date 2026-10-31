@@ -124,7 +124,26 @@ def _server_or_die(url):
     sys.exit(2)
 
 
-SERVER = _server_or_die(os.environ.get("AGENTGLASS_SERVER", "http://localhost:4000").rstrip("/"))
+def _default_server(host):
+    """http://<host>:<port> of the running server. The port is the one it wrote
+    at bind (next to the token file), because the app moves to another port when
+    4000 is taken and the AGENTGLASS_PORT an agent pane inherits can be stale;
+    then AGENTGLASS_PORT, then 4000. No probe: a hook cannot pay a round trip."""
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    port = ""
+    try:
+        with open(os.path.join(base, "agentglass", "port"), encoding="utf-8") as f:
+            port = f.read().strip()
+    except OSError:
+        pass
+    if not (port.isdigit() and 0 < int(port) < 65536):
+        port = os.environ.get("AGENTGLASS_PORT", "").strip()
+    if not (port.isdigit() and 0 < int(port) < 65536):
+        port = "4000"
+    return f"http://{host}:{port}"
+
+
+SERVER = _server_or_die((os.environ.get("AGENTGLASS_SERVER") or _default_server("localhost")).rstrip("/"))
 STATE_DIR = os.environ.get("AGENTGLASS_BROWSER_STATE_DIR") or os.path.expanduser("~/.cache/agentglass-browser")
 
 
@@ -197,6 +216,12 @@ def _said_redacted(res):
         fields = ", ".join(sorted(k for k in (r.get("fields") or {}) if isinstance(k, str)))
         print(f"redacted: {r.get('spans', 0)} span(s) in {fields or 'the answer'} — "
               f"the [redacted] marks are ours, not the page's", file=sys.stderr)
+    # A permission request the tab is holding for this agent, said the same
+    # way: `read` prints text, `--summary` a line, and neither carries it.
+    v = res.get("value") if isinstance(res, dict) else None
+    if isinstance(v, dict) and isinstance(v.get("pendingPermissions"), list):
+        for note in v["pendingPermissions"]:
+            print(note, file=sys.stderr)
     return res
 
 
@@ -301,7 +326,11 @@ def call(op, body):
     try:
         return _said_redacted(send(sent))
     except urllib.error.HTTPError as e:
-        if e.code in (401, 403):
+        # Only 401, and never from a minted scoped token (a seat's `st_`, a
+        # clone's `us_`, a plugin's `pg_`) or in a seat's pane: a 403 is an act
+        # refused, and the machine token in the file would turn it into a yes.
+        # The same rule as urlopen_fresh in agentglass-ui.
+        if e.code == 401 and not os.environ.get("AGENTGLASS_SEAT") and not re.match(r"[a-z]{2}_", sent or ""):
             fresh = _token_on_disk()
             tried_disk = bool(fresh)
             if fresh and fresh != sent:
@@ -315,7 +344,7 @@ def call(op, body):
             said = _said_redacted(json.loads(e.read() or b"{}"))
         except json.JSONDecodeError:
             said = {"ok": False, "error": f"server said {e.code}"}
-        if e.code in (401, 403):
+        if e.code == 401:
             # An answer somebody can act on. Bare "unauthorized" is what sends
             # a reader to /proc to fish the value out of another process.
             said = dict(said)
@@ -2583,18 +2612,14 @@ def main():
     p.add_argument("--since-last", dest="sinceLast", action="store_true")
     p.add_argument("--limit", type=int, default=None)
 
-    p = sub.add_parser("resize", help="give the page a viewport of your own size")
+    p = sub.add_parser("resize", help="lay the page out at a size of your own; shown fitted, ends at done. Only to simulate a phone or tablet; to see more of a page use zoom; never for shots")
     p.add_argument("width", type=int)
     p.add_argument("height", type=int)
-    p = sub.add_parser("zoom", help="lay the page out as a narrower screen would")
+    p = sub.add_parser("zoom", help="the browser's own page zoom (Ctrl+ / Ctrl-): see more or less of a page; the page always fills the panel")
     p.add_argument("factor", nargs="?", type=float,
-                   help="1 is 100%%, 1.58 is 158%%. Left out, it reports what the page is at — "
+                   help="1 is 100%%, 1.58 is 158%%, 0.1 to 5. Left out, it reports what the page is at — "
                         "which is how you match a screen instead of guessing at it. "
-                        "This is a device metrics override: it narrows the layout VIEWPORT while "
-                        "the pane keeps its box, so the page comes out laid out for a smaller "
-                        "window. It is NOT the person's Ctrl+/Ctrl- (which scales the page inside "
-                        "the box), and NOT the CSS `zoom` property (which reflows the page and "
-                        "multiplies with whatever the person has set)")
+                        "It is the person's Ctrl+/Ctrl-, not a device metrics override and not the CSS `zoom` property")
     p = sub.add_parser("html", help="the markup of one element, not just its text")
     p.add_argument("selector")
     p.add_argument("--max", type=int, default=None)
@@ -2781,9 +2806,15 @@ def main():
                         "cache and would be paid for on every turn afterwards")
     p.add_argument("--set", metavar="KEY=VALUE")
     p.add_argument("--remove", metavar="KEY")
-    p = sub.add_parser("permission", help="grant a permission by API instead of by a dialog nobody can click")
-    p.add_argument("origin", help="e.g. https://localhost:8001")
-    p.add_argument("permissions", nargs="+", help="e.g. clipboardReadWrite geolocation")
+    p = sub.add_parser("permission", help="answer what your tab is asking for (grant|deny microphone), "
+                                          "or grant a permission by API instead of by a dialog nobody can click")
+    p.add_argument("origin", nargs="?", help="grant or deny — your answer to a pending request — "
+                                             "or an origin, e.g. https://localhost:8001")
+    p.add_argument("permissions", nargs="*", help="microphone camera notifications after grant|deny; "
+                                                  "e.g. clipboardReadWrite geolocation after an origin")
+    p.add_argument("--origin", dest="preOrigin", metavar="ORIGIN",
+                   help="with grant|deny: answer for this site ahead of its ask, in this container only")
+    p.add_argument("--list", action="store_true", help="what this tab is waiting on, and what its container was told")
     p = sub.add_parser("pdf", help="print the page to PDF — the PRINT stylesheet, not a screenshot")
     p.add_argument("out", help="where to write it")
     p.add_argument("--landscape", action="store_true")
@@ -2949,8 +2980,9 @@ def main():
         help="grant camera/mic/clipboard/geolocation for an origin, by API — instead "
              "of a dialog nobody can click (spec §7)",
     )
-    p.add_argument("origin", help="e.g. https://example.com")
-    p.add_argument("grant", nargs="+",
+    p.add_argument("origin", nargs="?", help="e.g. https://example.com — leave out to list what "
+                                             "this tab's container holds and was told (`permission --list`)")
+    p.add_argument("grant", nargs="*",
                    choices=["camera", "microphone", "clipboardReadWrite",
                             "clipboardSanitizedWrite", "geolocation", "notifications", "midi"])
     p = sub.add_parser("cdp", help="one DevTools protocol command — the whole protocol, not a chosen slice")
@@ -3159,6 +3191,15 @@ def main():
         if refusal:
             print(refusal, file=sys.stderr)
             return 1
+        if not a.origin:
+            r = call("permission", stamped(a, _at(page, {"list": True})))
+            if not r.get("ok"):
+                print(r.get("error") or "could not list this tab's permissions", file=sys.stderr)
+                return 1
+            return emit("permission", r.get("value"), a)
+        if not a.grant:
+            print("permissions: name what to grant after the origin", file=sys.stderr)
+            return 2
         r = call("cdp", stamped(a, _at(page, {"method": "Browser.grantPermissions",
                                    "params": {"origin": a.origin, "permissions": a.grant}})))
         if not r.get("ok"):
@@ -3602,7 +3643,17 @@ def main():
     elif a.cmd == "upload":
         body = {"selector": a.selector, "paths": a.paths}
     elif a.cmd == "permission":
-        body = {"origin": a.origin, "permissions": a.permissions}
+        if a.list:
+            body = {"list": True}
+        elif a.origin in ("grant", "deny"):
+            body = {"answer": a.origin, "permissions": a.permissions}
+            if a.preOrigin:
+                body["origin"] = a.preOrigin
+        else:
+            if not a.origin or not a.permissions:
+                print("permission: grant|deny WHAT, an ORIGIN and what to grant it, or --list", file=sys.stderr)
+                return 2
+            body = {"origin": a.origin, "permissions": a.permissions}
     elif a.cmd == "reload":
         body = {"bypassCache": not a.keepCache}
     elif a.cmd == "cookies":

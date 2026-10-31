@@ -55,7 +55,7 @@ browser endpoint's, so none of the three opens either of the others.
 
 Environment:
     AGENTGLASS_SERVER           default http://localhost:4000
-    AGENTGLASS_TOKEN            only needed if the server was started with one
+    AGENTGLASS_TOKEN            read from ~/.config/agentglass/token when unset, and again after a 401
     AGENTGLASS_COCKPIT_HTTP     [HOST:]PORT — serve over Streamable HTTP instead of stdio
     AGENTGLASS_COCKPIT_TOKEN    that endpoint's Bearer token (32+ chars); minted and printed when unset
     AGENTGLASS_COCKPIT_EXPOSE   1 — the same opt-in as --expose
@@ -132,11 +132,8 @@ def get(path, params=None, timeout=30):
     # would pass this process off as the app's own page.
     req = urllib.request.Request(f"{SERVER}{path}{'?' + q if q else ''}", method="GET",
                                  headers={"Accept": "application/json"})
-    token = os.environ.get("AGENTGLASS_TOKEN")
-    if token:
-        req.add_header("Authorization", f"Bearer {token}")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with T.urlopen_fresh(req, timeout) as r:
             return 200, json.loads(r.read() or b"null")
     except urllib.error.HTTPError as e:
         e.close()
@@ -759,7 +756,7 @@ def main(argv=None):
         allow = list(args.allow_host) + os.environ.get("AGENTGLASS_COCKPIT_ALLOW_HOSTS", "").split(",")
         return T._run_http(bind, expose=args.expose, allow_hosts=allow, handle=handle_message, name=NAME,
                            token_env="AGENTGLASS_COCKPIT_TOKEN",
-                           distinct_from=("AGENTGLASS_TOKEN", "AGENTGLASS_MCP_TOKEN", "AGENTGLASS_UI_MCP_TOKEN"),
+                           distinct_from=("AGENTGLASS_TOKEN", "AGENTGLASS_MCP_TOKEN", "AGENTGLASS_UI_MCP_TOKEN", "AGENTGLASS_FLIGHTPLAN_MCP_TOKEN"),
                            opens="the cockpit's read-only tools", expose_env="AGENTGLASS_COCKPIT_EXPOSE")
     return T._serve_stdio(handle_message)
 

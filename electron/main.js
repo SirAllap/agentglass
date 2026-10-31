@@ -29,7 +29,7 @@ const os = require("os");
 // The `<webview>` boundary, in its own file so it can be read and tested on its
 // own. Shipped inside the asar with this one — see build.files in package.json.
 const {
-  BROWSER_PARTITION, isBrowserPartition, ephemeralPartition, safeGuestUrl, applyGuestGuard, mayAttachOnMainWindow, permissionVerdict, permissionPrompt, uniqueSavePath,
+  BROWSER_PARTITION, isBrowserPartition, ephemeralPartition, safeGuestUrl, applyGuestGuard, mayAttachOnMainWindow, permissionVerdict, holderAfter, createPermissionDesk, pendingPermissionNote, permissionPrompt, uniqueSavePath,
 } = require("./guest-guard.js");
 const { startEgressProxy, literalRefusal, EGRESS_ENV } = require("./egress-guard.js");
 const { sendInput, isAgentInput } = require("./trusted-input.js");
@@ -37,6 +37,7 @@ const { sendInput, isAgentInput } = require("./trusted-input.js");
    for the decision and which origins count. */
 const { IDENTIFY_HEADER, shouldIdentify, createOwnerBook } = require("./identify-header.js");
 const { createScrollbarBook } = require("./guest-scrollbar.js");
+const showLog = require("./show-log.js");
 
 /**
  * The browser's egress guard, once it is listening — see egress-guard.js for
@@ -81,9 +82,32 @@ const permissionPending = new Map();
 /** @param {string} what @param {string} origin */
 const permissionKey = (what, origin) => `${origin}\u0000${what}`;
 
-/** @param {Electron.WebContents | null} wc @param {string} permission @param {unknown} mediaTypes */
+/** Requests from agents' tabs, held for the agent to answer. */
+const permissionDesk = createPermissionDesk();
+
+/** Whose each guest is for the permission policy, by webContents id —
+ *  changed only through `holderAfter`. No entry is nobody's yet, and that is
+ *  held like an agent's, never asked. @type {Map<number, "person" | "agent">} */
+const guestHolder = new Map();
+/** @param {number} id @param {Parameters<typeof holderAfter>[1]} event */
+function moveHolder(id, event) {
+  const next = holderAfter(guestHolder.get(id), event);
+  if (next) guestHolder.set(id, next); else guestHolder.delete(id);
+}
+
+/**
+ * Who a request belongs to. The person only for a tab they opened (or typed an
+ * address into), and their front tab only when the RENDERER said it is on
+ * screen (`shownGuest`) — never `browserGuest`'s fallback of the last guest
+ * to attach, which an agent's background `newtab` is until the next switch.
+ * @param {Electron.WebContents | null} wc @param {string} permission @param {unknown} mediaTypes */
 function permissionAsk(wc, permission, mediaTypes) {
-  return permissionVerdict(permission, { frontTab: !!wc && !!browserGuest && wc === browserGuest, lane: !!wc && laneGuests.has(wc), mediaTypes });
+  return permissionVerdict(permission, {
+    frontTab: !!wc && !!shownGuest && wc === shownGuest,
+    lane: !!wc && laneGuests.has(wc),
+    person: !!wc && guestHolder.get(wc.id) === "person",
+    mediaTypes,
+  });
 }
 
 /**
@@ -135,12 +159,19 @@ function armEgress(partition) {
     permissionArmed.add(ses);
     ses.setPermissionRequestHandler((wc, permission, callback, details) => {
       const ask = permissionAsk(wc, permission, details && "mediaTypes" in details ? details.mediaTypes : undefined);
+      if (ask.verdict === "hold") {
+        let origin = "";
+        try { origin = new URL((details && details.requestingUrl) || wc.getURL()).origin; } catch { /* refused below */ }
+        if (!origin || origin === "null") return callback(false);
+        return permissionDesk.hold(wc.id, ses, origin, ask.needs || [], callback);
+      }
       if (ask.verdict !== "ask") return callback(ask.verdict === "allow");
       void askPermission(wc, ask.what, details && details.requestingUrl).then(callback);
     });
     // Synchronous, so it can only repeat an answer already given.
     ses.setPermissionCheckHandler((wc, permission, origin, details) => {
       const ask = permissionAsk(wc, permission, details && details.mediaType ? [details.mediaType] : undefined);
+      if (ask.verdict === "hold") return permissionDesk.allowed(ses, origin, ask.needs || []);
       if (ask.verdict !== "ask") return ask.verdict === "allow";
       return permissionAnswers.get(permissionKey(ask.what || "", origin)) === true;
     });
@@ -253,6 +284,21 @@ const { probe: probeServer, holdDesk } = require("./server-probe.js");
  * it was dpr 1 and the compositor upscaled the result, which is where "small or
  * blurry" came from.
  */
+/*
+ * Refuse `--ozone-platform=headless` before any window exists. Electron 43
+ * segfaults (null call in the browser process, Chromium EGL init fails first)
+ * the moment a BrowserWindow is created under it, show:false included, and
+ * systemd-coredump then shows the person "Process crashed: electron". Measured:
+ * 10 of 10 starts crash; RLIMIT_CORE 0 or 1 does not hide the journal entry.
+ * `nowin` (no window) and `offscreen` (webPreferences.offscreen) survive, but
+ * this app needs a real window; scripts/agx-bench/instance.sh is the way to
+ * run one without taking over the person's screen.
+ */
+if (process.argv.includes("--ozone-platform=headless")) {
+  process.stderr.write("agentglass: --ozone-platform=headless crashes Electron 43; use scripts/agx-bench/instance.sh\n");
+  app.exit(2);
+}
+
 if (process.platform === "linux") {
   app.commandLine.appendSwitch(
     "ozone-platform",
@@ -449,7 +495,7 @@ const SIDECAR_BIN = PACKAGED ? path.join(process.resourcesPath, SIDECAR_NAME) : 
  *
  * `bin/` ships inside every package as an extraResource (electron/package.json
  * "build.extraResources": `../bin` → `resources/bin`), so a .dmg carries
- * `agentglass-agent`, `agentglass-browser` and `agentglass-browser-mcp` at
+ * `agentglass-agent`, `agentglass-cleanup`, `agentglass-browser` and `agentglass-browser-mcp` at
  * `agentglass.app/Contents/Resources/bin/`. Nothing puts that directory on
  * anybody's PATH: the Linux installer symlinks the CLIs into `~/.local/bin`,
  * a .dmg has no installer, and an agent that types `agentglass-browser` on a
@@ -1710,9 +1756,57 @@ function registerIpc(win) {
     const n = Number(id);
     if (!Number.isInteger(n)) return false;
     for (const g of browserGuests) {
-      if (!g.isDestroyed() && g.id === n) { browserGuest = g; return true; }
+      if (!g.isDestroyed() && g.id === n) { browserGuest = g; shownGuest = g; return true; }
     }
     return false;
+  });
+
+  /*
+   * The Browser view was shown again.
+   *
+   * A <webview> brought back from `visibility: hidden` can stay unpainted on a
+   * real compositor (the area shows whatever is behind the view). Measured
+   * only the other way: an isolated run on a workspace nobody looks at painted
+   * every one of 20 shows, so the nudge below is NOT proven against a real
+   * occurrence. `invalidate()` asks the guest for a frame; when a 64px capture
+   * at 300 ms is still empty the renderer is told, and nudges the element's
+   * width by 1px for one frame. One line per show goes to browser-show.log
+   * either way, so the next blank explains itself.
+   */
+  ipcMain.handle("ag:browserShown", async (_e, at) => {
+    const n = Number(at?.guest);
+    let g = null;
+    for (const c of browserGuests) if (!c.isDestroyed() && c.id === n) g = c;
+    const t0 = Date.now();
+    // "painted" | "empty" | "timeout" | "error" | "noguest": the log says WHY a
+    // show counted as unpainted, because an occluded window never answers a
+    // capture and that must not read as a blank.
+    const painted = async () => {
+      if (!g || g.isDestroyed()) return "noguest";
+      // Time-boxed: capturePage on a guest that has not painted can stay
+      // pending for good, and the handler (and its log line) would go with it.
+      const gone = new Promise((r) => setTimeout(() => r("timeout"), 250));
+      try {
+        const img = await Promise.race([g.capturePage({ x: 0, y: 0, width: 64, height: 64 }), gone]);
+        if (img === "timeout") return "timeout";
+        return img.isEmpty() ? "empty" : "painted";
+      } catch { return "error"; }
+    };
+    if (g) { try { g.invalidate(); } catch { /* going away */ } }
+    await new Promise((r) => setTimeout(r, 300));
+    const early = await painted();
+    const finish = async () => {
+      const late = early === "painted" ? early : await painted();
+      let vis = "none";
+      if (g && !g.isDestroyed()) { try { vis = await g.executeJavaScript("document.visibilityState"); } catch { vis = "unreadable"; } }
+      showLog.appendCapped(showLog.logPath(), showLog.showLine({
+        ts: new Date(t0).toISOString(), webviews: Number(at?.webviews) || 0, tab: String(at?.tab || "").slice(0, 40),
+        asleep: at?.asleep ? "yes" : "no", guest: g ? "yes" : "no", visibility: vis,
+        paint1s: late === "painted" ? "yes" : "no", capture: late, nudged: early === "painted" ? "no" : "yes",
+      }));
+    };
+    if (early === "painted") void finish(); else setTimeout(() => { void finish(); }, 700);
+    return { painted: early === "painted" };
   });
 
   /* History and bookmarks from a chosen profile. Same privileged reader as the
@@ -2643,6 +2737,59 @@ function registerIpc(win) {
     guestOwner.apply(guestId, req && req.person === true
       ? { kind: "person" }
       : { kind: "ask", as: req && req.owner });
+    // Any agent ask on a tab, named or --shared, makes it agent-driven for
+    // permissions: its requests are never put to the person again.
+    if (!(req && req.person === true)) moveHolder(guestId, { kind: "driven" });
+  });
+
+  /*
+   * Who opened a guest — the window (the person), an agent's ask, or another
+   * guest's page as a popup — pushed by the renderer the moment the guest
+   * attaches, and the person typing an address. The permission policy's only
+   * source for "this is the person's tab"; see `holderAfter`.
+   */
+  ipcMain.on("ag:browserGuestOpener", (_e, req) => {
+    const guestId = Number(req && req.guestId);
+    if (!Number.isInteger(guestId) || guestId <= 0) return;
+    const from = Number(req.from);
+    if (req.by === "typed") moveHolder(guestId, { kind: "typed" });
+    else if (Number.isInteger(from) && from > 0) moveHolder(guestId, { kind: "popup", opener: guestHolder.get(from) });
+    else moveHolder(guestId, { kind: "opened", by: req.by });
+    // Typing is a new page: what the old one asked for stays the agent's to answer.
+    if (req.by === "typed" || guestHolder.get(guestId) !== "person") return;
+    // A request its page made before the window said whose the tab is was
+    // held like nobody's. It is the person's: it goes to them, or is refused
+    // when the tab is not the one on screen.
+    const guest = [...browserGuests].find((g) => !g.isDestroyed() && g.id === guestId);
+    for (const h of permissionDesk.handOver(guestId)) {
+      if (!guest || guest !== shownGuest) { h.done(false); continue; }
+      void askPermission(guest, h.needs.join(" and "), h.origin).then(h.done);
+    }
+  });
+
+  /*
+   * An agent's answer to the permission requests its tab is holding, or the
+   * list of them — the renderer asks on the agent's behalf, for a guest this
+   * app attached and nothing else. Only the agents' desk is reachable from
+   * here: the person's own answers (`permissionAnswers`) are not.
+   */
+  ipcMain.handle("ag:browserPermission", (_e, req) => {
+    const guestId = Number(req && req.guestId);
+    const guest = [...browserGuests].find((g) => !g.isDestroyed() && g.id === guestId);
+    if (!guest) return { ok: false, error: "no such tab" };
+    if (req.op === "list") {
+      const v = permissionDesk.list(guest.id, guest.session);
+      return { ok: true, value: { ...v, notes: v.pending.map(pendingPermissionNote) } };
+    }
+    if (req.op !== "grant" && req.op !== "deny") return { ok: false, error: "op must be list, grant or deny" };
+    const what = Array.isArray(req.what) ? req.what.filter((/** @type {unknown} */ w) => typeof w === "string") : [];
+    let origin;
+    if (req.origin !== undefined) {
+      try { origin = new URL(String(req.origin)).origin; } catch { /* checked below */ }
+      if (!origin || origin === "null" || !/^https?:/.test(origin)) return { ok: false, error: "origin must be a full http(s) origin" };
+    }
+    const r = permissionDesk.answer(guest.id, guest.session, what, req.op === "grant", origin);
+    return "error" in r ? { ok: false, error: r.error } : { ok: true, value: { [req.op === "grant" ? "granted" : "denied"]: r.answered, origins: r.origins, settled: r.settled } };
   });
 
   /*
@@ -3481,6 +3628,9 @@ function setAutostart(on) {
  *  mounted, which is most of the time.
  * @type {WebContents | null} */
 let browserGuest = null;
+/** The guest the renderer last said is on screen, and only that: what the
+ *  permission policy calls the person's front tab. @type {WebContents | null} */
+let shownGuest = null;
 /** Every attached guest. `browserGuest` is whichever of them the renderer says
  *  is on screen; this is what lets a destroyed tab fall back to another. */
 const browserGuests = new Set();
@@ -3891,6 +4041,10 @@ function guardWebviews(win, opts = {}) {
      * version always did and is right until the first tab switch.
      */
     browserGuests.add(guest);
+    // Main's own event, so the renderer can say who opened this guest before
+    // its page asks for anything — the <webview>'s DOM `did-attach` was
+    // measured missing on some attaches.
+    win.webContents.send("ag:browser-guest-attached", guest.id);
     // A lane's guest is addressed by id only. It never becomes the fallback
     // "front tab": that one must be a page somebody can see.
     if (!opts.lane) browserGuest = guest;
@@ -3898,6 +4052,9 @@ function guardWebviews(win, opts = {}) {
       browserGuests.delete(guest);
       guestFavicons.delete(guest);
       guestOwner.drop(guest.id);
+      permissionDesk.drop(guest.id);
+      guestHolder.delete(guest.id);
+      if (shownGuest === guest) shownGuest = null;
       if (browserGuest === guest) browserGuest = [...browserGuests].pop() ?? null;
     });
 
@@ -4767,6 +4924,10 @@ app.whenReady().then(async () => {
   // Retry that claims again. Only on an adopted server: a sidecar of ours has
   // its key from the pipe.
   ipcMain.on("ag:deskTaken", (e) => { e.returnValue = deskTaken === null ? null : { port: deskTaken }; });
+  /* localStorage lives in this process's memory until Chromium gets round to
+     writing it; measured, a hard kill 40 s after closing a tab still restored
+     it. The browser's tab list asks for a write after each open or close. */
+  ipcMain.on("ag:flushStorage", (e) => { try { e.sender.session.flushStorageData(); } catch { /* gone */ } });
   ipcMain.on("ag:retryDesk", () => { if (!sidecar && deskTaken !== null) holdAdoptedDesk(SERVER_PORT, 3000); });
   /* Asked at CALL time, not captured at load like the line above: the renderer
      needs this exactly when it does not yet know, and a page that came up
@@ -4873,6 +5034,9 @@ function killSidecar() {
   sidecar = null;
 }
 
+/* localStorage (the browser's open tabs among it) reaches disk on a delay;
+   a quit that outruns it restores the strip from before the last closes. */
+app.on("before-quit", () => { try { session.defaultSession.flushStorageData(); } catch { /* no session yet */ } });
 app.on("before-quit", stopSidecar);
 app.on("will-quit", stopSidecar);
 process.on("exit", stopSidecar);

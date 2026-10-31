@@ -9,7 +9,7 @@ import { fmtAgo, fmtUsd } from "../lib/format.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { DoneIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
+import { Badge, Button, Chip, INPUT, INPUT_STYLE, EDGE, Segmented } from "./workspace/Chrome.tsx";
 
 type Kind = "all" | "skill" | "command";
 type Usage = "all" | "used" | "never";
@@ -23,20 +23,6 @@ const SORTS: { key: Sort; label: string }[] = [
   { key: "oldest", label: "Oldest" },
   { key: "az", label: "a–z" },
 ];
-
-function Badge({ text, color }: { text: string; color: string }) {
-  return (
-    <span className="chip shrink-0 font-semibold" style={{ color, background: `color-mix(in srgb, ${color} 16%, transparent)`, borderColor: `color-mix(in srgb, ${color} 45%, transparent)` }}>
-      {text}
-    </span>
-  );
-}
-
-function chipStyle(active: boolean, color = "var(--primary)") {
-  return active
-    ? { color, background: `color-mix(in srgb, ${color} 16%, transparent)`, borderColor: `color-mix(in srgb, ${color} 50%, transparent)` }
-    : { color: "var(--text4)" };
-}
 
 function SkillCard({ s, isNew, isTop, expanded, onToggle }: { s: SkillInfo; isNew: boolean; isTop: boolean; expanded: boolean; onToggle: () => void }) {
   const [copied, setCopied] = useState(false);
@@ -61,16 +47,17 @@ function SkillCard({ s, isNew, isTop, expanded, onToggle }: { s: SkillInfo; isNe
     >
       <div className="flex items-center gap-2 min-w-0">
         <span className="font-semibold text-[12.5px] truncate" style={{ color: "var(--primary-ink)" }}>{invoke}</span>
-        <button
+        <Button
+          size="compact"
+          tone={copied ? "ok" : "plain"}
           onClick={copy}
           title={`Copy ${invoke} to clipboard`}
-          className="chip shrink-0 cursor-pointer"
-          style={copied ? { color: "var(--success-ink)", borderColor: "color-mix(in srgb, var(--success) 45%, transparent)" } : { color: "var(--text4)" }}
+          className="shrink-0"
         >
           {copied ? <span className="inline-flex items-center gap-1">Copied<DoneIcon size={ICON.xs} /></span> : "Copy"}
-        </button>
-        {isTop && <Badge text="Top" color="var(--warning)" />}
-        {isNew && <Badge text="New" color="var(--success)" />}
+        </Button>
+        {isTop && <Badge tint="var(--warning-ink)" fill="var(--warning)" wash={16} outlined>Top</Badge>}
+        {isNew && <Badge tint="var(--success-ink)" fill="var(--success)" wash={16} outlined>New</Badge>}
         <span className="ml-auto flex items-center gap-2 shrink-0 text-[10px] t-dim2">
           {s.calls > 0 ? (
             <span className="tabular-nums" style={{ color: "var(--text3)" }}>{s.calls}× {s.last_used ? `· ${fmtAgo(s.last_used)}` : ""}</span>
@@ -80,9 +67,9 @@ function SkillCard({ s, isNew, isTop, expanded, onToggle }: { s: SkillInfo; isNe
         </span>
       </div>
       <div className="flex items-center gap-1.5 mt-1 text-[9.5px] t-dim2 flex-wrap">
-        <span className="chip">{s.kind}</span>
-        <span className="chip">{s.category}</span>
-        <span className="chip">{s.source}</span>
+        <Badge tint="var(--text3)" fill="var(--text)" outlined>{s.kind}</Badge>
+        <Badge tint="var(--text3)" fill="var(--text)" outlined>{s.category}</Badge>
+        <Badge tint="var(--text3)" fill="var(--text)" outlined>{s.source}</Badge>
         <span>Added {fmtAgo(s.added)} ago</span>
         {s.copies > 1 && <span>· ×{s.copies} copies</span>}
         {perRun > 0 && <span className="tabular-nums" style={{ color: "var(--success-ink)" }}>· ~{fmtUsd(perRun)}/run</span>}
@@ -237,9 +224,9 @@ export function SkillsModal({ open, onClose }: { open: boolean; onClose: () => v
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  <a href={api.skillsExportUrl("md")} className="chip" style={{ color: "var(--text3)" }} onClick={(e) => e.stopPropagation()}>↓ md</a>
-                  <a href={api.skillsExportUrl("csv")} className="chip" style={{ color: "var(--text3)" }} onClick={(e) => e.stopPropagation()}>↓ csv</a>
-                  <a href={api.skillsExportUrl("json")} className="chip" style={{ color: "var(--text3)" }} onClick={(e) => e.stopPropagation()}>↓ json</a>
+                  {(["md", "csv", "json"] as const).map((ext) => (
+                    <Button key={ext} size="compact" href={api.skillsExportUrl(ext)} download={`skills.${ext}`} onClick={(e) => e.stopPropagation()}>↓ {ext}</Button>
+                  ))}
                   <CloseButton onClick={onClose} />
                 </div>
               </div>
@@ -253,38 +240,25 @@ export function SkillsModal({ open, onClose }: { open: boolean; onClose: () => v
                   className={`flex-1 min-w-[180px] ${INPUT}`}
                   style={INPUT_STYLE}
                 />
-                <div className="flex gap-1">
-                  {(["all", "skill", "command"] as Kind[]).map((k) => (
-                    <button key={k} onClick={() => setKind(k)} className="chip cursor-pointer" style={chipStyle(kind === k)}>
-                      {k === "all" ? "all" : k + "s"}
-                    </button>
-                  ))}
-                </div>
-                <div className="flex gap-1">
+                <Segmented<Kind> compact label="Kind" value={kind} onChange={setKind}
+                  options={(["all", "skill", "command"] as Kind[]).map((k) => ({ id: k, label: k === "all" ? "all" : k + "s" }))} />
+                <div className="flex gap-1.5">
                   {(["used", "never"] as Usage[]).map((u) => (
-                    <button key={u} onClick={() => setUsage((cur) => (cur === u ? "all" : u))} className="chip cursor-pointer" style={chipStyle(usage === u, "var(--warning)")}>
+                    <Chip key={u} compact on={usage === u} resting onClick={() => setUsage((cur) => (cur === u ? "all" : u))}>
                       {u === "never" ? "Never used" : "Used"}
-                    </button>
+                    </Chip>
                   ))}
                 </div>
-                <div className="flex gap-1">
-                  {SORTS.map((s) => (
-                    <button key={s.key} onClick={() => setSort(s.key)} className="chip cursor-pointer" style={chipStyle(sort === s.key, "var(--info)")}>
-                      {s.label}
-                    </button>
-                  ))}
-                </div>
+                <Segmented compact label="Sort" value={sort} onChange={setSort} options={SORTS.map((s) => ({ id: s.key, label: s.label }))} />
               </div>
 
               {/* category chips — the discovery rail */}
               <div className="flex items-center gap-1 px-5 pb-2 shrink-0 flex-wrap">
-                <button onClick={() => setCategory("all")} className="chip cursor-pointer" style={chipStyle(category === "all")}>
-                  All categories
-                </button>
+                <Chip compact on={category === "all"} resting onClick={() => setCategory("all")}>All categories</Chip>
                 {categories.map(([c, n]) => (
-                  <button key={c} onClick={() => setCategory((cur) => (cur === c ? "all" : c))} className="chip cursor-pointer" style={chipStyle(category === c)}>
+                  <Chip key={c} compact on={category === c} resting onClick={() => setCategory((cur) => (cur === c ? "all" : c))}>
                     {c} <span className="tabular-nums opacity-60">{n}</span>
-                  </button>
+                  </Chip>
                 ))}
               </div>
 

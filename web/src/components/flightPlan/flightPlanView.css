@@ -1,0 +1,360 @@
+/*
+ * THE FLIGHT PLAN SCREEN — ported from the approved design, block for block.
+ *
+ * Every size, radius, gap and weight is the design's own (its rem is 13px, so
+ * they are written here in px). The colours are the house tokens wherever one IS
+ * the design's colour: the design's paper is --bg, its panel ground is
+ * --surface-card, its rails --surface-nav, its sunken wells --surface-inset, its
+ * indigo is --primary, its greens, ambers and reds are --success, --warning and
+ * --error. The tints the design adds (a state colour washed into the page) are
+ * scoped here as --fp-*, mixed from the theme's own state colour, so a dark theme
+ * gets the same structure in its own hues.
+ *
+ * Everything is under `.fpv`, so none of these short class names reaches the
+ * rest of the app.
+ */
+.fpv {
+  --fp-ok-bg: color-mix(in srgb, var(--success) 14%, var(--bg));
+  --fp-warn-bg: color-mix(in srgb, var(--warning) 16%, var(--bg));
+  --fp-err-bg: color-mix(in srgb, var(--error) 11%, var(--bg));
+  --fp-info-bg: color-mix(in srgb, var(--info) 12%, var(--bg));
+  --fp-space-bg: color-mix(in srgb, var(--primary) 12%, var(--bg));
+  --fp-sel: color-mix(in srgb, var(--warning) 12%, var(--surface-nav));
+  --fp-line: var(--surface-line);
+  --fp-lift: var(--surface-lift);
+  --fp-lift-lg: 0 0 0 1px color-mix(in srgb, var(--shadow) 40%, transparent), 0 1px 1px -.5px var(--shadow), 0 6px 6px -3px var(--shadow), 0 24px 24px -12px var(--shadow);
+  --fp-ease: cubic-bezier(.23, 1, .32, 1);
+  --fp-go: color-mix(in srgb, var(--success) 50%, black);
+  /* Text in the state colours: the theme's hue pulled toward its own text colour, so it reads (4.5:1) on a light page and a dark one; the raw tokens are for fills and borders. */
+  --fp-ok-t: color-mix(in srgb, var(--success) 33%, var(--text)); --fp-err-t: color-mix(in srgb, var(--error) 52%, var(--text)); --fp-warn-t: color-mix(in srgb, var(--warning) 36%, var(--text)); --fp-info-t: color-mix(in srgb, var(--info) 50%, var(--text));
+  background: var(--bg); color: var(--text); font-family: var(--font-mono, ui-monospace, monospace); font-size: 13px; line-height: 1.45;
+  height: 100%; min-height: 0; display: grid; grid-template-rows: auto 1fr; min-width: 0; position: relative; overflow: hidden; font-variant-numeric: tabular-nums;
+}
+.fpv *, .fpv *::before, .fpv *::after { box-sizing: border-box; }
+.fpv button { font: inherit; color: inherit; }
+.fpv svg { flex: none; }
+.fpv :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 6px; }
+
+/* header */
+.fpv .vbanner { padding: 12px 22px 0; border-bottom: 1px solid var(--fp-line); } .fpv .vbanner .err-note { margin: 0 0 12px; }
+.fpv .vh { display: flex; align-items: center; gap: 14px; padding: 14px 22px 12px; border-bottom: 1px solid var(--fp-line); }
+.fpv .vt { display: flex; align-items: center; gap: 10px; }
+.fpv .vt .ic { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: var(--fp-space-bg); color: var(--primary); }
+.fpv .vt h3 { margin: 0; font-size: 16.3px; letter-spacing: -.01em; font-weight: 700; }
+.fpv .vh .r { margin-left: auto; display: flex; gap: 10px; align-items: center; }
+.fpv .seg { display: inline-flex; background: var(--surface-inset); border-radius: 9px; padding: 2px; gap: 2px; }
+.fpv .seg button { border: 0; background: none; border-radius: 7px; height: 24px; padding: 0 12px; cursor: pointer; color: var(--text3); font-size: 12px; transition: background .15s var(--fp-ease), color .15s; }
+.fpv .seg button[aria-pressed=true] { background: var(--bg); color: var(--text); font-weight: 650; box-shadow: 0 1px 2px var(--shadow); }
+.fpv .seg button .c { display: inline-block; min-width: 16px; margin-left: 5px; border-radius: 99px; background: var(--fp-warn-bg); color: var(--fp-warn-t); font-size: 10.1px; font-weight: 700; padding: 0 4px; }
+.fpv .chip { display: inline-flex; align-items: center; gap: 6px; border-radius: 99px; padding: 1px 10px; font-size: 10.9px; font-weight: 650; border: 1px solid transparent; white-space: nowrap; }
+.fpv .chip i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: inline-block; }
+.fpv .chip.ok { background: var(--fp-ok-bg); color: var(--fp-ok-t); } .fpv .chip.warn { background: var(--fp-warn-bg); color: var(--fp-warn-t); }
+.fpv .chip.err { background: var(--fp-err-bg); color: var(--fp-err-t); } .fpv .chip.info { background: var(--fp-info-bg); color: var(--fp-info-t); }
+.fpv .chip.space { background: var(--fp-space-bg); color: var(--primary); }
+.fpv .chip.off { border-color: var(--border2); color: var(--text3); } .fpv .chip.off i { background: transparent; border: 1.5px solid currentColor; }
+.fpv .btn { white-space: nowrap; display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--border2); background: var(--bg); box-shadow: 0 1px 2px var(--shadow); cursor: pointer; font-size: 12px; font-weight: 600; color: var(--text2); transition: transform .14s var(--fp-ease), border-color .15s; }
+.fpv .btn:active:not(:disabled) { transform: scale(.97); }
+.fpv .btn:disabled { opacity: .55; cursor: default; }
+@media (hover: hover) and (pointer: fine) { .fpv .btn:hover:not(:disabled) { border-color: var(--text4); } }
+.fpv .btn.go { background: var(--fp-go); border-color: var(--fp-go); color: #fff; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22), 0 8px 16px -10px var(--success); }
+.fpv .btn.go:disabled { background: var(--surface-inset); border-color: var(--border2); color: var(--text4); box-shadow: none; opacity: 1; cursor: not-allowed; }
+.fpv .btn.nogo { color: var(--fp-err-t); border-color: color-mix(in srgb, var(--error) 35%, var(--border2)); }
+.fpv .btn.nogo.send { background: var(--fp-err-bg); }
+.fpv .btn.primary { background: var(--primary); border-color: var(--primary); color: var(--on-primary); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .2), 0 1px 2px var(--shadow); }
+.fpv .btn.sm { height: 26px; padding: 0 10px; font-size: 11.2px; }
+
+/* three columns */
+.fpv .cols { display: grid; grid-template-columns: minmax(0, 1fr) 340px; min-height: 0; }
+
+/* open plan */
+.fpv .main { overflow: auto; scrollbar-gutter: stable; padding: 18px 26px 40px; min-width: 0; }
+.fpv .ttl { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+.fpv .ttl h4 { margin: 0; font-size: 17.2px; font-weight: 700; letter-spacing: -.01em; line-height: 1.3; }
+.fpv .ttl .meta { color: var(--text3); font-size: 11.2px; margin-top: 3px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.fpv .size { border: 1px solid var(--border2); border-radius: 6px; padding: 0 6px; font-weight: 700; color: var(--text2); font-size: 10.4px; }
+.fpv .traj { margin: 16px 0 18px; background: var(--surface-card); border: 1px solid var(--fp-line); border-radius: 13px; padding: 6px; box-shadow: var(--fp-lift); }
+.fpv .traj.flat { margin: 0 0 12px; }
+/* The trajectory, an orrery (Trajectory.tsx): bodies are placed by their angle --ang, 90deg at the front. */
+@property --ang { syntax: "<angle>"; inherits: false; initial-value: 90deg; }
+.fpv .fp-traj { position: relative; width: 100%; container-type: inline-size; border-radius: 9px; overflow: hidden;
+  background:
+    radial-gradient(60% 90% at 50% 112%, color-mix(in srgb, var(--primary) 9%, transparent), transparent 70%),
+    radial-gradient(1px 1px at 7% 18%, var(--text4) 99%, transparent), radial-gradient(1px 1px at 14% 72%, var(--text4) 99%, transparent),
+    radial-gradient(1.5px 1.5px at 23% 30%, var(--text3) 99%, transparent), radial-gradient(1px 1px at 36% 9%, var(--text4) 99%, transparent),
+    radial-gradient(1px 1px at 61% 13%, var(--text4) 99%, transparent), radial-gradient(1.5px 1.5px at 72% 26%, var(--text4) 99%, transparent),
+    radial-gradient(1px 1px at 83% 8%, var(--text3) 99%, transparent), radial-gradient(1px 1px at 91% 64%, var(--text4) 99%, transparent),
+    radial-gradient(1px 1px at 97% 34%, var(--text4) 99%, transparent), radial-gradient(1px 1px at 3% 52%, var(--text4) 99%, transparent),
+    color-mix(in srgb, var(--bg) 55%, var(--surface-card));
+  box-shadow: inset 0 0 0 1px var(--fp-line), inset 0 1px 0 color-mix(in srgb, var(--bg) 70%, transparent); }
+.fpv .fp-traj[data-bare] { background: none; box-shadow: none; }
+.fpv .fp-traj .sky { position: relative; height: 244px; --cy: 100px; --ry: 58px; --rx: 44cqw; }
+.fpv .fp-traj[data-bare] .sky { height: 64px; --cy: 32px; --ry: 18px; --rx: 46cqw; }
+.fpv .fp-traj .orbit { position: absolute; left: calc(50% - var(--rx)); width: calc(var(--rx) * 2); top: calc(var(--cy) - var(--ry)); height: calc(var(--ry) * 2); border-radius: 50%; box-sizing: border-box; border: 1px solid var(--border2);
+  mask-image: linear-gradient(to bottom, color-mix(in srgb, black 25%, transparent), black 75%); }
+.fpv .fp-traj .orbit.front { border: 1.5px solid color-mix(in srgb, var(--primary) 30%, var(--border2)); clip-path: inset(50% 0 0 0); mask-image: linear-gradient(to right, transparent, black 20%, black 80%, transparent); }
+.fpv .fp-traj .orbit.halo { --ry2: calc(var(--ry) * 1.42); left: calc(50% - var(--rx) * 1.08); width: calc(var(--rx) * 2.16); top: calc(var(--cy) - var(--ry2)); height: calc(var(--ry2) * 2); border: 1px dashed color-mix(in srgb, var(--border2) 55%, transparent);
+  mask-image: linear-gradient(to bottom, color-mix(in srgb, black 15%, transparent), color-mix(in srgb, black 60%, transparent)); }
+.fpv .fp-traj[data-bare] .orbit.halo, .fpv .fp-traj[data-bare] .sun { display: none; }
+.fpv .fp-traj .sun { position: absolute; left: 50%; top: var(--cy); width: 22px; height: 22px; transform: translate(-50%, -50%); border-radius: 50%;
+  background: radial-gradient(circle at 40% 38%, color-mix(in srgb, var(--primary) 30%, var(--bg)) 0, color-mix(in srgb, var(--primary) 35%, var(--bg)) 45%, color-mix(in srgb, var(--primary) 70%, var(--bg2)) 100%);
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--primary) 8%, transparent), 0 0 34px 10px color-mix(in srgb, var(--primary) 30%, transparent); opacity: .35; }
+/* Placed by transform alone: a change of --ang swings the body round the orbit without a layout. */
+.fpv .fp-traj .on { position: absolute; left: 0; top: 0; width: 0; height: 0; --d: calc((sin(var(--ang)) + 1) / 2);
+  transform: translate(calc(50cqw + cos(var(--ang)) * var(--rx)), calc(var(--cy) + sin(var(--ang)) * var(--ry))); transition: --ang .9s var(--fp-ease); }
+.fpv .fp-traj .dot { position: absolute; width: 4px; height: 4px; margin: -2px; border-radius: 50%; background: var(--primary); scale: calc(.5 + var(--d) * .7); opacity: calc(.35 + var(--d) * .65); }
+.fpv .fp-traj .dot[data-tail] { background: var(--success); }
+.fpv .fp-traj .stn { z-index: calc(1 + round(var(--d) * 10)); }
+.fpv .fp-traj .pl { position: absolute; left: 0; top: 0; width: var(--s); height: var(--s); translate: -50% -50%; scale: calc(.62 + var(--d) * .38); border-radius: 50%; box-sizing: border-box; display: grid; place-items: center; color: var(--on-primary);
+  --s: 22px; --c: var(--bg3);
+  background: radial-gradient(circle at 32% 28%, color-mix(in srgb, var(--c) 30%, var(--bg)) 0, var(--c) 52%, color-mix(in srgb, var(--c) 62%, var(--text)) 100%);
+  box-shadow: inset -2px -3px 5px color-mix(in srgb, var(--text) 14%, transparent), inset 1px 1px 1px color-mix(in srgb, var(--bg) 60%, transparent), 0 4px 10px -4px var(--shadow); }
+.fpv .fp-traj[data-bare] .pl { --s: 10px; }
+.fpv .fp-traj .stn[data-st="todo"] .pl { border: 1px solid var(--border2); box-shadow: inset -2px -3px 5px color-mix(in srgb, var(--text) 6%, transparent), 0 3px 8px -4px var(--shadow); }
+.fpv .fp-traj .stn[data-st="done"] .pl { --c: var(--primary); }
+.fpv .fp-traj .stn[data-st="skip"] .pl { --s: 16px; background: transparent; border: 1.5px dashed var(--border2); box-shadow: none; }
+/* Landed wears a ring (until it is the mark, which brings its own). */
+.fpv .fp-traj .stn.dest .pl::before { content: ""; position: absolute; left: 50%; top: 50%; width: 210%; height: 40%; border-radius: 50%; border: 1.5px solid var(--border2); translate: -50% -50%; rotate: -18deg;
+  mask-image: linear-gradient(to bottom, black 45%, transparent 45%, transparent 58%, black 58%); }
+/* The steps of a build: moons on their own small orbit, the done ones lit. */
+.fpv .fp-traj .moons { position: absolute; left: 0; top: 0; rotate: -14deg; }
+.fpv .fp-traj .moons::before { content: ""; position: absolute; left: -36px; top: -14px; width: 72px; height: 28px; border-radius: 50%; border: 1px solid color-mix(in srgb, var(--border2) 70%, transparent); box-sizing: border-box; }
+.fpv .fp-traj .moons i { position: absolute; width: 7px; height: 7px; margin: -3.5px; border-radius: 50%; box-sizing: border-box; background: var(--bg); border: 1px solid var(--border2);
+  translate: calc(cos(var(--m)) * 36px) calc(sin(var(--m)) * 14px); z-index: calc(round(sin(var(--m)) + 1) * 2 - 1); }
+.fpv .fp-traj .moons i[data-on] { background: var(--primary); border-color: var(--primary); box-shadow: 0 0 6px color-mix(in srgb, var(--primary) 60%, transparent); }
+/* Round 3: every planet wears the mark's finish (graticule, sheen, terminator); the current one, and Landed once landed, IS the mark. */
+.fpv .fp-traj .pl { background:
+    radial-gradient(ellipse 50% 17% at 50% 50%, transparent 88%, color-mix(in srgb, white 22%, transparent) 91%, transparent 96%),
+    radial-gradient(ellipse 22% 50% at 50% 50%, transparent 86%, color-mix(in srgb, white 18%, transparent) 90%, transparent 96%),
+    radial-gradient(circle at 34% 28%, color-mix(in srgb, white 72%, transparent) 0, color-mix(in srgb, white 15%, transparent) 50%, transparent 82%),
+    var(--c) !important;
+  box-shadow: inset calc(var(--s) * -.26) calc(var(--s) * -.06) calc(var(--s) * .22) color-mix(in srgb, black 38%, transparent), 0 4px 10px -4px var(--shadow) !important; border: 0 !important; }
+.fpv .fp-traj .stn[data-st="todo"] .pl { --c: color-mix(in srgb, var(--primary) 14%, var(--bg3));
+  box-shadow: inset calc(var(--s) * -.26) calc(var(--s) * -.06) calc(var(--s) * .22) color-mix(in srgb, black 16%, transparent), 0 0 0 1px color-mix(in srgb, var(--border2) 70%, transparent), 0 3px 8px -4px var(--shadow) !important; }
+.fpv .fp-traj .stn[data-st="skip"] .pl { background: transparent !important; border: 1.5px dashed var(--border2) !important; box-shadow: none !important; }
+.fpv .fp-traj .stn.mark.mark .pl { --s: 94px !important; background: none !important; box-shadow: none !important; color: var(--primary); overflow: visible; }
+.fpv .fp-traj .stn.mark .pl .mk { width: 100%; height: 100%; overflow: visible; }
+.fpv .fp-traj .stn.mark .pl::after { content: ""; position: absolute; left: 22%; top: 31%; width: 50%; height: 50%; border-radius: 50%; border: 1.5px solid var(--primary); opacity: 0; }
+.fpv .fp-traj .stn.mark[data-halt] .pl::after { display: none; }
+.fpv .fp-traj .stn.mark[data-halt] .pl .mk { filter: grayscale(1); opacity: .55; }
+.fpv .fp-traj .stn.mark[data-halt] .pl::before { content: ""; position: absolute; left: 22%; top: 31%; width: 50%; height: 50%; border-radius: 50%; border: 0; translate: 0 0; rotate: 0deg; mask-image: none; display: block;
+  box-shadow: 0 0 0 2px var(--text4), 0 0 0 7px color-mix(in srgb, var(--text4) 14%, transparent); }
+.fpv .fp-traj .stn.mark[data-halt="stopped"] .pl::before { box-shadow: 0 0 0 2px var(--error), 0 0 0 7px color-mix(in srgb, var(--error) 14%, transparent); }
+.fpv .fp-traj .stn.mark .hg { position: absolute; right: 16%; bottom: 14%; width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; background: var(--bg); color: var(--text3); box-shadow: 0 0 0 1.5px var(--text4); }
+.fpv .fp-traj .stn.mark[data-halt="stopped"] .hg { color: var(--error); box-shadow: 0 0 0 1.5px var(--error); }
+.fpv .fp-traj .stn.mark .hg svg { width: 9px; height: 9px; }
+.fpv .fp-traj .stn.dest.mark .pl::before { display: none; }
+/* No filter on the mark: the moon animates inside it, and a filter on its ancestor repaints the whole mark every frame. */
+/* Round 4: the mark is the living one from the loading cover; its green moon runs on the trajectory (global CSS pauses it). */
+.fpv .fp-traj .stn.mark .mk { display: block; }
+.fpv .fp-traj .stn.mark .pl .ag-lm > svg { width: 100%; height: 100%; color: var(--primary); }
+.fpv .fp-traj .stn.mark[data-halt] .pl .ag-lm > svg { color: var(--text3); }
+.fpv .fp-traj .stn.mark[data-halt] .ag-lm-dot { background: color-mix(in srgb, var(--text4) 18%, transparent); }
+.fpv .fp-traj .stn.mark[data-halt] .ag-lm-dot::after { background: var(--text4); }
+.fpv .fp-traj .stn.mark[data-halt="stopped"] .ag-lm-dot::after { background: var(--error); }
+/* The steps of a build around the mark: the cover's dashed orbit, lit moons, the next one amber. */
+.fpv .fp-traj .stn.mark .moons { rotate: -10deg; translate: -3px 3px; }
+.fpv .fp-traj .stn.mark .moons::before { left: -64px; top: -21px; width: 128px; height: 42px; border: 1px dashed color-mix(in srgb, var(--primary) 35%, transparent); }
+.fpv .fp-traj .stn.mark .moons i { width: 8px; height: 8px; margin: -4px; translate: calc(cos(var(--m)) * 64px) calc(sin(var(--m)) * 21px); }
+.fpv .fp-traj .stn.mark .moons i[data-next] { background: var(--warning); border-color: var(--warning); }
+/* The halo is a ring of its own, so the pulse is transform and opacity (compositor) and not a box-shadow repainted every frame: measured 8 % of the main thread for one moon. */
+.fpv .fp-traj .stn.mark .moons i[data-next]::before { content: ""; position: absolute; inset: -4px; border-radius: 50%; box-sizing: border-box; border: 4px solid color-mix(in srgb, var(--warning) 22%, transparent); pointer-events: none; will-change: transform, opacity; }
+/* Progress in flight: signals run the flown path into the mark; invisible unless motion is welcome. */
+.fpv .fp-traj .sig { z-index: 3; pointer-events: none; }
+.fpv .fp-traj .sig b { display: block; width: 6px; height: 6px; margin: -3px; border-radius: 50%; background: var(--primary); opacity: 0;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent), 0 0 10px 2px color-mix(in srgb, var(--primary) 55%, transparent); }
+/* Labels: under a body at the front, over it at the back, 12 px at any width. */
+.fpv .fp-traj .cap { position: absolute; left: 0; top: calc(var(--s0) * .5 + 6px); translate: -50% 0; display: flex; flex-direction: column; align-items: center; text-align: center; line-height: 1.25; white-space: nowrap; opacity: calc(.55 + var(--d) * .45); }
+.fpv .fp-traj .stn[data-side="back"] .cap { top: auto; bottom: calc(var(--s0) * .5 + 4px); }
+.fpv .fp-traj .lbl { font-size: 12px; color: var(--text2); }
+.fpv .fp-traj .sub { font-size: 11px; color: var(--text3); }
+.fpv .fp-traj .stn[data-st="todo"] .lbl, .fpv .fp-traj .stn[data-st="skip"] .lbl { color: var(--text3); }
+.fpv .fp-traj .stn[data-st="cur"] .lbl { color: var(--text); font-weight: 700; }
+.fpv .fp-traj .stn[data-halt="stopped"] .sub { color: var(--error); }
+.fpv .fp-traj .stn[data-side="back"] .sub { display: none; }
+/* Narrow: a flatter tilt, labels only at the front, and the sub-line only for the current station. */
+@container (max-width: 900px) {
+  .fpv .fp-traj:not([data-bare]) .sky { --ry: 40px; --cy: 74px; --rx: 42cqw; height: 198px; }
+  .fpv .fp-traj .stn[data-side="back"] .cap, .fpv .fp-traj .stn[data-side="edge"] .cap { display: none; }
+  .fpv .fp-traj .sub { display: none; }
+  .fpv .fp-traj .stn[data-st="cur"] .sub { display: block; }
+}
+@media (prefers-reduced-motion: reduce) { .fpv .fp-traj .on { transition: none; } }
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-idle="1"]) .fpv .fp-traj .stn[data-st="cur"]:not([data-halt]) .pl::after { animation: fp-pulse 2.4s var(--fp-ease) infinite; }
+  /* The running moon: the idle pause stays, a halted mark stays frozen. */
+  :root:not([data-idle="1"]) .fpv .fp-traj .stn.mark:not([data-halt]) :is(.ag-lm-o, .ag-lm-arm, .ag-lm-dot) { animation-duration: 7s; animation-play-state: running; }
+  :root:not([data-idle="1"]) .fpv .fp-traj .stn.mark:not([data-halt]) :is(.ag-lm-arm, .ag-lm-dot) { animation-timing-function: linear; }
+  .fpv .fp-traj .sig { transition: none; animation: fp-sig 1.6s cubic-bezier(.45, 0, .25, 1) 1 both; animation-delay: calc(var(--i) * .22s); }
+  .fpv .fp-traj .sig b { animation: fp-sig-o 1.6s linear 1 both; animation-delay: inherit; }
+  :root:not([data-idle="1"]) .fpv .fp-traj .stn.mark .moons i[data-next]::before { animation: fp-next 1.6s var(--fp-ease) infinite alternate; }
+}
+@keyframes fp-pulse { 0% { transform: scale(1); opacity: .55; } 100% { transform: scale(1.9); opacity: 0; } }
+@keyframes fp-sig { from { --ang: var(--from); } to { --ang: var(--to); } }
+@keyframes fp-sig-o { 0% { opacity: 0; } 12% { opacity: 1; } 82% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes fp-next { to { transform: scale(1.7); opacity: 0; } }
+
+.fpv .card { background: var(--surface-card); border: 1px solid var(--fp-line); border-radius: 13px; box-shadow: var(--fp-lift); margin-bottom: 16px; overflow: hidden; }
+.fpv .ch { display: flex; align-items: center; gap: 10px; padding: 13px 18px 6px; }
+.fpv .ch .ci { width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; background: var(--fp-space-bg); color: var(--primary); }
+.fpv .ch h5 { margin: 0; font-size: 13.8px; flex: 1; font-weight: 700; }
+.fpv .csub { padding: 0 18px 10px; color: var(--text3); font-size: 11.7px; }
+.fpv .doc { padding: 4px 18px 14px; font-size: 12.4px; color: var(--text2); border-top: 1px solid var(--fp-line); background: var(--bg); overflow-wrap: anywhere; }
+.fpv .doc h6 { font-size: 12px; margin: 12px 0 4px; color: var(--text); font-weight: 700; }
+.fpv .doc p, .fpv .doc li { margin: 3px 0; max-width: 80ch; }
+.fpv .doc ul { padding-left: 18px; margin: 4px 0; }
+.fpv .doc code { background: var(--surface-inset); border-radius: 4px; padding: 0 4px; }
+.fpv .doc pre { background: var(--surface-inset); border-radius: 8px; padding: 8px 10px; overflow: auto; }
+.fpv .fold { padding: 8px 18px; border-top: 1px solid var(--fp-line); color: var(--text3); font-size: 11.2px; display: flex; gap: 6px; align-items: center; cursor: pointer; background: none; border-left: 0; border-right: 0; border-bottom: 0; width: 100%; text-align: left; }
+.fpv .mock { display: grid; grid-template-columns: 260px 1fr; border-top: 1px solid var(--fp-line); background: var(--bg); }
+.fpv .thumb { margin: 14px 0 14px 18px; border: 1px solid var(--border2); border-radius: 10px; overflow: hidden; background: var(--bg); box-shadow: var(--fp-lift); align-self: start; }
+.fpv .thumb .bar { height: 16px; background: var(--surface-inset); display: flex; gap: 4px; align-items: center; padding: 0 6px; }
+.fpv .thumb .bar i { width: 5px; height: 5px; border-radius: 50%; background: var(--border2); }
+.fpv .thumb img { display: block; width: 100%; height: 150px; object-fit: cover; object-position: top; }
+.fpv .thumb .shot { position: relative; height: 150px; overflow: hidden; background: var(--surface-inset); }
+.fpv .thumb .shot img { height: 150px; }
+.fpv .thumb .shot iframe { position: absolute; top: 0; left: 0; border: 0; transform-origin: 0 0; pointer-events: none; background: #fff; }
+.fpv .thumb .none { height: 150px; display: grid; place-items: center; color: var(--text4); font-size: 11px; padding: 0 10px; text-align: center; }
+.fpv .mk-r { padding: 14px 18px; display: flex; flex-direction: column; gap: 8px; font-size: 11.7px; min-width: 0; }
+.fpv .kv { display: grid; grid-template-columns: 110px 1fr; gap: 4px 10px; color: var(--text2); }
+.fpv .kv span:nth-child(odd) { color: var(--text3); }
+.fpv .kv span { overflow-wrap: anywhere; }
+
+/* the plan against an earlier version */
+.fpv .cmp { border-top: 1px solid var(--fp-line); background: var(--bg); }
+.fpv .cmp-h { display: flex; align-items: center; gap: 10px; padding: 9px 18px; font-size: 11.7px; } .fpv .cmp-h span { flex: 1; color: var(--text3); }
+.fpv .cmp-b { max-height: 280px; overflow: auto; padding: 0 0 10px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.2px; }
+.fpv .dl { display: grid; grid-template-columns: 26px 1fr; padding: 0 18px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text2); }
+.fpv .dl > span:first-child { text-align: center; color: var(--text4); }
+.fpv .dl.add { background: var(--fp-ok-bg); } .fpv .dl.add > span:first-child { color: var(--fp-ok-t); }
+.fpv .dl.del { background: var(--fp-err-bg); } .fpv .dl.del > span:first-child { color: var(--fp-err-t); }
+
+/* findings */
+.fpv .fsum { padding: 0 18px 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.fpv .f { border-top: 1px solid var(--fp-line); padding: 12px 18px; display: grid; grid-template-columns: 22px 1fr; gap: 4px 12px; background: var(--bg); transition: background .2s; }
+.fpv .f.done { background: var(--surface-card); } .fpv .f.done .h b { color: var(--text2); }
+.fpv .sev { width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center; font-size: 9.4px; font-weight: 800; margin-top: 1px; }
+.fpv .sev.b { background: var(--fp-err-bg); color: var(--fp-err-t); } .fpv .sev.m { background: var(--fp-warn-bg); color: var(--fp-warn-t); } .fpv .sev.n { background: var(--surface-inset); color: var(--text3); }
+.fpv .f .h { display: flex; gap: 9px; align-items: baseline; flex-wrap: wrap; }
+.fpv .f .h b { font-size: 12.6px; }
+.fpv .f .sevw { font-size: 9.6px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--text3); }
+.fpv .f blockquote { margin: 5px 0 3px; padding: 4px 10px; border-radius: 7px; background: var(--surface-card); border: 1px solid var(--fp-line); color: var(--text2); font-size: 11.4px; overflow-wrap: anywhere; }
+.fpv .f .ev { font-size: 11.2px; color: var(--text3); overflow-wrap: anywhere; }
+.fpv .acts { grid-column: 2; display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+.fpv .act { height: 26px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border2); background: var(--bg); cursor: pointer; font-size: 11.2px; color: var(--text2); display: inline-flex; align-items: center; gap: 6px; transition: border-color .15s, background .15s, transform .14s var(--fp-ease); }
+.fpv .act:active:not(:disabled) { transform: scale(.97); } .fpv .act:disabled { opacity: .55; cursor: default; }
+@media (hover: hover) and (pointer: fine) { .fpv .act:hover:not(:disabled) { border-color: var(--text4); } }
+.fpv .act[aria-pressed=true] { font-weight: 650; }
+.fpv .act.fix[aria-pressed=true] { background: var(--fp-ok-bg); border-color: color-mix(in srgb, var(--success) 45%, transparent); color: var(--fp-ok-t); }
+.fpv .act.contest[aria-pressed=true] { background: var(--fp-info-bg); border-color: color-mix(in srgb, var(--info) 45%, transparent); color: var(--fp-info-t); }
+.fpv .act.askme[aria-pressed=true] { background: var(--fp-warn-bg); border-color: color-mix(in srgb, var(--warning) 45%, transparent); color: var(--fp-warn-t); }
+.fpv .act.dismiss[aria-pressed=true] { background: var(--surface-inset); border-color: var(--border2); color: var(--text3); }
+.fpv .resolved { grid-column: 2; font-size: 10.9px; color: var(--text2); display: flex; gap: 6px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
+.fpv .resolved span:first-child { white-space: nowrap; }
+.fpv .note-in { grid-column: 2; margin-top: 6px; display: flex; gap: 6px; }
+.fpv .note-in input, .fpv .field { flex: 1; min-width: 0; height: 26px; border: 1px solid var(--border2); border-radius: 8px; padding: 0 9px; font: inherit; font-size: 11.2px; background: var(--bg); color: var(--text); }
+.fpv .note-in input::placeholder, .fpv textarea::placeholder { color: var(--text4); }
+.fpv .skel { height: 10px; border-radius: 5px; background: linear-gradient(90deg, var(--surface-inset), color-mix(in srgb, var(--surface-inset) 55%, var(--bg)), var(--surface-inset)); background-size: 200% 100%; }
+@media (prefers-reduced-motion: no-preference) { .fpv .skel { animation: fp-sh 1.4s linear infinite; } }
+@keyframes fp-sh { to { background-position: -200% 0; } }
+.fpv .skels { padding: 6px 18px 16px; display: grid; gap: 9px; background: var(--bg); border-top: 1px solid var(--fp-line); }
+.fpv .err-note { display: flex; gap: 10px; background: var(--fp-err-bg); border: 1px solid color-mix(in srgb, var(--error) 30%, transparent); border-radius: 10px; padding: 10px 12px; color: var(--text); font-size: 11.7px; margin-bottom: 16px; }
+.fpv .err-note b { color: var(--fp-err-t); }
+.fpv .err-note .row { display: flex; gap: 8px; margin-top: 9px; }
+
+/* right column */
+.fpv .side { border-left: 1px solid var(--fp-line); background: var(--surface-nav); overflow: auto; padding: 16px 14px; }
+.fpv .poll { background: var(--bg); border: 1px solid var(--fp-line); border-radius: 13px; box-shadow: var(--fp-lift-lg); overflow: clip; }
+.fpv .poll .hd { padding: 13px 15px 6px; } .fpv .poll .hd b { font-size: 13.8px; }
+.fpv .poll .hd p { margin: 2px 0 0; color: var(--text3); font-size: 11.2px; }
+.fpv .pr { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center; padding: 8px 15px; border-top: 1px solid var(--fp-line); }
+.fpv .pr .k { font-weight: 600; } .fpv .pr .v { font-size: 10.4px; color: var(--text3); grid-column: 1; }
+.fpv .light { grid-row: span 2; display: inline-flex; align-items: center; gap: 6px; font-size: 10.1px; font-weight: 800; letter-spacing: .08em; border-radius: 7px; padding: 2px 8px; }
+.fpv .light.go { background: var(--fp-ok-bg); color: var(--fp-ok-t); } .fpv .light.hold { background: var(--fp-warn-bg); color: var(--fp-warn-t); }
+.fpv .light.skip { border: 1.5px dashed var(--border2); color: var(--text4); }
+.fpv .gobar { padding: 12px 15px 14px; border-top: 1px solid var(--fp-line); background: var(--surface-card); display: grid; position: sticky; bottom: 0; gap: 8px; }
+.fpv .gobar .row2 { display: flex; gap: 8px; } .fpv .gobar .row2 .btn { flex: 1; justify-content: center; height: 32px; }
+.fpv .gobar .note-in { grid-column: auto; margin: 0; } .fpv .gobar .note-in input { height: 26px; }
+.fpv .gobar small { color: var(--text3); font-size: 10.4px; }
+.fpv .gobar label { font-size: 11.2px; font-weight: 650; }
+.fpv .cert { margin-top: 14px; background: var(--bg); border: 1px solid var(--fp-line); border-radius: 13px; overflow: hidden; box-shadow: var(--fp-lift); }
+.fpv .cert .hd { display: flex; gap: 9px; align-items: center; padding: 11px 14px 4px; } .fpv .cert .hd b { flex: 1; }
+.fpv .seal { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--bg); box-shadow: 0 0 0 1.5px var(--primary), 0 2px 6px -2px var(--shadow); color: var(--primary); }
+.fpv .cert .big { padding: 2px 14px 9px; font-size: 12px; } .fpv .cert .big em { font-style: normal; font-weight: 700; }
+.fpv .files { border-top: 1px solid var(--fp-line); padding: 6px 14px 8px; font-size: 10.7px; }
+.fpv .file { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 3px 0; color: var(--text2); } .fpv .file span:first-child { overflow-wrap: anywhere; } .fpv .file span:last-child { color: var(--text4); white-space: nowrap; }
+.fpv .cfoot { border-top: 1px solid var(--fp-line); padding: 8px 14px 10px; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 10.7px; }
+.fpv .cfoot span:nth-child(odd) { color: var(--text3); }
+.fpv .costbar { height: 5px; border-radius: 3px; background: var(--surface-inset); overflow: hidden; margin-top: 5px; } .fpv .costbar i { display: block; height: 100%; background: var(--primary); border-radius: 3px; }
+
+/* settings view */
+.fpv .page { overflow: auto; padding: 18px 22px; min-height: 0; }
+.fpv .page.two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+.fpv .page .card { margin-bottom: 16px; }
+.fpv .srow { display: grid; grid-template-columns: minmax(12rem, 1fr) auto; gap: 6px 22px; align-items: center; padding: 11px 18px; border-top: 1px solid var(--fp-line); background: var(--bg); }
+.fpv .rn { font-weight: 650; } .fpv .rh { color: var(--text3); font-size: 11.3px; margin-top: 1px; }
+.fpv .tog { width: 38px; height: 22px; border-radius: 99px; background: var(--border2); position: relative; border: 0; cursor: pointer; transition: background .2s; padding: 0; }
+.fpv .tog::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .25); transition: transform .2s var(--fp-ease); }
+.fpv .tog[aria-checked=true] { background: var(--success); } .fpv .tog[aria-checked=true]::after { transform: translateX(16px); }
+.fpv .sel { height: 28px; border: 1px solid var(--border2); border-radius: 8px; padding: 0 26px 0 10px; background: var(--bg); font: inherit; font-size: 12px; color: var(--text); appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--text4) 50%), linear-gradient(135deg, var(--text4) 50%, transparent 50%); background-position: calc(100% - 14px) 12px, calc(100% - 9px) 12px; background-size: 5px 5px; background-repeat: no-repeat; cursor: pointer; }
+.fpv .money { height: 28px; border: 1px solid var(--border2); border-radius: 8px; padding: 0 10px; background: var(--bg); display: inline-flex; align-items: center; gap: 4px; width: 110px; } .fpv .money span { color: var(--text3); }
+.fpv .money input { flex: 1; min-width: 0; border: 0; background: none; font: inherit; font-size: 12px; color: var(--text); outline: none; width: 100%; }
+.fpv .prj { display: grid; grid-template-columns: 1fr repeat(3, 92px); gap: 8px; align-items: center; padding: 8px 18px; border-top: 1px solid var(--fp-line); background: var(--bg); font-size: 11.4px; }
+.fpv .prj.h { background: var(--surface-card); color: var(--text3); font-size: 10.1px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.fpv .prj > span:first-child { overflow-wrap: anywhere; }
+.fpv .pill { display: inline-flex; justify-content: center; border-radius: 7px; padding: 1px 0; font-size: 10.7px; font-weight: 650; border: 0; background: none; cursor: pointer; }
+.fpv .pill.p-off { color: var(--text3); border: 1px solid var(--border2); } .fpv .pill.p-ask { background: var(--fp-warn-bg); color: var(--fp-warn-t); }
+.fpv .pill.p-auto { background: var(--fp-ok-bg); color: var(--fp-ok-t); } .fpv .pill.p-inh { color: var(--text4); border: 1px dashed var(--border2); }
+.fpv .iso { padding: 8px 18px 12px; border-top: 1px solid var(--fp-line); background: var(--bg); font-size: 11.2px; color: var(--text2); }
+.fpv .iso ul { margin: 4px 0 0; padding-left: 18px; }
+.fpv .say { padding: 0 18px 12px; font-size: 11.2px; color: var(--text2); }
+.fpv .say.bad { color: var(--fp-err-t); }
+
+/* empty and history */
+.fpv .empty { display: grid; place-items: center; padding: 44px 20px 50px; text-align: center; overflow: auto; }
+.fpv .empty h4 { font-size: 16.9px; font-weight: 700; margin: 16px 0 6px; }
+.fpv .empty p { color: var(--text3); max-width: 56ch; margin: 0 auto 16px; }
+.fpv .flow { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; margin: 0 0 20px; font-size: 10.9px; color: var(--text2); }
+.fpv .flow span { border: 1px solid var(--fp-line); background: var(--surface-card); border-radius: 7px; padding: 2px 8px; } .fpv .flow em { color: var(--text4); font-style: normal; }
+.fpv .empty .arc { width: 280px; margin: 0 auto; opacity: .85; }
+.fpv .hrow { display: grid; grid-template-columns: 96px 1fr 140px 110px 90px; gap: 12px; align-items: center; padding: 10px 18px; border-top: 1px solid var(--fp-line); background: var(--bg); font-size: 11.7px; width: 100%; text-align: left; border-left: 0; border-right: 0; border-bottom: 0; cursor: pointer; }
+.fpv div.hrow { cursor: default; }
+@media (hover: hover) and (pointer: fine) { .fpv button.hrow:hover { background: var(--surface-card); } }
+.fpv .hrow.h { background: var(--surface-card); color: var(--text3); font-size: 9.9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.fpv .hrow .t { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .fpv .hrow .s { font-size: 10.4px; color: var(--text3); }
+.fpv .hrow .tcell { min-width: 0; }
+.fpv .dots { display: flex; gap: 3px; } .fpv .dots i { width: 8px; height: 8px; border-radius: 2px; }
+.fpv .dots .b { background: var(--error); } .fpv .dots .m { background: var(--warning); } .fpv .dots .n { background: var(--border2); }
+.fpv .hdetail { padding: 6px 18px 14px; background: var(--surface-card); border-top: 1px solid var(--fp-line); }
+
+/* composer */
+.fpv .scrim { position: absolute; inset: 0; z-index: 5; background: rgba(0, 0, 0, .35); display: grid; place-items: start center; padding-top: 12vh; }
+.fpv .pop { width: min(560px, 92vw); }
+.fpv .pop .poll .hd { display: flex; align-items: center; gap: 9px; padding-bottom: 10px; }
+.fpv .pop .poll .hd .ic { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; background: var(--fp-space-bg); color: var(--primary); }
+.fpv .pop .poll .hd b { flex: 1; } .fpv .pop .poll .hd span.esc { color: var(--text3); font-size: 10.4px; }
+.fpv .from { grid-template-columns: auto 1fr; }
+.fpv .rq { padding: 10px 15px; border-top: 1px solid var(--fp-line); }
+.fpv .rq label { font-weight: 650; font-size: 12px; } .fpv .rq .h { color: var(--text3); font-size: 10.9px; margin: 1px 0 6px; }
+.fpv textarea { width: 100%; resize: vertical; border: 1px solid var(--border2); border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 12px; background: var(--bg); color: var(--text); }
+.fpv .srow.flat { border-top: 1px solid var(--fp-line); padding: 11px 15px; }
+.fpv .fp-linkrow { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 14px; background: var(--surface-card); border: 1px solid var(--fp-line); border-radius: 10px; font-size: 11.7px; }
+
+@media (max-width: 1100px) { .fpv .cols { grid-template-columns: minmax(0, 1fr); overflow: auto; } .fpv .side { border-left: 0; border-top: 1px solid var(--fp-line); overflow: visible; } }
+@media (max-width: 760px) { .fpv .cols { grid-template-columns: 1fr; } .fpv .page.two { grid-template-columns: 1fr; } .fpv .hrow { grid-template-columns: 70px 1fr 90px; } .fpv .hrow > :nth-child(n+4) { display: none; } .fpv .mock { grid-template-columns: 1fr; } .fpv .thumb { margin-right: 18px; } .fpv .vh { flex-wrap: wrap; } }
+.fp-linkrow { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 14px; background: var(--surface-card); border: 1px solid var(--surface-line); border-radius: 10px; font-size: 11.7px; }
+.fp-linkrow .btn { white-space: nowrap; display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border2); background: var(--bg); cursor: pointer; font: inherit; font-size: 11.2px; font-weight: 600; }
+.fpv .say.hnone { padding: 14px 18px; background: var(--bg); border-top: 1px solid var(--fp-line); }
+.fpv .money input { height: 100%; padding: 0; border-radius: 0; background: none; }
+.fpv .textlink { border: 0; background: none; padding: 0; font: inherit; color: inherit; text-decoration: underline; cursor: pointer; }
+.fpv .doc { --agx-md-h1: 1em; --agx-md-h2: 1em; --agx-md-h3: 1em; --agx-md-h4: 1em; }
+.fpv .doc h1, .fpv .doc h2, .fpv .doc h3, .fpv .doc h4 { font-size: 12px; margin: 12px 0 4px; color: var(--text); font-weight: 700; }
+.fpv .doc ul, .fpv .doc ol { margin: 4px 0; gap: 0; }
+.fpv .doc li { margin: 3px 0; }
+.fpv .doc p { margin: 3px 0; }
+
+/* A state that is really running (Writing, In Preflight, Building, Checking) breathes; every other state is still. Transform and opacity only. */
+.fpv .pv-state .st-ico::after { content: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .fpv .pv-state[data-running] .st-ico::after { content: ""; position: absolute; inset: -1px; border-radius: inherit; border: 2px solid var(--h); animation: pv-ring 2.2s var(--fp-ease) infinite; pointer-events: none; }
+}
+@keyframes pv-ring { 0% { transform: scale(1); opacity: .5; } 100% { transform: scale(1.5); opacity: 0; } }

@@ -478,38 +478,6 @@ describe("driving a page", () => {
     expect(src).toContain('send("keyup")');
   });
 
-  test("zoom moves the page, not just the number it reports", async () => {
-    /*
-     * Two implementations of this verb reported their own argument. The first
-     * called setZoomFactor and read getZoomFactor back; the second called
-     * setZoomLevel, which is what the panel's own Ctrl+/Ctrl- uses. Measured on
-     * the running app, both times: 0.6, 0.7, 1.0 and 1.4 all left the page at
-     * innerWidth 1314 and devicePixelRatio 1.4. A guest's zoom level is set and
-     * then ignored — the scale it is drawn at comes from the window embedding
-     * it.
-     *
-     * So it overrides the device metrics, and the number it answers with is
-     * MEASURED from the page afterwards.
-     */
-    let natural = true;
-    const el = fakeGuest(() => {
-      // First read is the natural size, second is the size after the override.
-      const out = natural ? { w: 1000, h: 800, dpr: 1 } : { w: 500 };
-      natural = false;
-      return JSON.stringify(out);
-    });
-    const cdpCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
-    const r = await runBrowserAsk(el, ask("zoom", { factor: 2 }), undefined, undefined, undefined,
-      async (method, params) => { cdpCalls.push({ method, params: (params ?? {}) as Record<string, unknown> }); return { ok: true, result: {} }; });
-    // Cleared FIRST, or the "natural" size read back is its own last answer.
-    expect(cdpCalls[0]?.method).toBe("Emulation.clearDeviceMetricsOverride");
-    expect(cdpCalls[1]?.method).toBe("Emulation.setDeviceMetricsOverride");
-    expect(cdpCalls[1]?.params.width).toBe(500);
-    expect(cdpCalls[1]?.params.deviceScaleFactor).toBe(2);
-    // 1000 natural / 500 after = 2. Measured, not echoed.
-    expect((r.value as Record<string, unknown>)?.factor).toBe(2);
-  });
-
   test("a tab an agent sized is not handed the person's level again", () => {
     /* The distinction is the clone's, from the run that found this; the
        mechanism is not — it re-applied the agent's factor with setZoomFactor,

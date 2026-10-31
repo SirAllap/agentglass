@@ -46,6 +46,7 @@ import {
 import { ensurePluginSocketServer, pluginSocketPath, stopPluginSocketServer } from "./plugin-socket.ts";
 import { KEYRING_MARK, KeyringError, dropValue, exclusive, keyringEnabled, priorValue, putBack, pluginKeyId, reasonOf, sealValue, unlockFirst, unsealed } from "./keyring.ts";
 import { coerceSettings, dropNotesOf, fieldsWithOptions, forgetPlugin, pushEvent, resolveSettings, setLivenessCheck } from "./plugin-ui.ts";
+import { boundPort } from "./portfile.ts";
 
 /** What a plugin folder must carry at its root, translated from `orca-plugin.json`
  *  in the decision doc into a name that names nothing but this app. */
@@ -833,7 +834,7 @@ export function stopAllPluginsSync(): void {
 }
 
 function serverBase(): string {
-  return `http://127.0.0.1:${Number(process.env.AGENTGLASS_PORT || 4000)}`;
+  return `http://127.0.0.1:${boundPort() ?? Number(process.env.AGENTGLASS_PORT || 4000)}`;
 }
 
 /**

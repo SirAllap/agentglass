@@ -68,7 +68,7 @@ describe("opening a card", () => {
     /* As a child of the table's row it started below the board bar and the
        filter bar: a fifth of the window lit above a card that had been given
        the window. */
-    expect(src).toContain('<div className="relative flex flex-col flex-1 min-h-0">');
+    expect(src).toContain('<div className="relative flex-1 min-h-0 grid"');
     const modal = src.slice(src.indexOf('cardMode === "modal" && picked'));
     // The row closes BEFORE the overlay opens.
     expect(src.indexOf('{cardMode === "modal" && picked')).toBeGreaterThan(src.indexOf('</aside>'));
@@ -84,15 +84,14 @@ describe("opening a card", () => {
     expect(modal).toContain('flex items-stretch justify-center p-2');
   });
 
-  it("shows a way out, and only in the modal", () => {
+  it("shows a way out, in the modal and in the sidebar (the mockup draws one in both)", () => {
     /* The dimmed board and Escape were the whole exit: one is invisible, the
        other a keystroke nobody is told about. In the sidebar the card is part of
        the layout, so there is nothing to close. */
-    expect(src).toContain('onClose={cardMode === "modal" ? () => setSel(null) : undefined}');
+    expect(src).toContain("onClose={() => setSel(null)}");
     const head = src.slice(src.indexOf('aria-label="Close the card"'));
-    expect(head).toContain("var(--error)");
-    // A bare glyph is a 10px target; this one carries its own box.
-    expect(head).toContain("width: 26, height: 26");
+    // Quiet, as the mockup draws it, and on the house hit size: a bare glyph is a 10px target.
+    expect(head).toContain("width: HIT, height: HIT");
   });
 
   it("draws no sidebar until a card is picked", () => {

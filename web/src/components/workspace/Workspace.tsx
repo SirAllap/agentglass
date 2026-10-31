@@ -19,6 +19,7 @@
 // eight, and the dashboard — fourteen panels and a poll every four seconds — is
 // not among them until you ask for it.
 import { PluginsView } from "../plugins/PluginsView.tsx";
+import { FlightPlanView } from "../flightPlan/FlightPlanView.tsx";
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { hiddenOnly } from "./hiddenOnly.ts";
@@ -27,7 +28,6 @@ import { railBadgesKey, subscribeRailBadges, visiblePips } from "../../lib/railB
 import { pushScope } from "../../lib/findScope.ts";
 import { VIEWS, saveLastView, type ViewId } from "./views.ts";
 import { ViewBoundary } from "./ViewBoundary.tsx";
-import { FilesView } from "../FilesPanel.tsx";
 import { TasksView } from "../TasksPanel.tsx";
 import { subscribeReminders, firedCount } from "../../lib/reminderStore.ts";
 import { hasGitModal, subscribeGitModal } from "../../lib/gitModalIntent.ts";
@@ -156,11 +156,10 @@ export function Workspace({
      when the bench lets go of it. See lib/boardHost.ts. */
   const benchPr = useSyncExternalStore(subscribeBoards, () => benchWants("pr"), () => false);
   const benchTasks = useSyncExternalStore(subscribeBoards, () => benchWants("tasks"), () => false);
-  const benchFiles = useSyncExternalStore(subscribeBoards, () => benchWants("files"), () => false);
   useEffect(() => {
-    const want = [benchPr && "pr", benchTasks && "tasks", benchFiles && "files"].filter(Boolean) as ViewId[];
+    const want = [benchPr && "pr", benchTasks && "tasks"].filter(Boolean) as ViewId[];
     setVisited((cur) => (want.every((k) => cur.has(k)) ? cur : new Set([...cur, ...want])));
-  }, [benchPr, benchTasks, benchFiles]);
+  }, [benchPr, benchTasks]);
 
   /* A Git modal asked for through /control mounts the Git view without showing
      it: the modals are portals over whatever view is up, so the person stays
@@ -281,7 +280,6 @@ function BodyImpl({ id, active, openBrowser }: {
   openBrowser: () => void;
 }) {
   switch (id) {
-    case "files": return <BoardSlot kind="files" place="rail" visible={active} />;
     /* The two boards are not drawn here: this is one of the two places they
        can be shown, and the board itself is rendered once, below. */
     case "tasks": return <BoardSlot kind="tasks" place="rail" visible={active} />;
@@ -295,13 +293,14 @@ function BodyImpl({ id, active, openBrowser }: {
        the floating bench — see lanternAsk.ts. Nothing to hand it. */
     case "agents": return <AgentsView active={active} />;
     case "plugins": return <PluginsView active={active} />;
+    case "flightPlan": return <FlightPlanView active={active} />;
     default: return null;
   }
 }
 
 const Body = memo(BodyImpl, hiddenOnly);
 
-const BOARDS: BoardKind[] = ["pr", "tasks", "files"];
+const BOARDS: BoardKind[] = ["pr", "tasks"];
 
 /**
  * The one pull-request board, or the one task board.
@@ -343,7 +342,6 @@ interface BoardBodyProps {
 }
 
 function BoardBodyImpl({ kind, active, openBrowser, reviewInTerminal, prJump, cardJump, issueJump }: BoardBodyProps) {
-  if (kind === "files") return <FilesView active={active} />;
   return kind === "pr"
     ? <PrView active={active} onReviewInTerminal={reviewInTerminal} jumpTo={prJump} />
     : <TasksView active={active} onOpenBrowser={openBrowser} cardJump={cardJump} issueJump={issueJump} />;

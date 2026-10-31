@@ -197,9 +197,10 @@ describe("the page is only there with ClickUp", () => {
     expect(src).toContain('if (e.key === "Escape") { e.stopPropagation(); setComposer(false);');
     expect(src).not.toContain("queueMicrotask");
   });
-  test("the review menu reads nothing from ClickUp when neither of its steps is added", async () => {
-    const src = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url).pathname).text();
-    expect(src).toContain("if (!query || !wanted0) return;");
+  test("the review picker reads the card through the shared store, and the list only once it has the card", async () => {
+    const src = await Bun.file(new URL("../src/components/PrAskPicker.tsx", import.meta.url).pathname).text();
+    expect(src).toContain("const hit = o.on && ref ? cardOf(ref.query, undefined, kind ?? \"clickup\") : null;");
+    expect(src).toContain("if (!o.on || kind !== \"clickup\" || !listId) return;");
   });
   test("every save goes through the one prefs route", async () => {
     const pane = await Bun.file(new URL("../src/components/ClickUpPane.tsx", import.meta.url).pathname).text();

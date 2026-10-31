@@ -2,9 +2,10 @@ import { useLayoutEffect, useEffect, useRef, useState } from "react";
 import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
-import { DoneIcon } from "../lib/glyphIcons.tsx";
+import { BranchIcon, DoneIcon, SearchIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { pickerBody } from "../lib/gitDialog.ts";
 import { ICON } from "../lib/iconSize.ts";
-import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
+import { Button, EDGE, LINE, INPUT, INPUT_STYLE, ListRow } from "./workspace/Chrome.tsx";
 
 /**
  * Pick what a branch is measured and merged against.
@@ -31,7 +32,7 @@ import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
 export type BaseRef = { name: string; remote: boolean };
 
 export function BasePicker({
-  branch, base, refs, onOpen, onPick, disabled, label = "▾", title, className, style,
+  branch, base, refs, onOpen, onPick, disabled, label = "▾", title, className, style, error, onRetry,
 }: {
   branch: string;
   base: string | null;
@@ -45,6 +46,9 @@ export function BasePicker({
   title?: string;
   className?: string;
   style?: React.CSSProperties;
+  /** The ref list could not be read: said in a sentence, with a way to retry. */
+  error?: string | null;
+  onRetry?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -81,13 +85,15 @@ export function BasePicker({
 
   const close = () => { setQuery(""); setOpen(false); };
 
-  const shown = refs
-    .filter((b) => b.name !== branch)
+  const isTrunk = (n: string) => /(^|\/)(master|main)$/.test(n);
+  const candidates = refs.filter((b) => b.name !== branch);
+  const shown = candidates
     .filter((b) => { const q = query.trim().toLowerCase(); return !q || b.name.toLowerCase().includes(q); })
     // The current base first, then the trunk, then the rest as git ordered them
     // (most recent first).
     .sort((a, b) => Number(b.name === base) - Number(a.name === base)
-      || Number(/(^|\/)(master|main)$/.test(b.name)) - Number(/(^|\/)(master|main)$/.test(a.name)));
+      || Number(isTrunk(b.name)) - Number(isTrunk(a.name)));
+  const body = pickerBody({ loading: !refs.length, error, total: candidates.length, shown: shown.length, query });
 
   return (
     <>
@@ -120,69 +126,73 @@ export function BasePicker({
                 className="fixed rounded-xl text-[11px] flex flex-col"
                 style={{
                   top: pos.top, bottom: pos.bottom, right: pos.right,
-                  minWidth: 300, maxHeight: pos.maxHeight, overflow: "hidden", zIndex: 9999,
-                  background: "color-mix(in srgb, var(--bg2) 97%, black)",
+                  width: 360, maxWidth: "calc(100vw - 16px)", maxHeight: pos.maxHeight, overflow: "hidden", zIndex: 9999,
+                  background: "var(--surface-card)",
                   border: EDGE,
                   boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)",
-                  backdropFilter: "blur(18px)",
                 }}>
-                <div className="px-2.5 py-1.5 t-dim2 text-[9.5px] uppercase tracking-wider shrink-0 truncate" title={branch}>
-                  measure {branch} against…
+                <div className="px-3 pt-2.5 pb-1.5 shrink-0 truncate text-[11.5px]" style={{ color: "var(--text3)" }} title={branch}>
+                  Measure <span className="font-mono" style={{ color: "var(--text2)" }}>{branch}</span> against…
                 </div>
-                {/* The base it will actually use, pinned above the search — the
-                    answer to "what is this compared to" should not require
-                    scrolling a list of 800 to find the highlighted row. */}
-                <div className="mx-1.5 mb-1 px-2 py-1.5 rounded-md flex items-center gap-2 shrink-0"
-                  style={{ background: "color-mix(in srgb, var(--primary) 15%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
-                  <span className="shrink-0 flex" style={{ color: "var(--primary-hover)" }}><DoneIcon size={ICON.xs} /></span>
-                  <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text)" }} title={base ?? ""}>{base ?? "no base"}</span>
-                  <span className="shrink-0 text-[10px] t-dim2">current base</span>
-                </div>
-                <div className="px-2.5 pb-0.5 t-dim2 text-[9.5px] uppercase tracking-wider shrink-0">or change to…</div>
                 {/* A real repo has hundreds of refs — this one offers 827 — so
                     the list is only usable with a filter. */}
-                <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)}
-                  placeholder="filter branches…"
-                  className={`mx-1.5 mb-1 shrink-0 ${INPUT}`}
-                  style={INPUT_STYLE} />
-                {/* Padded on both ends: bottom-only put the first branch
-                    against the filter field, where it read as part of it. */}
-                <div className="agx-scroll overflow-y-auto overflow-x-hidden py-1.5">
-                  {/* Clearing the override is how you get back to the app's own
-                      answer, which is right far more often than not — without
-                      it, one correction pins the branch to a hand-picked base
-                      for good. Offered only when there is something to clear:
-                      the server treats an empty base as `--unset`, and it reads
-                      as a no-op the rest of the time. */}
-                  <button onClick={() => { close(); onPick(""); }}
-                    className="w-full text-left px-2.5 py-1.5 flex items-center gap-2"
-                    style={{ color: "var(--text3)" }}
-                    title="Forget the override and go back to the base this app works out on its own">
-                    <span className="shrink-0 text-[8.5px] px-1 py-px rounded" style={{ color: "var(--text3)", border: EDGE }}>AUTO</span>
-                    <span className="min-w-0 flex-1 truncate">work it out for me</span>
-                  </button>
-                  {shown.slice(0, 200).map((b) => (
-                    <button key={b.name} onClick={() => { close(); onPick(b.name); }}
-                      className="w-full text-left px-2.5 py-1.5 flex items-center gap-2"
-                      style={{ background: b.name === base ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent", color: "var(--text)" }}
-                      title={b.name}>
-                      {/* Which kind of ref this is, because it changes what you
-                          get: `master` is your copy, which may be weeks behind
-                          the `origin/master` next to it. */}
-                      <span className="shrink-0 text-[8.5px] px-1 py-px rounded"
-                        style={b.remote
-                          ? { color: "var(--info-ink)", border: "1px solid color-mix(in srgb, var(--info) 35%, transparent)" }
-                          : { color: "var(--text3)", border: EDGE }}>
-                        {b.remote ? "REMOTE" : "LOCAL"}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate">{b.name}</span>
-                      {b.name === base && <span className="shrink-0 text-[10px]" style={{ color: "var(--primary-hover)" }}>current</span>}
-                    </button>
-                  ))}
-                  {!refs.length && <div className="px-2.5 py-2 t-dim2">loading branches…</div>}
-                  {shown.length > 200 && (
-                    <div className="px-2.5 py-1.5 t-dim2 text-[9.5px]">showing 200 of {shown.length} — type to find the rest</div>
+                <div className="mx-2.5 mb-2 shrink-0 relative">
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: "var(--text3)" }}><SearchIcon size={ICON.sm} /></span>
+                  <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Find a branch" aria-label="Find a branch"
+                    className={`w-full pl-8 pr-16 ${INPUT}`} style={INPUT_STYLE} />
+                  {body === "rows" && <span className="absolute right-2.5 top-1/2 -translate-y-1/2 tabular-nums text-[10.5px]" style={{ color: "var(--text3)", fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>{shown.length} of {candidates.length}</span>}
+                </div>
+                <div className="agx-scroll overflow-y-auto overflow-x-hidden px-1 pb-1.5 min-h-0">
+                  {body === "loading" && (
+                    <div role="status" aria-label="Reading branches" className="px-2.5 flex flex-col gap-1.5">
+                      {[0, 1, 2].map((i) => <div key={i} className="rounded-lg motion-safe:animate-pulse" style={{ height: 38, background: "var(--surface-inset)", opacity: 1 - i * 0.2 }} />)}
+                    </div>
                   )}
+                  {body === "error" && (
+                    <div role="alert" className="mx-2.5 flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-[12px]" style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 28%, transparent)" }}>
+                      <WarningIcon size={ICON.md} /><span className="min-w-0 flex-1">{error}</span>
+                      {onRetry && <Button size="compact" onClick={onRetry} className="shrink-0">Try again</Button>}
+                    </div>
+                  )}
+                  {body === "empty" && <div className="px-3 py-4 text-[12px] text-center" style={{ color: "var(--text3)" }}>There is no other branch to measure against.</div>}
+                  {body === "no-match" && (
+                    <div className="px-3 py-4 text-center text-[12px]" style={{ color: "var(--text3)" }}>
+                      <div className="font-medium break-all" style={{ color: "var(--text2)" }}>No branch called “{query.trim()}”</div>
+                      <div className="mt-0.5">Check the spelling, or clear the search to see every ref.</div>
+                    </div>
+                  )}
+                  {body === "rows" && shown.slice(0, 200).map((b) => {
+                    const on = b.name === base;
+                    return (
+                      <ListRow key={b.name} onClick={() => { close(); onPick(b.name); }}
+                        current={on} title={b.name}
+                        leading={
+                          <span className="grid place-items-center rounded-lg"
+                            style={{ width: 28, height: 28, background: "var(--surface-inset)", border: EDGE, color: b.remote ? "var(--info-ink)" : "var(--text2)" }}>
+                            <BranchIcon size={ICON.sm} />
+                          </span>
+                        }
+                        sub={<>{b.remote ? "remote" : "local"}{isTrunk(b.name) ? " · trunk" : ""}</>}
+                        trailing={on ? <span className="grid place-items-center rounded-full" style={{ width: 18, height: 18, background: "var(--primary)", color: "var(--on-primary)" }} title="current base"><DoneIcon size={ICON.xs} /></span> : null}>
+                        <span style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>{b.name}</span>
+                      </ListRow>
+                    );
+                  })}
+                  {body === "rows" && shown.length > 200 && (
+                    <div className="px-3 py-1.5 text-[10.5px]" style={{ color: "var(--text3)" }}>showing 200 of {shown.length} — type to find the rest</div>
+                  )}
+                </div>
+                {/* Clearing the override is how you get back to the app's own
+                    answer, which is right far more often than not — without
+                    it, one correction pins the branch to a hand-picked base
+                    for good. The server treats an empty base as `--unset`. */}
+                <div className="shrink-0 flex items-center gap-2 px-2.5" style={{ minHeight: 40, borderTop: LINE, background: "var(--surface-nav)" }}>
+                  <Button onClick={() => { close(); onPick(""); }} className="shrink-0"
+                    title="Forget the override and go back to the base this app works out on its own">Work it out for me</Button>
+                  <span className="min-w-0 flex-1 truncate text-right text-[10.5px]" style={{ color: "var(--text3)" }} title={base ?? ""}>
+                    {base ? <>now <span className="font-mono">{base}</span></> : "no base set"}
+                  </span>
                 </div>
               </motion.div>
             </>

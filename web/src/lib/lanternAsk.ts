@@ -63,14 +63,37 @@ async function lanternTabAlive(): Promise<{ root: string; id: string } | null> {
  * "start an agent" menu uses (POST /terminal/agent), never through the
  * terminal socket by text.
  */
-export async function askOnBench(cwd: string, prompt: string, title = "ask"): Promise<{ ok: boolean; error?: string }> {
-  const r = await api.termAgentTicket(cwd, prompt, false, title).catch((e) => ({ ok: false, error: String(e) } as { ok: boolean; ticket?: string; error?: string }));
+export async function askOnBench(cwd: string, prompt: string, title = "ask", kind?: string): Promise<{ ok: boolean; error?: string }> {
+  const r = await api.termAgentTicket(cwd, prompt, false, title, kind).catch((e) => ({ ok: false, error: String(e) } as { ok: boolean; ticket?: string; error?: string }));
   if (!r.ok || !r.ticket) return { ok: false, error: r.error ?? "could not start a chat" };
   setBenchRoot(cwd);
   const slot = await coldSlot(cwd);
   addTab(cwd, { kind: "agent", slot, title, agent: r.ticket });
   openBench();
   return { ok: true };
+}
+
+/**
+ * askOnBench on the engine the person set for the builder role (Settings,
+ * Worker roles). POST /terminal/agent with no kind means Claude, so the choice
+ * is made here, and a CLI that is not installed is said out loud: the server
+ * would otherwise fall back to a plain shell in the tab.
+ */
+export async function askBuilderOnBench(cwd: string, prompt: string, title: string): Promise<{ ok: boolean; error?: string }> {
+  const w = await api.workerRoles().catch(() => null);
+  const kind = w?.roles?.builder?.provider;
+  if (!w?.ok || !kind) return { ok: false, error: w?.error ?? "could not read Worker roles" };
+  const p = w.providers?.find((x) => x.id === kind);
+  if (p && !p.installed) return { ok: false, error: `${p.title} is not installed here` };
+  return askOnBench(cwd, prompt, title, kind);
+}
+
+/** An agent tab on the bench for a ticket the server already minted (the Flight plan's author and its launch). */
+export async function openTicketOnBench(cwd: string, ticket: string, title: string): Promise<void> {
+  setBenchRoot(cwd);
+  const slot = await coldSlot(cwd);
+  addTab(cwd, { kind: "agent", slot, title: title.slice(0, 24), agent: ticket });
+  openBench();
 }
 
 /** Hand a session's conversation to another agent on the bench. */

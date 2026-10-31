@@ -57,3 +57,32 @@ describe("granting a permission", () => {
     expect(ask("not a url")).toHaveProperty("error");
   });
 });
+
+/* An agent's answer to what its own tab is holding (`permission grant|deny`):
+   the relay checks the shape and nothing wider gets through it. */
+describe("answering a held request", () => {
+  const answer = (body: object) => parseAsk("permission", body) as { ask?: { args: Record<string, unknown> }; error?: string };
+
+  test("grant or deny of the microphone, the camera or notifications passes, with or without a site", () => {
+    delete process.env.AGENTGLASS_BROWSER_ORIGINS;
+    expect(answer({ answer: "grant", permissions: ["microphone"] }).ask?.args).toMatchObject({ answer: "grant", permissions: ["microphone"] });
+    expect(answer({ answer: "deny", permissions: ["camera", "notifications"], origin: "http://localhost:8002" }).ask?.args)
+      .toMatchObject({ answer: "deny", origin: "http://localhost:8002" });
+    expect(answer({ list: true }).ask?.args).toMatchObject({ list: true });
+  });
+
+  test("anything else an agent might grant itself is refused", () => {
+    delete process.env.AGENTGLASS_BROWSER_ORIGINS;
+    for (const permissions of [["geolocation"], ["clipboardReadWrite"], ["microphone", "midi"], [], "microphone"]) {
+      expect(answer({ answer: "grant", permissions }), JSON.stringify(permissions)).toHaveProperty("error");
+    }
+    expect(answer({ answer: "allow", permissions: ["microphone"] })).toHaveProperty("error");
+  });
+
+  test("a site named ahead of the ask is held to the origin list", () => {
+    process.env.AGENTGLASS_BROWSER_ORIGINS = "localhost:8002";
+    expect(answer({ answer: "grant", permissions: ["microphone"], origin: "http://localhost:8002" })).not.toHaveProperty("error");
+    expect(answer({ answer: "grant", permissions: ["microphone"], origin: "https://example.com" })).toHaveProperty("error");
+    expect(answer({ answer: "grant", permissions: ["microphone"], origin: "file:///etc" })).toHaveProperty("error");
+  });
+});

@@ -164,6 +164,7 @@ contextBridge.exposeInMainWorld("agentglass", {
     return () => ipcRenderer.removeListener("ag:desk-taken", h);
   },
   retryDesk: () => ipcRenderer.send("ag:retryDesk"),
+  flushStorage: () => ipcRenderer.send("ag:flushStorage"),
   // The window's own controls, because the frame that used to carry them is
   // gone. See main.js for why.
   winMinimize: () => ipcRenderer.invoke("ag:winMinimize"),
@@ -188,6 +189,14 @@ contextBridge.exposeInMainWorld("agentglass", {
     const h = (_e, level) => fn(level);
     ipcRenderer.on("ag:browser-zoom", h);
     return () => ipcRenderer.removeListener("ag:browser-zoom", h);
+  },
+  /** A guest of this window has attached: say who opened it, before its page
+   *  can ask for anything. @param {(guestId: number) => void} fn */
+  onBrowserGuestAttached: (fn) => {
+    /** @type {IpcListener} */
+    const h = (_e, id) => { if (typeof id === "number") fn(id); };
+    ipcRenderer.on("ag:browser-guest-attached", h);
+    return () => ipcRenderer.removeListener("ag:browser-guest-attached", h);
   },
   /** A page in the built-in browser asked for a window — a middle click, a
    *  `target="_blank"`, an OAuth popup. It used to be handed to the OS
@@ -244,6 +253,9 @@ contextBridge.exposeInMainWorld("agentglass", {
    *  DevTools front-end, and CDP talks to the page being inspected.
    *  @param {{ guest: number; panel: string }} req */
   browserDevtoolsPanel: (req) => ipcRenderer.invoke("ag:browserDevtoolsPanel", req),
+  /** An agent's answer to what its tab's permission requests are waiting on,
+   *  or the list of them. @param {Record<string, unknown>} req */
+  browserPermission: (req) => ipcRenderer.invoke("ag:browserPermission", req),
   /** …and the same zoom after a Ctrl+wheel or Ctrl+plus inside the inspector,
    *  which lands in that view and never reaches this one.
    * @param {(at: { guest: number; level: number }) => void} fn */
@@ -285,6 +297,10 @@ contextBridge.exposeInMainWorld("agentglass", {
    *  agent asks for, and only this side knows which tab that is.
    * @param {number} id */
   setActiveBrowserGuest: (id) => ipcRenderer.invoke("ag:browserActive", id),
+  /** The Browser view was just shown: repaint the guest, log the moment, and
+   *  say whether a first paint was seen in time so the renderer can nudge.
+   * @param {{ guest: number, webviews: number, tab: string, asleep: boolean }} at */
+  browserShown: (at) => ipcRenderer.invoke("ag:browserShown", at),
   /** The whole page including what is below the fold, straight onto the
    *  clipboard. `capturePage` cannot: what was never painted has no frame.
    * @param {"copy" | "save"} [how] */
@@ -352,6 +368,11 @@ contextBridge.exposeInMainWorld("agentglass", {
    *  sent none; `person` says the person acted on the tab instead.
    *  @param {number} guestId @param {string} owner @param {boolean} [person] */
   setGuestOwner: (guestId, owner, person) => ipcRenderer.send("ag:browserGuestOwner", { guestId, owner, person: person === true }),
+  /** Who opened a guest (`person`, `agent`, or `from` another guest for a
+   *  popup), or `typed` when the person typed an address into it — whose its
+   *  permission requests are. Fire-and-forget like the owner push.
+   *  @param {number} guestId @param {string} by @param {number} [from] */
+  setGuestOpener: (guestId, by, from) => ipcRenderer.send("ag:browserGuestOpener", { guestId, by, from }),
   /** The system folder chooser, for picking a project. Resolves to a path, or
    *  null if it was cancelled. A browser tab has no equivalent, which is why
    *  the picker keeps a path box beside it.

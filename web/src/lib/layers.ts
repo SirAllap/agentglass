@@ -12,6 +12,16 @@
 
 export const LAYER = {
   /**
+   * What floats inside the Terminal's pane area: the Latest-output pill, the
+   * blocked-command note, Find, the pluck palette, the held card.
+   *
+   * Not a portal: these are positioned inside the pane box, so the number only
+   * orders them against each other and the panes. It sits below the viewer
+   * because it is never raised over another panel.
+   */
+  pane: 10005,
+
+  /**
    * A file, open over whatever you were looking at.
    *
    * Above the workspace and every panel in it, because it is raised FROM those
@@ -124,6 +134,25 @@ export const LAYER = {
    * call site is how a stack of numbers stops being a table anybody can read.
    */
   settingsDialog: 10140,
+
+  /**
+   * The Terminal's own dialog (Manage tmux sessions).
+   *
+   * Above Settings' dialogs, because it can be raised from the strip while
+   * Settings is open behind; below the Git dialog and the menus, which are
+   * raised from inside it.
+   */
+  termDialog: 10150,
+
+  /**
+   * A Git dialog or picker: a question the Git panel asks, drawn by GitDialog.
+   *
+   * Above the settings dialog because the Git panel can be raised from a card
+   * or from inside Settings' neighbours and must still answer on top of
+   * whatever raised it; below the menus because a dropdown inside one of these
+   * is still a menu and must escape its box.
+   */
+  gitDialog: 10160,
 
   /**
    * A menu opened from inside any of the above.

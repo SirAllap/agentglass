@@ -95,7 +95,26 @@ def _server_or_die(url):
     sys.exit(2)
 
 
-SERVER = _server_or_die(os.environ.get("AGENTGLASS_SERVER", "http://localhost:4000").rstrip("/"))
+def _default_server(host):
+    """http://<host>:<port> of the running server. The port is the one it wrote
+    at bind (next to the token file), because the app moves to another port when
+    4000 is taken and the AGENTGLASS_PORT an agent pane inherits can be stale;
+    then AGENTGLASS_PORT, then 4000. No probe: a hook cannot pay a round trip."""
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    port = ""
+    try:
+        with open(os.path.join(base, "agentglass", "port"), encoding="utf-8") as f:
+            port = f.read().strip()
+    except OSError:
+        pass
+    if not (port.isdigit() and 0 < int(port) < 65536):
+        port = os.environ.get("AGENTGLASS_PORT", "").strip()
+    if not (port.isdigit() and 0 < int(port) < 65536):
+        port = "4000"
+    return f"http://{host}:{port}"
+
+
+SERVER = _server_or_die((os.environ.get("AGENTGLASS_SERVER") or _default_server("localhost")).rstrip("/"))
 SLUG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 
@@ -286,8 +305,12 @@ def explain(status, body, id=None):
     if status == 403 and isinstance(err, str) and "level" in body:
         # The server's own sentence: which door, which level, which switch allows it.
         return {"ok": False, "error": err}
+    if status == 403 and isinstance(err, str) and err:
+        # Accepted and refused: the server's sentence is the reason ("Go is the person's here: ...").
+        return {"ok": False, "error": err}
     if status in (401, 403):
-        return {"ok": False, "error": "the server did not accept this token; open a new pane from agentglass, which hands it the current one"}
+        stale = "the server did not accept this token; open a new pane from agentglass, which hands it the current one"
+        return {"ok": False, "error": f"{err} ({stale})" if isinstance(err, str) and err else stale}
     if status == 400 and isinstance(err, str) and err != "unknown control command":
         # The server named the argument and what it takes: that sentence is the answer.
         return {"ok": False, "error": err}
@@ -315,10 +338,7 @@ def explain(status, body, id=None):
 
 # ── the wire ────────────────────────────────────────────────────────────────
 
-def token():
-    t = os.environ.get("AGENTGLASS_TOKEN", "").strip()
-    if t:
-        return t
+def _token_file():
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
     try:
         with open(os.path.join(base, "agentglass", "token"), encoding="utf-8") as f:
@@ -327,21 +347,57 @@ def token():
         return ""
 
 
-def http(path, body=None, timeout=15, origin=True):
+def token():
+    return os.environ.get("AGENTGLASS_TOKEN", "").strip() or _token_file()
+
+
+def urlopen_fresh(req, timeout):
+    """urlopen with the token; after a 401, once more with the token file's
+    value when it is not the one just refused. A pane keeps the token it was
+    opened with, and a reinstall mints a new one, so a long session's every
+    call answered 401 until somebody opened a new pane.
+
+    Only 401: a 403 means the credential was accepted and the act refused, and
+    the machine token from the file would turn that refusal into a yes. Never
+    from a minted, scoped credential (a seat's `st_`, a clone's `us_`, a
+    plugin's `pg_`) or in a seat's pane: the file holds the machine's token,
+    and falling back to it would hand the caller powers it was never given.
+    shortcut: a machine token that happens to start with two lowercase letters
+    and `_` (about 1 in 400) gets no retry, which fails safe. The same text is
+    in agentglass-ui, agentglass-agent and agentglass-browser-mcp, and
+    server/test/bin-token-retry.test.ts holds the copies equal."""
+    sent = token()
+    if sent:
+        req.add_header("Authorization", f"Bearer {sent}")
+    try:
+        return urllib.request.urlopen(req, timeout=timeout)
+    except urllib.error.HTTPError as e:
+        if e.code != 401 or os.environ.get("AGENTGLASS_SEAT") or re.match(r"[a-z]{2}_", sent):
+            raise
+        fresh = _token_file()
+        if not fresh or fresh == sent:
+            raise
+        e.close()
+        req.add_header("Authorization", f"Bearer {fresh}")
+        return urllib.request.urlopen(req, timeout=timeout)
+
+
+def http(path, body=None, timeout=15, origin=True, method=None):
     """(status, parsed body); status 0 when nothing answered. `origin=False` for the
     settings door: this CLI is an agent's, and on a server with no desk key an
     Origin is what the server takes for the person's window."""
     req = urllib.request.Request(
         f"{SERVER}{path}",
         data=None if body is None else json.dumps(body).encode(),
-        method="GET" if body is None else "POST",
+        method=method or ("GET" if body is None else "POST"),
         headers={"Content-Type": "application/json", **({"Origin": SERVER} if origin else {})},
     )
-    t = token()
-    if t:
-        req.add_header("Authorization", f"Bearer {t}")
+    # A flight-plan builder's tab says where it works: the server refuses it settings and rules writes.
+    builder = os.environ.get("AGENTGLASS_BUILDER_WORKTREE")
+    if builder:
+        req.add_header("x-agentglass-builder", builder)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urlopen_fresh(req, timeout) as r:
             return r.status, json.loads(r.read() or b"{}")
     except urllib.error.HTTPError as e:
         try:
@@ -465,7 +521,8 @@ def settings_get(id, as_name=None, root=None):
     q = f"/settings/door?id={urllib.parse.quote(id)}" + (f"&root={urllib.parse.quote(root)}" if root else "")
     status, body = http(q)
     if status == 200 and isinstance(body, dict) and body.get("ok"):
-        return {"ok": True, "id": id, "value": body.get("value"), "class": row.get("class")}
+        # The layer a value came from (default, global, project) rides along: a value that reads wrong is found by knowing whose it is.
+        return {"ok": True, "id": id, "value": body.get("value"), "class": row.get("class"), **{k: body[k] for k in ("scopedSet", "layer") if k in body}}
     return {"ok": False, "error": (body or {}).get("error") or f"server said {status}"}
 
 
@@ -500,6 +557,108 @@ def rules_set(root, match, setting, as_name=None, action=None, source="chat"):
         note = "applied" if ans.get("applied") else "waits for the person (approval card); nothing changed yet"
         return {"ok": True, "applied": bool(ans.get("applied")), "rule": r, "note": note}
     return {"ok": False, "error": explain(status, ans)["error"]}
+
+
+def _fp(path, body=None, as_name=None, method=None):
+    """One Flight plan call: the server's answer, or its sentence."""
+    if body is not None and as_name:
+        body = dict(body, **{"as": as_name})
+    status, ans = http(path, body, timeout=30, origin=False, method=method) if body is not None else http(path)
+    if status == 200 and isinstance(ans, dict) and ans.get("ok"):
+        return dict(ans)
+    if status == 404 and not (isinstance(ans, dict) and ans.get("error")):
+        return {"ok": False, "error": "this agentglass is older than the Flight plan: update the app"}
+    return {"ok": False, "error": explain(status, ans)["error"]}
+
+
+def _read_text(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read(), None
+    except (OSError, UnicodeDecodeError) as e:
+        return None, f"cannot read {path}: {e.__class__.__name__}"
+
+
+def flight_plan_plan(a, as_name=None):
+    """flight-plan plan new|list|show|set|mockup|preflight|go|no-go|launch|ask|answer|report: the plan itself. Go, No-go and Launch are the person's, or the coordinator's in Autopilot; the server says which."""
+    q = urllib.parse.quote
+    v = a.pverb
+    if v == "list":
+        return _fp("/flight-plan/plans?" + urllib.parse.urlencode({k: x for k, x in (("state", a.state), ("root", a.root)) if x}))
+    if v == "show":
+        return _fp(f"/flight-plan/plans/{q(a.id)}")
+    if v == "new":
+        body = {"root": a.root or os.getcwd(), "request": a.request, "visual": bool(a.visual), **({"size": a.size} if a.size else {}), **({"title": a.title} if a.title else {}), **({"taskId": a.task} if a.task else {})}
+        return _fp("/flight-plan/plans", body, as_name)
+    if v == "preflight":
+        return _fp(f"/flight-plan/plans/{q(a.id)}/preflight", {}, as_name)
+    if v in ("go", "launch"):
+        return _fp(f"/flight-plan/plans/{q(a.id)}/{v}", {}, as_name)
+    if v == "no-go":
+        return _fp(f"/flight-plan/plans/{q(a.id)}/no-go", {"reason": a.reason}, as_name)
+    if v == "ask":
+        body = {"question": a.question, "choices": a.choice, "reason": a.reason}
+        if getattr(a, "detail", None):
+            body["detail"] = a.detail
+        if getattr(a, "recommend", None):
+            if not 1 <= a.recommend <= len(a.choice):
+                return {"ok": False, "error": "recommend: the number (1, 2, ...) of one of the --choice values"}
+            body["recommended"] = a.recommend - 1
+        return _fp(f"/flight-plan/plans/{q(a.id)}/ask", body, as_name)
+    if v == "integrate-check":
+        return _fp(f"/flight-plan/plans/{q(a.id)}/integrate-check", {}, as_name)
+    if v == "report":
+        body = {"line": a.line}
+        if a.step is not None:
+            body["step"] = a.step
+        if getattr(a, "of", None) is not None:
+            body["of"] = a.of
+        return _fp(f"/flight-plan/plans/{q(a.id)}/report", body, as_name)
+    if v == "answer":
+        return _fp(f"/flight-plan/plans/{q(a.id)}/answer", {"answer": a.answer}, as_name)
+    body = {}
+    if v == "mockup":
+        body["mockups"] = [os.path.abspath(m) for m in a.paths]
+    else:
+        if getattr(a, "plan_md", None) is not None:
+            body["plan_md"] = a.plan_md
+        elif a.file:
+            text, err = _read_text(a.file)
+            if err:
+                return {"ok": False, "error": err}
+            body["plan_md"] = text
+        if a.title:
+            body["title"] = a.title
+        if a.visual is not None:
+            body["visual"] = a.visual
+        if a.size:
+            body["size"] = a.size
+        if not body:
+            return {"ok": False, "error": "nothing to set: give --file, --title, --visual or --no-visual"}
+    return _fp(f"/flight-plan/plans/{q(a.id)}", body, as_name, method="PATCH")
+
+
+def flight_plan(verb, a, as_name=None):
+    """flight-plan list|show|run|go|no-go|resolve|plan: a Preflight is a review by a reader with no context."""
+    q = urllib.parse.quote
+    if verb == "plan":
+        return flight_plan_plan(a, as_name)
+    if verb in ("hold", "resume"):
+        return _fp(f"/flight-plan/{verb}", {"root": a.root or os.getcwd()}, as_name)
+    if verb == "list":
+        return _fp("/flight-plan/runs?" + urllib.parse.urlencode({k: v for k, v in (("state", a.state), ("root", a.root)) if v}))
+    if verb == "show":
+        return _fp(f"/flight-plan/runs/{q(a.id)}")
+    if verb == "run":
+        body = {"root": a.root or os.getcwd(), "moment": a.moment, "files": [os.path.abspath(f) for f in a.files],
+                "mockups": [os.path.abspath(m) for m in a.mockup]}
+        if a.pr:
+            body["pr"] = {"number": a.pr, "root": body["root"]}
+        return _fp("/flight-plan/preflight", body, as_name)
+    if verb in ("go", "no-go"):
+        return _fp(f"/flight-plan/runs/{q(a.id)}/{verb}", {}, as_name)
+    return _fp(f"/flight-plan/runs/{q(a.id)}/findings/{q(a.finding)}",
+               {"action": None if a.action == "none" else a.action, "note": a.note}, as_name)
 
 
 def settings_requests():
@@ -730,6 +889,21 @@ def main(argv=None):
     pm = p.add_mutually_exclusive_group()
     pm.add_argument("--now", action="store_true", help="open it at once: ONLY when the person just asked you to prepare this")
     pm.add_argument("--quiet", action="store_true", help="wait behind a chip if the person is typing (the default)")
+    p = sub.add_parser("pr", help="the pull request board's filter and saved views, by repo (owner/name): filter-get, filter-set, views, view-save, view-delete")
+    ps = p.add_subparsers(dest="pverb", required=True)
+    for verb, why in (("filter-get", "the board's live filter, as text"), ("views", "the saved views, each as name and text")):
+        ps.add_parser(verb, help=why).add_argument("repo")
+    q = ps.add_parser("filter-set", help="replace the live filter with text in the board's syntax, or --clear it")
+    q.add_argument("repo")
+    q.add_argument("text", nargs="?", default=None, help="e.g. 'ci:failing -BETA (author:ana | author:bo)'; a line that does not parse is answered and changes nothing")
+    q.add_argument("--clear", action="store_true")
+    q = ps.add_parser("view-save", help="save a view under a name (same name = replaced); text omitted = the board's live filter")
+    q.add_argument("repo")
+    q.add_argument("name")
+    q.add_argument("text", nargs="?", default=None)
+    q = ps.add_parser("view-delete", help="delete the view with that name")
+    q.add_argument("repo")
+    q.add_argument("name")
     p = sub.add_parser("jira", help="a Jira card through the routes the screen uses: card, moves, links, linktypes, activity, steps, step, link, edit, comment, comment-edit, comment-delete, move, subtask, relate, unrelate, weblink, unweblink, worklog, worklog-edit, worklog-delete, watch, vote, rank, attach, unattach")
     js = p.add_subparsers(dest="jverb", required=True)
     for verb, spec in JIRA_VERBS.items():
@@ -752,6 +926,81 @@ def main(argv=None):
     q.add_argument("setting", choices=("allow", "ask", "never"))
     q.add_argument("--root", default=None, help='the project (default: this directory\'s), or "*" for every project')
     q.add_argument("--action", default=None, help="a readable key, e.g. git.push (default: made from the pattern)")
+    p = sub.add_parser("flight-plan", help="Preflight: a review of a plan or a result by a reader with no context; Go / No-go on one that waits")
+    fs = p.add_subparsers(dest="fverb", required=True)
+    q = fs.add_parser("list", help="the Preflight runs, newest first")
+    q.add_argument("--state", choices=("awaiting-go", "running", "done", "failed", "declined"))
+    q.add_argument("--root", default=None, help="only this project")
+    q = fs.add_parser("show", help="one run, with its certificate and findings")
+    q.add_argument("id")
+    q = fs.add_parser("run", help="review these files now (the first is the material); costs tokens")
+    q.add_argument("files", nargs="+", metavar="file")
+    q.add_argument("--pr", type=int, default=None, help="review this pull request of the project instead (read only)")
+    q.add_argument("--mockup", action="append", default=[], metavar="PATH", help="a mockup (.png .jpg .webp .html) read next to the plan; repeatable")
+    q.add_argument("--root", default=None, help="the project (default: this directory)")
+    q.add_argument("--moment", default="manual", choices=("before-launch", "task-done", "pr", "manual"),
+                   help="manual always runs; the others run only when the project's reviews list them (otherwise refused)")
+    for name, why in (("hold", "hold the project's flight plans: no new Go, launches frozen, builders told to stop at a safe point (you may hold yourself)"),
+                      ("resume", "let a held project fly again (the person's alone)")):
+        q = fs.add_parser(name, help=why)
+        q.add_argument("--root", default=None, help="the project (default: this directory)")
+    pp = fs.add_parser("plan", help="the flight plan itself: a request, the plan an author writes, its mockups; Go, No-go and Launch are the person's, or the coordinator's in Autopilot").add_subparsers(dest="pverb", required=True)
+    q = pp.add_parser("new", help="start a flight plan for a request (a draft until a plan is saved)")
+    q.add_argument("request", help="what should be built, in your own words")
+    q.add_argument("--title", default=None)
+    q.add_argument("--visual", action="store_true", help="the request is visual: a mockup is needed before Go")
+    q.add_argument("--task", default=None, help="the task it comes from")
+    q.add_argument("--size", choices=("S", "M", "L"), default=None, help="how big the change is (default M)")
+    q.add_argument("--root", default=None, help="the project (default: this directory)")
+    q = pp.add_parser("list", help="the flight plans, newest first")
+    q.add_argument("--state", choices=("draft", "ready", "go", "no-go", "launched"))
+    q.add_argument("--root", default=None, help="only this project")
+    q = pp.add_parser("show", help="one flight plan with its Preflight run and its open findings")
+    q.add_argument("id")
+    q = pp.add_parser("set", help="save the plan (a Markdown file), the title or the visual flag; a plan at Go goes back to ready")
+    q.add_argument("id")
+    q.add_argument("--file", default=None, metavar="plan.md")
+    q.add_argument("--title", default=None)
+    q.add_argument("--visual", dest="visual", action="store_true", default=None)
+    q.add_argument("--no-visual", dest="visual", action="store_false")
+    q.add_argument("--size", choices=("S", "M", "L"), default=None, help="how big the change is; decides how much review it gets")
+    q = pp.add_parser("mockup", help="attach the mockups (.png .jpg .webp .html): the whole list, replacing the last")
+    q.add_argument("id")
+    q.add_argument("paths", nargs="+", metavar="path")
+    q = pp.add_parser("preflight", help="a Preflight over the plan and its mockups (an S plan gets none); costs tokens")
+    q.add_argument("id")
+    q = pp.add_parser("go", help="say Go to a plan: the coordinator's only in Autopilot, not held, with no stop rule; otherwise the server refuses with the reason. A coordinator's Go launches the builder")
+    q.add_argument("id")
+    q = pp.add_parser("no-go", help="say No-go to a plan, with the reason that goes back to the author")
+    q.add_argument("id")
+    q.add_argument("--reason", required=True)
+    q = pp.add_parser("launch", help="launch the builder of a plan at Go")
+    q.add_argument("id")
+    q = pp.add_parser("ask", help="raise the ONE question a plan waits on (merge every ask finding into it); the person answers")
+    q.add_argument("id")
+    q.add_argument("--question", required=True, help="one sentence")
+    q.add_argument("--choice", action="append", default=[], metavar="TEXT", help="a choice (2-3); repeatable; mark your recommendation first")
+    q.add_argument("--reason", choices=("ask-finding", "builder-blocked", "sensitive-diff"), default="ask-finding")
+    q.add_argument("--detail", default=None, help="what the person needs to know to choose, a few lines")
+    q.add_argument("--recommend", type=int, default=None, metavar="N", help="which --choice you recommend (1 = the first)")
+    q = pp.add_parser("integrate-check", help="before you bring a launched builder's work in: stops with the reason when its real diff touches auth, migrations, secrets, payments, CI or a dependency")
+    q.add_argument("id")
+    q = pp.add_parser("report", help="the builder's line of progress for the Flight plan view: one line, and which step of how many")
+    q.add_argument("id")
+    q.add_argument("line", help="what is done or what comes next, in one line")
+    q.add_argument("--step", type=int, default=None, help="steps done")
+    q.add_argument("--of", type=int, default=None, help="steps in all")
+    q = pp.add_parser("answer", help="the person's answer to the plan's question")
+    q.add_argument("id")
+    q.add_argument("answer")
+    for name, why in (("go", "let a run that waits start"), ("no-go", "decline a run that waits")):
+        q = fs.add_parser(name, help=why)
+        q.add_argument("id")
+    q = fs.add_parser("resolve", help="answer one finding: fix, contest, ask or dismiss (contest and dismiss need --note); none clears it. The person's or the project's seat's only: anyone else is refused")
+    q.add_argument("id")
+    q.add_argument("finding", help="F1, F2, ...")
+    q.add_argument("action", choices=("fix", "contest", "ask", "dismiss", "none"))
+    q.add_argument("--note", default=None)
     p = sub.add_parser("settings", help="list, read or change the settings an agent may touch")
     ss = p.add_subparsers(dest="verb", required=True)
     ss.add_parser("list", help="every setting, the window's and the server's, with its class; and the requests waiting for the person")
@@ -774,6 +1023,19 @@ def main(argv=None):
         return emit(run_door("ui.state", {}, a.as_name))
     if a.cmd == "read":
         return emit(run_door("ui.read", {"panel": a.panel}, a.as_name))
+    if a.cmd == "pr":
+        door = {"filter-get": "pr.filter.get", "filter-set": "pr.filter.set", "views": "pr.views.list", "view-save": "pr.views.save", "view-delete": "pr.views.delete"}[a.pverb]
+        given = {"repo": a.repo}
+        if a.pverb == "filter-set":
+            if a.clear == (a.text is not None):
+                print("agentglass-ui: pr filter-set takes the filter text, or --clear, not both and not neither", file=sys.stderr)
+                return 2
+            given.update({"clear": True} if a.clear else {"text": a.text})
+        elif a.pverb in ("view-save", "view-delete"):
+            given["name"] = a.name
+            if a.pverb == "view-save" and a.text is not None:
+                given["filter"] = a.text
+        return emit(run_door(door, given, a.as_name))
     if a.cmd == "jira":
         given = {k: getattr(a, k) for k in JIRA_VERBS[a.jverb]["args"] if getattr(a, k, None) is not None}
         return emit(run_jira(a.jverb, given, a.as_name))
@@ -803,6 +1065,8 @@ def main(argv=None):
             typed[k] = v
         present = "now" if a.now else "quiet" if a.quiet else None
         return emit(run_door(a.id, typed, a.as_name, listing, present))
+    if a.cmd == "flight-plan":
+        return emit(flight_plan(a.fverb, a, a.as_name))
     if a.cmd == "rules":
         root = a.root or os.getcwd()
         if a.rverb == "set":

@@ -24,7 +24,7 @@ async function read(path: string): Promise<string> {
 describe("header/toolbar controls share the refresh button's height", () => {
   it("CTRL_H.regular is still the refresh button's own height", async () => {
     const chrome = await read("/workspace/Chrome.tsx");
-    expect(chrome).toContain("CTRL_H = { compact: 22, regular: 28, large: 32 }");
+    expect(chrome).toContain("CTRL_H = { compact: 22, strip: 24, hit: HIT, regular: 28, large: 32 }");
     expect(chrome).toContain("width: CTRL_H.regular, height: CTRL_H.regular");
   });
 
@@ -60,7 +60,11 @@ describe("header/toolbar controls share the refresh button's height", () => {
   });
 
   it("Terminal tmux strip: the active window tab carries a box, not colour alone", async () => {
-    const src = await read("/TerminalPanel.tsx");
-    expect(src).toContain("chipTone(w.id === activeWindow)");
+    const src = await read("/terminal/WindowTab.tsx");
+    // The lit tab is a filled, outlined box at the strip's 24 px rung (plus the
+    // underline); the others are bare.
+    expect(src).toContain("height: CTRL_H.strip");
+    expect(src).toContain('background: active ? "var(--bg)" : undefined');
+    expect(src).toContain("border: active ? EDGE");
   });
 });

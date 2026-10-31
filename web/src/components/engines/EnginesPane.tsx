@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SettingRow } from "../SettingRow.tsx";
-import { CommandLine, EmptyState, ProblemNote, SegControl, SettingsCard, StatusBadge } from "../SettingsKit.tsx";
+import { CommandLine, EmptyState, ProblemNote, SettingsCard, StatusBadge } from "../SettingsKit.tsx";
 import { useReportHead, useReportNeeds, useReportProblem } from "../SettingsPageState.tsx";
-import { Button } from "../workspace/Chrome.tsx";
+import { Button, Segmented } from "../workspace/Chrome.tsx";
 import { api } from "../../lib/api.ts";
 import { refreshProviderUsage, usageOf } from "../../lib/usageStore.ts";
 import { CaretIcon, DoneIcon, IconLabel, InfoIcon, MinusIcon, PlusIcon, SearchIcon, WarningIcon } from "../../lib/glyphIcons.tsx";
@@ -273,12 +273,12 @@ export function EnginesPane() {
         </SettingsCard>
       )}
       <div className="agx-tiles-bar">
-        <SegControl<typeof view> label="Show engines" value={view} onPick={setView}
+        <Segmented<typeof view> track label="Show engines" value={view} onChange={setView}
           options={[
-            { v: "all", label: `All ${counts.all}` },
-            { v: "ready", label: `Ready ${counts.ready}` },
-            { v: "needs", label: `Needs you ${counts.needs}` },
-            { v: "absent", label: `Not installed ${counts.absent}` },
+            { id: "all", label: `All ${counts.all}` },
+            { id: "ready", label: `Ready ${counts.ready}` },
+            { id: "needs", label: `Needs you ${counts.needs}` },
+            { id: "absent", label: `Not installed ${counts.absent}` },
           ]} />
         <span className="flex-1" />
         <Button onClick={() => load(true)}><IconLabel icon={<SearchIcon size={ICON.xs} />}>Rescan this machine</IconLabel></Button>

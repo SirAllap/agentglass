@@ -35,6 +35,7 @@ import { claudeCode } from "./agents/claudecode.ts";
 import { LANTERN_PROMPT_MARK } from "./lanternmark.ts";
 import { windowTree, allWindowTrees, LAYOUT_RE, type TmuxWindowDetail, type TmuxPaneRow } from "./tmuxlayout.ts";
 import { tmuxResume } from "./config.ts";
+import { noteRestored, dropStaleMarks, restoredMark, dismissRestored } from "./tmuxrestored.ts";
 
 /** A pane as captured. `startCommand` is the exact argv the pane was born
  *  with — replaying it in "all" mode is what resumes agent sessions. */
@@ -575,7 +576,7 @@ export function isForeground(found: Omit<AgentUnder, "startedAt"> & { startedAt?
 }
 
 /** The chat pane's own wrapper ends in `exec sleep 86400` once the CLI has
- *  exited, to keep the pane for reading (newSessionArgv, paneCommand). That
+ *  exited, to keep the pane for reading (paneCommand). That
  *  sleep, by its exact spelling, is nothing to bring back. */
 const isKeepAlive = (argv: readonly string[]): boolean =>
   argv.length === 2 && ((argv[0] || "").split("/").pop() || "") === "sleep" && argv[1] === "86400";
@@ -770,6 +771,7 @@ const forgotten = new Set<string>();
  */
 export function forgetSession(name: string): void {
   forgotten.add(name);
+  markEnded(name);
   const before = readRestoreState();
   if (!before) return;
   const sessions = before.sessions.filter((s) => s.name !== name);
@@ -778,6 +780,48 @@ export function forgetSession(name: string): void {
   const tmp = `${layoutPath()}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify({ ...before, sessions }), { mode: 0o600 });
   swapInLayout(tmp);
+}
+
+/*
+ * ENDED ON PURPOSE, ON DISK.
+ *
+ * `forgotten` dies with the process, and the restore file was never the only
+ * way back: a plain terminal on the engine opens with `new-session -A -s
+ * <checkout>`, attach-OR-CREATE, so a session ended from the picker was made
+ * again, empty, at the next start, and the panel landed on it — every restart.
+ * The terminal asks this before creating a name that is not live. A session
+ * that died in a crash or a power-off is never written here, so it still comes
+ * back by both routes.
+ */
+const ENDED_MAX = 200;
+const endedPath = (): string => join(restoreDir(), "ended.json");
+function readEnded(): Record<string, number> {
+  try {
+    const raw = JSON.parse(readFileSync(endedPath(), "utf8"));
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  } catch { return {}; }
+}
+function writeEnded(all: Record<string, number>): void {
+  try {
+    mkdirSync(restoreDir(), { recursive: true });
+    const tmp = `${endedPath()}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(all), { mode: 0o600 });
+    renameSync(tmp, endedPath());
+  } catch { /* the in-memory forget still holds for this run */ }
+}
+function markEnded(name: string, now = Date.now()): void {
+  const kept = Object.entries(readEnded()).filter(([n]) => n !== name).sort((a, b) => b[1] - a[1]).slice(0, ENDED_MAX - 1);
+  writeEnded(Object.fromEntries([[name, now], ...kept]));
+}
+export function endedOnPurpose(name: string): boolean {
+  return Object.hasOwn(readEnded(), name);
+}
+/** The name is wanted again: a terminal had nowhere else to open. */
+export function unmarkEnded(name: string): void {
+  const all = readEnded();
+  if (!Object.hasOwn(all, name)) return;
+  delete all[name];
+  writeEnded(all);
 }
 
 /** Capture every session on the engine's socket into the state dir. Safe to
@@ -1374,7 +1418,9 @@ async function restoreOnce(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
      * harmlessly — the trade this whole file already makes, in the direction
      * it already chose.
      */
-    settledOn.set(deskKey(), (await liveSessions()).engine);
+    const engineNow = (await liveSessions()).engine;
+    settledOn.set(deskKey(), engineNow);
+    dropStaleMarks(engineNow);
     return r;
   } catch (e: any) {
     /* And it comes back as an answer rather than an unhandled rejection: the
@@ -1503,6 +1549,9 @@ async function restorePass(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
     }
   }
   const restored = await keepTheDesk(made, mode);
+  /* Remembered AFTER the desk is whole and only remembered: what the strip says
+     about these windows never feeds back into what was built. */
+  noteRestored(made, mode, (await liveSessions()).engine);
   return { ok: true, restored };
 }
 
@@ -1582,6 +1631,7 @@ async function keepTheDesk(made: Made[], mode: "lazy" | "all"): Promise<number> 
             ...(m.window.name ? ["-n", m.window.name] : []), "-c", cwd]));
       if (!back) continue;
       id = back;
+      m.id = id; // the mark below is about the window that stands, not the one asked for
     }
     standing++;
 
@@ -1624,6 +1674,27 @@ async function keepTheDesk(made: Made[], mode: "lazy" | "all"): Promise<number> 
     await applyLayout(m.session, id, m.window.layout, want);
   }
   return standing;
+}
+
+/**
+ * RESUME THE AGENT A RESTORED WINDOW WAS RUNNING, in the pane that held it.
+ *
+ * The restore started nothing (`lazy`), and this is the person asking for it:
+ * the same argv `restore all` would have replayed (`runArgs`), through
+ * `respawn-pane -k` so the window, its name and its place do not move. False
+ * when the window carries no agent to resume or the pane cannot be found.
+ */
+export async function resumeRestored(windowId: string): Promise<boolean> {
+  const mark = restoredMark(windowId);
+  if (!/^@\d+$/.test(windowId) || !mark?.pane) return false;
+  const argv = runArgs("all", mark.pane);
+  if (!argv.length) return false;
+  const rows = await tmux(["list-panes", "-t", windowId, "-F", "#{pane_id}"]);
+  const target = rows.ok ? rows.stdout.split("\n").map((l) => l.trim()).filter(Boolean)[mark.paneIndex ?? 0] : undefined;
+  if (!target) return false;
+  const r = await tmux(["respawn-pane", "-k", "-t", target, "-c", mark.pane.path || ".", ...argv]);
+  if (r.ok) dismissRestored([windowId]);
+  return r.ok;
 }
 
 /*

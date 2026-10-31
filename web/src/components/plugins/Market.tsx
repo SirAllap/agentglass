@@ -33,10 +33,10 @@ import { ExternalIcon } from "../browser/icons.tsx";
 import { Portal } from "../Portal.tsx";
 import { CloseButton } from "../CloseButton.tsx";
 import { LAYER } from "../../lib/layers.ts";
-import { Button, CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS, EDGE, tintEdge, INPUT, INPUT_STYLE, LINE, RefreshButton } from "../workspace/Chrome.tsx";
+import { Badge, Button, EDGE, tintEdge, INPUT, INPUT_STYLE, LINE, RefreshButton, Segmented } from "../workspace/Chrome.tsx";
 import { PluginPreview } from "./PluginPreview.tsx";
 import { PLUGIN_CTRL_H } from "../../lib/pluginCard.ts";
-import { EmptyState, FIELD_SELECT, SegControl, StatusBadge } from "../SettingsKit.tsx";
+import { EmptyState, FIELD_SELECT, StatusBadge } from "../SettingsKit.tsx";
 import { Select } from "../Select.tsx";
 import { InfoIcon, SearchIcon } from "../../lib/glyphIcons.tsx";
 import { PageHead } from "./PageHead.tsx";
@@ -295,8 +295,8 @@ export function Market({ installed, onInstalled, onLoaded, onSettings }: {
         <span className="flex-1" />
         {state.kind === "ok" && kinds.length > 1 && (
           <>
-            <SegControl<string> label="Filter by type" value={type ?? ""} onPick={(v) => { setType(v || null); setPage(0); }}
-              options={[{ v: "", label: `All ${all.length}` }, ...bar.map((k) => ({ v: k.name, label: `${k.name} ${k.count}` }))]} />
+            <Segmented<string> track label="Filter by type" value={type ?? ""} onChange={(v) => { setType(v || null); setPage(0); }}
+              options={[{ id: "", label: `All ${all.length}` }, ...bar.map((k) => ({ id: k.name, label: `${k.name} ${k.count}` }))]} />
             {rest.length > 0 && (
               <Select title="More types" className={`${FIELD_SELECT} agx-mselect`} value={rest.some((k) => k.name === type) ? type! : ""} placeholder={`${rest.length} more types`}
                 onChange={(v) => { setType(v || null); setPage(0); }}
@@ -548,53 +548,48 @@ function Details({ entry, owner, tint, repo, open, busy, onClose, onInstall }: {
             <p className="m-0 text-[12.5px] leading-relaxed" style={{ color: "var(--text2)" }}>{entry.description}</p>
 
             {draws.length > 0 && (
-              <Field label="Where it draws">
+              <Fact label="Where it draws">
                 <div className="flex flex-col gap-1">
                   {draws.map((d) => <span key={d} className="text-[12px]" style={{ color: "var(--text2)" }}>{d}</span>)}
                 </div>
-              </Field>
+              </Fact>
             )}
 
             {(entry.categories ?? []).length > 0 && (
-              <Field label="Filed under">
+              <Fact label="Filed under">
                 <div className="flex items-center gap-1 flex-wrap">
                   {(entry.categories ?? []).map((c) => (
-                    <span key={c} className="chip text-[10px]" style={{
-                      color: "var(--text3)",
-                      background: "color-mix(in srgb, var(--border) 16%, transparent)",
-                      borderColor: "color-mix(in srgb, var(--border) 40%, transparent)",
-                    }}>{c}</span>
+                    <Badge key={c} tint="var(--text3)" fill="var(--border)" wash={16} outlined>{c}</Badge>
                   ))}
                 </div>
-              </Field>
+              </Fact>
             )}
 
             {(entry.scope || entry.license) && (
-              <Field label="Scope and licence">
+              <Fact label="Scope and licence">
                 <span className="text-[12px]" style={{ color: "var(--text2)" }}>
                   {[entry.scope && `${SCOPE_LABEL[entry.scope]}, as its listing says`, entry.license && `licence ${entry.license}`].filter(Boolean).join(" · ")}
                 </span>
-              </Field>
+              </Fact>
             )}
 
             <WhatIsCloned entry={entry} />
 
             {(entry.added || entry.minApp) && (
-              <Field label="Listed">
+              <Fact label="Listed">
                 <span className="text-[12px]" style={{ color: "var(--text2)" }}>
                   {entry.added ?? "date not given"}
                   {entry.minApp ? ` · needs agentglass ${entry.minApp} or newer` : ""}
                 </span>
-              </Field>
+              </Fact>
             )}
           </div>
 
           <div className="px-5 py-3 border-t shrink-0 flex items-center gap-2" style={{ borderColor: "var(--surface-line)" }}>
             {repo && (
-              <a href={repo} target="_blank" rel="noopener noreferrer" title={repo}
-                className={`${CHIP} ${CHIP_SURFACE_CLS}`} style={CHIP_SURFACE}>
+              <Button href={repo} title={repo}>
                 Repository <ExternalIcon size={ICON.xs} />
-              </a>
+              </Button>
             )}
             {onInstall && <Button tone="primary" style={{ height: PLUGIN_CTRL_H }} className="ml-auto" pending={busy} onClick={onInstall}>
               {busy ? "Installing…" : "Install"}
@@ -627,7 +622,7 @@ export function WhatIsCloned({ entry }: { entry: Entry }) {
   const ref = entry.source.ref;
   const commit = ref !== null && /^[0-9a-f]{40}$/.test(ref);
   return (
-    <Field label="What is cloned">
+    <Fact label="What is cloned">
       <span className="t-mono text-[11.5px] break-all" style={{ color: "var(--text2)" }}>
         {entry.source.url}
         {commit ? <> at <span title={ref}>{ref.slice(0, 7)}</span></> : ref ? `@${ref}` : ""}
@@ -641,13 +636,13 @@ export function WhatIsCloned({ entry }: { entry: Entry }) {
             ? "A branch or a tag, which its author can move: you get whatever it points to when you press Install."
             : "Its default branch, at whatever it points to when you press Install."}
       </span>
-    </Field>
+    </Fact>
   );
 }
 
-/** A labelled block inside the dialog. The label is the eyebrow this page uses
+/** A labelled read-only block inside the dialog (no control, so not the kit's `Field`, whose label names one). The label is the eyebrow this page uses
  *  everywhere else, at the size a sub-label has rather than a heading. */
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div>
       <div className="text-[10px] uppercase tracking-[.12em] mb-1.5" style={{ color: "var(--text4)" }}>{label}</div>

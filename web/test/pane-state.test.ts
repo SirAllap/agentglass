@@ -75,7 +75,7 @@ describe("the panes the window holds read the pref modules the rows call", () =>
 
   it("keys name every view and app chord, and flag only what was changed", () => {
     const k = P.readKeys();
-    expect(Object.keys(k.chords).sort()).toEqual([...(["dash", "git", "diff", "pr", "tasks", "docker", "term", "browser", "files", "agents", "plugins"])].sort());
+    expect(Object.keys(k.chords).sort()).toEqual([...(["dash", "git", "diff", "pr", "tasks", "docker", "term", "browser", "agents", "plugins", "flightPlan", "skills"])].sort());
     expect(Object.keys(k.appChords).length).toBeGreaterThanOrEqual(7);
     expect(k.customised).toEqual({ bindings: false, chords: false, appChords: false });
     keybindings.rebindChord("git", "mod+alt+g");

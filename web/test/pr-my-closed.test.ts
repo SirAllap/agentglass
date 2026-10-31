@@ -1,6 +1,6 @@
 /*
- * The "Closed" pill: the viewer's own merged and closed pull requests, in two
- * labelled sections. Pinned: the pill exists, the queries are the two halves of
+ * The "Closed" pill: the viewer's own merged and closed pull requests, in one list
+ * under an All | Merged | Closed switch. Pinned: the pill exists, the queries are the two halves of
  * "closed" and name the viewer, typing never asks for them, and each section is
  * drawn with its own heading, count, state and Load more.
  */
@@ -32,7 +32,7 @@ const board = (sections: NonNullable<React.ComponentProps<typeof TriageBoard>["r
 
 describe("the Closed pill", () => {
   it("sits with the other pills; Open is the way back", () => {
-    expect(panel).toContain('label="Closed"');
+    expect(panel).toContain('label: "Closed"');
     expect(panel).toContain("setClosedOn(true)");
   });
   it("asks for the viewer's own, merged first, as two searches", () => {
@@ -41,7 +41,8 @@ describe("the Closed pill", () => {
     expect(CLOSED_SECTIONS[1].query).toBe("author:@me is:closed is:unmerged");
   });
   it("sends nothing on typing: requests live only in the hook, gated by the pill", () => {
-    expect(panel).toContain("useMyClosed(root, closedOn)");
+    // Fetched once the repo is known, so the pill carries its number at rest.
+    expect(panel).toContain("useMyClosed(root, closedOn || (active && !!repo))");
     expect(hook).toContain("if (!on || !root) return;");
     expect(hook).not.toMatch(/setInterval/);
   });
@@ -60,36 +61,30 @@ describe("author:me and @me", () => {
   });
 });
 
-describe("the two sections", () => {
+describe("the closed list", () => {
   const html = board([
     { id: "merged", label: "Merged", rows: [pr(1, "MERGED"), pr(2, "MERGED")], total: 41, loading: false, more: () => {} },
     { id: "unmerged", label: "Closed without merging", rows: [pr(3, "CLOSED")], total: 1, loading: false },
   ]);
-  it("are labelled, in order, with their own counts", () => {
-    const m = html.indexOf('data-section="merged"');
-    const u = html.indexOf('data-section="unmerged"');
-    expect(m).toBeGreaterThan(-1);
-    expect(u).toBeGreaterThan(m);
-    expect(html).toMatch(/Merged<span[^>]*>41</);
-    expect(html).toMatch(/Closed without merging<span[^>]*>1</);
+  it("is one list under an All | Merged | Closed switch whose labels are plain words", () => {
+    expect(html).toContain('aria-label="Show"');
+    expect(html).toMatch(/>All</);
+    expect(html).toMatch(/>Merged</);
+    expect(html).toMatch(/>Closed</);
+    expect(html).not.toMatch(/All <small/);
+    expect(html).not.toContain("data-section=");
   });
-  it("show each card's state and give only the section with more a Load more", () => {
-    const unmerged = html.slice(html.indexOf('data-section="unmerged"'));
-    const merged = html.slice(0, html.indexOf('data-section="unmerged"'));
-    expect((merged.match(/data-pr="/g) ?? []).length).toBe(2);
-    expect((unmerged.match(/data-pr="/g) ?? []).length).toBe(1);
-    /* The header and the finished body say the state; the old "Merged." event line is gone. */
-    expect(merged).toContain('data-finished="merged"');
-    expect(merged).not.toContain('data-finished="closed"');
-    expect(unmerged).toContain('data-finished="closed"');
+  it("shows each card's state and gives the whole list one Load more", () => {
+    expect((html.match(/data-pr="/g) ?? []).length).toBe(3);
+    expect(html).toContain(". Merged");
+    expect(html).toContain(". Closed · not merged");
     expect((html.match(/Load more/g) ?? []).length).toBe(1);
-    expect(html.indexOf("Load more")).toBeLessThan(html.indexOf('data-section="unmerged"'));
   });
-  it("say so when a section is empty", () => {
+  it("says so, with a state of its own, when nothing is closed", () => {
     const empty = board([
-      { id: "merged", label: "Merged", rows: [pr(1, "MERGED")], total: 1, loading: false },
+      { id: "merged", label: "Merged", rows: [], total: 0, loading: false },
       { id: "unmerged", label: "Closed without merging", rows: [], total: 0, loading: false },
     ]);
-    expect(empty).toContain("None.");
+    expect(empty).toContain("Nothing closed");
   });
 });

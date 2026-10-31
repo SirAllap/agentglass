@@ -93,7 +93,7 @@ test("a dead session with an old claim is gone, not stuck", () => {
 test("the three answers come in the issue's order: running, stuck, needs you", () => {
   const v = fleetVerdict([blocked("a-web"), quiet("b-migrate"), quiet("c-docs"), working("d-api")], now)!;
   expect(v.clauses.map((c) => c.kind)).toEqual(["running", "stuck", "need"]);
-  expect(v.clauses.map((c) => c.text)).toEqual(["1 running", "2 stuck", "a-web: Claude needs your permission to use Bash"]);
+  expect(v.clauses.map((c) => c.text)).toEqual(["1 running", "2 quiet", "a-web: Claude needs your permission to use Bash"]);
   expect(v.tone).toBe("critical");
 });
 
@@ -200,33 +200,22 @@ test("the verdict carries the three counts, including the ones with no clause", 
 });
 
 const src = (p: string) => Bun.file(new URL(p, import.meta.url)).text();
-const kpisSrc = code(await src("../src/components/Kpis.tsx"));
-const dashSrc = code(await src("../src/components/DashboardView.tsx"));
-const stripSrc = code(await src("../src/components/FleetVerdictStrip.tsx"));
+const dashSrc = code(await src("../src/components/StarboardView.tsx"));
+const hookSrc = code(await src("../src/lib/useFleetVerdict.ts"));
 
 test("the KPI tiles count agents from the verdict, not from the cards", () => {
-  expect(kpisSrc).not.toMatch(/status\s*===\s*"(working|waiting|stalled)"/);
-  expect(kpisSrc).toContain("fleet?.counts.running");
-  expect(kpisSrc).toContain("fleet?.counts.need");
+  expect(dashSrc).not.toMatch(/status\s*===\s*"(working|waiting|stalled)"/);
+  expect(dashSrc).toContain("fleet?.counts.running");
+  expect(dashSrc).toContain("fleet?.counts.need");
 });
 
-test("a stale verdict dims the tiles as it dims the strip", () => {
-  // Same object, same freshness: a dimmed "stale" line over tiles at full
-  // strength says the numbers are both old and current.
-  expect(kpisSrc).toContain("fleet?.stale");
-  expect(kpisSrc.match(/stale=\{stale\}/g)).toHaveLength(2);
+test("a stale verdict dims the tiles", () => {
+  // A tile at full strength over a stale board says the number is both old and current.
+  expect(dashSrc).toContain("fleet?.stale");
 });
 
-test("the dashboard reads the verdict once and gives both the same one", () => {
+test("Starboard reads the verdict once and the chips and tiles share it", () => {
   expect(dashSrc.match(/useFleetVerdict\(/g)).toHaveLength(1);
-  const name = dashSrc.match(/const (\w+) = useFleetVerdict\(/)?.[1];
-  expect(name).toBeTruthy();
-  expect(dashSrc).toContain(`<FleetVerdictStrip verdict={${name}}`);
-  expect(dashSrc).toMatch(new RegExp(`<Kpis [^>]*fleet=\\{${name}\\}`));
-  // The strip draws what it is given; it does not read the board again.
-  const body = stripSrc.slice(stripSrc.indexOf("export function FleetVerdictStrip("));
-  expect(body).not.toContain("fleetVerdict(");
-  expect(body).not.toContain("useSyncExternalStore(");
 });
 
 test("how long is floored — ninety minutes quiet is 1h, not 2h", () => {
@@ -258,12 +247,9 @@ test("a failed read after a good one keeps the last verdict, marked stale", () =
   expect(fleetVerdict([], now, true, false)).toBeNull();
 });
 
-test("the strip says it is stale in words, and keeps its height", () => {
-  const body = stripSrc.slice(stripSrc.indexOf("export function FleetVerdictStrip("));
-  expect(body).toContain("v.stale");
-  expect(body).toMatch(/>\s*stale\s*</);
-  const hook = stripSrc.slice(stripSrc.indexOf("export function useFleetVerdict("), stripSrc.indexOf("export function FleetVerdictStrip("));
-  expect(hook).toContain("lanternKnown");
+test("the hook passes the store's failed and known flags to the verdict", () => {
+  expect(hookSrc).toContain("lanternKnown");
+  expect(hookSrc).toContain("lanternFailed");
 });
 
 test("the rail's pip is the strip's need count, from the same rule", () => {

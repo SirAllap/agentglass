@@ -170,10 +170,12 @@ export function ruleTotals(v: { base: readonly unknown[]; learned: readonly unkn
 /** The base rules in the order the design lists them: the patterns as stored, the permission mode last. */
 export const baseOrder = (base: readonly AgentRule[]): AgentRule[] => [...base.filter((r) => r.action !== MODE_ACTION), ...base.filter((r) => r.action === MODE_ACTION)];
 
-/* ── the permission mode, as the design's three words ─────────────────── */
+/* ── the permission mode, as the design's words ───────────────────────── */
 
+/** Every launch mode has a button: the base rule can hold any of the four (Settings offers all of them),
+ *  and a control with none lit says nothing about what is in force. */
 export const MODE_CHOICES: readonly { mode: LaunchMode; word: string }[] = [
-  { mode: "default", word: "Ask" }, { mode: "auto", word: "Auto" }, { mode: "acceptEdits", word: "Edits" },
+  { mode: "default", word: "Ask" }, { mode: "auto", word: "Auto" }, { mode: "acceptEdits", word: "Edits" }, { mode: "bypassPermissions", word: "Bypass" },
 ];
 
 /* ── the first-run line ───────────────────────────────────────────────── */
@@ -224,3 +226,8 @@ export function rowRequest(rule: AgentRule, setting: RuleSetting) {
     ...(rule.source === "chat" || rule.source === "always-allow" ? { source: rule.source } : null),
   };
 }
+
+/** The projects the Agents screen's picker offers: the open ones, then any with a coordinator, then any that
+ *  only has live sessions (a cockpit opened on one project still has agents running in another). */
+export const pickerProjects = (open: readonly string[], chairRoots: readonly string[], rows: readonly { project?: string; gone?: boolean }[]): string[] =>
+  [...new Set([...open, ...chairRoots, ...rows.filter((r) => !r.gone && r.project).map((r) => r.project!)])];

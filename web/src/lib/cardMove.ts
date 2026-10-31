@@ -63,6 +63,27 @@ export function mergeCardRef(
 }
 
 /**
+ * `mergeCardRef`, then the card the board already drew for this pull request.
+ *
+ * The server reads a row's card from its branch and title with a case-blind
+ * pattern and only names one it holds in a board it has read, so a lower-case
+ * `orbit-1043-profile-keys` shows ORBIT-1043 on the card while the stricter
+ * reader above, which wants capitals in a branch, finds nothing. The picker and
+ * the sidebar are the same pull request as the board: they follow the row.
+ * Whether this machine can write to that tracker at all is still asked first.
+ */
+export function mergeCardRefOrRow(
+  pr: { headRefName?: string; title?: string; body?: string; card?: { id: string; customId?: string; tracker?: "jira" } },
+  setup: RefSetup | null,
+): { label: string; query: string; tracker?: "jira" } | null {
+  const own = mergeCardRef(pr, setup);
+  if (own || !pr.card || !setup) return own;
+  const label = pr.card.customId || pr.card.id;
+  if (pr.card.tracker === "jira") return setup.jira ? { label, query: label, tracker: "jira" } : null;
+  return setup.connected ? { label, query: label } : null;
+}
+
+/**
  * `mergeCardRef`, for the surfaces whose body is ClickUp's alone (the review
  * menu's card move, a staged move, the unstick form): a Jira-owned card is not
  * theirs, and gets its own controls where it has them.

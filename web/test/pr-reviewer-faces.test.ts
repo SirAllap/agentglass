@@ -96,8 +96,9 @@ describe("a team is not drawn as a face", () => {
  */
 describe("the pull request sidebar", () => {
   test("declares both axes, so the browser cannot pick the second one", () => {
-    const aside = panel.slice(panel.indexOf("<aside className=\"sticky top-0"));
-    const cls = /className="([^"]*)"/.exec(aside)?.[1] ?? "";
+    /* The class is a ternary since the sidebar can fold (detailBand): the pinned column is the second string. */
+    const aside = panel.slice(panel.indexOf("className={fold ? \"flex"));
+    const cls = /: "([^"]*)"\}/.exec(aside)?.[1] ?? "";
     expect(cls, "the sidebar's own classes").toContain("overflow-y-auto");
     expect(cls, "without this, `visible` computes to `auto` and scrolls sideways")
       .toContain("overflow-x-hidden");

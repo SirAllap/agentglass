@@ -6,8 +6,8 @@
 import { describe, expect, test } from "bun:test";
 import type { PrSummary } from "../../shared/types.ts";
 import {
-  parseQuery, serializeQuery, applyFilters, applyRulesKeepUnread, buildFacets, toggleFacet, activeCount, DEFAULT_SORT,
-  readPrField, builderFields, queryToRules,
+  parseQuery, serializeQuery, applyFilters, buildFacets, toggleFacet, activeCount, DEFAULT_SORT,
+  readPrField, builderFields,
 } from "../src/lib/prFilter.ts";
 import { applyWith } from "../src/components/tasks/filters.ts";
 
@@ -366,52 +366,11 @@ describe("the board through the rule engine", () => {
     expect(none[0].milestone ?? null).toBeNull();
   });
 
-  test("the saved tabs open with their filters showing, not blank", () => {
-    // "Mine", "Failing" and the rest are hand-written query strings, and
-    // opening one has to FILL the builder rather than clear it.
-    const rules = queryToRules('author:ana label:backend');
-    expect(rules.map((r) => [r.field, r.op, r.values])).toEqual([
-      ["author", "is", ["ana"]],
-      ["label", "is", ["backend"]],
-    ]);
-  });
-
   test("a field with no values on any row is not offered", () => {
     // What keeps `Card status` invisible for everybody without a tracker.
     const fields = builderFields([pr(), pr()], parseQuery(""));
     expect(fields.some((f) => f.key === "cardstatus")).toBe(false);
     expect(fields.some((f) => f.key === "author")).toBe(true);
-  });
-});
-
-// A rule the user built ("Card status is not Done") must not hide the pull
-// requests the unread chip is still counting — the chip promised "2 unread"
-// and a matching rule could hide both with no way to see them. Only a rule
-// exempts; text search and the pills upstream of this call still narrow.
-describe("rule-builder exemption for unread pull requests", () => {
-  const rule = { join: "and" as const, rules: [{ id: "r1", field: "author", op: "not" as const, values: ["ana"] }] };
-
-  test("a rule-filtered-out row with something unread stays", () => {
-    const ana = pr({ author: "ana", number: 1 });
-    const bo = pr({ author: "bo", number: 2 });
-    const kept = applyRulesKeepUnread([ana, bo], rule, readPrField, (p) => p.number === 1);
-    expect(kept.map((p) => p.number).sort()).toEqual([1, 2]);
-  });
-
-  test("the same row with nothing unread goes, same as any other rule hit", () => {
-    const ana = pr({ author: "ana", number: 1 });
-    const bo = pr({ author: "bo", number: 2 });
-    const kept = applyRulesKeepUnread([ana, bo], rule, readPrField, () => false);
-    expect(kept.map((p) => p.number)).toEqual([2]);
-  });
-
-  // Broken on purpose once, to see it go red: an `isUnread` that always
-  // answers true would defeat the rule for everybody, not just the unread
-  // ones — asserting the healthy predicate still narrows the read row out.
-  test("a row that is read is not exempted just because another row is", () => {
-    const ana = pr({ author: "ana", number: 1 });
-    const kept = applyRulesKeepUnread([ana], rule, readPrField, () => false);
-    expect(kept).toEqual([]);
   });
 });
 

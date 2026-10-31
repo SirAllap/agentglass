@@ -46,11 +46,14 @@ describe("where the count is sent", () => {
 });
 
 const panel = await Bun.file(new URL("../../web/src/components/TerminalPanel.tsx", import.meta.url)).text();
+const strip = await Bun.file(new URL("../../web/src/components/terminal/TermStrip.tsx", import.meta.url)).text();
 
 describe("the panel", () => {
   test("reads the count off the frame and draws a chip only when it is above zero", () => {
     expect(panel).toContain('s.tmuxPhones = typeof f.phones === "number" ? f.phones : 0;');
-    expect(panel).toContain("(sess?.tmuxPhones ?? 0) > 0 &&");
-    expect(panel).toContain("phone attached");
+    // The chip moved out of the panel into the strip; the panel now hands the count down as a prop.
+    expect(panel).toContain("phones={sess?.tmuxPhones ?? 0}");
+    expect(strip).toContain("p.phones > 0 &&");
+    expect(strip).toContain("phone attached");
   });
 });

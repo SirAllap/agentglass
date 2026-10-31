@@ -434,6 +434,22 @@ talks to the same port and can set the same header. Where a capability must not
 be exercised at all, turn it off — the knobs below hold in a way the gate does
 not.
 
+### The agent rules fail open
+
+The rules in "What your agents may do" are checked by the same hooks, with a
+question to the server before each tool call (`GET /agent-rules/check`). That
+question waits two seconds. When agentglass is closed, restarting or slower
+than that, the hook lets the call through and says so on the agent's stderr
+("this call was not checked"). A rule set to "never" does not hold in that
+window.
+
+That is chosen, not missed: a stopped app must not stop every agent on the
+machine, and a hook that blocks on an unreachable server would do exactly that.
+The consequence is the same as for the gate above: the rules are a brake on a
+workflow. A thing that must never happen — a push to a protected branch, a
+release — needs a barrier that does not depend on agentglass being up, such as
+branch protection on the forge or the token not being on the machine.
+
 ## What agentglass stores, and how to get rid of it
 
 Everything below is on your machine and nowhere else. There is no account, no
@@ -1218,6 +1234,34 @@ every other verb not in the observe list — are refused under
 `AGENTGLASS_BROWSER_READONLY=1`, which leaves reading, screenshots and the
 network log working.
 
+**A page's permission requests go to whoever the tab belongs to.** Fullscreen,
+pointer lock and writing (never reading) the clipboard are granted to every
+page; clipboard reads, location, HID, serial, USB, screen capture and anything
+else unnamed are refused to every page. What is left — the microphone, the
+camera and notifications — is decided per tab:
+
+- A tab belongs to whoever OPENED it, from its first moment: the person when
+  they opened it in the window (a new tab, a link, their restored session), an
+  agent when its `newtab` or `open` made it — `--shared` included — and a
+  popup to the tab that opened it. Any agent verb that acts on a tab — `--as`
+  or `--shared`, on the person's own tab too — makes it agent-driven: with
+  several agents at once the person cannot know which of them a request is
+  for, so none of them is ever put to the person. Only the person typing an address
+  into the tab gives it back. Looking at a tab or clicking it in the strip
+  does not change whose it is.
+- The person's own tab, when it is the one the window says is on screen, is
+  asked in a native dialog the page cannot draw or click. His tab in the
+  background is refused.
+- Every other tab — an agent's, a lane, or one whose opener is not known — is
+  **held, never shown to the person**, and named in the agent's next answer
+  (`pendingPermissions`, and on the CLI's stderr). The agent settles it with
+  `permission grant|deny microphone`; unanswered, it is **denied after 30
+  seconds**, and that denial is not remembered. An agent's answer, or a grant
+  made ahead of the ask with `--origin`, holds for that container and that
+  origin until the app closes, never for another container and never for the
+  person's own tabs. Read-only mode refuses the answer and lets the timeout
+  deny it; `permission --list` still reads what is held.
+
 `upload` attaches a file from this machine to a page, so it is bounded like a
 read of the disk: a path is admitted only if the open project admits it, or (with
 no project open) it is under your home directory and not hidden, or the
@@ -1491,7 +1535,18 @@ level the server allows, which names doors and opens none) and send what
 log, not a credential and not a gate: a caller can omit it or lie in it, and
 the log's address and device columns say who really asked. The MCP endpoint
 over HTTP has a token of its own (`AGENTGLASS_UI_MCP_TOKEN`), refused if it
-equals the browser's, the cockpit's or the app's.
+equals the browser's, the cockpit's or the app's. `bin/agentglass-flightplan-mcp`
+is eleven of agentglass-ui's flight-plan verbs under shorter names and adds
+nothing either: it sends the caller's own credential, so who may say Go stays
+the server's decision, and its HTTP token (`AGENTGLASS_FLIGHTPLAN_MCP_TOKEN`)
+is refused if it equals any of the others.
+
+These CLIs and MCP servers read the token file when their environment has no
+token, and after a 401 ask once more with it when it holds a different token
+(a pane opened before the app was reinstalled). Never after a 403, which is an
+accepted credential and a refused act, and never from a seat's, a clone's or a
+plugin's minted token: the file holds the machine token, and falling back to it
+would widen what the caller may do.
 
 **The server does not read a `.env` file.** Its settings are its environment and
 its own settings file. The desktop sidecar is compiled with `.env` and

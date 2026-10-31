@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useOwnedQuestion } from "../lib/layerOwner.ts";
 import { preparedLine, useStageHold } from "../lib/stageHold.ts";
 import { motion, AnimatePresence } from "motion/react";
@@ -9,20 +9,23 @@ import { AssignPicker, useAskAssign } from "./AssignPicker.tsx";
 import { hasExtras, planOf } from "../../../shared/stepBlocks.ts";
 import { AskedExtras } from "./AskedExtras.tsx";
 import { prContext, type ExtraItem } from "../lib/stepExtras.ts";
-import { StatusPill } from "./StatusPill.tsx";
 import { Spinner } from "./Spinner.tsx";
-import { MERGE_OPTION, mergeBody, mergeSubject, type MergeMethod, type MergeCommit } from "../../../shared/mergeMethod.ts";
+import { ALL_METHODS, MERGE_OPTION, mergeBody, mergeSubject, type MergeMethod, type MergeCommit } from "../../../shared/mergeMethod.ts";
 import { LEAVE_ALONE, mergePreselect, movesCard, statusColor, statusOptions, type CardMove } from "../lib/cardMove.ts";
 import { useClickupPrefs } from "../lib/clickupPrefs.ts";
 import { resolveEnsure, stepChanges, type CardWrite, type Ensure, type PrAuthor } from "../lib/stepAssign.ts";
 import { api } from "../lib/api.ts";
 import { __forgetClickupSetup } from "../lib/clickupSetup.ts";
-import { MergeJiraCard } from "./MergeJiraCard.tsx";
+import { CardFrame, MergeJiraCard, MovePills } from "./MergeJiraCard.tsx";
 import { jiraMergeMove, type JiraMergeCard } from "../lib/mergeJira.ts";
 import { MOD_KEY } from "../lib/format.ts";
-import { WarningIcon } from "../lib/glyphIcons.tsx";
+import { ArrowRightIcon, BranchIcon, CommitIcon, DoneIcon, InfoIcon, MergeIcon, SparkleIcon, UserIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { CLEANUP_KIND_ROWS, type CleanupKind } from "../lib/cleanupSettings.ts";
+import { splitTail } from "../lib/cleanupPr.ts";
+import { KIND_ICON } from "./CleanupSettings.tsx";
+import "./mergeDialog.css";
 import { ICON } from "../lib/iconSize.ts";
-import { INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
+import { Button, Checkbox, INPUT, INPUT_STYLE, EDGE, Textarea } from "./workspace/Chrome.tsx";
 
 /**
  * The last question before a pull request lands.
@@ -95,13 +98,24 @@ export type MergeSpec = {
    *  merge button (and the chord) stay dead for a moment. Nothing merges until the
    *  person presses it; the method on the spec is the one the agent named. */
   prefill?: { by: string; subject?: string; body?: string };
+  /** The project's cleanup mode is "Offer at merge time": draw the tick "Clean up local leftovers". */
+  offerCleanup?: boolean;
+  /** With the tick: the kinds the project's settings include (shown as chips) and the safety blocks already in force (shown as reasons). Both absent = the card says nothing about them. */
+  cleanupKinds?: CleanupKind[];
+  cleanupHeld?: { title: string; why: string }[];
+  /** The strategies the repository allows; the others are drawn off. Absent = all three. */
+  allowed?: MergeMethod[];
 };
 
 /** What the dialog resolves to. `null` is a cancel. */
 export type MergeChoice = {
+  /** The strategy picked in the dialog; absent means the one the question named. */
+  method?: MergeMethod;
   subject?: string;
   body?: string;
   deleteBranch: boolean;
+  /** The tick "Clean up local leftovers" was on: the caller opens the dry run once the merge lands. */
+  cleanup?: boolean;
   /** A step's comment and fields, as the dialog showed them, to send after the merge (each is a request of its own). */
   extras?: { id: string; label: string; items: ExtraItem[] };
   /** Set only when a status other than the card's own was picked. Absent means
@@ -133,6 +147,19 @@ const FIELD = {
   color: "var(--text)",
 } as const;
 
+/** The subject length past which git log and most tools cut the line. */
+const SUBJECT_SOFT = 72;
+
+/** One line each on what the method does to the history, beside its name. */
+const MEANING: Record<MergeMethod, string> = {
+  merge: "Keeps every commit and adds a merge commit on top.",
+  squash: "Folds the whole branch into a single new commit.",
+  rebase: "Replays each commit onto the base. No merge commit.",
+};
+
+/** The confirm button is named after the strategy. */
+const BUTTON_LABEL: Record<MergeMethod, string> = { merge: "Create merge commit", squash: "Squash and merge", rebase: "Rebase and merge" };
+
 /** The card row's state machine, named rather than spelled out in booleans:
  *  every one of these draws something different, including the reasons it
  *  cannot offer anything, which are worth saying out loud. */
@@ -147,6 +174,7 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [deleteBranch, setDeleteBranch] = useState(false);
+  const [cleanup, setCleanup] = useState(false);
   const [card, setCard] = useState<CardState>({ kind: "none" });
   const [status, setStatus] = useState("");
   /* A Jira card: the row reads the card itself and reports what it found and what was picked. */
@@ -171,9 +199,14 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
   const [extraItems, setExtraItems] = useState<ExtraItem[]>([]);
   useEffect(() => { setExtraItems([]); }, [pending]);
   const mergeExtras = !!mergePrefs && mergeOn && hasExtras(planOf("merge", mergePrefs));
-  const subjectRef = useRef<HTMLInputElement>(null);
+  const fid = useId();
+  const subjectRef = useRef<HTMLTextAreaElement>(null);
+  /* The extended description is folded away while it is empty; one click opens it. */
+  const [descOpen, setDescOpen] = useState(false);
   const cancelRef = useRef<HTMLButtonElement>(null);
-  const rebase = pending?.method === "rebase";
+  /* The strategy being asked about: it opens on the one the question named, and the cards change it. */
+  const [method, setMethod] = useState<MergeMethod>(pending?.method ?? "merge");
+  const rebase = method === "rebase";
   const held = useStageHold(!!pending?.prefill, pending);
 
   // The commits are what a squash quotes, and the count is what the header
@@ -182,12 +215,15 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
 
   useEffect(() => {
     if (!pending) return;
+    setMethod(pending.method);
     setSubject(pending.prefill?.subject ?? mergeSubject(pending.method, pending) ?? "");
     setBody(pending.prefill?.body ?? mergeBody(pending.method, pending, pending.commits) ?? "");
     // Only offered when the repository is not already doing it — and then on
     // by default, which is what this app has always done. The difference is
     // that now it says so.
     setDeleteBranch(!pending.repoDeletesBranch);
+    setCleanup(true);
+    setDescOpen(false);
     // A prepared dialog opens on Cancel: the subject is the agent's to be read, and a
     // selected subject is one keystroke from being replaced by whatever the person
     // was typing when it arrived.
@@ -287,9 +323,11 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
     const plan = moves ? stepChanges({ status, people: on.people, unassign: "none", ensure }) : null;
     const note = plan?.named ? `assigned ${plan.named}` : ensure.kind === "unmapped" ? ensure.why : undefined;
     return {
+      method,
       subject: rebase ? undefined : subject.trim() || undefined,
       body: rebase ? undefined : body.trim() || undefined,
       deleteBranch,
+      ...(pending?.offerCleanup && cleanup ? { cleanup: true } : null),
       ...(on && extraItems.length ? { extras: { id: on.id, label: on.label, items: extraItems } } : null),
       card: on && moves
         ? {
@@ -318,9 +356,35 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
     // too and a dialog owns the keyboard until it is answered.
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [pending, subject, body, deleteBranch, rebase, card, status, ensure, held, jira]);
+  }, [pending, method, subject, body, deleteBranch, cleanup, rebase, card, status, ensure, held, jira]);
 
-  const how = pending ? MERGE_OPTION[pending.method] : null;
+  /* The subject grows to three lines and then scrolls inside its own box: never one clipped line. */
+  useEffect(() => {
+    const el = subjectRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`;
+    el.style.overflowY = el.scrollHeight > el.clientHeight + 1 ? "auto" : "hidden";
+  }, [subject, pending]);
+
+  const how = pending ? MERGE_OPTION[method] : null;
+
+  /* Switching keeps what was typed: a text still equal to the default of the method being left takes the new one's default; an edited text, or an agent's prepared one, is never touched. */
+  const pickMethod = (m: MergeMethod) => {
+    if (!pending || m === method) return;
+    if (!pending.prefill) {
+      if (subject === (mergeSubject(method, pending) ?? "")) setSubject(mergeSubject(m, pending) ?? "");
+      if (body === (mergeBody(method, pending, pending.commits) ?? "")) setBody(mergeBody(m, pending, pending.commits) ?? "");
+    }
+    setMethod(m);
+  };
+
+  const subjectLen = subject.length;
+  const subjectLong = subjectLen > SUBJECT_SOFT;
+  const [headStart, headEnd] = pending ? splitTail(pending.headRefName) : ["", ""];
+  /* Why the confirm button is dead, said next to it: a greyed button with no sentence is a guess. */
+  const blockedWhy = !pending ? "" : held ? "Read the prepared message first" : !rebase && !subject.trim() ? "Write a subject to continue" : "";
+  const assignText = (e: Ensure, people: { id?: number | null; me?: boolean }[] | undefined) => assignLine(e, people).replace(/^and /, "Also ");
 
   return (
     <AnimatePresence>
@@ -332,48 +396,44 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
           <div className="fixed inset-0 flex items-center justify-center p-6 pointer-events-none" style={{ zIndex: 10005 }}>
             <motion.div
               initial={{ opacity: 0, scale: 0.98, y: 6 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.98 }}
-              // Wide, because the subject is the thing being checked and a
-              // branch name plus a number plus "Merge pull request from" is
-              // longer than any 520px box. Capped at the viewport so a long
-              // squash body scrolls inside the dialog, not off the screen.
-              className="pointer-events-auto w-full max-w-[760px] max-h-[86vh] flex flex-col rounded-xl overflow-hidden"
-              style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}
+              // Wide, because the subject is the thing being checked. Capped at
+              // the viewport so a long body scrolls inside the dialog, not off
+              // the screen (mergeDialog.css).
+              className="pointer-events-auto agx-mg" data-method={method}
               role="dialog" aria-modal="true" aria-label={`${how.label} #${pending.number}`}
             >
-              {/* What is landing, and where. GitHub says this above its own
-                  form ("wants to merge 21 commits into base from head") and it
-                  is the one line that makes the rest of the dialog checkable. */}
-              <div className="px-4 py-3" style={{ borderBottom: LINE }}>
-                <div className="text-[13px] font-medium flex items-baseline gap-2 flex-wrap" style={{ color: "var(--text)" }}>
-                  <span>{how.label}</span>
-                  <span className="text-[11px] font-normal" style={{ color: "var(--text3)" }}>#{pending.number} · {how.hint}</span>
-                </div>
-                <div className="text-[11px] mt-1.5 flex items-center gap-1.5 flex-wrap" style={{ color: "var(--text3)" }}>
-                  {/* Every commit on the branch, merges included — the number
-                      the Commits tab shows and the number that is landing. The
-                      filtered list below is only about what a squash quotes. */}
-                  <span className="tabular-nums" style={{ color: "var(--text2)" }}>
-                    {pending.commits.length} commit{pending.commits.length === 1 ? "" : "s"}
-                  </span>
-                  <span>from</span>
-                  <Ref>{pending.headRefName}</Ref>
-                  <span>into</span>
-                  <Ref>{pending.baseRefName}</Ref>
+              {/* What is landing, and where: the PR's title, its number, how many
+                  commits, and head into base. The head branch gives up its middle
+                  (the full name is in the tooltip); the base is always whole. */}
+              <div className="agx-mg-head">
+                <span className="agx-mg-tile" aria-hidden><MergeIcon size={ICON.lg} /></span>
+                <div className="agx-mg-ttl">
+                  <b>{how.label}</b>
+                  <p className="agx-mg-pr" data-tip={pending.title}>{pending.title}</p>
+                  <div className="agx-mg-chips">
+                    <span className="agx-mg-chip">#{pending.number}</span>
+                    {/* Every commit on the branch, merges included — the number
+                        the Commits tab shows and the number that is landing. The
+                        filtered list is only about what a squash quotes. */}
+                    <span className="agx-mg-chip tabular-nums"><CommitIcon size={ICON.xs} />&nbsp;{pending.commits.length} commit{pending.commits.length === 1 ? "" : "s"}</span>
+                    <span className="agx-mg-chip" data-ref="" data-head="" data-tip={pending.headRefName} tabIndex={0} aria-label={`from ${pending.headRefName}`}>
+                      <span>{headStart}</span>{headEnd && <span>{headEnd}</span>}
+                    </span>
+                    <ArrowRightIcon size={ICON.sm} />
+                    <span className="agx-mg-chip" data-ref="" data-base="" aria-label={`into ${pending.baseRefName}`}>{pending.baseRefName}</span>
+                  </div>
                 </div>
               </div>
 
               {pending.prefill && (
-                <div className="px-4 py-2 text-[11.5px]" data-prepared-by="" role="status"
-                  style={{ color: "var(--warning-ink)", borderBottom: LINE }}>{preparedLine(pending.prefill.by)}</div>
+                <div className="agx-mg-note agx-mg-note-w text-[11.5px]" data-prepared-by="" data-prepared="" role="status">{preparedLine(pending.prefill.by)}</div>
               )}
 
               {(pending.awaitingReview?.length ?? 0) > 0 && (
-                <div className="px-4 py-2.5 text-[11.5px] leading-relaxed flex items-start gap-2"
-                  style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--warning) 10%, transparent)",
-                    borderBottom: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }}>
-                  <span aria-hidden className="flex" style={{ height: 18, alignItems: "center", color: "var(--warning-ink)" }}><WarningIcon size={ICON.sm} /></span>
+                <div className="agx-mg-note agx-mg-note-w text-[11.5px] leading-relaxed">
+                  <span aria-hidden className="flex" style={{ height: 18, alignItems: "center" }}><WarningIcon size={ICON.sm} /></span>
                   <span>
-                    <b style={{ color: "var(--text)", fontWeight: 500 }}>
+                    <b style={{ display: "inline", color: "var(--text)", fontWeight: 500 }}>
                       {pending.awaitingReview!.slice(0, 3).join(", ")}
                       {pending.awaitingReview!.length > 3 ? ` +${pending.awaitingReview!.length - 3}` : ""}
                     </b>{" "}
@@ -386,58 +446,140 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                 </div>
               )}
 
-              <div className="px-4 py-3.5 flex flex-col gap-3 min-h-0 overflow-y-auto agx-scroll">
+              <div className="agx-mg-body agx-scroll">
+                {/* The way it lands: the real control. The merge button's menu still
+                    sets the default that is remembered per repository; this is the
+                    choice for this merge. */}
+                <div className="agx-mg-sec">
+                  <div className="agx-mg-cap">How it lands</div>
+                  <div className="agx-mg-strat" role="radiogroup" aria-label="Merge method">
+                    {ALL_METHODS.map((m) => {
+                      const ok = !pending.allowed || pending.allowed.includes(m);
+                      return (
+                        <button key={m} type="button" role="radio" aria-checked={m === method} aria-current={m === method ? "true" : undefined}
+                          data-method={m} disabled={!ok} className="agx-mg-opt" onClick={() => pickMethod(m)}
+                          {...(ok ? null : { "data-tip": "This repository does not allow it" })}>
+                          <b>{MERGE_OPTION[m].label}</b>
+                          <span>{MEANING[m]}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
                 {rebase ? (
                   /* No fields, because there is no commit to name. What there
                      is instead is the consequence, which is the part people
                      get wrong about rebase. */
-                  <div className="text-[11.5px] leading-relaxed" style={{ color: "var(--text2)" }}>
-                    <div style={{ color: "var(--text)" }}>{pending.title}</div>
-                    <div className="mt-2">
+                  <div className="agx-mg-note" data-tone="info">
+                    <InfoIcon size={ICON.sm} />
+                    <span>
+                      <b>{pending.title}</b>
                       Every commit is replayed onto <Ref>{pending.baseRefName}</Ref> with a new SHA, and no merge
                       commit is written. Nothing here asks for a message because a rebase does not write one.
-                    </div>
+                    </span>
                   </div>
                 ) : (
                   <>
-                    <Field label="Commit subject" hint="this is what lands on the base branch, for ever">
-                      <input
-                        ref={subjectRef} value={subject} onChange={(e) => setSubject(e.target.value)}
+                    <div className="agx-mg-sec">
+                      <label className="agx-mg-cap" htmlFor={`${fid}-subject`}>
+                        <span>Commit subject</span>
+                        <span className="agx-mg-count" data-warn={subjectLong ? "" : undefined} aria-live="polite">
+                          {subjectLen} / {SUBJECT_SOFT}{subjectLong ? " · too long" : ""}
+                        </span>
+                      </label>
+                      <textarea
+                        id={`${fid}-subject`} ref={subjectRef} value={subject} rows={1}
+                        onChange={(e) => setSubject(e.target.value.replace(/\r?\n/g, " "))}
+                        onKeyDown={(e) => { if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) e.preventDefault(); }}
                         spellCheck={false}
-                        className={`w-full ${INPUT}`}
+                        className={`agx-mg-subj agx-scroll ${INPUT}`}
                         style={INPUT_STYLE}
                       />
-                    </Field>
-                    <Field
-                      label="Extended description"
-                      hint={pending.method === "squash"
-                        ? (real.length > 1 ? "the commit messages this squash replaces" : "the commit's own body")
-                        : "shown under the subject in the log"}
-                    >
-                      <textarea
-                        value={body} onChange={(e) => setBody(e.target.value)}
-                        spellCheck={false} rows={pending.method === "squash" ? 8 : 4}
-                        placeholder="Optional"
-                        className="w-full text-[12px] px-2.5 py-1.5 rounded outline-none resize-y agx-scroll"
-                        style={FIELD}
-                      />
-                    </Field>
+                      <p className="agx-mg-why" data-warn={subjectLong ? "" : undefined}>
+                        {subjectLong
+                          ? `Past ${SUBJECT_SOFT} characters git log and most tools cut the line off; keep the subject short and put the rest in the description.`
+                          : "Why it matters: this one line is what the base branch shows for ever, in git log, blame and release notes."}
+                      </p>
+                    </div>
+                    <div className="agx-mg-sec">
+                      {descOpen || body.trim() ? (
+                        <>
+                          <label className="agx-mg-cap" htmlFor={`${fid}-body`}>
+                            <span>Extended description</span>
+                            <span>
+                              {method === "squash"
+                                ? (real.length > 1 ? "the commit messages this squash replaces" : "the commit's own body")
+                                : "shown under the subject in the log"}
+                            </span>
+                          </label>
+                          <Textarea
+                            id={`${fid}-body`} value={body} onChange={(e) => setBody(e.target.value)}
+                            spellCheck={false} rows={method === "squash" ? 8 : 4}
+                            placeholder="Optional"
+                            className="w-full agx-scroll"
+                          />
+                        </>
+                      ) : (
+                        <button type="button" className="agx-mg-add" onClick={() => setDescOpen(true)}>+ Add an extended description</button>
+                      )}
+                    </div>
                   </>
                 )}
 
-                {/* The branch. This has been happening silently on every merge
-                    from here; a thing that deletes a branch should say so
-                    where the deciding is done. */}
-                {pending.repoDeletesBranch ? (
-                  <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>
-                    <Ref>{pending.headRefName}</Ref> is deleted by the repository itself once this merges.
+                {/* After it lands: the branch, which has been deleted silently on
+                    every merge from here and so says so where the deciding is
+                    done, and "Offer at merge time" (Settings, After a PR is
+                    merged), whose dry run opens when the merge lands. Nothing is
+                    removed by that tick; the dialog it opens asks again. */}
+                <div className="agx-mg-sec">
+                  <div className="agx-mg-cap">After it lands</div>
+                  <div className="agx-mg-card">
+                    <div className="agx-mg-row">
+                      <span className="agx-mg-sm" aria-hidden><BranchIcon size={ICON.sm} /></span>
+                      <div className="agx-mg-rt">
+                        {pending.repoDeletesBranch ? (
+                          <span className="text-[11px]">
+                            <Ref>{pending.headRefName}</Ref> is deleted by the repository itself once this merges.
+                          </span>
+                        ) : (
+                          <Checkbox checked={deleteBranch} onChange={setDeleteBranch}>
+                            <span>Delete <Ref>{pending.headRefName}</Ref> after merging</span>
+                          </Checkbox>
+                        )}
+                      </div>
+                    </div>
+                    {pending.offerCleanup && (
+                      <div className="agx-mg-row" data-merge-cleanup="">
+                        <span className="agx-mg-sm" aria-hidden><SparkleIcon size={ICON.sm} /></span>
+                        <div className="agx-mg-rt">
+                          <Checkbox checked={cleanup} onChange={setCleanup}>
+                            <span>Clean up local leftovers after merging</span>
+                          </Checkbox>
+                          <span className="text-[11px]">A dry run opens once it lands. Nothing is removed until you confirm there.</span>
+                          {pending.cleanupKinds && pending.cleanupKinds.length > 0 && (
+                            <div className="agx-mg-kinds" aria-label="What it will look for">
+                              {CLEANUP_KIND_ROWS.filter((k) => pending.cleanupKinds!.includes(k.id)).map((k) => {
+                                const Ic = KIND_ICON[k.icon];
+                                return <span key={k.id} className="agx-mg-kind" data-cl-kind={k.id} data-tip={k.text}><Ic size={ICON.xs} />{k.name}</span>;
+                              })}
+                            </div>
+                          )}
+                          {(pending.cleanupHeld?.length ?? 0) > 0 && (
+                            <div className="agx-mg-held" data-merge-held="">
+                              {pending.cleanupHeld!.map((h) => (
+                                <div key={h.title} className="agx-mg-note">
+                                  <WarningIcon size={ICON.sm} />
+                                  <span><b>Held back: {h.title}</b>{h.why}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                ) : (
-                  <label className="flex items-center gap-2 text-[11px] cursor-pointer select-none" style={{ color: "var(--text2)" }}>
-                    <input type="checkbox" checked={deleteBranch} onChange={(e) => setDeleteBranch(e.target.checked)} />
-                    <span>Delete <Ref>{pending.headRefName}</Ref> after merging</span>
-                  </label>
-                )}
+                </div>
 
                 {/* The card, where the deciding already is.
                     Merging here and then moving the card by hand on the board
@@ -446,108 +588,100 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                     days after the work shipped. The select opens on where the
                     card IS, so leaving it alone writes nothing at all; moving
                     it is a deliberate pick, made once, here. */}
-                {jiraCard && (
-                  <div className="pt-2.5" style={{ borderTop: LINE }}>
-                    <MergeJiraCard card={jiraCard} pick={jira.pick} onPick={(c, pick) => setJira({ card: c, pick })} />
-                  </div>
-                )}
-                {card.kind !== "none" && (
-                  <div className="pt-2.5" style={{ borderTop: LINE }}>
+                {(jiraCard || card.kind !== "none") && (
+                  <div className="agx-mg-sec">
+                    <div className="agx-mg-cap">Tracker card</div>
+                    {jiraCard && <MergeJiraCard card={jiraCard} pick={jira.pick} onPick={(c, pick) => setJira({ card: c, pick })} />}
                     {card.kind === "loading" && (
-                      <Spinner label={`Looking up ${pending.card?.label} on ClickUp…`} className="" />
+                      <CardFrame label={pending.card?.label ?? ""}>
+                        <Spinner label={`Looking up ${pending.card?.label} on ClickUp…`} className="" />
+                      </CardFrame>
                     )}
                     {card.kind === "failed" && (
-                      <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>
-                        {pending.card?.label} — {card.why}. The merge is unaffected.
-                      </div>
+                      <CardFrame label={pending.card?.label ?? ""}>
+                        <div className="agx-mg-quiet">{card.why}. The merge is unaffected.</div>
+                      </CardFrame>
                     )}
                     {(card.kind === "ready" || card.kind === "readonly") && (
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <Ref>{card.card.label}</Ref>
-                        <span className="text-[11px] truncate max-w-[240px]" style={{ color: "var(--text3)" }} title={card.card.title}>
-                          {card.card.title}
-                        </span>
-                        <span className="text-[11px]" style={{ color: "var(--text3)" }}>is in</span>
-                        <StatusPill status={card.card.status}
-                          color={statusColor(card.card.statuses, card.card.status) ?? card.card.statusColor} />
-                        {movesCard(card.card.status, status) && (
-                          <span className="text-[11px]" style={{ color: "var(--text3)" }}>→</span>
-                        )}
-                        {card.kind === "readonly" ? (
-                          <>
-                            <Select disabled value={LEAVE_ALONE} onChange={() => {}} title="This app is read-only on ClickUp"
-                              className="text-[11px]" style={FIELD}
-                              options={[{ value: LEAVE_ALONE, label: "Leave it there" }]} />
-                            <button onClick={allowWrites}
-                              title="Let this app change cards on your ClickUp board. The same switch the Tasks panel owns."
-                              className="text-[10.5px] px-2 py-1 rounded"
-                              style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>
-                              Allow ClickUp changes
-                            </button>
-                            <span className="text-[10px]" style={{ color: "var(--text4)" }}>— read-only until you do</span>
-                          </>
-                        ) : (
-                          /* "Leave it alone" is an option with a name, not a
-                             status that happens to be inert. Offering the card's
-                             OWN status as the default read as a promise to set
-                             the status it already had. */
-                          <Select
-                            value={status}
-                            onChange={setStatus}
-                            align="left"
-                            title="Where this card goes when the merge lands"
-                            className="text-[11px]"
-                            style={{
-                              // The board's own colour for wherever this is
-                              // about to go: the thing that makes a status
-                              // recognisable before it is read.
-                              borderColor: movesCard(card.card.status, status)
-                                ? (statusColor(card.card.statuses, status) ?? "var(--border)")
-                                : "var(--border)",
-                            }}
-                            options={[
-                              { value: LEAVE_ALONE, label: "Leave it there" },
-                              ...statusOptions(card.card.statuses, card.card.status).map((s) => ({
-                                value: s.status, label: s.status, tint: s.color || undefined,
-                                pill: true, dim: s.type === "done" || s.type === "closed",
-                              })),
-                            ]}
-                          />
-                        )}
+                      <CardFrame label={card.card.label} title={card.card.title}>
+                        <div className="agx-mg-trk-move">
+                          <MovePills from={card.card.status} fromColor={statusColor(card.card.statuses, card.card.status) ?? card.card.statusColor}
+                            to={movesCard(card.card.status, status) ? status : undefined} toColor={statusColor(card.card.statuses, status)} />
+                          <span className="ml-auto flex items-center gap-2 flex-wrap justify-end">
+                            {card.kind === "readonly" ? (
+                              <>
+                                <Select disabled value={LEAVE_ALONE} onChange={() => {}} title="This app is read-only on ClickUp"
+                                  className="text-[11px]" style={FIELD}
+                                  options={[{ value: LEAVE_ALONE, label: "Leave it there" }]} />
+                                <Button size="compact" onClick={allowWrites}
+                                  title="Let this app change cards on your ClickUp board. The same switch the Tasks panel owns.">
+                                  Allow ClickUp changes
+                                </Button>
+                              </>
+                            ) : (
+                              /* "Leave it alone" is an option with a name, not a
+                                 status that happens to be inert. Offering the card's
+                                 OWN status as the default read as a promise to set
+                                 the status it already had. */
+                              <Select
+                                value={status}
+                                onChange={setStatus}
+                                align="left"
+                                title="Where this card goes when the merge lands"
+                                className="text-[11px]"
+                                style={{
+                                  // The board's own colour for wherever this is
+                                  // about to go: the thing that makes a status
+                                  // recognisable before it is read.
+                                  borderColor: movesCard(card.card.status, status)
+                                    ? (statusColor(card.card.statuses, status) ?? "var(--border)")
+                                    : "var(--border)",
+                                }}
+                                options={[
+                                  { value: LEAVE_ALONE, label: "Leave it there" },
+                                  ...statusOptions(card.card.statuses, card.card.status).map((s) => ({
+                                    value: s.status, label: s.status, tint: s.color || undefined,
+                                    pill: true, dim: s.type === "done" || s.type === "closed",
+                                  })),
+                                ]}
+                              />
+                            )}
+                          </span>
+                        </div>
+                        {card.kind === "readonly" && <span className="agx-mg-quiet" style={{ fontSize: 10.5 }}>Read-only until you allow changes.</span>}
                         {card.kind === "ready" && mergeExtras && (
-                          <div className="basis-full">
+                          <div>
                             <AskedExtras blocks={mergePrefs?.blocks ?? []} fields={card.card.fields ?? null} listId={card.card.listId} onChange={setExtraItems}
                               ctx={prContext({ pr: { number: pending.number, title: pending.title, ...(pending.url ? { url: pending.url } : null) }, author: pending.author, status: movesCard(card.card.status, status) ? status : card.card.status })} />
                           </div>
                         )}
                         {card.kind === "ready" && movesCard(card.card.status, status) && askAssign && (
-                          <span className="basis-full flex items-center gap-2 text-[10.5px]" data-merge-ask="" style={{ color: "var(--text3)" }}>
+                          <span className="agx-mg-trk-who" data-merge-ask="">
                             <span>Assign to</span><AssignPicker state={asked} label="Assign to" />
                           </span>
                         )}
                         {card.kind === "ready" && movesCard(card.card.status, status) && ensure.kind !== "none" && (
-                          <span className="basis-full text-[10.5px]" data-merge-assign="" role="status"
-                            style={{ color: ensure.kind === "unmapped" ? "var(--warning-ink)" : "var(--text3)" }}>
-                            {ensure.kind === "unmapped" ? ensure.why : assignLine(ensure, card.card.people)}
+                          <span className="agx-mg-trk-who" data-merge-assign="" role="status"
+                            {...(ensure.kind === "unmapped" ? { "data-warn": "" } : /already on the card/.test(assignLine(ensure, card.card.people)) ? { "data-ok": "" } : null)}>
+                            {ensure.kind === "unmapped" ? <WarningIcon size={ICON.sm} /> : /already on the card/.test(assignLine(ensure, card.card.people)) ? <DoneIcon size={ICON.sm} /> : <UserIcon size={ICON.sm} />}
+                            {ensure.kind === "unmapped" ? ensure.why : assignText(ensure, card.card.people)}
                           </span>
                         )}
-                      </div>
+                      </CardFrame>
                     )}
                   </div>
                 )}
               </div>
 
-              <div className="px-4 py-2.5 flex items-center gap-2" style={{ borderTop: LINE }}>
-                <span className="text-[10px]" style={{ color: "var(--text4)" }}>{MOD_KEY}↵ to confirm · Esc to cancel</span>
-                <span className="ml-auto flex items-center gap-2">
-                  <button ref={cancelRef} onClick={() => pending.resolve(null)}
-                    className="text-[11px] px-2.5 py-1 rounded"
-                    style={{ color: "var(--text2)", border: EDGE }}>Cancel</button>
-                  <button
+              <div className="agx-mg-foot">
+                <span className="agx-mg-keys"><span><kbd>{MOD_KEY}↵</kbd>confirms</span><span><kbd>Esc</kbd>cancels</span></span>
+                <span className="agx-mg-act">
+                  {blockedWhy && <span className="agx-mg-reason" id={`${fid}-why`} role="status">{blockedWhy}</span>}
+                  <Button buttonRef={cancelRef} onClick={() => pending.resolve(null)}>Cancel</Button>
+                  <Button tone="primary" title={blockedWhy || undefined}
+                    aria-describedby={blockedWhy ? `${fid}-why` : undefined}
                     onClick={() => pending.resolve(answer())}
-                    disabled={(!rebase && !subject.trim()) || held}
-                    className="text-[11px] px-2.5 py-1 rounded font-medium disabled:opacity-40"
-                    style={{ color: "var(--on-primary)", background: "var(--primary)" }}>{how.label}</button>
+                    disabled={(!rebase && !subject.trim()) || held}>{BUTTON_LABEL[method]}</Button>
                 </span>
               </div>
             </motion.div>
@@ -574,19 +708,7 @@ function assignLine(e: Ensure, people: { id?: number | null; me?: boolean }[] | 
 function Ref({ children }: { children: React.ReactNode }) {
   return (
     <code className="px-1 py-px rounded text-[10.5px]"
-      style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text2)" }}>{children}</code>
-  );
-}
-
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <div className="text-[10.5px] mb-1 flex items-baseline gap-1.5">
-        <span style={{ color: "var(--text2)" }}>{label}</span>
-        {hint && <span style={{ color: "var(--text4)" }}>— {hint}</span>}
-      </div>
-      {children}
-    </label>
+      style={{ overflowWrap: "anywhere", background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text2)" }}>{children}</code>
   );
 }
 

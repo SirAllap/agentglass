@@ -5,8 +5,8 @@
 //     one cached lookup by branch),
 //   - the token is the house's 20px box and the control's slots are fixed,
 //   - no tracker's column is spelled out in code,
-//   - nothing moves when the mark appears: the card reserves the spine's height
-//     and the token takes the slot the base branch had,
+//   - nothing moves when the mark appears: the stack is a chip in the strip, so the card keeps one height,
+//     and the `#prev` token takes the slot the base branch had,
 //   - there is one list of trunks, not a copy in every screen.
 import { describe, expect, test } from "bun:test";
 
@@ -15,6 +15,7 @@ const code = (s: string) => s.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*|\{\/
 const marks = code(await src("components/StackMarks.tsx"));
 const board = await src("components/TriageBoard.tsx");
 const panel = await src("components/PrPanel.tsx");
+const card_ = await src("components/PrCard.tsx");
 const store = code(await src("lib/prBaseStore.ts"));
 const detect = code(await src("lib/prStack.ts"));
 const css = await src("index.css");
@@ -46,13 +47,11 @@ describe("size and slots", () => {
     // an absent neighbour disables the button, it does not remove it
     expect(marks).toMatch(/disabled=\{!to\}/);
   });
-  test("the card reserves the spine's height, and the token sits where the base branch did", () => {
-    expect(board).toMatch(/minHeight: stack \? spineHeight\(stack\.spine\) : undefined/);
-    /* Between the arrow of the stand line and the token there is no new row. */
-    const at = board.indexOf("<BaseToken");
-    const from = board.lastIndexOf("→</span>", at);
-    expect(from).toBeGreaterThan(0);
-    expect(board.slice(from, at)).not.toMatch(/<div|<br/);
+  test("the card is one fixed height whatever the stack: a chip and a popover, no spine in the card", () => {
+    expect(board).not.toMatch(/spineHeight|<Spine\b/);
+    /* The stack is a chip in the strip; the base branch turns into the `#prev` token in the route line, in the slot it had. */
+    expect(card_).toContain("Builds on #");
+    expect(card_).toContain("chipText(");
   });
 });
 

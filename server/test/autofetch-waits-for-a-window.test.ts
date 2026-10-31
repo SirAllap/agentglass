@@ -27,6 +27,8 @@ beforeAll(async () => {
   mkdirSync(repo);
   Bun.spawnSync([realGit, "init", "-q", repo]);
   Bun.spawnSync([realGit, "-C", repo, "-c", "user.email=a@b.c", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "first"]);
+  // Fetches go one remote at a time, so a repository with no remote runs none.
+  Bun.spawnSync([realGit, "-C", repo, "remote", "add", "origin", join(dir, "origin.git")]);
   mkdirSync(join(dir, "bin"));
   writeFileSync(join(dir, "bin", "git"), `#!/bin/sh\necho "$@" >> "${log}"\nexec "${realGit}" "$@"\n`);
   chmodSync(join(dir, "bin", "git"), 0o755);

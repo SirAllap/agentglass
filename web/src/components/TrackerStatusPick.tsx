@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Select, type SelectOption } from "./Select.tsx";
 import { putCard } from "../lib/prCardStore.ts";
 import { useMoveForm } from "./jira/JiraMoveForm.tsx";
+import { StateLabel, stateStyle } from "./jira/DockParts.tsx";
 import { askHint } from "../lib/jiraMoveForm.ts";
 import type { ProviderTask } from "../../../shared/providers.ts";
 import type { Tracker } from "../lib/trackerApi.ts";
@@ -24,12 +25,14 @@ const WHY_NOT = "\u0000why";
  * moved says so in the list instead of showing an empty one. `updated` rides along with the write, so a card that changed while
  * this was open comes back as a conflict.
  */
-export function TrackerStatusPick({ tracker, task, query, onSaid, onTask, align }: {
+export function TrackerStatusPick({ tracker, task, query, onSaid, onTask, align, chip }: {
   tracker: Tracker; task: ProviderTask; query: string; onSaid: (s: string) => void;
   /** Which edge of the control the list lines up with: `right` where the control sits at the end of a row. */
   align?: "left" | "right";
   /** The card after a move, for a list that holds its own copy (its new stamp rides the next write). */
   onTask?: (t: ProviderTask) => void;
+  /** Draw the closed control as the card's state chip of this height (the card dock's), not as the status pill. */
+  chip?: number;
 }) {
   const [opts, setOpts] = useState<StatusOptionsResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -83,8 +86,12 @@ export function TrackerStatusPick({ tracker, task, query, onSaid, onTask, align 
   };
 
   return (
-    <span className="min-w-0" onMouseEnter={load}>
-      <Select value={CURRENT} onChange={(v) => { void move(v); }} onOpen={load} busy={busy} title="Status" options={options} align={align} />
+    <span className="min-w-0" onMouseEnter={load} data-dock={chip ? "move" : undefined}>
+      {chip
+        ? <Select value={CURRENT} onChange={(v) => { void move(v); }} onOpen={load} busy={busy} title="Move this card to another step" options={options} align={align}
+            className="rounded-lg outline-none whitespace-nowrap max-w-[220px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--primary)]" style={stateStyle(task.statusColor || undefined, task.statusKind === "done", chip)}
+            trigger={<StateLabel status={task.status} done={task.statusKind === "done"} />} />
+        : <Select value={CURRENT} onChange={(v) => { void move(v); }} onOpen={load} busy={busy} title="Status" options={options} align={align} />}
       {form.dialog}
     </span>
   );

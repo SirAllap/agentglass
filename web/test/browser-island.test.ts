@@ -199,7 +199,7 @@ describe("the dock keeps one footprint", () => {
     expect(presence).toContain('<span className="agx-presence-state"><Swap k={state.key}>');
     expect(presence).not.toMatch(/\?\s*<span className="agx-presence-state"/);
     expect(presence).toContain('<Swap k={agent.paused ? "back" : "take"}>');
-    expect(presence).toContain('className="agx-sw-lay is-out" aria-hidden');
+    expect(presence).toContain('className="agx-swap-lay is-out" aria-hidden');
   });
   test("Take over wears the alien and Hand back the spark, and the alien looks from the ghost's state", () => {
     expect(presence).toContain("<><SparkGlyph />Hand back</> : <><AlienGlyph />Take over</>");
@@ -212,7 +212,7 @@ describe("the dock keeps one footprint", () => {
     const body = rm.slice(0, rm.indexOf("\n}\n"));
     expect(body).toContain(".agx-presence-dock button * { animation: none; }");
     expect(body).toContain(".agx-al-head, .agx-al-eyes { transform: none; transition: none; }");
-    expect(body).toContain(".agx-sw-lay.is-out { opacity: 0; }");
+    expect(body).toContain(".agx-swap-lay.is-out { opacity: 0; }");
   });
 });
 
@@ -288,7 +288,7 @@ describe("dock crossfade width", () => {
 
   test("the chip's floor grows with the font size, so no state word moves Take over", async () => {
     const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
-    expect(css).toMatch(/\.agx-presence-state \.agx-sw \{ height: 20px; min-width: calc\([\d.]+em \+ 20px\); \}/);
+    expect(css).toMatch(/\.agx-presence-state \.agx-swap \{ height: 20px; min-width: calc\([\d.]+em \+ 20px\); \}/);
     expect(presence).not.toContain("min={");
   });
 });

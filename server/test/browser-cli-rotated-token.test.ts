@@ -41,6 +41,10 @@ beforeAll(() => {
     port: 0,
     fetch(req) {
       presented.push(req.headers.get("authorization"));
+      // A minted, scoped credential the server knows and whose act it refuses.
+      const auth = req.headers.get("authorization") ?? "";
+      if (auth.startsWith("Bearer st_") || auth === "Bearer accepted-but-refused")
+        return Response.json({ ok: false, error: "a seat may not do this" }, { status: 403 });
       const ok = req.headers.get("authorization") === `Bearer ${CURRENT}`;
       return Response.json(ok ? { ok: true, tabs: [] } : { ok: false, error: "unauthorized" }, { status: ok ? 200 : 401 });
     },
@@ -106,5 +110,32 @@ describe.if(HAVE_PY)("a token from before the last rotation", () => {
     expect(r.code).not.toBe(0);
     expect(r.out + r.err).toContain("holds one it does not accept either");
     expect(presented).toHaveLength(2);
+  });
+
+  test("a seat's token refused with 403 is not asked again with the machine token", async () => {
+    // A 403 is a credential accepted and an act refused; the file's machine
+    // token would turn the refusal into a yes.
+    writeToken(CURRENT);
+    const r = await run({ AGENTGLASS_TOKEN: "st_seatToken" });
+    expect(r.code).not.toBe(0);
+    expect(presented).toEqual(["Bearer st_seatToken"]);
+    expect(r.out + r.err).toContain("a seat may not do this");
+  });
+
+  test("any token refused with 403 keeps the server's sentence and is not retried", async () => {
+    writeToken(CURRENT);
+    const r = await run({ AGENTGLASS_TOKEN: "accepted-but-refused" });
+    expect(r.code).not.toBe(0);
+    expect(presented).toEqual(["Bearer accepted-but-refused"]);
+    expect(r.out + r.err).not.toContain("Open a new pane");
+  });
+
+  test("a seat's stale token on 401, or any token in a seat's pane, is not retried either", async () => {
+    writeToken(CURRENT);
+    for (const env of [{ AGENTGLASS_TOKEN: "pg_pluginToken" }, { AGENTGLASS_TOKEN: "issued-before-the-restart", AGENTGLASS_SEAT: "/home/me/code/orbit" }] as Record<string, string>[]) {
+      const r = await run(env);
+      expect(r.code, JSON.stringify(env)).not.toBe(0);
+      expect(presented, JSON.stringify(env)).toHaveLength(1);
+    }
   });
 });

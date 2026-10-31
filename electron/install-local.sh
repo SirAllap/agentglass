@@ -240,12 +240,22 @@ if [ -f "$APP/resources/bin/agentglass-ui" ]; then
     chmod +x "$APP/resources/bin/agentglass-ui-mcp" 2>/dev/null || true
     ln -sf "$APP/resources/bin/agentglass-ui-mcp" "$BIN/agentglass-ui-mcp"
   fi
+  # A flight plan end to end: loads agentglass-ui-mcp, and through it the CLI and the transport.
+  if [ -f "$APP/resources/bin/agentglass-flightplan-mcp" ] && [ -f "$APP/resources/bin/agentglass-ui-mcp" ] && [ -f "$APP/resources/bin/agentglass-browser-mcp" ]; then
+    chmod +x "$APP/resources/bin/agentglass-flightplan-mcp" 2>/dev/null || true
+    ln -sf "$APP/resources/bin/agentglass-flightplan-mcp" "$BIN/agentglass-flightplan-mcp"
+  fi
 fi
 # The named-agent CLI: a script's launcher and liveness for unattended agents
 # on the engine. Same home as the browser CLI, for the same reason.
 if [ -f "$APP/resources/bin/agentglass-agent" ]; then
   chmod +x "$APP/resources/bin/agentglass-agent" 2>/dev/null || true
   ln -sf "$APP/resources/bin/agentglass-agent" "$BIN/agentglass-agent"
+fi
+# The post-merge cleanup CLI: dry run by default, runs only a plan id it printed.
+if [ -f "$APP/resources/bin/agentglass-cleanup" ]; then
+  chmod +x "$APP/resources/bin/agentglass-cleanup" 2>/dev/null || true
+  ln -sf "$APP/resources/bin/agentglass-cleanup" "$BIN/agentglass-cleanup"
 fi
 # The plugin CLI. `validate` runs with no app at all, which is the point: a
 # plugin's own CI checks its manifest with the same rules the app applies.
@@ -263,7 +273,7 @@ fi
 #
 # Copied rather than symlinked: this outlives any particular build, and a
 # dangling skill is a tool an agent believes in and cannot use.
-for _s in browser-use orchestrator ui-control; do
+for _s in browser-use flight-plan orchestrator ui-control; do
   [ -f "$APP/resources/skills/$_s/SKILL.md" ] || continue
   mkdir -p "$HOME/.claude/skills/$_s"
   cp "$APP/resources/skills/$_s/SKILL.md" "$HOME/.claude/skills/$_s/SKILL.md"
@@ -350,6 +360,7 @@ echo "  command  agentglass"
 [ -L "$BIN/agentglass-cockpit-mcp" ] && echo "  mcp      claude mcp add agentglass-cockpit -- agentglass-cockpit-mcp"
 [ -L "$BIN/agentglass-ui" ] && echo "  agent cli agentglass-ui (opens panels, reads state, reads and sets settings)"
 [ -L "$BIN/agentglass-ui-mcp" ] && echo "  mcp      claude mcp add agentglass-ui -- agentglass-ui-mcp"
+[ -L "$BIN/agentglass-flightplan-mcp" ] && echo "  mcp      claude mcp add agentglass-flightplan -- agentglass-flightplan-mcp"
 [ -f "$HOME/.claude/skills/browser-use/SKILL.md" ] && echo "  skill    ~/.claude/skills/browser-use (so agents know it is there)"
 echo "  launcher $DESKTOP/agentglass.desktop"
 

@@ -3,7 +3,8 @@ import { DEFAULT_RAIL, MiniRail } from "./MiniApp.tsx";
 import { LanternDemo } from "./LanternPreview.tsx";
 import { DiffDemo } from "./DiffPreview.tsx";
 import { SettingRow, Toggle } from "../../SettingRow.tsx";
-import { SegControl, SettingsCard } from "../../SettingsKit.tsx";
+import { SettingsCard } from "../../SettingsKit.tsx";
+import { Segmented } from "../../workspace/Chrome.tsx";
 import { SettingsPageHeader } from "../../SettingsPageHeader.tsx";
 import { ThemeIcon } from "../../settingsNavIcons.tsx";
 import { SURFACE_CSS } from "./Frame.tsx";
@@ -49,17 +50,17 @@ function SettingsDemo({ zoomPct }: { zoomPct: number }) {
       <div className="agx-settings-col" data-flow="single" style={{ padding: "0 24px", maxWidth: 620 }}>
         <SettingsCard title="Size and startup" icon={<ThemeIcon size={16} />}>
           <SettingRow agentExempt label="Display size" hint="How big everything inside the window is."
-            below={<SegControl label="Display size" value={size} onPick={noop}
-              options={[90, 100, 110, 125].map((n) => ({ v: String(n), label: `${n} %` }))} />} />
+            below={<Segmented track label="Display size" value={size} onChange={noop}
+              options={[90, 100, 110, 125].map((n) => ({ id: String(n), label: `${n} %` }))} />} />
           <Toggle on={false} onClick={noop} label="Fullscreen" hint="Hide the window frame." />
           <Toggle on onClick={noop} label="Start at login" hint="Open agentglass when you log in." />
         </SettingsCard>
         <SettingsCard title="Density & type" icon={<ThemeIcon size={16} />}>
           <SettingRow agentExempt label="Density" hint="How much air rows and cards get."
-            below={<SegControl label="Density" value="comfortable" onPick={noop}
-              options={[{ v: "compact", label: "Compact" }, { v: "comfortable", label: "Comfortable" }, { v: "roomy", label: "Roomy" }]} />} />
+            below={<Segmented track label="Density" value="comfortable" onChange={noop}
+              options={[{ id: "compact", label: "Compact" }, { id: "comfortable", label: "Comfortable" }, { id: "roomy", label: "Roomy" }]} />} />
           <Toggle on={false} onClick={noop} label="Translucent window" hint="Lets the desktop blur through the sidebar." />
-          <Toggle on onClick={noop} label="Reduce motion" hint="Skips the flight and fade animations." />
+          <Toggle on onClick={noop} label="Reduce motion" hint="Skips the sliding and fade animations." />
         </SettingsCard>
       </div>
     </div>
@@ -68,7 +69,7 @@ function SettingsDemo({ zoomPct }: { zoomPct: number }) {
 
 /** The tab pills that choose the view: they sit in the preview card's header, beside "The real app". */
 export function LiveTabs({ view, onView }: { view: LiveView; onView: (v: LiveView) => void }) {
-  return <SegControl label="View" value={view} onPick={onView} options={LIVE_VIEWS.map((v) => ({ v: v.id, label: v.label }))} />;
+  return <Segmented track label="View" value={view} onChange={onView} options={LIVE_VIEWS.map((v) => ({ id: v.id, label: v.label }))} />;
 }
 
 export interface LiveWindowProps {

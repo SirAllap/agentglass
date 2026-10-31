@@ -24,9 +24,26 @@ export async function settingsRequestsChanged(): Promise<void> {
   for (const f of subs) f();
 }
 
-/** The person's click. The card goes when the server's frame says the list changed. */
-export async function answerSettingsRequest(id: string, approve: boolean): Promise<string | null> {
+/** An answer the server refused after the request had already left its list: the card is gone, so
+ *  the refusal is kept here for the person to read (measured: Approve on a setting that changed since
+ *  made the card vanish with no word, and it looked applied). */
+export interface SettingRefusal { id: string; who: string; title: string; approve: boolean; error: string }
+let refusals: readonly SettingRefusal[] = [];
+export const settingsRefusals = {
+  list: (): readonly SettingRefusal[] => refusals,
+  subscribe: settingsRequests.subscribe,
+  dismiss(id: string): void { refusals = refusals.filter((x) => x.id !== id); for (const f of subs) f(); },
+};
+
+/** The person's click. The card goes when the server's frame says the list changed; a refusal that
+ *  outlives it is kept (settingsRefusals). A refusal with the card still there shows on the card. */
+export async function answerSettingsRequest(id: string, approve: boolean, about: { who: string; title: string } = { who: "", title: "" }): Promise<string | null> {
   const r = await api.settingsRequestDecide(id, approve).catch(() => null);
-  void settingsRequestsChanged();
-  return r?.ok ? null : r?.error ?? "the server did not answer";
+  await settingsRequestsChanged();
+  const error = r?.ok ? null : r?.error ?? "the server did not answer";
+  if (error && !items.some((x) => x.id === id)) {
+    refusals = [...refusals.filter((x) => x.id !== id), { id, ...about, approve, error }];
+    for (const f of subs) f();
+  }
+  return error;
 }

@@ -4,7 +4,7 @@
 # lowers the line in the same commit. A page built from SettingsKit has no
 # lines here; it is held at zero by the MIGRATED list in the test.
 # recipes: the 7 are the same CheckoutPicker names, in the run form.
-recipes clipped 7
+recipes clipped 3
 # budgets: the 7 are repository and branch names inside CheckoutPicker, which carry
 # their full value in a title; the page itself has no old box and no other defect.
-budgets clipped 7
+budgets clipped 6

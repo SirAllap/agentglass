@@ -17,6 +17,14 @@ export interface FieldRow {
   saidAt?: number;
   doing?: string;
   state?: "working" | "waiting" | "idle";
+  /** A subagent or a tool call is still open under this session. Its own turn
+   *  is idle while it waits on them, which is working, not forgotten. */
+  alive?: boolean;
+  /** The newest sign the session did something: a tool call (its own or a
+   *  subagent's), a prompt, a background shell launched. ms. */
+  lastLifeSign?: number;
+  /** A prompt or tool call came after the last Stop: the turn has not ended. */
+  turnOpen?: boolean;
 }
 
 /**
@@ -64,7 +72,7 @@ export const FORGOTTEN_AFTER_MS = 60 * 60_000;
  * a longer silence.
  */
 export const isForgotten = <R extends FieldRow>(r: R, now = Date.now()): r is R & { doing: string; saidAt: number } =>
-  !r.role && !r.needsYou && !isGone(r, now)
+  !r.role && !r.needsYou && !r.alive && !isGone(r, now)
   && r.state === "idle" && !!r.doing && !!r.saidAt && now - r.saidAt >= FORGOTTEN_AFTER_MS;
 
 /**
@@ -105,3 +113,21 @@ export function howLong(since: number, now = Date.now()): string {
   const m = Math.max(0, Math.floor((now - since) / 60_000));
   return m < 1 ? "just now" : m < 60 ? `${m}m` : m < 60 * 24 ? `${Math.floor(m / 60)}h` : `${Math.floor(m / (60 * 24))}d`;
 }
+
+/** Claimed work, a turn still open, and no life sign for this long. */
+export const STALLED_AFTER_MS = 20 * 60_000;
+
+/**
+ * "Said it is on something, its turn never ended, and nothing has moved for
+ * twenty minutes" — and no call, subagent or background shell is alive to
+ * explain the silence. Not `forgotten` (that reads the age of a status post, an
+ * hour) and not `left` (a turn that ended is finished, not stuck): the one
+ * definition of stalled the Starboard reads. Deliberately outside `attention()`
+ * so the watch's notifications do not change with it.
+ *
+ * shortcut: a background shell has no completion hook, so one launched less
+ * than the server's cap ago counts as alive however long it really ran.
+ */
+export const isStalled = (r: FieldRow, now = Date.now()): boolean =>
+  !r.role && !r.needsYou && !r.alive && !isGone(r, now)
+  && !!r.doing && !!r.turnOpen && !!r.lastLifeSign && now - r.lastLifeSign >= STALLED_AFTER_MS;

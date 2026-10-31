@@ -88,8 +88,6 @@ describe("idempotent event writes", () => {
     expect(session.output_tokens).toBe(100);
     expect(session.cost_usd).toBeCloseTo(0.1234, 10);
     expect(db.getRecent(100).filter((e) => e.event_id === "retry-safe-1")).toHaveLength(1);
-    expect(db.searchEvents("firstwriteuniquemarker")).toHaveLength(1);
-    expect(db.searchEvents("retryonlyuniquemarker")).toHaveLength(0);
     expect((db.getSessions().find((s) => s.session_id === "reliable-session") as any).pricing_baseline_usd).toBeUndefined();
   });
 

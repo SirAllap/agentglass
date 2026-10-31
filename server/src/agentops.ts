@@ -31,7 +31,7 @@ import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { db } from "./db.ts";
-import { tmux, engineWindowRunning, KEPT_MARK } from "./tmuxpane.ts";
+import { tmux, engineWindowRunning, engineSessionName, KEPT_MARK } from "./tmuxpane.ts";
 import { paneCommand } from "./tmuxlayout.ts";
 import { agentBinFor, agentArgv } from "./agentticket.ts";
 import { AGENT_PROVIDERS, agentKind, agentProvider } from "../../shared/agentKinds.ts";
@@ -47,8 +47,15 @@ import type { BoardRow } from "./agentboard.ts";
  *  plain, and never something `-t` could misread. */
 export const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 export const validName = (s: unknown): s is string => typeof s === "string" && NAME_RE.test(s);
-/** The engine session every named agent's window goes into. */
-export const AGENTS_SESSION = "agents";
+/**
+ * Every named agent's window opens in the app's one session, the engine session of the project root
+ * (`orbit` on a machine whose root is orbit), never in one of its own. It used to be a session called
+ * `agents` so a script's windows would not fill a strip; that left a seat's workers where no strip
+ * draws a tab, and the person could neither see nor open them. In the project's session the strip
+ * groups a window by the project its folder belongs to, so a worker sits next to its orchestrator.
+ * Opened without selecting (`select` false below), so nobody's screen moves.
+ */
+export const agentSession = (root: string): string => engineSessionName(root);
 
 export interface NamedAgent {
   name: string;
@@ -473,6 +480,19 @@ export function lockLoosened(rules: OpenCodeRule[], lock: string): { subject: st
   return null;
 }
 
+/** `opencode --version`, for a refusal's message only; "" when it will not say. Answer to a file, as below. */
+export async function openCodeVersion(bin: string, cwd: string, env: Record<string, string>): Promise<string> {
+  const dir = mkdtempSync(join(tmpdir(), "agx-oc-ver-"));
+  try {
+    const file = join(dir, "v.txt");
+    const proc = Bun.spawn([bin, "--version"], { cwd, env: { ...process.env, ...env }, stdin: "ignore", stdout: Bun.file(file), stderr: "ignore" });
+    const timer = setTimeout(() => { try { proc.kill(); } catch { /* gone */ } }, 5_000);
+    await proc.exited;
+    clearTimeout(timer);
+    return /\d+\.\d+\.\d+/.exec(readFileSync(file, "utf8"))?.[0] ?? "";
+  } catch { return ""; } finally { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } }
+}
+
 /**
  * Ask OpenCode itself what the role's agent will run under — every layer it
  * merges: the person's global config, the project's opencode.json and
@@ -504,7 +524,15 @@ export async function openCodeLockLoosened(bin: string, cwd: string, env: Record
     const done = await Promise.race([proc.exited, late]);
     clearTimeout(timer);
     if (done === "late") { try { proc.kill(); } catch { /* gone */ } return `OpenCode would not show its ${agent} agent's rules`; }
-    if (done !== 0) return `OpenCode would not show its ${agent} agent's rules`;
+    if (done !== 0) {
+      /* A nonzero exit is not a hang: OpenCode answered, and what it said is that
+         it has no \`debug agent\` (gone in 2.x, measured on 2.1.4, where \`debug agents\`
+         lists nothing and no other command shows an agent's merged rules). Say so
+         with its version, because "would not show" sends nobody anywhere. The
+         worker is still refused: a lock nobody could check is not a lock. */
+      const v = await openCodeVersion(bin, cwd, env);
+      return `OpenCode${v ? ` ${v}` : ""} cannot show the rules its ${agent} agent runs under (it has no \`opencode debug agent\`), so the lock cannot be checked and the worker was not started. Put this role on Claude in Settings, or install an OpenCode that still has \`debug agent\``;
+    }
     out = readFileSync(file, "utf8");
   } catch {
     return `OpenCode would not show its ${agent} agent's rules`;
@@ -604,6 +632,8 @@ export async function startAgent(p: {
   /** Started as a worker role: its model and OpenCode agent are the role's,
    *  so a caller's `--model`, `-m` or `--agent` is refused as well. */
   lockedRole?: boolean;
+  /** The OpenCode lock was checked on the private server this worker runs against (agents/opencodeserve.ts), so the plain probe below is skipped. Set only by that path. */
+  lockVerified?: boolean;
   /** Extra environment for the window. NOT reachable from `/agents/named/start`
    *  on purpose: this is how the server hands a seat its own credential
    *  (seat.ts), and a body that could set environment would be a body that
@@ -638,7 +668,7 @@ export async function startAgent(p: {
   /* OpenCode's lock is merged into the configs around it rather than laid over
      them, so whether it holds depends on the directory: asked of OpenCode, in
      that directory, before anything opens. */
-  if ((p.lockedRole || p.env?.OPENCODE_CONFIG_CONTENT) && kind.id === "opencode") {
+  if ((p.lockedRole || p.env?.OPENCODE_CONFIG_CONTENT) && kind.id === "opencode" && !p.lockVerified) {
     const bin = agentBinFor(kind.id);
     const why = bin ? await openCodeLockLoosened(bin, p.cwd, p.env ?? {}) : null;
     if (why) return { ok: false, error: "lock-loosened", detail: why };
@@ -660,11 +690,6 @@ export async function startAgent(p: {
   const argv = p.exactArgv ?? namedAgentArgv(bin, kind.id, { ...p, args }, supportsSessionName(bin));
   if (!argv.length) return { ok: false, error: "no-cli" };
 
-  /* One tmux session for every named agent, apart from the project's own:
-     Herdr gave each worker its own workspace, and a person's strip is not the
-     place for windows a script opened — it appears on the board and in the
-     Terminal view's session list either way. Never selected, so nobody's
-     screen is yanked by a tick. */
   /*
    * `keep` runs the CLI through the wrapper every other window this app opens
    * uses. Without it the window closes with the CLI, which is how a watched
@@ -675,7 +700,7 @@ export async function startAgent(p: {
    * (tmuxconf.ts) — took its tab and its answer with it.
    */
   const run = p.keep ? ["sh", "-c", paneCommand(argv)] : argv;
-  const opened = await engineWindowRunning(p.root, p.name, run, p.cwd, { AGENTGLASS_AGENT_NAME: p.name, ...(p.env ?? {}) }, AGENTS_SESSION, false);
+  const opened = await engineWindowRunning(p.root, p.name, run, p.cwd, { AGENTGLASS_AGENT_NAME: p.name, ...(p.env ?? {}) }, agentSession(p.root), false);
   if (!opened) return { ok: false, error: "no-window" };
   /* A window this app opened and watches: its closing is how `reconcile`
      learns the agent ended, so it closes on any exit rather than keeping the

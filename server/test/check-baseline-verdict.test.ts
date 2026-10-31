@@ -60,6 +60,18 @@ describe("aggregates", () => {
     expect(a.successes).toBe(2);
     expect(a.latest).toEqual({ ms: 10, conclusion: "success", completedAt: now - 1000 });
   });
+  test("each day counts its successes and failures apart from the cancelled, and the newest run names its pull request", () => {
+    const now = Date.parse("2026-09-30T12:00:00Z");
+    const a = aggregateRuns([
+      { conclusion: "success", ms: 10, completedAt: now - 1000, pr: 1042 }, { conclusion: "failure", ms: 3, completedAt: now - 2000, pr: 1044 },
+      { conclusion: "cancelled", ms: 1, completedAt: now - 3000 }, { conclusion: "failure", ms: 4, completedAt: now - 3 * 86_400_000 },
+    ], now);
+    expect(a.trend[13]).toMatchObject({ runs: 3, passed: 1, failed: 1 });
+    expect(a.trend[10]).toMatchObject({ runs: 1, passed: 0, failed: 1 });
+    expect(a.latest?.pr).toBe(1042);
+    // A run kept without a pull request leaves the field out rather than writing null into the answer.
+    expect("pr" in aggregateRuns([{ conclusion: "success", ms: 10, completedAt: now - 1000 }], now).latest!).toBe(false);
+  });
   test("latest skips a cancelled run and is null with nothing but cancellations", () => {
     const now = Date.parse("2026-09-30T12:00:00Z");
     expect(aggregateRuns([{ conclusion: "cancelled", ms: 1, completedAt: now - 10 }, { conclusion: "failure", ms: 7, completedAt: now - 500 }], now).latest)

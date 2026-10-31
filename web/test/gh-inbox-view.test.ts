@@ -13,7 +13,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { globalStubs } from "./stubGlobal";
 import type { InboxItem } from "../../shared/types.ts";
-import { byDay, facetCounts, facetOrder, filterInbox, inFacet, reasonLabel, searchInbox } from "../src/lib/ghInbox.ts";
+import { facetCounts, facetOrder, filterInbox, inFacet, reasonLabel, searchInbox } from "../src/lib/ghInbox.ts";
 import { __resetMarks, isDone, isSaved, onShelf, setDone, setSaved } from "../src/lib/inboxMarks.ts";
 const stubGlobal = globalStubs();
 
@@ -140,23 +140,3 @@ describe("the shelves, which are ours", () => {
   });
 });
 
-describe("grouped by day", () => {
-  test("today, yesterday, then the date", () => {
-    const now = Date.parse("2026-08-19T12:00:00Z");
-    const rows = [
-      note({ id: "a", at: Date.parse("2026-08-19T09:00:00Z") }),
-      note({ id: "b", at: Date.parse("2026-08-18T09:00:00Z") }),
-      note({ id: "c", at: Date.parse("2026-08-11T09:00:00Z") }),
-    ];
-    const groups = byDay(rows, now);
-    expect(groups.map((g) => g.label).slice(0, 2)).toEqual(["Today", "Yesterday"]);
-    expect(groups).toHaveLength(3);
-    expect(groups[2]!.items.map((n) => n.id)).toEqual(["c"]);
-  });
-
-  test("rows of the same day stay in one group", () => {
-    const now = Date.parse("2026-08-19T12:00:00Z");
-    const rows = [note({ id: "a", at: now - 3600_000 }), note({ id: "b", at: now - 7200_000 })];
-    expect(byDay(rows, now)).toHaveLength(1);
-  });
-});

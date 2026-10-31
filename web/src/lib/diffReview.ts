@@ -263,3 +263,50 @@ export function clearReview(root: string) {
   const { [root]: _gone, ...rest } = reviews;
   commit(rest);
 }
+
+type Box = { left: number; right: number; top: number; bottom: number };
+
+/**
+ * How far in from the right edge a bar must keep its content so a floating
+ * button (the bench, `data-floating-furniture`) does not sit on it.
+ *
+ * Measured: the round button covered half of the second Remove in the review
+ * tray at 1920x1080. Only furniture over the right half counts; one dragged to
+ * the left half would push everything into a sliver, which is worse than being
+ * covered. That case is not handled here.
+ */
+export function furnitureClearance(bar: Box, furniture: readonly Box[], gap = 8): number {
+  let pad = 0;
+  for (const f of furniture) {
+    const over = f.bottom > bar.top && f.top < bar.bottom && f.right > bar.left && f.left < bar.right;
+    if (over && f.left > (bar.left + bar.right) / 2) pad = Math.max(pad, bar.right - f.left + gap);
+  }
+  return pad;
+}
+
+/**
+ * The end of a Send: wait for the terminal's answer and say how it went. The
+ * review is NOT cleared on an ok answer: the request only parks a prompt for a
+ * window that may still fail to start the agent, and a review that vanished
+ * left nothing to send again. It goes when the person discards it.
+ */
+export async function settleReview(
+  answered: Promise<{ ok: boolean; error?: string }>,
+): Promise<{ ok: boolean; error?: string }> {
+  try { return await answered; } catch (e) { return { ok: false, error: e instanceof Error ? e.message : "the request failed" }; }
+}
+
+/** What the tray says about the last Send. A missing agent CLI is told apart from any
+ *  other failure by the server's own words ("<agent> is not installed here"), because
+ *  the fix differs: install or pick an agent, rather than look at the Terminal view. */
+export type SendNote =
+  | { kind: "missing-cli"; title: string; body: string }
+  | { kind: "failed"; title: string; body: string };
+
+export function failedSendNote(error: string | undefined, n: number): SendNote {
+  const kept = `Your review is kept: ${n} ${n === 1 ? "comment" : "comments"}, intro and outro.`;
+  if (error && /is not installed here/i.test(error)) {
+    return { kind: "missing-cli", title: "No agent CLI found on PATH.", body: `${kept} Set an agent in Settings, then send again.` };
+  }
+  return { kind: "failed", title: "Claude was not started:", body: `${error ?? "no answer"}. ${kept} Send again once that is fixed.` };
+}

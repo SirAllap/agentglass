@@ -21,6 +21,7 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }));
 for (const [me, other] of [["A", "B"], ["B", "A"]] as const) {
   writeFileSync(join(dir, `${me.toLowerCase()}.test.ts`), `import { beforeAll, expect, test } from "bun:test";
 process.env.AGENTGLASS_ROOT = "/gone/after/file-${me}";
+process.env.TMUX_TMPDIR = "/gone/after/file-${me}/tmux";
 beforeAll(() => { process.env.AGENTGLASS_PROBE_${me} = "set in a hook"; });
 test("${me} starts clean", () => {
   expect(process.env.AGENTGLASS_PROBE_${other}).toBeUndefined();
@@ -32,19 +33,21 @@ test("${me} starts clean", () => {
 writeFileSync(join(dir, "c.test.ts"), `import { expect, test } from "bun:test";
 test("C finds the root it was started with", () => {
   expect(process.env.AGENTGLASS_ROOT).toBe(process.env.ROOT_AT_START || undefined);
+  // The tmux tests refuse any socket outside a TMUX_TMPDIR the process holds.
+  expect(process.env.TMUX_TMPDIR).toBe(process.env.TMUX_AT_START || undefined);
 });
 `);
 
 async function run(preload: boolean) {
   const cmd = ["bun", "test", ...(preload ? ["--preload", new URL("./envscope.ts", import.meta.url).pathname] : []), "a.test.ts", "b.test.ts", "c.test.ts"];
-  const env: Record<string, string> = { ...process.env as Record<string, string>, ROOT_AT_START: process.env.AGENTGLASS_ROOT ?? "" };
+  const env: Record<string, string> = { ...process.env as Record<string, string>, ROOT_AT_START: process.env.AGENTGLASS_ROOT ?? "", TMUX_AT_START: process.env.TMUX_TMPDIR ?? "" };
   const p = Bun.spawn(cmd, { cwd: dir, env, stdout: "pipe", stderr: "pipe" });
   const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
   await p.exited;
   return { code: p.exitCode, text: out + err };
 }
 
-describe("the AGENTGLASS_* variables a test file leaves behind", () => {
+describe("the AGENTGLASS_* and TMUX_TMPDIR variables a test file leaves behind", () => {
   test("without the plugin the next file inherits them (the thing being fixed)", async () => {
     const r = await run(false);
     expect(r.code).not.toBe(0);

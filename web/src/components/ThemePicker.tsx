@@ -13,8 +13,8 @@ import { IS_DESKTOP, translucentSupported } from "../lib/desktop.ts";
 import { Select } from "./Select.tsx";
 import { SERVER, authHeaders } from "../lib/api.ts";
 import { ICON } from "../lib/iconSize.ts";
-import { Button } from "./workspace/Chrome.tsx";
-import { SegControl, SettingsCard } from "./SettingsKit.tsx";
+import { Button, Segmented } from "./workspace/Chrome.tsx";
+import { SettingsCard } from "./SettingsKit.tsx";
 import { PreviewCard, WithPreview } from "./settings/PreviewCard.tsx";
 import { AppearancePreview, LiveTabs, type LiveView } from "./settings/previews/index.ts";
 import { railItems } from "./settings/previews/MiniApp.tsx";
@@ -189,8 +189,8 @@ export function AppearancePane({ current, onChange, onAccent }: {
             : desk
               ? <>Your desktop's theme is {desk.name}, one click away. <b>System</b> follows your OS's dark or light.</>
               : <>A serious neutral pair. <b>System</b> follows your OS.</> }}
-          control={<SegControl<ThemeMode> label="Mode" value={mode} onPick={chooseMode}
-            options={[...(desk ? [{ v: "desktop" as ThemeMode, label: <DesktopMark source={desk.source} /> }] : []), ...MODES.map(({ m, label }) => ({ v: m, label }))]} />}
+          control={<Segmented<ThemeMode> track label="Mode" value={mode} onChange={chooseMode}
+            options={[...(desk ? [{ id: "desktop" as ThemeMode, label: <DesktopMark source={desk.source} /> }] : []), ...MODES.map(({ m, label }) => ({ id: m, label }))]} />}
         />
         <PaletteRows current={current} onChange={choose} />
       </SettingsCard>
@@ -227,8 +227,8 @@ export function AppearancePane({ current, onChange, onAccent }: {
         <SettingRow
           settingId="appearance.density" label="Density" modified={density !== "comfortable"}
           hint="How much air rows and cards get."
-          below={<SegControl<Density> label="Density" value={density} onPick={(v) => setting("appearance.density").set(v)}
-            options={DENSITIES.map((d) => ({ v: d, label: DENSITY_LABEL[d] }))} />} />
+          below={<Segmented<Density> track label="Density" value={density} onChange={(v) => setting("appearance.density").set(v)}
+            options={DENSITIES.map((d) => ({ id: d, label: DENSITY_LABEL[d] }))} />} />
         <SettingRow
           settingId="appearance.fontSize" label="Interface font size" modified={fontPx !== 13}
           hint="Terminals have their own size."
@@ -243,7 +243,7 @@ export function AppearancePane({ current, onChange, onAccent }: {
         <Toggle settingId="appearance.reduceMotion" on={reduce} modified={!followsSystem}
           onClick={() => setting("appearance.reduceMotion").set(!reduce)}
           label="Reduce motion"
-          hint="Skips the flight and fade animations."
+          hint="Skips the sliding and fade animations."
           detail={{ summary: "Details", body: <>It follows your system's setting until you choose here.{!followsSystem && <> <button type="button" className="underline" onClick={() => { resetReduceMotion(); setTick((n) => n + 1); }}>Follow the system again</button>.</>} Turning it off does not undo the few animations the stylesheet drops by itself when the system asks for less motion.</> }} />
       </SettingsCard>
     </WithPreview>

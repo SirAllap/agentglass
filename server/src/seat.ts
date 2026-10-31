@@ -32,6 +32,7 @@
 import { statSync } from "node:fs";
 import { basename } from "node:path";
 import * as AgentOps from "./agentops.ts";
+import { tmux } from "./tmuxpane.ts";
 import type * as AgentBoard from "./agentboard.ts";
 import { mintSeatToken, revokeSeatTokens } from "./auth.ts";
 import { claudeModels } from "./claudemodels.ts";
@@ -283,18 +284,52 @@ export async function seated(root: string): Promise<AgentOps.NamedAgent | null> 
   if (a && a.endedAt === null) return a;
 
   const row = seatRow(root);
-  if (!row?.adoptedPane) return null;
-  const alive = await AgentOps.paneAlive(row.adoptedPane);
-  if (!alive) {
-    /* Its pane is gone. The row keeps its settings and its lines; what it
-       stops claiming is that somebody is sitting there. */
-    unadopt.run(root);
+  let pane = row?.adoptedPane && await AgentOps.paneAlive(row.adoptedPane) ? row.adoptedPane : "";
+  if (!pane && row && row.startedAt > 0 && row.endedAt === null) {
+    /*
+     * A RELAUNCHED ORCHESTRATOR IS THE SAME CHAIR.
+     *
+     * The recorded pane is gone, but nobody stood the seat down: an
+     * orchestrator that is relayed (a fresh session in a new window named
+     * `Orchestrator-<project>`) never calls adopt again, and reading only the
+     * recorded id showed "Stood down" over a live one, with a Seat button that
+     * would have started a second. The live window carrying the seat name
+     * re-links the row; `closeSeat` sets `endedAt`, so a deliberate stand-down
+     * is never undone by this.
+     */
+    pane = (await orchestratorPane(root)) ?? "";
+    if (pane) adoptRow.run(root, row.name || seatName(root), row.powers, row.adoptedSession, pane, row.startedAt);
+  }
+  if (!pane) {
+    if (row?.adoptedPane) {
+      /* Its pane is gone. The row keeps its settings and its lines; what it
+         stops claiming is that somebody is sitting there. */
+      unadopt.run(root);
+      revokeSeatTokens(root);
+    }
     return null;
   }
   return {
-    name: row.name || "orchestrator", kind: occupantKind(row), cwd: root,
-    paneId: row.adoptedPane, windowId: "", startedAt: row.startedAt, endedAt: null,
+    name: row?.name || "orchestrator", kind: occupantKind(row), cwd: root,
+    paneId: pane, windowId: "", startedAt: row?.startedAt ?? 0, endedAt: null,
   };
+}
+
+/**
+ * The one live pane in a window named like a seat (`Orchestrator-…`, any case)
+ * whose directory belongs to this project, or null. Two candidates are
+ * nobody's to pick: a coin toss would adopt the wrong session.
+ */
+async function orchestratorPane(root: string): Promise<string | null> {
+  const r = await tmux(["list-panes", "-a", "-F", "#{pane_id}\t#{window_name}\t#{pane_current_path}"]).catch(() => null);
+  if (!r?.ok) return null;
+  const hits: string[] = [];
+  for (const line of r.stdout.split("\n")) {
+    const [id = "", window = "", cwd = ""] = line.split("\t");
+    if (!isSeatName(window.toLowerCase()) || !inScope(cwd, root)) continue;
+    if (await AgentOps.paneAlive(id)) hits.push(id);
+  }
+  return hits.length === 1 ? hits[0]! : null;
 }
 
 /** What sits in the chair now. A session this app adopted is a Claude Code
@@ -318,7 +353,7 @@ const occupantKind = (row: Seat | null): string =>
  * rather than handed them.
  */
 export async function adoptSeat(p: { root: string; session: string; pane: string; powers?: Power; now?: number }):
-Promise<{ ok: true; seat: Seat; already: boolean } | { ok: false; error: string }> {
+Promise<{ ok: true; seat: Seat; already: boolean; token: string } | { ok: false; error: string }> {
   const gate = seatable(p.root);
   if ("error" in gate) return { ok: false, error: gate.error };
   const pane = String(p.pane ?? "").trim();
@@ -338,7 +373,14 @@ Promise<{ ok: true; seat: Seat; already: boolean } | { ok: false; error: string 
     pane,
     p.now ?? Date.now(),
   );
-  return { ok: true, seat: seatRow(gate.root)!, already: there !== null };
+  /* A seat this app starts is handed its credential in its environment; an
+     adopted one was already running, so it is handed the same kind in the
+     answer. Without it the session's calls arrive on the machine token and
+     the Go door cannot tell it from any other agent. The powers on the token
+     are the row's, so `assign` is still what Go and Launch need. */
+  revokeSeatTokens(gate.root);
+  const token = mintSeatToken(gate.root, seatRow(gate.root)!.powers);
+  return { ok: true, seat: seatRow(gate.root)!, already: there !== null, token };
 }
 
 /**
@@ -479,6 +521,11 @@ export async function openSeat(p: {
     return { ok: false, error: `${there.name} (${there.kind}) already sits in this chair; stand it down or change the chair before seating ${p.kind}` };
   }
   if (there) return { ok: true, seat: row ?? toSeat({ root, name: there.name, kind: there.kind, model: "", powers: "speak", started_at: there.startedAt, ended_at: null, last_line: "", last_turn_at: 0, adopted_session: "", adopted_pane: "" }), agent: there, already: true };
+
+  /* Stood down in the app, but its session is still running: seating again
+     would put a second orchestrator on the project. */
+  const running = await orchestratorPane(root);
+  if (running) return { ok: false, error: `an orchestrator is already running for this project (pane ${running}); adopt it instead of seating another` };
 
   const powers: Power = p.powers ?? row?.powers ?? "speak";
   /* A seat reads a board and writes a sentence a few times an hour. It is not

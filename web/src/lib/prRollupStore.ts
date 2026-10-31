@@ -83,3 +83,18 @@ export function refreshRollup(root: string, number: number): void {
   // is exactly what they are trying to get past.
   rollupOf(root, number, "", true);
 }
+
+/** What is held, with the time it was read, without asking for anything. The
+ *  pane chip draws a CI dot only from this: no reading, no dot. */
+export function peekRollup(root: string, number: number): { checks: PrCheckRollup | null; at: number } | null {
+  const hit = seen.get(keyOf(root, number));
+  return hit ? { checks: hit.checks, at: hit.at } : null;
+}
+
+/** A reading the server's watch already made (frame `prchecks`): stored as the
+ *  freshest there is, with no request. */
+export function putRollup(root: string, number: number, checks: PrCheckRollup): void {
+  if (!root || !number) return;
+  seen.set(keyOf(root, number), { at: Date.now(), checks, sig: "" });
+  tell();
+}

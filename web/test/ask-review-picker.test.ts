@@ -3,7 +3,7 @@
  *
  * Nobody knows a colleague's login by heart, and a comma list gives no way to
  * see who has already been asked. Every way into a review request (the merge
- * box, the masthead menu, the sidebar pencil) now ends in the one FieldPicker.
+ * box, the masthead menu, the sidebar pencil) now ends in the one PeoplePicker.
  * There is no renderer in the tests, so the rule is asserted against source.
  */
 import { describe, expect, test } from "bun:test";
@@ -30,9 +30,12 @@ describe("one way to ask for a review", () => {
     expect(code(src)).toMatch(/getBoundingClientRect\(\); close\(\); onReviewers\(/);
   });
 
-  test("the picker pins who is already asked, from the open state, and marks the ticked rows", () => {
-    expect(code(src)).toContain('heldLabel="Already asked"');
-    expect(code(src)).toMatch(/options\.filter\(\(o\) => selected\.includes\(o\.value\)\)/);
-    expect(code(src)).toContain("aria-pressed={on}");
+  test("the picker pins who is already asked, from the open state, and marks the ticked rows", async () => {
+    const view = await Bun.file(new URL("../src/lib/prAskWho.ts", import.meta.url)).text();
+    const picker = await Bun.file(new URL("../src/components/workspace/PeoplePicker.tsx", import.meta.url)).text();
+    expect(view).toContain('title: "Already asked"');
+    expect(code(picker)).toContain("aria-selected={on}");
+    expect(code(src)).toContain("<AskPickerHost");
+    expect(code(src)).not.toContain("heldLabel=\"Already asked\"");
   });
 });

@@ -440,9 +440,11 @@ describe("presets", () => {
     W.setPreset("acme/orbit", [{ type: "ci-pass" }, { type: "ci-pass" }, { type: "check", match: "Evals", on: "fail" }, { type: "check", match: "evals", on: "fail" }], false);
     expect(W.listWatches().presets[0]!.rules.length).toBe(2);
   });
-  it("an empty rule list clears the preset", () => {
+  it("an empty rule list with auto off clears the preset; with auto on it is kept (new PRs start with nothing)", () => {
     W.setPreset("acme/orbit", [{ type: "ci-pass" }], true);
     W.setPreset("acme/orbit", [], true);
+    expect(W.listWatches().presets).toEqual([{ repo: "acme/orbit", rules: [], auto: true }]);
+    W.setPreset("acme/orbit", [], false);
     expect(W.listWatches().presets.length).toBe(0);
   });
 });

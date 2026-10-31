@@ -45,7 +45,9 @@ export const stillReading = (p: Pick<PrSummary, "checksLoaded">): boolean => p.c
  * colleague nobody has loaded yet needs `author:name` once.
  */
 /** The box's own words; the long form above is the popover under it and the accessible name. */
-export const SEARCH_PLACEHOLDER = "Search or filter · ⏎ searches all PRs";
+/** What the box says: it searches the whole repository, not the loaded rows. */
+export const searchPlaceholder = (repo?: string): string => `Search all of ${repo || "this repository"} · @person · -word · is:draft`;
+export const SEARCH_PLACEHOLDER = searchPlaceholder();
 
 export const SEARCH_HINT = "Filter these, or press ⏎ to search every pull request: a number (#123), a card key (ORBIT-1042), author:name, assignee:name, reviewer:name, or words from the title";
 
@@ -150,31 +152,13 @@ export function matchedAs(
   return why.length ? `${login}: ${why.join(", ")}` : null;
 }
 
-/** What a lane needs before its card's title starts wrapping, and the gap between lanes. */
-export const LANE_MIN_PX = 268;
 /**
- * The width an open lane has on the board, fixed. Measured as the lane's card
- * at a 2576 px window with three lanes open beside the folded review strip (576 CSS px, ~780 on-screen px at the owner's display scale: nothing inside it wraps or
- * moves). The board is that wide whatever the window is: when the lanes do not
+ * The width an open lane has on the board, fixed: the card is exactly 336px
+ * (it never shrinks, see `.agx-cd`) and the lane keeps 8px of air on each side
+ * of it. The board is that wide whatever the window is: when the lanes do not
  * fit, the lane strip scrolls sideways a whole lane at a time instead of
- * squeezing each one toward LANE_MIN_PX.
+ * squeezing each one. A lane that holds two stacked neighbours widens by
+ * `RAIL_WIDTH_PX` for the gutter rail.
  */
-export const LANE_WIDTH_PX = 576;
-export const LANE_GAP_PX = 10;
-/**
- * How many result columns a wide panel gets. Not the board's lane count: a
- * board of five lanes put results at a fifth of a 2576 px panel, about 475 px,
- * narrower than the same card reads on the board when it has three lanes in
- * view (~760 px). Three keeps the card at the width the board gives it.
- */
-export const RESULT_COLUMNS = 3;
-/**
- * A column of search results: exactly as wide as a lane is when the board shows
- * `lanes` of them side by side in this panel, and never narrower than a lane's
- * floor. The card is the board's card, so it gets the board's width — squeezed
- * to a sixth of the panel its badges wrapped and nothing sat where it sits on
- * the board. One result is one card at that width; a wide panel gets as many
- * columns as the board has lanes, a narrow one fewer.
- */
-export const resultColumn = (lanes: number): string =>
-  `minmax(max(${LANE_MIN_PX}px, calc((100% - ${Math.max(0, lanes - 1) * LANE_GAP_PX}px) / ${Math.max(1, lanes)})), 1fr)`;
+export const LANE_WIDTH_PX = 359;
+export const RAIL_WIDTH_PX = 26;

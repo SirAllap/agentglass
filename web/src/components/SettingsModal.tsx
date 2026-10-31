@@ -8,6 +8,7 @@
 //
 // Here each kind gets its own section, toggles look like toggles and say what
 // they control, and downloads say what you actually get.
+import { NO_DRAG } from "../lib/dragRegion.ts";
 import { useModalDialog } from "../lib/focusTrap.ts";
 import { PluginSettingsPane } from "./plugins/PluginSettingsPane.tsx";
 import {
@@ -47,6 +48,7 @@ import { useStableFlow } from "./useStableFlow.ts";
 import { Ticks } from "./Ticks.tsx";
 import { ingestUpdate, isUpdateAvailable } from "../lib/updateStore.ts";
 import { ReleaseNotesModal } from "./ReleaseNotesModal.tsx";
+import { V1Badge } from "./V1Badge.tsx";
 import { installedNotes, type NotesTarget } from "../lib/whatsNew.ts";
 import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESKTOP, IS_MAC_DESKTOP, HAS_BROWSER } from "../lib/desktop.ts";
 import { overlayOpen } from "../lib/overlays.ts";
@@ -79,11 +81,14 @@ import { THEMES } from "../lib/highlight.ts";
 import { BudgetsPane } from "./BudgetsPane.tsx";
 import { EnginesPane } from "./engines/EnginesPane.tsx";
 import { OrchestrationPane } from "./orchestration/OrchestrationPane.tsx";
+import { CleanupSettings } from "./CleanupSettings.tsx";
+import { FlightPlanLink } from "./flightPlan/FlightPlanLink.tsx";
 import { rendererPref, setRendererPref, type RendererPref } from "../lib/termRenderer.ts";
 import { TERM_FONTS, CURSORS, fontAvailable, currentTermFont, currentTermSize, currentTermCursor, currentTermLineHeight, setTermFont, setTermSize, setTermCursor, setTermLineHeight, SIZE_MIN, SIZE_MAX, LINE_HEIGHT_MIN, LINE_HEIGHT_MAX, DEFAULT_SIZE, DEFAULT_LINE_HEIGHT, type CursorStyle } from "../lib/termPrefs.ts";
 import { focusFollowsMouse, setFocusFollowsMouse } from "../lib/termFocusPref.ts";
 import { parseRules, setTabGroupsOn, tabGroupRulesText, tabGroupsOn } from "../lib/tabGroups.ts";
-import { paneActionsMode, setPaneActionsMode, type PaneActionsMode } from "../lib/paneActionsPref.ts";
+import { paneActionsMode, setPaneActionsMode, paneMarker, setPaneMarker, type PaneActionsMode, type PaneMarker } from "../lib/paneActionsPref.ts";
+import { PaneBarPicker } from "./PaneBarPicker.tsx";
 import { diffThemePref, setDiffThemePref, diffSplit, diffWrap, setDiffSplit, setDiffWrap, DEFAULT_SPLIT, DEFAULT_WRAP } from "../lib/diffPrefs.ts";
 import {
   TASK_SOURCES, taskSourceShown, shownTaskSources,
@@ -121,6 +126,7 @@ import { paceConfig, setPaceConfig, subscribePaceConfig } from "../lib/paceConfi
 import { PACE_MIN_MINUTES, type PaceConfig } from "../../../shared/pace.ts";
 import { longWindowUsed, providerUsage, subscribeProviderUsage } from "../lib/usageStore.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
+import { benchState, subscribeBench, setBenchFabMode, type FabMode } from "../lib/benchStore.ts";
 import { bindings, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId,
          chordFor, hasCustomChord, rebindChord, clearChord, resetChords, chordsCustomised, chordFromEvent, chordLabel,
          appChordFor, hasCustomAppChord, rebindAppChord, resetAppChords, appChordsCustomised,
@@ -137,7 +143,7 @@ import "./settingsSplit.css";
 import "./orchestration/orchestration.css";
 import "./settingsGroupB.css";
 import { HIT, ICON } from "../lib/iconSize.ts";
-import { AgentIcon, CheckboxIcon, ClockIcon, CrossIcon, DiskIcon, EditIcon, IconLabel, LinkIcon, PlusIcon, RefreshIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { AgentIcon, CheckboxIcon, ClockIcon, CrossIcon, DiskIcon, EditIcon, IconLabel, LinkIcon, MergeIcon, PlusIcon, RefreshIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { ciOnlyApproved } from "../lib/ciNotifyPref.ts";
 import { reviewGateOn, setReviewGate } from "../lib/reviewGatePref.ts";
 import { AskedAlertLog } from "./AskedAlertLog.tsx";
@@ -151,7 +157,7 @@ import { MuteGlyph } from "./TopBarNotes.tsx";
 import { Button, RefreshButton, INPUT, INPUT_STYLE, EDGE, LINE, Segmented } from "./workspace/Chrome.tsx";
 import { LAUNCH_MODES, LAUNCH_MODE_LABEL, isLaunchMode, parseDenyRules, type LaunchMode } from "../../../shared/launchModes.ts";
 import { setLaunchPermissions } from "../lib/launchMode.ts";
-import { CheckRow, Disclosure, DownloadButton, SELECT_BOX, SegControl, EmptyState, Field, LinkButton, ProblemNote, SaveBar, SaveChip, SettingsCard, SettingsForm, StatusBadge, helpIdFor, type StatusTone } from "./SettingsKit.tsx";
+import { CheckRow, Disclosure, DownloadButton, SELECT_BOX, EmptyState, Field, LinkButton, ProblemNote, SaveBar, SaveChip, SettingsCard, SettingsForm, StatusBadge, helpIdFor, type StatusTone } from "./SettingsKit.tsx";
 import { PreviewCard, WithPreview } from "./settings/PreviewCard.tsx";
 import { WindowPreview, SidebarPreview, DiffPreview, LanternPreview, BrowserPreview, LiveTabs, type LiveView } from "./settings/previews/index.ts";
 import { railItems } from "./settings/previews/MiniApp.tsx";
@@ -160,7 +166,7 @@ import { cardIdIn } from "../../../shared/cardRef.ts";
 import { pageChips, setPageFact, usePageFacts } from "../lib/pageFacts.ts";
 import { COUNTED_VIEWS, railBadgeOn, railBadgesCustomised, railBadgesKey, resetRailBadges, subscribeRailBadges } from "../lib/railBadges.ts";
 
-/** A heading inside a Section, for a pane that answers the same question about
+/** A heading inside a settings card, for a pane that answers the same question about
  *  two different sources. Without it "Quiet" and "Alert sounds" sit in one flat
  *  list and you have to read every hint to work out which switch is about your
  *  machine and which is about this app. */
@@ -336,7 +342,7 @@ function Choice<T extends string>({ label, hint, detail, value, options, onPick,
       wide={wide ?? choiceIsWide(options.map((o) => o.label))}
       control={select
         ? <Select value={value} onChange={(v) => onPick(v as T)} disabled={disabled} title={label} options={options.map((o) => ({ value: o.v, label: o.label }))} />
-        : <SegControl label={label} value={value} options={options} onPick={onPick} disabled={disabled} />
+        : <Segmented track label={label} value={value} options={options.map((o) => ({ id: o.v, label: o.label }))} onChange={onPick} disabled={disabled} />
       } />
   );
 }
@@ -379,9 +385,9 @@ function ScaleControl({ scale, onZoom }: { scale: number; onZoom: (dir: 1 | -1 |
   const quick = SCALE_QUICK.includes(scale);
   return (
     <span className="flex items-center gap-2 flex-wrap justify-start">
-      <SegControl label="Display size" value={quick ? String(scale) : undefined}
-        options={SCALE_QUICK.map((v) => ({ v: String(v), label: fmtScale(v) }))}
-        onPick={(v) => goTo(Number(v))} />
+      <Segmented track label="Display size" value={quick ? String(scale) : undefined}
+        options={SCALE_QUICK.map((v) => ({ id: String(v), label: fmtScale(v) }))}
+        onChange={(v) => goTo(Number(v))} />
       <select aria-label="Other display size" className={INPUT} style={INPUT_STYLE} value={quick ? "" : String(scale)}
         onChange={(e) => e.target.value && goTo(Number(e.target.value))}>
         <option value="" disabled>Other…</option>
@@ -400,7 +406,7 @@ function OnboardingMark({ done }: { done: boolean }) {
     : <StatusBadge tone="off">Not yet</StatusBadge>;
 }
 
-type Pane = "recipes" | "review-prompts" | "saved-replies" | "appearance" | "prefs" | "terminal" | "diff" | "tasks" | "privacy" | "notifications" | "browser" | "rail" | "keys" | "lantern" | "log" | "budgets" | "hooks" | "connections" | "engines" | "orchestration" | "clickup" | "jira" | "tmux" | "remote" | "plugins" | "understudy" | "about" | "onboarding"
+type Pane = "recipes" | "review-prompts" | "saved-replies" | "appearance" | "prefs" | "terminal" | "diff" | "tasks" | "git" | "privacy" | "notifications" | "browser" | "rail" | "keys" | "lantern" | "log" | "budgets" | "hooks" | "connections" | "engines" | "orchestration" | "clickup" | "jira" | "tmux" | "remote" | "plugins" | "understudy" | "about" | "onboarding"
   /** A plugin's own settings page, one per plugin that declares any. */
   | `plugin:${string}`;
 /** "" is a page that is in no group and so not in the nav (see LINK_ONLY).
@@ -524,10 +530,11 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
   // people to the wrong one of the two because I picked the obvious name. A
   // setting is filed under the thing it configures.
   ...(HAS_BROWSER ? [{ id: "browser" as const, label: "Browser", group: "Workspace" as const, kw: "browser web page zoom login cookies import chrome firefox zen profile home search engine", what: "Where the built-in browser starts, and how to bring in the logins you already have.", icon: BrowserIcon }] : []),
+  { id: "git", label: "Git and pull requests", group: "Workspace", kw: "git pull request pr merged merge cleanup clean up leftovers worktree branch docker stash notes tab automatic ask off older days include safety blocks", what: "What happens to the local leftovers of a PR once it is merged.", icon: MergeIcon },
   { id: "tasks", label: "Tasks", group: "Workspace", kw: "tasks sources github issues local taskwarrior clickup hide show providers view opens on", what: "Where the Tasks view starts, which trackers feed it, and how a branch finds its card.", icon: ChecklistIcon },
   { id: "hooks", label: "Agents", group: "Agents", kw: "agents hooks claude code install setup worker roles scout builder reviewer verifier lock model gate who answers nobody answers opencode qwen browser agent skill drive", what: "Wire Claude Code into the app, decide who answers the gate, and which CLI each worker role uses.", icon: PlugIcon },
   { id: "engines", label: "Agent engines", group: "Agents", kw: "engine engines provider hermes opencode codex gemini antigravity claude model version minimum signed in sign-in login orchestrator worker role ready test recheck installed update reporting connect events", what: "Every agent CLI on this machine, what it can do inside agentglass, and what is left to wire.", icon: ChipIcon },
-  { id: "orchestration", label: "Orchestration", group: "Agents", kw: "orchestration orchestrator main agent chair policy rule rules worker workers scout builder verifier engine model fallback chain ask when it runs usage weekly 5h plan hours budget ceiling envelope network commit write limits retries minutes per turn project override", what: "Which engine runs a project's main agent and does its work, the rules that change that for a while, and what a worker may do.", icon: FlowIcon },
+  { id: "orchestration", label: "Orchestration", group: "Agents", kw: "flight plan preflight go no-go orchestration orchestrator main agent chair policy rule rules worker workers scout builder verifier engine model fallback chain ask when it runs usage weekly 5h plan hours budget ceiling envelope network commit write limits retries minutes per turn project override", what: "Which engine runs a project's main agent and does its work, the rules that change that for a while, and what a worker may do.", icon: FlowIcon },
   { id: "lantern", label: "Lantern", group: "Agents", kw: "lantern reminder status what doing needs you ask sessions working on interval orchestrator seat wake floor chair post", what: "What the Lantern may ask of a session, and how often it looks.", icon: LanternIcon },
   /* Filed beside Agents rather than under System, and the two readings are
      both defensible: it is a store of what you did, and it is a thing that
@@ -933,40 +940,6 @@ function PageMatchHeading({ id, onOpen }: { id: Pane; onOpen: () => void }) {
   );
 }
 
-/** `headerControl` is a card's master switch, right-aligned in its heading.
- *  Nothing on this slice has a natural spot for one; the notifications page
- *  is the first user. */
-function Section({ title, desc, headerControl, children }: {
-  title?: string; desc?: string; headerControl?: React.ReactNode; children: React.ReactNode;
-}) {
-  return (
-    /* FLAT ON PURPOSE — a heading and a rows box, siblings.
-     *
-     * The card, the corner clipping and the gap to the next group are all
-     * drawn by `.agx-settings-col .agx-settings-section` in index.css, and
-     * that is the whole point: half the settings pages never call this
-     * component and build the same two boxes by hand. A card that lived here
-     * reached the pages that imported it and left the rest flat, which is how
-     * this ended up half-redesigned.
-     *
-     * agx-settings-section also hides itself when a search has filtered every
-     * row inside it away — a heading over nothing reads as a group whose
-     * contents failed to load. */
-    <div className="agx-settings-section">
-      {title && (
-        <div className="agx-settings-head flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="agx-settings-head-t">{title}</div>
-            {desc && <div className="agx-settings-head-d">{desc}</div>}
-          </div>
-          {headerControl !== undefined && <div className="shrink-0">{headerControl}</div>}
-        </div>
-      )}
-      <div className="agx-settings-rows">{children}</div>
-    </div>
-  );
-}
-
 /** The chip alone gave no sign that it records: an explicit verb beside it. The
  *  chip stays a target too. A row with two chips (a view with its chord) has
  *  no room for a third control, so it keeps labelled chips only. */
@@ -1206,7 +1179,7 @@ const VERBS: Record<string, string> = {
   "/git/stash-push": "stashed", "/git/stash-apply": "applied stash",
   "/git/stash-pop": "popped stash", "/git/stash-drop": "dropped stash",
   "/git/stash-rename": "renamed stash", "/git/stash-to-branch": "branched from stash",
-  "/git/stash-partial": "stashed files", "/git/stash-apply-overwrite": "applied stash over",
+  "/git/stash-partial": "stashed files", "/git/stash-apply-overwrite": "applied stash over", "/git/stash-put-back": "put the tree back",
   "/git/bisect-start": "started a bisect", "/git/bisect-mark": "marked a bisect step", "/git/bisect-reset": "reset the bisect",
   "/git/tag-create": "created tag", "/git/tag-delete": "deleted tag", "/git/tag-push": "pushed tag", "/git/tag-delete-remote": "deleted remote tag",
   "/git/apply-hunk": "staged a hunk", "/git/undo-merge": "undid the merge",
@@ -1503,7 +1476,12 @@ function AboutPane({ open }: { open: boolean }) {
           </span>
           {st.info.builtAt && <> · built {new Date(st.info.builtAt).toLocaleDateString(undefined, { day: "numeric", month: "long" })}</>}
         </>}
-        control={<span className="t-mono text-[13px] font-semibold">{st.info.version}</span>}
+        control={
+          <span className="flex items-center gap-2">
+            <span className="t-mono text-[13px] font-semibold">{st.info.version}</span>
+            <V1Badge version={st.info.version} />
+          </span>
+        }
       />
 
       {/* Said in words, because the stamp alone is only obvious once you know
@@ -3354,8 +3332,8 @@ function ToolsPane({ open }: { open: boolean }) {
   return (
     <>
       <div className="agx-tools-bar">
-        <SegControl<ToolsFilter> label="Show" value={filter} onPick={setFilter}
-          options={[{ v: "all", label: `All ${total}` }, { v: "ready", label: `Ready ${ready}` }, { v: "needs", label: `Needs you ${needs}` }]} />
+        <Segmented<ToolsFilter> track label="Show" value={filter} onChange={setFilter}
+          options={[{ id: "all", label: `All ${total}` }, { id: "ready", label: `Ready ${ready}` }, { id: "needs", label: `Needs you ${needs}` }]} />
         <span className="flex-1" />
         <Button pending={deps.busy || provs.busy} onClick={() => setNonce((n) => n + 1)}>
           <IconLabel icon={<RefreshIcon size={ICON.xs} />}>Recheck</IconLabel>
@@ -3439,9 +3417,9 @@ function LaunchPermissionsCard({ open }: { open: boolean }) {
           body: <>This covers the Review menu, a hand-off, an issue, a resumed session and a Command that runs claude; a review prompt or a Command can choose its own in its editor. Ask is Claude Code's own default: it asks before a tool it has not been allowed. Auto lets it decide what is safe to run. Accept edits runs file edits without asking. Bypass runs everything without asking — a tab in another mode than your other agents holds what is sent to it until somebody answers in it.</>,
         }}
         wide
-        control={<SegControl label="Permission mode" value={mode} disabled={busy}
-          onPick={(v) => { if (isLaunchMode(v)) { setMode(v); save({ mode: v }); } }}
-          options={LAUNCH_MODES.map((m) => ({ v: m, label: LAUNCH_MODE_LABEL[m] }))} />}
+        control={<Segmented track label="Permission mode" value={mode} disabled={busy}
+          onChange={(v) => { if (isLaunchMode(v)) { setMode(v); save({ mode: v }); } }}
+          options={LAUNCH_MODES.map((m) => ({ id: m, label: LAUNCH_MODE_LABEL[m] }))} />}
       />
       <SettingRow
         agentNever="what every agent the app starts may never do: an agent does not edit its own leash"
@@ -3500,8 +3478,8 @@ function TerminalRunsOn({ open }: { open: boolean }) {
           body: <>"The engine" gives it the pane engine — agentglass draws the tabs and splits, the prefix set under Pane engine (tmux) applies, and Restore there can bring it back after a reboot; one session per checkout. "This machine's tmux" resumes the session you left in your own tmux, with your own <span className="t-mono text-[11px]">~/.tmux.conf</span>. They are separate servers: switching moves nothing and loses nothing, and whichever you are not using keeps running.</>,
         }}
         wide
-        control={<SegControl label="Terminal runs on" value={terminal as "engine" | "desk"} onPick={saveTerminal} disabled={busy}
-          options={[{ v: "engine", label: "Pane engine" }, { v: "desk", label: "My own tmux" }]} />}
+        control={<Segmented track label="Terminal runs on" value={terminal as "engine" | "desk"} onChange={saveTerminal} disabled={busy}
+          options={[{ id: "engine", label: "Pane engine" }, { id: "desk", label: "My own tmux" }]} />}
         below={(err || note) ? (
           <div className="text-[12px]" role={err ? "alert" : "status"}
             style={{ color: err ? "var(--error-ink)" : "var(--success-ink)" }}>{err ?? note}</div>
@@ -3671,8 +3649,8 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
         hint="Use the bundled one unless you need your own."
         detail={{ summary: "Details", body: <>"Auto" prefers the bundled static tmux and falls back to the system one; "Custom" points at your own binary (e.g. a newer tmux). Tabs, splits and status are drawn by agentglass either way.</> }}
         wide
-        control={<SegControl label="tmux binary" value={source as "auto" | "bundled" | "system" | "custom"} disabled={busy} onPick={setSource}
-          options={[{ v: "auto", label: "Auto" }, { v: "bundled", label: "Bundled" }, { v: "system", label: "System" }, { v: "custom", label: "Custom" }]} />}
+        control={<Segmented track label="tmux binary" value={source as "auto" | "bundled" | "system" | "custom"} disabled={busy} onChange={setSource}
+          options={[{ id: "auto", label: "Auto" }, { id: "bundled", label: "Bundled" }, { id: "system", label: "System" }, { id: "custom", label: "Custom" }]} />}
       />
       <SettingRow
         label="Path to the binary" hint="Only read when Custom is picked." disabled={source !== "custom"}
@@ -3722,8 +3700,8 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
         hint="Append keeps the shipped config; Replace is only yours."
         detail={{ summary: "Details", body: <>"Append" runs your lines after the generated base (the UI's status bar stays off: that line is re-asserted after yours); "Replace" makes your text the whole config. A rejected config leaves the engine off and chat unaffected, and Reset brings it back.</> }}
         wide
-        control={<SegControl label="Mode" value={confMode as "append" | "replace"} disabled={busy} onPick={setConfMode}
-          options={[{ v: "append", label: "Append" }, { v: "replace", label: "Replace" }]} />}
+        control={<Segmented track label="Mode" value={confMode as "append" | "replace"} disabled={busy} onChange={setConfMode}
+          options={[{ id: "append", label: "Append" }, { id: "replace", label: "Replace" }]} />}
       />
       <SettingRow
         label="Override config"
@@ -4131,10 +4109,12 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
   const [groupsOn, setGroupsOn] = useState(() => tabGroupsOn());
   const [groupRules, setGroupRules] = useState(() => tabGroupRulesText());
   const [paneActs, setPaneActs] = useState<PaneActionsMode>(() => paneActionsMode());
+  const [paneMark, setPaneMark] = useState<PaneMarker>(() => paneMarker());
   const [scrollback, setScrollbackState] = useState(() => currentScrollback());
   const [wordSep, setWordSepState] = useState(() => currentWordSeparators());
   const [copySel, setCopySel] = useState(() => copyOnSelect());
   const [rcPaste, setRcPaste] = useState(() => rightClickPaste());
+  const benchFab = useSyncExternalStore(subscribeBench, () => benchState().fabMode);
   const [noteEd, setNoteEd] = useState<NoteEditor>(() => currentNoteEditor());
   const [dSplit, setDSplitState] = useState(() => diffSplit());
   const [dTheme, setDThemeState] = useState(() => diffThemePref());
@@ -4173,6 +4153,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
     setGroupsOn(tabGroupsOn());
     setGroupRules(tabGroupRulesText());
     setPaneActs(paneActionsMode());
+    setPaneMark(paneMarker());
     setScrollbackState(currentScrollback());
     setWordSepState(currentWordSeparators());
     setCopySel(copyOnSelect());
@@ -4231,13 +4212,14 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
       { modified: reduceMotionChoice() !== null, reset: () => { resetReduceMotion(); setAppearanceNonce((n) => n + 1); } },
     ],
     terminal: [
+      { modified: benchState().fabMode !== "always", reset: () => setBenchFabMode("always") },
       { modified: renderer !== "auto", reset: () => { setRendererPref("auto"); setRenderer("auto"); } },
       { modified: termFont !== "", reset: () => { setTermFont(""); setTermFontState(""); } },
       { modified: termSize !== DEFAULT_SIZE, reset: () => { setTermSize(DEFAULT_SIZE); setTermSizeState(DEFAULT_SIZE); } },
       { modified: termLine !== DEFAULT_LINE_HEIGHT, reset: () => { setTermLineHeight(DEFAULT_LINE_HEIGHT); setTermLineState(DEFAULT_LINE_HEIGHT); } },
       { modified: termCursor !== "block", reset: () => { setTermCursor("block"); setTermCursorState("block"); } },
       { modified: ffm, reset: () => { setFocusFollowsMouse(false); setFfm(false); } },
-      { modified: paneActs !== "hover", reset: () => { setPaneActionsMode("hover"); setPaneActs("hover"); } },
+      { modified: paneActs !== "summary" || paneMark !== "line", reset: () => { setPaneActionsMode("summary"); setPaneActs("summary"); setPaneMarker("line"); setPaneMark("line"); } },
       { modified: !copySel, reset: () => { setCopyOnSelect(true); setCopySel(true); } },
       { modified: rcPaste, reset: () => { setRightClickPaste(false); setRcPaste(false); } },
       { modified: !groupsOn, reset: () => { setTabGroupsOn(true); setGroupsOn(true); } },
@@ -4539,7 +4521,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             transition={{ duration: 0.14 }}
             className="agx-settings-shell fixed inset-0 flex pointer-events-auto"
-            style={{ zIndex: 10000, background: "var(--bg)" }}>
+            style={{ zIndex: 10000, background: "var(--bg)", ...NO_DRAG }}>
 
             {/* Back to app and the search box sit OUTSIDE the scrolling list, so a
                 long nav can never push either off the top. The nav paints its
@@ -4582,7 +4564,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
               {navTab && (
                 <SettingsPageHeader
                   label={navTab.label} group={groupByName(navTab.group) ?? null} icon={navTab.icon} what={navTab.what}
-                  chips={pageChips(navTab.id, headerChips(navTab.id, marks[navTab.id] ?? NO_MARK, saving.has(navTab.id), savedPages.has(navTab.id), heads[navTab.id]?.chips), pageFacts).concat(navTab.id === "orchestration" && pageChip ? [pageChip] : [])}
+                  chips={pageChips(navTab.id, headerChips(navTab.id, marks[navTab.id] ?? NO_MARK, saving.has(navTab.id), savedPages.has(navTab.id), heads[navTab.id]?.chips), pageFacts).concat((navTab.id === "orchestration" || navTab.id === "git") && pageChip ? [pageChip] : [])}
                   primary={problems[navTab.id] ? <Button tone="primary" onClick={() => retries.current[navTab.id]?.()}>Try again</Button>
                     : heads[navTab.id]?.action ? <Button tone="primary" onClick={() => headRuns.current[navTab.id]?.()}>{heads[navTab.id]!.action!.plain ? heads[navTab.id]!.action!.label : <IconLabel icon={<PlusIcon size={ICON.xs} />}>{heads[navTab.id]!.action!.label}</IconLabel>}</Button> : undefined}
                   reset={pageModified(navTab.id) || ALWAYS_RESET.has(navTab.id) ? <Button disabled={!pageModified(navTab.id)} onClick={() => resetPage(navTab.id)}>{RESET_WORD[navTab.id] ?? "Reset page"}</Button> : undefined} />
@@ -4739,10 +4721,12 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                         you reach the bottom one without dragging the pointer
                         across the others, and it is not on screen until the
                         pointer is on the seam at the pane's foot. */}
-                    <Toggle on={paneActs !== "off"} modified={paneActs !== "hover"}
-                      onClick={() => { const v = paneActs === "off" ? "hover" : "off"; setting("terminal.paneBar").set(v === "hover"); setPaneActs(v); }}
-                      settingId="terminal.paneBar" label="Bar on a pane"
-                      hint="Point at a pane's bottom edge: branch, changes, PR and card."  />
+                    <SettingRow settingId="terminal.paneBar" label="Pane bar"
+                      hint="The bar under each pane that says which branch, pull request and card you are in. Choose how it shows up. Hover a picture to see it move."
+                      modified={paneActs !== "summary"}
+                      below={<PaneBarPicker value={paneActs} marker={paneMark}
+                        onPick={(m) => { setting("terminal.paneBar").set(m); setPaneActs(m); }}
+                        onMarker={(m) => { setting("terminal.paneBarMarker").set(m); setPaneMark(m); }} />} />
                     <Toggle on={copySel} modified={!copySel} onClick={() => { const v = !copySel; setting("terminal.copyOnSelect").set(v); setCopySel(v); }}
                       settingId="terminal.copyOnSelect" label="Copy on select"
                       hint="A selection is on the clipboard at once, as in tmux." />
@@ -4813,7 +4797,11 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   </SettingsCard>
 
                   <SettingsCard title="Bench note" icon={<EditIcon size={ICON.sm} />}
-                    desc="The note tab of the floating bench.">
+                    desc="The floating bench: its button and its note tab.">
+                    <Choice<FabMode> settingId="terminal.benchButton" label="Floating button" value={benchFab} modified={benchFab !== "always"}
+                      hint={`The ${chordLabel(appChordFor("bench.toggle"))} shortcut opens the bench in every mode.`}
+                      options={[{ v: "always", label: "Always" }, { v: "open", label: "Only when something is open" }, { v: "never", label: "Never" }]}
+                      onPick={(v) => setting("terminal.benchButton").set(v)} />
                     <Choice<NoteEditor> settingId="terminal.noteEditor" label="Note editor" value={noteEd} modified={noteEd !== "builtin"}
                       hint="Neovim needs nvim installed; else the built-in one."
                       options={NOTE_EDITORS} onPick={(v) => { setting("terminal.noteEditor").set(v); setNoteEd(v); }} />
@@ -5075,7 +5063,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                           );
                         })}
                       </SettingsCard>
-                      <SettingsCard title="Only on the dashboard" icon={<DashIcon size={ICON.sm} />}
+                      <SettingsCard title="Only on Starboard" icon={<DashIcon size={ICON.sm} />}
                         desc="Single keys that would type into a shell, so they stay out of terminals.">
                         {[...viewIds, ...rest].map((id) => {
                           const err = keyError?.id === id ? keyError.msg : null;
@@ -5151,12 +5139,14 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                     );
                   })()}
 
+                  {ql && show("git") && <PageMatchHeading id="git" onOpen={() => { setPane("git" as Pane); setQ(""); }} />}
+                  {show("git") && <CleanupSettings onChip={setPageChip} />}
                   {ql && show("lantern") && <PageMatchHeading id="lantern" onOpen={() => { setPane("lantern" as Pane); setQ(""); }} />}
                   {show("lantern") && <LanternSection open={open} />}
                   {ql && show("engines") && <PageMatchHeading id="engines" onOpen={() => { setPane("engines" as Pane); setQ(""); }} />}
                   {show("engines") && <EnginesPane />}
                   {ql && show("orchestration") && <PageMatchHeading id="orchestration" onOpen={() => { setPane("orchestration" as Pane); setQ(""); }} />}
-                  {show("orchestration") && <OrchestrationPane onChip={setPageChip} />}
+                  {show("orchestration") && <><FlightPlanLink onGo={onClose} /><OrchestrationPane onChip={setPageChip} /></>}
                   {ql && show("hooks") && <PageMatchHeading id="hooks" onOpen={() => { setPane("hooks" as Pane); setQ(""); }} />}
 
                   {show("hooks") && (

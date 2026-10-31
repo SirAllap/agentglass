@@ -18,9 +18,17 @@ export const DESK_GATED: readonly string[] = [
   // A press of an account chip: only the person in the desktop window, never an agent staging it.
   "/usage/accounts/switch", "/usage/accounts/manage",
   // The person's own press of the keyring switch and of Clean up disk (mayPublishReview).
-  "/keyring/toggle", "/keyring/rehydrate", "/machine/disk-clean/run",
+  "/keyring/toggle", "/keyring/rehydrate", "/machine/disk-clean/run", "/cleanup/run", "/cleanup/build-cache/prune",
   // Data & privacy and the Jira write switches, judged the same way.
   "/privacy/retention", "/privacy/erase-history", "/jira/write-kinds",
+  // Flight plan: Go, No-go, Launch, a one-run cap and the author tab a new plan starts are the
+  // person's (mayPublishReview). Without the key the window's Go was refused as an agent's.
+  "/flight-plan/plans", "/flight-plan/plans/", "/flight-plan/runs/",
+  // Hold is anyone's; Resume is the person's, and both come from the strip's one button.
+  "/flight-plan/hold", "/flight-plan/resume",
+  // The project's agent rules: the person's own write applies at once and only the person answers a
+  // waiting one (setRule/answer get mayPublishReview); without the key the person waited on themselves.
+  "/agent-rules", "/agent-rules/",
 ];
 
 export function deskGated(path: string): boolean {

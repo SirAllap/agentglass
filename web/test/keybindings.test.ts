@@ -31,7 +31,7 @@ describe("keybindings", () => {
   it("starts on the shipped defaults", async () => {
     const kb = await load();
     expect(kb.bindings()["view.term"]).toBe("t");
-    expect(kb.bindings()["open.stats"]).toBe("s");
+    expect(kb.bindings()["open.skills"]).toBe("k");
     expect(kb.isCustomised()).toBe(false);
   });
 
@@ -70,7 +70,7 @@ describe("keybindings", () => {
     store.set("agentglass.keybindings", JSON.stringify({ "view.git": "q" }));
     const kb = await load();
     expect(kb.bindings()["view.git"]).toBe("q");      // the stored choice stands
-    expect(kb.bindings()["open.search"]).toBe("/");   // and the rest are not lost
+    expect(kb.bindings()["open.help"]).toBe("?");   // and the rest are not lost
   });
 
   it("ignores a corrupt stored map instead of throwing", async () => {

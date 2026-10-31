@@ -330,7 +330,7 @@ async function main() {
       // So answer the picker the way a person does, by closing it, and hold the
       // app to what closing promises: the views come in. A picker that closes
       // onto no rail is a first run stuck on an empty window, and still fails.
-      const pickerSel = '[role="dialog"][aria-label="Choose a project"]';
+      const pickerSel = '[role="dialog"][aria-label="Open projects"]';
       const waitFor = (expr: string, ms: number) => evaluate(`new Promise((r) => {
         const t0 = Date.now();
         (function poll() { const v = ${expr}; if (v || Date.now() - t0 > ${ms}) r(v); else setTimeout(poll, 100); })();
@@ -340,7 +340,7 @@ async function main() {
       // rail lands a beat later, so wait for it (10 s) — or for the picker.
       await waitFor(`${countTabs} >= 6 || !!document.querySelector('${pickerSel}')`, 10000);
       if (await evaluate(`!!document.querySelector('${pickerSel}')`)) {
-        await evaluate(`document.querySelector('${pickerSel} button[aria-label="Close"]')?.click()`);
+        await evaluate(`document.querySelector('${pickerSel} button[aria-label^="Close"]')?.click()`);
         if (!(await waitFor(`!document.querySelector('${pickerSel}')`, 5000)))
           failures.push("[workspace] the first-run project picker did not close");
         else console.log("• smoke: first run, closed the project picker to let the views in");

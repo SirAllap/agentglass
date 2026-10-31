@@ -63,6 +63,6 @@ describe("how the server decides", () => {
   });
 
   it("still lets the terminal view choose", () => {
-    expect(terminal).toContain('plain && tmuxTerminal() === "engine" ? engineAttachArgv(startIn) : null');
+    expect(terminal).toContain('plain && tmuxTerminal() === "engine" ? plainEngineArgv(startIn) : null');
   });
 });

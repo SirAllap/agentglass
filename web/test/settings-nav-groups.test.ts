@@ -26,7 +26,7 @@ describe("slice 6 nav groups", () => {
     // browser is filed only where HAS_BROWSER; the test source has both spellings of one entry
     // Pane engine sits under Workspace, beside the Terminal that runs on it, and Plugins closes Library:
     // that is where the approved Settings design files them (see lib/settingsNav.ts).
-    expect(idsIn("Workspace")).toEqual(["terminal", "tmux", "diff", "browser", "tasks"]);
+    expect(idsIn("Workspace")).toEqual(["terminal", "tmux", "diff", "browser", "git", "tasks"]);
     expect(idsIn("Agents")).toEqual(["hooks", "engines", "orchestration", "lantern", "understudy", "budgets"]);
     expect(idsIn("Library")).toEqual(["recipes", "review-prompts", "saved-replies", "plugins"]);
     expect(idsIn("Connections")).toEqual(["connections", "clickup", "jira", "remote"]);

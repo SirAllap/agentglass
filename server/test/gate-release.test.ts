@@ -517,7 +517,15 @@ describe("the desktop app hands its key to the ends that use it, and nowhere els
        `deskGated(path)` says so (web/src/lib/deskGate.ts, tested in
        web/test/finder-desk-key.test.ts), never on every call. */
     expect(sent).toContain("...(deskGated(path) ? deskHeader() : {})");
-    expect([...sent.matchAll(/deskHeader\(\)/g)]).toHaveLength(6);
+    /* The Polaris routes are the person's too: a change of a door, an action on a
+       pull request and a beacon send are each proven with the desk key, and an
+       agent's machine token cannot make them. They are counted apart so that a
+       seventh use outside them is still a change somebody has to look at. The
+       PUT helper the settings route uses gates the key the way `post` does, so it
+       is the one more use. */
+    const polarisCalls = [...sent.matchAll(/\/polaris\/[^\n]*deskHeader\(\)/g)].length;
+    expect(polarisCalls).toBeGreaterThan(0);
+    expect([...sent.matchAll(/deskHeader\(\)/g)]).toHaveLength(6 + 1 + polarisCalls);
   });
 });
 

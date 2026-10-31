@@ -25,6 +25,8 @@ const NOW = 1_800_000_000_000;
 describe("the routine rounds a coordinator keeps", () => {
   test("only the 'looked, nothing changed' lines are routine, and only this project's", () => {
     const put = (root: string, line: string, at: number) => db.query("INSERT INTO seat_line (root, line, at) VALUES (?, ?, ?)").run(root, line, at);
+    // bun test shares one database across files; another file's rounds for this root counted 4, not 2.
+    db.query("DELETE FROM seat_line WHERE root IN (?, ?)").run(ROOT, "/home/a/code/ledger");
     put(ROOT, "(looked at 09:49 — nothing had changed, so nobody was woken)", NOW - 4 * 3_600_000);
     put(ROOT, "(looked at 13:49 — the field cleared, so nobody was woken)", NOW - 3_600_000);
     put(ROOT, "orbit-lead: two upload branches overlap, asked the person", NOW - 1_800_000);

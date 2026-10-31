@@ -166,6 +166,13 @@ describe("the ozone platform", () => {
       .not.toMatch(/"ozone-platform",\s*"(x11|wayland)"\s*\)/);
   });
 
+  it("refuses headless before any window is made, so it never segfaults", () => {
+    const at = main.indexOf('process.argv.includes("--ozone-platform=headless")');
+    expect(at, "no headless guard in main.js").toBeGreaterThan(-1);
+    expect(main.slice(at, at + 300)).toContain("app.exit(2)");
+    expect(at, "the guard must run before the first window").toBeLessThan(main.indexOf("new BrowserWindow("));
+  });
+
   it("does not persist a window position the platform cannot honour", () => {
     // Wayland never tells a client where it is. getNormalBounds() still answers
     // with an origin, and writing that into window.json would look like a

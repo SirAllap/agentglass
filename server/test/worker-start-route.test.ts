@@ -42,9 +42,11 @@ const startBuilder = (name: string, extra: Record<string, unknown> = {}) =>
   h.asSeat("/agents/named/start", { name, cwd: h.wt, role: "builder", ...extra });
 /** A row as another seat's worker, or nobody's: pane ids that are not there. */
 const outside = () => { const d = mkdtempSync(join(tmpdir(), "agx-outside-")); outsiders.push(d); return d; };
-const sql = (q: string, args: (string | number | null)[]) => { const d = new Database(join(h.dir, "w.db")); d.run(q, args); d.close(); };
+/** The server holds this file too: a side connection waits for its lock instead of failing on the first busy answer (GitHub's runner lost this race). */
+const side = () => { const d = new Database(join(h.dir, "w.db")); d.run("PRAGMA busy_timeout = 5000"); return d; };
+const sql = (q: string, args: (string | number | null)[]) => { const d = side(); d.run(q, args); d.close(); };
 const seed = (name: string, seatRoot: string | null, ended = false) => {
-  const d = new Database(join(h.dir, "w.db"));
+  const d = side();
   d.run("INSERT OR REPLACE INTO named_agent (name, kind, cwd, pane_id, window_id, started_at, ended_at, seat_root) VALUES (?, 'opencode', ?, '%9999', '@9999', ?, ?, ?)",
     [name, h.wt, Date.now(), ended ? Date.now() : null, seatRoot]);
   d.close();

@@ -43,9 +43,9 @@ describe("the button a plugin puts in a pull request's header", () => {
     expect(ACTIONS, "a finished review must offer its findings, not another review").toContain("onShowLocal");
   });
 
-  test("is given the notes and the way to the findings by both headers that draw it", () => {
+  test("is given the notes and the way to the findings by the header that draws it", () => {
     const calls = PANEL.match(/<PluginPrActions[^/]*\/>/g) ?? [];
-    expect(calls.length, "the masthead and the overview both carry the row").toBe(2);
+    expect(calls.length, "the one header carries the row; the Overview no longer has a second one").toBe(1);
     for (const c of calls) {
       expect(c).toContain("local={local}");
       expect(c).toContain("onShowLocal={onShowLocal}");

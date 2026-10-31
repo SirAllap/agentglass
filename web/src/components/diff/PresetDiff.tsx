@@ -25,14 +25,16 @@ import { CloseButton } from "../CloseButton.tsx";
 import { SidebarGrip } from "../SidebarGrip.tsx";
 import { useSidebarWidth } from "../../lib/sidebarWidth.ts";
 import { useDiffHighlight, HiliteCtx } from "../../lib/diffHighlight.ts";
-import { diffSplit, diffWrap, setDiffSplit, setDiffWrap } from "../../lib/diffPrefs.ts";
+import { diffSplit, diffWrap, setDiffSplit, setDiffWrap, diffNoWhitespace, setDiffNoWhitespace } from "../../lib/diffPrefs.ts";
+import { hunkChanges, hunkWithoutWhitespace } from "../../lib/diffNoWhitespace.ts";
 import { useIncremental } from "../../lib/useIncremental.ts";
 import { ICON } from "../../lib/iconSize.ts";
 import { SplitDiff, UnifiedDiff, SCROLLBAR_CSS, SPLIT_SEL_CSS } from "./DiffLines.tsx";
-import { ThemePicker, Toggle, DiffSettingsLink } from "./DiffControls.tsx";
+import { DiffToolbar } from "./DiffToolbar.tsx";
 import { WarningIcon } from "../../lib/glyphIcons.tsx";
 import { riskColor, riskTitle } from "../../lib/riskView.ts";
 import { INPUT, INPUT_STYLE, EDGE } from "../workspace/Chrome.tsx";
+import { repoRelative } from "../../lib/gitActions.ts";
 
 export type PresetDiffProps = {
   open: boolean;
@@ -44,9 +46,24 @@ export type PresetDiffProps = {
   path?: string;
   onBack?: () => void;
   backLabel?: string;
+  /** Repository root: when given, the file list shows repo-relative folders. */
+  root?: string;
 };
 
-export function PresetDiff({ open, onClose, changes, title, path, onBack, backLabel }: PresetDiffProps) {
+export function PresetDiff({ open, onClose, changes, title, path, onBack, backLabel, root }: PresetDiffProps) {
+  // Escape closes it like every other dialog; before, only the X did. Captured
+  // on the document so the modal or page beneath never hears it, and it steps
+  // aside for a menu open inside it, which closes first.
+  useEffect(() => {
+    if (!open) return;
+    const k = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || document.querySelector("[role=menu],[role=listbox],[data-menu-layer]")) return;
+      e.stopPropagation();
+      onClose();
+    };
+    document.addEventListener("keydown", k, true);
+    return () => document.removeEventListener("keydown", k, true);
+  }, [open, onClose]);
   return (
     <Portal find>
       <AnimatePresence>
@@ -61,7 +78,7 @@ export function PresetDiff({ open, onClose, changes, title, path, onBack, backLa
                 className="w-[95vw] h-[95vh] rounded-xl flex flex-col pointer-events-auto outline-none overflow-hidden"
                 style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
               >
-                <Inner changes={changes} title={title} path={path} onBack={onBack} backLabel={backLabel} onClose={onClose} />
+                <Inner changes={changes} title={title} path={path} onBack={onBack} backLabel={backLabel} onClose={onClose} root={root} />
               </motion.div>
             </div>
           </>
@@ -71,7 +88,7 @@ export function PresetDiff({ open, onClose, changes, title, path, onBack, backLa
   );
 }
 
-function Inner({ changes, title, path, onBack, backLabel, onClose }: Omit<PresetDiffProps, "open">) {
+function Inner({ changes, title, path, onBack, backLabel, onClose, root }: Omit<PresetDiffProps, "open">) {
   const sidebarW = useSidebarWidth();
   const [selId, setSelId] = useState<number | null>(null);
   const [q, setQ] = useState("");
@@ -93,7 +110,12 @@ function Inner({ changes, title, path, onBack, backLabel, onClose }: Omit<Preset
   }, [changes, path]);
 
   const selected = useMemo(() => shown.find((c) => c.id === selId) ?? shown[0] ?? null, [shown, selId]);
-  const { hilite, themePref, setThemePref, hiliteError } = useDiffHighlight(selected?.file_path);
+  const { hilite, themePref, setThemePref, bold, setBold, hiliteError } = useDiffHighlight(selected?.file_path);
+  const [noWs, setNoWs] = useState(diffNoWhitespace);
+  /* The same fold the Diff view applies, from the same preference. */
+  const hunks = useMemo(
+    () => (selected ? (noWs ? selected.hunks.map(hunkWithoutWhitespace).filter(hunkChanges) : selected.hunks) : []),
+    [selected, noWs]);
   const totals = useMemo(
     () => changes.reduce((a, c) => ({ add: a.add + c.additions, del: a.del + c.deletions }), { add: 0, del: 0 }),
     [changes],
@@ -121,13 +143,14 @@ function Inner({ changes, title, path, onBack, backLabel, onClose }: Omit<Preset
           {" · "}<span style={{ color: "var(--success-ink)" }}>+{totals.add}</span>
           {" "}<span style={{ color: "var(--error-ink)" }}>−{totals.del}</span>
         </span>
-        <div className="ml-auto flex items-center gap-2">
-          <Toggle on={split} onClick={() => { setSplit(!split); setDiffSplit(!split); }} title="Side by side">split</Toggle>
-          <Toggle on={wrap} onClick={() => { setWrap(!wrap); setDiffWrap(!wrap); }} title="Wrap long lines">wrap</Toggle>
-          <ThemePicker value={themePref} onChange={setThemePref} error={hiliteError} />
-          <DiffSettingsLink />
+        <DiffToolbar className="ml-auto"
+          split={split} onSplit={(v) => { setSplit(v); setDiffSplit(v); }}
+          wrap={wrap} onWrap={(v) => { setWrap(v); setDiffWrap(v); }}
+          noWs={noWs} onNoWs={(v) => { setNoWs(v); setDiffNoWhitespace(v); }}
+          bold={bold} onBold={setBold}
+          themePref={themePref} onTheme={setThemePref} themeError={hiliteError}>
           <CloseButton onClick={onClose} />
-        </div>
+        </DiffToolbar>
       </div>
 
       <div className="flex-1 min-h-0 flex">
@@ -150,7 +173,7 @@ function Inner({ changes, title, path, onBack, backLabel, onClose }: Omit<Preset
             )}
             {inc.rows.map((c) => {
               const name = c.file_path.slice(c.file_path.lastIndexOf("/") + 1);
-              const dir = c.file_path.slice(0, c.file_path.length - name.length).replace(/\/$/, "");
+              const dir = repoRelative(root, c.file_path).slice(0, -name.length).replace(/\/$/, "");
               const on = c.id === selected?.id;
               return (
                 <div
@@ -188,7 +211,7 @@ function Inner({ changes, title, path, onBack, backLabel, onClose }: Omit<Preset
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
           {selected && (
             <div className="px-4 py-2 shrink-0 border-b" style={{ borderColor: "color-mix(in srgb, var(--border) 35%, transparent)" }}>
-              <p className="text-[12px] truncate" style={{ color: "var(--text)" }}>{selected.file_path}</p>
+              <p className="text-[12px] truncate" style={{ color: "var(--text)" }}>{repoRelative(root, selected.file_path)}</p>
               {/* The reasons in words above the diff they are about, so the
                   line a flag names can be found without hovering anything. */}
               {selected.risks?.map((r) => (
@@ -206,9 +229,10 @@ function Inner({ changes, title, path, onBack, backLabel, onClose }: Omit<Preset
                 change — and saying so is the whole difference between this and
                 the blank pane it replaces. */}
             {selected && !selected.hunks.length && <Empty>No textual change to show — binary, a rename, or a mode change</Empty>}
-            {selected && selected.hunks.length > 0 && (
+            {selected && selected.hunks.length > 0 && !hunks.length && <Empty>Only whitespace changed in this file — turn off Ignore space to see it</Empty>}
+            {hunks.length > 0 && selected && (
               <HiliteCtx.Provider value={hilite}>
-                {split ? <SplitDiff c={selected} wrap={wrap} /> : <UnifiedDiff c={selected} wrap={wrap} />}
+                {split ? <SplitDiff hunks={hunks} wrap={wrap} /> : <UnifiedDiff hunks={hunks} wrap={wrap} />}
               </HiliteCtx.Provider>
             )}
           </div>

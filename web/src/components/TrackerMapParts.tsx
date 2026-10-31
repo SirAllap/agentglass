@@ -46,16 +46,6 @@ export function TextRow({ label, hint, value, fallback = "", placeholder, onSave
   );
 }
 
-/** A section of the page: a settings card (SettingsKit). `open`/`onToggle` make its header a disclosure. */
-export function Card({ title, status, actions, children, open, onToggle, desc, icon }: { id?: string; title: string; status?: ReactNode; actions?: ReactNode; desc?: ReactNode; icon?: ReactNode; children: ReactNode; open?: boolean; onToggle?: (o: boolean) => void }) {
-  return (
-    <SettingsCard title={title} desc={desc} status={status} actions={actions} icon={icon}
-      fold={onToggle ? { open: !!open, onToggle } : undefined}>
-      {children}
-    </SettingsCard>
-  );
-}
-
 export const hint = (c: ReactNode, style?: object) => <span className="text-[11px]" style={{ color: "var(--text3)", ...style }}>{c}</span>;
 export const Tagged = ({ children }: { children: ReactNode }) => (
   <span className="inline-flex items-center gap-1 px-2 rounded-md text-[11px]" style={{ height: 20, background: "var(--bg)", boxShadow: "inset 0 0 0 1px var(--surface-line)" }}>{children}</span>

@@ -5,9 +5,10 @@ import { askLantern, hasLanternTab } from "../../lib/lanternAsk.ts";
 import { subscribeBench } from "../../lib/benchStore.ts";
 import { subscribeLantern, lanternChairs } from "../../lib/lanternStore.ts";
 import { openSettings } from "../../lib/openSettings.ts";
+import { openFlightPlan } from "../../lib/flightPlanNav.ts";
 import { Ph } from "./phosphor.tsx";
 import { useAgents, ALL } from "./useAgents.ts";
-import { Tiles, WaitingSection, WorkingSection, UpNext, CleanUpSection, NewBadge } from "./AgentsSections.tsx";
+import { Tiles, WaitingSection, WorkingSection, UpNext, CleanUpSection, HousekeepingSection, NewBadge } from "./AgentsSections.tsx";
 import { CoordinatorCard, ChangeDialog, ProjectCoordinators, PowersAndNotifies } from "./CoordinatorCard.tsx";
 import { AgentRulesSection } from "./AgentRulesSection.tsx";
 import { ScheduleDialog } from "../LanternSchedule.tsx";
@@ -17,8 +18,14 @@ import { subscribeViewModal, takeViewModal } from "../../lib/viewModalIntent.ts"
 import { whatWaits } from "../../lib/seatWaiting.ts";
 import { staleLine, hiddenLine, isRoutineLine } from "../../lib/agentsStale.ts";
 import { groupCleanup } from "../../lib/cleanupGroups.ts";
+import { housekeepingRows } from "../../lib/housekeeping.ts";
+import { housekeeping } from "../../lib/housekeepingStore.ts";
+import { keep, readKept } from "../../lib/cleanKeep.ts";
 import { coordinatorState } from "../../lib/coordinatorState.ts";
 import { sortField, waitingItems, projectLabel } from "../../lib/agentsScreen.ts";
+import { PolarisWaiting, PullRequestsSection } from "../polaris/PolarisSection.tsx";
+import { usePolarisItems } from "../polaris/usePolaris.ts";
+import { chipLabel, waitingOnYou } from "../../lib/polarisView.ts";
 
 /**
  * THE AGENTS SCREEN. One screen for what the Lantern and the orchestrator's
@@ -58,6 +65,7 @@ function useNow(active: boolean, ms = 30_000): number {
 export function AgentsView({ active }: { active: boolean }) {
   const d = useAgents(active);
   const now = useNow(active);
+  const auto = useSyncExternalStore(housekeeping.subscribe, housekeeping.list, housekeeping.list);
   const chairs = useSyncExternalStore((l) => subscribeLantern(l, false), lanternChairs, lanternChairs);
   const lanternOpen = useSyncExternalStore(subscribeBench, hasLanternTab, hasLanternTab);
   const [how, setHow] = useState(readHow);
@@ -70,6 +78,7 @@ export function AgentsView({ active }: { active: boolean }) {
 
   const all = d.scope === ALL;
   const root = all ? "" : d.scope;
+  const pol = usePolarisItems(root, active && !all);
   const seat = d.seat;
   const rows = d.rows;
   const sorted = useMemo(() => sortField(d.scoped, now), [d.scoped, now]);
@@ -80,6 +89,10 @@ export function AgentsView({ active }: { active: boolean }) {
     () => whatWaits(seat?.field ?? [], seat?.reports ?? [], seat?.tasks ?? [], seat?.needs ?? [], 2, now),
     [seat, now],
   );
+  /* Polaris: the sessions that could take a beacon are the idle ones; what waits on you is counted with the rest. */
+  const polPanes = useMemo(() => sorted.idle.filter((r) => r.paneId).map((r) => ({ id: r.paneId!, label: r.name })), [sorted.idle]);
+  const polWaiting = pol.settings && pol.items ? waitingOnYou(pol.items.items, pol.settings.doors).length : 0;
+  const reloadAll = () => { d.reload(); pol.reload(); };
   const sessions = new Set(d.scoped.map((r) => r.session).filter(Boolean));
   const gates = all ? d.gates : d.gates.filter((g) => sessions.has(g.session_id));
   const requests = d.requests.filter((r) => all || !r.root || r.root === root);
@@ -88,9 +101,10 @@ export function AgentsView({ active }: { active: boolean }) {
     [sorted.blocked, gates, wait, requests],
   );
   const stale = useMemo(() => staleLine(wait.stale, (a) => reachable.has(a), now), [wait.stale, reachable, now]);
+  const [kept, setKept] = useState(readKept);
   const clean = useMemo(
-    () => groupCleanup(d.forgotten, all ? d.schedules : d.schedules.filter((s) => s.cwd === root || s.cwd.startsWith(`${root}/`)), now),
-    [d.forgotten, d.schedules, all, root, now],
+    () => groupCleanup(d.forgotten, all ? d.schedules : d.schedules.filter((s) => s.cwd === root || s.cwd.startsWith(`${root}/`)), now, kept),
+    [d.forgotten, d.schedules, all, root, now, kept],
   );
   const hidden = hiddenLine(seat?.quiet);
   const hiddenDetail = useMemo(() => {
@@ -105,7 +119,7 @@ export function AgentsView({ active }: { active: boolean }) {
   const loading = rows === null || (!all && !seat);
   const firstRun = !loading && sorted.working.length + sorted.blocked.length + sorted.idle.length === 0 && coord === "none" && items.length === 0 && clean.total === 0;
   /* Every Claude session in tmux that could take the chair: the project's own coordinator included, so the one
-     in charge is in the list as "chosen"; another project's coordinator is not offered. */
+     in charge is in the list as "chosen"; another project's orchestrator is not offered. */
   const candidates = useMemo(
     () => (rows ?? []).filter((r) => r.role !== "lantern" && !(r.role && r.chairOf !== change?.root) && !r.gone && r.paneId && !sorted.gone.includes(r)),
     [rows, sorted.gone, change?.root],
@@ -151,7 +165,7 @@ export function AgentsView({ active }: { active: boolean }) {
                     {d.projects.length === 0 && <span className="mut none">No project is open</span>}
                     {d.projects.map((p) => (
                       <button key={p} type="button" role="option" aria-selected={p === root} className={p === root ? "on" : ""} onClick={() => pick(p)} title={p}>
-                        <span>{projectLabel(p)}</span>{chairs.some((c) => c.root === p) && <span className="mut">coordinator</span>}
+                        <span>{projectLabel(p)}</span>{chairs.some((c) => c.root === p) && <span className="mut">orchestrator</span>}
                       </button>
                     ))}
                   </div>
@@ -162,13 +176,15 @@ export function AgentsView({ active }: { active: boolean }) {
             <div className="scopeline">
               <Ph name="info" size={14} />
               {all
-                ? <>Showing agents working in every project. Pick a project to see its coordinator and queue.</>
-                : <>Showing agents working in <b style={{ color: "var(--text2)" }}>{label}</b>. The coordinator and its queue belong to this project only.</>}
+                ? <>Showing agents working in every project. Pick a project to see its orchestrator and queue.</>
+                : <>Showing agents working in <b style={{ color: "var(--text2)" }}>{label}</b>. The orchestrator and its queue belong to this project only.</>}
               {d.error && <span className="err-line" role="alert" style={{ marginLeft: 8 }}>{d.error}</span>}
             </div>
           </div>
           <div className="row">
-            <button type="button" className="btn" onClick={d.reload}><Ph name="arrows-clockwise" size={14} />{REFRESH}</button>
+            {/* Plain text, no count, no colour: always there, never asks for attention. The count lives on the top bar chip. */}
+            <button type="button" className="btn quiet" onClick={() => openFlightPlan()}><Ph name="rocket-launch" size={14} />Flight plan <Ph name="arrow-right" size={12} /></button>
+            <button type="button" className="btn" onClick={reloadAll}><Ph name="arrows-clockwise" size={14} />{REFRESH}</button>
             <button type="button" className="btn" disabled={asking === "opening…"} onClick={() => void ask()}
               title="A session on the floating bench that opens with this field as its first message. Ctrl+Alt+A brings it back from any view.">
               <Ph name="sparkle" size={14} />{asking === "opening…" ? "Opening…" : lanternOpen ? "Back to the session" : "Ask about the agents"}
@@ -200,7 +216,7 @@ export function AgentsView({ active }: { active: boolean }) {
             </div>
             <div className={`st${d.hooksReady ? " next" : ""}`}>
               <span className="n">3</span>
-              <div><b>Pick a coordinator for this project</b><span>Optional. One agent that splits work and keeps the others moving.</span>
+              <div><b>Pick an orchestrator for this project</b><span>Optional. One agent that splits work and keeps the others moving.</span>
                 <div style={{ marginTop: 8 }}>{d.hooksReady && <span className="agv-chip info">Do this next, on the right</span>}</div></div>
             </div>
           </div>
@@ -218,16 +234,19 @@ export function AgentsView({ active }: { active: boolean }) {
 
         <div className="grid2">
           <div className="cols">
-            <WaitingSection items={items} root={root} seat={seat} now={now} stale={stale} onChanged={d.reload} />
+            <WaitingSection items={items} root={root} seat={seat} now={now} stale={stale} onChanged={d.reload} extraCount={polWaiting}
+              extra={<PolarisWaiting root={root} settings={pol.settings} items={pol.items} panes={polPanes} onChanged={pol.reload} />} />
+            {!all && <PullRequestsSection root={root} settings={pol.settings} items={pol.items} error={pol.error} onChanged={pol.reload} />}
             <WorkingSection working={sorted.working} idle={sorted.idle} gone={sorted.gone} hidden={hidden} hiddenDetail={hiddenDetail} onChanged={d.reload} />
-            {firstRun && <div>{rules(true)}</div>}
+            <div className="rules-slot">{rules(firstRun)}</div>
           </div>
           <div className="cols">
             {all
               ? <ProjectCoordinators projects={d.projects} chairs={chairs} onPick={(r) => { d.setScope(r); setChange({ root: r, first: "new" }); }} onChanged={d.reload} />
-              : <CoordinatorCard root={root} seat={seat} onChange={() => setChange({ root, first: coord === "none" ? "mine" : "new" })} onChanged={d.reload} />}
+              : <CoordinatorCard root={root} seat={seat} polaris={chipLabel(pol.settings)} onChange={() => setChange({ root, first: coord === "none" ? "mine" : "new" })} onChanged={d.reload} />}
             <UpNext seat={seat} schedules={d.schedules} onCancel={cancelSchedule} showEmpty={!all} onSchedule={() => setScheduling(true)} root={root} canAdd={!all && coord !== "none"} onChanged={d.reload} />
-            <CleanUpSection clean={clean} onChanged={d.reload} />
+            <HousekeepingSection rows={housekeepingRows(auto, now)} />
+            <CleanUpSection clean={clean} onChanged={d.reload} onKeep={(k) => setKept(keep(k))} />
           </div>
         </div>
 
@@ -243,7 +262,6 @@ export function AgentsView({ active }: { active: boolean }) {
           </div>
         )}
 
-        {!firstRun && <div style={{ marginTop: 30 }}>{rules(false)}</div>}
       </div>
 
       <ScheduleDialog open={scheduling} checkouts={checkouts} onClose={() => setScheduling(false)} onAdded={d.reload} />

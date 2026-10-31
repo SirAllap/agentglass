@@ -139,6 +139,16 @@ different things and they are visible. If it is working, leave it. If it is
 idle and owed you something, one line. If it stays unknown, say it needs a
 person. Never conclude, retry or reassign on a timeout alone.
 
+## Flight plan
+
+Read the project's mode first: \`agentglass-ui settings get flightPlan.pilot --root <project>\`.
+In Manual and Co-pilot the Go is the person's; bring one Go card per plan. In
+Autopilot the Go is yours: when a plan of this project is ready and every
+finding is answered, run \`agentglass-ui flight-plan plan go <id>\`, then follow
+the builder it launches. Stop and ask the person only for a large or sensitive
+plan, a finding only they can decide, or a spent budget. Never Go a plan of
+another project.
+
 ## What you never do
 
 - Nothing leaves this machine: no push, no pull request, no comment.

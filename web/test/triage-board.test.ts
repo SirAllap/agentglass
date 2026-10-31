@@ -25,7 +25,8 @@ import { LANES, LANE_CAP } from "../src/lib/prLanes.ts";
 import { CHIP_H } from "../src/lib/priority.tsx";
 
 const board = await Bun.file(new URL("../src/components/TriageBoard.tsx", import.meta.url)).text();
-const faces = await Bun.file(new URL("../src/components/CardFaces.tsx", import.meta.url)).text();
+const cardSrc = await Bun.file(new URL("../src/components/PrCard.tsx", import.meta.url)).text();
+const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
 import type { PrSummary } from "../../shared/types.ts";
 
 const day = 86_400_000;
@@ -88,10 +89,10 @@ const column = (html: string, lane: string): string => {
 const drawn = (html: string, lane: string): number => (column(html, lane).match(/data-pr="/g) ?? []).length;
 /** The number in the lane's heading. */
 const heading = (html: string, lane: string): string | null =>
-  column(html, lane).match(/tabular-nums">([^<]+)</)?.[1] ?? null;
+  column(html, lane).match(/tabular-nums[^"]*"[^>]*>([^<]+)</)?.[1] ?? null;
 /** The number on the lane's count button, the one that lights the lane (the chip row it replaced is gone). */
 const segment = (html: string, lane: string): string | null =>
-  html.match(new RegExp(`data-seg="${lane}"[^>]*>\\s*<span[^>]*>([^<]+)</span>`))?.[1] ?? null;
+  html.match(new RegExp(`data-seg="${lane}"[^>]*>([^<]+)</button>`))?.[1] ?? null;
 
 /*
  * One board with a lane of every shape, built through the real classifier
@@ -163,18 +164,18 @@ describe("the lanes", () => {
     const html = full({ review: long });
     expect(drawn(html, "review")).toBe(LANE_CAP);
     expect(heading(html, "review")).toBe(String(LANE_CAP + 3));
-    expect(column(html, "review")).toContain("+3 more in this lane");
+    expect(column(html, "review")).toContain("Show the other 3");
   });
 
   it("leaves a lane under the cap alone", () => {
     const html = full();
     expect(drawn(html, "land")).toBe(2);
-    expect(column(html, "land")).not.toContain("more in this lane");
+    expect(column(html, "land")).not.toContain("Show the other");
   });
 
   it("says an empty lane is empty, per lane, when the rest are not", () => {
     const html = render({ mine: [pr(1)], review: [], total: 9 });
-    expect(column(html, "review")).toContain("Nothing here. Good.");
+    expect(column(html, "review")).toContain("Nothing here. Quiet is good.");
     expect(drawn(html, "flight")).toBe(1);
   });
 
@@ -186,37 +187,19 @@ describe("the lanes", () => {
   });
 });
 
-describe("the scope sentence", () => {
-  it("states what is on the board and what is not", () => {
+describe("the lanes carry the whole count", () => {
+  it("draws no scope sentence above the lanes: the counts on the lanes say it", () => {
+    // The design has no line between the bar and the lanes. It used to read
+    // "13 open · yours and asked of you · 1 can land right now", which restated
+    // the five lane counts next to it.
     const html = full();
-    expect(html).toContain(`${INVOLVED}</b>`);
-    expect(html).toContain("of 388 open · yours and asked of you");
-    // No way to the rest from here: the repository is reached by searching.
-    expect(html).not.toContain("show the other");
-    expect(html).not.toContain("never shows more than that");
+    expect(html).not.toContain("yours and asked of you");
+    expect(html).not.toContain("can land right now");
+    expect(html).not.toContain(`${INVOLVED}</b>`);
   });
 
-  it("drops every number built on the total when the total disagrees", () => {
-    /*
-     * Clamping is how "show the other 0" got onto a screen with 388 open
-     * pull requests behind it, and "5 of 3 want something from you" is the same
-     * bad total two sentences later. The way out stays; the false counts go —
-     * and they go together, or the screen contradicts itself.
-     */
-    const html = render({ total: 1, mine: MINE, review: REVIEW });
-    expect(html).not.toContain("show every open pull request");
-    expect(html).not.toContain("never shows more than that");
-    expect(html).not.toContain("the other 0");
-    expect(html).toContain("open · yours and asked of you");
-    expect(html).not.toContain("of 1 open");
-  });
-
-  it("shouts about the ones that only need a press", () => {
-    expect(full()).toContain("can land right now");
-  });
-
-  it("stays quiet about landing when nothing can", () => {
-    expect(render({ mine: [pr(1, { fail: 1 })], review: [], total: 4 })).not.toContain("can land right now");
+  it("still says how much of the repository is not on the board, in the footer", () => {
+    expect(full()).toContain(`${388 - INVOLVED}</b>`);
   });
 });
 
@@ -229,18 +212,21 @@ describe("waiting is not the same as empty", () => {
    */
   it("says it is still reading, and puts no number on it", () => {
     const html = render({ loading: true, total: 388 });
-    expect(html).toContain("Reading the two lists this board is made of");
-    expect(html).not.toContain("Nothing wants anything from you");
-    // Not "0 of 388". A count nobody has counted is the whole complaint.
-    expect(html).not.toContain("yours and asked of you");
-    expect(heading(html, "review")).toBe("—");
+    // The face is skeleton cards under a busy grid, never a claim.
+    expect(html).toContain('aria-busy="true"');
+    expect(html).toContain("agx-sk");
+    expect(html).not.toContain("No open pull requests");
+    expect(html).not.toContain("Quiet is good");
+    // Not "0". A count nobody has counted is the whole complaint.
+    expect(heading(html, "review")).toBe("\u2026");
   });
 
   it("says there is nothing only when both lists are in", () => {
     const html = render({ loading: false, total: 388 });
-    expect(html).toContain("Nothing wants anything from you");
-    expect(html).toContain("this is an answer, not a wait");
-    expect(html).not.toContain("Reading the two lists");
+    expect(html).toContain("No open pull requests");
+    expect(html).toContain("Quiet is good");
+    expect(html).not.toContain("agx-sk");
+    expect(html).not.toContain("aria-busy");
   });
 
   it("keeps the answer on screen while it refreshes", () => {
@@ -287,9 +273,11 @@ describe("the footer", () => {
     expect(html).toContain("1 of these has gone 30 days without a push or a comment");
   });
 
-  it("says so plainly when none of them is quiet", () => {
-    const html = render({ total: 20, mine: [pr(1), pr(2)], review: [] });
-    expect(html).toContain("everything here moved in the last 30 days");
+  it("draws no footer at all when nothing in it has anything to say", () => {
+    // "Everything here moved in the last 30 days" was a sentence about the
+    // absence of a problem; the footer now appears only with something to say.
+    const html = render({ total: -1, mine: [pr(1), pr(2)], review: [] });
+    expect(html).not.toContain("everything here moved");
     expect(html).not.toContain("of these have gone");
   });
 
@@ -321,9 +309,6 @@ describe("the summary bar", () => {
     expect(segment(html, "blocked")).toBe("1");
     expect(segment(html, "others")).toBe("1");
     expect(segment(html, "flight")).toBe("1");
-    // The board against the repository is the one line above the lanes now.
-    expect(html).toContain(`${INVOLVED}</b>`);
-    expect(html).toContain("of 388 open");
   });
 
   it("agrees with the lane headings, because two counts that can drift will", () => {
@@ -386,7 +371,15 @@ describe("the lane headings line up", () => {
    */
   it("draws no wrapping sentence in the heading", () => {
     const html = render({ mine: [pr(1, { reviewDecision: "APPROVED" })] });
-    for (const l of LANES) expect(html).not.toContain(`>${l.why}<`);
+    // The sentence is not inside the heading's text; it rides the info button's tip.
+    for (const l of LANES) {
+      const col = column(html, l.id);
+      if (!col) continue;
+      expect(col.slice(col.indexOf("<h3"), col.indexOf("</h3>"))).not.toContain(`>${l.why}<`);
+      // No description line under the heading; the sentence is the info button's tip, so the first card starts at one Y.
+      expect(col).not.toContain("agx-pl-help");
+      expect(col.slice(col.indexOf("<h3"), col.indexOf("</h3>"))).toContain(`aria-label="About ${l.label}`);
+    }
   });
 
   it("keeps every why as something you can still read", () => {
@@ -398,7 +391,6 @@ describe("the lane headings line up", () => {
     // would be asserting that a column nobody can see explains itself.
     const html = render({ mine: [pr(1)] });
     for (const l of LANES) {
-      if (l.hideWhenEmpty) continue;
       expect(html).toContain(l.why);
     }
     // And with something in it, it is a column again, ⓘ and all.
@@ -410,39 +402,46 @@ describe("the lane headings line up", () => {
 describe("the card carries the suite as a bar", () => {
   /*
    * "6/14" and "13/14" are the same shape at ten pixels — a board built for a
-   * glance was asking you to read two numbers and divide. What is asserted is
-   * the WIDTH, because the width is the claim: a bar that does not move with
-   * the rollup is worse than no bar, since it looks like an answer.
+   * glance was asking you to read two numbers and divide. The bar is one
+   * segment per check that reported, so what is asserted is the COUNT and the
+   * colour of the segments: a bar that does not move with the rollup is worse
+   * than no bar, since it looks like an answer.
    */
-  const width = (html: string, n: number): string | null => {
+  const segments = (html: string, n: number): { green: number; red: number; running: number; ring: string } => {
     const card = html.slice(html.indexOf(`data-pr="${n}"`));
-    return card.match(/width:\s*([0-9]+%)/)?.[1] ?? null;
+    const start = card.indexOf('class="agx-cd-svg"');
+    const ring = card.slice(start, card.indexOf("</svg>", start));
+    const count = (token: string) => ring.split(`stroke="var(--${token})"`).length - 1;
+    return { green: count("success"), red: count("error"), running: count("warning"), ring };
   };
 
   it("fills by what has reported, not by what passed", () => {
-    // 6 in of 14, nothing red: 43%. A run half in looks half in.
-    const html = render({ mine: [pr(1, { ok: 6, pend: 8 })] });
-    expect(width(html, 1)).toBe("43%");
+    // 6 in of 14, nothing red: six green segments and eight still running.
+    const s = segments(render({ mine: [pr(1, { ok: 6, pend: 8 })] }), 1);
+    expect([s.green, s.red, s.running]).toEqual([6, 0, 8]);
   });
 
-  it("fills a finished red run to the end", () => {
+  it("draws a failure as a segment of its own, in a run that has finished", () => {
     // A failure is not an unfinished run. The colour says the verdict; the
-    // length says the progress, and they are two different questions.
-    const html = render({ mine: [pr(2, { ok: 3, fail: 1 })] });
-    expect(width(html, 2)).toBe("100%");
+    // count says the progress, and they are two different questions.
+    const s = segments(render({ mine: [pr(2, { ok: 3, fail: 1 })] }), 2);
+    expect([s.green, s.red, s.running]).toEqual([3, 1, 0]);
   });
 
   it("leaves the track empty when nothing has reported", () => {
-    // Not a hidden bar — that would make the card a different height — and not
+    // Not a hidden ring — that would make the card a different shape — and not
     // a full grey one, which reads as "done".
-    const html = render({ mine: [pr(3, { ok: 0 })] });
-    expect(width(html, 3)).toBe("0%");
+    const s = segments(render({ mine: [pr(3, { ok: 0 })] }), 3);
+    expect([s.green, s.red, s.running]).toEqual([0, 0, 0]);
+    expect(s.ring).toContain('aria-label="No checks yet"');
   });
 
   it("still says the verdict in words", () => {
     // Colour alone cannot say "red" to somebody who cannot see red.
-    expect(render({ mine: [pr(4, { ok: 2, fail: 1 })] })).toContain("1 check failing");
-    expect(render({ mine: [pr(5, { ok: 6, pend: 8 })] })).toContain("6 of 14 in");
+    expect(render({ mine: [pr(4, { ok: 2, fail: 1 })] })).toContain("1 failing");
+    const running = render({ mine: [pr(5, { ok: 6, pend: 8 })] });
+    expect(running).toContain(">6/14<");
+    expect(running).toContain(">8 running<");
   });
 });
 
@@ -450,33 +449,26 @@ describe("the pin is a target you can hit", () => {
   /*
    * It was a 22px glyph in the bottom corner, under a sentence whose length
    * decided where it ended up — so it moved between cards, and you aimed at it
-   * rather than hitting it. Asked for explicitly.
+   * rather than hitting it. It lives in the footer's third slot now, the same
+   * place on every card, at the house's 26px square.
    */
-  const pinBtn = (html: string, n: number): string => {
-    const card = html.slice(html.indexOf(`data-pr="${n}"`));
-    const at = card.indexOf('aria-label="Pin');
-    return card.slice(Math.max(0, at - 400), at + 200);
-  };
-
-  it("is the number chip's height with a mouse and at least 26px square on a touch screen", () => {
-    // The size is two custom properties on the group and a class on the button:
-    // a media query for a coarse pointer cannot be written in an inline style.
+  it("is the house's 26px square, a kit button, on a mouse and on a touch screen", () => {
     const html = render({ mine: [pr(1)] });
     const card = html.slice(html.indexOf('data-pr="1"'));
     const at = card.indexOf('aria-label="Pin');
     const pin = card.slice(card.lastIndexOf("<button", at), card.indexOf(">", at));
-    expect(pin).toContain("agx-prc-ib");
-    expect(Number(card.match(/--ib:\s*([0-9]+)px/)?.[1] ?? 0)).toBe(CHIP_H + 2);
-    expect(Number(card.match(/--ib-hit:\s*([0-9]+)px/)?.[1] ?? 0)).toBeGreaterThanOrEqual(26);
+    expect(pin).toContain("width:26px");
+    expect(pin).toContain("height:26px");
+    expect(cardSrc).toContain('<Button size="hit" tone="quiet" square aria-pressed={props.pinned}');
   });
 
-  it("sits on the identity line beside the number, where every card has one", () => {
-    // Before the title and before the action, so its position cannot depend
-    // on how long either of them is.
+  it("sits in the footer's last slot, after what the card says, so its position cannot depend on how long the title is", () => {
     const html = render({ mine: [pr(1)] });
     const card = html.slice(html.indexOf('data-pr="1"'));
-    expect(card.indexOf('aria-label="Pin')).toBeLessThan(card.indexOf("agx-prc-title"));
-    expect(card.indexOf('aria-label="Pin')).toBeLessThan(card.indexOf("↳"));
+    expect(card.indexOf("agx-cd-t")).toBeGreaterThan(0);
+    expect(card.indexOf('aria-label="Pin')).toBeGreaterThan(card.indexOf("agx-cd-t"));
+    expect(card.indexOf('aria-label="Pin')).toBeGreaterThan(card.indexOf("↳"));
+    expect(card.indexOf("agx-cd-icb")).toBeLessThan(card.indexOf('aria-label="Pin'));
   });
 
   it("says which state it is in for a reader who cannot see the star", () => {
@@ -494,8 +486,8 @@ describe("a long title cannot decide the card's height", () => {
      */
     const long = "fix: " + "a very long title that nobody would ever type by hand ".repeat(4);
     const html = render({ mine: [pr(1, { title: long })] });
-    expect(html).toContain("-webkit-line-clamp:2");
-    expect(html).toContain(long.slice(0, 40)); // still there, still in the title attribute
+    expect(css).toMatch(/\.agx-cd-t \{[^}]*-webkit-line-clamp: 2;/);
+    expect(html).toContain(long.slice(0, 40)); // still there, whole in the tooltip
   });
 });
 
@@ -508,11 +500,13 @@ describe("a long title cannot decide the card's height", () => {
  * leaves empty.
  */
 describe("finding a card on the board", () => {
-  it("has a box, once there is something to look through", () => {
-    expect(full()).toContain("Find in these");
-    // Nothing to search on an empty board, and nothing to search while the two
-    // lists are still arriving.
+  it("draws no find button at rest, and keeps it for when something is lit", () => {
+    // The design's board has no tools row; Ctrl+F still opens the find. The
+    // tools float, drawn only when there is something to do with them.
+    expect(full()).not.toContain("Find in these");
     expect(render({ mine: [], review: [], total: 0 })).not.toContain("Find in these");
+    expect(board).toContain('aria-label="Find in these cards"');
+    expect(board).toContain("(unreadCount > 0 || onlyUnread || !!find || onlyLane !== null)");
   });
 
   it("quietens what does not match rather than removing it", () => {
@@ -534,7 +528,8 @@ describe("finding a card on the board", () => {
      */
     const call = board.slice(board.indexOf("dim={"), board.indexOf("root={root}", board.indexOf("dim={")));
     expect(call, "dim is derived from the search, per card").toContain("matches(p)");
-    expect(board).toContain('...(dim ? { opacity: 0.32, filter: "saturate(0.25)" } : null),');
+    expect(css).toContain(".agx-cd[data-dim] { opacity: .32; filter: saturate(.25); }");
+    expect(cardSrc).toContain('data-dim={props.dim ? "1" : undefined}');
     // Never a filtered list: every card is still rendered.
     expect(board).not.toContain(".filter(matches)</");
     expect(board).not.toContain(".filter(matches).map");
@@ -565,13 +560,14 @@ describe("who is on it", () => {
      * `Avatar` keeps initials as its own fallback, so nothing is lost where
      * there is no face.
      */
-    expect(faces).toContain("<Avatar login={f.login} size={ICON.md} />");
+    expect(cardSrc).toContain("<Avatar login={f.login} size={size} />");
     expect(board).not.toContain("r.login.slice(0, 2).toUpperCase()");
   });
 
-  it("the author leads the identity line; everyone the band waits on is a face on its right", () => {
-    expect(board).toContain("<Avatar login={p.author} size={20} />");
-    expect(board).toContain("<CardFaces r={reviewers} />");
+  it("the author is named by the strip and the event tooltip; everyone the band waits on is a face on its right", () => {
+    expect(cardSrc).not.toContain("<Avatar login={p.author} size={16} />");
+    expect(board).toContain("author: p.author,");
+    expect(cardSrc).toContain("<Faces faces={cv.stripFaces.faces}");
     expect(board).not.toContain("headerPeople");
     expect(board).not.toContain("agx-prc-foot");
   });
@@ -584,8 +580,8 @@ describe("a board is for pointing at, not for pressing", () => {
      * reason, and then an Open button nobody used. The whole card is the
      * button; the lane and its sentence say what wants doing.
      */
-    // `ref={cardEl}` sits first: the conflict resolver watches the card's visibility.
-    expect(board).toContain('<div ref={cardEl} onClick={onOpen} role="button"');
+    // `ref={props.cardRef}` sits first: the conflict resolver watches the card's visibility.
+    expect(cardSrc).toContain('<div ref={props.cardRef} onClick={props.onOpen} role="button"');
     expect(board).not.toContain("onAct(p, act)");
     expect(board).not.toContain('onAct(p, "open")');
   });
@@ -593,8 +589,8 @@ describe("a board is for pointing at, not for pressing", () => {
 
 describe("the number on a card", () => {
   it("copies when pressed, without opening the card underneath", () => {
-    expect(board).toContain("copyNumber(p.number)");
-    expect(board).toContain("e.stopPropagation(); copyNumber(p.number)");
+    expect(cardSrc).toContain('copy("num", `#${p.number}`)');
+    expect(cardSrc).toContain("const stop = (fn: () => void) => (e: React.MouseEvent) => { e.stopPropagation(); fn(); };");
   });
 
   it("wears the same chip the masthead does, so it reads as pressable", () => {
@@ -612,11 +608,12 @@ describe("the number on a card", () => {
      * What has to hold is the promise, not the codepoint: the chip still says
      * what it does before you try it, and still says it happened afterwards.
      */
-    expect(board).toContain("copied === p.number");
-    expect(board).toContain("<DoneIcon size={ICON.xs} />");
-    expect(board).toContain("<CopyIcon size={ICON.xs} />");
-    expect(board).toContain("border: copyEdge(copied === p.number),");
-    expect(board).toContain("`1px solid color-mix(in srgb, ${done ? \"var(--success) 50%\" : \"var(--border) 55%\"}, transparent)`");
+    expect(cardSrc).toContain('copied === "num"');
+    expect(cardSrc).toContain("<DoneIcon size={ICON.xs} />");
+    expect(cardSrc).toContain("<CopyIcon size={ICON.xs} />");
+    /* The green after a copy is the stylesheet's, keyed on the number's own flag. */
+    expect(cardSrc).toContain('data-copied={copied === "num" ? "1" : undefined}');
+    expect(css).toMatch(/\.agx-cd-n\[data-copied\] \{[^}]*var\(--success\)/);
   });
 });
 
@@ -644,44 +641,40 @@ describe("a red card", () => {
 });
 
 describe("taking a card away with you", () => {
-  /* The number, the link and the pin are one group on the identity line, right
-     after the number and before the age. They used to be split: the number on
-     the identity line, the link and the pin in a block of their own at the end
-     of the title row, which took the title's width. */
-  const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
-  const idRow = board.slice(board.indexOf('className="agx-prc-id"'), board.indexOf('<div title={p.title} className="agx-prc-title'));
-  const group = idRow.slice(idRow.indexOf('className="agx-prc-grp'), idRow.indexOf("{ago(p.updatedAt)}"));
+  /* The number copies on the title, before the words. The link and the pin are
+     the footer's last slot, beside "more actions": the same place on every
+     card, where they used to follow the title's width. */
+  const slot = cardSrc.slice(cardSrc.indexOf('<div className="agx-cd-icb">'), cardSrc.indexOf("/* ---- stack popover ---- */"));
 
   it("copies its link, beside the number and the pin", () => {
     /* The number copies the number — what goes in a branch or a commit. This is
        the other thing a card gets taken away as: a link to paste into a
        message. */
-    expect(board).toContain("copyLink()");
-    expect(board).toContain('navigator.clipboard?.writeText(p.url || "")');
+    expect(cardSrc).toContain('copy("link", p.url || "")');
+    expect(cardSrc).toContain("void navigator.clipboard?.writeText(text)");
   });
-  it("keeps the number, the link and the pin in one group on the identity line, before the age", () => {
-    expect(idRow).not.toBe("");
-    for (const call of ["copyNumber(p.number)", "copyLink()", "onPin()"]) {
-      expect(group, call).toContain(call);
-    }
-    expect(group.indexOf("copyNumber(")).toBeLessThan(group.indexOf("copyLink()"));
-    expect(group.indexOf("copyLink()")).toBeLessThan(group.indexOf("onPin()"));
+  it("keeps the number on the title, and the link and the pin in the footer's last slot", () => {
+    expect(slot).not.toBe("");
+    const title = cardSrc.slice(cardSrc.indexOf('<div className="agx-cd-t"'), cardSrc.indexOf("/* ---- ticket row ---- */"));
+    expect(title).toContain('copy("num"');
+    for (const call of ['copy("link"', "props.onPin()"]) expect(slot, call).toContain(call);
+    expect(slot.indexOf('copy("link"')).toBeLessThan(slot.indexOf("props.onPin()"));
   });
   it("keeps each control's label, pressed state and click guard", () => {
-    expect(group).toContain("aria-label={`Copy the link to #${p.number}`}");
-    expect(group).toContain("aria-pressed={pinned}");
-    expect(group.split("e.stopPropagation()").length - 1).toBe(3);
+    expect(slot).toContain("`Copy the link to #${p.number}`");
+    expect(slot).toContain("aria-pressed={props.pinned}");
+    expect(slot).toContain("More actions for #${p.number}");
+    expect(slot.split("e.stopPropagation()").length - 1).toBe(3);
   });
-  it("has no separate action block, and the layout has no area for one", () => {
+  it("has no separate action block, and the stylesheet has no area for one", () => {
     expect(board).not.toContain("agx-prc-ac");
     expect(css).not.toContain("agx-prc-ac");
     expect(css).not.toMatch(/grid-template-areas:[^;]*\bac\b/);
   });
-  it("sizes the link and the pin from the number chip, HIT on a touch screen", () => {
-    expect(group).toContain("CHIP_H + 2");
-    expect(group).toContain("HIT");
-    expect(css).toMatch(/\.agx-prc-ib \{ width: var\(--ib\); height: var\(--ib\); \}/);
-    expect(css).toMatch(/pointer: coarse\) \{\s*\.agx-prc-ib \{ width: var\(--ib-hit\)/);
+  it("sizes the footer's buttons from the kit: HIT, which is also what a touch screen needs", () => {
+    const footer = cardSrc.slice(cardSrc.indexOf('<div className="agx-cd-f"'), cardSrc.indexOf("/* ---- stack popover ---- */"));
+    expect(footer.split('size="hit"').length - 1).toBe(5);
+    expect(readFileSync(new URL("../src/components/workspace/Chrome.tsx", import.meta.url), "utf8")).toContain("hit: HIT");
   });
 });
 
@@ -749,53 +742,25 @@ describe("a stale approval on the card", () => {
   it("is green when GitHub still counts it, amber only once re-requested", () => {
     // Reported beside the merge box on the same pull request reading the
     // identical fact green ("still counts") while this card was amber for
-    // commits alone.
-    const fn = board.slice(board.indexOf('if (v.kind === "approved") {'), board.indexOf("function CardView("));
-    expect(fn).toContain("staleApproval(p.reviewDecision).counts");
-    expect(fn).toContain("if (!v.askedAgain && counts)");
-  });
-});
-
-describe("the card header strip, cleared", () => {
-  // Reported on the installed build: the merge box had already gone amber for
-  // "every changes-requester re-asked", and this strip — the same fact, a
-  // different surface — still read red. One truth, one wording, two places.
-  const fn = board.slice(board.indexOf('if (v.kind === "changes") {'), board.indexOf('if (v.kind === "awaiting") {'));
-
-  it("draws amber, not red, once every changes-requester is cleared", () => {
-    expect(fn).toContain("if (v.cleared)");
-    expect(fn).toContain("var(--warning)");
-  });
-
-  it("says the same thing the merge box says", () => {
-    expect(fn).toContain("Waiting on review by");
-    /* The header names who the ball is with; the sentence under it, in the
-       card's own last-event zone, says what happened. Said twice it was one
-       fact on two lines of the same card. */
-    expect(fn).not.toContain("Changes applied, asked to look again.");
+    // commits alone. The decision is in prCardView.ts and walked in pr-card-view.test.ts.
+    const view = readFileSync(new URL("../src/lib/prCardView.ts", import.meta.url), "utf8");
+    expect(view).toContain("staleApproval(p.reviewDecision).counts");
+    expect(view).toContain("o.staleCounts && !o.askedAgain");
   });
 });
 
 describe("card assignees on a board card", () => {
-  const tracker = readFileSync(new URL("../src/components/CardTracker.tsx", import.meta.url), "utf8");
-
-  it("draws up to five faces and says the rest as +N", () => {
-    expect(tracker).toContain("peopleShown(who.length)");
-    expect(tracker).toContain("who.slice(0, faces)");
-    expect(tracker).toContain("+{more}");
-  });
-
-  it("does not repeat the first assignee's name next to the faces", () => {
-    expect(tracker).not.toContain("who[0]!.name");
+  it("are named in the ticket's tooltip, once, with the status and priority", () => {
+    expect(cardSrc).toContain('(card.people ?? []).map((x) => x.name).join(", ")');
+    expect(cardSrc).toContain("On ${who}.");
+    expect(cardSrc).not.toContain("who[0]!.name");
   });
 });
 
-describe("the identity line of a board card", () => {
-  const line = board.slice(board.indexOf("Beside the number, before the title"), board.indexOf("Everything that is only sometimes true"));
-
-  it("does not print the author's name: the first face bottom right is the author", () => {
-    expect(line).toContain("ago(p.updatedAt)");
-    expect(line).not.toContain("{p.author}");
+describe("the identity of a board card", () => {
+  it("says who opened it in the tooltip, and how long since anything moved at the end of the event line", () => {
+    expect(cardSrc).toContain('<span className="agx-cd-eta">· {age}</span>');
+    expect(board).toContain("ago(p.updatedAt)");
   });
 });
 
@@ -813,12 +778,12 @@ describe("the repository on the board, and results as cards", () => {
     expect(html).toContain('data-pr="1"');
     expect(html).not.toContain('data-pr="10"');
     expect(html).not.toContain("on this page of the repository");
-    expect(html).not.toContain('data-lane="others"');
     expect(html).not.toContain("Load more pull requests");
-    expect(html).toContain("open · yours and asked of you");
+    // The lane for what others owe is always drawn, but holds none of the page.
+    expect(column(html, "others")).not.toContain("data-pr=");
   });
 
-  it("results are cards, merged ones included, never rows and never filed under Blocked", () => {
+  it("results are rows, merged ones included, never cards in a lane and never filed under Blocked", () => {
     const html = render({
       results: {
         title: "closed and merged pull requests", loading: false, empty: "none", onBack: () => {},
@@ -827,9 +792,14 @@ describe("the repository on the board, and results as cards", () => {
     });
     expect(html).toContain('data-results');
     expect((html.match(/data-pr="/g) ?? []).length).toBe(3);
-    expect(html).toContain('data-finished="merged"');
-    expect(html).toContain('data-finished="closed"');
+    expect(html).toContain('class="agx-srow"');
+    expect((html.match(/class="agx-srow"/g) ?? []).length).toBe(3);
+    expect(html).not.toContain("agx-prc");
+    // In a search the state is a tag on the right, not a word in the meta line.
+    expect(html).toMatch(/agx-pc-tag[^>]*>merged</);
+    expect(html).toMatch(/agx-pc-tag[^>]*>closed</);
     expect(html).not.toContain("data-lane=");
+    expect(html).not.toContain("Blocked");
     expect(html).toContain("Back to the board");
   });
 

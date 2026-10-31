@@ -463,6 +463,14 @@ back with its right-hand column sliced off, and the same page minutes later came
 back a different size. If you are reading an older transcript that tells you to
 call `resize` before capturing, that advice is obsolete.
 
+**`resize` and `emulate --width/--height` simulate a phone or tablet, and are
+rarely needed.** Use one only when the feature being built has to work at that
+screen. To see more of a page, use `zoom` (the Ctrl+ / Ctrl- page zoom, which
+always fills the panel). Never resize for screenshots. The tab is the person's
+to look at: a fixed viewport is drawn fitted into their pane, and it ends on
+its own when you say `done`, when they take the tab over, or after ten minutes
+without an ask.
+
 **There is no full-page shot.** It repeated any sticky header once per screen,
 so it was removed rather than left to produce pictures that duplicate content.
 The default frame already covers the document; use `--clip` or `--selector` when
@@ -579,11 +587,11 @@ curl -sS http://localhost:4000/control \
   -d '{"cmd":"ui","do":"settings.open","args":{"page":"appearance"}}'
 ```
 
-`do` is one of `view.open` (`to`), `panel.open` (`what`: stats, skills, search,
-help, palette), `finder.open` (`path`), `settings.open` (`page`, optional `row`),
+`do` is one of `view.open` (`to`), `panel.open` (`what`: skills, help,
+palette), `finder.open` (`path`), `settings.open` (`page`, optional `row`),
 `machine.open` (`tab`: ports, resources, locks), `project.picker`,
 `windows.switcher`, `bench.toggle`, `bench.file` and `peek.file` (`root`, `path`
-under it), `bench.board` (`root`, `kind`: pr, tasks, files), `git.modal`
+under it), `bench.board` (`root`, `kind`: pr, tasks), `git.modal`
 (`which`: insights, bisect), `git.compare` (`base`), `git.blame` (`path`),
 `theme.set`, `zoom.step`, `workspace.toggle`, `esc.peel`; and the
 settings door: `settings.set` (`id`, `value`) changes an exposed setting
@@ -620,6 +628,19 @@ was shown. Each command leaves one line in `GET /actions` (`/control/<id>`),
 naming the door and never the path.
 
 ## Guardrails, and why they are there
+
+**A page that asks for the microphone, the camera or notifications** in a tab
+you opened or acted on (`--as` or `--shared`) never puts a dialog, bar or
+badge in front of the person — the answer is yours alone. The request is held for you,
+and your next answer says so under `pendingPermissions` (and on stderr), as
+"pending permission: microphone for http://localhost:8002 — answer with
+permission grant|deny microphone within 30s, or it is denied". Answer it
+with `agentglass-browser --as <you> permission grant microphone`; say nothing
+and it is denied. To have it granted before the page asks — a test that starts
+recording on load — `permission grant microphone --origin http://localhost:8002`
+first; it holds for your container and that site until the app closes.
+`permission --list` (or `permissions` with no origin) shows what is held and
+what you answered. Location and clipboard reads are not yours to grant.
 
 `AGENTGLASS_BROWSER_ORIGINS` limits where the browser may be pointed.
 `AGENTGLASS_BROWSER_READONLY=1` allows observing and refuses acting — a verb

@@ -25,7 +25,7 @@ import { CloseButton } from "./CloseButton.tsx";
 import { LanesRow } from "./LanesRow.tsx";
 import { Portal } from "./Portal.tsx";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
-import { BROWSER_PARTITION, HAS_BROWSER, IS_DESKTOP, applySessionSettings, browserDevtools, browserDevtoolsClose, browserDevtoolsRect, browserDevtoolsZoom, browserCdp, browserZoom, browserShelfRead, captureFullPage, cookieSources, onDevtoolsZoom, onDevtoolsOpen, onBrowserZoom, onBrowserOpenTab, onBrowserKey, onBrowserSearch, onBrowserInspect, setActiveBrowserGuest, setGuestOwner, openEphemeralTab, closeEphemeralTab } from "../lib/desktop.ts";
+import { BROWSER_PARTITION, HAS_BROWSER, IS_DESKTOP, applySessionSettings, browserDevtools, browserDevtoolsClose, browserDevtoolsRect, browserDevtoolsZoom, browserCdp, browserZoom, browserShelfRead, captureFullPage, cookieSources, onDevtoolsZoom, onDevtoolsOpen, onBrowserZoom, onBrowserOpenTab, onBrowserKey, onBrowserSearch, onBrowserInspect, setActiveBrowserGuest, browserShown, setGuestOwner, setGuestOpener, onBrowserGuestAttached, openEphemeralTab, closeEphemeralTab } from "../lib/desktop.ts";
 import { buildSearchUrl, displayUrl, normalizeNavigationUrl } from "../lib/browserUrl.ts";
 import { BLANK, homePage, searchEngine, zoomLevel, setZoomLevel as saveZoom, zoomPercent, stepZoom, ZOOM_MIN, ZOOM_MAX, devtoolsSide, setDevtoolsSide, devtoolsSize, setDevtoolsSize, devtoolsZoom, setDevtoolsZoom, sidebarOpen, classicChrome, setClassicChrome, setSidebarOpen, sidebarWidth, setSidebarWidth, type DevtoolsSide } from "../lib/browserPrefs.ts";
 import { addTab, closeTab, SLEEP_GRACE_MS, type Recency, listable, newTab, patchTab, popupHome, pruneBlank, sleepingTab, stepTab, tabLabel, wake, withInspected, type BrowserTab } from "../lib/browserTabs.ts";
@@ -37,7 +37,7 @@ import {
   mergeImported, type ImportedShelf,
   type Shelf, type ShelfFolder, type ShelfItem, type ShelfSpot,
 } from "../lib/browserShelf.ts";
-import { forgetProfileTabs, readSession, saveSession, setFor } from "../lib/browserSession.ts";
+import { forgetProfileTabs, openingStrip, readSession, saveSession, setFor } from "../lib/browserSession.ts";
 import {
   addProfile, loadProfiles, partitionFor, profileHue, profileName, removeProfile, saveProfiles,
   type BrowserProfile,
@@ -45,9 +45,9 @@ import {
 import { VIEWPORTS, type Viewport } from "../lib/browserViewport.ts";
 import { browserNav, clearBrowserNav, subscribeBrowserNav } from "../lib/browserNav.ts";
 import { clientId, serveBrowserAsk, setBrowserAskHandler } from "../lib/browserBus.ts";
-import { activityReducer, actionOf, agentLabel, doneMayMark, pausedRefusal, tabState, type Activity, type TabAgent } from "../lib/browserAgentActivity.ts";
-import { api } from "../lib/api.ts";
-import { forgetAgentZoom, reapplyZoom, applyGuestZoom, setPageZoomer, crossContainerRefusal, mintTakesThePane, notePopup, onActLanded, type ActLanding, type GuestZoom, type DrivableWebview } from "../lib/browserDrive.ts";
+import { activityReducer, actionOf, agentLabel, doneMayMark, pausedRefusal, tabState, viewportReleased, IDLE_RELEASE_MS, type Activity, type TabAgent } from "../lib/browserAgentActivity.ts";
+import { api, flushStorage } from "../lib/api.ts";
+import { clearAgentViewport, onAgentViewport, type ViewportBox, forgetAgentZoom, reapplyZoom, applyGuestZoom, setShellZoom, setPageZoomer, crossContainerRefusal, mintTakesThePane, notePopup, onActLanded, type ActLanding, type GuestZoom, type DrivableWebview } from "../lib/browserDrive.ts";
 import { AgentPresence } from "./browser/AgentPresence.tsx";
 import { BrowserIsland } from "./browser/BrowserIsland.tsx";
 import { onBrowserTabs } from "../lib/browserBus.ts";
@@ -102,9 +102,6 @@ export type WebviewEl = HTMLElement & {
 
 /* -------------------------------------------------------------- small parts */
 
-/** A toolbar control. Square, quiet, and the same size as its neighbours — the
- *  old bar mixed glyph widths and read as a row of unrelated marks rather than
- *  as a toolbar. */
 /** The same control at the width a 228px column can afford. `Tool` is 30px and
  *  eight of those do not fit; the target stays square and stays above the icon
  *  floor. */
@@ -114,21 +111,6 @@ function SideTool({ on, label, onClick, disabled, children }: {
   return (
     <Button onClick={onClick} disabled={disabled} label={label} size="compact" square on={!!on}
       className="shrink-0">{children}</Button>
-  );
-}
-
-export function Tool({ on, label, onClick, disabled, tint, children }: {
-  label: string; onClick: () => void; disabled?: boolean; on?: boolean; tint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <button onClick={onClick} disabled={disabled} title={label} aria-label={label}
-      className="agx-btn shrink-0 rounded-lg flex items-center justify-center disabled:opacity-25"
-      style={{
-        width: 30, height: 30,
-        color: tint ?? (on ? "var(--primary-hover)" : "var(--text2)"),
-        background: on ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
-      }}>{children}</button>
   );
 }
 
@@ -273,88 +255,34 @@ export function BrowserView({ active: viewOn, scope }: {
    * validated on the way in — this string decides which cookie jar every page
    * in the strip loads with.
    */
-  const [profile, setProfile] = useState<string>(() => readSession(scope)?.current ?? "");
+  /* Where the app opens: the space, its pages and the one in front. The rules
+     are in `openingStrip`; read once, and the three states below seed from it. */
+  const [opening] = useState(() => {
+    if (IS_DEMO) return null;
+    const saved = readSession(scope);
+    const known = new Set(loadProfiles(globalThis.localStorage ?? null).map((p) => p.id));
+    /* A container that no longer exists: the file is told, once, rather than
+       left to be re-read every launch (see `openingStrip`). */
+    for (const id of Object.keys(saved?.byProfile ?? {})) {
+      if (id && id !== saved?.current && !known.has(id)) forgetProfileTabs(id);
+    }
+    return openingStrip(saved, known, (p) => {
+      const t = sleepingTab(homePage(), "", null, p);
+      return wakeFirst ? { ...t, asleep: false } : t;
+    });
+  });
+  const [profile, setProfile] = useState<string>(() => opening?.profile ?? "");
   const [tabs, setTabs] = useState<BrowserTab[]>(() => {
     // The demo opens with its own strip rather than whatever a previous visit
     // left in localStorage: a saved single blank tab would show the empty-state
     // card, which is exactly the dead panel this exists to stop being.
-    if (IS_DEMO) return DEMO_BROWSER_TABS.map((t, i) => {
+    if (!opening) return DEMO_BROWSER_TABS.map((t, i) => {
       const tab = sleepingTab(t.url, t.title, null, "");
       return i === 0 ? { ...tab, asleep: false } : tab;
     });
-    const saved = readSession(scope);
-    const set = setFor(saved, saved?.current ?? "");
-    /*
-     * No session yet — a fresh install, or a profile that has never opened this
-     * browser. Asleep like every other restored tab (see below): a real
-     * renderer profile with the debug port found a `<webview>` at about:blank
-     * on every idle desktop session, and this was why — a live Chromium guest
-     * mounted at launch and pointed at the home page, whether or not anybody
-     * had looked at the browser view yet. The home page itself normally loads
-     * fine; it read as about:blank because the guest that measured it had no
-     * network route out.
-     */
-    // Everything was closed on purpose last time: restore nothing, invent nothing.
-    if (saved && !Object.keys(saved.byProfile).length) return [];
-    if (!set) {
-      const t = sleepingTab(homePage(), "", null, saved?.current ?? "");
-      return [wakeFirst ? { ...t, asleep: false } : t];
-    }
-    // The one in front keeps its remembered name too, and only its `asleep`
-    // differs. Built with `newTab` it came back nameless and the strip read
-    // "New tab" until the page loaded, which is a flicker on every launch.
-    /*
-     * Everything asleep, even the one that was in front.
-     *
-     * This panel is now mounted from launch whether or not anybody goes to it
-     * (see KEEP_RUNNING), and waking a tab here would put a Chromium guest in
-     * every session that never opens the browser. The one in front wakes the
-     * moment the view is looked at — or the moment an agent asks for it, which
-     * is the other way this panel comes to life.
-     */
-    /*
-     * EVERY PROFILE'S PAGES COME BACK, not only the one on screen.
-     *
-     * Restoring the current profile alone was right while a profile was a
-     * place a person works in and only one of them existed at a time. It is
-     * wrong now that agents each have one: an agent's tabs simply vanished at
-     * launch, so restarting the application lost all their work, which was
-     * literally true, and the agent's next call found nothing to address and
-     * fell through to whatever was in front.
-     *
-     * It costs nothing. A restored tab is a name, an icon and an address with
-     * no guest behind it — that is what `sleepingTab` is — so bringing back
-     * forty of them is forty rows in an array. The strip shows the profile you
-     * are in; the rest are addressable and invisible, which is exactly what an
-     * agent's tab should be.
-     */
-    const here = saved?.current ?? "";
-    const mine = set.tabs.map((t) => ({ ...sleepingTab(t.url, t.title, t.icon, here, t.id), ...(t.agent ? { agent: t.agent } : null) }));
-    /*
-     * A CONTAINER THAT NO LONGER EXISTS BRINGS NOTHING BACK.
-     *
-     * Dropping a container forgets its pages, and closing its last page takes
-     * its entry out — but a file written before either of those existed still
-     * holds them, and every launch restored the lot. Measured on the real app:
-     * fifty containers that had been dropped hours earlier, sixty-four pages,
-     * and `newtab` refusing with "64 pages is the limit" on a browser whose
-     * owner had fourteen pages open.
-     *
-     * The names are the authority, not the tab file: an id that is not in the
-     * container list is an identity nothing can reach — no menu, no strip, no
-     * `--as`. Restoring pages into it is restoring them nowhere.
-     */
-    const known = new Set(loadProfiles(globalThis.localStorage ?? null).map((p) => p.id));
-    const theirs = Object.entries(saved?.byProfile ?? {})
-      .filter(([id]) => id !== here && (!id || known.has(id)))
-      .flatMap(([id, s]) => s.tabs.map((t) => ({ ...sleepingTab(t.url, t.title, t.icon, id, t.id), ...(t.agent ? { agent: t.agent } : null) })));
-    /* And the file is told, once, rather than left to be re-read every launch. */
-    for (const id of Object.keys(saved?.byProfile ?? {})) {
-      if (id && id !== here && !known.has(id)) forgetProfileTabs(id);
-    }
-    return [...mine, ...theirs];
+    return opening.tabs;
   });
-  const [activeId, setActiveId] = useState("");
+  const [activeId, setActiveId] = useState(() => opening?.activeId ?? "");
 
   /*
    * THE TABS, made addressable by an agent.
@@ -463,13 +391,37 @@ export function BrowserView({ active: viewOn, scope }: {
     return () => clearTimeout(t);
   }, [profile, tabs, activeId]);
 
-  /* And once more on the way out, because the debounce above may never fire:
-     closing the window is exactly the moment nothing gets half a second. */
+  /*
+   * A tab opened or closed is written AT ONCE, not half a second later.
+   *
+   * The debounce is for titles and favicons. A close is the one change a
+   * restart must not lose, and an install ends the app the moment it is
+   * ready — a page closed in the last half second came back. And written to
+   * DISK at once: Chromium keeps localStorage in memory, and a hard kill 40 s
+   * after a close still restored the closed page.
+   */
+  const shape = tabs.map((t) => `${t.id}:${t.profile || ""}`).join(" ");
+  useEffect(() => { saveSession(profile, tabs, activeId, scope); flushStorage(); }, [profile, shape]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /*
+   * And once more on the way out, because the debounce above may never fire:
+   * closing the window is exactly the moment nothing gets half a second.
+   *
+   * FROM A REF, ON THE WAY OUT ONLY. This flushed in the cleanup of an effect
+   * keyed on the tabs, and a cleanup runs on every change with the PREVIOUS
+   * render's values — so closing a container's last page wrote the strip as it
+   * was a moment before. `forgetProfileTabs` had just taken that container's
+   * entry out; the stale write put it back, and the save that followed left it
+   * alone as another profile's. Every container closed that way came back at
+   * the next launch.
+   */
+  const latest = useRef({ profile, tabs, activeId });
+  latest.current = { profile, tabs, activeId };
   useEffect(() => {
-    const flush = () => saveSession(profile, tabs, activeId, scope);
+    const flush = () => { const l = latest.current; saveSession(l.profile, l.tabs, l.activeId, scope); };
     window.addEventListener("pagehide", flush);
     return () => { window.removeEventListener("pagehide", flush); flush(); };
-  }, [profile, tabs, activeId]);
+  }, [scope]);
 
   /**
    * An ephemeral tab's jar is wiped the moment it is no longer among the
@@ -616,6 +568,45 @@ export function BrowserView({ active: viewOn, scope }: {
    *  person has taken the tab back. Read by the ask handler through a ref for
    *  the same reason as the lists above. */
   const [acts, dispatchAct] = useReducer(activityReducer, {} as Activity);
+  /*
+   * An agent's fixed viewport (`resize`, `emulate` with a size), as the share
+   * of the pane it is drawn in: the guest is shrunk to that box and centred,
+   * so the person sees the whole page letterboxed rather than a small page in
+   * the corner. It ends when the agent lets go of the tab — see
+   * `viewportReleased` — and the override goes with it.
+   */
+  const [boxes, setBoxes] = useState<Record<string, ViewportBox>>({});
+  const [releaseTick, setReleaseTick] = useState(0);
+  useEffect(() => onAgentViewport((el, box) => {
+    const id = [...els.current].find(([, w]) => (w as unknown) === el)?.[0];
+    if (!id) return;
+    setBoxes((b) => {
+      if (box) return { ...b, [id]: box };
+      const { [id]: _gone, ...rest } = b;
+      return rest;
+    });
+  }), []);
+  useEffect(() => {
+    const now = Date.now();
+    let next = Infinity;
+    for (const id of Object.keys(boxes)) {
+      const a = acts[id];
+      if (!viewportReleased(a, now)) {
+        const last = a?.lastAt ?? a?.log[a.log.length - 1]?.at ?? 0;
+        if (last) next = Math.min(next, last + IDLE_RELEASE_MS - now);
+        continue;
+      }
+      const w = els.current.get(id);
+      let gid: number | undefined;
+      try { gid = w?.getWebContentsId(); } catch { /* not attached */ }
+      if (!w || gid === undefined) { setBoxes(({ [id]: _gone, ...rest }) => rest); continue; }
+      void clearAgentViewport(w, (method, params) => browserCdp(method, params, gid));
+    }
+    /* One timer, for the first box to go idle; an ask moves `acts` and re-arms it. */
+    if (next === Infinity) return;
+    const t = setTimeout(() => setReleaseTick((n) => n + 1), Math.max(0, next) + 50);
+    return () => clearTimeout(t);
+  }, [acts, boxes, releaseTick]);
   /* Where each tab's last act landed, for the drawn pointer. One slot in
      browserDrive, filled while this panel is up. */
   const [landings, setLandings] = useState<Record<string, ActLanding>>({});
@@ -663,6 +654,14 @@ export function BrowserView({ active: viewOn, scope }: {
    *  served ask for an ephemeral tab? `TabOps.open` reads this to decide
    *  whether to mint a partition from main first (see the note there). */
   const mintEphemeral = useRef(false);
+  /** Who opened each tab, by tab id, until its guest attaches and main is
+   *  told (`setGuestOpener`): an agent's ask, the person in this window, or
+   *  the guest whose page opened it as a popup. A tab with no entry is
+   *  nobody's, and main holds its permission requests like an agent's. */
+  // The tabs this panel came up with are the person's own session.
+  /** Each mounted tab's `sayOpener`, for main's attach notice to call. */
+  const [sayers] = useState(() => new Map<string, () => void>());
+  const [openedBy] = useState(() => new Map<string, "person" | "agent" | number>(tabs.map((t) => [t.id, "person"])));
   /** The same trick for the two other things a keyboard callback has to read
    *  fresh: which tab is in front, and what is on the shelf. */
   const activeIdRef = useRef("");
@@ -840,6 +839,7 @@ export function BrowserView({ active: viewOn, scope }: {
       }
       tabsRef.current = made.tabs;
       setTabs(made.tabs);
+      openedBy.set(made.tab.id, "agent");
       /*
        * §12: THIS USED TO BE AN UNCONDITIONAL `setActiveId(made.tab.id)`.
        *
@@ -974,6 +974,27 @@ export function BrowserView({ active: viewOn, scope }: {
     if (!viewOn || !activeId) return;
     setTabs((prev) => (prev.find((t) => t.id === activeId)?.asleep ? wake(prev, activeId, recency()) : prev));
   }, [viewOn, activeId]);
+
+  /* Shown again: ask the shell to repaint the guest and log the moment (see
+     `ag:browserShown`). A beat late so the wake above has made its element.
+     When the shell says nothing had painted, the element is made 1px narrower
+     for a frame — the nudge that forces a new compositor frame. Only THE view,
+     not the bench's copy: the bench is not hidden by a view switch. */
+  useEffect(() => {
+    if (!viewOn || scope || !HAS_BROWSER) return;
+    const t = setTimeout(async () => {
+      const w = el();
+      const tab = tabsRef.current.find((x) => x.id === activeIdRef.current);
+      let guest = 0;
+      try { guest = w ? w.getWebContentsId() : 0; } catch { /* attaching */ }
+      const r = await browserShown({ guest, webviews: els.current.size, tab: tab?.id ?? "", asleep: !!tab?.asleep });
+      if (!w || !r || r.painted) return;
+      const was = w.style.width;
+      w.style.width = "calc(100% - 1px)";
+      requestAnimationFrame(() => { w.style.width = was; });
+    }, 150);
+    return () => clearTimeout(t);
+  }, [viewOn]);
 
   useEffect(() => {
     /*
@@ -1161,7 +1182,7 @@ export function BrowserView({ active: viewOn, scope }: {
            ask to have run and left its own answer in the ref. */
         mintShow.current = ask.args.show === true;
         mintEphemeral.current = ask.args.ephemeral === true;
-        serve(els.current.get(targetId) as unknown as DrivableWebview | null);
+          serve(els.current.get(targetId) as unknown as DrivableWebview | null);
       }, 1200);
     });
     return () => setBrowserAskHandler(null);
@@ -1299,6 +1320,10 @@ export function BrowserView({ active: viewOn, scope }: {
    * function while it is mounted and takes it back on teardown.
    */
   useEffect(() => {
+    setShellZoom(browserZoom);
+    return () => setShellZoom(null);
+  }, []);
+  useEffect(() => {
     setPageZoomer(async (dir) => applyZoom(dir === 0 ? 0 : stepZoom(zoomRef.current, dir)));
     return () => setPageZoomer(null);
   }, [applyZoom]);
@@ -1319,6 +1344,7 @@ export function BrowserView({ active: viewOn, scope }: {
     setTabs((prev) => {
       const r = addTab(prev, url, from, profile, shelfId, partition, recency());
       if ("error" in r) { say(r.error); return prev; }
+      openedBy.set(r.tab.id, "person");
       opened?.(r.tab.id);
       setActiveId(r.tab.id);
       return r.tabs;
@@ -1334,10 +1360,19 @@ export function BrowserView({ active: viewOn, scope }: {
       ].slice(0, 25);
     }
     els.current.delete(id);
+    openedBy.delete(id);
+    sayers.delete(id);
     dispatchAct({ type: "forget", tab: id });
     setTabs((prev) => {
       const r = closeTab(prev, id);
       setActiveId(r.activeId);
+      /* The space follows the page here too (see `select`): closing a
+         container's last page puts another container's page in front, and a
+         space left pointing at the empty one was saved as where the app
+         opens — the next launch filled it with a home page. */
+      const next = r.tabs.find((t) => t.id === r.activeId);
+      const left = going?.profile || "";
+      if (next && !r.tabs.some((t) => (t.profile || "") === left)) setProfile(next.profile || "");
       /*
        * THE LAST PAGE OF A CONTAINER TAKES ITS ENTRY WITH IT.
        *
@@ -1403,6 +1438,8 @@ export function BrowserView({ active: viewOn, scope }: {
           })
         : [newTab(homePage(), profileId)];
     setProfile(profileId);
+    // The person's own session coming back: their tabs, asked as theirs.
+    for (const t of restored) openedBy.set(t.id, "person");
     setTabs([...kept, ...restored]);
     setActiveId(already[0]?.id ?? restored[set?.active ?? 0]?.id ?? restored[0]?.id ?? "");
     setTyped(null);
@@ -1483,11 +1520,19 @@ export function BrowserView({ active: viewOn, scope }: {
   /* A page that opened a window used to be handed to the OS browser, because a
      single-page view had nowhere to put it. Now it goes beside the tab it came
      from — which is what makes an OAuth popup finish inside the app. */
+  useEffect(() => onBrowserGuestAttached((gid) => {
+    for (const [id, w] of els.current) {
+      let at: number | undefined;
+      try { at = w.getWebContentsId(); } catch { continue; }
+      if (at === gid) { sayers.get(id)?.(); return; }
+    }
+  }), [sayers]);
+
   useEffect(() => onBrowserOpenTab((url, opener) => {
     const idOf = (id: string) => { try { return els.current.get(id)?.getWebContentsId(); } catch { return undefined; } };
     const home = popupHome(tabsRef.current, idOf, opener, activeId);
     if (!home) { say("A page that is no longer open asked for a tab; it was not opened."); return; }
-    open(url, home.from, home.profile, undefined, (id) => notePopup(opener, id, url), home.partition);
+    open(url, home.from, home.profile, undefined, (id) => { if (opener !== undefined) openedBy.set(id, opener); else openedBy.delete(id); notePopup(opener, id, url); }, home.partition);
   }), [open, activeId]);
 
   /*
@@ -1669,7 +1714,7 @@ export function BrowserView({ active: viewOn, scope }: {
     patch(active.id, { failed: null, url: next });
     // The person is driving this tab now: whatever agent named it last no
     // longer owns the requests it is about to make.
-    try { setGuestOwner(w.getWebContentsId(), "", true); } catch { /* attaching */ }
+    try { setGuestOwner(w.getWebContentsId(), "", true); setGuestOpener(w.getWebContentsId(), "typed"); openedBy.set(active.id, "person"); } catch { /* attaching */ }
     w.src = next;
   }, [active, patch, el]);
 
@@ -1833,6 +1878,22 @@ export function BrowserView({ active: viewOn, scope }: {
     };
 
     w.addEventListener("dom-ready", onReady);
+    // Whose the tab is, from the guest's first moment — before its page can
+    // ask. And the tab in front is said to be in front at that moment too: the
+    // 60 ms beat of the active-guest effect lost the race to a page that asks
+    // on load, and the person's own new tab was refused instead of asked.
+    const sayOpener = () => {
+      // Kept, not consumed: a tab put to sleep comes back as a new guest.
+      const by = openedBy.get(id);
+      let gid: number;
+      try { gid = w.getWebContentsId(); } catch { return; /* not attached yet */ }
+      if (typeof by === "number") setGuestOpener(gid, "popup", by);
+      else if (by !== undefined) setGuestOpener(gid, by);
+      if (id === activeIdRef.current) setActiveBrowserGuest(gid);
+    };
+    w.addEventListener("did-attach", sayOpener);
+    sayers.set(id, sayOpener);
+    sayOpener();
     w.addEventListener("did-start-loading", onStart);
     w.addEventListener("did-stop-loading", onStop);
     w.addEventListener("did-navigate", sync);
@@ -2377,6 +2438,7 @@ export function BrowserView({ active: viewOn, scope }: {
   const openBeside = (url: string) => {
     const r = addTab(tabs, url, activeId, profile, undefined, undefined, recency());
     if ("error" in r) { say(r.error); return; }
+    openedBy.set(r.tab.id, "person");
     setTabs(r.tabs);
     setSplitId(r.tab.id);
   };
@@ -2702,7 +2764,7 @@ export function BrowserView({ active: viewOn, scope }: {
         */}
       <div className="flex items-center gap-0.5 px-1.5 pt-1.5 shrink-0">
         <div className="shrink-0">
-          <button ref={moreBtn} title="Menu" aria-label="Menu"
+          <Button buttonRef={moreBtn} label="Menu" size="compact" square on={menuOpen} className="shrink-0"
             onClick={() => {
               const r = moreBtn.current?.getBoundingClientRect();
               /* Pinned to the bar's own column: wide enough for the labels,
@@ -2711,13 +2773,7 @@ export function BrowserView({ active: viewOn, scope }: {
                  covered by anything in it. */
               setMenuAtXY(r ? { top: r.bottom + 6, right: 6 } : null);
               setMenuOpen((v) => !v);
-            }}
-            className="agx-btn shrink-0 rounded-lg flex items-center justify-center"
-            style={{
-              width: CTRL_H.compact, height: CTRL_H.compact,
-              color: menuOpen ? "var(--primary-hover)" : "var(--text3)",
-              background: menuOpen ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
-            }}><MoreIcon /></button>
+            }}><MoreIcon /></Button>
         </div>
         <SideTool label="Hide this bar (Ctrl+S)"
           onClick={() => { setSideOpen(false); setSidebarOpen(false); }}><PanelIcon /></SideTool>
@@ -3007,14 +3063,11 @@ export function BrowserView({ active: viewOn, scope }: {
           hand goes looking for "and one more". */}
       <div className="shrink-0 flex items-center gap-1 px-1.5 pt-1"
         style={{ borderTop: LINE }}>
-        <button onClick={() => setOmni("new")} title="New tab (Ctrl+T)"
-          className="flex-1 min-w-0 flex items-center gap-1.5 px-1.5 rounded-lg text-[10.5px]"
-          style={{ height: CTRL_H.compact, color: "var(--text3)" }}>
+        <Button size="compact" tone="quiet" onClick={() => setOmni("new")} title="New tab (Ctrl+T)"
+          className="flex-1 min-w-0" style={{ justifyContent: "flex-start" }}>
           <span style={{ fontSize: 12, lineHeight: 1 }}>+</span> New tab
-        </button>
-        <button onClick={() => newFolder()} title="New folder" aria-label="New folder"
-          className="shrink-0 grid place-items-center rounded-lg"
-          style={{ width: CTRL_H.compact, height: CTRL_H.compact, color: "var(--text3)" }}><FolderIcon size={13} /></button>
+        </Button>
+        <Button size="compact" square tone="quiet" onClick={() => newFolder()} label="New folder"><FolderIcon size={13} /></Button>
       </div>
 
       {/* THE STRIP OF SPACES ALONG THE FOOT IS GONE.
@@ -3109,10 +3162,8 @@ export function BrowserView({ active: viewOn, scope }: {
             <span className="shrink-0 text-[10.5px] tabular-nums" style={{ color: found?.of ? "var(--text3)" : "var(--text4)" }}>
               {find.trim() ? `${found?.at ?? 0}/${found?.of ?? 0}` : ""}
             </span>
-            <button onClick={() => step(false)} title="Previous match (Shift+Enter)" aria-label="Previous match"
-              className="shrink-0 grid place-items-center rounded-lg" style={{ width: CTRL_H.compact, height: CTRL_H.compact, color: "var(--text3)" }}><UpIcon /></button>
-            <button onClick={() => step(true)} title="Next match (Enter)" aria-label="Next match"
-              className="shrink-0 grid place-items-center rounded-lg" style={{ width: CTRL_H.compact, height: CTRL_H.compact, color: "var(--text3)" }}><DownIcon /></button>
+            <Button size="compact" square tone="quiet" onClick={() => step(false)} title="Previous match (Shift+Enter)" label="Previous match"><UpIcon /></Button>
+            <Button size="compact" square tone="quiet" onClick={() => step(true)} title="Next match (Enter)" label="Next match"><DownIcon /></Button>
             <CloseButton onClick={closeFind} title="Close the search" />
           </div>
           <div className="flex items-center gap-4 px-0.5">
@@ -3227,7 +3278,7 @@ export function BrowserView({ active: viewOn, scope }: {
               : split && t.id === splitId
                 ? { left: `${splitAt * 100}%`, right: 0 }
                 : { left: 0, right: 0, ...(t.id === activeId ? { zIndex: 1 } : drivenBehind(acts[t.id]) ? { zIndex: 0, pointerEvents: "none" as const } : { visibility: "hidden" as const }) }}>
-            <div style={{ position: "relative", width: viewport.width ? `${viewport.width}px` : "100%", height: "100%", maxWidth: "100%" }}>
+            <div style={{ position: "relative", width: viewport.width ? `${viewport.width}px` : "100%", height: "100%", maxWidth: "100%", ...(boxes[t.id] ? { background: "var(--surface-inset)" } : {}) }}>
               {acts[t.id] && (
                 <AgentPresence agent={acts[t.id]!} landing={landings[t.id] ?? null} url={t.url} quiet={!classic && islandTucked && t.id === activeId}
                   onToggle={() => dispatchAct({ type: "pause", tab: t.id, paused: !acts[t.id]!.paused })} />
@@ -3258,7 +3309,14 @@ export function BrowserView({ active: viewOn, scope }: {
                      @types/react says boolean, and it is wrong for this
                      renderer. */
                   {...({ allowpopups: "" } as unknown as { allowpopups?: boolean })}
-                  style={{ width: "100%", height: "100%", background: "var(--bg)" }}
+                  style={boxes[t.id]
+                    ? {
+                        position: "absolute", background: "var(--bg)",
+                        width: `${boxes[t.id]!.w * 100}%`, height: `${boxes[t.id]!.h * 100}%`,
+                        left: `${(1 - boxes[t.id]!.w) * 50}%`, top: `${(1 - boxes[t.id]!.h) * 50}%`,
+                        outline: EDGE,
+                      }
+                    : { width: "100%", height: "100%", background: "var(--bg)" }}
                 />
                 )}</BornAt>
               )}

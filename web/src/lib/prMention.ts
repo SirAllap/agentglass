@@ -102,3 +102,66 @@ export function selectorFor(hit: MentionHit): string | null {
   const attr = hit.where === "thread" ? "data-thread" : "data-node";
   return `[${attr}="${CSS.escape(hit.id)}"]`;
 }
+
+/**
+ * Where a `#discussion_r…` / `#issuecomment-…` / `#pullrequestreview-…`
+ * fragment lands. GitHub's own URL for each entry ends in that fragment, so the
+ * match is on the URL the panel already holds rather than on a numeric id the
+ * DOM does not carry.
+ *
+ * A line comment goes to Files, on ITS file, only while the code under it is
+ * still in the diff; an outdated one (or one on a file the diff no longer has)
+ * has no row there, so it is shown in the Conversation, where every thread is.
+ * Nothing found: the Conversation, with nothing to scroll to — never an
+ * unrelated file. `fetched` is the comment read on its own, for one the loaded
+ * threads (capped by GitHub) do not hold: it can say where, not open a thread.
+ */
+export interface AnchorTarget {
+  tab: "files" | "conversation";
+  path?: string;
+  line?: number;
+  /** What to scroll to: a thread (`data-thread`) or a timeline entry (`data-node`). */
+  thread?: string;
+  node?: string;
+}
+
+export function anchorTarget(
+  detail: {
+    comments?: { nodeId?: string | null; url?: string }[];
+    reviews?: { nodeId?: string | null; url?: string }[];
+    threads?: { id: string; path: string; line: number | null; isOutdated: boolean; comments?: { url?: string }[] }[];
+    files?: { path: string }[];
+  },
+  anchor: string,
+  fetched?: { path: string; line: number | null } | null,
+): AnchorTarget {
+  const is = (u?: string) => !!u && u.endsWith(`#${anchor}`);
+  const inDiff = (path: string) => (detail.files ?? []).some((f) => f.path === path);
+  const t = (detail.threads ?? []).find((x) => (x.comments ?? []).some((c) => is(c.url)));
+  if (t) {
+    return !t.isOutdated && t.line != null && inDiff(t.path)
+      ? { tab: "files", path: t.path, line: t.line, thread: t.id }
+      : { tab: "conversation", thread: t.id };
+  }
+  const node = [...(detail.comments ?? []), ...(detail.reviews ?? [])].find((c) => c.nodeId && is(c.url));
+  if (node?.nodeId) return { tab: "conversation", node: node.nodeId };
+  if (fetched && fetched.line != null && inDiff(fetched.path)) return { tab: "files", path: fetched.path, line: fetched.line };
+  return { tab: "conversation" };
+}
+
+/**
+ * Whether a pending anchor can be served now, and what is left pending.
+ *
+ * A link can arrive with the pull request cold (the detail loads later), cached
+ * (the detail is painted straight away) or already open (the detail object does
+ * not change at all). The panel calls this on every render of either input, so
+ * all three starts reach the same answer: wait until the detail is THIS pull
+ * request's, serve once, then nothing is pending.
+ */
+export function takeAnchor<T extends { number: number }>(
+  want: T | null,
+  detail: { number: number } | null | undefined,
+): { serve: T | null; pending: T | null } {
+  if (!want || !detail || detail.number !== want.number) return { serve: null, pending: want };
+  return { serve: want, pending: null };
+}

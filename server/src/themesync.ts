@@ -529,6 +529,12 @@ set -g clock-mode-colour "${v.primary}"
 set -g window-style "bg=${v.bg}"
 set -g window-active-style "bg=${v.bg}"
 
+# A popup (display-popup) is drawn in its own style, and tmux 3.8 changed the
+# default from the terminal's colours to a dark grey with white text: on a light
+# theme that is a grey frame and default-coloured text near-white on cream.
+set -g popup-style "bg=${v.bg},fg=${v.text}"
+set -g popup-border-style "bg=${v.bg},fg=${v.border}"
+
 # Copy-mode selection, in the same accent the app uses for selection.
 setw -g copy-mode-match-style "bg=${v.bg3},fg=${v.warning}"
 setw -g copy-mode-current-match-style "bg=${v.primary},fg=${v.bg}"

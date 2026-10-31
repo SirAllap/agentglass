@@ -44,6 +44,8 @@ export function cardExtras(f: Record<string, unknown>, ids?: { sprint?: string; 
     const type = isObj(pf.issuetype) ? str(pf.issuetype.name) : "";
     out.parent = { key: str(f.parent.key), title: str(pf.summary), ...(type ? { type } : {}) };
   }
+  const comps = Array.isArray(f.components) ? f.components.flatMap((c) => (isObj(c) && str(c.name) ? [str(c.name)] : [])) : [];
+  if (comps.length) out.components = comps;
   // The Flagged field is a list of options: raised when it holds one, absent (not false) when it does not.
   if (ids?.flag && Array.isArray(f[ids.flag]) && (f[ids.flag] as unknown[]).length) out.flagged = true;
   const waitsOn: string[] = [];

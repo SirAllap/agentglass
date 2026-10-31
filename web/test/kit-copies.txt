@@ -1,0 +1,27 @@
+# Ceilings for local copies of kit pieces, read by web/test/kit-copies-ratchet.test.ts:
+# "<file under web/src> <Name> <definitions + uses>". A number only goes DOWN: the
+# test fails above a line and below it, so a screen that moves onto the kit lowers
+# its line (or deletes it) in the same commit. A file with no line has a ceiling
+# of 0. Regenerate with KIT_COPIES_PRINT=1 bun test test/kit-copies-ratchet.test.ts.
+# Row and ListRow count the same way: a local `Row` is a copy of the kit's ListRow unless the screen draws something the kit has no piece for.
+components/CheckFailures.tsx Tag 23
+components/EventModal.tsx Row 9
+components/GitPanel.tsx Pill 1
+components/GitPanel.tsx Section 4
+components/GitRowMenu.tsx Row 2
+components/PrPanel.tsx Card 4
+components/PrPanel.tsx Field 4
+components/flightPlan/FlightList.tsx Row 2
+components/git/BranchesFrames.tsx Chip 2
+components/git/Lists.tsx Chip 15
+components/git/Lists.tsx Row 1
+components/git/TagsFrames.tsx Chip 2
+components/git/ui.tsx Chip 1
+components/git/ui.tsx Pill 1
+components/git/ui.tsx Row 1
+components/orchestration/OrchKit.tsx Card 1
+components/orchestration/OrchestrationPane.tsx Field 1
+components/orchestration/QuickSetup.tsx Card 1
+components/plugins/PluginTree.tsx Chip 1
+components/plugins/PluginTree.tsx Row 1
+components/prs/Inbox.tsx Chip 1

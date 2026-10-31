@@ -55,7 +55,7 @@ describe("pull-request panel GitHub budget", () => {
      server answers both queues from one request; the panel must not undo that
      by forcing a list nobody is looking at or dropping the rollups. */
   it("forces only what is on screen when Refresh is pressed", () => {
-    const at = CODE.indexOf("const plan = refreshPlan(selected);");
+    const at = CODE.indexOf("const plan = refreshPlan(selected, layout.list);");
     expect(at).toBeGreaterThan(-1);
     const press = CODE.slice(at, CODE.indexOf("}} disabled={busy} small", at));
     expect(press).not.toContain("forgetRollups(");

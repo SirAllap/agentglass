@@ -50,7 +50,7 @@ describe("the looked-up row's grid", () => {
 });
 
 describe("the table header tracks the same extra column", () => {
-  const headStart = src.indexOf('${EYEBROW} sticky top-0');
+  const headStart = src.indexOf('text-[11.5px] font-semibold sticky top-0');
   const headEnd = src.indexOf("</div>", headStart);
   const head = src.slice(headStart, headEnd);
 

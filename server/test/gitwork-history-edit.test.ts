@@ -131,6 +131,9 @@ describe("squash", () => {
     expect(git("status", "--porcelain").stdout.toString().trim()).toBe("");
     // The old tip is the undo point.
     expect(git("rev-parse", "ORIG_HEAD").stdout.toString().trim()).toBe(tip);
+    // Titled by the newest subject, no autosquash marker, the folded subjects kept.
+    expect(subject()).toBe("feat four");
+    expect(git("log", "-1", "--format=%b").stdout.toString()).toContain("- feat three");
   });
 
   it("refuses a range that is not contiguous to HEAD", () => {

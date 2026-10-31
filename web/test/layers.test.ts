@@ -71,6 +71,11 @@ describe("stacking", () => {
     for (const z of Object.values(LAYER)) expect(z).toBeGreaterThan(9999);
   });
 
+  it("puts a Git dialog over Settings' dialog and under the menus", () => {
+    expect(LAYER.gitDialog).toBeGreaterThan(LAYER.settingsDialog);
+    expect(LAYER.gitDialog).toBeLessThan(LAYER.menu);
+  });
+
   it("gives every layer a number of its own", () => {
     // Two entries sharing a number is the same thing as neither having one:
     // which wins goes back to the order the effects appended the containers,

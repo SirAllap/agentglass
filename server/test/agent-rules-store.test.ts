@@ -18,12 +18,16 @@ process.env.XDG_DATA_HOME = join(dir, "data");
 process.env.AGENTGLASS_STATE_DIR = join(dir, "state");
 
 const store = await import("../src/agentRulesStore.ts");
+const { db } = await import("../src/db.ts");
 const cfg = await import("../src/config.ts");
 const { DEFAULT_LAUNCH_DENY } = await import("../../shared/launchModes.ts");
 
 const ROOT = join(dir, "acme", "orbit");
 mkdirSync(ROOT, { recursive: true });
 Bun.spawnSync(["git", "init", "-q", ROOT]);
+
+/** A call in a session that would have stopped to ask: what a suggestion needs. */
+const asked = (root: string, tool: string, input: unknown) => store.check(root, tool, input, "default");
 
 type Ask = Parameters<NonNullable<Parameters<typeof store.setRulesDoor>[0]>["askExternal"]>[0];
 let cards: Ask[] = [];
@@ -102,7 +106,7 @@ describe("who may write what", () => {
   });
 
   test("answer() refuses anybody but the person, and changes nothing", async () => {
-    store.check(ROOT, "Bash", bash("npm publish"));
+    asked(ROOT, "Bash", bash("npm publish"));
     const id = store.view(ROOT).suggested[0]!.id;
     const r = store.answer(id, { setting: "allow" }, false);
     expect(r).toMatchObject({ ok: false, status: 403 });
@@ -130,7 +134,7 @@ describe("who may write what", () => {
 
 describe("first seen", () => {
   test("repeated identical checks leave exactly one suggestion, and it decides nothing", () => {
-    for (let i = 0; i < 4; i++) expect(store.check(ROOT, "Bash", bash("npm publish --tag beta")).decision).toBe("unknown");
+    for (let i = 0; i < 4; i++) expect(asked(ROOT, "Bash", bash("npm publish --tag beta")).decision).toBe("unknown");
     const v = store.view(ROOT);
     expect(v.suggested).toHaveLength(1);
     expect(v.suggested[0]).toMatchObject({ match: "Bash(npm publish:*)", source: "first-seen", pending: true });
@@ -138,27 +142,182 @@ describe("first seen", () => {
   });
 
   test("a call that only reads, or that a rule covers, suggests nothing", () => {
-    store.check(ROOT, "Read", { file_path: "/x" });
-    store.check(ROOT, "Bash", bash("ls -la"));
-    store.check(ROOT, "Bash", bash("git push"));
+    asked(ROOT, "Read", { file_path: "/x" });
+    asked(ROOT, "Bash", bash("ls -la"));
+    asked(ROOT, "Bash", bash("git push"));
     expect(store.view(ROOT).suggested).toHaveLength(0);
   });
 
   test("a dismissed suggestion never comes back", () => {
-    store.check(ROOT, "Bash", bash("npm publish"));
+    asked(ROOT, "Bash", bash("npm publish"));
     const id = store.view(ROOT).suggested[0]!.id;
     expect(store.answer(id, { dismiss: true }, true)).toMatchObject({ ok: true });
-    store.check(ROOT, "Bash", bash("npm publish"));
-    store.check(ROOT, "Bash", bash("npm publish --tag x"));
+    asked(ROOT, "Bash", bash("npm publish"));
+    asked(ROOT, "Bash", bash("npm publish --tag x"));
     expect(store.view(ROOT).suggested).toHaveLength(0);
+  });
+
+  test("a loop makes suggestions for its commands, never for its keywords", () => {
+    asked(ROOT, "Bash", bash("for n in 1 2; do npm publish $n; done"));
+    expect(store.view(ROOT).suggested.map((r) => r.match)).toEqual(["Bash(npm publish:*)"]);
+  });
+
+  test("a never on gh pr merge still holds inside a loop, an if and $(...)", async () => {
+    await store.setRule({ root: ROOT, match: "Bash(gh pr merge:*)", setting: "never" }, person);
+    for (const c of ["for n in 1 2; do gh pr merge $n; done", "if true; then gh pr merge 1; fi", "echo $(gh pr merge 1)", "X=1 gh pr merge 2 && ls"]) {
+      expect(store.check(ROOT, "Bash", bash(c)).decision).toBe("never");
+    }
+  });
+
+  test("pending first-seen rows from before the new split are dropped once; anything else stays", () => {
+    store.liveRules();
+    store.__resetRulesStore();
+    const ins = (action: string, match: string, pending = 1, source = "first-seen") =>
+      db.query("INSERT INTO agent_rules (id, project, action, match, setting, source, by_name, at, pending) VALUES (?,?,?,?,?,?,?,?,?)")
+        .run(`r_${action}`, ROOT, action, match, "allow", source, "agentglass", 1, pending);
+    ins("bash.-.master", "Bash(- master:*)");
+    ins("bash.ERROR", "Bash(ERROR:*)");
+    ins("bash.npm.publish", "Bash(npm publish:*)");
+    ins("bash.make", "Bash(make:*)", 0);
+    ins("bash.git.push", "Bash(git push:*)", 1, "chat");
+    db.query("DELETE FROM agent_rules_once").run();
+    expect(store.view(ROOT).suggested.map((r) => r.match)).toEqual(["Bash(git push:*)"]);
+    // the marker holds: a suggestion stored after the migration survives the next start
+    store.__resetRulesStore();
+    ins("bash.npm.publish", "Bash(npm publish:*)");
+    expect(store.view(ROOT).suggested.map((r) => r.match)).toEqual(["Bash(npm publish:*)"]);
+  });
+
+  test("a call that ran without asking files nothing, in any mode that never asks", () => {
+    for (const mode of ["bypassPermissions", "auto", "dontAsk", undefined]) {
+      expect(store.check(ROOT, "Bash", bash("make build"), mode).decision).toBe("unknown");
+      store.check(ROOT, "Write", { file_path: "/x" }, mode);
+    }
+    expect(store.view(ROOT).suggested).toHaveLength(0);
+  });
+
+  test("default and plan file a suggestion; acceptEdits files it for a command, not for an edit", () => {
+    store.check(ROOT, "Bash", bash("make build"), "default");
+    store.check(ROOT, "Bash", bash("npm publish"), "acceptEdits");
+    store.check(ROOT, "Edit", { file_path: "/x" }, "acceptEdits");
+    store.check(ROOT, "Write", { file_path: "/x" }, "plan");
+    expect(store.view(ROOT).suggested.map((r) => r.match).sort()).toEqual(["Bash(make build:*)", "Bash(npm publish:*)", "Write"]);
+  });
+
+  test("gh and git global flags before the subcommand do not change the rule", () => {
+    for (const c of ["gh --repo acme/orbit pr checks 12", "gh -R acme/orbit pr view 3", "git -C ../wt log -3", "git -c core.pager=cat --no-pager diff"]) asked(ROOT, "Bash", bash(c));
+    expect(store.view(ROOT).suggested.map((r) => r.match).sort()).toEqual(["Bash(gh pr:*)", "Bash(git diff:*)", "Bash(git log:*)"]);
+  });
+
+  test("a never on git push holds with -C in front of it", async () => {
+    await store.setRule({ root: ROOT, match: "Bash(git push:*)", setting: "never" }, person);
+    expect(store.check(ROOT, "Bash", bash("git -C ../wt push --force")).decision).toBe("never");
+  });
+
+  test("text in quotes and heredocs suggests nothing; the commands around it do", () => {
+    const lines = [
+      `grep -E "ERROR|Error|FAILED|Traceback|408" log | npm publish`,
+      `git commit -m "$(cat <<'EOF'\nFix packfile | not ready; to master\n\n- master\n- code\n- pre & ready\n- in\nI could; summary fails\nEOF\n)"`,
+      `gh pr edit 5 --body "update description | Dockerfile; Dockerfile.nginx && Ran 1"`,
+      "X=1 make build # last | EOF",
+    ];
+    for (const c of lines) asked(ROOT, "Bash", bash(c));
+    expect(store.view(ROOT).suggested.map((r) => r.match).sort()).toEqual(["Bash(gh pr:*)", "Bash(git commit:*)", "Bash(make build:*)", "Bash(npm publish:*)"]);
+  });
+
+  test("pending first-seen rows from calls that may have run freely are dropped once", () => {
+    store.liveRules();
+    store.__resetRulesStore();
+    const ins = (action: string, match: string, source = "first-seen") =>
+      db.query("INSERT INTO agent_rules (id, project, action, match, setting, source, by_name, at, pending) VALUES (?,?,?,?,?,?,?,?,1)")
+        .run(`r_${action}`, ROOT, action, match, "allow", source, "agentglass", 1);
+    ins("bash.git.add", "Bash(git add:*)");
+    ins("bash.git.push", "Bash(git push:*)", "chat");
+    db.query("DELETE FROM agent_rules_once WHERE name = 'only-asked-v1'").run();
+    expect(store.view(ROOT).suggested.map((r) => r.match)).toEqual(["Bash(git push:*)"]);
+    store.__resetRulesStore();
+    ins("bash.git.add", "Bash(git add:*)");
+    expect(store.view(ROOT).suggested.map((r) => r.match)).toEqual(["Bash(git add:*)"]);
   });
 
   test("a worktree shares the list of its repo", () => {
     const wt = join(dir, "acme", "orbit-wt");
     Bun.spawnSync(["git", "-C", ROOT, "-c", "user.email=a@b.c", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x"]);
     Bun.spawnSync(["git", "-C", ROOT, "worktree", "add", "-q", wt, "-b", "side"]);
-    store.check(wt, "Bash", bash("npm publish"));
+    asked(wt, "Bash", bash("npm publish"));
     expect(store.view(ROOT).suggested).toHaveLength(1);
+  });
+});
+
+describe("precedence and room", () => {
+  test("Allow on a broad suggestion does not allow what a base never covers", async () => {
+    asked(ROOT, "Bash", bash("gh pr view 3"));
+    const s = store.view(ROOT).suggested.find((r) => r.match === "Bash(gh pr:*)")!;
+    expect(store.answer(s.id, { setting: "allow" }, true)).toMatchObject({ ok: true });
+    expect(store.check(ROOT, "Bash", bash("gh pr view 3")).decision).toBe("allow");
+    expect(store.check(ROOT, "Bash", bash("gh pr merge 12")).decision).toBe("never");
+  });
+
+  test("an agent cannot weaken a never through another key without the person", async () => {
+    // broader: applies, but the never still speaks for merges
+    const broad = await store.setRule({ root: ROOT, match: "Bash(gh pr:*)", setting: "ask" }, agent);
+    expect(broad.ok && broad.write.applied).toBe(true);
+    expect(store.check(ROOT, "Bash", bash("gh pr merge 12")).decision).toBe("never");
+    // narrower: it would speak for those merges, so it waits
+    const narrow = await store.setRule({ root: ROOT, match: "Bash(gh pr merge 12:*)", setting: "ask" }, agent);
+    expect(narrow.ok && narrow.write).toMatchObject({ applied: false, waitsForPerson: true });
+    expect(cards[0]!.diff[0]).toContain("never -> ask");
+    expect(store.check(ROOT, "Bash", bash("gh pr merge 12")).decision).toBe("never");
+  });
+
+  test("a dismissed suggestion's pattern can still be written, by the person and by an agent going stricter", async () => {
+    asked(ROOT, "Bash", bash("gh pr view 3"));
+    const id = store.view(ROOT).suggested[0]!.id;
+    store.answer(id, { dismiss: true }, true);
+    const r = await store.setRule({ root: ROOT, match: "Bash(gh pr:*)", setting: "never" }, person);
+    expect(r.ok && r.write).toMatchObject({ applied: true });
+    expect(store.check(ROOT, "Bash", bash("gh pr view 3")).decision).toBe("never");
+    expect(store.view(ROOT).learned.map((x) => x.match)).toContain("Bash(gh pr:*)");
+
+    asked(ROOT, "Bash", bash("npm publish"));
+    store.answer(store.view(ROOT).suggested[0]!.id, { dismiss: true }, true);
+    const a = await store.setRule({ root: ROOT, match: "Bash(npm publish:*)", setting: "never" }, agent);
+    expect(a.ok && a.write.applied).toBe(true);
+  });
+
+  test("suggestions never crowd out the person's rules, and keep to their own cap", async () => {
+    const { RULES_MAX_PER_PROJECT } = await import("../../shared/agentRules.ts");
+    for (let i = 0; i < RULES_MAX_PER_PROJECT + 5; i++) asked(ROOT, "Bash", bash(`tool${i} run`));
+    expect(store.view(ROOT).suggested).toHaveLength(RULES_MAX_PER_PROJECT);
+    // the oldest went first
+    expect(store.view(ROOT).suggested.some((r) => r.match === "Bash(tool0 run:*)")).toBe(false);
+    for (const r of store.view(ROOT).suggested) store.answer(r.id, { dismiss: true }, true);
+    const w = await store.setRule({ root: ROOT, match: "Bash(npm publish:*)", setting: "never" }, person);
+    expect(w.ok).toBe(true);
+    expect(store.check(ROOT, "Bash", bash("npm publish")).decision).toBe("never");
+  });
+
+  test("dismissals keep the newest per project, up to the cap", async () => {
+    const { RULES_MAX_PER_PROJECT } = await import("../../shared/agentRules.ts");
+    let t = 1_000;
+    store.__setRulesClock(() => t++);
+    const dismissAll = () => { for (const r of [...store.view(ROOT).suggested].sort((x, y) => x.at - y.at)) store.answer(r.id, { dismiss: true }, true); };
+    for (let i = 0; i < RULES_MAX_PER_PROJECT; i++) asked(ROOT, "Bash", bash(`tool${i} run`));
+    dismissAll();
+    for (let i = RULES_MAX_PER_PROJECT; i < RULES_MAX_PER_PROJECT + 3; i++) asked(ROOT, "Bash", bash(`tool${i} run`));
+    dismissAll();
+    const left = db.query("SELECT match FROM agent_rules WHERE project = ? AND dismissed = 1").all(ROOT) as { match: string }[];
+    expect(left).toHaveLength(RULES_MAX_PER_PROJECT);
+    expect(left.some((r) => r.match === "Bash(tool2 run:*)")).toBe(false);
+    expect(left.some((r) => r.match === "Bash(tool3 run:*)")).toBe(true);
+    expect(left.some((r) => r.match === `Bash(tool${RULES_MAX_PER_PROJECT + 2} run:*)`)).toBe(true);
+  });
+
+  test("a suggestion the person answered is credited to the person, and still says where it came from", () => {
+    asked(ROOT, "Bash", bash("npm publish"));
+    const id = store.view(ROOT).suggested[0]!.id;
+    const r = store.answer(id, { setting: "ask" }, true);
+    expect(r.ok && r.write.rule).toMatchObject({ source: "first-seen", by: "you", setting: "ask" });
   });
 });
 

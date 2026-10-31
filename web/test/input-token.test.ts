@@ -60,20 +60,39 @@ const EXCLUDED_TYPE = /type=["']?(checkbox|radio|range|hidden|file)\b/;
  * reformatting.
  */
 const ALLOWED: { file: string; marker: string; why: string }[] = [
-  { file: "AgentsSections.tsx", marker: 'placeholder="Add a task for the coordinator"',
+  { file: "JiraTree.tsx", marker: 'aria-label="Rename"',
+    why: "the rename field replaces a label inside a 28px rail row, so the row keeps its height; INPUT is 32 and would push the rows below it" },
+
+  { file: "PrFilterDeck.tsx", marker: 'aria-label="Add a rule by typing"',
+    why: "the plus and the syntax-help buttons share the line's one border with the input; on the input they would sit outside it" },
+
+  { file: "SettingsTab.tsx", marker: 'inputMode="decimal"',
+    why: "the \"$\" prefix and the field share one 26px border, and the budget rows sit beside segmented controls of the same height; INPUT is 32 and would tilt the row"},
+
+  { file: "PrRuleEditor.tsx", marker: 'aria-label="Value"',
+    why: "the value ring carries the focus and error colour and the \"days ago\" suffix inside one border" },
+
+  { file: "PrFilterTree.tsx", marker: 'aria-label="Value"',
+    why: "a cell of the rule grid, 30px like the two selects beside it; INPUT is 32 and would tilt the row" },
+
+  { file: "RangePicker.tsx", marker: 'placeholder="a tag, branch or commit"',
+    why: "the search icon and the field share the label's one border, as in the rule deck; on the input the icon would sit outside it" },
+
+  { file: "AgentsSections.tsx", marker: 'placeholder="Add a task for the orchestrator"',
     why: "the field is the last row of the Up next card: the row's rule and the plus icon are its border, as the other rows' are" },
 
   { file: "AgentsSections.tsx", marker: 'placeholder="done when…"',
     why: "it sits inside the same queue row as the task field, sharing that row's rule rather than drawing a box of its own" },
-
-  { file: "FilesPanel.tsx", marker: 'placeholder={mode === "names" ? "Find a file by name…"',
-    why: "icon and a clear button share the pill's one border with the input; moving it onto the input would put them outside it" },
 
   { file: "FilePalette.tsx", marker: "placeholder={PLACEHOLDER[tab]}",
     why: "icon and a conditional PlaceChip share the pill's one border with the input" },
 
   { file: "TasksPanel.tsx", marker: "ref={searchBox} value={q}",
     why: "icon and a clear-button segment welded to the field's right edge share the pill's one border and clip radius with the input" },
+  { file: "JiraSearch.tsx", marker: 'aria-label="Filter this board"',
+    why: "icon and a clear-button segment welded to the field's right edge share the pill's one border and clip radius with the input, as in the board search above it" },
+  { file: "SearchSheet.tsx", marker: 'aria-label="Search the whole Jira site"',
+    why: "the field sits inside the sheet's own 32px inset pill beside a close button; INPUT would draw a second border inside the first" },
   { file: "TasksPanel.tsx", marker: 'placeholder="8:30"',
     why: "compact time-entry field inside a narrow dropdown popover; INPUT's 32px height does not fit the row" },
   { file: "TasksPanel.tsx", marker: 'type="date" value={current} disabled={busy}',
@@ -88,8 +107,6 @@ const ALLOWED: { file: string; marker: string; why: string }[] = [
     why: "compact inline filter chip (10px, width 92) inside a card, not a search box" },
   { file: "TasksPanel.tsx", marker: "ref={barRef} value={input}",
     why: "icon and a ParseStrip share the pill's one border with the input" },
-  { file: "TasksPanel.tsx", marker: 'autoFocus type="date" value={t.due',
-    why: "compact inline due-date editor on a card, not a search box" },
   { file: "TasksPanel.tsx", marker: "autoFocus list=\"agx-projects\" value={projectText}",
     why: "compact inline project editor on a card, not a search box" },
   { file: "TasksPanel.tsx", marker: 'autoFocus list="agx-tags" value={tagText}',
@@ -105,11 +122,9 @@ const ALLOWED: { file: string; marker: string; why: string }[] = [
   { file: "PrPanel.tsx", marker: 'placeholder="Filter files…"',
     why: "icon and a clear button share the pill's one border with the input" },
 
-  { file: "FilterPresets.tsx", marker: 'aria-label="Preset name"',
-    why: "a preset's name edited in place, inside the chip itself or a menu row; INPUT's 32px height would not fit either" },
-  { file: "TerminalPanel.tsx", marker: "defaultValue={String(w.index)}",
+  { file: "terminal/WindowTab.tsx", marker: "defaultValue={String(w.index)}",
     why: "a 7-character-wide inline rename of a window's position in the tab strip; not a search box" },
-  { file: "TerminalPanel.tsx", marker: "defaultValue={w.name}",
+  { file: "terminal/WindowTab.tsx", marker: "defaultValue={w.name}",
     why: "inline rename of a window in the tab strip; INPUT's 32px height would break the strip" },
 
   { file: "plugins/PluginTree.tsx", marker: 'className="agx-input" style={inputStyle} type="text"',
@@ -120,6 +135,9 @@ const ALLOWED: { file: string; marker: string; why: string }[] = [
     why: "same `.agx-input` triad as the text field above; a masked key box that looks like the field it replaces" },
   { file: "plugins/PluginTree.tsx", marker: 'className="agx-input t-mono w-full"',
     why: "same `.agx-input` family; a borderless search row inside a popover list" },
+
+  { file: "PrWatchMenu.tsx", marker: 'placeholder="Find a check by name"',
+    why: "the run map's search draws its own 28px pill (icon, field, count) with one border; the field inside it is transparent" },
 
   { file: "FinderChrome.tsx", marker: 'aria-label="Search settings"',
     why: "icon and the field share the Settings sheet's one pill border, as in the Strata reference; the input itself is transparent" },
@@ -133,6 +151,8 @@ const ALLOWED: { file: string; marker: string; why: string }[] = [
     why: "sits in the overview's glass header beside the count pill and takes that pill's height and radius, not a form field's" },
   { file: "FinderCustomize.tsx", marker: 'aria-label="Pick a color"',
     why: "sr-only native colour input opened from a swatch button; it is never seen, so there is no look to share" },
+  { file: "CleanupDialog.tsx", marker: 'aria-label="Filter the list"',
+    why: "the list toolbar's search box (`.agx-cd-srch`) draws one border around icon and field at the toolbar's 28px chip height; the input inside it is transparent" },
 
 ];
 

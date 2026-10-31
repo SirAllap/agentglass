@@ -315,6 +315,34 @@ export function dueLabel(due: string | null, today: string): string {
   return String(y) === today.slice(0, 4) ? label : `${label} ${y}`;
 }
 
+/** Whole days from `a` to `b`, both `YYYY-MM-DD`. */
+const daysBetween = (a: string, b: string): number => {
+  const t = (x: string) => { const [y, m, d] = x.split("-").map(Number) as [number, number, number]; return Date.UTC(y, m - 1, d); };
+  return Math.round((t(b) - t(a)) / 86_400_000);
+};
+
+/**
+ * The Due column's words and the tone they are drawn in.
+ *
+ * The whole phrase ("3 days ago"), because the cell has the room and a clipped
+ * "3 days a…" is worse than none. Ceiling: beyond 45 days either way it is the
+ * date, since "In 212 days" is not something anyone reads; a finished card says
+ * "Done" whatever its date was.
+ */
+export type DueTone = "late" | "today" | "later" | "none" | "done";
+export function dueWords(due: string | null, today: string, done: boolean): { text: string; tone: DueTone } {
+  if (done) return { text: "Done", tone: "done" };
+  if (!due) return { text: "No date", tone: "none" };
+  due = due.slice(0, 10);
+  const n = daysBetween(today, due);
+  const tone: DueTone = n < 0 ? "late" : n === 0 ? "today" : "later";
+  if (n === 0) return { text: "Today", tone };
+  if (n === 1) return { text: "Tomorrow", tone };
+  if (n === -1) return { text: "Yesterday", tone };
+  if (Math.abs(n) > 45) return { text: dueLabel(due, today), tone };
+  return { text: n < 0 ? `${-n} days ago` : `In ${n} days`, tone };
+}
+
 /**
  * When something was read, as a person would check it against a clock.
  *

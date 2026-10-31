@@ -29,10 +29,10 @@
 import type { BoardKind } from "./boardHost.ts";
 import { announceHidden, BENCH_OWNER } from "./layerOwner.ts";
 
-/** `pr`, `tasks` and `files` are the boards, which are not this checkout's — they
+/** `pr` and `tasks` are the boards, which are not this checkout's — they
  *  are the same board the view shows, moved here while this tab is on screen.
  *  See boardHost.ts. They run nothing, so their slot is 0. */
-export type BenchTabKind = "term" | "file" | "note" | "web" | "agent" | "pr" | "tasks" | "files";
+export type BenchTabKind = "term" | "file" | "note" | "web" | "agent" | "pr" | "tasks";
 
 /**
  * Every file of a checkout shares ONE editor, and this is its session.
@@ -102,9 +102,20 @@ export interface BenchState {
    *  in the same PLACE on another rather than the same pixel. */
   geom: BenchGeom;
   fab: { x: number; y: number };
+  /** When the floating button shows. The chord opens the bench in every mode. */
+  fabMode: FabMode;
   /** Which checkout the bench is pointed at. */
   root: string;
   byRoot: Record<string, { tabs: BenchTab[]; active: string }>;
+}
+
+export const FAB_MODES = ["always", "open", "never"] as const;
+export type FabMode = (typeof FAB_MODES)[number];
+
+/** "open" means the bench holds tabs, not that its window is up: the button is
+ *  how you come back to them, so it stays while there is something to come back to. */
+export function fabVisible(mode: FabMode, tabCount: number): boolean {
+  return mode === "always" || (mode === "open" && tabCount > 0);
 }
 
 const KEY = "agentglass.bench.v1";
@@ -114,7 +125,7 @@ const DEFAULT_GEOM: BenchGeom = { x: 18, y: 14, w: 64, h: 68 };
 const DEFAULT_FAB = { x: 96, y: 88 };
 
 const EMPTY: BenchState = {
-  open: false, grown: false, zoom: 1, geom: DEFAULT_GEOM, fab: DEFAULT_FAB, root: "", byRoot: {},
+  open: false, grown: false, zoom: 1, geom: DEFAULT_GEOM, fab: DEFAULT_FAB, fabMode: "always", root: "", byRoot: {},
 };
 
 const listeners = new Set<() => void>();
@@ -129,6 +140,7 @@ function read(): BenchState {
       zoom: clampZoom(raw.zoom ?? 1),
       geom: clampGeom({ ...DEFAULT_GEOM, ...(raw.geom ?? {}) }),
       fab: clampFab({ ...DEFAULT_FAB, ...(raw.fab ?? {}) }),
+      fabMode: (FAB_MODES as readonly unknown[]).includes(raw.fabMode) ? raw.fabMode! : "always",
       byRoot: sane(raw.byRoot),
       /* Never restored as open. The bench is a thing you reach for, and an app
          that starts with a window over the view you asked for is an app that
@@ -154,7 +166,7 @@ function sane(byRoot: unknown): BenchState["byRoot"] {
   return out;
 }
 
-const KINDS: BenchTabKind[] = ["term", "file", "note", "web", "agent", "pr", "tasks", "files"];
+const KINDS: BenchTabKind[] = ["term", "file", "note", "web", "agent", "pr", "tasks"];
 function isTab(x: unknown): x is BenchTab {
   const t = x as BenchTab;
   return !!t && typeof t.id === "string" && typeof t.title === "string"
@@ -226,6 +238,7 @@ export const setBenchZoom = (zoom: number) => commit({ ...state, zoom: clampZoom
 export const zoomBench = (dir: -1 | 0 | 1) =>
   setBenchZoom(dir === 0 ? 1 : state.zoom * (dir > 0 ? 1.1 : 1 / 1.1));
 export const setBenchGeom = (geom: BenchGeom) => commit({ ...state, geom: clampGeom(geom) });
+export const setBenchFabMode = (fabMode: FabMode) => commit({ ...state, fabMode });
 export const setBenchFab = (fab: { x: number; y: number }) => commit({ ...state, fab: clampFab(fab) });
 
 /** Point the bench at a checkout. The tabs of the one you left are untouched —
@@ -371,7 +384,7 @@ export function showBoard(root: string, kind: BoardKind): BenchTab {
     commit({ ...state, root, open: true, byRoot: { ...state.byRoot, [root]: { ...held!, active: same.id } } });
     return same;
   }
-  return addTab(root, { kind, slot: 0, title: kind === "pr" ? "Pull requests" : kind === "files" ? "Files" : "Tasks" });
+  return addTab(root, { kind, slot: 0, title: kind === "pr" ? "Pull requests" : "Tasks" });
 }
 
 /**
@@ -386,7 +399,7 @@ export function showBoard(root: string, kind: BoardKind): BenchTab {
  */
 export function benchTakesBoard(kind: BoardKind): boolean {
   const on = state.open && state.root ? activeTab(state.root) : null;
-  if (!on || (on.kind !== "pr" && on.kind !== "tasks" && on.kind !== "files")) return false;
+  if (!on || (on.kind !== "pr" && on.kind !== "tasks")) return false;
   showBoard(state.root, kind);
   return true;
 }
