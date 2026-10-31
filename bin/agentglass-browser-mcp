@@ -40,7 +40,7 @@ it. See the "Streamable-HTTP transport" section below.
 
 Environment:
     AGENTGLASS_SERVER     default http://localhost:4000
-    AGENTGLASS_TOKEN      only needed if the server was started with one
+    AGENTGLASS_TOKEN      read from ~/.config/agentglass/token when unset, and again after a 401
     AGENTGLASS_MCP_HTTP   [HOST:]PORT — serve MCP over Streamable HTTP instead of stdio
     AGENTGLASS_MCP_TOKEN  the Bearer token that endpoint requires (32+ chars);
                           minted for the process, and printed, when unset
@@ -97,10 +97,73 @@ def _server_or_die(url):
     sys.exit(2)
 
 
-SERVER = _server_or_die(os.environ.get("AGENTGLASS_SERVER", "http://localhost:4000").rstrip("/"))
+def _default_server(host):
+    """http://<host>:<port> of the running server. The port is the one it wrote
+    at bind (next to the token file), because the app moves to another port when
+    4000 is taken and the AGENTGLASS_PORT an agent pane inherits can be stale;
+    then AGENTGLASS_PORT, then 4000. No probe: a hook cannot pay a round trip."""
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    port = ""
+    try:
+        with open(os.path.join(base, "agentglass", "port"), encoding="utf-8") as f:
+            port = f.read().strip()
+    except OSError:
+        pass
+    if not (port.isdigit() and 0 < int(port) < 65536):
+        port = os.environ.get("AGENTGLASS_PORT", "").strip()
+    if not (port.isdigit() and 0 < int(port) < 65536):
+        port = "4000"
+    return f"http://{host}:{port}"
+
+
+SERVER = _server_or_die((os.environ.get("AGENTGLASS_SERVER") or _default_server("localhost")).rstrip("/"))
 PROTOCOL = "2025-06-18"
 NAME = "agentglass-browser"
 VERSION = "1.0.0"
+
+
+def _token_file():
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    try:
+        with open(os.path.join(base, "agentglass", "token"), encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def token():
+    return os.environ.get("AGENTGLASS_TOKEN", "").strip() or _token_file()
+
+
+def urlopen_fresh(req, timeout):
+    """urlopen with the token; after a 401, once more with the token file's
+    value when it is not the one just refused. A pane keeps the token it was
+    opened with, and a reinstall mints a new one, so a long session's every
+    call answered 401 until somebody opened a new pane.
+
+    Only 401: a 403 means the credential was accepted and the act refused, and
+    the machine token from the file would turn that refusal into a yes. Never
+    from a minted, scoped credential (a seat's `st_`, a clone's `us_`, a
+    plugin's `pg_`) or in a seat's pane: the file holds the machine's token,
+    and falling back to it would hand the caller powers it was never given.
+    shortcut: a machine token that happens to start with two lowercase letters
+    and `_` (about 1 in 400) gets no retry, which fails safe. The same text is
+    in agentglass-ui, agentglass-agent and agentglass-browser-mcp, and
+    server/test/bin-token-retry.test.ts holds the copies equal."""
+    sent = token()
+    if sent:
+        req.add_header("Authorization", f"Bearer {sent}")
+    try:
+        return urllib.request.urlopen(req, timeout=timeout)
+    except urllib.error.HTTPError as e:
+        if e.code != 401 or os.environ.get("AGENTGLASS_SEAT") or re.match(r"[a-z]{2}_", sent):
+            raise
+        fresh = _token_file()
+        if not fresh or fresh == sent:
+            raise
+        e.close()
+        req.add_header("Authorization", f"Bearer {fresh}")
+        return urllib.request.urlopen(req, timeout=timeout)
 
 
 def call(op, body, timeout=120):
@@ -118,11 +181,8 @@ def call(op, body, timeout=120):
             "Origin": SERVER,
         },
     )
-    token = os.environ.get("AGENTGLASS_TOKEN")
-    if token:
-        req.add_header("Authorization", f"Bearer {token}")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urlopen_fresh(req, timeout) as r:
             return json.loads(r.read() or b"{}")
     except urllib.error.HTTPError as e:
         try:
@@ -256,11 +316,8 @@ def windows_ready(seconds=1.6):
     deadline = time.time() + seconds
     while True:
         req = urllib.request.Request(f"{SERVER}/browser-use/status")
-        token = os.environ.get("AGENTGLASS_TOKEN")
-        if token:
-            req.add_header("Authorization", f"Bearer {token}")
         try:
-            with urllib.request.urlopen(req, timeout=3) as r:
+            with urlopen_fresh(req, 3) as r:
                 if json.loads(r.read()).get("windows", 0) > 0:
                     return True
         except Exception:
@@ -284,11 +341,8 @@ def open_browser_view():
         method="POST",
         headers={"Content-Type": "application/json", "Origin": SERVER},
     )
-    token = os.environ.get("AGENTGLASS_TOKEN")
-    if token:
-        req.add_header("Authorization", f"Bearer {token}")
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urlopen_fresh(req, 10) as r:
             r.read()
         return True
     except Exception:
@@ -793,18 +847,22 @@ TOOLS = [
     {
         "name": "browser_permission",
         "description": (
-            "Grant a permission for an origin — clipboard, geolocation, notifications, camera — "
-            "instead of waiting for a dialog nobody can click. For an agent a dialog is worse than a "
-            "refusal: a refusal is an answer, a dialog is a page that has stopped responding. Goes "
-            "through the same origin allow-list as every other verb."
+            "Answer what your tab is asking for: a page's request for the microphone, the camera "
+            "or notifications is held for you, never shown to a person, and named under "
+            "`pendingPermissions` in your next answer — `answer: grant|deny` with those names "
+            "settles it, unanswered it is denied after 30 s. `origin` with `answer` grants or "
+            "refuses ahead of the ask, in this container only; `list: true` shows what is held "
+            "and answered. Without `answer`: grant a permission for an origin by API (clipboard, "
+            "geolocation…). Goes through the same origin allow-list as every other verb."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
+                "answer": {"type": "string", "enum": ["grant", "deny"]},
+                "list": {"type": "boolean"},
                 "origin": {"type": "string"},
                 "permissions": {"type": "array", "items": {"type": "string"}},
             },
-            "required": ["origin", "permissions"],
         },
     },
     {
@@ -1404,7 +1462,7 @@ TOOLS = [
     },
     {
         "name": "browser_resize",
-        "description": "Give the page a viewport of your own size. Use it when a modal covers the column you came to look at, or when two captures need to be the same size.",
+        "description": "Simulate a phone or tablet screen, only when the feature being built has to work there; rarely needed. The person sees it fitted into their pane, and it ends on its own at `done`, Take over, or ten idle minutes. To see more of a page use `browser_zoom`. Never for screenshots: `shot` already frames the whole page.",
         "inputSchema": {
             "type": "object",
             "properties": {"width": {"type": "number"}, "height": {"type": "number"}},
@@ -2624,7 +2682,7 @@ class _McpHttpServer6(_McpHttpServer):
 
 
 def _run_http(bind, expose=False, allow_hosts=(), handle=None, name=NAME,
-              token_env="AGENTGLASS_MCP_TOKEN", distinct_from=("AGENTGLASS_TOKEN", "AGENTGLASS_COCKPIT_TOKEN", "AGENTGLASS_UI_MCP_TOKEN"), opens="the signed-in browser",
+              token_env="AGENTGLASS_MCP_TOKEN", distinct_from=("AGENTGLASS_TOKEN", "AGENTGLASS_COCKPIT_TOKEN", "AGENTGLASS_UI_MCP_TOKEN", "AGENTGLASS_FLIGHTPLAN_MCP_TOKEN"), opens="the signed-in browser",
               expose_env="AGENTGLASS_MCP_EXPOSE"):
     """Serve `handle` (this server's dispatch unless another is given) over
     Streamable HTTP. The parameters are what a second MCP server built on this
@@ -2647,7 +2705,12 @@ def _run_http(bind, expose=False, allow_hosts=(), handle=None, name=NAME,
             print(f"{token_env} must not be {other}: the endpoint's token opens "
                   f"{opens}, and only that — the other token stays with what it opens", file=sys.stderr)
             return 2
-    expose = expose or os.environ.get(expose_env, "").strip() == "1"
+    # The machine token is read from the file too now (urlopen_fresh), so it is one of the others.
+    if token and token == _token_file():
+        print(f"{token_env} must not be the machine token in agentglass/token: the endpoint's token opens "
+              f"{opens}, and only that", file=sys.stderr)
+        return 2
+    expose =expose or os.environ.get(expose_env, "").strip() == "1"
     if not _loopback(host):
         if not token:
             print(f"refusing to bind {host}: serving MCP over HTTP off loopback needs "

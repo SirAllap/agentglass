@@ -13,7 +13,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
-import { usePoll } from "../../lib/usePoll.ts";
+import { subscribe as onWindowsChanged } from "../../lib/liveWindow.ts";
 import { HIT, ICON } from "../../lib/iconSize.ts";
 import { LAYER } from "../../lib/layers.ts";
 import { appChordFor, chordFromEvent, chordLabel } from "../../lib/keybindings.ts";
@@ -23,11 +23,6 @@ import { SearchIcon } from "../../lib/glyphIcons.tsx";
 import { Portal } from "../Portal.tsx";
 import { StatusMark, STATUS_COLOR } from "./StatusMark.tsx";
 import { INPUT, INPUT_STYLE, EDGE, LINE } from "../workspace/Chrome.tsx";
-
-/** While open, the list is re-read this often: a status is a live thing, and
- *  a row that says "working" after its agent asked a question is the one lie
- *  this list cannot tell. */
-const REFRESH_MS = 2000;
 
 export function WindowSwitcher({ open, onClose, onGone }: {
   open: boolean;
@@ -40,7 +35,7 @@ export function WindowSwitcher({ open, onClose, onGone }: {
   const [q, setQ] = useState("");
   /*
    * The row under the cursor, held by WINDOW rather than by position. The list
-   * is re-read and re-sorted by urgency every two seconds, so an index points
+   * is re-read and re-sorted by urgency whenever a window changes, so an index points
    * at whatever moved into that slot — a window above it going idle was enough
    * to put Enter on a different window, possibly in another session.
    */
@@ -65,10 +60,14 @@ export function WindowSwitcher({ open, onClose, onGone }: {
     void loadRef.current();
     return () => { dead = true; loadRef.current = () => {}; };
   }, [open]);
-  /* Every two seconds only while somebody is looking: the switcher stays
-     mounted behind a window nobody has focused, and each read is three tmux
-     spawns and up to 35 KB, identical while nothing moves (measured). */
-  usePoll(open, () => loadRef.current(), REFRESH_MS);
+  /* Read again when something moved, not on a clock: a status is a live thing
+     and a row that says "working" after its agent asked a question is the one
+     lie this list cannot tell, but each read is three tmux spawns and up to
+     35 KB, identical while nothing moves (measured). The strip's frames say
+     when a window opened, closed, was renamed or changed status, and focus
+     coming back says the rest (see lib/liveWindow.ts). Windows of another
+     tmux server only show their change on that next read. */
+  useEffect(() => (open ? onWindowsChanged(() => { void loadRef.current(); }) : undefined), [open]);
 
   // The field takes the caret by hand: `autoFocus` does not take when the
   // palette mounts while the terminal holds focus, which is the usual case.

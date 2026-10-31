@@ -252,9 +252,9 @@ function Swap({ k, children }: { k: string; children: ReactNode }) {
     return () => ro.disconnect();
   }, [st.k]);
   return (
-    <span className="agx-sw" style={{ width: w }}>
-      {st.old && <span key={"o" + st.old.k} className="agx-sw-lay is-out" aria-hidden>{st.old.node}</span>}
-      <span key={"n" + st.k} ref={cur} className="agx-sw-lay is-in">{st.node}</span>
+    <span className="agx-swap" style={{ width: w }}>
+      {st.old && <span key={"o" + st.old.k} className="agx-swap-lay is-out" aria-hidden>{st.old.node}</span>}
+      <span key={"n" + st.k} ref={cur} className="agx-swap-lay is-in">{st.node}</span>
     </span>
   );
 }

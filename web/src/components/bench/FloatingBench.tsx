@@ -33,6 +33,7 @@ import { motion } from "motion/react";
 import { Portal } from "../Portal.tsx";
 import { openFind, useFindScope } from "../../lib/findScope.ts";
 import { LAYER } from "../../lib/layers.ts";
+import { focusToRemember, focusToRestore } from "../../lib/benchFocus.ts";
 import { NO_DRAG } from "../../lib/dragRegion.ts";
 import { api } from "../../lib/api.ts";
 import { isLanternTab } from "../../lib/lanternAsk.ts";
@@ -40,7 +41,7 @@ import { shortPath } from "../../lib/shortPath.ts";
 import { appChordFor, chordLabel } from "../../lib/keybindings.ts";
 import {
   activateTab, activeTab, addTab, benchRoots, benchState, closeBench, closeTab, freeSlot, openBench,
-  setBenchFab, setBenchGeom, setBenchGrown, setBenchRoot, showBoard, subscribeBench, tabsFor, zoomBench,
+  fabVisible, setBenchFab, setBenchGeom, setBenchGrown, setBenchRoot, showBoard, subscribeBench, tabsFor, zoomBench,
   READER_SLOT, readerSeed, type BenchTab,
 } from "../../lib/benchStore.ts";
 import { claimZoom } from "../../lib/zoomOwner.ts";
@@ -54,9 +55,9 @@ import { TOP_BAR_H } from "../TopBar.tsx";
 import type { GitRepoRef } from "../../../../shared/types.ts";
 import { ICON } from "../../lib/iconSize.ts";
 import { AgentIcon, ExpandIcon, FileIcon, NoteIcon, SearchIcon } from "../../lib/glyphIcons.tsx";
-import { BrowserIcon, FilesIcon, IssuesIcon, PrIcon, TerminalIcon } from "../workspace/icons.tsx";
+import { BrowserIcon, IssuesIcon, PrIcon, TerminalIcon } from "../workspace/icons.tsx";
 import { CloseIcon } from "../CloseButton.tsx";
-import { EDGE, LINE } from "../workspace/Chrome.tsx";
+import { Badge, Button, EDGE, IconButton, LINE, ListRow } from "../workspace/Chrome.tsx";
 import { OWNER_ATTR } from "../../lib/layerOwner.ts";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
@@ -117,7 +118,6 @@ const GLYPH: Record<BenchTab["kind"], ComponentType<{ size?: number }>> = {
   agent: AgentIcon,
   pr: PrIcon,
   tasks: IssuesIcon,
-  files: FilesIcon,
 };
 
 /**
@@ -200,6 +200,15 @@ export function FloatingBench() {
     const t = setTimeout(() => setAway(true), FADE_MS);
     return () => clearTimeout(t);
   }, [st.open]);
+  /* Where the keyboard was when the bench opened, given back on close (see
+     benchFocus.ts). Taken in a layout effect: the window's own terminals focus
+     themselves later, in an effect or a frame, so this still sees the old one. */
+  const cameFrom = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    if (!st.open) return;
+    const a = document.activeElement as HTMLElement | null;
+    cameFrom.current = focusToRemember(a, a === document.body, !!winRef.current?.contains(a));
+  }, [st.open]);
   useLayoutEffect(() => {
     const el = winRef.current;
     if (st.open || !el) return;
@@ -220,6 +229,18 @@ export function FloatingBench() {
       if (first) first.focus(); else (e.target as HTMLElement).blur();
     };
     el.addEventListener("focusin", refuse);
+    /* After the blur above, so "lost" means on the page. The fallback is a
+       terminal on screen outside the window, for a remembered one that was
+       unmounted meanwhile. */
+    const root = document.getElementById("root");
+    const lost = document.activeElement === document.body || document.activeElement === null;
+    const back = focusToRestore(
+      cameFrom.current,
+      Array.from(root?.querySelectorAll<HTMLElement>(".xterm-helper-textarea") ?? []).find((t) => !el.contains(t)) ?? null,
+      lost,
+    );
+    cameFrom.current = null;
+    back?.focus({ preventScroll: true });
     setPickOpen(false);
     setMenuOpen(false);
     return () => el.removeEventListener("focusin", refuse);
@@ -667,18 +688,14 @@ export function FloatingBench() {
                 style={{ background: "color-mix(in srgb, var(--text) 5%, var(--surface-nav))", borderBottom: LINE }}
                 onPointerDown={onBarDown} onPointerMove={onBarMove} onPointerUp={onBarUp} onPointerCancel={onBarUp}>
 
-                <button
+                <Button
+                  square
                   data-bench-plus
+                  on={menuOpen ? true : undefined}
                   onClick={() => setMenuOpen((o) => !o)}
                   title="Open something in the bench"
                   aria-expanded={menuOpen}
-                  className="agx-bench-hit shrink-0 rounded-md text-[15px] leading-none flex items-center justify-center"
-                  style={{
-                    width: 28, height: 28,
-                    color: menuOpen ? "var(--primary)" : "var(--text2)",
-                    border: EDGE,
-                    background: menuOpen ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
-                  }}>+</button>
+                  className="shrink-0 text-[15px]">+</Button>
 
                 <div className="flex items-center gap-1 min-w-0 overflow-x-auto agx-scroll">
                   {tabs.map((t) => {
@@ -727,22 +744,15 @@ export function FloatingBench() {
                     the time is clutter, and one that appears the moment you
                     change something is a label. Click resets. */}
                 {Math.round(st.zoom * 100) !== 100 && (
-                  <button onClick={() => zoomBench(0)} title="Back to 100% (Ctrl+0 in here) — Ctrl+wheel or Ctrl+± zooms this window alone"
-                    className="agx-bench-hit shrink-0 text-[10.5px] px-2 rounded-md tabular-nums flex items-center"
-                    style={{ height: 28, color: "var(--text2)", border: EDGE }}>
+                  <Button onClick={() => zoomBench(0)} title="Back to 100% (Ctrl+0 in here) — Ctrl+wheel or Ctrl+± zooms this window alone"
+                    className="shrink-0 tabular-nums">
                     {Math.round(st.zoom * 100)}%
-                  </button>
+                  </Button>
                 )}
-                <button onClick={() => { if (winRef.current) { const sel = window.getSelection?.()?.toString().trim() ?? ""; openFind(sel.length && sel.length <= 80 && !sel.includes("\n") ? sel : "", winRef.current); } }}
-                  title="Find in this window (Ctrl+F with the pointer over it)"
-                  className="agx-bench-hit shrink-0 rounded-md flex items-center justify-center"
-                  style={{ width: 28, height: 28, color: "var(--text2)" }}><SearchIcon size={ICON.sm} /></button>
-                <button onClick={() => setBenchGrown(!st.grown)} title={st.grown ? "Back to size" : "Fill the window"}
-                  className="agx-bench-hit shrink-0 rounded-md text-[14px] leading-none flex items-center justify-center"
-                  style={{ width: 28, height: 28, color: "var(--text2)" }}><ExpandIcon size={ICON.sm} shrink={st.grown} /></button>
-                <button onClick={closeBench} title={`Minimise to the button (${chord})`}
-                  className="agx-bench-hit shrink-0 rounded-md text-[15px] leading-none flex items-center justify-center"
-                  style={{ width: 28, height: 28, color: "var(--text2)" }}>—</button>
+                <IconButton bare onClick={() => { if (winRef.current) { const sel = window.getSelection?.()?.toString().trim() ?? ""; openFind(sel.length && sel.length <= 80 && !sel.includes("\n") ? sel : "", winRef.current); } }}
+                  title="Find in this window (Ctrl+F with the pointer over it)"><SearchIcon size={ICON.sm} /></IconButton>
+                <IconButton bare onClick={() => setBenchGrown(!st.grown)} title={st.grown ? "Back to size" : "Fill the window"}><ExpandIcon size={ICON.sm} shrink={st.grown} /></IconButton>
+                <IconButton bare onClick={closeBench} title={`Minimise to the button (${chord})`}>—</IconButton>
               </div>
 
               {menuOpen && (
@@ -881,6 +891,7 @@ function BenchFab() {
     if (f && !f.moved) (st.open ? closeBench : openBench)();
   };
 
+  if (!fabVisible(st.fabMode, live)) return null;
   return (
     <Portal z={LAYER.bench}>
       <button
@@ -925,7 +936,7 @@ function BenchFab() {
 /** Everything except a file. The file tabs share one editor and are rendered
  *  once, above — see the reader. */
 function TabBody({ root, tab, active }: { root: string; tab: BenchTab; active: boolean }) {
-  if (tab.kind === "pr" || tab.kind === "tasks" || tab.kind === "files") return <BoardSlot kind={tab.kind} place="bench" visible={active} />;
+  if (tab.kind === "pr" || tab.kind === "tasks") return <BoardSlot kind={tab.kind} place="bench" visible={active} />;
   if (tab.kind === "note") return <BenchNote root={root} active={active} />;
   if (tab.kind === "web") return <BenchWeb active={active} />;
   return <BenchTerm root={root} slot={tab.slot} agent={tab.kind === "agent" ? tab.agent : undefined} type={tab.type} active={active} />;
@@ -1018,7 +1029,6 @@ function BenchMenu({ root, onClose, onTerm, onNote, onWeb, onAgent, onBoard }: {
           <div className="px-3 pt-2 pb-1 text-[9px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>A board, moved here from its view</div>
           <MenuRow glyph={GLYPH.pr} label="Pull requests" onClick={() => onBoard("pr")} />
           <MenuRow glyph={GLYPH.tasks} label="Tasks" onClick={() => onBoard("tasks")} />
-          <MenuRow glyph={GLYPH.files} label="Files" onClick={() => onBoard("files")} />
         </div>
         <div className="px-3 py-2 text-[10px]" style={{ borderTop: LINE, color: "var(--text4)" }}>
           A file gets here from the palette, a diff or a pull request — wherever you were reading it.
@@ -1030,10 +1040,7 @@ function BenchMenu({ root, onClose, onTerm, onNote, onWeb, onAgent, onBoard }: {
 
 function MenuRow({ glyph: Glyph, label, onClick }: { glyph: ComponentType<{ size?: number }>; label: string; onClick: () => void }) {
   return (
-    <button onClick={onClick} className="agx-bench-hit w-full text-left px-3 flex items-center gap-2.5 text-[12px]"
-      style={{ minHeight: 32, color: "var(--text)" }}>
-      <span className="shrink-0 flex" style={{ color: "var(--text3)" }}><Glyph size={ICON.sm} /></span>{label}
-    </button>
+    <ListRow onClick={onClick} leading={<span style={{ color: "var(--text3)" }}><Glyph size={ICON.sm} /></span>}>{label}</ListRow>
   );
 }
 
@@ -1088,13 +1095,12 @@ function BenchChip({ repo, repos, root, elsewhere, openState, onPick }: {
 
   return (
     <>
-      <button ref={btn} onClick={() => setOpen(!open)}
-        className="agx-bench-hit shrink-0 flex items-center gap-1.5 text-[10.5px] px-2.5 rounded-md max-w-[220px]"
-        style={{ height: 28, background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: EDGE, color: "var(--text2)" }}
+      <Button buttonRef={btn} onClick={() => setOpen(!open)}
+        className="shrink-0 max-w-[220px]"
         title={root ? `Opening things in ${root}` : "Pick a checkout"}>
         <span className="truncate min-w-0">{repo ? (repo.worktreeOf ? repo.branch : repo.name) : (root ? shortPath(root) : "Pick a checkout")}</span>
         <span style={{ color: "var(--text3)" }}>▾</span>
-      </button>
+      </Button>
       {open && box && (
         <Portal z={LAYER.menu}>
           <div ref={panel} className="fixed rounded-lg text-[11px] flex flex-col overflow-hidden"
@@ -1112,34 +1118,19 @@ function BenchChip({ repo, repos, root, elsewhere, openState, onPick }: {
               {repos.map((r) => {
                 const n = tabsFor(r.root).length;
                 return (
-                  <button key={r.root} onClick={() => onPick(r.root)}
-                    className="w-full text-left px-3 py-1.5 flex flex-col gap-1"
-                    style={{ background: r.root === root ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
-                    <span className="flex items-center gap-2 min-w-0">
-                      <span className="truncate" style={{ color: "var(--text)" }}>{shortPath(r.root)}</span>
-                      {r.worktreeOf && (
-                        <span className="shrink-0 text-[8.5px] px-1 rounded"
-                          style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }}>WT</span>
-                      )}
-                      {n > 0 && (
-                        <span className="ml-auto shrink-0 text-[9px] px-1.5 rounded"
-                          style={{ color: "var(--info-ink)", border: "1px solid color-mix(in srgb, var(--info) 30%, transparent)" }}>
-                          {n} open
-                        </span>
-                      )}
-                    </span>
-                    <span className="text-[9.5px] truncate" style={{ color: "var(--text4)" }}>on {r.branch}</span>
-                  </button>
+                  <ListRow key={r.root} onClick={() => onPick(r.root)} current={r.root === root} sub={`on ${r.branch}`}
+                    trailing={<>
+                      {r.worktreeOf && <Badge tint="var(--primary-ink)" fill="var(--primary)" outlined tight>WT</Badge>}
+                      {n > 0 && <Badge tint="var(--info-ink)" fill="var(--info)" outlined tight>{n} open</Badge>}
+                    </>}>{shortPath(r.root)}</ListRow>
                 );
               })}
               {/* A checkout the repo list no longer has — a worktree removed
                   while its tabs were open. Named rather than dropped: the tabs
                   are still on the engine and this is the only door back. */}
               {elsewhere.filter((e) => !repos.some((r) => r.root === e.root)).map((e) => (
-                <button key={e.root} onClick={() => onPick(e.root)} className="w-full text-left px-3 py-1.5 flex flex-col gap-1">
-                  <span className="truncate" style={{ color: "var(--text2)" }}>{shortPath(e.root)}</span>
-                  <span className="text-[9.5px]" style={{ color: "var(--warning-ink)" }}>{e.n} open · this checkout is not in the list any more</span>
-                </button>
+                <ListRow key={e.root} onClick={() => onPick(e.root)}
+                  sub={<span style={{ color: "var(--warning-ink)" }}>{e.n} open · this checkout is not in the list any more</span>}>{shortPath(e.root)}</ListRow>
               ))}
             </div>
           </div>

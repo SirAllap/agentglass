@@ -49,7 +49,7 @@
  * exist — measured on the one session this was written against.
  */
 import type { Database } from "bun:sqlite";
-import { closeSync, fstatSync, openSync, readSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import { db } from "./db.ts";
 import { agentCwdsUnder } from "./paneloc.ts";
 
@@ -433,8 +433,90 @@ function transcriptDirs(path: string): string[] {
   return dirs;
 }
 
+
+/*
+ * WHERE THE SESSION DOES REAL WORK, as opposed to where it looks.
+ *
+ * `dirsFromTranscript` lists every directory a tool was handed, and a read is
+ * a mention like any other: `gh pr view`, a Grep over another checkout, a cat.
+ * An agent standing in the main checkout that only READS a PR's worktree has not
+ * gone there, and the chip must not follow it. The chip follows edits, writes,
+ * and shell lines that commit, build or test with a `cd`/`-C` into the tree.
+ *
+ * Two places hold that evidence. The session's own transcript, and one file per
+ * subagent under `<transcript minus .jsonl>/subagents/` — a subagent's tool calls
+ * are NOT in its parent's transcript, which is why a PR worktree edited by a
+ * subagent never reached the chip. Entries carry a timestamp, so the two merge
+ * newest first.
+ *
+ * Ceiling: a shell line that works in the shell's remembered directory with no
+ * `cd` or `-C` names no path and is not seen; so a build run that way does not move
+ * the chip, an Edit does.
+ */
+const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+const WORK_CMD = /(?:^|[\s;&|(])(?:git\s+(?:-C\s+\S+\s+)?(?:commit|add|apply|am|merge|rebase|cherry-pick|checkout|switch|restore|reset|stash|push|pull|rm|mv)|make|bun\s+(?:test|run|install|build|x)|npm\s+(?:test|run|ci|install)|pnpm|yarn|pytest|cargo\s+(?:build|test)|go\s+(?:build|test)|tsc|vitest|docker\s+compose\s+run)(?=\s|$)/;
+const CMD_DIR = /(?:\bcd|\s-C|\s--cwd|\s--prefix)\s+["']?(\/[^\s"';&|)]+)/g;
+
+export interface WorkMark { path: string; at: number }
+
+/** The paths a transcript's real work names, newest first. */
+export function workFromTranscript(text: string, cap = 20): WorkMark[] {
+  const out: WorkMark[] = [];
+  const lines = text.split("\n");
+  for (let i = lines.length - 1; i >= 0 && out.length < cap; i--) {
+    const line = lines[i]!;
+    if (!line.includes('"tool_use"')) continue;
+    let entry: { timestamp?: unknown; message?: { content?: unknown } };
+    try { entry = JSON.parse(line); } catch { continue; }
+    const content = entry?.message?.content;
+    if (!Array.isArray(content)) continue;
+    const at = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) || 0 : 0;
+    for (const block of content) {
+      const b = block as { type?: unknown; name?: unknown; input?: unknown };
+      if (b?.type !== "tool_use" || !b.input || typeof b.input !== "object") continue;
+      const input = b.input as Record<string, unknown>;
+      if (typeof b.name === "string" && EDIT_TOOLS.has(b.name)) {
+        for (const f of ["file_path", "notebook_path"]) {
+          const v = input[f];
+          if (typeof v === "string" && v.startsWith("/")) out.push({ path: v, at });
+        }
+      } else if (b.name === "Bash" && typeof input.command === "string" && WORK_CMD.test(input.command)) {
+        for (const m of input.command.matchAll(CMD_DIR)) out.push({ path: m[1]!, at });
+        if (typeof input.cwd === "string" && input.cwd.startsWith("/")) out.push({ path: input.cwd, at });
+      }
+    }
+  }
+  return out;
+}
+
+/** Newest first, a path once. Marks without a timestamp keep file order. */
+export function mergeWork(lists: WorkMark[][]): string[] {
+  const all = lists.flatMap((l, f) => l.map((m, i) => ({ ...m, f, i })));
+  all.sort((a, b) => b.at - a.at || a.f - b.f || a.i - b.i);
+  return [...new Set(all.map((m) => m.path))];
+}
+
+const SUBAGENT_FILES = 12;
+let workCache: { key: string; work: string[] } | null = null;
+
+function transcriptWork(path: string): string[] {
+  const files = [path];
+  try {
+    const sub = path.replace(/\.jsonl$/, "") + "/subagents";
+    const named = readdirSync(sub).filter((n) => n.endsWith(".jsonl")).map((n) => `${sub}/${n}`);
+    named.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+    files.push(...named.slice(0, SUBAGENT_FILES));
+  } catch { /* no subagents ran */ }
+  let key = "";
+  try { key = files.map((f) => `${f}:${statSync(f).size}`).join("|"); } catch { return []; }
+  if (workCache?.key === key) return workCache.work;
+  const work = mergeWork(files.map((f) => workFromTranscript(readTail(f))));
+  workCache = { key, work };
+  return work;
+}
+
 /** Forget the cached tail. Tests write a transcript, read it, then write more. */
-export function resetTailCache(): void { tailCache = null; }
+export function resetTailCache(): void { tailCache = null; workCache = null; }
 
 /**
  * Where the agent in this pane has been working, most certain first.
@@ -454,9 +536,13 @@ export function paneDirs(
   paneId: string,
   panePid: number,
   cwdsOf: (pid: number) => string[] = agentCwdsUnder,
-): { pane: string; dirs: string[] } {
+  server?: string,
+): { pane: string; dirs: string[]; work: string[]; agent: string } {
   const cwds = cwdsOf(panePid);
-  const note = paneAgentNote(paneId);
+  /* On THIS server: pane ids start at %0 on every one, and a dead server's
+     agent stood in the same parent repo as the new one, so the cwd check
+     below passed and its worktree came back on a pane that never had it. */
+  const note = paneAgentNote(paneId, server);
   // Only believe the note if the agent it was written for is still the one in
   // this pane. tmux reuses pane ids: %3 outlives the agent that was in it, and
   // a note from the last one would otherwise send you to a worktree belonging
@@ -464,7 +550,12 @@ export function paneDirs(
   const live = note && cwds.includes(note.cwd) ? note : null;
   const dirs = [...cwds];
   if (live) for (const d of transcriptDirs(live.transcript_path)) if (!dirs.includes(d)) dirs.push(d);
-  return { pane: paneId, dirs };
+  /* WHOSE answer, from the same check: the panel keeps a pane's worktree for as
+     long as this id stays the same, so a stale note's id — a reused pane, a
+     session ended and its ids handed out again — would keep the dead
+     session's worktree, PR and card on a pane standing somewhere else. */
+  /* What the session DID, apart from what it looked at — see transcriptWork. */
+  return { pane: paneId, dirs, work: live ? transcriptWork(live.transcript_path) : [], agent: live ? live.session_id : "" };
 }
 
 /**
@@ -493,4 +584,17 @@ export function recentPaneAgents(o: { sinceMs?: number; now?: number; cap?: numb
     return recentPanes.all(since, Math.max(1, o.cap ?? 60))
       .map((r) => ({ paneId: r.pane_id, sessionId: r.session_id, cwd: r.cwd, at: r.at }));
   } catch { return []; } // a database that cannot answer is not a reason to lose the board
+}
+
+/**
+ * A pane's directories split by the window's scope: the ones inside it, and —
+ * only when none is — the NAME of the first one outside it. The panel needs
+ * the name to say "this checkout exists, it belongs to another project" instead
+ * of "no checkout"; the path stays here, since a cockpit scoped to one project
+ * does not get to enumerate directories from another.
+ */
+export function splitByScope(dirs: string[], inScope: (dir: string) => boolean): { dirs: string[]; outside: string } {
+  const inside = dirs.filter(inScope);
+  const first = dirs[0]?.replace(/\/+$/, "").split("/").pop() ?? "";
+  return { dirs: inside, outside: inside.length ? "" : first };
 }

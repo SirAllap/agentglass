@@ -124,7 +124,8 @@ describe("the shape of the command", () => {
      * and their tpm/continuum with it, out of our server.
      */
     const text = await src.text();
-    expect(text).toContain('...engineSocketArgs(true), "-f", confPath(), "new-session", "-A", "-s", engineSessionName(root), "-c", root');
+    expect(text).toContain('...engineSocketArgs(true), "-f", confPath(), "new-session", "-A", "-s", name, "-c", root');
+    expect(text).toContain("export function engineAttachArgv(root: string, name = engineSessionName(root))");
   });
 
   it("answers null rather than a command that cannot run", async () => {

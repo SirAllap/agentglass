@@ -248,6 +248,8 @@ export interface Prefs {
   renderDocs: boolean;
   /** The sidebar places the person hid with Unpin (Strata's "show in sidebar" switches), by id. */
   hiddenPlaces: string[];
+  /** The Ctrl+K search: by name, or inside the files. Remembered like the rest. */
+  searchIn: "names" | "contents";
 }
 
 export interface SortChoice { sortKey: SortKey; sortDir: SortDir; foldersFirst: boolean }
@@ -272,7 +274,7 @@ export const fzScale = (textSize: number): number => textSize / 13;
 
 export const DEFAULT_PREFS: Prefs = {
   view: "columns", preview: true, density: "compact", textSize: 13, hidden: false, group: false, sizes: true, sidebar: true, rail: false,
-  sortKey: "name", sortDir: "asc", foldersFirst: true, thumb: THUMB_DEFAULT, sideW: 201, colW: 300, listW: [0, 90, 120, 150], readW: READ_WIDTH_DEFAULT, mirror: true, f1: true, peek: false, autoplay: false, renderDocs: true, hiddenPlaces: [],
+  sortKey: "name", sortDir: "asc", foldersFirst: true, thumb: THUMB_DEFAULT, sideW: 201, colW: 300, listW: [0, 90, 120, 150], readW: READ_WIDTH_DEFAULT, mirror: true, f1: true, peek: false, autoplay: false, renderDocs: true, hiddenPlaces: [], searchIn: "names",
 };
 
 function readSortChoice(v: unknown): SortChoice | null {
@@ -315,6 +317,7 @@ export function readPrefs(raw: string | null): Prefs {
     peek: flag(o.peek, d.peek),
     autoplay: flag(o.autoplay, d.autoplay),
     renderDocs: flag(o.renderDocs, d.renderDocs),
+    searchIn: pick(o.searchIn, ["names", "contents"], d.searchIn),
     hiddenPlaces: Array.isArray(o.hiddenPlaces) ? o.hiddenPlaces.filter((x): x is string => typeof x === "string").slice(0, 40) : [],
   };
 }

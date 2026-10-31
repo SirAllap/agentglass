@@ -21,6 +21,7 @@ import { ScopeBar } from "./ScopeBar.tsx";
 import { FlowView, fallbackRule } from "./FlowView.tsx";
 import { RolePicker } from "./RolePicker.tsx";
 import { AgentTrustRow } from "./AgentTrustRow.tsx";
+import { PolarisCard } from "../polaris/PolarisCard.tsx";
 import { rowId } from "../../lib/settingsIndex.ts";
 import { reducedMotion } from "../../lib/lookPrefs.ts";
 import type { HeaderChip } from "../../lib/settingsNav.ts";
@@ -33,14 +34,16 @@ import {
  * How work is handed out: which engine sits in a project's chair, which ones
  * do the work it gives out, and the rules that change that for a while.
  *
- * Only a person changes any of it. Nothing on this page has a setting id, so an
- * agent can open and read the page and cannot write it: the orchestrator works
- * inside this policy.
+ * Only a person changes the policy cards. Nothing on them has a setting id, so an
+ * agent can open and read them and cannot write them: the orchestrator works
+ * inside this policy. The Polaris card above them is the one part of this page
+ * with setting ids (`polaris.enabled`, `polaris.door.<door>`): an agent narrows a
+ * door through the settings door, and anything wider or live waits for the person.
  *
- * Nothing polls. The page reads the policy, the engines and the rules' state
- * when it opens, when the project changes and after each save; the server
- * settles a rule's switch on the events that change a reading, so the badges
- * are as fresh as the last time somebody looked.
+ * Nothing polls. The page reads the policy, the engines, the rules' state and the
+ * Polaris doors when it opens, when the project changes and after each save; the
+ * server settles a rule's switch and wakes the Polaris sweep on the events that
+ * change a reading, so the badges are as fresh as the last time somebody looked.
  */
 
 /** The server's sentence, or a note, under the control that produced it. */
@@ -420,6 +423,8 @@ export function OrchestrationView(p: OrchestrationViewProps) {
           the left scrolls. Under 1180px they stack, picture first. */}
       <div className="agx-split-page">
       <div className="agx-split-main agx-orch-col">
+      <PolarisCard root={root} />
+
       <QuickSetup q={q} policy={policy} root={root} readiness={readiness} states={states} inherited={inherited} busy={busy}
         note={notes.quick} onSave={save} onOpenEngines={p.onOpenEngines} />
 

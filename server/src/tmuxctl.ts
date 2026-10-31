@@ -478,7 +478,7 @@ export function parseWindows(out: string): TmuxWindow[] {
     if (!line.trim()) continue;
     // Tab-separated, because window names routinely contain spaces and a
     // space-separated format would split "npm run dev" into three windows.
-    const [id, index, name, active, flags, ask, width, height, , group, pin, cwd] = line.split("\t");
+    const [id, index, name, active, flags, ask, width, height, , group, pin, cwd, dead, deadStatus, deadTime] = line.split("\t");
     const i = Number(index);
     if (!WINDOW_ID.test(id ?? "") || !Number.isInteger(i)) continue;
     const asked = (ask ?? "").trim();
@@ -498,6 +498,13 @@ export function parseWindows(out: string): TmuxWindow[] {
       ...(sanitizeGroupName(group) ? { group: sanitizeGroupName(group)! } : {}),
       ...((pin ?? "").trim() === "1" ? { pinned: true } : {}),
       ...((cwd ?? "").trim() ? { cwd: cwd!.trim() } : {}),
+      // The active pane's corpse, when tmux kept one (`remain-on-exit failed`).
+      // Appended after `cwd` like the rest; absent for a live pane.
+      ...((dead ?? "").trim() === "1" ? {
+        dead: true,
+        exit: Number(deadStatus) || 0,
+        ...(Number(deadTime) > 0 ? { diedAt: Number(deadTime) * 1000 } : {}),
+      } : {}),
     });
   }
   return windows;
@@ -508,7 +515,7 @@ export interface TmuxFrame {
   windows: TmuxWindow[];
   /** Every session on this socket with at least one window, so the strip can
    *  offer them. Gathered from the sweep's own rows — no extra call. */
-  sessions: { id: string; name: string; windows: number }[];
+  sessions: { id: string; name: string; windows: number; created?: number }[];
   /**
    * The keys tmux is waiting for as its prefix, read on the same call.
    *
@@ -619,7 +626,7 @@ interface CachedParsedFrame {
   src: { at: number; out: string | null };
   /** Only what is the session's: `client` and `popup` are per client and are
    *  taken from each call's own parse, never from here. */
-  parsed: { session: string; id: string; status: string; owned: boolean; windows: TmuxWindow[]; panes: TmuxPane[]; windowOfPane: Map<string, string>; attached: Set<string>; sessions: { id: string; name: string; windows: number }[] };
+  parsed: { session: string; id: string; status: string; owned: boolean; windows: TmuxWindow[]; panes: TmuxPane[]; windowOfPane: Map<string, string>; attached: Set<string>; sessions: { id: string; name: string; windows: number; created?: number }[] };
   prefix: string[];
 }
 
@@ -812,7 +819,7 @@ export const FRAME_ARGV: string[] = [
      strip writes (see runAction) so they outlive agentglass and can be set
      from tmux's own command line; `pane_current_path` is the ACTIVE pane's
      directory, which is what a window is grouped by. */
-  "-F", "w\t#{session_id}\t#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{window_raw_flags}\t#{@agx-ask}\t#{window_width}\t#{window_height}\t#{session_name}\t#{@agx-group}\t#{@agx-pin}\t#{pane_current_path}",
+  "-F", "w\t#{session_id}\t#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{window_raw_flags}\t#{@agx-ask}\t#{window_width}\t#{window_height}\t#{session_name}\t#{@agx-group}\t#{@agx-pin}\t#{pane_current_path}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_dead_time}\t#{session_created}",
   ";",
   // Panes ride along for the same reason `@agx-ask` does: this runs twice a
   // second per attached client, and it is already ONE subprocess with three
@@ -853,7 +860,7 @@ export function parsePrefix(out: string): string[] {
  * *names* are not unique enough to bet a `kill-window` on — resurrect happily
  * restores a second session called `main` — and the id is what tmux itself uses.
  */
-export function parseFrame(out: string, tty: string): { session: string; id: string; client: { cols: number; rows: number } | null; status: string; owned: boolean; popup: boolean; windows: TmuxWindow[]; panes: TmuxPane[]; windowOfPane: Map<string, string>; attached: Set<string>; sessions: { id: string; name: string; windows: number }[] } | null {
+export function parseFrame(out: string, tty: string): { session: string; id: string; client: { cols: number; rows: number } | null; status: string; owned: boolean; popup: boolean; windows: TmuxWindow[]; panes: TmuxPane[]; windowOfPane: Map<string, string>; attached: Set<string>; sessions: { id: string; name: string; windows: number; created?: number }[] } | null {
   let session: string | null = null;
   let id: string | null = null;
   let client: { cols: number; rows: number } | null = null;
@@ -870,7 +877,7 @@ export function parseFrame(out: string, tty: string): { session: string; id: str
      strip needs it to offer the OTHER sessions — a window opened for a
      different checkout lands in one, and moving the client there instead took
      four windows of somebody's own work off their screen. */
-  const sessionsSeen = new Map<string, { id: string; name: string; windows: number }>();
+  const sessionsSeen = new Map<string, { id: string; name: string; windows: number; created?: number }>();
   const paneRows: string[] = [];
   /** Every session a client is on — see TmuxFrame.attached. */
   const attached = new Set<string>();
@@ -914,6 +921,9 @@ export function parseFrame(out: string, tty: string): { session: string; id: str
       if (sid && sname) {
         const row = sessionsSeen.get(sid) ?? { id: sid, name: sname, windows: 0 };
         row.windows += 1;
+        // Seconds since the epoch, appended last: the session's age for the Manage dialog.
+        const made = Number(f[17]);
+        if (Number.isFinite(made) && made > 0) row.created = made;
         sessionsSeen.set(sid, row);
       }
     } else if (line.startsWith("p\t")) {
@@ -1188,6 +1198,38 @@ export function nextAgentName(taken: readonly string[]): string {
   let n = 1;
   while (used.has(n)) n++;
   return `AI${String(n).padStart(2, "0")}`;
+}
+
+/**
+ * A closed window's plain shell, back in its slot: the "Reopen" the strip
+ * offers for five seconds after a close. Next to the window that was beside it
+ * (`anchor`, before or after), in the folder it was in, under its name, and
+ * selected. An anchor that is gone falls back to the end of the session.
+ * Nothing of the old process comes back; that is what "plain shell" says.
+ */
+export function reopenWindow(t: TmuxTarget, name: string | undefined, cwd: string | undefined, anchor: string | undefined, after: boolean): boolean {
+  const clean = sanitizeWindowName(name) ?? "shell";
+  const near = anchor && WINDOW_ID.test(anchor) && windowOnSocket(t.socket, anchor) ? anchor : null;
+  const made = tmux(t.socket, ["new-window", "-P", "-F", "#{window_id}", "-n", clean,
+    ...(near ? [after ? "-a" : "-b", "-t", near] : ["-t", t.id]), ...(cwd ? ["-c", cwd] : [])]);
+  if (made === null) return false;
+  const born = made.trim().split("\n").find((l) => WINDOW_ID.test(l.trim()))?.trim();
+  if (born) tmux(t.socket, ["set-window-option", "-t", born, "automatic-rename", "off"]);
+  return true;
+}
+
+/**
+ * A dead pane's "Restart here": its window's active pane respawned as the
+ * login shell, in the folder it stood in. Not the pane's own command again
+ * (that is what exited), and only a pane that is dead: a live one is never
+ * killed by this.
+ */
+export function restartWindow(t: TmuxTarget, windowId: string): boolean {
+  if (!WINDOW_ID.test(windowId) || !windowOnSocket(t.socket, windowId)) return false;
+  const row = tmux(t.socket, ["display-message", "-p", "-t", windowId, "#{pane_dead}\t#{pane_current_path}"]);
+  const [dead, path] = (row ?? "").replace(/\n$/, "").split("\t");
+  if (dead !== "1") return false;
+  return tmux(t.socket, ["respawn-pane", "-k", "-t", windowId, ...(path ? ["-c", path] : []), process.env.SHELL || "/bin/sh"]) !== null;
 }
 
 export function runAction(
@@ -1875,7 +1917,8 @@ const SESSION_ID = /^\$\d+$/;
  * pressed a button.
  */
 export function paneCwd(socket: string[], paneId: string): string | null {
-  if (!PANE_ID.test(paneId)) return null;
+  // A window id asks about that window's active pane — what `+` starts beside.
+  if (!PANE_ID.test(paneId) && !WINDOW_ID.test(paneId)) return null;
   const out = tmux(socket, ["display-message", "-p", "-t", paneId, "#{pane_current_path}"]);
   const path = out?.split("\n")[0]?.trim() ?? "";
   // Relative or empty is not a directory this may hand to `new-window -c`.
@@ -4105,7 +4148,7 @@ export function attachArgvFor(
    */
   zoomed: { windowId: string; paneId: string } | null;
 } | null {
-  if (!PANE_ID.test(paneId)) return null;
+  if (!PANE_ID.test(paneId) && !WINDOW_ID.test(paneId)) return null;
   /*
    * The phone's attach is the other argv this file hands out rather than runs,
    * and it is the heavier of the two: a `new-session -t`, four `set-option`s,

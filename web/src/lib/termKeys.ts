@@ -59,3 +59,14 @@ export function isAppChord(e: {
   const chord = chordFromEvent(e);
   return !!chord && appActionForChord(chord) !== null;
 }
+
+/**
+ * Alt+1..9: the Nth window on the strip. `code`, not `key`: Option+digit types a
+ * symbol on a Mac layout and `key` would never be a digit there. Null with any
+ * other modifier, so Ctrl+Alt+1..4 stays the pane doors.
+ */
+export function altDigit(e: { code: string; altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): number | null {
+  if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return null;
+  const m = /^Digit([1-9])$/.exec(e.code);
+  return m ? Number(m[1]) : null;
+}

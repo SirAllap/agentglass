@@ -295,6 +295,11 @@ export function menuSide(left: number, right: number, viewport: number, width = 
 const SETTINGS_PAGES = HAS_BROWSER ? ALL_SETTINGS_PAGES : ALL_SETTINGS_PAGES.filter((p) => p.id !== "browser");
 const SETTINGS_PAGES_NO_KW = SETTINGS_PAGES.map((p) => ({ ...p, kw: "" }) as SettingsPage);
 
+/** The quiet bar draws the pinned strip only once something is pinned; an empty one invites a pin nobody wanted. */
+export function showPins(quiet: boolean | undefined, pins: readonly string[]): boolean {
+  return !quiet || pins.length > 0;
+}
+
 export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClose, dropUp, quiet }: {
   root: string;
   disabled: boolean;
@@ -599,6 +604,21 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
               )}
             </div>
             <div className="agx-scroll overflow-y-auto overflow-x-hidden py-1" style={{ minHeight: 0 }}>
+              {/* The form takes the whole menu while it is up: you came here to
+                  run this one, and a list of three hundred others underneath is
+                  only somewhere to lose your place. */}
+              {asking ? (
+                <div className="px-2 py-2">
+                  <RunDialog r={asking} repos={repos} onRunStep={onRun} targetInTmux={runTargetInTmux}
+                    onClose={() => { setAsking(null); setOpen(false); setQuery(""); }}
+                    onNote={() => { setAsking(null); setOpen(false); setQuery(""); }} />
+                </div>
+              ) : groups.map(([label, list]) => (
+                <div key={label}>
+                  <div className="px-3 pt-2 pb-0.5 t-dim2 text-[9.5px] uppercase tracking-wider">{label}</div>
+                  {list.map((c) => <CommandRow key={label + ":" + c.cmd} c={c} font={font} on={pins.includes(c.cmd)} full={full} onRun={(cmd) => { const rr = (c as ProjectCommand & { recipe?: Recipe }).recipe; if (rr) runRecipe(rr); else run(cmd); }} onPin={pin} />)}
+                </div>
+              ))}
               {!!gitMatches.length && (
                 <div>
                   <div className="px-3 pt-1.5 pb-0.5 t-dim2 text-[9.5px] uppercase tracking-wider">git — always available</div>
@@ -624,21 +644,6 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
                   ))}
                 </div>
               )}
-              {/* The form takes the whole menu while it is up: you came here to
-                  run this one, and a list of three hundred others underneath is
-                  only somewhere to lose your place. */}
-              {asking ? (
-                <div className="px-2 py-2">
-                  <RunDialog r={asking} repos={repos} onRunStep={onRun} targetInTmux={runTargetInTmux}
-                    onClose={() => { setAsking(null); setOpen(false); setQuery(""); }}
-                    onNote={() => { setAsking(null); setOpen(false); setQuery(""); }} />
-                </div>
-              ) : groups.map(([label, list]) => (
-                <div key={label}>
-                  <div className="px-3 pt-2 pb-0.5 t-dim2 text-[9.5px] uppercase tracking-wider">{label}</div>
-                  {list.map((c) => <CommandRow key={label + ":" + c.cmd} c={c} font={font} on={pins.includes(c.cmd)} full={full} onRun={(cmd) => { const rr = (c as ProjectCommand & { recipe?: Recipe }).recipe; if (rr) runRecipe(rr); else run(cmd); }} onPin={pin} />)}
-                </div>
-              ))}
               {!asking && !gitMatches.length && !groups.length && !settingsPageMatches.length && !settingsRowMatches.length && (
                 <div className="px-3 py-2 t-dim2">{cmds ? `No command matches “${query.trim()}”` : "Reading the project…"}</div>
               )}
@@ -659,7 +664,7 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
           offset. The row is capped at MAX_PINS, so a crowded bar is a
           truncation problem rather than a scrolling one: chips shrink, the
           label ellipses, and the full command stays in the tooltip. */}
-      <div className="flex items-center gap-1 min-w-0 overflow-hidden" style={quiet ? { display: "none" } : undefined}>
+      <div className="flex items-center gap-1 min-w-0 overflow-hidden" style={showPins(quiet, pins) ? undefined : { display: "none" }}>
         {pins.map((cmd) => (
           <span key={cmd} className="group flex items-center min-w-0 rounded-md"
             style={{ border: EDGE }}>

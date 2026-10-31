@@ -172,9 +172,11 @@ export async function allWindowTrees(): Promise<{ trees: Map<string, TmuxWindowD
   return { trees, starts };
 }
 
-/** The command a pane starts with. Same `sh`-wrapped, exit-surviving shape the
- *  chat engine uses (newSessionArgv), so a tool that exits leaves the pane
- *  alive with a line saying so instead of vanishing mid-layout. A named agent
+/** The command a pane starts with: exit-surviving, so a tool that exits leaves the pane
+ *  alive with a line saying so instead of vanishing mid-layout. POSIX (`$?`, `exec`, `;`),
+ *  so it is always run as `sh -c`, never handed to tmux as a bare string: on a machine whose
+ *  login shell is fish that is a syntax error ("In fish, please use $status"), the pane died
+ *  on the spot and the tmux server exited with it. A named agent
  *  started with `--keep` runs in it too (agentops.ts), and is read as ended
  *  once the `sleep` has taken over (`KEPT_EXITED`). */
 export function paneCommand(argv: string[]): string {

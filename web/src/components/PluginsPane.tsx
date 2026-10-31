@@ -31,7 +31,7 @@ import { api } from "../lib/api.ts";
 import { fmtAgo } from "../lib/format.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import type { Catalogue, DeviceScope, InstallSource, PublicPlugin } from "../../../shared/types.ts";
-import { Button, EDGE, INPUT, INPUT_STYLE, LINE, RefreshButton } from "./workspace/Chrome.tsx";
+import { Badge, Button, EDGE, INPUT, INPUT_STYLE, LINE, RefreshButton } from "./workspace/Chrome.tsx";
 
 /** The one-line "From …" a reviewer reads — a local path plainly, a git
  *  source with its ref if one was pinned, a market install naming the list
@@ -638,11 +638,5 @@ function StatePill({ enabled, running, reconsent, needsReview, pid }: { enabled:
 }
 
 function DrawChip({ tint, label }: { tint: string; label: string }) {
-  return (
-    <span className="chip text-[10px]" style={{
-      color: `color-mix(in srgb, ${tint} 75%, var(--text))`,
-      background: `color-mix(in srgb, ${tint} 10%, transparent)`,
-      borderColor: `color-mix(in srgb, ${tint} 35%, transparent)`,
-    }}>{label}</span>
-  );
+  return <Badge tint={`color-mix(in srgb, ${tint} 75%, var(--text))`} fill={tint} outlined>{label}</Badge>;
 }

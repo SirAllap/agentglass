@@ -44,7 +44,7 @@ describe("Send to terminal", () => {
 
   it("the review button names the engine a click starts", async () => {
     const pr = await read("web/src/components/PrPanel.tsx");
-    expect(pr).toContain("Review with {agentName(engines)}");
+    expect(pr).toContain("Review this pull request with ${agentName(engines)}");
   });
 
   it("the ⋯ menu offers the three entries and opens no chat", async () => {

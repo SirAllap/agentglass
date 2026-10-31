@@ -80,7 +80,7 @@ describe("the whole window, in one request", () => {
   });
 
   test("the hover reads the book before the network", () => {
-    expect(term).toContain("const booked = focusPane ? paneBook.current.get(focusPane) : undefined;");
+    expect(term).toContain("const booked = paneBook.current.get(focusPane);");
     expect(term).toContain("booked ?? await api.paneDirs(focusWin)");
   });
 

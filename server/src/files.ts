@@ -16,15 +16,15 @@
 // it before it reaches the filesystem — a listing endpoint that accepts
 // `../../../etc` is a file server for the whole machine.
 
-import { type Dirent, lstatSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { type Dirent, lstatSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { failed } from "./refused.ts";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve, relative, sep } from "node:path";
+import { basename, dirname, join, resolve, relative, sep } from "node:path";
 import { git, safeAbs } from "./git.ts";
 import { inScopeReal, realish, workspaceRoots } from "./config.ts";
 import type { Caller } from "./auth.ts";
 import { diskAllows, fdPathArgs } from "./disk.ts";
-import { makeViewTempDir } from "./viewtemp.ts";
+import { isViewTemp, makeViewTempDir } from "./viewtemp.ts";
 import { FS_BROWSE_ENABLED } from "./fsbrowse.ts";
 
 export interface FileEntry {
@@ -578,6 +578,15 @@ export interface FileText {
   error?: string;
 }
 
+function viewTempCopy(relIn: unknown): { root: string; abs: string; rel: string } | null {
+  if (typeof relIn !== "string" || !relIn.startsWith("/") || relIn.includes("\0")) return null;
+  const abs = resolve(relIn);
+  try {
+    if (!isViewTemp(abs) || !isViewTemp(realpathSync(abs))) return null;
+  } catch { return null; }
+  return { root: dirname(abs), abs, rel: basename(abs) };
+}
+
 /**
  * A file's text, for something that renders rather than edits.
  *
@@ -591,7 +600,17 @@ export interface FileText {
  * replacement characters and no explanation.
  */
 export function fileText(rootIn: unknown, relIn: unknown, refIn?: unknown): FileText {
-  const at = inside(rootIn, relIn);
+  /*
+   * A pull request's copy, which this server wrote under the system temp
+   * directory. It is not inside any checkout, and for a repository that is only
+   * on GitHub (`gh:owner/name`) there is no checkout to be inside of: the root
+   * is not a directory, so `inside` answered "no directory given" for a file
+   * that was sitting right there. Admitted by where it lives, the same test the
+   * terminal applies, and only after its real path is there too, so a link
+   * planted in that directory cannot lead out of it.
+   */
+  const temp = viewTempCopy(relIn);
+  const at = temp ?? inside(rootIn, relIn);
   if ("error" in at) return { ok: false, rel: "", text: "", bytes: 0, error: at.error };
 
   /*
@@ -602,7 +621,7 @@ export function fileText(rootIn: unknown, relIn: unknown, refIn?: unknown): File
    * all for one that only exists upstream. That is the worst kind of wrong
    * answer: it looks like it worked.
    */
-  if (refIn !== undefined && refIn !== null && refIn !== "") {
+  if (!temp && refIn !== undefined && refIn !== null && refIn !== "") {
     const ref = resolveRef(at.root, refIn);
     if (!ref) return { ok: false, rel: at.rel, text: "", bytes: 0, error: `No such branch or ref here: ${String(refIn)}` };
     const r = git(at.root, ["show", `${ref}:${at.rel}`]);
