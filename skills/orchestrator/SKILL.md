@@ -1,6 +1,6 @@
 ---
 name: orchestrator
-description: Use when somebody asks for an orchestrator, a lead agent, a coordinator, or somebody to "keep an eye on" the agents working on a project — and when asking about who is minding a project, who is blocked, or what the orchestrator last said. Puts a seat in a project's chair inside agentglass (with its own rules, queue, memory and view) instead of a loose tmux session nobody else can see.
+description: Use when somebody asks for an orchestrator, a lead agent, an orchestrator, or somebody to "keep an eye on" the agents working on a project — and when asking about who is minding a project, who is blocked, or what the orchestrator last said. Puts a seat in a project's chair inside agentglass (with its own rules, queue, memory and view) instead of a loose tmux session nobody else can see.
 ---
 
 # The orchestrator's seat
@@ -49,9 +49,18 @@ field drawn for it with the last hour of every agent, and being woken when
 that field changes instead of keeping a clock of its own. Its rules files are
 seeded if missing so there is something to edit; they are not imposed on it.
 
+The answer carries a `token`: the seat's own credential, the same kind a
+seat the app starts gets in its environment. Put `AGENTGLASS_TOKEN=<token>` in
+front of the calls that must be recognised as the chair's, such as a plan's
+Go in Autopilot (each shell call starts clean, so an `export` does not
+last). It is in memory, bound to this project, and revoked when the claim is
+released.
+
 Standing down an adopted seat releases the claim. It does not kill the
 session — that would be throwing away somebody's day because a button said
 "stand down".
+
+M or L work (a feature, several files, a design, security, data) goes through the `flight-plan` skill before any worker is opened; S goes straight to one.
 
 ## What it may do
 

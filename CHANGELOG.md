@@ -4,6 +4,11 @@ Every release, read end to end. The record of record is the
 [releases page](https://github.com/SirAllap/agentglass/releases) — each tag
 carries its own notes, the desktop installers and the phone's `.apk`.
 
+## Unreleased
+
+- **Automatic cleanup shows itself.** While a merged PR is being cleaned a small chip in the window bar reads "Cleaning 3 of 10" (+ the PRs waiting), with a thin progress line; it is gone when idle and opens the Agents view. The Automatic option in Settings now says what it does: background, one PR at a time, resumes after a restart, what it removes and what it leaves alone.
+- **The Files view is gone; the Finder replaces it.** `agentglass-ui open files` now says so and points at the Finder, a notification about a file opens the Finder on it, and a saved rail order that still names Files is ignored. Git status marks in the tree and editing inside the app are not carried over: the Finder sends a file to nvim on the bench.
+
 ## Released
 
 - **v0.27.0** — **One Agents screen, one rule list per project, and no more chat view.**

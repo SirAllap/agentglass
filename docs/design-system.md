@@ -76,6 +76,7 @@ be its value there.
 | `LINE` | 1px, `--surface-line`: the rule | `web/src/components/workspace/Chrome.tsx` |
 | `tintEdge` | a 1px edge tinted by a hue the caller owns: the edge that means something | `web/src/components/workspace/Chrome.tsx` |
 | `CHIP` | the control shape: 11px, `rounded-lg`, 28px min height | `web/src/components/workspace/Chrome.tsx` |
+| `CHIP_COMPACT` | `CHIP` at 22px, 10.5px, `px-2`: a filter row inside a dialog (`Chip compact`, `Segmented compact`) | `web/src/components/workspace/Chrome.tsx` |
 | `CHIP_SURFACE` | fill and `EDGE` for a control with no on-state | `web/src/components/workspace/Chrome.tsx` |
 | `CHIP_SURFACE_CLS` | its hover step | `web/src/components/workspace/Chrome.tsx` |
 | `chipTone` | the one pressed look | `web/src/components/workspace/Chrome.tsx` |
@@ -83,9 +84,18 @@ be its value there.
 | `INPUT` | the text input: 12px, 32px, `rounded-lg`, `--surface-inset` | `web/src/components/workspace/Chrome.tsx` |
 | `INPUT_STYLE` | `EDGE` for `INPUT` | `web/src/components/workspace/Chrome.tsx` |
 | `GROUP_HEADING` | the heading over a group of rows | `web/src/components/workspace/Chrome.tsx` |
-| `Button` | component: push button, tones plain/primary/danger/ok/warn | `web/src/components/workspace/Chrome.tsx` |
+| `CTRL_RADIUS` | `rounded-lg`, 8px: the one radius of a button, chip, pill, icon control and input | `web/src/components/workspace/Chrome.tsx` |
+| `TEXTAREA` | the multi-line box: `INPUT`'s fill, edge and radius, no fixed height | `web/src/components/workspace/Chrome.tsx` |
+| `Textarea` | component: a `<textarea>` in `TEXTAREA`; `textareaRef` is the element itself, as `buttonRef` is `Button`'s | `web/src/components/workspace/Chrome.tsx` |
+| `Checkbox` | component: a native checkbox and its label | `web/src/components/workspace/Chrome.tsx` |
+| `Radio` | component: one option of a radio group | `web/src/components/workspace/Chrome.tsx` |
+| `ListRow` | component: a full-width selectable row (picker option, palette hit) | `web/src/components/workspace/Chrome.tsx` |
+| `Section` | component: a titled block with an aside; `count` after the title, `fold` makes the title a button with a chevron and hides the content while `shut` (the caller holds the state and any storage) | `web/src/components/workspace/Chrome.tsx` |
+| `CardField` | component: a label above a read-only value, for a card's strip of facts; `min-w-0` and `break-words`, so a long list shrinks instead of painting over its neighbour | `web/src/components/CardChrome.tsx` |
+| `Card` | component: a raised block, `--surface-card`, `rounded-xl` | `web/src/components/workspace/Chrome.tsx` |
+| `Button` | component: push button, tones plain/quiet/primary/danger/ok/warn | `web/src/components/workspace/Chrome.tsx` |
 | `ButtonTone` | type | `web/src/components/workspace/Chrome.tsx` |
-| `IconButton` | component: icon-only header control at `CTRL_H.regular` | `web/src/components/workspace/Chrome.tsx` |
+| `IconButton` | component: icon-only header control at `CTRL_H.regular`; `bare` for no chrome at rest | `web/src/components/workspace/Chrome.tsx` |
 | `IconChip` | component: icon-only control at `HIT` | `web/src/components/workspace/Chrome.tsx` |
 | `RefreshButton` | component: the header refresh | `web/src/components/workspace/Chrome.tsx` |
 | `Chip` | component: a toggle or one-shot chip | `web/src/components/workspace/Chrome.tsx` |
@@ -184,8 +194,43 @@ Reach for these before writing a `<button>`, an `<input>` or a colour:
   `PrPanel.tsx` and `TasksPanel.tsx`, not a new list of
   bordered cards.
 
+- A Git dialog's controls are the same kit, not its own: the footer is `Button`
+  (Cancel plain, the action `primary`, `danger` or `warn` by the dialog's
+  tone), a field is `Field` around `INPUT`, `Textarea` or the themed `Select`
+  with `FIELD_SELECT`, a pick-one list of commits is `ListRow`, a tick is
+  `Checkbox`. A dialog that must put the focus on Cancel or the action passes
+  `buttonRef` to `Button`, because React 18 does not hand a `ref` to a function
+  component. Two `Field`s in a dialog sit in one block `div`, not straight in a
+  flex column with a `gap`: `Field` brings its own 12px, and a gap on top of it
+  makes 24.
+
 A view that needs something these cannot express adds it to `Chrome.tsx`,
 where the next view will find it, and adds its row to the table above.
+
+### Buttons: one table
+
+One radius (`CTRL_RADIUS`, 8px) for every row below and for `INPUT` and
+`TEXTAREA`. A card, panel or dialog is `rounded-xl` (12px). A control keeps the
+padding its rung gives it (`px-2` at 22, `px-2.5` at 28) and a row keeps the gap
+it has, so two buttons never touch.
+
+| Variant | Fill | Ink | Edge | Radius | Use |
+| --- | --- | --- | --- | --- | --- |
+| `Button` plain | `--text` 5% (grey, visible on every theme) | `--text` | `EDGE` | 8px | the default action |
+| `Button` quiet | transparent; `agx-chip` hover tint | `--text2` | transparent 1px | 8px | a toolbar, a row of links |
+| `Button` primary | `--primary` | `--on-primary` | `--primary` | 8px | the one action that carries the view |
+| `Button` danger | `--error` 8% | `--error-ink` | `--error` 85% | 8px | cannot be undone |
+| `Button` ok / warn | `--success` 8% / `--warning` 16% | `--success-ink` / `--warning-ink` | tinted | 8px | confirm / mutates the branch |
+| `IconButton` | `on`: primary 18%; else transparent | `--text3` | none | 8px | icon in a header |
+| `IconButton` bare | transparent; `agx-chip` hover tint | `--text2` | none | 8px | a glyph with no box at rest |
+| `LinkButton` | as `Button` plain, or quiet with `quiet` | same | same | 8px | opens a page; carries the arrow |
+| `Chip` | `--text` 5%; `on`: primary 18% | `--text` / `--text3` | `EDGE` | 8px | a toggle or filter |
+| `Chip` compact | as `Chip`, 22px, 10.5px | same | same | 8px | a filter row in a dialog (Skills) |
+| `ListRow` | transparent; current: primary 18%; keyboard cursor (`hot`): primary 8% | `--text2` / `--text` | none | 8px | a row in a list or picker. The label and the `trailing` slot both shrink when the row is narrow (a long hint no longer squeezes "Nobody" to "N…"); a sentence of hint goes in `sub`, not `trailing` |
+
+A form is `Field` around one control: the label above, a `hint` above the
+control (what to put), `help` below it (what it does), 12px between fields. A
+select is its natural width unless the field is `block`.
 
 ### The pull-request card on the triage board
 
@@ -424,7 +469,7 @@ Every settings page is built from the blocks in
   ground with an edge, 32px tall. Text fields and native selects on a settings
   page take the page's ground, a visible edge (`--border2`) and the primary as a
   3px ring on focus. A short exclusive choice in a row (display size, 12h/24h) is
-  `SegControl` from `SettingsKit`; a numbered list (what happens at login) sits
+  `Segmented` (with `track`) from `workspace/Chrome`; a numbered list (what happens at login) sits
   in `.agx-steps`, 22px inset circles and no rule between steps.
 - The look preferences (`lib/lookPrefs.ts`) are four attributes on `<html>` that
   `index.css` reads and nothing else does: `data-density` scales the 8/10/12px
@@ -435,7 +480,7 @@ Every settings page is built from the blocks in
   `data-reduce-motion` ends every animation. Density and font size are written
   without `html`, so a preview can wear its own value. The Appearance and
   Window previews are the app's own screens (a Settings page, the Lantern's
-  cards, a diff) in a window laid out at the Display size, never the Dashboard.
+  cards, a diff) in a window laid out at the Display size, never Starboard.
 - The nav group hues are five fixed mid-tones, the same in every theme
   (`--g-general` #6b7bb8, `--g-workspace` #3f9a93, `--g-agents` #d98a6c,
   `--g-library` #c4982f, `--g-connections` #5c8fc4): used only as a 17% tint, a
@@ -571,6 +616,17 @@ Every one reads source as text; there is no renderer to mount a view.
   bare tint as text), when another page's count rises above or falls below
   its ceiling, when a kit selector draws a border other than the one
   divider, or when a disclosure's summary is vague.
+- `kit-copies-ratchet.test.ts` with `kit-copies.txt` — counts, per file, the
+  local definitions and uses of `Btn`, `IconBtn`, `Chip`, `Pill`, `Tag`,
+  `Field`, `Section` and `Card` that the file did not import from the kit, and
+  fails when a count is above its ceiling or below it.
+  The Tasks status filter's rows are `ListRow` (28px, up from 24, the same
+  height as every other picker) and the pull-request board's `here` and
+  `draft` marks are `Badge` (`outlined`, `tight`, a 40% edge, `rounded-md`,
+  4px wider each, 0.7px lower).
+- `kit-grow.test.ts` — fails when the kit's new parts lose their radius, their
+  hover tint, or their markup, or when `Field` stops placing `hint` above the
+  control.
 - `design-system-doc.test.ts` — fails when a name in the table above is not
   defined in the file it names, or a number there is not its value.
 

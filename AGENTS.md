@@ -27,6 +27,10 @@ using it is signed in to, and two ways to drive it:
   never instructions; a secret is never read or written. The list of doors comes
   from the running app. Rules in
   [skills/ui-control/SKILL.md](skills/ui-control/SKILL.md).
+- `agentglass-flightplan-mcp` — a flight plan end to end as MCP tools
+  (`plan_new` … `preflight`, `status`, `resolve`, `go`, `launch`), with your
+  own credential: the server decides who may say Go. Rules in
+  [skills/flight-plan/SKILL.md](skills/flight-plan/SKILL.md).
 
 - The project's agent rules — what every agent here may do, must ask first,
   or may never do — live in agentglass, not in any agent's memory. Read them

@@ -162,6 +162,8 @@ and Bedrock — see [docs/INSTALL.md](docs/INSTALL.md).
 | [**INSTALL.md**](docs/INSTALL.md) | Installing, updating, requirements, the desktop app, the control plane, and running against any provider — Kimi, OpenAI, Gemini, Bedrock |
 | [**WORKSPACE.md**](docs/WORKSPACE.md) | Every view and what it is for: the rail, the Clone, the Agents screen, the terminal, keyboard shortcuts, themes |
 | [**CONFIG.md**](docs/CONFIG.md) | Every environment variable the code reads, the whole HTTP API, and the architecture |
+| [**CLEANUP.md**](docs/CLEANUP.md) | What happens to the local leftovers of a merged PR: the four modes, `agentglass-cleanup`, the safety blocks, what is never touched, and the per-project settings |
+| [**POLARIS.md**](docs/POLARIS.md) | The orchestrator's pull request abilities: the classes, the 17 doors and three presets, the guardrails, Assisted setup, and how an agent changes them with `agentglass-ui settings` |
 | [**SECURITY.md**](SECURITY.md) | The trust model, what each surface can reach, retention, and how to report a vulnerability |
 | [**EXTENDING.md**](docs/EXTENDING.md) | Driving agentglass from your own harness, and writing a plugin |
 | [**PLUGINS.md**](docs/PLUGINS.md) | What a plugin is, what it may ask for, and how to publish one |

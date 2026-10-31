@@ -272,10 +272,10 @@ curl -sS http://localhost:4000/control \
 
 | `cmd` | Fields | Effect |
 | --- | --- | --- |
-| `view` | `to`: `dash`\|`git`\|`diff`\|`pr`\|`tasks`\|`docker`\|`term`\|`browser`\|`files`\|`seat`\|`lantern`\|`plugins` | switch the window to that view |
+| `view` | `to`: `dash`\|`git`\|`diff`\|`pr`\|`tasks`\|`docker`\|`term`\|`browser`\|`seat`\|`lantern`\|`plugins` | switch the window to that view |
 | `workspace` | `open?`: boolean | toggle (absent) or set — swaps between the dashboard and the last view, the way `Ctrl+\` does |
 | `esc` | — | close panels / workspace, as Escape does |
-| `open` | `what`: `stats`\|`skills`\|`search`\|`help`\|`palette` | open that panel |
+| `open` | `what`: `skills`\|`help`\|`palette` | open that panel |
 | `open` | `what`: `finder`, `path`: absolute | open the file finder (`Ctrl+Shift+P`) on that path, the way a click on it in a terminal does: a file shows in the reader, a path ending in `/` lists the folder |
 | `theme` | `name?`: id, or `dir?`: `1`\|`-1` | pin a palette, or step the list |
 | `zoom` | `dir`: `1`\|`-1`\|`0` | zoom in / out / reset — **desktop app only**; in a browser tab it is accepted and does nothing, because the browser's own zoom already covers it |
@@ -290,25 +290,27 @@ curl -sS http://localhost:4000/control \
 | `do` | `args` | Opens |
 | --- | --- | --- |
 | `view.open` | `to` | a view (old: `view`) |
-| `panel.open` | `what` | stats, skills, search, help, palette (old: `open`) |
+| `panel.open` | `what` | skills, help, palette (old: `open`) |
 | `finder.open` | `path` | the file finder (old: `open finder`) |
 | `settings.open` | `page`, `row?` | Settings on a page, scrolled to a row. The plugin market is inside `page: "plugins"` |
 | `machine.open` | `tab`: `ports`\|`resources`\|`locks` | the machine panel |
 | `project.picker`, `windows.switcher`, `bench.toggle` | — | the project picker, the window switcher, the bench |
 | `bench.file`, `peek.file` | `root`: absolute, `path`: under it | a file on the bench / in the viewer (reading) |
-| `bench.board` | `root`, `kind`: `pr`\|`tasks`\|`files` | a board as a bench tab |
+| `bench.board` | `root`, `kind`: `pr`\|`tasks` | a board as a bench tab |
 | `git.modal` | `which`: `insights`\|`bisect`\|`palette` | that modal, over the current view (the view does not change) |
 | `git.compare`, `git.blame`, `git.rebase` | `base` (a ref), `path` (under the checkout), `base` | those modals. The rebase editor only draws the plan: nothing moves until the person presses Start |
 | `event.open` | `id`: a whole number | the event modal, for an event in the window's feed or the server's recent list (otherwise `ok:false`, "no recent event has that id") |
 | `session.open` | `id`, `app?` | the session modal |
 | `whatsnew.open` | — | the release notes of the running version; never marks them seen |
-| `lantern.schedule`, `terminal.resume`, `agents.change` | — | the Agents screen's schedule dialog (a schedule exists only when the person submits it) and the Terminal's Resume sessions list |
+| `lantern.schedule`, `terminal.resume`, `terminal.sessions`, `agents.change` | — | the Agents screen's schedule dialog (a schedule exists only when the person submits it), the Terminal's Resume sessions list and its Manage sessions dialog (ending or locking a session is the person's click) |
 | `pr.unstick` (level 3, a `stage`) | `root`, `number` | the Unstick dialog on one pull request: close, reopen and sync one GitHub has lost track of. Opening runs nothing; the dialog says in words whether the pull request qualifies and only the person's confirm click closes it. Offered only when the owner allows level 3 |
 | `settings.plugin` | `name` | Settings on one plugin's page |
 | `pane.open` | `which`: `git`\|`diff`\|`pr`\|`card` | what the pane chords open for the focused terminal pane (`ok:false` when no pane has one) |
 | `workspace.toggle`, `esc.peel` | as the old `workspace`/`esc` | |
 | `theme.set`, `zoom.step` (level 2) | as the old `theme`/`zoom`; they persist, so they are writes: refused at level 1, limited like `settings.set`; `theme.set` goes through `appearance.theme` and leaves the undo chip | |
 | `ui.state`, `ui.read` | — / `panel` | *reads, not opens:* see below |
+| `pr.filter.get`, `pr.views.list` | `repo` (`owner/name`) | *reads:* the pull request board's live filter as one line of text, and its saved views (name and text) |
+| `pr.filter.set`, `pr.views.save`, `pr.views.delete` (level 2) | `repo` + `text` or `clear` / `name`, `filter?` / `name` | replace the live filter, save or replace a view, delete a view; they persist, so they are writes like `theme.set`. A line that does not parse is answered with why and changes nothing. Syntax: `skills/ui-control/SKILL.md` |
 
 | `settings.set` (level 2) | `id`, `value`: a string, number or boolean | changes one exposed setting (below) |
 | `settings.get`, `settings.list` | `id` / — | read one exposed setting / list what is exposed |
