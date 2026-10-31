@@ -25,7 +25,12 @@ import {
   writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, agentsChangeWithoutAsking, writeAgentsChangeWithoutAsking, phoneAlerts, writePhoneAlerts,
 } from "./config.ts";
 import { readPolicy, writePolicy } from "./orchestration.ts";
+import { readPolaris, readStoredPolaris, writePolaris } from "./config.ts";
+import { DOOR_IDS, checkDoor, withDoor, withEnabled, type DoorValue } from "../../shared/polaris.ts";
+import { CLEANUP_MODES, EMPTY_CLEANUP_CONFIG, parseCleanupConfig, parseCleanupEvidenceRoots, parseCleanupInclude, parseCleanupOtherFolders, type CleanupConfig } from "./cleanup.ts";
 import * as Seat from "./seat.ts";
+import { ruleRoot } from "./agentRulesStore.ts";
+import { APP, REVIEWS, getSetting, hasSetting, markHeld, putSetting, type SettingKey } from "./preflightStore.ts";
 import { hookStatus, applyGate } from "./hooksetup.ts";
 import { masterEnabled, setMaster, listPlugins, enablePlugin, disablePlugin, setPluginUnboxedConsent } from "./plugins.ts";
 import { jiraWriteEnabled, jiraWriteKinds, setJiraWrites, setJiraWriteKind, type JiraWriteKind } from "./jira.ts";
@@ -38,6 +43,20 @@ import { clickupPrefs, setClickupPrefs } from "./clickupPrefs.ts";
 import type { Applied, ServerSettingDef } from "./settingsDoor.ts";
 
 type Check = { value: unknown } | { error: string };
+
+const put = (root: string | undefined, key: SettingKey, v: unknown): Applied => { putSetting(root!, key, v as string | number | boolean | string[]); return { ok: true }; };
+/** A project's cleanup settings; nothing stored (or something unreadable) is the empty config, which skips every repo-specific step. */
+export function cleanupConfigOf(root: string): CleanupConfig {
+  try {
+    const raw = String(getSetting(root, "cleanup.config"));
+    const c = raw ? parseCleanupConfig(JSON.parse(raw)) : null;
+    const inc = parseCleanupInclude(getSetting(root, "cleanup.include"));
+    const roots = parseCleanupEvidenceRoots(getSetting(root, "cleanup.evidenceRoots"));
+    const other = parseCleanupOtherFolders(getSetting(root, "cleanup.otherFolders"));
+    return { ...EMPTY_CLEANUP_CONFIG, ...(c && "value" in c ? c.value : {}), ...("value" in inc ? { include: inc.value } : {}), ...("value" in roots ? { evidenceRoots: roots.value } : {}), ...("value" in other ? { otherFolders: other.value } : {}) };
+  } catch { return EMPTY_CLEANUP_CONFIG; }
+}
+const capUsd = (raw: unknown): Check => (typeof raw === "number" && raw > 0 && raw <= 1000 ? { value: raw } : { error: "a number above 0 and up to 1000" });
 const bool = (raw: unknown): Check => (typeof raw === "boolean" ? { value: raw } : { error: "true or false" });
 const minutes = (lo: number, hi: number) => (raw: unknown): Check => {
   const n = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() ? Number(raw) : NaN;
@@ -157,6 +176,168 @@ export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
         return p.bad.length ? { error: `not a rule: ${p.bad[0]}` } : { value: p.rules };
       },
       apply: (v) => saved(writeLaunchBase({ deny: v })),
+    },
+    {
+      id: "flightPlan.enabled", page: "orchestration", label: "Flight plan (the view where a plan is written, reviewed and launched)", type: "boolean",
+      read: () => getSetting(APP, "flightPlan.enabled"), validate: bool, apply: (v) => put(APP, "flightPlan.enabled", v),
+    },
+    {
+      id: "flightPlan.mockupGuide", page: "orchestration", label: "The mockup style guide a flight plan's author reads (a file path, or empty)", type: "string",
+      read: () => getSetting(APP, "flightPlan.mockupGuide"),
+      validate: (raw) => (raw === "" || (typeof raw === "string" && raw.length <= 500 && raw.startsWith("/") && !raw.includes("\0")) ? { value: raw } : { error: "an absolute path, or empty" }),
+      apply: (v) => put(APP, "flightPlan.mockupGuide", v),
+    },
+    {
+      id: "flightPlan.builder.permissions", page: "orchestration", label: "The permission mode a launched builder starts in (default, auto or bypassPermissions)", type: "string",
+      read: () => getSetting(APP, "flightPlan.builder.permissions"),
+      validate: (raw) => (raw === "default" || raw === "auto" || raw === "bypassPermissions" ? { value: raw } : { error: "default (ask), auto or bypassPermissions" }),
+      apply: (v) => put(APP, "flightPlan.builder.permissions", v),
+    },
+    {
+      id: "flightPlan.builderBase", page: "orchestration", label: "Where a launched builder's worktree is cut from (local trunk or origin)", type: "string",
+      read: () => getSetting(APP, "flightPlan.builderBase"),
+      validate: (raw) => (raw === "local" || raw === "remote" ? { value: raw } : { error: "local or remote" }),
+      apply: (v) => put(APP, "flightPlan.builderBase", v),
+    },
+    {
+      id: "flightPlan.pilot", page: "orchestration", label: "Who flies a project's plans (manual, copilot or autopilot)", scoped: true, type: "string",
+      read: (root) => getSetting(root ?? APP, "flightPlan.pilot"),
+      validate: (raw) => (raw === "manual" || raw === "copilot" || raw === "autopilot" ? { value: raw } : { error: "manual, copilot or autopilot" }),
+      apply: (v, root) => put(root ?? APP, "flightPlan.pilot", v),
+      isSet: (root) => hasSetting(root ?? APP, "flightPlan.pilot"),
+    },
+    {
+      id: "flightPlan.project.enabled", page: "orchestration", label: "Use Flight plan in a project (off: no plan is written, no Preflight runs, nothing waits)", scoped: true, type: "boolean",
+      read: (root) => getSetting(root ?? APP, "flightPlan.project.enabled"),
+      validate: bool, apply: (v, root) => put(root ?? APP, "flightPlan.project.enabled", v),
+      isSet: (root) => hasSetting(root ?? APP, "flightPlan.project.enabled"),
+    },
+    {
+      id: "flightPlan.preflight.reviews", page: "orchestration", label: "What a Preflight reviews: any of plan, taskDone, pr", scoped: true, type: "json",
+      read: (root) => getSetting(root ?? APP, "flightPlan.preflight.reviews"),
+      validate: (raw) => {
+        const list = Array.isArray(raw) ? raw : typeof raw === "string" ? raw.split(/[\s,]+/).filter(Boolean) : null;
+        return list && list.every((x) => (REVIEWS as readonly unknown[]).includes(x)) ? { value: [...new Set(list)] } : { error: "a list of plan, taskDone, pr" };
+      },
+      apply: (v, root) => put(root ?? APP, "flightPlan.preflight.reviews", v),
+      isSet: (root) => hasSetting(root ?? APP, "flightPlan.preflight.reviews"),
+    },
+    {
+      id: "flightPlan.preflight.sizes", page: "orchestration", label: "Which plan sizes get a Preflight (L, or ML for M and L)", type: "string",
+      read: () => getSetting(APP, "flightPlan.preflight.sizes"),
+      validate: (raw) => (raw === "L" || raw === "ML" ? { value: raw } : { error: "L or ML" }),
+      apply: (v) => put(APP, "flightPlan.preflight.sizes", v),
+    },
+    {
+      id: "flightPlan.preflight.secondLooks", page: "orchestration", label: "Reviews after a fix, per plan (0 to 2)", type: "number",
+      read: () => getSetting(APP, "flightPlan.preflight.secondLooks"),
+      validate: (raw) => (typeof raw === "number" && Number.isInteger(raw) && raw >= 0 && raw <= 2 ? { value: raw } : { error: "0, 1 or 2" }),
+      apply: (v) => put(APP, "flightPlan.preflight.secondLooks", v),
+    },
+    {
+      id: "flightPlan.budget.dailyUsd", page: "orchestration", label: "The most Flight plan may spend in a day, in dollars", type: "number",
+      read: () => getSetting(APP, "flightPlan.budget.dailyUsd"),
+      validate: capUsd, apply: (v) => put(APP, "flightPlan.budget.dailyUsd", v),
+    },
+    {
+      id: "flightPlan.budget.weeklyUsd", page: "orchestration", label: "The most Flight plan may spend in a week, in dollars", type: "number",
+      read: () => getSetting(APP, "flightPlan.budget.weeklyUsd"),
+      validate: capUsd, apply: (v) => put(APP, "flightPlan.budget.weeklyUsd", v),
+    },
+    {
+      id: "flightPlan.maxFlying", page: "orchestration", label: "How many launched builders fly at once (1 to 3)", type: "number",
+      read: () => getSetting(APP, "flightPlan.maxFlying"),
+      validate: (raw) => (typeof raw === "number" && Number.isInteger(raw) && raw >= 1 && raw <= 3 ? { value: raw } : { error: "1, 2 or 3" }),
+      apply: (v) => put(APP, "flightPlan.maxFlying", v),
+    },
+    {
+      id: "flightPlan.autopilot.askOnLarge", page: "orchestration", label: "Autopilot asks the person before Go on a large plan", scoped: true, type: "boolean",
+      read: (root) => getSetting(root ?? APP, "flightPlan.autopilot.askOnLarge"),
+      validate: bool, apply: (v, root) => put(root ?? APP, "flightPlan.autopilot.askOnLarge", v),
+      isSet: (root) => hasSetting(root ?? APP, "flightPlan.autopilot.askOnLarge"),
+    },
+    {
+      id: "flightPlan.autopilot.askOnSensitive", page: "orchestration", label: "Autopilot asks the person before Go on a sensitive plan", scoped: true, type: "boolean",
+      read: (root) => getSetting(root ?? APP, "flightPlan.autopilot.askOnSensitive"),
+      validate: bool, apply: (v, root) => put(root ?? APP, "flightPlan.autopilot.askOnSensitive", v),
+      isSet: (root) => hasSetting(root ?? APP, "flightPlan.autopilot.askOnSensitive"),
+    },
+    {
+      id: "flightPlan.held", page: "orchestration", label: "Hold a project's flight plans: no new Go, launches frozen", scoped: true, type: "boolean",
+      read: (root) => (root ? getSetting(ruleRoot(root), "flightPlan.held") : false),
+      validate: bool, apply: (v, root) => { markHeld(ruleRoot(root!), v as boolean, null); return put(ruleRoot(root!), "flightPlan.held", v); },
+      isSet: (root) => hasSetting(ruleRoot(root), "flightPlan.held"),
+    },
+    {
+      id: "flightPlan.preflight.model", page: "orchestration", label: "The model a Preflight reviews with", scoped: true, type: "string",
+      read: (root) => (root ? getSetting(root, "flightPlan.preflight.model") : "sonnet"),
+      validate: (raw) => (typeof raw === "string" && raw.length <= 120 && /^[A-Za-z0-9][\w.\[\]-]*$/.test(raw) ? { value: raw } : { error: "a model name, one word" }),
+      apply: (v, root) => put(root, "flightPlan.preflight.model", v),
+    },
+    {
+      id: "flightPlan.preflight.costCapUsd", page: "orchestration", label: "The most one Preflight may spend, in dollars (above 0, up to 5)", scoped: true, type: "number",
+      read: (root) => (root ? getSetting(root, "flightPlan.preflight.costCapUsd") : 0.5),
+      validate: (raw) => (typeof raw === "number" && raw > 0 && raw <= 5 ? { value: raw } : { error: "a number above 0 and up to 5" }),
+      apply: (v, root) => put(root, "flightPlan.preflight.costCapUsd", v),
+    },
+    {
+      id: "cleanup.config", page: "orchestration", label: "What cleaning up after a merged pull request may remove", scoped: true, type: "json",
+      read: (root) => { const { include: _kinds, evidenceRoots: _roots, otherFolders: _other, ...body } = root ? cleanupConfigOf(root) : EMPTY_CLEANUP_CONFIG; return body; },
+      validate: (raw) => parseCleanupConfig(raw),
+      apply: (v, root) => put(root, "cleanup.config", JSON.stringify(v)),
+      isSet: (root) => hasSetting(root, "cleanup.config"),
+    },
+    {
+      id: "polaris.enabled", page: "orchestration", label: "Polaris: pull request abilities of the orchestrator", scoped: true, type: "boolean",
+      read: (root) => readPolaris(root).settings.enabled,
+      validate: bool,
+      apply: (v, root) => saved(writePolaris(root, withEnabled(readStoredPolaris(root), v === true))),
+      isSet: (root) => typeof readStoredPolaris(root)?.enabled === "boolean",
+      layer: (root) => readPolaris(root).enabledLayer,
+    },
+    ...DOOR_IDS.map((d): ServerSettingDef => ({
+      id: `polaris.door.${d}`, page: "orchestration", label: `Polaris door ${d}: its mode and settings`, scoped: true, type: "json",
+      read: (root) => readPolaris(root).settings.doors[d],
+      // A mode alone keeps the settings the door already has.
+      validate: (raw, root) => checkDoor(d, raw, readPolaris(root).settings.doors[d]),
+      apply: (v, root) => saved(writePolaris(root, withDoor(readStoredPolaris(root), d, v as DoorValue))),
+      isSet: (root) => !!readStoredPolaris(root)?.doors && d in readStoredPolaris(root)!.doors!,
+      layer: (root) => readPolaris(root).layers[d],
+    })),
+    {
+      id: "cleanup.mode", page: "orchestration", label: "After a pull request ends: off, ask, at merge or automatic cleanup of its local leftovers", scoped: true, type: "string",
+      read: (root) => (root ? getSetting(root, "cleanup.mode") : "ask"),
+      validate: (raw) => ((CLEANUP_MODES as readonly unknown[]).includes(raw) ? { value: raw } : { error: `one of ${CLEANUP_MODES.join(", ")}` }),
+      apply: (v, root) => put(root, "cleanup.mode", v),
+      isSet: (root) => hasSetting(root, "cleanup.mode"),
+    },
+    {
+      id: "cleanup.autoCleanDays", page: "orchestration", label: "Days after a merge when its leftovers are cleaned by themselves (0 = never)", scoped: true, type: "number",
+      read: (root) => (root ? getSetting(root, "cleanup.autoCleanDays") : 0),
+      validate: (raw) => (typeof raw === "number" && Number.isInteger(raw) && raw >= 0 && raw <= 365 ? { value: raw } : { error: "a whole number of days, 0 to 365 (0 = never)" }),
+      apply: (v, root) => put(root, "cleanup.autoCleanDays", v),
+      isSet: (root) => hasSetting(root, "cleanup.autoCleanDays"),
+    },
+    {
+      id: "cleanup.include", page: "orchestration", label: "Which leftovers a cleanup plan holds", scoped: true, type: "json",
+      read: (root) => (root ? getSetting(root, "cleanup.include") : EMPTY_CLEANUP_CONFIG.include),
+      validate: (raw) => parseCleanupInclude(raw),
+      apply: (v, root) => put(root, "cleanup.include", v as string[]),
+      isSet: (root) => hasSetting(root, "cleanup.include"),
+    },
+    {
+      id: "cleanup.evidenceRoots", page: "orchestration", label: "Folders that hold a pull request's evidence (a folder whose name starts with the card id or the branch)", scoped: true, type: "json",
+      read: (root) => (root ? getSetting(root, "cleanup.evidenceRoots") : EMPTY_CLEANUP_CONFIG.evidenceRoots),
+      validate: (raw) => parseCleanupEvidenceRoots(raw),
+      apply: (v, root) => put(root, "cleanup.evidenceRoots", v as string[]),
+      isSet: (root) => hasSetting(root, "cleanup.evidenceRoots"),
+    },
+    {
+      id: "cleanup.otherFolders", page: "orchestration", label: "Other folders that belong to a pull request's card without starting with its id (patterns with {card} and {number})", scoped: true, type: "json",
+      read: (root) => (root ? getSetting(root, "cleanup.otherFolders") : EMPTY_CLEANUP_CONFIG.otherFolders),
+      validate: (raw) => parseCleanupOtherFolders(raw),
+      apply: (v, root) => put(root, "cleanup.otherFolders", v as string[]),
+      isSet: (root) => hasSetting(root, "cleanup.otherFolders"),
     },
     {
       id: "seat.model", page: "orchestration", label: "The chair's model", scoped: true, type: "string",

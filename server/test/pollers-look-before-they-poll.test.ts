@@ -21,7 +21,7 @@ const machine = await web("components/MachinePanel.tsx");
 const switcher = await web("components/terminal/WindowSwitcher.tsx");
 const peek = await web("components/PeekFile.tsx");
 const stats = await web("lib/useStats.ts");
-const dash = await web("components/DashboardView.tsx");
+const dash = await web("components/StarboardView.tsx");
 const browser = await web("components/BrowserPanel.tsx");
 
 /** Source without its comment lines, so a word in prose is not a call. */
@@ -38,11 +38,10 @@ test("the reminder and session polls go through the focus gate, and the palette 
 
 test("the machine panel, the terminal's pane reads and the switcher use usePoll, not setInterval", () => {
   expect(code(machine)).not.toContain("setInterval(");
-  /* Resources and Locks keep POLL_MS; the ports list has its own, slower one. */
-  expect((code(machine).match(/usePoll\(true, load, POLL_MS\)/g) ?? []).length).toBe(2);
-  expect((code(machine).match(/usePoll\(true, load, PORTS_POLL_MS\)/g) ?? []).length).toBe(1);
+  /* The Machine dialog was rebuilt on the docker view's own data and holds no timer of its own. */
   expect(code(switcher)).not.toContain("setInterval(");
-  expect(code(switcher)).toContain("usePoll(open");
+  /* The switcher is pushed by the server's window events, not polled. */
+  expect(code(switcher)).toContain("onWindowsChanged(");
   /* One timer for both terminal reads, not two 4 s intervals. */
   expect(code(terminal)).not.toMatch(/setInterval\([^)]*4000\)/);
   expect(code(terminal)).toContain("usePoll(open, () => { wtRunRef.current?.(); fillRef.current?.(); }, 4000)");

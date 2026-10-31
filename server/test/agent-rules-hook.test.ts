@@ -32,12 +32,12 @@ const post = async (path: string, body: unknown, headers: Record<string, string>
 const rules = async () => (await (await fetch(`${base}/agent-rules?root=${encodeURIComponent(root)}`, { headers: auth })).json()) as AgentRulesView;
 
 /** The hook as Claude Code runs it: the payload on stdin, the answer on stdout. */
-async function hook(command: string): Promise<{ code: number; stdout: string; stderr: string }> {
+async function hook(command: string, permission_mode?: string): Promise<{ code: number; stdout: string; stderr: string }> {
   const port = new URL(base).port;
   const p = Bun.spawn(["python3", HOOK, "--server", base, "--event-type", "PreToolUse", "--source-app", "orbit"], {
     cwd: root,
     env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: dir, AGENTGLASS_TOKEN: TOKEN, AGENTGLASS_PORT: port },
-    stdin: new Blob([JSON.stringify({ session_id: "s-orbit-1", cwd: root, hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } })]),
+    stdin: new Blob([JSON.stringify({ session_id: "s-orbit-1", cwd: root, hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, ...(permission_mode ? { permission_mode } : {}) })]),
     stdout: "pipe", stderr: "pipe",
   });
   const [stdout, stderr, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
@@ -106,13 +106,22 @@ describe.skipIf(!have)("the hook obeys the rules", () => {
   });
 
   test("an unknown command files exactly one quiet suggestion, however often it is asked", async () => {
-    const ask = () => fetch(`${base}/agent-rules/check?root=${encodeURIComponent(root)}&tool=Bash&input=${encodeURIComponent(JSON.stringify({ command: "npm publish --tag beta" }))}`, { headers: auth }).then((x) => x.json());
+    const ask = () => fetch(`${base}/agent-rules/check?root=${encodeURIComponent(root)}&tool=Bash&mode=default&input=${encodeURIComponent(JSON.stringify({ command: "npm publish --tag beta" }))}`, { headers: auth }).then((x) => x.json());
     expect(await ask()).toMatchObject({ ok: true, decision: "unknown" });
     await ask();
     await ask();
     const sug = (await rules()).suggested.filter((s) => s.match === "Bash(npm publish:*)");
     expect(sug).toHaveLength(1);
     expect(sug[0]).toMatchObject({ source: "first-seen", pending: true });
+  });
+
+  test("the hook files a suggestion only from a session that would have stopped to ask", async () => {
+    const made = async () => (await rules()).suggested.some((s) => s.match === "Bash(make build:*)");
+    await hook("make build", "bypassPermissions");
+    await hook("make build");
+    expect(await made()).toBe(false);
+    await hook("make build", "default");
+    expect(await made()).toBe(true);
   });
 
   test("an agent loosening a never gets 202, the rule holds, and the person has a card", async () => {

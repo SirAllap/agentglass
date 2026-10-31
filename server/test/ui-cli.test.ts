@@ -182,6 +182,13 @@ describe.skipIf(!HAVE_PY)("a command, built from what the app offers", () => {
     expect(build("settings.set", { id: "diff.wrap", value: true }, 2)[1]).toBeNull();
   });
 
+  test("the board filter doors: a repo as owner/name, text on one line, a write only from level 2", () => {
+    expect(build("pr.filter.set", { repo: "acme/orbit", text: "ci:failing -BETA" }, 2)[1]).toBeNull();
+    expect(build("pr.filter.set", { repo: "orbit", text: "x" }, 2)[1]).toContain("repo must be a repository as owner/name");
+    expect(build("pr.filter.set", { repo: "acme/orbit", text: "x" }, 1)[1]).toContain("not offered");
+    expect(build("pr.filter.get", { repo: "acme/orbit" }, 1)[1]).toBeNull();
+  });
+
   test("a typed value (an MCP call) is checked by the same spec", () => {
     expect(build("settings.set", { id: "diff.wrap", value: { nested: 1 } })[1]).toContain("a string, number or true/false");
     expect(build("zoom.step", { dir: 1 })[1]).toBeNull();
@@ -197,9 +204,10 @@ describe.skipIf(!HAVE_PY)("what the server said, as one sentence", () => {
     expect(explain(503, { error: "no window" })).toMatchObject({ ok: false, error: expect.stringContaining("no window open") });
     expect(explain(504, { error: "x" })).toMatchObject({ ok: false, error: expect.stringContaining("did not answer in time") });
     expect(explain(429, {})).toMatchObject({ ok: false, error: expect.stringContaining("30 a minute") });
-    // A level refusal is the server's own sentence; a 403 without a level is still a token problem.
+    // A 403 is the server's own sentence (the token was accepted, the act refused); only one with no text is a token problem.
     expect(explain(403, { ok: false, error: "settings.set is a level 2 door; the owner decides.", level: 1 })).toEqual({ ok: false, error: "settings.set is a level 2 door; the owner decides." });
-    expect(explain(403, { error: "forbidden" })).toMatchObject({ ok: false, error: expect.stringContaining("did not accept this token") });
+    expect(explain(403, { error: "Go is the person's here" })).toEqual({ ok: false, error: "Go is the person's here" });
+    expect(explain(403, {})).toMatchObject({ ok: false, error: expect.stringContaining("did not accept this token") });
     expect(explain(401, {})).toMatchObject({ ok: false, error: expect.stringContaining("did not accept this token") });
     expect(explain(0, { error: "no agentglass at http://x (refused)" })).toEqual({ ok: false, error: "no agentglass at http://x (refused)" });
   });
@@ -210,7 +218,7 @@ describe.skipIf(!HAVE_PY)("what the server said, as one sentence", () => {
   });
 
   test("a 400 that carries the server's own sentence keeps it", () => {
-    const e = 'panel.open does not take that "what"; accepted: one of stats, skills';
+    const e = 'panel.open does not take that "what"; accepted: one of skills, help';
     expect(explain(400, { ok: false, error: e }, "panel.open")).toEqual({ ok: false, error: e });
   });
 
@@ -502,7 +510,7 @@ describe.skipIf(!HAVE_PY)("against a running app", () => {
     const listed = (await reply(2)).result.tools as { name: string }[];
     // The registry's doors, then the card verbs: those are a route's, not the registry's (see jira-door-routes.test.ts).
     // This server is at the level it starts with, so the verbs that change a Jira site are not on the list.
-    expect(listed.map((t) => t.name)).toEqual([...names2(L2), ...DOOR_VERBS.filter((v) => !isActing(v)).map((v) => `ui_jira_${v}`), "ui_rules_list", "ui_rules_suggest", "ui_rules_set"]);
+    expect(listed.map((t) => t.name)).toEqual([...names2(L2), ...DOOR_VERBS.filter((v) => !isActing(v)).map((v) => `ui_jira_${v}`), "ui_rules_list", "ui_rules_suggest", "ui_rules_set", "ui_flight_plan_list", "ui_flight_plan_show", "ui_flight_plan_run", "ui_flight_plan_go", "ui_flight_plan_no_go", "ui_flight_plan_resolve", ...["new", "list", "show", "set", "mockup", "preflight", "go", "no_go", "launch", "ask", "answer", "integrate_check", "report"].map((v) => `ui_flight_plan_plan_${v}`), "ui_flight_plan_hold", "ui_flight_plan_resume"]);
     send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "ui_settings_open", arguments: { page: "diff", row: "wrap-long-lines" } } });
     const called = await reply(3);
     expect(called.result.isError).toBeUndefined();

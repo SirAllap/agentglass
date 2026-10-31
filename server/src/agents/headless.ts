@@ -146,6 +146,8 @@ const WRAPPER = [
   'for v in $(env | sed -n "s/^\\(HERMES_[A-Za-z0-9_]*_SESSION\\)=.*/\\1/p"); do unset "$v"; done',
   'TERMINAL_CWD=$PWD; export TERMINAL_CWD',
   '{ "$@" <"$in" 2>"$err"; echo $? >"${rc%/*}/part/rc"; mv "${rc%/*}/part/rc" "$rc"; } | tee "$out"',
+  // The private OpenCode server of this turn, by the pids recorded for it and only while they are still a `serve`.
+  'for p in $AGX_SERVE_PIDS; do grep -qa serve "/proc/$p/cmdline" 2>/dev/null && kill "$p" 2>/dev/null; done',
   'cat "$err" >&2',
   'exit "$(cat "$rc" 2>/dev/null || echo 1)"',
 ].join("\n");

@@ -1731,6 +1731,7 @@ db.run(`CREATE INDEX IF NOT EXISTS seat_task_root ON seat_task (root, done_at, t
  * apart from the real thing. An ALTER rather than a column above, so a
  * database made yesterday gains it too. */
 try { db.exec("ALTER TABLE seat_task ADD COLUMN proof TEXT NOT NULL DEFAULT ''"); } catch { /* already present */ }
+try { db.exec("ALTER TABLE seat_task ADD COLUMN preflight_run TEXT"); } catch { /* already present */ }
 
 /*
  * WHAT THE SEAT SAID, kept.
@@ -2159,26 +2160,6 @@ function sessionScopeClause(scope: Scope = workspaceRoots()): { clause: string; 
   // IN clause applies unchanged, and correctly.
   return scopeClause(scope);
 }
-
-/** The searchable text blob for an event — the fleet's collective memory. */
-export function ftsText(n: {
-  source_app: string;
-  session_id: string;
-  hook_event_type: string;
-  tool_name: string | null;
-  error_text: string | null;
-  payload?: Record<string, unknown>;
-}): string {
-  const p = (n.payload ?? {}) as any;
-  const ti = (p.tool_input ?? {}) as any;
-  return [
-    n.source_app, n.session_id, n.hook_event_type, n.tool_name, n.error_text,
-    ti.command, ti.file_path || ti.path, ti.query || ti.pattern, ti.description, ti.prompt,
-    p.prompt, p.message, p.last_assistant_message,
-  ].filter((s) => typeof s === "string" && s).join(" \n ").slice(0, 8000);
-}
-
-const ftsInsert = db.query("INSERT INTO events_fts(rowid, text) VALUES ($id, $text)");
 
 const insertStmt = db.query(`
   INSERT INTO events (
@@ -3008,6 +2989,11 @@ export type EventHook = (sessionId: string, type: string, ts: number, extra?: {
 let eventHook: EventHook | null = null;
 export function setEventHook(fn: EventHook): void { eventHook = fn; }
 
+/** A finished Bash call, with its command: the one moment a `git push` is known
+ *  to have landed. A second slot because the first takes no payload. */
+let bashDoneHook: ((cwd: string, command: string) => void) | null = null;
+export function setBashDoneHook(fn: (cwd: string, command: string) => void): void { bashDoneHook = fn; }
+
 export function insertEvent(n: NormalizedEvent): InsertResult {
   const model = n.model_name;
   // Every event, before any dedup/rollup below: the derived view keeps by max
@@ -3016,6 +3002,11 @@ export function insertEvent(n: NormalizedEvent): InsertResult {
     isError: !!n.is_error, toolUseId: n.tool_use_id, toolName: n.tool_name,
     notice: n.hook_event_type === "Notification" ? notificationKind(String(n.payload?.message ?? "")) : null,
   });
+  if (bashDoneHook && n.hook_event_type === "PostToolUse" && n.tool_name === "Bash") {
+    const cmd = (n.payload as any)?.tool_input?.command ?? (n.payload as any)?.command;
+    const cwd = (n.payload as any)?.cwd ?? (n.payload as any)?.project_path;
+    if (typeof cmd === "string" && typeof cwd === "string") { try { bashDoneHook(cwd, cmd); } catch { /* telemetry must not break ingest */ } }
+  }
 
   // --- token delta computation -------------------------------------------
   let dIn = n.usage.input_tokens ?? 0;
@@ -3089,7 +3080,6 @@ export function insertEvent(n: NormalizedEvent): InsertResult {
     }
 
     const event = parseEventRow(rowToEvent.get(inserted.id));
-    try { ftsInsert.run({ $id: inserted.id, $text: ftsText({ ...n, payload: n.payload }) }); } catch { /* fts best-effort */ }
     const session = upsertSession(n, dIn, dOut, dCw, dCr, eventCost, estimatedEventCost);
     return { event, session, inserted: true };
   };
@@ -4684,88 +4674,6 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
     timeline,
     changes: changesWithFlagged(sessionId, 40),
   };
-}
-
-/** Full-text search across every event's prompts, commands, paths, messages and errors — what `ftsText` indexes, which is not tool output. */
-/**
- * Turn what somebody typed into an fts5 MATCH expression.
- *
- * The old one-liner stripped every character that was not alphanumeric or an
- * underscore, then prefix-starred what was left. That welds a term with an
- * inner separator into a single token the unicode61 tokenizer can never
- * produce, so the search returned ZERO hits for text sitting verbatim in the
- * index:
- *
- *   src/db.ts       -> srcdbts*     0 hits
- *   foo-bar         -> foobar*      0 hits
- *   error: ENOENT   -> error* enoent*
- *   C++             -> C*           matches nearly everything
- *
- * Paths, hyphenated flags, dotted symbols and email addresses are most of
- * what anyone searches an agent's output for, so this was the common case
- * rather than the edge.
- *
- * Each term becomes a quoted fts5 phrase with the prefix star OUTSIDE the
- * quotes: `src/db.ts` -> `"src/db.ts"*`, which the tokenizer splits into the
- * phrase src+db+ts and matches. Double quotes in the input are honoured as a
- * phrase rather than split on whitespace, because a user who quotes means it.
- * A term that tokenizes to nothing at all (`C++`, `--`) is dropped rather
- * than degraded into a bare star that matches the whole table.
- */
-export function ftsQuery(q: string): string {
-  const terms: string[] = [];
-  // "quoted phrase" | bare-run-of-non-space
-  for (const m of q.matchAll(/"([^"]*)"|(\S+)/g)) {
-    const raw = (m[1] ?? m[2] ?? "").trim();
-    if (!raw) continue;
-    // fts5 escapes a double quote inside a phrase by doubling it.
-    const phrase = raw.replace(/"/g, '""');
-    // Nothing the tokenizer can index — a run of pure punctuation. Skipping it
-    // is what stops `C++` becoming `C*`.
-    if (!/[\p{L}\p{N}]/u.test(raw)) continue;
-    // The star is a prefix operator on the last token of the phrase, and it
-    // only means that outside the quotes.
-    terms.push(`"${phrase}"*`);
-  }
-  return terms.join(" ");
-}
-
-/** Full-text search over events, always project-scoped like the rest of the
- *  cockpit. Optional `since` (epoch ms) and `provider` mirror /stats so the
- *  Search UI can honour the header window and provider chip instead of scanning
- *  all retained history. The FTS rewrite (`ftsQuery`) is unchanged. */
-export function searchEvents(
-  q: string,
-  limit = 60,
-  opts?: { since?: number; provider?: string },
-): import("../../shared/types.ts").SearchHit[] {
-  const match = ftsQuery(q);
-  if (!match) return [];
-  const s = scopeClause();
-  // Joined as `e` — qualify every column that also exists on events_fts or is
-  // ambiguous once the join is in play.
-  const scoped = s.clause.replace(/\b(project_path|cwd_path)\b/g, "e.$1");
-  const prov = providerScope(opts?.provider);
-  const provClause = prov.clause.replace(/\bprovider\b/g, "e.provider");
-  const since = opts?.since;
-  const sinceClause =
-    since != null && Number.isFinite(since) ? " AND e.timestamp >= ?" : "";
-  const args: any[] = [match];
-  if (sinceClause) args.push(since);
-  args.push(...prov.args, ...s.args, limit);
-  try {
-    return db
-      .query<any, any[]>(
-        `SELECT e.id, e.timestamp, e.source_app, e.session_id, e.hook_event_type, e.tool_name,
-                e.cost_usd, e.duration_ms,
-                snippet(events_fts, 0, char(1), char(2), ' … ', 14) AS snippet
-         FROM events_fts f JOIN events e ON e.id = f.rowid
-         WHERE events_fts MATCH ?${sinceClause}${provClause}${scoped} ORDER BY rank LIMIT ?`
-      )
-      .all(...args);
-  } catch {
-    return [];
-  }
 }
 
 /** Stream rows for export (bounded). Scoped like everything else — an export

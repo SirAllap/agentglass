@@ -36,6 +36,10 @@ export interface ServerSettingDef {
   /** The value as it will be stored, or why not. Nothing is written here. */
   validate(raw: unknown, root?: string): { value: unknown } | { error: string };
   apply(value: unknown, root?: string): Applied | Promise<Applied>;
+  /** For a per-project setting: whether this project says it itself, or the value is inherited. */
+  isSet?(root: string): boolean;
+  /** Which layer the value read comes from (project, global, default), when the setting has layers. */
+  layer?(root: string): string;
   /** What will be in force once `value` is applied, when that is not the value
    *  itself (a removal that falls back to a default): the diff is read against it. */
   effective?(value: unknown, root?: string): unknown;
@@ -147,7 +151,7 @@ export interface Door {
   askExternal(r: { setting: string; label: string; key: string; root?: string; who: string; diff: string[]; apply: () => Applied | Promise<Applied> }): DoorAnswer;
   drop(key: string): void;
   /** One setting's value, never a secret's. */
-  value(id: string, root?: string): { value: unknown } | { error: string };
+  value(id: string, root?: string): { value: unknown; scopedSet?: boolean; layer?: string } | { error: string };
   pending(): PublicRequest[];
   /** The person's answer. Refused for anybody else, whatever the route. */
   decide(rid: unknown, approve: boolean, person: boolean): Promise<{ ok: true; applied: boolean; setting: string } | { ok: false; error: string; status: number }>;
@@ -201,7 +205,7 @@ export function makeDoor(deps: {
       const row = classOf(id);
       if (row?.class === "secret") return { ok: false, error: `${id} is a secret: it is never read or written through this door`, status: 403 };
       if (!def || !row) return { ok: false, error: `${id} is not a setting this door knows (settings list names them)`, status: 404 };
-      if (def.scoped && !root) return { ok: false, error: `${id} is held per project: name the project root`, status: 400 };
+      if (def.scoped && !root) return { ok: false, error: `${id} is kept per project: name the project root (--root <path>)`, status: 400 };
       const v = def.validate(raw, root);
       if ("error" in v) return { ok: false, error: `${id}: ${v.error}`, status: 400 };
       const prev = def.read(root);
@@ -239,8 +243,8 @@ export function makeDoor(deps: {
       const row = classOf(id);
       if (!def || !row) return { error: `${id} is not a setting this door knows` };
       if (row.class === "secret") return { error: `${id} is a secret: it is never read through this door` };
-      if (def.scoped && !root) return { error: `${id} is held per project: name the project root` };
-      return { value: def.read(root) };
+      if (def.scoped && !root) return { error: `${id} is kept per project: name the project root (--root <path>)` };
+      return { value: def.read(root), ...(def.isSet && root ? { scopedSet: def.isSet(root) } : {}), ...(def.layer && root ? { layer: def.layer(root) } : {}) };
     },
     pending() {
       if (prune()) deps.changed();

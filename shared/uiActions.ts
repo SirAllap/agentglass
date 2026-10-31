@@ -28,7 +28,7 @@ import { ACCOUNT_ID_RE, ACCOUNT_PROVIDERS } from "./pluginAccounts.ts";
 
 /*
  * Every view the rail can hold. The 0.8 redesign made the dashboard a view and
- * added tasks, files and the browser, so an external controller can reach every
+ * added tasks and the browser, so an external controller can reach every
  * one of them, not the six the workspace used to hold. `browser` earns its place
  * for a further reason: an agent driving the built-in browser (browserdrive.ts)
  * needs that view mounted before anything can answer it, and the alternative was
@@ -40,7 +40,7 @@ import { ACCOUNT_ID_RE, ACCOUNT_PROVIDERS } from "./pluginAccounts.ts";
  * 2026-09-08) leaves this list with it, and a renamed one stays reachable by its
  * old name through the aliases.
  */
-export const VIEW_IDS = ["dash", "git", "diff", "pr", "tasks", "docker", "term", "browser", "files", "agents", "plugins"] as const;
+export const VIEW_IDS = ["dash", "git", "diff", "pr", "tasks", "docker", "term", "browser", "agents", "plugins", "flightPlan", "skills"] as const;
 
 /**
  * THE NAMES THE AGENTS SCREEN HAD BEFORE IT WAS ONE SCREEN.
@@ -61,15 +61,15 @@ export const canonView = (name: string): string => (VIEW_ALIASES as Record<strin
 /** The pages Settings can be opened on. `plugin:<name>` pages come and go with
  *  the installed plugins and are not a closed set, so they are not here. */
 export const SETTINGS_PAGE_IDS = [
-  "prefs", "appearance", "notifications", "rail", "keys", "terminal", "diff", "browser", "tasks", "hooks", "engines", "orchestration", "lantern",
+  "prefs", "appearance", "notifications", "rail", "keys", "terminal", "diff", "browser", "git", "tasks", "hooks", "engines", "orchestration", "lantern",
   "understudy", "budgets", "recipes", "review-prompts", "saved-replies", "connections", "clickup", "jira", "remote", "plugins",
   "tmux", "privacy", "about", "log", "onboarding",
 ] as const;
 
-export const PANEL_IDS = ["stats", "skills", "search", "help", "palette"] as const;
+export const PANEL_IDS = ["skills", "help", "palette"] as const;
 export const MACHINE_TABS = ["ports", "resources", "locks"] as const;
 export const GIT_MODALS = ["insights", "bisect", "palette"] as const;
-export const BOARD_KINDS = ["pr", "tasks", "files"] as const;
+export const BOARD_KINDS = ["pr", "tasks"] as const;
 export const PANE_DOORS = ["git", "diff", "pr", "card"] as const;
 export const STAGE_MERGE_METHODS = ["squash", "merge", "rebase"] as const;
 export const STAGE_REVIEW_VERDICTS = ["approve", "request_changes", "comment"] as const;
@@ -219,6 +219,8 @@ interface UiActionBody {
 
 const def = <const D extends UiActionDef>(d: D): D => d;
 
+/** The longest filter line a door takes: the text form of a full view (40 rules) fits well inside it. */
+const PR_FILTER_TEXT_MAX = 2000;
 // A pull request's number: a whole number from 1. `int` starts at 0, so the
 // entries that take one refuse 0 in `refine`.
 const PR_NUMBER = { t: "int", max: 999_999_999 } as const;
@@ -239,7 +241,7 @@ export const UI_ACTIONS = {
     args: { open: { t: "bool", optional: true } },
   }),
   "esc.peel": def({ inPlace: true, level: 1, kind: "open", surface: "peels the top overlay, as Escape does", legacy: { cmd: "esc" }, args: {} }),
-  "panel.open": def({ modals: ["CommandPalette.tsx", "HelpLegend.tsx", "SearchModal.tsx", "SkillsModal.tsx", "StatsModal.tsx"], level: 1, kind: "open", surface: "stats, skills, search, help or the command palette", legacy: { cmd: "open" }, args: { what: { t: "enum", values: PANEL_IDS } } }),
+  "panel.open": def({ modals: ["CommandPalette.tsx", "HelpLegend.tsx", "SkillsModal.tsx"], level: 1, kind: "open", surface: "skills, help or the command palette", legacy: { cmd: "open" }, args: { what: { t: "enum", values: PANEL_IDS } } }),
   "finder.open": def({ modals: ["FilePalette.tsx", "finder/machine/FinderActions.tsx", "finder/machine/FinderChrome.tsx", "finder/machine/FinderSearch.tsx", "finder/machine/FolderPeek.tsx", "finder/machine/FolderViews.tsx", "finder/machine/MachineFinder.tsx", "finder/machine/Popover.tsx", "finder/machine/VolumeDialogs.tsx"],
     level: 1, kind: "open", surface: "the file finder on one absolute path", legacy: { cmd: "open", pin: { what: "finder" } }, chords: ["files.palette"],
     args: { path: { t: "abspath" }, kind: { t: "pathKind", of: "path" } },
@@ -273,18 +275,18 @@ export const UI_ACTIONS = {
     args: { id: { t: "slug", max: 80 }, value: { t: "scalar" }, root: { t: "abspath", optional: true } },
   }),
   "machine.open": def({ modals: ["MachinePanel.tsx"], level: 1, kind: "open", surface: "the machine panel on ports, resources or locks", args: { tab: { t: "enum", values: MACHINE_TABS } } }),
-  "project.picker": def({ modals: ["ProjectPicker.tsx"], level: 1, kind: "open", surface: "the project picker", args: {} }),
+  "project.picker": def({ modals: ["projects/ProjectsModal.tsx", "projects/SidePanes.tsx"], level: 1, kind: "open", surface: "the project picker", args: {} }),
   "windows.switcher": def({ modals: ["terminal/WindowSwitcher.tsx"], level: 1, kind: "open", surface: "the window switcher", chords: ["windows.switcher"], args: {} }),
   "bench.toggle": def({ modals: ["bench/FloatingBench.tsx"], level: 1, kind: "open", surface: "the floating bench, shown or hidden", chords: ["bench.toggle"], args: {} }),
   "bench.file": def({ level: 1, kind: "open", surface: "a file on the bench, read-write as the bench always is", args: { root: { t: "abspath" }, path: { t: "relpath" } } }),
-  "bench.board": def({ level: 1, kind: "open", surface: "a board (pull requests, tasks, files) as a bench tab", args: { root: { t: "abspath" }, kind: { t: "enum", values: BOARD_KINDS } } }),
+  "bench.board": def({ level: 1, kind: "open", surface: "a board (pull requests, tasks) as a bench tab", args: { root: { t: "abspath" }, kind: { t: "enum", values: BOARD_KINDS } } }),
   "peek.file": def({ modals: ["PeekFile.tsx"], level: 1, kind: "open", surface: "the file viewer, reading", args: { root: { t: "abspath" }, path: { t: "relpath" } } }),
-  "git.modal": def({ modals: ["InsightsModal.tsx", "BisectModal.tsx", "GitPalette.tsx", "GitPanel.tsx"], level: 1, kind: "open", surface: "Insights, Bisect or the git command palette over the focused terminal pane's checkout, else the one the Git view is on", args: { which: { t: "enum", values: GIT_MODALS } } }),
-  "git.compare": def({ modals: ["CompareModal.tsx"], level: 1, kind: "open", surface: "the Compare modal against one ref", args: { base: { t: "ref" } } }),
-  "git.blame": def({ modals: ["BlameModal.tsx"], level: 1, kind: "open", surface: "the Blame modal on one file of the checkout", args: { path: { t: "relpath" } } }),
+  "git.modal": def({ modals: ["GitDialog.tsx", "GitPalette.tsx"], level: 1, kind: "open", surface: "Insights, Bisect or the git command palette over the focused terminal pane's checkout, else the one the Git view is on", args: { which: { t: "enum", values: GIT_MODALS } } }),
+  "git.compare": def({ modals: ["GitDialog.tsx"], level: 1, kind: "open", surface: "the Compare modal against one ref", args: { base: { t: "ref" } } }),
+  "git.blame": def({ modals: ["GitDialog.tsx"], level: 1, kind: "open", surface: "the Blame modal on one file of the checkout", args: { path: { t: "relpath" } } }),
   // Opening shows a plan and moves nothing: the rebase starts only when the owner
   // presses Start rebase in the modal, and the server re-validates the plan then.
-  "git.rebase": def({ modals: ["RebaseModal.tsx"],
+  "git.rebase": def({ modals: ["GitDialog.tsx"],
     level: 1, kind: "open", surface: "the interactive-rebase editor from one commit (shows the plan; nothing moves until the owner presses Start)",
     args: { base: { t: "ref" } },
   }),
@@ -299,8 +301,9 @@ export const UI_ACTIONS = {
   // The dialog creates a schedule only when the owner submits it.
   "lantern.schedule": def({ modals: ["LanternSchedule.tsx"], level: 1, kind: "open", surface: "the Agents screen's schedule dialog (empty; a schedule exists only once the owner submits it)", args: {} }),
   // The dialog changes nothing until the owner presses "Make it the coordinator" (or "Start a coordinator").
-  "agents.change": def({ modals: ["agents/CoordinatorCard.tsx"], level: 1, kind: "open", surface: "the Change the coordinator dialog of the Agents screen, on the project it is looking at", args: {} }),
+  "agents.change": def({ modals: ["agents/CoordinatorCard.tsx"], level: 1, kind: "open", surface: "the Change the orchestrator dialog of the Agents screen, on the project it is looking at", args: {} }),
   "terminal.resume": def({ modals: ["ResumeSessions.tsx"], level: 1, kind: "open", surface: "the Resume sessions list of the Terminal view (resuming is the owner's click)", args: {} }),
+  "terminal.sessions": def({ modals: ["terminal/ManageSessions.tsx"], level: 1, kind: "open", surface: "the Manage sessions dialog of the Terminal view (ending or locking a session is the owner's click)", args: {} }),
   "settings.plugin": def({
     level: 1, kind: "open", surface: "Settings on one plugin's own page (a plugin that is not installed answers with its page saying so)",
     args: { name: { t: "slug", max: 64 } },
@@ -317,6 +320,27 @@ export const UI_ACTIONS = {
     level: 3, kind: "stage", surface: "the Unstick dialog (close, reopen and sync a pull request GitHub has lost track of) on one pull request; nothing runs until the owner confirms in it",
     args: { root: { t: "abspath" }, number: { t: "int", max: 1_000_000 } },
   }),
+  // The pull request board's filter, in the one-line text syntax (web/src/lib/
+  // prFilterSyntax.ts). The text is parsed by the window; a line that does not
+  // parse is the answer and nothing is applied. Level 2 because the live filter
+  // and the saved views persist, like a palette or a zoom.
+  "pr.filter.get": def({
+    level: 1, kind: "read", surface: "the pull request board's live filter of one repository, as text (`-word` hides, `is:conflict`, `ci:failing`, `updated:>14d`, `(a | b)`)",
+    args: { repo: { t: "repo" } },
+  }),
+  "pr.filter.set": def({
+    modals: ["PrFilterPop.tsx", "PrFilterSheet.tsx"],
+    level: 2, kind: "change", surface: "replaces the pull request board's live filter of one repository with text in that syntax (or clears it); a line that does not parse is answered with why and changes nothing",
+    args: { repo: { t: "repo" }, text: { t: "text", max: PR_FILTER_TEXT_MAX, line: true, optional: true }, clear: { t: "bool", optional: true } },
+    // Exactly one of the two: a filter to apply, or the order to empty it.
+    refine: (a) => ((a.text !== undefined) === (a.clear === true) ? null : a),
+  }),
+  "pr.views.list": def({ level: 1, kind: "read", surface: "the saved filter views of one repository's pull request board, each as name and text, with the one this machine has on", args: { repo: { t: "repo" } } }),
+  "pr.views.save": def({
+    level: 2, kind: "change", surface: "saves a filter view under a name (a name that exists is replaced); the filter is text in the board's syntax, or the board's live filter when omitted",
+    args: { repo: { t: "repo" }, name: { t: "text", max: 24, line: true }, filter: { t: "text", max: PR_FILTER_TEXT_MAX, line: true, optional: true } },
+  }),
+  "pr.views.delete": def({ level: 2, kind: "change", surface: "deletes the saved filter view with that name", args: { repo: { t: "repo" }, name: { t: "text", max: 24, line: true } } }),
   // Reads. They answer and show nothing: no view changes, no window rises, no
   // focus moves. The answer is `{state, untrusted}` (see UiSnapshot below).
   "ui.state": def({ level: 1, kind: "read", surface: "what is open in the window now, and which panels ui.read can describe", args: {} }),
@@ -417,6 +441,7 @@ export const UI_READ_NOT_COVERED: Readonly<Record<string, string>> = {
   "settings.jira": "credential pane: the token, the site and the write switch are never read through this channel (the one setting on it is a def, and the steps have their own door, GET /jira/steps)",
   "settings.onboarding": "not a setting",
   "settings.orchestration": "no setting of its own: the page shows the policy GET /orchestration answers, and only a person writes it (the route refuses an agent), so there is nothing here for an agent to read or change",
+  "settings.git": "the settings are held by the server per project (cleanup.mode, cleanup.autoCleanDays, cleanup.include): an agent reads and writes them through settings.get and settings.set with the project root, not through the window",
   "settings.engines": "no setting of its own: the page shows what GET /engines measures on this machine, and an agent reads that route (the tests there are a real turn and are not an agent's to start)",
 };
 
@@ -732,6 +757,8 @@ export function argsRefusal(id: string, d: UiActionDef, raw: unknown): string | 
       if (!optional) return `${id} needs "${k}": ${specAccepts(spec)}`;
       continue;
     }
+    // The Files view is gone and the Finder is a dialog on a path, not a view: say where to go.
+    if (id === "view.open" && b[k] === "files") return 'view.open has no "files" view any more; use the Finder (open finder, with an absolute path)';
     if (one(spec, b[k]) === undefined) return `${id} does not take that "${k}"; accepted: ${specAccepts(spec)}`;
   }
   return parseArgs(d, raw) ? null : `${id} refused that combination of arguments`;

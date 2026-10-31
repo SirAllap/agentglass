@@ -59,6 +59,20 @@ describe("underTmp", () => {
   });
 });
 
+describe("duplicatePids, process trees", () => {
+  const row = (pid: number, dir: string, proc: string) => ({ mine: true, pid, proc, dir });
+  test("a browser and its child processes on one port are one app, not duplicates", () => {
+    const parents = new Map([[11, 10], [12, 10], [13, 11]]);
+    const rows = [10, 11, 12, 13].map((p) => ({ ...row(p, "/home/a/.config/chromium", "chromium"), pid: p }));
+    expect(duplicatePids(rows, (p) => parents.get(p) ?? null).size).toBe(0);
+  });
+  test("two separate trees of the same program are still duplicates", () => {
+    const parents = new Map([[11, 10], [21, 20]]);
+    const rows = [10, 11, 20, 21].map((p) => ({ ...row(p, "/w/a", "chromium"), pid: p }));
+    expect([...duplicatePids(rows, (p) => parents.get(p) ?? null)].sort()).toEqual([10, 20]);
+  });
+});
+
 describe("duplicatePids", () => {
   const row = (pid: number, dir: string | null, proc = "python3", mine = true) => ({ mine, pid, proc, dir });
 

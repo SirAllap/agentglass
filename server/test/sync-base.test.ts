@@ -318,6 +318,18 @@ describe("undo merge", () => {
     run(repo, "checkout", "-q", "main");
   });
 
+  step("a detached HEAD on a merge commit (a bisect midpoint) is not undoable", async () => {
+    run(repo, "checkout", "-q", "-b", "undo-detached");
+    writeFileSync(join(repo, "detached-case.txt"), "x\n");
+    run(repo, "add", "detached-case.txt"); run(repo, "commit", "-qm", "own work");
+    run(repo, "merge", "--no-edit", "undo-side");
+    expect(await gw.undoableMerge(repo, 0, null)).toBe(true);
+    run(repo, "checkout", "-q", "--detach");
+    expect(await gw.undoableMerge(repo, 0, null)).toBe(false);
+    expect((await gw.undoMerge(repo)).ok).toBe(false);
+    run(repo, "checkout", "-q", "main");
+  });
+
   step("an untracked file the merge does not touch does not block the undo", async () => {
     // A scratch note sitting beside the work is not something a hard reset
     // takes away, and refusing over it sent people to delete it first.

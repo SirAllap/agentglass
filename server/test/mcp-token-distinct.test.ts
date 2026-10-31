@@ -1,7 +1,7 @@
 /*
  * Each MCP server that serves HTTP has a token of its own, and that token opens
- * only what that server opens: the machine's token, the browser's, the cockpit's
- * and the app-window's must be four different secrets. A server started with its
+ * only what that server opens: the machine's token, the browser's, the cockpit's,
+ * the app-window's and the flight plans' must be five different secrets. A server started with its
  * token equal to another's refuses to bind, so a shell that exports one value
  * under two names does not quietly turn the narrow door into the wide one.
  *
@@ -20,9 +20,10 @@ const BIN = (name: string) => new URL(`../../bin/${name}`, import.meta.url).path
 const SHARED = "t".repeat(40);
 
 const SERVERS: { bin: string; own: string; others: string[] }[] = [
-  { bin: "agentglass-ui-mcp", own: "AGENTGLASS_UI_MCP_TOKEN", others: ["AGENTGLASS_TOKEN", "AGENTGLASS_MCP_TOKEN", "AGENTGLASS_COCKPIT_TOKEN"] },
-  { bin: "agentglass-browser-mcp", own: "AGENTGLASS_MCP_TOKEN", others: ["AGENTGLASS_TOKEN", "AGENTGLASS_COCKPIT_TOKEN", "AGENTGLASS_UI_MCP_TOKEN"] },
-  { bin: "agentglass-cockpit-mcp", own: "AGENTGLASS_COCKPIT_TOKEN", others: ["AGENTGLASS_TOKEN", "AGENTGLASS_MCP_TOKEN", "AGENTGLASS_UI_MCP_TOKEN"] },
+  { bin: "agentglass-ui-mcp", own: "AGENTGLASS_UI_MCP_TOKEN", others: ["AGENTGLASS_TOKEN", "AGENTGLASS_MCP_TOKEN", "AGENTGLASS_COCKPIT_TOKEN", "AGENTGLASS_FLIGHTPLAN_MCP_TOKEN"] },
+  { bin: "agentglass-browser-mcp", own: "AGENTGLASS_MCP_TOKEN", others: ["AGENTGLASS_TOKEN", "AGENTGLASS_COCKPIT_TOKEN", "AGENTGLASS_UI_MCP_TOKEN", "AGENTGLASS_FLIGHTPLAN_MCP_TOKEN"] },
+  { bin: "agentglass-cockpit-mcp", own: "AGENTGLASS_COCKPIT_TOKEN", others: ["AGENTGLASS_TOKEN", "AGENTGLASS_MCP_TOKEN", "AGENTGLASS_UI_MCP_TOKEN", "AGENTGLASS_FLIGHTPLAN_MCP_TOKEN"] },
+  { bin: "agentglass-flightplan-mcp", own: "AGENTGLASS_FLIGHTPLAN_MCP_TOKEN", others: ["AGENTGLASS_TOKEN", "AGENTGLASS_MCP_TOKEN", "AGENTGLASS_COCKPIT_TOKEN", "AGENTGLASS_UI_MCP_TOKEN"] },
 ];
 
 async function start(bin: string, env: Record<string, string>) {

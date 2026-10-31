@@ -9,6 +9,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeDoor, leafDiff, MAX_PENDING, type ServerSettingDef } from "../src/settingsDoor.ts";
 import { classOf, REQUEST_TTL_MS, SETTING_CLASSES } from "../../shared/settingClass.ts";
+import { DOOR_IDS } from "../../shared/polaris.ts";
 
 const SOURCE = await Bun.file(new URL("../src/serverSettings.ts", import.meta.url)).text();
 
@@ -267,7 +268,9 @@ describe("the diff", () => {
 describe("every server setting has a class", () => {
   /* The ids serverSettings.ts defines, read as text: a literal id, or a template
      whose `${...}` part names a member of a list (a role, a plugin). */
-  const ids = [...SOURCE.matchAll(/\bid: (?:"([^"]+)"|`([^`]+)`)/g)].map((m) => (m[1] ?? m[2]!).replace(/\$\{[^}]+\}/g, "acme"));
+  const ids = [...SOURCE.matchAll(/\bid: (?:"([^"]+)"|`([^`]+)`)/g)].map((m) => (m[1] ?? m[2]!).replace(/\$\{[^}]+\}/g, "acme"))
+    // polaris.door.${d} is one id per door in DOOR_IDS
+    .flatMap((id) => (id === "polaris.door.acme" ? DOOR_IDS.map((d) => `polaris.door.${d}`) : [id]));
 
   test("the source defines the settings it is expected to", () => {
     expect(ids.length).toBeGreaterThan(20);
@@ -280,7 +283,7 @@ describe("every server setting has a class", () => {
   });
 
   test("every server line in the table is a setting there, or one no agent reaches", () => {
-    const windowish = /^(appearance|diff|terminal|rail|notifications|browser|tasks|keys|prefs|about)\.|^plugins\.sessionReads\.|^clickup\.statusSpaces\.|^jira\.statusUnits\./;
+    const windowish = /^(appearance|diff|terminal|rail|notifications|browser|tasks|keys|prefs|about)\.|^plugins\.sessionReads\.|^clickup\.statusSpaces\.|^jira\.statusUnits\.|^jira\.tree\./;
     const stale = Object.entries(SETTING_CLASSES)
       .filter(([k, row]) => !windowish.test(k) && row.class !== "secret" && !(row.class === "personOnly" && !ids.includes(k)))
       .filter(([k]) => !ids.some((id) => (k.includes("*") ? classOf(id) === SETTING_CLASSES[k] : id === k)))

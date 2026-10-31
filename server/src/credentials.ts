@@ -75,6 +75,8 @@ export interface Credential {
   auth?: "basic" | "bearer";
   /** The REST generation detected when connecting (Jira: 3 on Cloud, 2 on Data Center). */
   api?: 2 | 3;
+  /** Jira Cloud: the site's id, kept when only the api.atlassian.com gateway accepts the token (a scoped one). */
+  cloudId?: string;
   /** What the service said it is running as (Jira: `cloud` or `server`). */
   deployment?: "cloud" | "server";
   /** When it was last accepted by the service. */

@@ -31,6 +31,8 @@
  * change to it is a widening as far as this table can tell.
  */
 
+import { DOOR_IDS, doorNarrows, raisesToLive, type DoorId } from "./polaris.ts";
+
 export type SettingClass = "low" | "escalation" | "personOnly" | "secret";
 
 export interface ClassRow {
@@ -56,12 +58,28 @@ const offNarrows = (prev: unknown, next: unknown) => prev === true && next === f
 const onNarrows = (prev: unknown, next: unknown) => prev === false && next === true;
 /** A bigger number is the cheaper direction (an interval between wakes). */
 const higherNarrows = (prev: unknown, next: unknown) => typeof prev === "number" && typeof next === "number" && next > prev;
+/** A smaller number is the cheaper direction (a spending cap). */
+const lowerNarrows = (prev: unknown, next: unknown) => typeof prev === "number" && typeof next === "number" && next < prev;
 const items = (v: unknown): string[] =>
   Array.isArray(v) ? v.map(String) : typeof v === "string" ? v.split(/[\n,]/).map((s) => s.trim()).filter(Boolean) : [];
 /** The new list only loses members. */
 const subsetNarrows = (prev: unknown, next: unknown) => { const p = new Set(items(prev)); return items(next).every((x) => p.has(x)); };
 /** The new list only gains members (a deny list). */
 const supersetNarrows = (prev: unknown, next: unknown) => { const n = new Set(items(next)); return items(prev).every((x) => n.has(x)); };
+
+const PILOT_RANK: Record<string, number> = { manual: 0, copilot: 1, autopilot: 2 };
+/** Handing the flying to someone less hands-on (autopilot to copilot, copilot to manual) is the safer direction. */
+const pilotNarrows = (prev: unknown, next: unknown) =>
+  typeof prev === "string" && typeof next === "string" && prev in PILOT_RANK && next in PILOT_RANK && PILOT_RANK[next]! < PILOT_RANK[prev]!;
+/** Preflight looks at more plans for ML than for L: ML to L is the cheaper direction. */
+const sizesNarrow = (prev: unknown, next: unknown) => prev === "ML" && next === "L";
+/** A higher number is a bigger allowance: the direction only the person takes for a budget. */
+const raised = (prev: unknown, next: unknown) => typeof prev === "number" && typeof next === "number" && next > prev;
+/** A stop rule turned off: the coordinator would then say Go where it used to ask. */
+const turnedOff = (_prev: unknown, next: unknown) => next === false;
+
+/** Cleanup modes from strictest to loosest. */
+const CLEANUP_RANK: Record<string, number> = { off: 0, ask: 1, atMerge: 2, auto: 3 };
 
 /** Launch modes from strictest to loosest. */
 const MODE_RANK: Record<string, number> = { default: 0, acceptEdits: 1, auto: 2, bypassPermissions: 3 };
@@ -86,6 +104,13 @@ const JIRA_KIND = (what: string): ClassRow => ({ class: "escalation", why: `lets
 const MORE_POWER = "widens what agents may do";
 const COST = "decides which model runs and what it spends";
 
+/** A Polaris door: judged by the door's own modes and settings, so the helpers close over which door a value belongs to. */
+const doorRow = (door: DoorId): ClassRow => ({
+  class: "escalation", why: `how far the ${door} door of Polaris may act: a lower position narrows, a higher one widens what agents may do`,
+  narrows: (prev, next) => doorNarrows(door, prev, next),
+  personOnlyWhen: { when: (prev, next) => raisesToLive(door, prev, next), why: "a live position (relaunching jobs, starting sessions, following cards, diagnosing by itself) is the person's alone, from Settings" },
+});
+
 /**
  * One line per setting. A family (`rail.place.*`) covers every member a def
  * generates from a list; anything else is spelled out, so a new setting is a
@@ -97,8 +122,8 @@ export const SETTING_CLASSES: Readonly<Record<string, ClassRow>> = {
   "appearance.density": LOW(), "appearance.fontSize": LOW(), "appearance.translucent": LOW(), "appearance.reduceMotion": LOW(),
   "diff.split": LOW(), "diff.wrap": LOW(), "diff.syntaxTheme": LOW(),
   "terminal.renderer": LOW(), "terminal.font": LOW(), "terminal.fontSize": LOW(), "terminal.lineHeight": LOW(),
-  "terminal.cursor": LOW(), "terminal.focusFollowsMouse": LOW(), "terminal.paneBar": LOW(), "terminal.copyOnSelect": LOW(),
-  "terminal.noteEditor": LOW(), "terminal.tabGroups": LOW(), "terminal.tabGroupRules": LOW(), "terminal.scrollback": LOW(),
+  "terminal.cursor": LOW(), "terminal.focusFollowsMouse": LOW(), "terminal.paneBar": LOW(), "terminal.paneBarMarker": LOW(), "terminal.copyOnSelect": LOW(),
+  "terminal.noteEditor": LOW(), "terminal.benchButton": LOW(), "terminal.tabGroups": LOW(), "terminal.tabGroupRules": LOW(), "terminal.scrollback": LOW(),
   "terminal.wordSeparators": LOW(),
   "rail.place.*": LOW(), "rail.badge.*": LOW(), "tasks.source.*": LOW(), "keys.binding.*": LOW(),
   "notifications.quiet": LOW("only quiets what is not stopped: an agent blocked on the person still interrupts"),
@@ -106,7 +131,7 @@ export const SETTING_CLASSES: Readonly<Record<string, ClassRow>> = {
   "notifications.ciOnlyApproved": LOW(), "notifications.talk": LOW(),
   "browser.searchEngine": LOW(), "tasks.landing": LOW(),
   "prefs.diskWarn": LOW("only when the machine panel draws its quiet low-disk badge: it never deletes or notifies"),
-  "about.autoCheck": LOW("only whether this window asks the release feed on a timer"), "clickup.statusSpaces.counted": LOW(), "jira.statusUnits.counted": LOW(),
+  "about.autoCheck": LOW("only whether this window asks the release feed on a timer"), "clickup.statusSpaces.counted": LOW(), "jira.statusUnits.counted": LOW(), "jira.tree.shapes": LOW("only how this window draws the Jira sidebar: nothing an agent may do changes"),
   "plugins.sessionReads.repos": { class: "escalation", why: "lets review plugins read the authoring session of more repositories", narrows: subsetNarrows },
 
   // ── the server (server/src/serverSettings.ts) ──
@@ -115,6 +140,58 @@ export const SETTING_CLASSES: Readonly<Record<string, ClassRow>> = {
   "launch.mode": { class: "escalation", why: `the permission mode every agent the app starts runs in: ${MORE_POWER}`, narrows: modeNarrows },
   "launch.flags.*": { class: "escalation", why: `the flags an engine starts with in each permission mode, typed by hand: ${MORE_POWER}` },
   "launch.deny": { class: "escalation", why: `what every agent the app starts may never do: ${MORE_POWER}`, narrows: supersetNarrows },
+  "flightPlan.enabled": { class: "escalation", why: "turns the Flight plan on: an author agent and a Preflight each spend tokens", narrows: offNarrows },
+  "flightPlan.mockupGuide": { class: "escalation", why: "the file a flight plan's author is told to read: it is a path an agent will open", narrows: (_prev, next) => next === "" },
+  "flightPlan.builder.permissions": {
+    class: "escalation", why: `the permission mode a launched builder starts in: ${MORE_POWER}`, narrows: modeNarrows,
+    personOnlyWhen: { when: (_prev, next) => next === "bypassPermissions", why: "bypass lets a builder run every tool without asking: only the person turns it on, from Settings" },
+  },
+  "flightPlan.builderBase": LOW("which trunk a launched builder starts from: a choice of code, not of power"),
+  // Pilot: who flies a project's plans. Autopilot lets the seated coordinator say Go, so reaching it is the person's alone.
+  "flightPlan.pilot": {
+    class: "escalation", why: "who flies a project's plans: autopilot lets the project's orchestrator say Go itself", narrows: pilotNarrows,
+    personOnlyWhen: { when: (_prev, next) => next === "autopilot", why: "autopilot lets the orchestrator say Go without asking: only the person turns it on, from Settings" },
+  },
+  "flightPlan.project.enabled": { class: "escalation", why: "turns Flight plan on in a project: an author agent and a Preflight each spend tokens there", narrows: offNarrows },
+  "flightPlan.preflight.reviews": { class: "escalation", why: "which moments get a Preflight (the plan, a finished task, a pull request): each one spends tokens", narrows: subsetNarrows },
+  "flightPlan.preflight.sizes": { class: "escalation", why: "which plan sizes get a Preflight (L only, or M and L): each one spends tokens", narrows: sizesNarrow },
+  "flightPlan.preflight.secondLooks": { class: "escalation", why: "how many times a plan is reviewed again after a fix: each one spends tokens", narrows: lowerNarrows },
+  "flightPlan.budget.dailyUsd": {
+    class: "escalation", why: "the most Flight plan may spend in a day before autopilot drops to co-pilot", narrows: lowerNarrows,
+    personOnlyWhen: { when: raised, why: "raising the daily budget lets agents spend more: only the person does it, from Settings" },
+  },
+  "flightPlan.budget.weeklyUsd": {
+    class: "escalation", why: "the most Flight plan may spend in a week before autopilot drops to co-pilot", narrows: lowerNarrows,
+    personOnlyWhen: { when: raised, why: "raising the weekly budget lets agents spend more: only the person does it, from Settings" },
+  },
+  "flightPlan.maxFlying": { class: "escalation", why: "how many launched builders fly at once: more spends faster", narrows: lowerNarrows },
+  "flightPlan.autopilot.askOnLarge": {
+    class: "escalation", why: "whether autopilot asks the person before it says Go to a large plan", narrows: onNarrows,
+    personOnlyWhen: { when: turnedOff, why: "without this stop autopilot says Go to a large plan on its own: only the person turns it off, from Settings" },
+  },
+  "flightPlan.autopilot.askOnSensitive": {
+    class: "escalation", why: "whether autopilot asks the person before it says Go to a plan that touches auth, migrations, secrets, payments, CI or a dependency", narrows: onNarrows,
+    personOnlyWhen: { when: turnedOff, why: "without this stop autopilot says Go to a sensitive plan on its own: only the person turns it off, from Settings" },
+  },
+  // State, per project. Setting it true is the safe direction for anyone (the coordinator may hold itself); setting it false is the person's.
+  "flightPlan.held": {
+    class: "low", why: "holds a project's flight plans: no new Go, launches frozen. Anyone may hold; only the person resumes",
+    personOnlyWhen: { when: (_prev, next) => next === false, why: "resuming a held project is the person's alone: the orchestrator may hold itself, never release itself" },
+  },
+  "flightPlan.preflight.model": { class: "escalation", why: `the model a Preflight reviews with: ${COST}` },
+  "flightPlan.preflight.costCapUsd": { class: "escalation", why: "the most one Preflight may spend: a higher cap spends more", narrows: lowerNarrows },
+  // Polaris: Settings > Orchestration. One id per door, each with its own row.
+  "polaris.enabled": {
+    class: "escalation", why: "turns Polaris on: its doors then read and draft on pull requests", narrows: offNarrows,
+    personOnlyWhen: { when: (_prev, next) => next === true, why: "turning Polaris on is the person's alone, from Settings" },
+  },
+  ...Object.fromEntries(DOOR_IDS.map((d) => [`polaris.door.${d}`, doorRow(d)])),
+  "cleanup.config": { class: "escalation", why: "which containers, databases and folders a post-merge cleanup may remove: a wider list deletes more" },
+  "cleanup.mode": { class: "escalation", why: "whether leftovers of a finished pull request are removed on their own: ask is stricter than at merge, and at merge than automatic", narrows: (prev, next) => typeof prev === "string" && typeof next === "string" && prev in CLEANUP_RANK && next in CLEANUP_RANK && CLEANUP_RANK[next]! < CLEANUP_RANK[prev]! },
+  "cleanup.autoCleanDays": { class: "escalation", why: "cleans merged pull requests by itself once they are this old: 0 is never, fewer days is sooner", narrows: (prev, next) => typeof prev === "number" && typeof next === "number" && (next === 0 || (prev !== 0 && next > prev)) },
+  "cleanup.evidenceRoots": { class: "escalation", why: "folders a cleanup may remove evidence from: a longer list removes more", narrows: subsetNarrows },
+  "cleanup.otherFolders": { class: "escalation", why: "folder patterns a cleanup may remove checkouts and folders by: a longer list removes more", narrows: subsetNarrows },
+  "cleanup.include": { class: "escalation", why: "which kinds of leftover a cleanup may remove: a longer list removes more", narrows: subsetNarrows },
   "seat.model": { class: "escalation", why: `the chair's model: ${COST}` },
   "seat.kind": { class: "escalation", why: `the chair's engine: ${COST}` },
   "seat.powers": { class: "escalation", why: `what the chair may do to other agents: ${MORE_POWER}`, narrows: powerNarrows },

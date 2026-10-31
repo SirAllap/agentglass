@@ -66,8 +66,8 @@ describe("the real registry at each level", () => {
     expect(ids(1)).not.toContain("settings.set");
   });
 
-  test("level 2 adds the settings write, the palette and the zoom, which persist; level 3 adds exactly the stage entries", () => {
-    expect(ids(2).filter((i) => !ids(1).includes(i)).sort()).toEqual(["settings.set", "theme.set", "zoom.step"]);
+  test("level 2 adds the settings write, the palette, the zoom and the board filter writes, which persist; level 3 adds exactly the stage entries", () => {
+    expect(ids(2).filter((i) => !ids(1).includes(i)).sort()).toEqual(["pr.filter.set", "pr.views.delete", "pr.views.save", "settings.set", "theme.set", "zoom.step"]);
     expect(ids(3).filter((i) => !ids(2).includes(i))).toEqual((Object.entries(UI_ACTIONS) as [string, UiActionDef][]).filter(([, d]) => d.level === 3).map(([i]) => i));
     for (const [id, d] of Object.entries(UI_ACTIONS) as [string, UiActionDef][]) if (d.level === 3) expect(d.kind, id).toBe("stage");
   });
@@ -114,6 +114,21 @@ describe("the real registry at each level", () => {
     ]) expect(parseControlCmd({ cmd: "ui", do: "pr.unstick", args }, 3), JSON.stringify(args)).toBeNull();
   });
 
+  test("the board filter doors: reads from level 1, writes from level 2, and a set is a text or a clear, never both or neither", () => {
+    const set = (args: unknown) => ({ cmd: "ui", do: "pr.filter.set", args });
+    const repo = "acme/orbit";
+    expect(parseControlCmd({ cmd: "ui", do: "pr.filter.get", args: { repo } }, 1)).not.toBeNull();
+    expect(parseControlCmd({ cmd: "ui", do: "pr.views.list", args: { repo } }, 1)).not.toBeNull();
+    for (const body of [set({ repo, text: "-BETA" }), { cmd: "ui", do: "pr.views.save", args: { repo, name: "Main" } }, { cmd: "ui", do: "pr.views.delete", args: { repo, name: "Main" } }]) {
+      expect(parseControlCmd(body, 1), JSON.stringify(body)).toBeNull();
+      expect(parseControlCmd(body, 2), JSON.stringify(body)).not.toBeNull();
+    }
+    expect(parseControlCmd(set({ repo, clear: true }), 2)).not.toBeNull();
+    for (const args of [{ repo }, { repo, clear: true, text: "x" }, { repo, clear: false }, { repo, text: "a\nb" }, { repo: "orbit", text: "x" }, { repo, text: "x".repeat(2001) }]) {
+      expect(parseControlCmd(set(args), 2), JSON.stringify(args).slice(0, 60)).toBeNull();
+    }
+  });
+
   test("the old spellings obey the level too: a view is a look, a palette and a zoom persist and are level 2", () => {
     expect(parseControlCmd({ cmd: "view", to: "git" }, 1)).not.toBeNull();
     for (const old of [{ cmd: "theme", dir: 1 }, { cmd: "theme", name: "nord" }, { cmd: "zoom", dir: 1 }]) {
@@ -124,7 +139,7 @@ describe("the real registry at each level", () => {
   });
 
   test("every door that writes is counted by the write limit: theme and zoom included", () => {
-    for (const id of ["settings.set", "theme.set", "zoom.step"]) expect(isWriteKind(UI_ACTIONS[id as keyof typeof UI_ACTIONS].kind), id).toBe(true);
+    for (const id of ["settings.set", "theme.set", "zoom.step", "pr.filter.set", "pr.views.save", "pr.views.delete"]) expect(isWriteKind(UI_ACTIONS[id as keyof typeof UI_ACTIONS].kind), id).toBe(true);
   });
 
   test("the list served is cut on level AND kind: a door the parser would refuse is not listed", () => {
@@ -247,7 +262,7 @@ describe("what a refusal says", () => {
 
   test("a legacy spelling resolves to its entry", () => {
     expect(entryOfBody({ cmd: "open", what: "finder", path: "/x" })?.id).toBe("finder.open");
-    expect(entryOfBody({ cmd: "open", what: "stats" })?.id).toBe("panel.open");
+    expect(entryOfBody({ cmd: "open", what: "skills" })?.id).toBe("panel.open");
   });
 });
 

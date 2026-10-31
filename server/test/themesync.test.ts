@@ -132,3 +132,11 @@ test("an ordinary theme name with spaces is preserved", () => {
   expect(nvimTheme(normalizeVars(VARS), "Midnight Purple")).toContain("-- Theme: Midnight Purple");
   expect(tmuxTheme(normalizeVars(VARS), "Rosé Pine")).toContain("# Theme: Ros Pine");
 });
+
+// tmux 3.8's popup default is dark grey with white text; on a light theme the
+// popup's own default-coloured text vanished into the cream.
+test("tmux theme paints a popup in the theme, not tmux's dark-grey default", () => {
+  const out = tmuxTheme(normalizeVars(VARS), "x");
+  expect(out).toContain('set -g popup-style "bg=#0f0a1a,fg=#f3e8ff"');
+  expect(out).toContain('set -g popup-border-style "bg=#0f0a1a,fg=#6d28d9"');
+});

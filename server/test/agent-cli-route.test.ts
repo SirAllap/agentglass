@@ -13,7 +13,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
 import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
@@ -21,6 +21,8 @@ import { freePort } from "./freePort.ts";
 import { story } from "./story.ts";
 
 const SOCKET = `agx-agentops-${process.pid}`;
+/** The engine session of this server's project root: where every named agent's window opens. */
+const visibleName = () => basename(dir).replace(/[^A-Za-z0-9_-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
 const CLI = new URL("../../bin/agentglass-agent", import.meta.url).pathname;
 const have = Bun.which("tmux") && Bun.which("python3");
 
@@ -139,7 +141,7 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
     expect(out.error).toContain("not in the open project");
   }, SLOW);
 
-  step("start seats the CLI in the checkout, in the agents session, and waits until its box is drawn", async () => {
+  step("start seats the CLI in the checkout, in the project's own session (where the strip draws it), and waits until its box is drawn", async () => {
     const { code, out } = await cli("start", "w1", "--cwd", wt, "--yolo", "--remote-control", "w1", "--timeout", "20000", "--", "--model", "sonnet");
     expect(out.error).toBeUndefined();
     expect(code).toBe(0);
@@ -150,9 +152,13 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
     expect(agent.cwd).toBe(wt);
     expect(agent.paneId).toMatch(/^%\d+$/);
     expect(agent.windowId).toMatch(/^@\d+$/);
-    // The window really exists, in the session named for scripts' agents, named after the agent.
+    // The window really exists, named after the agent, in the project's session (`orbit` for a root called orbit):
+    // the one the tab strip draws, never a session of its own. The strip groups it by the folder's project.
+    const visible = visibleName();
     const rows = await panes();
-    expect(rows.some((r) => r.startsWith(`${agent.paneId}\tagents\tw1`))).toBe(true);
+    expect(rows.some((r) => r.startsWith(`${agent.paneId}\t${visible}\tw1`))).toBe(true);
+    expect(rows.some((r) => r.split("\t")[1] === "agents")).toBe(false);
+    expect([...new Set(rows.map((r) => r.split("\t")[1]))]).toEqual([visible]);
     // The CLI got the yolo flag (granted: bypass is on here), the remote-control name, and the pass-through flags.
     const argv = readFileSync(`${log}.argv`, "utf8").split("\n");
     expect(argv.slice(argv.indexOf("--permission-mode"), argv.indexOf("--permission-mode") + 2)).toEqual(["--permission-mode", "bypassPermissions"]);
@@ -220,8 +226,8 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
   step("stop kills the window; the name leaves the live list and is free to start again", async () => {
     const { code } = await cli("stop", "w1");
     expect(code).toBe(0);
-    for (let i = 0; i < 30 && (await panes()).some((r) => r.includes("\tagents\tw1")); i++) await Bun.sleep(100);
-    expect((await panes()).some((r) => r.includes("\tagents\tw1"))).toBe(false);
+    for (let i = 0; i < 30 && (await panes()).some((r) => r.includes(`\t${visibleName()}\tw1`)); i++) await Bun.sleep(100);
+    expect((await panes()).some((r) => r.includes(`\t${visibleName()}\tw1`))).toBe(false);
     expect((await cli("list")).out.result?.agents).toEqual([]);
     const all = (await cli("list", "--all")).out.result?.agents ?? [];
     expect(all.map((a) => a.name)).toEqual(["w1"]);
@@ -253,7 +259,7 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
     expect((await cli("unschedule", String(sched.id))).code, "cancelled once, not twice").toBe(1);
   }, SLOW);
 
-  step("a CLI that fails at launch leaves no corpse in the agents session", async () => {
+  step("a CLI that fails at launch leaves no corpse in the project's session", async () => {
     /*
      * The engine keeps a pane whose command failed (tmuxconf.ts), and the
      * window this app opens for a named agent is put back to closing itself
@@ -272,7 +278,7 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
       else expect(out.error).toContain("exited");
       await Bun.sleep(300);
       const rows = await panes();
-      expect(rows.filter((r) => r.endsWith("\tagents\twdie")), "a dead window was left in the agents session").toEqual([]);
+      expect(rows.filter((r) => r.endsWith(`\t${visibleName()}\twdie`)), "a dead window was left in the project's session").toEqual([]);
       expect((await cli("list")).out.result?.agents?.some((a) => a.name === "wdie")).toBe(false);
     } finally { rmSync(`${log}.die`, { force: true }); }
   }, SLOW);
@@ -293,7 +299,7 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
       const paneId = String((out.result?.agent as Record<string, string> | undefined)?.paneId ?? "");
       for (let i = 0; i < 30 && (await cli("list")).out.result?.agents?.some((a) => a.name === "wkeep"); i++) await Bun.sleep(100);
       expect((await cli("list")).out.result?.agents?.some((a) => a.name === "wkeep"), "an agent whose CLI has exited is not live").toBe(false);
-      expect((await panes()).some((r) => r.endsWith("\tagents\twkeep")), "the tab is still there").toBe(true);
+      expect((await panes()).some((r) => r.endsWith(`\t${visibleName()}\twkeep`)), "the tab is still there").toBe(true);
       const screen = Bun.spawnSync(["tmux", "-L", SOCKET, ...TMUX_ISOLATED, "capture-pane", "-p", "-t", paneId], { env: { ...process.env, TMUX_TMPDIR: TMUX_TEST_TMPDIR } }).stdout.toString();
       expect(screen).toContain("the answer is 42");
       expect(screen).toContain("the CLI exited (0)");
@@ -313,7 +319,7 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
          wrapper's day, and a seat that keeps every one-shot piles them up. */
       const stop = await cli("stop", "wkeep");
       expect(stop.out.ok, stop.out.error).toBe(true);
-      expect((await panes()).some((r) => r.endsWith("\tagents\twkeep")), "the tab is closed").toBe(false);
+      expect((await panes()).some((r) => r.endsWith(`\t${visibleName()}\twkeep`)), "the tab is closed").toBe(false);
       expect((await cli("read", "wkeep")).code, "and nothing is left to read").toBe(1);
     } finally { rmSync(`${log}.oneshot`, { force: true }); }
   }, SLOW);
@@ -332,7 +338,7 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
       expect(String(read.out.result?.text)).toContain("the CLI exited (1)");
       expect((await cli("list")).out.result?.agents?.some((a) => a.name === "wkdie"), "never live").toBe(false);
       expect((await cli("stop", "wkdie")).out.ok).toBe(true);
-      expect((await panes()).some((r) => r.endsWith("\tagents\twkdie"))).toBe(false);
+      expect((await panes()).some((r) => r.endsWith(`\t${visibleName()}\twkdie`))).toBe(false);
     } finally { rmSync(`${log}.die`, { force: true }); }
   }, SLOW);
 
@@ -340,8 +346,8 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
     writeFileSync(`${log}.oneshot`, "");
     try {
       await cli("start", "wgone", "--cwd", wt, "--timeout", "0");
-      for (let i = 0; i < 30 && (await panes()).some((r) => r.endsWith("\tagents\twgone")); i++) await Bun.sleep(100);
-      expect((await panes()).some((r) => r.endsWith("\tagents\twgone"))).toBe(false);
+      for (let i = 0; i < 30 && (await panes()).some((r) => r.endsWith(`\t${visibleName()}\twgone`)); i++) await Bun.sleep(100);
+      expect((await panes()).some((r) => r.endsWith(`\t${visibleName()}\twgone`))).toBe(false);
     } finally { rmSync(`${log}.oneshot`, { force: true }); }
   }, SLOW);
 
