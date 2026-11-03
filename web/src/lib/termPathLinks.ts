@@ -14,7 +14,7 @@ import { pathCandidates, resolvePrinted, type PathCandidate } from "./termPaths.
 export type Known = "dir" | "file" | null;
 
 /*
- * Cached by absolute path, and the in-flight ask is cached too: hovering the
+ * Cached by absolute path, and an ask already running is cached too: hovering the
  * same line twice, or a build log that prints one path forty times, is one
  * request. A miss is cached as well — the alternative is asking again on
  * every mouse move over `and/or` — but not for as long as a hit. Measured: an

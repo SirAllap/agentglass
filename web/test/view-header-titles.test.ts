@@ -25,9 +25,9 @@ import { describe, expect, it } from "bun:test";
 /** Every file that draws one of the workspace's top bars. */
 const VIEWS: Record<string, string> = {
   "Terminal": "TerminalPanel.tsx",
-  "Source control": "GitPanel.tsx",
+  "Source control": "GitHeader.tsx",
   "Pull Requests": "PrPanel.tsx",
-  "Docker": "DockerPanel.tsx",
+  "Docker": "docker/Header.tsx",
   "Browser": "BrowserPanel.tsx",
   "Diff": "diff/DiffPage.tsx",
 };
@@ -36,7 +36,6 @@ const VIEWS: Record<string, string> = {
  *  heading is `ViewHeader`'s, so what is checked here is the prop that feeds it. */
 const VIA_COMPONENT: Record<string, string> = {
   "Tasks": "TasksPanel.tsx",
-  "Files": "FilesPanel.tsx",
 };
 
 const read = (f: string) => Bun.file(new URL(`../src/components/${f}`, import.meta.url)).text();

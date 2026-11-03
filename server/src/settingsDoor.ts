@@ -33,9 +33,13 @@ export interface ServerSettingDef {
   scoped?: true;
   type: "boolean" | "number" | "string" | "json";
   read(root?: string): unknown;
-  /** The value as it will be stored, or why not. Nothing is written here. */
-  validate(raw: unknown, root?: string): { value: unknown } | { error: string };
+  /** The value as it will be stored, or why not. Nothing is written here. May be a promise: an engine check asks the probe. */
+  validate(raw: unknown, root?: string): { value: unknown } | { error: string } | Promise<{ value: unknown } | { error: string }>;
   apply(value: unknown, root?: string): Applied | Promise<Applied>;
+  /** For a per-project setting: whether this project says it itself, or the value is inherited. */
+  isSet?(root: string): boolean;
+  /** Which layer the value read comes from (project, global, default), when the setting has layers. */
+  layer?(root: string): string;
   /** What will be in force once `value` is applied, when that is not the value
    *  itself (a removal that falls back to a default): the diff is read against it. */
   effective?(value: unknown, root?: string): unknown;
@@ -147,7 +151,7 @@ export interface Door {
   askExternal(r: { setting: string; label: string; key: string; root?: string; who: string; diff: string[]; apply: () => Applied | Promise<Applied> }): DoorAnswer;
   drop(key: string): void;
   /** One setting's value, never a secret's. */
-  value(id: string, root?: string): { value: unknown } | { error: string };
+  value(id: string, root?: string): { value: unknown; scopedSet?: boolean; layer?: string } | { error: string };
   pending(): PublicRequest[];
   /** The person's answer. Refused for anybody else, whatever the route. */
   decide(rid: unknown, approve: boolean, person: boolean): Promise<{ ok: true; applied: boolean; setting: string } | { ok: false; error: string; status: number }>;
@@ -157,8 +161,9 @@ export interface Door {
 export function makeDoor(deps: {
   /** Read per call: a plugin installed a minute ago has its switch here now. */
   defs(): readonly ServerSettingDef[];
-  /** The person's switch: agents change escalations without asking. */
-  trusted(): boolean;
+  /** The person's switch: agents change escalations without asking. Held per
+   *  project: the root the request names, or the global one for no root. */
+  trusted(root?: string): boolean;
   /** Apply a window request the person approved (index.ts: a granted settings.set). */
   applyWindow(id: string, value: unknown, expect: unknown): Promise<Applied>;
   /** Told whenever the list of requests changes, so the window re-reads it. */
@@ -201,19 +206,23 @@ export function makeDoor(deps: {
       const row = classOf(id);
       if (row?.class === "secret") return { ok: false, error: `${id} is a secret: it is never read or written through this door`, status: 403 };
       if (!def || !row) return { ok: false, error: `${id} is not a setting this door knows (settings list names them)`, status: 404 };
-      if (def.scoped && !root) return { ok: false, error: `${id} is held per project: name the project root`, status: 400 };
-      const v = def.validate(raw, root);
+      if (def.scoped && !root) return { ok: false, error: `${id} is kept per project: name the project root (--root <path>)`, status: 400 };
+      const v = await def.validate(raw, root);
       if ("error" in v) return { ok: false, error: `${id}: ${v.error}`, status: 400 };
       const prev = def.read(root);
-      if (same(prev, v.value)) return { ok: true, applied: true, setting: id, prev, value: v.value, unchanged: true };
-      let verdict = person ? "apply" : agentVerdict(id, prev, v.value, deps.trusted());
+      // The person's write of a value equal to the default is still a write when
+      // nothing was stored: without the row, `setup.done` reads "never asked" for ever.
+      if (same(prev, v.value) && (!person || (def.isSet?.(root ?? "") ?? true))) return { ok: true, applied: true, setting: id, prev, value: v.value, unchanged: true };
+      let verdict = person ? "apply" : agentVerdict(id, prev, v.value, deps.trusted(root));
       // A seat speaks for its own project: what is the whole machine's waits for the person.
       if (verdict === "apply" && !person && confined && !def.scoped && !(id === "orchestration.policy" && root)) verdict = "ask";
       if (verdict === "refuse") return { ok: false, error: `${id}: ${refusalWhy(id, prev, v.value)}. An agent cannot change it, not even by asking`, status: 403 };
       if (verdict === "ask") {
         const shownNext = def.effective ? def.effective(v.value, root) : v.value;
         const explained = def.explain?.(v.value, root);
-        return queue({ setting: id, label: def.label, ...(root ? { root } : {}), who, prev, value: v.value, ...(def.effective ? { shownNext } : {}), ...(explained ? { explained } : {}), diff: diffLines(def, prev, shownNext, root, explained), where: "server" });
+        // The row's own sentence for a direction that always waits, so the card says why it is asked.
+        const extra = row.askAlways?.when(prev, v.value) ? [row.askAlways.why] : [];
+        return queue({ setting: id, label: def.label, ...(root ? { root } : {}), who, prev, value: v.value, ...(def.effective ? { shownNext } : {}), ...(explained ? { explained } : {}), diff: diffLines(def, prev, shownNext, root, [...(explained ?? []), ...extra]), where: "server" });
       }
       const r = await def.apply(v.value, root);
       if (!r.ok) return { ok: false, error: r.error, status: 400 };
@@ -239,8 +248,8 @@ export function makeDoor(deps: {
       const row = classOf(id);
       if (!def || !row) return { error: `${id} is not a setting this door knows` };
       if (row.class === "secret") return { error: `${id} is a secret: it is never read through this door` };
-      if (def.scoped && !root) return { error: `${id} is held per project: name the project root` };
-      return { value: def.read(root) };
+      if (def.scoped && !root) return { error: `${id} is kept per project: name the project root (--root <path>)` };
+      return { value: def.read(root), ...(def.isSet && root ? { scopedSet: def.isSet(root) } : {}), ...(def.layer && root ? { layer: def.layer(root) } : {}) };
     },
     pending() {
       if (prune()) deps.changed();
@@ -269,7 +278,7 @@ export function makeDoor(deps: {
       // The person approved THIS diff: if the setting moved since, it is not the one they saw.
       if (!same(def.read(r.root), r.prev) || ("shownNext" in r && !same(def.effective!(r.value, r.root), r.shownNext))
         || ("explained" in r && !same(def.explain!(r.value, r.root), r.explained))) return { ok: false, error: `${r.setting} changed since the request was made, so nothing was applied; the agent can ask again`, status: 409 };
-      const v = def.validate(r.value, r.root);
+      const v = await def.validate(r.value, r.root);
       if ("error" in v || !same(v.value, r.value)) return { ok: false, error: `${r.setting}: the value is no longer valid, so nothing was applied`, status: 409 };
       const a = await def.apply(r.value, r.root);
       return a.ok ? { ok: true, applied: true, setting: r.setting } : { ok: false, error: a.error, status: 400 };

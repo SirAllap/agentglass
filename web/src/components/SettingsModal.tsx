@@ -8,6 +8,7 @@
 //
 // Here each kind gets its own section, toggles look like toggles and say what
 // they control, and downloads say what you actually get.
+import { NO_DRAG } from "../lib/dragRegion.ts";
 import { useModalDialog } from "../lib/focusTrap.ts";
 import { PluginSettingsPane } from "./plugins/PluginSettingsPane.tsx";
 import {
@@ -19,13 +20,15 @@ import { RecipesPane } from "./RecipesPane.tsx";
 import { ReviewPromptsPane } from "./ReviewPromptsPane.tsx";
 import { SavedRepliesPane } from "./SavedRepliesPane.tsx";
 import { lastTerminalRoot } from "./TerminalPanel.tsx";
+import { openTutorial, TUTORIAL_CARDS, seenCards } from "../lib/setupTutorial.ts";
+import { runSetupAgain } from "../lib/setupState.ts";
 import { Filter, Fold, SettingRow, choiceIsWide, Toggle, Switch, type RowDetail } from "./SettingRow.tsx";
 import { resetShown } from "../lib/settingsModified.ts";
 import { pageScore, absentFor, rowId, type SettingsPage } from "../lib/settingsIndex.ts";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal, PortalFloor } from "./Portal.tsx";
 import { LAYER } from "../lib/layers.ts";
-import { api, type PrivacyFacts } from "../lib/api.ts";
+import { api, serverIsTokenless, type PrivacyFacts } from "../lib/api.ts";
 import { savePaneField as paneFieldSave } from "../lib/paneEngineSave.ts";
 import { browserPlaces, CAN_IMPORT_COOKIES, cookieSources, importCookies, forgetCookies, type CookieSource, type CookieImportReply } from "../lib/desktop.ts";
 import { loadProfiles } from "../lib/browserProfiles.ts";
@@ -35,7 +38,7 @@ import { useTrackerSetup } from "../lib/trackerSetup.ts";
 import { rememberTrackerChoices } from "../lib/trackerView.ts";
 import { __forgetClickupPrefs } from "../lib/clickupPrefs.ts";
 import { __forgetClickupSpaces } from "../lib/clickupSpaces.ts";
-import { ClickUpPane, CardSkillsRow } from "./ClickUpPane.tsx";
+import { ClickUpPane, CardSkillsCard } from "./ClickUpPane.tsx";
 import { JiraPane } from "./JiraPane.tsx";
 import { __forgetClickupSetup, clickupSetup } from "../lib/clickupSetup.ts";
 import { forgetCards } from "../lib/prCardStore.ts";
@@ -47,13 +50,15 @@ import { useStableFlow } from "./useStableFlow.ts";
 import { Ticks } from "./Ticks.tsx";
 import { ingestUpdate, isUpdateAvailable } from "../lib/updateStore.ts";
 import { ReleaseNotesModal } from "./ReleaseNotesModal.tsx";
+import { V1Badge } from "./V1Badge.tsx";
 import { installedNotes, type NotesTarget } from "../lib/whatsNew.ts";
 import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESKTOP, IS_MAC_DESKTOP, HAS_BROWSER } from "../lib/desktop.ts";
 import { overlayOpen } from "../lib/overlays.ts";
 import { Select } from "./Select.tsx";
-import { GateCard, WorkerRolesCard } from "./agents/AgentsCards.tsx";
+import { GateCard } from "./agents/AgentsCards.tsx";
 import { noteOpen } from "../lib/usageOpens.ts";
 import { WORKER_ROLES } from "../../../shared/workerRoles.ts";
+import { BROWSER_ENGINES, BROWSER_ROLES, type BrowserWorkers } from "../../../shared/browserWorkers.ts";
 import { ALARM_VOICES, NOTIFY_VOICES, findVoice, playVoice, type Voice } from "../lib/sounds.ts";
 import { alarmVoiceId, setAlarmVoice } from "../lib/alarm.ts";
 import { SEARCH_ENGINE_LABELS, type SearchEngine } from "../lib/browserUrl.ts";
@@ -62,12 +67,12 @@ import { RemoteAccessPane } from "./RemoteAccessPane.tsx";
 import { NOTIFY_KINDS, NOTIFY_CHANNELS, NOTIFY_KIND_LABEL, NOTIFY_CHANNEL_LABEL, type NotifyKind, type NotifyChannel } from "../../../shared/notifyPrefs.ts";
 import { getNotifyPrefs, subscribeNotifyPrefs, saveNotifyPrefs } from "../lib/notifyPrefsStore.ts";
 import { PluginsPane } from "./PluginsPane.tsx";
-import { TerminalIcon, DiffIcon, BrowserIcon, UnderstudyIcon, LanternIcon, DashIcon } from "./workspace/icons.tsx";
+import { TerminalIcon, DiffIcon, BrowserIcon, UnderstudyIcon, DashIcon } from "./workspace/icons.tsx";
 import {
   SlidersIcon, ThemeIcon, BellIcon, SidebarIcon, KeyboardIcon, BudgetIcon, PulseIcon,
   CommandIcon, ReviewIcon, QuoteIcon, PanesIcon, PlugIcon, ServerIcon, PhoneIcon,
-  PuzzleIcon, ShieldIcon, InfoIcon, ChecklistIcon, DownloadIcon, ColumnsIcon, ChipIcon, DiamondIcon, FlowIcon, LayersIcon } from "./settingsNavIcons.tsx";
-import { resolvePane, openSettings, paneWhenClickupKnown } from "../lib/openSettings.ts";
+  PuzzleIcon, ShieldIcon, InfoIcon, ChecklistIcon, DownloadIcon, ColumnsIcon, ChipIcon, DiamondIcon, FlowIcon, LayersIcon, ChevronRightIcon } from "./settingsNavIcons.tsx";
+import { resolvePane, openSettings, closeSettings, paneWhenClickupKnown } from "../lib/openSettings.ts";
 import { SettingsNav } from "./SettingsNav.tsx";
 import { SettingsSearchPanel } from "./SettingsSearchPanel.tsx";
 import { SettingsPageHeader } from "./SettingsPageHeader.tsx";
@@ -79,11 +84,16 @@ import { THEMES } from "../lib/highlight.ts";
 import { BudgetsPane } from "./BudgetsPane.tsx";
 import { EnginesPane } from "./engines/EnginesPane.tsx";
 import { OrchestrationPane } from "./orchestration/OrchestrationPane.tsx";
+import { GapsPane } from "./orchestration/GapsPane.tsx";
+import { PolarisPane } from "./polaris/PolarisPane.tsx";
+import { CleanupSettings } from "./CleanupSettings.tsx";
+import { FlightPlanLink } from "./flightPlan/FlightPlanLink.tsx";
 import { rendererPref, setRendererPref, type RendererPref } from "../lib/termRenderer.ts";
 import { TERM_FONTS, CURSORS, fontAvailable, currentTermFont, currentTermSize, currentTermCursor, currentTermLineHeight, setTermFont, setTermSize, setTermCursor, setTermLineHeight, SIZE_MIN, SIZE_MAX, LINE_HEIGHT_MIN, LINE_HEIGHT_MAX, DEFAULT_SIZE, DEFAULT_LINE_HEIGHT, type CursorStyle } from "../lib/termPrefs.ts";
 import { focusFollowsMouse, setFocusFollowsMouse } from "../lib/termFocusPref.ts";
 import { parseRules, setTabGroupsOn, tabGroupRulesText, tabGroupsOn } from "../lib/tabGroups.ts";
-import { paneActionsMode, setPaneActionsMode, type PaneActionsMode } from "../lib/paneActionsPref.ts";
+import { paneActionsMode, setPaneActionsMode, paneMarker, setPaneMarker, type PaneActionsMode, type PaneMarker } from "../lib/paneActionsPref.ts";
+import { PaneBarPicker } from "./PaneBarPicker.tsx";
 import { diffThemePref, setDiffThemePref, diffSplit, diffWrap, setDiffSplit, setDiffWrap, DEFAULT_SPLIT, DEFAULT_WRAP } from "../lib/diffPrefs.ts";
 import {
   TASK_SOURCES, taskSourceShown, shownTaskSources,
@@ -113,14 +123,18 @@ import {
   appNotify, subscribeAppNotify,
   type SysNotifyMode, type NotifyCapability,
 } from "../lib/sysNotify.ts";
-import type { DepReport, DepStatus } from "../../../shared/deps.ts";
+import { levelFor, needsYou, type DepReport, type DepStatus } from "../../../shared/deps.ts";
+import { pickedAgent } from "../lib/newWindow.ts";
 import { clock24, setClock24 } from "../lib/clockPref.ts";
 import { setSplashOn, splashOn } from "../lib/splashPref.ts";
 import { usageRefreshOn, setUsageRefreshOn } from "../lib/usageRefreshPref.ts";
+import { barSwitches, everSeen, type UsageBarProvider } from "../lib/usageBarPref.ts";
+import { OpenCodeGoCard } from "./engines/UsageKeyCard.tsx";
 import { paceConfig, setPaceConfig, subscribePaceConfig } from "../lib/paceConfig.ts";
 import { PACE_MIN_MINUTES, type PaceConfig } from "../../../shared/pace.ts";
 import { longWindowUsed, providerUsage, subscribeProviderUsage } from "../lib/usageStore.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
+import { benchState, subscribeBench, setBenchFabMode, type FabMode } from "../lib/benchStore.ts";
 import { bindings, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId,
          chordFor, hasCustomChord, rebindChord, clearChord, resetChords, chordsCustomised, chordFromEvent, chordLabel,
          appChordFor, hasCustomAppChord, rebindAppChord, resetAppChords, appChordsCustomised,
@@ -137,7 +151,7 @@ import "./settingsSplit.css";
 import "./orchestration/orchestration.css";
 import "./settingsGroupB.css";
 import { HIT, ICON } from "../lib/iconSize.ts";
-import { AgentIcon, CheckboxIcon, ClockIcon, CrossIcon, DiskIcon, EditIcon, IconLabel, LinkIcon, PlusIcon, RefreshIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { AgentIcon, CheckboxIcon, ClockIcon, CrossIcon, DiskIcon, EditIcon, EyeIcon, IconLabel, LinkIcon, MergeIcon, PlusIcon, RefreshIcon, SparkleIcon, StarIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { ciOnlyApproved } from "../lib/ciNotifyPref.ts";
 import { reviewGateOn, setReviewGate } from "../lib/reviewGatePref.ts";
 import { AskedAlertLog } from "./AskedAlertLog.tsx";
@@ -151,7 +165,7 @@ import { MuteGlyph } from "./TopBarNotes.tsx";
 import { Button, RefreshButton, INPUT, INPUT_STYLE, EDGE, LINE, Segmented } from "./workspace/Chrome.tsx";
 import { LAUNCH_MODES, LAUNCH_MODE_LABEL, isLaunchMode, parseDenyRules, type LaunchMode } from "../../../shared/launchModes.ts";
 import { setLaunchPermissions } from "../lib/launchMode.ts";
-import { CheckRow, Disclosure, DownloadButton, SELECT_BOX, SegControl, EmptyState, Field, LinkButton, ProblemNote, SaveBar, SaveChip, SettingsCard, SettingsForm, StatusBadge, helpIdFor, type StatusTone } from "./SettingsKit.tsx";
+import { CheckRow, Disclosure, DownloadButton, SELECT_BOX, EmptyState, Field, LinkButton, ProblemNote, SaveBar, SaveChip, SettingsCard, SettingsForm, StatusBadge, helpIdFor, type StatusTone } from "./SettingsKit.tsx";
 import { PreviewCard, WithPreview } from "./settings/PreviewCard.tsx";
 import { WindowPreview, SidebarPreview, DiffPreview, LanternPreview, BrowserPreview, LiveTabs, type LiveView } from "./settings/previews/index.ts";
 import { railItems } from "./settings/previews/MiniApp.tsx";
@@ -160,7 +174,7 @@ import { cardIdIn } from "../../../shared/cardRef.ts";
 import { pageChips, setPageFact, usePageFacts } from "../lib/pageFacts.ts";
 import { COUNTED_VIEWS, railBadgeOn, railBadgesCustomised, railBadgesKey, resetRailBadges, subscribeRailBadges } from "../lib/railBadges.ts";
 
-/** A heading inside a Section, for a pane that answers the same question about
+/** A heading inside a settings card, for a pane that answers the same question about
  *  two different sources. Without it "Quiet" and "Alert sounds" sit in one flat
  *  list and you have to read every hint to work out which switch is about your
  *  machine and which is about this app. */
@@ -336,7 +350,7 @@ function Choice<T extends string>({ label, hint, detail, value, options, onPick,
       wide={wide ?? choiceIsWide(options.map((o) => o.label))}
       control={select
         ? <Select value={value} onChange={(v) => onPick(v as T)} disabled={disabled} title={label} options={options.map((o) => ({ value: o.v, label: o.label }))} />
-        : <SegControl label={label} value={value} options={options} onPick={onPick} disabled={disabled} />
+        : <Segmented track label={label} value={value} options={options.map((o) => ({ id: o.v, label: o.label }))} onChange={onPick} disabled={disabled} />
       } />
   );
 }
@@ -379,9 +393,9 @@ function ScaleControl({ scale, onZoom }: { scale: number; onZoom: (dir: 1 | -1 |
   const quick = SCALE_QUICK.includes(scale);
   return (
     <span className="flex items-center gap-2 flex-wrap justify-start">
-      <SegControl label="Display size" value={quick ? String(scale) : undefined}
-        options={SCALE_QUICK.map((v) => ({ v: String(v), label: fmtScale(v) }))}
-        onPick={(v) => goTo(Number(v))} />
+      <Segmented track label="Display size" value={quick ? String(scale) : undefined}
+        options={SCALE_QUICK.map((v) => ({ id: String(v), label: fmtScale(v) }))}
+        onChange={(v) => goTo(Number(v))} />
       <select aria-label="Other display size" className={INPUT} style={INPUT_STYLE} value={quick ? "" : String(scale)}
         onChange={(e) => e.target.value && goTo(Number(e.target.value))}>
         <option value="" disabled>Other…</option>
@@ -400,7 +414,7 @@ function OnboardingMark({ done }: { done: boolean }) {
     : <StatusBadge tone="off">Not yet</StatusBadge>;
 }
 
-type Pane = "recipes" | "review-prompts" | "saved-replies" | "appearance" | "prefs" | "terminal" | "diff" | "tasks" | "privacy" | "notifications" | "browser" | "rail" | "keys" | "lantern" | "log" | "budgets" | "hooks" | "connections" | "engines" | "orchestration" | "clickup" | "jira" | "tmux" | "remote" | "plugins" | "understudy" | "about" | "onboarding"
+type Pane = "recipes" | "review-prompts" | "saved-replies" | "appearance" | "prefs" | "terminal" | "diff" | "tasks" | "git" | "privacy" | "notifications" | "browser" | "rail" | "keys" | "lantern" | "log" | "budgets" | "hooks" | "connections" | "engines" | "orchestration" | "gaps" | "polaris" | "clickup" | "jira" | "tmux" | "remote" | "plugins" | "understudy" | "about" | "onboarding"
   /** A plugin's own settings page, one per plugin that declares any. */
   | `plugin:${string}`;
 /** "" is a page that is in no group and so not in the nav (see LINK_ONLY).
@@ -491,8 +505,8 @@ const LAST_PANE_KEY = "agentglass.settings.pane";
 const ALWAYS_RESET: ReadonlySet<string> = new Set(["prefs", "appearance", "rail"]);
 /** The page header's reset button, where it is not "Reset page". */
 const RESET_WORD: Record<string, string> = { rail: "Reset rail" };
-/** Pages short enough to read whole: they have no "on this page" index. */
-const NO_TOC: ReadonlySet<string> = new Set(["prefs", "appearance", "rail", "connections"]);
+/** Pages short enough to read whole, or whose cards sit under tabs (an index would list cards of a hidden tab): no "on this page" index. */
+const NO_TOC: ReadonlySet<string> = new Set(["prefs", "appearance", "rail", "connections", "orchestration"]);
 
 const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: string; status?: boolean; icon: (p: { size?: number }) => React.ReactElement }[] = [
   // "sound" removed: it named the Notifications rows, not anything on this
@@ -524,17 +538,20 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
   // people to the wrong one of the two because I picked the obvious name. A
   // setting is filed under the thing it configures.
   ...(HAS_BROWSER ? [{ id: "browser" as const, label: "Browser", group: "Workspace" as const, kw: "browser web page zoom login cookies import chrome firefox zen profile home search engine", what: "Where the built-in browser starts, and how to bring in the logins you already have.", icon: BrowserIcon }] : []),
+  { id: "git", label: "Git and pull requests", group: "Workspace", kw: "git pull request pr merged merge cleanup clean up leftovers worktree branch docker stash notes tab automatic ask off older days include safety blocks", what: "What happens to the local leftovers of a PR once it is merged.", icon: MergeIcon },
   { id: "tasks", label: "Tasks", group: "Workspace", kw: "tasks sources github issues local taskwarrior clickup hide show providers view opens on", what: "Where the Tasks view starts, which trackers feed it, and how a branch finds its card.", icon: ChecklistIcon },
-  { id: "hooks", label: "Agents", group: "Agents", kw: "agents hooks claude code install setup worker roles scout builder reviewer verifier lock model gate who answers nobody answers opencode qwen browser agent skill drive", what: "Wire Claude Code into the app, decide who answers the gate, and which CLI each worker role uses.", icon: PlugIcon },
+  { id: "hooks", label: "Agents", group: "Agents", kw: "agents hooks claude code install setup gate who answers nobody answers browser agent skill drive lantern reminder status what doing needs you ask sessions working on interval orchestrator seat wake floor chair post watching notify look cache warm", what: "Everything agentglass does with the agents on this machine: what watches them, what it asks them, when the orchestrator wakes, and what may leave.", icon: PlugIcon },
   { id: "engines", label: "Agent engines", group: "Agents", kw: "engine engines provider hermes opencode codex gemini antigravity claude model version minimum signed in sign-in login orchestrator worker role ready test recheck installed update reporting connect events", what: "Every agent CLI on this machine, what it can do inside agentglass, and what is left to wire.", icon: ChipIcon },
-  { id: "orchestration", label: "Orchestration", group: "Agents", kw: "orchestration orchestrator main agent chair policy rule rules worker workers scout builder verifier engine model fallback chain ask when it runs usage weekly 5h plan hours budget ceiling envelope network commit write limits retries minutes per turn project override", what: "Which engine runs a project's main agent and does its work, the rules that change that for a while, and what a worker may do.", icon: FlowIcon },
-  { id: "lantern", label: "Lantern", group: "Agents", kw: "lantern reminder status what doing needs you ask sessions working on interval orchestrator seat wake floor chair post", what: "What the Lantern may ask of a session, and how often it looks.", icon: LanternIcon },
+  { id: "orchestration", label: "Orchestration", group: "Agents", kw: "flight plan preflight go no-go orchestration orchestrator main agent chair policy rule rules worker workers scout builder verifier engine model fallback chain ask when it runs usage weekly 5h plan hours budget ceiling envelope network commit write limits retries minutes per turn project override", what: "Edit the flow on the canvas: engines, who reviews, rounds, rules. This page holds only what is the same for every block.", icon: FlowIcon },
+  { id: "polaris", label: "Polaris", group: "Agents", kw: "polaris watch watching signals landing automatic doors preset guided autopilot merge dock cards labels approvals limits hours pull request review replies beacon sessions cleanup course guardrails", what: "What Polaris watches, what it may do without asking, and the limits under every stage.", icon: StarIcon },
+
   /* Filed beside Agents rather than under System, and the two readings are
      both defensible: it is a store of what you did, and it is a thing that
      watches agents work. It is here because the question people arrive with is
      "what is that face in the rail", and the face is about the work. */
   { id: "understudy", label: "Knowledge", group: "Agents", kw: "knowledge clone learn sources teach precedents decisions bank recall exclusions never see private terms consent scorecard watch score", what: "Where the orchestrator learns how you decide — what it may read, and what it must never see.", status: true, icon: UnderstudyIcon },
   { id: "budgets", label: "Usage & budgets", group: "Agents", kw: "usage pace plan budget spend cost limit money threshold codex usage current quota github api rate limit search remaining", what: "Budgets, plan pace, the Codex usage refresh and the GitHub API budget.", icon: BudgetIcon },
+  { id: "gaps", label: "Gaps and additions", group: "Agents", kw: "gaps additions missing redesign parity reference what changed before after decisions added worker editor conditions presets team rail", what: "What the orchestration redesign adds, where each piece lives, and the decisions behind it.", icon: ChecklistIcon },
   { id: "recipes", label: "Commands", group: "Library", kw: "commands recipes custom script make run shortcut alias task saved own", what: "Commands you keep, with the parts that change asked for when you run them.", icon: CommandIcon },
   /* Filed under the work rather than under the pull-request panel: these are
      prompts an agent is given, and the panel is only where the button happens
@@ -594,6 +611,97 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
  * State lives in localStorage rather than here, and is read back on mount, so
  * this pane and the view cannot disagree about what was chosen.
  */
+/** The Browser view is outside Settings, so the card that describes it offers the way there. */
+function showBrowserView() {
+  emitControl({ cmd: "view", to: "browser" });
+  emitControl({ cmd: "esc" });
+  closeSettings();
+}
+
+/**
+ * Who may drive the built-in browser: which engines and which worker roles.
+ *
+ * The server holds it (`browser.workers`, server/src/browseraccess.ts), so the
+ * launch path and this card cannot disagree: a worker whose engine or role is
+ * off is started with no browser credential at all, and its brief says so. The
+ * person's own change applies at once; an agent may read it or take a member
+ * away, and adding one back is a request that waits for the person here.
+ */
+function WhoMayDriveBrowser({ show }: { show: () => void }) {
+  const [granted, setGranted] = useState<BrowserWorkers | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  // A server with no token identifies nobody, so every rule below is advisory
+  // there. Read once: it cannot change without a restart.
+  const [tokenless, setTokenless] = useState(false);
+  useEffect(() => { void serverIsTokenless().then(setTokenless); }, []);
+
+  const load = useCallback(() => {
+    api.settingAtGlobal("browser.workers")
+      .then((r) => { if (r.ok) setGranted((r.value as BrowserWorkers | undefined) ?? null); else setErr(r.error || "Could not read it"); })
+      .catch(() => setErr("Could not reach the server"));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const save = async (next: BrowserWorkers) => {
+    setBusy(true); setErr(null);
+    const r = await api.settingsDoorSet("browser.workers", next).catch(() => ({ ok: false, applied: false as boolean | undefined, error: "Could not reach the server" }));
+    setBusy(false);
+    if (!r.ok) { setErr(r.error || "Could not save it"); return; }
+    // The person's own change applies; anything still pending is shown by the requests card.
+    if (r.applied === false) { setErr("That change waits for you on the requests card."); load(); return; }
+    load();
+  };
+
+  const flip = (kind: "engines" | "roles", id: string) => {
+    if (!granted || busy) return;
+    const list = granted[kind];
+    void save({ ...granted, [kind]: list.includes(id) ? list.filter((x) => x !== id) : [...list, id] });
+  };
+
+  const chips = (kind: "engines" | "roles") => (
+    <div className="flex flex-wrap gap-2">
+      {(kind === "engines" ? BROWSER_ENGINES : BROWSER_ROLES).map((x) => {
+        const on = granted?.[kind].includes(x.id) ?? false;
+        return (
+          <Button key={x.id} size="compact" on={on} aria-pressed={on}
+            aria-label={`${x.title}, ${on ? "on" : "off"}`}
+            disabled={!granted || busy}
+            onClick={() => flip(kind, x.id)}>{x.title}</Button>
+        );
+      })}
+    </div>
+  );
+
+  return (
+    <SettingsCard title="Who may drive the browser" icon={<BrowserIcon size={ICON.sm} />}
+      desc="Which worker CLIs and roles may use the built-in browser. A worker drives it in its own container; yours is never reachable. Off means the app hands no credential and the supplied CLI and MCP server refuse; a hand-written process running as the same operating-system user could still read files you can read — the worker envelope (sandbox) is what limits that."
+      status={<StatusBadge tone={err ? "err" : granted ? "ok" : "off"}>
+        {err ? "Not saved" : granted ? `${granted.engines.length} engines · ${granted.roles.length} roles` : "Reading…"}
+      </StatusBadge>}>
+      <SettingRow settingId="browser.workers" label="Engines"
+        hint="Turn one off and its workers are started with no browser credential, and their brief says so. A running one keeps it until its turn ends."
+        below={chips("engines")} />
+      <SettingRow settingId="browser.workers" label="Roles"
+        hint="Which kind of worker may drive it. A role that is off keeps every other ability it has."
+        below={chips("roles")} />
+      {tokenless && (
+        <SettingRow agentExempt label="No token on this server"
+          hint="This server has no token, so this list cannot be enforced; set AGENTGLASS_TOKEN to require a credential."
+          below={<div className="text-[12px]" style={{ color: "var(--warning-ink)" }}>
+            Any process on this machine reaches the browser as you, whatever is on here. Settings ▸ Remote has the command.
+          </div>} />
+      )}
+      <SettingRow agentExempt label="The floor"
+        hint="A worker's credential reaches its own container (agent:<name>) through the local relay, and the relay refuses yours, whatever is on here." />
+      <SettingRow agentExempt label="Widening waits for you"
+        hint="An agent may read this and turn an engine or a role off at once. Adding one back is one request that waits for you."
+        actions={<Button onClick={show} title="The Browser view opens here.">Show it</Button>} />
+      {err && <div role="alert" className="agx-settings-x px-4 py-2 text-[12px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
+    </SettingsCard>
+  );
+}
+
 function BrowserPane({ children }: { children?: React.ReactNode }) {
   const [home, setHome] = useState(homePageRaw);
   // What the view opens on is the saved address, not the draft in the box.
@@ -814,14 +922,6 @@ function RailPane() {
  * The title is optional, because a page whose only group repeats the page name
  * says "Terminal" twice before the first setting.
  */
-/** Panes whose content is a grid or a map of its own: one column of the page, at this width. */
-const WIDE_PANES = new Map<string, string>([
-  /* The workflow map is a column of step cards beside a column of statuses, with the lines running between them; 1100px is the width that keeps a card's header on two lines. The cap is higher so a wide window can put the other cards in two columns (.wfm in settingsGroupB.css), the map keeping the whole row. */
-  ["clickup", "1900px"],
-  /* The same map, so the same width: narrower, the statuses fall under the steps and no line is drawn to them. */
-  ["jira", "1900px"],
-]);
-
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 /** The hours a plan's weekly budget is spread over. See shared/pace.ts. */
@@ -833,7 +933,7 @@ const HOUR_OPTS = (from: number, to: number) => Array.from({ length: to - from +
 function WeekBars({ cfg }: { cfg: PaceConfig }) {
   const hours = (i: number) => (cfg.spread === "all" ? 24 : cfg.workDays[i] ? Math.max(0, cfg.workEnd - cfg.workStart) : 0);
   const week = [0, 1, 2, 3, 4, 5, 6].map(hours);
-  // All ticked-off is "every hour counts" (see PaceLines), so the bars say the same.
+  // All ticked-off is "every hour counts" (the spread the pace budget reads), so the bars say the same.
   const none = week.every((h) => h === 0);
   const hs = none ? week.map(() => 24) : week;
   const top = Math.max(...hs, 1);
@@ -930,40 +1030,6 @@ function PageMatchHeading({ id, onOpen }: { id: Pane; onOpen: () => void }) {
       style={{ color: "var(--text3)" }}>
       {t.label}
     </button>
-  );
-}
-
-/** `headerControl` is a card's master switch, right-aligned in its heading.
- *  Nothing on this slice has a natural spot for one; the notifications page
- *  is the first user. */
-function Section({ title, desc, headerControl, children }: {
-  title?: string; desc?: string; headerControl?: React.ReactNode; children: React.ReactNode;
-}) {
-  return (
-    /* FLAT ON PURPOSE — a heading and a rows box, siblings.
-     *
-     * The card, the corner clipping and the gap to the next group are all
-     * drawn by `.agx-settings-col .agx-settings-section` in index.css, and
-     * that is the whole point: half the settings pages never call this
-     * component and build the same two boxes by hand. A card that lived here
-     * reached the pages that imported it and left the rest flat, which is how
-     * this ended up half-redesigned.
-     *
-     * agx-settings-section also hides itself when a search has filtered every
-     * row inside it away — a heading over nothing reads as a group whose
-     * contents failed to load. */
-    <div className="agx-settings-section">
-      {title && (
-        <div className="agx-settings-head flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="agx-settings-head-t">{title}</div>
-            {desc && <div className="agx-settings-head-d">{desc}</div>}
-          </div>
-          {headerControl !== undefined && <div className="shrink-0">{headerControl}</div>}
-        </div>
-      )}
-      <div className="agx-settings-rows">{children}</div>
-    </div>
   );
 }
 
@@ -1206,7 +1272,7 @@ const VERBS: Record<string, string> = {
   "/git/stash-push": "stashed", "/git/stash-apply": "applied stash",
   "/git/stash-pop": "popped stash", "/git/stash-drop": "dropped stash",
   "/git/stash-rename": "renamed stash", "/git/stash-to-branch": "branched from stash",
-  "/git/stash-partial": "stashed files", "/git/stash-apply-overwrite": "applied stash over",
+  "/git/stash-partial": "stashed files", "/git/stash-apply-overwrite": "applied stash over", "/git/stash-put-back": "put the tree back",
   "/git/bisect-start": "started a bisect", "/git/bisect-mark": "marked a bisect step", "/git/bisect-reset": "reset the bisect",
   "/git/tag-create": "created tag", "/git/tag-delete": "deleted tag", "/git/tag-push": "pushed tag", "/git/tag-delete-remote": "deleted remote tag",
   "/git/apply-hunk": "staged a hunk", "/git/undo-merge": "undid the merge",
@@ -1503,7 +1569,12 @@ function AboutPane({ open }: { open: boolean }) {
           </span>
           {st.info.builtAt && <> · built {new Date(st.info.builtAt).toLocaleDateString(undefined, { day: "numeric", month: "long" })}</>}
         </>}
-        control={<span className="t-mono text-[13px] font-semibold">{st.info.version}</span>}
+        control={
+          <span className="flex items-center gap-2">
+            <span className="t-mono text-[13px] font-semibold">{st.info.version}</span>
+            <V1Badge version={st.info.version} />
+          </span>
+        }
       />
 
       {/* Said in words, because the stamp alone is only obvious once you know
@@ -1913,7 +1984,7 @@ function CookieImport() {
  *  /Applications is where a dragged .dmg lands. */
 const MAC_BUNDLE_BIN = "/Applications/agentglass.app/Contents/Resources/bin";
 
-function AgentBrowserPane({ open }: { open: boolean }) {
+function AgentBrowserPane({ open, bare }: { open: boolean; bare?: boolean }) {
   const [st, setSt] = useState<BrowserUseStatus | null>(null);
   const [busy, setBusy] = useState(false);
   useReportSaving("hooks", busy);
@@ -1934,7 +2005,9 @@ function AgentBrowserPane({ open }: { open: boolean }) {
     load();
   };
 
-  if (!st) return <SettingsCard title="Browser access" icon={<BrowserIcon size={ICON.sm} />}><EmptyState>Reading…</EmptyState></SettingsCard>;
+  if (!st) return bare
+    ? <EmptyState>Reading browser access…</EmptyState>
+    : <SettingsCard title="Browser access" icon={<BrowserIcon size={ICON.sm} />}><EmptyState>Reading browser access…</EmptyState></SettingsCard>;
 
   const mono = { color: "var(--text)" };
   /* A Mac has no installer to reinstall: the .dmg carries the CLI inside the
@@ -1954,36 +2027,46 @@ function AgentBrowserPane({ open }: { open: boolean }) {
         : st.skill.state === "missing" ? "Not installed — agents have no way to know the browser can be driven"
           : "This build does not carry the skill file, so there is nothing to install";
 
-  return (
-    /* Three independent things, so a checklist rather than a paragraph: the
-       count says how far off you are before you have read a word, and each
-       line carries the button that fixes that line. The argument for the
-       feature is read once, by somebody deciding whether to bother, so it
-       comes after the verdict. */
-    <SetupCard
-      title="Browser access" icon={<BrowserIcon size={ICON.sm} />}
-      error={err}
-      note={note}
-      actions={<Button onClick={load} disabled={busy}>Check again</Button>}
-      steps={[
-        { title: "The command", done: st.cli.state === "installed",
-          detail: <><span className="t-mono text-[11px]" style={mono}>agentglass-browser</span>. {cliSays}</> },
-        { title: "The skill", done: st.skill.state === "current",
-          detail: <>What tells an agent the command exists. {skillSays}</>,
-          action: (st.skill.state === "missing" || st.skill.state === "stale")
-            ? { label: st.skill.state === "stale" ? "Update" : "Install", onClick: () => void install(), busy }
-            : undefined },
-        { title: "A window that can answer", done: st.windows > 0, says: { done: "Open", todo: "Not open", todoTone: "off" },
-          detail: st.windows > 0
-            ? "The browser view is open in this window."
-            : "The browser view is not open yet. The command opens it itself on first use; until then there is nothing to drive." },
-      ]}>
-      <SettingRow label="Why an agent needs this rather than curl"
+  /* Three independent things, so a checklist rather than a paragraph: the
+     count says how far off you are before you have read a word, and each
+     line carries the button that fixes that line. The argument for the
+     feature is read once, by somebody deciding whether to bother, so it
+     comes after the verdict. */
+  const steps: SetupStep[] = [
+    { title: "The command", done: st.cli.state === "installed",
+      detail: <><span className="t-mono text-[11px]" style={mono}>agentglass-browser</span>. {cliSays}</> },
+    { title: "The skill", done: st.skill.state === "current",
+      detail: <>What tells an agent the command exists. {skillSays}</>,
+      action: (st.skill.state === "missing" || st.skill.state === "stale")
+        ? { label: st.skill.state === "stale" ? "Update" : "Install", onClick: () => void install(), busy }
+        : undefined },
+    { title: "A window that can answer", done: st.windows > 0, says: { done: "Open", todo: "Not open", todoTone: "off" },
+      detail: st.windows > 0
+        ? "The browser view is open in this window."
+        : "The browser view is not open yet. The command opens it itself on first use; until then there is nothing to drive." },
+  ];
+  const known = steps.filter((x) => x.done !== null);
+  const done = known.filter((x) => x.done).length;
+  const rows = (
+    <>
+      {steps.map((x) => (
+        <SettingRow key={x.title} label={x.title} hint={x.detail}
+          status={x.done === true
+            ? <StatusBadge tone="ok">{x.says?.done ?? "Done"}</StatusBadge>
+            : x.done === false
+              ? <StatusBadge tone={x.says?.todoTone ?? "warn"}>{x.says?.todo ?? "To do"}</StatusBadge>
+              : <StatusBadge tone="off">Your step</StatusBadge>}
+          actions={x.action
+            ? <Button pending={x.action.busy} onClick={x.action.onClick}>{x.action.label}</Button>
+            : undefined} />
+      ))}
+      {(err || note) && (
+        <div role={err ? "alert" : "status"} className="agx-settings-x px-4 py-2 text-[12px]"
+          style={{ color: err ? "var(--error-ink)" : "var(--text2)" }}>{err || note}</div>
+      )}
+      <SettingRow label="Why a window and not curl"
         hint="An agent fetching a URL from its shell gets the signed-out version of everything that matters, because the session lives in a browser. This one has your sessions in it. Three things have to be true for an agent to use it, and they break independently." />
-      {/* Something to paste, because "it is installed" and "I know what to say
-          to it" are different problems and only the first one is solved by a
-          green line. */}
-      <SettingRow label="Try it"
+      <SettingRow label="Three lines to paste into an agent"
         hint="Something to say to an agent once it can drive the browser."
         detail={{
           summary: "Three lines to paste into an agent",
@@ -1997,19 +2080,28 @@ function AgentBrowserPane({ open }: { open: boolean }) {
             ))}
           </ul>,
         }} />
-    </SetupCard>
+    </>
+  );
+  if (bare) return rows;
+  return (
+    <SettingsCard title="Browser access" icon={<BrowserIcon size={ICON.sm} />}
+      desc="One wire from this app to a browser an agent can drive."
+      status={<StatusBadge tone={done === known.length ? "ok" : "off"}>{done} of {known.length} done</StatusBadge>}
+      actions={<Button onClick={load} disabled={busy}>Check again</Button>}>
+      {rows}
+    </SettingsCard>
   );
 }
 
 /** The Agents page: the hooks and the gate beside it, the cards the modal hands
- *  in (browser, card skills), the worker roles, and one danger zone
- *  that holds both ways back — which is why the hooks state lives here and not
- *  in the card, and why the cards come in as slots: the flow fills columns in
- *  order, so the danger zone has to be drawn after every card it follows. */
+ *  in (browser, card skills), a pointer to the worker roles in Orchestration,
+ *  and one danger zone that holds both ways back — which is why the hooks state
+ *  lives here and not in the card, and why the cards come in as slots: the flow
+ *  fills columns in order, so the danger zone has to be drawn after every card
+ *  it follows. */
 function AgentsPage({ open, browser, skills }: {
   open: boolean; browser: React.ReactNode; skills: React.ReactNode;
 }) {
-  const [resetTick, setResetTick] = useState(0);
   const [armed, setArmed] = useState(false);
   const [resetNote, setResetNote] = useState<string | null>(null);
   const [st, setSt] = useState<HookSetupStatus | null>(null);
@@ -2018,24 +2110,53 @@ function AgentsPage({ open, browser, skills }: {
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
+  /* The Lantern's own state, read with the hooks: one page means one open. */
+  const [seatWake, setSeatWake] = useState(4);
+  const [ask, setAsk] = useState(true);
+  const [askMinutes, setAskMinutes] = useState(20);
+  const [watch, setWatch] = useState(true);
+  const [watchMinutes, setWatchMinutes] = useState(15);
+  const [cacheTtl, setCacheTtl] = useState(5);
+  const [watchErr, setWatchErr] = useState<string | null>(null);
+  const [watchNote, setWatchNote] = useState<string | null>(null);
+  /* Unknown until the read lands (and unknown again if it fails): the chip and
+     the card say so rather than reporting a default as the stored value. */
+  const [watchRead, setWatchRead] = useState<"reading" | "ok" | "failed">("reading");
+  const [watchTry, setWatchTry] = useState(0);
+
   useEffect(() => {
     if (!open) return;
     let live = true;
+    setWatchRead("reading");
     api.hooksStatus()
       .then((r) => { if (live) setSt(r); })
       .catch(() => { if (live) setSt(null); });
+    void api.seatWake().then((r) => { if (live && r.ok) setSeatWake(r.hours); }).catch(() => {});
+    api.lanternSettings()
+      .then((r) => {
+        if (!live) return;
+        if (typeof r.nudge === "boolean") setAsk(r.nudge);
+        if (typeof r.minutes === "number") setAskMinutes(r.minutes);
+        if (typeof r.watch === "boolean") setWatch(r.watch);
+        if (typeof r.watchMinutes === "number") setWatchMinutes(r.watchMinutes);
+        if (typeof r.cacheTtlMinutes === "number") setCacheTtl(r.cacheTtlMinutes);
+        setWatchErr(null);
+        setWatchRead("ok");
+      })
+      .catch(() => {
+        if (!live) return;
+        setWatchErr("Could not reach the server — the watching settings are unavailable.");
+        setWatchRead("failed");
+      });
     return () => { live = false; };
-  }, [open]);
+  }, [open, watchTry]);
 
-  /*
-   * THE GATE IS ITS OWN SWITCH, and the copy has to say why.
-   *
-   * The forwarder streams what happened. The gate HOLDS a tool call until
-   * somebody decides, and an outward one — a push, a pull request, a comment,
-   * a review, a merge, a ticket, a message in a channel — is held closed. Two
-   * different bargains, so two different buttons: nobody should acquire a
-   * thing that can stop their agents by asking for telemetry.
-   */
+  /* The gate is its own switch. The forwarder streams what happened; the gate
+     waits on an outward action until somebody answers, and an outward one — a
+     push, a pull request, a comment, a review, a merge, a ticket, a message in
+     a channel — waits with it. Two different bargains, so two different
+     switches: nobody should acquire a thing that can stop their agents by
+     asking for telemetry. */
   const gate = async (on: boolean) => {
     setBusy(true); setErr(null); setNote(null);
     const r = await api.hooksGate(on)
@@ -2066,232 +2187,219 @@ function AgentsPage({ open, browser, skills }: {
     );
   };
 
+  const saveWatch = (f: { nudge?: boolean; minutes?: number; watch?: boolean; watchMinutes?: number; cacheTtlMinutes?: number }) => {
+    setWatchNote(null);
+    api.lanternSettingsSave(f)
+      .then((r) => {
+        if (!r.ok) { setWatchNote(r.error ?? "Could not save."); return; }
+        if (typeof r.nudge === "boolean") setAsk(r.nudge);
+        if (typeof r.minutes === "number") setAskMinutes(r.minutes);
+        if (typeof r.watch === "boolean") setWatch(r.watch);
+        if (typeof r.watchMinutes === "number") setWatchMinutes(r.watchMinutes);
+        if (typeof r.cacheTtlMinutes === "number") setCacheTtl(r.cacheTtlMinutes);
+        setWatchRead("ok");
+        setWatchNote(f.watch !== undefined || f.watchMinutes !== undefined
+          ? "Saved. The next look is one interval from now."
+          : "Saved. Applies to the next prompt in every hooked session.");
+      })
+      .catch(() => setWatchNote("Could not save."));
+  };
+
+  /* The chips say the three things this page answers, before any card is read:
+     whether the hooks report, whether the gate is on, and whether the board
+     watches. The nav mark still carries the one that needs a person. */
+  useReportHead("hooks", st ? {
+    chips: [
+      { tone: st.installed ? "ok" : "off", text: st.installed ? "Hooks wired" : "Hooks not wired" },
+      ...(st.gateBundled ? [{ tone: st.gate ? "ok" as const : "warn" as const, text: st.gate ? "Gate on" : "Gate off" }] : []),
+      watchRead === "reading"
+        ? { tone: "off" as const, text: "Reading the watch" }
+        : watchRead === "failed"
+          ? { tone: "warn" as const, text: "Watch unknown" }
+          : { tone: watch ? "ok" as const : "off" as const, text: watch ? "Watching" : "Not watching" },
+    ],
+  } : null);
+
   const hooksIcon = <PlugIcon size={ICON.sm} />;
   /* The pieces that do not depend on the hooks being readable: the cards of the
      page are the same whatever the hooks say, so a failed read does not blank
-     the page, only the card that read it. */
+     the page, only the part that read it. */
   const resetRoles = async () => {
     if (!armed) { setArmed(true); return; }
     setArmed(false); setResetNote(null);
     const rs = await Promise.all(WORKER_ROLES.map((r) =>
       api.workerRoleSave(r.id, r.default.provider, r.default.model).then((x) => x.ok).catch(() => false)));
     setResetNote(rs.every(Boolean) ? "Every role is back on its default." : "Could not reset every role.");
-    setResetTick((n) => n + 1);
   };
 
-  const hooksCards = !st ? (
-    <SettingsCard title="Claude Code hooks" icon={hooksIcon}><EmptyState>Reading hook state…</EmptyState></SettingsCard>
-  ) : !st.bundled ? (
-    <SettingsCard title="Claude Code hooks" icon={hooksIcon}>
-      <SettingRow label="The hook scripts are not in this build"
-        hint={<>This build does not carry the hook scripts, so there is nothing to wire. Install from a Release, or run <span className="t-mono">bun run setup</span> in a checkout.</>}
-        status={<StatusBadge tone="warn">Not included</StatusBadge>} />
-    </SettingsCard>
-  ) : (
-    <>
-      {/* The last step is one only you can take, and there is no way from
-          here to see whether you have. It says so and stays out of the count,
-          rather than sitting there permanently unticked. */}
-      <SetupCard
-        title="Claude Code hooks" icon={hooksIcon}
-        desc="Lets agentglass see what your sessions are doing."
-        chip={<StatusBadge tone={st.installed ? "ok" : "warn"}>{st.installed ? "Wired" : "Not wired"}</StatusBadge>}
-        error={err}
-        note={note}
-        steps={[
-          { title: "Hook scripts in this build", done: st.bundled, says: { done: "Included" },
-            detail: "Shipped with the app — nothing to fetch." },
-          { title: "Wired into Claude Code", done: st.installed, says: { done: "Wired", todo: "Not wired" },
-            detail: <>Written to <span className="t-mono text-[11px]">{tilde(st.settingsPath)}</span>, run under <span className="t-mono text-[11px]">{st.python}</span>.</>,
-            /* What the checklist is FOR, read once, so it sits behind "Details". */
-            more: {
-              summary: "Details",
-              body: <>
-                Every Claude Code session streams here live — what ran, what it
-                cost, when it stopped for you. It watches; it never stops a tool
-                call, and its command ends in <span className="t-mono text-[11px]">|| exit 0</span> so that stays true
-                even if the script goes missing. Holding calls is the gate below, which is a separate switch.
-                It edits <span className="t-mono text-[11px]" style={{ color: "var(--text)" }}>{st.settingsPath}</span>,
-                backing it up first, and leaves your other hooks untouched.
-              </>,
-            },
-            action: st.installed ? undefined : { label: busy ? "Enabling…" : "Enable", onClick: () => void act("install"), busy } },
-          { title: "Start a fresh session", done: null,
-            detail: "Sessions already running keep the hooks they started with." },
-        ]}>
-        {/* The forwarder is a python script; the install writes the command
-            but cannot make an interpreter appear. Said up front rather than
-            left to a session that streams nothing and no error anywhere. */}
-        <SettingRow label="Python on your PATH"
-          hint={<>Hooks run under <span className="t-mono">{st.python}</span>; they load at startup.</>}
-          detail={{ summary: "Details", body: <>The forwarder is a python script, so <span className="t-mono">{st.python}</span> has to be on your PATH for events to arrive. A change takes effect on the next Claude Code session.</> }}
-          status={st.pythonVersion === undefined ? undefined
-            : st.pythonVersion ? <StatusBadge tone="ok">python {st.pythonVersion}</StatusBadge> : <StatusBadge tone="warn">Not found</StatusBadge>} />
-      </SetupCard>
-
-      {/* The gate. Its own card, below the forwarder, because it is the
-          stronger thing and read second for the same reason. */}
-      <GateCard st={st} busy={busy} open={open} onGate={(on) => void gate(on)} />
-    </>
-  );
-
-  return (
-    <>
-      {hooksCards}
-      {browser}
-      {skills}
-      <WorkerRolesCard open={open} resetTick={resetTick} onEngines={() => openSettings("engines")} />
-      {/* Both ways back, together and apart from everything that sets
-          something: the hooks come out of the person's own Claude Code
-          settings, the roles go back to the table in shared/workerRoles.ts.
-          Outline buttons, and neither deletes anything that cannot be put back. */}
-      <SettingsCard title="Danger zone" tone="danger" icon={<WarningIcon size={ICON.sm} />}
-          desc="Reversible, but they change what every session does.">
-          {st?.bundled && st.installed && (
-            <SettingRow label="Take the hooks back out"
-              hint="Removes the entries above; running sessions keep them until they end."
-              detail={{ summary: "Details", body: <>Also <span className="t-mono">python3 hooks/install_hooks.py --uninstall</span> in a checkout. Global (<span className="t-mono">~/.claude</span>), so it covers every project.</> }}
-              actions={<Button tone="danger" pending={busy} onClick={() => void act("uninstall")}>{busy ? "Disabling…" : "Disable hooks"}</Button>} />
-          )}
-          <SettingRow label="Forget worker roles"
-            hint={resetNote ?? (armed ? "Press again to put every role back on its default CLI and model." : "Back to “every role on its default CLI and model”.")}
-            actions={<Button tone="danger" onClick={() => void resetRoles()}>{armed ? "Reset roles?" : "Reset roles"}</Button>} />
-        </SettingsCard>
-    </>
-  );
-}
-
-/**
- * Every agent this app can connect, not only the one it ships hooks for.
- *
- * Beside the Claude Code section rather than in a tab of its own: they are the
- * same act — wiring an agent so it reports here — and splitting them would put
- * the answer to "can I use my other CLI with this" one tab further away than
- * the question that prompts it.
- */
-/**
- * THE LANTERN REMINDER — the one setting the Lantern has.
- *
- * Translated from Herdr's Lantern: its board is full because every agent it
- * seats is handed a rule to narrate what it is working toward. Here the ask
- * rides the hook every session already runs — on a prompt, the server may
- * answer with one line asking the session to `POST /agents/status`, and the
- * session reads it the way it reads the memory-save reminder. This is where
- * that is switched and paced. Two controls and no more: whether, and how often
- * one session may be asked again.
- */
-function LanternSection({ open }: { open: boolean }) {
-  const [seatWake, setSeatWake] = useState(4);
-  useEffect(() => { if (open) void api.seatWake().then((r) => { if (r.ok) setSeatWake(r.hours); }).catch(() => {}); }, [open]);
-  const [nudge, setNudge] = useState(true);
-  const [minutes, setMinutes] = useState(20);
-  const [watch, setWatch] = useState(true);
-  const [watchMinutes, setWatchMinutes] = useState(15);
-  const [cacheTtl, setCacheTtl] = useState(5);
-  const [note, setNote] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const take = (r: { nudge?: boolean; minutes?: number; watch?: boolean; watchMinutes?: number; cacheTtlMinutes?: number }) => {
-    if (typeof r.nudge === "boolean") setNudge(r.nudge);
-    if (typeof r.minutes === "number") setMinutes(r.minutes);
-    if (typeof r.watch === "boolean") setWatch(r.watch);
-    if (typeof r.watchMinutes === "number") setWatchMinutes(r.watchMinutes);
-    if (typeof r.cacheTtlMinutes === "number") setCacheTtl(r.cacheTtlMinutes);
+  const SHOW_AGENTS = "The Agents view opens here, on the Lantern board.";
+  const showAgents = () => {
+    emitControl({ cmd: "view", to: "agents" });
+    emitControl({ cmd: "esc" });
+    closeSettings();
   };
-  const load = () => api.lanternSettings()
-    .then((r) => { take(r); setErr(null); })
-    .catch(() => setErr("Could not reach the server — the Lantern settings are unavailable."));
-  useEffect(() => { if (open) void load(); }, [open]);
-  const save = (f: { nudge?: boolean; minutes?: number; watch?: boolean; watchMinutes?: number; cacheTtlMinutes?: number }) => {
-    setNote(null);
-    api.lanternSettingsSave(f)
-      .then((r) => {
-        if (!r.ok) { setNote(r.error ?? "Could not save."); return; }
-        take(r);
-        setNote(f.watch !== undefined || f.watchMinutes !== undefined
-          ? "Saved. The next look is one interval from now."
-          : "Saved. Applies to the next prompt in every hooked session.");
-      })
-      .catch(() => setNote("Could not save."));
-  };
-  const STEPS = [10, 20, 45, 90] as const;
-  const near = String(STEPS.find((m) => m >= minutes) ?? 90);
+
+  const ASK_STEPS = [10, 20, 45, 90] as const;
+  const nearAsk = String(ASK_STEPS.find((m) => m >= askMinutes) ?? 90);
   const WATCH_STEPS = [5, 10, 15, 30, 60] as const;
   const nearWatch = String(WATCH_STEPS.find((m) => m >= watchMinutes) ?? 60);
-  const ic = <LanternIcon size={ICON.sm} />;
-  /* Two cards, split by what they act on: the board and what it asks of a
-     session, and the one seat it wakes. The picture of the board is in the
-     side slot, and its watch line and cache clock follow the controls. */
+
+  const hooksPanel = !st ? (
+    <EmptyState>Reading hook state…</EmptyState>
+  ) : !st.bundled ? (
+    <SettingRow label="The hook scripts are not in this build"
+      hint={<>This build does not carry the hook scripts, so there is nothing to wire. Install from a Release, or run <span className="t-mono">bun run setup</span> in a checkout.</>}
+      status={<StatusBadge tone="warn">Not included</StatusBadge>} />
+  ) : (
+    <>
+      <SettingRow label="Hook scripts in this build" hint="Shipped with the app — nothing to fetch."
+        status={<StatusBadge tone={st.bundled ? "ok" : "warn"}>{st.bundled ? "Included" : "Not included"}</StatusBadge>} />
+      <SettingRow label="Wired into Claude Code"
+        hint={<span className="t-mono text-[11px]">{tilde(st.settingsPath)}</span>}
+        detail={{
+          summary: "What the hooks see, and never do",
+          body: <>Every Claude Code session streams here live — what ran, what it cost, when it stopped for you. It watches; it never stops a tool call, and its command ends in <span className="t-mono text-[11px]">|| exit 0</span> so that stays true even if the script goes missing. Stopping an outward action is the gate below, a separate switch. It edits <span className="t-mono text-[11px]" style={{ color: "var(--text)" }}>{st.settingsPath}</span>, backing it up first, and leaves your other hooks untouched.</>,
+        }}
+        status={<StatusBadge tone={st.installed ? "ok" : "warn"}>{st.installed ? "Wired" : "Not wired"}</StatusBadge>}
+        actions={st.installed ? undefined : <Button pending={busy} onClick={() => void act("install")}>{busy ? "Enabling…" : "Enable"}</Button>} />
+      <SettingRow label="Start a fresh session" hint="Sessions already running keep the hooks they started with."
+        status={<StatusBadge tone="off">Your step</StatusBadge>} />
+      <SettingRow label="Python on your PATH"
+        hint={<>Hooks run under <span className="t-mono">{st.python}</span>; they load at startup.</>}
+        detail={{ summary: "Details", body: <>The forwarder is a python script, so <span className="t-mono">{st.python}</span> has to be on your PATH for events to arrive. A change takes effect on the next Claude Code session.</> }}
+        status={st.pythonVersion === undefined ? undefined
+          : st.pythonVersion ? <StatusBadge tone="ok">python {st.pythonVersion}</StatusBadge> : <StatusBadge tone="warn">Not found</StatusBadge>} />
+      {(err || note) && (
+        <div role={err ? "alert" : "status"} className="agx-settings-x px-4 py-2 text-[12px]" style={{ color: err ? "var(--error-ink)" : "var(--text2)" }}>
+          {err || note}
+        </div>
+      )}
+    </>
+  );
+
+  /* Nothing here is reported before the read lands, and a failed read is said
+     rather than covered by the defaults: writing then would derive a value the
+     server never stored. */
+  const watchKnown = watchRead === "ok";
+  const watchStatus = watchRead === "reading" ? "…"
+    : watchRead === "failed" ? "Not read"
+      : watch ? `On · ${watchMinutes} min` : "Off";
+  const watchHint = watchKnown
+    ? "One notification per look at most, and only while something needs you."
+    : watchRead === "reading" ? "Reading the saved value." : "The saved value could not be read — try again above.";
+
   return (
-    <div className="agx-split-page">
-      <div className="agx-split-main">
-        <SettingsCard title="Lantern" icon={ic}
-          desc="The board that watches every agent, and how often it taps you on the shoulder."
-          status={<StatusBadge tone={watch ? "ok" : "off"}>{watch ? "Watching" : "Not watching"}</StatusBadge>}>
-          {err && <div role="alert" className="agx-settings-x pt-2 pb-3 text-[11px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
-          <Toggle on={watch} onClick={() => save({ watch: !watch })}
+    <div className="agx-agents-page">
+      <div className="agx-split-page agx-agents-hero">
+        <SettingsCard title="Watching" icon={<EyeIcon size={ICON.sm} />}
+          desc="The board that watches every session. It looks on a schedule, and tells you only while something needs you."
+          status={<StatusBadge tone={watchKnown && watch ? "ok" : "off"}>{watchStatus}</StatusBadge>}>
+          {watchErr && (
+            <div role="alert" className="agx-settings-x flex items-center gap-2 px-4 py-2 text-[11px]" style={{ color: "var(--error-ink)" }}>
+              <span className="flex-1">{watchErr}</span>
+              <Button onClick={() => setWatchTry((n) => n + 1)}>Try again</Button>
+            </div>
+          )}
+          <Toggle on={watch} settingId="lantern.watch" onClick={() => saveWatch({ watch: !watch })} disabled={!watchKnown}
             label="Watch the agents and notify me"
-            hint="One notification per look at most, while something needs you."
-            detail={{ summary: "Details", body: <>Every few minutes the agents are re-read. One notification goes out — the app's bell, the phone when paired, the desktop otherwise — if somebody is still stopped on you, a worker's window vanished, or claimed work has gone quiet for an hour. The instant alerts stay either way; this is the sweep behind them. It never starts, stops or queues anything.</> }} />
-          <Choice label="How often it looks" value={nearWatch}
+            hint={watchHint}
+            detail={{ summary: "Details", body: <>A look re-reads every session’s state. A notification goes out only if somebody is stopped on a permission or a question, a window vanished, or claimed work has gone quiet for an hour. The instant alerts stay either way; this is the sweep behind them. It never starts, stops or queues anything.</> }} />
+          <Choice settingId="lantern.watchMinutes" label="How often it looks" value={nearWatch}
             hint="How long between two looks at the board."
             options={WATCH_STEPS.map((m) => ({ v: String(m), label: `${m} min` }))}
-            onPick={(m) => save({ watchMinutes: Number(m) })} disabled={!watch}
-            disabledHint="Nothing is looked at while the watch is off." />
-          <Toggle on={nudge} onClick={() => save({ nudge: !nudge })}
+            onPick={(m) => saveWatch({ watchMinutes: Number(m) })} disabled={!watch || !watchKnown}
+            disabledHint={watchKnown ? "Nothing is looked at while the watch is off." : "The saved value could not be read."} />
+          <SettingRow agentExempt label="Where a notification goes"
+            hint="The bell, the desktop when the app is closed, and your phone when it is paired."
+            actions={<Button onClick={() => openSettings("notifications")}>Open Notifications</Button>} />
+          <div className="agx-agents-foot">
+            <ClockIcon size={ICON.sm} />
+            <span>A look re-reads every session; <b>instant alerts stay either way</b>.</span>
+          </div>
+        </SettingsCard>
+        <aside className="agx-split-side">
+          <PreviewCard id="lantern" title="The Lantern card" actions={<StatusBadge tone="info">Live preview</StatusBadge>}>
+            <LanternPreview watch={watch} everyMin={watchMinutes} wakeMin={cacheTtl} />
+            <div className="agx-preview-out">
+              <span>Opens the Agents view, outside Settings.</span>
+              <Button onClick={showAgents} title={SHOW_AGENTS}>Show it</Button>
+            </div>
+          </PreviewCard>
+        </aside>
+      </div>
+
+      <div className="agx-agents-pair">
+        <SettingsCard title="Sessions" icon={<SparkleIcon size={ICON.sm} />}
+          desc="What a session is doing, in its own words, so the board names the job and not just the window."
+          status={<StatusBadge tone={ask ? "ok" : "off"}>{ask ? "Asking" : "Off"}</StatusBadge>}>
+          <Toggle on={ask} settingId="lantern.nudge" onClick={() => saveWatch({ nudge: !ask })}
             label="Ask sessions what they are working on"
-            hint="Names a bare session after what it is doing."
-            detail={{ summary: "Details", body: <>On a prompt, a hooked session may be handed one line asking it to post its task (<span className="t-mono">POST /agents/status</span>). Off, and the Lantern lists sessions by name and pane only.</> }} />
-          <Choice select wide={false} label="How often one session may be asked again" value={near}
+            hint="On a prompt, a session may be asked to post its task in one line."
+            detail={{ summary: "Details", body: <>A hooked session may be handed one line asking it to post its task (<span className="t-mono">POST /agents/status</span>). Off, and the board lists sessions by name and pane only.</> }} />
+          <Choice settingId="lantern.nudgeMinutes" label="How often one session may be asked again" value={nearAsk}
             hint="A session that answered is left alone for this long."
-            options={STEPS.map((m) => ({ v: String(m), label: `${m} min` }))}
-            onPick={(m) => save({ minutes: Number(m) })} disabled={!nudge}
+            options={ASK_STEPS.map((m) => ({ v: String(m), label: `${m} min` }))}
+            onPick={(m) => saveWatch({ minutes: Number(m) })} disabled={!ask}
             disabledHint="Nothing is asked while the reminder is off." />
         </SettingsCard>
-        <SettingsCard title="The orchestrator" icon={<AgentIcon size={ICON.sm} />}>
-          {/* The seat's floor lives here because it rides the same look: the watch
-              re-reads the field, and the orchestrator is prompted only when what
-              it found CHANGED. This is how long a quiet field may stay quiet
-              before it gets a line anyway. */}
-          <Choice select wide={false} label="Wake the orchestrator at least every" value={String(seatWake)}
+
+        <SettingsCard title="The orchestrator" icon={<FlowIcon size={ICON.sm} />}
+          desc="The seat that wakes when the work changes — and how long its next prompt stays cheap."
+          status={<StatusBadge tone="ok">Seated</StatusBadge>}>
+          <Choice select settingId="seat.wakeHours" label="Wake the orchestrator at least every" value={String(seatWake)}
             hint="How long a quiet field may stay quiet before the seat gets a line anyway."
             detail={{ summary: "Details", body: <>The seat is woken when the field changes. This is the floor under that, so a quiet day still gets a line rather than a silence you cannot tell from a dead agent.</> }}
             options={[1, 2, 4, 8, 12, 24].map((h) => ({ v: String(h), label: h === 1 ? "1 hour" : `${h} hours` }))}
             onPick={(h) => { void api.seatWakeSave(Number(h)).then(() => setSeatWake(Number(h))); }} />
-          <Choice label="How long the prompt cache stays warm" value={String(cacheTtl === 60 ? 60 : 5)}
+          <Choice settingId="lantern.cacheTtlMinutes" label="How long the prompt cache stays warm" value={String(cacheTtl === 60 ? 60 : 5)}
             hint="A turn sent while it is warm is the cheap one."
-            detail={{ summary: "Details", body: <>Each card counts it down from the session's last turn. Five minutes on most plans; an hour on some.</> }}
+            detail={{ summary: "Details", body: <>Each card counts it down from the session’s last turn. Five minutes on most plans; an hour on some.</> }}
             options={[{ v: "5", label: "5 min" }, { v: "60", label: "1 hour" }]}
-            onPick={(m) => save({ cacheTtlMinutes: Number(m) })} />
+            onPick={(m) => saveWatch({ cacheTtlMinutes: Number(m) })} />
+          <SettingRow agentExempt label="Worker CLIs and models"
+            hint="Each worker role’s CLI and model is set for the project in Orchestration."
+            actions={<Button onClick={() => openSettings("orchestration")}>Open Orchestration</Button>} />
         </SettingsCard>
-        {note && <div role="status" className="agx-settings-x text-[11px]" style={{ color: "var(--text3)" }}>{note}</div>}
       </div>
-      <aside className="agx-split-side">
-        <PreviewCard id="lantern" title="The real Lantern card">
-          <LanternPreview watch={watch} everyMin={watchMinutes} wakeMin={cacheTtl} />
-        </PreviewCard>
-      </aside>
+
+      <SettingsCard title="Connect your agents" icon={hooksIcon} wide
+        desc="The two wires between this app and an agent: one reports what a session does, one lets it drive a browser.">
+        <div className="agx-connect-grid" data-panels={browser ? undefined : "1"}>
+          <div className="agx-connect-panel">
+            <div className="agx-connect-head"><span className="agx-connect-ic" aria-hidden>{hooksIcon}</span><b>Claude Code hooks</b></div>
+            {hooksPanel}
+          </div>
+          {browser ? (
+            <div className="agx-connect-panel">
+              <div className="agx-connect-head"><span className="agx-connect-ic" aria-hidden><BrowserIcon size={ICON.sm} /></span><b>Browser access</b></div>
+              {browser}
+            </div>
+          ) : null}
+        </div>
+      </SettingsCard>
+
+      {st && <GateCard st={st} busy={busy} open={open} onGate={(on) => void gate(on)} onShow={showAgents} showTitle={SHOW_AGENTS} />}
+
+      {skills}
+
+      {watchNote && <p role="status" className="agx-settings-x m-0 text-[11px]" style={{ color: "var(--text3)" }}>{watchNote}</p>}
+
+      <SettingsCard title="Danger zone" tone="danger" icon={<WarningIcon size={ICON.sm} />}
+        desc="Two ways back. Both are reversible.">
+        {st?.bundled && st.installed && (
+          <SettingRow label="Take the hooks back out"
+            hint="Removes the entries above; running sessions keep them until they end."
+            detail={{ summary: "Details", body: <>Also <span className="t-mono">python3 hooks/install_hooks.py --uninstall</span> in a checkout. Global (<span className="t-mono">~/.claude</span>), so it covers every project.</> }}
+            actions={<Button tone="danger" pending={busy} onClick={() => void act("uninstall")}>{busy ? "Disabling…" : "Disable hooks"}</Button>} />
+        )}
+        <SettingRow label="Forget worker roles"
+          hint={resetNote ?? (armed ? "Press again to put every role back on its default CLI and model." : "Back to “every role on its default CLI and model”.")}
+          actions={<Button tone="danger" onClick={() => void resetRoles()}>{armed ? "Reset roles?" : "Reset roles"}</Button>} />
+      </SettingsCard>
     </div>
   );
 }
 
-/**
- * The notification diet — what the fleet is ALLOWED to push at you, and on
- * which channel. See shared/notifyPrefs.ts.
- *
- * Everything here defaults quiet on purpose: only `blocked` (an agent truly
- * stopped on a gate or a permission prompt) and `reminders` (an alarm the
- * person set themselves) reach for them out of the box. The rest — an agent
- * merely idle, a stall, a tool error, the understudy needing a look, a usage
- * limit — still show wherever they already live (the fleet card, the bell's
- * history list); a switch here is what lets one of them additionally push.
- *
- * `None` sits above both groups rather than inside either: it silences every
- * kind on every channel at once, and the "What" and "Where" rows go disabled
- * under it so the state they represent is not lost, only overridden — turning
- * `None` back off returns to whatever was chosen before.
- */
-/** A switch that is one control among several in its row, so the row itself
- *  cannot be the button (a Select inside a button is invalid HTML). */
 function SwitchButton({ on, onClick, disabled, busy, label }: { on: boolean; onClick: () => void; disabled?: boolean; busy?: boolean; label: string }) {
   return (
     <button role="switch" aria-checked={on} aria-label={label} onClick={onClick} disabled={disabled}
@@ -2536,14 +2644,16 @@ function statusColor(d: DepReport): string {
   if (d.status === "ok") return "var(--success)";
   if (d.status === "attention") return "var(--warning)";
   if (d.status === "unsupported") return "var(--text3)";
-  return d.required ? "var(--error)" : "var(--text3)";
+  return levelFor(d, pickedAgent()) === "needed" ? "var(--error)" : "var(--text3)";
 }
 
 /** Worst first: what is broken, then what is merely unconfigured, then the
  *  rest. Someone opening this pane is looking for the problem, not the list. */
 const RANK: Record<DepStatus, number> = { missing: 0, attention: 1, ok: 2, unsupported: 3 };
+const LEVEL_RANK = { needed: 0, recommended: 1, optional: 2 } as const;
 const byUrgency = (a: DepReport, b: DepReport) =>
-  (RANK[a.status] - RANK[b.status]) || (Number(b.required) - Number(a.required));
+  (RANK[a.status] - RANK[b.status])
+  || (LEVEL_RANK[levelFor(a, pickedAgent())] - LEVEL_RANK[levelFor(b, pickedAgent())]);
 
 /**
  * The ones that are fine, at the size "fine" deserves.
@@ -2575,7 +2685,7 @@ function DepGrid({ deps, muted }: { deps: DepReport[]; muted?: boolean }) {
 function depTone(d: DepReport): StatusTone {
   if (d.status === "ok") return "ok";
   if (d.status === "attention") return "warn";
-  if (d.status === "missing" && d.required) return "err";
+  if (d.status === "missing" && levelFor(d, pickedAgent()) === "needed") return "err";
   return "off";
 }
 
@@ -2602,7 +2712,10 @@ function DepRow({ d, home }: { d: DepReport; home: string }) {
   // its own choosing — and requiring one hid the button entirely from anyone who
   // had never opened the terminal panel, which is most people the first time
   // they read this page.
-  const canType = !!d.install && d.status !== "ok" && d.status !== "unsupported";
+  // Only a missing tool is an install. An installed-but-unusable one has a
+  // sign-in or a first run, and an Install button there was the clean-install
+  // bug: gh, docker and task all offered one.
+  const canType = d.status === "missing" && !!d.install;
   const guide = !!href && d.status !== "unsupported" && d.status !== "ok";
   const tone = depTone(d);
   const mark: "ok" | "warn" | "err" | "off" = tone === "warn" ? "warn" : tone === "err" ? "err" : tone === "ok" ? "ok" : "off";
@@ -2617,7 +2730,7 @@ function DepRow({ d, home }: { d: DepReport; home: string }) {
     <SettingsCard icon={<Initial name={d.title} />} title={d.title}
       desc={d.status === "ok" ? d.detail : firstSentence(d.what)}
       tone={tone === "warn" || tone === "err" ? "decision" : "default"}
-      status={<StatusBadge tone={tone}>{d.status === "missing" && d.required ? "Needed, not installed" : STATUS_LABEL[d.status]}</StatusBadge>}
+      status={<StatusBadge tone={tone}>{d.status === "missing" && levelFor(d, pickedAgent()) === "needed" ? "Needed, not installed" : STATUS_LABEL[d.status]}</StatusBadge>}
       actions={canType
         ? <Button aria-expanded={console} onClick={() => setConsole((v) => !v)}
             title="Open a shell here with the command typed in — you press Enter">
@@ -3278,7 +3391,7 @@ function RequirementsPane({ open, filter, nonce, onCount }: { open: boolean; fil
   useEffect(() => {
     const live = (deps ?? []).filter((d) => d.status !== "unsupported");
     onCount({ total: live.length, ready: live.filter((d) => d.status === "ok").length, busy,
-      needs: live.filter((d) => d.status === "attention" || (d.status === "missing" && d.required)).length });
+      needs: live.filter((d) => needsYou(d, pickedAgent())).length });
   }, [deps, busy]);
 
   const recheck = <Button pending={busy} onClick={() => void load(true)}>Recheck</Button>;
@@ -3312,7 +3425,7 @@ function RequirementsPane({ open, filter, nonce, onCount }: { open: boolean; fil
 
   /* Needs you is what the person must act on: a needed tool missing, a tool that is there and not usable.
      An optional tool nobody installed is neutral: it is in All, under its own tile. */
-  const needs = (d: DepReport) => d.status === "attention" || (d.status === "missing" && d.required);
+  const needs = (d: DepReport) => needsYou(d, pickedAgent());
   const tiles = filter === "ready" ? [] : filter === "needs" ? wants.filter(needs) : wants;
   return (
     /* Only what wants something gets a tile (the status, the lines, the install); the ones that
@@ -3354,8 +3467,8 @@ function ToolsPane({ open }: { open: boolean }) {
   return (
     <>
       <div className="agx-tools-bar">
-        <SegControl<ToolsFilter> label="Show" value={filter} onPick={setFilter}
-          options={[{ v: "all", label: `All ${total}` }, { v: "ready", label: `Ready ${ready}` }, { v: "needs", label: `Needs you ${needs}` }]} />
+        <Segmented<ToolsFilter> track label="Show" value={filter} onChange={setFilter}
+          options={[{ id: "all", label: `All ${total}` }, { id: "ready", label: `Ready ${ready}` }, { id: "needs", label: `Needs you ${needs}` }]} />
         <span className="flex-1" />
         <Button pending={deps.busy || provs.busy} onClick={() => setNonce((n) => n + 1)}>
           <IconLabel icon={<RefreshIcon size={ICON.xs} />}>Recheck</IconLabel>
@@ -3439,9 +3552,9 @@ function LaunchPermissionsCard({ open }: { open: boolean }) {
           body: <>This covers the Review menu, a hand-off, an issue, a resumed session and a Command that runs claude; a review prompt or a Command can choose its own in its editor. Ask is Claude Code's own default: it asks before a tool it has not been allowed. Auto lets it decide what is safe to run. Accept edits runs file edits without asking. Bypass runs everything without asking — a tab in another mode than your other agents holds what is sent to it until somebody answers in it.</>,
         }}
         wide
-        control={<SegControl label="Permission mode" value={mode} disabled={busy}
-          onPick={(v) => { if (isLaunchMode(v)) { setMode(v); save({ mode: v }); } }}
-          options={LAUNCH_MODES.map((m) => ({ v: m, label: LAUNCH_MODE_LABEL[m] }))} />}
+        control={<Segmented track label="Permission mode" value={mode} disabled={busy}
+          onChange={(v) => { if (isLaunchMode(v)) { setMode(v); save({ mode: v }); } }}
+          options={LAUNCH_MODES.map((m) => ({ id: m, label: LAUNCH_MODE_LABEL[m] }))} />}
       />
       <SettingRow
         agentNever="what every agent the app starts may never do: an agent does not edit its own leash"
@@ -3500,8 +3613,8 @@ function TerminalRunsOn({ open }: { open: boolean }) {
           body: <>"The engine" gives it the pane engine — agentglass draws the tabs and splits, the prefix set under Pane engine (tmux) applies, and Restore there can bring it back after a reboot; one session per checkout. "This machine's tmux" resumes the session you left in your own tmux, with your own <span className="t-mono text-[11px]">~/.tmux.conf</span>. They are separate servers: switching moves nothing and loses nothing, and whichever you are not using keeps running.</>,
         }}
         wide
-        control={<SegControl label="Terminal runs on" value={terminal as "engine" | "desk"} onPick={saveTerminal} disabled={busy}
-          options={[{ v: "engine", label: "Pane engine" }, { v: "desk", label: "My own tmux" }]} />}
+        control={<Segmented track label="Terminal runs on" value={terminal as "engine" | "desk"} onChange={saveTerminal} disabled={busy}
+          options={[{ id: "engine", label: "Pane engine" }, { id: "desk", label: "My own tmux" }]} />}
         below={(err || note) ? (
           <div className="text-[12px]" role={err ? "alert" : "status"}
             style={{ color: err ? "var(--error-ink)" : "var(--success-ink)" }}>{err ?? note}</div>
@@ -3671,8 +3784,8 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
         hint="Use the bundled one unless you need your own."
         detail={{ summary: "Details", body: <>"Auto" prefers the bundled static tmux and falls back to the system one; "Custom" points at your own binary (e.g. a newer tmux). Tabs, splits and status are drawn by agentglass either way.</> }}
         wide
-        control={<SegControl label="tmux binary" value={source as "auto" | "bundled" | "system" | "custom"} disabled={busy} onPick={setSource}
-          options={[{ v: "auto", label: "Auto" }, { v: "bundled", label: "Bundled" }, { v: "system", label: "System" }, { v: "custom", label: "Custom" }]} />}
+        control={<Segmented track label="tmux binary" value={source as "auto" | "bundled" | "system" | "custom"} disabled={busy} onChange={setSource}
+          options={[{ id: "auto", label: "Auto" }, { id: "bundled", label: "Bundled" }, { id: "system", label: "System" }, { id: "custom", label: "Custom" }]} />}
       />
       <SettingRow
         label="Path to the binary" hint="Only read when Custom is picked." disabled={source !== "custom"}
@@ -3722,8 +3835,8 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
         hint="Append keeps the shipped config; Replace is only yours."
         detail={{ summary: "Details", body: <>"Append" runs your lines after the generated base (the UI's status bar stays off: that line is re-asserted after yours); "Replace" makes your text the whole config. A rejected config leaves the engine off and chat unaffected, and Reset brings it back.</> }}
         wide
-        control={<SegControl label="Mode" value={confMode as "append" | "replace"} disabled={busy} onPick={setConfMode}
-          options={[{ v: "append", label: "Append" }, { v: "replace", label: "Replace" }]} />}
+        control={<Segmented track label="Mode" value={confMode as "append" | "replace"} disabled={busy} onChange={setConfMode}
+          options={[{ id: "append", label: "Append" }, { id: "replace", label: "Replace" }]} />}
       />
       <SettingRow
         label="Override config"
@@ -3893,6 +4006,15 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
   const [h24, setH24] = useState<boolean>(() => clock24());
   const [splash, setSplash] = useState<boolean>(() => splashOn());
   const [usageRefresh, setUsageRefreshState] = useState<boolean>(() => usageRefreshOn());
+  const [barShown, setBarShown] = useState<Record<UsageBarProvider, boolean>>(barSwitches);
+  // The switches used to keep the answer read when the modal mounted, which is
+  // before the first poll has recorded what this machine has seen — so a
+  // provider with a chip in the bar drew as off here. Re-read the same
+  // `showInBar` the strip asks whenever a reading lands.
+  const usageSnapshot = useSyncExternalStore(subscribeProviderUsage, providerUsage, () => null);
+  useEffect(() => {
+    setBarShown(barSwitches());
+  }, [usageSnapshot]);
   // Re-read when an agent or an undo changes it, not only when this row is pressed.
   const diskWarn = useSyncExternalStore(subscribeSettings, diskWarnPct, () => DISK_WARN_DEFAULT);
   const [renderer, setRenderer] = useState<RendererPref>(() => rendererPref());
@@ -3973,6 +4095,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
    *  the reads land, which keeps the pinned row off the nav rather than
    *  flashing it and pulling it back a second later. */
   const [onboarding, setOnboarding] = useState<{ hook: boolean; provider: boolean; paneEngine: boolean } | null>(null);
+  /** The tutorial's seen list, so this page lists what is still unread. */
+  const [tutorialSeen, setTutorialSeen] = useState("");
   /** Facts only the nav's marks and the page header's chips read. `null` is a
    *  read that has not landed or that failed: it draws no mark rather than a
    *  guess. Read with the batch above, once per open. */
@@ -3994,13 +4118,15 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
       api.updateStatus().then((r) => isUpdateAvailable(r)).catch(() => null),
       api.notifyPrefs().then((r) => (r.ok ? !r.prefs.none : null)).catch(() => null),
       api.plugins().then((r) => r.plugins).catch(() => null),
-    ]).then(([deps, provs, remote, hookState, digest, jira, lanternWatching, updateAvailable, notificationsOn, plugs]) => {
+      api.setupState().catch(() => null),
+    ]).then(([deps, provs, remote, hookState, digest, jira, lanternWatching, updateAvailable, notificationsOn, plugs, setupState]) => {
       if (!live) return;
       setBadges({
         connections: connectionsNeeding(deps ?? [], provs ?? []),
         remote,
       });
       setLogDigest(digest);
+      setTutorialSeen(setupState?.tutorialSeen ?? "");
       setOnboarding({
         hook: hookState?.installed === true,
         provider: (provs ?? []).some((p) => p.state === "connected"),
@@ -4131,10 +4257,12 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
   const [groupsOn, setGroupsOn] = useState(() => tabGroupsOn());
   const [groupRules, setGroupRules] = useState(() => tabGroupRulesText());
   const [paneActs, setPaneActs] = useState<PaneActionsMode>(() => paneActionsMode());
+  const [paneMark, setPaneMark] = useState<PaneMarker>(() => paneMarker());
   const [scrollback, setScrollbackState] = useState(() => currentScrollback());
   const [wordSep, setWordSepState] = useState(() => currentWordSeparators());
   const [copySel, setCopySel] = useState(() => copyOnSelect());
   const [rcPaste, setRcPaste] = useState(() => rightClickPaste());
+  const benchFab = useSyncExternalStore(subscribeBench, () => benchState().fabMode);
   const [noteEd, setNoteEd] = useState<NoteEditor>(() => currentNoteEditor());
   const [dSplit, setDSplitState] = useState(() => diffSplit());
   const [dTheme, setDThemeState] = useState(() => diffThemePref());
@@ -4173,6 +4301,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
     setGroupsOn(tabGroupsOn());
     setGroupRules(tabGroupRulesText());
     setPaneActs(paneActionsMode());
+    setPaneMark(paneMarker());
     setScrollbackState(currentScrollback());
     setWordSepState(currentWordSeparators());
     setCopySel(copyOnSelect());
@@ -4231,13 +4360,14 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
       { modified: reduceMotionChoice() !== null, reset: () => { resetReduceMotion(); setAppearanceNonce((n) => n + 1); } },
     ],
     terminal: [
+      { modified: benchState().fabMode !== "always", reset: () => setBenchFabMode("always") },
       { modified: renderer !== "auto", reset: () => { setRendererPref("auto"); setRenderer("auto"); } },
       { modified: termFont !== "", reset: () => { setTermFont(""); setTermFontState(""); } },
       { modified: termSize !== DEFAULT_SIZE, reset: () => { setTermSize(DEFAULT_SIZE); setTermSizeState(DEFAULT_SIZE); } },
       { modified: termLine !== DEFAULT_LINE_HEIGHT, reset: () => { setTermLineHeight(DEFAULT_LINE_HEIGHT); setTermLineState(DEFAULT_LINE_HEIGHT); } },
       { modified: termCursor !== "block", reset: () => { setTermCursor("block"); setTermCursorState("block"); } },
       { modified: ffm, reset: () => { setFocusFollowsMouse(false); setFfm(false); } },
-      { modified: paneActs !== "hover", reset: () => { setPaneActionsMode("hover"); setPaneActs("hover"); } },
+      { modified: paneActs !== "summary" || paneMark !== "line", reset: () => { setPaneActionsMode("summary"); setPaneActs("summary"); setPaneMarker("line"); setPaneMark("line"); } },
       { modified: !copySel, reset: () => { setCopyOnSelect(true); setCopySel(true); } },
       { modified: rcPaste, reset: () => { setRightClickPaste(false); setRcPaste(false); } },
       { modified: !groupsOn, reset: () => { setTabGroupsOn(true); setGroupsOn(true); } },
@@ -4539,7 +4669,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             transition={{ duration: 0.14 }}
             className="agx-settings-shell fixed inset-0 flex pointer-events-auto"
-            style={{ zIndex: 10000, background: "var(--bg)" }}>
+            style={{ zIndex: 10000, background: "var(--bg)", ...NO_DRAG }}>
 
             {/* Back to app and the search box sit OUTSIDE the scrolling list, so a
                 long nav can never push either off the top. The nav paints its
@@ -4575,37 +4705,41 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                 them was measure; on a page the column is capped at 1120 and sits on the nav side,
                 so the slack is free and the gap is what stops the title reading
                 as an extension of the nav it sits beside. */}
-            <div ref={contentRef} tabIndex={-1} className="agx-settings-main agx-scroll flex-1 min-w-0 overflow-y-auto">
-              {/* The header stays while the cards scroll under it. It names the
-                  page on screen even while a query is stacking other pages
-                  below it: those carry their own heading (PageMatchHeading). */}
+            <div className="agx-settings-main flex-1 min-w-0 min-h-0 flex flex-col">
+              {/* The header sits above the one scroll region, not inside it. It
+                  names the page on screen even while a query is stacking other
+                  pages below it: those carry their own heading. */}
               {navTab && (
                 <SettingsPageHeader
                   label={navTab.label} group={groupByName(navTab.group) ?? null} icon={navTab.icon} what={navTab.what}
-                  chips={pageChips(navTab.id, headerChips(navTab.id, marks[navTab.id] ?? NO_MARK, saving.has(navTab.id), savedPages.has(navTab.id), heads[navTab.id]?.chips), pageFacts).concat(navTab.id === "orchestration" && pageChip ? [pageChip] : [])}
+                  scope={navTab.id === "hooks" ? (
+                    <>
+                      <span className="agx-ph-scope-k">Settings for</span>
+                      <span className="agx-ph-scope-pill"><ChipIcon size={ICON.sm} />This machine</span>
+                      <span className="agx-ph-scope-note">Every project on this machine.</span>
+                    </>
+                  ) : undefined}
+                  chips={pageChips(navTab.id, headerChips(navTab.id, marks[navTab.id] ?? NO_MARK, saving.has(navTab.id), savedPages.has(navTab.id), heads[navTab.id]?.chips), pageFacts).concat((navTab.id === "orchestration" || navTab.id === "git") && pageChip ? [pageChip] : [])}
                   primary={problems[navTab.id] ? <Button tone="primary" onClick={() => retries.current[navTab.id]?.()}>Try again</Button>
-                    : heads[navTab.id]?.action ? <Button tone="primary" onClick={() => headRuns.current[navTab.id]?.()}>{heads[navTab.id]!.action!.plain ? heads[navTab.id]!.action!.label : <IconLabel icon={<PlusIcon size={ICON.xs} />}>{heads[navTab.id]!.action!.label}</IconLabel>}</Button> : undefined}
+                    : heads[navTab.id]?.action?.flow ? (
+                      // The Flow editor is the page's one way in, so it is the biggest button on it: HIT (26) is the page's other buttons, 40 is the next step up
+                      // (no CTRL_H rung is taller than 32), with the flow glyph before the label and a chevron after.
+                      <Button tone="primary" data-open-flow onClick={() => headRuns.current[navTab.id]?.()}
+                        style={{ height: 40, padding: "0 16px", fontWeight: 700, fontSize: 13, gap: 8, boxShadow: "0 4px 14px color-mix(in srgb, var(--accent, var(--primary)) 35%, transparent)" }}>
+                        <FlowIcon size={ICON.md} />{heads[navTab.id]!.action!.label}<ChevronRightIcon size={ICON.sm} />
+                      </Button>
+                    ) : heads[navTab.id]?.action ? <Button tone="primary" onClick={() => headRuns.current[navTab.id]?.()}>{heads[navTab.id]!.action!.plain ? heads[navTab.id]!.action!.label : <IconLabel icon={<PlusIcon size={ICON.xs} />}>{heads[navTab.id]!.action!.label}</IconLabel>}</Button> : undefined}
                   reset={pageModified(navTab.id) || ALWAYS_RESET.has(navTab.id) ? <Button disabled={!pageModified(navTab.id)} onClick={() => resetPage(navTab.id)}>{RESET_WORD[navTab.id] ?? "Reset page"}</Button> : undefined} />
               )}
-              {/* The page's hue (its group's) tints every card's icon chip; a board's width
-                  is set here, on the ancestor of both the grid that reads it and the
-                  column, because a property inherits downward only. */}
+              {/* The one scroll region, and the only element in Settings that owns
+                  a scrollbar: what sticks inside it (the scope bar, the index)
+                  is offset from its top edge, never from the header's. */}
+              <div ref={contentRef} tabIndex={-1} data-settings-scroll className="agx-settings-scroll agx-scroll flex-1 min-h-0 min-w-0">
               <div className="agx-settings-page"
-                style={{
-                  "--hue": hueVar(groupByName(navTab?.group ?? "")?.id ?? "system"),
-                  ...(WIDE_PANES.has(pane) ? { "--agx-settings-col": WIDE_PANES.get(pane) } : null),
-                } as React.CSSProperties}>
+                style={{ "--hue": hueVar(groupByName(navTab?.group ?? "")?.id ?? "system") } as React.CSSProperties}>
                 {!ql && !NO_TOC.has(navPane) && <SettingsToc scope={colRef} scroller={contentRef} page={navPane} />}
                 <div className="agx-settings-content">
-                  {/*
-                    A BOARD (WIDE_PANES) is one column at the width it chose,
-                    not the card flow: its content is a grid or a map of its
-                    own, and two flow columns would cut it to 365px cards, the
-                    width that produced the 359x596 letterbox nobody could
-                    look at. The width is set on the page above, because a
-                    custom property inherits downward only.
-                  */}
-                  <div ref={colRef} className="agx-settings-col" data-flow={WIDE_PANES.has(pane) ? "single" : undefined}>
+                  <div ref={colRef} className="agx-settings-col">
                   <PageState.Provider value={pageState}>
                   <Filter.Provider value={filterCtx}>
                   {ql && show("appearance") && <PageMatchHeading id="appearance" onOpen={() => { setPane("appearance" as Pane); setQ(""); }} />}
@@ -4739,10 +4873,12 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                         you reach the bottom one without dragging the pointer
                         across the others, and it is not on screen until the
                         pointer is on the seam at the pane's foot. */}
-                    <Toggle on={paneActs !== "off"} modified={paneActs !== "hover"}
-                      onClick={() => { const v = paneActs === "off" ? "hover" : "off"; setting("terminal.paneBar").set(v === "hover"); setPaneActs(v); }}
-                      settingId="terminal.paneBar" label="Bar on a pane"
-                      hint="Point at a pane's bottom edge: branch, changes, PR and card."  />
+                    <SettingRow settingId="terminal.paneBar" label="Pane bar"
+                      hint="The bar under each pane that says which branch, pull request and card you are in. Choose how it shows up. Hover a picture to see it move."
+                      modified={paneActs !== "summary"}
+                      below={<PaneBarPicker value={paneActs} marker={paneMark}
+                        onPick={(m) => { setting("terminal.paneBar").set(m); setPaneActs(m); }}
+                        onMarker={(m) => { setting("terminal.paneBarMarker").set(m); setPaneMark(m); }} />} />
                     <Toggle on={copySel} modified={!copySel} onClick={() => { const v = !copySel; setting("terminal.copyOnSelect").set(v); setCopySel(v); }}
                       settingId="terminal.copyOnSelect" label="Copy on select"
                       hint="A selection is on the clipboard at once, as in tmux." />
@@ -4813,7 +4949,11 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   </SettingsCard>
 
                   <SettingsCard title="Bench note" icon={<EditIcon size={ICON.sm} />}
-                    desc="The note tab of the floating bench.">
+                    desc="The floating bench: its button and its note tab.">
+                    <Choice<FabMode> settingId="terminal.benchButton" label="Floating button" value={benchFab} modified={benchFab !== "always"}
+                      hint={`The ${chordLabel(appChordFor("bench.toggle"))} shortcut opens the bench in every mode.`}
+                      options={[{ v: "always", label: "Always" }, { v: "open", label: "Only when something is open" }, { v: "never", label: "Never" }]}
+                      onPick={(v) => setting("terminal.benchButton").set(v)} />
                     <Choice<NoteEditor> settingId="terminal.noteEditor" label="Note editor" value={noteEd} modified={noteEd !== "builtin"}
                       hint="Neovim needs nvim installed; else the built-in one."
                       options={NOTE_EDITORS} onPick={(v) => { setting("terminal.noteEditor").set(v); setNoteEd(v); }} />
@@ -5002,15 +5142,33 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   </>
                   )}
                   {show("budgets") && <GhBudget open={open} />}
+                  {show("budgets") && <OpenCodeGoCard />}
                   {show("budgets") && (
+                  <SettingsCard title="Usage bar" icon={<SlidersIcon size={ICON.sm} />}
+                    desc="Which provider cells the top bar has room for. A provider appears once this machine has seen one reading from it; Antigravity has none yet and keeps a dashed cell until you take it away.">
+                    <Toggle settingId="usage.bar.anthropic" on={barShown.anthropic}
+                      onClick={() => { const v = !barShown.anthropic; setting("usage.bar.anthropic").set(v); setBarShown((s) => ({ ...s, anthropic: v })); }}
+                      label="Claude in the usage bar" hint="The Claude plan cell in the top bar." />
+                    <Toggle settingId="usage.bar.codex" on={barShown.codex}
+                      onClick={() => { const v = !barShown.codex; setting("usage.bar.codex").set(v); setBarShown((s) => ({ ...s, codex: v })); }}
+                      label="Codex in the usage bar" hint="The Codex plan cell in the top bar." />
+                    <Toggle settingId="usage.bar.opencode" on={barShown.opencode}
+                      onClick={() => { const v = !barShown.opencode; setting("usage.bar.opencode").set(v); setBarShown((s) => ({ ...s, opencode: v })); }}
+                      label="OpenCode Go in the usage bar" hint="The OpenCode Go plan cell in the top bar." />
+                    <Toggle settingId="usage.bar.antigravity" on={barShown.antigravity}
+                      onClick={() => { const v = !barShown.antigravity; setting("usage.bar.antigravity").set(v); setBarShown((s) => ({ ...s, antigravity: v })); }}
+                      label="Antigravity in the usage bar" hint="A dashed cell, because Antigravity reports no quota." />
+                  </SettingsCard>
+                  )}
+                  {show("budgets") && everSeen("codex") && (
                   <SettingsCard title="Codex" icon={<PlugIcon size={ICON.sm} />}>
                     {/* Says what it costs, because it costs something: this
                         spends a little of the quota it is measuring. */}
                     <Toggle on={usageRefresh}
                       onClick={() => { setUsageRefreshOn(!usageRefresh); setUsageRefreshState(!usageRefresh); }}
                       label="Keep Codex usage current"
-                      hint="Reads the meter hourly while the window is open."
-                      detail={{ summary: "Details", body: <>Runs a minimal Codex turn hourly so the quota reading is not stale. It uses a small amount of the quota it measures.</> }} />
+                      hint="Runs one tiny Codex turn every hour."
+                      detail={{ summary: "Details", body: <>Codex only reports its quota while a Codex turn runs. With this on, agentglass runs one tiny Codex turn every hour to keep the number fresh; that turn spends a little of the quota it measures.</> }} />
                   </SettingsCard>
                   )}
 
@@ -5030,7 +5188,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
 
                   {ql && show("browser") && <PageMatchHeading id="browser" onOpen={() => { setPane("browser" as Pane); setQ(""); }} />}
 
-                  {show("browser") && <BrowserPane><CookieImport /></BrowserPane>}
+                  {show("browser") && <BrowserPane><WhoMayDriveBrowser show={showBrowserView} /><CookieImport /></BrowserPane>}
 
                   {ql && show("rail") && <PageMatchHeading id="rail" onOpen={() => { setPane("rail" as Pane); setQ(""); }} />}
 
@@ -5075,7 +5233,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                           );
                         })}
                       </SettingsCard>
-                      <SettingsCard title="Only on the dashboard" icon={<DashIcon size={ICON.sm} />}
+                      <SettingsCard title="Only on Starboard" icon={<DashIcon size={ICON.sm} />}
                         desc="Single keys that would type into a shell, so they stay out of terminals.">
                         {[...viewIds, ...rest].map((id) => {
                           const err = keyError?.id === id ? keyError.msg : null;
@@ -5151,22 +5309,22 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                     );
                   })()}
 
-                  {ql && show("lantern") && <PageMatchHeading id="lantern" onOpen={() => { setPane("lantern" as Pane); setQ(""); }} />}
-                  {show("lantern") && <LanternSection open={open} />}
+                  {ql && show("git") && <PageMatchHeading id="git" onOpen={() => { setPane("git" as Pane); setQ(""); }} />}
+                  {show("git") && <CleanupSettings onChip={setPageChip} />}
                   {ql && show("engines") && <PageMatchHeading id="engines" onOpen={() => { setPane("engines" as Pane); setQ(""); }} />}
                   {show("engines") && <EnginesPane />}
                   {ql && show("orchestration") && <PageMatchHeading id="orchestration" onOpen={() => { setPane("orchestration" as Pane); setQ(""); }} />}
-                  {show("orchestration") && <OrchestrationPane onChip={setPageChip} />}
+                  {show("orchestration") && <OrchestrationPane onChip={setPageChip} lead={<FlightPlanLink onGo={onClose} />} />}
+                  {ql && show("gaps") && <PageMatchHeading id="gaps" onOpen={() => { setPane("gaps" as Pane); setQ(""); }} />}
+                  {show("gaps") && <GapsPane />}
+                  {ql && show("polaris") && <PageMatchHeading id="polaris" onOpen={() => { setPane("polaris" as Pane); setQ(""); }} />}
+                  {show("polaris") && <PolarisPane />}
                   {ql && show("hooks") && <PageMatchHeading id="hooks" onOpen={() => { setPane("hooks" as Pane); setQ(""); }} />}
 
                   {show("hooks") && (
                   <AgentsPage open={open}
-                    browser={HAS_BROWSER ? <AgentBrowserPane open={open} /> : null}
-                    skills={cu ? (
-                      <SettingsCard title="Card skills" icon={<ChecklistIcon size={ICON.sm} />} desc="How agent skills relate to the cards of your tracker.">
-                        <CardSkillsRow connected />
-                      </SettingsCard>
-                    ) : null} />
+                    browser={HAS_BROWSER ? <AgentBrowserPane open={open} bare /> : null}
+                    skills={<CardSkillsCard connected={cu} />} />
                   )}
 
                   {ql && show("tmux") && <PageMatchHeading id="tmux" onOpen={() => { setPane("tmux" as Pane); setQ(""); }} />}
@@ -5217,12 +5375,27 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       status={<OnboardingMark done={onboarding.paneEngine} />} />
                   </SettingsCard>
                   )}
+                  {show("onboarding") && (
+                  <SettingsCard title="Tutorial"
+                    desc="Five cards, two minutes. It closes where you leave it, and unread ones stay listed here.">
+                    {TUTORIAL_CARDS.map((card) => (
+                      <SettingRow key={card.id} label={card.title}
+                        hint={seenCards(tutorialSeen).includes(card.id) ? "Read." : "Not read yet."}
+                        status={<OnboardingMark done={seenCards(tutorialSeen).includes(card.id)} />}
+                        actions={<button type="button" className="agx-btn" onClick={() => openTutorial()}>Show it</button>} />
+                    ))}
+                    <SettingRow label="Run the setup again"
+                      hint="Brings the first-run wizard back at step 1. A project open does not stop it."
+                      actions={<button type="button" className="agx-btn" onClick={() => void runSetupAgain()}>Run it</button>} />
+                  </SettingsCard>
+                  )}
                   {ql && show("about") && <PageMatchHeading id="about" onOpen={() => { setPane("about" as Pane); setQ(""); }} />}
                   {show("about") && <><AboutPane open={open} /><LogDigestSection d={logDigest} /><OpensSection open={open} /></>}
                   </Filter.Provider>
                   </PageState.Provider>
                   </div>
                 </div>
+              </div>
               </div>
             </div>
           {escArmed && (

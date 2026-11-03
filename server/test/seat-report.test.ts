@@ -24,7 +24,11 @@ const { db } = await import("../src/db.ts");
 const Board = await import("../src/agentboard.ts");
 
 const ROOT = "/home/a/code/orbit";
-beforeEach(() => { db.query("DELETE FROM seat_report").run(); db.query("DELETE FROM agent_status").run(); });
+beforeEach(() => {
+  db.query("DELETE FROM seat_report").run();
+  db.query("DELETE FROM agent_status").run();
+  db.query("DELETE FROM named_agent").run();
+});
 
 describe("reading what an agent sent", () => {
   test("the four labels land in the four fields", () => {
@@ -272,5 +276,92 @@ describe("old reports and dismissing a blocker", () => {
     const [other] = R.recentReports("/home/a/code/ledger", 5);
     R.resolveReports(ROOT, [other!.id]);
     expect(R.recentReports("/home/a/code/ledger", 5)[0]!.blocked).toBe("waiting on CI");
+  });
+});
+
+/*
+ * A BLOCKER WHOSE WORKER AND CHECKOUT ARE BOTH GONE.
+ *
+ * A failed turn reports where it left its files, and the worker ends with the
+ * turn. While that directory exists somebody may still want to read or finish
+ * the work, so the decision stays. Once it is gone too there is nothing left to
+ * decide, and the row leaves by itself rather than sitting in "waiting on you"
+ * until somebody presses Dismiss on a question with no answer.
+ */
+describe("a blocker whose worker and checkout are both gone", () => {
+  const HOUR = 3_600_000;
+  const report = (name: string, text: string) => R.addReport({ root: ROOT, agent: name, text, now: Date.now() - HOUR });
+  const blocker = (name: string) => report(name, [
+    `STATE: stopped: ${name} exited with 1`,
+    `BLOCKED: the turn failed; its files are in ${join(dir, `${name}-1099`)}`,
+    "NEED: decide whether to start it again, hand it to another engine, or drop it",
+    "COST: one decision",
+  ].join("\n"));
+  const named = (name: string, cwd: string, endedAt: number | null) =>
+    db.query("INSERT INTO named_agent (name, kind, cwd, pane_id, window_id, started_at, ended_at) VALUES (?, 'opencode', ?, '%71', '@71', ?, ?)")
+      .run(name, cwd, Date.now() - 2 * HOUR, endedAt);
+  const first = () => R.recentReports(ROOT, 5)[0]!;
+
+  test("clears itself when the worker has ended and its directory is gone", () => {
+    blocker("go-usage");
+    named("go-usage", join(dir, "go-usage-1099"), Date.now() - HOUR);
+    expect(first().blocked).toBe("");
+    expect(first().need).toBe("");
+    /* The words stay: a blocker is the record of what the agent said. */
+    expect(first().raw).toContain("its files are in");
+    expect(R.worthWaking(first())).toBe(false);
+  });
+
+  test("stays while the files are still there, because that is a person's decision", () => {
+    blocker("go-usage");
+    named("go-usage", dir, Date.now() - HOUR);
+    expect(first().blocked).toContain("the turn failed");
+  });
+
+  test("stays while the worker is still running under that name", () => {
+    blocker("go-usage");
+    named("go-usage", join(dir, "go-usage-1099"), null);
+    expect(first().blocked).toContain("the turn failed");
+  });
+});
+
+/*
+ * A NAME IS NOT A RUN.
+ *
+ * `named_agent` is keyed by name, and a name is reused across checkouts. The
+ * auto-clear read that one registry row and applied its dead directory to
+ * every report under the name, including an older run's blocker whose files
+ * were still there.
+ */
+describe("a name reused in another checkout", () => {
+  const MIN = 60_000;
+  const now = () => Date.now();
+  const blocked = (state: string, at: number) => R.addReport({
+    root: ROOT, agent: "builder", now: at,
+    text: `STATE: ${state}\nBLOCKED: the export fails\nNEED: a decision`,
+  });
+  const ran = (cwd: string, startedAt: number) =>
+    db.query("INSERT INTO named_agent (name, kind, cwd, pane_id, window_id, started_at, ended_at) VALUES ('builder', 'opencode', ?, '%81', '@81', ?, ?)")
+      .run(cwd, startedAt, now() - 10 * MIN);
+  const claim = (state: string) =>
+    db.query<{ blocked: string }, [string]>("SELECT blocked FROM seat_report WHERE state = ?").get(state);
+
+  test("keeps the older run's blocker when only the newer run's checkout is gone", () => {
+    blocked("older run, checkout a", now() - 3 * 60 * MIN);
+    blocked("newer run, checkout b", now() - 30 * MIN);
+    ran(join(dir, "checkout-b-removed"), now() - 2 * 60 * MIN);
+    R.unreadCount(ROOT);
+    expect(claim("older run, checkout a")!.blocked).toContain("the export fails");
+    expect(claim("newer run, checkout b")!.blocked).toBe("");
+  });
+
+  test("finds a blocker that a hundred routine reports came after", () => {
+    blocked("buried blocker", now() - 3 * 60 * MIN);
+    for (let i = 0; i < 100; i++) {
+      R.addReport({ root: ROOT, agent: "builder", now: now() - 60 * MIN + i, text: `STATE: routine ${i}` });
+    }
+    ran(join(dir, "checkout-c-removed"), now() - 4 * 60 * MIN);
+    R.unreadCount(ROOT);
+    expect(claim("buried blocker")!.blocked).toBe("");
   });
 });

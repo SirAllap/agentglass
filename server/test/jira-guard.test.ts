@@ -242,14 +242,15 @@ describe("the source says the same", () => {
   });
 
   test("a stand-in is never chosen by what was typed", () => {
-    // The origin is the override or the validated host, nothing else.
-    expect(code).toContain("const origin = baseOverride ?? `https://${site.site}`;");
+    // The origin is the override, the gateway under an id this server stored, or the validated host, nothing else.
+    expect(code).toContain("const origin = baseOverride ?? (creds.cloudId ? gatewayOrigin(creds.cloudId) : `https://${site.site}`);");
     expect(code).toContain("const site = parseSite(creds.site);");
   });
 
   test("no sentence is built from a response", () => {
-    // Bodies are cancelled, never read for text; only a JSON success is parsed.
+    // Bodies are cancelled, never read for text; only a JSON success is parsed, and the
+    // second parse is tenant_info, of which only a UUID-shaped `cloudId` is kept.
     expect(code.match(/\.text\(\)/g)).toBeNull();
-    expect(code.match(/res\.json\(\)/g)?.length).toBe(1);
+    expect(code.match(/res\.json\(\)/g)?.length).toBe(2);
   });
 });

@@ -1,31 +1,35 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { SELECT_BOX, helpIdFor } from "../SettingsKit.tsx";
 import { Select } from "../Select.tsx";
-import { EngineTile } from "./EngineTile.tsx";
-import { EngineTiles } from "./EngineTiles.tsx";
+import { AnchoredMenu } from "../AnchoredMenu.tsx";
 import { CloseIcon } from "../CloseButton.tsx";
 import { ICON } from "../../lib/iconSize.ts";
-import { Button, Chip, EDGE, INPUT, LINE, INPUT_STYLE } from "../workspace/Chrome.tsx";
+import { roleLabel, type FlowLike } from "../../lib/roleLabel.ts";
+import { Button, Chip, EDGE, INPUT, INPUT_STYLE, LINE } from "../workspace/Chrome.tsx";
 import { LAYER } from "../../lib/layers.ts";
-import { CHAIN_MAX, ROLE_IDS, TRIGGERS_MAX, type Chain, type EngineChoice, type Policy, type PolicyRule, type Trigger } from "../../../../shared/orchestration.ts";
+import {
+  CHAIN_MAX, ROLE_IDS, TRIGGERS_MAX,
+  type Chain, type EngineChoice, type Policy, type PolicyRule, type Trigger, type UsageProviderId,
+} from "../../../../shared/orchestration.ts";
 import { RuleStrip } from "./RuleStrips.tsx";
+import { buildRule, ruleProblem } from "./ruleDraft.ts";
 import { WORKER_ROLES, type RoleId } from "../../../../shared/workerRoles.ts";
 import type { EngineReadiness } from "../../../../shared/types.ts";
-import type { UsageProviderId } from "../../../../shared/orchestration.ts";
 import {
-  CHAIN_FULL, CHAIN_TAIL, GAUGE_HELP, chainAddFrom, chainMove, chainRemove, engineOptions, newRuleId, ruleLine, testDraft, usageChoices,
+  CHAIN_FULL, CHAIN_TAIL, GAUGE_HELP, chainAddFrom, chainMove, chainRemove, engineLetter, engineOptions, engineTileState,
+  newRuleId, ruleLine, testDraft, usageChoices, type EngineOption,
 } from "./orchestrationCopy.ts";
 
 /**
  * One rule, edited in a side sheet that opens over the page where the person
  * pressed Add or Edit: its name, when it applies (with the strip that shows it),
- * what it puts in place (as steps of tiles), the sentence the draft makes, and
+ * what it puts in place (one section per job), the sentence the draft makes, and
  * a dry run of it against this moment. Nothing is saved until Save, Esc and
- * Cancel change nothing, and the server's own sentence for a refusal sits under
+ * Cancel change nothing, and the server's own sentence for a refusal sits above
  * the buttons.
  *
- * A rule names the fields it changes and leaves the rest alone, so each part
- * under "Then" starts off and is switched on to say something.
+ * A rule names the fields it changes and leaves the rest alone, so each job
+ * under "Then use" starts off and is switched on to say something.
  */
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -49,16 +53,98 @@ export function freshTrigger(kind: Trigger["kind"]): Trigger {
   }
 }
 
-/** The engine a switched-on part starts with: the first one its role can take, so a fresh entry is never an unknown id. */
+/** The engine a switched-on job starts with: the first one its role can take, so a fresh entry is never an unknown id. */
 function firstOffered(role: "orchestrator" | "worker", readiness: readonly EngineReadiness[] | null): EngineChoice {
-  const o = engineOptions(role, readiness).find((x) => !x.disabled) ?? engineOptions(role, readiness)[0];
+  const all = engineOptions(role, readiness);
+  const o = all.find((x) => !x.disabled) ?? all[0];
   return { engine: o?.value ?? "", model: "" };
 }
 
+/** The engine's name from the provider table, never an id shown to the person. */
+const engineName = (engine: string, role: "orchestrator" | "worker"): string =>
+  engineOptions(role, null).find((o) => o.value === engine)?.label ?? engine;
+
+/** A dot only when the chosen engine cannot take the role; a ready engine says nothing. */
+function StepState({ engine, model, role, readiness }: {
+  engine: string; model: string; role: "orchestrator" | "worker"; readiness: readonly EngineReadiness[] | null;
+}) {
+  const s = engineTileState(engine, role, readiness, false, model);
+  if (s.tone === "ok" || s.tone === "checking") return null;
+  return <span aria-hidden className="agx-rule-step-dot" data-tone={s.tone} title={s.reason} />;
+}
+
 /**
- * A chain as numbered steps, tried in order, then the tiles to add one with.
- * A step can move, go (the last one cannot) and name a model; a tile that
- * cannot run says why once and adds nothing when pressed.
+ * One step of a chain: the mark and name, the model, and the three controls,
+ * always on one line and in the same columns. The model gives way first (it
+ * ellipsizes and carries the whole value in its title), never the remove.
+ */
+function StepRow({ id, label, index, count, step, role, readiness, onChange, onMove, onRemove }: {
+  id: string; label: string; index: number; count: number; step: EngineChoice;
+  role: "orchestrator" | "worker"; readiness: readonly EngineReadiness[] | null;
+  onChange: (c: EngineChoice) => void; onMove: (by: -1 | 1) => void; onRemove: () => void;
+}) {
+  const name = engineName(step.engine, role);
+  return (
+    <li className="agx-rule-step">
+      <span aria-hidden className="agx-rule-step-n">{index + 1}</span>
+      <span className="agx-rule-step-name" title={name}>
+        <span aria-hidden className="agx-rule-step-mark">{engineLetter(step.engine)}</span>
+        <span className="agx-rule-step-title">{name}</span>
+        <StepState engine={step.engine} model={step.model} role={role} readiness={readiness} />
+      </span>
+      <input value={step.model} placeholder="its default model" spellCheck={false}
+        id={`${id}-model-${index}`} aria-label={`${label}: model ${index + 1}`}
+        title={step.model || "Its default model"}
+        onChange={(e) => onChange({ ...step, model: e.target.value })}
+        className={`t-mono agx-rule-model ${INPUT}`} style={{ ...INPUT_STYLE, height: 28 }} />
+      <Button type="button" label="Move up" square size="regular" disabled={index === 0}
+        onClick={() => onMove(-1)}>↑</Button>
+      <Button type="button" label="Move down" square size="regular" disabled={index === count - 1}
+        onClick={() => onMove(1)}>↓</Button>
+      <Button type="button" label="Remove" square size="regular" disabled={count === 1}
+        onClick={onRemove}><CloseIcon size={ICON.sm} /></Button>
+    </li>
+  );
+}
+
+/**
+ * The engines as a menu, ready ones first. A disabled row is quiet and says why
+ * in one line; pressing it does nothing.
+ */
+function AddStep({ label, role, readiness, onAdd }: {
+  label: string; role: "orchestrator" | "worker"; readiness: readonly EngineReadiness[] | null;
+  onAdd: (engine: string, options: readonly EngineOption[]) => void;
+}) {
+  const anchor = useRef<HTMLSpanElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const options = engineOptions(role, readiness);
+  const ordered = [...options.filter((o) => !o.disabled), ...options.filter((o) => o.disabled)];
+  return (
+    <span ref={anchor} className="agx-rule-addwrap">
+      <Button type="button" size="regular" aria-haspopup="menu" aria-expanded={open}
+        label={`Add a step to ${label}`} onClick={() => setOpen((v) => !v)}>+ Add a step</Button>
+      {open && (
+        <AnchoredMenu anchor={anchor} align="left" minWidth={288} onClose={() => setOpen(false)}>
+          {ordered.map((o) => (
+            <button key={o.value} type="button" role="menuitem" disabled={!!o.disabled}
+              data-engine={o.value} data-off={o.disabled ? "" : undefined}
+              className="agx-step-pick" onClick={() => { setOpen(false); onAdd(o.value, options); }}>
+              <span aria-hidden className="agx-rule-step-mark">{engineLetter(o.value)}</span>
+              <span className="agx-step-pick-text">
+                <span className="agx-step-pick-name">{o.label}</span>
+                <span className="agx-step-pick-why">{o.disabled ? o.hint ?? "It cannot take this role here." : "Ready"}</span>
+              </span>
+            </button>
+          ))}
+        </AnchoredMenu>
+      )}
+    </span>
+  );
+}
+
+/**
+ * A chain as numbered steps, tried in order, then the one control that adds
+ * one. A full chain says so instead of offering a step it would drop.
  */
 export function ChainEditor({ id, label, chain, role, readiness, onChange }: {
   id: string;
@@ -70,30 +156,22 @@ export function ChainEditor({ id, label, chain, role, readiness, onChange }: {
 }) {
   const set = (i: number, c: EngineChoice) => onChange(chain.map((x, j) => (j === i ? c : x)));
   return (
-    <div className="grid gap-2" role="group" aria-label={label}>
-      <ol className="m-0 p-0 grid gap-2 list-none">
+    <div className="agx-rule-chain" role="group" aria-label={label}>
+      <ol className="agx-rule-steps">
         {chain.map((c, i) => (
-          <li key={i} className="flex flex-wrap items-center gap-2">
-            <EngineTile engine={c.engine} model={c.model} role={role} readiness={readiness} position={i + 1} />
-            <input value={c.model} placeholder="its default model" spellCheck={false}
-              id={`${id}-model-${i}`} aria-label={`${label}: model ${i + 1}`}
-              onChange={(e) => set(i, { ...c, model: e.target.value })}
-              className={`t-mono ${INPUT}`} style={{ ...INPUT_STYLE, width: 180 }} />
-            <Button type="button" label="Move up" square disabled={i === 0} onClick={() => onChange(chainMove(chain, i, -1))}>↑</Button>
-            <Button type="button" label="Move down" square disabled={i === chain.length - 1} onClick={() => onChange(chainMove(chain, i, 1))}>↓</Button>
-            <Button type="button" label="Remove" square disabled={chain.length === 1} onClick={() => onChange(chainRemove(chain, i))}><CloseIcon size={ICON.sm} /></Button>
-          </li>
+          <StepRow key={i} id={id} label={label} index={i} count={chain.length} step={c}
+            role={role} readiness={readiness} onChange={(next) => set(i, next)}
+            onMove={(by) => onChange(chainMove(chain, i, by))} onRemove={() => onChange(chainRemove(chain, i))} />
         ))}
       </ol>
       {chain.length >= CHAIN_MAX ? (
-        <span className="text-[12px]" style={{ color: "var(--text3)" }}>{CHAIN_FULL} {CHAIN_TAIL}</span>
+        <p className="agx-rule-note">{CHAIN_FULL} {CHAIN_TAIL}</p>
       ) : (
-        <>
-          <span className="text-[12px] font-medium" style={{ color: "var(--text)" }}>Add a step</span>
-          <EngineTiles role={role} readiness={readiness} label={`${label}: add a step`}
-            onPick={(engine, options) => { const n = chainAddFrom(chain, options, engine); if (n) onChange(n); }} />
-          <span className="text-[12px]" style={{ color: "var(--text3)" }}>Press a tile to add it as the next step. {CHAIN_TAIL}</span>
-        </>
+        <div className="agx-rule-addrow">
+          <AddStep label={label} role={role} readiness={readiness}
+            onAdd={(engine, options) => { const n = chainAddFrom(chain, options, engine); if (n) onChange(n); }} />
+          <span className="agx-rule-note">{CHAIN_TAIL}</span>
+        </div>
       )}
     </div>
   );
@@ -101,21 +179,27 @@ export function ChainEditor({ id, label, chain, role, readiness, onChange }: {
 
 type Left = Partial<Record<UsageProviderId, number>>;
 
-function TriggerEditor({ id, t, now, left, onChange, onRemove, removable }: {
+/** One condition: its kind, the fields that kind needs, and the strip that shows when it applies. */
+export function TriggerEditor({ id, t, now, left, onChange, onRemove, removable }: {
   id: string; t: Trigger; now: Date; left: Left; onChange: (t: Trigger) => void; onRemove: () => void; removable: boolean;
 }) {
   const choices = usageChoices();
   const num = (v: string) => Math.max(1, Math.min(99, Math.round(Number(v) || 1)));
+  const kind = KINDS.find((k) => k.id === t.kind)?.label ?? t.kind;
   return (
-    <div className="grid gap-3 rounded-lg p-3 min-w-0" style={{ background: "var(--surface-inset)" }}>
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Condition">
-          {KINDS.map((k) => <Chip key={k.id} on={t.kind === k.id} resting onClick={() => { if (k.id !== t.kind) onChange(freshTrigger(k.id)); }}>{k.label}</Chip>)}
-        </div>
-        {removable && <Button type="button" onClick={onRemove}>Remove this condition</Button>}
+    <div className="agx-rule-cond" role="group" aria-label={`Condition: ${kind}`}>
+      <div className="agx-rule-cond-top">
+        <Select value={t.kind} title="Condition" style={SELECT_BOX} options={KINDS.map((k) => ({ value: k.id, label: k.label }))}
+          onChange={(k) => { if (k !== t.kind) onChange(freshTrigger(k as Trigger["kind"])); }} />
+        <span className="agx-rule-grow" />
+        {removable && (
+          <Button type="button" square size="regular" label="Remove this condition" onClick={onRemove}>
+            <CloseIcon size={ICON.sm} />
+          </Button>
+        )}
       </div>
       {(t.kind === "usage" || t.kind === "limit") && (
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="agx-rule-fields">
           <Select value={t.provider} title="Which plan" style={SELECT_BOX} options={choices}
             onChange={(p) => onChange({ ...t, provider: p as typeof t.provider })} />
           {t.kind === "usage" && (
@@ -123,12 +207,12 @@ function TriggerEditor({ id, t, now, left, onChange, onRemove, removable }: {
               <Select value={t.window} title="Which window" style={SELECT_BOX}
                 options={[{ value: "5h", label: "5 h window" }, { value: "weekly", label: "Weekly window" }, { value: "either", label: "Either window" }]}
                 onChange={(w) => onChange({ ...t, window: w as typeof t.window })} />
-              <label htmlFor={`${id}-pct`} className="text-[12px]" style={{ color: "var(--text2)" }}>with at most</label>
+              <label htmlFor={`${id}-pct`} className="agx-rule-fieldlabel">with at most</label>
               <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
                 <input id={`${id}-pct`} type="number" min={1} max={99} value={t.remainingAtMost}
                   onChange={(e) => onChange({ ...t, remainingAtMost: num(e.target.value) })}
-                  className={`t-mono ${INPUT}`} style={{ ...INPUT_STYLE, width: 72 }} />
-                <span className="text-[12px]" style={{ color: "var(--text2)" }}>% left</span>
+                  className={`t-mono ${INPUT}`} style={{ ...INPUT_STYLE, width: 72, height: 28 }} />
+                <span className="agx-rule-fieldlabel">% left</span>
               </span>
             </>
           )}
@@ -136,23 +220,23 @@ function TriggerEditor({ id, t, now, left, onChange, onRemove, removable }: {
       )}
       {t.kind === "usage" && <RuleStrip when={[t]} now={now} left={left} />}
       {(t.kind === "usage" || t.kind === "limit") && GAUGE_HELP() && (
-        <p id={helpIdFor(`${id}-gauge`)} className="m-0 text-[12px]" style={{ color: "var(--text3)" }}>{GAUGE_HELP()}</p>
+        <p id={helpIdFor(`${id}-gauge`)} className="agx-rule-note">{GAUGE_HELP()}</p>
       )}
       {t.kind === "hours" && (
-        <div className="grid gap-2">
+        <div className="grid gap-3">
           <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Days">
             {DAY_LABELS.map((d, i) => (
               <Chip key={d} on={t.days.includes(i)} resting
                 onClick={() => onChange({ ...t, days: t.days.includes(i) ? t.days.filter((x) => x !== i) : [...t.days, i].sort() })}>{d}</Chip>
             ))}
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="agx-rule-fields">
             <input type="time" aria-label="From" value={t.from} onChange={(e) => onChange({ ...t, from: e.target.value })}
-              className={`t-mono ${INPUT}`} style={{ ...INPUT_STYLE, width: 112 }} />
-            <span className="text-[12px]" style={{ color: "var(--text2)" }}>to</span>
+              className={`t-mono ${INPUT}`} style={{ ...INPUT_STYLE, width: 112, height: 28 }} />
+            <span className="agx-rule-fieldlabel">to</span>
             <input type="time" aria-label="To" value={t.to} onChange={(e) => onChange({ ...t, to: e.target.value })}
-              className={`t-mono ${INPUT}`} style={{ ...INPUT_STYLE, width: 112 }} />
-            <span className="text-[12px]" style={{ color: "var(--text3)" }}>This computer's time. It may cross midnight.</span>
+              className={`t-mono ${INPUT}`} style={{ ...INPUT_STYLE, width: 112, height: 28 }} />
+            <span className="agx-rule-note">This computer's time. It may cross midnight.</span>
           </div>
           <RuleStrip when={[t]} now={now} left={left} />
         </div>
@@ -161,17 +245,59 @@ function TriggerEditor({ id, t, now, left, onChange, onRemove, removable }: {
   );
 }
 
-function Block({ label, children }: { label: string; children: ReactNode }) {
+/** A section of the sheet: its heading, an optional sentence, and one hairline above. */
+function Sec({ id, title, sub, children }: { id: string; title: string; sub?: ReactNode; children: ReactNode }) {
   return (
-    <div className="grid gap-2 min-w-0">
-      <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>{label}</span>
+    <section className="agx-rule-sec" data-block={id}>
+      <div className="agx-rule-sec-head">
+        <h2 className="agx-rule-sec-h">{title}</h2>
+        {sub && <p className="agx-rule-sec-sub">{sub}</p>}
+      </div>
       {children}
+    </section>
+  );
+}
+
+/** One job: its heading row (open or folded, on or off) and, open, its steps. */
+function JobSection({ id, slot, title, chain, role, readiness, open, onOpen, onToggle, onChange }: {
+  id: string; slot: string; title: string; chain: Chain | undefined; role: "orchestrator" | "worker";
+  readiness: readonly EngineReadiness[] | null; open: boolean;
+  onOpen: () => void; onToggle: () => void; onChange: (c: Chain) => void;
+}) {
+  const bodyOpen = !!chain && open;
+  const steps = chain?.length ?? 0;
+  return (
+    <div className="agx-rule-job" data-on={chain ? "" : undefined}>
+      <div className="agx-rule-job-head">
+        {chain ? (
+          <button type="button" className="agx-rule-job-open" aria-expanded={bodyOpen} onClick={onOpen}>
+            <span aria-hidden className="agx-rule-caret" data-open={bodyOpen ? "" : undefined}>▸</span>
+            <span className="agx-rule-job-title">{title}</span>
+            <span className="agx-rule-job-count">{steps} {steps === 1 ? "step" : "steps"}</span>
+          </button>
+        ) : (
+          <span className="agx-rule-job-open" data-static="">
+            <span aria-hidden className="agx-rule-caret" data-off="" />
+            <span className="agx-rule-job-title">{title}</span>
+            <span className="agx-rule-job-count">keeps the page's choice</span>
+          </span>
+        )}
+        <Button type="button" size="compact" on={!!chain} aria-pressed={!!chain}
+          aria-label={`${title}: ${chain ? "on" : "off"}`} onClick={onToggle}>{chain ? "On" : "Off"}</Button>
+      </div>
+      {chain && open && (
+        <div className="agx-rule-job-body">
+          <ChainEditor id={`${id}-${slot}`} label={title} chain={chain} role={role} readiness={readiness} onChange={onChange} />
+        </div>
+      )}
     </div>
   );
 }
 
 export interface RuleSheetProps {
   initial: PolicyRule | null;
+  /** The flow's role names: the group labels and the preview print these. */
+  flow?: FlowLike | null;
   policy: Policy;
   readiness: readonly EngineReadiness[] | null;
   /** "orbit", or "all projects": whose setting this edits. */
@@ -185,8 +311,10 @@ export interface RuleSheetProps {
   onDelete?: () => void;
 }
 
+type Job = { key: string; title: string; chain: Chain | undefined; role: "orchestrator" | "worker"; toggle: () => void; set: (c: Chain) => void };
+
 /** The side sheet. Esc and the scrim close it; the person's place on the page is not moved. */
-export function RuleSheet({ initial, policy, readiness, scope, facts, left, now, onSave, onCancel, onDelete }: RuleSheetProps) {
+export function RuleSheet({ initial, flow, policy, readiness, scope, facts, left, now, onSave, onCancel, onDelete }: RuleSheetProps) {
   const uid = initial?.id ?? "new-rule";
   const [name, setName] = useState(initial?.name ?? "");
   const [when, setWhen] = useState<Trigger[]>(initial?.when ?? [freshTrigger("usage")]);
@@ -196,17 +324,18 @@ export function RuleSheet({ initial, policy, readiness, scope, facts, left, now,
   const [busy, setBusy] = useState(false);
   const [tested, setTested] = useState<{ holds: string; lines: string[] } | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+  // The first job with steps is the one the sheet opens on.
+  const [openJobs, setOpenJobs] = useState<Record<string, boolean>>(() => {
+    const key = initial?.orchestrator ? "orchestrator" : ROLE_IDS.find((r) => initial?.workers?.[r]);
+    return key ? { [key]: true } : {};
+  });
   useEffect(() => { nameRef.current?.focus({ preventScroll: true }); }, []);
 
-  const draft = (): PolicyRule => ({
-    id: initial?.id ?? newRuleId(policy, name), name: name.trim(), when, enabled: initial?.enabled ?? true,
-    ...(orch ? { orchestrator: orch } : {}),
-    ...(ROLE_IDS.some((r) => workers[r]) ? { workers: Object.fromEntries(ROLE_IDS.filter((r) => workers[r]).map((r) => [r, workers[r]])) as PolicyRule["workers"] } : {}),
-  });
+  const draft = (): PolicyRule => buildRule({ id: initial?.id ?? null, name, when, enabled: initial?.enabled ?? true, orch, workers }, policy);
   const submit = async () => {
     setError(null);
-    if (!name.trim()) { setError("Give the rule a name: it is what the Lantern and the log show."); return; }
-    if (!orch && !ROLE_IDS.some((r) => workers[r])) { setError("A rule has to change something: switch on the main agent or one of the jobs."); return; }
+    const problem = ruleProblem({ name, orch, workers });
+    if (problem) { setError(problem); return; }
     setBusy(true);
     const e = await onSave(draft()).catch(() => "Could not reach the server.");
     setBusy(false);
@@ -214,13 +343,21 @@ export function RuleSheet({ initial, policy, readiness, scope, facts, left, now,
   };
 
   const setWhenAt = (i: number, t: Trigger) => { setWhen(when.map((x, j) => (j === i ? t : x))); setTested(null); };
-  const preview = ruleLine({ ...draft(), name: name.trim() || "This rule" });
-  const jobs: { key: string; title: string; chain: Chain | undefined; role: "orchestrator" | "worker"; toggle: () => void; set: (c: Chain) => void }[] = [
-    { key: "orchestrator", title: "The main agent", chain: orch, role: "orchestrator", toggle: () => setOrch(orch ? undefined : [firstOffered("orchestrator", readiness)]), set: setOrch },
+  const preview = ruleLine({ ...draft(), name: name.trim() || "This rule" }, flow);
+  const jobs: Job[] = [
+    {
+      key: "orchestrator", title: "The main agent", chain: orch, role: "orchestrator",
+      toggle: () => { setOrch(orch ? undefined : [firstOffered("orchestrator", readiness)]); setOpenJobs((o) => ({ ...o, orchestrator: true })); setTested(null); },
+      set: (c) => { setOrch(c); setTested(null); },
+    },
     ...WORKER_ROLES.map((r) => ({
-      key: r.id, title: `${r.title}s`, chain: workers[r.id], role: "worker" as const,
-      toggle: () => setWorkers((w) => { const n = { ...w }; if (n[r.id]) delete n[r.id]; else n[r.id] = [firstOffered("worker", readiness)]; return n; }),
-      set: (c: Chain) => setWorkers((w) => ({ ...w, [r.id]: c })),
+      key: r.id, title: roleLabel(r.id, flow).plural, chain: workers[r.id], role: "worker" as const,
+      toggle: () => {
+        setWorkers((w) => { const n = { ...w }; if (n[r.id]) delete n[r.id]; else n[r.id] = [firstOffered("worker", readiness)]; return n; });
+        setOpenJobs((o) => ({ ...o, [r.id]: true }));
+        setTested(null);
+      },
+      set: (c: Chain) => { setWorkers((w) => ({ ...w, [r.id]: c })); setTested(null); },
     })),
   ];
   return (
@@ -228,64 +365,62 @@ export function RuleSheet({ initial, policy, readiness, scope, facts, left, now,
       <div aria-hidden className="fixed inset-0 agx-scrim" style={{ zIndex: LAYER.settingsDialog }} onClick={onCancel} />
       <aside role="dialog" aria-modal="true" aria-label={initial ? `Edit ${initial.name}` : "New rule"} data-sheet="rule"
         onKeyDown={(e) => { if (e.key === "Escape" && !e.defaultPrevented) { e.stopPropagation(); onCancel(); } }}
-        className="fixed top-0 right-0 bottom-0 flex flex-col w-[min(560px,100vw)]"
+        className="fixed top-0 right-0 bottom-0 flex flex-col w-[min(560px,100vw)] agx-rule-sheet"
         style={{ zIndex: LAYER.settingsDialog, background: "var(--bg)", borderLeft: EDGE }}>
         <form className="flex flex-col min-h-0 flex-1" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
-          <div className="grid gap-1 p-4" style={{ borderBottom: LINE }}>
-            <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>
-              {initial ? "Editing" : "New"} condition for {scope}
-            </span>
+          <div className="agx-rule-head" style={{ borderBottom: LINE }}>
+            <span className="agx-rule-eyebrow">{initial ? "Editing" : "New"} condition for {scope}</span>
             <label htmlFor={`${uid}-name`} className="sr-only">Name</label>
             <input id={`${uid}-name`} ref={nameRef} value={name} maxLength={60} spellCheck={false} placeholder="Name this condition"
               onChange={(e) => setName(e.target.value)} className={INPUT} style={INPUT_STYLE} />
           </div>
-          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4 grid gap-5 content-start">
-            <Block label="When">
+          <div className="agx-rule-body overflow-y-auto overflow-x-hidden">
+            <Sec id="when" title="When"
+              sub={when.length > 1 ? "All of them have to be true." : "The condition that switches this rule on."}>
               {when.map((t, i) => (
                 <TriggerEditor key={i} id={`${uid}-when-${i}`} t={t} now={now} left={left} removable={when.length > 1}
                   onChange={(n) => setWhenAt(i, n)} onRemove={() => { setWhen(when.filter((_, j) => j !== i)); setTested(null); }} />
               ))}
-              <div className="flex flex-wrap items-center gap-3">
-                <Button type="button" disabled={when.length >= TRIGGERS_MAX} onClick={() => setWhen([...when, freshTrigger("hours")])}>Add a condition</Button>
-                <span className="text-[12px]" style={{ color: "var(--text3)" }}>{when.length > 1 ? "All of them have to hold." : ""}</span>
+              <div className="agx-rule-addrow">
+                <Button type="button" disabled={when.length >= TRIGGERS_MAX}
+                  onClick={() => { setWhen([...when, freshTrigger("hours")]); setTested(null); }}>+ Add a condition</Button>
               </div>
-            </Block>
-            <Block label="Then use">
-              <p className="m-0 text-[12px]" style={{ color: "var(--text3)" }}>A job left off keeps the choice on the page.</p>
-              {jobs.map((j) => (
-                <div key={j.key} className="grid gap-2 min-w-0">
-                  <div><Chip on={!!j.chain} resting onClick={() => { j.toggle(); setTested(null); }}>{j.title}</Chip></div>
-                  {j.chain && <ChainEditor id={`${uid}-${j.key}`} label={j.title} chain={j.chain} role={j.role} readiness={readiness}
-                    onChange={(c) => { j.set(c); setTested(null); }} />}
-                </div>
-              ))}
-            </Block>
-            <Block label="What this would do">
-              <p data-preview className="m-0 text-[13px] rounded-lg p-3 break-words" style={{ background: "var(--surface-inset)", color: "var(--text)" }}>{preview}</p>
-            </Block>
-            <Block label="Test it now">
-              <p className="m-0 text-[12px]" style={{ color: "var(--text3)" }}>Checks this draft against this moment. Nothing is started or saved.</p>
-              <div><Button type="button" onClick={() => setTested(testDraft(policy, draft(), facts, new Date(), left, readiness))}>Test it now</Button></div>
+            </Sec>
+            <Sec id="then" title="Then use" sub="A job left off keeps the choice on the page.">
+              <div className="agx-rule-jobs">
+                {jobs.map((j) => (
+                  <JobSection key={j.key} id={uid} slot={j.key} title={j.title} chain={j.chain} role={j.role} readiness={readiness}
+                    open={!!openJobs[j.key]} onOpen={() => setOpenJobs((o) => ({ ...o, [j.key]: !o[j.key] }))}
+                    onToggle={j.toggle} onChange={j.set} />
+                ))}
+              </div>
+            </Sec>
+            <Sec id="preview" title="What this would do">
+              <p data-preview className="agx-rule-preview">{preview}</p>
+            </Sec>
+            <Sec id="test" title="Test it now" sub="Checks this draft against this moment. Nothing is started or saved.">
+              <div>
+                <Button type="button" onClick={() => setTested(testDraft(policy, draft(), facts, new Date(), left, readiness, flow))}>Test it now</Button>
+              </div>
               {tested && (
                 <div role="status" data-tested className="grid gap-1 text-[12px]" style={{ color: "var(--text)" }}>
                   <p className="m-0 font-medium">{tested.holds}</p>
                   <ul className="m-0 pl-4 grid gap-1">{tested.lines.map((l) => <li key={l}>{l}</li>)}</ul>
                 </div>
               )}
-            </Block>
+            </Sec>
           </div>
-          <div className="grid gap-2 p-4" style={{ borderTop: LINE }}>
+          <footer className="agx-rule-foot" style={{ borderTop: LINE }}>
             {error && <div role="alert" className="agx-field-e">{error}</div>}
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="agx-rule-foot-row">
               {onDelete && <Button type="button" tone="danger" onClick={onDelete}>Delete</Button>}
-              <span className="flex-1" />
+              <span className="agx-rule-grow" />
               <Button type="button" onClick={onCancel}>Cancel</Button>
               <Button type="submit" tone="primary" pending={busy}>Save for {scope}</Button>
             </div>
-          </div>
+          </footer>
         </form>
       </aside>
     </>
   );
 }
-

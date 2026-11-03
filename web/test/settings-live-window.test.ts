@@ -19,7 +19,7 @@ const html = (el: React.ReactElement) => renderToStaticMarkup(el);
 const h = React.createElement;
 
 describe("the views a live window offers", () => {
-  test("the Dashboard is not one of them, and neither preview draws the miniature", () => {
+  test("Starboard is not one of them, and neither preview draws the miniature", () => {
     expect(LIVE_VIEWS.map((v) => v.id)).toEqual(["settings", "lantern", "diff"]);
     for (const f of ["WindowPreview.tsx", "AppearancePreview.tsx", "LiveWindow.tsx"]) {
       expect(src(f), f).not.toMatch(/<MiniApp\b|view="dash"|"dash"/);

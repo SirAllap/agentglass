@@ -60,13 +60,13 @@ describe("the pull request's conflict card", () => {
   });
 
   test("while it is live, the handoff button becomes Open tab and starts nothing", () => {
-    expect(c).toContain("{live ? (");
+    expect(c).toContain("live ? (");
     expect(c).toContain("openLiveWindow(live)");
     expect(c).toContain("Open tab");
   });
 
   test("while it is live, the in-app resolver is off, with the reason as its title", () => {
-    expect(c).toMatch(/disabled=\{disabled \|\| !!busy \|\| !!live\} warn/);
+    expect(c).toMatch(/<Button tone="warn"[\s\S]{0,600}?disabled=\{disabled \|\| !conflicted \|\| !!busy \|\| !!live\}/);
     expect(c).toContain("two things must not edit the same checkout");
   });
 

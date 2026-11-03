@@ -11,12 +11,13 @@
  * address is the row's tooltip and nothing more.
  */
 import type { CardDev, CardDevBuild } from "../../../../shared/providers.ts";
+import { tipAttr } from "../../lib/tip.ts";
 
 const TONE: Record<Exclude<CardDevBuild["state"], "">, string> = { passed: "var(--success-ink)", failed: "var(--error-ink)", running: "var(--info-ink)" };
 
 function Group({ title, left, children }: { title: string; left: number; children: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-0.5 min-w-0 mt-2" aria-label={title}>
+    <div className="flex flex-col min-w-0" style={{ gap: 4 }} aria-label={title}>
       <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>{title}</div>
       {children}
       {left > 0 && <div className="text-[10px]" style={{ color: "var(--text4)" }}>and {left} more on the site</div>}
@@ -27,12 +28,12 @@ function Group({ title, left, children }: { title: string; left: number; childre
 export function JiraDevLists({ dev }: { dev: CardDev | null | undefined }) {
   if (!dev || (!dev.branches.length && !dev.commits.length && !dev.builds.length)) return null;
   return (
-    <>
+    <div className="flex flex-col min-w-0" style={{ gap: 12 }}>
       {dev.branches.length > 0 && (
         <Group title="Branches" left={dev.counts.branches - dev.branches.length}>
           {dev.branches.map((b) => (
-            <div key={`${b.repo}/${b.name}`} className="truncate text-[11px]" title={b.url || b.name} style={{ color: "var(--text2)" }}>
-              {b.name}{b.repo && <span className="ml-1.5 text-[10px]" style={{ color: "var(--text4)" }}>{b.repo}</span>}
+            <div key={`${b.repo}/${b.name}`} className="agx-dk-mini text-[11px]" data-tip={tipAttr(b.url || b.name)} style={{ color: "var(--text2)" }}>
+              <span className="truncate min-w-0">{b.name}{b.repo && <span className="ml-1.5 text-[10px]" style={{ color: "var(--text4)" }}>{b.repo}</span>}</span>
             </div>
           ))}
         </Group>
@@ -40,8 +41,8 @@ export function JiraDevLists({ dev }: { dev: CardDev | null | undefined }) {
       {dev.commits.length > 0 && (
         <Group title="Commits" left={dev.counts.commits - dev.commits.length}>
           {dev.commits.map((c) => (
-            <div key={c.id} className="truncate text-[11px]" title={c.url || c.id} style={{ color: "var(--text2)" }}>
-              <span className="tabular-nums mr-1.5 text-[10px]" style={{ color: "var(--text4)" }}>{c.id}</span>{c.message}
+            <div key={c.id} className="agx-dk-mini text-[11px]" data-tip={tipAttr(c.url || c.id)} style={{ color: "var(--text2)" }}>
+              <span className="truncate min-w-0"><span className="tabular-nums mr-1.5 text-[10px]" style={{ color: "var(--text4)" }}>{c.id}</span>{c.message}</span>
             </div>
           ))}
         </Group>
@@ -49,12 +50,12 @@ export function JiraDevLists({ dev }: { dev: CardDev | null | undefined }) {
       {dev.builds.length > 0 && (
         <Group title={dev.buildsFailed || dev.buildsPassed ? `Builds · ${dev.buildsPassed} passed, ${dev.buildsFailed} failed` : "Builds"} left={dev.counts.builds - dev.builds.length}>
           {dev.builds.map((b, i) => (
-            <div key={`${b.name}-${i}`} className="truncate text-[11px]" title={b.url || b.name} style={{ color: "var(--text2)" }}>
-              {b.name}{b.state && <span className="ml-1.5 text-[10px]" style={{ color: TONE[b.state] }}>{b.state}</span>}
+            <div key={`${b.name}-${i}`} className="agx-dk-mini text-[11px]" data-tip={tipAttr(b.url || b.name)} style={{ color: "var(--text2)" }}>
+              <span className="truncate min-w-0">{b.name}{b.state && <span className="ml-1.5 text-[10px]" style={{ color: TONE[b.state] }}>{b.state}</span>}</span>
             </div>
           ))}
         </Group>
       )}
-    </>
+    </div>
   );
 }

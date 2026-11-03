@@ -93,10 +93,12 @@ describe("Reset page", () => {
 });
 
 describe("card header control", () => {
-  test("Section takes a headerControl and draws it in the head", () => {
-    const sec = fnBody(modalCode, "function Section(");
-    expect(modalCode).toContain("headerControl");
-    expect(sec).toContain("headerControl !== undefined && <div");
-    expect(sec).toContain("agx-settings-head");
+  test("SettingsCard draws a status and an action in its head, to the right", () => {
+    // The page-local `Section` that held this rule had no caller left; the card header every page
+    // builds on is the kit's, and the control column in its head is the same slot.
+    const card = fnBody(at("../src/components/SettingsKit.tsx"), "export function SettingsCard(");
+    expect(card).toContain("agx-scard-top");
+    expect(card).toContain('(status || actions) && (');
+    expect(card).toContain('className="agx-slot"');
   });
 });

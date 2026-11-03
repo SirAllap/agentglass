@@ -181,3 +181,13 @@ describe("a rail saved with the old view names", () => {
     expect(v.loadLastView()).toBe("agents");
   });
 });
+
+describe("what a fresh install draws", () => {
+  it("the rail is in the order the person chose, with Manifest and the Skills catalog put away", async () => {
+    const { SHIPPED_RAIL } = await import("../src/components/workspace/views.ts");
+    const ids = (l: { id: string }[]) => l.map((v) => v.id);
+    expect(ids(SHIPPED_RAIL.work)).toEqual(["term", "pr", "tasks", "git", "diff"]);
+    expect(ids(SHIPPED_RAIL.utility).filter((id) => id !== "browser")).toEqual(["agents", "flightPlan", "docker", "dash", "plugins"]);
+    expect(ids(SHIPPED_RAIL.hidden)).toEqual(["manifest", "skills"]);
+  });
+});

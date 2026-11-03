@@ -70,21 +70,46 @@ const metrics = await Bun.file(new URL("../src/components/prs/CiMetrics.tsx", im
 const code = (t: string) => t.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
 
 describe("the screen, against its source", () => {
-  test("the lens sits beside the other chips of the CI view, and the chip says how many", () => {
-    expect(metrics).toContain("Failing tests");
+  test("the lens is a box under the check history, always on the page, and its header says how many", () => {
+    expect(lens).toContain("Failing tests");
+    expect(lens).toContain("{data && <small>{data.rows.length}</small>}");
     expect(metrics).toContain("<FailingTestsLens");
+    // it is no longer one of the views the tiles swap: there is no "tests" chip
+    expect(metrics).not.toContain('"tests"');
+  });
+  test("the box has a filter of its own, 28 by 200 like the refresh beside it, and the refresh that reaches GitHub", () => {
+    expect(lens).toContain('label="Filter tests"');
+    expect(lens).toContain("!h-[28px] !w-[200px]");
+    expect(lens).toContain("<RefreshButton onRefresh={onRefresh}");
+    expect(lens).toContain("matchesTest(r, query) && matchesTest(r, testQuery)");
   });
   test("the table is read with every poll and costs nothing; GitHub is reached only by the refresh", () => {
     expect(metrics).toMatch(/usePoll\(active, \(\) => \{ load\(\); loadTests\(\); \}, 60_000\)/);
     expect(metrics).toMatch(/api\.prFailingTests\(root\)\n/);
     expect(metrics).toMatch(/api\.prFailingTests\(root, true\)/);
-    // the one automatic refresh is the first look at the lens, once per repository, never a timer
+    // the one automatic refresh is the first press of Failing now, once per repository, never a timer
+    expect(metrics).toContain('chip !== "failing"');
     expect(metrics).toContain("refreshed.current.has(root)");
     expect(code(metrics)).not.toMatch(/setInterval\([^)]*refreshTests/);
   });
   test("no raw colour: house tokens only", () => {
     expect(code(lens)).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgb\(/);
-    expect(lens).toContain("var(--surface-card)");
+    expect(lens).toContain("agx-cibox"); // the card fill comes from the box class, which is tokens
+  });
+  test("a test is a row: warning icon, check and title, verdict, the count of pull requests it failed on; opened, it holds the old columns", () => {
+    const row = lens.slice(lens.indexOf("function TestRow("), lens.indexOf("export function FailingTestsLens"));
+    expect(row).toContain("aria-expanded={open}");
+    expect(row).toContain("<WarningIcon");
+    expect(row).toContain("{r.check} · {r.title}");
+    expect(row).toContain("<Verdict r={r} />");
+    expect(row).toContain('r.verdict.kind !== "this-pr" && r.prs > 0');
+    for (const k of ["Check", "Runs", "PRs", "First seen", "Last seen"]) expect(row).toContain(`"${k}"`);
+    expect(row).toContain("{r.gist &&");
+    expect(code(lens)).not.toContain("HEAD.map(");
+  });
+  test("the verdict note and the coverage wait in a disclosure, not in the page", () => {
+    expect(lens).toContain("<details");
+    expect(lens.indexOf("<details")).toBeLessThan(lens.indexOf("VERDICT_NOTE}"));
   });
   test("it shows the cost and the coverage on the page", () => {
     expect(lens).toContain("budgetLine(CAP)");

@@ -7,26 +7,38 @@
  * opening forty pull requests. Never an absolute threshold: an eval suite that
  * always takes 15 minutes is fine at 15 and slow at 40.
  *
- * A table, like the checks list: it scales to dozens of checks and reads the
- * same way. The bar in the last column is the whole idea in one row — dark up
- * to what the job usually takes, light up to its slowest 1 in 10, and a marker
- * for the newest run coloured by what that run is against the job's own past.
- * The decisions (verdict, tiles, status, sort) live in lib/ciMetrics.ts.
+ * A list of rows, as the mockup draws it: the check, a bar per day, what it
+ * usually takes and the share of its runs that passed. Every other fact the old
+ * table had in columns (slow end, fails, the bar of this run against its own
+ * history, the status word, the dashed slowest-1-in-10 line) is in the row when
+ * it is opened, so the list stays a list and nothing is gone. The bar of an
+ * opened row is the whole idea in one picture — dark up to what the job usually
+ * takes, light up to its slowest 1 in 10, and a marker for the newest run
+ * coloured by what that run is against the job's own past. The decisions
+ * (verdict, tiles, status, sort) live in lib/ciMetrics.ts.
  *
- * Four tiles above the table filter it; the filter text comes from outside
- * (`filterText`), because the bar at the top of the panel owns the one search
- * box.
+ * Five tiles above the history filter it (Pass rate, Median run, Re-run
+ * passed, Drifting, Failing now); under it, always on the page, are the failing
+ * tests. The history has a filter and a sort of its own in its header, and the
+ * failing tests a filter of theirs: the bar at the top of the panel keeps the
+ * one global search, as the mockup draws it, and typing in it from here goes to
+ * the board's search (the panel does that, not this view).
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { RERUN_DAYS, MIN_SAMPLES, type CheckMetric } from "../../../../shared/checkBaseline.ts";
 import { api } from "../../lib/api.ts";
 import { usePoll } from "../../lib/usePoll.ts";
-import { barScale, barTop, chipCounts, DEFAULT_SORT, rerunWhy, inChip, isSlow, matches, nextSort, sortRows, sparkPaths, span, statusChip, tileOf, TILES, toRow, verdictWords, viewOfTile, type Chip, type CiView, type Row, type Sort, type SortKey, type Tile } from "../../lib/ciMetrics.ts";
-import { LINE, RefreshButton } from "../workspace/Chrome.tsx";
+import { barScale, barTop, chipCounts, DEFAULT_SORT, dayBars, parseSortChoice, passChip, rerunWhy, inChip, isSlow, matches, sortChoice, SORT_CHOICES, sortRows, sparkPaths, span, statusChip, tileFacts, tileOf, TILES, toRow, verdictWords, viewOfTile, type Chip, type CiView, type Row, type Sort, type SortKey, type Tile, type TileTone } from "../../lib/ciMetrics.ts";
+import { Button, CTRL_H, FilterField, RefreshButton } from "../workspace/Chrome.tsx";
+import { Select } from "../Select.tsx";
+import { CaretIcon, ChartIcon } from "../../lib/glyphIcons.tsx";
+import { ICON } from "../../lib/iconSize.ts";
+import { PrBlank } from "../TriageBoard.tsx";
+import { PrNotice } from "../PrNotice.tsx";
 import { Chip as StatusChip } from "../git/ui.tsx";
 import { Spinner } from "../Spinner.tsx";
-import { LENS_REFRESH_CAP } from "../../../../shared/failureVerdict.ts";
 import { FailingTestsLens } from "./FailingTestsLens.tsx";
+import { CODE_FONT_STYLE } from "../diff/DiffLines.tsx";
 import type { FailingTests } from "../../../../shared/types.ts";
 
 const CHIP_TEXT: Record<Chip, { label: string; title: string }> = {
@@ -34,10 +46,8 @@ const CHIP_TEXT: Record<Chip, { label: string; title: string }> = {
   slow: { label: "Slow", title: "The newest run is slower than the check's own slowest 1 in 10" },
   rerun: { label: "Re-run passed", title: `Failed, then passed, on the same commit in the last ${RERUN_DAYS} days, over at least ${MIN_SAMPLES} judged runs. That is the job, not a single test: a check that fails on every commit is broken, not re-run` },
   drifting: { label: "Drifting", title: "The last 7 days took 15% longer than the 7 before" },
+  failing: { label: "Failing now", title: "The newest run of the check failed. The failing tests it was read from are below" },
 };
-
-/** One grid for the header and every row, so the columns cannot drift apart. */
-const COLS = "minmax(190px, 1fr) 72px 64px 64px 48px minmax(160px, 380px) 112px";
 
 const TINT = {
   "much-slower": { bar: "var(--error)", ink: "var(--error-ink)" },
@@ -51,21 +61,20 @@ function tintOf(r: Row) {
   return r.failed ? TINT["much-slower"] : TINT[r.verdict];
 }
 
-const COLUMNS: { key: SortKey | null; label: string; align: "left" | "right"; title?: string }[] = [
-  { key: "check", label: "Check", align: "left" },
-  { key: null, label: "14 days", align: "left", title: "One point per day: the median of that day's successful runs" },
-  { key: "usual", label: "Usual", align: "right", title: "The median of its successful runs" },
-  { key: "slow", label: "Slow end", align: "right", title: "The slowest 1 in 10 of its successful runs" },
-  { key: "fails", label: "Fails", align: "right", title: "Failures over successes plus failures; cancelled runs do not count" },
-  { key: "verdict", label: "This run against its own history", align: "left", title: "The newest run of the check, judged against that check's own usual" },
-  { key: null, label: "Status", align: "left", title: "One word for what is notable about the newest run" },
-];
+const TILE_TITLE: Record<Tile, string> = {
+  pass: `${CHIP_TEXT.all.title}. The rate is each check's own, weighted by its runs`,
+  median: `The median of every check's usual time. Opens the slow ones: ${CHIP_TEXT.slow.title.toLowerCase()}`,
+  rerun: CHIP_TEXT.rerun.title,
+  drifting: CHIP_TEXT.drifting.title,
+  failing: CHIP_TEXT.failing.title,
+};
 
-const TILE_TEXT: Record<Tile, { label: string; title: string }> = {
-  all: { label: "All checks", title: CHIP_TEXT.all.title },
-  slow: { label: "Slow", title: CHIP_TEXT.slow.title },
-  rerun: { label: "Re-run passed", title: CHIP_TEXT.rerun.title },
-  attention: { label: "Drifting · failing tests", title: "Checks creeping up week on week, and every failing test the app has read" },
+/** The hue frames a tile and the ink draws its figure (the ink is the readable one on the wash). */
+const TILE_TONE: Record<TileTone, { hue: string; ink: string }> = {
+  good: { hue: "var(--success)", ink: "var(--success-ink)" },
+  info: { hue: "var(--info)", ink: "var(--info-ink, var(--info))" },
+  warn: { hue: "var(--warning)", ink: "var(--warning-ink)" },
+  bad: { hue: "var(--error)", ink: "var(--error-ink)" },
 };
 
 const TONE = { bad: "bad", warn: "warn", good: "good" } as const;
@@ -97,33 +106,65 @@ function Bar({ r, top }: { r: Row; top: number }) {
   );
 }
 
-function Line({ r, top }: { r: Row; top: number }) {
+/** The days as bars, tallest day full height: a day with no success is a stub, never a zero. */
+function DayBars({ r }: { r: Row }) {
+  const H = 16;
+  const bars = useMemo(() => dayBars(r.trend), [r.trend]);
+  const t = tintOf(r);
+  return (
+    <span className="flex items-end gap-px shrink-0" style={{ height: H }} aria-hidden>
+      {bars.map((b, i) => (
+        <span key={i} className="rounded-sm"
+          style={{ width: 3, height: b == null ? 2 : Math.max(3, Math.round(b * H)), background: b == null ? "color-mix(in srgb, var(--text) 18%, transparent)" : t.bar, opacity: b == null ? 1 : 0.55 + 0.45 * (i / Math.max(1, bars.length - 1)) }} />
+      ))}
+    </span>
+  );
+}
+
+const FACT = "flex flex-col gap-0.5 min-w-0";
+const FACT_K = "text-[10px] uppercase tracking-wide";
+
+/**
+ * One check: a row that opens. Closed it is what the mockup draws; opened it holds what the table's other
+ * columns held, so a fact is one press away and never gone.
+ */
+function Line({ r, top, open, onToggle }: { r: Row; top: number; open: boolean; onToggle: () => void }) {
   const t = tintOf(r);
   const words = verdictWords(r);
   const week = r.drift != null ? Math.round(r.drift * 100) : null;
   const status = statusChip(r);
+  const pass = passChip(r);
+  const label = r.workflow ? `${r.workflow} / ${r.name}` : r.name;
   return (
-    <div role="row" className="grid items-center gap-x-3 px-3 agx-hover" style={{ gridTemplateColumns: COLS, minHeight: 32, borderTop: QUIET }}>
-      <div role="cell" className="flex items-center gap-2 min-w-0">
-        <span className="truncate text-[11px]" style={{ color: "var(--text)" }} title={r.workflow ? `${r.workflow} / ${r.name}` : r.name}>{r.name}</span>
-        {r.workflow && <span className="text-[10px] truncate" style={{ color: "var(--text3)" }}>{r.workflow}</span>}
-        {week != null && <span className="text-[10px] shrink-0 tabular-nums" style={{ color: "var(--text3)" }} title="The last 7 days took longer than the 7 before">▲ {week}%</span>}
-      </div>
-      <div role="cell"><Spark r={r} /></div>
-      <div role="cell" className="text-right text-[11px] tabular-nums" style={{ color: "var(--text)" }}>{r.usual != null ? span(r.usual) : "—"}</div>
-      <div role="cell" className="text-right text-[11px] tabular-nums" style={{ color: "var(--text2)" }}>{r.slowEnd != null ? span(r.slowEnd) : "—"}</div>
-      <div role="cell" className="text-right text-[11px] tabular-nums" title={rerunWhy(r.sameCommit) || undefined} style={{ color: "var(--text3)" }}>
-        {r.failRate != null ? `${Math.round(r.failRate * 100)}%` : "—"}
-      </div>
-      <div role="cell" className="flex items-center gap-3 min-w-0">
-        <Bar r={r} top={top} />
-        <span className="text-[11px] tabular-nums shrink-0 w-[52px] text-right" style={{ color: t.ink }}>
-          {r.thisRun != null ? span(r.thisRun) : "—"}
+    <div role="row" className="agx-hover" style={{ borderTop: QUIET }}>
+      <button type="button" role="cell" aria-expanded={open} onClick={onToggle} title={open ? "Close the details" : "Open the details: slow end, fails, this run against its own history"}
+        className="agx-btn agx-cirow w-full grid items-center gap-x-3 px-3 text-left" style={{ minHeight: 36 }}>
+        <span className="flex items-center gap-2 min-w-0">
+          <span aria-hidden className="flex shrink-0" style={{ color: "var(--text4)", transform: open ? undefined : "rotate(-90deg)" }}><CaretIcon size={ICON.xs} /></span>
+          <span className="truncate text-[12px]" style={{ ...CODE_FONT_STYLE, color: "var(--text)" }}>{label}</span>
+          {week != null && <span className="inline-flex items-center gap-0.5 text-[10px] shrink-0 tabular-nums" style={{ color: "var(--text3)" }} title="The last 7 days took longer than the 7 before"><span aria-hidden className="flex" style={{ transform: "rotate(180deg)" }}><CaretIcon size={ICON.xs} /></span>{week}%</span>}
         </span>
-      </div>
-      <div role="cell" className="flex items-center min-w-0">
-        {status && <StatusChip tone={TONE[status.tone]} title={r.rerun ? rerunWhy(r.sameCommit) : words || undefined}>{status.label}</StatusChip>}
-      </div>
+        <DayBars r={r} />
+        <span className="text-right text-[11px] tabular-nums" style={{ ...CODE_FONT_STYLE, color: "var(--text2)" }} title="What it usually takes: the median of its successful runs">{r.usual != null ? span(r.usual) : "\u2014"}</span>
+        <span className="flex justify-end"><StatusChip tone={pass.tone} title="The share of its judged runs that passed; a cancelled run does not count">{pass.label}</StatusChip></span>
+      </button>
+      {open && (
+        <div className="grid gap-x-6 gap-y-3 px-3 pb-3 pt-1" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", background: "color-mix(in srgb, var(--text) 2.5%, transparent)" }}>
+          <div className={FACT}><span className={FACT_K} style={{ color: "var(--text3)" }}>Slow end</span><span className="text-[11px] tabular-nums" style={{ color: "var(--text2)" }} title="The slowest 1 in 10 of its successful runs">{r.slowEnd != null ? span(r.slowEnd) : "\u2014"}</span></div>
+          <div className={FACT}><span className={FACT_K} style={{ color: "var(--text3)" }}>Fails</span>
+            <span className="text-[11px] tabular-nums" style={{ color: "var(--text2)" }} title={rerunWhy(r.sameCommit) || "Failures over successes plus failures; cancelled runs do not count"}>{r.failRate != null ? `${Math.round(r.failRate * 100)}%` : "\u2014"}</span></div>
+          <div className={FACT}><span className={FACT_K} style={{ color: "var(--text3)" }}>14 days</span><span className="inline-flex items-center"><Spark r={r} /></span></div>
+          <div className={FACT} style={{ gridColumn: "span 2" }}>
+            <span className={FACT_K} style={{ color: "var(--text3)" }} title="The newest run of the check, judged against that check's own usual">This run against its own history</span>
+            <span className="flex items-center gap-3 min-w-0">
+              <Bar r={r} top={top} />
+              <span className="text-[11px] tabular-nums shrink-0 w-[52px] text-right" style={{ color: t.ink }}>{r.thisRun != null ? span(r.thisRun) : "\u2014"}{words ? <span className="sr-only"> {words}</span> : null}</span>
+            </span>
+          </div>
+          <div className={FACT}><span className={FACT_K} style={{ color: "var(--text3)" }}>Status</span>
+            <span className="flex items-center min-h-[18px]">{status ? <StatusChip tone={TONE[status.tone]} title={r.rerun ? rerunWhy(r.sameCommit) : words || undefined}>{status.label}</StatusChip> : <span className="text-[11px]" style={{ color: "var(--text3)" }}>usual</span>}</span></div>
+        </div>
+      )}
     </div>
   );
 }
@@ -145,12 +186,17 @@ export function CiMetrics({ root, repo, active, filterText, onFilterText }: {
   const [tests, setTests] = useState<FailingTests | null>(null);
   const [testsBusy, setTestsBusy] = useState(false);
   const [testsErr, setTestsErr] = useState("");
+  /** The failing tests' own filter box: it narrows that list only, on top of the bar's text. */
+  const [testQuery, setTestQuery] = useState("");
   // What the last refresh did stays on the page: the next poll re-reads the table and carries no refresh of its own.
   const [lastRefresh, setLastRefresh] = useState<FailingTests["refresh"]>(undefined);
   const refreshed = useRef(new Set<string>());
   const query = filterText;
   const setQuery = onFilterText;
   const [sort, setSort] = useState<Sort>(DEFAULT_SORT);
+  /** The checks whose details are open. */
+  const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
+  const toggle = useCallback((k: string) => setOpened((cur) => { const n = new Set(cur); if (!n.delete(k)) n.add(k); return n; }), []);
 
   // The newest request wins: an answer for the project the panel has since left must not be drawn under the new one's name.
   const asked = useRef(0);
@@ -182,7 +228,7 @@ export function CiMetrics({ root, repo, active, filterText, onFilterText }: {
   // Another project starts empty: the last one's checks are not this one's.
   useEffect(() => { setChecks(null); setTests(null); setLastRefresh(undefined); load(); loadTests(); }, [load, loadTests]);
   useEffect(() => {
-    if (chip !== "tests" || !tests || refreshed.current.has(root)) return;
+    if (chip !== "failing" || !tests || refreshed.current.has(root)) return;
     refreshed.current.add(root);
     if (tests.failedRuns > tests.readRuns) refreshTests();
   }, [chip, tests, root, refreshTests]);
@@ -192,90 +238,74 @@ export function CiMetrics({ root, repo, active, filterText, onFilterText }: {
   const rows = useMemo(() => (checks ?? []).map(toRow), [checks]);
   const found = useMemo(() => rows.filter((r) => matches(r, query)), [rows, query]);
   const counts = useMemo(() => chipCounts(found), [found]);
-  const testChip = chip === "tests";
-  const shown = useMemo(() => sortRows(found.filter((r) => inChip(testChip ? "all" : chip, r)), sort), [found, chip, testChip, sort]);
+  const shown = useMemo(() => sortRows(found.filter((r) => inChip(chip, r)), sort), [found, chip, sort]);
   const top = useMemo(() => barTop(rows), [rows]);
   const total = useMemo(() => rows.reduce((n, r) => n + r.runs, 0), [rows]);
+  const facts = useMemo(() => tileFacts(found, counts), [found, counts]);
+
+  if (err && !checks) {
+    return (
+      <PrNotice title="Could not read the check history" reason={err}
+        actions={<Button tone="primary" size="hit" pending={busy} onClick={load}>Try again</Button>}>
+        The local record is unreadable.
+      </PrNotice>
+    );
+  }
+  if (!checks) return <div className="flex items-center gap-2 text-[11px] px-4 py-6" style={{ color: "var(--text3)" }}><Spinner /> Reading the recorded runs…</div>;
+  if (!rows.length) {
+    return (
+      <PrBlank icon={<ChartIcon size={ICON.lg} />} title="0 runs recorded" sentence="Runs are recorded as each pull request's Checks tab loads." ghost>
+        <RefreshButton onRefresh={load} busy={busy} title="Read the recorded runs again" />
+      </PrBlank>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-3 p-4" role="region" aria-label="CI metrics">
-      <div className="flex items-baseline gap-2">
-        <h2 className="text-[13px] font-semibold" style={{ color: "var(--text)" }}>CI metrics</h2>
-        {checks && <span className="text-[11px]" style={{ color: "var(--text3)" }}>{repo} · {total} runs recorded</span>}
-        <span className="flex-1" />
-        <RefreshButton onRefresh={testChip ? refreshTests : () => { load(); loadTests(); }} busy={testChip ? testsBusy : busy}
-          title={testChip ? `Read the failed runs it has not read yet: at most ${LENS_REFRESH_CAP}, newest first, and the cost is stated below` : "Read the recorded runs again"} />
-      </div>
-      <div className="grid gap-2.5" style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }} role="group" aria-label="Which checks">
+      <div className="agx-tiles2" role="group" aria-label="Which checks">
         {TILES.map((t) => {
           const on = tileOf(chip) === t;
-          const n = t === "attention" ? counts.drifting : counts[t];
-          const warm = t === "slow" || t === "rerun" ? "var(--warning-ink)" : "var(--text)";
-          const frame = { background: on ? "color-mix(in srgb, var(--primary) 14%, transparent)" : "var(--surface-card)", border: LINE, boxShadow: on ? "inset 0 0 0 1px color-mix(in srgb, var(--primary) 45%, transparent)" : undefined } as const;
-          return t === "attention" ? (
-            <div key={t} className="rounded-xl px-3 py-2 min-w-0" style={frame} title={TILE_TEXT[t].title}>
-              <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>{TILE_TEXT[t].label}</div>
-              <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                <button type="button" aria-pressed={chip === "drifting"} onClick={() => setChip("drifting")} title={CHIP_TEXT.drifting.title}
-                  className="agx-btn rounded-md px-1.5 py-0.5 text-[11px] tabular-nums flex items-baseline gap-1"
-                  style={{ background: chip === "drifting" ? "color-mix(in srgb, var(--text) 10%, transparent)" : "transparent" }}>
-                  <span className="text-[18px] font-semibold leading-none" style={{ color: counts.drifting ? "var(--warning-ink)" : "var(--text3)" }}>{counts.drifting}</span>
-                  <span style={{ color: "var(--text2)" }}>Drifting</span>
-                </button>
-                <button type="button" aria-pressed={testChip} onClick={() => setChip("tests")} title="Every failing test the app has read, counted over runs and pull requests"
-                  className="agx-btn rounded-md px-1.5 py-0.5 text-[11px] tabular-nums flex items-baseline gap-1"
-                  style={{ background: testChip ? "color-mix(in srgb, var(--text) 10%, transparent)" : "transparent" }}>
-                  <span className="text-[18px] font-semibold leading-none" style={{ color: tests?.rows.length ? "var(--error-ink)" : "var(--text3)" }}>{tests ? tests.rows.length : "…"}</span>
-                  <span style={{ color: "var(--text2)" }}>Failing tests</span>
-                </button>
-              </div>
-            </div>
-          ) : (
-            <button key={t} type="button" aria-pressed={on} onClick={() => setChip(viewOfTile(t))} title={TILE_TEXT[t].title}
-              className="agx-btn rounded-xl px-3 py-2 text-left min-w-0" style={frame}>
-              <div className="text-[10.5px] truncate" style={{ color: "var(--text3)" }}>{TILE_TEXT[t].label}</div>
-              <div className="text-[22px] font-semibold leading-tight tabular-nums mt-0.5" style={{ color: n && t !== "all" ? warm : "var(--text)" }}>{n}</div>
+          const f = facts[t];
+          const tone = TILE_TONE[f.tone];
+          return (
+            <button key={t} type="button" aria-pressed={on} onClick={() => setChip(viewOfTile(t))} title={TILE_TITLE[t]}
+              className="agx-tile2 agx-btn" style={{ "--c": tone.hue, "--ink": tone.ink } as CSSProperties}>
+              <div className="agx-tile2-k">{f.label}</div>
+              <div className="agx-tile2-v">{f.value}</div>
+              <div className="agx-tile2-d">{f.detail}</div>
             </button>
           );
         })}
       </div>
-      {testChip ? (
-        <FailingTestsLens data={tests && { ...tests, refresh: lastRefresh }} query={query} busy={testsBusy} error={testsErr} />
-      ) : err && !checks ? (
-        <div className="text-[11px] px-1 py-6" style={{ color: "var(--text3)" }}>{err}</div>
-      ) : !checks ? (
-        <div className="flex items-center gap-2 text-[11px] px-1 py-6" style={{ color: "var(--text3)" }}><Spinner /> Reading the recorded runs…</div>
-      ) : !rows.length ? (
-        <div className="text-[11px] px-1 py-6" style={{ color: "var(--text3)" }}>No runs recorded yet. They are recorded as each pull request's Checks tab loads.</div>
-      ) : (
-        <div role="table" aria-label="Checks" className="rounded-xl" style={{ background: "var(--surface-card)", border: LINE, boxShadow: "var(--surface-lift)" }}>
-          {/* Sticky in the panel's own scroller, so the columns stay named under a long list. No overflow clip on the table itself: it would make the header stick to the table instead. */}
-          <div role="row" className="grid items-center gap-x-3 px-3 sticky top-0 z-10 rounded-t-xl" style={{ gridTemplateColumns: COLS, minHeight: 30, background: "var(--surface-inset)", borderBottom: LINE }}>
-            {COLUMNS.map((c) => c.key ? (
-              <button key={c.label} role="columnheader" type="button" title={c.title} onClick={() => setSort(nextSort(sort, c.key!))}
-                aria-sort={sort.key === c.key ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
-                className="agx-btn text-[10px] flex items-center gap-1 min-w-0"
-                style={{ justifyContent: c.align === "right" ? "flex-end" : "flex-start", color: sort.key === c.key ? "var(--text)" : "var(--text3)", fontWeight: sort.key === c.key ? 600 : 400 }}>
-                <span className="truncate">{c.label}</span>
-                {sort.key === c.key && <span aria-hidden>{sort.dir === "asc" ? "▲" : "▼"}</span>}
-              </button>
-            ) : (
-              <div key={c.label} role="columnheader" title={c.title} className="text-[10px]" style={{ color: "var(--text3)" }}>{c.label}</div>
-            ))}
-          </div>
-          {shown.length ? shown.map((r) => <Line key={r.key} r={r} top={top} />) : (
+      <div className="agx-cibox">
+        <div className="agx-cibox-h">
+          <ChartIcon size={ICON.sm} />Check history
+          <small className="truncate">{shown.length} of {rows.length} · {repo ? `${repo} · ` : ""}{total} runs recorded as each pull request's Checks tab loads</small>
+          <span className="flex-1" />
+          <FilterField value={query} onChange={setQuery} placeholder="Filter checks" label="Filter checks by name or workflow" className="!h-[28px] !w-[200px] !text-[11px]" />
+          <Select value={sortChoice(sort)} options={SORT_CHOICES.map((c) => ({ value: c.value, label: c.label }))} onChange={(v) => setSort(parseSortChoice(v))}
+            title="Sort the checks" align="right" className="agx-select rounded-lg px-2 text-[11px] outline-none max-w-[190px]" style={{ height: CTRL_H.regular }} />
+          <RefreshButton onRefresh={() => { load(); loadTests(); }} busy={busy} title="Read the recorded runs again" />
+        </div>
+        <div role="table" aria-label="Checks">
+          {shown.length ? shown.map((r) => <Line key={r.key} r={r} top={top} open={opened.has(r.key)} onToggle={() => toggle(r.key)} />) : (
             <div className="text-[11px] px-3 py-6 flex items-center gap-2" style={{ color: "var(--text3)", borderTop: QUIET }}>
-              No check matches{query ? <> “{query}”.</> : "."}
+              {query ? <>No check matches “{query}”.</> : "No check matches this tile."}
               {query && <button type="button" className="agx-btn underline underline-offset-2" style={{ color: "var(--text2)" }} onClick={() => setQuery("")}>Clear the filter</button>}
             </div>
           )}
-          <div className="text-[10px] px-3 py-2 flex flex-wrap gap-x-5 gap-y-1" style={{ color: "var(--text3)", borderTop: QUIET }}>
-            <span>bar = 0 → usual (solid) → slowest 1 in 10 (faint)</span>
-            <span>marker = this run, coloured by its own history</span>
-            <span>dashed line = slowest 1 in 10</span>
-          </div>
+          <details className="text-[10px] px-3 py-2" style={{ color: "var(--text3)", borderTop: QUIET }}>
+            <summary className="cursor-pointer select-none">How to read an opened row</summary>
+            <div className="flex flex-wrap gap-x-5 gap-y-1 pt-1.5">
+              <span>bar = 0 → usual (solid) → slowest 1 in 10 (faint)</span>
+              <span>marker = this run, coloured by its own history</span>
+              <span>dashed line = slowest 1 in 10</span>
+            </div>
+          </details>
         </div>
-      )}
+      </div>
+      <FailingTestsLens data={tests && { ...tests, refresh: lastRefresh }} query={query} testQuery={testQuery} onTestQuery={setTestQuery}
+        busy={testsBusy} error={testsErr} onRefresh={refreshTests} />
     </div>
   );
 }

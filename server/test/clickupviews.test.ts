@@ -145,6 +145,17 @@ describe("a folder on the sidebar", () => {
     expect(V.savedFolders()).toEqual([]);
   });
 
+  it("taking one list off the bar keeps the folder, its other lists and the writes answer", () => {
+    /* removeView once saved only views, cache and current, so one "Take off"
+       wiped every folder and turned the write permission back off. */
+    V.addFolder(folder("f1", ["10", "11"]));
+    V.setWritesAllowed(true);
+    V.removeView("list:10");
+    expect(V.savedFolders().map((f) => f.id)).toEqual(["f1"]);
+    expect(V.savedViews().map((v) => v.id)).toContain("list:11");
+    expect(V.writesAllowed()).toBe(true);
+  });
+
   it("never removes the built-in board, whatever a folder holds", () => {
     V.addFolder(folder("f1", ["10"]));
     V.removeFolder("f1");

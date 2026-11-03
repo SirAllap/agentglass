@@ -77,10 +77,10 @@ export function togglePin(repo: string, number: number, title: string, at = Date
   if (has) {
     cache = pins().filter((p) => !(p.repo === repo && p.number === number));
   } else {
-    // Oldest out when full, so pinning a seventh does something rather than
+    // Oldest out when full, so pinning one more does something rather than
     // silently nothing.
-    const kept = pins().slice(-(PIN_MAX - 1));
-    cache = [...kept, { repo, number, title, at }];
+    const kept = pins();
+    cache = [...(kept.length >= PIN_MAX ? kept.slice(1) : kept), { repo, number, title, at }];
   }
   persist();
   return !has;

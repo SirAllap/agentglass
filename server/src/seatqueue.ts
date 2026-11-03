@@ -22,6 +22,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { db } from "./db.ts";
+import { flagOf, getRun, type PreflightStatus } from "./preflightStore.ts";
 
 const line = (t: string) => String(t ?? "").replace(/\s+/g, " ").trim();
 
@@ -44,16 +45,19 @@ export interface SeatTask {
   doneAt: number | null;
   outcome: string;
   attempts: number;
+  /** The Preflight run over this task's result, once it was finished with one. */
+  preflight: null | { runId: string; status: PreflightStatus; openFindings: number };
 }
 
 interface Row {
   id: string; root: string; title: string; detail: string; proof: string; weight: number; created: number;
-  taken_at: number | null; taken_by: string; done_at: number | null; outcome: string; attempts: number;
+  taken_at: number | null; taken_by: string; done_at: number | null; outcome: string; attempts: number; preflight_run: string | null;
 }
 
 const toTask = (r: Row): SeatTask => ({
   id: r.id, root: r.root, title: r.title, detail: r.detail, proof: r.proof ?? "", weight: r.weight, created: r.created,
   takenAt: r.taken_at, takenBy: r.taken_by, doneAt: r.done_at, outcome: r.outcome, attempts: r.attempts,
+  preflight: r.preflight_run ? { runId: r.preflight_run, ...((run) => (run ? flagOf(run) : { status: "failed" as const, openFindings: 0 }))(getRun(r.preflight_run)) } : null,
 });
 
 const insert = db.query<never, [string, string, string, string, string, number, number]>(`
@@ -103,6 +107,10 @@ export function nextTask(root: string): SeatTask | null {
 export function claimTask(id: string, agent: string, now = Date.now()): SeatTask | null {
   const r = claimQ.get(now, agent, id);
   return r ? toTask(r) : null;
+}
+
+export function linkPreflight(taskId: string, runId: string): void {
+  db.query(`UPDATE seat_task SET preflight_run = ? WHERE id = ?`).run(runId, taskId);
 }
 
 export function finishTask(id: string, outcome: string, now = Date.now()): void {

@@ -12,10 +12,11 @@
  * assembly would be two boards that could disagree.
  */
 import { existsSync } from "node:fs";
+import { projectRootOf } from "./git.ts";
 import { tmux } from "./tmuxpane.ts";
 import * as AgentBoard from "./agentboard.ts";
 import { recentPaneAgents } from "./panewt.ts";
-import { db, sessionNames, latestWaits, sessionRoles, setSessionRole, sessionsWhosePromptStarts } from "./db.ts";
+import { db, sessionNames, latestWaits, openToolCalls, sessionRoles, setSessionRole, sessionsWhosePromptStarts } from "./db.ts";
 import { pendingGates } from "./gate.ts";
 import { lanternWatchMinutes } from "./config.ts";
 
@@ -29,9 +30,14 @@ async function runGitIn(args: string[], cwd: string): Promise<{ ok: boolean; out
 import { LANTERN_PROMPT_MARK } from "./lanternmark.ts";
 import { isSeatSession } from "./seatrole.ts";
 import { seatPanes, seatRoots } from "./seatpanes.ts";
-import { liveOwned } from "./agentops.ts";
-import { attention, isGone, type Attention } from "../../shared/fieldRules.ts";
+import { openNamed, everyAgent, liveOwned, type NamedAgent } from "./agentops.ts";
+import { crewFactsOfWorker, type RunFacts } from "./crewworker.ts";
+import { attention, isGone, isStalled, type Attention } from "../../shared/fieldRules.ts";
 export { LANTERN_PROMPT_MARK };
+
+/** How long a worker whose turn has ended keeps its Crew card: long enough to
+ *  read what it did, short enough that a finished worker is not furniture. */
+const SETTLED_WORKER_MS = 30 * 60_000;
 
 /** Sessions that are the Lantern's own chat. Persisted (session_role) and
  *  cached here; found by the role their pane carried, by the prompt they were
@@ -94,6 +100,9 @@ export interface GitFacts {
 export type LanternCard = AgentBoard.BoardRow & {
   facts?: SessionFacts;
   git?: GitFacts;
+  /** The project its worktree rolls up to, so a screen can list a project that has
+   *  live sessions without knowing how checkouts fold into one. */
+  project?: string;
   /** A name that is not somebody you can talk to — see `isGone`. Marked here
    *  so the view folds it the way the readout does: one rule, both screens. */
   gone?: true;
@@ -102,6 +111,14 @@ export type LanternCard = AgentBoard.BoardRow & {
    *  this codebase (the cockpit MCP) filters on it instead of writing the
    *  rule again. Absent when it asks nothing. */
   attention?: Attention;
+  /** A call is still open under the session — see `FieldRow.alive`. */
+  alive?: true;
+  /** ms of the newest life sign (see `FieldRow.lastLifeSign`). */
+  lastLifeSign?: number;
+  /** A prompt or tool came after the last Stop. */
+  turnOpen?: boolean;
+  /** Claimed work, turn open, silent 20 min — `isStalled`. */
+  stalled?: true;
 };
 
 /** What one tool call was doing, from its input, in a person's words. */
@@ -158,6 +175,57 @@ export function sessionFacts(ids: string[]): Map<string, SessionFacts> {
   return out;
 }
 
+/*
+ * LIFE SIGNS THE OPEN-TOOL LIST DOES NOT SEE.
+ *
+ * Measured on a real database (183k tool events): 119k carry an `agent_id`
+ * (a subagent's own calls), 3.6k SubagentStop, no SubagentStart at all, so a
+ * subagent is "alive" when its calls are recent and no SubagentStop followed.
+ * A background shell shows once, as a PostToolUse whose tool_input has
+ * run_in_background and whose tool_response names a backgroundTaskId; only a
+ * TaskStop ends it from our side. Nothing reports a shell finishing, so it is
+ * alive for `SHELL_CAP_MS` and then no more: a shell that outlives the cap
+ * reads as quiet. Pane output age is not here: no reader of it exists.
+ */
+export const SUBAGENT_LIVE_MS = 10 * 60_000;
+export const SHELL_CAP_MS = 30 * 60_000;
+export interface LifeSigns { subagent?: number; shell?: number; lastStop?: number }
+const lifeQ = () => ({
+  sub: db.query<{ session_id: string; t: number }, [string, number]>(
+    `SELECT e.session_id, MAX(e.timestamp) AS t FROM events e
+      WHERE e.session_id IN (SELECT value FROM json_each(?1)) AND e.timestamp > ?2
+        AND e.agent_id IS NOT NULL AND e.agent_id != '' AND e.hook_event_type IN ('PreToolUse','PostToolUse')
+        AND NOT EXISTS (SELECT 1 FROM events s WHERE s.session_id = e.session_id AND s.agent_id = e.agent_id
+                          AND s.hook_event_type = 'SubagentStop' AND s.id > e.id)
+      GROUP BY e.session_id`),
+  shell: db.query<{ session_id: string; t: number }, [string, number]>(
+    `SELECT e.session_id, MAX(e.timestamp) AS t FROM events e
+      WHERE e.session_id IN (SELECT value FROM json_each(?1)) AND e.timestamp > ?2
+        AND e.hook_event_type = 'PostToolUse' AND e.tool_name = 'Bash' AND e.payload LIKE '%"run_in_background":true%'
+        AND NOT EXISTS (SELECT 1 FROM events s WHERE s.session_id = e.session_id AND s.tool_name = 'TaskStop'
+                          AND s.hook_event_type = 'PostToolUse' AND s.id > e.id
+                          AND json_extract(s.payload, '$.tool_input.task_id') = json_extract(e.payload, '$.tool_response.backgroundTaskId'))
+      GROUP BY e.session_id`),
+  stop: db.query<{ session_id: string; t: number }, [string]>(
+    `SELECT session_id, MAX(timestamp) AS t FROM events
+      WHERE hook_event_type = 'Stop' AND (agent_id IS NULL OR agent_id = '') AND session_id IN (SELECT value FROM json_each(?1))
+      GROUP BY session_id`),
+});
+let lifeQueries: ReturnType<typeof lifeQ> | null = null;
+
+export function lifeSigns(ids: string[], now: number): Map<string, LifeSigns> {
+  const out = new Map<string, LifeSigns>();
+  const want = [...new Set(ids.filter(Boolean))];
+  if (!want.length) return out;
+  const q = (lifeQueries ??= lifeQ());
+  const arg = JSON.stringify(want);
+  const at = (id: string) => out.get(id) ?? (out.set(id, {}), out.get(id)!);
+  for (const r of q.sub.all(arg, now - SUBAGENT_LIVE_MS)) at(r.session_id).subagent = r.t;
+  for (const r of q.shell.all(arg, now - SHELL_CAP_MS)) at(r.session_id).shell = r.t;
+  for (const r of q.stop.all(arg)) at(r.session_id).lastStop = r.t;
+  return out;
+}
+
 /* Git per worktree, remembered for half a minute: the view reads every five
    seconds while it is open, and a `git status` on a large checkout is not
    free — eight worktrees at five seconds would be the board's whole budget. */
@@ -181,16 +249,26 @@ async function gitFactsFor(path: string, base: string, now: number): Promise<Git
   return facts;
 }
 
+/* One git call per worktree path for the life of the process: a checkout does not change project. */
+const projectOfWorktree = new Map<string, string | null>();
+const projectFor = (wt: string): string | null => {
+  if (!projectOfWorktree.has(wt)) projectOfWorktree.set(wt, projectRootOf(wt));
+  return projectOfWorktree.get(wt) ?? null;
+};
+
 export async function boardNow(): Promise<LanternCard[]> {
   /* A dead pane — the engine keeps one whose command failed — is not a pane
      somebody can be sent to: left in, a crashed agent's row never folds and
      its Go button lands on a status line. */
-  const panes = await tmux(["list-panes", "-a", "-F", "#{pane_id}\t#{window_name}\t#{pane_current_path}\t#{pane_dead}"])
-    .then((r) => (r.ok ? r.stdout.split("\n") : []).map((l) => {
-      const [paneId = "", name = "", cwd = "", dead = ""] = l.split("\t");
-      return { paneId, name, cwd, dead };
-    }).filter((x) => x.paneId.startsWith("%") && x.dead !== "1").map(({ dead: _d, ...x }) => x))
-    .catch(() => [] as { paneId: string; name: string; cwd: string }[]);
+  const listed = await tmux(["list-panes", "-a", "-F", "#{pane_id}\t#{window_name}\t#{pane_current_path}\t#{pane_dead}"])
+    .catch(() => ({ ok: false, stdout: "", stderr: "" }));
+  /* An empty list from a tmux that ANSWERED means no panes; an empty list from
+     one that failed means nobody looked. The two must not read the same. */
+  const panesRead = listed.ok;
+  const panes = (listed.ok ? listed.stdout.split("\n") : []).map((l) => {
+    const [paneId = "", name = "", cwd = "", dead = ""] = l.split("\t");
+    return { paneId, name, cwd, dead };
+  }).filter((x) => x.paneId.startsWith("%") && x.dead !== "1").map(({ dead: _d, ...x }) => x);
 
   /*
    * GIT IS ASKED IN THE REPOSITORY THE ROW IS ACTUALLY IN.
@@ -268,7 +346,7 @@ export async function boardNow(): Promise<LanternCard[]> {
   const waiting = new Map<string, { kind: "permission" | "input" | "gate"; why: string; since: number }>();
   for (const [id, w] of latestWaits([...new Set([...hooks.map((h) => h.sessionId), ...saidSessions])])) waiting.set(id, w);
   for (const g of pendingGates()) {
-    waiting.set(g.session_id, { kind: "gate", why: `held at the gate: ${g.tool_name}${g.summary ? ` — ${g.summary}` : ""}`.slice(0, 160), since: g.created });
+    waiting.set(g.session_id, { kind: "gate", why: `waiting at the gate: ${g.tool_name}${g.summary ? ` — ${g.summary}` : ""}`.slice(0, 160), since: g.created });
   }
   /* The observer, marked: the view sets it aside and the counts skip it; a
      wait on it is a person mid-conversation, never a finding. */
@@ -293,7 +371,41 @@ export async function boardNow(): Promise<LanternCard[]> {
      this on — see seatpanes.ts — and the cost of missing it was the seat being
      woken every hour by a finding about itself. */
   const chairs = seatPanes();
-  const rows: LanternCard[] = AgentBoard.placed(AgentBoard.merged({ said, hooks, panes, trees, landedBy, names, waiting, gone }), { chairs: seatRoots(), owned: liveOwned() }).map((r) => {
+  /* A named agent runs as its own window's command, so the hooks the rest of
+     this board is built from never see it. The registry does, and a row whose
+     pane this tmux did not list is one whose window is gone — dropped here
+     rather than written closed, because a failed tmux read must not end a
+     worker. `merged` drops the ones whose turn has settled. */
+  const seenPanes = new Set(panes.map((p) => p.paneId));
+  const named = openNamed()
+    .filter((a) => !panesRead || seenPanes.has(a.paneId))
+    .map((a: NamedAgent) => {
+      const by = a.startedBy as { role?: unknown } | undefined;
+      return {
+        name: a.name, kind: a.kind, cwd: a.cwd, paneId: a.paneId, startedAt: a.startedAt,
+        endedAt: a.endedAt, exitCode: a.exitCode,
+        role: typeof by?.role === "string" && by.role ? by.role : undefined,
+      };
+    });
+  /* A headless worker's model, from the row that started it: its frames carry
+     the cost and the tools but not always the id. And the workers whose turn is
+     over — dropped by `merged` because they ask nobody for anything, and the
+     one way a person reads what the turn did is its own Crew card — kept for
+     half an hour with the numbers from its own output. */
+  const workerModel = new Map<string, string>();
+  const roleOf = (a: NamedAgent): string | undefined => {
+    const by = a.startedBy as { role?: unknown } | undefined;
+    return typeof by?.role === "string" && by.role ? by.role : undefined;
+  };
+  const settledWorkers: { a: NamedAgent; facts: RunFacts }[] = [];
+  for (const a of [...openNamed(), ...everyAgent()]) {
+    if (a.model) workerModel.set(a.name, a.model);
+    if (a.exitCode === undefined || (a.endedAt ?? 0) <= Date.now() - SETTLED_WORKER_MS) continue;
+    if (settledWorkers.some((s) => s.a.name === a.name)) continue;
+    const facts = crewFactsOfWorker(a.name, { model: a.model });
+    if (facts) settledWorkers.push({ a, facts });
+  }
+  const rows: LanternCard[] = AgentBoard.placed(AgentBoard.merged({ said, hooks, panes: panesRead ? panes : undefined, trees, landedBy, names, waiting, gone, named }), { chairs: seatRoots(), owned: liveOwned() }).map((r) => {
     /* The two readers of this board, set aside the same way: the Lantern's
        chat and the project's seat. Neither is somebody's work, and a "needs
        you" on either is a person mid-conversation with it. */
@@ -301,6 +413,19 @@ export async function boardNow(): Promise<LanternCard[]> {
       : (isSeatSession(r.session) || (!!r.paneId && chairs.has(r.paneId))) ? "orchestrator" as const : null;
     return role ? { ...r, role, needsYou: undefined, state: r.state === "waiting" ? "idle" as const : r.state } : r;
   });
+
+  /* A settled worker nobody else drew, as a row that asks for nothing: its
+     window is a read-only tab, so it is "gone" by the board's own rule. */
+  const drawnNames = new Set(rows.map((r) => r.name));
+  for (const { a, facts: run } of settledWorkers) {
+    if (drawnNames.has(a.name)) continue;
+    drawnNames.add(a.name);
+    rows.push({
+      name: a.name, worktree: a.cwd, startedAt: a.startedAt, from: "seen", state: "idle", gone: true,
+      doing: run.activity,
+      worker: { role: roleOf(a) || a.kind, since: a.startedAt },
+    });
+  }
 
   /* The card's facts. Sessions in one query each; git per distinct worktree,
      cached, against the base the landed check already found. */
@@ -312,16 +437,46 @@ export async function boardNow(): Promise<LanternCard[]> {
     const into = branch && landedBy[branch]?.into;
     gitBy.set(wt, await gitFactsFor(wt, into && into !== branch ? into : "", now));
   }
+  /* A session whose own turn is idle but has a call still open (a subagent,
+     a long tool) is working. Without this it read as forgotten work. */
+  const life = lifeSigns(rows.map((r) => r.session ?? ""), now);
+  const openBy = new Set(openToolCalls().map((c) => c.session_id));
   for (const r of rows) {
     const f = r.session ? facts.get(r.session) : undefined;
     if (f) r.facts = f;
+    /* A headless worker fires no hooks, so its facts are its own turn's frames
+       (crewworker.ts). A session that does have hooks keeps them: they say more. */
+    if (r.worker && !f) {
+      const run: RunFacts | null = crewFactsOfWorker(r.name, { model: workerModel.get(r.name) });
+      if (run) {
+        r.facts = {
+          ...(run.model ? { model: run.model } : {}),
+          tools: run.tools, errors: run.errors, turns: 0, cost: run.cost,
+          ...(r.startedAt ? { startedAt: r.startedAt } : {}),
+          ...(run.lastSeen ? { lastSeen: run.lastSeen } : {}),
+          ...(run.lastTool ? { lastTool: run.lastTool } : {}),
+        };
+        if (run.activity) r.doing = run.activity;
+        if (run.ended) r.state = "idle";
+      }
+    }
+    const l = r.session ? life.get(r.session) : undefined;
+    if (r.session && (openBy.has(r.session) || l?.subagent || l?.shell)) r.alive = true;
+    const sign = Math.max(f?.lastTool?.at ?? 0, f?.lastAsk?.at ?? 0, l?.subagent ?? 0, l?.shell ?? 0);
+    if (sign) {
+      r.lastLifeSign = sign;
+      r.turnOpen = sign > (l?.lastStop ?? 0);
+    }
     const g = r.worktree ? gitBy.get(r.worktree) : undefined;
     if (g) r.git = g;
+    const project = r.worktree ? projectFor(r.worktree) : null;
+    if (project) r.project = project;
     /* The readout collapsed these onto one line from the start; the view went
        on drawing every one of them as an idle agent. Marked once, here. */
     if (!r.role && isGone(r, now)) r.gone = true;
     const a = attention(r, now);
     if (a) r.attention = a;
+    if (isStalled(r, now)) r.stalled = true;
   }
   return rows;
 }
@@ -332,7 +487,7 @@ const ago = (t: number, now: number) => {
   return m < 1 ? "just now" : m < 60 ? `${m}m` : m < 60 * 24 ? `${Math.round(m / 60)}h` : `${Math.round(m / (60 * 24))}d`;
 };
 const waitWord = (w: NonNullable<AgentBoard.BoardRow["needsYou"]>) =>
-  w.kind === "permission" ? "needs your permission" : w.kind === "gate" ? "held at the gate" : "waiting for your next prompt";
+  w.kind === "permission" ? "needs your permission" : w.kind === "gate" ? "waiting at the gate" : "waiting for your next prompt";
 
 /** A name that is not somebody you can talk to — the rule and why it has two
  *  halves live in shared/fieldRules.ts, beside the watch's "forgotten". */

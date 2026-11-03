@@ -141,7 +141,7 @@ export function useAmbientNotes(): { note: Note | null; behind: number; ahead: n
     setTimeout(() => advance(), NOTE_MS);
   };
 
-  // A tool call held at the gate. The most interrupting thing here, because an
+  // A tool call waiting at the gate. The most interrupting thing here, because an
   // agent is stopped until it is answered, and unlike everything else it cannot
   // be caught up on later: the hold expires on its own.
   //
@@ -408,7 +408,7 @@ function HistoryRow({ n, onGone, onGoto, onMute }: {
     if (!g || g.kind === "git" || g.kind === "card") return null;
     if (g.kind === "pr") return { label: `${g.repo}#${g.number}`, title: `Open ${g.repo}#${g.number}` };
     if (g.kind === "pane") return { label: "The terminal", title: "Go to the pane this is about" };
-    if (g.kind === "file") return { label: "The file", title: `Open ${g.path} in Files` };
+    if (g.kind === "file") return { label: "The file", title: `Open ${g.path} in the Finder` };
     return { label: "Settings", title: `Open Settings · ${g.pane}` };
   })();
   /*

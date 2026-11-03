@@ -156,6 +156,18 @@ complement, rather than replace, the private reporting path below.
   that launch's key and refuses a claim the same way. With no app attached, a server started by hand is on the
   `Origin` rule. An agent's lane is likewise only as private as
   `as` is honest: an identity is a claim, not a credential.
+- **A worker's browser container is its own, by namespace and by the tab it got
+  back.** A credential minted for an agent reaches only a container whose name
+  lives under the reserved prefix `agent:` — the person's side cannot create
+  such a name, and the panel mints one rather than resolving it to a profile
+  that already exists, so an agent called `work` beside a profile called `work`
+  gets its own container instead of the person's logins. The relay files a
+  minted tab only when the tab carrying that id, in the reply's own list, is in
+  that reserved container, and a `do` addresses the steps after its own mint to
+  the tab that mint returned, because an unaddressed ask goes to the tab in
+  front. The lanes and read-only places (`/browser/places`, `/browser/visit`,
+  `/browser/audit`, `/browser/lanes`) are scoped by the desk's principal, not by
+  an agent's identity: that is deliberate, and a worker is not served them.
 - **Cleaning the disk is the desktop app's own click.** The panel's disk cleanup
   deletes caches, finished session folders, merged checkouts and Docker images,
   so `POST /machine/disk-clean/run` asks for the desk key like the routes above
@@ -434,6 +446,22 @@ talks to the same port and can set the same header. Where a capability must not
 be exercised at all, turn it off — the knobs below hold in a way the gate does
 not.
 
+### The agent rules fail open
+
+The rules in "What your agents may do" are checked by the same hooks, with a
+question to the server before each tool call (`GET /agent-rules/check`). That
+question waits two seconds. When agentglass is closed, restarting or slower
+than that, the hook lets the call through and says so on the agent's stderr
+("this call was not checked"). A rule set to "never" does not hold in that
+window.
+
+That is chosen, not missed: a stopped app must not stop every agent on the
+machine, and a hook that blocks on an unreachable server would do exactly that.
+The consequence is the same as for the gate above: the rules are a brake on a
+workflow. A thing that must never happen — a push to a protected branch, a
+release — needs a barrier that does not depend on agentglass being up, such as
+branch protection on the forge or the token not being on the machine.
+
 ## What agentglass stores, and how to get rid of it
 
 Everything below is on your machine and nowhere else. There is no account, no
@@ -473,6 +501,7 @@ sessions.
 | `~/.config/agentglass/token` | The shared secret, `0600`, when one has been minted. |
 | `~/.config/agentglass/devices.json` | One row per paired device, `0600`: its name, its level, when it was added and last used, and a **SHA-256 of its credential** — never the credential. Revoked rows are kept rather than deleted, so "did I definitely cut that phone off" stays answerable. |
 | `~/.config/agentglass/config.json` | The active project scope and the UI switches. |
+| `~/.local/share/agentglass/agentglass.db` (the `signoff` table) | **The Manifest's verdicts**: one row per project and commit — `tested` or `failed`, who gave it (`person` or `phone`, with the device label), when, and the note. Commit subjects and notes are read from this machine; a paired phone that opens the Manifest receives the last 7 days of subjects, and the verdicts. Undo, in the view, deletes that commit's verdict; nothing else removes it. |
 | `~/.config/agentglass/clickup-views.json` | The ClickUp boards you saved, and a copy of the last thing each one returned — task titles, statuses and tags. Not a secret and not `0600`: it is a cache of things you can already see, kept on disk so the panel opens instantly instead of waiting a second and a half after every restart. Delete it and it rebuilds. |
 | `~/.config/agentglass/credentials.json` | **API tokens for services you connected in Settings → Integrations**, `0600`, alongside what the service said about each one — the account name and workspace, so a card can say who you are without a round trip. Only providers with no CLI of their own land here: `gh` keeps GitHub's token in your system keyring and agentglass never reads it. |
 | `~/.config/agentglass/secrets.json` | **The keys plugins asked you for** (a `secret` settings field), `0600`, by plugin name. Handed only to the plugin that declared the field, and never to the window or the API. A plugin running outside its box, or any program running as you, can read it; the plugin list says when one does. |
@@ -1035,6 +1064,116 @@ engine's lock is reported as more than **partly** enforced. On Claude Code a
 rule matches the start of a command line, so `git push` is refused and
 `git -C . push` or `/usr/bin/git push` is not; on OpenCode the rules are globs
 over the line, and a line a shell builds around a command is not read by them.
+`agentglass-browser` is the one of this app's own CLIs a role may run (builder,
+reviewer and verifier; a scout may not): it drives a tab through the local
+relay, and `--as` names the container it asks for while the relay reads the
+credential minted for that worker, which carries the same name. `--shared` and
+`--active`, and the
+prefixes argparse used to accept for them, are refused (on OpenCode wherever
+they sit in the line; on Claude Code and Qwen only at its start, the same
+ceiling as `git -C . push`). `--page` is allowed: it names a tab the relay
+serves only if this worker opened it, and refuses another with a sentence.
+The person's identity itself is refused by the CLI
+while `AGENTGLASS_ROLE` names a worker role: `--as "(default)"` is `--shared`
+on the wire, so `--shared`, `--profile`, `AGENTGLASS_PROFILE` and every spacing
+or case of that name are turned away before a request is built — a rule over
+flag prefixes cannot name a value the CLI maps onto the same identity. That
+refusal reads the worker's own shell, so it is a courtesy. The boundary is the
+credential: a worker launched by this app is handed a credential of its own (a
+worker principal minted in memory at the start of each turn, expiring no later
+than that turn's limit, revoked when the turn ends, gone on restart) in place of
+the machine token, and the relay **canonicalises** every ask to that container
+instead of checking whether the ask "looks" like the worker's. For a worker:
+`as`, `profile` and `name` may only be its own name; `container`, `how`,
+`shared` and `active` are refused. A request that can mint a container —
+`newtab`, or an `open` that carries a `profile` — reaches the panel only with
+`profile` equal to the worker's own name: an absent or empty `profile` is
+refused for those, never read as the person's container, and the relay writes
+the worker's own name into the ask at the one door every ask leaves by. A plain
+`open` with no `profile` only navigates a page of the worker's own, so it mints
+nothing. A page id is served only from a server-side registry of pages this
+worker opened, and a mint enters that registry only when the panel reports the
+tab was created in the worker's own container. An absolute page id is never
+trusted, so the person's front
+tab is refused even with `pageExplicit`, and there is no implicit target: a
+page-bound verb with no page of the worker's own is refused with a sentence.
+This applies to every `/browser/*` POST — `do` and `lane` included, with
+`steps` and `lanes[].steps` walked and inheriting the call's page — and to
+every do-step, deny-by-default against an explicit allowlist of own-profile
+verbs (`open`, `read`, `markdown`, `extract`, `links`, `count`, `search`,
+`interactive`, `forms`, `attr`, `click`, `type`, `wait`, `shot`, `back`,
+`forward`, `scroll`, `press`, `text`, `tabs`, `tab`, `newtab`, `closetab`,
+`console`, `network`, `resize`, `zoom`, `html`, `waitfor`, `observe`, `select`,
+`reload`, `frames`, `dblclick`, `rightclick`, `hover`, `focus`, `blur`, `check`,
+`fill`, `events`, `whoami`, `health`, `lane`, `a11y`, `inspect`, `vitals`).
+Each of those verbs also has a closed field list: any key it does not declare
+is refused by name, so `index`, `nth`, `position` and coordinates never reach
+the window, and a tab is addressed only by an `id` from the registry — `tab`
+and `closetab` both. Every reply that names pages — `tabs`, `tab`, `open`,
+`newtab`, `closetab` and `whoami` — is filtered to the same registry before a
+worker sees it, by a walk that reads the FIELDS of an entry and not the
+container it arrives in: an entry carrying an `id`, a `url` or a `title` is
+kept only when its id is one the worker opened, and one it cannot attribute is
+dropped. That covers the bare array `tabs` really answers with, the object
+`open` folds a list into, and a nested one; a top-level shape the relay does
+not know is replaced by an empty list, never passed on. The filter is applied
+at the one door every panel answer comes back through, so it covers the scalar
+verb, a `do` step, each `lanes[]`, and the `whoami` and `lane list`
+compositions alike — a route added later gets it without naming its verb. A
+worker's `lane list` names only the lanes it opened, even when the ask carries
+no `as`: the credential already says whose they are, and the rule is strict —
+a lane records the principal that made it at creation, and a lane with no
+owner (created by a caller with no identity, or with `shared: true`) belongs
+to the person's side and is invisible and refused to a worker. The ownership
+is resolved at the one door a request passes (the lane gate and `askBrowser`),
+so a lane named in `lane`, in a step's args or in any other field, and a
+`lane close` by id, are all checked the same way; `force` is refused outright,
+so there is no lever over somebody else's lane. A body from a worker with no
+`as` at all is refused at the relay rather than served as the person's, so the
+"name your own page" rule does not rest on the CLI alone. `health` answers a
+worker with whether the window, the panel and a page are up — the fields
+`window`, `panel`, `ready`, `mounted` and `hasPage`, and a summary built from
+those booleans. It never carries the mounted page's URL, title or id, because
+the panel's own summary names the tab in front, which is the person's. `show`
+is refused on a worker's mint (bringing the view forward takes the pane from
+whoever is using it), and `lane new --from-template` is refused like a template
+tab. A credential minted for a plugin may not mint a container either; there
+are no plugin callers of `/browser/*` in this tree. So a worker reads no
+other caller's title or URL.
+`AGENTGLASS_ROLE` is the CLI's own switch and is advice: unsetting it does not
+change what the credential reaches, because the relay reads the credential.
+`cookies`, `storage`, `eval`, `cdp`, `addInitScript`, `expose`, `fake`,
+`handoff`, `record`, `download`, `tools`/`call-tool` and anything else are
+refused outright. `/browser/ready` and `/browser/result` — the window
+registering itself and the window answering an ask — are refused to every
+credential that carries a principal, before their bodies are read, so such a
+credential cannot become the window that receives the person's asks or forge
+its replies. The WebSocket `hello` that claims a window's client id is refused
+on a socket whose credential carries a principal, for the same reason: it
+would put a worker in the table the relay sends the person's asks through. The browser's data routes (`places`, `places/all`,
+`places/forget`, `visit`), the audit read, the lane list and
+`/browser-use/install` are refused to every credential that carries a
+principal — worker or plugin — whatever the body says: they have no container
+dimension, so nothing in them can be the worker's own. The
+credential is minted **before** the private OpenCode serve starts, because on
+2.x the shell tool runs in that serve's process tree and its environment is
+frozen when it starts; minting afterwards left the process that runs the
+worker's shell without a token. The suite starts a stub `serve` and asserts the
+kind of credential in its environment (never the value). A seat cannot POST
+`/browser/*` at all (`seatAllows`), so it is not one of these callers. One more
+narrowing, outside the browser: a worker's credential is refused a
+`gh:owner/name` root (a repository outside the open project, read with the
+person's gh token), the same way a seat and a plugin are, because such a root
+reaches past every scope the project's rules are written against. The ceiling
+is the machine token: its file is readable by anything running as this user, so
+a worker that reads `~/.config/agentglass/token` and presents it is the person
+again, and this round does not close that gap.
+`network:false` does
+not stop the browser's own `open` or `eval`: they reach any `http:` or
+`https:` host as the person's browser. The relay refuses `file:`,
+`javascript:` and a literal link-local or unspecified address; loopback and
+the LAN stay reachable, and a hostname is judged again when the desktop app
+connects, where one that resolves to link-local is refused.
 A worker also runs as the same user as this app: it can read the app's token
 file, and a request made with that token and without the worker's name is, to
 the server, the person's. The check that turns a worker away from starting
@@ -1097,13 +1236,18 @@ What the server holds, and what a test asserts, in the order it matters:
   seat's credential from the process environment, so the seat and worker
   boundary is the same partly enforced one as the engine locks.
 - **Narrow by default, and widened only inside the ceiling.** A worker starts
-  with its own worktree, no network and no commit. A seat can widen by one
-  thing (`--allow network` or `--allow commit`) and never past the project's
-  ceiling, and the ceiling is checked again when a worker is resumed, so
-  narrowing it later stops a worker that was started under the old one.
-- **No envelope can hold a remote effect.** There is no field for a push, a
-  pull request, a merge, a release or spend, and the compiled-in deny list of
-  such commands cannot be emptied from a policy. Those stay the person's.
+  with its own worktree, no network, no commit and no docker. A seat can widen
+  by one thing (`--allow network`, `--allow commit` or `--allow docker`) and
+  never past the project's ceiling, and the ceiling is checked again when a
+  worker is resumed, so narrowing it later stops a worker that was started
+  under the old one. `docker` is off in every default: a container runs as this
+  user and can mount the host, so allowing it is a grant of the machine.
+- **No envelope can hold a remote effect on the checkout.** There is no field
+  for a branch push, a pull request, a merge, a release or spend, and the
+  compiled-in deny list of such commands cannot be emptied from a policy. Those
+  stay the person's. `docker`, when the ceiling allows it, can pull and push
+  images and is the one grant that reaches the network on its own; it is off
+  in every default.
 - **A worker is turned away from the chair.** The CLI sends the worker's
   name with every request, and the server refuses a caller that presents a
   worker's name when it tries to start agents or seat anything. Its wrapper unsets the token and seat variables before the engine starts.
@@ -1218,6 +1362,34 @@ every other verb not in the observe list — are refused under
 `AGENTGLASS_BROWSER_READONLY=1`, which leaves reading, screenshots and the
 network log working.
 
+**A page's permission requests go to whoever the tab belongs to.** Fullscreen,
+pointer lock and writing (never reading) the clipboard are granted to every
+page; clipboard reads, location, HID, serial, USB, screen capture and anything
+else unnamed are refused to every page. What is left — the microphone, the
+camera and notifications — is decided per tab:
+
+- A tab belongs to whoever OPENED it, from its first moment: the person when
+  they opened it in the window (a new tab, a link, their restored session), an
+  agent when its `newtab` or `open` made it — `--shared` included — and a
+  popup to the tab that opened it. Any agent verb that acts on a tab — `--as`
+  or `--shared`, on the person's own tab too — makes it agent-driven: with
+  several agents at once the person cannot know which of them a request is
+  for, so none of them is ever put to the person. Only the person typing an address
+  into the tab gives it back. Looking at a tab or clicking it in the strip
+  does not change whose it is.
+- The person's own tab, when it is the one the window says is on screen, is
+  asked in a native dialog the page cannot draw or click. His tab in the
+  background is refused.
+- Every other tab — an agent's, a lane, or one whose opener is not known — is
+  **held, never shown to the person**, and named in the agent's next answer
+  (`pendingPermissions`, and on the CLI's stderr). The agent settles it with
+  `permission grant|deny microphone`; unanswered, it is **denied after 30
+  seconds**, and that denial is not remembered. An agent's answer, or a grant
+  made ahead of the ask with `--origin`, holds for that container and that
+  origin until the app closes, never for another container and never for the
+  person's own tabs. Read-only mode refuses the answer and lets the timeout
+  deny it; `permission --list` still reads what is held.
+
 `upload` attaches a file from this machine to a page, so it is bounded like a
 read of the disk: a path is admitted only if the open project admits it, or (with
 no project open) it is under your home directory and not hidden, or the
@@ -1278,7 +1450,7 @@ or approve.
 What it reads is what the app's token reads, and that is a lot. For every
 session in scope: its title, project, model and spend, and which of its tool
 calls failed recently. The agent board, with what each agent says it is
-doing. Every held gate, with the tool and the call it holds. And, through
+doing. Every gate waiting on you, with the tool and the call it stops. And, through
 `cockpit_session`, a session's own text: its conversation, each message up
 to 20,000 characters; its timeline, with each tool's output up to 4,000
 characters — a `printenv`, a `cat` of a config file; its file changes with
@@ -1323,7 +1495,7 @@ three cases, and this is everything that travels:
   gate waiting on you, a reminder, the Clone stuck on a question, and the
   Lantern's watch notices, which name agents, the base name of a checkout,
   what an agent said it was working on, and the reason a permission prompt or a
-  held gate gave — each line cut at 200 characters.
+  gate waiting on you gave — each line cut at 200 characters.
 - **Pull-request nudges** — `POST /prs/nudge` with `send: true` posts the chase
   it wrote: the reviewers' logins as `@`-handles, the PR number, its title, a
   phrase for what is being asked (a first look, another look, a re-check), and
@@ -1491,7 +1663,18 @@ level the server allows, which names doors and opens none) and send what
 log, not a credential and not a gate: a caller can omit it or lie in it, and
 the log's address and device columns say who really asked. The MCP endpoint
 over HTTP has a token of its own (`AGENTGLASS_UI_MCP_TOKEN`), refused if it
-equals the browser's, the cockpit's or the app's.
+equals the browser's, the cockpit's or the app's. `bin/agentglass-flightplan-mcp`
+is eleven of agentglass-ui's flight-plan verbs under shorter names and adds
+nothing either: it sends the caller's own credential, so who may say Go stays
+the server's decision, and its HTTP token (`AGENTGLASS_FLIGHTPLAN_MCP_TOKEN`)
+is refused if it equals any of the others.
+
+These CLIs and MCP servers read the token file when their environment has no
+token, and after a 401 ask once more with it when it holds a different token
+(a pane opened before the app was reinstalled). Never after a 403, which is an
+accepted credential and a refused act, and never from a seat's, a clone's or a
+plugin's minted token: the file holds the machine token, and falling back to it
+would widen what the caller may do.
 
 **The server does not read a `.env` file.** Its settings are its environment and
 its own settings file. The desktop sidecar is compiled with `.env` and

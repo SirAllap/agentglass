@@ -1,5 +1,5 @@
 /**
- * "Ping in chat": whether the section is drawn, and how often we ask.
+ * "Ask in chat": whether the section is drawn, and how often we ask.
  *
  * It used to hide behind the ClickUp card, so a pull request with no card, or a
  * machine with no tracker at all, had no way to ask a colleague for a review

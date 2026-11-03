@@ -37,7 +37,8 @@ describe("the changes switch", () => {
 describe("the folding cards", () => {
   test("the header bar is the target, with hover and press from the same tokens as the rest", () => {
     // The folding cards are SettingsCard's `fold`, whose summary is the header.
-    expect(parts).toContain("fold={onToggle ? { open: !!open, onToggle } : undefined}");
+    expect(pane).toContain("fold={{ open: foundOpen ?? steps.length === 0, onToggle: setFoundOpen }}");
+    expect(pane).toContain("fold={{ open: !!advOpen, onToggle: setAdvOpen }}");
     expect(kit).toContain('<summary className="agx-scard-head agx-fold list-none">');
     expect(rule(".agx-fold")).toContain("cursor: pointer");
     expect(rule(".agx-fold:hover")).toContain("--text");

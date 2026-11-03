@@ -3347,7 +3347,7 @@ export { otherGithubLinks } from "../../shared/githubLinks.ts";
  *           at all, and its branch is ORBIT-2318-…
  *   #1436  its body says "PR #1042 (ORBIT-2318, inline FAQ default) was
  *           previously merged into this branch" — a mention of another PR.
- *   #1188  its body lists in-flight pull requests: (#667, …, #1042).
+ *   #1188  its body lists pull requests still open: (#667, …, #1042).
  *
  * Quoting the term does not help: `"ORBIT-1042"` as a phrase answers with
  * nothing, because the phrase genuinely appears nowhere. The search is still

@@ -1,15 +1,23 @@
+import type { AutoEntry } from "./housekeeping.ts";
+import type { Plan as CleanupPlan, Report as CleanupReport } from "./cleanupPr.ts";
 import { deskGated } from "./deskGate.ts";
+import type { LookupAnswer } from "./remoteRepos.ts";
 import { forgetShared, sharedRead } from "./sharedRead.ts";
 import type { UiAction, Field, NoteReply, NoteStatus, PluginPanel, PluginPrNotes, PrNotesSummary } from "./pluginTypes.ts";
 import type { ImportedPlace } from "./desktop.ts";
+import type { JiraAddChoice, JiraEpicCardsOut, JiraSpacePickerOut, JiraSpacesEdit, JiraSpacesOut, JiraSpaceTreeOut } from "../../../shared/jiraSpaces.ts";
 import type { Policy } from "../../../shared/orchestration.ts";
+import type { Flow } from "../../../shared/flow.ts";
+import type { PreflightTarget } from "../../../shared/preflightEngine.ts";
+import type { ActionAnswer, ActionBody, ItemsAnswer, SettingsAnswer, SettingsChange } from "../../../shared/polaris.ts";
 import type { AccountsOut } from "../../../shared/pluginAccounts.ts";
 import type { SettingRequestView } from "../../../shared/settingClass.ts";
 import { DEFAULT_LAUNCH_DENY, type LaunchMode, type LaunchPermissions } from "../../../shared/launchModes.ts";
 import type { PinnedPlace, PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/types.ts";
+import type { PrView } from "../../../shared/prFilter.ts";
 import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
-import type { WatchEvent, UsageOpens, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, BrowsePage, FileFacts, FileGitFacts, TerminalCommands, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, RemoteStatus, ServeResult, PairState, PairedDevice, DeviceScope, Budget, BudgetStatus, AgentProbe, EnginesReport, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, OrphanReport, OrphanStopResult, DiskCleanReport, DiskCleanRunResult, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, VolumeList, NetworkList, RemoteStep, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, PluginUpdateReport, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest, FsBody, FsAnswer, FsJob, FsTrashRow, FsProps, OpenWithList, FinderAction, FinderActionList, MediaFacts } from "../../../shared/types.ts";
+import type { WatchEvent, UsageOpens, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, FolderPrecheck, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitTagOrigin, GitStashFile, GitLastFetch, GitRangeCounts, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerPeek, DockerEnvRow, BrowseReport, BrowsePage, FileFacts, FileGitFacts, TerminalCommands, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, RemoteStatus, ServeResult, PairState, PairedDevice, DeviceScope, Budget, BudgetStatus, AgentProbe, EnginesReport, SetupState, SetupRepos, SetupScan, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, OrphanReport, OrphanStopResult, DiskCleanReport, DiskCleanRunResult, SpaceReport, FindReport, GrepReport, DiskPlaces, VolumeList, NetworkList, RemoteStep, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, PluginUpdateReport, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest, FsBody, FsAnswer, FsJob, FsTrashRow, FsProps, OpenWithList, FinderAction, FinderActionList, MediaFacts } from "../../../shared/types.ts";
 import type { JiraUnits } from "../../../shared/jiraStatusUnits.ts";
 import type { WorkSend } from "./jiraWorklog.ts";
 import type { CardEdit, CardFact, ProvidersResponse, JiraBlockOutcome, JiraConnectResult, JiraHandoffRule, JiraMoves, JiraPerson, JiraSettings, JiraStep, JiraStepChoice, JiraStepKey, JiraStepPr, JiraSteps, JiraStepsRead, JiraStatus, JiraViews, JiraViewRead, JiraBoardAreas, JiraBoardContext, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, CardDev, CardWebLink, CardEvent, TrackerChoice } from "../../../shared/providers.ts";
@@ -18,6 +26,8 @@ import type { CheckMetric } from "../../../shared/checkBaseline.ts";
 import type { UiReply } from "../../../shared/uiActions.ts";
 import type { GithubProblem } from "../../../shared/githubStatus.ts";
 import type { Look } from "../../../shared/unstick.ts";
+import type { NamedAgentRow } from "./workerBar.ts";
+import type { ManifestProject, ManifestStartWrite, ManifestSummary, ManifestWrite } from "../../../shared/manifest.ts";
 
 /** A partial update: any group may name just the keys it changes. */
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? Partial<T[K]> : T[K] };
@@ -166,6 +176,7 @@ type ShellBridge = {
   deskTaken?: () => { port: number } | null;
   onDeskTaken?: (fn: (d: { port: number } | null) => void) => () => void;
   retryDesk?: () => void;
+  flushStorage?: () => void;
 };
 
 const SHELL: ShellBridge | undefined =
@@ -183,6 +194,11 @@ export function onDeskTaken(fn: (d: { port: number } | null) => void): () => voi
 
 export function retryDesk(): void {
   SHELL?.retryDesk?.();
+}
+
+/** Ask the desktop shell to put localStorage on disk now. A no-op outside it. */
+export function flushStorage(): void {
+  SHELL?.flushStorage?.();
 }
 
 /** What the shell knew when this page loaded. Null in a browser tab, which has
@@ -265,6 +281,23 @@ export async function probeServer(timeoutMs = 2500): Promise<ServerIdentity> {
   } finally {
     clearTimeout(bail);
   }
+}
+
+/**
+ * Whether this server runs with no token at all.
+ *
+ * A tokenless server identifies nobody, so a rule about who may act is not
+ * enforced on it — the same fact auth.ts prints at start, said where a person
+ * reads a setting that would otherwise promise more than the server can keep.
+ */
+export async function serverIsTokenless(): Promise<boolean> {
+  if (IS_DEMO) return false;
+  try {
+    const r = await fetch(`${SERVER}/health`, { headers: authHeaders() });
+    if (!r.ok) return false;
+    const j = await r.json() as { tokenless?: unknown };
+    return j.tokenless === true;
+  } catch { return false; }
 }
 
 /** Auth token for a server that requires one (exposed / multi-user box). Read
@@ -426,8 +459,8 @@ export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string
   /**
    * This socket is the docked console.
    *
-   * The server gives it the engine whatever the terminal view is set to, and in
-   * a session of its own. Passed rather than inferred from `fresh`: they are
+   * The server gives it the engine whatever the terminal view is set to, in the
+   * session's `console` window. Passed rather than inferred from `fresh`: they are
    * different questions — `fresh` says "not the session the desk resumed", and
    * this says "this is the app's shell, and it must outlive the window".
    */
@@ -438,8 +471,8 @@ export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string
   /**
    * This socket is a tab of the floating bench, and which one.
    *
-   * A number, not a name: the server builds the tmux session from it, so a tab
-   * can be reattached tomorrow and no client can ever point at a session that
+   * A number, not a name: the server builds the bench window from it, so a tab
+   * can be reattached tomorrow and no client can ever point at a window that
    * is not its own. 0 means "not the bench" — see engineBenchArgv.
    */
   bench = 0,
@@ -581,9 +614,32 @@ export function whenServerUp(): Promise<void> {
   return serverUp;
 }
 
+/** A read whose refusal is a sentence, not a status. The Manifest view shows
+ *  what the server answered ("that project is not open"), so the body has to
+ *  survive a non-2xx answer. */
+export interface ManifestRead<T> {
+  ok: boolean;
+  status: number;
+  answer: T | null;
+  error: string;
+}
+
+async function manifestGet<T>(path: string): Promise<ManifestRead<T>> {
+  await whenServerUp();
+  let body: unknown = null;
+  try {
+    const r = await fetch(SERVER + path, { headers: authHeaders(deskGated(path) ? deskHeader() : {}) });
+    try { body = await r.json(); } catch { /* an answer that is not JSON says nothing */ }
+    const error = typeof (body as { error?: unknown } | null)?.error === "string" ? String((body as { error: string }).error) : "";
+    return { ok: r.ok, status: r.status, answer: r.ok ? (body as T) : null, error };
+  } catch {
+    return { ok: false, status: 0, answer: null, error: "" };
+  }
+}
+
 /** A caller that can change its mind. Only the ones that ask for it get one —
  *  a request nobody is waiting on any more is the exception, not the rule. */
-async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
+async function get<T>(path: string, signal?: AbortSignal, headers: Record<string, string> = {}): Promise<T> {
   await whenServerUp();
   let last: unknown;
   for (let i = 0; i <= COLD_START_WAITS.length; i++) {
@@ -592,7 +648,7 @@ async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
     // being handed to fetch.
     if (signal?.aborted) throw signal.reason ?? new DOMException("aborted", "AbortError");
     try {
-      const r = await fetch(SERVER + path, { headers: authHeaders(), ...(signal ? { signal } : {}) });
+      const r = await fetch(SERVER + path, { headers: authHeaders(headers), ...(signal ? { signal } : {}) });
       if (!r.ok) throw new Error(`${path} → ${r.status}`);
       return r.json() as Promise<T>;
     } catch (e) {
@@ -637,6 +693,23 @@ async function post<T>(path: string, body: unknown, headers: Record<string, stri
   } finally {
     if (git) forgetShared();
   }
+}
+
+/** PUT with a JSON body, gated like POST. The settings routes of Polaris are the one caller. */
+async function put<T>(path: string, body: unknown, headers: Record<string, string> = {}): Promise<T> {
+  await whenServerUp();
+  const r = await fetch(SERVER + path, { method: "PUT", headers: authHeaders({ "content-type": "application/json", ...(deskGated(path) ? deskHeader() : {}), ...headers }), body: JSON.stringify(body) });
+  const out = await (r.json() as Promise<T>);
+  // 202 is the settings door taking this for an agent's: nothing changed.
+  if (r.status === 202) return { ...(out as object), ok: false, error: "not saved: this window is not the desktop app" } as T;
+  return out;
+}
+
+/** DELETE with no body, gated like PUT. The flow is its one caller. */
+async function del<T>(path: string, headers: Record<string, string> = {}): Promise<T> {
+  await whenServerUp();
+  const r = await fetch(SERVER + path, { method: "DELETE", headers: authHeaders({ ...(deskGated(path) ? deskHeader() : {}), ...headers }) });
+  return (await r.json()) as T;
 }
 
 /** The viewer's IANA zone, or null if the runtime cannot say. Memoized: this
@@ -752,6 +825,8 @@ export interface SeatNeed {
 export interface SeatTask {
   id: string; root: string; title: string; detail: string; proof: string; weight: number; created: number;
   takenAt: number | null; takenBy: string; doneAt: number | null; outcome: string; attempts: number;
+  /** Where the Preflight of the finished task stands; null when none was asked. */
+  preflight?: { runId: string; status: "pending" | "checked" | "failed"; openFindings: number } | null;
 }
 
 /** What Data & privacy says about where the data is and for how long (server GET /privacy). */
@@ -759,6 +834,8 @@ export interface PrivacyFacts {
   db: string; dbBytes: number | null; config: string; configBytes: number | null; credentials: string;
   retentionDays: number; retentionFromEnv: boolean; pairedDevices: number; clickup: boolean; jira: boolean;
 }
+
+export type PinState = "open" | "draft" | "merged" | "closed";
 
 const realApi = {
   recent: (limit = 300) => get<WatchEvent[]>(`/events/recent?limit=${limit}`),
@@ -771,11 +848,11 @@ const realApi = {
    *  the worktrees it is already showing. See panewt.ts for why the screen
    *  cannot answer this. */
   paneDirs: (windowId: string) =>
-    get<{ ok: boolean; pane: string | null; dirs: string[]; agent?: string }>(`/terminal/pane-dirs?window=${encodeURIComponent(windowId)}`),
+    get<{ ok: boolean; pane: string | null; dirs: string[]; work?: string[]; outside?: string; agent?: string }>(`/terminal/pane-dirs?window=${encodeURIComponent(windowId)}`),
   /** Every pane of the window in one request, so the panel can fill its memory
    *  for a six-pane grid while nobody is waiting — see the route's note. */
   paneDirsAll: (windowId: string) =>
-    get<{ ok: boolean; panes: { pane: string; active: boolean; dirs: string[]; agent?: string }[] }>(
+    get<{ ok: boolean; panes: { pane: string; active: boolean; dirs: string[]; work?: string[]; outside?: string; agent?: string }[] }>(
       `/terminal/pane-dirs?all=1&window=${encodeURIComponent(windowId)}`),
   /** Put one in front of whoever is attached to tmux. */
   /** Every resumable agent session for this project, across all its checkouts,
@@ -784,6 +861,13 @@ const realApi = {
     get<{ ok: boolean; sessions: AgentSessionRow[] }>(`/agent/sessions?root=${encodeURIComponent(root)}`),
   focusPane: (p: { sessionId: string; windowId: string; paneId: string }) =>
     post<{ ok: boolean; error?: string }>("/terminal/panes/focus", p),
+  /** The Manifest: the summary the rail dot reads, one project's rows, and a
+   *  verdict. Reads keep the server's refusal sentence so the view can say it. */
+  manifestSummary: () => manifestGet<ManifestSummary>("/manifest"),
+  manifestProject: (root: string) => manifestGet<ManifestProject>(`/manifest?project=${encodeURIComponent(root)}`),
+  manifestSign: (b: { project: string; sha: string; verdict: "tested" | "failed" | "cleared"; note?: string }) =>
+    post<ManifestWrite>("/manifest/signoff", b),
+  manifestStart: (root: string) => post<ManifestStartWrite>("/manifest/start", { project: root }),
   // --- the pane engine's tmux, driven entirely from the UI ---
   /** Everything the settings panel needs to describe the engine's tmux. */
   tmuxStatus: () => get<{
@@ -825,7 +909,7 @@ const realApi = {
   /** The live window of this exact name in this repository (and checkout, when
    *  `path` is given), or null. */
   tmuxLiveWindow: (root: string, name: string, path?: string) =>
-    get<{ ok: boolean; window: { session: string; windowId: string; paneId: string; name: string; path: string } | null }>(
+    get<{ ok: boolean; window: { session: string; windowId: string; paneId: string; name: string; path: string; idle?: true } | null }>(
       `/terminal/tmux/live-window?root=${encodeURIComponent(root)}&name=${encodeURIComponent(name)}${path ? `&path=${encodeURIComponent(path)}` : ""}`),
   /** Tabs/splits/focus/kill/rename/resize on the engine's tmux. */
   tmuxWindowOp: (op: string, body: Record<string, unknown>) =>
@@ -868,6 +952,16 @@ const realApi = {
   accountSwitch: (provider: string, id: string) => post<{ ok: boolean; plugin?: string; error?: string }>(`/usage/accounts/switch`, { provider, id }),
   accountManage: (provider: string) => post<{ ok: boolean; plugin?: string; error?: string }>(`/usage/accounts/manage`, { provider }),
   refreshCodexUsage: () => post<{ ok: boolean; error?: string }>(`/usage/codex/refresh`, {}),
+  /** The same press for OpenCode Go. `force` is a person asking now; without it
+   *  the server's ten-minute cache answers and no browser tab is opened. */
+  refreshOpenCodeUsage: (force = false) => post<ProviderUsage>(`/usage/opencode/refresh${force ? "?force=1" : ""}`, {}),
+  /** Per-model spend and days from the local engine's own `stats` (no key, no
+   *  network), for the panel's detail. Asked when the detail is unfolded. */
+  openCodeDetail: (days = 30) => get<{ ok: boolean; detail?: { models: { model: string; steps: number; costUsd: number; tokens: number }[]; daily: { day: string; tokens: number; costUsd: number }[]; costUsd: number; steps: number } | null }>(`/usage/opencode/detail?days=${days}`),
+  /** The console key: whether one is stored (never the key), stored, or cleared. */
+  openCodeKey: () => get<{ ok: boolean; set: boolean }>(`/usage/opencode/key`),
+  setOpenCodeKey: (key: string) => post<{ ok: boolean; set?: boolean; error?: string }>(`/usage/opencode/key`, { key }),
+  clearOpenCodeKey: () => post<{ ok: boolean; set?: boolean; error?: string }>(`/usage/opencode/key`, { clear: true }),
   claimPaceAlerts: (alertAt: number) => post<{ ok: boolean; fired: number }>(`/usage/pace-claim`, { alertAt }),
   // usage_since: the epoch the call counts are known from. They are bounded
   // by AGENTGLASS_RETENTION_DAYS, so a bare count reads as a lifetime total
@@ -877,12 +971,6 @@ const realApi = {
   session: (id: string) => get<SessionDetail>(`/session?id=${encodeURIComponent(id)}`),
   insights: () => get<{ insights: Insight[] }>(`/insights`),
   collisions: () => get<{ collisions: Collision[] }>(`/collisions`),
-  search: (q: string, opts?: { since?: number; provider?: string }) => {
-    const p = new URLSearchParams({ q });
-    if (opts?.since != null && Number.isFinite(opts.since)) p.set("since", String(opts.since));
-    if (opts?.provider) p.set("provider", opts.provider);
-    return get<{ hits: SearchHit[] }>(`/search?${p}`);
-  },
   gatePending: () => get<{ gates: PendingGate[] }>(`/gate/pending`),
   gateHistory: (limit = 25, opts?: { ruleAllows?: boolean }) =>
     get<{ gates: GateRecord[] }>(`/gate/history?limit=${limit}${opts?.ruleAllows === false ? "&rule_allows=0" : ""}`),
@@ -931,6 +1019,8 @@ const realApi = {
   setProjectRoot: (path: string, added: boolean) => post<{ ok: boolean; roots: string[]; persisted: boolean; error?: string; note?: string }>("/projects/roots", { path, added }),
   /** Subdirectories matching a half-typed path — the picker's completion. */
   fsComplete: (prefix: string) => get<FsCompletion>(`/fs/complete?prefix=${encodeURIComponent(prefix)}`),
+  /** What adding this folder would bring in — the modal's live check. */
+  fsPrecheck: (path: string) => get<FolderPrecheck>(`/projects/precheck?path=${encodeURIComponent(path)}`),
   /** Whether an agent could drive the built-in browser at all: the CLI on PATH,
    *  the skill where agents look, and a window able to answer. See browseruse.ts
    *  for why each of the three is reported separately. */
@@ -1014,8 +1104,8 @@ const realApi = {
     get<ChangeRowsResult>(`/git/changes-v2?mode=${mode}`),
   /** One file's diff. Answered with an ETag over the content, so re-opening a
    *  file that has not changed costs a 304 and no parsing. */
-  gitFileDiff: (root: string, path: string, mode: "working" | "committed" = "working") =>
-    get<FileDiff>(`/git/file-diff?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}&mode=${mode}`),
+  gitFileDiff: (root: string, path: string, mode: "working" | "committed" = "working", from = "") =>
+    get<FileDiff>(`/git/file-diff?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}&mode=${mode}${from ? `&from=${encodeURIComponent(from)}` : ""}`),
   gitStage: (root: string, paths: string[]) => post<GitActionResult>("/git/stage", { root, paths }),
   gitUnstage: (root: string, paths: string[]) => post<GitActionResult>("/git/unstage", { root, paths }),
   gitStageAll: (root: string) => post<GitActionResult>("/git/stage-all", { root }),
@@ -1024,16 +1114,17 @@ const realApi = {
   gitCommitStaged: (root: string, title: string, body: string) => post<GitActionResult>("/git/commit-staged", { root, title, body }),
   gitPush: (root: string, opts?: { force?: boolean }) => post<GitActionResult>("/git/push", { root, force: opts?.force === true }),
   gitPull: (root: string) => post<GitActionResult>("/git/pull", { root }),
-  gitFetch: (root: string) => post<GitActionResult>("/git/fetch", { root }),
+  gitReflogEnable: (root: string) => post<GitActionResult>("/git/reflog-enable", { root }),
+  gitFetch: (root: string, remote?: string) => post<GitActionResult>("/git/fetch", { root, remote }),
   gitBranches: (root: string) => get<{ current: string; branches: GitBranch[]; trunk?: string | null; checking?: boolean }>(`/git/branches?root=${encodeURIComponent(root)}`),
   gitLog: (root: string, limit = 100) => get<{ commits: GitCommit[] }>(`/git/log?root=${encodeURIComponent(root)}&limit=${limit}`),
-  gitCommitDiff: (root: string, hash: string) => get<{ changes: FileChange[] }>(`/git/commit-diff?root=${encodeURIComponent(root)}&hash=${encodeURIComponent(hash)}`),
+  gitCommitDiff: (root: string, hash: string) => get<{ changes: GitFileChange[] }>(`/git/commit-diff?root=${encodeURIComponent(root)}&hash=${encodeURIComponent(hash)}`),
   gitRefs: (root: string) => get<{ ok: boolean; refs?: string[]; error?: string }>(`/git/refs?root=${encodeURIComponent(root)}`),
   gitSnapshots: (root: string) => get<{ ok: boolean; snapshots?: { sha: string; ref: string; time: string; label: string }[]; error?: string }>(`/git/snapshots?root=${encodeURIComponent(root)}`),
   gitSnapshotCreate: (root: string, label?: string) => post<GitActionResult & { sha?: string; ref?: string }>("/git/snapshot-create", { root, label }),
   gitSnapshotRestore: (root: string, sha: string) => post<GitActionResult>("/git/snapshot-restore", { root, sha }),
   gitSnapshotDelete: (root: string, sha: string) => post<GitActionResult>("/git/snapshot-delete", { root, sha }),
-  gitProtectedBranches: (root: string) => get<{ ok: boolean; branches?: string[]; error?: string }>(`/git/protected-branches?root=${encodeURIComponent(root)}`),
+  gitProtectedBranches: (root: string) => post<{ ok: boolean; branches?: string[]; error?: string }>("/git/protected-branches", { root }),
   gitProtectedBranchesSet: (root: string, names: string[]) => post<GitActionResult>("/git/protected-branches-set", { root, names }),
   gitStashes: (root: string) => get<{ stashes: GitStash[] }>(`/git/stashes?root=${encodeURIComponent(root)}`),
   gitTidy: (root: string) => get<TidyReport>(`/git/tidy?root=${encodeURIComponent(root)}`),
@@ -1045,8 +1136,12 @@ const realApi = {
    *  moves this checkout onto it. */
   gitTrackRemote: (root: string, ref: string, switchTo: boolean) => post<GitActionResult>("/git/track-remote", { root, ref, switch: switchTo }),
   gitTags: (root: string) => get<{ tags: GitTag[] }>(`/git/tags?root=${encodeURIComponent(root)}`),
-  gitReflog: (root: string) => get<{ entries: GitReflogEntry[] }>(`/git/reflog?root=${encodeURIComponent(root)}`),
+  gitTagsOrigin: (root: string) => get<{ tags: GitTagOrigin[] }>(`/git/tags-origin?root=${encodeURIComponent(root)}`),
+  gitStashFiles: (root: string, hash: string) => get<{ files: GitStashFile[] }>(`/git/stash-files?root=${encodeURIComponent(root)}&hash=${encodeURIComponent(hash)}`),
+  gitReflog: (root: string) => get<{ entries: GitReflogEntry[]; reflogOff?: boolean }>(`/git/reflog?root=${encodeURIComponent(root)}`),
   gitRepoStats: (root: string, days?: number) => get<RepoStats>(`/git/stats?root=${encodeURIComponent(root)}&days=${days ?? 30}`),
+  gitLastFetch: (root: string) => get<{ lastFetch: GitLastFetch | null }>(`/git/lastfetch?root=${encodeURIComponent(root)}`).then((r) => r.lastFetch),
+  gitRangeCounts: (root: string) => get<GitRangeCounts>(`/git/rangecounts?root=${encodeURIComponent(root)}`),
   gitChangelog: (root: string, from?: string, to?: string) => get<Changelog>(`/git/changelog?root=${encodeURIComponent(root)}&from=${encodeURIComponent(from ?? "")}&to=${encodeURIComponent(to ?? "")}`),
   gitSubmodules: (root: string) => get<{ submodules: GitSubmodule[] }>(`/git/submodules?root=${encodeURIComponent(root)}`),
   gitSubmoduleAdd: (root: string, url: string, path: string) => post<GitActionResult>("/git/submodule-add", { root, url, path }),
@@ -1060,9 +1155,6 @@ const realApi = {
   gitBisectStart: (root: string, bad: string, good: string) => post<GitActionResult>("/git/bisect-start", { root, bad, good }),
   gitBisectMark: (root: string, mark: "good" | "bad") => post<GitActionResult>("/git/bisect-mark", { root, mark }),
   gitBisectReset: (root: string) => post<GitActionResult>("/git/bisect-reset", { root }),
-  gitSearchCommits: (root: string, q: string, author?: string, since?: string) => get<{ ok: boolean; entries: FileHistoryEntry[]; error?: string }>(`/git/search-commits?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}${author ? `&author=${encodeURIComponent(author)}` : ""}${since ? `&since=${encodeURIComponent(since)}` : ""}`),
-  gitGrep: (root: string, q: string, opts: { caseSensitive?: boolean; wholeWord?: boolean; regex?: boolean }) => get<{ ok: boolean; hits: GitGrepHit[]; error?: string }>(`/git/grep?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}&caseSensitive=${opts.caseSensitive ? 1 : 0}&wholeWord=${opts.wholeWord ? 1 : 0}&regex=${opts.regex ? 1 : 0}`),
-  gitPickaxe: (root: string, q: string, type?: "S" | "G") => get<{ ok: boolean; entries: FileHistoryEntry[]; error?: string }>(`/git/pickaxe?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}&type=${type ?? "S"}`),
   gitTagCreate: (root: string, name: string, opts: { annotated?: boolean; message?: string; signed?: boolean; target?: string }) => post<GitActionResult>("/git/tag-create", { root, name, ...opts }),
   gitTagDelete: (root: string, name: string) => post<GitActionResult>("/git/tag-delete", { root, name }),
   gitTagPush: (root: string, name: string, remote?: string) => post<GitActionResult>("/git/tag-push", { root, name, remote }),
@@ -1087,7 +1179,7 @@ const realApi = {
        *  same project — a worktree of the repo you are looking at. */
       viaFamily?: string }>("/editor/open", { path, line }),
   gitCheckout: (root: string, name: string) => post<GitActionResult>("/git/checkout", { root, name }),
-  gitBranchCreate: (root: string, name: string) => post<GitActionResult>("/git/branch-create", { root, name }),
+  gitBranchCreate: (root: string, name: string, from?: string) => post<GitActionResult>("/git/branch-create", { root, name, from }),
   gitBranchDelete: (root: string, name: string, force: boolean) => post<GitActionResult>("/git/branch-delete", { root, name, force }),
   gitStashPush: (root: string, message: string) => post<GitActionResult>("/git/stash-push", { root, message }),
   gitStashApply: (root: string, index: number) => post<GitActionResult>("/git/stash-apply", { root, index }),
@@ -1097,6 +1189,7 @@ const realApi = {
   gitStashToBranch: (root: string, index: number, branch: string) => post<GitActionResult>("/git/stash-to-branch", { root, index, branch }),
   gitStashPartial: (root: string, paths: string[], keepIndex?: boolean) => post<GitActionResult>("/git/stash-partial", { root, paths, keepIndex: keepIndex === true }),
   gitStashApplyOverwrite: (root: string, index: number) => post<GitActionResult>("/git/stash-apply-overwrite", { root, index }),
+  gitStashPutBack: (root: string) => post<GitActionResult>("/git/stash-put-back", { root }),
   gitApplyHunk: (root: string, path: string, staged: boolean, action: "stage" | "unstage" | "discard", hunk: DiffHunk) => post<GitActionResult>("/git/apply-hunk", { root, path, staged, action, hunk }),
   gitConflictBlocks: (root: string, path: string) => get<{ ok: boolean; blocks: ConflictBlock[]; error?: string }>(`/git/conflict-blocks?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`),
   gitResolveBlocks: (root: string, path: string, choices: BlockChoice[], stamp?: string) => post<GitActionResult>("/git/resolve-blocks", { root, path, choices, stamp }),
@@ -1125,6 +1218,7 @@ const realApi = {
    *  Remotes tab asks; HEAD when omitted. */
   gitWorktreeAdd: (root: string, path: string, branch: string, newBranch: boolean, startPoint?: string) => post<GitActionResult>("/git/worktree-add", { root, path, branch, newBranch, startPoint }),
   gitWorktreeRemove: (root: string, path: string, force: boolean) => post<GitActionResult>("/git/worktree-remove", { root, path, force }),
+  gitWorktreeUnlock: (root: string, path: string) => post<GitActionResult>("/git/worktree-unlock", { root, path }),
   /** What removing these worktrees would delete that git wouldn't warn about —
    *  ask before offering the removal. One request for the whole batch. */
   /** Copy chosen leftovers into the main checkout. Never overwrites — anything
@@ -1159,10 +1253,12 @@ const realApi = {
   /** Fold the staged changes into the previous commit — the Source Control
    *  composer's variant, which amends the index as it stands. */
   gitAmendStaged: (root: string, title: string, body: string) => post<GitActionResult>("/git/amend-staged", { root, title, body }),
+  /** The tip's message to prefill the amend box, or the sentence that says why it cannot be amended. */
+  gitAmendInfo: (root: string) => post<GitActionResult & { hash?: string; title?: string; body?: string; refusal?: string }>("/git/amend-info", { root }),
   /** Fold a contiguous tip-span into one commit; ORIG_HEAD is the undo point. */
   gitSquash: (root: string, oldest: string, newest: string) => post<GitActionResult>("/git/squash", { root, oldest, newest }),
   /** The commits `base..HEAD`, oldest first, for the rebase editor. */
-  gitRebaseSteps: (root: string, base: string) => post<GitActionResult & { steps?: { action: string; hash: string; subject: string }[] }>("/git/rebase-steps", { root, base }),
+  gitRebaseSteps: (root: string, base: string) => post<GitActionResult & { steps?: { action: string; hash: string; subject: string }[]; unpushed?: number }>("/git/rebase-steps", { root, base }),
   /** Run the edited plan as one interactive rebase. */
   gitRebaseRun: (root: string, base: string, steps: { action: string; hash: string; subject: string; newMessage?: string }[]) => post<GitActionResult>("/git/rebase-run", { root, base, steps }),
   /** Compare two refs: how far ahead/behind each is, and the diff between them. */
@@ -1174,6 +1270,8 @@ const realApi = {
   /** `fresh` asks past the server's cache: the Refresh button, not the poll. */
   dockerOverview: (fresh = false) => get<DockerOverview>(`/docker/overview${fresh ? "?fresh=1" : ""}`),
   dockerStats: () => get<{ stats: DockerStat[] }>("/docker/stats"),
+  /** Where the live feed is (EventSource cannot send a header, so the token rides in the URL). */
+  dockerLiveUrl: (): string | null => withToken(`${SERVER}/docker/live`),
   /* --- the finder: browsing a place and looking at a file ----------------
      One pair for both worlds, because the finder's tabs should not behave
      differently depending on which backend answers them. */
@@ -1253,15 +1351,14 @@ const realApi = {
   finderEditSave: (root: string) => post<{ ok: boolean; live: boolean; modified: boolean; error?: string }>("/bench/finder-edit/save", { root }),
   previewReveal: (path: string) => post<{ ok: boolean; with?: string; error?: string }>("/preview/reveal", { path }),
   /** Fuzzy names across Home from the server's incremental index. */
-  diskIndexSearch: (q: string, signal?: AbortSignal) =>
-    get<{ ok: boolean; hits: { path: string; dir: boolean; score: number }[]; building: boolean; ms: number; error?: string }>(`/disk/index/search?q=${encodeURIComponent(q)}`, signal),
+  diskIndexSearch: (q: string, signal?: AbortSignal, limit?: number) =>
+    get<{ ok: boolean; hits: { path: string; dir: boolean; score: number }[]; building: boolean; ms: number; error?: string }>(`/disk/index/search?q=${encodeURIComponent(q)}${limit ? `&limit=${limit}` : ""}`, signal),
   diskGrep: (root: string, q: string) => get<GrepReport>(`/disk/grep?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}`),
 
   dockerLogs: (id: string, tail = 400) => get<{ ok: boolean; text: string; error?: string }>(`/docker/logs?id=${encodeURIComponent(id)}&tail=${tail}`),
   /* The slow lane. Each of these makes the daemon do real work, so they are
      called when a section is opened — never on the poll. */
   dockerDisk: (force = false) => get<DockerDisk & { error?: string }>(`/docker/disk${force ? "?force=1" : ""}`),
-  dockerVolume: (name: string) => get<DockerVolumeDetail>(`/docker/volume?name=${encodeURIComponent(name)}`),
   dockerPeek: (name: string, path = "") => get<DockerPeek>(`/docker/volume/peek?name=${encodeURIComponent(name)}&path=${encodeURIComponent(path)}`),
   /** Build cache older than `hours`. The safe reclaim: it costs one slower
    *  build, and nothing else. */
@@ -1269,6 +1366,8 @@ const realApi = {
   /** Remove images by tag or id, one at a time on the server so a single
    *  refusal does not abandon the rest. */
   dockerRemoveImages: (refs: string[]) => post<DockerActionResult>("/docker/images/rm", { refs }),
+  dockerRemoveNetwork: (name: string) => post<DockerActionResult>("/docker/networks/rm", { name }),
+  dockerRemoveVolume: (name: string) => post<DockerActionResult>("/docker/volumes/rm", { name }),
   /** Why does yours start and mine not. The values of anything
    *  credential-shaped are compared on the server and never sent. */
   dockerEnvDiff: (a: string, b: string) => get<{ ok: boolean; rows?: DockerEnvRow[]; error?: string }>(`/docker/env-diff?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`),
@@ -1397,6 +1496,15 @@ const realApi = {
   setJiraCounted: (counted: string[]) => post<{ ok: boolean; error?: string; counted?: string[] }>("/jira/status-units", { counted }),
   jiraProjectStatuses: (project: string) =>
     get<{ ok: boolean; error?: string; statuses?: { id: string; name: string; kind: "open" | "done" | "other" }[] }>(`/jira/project-statuses?project=${encodeURIComponent(project)}`),
+  /** The Jira spaces the person added, in order: local, no request to Jira. */
+  jiraSpaces: () => get<JiraSpacesOut>("/jira/spaces"),
+  editJiraSpaces: (edit: JiraSpacesEdit) => post<JiraSpacesOut | { ok: false; error: string }>("/jira/spaces", edit),
+  /** Every project of the site, or the one a typed key names. */
+  jiraSpacePicker: (q = "") => get<JiraSpacePickerOut | { ok: false; error: string; throttled?: boolean }>(`/jira/space-picker${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  /** One space's tree, read live; `fresh` goes past the server's held answer. */
+  jiraSpaceTree: (space: string, o: { fresh?: boolean; showDone?: boolean } = {}) =>
+    get<JiraSpaceTreeOut>(`/jira/space-tree?space=${encodeURIComponent(space)}${o.fresh ? "&fresh=1" : ""}${o.showDone ? "&showDone=1" : ""}`),
+  jiraEpicCards: (epic: string) => get<JiraEpicCardsOut>(`/jira/epic-cards?epic=${encodeURIComponent(epic)}`),
   /** The saved Jira views and folders: local, no request to Jira. */
   jiraViews: () => get<JiraViews>("/jira/views"),
   /** One saved view's cards. `cached` answers from disk only; `force` skips the server's held answer. */
@@ -1413,7 +1521,7 @@ const realApi = {
     get<{ ok: boolean; error?: string; boards: JiraViewChoice[]; filters: JiraViewChoice[]; truncated?: boolean }>(`/jira/view-choices?q=${encodeURIComponent(q)}`),
   jiraProjectChoices: () => get<{ ok: boolean; error?: string; projects: JiraProjectChoice[] }>("/jira/project-choices"),
   jiraAddView: (input: { url: string } | { kind: "board" | "filter"; id: string }) =>
-    post<{ ok: boolean; error?: string; view?: SavedView }>("/jira/views/add", input),
+    post<{ ok: boolean; error?: string; view?: SavedView; alternatives?: JiraAddChoice[] }>("/jira/views/add", input),
   jiraRemoveView: (id: string) => post<{ ok: boolean; error?: string }>("/jira/views/remove", { id }),
   jiraAddFolder: (key: string) => post<{ ok: boolean; error?: string; folder?: SavedFolder }>("/jira/folders/add", { key }),
   jiraRemoveFolder: (id: string) => post<{ ok: boolean }>("/jira/folders/remove", { id }),
@@ -1501,6 +1609,8 @@ const realApi = {
   /** The orchestrator's seat for a project: who is in it, what it last said,
    *  and the doctrine it was seated with. */
   seat: (root = "") => get<SeatAnswer>(`/seat${root ? `?root=${encodeURIComponent(root)}` : ""}`),
+  /** The models an engine offers, for a worker role's picker. Empty when it offers none. */
+  engineModels: (engine: string) => get<{ ok: boolean; models: { id: string; label: string }[] }>(`/engine-models?engine=${encodeURIComponent(engine)}`),
   seatOpen: (root: string, powers?: string, model?: string) =>
     post<{ ok: boolean; already?: boolean; error?: string }>("/seat/open", { root, powers, model }),
   seatClose: (root: string) => post<{ ok: boolean; was?: boolean }>("/seat/close", { root }),
@@ -1527,8 +1637,8 @@ const realApi = {
   /** One project's rules, and the base set every project shares. */
   agentRules: (root: string) =>
     get<{ ok: boolean; error?: string } & Partial<import("../../../shared/agentRules.ts").AgentRulesView>>(`/agent-rules?root=${encodeURIComponent(root)}`),
-  /** A person's rule: stricter and looser both apply at once for them. */
-  agentRuleSet: (f: import("../../../shared/agentRules.ts").RuleRequest) =>
+  /** A person's rule: stricter and looser both apply at once for them. `remove` takes one out. */
+  agentRuleSet: (f: import("../../../shared/agentRules.ts").RuleRequest | import("../../../shared/agentRules.ts").RuleRemoveRequest) =>
     post<{ ok: boolean; error?: string; applied?: boolean; waitsForPerson?: boolean }>("/agent-rules", f),
   /** A suggestion made a rule (`setting`) or put away for good (`dismiss`): only the person answers. */
   agentRuleAnswer: (id: string, a: { setting: import("../../../shared/agentRules.ts").RuleSetting } | { dismiss: true }) =>
@@ -1539,6 +1649,27 @@ const realApi = {
   agentsBroadcast: (text: string, names: string[] = []) =>
     post<{ ok: boolean; error?: string; result?: { sent: { name: string; outcome: string }[]; missing: string[]; asked: number } }>(
       "/agents/named/broadcast", { text, names }),
+  /** Every named agent, newest first. `all` keeps the ones that ended, whose
+   *  tabs are still on screen — a worker's tab is read after its turn. `pane`
+   *  asks about one window, which is a row read rather than a board sweep. */
+  namedAgents: (all = false, pane = "") => {
+    const q = new URLSearchParams();
+    if (all) q.set("all", "1");
+    if (pane) q.set("pane", pane);
+    const query = q.toString();
+    return get<{ ok: boolean; error?: string; result?: { agents: NamedAgentRow[] } }>(`/agents/named${query ? `?${query}` : ""}`);
+  },
+  /** The tab a named agent runs in, as its own reader draws it (the same answer
+   *  `agentglass-agent read` gets). A headless worker fires no hooks, so this is
+   *  the only live reading of its steps. */
+  agentRead: (name: string, lines = 300) =>
+    post<{ ok: boolean; error?: string; result?: { name: string; state: string; text: string; exitCode?: number; exitLine?: string } }>(
+      "/agents/named/read", { name, lines }),
+  /** The stop the CLI gives: it ends the turn and closes the tab. A tab the app
+   *  did not open is let go instead, and the answer says which happened. */
+  agentStop: (name: string) =>
+    post<{ ok: boolean; error?: string; result?: { name: string; killed: boolean; letGo: boolean } }>(
+      "/agents/named/stop", { name }),
   seatWake: () => get<{ ok: boolean; hours: number }>("/seat/wake"),
   seatWakeSave: (hours: number) => post<{ ok: boolean; error?: string }>("/seat/wake", { hours }),
   /** Which CLI and model each worker role runs on (shared/workerRoles.ts). */
@@ -1558,6 +1689,33 @@ const realApi = {
   orchestrationSave: (policy: Policy | null, root?: string) =>
     post<{ ok: boolean; error?: string; scope?: "project" | "global"; root?: string; overrides?: string[]; policy?: Policy }>(
       "/orchestration", { root, policy }, deskHeader()),
+  /** The flow in force for a project: the one it saved, or the template. */
+  getFlow: (root: string) =>
+    get<{ ok: boolean; error?: string; scope: "project" | "template"; root: string; flow: Flow }>(`/flow?root=${encodeURIComponent(root)}`),
+  /** Store a whole flow. The person's own window only; an agent is refused. */
+  putFlow: (root: string, flow: Flow) =>
+    put<{ ok: boolean; error?: string; scope?: "project" | "template"; root?: string; flow?: Flow }>(`/flow?root=${encodeURIComponent(root)}`, flow, deskHeader()),
+  /** Remove a saved flow, so the project falls back to the template. */
+  deleteFlow: (root: string) =>
+    del<{ ok: boolean; error?: string; scope?: "project" | "template"; root?: string; flow?: Flow }>(`/flow?root=${encodeURIComponent(root)}`, deskHeader()),
+  /** Polaris: the settings in force for a project (or the global ones) and the layer each door came from. */
+  polarisSettings: (root?: string) => get<SettingsAnswer | { ok: false; error: string }>(`/polaris/settings${root ? `?root=${encodeURIComponent(root)}` : ""}`),
+  /** Choose a preset, flip the switch, or store a whole layer. The person's own window only. */
+  polarisSettingsSave: (change: SettingsChange, root?: string) =>
+    put<SettingsAnswer | { ok: false; error: string }>("/polaris/settings", { ...change, ...(root ? { root } : {}) }, deskHeader()),
+  /** A verdict for each open pull request of a project; reading only. */
+  polarisItems: (root: string) => get<ItemsAnswer | { ok: false; error: string }>(`/polaris/items?root=${encodeURIComponent(root)}`),
+  /** A click on one pull request: write a beacon, dock it, ignore it, or propose a course or cleanup. */
+  polarisAct: (root: string, number: number, body: ActionBody) =>
+    post<ActionAnswer>(`/polaris/items/${number}/action`, { root, ...body }, deskHeader()),
+  /** Type the drafted beacon into a session: the click is the send. Without a paneId the server uses the matched session when the match door says use. */
+  polarisBeaconSend: (root: string, number: number, body: { reason?: string; paneId?: string } = {}) =>
+    post<ActionAnswer>(`/polaris/items/${number}/beacon/send`, { root, ...body }, deskHeader()),
+  /** Polaris: change the text of a draft, or throw it away. Neither sends anything. */
+  polarisBeaconEdit: (root: string, number: number, body: { reason?: string; text: string }) =>
+    post<ActionAnswer>(`/polaris/items/${number}/beacon/edit`, { root, ...body }, deskHeader()),
+  polarisBeaconDiscard: (root: string, number: number, body: { reason?: string } = {}) =>
+    post<ActionAnswer>(`/polaris/items/${number}/beacon/discard`, { root, ...body }, deskHeader()),
   /** Which rules are on and why a reading did not change one. Read when the
    *  page opens and after a save: the server settles it on events, not on a clock. */
   orchestrationState: () => get<{ ok: boolean; rules: PolicyRuleState[] }>("/orchestration/state"),
@@ -1588,6 +1746,11 @@ const realApi = {
   /** A partial update; a refusal comes back as `error`, with nothing saved. */
   clickupSetPrefs: (patch: DeepPartial<ClickUpPrefs>) =>
     post<{ ok: boolean; error?: string; prefs?: ClickUpPrefs }>("/clickup/prefs", patch),
+  /** The board's saved filter views of one repository (`owner/name`); `saved` false = the server has never held a list for it. */
+  prViews: (repo: string) => get<{ ok: boolean; views?: PrView[]; saved?: boolean }>(`/prs/views?repo=${encodeURIComponent(repo)}`),
+  /** Replace the whole list; a refusal comes back as `error`, with nothing saved. */
+  prSetViews: (repo: string, views: PrView[]) =>
+    post<{ ok: boolean; views?: PrView[]; error?: string }>(`/prs/views?repo=${encodeURIComponent(repo)}`, { views }),
   clickupView: (id?: string, force = false) =>
     get<ViewTasksResponse>(`/clickup/view?${new URLSearchParams({ ...(id ? { id } : {}), ...(force ? { force: "1" } : {}) })}`),
   clickupAddView: (url: string) =>
@@ -1645,12 +1808,14 @@ const realApi = {
   /** WHICH files would conflict, without merging anything — GitHub only ever
    *  says that a pull request conflicts, never where. Read-only: the merge
    *  happens in git's object database and the checkout is untouched. */
-  prConflictFiles: (root: string, number: number) =>
+  prConflictFiles: (root: string, number: number, sha?: string) =>
     get<{ ok: boolean; conflicts: string[]; clean: boolean; stale?: boolean;
       /** You merged the base in here and have not pushed it — see gitwork.ts. */
       resolvedLocally?: { branch: string; ahead: number };
+      /** The head the merge was tried against; GitHub's when `sha` was given. */
+      headSha?: string;
       error?: string }>(
-      `/prs/conflict-files?root=${encodeURIComponent(root)}&number=${number}`),
+      `/prs/conflict-files?root=${encodeURIComponent(root)}&number=${number}${sha ? `&sha=${encodeURIComponent(sha)}` : ""}`),
   /** One conflicted file of that preview with its markers, read from git's
    *  object database. `noMarkers`: a modify/delete conflict has none. */
   prConflictFile: (root: string, number: number, path: string) =>
@@ -1678,7 +1843,7 @@ const realApi = {
   /** The latest run per check name for ONE pull request — the list's rollup
    *  counts a re-run's old attempt beside the new one. See prRollupStore. */
   prRollup: (root: string, number: number, force = false) =>
-    get<{ ok: boolean; checks?: PrCheckRollup; error?: string }>(
+    get<{ ok: boolean; checks?: PrCheckRollup; all?: import("../../../shared/types.ts").PrCheck[]; sha?: string; error?: string }>(
       `/prs/rollup?${new URLSearchParams({ root, number: String(number), ...(force ? { force: "1" } : {}) })}`),
   /** One person's open pull requests: what they opened and what they were asked to review. */
   prPerson: (root: string, login: string, force = false) =>
@@ -1688,6 +1853,10 @@ const realApi = {
   prRefBranches: (root: string, key: string) =>
     get<{ ok: boolean; key?: string; branches?: string[]; rows?: PrSummary[]; error?: string }>(
       `/prs/ref-branches?${new URLSearchParams({ root, key })}`),
+  /** State of the pinned pull requests (`owner/name#n`), one request for all of them. */
+  prPinStates: (pins: string[]) =>
+    get<{ ok: boolean; states: Record<string, PinState> }>(
+      `/prs/pin-states?${new URLSearchParams({ pins: pins.join(",") })}`),
   /** The second pass (checks, size, review) for up to 24 pull requests in one request. */
   prRowDetails: (root: string, numbers: number[], finished: number[] = []) =>
     get<{ ok: boolean; rows: Record<number, Partial<PrSummary>>; error?: string }>(
@@ -1871,8 +2040,56 @@ const realApi = {
     get<IssuePrsReport>(`/issues/prs?root=${encodeURIComponent(root)}&number=${number}`),
   /** Hand the server a prompt and get a ticket to open a pane with. The way a
    *  terminal with no tmux starts an agent — see server/src/agentticket.ts. */
-  termAgentTicket: (cwd: string, prompt: string, yolo: boolean, title: string) =>
-    post<{ ok: boolean; ticket?: string; error?: string }>("/terminal/agent", { cwd, prompt, yolo, title }),
+  termAgentTicket: (cwd: string, prompt: string, yolo: boolean, title: string, kind?: string) =>
+    post<{ ok: boolean; ticket?: string; error?: string }>("/terminal/agent", { cwd, prompt, yolo, title, ...(kind ? { kind } : {}) }),
+  /** A shell in a project the caller names, for a first terminal whose picked
+   *  agent is not installed (server/src/index.ts, /terminal/open-shell). */
+  openShell: (root: string) =>
+    post<{ ok: boolean; pane?: string; window?: string; cwd?: string; error?: string }>("/terminal/open-shell", { root }),
+  /** Flight plan: plans, their Preflight runs and the person's answers (server/src/index.ts, /flight-plan/*). */
+  flightPlans: (root = "", state = "") =>
+    get<{ ok: boolean; enabled?: boolean; budget?: import("./flightPilot.ts").BudgetWire; plans?: Record<string, unknown>[]; error?: string }>(`/flight-plan/plans?${new URLSearchParams({ ...(root ? { root } : {}), ...(state ? { state } : {}) })}`),
+  flightPlan: (id: string) =>
+    get<{ ok: boolean; plan?: Record<string, unknown>; version?: number; run?: import("./flightPlan.ts").Run | null; error?: string }>(`/flight-plan/plans/${encodeURIComponent(id)}`),
+  /** An earlier plan text: n is 1 for the first one the plan had. */
+  flightPlanRevision: (id: string, n: number) =>
+    get<{ ok: boolean; revision?: { n: number; planMd: string; createdAt: number; by: string }; error?: string }>(`/flight-plan/plans/${encodeURIComponent(id)}/revisions/${n}`),
+  /** A mockup the plan lists, as an address an <img> or an iframe can load. */
+  flightMockupUrl: (id: string, n: number) => withToken(`${SERVER}/flight-plan/plans/${encodeURIComponent(id)}/mockups/${n}`),
+  flightPlanNew: (b: { root: string; title: string; request: string; visual: boolean; size?: string; taskId?: string; as?: string }) =>
+    post<{ ok: boolean; plan?: Record<string, unknown>; ticket?: string; error?: string }>("/flight-plan/plans", b),
+  /** capUsd: the person's higher cap for this one run (above 0, up to 5). */
+  flightPlanPreflight: (id: string, capUsd?: number) =>
+    post<{ ok: boolean; run?: { id: string; state: string }; error?: string }>(`/flight-plan/plans/${encodeURIComponent(id)}/preflight`, capUsd === undefined ? {} : { capUsd }),
+  /** model: the model this Go asks for; absent means the plan's own pick. */
+  flightPlanGo: (id: string, model?: string) => post<{ ok: boolean; error?: string; queued?: boolean; launchError?: string; window?: string; worktree?: string; branch?: string }>(`/flight-plan/plans/${encodeURIComponent(id)}/go`, model ? { model } : {}),
+  flightPlanNoGo: (id: string, reason: string) => post<{ ok: boolean; error?: string }>(`/flight-plan/plans/${encodeURIComponent(id)}/no-go`, { reason }),
+  flightPlanLaunch: (id: string, model?: string) =>
+    post<{ ok: boolean; window?: string; worktree?: string; branch?: string; error?: string }>(`/flight-plan/plans/${encodeURIComponent(id)}/launch`, model ? { model } : {}),
+  flightRuns: (root = "") => get<{ ok: boolean; runs?: import("./flightPlan.ts").Run[]; error?: string }>(`/flight-plan/runs?${new URLSearchParams(root ? { root } : {})}`),
+  /** What a Preflight will run on in this project: the server resolves it from that project's Reviewer chain. */
+  flightPreflightTarget: (root: string) =>
+    get<{ ok: boolean; target?: PreflightTarget; error?: string }>(`/flight-plan/preflight/target?${new URLSearchParams({ root })}`),
+  flightRunGo: (id: string) => post<{ ok: boolean; error?: string }>(`/flight-plan/runs/${encodeURIComponent(id)}/go`, {}),
+  flightFinding: (runId: string, fid: string, action: string | null, note: string) =>
+    post<{ ok: boolean; error?: string }>(`/flight-plan/runs/${encodeURIComponent(runId)}/findings/${encodeURIComponent(fid)}`, { action, note }),
+  /*
+   * Flight plan, who flies. The mode and hold are settings (settingAt); the budget rides on flightPlans; a question
+   * lives on its plan and is answered with the words (an engine choice is its text); Hold and Resume answer
+   * { ok, held }. There is no route to take a plan over: the web keeps that for the open view.
+   */
+  flightHold: (root: string) => post<{ ok: boolean; held?: boolean; told?: number; error?: string }>("/flight-plan/hold", { root }),
+  flightResume: (root: string) => post<{ ok: boolean; held?: boolean; error?: string }>("/flight-plan/resume", { root }),
+  /** A higher cap until the day (midnight) or the week (Monday) turns over; the base cap is untouched. */
+  flightRaiseBudget: (usd: number, scope: "day" | "week") =>
+    post<{ ok: boolean; capUsd?: number; until?: number; budget?: import("./flightPilot.ts").BudgetWire; error?: string }>("/flight-plan/budget/raise", { usd, scope }),
+  flightAnswer: (planId: string, answer: string) => post<{ ok: boolean; error?: string }>(`/flight-plan/plans/${encodeURIComponent(planId)}/answer`, { answer }),
+  /** One setting of the settings door at a project; a machine-wide one takes "" and ignores it. */
+  settingAt: (id: string, root: string) =>
+    get<{ ok: boolean; value?: unknown; scopedSet?: boolean; error?: string }>(`/settings/door?id=${encodeURIComponent(id)}&root=${encodeURIComponent(root)}`),
+  settingAtGlobal: (id: string) => get<{ ok: boolean; value?: unknown; error?: string }>(`/settings/door?id=${encodeURIComponent(id)}`),
+  settingAtSet: (id: string, value: unknown, root: string) =>
+    post<{ ok: boolean; applied?: boolean; error?: string }>("/settings/door", { id, value, root }),
   /** Everything with a worktree still on disk, so the list can say what is in
    *  progress without asking per row. */
   issuesWork: (repo = "") => get<{ work: IssueWork[] }>(`/issues/work?repo=${encodeURIComponent(repo)}`),
@@ -1894,8 +2111,9 @@ const realApi = {
   /** Every process this user owns, with the ones descended from this server
    *  marked. `limit` caps only the rest of the machine — ours all come back. */
   machineResources: (limit = 40) => get<ResourceReport>(`/machine/resources?limit=${limit}`),
-  /** Processes an agent left behind. Cached server-side (sampled every few
-   *  minutes); `fresh` lets the open panel ask for a newer sample. */
+  /** Processes left behind, each with the origin read from its own paths:
+   *  a checkout, a scratchpad or a temp wrapper. Cached server-side (sampled
+   *  every few minutes); `fresh` lets the open panel ask for a newer sample. */
   machineOrphans: (fresh = false) => get<OrphanReport>(`/machine/orphans${fresh ? "?fresh=1" : ""}`),
   /** Stop ONE left-behind pid; refused unless it is flagged right now. */
   machineOrphanStop: (pid: number) => post<OrphanStopResult>("/machine/orphans/stop", { pid }),
@@ -1918,7 +2136,6 @@ const realApi = {
   machineUnlock: (path: string) => post<{ ok: boolean; error?: string; detail?: string }>("/machine/unlock", { path }),
 
   // --- browsing and searching a checkout ---
-  filesTree: (root: string, rel = "") => get<TreeReport>(`/files/tree?root=${encodeURIComponent(root)}&rel=${encodeURIComponent(rel)}`),
   /** One file as text, for the markdown viewer. Refuses a binary rather than
    *  handing back a screenful of replacement characters — see files.ts. */
   filesRead: (root: string, rel: string, ref?: string) =>
@@ -1929,8 +2146,6 @@ const realApi = {
   filesTemp: (root: string, rel: string, ref: string) =>
     get<{ ok: boolean; file?: string; ref?: string; error?: string }>(
       `/files/temp?root=${encodeURIComponent(root)}&rel=${encodeURIComponent(rel)}&ref=${encodeURIComponent(ref)}`),
-  filesFind: (root: string, q: string, ref?: string) =>
-    get<FindReport>(`/files/find?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}${ref ? `&ref=${encodeURIComponent(ref)}` : ""}`),
   /** Which of these paths the working tree still has — see filesExist. */
   filesExist: (root: string, rels: string[]) =>
     get<{ ok: boolean; here: string[]; error?: string }>(
@@ -1940,8 +2155,6 @@ const realApi = {
   filesRefs: (root: string) =>
     get<{ ok: boolean; local: string[]; remote: string[]; head?: string; error?: string }>(
       `/files/refs?root=${encodeURIComponent(root)}`),
-  filesGrep: (root: string, q: string, ref?: string) =>
-    get<GrepReport>(`/files/grep?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}${ref ? `&ref=${encodeURIComponent(ref)}` : ""}`),
 
   // --- and searching the machine, which is not a checkout ---
   /** Where a machine search may be rooted, and a menu of places to start. */
@@ -2098,6 +2311,14 @@ const realApi = {
   agents: () => get<{ agents: AgentProbe[] }>("/agents"),
   /** What this machine has of each engine. `fresh` is Recheck: true skips the server's cache, an id rechecks that engine only. */
   engines: (fresh: boolean | string = false) => get<EnginesReport>(fresh === true ? "/engines?fresh=1" : fresh ? `/engines?fresh=${encodeURIComponent(fresh)}` : "/engines"),
+  /** The first run's facts: whether it is finished, what this machine already has. */
+  setupState: () => get<SetupState>("/setup/state"),
+  /** Step 4's folder read: every repository in it, with the branch each is on. */
+  setupRepos: (path: string) => get<SetupRepos>(`/setup/repos?path=${encodeURIComponent(path)}`),
+  /** One search for the Finder: start it, poll it, or stop it. */
+  setupScanStart: () => post<SetupScan>("/setup/scan", {}),
+  setupScan: (id: string) => get<SetupScan>(`/setup/scan?id=${encodeURIComponent(id)}`),
+  setupScanStop: (id: string) => post<SetupScan>("/setup/scan/stop", { id }),
   /** The one-line test: a real turn, so only ever on a click. */
   testEngine: (engine: string) => post<{ ok: boolean; ms: number; error?: string }>("/engines/test", { engine }),
   /** Wire one — and only the one asked for. */
@@ -2230,8 +2451,13 @@ const realApi = {
    *  request in another project opens instead of landing nowhere. */
   prLocate: (repo: string) =>
     get<{ ok: boolean; root?: string; error?: string }>(`/prs/locate?repo=${encodeURIComponent(repo)}`),
+  /** A GitHub repository with no checkout: found, or why not. Cached 60 s on the server; `fresh` skips that. */
+  ghRepoLookup: (repo: string, fresh = false) =>
+    get<LookupAnswer>(`/gh/repo-lookup?repo=${encodeURIComponent(repo)}${fresh ? "&fresh=1" : ""}`),
   prDetail: (root: string, number: number, force = false) =>
     get<{ ok: boolean; detail?: PrDetail; error?: string; stale?: boolean }>(`/prs/detail?root=${encodeURIComponent(root)}&number=${number}${force ? "&force=1" : ""}`),
+  prReviewComment: (root: string, id: number) =>
+    get<{ ok: boolean; comment?: { path: string; line: number | null; originalLine: number | null; inReplyToId: number | null }; error?: string }>(`/prs/review-comment?root=${encodeURIComponent(root)}&id=${id}`),
   prDiff: (root: string, number: number, force = false) =>
     get<{ ok: boolean; text?: string; error?: string }>(`/prs/diff?root=${encodeURIComponent(root)}&number=${number}${force ? "&force=1" : ""}`),
   /** Images in a PR body go through the server, which attaches the gh token —
@@ -2343,10 +2569,23 @@ const realApi = {
   /** Whether paired phones raise their own notification for a watch or a card (`phone.alerts`). */
   phoneAlerts: () => get<{ ok: boolean; value?: unknown }>("/settings/door?id=phone.alerts"),
   /** What agents asked to change and wait for the person on (the settings door). */
-  settingsRequests: () => get<{ ok: boolean; requests: SettingRequestView[] }>("/settings/requests"),
+  settingsRequests: () => get<{ ok: boolean; requests: SettingRequestView[] }>("/settings/requests", undefined, deskHeader()),
+  /** What the automatic cleanup after a merge is doing and has done (server/src/cleanupAuto.ts), newest first. */
+  cleanupAuto: () => get<{ ok: boolean; entries: AutoEntry[]; queued?: number }>("/cleanup/auto"),
+  /** The dry-run plan for one pull request of a repository (docs/CLEANUP.md). Read-only; a 4xx/5xx rejects with the route in the message. */
+  cleanupPlan: (repo: string, pr: number) => get<{ ok: boolean; plan?: CleanupPlan; error?: string }>(`/cleanup/plan?repo=${encodeURIComponent(repo)}&pr=${pr}`),
+  /** Runs the plan the person read. A person's run needs no card; the answer is the report, or { ok:false, error } when refused. */
+  cleanupRun: (repo: string, pr: number, planId: string, exclude: string[], confirmNotMerged: boolean) =>
+    post<Partial<CleanupReport> & { ok: boolean; error?: string }>("/cleanup/run", { repo, pr, planId, exclude, confirmNotMerged }),
+  /** Which of these finished PRs left anything on this machine: the server's local inventory, one row each, no gh. */
+  cleanupInventory: (repo: string, prs: { pr: number; branch: string }[]) =>
+    get<{ ok: boolean; rows?: ({ pr: number; items?: number; bytes?: number; groups?: { group: string; items: number; bytes: number }[]; unknown?: boolean; blocked?: string })[]; error?: string }>(`/cleanup/inventory?repo=${encodeURIComponent(repo)}${prs.map((x) => `&p=${encodeURIComponent(`${x.pr}:${x.branch}`)}`).join("")}`),
+  /** The Docker build cache every project shares (not one PR's leftover): its reclaimable size, and the prune. Person-only on the server. */
+  cleanupBuildCache: () => get<{ ok: boolean; reclaimableBytes?: number; totalBytes?: number; error?: string }>("/cleanup/build-cache"),
+  cleanupBuildCachePrune: () => post<{ ok: boolean; freedBytes?: number; remainingBytes?: number; error?: string }>("/cleanup/build-cache/prune", {}),
   /** The person's answer: carries the desk key (deskGate.ts), as only the person may give it. */
-  settingsRequestDecide: (id: string, approve: boolean) =>
-    post<{ ok: boolean; applied?: boolean; error?: string }>("/settings/requests/decide", { id, approve }),
+  settingsRequestDecide: (id: string, approve: boolean, bulk = false) =>
+    post<{ ok: boolean; applied?: boolean; error?: string }>("/settings/requests/decide", { id, approve, ...(bulk ? { bulk: true } : {}) }),
   /** The person's own switch, written from Settings: an agent cannot set it on any route. */
   agentsChangeWithoutAsking: () => get<{ ok: boolean; trusted: boolean }>("/settings/door"),
   agentsChangeWithoutAskingSave: (on: boolean) =>
@@ -2374,6 +2613,8 @@ const realApi = {
   dockerStart: (id: string) => post<DockerActionResult>("/docker/start", { id }),
   dockerStop: (id: string) => post<DockerActionResult>("/docker/stop", { id }),
   dockerRestart: (id: string) => post<DockerActionResult>("/docker/restart", { id }),
+  /** Resume a paused container; `dockerStart` refuses one. */
+  dockerUnpause: (id: string) => post<DockerActionResult>("/docker/unpause", { id }),
   dockerRm: (id: string) => post<DockerActionResult>("/docker/rm", { id }),
 
 };
@@ -2444,6 +2685,10 @@ const demoApi: typeof realApi = {
   paneDirsAll: (_w: string) => D({ ok: true, panes: [] as { pane: string; active: boolean; dirs: string[]; agent?: string }[] }),
   agentSessions: (_root: string) => D({ ok: true, sessions: [] as AgentSessionRow[] }),
   focusPane: (_p: { sessionId: string; windowId: string; paneId: string }) => D({ ok: false, error: "not in the demo" }),
+  manifestSummary: () => D({ ok: true, status: 200, answer: { projects: [] } as ManifestSummary, error: "" }),
+  manifestProject: () => D({ ok: false, status: 0, answer: null, error: "the demo reads no checkout" }),
+  manifestSign: () => D({ ok: false, error: "the demo keeps no verdicts" } as ManifestWrite),
+  manifestStart: () => D({ ok: false, error: "the demo has no start line" } as ManifestStartWrite),
   stats: (windowMs: number, provider?: string) => D(demo.stats(windowMs, provider)),
   usageDaily: (days = 90) => D(demo.usageDaily(days)),
   sessions: (_limit?: number, provider?: string) => D(demo.sessions(provider)),
@@ -2457,6 +2702,11 @@ const demoApi: typeof realApi = {
   accountSwitch: () => D({ ok: false, error: "the demo has no accounts" }),
   accountManage: () => D({ ok: false, error: "the demo has no accounts" }),
   refreshCodexUsage: () => D({ ok: false, error: "not available in the demo" }),
+  refreshOpenCodeUsage: () => D((demo.providerUsage() as ProviderUsage[]).find((r) => r.provider === "opencode")!),
+  openCodeDetail: () => D({ ok: true, detail: null }),
+  openCodeKey: () => D({ ok: true, set: false }),
+  setOpenCodeKey: () => D({ ok: false, error: "not available in the demo" }),
+  clearOpenCodeKey: () => D({ ok: false, error: "not available in the demo" }),
   claimPaceAlerts: (_alertAt: number) => D({ ok: true, fired: 0 }),
   skills: () => D(demo.skills()),
   changes: () => D(demo.changes()),
@@ -2465,7 +2715,6 @@ const demoApi: typeof realApi = {
   insights: () => D(demo.insights()),
   // The demo has no processes and no checkouts to share anything between.
   collisions: () => D({ collisions: [] as Collision[] }),
-  search: (q: string, opts?: { since?: number; provider?: string }) => D(demo.search(q, opts)),
   gatePending: () => D(demo.gatePending()),
   gateHistory: () => D({ gates: [] as GateRecord[] }),
   actions: () => D(demo.actions()),
@@ -2479,6 +2728,7 @@ const demoApi: typeof realApi = {
   setProjectRoot: (_path: string, _added: boolean) => D({ ok: false, roots: [] as string[], persisted: false, error: "unavailable in the demo" }),
   // The demo has no filesystem to browse, so completion is simply always empty.
   fsComplete: (_prefix: string) => D({ base: "", entries: [], truncated: false }),
+  fsPrecheck: (_path: string) => D({ path: "", exists: false, repos: 0, sample: [] } as FolderPrecheck),
   cloneProject: (_url: string, _parent: string) => D({ ok: false, error: "unavailable in the demo" }),
   newProject: (_name: string, _parent: string) => D({ ok: false, error: "unavailable in the demo" }),
   gitCapability: () => D({ available: true } as GitCapability),
@@ -2530,7 +2780,8 @@ const demoApi: typeof realApi = {
   gitCommitStaged: (_root: string, _title: string, _body: string) => D(demo.gitActionUnavailable()),
   gitPush: (_root: string) => D(demo.gitActionUnavailable()),
   gitPull: (_root: string) => D(demo.gitActionUnavailable()),
-  gitFetch: (_root: string) => D(demo.gitActionUnavailable()),
+  gitReflogEnable: (_root: string) => D(demo.gitActionUnavailable()),
+  gitFetch: (_root: string, _remote?: string) => D(demo.gitActionUnavailable()),
   gitBranches: (_root: string) => D(demo.gitBranches()),
   // The demo has no real repo behind it; empty lists render as "none yet"
   // rather than as an error, which is the right shape for a showcase.
@@ -2538,8 +2789,12 @@ const demoApi: typeof realApi = {
   gitRemoteBranches: (_root: string, _remote: string) => D({ ok: true, remote: "", branches: [] as GitRemoteBranch[] }),
   gitTrackRemote: (_root: string, _ref: string, _switchTo: boolean) => D(demo.gitActionUnavailable()),
   gitTags: (_root: string) => D({ tags: [] as GitTag[] }),
-  gitReflog: (_root: string) => D({ entries: [] as GitReflogEntry[] }),
+  gitTagsOrigin: (_root: string) => D({ tags: [] as GitTagOrigin[] }),
+  gitStashFiles: (_root: string, _hash: string) => D({ files: [] as GitStashFile[] }),
+  gitReflog: (_root: string) => D({ entries: [] as GitReflogEntry[], reflogOff: false }),
   gitRepoStats: (_root: string, _days?: number) => D({ days: 30, commitsPerDay: 0, contributors: [], filesTouched: 0, linesChanged: 0, topContributors: [], hotspots: [], churn: [] } as RepoStats),
+  gitLastFetch: (_root: string) => D(null as GitLastFetch | null),
+  gitRangeCounts: (_root: string) => D({ tags: [], root: 0 } as GitRangeCounts),
   gitChangelog: (_root: string, _from?: string, _to?: string) => D({ from: "", to: "", sections: [] } as Changelog),
   gitSubmodules: (_root: string) => D({ submodules: [] as GitSubmodule[] }),
   gitSubmoduleAdd: (_root: string, _url: string, _path: string) => D(demo.gitActionUnavailable()),
@@ -2553,9 +2808,6 @@ const demoApi: typeof realApi = {
   gitBisectStart: (_root: string, _bad: string, _good: string) => D(demo.gitActionUnavailable()),
   gitBisectMark: (_root: string, _mark: "good" | "bad") => D(demo.gitActionUnavailable()),
   gitBisectReset: (_root: string) => D(demo.gitActionUnavailable()),
-  gitSearchCommits: (_root: string, _q: string, _author?: string, _since?: string) => D({ ok: false, entries: [], error: "not available in the demo" }),
-  gitGrep: (_root: string, _q: string, _opts: { caseSensitive?: boolean; wholeWord?: boolean; regex?: boolean }) => D({ ok: false, hits: [], error: "not available in the demo" }),
-  gitPickaxe: (_root: string, _q: string, _type?: "S" | "G") => D({ ok: false, entries: [], error: "not available in the demo" }),
   gitTagCreate: (_root: string, _name: string, _opts: { annotated?: boolean; message?: string; signed?: boolean; target?: string }) => D(demo.gitActionUnavailable()),
   gitTagDelete: (_root: string, _name: string) => D(demo.gitActionUnavailable()),
   gitTagPush: (_root: string, _name: string, _remote?: string) => D(demo.gitActionUnavailable()),
@@ -2578,7 +2830,7 @@ const demoApi: typeof realApi = {
   gitStashes: (_root: string) => D(demo.gitStashes()),
   gitTidy: (_root: string) => D({ root: "", base: "main", findings: [], error: "not available in the demo" }),
   gitCheckout: (_root: string, _name: string) => D(demo.gitActionUnavailable()),
-  gitBranchCreate: (_root: string, _name: string) => D(demo.gitActionUnavailable()),
+  gitBranchCreate: (_root: string, _name: string, _from?: string) => D(demo.gitActionUnavailable()),
   gitBranchDelete: (_root: string, _name: string, _force: boolean) => D(demo.gitActionUnavailable()),
   gitStashPush: (_root: string, _message: string) => D(demo.gitActionUnavailable()),
   gitStashApply: (_root: string, _index: number) => D(demo.gitActionUnavailable()),
@@ -2588,6 +2840,7 @@ const demoApi: typeof realApi = {
   gitStashToBranch: (_root: string, _index: number, _branch: string) => D(demo.gitActionUnavailable()),
   gitStashPartial: (_root: string, _paths: string[], _keepIndex?: boolean) => D(demo.gitActionUnavailable()),
   gitStashApplyOverwrite: (_root: string, _index: number) => D(demo.gitActionUnavailable()),
+  gitStashPutBack: (_root: string) => D(demo.gitActionUnavailable()),
   gitApplyHunk: (_root: string, _path: string, _staged: boolean, _action: "stage" | "unstage" | "discard", _hunk: DiffHunk) => D(demo.gitActionUnavailable()),
   gitConflictBlocks: (_root: string, _path: string) => D({ ok: false, blocks: [] as ConflictBlock[], error: "not available in the demo" }),
   gitResolveBlocks: (_root: string, _path: string, _choices: BlockChoice[], _stamp?: string) => D(demo.gitActionUnavailable()),
@@ -2615,17 +2868,20 @@ const demoApi: typeof realApi = {
   gitCherryPickAbort: (_root: string) => D(demo.gitActionUnavailable()),
   gitRevert: (_root: string, _hash: string) => D(demo.gitActionUnavailable()),
   gitAmendStaged: (_root: string, _title: string, _body: string) => D(demo.gitActionUnavailable()),
+  gitAmendInfo: (_root: string) => D(demo.gitActionUnavailable()),
   gitSquash: (_root: string, _oldest: string, _newest: string) => D(demo.gitActionUnavailable()),
   gitRebaseSteps: (_root: string, _base: string) => D(demo.gitActionUnavailable()),
   gitRebaseRun: (_root: string, _base: string, _steps: { action: string; hash: string; subject: string; newMessage?: string }[]) => D(demo.gitActionUnavailable()),
   gitCompare: (_root: string, _base: string, _other: string) => D(demo.gitActionUnavailable()),
   gitWorktreeRemove: (_root: string, _path: string, _force: boolean) => D(demo.gitActionUnavailable()),
+  gitWorktreeUnlock: (_root: string, _path: string) => D(demo.gitActionUnavailable()),
   gitWorktreeLeftovers: (_root: string, _paths: string[]) => D({ leftovers: [] as WorktreeLeftovers[] }),
   gitWorktreeRescue: (_root: string, _path: string, _paths: string[]) => D(demo.gitActionUnavailable()),
   gitWorktreeChown: (_root: string, _path: string) => D(demo.gitActionUnavailable()),
   dockerCapability: () => D({ available: true, version: "27.0.3" } as DockerCapability),
   dockerOverview: () => D(demo.dockerOverview()),
   dockerStats: () => D(demo.dockerStats()),
+  dockerLiveUrl: (): string | null => null,
   browse: (path: string) => D({ ok: false, path, parent: null, entries: [], more: 0, hiddenSkipped: 0, error: "the demo has no filesystem" } as BrowseReport),
   browseList: (path: string) => D({ ok: false, path, total: 0, entries: [], next: null, hiddenSkipped: 0, error: "the demo has no filesystem" } as BrowsePage),
   fsOp: () => D({ ok: false, error: "the demo has no filesystem" } as FsAnswer),
@@ -2660,10 +2916,11 @@ const demoApi: typeof realApi = {
   diskGrep: () => D({ ok: false, hits: [], files: 0, truncated: false, via: "", error: "the demo has no filesystem" } as GrepReport),
   dockerLogs: (id: string, _tail?: number) => D(demo.dockerLogs(id)),
   dockerDisk: () => D({ images: 0, containers: 0, volumes: 0, buildCache: 0, reclaimable: 0, orphans: [], volumes_: [], at: Date.now() } as DockerDisk),
-  dockerVolume: (name: string) => D({ name, bytes: null, mountedBy: [], lastWrite: null, worktrees: [] } as DockerVolumeDetail),
   dockerPeek: () => D({ ok: false, error: "the demo has no volumes to look inside" } as DockerPeek),
   dockerPruneCache: () => D({ ok: false, error: "the demo is read-only" } as DockerActionResult),
   dockerRemoveImages: () => D({ ok: false, error: "the demo is read-only" } as DockerActionResult),
+  dockerRemoveNetwork: () => D({ ok: false, error: "the demo is read-only" } as DockerActionResult),
+  dockerRemoveVolume: () => D({ ok: false, error: "the demo is read-only" } as DockerActionResult),
   dockerEnvDiff: () => D({ ok: false, error: "the demo has one of everything" }),
   // The demo has no daemon to follow: the viewer falls back to the snapshot,
   // which is exactly what it does when a real engine refuses a stream.
@@ -2716,6 +2973,11 @@ const demoApi: typeof realApi = {
   // nothing to wire, and an empty list is the truth rather than a placeholder.
   agents: () => D({ agents: [] as AgentProbe[] }),
   engines: (_fresh?: boolean | string) => D({ host: "demo", engines: [] as EnginesReport["engines"] }),
+  setupState: () => D({ setupDone: true, setupInProgress: false, setupAgent: "claude", tutorialSeen: "", projectOpen: true, sessionsSeen: true, hooksInstalled: false, homedir: "~" } as SetupState),
+  setupRepos: (_path: string) => D({ path: "", exists: false, repos: [], capped: false } as SetupRepos),
+  setupScanStart: () => D({ id: "demo", state: "failed", roots: [], folders: 0, current: "", repos: [], capped: null, startedAt: 0, elapsedMs: 0, skips: [], error: "not available in the demo" } as SetupScan),
+  setupScan: (_id: string) => D({ id: "demo", state: "failed", roots: [], folders: 0, current: "", repos: [], capped: null, startedAt: 0, elapsedMs: 0, skips: [], error: "not available in the demo" } as SetupScan),
+  setupScanStop: (_id: string) => D({ id: "demo", state: "stopped", roots: [], folders: 0, current: "", repos: [], capped: "person", startedAt: 0, elapsedMs: 0, skips: [] } as SetupScan),
   testEngine: (_engine: string) => D({ ok: true, ms: 1200 } as { ok: boolean; ms: number; error?: string }),
   agentConnect: (_id: string, _undo?: boolean) => D({ ok: false, error: "not available in the demo" }),
   budgets: () => D({ budgets: [], status: [], models: [] }),
@@ -2733,6 +2995,7 @@ const demoApi: typeof realApi = {
   dockerStart: (_id: string) => D(demo.dockerActionUnavailable()),
   dockerStop: (_id: string) => D(demo.dockerActionUnavailable()),
   dockerRestart: (_id: string) => D(demo.dockerActionUnavailable()),
+  dockerUnpause: (_id: string) => D(demo.dockerActionUnavailable()),
   dockerRm: (_id: string) => D(demo.dockerActionUnavailable()),
 
   // The demo has no GitHub behind it, and pretending otherwise would put a
@@ -2770,7 +3033,9 @@ const demoApi: typeof realApi = {
      be the one number on the page that is a fiction. `ok: false` draws nothing. */
   prSpend: (_r: string) => D({ ok: false, error: "not available in the demo", since: 0, seamDay: null, beforeSeamUsd: 0, branches: [], worktrees: [] } as RepoSpend),
   prLocate: (_repo: string) => D({ ok: false, error: "not available in the demo" }),
+  ghRepoLookup: (_repo: string, _fresh?: boolean) => D({ found: false, error: "unreachable" } as LookupAnswer),
   prDetail: (_root: string, number: number, _force?: boolean) => D(demo.prDetail(number)),
+  prReviewComment: (_root: string, _id: number) => D({ ok: false as boolean, error: "demo" } as { ok: boolean; comment?: { path: string; line: number | null; originalLine: number | null; inReplyToId: number | null }; error?: string }),
   prDiff: (_root: string, number: number, _force?: boolean) => D(demo.prDiff(number)),
   prAssetUrl: (raw: string) => raw,
   prFileTemp: (_r: string, _n: number, _p: string) => D({ ok: false as const, error: "not available in the demo" }),
@@ -2826,6 +3091,12 @@ const demoApi: typeof realApi = {
   launchFlagsSave: (_k: string, _m: unknown) => D({ ok: false, error: "not available in the demo", overrides: {} as Record<string, Record<string, string[]>> }),
   launchPermissionsSave: (_p: unknown) => D({ ok: false, error: "not available in the demo", mode: "default" as LaunchMode, deny: [...DEFAULT_LAUNCH_DENY] }),
   settingsRequests: () => D({ ok: true, requests: [] as SettingRequestView[] }),
+  cleanupAuto: () => D({ ok: true, entries: [] as AutoEntry[] }),
+  cleanupPlan: (_r: string, _p: number) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; plan?: CleanupPlan; error?: string }),
+  cleanupRun: (_r: string, _p: number, _i: string, _e: string[], _c: boolean) => D({ ok: false, error: "not available in the demo" } as Partial<CleanupReport> & { ok: boolean; error?: string }),
+  cleanupInventory: (_r: string, _p: { pr: number; branch: string }[]) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; rows?: { pr: number; items?: number; bytes?: number; unknown?: boolean }[]; error?: string }),
+  cleanupBuildCache: () => D({ ok: false, error: "not available in the demo" } as { ok: boolean; reclaimableBytes?: number; error?: string }),
+  cleanupBuildCachePrune: () => D({ ok: false, error: "not available in the demo" } as { ok: boolean; freedBytes?: number; error?: string }),
   settingsRequestDecide: (_id: string, _approve: boolean) => D({ ok: false, error: "not available in the demo" }),
   phoneAlerts: () => D({ ok: true, value: true }),
   agentsChangeWithoutAsking: () => D({ ok: true, trusted: false }),
@@ -2892,6 +3163,11 @@ const demoApi: typeof realApi = {
   jiraStatusUnits: (_f?: boolean) => D({ ok: true, spaces: [], source: "spaces" as const, counted: [] as string[] }),
   setJiraCounted: (_c: string[]) => D({ ok: false, error: "not available in the demo" }),
   jiraProjectStatuses: (_p: string) => D({ ok: true, statuses: [] as { id: string; name: string; kind: "open" | "done" | "other" }[] }),
+  jiraSpaces: () => D<JiraSpacesOut>({ ok: true, spaces: [] }),
+  editJiraSpaces: (_e: JiraSpacesEdit) => D({ ok: false as const, error: "not available in the demo" }),
+  jiraSpacePicker: (_q?: string) => D<JiraSpacePickerOut | { ok: false; error: string; throttled?: boolean }>({ ok: true, projects: [] }),
+  jiraSpaceTree: (_s: string, _o?: { fresh?: boolean; showDone?: boolean }) => D<JiraSpaceTreeOut>({ ok: false, error: "not available in the demo" }),
+  jiraEpicCards: (_e: string) => D<JiraEpicCardsOut>({ ok: false, error: "not available in the demo" }),
   jiraViews: () => D<JiraViews>({
     connected: true, site: "acme.example", current: "board:1",
     views: [{ id: "board:1", name: "ORBIT board", url: "", addedAt: 0 }], folders: [],
@@ -2949,6 +3225,7 @@ const demoApi: typeof realApi = {
   agentBoard: () => D({ ok: true, agents: demoLanternField(), chairs: [{ root: "/home/you/code/orbit", name: "orchestrator-orbit", kind: "claude", model: "sonnet", next: { engine: "opencode", model: "big-pickle" }, handedOff: true }], watch: { at: Date.now() - 6 * 60_000, flagged: 2, every: 15, on: true }, cacheTtlMinutes: 5 }),
   agentForget: (_name: string) => D({ ok: true, cleared: true }),
   seat: () => D({ ok: true, root: "/demo/orbit", live: false, seat: null, agent: null, doctrine: "", doctrineText: "", tasks: [], needs: [], models: [], defaultModel: "", field: [], lines: [], wokenAt: null, floorHours: 4, screen: "", reports: [], unread: 0 } as SeatAnswer),
+  engineModels: (_e: string) => D({ ok: true, models: [] as { id: string; label: string }[] }),
   seatOpen: (_r: string, _p?: string, _m?: string) => D({ ok: false, error: "not available in the demo" }),
   seatClose: (_r: string) => D({ ok: false }),
   seatChange: (_r: string) => D({ ok: false, error: "not available in the demo" }),
@@ -2958,10 +3235,13 @@ const demoApi: typeof realApi = {
   seatTaskDrop: (_r: string, _i: string) => D({ ok: false, error: "not available in the demo" }),
   seatNeedSettled: (_r: string, _i: string, _o?: string) => D({ ok: false, error: "not available in the demo" }),
   agentsBroadcast: (_t: string, _n?: string[]) => D({ ok: false, error: "not available in the demo" }),
+  namedAgents: () => D({ ok: true, result: { agents: [] as NamedAgentRow[] } }),
+  agentRead: (_n: string, _l?: number) => D({ ok: false, error: "not available in the demo" }),
+  agentStop: (_n: string) => D({ ok: false, error: "the demo has no agents to stop" }),
   seatAdopt: (_r: string, _s: string, _p: string, _w?: string) => D({ ok: false, error: "not available in the demo" }),
   seatReportDismiss: (_r: string, _i: number[]) => D({ ok: false, error: "not available in the demo" }),
   agentRules: (_r: string) => D({ ok: false, error: "not available in the demo" }),
-  agentRuleSet: (_f: import("../../../shared/agentRules.ts").RuleRequest) => D({ ok: false, error: "not available in the demo" }),
+  agentRuleSet: (_f: import("../../../shared/agentRules.ts").RuleRequest | import("../../../shared/agentRules.ts").RuleRemoveRequest) => D({ ok: false, error: "not available in the demo" }),
   agentRuleAnswer: (_id: string, _a: { setting: import("../../../shared/agentRules.ts").RuleSetting } | { dismiss: true }) => D({ ok: false, error: "not available in the demo" }),
   seatWake: () => D({ ok: true, hours: 4 }),
   seatWakeSave: (_h: number) => D({ ok: false, error: "not available in the demo" }),
@@ -2984,13 +3264,23 @@ const demoApi: typeof realApi = {
         },
       },
       rules: [],
-      ceiling: { write: "worktree" as const, network: false, commit: true, deny: [] as string[] },
-      workerDefault: { write: "worktree" as const, network: false, commit: false, deny: [] as string[] },
+      ceiling: { write: "worktree" as const, network: false, commit: true, docker: false, deny: [] as string[] },
+      workerDefault: { write: "worktree" as const, network: false, commit: false, docker: false, deny: [] as string[] },
       limits: { maxWorkers: 3, turnMinutes: 30, maxRetries: 1 },
     } as Policy,
   }),
   orchestrationSave: (_p: Policy | null, _root?: string) => D({ ok: false, error: "not available in the demo" }),
+  getFlow: (_root: string) => D({ ok: false, error: "not available in the demo", scope: "template" as const, root: "", flow: {} as Flow }),
+  putFlow: (_root: string, _flow: Flow) => D({ ok: false, error: "not available in the demo" }),
+  deleteFlow: (_root: string) => D({ ok: false, error: "not available in the demo" }),
   orchestrationState: () => D({ ok: true, rules: [] as PolicyRuleState[] }),
+  polarisSettings: (_root?: string) => D({ ok: false, error: "not available in the demo" }),
+  polarisSettingsSave: (_c: SettingsChange, _root?: string) => D({ ok: false, error: "not available in the demo" }),
+  polarisItems: (_root: string) => D({ ok: false, error: "not available in the demo" }),
+  polarisAct: (_root: string, _n: number, _b: ActionBody) => D({ ok: false, error: "not available in the demo" }),
+  polarisBeaconSend: (_root: string, _n: number, _b?: { reason?: string; paneId?: string }) => D({ ok: false, error: "not available in the demo" }),
+  polarisBeaconEdit: (_root: string, _n: number, _b: { reason?: string; text: string }) => D({ ok: false, error: "not available in the demo" }),
+  polarisBeaconDiscard: (_root: string, _n: number, _b?: { reason?: string }) => D({ ok: false, error: "not available in the demo" }),
   lanternSettings: () => D({ ok: true, nudge: true, minutes: 20, watch: true, watchMinutes: 15, cacheTtlMinutes: 5, min: 5, max: 180 }),
   lanternSettingsSave: (_f: object) => D({ ok: false, error: "not available in the demo" }),
   lanternTicket: (_c?: string) => D({ ok: false, error: "not available in the demo" }),
@@ -3001,6 +3291,8 @@ const demoApi: typeof realApi = {
   clickupBudget: () => D({ ok: true, limit: 100, used: 0, resetsInSec: 0, known: false }),
   clickupPrefs: () => D<{ ok: boolean; prefs?: ClickUpPrefs }>({ ok: false }),
   clickupSetPrefs: (_p: DeepPartial<ClickUpPrefs>) => D<{ ok: boolean; error?: string; prefs?: ClickUpPrefs }>({ ok: false, error: "the demo is read-only" }),
+  prViews: (_r: string) => D<{ ok: boolean; views?: PrView[]; saved?: boolean }>({ ok: true, views: [], saved: true }),
+  prSetViews: (_r: string, _v: PrView[]) => D<{ ok: boolean; views?: PrView[]; error?: string }>({ ok: false, error: "the demo is read-only" }),
   clickupView: (_i?: string, _f?: boolean) => D({ tasks: [], statuses: [], fields: [], at: 0 }),
   clickupAddView: (_u: string) => D({ ok: false, error: "not available in the demo" }),
   clickupRemoveView: (_i: string) => D({ ok: true }),
@@ -3029,6 +3321,7 @@ const demoApi: typeof realApi = {
     local: { branch, exists: false, ahead: 0, behind: 0, dirty: false, sync: "absent" as const },
   }),
   prRollup: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
+  prPinStates: (_p: string[]) => D({ ok: true, states: {} as Record<string, PinState> }),
   prRowDetails: (_r: string, _n: number[], _f?: number[]) => D({ ok: true, rows: {} }),
   prRefBranches: (_r: string, _k: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; key?: string; branches?: string[]; rows?: PrSummary[]; error?: string }),
   prPerson: (_r: string, _l: string, _f?: boolean) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; login?: string; authored?: PrSummary[]; asked?: PrSummary[]; more?: boolean; error?: string }),
@@ -3085,8 +3378,29 @@ const demoApi: typeof realApi = {
   // No linked pull requests in the demo: the fixtures have no GitHub graph
   // behind them, and an invented link is a link somebody would click.
   issuePrs: (_r: string, _n: number) => D({ ok: true, prs: [] }),
+  flightPlans: (_r?: string, _s?: string) => D({ ok: false, enabled: false, plans: [] as Record<string, unknown>[], error: "not available in the demo" }),
+  flightPlanRevision: (_id: string, _n: number) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; revision?: { n: number; planMd: string; createdAt: number; by: string }; error?: string }),
+  flightMockupUrl: (_id: string, _n: number) => "",
+  flightPlan: (_id: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; plan?: Record<string, unknown>; version?: number; run?: import("./flightPlan.ts").Run | null; error?: string }),
+  flightPlanNew: (_b: { root: string; title: string; request: string; visual: boolean; size?: string; taskId?: string; as?: string }) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; plan?: Record<string, unknown>; ticket?: string; error?: string }),
+  flightPlanPreflight: (_id: string, _cap?: number) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; run?: { id: string; state: string }; error?: string }),
+  flightPlanGo: (_id: string) => D({ ok: false, error: "not available in the demo" }),
+  flightPlanNoGo: (_id: string, _r: string) => D({ ok: false, error: "not available in the demo" }),
+  flightPlanLaunch: (_id: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; window?: string; worktree?: string; branch?: string; error?: string }),
+  flightRuns: (_r?: string) => D({ ok: false, runs: [] as import("./flightPlan.ts").Run[], error: "not available in the demo" }),
+  flightPreflightTarget: (_r: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; target?: PreflightTarget; error?: string }),
+  flightRunGo: (_id: string) => D({ ok: false, error: "not available in the demo" }),
+  flightFinding: (_r: string, _f: string, _a: string | null, _n: string) => D({ ok: false, error: "not available in the demo" }),
+  flightHold: (_r: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; held?: boolean; told?: number; error?: string }),
+  flightResume: (_r: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; held?: boolean; error?: string }),
+  flightRaiseBudget: (_u: number, _s: "day" | "week") => D({ ok: false, error: "not available in the demo" } as { ok: boolean; capUsd?: number; until?: number; error?: string }),
+  flightAnswer: (_p: string, _a: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string }),
+  settingAt: (_id: string, _r: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; value?: unknown; scopedSet?: boolean; error?: string }),
+  settingAtGlobal: (_id: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; value?: unknown; error?: string }),
+  settingAtSet: (_id: string, _v: unknown, _r: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; applied?: boolean; error?: string }),
   termAgentTicket: (_c: string, _p: string, _y: boolean, _t: string) =>
     D({ ok: false, error: "not available in the demo" }),
+  openShell: (_r: string) => D({ ok: false, error: "not available in the demo" }),
   tmuxStatus: () => D({ ok: false, bin: { available: false, source: "none", path: "", version: null, reason: "demo" }, capability: { available: false, reason: "demo" }, confMode: "append", override: "", overrideActive: false, broken: false, brokenReason: "", restoreEnabled: false, resumeMode: "lazy", prefix: "", terminal: "engine", source: "auto", lastCaptureAt: null, crashLoop: null }),
   tmuxConfSave: (_m: string, _o: string) => D({ ok: false, error: "not available in the demo" }),
   tmuxSettingsSave: (_f: object) => D({ ok: false, error: "not available in the demo" }),
@@ -3122,17 +3436,14 @@ const demoApi: typeof realApi = {
   machineProcess: (pid: number) => D({ pid, comm: "", cmd: "", cwd: null, ageSec: null, ancestry: [], env: [], error: "not available in the demo" }),
   machineEnv: (_p: number, _k: string) => D({ ok: false, error: "not available in the demo" }),
   machineUnlock: (_p: string) => D({ ok: false, error: "not available in the demo" }),
-  filesTree: (_r: string, rel = "") => D(demo.filesTree(rel)),
   filesRead: (_r: string, rel: string, _ref?: string) => D(demo.filesRead(rel)),
   /* No git and no disk here, so there is nothing to write a ref's copy out of.
      Said rather than answered with a path that does not exist: the caller opens
      an editor on whatever comes back. */
   filesTemp: (_r: string, _rel: string, _ref: string) =>
     D({ ok: false as const, error: "the demo has no checkout to read a branch from" }),
-  filesFind: (_r: string, q: string) => D(demo.filesFind(q)),
   filesExist: (_r: string, rels: string[]) => D({ ok: true, here: rels }),
   filesRefs: (_r: string) => D({ ok: true, local: ["main", "feat/checkout-rewrite"], remote: ["origin/main", "origin/release"], head: "main" }),
-  filesGrep: (_r: string, _q: string) => D({ ok: false, hits: [], files: 0, truncated: false, via: "", error: "not available in the demo" }),
   /* The demo has no machine to search — and saying so is the point: an empty
      result list would read as "your home directory is empty". */
   diskPlaces: () => D({ ok: false, home: "", roots: [], places: [], error: "the demo has no machine to search" }),

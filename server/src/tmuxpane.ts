@@ -17,6 +17,7 @@
 // thing to hand them.
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { agentWindowDrops, BROWSER_OFF_VAR } from "./browseraccess.ts";
 import { failed } from "./refused.ts";
 import { resolveTmuxBin, tmuxSocket, engineSocketArgs } from "./tmuxbin.ts";
 import { confPath, confHealth, ensureConf } from "./tmuxconf.ts";
@@ -78,89 +79,186 @@ export function engineSessionName(root: string): string {
  * a plain shell — a terminal that opens on "command not found" is worse than
  * one that opens somewhere unremarkable.
  */
-export function engineAttachArgv(root: string): string[] | null {
+export function engineAttachArgv(root: string, name = engineSessionName(root)): string[] | null {
   const bin = resolveTmuxBin();
   if (!bin) return null;
   if (!confHealth().ok) return null;
   ensureConf();
-  return [bin, ...engineSocketArgs(true), "-f", confPath(), "new-session", "-A", "-s", engineSessionName(root), "-c", root];
+  return [bin, ...engineSocketArgs(true), "-f", confPath(), "new-session", "-A", "-s", name, "-c", root];
 }
 
 /**
- * The docked console's own engine session.
+ * The engine window the docked console lives in.
  *
- * A SEPARATE session from the terminal view's, and the separation is the whole
- * function. Sharing one meant two clients attached to the same tmux session,
- * which tmux answers by mirroring: the console showed whatever the terminal was
- * showing, keystroke for keystroke, and both fought over the size. That was
- * reported as "the Docker console is a mirror of the Terminal".
- *
- * Attach-or-create like the other one, so the console you had is the console
- * you get back — and because it lives on the engine, it is still there after
- * the app is closed and reopened. That is what the console's "keep running"
- * button used to fake by typing `tmux` into the shell, on the user's own
- * server, with the user's own config.
+ * The console used to be a session of its own (`<checkout>-console`), and so
+ * did every bench tab. Both are WINDOWS of the one engine session now: the
+ * strip draws that session, and a window opened anywhere else is a tab nobody
+ * can see. `enginePanelArgv` is how a panel still gets a screen of its own.
  */
-export function engineConsoleArgv(root: string): string[] | null {
-  const base = engineAttachArgv(root);
-  if (!base) return null;
-  // Same argv with the session renamed. Built from the other one rather than
-  // repeated, so the socket, the config and the flags cannot drift apart.
-  const at = base.lastIndexOf("-s");
-  if (at < 0 || !base[at + 1]) return null;
-  const named = [...base];
-  named[at + 1] = `${named[at + 1]}-console`;
-  return named;
+export const CONSOLE_WINDOW = "console";
+
+/** The engine window a bench tab lives in, `<n>` clamped because the slot
+ *  arrives from a client. The name is also what `benchLive` reads back. */
+export function benchWindowName(slot: number): string {
+  const n = Math.min(Math.max(Math.floor(slot) || 1, 1), 99);
+  return `bench-${n}`;
 }
 
 /**
- * A bench tab's own engine session.
+ * The sessions this app makes that are NOT the engine session: an ephemeral
+ * VIEW of it, one per panel client.
  *
- * The floating bench is a third client on this machine's engine, after the
- * terminal view and the docked console, and it needs the same thing they each
- * needed: a session nobody else is attached to. Two clients on one tmux session
- * mirror each other — that is not a bug to work around, it is what tmux is for,
- * and it is the wrong answer here twice over. The bench would show whatever the
- * terminal view is showing, and the two would fight over the size, which on
- * this machine has meant real sessions being resized under real work.
+ * A session group is the only way two clients can look at two windows of one
+ * session: the windows (and the processes in them) are shared, but each
+ * session in the group has its own current window. Without it the second
+ * client either shows the first one's window or moves it — two clients on one
+ * session mirror each other, which is the report this app already has.
  *
- * One session per TAB rather than one per bench, keyed by a small slot number
- * the client keeps. That is what makes a tab survive: close the app, open it
- * again, and tab 2 attaches to `<checkout>-bench2`, still running whatever it
- * was running. The slot is clamped by the caller before it ever reaches a
- * session name.
+ * So a panel joins a group of the engine session instead of owning a session.
+ * The view is never restored, never landed on, and dies with the pty that made
+ * it — see `enginePanelArgv`.
  */
-export function engineBenchArgv(root: string, slot: number, runs?: string[] | null, env?: Record<string, string>): string[] | null {
-  const base = engineAttachArgv(root);
-  if (!base) return null;
-  const at = base.lastIndexOf("-s");
-  if (at < 0 || !base[at + 1]) return null;
-  const n = Math.min(Math.max(Math.floor(slot) || 1, 1), 99);
-  const named = [...base];
-  named[at + 1] = `${named[at + 1]}-bench${n}`;
-  /*
-   * The session's own command, when the tab is for something in particular.
-   *
-   * tmux takes it as argv — no shell, no quoting, nothing interpreted — so an
-   * editor or an agent CLI becomes the process tmux is holding. That is what
-   * makes a bench tab survive the window: `-A` reattaches to it next time,
-   * still running, instead of starting a second one beside it.
-   *
-   * Ignored on reattach, which is tmux's own rule and the right one here: the
-   * session that exists wins over the command we would have started.
-   */
-  /* Variables for the session's first window, `-e` because a pane inherits
-     the tmux SERVER's environment, not the client's — see engineWindowRunning.
-     Ignored on reattach with the command, by the same rule. */
-  const withEnv = [...named, ...Object.entries(env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`])];
-  return runs && runs.length ? [...withEnv, ...runs] : withEnv;
+const VIEW_SESSION = /^agx-view-\d+-[a-z0-9]+$/;
+export const isPanelViewSession = (n: string): boolean => VIEW_SESSION.test(n);
+
+/** A window of the engine session, addressed by tmux's own id: a name is
+ *  matched by prefix and would let `bench-1` be `bench-19`. */
+export interface EngineWindowRef { windowId: string }
+
+/** One row per window of a session, with whether every pane in it is dead. */
+function sessionWindows(session: string): { id: string; name: string; dead: boolean }[] {
+  const r = tmuxSync(["list-panes", "-s", "-t", `=${session}:`, "-F", "#{window_id}\t#{window_name}\t#{pane_dead}"]);
+  if (!r.ok) return [];
+  const by = new Map<string, { id: string; name: string; dead: boolean }>();
+  for (const line of r.stdout.split("\n")) {
+    const [id = "", name = "", dead = ""] = line.split("\t");
+    if (!id.startsWith("@")) continue;
+    const row = by.get(id) ?? { id, name, dead: true };
+    row.dead = row.dead && dead === "1";
+    by.set(id, row);
+  }
+  return [...by.values()];
 }
 
-/** The session name a bench tab attaches to, for the reads that ask what is
- *  still alive. Derived from the argv builder above rather than spelled twice. */
-export function benchSessionName(root: string, slot: number): string {
-  const n = Math.min(Math.max(Math.floor(slot) || 1, 1), 99);
-  return `${engineSessionName(root)}-bench${n}`;
+/**
+ * Make sure this checkout's engine session holds the window `name`, and hand
+ * back its id.
+ *
+ * The window is the panel's home, so the tab that was already working is the
+ * tab that comes back. A window whose command has ENDED is ended here instead:
+ * an attach reattaches to whatever holds the name, corpse included, and the
+ * next open would show a dead pane rather than start the editor again (the
+ * bench already does this for its dead windows in `benchLive`).
+ *
+ * Synchronous because the pty that will attach to it is built inside one
+ * synchronous pass — see terminal.ts — the same reason `readerSessionState` is.
+ */
+export function ensurePanelWindow(
+  root: string,
+  name: string,
+  o: { runs?: string[] | null; env?: Record<string, string>; cwd?: string } = {},
+): EngineWindowRef | null {
+  const clean = engineWindowName(name);
+  if (!clean) return null;
+  const session = engineSessionName(root);
+  if (!validSessionName(session)) return null;
+  if (!resolveTmuxBin() || !confHealth().ok) return null;
+  ensureConf();
+  const mine = sessionWindows(session).filter((w) => w.name === clean);
+  const live = mine.find((w) => !w.dead);
+  if (live) return { windowId: live.id };
+  for (const w of mine) tmuxSync(["kill-window", "-t", w.id]);
+  const shape = [
+    "-P", "-F", "#{window_id}",
+    "-c", o.cwd ?? root,
+    "-n", clean,
+    // Variables for the window's panes: a pane inherits the tmux SERVER's
+    // environment, not the one this process has — see engineWindowOutcome.
+    ...Object.entries(o.env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
+    /*
+     * The window's own command, when the tab is for something in particular.
+     * tmux takes it as argv — no shell, nothing interpreted — so the editor or
+     * the agent becomes the process holding the pane, and the next attach
+     * finds it still running.
+     */
+    ...(o.runs ?? []),
+  ];
+  const there = tmuxSync(["has-session", "-t", `=${session}`]).ok;
+  /* The first window is the run: `new-session` without a command would leave a
+     stray shell in a session nobody asked for — the note above
+     engineWindowOutcome spells out what that cost. */
+  const out = there
+    ? tmuxSync(["new-window", "-d", "-t", `=${session}:`, ...shape])
+    : tmuxSync(["new-session", "-d", "-s", session, ...shape]);
+  if (!out.ok) return null;
+  const windowId = (out.stdout.split("\n")[0] ?? "").trim();
+  if (!windowId.startsWith("@")) return null;
+  if (!there) {
+    /* A SESSION THIS PANEL MADE LEAVES A SHELL CURRENT.
+     *
+     * The session's only window is this panel's, and a terminal view attaching
+     * later lands on the session's CURRENT window — the console, or a bench
+     * tab — which is two clients on one window and the mirroring this whole
+     * design exists to avoid. So the checkout's session gets the shell window a
+     * terminal would have opened, and leaves it current; the panel reads its
+     * own window through its own group. */
+    const shell = tmuxSync(["new-window", "-d", "-P", "-F", "#{window_id}", "-t", `=${session}:`, "-c", root]);
+    const shellId = (shell.stdout.split("\n")[0] ?? "").trim();
+    if (shell.ok && shellId.startsWith("@")) tmuxSync(["select-window", "-t", `=${session}:${shellId}`]);
+    // Written down now rather than at the next sweep: a session that exists
+    // for eight seconds before anything records it is one a reboot would not
+    // bring back. Bookkeeping may never fail the real operation.
+    captureNow();
+  }
+  return { windowId };
+}
+
+/**
+ * The argv that shows ONE engine window in a panel's own pty.
+ *
+ * `new-session -t` makes a session in the engine's GROUP: same windows, same
+ * running processes, its own current window. That is what the console and a
+ * bench tab need, and it is what a second session used to be for. The group is
+ * what lets the windows obey the rule — one session per checkout — without the
+ * mirroring a second client on the same session causes.
+ *
+ * `select-window` BEFORE `attach`, and by window ID: a new group starts on the
+ * engine's current window (the terminal view's), and a window NAME is matched
+ * by prefix, so `bench-1` would select `bench-19` on a busy day.
+ *
+ * The `client-attached` hook is what makes the view ephemeral. Set any earlier,
+ * `destroy-unattached` kills the session before the client arrives; set any
+ * later, it needs a second call that a crash can skip. This way the view goes
+ * when the pty does.
+ */
+export function enginePanelArgv(root: string, window: string, windowId: string): string[] | null {
+  const clean = engineWindowName(window);
+  if (!clean || !/^@\d+$/.test(windowId)) return null;
+  const engine = engineSessionName(root);
+  const base = engineAttachArgv(root);
+  if (!base) return null;
+  const at = base.indexOf("new-session");
+  if (at < 0) return null;
+  /* Ours to make and ours to end: the engine's own socket, its config and its
+     flags, taken from the attach above so the two cannot drift apart. */
+  const view = `agx-view-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+  return [
+    ...base.slice(0, at),
+    "new-session", "-d", "-t", `=${engine}`, "-s", view, "-c", root,
+    ";", "set-hook", "-t", view, "client-attached", `set-option -t ${view} destroy-unattached on`,
+    ";", "select-window", "-t", `=${view}:${windowId}`,
+    ";", "attach", "-t", `=${view}`,
+  ];
+}
+
+/** The docked console's view of the engine: see `enginePanelArgv`. */
+export function engineConsoleArgv(root: string, windowId: string): string[] | null {
+  return enginePanelArgv(root, CONSOLE_WINDOW, windowId);
+}
+
+/** A bench tab's view of the engine: see `enginePanelArgv`. */
+export function engineBenchArgv(root: string, slot: number, windowId: string): string[] | null {
+  return enginePanelArgv(root, benchWindowName(slot), windowId);
 }
 
 /**
@@ -508,6 +606,17 @@ export async function engineWindowOutcome(
    * and returned with `reused: true` instead of a new one being made.
    */
   reuse = false,
+  /**
+   * THIS WINDOW IS THE PERSON'S OWN TERMINAL, not an agent the app started.
+   *
+   * Bench tabs, the console, and a tab somebody opened by hand keep exactly the
+   * environment their shell would have had: they are the person working. Every
+   * other window through here runs an agent, and the one door decides its
+   * browser credential — a token in `env` is the one it was handed, and without
+   * one it gets none of the credential variables at all, never the server's
+   * inherited machine token (`agentWindowDrops`).
+   */
+  person = false,
 ): Promise<EngineWindow> {
   /* One place that says no, so the reason is written down the same way for all
      of them: returned to the button that asked, and logged once so the log and
@@ -555,12 +664,24 @@ export async function engineWindowOutcome(
    * nothing at all, silently. `has-session` costs one more call and cannot lie.
    */
   const clean = engineWindowName(name);
+  /* An agent window with nothing to run is `env -u …` alone: it opens and
+     exits at once. No caller asks for that, and one that does is a bug with a
+     window attached, so it is refused here rather than in each caller. */
+  if (!person && argv.length === 0) return fail("an agent window was asked for with no command to run");
+  /* The one door, here rather than at every caller: a caller that forgets is
+     still covered. See `agentWindowDrops`. A window handed no credential is
+     marked off, because the environment alone cannot tell it from one that was
+     given nothing — and the supplied CLI would otherwise fall back to the
+     person's token file. */
+  const given = person || env?.AGENTGLASS_TOKEN || env?.[BROWSER_OFF_VAR] ? env : { ...env, [BROWSER_OFF_VAR]: "1" };
+  const drops = person ? [] : agentWindowDrops(given);
   /* Everything that describes the window, built once: whichever tmux command
      ends up making it takes the same flags in the same order. */
   const shape = [
     "-P", "-F", "#{pane_id}\t#{window_id}", "-c", cwd,
     ...(clean ? ["-n", clean] : []),
-    ...Object.entries(env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
+    ...Object.entries(given ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
+    ...(drops.length ? ["env", ...drops.flatMap((v) => ["-u", v])] : []),
     ...argv,
   ];
 
@@ -614,7 +735,7 @@ export async function engineWindowOutcome(
     /* The size goes with tmux's own words because the one refusal that depends
        on it, "command too long", does not say how long. Arguments plus the
        variables for the window: those are what tmux packs into one message. */
-    const bytes = [...argv, ...Object.entries(env ?? {}).map(([k, v]) => `${k}=${v}`)].reduce((n, a) => n + Buffer.byteLength(a) + 1, 0);
+    const bytes = [...argv, ...Object.entries(given ?? {}).map(([k, v]) => `${k}=${v}`), ...(drops.length ? ["env", ...drops.flatMap((v) => ["-u", v])] : [])].reduce((n, a) => n + Buffer.byteLength(a) + 1, 0);
     return fail(`tmux refused the command: ${said || "it exited without saying why"} (${Math.max(1, Math.ceil(bytes / 1024))} KB)`);
   }
   /* Write it down straight away rather than waiting for the sweep. A session
@@ -666,15 +787,26 @@ export async function engineWindowRunning(
  */
 export async function engineSplitRunning(
   root: string, cwd: string, argv: string[],
+  env?: Record<string, string>, person = true,
 ): Promise<{ paneId: string } | null> {
   const session = engineSessionName(root);
   if (!validSessionName(session)) return null;
+  if (!person && argv.length === 0) return null;
   ensureConf();
   const there = await tmux(["has-session", "-t", `=${session}`]);
   // Nothing to split. The caller opens a window instead — a refusal here is not
   // a reason to leave a press with no answer.
   if (!there.ok) return null;
-  const out = await tmux(["split-window", "-h", "-P", "-F", "#{pane_id}", "-t", `=${session}:`, "-c", cwd, ...argv]);
+  /* The same door as `engineWindowOutcome`, because this is a second way to
+     create an agent pane: a split gets the server's environment like any other
+     window. No agent split today (`terminal.ts` passes a person), so this is
+     what keeps the next one from being the hole. */
+  const given = person || env?.AGENTGLASS_TOKEN || env?.[BROWSER_OFF_VAR] ? env : { ...env, [BROWSER_OFF_VAR]: "1" };
+  const drops = person ? [] : agentWindowDrops(given);
+  const out = await tmux(["split-window", "-h", "-P", "-F", "#{pane_id}", "-t", `=${session}:`, "-c", cwd,
+    ...(person ? [] : Object.entries(given ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`])),
+    ...(drops.length ? ["env", ...drops.flatMap((v) => ["-u", v])] : []),
+    ...argv]);
   if (!out.ok) return null;
   const paneId = (out.stdout.split("\n")[0] ?? "").trim();
   return paneId.startsWith("%") ? { paneId } : null;
@@ -694,47 +826,6 @@ export function engineWindowName(s: unknown): string | null {
  *  one here and `paneCommand` in tmuxlayout.ts both print them — so a reader
  *  of `#{pane_start_command}` can tell the wrapper from a person's own `sh`. */
 export const KEPT_MARK = "[agentglass] the CLI exited";
-
-export function newSessionArgv(name: string, cwd: string, argv: string[]): string[] {
-  const quoted = argv.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ");
-  const cmd = `${quoted}; printf '\\n[agentglass] the CLI exited (%s). This pane is kept for inspection.\\n' "$?"; exec sleep 86400`;
-  return [
-    "new-session", "-d",
-    "-s", name,
-    "-c", cwd,
-    // A generous fixed size. The pane is never shown as a terminal in the app —
-    // the chat is rendered from the transcript — but Claude Code lays its TUI out
-    // to the pane width, and a narrow pane makes the text it writes to the
-    // transcript no different while making an attached human's view miserable.
-    "-x", "200", "-y", "50",
-    // Run by `sh`, explicitly, rather than handed to tmux as a bare string.
-    //
-    // A bare string is executed with the *user's login shell*, and `cmd` is
-    // POSIX: `$?`, `exec`, `;`. On a machine whose shell is fish that is a
-    // syntax error — "In fish, please use $status" — so the command died
-    // instantly, the session went with it, and the tmux server exited leaving
-    // an orphaned socket behind. What the chat then reported was "the pane
-    // never became ready in 45s" with an empty screen under it, because by the
-    // time anything looked there was nothing left to look at. Nothing about
-    // that message points at a shell.
-    //
-    // The pane is ours, not a place anybody types: `sh` is the right shell for
-    // it whatever the user has chosen for themselves.
-    "sh", "-c", cmd,
-  ];
-}
-
-export async function startPane(name: string, cwd: string, argv: string[]): Promise<TmuxResult> {
-  if (!validPaneName(name)) return { ok: false, stdout: "", stderr: "invalid pane name" };
-  // The one call in this module that CREATES something. Everything else asks
-  // questions a missing server answers with "no". A test that reached here
-  // without redirecting the socket would start a real `claude` in a real pane
-  // on the developer's own tmux, so it is refused rather than trusted.
-  if (IS_TEST && !process.env.AGENTGLASS_TMUX_SOCKET) {
-    return { ok: false, stdout: "", stderr: "refusing to start a pane in tests without AGENTGLASS_TMUX_SOCKET" };
-  }
-  return tmux(newSessionArgv(name, cwd, argv));
-}
 
 export async function killPane(name: string): Promise<void> {
   if (!validPaneName(name)) return;

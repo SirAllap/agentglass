@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { withoutAuthor, authorLeftOutHint } from "../src/lib/reviewerPick.ts";
+import { withoutAuthor } from "../src/lib/reviewerPick.ts";
 
 const opt = (value: string) => ({ value, label: value });
 
@@ -14,14 +14,12 @@ describe("who a pull request can ask for a review", () => {
     expect(withoutAuthor([opt("ada"), opt("sam")], "").length).toBe(2);
   });
 
-  test("the hint says why only when the person at the keys opened it and would have been listed", () => {
-    expect(authorLeftOutHint("ada", true, ["ada", "sam"])).toContain("You opened this pull request");
-    expect(authorLeftOutHint("ada", false, ["ada", "sam"])).toBeUndefined();
-    expect(authorLeftOutHint("ada", true, ["sam"])).toBeUndefined();
-  });
-
   test("the reviewers picker applies it", async () => {
-    const src = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
-    expect(src).toContain("options={withFrequent(withoutAuthor([...reviewedOptions, ...rest], d.author), loadUse())}");
+    const src = await Bun.file(new URL("../src/components/PrAskPicker.tsx", import.meta.url)).text();
+    expect(src).toContain("mode, author: d.author, roster,");
+    /* The author's own row says why it is greyed (askView), so the header line that said it again is gone. */
+    expect(src).not.toContain("authorLeftOutHint(");
+    const who = await Bun.file(new URL("../src/lib/prAskWho.ts", import.meta.url)).text();
+    expect(who).toContain("withoutAuthor(i.people.map((p) => ({ value: p.login })), reviewing ? i.author : undefined)");
   });
 });

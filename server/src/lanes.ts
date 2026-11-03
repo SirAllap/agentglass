@@ -16,6 +16,7 @@
  *     never falls through to the visible tab (browserdrive.ts, askOnce): an
  *     agent that lost its lane must not start clicking in the person's window.
  */
+import { foldWorkerName } from "../../shared/workerContainer.ts";
 
 export interface Lane {
   id: string;
@@ -76,11 +77,25 @@ export const laneKnown = (id: unknown): boolean => typeof id === "string" && tab
  * caller that names nobody (the MCP with no identity, a hand-written client)
  * is "cannot tell" and allowed. Self-asserted, so forensics for accidents
  * between cooperating agents, not authentication.
+ *
+ * `ownedOnly` is the credential's door: a lane records the principal that made
+ * it, and a lane with no `as` was made by a caller this relay cannot place —
+ * the person's side. It is refused here under no spelling and no `force`,
+ * because the credential is the one thing in the request the caller cannot
+ * write.
  */
-export function laneRefusal(id: string, as: unknown, force = false): string | null {
+export function laneRefusal(id: string, as: unknown, force = false, ownedOnly = false): string | null {
   const l = table.get(id);
   if (!l) return `no lane called ${id} (it was closed, or it never existed) — \`lane list\`, or \`lane new\``;
-  if (!force && typeof as === "string" && as && l.as && as !== l.as) {
+  if (ownedOnly) {
+    /* A credential's principal is compared under the one fold, on both sides:
+       `Alba` and `alba` are one worker, and the lane table is where that used
+       to disagree with the page registry. */
+    if (typeof as === "string" && as && typeof l.as === "string" && foldWorkerName(l.as) === foldWorkerName(as)) return null;
+    return `lane ${id} was not opened by this credential: a credential minted for an agent drives only the lanes `
+      + `that credential opened (\`lane list\`), and a lane with no identity is the person's. Open your own with \`lane new\`.`;
+  }
+  if (!force && typeof as === "string" && as && l.as && foldWorkerName(l.as) !== foldWorkerName(as)) {
     return `lane ${id} was opened by ${l.as}, not ${as} — open your own with \`lane new\`, or pass --force if you mean it`;
   }
   return null;
@@ -94,7 +109,16 @@ export function touchLane(id: unknown): void {
 
 /** Every lane, or only the ones `as` opened. A caller that names nobody sees all. */
 export const listLanes = (as?: string): Lane[] =>
-  [...table.values()].filter((l) => !as || !l.as || l.as === as).map((l) => ({ ...l }));
+  [...table.values()]
+    .filter((l) => !as || !l.as || foldWorkerName(l.as) === foldWorkerName(as))
+    .map((l) => ({ ...l }));
+
+/** The lanes this principal made, and only those: an ownerless lane (made by a
+ *  caller with no identity) and another name's lane are both the person's. */
+export const listOwnedLanes = (principal: string): Lane[] =>
+  [...table.values()]
+    .filter((l) => typeof l.as === "string" && foldWorkerName(l.as) === foldWorkerName(principal))
+    .map((l) => ({ ...l }));
 
 export const isLaneId = (id: unknown): id is string => typeof id === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(id);
 
@@ -109,7 +133,9 @@ export async function openLane(
   /* Reserved before the window exists, so two agents asking in the same breath
      cannot both squeeze under the cap. */
   const now = Date.now();
-  const lane: Lane = { id, ...(as ? { as } : {}), container, ...(name ? { name } : {}), created: now, lastAsk: now };
+  /* A lane in the shared container is the person's: the CLI sends `as` for it
+     too, and recording that name made it look like the agent's own lane. */
+  const lane: Lane = { id, ...(as && container !== "shared" ? { as } : {}), container, ...(name ? { name } : {}), created: now, lastAsk: now };
   table.set(id, lane);
   const made = await deps.manage({ make: id, container, ...(name ? { name } : {}) });
   if (!made.ok) {
@@ -126,8 +152,8 @@ export async function openLane(
   return { ok: true, lane: { ...lane } };
 }
 
-export async function closeLane(id: string, as?: string, force = false): Promise<{ ok: boolean; error?: string }> {
-  const refused = laneRefusal(id, as, force);
+export async function closeLane(id: string, as?: string, force = false, ownedOnly = false): Promise<{ ok: boolean; error?: string }> {
+  const refused = laneRefusal(id, as, force, ownedOnly);
   if (refused) return { ok: false, error: refused };
   table.delete(id);
   missingSince.delete(id);

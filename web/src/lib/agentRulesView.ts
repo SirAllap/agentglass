@@ -11,7 +11,7 @@
  * name, everything else reads "Run <command>" or "Use <tool>". A rule that
  * needs a better name than that is a rule whose action key should say it.
  */
-import { BASE_PROJECT, MODE_ACTION, decide, primaryInput, shellSegments, type AgentRule, type RuleSetting } from "../../../shared/agentRules.ts";
+import { BASE_PROJECT, MODE_ACTION, decide, primaryInput, shellSegments, type AgentRule, type RuleRemoveRequest, type RuleRequest, type RuleSetting } from "../../../shared/agentRules.ts";
 import type { LaunchMode } from "../../../shared/launchModes.ts";
 import type { PhName } from "../components/agents/phosphor.tsx";
 
@@ -170,10 +170,12 @@ export function ruleTotals(v: { base: readonly unknown[]; learned: readonly unkn
 /** The base rules in the order the design lists them: the patterns as stored, the permission mode last. */
 export const baseOrder = (base: readonly AgentRule[]): AgentRule[] => [...base.filter((r) => r.action !== MODE_ACTION), ...base.filter((r) => r.action === MODE_ACTION)];
 
-/* ── the permission mode, as the design's three words ─────────────────── */
+/* ── the permission mode, as the design's words ───────────────────────── */
 
+/** Every launch mode has a button: the base rule can hold any of the four (Settings offers all of them),
+ *  and a control with none lit says nothing about what is in force. */
 export const MODE_CHOICES: readonly { mode: LaunchMode; word: string }[] = [
-  { mode: "default", word: "Ask" }, { mode: "auto", word: "Auto" }, { mode: "acceptEdits", word: "Edits" },
+  { mode: "default", word: "Ask" }, { mode: "auto", word: "Auto" }, { mode: "acceptEdits", word: "Edits" }, { mode: "bypassPermissions", word: "Bypass" },
 ];
 
 /* ── the first-run line ───────────────────────────────────────────────── */
@@ -224,3 +226,50 @@ export function rowRequest(rule: AgentRule, setting: RuleSetting) {
     ...(rule.source === "chat" || rule.source === "always-allow" ? { source: rule.source } : null),
   };
 }
+
+/**
+ * A name a person typed for a new rule, as the store's action key: `Ship code`
+ * → `ship.code`. "" when the name cannot be a key, which is what the form says
+ * instead of writing a rule named something it did not save.
+ */
+export function actionKeyOf(name: string): string {
+  const key = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, ".").replace(/^\.+|\.+$/g, "").slice(0, 80);
+  return /^[a-z][a-z0-9.]{0,79}$/.test(key) ? key : "";
+}
+
+/**
+ * A rule written by hand on a card, as `POST /agent-rules` takes it: the card's
+ * own project, or every project for the base card. An empty name sends no
+ * action and the server names the rule from the pattern.
+ */
+export function newRuleRequest(root: string, pattern: string, name: string, setting: RuleSetting): RuleRequest {
+  const action = actionKeyOf(name);
+  return { root, match: pattern.trim(), setting, ...(action ? { action } : null) };
+}
+
+/* ── full access for one repo ─────────────────────────────────────────── */
+
+/**
+ * What "Full access for this repo" writes, and what "Back to default" takes
+ * out: every tool, and the force push, which otherwise asks whatever allows
+ * `git push`. A narrower rule — a base Never, a learned one — still wins.
+ */
+export const FULL_ACCESS_RULES: readonly string[] = ["Bash", "Edit", "Write", "Bash(git push --force-with-lease:*)"];
+
+/** The four writes, as `POST /agent-rules` takes them, in that project only. */
+export const fullAccessRequests = (root: string): RuleRequest[] =>
+  FULL_ACCESS_RULES.map((match) => ({ root, match, setting: "allow" }));
+
+/** The four removals, through the same door: exactly these patterns, nothing else. */
+export const fullAccessRemovals = (root: string): RuleRemoveRequest[] =>
+  FULL_ACCESS_RULES.map((match) => ({ root, match, remove: true }));
+
+/** Is the option already on: all four in force as allow, none of them waiting for a click. */
+export function fullAccessOn(learned: readonly AgentRule[]): boolean {
+  return FULL_ACCESS_RULES.every((match) => learned.some((r) => r.match === match && r.setting === "allow" && !r.pending));
+}
+
+/** The projects the Agents screen's picker offers: the open ones, then any with a coordinator, then any that
+ *  only has live sessions (a cockpit opened on one project still has agents running in another). */
+export const pickerProjects = (open: readonly string[], chairRoots: readonly string[], rows: readonly { project?: string; gone?: boolean }[]): string[] =>
+  [...new Set([...open, ...chairRoots, ...rows.filter((r) => !r.gone && r.project).map((r) => r.project!)])];

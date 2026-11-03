@@ -8,7 +8,7 @@
  * the first open of it is 15 seconds old, or as soon as the window is hidden.
  *
  * The ids are this file's own names (`view:git`, `settings:about`,
- * `panel:stats`, `machine:ports`) and never a title, a path or anything typed.
+ * `panel:skills`, `machine:ports`) and never a title, a path or anything typed.
  * What it does not count: the bench, the Git modals and the dashboard's own
  * cards. Those are the next family to add if the numbers say they matter.
  */

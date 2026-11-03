@@ -241,7 +241,7 @@ export type QuotaWindow = {
 };
 
 export type ProviderUsage = {
-  provider: "anthropic" | "codex" | "antigravity";
+  provider: "anthropic" | "codex" | "opencode" | "antigravity";
   /** How the provider is named on screen. */
   label: string;
   available: boolean;
@@ -258,6 +258,24 @@ export type ProviderUsage = {
    *  row reads. Label and plan are the plugin's user-chosen words, never an
    *  email or an id. */
   account?: { label: string; plan: string; active: boolean };
+  /** Where the numbers come from, in the provider's own words. OpenCode Go says
+   *  "this PC": its windows are computed from the turns agentglass ran here,
+   *  which under-read the console's own count. */
+  source?: string;
+  /** The console's reading, when the person asked for it. Never the main
+   *  number: it is a calibration line under the local ones. */
+  calibration?: { at: number; windows: QuotaWindow[] };
+  /** Tokens per UTC day from the same recorded steps, newest last. */
+  daily?: { day: string; tokens: number }[];
+  /** A dollar total when the provider has numbers but no quota windows — the
+   *  per-model totals from the engine's own stats. Never a substitute for a
+   *  window: the chip names it as a spend, with the span it covers. */
+  spend?: { usd: number; window: string };
+  /** Whether a console key is stored. Set/unset only: the key itself never
+   *  travels to a browser. */
+  usageKey?: boolean;
+  /** Why the last console read failed, when one did: a sentence, never a number. */
+  usageNote?: string;
 };
 
 export interface SkillUsage {
@@ -445,6 +463,27 @@ export interface TmuxWindow {
    */
   cols?: number;
   rows?: number;
+  /**
+   * The window's process has exited and tmux kept the pane (`remain-on-exit
+   * failed`): a corpse with a status line. `exit` is the status it left and
+   * `diedAt` when, in ms. Read off the active pane in the call that already
+   * lists the windows; absent while the pane is alive.
+   */
+  dead?: boolean;
+  exit?: number;
+  diedAt?: number;
+  /**
+   * Rebuilt by the last restore after a reboot and not yet acted on. The pane
+   * is a plain shell with the old scrollback; nothing was started for it.
+   * `was` names the agent the pane was running before (its title), `resume`
+   * the conversation id a Resume would continue, and `restoredAt` stamps the
+   * restore so a dismissal can never outlive the next one. All cleared by
+   * the `restored` command (Resume, Plain shell, Not now).
+   */
+  restored?: boolean;
+  was?: string;
+  resume?: string;
+  restoredAt?: number;
 }
 
 /**
@@ -514,7 +553,7 @@ export type PtyServerFrame =
    * where there is no TIOCSWINSZ to make. `engine` says the shell is the app's
    * own tmux, whose `tmux` frame with the window list follows within a sweep.
    */
-  | { t: "ready"; mode: "pty" | "pipe"; shell: string; cwd: string; resize: boolean; engine?: boolean; pane?: { cols: number; rows: number } }
+  | { t: "ready"; mode: "pty" | "pipe"; shell: string; cwd: string; resize: boolean; engine?: boolean; noTmux?: boolean; pane?: { cols: number; rows: number } }
   /**
    * The window changed size under an attach that is already open.
    *
@@ -544,7 +583,19 @@ export type PtyServerFrame =
    */
   | {
       t: "tmux"; active: boolean; windows: TmuxWindow[]; panes: TmuxPane[]; session?: string | null;
+      /**
+       * The pane tmux has selected in the window on screen — the one this
+       * client is looking at, split or not.
+       *
+       * `panes` is geometry to choose between, so it is empty for a window that
+       * is not split. This is identity, and it is reported either way: a tab is
+       * one pane, and the bar over a worker's tab looks its row up in
+       * `/agents/named` by this id.
+       */
+      pane?: string;
       prefix?: string[]; client?: { cols: number; rows: number } | null;
+      /** The tmux socket this shell is on; quoted by the "Can't reach tmux" card. */
+      socket?: string;
       /**
        * Every session on this socket with a window in it.
        *
@@ -553,7 +604,7 @@ export type PtyServerFrame =
        * it takes somebody's own four windows off the screen. This is what lets
        * the strip OFFER the others instead: the person chooses.
        */
-      sessions?: { id: string; name: string; windows: number; locked?: boolean }[];
+      sessions?: { id: string; name: string; windows: number; locked?: boolean; /** When tmux made it, seconds since the epoch. */ created?: number }[];
       /** This shell is on agentglass's OWN tmux, not the machine's. The panel
        *  hides "Use tmux's bar" there: that server keeps its status line off by
        *  design — the config gate refuses any config that turns it on — so the
@@ -712,7 +763,9 @@ export type PtyClientFrame =
      and the strip they came from is one choice away. */
   /* `group` sets or clears a window's `@agx-group` (no `name` clears it);
      `pin` sets or clears `@agx-pin`, switched by `after`. */
-  | { t: "tmux"; cmd: "select" | "new" | "kill" | "rename" | "move" | "takeover" | "fit" | "session" | "endsession" | "locksession" | "group" | "pin"; window?: string; name?: string;
+  | { t: "tmux"; cmd: "select" | "new" | "kill" | "rename" | "move" | "takeover" | "fit" | "session" | "endsession" | "locksession" | "group" | "pin" | "restored" | "reopen" | "restart"; window?: string; name?: string;
+      /** `restored` only: "resume" starts the agent the window was running, "dismiss" drops the card. */
+      how?: "resume" | "dismiss";
       /** `fit` only: the asking panel's own grid. Range-checked on the server —
        *  it ends up in a `resize-window`, so it is a number to validate rather
        *  than to trust. */
@@ -759,7 +812,7 @@ type UnionValue<T, K extends PropertyKey> = T extends unknown ? (K extends keyof
  */
 export type PtyClientMessage = { [K in UnionKeys<PtyClientFrame>]?: UnionValue<PtyClientFrame, K> };
 
-/** A tool call held at the gate, awaiting a remote approve/deny. */
+/** A tool call waiting at the gate, awaiting a remote approve/deny. */
 export interface PendingGate {
   id: string;
   source_app: string;
@@ -826,19 +879,6 @@ export interface ActionRecord {
   ok: boolean;
   /** The server's error text when it failed. */
   detail: string | null;
-}
-
-export interface SearchHit {
-  id: number;
-  timestamp: number;
-  source_app: string;
-  session_id: string;
-  hook_event_type: string;
-  tool_name: string | null;
-  cost_usd: number;
-  duration_ms: number | null;
-  /** snippet with \x01…\x02 wrapping the matched terms */
-  snippet: string;
 }
 
 export interface Insight {
@@ -1160,7 +1200,7 @@ export type Liveness = "working" | "stuck" | "lost" | "unknown";
  * *type*; the UI (web/src/components/workspace/views.ts) attaches the icons,
  * labels and hotkeys and re-exports this so both sides name one set.
  */
-export type ViewId = "dash" | "git" | "diff" | "pr" | "docker" | "term" | "browser" | "files" | "tasks" | "agents" | "plugins";
+export type ViewId = "dash" | "git" | "diff" | "pr" | "docker" | "term" | "browser" | "tasks" | "agents" | "plugins" | "flightPlan" | "skills" | "manifest";
 
 /**
  * A UI-navigation command from an external controller (a Stream Deck, a phone),
@@ -1173,7 +1213,7 @@ export type ControlCmd =
   | { cmd: "view"; to: ViewId | "lantern" | "seat" | "chair" | "orchestrator" }
   | { cmd: "workspace"; open?: boolean }
   | { cmd: "esc" }
-  | { cmd: "open"; what: "stats" | "skills" | "search" | "help" | "palette" }
+  | { cmd: "open"; what: "skills" | "help" | "palette" }
   /** The file finder (Ctrl+Shift+P) on one absolute path, the way a click on
    *  that path in a terminal opens it. `kind` is the server's reading of the
    *  spelling the caller sent: a trailing slash is a folder, anything else a
@@ -1795,6 +1835,8 @@ export type WsFrame =
    *  each need a different slice of git state, so they re-read what they show
    *  rather than the server guessing which of them cares about what. */
   | { type: "git" }
+  /** A flight plan, a Preflight run or a project's hold changed. Carries nothing: the view re-reads what it shows. */
+  | { type: "flight-plan" }
   /** The desktop's theme changed. Carries nothing: the client reads
    *  `/desktop/palette`, as it does at boot, instead of polling it. */
   | { type: "desktop-palette" }
@@ -1805,6 +1847,8 @@ export type WsFrame =
    *  out, or was answered by a rule). Carries no payload: the client re-reads
    *  `/gate/pending`, which replaces a two second poll of it. */
   | { type: "gate" }
+  /** A pull request event reached a repository with Polaris on. No payload: an open Polaris card or section re-reads. */
+  | { type: "polaris"; baseFixed?: { base: string; tipSha: string; canSync: number } }
   /** A pull request's checks all finished. One frame per PR per verdict — the
    *  server holds the latch, so a suite of sixty-one checks sends one of these,
    *  not sixty-one. */
@@ -1849,6 +1893,8 @@ export type WsFrame =
       expect?: string | number | boolean }
   /** The settings requests waiting for the person changed: re-read GET /settings/requests. */
   | { type: "settings-requests" }
+  /** The automatic cleanup started, advanced or finished a pull request: re-read GET /cleanup/auto. */
+  | { type: "cleanup-auto" }
   /** The understudy scorecard, recomputed and pushed whole. It reports what
    *  the understudy WOULD have done and how often that matched; it commands
    *  nothing, which is why it rides the same read-only socket. */
@@ -2030,7 +2076,7 @@ export interface PrWatchFire {
   ok: boolean;
 }
 
-export interface PrChecksRead { repo: string; number: number; checks: PrCheckRollup; all: PrCheck[] }
+export interface PrChecksRead { repo: string; number: number; checks: PrCheckRollup; all: PrCheck[]; /** The commit these checks belong to. */ sha?: string }
 
 export interface PrWatchState { watches: PrWatch[]; presets: PrWatchPreset[] }
 
@@ -2205,6 +2251,16 @@ export interface FsEntry {
   path: string;
   repo: boolean;
 }
+/** What adding a folder would bring in, read before anything is saved. */
+export interface FolderPrecheck {
+  /** Absolute path the text resolves to ("" when it is not a path at all). */
+  path: string;
+  exists: boolean;
+  /** Git repositories the list would show for it, at the depth the list reads. */
+  repos: number;
+  /** The first few, so the pane can show what will be added. */
+  sample: { name: string; path: string }[];
+}
 export interface FsCompletion {
   /** Absolute, normalised directory the entries live in. */
   base: string;
@@ -2224,6 +2280,11 @@ export interface GitBranch {
   track: string; // raw "[ahead 4, behind 53]" / "[gone]" / ""
   date: string;  // committerdate, relative
   subject: string;
+  /** Who made the tip commit. */
+  author?: string;
+  /** Commits on this branch the trunk lacks, and the other way round (`%(ahead-behind:<trunk>)`, git 2.41+). Absent without a trunk or on an older git. */
+  aheadTrunk?: number;
+  behindTrunk?: number;
   /** Contained in the repo's trunk (origin/HEAD, or main/master). Absent when
    *  there's no trunk to compare against — which is not the same as false.
    *
@@ -2265,6 +2326,8 @@ export interface GitStash {
   index: number;
   ref: string; // stash@{N}
   message: string;
+  /** The stash commit; `stash@{N}` is not a hash the diff route accepts. */
+  hash: string;
 }
 /** One git command the server ran — the command log panel's row. */
 export interface GitLogEntry {
@@ -2320,6 +2383,18 @@ export interface GitTag {
   hash: string;
   annotated: boolean;
 }
+/** Whether a local tag is on a remote. "unknown" = a remote did not answer, or there is none. */
+export interface GitTagOrigin {
+  name: string;
+  onOrigin: "yes" | "no" | "unknown";
+  /** The first remote that has it, `origin` preferred. Only with "yes". */
+  remote?: string;
+}
+/** One path a stash touches, with the first letter of git's name-status. */
+export interface GitStashFile {
+  status: string;
+  path: string;
+}
 /** A reflog entry. Unlike a commit these are *local history* — where HEAD has
  *  been — which is what makes them the undo trail after a bad reset or rebase. */
 export interface GitReflogEntry {
@@ -2331,7 +2406,8 @@ export interface GitReflogEntry {
 }
 /** Repo analytics over a time window (see /git/stats). */
 export interface RepoInsightContributor { name: string; email: string; commits: number; added: number; deleted: number }
-export interface RepoInsightHotspot { path: string; commits: number; added: number; deleted: number }
+/** `renamedFrom`: the path this file had before a rename inside the window. */
+export interface RepoInsightHotspot { path: string; commits: number; added: number; deleted: number; renamedFrom?: string }
 export interface RepoInsightDay { date: string; commits: number; added: number; deleted: number }
 export interface RepoStats {
   days: number;
@@ -2342,11 +2418,25 @@ export interface RepoStats {
   topContributors: RepoInsightContributor[];
   hotspots: RepoInsightHotspot[];
   churn: RepoInsightDay[];
+  /** The repository has no commit yet: zeros, not an error. */
+  empty?: boolean;
   error?: string;
 }
 export interface ChangelogEntry { kind: string; scope: string; breaking: boolean; subject: string; hash: string }
 export interface ChangelogSection { title: string; entries: ChangelogEntry[] }
-export interface Changelog { from: string; to: string; sections: ChangelogSection[]; error?: string }
+export interface Changelog {
+  from: string; to: string; sections: ChangelogSection[]; empty?: boolean; error?: string;
+  /** Commits in from..to, merges included. */
+  sinceCount?: number;
+  /** sinceCount minus the commits the sections list. */
+  unlisted?: number;
+}
+/** The last fetch of a repository: when (ms), which remotes, how many remote refs moved. */
+export interface GitLastFetch { at: number; remotes: string[]; news: number }
+/** Commits in <tag>..HEAD; `at` is the tag's date in ms. */
+export interface GitRangeCount { name: string; count: number; at: number | null }
+/** The newest 20 tags with their counts, and every commit of HEAD as `root`. */
+export interface GitRangeCounts { tags: GitRangeCount[]; root: number }
 /** A submodule as the panel shows it — the index pin, the URL, the checkout state. */
 export interface GitSubmodule {
   name: string;
@@ -2382,12 +2472,6 @@ export interface GitBisectStatus {
   current?: { sha: string; subject: string };
   firstBad?: { sha: string; subject: string };
 }
-/** One `git grep` hit — path:line + the matching line. */
-export interface GitGrepHit {
-  path: string;
-  line: number;
-  text: string;
-}
 export interface GitWorktree {
   path: string;    // absolute
   branch: string;  // branch short name, or "(detached)"
@@ -2414,6 +2498,11 @@ export interface GitWorktree {
    * or a caller that didn't want to pay for it.
    */
   dirty?: number;
+  /** A process (lowest pid) whose working directory is in this checkout. Linux
+   *  only; omitted when none, or off Linux. */
+  pid?: number;
+  /** True exactly when `pid` is set. */
+  busy?: boolean;
 }
 
 /**
@@ -2545,11 +2634,23 @@ export interface DockerContainer {
    *  unhealthy, which today costs a trip nobody makes. */
   healthError?: string | null;
   healthFailures?: number;
+  /** Docker's own `State.Error`, verbatim, from the medium lane's inspect: why
+   *  a start failed. A container that never got as far as running says only that
+   *  it exited with a code, and this is the one place the reason lives. Empty
+   *  when docker has nothing to accuse. */
+  stateError?: string | null;
+  /** `State.FinishedAt` from the same inspect. With `startedAt` it is how a log
+   *  line from an earlier run is told from the attempt that just failed. */
+  finishedAt?: string | null;
   /** The checkout the stack was brought up from, resolved against the
    *  worktrees of the open project. */
   owner?: DockerOwnerRef;
   /** Named volumes this container mounts, from the same batched inspect. */
   mounts?: { name: string; rw: boolean; destination: string }[];
+  /** When this server last asked this container to stop, while that still
+   *  explains an exit. An `Exited (143)` after it is a stop of ours, not a
+   *  crash; the same code with no mark is the container's own failure. */
+  stopAskedAt?: number;
 }
 
 /** One mapping out of the ports column. See server/src/dockerports.ts. */
@@ -2660,7 +2761,23 @@ export interface DockerPeek {
   /** The command to run by hand, when there is no local image to look with. */
   hint?: string;
 }
-export interface DockerNetwork { id: string; name: string; driver: string; scope: string; }
+/** What `GET /docker/live` pushes (server-sent events, one JSON object per message). */
+export type DockerLiveScope = "containers" | "images" | "volumes" | "networks";
+export type DockerLiveMessage =
+  | { kind: "changed"; scope: DockerLiveScope }   // a list changed: ask for it again
+  | { kind: "stats"; stats: DockerStat[] }        // one sample of every running container
+  | { kind: "down" }                              // the daemon went away; the server is retrying
+  | { kind: "up" };                               // it is back: ask for everything again
+
+/** A container attached to a network (the same 12-char id the container list uses). */
+export interface DockerNetworkMember { id: string; name: string; }
+export interface DockerNetwork {
+  id: string; name: string; driver: string; scope: string;
+  /** First IPAM subnet; null when the network has none (host, none). Absent from an older server. */
+  subnet?: string | null;
+  /** Absent when `network inspect` failed, so "empty" and "unknown" differ. */
+  members?: DockerNetworkMember[];
+}
 /** Present only when the cockpit is open for one project, so the panel can say
  *  which slice of the host it is showing — and admit when the filter found
  *  nothing and fell back to the whole machine. */
@@ -3348,6 +3465,11 @@ export interface PrSummary {
    * should merge from it.
    */
   headSha?: string;
+  /** A push this machine's sessions made to this branch, and when. With `readAt`
+   *  (when the list holding this row was read) it tells the board the checks may
+   *  belong to the head before that push. */
+  pushSeen?: { sha: string; at: number };
+  readAt?: number;
   /** This checkout is on the PR's head branch — "you are here". */
   isCurrentBranch?: boolean;
   /** Whether `checks` has actually been fetched. The list arrives in two
@@ -3768,6 +3890,12 @@ export interface PrMergeGate {
 export interface PrDetail extends PrSummary {
   /** When the server read this from GitHub (ms). A cached copy keeps its own, so a head on it can be compared with the moment a review finished. */
   readAt?: number;
+  /** The commit `checks` belong to. It can trail `headSha` right after a push;
+   *  see shared/prFreshness.ts, which decides what may be shown while it does. */
+  checksSha?: string;
+  /** Set by `trustHead` when this reading is not about the commit the pull
+   *  request is on: the checks and the merge state were taken away. */
+  checking?: { sha: string; why: string };
   /** The base branch's tip the pull request was last compared against (40 hex).
    *  `headSha` is inherited from the row and is the head's. */
   baseSha?: string;
@@ -4138,6 +4266,81 @@ export interface EnginesReport {
   engines: EngineReadiness[];
 }
 
+/**
+ * What the first run is told about this machine, read once at launch
+ * (GET /setup/state).
+ *
+ * `setupDone` is null until somebody writes it: "never asked" is not "not
+ * finished", and the difference decides whether the machine's own facts are
+ * allowed to answer. The rest are facts no window has to guess at.
+ */
+export interface SetupState {
+  setupDone: boolean | null;
+  /** A setup run was left open: a reload resumes it at step 1. */
+  setupInProgress: boolean;
+  /** The agent a first terminal starts (an engine id). */
+  setupAgent: string;
+  /** The tutorial cards already read, as a comma list. */
+  tutorialSeen: string;
+  projectOpen: boolean;
+  sessionsSeen: boolean;
+  hooksInstalled: boolean;
+  homedir: string;
+}
+
+/** One repository a folder holds, as step 4 lists it: a name, a path, a branch. */
+export interface SetupRepoRow {
+  name: string;
+  root: string;
+  branch: string;
+}
+
+/** What step 4's folder read answers. `exists` false is a folder that is gone;
+ *  `exists` true with no rows is a folder with no git repository in it. */
+export interface SetupRepos {
+  /** The absolute path it read ("" when the text was not a path at all). */
+  path: string;
+  exists: boolean;
+  repos: SetupRepoRow[];
+  /** More repositories were there than were listed (`repos` is the first 200). */
+  capped: boolean;
+}
+
+/** One repository the Finder found: what the row needs and nothing more. */
+export interface SetupScanRow {
+  name: string;
+  root: string;
+  /** The folder the row groups under. */
+  parent: string;
+  branch: string;
+  /** When the checkout was last worked in, epoch ms; 0 when it could not be read. */
+  touchedAt: number;
+}
+
+/** Where a search stands. `stopped` is the cap or the person pressing Stop. */
+export type SetupScanState = "running" | "done" | "stopped" | "failed";
+
+/** What one search found, as `GET /setup/scan?id=` reports it. */
+export interface SetupScan {
+  id: string;
+  state: SetupScanState;
+  /** The folders it looks in, in full. */
+  roots: string[];
+  /** Folders read so far. */
+  folders: number;
+  /** The folder the walk is reading now, for the live line. */
+  current: string;
+  repos: SetupScanRow[];
+  /** Why it stopped early, or null when it reached the end. */
+  capped: "count" | "time" | "person" | null;
+  startedAt: number;
+  elapsedMs: number;
+  /** What it never enters, for the Finder's own sentence. */
+  skips: string[];
+  /** The server's own sentence when the search could not run. */
+  error?: string;
+}
+
 export interface AgentProbe extends KnownAgent {
   /** On PATH right now. */
   found: boolean;
@@ -4461,7 +4664,8 @@ export interface ResourceReport {
   rated: boolean;
 }
 
-/** A process that was left behind by an agent and is still costing the machine. */
+/** A process left behind, with the origin read from its own paths: a checkout,
+ *  an agent scratchpad or a temp wrapper. */
 export interface OrphanProc {
   pid: number;
   comm: string;
@@ -4550,15 +4754,6 @@ export interface DiskCleanRunResult {
   freed: number;
 }
 
-export interface FileEntry {
-  name: string;
-  rel: string;
-  dir: boolean;
-  size?: number;
-  /** Git status in this checkout: M, A, D, R, ? untracked, · something below. */
-  status?: string;
-}
-export interface TreeReport { ok: boolean; root: string; rel: string; entries: FileEntry[]; error?: string }
 export interface FindReport {
   ok: boolean;
   files: string[];
@@ -5400,3 +5595,40 @@ export interface FinderAction {
 export interface FinderActionList { ok: boolean; error?: string; actions: FinderAction[]; problems: { id: string; error: string }[] }
 export interface FsTrashRow { id: string; name: string; from: string; deleted: string; kind: "dir" | "file" | "link"; bytes: number | null }
 export interface FsProps { path: string; name: string; kind: "dir" | "file" | "link"; bytes: number | null; mtime: number; mode: number; owner: string; group: string; link: string | null; hidden: boolean; mine: boolean }
+
+/* ── Flight plan: who flies ── */
+
+/** Who flies a project's plans: the person (manual), the person with the coordinator doing the work (copilot), or the coordinator saying Go itself (autopilot). */
+export type Pilot = "manual" | "copilot" | "autopilot";
+export const PILOTS: readonly Pilot[] = ["manual", "copilot", "autopilot"];
+
+/**
+ * Why a plan needs the person before it flies. null = nothing stops the
+ * coordinator. One word per rule, so the view and the refusal sentence key on the same thing.
+ */
+export type StopReason =
+  | "ask-finding"      // a finding the orchestrator cannot decide: a product call
+  | "open-blocker"     // Preflight still has a blocker after the allowed second looks
+  | "large"            // an L plan, while askOnLarge is on
+  | "sensitive"        // touches auth, migrations, secrets, payments, CI or a dependency, while askOnSensitive is on
+  | "budget"           // the day's or the week's Flight plan spend reached its cap
+  | "builder-blocked"  // a launched builder was denied a tool twice or reported "blocked"
+  | "sensitive-diff"   // the builder's real diff touches what "sensitive" lists: stops at Integrate
+  | "required-step"   // a step the saved flow marks required has no passing result: stops at Integrate
+  | "rounds-used";     // a step failed as many times as its fail edge allows: stops at Integrate
+
+/**
+ * What the plans list says about a launched plan's builder tab: "live" has a
+ * live pane, "gone" is a tab tmux no longer has, "none" never had one on
+ * record, "unknown" is tmux not answering (the view then claims nothing).
+ */
+export type BuilderState = "live" | "gone" | "none" | "unknown";
+
+/** A project's Flight plan flying state, as the view and the coordinator read it. */
+export interface PilotState {
+  pilot: Pilot;
+  /** Held: no new Go by the coordinator, launches frozen. Only the person clears it. */
+  held: boolean;
+  /** Autopilot dropped to co-pilot because a cap was reached, until this time (ms). */
+  budgetUntil: number | null;
+}

@@ -11,10 +11,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
-import { wash } from "./git/ui.tsx";
 import { ClockIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, EDGE, LINE, Button } from "./workspace/Chrome.tsx";
 
 export interface AgentSchedule {
   id: string; name: string; cwd: string; kind: string; prompt: string; yolo: boolean;
@@ -116,12 +115,10 @@ export function ScheduleDialog({ open, checkouts, onClose, onAdded }: {
                 </label>
                 {err && <div className="text-[11px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
                 <div className="flex items-center justify-end gap-2 pt-1">
-                  <button type="button" onClick={onClose} className="agx-btn text-[11px] px-2.5 py-1 rounded-md" style={{ color: "var(--text2)", border: EDGE }}>Cancel</button>
-                  <button type="submit" disabled={busy || !name.trim() || !cwd.trim() || !when.trim()}
-                    className="agx-btn text-[11px] px-3 py-1 rounded-md font-medium disabled:opacity-50"
-                    style={{ color: "var(--text)", background: wash("--primary", 26), border: `1px solid ${wash("--primary", 55)}` }}>
+                  <Button onClick={onClose}>Cancel</Button>
+                  <Button type="submit" tint="var(--primary)" disabled={busy || !name.trim() || !cwd.trim() || !when.trim()}>
                     {busy ? "Scheduling…" : "Schedule"}
-                  </button>
+                  </Button>
                 </div>
               </form>
             </motion.div>

@@ -124,7 +124,7 @@ describe("what gets packed into app.asar", () => {
   it("keeps `files` an allowlist, so nothing rides along implicitly", () => {
     // Measured on `bun run dist:dir` with electron-builder 26 out of a bun
     // workspace: the asar holds main.js, preload.js, guest-guard.js,
-    // identify-header.js, guest-scrollbar.js, browser-menu.js, power.js, notify-mac.js, icons/**
+    // identify-header.js, guest-scrollbar.js, show-log.js, browser-menu.js, power.js, notify-mac.js, icons/**
     // and package.json, 1.4MB, and no dependency tree. electron-builder says so
     // out loud while packing ("no node modules returned while searching
     // directories") because bun has no CLI for a dependency tree and it falls
@@ -135,7 +135,7 @@ describe("what gets packed into app.asar", () => {
     // Every file main.js `require`s has to be named here — left out of the
     // asar the app does not start, and the lock is what turns that from a
     // discovery at launch into a red test.
-    expect(new Set(pkg.build.files)).toEqual(new Set(["main.js", "guest-guard.js", "identify-header.js", "guest-scrollbar.js", "egress-guard.js", "trusted-input.js", "browser-menu.js", "power.js", "notify-mac.js", "server-probe.js", "preload.js", "icons/**"]));
+    expect(new Set(pkg.build.files)).toEqual(new Set(["main.js", "guest-guard.js", "identify-header.js", "guest-scrollbar.js", "show-log.js", "egress-guard.js", "trusted-input.js", "browser-menu.js", "power.js", "notify-mac.js", "server-probe.js", "preload.js", "icons/**"]));
   });
 });
 
@@ -154,9 +154,12 @@ describe("the ozone platform", () => {
   const main = readFileSync(resolve(ELECTRON_DIR, "main.js"), "utf8");
 
   it("is chosen from the session, never hard-coded", () => {
-    const call = main.match(/appendSwitch\(\s*\n?\s*"ozone-platform",[\s\S]{0,220}?\);/);
-    expect(call, "no ozone-platform switch in main.js").toBeTruthy();
-    const src = call![0];
+    // The switch takes the value of DISPLAY_SERVER, which is decided from the session right above it.
+    const call = main.match(/appendSwitch\(\s*"ozone-platform",\s*DISPLAY_SERVER\s*\);/);
+    expect(call, "no ozone-platform switch fed by DISPLAY_SERVER in main.js").toBeTruthy();
+    const def = main.match(/const DISPLAY_SERVER =[\s\S]{0,300}?;\n/);
+    expect(def, "no DISPLAY_SERVER definition in main.js").toBeTruthy();
+    const src = def![0] + call![0];
     expect(src).toContain("WAYLAND_DISPLAY");
     expect(src).toContain("XDG_SESSION_TYPE");
     // Both spellings must be reachable. A pin to either one is the bug.
@@ -164,6 +167,13 @@ describe("the ozone platform", () => {
     expect(src).toContain('"x11"');
     expect(src, "a hard pin is a headless app on the other session type")
       .not.toMatch(/"ozone-platform",\s*"(x11|wayland)"\s*\)/);
+  });
+
+  it("refuses headless before any window is made, so it never segfaults", () => {
+    const at = main.indexOf('process.argv.includes("--ozone-platform=headless")');
+    expect(at, "no headless guard in main.js").toBeGreaterThan(-1);
+    expect(main.slice(at, at + 300)).toContain("app.exit(2)");
+    expect(at, "the guard must run before the first window").toBeLessThan(main.indexOf("new BrowserWindow("));
   });
 
   it("does not persist a window position the platform cannot honour", () => {

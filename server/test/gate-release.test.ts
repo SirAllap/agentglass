@@ -496,7 +496,7 @@ describe("the desktop app hands its key to the ends that use it, and nowhere els
 
   test("the renderer asks for it from a window's own page, is handed the next one on a restart, and carries it on the two requests that need it", () => {
     expect(MAIN).toContain('ipcMain.on("ag:deskKey", (e) => { e.returnValue = (e.sender.getType() === "window" || isLaneHost(e.sender)) ? deskKey : null; });');
-    expect(code(body(MAIN, "async function restartSidecar("))).toContain("{ origin: apiOrigin, token: sidecarUp ? currentToken() : null, deskKey }");
+    expect(code(body(MAIN, "async function restartSidecar("))).toContain("{ origin: apiOrigin, token: sidecarUp ? currentToken() : null, deskKey, preferredPort: PREFERRED_PORT }");
     expect(PRELOAD).toContain('ipcRenderer.sendSync("ag:deskKey")');
     expect(API).toContain(`"${DESK_HEADER}": DESK_KEY`);
     expect(code(body(API, "export function adoptServer(", "): void {"))).toContain('if (next.deskKey !== undefined) DESK_KEY = next.deskKey ?? "";');
@@ -517,7 +517,27 @@ describe("the desktop app hands its key to the ends that use it, and nowhere els
        `deskGated(path)` says so (web/src/lib/deskGate.ts, tested in
        web/test/finder-desk-key.test.ts), never on every call. */
     expect(sent).toContain("...(deskGated(path) ? deskHeader() : {})");
-    expect([...sent.matchAll(/deskHeader\(\)/g)]).toHaveLength(6);
+    /* The seventh is the settings-requests list: the server narrows it to the
+       caller's own projects unless the key proves the person, so the window
+       carries the key or the person sees only the open project's asks. */
+    expect(sent).toContain('"/settings/requests", undefined, deskHeader()');
+    /* The Polaris routes are the person's too: a change of a door, an action on a
+       pull request and a beacon send are each proven with the desk key, and an
+       agent's machine token cannot make them. They are counted apart so that a
+       use outside them is still a change somebody has to look at. The PUT helper
+       the settings route uses gates the key the way `post` does, so it is the
+       one more use. */
+    const polarisCalls = [...sent.matchAll(/\/polaris\/[^\n]*deskHeader\(\)/g)].length;
+    expect(polarisCalls).toBeGreaterThan(0);
+    /* The flow of a project is the person's too: saving and resetting it are
+       proven with the desk key, so an agent's machine token cannot rewrite the
+       rules the orchestrator is told. Counted apart for the same reason. */
+    const flowCalls = [...sent.matchAll(/`\/flow\?[^\n]*deskHeader\(\)/g)].length;
+    expect(flowCalls).toBeGreaterThan(0);
+    /* The GET and DELETE helpers send the key on a gated path, as the POST and PUT ones do; the flow route is the first to need them. */
+    const gatedHelpers = [...sent.matchAll(/(?:fetch\(SERVER \+ path, \{ headers|method: "DELETE", headers): authHeaders\([^\n]*deskGated\(path\) \? deskHeader\(\)/g)].length;
+    expect(gatedHelpers).toBe(2);
+    expect([...sent.matchAll(/deskHeader\(\)/g)]).toHaveLength(7 + 1 + polarisCalls + flowCalls + gatedHelpers);
   });
 });
 

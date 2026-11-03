@@ -29,7 +29,7 @@ const ORDER = ["critical", "high", "medium", "low", "info"] as const;
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
-const totalOpen = (s: PrNotesSummary) => ORDER.reduce((n, k) => n + s.open[k], 0);
+export const totalOpen = (s: PrNotesSummary) => ORDER.reduce((n, k) => n + s.open[k], 0);
 
 /** Counts for the tooltip: "2 critical, 1 medium open · 3 resolved". */
 export function countsLine(s: PrNotesSummary): string {

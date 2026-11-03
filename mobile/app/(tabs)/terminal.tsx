@@ -66,6 +66,7 @@ import {
 } from "../../src/terminal/liveFocus.ts";
 import { onHandoff, takeHandoff } from "../../src/terminal/handoff.ts";
 import { GateCard } from "../../src/terminal/GateCard.tsx";
+import { SettingsRequestList } from "../../src/terminal/SettingsRequestCard.tsx";
 import { Glyph } from "../../src/nav/glyphs.tsx";
 import { UsageChip } from "../../src/usage/Usage.tsx";
 import { ComputerChip } from "../../src/nav/ComputerChip.tsx";
@@ -181,7 +182,7 @@ export default function TerminalScreen(): React.ReactNode {
  *
  * The destination stays in the bar for every pairing, because "what are the
  * agents doing, and is one waiting on me" is a question every pairing asks. A
- * phone paired to answer gets the held gates to answer, here; a phone paired
+ * phone paired to answer gets the gates waiting on you to answer, here; a phone paired
  * to look is told so, and what would change it.
  */
 function TerminalRefused({ scope }: { scope: DeviceScope }): React.ReactNode {
@@ -229,6 +230,7 @@ function TerminalRefused({ scope }: { scope: DeviceScope }): React.ReactNode {
             {gates.map((gate) => (
               <GateCard key={gate.id} gate={gate} host={host} colors={C} onDone={refresh} />
             ))}
+            <SettingsRequestList host={host} colors={C} tick={fleet.at} onDone={refresh} />
           </View>
         ) : null}
       </ScrollView>
@@ -283,7 +285,7 @@ function TerminalPane(): React.ReactNode {
    * so a light phone drew a light header and key bar around a dark pane: a
    * seam across the screen at the one place the eye goes, and two surfaces
    * pretending to be one window. Everything this screen draws itself — the
-   * header, the tabs, the held gates, the key bar, the composer — wears the
+   * header, the tabs, the gates waiting on you, the key bar, the composer — wears the
    * pane's colours now, and so does the bar under it (see nav/barPalette.ts).
    * The sheets that rise over it keep the phone's: they are the app's, not the
    * pane's, and arrive over a scrim.
@@ -2127,10 +2129,10 @@ function TerminalPane(): React.ReactNode {
       </View>
 
       {/*
-        A held gate, answered here.
+        A gate waiting on you, answered here.
 
         Approving a command an agent is stopped on is the reason this app
-        exists. This used to be a band that counted the held gates and sent
+        exists. This used to be a band that counted the gates waiting on you and sent
         you to the Now screen to answer them, so answering an agent meant
         leaving it. The card is the answer itself: which window is asking,
         what it wants to run, Deny and Allow — and a way to that window when it
@@ -2169,6 +2171,19 @@ function TerminalPane(): React.ReactNode {
             </Pressable>
           ) : null}
         </View>
+      ) : null}
+
+      {/* An agent stopped on a settings request, answered over the pane the
+          same way a gate waiting on you is: the person away from the desk is who this is
+          for. Nothing is drawn when nothing waits. */}
+      {host ? (
+        <SettingsRequestList
+          host={host}
+          colors={paneColours}
+          tick={fleet.at}
+          onDone={refresh}
+          style={{ paddingHorizontal: SPACE.sm, paddingTop: SPACE.sm }}
+        />
       ) : null}
 
       {/* Said quietly, and only when it is not fine: a status line that is

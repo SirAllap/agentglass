@@ -80,8 +80,8 @@ describe("the controls, drawn", () => {
   });
   test("each sub-task row carries its own status control; read-only keeps the plain pill", () => {
     const rows = [task({ id: "1", customId: "ORBIT-1051", title: "Draft" })];
-    expect(html(React.createElement(SubtasksBlock, { rows, parent, writable: true, act }))).toContain('title="Status"');
-    expect(html(React.createElement(SubtasksSection, { rows }))).not.toContain('title="Status"');
+    expect(html(React.createElement(SubtasksBlock, { rows, parent, writable: true, act }))).toContain('title="Move this card to another step"');
+    expect(html(React.createElement(SubtasksSection, { rows }))).not.toContain('title="Move this card to another step"');
   });
   test("linked work items offer a way to link and a way to take each off, and say there are none when there are none", () => {
     const linked = [{ id: "77", phrase: "blocks", type: "Blocks", direction: "out", task: task() }] as CardLinked[];

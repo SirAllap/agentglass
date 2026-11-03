@@ -9,6 +9,7 @@
 import { describe, expect, it } from "bun:test";
 
 const board = await Bun.file(new URL("../src/components/TriageBoard.tsx", import.meta.url)).text();
+const card = await Bun.file(new URL("../src/components/PrCard.tsx", import.meta.url)).text();
 const panel = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
 const glyphs = await Bun.file(new URL("../src/lib/glyphIcons.tsx", import.meta.url)).text();
 
@@ -20,11 +21,13 @@ describe("pull request pins use the tack", () => {
     // The one star is "follow this colleague" on the person banner, which pins nothing.
     const banner = code(board).slice(code(board).indexOf("export function PersonBanner("));
     expect(code(board).replace(banner, "").replace(/import \{[^}]*\} from "..\/lib\/glyphIcons.tsx";/, "")).not.toContain("StarIcon");
-    expect(code(panel)).not.toContain("StarIcon");
+    // The one star in the panel is the comment header's "React" button (the mockup's), which pins nothing.
+    const withoutReact = code(panel).replace(/<Button[^>]*label="React"[\s\S]*?<\/Button>/, "").replace(/import \{[^}]*\} from "..\/lib\/glyphIcons.tsx";/, "");
+    expect(withoutReact.replace(/^import .*$/gm, "")).not.toContain("StarIcon");
   });
 
   it("the card button and the panel button draw a tack, filled when pinned", () => {
-    expect(code(board)).toContain("<PinIcon size={ICON.xs} filled={pinned} />");
+    expect(code(card)).toContain("<PinIcon size={ICON.sm} filled={props.pinned} />");
     expect(code(panel)).toContain("<PinIcon size={ICON.xs} filled={currentPinned} />");
   });
 

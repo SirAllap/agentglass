@@ -23,7 +23,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync, utimesSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { changeRows, fileDiff, parseHunks, parseNameStatus, parseNumstat, parseStatusV2 } from "../src/changerows.ts";
+import { changeRows, diffSpecs, fileDiff, parseHunks, parseNameStatus, parseNumstat, parseStatusV2 } from "../src/changerows.ts";
 
 /* ── the wire formats ─────────────────────────────────────────────────────── */
 
@@ -204,6 +204,25 @@ describe("what a row says about a file", () => {
     expect(rows[0]!.staged).toBe("partial");
   });
 
+  it("flags a force-added file that .gitignore matches", async () => {
+    /* `git check-ignore -z` without `--stdin` is a fatal error, so the answer
+       was always empty and no row was ever flagged ignored. */
+    const dir = repo();
+    mkdirSync(join(dir, "src"));
+    writeFileSync(join(dir, ".gitignore"), "*.log\n");
+    writeFileSync(join(dir, "src/forced.log"), "one\n");
+    writeFileSync(join(dir, "src/kept.ts"), "one\n");
+    runIn(dir, "add", ".gitignore", "src/kept.ts");
+    runIn(dir, "add", "-f", "src/forced.log");
+    runIn(dir, "commit", "-qm", "first");
+    writeFileSync(join(dir, "src/forced.log"), "one\ntwo\n");
+    writeFileSync(join(dir, "src/kept.ts"), "one\ntwo\n");
+
+    const { rows } = await changeRows(ref(dir), "working", null);
+    expect(rows.find((r) => r.path === "src/forced.log")!.ignored).toBe(true);
+    expect(rows.find((r) => r.path === "src/kept.ts")!.ignored).toBe(false);
+  });
+
   it("carries a rename's old path, so it is not shown as a new file", async () => {
     const dir = repo();
     writeFileSync(join(dir, "old.ts"), "x\n".repeat(20));
@@ -296,6 +315,26 @@ describe("what a row says about a file", () => {
 });
 
 describe("one file's diff", () => {
+  it("a pure rename has no hunks, instead of the whole file as added", async () => {
+    const dir = repo();
+    writeFileSync(join(dir, "old.ts"), "x\n".repeat(12));
+    runIn(dir, "add", "."); runIn(dir, "commit", "-qm", "first");
+    runIn(dir, "mv", "old.ts", "new.ts");
+    // Alone, the new path has no old side: every line reads as added.
+    expect((await fileDiff(dir, "new.ts", "working")).hunks.length).toBeGreaterThan(0);
+    const d = await fileDiff(dir, "new.ts", "working", "old.ts");
+    expect(d.hunks).toHaveLength(0);
+    expect(d.binary).toBe(false);
+  });
+
+  it("an old path that is not a plain path inside the repo is dropped", () => {
+    const root = "/work/orbit";
+    expect(diffSpecs(root, "new.ts", "old.ts")).toEqual(["-M", "--", "old.ts", "new.ts"]);
+    for (const bad of ["../x", "/etc/passwd", "-evil", ":(top)x", ":(exclude)new.ts", ""]) {
+      expect(diffSpecs(root, "new.ts", bad)).toEqual(["--", "new.ts"]);
+    }
+  });
+
   it("is the whole change against the last commit, staged part included", async () => {
     /* Reading a file is not a staging question. The old view ran the two diffs
        separately and showed whichever row you clicked, so a partially staged

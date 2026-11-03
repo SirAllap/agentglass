@@ -57,7 +57,7 @@ export interface AppSlice {
   windowMs: number;
   filter: { app: string; type: string; provider: string };
   modals: {
-    settings: boolean; palette: boolean; help: boolean; stats: boolean; skills: boolean; search: boolean;
+    settings: boolean; palette: boolean; help: boolean; skills: boolean;
     finder: boolean; windows: boolean; projectPicker: boolean; machine: string | null;
   };
   selectedEvent: { id: string; type: string; app: string } | null;

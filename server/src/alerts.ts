@@ -279,7 +279,7 @@ export function desktopNotifyArgv(title: string, body: string, urgency: number, 
 }
 
 /**
- * A tool call is being held at the control-plane gate — ping the human.
+ * A tool call is waiting at the control-plane gate — ping the human.
  *
  * The gate's id used to travel with it, so the two buttons on a pushed
  * notification knew what they were answering. Nothing carries buttons now, so
@@ -393,7 +393,7 @@ export function pushDeviceStoreChanged(path: string) {
 }
 
 /** The chair of a project has no engine left to run it (agents/noplan.ts).
- *  A blocked agent, like a held gate, so the one kind that is on by default. */
+ *  A blocked agent, like a gate waiting on you, so the one kind that is on by default. */
 export function pushNoPlanLeft(project: string, running: number) {
   deliver(`${project} has no plan left`,
     `The orchestrator for ${project} has no plan left. ${running} worker${running === 1 ? " is" : "s are"} still running and will stop at their limits.`,

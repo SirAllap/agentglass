@@ -27,7 +27,7 @@
  */
 import { openExternal } from "./externalUrl.ts";
 import { openCard } from "./openCard.ts";
-import { openPr } from "./openPrs.ts";
+import { openPr, prAnchorFromUrl } from "./openPrs.ts";
 import { api } from "./api.ts";
 import { clickupSetup, clickupSetupNow } from "./clickupSetup.ts";
 import { trackerSetup, jiraSiteNow } from "./trackerSetup.ts";
@@ -142,7 +142,7 @@ export function wantsExternal(e: Click | undefined, strict = false): boolean {
  */
 const LOCATE_TTL = 60_000;
 const located = new Map<string, { at: number; ok: Promise<boolean>; value?: boolean }>();
-function hasCheckout(repo: string): boolean | Promise<boolean> {
+export function hasCheckout(repo: string): boolean | Promise<boolean> {
   const key = repo.toLowerCase(); // GitHub names are case-insensitive
   const hit = located.get(key);
   if (hit && Date.now() - hit.at < LOCATE_TTL) return hit.value ?? hit.ok;
@@ -211,8 +211,14 @@ export function openInApp(
   if (r.kind === "jira") { deps.openCard(r.key, r.key, "jira"); return true; }
   const inApp = r.kind === "card"
     ? () => deps.openCard(r.query)
-    : () => deps.openPr(r.repo, r.number, r.kind === "ref" ? { fallback: r.url } : {});
-  const can = r.kind === "card" ? deps.hasClickup() : deps.hasCheckout(r.repo);
+    : () => {
+      const anchor = prAnchorFromUrl(r.url);
+      deps.openPr(r.repo, r.number, r.kind === "ref" ? { fallback: r.url } : anchor ? { anchor } : {});
+    };
+  /* A pull request of a repository with no checkout here is still read in the
+     app: the panel reads it from GitHub, read-only (see `away` in PrPanel). The
+     browser used to be the answer, before that mode existed. */
+  const can = r.kind === "card" ? deps.hasClickup() : true;
   /* Known already: decided inside the click. "No" hands the link back to the
      caller, whose own handling is the browser — opened by the click itself,
      which a popup blocker allows. */

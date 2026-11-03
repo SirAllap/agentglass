@@ -306,12 +306,15 @@ export interface Caller {
    * is the fence going up before the thing that needs fencing arrives, which is
    * the only order in which a fence is ever built correctly.
    */
-  principal?: "understudy" | "seat";
+  principal?: "understudy" | "seat" | "worker";
   /** When `principal` is `seat`: which project's chair, and what that chair
    *  was granted. Carried on the caller rather than looked up per request so
    *  the grant is the one made at seating — changing the setting afterwards
    *  takes effect at the next seating, which is also what the prompt says. */
   seat?: { root: string; powers: "speak" | "nudge" | "assign" };
+  /** When `principal` is `worker`: the agent this credential was minted for,
+   *  so a relay can say which worker asked and a revocation can name it. */
+  worker?: string;
   /** The plugin's name when `kind` is `plugin`. `allowed` grades it by scope
    *  like any other caller — the manifest declared a scope and a human approved
    *  it — but it is never a person's hand on a gate; see `kind`. */
@@ -357,6 +360,62 @@ const understudyTokens = new Set<string>();
  */
 const seatTokens = new Map<string, { root: string; powers: "speak" | "nudge" | "assign" }>();
 
+/*
+ * Credentials minted per WORKER at launch, and why they are the boundary.
+ *
+ * A worker inherits the process environment, which carries the MACHINE token —
+ * so an ask from a worker was the person's own ask at every layer, and no gate
+ * could tell them apart. This credential is minted here, handed to the worker's
+ * environment INSTEAD of the machine token, and refused by the browser relay
+ * for the person's own container (index.ts, `agentAskRefusal`). It is not a
+ * fifth scope: the worker keeps `full` for everything it did before. Two
+ * checks narrow by it: the browser gate (`agentAskRefusal`) and
+ * `mayReadForeignRoot` (a `gh:owner/name` root reaches past the open project,
+ * so it stays closed to a worker). A device answer is closed to a worker by
+ * `kind !== "device"`, not by this principal. One per agent name, so a
+ * follow-up turn replaces the
+ * token of the turn it continues.
+ *
+ * In memory, per turn, expired at the worker's own turn limit when the caller
+ * passes one (twelve hours otherwise) and revoked when the turn ends: a
+ * credential that outlives the work it was minted for is a credential somebody
+ * finds later.
+ */
+const workerTokens = new Map<string, { name: string; expiresAt: number }>();
+
+/** How long a credential lives when the caller has no turn to cap it by. */
+export const WORKER_TOKEN_DEFAULT_MS = 12 * 60 * 60_000;
+
+/** `replace: false` leaves a same-name credential alive. The start route needs
+ *  that: minting there before the start is known not to be `exists` used to cut
+ *  the live worker's credential on a retry of the same name. */
+export function mintWorkerToken(name: string, ttlMs = WORKER_TOKEN_DEFAULT_MS, replace = true): string {
+  if (replace) for (const [t, w] of workerTokens) if (w.name === name) workerTokens.delete(t);
+  const t = `wk_${randomBytes(24).toString("base64url")}`;
+  // A token whose turn never ends must still stop being a token: the caller
+  // caps it at the worker's own turn limit.
+  workerTokens.set(t, { name, expiresAt: Date.now() + Math.max(0, ttlMs) });
+  return t;
+}
+
+export function revokeWorkerToken(token: string): void { workerTokens.delete(token); }
+
+/** Every credential of `name` but this one: a start that won its name keeps
+ *  exactly one, whatever it found on the way. */
+export function revokeWorkerTokensExcept(name: string, keep: string): void {
+  for (const [t, w] of workerTokens) if (w.name === name && t !== keep) workerTokens.delete(t);
+}
+
+/** The token a worker's environment was given, so a test can prove revocation. */
+export function workerTokenOf(name: string): string | undefined {
+  for (const [t, w] of workerTokens) if (w.name === name) return t;
+  return undefined;
+}
+
+export function revokeWorkerTokens(name: string): void {
+  for (const [t, w] of workerTokens) if (w.name === name) workerTokens.delete(t);
+}
+
 export function mintSeatToken(root: string, powers: "speak" | "nudge" | "assign"): string {
   const t = `st_${randomBytes(24).toString("base64url")}`;
   seatTokens.set(t, { root, powers });
@@ -393,9 +452,35 @@ const SEAT_POST_NUDGE = new Set([
    business. Deciding who exists is the assigning half of the job. */
 const SEAT_POST_ASSIGN = new Set(["/agents/named/start", "/agents/named/stop", "/agents/named/keys", "/agents/named/enlist", "/agents/named/own"]);
 
-export function seatAllows(powers: "speak" | "nudge" | "assign", method: string, pathname: string): boolean {
+/*
+ * The coordinator's part in a flight plan: write the plan, answer its findings,
+ * raise the one question, hold itself, and in Autopilot say Go. The wall lets
+ * these through and the routes decide (index.ts): its own project only, the
+ * pilot, the hold, the stop rules. Left out on purpose: `…/answer` and
+ * `/flight-plan/resume`, which are the person's, a raw Preflight over any file
+ * (`/flight-plan/preflight`), a run's Go (`/flight-plan/runs/:id/go`) and
+ * `/flight-plan/budget/raise`, which spends more. Go and Launch start an agent,
+ * so they also need the power to assign.
+ */
+const FP_PLAN = /^\/flight-plan\/plans\/fp_[0-9a-f]{16}$/;
+const FP_PLAN_VERB = /^\/flight-plan\/plans\/fp_[0-9a-f]{16}\/(preflight|no-go|ask|report|integrate-check)$/;
+/* A seat acting on a pull request through Polaris: the same acts the person's click makes. A sync or a send leaves the app, so the route turns it into a request the person answers; the route also holds the root to the seat's own project. */
+const POLARIS_ACT = /^\/polaris\/items\/\d{1,9}\/(action|beacon\/(send|edit|discard))$/;
+/* `worker` links a plan to a worker the seat started, which the seat may only do with the power to assign one. */
+const FP_PLAN_STARTS = /^\/flight-plan\/plans\/fp_[0-9a-f]{16}\/(go|launch|worker)$/;
+const FP_FINDING = /^\/flight-plan\/runs\/pf_[0-9a-f]{16}\/findings\/F\d{1,3}$/;
+
+export function seatAllows(powers: "speak" | "nudge" | "assign", method: string, pathname: string, seatRoot?: string, trustedAt?: (root: string) => boolean): boolean {
   if (method === "GET" || method === "HEAD") return !FULL_GET.has(pathname);
+  if (method === "PATCH") return FP_PLAN.test(pathname);
   if (method !== "POST") return false;
+  if (pathname === "/flight-plan/plans" || pathname === "/flight-plan/hold" || FP_PLAN_VERB.test(pathname) || FP_FINDING.test(pathname)) return true;
+  if (FP_PLAN_STARTS.test(pathname) || POLARIS_ACT.test(pathname)) return powers === "assign";
+  /* The person's switch for THIS project (agents.changeWithoutAsking, held per
+     root in agentTrust.ts) hands the chair its own project's policy: the route
+     then takes the door's trusted path and writes only that root (index.ts).
+     One route, not a widening of the wall: everything else stays as it was. */
+  if (pathname === "/orchestration" && seatRoot && trustedAt?.(seatRoot)) return true;
   /* Saying its line and asking the bank are not acts: allowed at every level.
      Seating another orchestrator is NOT on this list at any level — a seat
      that could open seats is a seat that can spend without a ceiling. */
@@ -483,6 +568,16 @@ export function callerFor(req: Request, url: URL, token: string): Caller | null 
   }
   const seat = seatTokens.get(provided);
   if (seat) return { kind: "machine", scope: "full", principal: "seat", seat };
+  const worker = workerTokens.get(provided);
+  if (worker) {
+    // An expired credential is not a credential: drop it and answer null so a
+    // token that outlived its turn cannot become the person again.
+    if (worker.expiresAt <= Date.now()) {
+      workerTokens.delete(provided);
+      return null;
+    }
+    return { kind: "machine", scope: "full", principal: "worker", worker: worker.name };
+  }
   const plugin = pluginTokens.get(provided);
   if (plugin) return { kind: "plugin", scope: plugin.scope, plugin: plugin.name };
   if (eq(provided, token)) return { kind: "machine", scope: "full" };
@@ -555,6 +650,15 @@ const FULL_GET = new Set([
  */
 const ANSWER_POST = new Set([
   "/gate/decide",
+  /*
+   * Answering a settings request an agent is waiting on. The same act as
+   * `/gate/decide` and for the same reason: the request already exists, the
+   * value was validated by the server, and the answer starts nothing that was
+   * not asked for. The person away from the desk is exactly who this is for.
+   * The route itself asks `mayAnswerSettingsRequest`, so the grant here is the
+   * gate and not the decision.
+   */
+  "/settings/requests/decide",
   // "I have read this". Moves a badge on the other devices and nothing else:
   // no agent, no repository and nothing on GitHub hears about it. A read-scope
   // credential still only GETs it.
@@ -675,7 +779,8 @@ export function isDeskPrivatePluginPath(pathname: string): boolean {
  * they can, while every scope here is written against the open project. So it
  * is for a caller that could already do anything here: this machine (null, or
  * the machine token) or a full-scope paired device. A read-only phone, a
- * plugin whatever its scope, the understudy and a seat are refused.
+ * plugin whatever its scope, the understudy, a seat — and a worker, whose
+ * credential is minted by this app to narrow what it reaches — are refused.
  */
 export function mayReadForeignRoot(caller: Caller | null): boolean {
   if (caller === null) return true;
@@ -683,7 +788,7 @@ export function mayReadForeignRoot(caller: Caller | null): boolean {
 }
 
 /** True when this caller may make this request. */
-export function allowed(caller: Caller, method: string, pathname: string): boolean {
+export function allowed(caller: Caller, method: string, pathname: string, trustedAt?: (root: string) => boolean): boolean {
   // First, and returning outright — see `principal` on Caller. The understudy's
   // fence is a different function, not a lower rank, and the two must never be
   // consulted together: an `||` on this line would give back everything the
@@ -692,7 +797,7 @@ export function allowed(caller: Caller, method: string, pathname: string): boole
   /* Same rule, same reason: a separate function, never an `||` with the scope
      check — the seat's token says `full` so its reads work, and an `||` here
      would hand back every write this exists to withhold. */
-  if (caller.principal === "seat") return seatAllows(caller.seat?.powers ?? "speak", method, pathname);
+  if (caller.principal === "seat") return seatAllows(caller.seat?.powers ?? "speak", method, pathname, caller.seat?.root, trustedAt);
   // A plugin's own channel: its panels, its settings, its event queue, its
   // notes. Open at any scope because drawing is not a power over anything
   // else — what it may draw was declared in its manifest and approved, and
@@ -703,6 +808,10 @@ export function allowed(caller: Caller, method: string, pathname: string): boole
   // to the desk. Refused by KIND, before the scope check: a manifest may
   // declare `scope: "full"`, and `full` contains every FULL_GET below.
   if (caller.kind === "plugin" && isDeskPrivatePluginPath(pathname)) return false;
+  /* Sign-off and the start line grade themselves: an agent, a read device and a
+     stranger must all hear the same sentence, and each route asks the answer
+     grant before it writes. */
+  if (method === "POST" && (pathname === "/manifest/signoff" || pathname === "/manifest/start")) return true;
   return scopeAllows(caller.scope, scopeNeeded(method, pathname));
 }
 
@@ -755,6 +864,20 @@ export function answersFromADevice(caller: Caller | null | undefined): boolean {
   // the machine's".
   if (caller?.kind === "plugin") return false;
   return caller?.kind === "device" && scopeAllows(caller.scope, "answer");
+}
+
+/**
+ * May a paired phone answer a Polaris ask, by the ask's type?
+ *
+ * A sync may come from the phone; a send types into a live session, so only the
+ * person at the desk approves one. Written as its own function so the rule can be
+ * exercised as behaviour: the branch used to be checked by a regex over
+ * index.ts's source, and swapping the argument there kept that check green.
+ */
+export function phoneMayAnswerPolaris(ask: string | null | undefined, caller: Caller | null | undefined): boolean {
+  if (caller?.kind !== "device" || caller.principal) return false;
+  if (ask === "beacon-send-on-click") return false;
+  return scopeAllows(caller.scope, "answer");
 }
 
 /**

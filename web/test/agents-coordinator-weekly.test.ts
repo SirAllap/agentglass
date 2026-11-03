@@ -58,7 +58,7 @@ describe("the last day, as five marks and now", () => {
     { at: at(12, 30), line: "(looked at 12:30 — nothing had changed, so nobody was woken)" },
     { at: NOW - 30 * HOUR, line: "older than a day" },
   ];
-  test("a mark is blue when the coordinator said something real in it, with when; the last is now", () => {
+  test("a mark is blue when the orchestrator said something real in it, with when; the last is now", () => {
     const t = wakeTicks(lines, NOW, isRoutineLine);
     expect(t.map((x) => x.kind)).toEqual(["empty", "empty", "empty", "empty", "woke", "now"]);
     expect(t[4]!.label).toBe("9:49");

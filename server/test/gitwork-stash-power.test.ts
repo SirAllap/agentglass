@@ -14,7 +14,7 @@ import { identify } from "./gitIdentity.ts";
 const dir = realpathSync(mkdtempSync(join(tmpdir(), "agx-stashpw-")));
 process.env.AGENTGLASS_ROOT = dir;
 const {
-  stashList, stashPush, stashRename, stashToBranch, stashPartial, stashApplyOverwrite, stashDrop,
+  stashList, stashPush, stashRename, stashToBranch, stashPartial, stashApplyOverwrite, stashDrop, stashPutBack, workingTree, deleteBranch, renameBranch,
 } = await import("../src/gitwork.ts");
 
 let repo = "";
@@ -145,5 +145,75 @@ describe("stash power-ups", () => {
     writeFileSync(join(repo, "new.txt"), "locally created later\n");
     expect(stashApplyOverwrite(repo, 0).ok).toBe(true);
     expect(readFileSync(join(repo, "new.txt"), "utf8")).toBe("brand new\n");
+  });
+});
+
+describe("stash put back", () => {
+  beforeEach(build);
+  const rd = (f: string) => readFileSync(join(repo, f), "utf8");
+
+  it("undoes a clashing apply, keeps the stash and the work in progress that was there before", () => {
+    commit("d.txt", "third");
+    writeFileSync(join(repo, "a.txt"), "from the stash\n");
+    writeFileSync(join(repo, "b.txt"), "also stashed\n");
+    git("stash", "push", "-q", "-m", "clash");
+    commit("a.txt", "committed meanwhile");
+    writeFileSync(join(repo, "d.txt"), "work in progress\n");
+    expect(Bun.spawnSync(["git", "stash", "apply"], { cwd: repo }).exitCode).not.toBe(0);
+    expect(rd("a.txt")).toContain("<<<<<<<");
+    const r = stashPutBack(repo);
+    expect(r.ok).toBe(true);
+    expect(rd("a.txt")).toBe("committed meanwhile\n");
+    expect(rd("b.txt")).toBe("second\n");
+    expect(rd("d.txt")).toBe("work in progress\n");
+    expect(git("status", "--porcelain").stdout.toString().trim()).toBe("M d.txt");
+    expect(subjects()).toEqual(["On main: clash"]);
+  });
+
+  it("the tree names a file a stash apply left in conflict, so the panel can offer to resolve it", async () => {
+    writeFileSync(join(repo, "a.txt"), "mine\n");
+    git("stash", "push", "-q", "-m", "clash");
+    commit("a.txt", "committed meanwhile");
+    expect(Bun.spawnSync(["git", "stash", "apply"], { cwd: repo }).exitCode).not.toBe(0);
+    // A conflicted file prints as `diff --cc`; before it was named, the tree said clean.
+    const t = await workingTree(repo);
+    expect(t.clean).toBe(false);
+    expect(t.unstaged.filter((c) => c.status === "unmerged").map((c) => c.file_path)).toEqual([join(repo, "a.txt")]);
+  });
+
+  it("refuses when nothing is in conflict", () => {
+    writeFileSync(join(repo, "b.txt"), "staged by hand\n");
+    git("add", "b.txt");
+    const r = stashPutBack(repo);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/nothing is in conflict/);
+    expect(rd("b.txt")).toBe("staged by hand\n");
+  });
+
+  it("refuses a real merge conflict: reset --merge would drop MERGE_HEAD", () => {
+    git("checkout", "-q", "-b", "side");
+    commit("a.txt", "side edit");
+    git("checkout", "-q", "main");
+    commit("a.txt", "main edit");
+    expect(git("merge", "side").exitCode).not.toBe(0);
+    const r = stashPutBack(repo);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/in progress/);
+    expect(Bun.spawnSync(["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"], { cwd: repo }).exitCode).toBe(0);
+  });
+});
+
+describe("branch delete and rename guards (server)", () => {
+  beforeEach(build);
+  it("refuses a protected branch and the checked-out one, deletes a plain one", () => {
+    git("branch", "feature/x");
+    expect(deleteBranch(repo, "main", true).error).toMatch(/protected/);
+    expect(renameBranch(repo, "main", "trunk").error).toMatch(/protected/);
+    git("config", "agx.protectedbranches", "feature/x");
+    expect(deleteBranch(repo, "feature/x", true).error).toMatch(/protected/);
+    git("config", "--unset", "agx.protectedbranches");
+    git("checkout", "-q", "-b", "wip");
+    expect(deleteBranch(repo, "wip", true).error).toMatch(/checked out here/);
+    expect(deleteBranch(repo, "feature/x", true).ok).toBe(true);
   });
 });

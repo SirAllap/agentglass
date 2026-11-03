@@ -1,5 +1,5 @@
 /*
- * What a held gate's card says.
+ * What a gate waiting on you's card says.
  *
  * The Now screen drew a gate as its summary and a line of `source_app · the
  * agent is stopped until you answer`. `source_app` is the project's label, so

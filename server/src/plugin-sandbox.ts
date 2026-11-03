@@ -797,14 +797,19 @@ export function sandboxArgv(input: SandboxArgvInput): string[] {
   // enforced by that function existing at all, not by a check repeated here.
   for (const p of extraRo) argv.push("--ro-bind-try", p, p);
   argv.push("--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", home);
+  // After `--tmpfs home` (a checkout under HOME would otherwise be hidden by
+  // it), but before every writable bind: the bridge's root can contain
+  // `dataDir` — a checkout whose `XDG_CONFIG_HOME` lives inside it — and a
+  // later `--ro-bind` of the root would shadow the box's own rw bind there,
+  // leaving the entrypoint writing into a read-only filesystem.
+  // Not `-try`: a bridge that is missing must fail the start loudly, not leave a box whose entrypoint can never run.
+  for (const p of network?.bridgeRo ?? []) argv.push("--ro-bind", p, p);
   argv.push("--ro-bind", installDir, installDir);
   argv.push("--bind", dataDir, dataDir);
   // Handed as open descriptors, not paths — see `openGrantFds` for why.
   for (const g of grants.read) argv.push("--ro-bind-fd", String(g.childFd), g.dest);
   for (const g of grants.write) argv.push("--bind-fd", String(g.childFd), g.dest);
   for (const d of programDirs) argv.push("--ro-bind", d, d);
-  // Not `-try`: a bridge that is missing must fail the start loudly, not leave a box whose entrypoint can never run.
-  for (const p of network?.bridgeRo ?? []) argv.push("--ro-bind", p, p);
   argv.push("--chdir", installDir);
   // Wraps the plugin only, never the bridge in front of it: the bridge is
   // this app and has to dial the socket the plugin is not given. Not the

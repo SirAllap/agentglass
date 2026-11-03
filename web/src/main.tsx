@@ -1,3 +1,4 @@
+import "./lib/paneBarFirstRun.ts";
 import React, { useEffect } from "react";
 import ReactDOM from "react-dom/client";
 // First among the app's own modules: it reads whether the launch cover is up

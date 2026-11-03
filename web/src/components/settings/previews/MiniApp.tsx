@@ -4,7 +4,7 @@ import { densityPad, fontScale, railBadge, railDrawers, type Density, type RailI
 
 export type MiniView = "dash" | "pr" | "diff" | "term";
 export const MINI_VIEWS: { id: MiniView; label: string }[] = [
-  { id: "dash", label: "Dashboard" }, { id: "pr", label: "Pull requests" }, { id: "diff", label: "Diff" }, { id: "term", label: "Terminal" },
+  { id: "dash", label: "Starboard" }, { id: "pr", label: "Pull requests" }, { id: "diff", label: "Diff" }, { id: "term", label: "Terminal" },
 ];
 
 /** The rail in the shape the previews draw: the drawers a layout holds, and the views put away as "off". */
@@ -55,7 +55,7 @@ export function MiniRail({ items, selected }: { items: readonly RailItem[]; sele
   );
 }
 
-function Chip({ text }: { text: string }) {
+function StatusWord({ text }: { text: string }) {
   const tone = text === "Needs you" ? "--warning" : text === "Merged" ? "--info" : "--success";
   return <span style={{ fontSize: "0.8em", padding: "0.1em 0.6em", borderRadius: "999px", background: `color-mix(in srgb, var(${tone}) 16%, transparent)`, color: `var(${tone}-ink)` }}>{text}</span>;
 }
@@ -85,7 +85,7 @@ function Body({ view, pad }: { view: MiniView; pad: number }) {
       {rows.map(([t, s, c]) => (
         <div key={t} className="flex items-center justify-between" style={{ padding: `${pad}em 0.9em`, background: "var(--surface-card)", border: BORDER, borderRadius: "0.7em", gap: "1em" }}>
           <div className="min-w-0"><div style={{ fontWeight: 600, color: "var(--text)" }}>{t}</div><div style={{ fontSize: "0.8em", color: "var(--text3)" }}>{s}</div></div>
-          <Chip text={c} />
+          <StatusWord text={c} />
         </div>
       ))}
     </div>

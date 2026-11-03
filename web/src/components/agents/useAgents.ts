@@ -6,12 +6,13 @@ import { subscribeLantern, lanternRows, lanternChairs, refreshLantern } from "..
 import type { LanternRow } from "../LanternView.tsx";
 import type { AgentSchedule } from "../LanternSchedule.tsx";
 import { forgottenPorts, type Forgotten } from "../../lib/portsForgotten.ts";
+import { pickerProjects } from "../../lib/agentRulesView.ts";
 
 /*
  * EVERYTHING THE AGENTS SCREEN READS, in one place.
  *
  * Each source is the one the app already has — the board (lanternStore, one
- * reader for the whole app), a project's `/seat`, the held gates, the settings
+ * reader for the whole app), a project's `/seat`, the gates waiting on you, the settings
  * requests, a scan of listening ports, the schedules — read on the clock that
  * source needs and only while the screen is on show. Nothing is read twice and
  * nothing here decides anything: the decisions are in lib/agentsScreen.ts.
@@ -69,8 +70,7 @@ export function useAgents(active: boolean): AgentsData {
     }).catch(() => {});
   }, []);
 
-  /* In the order they were opened, then any with a coordinator that is not open. */
-  const projects = useMemo(() => [...new Set([...open, ...chairs.map((c) => c.root)])], [open, chairs]);
+  const projects = useMemo(() => pickerProjects(open, chairs.map((c) => c.root), rows ?? []), [open, chairs, rows]);
   /* A scope nobody chose follows the first open project; with none open it is every project. */
   const effective = scope === ALL ? ALL : scope && (projects.includes(scope) || scope.startsWith("/")) ? scope : open[0] ?? projects[0] ?? ALL;
   const setScope = useCallback((s: string) => { setScopeState(s); keepScope(s); }, []);
@@ -80,7 +80,7 @@ export function useAgents(active: boolean): AgentsData {
     api.seat(effective).then((r) => {
       if (!live.current) return;
       setSeat(r); setCheckedAt(Date.now()); setError(!r.ok && r.error ? r.error : "");
-    }).catch(() => { if (live.current) setError("could not read the coordinator"); });
+    }).catch(() => { if (live.current) setError("could not read the orchestrator"); });
   }, [effective]);
   const readAsks = useCallback(() => {
     api.gatePending().then((r) => { if (live.current) setGates(r.gates ?? []); }).catch(() => {});

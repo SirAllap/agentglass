@@ -61,7 +61,7 @@ describe("the sentence form of each trigger kind", () => {
 
   test("a rule reads as one sentence: when, then which engines, in order", () => {
     expect(ruleLine(rule())).toBe(
-      `When 10% or less of the ${title("claude")} weekly plan is left: builders use ${title("opencode")} big-pickle, then ${title("hermes")}.`);
+      `When 10% or less of the ${title("claude")} weekly plan is left: Builder uses ${title("opencode")} big-pickle, then ${title("hermes")}.`);
   });
   test("every condition and every named field is in the sentence", () => {
     const r = rule({
@@ -70,7 +70,7 @@ describe("the sentence form of each trigger kind", () => {
       workers: { scout: [{ engine: "opencode", model: "" }], verifier: [{ engine: "claude", model: "" }] },
     });
     expect(ruleLine(r)).toBe(
-      `When the project's budget is used up and it is Sat, 00:00 to 23:59: the main agent is ${title("claude")} haiku; scouts use ${title("opencode")}; verifiers use ${title("claude")}.`);
+      `When the project's budget is used up and it is Sat, 00:00 to 23:59: the main agent is ${title("claude")} haiku; Scout uses ${title("opencode")}; Verifier uses ${title("claude")}.`);
   });
 });
 

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
+import { CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS, INPUT, INPUT_STYLE, EDGE, LINE, ListRow, Button } from "./workspace/Chrome.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { BranchIcon, FolderIcon, SearchIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { pickerBody } from "../lib/gitDialog.ts";
 import type { GitRepoRef, GitBranch } from "../../../shared/types.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 
@@ -44,7 +46,7 @@ export interface CheckoutBranches {
 export function CheckoutPicker({
   repos, value, onPick,
   branches, branchLabel, placeholder = "Repo", emptyLabel = "no repos seen yet",
-  triggerMaxWidth = 240, disabled, title, onOpenChange, onDismiss,
+  triggerMaxWidth = 240, disabled, title, onOpenChange, onDismiss, loading, error, onRetry,
 }: {
   repos: GitRepoRef[];
   /** The chosen checkout's root. Empty means nothing picked yet. */
@@ -86,6 +88,12 @@ export function CheckoutPicker({
    * to simply omits this.
    */
   onDismiss?: () => void;
+  /** The list is still being read: rows are drawn as skeletons. */
+  loading?: boolean;
+  /** The last refresh failed. Said in a sentence above whatever list there is
+   *  (a stale list is kept rather than emptied), with a way to retry. */
+  error?: string | null;
+  onRetry?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -129,6 +137,8 @@ export function CheckoutPicker({
       .filter((b) => !checkedOut.has(b.name) && (!q || b.name.toLowerCase().includes(q)))
       .slice(0, 80);
   }, [branches, repos, query]);
+
+  const body = pickerBody({ loading: !!loading && !repos.length, error: error && !repos.length ? error : null, total: repos.length, shown: shownRepos.length + shownBranches.length, query });
 
   /** One list for the keyboard, because the cursor crosses the heading between
    *  them and "third row down" has to mean the third row down. */
@@ -207,25 +217,39 @@ export function CheckoutPicker({
            the two pieces that tell one checkout from another, and at 320 with
            the branch clipped at 150 they were both cut off on the same row. */
         <div
-          className="absolute left-0 mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col"
+          className="absolute left-0 mt-1 rounded-xl text-[11px] flex flex-col"
           role="listbox"
           onKeyDown={onKey}
           style={{
             zIndex: 30, background: "var(--surface-card)",
-            border: EDGE,
-            minWidth: 320, maxWidth: "min(86vw, 760px)", maxHeight: 420, overflow: "hidden",
+            border: EDGE, boxShadow: "var(--surface-lift), 0 24px 60px -18px rgba(0,0,0,0.5)",
+            width: 380, maxWidth: "min(86vw, 760px)", maxHeight: 420, overflow: "hidden",
           }}
         >
-          <input
-            autoFocus
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Filter checkouts…"
-            aria-label="Filter checkouts"
-            className={`m-1.5 shrink-0 ${INPUT}`}
-            style={INPUT_STYLE}
-          />
-          <div ref={rowsRef} className="agx-scroll overflow-y-auto overflow-x-hidden pb-1" style={{ minHeight: 0 }}>
+          <div className="m-2 shrink-0 relative">
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: "var(--text3)" }}><SearchIcon size={ICON.sm} /></span>
+                  <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Find a checkout"
+              aria-label="Filter checkouts"
+              className={`w-full pl-8 pr-16 ${INPUT}`} style={INPUT_STYLE}
+            />
+                  {body === "rows" && <span className="absolute right-2.5 top-1/2 -translate-y-1/2 tabular-nums text-[10.5px]" style={{ color: "var(--text3)", fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>{shownRepos.length} of {repos.length}</span>}
+                </div>
+          <div ref={rowsRef} className="agx-scroll overflow-y-auto overflow-x-hidden px-1 pb-1.5" style={{ minHeight: 0 }}>
+            {error && (
+              <div role="alert" className="mx-2 mb-1.5 flex items-center gap-2.5 rounded-lg px-3 py-2 text-[11.5px]" style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 28%, transparent)" }}>
+                <WarningIcon size={ICON.md} /><span className="min-w-0 flex-1">{error}</span>
+                {onRetry && <Button size="compact" onClick={onRetry} className="shrink-0">Try again</Button>}
+              </div>
+            )}
+            {body === "loading" && (
+              <div role="status" aria-label="Reading checkouts" className="px-2 flex flex-col gap-1.5">
+                {[0, 1, 2].map((i) => <div key={i} className="rounded-lg motion-safe:animate-pulse" style={{ height: 40, background: "var(--surface-inset)", opacity: 1 - i * 0.2 }} />)}
+              </div>
+            )}
             {unlisted && (
               <div className="px-2.5 py-1.5 flex items-center gap-2" style={{ background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>
                 <span className="shrink-0 text-[8.5px] leading-none px-1 py-0.5 rounded" style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>SET</span>
@@ -234,58 +258,53 @@ export function CheckoutPicker({
               </div>
             )}
             {shownRepos.map((r, i) => (
-              <button
+              <ListRow
                 key={r.root}
                 role="option"
                 aria-selected={r.root === value}
                 data-cursor={i === cursor ? "1" : undefined}
                 onMouseEnter={() => setCursor(i)}
                 onClick={() => { onPick(r.root); close(false); }}
-                className="w-full text-left px-2.5 py-1.5 flex items-center gap-2"
-                style={{
-                  background: r.root === value
-                    ? "color-mix(in srgb, var(--primary) 15%, transparent)"
-                    : i === cursor ? "color-mix(in srgb, var(--primary) 9%, transparent)" : "transparent",
-                }}
+                current={r.root === value}
+                hot={i === cursor}
+                title={r.worktreeOf ? `${r.branch}\n${r.root}` : r.root}
+                /* The tile names the kind outright and reads the same wherever
+                   the row lands. It was an indent once, which says nothing as
+                   soon as the list is filtered and the parent is off screen. */
+                leading={
+                  <span className="grid place-items-center rounded-lg"
+                    title={r.worktreeOf ? `worktree of ${r.worktreeOf}` : "main checkout"}
+                    style={{ width: 28, height: 28, background: "var(--surface-inset)", border: EDGE, color: r.worktreeOf ? "var(--primary-ink)" : "var(--text2)" }}>
+                    {r.worktreeOf ? <BranchIcon size={ICON.sm} /> : <FolderIcon size={ICON.sm} />}
+                  </span>
+                }
+                /* A worktree IS its branch — that's the whole point of one per
+                   ticket — so the branch is the name and the folder a terse
+                   stub of it. A project is the other way round: the folder is
+                   the identity and the branch is what happens to be checked
+                   out. The folder is shown either way, since a checkout can
+                   rename the row otherwise, and a directory's identity must
+                   not move under a click. */
+                sub={r.worktreeOf ? `worktree · ${r.name}` : `repo · ${r.branch}`}
+                trailing={<>
+                  {r.dirty > 0 && <span className="text-[10px] tabular-nums" style={{ color: "var(--warning-ink)" }} title={`${r.dirty} changed file${r.dirty === 1 ? "" : "s"}`}>●{r.dirty}</span>}
+                  {r.behind > 0 && <span className="text-[10px] tabular-nums" style={{ color: "var(--warning-ink)" }} title={`${r.behind} behind upstream`}>↓{r.behind}</span>}
+                  {r.ahead > 0 && <span className="text-[10px] tabular-nums" style={{ color: "var(--success-ink)" }} title={`${r.ahead} ahead of upstream`}>↑{r.ahead}</span>}
+                </>}
               >
-                {/* A badge names the kind outright and reads the same wherever
-                    the row lands. It was an indent once, which says nothing as
-                    soon as the list is filtered and the parent is off screen. */}
-                <span
-                  className="shrink-0 text-[8.5px] leading-none px-1 py-0.5 rounded"
-                  title={r.worktreeOf ? `worktree of ${r.worktreeOf}` : "main checkout"}
-                  style={r.worktreeOf
-                    ? { color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }
-                    : { color: "var(--text3)", border: EDGE }}
-                >{r.worktreeOf ? "WT" : "REPO"}</span>
-                {/* A worktree IS its branch — that's the whole point of one per
-                    ticket — so the branch gets the wide column and the folder
-                    is a terse stub of it. A project is the other way round: the
-                    folder is the identity and the branch is what happens to be
-                    checked out. The folder is shown beside it either way, since
-                    a checkout can rename the row otherwise, and a directory's
-                    identity must not move under a click. */}
-                <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={r.worktreeOf ? `${r.branch}\n${r.root}` : r.root}>
-                  {r.worktreeOf ? r.branch : r.name}
-                </span>
-                {!r.worktreeOf
-                  ? <span className="shrink-0 truncate t-dim2 text-[9.5px]" style={{ maxWidth: 150 }} title={r.branch}>{r.branch}</span>
-                  : r.name !== r.branch && <span className="shrink-0 truncate t-dim2 text-[9.5px]" style={{ maxWidth: 150 }} title={r.root}>{r.name}</span>}
-                {r.dirty > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--warning-ink)" }} title={`${r.dirty} changed file${r.dirty === 1 ? "" : "s"}`}>●{r.dirty}</span>}
-                {r.behind > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--warning-ink)" }} title={`${r.behind} behind upstream`}>↓{r.behind}</span>}
-                {r.ahead > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--success-ink)" }} title={`${r.ahead} ahead of upstream`}>↑{r.ahead}</span>}
-              </button>
+                {r.worktreeOf ? r.branch : r.name}
+              </ListRow>
             ))}
 
             {shownBranches.length > 0 && (
               <>
                 {/* Under their own heading, and last. These are the only rows in
                     this menu that write to disk. */}
-                <div className="px-2.5 pt-2 pb-1 text-[10px] uppercase tracking-wider t-dim2" style={{ borderTop: LINE }}>Branches — checkout here</div>
+                <div className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider t-dim2" style={{ borderTop: LINE }}>Branches — checkout here</div>
                 {shownBranches.map((b, i) => {
                   const at = shownRepos.length + i;
                   return (
-                    <button
+                    <ListRow
                       key={b.name}
                       role="option"
                       aria-selected={false}
@@ -293,19 +312,29 @@ export function CheckoutPicker({
                       onMouseEnter={() => setCursor(at)}
                       disabled={branches?.disabled}
                       onClick={() => { branches?.onCheckout(b.name); close(false); }}
-                      className="w-full text-left px-2.5 py-1.5 flex items-center gap-2 disabled:opacity-50"
-                      style={{ background: at === cursor ? "color-mix(in srgb, var(--primary) 9%, transparent)" : "transparent" }}
+                      hot={at === cursor}
+                      roomy
+                      title={b.name}
+                      leading={
+                        <span className="grid place-items-center rounded-lg" title="local branch — checked out in the current directory"
+                          style={{ width: 28, height: 28, background: "var(--surface-inset)", border: EDGE, color: "var(--text2)" }}><BranchIcon size={ICON.sm} /></span>
+                      }
+                      trailing={branches?.gone?.(b) ? <span className="text-[10px] px-1 rounded" style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }}>gone</span> : null}
                     >
-                      <span className="shrink-0 text-[8.5px] leading-none px-1 py-0.5 rounded" title="local branch — checked out in the current directory" style={{ color: "var(--text3)", border: EDGE }}>BR</span>
-                      <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={b.name}>{b.name}</span>
-                      {branches?.gone?.(b) && <span className="shrink-0 text-[10px] px-1 rounded" style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }}>gone</span>}
-                    </button>
+                      {b.name}
+                    </ListRow>
                   );
                 })}
               </>
             )}
 
-            {!repos.length && <div className="px-3 py-2 t-dim2">{emptyLabel}</div>}
+            {body === "empty" && <div className="px-3 py-4 text-center text-[12px] t-dim2">{emptyLabel}</div>}
+            {body === "no-match" && walk.length === 0 && (
+              <div className="px-3 py-4 text-center text-[12px]" style={{ color: "var(--text3)" }}>
+                <div className="font-medium break-all" style={{ color: "var(--text2)" }}>No checkout called “{query.trim()}”</div>
+                <div className="mt-0.5">Check the spelling, or clear the search.</div>
+              </div>
+            )}
           </div>
         </div>
       )}

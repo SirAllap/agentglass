@@ -1,5 +1,5 @@
 /**
- * THE DASHBOARD'S FIRST LINE: what is running, what is stuck, what needs you.
+ * STARBOARD'S FIRST LINE: what is running, what is quiet, what needs you.
  *
  * The dashboard answered "what happened" at equal weight in fourteen panels
  * and left "is anything wrong right now" to whoever could read them all. This
@@ -7,9 +7,9 @@
  * rather than a new source: the same rows the rail's pip and the Lantern view
  * already poll, sorted by `attention` in shared/fieldRules.ts — the same call
  * the watch makes before it sends a notification, so the line and the push
- * cannot tell two stories. A permission or a held gate is what needs you (and
+ * cannot tell two stories. A permission or a gate waiting on you is what needs you (and
  * is exactly what the rail's pip counts); claimed work quiet for an hour, or a
- * turn that ended and nobody came back to for an hour, is stuck. The rows it
+ * turn that ended and nobody came back to for an hour, is quiet (the clause key stays "stuck"). The rows it
  * counts are the rows the Lantern view draws, so a clause that opens the view
  * finds what it counted.
  *
@@ -46,7 +46,7 @@ export interface FleetVerdict {
 }
 
 const waitWord = (w: NonNullable<LanternRow["needsYou"]>) =>
-  w.kind === "permission" ? "needs your permission" : "held at the gate";
+  w.kind === "permission" ? "needs your permission" : "waiting at the gate";
 
 /** Null until the board has been read: "not known" must not be drawn as "all
  *  nominal". The store answers [] when its first read fails, so the rows alone
@@ -72,7 +72,7 @@ export function fleetVerdict(all: LanternRow[] | null, now = Date.now(), failed 
     const one = stuck.length === 1 ? stuck[0] : null;
     clauses.push({
       kind: "stuck", count: stuck.length, tone: "warn", paneId: one?.paneId,
-      text: !one ? `${stuck.length} stuck`
+      text: !one ? `${stuck.length} quiet`
         : one.needsYou ? `${one.name} waiting for your next prompt for ${howLong(one.needsYou.since, now)}`
         : `${one.name} quiet for ${howLong(one.saidAt!, now)} on "${one.doing}"`,
     });
@@ -83,7 +83,7 @@ export function fleetVerdict(all: LanternRow[] | null, now = Date.now(), failed 
     clauses.push({
       kind: "need", count: need.length, tone: "critical", paneId: one?.paneId,
       /* `why` is the agent's own sentence ("Claude needs your permission to
-         use Bash", "held at the gate: Bash — …"), so it stands alone; the
+         use Bash", "waiting at the gate: Bash — …"), so it stands alone; the
          kind's words are only for a wait that came without one. */
       text: one && w ? `${one.name}: ${w.why || waitWord(w)}` : `${need.length} need you`,
     });

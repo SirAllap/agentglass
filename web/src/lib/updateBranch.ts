@@ -108,7 +108,7 @@ export function branchNoticeJump(n: BranchNotice, repoRoot: string): WorktreeJum
 
 /** Which files the panel's own merge of the two trees found in conflict, and
  *  whether the fetch behind it failed. */
-export interface ConflictFilesSeen { files: string[]; stale: boolean }
+export interface ConflictFilesSeen { files: string[]; stale: boolean; headSha?: string }
 
 /** A fresh merge of the pushed refs came back with nothing to settle. See the
  *  panel for why that outranks GitHub's CONFLICTING. */
@@ -120,7 +120,8 @@ export const gitSaysClean = (seen: ConflictFilesSeen | null): boolean =>
  * and the merge buttons go, "Resolve conflicts" comes.
  *
  * GitHub's CONFLICTING, unless git has just merged the same refs and found
- * nothing — or because we merged the two trees ourselves and found out. GitHub
+ * nothing — or because we merged the two trees ourselves and found out, which
+ * counts only while GitHub says UNKNOWN and only at the head GitHub has. GitHub
  * computes `mergeable` lazily and answers UNKNOWN until somebody asks twice —
  * measured on this repository's own open pull request #464, which GitHub
  * called UNKNOWN while git named the one file it conflicts in. A gate that
@@ -141,8 +142,15 @@ export const gitSaysClean = (seen: ConflictFilesSeen | null): boolean =>
  * the refusal is held against. Should the worktree merge come out clean after
  * all, Resolve conflicts says so: "nothing to resolve, just push it".
  */
-export function prConflicted(mergeable: string, seen: ConflictFilesSeen | null, refused: boolean): boolean {
-  return refused
-    || (mergeable === "CONFLICTING" && !gitSaysClean(seen))
-    || (!!seen && !seen.stale && seen.files.length > 0);
+export function prConflicted(mergeable: string, seen: ConflictFilesSeen | null, refused: boolean, headSha?: string): boolean {
+  if (refused) return true;
+  if (mergeable === "CONFLICTING") return !gitSaysClean(seen);
+  // GitHub's MERGEABLE is the authority. Measured: a merge pushed from a
+  // terminal left the panel's own merge comparing against a remote-tracking
+  // ref that was not GitHub's head, and it said "blocked" on a pull request
+  // GitHub would merge.
+  if (mergeable === "MERGEABLE") return false;
+  // UNKNOWN: git's files count only when they were found against the head
+  // GitHub has — otherwise the claim is about a ref, not this pull request.
+  return !!seen && !seen.stale && seen.files.length > 0 && !!headSha && seen.headSha === headSha;
 }

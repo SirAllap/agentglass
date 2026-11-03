@@ -14,7 +14,7 @@ import { openSettings } from "../lib/openSettings.ts";
 import { __forgetListMembers } from "../lib/listMembers.ts";
 import { setting } from "../lib/settingsRegistry.ts";
 import { DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN, type ClickUpPrefs, type ClickUpStepBlock, type ProviderStatus } from "../../../shared/providers.ts";
-import { DEFAULT_CARD_SKILL_PATTERN } from "../../../shared/cardSkills.ts";
+import { cardSkills, DEFAULT_CARD_SKILL_PATTERN } from "../../../shared/cardSkills.ts";
 import { SettingRow, Switch, Toggle } from "./SettingRow.tsx";
 import { EmptyState, Field, ProblemNote, SettingsCard, SettingsForm, StatusBadge, helpIdFor } from "./SettingsKit.tsx";
 import { useReportProblem } from "./SettingsPageState.tsx";
@@ -23,7 +23,7 @@ import { Button, INPUT, INPUT_STYLE, RefreshButton, Segmented } from "./workspac
 import { Dot, StatusPopover, type PanelView } from "./StatusPanel.tsx";
 import { ListEye, WorkflowMap } from "./WorkflowMap.tsx";
 import { WFM_CSS } from "./workflowMapStyle.ts";
-import { Card, CountedPicker, CardView, PrView, TextRow, Tagged, ago, hint } from "./TrackerMapParts.tsx";
+import { CountedPicker, CardView, PrView, TextRow, Tagged, ago, hint } from "./TrackerMapParts.tsx";
 import { EyeIcon, LockIcon, PlusIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { HIT, ICON } from "../lib/iconSize.ts";
 import { ColumnsIcon, PlugIcon, SearchIcon, SlidersIcon } from "./settingsNavIcons.tsx";
@@ -32,18 +32,60 @@ const n = CLICKUP.nouns;
 
 
 /** Which agent skills count as knowing what a card is. It was filed under the tracker's names; it is about agents. */
-export function CardSkillsRow({ connected }: { connected: boolean }) {
+export function CardSkillsRow({ onPattern }: { onPattern?: (pattern: string) => void }) {
   const [prefs, setPrefs] = useState<ClickUpPrefs | null>(null);
-  useEffect(() => { if (connected) void clickupPrefs().then((p) => setPrefs(p)); }, [connected]);
-  if (!connected || !prefs) return null;
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { void clickupPrefs().then(setPrefs).catch(() => setFailed(true)); }, []);
+  /* The field is drawn before (and without) the read: a row that returns null
+     leaves the card's note under no control at all, and saving works anyway. */
   return (
-    <TextRow label="Card skills pattern" hint="Regex on a skill’s name or description: which skills know what a card is."
-      value={prefs.cardSkillPattern} fallback={DEFAULT_CARD_SKILL_PATTERN} placeholder="clickup|\bcu-|-cu\b"
-      onSave={async (v) => {
-        const r = await api.clickupSetPrefs({ cardSkillPattern: v });
-        if (!r.ok || !r.prefs) return r.error ?? "That did not save";
-        setPrefs(r.prefs); clickupPrefsSaved(r.prefs); return null;
-      }} />
+    <>
+      <TextRow label="Card skills pattern" hint="A pattern on a skill’s name or description. Matching skills are offered when a card is open."
+        value={prefs?.cardSkillPattern ?? DEFAULT_CARD_SKILL_PATTERN} fallback={DEFAULT_CARD_SKILL_PATTERN} placeholder={"acme|orbit-\\d{4}"}
+        onSave={async (v) => {
+          const r = await api.clickupSetPrefs({ cardSkillPattern: v });
+          if (!r.ok || !r.prefs) return r.error ?? "That did not save";
+          setPrefs(r.prefs); clickupPrefsSaved(r.prefs); onPattern?.(r.prefs.cardSkillPattern); return null;
+        }} />
+      {failed && (
+        <p className="agx-settings-x m-0 px-4 pb-2 text-[11px]" style={{ color: "var(--error-ink)" }}>
+          Could not read the saved pattern; this is the shipped one, and saving replaces it.
+        </p>
+      )}
+    </>
+  );
+}
+
+/** The Card skills block: the generic pattern, and where the tracker's own default lives. */
+export function CardSkillsCard({ connected }: { connected: boolean }) {
+  const [count, setCount] = useState<number | null>(null);
+  const [pattern, setPattern] = useState("");
+  const read = () => {
+    Promise.all([api.skills(), clickupPrefs()])
+      .then(([r, p]) => {
+        const src = p?.cardSkillPattern ?? DEFAULT_CARD_SKILL_PATTERN;
+        setPattern(src);
+        setCount(cardSkills(r.skills ?? [], src).length);
+      })
+      .catch(() => { /* the field still saves; only the count is unknown */ });
+  };
+  useEffect(read, []);
+  return (
+    <SettingsCard title="Card skills" icon={<SlidersIcon size={ICON.sm} />}
+      desc="Which of your skills know what a card is, so a card can offer them."
+      status={count === null ? undefined : <StatusBadge tone={count ? "info" : "off"}>{count} {count === 1 ? "skill matches" : "skills match"}</StatusBadge>}>
+      <CardSkillsRow onPattern={(p) => { setPattern(p); read(); }} />
+      <div className="agx-card-skills-note">
+        <span className="t-dim text-[11.5px]">
+          {connected
+            ? <>The tracker’s own default lives on the <b>ClickUp</b> page, not on this page.</>
+            : <>Connect ClickUp under <b>Tools &amp; services</b>; its own default lives on its page.</>}
+        </span>
+        <Button onClick={() => openSettings(connected ? "clickup" : "connections")}>
+          {connected ? "Open ClickUp" : "Open Connections"}
+        </Button>
+      </div>
+    </SettingsCard>
   );
 }
 
@@ -311,7 +353,7 @@ export function ClickUpPane() {
         <DisconnectBar onDone={() => { setEpoch((e) => e + 1); reread(); }} />
       </SettingsCard>
 
-      <Card id="cu-found" icon={<SearchIcon size={ICON.sm} />} title="What we found" open={foundOpen ?? steps.length === 0} onToggle={setFoundOpen}
+      <SettingsCard icon={<SearchIcon size={ICON.sm} />} title="What we found" fold={{ open: foundOpen ?? steps.length === 0, onToggle: setFoundOpen }}
         desc={reading ? undefined : `${part.counted.length} ${n.lists} count · ${distinct} statuses${part.folded.length ? ` · ${part.folded.length} ignored` : ""}${prefs.prLinkField ? ` · PR link ${prefs.prLinkField}` : ""}${prefs.swatchField ? ` · swatch ${prefs.swatchField}` : ""}`}
         status={<StatusBadge tone={state.kind === "error" ? (asOf ? "off" : "warn") : state.kind === "loading" ? "checking" : "ok"}>{reading ? "Reading your cards" : state.kind === "loading" ? "Reading" : state.kind === "error" ? (asOf ? `As of ${ago(asOf)}` : "Not read") : "Read-only"}</StatusBadge>}>
         <SettingRow label={`${n.lists[0]!.toUpperCase()}${n.lists.slice(1)} that count`}
@@ -342,7 +384,7 @@ export function ClickUpPane() {
             <div className="flex gap-2 items-baseline flex-wrap text-[13px]">Sprints {prefs.sprintListPattern === DEFAULT_SPRINT_LIST_PATTERN ? hint("lists named like “Sprint 12”, and dated ones") : <><Tagged>{prefs.sprintListPattern}</Tagged>{hint("and dated ones")}</>}</div>
             <span><button type="button" className="agx-textlink text-[12px]" onClick={showAdvanced}>Change these in Advanced</button></span>
           </div>} />
-      </Card>
+      </SettingsCard>
       {countAt && (
         <StatusPopover anchor={countAt} label={`${n.lists} that count`} onClose={(f) => { setCountAt(null); if (f) countAt.focus(); }}>
           <CountedPicker n={n} units={units} chosen={chosen} onChange={count} onReset={() => count([])} onClose={() => { setCountAt(null); countAt.focus(); }} />
@@ -365,7 +407,7 @@ export function ClickUpPane() {
         onRetry={reread} />
       {note && <div role="alert" className="text-[12px] -mt-3 mb-6" style={{ color: "var(--error-ink)" }}>{note}</div>}
 
-      <Card id="cu-shows" icon={<ColumnsIcon size={ICON.sm} />} title="Where this shows up" desc="Hover a step above to see which part of this it adds."
+      <SettingsCard icon={<ColumnsIcon size={ICON.sm} />} title="Where this shows up" desc="Hover a step above to see which part of this it adds."
         actions={<Segmented label={`Does the pull request name a ${n.item}?`} value={linked ? "1" : "0"} onChange={(v) => setLinked(v === "1")}
           options={[{ id: "1", label: "Linked" }, { id: "0", label: "No link" }]} />}>
         <div className="grid gap-4 agx-settings-x pt-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))" }}>
@@ -378,12 +420,12 @@ export function ClickUpPane() {
             : `No steps: the ${n.item} is shown, nothing writes.`}
           {!linked && ` This pull request names no ${n.item}: no ${n.name} block on it and no Pull requests section on the ${n.item}. Tasks works on its own.`}
         </div>
-      </Card>
+      </SettingsCard>
 
       <RequestBudgetCard epoch={epoch} />
 
       <div ref={advRef}>
-        <Card id="cu-adv" icon={<SlidersIcon size={ICON.sm} />} title="Advanced" desc="The fields and patterns the reading above is built on." open={advOpen} onToggle={setAdvOpen}>
+        <SettingsCard icon={<SlidersIcon size={ICON.sm} />} title="Advanced" desc="The fields and patterns the reading above is built on." fold={{ open: !!advOpen, onToggle: setAdvOpen }}>
           <TextRow label="PR link field" hint="The custom field that holds the pull request link. Empty: any field named github." value={prefs.prLinkField} placeholder="GitHub URL"
             onSave={async (v) => ((await send({ prLinkField: v } as never)) ? null : "That did not save")} />
           <TextRow label="Colour column field" hint="A drop-down shown as a swatch. Empty: guessed from the field names." value={prefs.swatchField} placeholder="Team"
@@ -392,9 +434,12 @@ export function ClickUpPane() {
             onSave={async (v) => patternSave(await api.clickupSetPrefs({ sprintListPattern: v }), setPrefs)} />
           <TextRow label="Read-only fields pattern" hint="Regex for fields shown but never written." value={prefs.readOnlyFieldPattern} fallback={DEFAULT_READ_ONLY_FIELD_PATTERN} placeholder="do not edit"
             onSave={async (v) => patternSave(await api.clickupSetPrefs({ readOnlyFieldPattern: v }), setPrefs)} />
+          <SettingRow agentExempt label="Card skills default"
+            hint="The tracker’s own naming. Skills matching it are offered when one of your cards is open; the generic pattern is on Settings › Agents."
+            status={<span className="t-mono text-[11px]">{DEFAULT_CARD_SKILL_PATTERN}</span>} />
           <Toggle on={prefs.assigned.includeSubtasks} onClick={() => { void send({ assigned: { includeSubtasks: !prefs.assigned.includeSubtasks } } as never); }}
             agentNever="changes how heavy the shared ClickUp read is against a rate-limited token the owner also works with, so it is the owner's to turn on" label="Subtasks on Assigned to me" hint="Slower: the workspace read can take twice as long." />
-        </Card>
+        </SettingsCard>
       </div>
     </div>
   );

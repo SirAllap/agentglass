@@ -24,10 +24,12 @@ describe("the Commands menu stays on screen", () => {
 });
 
 describe("the terminal has no dot on the rail", () => {
-  it("is not given one, and the rail no longer draws one", async () => {
+  it("is not given one, and the rail draws a dot only for a pip that asks", async () => {
+    // The rail draws no dot of its own: a view that wants one asks for it, as the
+    // Manifest does for rows waiting on a verdict. The terminal's pip has none.
     const ws = await Bun.file(new URL("../src/components/workspace/Workspace.tsx", import.meta.url)).text();
     const rail = await Bun.file(new URL("../src/components/workspace/ViewRail.tsx", import.meta.url)).text();
-    expect(ws).not.toContain("dot: true");
-    expect(rail).not.toContain("pip?.dot");
+    expect(ws).not.toMatch(/\bterm:\s*\{[^}]*dot/);
+    expect(rail).toContain("pip?.dot");
   });
 });

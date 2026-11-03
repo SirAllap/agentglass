@@ -94,6 +94,30 @@ for (const flavor of ["cloud", "datacenter"] as const) {
         expect(q.ok && q.url).toContain("jql=");
       });
 
+      test("a project's list view is a search by its jql, with the whole project one click away", () => {
+        const jql = "project = ORBIT AND component = Ingest ORDER BY created DESC";
+        const space = { kind: "space" as const, id: "ORBIT", label: "Add the whole project" };
+        for (const path of ["/jira/software/c/projects/ORBIT/list", "/jira/software/projects/ORBIT/list/", "/jira/core/projects/ORBIT/list", "/jira/software/c/projects/ORBIT/board", "/jira/software/c/projects/ORBIT/issues"]) {
+          const r = ok(`https://${site}${path}?jql=${encodeURIComponent(jql)}&atlOrigin=x`);
+          expect(r).toMatchObject({ ok: true, kind: "jql", jql });
+          expect(r.ok && r.alternatives).toEqual([{ kind: "jql", id: r.ok ? r.id : "", label: "Add as a search" }, space]);
+        }
+        // no jql: the whole project as a search, same two options
+        const bare = ok(`https://${site}/jira/software/c/projects/ORBIT/list`);
+        expect(bare).toMatchObject({ ok: true, kind: "jql", jql: "project = ORBIT" });
+        expect(bare.ok && bare.alternatives?.[1]).toEqual(space);
+        // an address that was not a project view carries no alternatives
+        expect(ok(`https://${site}/issues/?jql=project%20%3D%20ORBIT`)).not.toHaveProperty("alternatives");
+        expect(ok(`https://${site}/jira/software/c/projects/ORBIT/boards/1`)).not.toHaveProperty("alternatives");
+      });
+
+      test("a project's list view on another host, with a bad key, or with no restriction is refused", () => {
+        expect(ok("https://evil.example/jira/software/c/projects/ORBIT/list?jql=project%20%3D%20ORBIT")).toMatchObject({ ok: false });
+        for (const key of ["orbit", "1ORB", "OR-B", "OR%3BB"]) expect(ok(`https://${site}/jira/software/c/projects/${key}/list`)).toMatchObject({ ok: false, error: expect.stringContaining("?filter=10000") });
+        expect(ok(`https://${site}/jira/software/c/projects/ORBIT/list?jql=${encodeURIComponent("ORDER BY key")}`)).toMatchObject({ ok: false, error: expect.stringContaining("no restriction") });
+        expect(ok(`https://${site}/jira/software/c/projects/ORBIT/settings`)).toMatchObject({ ok: false });
+      });
+
       test("a name and password in the pasted address, and a fragment, are not kept", () => {
         const r = ok(`https://ada:${PW}@${site}/issues/?filter=10020#top`);
         expect(r).toMatchObject({ ok: true, kind: "filter", url: `https://${site}/issues/?filter=10020` });
@@ -131,6 +155,11 @@ for (const flavor of ["cloud", "datacenter"] as const) {
           expect(ok(u)).toMatchObject({ ok: false, error: expect.stringContaining("?filter=10000") });
         }
         expect(ok(`https://${site}/issues/?jql=${encodeURIComponent("ORDER BY key")}`)).toMatchObject({ ok: false, error: expect.stringContaining("no restriction") });
+      });
+
+      test("adding a project's list view keeps the search and hands back the whole-project option", async () => {
+        const r = await B.addViewByUrl(`https://${site}/jira/software/c/projects/ORBIT/list?jql=${encodeURIComponent("project = ORBIT ORDER BY key")}`);
+        expect(r.data).toMatchObject({ ok: true, view: { id: expect.stringMatching(/^jql:/) }, alternatives: [{ kind: "jql" }, { kind: "space", id: "ORBIT" }] });
       });
 
       test("an address from another host sends nothing", async () => {

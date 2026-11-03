@@ -53,10 +53,10 @@ describe("the palette still draws", () => {
     // The finder grew a browse mode, a preview pane and a query parser in one
     // pass; this is the assertion that the component still renders at all.
     expect(() => renderToStaticMarkup(React.createElement(FilePalette, {
-      open: false, onClose: () => {}, onOpenFile: () => {}, onBench: () => {}, onRevealDir: () => {},
+      open: false, onClose: () => {}, onOpenFile: () => {}, onBench: () => {},
     }))).not.toThrow();
     expect(() => renderToStaticMarkup(React.createElement(FilePalette, {
-      open: true, onClose: () => {}, onOpenFile: () => {}, onBench: () => {}, onRevealDir: () => {},
+      open: true, onClose: () => {}, onOpenFile: () => {}, onBench: () => {},
     }))).not.toThrow();
   });
 });

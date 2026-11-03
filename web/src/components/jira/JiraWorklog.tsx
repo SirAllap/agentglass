@@ -24,7 +24,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Select } from "../Select.tsx";
 import { Markdown } from "../../lib/markdown.tsx";
 import { fmtAgo } from "../../lib/format.ts";
-import { INPUT, INPUT_STYLE, EDGE, LINE } from "../workspace/Chrome.tsx";
+import { Button, INPUT, INPUT_STYLE, EDGE, LINE, Textarea } from "../workspace/Chrome.tsx";
 import { CommentAction } from "../tasks/CardEdit.tsx";
 import { WarningIcon } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
@@ -106,8 +106,8 @@ function WorkFormBox({ op, entry, work, onClose, bare }: { op: "add" | "edit"; e
           <input type="date" value={form.day} max={today()} disabled={off} aria-label="Day the work was done" onChange={(e) => set({ day: e.target.value })} className={`w-full ${INPUT}`} style={{ ...ring("day"), colorScheme: "light dark" }} />,
           typed("day") ?? (op === "add" ? "Optional · today by default" : "Optional"), !!typed("day"))}
         {row("Note",
-          <textarea value={form.note} rows={2} disabled={off} aria-label="What was done" onChange={(e) => set({ note: e.target.value })}
-            className="w-full px-2.5 py-1.5 rounded-lg text-[12px] outline-none" style={{ ...INPUT_STYLE, ...(typed("note") ? { boxShadow: "0 0 0 1px var(--error)" } : null), background: "var(--surface-inset)", color: "var(--text)" }} />,
+          <Textarea value={form.note} rows={2} disabled={off} aria-label="What was done" onChange={(e) => set({ note: e.target.value })}
+            className="w-full !min-h-0" style={typed("note") ? { boxShadow: "0 0 0 1px var(--error)" } : undefined} />,
           typed("note") ?? "Optional · Markdown", !!typed("note"))}
         {row("Remaining",
           <AdjustPicker op={op} form={form} set={set} off={off} />,
@@ -126,10 +126,9 @@ function WorkFormBox({ op, entry, work, onClose, bare }: { op: "add" | "edit"; e
         <span>{err || view.hint}</span>
       </div>
       <div className="flex items-center justify-end gap-2">
-        <button onClick={onClose} disabled={off} className="text-[11px] px-2.5 py-1 rounded disabled:opacity-40 shrink-0" style={{ color: "var(--text2)", border: EDGE }}>Cancel</button>
+        <Button onClick={onClose} disabled={off} className="shrink-0">Cancel</Button>
         {/* Off, the button keeps its size and place and reads as a drawn outline: white words on a washed primary were not legible. */}
-        <button onClick={() => void go()} disabled={!view.canSubmit || off} className="text-[11px] px-2.5 py-1 rounded font-medium min-w-[88px] text-center"
-          style={view.canSubmit && !off ? { color: "var(--on-primary)", background: "var(--primary)", border: EDGE } : { color: "var(--text3)", background: "transparent", border: EDGE }}>{label}</button>
+        <Button onClick={() => void go()} disabled={!view.canSubmit || off} tone={view.canSubmit && !off ? "primary" : "plain"} className="min-w-[88px]">{label}</Button>
       </div>
     </div>
   );
@@ -159,8 +158,8 @@ function DeleteAsk({ entry, work, onClose }: { entry: WorkEntry; work: JiraWorkU
       <span style={{ color: view.problems.value ? "var(--error)" : "var(--text3)" }}>{view.problems.value ?? view.effects[1] ?? ""}</span>
       {err && <span role="alert" style={{ color: "var(--error)" }}>{err}</span>}
       <div className="flex items-center gap-2">
-        <button className="agx-btn rounded-md px-2 py-0.5" disabled={off || !view.canSubmit} onClick={() => void go()} style={{ color: "var(--error-ink)", border: EDGE }}>{off ? "Deleting…" : "Delete"}</button>
-        <button className="agx-btn rounded-md px-2 py-0.5" disabled={off} onClick={onClose} style={{ color: "var(--text3)" }}>Keep it</button>
+        <Button size="compact" tone="danger" disabled={off || !view.canSubmit} onClick={() => void go()}>{off ? "Deleting…" : "Delete"}</Button>
+        <Button size="compact" tone="quiet" disabled={off} onClick={onClose}>Keep it</Button>
       </div>
     </div>
   );
@@ -215,8 +214,8 @@ export function WorklogPanel({ events, tracking, work, newest }: {
             <span className="min-w-0 truncate" style={{ color: "var(--text3)" }} title={readout}>{readout || "No estimate or time yet"}</span>
             <span className="flex-1" />
             {work && (
-              <button onClick={() => setAdding((a) => !a)} aria-pressed={adding} title="Log time on this card"
-                className="agx-btn shrink-0 rounded-md px-2 py-0.5 min-w-[76px] text-center" style={{ color: adding ? "var(--primary)" : "var(--text2)", border: EDGE }}>Log time</button>
+              <Button size="compact" tint={adding ? "var(--primary)" : undefined} onClick={() => setAdding((a) => !a)} aria-pressed={adding} title="Log time on this card"
+                className="shrink-0 min-w-[76px]">Log time</Button>
             )}
           </div>
           {work && <div style={{ minHeight: NOTE_H }} data-work-note=""><EditNote flush lines={2} note={work.note} busy={work.busy} onUndo={work.undo} onClose={work.clear} /></div>}

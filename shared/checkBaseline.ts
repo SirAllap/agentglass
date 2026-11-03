@@ -130,14 +130,16 @@ export interface CheckAggregate {
   /** Successful runs: what median and p90 stand on, so the view can refuse a verdict under MIN_SAMPLES. */
   successes: number;
   /** The newest run that was not cancelled, the one the view holds up against the rest. Null with none. */
-  latest: { ms: number; conclusion: "success" | "failure"; completedAt: number } | null;
+  latest: { ms: number; conclusion: "success" | "failure"; completedAt: number; pr?: number } | null;
   /** Successful runs only, like the baseline. Null with none. */
   median: number | null;
   p90: number | null;
   /** Failures over successes plus failures: a cancelled run says nothing about the job. Null with neither. */
   failureRate: number | null;
-  /** One bucket per day over the last `days`, oldest first; `median` is null on a day with no success. */
-  trend: { day: string; runs: number; median: number | null }[];
+  /** One bucket per day over the last `days`, oldest first; `median` is null on a day with no success.
+   *  `passed` and `failed` are that day's successes and failures (a cancelled run is in `runs` only): what the
+   *  week-over-week pass rate stands on. Absent on a record kept before they were counted. */
+  trend: { day: string; runs: number; median: number | null; passed?: number; failed?: number }[];
   /** Whether the check disagreed with itself on one commit; the only thing "Re-run passed" means. */
   sameCommit: SameCommit;
 }
@@ -150,13 +152,14 @@ export function aggregateRuns(rows: StoredRun[], now: number, days = 14): CheckA
     const d = today - (days - 1 - i);
     const inDay = rows.filter((r) => Math.floor(r.completedAt / DAY_MS) === d);
     const s = inDay.filter((r) => r.conclusion === "success").map((r) => r.ms);
-    return { day: new Date(d * DAY_MS).toISOString().slice(0, 10), runs: inDay.length, median: s.length ? median(s) : null };
+    const failed = inDay.filter((r) => r.conclusion === "failure").length;
+    return { day: new Date(d * DAY_MS).toISOString().slice(0, 10), runs: inDay.length, median: s.length ? median(s) : null, passed: s.length, failed };
   });
   const newest = rows.filter((r) => r.conclusion !== "cancelled").reduce<StoredRun | null>((a, r) => (!a || r.completedAt > a.completedAt ? r : a), null);
   return {
     runs: rows.length,
     successes: ok.length,
-    latest: newest ? { ms: newest.ms, conclusion: newest.conclusion as "success" | "failure", completedAt: newest.completedAt } : null,
+    latest: newest ? { ms: newest.ms, conclusion: newest.conclusion as "success" | "failure", completedAt: newest.completedAt, ...(newest.pr ? { pr: newest.pr } : {}) } : null,
     median: ok.length ? median(ok) : null,
     p90: ok.length ? percentile(ok, 0.9) : null,
     failureRate: ok.length + bad ? bad / (ok.length + bad) : null,

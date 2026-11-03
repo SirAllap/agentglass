@@ -66,9 +66,7 @@ export function HelpLegend({ open, onClose }: { open: boolean; onClose: () => vo
                 <div className="grid grid-cols-2 gap-y-1 text-[11px] t-dim">
                   <span><kbd className="chip">{MOD_KEY}K</kbd> Command palette</span>
                   <span><kbd className="chip">?</kbd> This help</span>
-                  <span><kbd className="chip">s</kbd> Statistics</span>
                   <span><kbd className="chip">k</kbd> Skills explorer</span>
-                  <span><kbd className="chip">/</kbd> Search all history</span>
                   {IS_DESKTOP && (
                     <span><kbd className="chip">{MOD_KEY}+</kbd> <kbd className="chip">{MOD_KEY}−</kbd> Display size</span>
                   )}

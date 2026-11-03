@@ -33,6 +33,8 @@
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { reposUnder } from "./gitwork.ts";
+import type { FolderPrecheck } from "../../shared/types.ts";
 
 /** How long a clone may take before it is abandoned. Generous, because a real
  *  repository over a slow line legitimately takes minutes; bounded, because the
@@ -145,6 +147,21 @@ export function targetFor(parentIn: string, name: string): { target: string } | 
   return { target };
 }
 
+/**
+ * What git said went wrong, for a sentence on screen.
+ *
+ * The cause is the `fatal:` / `error:` line, and git prints it FIRST, then a
+ * hint or two ("Please make sure you have the correct access rights…"). The
+ * last three lines kept only the hints, so a missing repository read as a
+ * permissions riddle. The cause leads; at most two lines of hint follow.
+ */
+export function gitFailure(stderr: string): string {
+  const lines = stderr.trim().split("\n").map((l) => l.trim()).filter(Boolean);
+  const cause = lines.filter((l) => /^(fatal|error):/i.test(l));
+  const rest = lines.filter((l) => !cause.includes(l));
+  return [...cause.slice(0, 2), ...rest.slice(-2)].join(" ").slice(0, 400);
+}
+
 /** Run git, with no shell and no inherited stdin. Returns the failure text git
  *  printed, because "clone failed" on its own sends people to a terminal to
  *  find out what this already knew. */
@@ -154,7 +171,7 @@ async function git(args: string[], cwd: string, timeout: number): Promise<{ ok: 
     const timer = setTimeout(() => { try { p.kill(); } catch { /* already gone */ } }, timeout);
     const [code, err] = await Promise.all([p.exited, new Response(p.stderr).text()]);
     clearTimeout(timer);
-    return code === 0 ? { ok: true, err: "" } : { ok: false, err: err.trim().split("\n").slice(-3).join(" ").slice(0, 400) };
+    return code === 0 ? { ok: true, err: "" } : { ok: false, err: gitFailure(err) };
   } catch (e) {
     return { ok: false, err: e instanceof Error ? e.message : String(e) };
   }
@@ -203,4 +220,24 @@ export async function createProject(nameIn: unknown, parentIn: unknown): Promise
   // nothing happened — but say plainly that it is not a repository yet.
   if (!r.ok) return { ok: true, path: t.target, error: `Created, but git init failed: ${r.err}` };
   return { ok: true, path: t.target };
+}
+
+const SAMPLE_MAX = 8;
+
+/** Read-only: no config is touched, and the folder itself is only listed. */
+export function precheckFolder(pathIn: unknown): FolderPrecheck {
+  const none: FolderPrecheck = { path: "", exists: false, repos: 0, sample: [] };
+  if (typeof pathIn !== "string" || !pathIn.trim() || pathIn.includes("\0")) return none;
+  const abs = resolve(expandDir(pathIn));
+  if (!isAbsolute(expandDir(pathIn))) return none;
+  try {
+    if (!statSync(abs).isDirectory()) return { ...none, path: abs };
+  } catch {
+    return { ...none, path: abs };
+  }
+  const repos = reposUnder(abs);
+  return {
+    path: abs, exists: true, repos: repos.length,
+    sample: repos.slice(0, SAMPLE_MAX).map((p) => ({ name: p.split("/").pop() || p, path: p })),
+  };
 }

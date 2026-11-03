@@ -18,9 +18,12 @@
  *     file or a log, and whatever gio says afterwards is scrubbed of it.
  */
 import { join } from "node:path";
+import { stopChild, trackChild } from "./childledger.ts";
 import type { RemoteStep, Volume } from "../../shared/types.ts";
 
 export interface GioProc {
+  /** Kernel pid when this is a real process; a test double has none. */
+  pid?: number;
   out: ReadableStream<string>;
   err: () => Promise<string>;
   write: (s: string) => void;
@@ -37,6 +40,7 @@ export function spawnGio(argv: string[]): GioProc {
   const p = Bun.spawn([bin, ...argv.slice(1)], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: { ...process.env, LC_ALL: "C.UTF-8" } });
   const err = new Response(p.stderr).text();
   return {
+    pid: p.pid,
     out: (p.stdout as ReadableStream<Uint8Array>).pipeThrough(new TextDecoderStream() as unknown as ReadableWritablePair<string, Uint8Array>),
     err: () => err,
     write: (s) => { try { p.stdin.write(s); void p.stdin.flush(); } catch { /* it already exited */ } },
@@ -170,6 +174,7 @@ export class Sessions {
     if (!v.ok) return { state: "error", error: v.error };
     if (this.live.size >= 4) return { state: "error", error: "too many connections are waiting for an answer" };
     const proc = this.spawn(["gio", "mount", v.uri]);
+    trackChild(proc, "gio mount");
     const id = crypto.randomUUID();
     const s: Live = { proc, uri: v.uri, buf: "", answers: {}, code: null, pumped: false, lastAt: Date.now(), wake: null, asked: null, used: [], timer: setTimeout(() => this.end(id), this.ttlMs) };
     this.live.set(id, s);
@@ -202,6 +207,7 @@ export class Sessions {
     if (!s) return;
     clearTimeout(s.timer); s.answers = {}; s.used = []; s.buf = "";
     this.live.delete(id);
+    if (s.proc.pid) stopChild(s.proc.pid);
     try { s.proc.kill(); } catch { /* gone */ }
   }
 

@@ -1,13 +1,14 @@
 /*
- * The bench, on the server side: a session per tab, and a note per checkout.
+ * The bench, on the server side: a window per tab, and a note per checkout.
  *
  * Two things are pinned here and both are the kind that fail quietly.
  *
- * The SESSION NAME, because the failure it prevents has already happened twice
- * in this app: two clients attached to one tmux session mirror each other, so a
- * bench tab sharing a name with the terminal view — or with another bench tab —
- * would show that session's screen and fight it for the size. On this machine
- * that has meant real work being resized under somebody's hands.
+ * WHERE A TAB LIVES, because it has already gone wrong twice in this app. Each
+ * tab is the `bench-<n>` WINDOW of the checkout's one engine session (a session
+ * of its own is a tab the strip cannot show), and the tab's client joins a
+ * session GROUP of that session to show it. Two clients on one session mirror
+ * each other — that is the bug a second session used to avoid — so the group is
+ * the half that keeps the bench from showing the terminal view's screen.
  *
  * The NOTE'S HOME, because the obvious place is inside the checkout, and an
  * untracked file in somebody's repository ends up in `git add -A` and then in a
@@ -17,7 +18,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { engineAttachArgv, engineBenchArgv, engineConsoleArgv, engineSessionName, benchSessionName } from "../src/tmuxpane.ts";
+import { benchWindowName, engineAttachArgv, engineBenchArgv, engineConsoleArgv, engineSessionName } from "../src/tmuxpane.ts";
 
 const ROOT0 = process.env.AGENTGLASS_ROOT;
 const NOTES0 = process.env.AGENTGLASS_BENCH_NOTES;
@@ -46,47 +47,56 @@ afterAll(() => {
  *  workspace on first read, and the env has to be set before that happens. */
 const bench = async () => await import("../src/bench.ts");
 
-describe("a tab is a session of its own", () => {
-  it("is not the terminal view's session, and not the console's", () => {
+describe("a tab is a window of the engine's session", () => {
+  it("is grouped on the terminal view's session, not a session of its own", () => {
     const desk = engineAttachArgv("/home/someone/code/orbit");
-    const con = engineConsoleArgv("/home/someone/code/orbit");
-    const tab = engineBenchArgv("/home/someone/code/orbit", 1);
+    const con = engineConsoleArgv("/home/someone/code/orbit", "@4");
+    const tab = engineBenchArgv("/home/someone/code/orbit", 1, "@4");
     if (!desk || !con || !tab) return; // no tmux here — nothing to compare
-    expect(tab).not.toEqual(desk);
-    expect(tab).not.toEqual(con);
-    expect(tab.join(" ")).toContain(`${engineSessionName("/home/someone/code/orbit")}-bench1`);
+    const engine = engineSessionName("/home/someone/code/orbit");
+    for (const argv of [con, tab]) {
+      const at = argv.indexOf("new-session");
+      expect(argv.slice(at, at + 5)).toEqual(["new-session", "-d", "-t", `=${engine}`, "-s"]);
+    }
+    expect(tab.join(" ")).toContain(`select-window -t =${tab[tab.indexOf("new-session") + 5]}:@4`);
+    // Neither of the old session names is anywhere in it.
+    expect(tab.join(" ")).not.toContain(`${engine}-bench1`);
+    expect(tab.join(" ")).not.toContain(`${engine}-console`);
   });
 
-  it("gives each tab its own name, and each checkout its own space", () => {
-    expect(benchSessionName("/a/orbit", 1)).not.toBe(benchSessionName("/a/orbit", 2));
-    expect(benchSessionName("/a/orbit", 1)).not.toBe(benchSessionName("/b/atlas", 1));
-    // The name the argv builds is the name the reads look for. Two spellings of
-    // it is how "3 open" ends up pointing at nothing.
-    const tab = engineBenchArgv("/a/orbit", 3);
-    if (tab) expect(tab).toContain(benchSessionName("/a/orbit", 3));
+  it("gives each tab its own window name, and each checkout the name of its session", () => {
+    expect(benchWindowName(1)).not.toBe(benchWindowName(2));
+    expect(engineSessionName("/a/orbit")).not.toBe(engineSessionName("/b/atlas"));
+    // The window name is the contract the reads look for. Two spellings of it
+    // is how "3 open" ends up pointing at nothing.
+    expect(benchWindowName(3)).toBe("bench-3");
   });
 
   it("clamps the slot, because it arrives from a client", () => {
-    expect(benchSessionName("/a/orbit", 0)).toBe(benchSessionName("/a/orbit", 1));
-    expect(benchSessionName("/a/orbit", 1e9)).toBe(benchSessionName("/a/orbit", 99));
-    expect(benchSessionName("/a/orbit", -4)).toBe(benchSessionName("/a/orbit", 1));
+    expect(benchWindowName(0)).toBe(benchWindowName(1));
+    expect(benchWindowName(1e9)).toBe(benchWindowName(99));
+    expect(benchWindowName(-4)).toBe(benchWindowName(1));
+    // Clamped before it can become a window name: `bench-NaN` is nobody's tab.
+    expect(benchWindowName(Number.NaN)).toBe("bench-1");
   });
 
-  it("keeps every flag the terminal's attach uses, and adds the command", () => {
+  it("keeps every flag the terminal's attach uses", () => {
     const desk = engineAttachArgv("/home/someone/code/orbit");
-    const tab = engineBenchArgv("/home/someone/code/orbit", 2, ["nvim", "-R", "/tmp/x.py"]);
+    const tab = engineBenchArgv("/home/someone/code/orbit", 2, "@7");
     if (!desk || !tab) return;
+    const head = desk.slice(0, desk.indexOf("new-session"));
+    expect(tab.slice(0, head.length)).toEqual(head);
     expect(tab).toContain("-S");
     expect(tab).toContain("-f");
-    expect(tab).toContain("-A");
-    // The command is argv, handed to tmux — never a string for a shell to
-    // reinterpret. That is what lets a path with a space in it be a path.
-    expect(tab.slice(-3)).toEqual(["nvim", "-R", "/tmp/x.py"]);
+    // The last command is the attach: the pty gets a terminal, not a command
+    // list that creates the group and returns.
+    const view = tab[tab.indexOf("new-session") + 5];
+    expect(tab.slice(-4)).toEqual([";", "attach", "-t", `=${view}`]);
   });
 
   it("answers null exactly when the terminal's attach does", () => {
     for (const root of ["", "/home/someone/code/orbit", "/tmp"]) {
-      expect(engineBenchArgv(root, 1) === null, root).toBe(engineAttachArgv(root) === null);
+      expect(engineBenchArgv(root, 1, "@4") === null, root).toBe(engineAttachArgv(root) === null);
     }
   });
 });

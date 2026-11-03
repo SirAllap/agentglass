@@ -8,7 +8,7 @@
 // was to compare two themes side by side.
 import { expect, test } from "bun:test";
 import { bundledThemes } from "shiki";
-import { getHighlighter, ensureTheme, ensureLanguage, langFromPath, THEMES, themeLabel } from "../src/lib/highlight.ts";
+import { getHighlighter, ensureTheme, ensureLanguage, langFromPath, THEMES, themeLabel, themeClash } from "../src/lib/highlight.ts";
 
 const CODE = 'const greeting = "hello"; // note';
 
@@ -163,4 +163,12 @@ test("the failure is reported with the name the user chose, not the internal one
   // The message goes on the picker button, where "-bold" would be noise.
   expect(themeLabel("kanagawa-dragon-bold")).toBe("Kanagawa Dragon");
   expect(themeLabel("kanagawa-dragon")).toBe("Kanagawa Dragon");
+});
+
+test("a theme whose light/dark differs from the app's gets a hint, a matching one does not", () => {
+  expect(themeClash("nord", "github-light")).toMatch(/dark theme and the app is light/);
+  expect(themeClash("github-light", "github-dark")).toMatch(/light theme and the app is dark/);
+  expect(themeClash("nord", "github-dark")).toBeNull();
+  expect(themeClash("github-light", "github-light")).toBeNull();
+  expect(themeClash("auto", "github-light")).toBeNull();
 });

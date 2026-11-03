@@ -75,8 +75,9 @@ export function choiceIsWide(labels: readonly string[]): boolean {
   return labels.reduce((n, l) => n + l.length + 4, 0) >= 30;
 }
 
-/** Secondary words behind a named disclosure. */
-export type RowDetail = { summary: string; body: React.ReactNode };
+/** Secondary words behind a named disclosure. `defaultOpen` is for a fold whose
+ *  content is the instruction, not the footnote: open until the thing is done. */
+export type RowDetail = { summary: string; body: React.ReactNode; defaultOpen?: boolean };
 
 export function SettingRow({ label, hint, control, status, actions, below, detail, rowRef, rowProps, minHeight, onClick, href, download, disabled, role, ariaChecked, align, modified, settingId, wide }: {
   /** The SettingDef this row binds to (web/src/lib/settingsRegistry.ts), written
@@ -140,7 +141,7 @@ export function SettingRow({ label, hint, control, status, actions, below, detai
   // plain rows only (see the props).
   const stacked = operable ? undefined : below;
   const more = operable ? undefined : detail;
-  const moreBelow = operable && detail ? <div className="agx-row-more"><Disclosure summary={detail.summary}>{detail.body}</Disclosure></div> : null;
+  const moreBelow = operable && detail ? <div className="agx-row-more"><Disclosure summary={detail.summary} defaultOpen={detail.defaultOpen}>{detail.body}</Disclosure></div> : null;
   // Status, actions and anything stacked hang from the top: a badge centred
   // against a three-line description lands in the middle of nowhere, and it
   // must not move when the description grows a line.
@@ -164,7 +165,7 @@ export function SettingRow({ label, hint, control, status, actions, below, detai
         {hint !== undefined && hint !== "" && (
           <span className="agx-row-help"><Ticks>{hint}</Ticks></span>
         )}
-        {more && stacked === undefined && <Disclosure summary={more.summary}>{more.body}</Disclosure>}
+        {more && stacked === undefined && <Disclosure summary={more.summary} defaultOpen={more.defaultOpen}>{more.body}</Disclosure>}
       </span>
       {slotted
         ? <span className="agx-slot">{status}{control}{actions}</span>
@@ -177,7 +178,7 @@ export function SettingRow({ label, hint, control, status, actions, below, detai
         )}
       {stacked !== undefined && <div className="agx-row-below">{stacked}</div>}
       {/* With a control stacked under the words, the Details come after it: the control is what the row is for. */}
-      {more && stacked !== undefined && <div className="agx-row-below" style={{ marginTop: 0 }}><Disclosure summary={more.summary}>{more.body}</Disclosure></div>}
+      {more && stacked !== undefined && <div className="agx-row-below" style={{ marginTop: 0 }}><Disclosure summary={more.summary} defaultOpen={more.defaultOpen}>{more.body}</Disclosure></div>}
     </>
   );
   const cls = `agx-settings-row${top ? " items-start" : ""}${onClick || href ? " agx-hover" : ""}${wide ? " agx-row-wide" : ""}`;

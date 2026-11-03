@@ -134,6 +134,21 @@ export function TerminalIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)}><rect x="1.6" y="2.4" width="10.8" height="9.2" rx="1.4" /><path d="M4 5.6l2 1.6-2 1.6M7.4 9h2.6" /></svg>;
 }
 
+/** ⌘ as a looped square: the Commands button. */
+export function CommandIcon({ size = ICON.sm, className }: P) {
+  return <svg {...svg(size, className)}><path d="M4.8 4.8h4.4v4.4H4.8zM4.8 4.8V3.5a1.3 1.3 0 1 0-1.3 1.3zM9.2 4.8V3.5a1.3 1.3 0 1 1 1.3 1.3zM4.8 9.2v1.3a1.3 1.3 0 1 1-1.3-1.3zM9.2 9.2v1.3a1.3 1.3 0 1 0 1.3-1.3z" /></svg>;
+}
+
+/** ⏻ */
+export function PowerIcon({ size = ICON.sm, className }: P) {
+  return <svg {...svg(size, className)}><path d="M7 1.8v5M4.2 3.6a4.4 4.4 0 1 0 5.6 0" /></svg>;
+}
+
+/** 🔔 */
+export function BellIcon({ size = ICON.sm, className }: P) {
+  return <svg {...svg(size, className)}><path d="M3.2 10.4h7.6l-.9-1.5V6.2a2.9 2.9 0 0 0-5.8 0v2.7z" /><path d="M5.8 12h2.4" /></svg>;
+}
+
 /** ⚠ */
 export function WarningIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)}><path d="M7 1.9l5.4 9.6H1.6z" /><path d="M7 5.6v2.6M7 9.9v.1" /></svg>;
@@ -310,6 +325,11 @@ export function UndoIcon({ size = ICON.sm, className, redo }: P & { redo?: boole
 /** ⇄ */
 export function SwapIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)}><path d="M2.4 4.6h9M9.4 2.4l2.2 2.2-2.2 2.2M11.6 9.4h-9M4.6 7.2L2.4 9.4l2.2 2.2" /></svg>;
+}
+
+/** Two arrows, one up and one down: turn a list's order round. */
+export function SortIcon({ size = ICON.sm, className }: P) {
+  return <svg {...svg(size, className)}><path d="M4.6 12V2.4M2.4 4.6l2.2-2.2 2.2 2.2M9.4 2v9.6M7.2 9.4l2.2 2.2 2.2-2.2" /></svg>;
 }
 
 /** ▤ — a note. */
@@ -513,4 +533,14 @@ export function UserPlusIcon({ size = ICON.sm, className }: P) {
 /** A person with a minus: take somebody off. */
 export function UserMinusIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)}><circle cx="5.6" cy="4.8" r="2.2" /><path d="M1.6 12a4 4 0 0 1 8 0M9.3 5.1h3.4" /></svg>;
+}
+
+/** → — the route from a branch to its base, and "Open". */
+export function ArrowRightIcon({ size = ICON.sm, className }: P) {
+  return <svg {...svg(size, className)}><path d="M2.5 7h9M8 3.5L11.5 7 8 10.5" /></svg>;
+}
+
+/** Three sheets, one over another: a stack of pull requests. */
+export function LayersIcon({ size = ICON.sm, className }: P) {
+  return <svg {...svg(size, className)}><path d="M7 1.8L12.4 4.6 7 7.4 1.6 4.6z" /><path d="M1.6 7.2L7 10l5.4-2.8" /><path d="M1.6 9.8L7 12.6l5.4-2.8" /></svg>;
 }

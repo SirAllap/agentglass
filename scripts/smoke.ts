@@ -327,20 +327,44 @@ async function main() {
       // a developer's own server on :4000 never sees it at all — that server wants
       // a token the bundle does not have, and a 401 releases the views.
       //
-      // So answer the picker the way a person does, by closing it, and hold the
-      // app to what closing promises: the views come in. A picker that closes
-      // onto no rail is a first run stuck on an empty window, and still fails.
-      const pickerSel = '[role="dialog"][aria-label="Choose a project"]';
+      // A first run on a clean machine has a door before that picker: nothing
+      // scoped, no session row, no hooks, so the Setup wizard draws INSTEAD of
+      // the workspace (App.tsx returns it early) and the rail is not in the
+      // document at all. The CI step boots exactly that machine — its own DB,
+      // its own empty home — and reported "expected a rail of view tabs, found
+      // 0" on it while a developer's own server, already set up or refusing
+      // with a 401, stayed green. Leave it the way somebody who does not want
+      // the tour would: its own Skip button.
+      //
+      // So answer either door the way a person does and hold the app to what
+      // closing promises: the views come in. A door that closes onto no rail is
+      // a first run stuck on an empty window, and still fails.
+      const pickerSel = '[role="dialog"][aria-label="Open projects"]';
+      const wizardSel = 'aside[aria-label="Setup steps"]';
+      /** SetupFlow's `skipLabel(0)`; web/test/smoke-first-run.test.ts keeps the two in step. */
+      const skipWords = "Skip setup";
       const waitFor = (expr: string, ms: number) => evaluate(`new Promise((r) => {
         const t0 = Date.now();
         (function poll() { const v = ${expr}; if (v || Date.now() - t0 > ${ms}) r(v); else setTimeout(poll, 100); })();
       })`);
       const countTabs = `document.querySelectorAll('${railSel} [role="tab"]').length`;
       // "Mounted" is the root's first paint, not the rail's: on a slow runner the
-      // rail lands a beat later, so wait for it (10 s) — or for the picker.
-      await waitFor(`${countTabs} >= 6 || !!document.querySelector('${pickerSel}')`, 10000);
+      // rail lands a beat later, so wait for it (10 s) — or for either door.
+      await waitFor(`${countTabs} >= 6 || !!document.querySelector('${pickerSel}') || !!document.querySelector('${wizardSel}')`, 10000);
+      if (await evaluate(`!!document.querySelector('${wizardSel}')`)) {
+        const left = await evaluate(`(() => {
+          const b = [...document.querySelectorAll("button")].find((el) => (el.textContent ?? "").trim() === ${JSON.stringify(skipWords)});
+          if (!b) return false;
+          b.click();
+          return true;
+        })()`);
+        if (!left) failures.push(`[workspace] the first-run Setup draws no "${skipWords}" button`);
+        else if (!(await waitFor(`!document.querySelector('${wizardSel}')`, 5000)))
+          failures.push("[workspace] the first-run Setup did not close");
+        else console.log("• smoke: first run, skipped the Setup wizard to let the views in");
+      }
       if (await evaluate(`!!document.querySelector('${pickerSel}')`)) {
-        await evaluate(`document.querySelector('${pickerSel} button[aria-label="Close"]')?.click()`);
+        await evaluate(`document.querySelector('${pickerSel} button[aria-label^="Close"]')?.click()`);
         if (!(await waitFor(`!document.querySelector('${pickerSel}')`, 5000)))
           failures.push("[workspace] the first-run project picker did not close");
         else console.log("• smoke: first run, closed the project picker to let the views in");

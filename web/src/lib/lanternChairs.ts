@@ -3,7 +3,7 @@
  *
  * A chair's workers nest under its card so a person sees whose they are. The
  * exception is the point of the screen: a worker that is stopped on a person
- * (a permission, a held gate, or a turn that ended) stays in its "Needs you" or
+ * (a permission, a gate waiting on you, or a turn that ended) stays in its "Needs you" or
  * "Finished" section, because a number that a fold can hide is not a number. It
  * is counted there, and the chair says how many of its own are up there. A
  * worker that has gone is not a quiet one: it goes with the gone, where a person

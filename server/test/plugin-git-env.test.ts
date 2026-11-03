@@ -6,7 +6,7 @@
  * tokens from the server's environment), and the two config keys a user's own
  * gitconfig could still set are cleared on the command line.
  */
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { pluginGitEnv, PLUGIN_GIT_CONFIG } from "../src/plugins.ts";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,7 +17,10 @@ const SOURCES = await Bun.file(new URL("../src/plugin-sources.ts", import.meta.u
 
 const LEAKS = ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_PARAMETERS", "SSH_AUTH_SOCK", "GH_TOKEN", "GITHUB_TOKEN", "AGENTGLASS_TOKEN", "ORBIT_SECRET"];
 const before: Record<string, string | undefined> = {};
-for (const k of LEAKS) { before[k] = process.env[k]; process.env[k] = "orbit-value"; }
+for (const k of LEAKS) before[k] = process.env[k];
+// In a hook, not at import: `bun test -t` imports a file whose tests it filters
+// out, and then afterAll never runs to put these back.
+beforeAll(() => { for (const k of LEAKS) process.env[k] = "orbit-value"; });
 afterAll(() => { for (const k of LEAKS) { if (before[k] === undefined) delete process.env[k]; else process.env[k] = before[k]; } });
 
 describe("pluginGitEnv", () => {

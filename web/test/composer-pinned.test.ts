@@ -13,7 +13,7 @@ const panel = await Bun.file(new URL("../src/components/TasksPanel.tsx", import.
 const composer = await Bun.file(new URL("../src/components/tasks/Composer.tsx", import.meta.url)).text();
 
 const scrollerAt = panel.indexOf("ref={listRef}");
-const endOfScroller = panel.indexOf("{full === null && <div");
+const endOfScroller = panel.indexOf("{full === null && <BoardSkeleton");
 const box = panel.indexOf("<Composer value={say}");
 
 describe("the card's comment box", () => {

@@ -46,7 +46,7 @@ describe("the + on the tab strip", () => {
        through. Anything else means no `-c`, which is tmux's own behaviour and
        not a guessed home directory. */
     const term = read("server/src/terminal.ts");
-    expect(term).toContain('const wanted = typeof msg.root === "string" ? msg.root : "";');
+    expect(term).toContain('const wanted = live ?? (typeof msg.root === "string" ? msg.root : "");');
     expect(term).toContain("existsSync(wanted) && inScope(repoRootOf(wanted) ?? wanted)");
     /* The validated path has to REACH the command. Asserted as a prefix rather
        than up to the closing paren: the call grew a client argument when the
@@ -59,7 +59,9 @@ describe("the + on the tab strip", () => {
     // The panel is the only thing that knows which repository is selected; the
     // server can only see where a pane happens to be.
     const panel = read("web/src/components/TerminalPanel.tsx");
-    expect(panel).toContain('tmuxCmd({ cmd: "new", root })');
+    // And the tab it was pressed on, whose live directory wins — see
+    // new-tab-follows-the-tab.test.ts.
+    expect(panel).toContain('tmuxCmd({ cmd: "new", root, window: focusWin || undefined })');
   });
 
   it("carries the path on the frame both ends read", () => {

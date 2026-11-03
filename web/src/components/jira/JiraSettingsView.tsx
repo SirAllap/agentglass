@@ -12,7 +12,7 @@ import { Button, Segmented } from "../workspace/Chrome.tsx";
 import { Dot, StatusPopover, type PanelView } from "../StatusPanel.tsx";
 import { ListEye, WorkflowMap } from "../WorkflowMap.tsx";
 import { WFM_CSS } from "../workflowMapStyle.ts";
-import { Card, CardView, CountedPicker, PrView, Tagged, ago, hint } from "../TrackerMapParts.tsx";
+import { CardView, CountedPicker, PrView, Tagged, ago, hint } from "../TrackerMapParts.tsx";
 import { setting } from "../../lib/settingsRegistry.ts";
 import { HIT, ICON } from "../../lib/iconSize.ts";
 import { ColumnsIcon, PlugIcon, SearchIcon, ServerIcon, ShieldIcon, SlidersIcon } from "../settingsNavIcons.tsx";
@@ -136,12 +136,15 @@ export function JiraSettingsView(p: JiraViewProps) {
         ))}
       </SettingsCard>
 
-      <Card id="jira-found" icon={<SearchIcon size={ICON.sm} />} title="What we found" open={foundOpen ?? steps.length === 0} onToggle={setFoundOpen}
+      <SettingsCard icon={<SearchIcon size={ICON.sm} />} title="What we found" fold={{ open: foundOpen ?? steps.length === 0, onToggle: setFoundOpen }}
         desc={state.kind === "loading" ? undefined : `${part.counted.length} ${n.lists} count · ${distinct} statuses${part.folded.length ? ` · ${part.folded.length} ignored` : ""}`}
         status={<StatusBadge tone={statusTone}>{statusText}</StatusBadge>}>
         <SettingRow settingId="jira.statusUnits.counted" label="Projects that count"
           hint={<>{part.counted.length ? part.counted.map((u) => u.name).join(", ") : state.kind === "loading" ? "reading…" : "none"}<span className="block mt-1">{chosen ? "You chose these. The rest are ignored, not deleted." : `Where your ${n.items} live, until you choose.`}</span>{state.kind === "ok" && state.note && <span className="block mt-1">{state.note}</span>}</>}
           actions={<Button aria-haspopup="listbox" aria-expanded={!!countAt} disabled={!units.length} onClick={(e) => setCountAt(countAt ? null : e.currentTarget)}>Change</Button>} />
+        <SettingRow settingId="jira.tree.shapes" label="How each space's tree is laid out"
+          hint="Each space in the sidebar is read by components (each with its epics) or by epics (each once, with all its cards). Switch it from the space's own header in the sidebar."
+          actions={<Button onClick={() => { setting("jira.tree.shapes").set(""); }}>Show every space by components</Button>} />
         <SettingRow agentExempt label={`Your ${n.lists} and their statuses`}
           below={state.kind === "loading" && !units.length ? hint("reading…")
             : part.counted.length ? (
@@ -161,7 +164,7 @@ export function JiraSettingsView(p: JiraViewProps) {
           hint={asOf && state.kind === "ok" ? `Read ${ago(asOf)} · cached for 10 min. Only ${n.lists} with a ${n.item} of yours, or that you chose, are read.` : "Nothing needs setting up."}
           actions={<Button onClick={p.onReread} disabled={state.kind === "loading"}>Re-read</Button>}
           below={<span><button type="button" className="agx-textlink text-[12px]" onClick={showAdvanced}>Site and older rules in Advanced</button></span>} />
-      </Card>
+      </SettingsCard>
       {countAt && (
         <StatusPopover anchor={countAt} label={`${n.lists} that count`} onClose={(f) => { setCountAt(null); if (f) countAt.focus(); }}>
           <CountedPicker n={n} units={units} chosen={chosen} onChange={count} onReset={() => count([])} onClose={() => { setCountAt(null); countAt.focus(); }} />
@@ -177,7 +180,7 @@ export function JiraSettingsView(p: JiraViewProps) {
         onCountAgain={(u) => { const ids = withCounted(units, u.id, true); if (ids) count(ids); }}
         onRetry={p.onReread} />
 
-      <Card id="jira-shows" icon={<ColumnsIcon size={ICON.sm} />} title="Where this shows up" desc="Hover a step above to see which part of this it adds."
+      <SettingsCard icon={<ColumnsIcon size={ICON.sm} />} title="Where this shows up" desc="Hover a step above to see which part of this it adds."
         actions={<Segmented label={`Does the pull request name a ${n.item}?`} value={linked ? "1" : "0"} onChange={(v) => setLinked(v === "1")}
           options={[{ id: "1", label: "Linked" }, { id: "0", label: "No link" }]} />}>
         <div className="grid gap-4 agx-settings-x pt-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))" }}>
@@ -190,7 +193,7 @@ export function JiraSettingsView(p: JiraViewProps) {
             : `No steps: the ${n.item} is shown, nothing writes.`}
           {!linked && ` This pull request names no ${n.item}: no ${n.name} block on it and no Pull requests section on the ${n.item}. Tasks works on its own.`}
         </div>
-      </Card>
+      </SettingsCard>
       {p.tracker}
 
       <SettingsCard title="Saved views and folders" icon={<ServerIcon size={ICON.sm} />}
@@ -201,7 +204,7 @@ export function JiraSettingsView(p: JiraViewProps) {
       </SettingsCard>
 
       <div ref={advRef}>
-        <Card id="jira-adv" icon={<SlidersIcon size={ICON.sm} />} title="Advanced" desc="The older per-project rules." open={advOpen} onToggle={setAdvOpen}>
+        <SettingsCard icon={<SlidersIcon size={ICON.sm} />} title="Advanced" desc="The older per-project rules." fold={{ open: !!advOpen, onToggle: setAdvOpen }}>
           <SettingRow agentExempt label="Projects with their own hand-off"
             hint={p.overrides.length ? `Before steps there was one hand-off rule per project. These ${p.overrides.length === 1 ? "project keeps its" : "projects keep their"} own until you clear it or save the hand-off step.` : "None: the hand-off step applies to every project."}
             below={p.overrides.length ? (
@@ -212,7 +215,7 @@ export function JiraSettingsView(p: JiraViewProps) {
                 ))}
               </ul>
             ) : undefined} />
-        </Card>
+        </SettingsCard>
       </div>
 
     </div>

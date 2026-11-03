@@ -1,6 +1,7 @@
 import type { BrowserAskFrame } from "../../../shared/types.ts";
+import { closedReply, openedReply, selectedReply, tabsReply, type TabRow } from "../../../shared/browserTabReplies.ts";
 import { api } from "./api.ts";
-import { captureBrowser, registerBrowserInitScript, browserCdp, browserInput, browserCdpEvents, applySessionSettings, browserDevtools, browserDevtoolsClose, browserDevtoolsShot, browserDevtoolsPanel, browserDevtoolsZoom, setGuestOwner } from "./desktop.ts";
+import { captureBrowser, registerBrowserInitScript, browserCdp, browserInput, browserCdpEvents, applySessionSettings, browserDevtools, browserDevtoolsClose, browserDevtoolsShot, browserDevtoolsPanel, browserDevtoolsZoom, setGuestOwner, browserPermission } from "./desktop.ts";
 import { runBrowserAsk, type DrivableWebview } from "./browserDrive.ts";
 import { paintOnDemand, whilePainting } from "./panePainting.ts";
 import { diagnosisScript } from "./browserObserve.ts";
@@ -66,7 +67,7 @@ export interface TabOps {
    *  gives it: two tabs in different profiles are two different people, with
    *  their own cookies and storage. It was there the whole time and only the
    *  human could reach it. */
-  list(): { id: string; title: string; url: string; active: boolean; profile?: string }[];
+  list(): TabRow[];
   select(which: { index?: number; id?: string }): boolean;
   /* `{ error }` rather than null: the panel knows WHY — "twelve pages awake at
      once is the limit", "that name is taken" — and a caller told only that it
@@ -112,7 +113,7 @@ async function serveTabs(ask: BrowserAskFrame): Promise<{ ok: boolean; value?: u
   };
   switch (ask.op) {
     case "tabs":
-      return { ok: true, value: tabs.list() };
+      return tabsReply(tabs.list());
     case "tab":
       /* A refusal names what it could not find, because the alternative — a
          silent no-op — reads as "the switch worked and the page is the same". */
@@ -132,10 +133,7 @@ async function serveTabs(ask: BrowserAskFrame): Promise<{ ok: boolean; value?: u
       const picked = typeof which.id === "string"
         ? rows.find((t) => t.id === which.id)
         : rows[which.index ?? -1];
-      return {
-        ok: true,
-        value: picked ? rows.map((t) => ({ ...t, active: t.id === picked.id })) : rows,
-      };
+      return selectedReply(rows, picked);
     case "profiles": {
       const a = ask.args as Record<string, unknown>;
       if (typeof a.make === "string") {
@@ -168,12 +166,12 @@ async function serveTabs(ask: BrowserAskFrame): Promise<{ ok: boolean; value?: u
         typeof ask.args.profile === "string" ? ask.args.profile : undefined);
       if (made && "error" in made) return { ok: false, error: made.error };
       return made
-        ? { ok: true, value: { ...made, tabs: tabs.list() } }
+        ? openedReply(made, tabs.list())
         : { ok: false, error: "could not open a tab, and the panel gave no reason" };
     }
     case "closetab":
       return tabs.close(which)
-        ? { ok: true, value: tabs.list() }
+        ? closedReply(tabs.list())
         : { ok: false, error: "no tab with that index or id — call `tabs` for what is open" };
     default:
       return { ok: false, error: "not a tab operation" };
@@ -311,7 +309,9 @@ export async function serveBrowserAsk(el: DrivableWebview | null, ask: BrowserAs
   /* Trusted input is dropped on a pane that is not painting: lit on the
      verb's first send, put out when it has answered. See `paintOnDemand`. */
   const lit = paintOnDemand(el as unknown as Element);
-  const reply = el
+  const answersPermission = ask.op === "permission" && (ask.args.answer !== undefined || ask.args.list === true);
+  const reply = answersPermission ? await answerPermission(el, ask.args as Record<string, unknown>).finally(lit.release)
+    : el
     /* The capture is told WHICH guest, because the shell would otherwise take
        whichever tab is in front — and with two agents that is not the same
        tab. See `captureBrowser`. */
@@ -460,9 +460,43 @@ export async function serveBrowserAsk(el: DrivableWebview | null, ask: BrowserAs
           return lit.run(() => browserInput(req, guest));
         }).finally(lit.release))
     : { ok: false, error: "the browser view is not open in this window" };
-  const withDiagnosis = await attachDiagnosis(el, ask.op, reply);
+  const withDiagnosis = await withPendingPermissions(el, await attachDiagnosis(el, ask.op, reply));
   try { await api.browserResult({ client: clientId(), id: ask.id, ...withDiagnosis }); } catch { /* the ask has already timed out */ }
   return (withDiagnosis as { ok?: boolean }).ok !== false;
+}
+
+/**
+ * `permission grant|deny WHAT` and `permission --list`: answered by main's
+ * desk for this tab, never by CDP — a grant through the protocol would skip
+ * the policy that decided the request was the agent's to answer.
+ */
+async function answerPermission(el: DrivableWebview | null, args: Record<string, unknown>): Promise<{ ok: boolean; value?: unknown; error?: string }> {
+  const guestId = guestIdOf(el);
+  if (typeof guestId !== "number") return { ok: false, error: "could not work out which tab this is — `observe` it first" };
+  if (args.list === true) return browserPermission({ guestId, op: "list" });
+  const op = args.answer === "grant" ? "grant" : args.answer === "deny" ? "deny" : null;
+  if (!op) return { ok: false, error: "answer must be grant or deny" };
+  return browserPermission({
+    guestId, op,
+    what: Array.isArray(args.permissions) ? args.permissions.map(String) : [],
+    origin: typeof args.origin === "string" ? args.origin : undefined,
+  });
+}
+
+/**
+ * A request the tab is holding for the agent rides on EVERY answer, so the
+ * agent reads it on its next verb without having to ask. Added to an object
+ * value as `pendingPermissions`; a value that is not an object is left alone.
+ */
+async function withPendingPermissions<T>(el: DrivableWebview | null, reply: T): Promise<T> {
+  const guestId = guestIdOf(el);
+  if (typeof guestId !== "number") return reply;
+  const r = reply as { value?: unknown };
+  if (!r || typeof r !== "object" || !r.value || typeof r.value !== "object" || Array.isArray(r.value)) return reply;
+  const list = await browserPermission({ guestId, op: "list" });
+  const notes = (list.value as { notes?: unknown } | undefined)?.notes;
+  if (!list.ok || !Array.isArray(notes) || notes.length === 0) return reply;
+  return { ...reply, value: { ...(r.value as object), pendingPermissions: notes } };
 }
 
 /**

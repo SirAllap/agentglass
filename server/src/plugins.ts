@@ -46,6 +46,7 @@ import {
 import { ensurePluginSocketServer, pluginSocketPath, stopPluginSocketServer } from "./plugin-socket.ts";
 import { KEYRING_MARK, KeyringError, dropValue, exclusive, keyringEnabled, priorValue, putBack, pluginKeyId, reasonOf, sealValue, unlockFirst, unsealed } from "./keyring.ts";
 import { coerceSettings, dropNotesOf, fieldsWithOptions, forgetPlugin, pushEvent, resolveSettings, setLivenessCheck } from "./plugin-ui.ts";
+import { boundPort } from "./portfile.ts";
 
 /** What a plugin folder must carry at its root, translated from `orca-plugin.json`
  *  in the decision doc into a name that names nothing but this app. */
@@ -833,7 +834,7 @@ export function stopAllPluginsSync(): void {
 }
 
 function serverBase(): string {
-  return `http://127.0.0.1:${Number(process.env.AGENTGLASS_PORT || 4000)}`;
+  return `http://127.0.0.1:${boundPort() ?? Number(process.env.AGENTGLASS_PORT || 4000)}`;
 }
 
 /**
@@ -860,14 +861,45 @@ function bridgeExecCommand(): string[] {
  * asks the filesystem for their target, but plenty of the OTHER imports
  * index.ts pulls in are not type-only, and they resolve relative to files
  * under `shared/`, a sibling of `server/`, not under it — so the bound root
- * is the repository, not just `server/`. Never node_modules-only: the
- * `plugin-bridge` subcommand exits in cookieentry.ts, its very first import,
- * before index.ts's own (non-type) imports — the ones that would reach
- * `node_modules` — are ever evaluated.
+ * is the repository, not just `server/`.
+ *
+ * The repository alone is not enough when a worktree shares another
+ * checkout's modules: bun links every static import of index.ts before
+ * cookieentry.ts gets to exit, so a `server/node_modules` that is a symlink
+ * pointing outside the bound root dangles inside the box and the bridge dies
+ * before the entrypoint runs. Measured on a worktree symlinked to another
+ * checkout: `Cannot find module '@anthropic-ai/sdk' from src/walkthrough.ts`,
+ * bridge exit 1, the box's data dir left empty.
  */
-function bridgeExtraRo(bridgeExec: string[]): string[] {
+export function bridgeExtraRo(bridgeExec: string[]): string[] {
   const paths = [bridgeExec[0]!];
-  if (bridgeExec[1]) paths.push(resolve(dirname(bridgeExec[1]), "..", ".."));
+  if (!bridgeExec[1]) return paths;
+  const root = resolve(dirname(bridgeExec[1]), "..", "..");
+  paths.push(root);
+  let realRoot = root;
+  try {
+    realRoot = realpathSync(root);
+  } catch {
+    /* an unresolvable root fails the bind loudly later, no need to guess here */
+  }
+  for (const modules of [join(root, "server", "node_modules"), join(root, "node_modules")]) {
+    let real: string;
+    try {
+      real = realpathSync(modules);
+    } catch {
+      continue; // a checkout with no modules of its own: nothing to add
+    }
+    const inside = (dir: string) => real === dir || real.startsWith(dir + sep);
+    if (inside(root) || inside(realRoot)) continue;
+    paths.push(real);
+    // Bun's isolated installs keep the packages those links name in
+    // `<checkout>/node_modules/.bun`, one level above the modules dir the
+    // worktree shares; without it every package link inside `real` dangles.
+    for (const up of [dirname(real), dirname(dirname(real))]) {
+      const store = join(up, "node_modules");
+      if (existsSync(join(store, ".bun")) && !paths.includes(store)) paths.push(store);
+    }
+  }
   return paths;
 }
 

@@ -12,9 +12,11 @@
  * numbers, booleans and fixed words. Provider keys stay where each CLI keeps
  * them, and this file never learns their names.
  *
- * No field grants a remote effect. `Envelope` has `commit` and `network`, and
- * nothing for push, pull request, merge, release or spend. What cannot be
- * written down cannot be granted by mistake.
+ * No field grants a remote effect on the checkout. `Envelope` has `commit`,
+ * `network` and `docker` (a container runs as this user and can mount the
+ * host, so that one is a grant of the machine and not only of the worktree),
+ * and nothing for a push, a pull request, a merge, a release or spend. What
+ * cannot be written down cannot be granted by mistake.
  *
  * Ceilings of this first cut, stated so they read as chosen and not missed:
  * a project override replaces the global policy whole (no field-by-field
@@ -37,6 +39,13 @@ export type UsageProviderId = ProviderUsage["provider"];
 /** The providers that report a quota window. Antigravity reports none, so a
  *  rule cannot watch it and the validator says so. */
 export const GAUGED_PROVIDERS: readonly UsageProviderId[] = ["anthropic", "codex"];
+
+/** The usage table names Claude's plan "anthropic"; every other provider reports under its engine's id. */
+const USAGE_ENGINE: Partial<Record<UsageProviderId, string>> = { anthropic: "claude" };
+export const usageEngine = (p: UsageProviderId): string => USAGE_ENGINE[p] ?? p;
+/** The provider an engine's plan is reported under: the other direction of the same table. */
+export const usageProvider = (engine: string): UsageProviderId =>
+  (GAUGED_PROVIDERS.find((p) => usageEngine(p) === engine) ?? engine) as UsageProviderId;
 
 export type Trigger =
   | { kind: "always" }
@@ -64,8 +73,15 @@ export interface Envelope {
   network: boolean;
   /** Local commits in its own worktree. */
   commit: boolean;
+  /** The `docker` command itself. A container shares this machine, so this is
+   *  wider than the worktree and off everywhere until a person turns it on. */
+  docker: boolean;
   /** Extra command prefixes on top of DENIED_COMMANDS. Can only add. */
   deny: string[];
+  /** The flow role's tool list, when its role has one: every engine tool not
+   *  named is denied (see `toolsDeniedFor`). Absent or empty = no extra denial.
+   *  Only ever narrows; `envelopeWithin` does not read it. */
+  tools?: string[];
 }
 
 export interface Policy {
@@ -96,9 +112,10 @@ export const RULES_MAX = 20;
 export const TRIGGERS_MAX = 4;
 
 /** Narrow by default: a worker writes in its own worktree and does nothing
- *  else. The ceiling lets an orchestrator add local commits and nothing more. */
-export const DEFAULT_WORKER_ENVELOPE: Envelope = { write: "worktree", network: false, commit: false, deny: [] };
-export const DEFAULT_CEILING: Envelope = { write: "worktree", network: false, commit: true, deny: [] };
+ *  else. The ceiling lets an orchestrator add local commits and nothing more:
+ *  `docker` is a grant of the machine, so a person turns it on scope by scope. */
+export const DEFAULT_WORKER_ENVELOPE: Envelope = { write: "worktree", network: false, commit: false, docker: false, deny: [] };
+export const DEFAULT_CEILING: Envelope = { write: "worktree", network: false, commit: true, docker: false, deny: [] };
 export const DEFAULT_LIMITS: Policy["limits"] = { maxWorkers: 3, turnMinutes: 30, maxRetries: 1 };
 
 export const defaultStored = (): StoredPolicy => ({
@@ -141,7 +158,7 @@ const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 
 
 /** An object with exactly these keys: an extra one is refused by name, not
  *  dropped, so a typo cannot silently turn a setting off. */
-function closed(v: unknown, field: string, keys: readonly string[], required: readonly string[] = keys): Record<string, unknown> | { ok: false; error: string } {
+export function closed(v: unknown, field: string, keys: readonly string[], required: readonly string[] = keys): Record<string, unknown> | { ok: false; error: string } {
   if (!isObj(v)) return bad(field, "has to be an object");
   for (const k of Object.keys(v)) if (!keys.includes(k)) return bad(`${field}.${k}`, "is not a setting; nothing was saved");
   for (const k of required) if (!(k in v)) return bad(`${field}.${k}`, "is missing");
@@ -196,11 +213,14 @@ function validAskChain(v: unknown, field: string): Validated<AskOr<Chain>> {
 }
 
 export function validEnvelope(v: unknown, field: string): Validated<Envelope> {
-  const o = closed(v, field, ["write", "network", "commit", "deny"]);
+  // `docker` is not required: a policy saved before it existed reads as off,
+  // rather than as a broken file that the whole scope loses.
+  const o = closed(v, field, ["write", "network", "commit", "docker", "deny"], ["write", "network", "commit", "deny"]);
   if (failed(o)) return o;
   if (o.write !== "none" && o.write !== "worktree") return bad(`${field}.write`, 'has to be "none" or "worktree"; nothing wider exists');
   if (typeof o.network !== "boolean") return bad(`${field}.network`, "has to be true or false");
   if (typeof o.commit !== "boolean") return bad(`${field}.commit`, "has to be true or false");
+  if (o.docker !== undefined && typeof o.docker !== "boolean") return bad(`${field}.docker`, "has to be true or false");
   if (!Array.isArray(o.deny) || o.deny.length > 40) return bad(`${field}.deny`, "has to be a list of up to 40 command prefixes");
   const deny: string[] = [];
   for (let i = 0; i < o.deny.length; i++) {
@@ -209,7 +229,7 @@ export function validEnvelope(v: unknown, field: string): Validated<Envelope> {
     if (looksLikeSecret(d.trim())) return bad(`${field}.deny[${i}]`, "looks like a key; this field takes a command prefix");
     if (!deny.includes(d.trim())) deny.push(d.trim());
   }
-  return { ok: true, value: { write: o.write, network: o.network, commit: o.commit, deny } };
+  return { ok: true, value: { write: o.write, network: o.network, commit: o.commit, docker: o.docker === true, deny } };
 }
 
 /** Whether `inner` asks for nothing `outer` does not allow. The one test the
@@ -218,7 +238,18 @@ export function envelopeWithin(inner: Envelope, outer: Envelope): boolean {
   return (outer.write === "worktree" || inner.write === "none")
     && (outer.network || !inner.network)
     && (outer.commit || !inner.commit)
+    && (outer.docker || !inner.docker)
     && outer.deny.every((d) => inner.deny.includes(d));
+}
+
+/** The three numbers a policy shares with a preset file (shared/preset.ts), so neither grows a second range. */
+export function validLimits(v: unknown, field: string): Validated<Policy["limits"]> {
+  const l = closed(v, field, ["maxWorkers", "turnMinutes", "maxRetries"]);
+  if (failed(l)) return l;
+  if (!wholeIn(l.maxWorkers, 1, 12)) return bad(`${field}.maxWorkers`, "has to be a whole number from 1 to 12");
+  if (!wholeIn(l.turnMinutes, 1, 240)) return bad(`${field}.turnMinutes`, "has to be a whole number of minutes from 1 to 240");
+  if (!wholeIn(l.maxRetries, 0, 5)) return bad(`${field}.maxRetries`, "has to be a whole number from 0 to 5");
+  return { ok: true, value: { maxWorkers: l.maxWorkers, turnMinutes: l.turnMinutes, maxRetries: l.maxRetries } };
 }
 
 function validTrigger(v: unknown, field: string): Validated<Trigger> {
@@ -263,7 +294,7 @@ function validTrigger(v: unknown, field: string): Validated<Trigger> {
   }
 }
 
-function validRule(v: unknown, field: string): Validated<PolicyRule> {
+export function validRule(v: unknown, field: string): Validated<PolicyRule> {
   const o = closed(v, field, ["id", "name", "when", "orchestrator", "workers", "enabled"], ["id", "name", "when", "enabled"]);
   if (failed(o)) return o;
   if (typeof o.id !== "string" || !ID_RE.test(o.id)) return bad(`${field}.id`, "is not a rule id (lowercase letters, digits and -)");
@@ -328,17 +359,24 @@ export function validatePolicy(raw: unknown): Validated<Policy> {
 
 type Parts = Pick<Policy, "rules" | "ceiling" | "workerDefault" | "limits">;
 
-/** The fields a policy and its stored form share. */
-function validParts(o: Record<string, unknown>, at: string): Validated<Parts> {
-  if (!Array.isArray(o.rules)) return bad(`${at}.rules`, "has to be a list");
-  if (o.rules.length > RULES_MAX) return bad(`${at}.rules`, `holds at most ${RULES_MAX} rules, it has ${o.rules.length}`);
+/** A rules list as a policy and a preset file both hold it: ids unique, each rule the one validator's. */
+export function validPolicyRules(v: unknown, field: string): Validated<PolicyRule[]> {
+  if (!Array.isArray(v)) return bad(field, "has to be a list");
+  if (v.length > RULES_MAX) return bad(field, `holds at most ${RULES_MAX} rules, it has ${v.length}`);
   const rules: PolicyRule[] = [];
-  for (let i = 0; i < o.rules.length; i++) {
-    const r = validRule(o.rules[i], `${at}.rules[${i}]`);
+  for (let i = 0; i < v.length; i++) {
+    const r = validRule(v[i], `${field}[${i}]`);
     if (!r.ok) return r;
-    if (rules.some((x) => x.id === r.value.id)) return bad(`${at}.rules[${i}].id`, "is used by an earlier rule");
+    if (rules.some((x) => x.id === r.value.id)) return bad(`${field}[${i}].id`, "is used by an earlier rule");
     rules.push(r.value);
   }
+  return { ok: true, value: rules };
+}
+
+/** The fields a policy and its stored form share. */
+function validParts(o: Record<string, unknown>, at: string): Validated<Parts> {
+  const rules = validPolicyRules(o.rules, `${at}.rules`);
+  if (!rules.ok) return rules;
 
   const ceiling = validEnvelope(o.ceiling, `${at}.ceiling`);
   if (!ceiling.ok) return ceiling;
@@ -348,16 +386,12 @@ function validParts(o: Record<string, unknown>, at: string): Validated<Parts> {
     return bad(`${at}.workerDefault`, "is wider than the most the main agent may allow; lower the default or raise that limit on purpose");
   }
 
-  const l = closed(o.limits, `${at}.limits`, ["maxWorkers", "turnMinutes", "maxRetries"]);
-  if (failed(l)) return l;
-  if (!wholeIn(l.maxWorkers, 1, 12)) return bad(`${at}.limits.maxWorkers`, "has to be a whole number from 1 to 12");
-  if (!wholeIn(l.turnMinutes, 1, 240)) return bad(`${at}.limits.turnMinutes`, "has to be a whole number of minutes from 1 to 240");
-  if (!wholeIn(l.maxRetries, 0, 5)) return bad(`${at}.limits.maxRetries`, "has to be a whole number from 0 to 5");
+  const l = validLimits(o.limits, `${at}.limits`);
+  if (!l.ok) return l;
 
   return {
     ok: true,
-    value: { rules, ceiling: ceiling.value, workerDefault: workerDefault.value,
-      limits: { maxWorkers: l.maxWorkers, turnMinutes: l.turnMinutes, maxRetries: l.maxRetries } },
+    value: { rules: rules.value, ceiling: ceiling.value, workerDefault: workerDefault.value, limits: l.value },
   };
 }
 
@@ -532,7 +566,10 @@ export function chainFor(policy: Policy, facts: RuleFacts, role: RoleId): Chain 
 // ── words ────────────────────────────────────────────────────────────────
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const PROVIDER_WORD: Record<UsageProviderId, string> = { anthropic: "Claude", codex: "Codex", antigravity: "Antigravity" };
+const PROVIDER_WORD: Record<UsageProviderId, string> = { anthropic: "Claude", codex: "Codex", opencode: "OpenCode Go", antigravity: "Antigravity" };
+
+/** The plan's own word for a provider, for the places that name the plan rather than the engine. */
+export const planWord = (p: UsageProviderId): string => PROVIDER_WORD[p];
 
 export function triggerSentence(t: Trigger): string {
   switch (t.kind) {

@@ -9,6 +9,8 @@
 import type { Budget, GateRule } from "../../shared/types.ts";
 import { agentProvider } from "../../shared/agentKinds.ts";
 import { validateStored, type StoredPolicy } from "../../shared/orchestration.ts";
+import { validateFlow, type Flow } from "../../shared/flow.ts";
+import { resolvePolaris, validateStoredPolaris, type StoredPolaris } from "../../shared/polaris.ts";
 import { DEFAULT_LAUNCH_DENY, isLaunchMode, parseDenyRules, parseFlagLine, type FlagOverrides, type LaunchMode } from "../../shared/launchModes.ts";
 import { GATE_ANSWERERS, GATE_ON_TIMEOUT, isOneOf, type GateAnswerer, type GateOnTimeout } from "../../shared/agentDefaults.ts";
 import { WORKER_ROLES, MODEL_RE, workerRole, type RoleChoice, type RoleId } from "../../shared/workerRoles.ts";
@@ -176,6 +178,10 @@ interface Config {
   /** Whether paired phones raise a notification for a PR watch or a card.
    *  On unless the person turned it off; one switch for every paired phone. */
   phoneAlerts?: boolean;
+  /** Which engines and worker roles may drive the built-in browser
+   *  (shared/browserWorkers.ts). Read as every one when absent, and checked
+   *  field by field because this file is hand-edited. */
+  browserWorkers?: { engines?: unknown; roles?: unknown };
   /** Keep the stored tokens and plugin keys in the system keyring instead of
    *  0600 files. Off unless the person turned it on (server/src/keyringSwitch.ts). */
   secretsKeyring?: boolean;
@@ -190,6 +196,12 @@ interface Config {
    *  does not already hold: rules, the ceiling, defaults, limits and the
    *  "ask" flags. `projects` is keyed by the checkout root, like budgets. */
   orchestration?: { global?: unknown; projects?: Record<string, unknown> };
+  /** Polaris, the pull request abilities (shared/polaris.ts). What a scope set,
+   *  keyed like `orchestration`; a door it leaves out reads the next layer. */
+  polaris?: { global?: unknown; projects?: Record<string, unknown> };
+  /** The flow (shared/flow.ts): one per project root, and nothing global. Kept
+   *  beside the policy and never inside it, so a policy write cannot lose it. */
+  flow?: { projects?: Record<string, unknown> };
 }
 
 function load(path: string): Config {
@@ -1338,6 +1350,15 @@ export function writePhoneAlerts(on: boolean): { ok: boolean; persisted: boolean
   return mergeConfig({ phoneAlerts: on !== false }, "the phone alerts switch");
 }
 
+/** The stored value for who may drive the browser, unread: `browseraccess.ts` validates it, so a hand-edited file cannot hand a worker a value the page never offered. */
+export function storedBrowserWorkers(): unknown {
+  return config().browserWorkers;
+}
+
+export function writeBrowserWorkers(v: { engines: string[]; roles: string[] }): { ok: boolean; persisted: boolean; error?: string } {
+  return mergeConfig({ browserWorkers: v }, "who may drive the browser");
+}
+
 /** Whether the secrets agentglass stores live in the system keyring: only `true` is on. */
 export function secretsKeyring(): boolean {
   return config().secretsKeyring === true;
@@ -1510,4 +1531,64 @@ export function writeStoredPolicy(root: string | undefined, stored: StoredPolicy
     if (stored) projects[root] = stored; else delete projects[root];
     return { orchestration: { ...cur, projects } };
   }, "the orchestration policy");
+}
+
+/**
+ * The stored flow for one project, or null when it never saved one (or the
+ * file's is unusable: a hand-edited entry that does not validate reads as
+ * absent, and the log says why, rather than as whatever it claims).
+ */
+export function readStoredFlow(root: string): Flow | null {
+  const raw = config().flow?.projects?.[root];
+  if (raw === undefined) return null;
+  const v = validateFlow(raw);
+  if (!v.ok) {
+    console.error(`[config] ignoring the flow for ${root}: ${v.error}`);
+    return null;
+  }
+  return v.value;
+}
+
+/** Write one project's flow, or remove it with null so the template answers again. */
+export function writeStoredFlow(root: string, flow: Flow | null): { ok: boolean; persisted: boolean; error?: string } {
+  return mergeConfig((existing) => {
+    const cur = (existing.flow ?? {}) as { projects?: Record<string, unknown> };
+    const projects = { ...(cur.projects ?? {}) };
+    if (flow) projects[root] = flow; else delete projects[root];
+    return { flow: { ...cur, projects } };
+  }, "the flow");
+}
+
+/** What one scope wrote down for Polaris, or null. An unusable entry reads as absent, like a policy. */
+export function readStoredPolaris(root?: string): StoredPolaris | null {
+  const o = config().polaris;
+  const raw = root ? o?.projects?.[root] : o?.global;
+  if (raw === undefined) return null;
+  const v = validateStoredPolaris(raw);
+  if (!v.ok) {
+    console.error(`[config] ignoring the polaris settings for ${root ?? "global"}: ${v.error}`);
+    return null;
+  }
+  return v.value;
+}
+
+/** Roots the sweep looks at: those with a layer of their own, and every open project when the global layer is on. */
+export const polarisRoots = (): string[] =>
+  [...new Set([...Object.keys(config().polaris?.projects ?? {}), ...(readStoredPolaris()?.enabled ? workspaceRoots() : [])])];
+
+/** The settings in force for a project: per door its own value, else the global one, else the safe default. */
+export function readPolaris(root?: string) {
+  return resolvePolaris(readStoredPolaris(), root ? readStoredPolaris(root) : null);
+}
+
+/** Write one scope's Polaris settings, or drop a project's with null. Same writer as the policy. */
+export function writePolaris(root: string | undefined, stored: StoredPolaris | null): { ok: boolean; persisted: boolean; error?: string } {
+  if (!root && !stored) return { ok: false, persisted: false, error: "the global Polaris settings cannot be removed, only changed" };
+  return mergeConfig((existing) => {
+    const cur = (existing.polaris ?? {}) as { global?: unknown; projects?: Record<string, unknown> };
+    if (!root) return { polaris: { ...cur, global: stored } };
+    const projects = { ...(cur.projects ?? {}) };
+    if (stored) projects[root] = stored; else delete projects[root];
+    return { polaris: { ...cur, projects } };
+  }, "the Polaris settings");
 }

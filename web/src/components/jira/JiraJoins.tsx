@@ -20,7 +20,7 @@
  * Ceiling: the picker searches with the board's own text search, so a card the
  * person cannot see is not found; the sub-task type is the project's first.
  */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { api, type JiraLinkKind } from "../../lib/api.ts";
 import { followLink } from "../../lib/linkRouter.ts";
 import { ICON } from "../../lib/iconSize.ts";
@@ -32,8 +32,8 @@ import { Select } from "../Select.tsx";
 import { StatusPill } from "../StatusPill.tsx";
 import { TrackerStatusPick } from "../TrackerStatusPick.tsx";
 import { CommentAction } from "../tasks/CardEdit.tsx";
-import { EDGE, LINE } from "../workspace/Chrome.tsx";
-import { CardRow, Progress, Section, groupLinked } from "./JiraSections.tsx";
+import { Button, EDGE, LINE, ListRow } from "../workspace/Chrome.tsx";
+import { CardRow, Progress, JiraSection, groupLinked } from "./JiraSections.tsx";
 
 /** What the pane gives the joins to change the card with; each says why it did not land, or null. */
 export interface JoinAct {
@@ -62,8 +62,8 @@ export function Aside({ plain, said, onSaid, open, onToggle, label, canAdd }: {
         <span className="inline-flex items-center gap-1.5 min-w-0" role={said.warn ? "alert" : "status"} style={{ color: said.warn ? "var(--warning-ink)" : "var(--success-ink)" }}>
           <span className="truncate min-w-0" title={said.text}>{said.text}</span>
           {said.undo && (
-            <button className="agx-btn shrink-0 rounded-md px-1.5 py-0.5" disabled={busy} style={{ color: "var(--text2)", border: EDGE }} title="Put it back"
-              onClick={async () => { setBusy(true); const why = await said.undo!(); setBusy(false); onSaid(why ? { text: why, warn: true } : { text: "Put back" }); }}>Undo</button>
+            <Button size="compact" className="shrink-0" disabled={busy} title="Put it back"
+              onClick={async () => { setBusy(true); const why = await said.undo!(); setBusy(false); onSaid(why ? { text: why, warn: true } : { text: "Put back" }); }}>Undo</Button>
           )}
           <CloseButton size={ICON.xs} onClick={() => onSaid(null)} title="Dismiss" />
         </span>
@@ -82,8 +82,8 @@ function Line({ children, busy, ok, onSend, onCancel, sendLabel, error }: {
       onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onCancel(); } }}>
       {children}
       <div className="flex items-center gap-2 text-[10.5px]">
-        <button type="submit" className="agx-btn rounded-md px-2 py-0.5" disabled={!ok || busy} style={{ color: "var(--text)", border: EDGE }}>{busy ? "Saving…" : sendLabel}</button>
-        <button type="button" className="agx-btn rounded-md px-2 py-0.5" disabled={busy} onClick={onCancel} style={{ color: "var(--text3)" }}>Cancel</button>
+        <Button type="submit" size="compact" disabled={!ok || busy}>{busy ? "Saving…" : sendLabel}</Button>
+        <Button size="compact" tone="quiet" disabled={busy} onClick={onCancel}>Cancel</Button>
         {error && <span role="alert" className="min-w-0 truncate" title={error} style={{ color: "var(--error-ink)" }}>{error}</span>}
       </div>
     </form>
@@ -93,14 +93,14 @@ function Line({ children, busy, ok, onSend, onCancel, sendLabel, error }: {
 export const Ask = ({ children, onYes, onNo, yes, busy }: { children: ReactNode; onYes: () => void; onNo: () => void; yes: string; busy: boolean }) => (
   <div className="flex items-center gap-2 py-1.5 text-[10.5px] flex-wrap" role="alertdialog" style={{ borderBottom: LINE }}>
     <span className="min-w-0" style={{ color: "var(--text2)" }}>{children}</span>
-    <button className="agx-btn rounded-md px-2 py-0.5" disabled={busy} onClick={onYes} style={{ color: "var(--error-ink)", border: EDGE }}>{busy ? "Working…" : yes}</button>
-    <button className="agx-btn rounded-md px-2 py-0.5" disabled={busy} onClick={onNo} style={{ color: "var(--text3)" }}>Keep it</button>
+    <Button size="compact" tone="danger" disabled={busy} onClick={onYes}>{busy ? "Working…" : yes}</Button>
+    <Button size="compact" tone="quiet" disabled={busy} onClick={onNo}>Keep it</Button>
   </div>
 );
 
 // --- sub-tasks --------------------------------------------------------------
 
-export function SubtasksBlock({ rows, parent, writable, act }: { rows: ProviderTask[]; parent: ProviderTask; writable: boolean; act: JoinAct }) {
+export function SubtasksBlock({ rows, parent, writable, act, onMenu }: { rows: ProviderTask[]; parent: ProviderTask; writable: boolean; act: JoinAct; onMenu?: (e: MouseEvent, t: ProviderTask) => void }) {
   const canAdd = writable && canHaveSubtasks(parent.issueType);
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
@@ -122,7 +122,7 @@ export function SubtasksBlock({ rows, parent, writable, act }: { rows: ProviderT
   const rowSaid = (s: string) => setSaid(s === "moving…" ? { text: "Moving…" } : s.startsWith("!") ? { text: s.slice(1), warn: true } : { text: `Moved: ${s}` });
 
   return (
-    <Section id="subtasks" title="Subtasks" count={rows.length || undefined}
+    <JiraSection id="subtasks" title="Subtasks" meter={rows.length ? <Progress rows={rows} /> : undefined}
       aside={<Aside plain={rows.length ? `${done} of ${rows.length} done` : null} said={said} onSaid={setSaid} open={open} onToggle={() => { setOpen((o) => !o); setErr(""); }} label="Add a sub-task" canAdd={canAdd} />}>
       {open && (
         <Line busy={busy} ok={parseSubtaskTitle(title).ok} onSend={() => void send()} onCancel={() => { setOpen(false); setErr(""); }} sendLabel="Add" error={err}>
@@ -130,15 +130,15 @@ export function SubtasksBlock({ rows, parent, writable, act }: { rows: ProviderT
             onChange={(e) => { setTitle(e.target.value); setErr(""); }} className="w-full text-[11.5px] rounded px-2 py-1.5 outline-none" style={INPUT_STYLE} />
         </Line>
       )}
-      {rows.length ? <Progress rows={rows} /> : <div className="text-[11px]" style={{ color: "var(--text4)" }}>No sub-tasks yet.</div>}
-      <div className="flex flex-col">
+      {!rows.length && <div className="text-[11px]" style={{ color: "var(--text4)" }}>No sub-tasks yet.</div>}
+      <div className="agx-dk-stack">
         {rows.map((s) => (
-          <CardRow key={s.id} t={s} tail={writable
-            ? <span className="shrink-0"><TrackerStatusPick tracker={TRACKERS.jira} task={s} query={s.customId ?? s.id} onSaid={rowSaid} onTask={act.onRowTask} align="right" /></span>
+          <CardRow key={s.id} t={s} onMenu={onMenu} tail={writable
+            ? <span className="shrink-0"><TrackerStatusPick tracker={TRACKERS.jira} task={s} query={s.customId ?? s.id} onSaid={rowSaid} onTask={act.onRowTask} align="right" chip={22} /></span>
             : undefined} />
         ))}
       </div>
-    </Section>
+    </JiraSection>
   );
 }
 
@@ -229,7 +229,7 @@ export function LinkedBlock({ linked, card, writable, act }: { linked: CardLinke
 
   if (!linked.length && !writable) return null;
   return (
-    <Section id="linked" title="Linked work items" count={linked.length || undefined}
+    <JiraSection id="linked" title="Linked work items" count={linked.length || undefined}
       aside={<Aside plain={null} said={said} onSaid={setSaid} open={open} onToggle={() => (open ? close() : setOpen(true))} label="Link another work item" canAdd={writable} />}>
       {open && (
         <Line busy={busy} ok={!!chosen && !!other && (picked ? true : parseCardId(other).ok)} onSend={() => void send()} onCancel={close} sendLabel="Link" error={err || kindsErr}>
@@ -240,7 +240,7 @@ export function LinkedBlock({ linked, card, writable, act }: { linked: CardLinke
           {picked ? (
             <div className="flex items-center gap-2 text-[11px] min-w-0">
               <span className="min-w-0 truncate" style={{ color: "var(--text)" }}>{chosen ? linkEffect(card, chosen, other) : other}</span>
-              <button type="button" className="agx-btn shrink-0 rounded-md px-1.5 py-0.5 text-[10.5px]" style={{ color: "var(--text3)", border: EDGE }} onClick={() => setPicked(null)} title="Pick another card">Change</button>
+              <Button size="compact" className="shrink-0" onClick={() => setPicked(null)} title="Pick another card">Change</Button>
             </div>
           ) : (
             <>
@@ -252,12 +252,11 @@ export function LinkedBlock({ linked, card, writable, act }: { linked: CardLinke
               {found && found.length > 0 && (
                 <div className="flex flex-col rounded" style={{ border: EDGE }}>
                   {found.map((t) => (
-                    <button key={t.id} type="button" onClick={() => { setPicked(t); setErr(""); }} title={`Link ${t.customId ?? t.id}`}
-                      className="agx-btn flex items-center gap-2 min-w-0 text-left text-[11px] px-2 py-1">
-                      <span className="tabular-nums shrink-0" style={{ color: "var(--text3)" }}>{t.customId ?? t.id}</span>
-                      <span className="flex-1 min-w-0 truncate" style={{ color: "var(--text)" }}>{t.title}</span>
-                      <StatusPill status={t.status} color={t.statusColor} dim={t.statusKind === "done"} />
-                    </button>
+                    <ListRow key={t.id} onClick={() => { setPicked(t); setErr(""); }} title={`Link ${t.customId ?? t.id}`}
+                      trailing={<StatusPill status={t.status} color={t.statusColor} dim={t.statusKind === "done"} />}>
+                      <span className="tabular-nums mr-2" style={{ color: "var(--text3)" }}>{t.customId ?? t.id}</span>
+                      <span style={{ color: "var(--text)" }}>{t.title}</span>
+                    </ListRow>
                   ))}
                 </div>
               )}
@@ -266,12 +265,10 @@ export function LinkedBlock({ linked, card, writable, act }: { linked: CardLinke
         </Line>
       )}
       {!linked.length && <div className="text-[11px]" style={{ color: "var(--text4)" }}>No linked work items.</div>}
-      {groupLinked(linked).map((g) => (
-        <div key={g.phrase} className="mb-1.5">
-          <div className="text-[10px] mt-1 -mb-0.5" style={{ color: "var(--text4)" }}>{g.phrase}</div>
-          {g.rows.map((l) => (
+      <div className="agx-dk-stack">
+      {groupLinked(linked).flatMap((g) => g.rows.map((l) => (
             <div key={l.id}>
-              <CardRow t={l.task} title={`${l.type}: ${g.phrase} ${l.task.customId ?? l.task.id}`}
+              <CardRow t={l.task} note={g.phrase} title={`${l.type}: ${g.phrase} ${l.task.customId ?? l.task.id}`}
                 after={writable ? <CloseButton size={ICON.xs} onClick={() => setAsking(l.id)} title={`Take off the link to ${l.task.customId ?? l.task.id}`} /> : undefined} />
               {asking === l.id && (
                 <Ask yes="Take off" busy={busy} onYes={() => void remove(l)} onNo={() => setAsking(null)}>
@@ -279,10 +276,9 @@ export function LinkedBlock({ linked, card, writable, act }: { linked: CardLinke
                 </Ask>
               )}
             </div>
-          ))}
-        </div>
-      ))}
-    </Section>
+          )))}
+      </div>
+    </JiraSection>
   );
 }
 
@@ -318,7 +314,7 @@ export function WebLinksBlock({ links, error, writable, card, act }: { links: Ca
   };
 
   return (
-    <Section id="weblinks" title="Web links" count={links.length || undefined}
+    <JiraSection id="weblinks" title="Web links" count={links.length || undefined}
       aside={<Aside plain={null} said={said} onSaid={setSaid} open={open} onToggle={() => (open ? close() : setOpen(true))} label="Add a web link" canAdd={writable} />}>
       {error && <div className="text-[10.5px] mb-1" role="status" style={{ color: "var(--warning-ink)" }}>{error}</div>}
       {open && (
@@ -350,7 +346,7 @@ export function WebLinksBlock({ links, error, writable, card, act }: { links: Ca
           </div>
         ))}
       </div>
-    </Section>
+    </JiraSection>
   );
 }
 

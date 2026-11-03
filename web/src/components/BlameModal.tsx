@@ -4,13 +4,12 @@
  * file as of that commit; clicking a blame line opens that commit's diff.
  */
 import { useEffect, useMemo, useState } from "react";
-import { motion, AnimatePresence } from "motion/react";
-import { Portal } from "./Portal.tsx";
-import { CloseButton } from "./CloseButton.tsx";
+import { GitDialog, DialogError, DialogSkeleton } from "./GitDialog.tsx";
+import { UNREACHABLE } from "../lib/gitDialog.ts";
 import { api } from "../lib/api.ts";
+import { repoRelative } from "../lib/gitActions.ts";
 import type { BlameLine, FileHistoryEntry } from "../../../shared/types.ts";
-import { EDGE } from "./workspace/Chrome.tsx";
-import { useEscapeClose } from "../lib/useDismiss.ts";
+import { Button, EDGE, ListRow } from "./workspace/Chrome.tsx";
 
 const SHORT = 7;
 
@@ -20,7 +19,6 @@ export function BlameModal({ root, path, onClose, onOpenCommit }: {
   onClose: () => void;
   onOpenCommit: (hash: string, subject: string) => void;
 }) {
-  useEscapeClose(onClose);
   const [lines, setLines] = useState<BlameLine[]>([]);
   const [history, setHistory] = useState<FileHistoryEntry[]>([]);
   const [at, setAt] = useState("HEAD");
@@ -34,7 +32,7 @@ export function BlameModal({ root, path, onClose, onOpenCommit }: {
       const b = await api.gitBlame(root, path, ref);
       if (!b.ok) { setError(b.error || "blame failed"); setLines([]); }
       else setLines(b.lines ?? []);
-    } catch (e) { setError(String(e)); setLines([]); }
+    } catch { setError(UNREACHABLE); setLines([]); }
     setBusy(false);
   };
 
@@ -59,72 +57,54 @@ export function BlameModal({ root, path, onClose, onOpenCommit }: {
   const fmt = (t: number) => (t ? new Date(t * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "");
 
   return (
-    <Portal>
-      <AnimatePresence>
-        <motion.div className="fixed inset-0 z-[90] flex items-center justify-center p-4" style={{ background: "color-mix(in srgb, #000 45%, transparent)" }} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-          <motion.div
-            className="relative w-full max-w-4xl h-[80vh] rounded-xl p-4 flex flex-col min-h-0"
-            style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 24px 80px rgba(0,0,0,.5)" }}
-            initial={{ opacity: 0, scale: .97, y: 8 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: .97, y: 8 }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center gap-3 mb-3 shrink-0">
-              <h3 className="text-[13px] font-semibold truncate" style={{ color: "var(--text)" }} title={path}>{path}</h3>
-              <span className="shrink-0 rounded px-1.5 py-px text-[9.5px] font-mono" style={{ color: "var(--info-ink)", border: "1px solid color-mix(in srgb, var(--info) 30%, transparent)" }}>{at}</span>
-              {at !== "HEAD" && (
-                <button onClick={() => reblame("HEAD", "HEAD")} className="shrink-0 text-[10px] px-2 py-0.5 rounded" style={{ color: "var(--text2)", border: EDGE }}>back to HEAD</button>
-              )}
-              <CloseButton onClick={onClose} />
-            </div>
+    <GitDialog title={repoRelative(root, path)} tone="neutral" width={920} cancelLabel="Close" onClose={onClose} initialFocus="none"
+      reason="Read-only. A click on a line opens its commit."
+      subtitle={<span className="inline-flex items-center gap-2">Who wrote each line, as of
+        <span className="rounded px-1.5 py-px text-[10px] font-mono" style={{ color: "var(--info-ink)", border: "1px solid color-mix(in srgb, var(--info) 30%, transparent)" }}>{at}</span>
+        {at !== "HEAD" && <Button size="compact" onClick={() => reblame("HEAD", "HEAD")}>back to HEAD</Button>}
+      </span>}>
+    <div className="flex gap-3" style={{ height: "clamp(220px, 56vh, 560px)" }}>
+      {/* History — the file's commits; a click reblames as of it. */}
+      <div className="w-72 shrink-0 min-h-0 flex flex-col rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: EDGE }}>
+        <div className="text-[9.5px] uppercase tracking-wider t-dim2 px-3 pt-2.5 pb-1 shrink-0">file history · click to reblame</div>
+        <div className="agx-scroll flex-1 min-h-0 overflow-y-auto px-1.5 pb-2">
+          {history.map((h) => (
+            <ListRow key={h.fullHash} current={at === h.hash} onClick={() => reblame(h.fullHash, h.hash)}
+              sub={<><span className="font-mono" style={{ color: "var(--info-ink)" }}>{h.hash}</span> · {h.author}</>}
+              trailing={<span className="text-[9.5px]">{fmt(h.time)}</span>}>
+              {h.subject}
+            </ListRow>
+          ))}
+          {!history.length && !busy && <div className="text-[10.5px] t-dim2 px-2 py-2">no history</div>}
+        </div>
+      </div>
 
-            <div className="flex-1 min-h-0 flex gap-3">
-              {/* History — the file's commits; a click reblames as of it. */}
-              <div className="w-72 shrink-0 min-h-0 flex flex-col rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: EDGE }}>
-                <div className="text-[9.5px] uppercase tracking-wider t-dim2 px-3 pt-2.5 pb-1 shrink-0">file history · click to reblame</div>
-                <div className="agx-scroll flex-1 min-h-0 overflow-y-auto px-1.5 pb-2">
-                  {history.map((h) => (
-                    <button key={h.fullHash} onClick={() => reblame(h.fullHash, h.hash)} className="w-full text-left px-2 py-1.5 rounded-md" style={{ background: at === h.hash ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent" }}>
-                      <div className="flex items-center gap-2">
-                        <span className="shrink-0 font-mono text-[9.5px]" style={{ color: "var(--info-ink)" }}>{h.hash}</span>
-                        <span className="shrink-0 text-[9.5px] t-dim2 ml-auto">{fmt(h.time)}</span>
-                      </div>
-                      <div className="truncate text-[11px] mt-0.5" style={{ color: "var(--text)" }}>{h.subject}</div>
-                      <div className="truncate text-[9.5px] t-dim2">{h.author}</div>
-                    </button>
-                  ))}
-                  {!history.length && !busy && <div className="text-[10.5px] t-dim2 px-2 py-2">no history</div>}
-                </div>
-              </div>
-
-              {/* The blame itself. */}
-              <div className="flex-1 min-h-0 flex flex-col rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: EDGE }}>
-                <div className="text-[9.5px] uppercase tracking-wider t-dim2 px-3 pt-2.5 pb-1 shrink-0">blame · click a line to open its commit</div>
-                {busy ? (
-                  <div className="flex-1 grid place-items-center text-[11px] t-dim2">Reading blame…</div>
-                ) : error ? (
-                  <div className="flex-1 grid place-items-center text-[11px] px-4 text-center" style={{ color: "var(--error-ink)" }}>{error}</div>
-                ) : (
-                  <div className="agx-scroll flex-1 min-h-0 overflow-y-auto px-1.5 pb-2 font-mono text-[10.5px] leading-[1.55]">
-                    {lines.map((l) => {
-                      const meta = l.sha ? bySha.get(l.sha) : null;
-                      return (
-                        <button key={l.line} onClick={() => { if (l.sha) onOpenCommit(l.sha, meta?.subject || ""); }}
-                          className="w-full flex items-baseline gap-2 text-left rounded-sm hover:bg-[color-mix(in_srgb,var(--primary)_10%,transparent)]"
-                          title={l.sha ? `${l.sha.slice(0, SHORT)} · ${meta?.subject ?? ""} · ${meta?.author ?? ""}` : "not yet committed"}>
-                          <span className="shrink-0 w-7 text-right select-none" style={{ color: "var(--text3)" }}>{l.line}</span>
-                          <span className="shrink-0 w-[4.6rem] truncate" style={{ color: l.sha ? "var(--info)" : "var(--warning)" }}>{l.sha ? l.sha.slice(0, SHORT) : "local"}</span>
-                          <span className="shrink-0 w-20 truncate" style={{ color: "var(--text3)" }}>{meta?.author ?? ""}</span>
-                          <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text2)" }}>{l.content}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
-          </motion.div>
-        </motion.div>
-      </AnimatePresence>
-    </Portal>
+      {/* The blame itself. */}
+      <div className="flex-1 min-h-0 flex flex-col rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: EDGE }}>
+        <div className="text-[9.5px] uppercase tracking-wider t-dim2 px-3 pt-2.5 pb-1 shrink-0">blame · click a line to open its commit</div>
+        {busy ? (
+          <div className="flex-1 p-3"><DialogSkeleton rows={4} label="Reading blame…" /></div>
+        ) : error ? (
+          <div className="flex-1 p-3"><DialogError message={error} onRetry={() => void load(at === "HEAD" ? "HEAD" : history.find((h) => h.hash === at)?.fullHash ?? "HEAD")} /></div>
+        ) : (
+          <div className="agx-scroll flex-1 min-h-0 overflow-y-auto px-1.5 pb-2 font-mono text-[10.5px] leading-[1.55]">
+            {lines.map((l) => {
+              const meta = l.sha ? bySha.get(l.sha) : null;
+              return (
+                <button key={l.line} onClick={() => { if (l.sha) onOpenCommit(l.sha, meta?.subject || ""); }}
+                  className="w-full flex items-baseline gap-2 text-left rounded-sm hover:bg-[color-mix(in_srgb,var(--primary)_10%,transparent)]"
+                  title={l.sha ? `${l.sha.slice(0, SHORT)} · ${meta?.subject ?? ""} · ${meta?.author ?? ""}` : "not yet committed"}>
+                  <span className="shrink-0 w-7 text-right select-none" style={{ color: "var(--text3)" }}>{l.line}</span>
+                  <span className="shrink-0 w-[4.6rem] truncate" style={{ color: l.sha ? "var(--info)" : "var(--warning)" }}>{l.sha ? l.sha.slice(0, SHORT) : "local"}</span>
+                  <span className="shrink-0 w-20 truncate" style={{ color: "var(--text3)" }}>{meta?.author ?? ""}</span>
+                  <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text2)" }}>{l.content}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+    </GitDialog>
   );
 }

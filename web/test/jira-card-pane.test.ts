@@ -10,7 +10,7 @@
 import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { propsOf, JiraHead, JiraProps, WRITES_OFF } from "../src/components/jira/JiraFacts.tsx";
+import { JiraHead, JiraProps, WRITES_OFF } from "../src/components/jira/JiraFacts.tsx";
 import { SubtasksSection } from "../src/components/jira/JiraSections.tsx";
 import { JiraPrsView } from "../src/components/jira/JiraCardPrs.tsx";
 import type { ProviderTask } from "../../shared/providers.ts";
@@ -28,19 +28,19 @@ const facts = (writable: boolean, t = card()) =>
 describe("the facts a Jira card shows", () => {
   test("sprint, points, priority, due, labels, project and parent are all there", () => {
     const html = facts(false);
-    for (const word of ["Sprint 4", "Points", ">5<", "High", "2026-02-03", ">sync<", ">bug<", "Orbit", "ORBIT-1000", "Report improvements"]) expect(html).toContain(word);
+    for (const word of ["Sprint 4", ">Points<", ">5<", "High", ">Due<", "#sync", "#bug", "Orbit", "ORBIT-1000", "Report improvements"]) expect(html).toContain(word);
   });
 
   test("zero points is a fact, no points is not a row", () => {
-    expect(propsOf(card({ points: 0 })).map(([k]) => k)).toContain("Points");
-    expect(propsOf(card({ points: null })).map(([k]) => k)).not.toContain("Points");
-    expect(propsOf(card({ sprint: undefined })).map(([k]) => k)).not.toContain("Sprint");
-    expect(facts(false, card({ tags: [] }))).not.toContain("Labels");
+    expect(facts(false, card({ points: 0 }))).toContain(">Points<");
+    expect(facts(false, card({ points: null }))).not.toContain(">Points<");
+    expect(facts(false, card({ sprint: undefined }))).not.toContain(">Sprint<");
+    expect(facts(false, card({ tags: [] }))).not.toContain(">Labels<");
     expect(facts(false, card({ priority: null }))).not.toContain(">priority<");
   });
 
   test("a card with no parent has no Parent row", () => {
-    expect(facts(false, card({ parent: undefined }))).not.toContain("Parent");
+    expect(facts(false, card({ parent: undefined }))).not.toMatch(/>(Parent|Epic)</);
   });
 });
 
@@ -80,20 +80,42 @@ describe("the subtasks section", () => {
 
 describe("the pane's shape, read from source", () => {
   const src = async (p: string) => (await Bun.file(new URL(p, import.meta.url)).text()).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  test("the card is one scroll in Jira's order, with no tab strip and no section for a card that lacks one", async () => {
+  test("the card has Card, Activity, Files and GitHub tabs, and each body shows only on its own tab", async () => {
     const c = await src("../src/components/jira/JiraCard.tsx");
-    expect(c).not.toContain("<CardTabs");
+    expect(c).toContain("<DockTabs");
     const at = (w: string) => c.indexOf(w);
-    const order = ["<JiraProps", "<JiraDescription", "<AttachmentsBlock", "<SubtasksSection", "<LinkedSection", "<WebLinksSection", 'id="development"', "<JiraActivity"];
-    for (const w of order) expect(at(w)).toBeGreaterThan(-1);
-    const found = order.map(at);
+    // Card tab: facts, description, then the relations; the other three own one block each.
+    const card = ['tab === "card" && <JiraProps', "<JiraDescription", "<SubtasksSection", "<LinkedSection", "<WebLinksSection"];
+    for (const w of card) expect(at(w)).toBeGreaterThan(-1);
+    const found = card.map(at);
     expect(found).toEqual(found.toSorted((x, y) => x - y));
+    for (const w of ['tab === "files" && <AttachmentsBlock', 'tab === "github"', 'id="development"', 'tab === "activity" && ']) expect(at(w)).toBeGreaterThan(-1);
   });
 
-  test("the composer and its sentence exist only with writes on", async () => {
+  test("a card that has no files offers no Files tab unless writes are on", async () => {
     const c = await src("../src/components/jira/JiraCard.tsx");
-    expect(c).toContain("{writes && <div");
+    expect(c).toContain('...(nFiles || writes ? [{ id: "files" as const');
+  });
+
+  test("the composer and its sentence exist only with writes on, on the Activity tab", async () => {
+    const c = await src("../src/components/jira/JiraCard.tsx");
+    expect(c).toContain('{writes && tab === "activity" && <div');
     expect(c).not.toContain("Commenting is switched off");
+  });
+
+  test("a card that cannot be read says so, keeps the id copyable and can be tried again", async () => {
+    const c = await src("../src/components/jira/JiraCard.tsx");
+    expect(c).toContain("Could not read this card");
+    expect(c).toContain("The id is kept so you can still copy it.");
+    expect(c).toContain("<BoardSkeleton");
+    for (const w of ["Try now", "Copy id"]) expect(c).toContain(w);
+  });
+
+  test("with writes off, the tiles that could be edited carry a lock and ask for the grant, with one note on top", async () => {
+    const html = renderToStaticMarkup(React.createElement(JiraProps, { t: card(), writable: false, onTask() {}, onAllow() {} }));
+    expect(html.split("agx-dk-lock").length - 1).toBeGreaterThanOrEqual(3);
+    expect(html.split("Read-only board. Turn changes on to edit").length - 1).toBeGreaterThanOrEqual(3);
+    expect(html.split("This board is read-only.").length - 1).toBe(1);
   });
 
   test("the board draws one pane for both shells", async () => {
@@ -103,23 +125,20 @@ describe("the pane's shape, read from source", () => {
   });
 });
 
-describe("the card chrome, shared with ClickUp's look", () => {
+describe("the card head and its tiles", () => {
   const src = async (p: string) => (await Bun.file(new URL(p, import.meta.url)).text()).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  test("the head has the action bar, the key chip with YOURS, and a title that copies itself", () => {
+  test("the head has the icon controls, the key chip with YOURS, and a title that copies itself", () => {
     const html = facts(true, card({ mine: true }));
-    for (const w of ['aria-label="Card actions"', "Copy ORBIT id", "Copy URL", "Open ↗", "YOURS", 'aria-label="Copy the title"']) expect(html).toContain(w);
+    for (const w of ['aria-label="Copy the link"', 'aria-label="Open in Jira"', 'aria-label="Read this card again"', 'aria-label="Copy ORBIT-1042"', "YOURS", 'aria-label="Copy the title"']) expect(html).toContain(w);
   });
   test("with writes off there is no hand-off button, and not-yours has no badge", () => {
     const html = facts(false);
     expect(html).not.toContain("YOURS");
     expect(html).not.toContain("Hand off");
   });
-  test("the Jira pane draws its head and its band from the shared parts", async () => {
+  test("the Jira head draws its icons from the dock parts, and the hand-off only with writes on", async () => {
     const facts = await src("../src/components/jira/JiraFacts.tsx");
-    expect(facts).toContain("<CardActionBar");
-    expect(facts).toContain("<CardChips");
-    expect(facts).toContain("<CardTitle");
-    expect(facts).toContain("<CardBand>");
-    expect(facts).toContain("handoff={writable ? <TrackerHandOffButton");
+    expect(facts).toContain("<DockIcon");
+    expect(facts).toContain("{writable && <TrackerHandOffButton");
   });
 });

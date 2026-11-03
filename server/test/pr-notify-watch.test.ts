@@ -440,9 +440,11 @@ describe("presets", () => {
     W.setPreset("acme/orbit", [{ type: "ci-pass" }, { type: "ci-pass" }, { type: "check", match: "Evals", on: "fail" }, { type: "check", match: "evals", on: "fail" }], false);
     expect(W.listWatches().presets[0]!.rules.length).toBe(2);
   });
-  it("an empty rule list clears the preset", () => {
+  it("an empty rule list with auto off clears the preset; with auto on it is kept (new PRs start with nothing)", () => {
     W.setPreset("acme/orbit", [{ type: "ci-pass" }], true);
     W.setPreset("acme/orbit", [], true);
+    expect(W.listWatches().presets).toEqual([{ repo: "acme/orbit", rules: [], auto: true }]);
+    W.setPreset("acme/orbit", [], false);
     expect(W.listWatches().presets.length).toBe(0);
   });
 });
@@ -603,7 +605,8 @@ describe("restart", () => {
       W.subscribeWatchFire((f) => got.push(f.number));
       await W.checkWatches(async () => ({ allDone: true, verdict: "green", all: [{ name: "a", workflow: "", state: "success", done: true }] }));
       console.log(JSON.stringify({ got, queued: W.pendingFires().map((f) => f.number) }));`;
-    const p = Bun.spawn(["bun", "-e", code], {
+    // The child must be the runtime running this suite, not `bun` resolved from PATH.
+    const p = Bun.spawn([process.execPath, "-e", code], {
       env: { ...process.env, AGENTGLASS_DB: DB.dbPath(), AGENTGLASS_SCAN_DISABLED: "1", NODE_ENV: "test" }, stdout: "pipe", stderr: "pipe",
     });
     const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);

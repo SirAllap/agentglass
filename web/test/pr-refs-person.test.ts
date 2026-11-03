@@ -117,28 +117,31 @@ const props = (extra: Record<string, unknown>) => ({
 const draw = (extra: Record<string, unknown>) => renderToStaticMarkup(React.createElement(TriageBoard, props(extra)));
 
 describe("the yellow bar", () => {
-  test("says whose board it is, with the way back, in warning colours", () => {
-    const html = renderToStaticMarkup(React.createElement(PersonBanner, { login: "ana-dev", onBack: noop }));
+  test("says whose board it is and that your rules do not apply, with Follow and the way back", () => {
+    const html = renderToStaticMarkup(React.createElement(PersonBanner, { login: "ana-dev", onBack: noop, follow: { on: false, toggle: noop } }));
     expect(html).toContain("data-person-banner");
-    expect(html).toContain("ana-dev");
-    expect(html).toContain("s board, not yours");
-    expect(html).toContain("Back to my board");
-    expect(html).toContain("var(--warning)");
-    expect(html).toContain("var(--warning-ink)");
+    expect(html).toContain("Viewing ana-dev.");
+    expect(html).toContain("Your rules do not apply.");
+    expect(html).toContain(">Follow<");
+    expect(html).toContain(">Back<");
+    const on = renderToStaticMarkup(React.createElement(PersonBanner, { login: "ana-dev", onBack: noop, follow: { on: true, toggle: noop } }));
+    expect(on).toContain(">Following<");
+    expect(on).toContain('aria-pressed="true"');
   });
   test("is on a person's board and nowhere else", () => {
     const person = draw({ viewer: "ana-dev", person: { onBack: noop, more: false } });
     expect(person).toContain("data-person-banner");
-    expect(person.match(/Back to my board/g)).toHaveLength(1);
+    expect(person.match(/data-person-banner/g)).toHaveLength(1);
     const own = draw({});
     expect(own).not.toContain("data-person-banner");
-    expect(own).not.toContain("Back to my board");
-    expect(own).not.toContain("not yours");
+    expect(own).not.toContain("Viewing ");
   });
-  test("a person's board draws four lanes and no 'waiting on someone else'", () => {
+  test("a person's board is your board's columns, from their perspective, under the banner", () => {
     const html = draw({ viewer: "ana-dev", person: { onBack: noop, more: false } });
-    expect(html).not.toContain("Waiting on someone else");
-    for (const l of lanesFor("ana-dev")) expect(html).toContain(l.label.replace("'", "&#x27;"));
+    expect(html).toContain("data-person");
+    expect(html).toContain("data-lane=");
+    expect(html).not.toContain("data-results");
+    expect(html).not.toContain("data-person-section");
   });
   test("only what is open now: no finished pull requests on a person's board", () => {
     const html = draw({ viewer: "ana-dev", person: { onBack: noop, more: false } });
@@ -157,7 +160,7 @@ describe("no request on typing", async () => {
     });
   });
   test("onChange only edits the box; a person opens on Enter or on the @ pick", () => {
-    expect(bar).toContain("(scoped ? scoped.onChange : onQuery)(e.target.value)");
+    expect(bar).toContain("setQuery(joinPersonTokens(chipsOf, e.target.value), true)");
     expect(bar).toContain("onPickPerson?.(login)");
   });
   test("the person board closes the search it never needed: Enter on a login sends no list search", () => {

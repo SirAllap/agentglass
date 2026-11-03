@@ -3,9 +3,9 @@
  * means for a given screen, and which hints the footer shows. Pure, so no renderer.
  */
 import { describe, expect, it } from "bun:test";
-import { decideKey, keyHints, onProposal, proposalLine, stepIndex, tabTarget, type KeyState } from "../src/lib/accountKeys.ts";
+import { decideKey, keyHints, nextProvider, onProposal, proposalLine, stagedProvider, stepIndex, tabTarget, type KeyState } from "../src/lib/accountKeys.ts";
 
-const base: KeyState = { providers: 2, accounts: 3, candidateActive: false, managed: false, proposal: false, busy: false };
+const base: KeyState = { providers: 2, accounts: 3, candidateActive: false, managed: false, proposal: false, busy: false, inTabs: false };
 const s = (o: Partial<KeyState> = {}): KeyState => ({ ...base, ...o });
 
 describe("decideKey", () => {
@@ -85,13 +85,22 @@ describe("keyHints", () => {
   it("hides a and m when the chips are read-only", () => {
     expect(keys(s({ managed: true }))).toEqual(["↑↓", "←→"]);
   });
+  it("gives ←→ to the provider while the tab row has the focus", () => {
+    // Focus lands on the selected tab when the sheet opens, and a tablist owns
+    // ←→: the footer said "←→ account" while the first press moved the tab.
+    const inTabs = keyHints(s({ inTabs: true }));
+    expect(inTabs.map((h) => `${h.keys} ${h.label}`)).toEqual(["↑↓ ←→ provider", "a switch", "m manage"]);
+    expect(inTabs.some((h) => h.label === "account")).toBe(false);
+    // One tab to move between: ←→ does nothing there, so it is promised nowhere.
+    expect(keys(s({ providers: 1, inTabs: true }))).toEqual(["a", "m"]);
+  });
   it("keeps a dim when the chip in use is in focus, rather than removing it", () => {
     const a = keyHints(s({ candidateActive: true })).find((h) => h.keys === "a")!;
     expect(a.enabled).toBe(false);
     expect(keyHints(s()).find((h) => h.keys === "a")!.enabled).toBe(true);
   });
   it("agrees with decideKey about what works", () => {
-    for (const st of [s(), s({ candidateActive: true }), s({ busy: true }), s({ managed: true })]) {
+    for (const st of [s(), s({ candidateActive: true }), s({ busy: true }), s({ managed: true }), s({ inTabs: true })]) {
       for (const h of keyHints(st)) {
         if (h.act) expect(decideKey(st, h.keys) !== null).toBe(h.enabled);
       }
@@ -141,5 +150,42 @@ describe("onProposal: a proposal with no row to anchor it is dropped, not kept f
   it("with no row it is seen and does not open, now or when a reading lands", () => {
     expect(onProposal(0, 1, false)).toEqual({ seen: 1, open: false });
     expect(onProposal(1, 1, true)).toEqual({ seen: 1, open: false });
+  });
+});
+
+describe("the sheet's provider axis", () => {
+  const tabs = ["anthropic", "opencode", "codex"] as const;
+  it("moves to the next tab and back, from the tab that is selected now", () => {
+    expect(nextProvider(tabs, "anthropic", 1)).toBe("opencode");
+    expect(nextProvider(tabs, "opencode", 1)).toBe("codex");
+    expect(nextProvider(tabs, "codex", 1)).toBe("anthropic");
+    // Back the way it came: a pick remembered from the first move returned the
+    // provider it was made against, so tabbing away and back drew another
+    // provider under a tab that still said Claude.
+    expect(nextProvider(tabs, "opencode", -1)).toBe("anthropic");
+    expect(nextProvider(tabs, "anthropic", -1)).toBe("codex");
+  });
+
+  it("stays put with one tab, or when the current provider is not a tab", () => {
+    expect(nextProvider(["anthropic"] as const, "anthropic", 1)).toBe("anthropic");
+    expect(nextProvider<string>(["anthropic", "opencode"], "elsewhere", 1)).toBe("elsewhere");
+    expect(nextProvider<string>([], "anthropic", 1)).toBe("anthropic");
+  });
+});
+
+describe("which provider the sheet opens on", () => {
+  const bar = ["anthropic", "codex"] as const;
+  const hasCell = (p: string) => bar.includes(p as (typeof bar)[number]);
+
+  it("an agent's proposal opens on the provider it names, so its card has a tab to live under", () => {
+    // The failing case: Claude is the busiest row and has no plugin accounts,
+    // only Codex has a list. Opened on Claude, the chips have nothing to draw
+    // and the "Proposed switch" card and its Switch button never appear.
+    expect(stagedProvider("codex", hasCell, "anthropic")).toBe("codex");
+  });
+
+  it("falls back to the live row when the named provider has no cell on the bar", () => {
+    expect(stagedProvider("opencode", hasCell, "anthropic")).toBe("anthropic");
+    expect(stagedProvider("opencode", hasCell, undefined)).toBeUndefined();
   });
 });

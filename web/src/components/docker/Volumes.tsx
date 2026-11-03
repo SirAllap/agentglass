@@ -1,201 +1,243 @@
 /*
- * Volumes, with the three facts that were missing.
+ * Volumes: one sentence, three cards that also filter, then the volumes by
+ * state. The line this view holds is that a data volume is never offered for
+ * removal, with the reason written on the card: `volumesView` classifies, and
+ * the server refuses anything that is not a node_modules volume as well.
  *
- * The old table was two columns: name and "local". Everything anybody actually
- * wants to know about a volume was absent — how big it is, who is holding it,
- * and whether what is inside it is yours. That last one is not a nicety on this
- * machine: every worktree shares the same global volumes, so the bundle your
- * app serves may well have been built by a branch you have never checked out,
- * and until now nothing said so.
- *
- * Sizes are the expensive half (`docker system df -v` walks every layer), so
- * they are fetched when this section is opened and never on the poll. The
- * ownership half is free — it comes from agentglass's own ledger — so it is
- * already in the list.
+ * Sizes are the expensive half (`docker system df -v`), so they arrive from the
+ * Disk measurement and the cards say "measuring" until they do. Selecting a
+ * card opens the panel below with who holds the volume and "Look inside".
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { DockerDisk, DockerPeek, DockerVolume, DockerVolumeDetail } from "../../../../shared/types.ts";
+import { useMemo, useState } from "react";
+import type { DockerContainer, DockerPeek, DockerVolume } from "../../../../shared/types.ts";
 import { api } from "../../lib/api.ts";
-import { humanSize, sinceLabel } from "../../lib/dockerVolumeView.ts";
-import { LINE } from "../workspace/Chrome.tsx";
+import { sinceLabel, volumeLabel, volumesView, type VolumeState } from "../../lib/dockerVolumeView.ts";
+import { sectionsOf, volumeAnswers, volumeHit, volumeMenu, volumeShape, type VolumeItem } from "../../lib/dockerResourceUi.ts";
+import { BranchIcon, FileIcon, FolderIcon, RefreshIcon } from "../../lib/glyphIcons.tsx";
+import { ICON } from "../../lib/iconSize.ts";
+import { useEscapeClose } from "../../lib/useDismiss.ts";
+import { CubeIcon, CylinderIcon, UpIcon } from "./DockerIcons.tsx";
+import { Button } from "../workspace/Chrome.tsx";
+import { humanSize } from "../../../../shared/dockerSize.ts";
+import {
+  Answers, Badge, ConfirmBar, ContainerChips, copyTo, GroupHead, MoreButton, NoMatch, ReadOnlyNote, RemoveButton,
+  ResourceEmpty, Sentence, Shape, SizeBar, useMenu, XMenu,
+} from "./ResourceKit.tsx";
 
-function Chip({ text, tint, title }: { text: string; tint: string; title?: string }) {
-  return (
-    <span title={title} className="text-[9.5px] px-1.5 py-0.5 rounded-md whitespace-nowrap"
-      style={{ color: tint, border: `1px solid color-mix(in srgb, ${tint} 40%, transparent)`, background: `color-mix(in srgb, ${tint} 10%, transparent)` }}>
-      {text}
-    </span>
-  );
+const SECTIONS = [
+  { key: "safe", title: "Safe to remove", sub: "node_modules, nothing attached" },
+  { key: "use", title: "In use" },
+  { key: "kept", title: "Kept", sub: "data, nothing attached" },
+] as const;
+
+type Peek = { name: string; s: "busy" | "err" | "ok"; path: string; res?: DockerPeek };
+
+/** Who made the volume what it is: the fact that explains a bundle you did not build. */
+/** The peek reports local "YYYY-MM-DD HH:MM"; the cards say "3 weeks ago". */
+function whenLabel(when: string): string {
+  const t = new Date(when.replace(" ", "T"));
+  return Number.isNaN(t.getTime()) ? when : sinceLabel(t.toISOString());
 }
 
-export function Volumes({ volumes }: { volumes: DockerVolume[] }) {
-  const [sizes, setSizes] = useState<Record<string, number | null> | null>(null);
-  const [sizeErr, setSizeErr] = useState<string | null>(null);
+function Held({ v }: { v: DockerVolume }) {
+  const w = v.worktrees;
+  if (!w) return <span className="dk-xe">owner unknown</span>;
+  if (!w.length) return <span className="dk-xe">no worktree</span>;
+  return w.length === 1
+    ? <Badge tone="var(--merged-ink)" title={`Belongs to the worktree ${w[0]}`}><BranchIcon size={ICON.xs} />{w[0]}</Badge>
+    : <Badge tone="var(--warning-ink)" title={w.join(", ")}><BranchIcon size={ICON.xs} />{w.length} worktrees</Badge>;
+}
+
+export function Volumes({ volumes, containers, sizes, sizeError, q, readOnly, flash, onClear, onGoContainer }: {
+  volumes: DockerVolume[]; containers: DockerContainer[];
+  /** Null until the disk measurement has answered. */
+  sizes: Record<string, number | null> | null; sizeError: string | null;
+  q: string; readOnly: boolean; flash: (ok: boolean, msg: string) => void; onClear: () => void; onGoContainer: (id: string) => void;
+}) {
+  const view = useMemo(() => volumesView(volumes, containers, sizes ?? {}), [volumes, containers, sizes]);
+  const [only, setOnly] = useState<VolumeState | null>(null);
+  const [armed, setArmed] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const [sel, setSel] = useState<string | null>(null);
-  const [detail, setDetail] = useState<DockerVolumeDetail | null>(null);
-  const [peek, setPeek] = useState<DockerPeek | null>(null);
-  const [path, setPath] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [peek, setPeek] = useState<Peek | null>(null);
+  const menu = useMenu();
 
-  /* One call for every size. `docker system df -v` is THE expensive call on
-     this surface — the daemon adds up every layer on the machine — so it is
-     made once when this section opens, and never on the poll. Asking per row
-     would be thirty of them. */
-  useEffect(() => {
-    let live = true;
-    void api.dockerDisk().then((d: DockerDisk & { error?: string }) => {
-      if (!live) return;
-      if (d?.error) { setSizeErr(d.error); return; }
-      setSizes(Object.fromEntries((d.volumes_ ?? []).map((v) => [v.name, v.bytes])));
-    }).catch((e) => { if (live) setSizeErr(String(e)); });
-    return () => { live = false; };
-  }, []);
+  if (!volumes.length) return <ResourceEmpty icon={<CylinderIcon size={ICON.xl} />} title="No volumes yet" text="Volumes appear here once a container asks for one." />;
 
-  const open = useCallback(async (name: string) => {
-    setSel(name); setDetail(null); setPeek(null); setPath("");
-    setDetail(await api.dockerVolume(name));
-  }, []);
+  const measured = sizes !== null;
+  const biggest = Math.max(0, ...view.items.map((i) => i.bytes ?? 0));
+  const sections = sectionsOf(view.groups, SECTIONS, only, (i) => volumeHit(i, q));
+  const selected = sel ? view.items.find((i) => i.volume.name === sel) : undefined;
 
-  const look = useCallback(async (name: string, at: string) => {
-    setBusy(true);
-    setPath(at);
-    try { setPeek(await api.dockerPeek(name, at)); }
-    finally { setBusy(false); }
-  }, []);
+  const remove = async (i: VolumeItem) => {
+    setArmed(null); setBusy(i.volume.name);
+    try {
+      const r = await api.dockerRemoveVolume(i.volume.name);
+      flash(r.ok, r.ok ? `Removed ${i.volume.name}` : (r.error || "Docker refused"));
+      if (r.ok && sel === i.volume.name) { setSel(null); setPeek(null); }
+    } catch (e) { flash(false, String(e)); }
+    finally { setBusy(null); }
+  };
+  const select = (name: string) => { setSel(name); setPeek((p) => (p?.name === name ? p : null)); };
+  const toggle = (name: string) => { if (sel === name) { setSel(null); setPeek(null); } else select(name); };
+  const look = async (name: string, path: string) => {
+    setPeek({ name, s: "busy", path });
+    try {
+      const res = await api.dockerPeek(name, path);
+      setPeek({ name, s: res.ok ? "ok" : "err", path, res });
+    } catch (e) { setPeek({ name, s: "err", path, res: { ok: false, error: String(e) } }); }
+  };
+  const menuItem = menu.key ? view.items.find((i) => i.volume.name === menu.key) : undefined;
 
-  const rows = useMemo(
-    () => [...volumes].sort((a, b) => (sizes?.[b.name] ?? 0) - (sizes?.[a.name] ?? 0) || a.name.localeCompare(b.name)),
-    [volumes, sizes],
-  );
+  // Until the sizes arrive the sentence says what it knows, not "0 B".
+  const lead = measured ? view.lead : `${volumes.length} volume${volumes.length === 1 ? "" : "s"}.`;
+  const rest = measured ? view.rest : "Measuring sizes… this can take a few seconds on a big disk.";
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <div className="agx-scroll flex-1 min-h-0 overflow-auto p-4">
-        {sizeErr && <div className="text-[11px] mb-2" style={{ color: "var(--warning-ink)" }}>{sizeErr}</div>}
-        <table className="w-full text-[11px]" style={{ color: "var(--text2)" }}>
-          <thead className="text-[9.5px] uppercase tracking-wider t-dim2 text-left">
-            <tr>
-              {["Volume", "Size", "Held by", "Last written", ""].map((h) => <th key={h} className="py-1.5 pr-4 font-semibold">{h}</th>)}
-            </tr>
-          </thead>
-          <tbody className="tabular-nums">
-            {rows.map((v) => (
-              <tr key={v.name} onClick={() => open(v.name)}
-                className="cursor-pointer"
-                style={{
-                  borderTop: LINE,
-                  background: sel === v.name ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent",
-                }}>
-                <td className="py-1.5 pr-4 break-all" style={{ color: "var(--text)" }}>{v.name}</td>
-                <td className="py-1.5 pr-4">{sizes ? humanSize(sizes[v.name] ?? null) : "…"}</td>
-                <td className="py-1.5 pr-4">
-                  {/* The fact that explains "why is my app serving somebody
-                      else's bundle". One worktree is normal; six is the thing
-                      nothing else on this machine reports. */}
-                  {v.worktrees?.length
-                    ? <Chip text={v.worktrees.length === 1 ? v.worktrees[0]! : `${v.worktrees.length} worktrees`}
-                        tint={v.worktrees.length > 1 ? "var(--warning)" : "var(--text3)"}
-                        title={v.worktrees.join("\n")} />
-                    : <span className="t-dim2">unknown</span>}
-                </td>
-                <td className="py-1.5 pr-4">
-                  {v.lastWrite
-                    ? <span title={`${v.lastWrite.via} · ${v.lastWrite.branch ?? "detached"} · ${v.lastWrite.at}`}>
-                        {v.lastWrite.worktree} <span className="t-dim2">{sinceLabel(v.lastWrite.at)}</span>
-                      </span>
-                    /* Never observed. A real answer, and usually the one that
-                       says this volume is safe to delete. */
-                    : <span className="t-dim2">—</span>}
-                </td>
-                <td className="py-1.5 pr-4 text-right">
-                  <button onClick={(e) => { e.stopPropagation(); void open(v.name).then(() => look(v.name, "")); }}
-                    className="text-[9.5px] px-2 py-0.5 rounded-md min-h-[20px]"
-                    style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
-                    look inside
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {!rows.length && <tr><td className="py-3 t-dim2">No volumes</td></tr>}
-          </tbody>
-        </table>
-      </div>
-
-      {sel && (
-        <div className="shrink-0 border-t max-h-[45%] agx-scroll overflow-auto" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-          <div className="flex items-center gap-2 px-4 py-2">
-            <span className="text-[12px] font-medium break-all" style={{ color: "var(--text)" }}>{sel}</span>
-            {detail?.bytes != null && <Chip text={humanSize(detail.bytes)} tint="var(--text3)" />}
-            <button onClick={() => setSel(null)} className="ml-auto text-[10px] px-2 py-0.5 rounded min-h-[20px]" style={{ color: "var(--text3)" }}>close</button>
-          </div>
-
-          <div className="px-4 pb-2 flex flex-col gap-1.5 text-[11px]">
-            <div className="flex gap-3">
-              <span className="w-28 shrink-0 t-dim2">held by</span>
-              <span className="min-w-0">
-                {detail?.mountedBy.length
-                  ? detail.mountedBy.map((m) => `${m.name}${m.state === "running" ? "" : ` (${m.state})`}`).join(", ")
-                  : <span className="t-dim2">nothing right now</span>}
-              </span>
-            </div>
-            <div className="flex gap-3">
-              <span className="w-28 shrink-0 t-dim2">last written by</span>
-              <span className="min-w-0">
-                {detail?.lastWrite
-                  ? <>{detail.lastWrite.worktree} · <span className="t-dim2">{detail.lastWrite.via}</span> · {sinceLabel(detail.lastWrite.at)}</>
-                  : <span className="t-dim2">agentglass has not seen anything write to it</span>}
-              </span>
-            </div>
-            {!!detail?.worktrees.length && (
-              <div className="flex gap-3">
-                <span className="w-28 shrink-0 t-dim2">worktrees</span>
-                <span className="min-w-0 break-all">{detail.worktrees.join(", ")}</span>
-              </div>
-            )}
-          </div>
-
-          <div className="px-4 pb-3">
-            <div className="flex items-center gap-2 mb-1">
-              <button onClick={() => look(sel, "")} disabled={busy}
-                className="text-[10px] px-2 py-0.5 rounded-md min-h-[20px] disabled:opacity-40"
-                style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
-                {busy ? "looking…" : "look inside"}
-              </button>
-              {path && (
-                <span className="text-[10px] t-dim2 break-all">/{path}
-                  <button onClick={() => look(sel, path.split("/").slice(0, -1).join("/"))} className="ml-2 min-h-[20px]" style={{ color: "var(--primary-hover)" }}>up</button>
-                </span>
-              )}
-              {/* Which image the look was taken with, so it is obvious nothing
-                  was pulled to answer a click. */}
-              {peek?.image && <span className="ml-auto text-[9.5px] t-dim2">via {peek.image}</span>}
-            </div>
-
-            {peek && !peek.ok && (
-              <div className="text-[10.5px]" style={{ color: "var(--warning-ink)" }}>
-                {peek.error}
-                {peek.hint && <div className="mt-1 t-dim2 break-all" style={{ fontFamily: "ui-monospace, monospace" }}>{peek.hint}</div>}
-              </div>
-            )}
-            {peek?.entries && (
-              <div className="text-[10.5px]" style={{ fontFamily: "ui-monospace, monospace", color: "var(--text2)" }}>
-                {peek.entries.map((e) => (
-                  <div key={e.name} className="flex gap-3">
-                    <span className="flex-1 min-w-0 truncate" style={{ color: e.dir ? "var(--primary-hover)" : "var(--text2)" }}>
-                      {e.dir
-                        ? <button onClick={() => look(sel, path ? `${path}/${e.name}` : e.name)} className="text-left min-h-[20px]">{e.name}/</button>
-                        : e.name}
-                    </span>
-                    <span className="w-20 text-right tabular-nums t-dim2">{e.dir ? "" : humanSize(e.bytes)}</span>
-                    <span className="w-32 text-right t-dim2">{e.when}</span>
-                  </div>
+      <div className="dk-xs">
+        {sizeError && <div className="dk-note" style={{ ["--tint" as string]: "var(--warning)" }}><span>{sizeError}</span></div>}
+        <Sentence lead={lead} rest={rest} />
+        <Answers cards={volumeAnswers(view, measured)} active={only} onPick={(k: VolumeState) => setOnly((cur) => (cur === k ? null : k))} what="volume" />
+        {sections.length === 0 ? <NoMatch q={q} filtered={only !== null} onClear={() => { setOnly(null); onClear(); }} />
+          : sections.map((s) => (
+            <div key={s.key}>
+              <GroupHead title={s.title} sub={`${s.items.length}${measured ? ` · ${humanSize(s.items.reduce((n, i) => n + (i.bytes ?? 0), 0))}` : ""}${"sub" in s && s.sub ? ` · ${s.sub}` : ""}`} />
+              <div className="dk-xgrid">
+                {s.items.map((i) => (
+                  <VolumeCard key={i.volume.name} i={i} max={biggest} measured={measured} readOnly={readOnly} selected={sel === i.volume.name}
+                    armed={armed === i.volume.name} pending={busy === i.volume.name} menuOpen={menu.key === i.volume.name}
+                    onMenu={menu.open(i.volume.name)} onSelect={() => toggle(i.volume.name)} onArm={() => setArmed(i.volume.name)}
+                    onNo={() => setArmed(null)} onYes={() => void remove(i)} onGoContainer={onGoContainer} />
                 ))}
-                {!peek.entries.length && <div className="t-dim2">empty</div>}
               </div>
-            )}
-          </div>
-        </div>
+            </div>
+          ))}
+        <ReadOnlyNote on={readOnly} />
+        <p className="dk-xe" style={{ margin: "12px 0 0" }}>Click a volume to see who holds it and to look inside.</p>
+      </div>
+      {selected && <VolumePanel i={selected} peek={peek?.name === selected.volume.name ? peek : null} onLook={(path) => void look(selected.volume.name, path)}
+        onClosePeek={() => setPeek(null)} onClose={() => { setSel(null); setPeek(null); }} onGoContainer={onGoContainer} />}
+      {menuItem && (
+        <XMenu anchor={menu.anchor} entries={volumeMenu(menuItem, readOnly)} onClose={menu.close}
+          onPick={(v) => {
+            if (v === "copy") void copyTo(menuItem.volume.name, "the volume name", flash);
+            else if (v === "look") { select(menuItem.volume.name); void look(menuItem.volume.name, ""); }
+            else if (v === "rm") setArmed(menuItem.volume.name);
+          }} />
       )}
+    </div>
+  );
+}
+
+function VolumeCard({ i, max, measured, readOnly, selected, armed, pending, menuOpen, onMenu, onSelect, onArm, onNo, onYes, onGoContainer }: {
+  i: VolumeItem; max: number; measured: boolean; readOnly: boolean; selected: boolean; armed: boolean; pending: boolean; menuOpen: boolean;
+  onMenu: (el: HTMLElement) => void; onSelect: () => void; onArm: () => void; onNo: () => void; onYes: () => void; onGoContainer: (id: string) => void;
+}) {
+  const { volume: v } = i;
+  const worn = volumeShape(i);
+  const last = v.lastWrite;
+  return (
+    <div className="dk-xk" data-click data-sel={selected || undefined} role="button" tabIndex={0} aria-pressed={selected} aria-label={`${v.name}, ${worn.word}`}
+      onClick={onSelect} onKeyDown={(e) => { if (e.key === "Enter" && e.target === e.currentTarget) { e.preventDefault(); onSelect(); } }}>
+      <div className="dk-xt">
+        <Shape worn={worn} />
+        <div className="nm">
+          <b className="dk-xn" title={v.name}>{volumeLabel(v.name)}</b>
+          {i.kind === "nm"
+            ? <span className="dk-kind" data-k="nm" title="Installed dependencies. The next install rebuilds this volume."><CubeIcon size={ICON.xs} />node_modules</span>
+            : <span className="dk-kind" title="Holds data that is not stored anywhere else"><CylinderIcon size={ICON.xs} />data</span>}
+        </div>
+        <RemoveButton label={`Remove ${v.name}`} off={!i.removable} reason={i.why} readOnly={readOnly} pending={pending} lock={i.kind === "data"} onClick={onArm} />
+        <MoreButton label={v.name} open={menuOpen} onMenu={onMenu} />
+      </div>
+      <div className="dk-xb">
+        {i.bytes == null
+          ? <span className="dk-xe">{measured ? "size not reported" : "size not measured yet"}</span>
+          : <SizeBar bytes={i.bytes} max={max} tone={i.kind === "nm" ? "var(--warning)" : "var(--merged)"} />}
+        <span className="dk-xsz">{i.bytes == null ? "…" : humanSize(i.bytes)}</span>
+      </div>
+      <div className="dk-xf">
+        <ContainerChips cs={i.holders} none="nothing attached" onGo={onGoContainer} />
+        <Held v={v} />
+        <span className="dk-xage" title={last ? `${last.via} · ${last.branch ?? "detached"} · ${last.at}` : undefined}>
+          {last ? `written ${sinceLabel(last.at)}` : "no writes seen"}
+        </span>
+      </div>
+      <div className="dk-xwhy">{i.note}</div>
+      {armed && (
+        <ConfirmBar yes="remove" onYes={onYes} onNo={onNo}>
+          remove <b>{v.name}</b>? Frees {i.bytes == null ? "its space" : humanSize(i.bytes)}. The next install rebuilds it.
+        </ConfirmBar>
+      )}
+    </div>
+  );
+}
+
+function VolumePanel({ i, peek, onLook, onClosePeek, onClose, onGoContainer }: {
+  i: VolumeItem; peek: Peek | null; onLook: (path: string) => void; onClosePeek: () => void; onClose: () => void; onGoContainer: (id: string) => void;
+}) {
+  const { volume: v } = i;
+  const last = v.lastWrite;
+  const busy = peek?.s === "busy";
+  const up = (p: string) => p.split("/").slice(0, -1).join("/");
+  useEscapeClose(onClose);
+  return (
+    <div className="dk-vdet" role="region" aria-label={`${v.name} detail`}>
+      <div className="dk-vdi">
+        <div className="dk-vdh">
+          <Shape worn={volumeShape(i)} /><b>{v.name}</b>
+          <span className="dk-btn-end" style={{ display: "inline-flex", gap: 6 }}>
+            <Button size="compact" disabled={busy} onClick={() => onLook(peek?.path ?? "")}><FolderIcon size={ICON.xs} />{busy ? "Looking…" : peek ? "Look again" : "Look inside"}</Button>
+          </span>
+        </div>
+        <div className="dk-vrow"><span className="k">Held by</span><span><ContainerChips cs={i.holders} none="nothing right now" onGo={onGoContainer} /></span></div>
+        <div className="dk-vrow"><span className="k">Last written by</span>
+          <span>{last ? `${last.worktree}${last.branch ? ` (${last.branch})` : ""} · ${sinceLabel(last.at)} · via ${last.via}` : <span className="dk-xe">agentglass has not seen anything write to it</span>}</span></div>
+        <div className="dk-vrow"><span className="k">Worktrees</span>
+          <span>{v.worktrees?.length ? v.worktrees.map((w) => <Badge key={w} tone="var(--merged-ink)"><BranchIcon size={ICON.xs} />{w}</Badge>) : <span className="dk-xe">none</span>}</span></div>
+      </div>
+      <div className="dk-vdp"><Listing peek={peek} up={up} onLook={onLook} onClose={onClosePeek} /></div>
+    </div>
+  );
+}
+
+function Listing({ peek, up, onLook, onClose }: { peek: Peek | null; up: (p: string) => string; onLook: (path: string) => void; onClose: () => void }) {
+  if (!peek) return <div className="dk-xe" style={{ fontSize: 11.5 }}>Look inside lists its files through a throwaway container; nothing is changed.</div>;
+  if (peek.s === "busy") {
+    return <div className="dk-xe" style={{ display: "flex", gap: 8, alignItems: "center" }}><span className="dk-spin" style={{ display: "inline-flex" }}><RefreshIcon size={ICON.sm} /></span>Looking inside through a throwaway container…</div>;
+  }
+  const res = peek.res;
+  if (peek.s === "err" || !res?.entries) {
+    return (
+      <div className="dk-hnote" role="alert">
+        <div>
+          <b>Could not look inside.</b><br />{res?.error || "The volume could not be read."}
+          {res?.hint && <><br /><code>{res.hint}</code></>}
+        </div>
+      </div>
+    );
+  }
+  const join = (name: string) => (peek.path ? `${peek.path}/${name}` : name);
+  return (
+    <div className="dk-pk">
+      <div className="pr" data-head>
+        <span>/{peek.path}</span>
+        <span style={{ display: "inline-flex", gap: 6 }}>
+          <Button size="compact" tone="quiet" disabled={!peek.path} onClick={() => onLook(up(peek.path))}><UpIcon size={ICON.xs} />Up</Button>
+          <Button size="compact" tone="quiet" onClick={onClose}>Close</Button>
+        </span>
+      </div>
+      {res.entries.length === 0 ? <div className="pr"><span /><span className="dk-xe">This volume is empty.</span></div>
+        : res.entries.map((e) => (
+          <div className="pr" key={e.name}>
+            <span>{e.dir ? <FolderIcon size={ICON.sm} /> : <FileIcon size={ICON.sm} />}</span>
+            {e.dir ? <button type="button" className="lk" onClick={() => onLook(join(e.name))}>{e.name}/</button> : <span>{e.name}</span>}
+            <span className="r">{e.dir ? "" : humanSize(e.bytes)}</span>
+            <span className="r dk-xe">{whenLabel(e.when)}</span>
+          </div>
+        ))}
+      <div className="pr" data-foot><span /><span>read-only{res.image ? ` · via image ${res.image}` : ""}</span></div>
     </div>
   );
 }

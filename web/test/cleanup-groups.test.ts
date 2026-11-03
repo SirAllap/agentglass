@@ -6,7 +6,7 @@
  * fifty-one days ago. Invented ports and names; the shapes are the real ones.
  */
 import { describe, expect, test } from "bun:test";
-import { groupCleanup, stackShares, isDeadSchedule, CHIPS_SHOWN } from "../src/lib/cleanupGroups.ts";
+import { groupCleanup, keepKey, stackShares, isDeadSchedule, CHIPS_SHOWN } from "../src/lib/cleanupGroups.ts";
 import type { Forgotten } from "../src/lib/portsForgotten.ts";
 import type { PortEntry } from "../../shared/types.ts";
 
@@ -62,8 +62,8 @@ describe("where each server goes", () => {
     expect(g.oldestDays).toBe(9);
   });
 
-  test("a server that is only idle gets its own group, so it is not dropped", () => {
-    const g = groupCleanup([port(6006, { idleSec: 3 * DAY })], [], NOW).groups[0]!;
+  test("an agent-started server that is only idle gets its own group, so it is not dropped", () => {
+    const g = groupCleanup([port(6006, { idleSec: 3 * DAY, fromAgent: true })], [], NOW).groups[0]!;
     expect(g.kind).toBe("idle");
     expect(g.oldestDays).toBe(3);
   });
@@ -104,5 +104,29 @@ describe("the tile's bar", () => {
   });
   test("nothing to clean is no bar", () => {
     expect(stackShares([])).toEqual([]);
+  });
+});
+
+describe("Idle is only for what an agent started, and Keep is remembered", () => {
+  const idleFor = 9 * 3600;
+  test("a memory service and a gallery server with a live cwd, not started by an agent, are in no group", () => {
+    const memory = port(7437, { proc: "memd", dir: "/home/a/.memd", idleSec: idleFor, ageSec: 5 * DAY });
+    const gallery = port(8790, { proc: "python3", dir: "/home/a/docs/gallery", idleSec: idleFor });
+    expect(groupCleanup([memory, gallery], [], NOW).total).toBe(0);
+  });
+
+  test("a vite an agent started in a deleted scratchpad is Left behind; one in a live folder is Idle", () => {
+    const gone = port(5180, { cwdGone: true, fromAgent: true, idleSec: idleFor });
+    const live = port(5181, { fromAgent: true, idleSec: idleFor });
+    expect(groupCleanup([gone, live], [], NOW).groups.map((g) => g.kind)).toEqual(["left-behind", "idle"]);
+  });
+
+  test("a kept server never comes back, even when it restarts under a new pid", () => {
+    const before = port(5181, { fromAgent: true, idleSec: idleFor });
+    const kept = new Set([keepKey(before.port)]);
+    const restarted = port(5181, { fromAgent: true, idleSec: idleFor });
+    expect(restarted.port.pid).not.toBe(before.port.pid);
+    expect(groupCleanup([restarted], [], NOW, kept).total).toBe(0);
+    expect(groupCleanup([restarted], [], NOW).total).toBe(1);
   });
 });

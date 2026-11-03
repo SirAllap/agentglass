@@ -115,7 +115,36 @@ describe("reading a batched docker inspect", () => {
   test("a container nobody has inspected yet reads as empty, never as absent", () => {
     // So the UI never has to branch on "have we run the medium lane".
     expect(factsFor(new Map(), "whatever")).toEqual({
-      startedAt: null, restarts: 0, healthError: null, healthFailures: 0, volumes: [],
+      startedAt: null, restarts: 0, healthError: null, healthFailures: 0, stateError: null, finishedAt: null, volumes: [],
     });
+  });
+});
+
+describe("a start that failed before the container ran", () => {
+  const shim = 'failed to create shim task: OCI runtime create failed: error mounting "/home/dev/orbit/file.conf" to rootfs at "/app/file.conf": no such file or directory';
+  const failed = JSON.stringify([{
+    Id: "badbadbadbad",
+    RestartCount: 0,
+    State: { Status: "exited", ExitCode: 127, Error: shim, StartedAt: "0001-01-01T00:00:00Z", FinishedAt: "2026-10-31T09:41:12.418Z" },
+  }]);
+
+  /* The whole point: this string is the only place the reason exists, and the
+     panel used to show the exit code and nothing else. */
+  test("docker's own words are carried through untouched", () => {
+    expect(parseFacts(failed).get("badbadbadbad")!.stateError).toBe(shim);
+  });
+
+  test("a failed create has no start time but does have the time it ended", () => {
+    const f = parseFacts(failed).get("badbadbadbad")!;
+    expect(f.startedAt).toBe(null);
+    expect(f.finishedAt).toBe("2026-10-31T09:41:12.418Z");
+  });
+
+  test("a container docker has no complaint about carries neither", () => {
+    const quiet = JSON.stringify([{
+      Id: "abc123abc123",
+      State: { Status: "running", Error: "   ", FinishedAt: "0001-01-01T00:00:00Z", StartedAt: "2026-10-31T09:00:00Z" },
+    }]);
+    expect(parseFacts(quiet).get("abc123abc123")).toMatchObject({ stateError: null, finishedAt: null, startedAt: "2026-10-31T09:00:00Z" });
   });
 });

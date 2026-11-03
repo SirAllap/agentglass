@@ -21,6 +21,7 @@
 import { describe, expect, test } from "bun:test";
 
 const src = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
+const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
 
 /**
  * The body of a named function, by COUNTING BRACES.
@@ -42,11 +43,16 @@ function bodyOf(name: string): string {
   }
   return "";
 }
-const pill = bodyOf("Pill");
+const pill = bodyOf("viewTab");
+// The tab semantics and the selected wash live in the kit Chip that viewTab draws.
+const chrome = await Bun.file(new URL("../src/components/workspace/Chrome.tsx", import.meta.url)).text();
 
-/** The body of every `onClick` in the file, as strings. */
-const clicks = [...src.matchAll(/onClick=\{(\([^)]*\)\s*=>\s*\{[\s\S]{0,400}?\}|\([^)]*\)\s*=>[^\n}]+)\}/g)]
-  .map((m) => m[1]);
+/** The body of every `onClick` in the file, as strings: the JSX attribute, and
+ *  the property the view row's `viewTab({ ..., onClick: () => {...} })` calls pass. */
+const clicks = [
+  ...src.matchAll(/onClick=\{(\([^)]*\)\s*=>\s*\{[\s\S]{0,400}?\}|\([^)]*\)\s*=>[^\n}]+)\}/g),
+  ...src.matchAll(/onClick: (\([^)]*\)\s*=>\s*\{[\s\S]{0,400}?\})\s*\}\)/g),
+].map((m) => m[1]);
 
 /** The click handlers that choose which of the three surfaces is shown. */
 const viewPickers = clicks.filter((c) => /setBoard\(|setInboxOn\(/.test(c));
@@ -80,17 +86,19 @@ describe("the view row", () => {
   test("the row is one exclusive group, and says so to a screen reader", () => {
     // `aria-selected` rather than `aria-pressed`: these are one choice among
     // several, which is a tab, not seven independent switches.
-    expect(pill, "the Pill's body").not.toBe("");
-    expect(pill).toContain('role="tab"');
-    expect(pill).toContain("aria-selected={on}");
+    expect(pill, "viewTab's body").not.toBe("");
+    expect(pill).toContain('role="tab" aria-selected={on}');
+    expect(src).toContain('role="tablist" aria-label="Pull request views"');
+    // The track styles the chosen tab by the same attribute.
+    expect(css).toContain('.agx-seg-b[aria-selected="true"]');
   });
 
-  test("only the selected one is outlined", () => {
+  test("only the selected one is raised", () => {
     /* Seven outlines competing is why nothing stood out — a border on every
-       option is a border on none. The unselected border is `transparent`. */
-    const border = pill.match(/border: `1px solid \$\{on \? ([^:]+) : ([^}]+)\}`/);
-    expect(border, "the Pill sets its border from `on`").not.toBeNull();
-    expect(border![2]).toContain("transparent");
+       option is a border on none. A tab has no border of its own; the chosen
+       one is lifted off the track by the track's ground and a hairline shadow. */
+    expect(pill).not.toContain("border:");
+    expect(css).toMatch(/\.agx-seg-b\[aria-pressed="true"\], \.agx-seg-b\[aria-selected="true"\], \.agx-seg-b\[aria-checked="true"\] \{[^}]*box-shadow/);
   });
 
   test("and the selected one is a tint, not an inversion", () => {
@@ -98,7 +106,7 @@ describe("the view row", () => {
        this row is read at a glance many times an hour. The git panel's own
        segmented control settled this. */
     expect(pill).not.toContain('color: on ? "var(--bg)"');
-    expect(pill).toContain("color-mix(in srgb, var(--primary) 18%, transparent)");
+    expect(chrome).toContain('background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent"');
   });
 });
 

@@ -20,7 +20,7 @@
 // ever shrink the result to zero, which reads as broken.
 import type { PrSummary } from "../../../shared/types.ts";
 import { prTextMatch } from "../../../shared/prSearch.ts";
-import { applyWith, type FieldSpec, type FilterSet, type ReadField, type Rule } from "../components/tasks/filters.ts";
+import type { FieldSpec, ReadField } from "../components/tasks/filters.ts";
 
 export type ReviewTok = "approved" | "changes-requested" | "required" | "none";
 export type ChecksTok = "green" | "red" | "pending";
@@ -312,20 +312,6 @@ export function applyFilters(prs: PrSummary[], f: FilterState): PrSummary[] {
 }
 
 /**
- * The rule builder, minus one exemption: a row with something unread on it
- * (the same predicate the "N unread" chip counts by) is never dropped by a
- * rule the user built — only read gets it out. The chip promised "2 unread"
- * and a rule like "Card status is not Done" could hide both with no way to
- * see them; the text box and the pills above still apply normally.
- */
-export function applyRulesKeepUnread<T>(rows: T[], rules: FilterSet, read: ReadField<T>, isUnread: (row: T) => boolean): T[] {
-  const kept = applyWith(rows, rules, read);
-  if (kept.length === rows.length) return kept;
-  const keptSet = new Set(kept);
-  return [...kept, ...rows.filter((r) => !keptSet.has(r) && isUnread(r))];
-}
-
-/**
  * Sort only, no filtering.
  *
  * What the panel wants now that the filter travels to GitHub: the rows in hand
@@ -492,25 +478,6 @@ export function builderFields(prs: PrSummary[], f: FilterState, repo?: RepoFacet
 }
 
 /**
- * A saved view's query string, as rules the builder can show.
- *
- * The tabs along the top — Needs my review, Mine, Failing, Ready — are query
- * strings written by hand, and they have to keep working: opening one has to
- * fill the builder with what it says rather than clearing it. Only `is` comes
- * out, because a query string is all this file has ever been able to say; a
- * view that wanted `is not` could not have been written in the first place.
- */
-export function queryToRules(query: string): Rule[] {
-  const f = parseQuery(query);
-  const out: Rule[] = [];
-  for (const facet of FACETS) {
-    const chosen = f[facet.key];
-    if (chosen.length) out.push({ id: `${facet.queryKey}-0`, field: facet.queryKey, op: "is", values: [...chosen] });
-  }
-  return out;
-}
-
-/**
  * One field of one pull request, for the rule engine.
  *
  * The `FACETS` table above already says what every field means; this is that
@@ -521,11 +488,36 @@ export function queryToRules(query: string): Rule[] {
  * view from a future version naming a field this build has never heard of
  * should narrow nothing, not break the board.
  */
-export const readPrField: ReadField<PrSummary> = (p, key) => {
+export const readPrField: ReadField<PrSummary> = (p, key) => readPrFieldAt(p, key, Date.now());
+
+/*
+ * The fields the lane filter reads that no pill draws, so they stay out of
+ * FACETS (which would add a dropdown for each). `updated` is the age in whole
+ * days, which is why the clock is an argument: a test pins it.
+ *
+ * `conflict` is empty rather than "no" for a clean row, so `is not` and
+ * `unset` both read it the way the sentence does.
+ */
+const DAY_MS = 86_400_000;
+const EXTRA_FIELDS: Record<string, (p: PrSummary, now: number) => string[]> = {
+  text: (p) => [p.title, p.headRefName].filter(Boolean),
+  number: (p) => [String(p.number)],
+  card: (p) => (p.card ? [p.card.customId ?? p.card.id] : []),
+  conflict: (p) => (p.mergeable === "CONFLICTING" ? ["yes"] : []),
+  updated: (p, now) => {
+    const t = Date.parse(p.updatedAt);
+    return Number.isNaN(t) ? [] : [String(Math.max(0, Math.floor((now - t) / DAY_MS)))];
+  },
+};
+export const EXTRA_FIELD_KEYS = Object.keys(EXTRA_FIELDS);
+
+export function readPrFieldAt(p: PrSummary, key: string, now: number): string[] {
+  const extra = EXTRA_FIELDS[key];
+  if (extra) return extra(p, now);
   const facet = FACET_BY_QKEY.get(key);
   if (!facet) return [];
   /* `null` is the fail-open the checks facet uses for a row whose checks have
      not arrived; for the rule engine that means "no values", which `is` reads
      as no match and `is not` as a match — the same answer the pills give. */
   return facet.field(p) ?? [];
-};
+}

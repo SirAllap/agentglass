@@ -64,33 +64,29 @@ describe("the last-event zone", () => {
 
 /*
  * The card's skeleton is asserted against source, because there is no renderer
- * here: three zones and one footer, each a named grid area the wide layout
- * rearranges. A zone renamed in one file and not the other leaves the wide
- * lane stacked, and only a screen would say so.
+ * here: a verdict strip, a ring beside the title and the ticket row, three
+ * cells, an event line and a one-row footer, in a box that is 336px and no
+ * other width. A zone renamed in the component and not in the stylesheet
+ * draws unstyled, and only a screen would say so.
  */
-describe("the card's zones and the wide layout agree", () => {
+describe("the card's zones and its stylesheet agree", () => {
+  const card = readFileSync(new URL("../src/components/PrCard.tsx", import.meta.url), "utf8");
   const board = readFileSync(new URL("../src/components/TriageBoard.tsx", import.meta.url), "utf8");
   const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
-  const wide = css.slice(css.indexOf("@container agx-prc (min-width: 760px)"));
-  const wideBlock = wide.slice(0, wide.indexOf("\n}\n"));
-  const narrow = css.slice(css.indexOf(".agx-prc-main {")).split("}")[0]!;
-  const areas = (block: string) => block.match(/grid-template-areas:\s*([^;]+);/)?.[1] ?? "";
 
-  // [class the card draws, the area the layout places it in]
-  for (const [zone, area] of [["id", "id"], ["title", "tt"], ["stand", "st"], ["event", "ev"]] as const) {
-    test(`${zone}: drawn by the card, given its area, and placed by both layouts`, () => {
-      expect(board).toContain(`agx-prc-${zone}`);
-      expect(css).toMatch(new RegExp(`\\.agx-prc-${zone} \\{[^}]*grid-area: ${area};`));
-      expect(areas(narrow), "the narrow layout names it").toMatch(new RegExp(`\\b${area}\\b`));
-      expect(areas(wideBlock), "the wide layout names it").toMatch(new RegExp(`\\b${area}\\b`));
+  for (const zone of ["agx-cd-h", "agx-cd-main", "agx-cd-ring", "agx-cd-t", "agx-cd-tk", "agx-cd-cells", "agx-cd-cell", "agx-cd-evl", "agx-cd-f"]) {
+    test(`${zone}: drawn by the card and styled`, () => {
+      expect(card).toContain(zone);
+      expect(css).toMatch(new RegExp(`\\.${zone}[ ,{[:]`));
     });
   }
-  test("the card is its own container, so the lane's width is what decides", () => {
-    expect(board).toContain("agx-prc overflow-hidden");
-    expect(css).toContain(".agx-prc { container-type: inline-size; container-name: agx-prc; }");
+  test("the card is exactly 336px: min = max, never shrinks, no container-query variant", () => {
+    expect(css).toMatch(/\.agx-cd \{[^}]*flex: none;\s*width: 336px; min-width: 336px; max-width: 336px;/);
+    expect(css).not.toMatch(/@container agx-prc|container-name: agx-prc/);
   });
-  test("the card is ONE surface: no tracker bar over a nested panel", () => {
-    expect(board.split("height: 42,").length - 1).toBe(0);
+  test("the card is ONE surface and the board hands it data, not markup", () => {
+    expect(board).toContain("<PrCard ");
     expect(board).not.toContain("agx-prc-body");
+    expect(board.split("height: 42,").length - 1).toBe(0);
   });
 });

@@ -41,6 +41,8 @@ describe("a realistic query lands on the page it names", () => {
     ["dark mode", "appearance"],
     ["tmux prefix", "tmux"],
     ["sidebar order", "rail"],
+    ["flight plan", "orchestration"],
+    ["flight", "orchestration"],
     ["diff view", "diff"],
     ["task sources", "tasks"],
     ["github token", "connections"],

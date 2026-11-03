@@ -100,10 +100,10 @@ describe("the routes", () => {
     expect(fake.requests.length).toBe(0);
   });
 
-  step("a refused token is a 400 with the expiry sentence and nothing on disk", async () => {
+  step("a refused token is a 400 with the refusal sentence and nothing on disk", async () => {
     const r = await post("/jira/connect", { ...GOOD, token: "wrong-token-for-the-route" });
     expect(r.status).toBe(400);
-    expect((await r.json() as { error: string }).error).toContain("expired, been revoked or been blocked");
+    expect((await r.json() as { error: string }).error).toContain("revoked or blocked by your organisation");
     expect(() => readFileSync(join(dir, "agentglass", "credentials.json"), "utf8")).toThrow();
   });
 

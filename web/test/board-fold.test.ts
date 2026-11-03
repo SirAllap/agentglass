@@ -24,6 +24,7 @@
  */
 import { beforeEach, describe, expect, test } from "bun:test";
 import { globalStubs } from "./stubGlobal";
+import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { PrSummary } from "../../shared/types.ts";
@@ -38,6 +39,7 @@ stubGlobal("localStorage", {
 });
 
 const { TriageBoard } = await import("../src/components/TriageBoard.tsx");
+const { readTip } = await import("../src/lib/tip.ts");
 const { LANE_WIDTH_PX } = await import("../src/lib/prSearch.ts");
 const { ALWAYS_OPEN, foldedLanes, setFoldedLanes, walkable } = await import("../src/lib/boardPrefs.ts");
 
@@ -150,9 +152,12 @@ describe("a folded lane", () => {
   test("the lane strip is as wide as its lanes and the scroller around it goes sideways", () => {
     const html = render(withCards);
     expect(html).toContain("overflow-x-auto");
-    expect(html).toContain("grid gap-2.5 h-full w-max");
-    // 1fr tracks would hand every lane a share of the window and nothing would scroll.
+    // The card is 336px and never shrinks, so a lane is a fixed column (the card and its gutter), not a share of the window: a wide window leaves room at the end, a narrow one scrolls.
+    expect(html).toMatch(new RegExp(`grid-template-columns:[^"]*${LANE_WIDTH_PX}px`));
     expect(html).not.toMatch(/grid-template-columns:[^"]*1fr/);
+    expect(html).toMatch(/min-width:\d+px/);
+    // `w-max` sized the 1fr tracks to the widest card (442px measured), not to the floor.
+    expect(html).not.toContain("w-max");
   });
 });
 
@@ -260,7 +265,7 @@ describe("the card's header", () => {
 
   test("the pin and the link are the same size as each other", () => {
     /*
-     * Scoped to the two controls that sit side by side in the same square (`agx-prc-ib`), and not
+     * Scoped to the two controls that sit side by side in the footer's last slot, and not
      * to every icon on the card — the first draft of this assertion counted
      * the whole card, saw 12, 14 and 16, and failed on a difference that is
      * the design: the mark inside the number chip is 12 because it sits beside
@@ -269,7 +274,7 @@ describe("the card's header", () => {
      * What reads as carelessness is not a spread across a card. It is two
      * ADJACENT controls, in identical boxes, drawn at different sizes.
      */
-    const boxes = [...card().matchAll(/<button[^>]*agx-prc-ib[^>]*>[\s\S]*?<\/button>/g)].map((m) => m[0]);
+    const boxes = [...card().matchAll(/<button[^>]*aria-label="(?:Copy the link to|Pin|Unpin)[^>]*>[\s\S]*?<\/button>/g)].map((m) => m[0]);
     expect(boxes.length, "the pin and the link, in their one square").toBe(2);
     const sizes = boxes.map((b) => b.match(/width="(\d+)"/)?.[1]);
     expect(new Set(sizes).size, `drawn at ${sizes.join(" and ")}`).toBe(1);
@@ -279,143 +284,139 @@ describe("the card's header", () => {
 /*
  * THE CARD SAYS WHAT A PERSON DECIDED.
  *
- * A card for a pull request approved sixteen hours earlier read as
- * `2 failing → master` and nothing else: this row led with the checks and had
- * no review state on it at all. The board already carried `reviewDecision` in
- * the list it draws from — the answer was in hand and not on screen.
+ * A card for a pull request approved sixteen hours earlier once read as
+ * `2 failing -> master` and nothing else: it led with the checks and had no
+ * review state on it at all. The board already carried `reviewDecision` in the
+ * list it draws from, and the answer has to be on screen.
  *
  * Both directions are locked. An approval that is not drawn is the bug; a
  * "changes asked" that is not drawn is the same bug pointing the other way,
  * and the more expensive one, because it is the state where the pull request
  * is waiting on YOU rather than on CI.
+ *
+ * The card (direction "Facet") says it in three places: one sentence in the
+ * verdict strip, one word in the Review cell, and a face per person whose
+ * tooltip says what that person did. The decisions are walked in
+ * pr-card-view.test.ts; this is that they reach the screen.
  */
-describe("the verdict a card leads with", () => {
-  const V = (kind: string, o: Record<string, unknown> = {}) =>
-    ({ kind, who: ["okoro"], ...o }) as unknown as PrSummary["humanReview"];
-  /* The CARD, not the page: the lane headings carry words like "Approved" in
-     their own explanations, and an assertion over the whole board matches
-     those instead. */
-  const drawnIn = (o: Partial<PrSummary>) => {
-    const html = render({ mine: [pr(7, o)], total: 1 });
-    const i = html.indexOf('data-pr="7"');
-    return i < 0 ? "" : html.slice(html.lastIndexOf("<div", i), html.indexOf("</div></div></div></div>", i));
-  };
+const V = (kind: string, o: Record<string, unknown> = {}) =>
+  ({ kind, who: ["okoro"], ...o }) as unknown as PrSummary["humanReview"];
 
-  test("says Approved, capitalised and with the name", () => {
-    /* Capitalised because GitHub's own badge is, and the two sit on one screen:
-       "improve the chips with a capital letter, not all lowercase". */
-    const html = drawnIn({ humanReview: V("approved") });
-    expect(html).toContain("Approved by okoro");
+/** One card, from its own marker to the next one's. */
+const cardHtml = (o: Partial<PrSummary>, props: Record<string, unknown> = {}, n = 7): string => {
+  const html = render({ mine: [pr(n, o)], total: 1, hasTaskProvider: true, ...props });
+  const i = html.indexOf(`data-pr="${n}"`);
+  return i < 0 ? "" : html.slice(html.lastIndexOf("<div", i));
+};
+const strip = (html: string): string => html.match(/<span class="agx-cd-v">([^<]*)</)?.[1] ?? "";
+const cellOf = (html: string, label: string): { word: string; tone: string } => {
+  const at = html.indexOf(`<span class="agx-cd-lb">${label}</span>`);
+  const open = html.lastIndexOf("data-tone=\"", at);
+  return {
+    word: html.slice(at).match(/<span class="agx-cd-vl">([^<]*)</)?.[1] ?? "",
+    tone: html.slice(open + 11, html.indexOf('"', open + 11)),
+  };
+};
+/** Every tooltip on the card, as the tooltip reads it. */
+const tips = (html: string): { name: string; text?: string; detail?: string }[] =>
+  [...html.matchAll(/data-tip="([^"]*)"/g)].map((m) => readTip(m[1]!.replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&#x27;/g, "'")));
+
+describe("the verdict a card leads with", () => {
+  test("approved: the Review cell says approved in green and the face says who", () => {
+    const html = cardHtml({ humanReview: V("approved") });
+    expect(cellOf(html, "Review")).toEqual({ word: "approved", tone: "ok" });
+    expect(tips(html)).toContainEqual({ name: "okoro", text: "approved" });
   });
 
-  test("says Changes requested with the same weight as an approval", () => {
-    // Both are a band with a name in it. One was a band and the other a grey
+  test("changes requested: the same weight as an approval, in red", () => {
+    // Both are a word with a name behind it. One was a band and the other a grey
     // line, which is the inconsistency that was reported.
-    expect(drawnIn({ humanReview: V("changes") })).toContain("Changes requested by okoro");
+    const html = cardHtml({ humanReview: V("changes") });
+    expect(cellOf(html, "Review")).toEqual({ word: "changes", tone: "bad" });
+    expect(tips(html)).toContainEqual({ name: "okoro", text: "changes requested" });
   });
 
   test("warns when the approval no longer covers the code", () => {
     /* The dangerous state: the row says approved and the reviewer approved
        something else. GitHub says so on the PR's own page; the board did not. */
-    const html = drawnIn({ humanReview: V("approved", { stale: true }) });
-    expect(html).toContain("it has moved since");
-    expect(html, "and not as a plain approval").not.toContain(">Approved by okoro<");
+    const html = cardHtml({ humanReview: V("approved", { stale: true }), reviewDecision: "REVIEW_REQUIRED" } as Partial<PrSummary>);
+    expect(strip(html)).toBe("Approved \u00b7 new commits since");
+    expect(cellOf(html, "Review")).toEqual({ word: "stale", tone: "run" });
   });
 
-  test("speaks in the second person when the verdict is yours", () => {
-    expect(drawnIn({ humanReview: V("approved", { mine: true }) })).toContain("You approved");
-    expect(drawnIn({ humanReview: V("changes", { mine: true }) })).toContain("You asked for changes");
-    expect(drawnIn({ humanReview: V("awaiting", { mine: true }) })).toContain("Waiting on you");
+  test("but stays green while GitHub still counts it and nobody has been asked again", () => {
+    const html = cardHtml({ humanReview: V("approved", { stale: true }), reviewDecision: "APPROVED" } as Partial<PrSummary>);
+    expect(strip(html)).toBe("Approved \u00b7 new commits since");
+    expect(cellOf(html, "Review")).toEqual({ word: "approved", tone: "ok" });
   });
 
-  test("counts the people on the other side rather than hiding them", () => {
-    // One approval and one rejection is not "changes requested" alone.
-    expect(drawnIn({ humanReview: V("changes", { others: 1 }) })).toContain("1 approval");
+  test("a stale approval that was asked again is amber, and says so on the face", () => {
+    const people = [{ login: "okoro", state: "again" }];
+    const html = cardHtml({ humanReview: V("approved", { stale: true, askedAgain: true, people }), reviewDecision: "APPROVED" } as Partial<PrSummary>);
+    expect(cellOf(html, "Review").tone).toBe("run");
+    expect(tips(html)).toContainEqual({ name: "okoro", text: "re-review requested" });
+  });
+
+  test("speaks of YOU when the review is asked of you", () => {
+    const asked = pr(7, { author: "mara-k", humanReview: V("awaiting", { mine: true, people: [{ login: "someone", state: "await" }] }) });
+    const html = render({ review: [asked], total: 1 });
+    expect(strip(html.slice(html.indexOf('data-pr="7"')))).toBe("mara-k wants your review");
   });
 
   test("two people owe an answer: the sentence counts them and each has a face with its ring", () => {
-    // One asked again after changes, one never answered: the case the band used to name one of.
-    const html = drawnIn({ humanReview: V("changes", { cleared: true, askedAgain: true, who: ["tlindqvist"],
+    // One asked again after changes, one never answered: the case the strip used to name one of.
+    const html = cardHtml({ humanReview: V("changes", { cleared: true, askedAgain: true, who: ["tlindqvist"],
       people: [{ login: "tlindqvist", state: "again" }, { login: "rnakamura", state: "await" }] }) });
-    expect(html).toContain("Waiting on 2 reviewers");
-    expect(html).toContain('title="tlindqvist \u2014 re-review requested"');
-    expect(html).toContain('title="rnakamura \u2014 review requested, not answered yet"');
-    expect(html).toContain("1.5px dashed var(--text4)");
+    expect(strip(html)).toBe("Waiting on 2 reviewers");
+    expect(tips(html)).toContainEqual({ name: "tlindqvist", text: "re-review requested" });
+    expect(tips(html)).toContainEqual({ name: "rnakamura", text: "review requested, not answered yet" });
+    expect(html).toContain('data-state="again"');
+    expect(html).toContain('data-state="await"');
   });
 
   test("one person owing an answer keeps the sentence that names them", () => {
-    expect(drawnIn({ humanReview: V("awaiting", { who: ["mkovac"], people: [{ login: "mkovac", state: "await" }] }) })).toContain("Waiting on mkovac");
+    expect(strip(cardHtml({ humanReview: V("awaiting", { who: ["mkovac"], people: [{ login: "mkovac", state: "await" }] }) }))).toBe("Waiting on mkovac");
   });
 
   test("changes requested keeps its sentence while the others still get their faces", () => {
-    const html = drawnIn({ humanReview: V("changes", { who: ["tlindqvist"], people: [
+    const html = cardHtml({ humanReview: V("changes", { who: ["tlindqvist"], people: [
       { login: "tlindqvist", state: "changes" }, { login: "rnakamura", state: "await" }, { login: "ofarah", state: "approved" }] }) });
-    expect(html).toContain("Changes requested by tlindqvist");
-    expect(html).not.toContain("Waiting on 2 reviewers");
-    expect(html.match(/data-face-state=/g)).toHaveLength(3);
+    expect(strip(html)).not.toContain("Waiting on 2 reviewers");
+    expect(html.match(/data-state="(changes|await|approved)"/g)).toHaveLength(3);
+    expect(tips(html).filter((t) => ["tlindqvist", "rnakamura", "ofarah"].includes(t.name)).length).toBeGreaterThanOrEqual(3);
   });
 
-  test("five waiting: three faces and a +2 that names the others", () => {
+  test("five waiting: one face and a +4 in the Review cell, two and a +3 in the strip, every name in the tooltip", () => {
     const people = ["a1", "b2", "c3", "d4", "e5"].map((login) => ({ login, state: "await" }));
-    const html = drawnIn({ humanReview: V("awaiting", { who: people.map((x) => x.login), people }) });
-    expect(html).toContain("Waiting on 5 reviewers");
-    expect(html.match(/data-face-state=/g)).toHaveLength(3);
-    expect(html).toContain("+2");
+    const html = cardHtml({ humanReview: V("awaiting", { who: people.map((x) => x.login), people }) });
+    expect(strip(html)).toBe("Waiting on 5 reviewers");
+    expect(html).toContain(">+4<");
+    expect(html).toContain(">+3<");
+    expect(cellOf(html, "Review")).toEqual({ word: "5 waiting", tone: "run" });
   });
 
   test("a row from before `people` existed still draws the faces it did", () => {
-    expect(drawnIn({ humanReview: V("awaiting", { who: ["a1", "b2"] }) }).match(/data-face-state="await"/g)).toHaveLength(2);
+    const html = cardHtml({ humanReview: V("awaiting", { who: ["a1", "b2"] }) });
+    expect(html.match(/data-state="await"/g)).toHaveLength(4);
+    expect(strip(html)).toBe("Waiting on 2 reviewers");
   });
 
   test("says when a follow-up round has already been asked for", () => {
     /*
      * Applying a review and pressing "Re-request review" used to leave this
-     * card reading exactly as it had before either happened — "Changes
-     * requested by okoro", full stop — as if nothing had moved. The
-     * review still blocks, same as GitHub's own page; this is the other
-     * half GitHub's page ALSO shows: their own ↻.
+     * card reading exactly as it had before either happened as if nothing had
+     * moved. The review still blocks, same as GitHub's own page; the face says
+     * the other half GitHub's page ALSO shows: their own re-request mark.
      */
-    const html = drawnIn({ humanReview: V("changes", { askedAgain: true }) });
-    expect(html).toContain("asked to look again");
-    expect(drawnIn({ humanReview: V("changes") })).not.toContain("asked to look again");
-  });
-
-  test("and in the second person when the re-request is yours to answer", () => {
-    // The viewer is the one who was re-asked — their own move, not somebody
-    // else's threads to watch.
-    const html = drawnIn({ humanReview: V("changes", { mine: true, askedAgain: true }) });
-    expect(html).toContain("You were asked to look again");
-  });
-
-  /*
-   * A STALE APPROVAL, RE-REQUESTED, IS NOT THE AUTHOR'S MOVE EITHER.
-   *
-   * The stale-approval card kept saying "it has moved since" as if the
-   * author still had something to do, even once they had already
-   * re-requested that reviewer's look — while the roster beside it already
-   * showed the same reviewer with the re-request icon. Same `askedAgain`
-   * field the changes-requested case above reads, from the same `pending`.
-   */
-  test("a stale approval that was asked again says so, on top of having moved", () => {
-    const html = drawnIn({ humanReview: V("approved", { stale: true, askedAgain: true }) });
-    expect(html).toContain("it has moved since");
-    expect(html).toContain("asked to look again");
-  });
-
-  test("a stale approval without a re-request keeps today's wording exactly", () => {
-    const html = drawnIn({ humanReview: V("approved", { stale: true }) });
-    expect(html).toContain("it has moved since");
-    expect(html).not.toContain("asked to look again");
-  });
-
-  test("and in the second person when the stale approval's re-request is yours to answer", () => {
-    const html = drawnIn({ humanReview: V("approved", { stale: true, mine: true, askedAgain: true }) });
-    expect(html).toContain("You were asked to look again");
+    const people = [{ login: "okoro", state: "again" }];
+    expect(tips(cardHtml({ humanReview: V("changes", { askedAgain: true, people }) }))).toContainEqual({ name: "okoro", text: "re-review requested" });
+    expect(tips(cardHtml({ humanReview: V("changes") }))).not.toContainEqual({ name: "okoro", text: "re-review requested" });
   });
 
   test("a draft says nobody has been asked", () => {
     // It was a label lost among the others; a draft is waiting on no one.
-    expect(drawnIn({ isDraft: true })).toContain("nobody has been asked");
+    expect(strip(cardHtml({ isDraft: true }))).toBe("Draft \u00b7 not asked yet");
+    expect(cellOf(cardHtml({ isDraft: true }), "Review").word).toBe("nobody asked");
   });
 
   test("says nobody has been asked, rather than drawing nothing", () => {
@@ -423,38 +424,37 @@ describe("the verdict a card leads with", () => {
      * This drew no header at all, on the argument that one saying "nothing"
      * steals weight from the ones that say something. Right about weight, wrong
      * about the card: the row came out visibly shorter than every other in the
-     * lane, and a column of two shapes is a column you re-read. Drawn in the
-     * quietest colour there is — it holds the shape without asking for
-     * attention — and it states the real state rather than a placeholder.
+     * lane, and a column of two shapes is a column you re-read. It states the
+     * real state rather than a placeholder.
      */
-    const html = drawnIn({ humanReview: null });
-    expect(html).toContain("No review asked for yet");
+    const html = cardHtml({ humanReview: null });
+    expect(strip(html)).toBe("Open · nobody asked yet");
+    expect(cellOf(html, "Review").word).toBe("nobody asked");
     for (const word of ["Approved", "Changes requested", "Waiting on"]) {
-      expect(html, `claimed "${word}" over an unreviewed pull request`).not.toContain(word);
+      expect(strip(html), `claimed "${word}" over an unreviewed pull request`).not.toContain(word);
     }
   });
 
   test("every state carries a glyph, not colour alone", () => {
-    // The board's own rule for check state, and this is the first thing read.
-    // Drawn now (lib/glyphIcons.tsx), so "a glyph" is a shape: each state
-    // leaves a different set of drawings on the card, whatever its colour.
-    const shapes = (["approved", "changes", "awaiting"] as const).map((kind) => {
-      const svgs = drawnIn({ humanReview: V(kind) }).match(/<svg[\s\S]*?<\/svg>/g) ?? [];
-      expect(svgs.length, kind).toBeGreaterThan(0);
-      return svgs.join("");
-    });
+    // The strip's icon is a shape: each state leaves a different drawing on the card.
+    const icon = (o: Partial<PrSummary>) => {
+      const html = cardHtml(o);
+      return html.slice(html.indexOf('class="agx-cd-h"'), html.indexOf('<span class="agx-cd-v">')).match(/<svg[\s\S]*?<\/svg>/)?.[0] ?? "";
+    };
+    const shapes = [icon({ humanReview: V("approved"), reviewDecision: "APPROVED" } as Partial<PrSummary>), icon({ humanReview: V("changes"), reviewDecision: "CHANGES_REQUESTED" } as Partial<PrSummary>), icon({ humanReview: V("awaiting", { people: [{ login: "okoro", state: "await" }] }) })];
+    for (const sh of shapes) expect(sh.length).toBeGreaterThan(0);
     expect(new Set(shapes).size).toBe(3);
   });
 
   test("an approved card still shows its failing checks", () => {
     /* Approved does not mean mergeable, and a card that dropped the red to
        celebrate the tick would be the same lie in the other direction. */
-    const html = drawnIn({
+    const html = cardHtml({
       humanReview: V("approved"),
       checks: { total: 3, success: 1, failure: 2, skipped: 0, pending: 0, allDone: true, verdict: "red", failing: [] },
     } as Partial<PrSummary>);
-    expect(html).toContain("Approved");
-    expect(html).toContain("2 checks failing");
+    expect(strip(html)).toBe("2 checks failing");
+    expect(cellOf(html, "Review").word).toBe("approved");
   });
 });
 
@@ -466,38 +466,34 @@ describe("the verdict a card leads with", () => {
  * state lived three clicks away in another view.
  */
 describe("the rest of the card's row", () => {
-  const inCard = (o: Partial<PrSummary>) => {
-    const html = render({ mine: [pr(7, o)], total: 1 });
-    const i = html.indexOf('data-pr="7"');
-    return i < 0 ? "" : html.slice(html.lastIndexOf("<div", i), html.indexOf("</div></div></div></div>", i));
-  };
-
   test("says when it conflicts with the base", () => {
     /* `mergeable` was put on the summary precisely because the board files by
        what a row NEEDS, and then the card never drew it. */
-    expect(inCard({ mergeable: "CONFLICTING" } as Partial<PrSummary>)).toContain("conflicts");
+    const html = cardHtml({ mergeable: "CONFLICTING" } as Partial<PrSummary>);
+    expect(strip(html)).toBe("Conflicts with main");
+    expect(cellOf(html, "Branch")).toEqual({ word: "conflict", tone: "bad" });
   });
 
   test("but not while GitHub is still working it out", () => {
     // `UNKNOWN` is "not computed yet". A conflict warning that flashes on and
     // off is worse than none.
-    expect(inCard({ mergeable: "UNKNOWN" } as Partial<PrSummary>)).not.toContain("conflicts");
-    expect(inCard({ mergeable: "MERGEABLE" } as Partial<PrSummary>)).not.toContain("conflicts");
+    expect(strip(cardHtml({ mergeable: "UNKNOWN" } as Partial<PrSummary>))).not.toContain("Conflicts");
+    expect(cellOf(cardHtml({ mergeable: "UNKNOWN" } as Partial<PrSummary>), "Branch").word).not.toBe("conflict");
+    expect(cellOf(cardHtml({ mergeable: "MERGEABLE" } as Partial<PrSummary>), "Branch").word).not.toBe("conflict");
   });
 
-  test("shows the tracker card's state on a line of its own", () => {
-    const html = inCard({
+  test("shows the tracker card's state in the ticket row", () => {
+    const html = cardHtml({
       headRefName: "ORBIT-1042-a-thing",
       card: { id: "x", customId: "ORBIT-1042", title: "A thing", status: "ready for qa", priority: "high" },
     } as Partial<PrSummary>);
-    expect(html).toContain("ready for qa");
+    expect(html).toContain("<span>ready for qa</span>");
   });
 
   test("and draws nothing about it when the boards have not seen it", () => {
     /* Absent is "we have not seen this card", which is not "it has no status" —
        the difference between honest and inventing one. */
-    const html = inCard({ headRefName: "ORBIT-9999-a-thing" } as Partial<PrSummary>);
-    expect(html).not.toContain("ready for qa");
+    expect(cardHtml({ headRefName: "ORBIT-9999-a-thing" } as Partial<PrSummary>)).not.toContain("ready for qa");
   });
 });
 
@@ -511,31 +507,24 @@ describe("the rest of the card's row", () => {
  *     Pull requests stopped drawing.
  *     Cannot read properties of undefined (reading 'slice')
  *
- * Not a hypothetical — it happened on his screen, and the board is the wrong
- * place to learn that a field changed shape. Anything that crossed a wire is
- * checked rather than assumed.
+ * The board is the wrong place to learn that a field changed shape. Anything
+ * that crossed a wire is checked rather than assumed.
  */
 describe("a verdict in a shape this build did not write", () => {
-  const inCard = (o: Partial<PrSummary>) => {
-    const html = render({ mine: [pr(7, o)], total: 1 });
-    const i = html.indexOf('data-pr="7"');
-    return i < 0 ? "" : html.slice(html.lastIndexOf("<div", i), html.indexOf("</div></div></div></div>", i));
-  };
-
   test("the old string still draws, without a name", () => {
-    const html = inCard({ humanReview: "approved" } as unknown as Partial<PrSummary>);
-    expect(html).toContain("Approved");
-    expect(html, "no name to give, so none is invented").not.toContain("Approved by");
+    const html = cardHtml({ humanReview: "approved" } as unknown as Partial<PrSummary>);
+    expect(html).toContain('data-pr="7"');
+    expect(strip(html)).not.toBe("");
+    expect(tips(html).filter((t) => t.text === "approved"), "no name to give, so none is invented").toEqual([]);
   });
 
   test("an object with no `who` does not take the view down", () => {
-    const html = inCard({ humanReview: { kind: "changes" } } as unknown as Partial<PrSummary>);
-    expect(html).toContain("Changes requested");
+    expect(cardHtml({ humanReview: { kind: "changes" } } as unknown as Partial<PrSummary>)).toContain('data-pr="7"');
   });
 
-  test("and something unrecognisable draws no header rather than throwing", () => {
-    expect(() => inCard({ humanReview: { who: ["a"] } } as unknown as Partial<PrSummary>)).not.toThrow();
-    expect(() => inCard({ humanReview: 42 } as unknown as Partial<PrSummary>)).not.toThrow();
+  test("and something unrecognisable draws the card rather than throwing", () => {
+    expect(() => cardHtml({ humanReview: { who: ["a"] } } as unknown as Partial<PrSummary>)).not.toThrow();
+    expect(() => cardHtml({ humanReview: 42 } as unknown as Partial<PrSummary>)).not.toThrow();
   });
 });
 
@@ -546,11 +535,6 @@ describe("a verdict in a shape this build did not write", () => {
  * the pull request panel and did nothing here.
  */
 describe("what the card finally says", () => {
-  const inCard = (o: Partial<PrSummary>) => {
-    const html = render({ mine: [pr(7, o)], total: 1 });
-    const i = html.indexOf('data-pr="7"');
-    return i < 0 ? "" : html.slice(html.lastIndexOf("<div", i), html.indexOf("</div></div></div></div>", i));
-  };
   const withCard = (extra: Record<string, unknown>) => ({
     headRefName: "ORBIT-1042-a-thing",
     card: { id: "x", customId: "ORBIT-1042", title: "A thing", status: "ready for qa", priority: "high", ...extra },
@@ -559,108 +543,86 @@ describe("what the card finally says", () => {
   test("marks a card that says done under a pull request still open", () => {
     /* The pair that starts a conversation, and reading it meant crossing two
        screens by hand. */
-    const html = inCard(withCard({ status: "closed", statusKind: "done" }));
-    expect(html).toContain("while this pull request is still open");
+    const html = cardHtml(withCard({ status: "closed", statusKind: "done" }));
+    expect(html).toContain('class="agx-cd-odd"');
+    expect(tips(html)).toContainEqual({ name: "closed", text: "The card says this while the pull request is still open." });
   });
 
   test("and says nothing when the two agree", () => {
-    expect(inCard(withCard({ statusKind: "open" }))).not.toContain("while this pull request is still open");
+    expect(cardHtml(withCard({ statusKind: "open" }))).not.toContain("agx-cd-odd");
   });
 
-  test("shows who the card is on, with the tracker's own face", () => {
+  test("names who the card is on in the ticket's tooltip", () => {
     /* ClickUp's people, not GitHub logins: a name on a tracker board is not a
        username on a forge, and `<Avatar login="Grace Hopper">` draws a blank
-       circle. The tracker hands over the photo, the initials and the colour. */
-    const html = inCard(withCard({ people: [{ name: "Antonio", initials: "AG", color: "#7b68ee" }] }));
-    expect(html).toContain("Card assigned to Antonio");
-    expect(html, "the initials stand in when there is no photo").toContain("AG");
+       circle. */
+    const html = cardHtml(withCard({ people: [{ name: "Antonio", initials: "AG", color: "#7b68ee" }] }));
+    expect(tips(html).some((t) => t.name === "ORBIT-1042" && t.text?.includes("On Antonio."))).toBe(true);
   });
 
   test("says so in words when nothing has moved in over a week", () => {
     const old = new Date(Date.now() - 9 * 86_400_000).toISOString();
-    expect(inCard({ updatedAt: old })).toContain("9 days without activity");
+    expect(tips(cardHtml({ updatedAt: old, humanReview: V("awaiting", { people: [{ login: "okoro", state: "await" }] }) }))
+      .some((t) => t.name === "Last activity" && !!t.text?.includes("9 days without activity"))).toBe(true);
   });
 
   test("but not on one that moved yesterday", () => {
     const fresh = new Date(Date.now() - 86_400_000).toISOString();
-    expect(inCard({ updatedAt: fresh })).not.toContain("days without activity");
+    expect(tips(cardHtml({ updatedAt: fresh })).some((t) => t.text?.includes("days without activity"))).toBe(false);
   });
 
-  test("the card's id is a button that opens it, with room around the flag", () => {
-    /* Asked for twice: id, status, assignee and a way in, on their own line.
-       The first attempt put them in the tag row beside the labels — not where
-       he said, and it read as one more label. */
-    const html = inCard(withCard({}));
-    expect(html).toContain("Open ORBIT-1042 in Tasks");
+  test("the card's id is a button that opens it", () => {
+    expect(cardHtml(withCard({}))).toContain("Open ORBIT-1042 in Tasks");
   });
 });
 
 describe("the card's own line", () => {
-  const inCard = (o: Partial<PrSummary>) => {
-    const html = render({ mine: [pr(7, o)], total: 1, hasTaskProvider: true });
-    const i = html.indexOf('data-pr="7"');
-    return i < 0 ? "" : html.slice(html.lastIndexOf("<div", i), html.indexOf("</div></div></div></div>", i));
-  };
   const withCard = (extra: Record<string, unknown>) => ({
     headRefName: "ORBIT-1042-a-thing",
     card: { id: "x", customId: "ORBIT-1042", title: "A thing", status: "code review", priority: "normal", ...extra },
   } as unknown as Partial<PrSummary>);
 
-  test("carries the id, the state and the assignee together", () => {
-    const html = inCard(withCard({ people: [{ name: "someone", initials: "SO" }] }));
+  test("carries the id, the state and the three copy buttons together", () => {
+    const html = cardHtml(withCard({ url: "https://tracker.example/ORBIT-1042" }));
     expect(html).toContain("ORBIT-1042");
-    expect(html).toContain("code review");
-    expect(html).toContain("Card assigned to someone");
+    expect(html).toContain("<span>code review</span>");
+    for (const label of ["Copy card ID", "Copy card name", "Copy card link"]) expect(html, label).toContain(`aria-label="${label} for ORBIT-1042"`);
   });
 
   test("and a way straight into the card", () => {
-    expect(inCard(withCard({}))).toContain("Open ORBIT-1042 in Tasks");
+    expect(cardHtml(withCard({}))).toContain("Open ORBIT-1042 in Tasks");
   });
 
   test("the flag is not welded to the number", () => {
     /* Reported looking at it: the flag sat against the id with nothing between
-       them. `gap-1.5` on the button is what puts the air back. */
-    const html = inCard(withCard({}));
-    const i = html.indexOf("ORBIT-1042");
-    const btn = html.slice(html.lastIndexOf("<button", i), i);
-    expect(btn, "the id button spaces its contents").toContain("gap-1.5");
+       them. The stylesheet's gap on the id button is what puts the air back. */
+    const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
+    expect(css).toMatch(/\.agx-cd-tk \{[^}]*gap: \d+px/);
   });
 });
 
 /*
  * ONE CHIP PER CARD, NOT TWO.
  *
- * The tag row carried the card's id and so did the card's own line, four lines
- * apart on the same card — "don't repeat the clickup card, leave only the new one".
- * The line wins: it has the state and the assignee too. The tag row keeps it
- * only for the case the line cannot cover.
+ * The card's id was drawn twice, four lines apart on the same card. The ticket
+ * row wins: it has the state and the copy buttons too.
  */
 describe("the card id is not drawn twice", () => {
-  const inCard = (o: Partial<PrSummary>) => {
-    const html = render({ mine: [pr(7, o)], total: 1, hasTaskProvider: true });
-    const i = html.indexOf('data-pr="7"');
-    return i < 0 ? "" : html.slice(html.lastIndexOf("<div", i), html.indexOf("</div></div></div></div>", i));
-  };
-
   test("once, when the card is known", () => {
-    const html = inCard({
+    const html = cardHtml({
       headRefName: "ORBIT-1042-a-thing",
       card: { id: "x", customId: "ORBIT-1042", title: "A thing", status: "in development", priority: "normal" },
     } as unknown as Partial<PrSummary>);
-    /* CHIPS, not mentions: the id also appears inside its own `title`, and
-       counting strings would make this pass or fail on a tooltip. */
-    /* By marker, not by class list: the first version of this matched the exact
-       classes and went red the day a padding changed. */
-    const chips = (html.match(/data-card-chip/g) ?? []).length;
-    expect(chips, "one chip for the card, not two").toBe(1);
-    expect(html).toContain("in development");
+    expect((html.match(/class="agx-cd-tk"/g) ?? []).length, "one id button for the card, not two").toBe(1);
+    expect(html).toContain("<span>in development</span>");
   });
 
-  test("and the tag row still shows it when the boards have never seen the card", () => {
+  test("and the row still shows the id when the boards have never seen the card", () => {
     /* A branch naming a card nobody has cached: the id is all there is, and it
        is still worth showing. */
-    const html = inCard({ headRefName: "ORBIT-9999-a-thing" } as Partial<PrSummary>);
+    const html = cardHtml({ headRefName: "ORBIT-9999-a-thing" } as Partial<PrSummary>);
     expect(html).toContain("ORBIT-9999");
+    expect(html).toContain("<span>not found</span>");
   });
 });
 
@@ -677,32 +639,27 @@ describe("the card id is not drawn twice", () => {
  * as current when it is not.
  */
 describe("how fresh the card's status is", () => {
-  const inCard = (o: Partial<PrSummary>) => {
-    const html = render({ mine: [pr(7, o)], total: 1, hasTaskProvider: true });
-    const i = html.indexOf('data-pr="7"');
-    return i < 0 ? "" : html.slice(html.lastIndexOf("<div", i), html.indexOf("</div></div></div></div>", i));
-  };
   const card = (at?: number) => ({
     headRefName: "ORBIT-1042-a-thing",
     card: { id: "x", customId: "ORBIT-1042", title: "A thing", status: "code review", priority: "normal", at },
   } as unknown as Partial<PrSummary>);
 
   test("a fresh reading is stated plainly", () => {
-    const html = inCard(card(Date.now() - 5 * 60_000));
-    expect(html).toContain("code review");
-    expect(html, "nothing to warn about").not.toContain("h ago");
+    const html = cardHtml(card(Date.now() - 5 * 60_000));
+    expect(html).toContain("<span>code review</span>");
+    expect(html, "nothing to warn about").not.toContain("data-stale");
   });
 
-  test("an old one says when it was read", () => {
-    const html = inCard(card(Date.now() - 5 * 60 * 60_000));
-    expect(html).toContain("code review");
-    expect(html).toContain("5h ago");
+  test("an old one dims and says when it was read", () => {
+    const html = cardHtml(card(Date.now() - 5 * 60 * 60_000));
+    expect(html).toContain('data-stale="1"');
+    expect(tips(html).some((t) => t.name === "code review" && !!t.text?.includes("5h ago"))).toBe(true);
   });
 
   test("and the tooltip never claims it is current", () => {
     /* "was in ... when this board was read" rather than "is in". The wording is
        the whole guarantee. */
-    expect(inCard(card(Date.now() - 3 * 60 * 60_000))).toContain("was in");
+    expect(tips(cardHtml(card(Date.now() - 3 * 60 * 60_000))).some((t) => t.text?.startsWith("The card was in"))).toBe(true);
   });
 });
 
@@ -724,32 +681,38 @@ describe("the tracker block is there in a tracker repository, and only there", (
   };
 
   test("says so when this pull request names no card but its repository links them", () => {
-    expect(inCard({ headRefName: "chore/release-notes" })).toContain("No card linked");
+    expect(inCard({ headRefName: "chore/release-notes" })).toContain("No card");
+    expect(tips(inCard({ headRefName: "chore/release-notes" }))).toContainEqual({ name: "No card linked", text: "Nothing in Tasks points to this pull request yet." });
   });
 
   test("and tells that apart from a card nobody has cached", () => {
     /* Two different facts: "this work has no card" and "we have not seen the
        card this names". Drawing both as silence loses the second. */
-    expect(inCard({ headRefName: "ORBIT-9999-a-thing" })).toContain("card not found on your boards");
+    const html = inCard({ headRefName: "ORBIT-9999-a-thing" });
+    expect(html).toContain("<span>not found</span>");
+    expect(tips(html).some((t) => t.name === "Card not found")).toBe(true);
   });
 
   test("but says neither while the row is still arriving", () => {
     // That is the skeleton's job; a card mid-flight has not failed to find
     // anything yet.
     const html = inCard({ headRefName: "ORBIT-9999-a-thing", checksLoaded: false } as Partial<PrSummary>);
-    expect(html).not.toContain("card not found");
-    expect(html).not.toContain("No card linked");
+    expect(html).not.toContain("<span>not found</span>");
+    expect(html).not.toContain("No card");
   });
 
   test("draws nothing, and holds no place, in a repository that links no cards", () => {
     const html = inCard({ headRefName: "chore/release-notes" }, [pr(8, { headRefName: "fix/retry-worker" })]);
-    expect(html).not.toContain("agx-trk");
-    expect(html).not.toContain("No card linked");
+    expect(html).not.toContain("agx-cd-tk");
+    expect(html).not.toContain("No card");
   });
 
   test("and not when nothing is connected, whatever the branches say", () => {
     const html = render({ mine: [pr(7, { headRefName: "ORBIT-1042-a-thing" })], total: 1, hasTaskProvider: false });
-    expect(html).not.toContain('data-block="');
+    /* It says so, in a dashed slot of the same height, instead of drawing a card, an id or a hint it cannot back. */
+    expect(html).toContain("No tracker");
+    expect(html).not.toContain("<span>not found</span>");
+    expect(html).not.toContain("Open ORBIT-1042 in Tasks");
   });
 });
 
@@ -760,33 +723,26 @@ describe("the tracker block is there in a tracker repository, and only there", (
  * "the second pass is still coming", `true` is "it arrived", and `undefined` is
  * "this row was never built in two passes at all". A guard written `!== true`
  * folds the last two together and leaves a skeleton on screen for ever on any
- * caller that fetches in one go — which is exactly what it did, hiding the
- * header this test is about.
+ * caller that fetches in one go.
  */
 describe("the three states of a half-built row", () => {
-  const inCard = (o: Partial<PrSummary>) => {
-    const html = render({ mine: [pr(7, o)], total: 1, hasTaskProvider: true });
-    const i = html.indexOf('data-pr="7"');
-    return i < 0 ? "" : html.slice(html.lastIndexOf("<div", i), html.indexOf("</div></div></div></div>", i));
-  };
-
-  test("still coming: a skeleton", () => {
-    const html = inCard({ humanReview: null, checksLoaded: false } as Partial<PrSummary>);
+  test("still coming: a skeleton, claiming nothing", () => {
+    const html = cardHtml({ humanReview: null, checksLoaded: false } as Partial<PrSummary>);
     expect(html).not.toContain("No review asked for yet");
+    expect(html).toContain('class="agx-cd-sk"');
   });
 
   test("never two-passed: the real answer, not a skeleton for ever", () => {
-    expect(inCard({ humanReview: null })).toContain("No review asked for yet");
+    expect(strip(cardHtml({ humanReview: null }))).toBe("Open · nobody asked yet");
   });
 
   test("arrived with nothing: the real answer too", () => {
-    expect(inCard({ humanReview: null, checksLoaded: true } as Partial<PrSummary>))
-      .toContain("No review asked for yet");
+    expect(strip(cardHtml({ humanReview: null, checksLoaded: true } as Partial<PrSummary>))).toBe("Open · nobody asked yet");
   });
 });
 
 /*
- * THE HEADER CANNOT DISAPPEAR.
+ * THE STRIP CANNOT DISAPPEAR.
  *
  * Reported five times in one afternoon, each time as "it loses the header on
  * reload", and each time the answer was a different missing piece: a field
@@ -795,10 +751,8 @@ describe("the three states of a half-built row", () => {
  * them fixed, and the sixth would have been another.
  *
  * So the property is stated directly rather than reached: whatever the row is,
- * `cardVerdict` returns a header. Loading is a skeleton, unreviewed says so, a
- * draft says so, a malformed verdict falls back. The card's shape stops being a
- * consequence of the data arriving and becomes a thing the component
- * guarantees.
+ * the card draws a strip. Loading is a skeleton, unreviewed says so, a draft
+ * says so, a malformed verdict falls back.
  */
 describe("whatever the row looks like", () => {
   const shapes: [string, Partial<PrSummary>][] = [
@@ -813,12 +767,12 @@ describe("whatever the row looks like", () => {
   ];
 
   for (const [name, o] of shapes) {
-    test(`there is a header: ${name}`, () => {
-      const html = render({ mine: [pr(7, o)], total: 1, hasTaskProvider: true });
-      const i = html.indexOf('data-pr="7"');
-      const card = html.slice(html.lastIndexOf("<div", i), html.indexOf("</div></div></div></div>", i));
-      /* The header is the only `role="note"` inside a card. */
-      expect(card, `no header for: ${name}`).toContain('role="note"');
+    test(`there is a strip: ${name}`, () => {
+      const html = cardHtml(o);
+      const at = html.indexOf('class="agx-cd-h"');
+      expect(at, `no strip for: ${name}`).toBeGreaterThan(0);
+      /* The strip says a sentence, or holds its place with the skeleton while the second pass is out. */
+      expect(html.slice(at, at + 600), name).toMatch(/class="agx-cd-v"|class="agx-cd-sk"/);
     });
   }
 });

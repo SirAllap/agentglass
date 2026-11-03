@@ -106,7 +106,9 @@ async function main() {
   const server = serveAt ? null : spawn({
     cmd: ["bun", join(ROOT, "server", "src", "index.ts")],
     env: {
-      ...process.env,
+      // Every AGENTGLASS_* of the operator's shell is dropped, not just the ones set below:
+      // a variable this list forgets (ROOT, a bind, a token) would point the probe at the real machine.
+      ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("AGENTGLASS_"))),
       AGENTGLASS_PORT: String(port),
       AGENTGLASS_DB: join(home, "agentglass.db"),
       XDG_CONFIG_HOME: join(home, "config"),

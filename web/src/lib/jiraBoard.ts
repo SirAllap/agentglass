@@ -29,6 +29,7 @@ import { api } from "./api.ts";
 import { boardStorageKey, type BoardSource, type BoardViews } from "./boardSource.ts";
 import { JiraAddView } from "../components/jira/AddBar.tsx";
 import { JiraCardPane } from "../components/JiraTasks.tsx";
+import { JiraListView } from "../components/jira/list/JiraListView.tsx";
 import type { JiraViewRead, ListStatus, ProviderTask, ViewTasksResponse } from "../../../shared/providers.ts";
 
 const NOT_HERE = { ok: false, error: "Jira has no such thing" } as const;
@@ -113,7 +114,7 @@ export const JIRA_BOARD: BoardSource = {
   nouns: {
     tracker: "Jira", space: "site", folder: "project", list: "board", board: "board", openIn: "Open in Jira",
     searchTip: "Searches the title, description and comments of the cards in the projects you can see, and a card key exactly.",
-    addHint: "Add a board, a filter or a project",
+    addHint: "Add a space, a board or a filter",
     assignedHint: "Every open card assigned to you, on the site you connected.",
   },
   caps: {
@@ -150,4 +151,5 @@ export const JIRA_BOARD: BoardSource = {
   openAddress: (data) => data?.view?.url || undefined,
   AddView: JiraAddView,
   CardPane: JiraCardPane,
+  Main: JiraListView,
 };

@@ -55,3 +55,23 @@ describe("the chord", () => {
     expect(isPluckChord({ key: "p", ctrlKey: true, shiftKey: true })).toBe(false);
   });
 });
+
+describe("a card id", () => {
+  test("ORBIT-1042 is offered as a card, once, even when a branch also carries it", () => {
+    const rows = [R("working on ORBIT-1042 now"), R("branch feat/ORBIT-1042-launch ORBIT-1042")];
+    const got = pluckTokens(rows);
+    expect(got.filter((t) => t.text === "ORBIT-1042")).toHaveLength(1);
+    expect(got.find((t) => t.text === "ORBIT-1042")?.kind).toBe("card");
+  });
+  test("UTF-8 and SHA-256 are not cards", () => {
+    const got = pluckTokens([R("encoding UTF-8 and SHA-256 and CVE-2024")]);
+    expect(got.filter((t) => t.kind === "card").map((t) => t.text)).toEqual([]);
+  });
+});
+
+describe("the second half of owner/repo is not a path", () => {
+  test("acme/orbit#1051 does not offer /orbit, while a rooted path after a space still is one", () => {
+    const got = pluckTokens([R("ORBIT-1042 failed in acme/orbit#1051 at /srv/app/run.ts:9")]).filter((t) => t.kind === "path").map((t) => t.text);
+    expect(got).toEqual(["/srv/app/run.ts:9"]);
+  });
+});

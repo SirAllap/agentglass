@@ -14,6 +14,10 @@
  * travels is "same" or "different".
  */
 
+import { isSecret } from "../../shared/dockerSecret.ts";
+
+export { isSecret };
+
 /** `KEY=value`, as docker hands it over, into a map. A value containing `=` is
  *  normal (URLs, JSON) and only the first one separates. */
 export function envMap(lines: string[]): Map<string, string> {
@@ -24,20 +28,6 @@ export function envMap(lines: string[]): Map<string, string> {
     out.set(line.slice(0, eq), line.slice(eq + 1));
   }
   return out;
-}
-
-/**
- * Does this variable hold a credential?
- *
- * Deliberately broad. A false positive costs one masked value in a diff nobody
- * needed; a false negative puts somebody's production token in a screenshot.
- * Matched on the NAME only — a heuristic on the value would leak exactly the
- * things whose shape is unusual.
- */
-export function isSecret(name: string): boolean {
-  return /(?:^|_)(?:KEY|TOKEN|SECRET|PASS|PASSWORD|PWD|AUTH|CREDENTIAL|CREDENTIALS|SIGNATURE|PRIVATE|SESSION|COOKIE|DSN|SALT|PEPPER)(?:_|$)/i.test(name)
-    // Names that are one word and obviously a credential.
-    || /^(?:password|secret|token|apikey|api_key|authorization)$/i.test(name);
 }
 
 export type EnvChange = "only-a" | "only-b" | "changed" | "same";

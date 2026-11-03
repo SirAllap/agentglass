@@ -24,7 +24,10 @@
  * with the switch off, where the session must come out visibly mangled, and once
  * with it on, where it must come out byte-identical.
  */
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 /* The eleven other tmux suites in here all carry this, and it is not optional:
  * every case below drives a real server, so on a machine without the binary
@@ -39,8 +42,18 @@ import {
 } from "../src/tmuxctl.ts";
 import { startSession } from "./tmuxIsolated.ts";
 
-const SOCK = `/tmp/agx-observe-${process.pid}.sock`;
+/* The socket lives under a TMUX_TMPDIR this file owns. tmuxctl refuses any
+ * socket outside the TMUX_TMPDIR a process was handed (`tmuxSocketConfined`),
+ * and an earlier test file in the same `bun test` process can leave its own
+ * set: with a socket in /tmp the control then mangled nothing, `windowSize`
+ * answered null and the attach argv fell back to `new-session -A`, in the CI
+ * replica's shuffled file order and nowhere an alphabetical run reached. */
+const TMUX_BASE = mkdtempSync(join(tmpdir(), "agx-obs-"));
+mkdirSync(join(TMUX_BASE, `tmux-${process.getuid?.() ?? 0}`), { mode: 0o700 });
+const SOCK = join(TMUX_BASE, `tmux-${process.getuid?.() ?? 0}`, "observe.sock");
 const SOCKET = ["-S", SOCK];
+const REAL_TMUX_TMPDIR = process.env.TMUX_TMPDIR;
+beforeAll(() => { process.env.TMUX_TMPDIR = TMUX_BASE; });
 const T = ["tmux", "-f", "/dev/null", ...SOCKET];
 
 /** The raw CLI, so the fixture is built by something other than the code under
@@ -131,7 +144,11 @@ afterEach(() => {
   cli("kill-server");
 });
 
-afterAll(() => { cli("kill-server"); });
+afterAll(() => {
+  cli("kill-server");
+  if (REAL_TMUX_TMPDIR === undefined) delete process.env.TMUX_TMPDIR; else process.env.TMUX_TMPDIR = REAL_TMUX_TMPDIR;
+  rmSync(TMUX_BASE, { recursive: true, force: true });
+});
 
 describe.if(has)("what the app can do to a session it did not create", () => {
   it("mangles it, with the switch off — the control", () => {

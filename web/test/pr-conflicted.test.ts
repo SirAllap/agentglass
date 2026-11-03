@@ -13,7 +13,8 @@
 import { describe, expect, it } from "bun:test";
 import { prConflicted } from "../src/lib/updateBranch.ts";
 
-const files = (list: string[], stale = false) => ({ files: list, stale });
+const files = (list: string[], stale = false, headSha?: string) => ({ files: list, stale, headSha });
+const HEAD = "a".repeat(40);
 
 describe("an update refused over a conflict", () => {
   it("counts as a conflict when GitHub had not worked it out yet", () => {
@@ -36,8 +37,20 @@ describe("without a refusal, what it did before", () => {
     expect(prConflicted("MERGEABLE", null, false)).toBe(false);
   });
 
-  it("follows the files git found, over GitHub's UNKNOWN", () => {
-    expect(prConflicted("UNKNOWN", files(["a.ts"]), false)).toBe(true);
+  it("follows the files git found, over GitHub's UNKNOWN, when found at GitHub's head", () => {
+    expect(prConflicted("UNKNOWN", files(["a.ts"], false, HEAD), false, HEAD)).toBe(true);
+  });
+
+  // A merge pushed from a terminal: GitHub says MERGEABLE and its head
+  // contains the base; git, merging a stale remote-tracking ref, names 2 files.
+  it("lets GitHub's MERGEABLE overrule git's conflict", () => {
+    expect(prConflicted("MERGEABLE", files(["urls.py", "views.py"], false, "b".repeat(40)), false, HEAD)).toBe(false);
+    expect(prConflicted("MERGEABLE", files(["urls.py", "views.py"], false, HEAD), false, HEAD)).toBe(false);
+  });
+
+  it("does not call UNKNOWN blocked on files found against another head", () => {
+    expect(prConflicted("UNKNOWN", files(["urls.py", "views.py"], false, "b".repeat(40)), false, HEAD)).toBe(false);
+    expect(prConflicted("UNKNOWN", files(["urls.py"]), false, HEAD)).toBe(false);
   });
 
   it("does not let a stale file list take buttons away", () => {

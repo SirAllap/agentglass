@@ -71,8 +71,8 @@ describe("chips", () => {
     toRow(metric("lint", { median: s(41), p90: s(49), latest: { ms: s(40), conclusion: "success", completedAt: 0 }, trend: flat(s(41)) })),
     toRow(metric("brand-new", { runs: 3, successes: 3, failureRate: 0.33, sameCommit: flipped(1, { judged: 3 }) })),
   ];
-  it("counts slow, re-run passed and drifting", () => {
-    expect(chipCounts(rows)).toEqual({ all: 4, slow: 1, rerun: 1, drifting: 1 });
+  it("counts slow, re-run passed, drifting and failing now", () => {
+    expect(chipCounts(rows)).toEqual({ all: 4, slow: 1, rerun: 1, drifting: 1, failing: 0 });
   });
   it("a high failure rate alone is not a re-run that passed: it has to have flipped on one commit", () => {
     // Fails 1 run in 3 on every commit it sees: broken, and the old 1-in-20 rule flagged it.
@@ -91,7 +91,7 @@ describe("chips", () => {
     expect(rows[3]!.rerun).toBe(false);
   });
   it("counts only what the filter box lets through", () => {
-    expect(chipCounts(rows.filter((r) => matches(r, "lint")))).toEqual({ all: 1, slow: 0, rerun: 0, drifting: 0 });
+    expect(chipCounts(rows.filter((r) => matches(r, "lint")))).toEqual({ all: 1, slow: 0, rerun: 0, drifting: 0, failing: 0 });
   });
   it("a chip narrows the table to its rows", () => {
     expect(rows.filter((r) => inChip("rerun", r)).map((r) => r.name)).toEqual(["e2e"]);
@@ -172,9 +172,9 @@ describe("drawing", () => {
 const panel = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
 describe("the CI pill in the panel's exclusive row", () => {
   it("clears the inbox, and the inbox, the board and every scope clear it", () => {
-    expect(panel).toContain("onClick={() => { setInboxOn(false); setClosedOn(false); setMetricsOn(true); }}");
-    expect(panel).toContain("onClick={() => { setMetricsOn(false); setClosedOn(false); setInboxOn(true); }}");
-    expect(panel).toContain("setInboxOn(false); setMetricsOn(false); setClosedOn(false);\n            }} />");
+    expect(panel).toContain("onClick: () => { setInboxOn(false); setClosedOn(false); setMetricsOn(true); } })");
+    expect(panel).toContain("onClick: () => { setMetricsOn(false); setClosedOn(false); setInboxOn(true); } })");
+    expect(panel).toContain("setInboxOn(false); setMetricsOn(false); setClosedOn(false);\n            } })");
   });
   it("is drawn before the inbox, which the switch would otherwise never reach", () => {
     expect(panel.indexOf("{metricsOn ? (")).toBeGreaterThan(0);

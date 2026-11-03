@@ -15,7 +15,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { globalStubs } from "./stubGlobal";
 import { newTab, sleepingTab, wake, __resetTabIds, type BrowserTab } from "../src/lib/browserTabs.ts";
-import { readSession, saveSession, forgetSession, forgetProfileTabs, worthSaving, countFor, setFor, SESSION_KEY } from "../src/lib/browserSession.ts";
+import { readSession, saveSession, forgetSession, forgetProfileTabs, worthSaving, countFor, setFor, openingStrip, SESSION_KEY } from "../src/lib/browserSession.ts";
 const stubGlobal = globalStubs();
 
 /** localStorage, in a test runner that has none. */
@@ -326,12 +326,113 @@ describe("a tab keeps its id", () => {
 });
 
 describe("every restore hands the saved id back", () => {
-  // Launch (this profile, the others) and switching
+  // Launch (`openingStrip`, every profile at once) and switching
   // container away and back; one that forgets the id gives the tab a new address.
   it("passes t.id at each sleepingTab call that reads a saved tab", async () => {
-    const src = await Bun.file(new URL("../src/components/BrowserPanel.tsx", import.meta.url)).text();
+    const src = await Bun.file(new URL("../src/components/BrowserPanel.tsx", import.meta.url)).text()
+      + await Bun.file(new URL("../src/lib/browserSession.ts", import.meta.url)).text();
     const calls = src.split("\n").filter((l) => /sleepingTab\(t\.url, t\.title, t\.icon,/.test(l));
-    expect(calls.length).toBe(3);
+    expect(calls.length).toBe(2);
     for (const l of calls) expect(l).toMatch(/\bt\.id\b/);
+  });
+});
+
+/*
+ * What was open when the app closed is what comes back: no more, no less.
+ *
+ * Each case is the sequence of writes the panel makes, then a "restart" —
+ * a fresh `readSession`, which is all a launch reads. A hard kill is the same
+ * restart with nothing flushed after the last write.
+ */
+describe("a restart brings back exactly what was open", () => {
+  const six = ["", "orbita", "orbitb", "orbitc", "orbitd", "orbite"]
+    .map((p) => tab(`https://${p || "home"}.example.test/`, p ? { profile: p, agent: `agent-${p}` } : {}));
+
+  /** Closing a container's last page, as the panel does it: forget, then save the new strip. */
+  const closeLast = (strip: BrowserTab[], p: string): BrowserTab[] => {
+    const next = strip.filter((t) => t.profile !== p);
+    forgetProfileTabs(p);
+    saveSession("", next, next[0]?.id ?? "");
+    return next;
+  };
+
+  it("keeps four closed containers closed, and the agents' two open ones open", () => {
+    saveSession("", six, six[0]!.id);
+    let strip = six;
+    for (const p of ["orbita", "orbitb", "orbitc", "orbitd"]) strip = closeLast(strip, p);
+
+    const back = readSession()!;
+    expect(Object.keys(back.byProfile).sort()).toEqual(["", "orbite"]);
+    expect(setFor(back, "orbite")!.tabs[0]!.agent).toBe("agent-orbite");
+  });
+
+  it("brings a closed container back if a write from before the close lands after it", () => {
+    // The defect, kept as the mechanism the panel must never produce again:
+    // one stale write is all it takes.
+    saveSession("", six, six[0]!.id);
+    const strip = closeLast(six, "orbita");
+    saveSession("", six, six[0]!.id);      // the old strip, written late
+    saveSession("", strip, strip[0]!.id);  // the right one, which leaves orbita alone
+    expect(countFor(readSession(), "orbita")).toBe(1);
+  });
+});
+
+describe("the app opens where it was left", () => {
+  const home = (p: string) => sleepingTab("https://home.example.test/", "", null, p);
+  const known = new Set(["mkt"]);
+
+  it("keeps a closed Default closed when only a container is open", () => {
+    const wiki = tab("https://en.wikipedia.org/wiki/Orbit", { profile: "mkt" });
+    // Default's last page closed while the person was in it: the file still says "".
+    saveSession("", [wiki], wiki.id);
+    expect(readSession()!.current).toBe("");
+    const o = openingStrip(readSession(), known, home);
+    expect(o.profile).toBe("mkt");
+    expect(o.tabs.map((t) => [t.profile, t.url])).toEqual([["mkt", wiki.url]]);
+    expect(o.activeId).toBe(wiki.id);
+  });
+
+  it("puts the page that was in front back in front", () => {
+    const strip = [tab("https://home.example.test/"), tab("https://en.wikipedia.org/wiki/Orbit")];
+    saveSession("", strip, strip[1]!.id);
+    const o = openingStrip(readSession(), known, home);
+    expect(o.activeId).toBe(strip[1]!.id);
+    expect(o.tabs.every((t) => t.asleep)).toBe(true);
+  });
+
+  it("opens one fresh tab when nothing saved can be reached, and none when everything was closed", () => {
+    saveSession("", [tab("https://a.example.test/", { profile: "gone" })], "");
+    const o = openingStrip(readSession(), known, home);
+    expect(o.tabs.map((t) => t.url)).toEqual(["https://home.example.test/"]);
+    expect(o.activeId).toBe(o.tabs[0]!.id);
+
+    store.clear();
+    saveSession("", [], "");
+    expect(openingStrip(readSession(), known, home).tabs).toEqual([]);
+    store.clear();
+    expect(openingStrip(readSession(), known, home).tabs.length).toBe(1);
+  });
+});
+
+const panelSrc = await Bun.file(new URL("../src/components/BrowserPanel.tsx", import.meta.url)).text();
+describe("the panel never writes a strip it no longer has", () => {
+  const code = panelSrc.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+
+  it("flushes on the way out from a ref, in an effect that does not re-run on every tab change", () => {
+    const at = code.indexOf('window.addEventListener("pagehide", flush)');
+    expect(at).toBeGreaterThan(-1);
+    const effect = code.slice(code.lastIndexOf("useEffect(", at), code.indexOf("}, [", at) + 20);
+    expect(effect).toContain("latest.current");
+    expect(effect).toMatch(/\}, \[scope\]\);/);
+  });
+
+  it("moves the space to the page in front when a close empties the one on screen", () => {
+    const at = code.indexOf("const close = useCallback(");
+    const body = code.slice(at, code.indexOf("}, []);", at));
+    expect(body).toMatch(/if \(next && !r\.tabs\.some\(\(t\) => \(t\.profile \|\| ""\) === left\)\) setProfile\(next\.profile \|\| ""\)/);
+  });
+
+  it("writes an open or a close at once, and to disk, not only after the debounce", () => {
+    expect(code).toMatch(/useEffect\(\(\) => \{ saveSession\(profile, tabs, activeId, scope\); flushStorage\(\); \}, \[profile, shape\]\)/);
   });
 });

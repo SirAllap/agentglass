@@ -43,11 +43,12 @@ test("the board is handed the filtered lists, not the raw fetches", () => {
   /* Enriched with the card the screen is showing, then filtered. */
   expect(src).toMatch(/const boardMineCards = useMemo\(\s*\(\) => boardMineFilled\.map\(\(p\) => withConflict\(root, withCard\(p, hasTaskProvider\)\)\)/);
   expect(src).toMatch(/const boardReviewCards = useMemo\(\s*\(\) => boardReviewFilled\.map\(\(p\) => withConflict\(root, withCard\(p, hasTaskProvider\)\)\)/);
-  /* `applyRulesKeepUnread`, not `applyWith` directly: a pull request with
-     something unread on it survives a rule that would otherwise drop it — see
-     prFilter.test.ts. */
-  expect(src).toContain("applyRulesKeepUnread(boardMineCards, rules, readPrField, isRuleExempt)");
-  expect(src).toContain("applyRulesKeepUnread(boardReviewCards, rules, readPrField, isRuleExempt)");
+  /* `evalExempt`, not `evalLanes` directly: a pull request with something unread
+     on it survives a rule that would otherwise drop it (see pr-filter-view.test.ts).
+     One evaluation over every card, and each list keeps what passed. */
+  expect(src).toContain("evalExempt(boardCardsAll, laneFilter, readPrField, isRuleExempt)");
+  expect(src).toContain("boardMineCards.filter((p) => boardKept.has(p.number))");
+  expect(src).toContain("boardReviewCards.filter((p) => boardKept.has(p.number))");
   // Wiring pinned: a person's board has its own lists (not the owner's rules);
   // the owner's board is handed the filtered pair.
   expect(src).toContain("mine={personLogin ? personLists.mine : boardMineShown} review={personLogin ? personLists.review : boardReviewShown}");

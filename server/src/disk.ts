@@ -319,7 +319,7 @@ export function diskGrep(rootIn: unknown, qIn: unknown, limit = MAX_GREP_HITS): 
   const rg = Bun.which("rg", { PATH: process.env.PATH ?? "" });
   const argv = rg
     ? [rg, "--fixed-strings", "--ignore-case", "--line-number", "--no-heading", "--with-filename",
-       "--color", "never", "--max-count", "5", "--max-filesize", "4M", "-I",
+       "--color", "never", "--max-count", "5", "--max-filesize", "4M",
        // Hidden paths are excluded by the boundary itself; saying so to ripgrep
        // as well means it never even walks ~/.cache, which is most of the time.
        "--no-hidden", "--", q, root]

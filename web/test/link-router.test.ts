@@ -89,7 +89,7 @@ function harnessFor(opts: { checkout?: boolean; clickup?: boolean; known?: boole
     hasCheckout: (repo) => { calls.push(`locate ${repo}`); return answer(opts.checkout ?? true); },
     hasClickup: () => answer(opts.clickup ?? true),
     jiraSite: () => (opts.known ? opts.jira ?? null : Promise.resolve(opts.jira ?? null)),
-    openPr: (repo, n, o) => { calls.push(`pr ${repo}#${n}${o?.fallback ? ` else ${o.fallback}` : ""}`); },
+    openPr: (repo, n, o) => { calls.push(`pr ${repo}#${n}${o?.fallback ? ` else ${o.fallback}` : ""}${o?.anchor ? ` at ${o.anchor}` : ""}`); },
     openCard: (q, _l, t) => { calls.push(`card ${q}${t ? ` in ${t}` : ""}`); },
     openExternal: (u) => { calls.push(`out ${u}`); return true; },
   };
@@ -238,21 +238,28 @@ describe("opening it", () => {
     const h = harness();
     expect(openInApp("https://github.com/acme/orbit/pull/1042", undefined, {}, h.deps)).toBe(true);
     await settle();
-    expect(h.calls).toEqual(["locate acme/orbit", "pr acme/orbit#1042"]);
+    expect(h.calls).toEqual(["pr acme/orbit#1042"]);
   });
 
-  it("a pull request from a repository nobody cloned goes to the browser, not to an empty view", async () => {
+  it("a pull request from a repository nobody cloned opens the read-only view, not the browser", async () => {
     const h = harness({ checkout: false });
     expect(openInApp("https://github.com/acme/orbit/pull/1042", undefined, {}, h.deps)).toBe(true);
     await settle();
-    expect(h.calls).toEqual(["locate acme/orbit", "out https://github.com/acme/orbit/pull/1042"]);
+    expect(h.calls).toEqual(["pr acme/orbit#1042"]);
+  });
+
+  it("a link to a comment carries its fragment to the view", async () => {
+    const h = harness();
+    openInApp("https://github.com/acme/orbit/pull/553#discussion_r4359351454", undefined, {}, h.deps);
+    await settle();
+    expect(h.calls).toEqual(["pr acme/orbit#553 at discussion_r4359351454"]);
   });
 
   it("a short ref carries its way out, for when it turns out to be an issue", async () => {
     const h = harness();
     openInApp("https://github.com/acme/orbit/issues/7", undefined, { shortRef: true }, h.deps);
     await settle();
-    expect(h.calls).toEqual(["locate acme/orbit", "pr acme/orbit#7 else https://github.com/acme/orbit/issues/7"]);
+    expect(h.calls).toEqual(["pr acme/orbit#7 else https://github.com/acme/orbit/issues/7"]);
   });
 
   it("a card opens the board, or the browser when there is no board", async () => {
@@ -270,11 +277,11 @@ describe("opening it", () => {
        which a popup blocker allows and a window.open after a round trip is not. */
     const yes = harness({ known: true });
     expect(openInApp("https://github.com/acme/orbit/pull/1042", undefined, {}, yes.deps)).toBe(true);
-    expect(yes.calls).toEqual(["locate acme/orbit", "pr acme/orbit#1042"]);
+    expect(yes.calls).toEqual(["pr acme/orbit#1042"]);
     const no = harness({ known: true, checkout: false, clickup: false });
-    expect(openInApp("https://github.com/acme/orbit/pull/1042", undefined, {}, no.deps)).toBe(false);
+    expect(openInApp("https://github.com/acme/orbit/pull/1042", undefined, {}, no.deps)).toBe(true);
     expect(openInApp("https://app.clickup.com/t/86abc1xyz", undefined, {}, no.deps)).toBe(false);
-    expect(no.calls).toEqual(["locate acme/orbit"]);
+    expect(no.calls).toEqual(["pr acme/orbit#1042"]);
   });
 
   it("everything else is left to the caller, which does what it always did", () => {

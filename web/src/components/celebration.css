@@ -1,0 +1,134 @@
+/* The 1.0 moment (Celebration.tsx). Variant A from the approved mockup.
+   Colours come from the active theme's tokens; the mark alone wears the app
+   icon's fixed paints, because the celebration is the icon's moment. */
+.cel {
+  --cel-mark: #a78bfa; --cel-mark-ink: #1b0b38; --cel-contact: #34d399; --cel-shadow-ink: #8b5cf6;
+  --cel-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  position: fixed; inset: 0; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg); color: var(--text);
+  font: 15px/1.55 var(--font-prose);
+  -webkit-font-smoothing: antialiased;
+}
+.cel button { font-family: inherit; }
+.cel :focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+
+.cel-controls { position: absolute; top: 14px; right: 14px; display: flex; align-items: center; gap: 6px; z-index: 3; }
+.cel-replay, .cel-close {
+  height: 34px; border: 1px solid transparent; border-radius: 8px; background: transparent;
+  color: var(--text3); font-size: 12.5px; cursor: pointer;
+}
+.cel-replay { padding: 0 11px; display: inline-flex; align-items: center; gap: 7px; }
+.cel-replay svg { width: 14px; height: 14px; display: block; }
+.cel-close { width: 34px; display: grid; place-items: center; }
+.cel-close svg { width: 16px; height: 16px; display: block; }
+.cel-replay:hover, .cel-close:hover { background: var(--bg2); color: var(--text); border-color: var(--border); }
+
+.cel-sheet {
+  flex: 1; min-height: 0; width: 100%; max-width: 1320px; margin: 0 auto;
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.06fr);
+  align-items: center; gap: clamp(18px, 3.6vw, 56px);
+  padding: clamp(26px, 4.4vw, 62px) clamp(26px, 4.6vw, 72px) 0;
+}
+
+.cel-eyebrow {
+  display: flex; align-items: center; gap: 9px; margin: 0 0 12px;
+  font: 11px var(--cel-mono); letter-spacing: .2em; text-transform: uppercase; color: var(--text3);
+}
+.cel-eyebrow b {
+  color: var(--text); font-weight: 600; letter-spacing: .04em;
+  border: 1px solid var(--border); border-radius: 5px; padding: 2px 6px; font-size: 10.5px;
+}
+
+/* One mask per character, 40 ms apart. */
+.cel-numeral {
+  display: flex; margin: 0 0 10px; font-weight: 600; font-size: clamp(64px, 8.4vw, 112px); line-height: .88;
+  letter-spacing: -.07em; color: var(--text);
+}
+.cel-numeral .ch { display: inline-block; overflow: hidden; padding: 0 .02em .08em 0; }
+.cel-numeral .ch > i { display: block; font-style: normal; will-change: transform; }
+.cel-numeral .dot { color: var(--text4); padding-right: .02em; margin: 0 -.055em 0 -.045em; }
+.cel-numeral .dotmark { display: block; width: .11em; height: .11em; border-radius: 50%; background: var(--text4); margin: .76em 0 .04em .06em; }
+
+.cel-h1 { margin: 0; font-size: clamp(29px, 3.4vw, 46px); line-height: 1.08; letter-spacing: -.032em; font-weight: 650; }
+.cel-h1 .line { display: block; overflow: hidden; padding-bottom: .06em; }
+.cel-h1 .line > i { display: block; font-style: normal; will-change: transform; }
+
+.cel-lede { margin: 14px 0 0; max-width: 46ch; color: var(--text2); font-size: clamp(14px, 1.1vw, 16px); line-height: 1.6; }
+
+.cel-row3 { list-style: none; margin: clamp(16px, 2.6vh, 28px) 0 0; padding: 0; display: grid; gap: 2px; }
+.cel-row3 li { display: grid; grid-template-columns: 34px 1fr; gap: 12px; align-items: start; padding: 8px 0; will-change: transform; }
+.cel-row3 .tile {
+  width: 34px; height: 34px; border-radius: 8px; border: 1px solid var(--border);
+  background: linear-gradient(var(--bg), var(--bg2));
+  display: grid; place-items: center; padding: 0; color: var(--text2);
+}
+.cel-row3 .tile svg { width: 17px; height: 17px; display: block; }
+.cel-row3 b { display: block; font-size: 14px; font-weight: 600; letter-spacing: -.01em; }
+.cel-row3 span span { display: block; font-size: 13px; line-height: 1.5; color: var(--text3); margin-top: 2px; }
+
+.cel-acts { display: flex; align-items: center; gap: 14px; margin-top: clamp(16px, 2.6vh, 28px); flex-wrap: wrap; }
+.cel-go {
+  height: 42px; padding: 0 18px; display: inline-flex; align-items: center; gap: 9px;
+  border: 1px solid var(--primary); border-radius: 8px; background: var(--primary);
+  color: var(--bg); font-weight: 600; font-size: 14px; cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .14), 0 1px 2px rgba(0, 0, 0, .18);
+}
+.cel-go:hover { filter: brightness(1.08); }
+.cel-go svg { width: 15px; height: 15px; display: block; }
+.cel-later {
+  height: 34px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent;
+  color: var(--text3); font-size: 13.5px; cursor: pointer;
+}
+.cel-later:hover { color: var(--text); background: var(--bg2); }
+
+/* The stage: the mark, drawn in by the timeline. */
+.cel-art { margin: 0; display: grid; place-items: center; min-width: 0; }
+.cel-stage { position: relative; width: min(100%, 620px); display: grid; place-items: center; isolation: isolate; }
+.cel .mark { width: 100%; height: auto; display: block; overflow: visible; }
+.cel .mark .ground { transform-box: fill-box; transform-origin: center; }
+.cel .mark .arc, .cel .mark .band { fill: none; stroke-linecap: round; stroke-dasharray: 1; }
+.cel .mark .arc.back { stroke: var(--cel-mark); stroke-opacity: .4; stroke-width: 3.2; }
+.cel .mark .arc.front { stroke: var(--cel-mark); stroke-width: 3.2; }
+.cel .mark .disc { transform-box: view-box; transform-origin: 30px 34px; }
+.cel .mark .band { stroke: #fff; stroke-opacity: .2; stroke-width: 1.1; }
+.cel .mark .terminator { fill: var(--cel-mark-ink); fill-opacity: .42; }
+.cel .mark .sweep { opacity: 0; }
+.cel .mark .halo { fill: var(--cel-contact); fill-opacity: .18; transform-box: fill-box; transform-origin: center; }
+.cel .mark .contact { fill: var(--cel-contact); transform-box: fill-box; transform-origin: center; }
+.cel .mark .float { will-change: transform; }
+.cel .mark .world { transform-box: view-box; transform-origin: 30px 34px; }
+
+.cel-caption {
+  width: min(100%, 480px); margin: 4px auto 0; display: flex; justify-content: space-between; gap: 12px;
+  font: 10.5px var(--cel-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--text3);
+}
+.cel-foot {
+  margin: 0 auto; padding: 12px clamp(26px, 4.6vw, 72px) 16px; width: 100%; max-width: 1320px;
+  font: 10.5px var(--cel-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--text3);
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+}
+.cel-foot i { width: 3px; height: 3px; border-radius: 50%; background: var(--border2); }
+
+/* 960 x 540 has to fit without scrolling: the small-window rules. */
+@media (max-height: 620px) {
+  .cel-sheet { padding-top: 20px; gap: 20px; }
+  .cel-eyebrow { margin-bottom: 8px; }
+  .cel-numeral { font-size: clamp(44px, 7.4vw, 72px); margin-bottom: 6px; }
+  .cel-h1 { font-size: clamp(22px, 3.2vh, 30px); }
+  .cel-lede { font-size: 13.5px; margin-top: 10px; }
+  .cel-row3 { margin-top: 12px; }
+  .cel-row3 li { padding: 5px 0; }
+  .cel-row3 .tile { width: 30px; height: 30px; }
+  .cel-row3 b { font-size: 13px; }
+  .cel-row3 span span { font-size: 12px; }
+  .cel-acts { margin-top: 14px; }
+  .cel-stage { width: min(100%, 430px); }
+  .cel-foot { padding-bottom: 10px; }
+}
+
+/* Reduced motion: no animation is created (Celebration.tsx), so the resting
+   style is the final frame. The sweeps only exist to be animated. */
+@media (prefers-reduced-motion: reduce) {
+  .cel .mark .spec, .cel .mark .sheen { display: none; }
+}
+html[data-reduce-motion] .cel .mark .spec, html[data-reduce-motion] .cel .mark .sheen { display: none; }

@@ -26,6 +26,8 @@ export type PrJump = {
   /** Where to send the click instead when this number turns out not to be a
    *  pull request: `#123` in a body names issues and pull requests alike. */
   fallback?: string;
+  /** A comment the link named: `discussion_r<id>`, `issuecomment-<id>` or `pullrequestreview-<id>`. */
+  anchor?: string;
   /** Increments per request, so asking for the same PR twice is two requests.
    *  Without it, closing a PR and clicking the same notification again would
    *  look like the request that has already been served. */
@@ -42,7 +44,7 @@ export function subscribePrJump(fn: () => void): () => void {
 
 export function prJump(): PrJump | null { return pending; }
 
-export function requestPrJump(repo: string, number: number, opts: { mention?: boolean; focus?: "local"; fallback?: string } = {}): void {
+export function requestPrJump(repo: string, number: number, opts: { mention?: boolean; focus?: "local"; fallback?: string; anchor?: string } = {}): void {
   pending = { repo, number, ...opts, n: (pending?.n ?? 0) + 1 };
   subs.forEach((f) => f());
 }

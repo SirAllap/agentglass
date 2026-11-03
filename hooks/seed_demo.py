@@ -11,7 +11,26 @@ import random
 import time
 import urllib.request
 
-SERVER = os.environ.get("AGENTGLASS_SERVER", "http://127.0.0.1:4000")
+def _default_server(host):
+    """http://<host>:<port> of the running server. The port is the one it wrote
+    at bind (next to the token file), because the app moves to another port when
+    4000 is taken and the AGENTGLASS_PORT an agent pane inherits can be stale;
+    then AGENTGLASS_PORT, then 4000. No probe: a hook cannot pay a round trip."""
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    port = ""
+    try:
+        with open(os.path.join(base, "agentglass", "port"), encoding="utf-8") as f:
+            port = f.read().strip()
+    except OSError:
+        pass
+    if not (port.isdigit() and 0 < int(port) < 65536):
+        port = os.environ.get("AGENTGLASS_PORT", "").strip()
+    if not (port.isdigit() and 0 < int(port) < 65536):
+        port = "4000"
+    return f"http://{host}:{port}"
+
+
+SERVER = (os.environ.get("AGENTGLASS_SERVER") or _default_server("127.0.0.1"))
 
 def _agentglass_local_only(url):
     """Refuse to send transcript/telemetry anywhere but this machine.

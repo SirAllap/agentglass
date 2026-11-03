@@ -3,15 +3,17 @@ import type { PrCheck, PrCheckRollup, PrChecksRead, PrDetail, PrSummary } from "
 /**
  * What the Refresh button asks GitHub for.
  *
- * On the list it means the lists. With one pull request open it means that
- * pull request: the button used to force every list, drop the check, behind
- * and card caches of every row, and go back to a board where each card
- * loaded again — measured as a full page of requests to re-read one.
+ * On the list it means the lists. With one pull request open FULL SCREEN it
+ * means that pull request: the button used to force every list, drop the
+ * check, behind and card caches of every row, and go back to a board where
+ * each card loaded again — measured as a full page of requests to re-read one.
+ * Docked, the board is on screen next to it, so the lists are read as well, but
+ * the other rows' caches are kept (the caller does not drop them).
  *
  * `list` covers the board's two lists as well; they are the same rows.
  */
-export function refreshPlan(selected: number | null): { list: boolean; pr: number | null } {
-  return selected == null ? { list: true, pr: null } : { list: false, pr: selected };
+export function refreshPlan(selected: number | null, listShown = false): { list: boolean; pr: number | null } {
+  return selected == null ? { list: true, pr: null } : { list: listShown, pr: selected };
 }
 
 /**
@@ -191,8 +193,10 @@ export function detailWithChecks(d: PrDetail, repo: string, r: PrChecksRead): Pr
   const key = (c: PrCheck) => `${c.workflow ?? ""}\u0000${c.name}`;
   const req = new Map((d.checksAll ?? []).map((c) => [key(c), c.required]));
   const all = r.all.map((c) => (req.get(key(c)) === undefined ? c : { ...c, required: req.get(key(c)) }));
-  if (JSON.stringify(d.checks) === JSON.stringify(r.checks)) return null;
-  return { ...d, checks: r.checks, checksAll: all };
+  /* Checks of another commit than the head this detail was read at are not its checks. */
+  if (r.sha && d.headSha && !r.sha.startsWith(d.headSha) && !d.headSha.startsWith(r.sha)) return null;
+  if (JSON.stringify(d.checks) === JSON.stringify(r.checks) && (!r.sha || d.checksSha === r.sha)) return null;
+  return { ...d, checks: r.checks, checksAll: all, ...(r.sha ? { checksSha: r.sha } : null) };
 }
 
 export const rowWithChecks = (rows: PrSummary[], repo: string, r: PrChecksRead): PrSummary[] =>

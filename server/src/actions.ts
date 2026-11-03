@@ -162,7 +162,7 @@ export function targetOf(pathname: string, b: Record<string, unknown>): string {
 
   // A gate: what was held, not the uuid it was held under.
   if (pathname.startsWith("/gate/")) return clip([named(b.tool), named(b.summary)].filter(Boolean).join(" · "));
-  if (pathname.startsWith("/docker/")) return named(b.id);
+  if (pathname.startsWith("/docker/")) return named(b.id) || named(b.name);
   // A settings change from an agent: which setting, never to what.
   // A door an agent opened: who (the name it stamped), and for a settings
   // change which setting, never to what.

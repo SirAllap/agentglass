@@ -102,6 +102,27 @@ describe("identity and projects", () => {
     const q = await call("GET", "/project/search?query=orb");
     expect(q.json.values.map((p: { key: string }) => p.key)).toEqual(["ORBIT"]);
   });
+
+  it("serves one project and its components, a project left out of the list by key, and the picture of each", async () => {
+    fake.state.projectComponents.ORBIT = [{ id: "20001", name: "Api" }];
+    fake.state.extraProjects = [{ id: "12000", key: "HIDDEN", name: "Hidden room", unlisted: true }];
+    expect((await call("GET", "/project/ORBIT/components")).json).toEqual([{ id: "20001", name: "Api", project: "ORBIT" }]);
+    expect((await call("GET", "/project/ACME/components")).json).toEqual([]);
+    const one = await call("GET", "/project/ORBIT");
+    expect(one.json).toMatchObject({ key: "ORBIT", name: "Orbit", avatarUrls: { "48x48": "https://avatar.acme.example/project/ORBIT/48.png" } });
+    expect((await call("GET", "/project/HIDDEN")).json.name).toBe("Hidden room");
+    expect((await call("GET", "/project/search")).json.values.map((p: { key: string }) => p.key)).toEqual(["ORBIT", "ACME"]);
+    expect((await call("GET", "/project/NOPE")).status).toBe(404);
+    expect((await call("GET", "/project/NOPE/components")).status).toBe(404);
+  });
+
+  it("answers `parent = KEY` with the children of that card only, and gives a component the id the project lists", async () => {
+    fake.state.projectComponents.ORBIT = [{ id: "20001", name: "Api" }];
+    fake.state.issues["ORBIT-1042"]!.components = ["Api"];
+    const r = await call("POST", "/search/jql", { body: { jql: "parent = ORBIT-1000 ORDER BY key ASC", fields: ["components"] } });
+    expect(r.json.issues.map((i: { key: string }) => i.key)).toEqual(["ORBIT-1001", "ORBIT-1042", "ORBIT-1050"]);
+    expect(r.json.issues.find((i: { key: string }) => i.key === "ORBIT-1042").fields.components).toEqual([{ id: "20001", name: "Api" }]);
+  });
 });
 
 describe("reading an issue", () => {

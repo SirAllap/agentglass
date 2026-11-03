@@ -30,7 +30,7 @@
 // same treatment for the same reason: the set you switch AWAY from keeps its
 // addresses and loses its guests.
 
-import type { BrowserTab } from "./browserTabs.ts";
+import { sleepingTab, type BrowserTab } from "./browserTabs.ts";
 import { isProfileId } from "./browserProfiles.ts";
 
 export const SESSION_KEY = "agentglass.browser.session";
@@ -255,4 +255,96 @@ export function forgetProfileTabs(profileId: string): void {
   const byProfile = { ...prev.byProfile };
   delete byProfile[profileId];
   write({ v: 2, current: prev.current === profileId ? "" : prev.current, byProfile });
+}
+
+/** What the browser opens with: the space on screen, every page, and the one in front. */
+export interface Opening { profile: string; tabs: BrowserTab[]; activeId: string }
+
+/**
+ * Last time's session as the strip the app opens with.
+ *
+ * `known` is the container list, `home` mints the one fresh tab for a browser
+ * with nothing to restore.
+ */
+export function openingStrip(saved: SavedSession | null, known: ReadonlySet<string>, home: (profile: string) => BrowserTab): Opening {
+  /*
+   * No session yet — a fresh install, or a profile that has never opened this
+   * browser. Asleep like every other restored tab (see below): a real
+   * renderer profile with the debug port found a `<webview>` at about:blank
+   * on every idle desktop session, and this was why — a live Chromium guest
+   * mounted at launch and pointed at the home page, whether or not anybody
+   * had looked at the browser view yet. The home page itself normally loads
+   * fine; it read as about:blank because the guest that measured it had no
+   * network route out.
+   */
+  if (!saved) { const t = home(""); return { profile: "", tabs: [t], activeId: t.id }; }
+  // Everything was closed on purpose last time: restore nothing, invent nothing.
+  if (!Object.keys(saved.byProfile).length) return { profile: saved.current, tabs: [], activeId: "" };
+  /*
+   * A CONTAINER THAT NO LONGER EXISTS BRINGS NOTHING BACK.
+   *
+   * Dropping a container forgets its pages, and closing its last page takes
+   * its entry out — but a file written before either of those existed still
+   * holds them, and every launch restored the lot. Measured on the real app:
+   * fifty containers that had been dropped hours earlier, sixty-four pages,
+   * and `newtab` refusing with "64 pages is the limit" on a browser whose
+   * owner had fourteen pages open.
+   *
+   * The names are the authority, not the tab file: an id that is not in the
+   * container list is an identity nothing can reach — no menu, no strip, no
+   * `--as`. Restoring pages into it is restoring them nowhere.
+   */
+  const reachable = (id: string) => !id || known.has(id);
+  /*
+   * THE SPACE ON SCREEN MAY BE EMPTY.
+   *
+   * Its last page was closed while another container's stayed open, and the
+   * file still names it as where to open. Opening there minted a home page in
+   * it: a closed Default came back as "Default · 1 tab" beside the container
+   * that was really open. Open in a space that has pages instead.
+   */
+  const profile = setFor(saved, saved.current) ? saved.current : (Object.keys(saved.byProfile).find(reachable) ?? saved.current);
+  const set = setFor(saved, profile);
+  // The one in front keeps its remembered name too, and only its `asleep`
+  // differs. Built with `newTab` it came back nameless and the strip read
+  // "New tab" until the page loaded, which is a flicker on every launch.
+  /*
+   * Everything asleep, even the one that was in front.
+   *
+   * This panel is now mounted from launch whether or not anybody goes to it
+   * (see KEEP_RUNNING), and waking a tab here would put a Chromium guest in
+   * every session that never opens the browser. The one in front wakes the
+   * moment the view is looked at — or the moment an agent asks for it, which
+   * is the other way this panel comes to life.
+   */
+  /*
+   * EVERY PROFILE'S PAGES COME BACK, not only the one on screen.
+   *
+   * Restoring the current profile alone was right while a profile was a
+   * place a person works in and only one of them existed at a time. It is
+   * wrong now that agents each have one: an agent's tabs simply vanished at
+   * launch, so restarting the application lost all their work, which was
+   * literally true, and the agent's next call found nothing to address and
+   * fell through to whatever was in front.
+   *
+   * It costs nothing. A restored tab is a name, an icon and an address with
+   * no guest behind it — that is what `sleepingTab` is — so bringing back
+   * forty of them is forty rows in an array. The strip shows the profile you
+   * are in; the rest are addressable and invisible, which is exactly what an
+   * agent's tab should be.
+   */
+  const revive = (id: string, s: SavedSet) => s.tabs.map((t) => ({ ...sleepingTab(t.url, t.title, t.icon, id, t.id), ...(t.agent ? { agent: t.agent } : null) }));
+  const mine = set ? revive(profile, set) : [];
+  const theirs = Object.entries(saved.byProfile)
+    .filter(([id]) => id !== profile && reachable(id))
+    .flatMap(([id, s]) => revive(id, s));
+  const tabs = [...mine, ...theirs];
+  /* Every saved page belonged to a container that is gone: nothing is open,
+     so one fresh tab, as on a first launch. */
+  if (!tabs.length) { const t = home(profile); return { profile, tabs: [t], activeId: t.id }; }
+  /* The page that was in front, not the first one. Every restored tab is
+     asleep, so the panel's "first awake one" found none and landed on the
+     container's first page: the page being read came back asleep behind the
+     home page. */
+  return { profile, tabs, activeId: mine[set?.active ?? 0]?.id ?? "" };
 }

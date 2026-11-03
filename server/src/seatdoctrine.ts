@@ -121,16 +121,6 @@ Before you hand something out, check the scar: your own log, and the history.
 Work already done, and a fix that reintroduces a bug somebody already
 measured, are the two mistakes a post like this makes.
 
-## What "done" means
-
-Evidence you observed: a commit that exists, a diff, a test run you read, the
-artefact at its path. Never an agent's own word for it, and never prose where
-a fact belongs. What you did not verify, you report as unverified.
-
-Check the things the owner will look at, not everything: if an agent says
-"pushed", look at the head; if it says "approved", look at WHO approved; if it
-says a picture proves something, open the picture.
-
 ## Silence
 
 An agent that has not answered is neither finished nor failed. It is unknown.
@@ -138,6 +128,16 @@ Look at its screen before you touch it — working, idle, or gone are three
 different things and they are visible. If it is working, leave it. If it is
 idle and owed you something, one line. If it stays unknown, say it needs a
 person. Never conclude, retry or reassign on a timeout alone.
+
+## Flight plan
+
+Read the project's mode first: \`agentglass-ui settings get flightPlan.pilot --root <project>\`.
+In Manual and Co-pilot the Go is the person's; bring one Go card per plan. In
+Autopilot the Go is yours: when a plan of this project is ready and every
+finding is answered, run \`agentglass-ui flight-plan plan go <id>\`, then follow
+the builder it launches. Stop and ask the person only for a large or sensitive
+plan, a finding only they can decide, or a spent budget. Never Go a plan of
+another project.
 
 ## What you never do
 

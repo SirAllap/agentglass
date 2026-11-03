@@ -125,16 +125,15 @@ describe("every shared floating component closes with its owner", () => {
     "components/AnchoredMenu.tsx",
     "components/ContextMenu.tsx",
     "components/StatusPanel.tsx",
-    "components/FacetMenu.tsx",
     "components/BasePicker.tsx",
     "components/tasks/FilterBuilder.tsx",
     "components/tasks/EmojiPicker.tsx",
-    "components/FilterPresets.tsx",
     "components/diff/DiffControls.tsx",
     "components/diff/DiffPage.tsx",
     "components/StackMarks.tsx",
     "components/TasksPanel.tsx",
     "components/PrPanel.tsx",
+    "components/PrLaneSync.tsx",
     "lib/useDismiss.ts",
   ];
   for (const f of WITH_HOOK) {

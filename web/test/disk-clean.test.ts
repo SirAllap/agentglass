@@ -50,6 +50,39 @@ describe("which lines may be cleaned", () => {
   });
 });
 
+describe("the card's headline", () => {
+  it("puts the same numbers the Disk dial draws in one line", () => {
+    expect(D.diskHeadline({ diskTotal: 240 * GB, diskFree: 70 * GB })).toBe("Disk 71% used · 70 GB free");
+    expect(D.diskHeadline({ diskTotal: 100 * GB, diskFree: 100 * GB })).toBe("Disk 0% used · 100 GB free");
+  });
+  it("says nothing when the host gave no disk", () => {
+    expect(D.diskHeadline({ diskTotal: 0, diskFree: 0 })).toBeNull();
+  });
+  it("the reclaimable total is the plan's own words, large in the card", () => {
+    expect(D.reclaimHeadline({ ids: ["a", "b"], bytes: 12.4 * GB })).toBe("12.4 GB can go");
+    expect(D.reclaimHeadline({ ids: ["a"], bytes: 0 })).toBe("1 item can go");
+    expect(D.reclaimHeadline({ ids: [], bytes: 12 * GB })).toBeNull();
+  });
+});
+
+describe("the header chip", () => {
+  it("names what the scan on screen would free, and is nothing when nothing safe is there", () => {
+    expect(D.cleanupChipLabel({ ids: ["a", "b"], bytes: 21.4 * GB })).toBe("Disk cleanup · 21.4 GB can go");
+    expect(D.cleanupChipLabel({ ids: [], bytes: 12 * GB })).toBeNull();
+  });
+  it("a plan whose lines have no size yet counts items instead of claiming a megabyte", () => {
+    expect(D.cleanupChipLabel({ ids: ["a"], bytes: 0 })).toBe("Disk cleanup · 1 item can go");
+    expect(D.cleanupChipLabel({ ids: ["a", "b"], bytes: 0 })).toBe("Disk cleanup · 2 items can go");
+  });
+  it("the chip reads the plan the block publishes, and a clean takes it away", () => {
+    expect(D.diskPlanNow()).toBeNull();
+    D.publishDiskPlan({ ids: ["a"], bytes: 3 * GB });
+    expect(D.diskPlanNow()).toEqual({ ids: ["a"], bytes: 3 * GB });
+    D.publishDiskPlan(null);
+    expect(D.diskPlanNow()).toBeNull();
+  });
+});
+
 describe("the order", () => {
   it("safe first, then ask, in use, info; the biggest first inside a group; unmeasured last", () => {
     const ids = D.sortLines([
@@ -87,10 +120,12 @@ describe("words", () => {
     expect(D.fmtBytes(120 * GB)).toBe("120 GB");
     expect(D.fmtBytes(300_000)).toBe("1 MB");
     expect(D.fmtBytes(512e6)).toBe("512 MB");
+    expect(D.fmtBytes(1000 * GB)).toBe("1 TB");
+    expect(D.fmtBytes(1.5e12)).toBe("1.5 TB");
   });
   it("the confirm names what will go, with the plural right", () => {
-    expect(D.confirmLabel(1, GB)).toBe("Remove 1 item (1.0 GB)");
-    expect(D.confirmLabel(3, 12.5 * GB)).toBe("Remove 3 items (12.5 GB)");
+    expect(D.confirmLabel(1, GB)).toBe("Yes, remove 1 item (1.0 GB)");
+    expect(D.confirmLabel(3, 12.5 * GB)).toBe("Yes, remove 3 items (12.5 GB)");
   });
   it("one colour per meaning: only safe is green and only ask is amber", () => {
     expect(D.VERDICT.safe.tone).toBe("ok");
@@ -117,6 +152,14 @@ describe("the low-disk badge sentence", () => {
     expect(D.lowDiskNow()).toBeNull();
     D.publishDiskMounts("tile", null);
     expect(D.lowDiskNow()).toBeNull();
+  });
+  it("the machine tile alone lights the badge, from the dials' own disk numbers", () => {
+    D.publishMachineDisk({ diskTotal: 500 * GB, diskFree: 38 * GB });
+    expect(D.lowDiskNow()).toBe("Low disk: / 8 % free");
+    D.publishMachineDisk({ diskTotal: 500 * GB, diskFree: 300 * GB });
+    expect(D.lowDiskNow()).toBeNull();
+    D.publishMachineDisk({ diskTotal: 0, diskFree: 0 });
+    D.publishDiskMounts("tile", null);
   });
   it("follows the setting: off silences it, 20 % names a disk that 10 % does not", () => {
     D.publishDiskMounts("scan", [m("/", 100, 15)]);

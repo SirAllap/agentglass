@@ -61,6 +61,8 @@ const MUTATING = [
   `pathname === "/machine/unlock"`,
   `pathname === "/machine/kill"`,
   `pathname === "/machine/disk-clean/run"`,
+  // A higher spending cap until the day or the week turns over.
+  `pathname === "/flight-plan/budget/raise"`,
   `pathname === "/terminal/panes/focus"`,
   `pathname === "/walkthrough"`,
   `pathname.startsWith("/git/")`,

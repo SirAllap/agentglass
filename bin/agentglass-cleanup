@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""Clean up the local leftovers of a finished pull request: its checkout, branch,
+stashes, containers, images and scratch folders. A dry run is the default. This
+command works on any merged pull request, whatever the "After a PR is merged"
+setting says: it is how you run a cleanup yourself.
+
+    agentglass-cleanup 77                       # the plan: what would go, and what blocks it
+    agentglass-cleanup 77 --repo ~/code/orbit   # a repository other than the one you stand in
+    agentglass-cleanup 77 --yes <plan id>       # run exactly that plan
+    agentglass-cleanup 77 --yes <plan id> --exclude branch:ORBIT-1042-fix-x   # leave one item alone
+    agentglass-cleanup 77 --yes <plan id> --confirm-not-merged   # a pull request closed without a merge
+
+The plan id is a hash of what the plan would do and the checkout's HEAD. A run
+recomputes the plan from the live state and refuses a different id, so a plan
+you read is the plan that runs. Anything that makes it unsafe (uncommitted
+changes, a commit that is only here, another open pull request on the branch, a
+session running in the checkout, the main checkout, the default branch) is a
+block: the dry run lists it and the run refuses. Nothing remote is touched.
+
+What counts as the project's own (container names to keep, database prefix,
+evidence and notes folders, ...) is the per-project setting `cleanup.config`
+(`agentglass-ui settings set cleanup.config '{...}' --root <repo>`); with none
+set those steps are skipped.
+
+A run removes things, so an agent's --yes does not run it: it raises an approval
+card for the person and answers {"ok": true, "approval": "pending", "cardId": ...}
+with nothing removed. The run happens when the person approves the card (the plan
+is checked again then). A person running it from the app needs no card.
+
+Every answer is one JSON object on stdout; the exit code is 0 when ok and 1
+otherwise.
+
+Environment:
+    AGENTGLASS_SERVER   base url (default http://localhost:4000)
+    AGENTGLASS_TOKEN    the server's token; read from ~/.config/agentglass/token
+"""
+import argparse
+import json
+import os
+import subprocess
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+
+def _server_or_die(url):
+    """Where the Bearer token goes. It is sent to whatever AGENTGLASS_SERVER
+    names, and over plain http to a remote host it travels in the clear —
+    every hop between here and there reads it. So: https anywhere, http only
+    to this machine (localhost, or a loopback address). Anything else is one
+    line on stderr and exit 2, before a single request is built."""
+    import ipaddress
+    from urllib.parse import urlsplit
+    u = urlsplit(url)
+    host = (u.hostname or "").lower()
+    if u.scheme == "https" and host:
+        return url
+    if u.scheme == "http" and host:
+        loop = host == "localhost"
+        if not loop:
+            try:
+                loop = ipaddress.ip_address(host).is_loopback
+            except ValueError:
+                loop = False
+        if loop:
+            return url
+        print(f"agentglass: refusing plain http to {host}: the token would travel in the clear. "
+              f"Use https://, or http:// only to localhost/127.0.0.1/::1 (AGENTGLASS_SERVER={url})", file=sys.stderr)
+        sys.exit(2)
+    print(f"agentglass: AGENTGLASS_SERVER must be https://<host> or http://<loopback>, got {url!r}", file=sys.stderr)
+    sys.exit(2)
+
+
+def _default_server(host):
+    """http://<host>:<port> of the running server. The port is the one it wrote
+    at bind (next to the token file), because the app moves to another port when
+    4000 is taken and the AGENTGLASS_PORT an agent pane inherits can be stale;
+    then AGENTGLASS_PORT, then 4000. No probe: a hook cannot pay a round trip."""
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    port = ""
+    try:
+        with open(os.path.join(base, "agentglass", "port"), encoding="utf-8") as f:
+            port = f.read().strip()
+    except OSError:
+        pass
+    if not (port.isdigit() and 0 < int(port) < 65536):
+        port = os.environ.get("AGENTGLASS_PORT", "").strip()
+    if not (port.isdigit() and 0 < int(port) < 65536):
+        port = "4000"
+    return f"http://{host}:{port}"
+
+
+SERVER = _server_or_die((os.environ.get("AGENTGLASS_SERVER") or _default_server("localhost")).rstrip("/"))
+
+
+def token():
+    t = os.environ.get("AGENTGLASS_TOKEN", "").strip()
+    if t:
+        return t
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    try:
+        with open(os.path.join(base, "agentglass", "token"), encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def call(path, body=None, method="POST", timeout=630):
+    req = urllib.request.Request(
+        f"{SERVER}{path}",
+        data=None if body is None else json.dumps(body).encode(),
+        method=method,
+        headers={"Content-Type": "application/json", "Origin": SERVER},
+    )
+    # Who is asking, when it is a worker: the server turns a worker away from
+    # the verbs that start, stop or seat anything. Not a credential.
+    me = os.environ.get("AGENTGLASS_AGENT_NAME", "").strip()
+    if me:
+        req.add_header("X-Agentglass-Agent", me)
+    t = token()
+    if t:
+        req.add_header("Authorization", f"Bearer {t}")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read() or b"{}")
+        except json.JSONDecodeError:
+            return {"ok": False, "error": f"server said {e.code}"}
+    except urllib.error.URLError as e:
+        return {"ok": False, "error": f"no agentglass at {SERVER} ({e.reason})"}
+
+
+def emit(res):
+    print(json.dumps(res))
+    return 0 if res.get("ok") else 1
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="agentglass-cleanup", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("pr", type=int, help="the pull request number")
+    ap.add_argument("--repo", help="the repository (default: the one you stand in)")
+    ap.add_argument("--dry-run", action="store_true", help="print the plan and change nothing (the default)")
+    ap.add_argument("--yes", metavar="PLAN_ID", help="run the plan with this id; from an agent this raises an approval card for the person and removes nothing until it is approved")
+    ap.add_argument("--exclude", nargs="+", default=[], metavar="ID", help="plan item ids to leave alone")
+    ap.add_argument("--confirm-not-merged", action="store_true", help="allow cleaning a pull request closed without a merge")
+    a = ap.parse_args()
+    if a.yes and a.dry_run:
+        return emit({"ok": False, "error": "--dry-run and --yes together: pick one"})
+    repo = a.repo
+    if not repo:
+        p = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+        if p.returncode != 0:
+            return emit({"ok": False, "error": "not inside a git repository: pass --repo"})
+        repo = p.stdout.strip()
+    repo = os.path.abspath(os.path.expanduser(repo))
+    if not a.yes:
+        return emit(call("/cleanup/plan?" + urllib.parse.urlencode({"repo": repo, "pr": a.pr}), method="GET"))
+    return emit(call("/cleanup/run", {"repo": repo, "pr": a.pr, "planId": a.yes, "exclude": a.exclude,
+                                      "confirmNotMerged": a.confirm_not_merged}))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

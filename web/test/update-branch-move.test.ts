@@ -165,7 +165,7 @@ describe("the Update branch notice in the merge box", () => {
   });
 
   it("has one button, and it goes inside the app, to where the lib says", () => {
-    expect(notice.match(/<Btn /g)?.length).toBe(1);
+    expect(notice.match(/<Button /g)?.length).toBe(1);
     expect(notice).toContain("requestWorktreeJump(branchNoticeJump(n, root))");
     for (const label of ['"Review changes"', '"Show commits"', '"Show branch"', '"Open in Git"']) expect(notice).toContain(label);
   });
@@ -181,7 +181,7 @@ describe("the Update branch notice in the merge box", () => {
     for (const sync of ["dirty", "diverged", "busy"] as const) {
       expect(updateBranchMove(5, "main", head({ sync, ahead: 1, worktree: "/x/wt" })).notice).toBeDefined();
     }
-    expect(code(panel)).toMatch(/<Btn onClick=\{\(\) => onUpdateBranch\(updateMove\.syncLocal\)\}[^\n]*hazard=\{!!updateMove\.notice\}/);
+    expect(code(panel)).toMatch(/<Button size="hit" tone=\{slots\.update\.enabled \? "warn" : "plain"\}\s*style=\{slots\.update\.enabled && updateMove\.notice && !\(busy \|\| updateHeld\(upState\)\) \? \{ background: HAZARD_STRIPE[\s\S]{0,200}?onClick=\{\(\) => onUpdateBranch\(updateMove\.syncLocal\)\}/);
     expect(code(panel).match(/background: HAZARD_STRIPE/g)?.length).toBe(3);
     expect(code(panel)).not.toContain('background: "repeating-linear-gradient(135deg, var(--warning)');
   });

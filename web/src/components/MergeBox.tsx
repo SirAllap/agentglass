@@ -15,30 +15,25 @@
 // and does not cover. Under 640px of its own width the strip goes 2x2 and the
 // "why" drops under the "what", the way the columns of a table do on a phone.
 import { useState, type CSSProperties, type ReactNode } from "react";
-import { CrossIcon, DoneIcon } from "../lib/glyphIcons.tsx";
+import { ClockIcon, CrossIcon, DoneIcon } from "../lib/glyphIcons.tsx";
 import { WarningIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { actionInFooter, heroPlacement, type Hero, type Mover, type MergePath, type PathAction, type PathRow, type Stage } from "../../../shared/mergePath.ts";
 import { Button, CTRL_H, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { ReviewBar, ReviewFace } from "./ReviewFace.tsx";
 import { wash } from "../lib/reviewBar.ts";
+import type { OverviewRow, Tone, Verdict } from "../lib/prOverviewView.ts";
 
 export const MERGEBOX_CSS = `
 .agx-mb{container:agx-mb / inline-size}
-.agx-mb-stages{display:grid;grid-template-columns:repeat(4,minmax(0,1fr))}
 .agx-mb-row{display:grid;grid-template-columns:32px minmax(0,1.05fr) minmax(0,1.35fr) 104px;column-gap:14px;align-items:start}
 .agx-mb-row > .agx-mb-who{justify-self:end}
 .agx-mb-head > .agx-mb-what{grid-column:1 / 3}
 .agx-mb-head > .agx-mb-why{grid-column:3}
 .agx-mb-head > .agx-mb-who{grid-column:4}
-.agx-mb-quiet{height:24px;padding:0 6px;border-radius:6px;font-size:10.5px;color:var(--text3);background:transparent}
-.agx-mb-quiet:hover:not(:disabled),.agx-mb-quiet:focus-visible{color:var(--text);background:color-mix(in srgb,var(--text) 7%,transparent)}
-.agx-mb-quiet-danger:hover:not(:disabled),.agx-mb-quiet-danger:focus-visible{color:var(--error-ink);background:color-mix(in srgb,var(--error) 9%,transparent)}
-.agx-mb-quiet:disabled{opacity:.4}
 .agx-mb-spin{transform-origin:50% 50%;animation:agx-spin 1.1s linear infinite}
 @media (prefers-reduced-motion: reduce){.agx-mb-spin{animation:agx-breathe 1.6s ease-in-out infinite}}
 @container agx-mb (max-width: 640px){
-  .agx-mb-stages{grid-template-columns:repeat(2,minmax(0,1fr))}
   .agx-mb-row{grid-template-columns:32px minmax(0,1fr) auto}
   .agx-mb-row > .agx-mb-why{grid-column:2 / -1;grid-row:2}
   .agx-mb-head > .agx-mb-why{display:none}
@@ -54,7 +49,8 @@ const TONE = {
   idle: { tint: "var(--text3)", ink: "var(--text3)" },
 } as const;
 
-const heroTone = (t: Hero["tone"]) => (t === "ready" ? TONE.ok : t === "wait" ? TONE.wait : TONE.you);
+/** The banner and the rows speak in three tones; the table below keeps the path's own four. */
+const TONE_OF: Record<Tone, { tint: string; ink: string }> = { ok: TONE.ok, warn: TONE.wait, bad: TONE.you };
 
 const moverTone = (m: Mover) => (m === "you" || m === "author" || m === "other" ? TONE.you : m === "fyi" || m === "done" ? TONE.idle : TONE.wait);
 
@@ -114,25 +110,31 @@ function Who({ row }: { row: Pick<PathRow, "mover" | "moverLabel"> }) {
   );
 }
 
-function StageCell({ s, first }: { s: Stage; first: boolean }) {
+/**
+ * One of the four things between you and the merge, drawn the way the mockup's
+ * reason rows are: a tinted row, the status bubble, the bold name and its
+ * sentence on one line. Stacked, not four columns: at the docked width four
+ * columns left each sentence three words wide.
+ */
+function StageCell({ s }: { s: Stage }) {
   const tone = s.status === "done" ? TONE.ok : s.status === "blocked" ? TONE.you : s.status === "wait" ? TONE.wait : TONE.idle;
   const filled = s.status === "done" || (s.status === "blocked" && s.current);
+  const tinted = s.status !== "idle";
   return (
-    <div className="px-4 py-3 min-w-0"
+    <div className="agx-mb-stage grid items-center gap-2.5 px-3 py-2 rounded-lg min-w-0" data-stage={s.key} data-status={s.status}
       style={{
-        borderLeft: first ? undefined : LINE,
-        background: s.current ? wash(tone.tint, 11) : undefined,
-        boxShadow: s.current && first ? `inset 3px 0 0 ${tone.tint}` : undefined,
+        gridTemplateColumns: "22px minmax(0,1fr)",
+        background: tinted ? wash(tone.tint, s.current ? 9 : 5) : wash("var(--text)", 5),
+        boxShadow: tinted && s.status !== "done" ? `inset 0 0 0 1px ${wash(tone.tint, 22)}` : undefined,
       }}>
-      <div className="flex items-center gap-2">
-        <Bubble n={s.n} tone={tone} filled={filled} done={s.status === "done"} />
-        <span className={`text-[11.5px] font-semibold leading-snug ${s.need ? "" : "truncate"}`} style={{ color: s.current || s.status !== "idle" ? tone.ink : "var(--text2)" }}>
-          {s.label}{s.need && <span style={{ fontWeight: 500 }}> · {s.need}</span>}
-        </span>
+      <Bubble n={s.n} tone={tone} filled={filled} done={s.status === "done"} />
+      <div className="min-w-0 text-[12.5px] leading-snug">
+        <b className="font-semibold" style={{ color: "var(--text)" }}>{s.label}</b>
+        {s.need && <span style={{ color: tone.ink }}> · {s.need}</span>}
+        {s.big && <b className="tabular-nums ml-1.5" style={{ color: tone.ink }}>{s.big}</b>}
+        <span className="ml-1.5 text-[11.5px]" style={{ color: "var(--text3)" }}>{s.sub}</span>
+        {s.tally && <ReviewBar tally={s.tally} />}
       </div>
-      {s.tally && <ReviewBar tally={s.tally} />}
-      {s.big && <div className="text-[16px] font-semibold mt-1.5 tabular-nums" style={{ color: tone.ink }}>{s.big}</div>}
-      <div className={`text-[10.5px] leading-snug ${s.big ? "mt-1" : "mt-1.5"}`} style={{ color: "var(--text3)" }}>{s.sub}</div>
     </div>
   );
 }
@@ -160,35 +162,32 @@ function Segments({ segs, total }: { segs: { key: string; count: number; label: 
 }
 
 export function MergeBox({
-  path, onAction, busy, mergeNode, autoNode, extraNode, noticeNode, cornerNode, notes, history, actionDisabled, pendingAction, showMergeRow = true,
+  path, onAction, busy, noticeNode, notes, actionDisabled, pendingAction, verdict, summary, onGo, onRerun, rerunDisabled,
 }: {
   path: MergePath;
   /** `from` is the box of the button pressed, for an action that opens something beside it. */
   onAction: (a: PathAction, from?: DOMRect) => void;
   busy: boolean;
-  /** The panel's real merge button, method menu and all. */
-  mergeNode: ReactNode;
-  /** "Merge when green", or "Cancel auto-merge" once it is armed. */
-  autoNode: ReactNode;
-  /** The quieter row of what else can be done to the branch. */
-  extraNode?: ReactNode;
-  /** A notice about the branch action beside it: a row of its own under the buttons, full width. */
+  /** A notice about the branch action (the dock holds the button): full width, under the list. */
   noticeNode?: ReactNode;
-  /** Rarely used actions (To draft, Close), quiet, in the hero's top-right corner. */
-  cornerNode?: ReactNode;
   /** Things only the panel knows about this branch (a confirmation, the files that conflict), as rows under the list. */
   notes?: ReactNode;
-  /** The review history, drawn under the hero while the secondary button has it open. */
-  history?: ReactNode;
   /** Actions that cannot be taken right now, with the reason. */
   actionDisabled?: Partial<Record<PathAction["id"], string>>;
   pendingAction?: PathAction["id"];
-  /** Whether the footer has a merge button or an auto-merge control to draw; false over a conflict, where neither is offered. */
-  showMergeRow?: boolean;
+  /** The banner's sentence and the four rows under it (lib/prOverviewView.ts). */
+  verdict: Verdict;
+  summary: OverviewRow[];
+  /** See checks / Open conversation. */
+  onGo: (to: "checks" | "conversation") => void;
+  /** Run the failed checks again, from the Checks row; absent when the hero already offers it. */
+  onRerun?: () => void;
+  rerunDisabled?: string;
 }) {
-  const [historyOpen, setHistoryOpen] = useState(false);
+  /* Open while something stands in the way: the reasons are the point of the table then. Closed when nothing does. */
+  const [whoOpen, setWhoOpen] = useState(path.count > 0);
   const { hero, stages, rows, otherCi, callout, count } = path;
-  const tone = heroTone(hero.tone);
+  const tone = TONE_OF[verdict.tone];
   const heroTop = heroPlacement(hero).top;
   const counted = rows.filter((r) => r.counted);
   const fyiRows = rows.filter((r) => !r.counted && r.mover !== "done");
@@ -198,13 +197,12 @@ export function MergeBox({
 
   const action = (a: PathAction, primary: boolean): ReactNode => {
     if (actionInFooter(a.id)) return null; // branch moves live in the footer, in every state (see heroPlacement)
-    const isHistory = a.id === "history";
+    if (a.id === "history") return null; // the history is its own box under the description
     return (
       <Button key={a.id} size="regular" tone={primary ? "primary" : "plain"}
         disabled={busy || !!actionDisabled?.[a.id]} title={actionDisabled?.[a.id]} pending={pendingAction === a.id}
-        aria-expanded={isHistory ? historyOpen : undefined}
         style={primary ? { background: "var(--text)", color: "var(--bg)", borderColor: "var(--text)" } : undefined}
-        onClick={(e) => (isHistory ? setHistoryOpen((o) => !o) : onAction(a, e.currentTarget.getBoundingClientRect()))}>
+        onClick={(e) => onAction(a, e.currentTarget.getBoundingClientRect())}>
         {a.label}
       </Button>
     );
@@ -233,8 +231,8 @@ export function MergeBox({
                   </div>
                   {r.sub && <div className="text-[10.5px] mt-0.5 break-words" style={{ color: "var(--text3)" }}>{r.sub}</div>}
                   {r.link && (
-                    <button type="button" onClick={() => onAction({ id: "open-log", label: r.link!.label, url: r.link!.url })}
-                      className="agx-btn text-[10.5px] mt-1.5 underline underline-offset-2" style={{ color: "var(--text)" }}>{r.link.label}</button>
+                    <Button tone="quiet" size="compact" onClick={() => onAction({ id: "open-log", label: r.link!.label, url: r.link!.url })}
+                      className="mt-1.5 underline underline-offset-2" style={{ color: "var(--text)" }}>{r.link.label}</Button>
                   )}
                   {r.action && (
                     <div className="mt-2">{action(r.action, false)}</div>
@@ -246,35 +244,67 @@ export function MergeBox({
             );
   };
 
+  const rowTone = (t: Tone) => TONE_OF[t];
   return (
-    <section className="agx-mb rounded-xl overflow-hidden" style={{ border: EDGE, background: "var(--surface-card)" }}>
+    <div className="agx-mb flex flex-col gap-3.5">
       <style>{MERGEBOX_CSS}</style>
 
-      <div className="px-4 py-3.5 flex items-start gap-3" style={{ boxShadow: `inset 3px 0 0 ${tone.tint}`, background: hero.tone === "ready" ? wash(tone.tint, 7) : undefined }}>
+      {/* The verdict, in the mockup's one sentence. The path still says who has to move; its buttons (re-run, open the log, ask for a review, unstick) stay here. */}
+      <div className="agx-mb-big flex items-center gap-3 px-3.5 py-3 rounded-xl"
+        style={{ background: wash(tone.tint, 7), boxShadow: `inset 0 0 0 1px ${wash(tone.tint, 28)}` }}>
+        <span aria-hidden className="shrink-0 grid place-items-center rounded-lg"
+          style={{ width: 32, height: 32, background: "var(--bg)", color: tone.ink, boxShadow: "inset 0 0 0 1px currentColor" }}>
+          {verdict.tone === "ok" ? <DoneIcon size={ICON.sm} /> : <WarningIcon size={ICON.sm} />}
+        </span>
         <div className="min-w-0 flex-1">
-        <div className="text-[10px] font-semibold uppercase tracking-[.13em]" style={{ color: tone.ink }}>{hero.eyebrow}</div>
-        <h2 className="text-[17px] leading-snug font-semibold mt-1.5" style={{ color: "var(--text)" }}>
-          {hero.parts.map((p, k) => p.em ? <span key={k} style={{ color: tone.ink }}>{p.text}</span> : <span key={k}>{p.text}</span>)}
-        </h2>
-        {hero.warnings?.map((w) => (
-          <p key={w} className="text-[12px] font-semibold leading-snug mt-1.5 flex items-center gap-1.5" style={{ color: TONE.wait.ink }}>
-            <span aria-hidden className="shrink-0 flex"><WarningIcon size={ICON.sm} /></span>{w}
-          </p>
-        ))}
-        {hero.sub && <p className="text-[11.5px] leading-snug mt-1.5" style={{ color: "var(--text3)" }}>{hero.sub}</p>}
-        {(heroTop.length > 0 || hero.after) && (
-          <div className="flex items-center gap-2 flex-wrap mt-3">
-            {heroTop.map((a) => action(a, a === hero.primary))}
-            {hero.after && <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>{hero.after}</span>}
-          </div>
-        )}
+          <h2 className="text-[13px] leading-[1.45] m-0 font-normal" style={{ color: "var(--text)" }}>
+            <b className="font-semibold" style={{ color: tone.ink }}>{verdict.lead}</b> {verdict.text}
+          </h2>
+          {hero.warnings?.map((w) => (
+            <p key={w} className="text-[12px] font-semibold leading-snug mt-1.5 flex items-center gap-1.5" style={{ color: TONE.wait.ink }}>
+              <span aria-hidden className="shrink-0 flex"><WarningIcon size={ICON.sm} /></span>{w}
+            </p>
+          ))}
+          {verdict.tone !== "ok" && hero.sub && <p className="text-[11.5px] leading-snug mt-1" style={{ color: "var(--text3)" }}>{hero.sub}</p>}
+          {(heroTop.some((a) => a.id !== "history") || (verdict.tone !== "ok" && hero.after)) && (
+            <div className="flex items-center gap-2 flex-wrap mt-2">
+              {heroTop.map((a) => action(a, a === hero.primary))}
+              {verdict.tone !== "ok" && hero.after && <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>{hero.after}</span>}
+            </div>
+          )}
         </div>
-        {cornerNode && <div className="shrink-0 flex items-center gap-0.5 -mr-1.5 -mt-1">{cornerNode}</div>}
       </div>
-      {historyOpen && history}
 
-      <div className="agx-mb-stages" style={{ borderTop: LINE }}>
-        {stages.map((s, k) => <StageCell key={s.key} s={s} first={k === 0} />)}
+      {/* Checks, Review, Conflicts, Branch: one line each, the button that goes to the thing. */}
+      <div className="grid gap-1.5" data-overview-rows>
+        {summary.map((r) => {
+          const t = rowTone(r.tone);
+          return (
+            <div key={r.key} data-row={r.key} data-tone={r.tone} className="grid items-center gap-2.5 px-3 py-2 rounded-xl text-[12.5px] leading-snug"
+              style={{ gridTemplateColumns: "22px minmax(0,1fr) auto", background: wash(t.tint, 6), boxShadow: r.tone === "ok" ? undefined : `inset 0 0 0 1px ${wash(t.tint, 22)}`, color: "var(--text2)" }}>
+              <span aria-hidden className="grid place-items-center" style={{ color: t.tint }}>
+                {r.tone === "ok" ? <DoneIcon size={ICON.sm} /> : r.key === "checks" && r.tone === "warn" ? <ClockIcon size={ICON.sm} /> : <WarningIcon size={ICON.sm} />}
+              </span>
+              <div className="min-w-0 break-words"><b className="font-semibold" style={{ color: "var(--text)" }}>{r.label}</b> <span className="text-[11.5px]" style={{ color: "var(--text3)" }}>{r.text}</span></div>
+              <span className="flex items-center gap-1.5">
+                {r.rerun && onRerun && (
+                  <Button size="compact" disabled={busy || !!rerunDisabled} title={rerunDisabled ?? "Run the failed checks again"} onClick={onRerun}>Re-run failed</Button>
+                )}
+                {r.go && <Button size="compact" onClick={() => onGo(r.go!)}>{r.go === "checks" ? "See checks" : "Open conversation"}</Button>}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* The path under the rows: who has to move what, in the order it has to happen. */}
+      <details open={whoOpen} onToggle={(e) => setWhoOpen((e.currentTarget as HTMLDetailsElement).open)}
+        className="rounded-xl overflow-hidden" style={{ border: EDGE, background: "var(--surface-card)" }} data-overview-path>
+        <summary className="cursor-pointer px-3 py-2 text-[11.5px] font-semibold" style={{ color: "var(--text2)" }}>
+          Who moves it <span className="font-normal" style={{ color: "var(--text3)" }}>{count > 0 ? `— ${count} thing${count === 1 ? "" : "s"} between you and merge` : "— nothing stands between you and merge"}</span>
+        </summary>
+      <div className="agx-mb-stages grid gap-1.5 px-3 pb-3 pt-1">
+        {stages.map((s) => <StageCell key={s.key} s={s} />)}
       </div>
 
       {(counted.length > 0 || fyiRows.length > 0 || doneRows.length > 0 || showOther) && (
@@ -296,7 +326,7 @@ export function MergeBox({
           {doneRows.map((r) => renderRow(r))}
 
           {otherCi && showOther && (
-            <div className="agx-mb-row px-4 py-3" style={{ borderBottom: callout || extraNode ? LINE : undefined }}>
+            <div className="agx-mb-row px-4 py-3" style={{ borderBottom: callout ? LINE : undefined }}>
               <span className="pt-0.5"><Ring mode="queued" tint="var(--text3)" /></span>
               <div className="min-w-0">
                 <b className="text-[12.5px] font-semibold" style={{ color: "var(--text)" }}>Other CI</b>
@@ -312,7 +342,9 @@ export function MergeBox({
         </div>
       )}
 
-      {notes && <div style={{ borderTop: LINE }}>{notes}</div>}
+      </details>
+
+      {notes && <div className="rounded-xl overflow-hidden" style={{ border: EDGE }}>{notes}</div>}
 
       {/* ONE footer row. It was two: the merge group on one line and the
           secondary actions (update, draft, close) on a second, so the box
@@ -320,8 +352,8 @@ export function MergeBox({
           secondary group sits left, the merge group right, and the callout,
           when there is one, above the row on a line of its own; when they do not fit, the groups wrap under each other
           instead of squeezing. */}
-      {(callout || extraNode || noticeNode || showMergeRow) && (
-        <div className="flex items-center gap-x-3 gap-y-2 flex-wrap px-4 py-3" style={{ borderTop: LINE, background: wash("var(--border)", 12) }}>
+      {(callout || noticeNode) && (
+        <div className="flex items-center gap-x-3 gap-y-2 flex-wrap px-4 py-3 rounded-xl" style={{ border: EDGE, background: wash("var(--border)", 12) }}>
           {callout && (
             <span className="flex items-center gap-2 min-w-0 basis-full pl-3 text-[11.5px] font-semibold leading-snug"
               style={{ color: "var(--text)", boxShadow: `inset 2px 0 0 ${callout.tone === "warn" ? TONE.wait.tint : TONE.ok.tint}` }}>
@@ -331,11 +363,9 @@ export function MergeBox({
               {callout.text}
             </span>
           )}
-          {extraNode && <div className="flex items-center gap-1.5 flex-wrap min-w-0">{extraNode}</div>}
-          {showMergeRow && <span className="flex items-center gap-1.5 ml-auto flex-wrap">{mergeNode}{!path.ready && autoNode}</span>}
           {noticeNode && <div className="basis-full min-w-0 flex flex-col gap-1.5">{noticeNode}</div>}
         </div>
       )}
-    </section>
+    </div>
   );
 }

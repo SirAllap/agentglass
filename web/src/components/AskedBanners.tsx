@@ -23,8 +23,8 @@ import { AnimatePresence, motion } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { TOP_BAR_H } from "./TopBar.tsx";
 import { CloseButton } from "./CloseButton.tsx";
-import { ICON, HIT } from "../lib/iconSize.ts";
-import { EDGE } from "./workspace/Chrome.tsx";
+import { ICON } from "../lib/iconSize.ts";
+import { Button, Card, EDGE } from "./workspace/Chrome.tsx";
 import { actionTarget, primaryAction, secondaryAction, type AskedAlert, type NotifyAction } from "../../../shared/notifyPayload.ts";
 import { openTarget } from "../lib/sysNotify.ts";
 import { api } from "../lib/api.ts";
@@ -50,6 +50,9 @@ function splitTitle(title: string): { verdict: string; object: string } {
   return cut < 0 ? { verdict: title, object: "" } : { verdict: title.slice(0, cut), object: title.slice(cut) };
 }
 
+/** The kit's Card, animated: the banner and the compact row are cards, not copies of one. */
+const MCard = motion.create(Card);
+
 /** Rises on arrival and leaves the way it came; shared by the card and the compact row. */
 const MOTION = {
   initial: { opacity: 0, y: -12 },
@@ -66,23 +69,23 @@ const MOTION = {
  * older ones keep what is needed to act (what it was and one press to its
  * target) and give back the rest. The facts and the re-run are on the card, not here.
  */
-function Row({ a }: { a: AskedAlert }) {
+function CompactAlert({ a }: { a: AskedAlert }) {
   const tone = a.ok ? "var(--success)" : "var(--error)";
   const ink = a.ok ? "var(--success-ink)" : "var(--error-ink)";
   const first = primaryAction(a.payload);
   const to = first ? actionTarget(first) : null;
   const { verdict, object } = splitTitle(a.payload.title);
   return (
-    <motion.div
+    <MCard
       layout
+      compact
       role="alert"
       tabIndex={0}
       {...MOTION}
       onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); closeAsked(a.id, false); } }}
-      className="flex items-center gap-2 rounded-lg w-full pl-3 pr-1.5"
+      className="flex items-center gap-2 w-full"
       style={{
-        pointerEvents: "auto", height: ROW_H,
-        background: "var(--surface-card)",
+        pointerEvents: "auto", height: ROW_H, padding: "0 6px 0 12px",
         borderWidth: 1, borderStyle: "solid", borderColor: `color-mix(in srgb, ${tone} 45%, var(--border))`,
         boxShadow: "0 10px 24px -16px var(--shadow)",
       }}
@@ -92,12 +95,10 @@ function Row({ a }: { a: AskedAlert }) {
         <span style={{ color: ink }}>{verdict}</span>{object}
       </span>
       {to && (
-        <button type="button" className="rounded-md px-2.5 text-[11.5px] font-semibold whitespace-nowrap"
-          style={{ height: HIT - 2, background: ink, color: "var(--bg)", cursor: "pointer" }}
-          onClick={() => { closeAsked(a.id, true); openTarget(to); }}>Open</button>
+        <Button size="compact" tint={ink} solid onClick={() => { closeAsked(a.id, true); openTarget(to); }}>Open</Button>
       )}
       <CloseButton onClick={() => closeAsked(a.id, false)} title="Close" className="agx-note-btn agx-note-icon shrink-0" />
-    </motion.div>
+    </MCard>
   );
 }
 
@@ -122,17 +123,16 @@ function Banner({ a }: { a: AskedAlert }) {
   };
 
   return (
-    <motion.div
+    <MCard
       layout
       role="alert"
       tabIndex={0}
       {...MOTION}
       onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); closeAsked(a.id, false); } }}
-      className="flex gap-3 rounded-xl w-full overflow-hidden"
+      className="flex gap-3 w-full overflow-hidden"
       style={{
         pointerEvents: "auto",
         padding: "14px 10px 14px 0",
-        background: "var(--surface-card)",
         // The verdict tints the edge: the one border here that is not the house pair.
         borderWidth: 1, borderStyle: "solid", borderColor: `color-mix(in srgb, ${tone} 45%, var(--border))`,
         boxShadow: `0 14px 34px -14px color-mix(in srgb, ${tone} 55%, transparent), 0 22px 48px -20px var(--shadow)`,
@@ -157,21 +157,17 @@ function Banner({ a }: { a: AskedAlert }) {
         {(primary || secondary) && (
           <span className="flex items-center gap-2 flex-wrap mt-2.5">
             {primary && (
-              <button type="button" className="rounded-md px-3 text-[12px] font-semibold whitespace-nowrap" disabled={busy}
-                style={{ height: HIT + 2, background: ink, color: "var(--bg)", cursor: "pointer" }}
-                onClick={() => void act(primary)}>{primary.label}</button>
+              <Button tint={ink} solid disabled={busy} onClick={() => void act(primary)}>{primary.label}</Button>
             )}
             {secondary && (
-              <button type="button" className="rounded-md px-3 text-[12px] font-semibold whitespace-nowrap" disabled={busy}
-                style={{ height: HIT + 2, background: "var(--surface-card)", color: "var(--text)", border: EDGE, cursor: "pointer" }}
-                onClick={() => void act(secondary)}>{busy ? "Re-running…" : secondary.label}</button>
+              <Button disabled={busy} onClick={() => void act(secondary)}>{busy ? "Re-running…" : secondary.label}</Button>
             )}
           </span>
         )}
         {err && <span className="text-[11.5px] mt-1.5" style={{ color: "var(--error-ink)" }}>{err}</span>}
       </div>
       <CloseButton onClick={() => closeAsked(a.id, false)} title="Close" className="agx-note-btn agx-note-icon shrink-0 self-start" />
-    </motion.div>
+    </MCard>
   );
 }
 
@@ -189,7 +185,7 @@ export function AskedBanners() {
         style={{ top: TOP_BAR_H + 10, left: "50%", transform: "translateX(-50%)", width: "min(620px, calc(100vw - 32px))", pointerEvents: "none" }}
       >
         <AnimatePresence initial={false}>
-          {shown.map((a, i) => (i === 0 ? <Banner key={a.id} a={a} /> : <Row key={a.id} a={a} />))}
+          {shown.map((a, i) => (i === 0 ? <Banner key={a.id} a={a} /> : <CompactAlert key={a.id} a={a} />))}
         </AnimatePresence>
         {more > 0 && (
           <span className="text-[11px] rounded-full px-2.5 py-0.5"

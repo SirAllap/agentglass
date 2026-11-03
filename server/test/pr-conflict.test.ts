@@ -139,6 +139,13 @@ describe("preparing a conflict", () => {
     expect(again.conflicts).toEqual(["f.txt"]);
   });
 
+  it("says what to do when the branch is not in this checkout, not the raw git line", () => {
+    const r = prepareConflictMerge(repo, "orbit-1046-settings-keys", "main");
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("not fetched");
+    expect(r.error).not.toContain("fatal:");
+  });
+
   it("refuses a branch name that is not one", () => {
     expect(prepareConflictMerge(repo, "feature; rm -rf /", "main").ok).toBe(false);
     expect(prepareConflictMerge(repo, "feature", "--upload-pack=evil").ok).toBe(false);

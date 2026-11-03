@@ -66,13 +66,13 @@ describe("nothing outside a click runs it", () => {
   it("the panel opens the dialog from the row's button or the door, and gives it the gate as it stands", async () => {
     const text = await read("../src/components/PrPanel.tsx");
     const opens = [...text.matchAll(/\bopenUnstick\(/g)].length;
-    expect(opens).toBe(1); // the agent's door; the button passes the function itself, below
+    expect(opens).toBe(2); // the agent's door and the card menu's Unstick (once the page is open); the button passes the function itself, below
     expect(text).toContain("onUnstick={openUnstick}");
     expect(text).toContain("{unstickShown && (");
     // The dialog keeps what it was opened on: it must not vanish or change its question after the run re-reads the pull request.
     expect(text).not.toContain("{unstickOpen &&");
     expect((await read("../src/components/UnstickDialog.tsx"))).toContain("useState(() => ({ gate: props.gate, facts: props.facts }))");
-    expect(text).toContain("unstickOffer={!!unstickGate?.show}");
+    expect(text).toContain("unstickOffer={!!unstickGate?.show && !readOnly}");
   });
   it("only a stuck row carries the button, and only when the gate said so", () => {
     const base = { state: "OPEN", mergeState: "UNKNOWN", mergeable: "UNKNOWN", baseRefName: "main", unknownSince: 1, now: 31 * 60_000 + 1 };

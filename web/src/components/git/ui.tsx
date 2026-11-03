@@ -35,12 +35,18 @@
  */
 import type { CSSProperties, ReactNode } from "react";
 import { HIT, ICON } from "../../lib/iconSize.ts";
-import { Button, CHIP, LINE } from "../workspace/Chrome.tsx";
+import { Badge, Button, CHIP, CTRL_H, LINE } from "../workspace/Chrome.tsx";
 
 export const edge = (pct: number): string => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 export const wash = (token: string, pct: number): string => `color-mix(in srgb, var(${token}) ${pct}%, transparent)`;
+/** The left rule of an inspector pane, so the two panes that draw one cannot drift apart. */
+export const INSPECTOR_RULE = `1px solid ${wash("--text", 8)}`;
 
 export type Tone = "neutral" | "good" | "warn" | "bad" | "accent";
+
+/** `--*-ink` is lifted against `--bg3`; on the tint a chip draws under itself it still read 3.3-4.3:1.
+ *  Pulled toward the theme's text, as `--merged-ink` is, it clears 4.5:1 on that wash in both themes. */
+export const inkOver = (token: string): string => `color-mix(in srgb, var(${token}-ink) 70%, var(--text))`;
 
 const TONE: Record<Tone, string> = {
   neutral: "var(--text3)",
@@ -48,6 +54,16 @@ const TONE: Record<Tone, string> = {
   warn: "var(--warning)",
   bad: "var(--error)",
   accent: "var(--primary)",
+};
+
+/** The same tones as TEXT: `--*-ink` is the tint lifted until it clears 4.5:1 on the palest ground a
+ *  chip's wash sits on. A raw `--error` over its own 14% wash measured 3.0:1 in Porcelain. */
+const INK: Record<Tone, string> = {
+  neutral: "var(--text2)",
+  good: inkOver("--success"),
+  warn: inkOver("--warning"),
+  bad: inkOver("--error"),
+  accent: inkOver("--primary"),
 };
 
 /**
@@ -58,7 +74,7 @@ const TONE: Record<Tone, string> = {
  * with dots on its own line, and deliberately not aligned into columns: the
  * facts about a branch are not a table, they are a sentence.
  */
-export function Row({ rail, title, chips, facts, action, selected, current, onClick, onContextMenu, title2, gutter, variant = "card" }: {
+export function Row({ rail, title, chips, facts, action, selected, current, onClick, onContextMenu, title2, gutter, variant = "card", lead, trail, dim, picked, pickMark }: {
   rail?: Tone;
   title: ReactNode;
   chips?: ReactNode;
@@ -79,7 +95,11 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
    * of gap, five hundred times. There was room to draw it outside the card, so
    * it is.
    */
-  gutter?: ReactNode;
+  gutter?: ReactNode | ((cursor: boolean) => ReactNode);
+  /** `line` with a gutter: the row is in the log's pick set (a tint of its own, under the cursor ring). */
+  picked?: boolean;
+  /** `line` with a gutter: the pick's number in graph order, drawn on the row's left edge. */
+  pickMark?: number;
   /**
    * `card` for a list of THINGS — a branch, a worktree, a stash. Each is a
    * discrete object with its own state, and a bounded card is what says so.
@@ -91,9 +111,73 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
    * they are not. It also cost 40% of the vertical space — seventeen commits on
    * a 1000px screen where a line list shows thirty.
    */
-  variant?: "card" | "line";
+  variant?: "card" | "line" | "item";
+  /** `item` only: the leading column (a tick and a tile). */
+  lead?: ReactNode;
+  /** `item` only: what sits at the right edge before the action, such as ahead/behind. */
+  trail?: ReactNode;
+  /** `item` only: a row that is done with (merged) steps back. */
+  dim?: boolean;
 }) {
+  if (variant === "item") {
+    return (
+      <div className="group git-item min-w-0" title={title2} onClick={onClick} onContextMenu={onContextMenu}
+        style={{
+          display: "grid", gridTemplateColumns: "auto minmax(0, 1fr) auto", alignItems: "center", gap: 10,
+          minHeight: 44, padding: "6px 10px", borderRadius: 10, cursor: "default", opacity: dim && !selected ? 0.62 : 1,
+          background: selected ? wash("--primary", 7) : "transparent",
+          boxShadow: selected ? `inset 0 0 0 1px ${wash("--primary", 34)}` : "none",
+          transition: "background .12s ease",
+        }}>
+        <span className="flex items-center gap-1.5">{lead}</span>
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="truncate text-[12.5px] font-medium"
+              style={{ color: "var(--text)", fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>{title}</span>
+            {chips}
+          </div>
+          {!!facts?.length && (
+            <div className="flex items-center gap-1.5 mt-0.5 min-w-0 text-[11.5px]" style={{ color: "var(--text3)", fontFamily: "var(--font-sans)" }}>
+              {facts.filter(Boolean).map((f, i) => (
+                <span key={i} className="flex items-center gap-1.5 min-w-0">
+                  {i > 0 && <span style={{ opacity: 0.45 }}>·</span>}
+                  <span className="truncate">{f}</span>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">{trail}{action}</div>
+      </div>
+    );
+  }
   const line = variant === "line";
+  if (line && gutter) {
+    /* The log row, as drawn in the approved Log: a graph gutter, the refs and the subject, and
+       avatar, time and sha at the right. The cursor is a tint with a ring; a pick is its own tint. */
+    return (
+      <div className="git-line group min-w-0 text-[12px]" onClick={onClick} onContextMenu={onContextMenu} title={title2}
+        style={{
+          position: "relative", display: "grid", gridTemplateColumns: "86px minmax(0, 1fr) auto", alignItems: "center", gap: 8,
+          height: CTRL_H.large, padding: "0 10px 0 4px", borderRadius: 8, color: "var(--text2)", cursor: "default",
+          background: picked ? wash("--info", 6) : selected ? wash("--primary", 7) : "transparent",
+          boxShadow: selected ? `inset 0 0 0 1px ${wash("--primary", 34)}` : undefined,
+          transition: "background .12s ease",
+        }}>
+        {!!pickMark && (
+          <span aria-hidden className="absolute grid place-items-center font-semibold text-[9.5px]" title="Applied in this order, oldest first"
+            style={{ left: -2, top: 8, width: 16, height: 16, borderRadius: 5, background: "var(--info)", color: "var(--on-primary)", fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>{pickMark}</span>
+        )}
+        <span className="relative self-stretch" aria-hidden>{typeof gutter === "function" ? gutter(!!selected) : gutter}</span>
+        <span className="flex items-center gap-1.5 min-w-0">{chips}<span className="min-w-0 truncate">{title}</span></span>
+        {!!facts?.length && (
+          <span className="flex items-center gap-2.5 text-[11px] tabular-nums shrink-0" style={{ color: "var(--text3)", fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>
+            {facts.filter(Boolean).map((f, i) => <span key={i} className="flex items-center">{f}</span>)}
+          </span>
+        )}
+      </div>
+    );
+  }
   const style: CSSProperties = line ? {
     position: "relative",
     display: "grid",
@@ -147,19 +231,13 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
     cursor: "default",
     transition: "background .14s ease, border-color .14s ease",
   };
-  /* Inside a gutter the wrapper above owns the ground, so the body must not
-     paint a second one — two tints of the same colour do not cancel out, they
-     stack, and the row came out a shade brighter than the highlight it was
-     supposed to match. */
-  if (gutter && line) { style.background = "transparent"; }
-
   const body = (
     // `git-card` is what the stylesheet hangs hover and reduced-motion off:
     // hovering lifts the border and the ground a step, which is the feedback a
     // list of identical cards needs to feel like it is under your hand rather
     // than printed on the page.
-    <div className={line ? `${gutter ? "" : "git-line "}group min-w-0` : "git-card group"} style={style}
-      onClick={gutter ? undefined : onClick} onContextMenu={gutter ? undefined : onContextMenu} title={gutter ? undefined : title2}>
+    <div className={line ? "git-line group min-w-0" : "git-card group"} style={style}
+      onClick={onClick} onContextMenu={onContextMenu} title={title2}>
       {/* The rail. Sits inside the border radius rather than beside it, so a
           list of them reads as one column of colour down the left. */}
       {!line && (
@@ -184,7 +262,7 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
             two lines per commit is what made seventeen of them fill a screen,
             and "21 hours ago · abc6072 · Manuel" is a caption, not a paragraph. */}
         {!!facts?.length && !line && (
-          <div className="flex items-center gap-1.5 mt-0.5 min-w-0 text-[10px]" style={{ color: "var(--text4)" }}>
+          <div className="flex items-center gap-1.5 mt-0.5 min-w-0 text-[10px]" style={{ color: "var(--text3)" }}>
             {facts.filter(Boolean).map((f, i) => (
               <span key={i} className="flex items-center gap-1.5 min-w-0">
                 {i > 0 && <span style={{ opacity: 0.45 }}>·</span>}
@@ -210,28 +288,29 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
     </div>
   );
 
-  if (!gutter) return body;
-  /*
-   * The gutter is a flex sibling with `items-stretch`, so it is exactly as tall
-   * as the row whatever the row decides to be — which is what keeps five hundred
-   * little drawings joined into one.
-   *
-   * The selection moves OUT here with it. A tint that stopped where the graph
-   * began drew a line down the middle of the row it was meant to pick out, and
-   * left the one dot the reader is looking for outside the highlight — on the
-   * very screen where the complaint was that finding it is hard.
-   */
+  return body;
+}
+
+/** The 22px tile a branch row leads with: the icon in the row's tone on a faint wash of it. */
+export function Tile({ tone, children }: { tone: string; children: ReactNode }) {
   return (
-    <div className={`${line ? "git-line" : ""} flex items-stretch min-w-0`}
-      style={{
-        borderRadius: 6,
-        background: selected ? wash("--primary", 16) : "transparent",
-        transition: "background .12s ease",
-      }}
-      onClick={onClick} onContextMenu={onContextMenu} title={title2}>
-      <span className="shrink-0 relative self-stretch" aria-hidden>{gutter}</span>
-      <div className="min-w-0 flex-1">{body}</div>
-    </div>
+    <span aria-hidden className="grid place-items-center shrink-0" style={{
+      width: 22, height: 22, borderRadius: 7, color: tone,
+      background: `linear-gradient(180deg, var(--surface-card), color-mix(in srgb, ${tone} 8%, var(--surface-card)))`,
+      boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${tone} 24%, transparent)`,
+    }}>{children}</span>
+  );
+}
+
+/** ↑ahead ↓behind in mono, green and blue; "in sync" when both are nothing. */
+export function Drift({ ahead, behind, title }: { ahead: number; behind: number; title?: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 text-[11px] tabular-nums" title={title}
+      style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", color: "var(--text3)" }}>
+      {ahead > 0 && <span style={{ color: inkOver("--success") }}>↑{ahead}</span>}
+      {behind > 0 && <span style={{ color: inkOver("--info") }}>↓{behind}</span>}
+      {!ahead && !behind && <span style={{ color: "var(--text4)" }}>in sync</span>}
+    </span>
   );
 }
 
@@ -239,27 +318,15 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
  *  coloured — everything else on the card is text or grey. */
 export function Chip({ tone = "neutral", children, title, clip }: {
   tone?: Tone; children: ReactNode; title?: string;
-  /** This chip carries arbitrary text — a commit's refs, not a status word.
-   *  It gives up its `shrink-0` and ellipsizes instead, because a chip that
-   *  refuses to shrink in a flex row does not get clipped by the row: it
-   *  OVERFLOWS it and paints over whatever is beside it. Which is what a
-   *  branch name of sixty characters did to the date and author next to it. */
+  /** This chip carries arbitrary text — a commit's refs, not a status word. See `Badge`. */
   clip?: boolean;
 }) {
+  // A status word is a LABEL, not a control: `.chip`'s geometry (6px radius, no bold), not a
+  // stadium as loud as the branch name it describes. `Badge` owns the shape.
   return (
-    /*
-     * `.chip`'s own geometry: 6px radius, 1px/6px padding, no bold.
-     *
-     * A status word is a LABEL — not a control and not a badge. It was a
-     * stadium at 2px/8px in semibold, which made `⎇ master` and `you are here`
-     * as loud as the branch name they were describing, and put a third radius
-     * on a screen that already had two.
-     */
-    <span className={`text-[9.5px] px-1.5 py-px rounded-md whitespace-nowrap ${clip ? "min-w-0 truncate" : "shrink-0"}`}
-      style={{ color: TONE[tone], background: wash(tone === "neutral" ? "--text" : `--${tone === "good" ? "success" : tone === "warn" ? "warning" : tone === "bad" ? "error" : "primary"}`, tone === "neutral" ? 10 : 14) }}
-      title={title}>
+    <Badge tint={INK[tone]} fill={tone === "neutral" ? "var(--text)" : TONE[tone]} wash={tone === "neutral" ? 10 : 14} clip={clip} title={title}>
       {children}
-    </span>
+    </Badge>
   );
 }
 
@@ -310,8 +377,10 @@ export function TickBox({ on, onClick, title }: { on: boolean; onClick: (e: Reac
 }
 
 /** A heading over a group of cards. */
-export function GroupHead({ label, count, note, folded, onToggle }: {
+export function GroupHead({ label, count, note, folded, onToggle, raw }: {
   label: string; count?: number; note?: ReactNode; folded?: boolean; onToggle?: () => void;
+  /** Drawn as typed (`fix/`), not upper-cased like a heading. */
+  raw?: boolean;
 }) {
   const inner = (
     <>
@@ -325,7 +394,7 @@ export function GroupHead({ label, count, note, folded, onToggle }: {
           <path d="M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       )}
-      <span className="text-[10px] uppercase tracking-[0.11em] font-medium" style={{ color: "var(--text2)" }}>{label}</span>
+      <span className={`text-[10px] ${raw ? "" : "uppercase "}tracking-[0.11em] font-medium`} style={{ color: "var(--text2)" }}>{label}</span>
       {count != null && (
         <span className="text-[9.5px] tabular-nums px-1.5 py-px rounded-full"
           style={{ color: "var(--text3)", background: wash("--text", 9) }}>{count}</span>

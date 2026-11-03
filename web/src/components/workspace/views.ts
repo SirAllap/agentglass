@@ -1,9 +1,10 @@
 import type { ComponentType } from "react";
 import type { ViewId } from "../../../../shared/types.ts";
-import { GitIcon, DiffIcon, DockerIcon, TerminalIcon, PrIcon, BrowserIcon, FilesIcon, DashIcon, IssuesIcon, LanternIcon, PluginsIcon } from "./icons.tsx";
+import { GitIcon, DiffIcon, DockerIcon, TerminalIcon, PrIcon, BrowserIcon, DashIcon, IssuesIcon, AgentsIcon, PluginsIcon, FlightPlanIcon, SkillsIcon, ManifestIcon } from "./icons.tsx";
 import { HAS_BROWSER } from "../../lib/desktop.ts";
 import { IS_DEMO } from "../../lib/demo.ts";
 import { canonView } from "../../../../shared/uiActions.ts";
+import { warm as warmDocker } from "../../lib/dockerCount.ts";
 
 /** Re-exported from shared so the server (POST /control validation) and the UI
  *  name one set of views. */
@@ -20,7 +21,7 @@ export type ViewDef = {
   /**
    * Where this ships in the rail — the default drawer, not a fixed one.
    *
-   * "utility" sits at the bottom with settings, ports and resources; everything
+   * "utility" sits at the bottom with settings and the machine panel; everything
    * else is at the top. The line is not importance, it is what you are doing
    * with the window: the top is where you WORK — the tree, the diff, the shell,
    * the containers — and the bottom is what you go and LOOK at. Mixing the two
@@ -33,6 +34,13 @@ export type ViewDef = {
    *  rail's back pocket — the view still exists and is still reachable from the
    *  restore menu, it just does not take a seat by default. */
   group?: "utility" | "hidden";
+  /** Opens a dialog over the workspace instead of becoming the current view.
+   *  It still sits in a drawer and moves like any other entry, but it is never
+   *  "the view you are on", so it takes no ⌘ number and ⌘[ / ⌘] skip it. */
+  modal?: true;
+  /** Called when the pointer or focus reaches the button, to fetch whatever its
+   *  tooltip adds (see lib/railTips.ts). Absent for a view with nothing to add. */
+  warmTip?: () => void;
 };
 
 /** Order is the rail's order, and ⌘1..⌘N index into it.
@@ -52,25 +60,18 @@ export const VIEWS: ViewDef[] = [
   // First, and it leads for a reason: this is the app's own screen — the fleet,
   // the spend, the history — and it used to BE the app. It is a view now, but a
   // view you can always get back to in one key.
-  { id: "dash", label: "Dashboard", key: "1", icon: DashIcon, hint: "The fleet, the spend and the history — every panel, unchanged", group: "utility" },
+  { id: "dash", label: "Starboard", key: "1", icon: DashIcon, hint: "The control deck: crew, needs-you, tools, spend and live events", group: "utility" },
   { id: "git", label: "Git", key: "g", icon: GitIcon, hint: "Stage, commit, push/pull the working tree" },
   { id: "diff", label: "Diff", key: "d", icon: DiffIcon, hint: "Review & commit every diff the fleet made" },
   { id: "pr", label: "Pull requests", key: "p", icon: PrIcon, hint: "Review pull requests without leaving for the browser" },
   { id: "tasks", label: "Tasks", key: "i", icon: IssuesIcon, hint: "Everything you owe — GitHub issues and your own list, in one place" },
-  { id: "docker", label: "Docker", key: "o", icon: DockerIcon, hint: "Containers, logs, stats & actions" },
+  { id: "docker", label: "Docker", key: "o", icon: DockerIcon, hint: "Containers, logs, stats & actions", group: "utility", warmTip: () => { void warmDocker(); } },
   { id: "term", label: "Term", key: "t", icon: TerminalIcon, hint: "A real shell in any repo/worktree" },
   ...(HAS_BROWSER || IS_DEMO
     ? [{ id: "browser" as const, label: "Browser", key: "b", icon: BrowserIcon, hint: "A page, without leaving the app", group: "utility" as const }]
     : []),
-  // Appended, for the same reason Browser was: ⌘1..⌘N index into this order,
-  // and inserting anywhere above renumbers a chord somebody already has in
-  // their fingers. Anyone who has ever dragged the rail gets it appended to
-  // their own order regardless — loadViewOrder puts unknown views at the end —
-  // so leading with it here would only have renumbered the people who never
-  // touched it.
-  { id: "files", label: "Files", key: "e", icon: FilesIcon, hint: "Browse and search a checkout — and open a file to edit" },
-  // Appended for the same reason Files was — a number already in somebody's
-  // fingers is not worth taking away — and it ships in the bottom drawer for
+  // Appended, because ⌘1..⌘N index into this order and a number already in
+  // somebody's fingers is not worth taking away — and it ships in the bottom drawer for
   // the reason set out on `group` above: this is a thing you go and LOOK at.
   // It is a scorecard. It cannot stage, commit, launch or answer anything, and
   // a seat among the views you WORK in would be a promise the view does not
@@ -86,11 +87,21 @@ export const VIEWS: ViewDef[] = [
    * question and listed the same agents twice. Their old names still open this
    * one: see VIEW_ALIASES in shared/uiActions.ts.
    */
-  { id: "agents", label: "Agents", key: "l", icon: LanternIcon, hint: "Who is working, who needs you, what is left behind, and who is minding the project", group: "utility" },
+  { id: "agents", label: "Agents", key: "l", icon: AgentsIcon, hint: "Who is working, who needs you, what is left behind, and who is minding the project", group: "utility" },
+  // Immediately after Agents, in the same drawer: both answer "what is the
+  // field doing", and this is the one you LOOK at after an agent lands.
+  { id: "manifest", label: "Manifest", key: "m", icon: ManifestIcon, hint: "What got done, what is running, and what is waiting for your verdict", group: "hidden" },
   // Appended, same reason as every entry above it: a number already in
   // somebody's fingers is not renumbered. Bottom drawer, because it is where
   // plugins draw rather than a place you work in by default.
   { id: "plugins", label: "Plugins", key: "x", icon: PluginsIcon, hint: "Panels your plugins draw — drawn by this app, never run in it", group: "utility" },
+  // Appended like every entry above it. On the rail by default so the flagship
+  // feature is one click away; Settings → Sidebar can hide or move it like any other.
+  { id: "flightPlan", label: "Flight plan", key: "f", icon: FlightPlanIcon, hint: "A fresh reviewer reads every plan before it launches, and you say Go", group: "utility" },
+  // The catalog is reference, not a place you work in: it opens over the
+  // workspace and hands it straight back. It ships in the top drawer like the
+  // rest and can be hidden or moved from there.
+  { id: "skills", label: "Skills catalog", key: "k", icon: SkillsIcon, hint: "What this fleet can do — every skill and command", modal: true, group: "hidden" },
 ];
 
 export const VIEW_IDS = VIEWS.map((v) => v.id);
@@ -128,10 +139,22 @@ const LEGACY_ORDER_KEY = "agentglass.workspace.order";
 
 /** What the rail looks like before anyone touches it. Also the server snapshot
  *  for useSyncExternalStore, where localStorage does not exist. */
+/** The order a fresh install draws, top to bottom. The registry above keeps its
+ *  own order because ⌘1..⌘N index into it and a number in somebody's fingers is
+ *  not renumbered; the rail is what a person sees, and it is set here. A view
+ *  missing from this list keeps the registry's order after the ones named. */
+const SHIPPED_ORDER: ViewId[] = [
+  "term", "pr", "tasks", "git", "diff",
+  "browser", "agents", "flightPlan", "docker", "dash", "plugins",
+  "manifest", "skills",
+];
+const shippedRank = (v: ViewDef) => { const i = SHIPPED_ORDER.indexOf(v.id); return i < 0 ? SHIPPED_ORDER.length : i; };
+const inShippedOrder = (list: ViewDef[]) => [...list].sort((a, b) => shippedRank(a) - shippedRank(b));
+
 export const SHIPPED_RAIL: RailLayout = {
-  work: VIEWS.filter((v) => !v.group),
-  utility: VIEWS.filter((v) => v.group === "utility"),
-  hidden: VIEWS.filter((v) => v.group === "hidden"),
+  work: inShippedOrder(VIEWS.filter((v) => !v.group)),
+  utility: inShippedOrder(VIEWS.filter((v) => v.group === "utility")),
+  hidden: inShippedOrder(VIEWS.filter((v) => v.group === "hidden")),
 };
 
 /**
@@ -194,7 +217,7 @@ function buildRail(): RailLayout {
     let legacy: unknown = null;
     try { legacy = JSON.parse(localStorage.getItem(LEGACY_ORDER_KEY) || "null"); } catch { /* absent or corrupt */ }
     const flat = pick(legacy);
-    for (const v of VIEWS) if (!taken.has(v.id)) { taken.add(v.id); flat.push(v); }
+    for (const v of inShippedOrder(VIEWS)) if (!taken.has(v.id)) { taken.add(v.id); flat.push(v); }
     return {
       work: flat.filter((v) => !v.group),
       utility: flat.filter((v) => v.group === "utility"),
@@ -272,13 +295,13 @@ export const railCustomised = () => !sameRail(railIds(loadRail()), railIds(SHIPP
  *
  * The numbers belong to the work drawer alone. Down at the bottom they were
  * numbering the wrong things: the dashboard and a web page sat among
- * settings and ports, none of which has ever had a number, and a ⌘6 that opens
+ * settings and the machine panel, none of which has ever had a number, and a ⌘6 that opens
  * a browser reads as an accident of list position rather than a shortcut
  * anybody chose. Moving a view down there now takes its number away, which is
  * the honest meaning of "this is not where I work".
  */
 export function workIds(): ViewId[] {
-  if (!cachedWork) cachedWork = loadRail().work.map((v) => v.id);
+  if (!cachedWork) cachedWork = loadRail().work.filter((v) => !v.modal).map((v) => v.id);
   return cachedWork;
 }
 
@@ -287,7 +310,7 @@ export function workIds(): ViewId[] {
 export function visibleIds(): ViewId[] {
   if (!cachedVisible) {
     const r = loadRail();
-    cachedVisible = [...r.work, ...r.utility].map((v) => v.id);
+    cachedVisible = [...r.work, ...r.utility].filter((v) => !v.modal).map((v) => v.id);
   }
   return cachedVisible;
 }

@@ -46,9 +46,12 @@ describe("values that can outgrow their cell", () => {
   test("the issue strip's cells can shrink AND clip", () => {
     /* The same shape, one panel over: a three-column grid holding
        `assignees.join(", ")`. It had neither half. */
-    const fn = tasks.slice(tasks.indexOf("const Field = ({ k, children }"), tasks.indexOf("const Field = ({ k, children }") + 500);
-    expect(fn, "a grid cell without min-w-0 pushes its neighbour instead of shrinking").toContain("min-w-0");
-    expect(fn, "and without a wrap rule it paints over it").toMatch(/truncate|overflowWrap/);
+    /* The issue pane's row is a label/value grid whose value column is `minmax(0, 1fr)` (it can shrink),
+       and the value wraps rather than painting over its neighbour: the pair has to be there. */
+    const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
+    const row = css.slice(css.indexOf(".agx-lrow {"), css.indexOf("}", css.indexOf(".agx-lrow {")));
+    expect(row, "a grid column without minmax(0, 1fr) pushes its neighbour instead of shrinking").toContain("minmax(0, 1fr)");
+    expect(tasks, "and the assignees value wraps").toContain('<span>Assignees</span><div className="min-w-0 break-words">');
   });
 
   test("the band's value wrapper stretches to its 210px cap instead of sizing to its own content", () => {
@@ -67,7 +70,10 @@ describe("values that can outgrow their cell", () => {
     /* Code only — my own explaining comment quotes `alignSelf: "flex-start"`
        verbatim as the thing NOT to do, which would trip this same check. */
     const block = tasks.slice(start, start + 1400).replace(/\/\*[\s\S]*?\*\//g, "");
-    expect(block, "maxWidth: 210 is the cap this wrapper must actually stretch to fill").toContain("maxWidth: 210");
+    /* The cap is the label-left row's own value column now (minmax(0, 1fr) beside a
+       92px label, index.css .agx-lrow): a track that can shrink, which is what
+       lets max-w-full on the value clip against something definite. */
+    expect(block, "the value sits in the row's shrinkable column").toContain("agx-lrow min-w-0");
     expect(block, 'alignSelf: "flex-start" opts the value out of stretch, so max-w-full clips against nothing')
       .not.toContain("flex-start");
   });

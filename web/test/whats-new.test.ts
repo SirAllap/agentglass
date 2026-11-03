@@ -112,3 +112,18 @@ describe("notes on demand", () => {
     expect(wn.installedNotes("v0.3.0", 0, "v0.4.0")?.tag).toBe("v0.3.0");
   });
 });
+
+describe("which release gets the 1.0 moment", () => {
+  it("is the first 1.0 only, with or without the v", () => {
+    expect(wn.isCelebrationTag("v1.0.0")).toBe(true);
+    expect(wn.isCelebrationTag("1.0.0")).toBe(true);
+  });
+
+  it("leaves every other tag on the plain notes", () => {
+    // A patch and the next minor are ordinary updates; v0.10.0 must not match
+    // by containing "1.0" as a substring.
+    for (const tag of ["v1.0.1", "v1.1.0", "v2.0.0", "v0.10.0", "v0.1.0", "v11.0.0", ""]) {
+      expect(wn.isCelebrationTag(tag)).toBe(false);
+    }
+  });
+});

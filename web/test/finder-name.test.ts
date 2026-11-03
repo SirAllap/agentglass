@@ -25,10 +25,9 @@ const files = ["web/src", "shared", "server/src", "scripts", "docs", "skills", "
   .concat(["README.md", "CONTRIBUTING.md", "SECURITY.md"].map((f) => join(root, f)));
 
 describe("the finder is called the finder", () => {
-  test("no prose says 'file palette' or 'Find a file' (the Files view's own search box is another thing)", () => {
+  test("no prose says 'file palette' or 'Find a file'", () => {
     const bad: string[] = [];
     for (const f of files) {
-      if (f.endsWith("web/src/components/FilesPanel.tsx")) continue;
       readFileSync(f, "utf8").split("\n").forEach((l, i) => { if (/file palette|Find a file/i.test(l)) bad.push(`${f.slice(root.length)}:${i + 1}`); });
     }
     expect(bad).toEqual([]);

@@ -55,3 +55,8 @@ export function writeClosed(repo: string, number: number, headSha: string, store
     ON CONFLICT(repo, number) DO UPDATE SET head_sha = excluded.head_sha, body = excluded.body, read_at = excluded.read_at`)
     .run(repo, number, headSha, JSON.stringify(stored), Date.now());
 }
+
+/** Drop a pull request's cached row (a cleanup after it ends); returns the rows removed. */
+export function forgetClosed(repo: string, number: number): number {
+  return db.query(`DELETE FROM pr_closed WHERE repo = ? AND number = ?`).run(repo, number).changes;
+}

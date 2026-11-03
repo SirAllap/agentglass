@@ -31,9 +31,9 @@ describe("the sub-filter by person", () => {
     expect(src).toContain("for (const e of laned) if (e.author)");
   });
 
-  it("does not appear where it could only ever do nothing", () => {
-    // One speaker means the only choice is "the person already on screen".
-    expect(src).toContain('who === "human" && speakers.length > 1');
+  it("is drawn in every lane like the mockup's, and disabled where it could only ever do nothing", () => {
+    // With nobody who spoke the only choice is "Everyone", so it greys out rather than vanishing.
+    expect(src).toContain("disabled={speakers.length === 0}");
   });
 
   it("clears itself when you leave the lane", () => {

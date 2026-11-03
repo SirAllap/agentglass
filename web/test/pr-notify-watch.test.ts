@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import type { PrCheck, PrWatch } from "../../shared/types.ts";
-import { bellState, ciPassRule, firedOk, hasActiveWatch, ignorableNames, ignoredOf, moreIgnorableNames, ruleLabel, sameRule, setPrWatchState, toggleIgnored, watchPhase, watchesOf } from "../src/lib/prWatchStore.ts";
+import { bellState, ciPassRule, firedOk, hasActiveWatch, ignoredOf, ruleLabel, sameRule, setPrWatchState, toggleIgnored, watchPhase, watchesOf } from "../src/lib/prWatchStore.ts";
 
 const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
 const src = async (p: string) => strip(await Bun.file(new URL(p, import.meta.url)).text());
@@ -83,21 +83,23 @@ describe("one event, one notification", () => {
 
 describe("wiring", () => {
   it("the header mounts the bell with its checkout and repository", () => {
-    expect(body(panel, "function Masthead(")).toContain("<PrWatchMenu root={root} repo={repo} d={d} />");
+    expect(body(panel, "function Masthead(")).toContain("<PrWatchMenu root={root} repo={repo} d={d} iconOnly />");
     expect(panel).toContain("root={root} repo={repo?.nameWithOwner ?? \"\"}");
   });
   it("the bell reads the shared store and writes through the server, not local state", () => {
     expect(menu).toContain("usePrWatchState()");
     expect(menu).toContain("api.prWatchAdd(");
     expect(menu).toContain("api.prWatchRemove(");
+    expect(menu).toContain("api.prWatchPreset(");
     expect(menu).not.toContain("localStorage");
-    expect(menu).toContain('import { Select } from "./Select.tsx"');
     expect(menu).not.toMatch(/<select|type="checkbox"/); // the house components, not native ones
   });
-  it("the comment rule says it stays on", () => {
-    expect(menu).toContain("stays on until you turn it off");
+  it("the three cards are switches, and the comment card says it stays on", () => {
+    expect(menu).toContain('role="switch" aria-checked={!!waiting(rule)}');
+    for (const t of ["ci-pass", "ci-fail", "comment"]) expect(menu).toContain(`{ type: "${t}" }`);
+    expect(menu).toContain("Every new comment or review, until I turn it off.");
   });
-  it("the menu uses the house dismiss hook, house Select and switch, and the icon uses the house size", () => {
+  it("the menu uses the house dismiss hook and the house icon sizes", () => {
     expect(menu).toContain("useDismiss(open, box"); // Escape and outside click, the house hook
     expect(menu).toContain("ICON.xs");
     expect(menu).not.toMatch(/size=\{\d+\}/);
@@ -193,78 +195,58 @@ describe("All CI passed, ignoring some checks", () => {
     expect(ciPassRule([])).toEqual({ type: "ci-pass" });
     expect(ciPassRule(["a"])).toEqual({ type: "ci-pass", ignore: ["a"] });
   });
-  it("chips up front are the checks that can hold it back, once each, plus what is already ignored", () => {
-    const all = [chk("lint", "success"), chk("e2e-flaky", "failure"), chk("build", "pending"), chk("docs", "skipped"),
-      chk("e2e-flaky", "failure", { event: "push" }), chk("deploy-preview", "failure", { cancelled: true })];
-    expect(ignorableNames(all, [])).toEqual(["build", "deploy-preview", "e2e-flaky"]);
-    expect(ignorableNames(all, ["lint", "gone-job"])).toEqual(["build", "deploy-preview", "e2e-flaky", "gone-job", "lint"]);
-    expect(ignorableNames([chk("lint", "success")], [])).toEqual([]);
-  });
-  it("'+N more' holds the rest, so up front plus more is every check name the PR has", () => {
-    const all = [chk("lint", "success"), chk("e2e-flaky", "failure"), chk("build", "pending"), chk("docs", "skipped"),
-      chk("e2e-flaky", "failure", { event: "push" }), chk("deploy-preview", "failure", { cancelled: true })];
-    expect(moreIgnorableNames(all, [])).toEqual(["docs", "lint"]);
-    expect(moreIgnorableNames(all, ["lint"])).toEqual(["docs"]);
-    expect([...ignorableNames(all, []), ...moreIgnorableNames(all, [])].sort()).toEqual([...new Set(all.map((c) => c.name))].sort());
-    expect(moreIgnorableNames([chk("lint", "success")], [])).toEqual(["lint"]); // nothing failing: only the chip
-    expect(moreIgnorableNames([], [])).toEqual([]);
-  });
   it("a name with 'fail' in it after the verdict does not turn a pass into a failure", () => {
     expect(firedOk(w({ lastText: "CI passed on abc1234: ignoring 1: detect-failures" }))).toBe(true);
     expect(firedOk(w({ lastText: "CI failed on abc1234: lint" }))).toBe(false);
     expect(firedOk(w({ lastText: "evals failed: evals (py3.13)" }))).toBe(false);
     expect(firedOk(w({ lastText: "CI passed" }))).toBe(true);
   });
-  it("the menu draws the chips as pressed toggles in a labelled group, and stays quiet about it when none apply", () => {
-    expect(menu).toContain("aria-pressed={ignored.includes(n)}");
-    expect(menu).toContain('role="group" aria-label="Checks All CI passed does not wait for"');
-    expect(menu).toContain("No checks on this pull request yet");
-    expect(menu).toContain(">Ignore:</span>"); // the chips say what they are before one is pressed
-    expect(menu).toContain("ciPassRule(ignored)");
+  it("a square is a focusable button with a name, and the map is a roving grid", () => {
+    expect(menu).toContain('<button key={c.name} type="button" className="pw-d"');
+    expect(menu).toContain("tabIndex={i === roving ? 0 : -1}");
+    expect(menu).toContain("onKeyDown={onMapKey}");
+    expect(menu).toContain('role="checkbox" aria-checked={ignored.includes(bubbleCheck.name)}');
   });
-  it("the chips are written through the same add route, only while the rule is on, and staged otherwise", () => {
-    const at = menu.indexOf("const ignore = (name: string) =>");
+  it("ignoring is written through the same add route, only while the rule is on, and staged otherwise", () => {
+    const at = menu.indexOf("const setIgnored = (next: string[]) =>");
     expect(at).toBeGreaterThan(-1);
     const i = menu.slice(at, menu.indexOf("\n  };", at)); // to the arrow's own closing brace
     expect(i).toContain("api.prWatchAdd(root, d.number, d.title, ciPassRule(next))");
     expect(i).toContain('waiting({ type: "ci-pass" })');
     expect(i.indexOf("setStaged(next)")).toBeLessThan(i.indexOf("api.prWatchAdd"));
   });
-  it("applying the default says it keeps the PR's own ignores, and still sends one request", () => {
-    expect(menu).toContain(">Apply default, keep ignores</Button>");
-    expect(menu).toContain("are added to the ones this pull request already ignores");
-    expect(menu).toContain("api.prWatchApply(root, d.number, d.title)");
-    expect(menu).not.toContain("Apply my default");
+  it("Escape takes the bubble down before the popover, and the popover is fitted to the window", () => {
+    expect(menu).toContain('window.addEventListener("keydown", onKey, true)');
+    expect(menu).toContain("placePop(box.current.getBoundingClientRect(), window.innerHeight,");
+    expect(menu).toContain('window.addEventListener("resize", measure)');
   });
-  it("the popover never outgrows a short window: it scrolls inside itself, so the controls at the bottom stay reachable", () => {
-    expect(menu).toMatch(/minWidth: 268, maxHeight: "calc\(100vh - \d+px\)", overflowY: "auto" \}\} data-pr-watch-menu>/);
+  it("the footer switch saves the default and its auto flag in one call", () => {
+    expect(menu).toContain("Same for my new PRs in");
+    expect(menu).toContain("api.prWatchPreset(root, rules, on)");
+    expect(menu).not.toContain("api.prWatchApply(");
   });
-  it("the block is indented under the rule's label and muted while the rule is off, its chips still pressable", () => {
-    expect(menu).toContain('className="flex flex-wrap gap-1 pl-9 pr-1" style={waiting(rule) ? undefined : { opacity: 0.5 }}');
-    expect(menu).toContain('data-pr-watch-ignore={waiting(rule) ? "on" : "off"}');
-    const chip = menu.slice(menu.indexOf('<button key={n} type="button" className="agx-inline-add'), menu.indexOf("</button>", menu.indexOf('<button key={n} type="button" className="agx-inline-add')));
-    expect(chip).not.toContain("disabled"); // muted, not dead
-  });
-  it("an ignored chip wears the eye-off icon in a slot every chip reserves, so a press never changes a chip's width", () => {
-    expect(menu).toContain("EyeOffIcon");
-    expect(menu).toContain('visibility: ignored.includes(n) ? "visible" : "hidden"');
-    expect(menu).toContain("width: ICON.xs, height: ICON.xs");
-    expect(menu).toContain('aria-hidden="true"><EyeOffIcon size={ICON.xs} />'); // the state is said by aria-pressed, not by the picture
-    expect(menu).toContain("aria-pressed={ignored.includes(n)}");
-  });
-  it("the popover is three blocks, one thin divider between each, and the default buttons' divider is not doubled", () => {
-    const dividers = menu.match(/<div style=\{\{ borderTop: LINE, margin: "4px 0" \}\} \/>/g) ?? [];
-    expect(dividers.length).toBe(2);
-    expect(menu.indexOf("borderTop: LINE")).toBeLessThan(menu.indexOf("A specific check</div>"));
-    expect(menu.lastIndexOf("borderTop: LINE")).toBeGreaterThan(menu.indexOf("A specific check</div>"));
-    expect(menu.lastIndexOf("borderTop: LINE")).toBeLessThan(menu.indexOf("Save as my default"));
-  });
-  it("no timer joins the menu, and the pressed chip is styled with the house tokens, not new ones", async () => {
+  it("no timer joins the menu, and the popover is styled with the theme's colours", async () => {
     expect(menu).not.toMatch(/setInterval|setTimeout/);
-    const css = (await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text()).split("\n").find((l) => l.startsWith('.agx-inline-add[aria-pressed="true"]'))!;
-    expect(css).not.toBeUndefined();
-    expect(css).not.toMatch(/#[0-9a-f]{3,6}|rgb\(|px/i);
-    expect(css).toContain("var(--surface-inset)"); // an ignored chip sits on the muted surface and keeps its strike-through
-    expect(css).toContain("line-through");
+    const css = (await Bun.file(new URL("../src/index.css", import.meta.url)).text()).split("\n").filter((l) => l.startsWith(".pw-")).join("\n");
+    expect(css).not.toMatch(/#[0-9a-f]{3,8}\b/i); // the theme's colours, never a literal one
+  });
+  /* Measured in the built app at 1440x900 with a required check skipped: "· 1 required not waited for" was cut to "·…"
+     by an ellipsis, and "This run" broke onto two lines under a long meta. Both are read from the CSS that fixes them. */
+  it("the live line wraps instead of cutting the required warning, and the run title stays on one line", async () => {
+    const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
+    const rule = (sel: string) => css.split("\n").find((l) => l.startsWith(sel)) ?? "";
+    expect(rule(".pw-now > span:last-child")).not.toContain("ellipsis");
+    expect(rule(".pw-runh b")).toContain("white-space: nowrap");
+  });
+  it("typing a search scrolls the hits into view, because they sit under the map", () => {
+    expect(menu).toContain("bodyRef.current.scrollHeight");
+  });
+  it("This run names the commit the squares are from, in mono, even with no watch to have read one", () => {
+    expect(menu).toContain("d.checksSha || d.headSha");
+    expect(menu).toContain("<code>{head}</code>");
+  });
+  it("the default switch works with no rule on: it is never disabled and saves what is on, even nothing", () => {
+    expect(menu).not.toMatch(/disabled=\{!preset/);
+    expect(menu).not.toContain("if (!rules.length) return;");
   });
 });

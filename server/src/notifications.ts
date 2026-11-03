@@ -19,6 +19,7 @@
  */
 
 import { spawn, type Subprocess } from "bun";
+import { deathTie } from "./pdeathsig.ts";
 import { failed } from "./refused.ts";
 import { existsSync } from "node:fs";
 
@@ -355,26 +356,10 @@ function emit(n: SystemNote) {
  *     WITHOUT running anything: a SIGKILL, an OOM kill, a crash. `setpriv`
  *     execs dbus-monitor in place, so the pid we hold is still the monitor's.
  *
- * setpriv is util-linux, but `--pdeathsig` only arrived in 2.33 and busybox's
- * applet has no such option: there it exits 1 at once, and a monitor that dies
- * the instant it spawns is respawned under backoff for the life of the server
- * with nothing logged. So the option is proved once, on a `true`, before it is
- * trusted. Where it is missing or refused the monitor is spawned bare, and a
- * server that dies without running its exit hook leaves the monitor until its
- * next write fails. A server that dies between the spawn and setpriv's own
- * prctl, microseconds, arms nothing either. Those are the limits, named rather
- * than papered over.
+ * A server that dies between the spawn and setpriv's own prctl, microseconds,
+ * arms nothing; that is the limit of the kernel half, named rather than
+ * papered over. `deathTie` proved the option on this machine before using it.
  */
-let pdeathsig: string[] | null = null;
-function deathTie(): string[] {
-  if (pdeathsig) return pdeathsig;
-  const setpriv = Bun.which("setpriv");
-  const tie = setpriv ? [setpriv, "--pdeathsig", "TERM", "--"] : [];
-  let ok = false;
-  try { ok = !!setpriv && Bun.spawnSync([...tie, "true"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0; } catch { /* not runnable */ }
-  pdeathsig = ok ? tie : [];
-  return pdeathsig;
-}
 process.on("exit", () => { try { proc?.kill(); } catch { /* already gone */ } });
 
 function start() {

@@ -55,7 +55,7 @@ browser endpoint's, so none of the three opens either of the others.
 
 Environment:
     AGENTGLASS_SERVER           default http://localhost:4000
-    AGENTGLASS_TOKEN            only needed if the server was started with one
+    AGENTGLASS_TOKEN            read from ~/.config/agentglass/token when unset, and again after a 401
     AGENTGLASS_COCKPIT_HTTP     [HOST:]PORT — serve over Streamable HTTP instead of stdio
     AGENTGLASS_COCKPIT_TOKEN    that endpoint's Bearer token (32+ chars); minted and printed when unset
     AGENTGLASS_COCKPIT_EXPOSE   1 — the same opt-in as --expose
@@ -132,11 +132,8 @@ def get(path, params=None, timeout=30):
     # would pass this process off as the app's own page.
     req = urllib.request.Request(f"{SERVER}{path}{'?' + q if q else ''}", method="GET",
                                  headers={"Accept": "application/json"})
-    token = os.environ.get("AGENTGLASS_TOKEN")
-    if token:
-        req.add_header("Authorization", f"Bearer {token}")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with T.urlopen_fresh(req, timeout) as r:
             return 200, json.loads(r.read() or b"null")
     except urllib.error.HTTPError as e:
         e.close()
@@ -610,6 +607,22 @@ def t_accounts(args):
     return fit({"providers": rows}, ["providers"], "ask again after removing accounts, or read the popover")
 
 
+def t_manifest(args):
+    # What landed, what is running and what waits for a verdict — the Manifest
+    # view's own reads (GET /manifest). Read-only; signing off is the person's
+    # press and there is deliberately no tool for it here.
+    project = _str(args, "project")
+    if not project:
+        return fit({"projects": _need(get("/manifest")).get("projects") or []}, ["projects"],
+                   "pass project= to read one project's rows")
+    d = _need(get("/manifest", {"project": project}))
+    rows = [{k: r.get(k) for k in ("sha", "subject", "time", "ticket", "inBuild", "verdict", "at", "kind", "group")}
+            for r in (d.get("rows") or []) if isinstance(r, dict)]
+    return fit({"project": d.get("name"), "root": d.get("root"), "boundary": d.get("boundary"),
+                "trunk": d.get("trunk"), "counters": d.get("counters") or {}, "left": d.get("left"),
+                "rows": rows}, ["rows"], "the rows are already the last 7 days of the trunk")
+
+
 def _tool(name, fn, description, properties=None, required=()):
     return {
         "name": name,
@@ -671,7 +684,7 @@ _TOOLS = [
           {"state": {"type": "string", "enum": ["working", "waiting", "idle"]}}),
     _tool("cockpit_attention", t_attention,
           "What asks something of a person right now, by the dashboard's own rule; each agent says which in "
-          "`attention`: blocked (a permission prompt or a held gate), left (a turn that ended and nobody came "
+          "`attention`: blocked (a permission prompt or a gate waiting for you), left (a turn that ended and nobody came "
           "back to for an hour) or forgotten (claimed work quiet for an hour). A turn that ended under the hour "
           "is not here, as it is not on the dashboard's line; cockpit_agents with state=waiting lists every one. "
           "Plus the gates held for a decision. Read-only: nothing here answers or approves them."),
@@ -682,10 +695,17 @@ _TOOLS = [
           "switching is the person's press of a chip in the usage popover; ui_usage_account_stage can propose "
           "one for them to look at."),
     _tool("cockpit_orphans", t_orphans,
-          "Processes an agent left behind that are still running: re-parented to systemd, in a deleted or "
-          "agent-owned directory, or a test run or build that has gone on for hours. Each says why in plain "
+          "Processes left behind that are still running: re-parented to systemd (with the origin it was "
+          "traced to: a deleted checkout, a temp wrapper, or this app's own helper), or a test run or build "
+          "that has gone on for hours. Each says why in plain "
           "words (`reasons`), where it ran, its age and CPU. Read-only: stopping one is a person's click in "
           "the Resources panel."),
+    _tool("cockpit_manifest", t_manifest,
+          "What landed on this machine's trunk, what is running and what waits for the person's verdict: "
+          "the open projects and how many rows wait for a sign-off, or one project's first-parent trunk "
+          "commits of the last 7 days with whether the running build contains each, its verdict and its group "
+          "(toTest, done, ready). Read-only; the verdict is the person's press.",
+          {"project": {"type": "string", "description": "a project root, as cockpit_manifest lists it"}}),
 ]
 TOOLS = [{k: v for k, v in t.items() if k != "_fn"} for t in _TOOLS]
 _BY_NAME = {t["name"]: t["_fn"] for t in _TOOLS}
@@ -759,7 +779,7 @@ def main(argv=None):
         allow = list(args.allow_host) + os.environ.get("AGENTGLASS_COCKPIT_ALLOW_HOSTS", "").split(",")
         return T._run_http(bind, expose=args.expose, allow_hosts=allow, handle=handle_message, name=NAME,
                            token_env="AGENTGLASS_COCKPIT_TOKEN",
-                           distinct_from=("AGENTGLASS_TOKEN", "AGENTGLASS_MCP_TOKEN", "AGENTGLASS_UI_MCP_TOKEN"),
+                           distinct_from=("AGENTGLASS_TOKEN", "AGENTGLASS_MCP_TOKEN", "AGENTGLASS_UI_MCP_TOKEN", "AGENTGLASS_FLIGHTPLAN_MCP_TOKEN"),
                            opens="the cockpit's read-only tools", expose_env="AGENTGLASS_COCKPIT_EXPOSE")
     return T._serve_stdio(handle_message)
 

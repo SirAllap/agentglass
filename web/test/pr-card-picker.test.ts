@@ -8,7 +8,7 @@
  * one of them happened; and opening the menu again a while later left the whole
  * window black.
  *
- * These read `PrPanel.tsx` as text, which is a weak kind of test and the honest
+ * These read `PrPanel.tsx` and `PrAskPicker.tsx` as text, which is a weak kind of test and the honest
  * one available here: three of the four are invariants about WHERE code sits —
  * hooks above a conditional return, a dependency that is a string rather than
  * an object — and there is no DOM under `bun test` to re-render a component in.
@@ -34,7 +34,11 @@ const bodyOf = (name: string) => {
   return src.slice(i, j === -1 ? undefined : j);
 };
 
-const CLICKUP = bodyOf("ClickUpSide");
+/* The card half of the review picker lives in PrAskPicker.tsx: a hook that reads the card and the component that applies. */
+const ask = await Bun.file(new URL("../src/components/PrAskPicker.tsx", import.meta.url)).text();
+const upto = (from: string, to: string) => { const i = ask.indexOf(from); expect(i, `no ${from}`).toBeGreaterThan(-1); const j = ask.indexOf(to, i + 1); return ask.slice(i, j === -1 ? undefined : j); };
+const CLICKUP = upto("export function usePrCardSide(", "\n/** Jira finds people");
+const FLOW = ask.slice(ask.indexOf("export function PrAskPicker("));
 const PICKER = bodyOf("FieldPicker");
 const FACTS = bodyOf("CardFacts");
 
@@ -43,20 +47,22 @@ describe("the window that went black", () => {
     /*
      * `mergeCardRef` is null until `useClickupSetup` answers — a read cached for
      * a minute, so a menu opened later has one render with no card and the next
-     * with one. The plan and the write lived BELOW `if (!ref) return null`, so
-     * those two renders ran a different number of hooks and React threw the
-     * whole tree away.
+     * with one. The plan and the write once lived BELOW `if (!ref) return null`,
+     * so those two renders ran a different number of hooks and React threw the
+     * whole tree away. The hook now decides a STATE, never an early return, and
+     * the component has a single return at its end.
      */
-    const tail = CLICKUP.slice(CLICKUP.indexOf("if (!ref || (!stepOn && !assignReviewer)) return null;"));
-    expect(tail.length).toBeGreaterThan(200);
-    const hook = /\buse[A-Z]\w*\(/.exec(tail);
-    expect(hook?.[0] ?? "none", "a hook below the early return").toBe("none");
+    expect(CLICKUP).not.toMatch(/return null;/);
+    expect(CLICKUP.match(/\n  return \{/g)?.length).toBe(1);
+    expect(FLOW).not.toMatch(/\n  if \(.*\) return/);
+    expect(FLOW.match(/\n  return \(/g)?.length).toBe(1);
+    const tail = FLOW.slice(FLOW.indexOf("\n  return ("));
+    expect(/\buse[A-Z]\w*\(/.exec(tail)?.[0] ?? "none", "a hook below the return").toBe("none");
   });
 
-  it("keeps the early return, rather than drawing an empty half", () => {
-    // The fix is not "always render": a pull request with no card must draw
-    // nothing here at all.
-    expect(CLICKUP).toContain("if (!ref || (!stepOn && !assignReviewer)) return null;");
+  it("draws a state for a pull request with no card instead of an empty half", () => {
+    expect(CLICKUP).toContain('else if (!ref || !kind) state = "unlinked";');
+    expect(CLICKUP).toContain('if (!setup.connected && !setup.jira) state = "none";');
   });
 
   it("holds the same line in the sidebar, which has the same shape", () => {
@@ -121,7 +127,7 @@ describe("where the card stands, beside the pull request", () => {
   });
 
   it("is the second reader of a lookup the menu replaces when it writes", () => {
-    expect(CLICKUP).toContain("putCard(query, r.task);");
+    expect(CLICKUP).toContain("putCard(query, t);");
   });
 });
 
@@ -131,14 +137,15 @@ describe("the people who reset themselves", () => {
        lookup effect re-ran every few seconds and replaced what had just been
        ticked with whatever the card held. */
     expect(CLICKUP).toMatch(/const query = ref\?\.query \?\? ""/);
-    expect(CLICKUP).toMatch(/await api\.clickupFind\(query\)/);
-    // The effect's dependencies are that string and one boolean (is any step added), never an object.
-    expect(CLICKUP).toMatch(/\n  \}, \[query, wanted0\]\);/);
+    expect(CLICKUP).toMatch(/const query = ref\?\.query \?\? ""/);
+    /* The card is read through the shared store (a lookup the board and the sidebar already made), the list by the card's own list id. */
+    expect(CLICKUP).not.toContain("api.clickupFind");
+    expect(CLICKUP).toContain("}, [o.on, kind, listId]);");
     expect(CLICKUP).not.toMatch(/\n  \}, \[ref\]\);/);
   });
 
   it("memoizes the reference on the fields it reads, not on the pull request", () => {
-    expect(CLICKUP).toContain("[d.headRefName, d.title, d.body, setup]");
+    expect(CLICKUP).toContain("[d.headRefName, d.title, d.body, d.card, setup]");
   });
 });
 
@@ -150,48 +157,45 @@ describe("the confirmation that came half true", () => {
      * "somebody changed this card while you had it open". Ana went on, Rob
      * never came off, the status never moved.
      */
-    expect(CLICKUP).toContain("api.clickupCard(");
-    expect(CLICKUP).not.toContain("api.clickupAssign(");
-    expect(CLICKUP).not.toContain("api.clickupStatus(");
+    expect(FLOW.match(/api\.clickupCard\(/g)?.length).toBe(1);
+    expect(ask).not.toContain("api.clickupAssign(");
+    expect(ask).not.toContain("api.clickupStatus(");
   });
 
   it("checks the answer and says what it was", () => {
     // The old loop was inside a `try` that could not fail: the failure came
     // back as `{ ok: false }`, which is not thrown, so every outcome read as
-    // success and nothing was reported either way.
-    expect(CLICKUP).toContain("note(r.ok && (!ex || ex.ok),");
-    expect(CLICKUP).toContain("return r.ok && (!ex || ex.ok);");
+    // success and nothing was reported either way. Each step now carries its own outcome.
+    expect(FLOW).toContain('res[id] = r.ok ? { state: "ok" } : said(r.error);');
+    expect(FLOW).toContain('res["card-extras"] = ex?.ok ? { state: "ok" } : said(ex?.error);');
+  });
+
+  it("moves the stamp after a write so the next one is not refused", () => {
+    expect(FLOW).toContain("if (r.ok) sd.advance(r.task);");
+    expect(CLICKUP).toContain("advance: (t) => { if (t) { taskRef.current = t; putCard(query, t); } },");
   });
 
   it("builds the summary and the write from the same plan", () => {
-    expect(CLICKUP).toContain("cardPlan({");
-    expect(CLICKUP).toContain("{ add: plan.add, rem: plan.drop, status: plan.status || undefined }");
-    expect(CLICKUP).toContain("lines: folded ? [] : [...plan.lines, ...extraLines]");
+    expect(FLOW).toContain("const plan = useMemo(() => handOverPlan({");
+    expect(FLOW).toContain("runSteps(plan.steps, ids,");
+    expect(FLOW).toContain("{ add: add.map((p) => Number(p.key))");
   });
 
-  it("waits for GitHub before it touches the card", () => {
-    // "GitHub first, and ClickUp only if it landed" was a comment over a call
-    // nobody awaited.
-    expect(PICKER).toContain("const wrote = await onCommit(selRef.current);");
-    expect(PICKER).toContain("if (wrote === false)");
+  it("does not hold the card for GitHub: each system answers for itself and only the failed one is retried", () => {
+    /* "GitHub first, and the card only if it landed" left a card untouched
+       whenever GitHub was slow. The result has one row per system and
+       `Retry only X` sends just that system's steps again. */
+    const card = FLOW.slice(FLOW.indexOf("const cardRunner: Runner"), FLOW.indexOf("const run = (ids"));
+    expect(card.length).toBeGreaterThan(500);
+    expect(card).not.toContain("sendGithub");
+    expect(FLOW).toContain("{ github, ...(side.kind ? { [side.kind]: cardRunner } : null) }");
+    expect(FLOW).toContain("run(r.retry)");
+    expect(FLOW).toContain("dismissible={result.phase !== \"working\"}");
   });
 
-  it("claims a GitHub write only when there is one", () => {
-    expect(PICKER).toContain("{ghChanged > 0 && (() => {");
-    expect(PICKER).toContain("<div>· {title} on GitHub</div>");
-  });
-
-  it("names who goes on and who comes off, with their face", () => {
-    /* The line was the picker's own title — "Request reviewers on GitHub" —
-       printed for a step that was taking a reviewer OFF. The ClickUp lines
-       under it named the person in both directions, so the one row that could
-       not be checked was the row about the write that is hardest to undo.
-       Reported as: it should say remove that user, with the avatar adding one
-       already has. */
-    expect(PICKER).toContain("const add = sel.filter((x) => !selected.includes(x));");
-    expect(PICKER).toContain("const gone = selected.filter((x) => !sel.includes(x));");
-    expect(PICKER).toContain("<Avatar login={o.avatar} size={14} />");
-    expect(PICKER).toContain('{on ? "+" : "−"}');
+  it("names who goes on and who comes off", () => {
+    expect(FLOW).toContain("...(dropPeople.length ? { drop: dropPeople.map((p) => p.name) } : null)");
+    expect(FLOW).toContain("rem: drop.map((p) => Number(p.key))");
   });
 });
 

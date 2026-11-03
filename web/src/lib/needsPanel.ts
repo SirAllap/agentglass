@@ -40,3 +40,13 @@ export function needsPanelLeft(
   const centred = anchor.left + anchor.width / 2 - width / 2;
   return Math.max(GAP, Math.min(centred, end - width));
 }
+
+/**
+ * Whether the "needs you" chip opens a plan instead of the list.
+ *
+ * The chip drew a ▾ and, with only plans waiting, went straight to the oldest
+ * one: with five or seventy plans awaiting Go the arrow promised a list that
+ * never opened and the other plans were reachable only from the Flight plan
+ * view. Straight to the plan stays for exactly one; more than one is a list.
+ */
+export const chipGoesToPlan = (needs: { plan?: string } | null, listed: number): boolean => !!needs?.plan && listed <= 1;

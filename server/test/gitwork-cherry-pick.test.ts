@@ -31,7 +31,7 @@ import { identify } from "./gitIdentity.ts";
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), "agx-cherry-")));
 process.env.AGENTGLASS_ROOT = dir;
-const { cherryPick, cherryPickContinue, cherryPickAbort, conflicts, resolveWith, mergeContinue } =
+const { cherryPick, revertCommit, cherryPickContinue, cherryPickAbort, conflicts, resolveWith, mergeContinue } =
   await import("../src/gitwork.ts");
 
 let repo = "";
@@ -139,5 +139,53 @@ describe("cherry-pick engine", () => {
     const r = cherryPickContinue(repo);
     expect(r.ok).toBe(false);
     expect(r.error).toContain("nothing to continue");
+  });
+
+  it("a commit already on the branch is refused and leaves no pick in progress", () => {
+    // git stops with "The previous cherry-pick is now empty" and keeps the
+    // sequencer open with zero conflicts: a screen with nothing to resolve.
+    const same = git("rev-parse", "HEAD").stdout.toString().trim();
+    git("checkout", "-q", "-b", "twin", "HEAD~1");
+    git("cherry-pick", same);
+    const r = cherryPick(repo, [same]);
+    expect(r.ok).toBe(false);
+    expect(Bun.spawnSync(["test", "-e", join(repo, ".git", "CHERRY_PICK_HEAD")]).exitCode).not.toBe(0);
+    expect(git("status", "--porcelain").stdout.toString().trim()).toBe("");
+  });
+
+  it("a merge commit is refused for revert with a plain sentence", () => {
+    // Raw git said "is a merge but no -m option was given" with a 40-char sha for the second.
+    git("checkout", "-q", "feat");
+    git("merge", "--no-ff", "-qm", "merge main", "main", "-X", "ours");
+    const m = git("rev-parse", "HEAD").stdout.toString().trim();
+    const rm = revertCommit(repo, m);
+    expect(rm.ok).toBe(false);
+    expect(rm.error).toContain("merge commit");
+    expect(rm.error).not.toContain(m);
+    expect(git("status", "--porcelain").stdout.toString().trim()).toBe("");
+  });
+
+  it("a revert resolved to no change is skipped instead of stranding the revert", () => {
+    // Raw git stayed "Revert in progress" and the toast was six lines of status.
+    git("checkout", "-q", "feat");
+    const one = git("rev-parse", "HEAD~2").stdout.toString().trim();
+    writeFileSync(join(repo, "a.txt"), "later\n");
+    git("add", "-A"); git("commit", "-qm", "feat later");
+    expect(revertCommit(repo, one).ok).toBe(false);
+    git("checkout", "--ours", "a.txt"); git("add", "a.txt");
+    const r = mergeContinue(repo);
+    expect(r.ok).toBe(true);
+    expect(Bun.spawnSync(["test", "-e", join(repo, ".git", "REVERT_HEAD")]).exitCode).not.toBe(0);
+  });
+
+  it("a pick that fails for another reason is not skipped as if it were empty", () => {
+    // A signing program that fails leaves CHERRY_PICK_HEAD in place with no
+    // conflicts and a non-empty change; skipping it would drop that commit.
+    git("config", "commit.gpgsign", "true");
+    git("config", "gpg.program", "false");
+    const two = git("rev-parse", "feat~1").stdout.toString().trim();
+    const r = cherryPick(repo, [two]);
+    expect(r.ok).toBe(false);
+    expect(Bun.spawnSync(["test", "-e", join(repo, ".git", "CHERRY_PICK_HEAD")]).exitCode).toBe(0);
   });
 });

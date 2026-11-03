@@ -20,8 +20,8 @@ import { openExternal } from "../../lib/externalUrl.ts";
 import { descriptionMode } from "../../lib/jiraEdit.ts";
 import type { CardEdit } from "../../../../shared/providers.ts";
 import { CommentAction } from "../tasks/CardEdit.tsx";
-import { EDGE } from "../workspace/Chrome.tsx";
-import { Section } from "./JiraSections.tsx";
+import { Button, Textarea } from "../workspace/Chrome.tsx";
+import { JiraSection } from "./JiraSections.tsx";
 
 const PENCIL = "M4 20h4l10-10a2.8 2.8 0 0 0-4-4L4 16v4z";
 export const LOCKED_SAYS = "This description has parts Markdown cannot keep (a table, a panel, an image or a colour), so it is changed in Jira.";
@@ -54,39 +54,38 @@ export function JiraDescription({ text, edit, writes, url, busy, onSave }: {
   };
 
   return (
-    <Section id="description" title="Description" aside={mode === "none" ? undefined : (
+    <JiraSection id="description" title="Description" aside={mode === "none" ? undefined : (
       <CommentAction iconOnly label="Edit" busy={mode === "locked"} on={open} tone="var(--primary)"
         title={mode === "locked" ? LOCKED_SAYS : open ? "Close the editor" : "Change the description"} d={PENCIL}
         onClick={() => { if (open) { setOpen(false); } else { setDraft(text); setOpen(true); } }} />
     )}>
       {open ? (
         <div className="flex flex-col gap-1.5">
-          <textarea value={draft} autoFocus rows={8} disabled={busy} aria-label="Change the description"
+          <Textarea value={draft} autoFocus rows={8} disabled={busy} aria-label="Change the description"
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void save(); }
               // Escape closes the box and nothing else: it must not reach the pane behind it.
               if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setOpen(false); }
             }}
-            className="w-full text-[11.5px] rounded px-2 py-1.5 outline-none resize-y"
-            style={{ background: "var(--bg)", color: "var(--text)", border: EDGE, minHeight: 120 }} />
+            className="w-full" style={{ minHeight: 120 }} />
           <div className="flex items-center gap-2 text-[10.5px]">
-            <button className="agx-btn rounded-md px-2 py-0.5" disabled={busy} onClick={() => void save()} style={{ color: "var(--text)", border: EDGE }}>{busy ? "Saving…" : "Save"}</button>
-            <button className="agx-btn rounded-md px-2 py-0.5" disabled={busy} onClick={() => setOpen(false)} style={{ color: "var(--text3)" }}>Cancel</button>
+            <Button size="compact" disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : "Save"}</Button>
+            <Button size="compact" tone="quiet" disabled={busy} onClick={() => setOpen(false)}>Cancel</Button>
             <span style={{ color: "var(--text4)" }}>Markdown · Ctrl+Enter saves</span>
           </div>
         </div>
       ) : (
-        <div className="agx-cu-body min-w-0 break-words">
+        <div className="agx-cu-body min-w-0 break-words" style={{ fontFamily: "var(--font-prose)", fontSize: 13, lineHeight: 1.55 }}>
           {text.trim() ? <Markdown text={text} /> : <span style={{ color: "var(--text4)" }}>No description.</span>}
         </div>
       )}
       {mode === "locked" && (
         <div className="flex items-center gap-2 mt-1.5 text-[10.5px] flex-wrap" role="status" style={{ color: "var(--text3)" }}>
           <span>{LOCKED_SAYS}</span>
-          {url && <button className="agx-btn rounded-md px-2 py-0.5" onClick={() => openExternal(url)} style={{ color: "var(--text2)", border: EDGE }}>Open in Jira</button>}
+          {url && <Button size="compact" onClick={() => openExternal(url)}>Open in Jira</Button>}
         </div>
       )}
-    </Section>
+    </JiraSection>
   );
 }

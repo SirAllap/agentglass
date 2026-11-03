@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import type { StatsSummary } from "../../../shared/types.ts";
 import { api } from "./api.ts";
 import { usePoll } from "./usePoll.ts";
@@ -39,12 +39,20 @@ function pollFor(windowMs: number): number {
 export function useStats(windowMs: number, intervalMs?: number, provider = "", enabled = true) {
   const [stats, setStats] = useState<StatsSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /* Which window the numbers on screen answer. Compared by what was asked, not by the window the server echoes: it clamps "All". */
+  const [answered, setAnswered] = useState(`${windowMs}|${provider}`);
+  const want = useRef("");
+  want.current = `${windowMs}|${provider}`;
 
   const load = useCallback(() => {
+    const asked = `${windowMs}|${provider}`;
     api
       .stats(windowMs, provider || undefined)
       .then((s) => {
+        /* A slow answer for the window the person just left must not land over the one they chose. */
+        if (asked !== want.current) return;
         setStats(s);
+        setAnswered(asked);
         setError(null);
       })
       .catch((e) => setError(String(e)));
@@ -56,5 +64,6 @@ export function useStats(windowMs: number, intervalMs?: number, provider = "", e
      minute for a summary nobody was reading (measured). */
   usePoll(enabled, load, every);
 
-  return { stats, error };
+  /* True from the click on another window until its numbers arrive: the old ones stay up meanwhile, and the view says so. */
+  return { stats, error, pending: enabled && answered !== `${windowMs}|${provider}` };
 }

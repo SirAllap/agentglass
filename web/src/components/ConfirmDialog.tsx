@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
-import { INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
+import { Button, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
+import { Field } from "./SettingsKit.tsx";
 import { preparedLine, useStageHold } from "../lib/stageHold.ts";
 import { PLUGIN_CTRL_H } from "../lib/pluginCard.ts";
 import { useOwnedQuestion } from "../lib/layerOwner.ts";
@@ -87,6 +88,16 @@ export function ConfirmDialog({ pending }: { pending: Pending | null }) {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [pending, text, isPrompt]);
 
+  const inputId = useId();
+  const field = (
+    <input
+      id={inputId} ref={inputRef} value={text} onChange={(e) => setText(e.target.value)}
+      placeholder={pending?.input?.placeholder}
+      className={`w-full ${INPUT}`}
+      style={INPUT_STYLE}
+    />
+  );
+
   return (
     <AnimatePresence>
       {pending && (
@@ -117,28 +128,20 @@ export function ConfirmDialog({ pending }: { pending: Pending | null }) {
                 )}
                 {isPrompt && (
                   <div className="mt-3">
-                    {pending.input!.label && <div className="text-[10.5px] mb-1" style={{ color: "var(--text3)" }}>{pending.input!.label}</div>}
-                    <input
-                      ref={inputRef} value={text} onChange={(e) => setText(e.target.value)}
-                      placeholder={pending.input!.placeholder}
-                      className={`w-full ${INPUT}`}
-                      style={INPUT_STYLE}
-                    />
+                    {pending.input!.label ? <Field label={pending.input!.label} htmlFor={inputId}>{field}</Field> : field}
                   </div>
                 )}
               </div>
               <div className="px-4 py-2.5 shrink-0 flex items-center justify-end gap-2" style={{ borderTop: LINE }}>
-                <button ref={cancelRef} onClick={() => pending.resolve(isPrompt ? null : false)}
-                  className="text-[11px] px-2.5 py-1 rounded"
-                  style={{ color: "var(--text2)", border: EDGE, ...(pending.wide ? { height: PLUGIN_CTRL_H } : null) }}>
+                <Button buttonRef={cancelRef} onClick={() => pending.resolve(isPrompt ? null : false)}
+                  style={pending.wide ? { height: PLUGIN_CTRL_H } : undefined}>
                   {pending.cancelLabel ?? "Cancel"}
-                </button>
-                <button ref={confirmRef} onClick={() => pending.resolve(isPrompt ? text.trim() : true)}
+                </Button>
+                <Button buttonRef={confirmRef} tone={pending.danger ? "danger" : "primary"} onClick={() => pending.resolve(isPrompt ? text.trim() : true)}
                   disabled={(isPrompt && !text.trim()) || held}
-                  className="text-[11px] px-2.5 py-1 rounded font-medium disabled:opacity-40"
-                  style={{ color: pending.danger ? "var(--bg)" : "var(--on-primary)", background: pending.danger ? "var(--error)" : "var(--primary)", ...(pending.wide ? { height: PLUGIN_CTRL_H } : null) }}>
+                  style={pending.wide ? { height: PLUGIN_CTRL_H } : undefined}>
                   {pending.confirmLabel ?? (pending.danger ? "Delete" : "Ok")}
-                </button>
+                </Button>
               </div>
             </motion.div>
           </div>

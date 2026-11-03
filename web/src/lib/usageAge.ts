@@ -31,3 +31,20 @@ export function stalenessLabel(fetchedAt: number, now: number = Date.now()): str
   const h = Math.floor(m / 60);
   return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
 }
+
+/**
+ * How old a plan reading is.
+ *
+ * Load-bearing for Codex, whose number is written only when a turn runs and can
+ * be days old with nothing on screen to suggest it. Anything under a couple of
+ * minutes reads as "just now" rather than "1m ago", because a precise age on a
+ * fresh number is noise.
+ */
+export function ageLabel(observedAt: number | undefined, now = Date.now()): string {
+  if (!observedAt) return "";
+  const ms = now - observedAt;
+  if (ms < 2 * 60_000) return "just now";
+  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m ago`;
+  if (ms < 24 * 3_600_000) return `${Math.floor(ms / 3_600_000)}h ago`;
+  return `${Math.floor(ms / (24 * 3_600_000))}d ago`;
+}

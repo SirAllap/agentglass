@@ -48,7 +48,7 @@ describe("overlayDetail", () => {
 
 const src = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
 describe("the Refresh button", () => {
-  const start = src.indexOf("const plan = refreshPlan(selected);");
+  const start = src.indexOf("const plan = refreshPlan(selected, layout.list);");
   const branch = src.slice(start, src.indexOf("return;", start));
   it("does not touch a list or another row's caches on the one-pull-request branch", () => {
     expect(start).toBeGreaterThan(0);

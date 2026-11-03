@@ -1,6 +1,6 @@
 ---
 name: orchestrator
-description: Use when somebody asks for an orchestrator, a lead agent, a coordinator, or somebody to "keep an eye on" the agents working on a project — and when asking about who is minding a project, who is blocked, or what the orchestrator last said. Puts a seat in a project's chair inside agentglass (with its own rules, queue, memory and view) instead of a loose tmux session nobody else can see.
+description: Use when somebody asks for an orchestrator, a lead agent, an orchestrator, or somebody to "keep an eye on" the agents working on a project — and when asking about who is minding a project, who is blocked, or what the orchestrator last said. Puts a seat in a project's chair inside agentglass (with its own rules, queue, memory and view) instead of a loose tmux session nobody else can see.
 ---
 
 # The orchestrator's seat
@@ -49,9 +49,18 @@ field drawn for it with the last hour of every agent, and being woken when
 that field changes instead of keeping a clock of its own. Its rules files are
 seeded if missing so there is something to edit; they are not imposed on it.
 
+The answer carries a `token`: the seat's own credential, the same kind a
+seat the app starts gets in its environment. Put `AGENTGLASS_TOKEN=<token>` in
+front of the calls that must be recognised as the chair's, such as a plan's
+Go in Autopilot (each shell call starts clean, so an `export` does not
+last). It is in memory, bound to this project, and revoked when the claim is
+released.
+
 Standing down an adopted seat releases the claim. It does not kill the
 session — that would be throwing away somebody's day because a button said
 "stand down".
+
+M or L work (a feature, several files, a design, security, data) goes through the `flight-plan` skill before any worker is opened; S goes straight to one.
 
 ## What it may do
 
@@ -121,16 +130,33 @@ Where the person has set an orchestration policy (Settings), `--role` starts
 the engine the policy says for that role, headless: one turn in a tab, with an
 exit code. The result says `{engine, model, because, envelope}`; read `because`.
 
+Launch at Go takes the same path. A project whose builder chain starts on
+Claude opens a tab; on another engine, Launch starts the worker through the
+policy, in the plan's own tree, with the plan as its brief, and links the plan
+to it. The view follows the link: `workerState` says `working` while that
+worker is live and `ended` once it has stopped (`show` and `list` carry it when
+the name is a worker this machine ran). A worker you started yourself is linked
+with `agentglass-ui flight-plan plan worker <plan> <name>`, an empty name to
+clear it; the answer is the updated plan. A chair with less than `assign` is
+refused.
+
 - **The policy decides the choices.** `--engine` and `--model` must be an entry
   of the role's chain, and the engine must be ready on this machine. Anything
   else is refused with the chain in the sentence. You cannot edit the policy.
-- **The envelope starts narrow**: its own worktree, no network, no commit.
-  `--allow network` or `--allow commit` widens it by one thing, only up to the
-  project's ceiling. Pushing, posting, merging, publishing and spending are not
-  something an envelope can hold: they are the person's, always.
+- **The envelope starts narrow**: its own worktree, no network, no commit, no
+  docker. `--allow network`, `--allow commit` or `--allow docker` widens it by
+  one thing, only up to the project's ceiling. Pushing a branch, posting,
+  merging, publishing a release and spending are not something an envelope can
+  hold: they are the person's, always.
 - **A worker is stopped, not steered.** It cannot be told something in the middle
   of a turn. When its turn has ended (`wait <name> --until gone`, then `read`),
   `prompt <name> "<next>"` starts the next turn on the same engine, resumed.
+- **Every engine is talked to the same way.** A worker on Claude Code, Codex,
+  OpenCode or any other engine is reached with `prompt` and read with `read`,
+  never by typing into its tab. Chat messages between sessions (`SendMessage`)
+  reach only a Claude Code session that is open and waiting; a headless worker
+  on another engine never sees one, so a report from it comes from `read`, not
+  from a message.
 - **A turn has a limit** (Settings ▸ Orchestration, 30 minutes unless changed). A
   worker still running at it is stopped with everything it started, its row says
   `timeout` (exit 124), and you get one report. If the app restarted during the

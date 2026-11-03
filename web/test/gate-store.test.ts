@@ -111,7 +111,7 @@ test("the snapshot keeps its identity while the set is unchanged", () => {
  * had been announced, that reply would announce it a second time -- a toast for
  * a request you just answered, which teaches you to distrust the toasts.
  */
-test("answering a gate does not let an in-flight poll re-announce it", () => {
+test("answering a gate does not let a poll already running re-announce it", () => {
   standing();
   store.ingestGates([gate("a"), gate("b"), gate("c")]);
   store.forgetGate("c");

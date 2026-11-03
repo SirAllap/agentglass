@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
-import { LANE_MIN_PX, RESULT_COLUMNS, resultColumn, SEARCH_HINT, knownLogins, matchedAs, normalizeFree, personIn, resultsHeading, searchPool, stillReading, toServerQuery } from "../src/lib/prSearch.ts";
+import { LANE_WIDTH_PX, SEARCH_HINT, knownLogins, matchedAs, normalizeFree, personIn, resultsHeading, searchPool, stillReading, toServerQuery } from "../src/lib/prSearch.ts";
 import { DETAIL_BATCH, DETAIL_REACH, nextDetailBatch } from "../src/lib/useRowDetails.ts";
 
 describe("the heading over a search", () => {
@@ -49,7 +49,7 @@ describe("the panel's wiring", () => {
     expect(code(panel)).not.toContain("open pull requests matching");
   });
   it("counts the drawn cards in the filter bar while searching", () => {
-    expect(code(panel)).toContain("total={searching ? visiblePrs.length");
+    expect(code(panel)).toContain("searching ? visiblePrs.length");
   });
   it("draws a reading row as a skeleton, never as 'not finished'", () => {
     expect(code(board)).toContain("stillReading(p)");
@@ -111,15 +111,16 @@ describe("a person", () => {
   });
 });
 
-describe("a search has rules of its own", () => {
+describe("a search has no board rules", () => {
   const panel = readFileSync(new URL("../src/components/PrPanel.tsx", import.meta.url), "utf8");
   const code = (x: string) => x.split("\n").filter((l) => !/^\s*(\/?\*|\/\/)/.test(l)).join("\n");
   it("the board's saved rules are never what a search runs through", () => {
     const c = code(panel);
-    expect(c).toContain("const activeRules = searchingNow ? searchRules : rules;");
-    expect(c).toContain("[pool, answered, filters, activeRules");
-    expect(c).toContain("<FilterBuilder bare fields={ruleFields} value={activeRules}");
-    expect(c).toContain("rules: activeRules, setRules: setActiveRules");
+    expect(c).toContain("const activeLanes = searchingNow ? EMPTY_LANES : laneFilter;");
+    expect(c).toContain("[tableRows, activeLanes");
+    // The deck steps aside while there is a search: no rule is drawn that does not apply to it.
+    // An open PR hides it too (cc4488d08), so only the search part is pinned here.
+    expect(c).toContain("repo && bar === \"board\" && !searchingNow && !personLogin && (");
   });
   it("the counts are one number: nothing walks the scope for an 'of 200'", () => {
     expect(code(panel)).not.toContain("SWEEP_PAGES");
@@ -143,15 +144,21 @@ describe("a search has rules of its own", () => {
   });
 });
 
-describe("a result is the board's card, at the board's width", () => {
-  it("a column is a lane's share of the panel, never below a lane's floor", () => {
-    expect(resultColumn(3)).toBe(`minmax(max(${LANE_MIN_PX}px, calc((100% - 20px) / 3)), 1fr)`);
-    expect(RESULT_COLUMNS).toBe(3);
-    expect(resultColumn(1)).toContain("calc((100% - 0px) / 1)");
+describe("a result is a row, a lane is a fixed column wide enough for the 336px card", () => {
+  const board = readFileSync(new URL("../src/components/TriageBoard.tsx", import.meta.url), "utf8");
+  it("an open lane is 359 wide: the card is 336 and never shrinks, the gutter is the rest", () => {
+    expect(LANE_WIDTH_PX).toBe(359);
   });
-  it("the board and its results are drawn from the same floor", () => {
-    const board = readFileSync(new URL("../src/components/TriageBoard.tsx", import.meta.url), "utf8");
+  it("results are rows (.srow), not the board's cards in a grid", () => {
+    expect(board).toContain("<ResultRowView");
+    expect(board).not.toContain("resultColumn(");
     expect(board).not.toContain("minmax(268px");
-    expect(board).toContain("resultColumn(RESULT_COLUMNS)");
+  });
+  it("a row opens docked on a click, full screen on a double-click, and has the card's menu", () => {
+    const row = board.slice(board.indexOf("function ResultRowView("));
+    expect(row).toContain("onClick={onOpen}");
+    expect(row).toContain("onDoubleClick=");
+    expect(row).toContain("onContextMenu=");
+    expect(row).toMatch(/e\.shiftKey && e\.key === "F10"/);
   });
 });

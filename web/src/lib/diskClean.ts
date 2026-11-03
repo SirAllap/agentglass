@@ -14,6 +14,7 @@ import { DISK_WARN_DEFAULT, diskWarnPct, freePct, lowDiskMounts } from "./diskWa
 /** Decimal, like the "N GB free" tile at the top of the same panel and like `df -H`. */
 export function fmtBytes(n: number | null): string {
   if (n === null) return "unknown";
+  if (n >= 1e12) return `${(n / 1e12).toFixed(n >= 1e13 ? 0 : 1).replace(/\.0$/, "")} TB`;
   if (n >= 1e9) return `${(n / 1e9).toFixed(n >= 1e11 ? 0 : 1)} GB`;
   return `${Math.max(1, Math.round(n / 1e6))} MB`;
 }
@@ -44,6 +45,42 @@ export function wholePlan(report: DiskCleanReport): { ids: string[]; bytes: numb
   return { ids: lines.map((l) => l.id), bytes: lines.reduce((n, l) => n + (l.bytes ?? 0), 0) };
 }
 
+/** What the plan on screen would free in one line, or null when nothing may go. Zero bytes counts items instead of claiming "0 MB". */
+export function reclaimHeadline(plan: { ids: readonly string[]; bytes: number }): string | null {
+  if (!plan.ids.length) return null;
+  if (plan.bytes > 0) return `${fmtBytes(plan.bytes)} can go`;
+  return `${plan.ids.length} item${plan.ids.length === 1 ? "" : "s"} can go`;
+}
+
+/** The disk numbers the Disk dial in the same view draws, in one line: `Disk 71% used · 70 GB free`. Null when the host would not say. */
+export function diskHeadline(m: { diskTotal: number; diskFree: number }): string | null {
+  if (!m.diskTotal) return null;
+  const used = Math.round(((m.diskTotal - m.diskFree) / m.diskTotal) * 100);
+  return `Disk ${used}% used · ${(m.diskFree / 1e9).toFixed(0)} GB free`;
+}
+
+/** The header chip's words, or null when nothing on screen may go: a chip that says "0 B" is one to ignore. */
+export function cleanupChipLabel(plan: { ids: readonly string[]; bytes: number }): string | null {
+  const what = reclaimHeadline(plan);
+  return what ? `Disk cleanup · ${what}` : null;
+}
+
+export type DiskPlan = { ids: readonly string[]; bytes: number };
+/* The scan on screen publishes its plan here, so the header can name what the
+   block below would free without owning the block's state. */
+let planNow: DiskPlan | null = null;
+const planSubs = new Set<() => void>();
+export function publishDiskPlan(plan: DiskPlan | null): void {
+  planNow = plan;
+  for (const f of planSubs) f();
+}
+export const diskPlanNow = (): DiskPlan | null => planNow;
+const subscribePlan = (fn: () => void): (() => void) => { planSubs.add(fn); return () => { planSubs.delete(fn); }; };
+/** What the scan on screen would remove; null until one is made, and after a clean. */
+export function useDiskPlan(): DiskPlan | null {
+  return useSyncExternalStore(subscribePlan, diskPlanNow, () => null);
+}
+
 export type Phase = "idle" | "scanning" | "error" | "empty" | "plan" | "done";
 /** Which face the block shows. A scan in flight wins over everything; a finished clean shows its report until the next scan. */
 export function phaseOf(s: { report: DiskCleanReport | null; scanning: boolean; error: string | null; result: DiskCleanRunResult | null }): Phase {
@@ -56,7 +93,7 @@ export function phaseOf(s: { report: DiskCleanReport | null; scanning: boolean; 
 
 /** What a button that has been pressed once says. Named, so nobody confirms what they did not read. */
 export function confirmLabel(n: number, bytes: number): string {
-  return `Remove ${n} item${n === 1 ? "" : "s"} (${fmtBytes(bytes)})`;
+  return `Yes, remove ${n} item${n === 1 ? "" : "s"} (${fmtBytes(bytes)})`;
 }
 
 const STATUS: Record<DiskCleanLineResult["status"], { label: string; tone: Tone }> = {
@@ -117,6 +154,10 @@ const currentMounts = (): Mounts => sources.get("scan") ?? sources.get("tile") ?
 export function publishDiskMounts(from: "scan" | "tile", mounts: Mounts | null): void {
   if (mounts === null) sources.delete(from); else sources.set(from, mounts);
   for (const f of subs) f();
+}
+/** The machine tile's one mount, "/" read from the dials' own numbers; none when the host would not say. */
+export function publishMachineDisk(m: { diskTotal: number; diskFree: number }): void {
+  publishDiskMounts("tile", m.diskTotal ? [{ mount: "/", size: m.diskTotal, free: m.diskFree }] : null);
 }
 const subscribeBoth = (fn: () => void): (() => void) => {
   subs.add(fn);

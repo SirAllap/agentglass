@@ -1,7 +1,7 @@
 /*
  * The mark for what the agent in a tmux window is doing.
  *
- * Fleet's silhouettes and colours (`Fleet.tsx`, `StateMark`), so a state looks
+ * the silhouettes and colours the old Fleet used, so a state looks
  * the same in the tab strip, the window switcher and the fleet: a disc is work
  * in progress, a ring is a question waiting for you, a wedge is an error. The
  * fleet has no "finished and unseen", so that one is a tick — in the colour the

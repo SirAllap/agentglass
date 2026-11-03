@@ -21,7 +21,26 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-DEFAULT_SERVER = os.environ.get("AGENTGLASS_SERVER", "http://127.0.0.1:4000")
+def _default_server(host):
+    """http://<host>:<port> of the running server. The port is the one it wrote
+    at bind (next to the token file), because the app moves to another port when
+    4000 is taken and the AGENTGLASS_PORT an agent pane inherits can be stale;
+    then AGENTGLASS_PORT, then 4000. No probe: a hook cannot pay a round trip."""
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    port = ""
+    try:
+        with open(os.path.join(base, "agentglass", "port"), encoding="utf-8") as f:
+            port = f.read().strip()
+    except OSError:
+        pass
+    if not (port.isdigit() and 0 < int(port) < 65536):
+        port = os.environ.get("AGENTGLASS_PORT", "").strip()
+    if not (port.isdigit() and 0 < int(port) < 65536):
+        port = "4000"
+    return f"http://{host}:{port}"
+
+
+DEFAULT_SERVER = (os.environ.get("AGENTGLASS_SERVER") or _default_server("127.0.0.1"))
 
 def _agentglass_local_only(url):
     """Refuse to send transcript/telemetry anywhere but this machine.
@@ -91,11 +110,18 @@ def rules_verdict(server, headers, payload):
     tool = payload.get("tool_name") or ""
     if not tool or not cwd.startswith("/"):
         return None
-    q = urllib.parse.urlencode({
+    fields = {
         "root": cwd,
         "tool": tool,
         "input": json.dumps(payload.get("tool_input") or {})[:8000],
-    })
+        # Only a session that would stop for this call gets a suggestion for it.
+        "mode": payload.get("permission_mode") or "",
+    }
+    # A Flight plan builder's tab starts with its worktree in the environment: the server holds its file writes inside it.
+    bound = os.environ.get("AGENTGLASS_BUILDER_WORKTREE") or ""
+    if bound.startswith("/"):
+        fields["bound"] = bound
+    q = urllib.parse.urlencode(fields)
     try:
         req = urllib.request.Request(server.rstrip("/") + "/agent-rules/check?" + q, headers=headers, method="GET")
         with urllib.request.urlopen(req, timeout=RULES_TIMEOUT) as resp:
@@ -226,6 +252,19 @@ def main():
                 print(remind.strip())
         except Exception:
             pass  # a reminder that cannot be read must never cost the event it rode in on
+
+    # NOTICES PARKED FOR THIS SEAT. A notice is never typed over text the person
+    # is writing (server/src/seatnotice.ts); the server hands the parked ones
+    # back on the seat's next prompt and this prints them as context. A hook
+    # only runs on a turn: an idle seat is woken once its box empties.
+    if event_type == "UserPromptSubmit":
+        try:
+            notices = json.loads(answer.decode("utf-8", "replace")).get("notices") if answer else None
+            for n in notices if isinstance(notices, list) else []:
+                if isinstance(n, str) and n.strip():
+                    print(n.strip())
+        except Exception:
+            pass  # same rule as the reminder above
 
     if verdict:
         print(json.dumps({"hookSpecificOutput": {

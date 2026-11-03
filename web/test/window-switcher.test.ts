@@ -193,3 +193,12 @@ describe("the chord", () => {
     expect(sw).not.toContain("transition");
   });
 });
+
+describe("the switcher is event-driven", () => {
+  const sw = readFileSync(new URL("../src/components/terminal/WindowSwitcher.tsx", import.meta.url).pathname, "utf8");
+  test("no clock: it asks again when windows change or focus returns", () => {
+    expect(sw).not.toContain("usePoll");
+    expect(sw).not.toContain("REFRESH_MS");
+    expect(sw).toContain("onWindowsChanged(() => { void loadRef.current(); })");
+  });
+});

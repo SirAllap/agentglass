@@ -84,6 +84,36 @@ function resolve(name: string, file: string): { file: string; body: string } | n
 const SHARED = new Set(["SettingRow", "Toggle", "Fold", "Switch", "Section", "SettingsCard", "StatusBadge",
   "Disclosure", "SettingsForm", "Field", "EmptyState", "LinkButton", "Button", "Segmented", "Select", "Fragment"]);
 
+/** A rule's body, delimited by its own braces rather than by a window of
+ *  characters after its selector: a second rule for the same selector, later
+ *  in the file, is then read as a second rule and not swallowed. */
+function ruleBody(css: string, selector: string): string {
+  const at = css.indexOf(selector);
+  if (at < 0) return "";
+  const from = css.indexOf("{", at);
+  let depth = 0;
+  for (let i = from; i < css.length; i++) {
+    if (css[i] === "{") depth++;
+    else if (css[i] === "}" && --depth === 0) return css.slice(from + 1, i);
+  }
+  return "";
+}
+
+/** Every body of one at-rule, same brace rule, so a test can say WHICH media
+ *  block holds a rule instead of matching a string anywhere in the sheet. */
+function atRuleBodies(css: string, head: string): string[] {
+  const out: string[] = [];
+  for (let at = css.indexOf(head); at >= 0; at = css.indexOf(head, at + 1)) {
+    const from = css.indexOf("{", at);
+    let depth = 0;
+    for (let i = from; i < css.length; i++) {
+      if (css[i] === "{") depth++;
+      else if (css[i] === "}" && --depth === 0) { out.push(css.slice(from + 1, i)); break; }
+    }
+  }
+  return out;
+}
+
 const tabIds = [...modal.matchAll(/\{ id: "([a-z-]+)", label: "([^"]*)", group: "/g)].map((m) => ({ id: m[1]!, label: m[2]! }));
 
 /** Each page's own source: its show blocks and the components they name,
@@ -159,7 +189,7 @@ const METRICS: Record<string, (src: string) => number> = {
 };
 
 /** Held at zero: the pages already built from the kit. */
-const MIGRATED = ["connections", "engines", "orchestration", "clickup", "jira", "prefs", "appearance", "notifications", "rail", "keys", "terminal", "diff", "tasks", "browser", "lantern", "understudy", "review-prompts", "saved-replies", "about", "privacy", "tmux", "plugins", "remote", "log", "onboarding"];
+const MIGRATED = ["connections", "engines", "orchestration", "clickup", "jira", "prefs", "appearance", "notifications", "rail", "keys", "terminal", "diff", "tasks", "browser", "understudy", "review-prompts", "saved-replies", "about", "privacy", "tmux", "plugins", "remote", "log", "onboarding", "git"];
 
 const RATCHET_PATH = join(import.meta.dir, "settings-ratchet.txt");
 const ceilings = new Map<string, number>();
@@ -280,20 +310,68 @@ describe("the shared blocks", () => {
     // A 480px cap left every form a strip inside a card twice its width.
     expect(css).toMatch(/\.agx-sform \{ display: flex; flex-direction: column; gap: 12px; \}/);
     // The controls fill the field; the rule sits in a layer so `w-[96px]` still wins.
-    expect(css).toMatch(/@layer components \{\s*\.agx-field > :where\(input:not\([^)]*\), select, textarea\) \{ width: 100%; \}/);
+    expect(css).toMatch(/@layer components \{\s*\.agx-field > :where\(input:not\([^)]*\), textarea\) \{ width: 100%; \}/);
+    // A select is its natural width unless the field is `block` (kit-grow.test.ts holds that rule).
     expect(css).toMatch(/\.agx-field \{ display: flex; flex-direction: column; gap: 6px; \}/);
     const field = kit.slice(kit.indexOf("export function Field("));
     expect(field.indexOf("<label")).toBeLessThan(field.indexOf("{children}"));
-    expect(field.indexOf("{children}")).toBeLessThan(field.indexOf("agx-field-h"));
+    expect(field.indexOf("{children}")).toBeLessThan(field.indexOf("id={helpId}"));
   });
-  test("the column is a flow that fills the page; only a board is capped, and by the page", () => {
+  test("the column is a flow that fills the page, with no page's own width", () => {
     // It was capped at 1120px against the nav, which left the index rail a
-    // 1000px hole away from the cards on a 2560px window. Now the flow fills the
-    // page and the rail sits against it; a board (WIDE_PANES) chooses its own width.
+    // 1000px hole away from the cards on a 2560px window. A table of per-page
+    // caps replaced it (1260 for the Agents page, 1900 for the two boards) and
+    // kept the band: a fixed width inside a wide window is the defect itself.
     const col = css.slice(css.indexOf(".agx-settings-col {"), css.indexOf("}", css.indexOf(".agx-settings-col {")));
-    expect(col).toContain("max-width: var(--agx-settings-col, none)");
-    expect(col).not.toMatch(/margin-inline: auto|1120px/);
-    expect(css).toMatch(/\.agx-settings-page \{ grid-template-columns: minmax\(0, var\(--agx-settings-col, 1fr\)\) 224px; justify-content: start; \}/);
+    expect(col).not.toMatch(/max-width|1120px/);
+    expect(css).not.toMatch(/--agx-settings-col|data-flow="single"/);
+    const modal = read(join(COMPONENTS, "SettingsModal.tsx"));
+    expect(modal).not.toContain("WIDE_PANES");
+    expect(modal).not.toMatch(/\["(?:clickup|jira|hooks)", "\d+px"\]/);
+  });
+  test("from 1760px every page fills the track; only a board caps it", () => {
+    // Left-aligned (and not centred) a board's cap owned its width; every page
+    // without a cap fills the track and has no slack to place. One rule, and
+    // only one, for every page: a second .agx-settings-page block in this media
+    // query would be a page that opted out.
+    const wide = atRuleBodies(css, "@media (min-width: 1760px)").filter((b) => b.includes(".agx-settings-page"));
+    expect(wide).toHaveLength(1);
+    const page = ruleBody(wide[0]!, ".agx-settings-page {");
+    expect(page).toContain("grid-template-columns: minmax(0, 1fr) 224px");
+    expect(page).toContain("justify-content: start");
+    expect(page).not.toContain("justify-content: center");
+  });
+  test("the Agents page uses the window like every other page from 1760px", () => {
+    // Its wrappers (the hero, the pair) kept its cards out of the page's flow,
+    // so it was one column with a cap of its own and a band beside it. From
+    // 1760px the wrappers hand their cards to the flow; below it the page keeps
+    // its one deliberate column, which is what the cap kept.
+    expect(read(join(COMPONENTS, "SettingsModal.tsx"))).not.toContain("WIDE_PANES");
+    const wide = atRuleBodies(css, "@media (min-width: 1760px)").join("\n");
+    const release = ruleBody(wide, ".agx-agents-page, .agx-agents-pair, .agx-agents-hero {");
+    expect(release).toContain("display: contents");
+    expect(ruleBody(wide, ".agx-agents-hero > .agx-split-side {")).toContain("display: contents");
+    const narrow = atRuleBodies(css, "@media (min-width: 1180px)").join("\n");
+    expect(ruleBody(narrow, ".agx-settings-col .agx-agents-hero {")).toContain("minmax(0, 1fr) 344px");
+    expect(ruleBody(narrow, ".agx-agents-pair {")).toContain("minmax(0, 1fr) minmax(0, 1fr)");
+  });
+  test("the stable flow places the cards a display:contents wrapper hands to the grid", () => {
+    // The Agents page's wrappers have no box from 1760px, so the grid's items
+    // are their children; the script walked `col.children` and pinned the one
+    // wrapper that has no box, leaving every card unplaced in 1px rows.
+    const flow = read(join(SRC, "components", "useStableFlow.ts"));
+    expect(flow).toContain("const kids = flowKids(col);");
+    expect(flow).toContain('getComputedStyle(h).display === "contents"');
+  });
+  test("the Agents page's Watching card keeps its own height beside the taller preview", () => {
+    // The hero is a two-column grid whose right column is a live preview; a
+    // stretch on both items grew the Watching card to the preview's height and
+    // left a hollow box under its last row. The side stretches, the card does not.
+    const hero = ruleBody(css, ".agx-settings-col .agx-agents-hero {");
+    expect(hero).toContain("align-items: start");
+    expect(hero).not.toContain("align-items: stretch");
+    expect(hero).toContain("grid-template-columns: minmax(0, 1fr) 344px");
+    expect(css).toContain(".agx-agents-hero > .agx-split-side { position: static; align-self: stretch; }");
   });
   test("no control in a settings pane is capped at 480px inside a wider card", () => {
     expect(read(join(SRC, "components", "SettingsModal.tsx"))).not.toContain("max-w-[480px]");

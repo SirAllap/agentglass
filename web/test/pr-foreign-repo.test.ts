@@ -26,12 +26,14 @@ describe("a checkout-less pull request", () => {
 
   it("switches every write off for the whole visit, and keeps refresh working", () => {
     expect(code).toContain('const readOnly = away?.root.startsWith("gh:") === true;');
-    expect(code).toContain("const busy = running || readOnly || updatingHere;");
+    expect(code).toContain("const busy = running || updatingHere;");
     expect(code).toMatch(/busy=\{running\} spinning=\{refreshing\}/);
   });
 
   it("says why in the strip, in full", () => {
-    expect(code).toContain("read-only: there is no checkout of ${away.repo} on this machine");
+    // The strip names what works and what needs a checkout; RemoteStrip owns the sentence.
+    const strip = Bun.file(new URL("../src/components/RemoteStrip.tsx", import.meta.url));
+    return strip.text().then((t) => expect(t).toContain("has no checkout here — merge, branch update, comments and labels work"));
   });
 
   it("never puts a failure where it is cut off", () => {
@@ -42,7 +44,11 @@ describe("a checkout-less pull request", () => {
   });
 
   it("draws the Inbox count in the warning ink, not the bare tint on its own wash", () => {
-    expect(code).toContain("`var(--${countTint}-ink)`");
+    // The kit Badge puts a status word in its ink (dataInk) on a wash of the tint;
+    // viewTab's count has no tint prop of its own any more, and the Inbox pill
+    // passes none, so no call draws a bare semantic tint on its own wash.
+    expect(code).toContain("tint={dataInk(");
     expect(code).not.toContain('countTint="var(--warning)"');
+    expect(code).not.toContain("countTint");
   });
 });

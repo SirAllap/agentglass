@@ -98,7 +98,8 @@ describe("the timeline's geometry lives in Chrome.tsx, once", () => {
 
 describe("a comment's actions are compact controls", () => {
   it("take their height from CTRL_H.compact, not a typed number", () => {
-    expect(action).toContain("height: CTRL_H.compact");
+    // The kit's Button at its `compact` rung is CTRL_H.compact; no typed height is left on the action.
+    expect(action).toContain('size="compact"');
     expect(action).not.toMatch(/height:\s*\d/);
   });
 });

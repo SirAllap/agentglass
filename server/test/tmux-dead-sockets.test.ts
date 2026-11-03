@@ -100,7 +100,15 @@ describe("tmuxSockets against a hundred dead sockets", () => {
     await listPanes();
     clearInterval(timer);
     expect(ticks).toBeGreaterThanOrEqual(2);
-    expect(tmuxSockets()).toEqual([["-S", join(sockDir, LABEL)]]);
+    // Only "no server running" is a verdict the fallback remembers; a connect
+    // that failed for another reason is asked again next poll, by design (see
+    // NO_SERVER). The CI container left one of these hundred with no verdict,
+    // 95ms for the whole test, so no probe had hit the 2s timeout.
+    const live = ["-S", join(sockDir, LABEL)];
+    const stragglers = () => tmuxSockets().filter((s) => s[1] !== live[1]);
+    if (stragglers().length) await listPanes();
+    expect(stragglers()).toEqual([]);
+    expect(tmuxSockets()).toEqual([live]);
   });
 });
 

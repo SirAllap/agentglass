@@ -328,3 +328,17 @@ export function shikiTheme(): "github-dark" | "github-light" {
     return "github-dark";
   }
 }
+
+/**
+ * The sentence for a syntax theme whose light/dark does not match the app's,
+ * or null. Token colours are drawn on the app's own surface, so a dark theme
+ * on a light app is pale grey on white. Drawing the theme's own background
+ * would be a redesign; the picker says so instead.
+ */
+export function themeClash(id: string, app: "github-dark" | "github-light"): string | null {
+  const t = THEMES.find((x) => x.id === id);
+  if (!t || t.dark === (app === "github-dark")) return null;
+  return t.dark
+    ? `${t.label} is a dark theme and the app is light: code may be hard to read`
+    : `${t.label} is a light theme and the app is dark: code may be hard to read`;
+}

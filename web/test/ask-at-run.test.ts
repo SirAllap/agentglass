@@ -192,8 +192,8 @@ describe("the three places that ask", () => {
     expect(body.match(/api\.clickupCard\(/g)?.length).toBe(1);
   });
   test("the review menu's item reads the picker's choice, with the members it already holds", async () => {
-    const src = await read("components/PrPanel.tsx");
-    expect(src).toContain("const ensure: Ensure = askAssign ? asked.ensure : fixedEnsure;");
+    const src = await read("components/PrAskPicker.tsx");
+    expect(src).toContain("const ensure = askAssign ? asked.ensure : fixedEnsure;");
     expect(src).toContain("useAskAssign({ on: !!askAssign, members,");
   });
   test("the picker is the app's one people picker", async () => {

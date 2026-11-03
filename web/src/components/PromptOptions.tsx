@@ -1,12 +1,11 @@
 import { useRef, useState } from "react";
 import { AnchoredMenu } from "./AnchoredMenu.tsx";
 import { MenuItem } from "./ContextMenu.tsx";
-import { Portal } from "./Portal.tsx";
-import { EDGE, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { Button, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { TaskDialog } from "./tasks/TaskDialog.tsx";
 import { useHandoffEngines, modesFor, engineTitle } from "../lib/handoffEngines.ts";
 import type { SendOpts } from "../lib/sendOptions.ts";
 import { HIT } from "../lib/iconSize.ts";
-import { LAYER } from "../lib/layers.ts";
 import { LAUNCH_MODE_LABEL } from "../../../shared/launchModes.ts";
 
 /**
@@ -40,7 +39,7 @@ export function PromptOptions({ label, loadPrompt, onSend, onDone }: {
   const modes = e ? modesFor(e, e.def) : [];
   return (
     <>
-      <button ref={box} type="button" aria-label={`Options for ${label}`} aria-haspopup="menu" aria-expanded={open} title="More ways to send it"
+      <button ref={box} type="button" role="menuitem" aria-label={`Options for ${label}`} aria-haspopup="menu" aria-expanded={open} title="More ways to send it"
         onClick={(ev) => { ev.stopPropagation(); setOpen((v) => !v); }}
         className="inline-flex items-center justify-center rounded hover:bg-white/10 shrink-0"
         style={{ width: HIT, height: HIT, color: "var(--text3)" }}>
@@ -72,25 +71,14 @@ export function PromptOptions({ label, loadPrompt, onSend, onDone }: {
         </AnchoredMenu>
       )}
       {text !== null && (
-        <Portal>
-          <div className="fixed inset-0 agx-scrim" style={{ zIndex: LAYER.menu }} onClick={() => setText(null)} />
-          <div className="fixed inset-0 flex items-center justify-center p-6 pointer-events-none" style={{ zIndex: LAYER.menu + 1 }}>
-            <div role="dialog" aria-modal="true" aria-label={`Edit the prompt: ${label}`}
-              className="pointer-events-auto w-full max-w-[640px] rounded-xl flex flex-col gap-3 p-4"
-              style={{ background: "var(--surface-card)", border: EDGE, maxHeight: "calc(100dvh - 48px)" }}>
-              <div className="text-[13px] font-medium" style={{ color: "var(--text)" }}>Edit prompt before sending</div>
-              <textarea autoFocus value={text} onChange={(ev) => setText(ev.target.value)} spellCheck={false} rows={14}
-                aria-label="Prompt text" className={`w-full ${INPUT} font-mono`} style={{ ...INPUT_STYLE, minHeight: 240 }} />
-              <div className="flex justify-end gap-2">
-                <button type="button" className="text-[11px] px-3 rounded-lg" style={{ minHeight: HIT, border: EDGE, color: "var(--text2)" }}
-                  onClick={() => setText(null)}>Cancel</button>
-                <button type="button" disabled={!text.trim()} className="text-[11px] px-3 rounded-lg disabled:opacity-40"
-                  style={{ minHeight: HIT, border: EDGE, color: "var(--text)" }}
-                  onClick={() => send({ prompt: text })}>Send to terminal</button>
-              </div>
-            </div>
-          </div>
-        </Portal>
+        <TaskDialog title="Edit prompt before sending" width={640} onClose={() => setText(null)}
+          footer={<>
+            <Button onClick={() => setText(null)}>Cancel</Button>
+            <Button tone="primary" disabled={!text.trim()} onClick={() => send({ prompt: text })}>Send to terminal</Button>
+          </>}>
+          <textarea autoFocus value={text} onChange={(ev) => setText(ev.target.value)} spellCheck={false} rows={14}
+            aria-label="Prompt text" className={`w-full ${INPUT} font-mono`} style={{ ...INPUT_STYLE, minHeight: 240 }} />
+        </TaskDialog>
       )}
     </>
   );

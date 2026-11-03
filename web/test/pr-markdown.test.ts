@@ -305,15 +305,15 @@ describe("a coverage bot's comment", () => {
   // What github-actions' pytest-coverage-comment really emits: a marker, then
   // badge and fold pressed onto one line.
   const BOT = [
-    "<!-- Pytest Coverage Comment: vaptt-unit-tests | vaptt -->",
-    '<a href="https://github.com/acme/orbit/blob/abc/README.md"><img alt="Coverage" src="https://img.shields.io/badge/Coverage-75%25-yellow.svg"></a><details><summary>Coverage (vaptt)</summary>',
+    "<!-- Pytest Coverage Comment: orbit-unit-tests | orbit -->",
+    '<a href="https://github.com/acme/orbit/blob/abc/README.md"><img alt="Coverage" src="https://img.shields.io/badge/Coverage-75%25-yellow.svg"></a><details><summary>Coverage (orbit)</summary>',
     "",
     "| File | Stmts |",
     "| --- | --- |",
     "| models.py | 188 |",
     "",
     "</details>",
-    "<!-- Sticky Pull Request Commentpatch-coverage-vaptt -->",
+    "<!-- Sticky Pull Request Commentpatch-coverage-orbit -->",
   ].join("\n");
 
   test("the machine markers do not reach the screen", () => {
@@ -326,7 +326,7 @@ describe("a coverage bot's comment", () => {
     const blocks = parseBody(BOT);
     const det = blocks.find((b) => b.kind === "details");
     expect(det).toBeDefined();
-    expect((det as Extract<MdBlock, { kind: "details" }>).summary).toBe("Coverage (vaptt)");
+    expect((det as Extract<MdBlock, { kind: "details" }>).summary).toBe("Coverage (orbit)");
   });
 
   test("the badge on that same line survives it", () => {

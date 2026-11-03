@@ -116,7 +116,8 @@ describe("the list's own blurb", () => {
   it("opens over the board rather than above it", () => {
     /* As a fold it pushed the rows down by two hundred pixels: the reference
        material shoving aside the thing you came to read. */
-    expect(src).toContain("<Portal find z={LAYER.viewer}>");
+    // TaskDialog is the Portal layer; AboutList is not above the board.
+    expect(src).toContain("<TaskDialog title={`About ${name}`}");
     expect(src).not.toContain('const DESC_KEY = "agentglass.clickup.listDescription";');
   });
 

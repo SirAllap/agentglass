@@ -7,7 +7,7 @@
  *   #1042  matched by its own NUMBER — no "1042" anywhere in its title or
  *           body, and its branch is ORBIT-2318-…
  *   #1436  its body mentions "PR #1042 (ORBIT-2318, inline FAQ default)".
- *   #1188  its body lists in-flight pull requests: (#667, …, #1042).
+ *   #1188  its body lists pull requests still open: (#667, …, #1042).
  *
  * The search stays — the id can be in a branch, a title or a body, and which of
  * those is not ours to assume — but every row it returns is checked.
@@ -45,10 +45,10 @@ describe("and the three that did not", () => {
     })).toBe(false);
   });
 
-  test("the one that lists in-flight pull requests", () => {
+  test("the one that lists pull requests still open", () => {
     expect(mentionsCard(ID, {
       title: "Perceived latency analysis and brief",
-      body: "- Audit of in-flight open PRs (#1030, #1031, #1033, #1037, #1039, #1040, #1042)",
+      body: "- Audit of open PRs still in review (#1030, #1031, #1033, #1037, #1039, #1040, #1042)",
     })).toBe(false);
   });
 });

@@ -72,8 +72,8 @@ export function whoCellWidth(people: number, m: DigitMetrics): number {
   if (people <= 0) return 0;
   const faces = Math.min(people, FACES_SHOWN);
   let w = FACE * faces - FACE_OVERLAP * (faces - 1);
-  // 8.5px sans, against the 9.5px the chip counts are probed at.
-  if (people > FACES_SHOWN) w += GAP + (1 + digits(people - FACES_SHOWN)) * m.sans * (8.5 / 9.5);
+  // 10px sans, against the 9.5px the chip counts are probed at.
+  if (people > FACES_SHOWN) w += GAP + (1 + digits(people - FACES_SHOWN)) * m.sans * (10 / 9.5);
   return Math.ceil(w) + 1;
 }
 
@@ -112,3 +112,24 @@ export function digitMetrics(): DigitMetrics {
 
 /** Forget the probe, for the one moment it can change: the fonts arriving. */
 export function forgetDigitMetrics(): void { probed = null; }
+
+/**
+ * Which columns the board table keeps at its own width.
+ *
+ * The table has no minimum width: it is the card pane that eats its room, and a
+ * window media query cannot see that. Under 760px PR and Pts go, under 560px
+ * Who goes too; Task, Due and the rest stay. Tiers rather than widths so a
+ * resize that crosses no threshold re-renders nothing. An unmeasured table (0)
+ * is the widest tier, so the first paint is not the narrow one.
+ *
+ * Ceiling: three tiers, fixed thresholds; a board with a column of its own that
+ * needs more room than these leaves is not measured.
+ */
+export const COLUMN_TIER_WIDTHS = { pr: 760, who: 560 } as const;
+export function columnTier(width: number): 0 | 1 | 2 {
+  if (!(width > 0) || width >= COLUMN_TIER_WIDTHS.pr) return 2;
+  return width >= COLUMN_TIER_WIDTHS.who ? 1 : 0;
+}
+export function columnsAt(tier: 0 | 1 | 2): { pr: boolean; who: boolean; pts: boolean } {
+  return { pr: tier === 2, who: tier >= 1, pts: tier === 2 };
+}

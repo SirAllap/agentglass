@@ -79,7 +79,7 @@ describe("the Activity as first drawn", () => {
     const html = await draw({});
     for (const w of ["All", "Comments", "History", "Work log", "Oldest first", "No comments yet."]) expect(html).toContain(w);
     expect(html.indexOf("All")).toBeLessThan(html.indexOf("History"));
-    expect(html).toContain('aria-selected="true"');
+    expect(html).toContain('aria-pressed="true"');
   });
   test("comments the card read left out are offered, with their number", async () => {
     expect(await draw({ moreComments: 3 })).toContain("Show 3 more comments");

@@ -55,12 +55,14 @@ describe("pull-request panel GitHub budget", () => {
      server answers both queues from one request; the panel must not undo that
      by forcing a list nobody is looking at or dropping the rollups. */
   it("forces only what is on screen when Refresh is pressed", () => {
-    const at = CODE.indexOf("const plan = refreshPlan(selected);");
+    const at = CODE.indexOf("const plan = refreshPlan(selected, layout.list);");
     expect(at).toBeGreaterThan(-1);
     const press = CODE.slice(at, CODE.indexOf("}} disabled={busy} small", at));
     expect(press).not.toContain("forgetRollups(");
     expect(press).toMatch(/if \(boardShown\) \{\s*boardForce\.current = true;/);
-    expect(press).toContain("const listOnScreen = !boardShown || BOARD_IS_WIDE;");
+    // `boardWide` is the `BOARD_IS_WIDE` constant turned into a per-repository
+    // switch: the list is on screen when the board is not, or when it is wide.
+    expect(press).toContain("const listOnScreen = !boardShown || boardWide;");
     expect(press).toContain("loadList(listOnScreen)");
   });
 });

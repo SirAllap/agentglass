@@ -24,7 +24,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api.ts";
-import { bandLabels, stepLabel } from "../lib/conflictBrief.ts";
+import { bandLabels, carriedLine, opNoun, stepLabel } from "../lib/conflictBrief.ts";
 import { reviewRows } from "../lib/mergeReview.ts";
 import type {
   BlockChoice, ConflictBlock, ConflictFile, GitActionResult, GitFileChange,
@@ -32,7 +32,7 @@ import type {
 } from "../../../shared/types.ts";
 import { CircleIcon, DoneIcon, DotIcon, IconLabel, MoreIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { EDGE } from "./workspace/Chrome.tsx";
+import { Button, EDGE, Textarea } from "./workspace/Chrome.tsx";
 
 /** Unchanged lines kept either side of a conflict before the rest is folded.
  *  Twelve is about a function signature plus its opening lines — enough to
@@ -58,26 +58,6 @@ function choiceLabel(c: BlockChoice, labels: { ours: string; theirs: string }): 
 const KEY_CHOICE: Record<string, BlockChoice> = { "1": "ours", "2": "theirs", "3": "both", "4": "theirs-first" };
 
 /* ------------------------------------------------------------------ pieces */
-
-function Btn({ children, onClick, disabled, tone, title, grow }: {
-  children: React.ReactNode; onClick: () => void; disabled?: boolean;
-  tone?: "ours" | "theirs" | "danger" | "go" | "quiet"; title?: string; grow?: boolean;
-}) {
-  const c = tone === "ours" ? "var(--primary-hover)"
-    : tone === "theirs" ? "var(--warning)"
-    : tone === "danger" ? "var(--error)"
-    : tone === "go" ? "var(--success)"
-    : "var(--text2)";
-  return (
-    <button onClick={onClick} disabled={disabled} title={title}
-      className={`text-[11px] px-2 py-1 rounded-lg whitespace-nowrap ${grow ? "flex-1" : "shrink-0"}`}
-      style={{
-        color: c,
-        border: `1px solid color-mix(in srgb, ${c} 38%, transparent)`,
-        opacity: disabled ? 0.4 : 1,
-      }}>{children}</button>
-  );
-}
 
 /** A key cap, so the shortcut is on the control rather than in a help sheet. */
 const Cap = ({ k }: { k: string }) => (
@@ -363,9 +343,9 @@ export function ConflictMode(p: ConflictModeProps) {
           <button onClick={() => setReview(true)}
             className="shrink-0 text-left px-3 py-2 border-t text-[10.5px] leading-snug"
             style={{ borderColor: "color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text3)" }}>
-            <b style={{ color: "var(--text2)" }}>{clean} more file{clean === 1 ? "" : "s"}</b> come in with
-            this merge without conflicting.<br />
-            <span style={{ textDecoration: "underline", textUnderlineOffset: 2 }}>Review them →</span>
+            <b style={{ color: "var(--text2)" }}>{clean} more file{clean === 1 ? "" : "s"}</b>{" "}
+            {carriedLine(merge?.state, clean)}<br />
+            <span style={{ textDecoration: "underline", textUnderlineOffset: 2 }}>See {clean === 1 ? "it" : "them"} →</span>
           </button>
         </div>
 
@@ -379,12 +359,12 @@ export function ConflictMode(p: ConflictModeProps) {
                 the word — which is what happened when only one ref was short
                 enough to fit — reads as two different kinds of control. */}
             <div className="ml-auto flex items-center gap-1.5">
-              <Btn tone="quiet" onClick={() => void wholeFile("ours")} disabled={busy || !sel}
-                title={`Answer every conflict in this file with ${labels.ours}`}>all {shortSides ? labels.ours : "ours"}</Btn>
-              <Btn tone="quiet" onClick={() => void wholeFile("theirs")} disabled={busy || !sel}
-                title={`Answer every conflict in this file with ${labels.theirs}`}>all {shortSides ? labels.theirs : "theirs"}</Btn>
-              <Btn tone="quiet" onClick={() => sel && p.onOpenEditor(sel, blocks[cursor]?.line ?? 1)} disabled={!sel}
-                title="Open this file in your editor, at this conflict">▸_ editor</Btn>
+              <Button onClick={() => void wholeFile("ours")} disabled={busy || !sel}
+                title={`Answer every conflict in this file with ${labels.ours}`}>all {shortSides ? labels.ours : "ours"}</Button>
+              <Button onClick={() => void wholeFile("theirs")} disabled={busy || !sel}
+                title={`Answer every conflict in this file with ${labels.theirs}`}>all {shortSides ? labels.theirs : "theirs"}</Button>
+              <Button onClick={() => sel && p.onOpenEditor(sel, blocks[cursor]?.line ?? 1)} disabled={!sel}
+                title="Open this file in your editor, at this conflict">▸_ editor</Button>
             </div>
           </div>
 
@@ -402,7 +382,7 @@ export function ConflictMode(p: ConflictModeProps) {
               <div className="m-3 px-3 py-2 rounded-lg text-[11px]" style={{ color: "var(--text2)", border: EDGE }}>
                 Nothing is conflicted in this file any more — something else resolved it.
                 <div className="mt-1.5">
-                  <Btn tone="go" onClick={() => void p.act(() => api.gitResolve(root, [sel!], "ours"), `${sel} staged`)} disabled={busy}>Mark it resolved</Btn>
+                  <Button tone="ok" onClick={() => void p.act(() => api.gitResolve(root, [sel!], "ours"), `${sel} staged`)} disabled={busy}>Mark it resolved</Button>
                 </div>
               </div>
             )}
@@ -437,10 +417,10 @@ export function ConflictMode(p: ConflictModeProps) {
               style={{ borderColor: "color-mix(in srgb, var(--border) 45%, transparent)" }}>
               <span style={{ color: "var(--text3)" }}>{answered} of {blocks.length} conflict{blocks.length === 1 ? "" : "s"} in this file answered</span>
               <div className="ml-auto flex items-center gap-2">
-                <Btn tone="go" onClick={() => void apply()} disabled={!allAnswered || saving || busy || !writeEnabled}
+                <Button tone="ok" onClick={() => void apply()} disabled={!allAnswered || saving || busy || !writeEnabled}
                   title={allAnswered ? "Write every choice and stage the file" : "Answer every conflict first"}>
                   {saving ? "writing…" : `Resolve ${sel?.split("/").pop() ?? "file"}`}
-                </Btn>
+                </Button>
               </div>
             </div>
           )}
@@ -451,31 +431,31 @@ export function ConflictMode(p: ConflictModeProps) {
           move that is guaranteed safe. */}
       <div className="shrink-0 px-3 py-2 border-t flex items-center gap-2"
         style={{ borderColor: "color-mix(in srgb, var(--border) 45%, transparent)", background: "var(--surface-card)" }}>
-        <Btn tone="danger" disabled={busy}
+        <Button tone="danger" disabled={busy}
           onClick={async () => {
             if (!(await p.ask({
-              title: `Abandon this ${merge?.state === "rebasing" ? "rebase" : "merge"}?`,
+              title: `Abandon this ${opNoun(merge?.state)}?`,
               body: "The tree goes back to exactly how it was. Every resolution made here is lost.",
               danger: true, confirmLabel: "Abandon it",
             }))) return;
-            void p.act(() => api.gitMergeAbort(root), "merge aborted", "abort");
+            void p.act(() => api.gitMergeAbort(root), `${opNoun(merge?.state)} aborted`, "abort");
           }}
-          title="Throw it away and put the tree back exactly as it was">Abandon</Btn>
+          title="Throw it away and put the tree back exactly as it was">Abandon</Button>
         {/* The terminal gives you the session itself, attached, beside your own
             shells, where you can watch it edit and take the keyboard off it. */}
         <span className="text-[10.5px] ml-1" style={{ color: "var(--text3)" }}>Send to terminal</span>
-        <Btn tone="ours" onClick={p.onAskClaudeTerminal}
+        <Button tint="var(--primary-hover)" onClick={p.onAskClaudeTerminal}
           title={p.terminalWindowLive
             ? "Your agent is already working in this repo's \"conflicts\" window — switch to its tab"
-            : "Opens a tmux window in this repo with your agent on it, told which side is which and which files are in conflict"}>{p.terminalWindowLive ? "▸_ Agent is working · Open tab" : "▸_ in a terminal"}</Btn>
+            : "Opens a tmux window in this repo with your agent on it, told which side is which and which files are in conflict"}>{p.terminalWindowLive ? "▸_ Agent is working · Open tab" : "▸_ in a terminal"}</Button>
         <div className="ml-auto flex items-center gap-2">
           {left > 0
             ? <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>{left} file{left === 1 ? "" : "s"} still to resolve</span>
             : <span className="text-[10.5px]" style={{ color: "var(--success-ink)" }}>every conflict answered</span>}
-          <Btn tone="go" disabled={left > 0 || busy || !writeEnabled} onClick={() => setReview(true)}
+          <Button tone="ok" disabled={left > 0 || busy || !writeEnabled} onClick={() => setReview(true)}
             title={left > 0 ? "Resolve every file first" : "See everything this commit would carry, then commit"}>
             Review and {merge?.state === "rebasing" ? "continue" : "commit"}{step ? ` — ${step}` : ""}
-          </Btn>
+          </Button>
         </div>
       </div>
     </div>
@@ -593,13 +573,13 @@ function Body({ file, picks, labels, cursor, opened, editing, onCursor, onPick, 
 
             {editing?.index === b.index ? (
               <div className="px-[5ch] py-2 flex flex-col gap-1.5">
-                <textarea autoFocus value={editing.text} onChange={(e) => onEditText(e.target.value)}
+                <Textarea autoFocus value={editing.text} onChange={(e) => onEditText(e.target.value)}
                   spellCheck={false} rows={Math.min(20, Math.max(3, editing.text.split("\n").length + 1))}
-                  className="w-full rounded-lg px-2 py-1.5 text-[11.5px] font-mono outline-none"
-                  style={{ background: "var(--bg)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)", lineHeight: 1.7 }} />
+                  className="w-full font-mono !text-[11.5px]"
+                  style={{ border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", lineHeight: 1.7 }} />
                 <div className="flex items-center gap-2">
-                  <Btn tone="go" onClick={() => onEditDone(true)}>Use this</Btn>
-                  <Btn tone="quiet" onClick={() => onEditDone(false)}>Cancel</Btn>
+                  <Button tone="ok" onClick={() => onEditDone(true)}>Use this</Button>
+                  <Button onClick={() => onEditDone(false)}>Cancel</Button>
                   <span className="text-[10px]" style={{ color: "var(--text3)" }}>
                     Empty deletes the whole region. Conflict markers are refused.
                   </span>
@@ -607,11 +587,11 @@ function Body({ file, picks, labels, cursor, opened, editing, onCursor, onPick, 
               </div>
             ) : (
               <div className="px-[5ch] py-1.5 flex items-center gap-1.5 flex-wrap">
-                <Btn tone="ours" onClick={() => onPick(b.index, "ours")}><Cap k="1" />Keep ours</Btn>
-                <Btn tone="theirs" onClick={() => onPick(b.index, "theirs")}><Cap k="2" />Take theirs</Btn>
-                <Btn tone="quiet" onClick={() => onPick(b.index, "both")}><Cap k="3" />Both</Btn>
-                <Btn tone="quiet" onClick={() => onPick(b.index, "theirs-first")}><Cap k="4" />Both ⇅</Btn>
-                <Btn tone="quiet" onClick={() => onEdit(b)}><Cap k="e" />Write it myself</Btn>
+                <Button tint="var(--primary-hover)" onClick={() => onPick(b.index, "ours")}><Cap k="1" />Keep ours</Button>
+                <Button tint="var(--warning)" onClick={() => onPick(b.index, "theirs")}><Cap k="2" />Take theirs</Button>
+                <Button onClick={() => onPick(b.index, "both")}><Cap k="3" />Both</Button>
+                <Button onClick={() => onPick(b.index, "theirs-first")}><Cap k="4" />Both ⇅</Button>
+                <Button onClick={() => onEdit(b)}><Cap k="e" />Write it myself</Button>
                 {isCursor && <span className="text-[10px] ml-1" style={{ color: "var(--text3)" }}>n · p to move</span>}
               </div>
             )}
@@ -652,9 +632,9 @@ function Review({ root, staged, files, busy, writeEnabled, act, ask, merge, step
     <div className="flex-1 min-h-0 flex flex-col">
       <div className="shrink-0 px-4 py-2 border-b flex items-center gap-3"
         style={{ borderColor: "color-mix(in srgb, var(--border) 45%, transparent)", background: "var(--surface-card)" }}>
-        <button onClick={onBack} className="text-[11px]" style={{ color: "var(--text2)" }}>← Back to the conflicts</button>
+        <Button tone="quiet" onClick={onBack}>← Back to the conflicts</Button>
         <span className="text-[11px] font-semibold ml-2" style={{ color: "var(--text)" }}>
-          What this {rebase ? "commit" : "merge"} carries
+          What this {rebase ? "commit" : opNoun(merge?.state)} carries
         </span>
         <span className="ml-auto text-[11px] tabular-nums" style={{ color: "var(--text2)" }}>{rows.length} files</span>
       </div>
@@ -685,17 +665,17 @@ function Review({ root, staged, files, busy, writeEnabled, act, ask, merge, step
           {step && ` This is ${step} — the ${rebase ? "rebase" : "operation"} continues after it.`}
         </span>
         <div className="ml-auto">
-          <Btn tone="go" disabled={busy || !writeEnabled}
+          <Button tone="ok" disabled={busy || !writeEnabled}
             onClick={async () => {
               if (!(await ask({
-                title: rebase ? `Continue the rebase?` : `Commit this merge?`,
-                body: `${rows.length} file${rows.length === 1 ? "" : "s"} go in.${step ? ` This is ${step}; the rebase will stop again if a later commit conflicts.` : ""}`,
-                confirmLabel: rebase ? "Continue" : "Commit the merge",
+                title: rebase ? `Continue the rebase?` : `Commit this ${opNoun(merge?.state)}?`,
+                body: `${rows.length} file${rows.length === 1 ? " goes" : "s go"} in.${step ? ` This is ${step}; the rebase will stop again if a later commit conflicts.` : ""}`,
+                confirmLabel: rebase ? "Continue" : `Commit the ${opNoun(merge?.state)}`,
               }))) return;
-              void act(() => api.gitMergeContinue(root), rebase ? "rebase continued" : "merge committed", "continue");
+              void act(() => api.gitMergeContinue(root), rebase ? "rebase continued" : `${opNoun(merge?.state)} committed`, "continue");
             }}>
-            {rebase ? "Continue the rebase" : "Commit the merge"}
-          </Btn>
+            {rebase ? "Continue the rebase" : `Commit the ${opNoun(merge?.state)}`}
+          </Button>
         </div>
       </div>
     </div>

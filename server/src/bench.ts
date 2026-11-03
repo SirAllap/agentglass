@@ -1,14 +1,14 @@
 /*
  * The floating bench's own state: its notes, and what of it is still running.
  *
- * The tabs themselves need nothing here — each is a tmux session on the engine
- * (see engineBenchArgv), which is what makes them survive the window, the app
- * and the reboot. Two things do not fit in a tmux session, and they are what
- * this file is:
+ * The tabs themselves need nothing here — each is a WINDOW of the checkout's
+ * one engine session (see engineBenchArgv), which is what makes them survive
+ * the window, the app and the reboot. Two things do not fit in a tmux window,
+ * and they are what this file is:
  *
  *   the note      "what I just found out about this branch". It belongs to a
  *                 CHECKOUT and to nothing else.
- *   what is live  which bench sessions this checkout still has, so the window
+ *   what is live  which bench windows this checkout still has, so the window
  *                 can say "3 open" about a worktree you are not looking at
  *                 rather than quietly losing them.
  *
@@ -28,7 +28,7 @@ import { safeAbs } from "./git.ts";
 import { inScopeReal } from "./config.ts";
 import { diskAllows } from "./disk.ts";
 import { isViewTemp } from "./viewtemp.ts";
-import { benchSessionName, tmux, tmuxSync } from "./tmuxpane.ts";
+import { benchWindowName, engineSessionName, tmux, tmuxSync } from "./tmuxpane.ts";
 
 /** Big enough for a page of notes, small enough that this is not a file store:
  *  the thing being written is a paragraph you will read tomorrow. */
@@ -133,66 +133,89 @@ export function writeNote(rootIn: unknown, textIn: unknown): NoteReport {
 
 export interface BenchLive {
   ok: boolean;
-  /** The slot numbers with a session still on the engine. */
+  /** The slot numbers with a window still on the engine. */
   slots: number[];
   error?: string;
 }
 
+/** A window of the engine session, with whether every pane in it is dead. */
+interface BenchWindow { id: string; name: string; dead: boolean }
+
+/** Grouped from one `list-panes -s`: a window is dead only when every pane in
+ *  it is, and a bench tab is one pane, so the two answers never disagree. */
+function windowRowsFrom(out: string): BenchWindow[] {
+  const by = new Map<string, BenchWindow>();
+  for (const line of out.split("\n")) {
+    const [id = "", name = "", dead = ""] = line.split("\t");
+    if (!id.startsWith("@")) continue;
+    const row = by.get(id) ?? { id, name, dead: true };
+    row.dead = row.dead && dead === "1";
+    by.set(id, row);
+  }
+  return [...by.values()];
+}
+
+const WINDOWS_FORMAT = "#{window_id}\t#{window_name}\t#{pane_dead}";
+
 /**
- * Which of this checkout's bench tabs are still running.
+ * Every window of this checkout's engine session, by exact name.
  *
  * Asked of tmux rather than remembered here, because the truth is over there:
- * a session ends when its command exits, and a window that believed its own
+ * a window ends when its command exits, and a panel that believed its own
  * bookkeeping would offer you tabs that are no longer anything. Nothing is
- * created by asking.
+ * created by asking. The engine session is the ONE session of the checkout —
+ * the console and every bench tab are windows in it, see enginePanelArgv.
  */
+async function engineWindows(root: string): Promise<BenchWindow[]> {
+  const r = await tmux(["list-panes", "-s", "-t", `=${engineSessionName(root)}:`, "-F", WINDOWS_FORMAT]);
+  return r.ok ? windowRowsFrom(r.stdout) : [];
+}
+
+/** The same read for the one caller that cannot await — see readerSessionState. */
+function engineWindowsSync(root: string): BenchWindow[] {
+  const r = tmuxSync(["list-panes", "-s", "-t", `=${engineSessionName(root)}:`, "-F", WINDOWS_FORMAT]);
+  return r.ok ? windowRowsFrom(r.stdout) : [];
+}
+
 /**
- * End a bench slot's session — what closing the Lantern's tab does.
+ * End a bench tab's window — what closing the Lantern's tab does.
  *
- * A bench tab ordinarily forgets its tab and leaves the session running:
- * that is the feature, a shell or an agent that survives the window. The
- * Lantern's chat is the one tab where that is wrong — an observer nobody is
- * looking at is a Claude sitting in tmux, invisible, showing on the very
- * board it was opened to read, long after the session was closed. So its
- * close ends the session, and this is the verb.
+ * A bench tab ordinarily forgets its tab and leaves the window running: that
+ * is the feature, a shell or an agent that survives the window. The Lantern's
+ * chat is the one tab where that is wrong — an observer nobody is looking at
+ * is a Claude sitting in tmux, invisible, showing on the very board it was
+ * opened to read, long after the session was closed. So its close ends the
+ * window, and this is the verb.
  */
 export async function benchEnd(rootIn: unknown, slotIn: unknown): Promise<{ ok: boolean; error?: string; ended?: boolean }> {
   const at = checkout(rootIn);
   if ("error" in at) return { ok: false, error: at.error };
   const slot = Math.floor(Number(slotIn));
   if (!Number.isFinite(slot) || slot < 1 || slot > 99) return { ok: false, error: "no such slot" };
-  const r = await tmux(["kill-session", "-t", `=${benchSessionName(at.root, slot)}`]);
+  /* By ID, never by name: tmux matches a window name by prefix, so
+     `kill-window -t bench-1` would close `bench-19` on a busy day. */
+  const w = (await engineWindows(at.root)).find((x) => x.name === benchWindowName(slot));
+  if (!w) return { ok: true, ended: false };
+  const r = await tmux(["kill-window", "-t", w.id]);
   return { ok: true, ended: r.ok };
 }
 
 export async function benchLive(rootIn: unknown): Promise<BenchLive> {
   const at = checkout(rootIn);
   if ("error" in at) return { ok: false, slots: [], error: at.error };
-  const r = await tmux(["list-sessions", "-F", "#{session_name}"]);
-  // No server running is not a failure: it means nothing is live, which is a
-  // perfectly good answer to this question.
-  if (!r.ok) return { ok: true, slots: [] };
-  const names = new Set(r.stdout.split("\n").map((s) => s.trim()).filter(Boolean));
-  /*
-   * A slot whose command has died is not live, and is closed here so the
-   * next open starts the command again. The engine keeps a pane whose command
-   * failed (tmuxconf.ts); the bench attaches with `new-session -A`, which
-   * would reattach to that corpse and report it live for as long as it stood.
-   */
-  const dead = new Set<string>();
-  const panes = await tmux(["list-panes", "-a", "-F", "#{session_name}\t#{pane_dead}"]);
-  const alive = new Set<string>();
-  for (const line of panes.ok ? panes.stdout.split("\n") : []) {
-    const [session = "", isDead = ""] = line.split("\t");
-    if (!session) continue;
-    if (isDead === "1") dead.add(session); else alive.add(session);
-  }
+  /* No engine session is not a failure: it means nothing is live, which is a
+     perfectly good answer to this question. */
+  const windows = new Map((await engineWindows(at.root)).map((w) => [w.name, w]));
   const slots: number[] = [];
   for (let n = 1; n <= 99; n++) {
     if (n === FINDER_EDIT_SLOT) continue; // the Finder's own editor is not a tab of the bench
-    const name = benchSessionName(at.root, n);
-    if (!names.has(name)) continue;
-    if (dead.has(name) && !alive.has(name)) { await tmux(["kill-session", "-t", `=${name}`]); continue; }
+    const w = windows.get(benchWindowName(n));
+    if (!w) continue;
+    /* A window whose command has died is not live, and is closed here so the
+       next open starts the command again. An attach reattaches to whatever
+       holds the name, corpse included, and would report it live for as long
+       as it stood. */
+    if (w.dead) { await tmux(["kill-window", "-t", w.id]); continue; }
     slots.push(n);
   }
   return { ok: true, slots };
@@ -203,7 +226,7 @@ export async function benchLive(rootIn: unknown): Promise<BenchLive> {
 /**
  * One editor for the files, not one per file.
  *
- * Every file tab of a checkout shares a single tmux session running one nvim,
+ * Every file tab of a checkout shares a single window running one nvim,
  * and that is the difference between a viewer and an editor you work in: the
  * buffers accumulate, `:b#` jumps between the two files you are comparing, the
  * jumplist survives leaving the app for the terminal, and the second file opens
@@ -211,7 +234,7 @@ export async function benchLive(rootIn: unknown): Promise<BenchLive> {
  * neovim with your plugins.
  *
  * The socket is DERIVED from the checkout rather than minted per pane. It has
- * to be: the session outlives the socket that created it, so the next request
+ * to be: the window outlives the socket that created it, so the next request
  * to open a file has to find the same editor without having been the one to
  * start it. Ours because we hand it to `--listen`; the client never sees it and
  * could not name it — see editorwhere.ts for the same rule at pane scope.
@@ -222,8 +245,8 @@ export const BENCH_READER_SLOT = 90;
  * The slot of the nvim the Finder's Editing tab shows inside its own preview.
  *
  * Not a bench tab: the Finder starts it when Editing is chosen and ends it
- * (kill-session by this name) when Editing is left, so it is never offered to
- * the bench window, and `benchLive` leaves it out. Its own socket, because the
+ * (its `bench-89` window) when Editing is left, so it is never offered to the
+ * bench window, and `benchLive` leaves it out. Its own socket, because the
  * reader's is derived from the checkout and two editors cannot listen on one.
  */
 export const FINDER_EDIT_SLOT = 89;
@@ -256,12 +279,12 @@ export async function finderEditSave(rootIn: unknown): Promise<FinderEditState> 
   return finderEditState(rootIn);
 }
 
-/** The keys that quit nvim without writing: constants. Asked of nvim itself so it removes its own swap file, which a bare kill-session leaves behind (and the next open then warns about). */
+/** The keys that quit nvim without writing: constants. Asked of nvim itself so it removes its own swap file, which a bare kill-window leaves behind (and the next open then warns about). */
 export const FINDER_QUIT_KEYS = "<Esc><Cmd>qa!<CR>";
 
 /**
- * End the Finder's editor: nvim quits itself, then whatever is left of its tmux
- * session is killed by name, so nothing outlives the tab. Callers have already
+ * End the Finder's editor: nvim quits itself, then whatever is left of its
+ * window is ended, so nothing outlives the tab. Callers have already
  * asked about unsaved changes; this one does not.
  */
 export async function finderEditEnd(rootIn: unknown): Promise<{ ok: boolean; ended?: boolean; error?: string }> {
@@ -304,35 +327,38 @@ export function readerSocketPath(root: string): string {
 }
 
 /**
- * What the reader session of this checkout is, before anything attaches to it.
+ * What the reader's window of this checkout is, before anything attaches to it.
  *
- * - `none`: there is no session; the next attach creates one with the editor.
+ * - `none`: there is no window; the next open creates one with the editor.
  * - `editor`: a live pane started with a command — the editor this server
  *   started. Attaching to it is the whole point of the reader.
- * - `other`: a session that is NOT the editor, and that nothing will ever turn
- *   into one. `new-session -A` reattaches to whatever holds the name and
- *   ignores the command, so a reader session that began as a plain shell (its
- *   first file was gone, or refused) stayed a shell for every file opened
- *   after it, and `/bench/edit` had no editor socket to reach. Measured on an
- *   isolated server: "Edit in nvim" on a valid file showed the checkout's
- *   prompt, indefinitely. A dead pane is the same case — the engine keeps a
- *   pane whose command failed.
+ * - `other`: a window that is NOT the editor, and that nothing will ever turn
+ *   into one. An attach reattaches to whatever holds the name and ignores the
+ *   command, so a reader that began as a plain shell (its first file was gone,
+ *   or refused) stayed a shell for every file opened after it, and
+ *   `/bench/edit` had no editor socket to reach. Measured on an isolated
+ *   server: "Edit in nvim" on a valid file showed the checkout's prompt,
+ *   indefinitely. A dead pane is the same case — the engine keeps a pane whose
+ *   command failed.
  *
  * A shell's pane has an empty start command; the editor's is its argv. That is
  * the test, and not the editor socket, so an editor that takes no `--listen`
  * (vim) is still recognised and not restarted on every attach.
  */
 export function readerSessionState(root: string): "none" | "editor" | "other" {
-  const r = tmuxSync(["list-panes", "-t", `=${benchSessionName(root, BENCH_READER_SLOT)}:`, "-F", "#{pane_dead}\t#{pane_start_command}"]);
+  const name = benchWindowName(BENCH_READER_SLOT);
+  const r = tmuxSync(["list-panes", "-s", "-t", `=${engineSessionName(root)}:`, "-F", "#{window_name}\t#{pane_dead}\t#{pane_start_command}"]);
   if (!r.ok) return "none";
-  const panes = r.stdout.split("\n").filter(Boolean).map((l) => l.split("\t"));
+  const panes = r.stdout.split("\n").filter(Boolean).map((l) => l.split("\t")).filter(([w]) => w === name);
   if (!panes.length) return "none";
-  return panes.some(([dead, cmd]) => dead !== "1" && !!cmd?.trim()) ? "editor" : "other";
+  return panes.some(([, dead, ...cmd]) => dead !== "1" && !!cmd.join("\t").trim()) ? "editor" : "other";
 }
 
-/** End the reader session, synchronously — see readerSessionState. */
+/** End the reader's window, synchronously — see readerSessionState. */
 export function endReaderSession(root: string): boolean {
-  return tmuxSync(["kill-session", "-t", `=${benchSessionName(root, BENCH_READER_SLOT)}`]).ok;
+  const w = engineWindowsSync(root).find((x) => x.name === benchWindowName(BENCH_READER_SLOT));
+  if (!w) return false;
+  return tmuxSync(["kill-window", "-t", w.id]).ok;
 }
 
 /** A path the bench may open: in the project, in your home (the machine tab's

@@ -34,7 +34,9 @@ describe("the wiring", () => {
     const src = read("components/TerminalPanel.tsx");
     expect(src).toContain("ask={selection && onAsk ? { lines: selection.split(\"\\n\").length, onAsk } : null}");
     expect(src).toContain("const agentHere = !!paneId && (lanternRows() ?? []).some((r) => r.paneId === paneId && r.role !== \"lantern\");");
-    expect(src).toContain("if (!agentHere) { void askOnBench(s.root, text, \"ask\"); return; }");
+    // Through the shared helper, keyed by the selection: asking about the same
+    // text again lands in the chat that already has it.
+    expect(src).toContain("if (!agentHere) { void askOnBench(s.root, text, \"ask\", undefined, JOB.askAboutSelection(text)); return; }");
     // Bracketed, then Enter — one paste into an input box, not a line of keys.
     expect(src).toContain("d: `\\x1b[200~${text}\\x1b[201~`");
     const bar = read("components/terminal/PaneBar.tsx");

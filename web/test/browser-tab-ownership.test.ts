@@ -21,6 +21,7 @@ import {
   crossContainerRefusal, mintTakesThePane, runBrowserAsk, stampWhere,
   type AskOwnership, type DrivableWebview,
 } from "../src/lib/browserDrive.ts";
+import { containerOwner } from "../../shared/workerContainer.ts";
 
 /** A's tab, in A's container, asked about by whoever the test says. */
 const owned = (over: Partial<AskOwnership> = {}): AskOwnership => ({
@@ -45,6 +46,16 @@ describe("a cross-container act is refused, and both owners are named", () => {
 
   test("your own tab is served", () => {
     expect(crossContainerRefusal(owned({ as: "orbit-ops" }))).toBeNull();
+  });
+
+  test("a capitalised worker name owns the tab its own container holds", () => {
+    /* The panel hands over the folded container owner and the raw `as` the
+       caller typed; `Alba` is a legal worker name and must not be refused the
+       tab it just minted. */
+    const container = containerOwner("agent:Alba");
+    expect(container).toBe("alba");
+    expect(crossContainerRefusal(owned({ container, as: "Alba" }))).toBeNull();
+    expect(crossContainerRefusal(owned({ container, as: "ALBA" }))).toBeNull();
   });
 
   test("the unprofiled tab belongs to `default`, said out loud", () => {
@@ -171,6 +182,14 @@ describe("the panel is wired to all three", () => {
        already changed by the time anybody is told it should not have. */
     expect(handler.indexOf("crossContainerRefusal("))
       .toBeLessThan(handler.indexOf("void serveBrowserAsk(null, ask)"));
+  });
+
+  test("the refusal compares against the tab's OWN container", () => {
+    /* Round 17's Must was one line: without `containerOwner` an agent's
+       `agent:Alba` reads as the person's `default`, so the check compares the
+       ask against the wrong container and lets it through. */
+    const handler = code(between("setBrowserAskHandler((ask) => {", "setBrowserAskHandler(null)"));
+    expect(handler.includes("container: containerOwner(")).toBe(true);
   });
 
   test("the handler's own early replies still name the window that sent them", () => {

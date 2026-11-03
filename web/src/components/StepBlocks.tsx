@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { Button } from "./workspace/Chrome.tsx";
+import { Button, ListRow } from "./workspace/Chrome.tsx";
 import { Dot } from "./StatusPanel.tsx";
 import { AnchoredMenu } from "./AnchoredMenu.tsx";
 import { PeoplePick } from "./PeoplePick.tsx";
@@ -45,10 +45,8 @@ export interface MapPerson { id: number; name: string; sub?: string }
  * button that opened it. Arrow keys, Home, End and Escape are the menu's own.
  */
 type Anchor = React.RefObject<HTMLElement | null>;
-const Row = ({ selected, onClick, children, disabled, ...rest }: { selected?: boolean; onClick: () => void; children: ReactNode; disabled?: boolean } & React.HTMLAttributes<HTMLButtonElement>) => (
-  <button type="button" role="menuitem" className="wfm-opt" aria-current={selected || undefined} aria-disabled={disabled || undefined} onClick={onClick} {...rest}>{children}</button>
-);
-const Check = ({ on }: { on: boolean }) => <span className="ck" aria-hidden>{on ? <DoneIcon size={ICON.xs} /> : null}</span>;
+/** The tick slot of a menu entry; the entries are the kit's ListRow, as menuitems so AnchoredMenu's arrow keys find them. */
+const Check = ({ on }: { on: boolean }) => <span className="grid" style={{ width: 16, color: "var(--primary)" }} aria-hidden>{on ? <DoneIcon size={ICON.xs} /> : null}</span>;
 
 /** Who comes off: nobody, only you, everyone, or named people (the app's one people picker, ticks, stays open). */
 export function UnassignMenu({ anchor, value, people, onPick, onPeople, onClose }: { anchor: Anchor; value: { who: Unassign | "people"; people?: { id: number; name: string }[] }; people?: () => Promise<MapPerson[] | null>; onPick: (who: Unassign) => void; onPeople: (list: { id: number; name: string }[]) => void; onClose: () => void }) {
@@ -76,8 +74,8 @@ export function UnassignMenu({ anchor, value, people, onPick, onPeople, onClose 
   return (
     <AnchoredMenu anchor={anchor} align="left" minWidth={200} onClose={onClose}>
       <div className="wfm" style={{ display: "contents" }}>
-        {(["none", "me", "all"] as const).map((w) => <Row key={w} selected={value.who === w} onClick={() => onPick(w)}><Check on={value.who === w} /><span className="n">{UNASSIGN_LABEL[w]}</span></Row>)}
-        {people && (<Row selected={value.who === "people"} onClick={() => setView("people")}><Check on={value.who === "people"} /><span className="n">people…</span></Row>)}
+        {(["none", "me", "all"] as const).map((w) => <ListRow key={w} role="menuitem" current={value.who === w} leading={<Check on={value.who === w} />} onClick={() => onPick(w)}>{UNASSIGN_LABEL[w]}</ListRow>)}
+        {people && (<ListRow role="menuitem" current={value.who === "people"} leading={<Check on={value.who === "people"} />} onClick={() => setView("people")}>people…</ListRow>)}
       </div>
     </AnchoredMenu>
   );
@@ -114,7 +112,7 @@ export function AssignMenu({ anchor, value, people, withNobody, also, onPeople, 
     <AnchoredMenu anchor={anchor} align="left" minWidth={200} onClose={onClose}>
       <div className="wfm" style={{ display: "contents" }}>
         {ASSIGN_WHO.filter((w) => (w !== "none" || withNobody) && (w !== "author" || AUTHOR_IS_MEMBER.clickup) && (w !== "person" || !!people)).map((w) => (
-          <Row key={w} selected={value.who === w} onClick={() => (w === "person" ? setView("people") : onPick({ who: w }))}><Check on={value.who === w} /><span className="n">{w === "none" ? "nobody" : ASSIGN_LABEL[w]}</span></Row>))}
+          <ListRow key={w} role="menuitem" current={value.who === w} leading={<Check on={value.who === w} />} onClick={() => (w === "person" ? setView("people") : onPick({ who: w }))}>{w === "none" ? "nobody" : ASSIGN_LABEL[w]}</ListRow>))}
       </div>
     </AnchoredMenu>
   );
@@ -387,10 +385,10 @@ export function StepBlocks(p: StepBlocksProps) {
               const why = blockRefusal(trigger, shown, info.type, p.tracker);
               const I = GLYPH[info.type] ?? PlusIcon;
               return (
-                <Row key={info.type} disabled={!!why} data-add={info.type} onClick={() => { if (!why) add(info.type); }}>
+                <button key={info.type} type="button" role="menuitem" className="wfm-opt" aria-disabled={!!why || undefined} data-add={info.type} onClick={() => { if (!why) add(info.type); }}>
                   <span className="wfm-gl"><I size={ICON.xs} /></span>
                   <span className="n wfm-blkopt"><b className="text-[13px]">{info.name}</b>{hint(info.blurb)}{why && <span className="wfm-why">{why}</span>}</span>
-                </Row>
+                </button>
               );
             })}
           </div>

@@ -45,8 +45,9 @@ describe("every ClickUp write in PrPanel", () => {
   it("finds the call sites it is supposed to guard", () => {
     // Merge-with-card (a status write, or the card write when it also assigns),
     // review menu, status, people, hand-off, note, and the staged card move (which
-    // reads writeBlock first and writes only after the person's yes).
-    expect(calls.length).toBe(8);
+    // reads writeBlock first and writes only after the person's yes). The review
+    // picker's own card write lives in PrAskPicker.tsx, pinned below.
+    expect(calls.length).toBe(7);
   });
 
   it("sits in a component that reads writeBlock, bar the merge", () => {
@@ -60,10 +61,35 @@ describe("every ClickUp write in PrPanel", () => {
   });
 
   it("disables the control rather than hiding it", () => {
-    for (const name of ["CardStatusPick", "CardPeoplePick", "CardReadyForQaButton", "CardFacts", "ClickUpSide"]) {
+    for (const name of ["CardStatusPick", "CardPeoplePick", "CardReadyForQaButton", "CardFacts"]) {
       const body = enclosing(src.indexOf(`function ${name}(`) + 1).body;
       expect(body.includes("disabled={"), `${name} has no disabled control`).toBe(true);
       expect(/blocked \?\? /.test(body) || /\{blocked\}/.test(body), `${name} never says why`).toBe(true);
     }
+  });
+});
+
+const ask = await Bun.file(new URL("../src/components/PrAskPicker.tsx", import.meta.url)).text();
+
+describe("the review picker's card half, in PrAskPicker", () => {
+  it("reads writeBlock and plans no card step while writes are off", () => {
+    expect(ask).toContain("const blocked = cardWriteBlock(kind, setup, jiraSettings);");
+    expect(ask).toContain("...(readOnly ? { readOnly: true } : null)");
+    expect(ask).toContain("const statusPick = readOnly ? \"\" :");
+  });
+  it("disables the controls in place and says why", () => {
+    expect(ask).toContain("disabled={readOnly || locked}");
+    expect(ask).toContain("{side.blocked}");
+    expect(ask).toContain("is read-only for this token.");
+  });
+});
+
+describe("the read-only note is the mockup's blue, not a warning", () => {
+  it("draws the note and its lock in the info tone", async () => {
+    const ask = await Bun.file(new URL("../src/components/PrAskPicker.tsx", import.meta.url)).text();
+    const a = ask.indexOf("{readOnly && (");
+    const note = ask.slice(a, ask.indexOf("</div>)}", a));
+    expect(note).toContain("var(--info)");
+    expect(note).not.toContain("var(--warning)");
   });
 });

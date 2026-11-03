@@ -101,7 +101,7 @@ export interface Sorted<R extends RowLike> { working: R[]; blocked: R[]; idle: R
  * and the coordinator are set aside: both read this board, and a reader of the
  * board that shows up on it is not work on it.
  *
- *   blocked  a permission or a held gate: it cannot go on without you
+ *   blocked  a permission or a gate waiting on you: it cannot go on without you
  *   working  something ran lately and nobody is stopping it
  *   idle     everything else, including a turn that merely ended (that is most
  *            sessions most of the time, and not an interruption)
@@ -149,7 +149,7 @@ export type WaitItem =
   | { kind: "permission"; key: string; name: string; branch?: string; paneId?: string; worktree?: string; since: number; why: string; gate?: { id: string; tool: string; summary: string } }
   | { kind: "coordinator"; key: string; since: number; need: NeedLike }
   | { kind: "rule"; key: string; name: string; since: number; request: RequestLike; diff: { match: string; from: string; to: string } | null }
-  | { kind: "report"; key: string; name: string; since: number; text: string; paneId?: string }
+  | { kind: "report"; key: string; name: string; since: number; text: string; paneId?: string; reportId: number }
   | { kind: "task"; key: string; since: number; task: TaskLike };
 
 export const toneOfWait = (k: WaitItem["kind"]): "err" | "warn" => (k === "permission" ? "err" : "warn");
@@ -183,8 +183,8 @@ export function waitingItems(p: {
   const rest: WaitItem[] = [
     ...p.needs.map((need): WaitItem => ({ kind: "coordinator", key: `n-${need.id}`, since: need.created, need })),
     ...p.requests.map((request): WaitItem => ({ kind: "rule", key: `q-${request.id}`, name: request.who, since: request.at, request, diff: request.setting === "agent.rules" ? parseRuleDiff(request.diff[0]) : null })),
-    ...p.asked.map((r): WaitItem => ({ kind: "report", key: `a-${r.id}`, name: r.agent, since: r.at, text: r.need || r.blocked })),
-    ...p.orphaned.map((r): WaitItem => ({ kind: "report", key: `o-${r.id}`, name: r.agent, since: r.at, text: `stopped and is no longer here, left blocked: ${r.blocked}` })),
+    ...p.asked.map((r): WaitItem => ({ kind: "report", key: `a-${r.id}`, reportId: r.id, name: r.agent, since: r.at, text: r.need || r.blocked })),
+    ...p.orphaned.map((r): WaitItem => ({ kind: "report", key: `o-${r.id}`, reportId: r.id, name: r.agent, since: r.at, text: `stopped and is no longer here, left blocked: ${r.blocked}` })),
     ...p.beaten.map((task): WaitItem => ({ kind: "task", key: `t-${task.id}`, since: task.created, task })),
   ].sort((a, b) => a.since - b.since);
   return [...out, ...rest];
@@ -193,7 +193,7 @@ export function waitingItems(p: {
 /** The waiting card's thin rows: the oldest three, with who and how long. */
 export function waitingMini(items: readonly WaitItem[], now = Date.now()): { name: string; age: string; pct: number; tone: "err" | "warn" }[] {
   return items.slice(0, 3).map((i) => ({
-    name: i.kind === "coordinator" ? "coordinator" : i.kind === "task" ? "queue" : i.name,
+    name: i.kind === "coordinator" ? "orchestrator" : i.kind === "task" ? "queue" : i.name,
     age: ageShort(now - i.since), pct: agePct(now - i.since), tone: toneOfWait(i.kind),
   }));
 }

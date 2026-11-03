@@ -18,3 +18,12 @@ it("has a visible Copy link button beside GitHub", () => {
 it("no longer carries it in the overflow menu", () => {
   expect(masthead).not.toContain("<MenuItem onClick={() => { close(); onCopyLink(); }}");
 });
+
+it("in the narrow header's menu it keeps the header button's answer: the item says Copied for the same 1.5s and the menu waits", () => {
+  const code = masthead.split("\n").filter((l) => !/^\s*(\/\/|\/?\*|\{\/\*)/.test(l)).join("\n");
+  expect(src).toContain("const COPIED_LINK_MS = 1500;");
+  expect(code).toContain('<span aria-live="polite">{linkCopied ? "Copied" : "Copy link"}</span>');
+  expect(code).toContain("setTimeout(close, COPIED_LINK_MS)");
+  /* The press no longer closes the menu before the label can change. */
+  expect(code).not.toContain("{ close(); copyLink(); }");
+});

@@ -23,6 +23,7 @@
 import type { FailureHint } from "./prFailureHint.ts";
 import type { PrSummary } from "../../../shared/types.ts";
 import { gateReason, type GateFacts } from "./prNotesChip.ts";
+import { rowChecking } from "../../../shared/prFreshness.ts";
 
 export type LaneId = "review" | "land" | "blocked" | "others" | "flight";
 
@@ -34,32 +35,19 @@ export interface Lane {
   why: string;
   /** Which CSS variable tints it. */
   tint: string;
-  /**
-   * Drawn only when it holds something.
-   *
-   * An empty lane is usually the most valuable thing on this board — "Needs
-   * your review · Nothing here. Good." is the answer somebody came for. That
-   * only holds where the zero is news. `others` can only ever be fed by the two
-   * lists the board is given, yours and the ones you were asked to look at, so
-   * for it to have a card at all somebody must have asked you to review a draft
-   * or something conflicting. Reported after weeks of use: the "waiting on
-   * someone else" count was zero and no card had ever been in it. A column that is always empty is
-   * a column that teaches you to skip a fifth of the screen.
-   */
-  hideWhenEmpty?: boolean;
 }
 
 export const LANES: Lane[] = [
-  { id: "review", label: "Needs your review", tint: "var(--warning)",
-    why: "Somebody asked you by name, and nobody else can unblock it." },
+  { id: "review", label: "Needs your review", tint: "var(--info)",
+    why: "Someone asked you. Read it, then approve or ask for changes." },
   { id: "land", label: "Green, ready to land", tint: "var(--success)",
-    why: "Approved, green, no conflicts. Only a human press is missing." },
+    why: "Approved and every required check is green." },
   { id: "blocked", label: "Blocked", tint: "var(--error)",
-    why: "Red checks or conflicts. Reviewing these is wasted work until they move." },
-  { id: "others", label: "Waiting on someone else", tint: "var(--info)",
-    why: "Not yours to move. The only useful action is a poke.", hideWhenEmpty: true },
-  { id: "flight", label: "Yours, in flight", tint: "var(--primary)",
-    why: "Open by you and still moving. Nothing is owed by you right now." },
+    why: "A failing check, a conflict or a change request is in the way." },
+  { id: "others", label: "Waiting on someone else", tint: "var(--warning)",
+    why: "Yours, with the ball on a reviewer." },
+  { id: "flight", label: "Yours in flight", tint: "var(--text3)",
+    why: "Drafts and work you have not asked anyone to read yet." },
 ];
 
 /**
@@ -129,6 +117,17 @@ export function fileInLane(p: PrSummary, stake: Stake, hint?: FailureHint | null
   if (p.isDraft) {
     return { lane: stake.mine ? "flight" : "others",
       reason: "Still a draft. Nobody is waiting on it, including you." };
+  }
+
+  /*
+   * A push to this branch is newer than what the row was read from: its checks,
+   * threads and merge state may all be the previous head's. No lane claims
+   * anything green until the new head is read (shared/prFreshness.ts).
+   */
+  const waitFor = rowChecking(p);
+  if (waitFor) {
+    return { lane: stake.asked ? "review" : stake.mine ? "flight" : "others",
+      reason: `Checking the new head · ${waitFor}` };
   }
 
   /*
@@ -335,10 +334,11 @@ export function fileInLane(p: PrSummary, stake: Stake, hint?: FailureHint | null
   }
 
   if (stake.mine) {
-    return { lane: "flight",
-      reason: p.reviewers?.length
-        ? `Waiting on ${p.reviewers.slice(0, 2).map((r) => r.login).join(", ")}.`
-        : "Open, green, and nobody has been asked to look yet." };
+    /* Yours with somebody asked is the ball on a reviewer ("Waiting on someone
+       else"); yours with nobody asked is still in your hands ("Yours in flight"). */
+    return p.reviewers?.length
+      ? { lane: "others", reason: `Waiting on ${p.reviewers.slice(0, 2).map((r) => r.login).join(", ")}.` }
+      : { lane: "flight", reason: "Open, green, and nobody has been asked to look yet." };
   }
 
   return { lane: "others", reason: "Nothing for you to do — here so it is not invisible." };
@@ -385,7 +385,7 @@ export function lanesFor(viewer?: string): Lane[] {
   if (!viewer) return LANES;
   return LANES.filter((l) => l.id !== "others").map((l) => ({
     ...l,
-    label: l.id === "review" ? `Needs ${viewer}'s review` : l.label === "Yours, in flight" ? `${viewer}'s, in flight` : l.label,
+    label: l.id === "review" ? `Needs ${viewer}'s review` : l.label === "Yours in flight" ? `${viewer}'s, in flight` : l.label,
     why: l.id === "review" ? `Somebody asked ${viewer} by name, and nobody else can unblock it.`
       : l.id === "others" ? `Not ${viewer}'s to move. The only useful action is a poke.`
       : l.id === "flight" ? `Open by ${viewer} and still moving. Nothing is owed by ${viewer} right now.`
@@ -398,8 +398,9 @@ export function board(prs: PrSummary[], stakeOf: (p: PrSummary) => Stake, hintOf
   const out = new Map<LaneId, (PrSummary & { filed: Filed })[]>();
   for (const l of LANES) out.set(l.id, []);
   for (const p of prs) {
-    const f = fileInLane(p, stakeOf(p), hintOf?.(p), gateOf?.(p));
-    const filed = viewer ? { ...f, reason: voice(f.reason, viewer), lane: f.lane === "others" ? "review" as const : f.lane } : f;
+    const stake = stakeOf(p);
+    const f = fileInLane(p, stake, hintOf?.(p), gateOf?.(p));
+    const filed = viewer ? { ...f, reason: voice(f.reason, viewer), lane: f.lane === "others" ? (stake.mine ? "flight" as const : "review" as const) : f.lane } : f;
     out.get(filed.lane)!.push({ ...p, filed });
   }
   return out;
@@ -436,7 +437,7 @@ export const LANE_CAP = 20;
  */
 export type Suggested = "open" | "merge" | "rerun";
 
-export function suggestedAction(p: PrSummary, filed: Filed): Suggested {
+export function suggestedAction(p: Pick<PrSummary, "mergeable" | "checks" | "humanReview">, filed: Pick<Filed, "lane">): Suggested {
   if (filed.lane === "land") return "merge";
   /*
    * A review asked of you on something already approved and green: the press
@@ -476,11 +477,11 @@ export const ACTION_LABEL: Record<Suggested, string> = {
 /**
  * Whether the board reaches past the viewer's own two queues, to the repository.
  *
- * It does not. The default board once took in a page of the repository, which
+ * The default board does not: it once took in a page of the repository, which
  * put other people's pull requests under "Waiting on someone else" and a "Load
- * more" under the board. The pills that filtered the board (Needs my review,
- * Failing, Ready) are gone: the lanes already say it. The wide branches in
- * PrPanel and TriageBoard are left behind this one constant until a board needs
- * a page of the repository badly enough to pay for its request.
+ * more" under the board. What is left behind this constant is for a board that
+ * needs a page of the repository badly enough to pay for its request, and the
+ * "Show everyone's PRs" switch in the views row is that ask per repository —
+ * PrPanel reads it and widens the board where the person turned it on.
  */
 export const BOARD_IS_WIDE = false;

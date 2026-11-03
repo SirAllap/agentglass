@@ -134,7 +134,7 @@ describe("the pane keeps the house rules", () => {
   });
   test("the bar's one button is always drawn and keeps its words; the note line holds its height", () => {
     const c = code(panel);
-    expect(c).toMatch(/aria-pressed=\{adding\}[^]*?>Log time<\/button>/);
+    expect(c).toMatch(/aria-pressed=\{adding\}[^]*?>Log time<\/Button>/);
     expect(c).toContain("minHeight: NOTE_H");
     expect(c).toContain("min-w-[76px]");
   });

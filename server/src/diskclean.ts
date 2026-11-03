@@ -443,7 +443,7 @@ async function busyDirs(ctx: DiskCtx, fds = false): Promise<string[]> {
 }
 
 /** Is any of `dirs` the checkout or a folder inside it? Both spellings of the checkout, since a link may name it. */
-function anyInside(dirs: string[], checkout: string): boolean {
+export function anyInside(dirs: string[], checkout: string): boolean {
   const spell = new Set([checkout]);
   try { spell.add(realpathSync(checkout)); } catch { /* gone */ }
   return dirs.some((d) => [...spell].some((c) => d === c || d.startsWith(`${c}/`)));

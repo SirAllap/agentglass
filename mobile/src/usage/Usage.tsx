@@ -1,5 +1,5 @@
 /*
- * What is left of the plan: a chip on every header, and the sheet it opens.
+ * How much of the plan is used: a chip on every header, and the sheet it opens.
  *
  * ── why a chip, and why everywhere ───────────────────────────────────────
  * It was a card at the bottom of Settings. The question it answers — can I
@@ -7,11 +7,11 @@
  * are, and Settings is where nobody is at that moment. A number three taps
  * away was a number nobody looked at.
  *
- * The chip is one value: what is left of the window closest to running out,
+ * The chip is one value: what is used of the window closest to running out,
  * across every provider. That is what actually stops a long turn — the
  * tightest window, not the average of them — and a ring around it says the
  * same thing to somebody who does not read the digits. The sheet has the rest:
- * every window, when each one resets, and how old the reading is.
+ * every window, when each one resets, and which reading it came from.
  *
  * ── what it never does ───────────────────────────────────────────────────
  * Draw a number it does not have. Until an answer lands, and on a computer
@@ -25,21 +25,22 @@ import { Pressable, Text, View } from "react-native";
 import Svg, { Circle } from "react-native-svg";
 import type { QuotaWindow } from "../../../shared/types.ts";
 import {
-  accountHeading, ageLabel, planState, providerCount, quotaTone, remainingOf, resetLabel, tightestWindow, windowName,
+  accountHeading, ageLabel, estimatedWindows, planReadAt, planState, planWindows, providerCount, quotaTone, readLine,
+  resetLabel, sourceLine, tightestWindow, usedOf, windowName,
 } from "../model/quota.ts";
 import { useUsage } from "../state/use-usage.ts";
 import { C, RADIUS, SPACE, T, type Palette } from "../theme.ts";
 import { Btn, Note, Sheet, TAP } from "../ui.tsx";
 
-/** The tone of what is LEFT, from `quotaTone` over what was used: under 15%
- *  left is red and under 40% is amber, which are the same two lines. */
+/** The tone of a level, from `quotaTone` over what was used: 60% used is amber
+ *  and 85% is red, the same two lines the dashboard draws. */
 function toneOf(K: Palette, usedPercent: number): string {
   const tone = quotaTone(usedPercent);
   return tone === "crit" ? K.error : tone === "bad" ? K.warning : K.success;
 }
 
-function Ring({ left, color, track, size = 16, stroke = 2.4 }: {
-  left: number;
+function Ring({ used, color, track, size = 16, stroke = 2.4 }: {
+  used: number;
   color: string;
   track: string;
   size?: number;
@@ -51,10 +52,10 @@ function Ring({ left, color, track, size = 16, stroke = 2.4 }: {
   return (
     <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
       <Circle cx={half} cy={half} r={r} fill="none" stroke={track} strokeWidth={stroke} />
-      {left > 0 ? (
+      {used > 0 ? (
         <Circle
           cx={half} cy={half} r={r} fill="none" stroke={color} strokeWidth={stroke}
-          strokeLinecap="round" strokeDasharray={`${(c * left) / 100} ${c}`}
+          strokeLinecap="round" strokeDasharray={`${(c * used) / 100} ${c}`}
           transform={`rotate(-90 ${half} ${half})`}
         />
       ) : null}
@@ -82,13 +83,13 @@ export function UsageChip({ colors = C }: { colors?: Palette }): React.ReactNode
   const [open, setOpen] = useState(false);
   const top = tightestWindow(rows);
   if (!top) return null;
-  const left = remainingOf(top.window);
+  const used = usedOf(top.window);
   const tone = toneOf(K, top.window.usedPercent);
   return (
     <>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`Usage: ${left}% of the ${windowName(top.window.label)} window left. Opens usage.`}
+        accessibilityLabel={`Usage: ${used}% of the ${windowName(top.window.label)} window used. Opens usage.`}
         onPress={() => setOpen(true)}
         hitSlop={{ top: 6, bottom: 6 }}
         style={({ pressed }) => ({
@@ -98,9 +99,9 @@ export function UsageChip({ colors = C }: { colors?: Palette }): React.ReactNode
           transform: [{ scale: pressed ? 0.97 : 1 }],
         })}
       >
-        <Ring left={left} color={tone} track={K.border2} />
+        <Ring used={used} color={tone} track={K.border2} />
         <Text style={{ color: K.text, fontSize: T.small, fontWeight: "600", fontVariant: ["tabular-nums"] }}>
-          {left}%
+          {used}%
         </Text>
         <Text style={{ color: K.text3, fontSize: T.small }}>{top.window.label}</Text>
       </Pressable>
@@ -109,30 +110,36 @@ export function UsageChip({ colors = C }: { colors?: Palette }): React.ReactNode
   );
 }
 
-/** One window, as a bar of what is LEFT of it.
- *
- *  Left, not used, and the direction is the point: the question anybody has in
- *  front of this number is "can I start a long one", and a bar that fills up as
- *  you work answers the opposite one. A window with nothing left draws no bar at
- *  all, because the single thing this must never do is overstate what is there. */
-function Meter({ label, window: w, now }: { label: string; window: QuotaWindow; now: number }): React.ReactNode {
-  const left = remainingOf(w);
+/** One window, as a bar of what is USED of it, the same direction the desk's
+ *  bars and numbers take: the two surfaces are two windows onto one plan, and a
+ *  monitor that says 82% while the hand says 39.8% left is a bug in one of them.
+ *  A window with nothing used draws no bar. `estimate` tags this one bar, since
+ *  a row can mix the console's numbers with one this PC filled in. */
+function Meter({ label, window: w, now, estimate }: {
+  label: string;
+  window: QuotaWindow;
+  now: number;
+  estimate: boolean;
+}): React.ReactNode {
+  const used = usedOf(w);
   const tone = toneOf(C, w.usedPercent);
   const resets = resetLabel(w.resetsAt, now);
+  const tag = estimate ? "estimate · this PC" : "";
   return (
     <View
       accessibilityRole="text"
-      accessibilityLabel={`${label}: ${left}% left${resets ? `, resets ${resets}` : ""}`}
+      accessibilityLabel={`${label}: ${used}% used${resets ? `, resets ${resets}` : ""}${tag ? `, ${tag}` : ""}`}
       style={{ gap: SPACE.sm, paddingVertical: SPACE.md }}
     >
       <View style={{ flexDirection: "row", alignItems: "baseline" }}>
         <Text style={{ color: C.text, fontSize: T.body, fontWeight: "500", flex: 1 }} numberOfLines={1}>{label}</Text>
-        <Text style={{ color: tone, fontSize: T.body, fontWeight: "600" }}>{left}% left</Text>
+        <Text style={{ color: tone, fontSize: T.body, fontWeight: "600" }}>{used}% used</Text>
       </View>
       <View style={{ height: 8, borderRadius: 4, backgroundColor: C.bg4, overflow: "hidden" }}>
-        {left > 0 ? <View style={{ width: `${left}%`, height: "100%", borderRadius: 4, backgroundColor: tone }} /> : null}
+        {used > 0 ? <View style={{ width: `${used}%`, height: "100%", borderRadius: 4, backgroundColor: tone }} /> : null}
       </View>
       {resets ? <Text style={{ color: C.text3, fontSize: T.small }}>Resets {resets}</Text> : null}
+      {tag ? <Text style={{ color: C.text3, fontSize: T.small }}>{tag}</Text> : null}
     </View>
   );
 }
@@ -149,7 +156,7 @@ export function UsageSheet({ open, onClose }: { open: boolean; onClose: () => vo
   const { rows, loaded, error, reload } = useUsage();
   const now = useMinute();
   const state = planState(loaded, rows);
-  const top = tightestWindow(rows);
+  const top = tightestWindow(rows, now);
   /* Only worth naming the provider on each bar when more than one is
      reporting. On a machine with Claude alone, "Claude 5h" on every row is one
      word of signal and one of furniture. Two logins of one provider are still
@@ -171,20 +178,20 @@ export function UsageSheet({ open, onClose }: { open: boolean; onClose: () => vo
           <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.md, paddingVertical: SPACE.xs }}>
             <Text style={{
               color: toneOf(C, top.window.usedPercent), fontSize: 44, fontWeight: "600", lineHeight: 50,
-            }}>{remainingOf(top.window)}%</Text>
+            }}>{usedOf(top.window)}%</Text>
             <View style={{ flex: 1, gap: 2 }}>
               <Text style={{ color: C.text, fontSize: T.body, fontWeight: "500" }}>
-                left in the {windowName(top.window.label).toLowerCase()} window
+                used in the {windowName(top.window.label).toLowerCase()} window
               </Text>
               <Text style={{ color: C.text3, fontSize: T.small }}>
                 {[
                   several ? top.provider : "",
                   top.window.resetsAt ? `resets ${resetLabel(top.window.resetsAt, now)}` : "",
-                  // The age belongs beside the number it qualifies. The computer
-                  // holds an Anthropic reading for fifteen minutes and keeps
-                  // serving the last good one for up to a day while that endpoint
-                  // rate-limits, so a stale percentage looks exactly like a live
-                  // one unless it says so.
+                  // The headline's own window can be this PC's arithmetic while
+                  // the others are the plan's: the desk tags it beside the figure.
+                  top.estimated ? "estimate · this PC" : "",
+                  // The age belongs beside the number it qualifies: a good
+                  // reading served for a day looks exactly like a live one.
                   age,
                 ].filter(Boolean).join(" · ")}
               </Text>
@@ -198,6 +205,13 @@ export function UsageSheet({ open, onClose }: { open: boolean; onClose: () => vo
           }}>
             {available.map((row, n) => {
               const heading = accountHeading(row);
+              const plan = planWindows(row, now);
+              const estimated = estimatedWindows(plan);
+              // The source and the age of the reading actually drawn: an
+              // estimate and a console count look identical in a bar.
+              const read = row.provider === "opencode"
+                ? [sourceLine(row, plan), readLine(planReadAt(row, plan), now)].filter(Boolean).join(" · ")
+                : "";
               return (
                 <View
                   key={`${row.provider}:${row.account?.label ?? ""}`}
@@ -211,15 +225,19 @@ export function UsageSheet({ open, onClose }: { open: boolean; onClose: () => vo
                       {row.account?.active ? <Text style={{ color: C.text3, fontSize: T.small }}>active</Text> : null}
                     </View>
                   ) : null}
-                  {row.windows.map((w, i) => (
+                  {plan.windows.map((w, i) => (
                     <View key={w.label} style={i > 0 ? { borderTopWidth: 1, borderTopColor: C.border } : undefined}>
                       <Meter
                         label={several ? `${row.label} · ${windowName(w.label)}` : windowName(w.label)}
                         window={w}
                         now={now}
+                        estimate={estimated.has(w.minutes)}
                       />
                     </View>
                   ))}
+                  {read ? (
+                    <Text style={{ color: C.text3, fontSize: T.small, paddingBottom: SPACE.md }}>{read}</Text>
+                  ) : null}
                 </View>
               );
             })}
@@ -228,7 +246,7 @@ export function UsageSheet({ open, onClose }: { open: boolean; onClose: () => vo
 
         {top ? (
           <Text style={{ color: C.text3, fontSize: T.small, paddingTop: SPACE.xs }}>
-            The chip on every header is the tightest window. It turns amber under 40% left and red under 15%.
+            The chip on every header is the tightest window. It turns amber at 60% used and red at 85%.
           </Text>
         ) : null}
 

@@ -1,10 +1,8 @@
 /*
- * The cards of the Agents page that carry the choices the mockup draws as
- * compact rows: the gate (who is told, what happens when nobody answers) and
- * the worker roles. One line of help each; the long words are behind
- * "Details".
+ * The gate card of the Agents page: who is told, and what happens when nobody
+ * answers. One line of help each; the long words are behind "Details".
  *
- * The two server-held settings come through the settings door
+ * The two settings the server keeps come through the settings door
  * (lib/agentDefaults.ts), so a change here and an agent's change are the same
  * write.
  */
@@ -15,15 +13,14 @@ import { AGENT_DEFAULTS, DOOR_ID, loadDefaults, type AgentDefaults } from "../..
 import {
   GATE_ANSWERERS, GATE_ANSWERER_LABEL, GATE_ON_TIMEOUT, GATE_ON_TIMEOUT_LABEL,
 } from "../../../../shared/agentDefaults.ts";
-import { WORKER_ROLES, type RoleId } from "../../../../shared/workerRoles.ts";
 import type { HookSetupStatus } from "../../../../shared/types.ts";
 import { Select } from "../Select.tsx";
-import { SettingRow } from "../SettingRow.tsx";
-import { Field, SegControl, SettingsCard, StatusBadge, helpIdFor } from "../SettingsKit.tsx";
-import { Button, INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
-import { ShieldIcon, PlugIcon } from "../settingsNavIcons.tsx";
+import { SettingRow, Switch } from "../SettingRow.tsx";
+import { SettingsCard, StatusBadge } from "../SettingsKit.tsx";
+import { Button, Segmented } from "../workspace/Chrome.tsx";
+import { ShieldIcon } from "../settingsNavIcons.tsx";
+import { WarningIcon } from "../../lib/glyphIcons.tsx";
 import { useReportSaving } from "../SettingsPageState.tsx";
-import { JOB_ORDER } from "../orchestration/orchestrationCopy.ts";
 
 /** The two, read once per open and written one at a time. A refusal comes back as the server's own sentence. */
 export function useAgentDefaults(open: boolean) {
@@ -54,36 +51,40 @@ const Note = ({ text }: { text: string | null }) => text
 
 /* ── Gate ── */
 
-export function GateCard({ st, busy, onGate, open }: { st: HookSetupStatus; busy: boolean; onGate: (on: boolean) => void; open: boolean }) {
+export function GateCard({ st, busy, onGate, open, onShow, showTitle }: {
+  st: HookSetupStatus; busy: boolean; onGate: (on: boolean) => void; open: boolean;
+  /** The one thing here that lives outside Settings: the board of waiting actions. */
+  onShow?: () => void; showTitle?: string;
+}) {
   const { d, set, note } = useAgentDefaults(open);
   const off = st.gateBundled && !st.gate;
   return (
     <SettingsCard title="Gate" icon={<ShieldIcon size={ICON.sm} />} tone={off ? "decision" : "default"}
-      desc="Holds an outward action until somebody decides."
+      desc="What may leave this machine, and what happens if nobody answers."
       status={<StatusBadge tone={!st.gateBundled ? "off" : st.gate ? "ok" : "warn"}>{!st.gateBundled ? "Not in this build" : st.gate ? "On" : "Off · needs a decision"}</StatusBadge>}>
-      <SettingRow settingId="hooks.gate" label="Hold what leaves this machine"
-        hint="A push, a PR, a comment, a merge or a message waits for an answer."
+      <SettingRow settingId="hooks.gate" label="Ask me before anything leaves this machine"
+        hint="A push, a pull request, a review, a comment, a merge or a message waits for your answer."
         detail={{
           summary: "Details",
           body: <>
-            A pull request, a review, a ticket or a message in a channel waits here with the text it would send, and
-            nobody answering means it does not happen. Everything local — writing code, running tests, cutting a
-            worktree — is never held. Until you turn this on, that line is held by each agent remembering it.
+            An outward action waits here with the text it would send, and nobody answering means it does not happen.
+            Everything local — writing code, running tests, cutting a worktree — is never stopped. Until you turn this
+            on, that line rests on each agent remembering it.
           </>,
         }}
-        actions={st.gateBundled
-          ? <Button tone={st.gate ? "danger" : "primary"} disabled={busy} onClick={() => onGate(!st.gate)}>
-              {busy ? "Working…" : st.gate ? "Turn the gate off" : "Turn the gate on"}
-            </Button>
-          : undefined} />
+        onClick={st.gateBundled ? () => onGate(!st.gate) : undefined}
+        disabled={!st.gateBundled || busy}
+        role={st.gateBundled ? "switch" : undefined}
+        ariaChecked={st.gateBundled ? st.gate : undefined}
+        control={st.gateBundled ? <Switch on={st.gate} busy={busy} /> : undefined} />
       <SettingRow settingId="gate.answerer" label="Who answers"
-        hint="Held actions show up in the Lantern first."
+        hint="Waiting actions show up in the Agents view first."
         detail={{
           summary: "Details",
           body: <>
-            You always decide. With “Me, and tell the orchestrator” its window also gets one line for each held action
-            (and for each reminder), so it can brief you. It cannot release a hold: an agent that can be held may not let
-            itself go. {off ? "Nothing is held until the gate is on." : ""}
+            You always decide. With “Me, and tell the orchestrator” its window also gets one line for each waiting action
+            (and for each reminder), so it can brief you. It cannot release one: an agent that may be stopped may not
+            let itself go. {off ? "Nothing waits until the gate is on." : ""}
           </>,
         }}
         control={
@@ -95,85 +96,38 @@ export function GateCard({ st, busy, onGate, open }: { st: HookSetupStatus; busy
         detail={{
           summary: "Details",
           body: <>
-            Either way a held action nobody answered does not happen. “Ask again” repeats the notification at a third and
-            two thirds of the wait; it never makes the wait longer, because the hook that holds the agent stops waiting
-            when its own window ends.
+            Either way a waiting action nobody answered does not happen. “Ask me again” repeats the notification at a
+            third and two thirds of the wait; it never makes the wait longer, because the hook that waits stops when
+            its own window ends.
           </>,
         }}
         control={
-          <SegControl label="If nobody answers" value={d.gateOnTimeout}
-            options={GATE_ON_TIMEOUT.map((v) => ({ v, label: GATE_ON_TIMEOUT_LABEL[v] }))}
-            onPick={(v) => void set("gateOnTimeout", v)} />} />
+          <Segmented track label="If nobody answers" value={d.gateOnTimeout}
+            options={GATE_ON_TIMEOUT.map((v) => ({ id: v, label: GATE_ON_TIMEOUT_LABEL[v] }))}
+            onChange={(v) => void set("gateOnTimeout", v)} />} />
+      {st.gateBundled && (
+        <div className="agx-gate-strip" data-on={st.gate ? "" : undefined}>
+          {off && <WarningIcon size={ICON.sm} />}
+          <div className="agx-gate-strip-main">
+            <b>{off ? "Off: nothing is stopped." : "On: an outward action waits for you."}</b>
+            <p>{off
+              ? "A push, a review, a comment or a message goes out the moment an agent asks. Turn the gate on and it waits for you — only what leaves this machine, never a local edit or a test run."
+              : "An outward action stops here with the text it would send, and goes out when you answer. A local edit, a test run or a worktree never waits."}</p>
+            <div className="agx-gate-chips" aria-label="What waits">
+              {["a push", "a pull request", "a review", "a comment", "a merge", "a message"].map((w) => (
+                <span key={w} className="agx-gate-chip">{w}</span>
+              ))}
+            </div>
+          </div>
+          {onShow && (
+            <div className="agx-gate-dest">
+              <span>Waiting actions live in the Agents view.</span>
+              <Button onClick={onShow} title={showTitle}>Show it</Button>
+            </div>
+          )}
+        </div>
+      )}
       <Note text={note} />
-    </SettingsCard>
-  );
-}
-
-/* ── Worker roles ── */
-
-/** What a role is, in the words under its name. */
-const ROLE_BLURB: Record<RoleId, string> = {
-  builder: "Writes the change", reviewer: "Reads it adversarially", verifier: "Runs the checks", scout: "Read-only search",
-};
-
-type Choice = { provider: string; model: string };
-
-export function WorkerRolesCard({ open, resetTick, onEngines }: { open: boolean; resetTick: number; onEngines: () => void }) {
-  const [roles, setRoles] = useState<Record<string, Choice>>({});
-  const [clis, setClis] = useState<{ id: string; title: string; installed: boolean }[]>([]);
-  const [models, setModels] = useState<Record<string, string>>({});
-  const [note, setNote] = useState<string | null>(null);
-  const take = (r: { roles?: Record<string, Choice> }) => {
-    if (!r.roles) return;
-    setRoles(r.roles);
-    setModels(Object.fromEntries(Object.entries(r.roles).map(([k, v]) => [k, v.model])));
-  };
-  useEffect(() => {
-    if (!open) return;
-    void api.workerRoles().then((r) => { take(r); setClis(r.providers ?? []); })
-      .catch(() => setNote("Could not reach the server — the worker roles are unavailable."));
-  }, [open, resetTick]);
-  const save = (role: string, c: Choice) => {
-    setNote(null);
-    void api.workerRoleSave(role, c.provider, c.model)
-      .then((r) => { if (!r.ok) setNote(r.error ?? "Could not save."); else { take(r); setNote("Saved. Applies to the next worker started in that role."); } })
-      .catch(() => setNote("Could not save."));
-  };
-  return (
-    <SettingsCard title="Worker roles" icon={<PlugIcon size={ICON.sm} />}
-      desc={<>Which CLI each role runs on. <button type="button" className="agx-field-link" onClick={onEngines}>Which engines this computer has</button></>}>
-      {JOB_ORDER.map((id) => {
-        const r = WORKER_ROLES.find((x) => x.id === id);
-        const c = roles[id];
-        if (!r || !c) return null;
-        const mid = `role-model-${id}`;
-        return (
-          <SettingRow key={id} label={r.title} hint={ROLE_BLURB[id]}
-            detail={{
-              summary: "Model and lock",
-              body: <>
-                <span className="block mb-2">
-                  {r.what}{r.readOnly ? " File edits are refused too." : ""} Locked against push, commit, merge and the network clients,
-                  in a layer the project's own config cannot loosen. Default: {r.default.provider}, {r.default.model}.
-                </span>
-                <div className="agx-sform">
-                  <Field label="Model" htmlFor={mid} help="Handed to the CLI as typed. Empty runs its default model.">
-                    <input id={mid} value={models[id] ?? ""} placeholder="default model" spellCheck={false}
-                      onChange={(e) => setModels((m) => ({ ...m, [id]: e.target.value }))}
-                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); save(id, { provider: c.provider, model: models[id] ?? "" }); } }}
-                      onBlur={() => { if ((models[id] ?? "") !== c.model) save(id, { provider: c.provider, model: models[id] ?? "" }); }}
-                      aria-describedby={helpIdFor(mid)} className={`t-mono w-full ${INPUT}`} style={INPUT_STYLE} />
-                  </Field>
-                </div>
-              </>,
-            }}
-            control={
-              <Select value={c.provider} align="right" className="agx-select outline-none w-[150px] justify-between"
-                options={clis.map((p) => ({ value: p.id, label: p.installed ? p.title : `${p.title} (not installed)` }))}
-                onChange={(v) => save(id, { provider: v, model: "" })} />} />
-        );
-      })}
-      {note && <div role="status" className="agx-settings-x pt-2 pb-3 text-[11px]" style={{ color: "var(--text3)" }}>{note}</div>}
     </SettingsCard>
   );
 }

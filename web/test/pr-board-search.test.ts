@@ -44,13 +44,13 @@ describe("a search is a section of the board", () => {
      * never `boardOn`, which is only what was last picked.
      *
      * One property rather than the three this used to spell out: the pills are
-     * a shared `Pill` now, so `on` is the single thing that decides colour,
+     * a shared `viewTab` now, so `on` is the single thing that decides colour,
      * background and border. Fewer places to disagree is the point of the
      * component; pinning the three literal style lines only pinned the old
      * markup.
      */
-    expect(src).toContain("on={!inboxOn && !metricsOn && !closedOn}");
-    expect(src).not.toContain("<Pill on={boardOn}");
+    expect(src).toContain("on: !inboxOn && !metricsOn && !closedOn");
+    expect(src).not.toContain("viewTab({ on: boardOn");
   });
 
   it("gives a view a way back from a search, because the pill clears the box", () => {
@@ -60,8 +60,8 @@ describe("a search is a section of the board", () => {
        icon nested inside this pill, so that slice ended before the handler and
        the assertion below passed over nothing. Third time this exact cut has
        been got wrong in this repository. */
-    const from = src.indexOf('label="Open"');
-    const views = src.slice(from, src.indexOf("/>", src.indexOf("onClick", from)));
+    const from = src.indexOf('label: "Open"');
+    const views = src.slice(from, src.indexOf("} })", src.indexOf("onClick", from)));
     expect(from).toBeGreaterThan(0);
     expect(views).toContain('setQuery("")');
   });
@@ -71,7 +71,7 @@ describe("a search is a section of the board", () => {
        active, and with a search up one of them is. `inboxOn` joined this the day
        the inbox stopped being a toggle: it hides the table too, so a scope lit
        under it was the same lie. */
-    expect(src).toContain("on={!inboxOn && !metricsOn && !closedOn}");
+    expect(src).toContain("on: !inboxOn && !metricsOn && !closedOn");
   });
 });
 
@@ -146,7 +146,7 @@ describe("the three columns", () => {
     /* Two carry the class; the tree caps itself against the viewport instead,
        for the reason in the test below. */
     expect(src.split("agx-col3").length - 1).toBe(1);
-    expect(css).toContain(".agx-tree3 { width: 250px; max-height: var(--agx-tree-max, 60vh); overflow-y: auto; }");
+    expect(css).toContain(".agx-tree3 { width: 230px; max-height: var(--agx-tree-max, 60vh); overflow-y: auto; }");
     expect(rail).toContain("agx-col3");
   });
 
@@ -169,7 +169,7 @@ describe("the three columns", () => {
   it("does not also sit inside a scrolling page", () => {
     // Three bounded columns inside a scroller is four scrolls and feels like
     // one, which is the bug.
-    expect(src).toContain('className="flex min-h-0 gap-0 items-start h-full"');
+    expect(src).toContain('className="agx-files flex min-h-0 gap-0 items-start h-full"');
   });
 
   it("caps the tree against its own column, not against the window", () => {
@@ -197,20 +197,21 @@ describe("the three columns", () => {
     // The row must NOT be capped: a sticky element only stays put while its own
     // row is on screen, and capping it unpinned the tree after one screenful.
     expect(src).not.toContain('className="flex gap-3 items-start flex-1 min-h-0"');
-    expect(css).toContain(".agx-tree3 { width: 250px; max-height: var(--agx-tree-max, 60vh); overflow-y: auto; }");
+    expect(css).toContain(".agx-tree3 { width: 230px; max-height: var(--agx-tree-max, 60vh); overflow-y: auto; }");
     expect(src).not.toContain("agx-tree3 agx-col3");
   });
 
   it("uses the mockup's widths", () => {
-    expect(css).toContain(".agx-tree3 { width: 250px;");
+    expect(css).toContain(".agx-tree3 { width: 230px;");
     expect(rail).toContain("width: 320");
     expect(css).not.toContain("width: 190px");
   });
 
   it("keeps the rail down to the width the mockup draws it to", () => {
     // Tailwind's `xl` is 1280; the mockup hides the rail at 1180. The column was
-    // vanishing a hundred pixels early, and nobody chose that.
-    expect(css).toContain("@media (min-width: 1180px) { .agx-rail { display: flex; } }");
+    // vanishing a hundred pixels early, and nobody chose that. The width is the
+    // pane's, not the window's: a 620px dock in a 2560px window has no room for it.
+    expect(css).toContain("@container agx-files (min-width: 1180px) { .agx-rail { display: flex; } }");
     expect(rail).not.toContain("xl:flex");
   });
 });
@@ -309,9 +310,9 @@ describe("the bar that walks you through what is new", () => {
   it("is pinned to the top of the scroller, because it is a control", () => {
     /* Reported the moment it worked: "Next" sends you three screens down and
        the button that says Next is now three screens up. */
-    expect(src).toContain('position: "sticky", top: 0, zIndex: 8, boxShadow: "0 -12px 0 0 var(--bg)"');
-    // Opaque: comment text slides under it.
-    expect(src).toContain('background: "color-mix(in srgb, var(--warning) 14%, var(--bg))"');
+    expect(src).toContain('position: "sticky", top: 0, zIndex: 8, background: "var(--bg)", boxShadow: "0 -12px 0 0 var(--bg)"');
+    // Opaque (the page background, not a tint): comment text slides under it.
+    expect(src).toContain('data-conv-toolbar');
   });
 });
 
@@ -525,7 +526,8 @@ describe("feedback on a request in flight", () => {
      * the button going grey — the same grey it wears when it is disabled for a
      * reason that has nothing to do with you.
      */
-    expect(src).toContain("pending?: boolean;");
+    // The prop lives on the kit Button now that the panel has no wrapper of its own.
+    expect(chrome).toContain("pending?: boolean;");
     expect(src).toContain("setBusyWhat(label);");
     expect(src).toContain('finally { actLock.current = false; setBusy(false); setBusyWhat(""); }');
     for (const label of ["Update branch", "Re-run checks", "Review"]) {
@@ -602,7 +604,7 @@ describe("the facts strip", () => {
      * scrolling it, which is what made "put me back where I was" a race nobody
      * could win: three attempts at remembering a scroll position lost to it.
      */
-    expect(src).toContain("const condensed = false;");
+    expect(src).not.toContain("const condensed");
     expect(src).not.toContain("setCondensed((was) => (was ? y > 24 : y > 72));");
     expect(src).not.toContain("setCondensed(false)");
   });
@@ -664,59 +666,53 @@ describe("how far behind, on the page and on the board", () => {
   });
 });
 
+const ask = await Bun.file(new URL("../src/components/PrAskPicker.tsx", import.meta.url)).text();
+const people = await Bun.file(new URL("../src/components/workspace/PeoplePicker.tsx", import.meta.url)).text();
+
 describe("assigning on GitHub, and the card on the other board", () => {
-  it("offers ClickUp beside the people, never instead of them", () => {
+  it("draws the card half under the people, on the same Done, never instead of them", () => {
     /*
      * A reviewer goes on the pull request and the card goes to Code Review —
      * one motion in somebody's head, two applications on the screen, and the
-     * second is the one people forget. Optional: assigning on GitHub must never
-     * be conditional on ClickUp being reachable, right, or wanted.
+     * second is the one people forget. The card half sits open under a hairline
+     * (no fold) and one Done applies both; GitHub never waits for the tracker.
      */
-    expect(src).toContain("side={(h) => <ClickUpSide d={d} note={note} {...h} />}");
-    expect(src).toContain("Also in ClickUp");
-    expect(src).toContain("· optional");
+    expect(src).toContain("<AskPickerHost");
+    expect(src).not.toContain("<ClickUpSide");
+    expect(ask).toContain("<PeoplePicker");
+    expect(ask).toContain("{cardBlock}");
+    expect(ask).not.toContain("Not now ▾");
   });
 
-  it("only when the pull request really carries a card", () => {
+  it("only when the pull request really carries a card, and says so when it does not", () => {
     // `mergeCardRef` is the strict reader — a reference in a branch name alone
     // is a convention other trackers share — and the same one the merge dialog
-    // trusts before it writes. Read off the fields rather than off `d`: see
+    // trusts before it writes; `mergeCardRefOrRow` adds only the card the board
+    // row already shows, which the server read case-blind. Read off the fields rather than off `d`: see
     // pr-card-picker.test.ts, where a new `d` every poll wiped the selection.
-    expect(src).toContain("const ref = useMemo(() => mergeCardRef(d, setup), [d.headRefName, d.title, d.body, setup]);");
-    expect(src).toContain("if (!ref) return null;");
+    expect(ask).toContain("const ref = useMemo(() => mergeCardRefOrRow(d, setup), [d.headRefName, d.title, d.body, d.card, setup]);");
+    expect(ask).toContain("No card is linked to #{d.number}");
+    expect(ask).toContain("No tracker is connected for this repo, so no card is updated here. Connect one in Settings.");
   });
 
-  it("writes nothing until the summary is accepted", () => {
-    /* One button for both halves, and a summary before either happens: the two
-       writes land on two different servers and only one of them can
-       be undone from here. */
-    expect(src).toContain('? (ghChanged ? "Yes, do both" : "Yes, move the card")');
-    expect(src).toContain('if (!asking) { setAsking(true); return; }');
+  it("writes nothing until Done, and Done is one press for both systems", () => {
+    expect(ask).toContain("const done = () => { if (!plan.done.disabled && result.phase === \"idle\") run(plan.steps.map((s) => s.id)); };");
+    expect(ask).toContain("onDone={done}");
   });
 
-  it("sends nothing to ClickUp when nothing there would change", () => {
+  it("sends nothing to the tracker when nothing there would change", () => {
     /* A card already in Code Review being "moved" to Code Review is not a
-       change, and leaving yourself on it is not an assignment. An empty plan
-       skips the confirmation entirely and the press is a GitHub assignment. */
-    expect(src).toContain("if (!plan.lines.length) { void onCommit(selRef.current); onClose(); return; }");
-    expect(src).toContain("if (folded || !card || (!plan.lines.length && !menuExtras.length)) return true;");
-  });
-
-  it("does GitHub first and ClickUp only after it", () => {
-    // A card saying "code review, assigned to you" over a pull request nobody
-    // was asked to review is a worse state than an unfinished one — and the
-    // GitHub half is now awaited, which is what makes that true rather than
-    // hoped for.
-    expect(src).toContain("const wrote = await onCommit(selRef.current);");
-    expect(src).toContain("const moved = await plan.run();");
+       change, and leaving whoever is on it there is not an assignment: the plan has no
+       step for it (pr-hand-over.test.ts), so there is no write to make. */
+    expect(ask).toContain("const toAdd = chosen.filter((p) => !onCardIdent.has(p.ident));");
+    expect(ask).toContain("const staying = !chosen.length && !handOver ? side.onCard : [];");
   });
 
   it("finds Code Review by asking the list, not by knowing the word", () => {
     // One board's "Code Review" is another's "In review"; the match is on the
     // name because that is all a status has, and the fallback is to leave it.
-    // The match itself moved to `reviewStatus` in cardMove.ts (same rule, now
-    // with the workspace's own names first); the panel only asks it.
-    expect(src).toContain("reviewStatus(st, t.status, rp.move.names)");
+    // The match itself is `reviewStatus` in cardMove.ts (the workspace's own names first).
+    expect(ask).toContain("reviewStatus(meta.statuses, status, names)");
   });
 
   it("moves the people and the status together, or not at all", () => {
@@ -727,52 +723,42 @@ describe("assigning on GitHub, and the card on the other board", () => {
      * refused the rest: the card gained an assignee, lost nobody and never
      * moved. One PUT has one precondition and no order to get wrong.
      */
-    expect(src).toContain("{ add: plan.add, rem: plan.drop, status: plan.status || undefined }");
-    expect(src).not.toContain("await api.clickupStatus(card.id");
+    expect(ask).toContain("...(has(\"card-status\") && to ? { status: to } : null),");
+    expect(ask).not.toContain("await api.clickupStatus(");
   });
 });
 
-describe("the ClickUp half, as its own controls", () => {
-  it("picks the status through the app's own Select, not a list in the flow", () => {
-    /*
-     * A status keeps the colour its board gave it — a row of bordered words
-     * throws away the one thing that makes seventeen of them scannable — so the
-     * options are pills.
-     *
-     * They go through `Select` because the list used to be drawn in the flow,
-     * inside a column that clips and scrolls with a Done button under it: it
-     * opened INSIDE the container, most of the statuses were unreachable, and
-     * near the bottom of the screen there was nowhere for it to go. `Select`
-     * portals out of the clipping and flips above the trigger.
-     */
-    expect(src).toContain("value={pick}");
-    expect(src).toContain("value: x.status, label: x.status, tint: x.color, pill: true,");
-    expect(src).toContain('{ value: "", label: "leave it where it is" }');
-    expect(src).not.toContain("setStOpen");
+describe("the card half, as its own controls", () => {
+  it("picks the status from the tracker's next states, drawn as pills with the move spelled out", () => {
+    expect(ask).toContain('role="radiogroup" aria-label="Card status"');
+    expect(ask).toContain('const statusOptions = [{ id: "", label: "Leave it" }');
+    expect(ask).toContain("<CardStatus status={now} kind={side.kind} /><span aria-hidden>→</span><CardStatus status={statusPick} kind={side.kind} />");
+    expect(ask).toContain("nextStatuses(");
   });
 
   it("draws people as faces, with their own colour when there is no picture", () => {
-    /* One face for the whole app (AssignPicker's Face, which the panel's memberFace draws). */
+    /* One face for the whole app (AssignPicker's Face). */
     const face = require("node:fs").readFileSync(new URL("../src/components/AssignPicker.tsx", import.meta.url), "utf8") as string;
     expect(face).toContain("referrerPolicy=\"no-referrer\"");
     expect(face).toContain("background: m.color || \"var(--bg4)\"");
-    expect(src).toContain("return <Face m={p} />;");
+    expect(ask).toContain("<Face m={p} size={16} />");
   });
 
   it("stacks under the people rather than widening the menu", () => {
-    /* The menu is already tall — that is the space going spare, not the width.
-       Widening it to 620 pushed a second column across the pane; this uses the
-       height that was already there. */
+    /* The menu is already tall — that is the space going spare, not the width. */
+    expect(people).toContain("const W = 440;");
+    // Wide enough for an email beside a name, and never a sideways scroll: the card half is one shrinkable column.
+    expect(people).toContain('overflowX: "hidden"');
+    expect(ask).toContain('gridTemplateColumns: "minmax(0, 1fr)"');
+    expect(people).not.toContain("const W = side ? 620");
     expect(src).toContain("const W = 300;");
-    expect(src).not.toContain("const W = side ? 620 : 300;");
-    expect(src).toContain('className="fixed rounded-lg overflow-hidden flex flex-col"');
   });
 
-  it("starts folded, on a line above Done", () => {
-    // The errand is the reviewer; this is the thing you may also want.
-    expect(src).toContain("const [sideFolded, setSideFolded] = useState(true);");
-    expect(src).toContain("Not now ▾");
-    expect(src).toContain("Also move {ref.label} in ClickUp");
+  it("is open under a hairline, with no fold to put it away", () => {
+    // The errand is the reviewer; the card is the other half of the same errand.
+    expect(ask).not.toContain("setSideFolded");
+    expect(ask).not.toContain("Also move {ref.label} in ClickUp");
+    expect(people).toContain("children");
   });
 });
 
@@ -784,20 +770,6 @@ describe("the picker's own height", () => {
      * ClickUp half and Done off the bottom, and leaving nothing to scroll.
      */
     expect(src).toContain('className="flex flex-col min-w-0 min-h-0 flex-1"');
-  });
-});
-
-describe("folding it away", () => {
-  it("takes its plan with it", () => {
-    /* It was still announcing its changes while put away, which left "Done ·
-       and ClickUp" on a menu with nothing showing. Folded means "not this
-       time". */
-    expect(src).toContain("onPlan({ lines: folded ? [] : [...plan.lines, ...extraLines], run })");
-    expect(src).toContain("if (folded || !card || (!plan.lines.length && !menuExtras.length)) return true;");
-  });
-
-  it("drops a summary that no longer has anything to summarise", () => {
-    expect(src).toContain("useEffect(() => { if (!plan.lines.length) setAsking(false); }, [plan.lines.length]);");
   });
 });
 

@@ -24,7 +24,7 @@ import { mergeBlockedWhy, checksLine, checksStanding, standingLine, mergeVerdict
 import { mergeBlockers, mergeRefusal } from "../../../shared/mergeBlockers.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { CircleIcon, CommentIcon, CrossIcon, DoneIcon, IconLabel } from "../lib/glyphIcons.tsx";
-import { EDGE, LINE } from "./workspace/Chrome.tsx";
+import { CTRL_H, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 /** How your own last verdict reads back, and in what colour. Its own map so the
  *  three states are spelled once — the buttons above already spell them as
@@ -596,8 +596,8 @@ export function FileRail({
                 return (
                   <button key={id} onClick={on} disabled={off} aria-pressed={chosen}
                     title={off ? "GitHub does not let you approve or block your own pull request" : undefined}
-                    className="agx-btn rounded px-1.5 py-0.5 text-[10px] disabled:opacity-40"
-                    style={{
+                    className="inline-flex items-center justify-center agx-btn rounded px-1.5 text-[10px] disabled:opacity-40"
+                    style={{ height: CTRL_H.compact,
                       color: chosen ? tint : "var(--text2)", fontWeight: chosen ? 650 : 400,
                       border: edge(chosen ? 34 : 18),
                       background: chosen ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
@@ -617,8 +617,8 @@ export function FileRail({
             <p className="m-0 mt-1.5 text-[10px]" style={{ color: "var(--text4)" }}>{goesWith}</p>
             {onSubmit && (
               <button onClick={onSubmit} disabled={busyWhat === "Review"}
-                className="agx-btn w-full mt-1.5 rounded-md py-1 text-[10.5px] inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
-                style={{ background: "var(--primary)", color: "var(--on-primary)", border: EDGE }}>
+                className="agx-btn w-full mt-1.5 rounded-md text-[10.5px] inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
+                style={{ height: CTRL_H.hit, background: "var(--primary)", color: "var(--on-primary)", border: EDGE }}>
                 {busyWhat === "Review" && (
                   <span className="agx-spin" aria-hidden
                     style={{ width: 9, height: 9, borderWidth: 1.5, borderColor: "color-mix(in srgb, var(--on-primary) 55%, transparent)", borderTopColor: "transparent" }} />
@@ -652,8 +652,9 @@ export function FileRail({
         {under && <p className="m-0 mt-1 text-[10px]" style={{ color: "var(--text4)" }}>{under}</p>}
         <button onClick={onMerge} disabled={!canMerge || !!refusal || busyWhat === "Merge"}
           title={refusal ? `${refusal.title} — ${refusal.detail}` : undefined}
-          className="agx-btn w-full mt-2 rounded-md py-1 text-[10.5px] inline-flex items-center justify-center gap-1.5 disabled:opacity-40"
-          style={{ background: allClear ? "var(--primary)" : "transparent", color: allClear ? "var(--on-primary)" : "var(--text2)", border: EDGE }}>
+          className="agx-btn w-full mt-2 rounded-md text-[10.5px] inline-flex items-center justify-center gap-1.5 disabled:opacity-40"
+          style={{ height: CTRL_H.hit, background: allClear ? "var(--success)" : "transparent", color: allClear ? "var(--bg)" : "var(--text2)", border: EDGE }}>
+          {/* Green with the dock's own ink: two Merge buttons on one screen, two colours, read as two different actions. */}
           {/* "anyway" is a word about overriding something. With nothing to
               override it turned a plain press into a dare. */}
           {busyWhat === "Merge" && (

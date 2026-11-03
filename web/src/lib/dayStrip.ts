@@ -39,11 +39,24 @@ export function dayCells(days: UsageDay[], now: number) {
 let last: UsageDay[] | null = null;
 let inflight: Promise<UsageDay[]> | null = null;
 
+/** Sheet totals subscribe: the answer lands after the first paint, and a total
+ *  read once during render stayed blank for as long as the sheet was open. */
+const watchers = new Set<() => void>();
+
+export function subscribeDayStrip(fn: () => void): () => void {
+  watchers.add(fn);
+  return () => { watchers.delete(fn); };
+}
+
 export const lastWeek = (): UsageDay[] | null => last;
 
 export function warmDayStrip(): Promise<UsageDay[]> {
   inflight ??= api.usageDaily(7)
-    .then((h) => (last = h.days))
+    .then((h) => {
+      last = h.days;
+      for (const fn of watchers) fn();
+      return h.days;
+    })
     .finally(() => { inflight = null; });
   return inflight;
 }

@@ -70,11 +70,11 @@ describe("what it costs to stay fresh", () => {
   });
   const code = (s: string) => s.split("\n").filter((l) => !/^\s*(\/?\*|\/\/)/.test(l)).join("\n");
 
-  test("the tab has no timer of its own: the heartbeat is the shared board's, and it asks only when the rows are old", () => {
+  test("the tab has no timer of its own: the board re-reads on coming back to the window, and only when the rows are old", () => {
     expect(code(screen)).not.toMatch(/setInterval\(|setTimeout\(/);
     const c = code(panel);
-    expect(c).toContain("setInterval(tick, BOARD_TICK_MS)");
-    expect(c).toContain("boardDue(Date.now(), data?.at, cause)");
+    expect(c).not.toContain("setInterval(tick");
+    expect(c).toContain("boardDue(Date.now(), data?.at)");
   });
 
   test("the panel gives a Jira jump to Jira and keeps it from ClickUp, on the same body with its own source", () => {

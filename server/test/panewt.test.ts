@@ -16,11 +16,11 @@
  * writing one, which is the same reason paneloc.ts splits its parser out.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  dirsFromTranscript, ensurePaneNoteTable, noteForSession, notePaneAgent, notePaneFromHook, paneAgentNote, paneDirs, paneHeldSessions, readTail, resetTailCache,
+  dirsFromTranscript, mergeWork, workFromTranscript, ensurePaneNoteTable, noteForSession, notePaneAgent, notePaneFromHook, paneAgentNote, paneDirs, paneHeldSessions, readTail, resetTailCache, splitByScope,
 } from "../src/panewt.ts";
 import { Database } from "bun:sqlite";
 
@@ -329,8 +329,32 @@ describe("paneDirs", () => {
     notePaneAgent({ pane: PANE, sessionId: "s", transcriptPath: transcript, cwd: "/home/dev/code/something-else" });
     // tmux handed %9911 to a different project. The old session's worktree must
     // not come back with it.
-    const { dirs } = paneDirs(PANE, 1, () => [REPO]);
+    const { dirs, agent } = paneDirs(PANE, 1, () => [REPO]);
     expect(dirs).toEqual([REPO]);
+    /* Nor its id: the panel's memory of this pane is kept while the id
+       matches, and the dead session's worktree, PR and card rode on it. */
+    expect(agent).toBe("");
+  });
+
+  test("a plain shell on a reused pane id answers as nobody", () => {
+    notePaneAgent({ pane: PANE, sessionId: "ended", transcriptPath: transcript, cwd: WT });
+    expect(paneDirs(PANE, 1, () => []).agent).toBe("");
+  });
+
+  test("a pane that gets an ended session's id on a new server inherits nothing", () => {
+    /* The ended session's agent stood in the parent repo and worked in a
+       worktree; the new server hands its %id to a new agent in the same repo.
+       The cwd check alone believed the old note. */
+    notePaneAgent({ pane: "%9951", sessionId: "ended", transcriptPath: transcript, cwd: REPO, server: "/tmp/tmux-1000/agentglass,111" });
+    expect(paneDirs("%9951", 1, () => [REPO], "/tmp/tmux-1000/agentglass,111").dirs, "on its own server it is believed").toContain(WT);
+    const { dirs, agent } = paneDirs("%9951", 1, () => [REPO], "/tmp/tmux-1000/agentglass,222");
+    expect(dirs).toEqual([REPO]);
+    expect(agent).toBe("");
+  });
+
+  test("the agent that is there answers with its own id", () => {
+    notePaneAgent({ pane: PANE, sessionId: "s", transcriptPath: transcript, cwd: REPO });
+    expect(paneDirs(PANE, 1, () => [REPO]).agent).toBe("s");
   });
 
   test("no agent, no note, no answer — and no throw", () => {
@@ -367,5 +391,87 @@ describe("paneHeldSessions", () => {
     const held = paneHeldSessions([{ paneId: "%9941", agentCwds: [REPO], server: s1 }]);
     expect([...held]).toEqual(["idle-on-s1"]);
     expect([...paneHeldSessions([{ paneId: "%9941", agentCwds: [REPO], server: s2 }])]).toEqual(["busy-on-s2"]);
+  });
+});
+
+describe("a pane directory the window's scope drops", () => {
+  const inAcme = (d: string) => d.startsWith("/home/dev/code/acme");
+  test("is named by its last segment, never its path, when nothing else is in scope", () => {
+    expect(splitByScope(["/home/dev/code/orbit/"], inAcme)).toEqual({ dirs: [], outside: "orbit" });
+  });
+  test("is not reported while an in-scope directory answers", () => {
+    expect(splitByScope(["/home/dev/code/orbit", "/home/dev/code/acme"], inAcme))
+      .toEqual({ dirs: ["/home/dev/code/acme"], outside: "" });
+  });
+  test("a pane with no directory names nothing", () => {
+    expect(splitByScope([], inAcme)).toEqual({ dirs: [], outside: "" });
+  });
+});
+
+/** A transcript line with the time the CLI stamps on it. */
+const at = (iso: string, name: string, input: Record<string, unknown>) =>
+  JSON.stringify({ type: "assistant", timestamp: iso, message: { content: [{ type: "tool_use", name, input }] } });
+
+describe("workFromTranscript: the chip follows work, never a look", () => {
+  test("reads of another checkout name nothing", () => {
+    const t = [
+      toolUse("Read", { file_path: `${WT}/a.py` }),
+      toolUse("Grep", { pattern: "x", path: WT }),
+      toolUse("Bash", { command: `gh pr view 698 && cat ${WT}/a.py && git -C ${WT} log -3` }),
+    ].join("\n");
+    expect(workFromTranscript(t)).toEqual([]);
+  });
+
+  test("an edit, a write and a build in a directory move it", () => {
+    const t = [
+      toolUse("Edit", { file_path: `${WT}/a.py` }),
+      toolUse("Write", { file_path: `${WT}/b.py` }),
+      toolUse("Bash", { command: `cd ${WT} && make test` }),
+      toolUse("Bash", { command: `git -C ${WT} commit -m x` }),
+    ].join("\n");
+    expect(workFromTranscript(t).map((m) => m.path)).toEqual([WT, WT, `${WT}/b.py`, `${WT}/a.py`]);
+  });
+});
+
+describe("paneDirs.work: a subagent's edits reach the pane that started it", () => {
+  let dir = "";
+  const PANE = "%9921";
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "agx-panework-")); resetTailCache(); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  test("main-checkout session reads the PR; its subagent edits the PR worktree", () => {
+    const transcript = join(dir, "s1.jsonl");
+    writeFileSync(transcript, [
+      at("2026-10-27T10:00:00Z", "Bash", { command: `gh pr view 698 && cat ${WT}/a.py` }),
+      at("2026-10-27T10:00:05Z", "Read", { file_path: `${WT}/a.py` }),
+    ].join("\n") + "\n");
+    notePaneAgent({ pane: PANE, sessionId: "s1", transcriptPath: transcript, cwd: REPO });
+    // Only looked: the dirs list sees the worktree, the work list does not.
+    let r = paneDirs(PANE, 1, () => [REPO]);
+    expect(r.dirs).toContain(`${WT}/a.py`);
+    expect(r.work).toEqual([]);
+    mkdirSync(join(dir, "s1", "subagents"), { recursive: true });
+    writeFileSync(join(dir, "s1", "subagents", "agent-a1.jsonl"),
+      at("2026-10-27T10:05:00Z", "Edit", { file_path: `${WT}/serializers.py` }) + "\n");
+    r = paneDirs(PANE, 1, () => [REPO]);
+    expect(r.work).toEqual([`${WT}/serializers.py`]);
+    expect(r.agent).toBe("s1");
+  });
+
+  test("another pane's agent gets none of it", () => {
+    const transcript = join(dir, "s2.jsonl");
+    writeFileSync(transcript, at("2026-10-27T10:00:00Z", "Edit", { file_path: `${WT}/a.py` }) + "\n");
+    notePaneAgent({ pane: PANE, sessionId: "s2", transcriptPath: transcript, cwd: REPO });
+    // %9922 has no note: a pane tmux reused, or a shell.
+    expect(paneDirs("%9922", 1, () => [REPO]).work).toEqual([]);
+    // The note is believed only while its agent is still there.
+    expect(paneDirs(PANE, 1, () => ["/home/dev/code/other"]).work).toEqual([]);
+  });
+
+  test("the newest work wins across the session and its subagents", () => {
+    expect(mergeWork([
+      [{ path: "/a", at: 100 }],
+      [{ path: "/b", at: 300 }, { path: "/a", at: 50 }],
+    ])).toEqual(["/b", "/a"]);
   });
 });

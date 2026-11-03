@@ -4,7 +4,7 @@ import { Portal } from "../Portal.tsx";
 import { Select } from "../Select.tsx";
 import { CloseButton } from "../CloseButton.tsx";
 import { CardRef, StatusMove } from "../StepCard.tsx";
-import { EDGE, INPUT, INPUT_STYLE, LINE } from "../workspace/Chrome.tsx";
+import { Button, EDGE, INPUT, INPUT_STYLE, LINE, Textarea } from "../workspace/Chrome.tsx";
 import { FIELD_KEY, titleOf } from "./JiraStepDialog.tsx";
 import { useFocusTrap } from "../../lib/focusTrap.ts";
 import { useOwnedQuestion } from "../../lib/layerOwner.ts";
@@ -66,7 +66,7 @@ function Control({ f, value, on, off, bad }: { f: JiraMoveField; value: string |
     }
     case "comment":
     case "longtext":
-      return <textarea value={text} rows={2} disabled={off} aria-label={f.name} className="w-full px-2.5 py-1.5 rounded-lg text-[12px] outline-none" style={{ ...edge, background: "var(--surface-inset)", color: "var(--text)" }} onChange={(e) => on(e.target.value)} />;
+      return <Textarea value={text} rows={2} disabled={off} aria-label={f.name} className="w-full !min-h-0" style={edge} onChange={(e) => on(e.target.value)} />;
     case "number":
       return <input value={text} inputMode="decimal" disabled={off} aria-label={f.name} className={`w-full ${INPUT}`} style={edge} onChange={(e) => on(e.target.value)} />;
     case "date":
@@ -174,11 +174,10 @@ export function MoveForm({ spec, onDone }: { spec: MoveFormSpec; onDone: (r: Mov
               <span>{foot.text}</span>
             </div>
             <div className="flex items-center justify-end gap-2">
-              <button onClick={close} disabled={phase === "running"} className="text-[11px] px-2.5 py-1 rounded disabled:opacity-40 shrink-0"
-                style={{ color: "var(--text2)", border: EDGE, visibility: phase === "done" ? "hidden" : "visible" }}>Cancel</button>
-              <button onClick={phase === "done" ? close : () => { void go(); }} disabled={phase !== "done" && !view.canSubmit}
-                className="text-[11px] px-2.5 py-1 rounded font-medium disabled:opacity-40 min-w-[96px] text-center"
-                style={{ color: "var(--on-primary)", background: "var(--primary)" }}>{label}</button>
+              <Button onClick={close} disabled={phase === "running"} className="shrink-0"
+                style={{ visibility: phase === "done" ? "hidden" : "visible" }}>Cancel</Button>
+              <Button tone="primary" onClick={phase === "done" ? close : () => { void go(); }} disabled={phase !== "done" && !view.canSubmit}
+                className="min-w-[96px]">{label}</Button>
             </div>
           </div>
         </motion.div>

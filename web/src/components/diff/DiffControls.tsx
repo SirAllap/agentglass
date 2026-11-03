@@ -9,12 +9,12 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useCloseWithOwner } from "../../lib/layerOwner.ts";
-import { THEMES } from "../../lib/highlight.ts";
-import { ICON, MIN_BOX } from "../../lib/iconSize.ts";
+import { THEMES, shikiTheme, themeClash } from "../../lib/highlight.ts";
+import { ICON } from "../../lib/iconSize.ts";
 import { WarningIcon } from "../../lib/glyphIcons.tsx";
 import { GearIcon } from "../workspace/icons.tsx";
 import { openSettings } from "../../lib/openSettings.ts";
-import { EDGE } from "../workspace/Chrome.tsx";
+import { Button, EDGE, ListRow } from "../workspace/Chrome.tsx";
 
 /**
  * The syntax theme, as a dropdown. "auto" follows the app's own light/dark; the
@@ -38,44 +38,30 @@ export function ThemePicker({ value, onChange, error }: { value: string; onChang
     return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc, true); };
   }, [open]);
 
+  const clash = error ? null : themeClash(value, shikiTheme());
   const label = value === "auto" ? "Auto" : (THEMES.find((t) => t.id === value)?.label ?? value);
-  const Row = ({ id, name }: { id: string; name: string }) => (
-    <button
-      onClick={() => { onChange(id); setOpen(false); }}
-      role="menuitemradio" aria-checked={value === id}
-      className="w-full text-left px-2.5 py-1 flex items-center gap-2 transition-colors"
-      style={{ background: value === id ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent", color: value === id ? "var(--text)" : "var(--text2)" }}
-    >
-      <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" aria-hidden className="shrink-0"
-        style={{ opacity: value === id ? 1 : 0, color: "var(--primary-ink)" }}>
-        <path d="M2.5 6.4l2.4 2.4L9.5 3.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-      <span className="truncate">{name}</span>
-    </button>
+  const choice = (id: string, name: string) => (
+    <ListRow key={id} onClick={() => { onChange(id); setOpen(false); }} role="menuitemradio" aria-checked={value === id}
+      current={value === id} leading={<TickIcon on={value === id} />}>{name}</ListRow>
   );
 
   return (
     <div ref={ref} className="relative">
-      <button
+      <Button
+        size="regular" tint={error || clash ? "var(--warning)" : undefined}
         onClick={() => setOpen((o) => !o)}
-        title={error || "Syntax theme"}
+        title={error || clash || "Syntax theme"}
         aria-expanded={open}
-        className="px-2 py-1 rounded-md text-[10.5px] transition-colors flex items-center gap-1"
-        style={{
-          background: error ? "color-mix(in srgb, var(--warning) 16%, transparent)" : "color-mix(in srgb, var(--bg3) 45%, transparent)",
-          border: `1px solid color-mix(in srgb, var(--${error ? "warning" : "border"}) ${error ? 55 : 30}%, transparent)`,
-          color: error ? "var(--warning)" : "var(--text3)",
-        }}
       >
         {/* The label names the theme that was CHOSEN, so when it could not be
             loaded the button has to say so — otherwise it vouches for colours
             that are not on screen. */}
-        {error && <span aria-hidden className="flex"><WarningIcon size={ICON.xs} /></span>}
+        {(error || clash) && <span aria-hidden className="flex"><WarningIcon size={ICON.xs} /></span>}
         <span className="truncate" style={{ maxWidth: 92 }}>{label}</span>
         <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" aria-hidden style={{ opacity: 0.7 }}>
           <path d="M3 5l3 3 3-3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
-      </button>
+      </Button>
       {open && (
         <div
           role="menu"
@@ -85,11 +71,11 @@ export function ThemePicker({ value, onChange, error }: { value: string; onChang
              bars across this list wherever a `@@ … @@` line sat behind it. */
           style={{ zIndex: 40, background: "var(--surface-card)", border: EDGE, minWidth: 178, maxHeight: 340, overflowY: "auto" }}
         >
-          <Row id="auto" name="Auto (app theme)" />
+          {choice("auto", "Auto (app theme)")}
           <div className="px-2.5 pt-1.5 pb-0.5 text-[9px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>Dark</div>
-          {THEMES.filter((t) => t.dark).map((t) => <Row key={t.id} id={t.id} name={t.label} />)}
+          {THEMES.filter((t) => t.dark).map((t) => choice(t.id, t.label))}
           <div className="px-2.5 pt-1.5 pb-0.5 text-[9px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>Light</div>
-          {THEMES.filter((t) => !t.dark).map((t) => <Row key={t.id} id={t.id} name={t.label} />)}
+          {THEMES.filter((t) => !t.dark).map((t) => choice(t.id, t.label))}
         </div>
       )}
     </div>
@@ -100,30 +86,22 @@ export function ThemePicker({ value, onChange, error }: { value: string; onChang
  *  these sit in a row of five and colour is the only other thing telling them
  *  apart. */
 export function Toggle({ on, onClick, children, title }: { on?: boolean; onClick: () => void; children: ReactNode; title?: string }) {
-  return (
-    <button
-      onClick={onClick}
-      title={title}
-      aria-pressed={!!on}
-      className="px-2 py-1 rounded-md text-[10.5px] transition-colors"
-      style={{
-        background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "color-mix(in srgb, var(--bg3) 45%, transparent)",
-        border: `1px solid color-mix(in srgb, var(--border) ${on ? 50 : 30}%, transparent)`,
-        color: on ? "var(--text)" : "var(--text3)",
-      }}
-    >
-      {children}
-    </button>
-  );
+  return <Button size="regular" on={!!on} aria-pressed={!!on} onClick={onClick} title={title}>{children}</Button>;
 }
 
 /** The way to the settings for everything above: split, wrap and theme all
  *  have their defaults on the Diff page. Sits beside the theme picker in each
  *  toolbar, so there is no row of its own. */
 export function DiffSettingsLink() {
+  return <Button size="regular" square tone="quiet" label="Diff settings…" onClick={() => openSettings("diff")}><GearIcon size={ICON.xs} /></Button>;
+}
+
+/** The check in front of a picker row; kept in the layout when off so labels stay aligned. */
+function TickIcon({ on }: { on: boolean }) {
   return (
-    <button type="button" onClick={() => openSettings("diff")} aria-label="Diff settings…" title="Diff settings…"
-      className="shrink-0 grid place-items-center rounded hover:bg-white/10"
-      style={{ width: MIN_BOX, height: MIN_BOX, color: "var(--text3)" }}><GearIcon size={ICON.xs} /></button>
+    <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" aria-hidden className="shrink-0"
+      style={{ opacity: on ? 1 : 0, color: "var(--primary-ink)" }}>
+      <path d="M2.5 6.4l2.4 2.4L9.5 3.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }

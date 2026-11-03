@@ -179,4 +179,21 @@ describe("runRebase", () => {
     expect(git("status", "--porcelain").stdout.toString().trim()).toBe("");
     expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("two\n");
   });
+
+  it("refuses a range that holds a merge commit and leaves no rebase behind", () => {
+    // A merge in base..HEAD made git reject the todo ("'pick' does not accept
+    // merge commits") after it had already started, stranding a rebase.
+    const b = base();
+    git("checkout", "-q", "-b", "side", b);
+    writeFileSync(join(repo, "side.txt"), "x\n");
+    git("add", "-A"); git("commit", "-qm", "side work");
+    git("checkout", "-q", "main");
+    git("merge", "--no-ff", "-qm", "merge side", "side");
+    const s = rebaseSteps(repo, b).steps!;
+    const r = runRebase(repo, b, s);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("merge commit");
+    expect(git("status", "--porcelain=v2", "--branch").stdout.toString()).toContain("main");
+    expect(Bun.spawnSync(["test", "-d", join(repo, ".git", "rebase-merge")]).exitCode).not.toBe(0);
+  });
 });

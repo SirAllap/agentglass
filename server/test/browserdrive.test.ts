@@ -487,7 +487,7 @@ describe("§16 — origins, read-only, audit, redaction", () => {
     expect(p.error).toContain("read-only");
   });
 
-  test("read-only mode refuses type, eval and open — never lets an unclassified verb through as observing", () => {
+  test("read-only mode refuses type, eval and open — never lets a verb with no class through as observing", () => {
     process.env.AGENTGLASS_BROWSER_READONLY = "1";
     expect("error" in parseAsk("type", { selector: "#q", text: "hi" })).toBe(true);
     expect("error" in parseAsk("eval", { js: "1+1" })).toBe(true);
@@ -636,7 +636,7 @@ describe("§16 — origins, read-only, audit, redaction", () => {
 
   test("every op OBSERVE_OPS does not name is acting by default", () => {
     // Every verb in the real op set is either explicitly observing or refused
-    // under read-only — none of them slip through unclassified.
+    // under read-only — none of them slip through with no class.
     process.env.AGENTGLASS_BROWSER_READONLY = "1";
     const acting = ["open", "click", "type", "back", "forward", "scroll", "press",
       "tab", "newtab", "closetab", "resize", "eval", "select", "reload", "fake"];

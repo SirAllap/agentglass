@@ -59,6 +59,20 @@ describe("underTmp", () => {
   });
 });
 
+describe("duplicatePids, process trees", () => {
+  const row = (pid: number, dir: string, proc: string) => ({ mine: true, pid, proc, dir });
+  test("a browser and its child processes on one port are one app, not duplicates", () => {
+    const parents = new Map([[11, 10], [12, 10], [13, 11]]);
+    const rows = [10, 11, 12, 13].map((p) => ({ ...row(p, "/home/a/.config/chromium", "chromium"), pid: p }));
+    expect(duplicatePids(rows, (p) => parents.get(p) ?? null).size).toBe(0);
+  });
+  test("two separate trees of the same program are still duplicates", () => {
+    const parents = new Map([[11, 10], [21, 20]]);
+    const rows = [10, 11, 20, 21].map((p) => ({ ...row(p, "/w/a", "chromium"), pid: p }));
+    expect([...duplicatePids(rows, (p) => parents.get(p) ?? null)].sort()).toEqual([10, 20]);
+  });
+});
+
 describe("duplicatePids", () => {
   const row = (pid: number, dir: string | null, proc = "python3", mine = true) => ({ mine, pid, proc, dir });
 
@@ -68,6 +82,19 @@ describe("duplicatePids", () => {
 
   test("one pid on two addresses is one listener", () => {
     expect(duplicatePids([row(1, "/tmp/r"), row(1, "/tmp/r")]).size).toBe(0);
+  });
+
+  test("one program on one port with two pids is one listener, not a duplicate", () => {
+    // Measured: a chromium opened one port on 127.0.0.1 and ::1 from two pids
+    // with no visible kinship, and Clean up listed the one app as "Duplicates
+    // :9440 x2 keep".
+    const rows = [{ ...row(10, "/home/a/.config/chromium", "chromium"), port: 9440 }, { ...row(11, "/home/a/.config/chromium", "chromium"), port: 9440 }];
+    expect(duplicatePids(rows).size).toBe(0);
+  });
+
+  test("two copies on two ports are still duplicates", () => {
+    const rows = [{ ...row(10, "/code/orbit", "vite"), port: 5173 }, { ...row(11, "/code/orbit", "vite"), port: 5174 }];
+    expect([...duplicatePids(rows)].sort()).toEqual([10, 11]);
   });
 
   test("different folders, different programs, other users' processes are not", () => {

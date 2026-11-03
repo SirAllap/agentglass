@@ -17,7 +17,7 @@
 // flag a later tidy-up removes as redundant, on the reasonable-sounding grounds
 // that fetches normally finish.
 import { test, expect } from "bun:test";
-import { FETCH_ARGV } from "../src/gitwork.ts";
+import { FETCH_ARGV, fetchArgvs } from "../src/gitwork.ts";
 
 test("every fetch this app runs is atomic", () => {
   expect(FETCH_ARGV).toContain("--atomic");
@@ -25,7 +25,6 @@ test("every fetch this app runs is atomic", () => {
 
 test("it is still the fetch it was, and still prunes", () => {
   expect(FETCH_ARGV[0]).toBe("fetch");
-  expect(FETCH_ARGV).toContain("--all");
   expect(FETCH_ARGV).toContain("--prune");
 });
 
@@ -35,4 +34,19 @@ test("it never writes to the remote", () => {
   for (const forbidden of ["push", "--force", "-f", "--delete", "--set-upstream", "--tags-only"]) {
     expect(FETCH_ARGV as readonly string[]).not.toContain(forbidden);
   }
+});
+
+test("two remotes are fetched one at a time, because --atomic refuses --all", () => {
+  expect(FETCH_ARGV as readonly string[]).not.toContain("--all");
+  const { mkdtempSync, rmSync } = require("node:fs");
+  const { tmpdir } = require("node:os");
+  const dir = mkdtempSync(`${tmpdir()}/agx-fetch-`);
+  const sh = (cwd: string, ...a: string[]) => Bun.spawnSync(["git", "-C", cwd, ...a]);
+  try {
+    sh(dir, "init", "-q", "w"); sh(dir, "init", "-q", "--bare", "a.git"); sh(dir, "init", "-q", "--bare", "b.git");
+    sh(`${dir}/w`, "remote", "add", "o1", `${dir}/a.git`); sh(`${dir}/w`, "remote", "add", "o2", `${dir}/b.git`);
+    const argvs = fetchArgvs(`${dir}/w`);
+    expect(argvs).toEqual([[...FETCH_ARGV, "o1"], [...FETCH_ARGV, "o2"]]);
+    for (const a of argvs) expect(sh(`${dir}/w`, ...a).exitCode).toBe(0);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

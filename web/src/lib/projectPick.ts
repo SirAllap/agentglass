@@ -4,6 +4,8 @@
 // Paths are the server's: absolute, resolved, `/`-separated. The server never
 // hands the picker a `~/…` or a Windows path, so neither is handled here.
 
+import type { GitRepoRef } from "../../../shared/types.ts";
+
 const leaf = (p: string) => p.split("/").filter(Boolean).pop() ?? p;
 const trim = (p: string) => (p.length > 1 ? p.replace(/\/+$/, "") : p);
 const within = (p: string, dir: string) => {
@@ -19,6 +21,14 @@ export function scopeLabel(workspaces: readonly string[]): string | null {
   if (!workspaces.length) return null;
   const first = leaf(workspaces[0]!);
   return workspaces.length === 1 ? first : `${first} +${workspaces.length - 1}`;
+}
+
+/** The project button's accessible name: names, never paths. The full paths
+ *  stay on the tooltip, which a screen reader reads as a description. */
+export function scopeAria(workspaces: readonly string[], workspace: string | null | undefined): string {
+  if (workspace === undefined) return "Reading the open project";
+  if (!workspace) return "Every repo on this machine. Open projects";
+  return `Open project ${workspaces.map(leaf).join(", ")}. Switch project`;
 }
 
 /** Every open project in full, for the tooltip the short label leaves out. */
@@ -89,6 +99,13 @@ export function openFolders(workspaces: readonly string[], listed: readonly { ro
   return workspaces.filter((w) => !listed.some((r) => trim(r.root) === trim(w)));
 }
 
+/** The list plus a row of its own for every open path it lacks, so "Open now"
+ *  shows everything that is open and every tick has a row to untick. */
+export function withOpenFolders<T extends { root: string }>(listed: readonly T[], workspaces: readonly string[]): (T | GitRepoRef)[] {
+  const extra = openFolders(workspaces, listed).map((root): GitRepoRef => ({ root, name: leaf(root), branch: "", dirty: 0, ahead: 0, behind: 0, touchedAt: 0 }));
+  return [...listed, ...extra];
+}
+
 /** Ticked when the picker opens: the open projects that the list can show. */
 export function initialTicks(workspaces: readonly string[], listed: readonly { root: string }[]): string[] {
   return workspaces.filter((w) => listed.some((r) => r.root === w));
@@ -115,4 +132,23 @@ export function autoPick(listed: readonly { root: string }[], workspaces: readon
 export function firstRun(listed: readonly unknown[] | null, roots: readonly string[], scanned: boolean, workspaces: readonly string[] | null): boolean {
   // null: the server has not said what is open yet, which is not "nothing".
   return listed !== null && !roots.length && !scanned && workspaces !== null && !workspaces.length;
+}
+
+/** Set once the user has answered the startup question (either way), so an
+ *  unscoped instance doesn't re-ask on every reload. */
+export const PICKER_ANSWERED_KEY = "agentglass.projectChosen";
+export const markAnswered = (): void => { try { localStorage.setItem(PICKER_ANSWERED_KEY, "1"); } catch { /* ignore */ } };
+
+/** What a multi-open reports per project (frame 12). */
+export type OpenRow = { path: string; state: "opening" | "ok" | "fail" | "ready"; why?: string };
+
+/** After a refused open: which projects can still be opened. The ones whose
+ *  folder is gone fail with a reason; the rest are ready and stay ticked. */
+export function explainOpen(paths: readonly string[], exists: Readonly<Record<string, boolean>>, serverError: string): OpenRow[] {
+  const gone = paths.filter((p) => exists[p] === false);
+  return paths.map((p) => exists[p] === false
+    ? { path: p, state: "fail" as const, why: `${p} does not exist. It may be on a drive that is not mounted.` }
+    : gone.length
+      ? { path: p, state: "ready" as const }
+      : { path: p, state: "fail" as const, why: serverError });
 }

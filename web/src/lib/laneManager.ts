@@ -26,7 +26,12 @@ export function laneSlug(
   if (container === "shared") return { slug: "" };
   if (container === "ephemeral") return { slug: "", ephemeral: true };
   if (container === "named") {
-    const hit = typeof name === "string" ? profiles.find((p) => p.name === name || p.id === name) : undefined;
+    /* Folded, as `mintAgentProfile` resolves the same question: a person who
+       typed `Orbit` means the stored `orbit`, not a container that is missing. */
+    const wanted = typeof name === "string" ? name.trim().toLowerCase() : "";
+    const hit = wanted
+      ? profiles.find((p) => p.name.trim().toLowerCase() === wanted || p.id.trim().toLowerCase() === wanted)
+      : undefined;
     return hit && hit.id ? { slug: hit.id } : { error: `no container called ${String(name)} — \`profiles\` lists them` };
   }
   return { slug: id };

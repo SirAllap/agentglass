@@ -19,15 +19,16 @@
 // eight, and the dashboard — fourteen panels and a poll every four seconds — is
 // not among them until you ask for it.
 import { PluginsView } from "../plugins/PluginsView.tsx";
+import { FlightPlanView } from "../flightPlan/FlightPlanView.tsx";
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { hiddenOnly } from "./hiddenOnly.ts";
 import { ViewRail, type RailPip } from "./ViewRail.tsx";
+import { subscribeSummary, summarySnapshot, summaryHasLeft } from "../../lib/manifest.ts";
 import { railBadgesKey, subscribeRailBadges, visiblePips } from "../../lib/railBadges.ts";
 import { pushScope } from "../../lib/findScope.ts";
 import { VIEWS, saveLastView, type ViewId } from "./views.ts";
 import { ViewBoundary } from "./ViewBoundary.tsx";
-import { FilesView } from "../FilesPanel.tsx";
 import { TasksView } from "../TasksPanel.tsx";
 import { subscribeReminders, firedCount } from "../../lib/reminderStore.ts";
 import { hasGitModal, subscribeGitModal } from "../../lib/gitModalIntent.ts";
@@ -38,6 +39,7 @@ import { DockerView } from "../DockerPanel.tsx";
 import { TermView } from "../TerminalPanel.tsx";
 import { BrowserView } from "../BrowserPanel.tsx";
 import { AgentsView } from "../agents/AgentsView.tsx";
+import { ManifestView } from "../ManifestView.tsx";
 import { subscribeLantern, lanternNeed } from "../../lib/lanternStore.ts";
 import { requestTermReview } from "../../lib/termReview.ts";
 import { requestTermIssue } from "../../lib/termIssue.ts";
@@ -83,13 +85,15 @@ const KEEP_RUNNING = new Set<ViewId>(["term", "browser"]);
  */
 
 export function Workspace({
-  view, onView, onSkills, onSettings, onMachine, dashboard, prJump, cardJump, issueJump,
+  view, onView, onSkills, onSettings, onMachine, onOpenProject, dashboard, prJump, cardJump, issueJump,
 }: {
   view: ViewId;
   onView: (v: ViewId) => void;
   onSkills: () => void;
   onSettings: () => void;
-  onMachine: (tab: "ports" | "resources") => void;
+  onMachine: (tab: "resources") => void;
+  /** The app-wide project picker, the same door the top bar opens. */
+  onOpenProject: () => void;
   /** The dashboard is a view like any other, but its data lives at the root
    *  (the live socket feeds it), so it arrives already built
    *  and is handed its own `active` here like everything else. */
@@ -122,6 +126,7 @@ export function Workspace({
   const frameRef = useRef<HTMLDivElement>(null);
   const firedReminders = useSyncExternalStore(subscribeReminders, firedCount, firedCount);
   const lanternWaiting = useSyncExternalStore(subscribeLantern, lanternNeed, lanternNeed);
+  const manifestSummary = useSyncExternalStore(subscribeSummary, summarySnapshot, summarySnapshot);
 
   // A count the person turned off in Settings (Sidebar) is not drawn.
   useSyncExternalStore(subscribeRailBadges, railBadgesKey, railBadgesKey);
@@ -135,6 +140,9 @@ export function Workspace({
     // hundred open tasks is a normal Tuesday, and a badge that said so would
     // be ignored within a day.
     tasks: firedReminders > 0 ? { count: firedReminders } : {},
+    // A presence dot, not a count: the rows wait for a verdict, not for a
+    // number to be read. It is on only for projects this caller may sign in.
+    manifest: summaryHasLeft(manifestSummary) ? { dot: true } : {},
   };
 
   /**
@@ -156,11 +164,10 @@ export function Workspace({
      when the bench lets go of it. See lib/boardHost.ts. */
   const benchPr = useSyncExternalStore(subscribeBoards, () => benchWants("pr"), () => false);
   const benchTasks = useSyncExternalStore(subscribeBoards, () => benchWants("tasks"), () => false);
-  const benchFiles = useSyncExternalStore(subscribeBoards, () => benchWants("files"), () => false);
   useEffect(() => {
-    const want = [benchPr && "pr", benchTasks && "tasks", benchFiles && "files"].filter(Boolean) as ViewId[];
+    const want = [benchPr && "pr", benchTasks && "tasks"].filter(Boolean) as ViewId[];
     setVisited((cur) => (want.every((k) => cur.has(k)) ? cur : new Set([...cur, ...want])));
-  }, [benchPr, benchTasks, benchFiles]);
+  }, [benchPr, benchTasks]);
 
   /* A Git modal asked for through /control mounts the Git view without showing
      it: the modals are portals over whatever view is up, so the person stays
@@ -186,7 +193,7 @@ export function Workspace({
   }, []);
 
   return (
-    <div ref={frameRef} tabIndex={-1} className="flex-1 min-h-0 flex outline-none">
+    <div ref={frameRef} tabIndex={-1} className="agx-shell-grow flex-1 min-h-0 flex outline-none">
       <ViewRail view={view} onSelect={onView} onSkills={onSkills}
         onSettings={onSettings} onMachine={onMachine} pips={visiblePips(pips)} />
 
@@ -216,7 +223,7 @@ export function Workspace({
                 {v.id === "dash"
                   ? dashboard(active)
                   : <Body id={v.id} active={active}
-                      openBrowser={openBrowser} />}
+                      openBrowser={openBrowser} onOpenProject={onOpenProject} />}
               </ViewBoundary>
             </ViewBox>
           );
@@ -273,15 +280,15 @@ function ViewBox({ active, children }: { active: boolean; children: React.ReactN
 
 /** The non-dashboard views, and the props each one wants. Split out so the map
  *  above stays about mounting rather than about plumbing. */
-function BodyImpl({ id, active, openBrowser }: {
+function BodyImpl({ id, active, openBrowser, onOpenProject }: {
   id: ViewId; active: boolean;
+  onOpenProject: () => void;
   /** Bring the browser view forward — the Docker panel asks for it when you
    *  open a container's port, so a dev server lands in a tab of this app
    *  instead of somewhere else. */
   openBrowser: () => void;
 }) {
   switch (id) {
-    case "files": return <BoardSlot kind="files" place="rail" visible={active} />;
     /* The two boards are not drawn here: this is one of the two places they
        can be shown, and the board itself is rendered once, below. */
     case "tasks": return <BoardSlot kind="tasks" place="rail" visible={active} />;
@@ -294,14 +301,16 @@ function BodyImpl({ id, active, openBrowser }: {
     /* The Lantern and the project's chair, as one screen. Its chat is a tab on
        the floating bench — see lanternAsk.ts. Nothing to hand it. */
     case "agents": return <AgentsView active={active} />;
+    case "manifest": return <ManifestView active={active} onOpenProject={onOpenProject} />;
     case "plugins": return <PluginsView active={active} />;
+    case "flightPlan": return <FlightPlanView active={active} />;
     default: return null;
   }
 }
 
 const Body = memo(BodyImpl, hiddenOnly);
 
-const BOARDS: BoardKind[] = ["pr", "tasks", "files"];
+const BOARDS: BoardKind[] = ["pr", "tasks"];
 
 /**
  * The one pull-request board, or the one task board.
@@ -343,7 +352,6 @@ interface BoardBodyProps {
 }
 
 function BoardBodyImpl({ kind, active, openBrowser, reviewInTerminal, prJump, cardJump, issueJump }: BoardBodyProps) {
-  if (kind === "files") return <FilesView active={active} />;
   return kind === "pr"
     ? <PrView active={active} onReviewInTerminal={reviewInTerminal} jumpTo={prJump} />
     : <TasksView active={active} onOpenBrowser={openBrowser} cardJump={cardJump} issueJump={issueJump} />;

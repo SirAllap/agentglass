@@ -186,6 +186,8 @@ export function isRealAgentglassPath(p: string): boolean {
 
 /** The scratch home this process made, and removes at the end; none on a re-entry. */
 let madeHome: string | null = null;
+/** The one AGENTGLASS_* switch that must outlive the sweep below: the opt-in for the real-model canary. */
+export const PREFLIGHT_CANARY = process.env.AGENTGLASS_PREFLIGHT_CANARY === "1";
 if (!scratch(process.env.HOME)) {
   for (const k of Object.keys(process.env)) if (k.startsWith("AGENTGLASS_")) delete process.env[k];
   madeHome = fs.mkdtempSync(join(TMP, "agx-test-home-"));

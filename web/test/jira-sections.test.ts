@@ -10,7 +10,7 @@
 import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { groupLinked, LinkedSection, Section, SubtasksSection, WebLinksSection } from "../src/components/jira/JiraSections.tsx";
+import { groupLinked, LinkedSection, JiraSection, SubtasksSection, WebLinksSection } from "../src/components/jira/JiraSections.tsx";
 import { FactValue } from "../src/components/jira/JiraFacts.tsx";
 import { globalStubs } from "./stubGlobal.ts";
 import type { CardLinked, CardWebLink, ProviderTask } from "../../shared/providers.ts";
@@ -84,7 +84,7 @@ describe("the Details", () => {
 describe("a section's open state", () => {
   test("storage that throws leaves it open, and a title with a count says the count", () => {
     stubGlobal("localStorage", { getItem() { throw new Error("blocked"); }, setItem() { throw new Error("blocked"); } });
-    const out = html(React.createElement(Section, { id: "x", title: "Things", count: 3, children: React.createElement("p", null, "inside") }));
+    const out = html(React.createElement(JiraSection, { id: "x", title: "Things", count: 3, children: React.createElement("p", null, "inside") }));
     expect(out).toContain("inside");
     expect(out).toContain("Things");
     expect(out).toContain('aria-expanded="true"');

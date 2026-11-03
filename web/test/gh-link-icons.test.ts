@@ -38,7 +38,7 @@ describe("the link and copy controls on a comment", () => {
     // An icon-only control that inherits a 10px row is a target nobody can hit
     // — the repeated note about icons coming out tiny.
     expect(block).toContain("ICON.xs");
-    expect(block).toContain("width: 20, height: 20");
+    expect(block).toContain("width: CTRL_H.compact, height: CTRL_H.compact");
   });
 
   it("says nothing at all when the link cannot be vouched for", () => {

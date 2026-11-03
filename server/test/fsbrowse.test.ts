@@ -12,10 +12,10 @@ import { completePath, splitPrefix } from "../src/fsbrowse.ts";
 let base = "";
 beforeAll(() => {
   base = mkdtempSync(join(tmpdir(), "agx-fsbrowse-"));
-  for (const d of ["alpha", "alavera_app", "alavera_api", "beta", ".hidden", "node_modules"]) {
+  for (const d of ["alpha", "orbit_app", "orbit_api", "beta", ".hidden", "node_modules"]) {
     mkdirSync(join(base, d));
   }
-  mkdirSync(join(base, "alavera_app", ".git"));
+  mkdirSync(join(base, "orbit_app", ".git"));
   writeFileSync(join(base, "a-file.txt"), "not a directory");
   writeFileSync(join(base, "alpha", "secret.env"), "TOKEN=hunter2");
   symlinkSync(join(base, "alpha"), join(base, "alink"));
@@ -68,20 +68,20 @@ describe("completePath", () => {
   });
 
   test("entries carry only a name, an absolute path and a repo flag", () => {
-    const e = completePath(base + "/alavera")!.entries[0];
+    const e = completePath(base + "/orbit")!.entries[0];
     expect(Object.keys(e).sort()).toEqual(["name", "path", "repo"]);
   });
 
   test("the partial segment filters by prefix, case-insensitively", () => {
-    expect(names(base + "/alav").sort()).toEqual(["alavera_api", "alavera_app"]);
-    expect(names(base + "/ALAV").sort()).toEqual(["alavera_api", "alavera_app"]);
+    expect(names(base + "/orbi").sort()).toEqual(["orbit_api", "orbit_app"]);
+    expect(names(base + "/ORBI").sort()).toEqual(["orbit_api", "orbit_app"]);
     expect(names(base + "/zzz")).toEqual([]);
   });
 
   test("git repos are marked; plain directories are not", () => {
     const byName = new Map(completePath(base + "/").entries.map((e) => [e.name, e.repo]));
-    expect(byName.get("alavera_app")).toBe(true);
-    expect(byName.get("alavera_api")).toBe(false);
+    expect(byName.get("orbit_app")).toBe(true);
+    expect(byName.get("orbit_api")).toBe(false);
   });
 
   test("hidden dirs stay out until a dot is typed; dependency trees never appear", () => {

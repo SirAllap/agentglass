@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "bun:test";
 import { askInChatVisible, forgetSlackReach, slackReach, REACH_TTL_MS } from "../src/lib/askInChat.ts";
 
 /*
- * "Ping in chat" without a card.
+ * "Ask in chat" without a card.
  *
  * The button sat inside the ClickUp section, behind the early return that
  * draws nothing for a pull request with no card id. So a machine with no
@@ -76,13 +76,13 @@ describe("where the section lives in the panel", () => {
   });
   it("leaves the card section with the note only", () => {
     expect(facts).not.toContain("notifyReach");
-    expect(facts).not.toContain("Ping in chat");
+    expect(facts).not.toContain("Ask in chat");
     expect(facts).not.toContain('"slack"');
     expect(facts).not.toContain("requestTermIssue");
     expect(facts).toContain("Note on card");
   });
   it("is labelled for chat, not for one product", () => {
-    expect(ask).toContain("Ping in chat");
+    expect(ask).toContain("<SparkleIcon size={ICON.sm} />Ask in chat");
     expect(ask).not.toContain("Ping Slack");
   });
   it("sends an empty card when there is none, and the wording stays the user's", () => {

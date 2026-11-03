@@ -72,6 +72,8 @@ import workflowFixture from "./jira/workflow.json";
  * sub-task made through `POST /issue` is listed under its parent; the seeded ones are listed
  * from the fixture rather than derived from `parent`. The link writes and `createmeta` follow the
  * shapes a real sandbox answered (201 with no body for a link, 204 for both deletes).
+ * Jira spaces read `GET /project/{key}` and `/project/{key}/components` (`state.projectComponents`; an issue's `components` names resolve to those ids),
+ * a project list past the two seeded (`state.extraProjects`, one may be `unlisted`) and `parent = KEY`.
  * Data Center in particular: wiki markup is stored and returned as given, never
  * parsed or rendered; people are the fixed directory, with the email always
  * shown; one version's behaviour (9.x) stands for all of Server and Data Center.
@@ -257,6 +259,10 @@ export interface FakeState {
   /** When true, search answers from the data as it was at the last reset,
    *  the way a real index can trail a write. */
   searchLags: boolean;
+  /** The components each project lists (`GET /project/{key}/components`); an issue's `components` names resolve to these ids. */
+  projectComponents: Record<string, { id: string; name: string }[]>;
+  /** Projects past the two in projects.json, served by the project list and `GET /project/{key}` only (a test pages the picker with them). */
+  extraProjects: { id: string; key: string; name: string; /** Reachable by key but left out of the list, as a project the account may browse but not list. */ unlisted?: boolean }[];
   tick: number;
 }
 
@@ -380,6 +386,8 @@ function seedState(flavor: FakeFlavor): FakeState {
     sprints: { 3: [{ id: 41, name: "Sprint 4", state: "active", startDate: "2026-10-05T09:00:00.000Z", endDate: "2026-10-19T09:00:00.000Z", goal: "Ship the board" }, { id: 42, name: "Sprint 5", state: "future" }], 2: [] },
     denyRank: [],
     commentCap: null,
+    projectComponents: {},
+    extraProjects: [],
   };
 }
 
@@ -481,7 +489,7 @@ function boardFields(i: FakeIssue, state: FakeState, dc: boolean): Record<string
         ? { thumbnail: dc ? `https://${DC_SITE}/secure/thumbnail/${a.id}/${encodeURIComponent(a.filename)}` : `https://${CLOUD_SITE}/rest/api/3/attachment/thumbnail/${a.id}` }
         : {}),
     })),
-    components: (i.components ?? []).map((name, n) => ({ id: String(10300 + n), name })),
+    components: (i.components ?? []).map((name, n) => ({ id: state.projectComponents[i.projectKey]?.find((c) => c.name === name)?.id ?? String(10300 + n), name })),
     fixVersions: (i.fixVersions ?? []).map((name, n) => ({ id: String(10400 + n), name })),
     versions: (i.versions ?? []).map((name, n) => ({ id: String(10500 + n), name })),
     ...(i.noTimeTracking ? {} : { timetracking: i.timetracking ?? {} }),
@@ -685,8 +693,11 @@ function runJql(jql: string, issues: Record<string, FakeIssue>, dc: boolean): Fa
     } else if ((m = /^sprint\s*=\s*(\d+)$/i.exec(c))) rows = rows.filter((i) => i.sprints.some((x) => String(x.id) === m![1]));
     // What a board asks for the cards that are not in its sprint. As on the site, `!=` alone leaves out a card with no sprint.
     else if ((m = /^\(?sprint\s+is\s+empty\s+or\s+sprint\s*!=\s*(\d+)\)?$/i.exec(c))) rows = rows.filter((i) => !i.sprints.some((x) => String(x.id) === m![1]));
+    else if ((m = /^component\s*=\s*"((?:[^"\\]|\\.)*)"$/i.exec(c))) { const want = m[1].replace(/\\(.)/g, "$1"); rows = rows.filter((i) => (i.components ?? []).includes(want)); }
+    else if (/^component\s+is\s+empty$/i.test(c)) rows = rows.filter((i) => !(i.components ?? []).length);
     else if ((m = /^key\s*=\s*(.+)$/i.exec(c))) rows = rows.filter((i) => i.key === q(m![1]).toUpperCase());
     // The two clauses the Areas read adds: a card under something, and not a sub-task.
+    else if ((m = /^parent\s*=\s*(.+)$/i.exec(c))) rows = rows.filter((i) => i.parentKey === q(m![1]).toUpperCase());
     else if ((m = /^parent\s+is\s+(not\s+)?empty$/i.exec(c))) rows = rows.filter((i) => (i.parentKey === null) === !m![1]);
     else if ((m = /^parent\s+in\s*\(([^)]*)\)$/i.exec(c))) { const want = m[1].split(",").map((v) => v.trim()); rows = rows.filter((i) => i.parentKey !== null && want.includes(i.parentKey)); }
     else if (/^issuetype\s+not\s+in\s+subTaskIssueTypes\(\)$/i.test(c)) rows = rows.filter((i) => i.issueType !== "Sub-task");
@@ -860,17 +871,24 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
     }
 
     // Data Center lists every project in one array; Cloud pages them.
-    if (dc && m === "GET" && path === "/project") {
-      return json(200, projects.map(({ defaultAssignee: _d, ...p }) => ({ ...p, self: `${PREFIX}/project/${p.id}`, avatarUrls: {} })));
-    }
+    const listed = (withUnlisted = false) => [...projects.map(({ defaultAssignee: _d, ...p }) => p), ...live.extraProjects.filter((p) => withUnlisted || !p.unlisted).map(({ unlisted: _u, ...p }) => ({ ...p, projectTypeKey: "software", simplified: false, style: "classic" }))]
+      .map((p) => ({ ...p, self: `${PREFIX}/project/${p.id}`, avatarUrls: { "48x48": `https://avatar.acme.example/project/${p.key}/48.png` } }));
+    if (dc && m === "GET" && path === "/project") return json(200, listed());
 
     if (!dc && m === "GET" && path === "/project/search") {
       const start = Number(query.startAt ?? 0);
       const max = Math.min(Number(query.maxResults ?? 50), 50);
       const q = (query.query ?? "").toLowerCase();
-      const all = projects.filter((p) => !q || p.key.toLowerCase().includes(q) || p.name.toLowerCase().includes(q));
-      const values = all.slice(start, start + max).map(({ defaultAssignee: _d, ...p }) => p);
-      return json(200, { startAt: start, maxResults: max, total: all.length, isLast: start + max >= all.length, values });
+      const all = listed().filter((p) => !q || p.key.toLowerCase().includes(q) || p.name.toLowerCase().includes(q));
+      return json(200, { startAt: start, maxResults: max, total: all.length, isLast: start + max >= all.length, values: all.slice(start, start + max) });
+    }
+
+    // One project, and its components (an unpaged array, as the project route answers).
+    if (m === "GET" && (r = /^\/project\/([^/]+)(\/components)?$/.exec(path))) {
+      const key = decodeURIComponent(r[1]!);
+      const p = listed(true).find((x) => x.key === key || x.id === key);
+      if (!p) return json(404, { errorMessages: [`No project could be found with key '${key}'.`], errors: {} });
+      return json(200, r[2] ? (live.projectComponents[p.key] ?? []).map((c) => ({ ...c, project: p.key })) : p);
     }
 
     // A project's statuses, grouped by issue type (the same on both flavors).

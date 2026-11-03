@@ -5,17 +5,19 @@
  * ids and refs on the visible screen, newest first, each with a letter: press
  * the letter and the token is written into the pane as one paste (the agent
  * said a path; you say it back); Shift+letter copies it instead; Escape
- * closes. The same surface as the find bar, in the same corner, so the pane
- * has one vocabulary of floating things.
+ * closes. It floats at the pane's bottom-left, where the eye already is after
+ * reading the screen, and Find takes the top-right corner: neither covers the
+ * strip above the pane, so every strip button stays reachable.
  */
 import { useEffect, useMemo } from "react";
+import { LAYER } from "../../lib/layers.ts";
 import { pluckTokens, PLUCK_KEYS, type Pluck, type PluckKind } from "../../lib/pluck.ts";
 import { EDGE, LINE } from "../workspace/Chrome.tsx";
 
 const KIND_TONE: Record<PluckKind, string> = {
-  path: "var(--primary)", url: "var(--info, var(--primary))", hash: "var(--warning)", uuid: "var(--text3)", ref: "var(--success)",
+  path: "var(--primary)", url: "var(--info, var(--primary))", hash: "var(--warning)", uuid: "var(--text3)", ref: "var(--success)", card: "var(--info, var(--primary))",
 };
-const KIND_WORD: Record<PluckKind, string> = { path: "path", url: "link", hash: "hash", uuid: "id", ref: "ref" };
+const KIND_WORD: Record<PluckKind, string> = { path: "path", url: "link", hash: "hash", uuid: "id", ref: "ref", card: "card" };
 
 export function PluckPalette({ rows, onPick, onCopy, onClose }: {
   rows: { text: string; wrapped: boolean }[];
@@ -41,12 +43,12 @@ export function PluckPalette({ rows, onPick, onCopy, onClose }: {
   }, [items, onPick, onCopy, onClose]);
 
   return (
-    <div data-pluck className="absolute z-30 flex flex-col rounded-lg agx-menu overflow-hidden"
-      style={{ top: 8, right: 12, width: "min(560px, calc(100% - 24px))", maxHeight: "min(70%, 520px)", boxShadow: "0 8px 24px rgba(0,0,0,0.35)" }}
+    <div data-pluck className="absolute flex flex-col rounded-lg agx-menu overflow-hidden"
+      style={{ left: 10, bottom: 12, zIndex: LAYER.pane, width: "min(460px, calc(100% - 20px))", maxHeight: "min(70%, 520px)", boxShadow: "0 8px 24px rgba(0,0,0,0.35)" }}
       role="listbox" aria-label="Things on the screen you can take">
       <div className="flex items-baseline gap-2 px-3 py-2" style={{ borderBottom: LINE }}>
-        <span className="text-[11.5px] font-medium" style={{ color: "var(--text)" }}>On the screen</span>
-        <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>letter pastes into the pane · Shift+letter copies · Esc</span>
+        <span className="shrink-0 whitespace-nowrap text-[11.5px] font-medium" style={{ color: "var(--text)" }}>On the screen</span>
+        <span className="min-w-0 truncate text-[10.5px]" style={{ color: "var(--text4)" }}>letter pastes · Shift+letter copies · Esc</span>
         <span className="ml-auto text-[10.5px] tabular-nums" style={{ color: "var(--text4)" }}>{items.length}</span>
       </div>
       {items.length === 0 ? (

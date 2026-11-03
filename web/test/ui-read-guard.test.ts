@@ -48,8 +48,8 @@ const control = read("server/src/control.ts");
 const index = read("server/src/index.ts");
 
 describe("the registry's reads", () => {
-  it("are level 1, closed, and exactly ui.state, ui.read and the two settings reads", () => {
-    expect([...UI_READ_IDS].sort()).toEqual(["settings.get", "settings.list", "ui.read", "ui.state"]);
+  it("are level 1, closed, and exactly ui.state, ui.read, the two settings reads and the two pull request filter reads", () => {
+    expect([...UI_READ_IDS].sort()).toEqual(["pr.filter.get", "pr.views.list", "settings.get", "settings.list", "ui.read", "ui.state"]);
     for (const id of UI_READ_IDS) expect((UI_ACTIONS[id] as UiActionDef).level, id).toBe(1);
     expect(Object.keys((UI_ACTIONS["ui.read"] as UiActionDef).args)).toEqual(["panel"]);
     expect(Object.keys((UI_ACTIONS["ui.state"] as UiActionDef).args)).toEqual([]);
@@ -65,7 +65,8 @@ describe("the registry's reads", () => {
       const line = handlers.slice(at, handlers.indexOf("\n", at));
       // The settings reads answer from the settings registry (the same defs the
       // rows call), not from the snapshot providers; neither opens anything.
-      expect(line, id).toMatch(id.startsWith("settings.") ? /\bsettings\.(get|list)\(/ : /sourcesOf\(/);
+      // The board filter reads answer from the board's own stores (lib/prFilterDoor.ts).
+      expect(line, id).toMatch(id.startsWith("settings.") ? /\bsettings\.(get|list)\(/ : id.startsWith("pr.") ? /\b(filterGet|viewsList)\(/ : /sourcesOf\(/);
       expect(line, id).not.toMatch(/\bc\.(goView|workspace|peel|panel|setTheme|zoom|setMachine|setProjectOpen|setWindowsOpen)\b|openSettings|openFinderAt|latch\w+|toggleBench|showFile|showBoard|openPeek/);
     }
   });

@@ -4,11 +4,12 @@
 // CLI writes, and nothing at all — normalised so that the surfaces render a
 // list instead of three bespoke blocks. The order is fixed rather than sorted:
 // a row that moves because a number changed is a row nobody can find twice.
-import type { ProviderUsage, AgentProbe } from "../../shared/types.ts";
+import type { ProviderUsage } from "../../shared/types.ts";
 import type { UsagePayload } from "./usage.ts";
 import { getUsage } from "./usage.ts";
 import { windowLabel } from "../../shared/quota.ts";
 import { codexUsage } from "./codexusage.ts";
+import { opencodeUsage } from "./opencodeusage.ts";
 import { probeAgents } from "./agentprobe.ts";
 import { holderOf } from "./accounts.ts";
 import type { AccountsInput } from "../../shared/pluginAccounts.ts";
@@ -111,15 +112,22 @@ async function anthropic(): Promise<ProviderUsage> {
 /**
  * Which roster entry decides whether a provider is shown at all.
  *
- * Only three of the four agents have quota to report — the Gemini CLI has no
- * plan window this app can read, so it maps to nothing here rather than to an
- * empty row.
+ * The agents whose plan has a reading this app can reach — the Gemini CLI has
+ * no plan window here, so it maps to nothing rather than to an empty row.
+ * OpenCode Go's windows are summed from the worker turns recorded here, so its
+ * binary is what says the plan is in use on this machine.
  */
 const AGENT_FOR: Record<ProviderUsage["provider"], string> = {
   anthropic: "claude-code",
   codex: "codex",
+  opencode: "opencode",
   antigravity: "antigravity",
 };
+
+/** The facts `installedProviders` reads out of a probe. `connected` is accepted
+ *  and ignored on purpose: quota does not travel over the event wiring, so an
+ *  agent unwired here still has a plan that runs out. */
+type ProbedAgent = { id: string; found: boolean; connected?: boolean };
 
 /**
  * The providers whose agent is installed on this machine, and so worth a row.
@@ -137,7 +145,7 @@ const AGENT_FOR: Record<ProviderUsage["provider"], string> = {
  * where the note would otherwise invite you to "run a Codex turn" with no
  * codex binary to run it with.
  */
-export function installedProviders(probes: AgentProbe[]): Set<ProviderUsage["provider"]> {
+export function installedProviders(probes: readonly ProbedAgent[]): Set<ProviderUsage["provider"]> {
   const here = new Set(probes.filter((p) => p.found).map((p) => p.id));
   const out = new Set<ProviderUsage["provider"]>();
   for (const [provider, id] of Object.entries(AGENT_FOR)) {
@@ -177,18 +185,38 @@ export function withAccounts(row: ProviderUsage, list: AccountsInput | null | un
 }
 
 /**
+ * The real roster, plus the one agent the roster has no probe row for.
+ *
+ * OpenCode has no `probe` facet in shared/agentKinds.ts, so it never appears in
+ * `probeAgents`; its binary is still the gate for whether the Go plan is in use
+ * here.
+ */
+function defaultProbes(): ProbedAgent[] {
+  return [
+    ...probeAgents(undefined, () => null),
+    // No roster entry to spread: the one fact this filter reads is `found`.
+    { id: "opencode", found: !!Bun.which("opencode") },
+  ];
+}
+
+/**
  * `seen` is stubbed out: `found` is decided by `Bun.which` alone, so the four
  * `MAX(timestamp)` queries `probeAgents` would otherwise run are work this
  * endpoint has no use for, on a route the dashboard polls every five minutes.
  */
 export async function allProviderUsage(
-  probes: AgentProbe[] = probeAgents(undefined, () => null),
+  probes: readonly ProbedAgent[] = defaultProbes(),
   accountsOf: (provider: string) => AccountsInput | undefined = (p) => holderOf(p)?.list,
 ): Promise<ProviderUsage[]> {
   const show = installedProviders(probes);
   const rows: ProviderUsage[] = [];
   if (show.has("anthropic")) rows.push(await anthropic());
   if (show.has("codex")) rows.push(codexUsage());
+  if (show.has("opencode")) {
+    // The row is computed from steps already recorded, so a poll costs a file
+    // read. The console is never read here: the strip's button asks for it.
+    rows.push(opencodeUsage());
+  }
   if (show.has("antigravity")) {
     rows.push({
       provider: "antigravity", label: "Antigravity", available: false,

@@ -112,8 +112,6 @@ export function BaseToken({ base, facts, onOpen, onLit }: {
 
 export interface Neighbour { number: number; word: string; note?: string }
 
-const STEP = CTRL_H.compact;
-
 function Step({ dir, to, onOpen }: { dir: "prev" | "next"; to: Neighbour | null; onOpen: (n: number) => void }) {
   const label = to
     ? `${dir === "prev" ? "Previous" : "Next"}: #${to.number}, ${to.word}${to.note ? `, ${to.note}` : ""}. Open it`
@@ -126,13 +124,31 @@ function Step({ dir, to, onOpen }: { dir: "prev" | "next"; to: Neighbour | null;
   );
 }
 
+/** The same three slots when the pull request is on its own: dimmed in place, never absent, so the row does not change shape between pull requests. */
+export function StackNone() {
+  return (
+    <span className="relative shrink-0 inline-flex align-middle mr-1.5" title="Not stacked on another pull request" style={{ opacity: 0.55 }}>
+      <span className="agx-stk-c" role="group" aria-label="Not stacked" style={{ height: CTRL_H.strip }}>
+        <Step dir="prev" to={null} onOpen={() => {}} />
+        <button type="button" className="agx-stk-mid" disabled>
+          <span className="agx-stk-mini" aria-hidden="true"><i /></span>
+          <span>Not stacked</span>
+        </button>
+        <Step dir="next" to={null} onOpen={() => {}} />
+      </span>
+    </span>
+  );
+}
+
 /**
  * Previous, identifier, next: three slots that never move, so stepping through a
  * stack leaves the header where it was. A missing neighbour keeps its slot,
  * dimmed. The identifier opens the ladder; Escape or a click outside closes it.
  */
-export function StackControl({ stack, prev, next, onOpen, rungs, factsOf }: {
+export function StackControl({ stack, prev, next, onOpen, rungs, factsOf, compact }: {
   stack: Stack; prev: Neighbour | null; next: Neighbour | null;
+  /** Without the mini bars: the header's one-row meta at the default dock needs the room for the branch. "2 of 3" says the same. */
+  compact?: boolean;
   onOpen: (n: number) => void;
   rungs: (n: number) => Rung | undefined;
   factsOf: (n: number) => Facts | undefined;
@@ -153,12 +169,12 @@ export function StackControl({ stack, prev, next, onOpen, rungs, factsOf }: {
   const mid = `Stack: pull request ${tier}. Open the ladder`;
   return (
     <span className="relative shrink-0 inline-flex align-middle mr-1.5" ref={box}>
-      <span className="agx-stk-c" role="group" aria-label={`Stack, pull request ${tier}`} data-broken={stack.broken ? "" : undefined} style={{ height: STEP + 2 }}>
+      <span className="agx-stk-c" role="group" aria-label={`Stack, pull request ${tier}`} data-broken={stack.broken ? "" : undefined} style={{ height: CTRL_H.strip }}>
         <Step dir="prev" to={prev} onOpen={onOpen} />
         <button type="button" className="agx-stk-mid" aria-expanded={open} aria-haspopup="dialog" title={mid} onClick={() => setOpen((v) => !v)}>
-          <span className="agx-stk-mini" aria-hidden="true">
+          {compact ? null : <span className="agx-stk-mini" aria-hidden="true">
             {Array.from({ length: bars }, (_, i) => <i key={i} data-cur={i === Math.min(stack.position - 1, bars - 1) ? "" : undefined} />)}
-          </span>
+          </span>}
           <span className="tabular-nums">{tier}</span>
           <span aria-hidden="true" className="flex" style={{ color: "var(--text3)" }}><CaretIcon size={ICON.xs} /></span>
         </button>

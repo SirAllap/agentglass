@@ -13,7 +13,7 @@ import { dayToMs, msToDay, tagChoices } from "../../lib/cardEdits.ts";
 import { Flag, prioLook } from "../../lib/priority.tsx";
 import { schemeOfTheme } from "../../lib/schemeOfTheme.ts";
 import { ICON } from "../../lib/iconSize.ts";
-import { CTRL_H, EDGE } from "../workspace/Chrome.tsx";
+import { Button, EDGE, ListRow } from "../workspace/Chrome.tsx";
 import { Select } from "../Select.tsx";
 import { edge } from "../git/ui.tsx";
 import type { ProviderTask } from "../../../../shared/providers.ts";
@@ -39,21 +39,15 @@ export function CommentAction({ label, title, d, onClick, busy, on, tone, iconOn
 }) {
   const colour = on ? (tone ?? "var(--success, #98c379)") : tone && label === "Delete" ? tone : "var(--text3)";
   return (
-    <button onClick={onClick} disabled={busy} title={title} aria-label={title} aria-pressed={on || undefined}
-      className={`agx-btn inline-flex items-center justify-center gap-1 rounded-md text-[10.5px] ${iconOnly ? "" : "px-1.5"}`}
-      style={{
-        height: CTRL_H.compact,
-        ...(iconOnly ? { width: CTRL_H.compact } : null),
-        color: colour,
-        border: `1px solid color-mix(in srgb, ${on ? (tone ?? "var(--success, #98c379)") : "var(--text)"} ${on ? 40 : 14}%, transparent)`,
-        background: on ? `color-mix(in srgb, ${tone ?? "var(--success, #98c379)"} 12%, transparent)` : "transparent",
-      }}>
+    <Button size="compact" square={iconOnly} tint={on ? (tone ?? "var(--success, #98c379)") : undefined}
+      onClick={onClick} disabled={busy} title={title} label={title} aria-pressed={on || undefined}
+      style={on ? undefined : { color: colour }}>
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
         <path d={d} />
       </svg>
       {!iconOnly && label}
-    </button>
+    </Button>
   );
 }
 
@@ -140,8 +134,7 @@ export function EditDay({ value, busy, title, onSave }: {
         className="text-[11px] px-1.5 py-0.5 rounded outline-none"
         style={{ background: "transparent", color: "var(--text2)", border: EDGE, colorScheme: schemeOfTheme() }} />
       {value != null && !busy && (
-        <button className="agx-btn rounded text-[10px]" style={{ color: "var(--text4)" }}
-          title="Clear this date" onClick={() => onSave(null)}>Clear</button>
+        <Button size="compact" tone="quiet" title="Clear this date" onClick={() => onSave(null)}>Clear</Button>
       )}
       {busy && <span className="agx-spin" aria-label="Saving" style={{ width: 10, height: 10, borderWidth: 1.5, borderColor: "var(--text3)", borderTopColor: "transparent" }} />}
     </span>
@@ -279,8 +272,7 @@ export function TagEditor({ tags, suggestions, busy, onAdd, onRemove, onOpen, no
               }}
               className="text-[11px] px-1.5 py-0.5 rounded outline-none"
               style={{ background: "var(--bg)", color: "var(--text)", border: EDGE, width: 170 }} />
-          : <button className="agx-btn rounded text-[10.5px]" style={{ color: "var(--text4)" }}
-              title={`Add a ${noun}`} disabled={busy} onClick={() => { setAdding(true); setHot(0); }}>+ {noun}</button>}
+          : <Button size="compact" tone="quiet" title={`Add a ${noun}`} disabled={busy} onClick={() => { setAdding(true); setHot(0); }}>+ {noun}</Button>}
         {adding && (
           <div className="agx-scroll absolute left-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-y-auto py-1"
             style={{ zIndex: 30, background: "var(--surface-card)", border: edge(28), minWidth: 190, maxHeight: 260 }}>
@@ -295,17 +287,16 @@ export function TagEditor({ tags, suggestions, busy, onAdd, onRemove, onOpen, no
             {rows.map((name, i) => {
               const isNew = i === newAt;
               return (
-                <button key={`${isNew ? "new:" : ""}${name}`} type="button"
+                <ListRow key={`${isNew ? "new:" : ""}${name}`} hot={i === hot}
                   onMouseEnter={() => setHot(i)}
                   /* mousedown, not click: the input's blur would close this
                      list before a click landed on it. */
                   onMouseDown={(e) => { e.preventDefault(); add(name); }}
-                  className="text-left px-2.5 py-1.5 text-[11px] truncate flex items-center gap-1.5"
-                  style={{ background: i === hot ? "color-mix(in srgb, var(--text) 8%, transparent)" : "transparent" }}>
-                  {isNew && <span className="shrink-0 text-[10px]" style={{ color: "var(--info-ink)" }}>+</span>}
-                  <span className="truncate" style={{ color: isNew ? "var(--info)" : "var(--text2)" }}>{name}</span>
-                  {isNew && <span className="shrink-0 text-[9.5px]" style={{ color: "var(--text4)" }}>new {noun}</span>}
-                </button>
+                  leading={isNew ? <span className="text-[10px]" style={{ color: "var(--info-ink)" }}>+</span> : undefined}
+                  trailing={isNew ? <span className="text-[9.5px]" style={{ color: "var(--text4)" }}>new {noun}</span> : undefined}
+                  style={{ color: isNew ? "var(--info)" : "var(--text2)" }}>
+                  {name}
+                </ListRow>
               );
             })}
           </div>

@@ -115,7 +115,7 @@ describe("the panel", () => {
   const src = Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
   test("records the request on GitHub's answer, never on the press", async () => {
     const text = await src;
-    const at = text.indexOf("const doUpdateBranch = (syncLocal: boolean) => {");
+    const at = text.indexOf("const doUpdateBranch = (syncLocal: boolean, from?");
     expect(at).toBeGreaterThan(0);
     const block = text.slice(at, text.indexOf("\n  };", at));
     const press = block.slice(0, block.indexOf("return api.prUpdateBranch("));

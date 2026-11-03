@@ -173,7 +173,7 @@ async function call(name: string, args: Record<string, unknown> = {}, env: Recor
 }
 
 const READ_TOOLS = [
-  "cockpit_accounts", "cockpit_agents", "cockpit_attention", "cockpit_errors", "cockpit_orphans", "cockpit_recent_events",
+  "cockpit_accounts", "cockpit_agents", "cockpit_attention", "cockpit_errors", "cockpit_manifest", "cockpit_orphans", "cockpit_recent_events",
   "cockpit_session", "cockpit_sessions", "cockpit_spend", "cockpit_tool_latency",
 ];
 
@@ -882,7 +882,8 @@ describe.skipIf(!HAVE_PY)("the stdio server outlives a bad call", () => {
     // Named as what is allowed, not as what is forbidden: a POST helper added
     // to the browser module later would get past a list of the ones known today.
     const code = SOURCE.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
-    const allowed = ["PROTOCOL", "SERVER", "_run_http", "_serve_stdio", "make_reply"];
+    // urlopen_fresh sends the Request get() built, with the token and its one retry after a 401.
+    const allowed = ["PROTOCOL", "SERVER", "_run_http", "_serve_stdio", "make_reply", "urlopen_fresh"];
     const used = [...new Set([...code.matchAll(/\bT\.(\w+)/g)].map((m) => m[1]!))];
     expect(used.length).toBeGreaterThan(0);
     for (const name of used) expect(allowed, `T.${name}`).toContain(name);

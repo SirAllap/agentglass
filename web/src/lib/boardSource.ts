@@ -156,6 +156,46 @@ export interface BoardSource {
   /** The pane a card opens in. A source that has none leaves it out and the
    *  body draws ClickUp's. */
   CardPane?: ComponentType<CardPaneProps>;
+  /**
+   * The whole centre column, from the top bar to the footer and the card pane. A source that has one gets it INSTEAD of
+   * the body's own toolbar, search, chips, table, footer and card pane; the rail beside it is still the body's. A source
+   * that has none (ClickUp) is drawn exactly as before.
+   */
+  Main?: ComponentType<BoardMainProps>;
+}
+
+/** What the body hands the whole-column slot (`BoardSource.Main`). */
+export interface BoardMainProps {
+  source: BoardSource;
+  /** The view on screen, or the one just asked for; null before the first read names one. */
+  viewId: string | null;
+  /** The open epic, or the sprint (`@sprints`), or null. */
+  areaId: string | null;
+  /** Whether this app may change the tracker at all. */
+  writable: boolean;
+  /** Ask to turn changes on. */
+  onAllow: () => void;
+  /** Pick a view or an area from inside the slot. The rail's own clicks reach the slot as new props. */
+  onSelect?: (sel: { viewId?: string; areaId?: string | null }) => void;
+  /** What the slot's one read tells the body back, so the rail (highlight, areas tree, sprint) draws from the same answer. */
+  feed?: MainFeed;
+  /** Bumped (`n`) when the body asks the slot to read again; `force` skips the server's minute. */
+  reload?: MainReload;
+  /** Whether the Tasks tab is the one on screen: a hidden tab does not re-read on focus. */
+  active?: boolean;
+  /** The cards found by id that are on no board ("Looked up" in the sidebar), and whether that row is the one lit. */
+  looked?: { on: boolean; cards: ProviderTask[]; forget: (id: string) => void; add: (t: ProviderTask) => void };
+  /** A card the body wants open in the card pane (the pull-request panel's "show me this card", the sidebar's Looked up): `n` changes on every ask. */
+  show?: { id: string; n: number } | null;
+}
+
+export interface MainReload { n: number; force: boolean }
+
+/** The slot's read, handed back to the body. */
+export interface MainFeed {
+  read: (r: ViewTasksResponse) => void;
+  context: (c: JiraBoardContext | null) => void;
+  areas: (a: { state: "loading" | "ready" | "error"; read: JiraBoardAreas | null }) => void;
 }
 
 export interface CardPaneProps {
@@ -168,6 +208,8 @@ export interface CardPaneProps {
   nav?: ReactNode;
   /** Close it, when it is a dialog. */
   onClose?: () => void;
+  /** Ask to turn changes on, from the read-only note at the top of the card. */
+  onAllow?: () => void;
 }
 
 /** `agentglass.<tracker>.<name>`: ClickUp's keys as they were, others by id. */

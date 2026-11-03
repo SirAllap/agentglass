@@ -62,6 +62,8 @@ export interface AgentRequest {
    * rather than making them all pass a constant.
    */
   kind?: string;
+  /** Claude's `--model` for this one launch, already a name from the table modelFlags knows; absent is the CLI's own. */
+  model?: string;
 }
 
 /**

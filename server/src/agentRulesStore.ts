@@ -14,9 +14,11 @@ import { launchDeny, launchMode, writeLaunchPermissions } from "./config.ts";
 import { projectRootOf } from "./git.ts";
 import { DEFAULT_LAUNCH_DENY, isLaunchMode, parseDenyRules, type LaunchMode } from "../../shared/launchModes.ts";
 import {
-  BASE_PROJECT, BASE_RULES, MODE_ACTION, RULES_MAX_PER_PROJECT, decide, isLooser, isLooserMode, ruleFor, shellSegments, primaryInput,
-  type AgentRule, type AgentRulesView, type RuleChange, type RuleCheck, type RuleSetting, type RuleSource, type RuleWrite,
+  BASE_PROJECT, BASE_RULES, MODE_ACTION, RULES_MAX_PER_PROJECT, decide, inForceFor, isLooser, isLooserMode, isRuleScope, ruleFor, seatChecksRule, shellSegments, primaryInput, wouldPrompt,
+  type AgentRule, type AgentRulesView, type RuleChange, type RuleCheck, type RuleScope, type RuleSetting, type RuleSource, type RuleWrite,
 } from "../../shared/agentRules.ts";
+import { hasVerifierBlock } from "../../shared/flow.ts";
+import { readFlow } from "./flow.ts";
 import type { Applied, DoorAnswer } from "./settingsDoor.ts";
 
 db.exec(`
@@ -34,6 +36,21 @@ CREATE TABLE IF NOT EXISTS agent_rules (
   mode TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS agent_rules_key ON agent_rules (project, action, match);
+CREATE TABLE IF NOT EXISTS agent_role_rules (
+  id TEXT PRIMARY KEY,
+  project TEXT NOT NULL,
+  action TEXT NOT NULL,
+  match TEXT NOT NULL,
+  setting TEXT NOT NULL,
+  source TEXT NOT NULL,
+  by_name TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  pending INTEGER NOT NULL DEFAULT 0,
+  dismissed INTEGER NOT NULL DEFAULT 0,
+  mode TEXT,
+  role TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS agent_role_rules_key ON agent_role_rules (project, action, match, role);
 CREATE TABLE IF NOT EXISTS agent_rule_changes (
   rule_id TEXT NOT NULL,
   project TEXT NOT NULL,
@@ -45,14 +62,22 @@ CREATE TABLE IF NOT EXISTS agent_rule_changes (
   waits INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS agent_rule_changes_project ON agent_rule_changes (project, at);
+CREATE VIEW IF NOT EXISTS agent_rules_all AS
+  SELECT id, project, action, match, setting, source, by_name, at, pending, dismissed, mode, '' AS role FROM agent_rules
+  UNION ALL
+  SELECT id, project, action, match, setting, source, by_name, at, pending, dismissed, mode, role FROM agent_role_rules;
 `);
+/* A scoped rule cannot share the old table: its unique key has no room for a second row on the same
+ * pattern, and rebuilding that key would make an older build fail on a database it cannot read. */
+const tableOf = (role: string) => (role ? "agent_role_rules" : "agent_rules");
 
-interface Row { id: string; project: string; action: string; match: string; setting: string; source: string; by_name: string; at: number; pending: number; dismissed: number; mode: string | null }
+interface Row { id: string; project: string; action: string; match: string; setting: string; source: string; by_name: string; at: number; pending: number; dismissed: number; mode: string | null; role: string }
 
 const toRule = (r: Row): AgentRule => ({
   id: r.id, project: r.project, action: r.action, match: r.match, setting: r.setting as RuleSetting,
   source: r.source as RuleSource, by: r.by_name, at: r.at,
   ...(r.pending ? { pending: true } : {}), ...(r.mode && isLaunchMode(r.mode) ? { mode: r.mode } : {}),
+  ...(isRuleScope(r.role) ? { role: r.role } : {}),
 });
 
 const newId = () => `ar_${randomBytes(9).toString("hex")}`;
@@ -85,12 +110,18 @@ function note(ruleId: string, project: string, from: RuleSetting | null, to: Rul
   db.query("INSERT INTO agent_rule_changes VALUES (?,?,?,?,?,?,?,?)").run(ruleId, project, from, to, by, now(), applied ? 1 : 0, waits ? 1 : 0);
 }
 
-const all = (): Row[] => db.query("SELECT * FROM agent_rules WHERE dismissed = 0").all() as Row[];
-const one = (id: string) => db.query("SELECT * FROM agent_rules WHERE id = ?").get(id) as Row | null;
-const byKey = (project: string, action: string, match: string) =>
-  db.query("SELECT * FROM agent_rules WHERE project = ? AND action = ? AND match = ?").get(project, action, match) as Row | null;
-const byMatch = (project: string, match: string) =>
-  db.query("SELECT * FROM agent_rules WHERE project = ? AND match = ? AND dismissed = 0 AND action != ?").get(project, match, MODE_ACTION) as Row | null;
+const all = (): Row[] => db.query("SELECT * FROM agent_rules_all WHERE dismissed = 0").all() as Row[];
+const one = (id: string) => db.query("SELECT * FROM agent_rules_all WHERE id = ?").get(id) as Row | null;
+const byKey = (project: string, action: string, match: string, role = "") =>
+  db.query("SELECT * FROM agent_rules_all WHERE project = ? AND action = ? AND match = ? AND role = ?").get(project, action, match, role) as Row | null;
+const byMatch = (project: string, match: string, role = "") =>
+  db.query("SELECT * FROM agent_rules_all WHERE project = ? AND match = ? AND role = ? AND dismissed = 0 AND action != ?").get(project, match, role, MODE_ACTION) as Row | null;
+/** The row a write lands on, a dismissed suggestion included: the pattern is still that row's in the unique key. */
+const rowFor = (project: string, match: string, role = "") =>
+  db.query("SELECT * FROM agent_rules_all WHERE project = ? AND match = ? AND role = ? AND action != ? ORDER BY dismissed").get(project, match, role, MODE_ACTION) as Row | null;
+/** Rules in force in a project: what the cap counts. Suggestions have a cap of their own. */
+const liveCount = (project: string) =>
+  (db.query("SELECT COUNT(*) AS n FROM agent_rules_all WHERE project = ? AND pending = 0 AND dismissed = 0").get(project) as { n: number }).n;
 
 /**
  * The base set, made once from what config.json holds today: the mode, and
@@ -98,9 +129,29 @@ const byMatch = (project: string, match: string) =>
  * list arrives as `allow`, so nothing a launch did yesterday changes today.
  */
 let seeded = false;
+
+/**
+ * Every pending first-seen suggestion stored before the shell split respected
+ * quotes and heredocs: that split made `ERROR`, `- master` and `EOF` out of
+ * quoted text, and no row it made can be told apart from a real one. A real
+ * one comes back the next time it is seen. Runs once per database.
+ */
+function dropOldSplitSuggestions() {
+  dropOnce("shell-split-v2");
+  // The row does not say which mode the call ran in, so every pending one goes: a real one comes back the next time the session asks.
+  dropOnce("only-asked-v1");
+}
+
+function dropOnce(name: string) {
+  db.exec("CREATE TABLE IF NOT EXISTS agent_rules_once (name TEXT PRIMARY KEY)");
+  if (db.query("INSERT OR IGNORE INTO agent_rules_once (name) VALUES (?)").run(name).changes === 0) return;
+  db.query("DELETE FROM agent_rules WHERE pending = 1 AND source = 'first-seen'").run();
+}
+
 export function ensureBase() {
   if (seeded) return;
   seeded = true;
+  dropOldSplitSuggestions();
   if (db.query("SELECT 1 FROM agent_rules WHERE project = ? LIMIT 1").get(BASE_PROJECT)) return;
   const deny = launchDeny();
   const insert = (action: string, match: string, setting: RuleSetting, source: RuleSource, mode: LaunchMode | null) => {
@@ -134,7 +185,7 @@ export function actionOf(match: string): string {
 function mirror(): Applied {
   const base = all().filter((r) => r.project === BASE_PROJECT && !r.pending);
   const mode = base.find((r) => r.action === MODE_ACTION)?.mode;
-  const deny = base.filter((r) => r.action !== MODE_ACTION && r.setting === "never").map((r) => r.match);
+  const deny = base.filter((r) => r.action !== MODE_ACTION && !r.role && r.setting === "never").map((r) => r.match);
   const w = writeLaunchPermissions({ ...(mode && isLaunchMode(mode) ? { mode } : {}), deny });
   return w.ok ? { ok: true } : { ok: false, error: w.error ?? "could not save the launch permissions" };
 }
@@ -145,24 +196,30 @@ export function liveRules(): AgentRule[] {
   return all().map(toRule);
 }
 
-export function check(rootIn: string, tool: string, input: unknown): RuleCheck {
+export function check(rootIn: string, tool: string, input: unknown, mode?: string, role?: RuleScope): RuleCheck {
   const root = ruleRoot(rootIn);
   const rules = liveRules();
-  const verdict = decide(rules, root, tool, input);
-  if (verdict.decision === "unknown") firstSeen(rules, root, tool, input);
+  const derived = role === "seat" ? seatChecksRule(root, hasVerifierBlock(readFlow(root).flow)) : null;
+  const live = derived ? [...rules, derived] : rules;
+  const verdict = decide(live, root, tool, input, role);
+  if (verdict.decision === "unknown" && wouldPrompt(mode, tool)) firstSeen(live, root, tool, input, role);
   return verdict;
 }
 
-/** One quiet suggestion per action a project has no rule for. Never more than one, never back once dismissed. */
-function firstSeen(rules: AgentRule[], root: string, tool: string, input: unknown) {
+/**
+ * One quiet suggestion per action a project has no rule for. Never more than
+ * one, never back once dismissed. Waiting suggestions keep to their own cap,
+ * oldest out first, so they never crowd out a rule the person writes.
+ */
+function firstSeen(rules: AgentRule[], root: string, tool: string, input: unknown, role?: RuleScope) {
   const calls = tool === "Bash" ? shellSegments(primaryInput(input)).map((s) => ({ command: s })) : [input];
   for (const c of calls) {
-    if (decide(rules, root, tool, c).decision !== "unknown") continue;
+    if (decide(rules, root, tool, c, role).decision !== "unknown") continue;
     const s = ruleFor(tool, c);
     if (!s) continue;
     if (byKey(root, s.action, s.match)) continue;
-    const n = (db.query("SELECT COUNT(*) AS n FROM agent_rules WHERE project = ?").get(root) as { n: number }).n;
-    if (n >= RULES_MAX_PER_PROJECT) return;
+    db.query(`DELETE FROM agent_rules WHERE id IN (SELECT id FROM agent_rules WHERE project = ? AND pending = 1 AND dismissed = 0 AND source = 'first-seen'
+      ORDER BY at DESC, rowid DESC LIMIT -1 OFFSET ?)`).run(root, RULES_MAX_PER_PROJECT - 1);
     const id = newId();
     db.query("INSERT OR IGNORE INTO agent_rules (id, project, action, match, setting, source, by_name, at, pending) VALUES (?,?,?,?,?,?,?,?,1)")
       .run(id, root, s.action, s.match, "allow", "first-seen", "agentglass", now());
@@ -188,7 +245,8 @@ export function view(rootIn: string): AgentRulesView {
     return learned.filter((r) => r.at > end - WEEK && r.at <= end).length;
   });
   const mode = base.find((r) => r.action === MODE_ACTION)?.mode ?? launchMode();
-  return { root, mode, base, learned, suggested, history, weekly };
+  const rule = root === BASE_PROJECT ? null : seatChecksRule(root, hasVerifierBlock(readFlow(root).flow));
+  return { root, mode, base, learned, suggested, derived: rule ? [rule] : [], history, weekly };
 }
 
 export type RulesAnswer = { ok: true; write: RuleWrite } | { ok: false; error: string; status: number };
@@ -197,20 +255,41 @@ export type RulesAnswer = { ok: true; write: RuleWrite } | { ok: false; error: s
  * One rule written by somebody. The person's applies at once. An agent's
  * applies at once when it is stricter than what is in force; a looser one is
  * stored pending and put on the approval card, and nothing changes until the
- * person answers it.
+ * person answers it. `remove: true` takes the rule out instead, the person's alone.
  */
 export async function setRule(
-  b: { root?: unknown; action?: unknown; match?: unknown; setting?: unknown; source?: unknown; mode?: unknown },
+  b: { root?: unknown; action?: unknown; match?: unknown; setting?: unknown; source?: unknown; mode?: unknown; remove?: unknown; role?: unknown },
   who: { person: boolean; by: string },
 ): Promise<RulesAnswer> {
   ensureBase();
   if (typeof b.root !== "string" || !(b.root === BASE_PROJECT || b.root.startsWith("/"))) return { ok: false, error: 'root: a project\'s absolute path, or "*" for every project', status: 400 };
+  if (b.role !== undefined && !isRuleScope(b.role)) return { ok: false, error: 'role: "seat", or left out for every agent', status: 400 };
+  const role: RuleScope | "" = isRuleScope(b.role) ? b.role : "";
   const root = ruleRoot(b.root);
   const source: RuleSource = b.source === "chat" || b.source === "always-allow" ? b.source : who.person ? "you" : "chat";
   const by = who.person ? "you" : who.by;
 
+  if (b.remove === true) {
+    if (!who.person) return { ok: false, error: "only the person takes a rule out", status: 403 };
+    if (typeof b.match !== "string") return { ok: false, error: "match: the tool pattern to take out", status: 400 };
+    const parsed = parseDenyRules(b.match.trim());
+    if (parsed.bad.length || parsed.rules.length !== 1) return { ok: false, error: `match: not a tool pattern: ${b.match.slice(0, 60)}`, status: 400 };
+    const match = parsed.rules[0]!;
+    const cur = rowFor(root, match, role);
+    if (!cur) return { ok: false, error: "no such rule in this project", status: 404 };
+    // The rule is gone, so no setting changed: the history keeps settings, and the action log keeps the request.
+    db.query(`DELETE FROM ${tableOf(cur.role)} WHERE id = ?`).run(cur.id);
+    door?.drop(cur.id);
+    if (root === BASE_PROJECT) {
+      const a = mirror();
+      if (!a.ok) return { ok: false, error: a.error, status: 500 };
+    }
+    return { ok: true, write: { rule: toRule(cur), applied: true, waitsForPerson: false } };
+  }
+
   if (b.action === MODE_ACTION) {
     if (root !== BASE_PROJECT) return { ok: false, error: 'the permission mode is one for every project: root "*"', status: 400 };
+    if (role) return { ok: false, error: "the permission mode is one for every agent: no role", status: 400 };
     if (!isLaunchMode(b.mode)) return { ok: false, error: "mode: default, auto, acceptEdits or bypassPermissions", status: 400 };
     const cur = byKey(BASE_PROJECT, MODE_ACTION, "")!;
     const from = (cur.mode && isLaunchMode(cur.mode) ? cur.mode : "default") as LaunchMode;
@@ -236,26 +315,29 @@ export async function setRule(
   const match = parsed.rules[0]!;
   if (b.setting !== "allow" && b.setting !== "ask" && b.setting !== "never") return { ok: false, error: "setting: allow, ask or never", status: 400 };
   const setting = b.setting;
-  const prior = byMatch(root, match);
+  const prior = rowFor(root, match, role);
   const action = typeof b.action === "string" && /^[a-z][a-z0-9._-]{0,79}$/.test(b.action) ? b.action : prior?.action ?? actionOf(match);
-  // What is in force for this pattern now: the project's own rule, else the base one.
-  const inForce = prior && !prior.pending ? prior : root !== BASE_PROJECT ? byMatch(BASE_PROJECT, match) : null;
-  const from = inForce && !inForce.pending ? (inForce.setting as RuleSetting) : null;
-  if (!prior) {
-    const n = (db.query("SELECT COUNT(*) AS n FROM agent_rules WHERE project = ?").get(root) as { n: number }).n;
-    if (n >= RULES_MAX_PER_PROJECT) return { ok: false, error: `this project already has ${RULES_MAX_PER_PROJECT} rules`, status: 409 };
+  // What is in force for the calls this pattern names, whichever rule speaks for them:
+  // `Bash(gh pr merge 1:*)` = ask under a never on `gh pr merge` hands an agent more.
+  const from = inForceFor(liveRules(), root, match, role || undefined);
+  const looser = !who.person && isLooser(from, setting);
+  // Only an agent's looser write is ever refused for room; the person's and a stricter one always land.
+  if (looser && !(prior && !prior.dismissed) && liveCount(root) >= RULES_MAX_PER_PROJECT) {
+    return { ok: false, error: `this project already has ${RULES_MAX_PER_PROJECT} rules`, status: 409 };
   }
 
-  const looser = !who.person && isLooser(from, setting);
   const id = prior?.id ?? newId();
+  const table = tableOf(role);
   if (!prior) {
-    db.query("INSERT INTO agent_rules (id, project, action, match, setting, source, by_name, at, pending) VALUES (?,?,?,?,?,?,?,?,?)")
+    if (role) db.query("INSERT INTO agent_role_rules (id, project, action, match, setting, source, by_name, at, pending, role) VALUES (?,?,?,?,?,?,?,?,?,?)")
+      .run(id, root, action, match, setting, source, by, now(), looser ? 1 : 0, role);
+    else db.query("INSERT INTO agent_rules (id, project, action, match, setting, source, by_name, at, pending) VALUES (?,?,?,?,?,?,?,?,?)")
       .run(id, root, action, match, setting, source, by, now(), looser ? 1 : 0);
   } else if (!looser) {
-    db.query("UPDATE agent_rules SET action = ?, setting = ?, source = ?, by_name = ?, at = ?, pending = 0, dismissed = 0 WHERE id = ?").run(action, setting, source, by, now(), id);
+    db.query(`UPDATE ${table} SET action = ?, setting = ?, source = ?, by_name = ?, at = ?, pending = 0, dismissed = 0 WHERE id = ?`).run(action, setting, source, by, now(), id);
   } else if (prior.pending) {
     // A pending suggestion an agent now asks for: it stays pending, with the agent's words on it.
-    db.query("UPDATE agent_rules SET setting = ?, source = ?, by_name = ?, at = ? WHERE id = ?").run(setting, source, by, now(), id);
+    db.query(`UPDATE ${table} SET setting = ?, source = ?, by_name = ?, at = ?, dismissed = 0 WHERE id = ?`).run(setting, source, by, now(), id);
   }
   if (!looser) {
     note(id, root, from, setting, by, true, false);
@@ -271,7 +353,7 @@ export async function setRule(
   const apply = (): Applied => {
     const cur = one(id);
     if (!cur) return { ok: false, error: "the rule is gone" };
-    db.query("UPDATE agent_rules SET setting = ?, source = ?, by_name = ?, at = ?, pending = 0, dismissed = 0 WHERE id = ?").run(setting, source, by, now(), id);
+    db.query(`UPDATE ${tableOf(cur.role)} SET setting = ?, source = ?, by_name = ?, at = ?, pending = 0, dismissed = 0 WHERE id = ?`).run(setting, source, by, now(), id);
     note(id, root, from, setting, "you", true, false);
     return root === BASE_PROJECT ? mirror() : { ok: true };
   };
@@ -295,12 +377,15 @@ export function answer(id: string, b: { setting?: unknown; dismiss?: unknown }, 
   door?.drop(id);
   if (b.dismiss === true) {
     if (!cur.pending) return { ok: false, error: "only a suggestion is dismissed; set a rule in force to what it should be instead", status: 400 };
-    db.query("UPDATE agent_rules SET dismissed = 1 WHERE id = ?").run(id);
+    db.query(`UPDATE ${tableOf(cur.role)} SET dismissed = 1 WHERE id = ?`).run(id);
+    // Dismissals are remembered up to the cap, newest kept; an older one dropped may be suggested again.
+    db.query(`DELETE FROM agent_rules WHERE id IN (SELECT id FROM agent_rules WHERE project = ? AND dismissed = 1
+      ORDER BY at DESC, rowid DESC LIMIT -1 OFFSET ?)`).run(cur.project, RULES_MAX_PER_PROJECT);
     return { ok: true, write: { rule: toRule(cur), applied: false, waitsForPerson: false } };
   }
   if (b.setting !== "allow" && b.setting !== "ask" && b.setting !== "never") return { ok: false, error: "setting: allow, ask or never (or dismiss: true)", status: 400 };
   if (cur.action === MODE_ACTION) return { ok: false, error: "the mode is set with action launch.mode", status: 400 };
-  db.query("UPDATE agent_rules SET setting = ?, source = CASE WHEN pending = 1 THEN source ELSE 'you' END, by_name = CASE WHEN pending = 1 THEN by_name ELSE 'you' END, at = ?, pending = 0 WHERE id = ?")
+  db.query(`UPDATE ${tableOf(cur.role)} SET setting = ?, source = CASE WHEN pending = 1 THEN source ELSE 'you' END, by_name = 'you', at = ?, pending = 0 WHERE id = ?`)
     .run(b.setting, now(), id);
   note(id, cur.project, cur.pending ? null : (cur.setting as RuleSetting), b.setting, "you", true, false);
   if (cur.project === BASE_PROJECT) {
@@ -333,10 +418,10 @@ export function writeLaunchBase(fields: { mode?: unknown; deny?: unknown }, by =
     for (const r of base) {
       if (r.setting !== "never" || deny.includes(r.match)) continue;
       if (BASE_RULES.some((x) => x.match === r.match)) {
-        db.query("UPDATE agent_rules SET setting = 'allow', source = 'you', by_name = ?, at = ? WHERE id = ?").run(by, now(), r.id);
+        db.query(`UPDATE ${tableOf(r.role)} SET setting = 'allow', source = 'you', by_name = ?, at = ? WHERE id = ?`).run(by, now(), r.id);
         note(r.id, BASE_PROJECT, "never", "allow", by, true, false);
       } else {
-        db.query("DELETE FROM agent_rules WHERE id = ?").run(r.id);
+        db.query(`DELETE FROM ${tableOf(r.role)} WHERE id = ?`).run(r.id);
       }
     }
     for (const d of deny) {
@@ -356,5 +441,5 @@ export function writeLaunchBase(fields: { mode?: unknown; deny?: unknown }, by =
 export function __resetRulesStore() {
   seeded = false;
   rootCache.clear();
-  db.exec("DELETE FROM agent_rules; DELETE FROM agent_rule_changes;");
+  db.exec("DELETE FROM agent_rules; DELETE FROM agent_role_rules; DELETE FROM agent_rule_changes;");
 }

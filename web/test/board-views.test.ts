@@ -21,8 +21,8 @@ describe("no board views", () => {
     expect(board).not.toContain("view = \"all\"");
   });
   it("the panel pills are Open, Closed, Inbox and CI, and no lane pill", () => {
-    for (const label of ["Open", "Closed", "Inbox", "CI"]) expect(panel).toContain(`label="${label}"`);
-    for (const gone of ["Needs my review", "Failing", "Ready"]) expect(panel).not.toContain(`label="${gone}"`);
+    for (const label of ["Open", "Closed", "Inbox", "CI"]) expect(panel).toContain(`label: "${label}"`);
+    for (const gone of ["Needs my review", "Failing", "Ready"]) expect(panel).not.toContain(`label: "${gone}"`);
   });
 });
 

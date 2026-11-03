@@ -7,7 +7,7 @@ import { UI_ACTIONS, parseUi, parseArgs, argsRefusal } from "../../shared/uiActi
 
 describe("parseControlCmd — view", () => {
   test("accepts every real view id", () => {
-    for (const to of ["dash", "git", "diff", "pr", "tasks", "docker", "term", "browser", "files", "lantern", "seat"]) {
+    for (const to of ["dash", "git", "diff", "pr", "tasks", "docker", "term", "browser", "lantern", "seat"]) {
       expect(parseControlCmd({ cmd: "view", to })).toEqual({ cmd: "view", to } as never);
     }
   });
@@ -40,7 +40,7 @@ describe("parseControlCmd — esc", () => {
 
 describe("parseControlCmd — open", () => {
   test("accepts every panel the keyboard opens", () => {
-    for (const what of ["stats", "skills", "search", "help", "palette"]) {
+    for (const what of ["skills", "help", "palette"]) {
       expect(parseControlCmd({ cmd: "open", what })).toEqual({ cmd: "open", what } as never);
     }
   });
@@ -251,8 +251,8 @@ describe("parseControlCmd — the ui wire shape", () => {
     expect(parseUi(unlevelled, "oops", {}, UI_MAX_LEVEL)).toBeNull();
   });
 
-  test("only the writes are level 2 (a setting, the palette, the zoom); every other entry is level 1, or a level 3 stage", () => {
-    for (const [id, d] of Object.entries(UI_ACTIONS) as [string, { level: number; kind: string }][]) expect(d.level, id).toBe(["settings.set", "theme.set", "zoom.step"].includes(id) ? 2 : d.kind === "stage" ? 3 : 1);
+  test("only the writes are level 2 (a setting, the palette, the zoom, the board filter); every other entry is level 1, or a level 3 stage", () => {
+    for (const [id, d] of Object.entries(UI_ACTIONS) as [string, { level: number; kind: string }][]) expect(d.level, id).toBe(["settings.set", "theme.set", "zoom.step", "pr.filter.set", "pr.views.save", "pr.views.delete"].includes(id) ? 2 : d.kind === "stage" ? 3 : 1);
   });
 });
 
@@ -279,7 +279,7 @@ describe("parseControlCmd — the old spellings are registry entries", () => {
   test("the audit id is the registry id, for either spelling, and never carries a value", () => {
     expect(controlId(parseControlCmd({ cmd: "view", to: "git" })!)).toBe("view.open");
     expect(controlId(parseControlCmd({ cmd: "open", what: "finder", path: "/secret/place" })!)).toBe("finder.open");
-    expect(controlId(parseControlCmd({ cmd: "open", what: "stats" })!)).toBe("panel.open");
+    expect(controlId(parseControlCmd({ cmd: "open", what: "skills" })!)).toBe("panel.open");
     expect(controlId(parseControlCmd({ cmd: "ui", do: "settings.open", args: { page: "about" } })!)).toBe("settings.open");
   });
 
@@ -300,7 +300,7 @@ describe("parseControlCmd — the old spellings are registry entries", () => {
 describe("argsRefusal — a wrong argument names itself and what the door takes", () => {
   test("a wrong enum lists the values, a missing one says it is needed", () => {
     const d = UI_ACTIONS["panel.open"];
-    expect(argsRefusal("panel.open", d, { what: "stat" })).toMatch(/^panel\.open does not take that "what"; accepted: one of .*stats/);
+    expect(argsRefusal("panel.open", d, { what: "skill" })).toMatch(/^panel\.open does not take that "what"; accepted: one of .*skills/);
     expect(argsRefusal("panel.open", d, {})).toMatch(/^panel\.open needs "what": one of /);
     expect(argsRefusal("panel.open", d, [])).toBe("panel.open takes its arguments as an object");
   });
@@ -315,7 +315,14 @@ describe("argsRefusal — a wrong argument names itself and what the door takes"
         expect(bad).toContain(id);
       }
     }
-    expect(argsRefusal("panel.open", UI_ACTIONS["panel.open"], { what: "stats" })).toBeNull();
-    expect(parseArgs(UI_ACTIONS["panel.open"], { what: "stats" })).not.toBeNull();
+    expect(argsRefusal("panel.open", UI_ACTIONS["panel.open"], { what: "skills" })).toBeNull();
+    expect(parseArgs(UI_ACTIONS["panel.open"], { what: "skills" })).not.toBeNull();
+  });
+});
+
+describe("the retired Files view", () => {
+  test("is refused, and the sentence points at the Finder", () => {
+    expect(parseControlCmd({ cmd: "view", to: "files" })).toBeNull();
+    expect(argsRefusal("view.open", UI_ACTIONS["view.open"], { to: "files" })).toContain("use the Finder");
   });
 });

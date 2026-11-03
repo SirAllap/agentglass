@@ -32,12 +32,12 @@ const post = async (path: string, body: unknown, headers: Record<string, string>
 const rules = async () => (await (await fetch(`${base}/agent-rules?root=${encodeURIComponent(root)}`, { headers: auth })).json()) as AgentRulesView;
 
 /** The hook as Claude Code runs it: the payload on stdin, the answer on stdout. */
-async function hook(command: string): Promise<{ code: number; stdout: string; stderr: string }> {
+async function hook(command: string, permission_mode?: string): Promise<{ code: number; stdout: string; stderr: string }> {
   const port = new URL(base).port;
   const p = Bun.spawn(["python3", HOOK, "--server", base, "--event-type", "PreToolUse", "--source-app", "orbit"], {
     cwd: root,
     env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: dir, AGENTGLASS_TOKEN: TOKEN, AGENTGLASS_PORT: port },
-    stdin: new Blob([JSON.stringify({ session_id: "s-orbit-1", cwd: root, hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } })]),
+    stdin: new Blob([JSON.stringify({ session_id: "s-orbit-1", cwd: root, hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, ...(permission_mode ? { permission_mode } : {}) })]),
     stdout: "pipe", stderr: "pipe",
   });
   const [stdout, stderr, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
@@ -106,13 +106,22 @@ describe.skipIf(!have)("the hook obeys the rules", () => {
   });
 
   test("an unknown command files exactly one quiet suggestion, however often it is asked", async () => {
-    const ask = () => fetch(`${base}/agent-rules/check?root=${encodeURIComponent(root)}&tool=Bash&input=${encodeURIComponent(JSON.stringify({ command: "npm publish --tag beta" }))}`, { headers: auth }).then((x) => x.json());
+    const ask = () => fetch(`${base}/agent-rules/check?root=${encodeURIComponent(root)}&tool=Bash&mode=default&input=${encodeURIComponent(JSON.stringify({ command: "npm publish --tag beta" }))}`, { headers: auth }).then((x) => x.json());
     expect(await ask()).toMatchObject({ ok: true, decision: "unknown" });
     await ask();
     await ask();
     const sug = (await rules()).suggested.filter((s) => s.match === "Bash(npm publish:*)");
     expect(sug).toHaveLength(1);
     expect(sug[0]).toMatchObject({ source: "first-seen", pending: true });
+  });
+
+  test("the hook files a suggestion only from a session that would have stopped to ask", async () => {
+    const made = async () => (await rules()).suggested.some((s) => s.match === "Bash(make build:*)");
+    await hook("make build", "bypassPermissions");
+    await hook("make build");
+    expect(await made()).toBe(false);
+    await hook("make build", "default");
+    expect(await made()).toBe(true);
   });
 
   test("an agent loosening a never gets 202, the rule holds, and the person has a card", async () => {
@@ -137,6 +146,21 @@ describe.skipIf(!have)("the hook obeys the rules", () => {
   test("an agent going stricter applies at once", async () => {
     const r = await post("/agent-rules", { root, match: "Bash(rm:*)", setting: "never", as: "builder-1" }, fromAgent());
     expect(r).toMatchObject({ status: 200, body: { applied: true } });
+  });
+
+  test("full access through the same door, and only the person takes a rule out", async () => {
+    for (const match of ["Bash", "Edit", "Write", "Bash(git push --force-with-lease:*)"]) {
+      expect((await post("/agent-rules", { root, match, setting: "allow" }, fromApp())).status).toBe(200);
+    }
+    /* The force push no longer asks, though a never on `git push` is still in force for the plain one. */
+    expect((await hook("git push --force-with-lease origin main")).stdout).toBe("");
+    expect((await hook("git push origin main")).stdout).toContain("deny");
+
+    expect((await post("/agent-rules", { root, match: "Bash", remove: true }, fromAgent())).status).toBe(403);
+    expect((await rules()).learned.some((r) => r.match === "Bash")).toBe(true);
+    expect((await post("/agent-rules", { root, match: "Bash", remove: true }, fromApp())).status).toBe(200);
+    expect((await rules()).learned.some((r) => r.match === "Bash")).toBe(false);
+    expect((await post("/agent-rules", { root, match: "Bash", remove: true }, fromApp())).status).toBe(404);
   });
 
   test("a server that is not there never stops the agent: the hook exits 0 and says it skipped the check", async () => {

@@ -21,6 +21,12 @@ afterAll(() => {
 });
 
 describe("counting", () => {
+  test("a camel-case view id and the server's own flight plan ids are ids; an upper-case first letter is not", () => {
+    // a batch with one refused id is refused whole, so the flightPlan view's open must not be the id that sinks it
+    expect(recordOpens({ "view:flightPlan": 1, "flightPlan:created": 1, "flightPlan:no-go": 2 }, day("2026-10-20"))).toEqual({ ok: true, recorded: 4 });
+    expect(recordOpens({ "View:git": 1 }, day("2026-10-20")).ok).toBe(false);
+  });
+
   test("a batch adds to the id, and the last date moves to the day of the batch", () => {
     expect(recordOpens({ "view:git": 2, "settings:about": 1 }, day("2026-10-20"))).toEqual({ ok: true, recorded: 3 });
     recordOpens({ "view:git": 3 }, day("2026-10-22"));

@@ -1094,8 +1094,8 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
       {ops.nodes}
       {folderPeek.node}
       {help && <HelpSheet onClose={() => setHelp(false)} />}
-      {searching && <FinderSearch home={home} onTarget={reveal} onClose={() => setSearching(false)} />}
-      {jumping && <FinderSearch home={home} jump={{ visited, here: trail[0] ?? "" }} onTarget={reveal} onClose={() => setJumping(false)} />}
+      {searching && <FinderSearch home={home} here={trail[trail.length - 1] ?? ""} mode={prefs.searchIn} onMode={(m) => setPrefs({ searchIn: m })} onTarget={reveal} onClose={() => setSearching(false)} />}
+      {jumping && <FinderSearch home={home} mode={prefs.searchIn} onMode={(m) => setPrefs({ searchIn: m })} jump={{ visited, here: trail[0] ?? "" }} onTarget={reveal} onClose={() => setJumping(false)} />}
       {settings && <FinderSettings say={setNote} prefs={prefs} onPref={setPrefs} onReset={() => { setPrefsState(DEFAULT_PREFS); savePrefs(DEFAULT_PREFS); setNote("Finder settings reset"); }} onForget={() => { try { localStorage.removeItem(SNAP_KEY); } catch { /* nothing kept */ } setDragged({}); scrolls.current = {}; setNote("Remembered places cleared"); }} onClose={() => setSettings(null)} />}
       {menu && <AppearanceMenu anchor={menu} prefs={prefs} onPref={setPrefs} onClose={() => setMenu(null)} />}
     </div>

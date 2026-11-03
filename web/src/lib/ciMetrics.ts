@@ -24,8 +24,8 @@ import { durationVerdict, rerunPassed, MIN_SAMPLES, NOISE_MS, type CheckAggregat
 const DRIFT_RATIO = 1.15;
 const WEEK = 7;
 
-export type Chip = "all" | "slow" | "rerun" | "drifting";
-export const CHIPS: readonly Chip[] = ["all", "slow", "rerun", "drifting"];
+export type Chip = "all" | "slow" | "rerun" | "drifting" | "failing";
+export const CHIPS: readonly Chip[] = ["all", "slow", "rerun", "drifting", "failing"];
 
 export type SortKey = "check" | "usual" | "slow" | "fails" | "verdict";
 export interface Sort { key: SortKey; dir: "asc" | "desc" }
@@ -61,6 +61,8 @@ export interface Row {
   /** The newest run: what the bar's marker shows. It is also inside `usual`, which is the whole stored history: a lone outlier among 5 successes pulls the median toward itself. */
   thisRun: number | null;
   failed: boolean;
+  /** The pull request the newest run belonged to, when the record kept it. */
+  thisPr: number | null;
   verdict: DurationVerdict;
   rerun: boolean;
   sameCommit: SameCommit;
@@ -89,6 +91,7 @@ export function toRow(m: CheckMetric): Row {
     trend: a.trend,
     thisRun: a.latest?.ms ?? null,
     failed,
+    thisPr: a.latest?.pr ?? null,
     // A failed run stops early, so "faster" would be a lie: shared/checkBaseline.ts refuses it too.
     verdict: failed ? "unknown" : durationVerdict(a.latest?.ms ?? null, usual),
     rerun: rerunPassed(a.sameCommit),
@@ -107,6 +110,7 @@ const IN: Record<Chip, (r: Row) => boolean> = {
   slow: isSlow,
   rerun: (r) => r.rerun,
   drifting: (r) => r.drift != null,
+  failing: (r) => r.failed,
 };
 
 /** The count on each chip, over the rows the filter box lets through, so a chip never promises rows the box has hidden. */
@@ -115,21 +119,91 @@ export function chipCounts(rows: Row[]): Record<Chip, number> {
 }
 
 /**
- * The four tiles above the table. Each one filters it; the fifth and sixth of
- * the old row of buttons (Drifting, Failing tests) are two chips inside the
- * fourth tile, so every one of the five filters stays one press away.
+ * The five tiles above the history. Each one filters it, and each one is the
+ * entrance to a chip that was already there: Pass rate is every check, Median
+ * run opens the slow ones, and Failing now the checks whose newest run failed.
+ * (The failing TESTS are the box under the history, not a tile.)
  */
-export type Tile = "all" | "slow" | "rerun" | "attention";
-export const TILES: readonly Tile[] = ["all", "slow", "rerun", "attention"];
+export type Tile = "pass" | "median" | "rerun" | "drifting" | "failing";
+export const TILES: readonly Tile[] = ["pass", "median", "rerun", "drifting", "failing"];
 
-/** What the view shows: a table chip, or the failing-tests lens. */
-export type CiView = Chip | "tests";
+/** What the view shows: the chip a tile filters the history by. */
+export type CiView = Chip;
+
+const TILE_VIEW: Record<Tile, CiView> = { pass: "all", median: "slow", rerun: "rerun", drifting: "drifting", failing: "failing" };
 
 /** The tile a view belongs to. */
-export const tileOf = (v: CiView): Tile => (v === "drifting" || v === "tests" ? "attention" : v);
+export const tileOf = (v: CiView): Tile => TILES.find((t) => TILE_VIEW[t] === v)!;
 
-/** The view a press on a tile opens. The fourth opens on Drifting, the one with a table; Failing tests is the chip beside it. */
-export const viewOfTile = (t: Tile): Chip => (t === "attention" ? "drifting" : t);
+/** The view a press on a tile opens. */
+export const viewOfTile = (t: Tile): CiView => TILE_VIEW[t];
+
+export type TileTone = "good" | "info" | "warn" | "bad";
+
+/** Fewest pass-or-fail runs a week must hold before it may be compared with the one before it. */
+export const WEEK_MIN_RUNS = 5;
+
+/**
+ * The pass rate of the last 7 days against the 7 before, in whole points (+2 is
+ * "two points better"), over every check's runs together. Null when either week
+ * has fewer than WEEK_MIN_RUNS judged runs, or when the record carries no
+ * per-day counts (kept before they were stored): a change out of three runs, or
+ * out of nothing, is not said. Ceiling: the whole repository, never one check.
+ */
+export function passDelta(rows: Pick<Row, "trend">[]): number | null {
+  const week = (from: number, to?: number) => {
+    let passed = 0, failed = 0, seen = false;
+    for (const r of rows) for (const d of r.trend.slice(from, to)) {
+      if (d.passed == null || d.failed == null) continue;
+      seen = true; passed += d.passed; failed += d.failed;
+    }
+    return seen && passed + failed >= WEEK_MIN_RUNS ? passed / (passed + failed) : null;
+  };
+  const now = week(-WEEK, undefined), before = week(-2 * WEEK, -WEEK);
+  return now == null || before == null ? null : Math.round((now - before) * 100);
+}
+
+/** How many pull requests the failing checks' newest runs belong to; null when none of them says. */
+export function failingPrs(rows: Pick<Row, "failed" | "thisPr">[]): number | null {
+  const prs = new Set(rows.flatMap((r) => (r.failed && r.thisPr != null ? [r.thisPr] : [])));
+  return prs.size || null;
+}
+
+/** The line under the pass rate: how many runs it stands on, and the week's change when there is one to say. */
+export function passDetail(runs: number, delta: number | null): string {
+  const base = `last ${runs} run${runs === 1 ? "" : "s"}`;
+  if (delta == null) return base;
+  return `${base} · ${delta === 0 ? "level with last week" : `${delta > 0 ? "+" : "−"}${Math.abs(delta)} vs last week`}`;
+}
+
+/** The line under Failing now: the pull requests it is on when the record says, else what a failing check is. */
+export function failingDetail(prs: number | null): string {
+  return prs == null ? "newest run failed" : `on ${prs} pull request${prs === 1 ? "" : "s"}`;
+}
+
+/**
+ * What each tile says: the figure, the line under it, and the tone the figure
+ * is drawn in. The pass rate is the runs-weighted mean of each check's own
+ * (1 - failure rate); a cancelled run is counted by the check's rate, not
+ * separately, because the aggregate does not keep it. Its tone is a display
+ * choice (90% and above reads as good), not a verdict: the verdicts of this
+ * view are all against a check's own history.
+ */
+export function tileFacts(rows: Row[], counts: Record<Chip, number>): Record<Tile, { label: string; value: string; detail: string; tone: TileTone }> {
+  const judged = rows.filter((r) => r.failRate != null && r.runs > 0);
+  const weight = judged.reduce((n, r) => n + r.runs, 0);
+  const pass = weight ? judged.reduce((n, r) => n + (1 - r.failRate!) * r.runs, 0) / weight : null;
+  const usuals = rows.flatMap((r) => (r.usual == null ? [] : [r.usual])).sort((a, b) => a - b);
+  const median = usuals.length ? (usuals[Math.floor((usuals.length - 1) / 2)]! + usuals[Math.ceil((usuals.length - 1) / 2)]!) / 2 : null;
+  const slowest = rows.reduce<Row | null>((m, r) => (r.slowEnd != null && (!m || r.slowEnd > (m.slowEnd ?? 0)) ? r : m), null);
+  return {
+    pass: { label: "Pass rate", value: pass == null ? "—" : `${Math.round(pass * 100)}%`, detail: passDetail(rows.reduce((n, r) => n + r.runs, 0), passDelta(rows)), tone: pass == null || pass >= 0.9 ? "good" : "warn" },
+    median: { label: "Median run", value: median == null ? "—" : span(median), detail: counts.slow ? `${counts.slow} slow now` : slowest ? `slowest: ${slowest.name}` : "none slow now", tone: "info" },
+    rerun: { label: "Re-run passed", value: String(counts.rerun), detail: "passed after a retry", tone: "warn" },
+    drifting: { label: "Drifting", value: String(counts.drifting), detail: "slower than their usual", tone: "info" },
+    failing: { label: "Failing now", value: String(counts.failing), detail: counts.failing ? failingDetail(failingPrs(rows)) : "nothing failing", tone: counts.failing ? "bad" : "good" },
+  };
+}
 
 /** The one status chip of a row, or null when the run is simply usual. A failed run outranks everything, then a re-run that passed, then the verdict, then a week that drifted. */
 export function statusChip(r: Row): { label: string; tone: "bad" | "warn" | "good" } | null {
@@ -172,6 +246,28 @@ export function sortRows(rows: Row[], s: Sort): Row[] {
   });
 }
 
+/** The sort menu: every column the table used to sort by, in both directions, as `key:dir`. */
+export const SORT_CHOICES: readonly { value: string; label: string }[] = [
+  { value: "slow:desc", label: "Slow end \u00b7 longest first" },
+  { value: "slow:asc", label: "Slow end \u00b7 shortest first" },
+  { value: "usual:desc", label: "Usual \u00b7 longest first" },
+  { value: "usual:asc", label: "Usual \u00b7 shortest first" },
+  { value: "check:asc", label: "Check \u00b7 A to Z" },
+  { value: "check:desc", label: "Check \u00b7 Z to A" },
+  { value: "fails:desc", label: "Fails \u00b7 most first" },
+  { value: "fails:asc", label: "Fails \u00b7 fewest first" },
+  { value: "verdict:desc", label: "This run \u00b7 worst first" },
+  { value: "verdict:asc", label: "This run \u00b7 best first" },
+];
+
+export const sortChoice = (s: Sort): string => `${s.key}:${s.dir}`;
+
+/** The sort a menu value names; the default when it names none (a stale value). */
+export function parseSortChoice(v: string): Sort {
+  const [key, dir] = v.split(":");
+  return SORT_CHOICES.some((c) => c.value === v) ? { key: key as SortKey, dir: dir as "asc" | "desc" } : DEFAULT_SORT;
+}
+
 /** What a header click does: the same column flips, another starts where its numbers are biggest first (names, A to Z). */
 export function nextSort(cur: Sort, key: SortKey): Sort {
   if (cur.key === key) return { key, dir: cur.dir === "asc" ? "desc" : "asc" };
@@ -186,6 +282,27 @@ export function span(ms: number): string {
   if (m < 60) return r ? `${m}m ${r}s` : `${m}m`;
   const h = Math.floor(m / 60);
   return m % 60 ? `${h}h ${m % 60}m` : `${h}h`;
+}
+
+/**
+ * The pill at the end of a history row: the share of its judged runs that passed, in the tone of how
+ * much of a problem that is. Display tones, not a verdict (the verdicts of this view are against a
+ * check's own history): 95 and above reads as good, 80 and above as a warning.
+ */
+export function passChip(r: Pick<Row, "failRate">): { label: string; tone: "good" | "warn" | "bad" | "neutral" } {
+  if (r.failRate == null) return { label: "\u2014", tone: "neutral" };
+  const pct = Math.round((1 - r.failRate) * 100);
+  return { label: `${pct}% pass`, tone: pct >= 95 ? "good" : pct >= 80 ? "warn" : "bad" };
+}
+
+/**
+ * The days of a trend as bar heights from 0 to 1, scaled to the check's own tallest day; a day with
+ * no success is null (drawn as a stub, never as zero seconds). The same medians as the line, so the
+ * bars and the line in the open row cannot disagree.
+ */
+export function dayBars(trend: CheckAggregate["trend"]): (number | null)[] {
+  const top = Math.max(0, ...trend.map((d) => d.median ?? 0));
+  return trend.map((d) => (d.median == null || top === 0 ? null : d.median / top));
 }
 
 /** The longest span any check draws: the one axis every bar shares. */

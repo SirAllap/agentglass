@@ -22,6 +22,7 @@
  *     the viewer is waiting for.
  */
 import { dockerBin } from "./docker.ts";
+import { stopChild, trackChild } from "./childledger.ts";
 
 /** Container id or name, same rule the rest of the surface uses. */
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
@@ -80,6 +81,7 @@ export function streamLogs(id: string, tail: number, signal?: AbortSignal): LogS
         closed = true;
         try { controller.close(); } catch { /* already closed */ }
         live = Math.max(0, live - 1);
+        if (proc?.pid) stopChild(proc.pid);
         try { proc?.kill(); } catch { /* already gone */ }
       };
 
@@ -87,6 +89,7 @@ export function streamLogs(id: string, tail: number, signal?: AbortSignal): LogS
         proc = Bun.spawn([bin, "logs", "--follow", "--timestamps", "--tail", String(n), id], {
           stdout: "pipe", stderr: "pipe",
         });
+        trackChild(proc, "docker logs --follow");
       } catch (e) {
         done(`could not follow this container: ${String(e)}`);
         return;
@@ -116,6 +119,7 @@ export function streamLogs(id: string, tail: number, signal?: AbortSignal): LogS
     cancel() {
       closed = true;
       live = Math.max(0, live - 1);
+      if (proc?.pid) stopChild(proc.pid);
       try { proc?.kill(); } catch { /* already gone */ }
     },
   });

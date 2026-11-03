@@ -63,11 +63,11 @@ describe("the shell", () => {
 });
 
 describe("the router", () => {
-  it("takes a file to Files, scoped to its checkout and the folder it is in", () => {
+  it("takes a file to the Finder, on its absolute path", () => {
     const g = body(app, "const goFromNote = useCallback(async (g");
     expect(g).toContain('g.kind === "file"');
-    expect(g).toContain("requestFilesReveal(g.root,");
-    expect(g).toContain('goView("files")');
+    expect(g).toContain('openFinderAt(g.path.startsWith("/") ? g.path : `${g.root');
+    expect(g).not.toContain('goView("files")');
   });
   it("the bell, the toast and the popup share one resolver", () => {
     expect(app).toContain("setAlertGoto(goFromNote)");

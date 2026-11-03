@@ -131,7 +131,7 @@ export function rankWindows(rows: readonly SwitcherRow[], query: string): Switch
  * chord again walks these, so a desk with three questions open is three
  * presses from answering all of them.
  */
-export function nextWaiting(rows: readonly SwitcherRow[], from: number): number {
+export function nextWaiting(rows: readonly { status?: WindowStatus | null }[], from: number): number {
   const n = rows.length;
   for (let step = 1; step <= n; step++) {
     const i = (((from + step) % n) + n) % n;

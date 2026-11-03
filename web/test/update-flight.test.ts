@@ -68,7 +68,7 @@ describe("the flights", () => {
 });
 
 describe("the panel", () => {
-  const press = code(bodyOf(SRC, "const doUpdateBranch = (syncLocal: boolean) =>"));
+  const press = code(bodyOf(SRC, "const doUpdateBranch = (syncLocal: boolean, from?:"));
 
   test("Update branch does not go through the panel-wide act()", () => {
     // act() sets the one `busy` every button of every pull request reads.
@@ -97,7 +97,7 @@ describe("the panel", () => {
 
   test("the buttons of the pull request on screen read only that pull request's flight", () => {
     expect(SRC).toContain("const updatingHere = detail != null && inFlight(updating, root, detail.number)");
-    expect(SRC).toMatch(/const busy = running \|\| readOnly \|\| updatingHere;/);
+    expect(SRC).toMatch(/const busy = running \|\| updatingHere;/);
     expect(SRC).toContain('const busyWhat = updatingHere ? "Update branch" : busyWhatAct;');
   });
 });

@@ -1,43 +1,48 @@
 /*
- * "An agent asks to change a setting": the person's one click, Approve or Decline.
+ * "An agent asks to change a setting": the person's answer, Approve or Decline,
+ * each held for a second so a click or a key tap cannot answer by accident.
  *
- * Drawn in the corner every agent chip shares (AgentChangeChip.tsx), on the same
- * card (AGENT_CARD), so a request reads as one of that family. Every word on it
- * is the server's: who asked as the server knows them, the setting's label, and
- * the diff it computed from the value it validated (server/src/settingsDoor.ts).
- * Nothing the agent wrote reaches this card as a sentence; a value it asked for
- * is shown as JSON, as data. Approve applies that diff and grants nothing for
- * next time. A request nobody answers is declined when it expires, and the card
- * goes when the server says so.
+ * Drawn in the corner every agent chip shares (AgentChangeChip.tsx), as the
+ * approve card (ApproveCard.tsx). Every word that names something is the
+ * server's: who asked as the server knows them, the setting's label, and the
+ * diff it computed from the value it validated (server/src/settingsDoor.ts).
+ * Approve applies that diff and grants nothing for next time. A request nobody
+ * answers is declined when it expires, and the card goes when the server says so.
  */
 import { useState, useSyncExternalStore } from "react";
-import { settingsRequests, answerSettingsRequest } from "../lib/settingsRequests.ts";
+import { settingsRequests, settingsRefusals, answerSettingsRequest, answerAllSettingsRequests, type SettingRefusal } from "../lib/settingsRequests.ts";
 import { AGENT_BTN, AGENT_CARD } from "./AgentOffers.tsx";
 import { HIT } from "../lib/iconSize.ts";
-import type { SettingRequestView } from "../../../shared/settingClass.ts";
-
-const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+import { cleanupCardView } from "../lib/cleanupCard.ts";
+import { CleanupAskCard } from "./CleanupAskCard.tsx";
+import { ApproveCard } from "./ApproveCard.tsx";
+import { isPolarisSend, type SettingRequestView } from "../../../shared/settingClass.ts";
 
 function RequestCard({ r }: { r: SettingRequestView }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const answer = async (approve: boolean) => {
     setBusy(true);
-    setError(await answerSettingsRequest(r.id, approve));
+    setError(await answerSettingsRequest(r.id, approve, { who: r.who, title: r.diff[0] ?? r.setting }));
     setBusy(false);
   };
-  const [title, ...lines] = r.diff;
+  const ask = cleanupCardView(r, Date.now());
+  if (ask) return <CleanupAskCard corner r={r} view={ask} busy={busy} error={error} onAnswer={(a) => void answer(a)} />;
+  return <ApproveCard r={r} busy={busy} error={error} onAnswer={(a) => void answer(a)} />;
+}
+
+export function useSettingsRefusals(): readonly SettingRefusal[] {
+  return useSyncExternalStore(settingsRefusals.subscribe, settingsRefusals.list, () => []);
+}
+
+/** What the server said when it refused an answer whose card is already gone. Stays until dismissed. */
+function RefusalCard({ x }: { x: SettingRefusal }) {
   return (
-    <div className="rounded-xl text-left" data-settings-request={r.setting} style={{ ...AGENT_CARD, padding: "12px 14px" }} role="alertdialog" aria-label={`${r.who} asks to change ${r.label}`}>
-      <div className="text-[13.5px] font-semibold" style={{ color: "var(--text)", overflowWrap: "anywhere" }}>{r.who} asks to change a setting</div>
-      <div className="text-[12px] mt-1" style={{ color: "var(--text2)", overflowWrap: "anywhere" }}>{title}</div>
-      <div className="text-[11.5px] mt-1 font-mono overflow-auto" style={{ color: "var(--text3)", maxHeight: 120, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{lines.join("\n")}</div>
-      <div className="text-[11.5px] mt-1" style={{ color: "var(--text4)" }}>Declined by itself at {clock(r.expires)} if you do not answer.</div>
-      {error && <div className="text-[12px] mt-1" style={{ color: "var(--error-ink)" }}>{error}</div>}
-      <div className="flex gap-2 mt-2">
-        <button disabled={busy} onClick={() => void answer(true)} className="agx-btn text-[12px] px-2.5 rounded-lg font-medium" style={AGENT_BTN}>Approve</button>
-        <button disabled={busy} onClick={() => void answer(false)} className="agx-btn text-[12px] px-2.5 rounded-lg" style={{ minHeight: HIT, color: "var(--text2)" }}>Decline</button>
-      </div>
+    <div className="rounded-xl text-left" data-settings-refusal={x.id} role="alert" style={{ ...AGENT_CARD, padding: "12px 14px" }}>
+      <div className="text-[13.5px] font-semibold" style={{ color: "var(--error-ink)" }}>{x.approve ? "Not applied" : "Not declined"}</div>
+      {x.title && <div className="text-[12px] mt-1" style={{ color: "var(--text2)", overflowWrap: "anywhere" }}>{x.who ? `${x.who}: ` : ""}{x.title}</div>}
+      <div className="text-[12px] mt-1" style={{ color: "var(--text)", overflowWrap: "anywhere" }}>{x.error}</div>
+      <button onClick={() => settingsRefusals.dismiss(x.id)} className="agx-btn text-[12px] mt-2 px-2.5 rounded-lg" style={{ minHeight: HIT, color: "var(--text2)" }}>Dismiss</button>
     </div>
   );
 }
@@ -46,12 +51,36 @@ export function useSettingsRequests(): readonly SettingRequestView[] {
   return useSyncExternalStore(settingsRequests.subscribe, settingsRequests.list, () => []);
 }
 
+/** Every waiting request in one click: twenty cards already climb off the screen, so
+ *  answering them one by one is the same errand repeated. */
+function ApproveAll({ requests: all }: { requests: readonly SettingRequestView[] }) {
+  const [busy, setBusy] = useState(false);
+  // A send types into a live session: it is approved on its own card, never here.
+  const requests = all.filter((r) => !isPolarisSend(r));
+  if (requests.length < 2) return null;
+  return (
+    <div className="rounded-xl flex items-center gap-2" style={{ ...AGENT_CARD, padding: "8px 10px" }}>
+      <span className="text-[12px] min-w-0" style={{ color: "var(--text2)" }}>
+        {requests.length} requests wait: {requests.map((r) => r.label).join(", ")}
+      </span>
+      <button
+        disabled={busy}
+        onClick={() => { setBusy(true); void answerAllSettingsRequests(requests).then(() => setBusy(false)); }}
+        className="agx-btn text-[12px] px-2.5 rounded-lg font-medium ml-auto" style={AGENT_BTN}
+      >Approve all ({requests.length})</button>
+    </div>
+  );
+}
+
 /** The oldest few, and a line for the rest: twenty cards would climb off the screen.
  *  Answering one brings the next up. */
 export function SettingsRequestsList({ requests, max }: { requests: readonly SettingRequestView[]; max: number }) {
   const more = requests.length - max;
+  const refused = useSettingsRefusals();
   return (
     <>
+      {refused.map((x) => <RefusalCard key={x.id} x={x} />)}
+      {requests.length > 1 && <ApproveAll requests={requests} />}
       {requests.slice(0, max).map((r) => <RequestCard key={r.id} r={r} />)}
       {more > 0 && <div className="text-[12px] rounded-xl" style={{ ...AGENT_CARD, padding: "8px 14px", color: "var(--text3)" }}>{more} more {more === 1 ? "request waits" : "requests wait"} behind these</div>}
     </>

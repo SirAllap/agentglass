@@ -10,7 +10,28 @@
 // Two numbers in one file so the comparison that matters can be asserted rather
 // than reasoned about — see layers.test.ts.
 
+/**
+ * The Settings page's own pinned rows, in the order they stay: the index band
+ * first, the scope bar that pins under it.
+ *
+ * Not in LAYER, and the difference is the whole point: LAYER orders portals
+ * against each other over the body, so every one of its numbers is above 9999.
+ * These two order rows inside one sheet that is already at a portal layer, and
+ * they mean nothing outside it.
+ */
+export const SHEET_ROWS = { band: 4, bar: 10 } as const;
+
 export const LAYER = {
+  /**
+   * What floats inside the Terminal's pane area: the Latest-output pill, the
+   * blocked-command note, Find, the pluck palette, the held card.
+   *
+   * Not a portal: these are positioned inside the pane box, so the number only
+   * orders them against each other and the panes. It sits below the viewer
+   * because it is never raised over another panel.
+   */
+  pane: 10005,
+
   /**
    * A file, open over whatever you were looking at.
    *
@@ -123,7 +144,35 @@ export const LAYER = {
    * from settings needs a name to reach for, and an arithmetic expression at a
    * call site is how a stack of numbers stops being a table anybody can read.
    */
+  /**
+   * The Flow editor: a whole screen over Settings, which is where its page opens it.
+   *
+   * Above Settings so it covers the page it was opened from, and below the
+   * Settings dialogs and the menus, so a confirmation raised from inside it
+   * is still seen.
+   */
+  flowEditor: 10125,
+
   settingsDialog: 10140,
+
+  /**
+   * The Terminal's own dialog (Manage tmux sessions).
+   *
+   * Above Settings' dialogs, because it can be raised from the strip while
+   * Settings is open behind; below the Git dialog and the menus, which are
+   * raised from inside it.
+   */
+  termDialog: 10150,
+
+  /**
+   * A Git dialog or picker: a question the Git panel asks, drawn by GitDialog.
+   *
+   * Above the settings dialog because the Git panel can be raised from a card
+   * or from inside Settings' neighbours and must still answer on top of
+   * whatever raised it; below the menus because a dropdown inside one of these
+   * is still a menu and must escape its box.
+   */
+  gitDialog: 10160,
 
   /**
    * A menu opened from inside any of the above.

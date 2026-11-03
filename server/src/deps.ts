@@ -14,11 +14,12 @@ import { DEPS, usedOn, PKG_INSTALL, type DepReport, type DepSpec, type DepStatus
 import { gitCapability } from "./git.ts";
 import { dockerCapability } from "./docker.ts";
 import { ghCapability } from "./prs.ts";
-import { tmuxCapability } from "./tmuxpane.ts";
+import { tmuxBinStatus, type TmuxBinStatus } from "./tmuxbin.ts";
 import { notifyCapability } from "./notifications.ts";
 import { HAS_NVIM } from "./editor.ts";
 import { taskCapability } from "./tasks.ts";
 import { PTY_BACKEND } from "./terminal.ts";
+import { probeEngines } from "./agentprobe.ts";
 
 /** The interpreter the hook forwarder is written against, resolved the way
  *  hooksetup.ts resolves it: python3 everywhere but Windows, where python3 is
@@ -44,14 +45,39 @@ const attention = (detail: string) => ({ status: "attention" as DepStatus, detai
  * describing. The subprocess-backed ones (docker, gh) cache inside their own
  * modules, so asking here costs at most what the panel would have cost.
  */
+/** Claude's row: found, but signed out, is not the same as ready. Kept pure so
+ *  the three answers are a fixture rather than a probe of this machine. */
+export function claudeEvidence(installed: boolean, signedIn: boolean | null, version: string | null) {
+  if (!installed) return missing("not on PATH");
+  return signedIn === false ? attention("installed, but not signed in") : ok(version ?? undefined);
+}
+
+/** tmux's whole row, from the binary status: `available` decides, and a
+ *  source for anything already installed means there is nothing to install. */
+export function tmuxDependencyRow(c: TmuxBinStatus): DepReport {
+  const spec = DEPS.find((d) => d.id === "tmux")!;
+  const base: DepReport = { ...spec, tmuxSource: c.source, status: "missing" };
+  if (!c.available) return { ...base, detail: c.reason, install: installLine(spec) };
+  return { ...base, status: "ok", detail: c.version ?? undefined };
+}
+
 async function probe(spec: DepSpec): Promise<{ status: DepStatus; detail?: string }> {
   switch (spec.id) {
     case "git": {
       const c = gitCapability();
       return c.available ? ok(c.version) : missing(c.reason);
     }
-    case "claude":
-      return found("claude") ? ok() : missing("not on PATH");
+    case "claude": {
+      if (!found("claude")) return missing("not on PATH");
+      // One fact with step 1 and the Connections badge: installed but signed
+      // out is `attention`, not `ok`. A probe that cannot answer keeps the old
+      // answer rather than blocking the page.
+      try {
+        const report = await probeEngines({ cachedOnly: true });
+        const engine = report.engines.find((e) => e.id === "claude");
+        return claudeEvidence(true, engine?.account.signedIn ?? null, engine?.version ?? null);
+      } catch { return ok(); }
+    }
     case "python": {
       const py = pythonBin();
       if (!py) return missing("no python3 on PATH: hooks cannot forward events, and the terminal has no pseudo-terminal");
@@ -60,10 +86,6 @@ async function probe(spec: DepSpec): Promise<{ status: DepStatus; detail?: strin
       return PTY_BACKEND === "pty"
         ? ok(py)
         : attention(`${py} is on PATH, but the terminal is running in ${PTY_BACKEND} mode`);
-    }
-    case "tmux": {
-      const c = tmuxCapability();
-      return c.available ? ok() : missing(c.reason);
     }
     case "gh": {
       const c = await ghCapability();
@@ -178,6 +200,7 @@ export async function dependencyReport(force = false): Promise<DepsResponse> {
       if (!usedOn(spec, platform)) {
         return { ...spec, status: "unsupported", detail: `not used on ${platform}` };
       }
+      if (spec.id === "tmux") return tmuxDependencyRow(tmuxBinStatus());
       const r = await probe(spec);
       return { ...spec, ...r, install: installLine(spec) };
     }),

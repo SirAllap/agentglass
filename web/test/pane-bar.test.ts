@@ -101,24 +101,20 @@ describe("the bar", () => {
        no pull request gets no pull-request button. */
     expect(draw()).not.toContain("#1249");
     const full = draw({
-      pr: { number: 1249, title: "Break times", changes: false }, onPr: () => {},
-      card: { label: "ORBIT-1049", prio: "high", inApp: true }, onCard: () => {},
+      pr: { number: 1249, title: "Break times", state: "open" }, onPr: () => {},
+      card: { id: "ORBIT-1049", priority: "high", status: "In review", inApp: true }, onCard: () => {},
     });
     expect(full).toContain("#1249");
     expect(full).toContain("ORBIT-1049");
   });
 
-  test("the card wears its priority as a colour", () => {
-    const urgent = draw({ card: { label: "ORBIT-1049", prio: "urgent", inApp: true }, onCard: () => {} });
-    expect(urgent).toContain("var(--error)");
-    /* And a card with no priority wears the ACCENT, not `--info`: that token is
-       the palette's word for a link, and a chip borrowing it says something it
-       does not mean. The strip's own chrome is one colour, the one the person
-       picked; the priority is the exception, because that is the tracker's fact
-       rather than a decoration. */
-    const none = draw({ card: { label: "ORBIT-1049", prio: null, inApp: true }, onCard: () => {} });
-    expect(none).toContain("var(--accent, var(--primary))");
-    expect(none).not.toContain("var(--info)");
+  test("the card and the pull request are drawn by ONE component", () => {
+    /* The right-hand segment is a boundary: the bar hands it the facts and it
+       draws them, so a redesign replaces one file. */
+    const bar = readFileSync(new URL("../src/components/terminal/PaneBar.tsx", import.meta.url), "utf8");
+    expect(bar).toContain("<PaneChipStatus");
+    expect(bar).not.toContain("PR_TONE");
+    expect(draw({ card: { id: "ORBIT-1049", priority: null, status: null, inApp: true }, onCard: () => {} })).toContain("ORBIT-1049");
   });
 
   test("closed, it is under the pane's edge and takes no pointer events", () => {
@@ -149,7 +145,7 @@ describe("the bar", () => {
        is that it costs nothing. It is `pointer-events: none`, and the pane slot
        reports the pointer instead (see nearFoot in TerminalPanel). */
     const src = readFileSync(new URL("../src/components/terminal/PaneBar.tsx", import.meta.url), "utf8");
-    const seam = src.slice(src.indexOf("data-pane-seam"), src.indexOf("data-pane-bar"));
+    const seam = src.slice(src.indexOf("      data-pane-seam"), src.indexOf("data-pane-arrow"));
     expect(seam).toContain("pointer-events-none");
     expect(seam).toContain("linear-gradient(90deg");
     // And the zone you have to be in is taller than the line you can see.
@@ -209,7 +205,7 @@ describe("the bar", () => {
        be a line in somebody's command history. The bar comes up with a green
        tick, so what you are told is WHICH branch was copied. */
     const src = readFileSync(new URL("../src/components/terminal/PaneBar.tsx", import.meta.url), "utf8");
-    expect(src).toContain("const on = want || linger || shout;");
+    expect(src).toContain("const on = pinned || want || linger || shout;");
     expect(src).toContain("setTimeout(() => setShout(false), 1500)");
     expect(src).toContain("color: copied || shout ?");
     const term = readFileSync(new URL("../src/components/TerminalPanel.tsx", import.meta.url), "utf8");
@@ -249,10 +245,11 @@ describe("the bar", () => {
     expect(term).toContain("try { await readOnce(); } finally { if (!stopped) setWtDetecting(false); }");
     // And it says which of the two states it is in, rather than "reading" for
     // a read that came back empty — or, worse, nothing at all.
-    expect(term).toContain('note={wtDetecting');
+    expect(term).toContain('loading={wtDetecting}');
     // And a pane in a checkout nobody scanned says WHERE it is, rather than
     // claiming there is nothing behind it.
-    expect(term).toContain("no repo scanned here");
+    const note = readFileSync(new URL("../src/lib/paneWorktree.ts", import.meta.url), "utf8");
+    expect(note).toContain("no repo scanned here");
   });
 
   test("the bar cannot widen the document, and nothing has to be clipped", () => {

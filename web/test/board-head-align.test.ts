@@ -18,8 +18,8 @@ const src = await Bun.file(new URL("../src/components/TasksPanel.tsx", import.me
 
 describe("the rail header and the table header", () => {
   it("both take their height from the same constant", () => {
-    // Two uses, not one. One is the miss that got shipped.
-    expect(src.match(/(?<!min)[Hh]eight: HEAD_H/g)?.length).toBe(2);
+    // Two uses, not one. One is the miss that got shipped. Jira's rail alone is taller (JIRA_RAIL_HEAD_H): its list is a `Main` that draws no table header to line up with.
+    expect(src.match(/(?<!min)[Hh]eight: (?:isJira \? JIRA_RAIL_HEAD_H : )?HEAD_H/g)?.length).toBe(2);
   });
 
   it("puts the card's identity chips in that same band", () => {
@@ -45,7 +45,7 @@ describe("the rail header and the table header", () => {
     /* `py-1` plus a fixed height is a box that is one of the two depending on
        box-sizing, and it is the shape the table header had while it was
        drifting. */
-    const head = src.slice(src.indexOf('${EYEBROW} sticky top-0'), src.indexOf("agx-stick-head"));
+    const head = src.slice(src.indexOf('text-[11.5px] font-semibold sticky top-0'), src.indexOf("agx-stick-head"));
     expect(head).not.toContain("py-1");
     expect(head).toContain('alignItems: "center"');
   });
@@ -53,7 +53,7 @@ describe("the rail header and the table header", () => {
   it("stops the table header carrying a rule the rail does not", () => {
     // A top border on one of two side-by-side headers is a line that starts
     // halfway across the panel.
-    const head = src.slice(src.indexOf('${EYEBROW} sticky top-0'), src.indexOf("agx-stick-head"));
+    const head = src.slice(src.indexOf('text-[11.5px] font-semibold sticky top-0'), src.indexOf("agx-stick-head"));
     expect(head).not.toContain("borderTop");
     expect(head).toContain("borderBottom");
   });

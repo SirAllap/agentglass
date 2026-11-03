@@ -4,7 +4,7 @@ import { Portal } from "../Portal.tsx";
 import { Select } from "../Select.tsx";
 import { CardRef, PersonLine, StatusMove } from "../StepCard.tsx";
 import { Face } from "../AssignPicker.tsx";
-import { EDGE, LINE } from "../workspace/Chrome.tsx";
+import { Button, CTRL_H, EDGE, LINE, Textarea } from "../workspace/Chrome.tsx";
 import { useOwnedQuestion } from "../../lib/layerOwner.ts";
 import { useFocusTrap } from "../../lib/focusTrap.ts";
 import { CircleIcon, CommentIcon, CrossIcon, DoneIcon, LinkIcon, MinusIcon, RefreshIcon, SwapIcon, UserIcon, WarningIcon } from "../../lib/glyphIcons.tsx";
@@ -250,8 +250,8 @@ export function StepDialog({ spec, onDone }: { spec: StepDialogSpec; onDone: (r:
                 </>}
                 {spec.asks.comment && <>
                   <div style={{ ...FIELD_KEY, alignSelf: "start", paddingTop: 6 }}>Comment</div>
-                  <textarea value={comment} rows={3} disabled={phase !== "idle"} className="w-full px-2 py-1 rounded-md text-[12px]"
-                    style={{ background: "var(--bg)", color: "var(--text)", boxShadow: "inset 0 0 0 1px var(--surface-line)" }} onChange={(e) => setComment(e.target.value)} />
+                  <Textarea value={comment} rows={3} disabled={phase !== "idle"} className="w-full !min-h-0"
+                    onChange={(e) => setComment(e.target.value)} />
                 </>}
               </div>
             )}
@@ -272,13 +272,14 @@ export function StepDialog({ spec, onDone }: { spec: StepDialogSpec; onDone: (r:
             </div>
             <div className="flex items-center justify-end gap-2">
               {!finished && (
-                <button onClick={close} disabled={phase === "running"} className="text-[11px] px-2.5 py-1 rounded disabled:opacity-40 shrink-0" style={{ color: "var(--text2)", border: EDGE }}>Cancel</button>
+                <Button onClick={close} disabled={phase === "running"} className="shrink-0">Cancel</Button>
               )}
-              <button ref={confirm} onClick={finished ? close : () => { void go(); }} disabled={!finished && (phase === "running" || !spec.writes || !label)}
-                className="text-[11px] px-2.5 py-1 rounded font-medium disabled:opacity-40 min-w-0 text-left leading-snug"
-                style={{ color: "var(--on-primary)", background: "var(--primary)" }} title={finished ? undefined : label ?? undefined}>
+              <Button tone="primary" buttonRef={confirm} onClick={finished ? close : () => { void go(); }} disabled={!finished && (phase === "running" || !spec.writes || !label)}
+                className="min-w-0"
+                /* The label is the step's own sentence and may be long: it wraps, as it always did, instead of being cut at one line. */
+                style={{ height: "auto", minHeight: CTRL_H.regular, paddingBlock: 4, whiteSpace: "normal", textAlign: "left", lineHeight: 1.3 }} title={finished ? undefined : label ?? undefined}>
                 {finished ? "Close" : phase === "running" ? "Running…" : label ?? "Nothing to change"}
-              </button>
+              </Button>
             </div>
           </div>
         </motion.div>

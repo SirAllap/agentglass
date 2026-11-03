@@ -1,6 +1,7 @@
 /*
- * The Agents page's own rows: the gate's two choices and the reviewer among the
- * worker roles. The page reads the two server settings from the settings door.
+ * The Agents page's own rows: the gate's two choices. The page reads the two
+ * server settings from the settings door; the worker roles live in
+ * Orchestration, and this page only points there.
  */
 import { describe, expect, test } from "bun:test";
 import React from "react";
@@ -30,24 +31,43 @@ describe("what the door's list says", () => {
 });
 
 describe("the gate card", () => {
-  const html = (over?: Partial<HookSetupStatus>) => renderToStaticMarkup(React.createElement(GateCard, { st: st(over), busy: false, onGate() {}, open: false }));
+  const html = (over?: Partial<HookSetupStatus>, busy = false) => renderToStaticMarkup(React.createElement(GateCard, { st: st(over), busy, onGate() {}, open: false, onShow() {}, showTitle: "The Agents view opens here." }));
   test("three rows with one line of help each, and the long words behind Details", () => {
     const h = html();
-    for (const w of ["Hold what leaves this machine", "Who answers", "If nobody answers", "Held actions show up in the Lantern first.", "After the wait, the action is dropped, never sent.", "Drop it", "Ask again"]) expect(h).toContain(w);
+    for (const w of ["Ask me before anything leaves this machine", "Who answers", "If nobody answers", "Waiting actions show up in the Agents view first.", "After the wait, the action is dropped, never sent.", "Drop it", "Ask again"]) expect(h).toContain(w);
     expect(h.match(/Details/g)!.length).toBeGreaterThanOrEqual(3);
   });
-  test("off asks for a decision; on offers to turn it off; a build without a gate says so", () => {
-    expect(html()).toContain("Turn the gate on");
+  test("off asks for a decision; on reports it; a build without a gate says so", () => {
     expect(html()).toContain("Off · needs a decision");
-    expect(html({ gate: true })).toContain("Turn the gate off");
+    expect(html({ gate: true })).toContain(">On</");
     expect(html({ gateBundled: false })).toContain("Not in this build");
+  });
+  test("the whole row is one switch, and it refuses while it is busy or absent", () => {
+    const off = html();
+    expect(off).toContain('role="switch"');
+    expect(off).toContain('aria-checked="false"');
+    expect(html({ gate: true })).toContain('aria-checked="true"');
+    expect(html({ gate: true }, true)).toContain('disabled=""');
+    expect(html({ gateBundled: false })).not.toContain('role="switch"');
+  });
+  test("the strip says what waits and where, whichever way the gate is set", () => {
+    for (const h of [html(), html({ gate: true })]) {
+      expect(h).toContain("agx-gate-strip");
+      expect(h).toContain("Waiting actions live in the Agents view.");
+      for (const w of ["a push", "a pull request", "a review", "a comment", "a merge", "a message"]) expect(h).toContain(w);
+    }
+    expect(html()).toContain("Off: nothing is stopped.");
+    expect(html({ gate: true })).toContain("On: an outward action waits for you.");
   });
 });
 
-const cards = strip(await Bun.file(new URL("../src/components/agents/AgentsCards.tsx", import.meta.url)).text());
-describe("the worker roles", () => {
-  test("the roles are drawn in the picture's order, so the reviewer has its row", () => {
-    expect(cards).toContain("JOB_ORDER.map");
-    expect(cards).toContain('reviewer: "Reads it adversarially"');
+describe("the worker roles have one home", () => {
+  test("neither the Agents card file nor the modal draws a roles card", async () => {
+    const cards = strip(await Bun.file(new URL("../src/components/agents/AgentsCards.tsx", import.meta.url)).text());
+    const modal = strip(await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url)).text());
+    for (const src of [cards, modal]) {
+      expect(src).not.toContain("WorkerRolesCard");
+      expect(src).not.toContain('title="Worker roles"');
+    }
   });
 });

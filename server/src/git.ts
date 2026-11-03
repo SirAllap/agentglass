@@ -358,6 +358,13 @@ export async function repoRootOfAsync(anchor: string): Promise<string | null> {
  * still exist; `--git-common-dir` then folds any nested subdirectory
  * (`repo/apps/client/src`) up to the repo that owns it.
  */
+/* A polling route asks this per card (the settings tray resolves each card's
+   root), and the answer is a synchronous spawn. One answer per directory is
+   enough: a checkout does not move while the app runs. Failures are not kept —
+   a repo cloned into that directory later must be found. */
+const PROJECT_ROOT = new Map<string, string>();
+const PROJECT_ROOT_ENTRIES = 32;
+
 export function projectRootOf(anchor: string): string | null {
   const abs = safeAbs(anchor);
   if (!abs) return null;
@@ -365,11 +372,17 @@ export function projectRootOf(anchor: string): string | null {
   const base = wt === -1 ? abs : abs.slice(0, wt);
   let dir = base;
   try { if (!statSync(base).isDirectory()) dir = dirname(base); } catch { dir = dirname(base); }
+  const known = PROJECT_ROOT.get(dir);
+  if (known) return known;
   const r = git(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
   if (r.code === 0) {
     const common = r.stdout.trim();
-    if (common.endsWith("/.git")) return dirname(common);
-    if (common) return common;
+    const root = common.endsWith("/.git") ? dirname(common) : common;
+    if (root) {
+      if (PROJECT_ROOT.size >= PROJECT_ROOT_ENTRIES) PROJECT_ROOT.delete(PROJECT_ROOT.keys().next().value!);
+      PROJECT_ROOT.set(dir, root);
+      return root;
+    }
   }
   // Not a repo (or gone): the worktree strip is still a better answer than the
   // raw path, but a plain non-repo directory has no project to roll up to.
@@ -560,7 +573,7 @@ export function commit(root: string, files: string[], title: string, body: strin
  * Amend the last commit with the selected files, keeping the same shape as
  * `commit()` above: stage exactly the picked files, then rewrite HEAD with a
  * pathspec so nothing else leaks in. Refuses when the repo is mid-operation —
- * rewriting a commit under an in-flight sequencer is how the two collide.
+ * rewriting a commit under a sequencer that is running is how the two collide.
  */
 export function amend(root: string, files: string[], title: string, body: string): CommitResult {
   if (!COMMIT_ENABLED) return { ok: false, error: "commit is disabled (AGENTGLASS_COMMIT_DISABLED=1)" };

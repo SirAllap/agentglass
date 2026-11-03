@@ -200,8 +200,8 @@ describe("the board's source", async () => {
   });
 
   it("the header reads the same summary and passes the head it is on", () => {
-    // The two header mounts of PluginPrActions; the run header's PublishReview takes the head too.
-    expect(panel.match(/<PluginPrActions[^>]*head=\{\{ sha: d\.headSha, at: d\.readAt \}\}/g)).toHaveLength(2);
+    // The one header mount of PluginPrActions (the Overview's duplicate row is gone); the run header's PublishReview takes the head too.
+    expect(panel.match(/<PluginPrActions[^>]*head=\{\{ sha: d\.headSha, at: d\.readAt \}\}/g)).toHaveLength(1);
     expect(noComments(actions)).toContain("notReadyChip(summariesOf(repo).get(number))");
   });
 

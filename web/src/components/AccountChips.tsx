@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 import type { ProviderUsage } from "../../../shared/types.ts";
 import { accountLists, colourOf, MANAGER_NAME, peakOf, pressAccount, readingFor, refreshAccounts, subscribeAccounts } from "../lib/accountStore.ts";
-import { decideKey, keyHints, proposalLine, stepIndex, tabTarget, type KeyState } from "../lib/accountKeys.ts";
+import { decideKey, keyHints, nextProvider, proposalLine, stepIndex, tabTarget, type KeyState } from "../lib/accountKeys.ts";
 import { accountStageOf, clearStage, peekStage, subscribeStage } from "../lib/stageIntent.ts";
 import { providerUsage, usageOf } from "../lib/usageStore.ts";
 import { openSettings } from "../lib/openSettings.ts";
@@ -23,12 +23,23 @@ type Note = { text: string; bad: boolean };
  * State and keys of the chips. PlanPanel owns the layout and asks this for the
  * row to draw bars from, plus the props that make its root take the keyboard.
  * `u` is the row the strip chose; ↑↓ may move to another provider that has
- * accounts and a reading of its own.
+ * accounts and a reading of its own — or, when the sheet supplies `axis`, to
+ * the next tab, so provider is one axis and not two.
  */
-export function useAccountPanel(u: ProviderUsage, onClose: () => void, onEscape: () => void, focusIn: boolean) {
+export interface ProviderAxis<P extends string> {
+  /** The providers the sheet's tabs can move between, in tab order. */
+  providers: readonly P[];
+  /**
+   * Move the sheet's tab. The same call a click on that tab makes, except when
+   * `focus` is false: then it is the sheet following a proposal, not a key the
+   * person pressed, and the keyboard must stay where it was.
+   */
+  onPick: (provider: P, focus?: boolean) => void;
+}
+
+export function useAccountPanel(u: ProviderUsage, onClose: () => void, onEscape: () => void, focusIn: boolean, axis: ProviderAxis<ProviderUsage["provider"]>, inTabs: boolean) {
   const lists = useSyncExternalStore(subscribeAccounts, accountLists, accountLists);
   const proposal = useSyncExternalStore(subscribeStage, () => accountStageOf(peekStage()), () => null);
-  const [provider, setProvider] = useState<ProviderUsage["provider"]>(u.provider);
   const [candId, setCandId] = useState<string | null>(null);
   const [note, setNote] = useState<Note | null>(null);
   const [busy, setBusy] = useState(false);
@@ -44,6 +55,10 @@ export function useAccountPanel(u: ProviderUsage, onClose: () => void, onEscape:
   // Not when an agent's proposal opened it: the person may be typing somewhere
   // else, and their next key must go where they were typing.
   useEffect(() => { if (focusIn) root.current?.focus({ preventScroll: true }); void refreshAccounts(); }, []);
+
+  // The sheet was handed another row (its tab changed): nothing about the
+  // previous provider's candidate or switch note belongs to this one.
+  useEffect(() => { setCandId(null); setNote(null); }, [u.provider]);
 
   // Tab stays inside while the person is in the popover. On the document, not
   // the root: a press disables the button that had focus, focus drops to the
@@ -65,9 +80,10 @@ export function useAccountPanel(u: ProviderUsage, onClose: () => void, onEscape:
   }, []);
   const keepFocusIn = () => { if (root.current && !root.current.contains(document.activeElement)) root.current.focus({ preventScroll: true }); };
 
-  const usable = lists.filter((l) => l.accounts.length > 0 && (l.provider === u.provider || usageOf(l.provider)));
-  const shown = usable.some((l) => l.provider === provider) ? provider : u.provider;
-  const list = usable.find((l) => l.provider === shown) ?? null;
+  // The sheet's tab is the only provider the chips may belong to: a second
+  // provider axis is what put a Codex headline under a selected Claude tab.
+  const shown = u.provider;
+  const list = lists.find((l) => l.provider === shown && l.accounts.length > 0) ?? null;
   const accounts = list?.accounts ?? [];
   const activeAt = accounts.findIndex((a) => a.active);
   const found = accounts.findIndex((a) => a.id === candId);
@@ -75,10 +91,15 @@ export function useAccountPanel(u: ProviderUsage, onClose: () => void, onEscape:
   const cand = accounts[at] ?? null;
   const managed = !!list?.managedBy;
 
-  // An agent's proposal shows the provider it names, and selects no chip: a key
-  // pressed next must never mean the agent's pick.
+  // A proposal that arrives while the sheet is open moves the tab to the
+  // provider it names, without taking focus: a staged open already came up on
+  // that tab, and the person's next key must not land on ours.
   const pn = proposal?.n;
-  useEffect(() => { if (proposal) setProvider(proposal.a.provider); }, [pn]);
+  useEffect(() => {
+    const named = proposal?.a.provider;
+    if (!named || named === u.provider || !axis.providers.includes(named)) return;
+    axis.onPick(named, false);
+  }, [pn]);
 
   const offerList = proposal ? lists.find((l) => l.provider === proposal.a.provider) : undefined;
   const offered = proposal ? offerList?.accounts.find((a) => a.id === proposal.a.id) : undefined;
@@ -87,9 +108,9 @@ export function useAccountPanel(u: ProviderUsage, onClose: () => void, onEscape:
     : null;
 
   const row = cand ? readingFor(providerUsage(), shown, cand) : null;
-  const header = shown === u.provider ? u : usageOf(shown) ?? u;
+  const header = u;
 
-  const ks: KeyState = { providers: usable.length, accounts: accounts.length, candidateActive: !!cand?.active, managed, proposal: !!offer, busy };
+  const ks: KeyState = { providers: axis.providers.length, accounts: accounts.length, candidateActive: !!cand?.active, managed, proposal: !!offer, busy, inTabs };
 
   const doSwitch = async (prov: string, id: string, label: string) => {
     setBusy(true);
@@ -136,9 +157,8 @@ export function useAccountPanel(u: ProviderUsage, onClose: () => void, onEscape:
       if (id) chipEls.current.get(id)?.focus({ preventScroll: true });
     }
     else if (d.do === "provider") {
-      const i = usable.findIndex((l) => l.provider === shown);
-      setProvider(usable[stepIndex(i, d.step, usable.length)]!.provider);
       setCandId(null);
+      axis.onPick(nextProvider(axis.providers, u.provider, d.step));
     } else act(d.do);
   };
 

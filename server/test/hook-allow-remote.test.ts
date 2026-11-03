@@ -126,7 +126,8 @@ describe("what the hooks actually connect to", () => {
     // is what a fresh setup gets, and it should not need the net.
     for (const name of HOOKS) {
       const src = readFileSync(new URL("../../hooks/" + name, import.meta.url), "utf8");
-      expect(src, name).toContain("http://127.0.0.1:4000");
+      // Written as the host alone now: the port comes from `_default_server` / `localPort`.
+      expect(src, name).toMatch(/http:\/\/127\.0\.0\.1:|_default_server\("127\.0\.0\.1"\)/);
       expect(src, name).not.toContain('"http://localhost:4000"');
     }
   });

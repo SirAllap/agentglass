@@ -103,6 +103,8 @@ describe("the app window as the lane manager", () => {
     expect(laneSlug("l1a2b3c4d", "private", undefined, profiles)).toEqual({ slug: "l1a2b3c4d" });
     expect(laneSlug("l1a2b3c4d", "shared", undefined, profiles)).toEqual({ slug: "" });
     expect(laneSlug("l1a2b3c4d", "named", "orbit-qa", profiles)).toEqual({ slug: "orbit1" });
+    // Case is not a second container: the same fold `mintAgentProfile` uses.
+    expect(laneSlug("l1a2b3c4d", "named", "Orbit-QA", profiles)).toEqual({ slug: "orbit1" });
     expect("error" in laneSlug("l1a2b3c4d", "named", "nobody", profiles)).toBe(true);
     // Never quietly the person's jar for something it did not recognise.
     expect("error" in laneSlug("l1a2b3c4d", "named", undefined, profiles)).toBe(true);

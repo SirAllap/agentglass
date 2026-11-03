@@ -93,8 +93,14 @@ describe("what the README tells people about reaching this from elsewhere", () =
     // answers ::1 first makes every event pay a refused connect. A README that
     // still said localhost would be documenting the slow path as the default.
     expect(section).toContain("http://127.0.0.1:4000");
-    expect(repo("hooks/send_event.py")).toContain('"http://127.0.0.1:4000"');
-    expect(repo("hooks/gate_event.py")).toContain('"http://127.0.0.1:4000"');
+    // The hooks no longer spell the URL: the default is `_default_server("127.0.0.1")`, which reads the port the
+    // server wrote at bind and falls back to 4000, so the README's address is the fallback they end on.
+    for (const hook of ["hooks/send_event.py", "hooks/gate_event.py"]) {
+      const src = repo(hook);
+      expect(src).toContain('_default_server("127.0.0.1")');
+      expect(src).toContain('port = "4000"');
+      expect(src).toContain("(default http://127.0.0.1:4000)");
+    }
   });
 
   test("the reverse-proxy variable it names is the one the guard reads", () => {

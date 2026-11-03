@@ -30,8 +30,9 @@
  * agentops.ts learned about permission flags arriving as parameters.
  */
 import { statSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, resolve } from "node:path";
 import * as AgentOps from "./agentops.ts";
+import { tmux } from "./tmuxpane.ts";
 import type * as AgentBoard from "./agentboard.ts";
 import { mintSeatToken, revokeSeatTokens } from "./auth.ts";
 import { claudeModels } from "./claudemodels.ts";
@@ -56,6 +57,9 @@ import { inboxReadout, oldReportCount, recentReports, unreadCount, type SeatRepo
 import { needReadout } from "./seatneed.ts";
 import { BUCKETS, pulses } from "./seatpulse.ts";
 import { lastWoken } from "./seatwoken.ts";
+import { readFlow, renderFlowForOrchestrator } from "./flow.ts";
+import { APP, getSetting } from "./preflightStore.ts";
+import { DEFAULT_REVIEW_ROUNDS, DEFAULT_REVIEW_WHO, isReviewWho, reviewBrief, secondFromStored, type ReviewWho, type SecondReviewer } from "../../shared/reviewSettings.ts";
 
 /** What a seat is allowed to do. Ordered: each level is the one before it
  *  plus one verb, so a check is a comparison and not a set membership. */
@@ -211,7 +215,12 @@ export function isSeatName(name: string): boolean {
  */
 export function seatSpeaksFor(own: string, asked: unknown): { root: string } | { error: string } {
   const root = typeof asked === "string" ? asked.trim() : "";
-  if (!root || root === own || root.startsWith(`${own}/`) || projectRootOf(root) === own) return { root: own };
+  if (!root) return { root: own };
+  /* Lexically first: `own/../other` is spelled under `own` and is not, so the
+     path is compared after `resolve`, never as it arrived. */
+  const mine = own.startsWith("/") ? resolve(own) : own;
+  const plain = root.startsWith("/") && !root.includes("\0") ? resolve(root) : root;
+  if (plain === mine || plain.startsWith(`${mine}/`) || projectRootOf(plain) === mine) return { root: own };
   return { error: `a seat speaks for its own project (${basename(own)}), not for another one` };
 }
 
@@ -283,18 +292,55 @@ export async function seated(root: string): Promise<AgentOps.NamedAgent | null> 
   if (a && a.endedAt === null) return a;
 
   const row = seatRow(root);
-  if (!row?.adoptedPane) return null;
-  const alive = await AgentOps.paneAlive(row.adoptedPane);
-  if (!alive) {
-    /* Its pane is gone. The row keeps its settings and its lines; what it
-       stops claiming is that somebody is sitting there. */
-    unadopt.run(root);
+  let pane = row?.adoptedPane && await AgentOps.paneAlive(row.adoptedPane) ? row.adoptedPane : "";
+  if (!pane && row && row.startedAt > 0 && row.endedAt === null) {
+    /*
+     * A RELAUNCHED ORCHESTRATOR IS THE SAME CHAIR.
+     *
+     * The recorded pane is gone, but nobody stood the seat down: an
+     * orchestrator that is relayed (a fresh session in a new window named
+     * `Orchestrator-<project>`) never calls adopt again, and reading only the
+     * recorded id showed "Stood down" over a live one, with a Seat button that
+     * would have started a second. The live window carrying the seat name
+     * re-links the row; `closeSeat` sets `endedAt`, so a deliberate stand-down
+     * is never undone by this.
+     */
+    pane = (await orchestratorPane(root)) ?? "";
+    if (pane) adoptRow.run(root, row.name || seatName(root), row.powers, row.adoptedSession, pane, row.startedAt);
+  }
+  if (!pane) {
+    if (row?.adoptedPane) {
+      /* Its pane is gone. The row keeps its settings and its lines; what it
+         stops claiming is that somebody is sitting there. */
+      unadopt.run(root);
+      revokeSeatTokens(root);
+    }
     return null;
   }
   return {
-    name: row.name || "orchestrator", kind: occupantKind(row), cwd: root,
-    paneId: row.adoptedPane, windowId: "", startedAt: row.startedAt, endedAt: null,
+    name: row?.name || "orchestrator", kind: occupantKind(row), cwd: root,
+    paneId: pane, windowId: "", startedAt: row?.startedAt ?? 0, endedAt: null,
   };
+}
+
+/**
+ * The one live pane in a window named like a seat (`Orchestrator-…`, any case)
+ * whose directory belongs to this project, or null. Two candidates are
+ * nobody's to pick: a coin toss would adopt the wrong session.
+ */
+async function orchestratorPane(root: string): Promise<string | null> {
+  const r = await tmux(["list-panes", "-a", "-F", "#{pane_id}\t#{window_name}\t#{pane_current_path}"]).catch(() => null);
+  if (!r?.ok) return null;
+  /* A SET of ids, not a list of rows: a session GROUP (a phone's mirror, a
+     panel's view) shares every window, so `list-panes -a` reports one pane
+     twice and the chair read as empty while a bench tab was open. */
+  const hits = new Set<string>();
+  for (const line of r.stdout.split("\n")) {
+    const [id = "", window = "", cwd = ""] = line.split("\t");
+    if (!isSeatName(window.toLowerCase()) || !inScope(cwd, root)) continue;
+    if (await AgentOps.paneAlive(id)) hits.add(id);
+  }
+  return hits.size === 1 ? [...hits][0]! : null;
 }
 
 /** What sits in the chair now. A session this app adopted is a Claude Code
@@ -318,7 +364,7 @@ const occupantKind = (row: Seat | null): string =>
  * rather than handed them.
  */
 export async function adoptSeat(p: { root: string; session: string; pane: string; powers?: Power; now?: number }):
-Promise<{ ok: true; seat: Seat; already: boolean } | { ok: false; error: string }> {
+Promise<{ ok: true; seat: Seat; already: boolean; token: string } | { ok: false; error: string }> {
   const gate = seatable(p.root);
   if ("error" in gate) return { ok: false, error: gate.error };
   const pane = String(p.pane ?? "").trim();
@@ -338,7 +384,14 @@ Promise<{ ok: true; seat: Seat; already: boolean } | { ok: false; error: string 
     pane,
     p.now ?? Date.now(),
   );
-  return { ok: true, seat: seatRow(gate.root)!, already: there !== null };
+  /* A seat this app starts is handed its credential in its environment; an
+     adopted one was already running, so it is handed the same kind in the
+     answer. Without it the session's calls arrive on the machine token and
+     the Go door cannot tell it from any other agent. The powers on the token
+     are the row's, so `assign` is still what Go and Launch need. */
+  revokeSeatTokens(gate.root);
+  const token = mintSeatToken(gate.root, seatRow(gate.root)!.powers);
+  return { ok: true, seat: seatRow(gate.root)!, already: there !== null, token };
 }
 
 /**
@@ -351,7 +404,28 @@ Promise<{ ok: true; seat: Seat; already: boolean } | { ok: false; error: string 
  * the field and will wake it when something changes), and it must report
  * through one line rather than leave a person to read a pane.
  */
+/** The project's review answer, as the seat is told it: the default when nothing was chosen. */
+export function reviewFor(root: string): { who: ReviewWho; rounds: number; second: SecondReviewer | null } {
+  const at = root || APP;
+  const who = getSetting(at, "orchestration.review.who");
+  const rounds = getSetting(at, "orchestration.review.rounds");
+  return {
+    who: isReviewWho(who) ? who : DEFAULT_REVIEW_WHO,
+    rounds: typeof rounds === "number" ? rounds : DEFAULT_REVIEW_ROUNDS,
+    second: secondFromStored(getSetting(at, "orchestration.review.second")),
+  };
+}
+
+/** `never` forbids opening the change, so there the report is what says it is green.
+ *  The whole evidence rule lives here, not in the doctrine, because it changes with the answer. */
+function doneEvidence(who: ReviewWho): string {
+  if (who === "never")
+    return "- \"Done\" is what a worker's report proves: the branch and head it names, the test log it quotes. You never open a diff, run a test or go and check the branch yourself, so an agent's own word for it is not evidence, and prose is not a fact. What the report does not prove, you report as unverified.";
+  return "- \"Done\" is evidence YOU observed: a commit that exists, a diff, a test run you read, the artefact at its path. Never an agent's own word for it, and never prose where a fact belongs. What you did not verify, you report as unverified. Check the things the owner will look at, not everything: if an agent says \"pushed\", look at the head; if it says \"approved\", look at WHO approved; if it says a picture proves something, open the picture.";
+}
+
 export function houseBlock(powers: Power, wakeHours: number, root = ""): string {
+  const review = reviewFor(root);
   const may = powers === "speak"
     ? "You may not start, stop or prompt any agent. If one is stuck, say so — do not push it."
     : powers === "nudge"
@@ -379,12 +453,13 @@ export function houseBlock(powers: Power, wakeHours: number, root = ""): string 
      * a worker killed mid-task reports as completed, with no deliverable.
      */
     "- BEFORE you propose, queue or decide anything, ask what this person already decided: `agentglass-agent recall \"<the question, in your words>\"`. It answers out of thousands of recorded decisions, and it says when it has nothing — then decide on the facts and say you had no precedent.",
-    "- \"Done\" is evidence YOU observed: a commit that exists, a diff, a test run you read. Never an agent's own word for it, and never prose where a fact belongs. What you did not verify, you report as unverified.",
+    doneEvidence(review.who),
     "- Silence is not an answer. An agent that has not replied is neither finished nor failed — it is unknown. Never conclude, retry, or hand its work to somebody else on a timeout alone: say it is unknown, and if it stays unknown say it needs a person.",
     "- Report each round by running `agentglass-agent say` from this checkout with YOUR sentence as its one argument — never the words below, which are only the shape:",
     "    agentglass-agent say \"2 stopped on you: db-fix wants permission (12m), tab-strip quiet 1h. 3 moving.\"",
     "  That sentence is what a person reads in the Orchestrator view; nothing else you print reaches them.",
     `- ${may}`,
+    `- ${reviewBrief(review.who, review.rounds, review.second)}`,
     "- You never merge, never push, and never open a pull request. When something is ready you say it is ready and who it is ready for.",
     `- DO NOT build a loop or a schedule of your own. This app re-reads the field on its own clock and will prompt you when something changes, and at least every ${wakeHours} h if nothing does. A round you run for yourself is a round nobody asked for.`,
     "- End your round after you have reported. Waiting costs a turn; being woken costs nothing.",
@@ -420,6 +495,10 @@ export async function seatPrompt(root: string, powers: Power, wakeHours: number)
     "",
     text.trim(),
     houseBlock(powers, wakeHours, root),
+    /* The project's flow, so the seat is told the order before it reads the
+       field: the drawing and the brief come from the same record. */
+    renderFlowForOrchestrator(readFlow(root).flow),
+    "",
     `## The agents working in ${root} right now`,
     "",
     fieldReadout(rows),
@@ -479,6 +558,11 @@ export async function openSeat(p: {
     return { ok: false, error: `${there.name} (${there.kind}) already sits in this chair; stand it down or change the chair before seating ${p.kind}` };
   }
   if (there) return { ok: true, seat: row ?? toSeat({ root, name: there.name, kind: there.kind, model: "", powers: "speak", started_at: there.startedAt, ended_at: null, last_line: "", last_turn_at: 0, adopted_session: "", adopted_pane: "" }), agent: there, already: true };
+
+  /* Stood down in the app, but its session is still running: seating again
+     would put a second orchestrator on the project. */
+  const running = await orchestratorPane(root);
+  if (running) return { ok: false, error: `an orchestrator is already running for this project (pane ${running}); adopt it instead of seating another` };
 
   const powers: Power = p.powers ?? row?.powers ?? "speak";
   /* A seat reads a board and writes a sentence a few times an hour. It is not

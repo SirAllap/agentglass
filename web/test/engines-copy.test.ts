@@ -177,7 +177,7 @@ describe("the component", () => {
   });
 
   test("engines that are not installed are tiles of their own, behind the same filter", () => {
-    expect(code).toContain('{ v: "absent", label: `Not installed ${counts.absent}` }');
+    expect(code).toContain('{ id: "absent", label: `Not installed ${counts.absent}` }');
     expect(code).toContain("<AddCli />");
   });
 
@@ -194,9 +194,12 @@ describe("the component", () => {
     expect(hint).not.toMatch(/always|never|cannot/);
   });
 
-  test("the old Agents list is a link to this page, not a second list", () => {
+  test("the worker roles have one home: the Agents page points at Orchestration", () => {
     const modal = readFileSync(new URL("../src/components/SettingsModal.tsx", import.meta.url), "utf8");
-    expect(modal).toContain('<WorkerRolesCard open={open} resetTick={resetTick} onEngines={() => openSettings("engines")} />');
+    expect(modal).not.toContain("WorkerRolesCard");
+    expect(modal).toContain('label="Worker CLIs and models"');
+    expect(modal).toContain("Each worker role’s CLI and model is set for the project in Orchestration.");
+    expect(modal).toContain('openSettings("orchestration")');
     expect(modal).not.toContain("Other agents on this machine");
   });
 });

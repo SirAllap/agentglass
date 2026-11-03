@@ -1121,6 +1121,8 @@ export const scanBacklog = () => backlog;
  * and stats every file again, which is cheap next to the reads it saves.
  */
 const coldBudgetBytes = () => Math.max(1024 * 1024, Number(process.env.AGENTGLASS_SCAN_COLD_BUDGET_BYTES || 128 * 1024 * 1024));
+/** What a workspace change reads before answering; see resyncScope(). */
+const resyncBudgetBytes = () => Math.max(1024 * 1024, Number(process.env.AGENTGLASS_SCAN_RESYNC_BUDGET_BYTES || 8 * 1024 * 1024));
 const coldPauseMs = () => Math.max(0, Number(process.env.AGENTGLASS_SCAN_COLD_PAUSE_MS ?? 200));
 
 /** One sweep over every project directory under every root.
@@ -1276,18 +1278,61 @@ let sweepBusy = false;
  * are *historical backfill*, not live activity, so this sweep deliberately
  * passes no onLive: broadcasting months of old events would flood every
  * client and fire alerts for things long finished (the same reason the
- * startup backfill is silent). Waits out any in-flight sweep first.
+ * startup backfill is silent). Waits out a sweep already running first.
  */
 export async function resyncScope(): Promise<void> {
   if (!scanningEnabled()) return;
   while (sweepBusy) await new Promise((r) => setTimeout(r, 200));
   sweepBusy = true;
+  let handedOn = false;
   try {
-    await scanOnce(null);
+    // Only the newest transcripts are read before answering: the picker waits
+    // on this call with nothing to show, and reading every newly eligible
+    // transcript in one go kept it there for minutes. The rest is backfill
+    // nobody is looking at yet; it follows in chunks, newest first, holding
+    // the busy flag so no second sweep double-counts a file.
+    await scanOnce(null, true, resyncBudgetBytes());
+    if (backlog) {
+      handedOn = true;
+      void (async () => {
+        try {
+          do {
+            await new Promise((r) => setTimeout(r, coldPauseMs()));
+            await scanOnce(null, true, coldBudgetBytes());
+          } while (backlog);
+        } catch (e) {
+          console.error(`[scan] rescope backfill failed: ${e instanceof Error ? e.message : e}`);
+        } finally {
+          sweepBusy = false;
+        }
+      })();
+    }
   } catch (e) {
     console.error(`[scan] rescope sweep failed: ${e instanceof Error ? e.message : e}`);
   } finally {
-    sweepBusy = false;
+    if (!handedOn) sweepBusy = false;
+  }
+}
+
+/** How long the picker may spend waiting for a rescope before it is answered anyway. */
+export const RESYNC_ANSWER_MS = 2_000;
+
+/**
+ * `resyncScope()`, but the caller does not sit through a whole-machine sweep.
+ *
+ * A cold server holds one flag while it backfills everything on disk, and
+ * `resyncScope` waits on it before it starts: measured 40 s for the first
+ * "Open 1" of a fresh instance (32 ms for the same call straight after). The
+ * switch is already applied either way; the page that follows reads what is
+ * there and this keeps filling it.
+ */
+export async function resyncScopeBounded(ms = RESYNC_ANSWER_MS): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<false>((r) => { timer = setTimeout(() => r(false), ms); });
+  try {
+    return await Promise.race([resyncScope().then(() => true), late]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 

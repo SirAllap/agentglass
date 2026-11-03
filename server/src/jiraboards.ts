@@ -28,13 +28,15 @@
  * configuration, the filter and the search pages (plus the priority list once);
  * read again inside a minute it is nothing; forced, only the search pages.
  */
+import { parseScope, scopeJql, scopeName } from "../../shared/jiraScope.ts";
 import { ASSIGNED_VIEW_ID } from "../../shared/providers.ts";
+import type { JiraAddChoice } from "../../shared/jiraSpaces.ts";
 import type {
   JiraColumn, JiraProjectChoice, ProviderTask, JiraViewChoice, JiraViewRead, JiraViews, ListStatus, SavedFolder, SavedView,
 } from "../../shared/providers.ts";
 import { redacted } from "./credentials.ts";
 import {
-  CATEGORY_COLOR, apiOf, jiraCall, jiraGeneration, orderByAt, memoOk, memoHas, mine, projects, searchJql, withStored,
+  CATEGORY_COLOR, apiOf, jiraCall, jiraGeneration, orderByAt, memoOk, memoHas, mine, projectKey, projects, searchJql, withStored,
   type JiraCreds, type JiraResult, type JiraTasks, type SeenStatus,
 } from "./jira.ts";
 import { activeSprint, boardEpics, quickFilterRows } from "./jiraBoardContext.ts";
@@ -66,7 +68,7 @@ const connectedSite = (): string | null => redacted("jira")?.site || null;
 // ---------------------------------------------------------------------------
 
 export type ParsedView =
-  | { ok: true; kind: "board" | "filter" | "jql"; id: string; url: string; jql?: string }
+  | { ok: true; kind: "board" | "filter" | "jql"; id: string; url: string; jql?: string; alternatives?: JiraAddChoice[] }
   | { ok: false; error: string };
 
 const NOT_A_VIEW = "That address is not a Jira board, a saved filter or a search. Paste a board's address, or one that ends in ?filter=10000";
@@ -108,13 +110,22 @@ export function parseViewUrl(text: string, site: string): ParsedView {
   if (NUM.test(q.get("filter") ?? "")) return { ok: true, kind: "filter", id: q.get("filter")!, url: kept };
   if (/^\/secure\/IssueNavigator\.jspa$/i.test(rest) && NUM.test(q.get("requestId") ?? "")) return { ok: true, kind: "filter", id: q.get("requestId")!, url: kept };
 
+  // A project's own list or board view (no board id): its jql is the search, and without one the whole project.
+  const view = /^\/jira\/(?:software|core|business)\/(?:c\/)?projects\/([^/]+)\/(?:list|board|issues)\/?$/.exec(rest);
+  if (view && !projectKey(view[1])) return { ok: false, error: NOT_A_VIEW };
+
   m = /^\/issues\/?$/.exec(rest);
-  const jql = q.get("jql")?.trim();
-  if (m && jql) {
+  const jql = q.get("jql")?.trim() || (view ? `project = ${view[1]}` : undefined);
+  if ((m || view) && jql) {
     if (jql.length > MAX_JQL) return { ok: false, error: "That search is too long to keep" };
     if (!splitOrder(jql).restriction) return { ok: false, error: "That search has no restriction, so it would read every card. Add a project or an assignee to it" };
     const canonical = `https://${site}/issues/?jql=${encodeURIComponent(jql)}`;
-    return { ok: true, kind: "jql", id: `jql:${Bun.hash(jql).toString(36)}`, url: canonical, jql };
+    const id = `jql:${Bun.hash(jql).toString(36)}`;
+    // The default first (shared/jiraSpaces.ts JiraAddChoice); the whole project is one click away.
+    const alternatives: JiraAddChoice[] | undefined = view
+      ? [{ kind: "jql", id, label: "Add as a search" }, { kind: "space", id: view[1], label: "Add the whole project" }]
+      : undefined;
+    return { ok: true, kind: "jql", id, url: canonical, jql, ...(alternatives && { alternatives }) };
   }
   return { ok: false, error: NOT_A_VIEW };
 }
@@ -458,6 +469,8 @@ async function readView(creds: JiraCreds, view: SavedView, force: boolean, quick
     const { seen: _seen, ...rows } = r.data;
     return { ok: true, data: { ...rows, columns: [], statuses: await viewStatuses(creds, r.data) } };
   }
+  const place = parseScope(view.id);
+  if (place) return readJql(creds, scopeJql(place));
   const [kind, num] = view.id.split(":");
   if (kind === "board") return readBoard(creds, num, quick);
   if (kind === "filter") return readFilter(creds, num);
@@ -501,9 +514,13 @@ export async function viewRead(id?: string, o: { force?: boolean; cached?: boole
   if (!site) return emptyRead(NOT_CONNECTED);
   const views = savedViews(site);
   const want = id || currentView(site) || ASSIGNED_VIEW_ID;
-  const view = views.find((v) => v.id === want);
+  // A place in the tree is a search that is never stored, and never becomes "the current view": the rail's own pick stays where it was.
+  const place = id ? parseScope(id) : null;
+  const view: SavedView | undefined = place
+    ? { id: want, name: scopeName(place), url: `https://${site}/issues/?jql=${encodeURIComponent(scopeJql(place))}`, addedAt: 0 }
+    : views.find((v) => v.id === want);
   if (!view) return emptyRead("That view is not saved any more");
-  if (want !== currentView(site)) setCurrent(site, want);
+  if (!place && want !== currentView(site)) setCurrent(site, want);
 
   // Quick filters narrow a board and nothing else; each distinct set is its own minute.
   const quick = want.startsWith("board:") ? [...new Set(o.quick ?? [])].sort() : [];
@@ -587,7 +604,7 @@ export async function projectChoices(creds: JiraCreds): Promise<JiraResult<{ pro
 // adding and removing
 // ---------------------------------------------------------------------------
 
-export type AddResult = { ok: true; view: SavedView } | { ok: false; error: string };
+export type AddResult = { ok: true; view: SavedView; alternatives?: JiraAddChoice[] } | { ok: false; error: string };
 
 /** Names the view with one request, then keeps it. Nothing is kept when Jira will not name it. */
 async function addResolved(creds: JiraCreds, kind: "board" | "filter" | "jql", id: string, url: string, jql?: string): Promise<AddResult> {
@@ -613,7 +630,8 @@ export function addViewByUrl(text: string): Promise<JiraResult<AddResult>> {
   return withStored(async (creds) => {
     const p = parseViewUrl(text, creds.site);
     if (!p.ok) return { ok: true, data: p };
-    return { ok: true, data: await addResolved(creds, p.kind, p.id, p.url, p.jql) };
+    const r = await addResolved(creds, p.kind, p.id, p.url, p.jql);
+    return { ok: true, data: r.ok && p.alternatives ? { ...r, alternatives: p.alternatives } : r };
   });
 }
 

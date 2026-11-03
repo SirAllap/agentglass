@@ -25,7 +25,7 @@ function driver(fx: Fixture): string {
     'if (!w || !w.startsWith(process.env.AGX_SHIM)) throw new Error("docker is not the fake: " + w);',
     'const ctx = m.defaultDiskCtx({ home: process.env.AGX_HOME, procDir: process.env.AGX_PROC ?? process.env.AGX_HOME + "/no-proc", swaps: () => process.env.AGX_SWAPS ?? "", snapshotsDir: process.env.AGX_HOME + "/no-snapshots", repos: [], ...(process.env.AGX_SOCKS ? { tmuxSockets: () => [["-S", "/fake/other.sock"]] } : {}) });',
     'const [mode, arg] = process.argv.slice(2);',
-    // sequences in ONE process, because the cache and the in-flight scan are module state
+    // sequences in ONE process, because the cache and the scan already running are module state
     'const seq = {',
     '  async "scan-then-run"() { await m.diskCleanReport(true, ctx); return m.runDiskClean(["trash"], {}, ctx); },',
     '  async "scan-dry-run-then-run"() { await m.diskCleanReport(true, ctx); await m.runDiskClean(undefined, { dryRun: true }, ctx); return m.runDiskClean(["trash"], {}, ctx); },',

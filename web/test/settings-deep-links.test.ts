@@ -7,7 +7,7 @@ const files = {
   bell: await read("TopBarNotes.tsx"),
   usage: await read("TopBar.tsx"),
   modal: await read("SettingsModal.tsx"),
-  preset: await read("diff/PresetDiff.tsx"),
+  preset: await read("diff/DiffToolbar.tsx"),
   git: await read("GitPanel.tsx"),
 };
 const code = (s: string) => s.split("\n").filter((l) => !/^\s*(\/\/|\/\*|\*|\{\/\*)/.test(l)).join("\n");
@@ -21,10 +21,10 @@ describe("panels link to their settings", () => {
   ] as const)("%s opens the %s page from a gear", (k, pane) => {
     const s = code(files[k]);
     expect(s).toContain(`openSettings("${pane}")`);
-    expect(s).toMatch(/<GearIcon size=\{ICON\.(xs|md)\} \/>/);
+    expect(s).toMatch(/<GearIcon size=\{ICON\.(xs|sm|md)\} \/>/);
   });
 
-  test("the diff gear sits in both diff toolbars, beside the theme picker", () => {
+  test("the diff gear sits in the shared diff toolbar and the Git one, beside the theme picker", () => {
     expect(code(files.preset)).toMatch(/<ThemePicker[^>]*\/>\s*<DiffSettingsLink \/>/);
     expect(code(files.git)).toMatch(/<ThemePicker[^>]*\/><DiffSettingsLink \/>/);
   });

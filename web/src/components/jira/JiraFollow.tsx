@@ -8,6 +8,7 @@
 import { Chip } from "../workspace/Chrome.tsx";
 import { EyeIcon, ThumbUpIcon } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
+import { DockIcon } from "./DockParts.tsx";
 import { canPress, followControl, type FollowControl } from "../../lib/jiraFollow.ts";
 import type { JiraFollowUi } from "./useJiraFollow.ts";
 
@@ -37,6 +38,24 @@ function One({ c, onPress }: { c: FollowControl; onPress: () => void }) {
       {body}
     </Chip>
   );
+}
+
+/** Watching, as the header's eye: icon-only, lit while the account watches. Nothing before the card is read. */
+export function JiraWatch({ ui, writes, cardKey }: { ui: JiraFollowUi; writes: boolean; cardKey: string }) {
+  const c = followControl("watch", ui.follow, { writes, out: ui.busy, denied: ui.denied.watch ?? null, key: cardKey });
+  if (!c) return null;
+  return (
+    <DockIcon tip={{ name: c.label, text: c.title }} label={c.title || c.label} on={c.on}
+      disabled={!canPress(c)} onClick={() => ui.press("watch", !c.on)}>
+      <Mark c={c} />
+    </DockIcon>
+  );
+}
+
+/** Voting, where the site has it on: the house chip with the count. */
+export function JiraVote({ ui, writes, cardKey }: { ui: JiraFollowUi; writes: boolean; cardKey: string }) {
+  const c = followControl("vote", ui.follow, { writes, out: ui.busy, denied: ui.denied.vote ?? null, key: cardKey });
+  return c ? <One c={c} onPress={() => ui.press("vote", !c.on)} /> : null;
 }
 
 /** Both controls, or nothing before the card is read; a site with voting off draws only the watch. */

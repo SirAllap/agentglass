@@ -11,14 +11,12 @@
  * modal closes on start; the conflict screen owns the rest.
  */
 import { useEffect, useState } from "react";
-import { BranchIcon, CaretIcon, IconLabel } from "../lib/glyphIcons.tsx";
-import { motion, AnimatePresence } from "motion/react";
-import { Portal } from "./Portal.tsx";
-import { CloseButton } from "./CloseButton.tsx";
+import { CaretIcon } from "../lib/glyphIcons.tsx";
+import { GitDialog, RefStrip, DialogError, DialogSkeleton } from "./GitDialog.tsx";
+import { UNREACHABLE } from "../lib/gitDialog.ts";
 import { api } from "../lib/api.ts";
-import { ICON } from "../lib/iconSize.ts";
-import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
-import { useEscapeClose } from "../lib/useDismiss.ts";
+import { Button, INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
+import { Select } from "./Select.tsx";
 
 export type RebaseStep = { action: "pick" | "squash" | "fixup" | "drop" | "reword" | "edit"; hash: string; subject: string; newMessage?: string };
 
@@ -39,21 +37,25 @@ export function RebaseModal({ root, base, branch, onClose, onDone }: {
   branch: string;
   onClose: () => void;
   /** Called after a successful run so the log can reload. */
-  onDone: () => void;
+  onDone: (message: string) => void;
 }) {
-  useEscapeClose(onClose);
   const [steps, setSteps] = useState<RebaseStep[] | null>(null);
+  /** Commits no remote has, from git — not the step count. */
+  const [unpushed, setUnpushed] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
+    setSteps(null); setErr(null);
     api.gitRebaseSteps(root, base)
       .then((r) => {
         if (!r.ok || !r.steps?.length) { setErr(r.error || "nothing to rebase"); setSteps([]); return; }
         setSteps(r.steps as RebaseStep[]);
+        setUnpushed(r.unpushed ?? null);
       })
-      .catch((e) => { setErr(String(e)); setSteps([]); });
-  }, [root, base]);
+      .catch(() => { setErr(UNREACHABLE); setSteps([]); });
+  }, [root, base, attempt]);
 
   const move = (i: number, dir: -1 | 1) => setSteps((prev) => {
     if (!prev) return prev;
@@ -80,90 +82,62 @@ export function RebaseModal({ root, base, branch, onClose, onDone }: {
     try {
       const r = await api.gitRebaseRun(root, base, plan);
       if (!r.ok) { setErr(r.error || "rebase failed"); return; }
-      onDone();
-    } catch (e) { setErr(String(e)); }
+      onDone(`Rebased ${after} commit${after === 1 ? "" : "s"} onto ${base.slice(0, 7)}`);
+    } catch { setErr(UNREACHABLE); }
     finally { setBusy(false); }
   };
 
+  const n = steps?.length ?? 0;
   return (
-    <Portal>
-      <AnimatePresence>
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-          className="fixed inset-0 agx-scrim" style={{ zIndex: 10002 }} onClick={onClose} />
-        <div className="fixed inset-0 flex items-center justify-center p-6 pointer-events-none" style={{ zIndex: 10003 }}>
-          <motion.div
-            initial={{ opacity: 0, scale: 0.96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97, y: 8 }}
-            transition={{ type: "spring", stiffness: 340, damping: 30 }}
-            className="w-[min(640px,94vw)] max-h-[min(720px,92vh)] rounded-xl flex flex-col pointer-events-auto"
-            style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
-          >
-            <div className="flex items-center gap-2.5 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-              <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>Rebase</span>
-              <span className="chip text-[10px]" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}><IconLabel icon={<BranchIcon size={ICON.xs} />}>{branch}</IconLabel></span>
-              <span className="min-w-0 truncate text-[10.5px] t-dim2 font-mono" title={base}>{base.slice(0, 7)}…</span>
-              <CloseButton onClick={onClose} className="ml-auto" />
+    <GitDialog
+      title={`Rebase ${branch}?`}
+      subtitle={n ? `Replays ${n} commit${n === 1 ? "" : "s"} above the base, in the order and with the actions you pick.` : "Reads the commits above the base."}
+      tone="warn" width={640}
+      confirmLabel={busy ? "Rebasing…" : "Start rebase"} confirmDisabled={!n || busy} onConfirm={start}
+      reason={n ? `Rewrites ${after} commit${after === 1 ? "" : "s"}${unpushed != null ? `, ${unpushed} not on any remote` : ""}. ORIG_HEAD holds the old tip until the next history move.` : undefined}
+      locked={busy} onClose={onClose}
+    >
+      <RefStrip head={branch} base={base.slice(0, 7)} tone="warn" />
+      {steps === null && <DialogSkeleton rows={4} label="Reading commits…" />}
+      {err && !n && <DialogError message={err} onRetry={() => setAttempt((a) => a + 1)} />}
+      {n > 0 && (
+        <div className="space-y-1">
+          {steps!.map((s, i) => (
+            <div key={s.hash} className="flex items-center gap-2 px-2 py-1.5 rounded-lg"
+              style={{ background: s.action === "drop" ? "color-mix(in srgb, var(--error) 7%, transparent)" : "var(--surface-inset)", border: EDGE }}>
+              <span className="shrink-0 tabular-nums text-[9.5px] t-dim2 w-4 text-right">{i + 1}</span>
+              {/* Reorder. Up/down buttons rather than drag: the codebase
+                  has no drag util, and for a list that is at most a few
+                  dozen rows, two 14px buttons are faster and forgiving. */}
+              <span className="shrink-0 flex gap-0.5">
+                <Button tone="quiet" size="compact" square label="Move up" disabled={i === 0} onClick={() => move(i, -1)}><CaretIcon className="rotate-180" /></Button>
+                <Button tone="quiet" size="compact" square label="Move down" disabled={i === n - 1} onClick={() => move(i, 1)}><CaretIcon /></Button>
+              </span>
+              <Select value={s.action} onChange={(v) => setAction(i, v as RebaseStep["action"])} title={ACTION_HINT[s.action]}
+                style={{ color: s.action === "drop" ? "var(--error)" : s.action === "reword" ? "var(--primary-hover)" : "var(--text2)" }}
+                options={ACTIONS.map((a) => ({ value: a, label: a }))} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[11.5px]" title={s.subject} style={{ color: s.action === "drop" ? "var(--text3)" : "var(--text)", textDecoration: s.action === "drop" ? "line-through" : "none" }}>{s.subject}</span>
+                {s.action === "reword" && (
+                  <input value={s.newMessage ?? ""} onChange={(e) => setMsg(i, e.target.value)} placeholder={s.subject} autoFocus={i === steps!.findIndex((x) => x.action === "reword")}
+                    className={`w-full mt-0.5 ${INPUT}`}
+                    style={INPUT_STYLE} />
+                )}
+              </span>
+              <span className="shrink-0 tabular-nums text-[9.5px] t-dim2 font-mono">{s.hash.slice(0, 7)}</span>
             </div>
-
-            <div className="flex-1 min-h-0 overflow-y-auto px-5 py-3">
-              {err && !steps?.length && (
-                <div className="text-[11.5px] px-3 py-2 rounded-lg" style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }}>{err}</div>
-              )}
-              {steps === null && <div className="t-dim2 text-center py-12 text-[12px]">Reading commits…</div>}
-              {steps && steps.length > 0 && (
-                <div className="space-y-1">
-                  {steps.map((s, i) => (
-                    <div key={s.hash} className="flex items-center gap-2 px-2 py-1.5 rounded-lg"
-                      style={{ background: s.action === "drop" ? "color-mix(in srgb, var(--error) 7%, transparent)" : "color-mix(in srgb, var(--bg3) 30%, transparent)", border: EDGE }}>
-                      <span className="shrink-0 tabular-nums text-[9.5px] t-dim2 w-4 text-right">{i + 1}</span>
-                      {/* Reorder. Up/down buttons rather than drag: the codebase
-                          has no drag util, and for a list that is at most a few
-                          dozen rows, two 14px buttons are faster and forgiving. */}
-                      <span className="shrink-0 flex flex-col">
-                        <button disabled={i === 0} onClick={() => move(i, -1)} className="inline-flex items-center justify-center rounded t-dim2 disabled:opacity-25" title="Move up"><CaretIcon className="rotate-180" /></button>
-                        <button disabled={i === steps.length - 1} onClick={() => move(i, 1)} className="inline-flex items-center justify-center rounded t-dim2 disabled:opacity-25" title="Move down"><CaretIcon /></button>
-                      </span>
-                      <select value={s.action} onChange={(e) => setAction(i, e.target.value as RebaseStep["action"])} title={ACTION_HINT[s.action]}
-                        className="shrink-0 text-[10px] px-1.5 py-0.5 rounded outline-none"
-                        style={{ background: "color-mix(in srgb, var(--bg2) 80%, black)", border: EDGE, color: s.action === "drop" ? "var(--error)" : s.action === "reword" ? "var(--primary-hover)" : "var(--text2)" }}>
-                        {ACTIONS.map((a) => <option key={a} value={a}>{a}</option>)}
-                      </select>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[11.5px]" style={{ color: s.action === "drop" ? "var(--text3)" : "var(--text)", textDecoration: s.action === "drop" ? "line-through" : "none" }}>{s.subject}</span>
-                        {s.action === "reword" && (
-                          <input value={s.newMessage ?? ""} onChange={(e) => setMsg(i, e.target.value)} placeholder={s.subject} autoFocus={i === steps.findIndex((x) => x.action === "reword")}
-                            className={`w-full mt-0.5 ${INPUT}`}
-                            style={INPUT_STYLE} />
-                        )}
-                      </span>
-                      <span className="shrink-0 tabular-nums text-[9.5px] t-dim2 font-mono">{s.hash.slice(0, 7)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {steps && steps.length > 0 && (
-                <div className="mt-2.5 text-[10px] t-dim2 flex items-center gap-3">
-                  <span>{steps.length} commits above the base</span>
-                  {after !== steps.length && <span style={{ color: "var(--warning-ink)" }}>{drops} dropped → {after} in the result</span>}
-                  {rewords > 0 && <span style={{ color: "var(--primary-hover)" }}>{rewords} reworded</span>}
-                  <span className="ml-auto">conflict → resolve, then Continue; Abort puts the branch back</span>
-                </div>
-              )}
-              {err && steps && steps.length > 0 && (
-                <div className="mt-2 text-[11px] px-3 py-2 rounded-lg font-mono" style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }}>{err}</div>
-              )}
-            </div>
-
-            <div className="flex items-center gap-2 px-5 py-3 border-t shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-              <span className="text-[10px] t-dim2">Rewrites {after} unpushed commit{after === 1 ? "" : "s"} — ORIG_HEAD holds the old tip until the next history move.</span>
-              <button onClick={start} disabled={!steps?.length || busy}
-                className="ml-auto px-3.5 py-1.5 rounded-lg text-[11px] font-medium"
-                style={{ background: "var(--primary)", color: "var(--on-primary)", opacity: !steps?.length || busy ? 0.45 : 1 }}>
-                {busy ? "Rebasing…" : `Start rebase`}
-              </button>
-            </div>
-          </motion.div>
+          ))}
         </div>
-      </AnimatePresence>
-    </Portal>
+      )}
+      {n > 0 && (
+        <div className="text-[10px] t-dim2 flex flex-wrap items-center gap-x-3 gap-y-0.5">
+          <span>{n} commit{n === 1 ? "" : "s"} above the base</span>
+          {after !== n && <span style={{ color: "var(--warning-ink)" }}>{drops} dropped → {after} in the result</span>}
+          {rewords > 0 && <span style={{ color: "var(--primary-hover)" }}>{rewords} reworded</span>}
+          <span className="ml-auto">conflict → resolve, then Continue; Abort puts the branch back</span>
+        </div>
+      )}
+      {err && n > 0 && <DialogError message={err} />}
+    </GitDialog>
   );
 }

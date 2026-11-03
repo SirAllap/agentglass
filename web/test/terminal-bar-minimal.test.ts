@@ -72,19 +72,22 @@ describe("the row itself is gone, and where its survivors went", () => {
     expect(src).not.toContain("PR #{chipPr.pr.number}");
   });
 
-  test("Commands and Sessions survive, in that order, in one group", () => {
-    // Still the quiet Commands: the console keeps the full control.
-    expect(src).toContain("onClose={focusTerm} quiet />");
+  test("Commands survives in the group, and Sessions moved into the + menu", () => {
+    // Phase 3: Commands is the CommandsPopover (pinned and Find inside it) and
+    // Resume is a row of the "+" menu, so the group no longer holds a Sessions chip.
     const group = src.slice(src.indexOf("const barRight = ("), src.indexOf("const tabsRowShown"));
-    expect(group.indexOf("<CommandBar")).toBeGreaterThan(-1);
-    expect(group.indexOf("<ResumeSessions")).toBeGreaterThan(group.indexOf("<CommandBar"));
-    // And exactly one of each in the terminal's own chrome — the group is
-    // rendered from three places, so a second copy would be two live menus
-    // rather than a fallback. (The docked Docker console keeps its own
-    // CommandBar: a different shell, and the full control rather than this
-    // quiet one.)
-    expect(src.split("<ResumeSessions").length - 1).toBe(1);
-    expect(src.split("onClose={focusTerm} quiet />").length - 1).toBe(1);
+    expect(group).toContain("<CommandsPopover");
+    expect(group).not.toContain("<ResumeSessions");
+    expect(group).not.toContain("<CommandBar");
+    // Exactly one Commands in the terminal's own chrome — the group is rendered
+    // from three places, so a second copy would be two live menus. (The docked
+    // Docker console keeps its own CommandBar: a different shell.)
+    expect(src.split("<CommandsPopover").length - 1).toBe(1);
+    // Resume is reachable from both strips, through the "+" menu they share.
+    // Two in this file: the shell strip, and the empty row of a tmux with no windows.
+    expect(src.split("<PlusButton").length - 1).toBe(2);
+    expect(src).toContain("plus={plus}");
+    expect(src).toContain("onResume:");
   });
 
   test("the group rides the tabs row, outside its scroller", () => {

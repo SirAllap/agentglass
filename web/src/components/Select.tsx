@@ -4,7 +4,7 @@ import { Portal } from "./Portal.tsx";
 import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { LAYER } from "../lib/layers.ts";
 import { StatusPill } from "./StatusPill.tsx";
-import { EDGE } from "./workspace/Chrome.tsx";
+import { EDGE, ListRow } from "./workspace/Chrome.tsx";
 import { CaretIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 
@@ -222,23 +222,21 @@ export function Select({
               >
                 {loading && !options.length && <div className="px-2.5 py-1.5 text-[11px]" style={{ color: "var(--text3)" }}>Reading…</div>}
                 {options.map((o, i) => (
-                  <button type="button" key={o.value} onClick={() => pick(o.value)}
+                  <ListRow key={o.value} onClick={() => pick(o.value)}
                     role="option"
                     aria-selected={o.value === value}
                     aria-disabled={o.disabled || undefined}
                     tabIndex={-1}
                     onMouseEnter={() => setCursor(i)}
-                    className={`px-2.5 py-1.5 rounded-lg text-[11.5px] text-left whitespace-nowrap flex items-center gap-3 ${o.disabled ? "opacity-50 cursor-default" : "hover:bg-white/5"}`}
-                    style={o.disabled ? { color: "var(--text4)" } : i === cursor
-                      ? { background: "color-mix(in srgb, var(--primary) 26%, transparent)", color: "var(--primary-hover)" }
-                      : o.value === value
-                      ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)", color: "var(--primary-hover)" }
-                      : { color: o.tint || "var(--text3)" }}>
+                    current={o.value === value}
+                    hot={i === cursor && !o.disabled}
+                    trailing={o.hint ? <span className="text-[9.5px] opacity-80">{o.hint}</span> : undefined}
+                    className={`whitespace-nowrap ${o.disabled ? "opacity-50 cursor-default" : ""}`}
+                    style={o.disabled ? { color: "var(--text4)" } : o.tint && o.value !== value ? { color: o.tint } : undefined}>
                     {o.pill
-                      ? <span className="flex-1"><StatusPill status={o.label} color={o.tint} dim={o.dim} /></span>
-                      : <span className="flex-1 flex items-center gap-2">{o.node ?? <>{o.icon}{o.label}</>}</span>}
-                    {o.hint && <span className="text-[9.5px] opacity-60">{o.hint}</span>}
-                  </button>
+                      ? <StatusPill status={o.label} color={o.tint} dim={o.dim} />
+                      : <span className="flex items-center gap-2">{o.node ?? <>{o.icon}{o.label}</>}</span>}
+                  </ListRow>
                 ))}
               </motion.div>
             </>

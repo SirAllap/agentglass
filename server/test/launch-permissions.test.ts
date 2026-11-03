@@ -143,6 +143,7 @@ const OWN_FLAGS: Record<string, string> = {
 /** Files that resolve an agent binary, and how each one launches it. */
 const LOOKS_UP_A_BIN: Record<string, string> = {
   "agentticket.ts": "the builder",
+  "preflight.ts": "a read-only review in a scratch directory: Read, Grep, Glob and nothing else",
   "terminal.ts": "every terminal path: agentArgv or launchFlags",
   "agentops.ts": "named agents: namedAgentArgv",
   "tmuxrestore.ts": "replays a saved launch after a reboot, flags as they were",

@@ -25,6 +25,10 @@ process.env.XDG_CONFIG_HOME = dir;
 
 let db: typeof import("../src/db.ts");
 const DAY = 86_400_000;
+// db.ts opens its database once per bun process, so every test file that
+// imports it shares the rows. A session id other files also use ("s-live" is
+// one) made this count 2 whenever lantern-life-signs ran first.
+const LIVE = "s-live-rollup";
 
 const event = (over: Record<string, unknown> = {}) => ({
   source_app: "proj",
@@ -58,7 +62,7 @@ beforeAll(async () => {
   // Another project, same day — must not leak into a scoped read.
   db.insertEvent(event({ timestamp: Date.now() - 30 * DAY + 6, session_id: "s-other", payload: { project_path: OTHER } }) as any);
   // And something recent, which the prune must leave alone entirely.
-  db.insertEvent(event({ timestamp: Date.now() - 60_000, session_id: "s-live" }) as any);
+  db.insertEvent(event({ timestamp: Date.now() - 60_000, session_id: LIVE }) as any);
 });
 
 const step = story();
@@ -87,10 +91,10 @@ describe("expiring events are summarised before they are deleted", () => {
   });
 
   step("the live window is untouched", () => {
-    // s-live is a minute old; the prune must not have taken it.
+    // LIVE is a minute old; the prune must not have taken it.
     const n = db.db
-      .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM events WHERE session_id = 's-live'")
-      .get()!.n;
+      .query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM events WHERE session_id = ?")
+      .get(LIVE)!.n;
     expect(n).toBe(1);
   });
 

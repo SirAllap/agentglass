@@ -7,7 +7,7 @@ import { test, expect } from "bun:test";
 import type { DiffHunk } from "../../shared/types.ts";
 import {
   addComment, anchorLabel, captureSnippet, checkAtSend, clearReview, composeReview, editComment,
-  isStale, removeComment, reviewFor, sanitizeReviews, setFrame, type ReviewComment,
+  furnitureClearance, isStale, removeComment, reviewFor, sanitizeReviews, setFrame, type ReviewComment,
 } from "../src/lib/diffReview.ts";
 
 const PAGE = await Bun.file(new URL("../src/components/diff/DiffPage.tsx", import.meta.url)).text();
@@ -227,4 +227,21 @@ test("Send review opens a terminal with an agent already on it, not a chat draft
   expect(deliver).toContain("requestTermIssue(");
   expect(deliver).not.toContain("c.draft = withDraft(");
   expect(deliver).not.toMatch(/\bseedChat\(/);
+});
+
+test("the review tray keeps clear of a floating button over its right half", () => {
+  // The bench button sat on the second Remove at 1920x1080.
+  const tray = { left: 300, right: 1920, top: 700, bottom: 1000 };
+  const fab = { left: 1860, right: 1898, top: 940, bottom: 978 };
+  expect(furnitureClearance(tray, [fab])).toBe(1920 - 1860 + 8);
+  // Not over the tray, or over its left half: no shift.
+  expect(furnitureClearance(tray, [{ ...fab, top: 100, bottom: 138 }])).toBe(0);
+  expect(furnitureClearance(tray, [{ ...fab, left: 400, right: 438 }])).toBe(0);
+  expect(furnitureClearance(tray, [])).toBe(0);
+});
+
+test("the tray re-measures when its own size changes, not only on window resize", async () => {
+  const src = await Bun.file(new URL("../src/lib/useFurnitureClear.ts", import.meta.url)).text();
+  expect(src).toMatch(/new ResizeObserver\(measure\)/);
+  expect(src).toMatch(/ro\?\.disconnect\(\)/);
 });

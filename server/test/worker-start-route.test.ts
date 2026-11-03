@@ -10,12 +10,13 @@
  * test that cannot get what it needs fails instead of starting something else.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { Database } from "bun:sqlite";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
 import { DENIED_COMMANDS } from "../../shared/workerRoles.ts";
+import { RESULT_CONTRACT } from "../src/rolePrompt.ts";
 import { MACHINE, nights, startHarness, type Harness } from "./fixtures/workerHarness.ts";
 
 const have = !!Bun.which("tmux") && !!Bun.which("python3");
@@ -42,9 +43,11 @@ const startBuilder = (name: string, extra: Record<string, unknown> = {}) =>
   h.asSeat("/agents/named/start", { name, cwd: h.wt, role: "builder", ...extra });
 /** A row as another seat's worker, or nobody's: pane ids that are not there. */
 const outside = () => { const d = mkdtempSync(join(tmpdir(), "agx-outside-")); outsiders.push(d); return d; };
-const sql = (q: string, args: (string | number | null)[]) => { const d = new Database(join(h.dir, "w.db")); d.run(q, args); d.close(); };
+/** The server holds this file too: a side connection waits for its lock instead of failing on the first busy answer (GitHub's runner lost this race). */
+const side = () => { const d = new Database(join(h.dir, "w.db")); d.run("PRAGMA busy_timeout = 5000"); return d; };
+const sql = (q: string, args: (string | number | null)[]) => { const d = side(); d.run(q, args); d.close(); };
 const seed = (name: string, seatRoot: string | null, ended = false) => {
-  const d = new Database(join(h.dir, "w.db"));
+  const d = side();
   d.run("INSERT OR REPLACE INTO named_agent (name, kind, cwd, pane_id, window_id, started_at, ended_at, seat_root) VALUES (?, 'opencode', ?, '%9999', '@9999', ?, ?, ?)",
     [name, h.wt, Date.now(), ended ? Date.now() : null, seatRoot]);
   d.close();
@@ -63,19 +66,154 @@ describe.skipIf(!have)("a seat starting workers through the policy", () => {
     const call = h.callsOf("opencode").at(-1)!;
     expect(call.argv.slice(0, 4)).toEqual(["run", "--format", "json", "--model"]);
     expect(call.argv[4]).toBe("opencode/big-pickle");
-    expect(call.argv.slice(-2)).toEqual(["--", "-m evil: say done"]);
+    // The task is the prompt, and the builder's result contract ends it.
+    expect(call.argv.at(-2)).toBe("--");
+    expect(call.argv.at(-1)).toBe(`-m evil: say done\n\n${RESULT_CONTRACT}`);
     expect(call.argv).not.toContain("--auto");
     const cfg = JSON.parse(call.env.OPENCODE_CONFIG_CONTENT!) as { permission: { bash: Record<string, string>; webfetch: string } };
     expect(cfg.permission.bash["git push"]).toBe("deny");
     expect(cfg.permission.bash["agentglass-agent"]).toBe("deny");
+    expect(cfg.permission.bash["agentglass-ui"]).toBe("deny");
     expect(cfg.permission.webfetch).toBe("deny");
-    // The wrapper dropped this app's credentials from the engine's environment.
-    expect(call.env.AGENTGLASS_TOKEN).toBeUndefined();
+    // The builder reaches the app's own browser, in its own named tab only.
+    expect(cfg.permission.bash["*agentglass-browser*"]).toBeUndefined();
+    for (const f of ["--shar", "--acti"]) expect(cfg.permission.bash[`*agentglass-browser*${f}*`]).toBe("deny");
+    // And nothing else the lock refuses was opened with it.
+    for (const c of ["curl", "rm", "kill", "killall5", "docker"]) expect(cfg.permission.bash[`${c} *`]).toBe("deny");
+    // The wrapper dropped the machine credential and handed the engine the
+    // worker's own (the relay refuses the person's container by it), under a
+    // name the engine never sees.
+    expect(call.env.AGENTGLASS_TOKEN).toStartWith("wk_");
+    expect(call.env.AGENTGLASS_TOKEN).not.toBe(MACHINE);
+    expect(call.env.AGENTGLASS_WORKER_TOKEN).toBeUndefined();
     expect(call.env.AGENTGLASS_SEAT).toBeUndefined();
+    // The person's inherited identity is replaced by the worker's own, never kept.
+    expect(call.env.AGENTGLASS_PROFILE).toBe(name);
+    expect(call.env.AGENTGLASS_BROWSER_AS).toBe(name);
 
     expect(done).toMatchObject({ seatRoot: h.dir, model: "opencode/big-pickle", exitCode: 0 });
     expect(done.exitLine).toBe("note: free model, rate may vary");
     expect(done.startedBy).toMatchObject({ rule: "Nights", role: "builder", engine: "opencode", headless: true });
+  }, 40_000);
+
+  test("a start in a checkout with no node_modules says so, in its answer and in the worker's first prompt line", async () => {
+    await withNights();
+    // A worktree cut minutes ago: the package.json is there, the installs are not.
+    const bare = join(h.wt, "orbit-bare");
+    mkdirSync(join(bare, "web"), { recursive: true });
+    writeFileSync(join(bare, "package.json"), JSON.stringify({ name: "orbit", private: true, workspaces: ["web"] }));
+    writeFileSync(join(bare, "web", "package.json"), JSON.stringify({ name: "orbit-web", dependencies: { "orbit-shared": "1.0.0" } }));
+
+    const name = nm("w-deps");
+    const before = h.callsOf("opencode").length;
+    const r = await startBuilder(name, { cwd: bare, prompt: "run the checks" });
+    expect(r.ok).toBe(true);
+    expect(String(r.result?.environment)).toStartWith("environment: node_modules missing (node_modules, web/node_modules)");
+    await h.until(async () => h.callsOf("opencode").length > before);
+    const said = h.callsOf("opencode").at(-1)!.argv.at(-1)!;
+    expect(said).toStartWith("environment: node_modules missing (node_modules, web/node_modules)");
+    expect(said).toContain("\n\nrun the checks\n\n");
+    expect(said).toEndWith(RESULT_CONTRACT);
+    await h.exited(name);
+
+    // A checkout that has its installs: no line, and the prompt is what was asked.
+    const ready = join(h.wt, "orbit-ready");
+    mkdirSync(join(ready, "node_modules"), { recursive: true });
+    writeFileSync(join(ready, "package.json"), JSON.stringify({ name: "orbit", private: true }));
+    const fine = nm("w-deps");
+    const calls = h.callsOf("opencode").length;
+    const ok = await startBuilder(fine, { cwd: ready, prompt: "run the checks" });
+    expect(ok.ok).toBe(true);
+    expect(ok.result?.environment).toBeUndefined();
+    await h.until(async () => h.callsOf("opencode").length > calls);
+    expect(h.callsOf("opencode").at(-1)!.argv.at(-1)).toBe(`run the checks\n\n${RESULT_CONTRACT}`);
+    await h.exited(fine);
+
+    // A person's own start goes through a different branch and says the same thing.
+    const mine = nm("deps");
+    const own = await h.asPerson("/agents/named/start", { name: mine, cwd: bare, kind: "claude", yolo: true, keep: true });
+    expect(own.ok).toBe(true);
+    expect(String(own.result?.environment)).toStartWith("environment: node_modules missing");
+    await h.asPerson("/agents/named/stop", { name: mine });
+  }, 40_000);
+
+  test("a resumed turn in that checkout says it too: its answer and the prompt the engine gets", async () => {
+    await withNights();
+    const bare = join(h.wt, "orbit-bare-resume");
+    mkdirSync(join(bare, "web"), { recursive: true });
+    writeFileSync(join(bare, "package.json"), JSON.stringify({ name: "orbit", private: true, workspaces: ["web"] }));
+    writeFileSync(join(bare, "web", "package.json"), JSON.stringify({ name: "orbit-web", dependencies: { "orbit-shared": "1.0.0" } }));
+
+    const name = nm("w-resume-deps");
+    expect((await startBuilder(name, { cwd: bare, prompt: "run the checks" })).ok).toBe(true);
+    await h.exited(name);
+    // The next turn is its own site with its own sentence: measured on the argv
+    // the engine was handed, not on the first turn's prompt.
+    const calls = h.callsOf("opencode").length;
+    const r = await h.asSeat("/agents/named/prompt", { name, text: "the second part" });
+    expect(r.ok).toBe(true);
+    expect(String(r.result?.environment)).toStartWith("environment: node_modules missing (node_modules, web/node_modules)");
+    await h.until(async () => h.callsOf("opencode").length > calls);
+    const said = h.callsOf("opencode").at(-1)!.argv.at(-1)!;
+    expect(said).toStartWith("environment: node_modules missing (node_modules, web/node_modules)");
+    expect(said).toContain("\n\nthe second part\n\n");
+    expect(said).toEndWith(RESULT_CONTRACT);
+    await h.asSeat("/agents/named/stop", { name });
+  }, 40_000);
+
+  test("a policy start whose browser is off hands the engine no credential and no identity at all", async () => {
+    await withNights();
+    const { body } = await h.read("/settings/door?id=browser.workers", MACHINE);
+    const all = body.value as { engines: string[]; roles: string[] };
+    const off = await h.asPerson("/settings/door", { id: "browser.workers", value: { ...all, engines: all.engines.filter((e) => e !== "opencode") } });
+    expect(off.ok).toBe(true);
+    const name = nm("w-off-headless");
+    expect((await startBuilder(name)).ok).toBe(true);
+    await h.exited(name);
+    const call = h.callsOf("opencode").at(-1)!;
+    for (const v of ["AGENTGLASS_TOKEN", "AGENTGLASS_WORKER_TOKEN", "AGENTGLASS_PROFILE", "AGENTGLASS_BROWSER_AS"]) expect(call.env[v]).toBeUndefined();
+    await h.asPerson("/settings/door", { id: "browser.workers", value: all });
+  }, 40_000);
+
+  test("a role whose browser is off opens a window with no browser credential at all, not the machine's", async () => {
+    /* The tmux path, which a policy start does not take: this harness has a
+       stored policy by the time other tests run, so the window path gets one of
+       its own. A tmux window inherits the SERVER's environment, and this server
+       runs with AGENTGLASS_TOKEN set — the very variable an off worker must not
+       come up holding, since a CLI falls back to the person's token file when it
+       is empty just as when it is absent. */
+    const own = await startHarness("woff");
+    try {
+      const { body } = await own.read("/settings/door?id=browser.workers", MACHINE);
+      const all = body.value as { engines: string[]; roles: string[] };
+      const off = await own.asPerson("/settings/door", { id: "browser.workers", value: { ...all, roles: all.roles.filter((r) => r !== "builder") } });
+      expect(off.ok).toBe(true);
+      const name = nm("w-off");
+      const before = new Set(readdirSync(own.logs).filter((f) => f.endsWith(".envnames")));
+      const r = await own.asPerson("/agents/named/start", { name, cwd: own.wt, role: "builder" });
+      expect(r.ok).toBe(true);
+      const file = await own.until(async () => readdirSync(own.logs).find((f) => f.endsWith(".envnames") && !before.has(f)));
+      const seen = readFileSync(join(own.logs, file), "utf8").split("\n").filter(Boolean);
+      for (const v of ["AGENTGLASS_TOKEN", "AGENTGLASS_WORKER_TOKEN", "AGENTGLASS_PROFILE", "AGENTGLASS_BROWSER_AS"]) expect(seen).not.toContain(v);
+      // Off takes the browser credential away and nothing else the role gives it.
+      expect(seen).toContain("AGENTGLASS_ROLE");
+      await own.asPerson("/agents/named/stop", { name });
+    } finally {
+      await own.stop();
+    }
+  }, 60_000);
+
+  test("one pane's row is answered from the rows, and a pane id that is not one is refused", async () => {
+    await withNights();
+    const name = nm("w-row");
+    const started = await startBuilder(name);
+    expect(started.ok).toBe(true);
+    const pane = String(started.result?.agent.paneId);
+    const one = await h.read(`/agents/named?all=1&pane=${encodeURIComponent(pane)}`, MACHINE);
+    expect(one.status).toBe(200);
+    expect((one.body.result.agents as { name: string }[]).map((r) => r.name)).toEqual([name]);
+    expect((await h.read("/agents/named?pane=nope", MACHINE)).status).toBe(400);
+    await h.asSeat("/agents/named/stop", { name });
   }, 40_000);
 
   test("--allow commit within the ceiling lifts git commit and nothing else; --allow network beyond it starts nothing", async () => {
@@ -208,7 +346,7 @@ describe.skipIf(!have)("a seat starting workers through the policy", () => {
     await h.until(async () => h.callsOf("opencode").length > calls);
     const argv = h.callsOf("opencode").at(-1)!.argv;
     expect(argv.slice(argv.indexOf("-s"), argv.indexOf("-s") + 2)).toEqual(["-s", "ses_fake0001"]);
-    expect(argv.at(-1)).toBe("now the second part");
+    expect(argv.at(-1)).toBe(`now the second part\n\n${RESULT_CONTRACT}`);
     expect(argv[argv.indexOf("--model") + 1]).toBe("opencode/big-pickle");
   }, 40_000);
 

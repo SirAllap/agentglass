@@ -327,7 +327,7 @@ export function parsePorts(out: string): PortsReport {
       tmpLeftover: false, duplicate: false, idleSec: null,
     });
   }
-  const twins = duplicatePids(ports);
+  const twins = duplicatePids(ports, (pid) => procFromSlashProc(pid)?.ppid ?? null);
   for (const p of ports) {
     p.tmpLeftover = underTmp(p.dir);
     p.duplicate = p.pid != null && twins.has(p.pid);

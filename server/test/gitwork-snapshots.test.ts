@@ -11,7 +11,7 @@
  *     failure path leaves the stash where the error message says it is.
  */
 import { afterAll, beforeEach, describe, expect, it } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { identify } from "./gitIdentity.ts";
@@ -119,9 +119,18 @@ describe("WIP snapshots", () => {
     expect(git("stash", "list").stdout.toString().trim()).toBe("");
   });
 
-  it("auto-stash failure leaves the stash where the error says", () => {
+  it("auto-stash: a refusal that changed nothing puts the work back", () => {
     writeFileSync(join(repo, "a.txt"), "dirty\n");
-    const r = withAutoStash(repo, () => ({ ok: false, error: "boom" }));
+    const r = withAutoStash(repo, () => ({ ok: false, error: "refused" }));
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe("refused");
+    expect(git("stash", "list").stdout.toString().trim()).toBe("");
+    expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("dirty\n");
+  });
+
+  it("auto-stash failure with partial state leaves the stash where the error says", () => {
+    writeFileSync(join(repo, "a.txt"), "dirty\n");
+    const r = withAutoStash(repo, () => { writeFileSync(join(repo, "half.txt"), "partial\n"); return { ok: false, error: "boom" }; });
     expect(r.ok).toBe(false);
     expect(r.error).toContain("stash@{0}");
     expect(git("stash", "list").stdout.toString()).toContain("agx: auto-stash");

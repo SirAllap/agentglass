@@ -5,14 +5,19 @@ import { recordSnapshot } from "./paceSamples.ts";
 import { checkPaceAlerts } from "./paceAlert.ts";
 import { isCoreRow, onActiveChanged, refreshAccounts } from "./accountStore.ts";
 import { HOLD_MAX_MS, retryDelay, settleHold, startHold, type Hold } from "./usageHold.ts";
+import { noteReadings } from "./usageBarPref.ts";
+import { ageLabel } from "./usageAge.ts";
+import { keyReadDue } from "../../../shared/opencodePanel.ts";
+
+export { ageLabel };
 
 /**
  * Plan quota for every provider, polled once for the whole app.
  *
  * A module store rather than a hook: the answer belongs to the app, not to
- * whichever gauge happens to be mounted. Three surfaces read this now — the
- * dashboard box, the Stats modal and the notch — and a per-component fetch
- * would mean three timers racing an endpoint that talks to a rate-limited API
+ * whichever gauge happens to be mounted. Several surfaces read this — the
+ * dashboard box, the top bar and the notch — and a per-component fetch
+ * would mean several timers racing an endpoint that talks to a rate-limited API
  * on our behalf.
  */
 
@@ -34,12 +39,20 @@ function onSnapshot(next: ProviderUsage[], accounts = true): void {
   // strip's: sampled under the same provider|window key they would be mixed
   // into the active account's pace history.
   const core = next.filter(isCoreRow);
+  noteReadings(core);
   recordSnapshot(core);
   checkPaceAlerts(core);
   hold = settleHold(hold, next, Date.now());
   // The accounts ride the same poll rather than owning a timer.
   if (accounts) void refreshAccounts();
 }
+
+/*
+ * OpenCode Go's windows are local now: recorded worker steps, computed on the
+ * server, so the first poll already carries them. The console is calibration,
+ * read only when the person presses its button — never on a page load and
+ * never on the poll.
+ */
 
 /*
  * A switch changes whose quota the core reads: ask for the readings now, not at
@@ -150,7 +163,7 @@ export function subscribeProviderUsage(fn: () => void): () => void {
     const load = () => api.providerUsage()
       // A failed poll leaves the last good answer standing: the meters must
       // never blink out because one request lost.
-      .then((next) => { snapshot = next; onSnapshot(next); void maybeRefreshCodex(); })
+      .then((next) => { snapshot = next; onSnapshot(next); readOpenCodeKeyOnce(next); void maybeRefreshCodex(); })
       .catch(() => { /* offline — keep what we have */ })
       .finally(() => { firstFetchDone = true; for (const l of listeners) l(); });
     load();
@@ -176,10 +189,28 @@ export function subscribeProviderUsage(fn: () => void): () => void {
  * last good answer standing. A meter that blinks out is worse than one that is
  * a few minutes old, and the age is already on screen.
  */
+/**
+ * The OpenCode console is read when the app starts and again before its reading
+ * goes stale. The server forgets its reading on a restart, and a reading older
+ * than an hour falls back to this PC's count, which undercounts (21 % where the
+ * plan said 54 %): an app left open for the afternoon showed the wrong number
+ * until the panel was opened. The 5-minute snapshot poll asks, so there is no
+ * timer of its own; a read happens only with a key stored and only when the
+ * reading is missing or older than 4 minutes, and never twice in four.
+ */
+let openCodeKeyAt = 0;
+function readOpenCodeKeyOnce(rows: ProviderUsage[]): void {
+  const now = Date.now();
+  if (now - openCodeKeyAt < 4 * 60_000 || !keyReadDue(rows, now)) return;
+  openCodeKeyAt = now;
+  void api.refreshOpenCodeUsage().then(() => refreshProviderUsage({ accounts: false })).catch(() => {});
+}
+
 export async function refreshProviderUsage(opts: { accounts?: boolean } = {}): Promise<void> {
   try {
     snapshot = await api.providerUsage();
     onSnapshot(snapshot, opts.accounts !== false);
+    readOpenCodeKeyOnce(snapshot);
   } catch { /* offline — keep what we have */ } finally {
     firstFetchDone = true;
     for (const l of listeners) l();
@@ -269,23 +300,6 @@ export function resetLabel(iso: string | null, now = Date.now()): string {
   const day = d.toLocaleDateString([], { weekday: "short" });
   const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   return `${day} ${time}`;
-}
-
-/**
- * How old a reading is.
- *
- * Load-bearing for Codex, whose number is written only when a turn runs and can
- * be days old with nothing on screen to suggest it. Anything under a couple of
- * minutes reads as "just now" rather than "1m ago", because a precise age on a
- * fresh number is noise.
- */
-export function ageLabel(observedAt: number | undefined, now = Date.now()): string {
-  if (!observedAt) return "";
-  const ms = now - observedAt;
-  if (ms < 2 * 60_000) return "just now";
-  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m ago`;
-  if (ms < 24 * 3_600_000) return `${Math.floor(ms / 3_600_000)}h ago`;
-  return `${Math.floor(ms / (24 * 3_600_000))}d ago`;
 }
 
 /** Test seam: forget everything this module remembers. */

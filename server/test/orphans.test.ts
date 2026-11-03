@@ -45,6 +45,7 @@ describe("what is left behind", () => {
     expect(p!.session).toBe(SESSION);
     expect(p!.origin).toBe("an agent scratchpad");
     expect(p!.reasons.join(" | ")).toContain("deleted");
+    expect(p!.reasons.join(" | ")).toContain("the checkout it ran in is gone");
   });
 
   test("a deleted working directory flags a process whose parent is alive", () => {
@@ -135,6 +136,83 @@ describe("the home directory is not a worktree", () => {
   });
 });
 
+describe("helpers that outlived whoever they served", () => {
+  // Measured on one machine: 39 udisksctl monitor, 43 gio, 31 git and 16
+  // inotifywait with systemd as parent, plus dozens of `sleep 1` from a run.
+  test("a sleep re-parented to systemd, in a checkout, is flagged and says what it is", () => {
+    const [p] = flagged({ comm: "sleep", cmd: "sleep 1", cwd: "/home/dev/code/orbit-feat", ageSec: 4 * H });
+    expect(p).toBeDefined();
+    expect(p!.reasons.join(" | ")).toContain("a sleep helper that outlived the process that started it");
+    expect(p!.reasons.join(" | ")).toContain("its parent is gone");
+    expect(p!.origin).toBe("worktree orbit-feat");
+  });
+
+  test("a sleep with its parent alive is not flagged", () => {
+    expect(flagged({ ppid: 777, comm: "sleep", cmd: "sleep 1", cwd: "/home/dev/code/orbit-feat", ageSec: 4 * H })).toHaveLength(0);
+  });
+
+  test("a helper with no origin is not flagged on its name and parent alone", () => {
+    // The desktop's own watchers hang from systemd --user and have no checkout.
+    expect(flagged({ comm: "sleep", cmd: "sleep 1", cwd: "/home/dev", ageSec: 4 * H })).toHaveLength(0);
+    expect(flagged({ comm: "inotifywait", cmd: "inotifywait -q -m -e create /.snapshots", cwd: "/home/dev", ageSec: 100 * H })).toHaveLength(0);
+    expect(flagged({ comm: "gio", cmd: "gio mount -m", cwd: "/home/dev", ageSec: 4 * H })).toHaveLength(0);
+  });
+
+  test("a helper younger than the floor is not flagged yet, and no age means no verdict", () => {
+    const wt = "/home/dev/code/orbit-feat";
+    expect(flagged({ comm: "sleep", cmd: "sleep 1", cwd: wt, ageSec: 10 })).toHaveLength(0);
+    expect(flagged({ comm: "sleep", cmd: "sleep 1", cwd: wt, ageSec: null })).toHaveLength(0);
+  });
+
+  test("udisksctl monitor is seen even though the allow list names udisks, and takes 'a'", () => {
+    const [p] = flagged({ comm: "udisksctl", cmd: "/usr/bin/udisksctl monitor", cwd: "/home/dev/code/orbit-feat", ageSec: 90 * 60 });
+    expect(p!.origin).toBe("worktree orbit-feat");
+    expect(p!.reasons.join(" | ")).toContain("a udisksctl helper");
+  });
+
+  test("a daemon that detaches by design is never flagged, and a worktree watcher is", () => {
+    // fsmonitor detaches at once to serve later git commands; its parent being
+    // gone is its normal start path, and it returns after every Stop.
+    expect(flagged({ comm: "git", cmd: "git fsmonitor--daemon run --detach --ipc-threads=8", cwd: "/home/dev/code/orbit-feat", ageSec: 100 * H })).toHaveLength(0);
+    expect(flagged({ comm: "git", cmd: "git gc --auto", cwd: "/home/dev/code/orbit-feat", ageSec: 100 * H })).toHaveLength(0);
+    expect(flagged({ comm: "git", cmd: "git maintenance run --auto", cwd: "/home/dev/code/orbit-feat", ageSec: 100 * H })).toHaveLength(0);
+    const [p] = flagged({ comm: "inotifywait", cmd: "inotifywait -q -m -e create src", cwd: "/home/dev/code/orbit-feat", ageSec: 100 * H });
+    expect(p!.reasons.join(" | ")).toContain("an inotifywait helper");
+  });
+
+  test("a gio from a deleted temp wrapper names the wrapper as its origin", () => {
+    const [p] = flagged({
+      pid: 31, comm: "gio", cmd: "/bin/sh /tmp/agx-volumes-x/bin/gio mount -m", cwd: "/tmp/agx-volumes-x (deleted)", ageSec: 3 * H,
+    });
+    expect(p!.origin).toBe("a throwaway wrapper in a temp directory");
+    expect(p!.cwdGone).toBe(true);
+  });
+
+  test("a temp wrapper row never claims a checkout was deleted, because it never had one", () => {
+    const [p] = flagged({
+      pid: 31, comm: "gio", cmd: "/bin/sh /tmp/agx-volumes-x/bin/gio mount -m", cwd: "/tmp/agx-volumes-x (deleted)", ageSec: 3 * H,
+    });
+    expect(p!.reasons.join(" | ")).not.toContain("checkout");
+    expect(p!.reasons.join(" | ")).toContain("a gio helper that outlived the process that started it");
+    expect(p!.reasons.join(" | ")).toContain("it came from a throwaway wrapper in a temp directory");
+  });
+
+  test("a wrapper under the OS temp dir counts, not only /tmp", () => {
+    const prev = process.env.TMPDIR;
+    process.env.TMPDIR = "/home/dev/scratch";
+    try {
+      const [p] = flagged({ comm: "gio", cmd: "/bin/sh /home/dev/scratch/agx-volumes-x/bin/gio mount -m", cwd: "/home/dev", ageSec: 3 * H });
+      expect(p!.origin).toBe("a throwaway wrapper in a temp directory");
+    } finally {
+      if (prev === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = prev;
+    }
+  });
+
+  test("an unknown system binary re-parented is still left alone", () => {
+    expect(flagged({ comm: "mysteryd", cmd: "/usr/bin/mysteryd --serve", cwd: "/home/dev", ageSec: 100 * H })).toHaveLength(0);
+  });
+});
+
 // Shape of the real list that came back from a laptop after the fix: dev
 // servers, their esbuild and node children, all with a deleted checkout.
 describe("real-shaped list: leftovers flagged, desktop around them not", () => {
@@ -148,7 +226,9 @@ describe("real-shaped list: leftovers flagged, desktop around them not", () => {
     row({ pid: 22, comm: "git", cmd: "git fsmonitor--daemon run", cwd: "/home/dev", ageSec: 100 * H }),
     row({ pid: 23, comm: "engram", cmd: "/home/dev/.local/bin/engram serve", cwd: "/home/dev", ageSec: 100 * H }),
   ];
-  test("exactly the deleted-checkout trio", () => {
+  test("exactly the deleted-checkout trio: the fsmonitor daemon is left alone", () => {
+    // pid 22 is a fsmonitor daemon: it detaches on purpose and serves later
+    // commands, so its parent being gone says nothing.
     expect(classifyOrphans(rows, ctx).map((p) => p.pid).sort()).toEqual([10, 11, 12]);
   });
 });

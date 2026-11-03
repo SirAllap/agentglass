@@ -20,16 +20,14 @@
  * two agents appending to one transcript. Those cards are dimmed, say which
  * window they are in, and offer the trip instead of the launch.
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState, type RefObject } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { AgentSessionRow } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import { ago } from "../lib/fileRecents.ts";
 import { Portal } from "./Portal.tsx";
-import { subscribeViewModal, takeViewModal } from "../lib/viewModalIntent.ts";
 import { LAYER } from "../lib/layers.ts";
-import { CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
-import { ICON } from "../lib/iconSize.ts";
+import { Button, Checkbox, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 const YOLO_KEY = "agentglass.resume.yolo";
 
@@ -44,36 +42,29 @@ function weight(size: number): string {
 /** The checkout's own name, which is what tells `orbit` from `orbit-CARD-1`. */
 const where = (cwd: string) => cwd.split("/").filter(Boolean).pop() ?? cwd;
 
-export function ResumeSessions({ root, disabled, onOpen, onGo }: {
+export function ResumeSessions({ root, open, anchor, onClose, onOpen, onGo }: {
   /** The project on screen. Its whole family of checkouts is searched. */
   root: string;
-  disabled?: boolean;
+  /** Drawn only while open. The trigger is the "+" menu's row, which owns this. */
+  open: boolean;
+  /** What the list hangs from. */
+  anchor: RefObject<HTMLElement | null>;
+  onClose: () => void;
   /** Start it: a window of its own, or a split beside what is on screen. */
   onOpen: (s: AgentSessionRow, how: { split: boolean; yolo: boolean }) => void;
   /** Take me to the pane it is already running in. */
   onGo: (at: NonNullable<AgentSessionRow["openIn"]>) => void;
 }) {
-  const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<AgentSessionRow[] | null>(null);
   const [err, setErr] = useState("");
   const [q, setQ] = useState("");
   const [yolo, setYolo] = useState(() => {
     try { return localStorage.getItem(YOLO_KEY) === "1"; } catch { return false; }
   });
-  const btnRef = useRef<HTMLButtonElement>(null);
   const [pos, setPos] = useState<{ top?: number; bottom?: number; left: number; maxHeight: number }>(
     { top: 0, left: 0, maxHeight: 460 });
 
-  const close = useCallback(() => { setOpen(false); setQ(""); }, []);
-
-  // Asked for through the registry (lib/viewModalIntent.ts); MoreMenu opens
-  // itself first so this is mounted to hear it, and a request that arrived
-  // before the mount is still in the mailbox.
-  useEffect(() => {
-    const run = () => { if (takeViewModal("terminal.resume")) setOpen(true); };
-    run();
-    return subscribeViewModal(run);
-  }, []);
+  const close = useCallback(() => { setQ(""); onClose(); }, [onClose]);
 
   /* Asked for when the menu opens, not on a timer: a transcript list is a
      directory read per checkout and this is a menu, not a live view. */
@@ -88,8 +79,8 @@ export function ResumeSessions({ root, disabled, onOpen, onGo }: {
   }, [open, root]);
 
   useLayoutEffect(() => {
-    if (!open || !btnRef.current) return;
-    const r = btnRef.current.getBoundingClientRect();
+    const r = open ? anchor.current?.getBoundingClientRect() : undefined;
+    if (!r) return;
     const below = window.innerHeight - r.bottom - 12;
     const above = r.top - 12;
     // The same rule every other menu in this app uses: up only when down does
@@ -98,10 +89,10 @@ export function ResumeSessions({ root, disabled, onOpen, onGo }: {
     setPos({
       top: up ? undefined : r.bottom + 6,
       bottom: up ? window.innerHeight - r.top + 6 : undefined,
-      left: Math.max(8, Math.min(r.left, window.innerWidth - 560)),
-      maxHeight: Math.max(220, Math.min(560, up ? above : below)),
+      left: Math.max(8, Math.min(r.left, window.innerWidth - 528)),
+      maxHeight: Math.max(220, Math.min(520, up ? above : below)),
     });
-  }, [open]);
+  }, [open, anchor]);
 
   useEffect(() => {
     if (!open) return;
@@ -123,23 +114,7 @@ export function ResumeSessions({ root, disabled, onOpen, onGo }: {
   };
 
   return (
-    <>
-      <button ref={btnRef} disabled={disabled || !root}
-        onClick={() => (open ? close() : setOpen(true))}
-        title="Resume a past agent session from this project — any of its checkouts"
-        className={`${CHIP} ${CHIP_SURFACE_CLS} flex items-center gap-1.5 shrink-0 disabled:opacity-40`}
-        style={CHIP_SURFACE}>
-        <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 16 16" fill="none" aria-hidden="true"
-          stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M2.6 8a5.4 5.4 0 1 0 1.6-3.8" />
-          <path d="M2.4 2.6v3h3" />
-          <path d="M8 5.2V8l2 1.4" />
-        </svg>
-        <span>Sessions</span>
-        <span style={{ color: "var(--text4)" }}>▾</span>
-      </button>
-
-      <Portal z={LAYER.menu}>
+    <Portal z={LAYER.menu}>
         <AnimatePresence>
           {open && (
             <>
@@ -151,7 +126,7 @@ export function ResumeSessions({ root, disabled, onOpen, onGo }: {
                 className="fixed rounded-xl overflow-hidden flex flex-col"
                 style={{
                   ...(pos.bottom == null ? { top: pos.top } : { bottom: pos.bottom }),
-                  left: pos.left, width: 540, maxHeight: pos.maxHeight, zIndex: 9999,
+                  left: pos.left, width: 520, maxHeight: pos.maxHeight, zIndex: 9999,
                   background: "color-mix(in srgb, var(--bg2) 97%, black)",
                   border: EDGE,
                   boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)",
@@ -165,12 +140,10 @@ export function ResumeSessions({ root, disabled, onOpen, onGo }: {
                   {/* Remembered, and stated where the press happens: what a
                       resumed agent may do without asking is not something to
                       find out afterwards. */}
-                  <label className="flex items-center gap-1.5 text-[10px] shrink-0 cursor-pointer"
-                    title="Start it with --dangerously-skip-permissions"
-                    style={{ color: yolo ? "var(--warning)" : "var(--text3)" }}>
-                    <input type="checkbox" checked={yolo} onChange={(e) => setYoloKept(e.target.checked)} />
-                    yolo
-                  </label>
+                  <span title="Start it with --dangerously-skip-permissions" className="shrink-0 text-[11px]"
+                    style={{ color: yolo ? "var(--warning-ink)" : "var(--text3)" }}>
+                    <Checkbox checked={yolo} onChange={setYoloKept}>Skip permission prompts</Checkbox>
+                  </span>
                 </div>
 
                 <div className="agx-scroll flex-1 min-h-0 overflow-y-auto p-2 flex flex-col gap-1.5">
@@ -210,26 +183,16 @@ export function ResumeSessions({ root, disabled, onOpen, onGo }: {
                           </div>
                           <div className="shrink-0 flex items-center gap-1">
                             {at ? (
-                              <button onClick={() => { onGo(at); close(); }}
-                                title={`Running in ${at.session}:${at.windowIndex} ${at.windowName}`}
-                                className="agx-btn text-[10px] px-1.5 py-0.5 rounded"
-                                style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
+                              <Button size="compact" tone="plain" onClick={() => { onGo(at); close(); }}
+                                title={`Running in ${at.session}:${at.windowIndex} ${at.windowName}`}>
                                 Go →
-                              </button>
+                              </Button>
                             ) : (
                               <>
-                                <button onClick={() => { onOpen(s, { split: false, yolo }); close(); }}
-                                  title="Resume it in a tab of its own"
-                                  className="agx-btn text-[10px] px-1.5 py-0.5 rounded"
-                                  style={{ color: "var(--text2)", border: EDGE }}>
-                                  Tab
-                                </button>
-                                <button onClick={() => { onOpen(s, { split: true, yolo }); close(); }}
-                                  title="Resume it beside this pane"
-                                  className="agx-btn text-[10px] px-1.5 py-0.5 rounded"
-                                  style={{ color: "var(--text2)", border: EDGE }}>
-                                  Split
-                                </button>
+                                <Button size="compact" tone="plain" onClick={() => { onOpen(s, { split: false, yolo }); close(); }}
+                                  title="Resume it in a tab of its own">In a tab</Button>
+                                <Button size="compact" tone="plain" onClick={() => { onOpen(s, { split: true, yolo }); close(); }}
+                                  title="Resume it beside this pane">Split</Button>
                               </>
                             )}
                           </div>
@@ -256,6 +219,5 @@ export function ResumeSessions({ root, disabled, onOpen, onGo }: {
           )}
         </AnimatePresence>
       </Portal>
-    </>
   );
 }

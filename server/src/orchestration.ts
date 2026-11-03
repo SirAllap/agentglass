@@ -13,11 +13,12 @@
  * change one thing.
  */
 import {
-  composePolicy, defaultStored, ROLE_IDS, storedOf, validatePolicy,
-  type EngineChoice, type Policy,
+  chainFor, composePolicy, defaultStored, ROLE_IDS, storedOf, validatePolicy,
+  type Chain, type EngineChoice, type Policy, type RuleFacts,
 } from "../../shared/orchestration.ts";
 import type { RoleId } from "../../shared/workerRoles.ts";
 import { policyRoots, readStoredPolicy, workerRoles, writeStoredPolicy, writeWorkerRole } from "./config.ts";
+import { ruleStates } from "./orchpolicy.ts";
 import { defaultSeatModel, seatRow, setSeatSettings } from "./seat.ts";
 
 /** What the app runs today, as engine and model, for one project. */
@@ -55,6 +56,15 @@ export function readPolicy(root?: string): PolicyView {
 }
 
 export type WriteResult = { ok: true; view: PolicyView } | { ok: false; error: string };
+
+/** The chain a project's role uses now: its own rules when one is on, else the
+ *  base. Read the same way a worker start reads it, so a project rule that
+ *  moves the Reviewer also moves what a Preflight runs on. */
+export function chainInForce(root: string | undefined, role: RoleId): Chain {
+  const on = new Set(ruleStates().filter((s) => s.active).map((s) => s.ruleId));
+  const facts: RuleFacts = { on: (id) => on.has(id) };
+  return chainFor(readPolicy(root).policy, facts, role);
+}
 
 /**
  * Check a whole policy and store it. `root` absent writes the global one; a

@@ -92,6 +92,16 @@ describe("reading tmux's window list", () => {
     expect(w).toEqual({ id: "@7", index: 4, name: "", active: false, flags: "" });
   });
 
+  test("a window whose process exited carries its status and when, and a live one carries nothing", () => {
+    const [dead, live] = parseWindows([
+      "@8\t1\tbuild\t0\t\t\t80\t24\t\t\t\t/tmp\t1\t3\t1700000000",
+      "@9\t2\tbash\t0\t\t\t80\t24\t\t\t\t/tmp\t0\t\t",
+    ].join("\n"));
+    expect(dead).toMatchObject({ dead: true, exit: 3, diedAt: 1_700_000_000_000 });
+    expect(live!.dead).toBeUndefined();
+    expect(live!.exit).toBeUndefined();
+  });
+
   test("blank lines and unparseable indexes are skipped, not guessed at", () => {
     expect(parseWindows("\n\n")).toEqual([]);
     expect(parseWindows("no such session: =agx\n")).toEqual([]);

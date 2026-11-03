@@ -2,11 +2,12 @@
  * The "waiting on you" panel: when it stays open and where it is drawn.
  */
 import { describe, expect, it } from "bun:test";
-import { NEEDS_PANEL_W, needsPanelLeft, needsStaysOpen } from "../src/lib/needsPanel.ts";
+import { NEEDS_PANEL_W, chipGoesToPlan, needsPanelLeft, needsStaysOpen } from "../src/lib/needsPanel.ts";
 import { LAYER } from "../src/lib/layers.ts";
 
 const topBar = await Bun.file(new URL("../src/components/TopBar.tsx", import.meta.url)).text();
 const popover = await Bun.file(new URL("../src/components/NeedsPopover.tsx", import.meta.url)).text();
+const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
 const code = (src: string) => src.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
 
 describe("needsStaysOpen", () => {
@@ -56,5 +57,45 @@ describe("wiring", () => {
     const c = code(topBar);
     expect(c).toMatch(/needsStaysOpen\(needsFor\.current/);
     expect(c).toContain("avoidRef={rightRef}");
+  });
+});
+
+describe("the chip with flight plans waiting", () => {
+  // Five plans awaiting Go drew "▾" on the chip and the click went to the oldest
+  // plan: the list the arrow promised never opened, and the panel's own rows
+  // (which do open each plan) were unreachable.
+  it("goes straight to a plan only when there is exactly one", () => {
+    expect(chipGoesToPlan({ plan: "fp_a" }, 1)).toBe(true);
+    expect(chipGoesToPlan({ plan: "fp_a" }, 5)).toBe(false);
+    expect(chipGoesToPlan({ plan: "fp_a" }, 70)).toBe(false);
+  });
+  it("never goes to a plan when an agent is what needs you", () => {
+    expect(chipGoesToPlan({}, 1)).toBe(false);
+    expect(chipGoesToPlan(null, 0)).toBe(false);
+  });
+  it("draws the arrow only where a list opens, and the click uses the same decision", () => {
+    const bar = code(topBar);
+    expect(bar).toContain("if (chipGoesToPlan(needs, needsList.length)) { openFlightPlan({ card: needs!.plan }); return; }");
+    expect(bar).toContain("{!chipGoesToPlan(needs, needsList.length) && <span");
+  });
+  it("closes the panel behind a row that opens its card", () => {
+    expect(code(popover)).toContain("onPlan={(id) => { openFlightPlan({ card: id }); onClose(); }}");
+  });
+});
+
+describe("the list scrolls what the heading leaves", () => {
+  it("the panel ends at the window, so the list is never drawn past it", () => {
+    expect(code(popover)).toContain("maxHeight");
+    expect(code(popover)).toContain("window.innerHeight - at.top");
+    expect(code(popover)).toMatch(/className="flex items-center gap-2 px-2\.5 py-1\.5 shrink-0"/);
+  });
+  it("the list fills the panel under the heading instead of a fixed 46vh", () => {
+    expect(code(popover)).toContain('className="agx-inbox-list" data-fill=""');
+    const i = css.indexOf(".agx-inbox-list[data-fill] {");
+    expect(i).toBeGreaterThan(-1);
+    const rule = css.slice(i, css.indexOf("}", i));
+    expect(rule).toContain("max-height: none");
+    expect(rule).toContain("min-height: 0");
+    expect(rule).toContain("flex: 1 1 auto");
   });
 });

@@ -46,14 +46,14 @@ test("the fleet card takes the session row's flags", () => {
 
 // There is no renderer here, so the wiring is asserted against source: the two
 // screens the flags were built for have to actually read them.
-const fleet = await Bun.file(new URL("../src/components/Fleet.tsx", import.meta.url)).text();
+const fleet = await Bun.file(new URL("../src/components/StarboardPanels.tsx", import.meta.url)).text();
 const preset = await Bun.file(new URL("../src/components/diff/PresetDiff.tsx", import.meta.url)).text();
 const code = (src: string) => src.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*|\{\/\*)/.test(l)).join("\n");
 
-test("the fleet card draws the session's chip, with the reasons in its tooltip", () => {
-  const card = code(fleet.slice(fleet.indexOf("function SessionCard("), fleet.indexOf("\n}\n", fleet.indexOf("function SessionCard("))));
-  expect(card).toContain("riskChip(a.risks)");
-  expect(card).toContain("riskTitle(a.risks)");
+test("the crew card draws the session's chip, with the reasons in its tooltip", () => {
+  const card = code(fleet.slice(fleet.indexOf("export function Crew("), fleet.indexOf("\n}\n", fleet.indexOf("export function Crew("))));
+  expect(card).toContain("riskChip(card?.risks)");
+  expect(card).toContain("riskTitle(card!.risks)");
 });
 
 test("the diff panel marks each flagged file and spells the reasons out above its diff", () => {

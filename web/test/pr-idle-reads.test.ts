@@ -70,7 +70,7 @@ describe("the panel's own timers", () => {
     expect(inbox).toContain("usePoll(active");
     expect(inbox).not.toContain("setInterval(");
     const panel = await src("components/PrPanel.tsx");
-    expect(panel).toContain("active={active && selected == null}");
+    expect(panel).toContain("active={active && layout.list}");
   });
 
   it("the open pull request's local and behind ticks check that the window is looked at", async () => {

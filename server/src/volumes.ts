@@ -23,6 +23,8 @@
  */
 import { readdirSync } from "node:fs";
 import { isAbsolute } from "node:path";
+import { trackChild, stopChild } from "./childledger.ts";
+import { deathTie } from "./pdeathsig.ts";
 import { gvfsDir, remotesFromMounts } from "./remotes.ts";
 import type { Volume } from "../../shared/types.ts";
 
@@ -223,14 +225,17 @@ export async function actOnDevice(act: DeviceAct, id: unknown, passphrase: unkno
  */
 export function watchDevices(onChange: () => void, spawn = (): Bun.Subprocess<"ignore", "pipe", "ignore"> | null => {
   const bin = Bun.which("udisksctl");
-  return bin ? Bun.spawn([bin, "monitor"], { stdin: "ignore", stdout: "pipe", stderr: "ignore" }) : null;
-}, burstMs = 300): () => void {
+  // The kernel ends it even when this server is SIGKILLed or the run's state
+  // dir (with its ledger) is deleted with the run.
+  return bin ? Bun.spawn([...deathTie(), bin, "monitor"], { stdin: "ignore", stdout: "pipe", stderr: "ignore" }) : null;
+}, burstMs = 300, name = "udisksctl monitor"): () => void {
   let stopped = false, child: Bun.Subprocess | null = null, timer: ReturnType<typeof setTimeout> | null = null, wait = 1000;
   const bump = () => { if (!timer) timer = setTimeout(() => { timer = null; if (!stopped) onChange(); }, burstMs); };
   const run = async () => {
     const p = spawn();
     if (!p) return;
     child = p;
+    trackChild(p, name);
     const dec = new TextDecoder();
     let seen = false;
     const born = Date.now();
@@ -246,7 +251,7 @@ export function watchDevices(onChange: () => void, spawn = (): Bun.Subprocess<"i
     setTimeout(() => { if (!stopped) void run(); }, wait);
   };
   void run();
-  return () => { stopped = true; if (timer) clearTimeout(timer); try { child?.kill(); } catch { /* gone */ } };
+  return () => { stopped = true; if (timer) clearTimeout(timer); if (child?.pid) stopChild(child.pid); try { child?.kill(); } catch { /* gone */ } };
 }
 
 /**
@@ -278,7 +283,7 @@ export function ensureDeviceWatch(onMoved: () => void, run: Run = runTool) {
   };
   // Two sources of events, neither a timer: udisks for disks, gio for the mounts GVfs makes.
   const stopUdisks = watchDevices(moved);
-  const stopGio = watchDevices(moved, () => { const bin = Bun.which("gio"); return bin ? Bun.spawn([bin, "mount", "-m"], { stdin: "ignore", stdout: "pipe", stderr: "ignore" }) : null; });
+  const stopGio = watchDevices(moved, () => { const bin = Bun.which("gio"); return bin ? Bun.spawn([...deathTie(), bin, "mount", "-m"], { stdin: "ignore", stdout: "pipe", stderr: "ignore" }) : null; }, 300, "gio mount -m");
   watching = () => { stopUdisks(); stopGio(); };
 }
 export const __stopDeviceWatch = () => { watching?.(); watching = null; shown = ""; };

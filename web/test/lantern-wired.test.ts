@@ -56,21 +56,22 @@ describe("Ask about the field", () => {
     // Not the Chat view (hidden from his rail; it landed on Git) and not the
     // Terminal view (leaves the board behind): the bench floats over whatever
     // view you are in and its tab is a tmux session that outlives the window.
-    expect(view).toContain('import { askLantern, hasLanternTab } from "../../lib/lanternAsk.ts";');
+    expect(view).toContain('import { askLantern, LANTERN_TAB_TITLE } from "../../lib/lanternAsk.ts";');
     expect(view).toContain("const r = await askLantern();");
+    // One chat for the app, keyed by its job: the button asks the shared hook
+    // whether it is open and draws the shared line, so a second press focuses
+    // the bench tab instead of seating a second agent.
+    expect(view).toContain('useBenchJob("", JOB.lantern, LANTERN_TAB_TITLE)');
+    expect(view).toContain('<BenchJobLine root="" job={JOB.lantern}');
     const ask = read("src/lib/lanternAsk.ts");
-    expect(ask).toContain('addTab(root, { kind: "agent", slot, title: LANTERN_TAB_TITLE, agent: r.ticket });');
-    expect(ask).toContain("openBench();");
-    // Asking twice brings the tab there to the front rather than seating a
-    // second agent — Lantern's own `open` rule.
-    expect(ask).toContain("activateTab(there.root, there.id);");
-    // …but only a tab whose session is still on the engine: one whose chat
-    // was ended or whose engine restarted would reattach as an empty shell
-    // called "lantern", so it is forgotten and a fresh chat opens instead.
-    expect(ask).toContain("live = r.ok && r.slots.includes(t.slot);");
-    expect(ask).toContain("closeTab(root, t.id);");
-    // And reuse is decided BEFORE a ticket is minted — a ticket is single-use.
-    expect(ask.indexOf("await lanternTabAlive()")).toBeLessThan(ask.indexOf("await api.lanternTicket()"));
+    expect(ask).toContain("job: JOB.lantern, root: \"\", claim: LANTERN_TAB_TITLE");
+    // The dedupe, the engine check and the focus all live in the one helper —
+    // and reuse is decided BEFORE a ticket is minted, since it is single-use.
+    const helper = read("src/lib/benchJobs.ts");
+    expect(helper).toContain("if (running) return running;");
+    expect(helper).toContain("r.slots.includes(tab.slot)");
+    expect(helper).toContain("closeTab(root, there.id);");
+    expect(helper).toContain("showBenchJob(root, there);");
   });
 
   test("the first message is composed on the server, never sent by the client", () => {
@@ -96,25 +97,25 @@ describe("Go", () => {
 });
 
 describe("the Lantern section in Settings", () => {
-  const section = settings.slice(settings.indexOf("function LanternSection("), settings.indexOf("function AgentsSection("));
+  const section = settings.slice(settings.indexOf("function AgentsPage("), settings.indexOf("function SwitchButton("));
 
-  test("exists, on its own Lantern page, and is searchable from it", () => {
-    const lantern = settings.slice(settings.indexOf('{show("lantern") &&'), settings.indexOf('{ql && show("hooks")'));
-    expect(lantern).toContain("<LanternSection open={open} />");
-    const kw = /id: "lantern", label: "Lantern", group: "Agents", kw: "([^"]*)"/.exec(settings)?.[1] ?? "";
+  test("exists on the merged Agents page, and is searchable from it", () => {
+    expect(settings).not.toContain('{show("lantern") &&');
+    expect(settings).toContain('{show("hooks") && (');
+    const kw = /id: "hooks", label: "Agents", group: "Agents", kw: "([^"]*)"/.exec(settings)?.[1] ?? "";
     for (const word of ["lantern", "reminder", "needs you"]) expect(kw, word).toContain(word);
   });
 
   test("reads and writes through the api, never a local guess", () => {
     expect(section).toContain("api.lanternSettings()");
     expect(section).toContain("api.lanternSettingsSave(");
-    expect(section).toContain("save({ nudge: !nudge })");
+    expect(section).toContain("saveWatch({ nudge: !ask })");
     // The watch beside it: its own switch and its own clock, through the same api.
-    expect(section).toContain("save({ watch: !watch })");
-    expect(section).toContain("save({ watchMinutes: Number(m) })");
+    expect(section).toContain("saveWatch({ watch: !watch })");
+    expect(section).toContain("saveWatch({ watchMinutes: Number(m) })");
     expect(section).toContain("Watch the agents and notify me");
-    expect(section).toContain("save({ cacheTtlMinutes: Number(m) })");
-    expect(section).toContain("save({ minutes: Number(m) })");
+    expect(section).toContain("saveWatch({ cacheTtlMinutes: Number(m) })");
+    expect(section).toContain("saveWatch({ minutes: Number(m) })");
   });
 
   test("the api has both halves, in the real client and the demo", () => {
@@ -139,8 +140,10 @@ describe("opening a view a panel asks for", () => {
   test("Workspace is handed goView, which un-hides before it switches", () => {
     expect(app).toContain("view={wsView} onView={goView}");
     expect(app).not.toContain("onView={setWsView}");
-    const go = app.slice(app.indexOf("const goView = useCallback"), app.indexOf("const goView = useCallback") + 200);
+    const at = app.indexOf("const goView = useCallback");
+    const go = app.slice(at, app.indexOf("}, []);", at));
     expect(go).toContain('if (!isVisibleView(v)) moveView(v, "work");');
+    expect(go.indexOf("moveView(v")).toBeLessThan(go.indexOf("setWsView(v)"));
   });
 });
 

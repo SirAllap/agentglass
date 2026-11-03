@@ -52,7 +52,7 @@ describe("pending GitHub comments in the diff", () => {
        three comments disagrees with itself — but they are not the same thing,
        and one number would claim the two you can still edit are three. */
     expect(src).toContain("const heldOnFile = held.filter((h) => h.path === f.path).length;");
-    expect(src).toContain("on GitHub`}");
+    expect(src).toContain("`${heldOnFile} on GitHub`");
   });
 
   it("says the drafts are this browser's, now that there are two kinds", () => {

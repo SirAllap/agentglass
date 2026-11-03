@@ -54,11 +54,9 @@ describe("the indigo state", () => {
     expect(finishedKind({ state: "CLOSED" })).toBe("closed");
     expect(finishedKind({ state: "OPEN" })).toBeNull();
   });
-  test("the card header paints merged with the indigo token and closed grey", async () => {
-    const src = await Bun.file(new URL("../src/components/TriageBoard.tsx", import.meta.url)).text();
-    const at = src.indexOf("function cardVerdict(");
-    const body = src.slice(at, src.indexOf("\n}\n", at));
-    expect(body).toContain('merged ? "var(--merged)" : "var(--text3)"');
+  test("the card strip paints merged with the indigo token and closed grey", async () => {
+    const src = await Bun.file(new URL("../src/components/PrCard.tsx", import.meta.url)).text();
+    expect(src).toContain('merged: "var(--merged)", mute: "var(--text3)"');
     const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
     expect(css).toContain("--merged: #8b8fe8;");
   });

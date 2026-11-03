@@ -10,7 +10,7 @@ import { identify } from "./gitIdentity.ts";
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), "agx-insights-")));
 process.env.AGENTGLASS_ROOT = dir;
-const { repoStats, generateChangelog } = await import("../src/gitinsights.ts");
+const { repoStats, generateChangelog, parseNumstatZ } = await import("../src/gitinsights.ts");
 
 let repo = "";
 const git = (...args: string[]) =>
@@ -92,11 +92,81 @@ describe("repo insights", () => {
     expect(s.churn[0].date).toBe(recent.slice(0, 10));
   });
 
+  it("cuts by whole UTC days so the tiles and the `days` bars cover the same commits", async () => {
+    const midnight = Math.floor(Date.now() / 86_400_000) * 86_400_000;
+    const iso = (ms: number) => new Date(ms).toISOString();
+    commit("a.txt", "feat: just outside", iso(midnight - 6 * 86_400_000 - 1000)); // last second of day 7 back
+    commit("b.txt", "feat: first second inside", iso(midnight - 6 * 86_400_000)); // first second of day 6 back
+    const s = await repoStats(repo, 7);
+    expect(s.churn.reduce((n, d) => n + d.commits, 0)).toBe(1);
+    expect(s.churn[0].date).toBe(iso(midnight - 6 * 86_400_000).slice(0, 10));
+  });
+
   it("treats a merge-heavy repo without merges", async () => {
     commit("a.txt", "feat: one", at(1));
     const s = await repoStats(repo, 90);
     expect(s.churn).toHaveLength(1);
     expect(s.contributors[0].commits).toBe(1);
+  });
+});
+
+describe("repo insights: truth", () => {
+  beforeEach(build);
+
+  it("counts every commit in the window when an old-dated commit sits in the middle of the history", async () => {
+    // Plain --since stops at the first commit older than the cutoff and hides
+    // everything behind it: a rebased or imported commit is enough.
+    commit("a.txt", "chore: old base", at(400));
+    commit("b.txt", "feat: recent one", at(5));
+    commit("c.txt", "chore: stale date", at(300));
+    commit("d.txt", "feat: recent two", at(3));
+    commit("e.txt", "feat: recent three", at(2));
+    const s7 = await repoStats(repo, 7);
+    expect(s7.churn.reduce((n, d) => n + d.commits, 0)).toBe(3);
+    const s90 = await repoStats(repo, 90);
+    expect(s90.churn.reduce((n, d) => n + d.commits, 0)).toBe(3);
+    expect(s90.filesTouched).toBe(3);
+  });
+
+  it("keeps a commit authored inside the window but recorded before it", async () => {
+    writeFileSync(join(repo, "skew.txt"), "x\n");
+    git("add", "-A");
+    const env = { ...process.env, GIT_AUTHOR_DATE: at(2), GIT_COMMITTER_DATE: at(200) };
+    Bun.spawnSync(["git", "-c", "user.email=t@e.st", "-c", "user.name=T", "-c", "commit.gpgsign=false", "commit", "-qm", "feat: skewed"], { cwd: repo, env });
+    commit("b.txt", "feat: normal", at(1));
+    const s = await repoStats(repo, 7);
+    expect(s.churn.reduce((n, d) => n + d.commits, 0)).toBe(2);
+    expect(s.hotspots.map((h) => h.path)).toContain("skew.txt");
+  });
+
+  it("reads a brace rename as its new path", async () => {
+    Bun.spawnSync(["mkdir", "-p", join(repo, "src/api"), join(repo, "old")]);
+    commit("src/api/m4.ts", "feat: add", at(4));
+    commit("old/x.ts", "feat: add x", at(3));
+    git("mv", "src/api/m4.ts", "src/api/m4-new.ts");
+    git("mv", "old", "fresh");
+    commit("fresh/x.ts", "refactor: move", at(2));
+    const s = await repoStats(repo, 30);
+    const paths = s.hotspots.map((h) => h.path);
+    expect(paths).toContain("src/api/m4-new.ts");
+    expect(paths).toContain("fresh/x.ts");
+    expect(paths.some((p) => p.includes("{") || p.includes("=>"))).toBe(false);
+  });
+
+  it("answers an empty repository cleanly, for stats and changelog", async () => {
+    const s = await repoStats(repo, 30);
+    expect(s.empty).toBe(true);
+    expect(s.error).toBeUndefined();
+    const c = await generateChangelog(repo, "", "");
+    expect(c.empty).toBe(true);
+    expect(c.error).toBeUndefined();
+  });
+
+  it("keeps a bad revision as a changelog error, apart from the empty answer", async () => {
+    commit("a.txt", "feat: one", at(1));
+    const c = await generateChangelog(repo, "", "nope");
+    expect(c.empty).toBeUndefined();
+    expect(c.error).toContain("nope");
   });
 });
 
@@ -130,5 +200,16 @@ describe("changelog", () => {
     const c = await generateChangelog(repo, from, "HEAD");
     expect(c.from).toBe(from);
     expect(c.sections[0].entries.map((e) => e.subject)).toEqual(["new"]);
+  });
+});
+
+describe("parseNumstatZ", () => {
+  it("takes the new path of a rename and survives a commit with no rows", () => {
+    const out = ":AGX:aaa\0\n1\t0\tp\0:AGX:bbb\0:AGX:ccc\0\n0\t0\t\0src/{a => b}/x.ts\0src/b/x.ts\0-\t-\tbin.png\0";
+    expect(parseNumstatZ(out)).toEqual([
+      { sha: "aaa", added: 1, deleted: 0, path: "p" },
+      { sha: "ccc", added: 0, deleted: 0, path: "src/b/x.ts", renamedFrom: "src/{a => b}/x.ts" },
+      { sha: "ccc", added: 0, deleted: 0, path: "bin.png" },
+    ]);
   });
 });

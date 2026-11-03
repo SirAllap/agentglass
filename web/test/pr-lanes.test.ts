@@ -327,3 +327,29 @@ describe("a suite that is still running", () => {
     expect(f.reason).toContain("nothing red yet");
   });
 });
+
+describe("a push the board has not read past", () => {
+  const OLD = "1".repeat(40), NEW = "2".repeat(40);
+  // The list was read at t=1000 with the old head's green and its approval; a
+  // session pushed the new head at t=5000 and its checks have not been read yet.
+  const approvedGreen = { reviewDecision: "APPROVED", headSha: OLD, readAt: 1000 } as const;
+
+  it("without the push the same card is ready to land", () => {
+    expect(fileInLane(pr(approvedGreen), MINE).lane).toBe("land");
+  });
+  it("is never in 'ready to land' and never says nobody pressed merge", () => {
+    const f = fileInLane(pr({ ...approvedGreen, pushSeen: { sha: NEW, at: 5000 } }), MINE);
+    expect(f.lane).toBe("flight");
+    expect(f.reason).toBe(`Checking the new head · ${NEW.slice(0, 7)}`);
+    expect(f.reason).not.toContain("Nobody has pressed merge");
+  });
+  it("a review request stays in review, others in others, without the green claim", () => {
+    const o = { ...approvedGreen, pushSeen: { sha: NEW, at: 5000 } };
+    expect(fileInLane(pr(o), ASKED).lane).toBe("review");
+    expect(fileInLane(pr(o), ASKED).reason).not.toContain("green");
+    expect(fileInLane(pr(o), NEITHER).lane).toBe("others");
+  });
+  it("waits only until the list is read after the push", () => {
+    expect(fileInLane(pr({ ...approvedGreen, readAt: 6000, headSha: NEW, pushSeen: { sha: NEW, at: 5000 } }), MINE).lane).toBe("land");
+  });
+});

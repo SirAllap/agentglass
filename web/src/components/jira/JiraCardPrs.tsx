@@ -18,9 +18,12 @@ import type { CardDev } from "../../../../shared/providers.ts";
 import { api } from "../../lib/api.ts";
 import { openPr, openPrs, prRefFromUrl } from "../../lib/openPrs.ts";
 import { prAddress } from "../../../../shared/taskref.ts";
-import { CardPrDetailRow } from "../CardPrChip.tsx";
+import { Author } from "./Author.tsx";
+import { tipAttr } from "../../lib/tip.ts";
+import { mergedInk } from "../../lib/cardPrPick.ts";
+import { PullRequestIcon } from "../../lib/glyphIcons.tsx";
 import { EDGE, INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
-import { HIT } from "../../lib/iconSize.ts";
+import { HIT, ICON } from "../../lib/iconSize.ts";
 
 export const LINKING_OFF = "Linking a pull request writes to Jira, which is switched off. Turn on “Changes in Jira” in the Jira settings.";
 
@@ -38,11 +41,38 @@ export function openLinked(url: string, number: number): void {
   else openPrs(String(number), "all");
 }
 
-/** What the development tool adds to a pull request, as short parts that wrap as the pane narrows: who wrote it, where it goes, who approved. */
-export function devParts(l: JiraLink): string[] {
+/** The ring a pull request wears: open is green, merged purple, closed red, and a draft or a mention the quiet grey. */
+function ringOf(l: JiraLink): { c: string; ink: string; word: string } {
+  const st = l.dev?.state ?? "";
+  if (st === "MERGED") return { c: "var(--merged)", ink: mergedInk(), word: "MERGED" };
+  if (st === "CLOSED") return { c: "var(--error)", ink: "var(--error-ink)", word: "CLOSED" };
+  if (st === "OPEN") return { c: "var(--success)", ink: "var(--success-ink)", word: "OPEN" };
+  return { c: "var(--text3)", ink: "var(--text3)", word: "" };
+}
+
+/** One pull request as a tile: a facet-cut card whose ring is its state, who wrote it, where it goes, who approved. The tile is the one control: it opens the pull request here. */
+export function PrTile({ l }: { l: JiraLink }) {
+  const r = ringOf(l);
   const d = l.dev;
-  if (!d) return [];
-  return [d.author && `by ${d.author}`, approvalsOf(d), d.from && d.into && `${d.from} into ${d.into}`].filter((x): x is string => !!x);
+  const parts = d ? [approvalsOf(d)].filter((x): x is string => !!x) : [];
+  return (
+    <div className="agx-dk-prt" style={{ ["--st" as string]: r.c }}>
+      <span aria-hidden className="inline-flex items-center justify-center shrink-0" style={{ width: 28, height: 28, borderRadius: 8, color: r.ink, background: `color-mix(in srgb, ${r.c} 14%, transparent)`, boxShadow: `inset 0 0 0 1.5px color-mix(in srgb, ${r.c} 55%, transparent)` }}>
+        <PullRequestIcon size={ICON.md} />
+      </span>
+      <button type="button" onClick={() => openLinked(l.url, l.number)} data-tip={tipAttr({ name: `#${l.number}`, mono: true, text: "Open this pull request." })}
+        aria-label={`Open pull request #${l.number}`} className="agx-btn flex-1 min-w-0 text-left flex flex-col" style={{ gap: 4 }}>
+        <span className="truncate" style={{ fontFamily: "var(--font-prose)", fontSize: 13, fontWeight: 600, lineHeight: 1.35, color: "var(--text)" }}>{l.dev?.title || l.title || l.url}</span>
+        <span className="flex items-center min-w-0" style={{ gap: 8, fontSize: 10.5, color: "var(--text3)" }}>
+          <span className="tabular-nums shrink-0" style={{ color: r.ink }}>#{l.number}{r.word && ` ${r.word}`}</span>
+          {d?.from && d.into && <span className="truncate min-w-0">{d.from} → {d.into}</span>}
+          {d?.author && <span className="inline-flex shrink-0" aria-label={`by ${d.author}`}><Author who={d.author} size={20} /></span>}
+          {parts.map((x) => <span key={x} className="shrink-0">{x}</span>)}
+        </span>
+        {l.where && <span style={{ fontSize: 10, color: "var(--text4)" }}>{WHERE_LABEL[l.where]}</span>}
+      </button>
+    </div>
+  );
 }
 
 /** The rows and the box, from what is already known; the data and the writing live in `JiraCardPrs`. */
@@ -53,24 +83,14 @@ export function JiraPrsView({ links, error, writable, said, busy, draft, onDraft
   quiet?: boolean;
 }) {
   return (
-    <div className="flex flex-col gap-1.5 min-w-0" aria-label="Pull requests">
+    <div className="flex flex-col min-w-0" style={{ gap: 8 }} aria-label="Pull requests">
       <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>Pull requests</div>
       {links === null && <div className="text-[10.5px]" style={{ color: "var(--text4)" }}>Reading the card's links…</div>}
       {links !== null && error && <div className="text-[10.5px]" role="status" style={{ color: "var(--warning-ink)" }}>{error}</div>}
       {links !== null && !error && !links.length && <div className="text-[10.5px]" style={{ color: "var(--text4)" }}>No pull request is linked on the card.</div>}
-      {links?.map((l) => (
-        <div key={l.url} className="text-[11px]">
-          <CardPrDetailRow p={{ number: l.number, title: l.title, state: l.dev?.state ?? "", url: l.url }} onOpen={() => openLinked(l.url, l.number)} trailing={null} />
-          {devParts(l).length > 0 && (
-            <div className="flex flex-wrap gap-x-2 text-[10px] pl-1 min-w-0" style={{ color: "var(--text3)" }}>
-              {devParts(l).map((x, i) => <span key={x} className="min-w-0 break-all">{i > 0 ? "· " : ""}{x}</span>)}
-            </div>
-          )}
-          {l.where && <div className="text-[10px] pl-1" style={{ color: "var(--text4)" }}>{WHERE_LABEL[l.where]}</div>}
-        </div>
-      ))}
+      {links?.map((l) => <PrTile key={l.url} l={l} />)}
       {writable ? (
-        <form className="flex items-center gap-2 min-w-0" onSubmit={(e) => { e.preventDefault(); if (!busy) onLink(); }}>
+        <form className="flex items-center min-w-0" style={{ gap: 8 }} onSubmit={(e) => { e.preventDefault(); if (!busy) onLink(); }}>
           <input value={draft} onChange={(e) => onDraft(e.target.value)} placeholder="Paste a pull request address"
             aria-label="Pull request address" spellCheck={false}
             className={`flex-1 min-w-0 ${INPUT}`} style={INPUT_STYLE} />
