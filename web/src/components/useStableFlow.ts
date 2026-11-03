@@ -3,6 +3,18 @@ import { GAP, placeFlow } from "../lib/settingsFlow.ts";
 
 /** The column each card was given the first time it was placed (settingsFlow.ts: balanced, then stable). */
 const COL = new WeakMap<Element, number>();
+
+/** The cards the column's grid lays out: a wrapper with `display: contents` has
+ *  no box, so its own children are the grid's items, not it. */
+function flowKids(el: HTMLElement): HTMLElement[] {
+  const out: HTMLElement[] = [];
+  for (const c of el.children) {
+    const h = c as HTMLElement;
+    if (getComputedStyle(h).display === "contents") out.push(...flowKids(h));
+    else out.push(h);
+  }
+  return out;
+}
 /** Cards fill in for a moment after mount (lists load); until then the choice is redone, after it a card keeps its column. */
 const SETTLE_MS = 800;
 
@@ -19,7 +31,7 @@ export function useStableFlow(ref: RefObject<HTMLElement | null>, deps: readonly
     let settled = false;
     const timer = setTimeout(() => { settled = true; place(); }, SETTLE_MS);
     const place = () => {
-      const kids = [...col.children] as HTMLElement[];
+      const kids = flowKids(col);
       const cols = Number(getComputedStyle(col).getPropertyValue("--agx-cols")) || 1;
       const items = kids.map((el) => {
         const cs = getComputedStyle(el);
@@ -37,10 +49,10 @@ export function useStableFlow(ref: RefObject<HTMLElement | null>, deps: readonly
     col.setAttribute("data-stable", "");
     place();
     const ro = new ResizeObserver(place);
-    const watch = () => { ro.disconnect(); ro.observe(col); for (const el of col.children) ro.observe(el); };
+    const watch = () => { ro.disconnect(); ro.observe(col); for (const el of flowKids(col)) ro.observe(el); };
     watch();
     const mo = new MutationObserver(() => { watch(); place(); });
-    mo.observe(col, { childList: true });
+    mo.observe(col, { childList: true, subtree: true });
     return () => { clearTimeout(timer); ro.disconnect(); mo.disconnect(); col.removeAttribute("data-stable"); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);

@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { PRESETS, type DoorValue, type PolarisItem, type PrFacts } from "../../shared/polaris.ts";
 import { actionLog } from "../src/db.ts";
 import { writePolaris } from "../src/config.ts";
-import { __resetPolaris, __syncConflicted, baseReader, basesOf, executeAction, markInherited, onBaseFixed, sweep, type BaseChecks, type BaseFixed, type PolarisIo } from "../src/polaris.ts";
+import { __resetPolaris, __syncConflicted, baseReader, basesOf, executeAction, markInherited, onBaseFixed, sweep, type BaseChecks, type BaseFixed, type PolarisIo, type PolarisWho } from "../src/polaris.ts";
 import { polarisRoute } from "../src/polarisRoutes.ts";
 
 const ROOT = "/work/acme/orbit";
@@ -222,7 +222,7 @@ describe("sync", () => {
       __resetPolaris();
       const n = state.length;
       await executeAction("sync", { ...args, number: n }, { ...i, localAfter: async () => ({ state, branch: "feat/retry" }) });
-      const r = await polarisRoute("POST", `/polaris/items/${n}/beacon/edit`, new URLSearchParams(), { root: ROOT, reason: "synced", text: "x" }, true);
+      const r = await polarisRoute("POST", `/polaris/items/${n}/beacon/edit`, new URLSearchParams(), { root: ROOT, reason: "synced", text: "x" }, { kind: "person" });
       seen.push(`${state}:${r!.status}`);
     }
     // 200: a draft exists for the reason "synced" (edit finds it); 409: none.
@@ -242,10 +242,10 @@ describe("sync", () => {
     expect(__syncConflicted(ROOT, 7, HEAD)).toBe(true);
   });
 
-  test("the route: an agent is refused, the person's click reaches the action", async () => {
+  test("the route: a phone is refused, the person's click reaches the action", async () => {
     on();
-    const post = (person: boolean) => polarisRoute("POST", "/polaris/items/7/action", new URLSearchParams(), { root: ROOT, type: "sync", headSha: HEAD, baseSha: NEW }, person);
-    expect(await post(false)).toMatchObject({ status: 403 });
-    expect(await post(true)).toMatchObject({ status: 200, body: { ok: true, outcome: "skipped-in-dry-run" } });
+    const post = (who: PolarisWho) => polarisRoute("POST", "/polaris/items/7/action", new URLSearchParams(), { root: ROOT, type: "sync", headSha: HEAD, baseSha: NEW }, who);
+    expect(await post({ kind: "phone" })).toMatchObject({ status: 403 });
+    expect(await post({ kind: "person" })).toMatchObject({ status: 200, body: { ok: true, outcome: "skipped-in-dry-run" } });
   });
 });

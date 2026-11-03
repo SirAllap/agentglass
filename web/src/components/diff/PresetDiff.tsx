@@ -126,7 +126,7 @@ function Inner({ changes, title, path, onBack, backLabel, onClose, root }: Omit<
     <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
       <style>{SCROLLBAR_CSS}{SPLIT_SEL_CSS}</style>
 
-      <div className="flex items-center gap-3 px-4 shrink-0 border-b" style={{ height: 48, borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
+      <div className="flex flex-wrap items-center gap-3 gap-y-1.5 px-4 py-1.5 shrink-0 border-b" style={{ minHeight: 48, borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
         {onBack && (
           <button onClick={onBack} title={backLabel || "Back"}
             className="shrink-0 px-2.5 py-1 rounded-lg text-[11px] flex items-center gap-1.5"

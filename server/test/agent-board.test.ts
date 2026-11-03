@@ -550,7 +550,7 @@ describe("who needs you", () => {
     const rows = Board.merged({
       hooks: [hook("%4", "s-1", MIN)],
       trees, now,
-      waiting: new Map([["s-1", { kind: "gate", why: "held at the gate: Bash", since: now - MIN }]]),
+      waiting: new Map([["s-1", { kind: "gate", why: "waiting at the gate: Bash", since: now - MIN }]]),
     });
     const row = rows.find((r) => r.name === "orbit-1042")!;
     expect(row.state).toBe("waiting");
@@ -929,5 +929,90 @@ describe("a person clearing a line", () => {
     expect(Board.board().map((r) => r.name)).toEqual(["orbit-2001"]);
     expect(Board.dropLine("orbit-1042-review"), "already gone").toBe(false);
     expect(Board.dropLine("")).toBe(false);
+  });
+});
+
+/*
+ * A HEADLESS WORKER HAS NO HOOKS.
+ *
+ * A named agent runs the CLI as its window's command, and the CLI exiting takes
+ * the window with it. There is no hook, no status line and often no pane a
+ * person started, so every other source here misses it: the Agents screen read
+ * "No agents yet" while workers were running. The registry (`named_agent`) is
+ * what knows, and these are what it is allowed to say.
+ */
+describe("a headless worker this app started", () => {
+  const now = 1_700_000_000_000;
+  const MIN = 60_000;
+  /* A fictional checkout: the real ones name a private project, and this
+     repository is public. */
+  const wt = "/home/somebody/code/orbit-feature";
+  const worker = (over: Partial<Board.WorkerSeen> = {}): Board.WorkerSeen => ({
+    name: "go-usage", kind: "opencode", cwd: wt, paneId: "%71", startedAt: now - 5 * MIN, endedAt: null, ...over,
+  });
+
+  test("is a working row with the role it runs as and when it started", () => {
+    const rows = Board.merged({ named: [worker({ role: "builder", startedAt: now - 12 * MIN })], now });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      name: "go-usage", paneId: "%71", from: "seen", state: "working",
+      worker: { role: "builder", since: now - 12 * MIN },
+    });
+    expect(rows[0]!.needsYou).toBeUndefined();
+  });
+
+  test("says its kind as the role when no policy chose one for it", () => {
+    const [row] = Board.merged({ named: [worker()], now });
+    expect(row!.worker?.role).toBe("opencode");
+  });
+
+  test("a finished or failed worker is not a row, so it cannot count as waiting on anybody", () => {
+    const rows = Board.merged({
+      named: [
+        worker({ exitCode: 1 }),
+        worker({ name: "go-usage2", paneId: "%72", exitCode: 0 }),
+        worker({ name: "go-usage3", paneId: "%73", endedAt: now - MIN }),
+      ],
+      now,
+    });
+    expect(rows).toEqual([]);
+  });
+
+  test("and a wait recorded before its turn ended does not stay on its row", () => {
+    /* The hook said "needs your permission" a minute before the engine died.
+       The worker is over: the row is idle, not "waiting on you". */
+    const rows = Board.merged({
+      hooks: [{ paneId: "%71", sessionId: "s-1", cwd: wt, at: now - MIN }],
+      panes: [{ paneId: "%71", name: "go-usage", cwd: wt }],
+      waiting: new Map([["s-1", { kind: "permission" as const, why: "needs your permission", since: now - MIN }]]),
+      named: [worker({ exitCode: 1 })],
+      now,
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.needsYou).toBeUndefined();
+    expect(rows[0]!.state).toBe("idle");
+  });
+
+  test("a row another source already drew wins: the same worker is not drawn twice", () => {
+    const rows = Board.merged({
+      hooks: [{ paneId: "%71", sessionId: "s-1", cwd: wt, at: now - MIN }],
+      trees: [{ path: wt, branch: "feat/orbit-1042" }],
+      named: [worker()], now,
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.worker).toBeUndefined();
+  });
+
+  test("a resumed worker is not hidden by the line its previous turn left", () => {
+    /* A failed turn writes a `said` row and stops being fresh; twenty minutes
+       later the same name runs again. The old row is idle, and letting it win
+       left Working at zero while the new turn was running. */
+    const stale = { name: "go-usage", doing: "the turn failed", saidAt: now - 20 * MIN, from: "said" as const };
+    const rows = Board.merged({ said: [stale], named: [worker()], now });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      name: "go-usage", paneId: "%71", state: "working",
+      startedAt: now - 5 * MIN, worker: { role: "opencode", since: now - 5 * MIN },
+    });
   });
 });

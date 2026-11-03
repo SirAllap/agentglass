@@ -23,6 +23,12 @@ export type RuleSource = (typeof RULE_SOURCES)[number];
 export const isRuleSource = (v: unknown): v is RuleSource =>
   typeof v === "string" && (RULE_SOURCES as readonly string[]).includes(v);
 
+/** Who a rule is for. Absent is every agent; `seat` is the project's orchestrator alone. */
+export const RULE_SCOPES = ["seat"] as const;
+export type RuleScope = (typeof RULE_SCOPES)[number];
+export const isRuleScope = (v: unknown): v is RuleScope =>
+  typeof v === "string" && (RULE_SCOPES as readonly string[]).includes(v);
+
 /** `project` for a rule every project shares. */
 export const BASE_PROJECT = "*";
 /** The action key of the one base rule that is a permission mode, not a pattern. */
@@ -36,6 +42,10 @@ export interface AgentRule {
   action: string;
   /** The tool pattern, `launch.deny` syntax. Empty for the mode rule. */
   match: string;
+  /** More than one pattern, for a rule derived from the flow rather than written. */
+  matches?: string[];
+  /** The orchestrator seat alone; absent means every agent. */
+  role?: RuleScope;
   setting: RuleSetting;
   source: RuleSource;
   /** An agent's name, or `"you"` for the person. */
@@ -43,6 +53,8 @@ export interface AgentRule {
   at: number;
   /** A suggestion or a looser change waiting for the person; it does not apply yet. */
   pending?: boolean;
+  /** What the seat is told instead of the usual sentence: a rule derived from the flow says what to do. */
+  why?: string;
   /** Only on the `launch.mode` rule. */
   mode?: LaunchMode;
 }
@@ -65,6 +77,8 @@ export interface AgentRulesView {
   base: AgentRule[];
   learned: AgentRule[];
   suggested: AgentRule[];
+  /** From the project's flow, in force for the seat only, never stored. */
+  derived: AgentRule[];
   history: RuleChange[];
   /** Rules this project learned per week, oldest first, this week last. */
   weekly: number[];
@@ -77,8 +91,19 @@ export interface RuleRequest {
   match: string;
   setting: RuleSetting;
   source?: RuleSource;
+  /** `seat` narrows the rule to the orchestrator; left out, every agent. */
+  role?: RuleScope;
   /** Only with `action: "launch.mode"`. */
   mode?: LaunchMode;
+}
+
+/** Taking one rule out of a project through the same door: only `match` and `role` are read. */
+export interface RuleRemoveRequest {
+  root: string;
+  match: string;
+  role?: RuleScope;
+  /** The person's alone; an agent is refused. */
+  remove: true;
 }
 
 /** What `POST /agent-rules` answers. */
@@ -387,9 +412,9 @@ function matchesOne(rule: string, tool: string, input: string): boolean {
   return globMatch(pat, input);
 }
 
-/** The rules that apply to one project: base and learned, pending ones left out. */
-export const rulesFor = (rules: readonly AgentRule[], root: string): AgentRule[] =>
-  rules.filter((r) => !r.pending && r.action !== MODE_ACTION && (r.project === BASE_PROJECT || r.project === root));
+/** The rules that apply to one project and one caller: base and learned, pending ones left out, a seat's own included only for the seat. */
+export const rulesFor = (rules: readonly AgentRule[], root: string, role?: RuleScope): AgentRule[] =>
+  rules.filter((r) => !r.pending && r.action !== MODE_ACTION && (!r.role || r.role === role) && (r.project === BASE_PROJECT || r.project === root));
 
 /** How much of a call a pattern names: `Bash(gh pr merge:*)` is narrower than `Bash(gh:*)`, which is narrower than `Bash`. */
 function specificity(match: string): number {
@@ -402,8 +427,9 @@ function winner(live: readonly AgentRule[], tool: string, seg: string): AgentRul
   let best: AgentRule | null = null;
   let width = -1;
   for (const r of live) {
-    if (!matchesOne(r.match, tool, seg)) continue;
-    const w = specificity(r.match);
+    const hit = (r.matches ?? [r.match]).filter((p) => matchesOne(p, tool, seg));
+    if (!hit.length) continue;
+    const w = Math.max(...hit.map(specificity));
     const d = !best ? 1 : w !== width ? w - width
       : (r.project !== BASE_PROJECT) !== (best.project !== BASE_PROJECT) ? (r.project !== BASE_PROJECT ? 1 : -1)
       : RANK[r.setting] - RANK[best.setting];
@@ -433,8 +459,8 @@ const LINE_RANK: Record<RuleDecision, number> = { allow: 0, unknown: 1, ask: 2, 
  * strictest wins: never, then ask, then a command no rule covers (`unknown`),
  * then allow. So `cd pkg && npm publish` asks when publishing asks.
  */
-export function decide(rules: readonly AgentRule[], root: string, tool: string, input: unknown): RuleCheck {
-  const live = rulesFor(rules, root);
+export function decide(rules: readonly AgentRule[], root: string, tool: string, input: unknown, role?: RuleScope): RuleCheck {
+  const live = rulesFor(rules, root, role);
   const text = primaryInput(input);
   const segments = tool === "Bash" ? shellSegments(text) : [text];
   if (segments.length === 0) segments.push("");
@@ -457,16 +483,45 @@ export function decide(rules: readonly AgentRule[], root: string, tool: string, 
  * calls (`Bash(gh pr:*)` as `gh pr`). null when no rule covers it. A write is
  * looser when it hands an agent more than this.
  */
-export function inForceFor(rules: readonly AgentRule[], root: string, match: string): RuleSetting | null {
+export function inForceFor(rules: readonly AgentRule[], root: string, match: string, role?: RuleScope): RuleSetting | null {
   const m = RULE_SHAPE.exec(match);
   if (!m) return null;
   const call = (m[2] ?? "").replace(/:\*$/, "").replace(/\*+/g, "");
-  const d = decide(rules, root, m[1]!, m[1] === "Bash" ? { command: call } : call).decision;
+  const d = decide(rules, root, m[1]!, m[1] === "Bash" ? { command: call } : call, role).decision;
   return d === "unknown" ? null : d;
 }
 
 const reasonFor = (r: AgentRule): string =>
-  `agentglass rule ${r.action} (${r.match}) is "${r.setting}" ${r.project === BASE_PROJECT ? "for every project" : "in this project"}; set by ${r.by}.`;
+  r.why ?? `agentglass rule ${r.action} (${r.match}) is "${r.setting}" ${r.project === BASE_PROJECT ? "for every project" : "in this project"}${r.role ? ", for the orchestrator seat" : ""}; set by ${r.by}.`;
+
+/**
+ * The commands a Verifier runs, in the spellings people use. A target named
+ * nowhere here, or a test behind a script, is not covered: a prefix rule's ceiling.
+ */
+export const SEAT_CHECK_MATCHES: readonly string[] = [
+  "Bash(bun test:*)", "Bash(bun run test:*)", "Bash(npm test:*)", "Bash(npm run test:*)", "Bash(pnpm test:*)", "Bash(pnpm run test:*)",
+  "Bash(yarn test:*)", "Bash(vitest:*)", "Bash(npx vitest:*)", "Bash(bunx vitest:*)", "Bash(jest:*)", "Bash(npx jest:*)", "Bash(bunx jest:*)",
+  "Bash(pytest:*)", "Bash(go test:*)", "Bash(cargo test:*)", "Bash(make test:*)",
+  "Bash(tsc:*)", "Bash(npx tsc:*)", "Bash(bunx tsc:*)", "Bash(npm run typecheck:*)", "Bash(bun run typecheck:*)", "Bash(pnpm run typecheck:*)", "Bash(make typecheck:*)",
+  "Bash(make check:*)", "Bash(make ci:*)", "Bash(make ci-docker:*)", "Bash(make smoke:*)",
+];
+
+/** The derived rule's id: stable, namespaced apart from the stored `ar_` ids. */
+export const SEAT_CHECKS_ID = "seat.checks";
+
+/**
+ * The one rule the seat gets from its flow: while the Verifier is a block on
+ * the canvas the checks are that worker's, and the seat is told to start one.
+ * null when the flow has no Verifier block: then nobody else owns the checks.
+ */
+export function seatChecksRule(project: string, hasVerifier: boolean): AgentRule | null {
+  if (!hasVerifier) return null;
+  return {
+    id: SEAT_CHECKS_ID, project, action: "seat.checks", match: SEAT_CHECK_MATCHES[0]!, matches: [...SEAT_CHECK_MATCHES],
+    role: "seat", setting: "never", source: "base", by: "agentglass", at: 0,
+    why: "the checks belong to this project's Verifier block: start a Verifier worker (`agentglass-agent start <name> --cwd <checkout> --role verifier`) and let it run the test, typecheck and CI replica.",
+  };
+}
 
 /** Tools that only read, and read-only shell words: they never become a suggestion. */
 const QUIET_TOOLS = new Set(["Read", "Grep", "Glob", "LS", "NotebookRead", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "ToolSearch", "WebSearch"]);

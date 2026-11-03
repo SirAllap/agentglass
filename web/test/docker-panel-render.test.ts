@@ -16,6 +16,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { DockerContainer } from "../../shared/types.ts";
 import { DockerView } from "../src/components/DockerPanel.tsx";
+import { ConsoleDock } from "../src/components/docker/ConsoleDock.tsx";
 import { Detail } from "../src/components/docker/Detail.tsx";
 import { LogView } from "../src/components/docker/LogView.tsx";
 
@@ -51,6 +52,18 @@ describe("the view draws on its first paint", () => {
 });
 
 describe("the pieces the view is made of", () => {
+  test("the console bar draws its sentence and the stream status", () => {
+    const html = draw(React.createElement(ConsoleDock, {
+      show: true, open: false, height: 0.1, onHeight: () => {}, onClose: () => {}, onToggle: () => {},
+    }));
+    expect(html).toContain("A shell in this project, docked under the view.");
+    expect(html).toContain("Live: changes arrive from Docker");
+    // No daemon answer: a strip already open stays, the bar is not promised.
+    expect(draw(React.createElement(ConsoleDock, {
+      show: false, open: false, height: 0.1, onHeight: () => {}, onClose: () => {}, onToggle: () => {},
+    }))).not.toContain("dk-dock");
+  });
+
   /* Each of these owns a hook or two of its own. A hook called conditionally,
      or a constant read before its declaration, throws here and nowhere else in
      the suite. */
@@ -98,6 +111,25 @@ describe("the pieces the view is made of", () => {
     expect(sick).toContain("Health check failing 3 times in a row:");
     expect(sick).toContain("Show in log");
     expect(draw(React.createElement(Detail, { ...props, c: container() }))).not.toContain("Show in log");
+  });
+
+  /* A container that never ran says only "Exited (127)" until this: the reason
+     is in docker's State.Error, and it was invisible everywhere. */
+  test("a start docker could not complete says why, with its own words behind a fold", () => {
+    const props = { stat: undefined, env: null, config: null, top: null, error: null, readOnly: false, tail: 200, onTail: () => {}, onOpenPort: () => {}, bar, open: folds, onToggle: () => {}, others: [] };
+    const shim = 'failed to create shim task: OCI runtime create failed: error mounting "/home/dev/orbit/file.conf" to rootfs at "/app/file.conf": no such file or directory';
+    const html = draw(React.createElement(Detail, {
+      ...props, c: container({ state: "exited", status: "Exited (127) 13 minutes ago", stateError: shim, finishedAt: "2026-10-31T09:41:12.418Z" }),
+    }));
+    expect(html).toContain("Exited with code 127");
+    expect(html).toContain("Docker could not start it: a file it needs to mount is missing: /home/dev/orbit/file.conf");
+    expect(html).toContain("<details");
+    expect(html).toContain(">details</summary>");
+    expect(html).toContain("failed to create shim task");
+    // A container docker has no complaint about keeps the line it always had.
+    const plain = draw(React.createElement(Detail, { ...props, c: container({ state: "exited", status: "Exited (1) 3 hours ago" }) }));
+    expect(plain).toContain("It was not stopped by you.");
+    expect(plain).not.toContain("<details");
   });
 
   test("the head: the one action, Shell, the step in the list layout and not in split", () => {

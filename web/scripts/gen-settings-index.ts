@@ -174,6 +174,10 @@ function subComponentsIn(text: string): string[] {
 
 /** Panes whose container hands what it reads to a view that draws the rows. Opt-in: following every pane two levels adds rows to pages nobody asked about. */
 const DEEP_PANES = new Set(["jira", "hooks"]);
+/** How many component boundaries to follow inside a deep pane. Orchestration
+ *  draws its configuration through a view whose panel is one level further:
+ *  pane → OrchestrationPane → OrchestrationView → BlockPanel. */
+const DEEP_DEPTH: Readonly<Record<string, number>> = { orchestration: 2 };
 
 function rowsForPane(pane: string, block: string, seenComponents: Set<string>, depth = 0): Row[] {
   const rows = rowsIn(block, pane);
@@ -186,7 +190,8 @@ function rowsForPane(pane: string, block: string, seenComponents: Set<string>, d
     if (!body) continue;
     rows.push(...rowsIn(body, pane));
     // A pane whose container hands what it reads to a view (JiraPane -> JiraSettingsView) has its rows one level further down.
-    if (depth < 1 && DEEP_PANES.has(pane)) rows.push(...rowsForPane(pane, body, seenComponents, depth + 1).slice(rowsIn(body, pane).length));
+    const deep = DEEP_DEPTH[pane] ?? (DEEP_PANES.has(pane) ? 1 : 0);
+    if (depth < deep) rows.push(...rowsForPane(pane, body, seenComponents, depth + 1).slice(rowsIn(body, pane).length));
   }
   return rows;
 }

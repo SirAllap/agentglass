@@ -24,7 +24,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, normalize } from "node:path";
 import type { TmuxWindow, TmuxPane, AgentPane } from "../../shared/types.ts";
 import { parsePanes, PANE_FORMAT } from "./paneloc.ts";
-import { validSessionName } from "./tmuxpane.ts";
+import { validSessionName, isPanelViewSession } from "./tmuxpane.ts";
 import { PLACE_FORMAT, parsePlaceWindows, placeArgs } from "./tmuxplace.ts";
 import { isLocked } from "./tmuxlock.ts";
 import { findTmuxBelow } from "./procchildren.ts";
@@ -1004,6 +1004,26 @@ export function parsePaneGeometry(rows: string[], sessionId: string): TmuxPane[]
     });
   }
   return out;
+}
+
+/**
+ * What the tmux frame says about the panes of the window on screen.
+ *
+ * `panes` is the geometry the split UI hovers over, and it stays empty for a
+ * window that is not split: one pane covering everything is nothing to choose
+ * between, and every control that draws on a pane is guarded on there being
+ * two. `pane` is identity, and it is reported either way — a tab is one pane
+ * whether it is split or not.
+ *
+ * Identity is the half that was missing. With no pane named, a window that is
+ * not split left the bar over a worker's tab with the terminal session's own
+ * key (`t12-…`, a client-side name) to look the worker up by, and
+ * `/agents/named?pane=` answered every one of those polls 400.
+ */
+export function framePanes(f: { panes?: TmuxPane[] } | null): { panes: TmuxPane[]; pane?: string } {
+  const all = f?.panes ?? [];
+  const pane = all.find((p) => p.active)?.id;
+  return { panes: all.length > 1 ? all : [], ...(pane ? { pane } : {}) };
 }
 
 /**
@@ -3100,14 +3120,15 @@ export function leaveCopyMode(socket: string[], paneId: string): boolean {
  *  exactly what must not reach a spawn. */
 export async function focusPaneAnywhere(known: string[] | undefined, _sessionId: string, _windowId: string, paneId: string): Promise<boolean> {
   if (!PANE_ID.test(paneId)) return false;
-  // A grouped session — a phone mirror, `agx-phone-…` — shares this pane's
-  // window, so `list-panes -a` reports the pane under BOTH the real session and
-  // the mirror. `switch-client` onto the mirror is what moved the desk onto a
-  // phone-sized, doubled view it could not close without reloading tmux. So
-  // exclude the mirror and aim at the real session that owns the pane, using
-  // that row's own session and window ids rather than the ones the click
-  // carried — which, coming from the same duplicated list, may be the mirror's.
-  const row = (await listPanes(known)).find((r) => r.paneId === paneId && !PHONE_SESSION.test(r.session));
+  // A grouped session — a phone mirror, `agx-phone-…`, or a panel's view,
+  // `agx-view-…` — shares this pane's window, so `list-panes -a` reports the
+  // pane under BOTH the real session and the group. `switch-client` onto the
+  // group is what moved the desk onto a phone-sized, doubled view it could not
+  // close without reloading tmux. So exclude the group and aim at the real
+  // session that owns the pane, using that row's own session and window ids
+  // rather than the ones the click carried — which, coming from the same
+  // duplicated list, may be the group's.
+  const row = (await listPanes(known)).find((r) => r.paneId === paneId && !isOursGroup(r.session));
   return row ? focusPane(row.socket, row.sessionId, row.windowId, paneId) : false;
 }
 
@@ -3584,6 +3605,13 @@ const MIRROR_LEASE_OPTION = "@agx_mirror_lease";
 export function isPhoneSession(session: string | null | undefined): boolean {
   return typeof session === "string" && PHONE_SESSION.test(session);
 }
+
+/** A session this app grouped on another one: a phone's mirror, or a panel's
+ *  view (`agx-view-…`). `list-panes -a` reports every pane of the group twice,
+ *  once under each session, so a rule that treats the two as rival candidates
+ *  refuses panes that are working — see `focusPaneAnywhere` and `attachArgvFor`. */
+const isOursGroup = (session: string | null | undefined): boolean =>
+  isPhoneSession(session) || isPanelViewSession(session ?? "");
 
 /** How many phones are attached: the mirror sessions among the ones a client
  *  is on. The frame already carries that set, so this costs no tmux call. */
@@ -4194,11 +4222,13 @@ export function attachArgvFor(
    * the teardown addresses, and a phone session dies with its client, so
    * joining one leaves the restore pointed at a session that is already gone.
    *
-   * Only ours is dropped. A user who has grouped two of their own sessions
-   * really does have two answers, and this still declines — that is the rule
-   * above doing its job rather than an omission in this one.
+   * Only ours is dropped — a phone's mirror and a panel's view, both of which
+   * are groups of a session somebody is already looking at. A user who has
+   * grouped two of their own sessions really does have two answers, and this
+   * still declines — that is the rule above doing its job rather than an
+   * omission in this one.
    */
-  const rows = listPanesSync(known).filter((r) => r.paneId === paneId && !PHONE_SESSION.test(r.session));
+  const rows = listPanesSync(known).filter((r) => r.paneId === paneId && !isOursGroup(r.session));
   if (rows.length !== 1) return null;
   const row = rows[0]!;
   if (!SESSION_ID.test(row.sessionId) || !WINDOW_ID.test(row.windowId)) return null;

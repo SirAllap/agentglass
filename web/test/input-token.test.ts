@@ -154,6 +154,12 @@ const ALLOWED: { file: string; marker: string; why: string }[] = [
   { file: "CleanupDialog.tsx", marker: 'aria-label="Filter the list"',
     why: "the list toolbar's search box (`.agx-cd-srch`) draws one border around icon and field at the toolbar's 28px chip height; the input inside it is transparent" },
 
+  { file: "ManifestView.tsx", marker: 'className="mv-note-in"',
+    why: "the sign-off note is a 30px inline field in a row whose verdict button sets its height, and it grows to the touch height on a phone; INPUT is 32 and does not" },
+
+  { file: "setup/ProjectFinder.tsx", marker: 'className="finder-filter"',
+    why: "the finder's filter sits inside `.finder-searchbox`, which draws one border around the search mark and the field; the input inside it is transparent, as the other finder filters are" },
+
 ];
 
 function isAllowed(file: string, tag: string): string | undefined {

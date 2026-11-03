@@ -11,6 +11,8 @@
  * a second window — the server's audit log is the record that survives.
  */
 
+import { foldWorkerName } from "../../../shared/workerContainer.ts";
+
 export const LOG_MAX = 20;
 
 /** The verbs that change a page, which is what a person wants to see written
@@ -73,7 +75,8 @@ export function agentLabel(as: unknown, container: string): string {
  *  with no `as` skip the container check, and the badge's fallback name is the container's, so a name
  *  that was never sent matches nothing here. The answer is ok either way. */
 export function doneMayMark(cur: TabAgent | undefined, as: unknown): boolean {
-  return !!cur && typeof as === "string" && as.trim() !== "" && as.trim() === cur.agent;
+  return !!cur && typeof as === "string" && as.trim() !== ""
+    && foldWorkerName(as) === foldWorkerName(cur.agent);
 }
 
 /** What an agent is told when the person has the tab. */

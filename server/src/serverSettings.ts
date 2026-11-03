@@ -11,26 +11,34 @@
  * declare a secret field), and every token. The ceiling of this list: those are
  * still changed only on their own pages.
  */
-import type { Budget } from "../../shared/types.ts";
+import type { Budget, EngineReadiness } from "../../shared/types.ts";
 import { writeLaunchBase } from "./agentRulesStore.ts";
 import { validatePolicy } from "../../shared/orchestration.ts";
+import { validatePresetList, type PresetFile } from "../../shared/preset.ts";
 import { isLaunchMode, parseDenyRules, parseFlagLine } from "../../shared/launchModes.ts";
-import { AGENT_PROVIDERS } from "../../shared/agentKinds.ts";
+import { AGENT_PROVIDERS, ENGINE_IDS } from "../../shared/agentKinds.ts";
 import { WORKER_ROLES } from "../../shared/workerRoles.ts";
 import { GATE_ANSWERERS, GATE_ON_TIMEOUT, isOneOf } from "../../shared/agentDefaults.ts";
 import {
   launchMode, launchDeny, launchFlagOverrides, writeLaunchFlagOverrides, seatWakeHours, writeSeatSettings, workerRoles, writeWorkerRole,
   readBudgets, writeBudgets, policyRoots, lanternNudge, lanternNudgeMinutes, lanternWatch, lanternWatchMinutes, cacheTtlMinutes,
   gateAnswerer, gateOnTimeout, writeAgentDefaults,
-  writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, agentsChangeWithoutAsking, writeAgentsChangeWithoutAsking, phoneAlerts, writePhoneAlerts,
+  writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, phoneAlerts, writePhoneAlerts,
 } from "./config.ts";
+import { agentsTrusted, agentsTrustSetAt, writeAgentsTrusted } from "./agentTrust.ts";
+import { browserWorkersNow, saveBrowserWorkers, validateBrowserWorkers } from "./browseraccess.ts";
 import { readPolicy, writePolicy } from "./orchestration.ts";
+import {
+  REVIEW_ROUNDS_MAX, REVIEW_ROUNDS_MIN, checkSecondReviewer, isReviewWho, secondFromStored,
+} from "../../shared/reviewSettings.ts";
 import { readPolaris, readStoredPolaris, writePolaris } from "./config.ts";
 import { DOOR_IDS, checkDoor, withDoor, withEnabled, type DoorValue } from "../../shared/polaris.ts";
 import { CLEANUP_MODES, EMPTY_CLEANUP_CONFIG, parseCleanupConfig, parseCleanupEvidenceRoots, parseCleanupInclude, parseCleanupOtherFolders, type CleanupConfig } from "./cleanup.ts";
+import { BUILDER_MODELS } from "../../shared/builderModel.ts";
 import * as Seat from "./seat.ts";
 import { ruleRoot } from "./agentRulesStore.ts";
 import { APP, REVIEWS, getSetting, hasSetting, markHeld, putSetting, type SettingKey } from "./preflightStore.ts";
+import { preflightModel } from "./flightPlan.ts";
 import { hookStatus, applyGate } from "./hooksetup.ts";
 import { masterEnabled, setMaster, listPlugins, enablePlugin, disablePlugin, setPluginUnboxedConsent } from "./plugins.ts";
 import { jiraWriteEnabled, jiraWriteKinds, setJiraWrites, setJiraWriteKind, type JiraWriteKind } from "./jira.ts";
@@ -113,11 +121,23 @@ export interface ServerSettingsEnv {
   budgetWrites: boolean;
   /** Told after the orchestration policy changes: its switches and the chairs settle again. */
   policyChanged(): void;
+  /** This machine's engine readiness. Left out in tests, which must not probe a CLI. */
+  engineReadiness?(): Promise<readonly EngineReadiness[]>;
 }
 
 /** One kind of Jira write, as its own switch under the master one (server/src/jira.ts, writeRefusal). */
 const jiraKindSetting = (d: { id: string; kind: JiraWriteKind; label: string }): ServerSettingDef =>
   ({ id: d.id, page: "jira", label: d.label, type: "boolean", read: () => jiraWriteKinds()[d.kind], validate: bool, apply: (v) => done(() => setJiraWriteKind(d.kind, v === true)) });
+
+/** A project's own presets, or the machine-wide ones. A hand-edited list that does not validate reads as none, like every policy file. */
+export function storedPresets(root: string | undefined): PresetFile[] {
+  try {
+    const raw = String(getSetting(root ?? APP, "orchestration.presets"));
+    if (!raw) return [];
+    const v = validatePresetList(JSON.parse(raw));
+    return v.ok ? v.value : [];
+  } catch { return []; }
+}
 
 export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
   const seat = (root?: string) => (root ? Seat.seatRow(root) : null);
@@ -134,6 +154,39 @@ export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
       },
       effective: (v) => (v === null ? readPolicy(undefined).policy : v),
       apply: (v, root) => { const r = writePolicy(root, v); if (r.ok) env.policyChanged(); return r.ok ? { ok: true } : { ok: false, error: r.error }; },
+    },
+    {
+      id: "orchestration.presets", page: "orchestration", label: "Presets: named setups a person saves, shares and applies again (validated .agxpreset files)", scoped: true, type: "json",
+      read: (root) => storedPresets(root),
+      validate: (raw) => validatePresetList(raw),
+      apply: (v, root) => put(root ?? APP, "orchestration.presets", JSON.stringify(v)),
+      isSet: (root) => hasSetting(root ?? APP, "orchestration.presets"),
+    },
+    {
+      id: "orchestration.review.who", page: "orchestration", label: "Who reviews and checks: the orchestrator never reads code or runs tests, makes a second review, or is the reviewer", scoped: true, type: "string",
+      read: (root) => getSetting(root ?? APP, "orchestration.review.who"),
+      validate: (raw) => (isReviewWho(raw) ? { value: raw } : { error: "never, second or is" }),
+      apply: (v, root) => put(root ?? APP, "orchestration.review.who", v),
+      isSet: (root) => hasSetting(root ?? APP, "orchestration.review.who"),
+    },
+    {
+      id: "orchestration.review.rounds", page: "orchestration", label: "The most rounds of the Builder to Reviewer loop before it stops and asks", scoped: true, type: "number",
+      read: (root) => getSetting(root ?? APP, "orchestration.review.rounds"),
+      validate: (raw) => (typeof raw === "number" && Number.isInteger(raw) && raw >= REVIEW_ROUNDS_MIN && raw <= REVIEW_ROUNDS_MAX ? { value: raw } : { error: `a whole number from ${REVIEW_ROUNDS_MIN} to ${REVIEW_ROUNDS_MAX}` }),
+      apply: (v, root) => put(root ?? APP, "orchestration.review.rounds", v),
+      isSet: (root) => hasSetting(root ?? APP, "orchestration.review.rounds"),
+    },
+    {
+      id: "orchestration.review.second", page: "orchestration", label: "A second reviewer, on another engine and model", scoped: true, type: "json",
+      read: (root) => secondFromStored(getSetting(root ?? APP, "orchestration.review.second")),
+      validate: async (raw) => {
+        const checked = checkSecondReviewer(raw);
+        if ("error" in checked || !checked.value) return checked;
+        const engines = await (env.engineReadiness ?? (async () => (await Seat.engineReport()).engines))();
+        return checkSecondReviewer(checked.value, engines);
+      },
+      apply: (v, root) => put(root ?? APP, "orchestration.review.second", v === null ? "" : JSON.stringify(v)),
+      isSet: (root) => hasSetting(root ?? APP, "orchestration.review.second") && getSetting(root ?? APP, "orchestration.review.second") !== "",
     },
     ...WORKER_ROLES.map((role): ServerSettingDef => ({
       id: `agents.role.${role.id}`, page: "engines", label: `${role.id} role: engine and model`, type: "json",
@@ -178,6 +231,27 @@ export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
       apply: (v) => saved(writeLaunchBase({ deny: v })),
     },
     {
+      id: "setup.done", page: "onboarding", label: "The first run is finished", type: "boolean",
+      read: () => getSetting(APP, "setup.done"), validate: bool, apply: (v) => put(APP, "setup.done", v),
+      isSet: () => hasSetting(APP, "setup.done"),
+    },
+    {
+      id: "setup.inProgress", page: "onboarding", label: "A setup run is open (the wizard survives a reload)", type: "boolean",
+      read: () => getSetting(APP, "setup.inProgress"), validate: bool, apply: (v) => put(APP, "setup.inProgress", v),
+    },
+    {
+      id: "setup.tutorial", page: "onboarding", label: "The tutorial cards already read", type: "string",
+      read: () => getSetting(APP, "setup.tutorial"),
+      validate: (raw) => (typeof raw === "string" && raw.length <= 200 && !raw.includes("\0") ? { value: raw } : { error: "a comma list of card ids" }),
+      apply: (v) => put(APP, "setup.tutorial", v),
+    },
+    {
+      id: "setup.agent", page: "onboarding", label: "The agent a first terminal starts", type: "string",
+      read: () => getSetting(APP, "setup.agent"),
+      validate: (raw) => (typeof raw === "string" && ENGINE_IDS.includes(raw as never) ? { value: raw } : { error: `an engine id: ${ENGINE_IDS.join(", ")}` }),
+      apply: (v) => put(APP, "setup.agent", v),
+    },
+    {
       id: "flightPlan.enabled", page: "orchestration", label: "Flight plan (the view where a plan is written, reviewed and launched)", type: "boolean",
       read: () => getSetting(APP, "flightPlan.enabled"), validate: bool, apply: (v) => put(APP, "flightPlan.enabled", v),
     },
@@ -192,6 +266,12 @@ export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
       read: () => getSetting(APP, "flightPlan.builder.permissions"),
       validate: (raw) => (raw === "default" || raw === "auto" || raw === "bypassPermissions" ? { value: raw } : { error: "default (ask), auto or bypassPermissions" }),
       apply: (v) => put(APP, "flightPlan.builder.permissions", v),
+    },
+    {
+      id: "flightPlan.builder.strongModel", page: "orchestration", label: "The model a sensitive or L plan's builder starts on (haiku, sonnet or opus)", type: "string",
+      read: () => getSetting(APP, "flightPlan.builder.strongModel"),
+      validate: (raw) => (BUILDER_MODELS.includes(raw as never) ? { value: raw } : { error: `one of ${BUILDER_MODELS.join(", ")}` }),
+      apply: (v) => put(APP, "flightPlan.builder.strongModel", v),
     },
     {
       id: "flightPlan.builderBase", page: "orchestration", label: "Where a launched builder's worktree is cut from (local trunk or origin)", type: "string",
@@ -269,10 +349,15 @@ export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
       isSet: (root) => hasSetting(ruleRoot(root), "flightPlan.held"),
     },
     {
-      id: "flightPlan.preflight.model", page: "orchestration", label: "The model a Preflight reviews with", scoped: true, type: "string",
-      read: (root) => (root ? getSetting(root, "flightPlan.preflight.model") : "sonnet"),
-      validate: (raw) => (typeof raw === "string" && raw.length <= 120 && /^[A-Za-z0-9][\w.\[\]-]*$/.test(raw) ? { value: raw } : { error: "a model name, one word" }),
-      apply: (v, root) => put(root, "flightPlan.preflight.model", v),
+      id: "flightPlan.preflight.model", page: "orchestration", label: "The model a Preflight reviews with: the Reviewer role's model, chosen in Orchestration", scoped: true, type: "string",
+      read: (root) => preflightModel(root ?? APP),
+      validate: (raw) => {
+        if (!(typeof raw === "string" && raw.length <= 120 && /^[A-Za-z0-9][\w.\[\]-]*$/.test(raw))) return { error: "a model name, one word" };
+        const role = workerRoles().reviewer;
+        return role.provider === "claude" ? { value: raw } : { error: `the Reviewer role runs ${role.provider}: its engine and model are chosen in Orchestration` };
+      },
+      apply: (v) => saved(writeWorkerRole("reviewer", { provider: workerRoles().reviewer.provider, model: v })),
+      isSet: (root) => workerRoles().reviewer.model !== "",
     },
     {
       id: "flightPlan.preflight.costCapUsd", page: "orchestration", label: "The most one Preflight may spend, in dollars (above 0, up to 5)", scoped: true, type: "number",
@@ -459,9 +544,18 @@ export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
       apply: (v) => saved(writePhoneAlerts(v === true)),
     },
     {
+      id: "browser.workers", page: "browser", label: "Who may drive the built-in browser (engines and worker roles)", type: "json",
+      read: () => browserWorkersNow(), validate: (raw) => validateBrowserWorkers(raw),
+      apply: (v) => saveBrowserWorkers(v as { engines: string[]; roles: string[] }),
+    },
+    /* Held per project (agentTrust.ts): a root names the project the page is
+       editing, and no root is the global value that a request naming no project
+       reads. Not `scoped`, which would refuse the global write. */
+    {
       id: "agents.changeWithoutAsking", page: "orchestration", label: "Let my agents change settings without asking", type: "boolean",
-      read: () => agentsChangeWithoutAsking(), validate: bool,
-      apply: (v) => saved(writeAgentsChangeWithoutAsking(v === true)),
+      read: (root) => agentsTrusted(root), validate: bool,
+      apply: (v, root) => saved(writeAgentsTrusted(v === true, root)),
+      isSet: (root) => agentsTrustSetAt(root),
     },
   ];
   return defs;

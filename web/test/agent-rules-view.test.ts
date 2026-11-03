@@ -270,4 +270,7 @@ describe("the base rules are global, and the page has no dead band", () => {
     expect(left).toContain('className="rules-slot"');
     expect(view.slice(view.indexOf("</div>\n        </div>\n\n        {!all"))).not.toContain("rules(false)");
   });
+  test("one project picked: its card spans the same width as the base card", () => {
+    expect(SECTION).toContain("single={roots.length === 1}");
+  });
 });

@@ -1,22 +1,21 @@
 /*
- * How much of the plan is left, as a phone reads it.
+ * How much of the plan is used, as a phone reads it.
  *
  * `/usage/providers` answers the same `ProviderUsage[]` the dashboard's Usage
- * panel draws, so nothing about the numbers is decided here: the server already
- * talked to Anthropic (or read what the Codex CLI wrote), rounded the
- * percentages and named the windows. What this file decides is the phone's
- * question, which is a different one.
+ * panel draws. What this file decides is which reading of a row the phone may
+ * draw, and how it is worded.
  *
- * The desk asks "how much have I used", because it has room for five bars and a
- * person sitting in front of them. A phone is looked at for two seconds on the
- * way somewhere, and the thing being asked is "have I got enough left to start
- * this". So every number that leaves this file is REMAINING, and the headline is
- * the window that runs out first rather than the first window in the list.
+ * Both questions have one answer for both surfaces: the top-bar panel and this
+ * sheet call `openCodePanelWindows`, so a percentage on the monitor and one in
+ * your hand come from the same reading. And the number says USED, as the desk's
+ * does; the headline is the window closest to its limit rather than the first
+ * window in the list.
  *
  * Data, not JSX, for the reason dates.ts gives: a helper that lives inside a
  * screen is a helper no test can reach, because `react-native`'s entry point
  * cannot be parsed by the test runner.
  */
+import { openCodePanelWindows, type PanelWindows } from "../../../shared/opencodePanel.ts";
 import type { ProviderUsage, QuotaWindow } from "../../../shared/types.ts";
 
 /** A window with the provider that reported it, so a headline can name both. */
@@ -24,15 +23,47 @@ export interface TightWindow {
   /** The provider's screen name ("Claude"), not its id. */
   provider: string;
   window: QuotaWindow;
-  /** When THAT provider was last asked, carried here so the headline can date
-   *  itself without the card searching the list back for the row it came from. */
+  /** Whether this window is this PC's arithmetic rather than the plan's number. */
+  estimated: boolean;
+  /** When THAT reading was taken, carried here so the headline can date itself
+   *  without the card searching the list back for the row it came from. */
   observedAt?: number;
 }
 
-/** What is left of a window, 0..100. Clamped rather than trusted: a provider
- *  that reports 103% used would otherwise render a negative bar. */
-export function remainingOf(window: QuotaWindow): number {
-  return Math.max(0, Math.min(100, 100 - window.usedPercent));
+/** The windows a row is drawn from, as the desk draws them. OpenCode Go's
+ *  console reading wins while it is drawable; every other row is what the
+ *  provider reported. Per-window estimates ride along, because a row can mix a
+ *  console window with one this PC had to fill in. */
+export function planWindows(row: ProviderUsage, now: number): PanelWindows {
+  if (row.provider !== "opencode") return { windows: row.windows, estimate: false };
+  return openCodePanelWindows(row, now);
+}
+
+/** The minutes of a plan that are this PC's arithmetic, the desk's rule: the
+ *  windows whose console reset had passed, or every one when no console reading
+ *  is drawable at all. */
+export function estimatedWindows(plan: PanelWindows): Set<number> {
+  const all = plan.estimate ? plan.windows.map((w) => w.minutes) : [];
+  return new Set(plan.estimatedMinutes ?? all);
+}
+
+/** Whether any bar in a plan is the console's own number rather than this PC's
+ *  arithmetic for it. */
+function drawnFromConsole(row: ProviderUsage, plan: PanelWindows): boolean {
+  const estimated = estimatedWindows(plan);
+  return !!row.calibration && plan.windows.some((w) => !estimated.has(w.minutes));
+}
+
+/** When the reading a plan draws was taken. A console window is dated by the
+ *  read, not by this PC's last step, which says nothing about that number. */
+export function planReadAt(row: ProviderUsage, plan: PanelWindows): number | undefined {
+  return drawnFromConsole(row, plan) ? row.calibration!.at : row.observedAt;
+}
+
+/** What a window has used, 0..100. Clamped rather than trusted: a provider
+ *  that reports 103% used would otherwise draw past its track. */
+export function usedOf(window: QuotaWindow): number {
+  return Math.max(0, Math.min(100, window.usedPercent));
 }
 
 /**
@@ -41,7 +72,7 @@ export function remainingOf(window: QuotaWindow): number {
  * This is the one number the card exists to show. Providers that cannot report
  * are skipped rather than counted as empty: "nothing is close to its limit" and
  * "nobody would say" are different answers, and only the first one is a reason
- * to start a long turn.
+ * to be careful with a long turn.
  *
  * Ties go to the window already found, which keeps the headline still while two
  * windows sit at the same percentage instead of swapping on every poll.
@@ -49,13 +80,16 @@ export function remainingOf(window: QuotaWindow): number {
  * A login the computer lists but is not signed in as is not in the running: the
  * headline answers "can I start a long one" with the account that would run it.
  */
-export function tightestWindow(rows: ProviderUsage[] | null): TightWindow | null {
+export function tightestWindow(rows: ProviderUsage[] | null, now = Date.now()): TightWindow | null {
   let best: TightWindow | null = null;
   for (const row of rows ?? []) {
     if (!row.available || row.account?.active === false) continue;
-    for (const window of row.windows) {
+    const plan = planWindows(row, now);
+    const estimated = estimatedWindows(plan);
+    const observedAt = planReadAt(row, plan);
+    for (const window of plan.windows) {
       if (!best || window.usedPercent > best.window.usedPercent) {
-        best = { provider: row.label, window, observedAt: row.observedAt };
+        best = { provider: row.label, window, estimated: estimated.has(window.minutes), observedAt };
       }
     }
   }
@@ -116,6 +150,26 @@ export function ageLabel(observedAt: number | undefined, now: number): string {
   if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m old`;
   if (ms < 24 * 3_600_000) return `${Math.floor(ms / 3_600_000)}h old`;
   return `${Math.floor(ms / (24 * 3_600_000))}d old`;
+}
+
+/** Where a row's numbers come from. The tag is the desk's own: "estimate · this
+ *  PC" for arithmetic this machine did, the reading's source otherwise. */
+export function sourceLine(row: ProviderUsage, plan: PanelWindows): string {
+  const source = row.source ?? "";
+  if (row.provider !== "opencode") return source;
+  // "opencode stats" is the CLI's own total: planWindows has nothing to add.
+  if (source && source !== "this PC" && source !== "console" && source !== "console key") return source;
+  // A stored key is not evidence for the numbers in hand: a page read taken
+  // before the key was saved would be credited to a read it never made.
+  return drawnFromConsole(row, plan) ? "console" : "this PC estimate";
+}
+
+/** "read 4m ago", the half of the footer after the source. Empty when the row
+ *  carries no date. */
+export function readLine(at: number | undefined, now: number): string {
+  if (!at) return "";
+  const age = ageLabel(at, now);
+  return age ? `read ${age.replace(/ old$/, " ago")}` : "read just now";
 }
 
 /**

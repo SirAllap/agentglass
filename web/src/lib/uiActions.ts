@@ -13,7 +13,7 @@
  * phone, a tab with another project): every seam here is a no-op with nothing
  * listening, which is why none of these throws.
  */
-import { UI_ACTIONS, canonView, parseArgs, uiOf, type UiActionId, type UiArgs, type UiReply } from "../../../shared/uiActions.ts";
+import { UI_ACTIONS, canonMachineTab, canonView, parseArgs, uiOf, type UiActionId, type UiArgs, type UiReply } from "../../../shared/uiActions.ts";
 import type { ControlCmd, ViewId } from "../../../shared/types.ts";
 import { openSettings } from "./openSettings.ts";
 import { openFinderAt } from "./finderTarget.ts";
@@ -125,7 +125,7 @@ export const UI_HANDLERS: { [Id in UiActionId]: Handler<Id> } = {
   "settings.get": (a) => answered(settings.get(a.id)),
   "settings.list": (_a, c) => settings.list(c.serverLevel),
   "settings.set": (a, c) => answered(settings.set(a.id, a.value, c.as, c.grant === true, c.expect)),
-  "machine.open": (a, c) => c.setMachine(a.tab),
+  "machine.open": (a, c) => c.setMachine(canonMachineTab(a.tab)),
   "project.picker": (_a, c) => c.setProjectOpen(true),
   "windows.switcher": (_a, c) => c.setWindowsOpen(true),
   "bench.toggle": () => toggleBench(),

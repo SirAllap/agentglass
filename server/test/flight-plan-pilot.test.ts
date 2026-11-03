@@ -208,6 +208,29 @@ describe("budget", () => {
     expect(w.reached).toBe("weekly");
     expect(w.until).toBe(Budget.weekStart(now) + 7 * 86_400_000);
   });
+
+  test("a raise for today is in force today and gone the next day, and the base cap is left alone", () => {
+    const today = new Date(2026, 9, 28, 15).getTime();
+    const lateToday = new Date(2026, 9, 28, 23, 59).getTime();
+    const tomorrow = new Date(2026, 9, 29, 9).getTime();
+    expect(Budget.capAt("day", today)).toBe(5);
+    Budget.raiseCap("day", 12, today);
+    expect(Budget.capAt("day", today)).toBe(12);
+    expect(Budget.capAt("day", lateToday)).toBe(12);
+    expect(Store.getSetting(APP, "flightPlan.budget.dailyUsd")).toBe(5);
+    expect(Budget.capAt("day", tomorrow)).toBe(5);
+  });
+
+  test("the raise is the cap the day is measured against, and the week's lasts until the next Monday", () => {
+    const now = new Date(2026, 9, 28, 15).getTime();
+    const spend = { rows: () => [], preflight: (since: number) => (since === Budget.dayStart(now) ? 8 : 8), roots: () => [] };
+    expect(Budget.budgetState(now, spend).reached).toBe("daily");
+    Budget.raiseCap("day", 20, now);
+    expect(Budget.budgetState(now, spend)).toMatchObject({ reached: null, dailyCap: 20 });
+    Budget.raiseCap("week", 40, now);
+    expect(Budget.capAt("week", new Date(2026, 10, 1, 23).getTime())).toBe(40);
+    expect(Budget.capAt("week", new Date(2026, 10, 2, 0, 1).getTime())).toBe(20);
+  });
 });
 
 describe("what a Preflight costs", () => {
@@ -279,14 +302,16 @@ describe("the builder never", () => {
     const start = src.indexOf("async function launchFlightPlan(");
     const body = src.slice(start, src.indexOf("\n}\n", start));
     expect(start).toBeGreaterThan(0);
-    expect(body).toContain("launchPerm(builder.mode, undefined, false, FlightPlan.BUILDER_DENY)");
+    expect(body).toContain("launchPerm(builder.mode, undefined, false, FlightPlan.builderDenyFor(plan.root))");
+    const fp = await Bun.file(new URL("../src/flightPlan.ts", import.meta.url).pathname).text();
+    expect(fp).toContain("[...new Set([...BUILDER_DENY,"); // the flow lock only appends to the fence
   });
 
   test("the launch gives the builder's tab its worktree in the environment, which is what holds its file writes (break this and they are free)", async () => {
     const src = await Bun.file(new URL("../src/index.ts", import.meta.url).pathname).text();
     const start = src.indexOf("async function launchFlightPlan(");
     const body = src.slice(start, src.indexOf("\n}\n", start));
-    expect(body).toContain("{ [FlightPlan.BUILDER_ENV]: tree.path, TMPDIR: scratch }");
+    expect(body).toContain('const env: Record<string, string> = { [FlightPlan.BUILDER_ENV]: tree.path, TMPDIR: scratch, AGENTGLASS_ROLE: "builder" };');
     expect(Flight.BUILDER_ENV).toBe("AGENTGLASS_BUILDER_WORKTREE");
     const hook = await Bun.file(new URL("../../hooks/send_event.py", import.meta.url).pathname).text();
     expect(hook).toContain(Flight.BUILDER_ENV);
@@ -490,6 +515,18 @@ describe.skipIf(!have)("a coordinator on a booted server", () => {
     expect(stop.status).toBe(403);
     expect(stop.body.error).toBe(`Go is the person's here: ${Flight.STOP_SENTENCE.large}`);
     expect((await planOf(large)).stopReason).toBe("large");
+  });
+
+  test("a model stronger than the plan's pick is the person's: the coordinator's ask is refused, a weaker one is not", async () => {
+    await setPilot("autopilot");
+    const id = await ready();  // M, nothing sensitive: the builder role's model
+    await h.asPerson(`/flight-plan/plans/${id}/go`, {});  // no git checkout here, so the plan stays at Go
+    expect((await planOf(id)).plan.state).toBe("go");
+    const strong = await seat("POST", `/flight-plan/plans/${id}/launch`, { model: "opus" });
+    expect(strong.status).toBe(403);
+    expect(strong.body.error).toBe("a stronger model than the plan's choice is the person's: Opus costs more than Sonnet");
+    const weak = await seat("POST", `/flight-plan/plans/${id}/launch`, { model: "haiku" });
+    expect(weak.body.error).not.toContain("the person's");  // refused for the worktree, never for the model
   });
 
   test("the one question: the coordinator raises it, cannot answer it, the person does, and Go then goes", async () => {

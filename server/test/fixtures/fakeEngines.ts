@@ -81,7 +81,7 @@ export const SHAPE: Record<FakeEngineId, { status: string[]; headless: string[];
   claude: { status: ["auth", "status"], headless: ["-p", "--print"], version: "2.1.296 (Claude Code)" },
   codex: { status: ["login", "status"], headless: ["exec"], version: "codex-cli 0.157.1" },
   gemini: { status: ["status"], headless: ["-p"], version: "0.40.0" },
-  opencode: { status: ["providers", "list"], headless: ["run"], version: "1.18.32" },
+  opencode: { status: ["auth", "list"], headless: ["run"], version: "1.18.32" },
   hermes: { status: ["status"], headless: ["chat"], version: "Hermes Agent v0.21.5 (2026.9.21) · upstream 9a71d5a8" },
   agy: { status: ["status"], headless: ["-p"], version: "agy 1.4.0" },
 };

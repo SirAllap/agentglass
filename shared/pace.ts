@@ -356,7 +356,11 @@ export function pace(input: PaceInput): Pace {
   const expected = (100 * elapsed) / tot;
   const delta = usedPercent - expected;
   const band = Math.max(1, expected * 0.1);
-  const status: PaceStatus = expected < 2 ? "too-early" : delta > band ? "ahead" : delta < -band ? "under" : "on";
+  // A plan that already reported a notable share is judged even when the
+  // curve has earned almost nothing: "too early" must not hide that number.
+  const status: PaceStatus = delta > band ? "ahead"
+    : expected < 2 ? "too-early"
+    : delta < -band ? "under" : "on";
 
   const p = zoned(now, cfg.timeZone);
   const dayStart = localInstant(p.y, p.mo, p.d, 0, cfg.timeZone);
@@ -469,9 +473,10 @@ const STATUS_WORDS: Record<PaceStatus, string> = {
   "too-early": "too early to judge", ahead: "ahead of pace", under: "under pace", on: "on pace",
 };
 
-/** "budget 17% · under pace" */
+/** "budget 17% earned · under pace". "earned" is what separates this share
+ *  from the plan's own used percent sitting beside it in the same line. */
 export function budgetLine(p: Extract<Pace, { state: "ok" }>): string {
-  return `budget ${pct(p.expected)} · ${STATUS_WORDS[p.status]}`;
+  return `budget ${pct(p.expected)} earned · ${STATUS_WORDS[p.status]}`;
 }
 
 /** The projection sentence, or null when there is nothing honest to say. */

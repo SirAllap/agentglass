@@ -6,7 +6,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { answerText, budgetOf, factsOf, flightItems, flightNow, needsYou, pilotSnapshot, questionOf, rowMeta, seatName, stripCounts, stripFor } from "../src/lib/flightPilot.ts";
-import { goOutcome, groupOf, toPlan, type Plan, type Run } from "../src/lib/flightPlan.ts";
+import { goOutcome, groupOf, mergeOpenPlan, toPlan, type Plan, type Run } from "../src/lib/flightPlan.ts";
 import { PILOT_KEYS, decode, noteFor, parseUsd } from "../src/lib/pilotSettings.ts";
 
 const NOW = new Date(2026, 9, 28, 12, 0).getTime();
@@ -39,6 +39,13 @@ describe("a plan off the wire", () => {
   test("a second look is said as such while the reviewer reads", () => {
     const running = { ...runWith([]), state: "running" } as Run;
     expect(flightNow({ plan: toPlan(wire()), run: running }, null, NOW).sub).toContain("again");
+  });
+  test("the plan opened whole keeps the model line the list carries; its Go card needs it", () => {
+    const launch = { mode: "auto", model: "sonnet", why: "Sonnet: this plan is M and touches nothing sensitive, so it launches on the builder role's model." };
+    const listed = toPlan(wire({ launch }));
+    const full = toPlan({ ...wire(), planMd: "# Plan\nChange the footer." });
+    expect(full.launch).toBeUndefined();
+    expect(mergeOpenPlan(full, listed)).toMatchObject({ launch, planMd: "# Plan\nChange the footer." });
   });
 });
 
@@ -217,6 +224,18 @@ describe("a stop rule is only spoken of where Autopilot is flying", () => {
     expect(flightNow(it!, mode("manual"), NOW).sub).not.toContain("Autopilot");
     expect(flightNow(it!, mode("copilot"), NOW).sub).not.toContain("Autopilot");
     expect(flightNow(it!, mode("autopilot"), NOW).sub).toContain("large");
+  });
+});
+
+describe("the raise for today is a raise, and it expires", () => {
+  test("the strip's Raise asks for a number and posts it to the budget raise route, never to the permanent Settings row", async () => {
+    const src = await Bun.file(new URL("../src/components/flightPlan/FlightPlanView.tsx", import.meta.url)).text();
+    expect(src).toContain('else if (id === "raise") void raiseCap(root);');
+    expect(src).toContain('api.flightRaiseBudget(n, week ? "week" : "day")');
+    expect(src).toContain("The raise lasts until");
+    expect(src).not.toContain('else setTab("settings")');
+    const api = await Bun.file(new URL("../src/lib/api.ts", import.meta.url)).text();
+    expect(api).toContain('post<{ ok: boolean; capUsd?: number; until?: number; budget?: import("./flightPilot.ts").BudgetWire; error?: string }>("/flight-plan/budget/raise", { usd, scope })');
   });
 });
 

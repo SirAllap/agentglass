@@ -62,7 +62,7 @@ export function PlusButton(p: PlusProps) {
         <AnchoredMenu anchor={box} align="left" minWidth={250} plain onClose={() => setOpen(false)}>
           <div className={GROUP_HEADING} style={{ color: "var(--text3)", fontWeight: 600 }}>New window</div>
           <MenuRow icon={<TerminalIcon size={ICON.sm} />} kbd={chordLabel(appChordFor("terminal.newshell"))} onClick={pick(p.newShell)}>New shell</MenuRow>
-          <MenuRow icon={<AgentIcon size={ICON.sm} />} onClick={pick(p.newAgent)}>New agent (Claude Code)</MenuRow>
+          <MenuRow icon={<AgentIcon size={ICON.sm} />} onClick={pick(p.newAgent)}>New agent</MenuRow>
           <MenuRow icon={<ResumeIcon />} disabled={!p.canResume} title={p.canResume ? "Resume a past agent session from this project, in any of its checkouts" : "Resuming opens a tmux window, and this terminal is not in tmux"}
             onClick={pick(() => setResume(true))}>Resume a session…</MenuRow>
           <MenuRule />

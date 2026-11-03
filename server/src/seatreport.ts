@@ -16,6 +16,7 @@
  * lost. A parser that refuses a report is a parser that turns a status into an
  * argument about formatting, and the report is the thing that matters.
  */
+import { existsSync } from "node:fs";
 import { db } from "./db.ts";
 import { board, saidBy } from "./agentboard.ts";
 import { agentNamed } from "./agentops.ts";
@@ -54,10 +55,16 @@ const unreadQ = db.query<Row, [string, number]>(
   `SELECT * FROM seat_report WHERE root = ? AND read_at IS NULL ORDER BY at ASC LIMIT ?`);
 const recentQ = db.query<Row, [string, number]>(
   `SELECT * FROM seat_report WHERE root = ? ORDER BY at DESC LIMIT ?`);
+/** The rows that can still be a claim, however many routine reports followed:
+ *  a scan of the newest 100 missed a blocker buried under them. */
+const claimsQ = db.query<Row, [string]>(
+  `SELECT * FROM seat_report WHERE root = ? AND (blocked <> '' OR need <> '') ORDER BY at DESC`);
 const markQ = db.query<never, [number, string]>(
   `UPDATE seat_report SET read_at = ? WHERE root = ? AND read_at IS NULL`);
 const countQ = db.query<{ n: number }, [string]>(
   `SELECT COUNT(*) AS n FROM seat_report WHERE root = ? AND read_at IS NULL`);
+const sinceQ = db.query<{ n: number }, [string, number]>(
+  `SELECT COUNT(*) AS n FROM seat_report WHERE agent = ? AND at >= ?`);
 
 const line = (s: string) => String(s ?? "").replace(/\s+/g, " ").trim();
 
@@ -161,9 +168,22 @@ export function addReport(p: { root: string; agent: string; session?: string; te
   return { ok: true, report: toReport(last!) };
 }
 
-export const unreadReports = (root: string, limit = 20): SeatReport[] => unreadQ.all(root, Math.max(1, Math.min(100, limit))).map(toReport);
-export const recentReports = (root: string, limit = 8): SeatReport[] => recentQ.all(root, Math.max(1, Math.min(100, limit))).map(toReport);
-export const unreadCount = (root: string): number => countQ.get(root)?.n ?? 0;
+export const unreadReports = (root: string, limit = 20): SeatReport[] => {
+  clearVacated(root);
+  return unreadQ.all(root, Math.max(1, Math.min(100, limit))).map(toReport);
+};
+export const recentReports = (root: string, limit = 8): SeatReport[] => {
+  clearVacated(root);
+  return recentQ.all(root, Math.max(1, Math.min(100, limit))).map(toReport);
+};
+export const unreadCount = (root: string): number => {
+  clearVacated(root);
+  return countQ.get(root)?.n ?? 0;
+};
+
+/** Whether this agent filed a report since `at`: a report is a result too, even
+ *  when the turn's last message said nothing. */
+export const reportedSince = (agent: string, at: number): boolean => (sinceQ.get(agent, at)?.n ?? 0) > 0;
 
 /** How long a report stays a live claim. The same 7 days the tmux memory uses
  *  for "stale": past it, a blocker is history and the screen folds it. */
@@ -185,6 +205,35 @@ const resolveQ = db.query<never, [number, string]>(`UPDATE seat_report SET block
 export function resolveReports(root: string, ids: number[]): number {
   let n = 0;
   for (const id of ids) if (Number.isInteger(id)) { resolveQ.run(id, root); n++; }
+  return n;
+}
+
+/*
+ * A BLOCKER WHOSE WORKER AND CHECKOUT ARE BOTH GONE.
+ *
+ * A failed turn reports where it left its files, and the worker ends with the
+ * turn. While that directory exists somebody may still want to read or finish
+ * the work, so the decision stays. Once it is gone too there is nothing left
+ * to decide: the row leaves by itself instead of sitting in "waiting on you"
+ * until the week-old fold, or until somebody presses Dismiss on a question
+ * with no answer.
+ *
+ * `named_agent` keeps the directory after the worker ends, so this reads the
+ * registry rather than the sentence in `blocked`. A live worker — even one
+ * that failed a turn and was resumed under the same name — is never cleared.
+ */
+export function clearVacated(root: string): number {
+  let n = 0;
+  for (const r of claimsQ.all(root).map(toReport)) {
+    const a = agentNamed(r.agent);
+    if (!a || (a.endedAt === null && a.exitCode === undefined)) continue;
+    if (existsSync(a.cwd)) continue;
+    /* A name reused in another checkout is a different run: this report was
+       written before that run started, so its directory says nothing about it. */
+    if (r.at < a.startedAt) continue;
+    resolveQ.run(r.id, root);
+    n++;
+  }
   return n;
 }
 

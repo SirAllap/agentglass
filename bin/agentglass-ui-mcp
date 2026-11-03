@@ -158,6 +158,17 @@ RULES_TOOLS = [
 ]
 
 
+def polaris_tools():
+    """Built from the CLI's one table, so the two cannot list different verbs."""
+    out = []
+    for verb, spec in UI.POLARIS_VERBS.items():
+        props = {k: {"type": "string", "description": why} for k, why in spec["args"].items()}
+        out.append({"name": f"ui_polaris_{verb}", "description": spec["surface"] + ". " + UI.POLARIS_NOTE,
+                    "inputSchema": {"type": "object", "properties": props,
+                                    "required": [k for k in ("number", "type") if k in props], "additionalProperties": False}})
+    return out
+
+
 _FP_ID = {"type": "string", "description": "a run id (pf_...)"}
 _FPP_ID = {"type": "string", "description": "a flight plan id (fp_...)"}
 FLIGHT_TOOLS = [
@@ -321,6 +332,8 @@ def run(name, args):
     given0 = dict(args) if isinstance(args, dict) else {}
     if name in ("ui_rules_list", "ui_rules_suggest", "ui_rules_set"):
         return run_rules(name, given0)
+    if isinstance(name, str) and name.startswith("ui_polaris_") and name[len("ui_polaris_"):] in UI.POLARIS_VERBS:
+        return _wrap(UI.polaris(name[len("ui_polaris_"):], {k: str(v) for k, v in given0.items()}, AS))
     if name in {t["name"] for t in FLIGHT_TOOLS}:
         return run_flight(name, given0)
     # The settings verbs reach the server's settings as well as the window's (agentglass-ui does the routing).
@@ -379,7 +392,7 @@ def handle_message(msg):
         actions, level, why = _registry()
         if why:
             return T.make_reply(msg_id, error={"code": -32603, "message": why})
-        return T.make_reply(msg_id, {"tools": tools_from_actions(actions) + jira_tools(level) + RULES_TOOLS + FLIGHT_TOOLS})
+        return T.make_reply(msg_id, {"tools": tools_from_actions(actions) + jira_tools(level) + RULES_TOOLS + polaris_tools() + FLIGHT_TOOLS})
     if method == "tools/call":
         params = msg.get("params")
         if not isinstance(params, dict):

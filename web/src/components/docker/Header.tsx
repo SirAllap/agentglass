@@ -5,14 +5,14 @@
  * because there is nothing live to filter.
  */
 import type { freshness, GroupBy, Layout, ScopeLine, Situation } from "../../lib/dockerView.ts";
-import { CaretIcon, ListIcon, LockIcon, RefreshIcon, SearchIcon, SparkleIcon } from "../../lib/glyphIcons.tsx";
+import { CaretIcon, ListIcon, LockIcon, PlayIcon, PowerIcon, RefreshIcon, SearchIcon, SparkleIcon } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { Button, Chip, IconButton, RefreshButton, INPUT_STYLE, BAR_INPUT, Segmented } from "../workspace/Chrome.tsx";
-import { viewHeaderClass, viewHeaderStyle } from "../workspace/ViewHeader.tsx";
+import { VIEW_HEADER_H, viewHeaderClass, viewHeaderStyle } from "../workspace/ViewHeader.tsx";
 
 export function DockerHeader({
   situation, version, fresh, scope, q, onQ, section = "containers", groupBy, onGroupBy, layout, onLayout, dense, onDense,
-  readOnly, onRefresh, refreshing, onMeasure, analyze, showFilter, showView, back,
+  readOnly, onRefresh, refreshing, onMeasure, analyze, bulk, showFilter, showView, back,
 }: {
   situation: Situation; version: string | null; fresh: ReturnType<typeof freshness>; scope: ScopeLine | null;
   q: string; onQ: (v: string) => void; section?: string;
@@ -23,7 +23,11 @@ export function DockerHeader({
   /** The Disk section's own refresh: `docker system df` is slow, so it is asked for by name. */
   onMeasure?: () => void;
   /** "Analyze with agent": opens a guided cleanup in a new tab. `title` is the tooltip, or the reason it is off. */
-  analyze?: { onClick: () => void; disabled: boolean; title: string; pending: boolean };
+  analyze?: { onClick: () => void; disabled: boolean; tip: string; pending: boolean };
+  /** One verb for every container of the project in view. Present only while
+   *  there is something for it to do: Stop all while any is live, Start all
+   *  once none is. */
+  bulk?: { verb: "stop" | "start"; n: number; pending: boolean; disabled: boolean; title: string; onClick: () => void } | null;
   /** Filter box shown (the Containers section only: it filters containers). */
   showFilter: boolean;
   /** By stack / layout / Dense shown (the Containers section only). */
@@ -35,7 +39,11 @@ export function DockerHeader({
   const idle = down || situation === "loading" || situation === "empty";
   const installed = situation !== "notinstalled";
   return (
-    <div className={`${viewHeaderClass} dk-hdr`} style={{ ...viewHeaderStyle, gap: 8, paddingLeft: 12, paddingRight: 12 }}>
+    // One line while it fits, two when it does not: from about 1000px down the
+    // fixed-width controls on the right painted over the filter, and below 700
+    // the last of them left the window with nothing to scroll.
+    <div className={`${viewHeaderClass} dk-hdr flex-wrap`}
+      style={{ ...viewHeaderStyle, gap: 8, paddingLeft: 12, paddingRight: 12, rowGap: 6, height: "auto", minHeight: VIEW_HEADER_H, maxHeight: "none", paddingTop: 6, paddingBottom: 6 }}>
       {installed && back && (
         <IconButton onClick={back} title="Back to all containers (Esc)" bare><span style={{ display: "flex", transform: "rotate(90deg)" }}><CaretIcon size={ICON.md} /></span></IconButton>
       )}
@@ -76,7 +84,14 @@ export function DockerHeader({
         <span className="dk-ro" title="This instance has writes turned off"><LockIcon size={ICON.xs} />Read-only</span>
       )}
       {installed && analyze && (
-        <Button onClick={analyze.onClick} disabled={analyze.disabled || analyze.pending} pending={analyze.pending} title={analyze.title}><SparkleIcon size={ICON.sm} />Analyze with agent</Button>
+        <Button onClick={analyze.onClick} disabled={analyze.disabled || analyze.pending} pending={analyze.pending} data-tip={analyze.tip}><SparkleIcon size={ICON.sm} />Analyze with agent</Button>
+      )}
+      {installed && bulk && bulk.n > 0 && (
+        <Button onClick={bulk.onClick} disabled={bulk.disabled} pending={bulk.pending} title={bulk.title}
+          tone={bulk.verb === "stop" ? "warn" : "ok"}>
+          {bulk.verb === "stop" ? <PowerIcon size={ICON.sm} /> : <PlayIcon size={ICON.sm} />}
+          {bulk.verb === "stop" ? "Stop all" : "Start all"}
+        </Button>
       )}
       {installed && section === "disk" && onMeasure
         ? <Button onClick={onMeasure} disabled={refreshing} title="Ask Docker how much space everything takes, ignoring the short cache"><span className={refreshing ? "dk-spin" : undefined} style={{ display: "inline-flex" }}><RefreshIcon size={ICON.sm} /></span>Measure again</Button>

@@ -19,14 +19,21 @@ when the runner dropped it, and that starts as a dry run.
 
 ## Turning it on
 
-**Settings > Orchestration > Polaris.** The card follows the scope bar at the top
-of the page: with a project selected you edit that project's own settings, and a
-door you have not set there follows the global setting (the row says
-*Inherits global*). *Global* and *All projects* edit the global layer.
+**Settings > Agents > Polaris.** The page has a **Settings for** choice of its own at
+the top: with a project selected you edit that project's own settings, and a door
+you have not set there follows the global setting (*Use global* in a tab, and *Use
+the general setting* in its stage menu). *All projects* edits the global layer.
 
-Polaris is **off** until you press **Turn on**. Turning it on for a layer that
-has no doors yet starts in **Guided**: it reads and drafts, and anything it would
-run again is shown as a dry run first. Turning it off keeps your doors.
+The drawing at the top comes first, with the doors under it: the on/off
+switch, the three presets, the four stages (Watching, Signals, Landing,
+Automatic), the limits rail and the guardrails. Under it, six tabs — the five
+door groups and Guardrails. Every tab edits a draft; **Save changes** writes it,
+**Discard** puts the stored layer back.
+
+Polaris is **off** until you turn it on: the switch in the header, then
+**Save changes**. Turning it on for a layer that has no doors yet starts in
+**Guided**: it reads and drafts, and anything it would run again is shown as a
+dry run first. Turning it off keeps your doors.
 
 ## The classes
 
@@ -111,8 +118,12 @@ most two relaunches, and cap 1 never relaunches. Nothing is relaunched while a
 check on the pull request is still running, and a run attempt is tried once.
 
 In **Dry run** the item shows *would relaunch* and nothing is sent. **Live** is
-the only position in which Polaris acts on GitHub by itself, and putting a door
-live always asks you first.
+the only position in which Polaris acts on GitHub by itself. In Settings every
+door whose saved position is live is marked Live on its row, wherever that
+position comes from, and the rows above Save name them before you press it. A
+door that was not live before — one a preset opens, or one a block reset hands
+back to a live global setting — asks once by name: the first Save only opens the
+question, and the second is the consent.
 
 ### A red the base branch has too
 
@@ -194,12 +205,28 @@ the preset ("Polaris, Guided"), and the items that wait on you are rows in
 
 ## Assisted setup
 
-**Assisted setup** (on the card) opens a terminal in the project with the engine
-set for the builder role in Settings > Agent engines. The agent asks about your
-team (who reviews, which checks gate a merge, whether CI drops jobs), then
-proposes the doors one group at a time using the settings commands below. Without
-an engine, or without an installed one, the button is disabled and links to
-**Agent engines**.
+**Assisted setup** (pinned at the top of the view) opens a terminal in the
+project with the engine set for the builder role in Settings > Agent engines. The
+agent asks about your team (who reviews, which checks gate a merge, whether CI
+drops jobs) in one message, then proposes the doors using the settings commands
+below. Narrower doors apply at once; every wider or live position waits for your
+click as one approval request. The row says where the session went and carries
+**Show it**, because the bench is behind Settings. Without an engine, or without
+an installed one, the button is disabled and says why.
+
+## Keys in the Settings view
+
+Registered in `web/src/lib/polarisKeys.ts` and walked by
+`web/test/polaris-keys.test.ts`.
+
+| Keys | Where | Does |
+| --- | --- | --- |
+| `Alt+1`..`Alt+6` | The view | Jump to Watching, Signals, Landing, Automatic, Limits, Guardrails |
+| `Shift+F10`, Menu key, right-click | A stage card | Open its menu |
+| `Enter` | The stage menu | Open this block |
+| `Esc` | The stage menu, then the example | Close the menu; close the example card |
+| Arrows, `Home`, `End` | The stage menu | Walk its entries |
+
 
 ## Agent control
 
@@ -229,6 +256,6 @@ is `{ "version": 1, "enabled": true, "preset": "guided", "doors": { ... } }` and
 has only what you set. A missing door reads its safe position, an unknown key is
 kept, and a layer saved by a newer version is read, not refused.
 
-When a later version adds a door, the card says so (*Format 1 to 2*): the new door
-is off for you until you turn it on, your other doors do not change, and Dismiss
-saves the layer in the new format with an Undo beside it.
+When a later version adds a door, the new door is off for you until you turn it on, and
+your other doors do not change. Nothing is rewritten silently: a layer keeps the format
+it was saved in, and the next Save writes that format back.

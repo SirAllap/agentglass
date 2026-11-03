@@ -1,5 +1,5 @@
 /*
- * A held gate, answered where it is read.
+ * A gate waiting on you, answered where it is read.
  *
  * It lived on the Now screen, a destination of its own, and the terminal only
  * said HOW MANY were held — a red band that sent you there. So answering an
@@ -25,7 +25,7 @@ import { MONO, RADIUS, SPACE, T, ink, tint, type Palette } from "../theme.ts";
 import { TAP } from "../ui.tsx";
 
 /** A clock that moves once a minute — the grain of `waited`, and the same
- *  cadence the usage chip uses so a held gate does not re-render every second. */
+ *  cadence the usage chip uses so a gate waiting on you does not re-render every second. */
 function useMinute(): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {

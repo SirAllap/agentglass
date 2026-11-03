@@ -23,7 +23,7 @@ const min = 60_000;
 const row = (name: string, over: Partial<LanternRow> = {}): LanternRow => ({ name, from: "seen", state: "idle", paneId: `%${name.length}`, ...over });
 const working = (name: string, over: Partial<LanternRow> = {}) => row(name, { state: "working", ...over });
 const blocked = (name: string, kind: "permission" | "gate" = "permission", over: Partial<LanternRow> = {}) =>
-  row(name, { state: "waiting", needsYou: { kind, why: kind === "gate" ? "held at the gate: Bash — rm -rf dist" : "Claude needs your permission to use Bash", since: now - 4 * min }, ...over });
+  row(name, { state: "waiting", needsYou: { kind, why: kind === "gate" ? "waiting at the gate: Bash — rm -rf dist" : "Claude needs your permission to use Bash", since: now - 4 * min }, ...over });
 const quiet = (name: string, over: Partial<LanternRow> = {}) =>
   row(name, { from: "said", doing: "migrate the orbit tables", saidAt: now - 90 * min, ...over });
 
@@ -50,7 +50,7 @@ test("the Lantern's own chat is never counted as work", () => {
   expect(v.clauses[0].text).toBe("nothing running");
 });
 
-test("a permission or a held gate needs you, and is the loud tone", () => {
+test("a permission or a gate waiting on you needs you, and is the loud tone", () => {
   const v = fleetVerdict([working("orbit-api"), blocked("orbit-web", "permission"), blocked("acme-docs", "gate")], now)!;
   expect(v.tone).toBe("critical");
   const need = v.clauses.find((c) => c.kind === "need")!;
@@ -99,12 +99,12 @@ test("the three answers come in the issue's order: running, stuck, needs you", (
 
 test("the wait's own sentence stands alone — never 'needs your permission (… needs your permission …)'", () => {
   const v = fleetVerdict([blocked("orbit-web", "gate")], now)!;
-  expect(v.clauses.find((c) => c.kind === "need")!.text).toBe("orbit-web: held at the gate: Bash — rm -rf dist");
+  expect(v.clauses.find((c) => c.kind === "need")!.text).toBe("orbit-web: waiting at the gate: Bash — rm -rf dist");
 });
 
 test("a wait that came without a sentence is named by its kind", () => {
   const v = fleetVerdict([blocked("orbit-web", "gate", { needsYou: { kind: "gate", why: "", since: now } })], now)!;
-  expect(v.clauses.find((c) => c.kind === "need")!.text).toBe("orbit-web: held at the gate");
+  expect(v.clauses.find((c) => c.kind === "need")!.text).toBe("orbit-web: waiting at the gate");
 });
 
 test("a working seat counts as running, as the Lantern view counts it", () => {

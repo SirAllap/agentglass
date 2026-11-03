@@ -16,9 +16,10 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  addProfile, DEFAULT_PROFILE, isProfileId, loadProfiles, MAX_PROFILES, mintProfileId,
+  addProfile, DEFAULT_PROFILE, isProfileId, loadProfiles, MAX_PROFILES, mintAgentProfile, mintProfileId,
   partitionFor, partitionsFor, profileHue, profileName, removeProfile, saveProfiles,
 } from "../src/lib/browserProfiles.ts";
+import { agentContainerName } from "../../shared/workerContainer.ts";
 
 const BASE = "persist:agentglass-browser";
 /** The pattern electron/main.js validates against. Copied deliberately: if the
@@ -340,5 +341,68 @@ describe("a partition for a name that is not an id", () => {
   test("and two different names do not collide on one jar", () => {
     expect(partitionFor("persist:agx", "review-pr-540"))
       .not.toBe(partitionFor("persist:agx", "review-pr-541"));
+  });
+});
+
+describe("an agent's container is namespaced and never borrowed (M2)", () => {
+  test("a person cannot take the reserved name an agent's container lives under", () => {
+    expect(addProfile([], "agent:work")).toEqual({ error: "that name is reserved for an agent's own container" });
+    expect(addProfile([], "AGENT:Work")).toEqual({ error: "that name is reserved for an agent's own container" });
+  });
+
+  test("a person's profile named exactly like the worker never becomes its container", () => {
+    /* The defect: the panel resolved a wanted name against the profiles that
+       already existed, so a worker called `work` beside this profile got a tab
+       in the person's logins. */
+    const person = addProfile([], "work");
+    if ("error" in person) throw new Error(person.error);
+    const mine = mintAgentProfile(person.profiles, agentContainerName("work"));
+    if ("error" in mine) throw new Error(mine.error);
+    expect(mine.profile.name).toBe("agent:work");
+    expect(mine.profile.id).not.toBe(person.profile.id);
+    expect(partitionFor(BASE, mine.profile.id)).not.toBe(partitionFor(BASE, person.profile.id));
+    /* And the two lists keep both: the person's profile is not replaced. */
+    expect(mine.profiles.map((p) => p.name).sort()).toEqual(["agent:work", "work"]);
+  });
+
+  test("a reserved name with no container yet is minted, and the second mint reuses its own", () => {
+    const first = mintAgentProfile([], agentContainerName("Orbit-R15"));
+    if ("error" in first) throw new Error(first.error);
+    const again = mintAgentProfile(first.profiles, agentContainerName("orbit-r15"));
+    if ("error" in again) throw new Error(again.error);
+    expect(again.profile.id).toBe(first.profile.id);
+    expect(again.profiles.length).toBe(1);
+  });
+
+  test("a 64-character name keeps the whole container the relay asks for", () => {
+    const name = "reviewer-row-89-worker-browser-that-needs-all-sixty-four-chars-x";
+    expect(name.length).toBe(64);
+    const want = agentContainerName(name);
+    const mine = mintAgentProfile([], want);
+    if ("error" in mine) throw new Error(mine.error);
+    expect(mine.profile.name).toBe(want);
+    /* And the same list read back is the same container: a cap at load time
+       would undo the mint on the next mount. */
+    const saved = JSON.stringify(mine.profiles);
+    const read = loadProfiles({
+      getItem: () => saved,
+      setItem: () => undefined,
+    } as unknown as Pick<Storage, "getItem" | "setItem">);
+    expect(read.map((p) => p.name)).toEqual([want]);
+  });
+
+  test("two 64-character names with a shared prefix get two containers", () => {
+    const a = "reviewer-row-89-worker-browser-that-needs-all-sixty-four-chars-x";
+    const b = "reviewer-row-89-worker-browser-that-needs-all-sixty-four-chars-y";
+    expect(a.length).toBe(64);
+    expect(b.length).toBe(64);
+    expect(a.slice(0, 42)).toBe(b.slice(0, 42));
+    const first = mintAgentProfile([], agentContainerName(a));
+    if ("error" in first) throw new Error(first.error);
+    const second = mintAgentProfile(first.profiles, agentContainerName(b));
+    if ("error" in second) throw new Error(second.error);
+    expect(second.profile.name).not.toBe(first.profile.name);
+    expect(second.profile.id).not.toBe(first.profile.id);
+    expect(partitionFor(BASE, second.profile.id)).not.toBe(partitionFor(BASE, first.profile.id));
   });
 });

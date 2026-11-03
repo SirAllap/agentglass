@@ -133,6 +133,7 @@ describe("every shared floating component closes with its owner", () => {
     "components/StackMarks.tsx",
     "components/TasksPanel.tsx",
     "components/PrPanel.tsx",
+    "components/PrLaneSync.tsx",
     "lib/useDismiss.ts",
   ];
   for (const f of WITH_HOOK) {

@@ -24,6 +24,7 @@ import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useSta
 import { createPortal } from "react-dom";
 import { hiddenOnly } from "./hiddenOnly.ts";
 import { ViewRail, type RailPip } from "./ViewRail.tsx";
+import { subscribeSummary, summarySnapshot, summaryHasLeft } from "../../lib/manifest.ts";
 import { railBadgesKey, subscribeRailBadges, visiblePips } from "../../lib/railBadges.ts";
 import { pushScope } from "../../lib/findScope.ts";
 import { VIEWS, saveLastView, type ViewId } from "./views.ts";
@@ -38,6 +39,7 @@ import { DockerView } from "../DockerPanel.tsx";
 import { TermView } from "../TerminalPanel.tsx";
 import { BrowserView } from "../BrowserPanel.tsx";
 import { AgentsView } from "../agents/AgentsView.tsx";
+import { ManifestView } from "../ManifestView.tsx";
 import { subscribeLantern, lanternNeed } from "../../lib/lanternStore.ts";
 import { requestTermReview } from "../../lib/termReview.ts";
 import { requestTermIssue } from "../../lib/termIssue.ts";
@@ -83,13 +85,15 @@ const KEEP_RUNNING = new Set<ViewId>(["term", "browser"]);
  */
 
 export function Workspace({
-  view, onView, onSkills, onSettings, onMachine, dashboard, prJump, cardJump, issueJump,
+  view, onView, onSkills, onSettings, onMachine, onOpenProject, dashboard, prJump, cardJump, issueJump,
 }: {
   view: ViewId;
   onView: (v: ViewId) => void;
   onSkills: () => void;
   onSettings: () => void;
-  onMachine: (tab: "ports" | "resources") => void;
+  onMachine: (tab: "resources") => void;
+  /** The app-wide project picker, the same door the top bar opens. */
+  onOpenProject: () => void;
   /** The dashboard is a view like any other, but its data lives at the root
    *  (the live socket feeds it), so it arrives already built
    *  and is handed its own `active` here like everything else. */
@@ -122,6 +126,7 @@ export function Workspace({
   const frameRef = useRef<HTMLDivElement>(null);
   const firedReminders = useSyncExternalStore(subscribeReminders, firedCount, firedCount);
   const lanternWaiting = useSyncExternalStore(subscribeLantern, lanternNeed, lanternNeed);
+  const manifestSummary = useSyncExternalStore(subscribeSummary, summarySnapshot, summarySnapshot);
 
   // A count the person turned off in Settings (Sidebar) is not drawn.
   useSyncExternalStore(subscribeRailBadges, railBadgesKey, railBadgesKey);
@@ -135,6 +140,9 @@ export function Workspace({
     // hundred open tasks is a normal Tuesday, and a badge that said so would
     // be ignored within a day.
     tasks: firedReminders > 0 ? { count: firedReminders } : {},
+    // A presence dot, not a count: the rows wait for a verdict, not for a
+    // number to be read. It is on only for projects this caller may sign in.
+    manifest: summaryHasLeft(manifestSummary) ? { dot: true } : {},
   };
 
   /**
@@ -185,7 +193,7 @@ export function Workspace({
   }, []);
 
   return (
-    <div ref={frameRef} tabIndex={-1} className="flex-1 min-h-0 flex outline-none">
+    <div ref={frameRef} tabIndex={-1} className="agx-shell-grow flex-1 min-h-0 flex outline-none">
       <ViewRail view={view} onSelect={onView} onSkills={onSkills}
         onSettings={onSettings} onMachine={onMachine} pips={visiblePips(pips)} />
 
@@ -215,7 +223,7 @@ export function Workspace({
                 {v.id === "dash"
                   ? dashboard(active)
                   : <Body id={v.id} active={active}
-                      openBrowser={openBrowser} />}
+                      openBrowser={openBrowser} onOpenProject={onOpenProject} />}
               </ViewBoundary>
             </ViewBox>
           );
@@ -272,8 +280,9 @@ function ViewBox({ active, children }: { active: boolean; children: React.ReactN
 
 /** The non-dashboard views, and the props each one wants. Split out so the map
  *  above stays about mounting rather than about plumbing. */
-function BodyImpl({ id, active, openBrowser }: {
+function BodyImpl({ id, active, openBrowser, onOpenProject }: {
   id: ViewId; active: boolean;
+  onOpenProject: () => void;
   /** Bring the browser view forward — the Docker panel asks for it when you
    *  open a container's port, so a dev server lands in a tab of this app
    *  instead of somewhere else. */
@@ -292,6 +301,7 @@ function BodyImpl({ id, active, openBrowser }: {
     /* The Lantern and the project's chair, as one screen. Its chat is a tab on
        the floating bench — see lanternAsk.ts. Nothing to hand it. */
     case "agents": return <AgentsView active={active} />;
+    case "manifest": return <ManifestView active={active} onOpenProject={onOpenProject} />;
     case "plugins": return <PluginsView active={active} />;
     case "flightPlan": return <FlightPlanView active={active} />;
     default: return null;

@@ -21,7 +21,7 @@
  *   from lists the phone already holds (see TabBar.tsx for why issues and
  *   cards carry none).
  *
- *   Now's held gates are answered where the agent is, in the terminal — and
+ *   Now's gates waiting on you are answered where the agent is, in the terminal — and
  *   on a phone that may not type, the Terminal screen is where they are
  *   listed instead of a pane.
  *

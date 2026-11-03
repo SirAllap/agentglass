@@ -25,7 +25,7 @@ export interface PageStateSink {
 export interface PageHead {
   chips?: readonly HeaderChip[];
   /** `plain` is a verb that adds nothing (Install), so it has no plus before it. */
-  action?: { label: string; plain?: boolean };
+  action?: { label: string; plain?: boolean; /** The Flow editor button: larger, with the flow icon and a chevron. */ flow?: boolean };
 }
 export const PageState = createContext<PageStateSink | null>(null);
 

@@ -10,7 +10,7 @@
 // Crew, Orrery, Needs you, Tools and Cost live in StarboardPanels.tsx and read
 // the Lantern board and the stats. Ceiling: a Stalled? tile is drawn only once
 // the engine supplies a value; until then it is left out, not shown as a dash.
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { WatchEvent, SessionRollup, StatsSummary } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import { usePoll } from "../lib/usePoll.ts";
@@ -19,11 +19,18 @@ import { Alerts } from "./Alerts.tsx";
 import { Feed } from "./Feed.tsx";
 import { useFleetVerdict } from "../lib/useFleetVerdict.ts";
 import { Crew, Orrery, NeedsYou, Tools, Cost, useCrewCounts, useBoard } from "./StarboardPanels.tsx";
+import { WorkerLive } from "./StarboardWorkerLive.tsx";
 import { subscribeProviderUsage, providerUsage } from "../lib/usageStore.ts";
 import { coreRows } from "../lib/accountStore.ts";
-import { spendSeries, sparkPath, fiveHour, quotaLines, untilReset, stalledCount, clockWords } from "../lib/starboardKpi.ts";
+import { spendSeries, sparkPath, fiveHour, quotaTipLines, untilReset, stalledCount, clockWords } from "../lib/starboardKpi.ts";
 import { sbTip, sbQuotaTip, type SbTip } from "../lib/starboardTips.ts";
 import { Select } from "./Select.tsx";
+import { Spinner } from "./Spinner.tsx";
+import {
+  ALL_SCOPE, filterEvents, filterRows, isEventScoped, isScoped, readScope, resolveScope, scopeChoices,
+  scopedSummary, withProject, withSession, withWorker, writeScope, type Scope,
+} from "../lib/starboardScope.ts";
+import { baseName } from "../lib/starboardCrew.ts";
 import type { ReactNode } from "react";
 import type { AgentCard, Alert } from "../lib/derive.ts";
 import { CrossIcon } from "../lib/glyphIcons.tsx";
@@ -48,12 +55,11 @@ const WINDOWS = [
 export type DashFilter = { app: string; type: string; provider: string };
 
 export function StarboardView({
-  active, events, visibleEvents, agents, alerts, stats, sessionProvider, providers,
+  active, visibleEvents, agents, alerts, stats, sessionProvider, providers,
   windowMs, onWindow, filter, onFilter, onClearFilter, retentionDays, refreshing,
   startedAt, epm, onSelectEvent, onSelectSession, onOpenLantern,
 }: {
   active: boolean;
-  events: WatchEvent[];
   visibleEvents: WatchEvent[];
   agents: AgentCard[];
   alerts: Alert[];
@@ -92,16 +98,43 @@ export function StarboardView({
   const [, setTick] = useState(0);
   usePoll(active, () => setTick((n) => n + 1), 30_000);
   const now = Date.now();
+  const boardRows = useBoard();
+  /*
+   * One project or one session, kept for this viewer. The stored id is checked
+   * against the board on every render: a session that has ended falls back to
+   * All instead of leaving every tile empty.
+   */
+  const [picked, setPicked] = useState<Scope>(() => readScope());
+  const scope = useMemo(() => resolveScope(picked, boardRows), [picked, boardRows]);
+  useEffect(() => { if (scope !== picked) setPicked(scope); }, [scope, picked]);
+  useEffect(() => { writeScope(scope); }, [scope]);
+  const scopedEvents = useMemo(() => filterEvents(visibleEvents, boardRows, scope), [visibleEvents, boardRows, scope]);
+  const scoped = useMemo(
+    () => (isEventScoped(scope) ? scopedSummary(scopedEvents, windowMs ? now - windowMs : 0) : null),
+    [scope, scopedEvents, windowMs, now],
+  );
+  const choices = useMemo(() => scopeChoices(boardRows), [boardRows]);
+  const sessionRows = useMemo(() => filterRows(boardRows, { project: scope.project, session: "" }), [boardRows, scope.project]);
+  const sessionChoices = useMemo(() => scopeChoices(sessionRows).sessions, [sessionRows]);
+  const scopeIds = useMemo(
+    () => (isEventScoped(scope) && boardRows.length > 0 ? new Set(filterRows(boardRows, scope).map((r) => r.session).filter((s): s is string => !!s)) : undefined),
+    [scope, boardRows],
+  );
+  const scopedAgents = useMemo(
+    () => (scopeIds ? agents.filter((a) => scopeIds.has(a.session_id)) : agents),
+    [agents, scopeIds],
+  );
   const crew = useCrewCounts(now);
   const spend = spendSeries(stats?.timeline);
   const quotaRows = coreRows(useSyncExternalStore(subscribeProviderUsage, providerUsage, () => null));
   const five = fiveHour(quotaRows);
-  const quotaTip = sbQuotaTip(quotaLines(quotaRows));
+  const quotaTip = sbQuotaTip(quotaTipLines(quotaRows));
   const stalled = stalledCount(useBoard());
   const clock = clockWords(now);
   const up = Math.max(0, Math.floor((now - startedAt) / 60_000));
 
-  const hasFilter = filter.app || filter.type || filter.provider;
+  const hasFilter = filter.app || filter.type || filter.provider || isScoped(scope);
+  const clearAll = () => { setPicked(ALL_SCOPE); onClearFilter(); };
   const selStyle = {
     background: "color-mix(in srgb, var(--bg3) 40%, transparent)",
     border: EDGE,
@@ -136,6 +169,16 @@ export function StarboardView({
                 );
               })}
             </span>
+            <Select value={scope.project} style={selStyle} title="Project"
+              options={[{ value: "", label: "All projects" }, ...choices.projects.map((p) => ({ value: p, label: baseName(p) }))]}
+              onChange={(v) => setPicked(withProject(scope, v))} />
+            <Select value={scope.session} style={selStyle} title="Session"
+              options={[{ value: "", label: "All sessions" }, ...sessionChoices.map((r) => ({ value: r.session!, label: r.name }))]}
+              onChange={(v) => setPicked(withSession(scope, v))} />
+            {/* The numbers stay up, dimmed, until the new ones land; this says why. */}
+            <span className="sb-recalc" data-on={refreshing ? "1" : undefined} data-tip={refreshing ? "Recalculating…" : undefined} aria-label={refreshing ? "Recalculating" : undefined}>
+              {refreshing && <Spinner className="px-0 py-0" />}
+            </span>
             <Select value={filter.app} style={selStyle}
               options={[{ value: "", label: "All apps" }, ...opts.source_apps.map((a) => ({ value: a, label: a }))]}
               onChange={(v) => onFilter({ ...filter, app: v })} />
@@ -143,46 +186,48 @@ export function StarboardView({
               options={[{ value: "", label: "All events" }, ...opts.hook_event_types.map((x) => ({ value: x, label: x }))]}
               onChange={(v) => onFilter({ ...filter, type: v })} />
             {/* Reserved when absent: a control that comes and goes under the pointer moves the ones beside it. */}
-            <span style={{ visibility: providers.length > 1 ? "visible" : "hidden" }}>
+            <span style={{ visibility: providers.length > 1 ? "inherit" : "hidden" }}>
               <Select value={filter.provider} style={selStyle}
                 options={[{ value: "", label: "All providers" }, ...providers.map((p) => ({ value: p, label: providerLabel(p) }))]}
                 onChange={(v) => onFilter({ ...filter, provider: v })} />
             </span>
-            <span style={{ visibility: hasFilter ? "visible" : "hidden" }}>
-              <Button tone="warn" size="compact" className="shrink-0" onClick={onClearFilter}>Clear<CrossIcon size={ICON.xs} /></Button>
+            <span style={{ visibility: hasFilter ? "inherit" : "hidden" }}>
+              <Button tone="warn" size="compact" className="shrink-0" onClick={clearAll}>Clear<CrossIcon size={ICON.xs} /></Button>
             </span>
           </div>
           <div className="sb-clock" data-tip={sbTip("clock")} tabIndex={0}><b>{clock.time}</b><span>{clock.date}</span></div>
         </header>
 
         <section className="sb-kpi" aria-label="Key numbers" style={{ opacity: fleet?.stale ? 0.6 : 1 }}>
-          <Tile tip="spend" label="Spend" n={t ? `~$${t.cost_usd.toFixed(2)}` : "–"} sub={`estimated · ${(t?.sessions ?? 0).toLocaleString()} sessions`} hero spark={spend ? sparkPath(spend) : undefined} />
+          <Tile tip="spend" label="Spend" n={scoped ? `~$${scoped.totals.cost_usd.toFixed(2)}` : t ? `~$${t.cost_usd.toFixed(2)}` : "–"} sub={scoped ? `estimated · ${scoped.totals.sessions.toLocaleString()} sessions in view` : `estimated · ${(t?.sessions ?? 0).toLocaleString()} sessions`} hero spark={!scoped && spend ? sparkPath(spend) : undefined} />
           <Tile tip="working" label="Working" n={fleet?.counts.running ?? "–"} sub="from the Lantern board" />
           <Tile tip="waiting" label="Waiting on you" n={fleet?.counts.need ?? "–"} sub="same as the rail pip" warn={!!fleet?.counts.need} />
-          <Tile tip="eventsMin" label="Events / min" n={epm} sub="live, last 60 s" />
-          <Tile tip="tools" label="Tools run" n={t ? t.tool_calls.toLocaleString() : "–"} sub={`${(t?.events ?? 0).toLocaleString()} events`} />
-          <Tile tip="failed" label="Failed" n={t ? (t.tool_errors ?? 0).toLocaleString() : "–"} sub={t && t.tool_calls ? `${((t.tool_errors ?? 0) / t.tool_calls * 100).toFixed(1)}% of tools run` : "failed tool calls"} bad={!!t?.tool_errors} />
+          <Tile tip="eventsMin" label="Events / min" n={scoped ? scopedEvents.filter((e) => e.timestamp >= now - 60_000).length : epm} sub="live, last 60 s" />
+          <Tile tip="tools" label="Tools run" n={scoped ? scoped.totals.tool_calls.toLocaleString() : t ? t.tool_calls.toLocaleString() : "–"} sub={`${(scoped ? scoped.totals.events : t?.events ?? 0).toLocaleString()} events`} />
+          <Tile tip="failed" label="Failed" n={scoped ? scoped.totals.tool_errors.toLocaleString() : t ? (t.tool_errors ?? 0).toLocaleString() : "–"} sub={scoped ? (scoped.totals.tool_calls ? `${(scoped.totals.tool_errors / scoped.totals.tool_calls * 100).toFixed(1)}% of tools run` : "failed tool calls") : t && t.tool_calls ? `${((t.tool_errors ?? 0) / t.tool_calls * 100).toFixed(1)}% of tools run` : "failed tool calls"} bad={scoped ? !!scoped.totals.tool_errors : !!t?.tool_errors} />
           <Tile tip="uptime" label="Uptime" n={`${Math.floor(up / 60)} h ${String(up % 60).padStart(2, "0")} m`} sub="server" opt />
           <Tile tip="quota" tipText={quotaTip} label="Quota · 5 h" n={five ? <>{Math.round(five.used)}<small>%</small></> : "–"}
             sub={five ? (untilReset(five.resetsAt, now) ? `resets in ${untilReset(five.resetsAt, now)}` : "reset time not reported") : "no reading · sign in"} opt />
-          {stalled !== null && <Tile tip="stalled" label="Stalled?" n={stalled} sub="proposed · see tooltip" proposed opt />}
+          {stalled !== null && <Tile tip="stalled" label="Stalled?" n={stalled} sub="no life sign for 20 min" opt />}
         </section>
 
-        <Crew cards={agents} now={now} />
-        <Orrery now={now} working={fleet?.counts.running ?? 0} />
+        <Crew cards={agents} now={now} scope={scope} onPickSession={(s) => setPicked(withSession(scope, s))} onPickWorker={(w) => setPicked(withWorker(scope, w))} />
+        <Orrery now={now} working={fleet?.counts.running ?? 0} scope={scope} />
         <div className="sb-right">
           <NeedsYou onOpenLantern={onOpenLantern} now={now} />
           <div className="sb-slot" data-glyph="alerts" data-tip={sbTip("alerts")} tabIndex={0}>
-            <Alerts alerts={alerts} agents={agents} active={active} onSelectApp={(app) => onFilter({ ...filter, app })} />
+            <Alerts alerts={alerts} agents={scopedAgents} scopeIds={scopeIds} active={active} onSelectApp={(app) => onFilter({ ...filter, app })} />
           </div>
-          <Tools stats={stats} />
+          <Tools stats={stats} latency={scoped?.tool_latency} />
         </div>
         <div className="sb-feed sb-slot" data-glyph="live" data-tip={sbTip("feed")} tabIndex={0}>
-          <Feed events={events} filter={filter} sessionProvider={sessionProvider} onSelect={onSelectEvent} onClearFilter={onClearFilter} />
+          {scope.worker
+            ? <WorkerLive name={scope.worker} />
+            : <Feed events={scopedEvents} filter={filter} sessionProvider={sessionProvider} onSelect={onSelectEvent} onClearFilter={onClearFilter} />}
         </div>
         <div className="sb-bot">
-          <div className="sb-slot" data-glyph="thru" data-tip={sbTip("thru")} tabIndex={0}><Throughput events={visibleEvents} /></div>
-          <Cost stats={stats} />
+          <div className="sb-slot" data-glyph="thru" data-tip={sbTip("thru")} tabIndex={0}><Throughput events={scopedEvents} /></div>
+          <Cost stats={stats} models={scoped?.by_model} />
         </div>
       </div>
     </div>

@@ -6,8 +6,8 @@
 import { describe, expect, test } from "bun:test";
 import type { DockerContainer, DockerStat } from "../../shared/types.ts";
 import {
-  envRows, envSummary, factsOf, healthLine, hitsIn, lastIndexOf, levelCounts, markSegments, pauseLabel,
-  portChips, readLog, shownBy, stepHit, streamChip, topTree,
+  envRows, envSummary, factsOf, healthLine, hitsIn, lastIndexOf, levelCounts, logFromEarlierRun, markSegments,
+  NO_LOG_FROM_THIS_START, pauseLabel, portChips, readLog, shownBy, stepHit, streamChip, topTree,
 } from "../src/lib/dockerDetail.ts";
 
 const c = (over: Partial<DockerContainer> = {}): DockerContainer => ({
@@ -43,6 +43,64 @@ describe("the red line under the header", () => {
     const w = healthLine(c({ health: "unhealthy", restarts: undefined }))!;
     expect(w.rest).toBe("Up 4 hours.");
     expect(w.lead).toBe("Health check failing:");
+  });
+});
+
+describe("an exit docker can explain, and one it cannot", () => {
+  const shim = 'failed to create shim task: OCI runtime create failed: error mounting "/home/dev/orbit/file.conf" to rootfs at "/app/file.conf": no such file or directory';
+  const failed = c({ state: "exited", status: "Exited (127) 13 minutes ago", stateError: shim, finishedAt: "2026-10-31T09:41:12.418Z" });
+
+  /* The banner used to say only "Exited with code 127 13 minutes ago. It was not
+     stopped by you." A container that never ran has no log of its own, so the
+     reason docker recorded was the only one there was and nothing showed it. */
+  test("a start failure adds one plain sentence and keeps docker's words behind it", () => {
+    const w = healthLine(failed)!;
+    expect(w.lead).toBe("Exited with code 127");
+    expect(w.rest).toBe("13 minutes ago. It was not stopped by you.");
+    expect(w.cause).toBe("Docker could not start it: a file it needs to mount is missing: /home/dev/orbit/file.conf.");
+    expect(w.raw).toBe(shim);
+  });
+
+  test("an empty state error leaves today's text exactly as it was", () => {
+    for (const stateError of [undefined, null, "", "   "]) {
+      const w = healthLine(c({ state: "exited", status: "Exited (1) 3 hours ago", stateError }))!;
+      expect(w.rest).toBe("3 hours ago. It was not stopped by you.");
+      expect(w.cause).toBeUndefined();
+      expect(w.raw).toBeUndefined();
+    }
+  });
+});
+
+describe("a log written before the start that failed", () => {
+  const failure = { stateError: "OCI runtime create failed", finishedAt: "2026-10-31T09:41:12.418Z", startedAt: null };
+  const before = readLog(["2026-10-31T09:20:00.000000000Z INFO booting", "2026-10-31T09:20:05.000000000Z ERROR bye"]);
+
+  test("lines that settle before the attempt ended are the run before it", () => {
+    expect(logFromEarlierRun(failure, before)).toBe(true);
+    expect(NO_LOG_FROM_THIS_START).toBe("No log from this start attempt");
+  });
+
+  test("a line at or after the end belongs to the attempt, and says nothing extra", () => {
+    expect(logFromEarlierRun(failure, readLog(["2026-10-31T09:45:00Z INFO booting"]))).toBe(false);
+    expect(logFromEarlierRun(failure, readLog(["2026-10-31T09:41:12.418Z INFO booting"]))).toBe(false);
+  });
+
+  test("no docker error means no claim about the log", () => {
+    expect(logFromEarlierRun({ ...failure, stateError: "" }, before)).toBe(false);
+  });
+
+  test("a container docker stamped neither way cannot be decided, and is left alone", () => {
+    expect(logFromEarlierRun({ stateError: "boom", finishedAt: null, startedAt: null }, before)).toBe(false);
+    expect(logFromEarlierRun({ stateError: "boom", finishedAt: "0001-01-01T00:00:00Z", startedAt: null }, before)).toBe(false);
+  });
+
+  test("the start time stands in when the exit left no stamp of its own", () => {
+    expect(logFromEarlierRun({ ...failure, finishedAt: null, startedAt: "2026-10-31T09:41:12Z" }, before)).toBe(true);
+  });
+
+  test("a log whose lines carry no stamp cannot be placed in time", () => {
+    expect(logFromEarlierRun(failure, readLog(["just text", "more text"]))).toBe(false);
+    expect(logFromEarlierRun(failure, [])).toBe(false);
   });
 });
 

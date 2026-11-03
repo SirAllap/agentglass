@@ -6,7 +6,7 @@
  */
 import { namedFiles, runPreflight, type PreflightDeps, type PreflightInput } from "./preflight.ts";
 import { linkPreflight, type SeatTask } from "./seatqueue.ts";
-import { type LaunchedWhere, type Plan, countAutoRun, findingsAnswered, listPlans, markLaunched, setPreflightRun, versionOf } from "./flightPlanStore.ts";
+import { type LaunchedWhere, type Plan, countAutoRun, findingsAnswered, gateSince, listPlans, markLaunched, failCount, passedRoles, setPreflightRun, versionOf } from "./flightPlanStore.ts";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { isLaunchMode, type LaunchMode } from "../../shared/launchModes.ts";
 import { existsSync } from "node:fs";
@@ -15,8 +15,15 @@ import { commandVerdict, isInside, realish } from "./builderGuard.ts";
 import { ruleRoot } from "./agentRulesStore.ts";
 import { addWorktree } from "./gitwork.ts";
 import { git } from "./git.ts";
-import { APP, REVIEW_OF, createRun, fail, finish, getRun, getSetting, setState, type Moment, type Run } from "./preflightStore.ts";
+import { APP, REVIEW_OF, clearRetired, createRun, fail, finish, getRun, getSetting, PREFLIGHT_MODEL_ALIAS, retiredSetting, setState, type Moment, type Run } from "./preflightStore.ts";
+import { readFlow } from "./flow.ts";
+import { readStoredFlow, workerRoles, writeWorkerRole } from "./config.ts";
+import { roleLockFor, rolePromptFor } from "./rolePrompt.ts";
+import { toolsDeniedFor } from "./agents/envelope.ts";
+import { chainInForce } from "./orchestration.ts";
 import { budgetState } from "./flightBudget.ts";
+import { builderPick, overrideVerdict, sensitiveHit, sensitivePath, type BuilderModel, type BuilderPick } from "../../shared/builderModel.ts";
+import { preflightTargetFromChain, type PreflightTarget } from "../../shared/preflightEngine.ts";
 import type { BuilderState, Pilot, StopReason } from "../../shared/types.ts";
 
 /** Tests swap the runner's deps; a booted test server reads AGENTGLASS_PREFLIGHT_BIN, honoured only under NODE_ENV=test. */
@@ -48,9 +55,10 @@ export function request(r: RequestIn): Requested {
   // A Preflight runs the moment it is asked for: the list of reviews decides whether it is asked at all, and a press on Run is always asked.
   const review = REVIEW_OF[r.moment];
   if (review && !(getSetting(r.root, "flightPlan.preflight.reviews") as string[]).includes(review)) return { ok: false, error: `Preflight does not review ${r.moment} in ${r.root}.` };
+  const target = preflightTargetFor(r.root);
   const input: PreflightInput = {
     files: r.files ?? [], ...(r.ranges ? { ranges: r.ranges } : {}), ...(r.leftOut?.length ? { leftOut: r.leftOut } : {}), mockups: r.mockups ?? [], root: r.root, ...(r.pr ? { pr: r.pr } : {}), ...(r.extraText ? { extraText: r.extraText } : {}),
-    model: String(getSetting(r.root, "flightPlan.preflight.model")), budgetUsd: r.capUsd ?? Number(getSetting(r.root, "flightPlan.preflight.costCapUsd")),
+    engine: target.engine, model: target.model, budgetUsd: r.capUsd ?? Number(getSetting(r.root, "flightPlan.preflight.costCapUsd")),
   };
   const run = createRun({ root: r.root, moment: r.moment, state: "running", by: r.by, input, taskId: r.taskId });
   return { ok: true, run, done: execute(run.id) };
@@ -209,10 +217,18 @@ export function authorPrompt(p: Plan, guide: string): string {
   ].filter(Boolean).join("\n\n");
 }
 
+/**
+ * The Builder role's prompt from the project's saved flow, or the shipped one
+ * when that flow has no Builder prompt. A project with no saved flow gets "":
+ * its launches stay as they were until somebody opens the flow editor.
+ */
+export const builderRolePrompt = (root: string): string => rolePromptFor(root, "builder");
+
 /** The brief a launched worker starts with: the plan the person said Go to, and the mockups beside it. */
 export function launchPrompt(p: Plan, coordinator: string | null = null): string {
   const progress = `As you work, keep the Flight plan view current: \`agentglass-ui flight-plan plan report ${p.id} "<one line: done or next>" --step <n> --of <m>\` after each step.`;
-  return `${brief(p)}${p.mockups.length ? `\n## Mockups\n${p.mockups.map((m) => `- ${m.path} (${m.kind})`).join("\n")}\nBuild what the mockup shows.\n` : ""}\nThis flight plan was reviewed and given Go. Build it as written; where it is silent, decide and say what you decided.\n\n${progress}\n\n${reportingBlock(coordinator)}`;
+  const role = builderRolePrompt(p.root);
+  return `${role ? `${role}\n\n` : ""}${brief(p)}${p.mockups.length ? `\n## Mockups\n${p.mockups.map((m) => `- ${m.path} (${m.kind})`).join("\n")}\nBuild what the mockup shows.\n` : ""}\nThis flight plan was reviewed and given Go. Build it as written; where it is silent, decide and say what you decided.\n\n${progress}\n\n${reportingBlock(coordinator)}`;
 }
 
 /** The builder's tab name on the strip: short, from the plan's branch (`flight-plan/<slug>`). */
@@ -242,9 +258,62 @@ export const BUILDER_DENY: readonly string[] = [
   "Bash(agentglass-ui settings set:*)", "Bash(agentglass-ui rules set:*)",
 ];
 
-/** What the launched builder starts with: the person's chosen permission mode (Auto unless set), and the model the workers' builder role names, else Sonnet. */
-export function builderLaunch(role: { provider: string; model: string }, permissions: string): { mode: LaunchMode; model: string } {
-  return { mode: isLaunchMode(permissions) ? permissions : "auto", model: role.provider === "claude" && ["haiku", "sonnet", "opus"].includes(role.model) ? role.model : "sonnet" };
+/** BUILDER_DENY plus the saved flow's lock for the builder role: the write tools when it reads only, every tool its list leaves out. Appended only; no saved flow = BUILDER_DENY as it was. */
+export function builderDenyFor(root: string): readonly string[] {
+  const lock = roleLockFor(root, "builder");
+  if (!lock) return BUILDER_DENY;
+  return [...new Set([...BUILDER_DENY, ...(lock.readsOnly ? ["Edit", "Write", "NotebookEdit", "MultiEdit"] : []), ...toolsDeniedFor(lock.tools)])];
+}
+
+/** What the launched builder starts with: the person's chosen permission mode (Auto unless set), and the model the plan's size and what it touches pick. */
+export function builderLaunch(plan: { size: "S" | "M" | "L" | null; planMd: string }, role: { provider: string; model: string }, permissions: string, strong: string): { mode: LaunchMode; model: BuilderModel; why: string } {
+  const pick = builderPick(plan, role, strong);
+  return { mode: isLaunchMode(permissions) ? permissions : "auto", model: pick.model, why: pick.why };
+}
+/** A model asked for at Go, or why it cannot be used: a stronger one than the plan's pick is the person's. */
+export function builderOverride(pick: BuilderPick, wanted: string, person: boolean): { ok: true; model: BuilderModel } | { ok: false; error: string } {
+  const why = overrideVerdict(pick, wanted, person);
+  return why ? { ok: false, error: why } : { ok: true, model: wanted as BuilderModel };
+}
+
+/**
+ * The engine and model a Preflight reviews with: the first engine of the
+ * project's Reviewer chain, so a project rule that moves the Reviewer moves the
+ * Preflight too. Claude and OpenCode are the two CLIs a review runs on; any
+ * other engine leaves Claude Sonnet to read it, and the card says so rather
+ * than the run going quiet about it.
+ */
+export function preflightTargetFor(root: string): PreflightTarget {
+  adoptPreflightModel(root);
+  return preflightTargetFromChain(chainInForce(root, "reviewer"), workerRoles().reviewer);
+}
+
+/** The model a Preflight reviews with, which is the target's. */
+export function preflightModel(root: string): string {
+  return preflightTargetFor(root).model;
+}
+
+/**
+ * Once: a model stored at the old per-project key becomes the Reviewer role's
+ * model, and the key goes, so one choice is left. A Reviewer role on another CLI
+ * keeps its engine; the old key goes without being adopted, because a Claude
+ * model name is not one that engine takes.
+ *
+ * The role is written before the key is cleared, and the key stays when that
+ * write failed (a config.json that does not parse, a config directory that
+ * cannot be written): clearing first loses the person's model for good.
+ * Unlike the LEGACY_MOMENT rows, this one is deleted rather than kept, because
+ * it is an alias and not a record: a row left behind is re-adopted on the next
+ * read and beats a model chosen in Orchestration afterwards.
+ */
+function adoptPreflightModel(root: string): void {
+  for (const at of root === APP ? [APP] : [root, APP]) {
+    const old = retiredSetting(at, PREFLIGHT_MODEL_ALIAS);
+    if (!old) continue;
+    const role = workerRoles().reviewer;
+    if (role.provider === "claude" && old !== role.model && !writeWorkerRole("reviewer", { provider: "claude", model: old }).ok) continue;
+    clearRetired(at, PREFLIGHT_MODEL_ALIAS);
+  }
 }
 
 /* ── Pilot: when a coordinator may say Go alone ── */
@@ -259,20 +328,7 @@ export const heldKey = (root: string): string => ruleRoot(root);
 export const projectOn = (root: string): boolean => getSetting(root, "flightPlan.project.enabled") !== false;
 export const isHeld = (root: string): boolean => getSetting(heldKey(root), "flightPlan.held") === true;
 
-/** Paths whose change the person looks at first: auth, migrations, secrets, payments, CI, and a dependency list. A fixed list, not a setting. */
-const SENSITIVE_PATH = [
-  /(^|\/)(auth|oauth|login|sessions?|secrets?|credentials?|keyring|payments?|billing)(\/|\.|-|_|$)/i, /(^|\/)migrations?(\/|$)/i,
-  /(^|\/)\.github(\/|$)/, /(^|\/)\.gitlab-ci\.yml$/, /(^|\/)Jenkinsfile$/,
-  /(^|\/)(package\.json|bun\.lockb?|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|requirements[\w.-]*\.txt|pyproject\.toml|Cargo\.(toml|lock)|go\.(mod|sum)|Gemfile(\.lock)?)$/,
-];
-const SENSITIVE_WORD = /\b(auth\w*|migrations?|secrets?|credentials?|payments?|billing|CI|dependenc(y|ies)|new package)\b/i;
-/** Whether the plan touches something sensitive: a path it names, or its own "Risk" section saying so. Shortcut: a path written without a slash or a recognised file name is missed; the Risk section is what catches it. */
-export function sensitiveHit(planMd: string): string | null {
-  for (const tok of planMd.match(/[\w@.-]+(?:\/[\w@.-]+)*/g) ?? []) if (SENSITIVE_PATH.some((re) => re.test(tok))) return tok;
-  const risk = /^#{1,4}\s*Risks?\b.*\n([\s\S]*?)(?=^#{1,4}\s|(?![\s\S]))/im.exec(planMd)?.[1] ?? "";
-  const w = SENSITIVE_WORD.exec(risk);
-  return w ? w[0] : null;
-}
+/** Paths whose change the person looks at first. The list lives with the model pick, which reads the same plan text. */
 
 /**
  * Why this plan needs the person before it flies, or null when nothing does.
@@ -291,6 +347,7 @@ export function stopReason(p: Plan, now = Date.now(), fresh = false): StopReason
   if (p.size === "L" && getSetting(p.root, "flightPlan.autopilot.askOnLarge") === true) return "large";
   if (getSetting(p.root, "flightPlan.autopilot.askOnSensitive") === true && sensitiveHit(p.planMd)) return "sensitive";
   if (budgetState(now, undefined, fresh).reached) return "budget";
+  if (p.id && roundsUsed(p).length) return "rounds-used";
   return null;
 }
 
@@ -303,7 +360,54 @@ export const STOP_SENTENCE: Record<StopReason, string> = {
   budget: "Flight plan reached its budget for the day or the week: Autopilot is Co-pilot until it resets",
   "builder-blocked": "a builder is blocked: the person decides what happens next",
   "sensitive-diff": "the builder's real diff touches auth, migrations, secrets, payments, CI or a dependency: the person looks before it lands",
+  "required-step": "A step the flow marks required has no passing result yet: a person decides.",
+  "rounds-used": "A step has failed the most times the flow allows: a person decides.",
 };
+
+/**
+ * Names of the roles the saved flow marks required, that are on its path, and
+ * have no passing result recorded for this plan's current text. Empty for a
+ * plan with no saved flow, no required role on the path, or one made before the
+ * gate existed. A required id that left the roster is ignored. Computed on
+ * every look, so there is no flag to clear.
+ */
+export function requiredMissing(p: Plan): string[] {
+  if (p.createdAt < gateSince()) return [];
+  const flow = readStoredFlow(p.root);
+  if (!flow) return [];
+  const done = passedRoles(p.id);
+  return flow.roster.filter((r) => r.required && flow.path.includes(r.id) && !done.has(r.id)).map((r) => r.name);
+}
+
+/** A failing arrow whose role has failed this plan as many times as it allows. */
+const spentEdge = (p: Plan, e: { on: string; from: string; maxRounds?: number }): boolean =>
+  e.on === "fail" && e.maxRounds !== undefined && Number.isInteger(e.maxRounds) && e.maxRounds > 0 && failCount(p.id, e.from) >= e.maxRounds;
+
+/**
+ * Names of the roles whose fail edge in the saved flow has been used up: the
+ * role failed this plan at least `maxRounds` times. An edge with no positive
+ * integer maxRounds is not enforced. Same exemption and same no-flag rule as
+ * requiredMissing: counts are read now, so raising maxRounds clears it.
+ */
+export function roundsUsed(p: Plan): string[] {
+  if (p.createdAt < gateSince()) return [];
+  if (!readStoredFlow(p.root)) return [];
+  const flow = readFlow(p.root).flow, names = new Map(flow.roster.map((r) => [r.id, r.name]));
+  return flow.edges.filter((e) => spentEdge(p, e)).map((e) => names.get(e.from) ?? e.from);
+}
+
+/**
+ * Whether starting `role` for this plan would go round a fail edge that is
+ * used up: the role is the failing end of it. A built-in role reaches its
+ * roster entry by `policyRole`; a role a person made, by its id.
+ */
+export function roundsSpentFor(p: Plan, role: unknown): boolean {
+  if (typeof role !== "string" || p.createdAt < gateSince()) return false;
+  if (!readStoredFlow(p.root)) return false;
+  const flow = readFlow(p.root).flow;
+  const ids = new Set(flow.roster.filter((r) => r.id === role || r.policyRole === role).map((r) => r.id));
+  return flow.edges.some((e) => ids.has(e.from) && spentEdge(p, e));
+}
 
 /** Whether the project's coordinator may say Go to this plan on its own: only in Autopilot, not held, with nothing in stopReason. The sentence is the reason when not. */
 export function seatMayFly(p: Plan): { ok: true } | { ok: false; error: string } {
@@ -335,6 +439,14 @@ export function landed(p: Plan, base: string): boolean {
 export const flying = (root: string, base: string): Plan[] => listPlans({ root, state: "launched" }).filter((p) => !landed(p, base));
 /** A builder is at work while its tab has a live pane. A launched plan whose tab is gone is paused: it holds no slot and costs nothing. */
 export const builderLive = (panes: readonly { dead?: boolean }[] | null): boolean => !!panes?.some((x) => !x.dead);
+
+/** What a plan's linked worker is doing, from its own row: working, ended, or null when the name has no row here. */
+export type WorkerState = "working" | "ended";
+export function workerPhase(name: string | null | undefined, rows: readonly { name: string; endedAt: number | null }[]): WorkerState | null {
+  if (!name) return null;
+  const row = rows.find((r) => r.name === name);
+  return row ? (row.endedAt === null ? "working" : "ended") : null;
+}
 
 /** The windows of every tmux session as `allWindowTrees` lists them; null when tmux did not answer. */
 export type WindowTrees = ReadonlyMap<string, readonly { id: string; panes: readonly { dead?: boolean }[] }[]> | null;
@@ -448,5 +560,5 @@ export function builderDiff(p: Plan): string[] {
 }
 /** The first sensitive path in the builder's real diff, or null: what stops Integrate with `sensitive-diff`. */
 export function sensitiveDiff(p: Plan): string | null {
-  return builderDiff(p).find((f) => SENSITIVE_PATH.some((re) => re.test(f))) ?? null;
+  return builderDiff(p).find(sensitivePath) ?? null;
 }

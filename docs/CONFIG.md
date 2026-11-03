@@ -112,7 +112,7 @@ are:
 | `AGENTGLASS_RETENTION_DAYS` | `8` | Days of **raw events** to keep (pruned hourly, with resolved gates and answered reminders). Covers the full 7d stats window. Expiring days are folded into a daily rollup first, so spend history outlives the rows. `0` = keep events for ever, and also keep the Clone's shifts, acts and runs for ever. Also chosen in Settings › Data & privacy (`retentionDays` in `config.json`, by the person only: shortening it deletes history at the next sweep); the variable wins when it is set. It does **not** move the Clone's and Lantern's own windows (30 and 90 days, fixed) — see SECURITY.md, *What agentglass stores*. |
 | `AGENTGLASS_PRICING` | — | Path to a JSON pricing override (see `server/src/pricing.ts`). |
 | `AGENTGLASS_PRICING_REFRESH` | — | `1` (or `true`/`yes`/`on`) → refresh exact model prices from LiteLLM at boot and daily. A credential-free GET of a public file, through the same egress check as the webhook; see [SECURITY.md](../SECURITY.md#one-request-that-carries-nothing-the-price-catalogue). The bundled table remains the offline fallback; `AGENTGLASS_PRICING` disables the refresh and stays authoritative. New rates price **new** events: a cost is computed once, when the event is stored, so a refresh never rewrites what a past day cost. |
-| `AGENTGLASS_WEBHOOK` | — | POST `{text}` here (a Slack/Discord-shaped incoming webhook) for alerts, Lantern watch notices and PR nudges sent with `send: true`. Loopback and the two hosts it exists for (`hooks.slack.com`, `discord.com`) work directly; any other destination requires `AGENTGLASS_ALLOW_REMOTE=1`. The host it resolved to is logged once at boot — the host, never the path, which is where a webhook URL keeps its credential. What travels is the notification's title and body — agent names, a checkout's base name, a PR's number, title, URL and reviewer logins — never a transcript, a diff or a token. Blanked out of every Clone run. |
+| `AGENTGLASS_WEBHOOK` | — | POST `{text}` here (a Slack/Discord-shaped incoming webhook) for alerts, Lantern watch notices and PR reminders sent with `send: true`. Loopback and the two hosts it exists for (`hooks.slack.com`, `discord.com`) work directly; any other destination requires `AGENTGLASS_ALLOW_REMOTE=1`. The host it resolved to is logged once at boot — the host, never the path, which is where a webhook URL keeps its credential. What travels is the notification's title and body — agent names, a checkout's base name, a PR's number, title, URL and reviewer logins — never a transcript, a diff or a token. Blanked out of every Clone run. |
 | `AGENTGLASS_NOTIFY` | — | `1` → fire desktop alerts. A connected client (browser or desktop app) raises a **native OS notification** on any platform; `notify-send` is the fallback for a headless server with nothing attached to show it. Does **not** gate the phone, which hears every alert on the socket it already holds and decides for itself — see [Alerts on the phone](WORKSPACE.md#alerts-on-the-phone-and-what-they-honestly-cover). |
 | `AGENTGLASS_SERVER` | `http://127.0.0.1:4000` | Used by the hook/seed scripts. Refused unless it points at this machine — see the next row. A `localhost` value is accepted and rewritten to `127.0.0.1` before connecting: the server binds IPv4-only, so on a host that resolves `localhost` to `::1` first, every event pays a refused connect before falling back. |
 | `AGENTGLASS_ALLOW_REMOTE` | — | `1` → allow configured outbound destinations beyond loopback and the hosts each one trusts by default. This lets the hook scripts post to a non-local `AGENTGLASS_SERVER`, allows an `AGENTGLASS_WEBHOOK` somewhere other than Slack or Discord, and permits a custom `ANTHROPIC_BASE_URL` for walkthroughs — on the local `claude` CLI as well as the API. Off by default and deliberately awkward: those payloads carry session transcripts and repository diffs, and `AGENTGLASS_SERVER` can be set by a repo-local `settings.json` — so a cloned repository could otherwise redirect your transcripts to somebody else's host. Set it only if you genuinely run the server, or the model, on another machine. |
@@ -274,7 +274,9 @@ that nothing the code reads goes unnamed. None is required.
 | `AGENTGLASS_BROWSER_ROBOTS` | off | `1` → every `open` and `newtab` the CLIs and the MCP ask for is checked against the origin's `robots.txt` first (one fetch per origin per hour) and refused, by name, when the path is disallowed for `agentglass` — or for `*` when no group names it. Off by default because this browser is a person's own, signed in as they are; the switch is for the run where an agent is sent to read a site it has no relationship with. A `robots.txt` that cannot be fetched allows everything. |
 | `AGENTGLASS_BROWSER_EGRESS` | `on` | The browser's egress guard: a loopback proxy every browsing session is pointed at, which resolves each name once per connection, refuses any answer that is link-local (169.254/16, where cloud metadata lives), unspecified, or one of the two other metadata addresses named outright (`100.100.100.200` and `fd00:ec2::254`, which sit in ranges that stay allowed), and refuses a name that answered a public address when first met and answers a private or loopback one later — DNS rebinding. Loopback and LAN addresses stay reachable, and a name that was private from its first answer (a hosts-file entry, a LAN box) stays allowed. `off` restores direct connections; read at launch by the desktop app, so it goes in the app's environment, not the server's. A proxy set through the `session` verb replaces the guard's while it is set. |
 | `AGENTGLASS_BROWSER_AUDIT_LOG` | `$AGENTGLASS_STATE_DIR/browser-audit.log` | Where every browser act is appended (rotates once at 4 MiB). |
-| `AGENTGLASS_PROFILE` | derived from the session | The CLI's default profile name when `--profile` is not given. |
+| `AGENTGLASS_PROFILE` | derived from the session | The CLI's default profile name when `--profile` is not given. The app sets it, and `AGENTGLASS_BROWSER_AS`, to the worker's own agent name when it starts a worker: the relay serves a worker only the container that name opened, so a derived name would be a 403. A worker that passes a different `--as` is refused by the CLI. |
+| `AGENTGLASS_BROWSER_AS` | unset | The identity the CLI acts as, ahead of `AGENTGLASS_PROFILE`. The browser half of the same hand-off. |
+| `AGENTGLASS_BROWSER_OFF` | unset | Set by the app, to `1`, on a window it handed **no** browser credential: `agentglass-browser` and `agentglass-browser-mcp` then refuse every verb with one sentence and never fall back to the machine identity in `~/.config/agentglass/token`. It carries no secret. |
 | `AGENTGLASS_BROWSER_SHOW` | off | `1` makes every CLI verb bring the browser view to the front, the way `--show` does for one call. |
 | `AGENTGLASS_BROWSER_WAIT` | `2.5` | Seconds the CLI's `tail` verbs wait for more output before returning. |
 | `AGENTGLASS_BROWSER_STATE_DIR` | `$XDG_STATE_HOME/agentglass` | Where `--since-last` keeps its cursor. |
@@ -361,12 +363,33 @@ Every route is behind the token and the origin/Host gates described in [Security
 | `GET /events/recent?limit=` · `/events/filter-options` | Latest events; distinct apps, event types and models. |
 | `GET /projects` · `POST /projects/{clone,new,hidden,roots}` | Known projects in scope plus the open ones (`workspaces`; `workspace` is the first); clone a URL into a folder, create a project, hide one from the picker, add or forget a folder the picker lists from (`{path, added}`). |
 | `POST /workspace` | Scope the cockpit at runtime: `{roots: [...]}` opens several projects together, all or nothing; `{root}` opens one; an empty list or `null` = whole machine. Persisted; what the project picker calls. |
+| `GET /manifest` · `GET /manifest?project=` · `POST /manifest/signoff` | **The Manifest view.** With no `project`, the summary the rail dot reads: `{projects: [{root, name, left, signOff, trunk}]}`, cached for 60 seconds and cleared by any write, where `left` is the unsigned To test rows of a project this caller may sign in (and 0 for a checkout with no branch). With `?project=` (one of the open projects, else `404 "that project is not open"`), that project read now and never cached: every first-parent trunk commit of the last 7 days (`{sha, subject, time, ticket, inBuild, verdict, at, kind, note, group}`, newest first), `inProgress` (name, doing, branch, startedAt, paneId), `counters {merged, running, builtWaiting}`, `left`, `signOff` (`yes`/`grant`/`off`) and `boundary` (`build` when the running build's commit is in that checkout, `none` otherwise — then nothing is called outside the build, every row is signable and `builtWaiting` is `null`). A row is `toTest` while unsigned or under 24 hours after its verdict, `done` after that (only rows the build contains), and `ready` when the build does not contain it yet. `POST {project, sha, verdict: "tested"|"failed"|"cleared", note?}` is the person's: the desk, or a paired phone with the `answer` grant; every agent credential gets `403 "only the person signs off"`. `tested`/`failed` need a row in To test or Done (a commit outside the build is refused with `"merged, not in the build you are looking at"`), the sha is 40 hex characters, the note is at most 500 characters, and signing again keeps `at`; `cleared` is the Undo and answers 200 whether or not a verdict was there. Verdicts live in the `signoff` table (`project`, `sha`, `verdict`, `kind`, `by`, `at`, `note`), keyed by commit, so a rebase leaves the old ones behind and the rewritten row reads unsigned. Commit subjects and notes are stored on this machine and sent to a paired phone that opens the view. |
 | `GET /git/repo?root=` | One checkout's row (branch, changed-files count, ahead/behind), read now and never cached — what the pill under a terminal pane polls. |
 | `GET /git/repos?all=1` | The picker's list: repos under the added folders (`roots` in the answer). `&scan=1` is its explicit "look for projects" — every repo agents have run in. |
 | `GET /sessions?limit=` · `/session?id=` · `/agent/sessions?root=` | Session rollups; one session in full; resumable agent sessions for a repo, joined with the live panes. |
 | `GET /stats?window=` · `/insights` | The analytics summary; derived warnings (loops, fast burn, failure rate). |
-| `GET /usage` · `/usage/daily?days=` · `/usage/providers` · `POST /usage/codex/refresh` | Plan-limit windows; daily totals across the retention seam (rollup + live events); every provider's quota; a Codex quota refresh (spends a little quota, so opt-in). |
+| `GET /usage` · `/usage/daily?days=` · `/usage/providers` · `/usage/opencode` · `/usage/opencode/detail` · `POST /usage/codex/refresh` · `/usage/opencode/refresh` | Plan-limit windows; daily totals across the retention seam (rollup + live events); every provider's quota; OpenCode Go's row on its own (rolling 5 h / weekly / monthly summed from this PC's recorded worker steps, labelled "this PC"); its per-model and per-day detail from the local `opencode stats`; a Codex quota refresh (spends a little quota, so opt-in); an OpenCode Go **console** read through the app's browser as calibration only (`?force=1` asks now, otherwise a ten-minute cache answers), never the row's main number — the desk's panel and the phone's sheet both draw that reading while its windows are live (`shared/opencodePanel.ts`). |
+| `GET` · `POST /usage/opencode/key` | **The optional OpenCode console key.** `GET` answers `{set}` and never the key; `POST {key}` stores it (`0600`, beside `credentials.json`) and `{clear:true}` removes it. With a key, `/usage/opencode/refresh` asks `https://opencode.ai/api/experimental/usage/limits` with `Authorization: Bearer` instead of driving a browser, and a 403 is reported as "this key needs Budgets: Read". Without one the browser read is unchanged. |
 | `GET` · `POST /usage/opens` | **Local-only.** How often each view, Settings page and modal was opened on this machine, most opened first, with the date of the last open. The window posts a batch at most every 15 seconds and when it is hidden; nothing polls. It lives in `usage-opens.json` in the state dir (`AGENTGLASS_STATE_DIR`), holds ids such as `view:git` and counts and dates only, is never sent anywhere, and has no setting: delete the file to start again. Read it from Settings ▸ About, or `agentglass-ui read usage`. |
+
+### The OpenCode usage key, and why you might want one
+
+Without a key the OpenCode panel counts this PC's own worker turns, and says
+"this PC" because it does: a second machine, or a teammate, is not in that
+number. A console key is the one way to see the plan's own count, and it is
+optional — nothing in the app needs it.
+
+Create a key at opencode.ai > Account > Personal API keys > Add API key.
+Workspace: Default. Expiration: 90 days. Permissions: Restricted, Usage = Read,
+everything else None (Models stays None: that permission spends money). Copy it
+once, paste it in Settings ▸ Agent engines ▸ OpenCode usage key.
+
+The panel reads the console once when it opens and once when its refresh button
+is pressed; nothing polls. If the panel says 403, the key is real but not allowed
+to read budgets: edit it so Budgets is Read, or create a new key with that
+permission, and paste that one instead. The route behind this is undocumented
+(`/api/experimental/usage/limits`); a shape this app does not recognise is
+reported as such and never drawn as a number.
 | `POST /statusline` | A live Claude Code session hands over its plan-limit windows. Authenticated like any route, not an intake sink. |
 | `GET /skills` | Skills and commands scanned from `~/.claude` and `$AGENTGLASS_CODE_DIR/*/.claude`, joined with recorded usage. |
 | `GET /changes?limit=` · `POST /walkthrough` | Recent Edit/Write diff hunks for the Diff view; the AI **Explain** walkthrough of a set of diffs (the one route that sends code to a model). |
@@ -406,20 +429,20 @@ Every route is behind the token and the origin/Host gates described in [Security
 | `GET /dependencies?force=1` · `GET /browser-use/status` · `POST /browser-use/install` | Every outside tool probed for the Requirements pane; whether an agent could drive the built-in browser and what is missing; install that skill. |
 | `GET /agents/board` | The **Agents screen**: every hooked session — name, worktree, branch, whether it is **stopped on you** and why, what it said it is on, `facts` and `git` for the cards, and `watch`. A worker an orchestrator started carries `under` (the project whose chair it answers to), `startedBy` (the engine, model and rule that put it there) or `orphaned` when that chair is empty; the chair's own row carries `chairOf`. `chairs` lists each occupied chair with `next`, the engine the policy would seat instead, and `handedOff`, whether its brief or doctrine was written since it sat down. Each row with a session carries `pulse`, the last hour of tool calls as twelve five-minute counts. Read-only; the Lantern's own chat is `role: "lantern"` and never "needs you". |
 | `POST /seat/report/dismiss` | Clear stale blockers from a project's tray: `{root, ids}`. The report's `blocked` and `need` are emptied, so it stops counting as waiting, and `raw` — what the agent wrote — stays. `agentglass-agent dismiss <ids>`. The Agents screen's "Dismiss all" on its stale line. |
-| `GET /agent-rules?root=` · `POST /agent-rules` · `POST /agent-rules/:id/answer` · `GET /agent-rules/check` | The per-project rule list every agent obeys (`shared/agentRules.ts`). `GET` answers `{root, mode, base, learned, suggested, history, weekly}` for a project (`root: "*"` for the base set); `POST {root, action?, match, setting, source?, mode?}` writes one rule, where `setting` is `allow`, `ask` or `never` and `match` is a `launch.deny` pattern. A person's write applies at once; an agent's applies at once only when it is stricter than what is in force, a looser one is stored as a request and waits on the approval card (`202`, `waitsForPerson`). `POST …/:id/answer {setting}` or `{dismiss: true}` is the person's alone: an agent is refused. `GET …/check?root=&tool=&input=` is the hooks' question before each tool call, and files the first-seen suggestion when no rule covers it and the session would have stopped to ask: the hook passes `mode=` (the payload's `permission_mode`), and only `default`, `plan` and `acceptEdits` (not for file edits) count. A call under `bypassPermissions`, `auto` or no mode files nothing. `agentglass-ui rules list|suggest|set`. The Agents screen's "What your agents may do" section reads the list per project every thirty seconds and writes through the same two routes. |
-| `GET /flight-plan/runs?state=&root=` · `GET /flight-plan/runs/:id` · `POST /flight-plan/preflight` · `POST /flight-plan/runs/:id/go` · `POST …/no-go` · `POST …/findings/:fid` | **Preflight**: a review of a plan, a result or a pull request by a reader that knows nothing but a temporary directory (`server/src/preflight.ts`): `claude -p` with project settings only, auto-memory off and `Read`/`Grep`/`Glob`, over a read-only copy of only the files named (5 MB each) and any mockups (`.png .jpg .webp .html`, under `mockup/`). `POST /flight-plan/preflight {root, moment, files?, mockups?, pr?: {number, root}, as?}` answers `{id, state}` at once and the run executes after: `manual` always runs; `before-launch`, `task-done` and `pr` run only when the project's `flightPlan.preflight.reviews` lists `plan`, `taskDone` or `pr` (otherwise `409` and a sentence). A run starts at once; `awaiting-go` survives only for runs stored by an older version, which `POST …/go {as}` starts and `…/no-go` declines. A run is `awaiting-go`, `running`, `done`, `failed` or `declined`; `done` carries the certificate (model, cost, each file's sha256, what was skipped, the findings). `POST …/findings/F1 {action, note, as}` answers a finding with `fix`, `contest`, `ask`, `dismiss` or `null`; `contest` and `dismiss` need a note. Finishing a task (`POST /seat/task/finish`) starts a `task-done` run when the project's reviews include `taskDone` and the flight plan behind the task is size L, and the task carries `preflight: {runId, status, openFindings}` (`pending`, `checked`, `failed`; `openFindings` counts unanswered blocker and major findings). Findings are advisory: nothing waits or refuses because of them. Go and No-go are the person's alone (an agent gets `403`), a seat touches its own project's runs only, and `files`/`mockups` must sit under the home folder and not look like secrets (`.ssh`, `.aws`, `.env*`, `.credentials.json`…). Nothing here writes anything remote. `agentglass-ui flight-plan list|show|run|go|no-go|resolve`; MCP `ui_flight_plan_*`. |
-| `GET /flight-plan/plans?root=&state=` · `GET /flight-plan/plans/:id` · `POST /flight-plan/plans {root, title?, request, visual?, size?: "S"|"M"|"L" (default M), taskId?, as?}` · `PATCH /flight-plan/plans/:id {title?, plan_md?, visual?, size?, mockups?}` · `POST …/:id/preflight` · `POST …/:id/go` · `POST …/:id/no-go {reason}` · `POST …/:id/launch` | **Flight plans** (`server/src/flightPlanStore.ts`, table `flight_plan`): a request, the plan an author wrote, mockups (`[{path, kind}]`, same file rules as Preflight) and where it stands: `draft` (no plan yet), `ready`, `go`, `no-go` (with the person's reason), `launched`. `POST /flight-plan/plans` answers `409` while `flightPlan.enabled` is off; when the person makes one it also returns `ticket`, an author agent tab to open like a `/terminal/agent` ticket (an agent's call gets `ticket: null` and writes the plan itself). `PATCH` saves the plan (up to 200 KB) and makes it `ready`; a change to a plan at Go or No-go sends it back to `ready` (a No-go reason stays until the next decision); a launched plan is read-only. `…/preflight` runs a Preflight over the plan and mockups at the `before-launch` moment (refused for an S plan, and when `plan` is not in the project's reviews) and links the run; new plan text starts one by itself for M and L (`flightPlan.preflight.sizes`), up to `1 + flightPlan.preflight.secondLooks` times. `GET …/:id` answers `{plan, run, openFindings}`; the list leaves the plan text out and carries `planBytes`. Findings are advisory: Go is refused only for an empty plan or a visual one with no mockup, never for findings. Go, No-go and Launch are the person's, and the project's seated orchestrator's only when `flightPlan.pilot` is `autopilot`, the project is not held and `stopReason` is null (`403` with the reason otherwise; an orchestrator's Go is recorded `coordinator:<name>` and launches the builder at once, queued as `queued: true` behind `flightPlan.maxFlying` builders in the air). `…/launch` (from `go`, once) cuts the builder's worktree and opens its tab; Go (anyone's) needs a finished Preflight on the plan as it is now when the project's reviews list `plan` and the size is one Preflight looks at (an S plan, and an M plan while `sizes` is `L`, skip): `409 Go has to wait: …` otherwise, and any edit of the text or the size after a run takes it back. An orchestrator raises a plan's size and is refused lowering it (`403`), may not change an `ask` finding or dismiss a blocker (`403`; its answers are stamped `coordinator:<seat>`), and presses Preflight only while `1 + secondLooks` runs are not used. `POST …/:id/integrate-check` (the seat or the person) reads the builder's real diff against the sensitive list: for a seat a hit is `403 sensitive-diff` and the orchestrator raises the one question; the plan's `stopReason` reads `sensitive-diff` in `GET …/:id` meanwhile. Go launches the builder at once, whoever said it (the answer carries `queued`, or `launchError` with the plan left at Go when it cannot; the orchestrator's Go waits behind `flightPlan.maxFlying`, the person's does not); `…/launch` stays for a retry. The launch carries a deny list (`git push`, `gh pr`, `gh release`, `git merge`, `git tag`, `agentglass-ui settings set`, `agentglass-ui rules set`) on top of `launch.deny`, and starts the tab with `AGENTGLASS_BUILDER_WORKTREE`: the pre-tool hook sends it to `GET /agent-rules/check?bound=`, which refuses Edit, Write, MultiEdit and NotebookEdit outside that worktree and reads a Bash command the way a shell does (server/src/builderGuard.ts): `git push|pull|merge|tag|update-ref`, `git branch -f/-D/-M` or `checkout`/`switch` of main, the base branch or master, git pointed outside the tree, `gh pr`, `gh release`, `gh api` with any write, `agentglass-ui settings set|rules set` and a write (`>`, `>>`, `tee`, `sed -i`, `cp`, `mv`, `rm`, `install`, `ln`, `dd of=`) outside the worktree are refused, through `env`, `command`, `exec`, `sudo`, `timeout`, `sh -c`, git's `-C`/`-c`/`--git-dir`, absolute paths and command substitutions. The builder's scratch directory is its own `TMPDIR` (`<tmp>/agx-builder-<tree>`), not the system one; its CLI sends `x-agentglass-builder` and `/settings/door` and `/agent-rules` writes from it are `403`. Ceilings: a script the builder writes and runs, a command built from a variable and `eval` are not seen, a builder calling the API by hand leaves the header off, and, like every rule, a server that does not answer in 2 s lets the call through; like every rule, a server that does not answer in 2 s lets the call through). `…/ask {question, choices?, reason?: "ask-finding"|"builder-blocked"}` raises the one question a plan waits on (the seat or the person); `…/answer {answer}` is the person's. `POST /flight-plan/hold {root?}` (anyone, a seat for its own project) freezes new Go and launches and tells each flying builder to stop at a safe point; `POST /flight-plan/resume` is the person's. `GET …/:id` also answers `pilot`, `held`, `stopReason` (`ask-finding`, `open-blocker`, `large`, `sensitive`, `budget`, `builder-blocked` or null) and `budget` (`{reached, dayUsd, weekUsd, dailyCap, weeklyCap, until}`); the list carries `pilot`, `held`, `budget` and each plan's `stopReason`. `…/ask` also takes `detail` and `recommended` (the 0-based index of the choice the orchestrator recommends); a plan's `question` is `{id, text, detail?, choices, recommended?, by, at, answer?}`. Each plan carries `createdBy` (`you`, `coordinator:<seat>` or an agent's name), `landed` and `landedAt` (a launched plan whose branch moved off its start commit and is in main, or is gone; `landedAt` is when it was first seen so, and a plan launched before the branch was kept reads as landed) and `lastReport` (`{line, step, of, by, at}`), which a builder writes with `POST …/:id/report {line, step?, of?}` (`agentglass-ui flight-plan plan report`; launched plans only, one line of up to 200 characters, text from an agent and so data). The list and `GET …/:id` carry `heldBy` and `heldAt` beside `held`. A `{"type":"flight-plan"}` frame on `/stream` says a plan, a run or a hold changed: re-read. A seat reads its own project's runs and plans only and cannot write any of them. Each plan created, Go, No-go and launch is counted locally as `flightPlan:created`, `:go`, `:no-go`, `:launch` (`/usage/opens`). Settings (`agentglass-ui settings`): `flightPlan.enabled` (off; turning it on waits for the person), `flightPlan.mockupGuide`, `flightPlan.pilot` (`manual`|`copilot`|`autopilot`, per project, default `copilot`; `autopilot` is the person's alone), `flightPlan.preflight.reviews` (per project, default `["plan"]`; an older project's `beforeLaunch`/`onTaskDone`/`onPr` is read as: off is not listed, ask and auto are), `.sizes` (`ML`|`L`), `.secondLooks` (0-2, default 1), `.model`, `.costCapUsd`, `flightPlan.budget.dailyUsd` (5) and `.weeklyUsd` (20) (raising one is the person's), `flightPlan.maxFlying` (1-3, default 2), `flightPlan.autopilot.askOnLarge` and `.askOnSensitive` (default true; turning one off is the person's), `flightPlan.held` (per project, kept under the project's root however the path is spelled; an agent may set true, only the person false) and `flightPlan.builder.permissions`. `agentglass-ui flight-plan plan new|list|show|set|mockup|preflight|go|no-go|launch|ask|answer` and `flight-plan hold|resume`; MCP `ui_flight_plan_plan_*`, `ui_flight_plan_hold`, `ui_flight_plan_resume`. |
+| `GET /agent-rules?root=` · `POST /agent-rules` · `POST /agent-rules/:id/answer` · `GET /agent-rules/check` | The per-project rule list every agent obeys (`shared/agentRules.ts`). `GET` answers `{root, mode, base, learned, suggested, derived, history, weekly}` for a project (`root: "*"` for the base set); `POST {root, action?, match, setting, source?, mode?, role?}` writes one rule, where `setting` is `allow`, `ask` or `never` and `match` is a `launch.deny` pattern; `remove: true` with `match` takes that one rule out of the project (the person's alone). A person's write applies at once; an agent's applies at once only when it is stricter than what is in force, a looser one is stored as a request and waits on the approval card (`202`, `waitsForPerson`). `POST …/:id/answer {setting}` or `{dismiss: true}` is the person's alone: an agent is refused. `GET …/check?root=&tool=&input=` is the hooks' question before each tool call, and files the first-seen suggestion when no rule covers it and the session would have stopped to ask: the hook passes `mode=` (the payload's `permission_mode`), and only `default`, `plan` and `acceptEdits` (not for file edits) count. A call under `bypassPermissions`, `auto` or no mode files nothing. A rule may carry `role: "seat"`, and then it decides only the project's orchestrator: the hooks pass nobody's word for it, the server answers it from the credential (`caller.principal`), which the seat is given when it is seated. When the project's flow has a Verifier block, the seat is also refused the test, typecheck and CI-replica commands and told to start a Verifier worker: `GET` carries that one derived rule in `derived`, never stored, and a flow without the block has none. `agentglass-ui rules list|suggest|set`. The Agents screen's "What your agents may do" section reads the list per project every thirty seconds and writes through the same two routes. |
+| `GET /flight-plan/runs?state=&root=` · `GET /flight-plan/runs/:id` · `POST /flight-plan/preflight` · `POST /flight-plan/runs/:id/go` · `POST …/no-go` · `POST …/findings/:fid` | **Preflight**: a review of a plan, a result or a pull request by a reader that knows nothing but a temporary directory (`server/src/preflight.ts`): the CLI the Reviewer role is on (`shared/preflightEngine.ts`), `claude -p` with project settings only, auto-memory off and `Read`/`Grep`/`Glob`, or `opencode run --standalone` under a permission layer with no edit, shell, network tool or subagent (30 steps and a 10-minute ceiling instead of a dollar cap; its cost is what the engine reports, or `costKnown: false`), over a read-only copy of only the files named (5 MB each) and any mockups (`.png .jpg .webp .html`, under `mockup/`). `POST /flight-plan/preflight {root, moment, files?, mockups?, pr?: {number, root}, as?}` answers `{id, state}` at once and the run executes after: `manual` always runs; `before-launch`, `task-done` and `pr` run only when the project's `flightPlan.preflight.reviews` lists `plan`, `taskDone` or `pr` (otherwise `409` and a sentence). A run starts at once; `awaiting-go` survives only for runs stored by an older version, which `POST …/go {as}` starts and `…/no-go` declines. A run is `awaiting-go`, `running`, `done`, `failed` or `declined`; `done` carries the certificate (model, cost, each file's sha256, what was skipped, the findings). `POST …/findings/F1 {action, note, as}` answers a finding with `fix`, `contest`, `ask`, `dismiss` or `null`; `contest` and `dismiss` need a note. Finishing a task (`POST /seat/task/finish`) starts a `task-done` run when the project's reviews include `taskDone` and the flight plan behind the task is size L, and the task carries `preflight: {runId, status, openFindings}` (`pending`, `checked`, `failed`; `openFindings` counts unanswered blocker and major findings). Findings are advisory: nothing waits or refuses because of them. Go and No-go are the person's alone (an agent gets `403`), a seat touches its own project's runs only, and `files`/`mockups` must sit under the home folder and not look like secrets (`.ssh`, `.aws`, `.env*`, `.credentials.json`…). Nothing here writes anything remote. `agentglass-ui flight-plan list|show|run|go|no-go|resolve`; MCP `ui_flight_plan_*`. |
+| `GET /flight-plan/plans?root=&state=` · `GET /flight-plan/plans/:id` · `POST /flight-plan/plans {root, title?, request, visual?, size?: "S"|"M"|"L" (default M), taskId?, as?}` · `PATCH /flight-plan/plans/:id {title?, plan_md?, visual?, size?, mockups?}` · `POST …/:id/preflight` · `POST …/:id/go` · `POST …/:id/no-go {reason}` · `POST …/:id/launch` · `POST …/:id/worker {worker}` | **Flight plans** (`server/src/flightPlanStore.ts`, table `flight_plan`): a request, the plan an author wrote, mockups (`[{path, kind}]`, same file rules as Preflight) and where it stands: `draft` (no plan yet), `ready`, `go`, `no-go` (with the person's reason), `launched`. `POST /flight-plan/plans` answers `409` while `flightPlan.enabled` is off; when the person makes one it also returns `ticket`, an author agent tab to open like a `/terminal/agent` ticket (an agent's call gets `ticket: null` and writes the plan itself). `PATCH` saves the plan (up to 200 KB) and makes it `ready`; a change to a plan at Go or No-go sends it back to `ready` (a No-go reason stays until the next decision); a launched plan is read-only. `…/preflight` runs a Preflight over the plan and mockups at the `before-launch` moment (refused for an S plan, and when `plan` is not in the project's reviews) and links the run; new plan text starts one by itself for M and L (`flightPlan.preflight.sizes`), up to `1 + flightPlan.preflight.secondLooks` times. `GET …/:id` answers `{plan, run, openFindings}`; the list leaves the plan text out and carries `planBytes`. Findings are advisory: Go is refused only for an empty plan or a visual one with no mockup, never for findings. Go, No-go and Launch are the person's, and the project's seated orchestrator's only when `flightPlan.pilot` is `autopilot`, the project is not held and `stopReason` is null (`403` with the reason otherwise; an orchestrator's Go is recorded `coordinator:<name>` and launches the builder at once, queued as `queued: true` behind `flightPlan.maxFlying` builders in the air). `…/launch` (from `go`, once) cuts the builder's worktree, then opens the Claude builder's tab or, when the project's builder chain starts on another engine, starts that engine's worker through the policy (the plan is linked to it by name); Go (anyone's) needs a finished Preflight on the plan as it is now when the project's reviews list `plan` and the size is one Preflight looks at (an S plan, and an M plan while `sizes` is `L`, skip): `409 Go has to wait: …` otherwise, and any edit of the text or the size after a run takes it back. An orchestrator raises a plan's size and is refused lowering it (`403`), may not change an `ask` finding or dismiss a blocker (`403`; its answers are stamped `coordinator:<seat>`), and presses Preflight only while `1 + secondLooks` runs are not used. `POST …/:id/integrate-check` (the seat or the person) reads the builder's real diff against the sensitive list: for a seat a hit is `403 sensitive-diff` and the orchestrator raises the one question; the plan's `stopReason` reads `sensitive-diff` in `GET …/:id` meanwhile. `POST …/:id/worker {worker}` links the plan to the named worker that builds it (Launch's own, or one the coordinator started; a name this machine never ran says nothing), and `GET …/:id` and the list answer `workerState` as `working` or `ended` from that worker's row, which is what the view follows when the builder is not a tab. Go launches the builder at once, whoever said it (the answer carries `queued`, or `launchError` with the plan left at Go when it cannot; the orchestrator's Go waits behind `flightPlan.maxFlying`, the person's does not); `…/launch` stays for a retry. The launch carries a deny list (`git push`, `gh pr`, `gh release`, `git merge`, `git tag`, `agentglass-ui settings set`, `agentglass-ui rules set`) on top of `launch.deny`, and starts the tab with `AGENTGLASS_BUILDER_WORKTREE`: the pre-tool hook sends it to `GET /agent-rules/check?bound=`, which refuses Edit, Write, MultiEdit and NotebookEdit outside that worktree and reads a Bash command the way a shell does (server/src/builderGuard.ts): `git push|pull|merge|tag|update-ref`, `git branch -f/-D/-M` or `checkout`/`switch` of main, the base branch or master, git pointed outside the tree, `gh pr`, `gh release`, `gh api` with any write, `agentglass-ui settings set|rules set` and a write (`>`, `>>`, `tee`, `sed -i`, `cp`, `mv`, `rm`, `install`, `ln`, `dd of=`) outside the worktree are refused, through `env`, `command`, `exec`, `sudo`, `timeout`, `sh -c`, git's `-C`/`-c`/`--git-dir`, absolute paths and command substitutions. The builder's scratch directory is its own `TMPDIR` (`<tmp>/agx-builder-<tree>`), not the system one; its CLI sends `x-agentglass-builder` and `/settings/door` and `/agent-rules` writes from it are `403`. Ceilings: a script the builder writes and runs, a command built from a variable and `eval` are not seen, a builder calling the API by hand leaves the header off, and, like every rule, a server that does not answer in 2 s lets the call through; like every rule, a server that does not answer in 2 s lets the call through). `…/ask {question, choices?, reason?: "ask-finding"|"builder-blocked"}` raises the one question a plan waits on (the seat or the person); `…/answer {answer}` is the person's. `POST /flight-plan/hold {root?}` (anyone, a seat for its own project) freezes new Go and launches and tells each flying builder to stop at a safe point; `POST /flight-plan/resume` is the person's. `POST /flight-plan/budget/raise {usd, scope: "day"|"week"}` is the person's too: a higher cap in force until local midnight (Monday for the week), the base cap left as it was, and `dailyCap`/`weeklyCap` carry whichever is in force. `GET …/:id` also answers `pilot`, `held`, `stopReason` (`ask-finding`, `open-blocker`, `large`, `sensitive`, `budget`, `builder-blocked` or null) and `budget` (`{reached, dayUsd, weekUsd, dailyCap, weeklyCap, until}`); the list carries `pilot`, `held`, `budget` and each plan's `stopReason`. `…/ask` also takes `detail` and `recommended` (the 0-based index of the choice the orchestrator recommends); a plan's `question` is `{id, text, detail?, choices, recommended?, by, at, answer?}`. Each plan carries `createdBy` (`you`, `coordinator:<seat>` or an agent's name), `landed` and `landedAt` (a launched plan whose branch moved off its start commit and is in main, or is gone; `landedAt` is when it was first seen so, and a plan launched before the branch was kept reads as landed) and `lastReport` (`{line, step, of, by, at}`), which a builder writes with `POST …/:id/report {line, step?, of?}` (`agentglass-ui flight-plan plan report`; launched plans only, one line of up to 200 characters, text from an agent and so data). The list and `GET …/:id` carry `heldBy` and `heldAt` beside `held`. A `{"type":"flight-plan"}` frame on `/stream` says a plan, a run or a hold changed: re-read. A seat reads its own project's runs and plans only, and its writes stay in that project: it creates a plan, raises its size (never lowers it), runs Preflight, asks, reports, integrate-checks, holds the plans and answers a finding unless the project flies in Manual; it says No-go in Autopilot at any power, while Go and Launch need the `assign` power there with no hold and no stop rule, and linking a worker needs that power too; answering a plan's question is the person's. Each plan created, Go, No-go and launch is counted locally as `flightPlan:created`, `:go`, `:no-go`, `:launch` (`/usage/opens`). Settings (`agentglass-ui settings`): `flightPlan.enabled` (off; turning it on waits for the person), `flightPlan.mockupGuide`, `flightPlan.pilot` (`manual`|`copilot`|`autopilot`, per project, default `copilot`; `autopilot` is the person's alone), `flightPlan.preflight.reviews` (per project, default `["plan"]`; an older project's `beforeLaunch`/`onTaskDone`/`onPr` is read as: off is not listed, ask and auto are), `.sizes` (`ML`|`L`), `.secondLooks` (0-2, default 1), `.model` (a read-through of the Reviewer worker role's engine and model: the one place either is chosen is `agents.role.reviewer` in Orchestration, and writing the model from here sets that role; a Reviewer on an engine a Preflight cannot run keeps Claude Sonnet and the card says so), `.costCapUsd`, `flightPlan.budget.dailyUsd` (5) and `.weeklyUsd` (20) (raising one is the person's, and is permanent; the strip's raise lasts until midnight), `flightPlan.maxFlying` (1-3, default 2), `flightPlan.autopilot.askOnLarge` and `.askOnSensitive` (default true; turning one off is the person's), `flightPlan.held` (per project, kept under the project's root however the path is spelled; an agent may set true, only the person false) `flightPlan.builder.permissions` and `flightPlan.builder.strongModel` (`haiku`|`sonnet`|`opus`, default `opus`: the model a sensitive or L plan's builder starts on, any other plan taking the builder role's model). A plan before Go carries `launch` (`{mode, model, why}`): the model its builder will start on and one sentence saying why; `…/go` and `…/launch` take `{model?}` to ask for another one, and a stronger model than the plan's own pick is refused `403` for anyone but the person. `agentglass-ui flight-plan plan new|list|show|set|mockup|preflight|go|no-go|launch|ask|answer` and `flight-plan hold|resume`; MCP `ui_flight_plan_plan_*`, `ui_flight_plan_hold`, `ui_flight_plan_resume`. |
 | `GET /orchestration?root=` · `POST /orchestration` | The **orchestration policy** in force for a project: its own, or the global one (`scope`), the roots that carry their own (`overrides`), and the whole `policy`. `POST {root?, policy}` stores a whole policy (no `root` writes the global one), checks it against a closed schema, and answers with the one now in force. **Only the person writes it**: from the machine token (the one every agent shell holds), a seat's or a plugin's, or a request naming an agent, the policy becomes a request the person approves (`202` with the request; the settings door below), and the action log has a line. See [The orchestration policy](#the-orchestration-policy). |
-| `GET /settings/door` · `GET /settings/door?id=&root=` · `POST /settings/door` | **The settings door**: every server-held setting with its `class` (shared/settingClass.ts) and, unless it is a secret or held per project, its value; `?id=` reads one. `POST {id, value, root?, as?}` changes one. From the person it applies. From an agent: `low` applies, a change that narrows applies, an `escalation` becomes a request (`202`, the server's diff in it), `personOnly` and `secret` are `403`. `trusted` is the person's own switch, *Let my agents change settings without asking*: only the person turns it on (an agent's attempt is a `403` and never a request); while on, an agent's escalation applies. The person is told apart by the same test as the policy above, plus no `X-Agentglass-Agent` on the request. |
-| `GET /settings/requests` · `POST /settings/requests/decide` | The requests waiting for the person, each with who asked (as the server knows them), the diff and when it expires (30 minutes, then declined). `POST {id, approve}` answers one, and only for the person: every agent credential is a `403`, its own request included. Approve applies exactly that diff, once, and only while the setting still reads what it read when asked (`409` otherwise); it grants nothing for next time. A window setting of the escalation class goes back to the windows as a `settings.set` the server marks granted. Requests live in memory: a restart declines them. |
+| `GET /settings/door` · `GET /settings/door?id=&root=` · `POST /settings/door` | **The settings door**: every server-held setting with its `class` (shared/settingClass.ts) and, unless it is a secret or held per project, its value; `?id=` reads one. `POST {id, value, root?, as?}` changes one. From the person it applies. From an agent: `low` applies, a change that narrows applies, an `escalation` becomes a request (`202`, the server's diff in it), `personOnly` and `secret` are `403`. `trusted` is the person's own switch, *Let my agents change settings without asking*: only the person turns it on (an agent's attempt is a `403` and never a request); while on, an agent's escalation applies. **The switch is held per project** (`?root=`, the same root the orchestration policy takes): `trusted` is that project's value, a request naming no root reads the machine-wide value (`agentsChangeWithoutAsking` in `config.json`), and a project with no value of its own is off whatever the machine-wide one says. With it on for a project, that project's seat may write its own `orchestration.policy` directly (the chair's wall in `auth.ts` defers to the switch for that one route, and the route pins the seat to its own root); another project's chair still gets a `202` request. The person is told apart by the same test as the policy above, plus no `X-Agentglass-Agent` on the request. |
+| `GET /settings/requests` · `POST /settings/requests/decide` | The requests waiting for the person, each with who asked (as the server knows them), the diff and when it expires (30 minutes, then declined). The read is scoped by the caller: the person at the desk and every paired device (a look-only one included) read every card; a seat reads the cards of its own project, and a plugin — like the bare machine token every agent shell holds — reads every open project's, while a policy worker's `wk_` credential reads no card that names a project at all (`agentOwnRoots` gives a worker no root, so a rooted ask it raises cannot be read back by it). A card with no project reads back only to the credential that proves the asker's name (a seat's, a plugin's, or a worker's own `wk_` credential; the `X-Agentglass-Agent` header is a name the caller writes about itself and proves nobody). `?as=` is a label a CLI stamps on its own writes, never identity: a machine token with no seat, plugin or worker proof reads no card without a project, its own labelled asks included — those wait for the person (a hand-started server with no desk key still takes an Origin for the person's window; the CLI does not send one). `POST {id, approve}` answers one, and only for the person: every agent credential is a `403`, its own request included. Approve applies exactly that diff, once, and only while the setting still reads what it read when asked (`409` otherwise); it grants nothing for next time. A window setting of the escalation class goes back to the windows as a `settings.set` the server marks granted. Requests live in memory: a restart declines them. |
 | `GET /orchestration/state` | Read-only: which rules are on and why a reading did not change one (`holding: the last usage reading is 47 min old`), and the wake-ups armed. Nothing here asks anybody for a reading. |
 | `POST /seat/change` | "Change now": stands the chair down and seats the engine named by `next`. Refused with the reason while there is no `next` or the hand-off is not written. From an agent, a seat's own credential included, it is a request the person approves (the settings door), as are `POST /seat/settings` changes to the chair's engine, model and powers that do not narrow. |
 | `POST /agents/status` | A session saying what it is on — `{name, doing, worktree?, branch?, left?, session?}`; `{name, done: true}` clears it, from the same session only. Fields capped (512 / 4096). Tokenless on loopback: a hook carries it. |
 | `GET` · `POST /lantern/settings` · `POST /lantern/ticket` | The status reminder (`{nudge, minutes}`) and the server-side **watch** (`{watch, watchMinutes}`) that notifies when somebody is still stopped on you; a ticket opening a chat with the board as its first message. |
-| `GET /agents/named` · `POST /agents/named/{start,prompt,wait,read,keys,stop}` | **Named agents** — seat a CLI by name in a checkout (`--yolo` only if Settings allow; permission-shaped args refused with a 400 naming the flag), prompt it, wait for a state, read its screen, press a key, kill it. `agentglass-agent` is the CLI in front (`send-keys` → `keys`). |
+| `GET /agents/named` · `POST /agents/named/{start,prompt,wait,read,keys,stop}` | **Named agents** — seat a CLI by name in a checkout (`--yolo` only if Settings allow; permission-shaped args refused with a 400 naming the flag), prompt it, wait for a state, read its screen, press a key, kill it. `agentglass-agent` is the CLI in front (`send-keys` → `keys`). A policy-started worker's tab reads its OpenCode events as lines (`server/src/agents/opencodeview.py`) and keeps the raw stream in `<state>/worker-runs/<name>/out`; its tab cannot be typed to, and `stop` is how the turn ends. `GET /agents/named?all=1&pane=%7` answers that pane only, from the rows and not the board — the bar over a worker's tab polls it. |
 | `GET /engines` · `POST /engines/test` | **Engine readiness** — per engine (Claude Code, Codex, Antigravity, Gemini, Hermes, OpenCode): found, version against the minimum, account names (never a key), the roles it can take, and `missing`, whose first entry is the next thing to do. Cached by the binary's and the config directory's mtime; `?fresh=1` skips the cache and `?fresh=hermes` rechecks one engine. Never polled. The test route runs one real turn (`Reply with the single word: ok`) in a throwaway directory, one at a time per engine; it is `full` scope and origin-checked. |
 | `GET /keyring` · `POST /keyring/toggle` · `POST /keyring/rehydrate` | **Secrets in the system keyring** (Linux Secret Service, off by default; `secretsKeyring` in `config.json`). `GET` answers `{enabled, state: ready\|locked\|unavailable, why?, held}` — a count, never a value. `toggle` takes `{enabled}` and moves every stored token and plugin key between the files and the keyring (keyring written and read back first; a failure leaves both copies); from an agent it goes through the settings door as `secrets.keyring`: turning it on is an escalation the person approves; turning it off is refused (`403`) even while *Let my agents change settings without asking* is on, because it writes every token back into plain files. `rehydrate` reads the keyring again once it is unlocked, without a restart. |
-| `GET /agents/roles` · `POST /agents/roles` | **Worker roles** — which CLI and model a `scout`, `builder`, `reviewer` or `verifier` runs on (`{role, provider, model}`), saved as `workerRoles` in `config.json`. Only a CLI with a lock this app can apply is accepted (Claude Code, OpenCode, Qwen Code). A named start with `role` takes its CLI, model and lock from here; naming a different `kind` beside it is a 400. |
+| `GET /agents/roles` · `POST /agents/roles` | **Worker roles** — which CLI and model a `scout`, `builder`, `reviewer` or `verifier` runs on (`{role, provider, model}`), saved as `workerRoles` in `config.json`. Only a CLI with a lock this app can apply is accepted (Claude Code, OpenCode, Qwen Code). A named start with `role` takes its CLI, model and lock from here; naming a different `kind` beside it is a 400. The `reviewer` role's model is also the one a Preflight reviews with: `flightPlan.preflight.model` reads it and writes it, so a model is chosen in one place. |
 | `GET` · `POST /agents/schedule` · `POST /agents/schedule/cancel` | **Scheduled starts** — `{name, cwd, when, prompt?, yolo?, kind?}`, `when` as `08:00`, `2026-09-06 08:00` or `+30m`. The named-agent rules are checked when written and again when it fires. The machine must be awake. |
 | `POST /agents/handoff` · `GET /agents/working` | Hand a session's conversation to another agent as a brief (`{session, kind}`), seated on the floating bench; whether anything is working — what the desktop's `agent` power mode polls. |
 | `GET /bench/{note,live}?root=` · `POST /bench/{note,edit,end}` | The floating bench: a per-checkout note (empty text deletes it), which slots still run, open a file in the checkout's editor, end one slot's tmux session (`{root, slot}`). |
@@ -472,6 +495,22 @@ limits, and one **Save** for the two permission groups; each item is a sentence
 and an example. It changes the same `workerDefault`, `ceiling` and `limits`
 fields below, through the same `POST /orchestration`.
 
+**Presets and Conditions on the Flow canvas.** The Flow editor's "Around the flow" row has
+**Presets** and **Conditions · N on**. A rule that is on shows on the block it moves (an outline, the
+tag "rule on", the engine in force, the usual one struck through, "Because: <rule>"); the box never
+changes size. Hovering a preset previews old to new on the blocks and writes nothing; "Use this
+setup" adds the same single `preset-` rule as the page card and keeps a toast with Undo for ten
+seconds; "Check my setup" marks a block whose engine is not installed or not signed in. The
+Conditions panel takes the block panel's slot and lists each rule as one sentence with its switch,
+whether it holds now, and how many blocks it touches; hovering a rule lights its blocks. Where two
+rules set the same block, the first in the list that holds wins (the order `resolve` already uses),
+and the arrows on a rule move it in the stored list. Rules the blocks made (`fallback-<role>`) are
+read only and point at their block; a project that follows "All projects" sees those rules read
+only with "Override for <project>". Editing a rule uses the same panel: WHEN lines of every kind
+(all must hold), blocks outside the rule fade, pressing a block adds it, and each block's chain
+takes up to four steps then "ask me". The saved rule is built by the same function as the rule
+sheet's, so both write the same bytes.
+
 **Quick setup**, under it, offers three named
 setups built from the engines this machine reports ready for the role: the
 main agent stays Claude Code and the workers go to the other ready engines (refused,
@@ -490,21 +529,153 @@ and says who would run the main agent and which engine each role would use now,
 and what each rule would change if it held; it makes no request and starts
 nothing.
 
-| Field | What it holds | Default |
+| Field | What it keeps | Default |
 | --- | --- | --- |
 | `base` | Read, not stored: the chair's engine and model, and each role's (`scout`, `builder`, `reviewer`, `verifier`), as the app runs them today. One copy, so Settings and the policy cannot disagree. | what the seat and `workerRoles` say |
 | `ask` | Per role and for the chair: `true` is "ask when it runs", so the person picks at the moment and the default is preselected. A role set to ask is never moved to another engine on its own. | all `false` |
 | `rules` | Up to 20, each `{id, name, when, orchestrator?, workers?, enabled}`. `when` is 1 to 4 triggers, all of which must hold: `always`, `usage` (a provider's `5h`, `weekly` or `either` window with at most N % left), `limit` (a provider is rate-limited), `hours` (days and a `HH:MM` span) and `budget`. A chain is 1 to 4 `{engine, model}` entries, tried in order. The first enabled rule whose triggers hold wins, per field. | none |
-| `ceiling` | The widest envelope an orchestrator may ask for in this project. | `write: worktree`, `network: false`, `commit: true` |
-| `workerDefault` | The envelope a worker gets when the orchestrator says nothing. | `write: worktree`, `network: false`, `commit: false` |
+| `ceiling` | The widest envelope an orchestrator may ask for in this project. | `write: worktree`, `network: false`, `commit: true`, `docker: false` |
+| `workerDefault` | The envelope a worker gets when the orchestrator says nothing. | `write: worktree`, `network: false`, `commit: false`, `docker: false` |
 | `limits` | `maxWorkers` (1–12), `turnMinutes` (1–240), `maxRetries` (0–5). | `3`, `30`, `1` |
 
-An envelope is `{write: none|worktree, network, commit, deny}`. It has no field
-for a push, a pull request, a merge, a release or spend, so none can be
-granted: those stay the person's, whatever is stored. `deny` only adds command
-prefixes on top of the ones compiled in. No string field can hold a credential:
-every one is an engine id from the table, a model name, a label or a command
-prefix, and each is also refused when it is shaped like a key.
+**Who reviews and checks** is kept per project beside the policy, through the
+settings door (Settings ▸ Orchestration ▸ Reviewer). It has three ids:
+
+| Setting | What it keeps | Default |
+| --- | --- | --- |
+| `orchestration.review.who` | `never`: the orchestrator never reads code and never runs tests, and every change reaches it as a worker's report with its branch and test log. `second`: it reads the diff after the Reviewer. `is`: it is the reviewer; the Reviewer stop and the round cap stay drawn as they are, so this is about who does the reading. | `second`, which is how the app worked before the setting existed |
+| `orchestration.review.rounds` | The most Builder-to-Reviewer rounds before the task stops and asks the person: a whole number from 1 to 6. | `3` |
+| `orchestration.review.second` | `null` for off, else `{"engine": "<id>", "model": "<name or empty>"}`: a second reviewer reads the same diff on another engine and its findings join the first's. | `null` (off) |
+
+The answer is part of the chair's standing instructions: the app composes them
+when it seats an orchestrator, and a change takes effect the next time it is
+seated. An agent asking for a wider `who` (from `never` toward `second` or `is`)
+always waits for the person on an approval card, even with "Let my agents change
+settings without asking" on; a narrower answer applies at once. A lower
+`rounds` and turning the second reviewer off are the narrowing directions.
+
+An envelope is `{write: none|worktree, network, commit, docker, deny}`. It has
+no field for a branch push, a pull request, a merge, a release or spend, so
+none can be granted: those stay the person's, whatever is stored. `docker` is
+the `docker` command itself and is off in every default: a container runs as
+the person's user and can mount the host, so allowing it is a grant of the
+machine and not only of the worktree. `deny` only adds command prefixes on top
+of the ones compiled in. The one per-role widening is a flow role's `allow` (a
+list of command prefixes, the editor's "Commands this role may run"), which
+takes prefixes off that role's workers' deny list and nothing else: `git push`,
+`gh`, `ssh`, `scp`, `sudo`, `rm` and the signal senders are never grantable by
+any role, and asking for one is refused when the flow is saved. No string field
+can hold a credential: every one is an engine id from the table, a model name,
+a label or a command prefix, and each is also refused when it is shaped like a
+key.
+
+**Presets** are named setups a person saves, shares and applies again, kept per
+project under `orchestration.presets` (a list of `.agxpreset` files, at most 20).
+A file is closed and checked before anything is usable: `format` is
+`agentglass-preset`, `version` is `1`, an unknown key or part is refused by name,
+every string is checked against the shape of a key, and the flow, the rules, the
+envelopes and the limits go through the schema's own validators. `includes` names
+the parts the file carries — `flow`, `look`, `prompts`, `eng`, `fb`, `lim`,
+`rules`, `safety`, `refused`, `team` — and a part that is off is not written into
+the file at all, so a prompt that names a tool or a habit never leaves the
+machine by accident; a file that asks to apply a part it was not shared with is
+refused with a sentence. Keys, sign-ins, the project's own path, history and the
+shipped always-refused list are never inside one as data, and no field can grant
+a push. A safety part wider than the ceiling already in force in the project is
+refused, not applied: the person's own limit always wins. The text is previewed
+exactly as it is downloaded, an import shows the file before anything is usable,
+and only a person presses Use; the page then saves the policy through
+`POST /orchestration` and the flow through `PUT /flow`.
+
+A builder, a reviewer and a verifier may also run `agentglass-browser`, the
+app's own browser, from its shell. It reaches the person's window through the
+local relay. Which engines and roles may do that is the
+setting `browser.workers` (Settings ▸ Browser, "Who may drive the browser"):
+`{"engines": [...], "roles": [...]}`, every engine that can run a headless
+worker turn (six of them) and all four
+roles until the person turns one off. A stored name this app does not know is
+dropped, never read as "all on": the known members stay and a list with nothing
+known left is nothing on, and so is a key missing from a stored object — remove
+the whole setting to have everything back. A worker whose engine or role is off is
+started with **no browser credential at all** and with
+`AGENTGLASS_BROWSER_OFF=1`, and near the top of its brief
+(above it only when the checkout has no `node_modules` install) a line says so;
+it keeps every other ability its role gives it. Off means the app hands no
+credential and the supplied CLI and MCP server refuse; it does not stop a
+hand-written process running as the same operating-system user from reading the
+files the person can read — the worker envelope (sandbox) is what limits that.
+The same holds for every agent
+window this app opens by itself, not only the two worker starts: a flight-plan
+builder launched by Go gets its own credential or none, the role it runs is
+handed over with it, and the server's machine token is never inherited by an
+agent window. A pane a restore or resume replays is the case with no turn to
+mint for: it is handed no credential and is marked off, so only its window and
+directory come back, not the person's identity. The person's own terminals — the
+bench, the console, and a tab they opened by hand — are unchanged. An agent may read the
+setting and take a member away at once; adding one back is one request that
+waits for the person. `--as <name>` picks the container the worker asks for, and the
+relay reads the credential minted for that worker, which names it: a request
+under another name is refused. The flags that
+cross out of that tab (`--shared`, `--active`, and the prefixes
+argparse used to accept for them) are refused, and a scout does not get the
+browser at all. `--page` is allowed: the relay serves only a page this worker
+opened and refuses another with a sentence.
+The identity is refused too, where a flag-stem rule cannot
+reach it: while `AGENTGLASS_ROLE` names a worker role, the CLI turns away
+`--shared`, `--as "(default)"` (the same identity on the wire), `--profile`,
+`AGENTGLASS_PROFILE`, and any spacing or case of that name before it builds a
+request. That floor is the same on both start paths (`agentglass-agent start
+--role` and a rule in Settings ▸ Orchestration). The CLI's refusal is a
+courtesy, because it reads a variable the worker's own shell owns. The boundary
+is the credential: a worker launched by this app is handed a credential of its
+own (a worker principal, minted in memory at the start of each turn, capped at
+the worker's own turn limit and revoked when the turn ends), in place of the
+machine token it used to inherit, and the relay **canonicalises every ask to
+that worker's container**. `as`, `profile` and `name` may only be the worker's
+own name; `container`, `how`, `shared`, `active` and an empty `profile` are
+refused; `open`/`newtab` mint only with `profile` equal to that name; and a
+`page` id is served only from a server-side registry of pages this worker
+opened, filled from the window's replies. An absolute page id is never trusted,
+so the person's front tab is refused even with `pageExplicit`, and a page-bound
+verb with no page of the worker's own is refused rather than falling through to
+the tab in front. This covers every `/browser/*` POST (`do` and `lane`
+included, with `steps` and `lanes[].steps` walked and inheriting the call's
+page) and every do-step, deny-by-default against an allowlist of own-profile
+verbs; each of those verbs also has a closed field list and any key it does not
+declare is refused, so `index`, `nth`, `position` and coordinates never reach
+the window; `cookies`, `storage`, `eval`, `cdp`, `fake`, `handoff`, `record`,
+`download` and the WebMCP tools are refused. `/browser/ready` and
+`/browser/result` are refused to any credential carrying a principal before
+their bodies are read, so it cannot register as the window or answer its asks.
+One gap this paragraph's claim does not cover: a server run without
+`AGENTGLASS_TOKEN` identifies nobody, and `POST /browser/*` on it answers any
+process on the machine as the person. An engine or role that is off there gets
+no browser credential but needs none, the card in Settings ▸ Browser says so,
+and setting `AGENTGLASS_TOKEN` is what makes the list enforceable.
+The data routes (`places`, `places/all`, `places/forget`, `visit`), the audit
+read, the lane list and `/browser-use/install` are refused the same way. The
+worker's token is minted before the private OpenCode serve starts, so the
+process that runs its shell on 2.x has it; the suite starts a stub serve and
+asserts the kind of credential in its environment, never the value. `as` is the
+audit label;
+`profile` and `page` are what choose the container, which is why
+`profile: "(default)"` opens a NEW container by that name rather than the
+person's. The ceiling is the machine token: its file is readable by anything
+running as this user, so a worker that reads `~/.config/agentglass/token` and
+presents it is the person again, and this round does not close that gap. The rule over flags itself
+reads the whole line on OpenCode; on Claude Code and Qwen it is a start-of-line
+rule, so a flag placed after other arguments is the same gap as `git -C . push`
+there: for `--shared` and the identity alias the CLI's own refusal still catches
+it, while `--active` spelled that way remains the gap it is.
+That is not a network rule:
+`network:false` still denies
+`curl`, `wget` and OpenCode's webfetch, but the browser's own `open` and `eval`
+reach any `http:` or `https:` host with the person's cookies. The relay refuses
+`file:`, `javascript:` and a literal link-local or unspecified address
+(`169.254.0.0/16`, `fe80::/10`, `0.0.0.0`); loopback and the LAN stay
+reachable, a hostname is judged again when the desktop app connects (refused
+if it resolves to link-local or the unspecified address), and
+`AGENTGLASS_BROWSER_ORIGINS` unset means any origin.
 
 **Resolution happens when a worker starts.** A running worker is never killed,
 moved or re-pointed by a rule changing, and a resume keeps the engine the worker
@@ -519,10 +690,64 @@ the action log.
 
 A seat starts a worker with `agentglass-agent start <name> --role <role> --cwd
 <dir>`, plus optionally `--engine` and `--model` (an entry of the role's chain),
-`--allow network|commit` (each within `ceiling`) and `--prompt`. Anything else
+`--allow network|commit|docker` (each within `ceiling`) and `--prompt`. Anything else
 is refused with a sentence, not dropped. A turn that is still running when the
 server restarts is marked `ceiling lost: restarted` on its row and is not
 stopped at its limit afterwards; see SECURITY.md.
+
+A checkout with no node_modules — a worktree cut a minute ago — is started all
+the same, and says so: a start's and a resumed turn's answer carry
+`environment: node_modules missing (...)`, and the same sentence is the first
+line of the worker's prompt, because its `tsc` failure there is the environment
+and not its change. The same holds for the builder a flight plan launches: the
+answer carries it and the brief starts with it. Bun installs each workspace's
+own, so `bun install` in the checkout is the fix; a single `node_modules`
+symlink at the root is not enough, and a workspace with no dependency of its own
+has none to install, so it is never asked for one. `make typecheck`, `make check`
+and `make ci` print that sentence instead of a type error when the tree they are
+about to check has none.
+
+### Polaris: an agent and the pull requests
+
+An agent reads the board with `agentglass-ui polaris items --root R` and acts with
+`polaris act <n> <type> --root R` (`--text`, `--reason`, `--pane`, `--head-sha`,
+`--base-sha`, `--door`); `polaris requests --root R` lists its own requests and
+how each ended. The same verbs are MCP tools (`ui_polaris_items`, `ui_polaris_act`,
+`ui_polaris_requests`). Every write is confined to the project the caller's
+credential belongs to: a seat's chair (`assign` power), or one of the projects this app
+is open on. A header the caller writes (`x-agentglass-agent`, `x-agentglass-builder`)
+never picks or widens that root; a builder's worktree counts as the project it was cut
+from. Naming another project answers 403, and a caller that belongs to no project acts
+on none. Reads (`polaris items`, `polaris settings`) stay open to any local caller, as
+before.
+
+- Direct (they stay in the app's memory): `beacon-draft`, `beacon-edit`,
+  `beacon-discard`, `propose`, `ignore`. A draft text over 2000 characters is
+  refused.
+- Ask (they leave the app): `sync` and `beacon-send-on-click` answer 202 with a
+  request the person approves on the settings-requests list (kind
+  `polaris-action`). The server reads the pull request's head from GitHub itself when
+  the ask is made and again on approval, and refuses the approval if the head, or for a
+  send the draft text, moved since. A send types into a live session of that project
+  (the `--pane` an agent names is checked against it), and its card names the session.
+  A send is approved at the desk only: never from the phone and never by Approve all.
+  A `sync` may be approved from the phone. Requests are never auto-applied, whatever
+  the project's trust switch says.
+- Refused: `dock` (it writes the project's Polaris settings, so it goes through the
+  settings door). Settings stay the person's.
+- With no `AGENTGLASS_TOKEN` on a loopback install nobody is identified as an
+  agent, so Polaris stays person-only there: a write from a caller no credential
+  names is refused (`403`), never treated as an agent or as the person.
+
+The project's orchestrator is woken, once per pull request head and reason: a red
+that is not a dropped job when the `diagnose` door is `auto` (in `click` the person
+gets a button and nobody is woken), and a pull request that fell behind its base when
+the `course` door is not `off`, inside its hours.
+
+Ceilings: requests are kept in memory, so a restart loses them (the CLI reports
+`lost-on-restart`); at most 20 pending per project (a queue in one project does not
+spend another's room), and a newer ask replaces only the same agent's own older one.
+The once-per-head memory is lost the same way, so a wake may repeat once after a restart.
 
 ### The CLIs in front of the API
 
@@ -545,12 +770,14 @@ over plain `http://` to any host that is not this machine.
   (SECURITY.md has the list).
   `start --role scout|builder|reviewer|verifier` seats the CLI and model Settings ▸ Worker
   roles picks for that role, with its lock: push, commit, merge, rebase, reset,
-  checkout, the network clients, `sudo` and `rm` are denied in the layer of that
+  checkout, the network clients, `sudo`, `rm` and `kill` are denied in the layer of that
   CLI a person's or a project's own config cannot loosen — for OpenCode, which
   merges its lock with the project's config instead, the start asks OpenCode for
   the merged rules and refuses when a project rule wins over the lock — and a
   scout, a reviewer or a verifier may not edit files either; a `--model` or `--agent` after `--` is
-  refused, since those are the role's, and so is `--yolo`. It is a list of command prefixes, not a
+  refused, since those are the role's, and so is `--yolo`. The lock applies the same
+  floor as a role started by a rule in Settings ▸ Orchestration: `agentglass-browser`
+  for builder, reviewer and verifier and no other door, none of them for a scout. It is a list of command prefixes, not a
   sandbox — `sh -c '…'` is not a command named `git push`. A project OpenCode
   plugin is arbitrary code run inside the worker and is not covered by the lock.
   `python3 bin/agentglass-agent --help` is the reference.
@@ -605,8 +832,12 @@ over plain `http://` to any host that is not this machine.
   can ask what it has spent, which tools are slow, what failed and what is
   waiting on a person: `cockpit_sessions`, `cockpit_session`, `cockpit_spend`,
   `cockpit_tool_latency`, `cockpit_errors`, `cockpit_recent_events`,
-  `cockpit_agents`, `cockpit_attention`, `cockpit_orphans` (processes an agent
-  left behind). Every request it makes to the app is a
+  `cockpit_agents`, `cockpit_attention`, `cockpit_orphans` (processes left
+  behind — an agent's test run, the app's own monitors, or a named helper
+  whose parent went — each with the origin it came from: a checkout, an agent
+  scratchpad or a temp wrapper). That origin is read from the process's own
+  arguments and working directory, so it is a hint, never proof. Every request
+  it makes to the app is a
   GET; nothing it offers writes, kills or approves. Every answer stays under
   `AGENTGLASS_COCKPIT_MAX_BYTES`, clipping long text and dropping the oldest
   items, and naming both, rather than cutting the payload. Another session's

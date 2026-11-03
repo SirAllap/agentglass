@@ -1,11 +1,12 @@
 /*
  * PREFLIGHT: a review by a reader who knows nothing but a directory.
  *
- * The material goes into a fresh temporary directory, read-only, and one
- * `claude -p` runs there with project settings only, auto-memory off and three
- * read tools. It never sees the conversation, the memory or the hooks that
- * produced the work, so what it flags is what a cold reader cannot tell. Only
- * what was named is copied: the directory holds nothing else of the machine.
+ * The material goes into a fresh temporary directory, read-only, and one turn
+ * of a CLI runs there — `claude -p`, or `opencode run` when the Reviewer role is
+ * on OpenCode — with the person's own settings kept out of it and read tools
+ * only. It never sees the conversation, the memory or the hooks that produced
+ * the work, so what it flags is what a cold reader cannot tell. Only what was
+ * named is copied: the directory carries nothing else of the machine.
  * server/test/preflight-canary.test.ts proves that against a real claude.
  *
  * The runner is pure of the database: it takes a request and answers with the
@@ -15,6 +16,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, lstatSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
+import { rolePromptFor } from "./rolePrompt.ts";
+import type { PreflightEngine } from "../../shared/preflightEngine.ts";
 
 export const FILE_LIMIT_BYTES = 5 * 1024 * 1024;
 export const NAMED_FILES_MAX = 12;
@@ -26,6 +29,14 @@ export const IMPORT_LINES = 30;
 export const WHOLE_FILE_MAX = 40 * 1024;
 export const UNCITED_HEAD_LINES = 200;
 export const ISOLATION = "claude -p, auto-memory off, project settings only, read-only tools";
+/**
+ * The same guarantees in OpenCode's terms. It runs its own server process so the
+ * lock is the one in force, and its lock is merged over the person's own files
+ * rather than replacing them, so the sentence says which layer is the app's.
+ */
+export const ISOLATION_OPENCODE = "opencode run --standalone: its own server process, the app's permission layer over the person's config, no edit, no shell, no network tool, no subagent, step and time ceiling";
+/** The most steps an OpenCode reviewer takes before it is forced to answer; there is no dollar cap to pass it. */
+export const OPENCODE_STEPS = 30;
 
 export type Severity = "blocker" | "major" | "nit";
 export type FindingAction = "fix" | "contest" | "ask" | "dismiss";
@@ -37,6 +48,10 @@ export interface Finding {
 }
 export interface Certificate {
   id: string; createdAt: number; model: string; costUsd: number;
+  /** The CLI that read it; absent on a certificate from before this was recorded. */
+  engine?: PreflightEngine;
+  /** False when the engine did not say what it spent, so `costUsd` is 0 and not a measurement. Absent means it did say. */
+  costKnown?: boolean;
   /** The most this run was allowed to spend; absent on a certificate from before it was recorded. */
   capUsd?: number;
   /** `part` is what of the file was sent: "whole", "lines 1–30, 1144–1264" or "partial" (the head of a big file named with no line). Absent on a certificate from before it was recorded. */
@@ -57,6 +72,8 @@ export interface PreflightInput {
   /** Paths inside the copy are relative to this when the file is under it, else to `/`. */
   root?: string;
   model: string;
+  /** The CLI that reads it (shared/preflightEngine.ts). Absent is claude, which is what every caller before this asked for. */
+  engine?: PreflightEngine;
   budgetUsd: number;
   /** Absolute paths of mockups (.png .jpg .webp .html), copied to mockup/<basename>. */
   mockups?: string[];
@@ -68,7 +85,7 @@ export interface PreflightInput {
   leftOut?: { path: string; reason: string }[];
 }
 export interface PreflightDeps {
-  /** The claude command. A test passes `[process.execPath, stub]`. */
+  /** The CLI's command: the engine's own binary, or `[process.execPath, stub]` in a test. */
   bin?: string[];
   env?: Record<string, string>;
   timeoutMs?: number;
@@ -168,7 +185,7 @@ export function parseFindings(text: string): Finding[] | null {
   return out.length ? out : null;
 }
 
-function promptFor(material: string, mockups: boolean): string {
+function promptFor(material: string, mockups: boolean, houseRules = ""): string {
   return `You are a reviewer who knows nothing except this directory. You have no other context and must not guess at any.
 
 ${material} is what is being reviewed. The directory files/ holds the files it names, copied as they are. Read the material first, then open whatever it points to. Check what the material says about those files against the files themselves. If a file it names is not in files/, that is not a problem to report: you were not given it.
@@ -185,6 +202,9 @@ The directory mockup/ holds mockups of the interface. Read every one (Read shows
 - where the plan and a mockup disagree
 - states the plan needs that no mockup shows: empty, loading, error, long text, narrow width
 - a control a mockup shows that the plan gives no behaviour
+` : ""}${houseRules ? `
+House rules for this reviewer:
+${houseRules}
 ` : ""}
 Use exactly this format for each problem, and nothing else:
 
@@ -194,6 +214,62 @@ Evidence: <what you read that shows it, with file:line when it is code>
 
 If there is nothing to report, reply with exactly: No findings
 No praise, no summary, no advice beyond the problem.`;
+}
+
+/**
+ * The lock an OpenCode reviewer runs under, as `OPENCODE_CONFIG_CONTENT` (the
+ * same layer `shared/workerRoles.ts` writes): no edit or write, no shell, no
+ * network tool, no subagent, and no path outside the work directory — the
+ * person's auth file is not a page of this plan. It goes on the `build` agent
+ * too, because an agent's own rules win over the global ones.
+ */
+export function openCodeLock(): string {
+  const permission = {
+    edit: "deny", write: "deny", patch: "deny", bash: "deny",
+    webfetch: "deny", websearch: "deny", task: "deny", subagent: "deny",
+    external_directory: "deny",
+  };
+  return JSON.stringify({ default_agent: "build", permission, agent: { build: { steps: OPENCODE_STEPS, permission } } });
+}
+
+export interface OpenCodeTurn {
+  /** The text parts, in order: the answer is the last one, a preamble is any before it. */
+  texts: string[];
+  cost: number;
+  /** False when no step said what it spent: a subscription plan reports none, and 0 is not a measurement. */
+  costKnown: boolean;
+  /** The model the engine said it ran, when it said; `""` otherwise. */
+  model: string;
+  error: string;
+}
+
+/** One `opencode run --format json` stream, read from its lines: text, spend, model, and why it stopped. */
+export function parseOpenCodeTurn(out: string): OpenCodeTurn {
+  const turn: OpenCodeTurn = { texts: [], cost: 0, costKnown: false, model: "", error: "" };
+  for (const raw of String(out ?? "").split("\n")) {
+    const line = raw.trim();
+    if (!line.startsWith("{")) continue;
+    let event: Record<string, unknown>;
+    try { event = JSON.parse(line) as Record<string, unknown>; } catch { continue; }
+    if (!event || typeof event !== "object") continue;
+    const part = (event.part && typeof event.part === "object" ? event.part : {}) as Record<string, unknown>;
+    if (event.type === "text") {
+      const text = typeof part.text === "string" ? part.text : typeof event.text === "string" ? event.text : "";
+      if (text.trim()) turn.texts.push(text);
+    }
+    if (event.type === "step_finish") {
+      if (typeof part.cost === "number" && Number.isFinite(part.cost)) { turn.cost += part.cost; turn.costKnown = true; }
+    }
+    if (event.type === "error" && !turn.error) {
+      const e = (typeof event.error === "object" && event.error ? event.error : {}) as Record<string, unknown>;
+      const data = (typeof e.data === "object" && e.data ? e.data : {}) as Record<string, unknown>;
+      const said = [data.message, e.message, e.name, event.error].find((m) => typeof m === "string" && m.trim());
+      turn.error = typeof said === "string" ? said : "the engine reported an error";
+    }
+    const model = [part.modelID, part.model, event.modelID, event.model].find((m) => typeof m === "string" && m);
+    if (typeof model === "string") turn.model = model;
+  }
+  return turn;
 }
 
 async function defaultGh(args: string[], cwd: string): Promise<string> {
@@ -209,11 +285,14 @@ async function defaultGh(args: string[], cwd: string): Promise<string> {
  * whose only job is to read a plan. The session markers of the asking Claude are not on the list.
  */
 const ENV_ALLOWED = /^(PATH|HOME|USER|LOGNAME|SHELL|LANG|LC_[A-Z_]+|TERM|TMPDIR|XDG_[A-Z_]+|ANTHROPIC_[A-Z_]+|CLAUDE_CONFIG_DIR|CLAUDE_CODE_USE_[A-Z_]+|(HTTPS?|NO|ALL)_PROXY|(https?|no|all)_proxy)$/;
+/** OpenCode's config layers from the environment (server/src/agentops.ts): emptied for a review, so the app's lock is the only one added. */
+const OPENCODE_ENV_LAYERS = ["OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_PERMISSION", "OPENCODE_DISABLE_PROJECT_CONFIG"];
 const RESERVED_TEXT = new Set(["MATERIAL.md", "PR.md", "PR.diff"]);
 
 export async function runPreflight(input: PreflightInput, deps: PreflightDeps = {}): Promise<Certificate> {
-  const bin = deps.bin ?? [Bun.which("claude") ?? ""];
-  if (!bin[0]) throw new Error("claude is not on PATH");
+  const engine: PreflightEngine = input.engine === "opencode" ? "opencode" : "claude";
+  const bin = deps.bin ?? [Bun.which(engine) ?? ""];
+  if (!bin[0]) throw new Error(`${engine} is not on PATH`);
   const id = input.id ?? `pc_${randomBytes(8).toString("hex")}`;
   const createdAt = Date.now();
   const work = mkdtempSync(join(tmpdir(), "agx-preflight-"));
@@ -272,14 +351,31 @@ export async function runPreflight(input: PreflightInput, deps: PreflightDeps = 
 
     const env: Record<string, string | undefined> = {};
     for (const [k, v] of Object.entries(process.env)) if (ENV_ALLOWED.test(k)) env[k] = v;
-    env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
+    if (engine === "claude") {
+      env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
+    } else {
+      /* OpenCode merges its layers, so the person's own env layers are emptied and the app's lock is
+         the only one added; the temp directory has no project config to find either. */
+      for (const k of OPENCODE_ENV_LAYERS) env[k] = "";
+      env.OPENCODE_CONFIG_CONTENT = openCodeLock();
+      env.OPENCODE_DISABLE_PROJECT_CONFIG = "1";
+      env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS = "1";
+    }
     Object.assign(env, deps.env);
     deps.onWorkDir?.(work);
 
-    const argv = [
-      ...bin, "-p", "--setting-sources", "project", "--model", input.model, "--output-format", "json",
-      "--max-budget-usd", String(input.budgetUsd), "--tools", "Read,Grep,Glob", "--allowedTools", "Read", "Grep", "Glob", "--", promptFor(material, mockups.length > 0),
-    ];
+    /* The flow's Inspector prompt rides before the fixed output format, so the format stays last. */
+    const prompt = promptFor(material, mockups.length > 0, base ? rolePromptFor(base, "reviewer") : "");
+    /* Claude takes a dollar cap; OpenCode has none to pass, so what bounds it is the step ceiling in
+       openCodeLock() and the timeout below, and the certificate says when it reported no cost. */
+    const argv = engine === "opencode"
+      /* `--standalone`: its own server, because a run that joins the person's background one
+         takes that server's environment and never sees the lock above (measured on 2.1.4). */
+      ? [...bin, "run", "--standalone", "--format", "json", "--agent", "build", ...(input.model ? ["-m", input.model] : []), "--", prompt]
+      : [
+        ...bin, "-p", "--setting-sources", "project", "--model", input.model, "--output-format", "json",
+        "--max-budget-usd", String(input.budgetUsd), "--tools", "Read,Grep,Glob", "--allowedTools", "Read", "Grep", "Glob", "--", prompt,
+      ];
     const p = Bun.spawn(argv, { cwd: work, env: env as Record<string, string>, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     const timer = setTimeout(() => { try { p.kill(); } catch { /* already gone */ } }, deps.timeoutMs ?? 10 * 60_000);
     let out: string, err: string, code: number;
@@ -290,20 +386,33 @@ export async function runPreflight(input: PreflightInput, deps: PreflightDeps = 
 
     /* A run that failed still spent: the error carries what it cost, so the budget counts it (flightBudget.ts). With no reply to read the cost from, it is billed at its cap. */
     const billed = (message: string, costUsd: number) => Object.assign(new Error(message), { costUsd });
-    let reply: { result?: unknown; total_cost_usd?: unknown; is_error?: unknown; subtype?: unknown };
-    try { reply = JSON.parse(out); } catch { throw billed(`the reviewer gave no JSON (exit ${code}): ${(out || err).slice(0, 200)}`, input.budgetUsd); }
-    const spent = Number(reply.total_cost_usd) || 0;
-    /* claude -p ends a run that hit --max-budget-usd with this subtype and no result; the view reads "spent $X". */
-    if (reply.subtype === "error_max_budget_usd") throw billed(`stopped at the cap: spent $${spent.toFixed(2)} of $${input.budgetUsd.toFixed(2)}`, spent);
-    if (reply.is_error || typeof reply.result !== "string") throw billed(`the reviewer failed (exit ${code}): ${String(reply.result ?? err).slice(0, 200)}`, spent);
-    const findings = parseFindings(reply.result);
-    if (!findings) throw billed(`the reviewer's reply had no findings and no "No findings": ${reply.result.slice(0, 200)}`, spent);
+    let findings: Finding[] | null, ranModel = input.model, spent = 0, costKnown = true;
+    if (engine === "opencode") {
+      const turn = parseOpenCodeTurn(out);
+      spent = turn.cost;
+      costKnown = turn.costKnown;
+      ranModel = turn.model || input.model || "opencode default";
+      if (turn.error) throw billed(`the reviewer failed (exit ${code}): ${turn.error.slice(0, 200)}`, spent);
+      const last = turn.texts[turn.texts.length - 1] ?? "";
+      findings = parseFindings(last) ?? parseFindings(turn.texts.join("\n\n"));
+      if (!findings) throw billed(`the reviewer's reply had no findings and no "No findings" (exit ${code}): ${(turn.texts.join(" ") || out || err).slice(0, 200)}`, spent);
+    } else {
+      let reply: { result?: unknown; total_cost_usd?: unknown; is_error?: unknown; subtype?: unknown };
+      try { reply = JSON.parse(out); } catch { throw billed(`the reviewer gave no JSON (exit ${code}): ${(out || err).slice(0, 200)}`, input.budgetUsd); }
+      spent = Number(reply.total_cost_usd) || 0;
+      /* claude -p ends a run that hit --max-budget-usd with this subtype and no result; the view reads "spent $X". */
+      if (reply.subtype === "error_max_budget_usd") throw billed(`stopped at the cap: spent $${spent.toFixed(2)} of $${input.budgetUsd.toFixed(2)}`, spent);
+      if (reply.is_error || typeof reply.result !== "string") throw billed(`the reviewer failed (exit ${code}): ${String(reply.result ?? err).slice(0, 200)}`, spent);
+      findings = parseFindings(reply.result);
+      if (!findings) throw billed(`the reviewer's reply had no findings and no "No findings": ${reply.result.slice(0, 200)}`, spent);
+    }
     const texts = (input.extraText ?? []).map((t) => t.name.replace(/[^\w.-]/g, "_"));
     const named = input.extraText?.length ? files : files.slice(1);
     const read = `Read ${[...texts, ...(input.extraText?.length ? [] : files.slice(0, 1).map((f) => basename(f.path)))].join(" + ") || "nothing"}${named.length ? ` + ${named.length} file${named.length === 1 ? "" : "s"}: ${named.map((f) => (base && resolve(f.path).startsWith(resolve(base) + "/") ? relative(resolve(base), resolve(f.path)) : f.path) + (f.part ? ` (${f.part})` : "")).join(", ")}` : ""}`;
     return {
-      id, createdAt, model: input.model, costUsd: Number(reply.total_cost_usd) || 0, capUsd: input.budgetUsd, files, mockups, skipped, read,
-      sawConversation: false, isolation: ISOLATION, findings,
+      id, createdAt, model: ranModel, engine, ...(costKnown ? {} : { costKnown: false }),
+      costUsd: spent, capUsd: input.budgetUsd, files, mockups, skipped, read,
+      sawConversation: false, isolation: engine === "opencode" ? ISOLATION_OPENCODE : ISOLATION, findings,
     };
   } finally {
     /* `work` is the literal mkdtemp result above, never empty; the check keeps a future edit from pointing rm elsewhere. */

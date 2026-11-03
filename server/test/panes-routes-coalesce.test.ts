@@ -1,5 +1,5 @@
 /**
- * The pane routes share one in-flight tmux spawn across concurrent pollers.
+ * The pane routes share one tmux spawn with every poller that asks while it runs.
  *
  * Desktop, phone and an extra tab each poll `/agent/sessions`, `/tree` and the
  * pane-hover routes on their own timer; two of them landing in the same

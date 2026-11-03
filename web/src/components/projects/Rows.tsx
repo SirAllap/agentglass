@@ -62,7 +62,7 @@ export function ProjectRow({ r, tabs, query, now, current, hotRow, ticked, hidde
   const sync = r.ahead || r.behind ? `${r.ahead ? "↑" + r.ahead : ""}${r.ahead && r.behind ? " " : ""}${r.behind ? "↓" + r.behind : ""}` : "";
   const m = middleSplit(tildify(r.root));
   const nm = nameSplit(r.name);
-  const acts = hotRow ? "visible" : "hidden";
+  const acts = hotRow ? "inherit" : "hidden";
   return (
     <div role="option" aria-selected={hotRow} data-root={r.root} onMouseMove={onHot} onClick={onOpen}
       onContextMenu={(e) => { e.preventDefault(); onMenu(e.clientX, e.clientY); }}

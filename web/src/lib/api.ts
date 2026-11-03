@@ -7,6 +7,8 @@ import type { UiAction, Field, NoteReply, NoteStatus, PluginPanel, PluginPrNotes
 import type { ImportedPlace } from "./desktop.ts";
 import type { JiraAddChoice, JiraEpicCardsOut, JiraSpacePickerOut, JiraSpacesEdit, JiraSpacesOut, JiraSpaceTreeOut } from "../../../shared/jiraSpaces.ts";
 import type { Policy } from "../../../shared/orchestration.ts";
+import type { Flow } from "../../../shared/flow.ts";
+import type { PreflightTarget } from "../../../shared/preflightEngine.ts";
 import type { ActionAnswer, ActionBody, ItemsAnswer, SettingsAnswer, SettingsChange } from "../../../shared/polaris.ts";
 import type { AccountsOut } from "../../../shared/pluginAccounts.ts";
 import type { SettingRequestView } from "../../../shared/settingClass.ts";
@@ -15,7 +17,7 @@ import type { PinnedPlace, PrWatchFire, PrWatchRule, PrWatchState } from "../../
 import type { PrView } from "../../../shared/prFilter.ts";
 import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
-import type { WatchEvent, UsageOpens, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, FolderPrecheck, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitTagOrigin, GitStashFile, GitLastFetch, GitRangeCounts, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerPeek, DockerEnvRow, BrowseReport, BrowsePage, FileFacts, FileGitFacts, TerminalCommands, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, RemoteStatus, ServeResult, PairState, PairedDevice, DeviceScope, Budget, BudgetStatus, AgentProbe, EnginesReport, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, OrphanReport, OrphanStopResult, DiskCleanReport, DiskCleanRunResult, SpaceReport, FindReport, GrepReport, DiskPlaces, VolumeList, NetworkList, RemoteStep, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, PluginUpdateReport, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest, FsBody, FsAnswer, FsJob, FsTrashRow, FsProps, OpenWithList, FinderAction, FinderActionList, MediaFacts } from "../../../shared/types.ts";
+import type { WatchEvent, UsageOpens, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, FolderPrecheck, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitTagOrigin, GitStashFile, GitLastFetch, GitRangeCounts, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerPeek, DockerEnvRow, BrowseReport, BrowsePage, FileFacts, FileGitFacts, TerminalCommands, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, RemoteStatus, ServeResult, PairState, PairedDevice, DeviceScope, Budget, BudgetStatus, AgentProbe, EnginesReport, SetupState, SetupRepos, SetupScan, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, OrphanReport, OrphanStopResult, DiskCleanReport, DiskCleanRunResult, SpaceReport, FindReport, GrepReport, DiskPlaces, VolumeList, NetworkList, RemoteStep, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, PluginUpdateReport, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest, FsBody, FsAnswer, FsJob, FsTrashRow, FsProps, OpenWithList, FinderAction, FinderActionList, MediaFacts } from "../../../shared/types.ts";
 import type { JiraUnits } from "../../../shared/jiraStatusUnits.ts";
 import type { WorkSend } from "./jiraWorklog.ts";
 import type { CardEdit, CardFact, ProvidersResponse, JiraBlockOutcome, JiraConnectResult, JiraHandoffRule, JiraMoves, JiraPerson, JiraSettings, JiraStep, JiraStepChoice, JiraStepKey, JiraStepPr, JiraSteps, JiraStepsRead, JiraStatus, JiraViews, JiraViewRead, JiraBoardAreas, JiraBoardContext, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, CardDev, CardWebLink, CardEvent, TrackerChoice } from "../../../shared/providers.ts";
@@ -24,6 +26,8 @@ import type { CheckMetric } from "../../../shared/checkBaseline.ts";
 import type { UiReply } from "../../../shared/uiActions.ts";
 import type { GithubProblem } from "../../../shared/githubStatus.ts";
 import type { Look } from "../../../shared/unstick.ts";
+import type { NamedAgentRow } from "./workerBar.ts";
+import type { ManifestProject, ManifestStartWrite, ManifestSummary, ManifestWrite } from "../../../shared/manifest.ts";
 
 /** A partial update: any group may name just the keys it changes. */
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? Partial<T[K]> : T[K] };
@@ -279,6 +283,23 @@ export async function probeServer(timeoutMs = 2500): Promise<ServerIdentity> {
   }
 }
 
+/**
+ * Whether this server runs with no token at all.
+ *
+ * A tokenless server identifies nobody, so a rule about who may act is not
+ * enforced on it — the same fact auth.ts prints at start, said where a person
+ * reads a setting that would otherwise promise more than the server can keep.
+ */
+export async function serverIsTokenless(): Promise<boolean> {
+  if (IS_DEMO) return false;
+  try {
+    const r = await fetch(`${SERVER}/health`, { headers: authHeaders() });
+    if (!r.ok) return false;
+    const j = await r.json() as { tokenless?: unknown };
+    return j.tokenless === true;
+  } catch { return false; }
+}
+
 /** Auth token for a server that requires one (exposed / multi-user box). Read
  *  once from `?token=` — then stripped from the URL bar so it isn't shoulder-
  *  surfed or copied around — or from a prior localStorage save. Empty on the
@@ -438,8 +459,8 @@ export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string
   /**
    * This socket is the docked console.
    *
-   * The server gives it the engine whatever the terminal view is set to, and in
-   * a session of its own. Passed rather than inferred from `fresh`: they are
+   * The server gives it the engine whatever the terminal view is set to, in the
+   * session's `console` window. Passed rather than inferred from `fresh`: they are
    * different questions — `fresh` says "not the session the desk resumed", and
    * this says "this is the app's shell, and it must outlive the window".
    */
@@ -450,8 +471,8 @@ export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string
   /**
    * This socket is a tab of the floating bench, and which one.
    *
-   * A number, not a name: the server builds the tmux session from it, so a tab
-   * can be reattached tomorrow and no client can ever point at a session that
+   * A number, not a name: the server builds the bench window from it, so a tab
+   * can be reattached tomorrow and no client can ever point at a window that
    * is not its own. 0 means "not the bench" — see engineBenchArgv.
    */
   bench = 0,
@@ -593,9 +614,32 @@ export function whenServerUp(): Promise<void> {
   return serverUp;
 }
 
+/** A read whose refusal is a sentence, not a status. The Manifest view shows
+ *  what the server answered ("that project is not open"), so the body has to
+ *  survive a non-2xx answer. */
+export interface ManifestRead<T> {
+  ok: boolean;
+  status: number;
+  answer: T | null;
+  error: string;
+}
+
+async function manifestGet<T>(path: string): Promise<ManifestRead<T>> {
+  await whenServerUp();
+  let body: unknown = null;
+  try {
+    const r = await fetch(SERVER + path, { headers: authHeaders(deskGated(path) ? deskHeader() : {}) });
+    try { body = await r.json(); } catch { /* an answer that is not JSON says nothing */ }
+    const error = typeof (body as { error?: unknown } | null)?.error === "string" ? String((body as { error: string }).error) : "";
+    return { ok: r.ok, status: r.status, answer: r.ok ? (body as T) : null, error };
+  } catch {
+    return { ok: false, status: 0, answer: null, error: "" };
+  }
+}
+
 /** A caller that can change its mind. Only the ones that ask for it get one —
  *  a request nobody is waiting on any more is the exception, not the rule. */
-async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
+async function get<T>(path: string, signal?: AbortSignal, headers: Record<string, string> = {}): Promise<T> {
   await whenServerUp();
   let last: unknown;
   for (let i = 0; i <= COLD_START_WAITS.length; i++) {
@@ -604,7 +648,7 @@ async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
     // being handed to fetch.
     if (signal?.aborted) throw signal.reason ?? new DOMException("aborted", "AbortError");
     try {
-      const r = await fetch(SERVER + path, { headers: authHeaders(), ...(signal ? { signal } : {}) });
+      const r = await fetch(SERVER + path, { headers: authHeaders(headers), ...(signal ? { signal } : {}) });
       if (!r.ok) throw new Error(`${path} → ${r.status}`);
       return r.json() as Promise<T>;
     } catch (e) {
@@ -659,6 +703,13 @@ async function put<T>(path: string, body: unknown, headers: Record<string, strin
   // 202 is the settings door taking this for an agent's: nothing changed.
   if (r.status === 202) return { ...(out as object), ok: false, error: "not saved: this window is not the desktop app" } as T;
   return out;
+}
+
+/** DELETE with no body, gated like PUT. The flow is its one caller. */
+async function del<T>(path: string, headers: Record<string, string> = {}): Promise<T> {
+  await whenServerUp();
+  const r = await fetch(SERVER + path, { method: "DELETE", headers: authHeaders({ ...(deskGated(path) ? deskHeader() : {}), ...headers }) });
+  return (await r.json()) as T;
 }
 
 /** The viewer's IANA zone, or null if the runtime cannot say. Memoized: this
@@ -810,6 +861,13 @@ const realApi = {
     get<{ ok: boolean; sessions: AgentSessionRow[] }>(`/agent/sessions?root=${encodeURIComponent(root)}`),
   focusPane: (p: { sessionId: string; windowId: string; paneId: string }) =>
     post<{ ok: boolean; error?: string }>("/terminal/panes/focus", p),
+  /** The Manifest: the summary the rail dot reads, one project's rows, and a
+   *  verdict. Reads keep the server's refusal sentence so the view can say it. */
+  manifestSummary: () => manifestGet<ManifestSummary>("/manifest"),
+  manifestProject: (root: string) => manifestGet<ManifestProject>(`/manifest?project=${encodeURIComponent(root)}`),
+  manifestSign: (b: { project: string; sha: string; verdict: "tested" | "failed" | "cleared"; note?: string }) =>
+    post<ManifestWrite>("/manifest/signoff", b),
+  manifestStart: (root: string) => post<ManifestStartWrite>("/manifest/start", { project: root }),
   // --- the pane engine's tmux, driven entirely from the UI ---
   /** Everything the settings panel needs to describe the engine's tmux. */
   tmuxStatus: () => get<{
@@ -894,6 +952,16 @@ const realApi = {
   accountSwitch: (provider: string, id: string) => post<{ ok: boolean; plugin?: string; error?: string }>(`/usage/accounts/switch`, { provider, id }),
   accountManage: (provider: string) => post<{ ok: boolean; plugin?: string; error?: string }>(`/usage/accounts/manage`, { provider }),
   refreshCodexUsage: () => post<{ ok: boolean; error?: string }>(`/usage/codex/refresh`, {}),
+  /** The same press for OpenCode Go. `force` is a person asking now; without it
+   *  the server's ten-minute cache answers and no browser tab is opened. */
+  refreshOpenCodeUsage: (force = false) => post<ProviderUsage>(`/usage/opencode/refresh${force ? "?force=1" : ""}`, {}),
+  /** Per-model spend and days from the local engine's own `stats` (no key, no
+   *  network), for the panel's detail. Asked when the detail is unfolded. */
+  openCodeDetail: (days = 30) => get<{ ok: boolean; detail?: { models: { model: string; steps: number; costUsd: number; tokens: number }[]; daily: { day: string; tokens: number; costUsd: number }[]; costUsd: number; steps: number } | null }>(`/usage/opencode/detail?days=${days}`),
+  /** The console key: whether one is stored (never the key), stored, or cleared. */
+  openCodeKey: () => get<{ ok: boolean; set: boolean }>(`/usage/opencode/key`),
+  setOpenCodeKey: (key: string) => post<{ ok: boolean; set?: boolean; error?: string }>(`/usage/opencode/key`, { key }),
+  clearOpenCodeKey: () => post<{ ok: boolean; set?: boolean; error?: string }>(`/usage/opencode/key`, { clear: true }),
   claimPaceAlerts: (alertAt: number) => post<{ ok: boolean; fired: number }>(`/usage/pace-claim`, { alertAt }),
   // usage_since: the epoch the call counts are known from. They are bounded
   // by AGENTGLASS_RETENTION_DAYS, so a bare count reads as a lifetime total
@@ -1569,8 +1637,8 @@ const realApi = {
   /** One project's rules, and the base set every project shares. */
   agentRules: (root: string) =>
     get<{ ok: boolean; error?: string } & Partial<import("../../../shared/agentRules.ts").AgentRulesView>>(`/agent-rules?root=${encodeURIComponent(root)}`),
-  /** A person's rule: stricter and looser both apply at once for them. */
-  agentRuleSet: (f: import("../../../shared/agentRules.ts").RuleRequest) =>
+  /** A person's rule: stricter and looser both apply at once for them. `remove` takes one out. */
+  agentRuleSet: (f: import("../../../shared/agentRules.ts").RuleRequest | import("../../../shared/agentRules.ts").RuleRemoveRequest) =>
     post<{ ok: boolean; error?: string; applied?: boolean; waitsForPerson?: boolean }>("/agent-rules", f),
   /** A suggestion made a rule (`setting`) or put away for good (`dismiss`): only the person answers. */
   agentRuleAnswer: (id: string, a: { setting: import("../../../shared/agentRules.ts").RuleSetting } | { dismiss: true }) =>
@@ -1581,6 +1649,27 @@ const realApi = {
   agentsBroadcast: (text: string, names: string[] = []) =>
     post<{ ok: boolean; error?: string; result?: { sent: { name: string; outcome: string }[]; missing: string[]; asked: number } }>(
       "/agents/named/broadcast", { text, names }),
+  /** Every named agent, newest first. `all` keeps the ones that ended, whose
+   *  tabs are still on screen — a worker's tab is read after its turn. `pane`
+   *  asks about one window, which is a row read rather than a board sweep. */
+  namedAgents: (all = false, pane = "") => {
+    const q = new URLSearchParams();
+    if (all) q.set("all", "1");
+    if (pane) q.set("pane", pane);
+    const query = q.toString();
+    return get<{ ok: boolean; error?: string; result?: { agents: NamedAgentRow[] } }>(`/agents/named${query ? `?${query}` : ""}`);
+  },
+  /** The tab a named agent runs in, as its own reader draws it (the same answer
+   *  `agentglass-agent read` gets). A headless worker fires no hooks, so this is
+   *  the only live reading of its steps. */
+  agentRead: (name: string, lines = 300) =>
+    post<{ ok: boolean; error?: string; result?: { name: string; state: string; text: string; exitCode?: number; exitLine?: string } }>(
+      "/agents/named/read", { name, lines }),
+  /** The stop the CLI gives: it ends the turn and closes the tab. A tab the app
+   *  did not open is let go instead, and the answer says which happened. */
+  agentStop: (name: string) =>
+    post<{ ok: boolean; error?: string; result?: { name: string; killed: boolean; letGo: boolean } }>(
+      "/agents/named/stop", { name }),
   seatWake: () => get<{ ok: boolean; hours: number }>("/seat/wake"),
   seatWakeSave: (hours: number) => post<{ ok: boolean; error?: string }>("/seat/wake", { hours }),
   /** Which CLI and model each worker role runs on (shared/workerRoles.ts). */
@@ -1600,6 +1689,15 @@ const realApi = {
   orchestrationSave: (policy: Policy | null, root?: string) =>
     post<{ ok: boolean; error?: string; scope?: "project" | "global"; root?: string; overrides?: string[]; policy?: Policy }>(
       "/orchestration", { root, policy }, deskHeader()),
+  /** The flow in force for a project: the one it saved, or the template. */
+  getFlow: (root: string) =>
+    get<{ ok: boolean; error?: string; scope: "project" | "template"; root: string; flow: Flow }>(`/flow?root=${encodeURIComponent(root)}`),
+  /** Store a whole flow. The person's own window only; an agent is refused. */
+  putFlow: (root: string, flow: Flow) =>
+    put<{ ok: boolean; error?: string; scope?: "project" | "template"; root?: string; flow?: Flow }>(`/flow?root=${encodeURIComponent(root)}`, flow, deskHeader()),
+  /** Remove a saved flow, so the project falls back to the template. */
+  deleteFlow: (root: string) =>
+    del<{ ok: boolean; error?: string; scope?: "project" | "template"; root?: string; flow?: Flow }>(`/flow?root=${encodeURIComponent(root)}`, deskHeader()),
   /** Polaris: the settings in force for a project (or the global ones) and the layer each door came from. */
   polarisSettings: (root?: string) => get<SettingsAnswer | { ok: false; error: string }>(`/polaris/settings${root ? `?root=${encodeURIComponent(root)}` : ""}`),
   /** Choose a preset, flip the switch, or store a whole layer. The person's own window only. */
@@ -1944,6 +2042,10 @@ const realApi = {
    *  terminal with no tmux starts an agent — see server/src/agentticket.ts. */
   termAgentTicket: (cwd: string, prompt: string, yolo: boolean, title: string, kind?: string) =>
     post<{ ok: boolean; ticket?: string; error?: string }>("/terminal/agent", { cwd, prompt, yolo, title, ...(kind ? { kind } : {}) }),
+  /** A shell in a project the caller names, for a first terminal whose picked
+   *  agent is not installed (server/src/index.ts, /terminal/open-shell). */
+  openShell: (root: string) =>
+    post<{ ok: boolean; pane?: string; window?: string; cwd?: string; error?: string }>("/terminal/open-shell", { root }),
   /** Flight plan: plans, their Preflight runs and the person's answers (server/src/index.ts, /flight-plan/*). */
   flightPlans: (root = "", state = "") =>
     get<{ ok: boolean; enabled?: boolean; budget?: import("./flightPilot.ts").BudgetWire; plans?: Record<string, unknown>[]; error?: string }>(`/flight-plan/plans?${new URLSearchParams({ ...(root ? { root } : {}), ...(state ? { state } : {}) })}`),
@@ -1959,11 +2061,15 @@ const realApi = {
   /** capUsd: the person's higher cap for this one run (above 0, up to 5). */
   flightPlanPreflight: (id: string, capUsd?: number) =>
     post<{ ok: boolean; run?: { id: string; state: string }; error?: string }>(`/flight-plan/plans/${encodeURIComponent(id)}/preflight`, capUsd === undefined ? {} : { capUsd }),
-  flightPlanGo: (id: string) => post<{ ok: boolean; error?: string; queued?: boolean; launchError?: string; window?: string; worktree?: string; branch?: string }>(`/flight-plan/plans/${encodeURIComponent(id)}/go`, {}),
+  /** model: the model this Go asks for; absent means the plan's own pick. */
+  flightPlanGo: (id: string, model?: string) => post<{ ok: boolean; error?: string; queued?: boolean; launchError?: string; window?: string; worktree?: string; branch?: string }>(`/flight-plan/plans/${encodeURIComponent(id)}/go`, model ? { model } : {}),
   flightPlanNoGo: (id: string, reason: string) => post<{ ok: boolean; error?: string }>(`/flight-plan/plans/${encodeURIComponent(id)}/no-go`, { reason }),
-  flightPlanLaunch: (id: string) =>
-    post<{ ok: boolean; window?: string; worktree?: string; branch?: string; error?: string }>(`/flight-plan/plans/${encodeURIComponent(id)}/launch`, {}),
+  flightPlanLaunch: (id: string, model?: string) =>
+    post<{ ok: boolean; window?: string; worktree?: string; branch?: string; error?: string }>(`/flight-plan/plans/${encodeURIComponent(id)}/launch`, model ? { model } : {}),
   flightRuns: (root = "") => get<{ ok: boolean; runs?: import("./flightPlan.ts").Run[]; error?: string }>(`/flight-plan/runs?${new URLSearchParams(root ? { root } : {})}`),
+  /** What a Preflight will run on in this project: the server resolves it from that project's Reviewer chain. */
+  flightPreflightTarget: (root: string) =>
+    get<{ ok: boolean; target?: PreflightTarget; error?: string }>(`/flight-plan/preflight/target?${new URLSearchParams({ root })}`),
   flightRunGo: (id: string) => post<{ ok: boolean; error?: string }>(`/flight-plan/runs/${encodeURIComponent(id)}/go`, {}),
   flightFinding: (runId: string, fid: string, action: string | null, note: string) =>
     post<{ ok: boolean; error?: string }>(`/flight-plan/runs/${encodeURIComponent(runId)}/findings/${encodeURIComponent(fid)}`, { action, note }),
@@ -1974,6 +2080,9 @@ const realApi = {
    */
   flightHold: (root: string) => post<{ ok: boolean; held?: boolean; told?: number; error?: string }>("/flight-plan/hold", { root }),
   flightResume: (root: string) => post<{ ok: boolean; held?: boolean; error?: string }>("/flight-plan/resume", { root }),
+  /** A higher cap until the day (midnight) or the week (Monday) turns over; the base cap is untouched. */
+  flightRaiseBudget: (usd: number, scope: "day" | "week") =>
+    post<{ ok: boolean; capUsd?: number; until?: number; budget?: import("./flightPilot.ts").BudgetWire; error?: string }>("/flight-plan/budget/raise", { usd, scope }),
   flightAnswer: (planId: string, answer: string) => post<{ ok: boolean; error?: string }>(`/flight-plan/plans/${encodeURIComponent(planId)}/answer`, { answer }),
   /** One setting of the settings door at a project; a machine-wide one takes "" and ignores it. */
   settingAt: (id: string, root: string) =>
@@ -2002,8 +2111,9 @@ const realApi = {
   /** Every process this user owns, with the ones descended from this server
    *  marked. `limit` caps only the rest of the machine — ours all come back. */
   machineResources: (limit = 40) => get<ResourceReport>(`/machine/resources?limit=${limit}`),
-  /** Processes an agent left behind. Cached server-side (sampled every few
-   *  minutes); `fresh` lets the open panel ask for a newer sample. */
+  /** Processes left behind, each with the origin read from its own paths:
+   *  a checkout, a scratchpad or a temp wrapper. Cached server-side (sampled
+   *  every few minutes); `fresh` lets the open panel ask for a newer sample. */
   machineOrphans: (fresh = false) => get<OrphanReport>(`/machine/orphans${fresh ? "?fresh=1" : ""}`),
   /** Stop ONE left-behind pid; refused unless it is flagged right now. */
   machineOrphanStop: (pid: number) => post<OrphanStopResult>("/machine/orphans/stop", { pid }),
@@ -2201,6 +2311,14 @@ const realApi = {
   agents: () => get<{ agents: AgentProbe[] }>("/agents"),
   /** What this machine has of each engine. `fresh` is Recheck: true skips the server's cache, an id rechecks that engine only. */
   engines: (fresh: boolean | string = false) => get<EnginesReport>(fresh === true ? "/engines?fresh=1" : fresh ? `/engines?fresh=${encodeURIComponent(fresh)}` : "/engines"),
+  /** The first run's facts: whether it is finished, what this machine already has. */
+  setupState: () => get<SetupState>("/setup/state"),
+  /** Step 4's folder read: every repository in it, with the branch each is on. */
+  setupRepos: (path: string) => get<SetupRepos>(`/setup/repos?path=${encodeURIComponent(path)}`),
+  /** One search for the Finder: start it, poll it, or stop it. */
+  setupScanStart: () => post<SetupScan>("/setup/scan", {}),
+  setupScan: (id: string) => get<SetupScan>(`/setup/scan?id=${encodeURIComponent(id)}`),
+  setupScanStop: (id: string) => post<SetupScan>("/setup/scan/stop", { id }),
   /** The one-line test: a real turn, so only ever on a click. */
   testEngine: (engine: string) => post<{ ok: boolean; ms: number; error?: string }>("/engines/test", { engine }),
   /** Wire one — and only the one asked for. */
@@ -2451,7 +2569,7 @@ const realApi = {
   /** Whether paired phones raise their own notification for a watch or a card (`phone.alerts`). */
   phoneAlerts: () => get<{ ok: boolean; value?: unknown }>("/settings/door?id=phone.alerts"),
   /** What agents asked to change and wait for the person on (the settings door). */
-  settingsRequests: () => get<{ ok: boolean; requests: SettingRequestView[] }>("/settings/requests"),
+  settingsRequests: () => get<{ ok: boolean; requests: SettingRequestView[] }>("/settings/requests", undefined, deskHeader()),
   /** What the automatic cleanup after a merge is doing and has done (server/src/cleanupAuto.ts), newest first. */
   cleanupAuto: () => get<{ ok: boolean; entries: AutoEntry[]; queued?: number }>("/cleanup/auto"),
   /** The dry-run plan for one pull request of a repository (docs/CLEANUP.md). Read-only; a 4xx/5xx rejects with the route in the message. */
@@ -2461,13 +2579,13 @@ const realApi = {
     post<Partial<CleanupReport> & { ok: boolean; error?: string }>("/cleanup/run", { repo, pr, planId, exclude, confirmNotMerged }),
   /** Which of these finished PRs left anything on this machine: the server's local inventory, one row each, no gh. */
   cleanupInventory: (repo: string, prs: { pr: number; branch: string }[]) =>
-    get<{ ok: boolean; rows?: ({ pr: number; items?: number; bytes?: number; groups?: { group: string; items: number; bytes: number }[]; unknown?: boolean })[]; error?: string }>(`/cleanup/inventory?repo=${encodeURIComponent(repo)}${prs.map((x) => `&p=${encodeURIComponent(`${x.pr}:${x.branch}`)}`).join("")}`),
+    get<{ ok: boolean; rows?: ({ pr: number; items?: number; bytes?: number; groups?: { group: string; items: number; bytes: number }[]; unknown?: boolean; blocked?: string })[]; error?: string }>(`/cleanup/inventory?repo=${encodeURIComponent(repo)}${prs.map((x) => `&p=${encodeURIComponent(`${x.pr}:${x.branch}`)}`).join("")}`),
   /** The Docker build cache every project shares (not one PR's leftover): its reclaimable size, and the prune. Person-only on the server. */
   cleanupBuildCache: () => get<{ ok: boolean; reclaimableBytes?: number; totalBytes?: number; error?: string }>("/cleanup/build-cache"),
   cleanupBuildCachePrune: () => post<{ ok: boolean; freedBytes?: number; remainingBytes?: number; error?: string }>("/cleanup/build-cache/prune", {}),
   /** The person's answer: carries the desk key (deskGate.ts), as only the person may give it. */
-  settingsRequestDecide: (id: string, approve: boolean) =>
-    post<{ ok: boolean; applied?: boolean; error?: string }>("/settings/requests/decide", { id, approve }),
+  settingsRequestDecide: (id: string, approve: boolean, bulk = false) =>
+    post<{ ok: boolean; applied?: boolean; error?: string }>("/settings/requests/decide", { id, approve, ...(bulk ? { bulk: true } : {}) }),
   /** The person's own switch, written from Settings: an agent cannot set it on any route. */
   agentsChangeWithoutAsking: () => get<{ ok: boolean; trusted: boolean }>("/settings/door"),
   agentsChangeWithoutAskingSave: (on: boolean) =>
@@ -2567,6 +2685,10 @@ const demoApi: typeof realApi = {
   paneDirsAll: (_w: string) => D({ ok: true, panes: [] as { pane: string; active: boolean; dirs: string[]; agent?: string }[] }),
   agentSessions: (_root: string) => D({ ok: true, sessions: [] as AgentSessionRow[] }),
   focusPane: (_p: { sessionId: string; windowId: string; paneId: string }) => D({ ok: false, error: "not in the demo" }),
+  manifestSummary: () => D({ ok: true, status: 200, answer: { projects: [] } as ManifestSummary, error: "" }),
+  manifestProject: () => D({ ok: false, status: 0, answer: null, error: "the demo reads no checkout" }),
+  manifestSign: () => D({ ok: false, error: "the demo keeps no verdicts" } as ManifestWrite),
+  manifestStart: () => D({ ok: false, error: "the demo has no start line" } as ManifestStartWrite),
   stats: (windowMs: number, provider?: string) => D(demo.stats(windowMs, provider)),
   usageDaily: (days = 90) => D(demo.usageDaily(days)),
   sessions: (_limit?: number, provider?: string) => D(demo.sessions(provider)),
@@ -2580,6 +2702,11 @@ const demoApi: typeof realApi = {
   accountSwitch: () => D({ ok: false, error: "the demo has no accounts" }),
   accountManage: () => D({ ok: false, error: "the demo has no accounts" }),
   refreshCodexUsage: () => D({ ok: false, error: "not available in the demo" }),
+  refreshOpenCodeUsage: () => D((demo.providerUsage() as ProviderUsage[]).find((r) => r.provider === "opencode")!),
+  openCodeDetail: () => D({ ok: true, detail: null }),
+  openCodeKey: () => D({ ok: true, set: false }),
+  setOpenCodeKey: () => D({ ok: false, error: "not available in the demo" }),
+  clearOpenCodeKey: () => D({ ok: false, error: "not available in the demo" }),
   claimPaceAlerts: (_alertAt: number) => D({ ok: true, fired: 0 }),
   skills: () => D(demo.skills()),
   changes: () => D(demo.changes()),
@@ -2846,6 +2973,11 @@ const demoApi: typeof realApi = {
   // nothing to wire, and an empty list is the truth rather than a placeholder.
   agents: () => D({ agents: [] as AgentProbe[] }),
   engines: (_fresh?: boolean | string) => D({ host: "demo", engines: [] as EnginesReport["engines"] }),
+  setupState: () => D({ setupDone: true, setupInProgress: false, setupAgent: "claude", tutorialSeen: "", projectOpen: true, sessionsSeen: true, hooksInstalled: false, homedir: "~" } as SetupState),
+  setupRepos: (_path: string) => D({ path: "", exists: false, repos: [], capped: false } as SetupRepos),
+  setupScanStart: () => D({ id: "demo", state: "failed", roots: [], folders: 0, current: "", repos: [], capped: null, startedAt: 0, elapsedMs: 0, skips: [], error: "not available in the demo" } as SetupScan),
+  setupScan: (_id: string) => D({ id: "demo", state: "failed", roots: [], folders: 0, current: "", repos: [], capped: null, startedAt: 0, elapsedMs: 0, skips: [], error: "not available in the demo" } as SetupScan),
+  setupScanStop: (_id: string) => D({ id: "demo", state: "stopped", roots: [], folders: 0, current: "", repos: [], capped: "person", startedAt: 0, elapsedMs: 0, skips: [] } as SetupScan),
   testEngine: (_engine: string) => D({ ok: true, ms: 1200 } as { ok: boolean; ms: number; error?: string }),
   agentConnect: (_id: string, _undo?: boolean) => D({ ok: false, error: "not available in the demo" }),
   budgets: () => D({ budgets: [], status: [], models: [] }),
@@ -3103,10 +3235,13 @@ const demoApi: typeof realApi = {
   seatTaskDrop: (_r: string, _i: string) => D({ ok: false, error: "not available in the demo" }),
   seatNeedSettled: (_r: string, _i: string, _o?: string) => D({ ok: false, error: "not available in the demo" }),
   agentsBroadcast: (_t: string, _n?: string[]) => D({ ok: false, error: "not available in the demo" }),
+  namedAgents: () => D({ ok: true, result: { agents: [] as NamedAgentRow[] } }),
+  agentRead: (_n: string, _l?: number) => D({ ok: false, error: "not available in the demo" }),
+  agentStop: (_n: string) => D({ ok: false, error: "the demo has no agents to stop" }),
   seatAdopt: (_r: string, _s: string, _p: string, _w?: string) => D({ ok: false, error: "not available in the demo" }),
   seatReportDismiss: (_r: string, _i: number[]) => D({ ok: false, error: "not available in the demo" }),
   agentRules: (_r: string) => D({ ok: false, error: "not available in the demo" }),
-  agentRuleSet: (_f: import("../../../shared/agentRules.ts").RuleRequest) => D({ ok: false, error: "not available in the demo" }),
+  agentRuleSet: (_f: import("../../../shared/agentRules.ts").RuleRequest | import("../../../shared/agentRules.ts").RuleRemoveRequest) => D({ ok: false, error: "not available in the demo" }),
   agentRuleAnswer: (_id: string, _a: { setting: import("../../../shared/agentRules.ts").RuleSetting } | { dismiss: true }) => D({ ok: false, error: "not available in the demo" }),
   seatWake: () => D({ ok: true, hours: 4 }),
   seatWakeSave: (_h: number) => D({ ok: false, error: "not available in the demo" }),
@@ -3129,12 +3264,15 @@ const demoApi: typeof realApi = {
         },
       },
       rules: [],
-      ceiling: { write: "worktree" as const, network: false, commit: true, deny: [] as string[] },
-      workerDefault: { write: "worktree" as const, network: false, commit: false, deny: [] as string[] },
+      ceiling: { write: "worktree" as const, network: false, commit: true, docker: false, deny: [] as string[] },
+      workerDefault: { write: "worktree" as const, network: false, commit: false, docker: false, deny: [] as string[] },
       limits: { maxWorkers: 3, turnMinutes: 30, maxRetries: 1 },
     } as Policy,
   }),
   orchestrationSave: (_p: Policy | null, _root?: string) => D({ ok: false, error: "not available in the demo" }),
+  getFlow: (_root: string) => D({ ok: false, error: "not available in the demo", scope: "template" as const, root: "", flow: {} as Flow }),
+  putFlow: (_root: string, _flow: Flow) => D({ ok: false, error: "not available in the demo" }),
+  deleteFlow: (_root: string) => D({ ok: false, error: "not available in the demo" }),
   orchestrationState: () => D({ ok: true, rules: [] as PolicyRuleState[] }),
   polarisSettings: (_root?: string) => D({ ok: false, error: "not available in the demo" }),
   polarisSettingsSave: (_c: SettingsChange, _root?: string) => D({ ok: false, error: "not available in the demo" }),
@@ -3250,16 +3388,19 @@ const demoApi: typeof realApi = {
   flightPlanNoGo: (_id: string, _r: string) => D({ ok: false, error: "not available in the demo" }),
   flightPlanLaunch: (_id: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; window?: string; worktree?: string; branch?: string; error?: string }),
   flightRuns: (_r?: string) => D({ ok: false, runs: [] as import("./flightPlan.ts").Run[], error: "not available in the demo" }),
+  flightPreflightTarget: (_r: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; target?: PreflightTarget; error?: string }),
   flightRunGo: (_id: string) => D({ ok: false, error: "not available in the demo" }),
   flightFinding: (_r: string, _f: string, _a: string | null, _n: string) => D({ ok: false, error: "not available in the demo" }),
   flightHold: (_r: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; held?: boolean; told?: number; error?: string }),
   flightResume: (_r: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; held?: boolean; error?: string }),
+  flightRaiseBudget: (_u: number, _s: "day" | "week") => D({ ok: false, error: "not available in the demo" } as { ok: boolean; capUsd?: number; until?: number; error?: string }),
   flightAnswer: (_p: string, _a: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string }),
   settingAt: (_id: string, _r: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; value?: unknown; scopedSet?: boolean; error?: string }),
   settingAtGlobal: (_id: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; value?: unknown; error?: string }),
   settingAtSet: (_id: string, _v: unknown, _r: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; applied?: boolean; error?: string }),
   termAgentTicket: (_c: string, _p: string, _y: boolean, _t: string) =>
     D({ ok: false, error: "not available in the demo" }),
+  openShell: (_r: string) => D({ ok: false, error: "not available in the demo" }),
   tmuxStatus: () => D({ ok: false, bin: { available: false, source: "none", path: "", version: null, reason: "demo" }, capability: { available: false, reason: "demo" }, confMode: "append", override: "", overrideActive: false, broken: false, brokenReason: "", restoreEnabled: false, resumeMode: "lazy", prefix: "", terminal: "engine", source: "auto", lastCaptureAt: null, crashLoop: null }),
   tmuxConfSave: (_m: string, _o: string) => D({ ok: false, error: "not available in the demo" }),
   tmuxSettingsSave: (_f: object) => D({ ok: false, error: "not available in the demo" }),

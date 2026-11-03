@@ -17,8 +17,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
 import { createLogFeed, type LogFeed } from "../../lib/dockerLogFeed.ts";
 import {
-  hitsIn, lastIndexOf, levelCounts, markSegments, pauseLabel, readLog, shownBy, stepHit, streamChip,
-  type LevelPick, type LogEntry,
+  hitsIn, lastIndexOf, levelCounts, logFromEarlierRun, markSegments, NO_LOG_FROM_THIS_START, pauseLabel,
+  readLog, shownBy, stepHit, streamChip, type LevelPick, type LogEntry, type StartAttempt,
 } from "../../lib/dockerDetail.ts";
 import { CaretIcon, RefreshIcon, SearchIcon } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
@@ -41,10 +41,13 @@ function Line({ e, q, first, cur, lastErr }: { e: LogEntry; q: string; first: nu
   );
 }
 
-export function LogView({ id, tail, onTail, running, errorTick = 0 }: {
+export function LogView({ id, tail, onTail, running, errorTick = 0, container }: {
   id: string; tail: number; onTail: (n: number) => void; running: boolean;
   /** Bumped by "Show in log": scroll to the last error, whatever the filter. */
   errorTick?: number;
+  /** The row this log belongs to, for the one thing the feed cannot know: the
+   *  lines may have been written by the run before the one that failed. */
+  container?: StartAttempt;
 }) {
   const feedRef = useRef<LogFeed | null>(null);
   const [tick, bump] = useState(0);
@@ -91,6 +94,7 @@ export function LogView({ id, tail, onTail, running, errorTick = 0 }: {
   const lines = snapshot !== null ? snapshot.split("\n") : feedLines;
   // `tick` is the version: the feed trims in place, so its length alone can stand still while the lines move.
   const entries = useMemo(() => readLog(lines), [tick, snapshot, lines.length]);
+  const earlierRun = !!container && logFromEarlierRun(container, entries);
   const counts = levelCounts(entries);
   const shown = shownBy(entries, pick);
   const drawn = shown.length > DRAWN ? shown.slice(-DRAWN) : shown;
@@ -168,6 +172,11 @@ export function LogView({ id, tail, onTail, running, errorTick = 0 }: {
       </div>
 
       <div className="dk-logwrap">
+        {earlierRun && (
+          <div className="dk-logold" role="status" title="Docker could not start this container, so it wrote no log of its own. What is below came from the run before.">
+            {NO_LOG_FROM_THIS_START}. Every line below was written by an earlier run.
+          </div>
+        )}
         <pre ref={boxRef} className="dk-log agx-scroll" tabIndex={0} aria-label="Log" data-cid={id}
           onScroll={(e) => {
             const el = e.currentTarget;

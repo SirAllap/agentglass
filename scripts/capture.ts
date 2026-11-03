@@ -190,13 +190,17 @@ async function main() {
       await capture(id, STILLS_ONLY ? 0 : 16);
     }
 
-    // Ports and Resources are an overlay, not a rail view — opened from the
-    // rail's own buttons (aria-labelled) and dismissed with Escape.
-    for (const [label, name] of [["Ports", "ports"], ["Resources", "resources"]] as const) {
-      const ok = await cdp.ev(`(()=>{const b=document.querySelector('button[aria-label=${jsLit(label)}]');b?.click();return !!b})()`);
-      if (!ok) { console.warn(`  ! no "${label}" button — skipped`); continue; }
+    // The machine panel is an overlay, not a rail view — opened from the rail's
+    // one Resources button; Ports and Locks are tabs inside it, and Escape
+    // dismisses it.
+    const machine = await cdp.ev(`(()=>{const b=document.querySelector('button[aria-label="Resources"]');b?.click();return !!b})()`);
+    if (!machine) console.warn('  ! no "Resources" button — skipped');
+    else {
       await Bun.sleep(1600);
-      await capture(name, STILLS_ONLY ? 0 : 14);
+      await capture("resources", STILLS_ONLY ? 0 : 14);
+      await cdp.ev(`(()=>{const b=[...document.querySelectorAll('[role="tab"]')].find(b=>/^Ports/.test((b.textContent||'').trim()));b?.click();return !!b})()`);
+      await Bun.sleep(1200);
+      await capture("ports", STILLS_ONLY ? 0 : 14);
       await key(cdp, "Escape");
       await Bun.sleep(500);
     }

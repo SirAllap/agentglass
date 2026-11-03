@@ -13,6 +13,7 @@ import { engineProviders, type Provider } from "../../../../shared/agentKinds.ts
 import type { AgentProbe, EngineReadiness, EnginesReport } from "../../../../shared/types.ts";
 import { LaunchFlagsRows } from "./LaunchFlagsRows.tsx";
 import { ReportingRow } from "./ReportingRow.tsx";
+import { UsageKeyFields, useOpenCodeKey } from "./UsageKeyCard.tsx";
 import {
   accountText, actionOf, badgeOf, credentialNote, engineCounts, engineState, firstRow, logoOf, reportingCheck, roleBadge,
   tileChecks, versionLine, versionText, type TileCheck,
@@ -56,7 +57,7 @@ function Check({ c }: { c: TileCheck }) {
   );
 }
 
-function EngineTile({ p, e, now, reporting, reportingLoaded, busy, note, onRecheck, onTest, onConnect }: {
+function EngineTile({ p, e, now, reporting, reportingLoaded, busy, note, keySet, onRecheck, onTest, onConnect }: {
   p: Provider;
   e: EngineReadiness | null;
   now: number;
@@ -65,6 +66,8 @@ function EngineTile({ p, e, now, reporting, reportingLoaded, busy, note, onReche
   reportingLoaded: boolean;
   busy: boolean;
   note: { text: string; bad: boolean } | null;
+  /** OpenCode's optional console key: the tile owns its field, the page owns the one read. */
+  keySet?: ReturnType<typeof useOpenCodeKey>;
   onRecheck: () => void;
   onTest: () => void;
   onConnect: (a: AgentProbe, undo: boolean) => void;
@@ -90,6 +93,9 @@ function EngineTile({ p, e, now, reporting, reportingLoaded, busy, note, onReche
   const checks = state === "missing" && e
     ? [{ state: "no" as const, label: "Installed", value: "Not on this machine" }]
     : tileChecks(e, now, reportingCheck(reporting, reportingLoaded, now));
+  if (keySet && state !== "missing") {
+    checks.push({ state: keySet.set ? "ok" : "no", label: "Usage key", value: keySet.set ? "Set: whole plan" : keySet.set === false ? "Not set: this PC only" : "…" });
+  }
   checks.forEach((c) => { if (c.label === "Installed" && e?.path) c.value = homeShort(e.path); });
   return (
     <article className="agx-tile" data-attn={state === "ready" || state === "checking" || state === "missing" || state === "testing" ? undefined : "true"} data-none={state === "missing" ? "true" : undefined}
@@ -117,6 +123,7 @@ function EngineTile({ p, e, now, reporting, reportingLoaded, busy, note, onReche
             )}
             {state === "old" && <Button tone="primary" onClick={() => setMore(true)}>Update</Button>}
             <Button disabled={act.disabled} onClick={act.label === "Test" ? onTest : onRecheck}>{act.label}</Button>
+            {keySet && keySet.set !== true && <Button onClick={() => setMore(true)}>Add usage key</Button>}
             {p.id === "codex" && state === "ready" && (
               <Button pending={usage.busy} onClick={() => void readUsage()} title="Runs one minimal Codex turn: it spends a little of the quota it measures">Read usage</Button>
             )}
@@ -130,6 +137,7 @@ function EngineTile({ p, e, now, reporting, reportingLoaded, busy, note, onReche
       {usage.text && <p className="agx-tile-hint" role="status">{usage.text}</p>}
       {more && (
         <div className="agx-tile-d agx-scard-body">
+          {keySet && <UsageKeyFields set={keySet.set} setSet={keySet.setSet} />}
           <SettingRow label="Right now" hint={withCode(first.text)}
             below={first.command ? <CommandLine command={first.command} /> : undefined} />
           <SettingRow label="Version" control={textOf(e ? versionText(e) : "…")} />
@@ -169,8 +177,8 @@ function EngineTile({ p, e, now, reporting, reportingLoaded, busy, note, onReche
             ? <ReportingRow p={reporting} busy={busy} note={note} onConnect={onConnect} />
             : !reportingLoaded && <SettingRow label="Reports to agentglass" status={<StatusBadge tone="checking">Checking</StatusBadge>} />}
           {p.id !== "claude" && <LaunchFlagsRows kind={p.id} title={p.title} />}
-          <SettingRow label="Hook settings" hint={`The wiring for ${p.title} is written on the Agents page.`}
-            actions={<Button onClick={() => openSettings("hooks")}>Open settings</Button>} />
+          {reporting && <SettingRow label="Hook settings" hint={`The wiring for ${p.title} is written on the Agents page.`}
+            actions={<Button onClick={() => openSettings("hooks")}>Open settings</Button>} />}
         </div>
       )}
     </article>
@@ -244,6 +252,7 @@ export function EnginesPane() {
   };
   const reportingOf = (p: Provider): AgentProbe | null => agents?.find((a) => a.id === (p.probe?.id ?? p.id)) ?? null;
 
+  const openCodeKey = useOpenCodeKey();
   const rows = providers.map((p) => ({ p, e: readiness(p) }));
   const counts = engineCounts(rows.map((r) => engineState(r.e)));
   const needs = rows.filter((r) => !["ready", "checking", "missing"].includes(engineState(r.e)));
@@ -287,6 +296,7 @@ export function EnginesPane() {
       <div className="agx-tiles">
         {shown.map(({ p, e }) => (
           <EngineTile key={p.id} p={p} e={e} now={now} reporting={reportingOf(p)} reportingLoaded={agents !== null}
+            keySet={p.id === "opencode" ? openCodeKey : undefined}
             busy={busy === (p.probe?.id ?? p.id)} note={note && note.id === (p.probe?.id ?? p.id) ? note : null}
             onRecheck={() => load(p.id)} onTest={() => void test(p.id)} onConnect={(a, undo) => void connect(a, undo)} />
         ))}

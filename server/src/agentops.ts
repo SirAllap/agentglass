@@ -36,6 +36,11 @@ import { paneCommand } from "./tmuxlayout.ts";
 import { agentBinFor, agentArgv } from "./agentticket.ts";
 import { AGENT_PROVIDERS, agentKind, agentProvider } from "../../shared/agentKinds.ts";
 import { roleLaunch, workerRole } from "../../shared/workerRoles.ts";
+import { DEFAULT_WORKER_ENVELOPE } from "../../shared/orchestration.ts";
+import { createHash } from "node:crypto";
+import { deniedFor, toolsDeniedFor } from "./agents/envelope.ts";
+import { revokeWorkerTokens } from "./auth.ts";
+import { forgetWorkerPages } from "./browserdrive.ts";
 import { workerRoles } from "./config.ts";
 import { claudeCode, supportsSessionName } from "./agents/claudecode.ts";
 import { SPELLINGS } from "./agents/launch.ts";
@@ -194,6 +199,25 @@ export function agentNamed(name: string): NamedAgent | null {
 
 /** The whole history, for `--all`: what ran and when it ended. */
 export function everyAgent(): NamedAgent[] { return everything.all().map(toAgent); }
+
+/**
+ * Every named agent whose registry row is still open, as stored.
+ *
+ * Deliberately no tmux call: the board has just listed the panes and can drop
+ * the rows whose window is gone. Reconciling here would mean a failed tmux
+ * read closed every worker's row, and a screen that polls this must never be
+ * the thing that kills a name.
+ */
+export function openNamed(): NamedAgent[] {
+  return live.all().map(toAgent);
+}
+
+/** The rows for one pane, newest first — what a window's bar asks. No tmux and
+ *  no board: a poll from the terminal has to cost a row, not a sweep. */
+export function agentsAtPane(paneId: string, all = false): NamedAgent[] {
+  const rows = all ? everyAgent() : live.all().map(toAgent);
+  return rows.filter((a) => a.paneId === paneId);
+}
 
 export type StartResult =
   | { ok: true; agent: NamedAgent }
@@ -359,23 +383,37 @@ function lockDir(): string {
  * Qwen Code's lock is a SYSTEM settings file, and naming one replaces
  * /etc/qwen-code/settings.json for that process. A machine that keeps rules
  * there loses them for the worker; the ones this writes are the floor.
+ *
+ * The floor is the same one the policy path compiles (`deniedFor` over the
+ * default worker envelope), so `agentglass-agent start --role` and an
+ * orchestration rule agree on which doors a role has.
  */
 export function roleStart(
   roleId: unknown,
   roles: ReturnType<typeof workerRoles> = workerRoles(),
   dir: string = lockDir(),
-): { ok: true; kind: string; args: string[]; env: Record<string, string> } | { ok: false; error: "no-role" | "no-lock" } {
-  const role = workerRole(roleId);
-  if (!role) return { ok: false, error: "no-role" };
+  lock: { readsOnly: boolean; tools: string[]; allow?: string[] } | null = null,
+): { ok: true; id: string; kind: string; args: string[]; env: Record<string, string> } | { ok: false; error: "no-role" | "no-lock" } {
+  const base = workerRole(roleId);
+  if (!base) return { ok: false, error: "no-role" };
+  /* A saved flow's lock only narrows, except the role's own grant, which this
+     path is as much a worker of as one the policy started. */
+  const role = lock
+    ? { ...base, ...(lock.readsOnly ? { readOnly: true } : {}), ...(lock.allow?.length ? { allow: lock.allow } : {}) }
+    : base;
   const choice = roles[role.id];
   const row = agentProvider(choice.provider);
-  const launch = row && agentKind(row.id) ? roleLaunch(row, role, choice.model) : null;
+  const launch = row && agentKind(row.id)
+    ? roleLaunch(row, role, choice.model, deniedFor(DEFAULT_WORKER_ENVELOPE, role), toolsDeniedFor(lock?.tools))
+    : null;
   if (!row || !launch) return { ok: false, error: "no-lock" };
-  const env = { ...launch.env };
+  const plain = lock ? roleLaunch(row, base, choice.model, deniedFor(DEFAULT_WORKER_ENVELOPE, base)) : null;
+  const env: Record<string, string> = { ...launch.env, AGENTGLASS_ROLE: role.id };
   if (launch.env.OPENCODE_CONFIG_CONTENT) for (const k of OPENCODE_ENV_LAYERS) env[k] = process.env[k] ?? "";
   if (launch.file) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const path = join(dir, `${role.id}-${row.id}.json`);
+    // A narrowed lock gets a file of its own, so a worker already running on the plain one is not rewritten under it.
+    const path = join(dir, `${role.id}-${row.id}${lock && launch.file.content !== plain?.file?.content ? `-${createHash("sha1").update(launch.file.content).digest("hex").slice(0, 8)}` : ""}.json`);
     // Written aside and renamed into place: two workers started in the same
     // role share this file, and a truncating write in place is a moment when
     // the one already starting reads an empty lock. The new file is created
@@ -385,7 +423,7 @@ export function roleStart(
     renameSync(tmp, path);
     env[launch.file.env] = path;
   }
-  return { ok: true, kind: row.id, args: launch.args, env };
+  return { ok: true, id: role.id, kind: row.id, args: launch.args, env };
 }
 
 /**
@@ -619,6 +657,23 @@ export function settleTurn(a: NamedAgent, result: { exitCode: number; line: stri
   return agentNamed(a.name) ?? a;
 }
 
+/* The wrapper's own line, printed after its CLI returns: the status the pane
+ * keeps, on screen, whatever the pane's current command has caught up to. */
+const EXITED_LINE = /the CLI exited \((\d+)\)/;
+
+/** The status a kept window's wrapper printed, or null while it has not. */
+export async function keptExit(paneId: string): Promise<string | null> {
+  return EXITED_LINE.exec((await screenOf(paneId)) ?? "")?.[1] ?? null;
+}
+
+/** End the row of a kept tab whose CLI is over. The launch-time check cannot
+ *  always see that — the pane has not exec'd its command when `new-window`
+ *  returns — and a caller that waited for the CLI can. */
+export function endKept(name: string, now = Date.now()): void {
+  letGo(name);
+  end.run(now, name);
+}
+
 export async function startAgent(p: {
   root: string; name: string; cwd: string; kind?: string; prompt?: string; yolo?: boolean;
   /** Extra CLI flags after the ones this app builds, each one argv element. */
@@ -700,7 +755,7 @@ export async function startAgent(p: {
    * (tmuxconf.ts) — took its tab and its answer with it.
    */
   const run = p.keep ? ["sh", "-c", paneCommand(argv)] : argv;
-  const opened = await engineWindowRunning(p.root, p.name, run, p.cwd, { AGENTGLASS_AGENT_NAME: p.name, ...(p.env ?? {}) }, agentSession(p.root), false);
+  const opened = await engineWindowRunning(p.root, p.name, run, p.cwd, { AGENTGLASS_AGENT_NAME: p.name, ...(p.env ?? {}) }, agentSession(p.root), false, false);
   if (!opened) return { ok: false, error: "no-window" };
   /* A window this app opened and watches: its closing is how `reconcile`
      learns the agent ended, so it closes on any exit rather than keeping the
@@ -721,7 +776,7 @@ export async function startAgent(p: {
      `stop` reach it the way they reach any kept tab. One that exited 0 this
      fast is a one-shot that finished. */
   if (p.keep && KEPT_EXITED(current, start.join("\t"))) {
-    const status = /the CLI exited \((\d+)\)/.exec((await screenOf(opened.paneId)) ?? "")?.[1];
+    const status = await keptExit(opened.paneId);
     if (status && status !== "0") {
       const now = p.now ?? Date.now();
       letGo(p.name);
@@ -868,6 +923,8 @@ export async function stopAgent(a: NamedAgent, now = Date.now(), kill = !a.adopt
   /* An ended agent is only stopped through its kept tab, found by its pane
      (`keptTabOf`), so that is the window closed. */
   letGo(a.name);
+  revokeWorkerTokens(a.name);
+  forgetWorkerPages(a.name);
   const killed = kill ? (await tmux(["kill-window", "-t", a.endedAt === null ? a.windowId : a.paneId])).ok : false;
   end.run(now, a.name);
   return { ok: kill ? killed : true, killed };
@@ -908,9 +965,12 @@ export async function enlistAgent(p: {
   /* A dead pane — the engine keeps one whose command failed — is a status
      line, not an agent to enlist. */
   const rows = r.stdout.split("\n").map((l) => l.split("\t")).filter((c) => c.length >= 5 && c[6] !== "1" && !KEPT_EXITED(c[4] ?? "", c[5] ?? ""));
-  const wanted = p.pane
+  /* ONE ROW PER PANE, whatever session listed it. A session GROUP — a phone's
+     mirror, a panel's view — shares every window, so `list-panes -a` reports
+     the same pane twice and naming it refused itself as "many-panes". */
+  const wanted = [...new Map((p.pane
     ? rows.filter((c) => c[0] === p.pane)
-    : rows.filter((c) => c[2] === (p.window ?? p.name));
+    : rows.filter((c) => c[2] === (p.window ?? p.name))).map((c) => [c[0], c])).values()];
   if (!wanted.length) return { ok: false, error: "no-pane" };
   /* A window name is a label, not a key: two tabs can carry the same one, and
      picking the first would enlist a coin toss. */

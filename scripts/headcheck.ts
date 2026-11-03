@@ -9,7 +9,7 @@
  * not an exception.
  *
  * The breakage that bought this script, 2026-08-06. Commit 5d2ac02 was made
- * with `git add -A` in a shared worktree and swept up four in-flight lines
+ * with `git add -A` in a shared worktree and swept up four lines still being written
  * belonging to another session: the `PanesResponse` import and a `const body`
  * in server/src/index.ts, and the import plus `get<PanesResponse>` in
  * web/src/lib/api.ts. They landed committed, importing a type that
@@ -166,7 +166,7 @@ async function run(): Promise<number> {
     if (!existsSync(join(sandbox, rel))) continue;
     const real = join(REPO, rel, "node_modules");
     const here = join(sandbox, rel, "node_modules");
-    if (!existsSync(real)) untrustworthy(`${join(rel, "node_modules")} is missing — run \`bun install\` first`);
+    if (!existsSync(real)) untrustworthy(`environment: node_modules missing (${join(rel, "node_modules")}) in ${REPO} — run \`bun install\` there`);
     // node_modules is gitignored twice over (both forms, deliberately), so an
     // extracted one means somebody committed it and the borrowed copy would be
     // silently ignored in favour of it.

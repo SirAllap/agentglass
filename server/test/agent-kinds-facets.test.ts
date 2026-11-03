@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { AGENT_PROVIDERS, agentProvider, type Provider } from "../../shared/agentKinds.ts";
 import { extractVersion, versionAtLeast } from "../../shared/semverLite.ts";
 import { __running, screenNeedsYou } from "../src/chatpane.ts";
+import { namesOf } from "../src/agentprobe.ts";
 import { SHAPE, STATUS_DEFAULT, type FakeEngineId } from "./fixtures/fakeEngines.ts";
 
 // The table's ids and the fakes' file names differ for one engine.
@@ -92,6 +93,23 @@ describe("account", () => {
       expect(re.test(STATUS_DEFAULT[FAKE[id]]), `${id} signed in`).toBe(true);
       expect(re.test(SIGNED_OUT[id]), `${id} signed out`).toBe(false);
     }
+  });
+
+  test("OpenCode 2.x: `auth list` is the probe, a stored account is signed in, an empty list is not", () => {
+    const a = get("opencode").account!;
+    expect(a.args).toEqual(["auth", "list"]);
+    const re = new RegExp(a.signedIn, "m");
+    expect(re.test("Acme Go  Acme Go                 stored\nAcme Go  Acme Go 2               stored")).toBe(true);
+    expect(re.test("1 credentials")).toBe(true);
+    expect(re.test("0 credentials")).toBe(false);
+    expect(re.test("No integrations stored yet")).toBe(false);
+  });
+
+  test("OpenCode 2.x: the tile names the saved accounts, never their labels' secrets", () => {
+    const raw = { out: "Acme Go  Acme Go                 stored\nAcme Go  Acme Go 2               stored\n", err: "", code: 0, timedOut: false };
+    expect(namesOf("opencode", raw)).toEqual({ provider: "Acme Go (2 accounts)" });
+    expect(namesOf("opencode", { ...raw, out: "Acme Go  Acme Go  stored\n" })).toEqual({ provider: "Acme Go" });
+    expect(namesOf("opencode", { ...raw, out: "" })).toEqual({});
   });
 
   test("the real multi-line status of Claude Code matches too", () => {

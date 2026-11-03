@@ -73,7 +73,9 @@ describe("an agent's proposal", () => {
     expect(mount).toContain("focusIn");
     expect(mount).toMatch(/if \(focusIn\)/);
     const bar = code(body(topBar, "function PlanPanel("));
-    expect(bar).toContain("useAccountPanel(strip, onClose, onEscape, !at.staged)");
+    // The sheet owns its own provider now (the tabs switch it); the rule is
+    // that the row it draws is the one handed to the account hook.
+    expect(bar).toContain("useAccountPanel(tab.row, onClose, () => onEscape(activeId), !at.staged, { providers: tabIds, onPick: pick }, inTabs)");
   });
 
   it("is marked as staged when it opens the popover", () => {
@@ -83,8 +85,29 @@ describe("an agent's proposal", () => {
 
   it("selects no chip: the candidate stays where the person left it", () => {
     const eff = panel.slice(panel.indexOf("const pn = proposal?.n;"), panel.indexOf("const offerList"));
-    expect(eff).toContain("setProvider");
+    // It moves the tab to the provider it names (so the card has a tab to be
+    // drawn under), and takes no focus while doing it.
+    expect(eff).toContain("axis.onPick(named, false)");
     expect(eff).not.toContain("setCandId");
+  });
+});
+
+describe("the sheet has one provider axis, so its tab cannot say Claude over Codex", () => {
+  const hook = code(chips.slice(chips.indexOf("export function useAccountPanel"), chips.indexOf("export type AccountPanel")));
+  const panel = code(body(topBar, "function PlanPanel("));
+
+  it("hands ↑↓ to the tabs instead of keeping a provider of its own", () => {
+    expect(panel).toContain("{ providers: tabIds, onPick: pick }");
+    expect(hook).toContain("const shown = u.provider;");
+    expect(hook).toContain("axis.onPick(nextProvider(axis.providers, u.provider, d.step));");
+  });
+
+  it("has no provider pick of its own for a test to pin: the tab is the only axis", () => {
+    // The pick was a write nothing read, and it is what opened the sheet on the
+    // live provider while an agent's proposal named another.
+    expect(hook).not.toContain("setPick");
+    expect(hook).not.toContain("pickedProvider");
+    expect(chips).not.toContain("pickedProvider");
   });
 });
 
@@ -139,7 +162,7 @@ describe("the popover for a keyboard and a screen reader", () => {
   });
 
   it("puts focus back on the strip when the scrim closes it, like Escape", () => {
-    expect(panel).toMatch(/className="fixed inset-0" onClick=\{onEscape\}/);
+    expect(panel).toMatch(/className="fixed inset-0" onClick=\{\(\) => onEscape\(activeId\)\}/);
   });
 
   it("brings focus back into the popover when a press disables the button that had it", () => {

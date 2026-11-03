@@ -56,4 +56,13 @@ describe("DayStrip source", async () => {
     const top = await Bun.file(new URL("../src/components/TopBar.tsx", import.meta.url)).text();
     expect(top).toContain("warmDayStrip(");
   });
+  test("an answer already in hand is not fetched again on every expand of the fold", () => {
+    // The fold unmounts and remounts this; `inflight` is cleared once the
+    // answer lands, so without the guard each expand was another GET for a
+    // chart that changes daily.
+    const guard = body.indexOf("if (lastWeek()?.length) return;");
+    const warm = body.indexOf("warmDayStrip()");
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(warm);
+  });
 });

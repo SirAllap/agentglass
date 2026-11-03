@@ -12,7 +12,7 @@
  * those are small.
  *
  * This core is written beside clickup.ts's rather than extracted from it. The
- * mechanics repeat — in-flight GET dedupe, a ten-minute memo of answers that
+ * mechanics repeat — GET dedupe while a read is running, a ten-minute memo of answers that
  * hold still, per-call timeouts — but the budget model differs (Jira answers a
  * 429 with `Retry-After`; ClickUp publishes a remaining count) and folding the
  * two would touch a module with a large suite that must not move. Ceiling: two
@@ -255,7 +255,7 @@ export interface CallOpts {
   timeoutMs?: number;
   /** A read nobody is waiting on: answered `throttled` with no request while a hold is on. */
   optional?: boolean;
-  /** Skip the in-flight merge. */
+  /** Skip the merge with a read already running. */
   fresh?: boolean;
   /** A file to attach, sent as multipart. The anti-forgery header the site asks for rides with it. */
   form?: FormData;
@@ -1293,7 +1293,7 @@ export const NOT_ACCEPTED = "Jira did not accept that move. The card may have mo
  * POST with what was typed, and a read of the card. Three requests, plus one when the site's moves for
  * this status are not remembered yet.
  *
- * The reads that bracket the write skip the in-flight merge: a read of this
+ * The reads that bracket the write skip the merge with a read running: a read of this
  * card already in the air from before the write would be handed back as the
  * card "after" it.
  */

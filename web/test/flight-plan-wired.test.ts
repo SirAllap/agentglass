@@ -28,9 +28,9 @@ const jiraFacts = read("src/components/jira/JiraFacts.tsx");
 const code = (s: string) => s.split("\n").filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l)).join("\n");
 
 describe("rail seat", () => {
-  test("it is on the shipped work rail, on its own letter, with the label the tooltip shows", () => {
-    expect(VIEWS.find((v) => v.id === "flightPlan")?.group).toBeUndefined();
-    expect(SHIPPED_RAIL.work.some((v) => v.id === "flightPlan")).toBe(true);
+  test("it is on the shipped rail (the lower drawer), on its own letter, with the label the tooltip shows", () => {
+    expect(VIEWS.find((v) => v.id === "flightPlan")?.group).toBe("utility");
+    expect(SHIPPED_RAIL.utility.some((v) => v.id === "flightPlan")).toBe(true);
     expect(VIEWS.find((v) => v.id === "flightPlan")?.label).toBe("Flight plan");
     expect(LETTER_TO_VIEW.f).toBe("flightPlan");
   });
@@ -56,6 +56,13 @@ describe("every control reaches a route", () => {
   test("Go launches through the routes; the server opens the builder as a normal tab, so the window never touches the bench", () => {
     const go = view.slice(view.indexOf("const go = useCallback("), view.indexOf("const nogo = useCallback("));
     expect(go).toContain("api.flightPlanGo("); expect(go).toContain("api.flightPlanLaunch("); expect(go).not.toContain("openTicketOnBench(");
+    // The model the person picks on the card goes with the route, and only when it is not the plan's own pick.
+    expect(go).toContain("api.flightPlanGo(id, model)"); expect(go).toContain("api.flightPlanLaunch(id, model)");
+  });
+  test("the Go card says which model the builder starts on, and sends the one picked", () => {
+    expect(poll).toContain('aria-label="The model this builder starts on"');
+    expect(poll).toContain("plan.launch.why");
+    expect(poll).toContain("onGo(model && model !== plan.launch?.model ? model : undefined)");
   });
   test("No-go sends its reason; the composer creates the plan and opens the author's tab", () => {
     expect(view).toContain("api.flightPlanNoGo(id, reason)");

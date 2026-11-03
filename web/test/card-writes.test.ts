@@ -15,7 +15,7 @@
  *   the order   which only works if writes to one card are serialised.
  *
  * And nothing blocks: two different cards do not wait for each other, and the
- * in-flight set is per control, so status can be saving while the assignee menu is
+ * set still in progress is per control, so status can be saving while the assignee menu is
  * still being used.
  */
 import { describe, expect, it } from "bun:test";

@@ -28,7 +28,7 @@ import { safeAbs, repoRootOf, repoRootOfAsync } from "./git.ts";
 import { terminalActive } from "./loopwatch.ts";
 import { inScope, workspaceRoot, terminalDisabledSource, tmuxTerminal, tmuxPrefix, inScopeReal, workerRoles } from "./config.ts";
 import { noteNvimArgv } from "./bench.ts";
-import { engineAttachArgv, engineBenchArgv, engineConsoleArgv, engineWindowOutcome, engineWindowRunning, engineSplitRunning, engineSessionName, tmuxSync } from "./tmuxpane.ts";
+import { engineAttachArgv, engineBenchArgv, engineConsoleArgv, ensurePanelWindow, benchWindowName, CONSOLE_WINDOW, isPanelViewSession, engineWindowOutcome, engineWindowRunning, engineSplitRunning, engineSessionName, tmuxSync } from "./tmuxpane.ts";
 import { tmuxBinStatus } from "./tmuxbin.ts";
 import { confHealth, ensureConf } from "./tmuxconf.ts";
 import { readerSocketPath, readerSessionState, endReaderSession, finderEditSocketPath, BENCH_READER_SLOT, FINDER_EDIT_SLOT } from "./bench.ts";
@@ -209,10 +209,11 @@ export type PtyWsData = { kind: "pty"; root: string; cols: number; rows: number;
   /**
    * This socket is a tab of the floating bench, and which one.
    *
-   * Its own session per tab, like the console has its own — see
-   * engineBenchArgv. A number rather than a name: the client says "my second
-   * tab", and the server builds the session name, so a session on this engine
-   * can never be picked by whatever a client puts in a query string.
+   * The `bench-<n>` window of the checkout's engine session, like the console
+   * has `console` — see engineBenchArgv. A number rather than a name: the
+   * client says "my second tab", and the server builds the window name, so a
+   * session on this engine can never be picked by whatever a client puts in a
+   * query string.
    */
   bench?: number;
   /** A bench tab that is the checkout's note, in Neovim. See noteNvimArgv. */
@@ -523,7 +524,7 @@ import { watchSession, QUIET_SWEEPS, SLOW_MS, HEARTBEAT_MS, type SessionWatch, t
 import { forgetSession, endedOnPurpose, unmarkEnded, resumeRestored } from "./tmuxrestore.ts";
 import { restoredFields, restoredIds, dismissRestored } from "./tmuxrestored.ts";
 import { setLocked, lockedSessions } from "./tmuxlock.ts";
-import { focusPaneAnywhere, switchClientToSession, killSessionByName, resolveClient, readFrameCached, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, healPrefix, reopenWindow, restartWindow, paneCwd, selectPane, attachArgvFor, restoreWindows, endPhoneSession, phoneWindows, fitWindow, reclaimPinnedWindow, windowSize, socketPath, scrollPhonePane, leaveCopyMode, remountPhoneClient, isPhoneSession, phonesAttached, redrawClient, sessionNameOf, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
+import { focusPaneAnywhere, switchClientToSession, killSessionByName, resolveClient, readFrameCached, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, healPrefix, reopenWindow, restartWindow, paneCwd, selectPane, attachArgvFor, restoreWindows, endPhoneSession, phoneWindows, fitWindow, reclaimPinnedWindow, windowSize, socketPath, scrollPhonePane, leaveCopyMode, remountPhoneClient, isPhoneSession, phonesAttached, redrawClient, sessionNameOf, framePanes, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
 import { paneStatus, markSeen } from "./agentdone.ts";
 import { worstStatus } from "../../shared/windowStatus.ts";
 import { windowRepo } from "./windowrepo.ts";
@@ -675,15 +676,18 @@ export function editorFor(env: NodeJS.ProcessEnv = process.env): string | null {
  * Named after the checkout, attach-or-create — except a name the person ended
  * on purpose and that is not live: creating it would bring back what they just
  * ended. It lands where they were instead (the remembered session, else the
- * one attached last), leaving out what the app made for itself (a console, a
- * bench tab, a phone). Only with nowhere else to go is the name made again.
+ * one attached last), leaving out what the app made for itself: a panel's
+ * view (a group with a client and no windows of its own), a phone's mirror,
+ * and the `<checkout>-console` / `-bench<n>` sessions older builds made —
+ * somebody upgrading still has those on disk. Only with nowhere else to go is
+ * the name made again.
  */
 export function plainEngineArgv(root: string): string[] | null {
   const own = engineSessionName(root);
   if (!endedOnPurpose(own) || tmuxSync(["has-session", "-t", `=${own}`]).ok) return engineAttachArgv(root, own);
   const r = tmuxSync(["list-sessions", "-F", "#{session_last_attached}\t#{session_name}"]);
   const live = (r.ok ? r.stdout.split("\n") : []).map((l) => l.split("\t"))
-    .filter(([, n]) => n && !/-(console|bench\d+)$/.test(n) && !isPhoneSession(n) && !endedOnPurpose(n))
+    .filter(([, n]) => n && !/-(console|bench\d+)$/.test(n) && !isPanelViewSession(n) && !isPhoneSession(n) && !endedOnPurpose(n))
     .sort((a, b) => Number(b[0]) - Number(a[0])).map(([, n]) => n!);
   const seen = recall()?.session;
   const land = seen && live.includes(seen) ? seen : live[0];
@@ -984,18 +988,19 @@ export function ptyOpen(ws: PtyWs) {
    * null with no tmux and with a config the gate has refused.
    */
   const plain = wantsDeskResume(d, { attach: !!attach, agent: agentRun.length > 0, editor: !!editor });
-  /* The console is not offered the choice: it is always the engine. Its own
-     session, too — sharing the terminal's meant two clients on one tmux
-     session, which tmux answers by mirroring both screens. */
-  /* A bench tab is the console's sibling: always the engine, always a session
-     of its own. It comes FIRST because a bench tab that also asked for a file
-     or an agent still belongs in its own session — the file and the agent
-     decide what RUNS, this decides where it lives. */
-  /* What a bench tab is FOR, hoisted so the session can be told to run it.
-     tmux takes a command on `new-session`, so the agent or the editor becomes
-     the session's own process rather than a child of this socket — which is
-     the whole promise of the bench: close the window, the work is still there
-     when it opens again. */
+  /* The console is not offered the choice: it is always the engine, in the
+     `console` window of the checkout's one engine session — the panel's client
+     joins a group of that session so it shows its own window. See
+     enginePanelArgv. */
+  /* A bench tab is the console's sibling: always the engine, always the
+     `bench-<n>` window of that same session. It comes FIRST because a bench
+     tab that also asked for a file or an agent still belongs in its window —
+     the file and the agent decide what RUNS, this decides where it runs. */
+  /* What a bench tab is FOR, hoisted so the window can be told to run it.
+     tmux takes a command when the window is made, so the agent or the editor
+     becomes the window's own process rather than a child of this socket —
+     which is the whole promise of the bench: close the window, the work is
+     still there when it opens again. */
   const editorArgv = editor
     ? editorRunArgv({ editor, listen: editorSock?.path ?? null, readonlyFlags, line: d.line, file: wanted! })
     : null;
@@ -1042,11 +1047,19 @@ export function ptyOpen(ws: PtyWs) {
       return;
     }
   }
-  const engine = d.bench
-    ? engineBenchArgv(startIn, d.bench, benchRuns, ticket?.role ? { AGENTGLASS_ROLE: ticket.role } : undefined)
-    : d.console
-      ? engineConsoleArgv(startIn)
-      : plain && tmuxTerminal() === "engine" ? plainEngineArgv(startIn) : null;
+  const engine = (() => {
+    if (!d.bench && !d.console) return plain && tmuxTerminal() === "engine" ? plainEngineArgv(startIn) : null;
+    /* The window first, then the view of it: the window is where the work
+       lives, and it outlives every panel that looks at it. */
+    const window = d.bench ? benchWindowName(d.bench) : CONSOLE_WINDOW;
+    const at = ensurePanelWindow(startIn, window, {
+      runs: d.bench ? benchRuns : null,
+      env: d.bench && ticket?.role ? { AGENTGLASS_ROLE: ticket.role } : undefined,
+      cwd: startIn,
+    });
+    if (!at) return null;
+    return d.bench ? engineBenchArgv(startIn, d.bench, at.windowId) : engineConsoleArgv(startIn, at.windowId);
+  })();
   const resume = !engine && plain
     ? (() => { const seen = recall(); return seen ? deskAttachArgv(seen.socket, seen.session) : null; })()
     : null;
@@ -1444,9 +1457,10 @@ export function ptyOpen(ws: PtyWs) {
       }
     }
     // Only the active window's, and only while tmux is drawing them — see
-    // parsePaneGeometry. Empty is the honest answer for an unsplit window too:
-    // one pane covering everything is nothing to choose between.
-    const panes = (frame?.panes ?? []).length > 1 ? frame!.panes : [];
+    // parsePaneGeometry. `panes` is the geometry the split UI hovers over;
+    // `pane` is which pane that is, and it is reported for an unsplit window
+    // too — see framePanes.
+    const { panes, pane } = framePanes(frame);
     /*
      * Re-read, not remembered from the attach.
      *
@@ -1545,13 +1559,16 @@ export function ptyOpen(ws: PtyWs) {
        panel shows a quiet chip from this count. Part of the shape, so one
        attaching or leaving redraws it. */
     const phones = phonesAttached(frame?.attached ?? []);
-    const shape = JSON.stringify([session.tmux?.id ?? null, windows, panes, frame?.client ?? null, session.onEngine === true, session.tmuxPrefix ?? [], frame?.popup === true, frame?.sessions ?? [], [...locks].sort(), phones]);
+    const shape = JSON.stringify([session.tmux?.id ?? null, windows, panes, pane ?? null, frame?.client ?? null, session.onEngine === true, session.tmuxPrefix ?? [], frame?.popup === true, frame?.sessions ?? [], [...locks].sort(), phones]);
     if (shape === sent) return;
     sent = shape;
     ctl(ws, {
       t: "tmux", active: true, session: session.tmux?.session ?? null,
       prefix: session.tmuxPrefix ?? [], windows, panes, client: frame?.client ?? null,
       engine: session.onEngine === true, popup: frame?.popup === true, phones,
+      /* Which pane tmux has selected on the window this client is drawing,
+         split or not: the bar over a worker's tab looks its row up by it. */
+      ...(pane ? { pane } : {}),
       /* Where tmux is listening, for the card that says it cannot be reached. */
       ...(session.tmux ? { socket: socketPath(session.tmux.socket) } : {}),
       /* The other sessions on this socket, so the strip can OFFER them —
@@ -2171,7 +2188,7 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
           // No agent on this machine is not a reason to open nothing: a shell
           // in the right project is still most of what was asked for, and the
           // same answer `cmd:"issue"` gives.
-          : [], root, undefined, into, true);
+          : [], root, undefined, into, true, false, true);
         if (!opened) {
           ctl(ws, { t: "openfail", error: "the engine would not open a window" });
           return;
@@ -2263,7 +2280,7 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
           { canName: supportsSessionName, modelFlags, defaultKind: workerRoles().builder.provider });
         if (!built.ok) return;
         const opened = await engineWindowRunning(plan.cwd, `pr-${number}`, built.argv,
-          plan.cwd, undefined, lastTmuxTarget()?.session ?? "", true);
+          plan.cwd, undefined, lastTmuxTarget()?.session ?? "", true, false, true);
         /*
          * And then go there.
          *
@@ -2393,9 +2410,9 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
         /* Into the session this client is attached to — see the note on
            `engineWindowRunning`. A button a person pressed opens where they
            are looking, full stop. */
-        void engineWindowOutcome(cwd, name, argv, cwd, undefined, here, true, msg.reuse === true).then((w) => { answer(w.ok, w.ok ? "" : w.reason, w.ok && w.reused === true); s.tmuxSweep?.(); });
+        void engineWindowOutcome(cwd, name, argv, cwd, undefined, here, true, msg.reuse === true, true).then((w) => { answer(w.ok, w.ok ? "" : w.reason, w.ok && w.reused === true); s.tmuxSweep?.(); });
       } else {
-        void engineWindowOutcome(cwd, name, [], cwd, undefined, here, true, msg.reuse === true).then((w) => { answer(w.ok, w.ok ? "" : w.reason, w.ok && w.reused === true); s.tmuxSweep?.(); });
+        void engineWindowOutcome(cwd, name, [], cwd, undefined, here, true, msg.reuse === true, true).then((w) => { answer(w.ok, w.ok ? "" : w.reason, w.ok && w.reused === true); s.tmuxSweep?.(); });
       }
       return;
     }
@@ -2457,8 +2474,8 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
            a press opens where the person is looking. */
         const mine = lastTmuxTarget()?.session ?? "";
         const opened = msg.split === true
-          ? (await engineSplitRunning(cwd, cwd, argv)) ?? (await engineWindowRunning(cwd, name, argv, cwd, undefined, mine, true))
-          : await engineWindowRunning(cwd, name, argv, cwd, undefined, mine, true);
+          ? (await engineSplitRunning(cwd, cwd, argv)) ?? (await engineWindowRunning(cwd, name, argv, cwd, undefined, mine, true, false, true))
+          : await engineWindowRunning(cwd, name, argv, cwd, undefined, mine, true, false, true);
         if (!opened) { ctl(ws, { t: "openfail", error: "the engine would not open a window" }); return; }
         s.tmuxSweep?.();
       })();

@@ -46,8 +46,8 @@ describe("saving", () => {
   });
   test("the page header says Saving after the verdict while a write is out", () => {
     const on: PageMark = { state: "on" };
-    expect(headerChips("lantern", on, true)).toEqual([{ tone: "ok", text: "Watching" }, { tone: "saving", text: "Saving" }]);
-    expect(headerChips("lantern", on)).toEqual([{ tone: "ok", text: "Watching" }]);
+    expect(headerChips("hooks", on, true)).toEqual([{ tone: "ok", text: "Hooks wired" }, { tone: "saving", text: "Saving" }]);
+    expect(headerChips("hooks", on)).toEqual([{ tone: "ok", text: "Hooks wired" }]);
     expect(headerChips("privacy", NO_MARK, true)).toEqual([{ tone: "saving", text: "Saving" }]);
   });
   test("the editor foot says Saving while a save is out, and keeps Save from being pressed twice", () => {

@@ -78,16 +78,39 @@ describe("an agent's change to a door", () => {
     expect(r.door.pending()).toHaveLength(1);
   });
 
-  test("a live position is refused, even with the trust switch on", async () => {
+  test("a live position is filed as a request, never applied, even with the trust switch on", async () => {
+    // Was "a live position is refused, even with the trust switch on": the refusal
+    // sent the owner hunting in Settings, so it is a request now (askAlways).
+    const r = rig();
+    r.trust(true);
+    writePolaris(ROOT, { enabled: true, doors: { ...structuredClone(PRESETS.guided.doors), relaunch: { mode: "dry", cap: 2 }, startSession: { mode: "off", tries: 3 }, diagnose: { mode: "click" }, cards: { mode: "off" } } });
+    for (const [door, v] of [["relaunch", { mode: "live" }], ["diagnose", { mode: "auto" }], ["startSession", { mode: "click" }], ["cards", { mode: "on" }]] as const) {
+      const a = await set(r, `polaris.door.${door}`, v);
+      expect(a.ok && !a.applied, door).toBe(true);
+    }
+    expect(doorOf("relaunch").mode).toBe("dry");
+    expect(r.door.pending().map((q) => q.setting)).toContain("polaris.door.startSession");
+    expect(r.door.pending()[0]!.diff.join("\n")).toContain("a live position");
+    // ...and a widening that is not live goes through when the switch is on
+    expect(await set(r, "polaris.door.course", { mode: "hours", hours: 4 })).toMatchObject({ ok: true, applied: true });
+    // A narrowing of a live door still applies at once, trusted or not.
+    expect(await set(r, "polaris.door.relaunch", { mode: "off" })).toMatchObject({ ok: true, applied: true });
+  });
+
+  test("the person approves a live request and it applies; an agent cannot answer its own", async () => {
     const r = rig();
     r.trust(true);
     writePolaris(ROOT, { enabled: true, doors: structuredClone(PRESETS.guided.doors) });
-    for (const [door, v] of [["relaunch", { mode: "live" }], ["diagnose", { mode: "auto" }], ["startSession", { mode: "click" }], ["cards", { mode: "on" }]] as const) {
-      expect(await set(r, `polaris.door.${door}`, v)).toMatchObject({ ok: false, status: 403 });
-    }
-    expect(doorOf("relaunch").mode).toBe("dry");
-    // ...and a widening that is not live goes through when the switch is on
-    expect(await set(r, "polaris.door.course", { mode: "hours", hours: 4 })).toMatchObject({ ok: true, applied: true });
+    const a = await set(r, "polaris.door.startSession", { mode: "off" });
+    expect(a).toMatchObject({ ok: true, applied: true });
+    const q = await set(r, "polaris.door.startSession", { mode: "click", tries: 1 });
+    if (!q.ok || q.applied) throw new Error("expected a pending request");
+    expect(doorOf("startSession").mode).toBe("off");
+    expect(await r.door.decide(q.pending.id, true, false)).toMatchObject({ ok: false, status: 403 });
+    expect(doorOf("startSession").mode).toBe("off");
+    expect(await r.door.decide(q.pending.id, true, true)).toMatchObject({ ok: true, applied: true });
+    expect(doorOf("startSession")).toMatchObject({ mode: "click", tries: 1 });
+    expect(r.door.pending()).toEqual([]);
   });
 
   test("a setting moved its narrower way applies; the wider way waits", async () => {

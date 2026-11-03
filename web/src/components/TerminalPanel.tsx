@@ -9,6 +9,7 @@ import { usePoll } from "../lib/usePoll.ts";
 import { PILL_POLL_MS, withFreshRepo } from "../lib/repoPulse.ts";
 import { subscribeTermReview, termReview, clearTermReview } from "../lib/termReview.ts";
 import { subscribeTermIssue, termIssue, clearTermIssue, resolveTermIssue, type TermIssue } from "../lib/termIssue.ts";
+import { setupPane, subscribeSetupPane, takeSetupPane } from "../lib/setupFirstWork.ts";
 import { dirName } from "../lib/worktree.ts";
 import { noteWindowSet } from "../lib/liveWindow.ts";
 import { requestWorktreeJump } from "../lib/worktreeJump.ts";
@@ -19,6 +20,7 @@ import { SearchIcon } from "../lib/glyphIcons.tsx";
 import type { TmuxCmdBody } from "../lib/tmuxCmd.ts";
 import { StripFrame, TermStrip } from "./terminal/TermStrip.tsx";
 import { TermOverlays, noTmuxNoteDismissed } from "./terminal/TermOverlays.tsx";
+import { WorkerBar } from "./terminal/WorkerBar.tsx";
 import { SkeletonTabs } from "./terminal/PaneStates.tsx";
 import { useWindowClose } from "../lib/useWindowClose.ts";
 import { termState } from "../lib/termStates.ts";
@@ -28,6 +30,7 @@ import { chipWorktree, pickWorktree, paneCandidates, paneNote, nextSeen, vouched
 import { readBranchPrs, writeBranchPrs, readCardPrios, writeCardPrios, type RememberedPr, type RememberedPrio } from "../lib/paneFacts.ts";
 import { lanternRows } from "../lib/lanternStore.ts";
 import { askOnBench } from "../lib/lanternAsk.ts";
+import { JOB } from "../lib/benchJobs.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { checkoutConfirm, needsCheckoutConfirm } from "../lib/checkoutWarning.ts";
 import { keepTermFocus } from "../lib/keepFocus.ts";
@@ -88,7 +91,7 @@ import { LatestOutputPill } from "./terminal/LatestOutputPill.tsx";
 import { PluckPalette } from "./terminal/PluckPalette.tsx";
 import { buildGroups, openGroups, parseRules, setOpenGroups, subscribeTabGroups, tabGroupRulesText, tabGroupsOn, tabGroupsVersion, type TabGroup } from "../lib/tabGroups.ts";
 import { LAYER } from "../lib/layers.ts";
-import { AGENT_COMMAND, appearedWindow, splitKeys } from "../lib/newWindow.ts";
+import { agentCommand, appearedWindow, splitKeys } from "../lib/newWindow.ts";
 import { prText } from "../lib/peekCard.ts";
 import { Button, CTRL_H, EDGE, INPUT, INPUT_STYLE, LINE, tintEdge } from "./workspace/Chrome.tsx";
 
@@ -242,6 +245,10 @@ type Sess = {
   /** The panes of the tmux window on screen, when it has more than one. Empty
    *  otherwise — see the server's sweep. */
   tmuxPanes: TmuxPane[];
+  /** The pane tmux has selected in that window, split or not. `tmuxPanes` is
+   *  empty for a single pane, and this is the id the bar over a worker's tab
+   *  looks its row up by. */
+  tmuxPane?: string;
   /** The session those windows belong to, for the status-line toggle. */
   tmuxSession: string | null;
   /** The grid tmux thinks THIS client has — the terminal on this desk, not the
@@ -677,6 +684,7 @@ function connect(s: Sess) {
       /* The other sessions on this socket, for the strip's picker. */
       s.tmuxSessions = Array.isArray(f.sessions) ? f.sessions : [];
       s.tmuxPanes = Array.isArray(f.panes) ? f.panes : [];
+      s.tmuxPane = typeof f.pane === "string" ? f.pane : undefined;
       s.tmuxSession = typeof f.session === "string" ? f.session : null;
       s.tmuxClient = f.client ?? null;
       s.tmuxPrefix = Array.isArray(f.prefix) ? f.prefix : [];
@@ -2141,7 +2149,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     if (note === null) return;
     const text = askAboutText(sel, note);
     try { s.term.clearSelection(); } catch { /* fine */ }
-    if (!agentHere) { void askOnBench(s.root, text, "ask"); return; }
+    if (!agentHere) { void askOnBench(s.root, text, "ask", undefined, JOB.askAboutSelection(text)); return; }
     if (s.status !== "live" || s.ws?.readyState !== WebSocket.OPEN) return;
     s.ws.send(ptyFrame({ t: "in", d: `\x1b[200~${text}\x1b[201~` }));
     setTimeout(() => { if (s.ws?.readyState === WebSocket.OPEN) s.ws.send(ptyFrame({ t: "in", d: "\r" })); }, 120);
@@ -3043,6 +3051,20 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     })();
   }, [sess, sessTick]);
 
+  /*
+   * The first run's last step mints the ticket and leaves the pane here: the
+   * wizard is not the terminal and cannot make a session, so the view that can
+   * takes the ticket the moment it is mounted. One slot, taken once.
+   */
+  const handed = useSyncExternalStore(subscribeSetupPane, setupPane, () => null);
+  useEffect(() => {
+    if (!handed) return;
+    const s = createSession(handed.root, handed.ticket);
+    setPaneIds((ids) => (ids.length >= 4 ? [...ids.slice(1), s.id] : [...ids, s.id]));
+    setFocusIdx((i) => Math.min(i + 1, 3));
+    takeSetupPane();
+  }, [handed]);
+
   const addShell = useCallback(() => {
     if (!root || IS_DEMO) return;
     const s = createSession(root);
@@ -3127,7 +3149,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   useEffect(() => {
     if (!agentFrom) return;
     // No tmux: the shell addShell made is the focused pane; type into it.
-    if (!sess?.tmux) { setAgentFrom(null); run(AGENT_COMMAND, true); return; }
+    if (!sess?.tmux) { setAgentFrom(null); run(agentCommand(), true); return; }
     const id = appearedWindow(agentFrom, tmuxWindows);
     if (!id) return;
     const w = tmuxWindows.find((x) => x.id === id);
@@ -3136,7 +3158,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
       return;
     }
     setAgentFrom(null);
-    run(AGENT_COMMAND, true);
+    run(agentCommand(), true);
   }, [agentFrom, tmuxWindows, sess, run, tmuxCmd]);
 
   /** Split this window: under tmux, tmux's own split binding typed as its prefix then `%`; otherwise the panel's second pane. */
@@ -3302,6 +3324,12 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                     {barRight}
                   </StripFrame>
                 )}
+
+                {/* A worker's tab is a reading pane: its events are drawn as
+                    lines, what is typed there reaches nobody, and the only move
+                    is the stop the CLI gives. The pane is tmux's own id, not
+                    the shell's key in `sessions` — /agents/named refuses that. */}
+                {tmuxActive && !IS_DEMO && <WorkerBar paneId={focusSess?.tmuxPane ?? null} open={open} />}
 
                 {/* the terminals — one slot per visible pane */}
                 <div ref={wrapRef} className="flex-1 min-h-0 relative" style={{ background: "var(--bg)" }}

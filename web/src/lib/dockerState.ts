@@ -9,6 +9,10 @@
  * `containerHealth` in dockerStacks.ts is the older four-level reading the
  * stack chips still use; the two agree on what is broken, but this one also
  * counts a crashed exit and a restart loop as needing a person.
+ *
+ * `startFailure` belongs to the same question — a container that exited says
+ * only its code — and lives here so the row, the card and the detail read
+ * docker's `State.Error` the same way.
  */
 import type { DockerContainer } from "../../../shared/types.ts";
 
@@ -42,6 +46,21 @@ export function exitCode(c: Pick<DockerContainer, "status">): number | null {
   return m ? Number(m[1]) : null;
 }
 
+/** The two codes that are docker's own signal rather than the container's
+ *  failure: 143 is SIGTERM, 137 the SIGKILL sent when the grace period runs
+ *  out. Both are also what a container killed from elsewhere looks like, so
+ *  the code alone proves nothing — see `stoppedOnRequest`. */
+const SIGNAL_EXITS: ReadonlySet<number> = new Set([143, 137]);
+
+/** True when the exit is plainly the stop this server asked for: a signal
+ *  docker sends, on a container it stopped a few minutes ago. An unexplained
+ *  143 or 137 stays a crash. */
+export function stoppedOnRequest(c: DockerContainer): boolean {
+  if (c.stopAskedAt == null) return false;
+  const code = exitCode(c);
+  return code !== null && SIGNAL_EXITS.has(code);
+}
+
 /** The first match wins, in the mockup's order: a restart loop is a restart
  *  loop even if a stale health flag says otherwise. A state docker adds later
  *  reads as stopped, the one reading that offers nothing destructive. */
@@ -51,10 +70,60 @@ export function kindOf(c: DockerContainer): ContainerKind {
   if (state === "restarting") return "restarting";
   if (c.health === "unhealthy") return "unhealthy";
   if (state === "paused") return "paused";
-  if (state === "exited") return exitCode(c) ? "crash" : "stop";
+  if (state === "exited") return stoppedOnRequest(c) || !exitCode(c) ? "stop" : "crash";
   if (state === "created") return "made";
   if (state === "running") return c.health === "healthy" ? "healthy" : "up";
   return "stop";
+}
+
+/* ------------------------------------------------------ a start that failed */
+
+export interface StartFailure {
+  /** One plain sentence, for the line under the exit code. */
+  sentence: string;
+  /** A few words, for a row that has no room for the sentence. */
+  short: string;
+}
+
+/** The first path docker names: the one it quoted when it could, else the first
+ *  absolute one in the message. */
+function pathIn(error: string): string | null {
+  return /"([^"]+)"/.exec(error)?.[1] ?? /(?:^|\s)(\/[^\s"':,]+)/.exec(error)?.[1] ?? null;
+}
+
+const said = (cause: string, detail: string | null): string =>
+  `Docker could not start it: ${cause}${detail ? `: ${detail}` : ""}.`;
+
+/**
+ * Docker's `State.Error`, in words a person can act on.
+ *
+ * This string is written for a daemon — `failed to create shim task: OCI
+ * runtime create failed: ... error mounting "/x" to rootfs ...` — and it is the
+ * only place a container that never ran says why. The four causes below cover
+ * the ones that recur on a developer machine; anything else keeps docker's own
+ * first 120 characters rather than a guess. Null when there is no error, so the
+ * caller keeps the text it showed before.
+ */
+export function startFailure(raw: string | null | undefined): StartFailure | null {
+  const error = (raw ?? "").trim();
+  if (!error) return null;
+  const path = pathIn(error);
+  if (/port is already allocated|address already in use/i.test(error)) {
+    const port = /:(\d{1,5})(?:\/tcp)?\b/.exec(error)?.[1] ?? null;
+    return { sentence: said("a port it needs is already taken", port), short: "could not start: its port is taken" };
+  }
+  // Before the mount branch: a mount docker was not allowed to read says both,
+  // and permission is the cause a person can fix.
+  if (/permission denied/i.test(error)) {
+    return { sentence: said("it was not allowed to read or write a path it needs", path), short: "could not start: not allowed to read a path" };
+  }
+  if (/error mounting|bind source path does not exist|invalid mount config/i.test(error)) {
+    return { sentence: said("a file it needs to mount is missing", path), short: "could not start: a mount is missing" };
+  }
+  if (/executable file not found|command not found|exec: "[^"]*": stat|no such file or directory/i.test(error)) {
+    return { sentence: said("the command it runs is not in the image", path), short: "could not start: command not found" };
+  }
+  return { sentence: `Docker could not start it: ${error.slice(0, 120)}`, short: "could not start" };
 }
 
 const NEEDS: ReadonlySet<ContainerKind> = new Set(["unhealthy", "restarting", "crash", "dead"]);

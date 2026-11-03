@@ -2,16 +2,16 @@ import { useEffect, useMemo, useState } from "react";
 import { Disclosure, SettingsCard, StatusBadge } from "../SettingsKit.tsx";
 import { PanesIcon } from "../settingsNavIcons.tsx";
 import { Button } from "../workspace/Chrome.tsx";
-import { Card, OrchSeg } from "./OrchKit.tsx";
+import { OrchSeg } from "./OrchKit.tsx";
 import { SettingRow } from "../SettingRow.tsx";
 import { CloseIcon } from "../CloseButton.tsx";
 import { ICON } from "../../lib/iconSize.ts";
-import { PresetDiagram } from "./PresetDiagram.tsx";
 import { agentProvider } from "../../../../shared/agentKinds.ts";
 import type { PolicyRuleState } from "../../lib/api.ts";
 import type { Policy } from "../../../../shared/orchestration.ts";
 import type { EngineReadiness } from "../../../../shared/types.ts";
 import { rowId } from "../../lib/settingsIndex.ts";
+import type { FlowLike } from "../../lib/roleLabel.ts";
 import { ALWAYS_PRESETS, BACK_GONE, BACK_LABEL, appliedLine, applyPreset, presetInForce, scopeWords, backAvailable, backOf, cardUndo, checkSetup, presetDiagram, undoPolicy, presetOffers, type Back, type PresetId, type PresetOffer, type SetupCheck } from "./orchestrationCopy.ts";
 
 /**
@@ -53,6 +53,8 @@ function writeBack(root: string, b: Back | null): void {
 }
 
 export interface QuickSetupProps {
+  /** The flow's role names, so the cards and the check say Paco where the flow says Paco. */
+  flow?: FlowLike | null;
   policy: Policy;
   root: string;
   readiness: EngineReadiness[] | null;
@@ -92,7 +94,7 @@ export function useQuickSetup(p: QuickSetupProps) {
     setResult(null);
   }, [back, pending, p.policy, p.root]);
 
-  const offers = useMemo(() => presetOffers(p.readiness, p.policy), [p.readiness, p.policy]);
+  const offers = useMemo(() => presetOffers(p.readiness, p.policy, p.flow), [p.readiness, p.policy, p.flow]);
   const locked = p.inherited || p.busy;
   const canGoBack = backAvailable(back, p.policy);
 
@@ -127,102 +129,5 @@ export function useQuickSetup(p: QuickSetupProps) {
 
 export type QuickSetupState = ReturnType<typeof useQuickSetup>;
 
-/* The two setups that always hold replace each other, so they are one choice here; the usage one is a rule and lives with the others. */
-const claude = (): string => agentProvider("claude")?.title ?? "Claude";
-const HELP: Record<PresetId, () => string> = {
-  "claude-orchestrates": () => `${claude()} runs the main agent. Other engines do the work.`,
-  "all-on-claude": () => `${claude()} runs the main agent and every worker.`,
-  "save-my-plan": () => `Builders move to another engine when the ${claude()} plan runs low.`,
-};
 const SHORT: Record<PresetId, string> = { "claude-orchestrates": "Claude + others", "all-on-claude": "All on Claude", "save-my-plan": "Save my plan" };
 export const presetLabel = (id: PresetId): string => SHORT[id];
-
-export function QuickSetup(p: QuickSetupProps & { q: QuickSetupState }) {
-  const { offers, locked, canGoBack, undoOnCard, back, check, setCheck, gone, result, setResult, apply, undo, showRule } = p.q;
-  const choices = offers.filter((o) => ALWAYS_PRESETS.includes(o.id));
-  const active = choices.find((o) => o.active);
-  const blocked = choices.find((o) => o.blocked);
-  const line = (o: PresetOffer | undefined) => o ? HELP[o.id]() : "Pick one to start from. Nothing running is moved, and Undo puts it back.";
-  return (
-    <div data-orch-presets>
-      <SettingsCard title="Quick setup" icon={<PanesIcon size={ICON.sm} />}
-        actions={canGoBack && !undoOnCard ? <Button disabled={locked} title={`Undo "${back?.title}"`} onClick={() => void undo()}>{BACK_LABEL}</Button> : undefined}>
-      <SettingRow label="Start from a preset" hint={line(active)}
-        below={
-          <div className="grid gap-2">
-            <OrchSeg label="Start from a preset" value={active?.id ?? ""} disabled={locked}
-              options={choices.map((o) => ({ id: o.id, label: presetLabel(o.id), title: o.blocked ?? o.title, disabled: !!o.blocked }))}
-              onChange={(id) => { const o = choices.find((c) => c.id === id); if (o) void apply(o.id, o.title, o.ruleName ?? o.title); }} />
-            {blocked && p.readiness && (
-              <p className="m-0 text-[12px]" style={{ color: "var(--text3)" }}>{blocked.blocked}{" "}
-                <button type="button" className="agx-field-link" onClick={p.onOpenEngines}>See Agent engines</button></p>)}
-            <Disclosure summary="Before and after, and check my setup" wide>
-      <div className="grid gap-3 pt-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <Button disabled={!p.readiness} onClick={() => setCheck(checkSetup(p.policy, p.states, p.readiness, p.inherited || p.root === "" ? "global" : p.root))}>Check my setup</Button>
-        <span className="text-[11px]" style={{ color: "var(--text3)" }}>Reads the setup against this machine. Starts and changes nothing.</span>
-      </div>
-      <div className="agx-presets">
-        {offers.map((o) => (
-          <article key={o.id} data-row={rowId(o.title)} className="rounded-xl p-4 grid content-start gap-3 min-w-0"
-            style={{ background: "var(--bg)", border: o.active ? "1px solid var(--success)" : "1px solid var(--border)", boxShadow: o.active ? "0 0 0 1px var(--success)" : undefined, opacity: p.inherited ? 0.6 : 1 }}>
-            <div className="grid gap-1">
-              <h3 className="m-0 text-[13px] font-semibold leading-snug" style={{ color: "var(--text)" }}>{o.title}</h3>
-              <div className="text-[11px]" style={{ color: "var(--text3)" }}>
-                {o.blocked ? o.blocked : o.says.map((line) => <span key={line} className="block">{line}</span>)}
-              </div>
-            </div>
-            <PresetDiagram rows={presetDiagram(p.policy, o.workers)} />
-            <div className="flex flex-wrap items-center gap-2 mt-auto">
-              {o.active ? (
-                <>
-                  <StatusBadge tone="ok">{`Applied for ${scopeWords(p.root)}`}</StatusBadge>
-                  {cardUndo(back, p.policy, o.title) && <Button disabled={locked} title={`Undo "${back?.title}"`} onClick={() => void undo()}>{BACK_LABEL}</Button>}
-                </>
-              ) : (
-                <>
-                  <Button tone="primary" disabled={locked || !!o.blocked} title={o.blocked ?? o.confirm} onClick={() => void apply(o.id, o.title, o.ruleName ?? o.title)}>Use this setup</Button>
-                  {o.blocked && p.readiness && <button type="button" className="agx-field-link" onClick={p.onOpenEngines}>See Agent engines</button>}
-                </>
-              )}
-              <span className="text-[11px]" style={{ color: "var(--text3)" }}>{o.confirm}</span>
-            </div>
-          </article>
-        ))}
-      </div>
-      </div>
-            </Disclosure>
-          </div>} />
-      <div className="agx-orch-after">
-      {result && (
-        <p role="status" className="m-0 text-[12px] flex flex-wrap items-center gap-x-3 gap-y-1" style={{ color: "var(--text)" }}>
-          <span>{appliedLine(result.ruleName, result.changed, p.root)}</span>
-          {result.changed && canGoBack && <button type="button" className="agx-field-link" disabled={locked} onClick={() => void undo()}>{BACK_LABEL}</button>}
-          <button type="button" className="agx-field-link" onClick={() => showRule(result.ruleName)}>See it in Conditions below</button>
-          <Button label="Dismiss" square size="compact" onClick={() => setResult(null)}><CloseIcon size={ICON.sm} /></Button>
-        </p>)}
-      {gone && !canGoBack && <p className="m-0 text-[12px]" style={{ color: "var(--text3)" }}>{BACK_GONE}</p>}
-      {p.inherited && <p className="m-0 text-[12px]" style={{ color: "var(--text3)" }}>This project uses the general setting. Set it for this project first, or pick All projects.</p>}
-      {check && (
-        <Card>
-          <div className="flex items-start justify-between gap-3">
-            <div className="grid gap-2 text-[12px] min-w-0" style={{ color: "var(--text)" }}>
-              <b className="text-[13px]">Your setup right now</b>
-              <span style={{ color: "var(--text3)" }}>Nothing was started or changed. This is what the policy says when it is read against this machine now.</span>
-              <p className="m-0">{check.chair}</p>
-              <ul className="m-0 pl-4 grid gap-1">{check.roles.map((r) => <li key={r.id}>{r.line}</li>)}</ul>
-              {check.rules.length > 0 && (
-                <ul className="m-0 pl-4 grid gap-1" aria-label="What each rule would change">
-                  {check.rules.map((r) => <li key={r.id}><b>{r.name}.</b> {r.line}</li>)}
-                </ul>)}
-            </div>
-            <Button onClick={() => setCheck(null)}>Hide</Button>
-          </div>
-        </Card>
-      )}
-      {p.note && <div role="alert" className="text-[12px]" style={{ color: "var(--error-ink)" }}>{p.note}</div>}
-      </div>
-      </SettingsCard>
-    </div>
-  );
-}

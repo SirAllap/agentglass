@@ -85,13 +85,13 @@ describe("every page mounts its preview with the props the preview declares", ()
     expect(read("components/settings/PreviewCard.tsx")).not.toMatch(/useState|useEffect|localStorage/);
     expect(read("components/settings/pluginPreviews.tsx")).not.toMatch(/useState|useEffect|localStorage/);
   });
-  test("Orchestration keeps the live, interactive flow in its side slot", () => {
-    // The OrchestrationPreview is the same FlowView made read-only; the page's own slot
-    // must keep the Change buttons that drive the fine-tune card.
+  test("Orchestration draws no flow of its own: a card points to the Flow editor, which draws it", () => {
+    // The page keeps no second chain beside the editor's canvas.
     const pane = read("components/orchestration/OrchestrationPane.tsx");
-    const side = pane.slice(pane.indexOf('<aside className="agx-split-side">'), pane.indexOf("</aside>"));
-    expect(side).toContain("<FlowView");
-    expect(side).toContain("onChange={(field) => { setPicking(field)");
+    expect(pane).not.toContain("<FlowChain");
+    expect(pane).not.toContain('aria-label="Flow"');
+    expect(pane).not.toContain("Per-block settings live in the Flow editor");
+    expect(pane).not.toContain("<PolarisSlot");
   });
 });
 

@@ -15,20 +15,19 @@
 // rather than on the near-black the notch needed to read as "carved out of the
 // screen". That is what makes it belong to the theme instead of floating over it.
 import type { SystemNote } from "../lib/sysNotify.ts";
-import type { ProviderUsage } from "../../../shared/types.ts";
+import type { ProviderUsage, QuotaWindow } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { api } from "../lib/api.ts";
-import { subscribeProviderUsage, usageOf, busiestOf, providerUsage, heldRows, resetShort, resetLabel, usedColor, usedTextColor, ageLabel, refreshProviderUsage } from "../lib/usageStore.ts";
+import { subscribeProviderUsage, usageOf, busiestOf, providerUsage, usageLoaded, heldRows, resetShort, ageLabel, refreshProviderUsage } from "../lib/usageStore.ts";
 import { providerInContext } from "../lib/providerContext.ts";
 import { windowLabel } from "../../../shared/quota.ts";
 import { stalenessLabel } from "../lib/usageAge.ts";
 import { heldAgeLabel, stripRow } from "../lib/usageHold.ts";
-import { paceConfig, subscribePaceConfig } from "../lib/paceConfig.ts";
-import { OLD_READING_MS, windowPace } from "../lib/usagePace.ts";
-import { warmDayStrip } from "../lib/dayStrip.ts";
+import { dayCells, lastWeek, subscribeDayStrip, warmDayStrip } from "../lib/dayStrip.ts";
+import { fmtTokens } from "../lib/format.ts";
 import { NO_DRAG } from "../lib/dragRegion.ts";
-import { DayStrip, PaceLines, PaceMarker } from "./PlanPace.tsx";
+import { DayStrip, PaceMarker } from "./PlanPace.tsx";
 import { metersMustHide } from "../lib/topbarFit.ts";
 import { subscribeSessions, liveSessionCount } from "./TerminalPanel.tsx";
 import { clock24, subscribeClock24 } from "../lib/clockPref.ts";
@@ -40,15 +39,24 @@ import { useAmbientNotes, NoteToast, NotifyBell } from "./TopBarNotes.tsx";
 import { NeedsPopover, type NeedsItem } from "./NeedsPopover.tsx";
 import { openFlightPlan } from "../lib/flightPlanNav.ts";
 import { chipGoesToPlan, needsStaysOpen } from "../lib/needsPanel.ts";
-import { ICON, MIN_BOX } from "../lib/iconSize.ts";
+import { HIT, ICON, MIN_BOX } from "../lib/iconSize.ts";
+import { USAGE_KEY_GUIDE } from "../lib/usageKeyGuide.ts";
+import { openCodePanelWindows, CONSOLE_REREAD_MS } from "../../../shared/opencodePanel.ts";
 import { LAYER } from "../lib/layers.ts";
 import { AccountChips, AccountKeyBar, useAccountPanel } from "./AccountChips.tsx";
+import { isCoreRow } from "../lib/accountStore.ts";
+import { chipView, tabBadge, worstWindow } from "../lib/usageChips.ts";
+import { bankTip, BANK_CELL_PX, foldCells, groupWindows, paceBudget, paceVerdict, resetWhen, runsOut, sheetTail } from "../lib/usageBank.ts";
+import { OLD_READING_MS } from "../lib/usagePace.ts";
+import { rowsInBar } from "../lib/usageBarPref.ts";
+import { ProviderMark } from "./ProviderMark.tsx";
+import { logoOf } from "./engines/enginesCopy.ts";
 import { accountStageOf, peekStage, subscribeStage } from "../lib/stageIntent.ts";
-import { onProposal } from "../lib/accountKeys.ts";
+import { onProposal, stagedProvider } from "../lib/accountKeys.ts";
 import { GearIcon } from "./workspace/icons.tsx";
 import { openSettings } from "../lib/openSettings.ts";
 import { appChordFor, chordLabel } from "../lib/keybindings.ts";
-import { FolderIcon, SearchIcon } from "../lib/glyphIcons.tsx";
+import { ExpandIcon, FolderIcon, SearchIcon } from "../lib/glyphIcons.tsx";
 import { scopeAria, scopeLabel, scopeTitle } from "../lib/projectPick.ts";
 import { RefreshButton, EDGE, LINE } from "./workspace/Chrome.tsx";
 
@@ -139,11 +147,10 @@ function WindowControls({ max }: { max: boolean }) {
   );
 }
 
-/** The window's own clock. A second's resolution is pointless at this size, so
- *  it ticks per minute — and stops when the tab is hidden, because nobody reads
- *  a clock they cannot see and the point of all this is a quiet CPU. */
-function useMinuteClock(): string {
-  const h24 = useSyncExternalStore(subscribeClock24, clock24, () => true);
+/** The clock, re-read every minute and on coming back to a visible tab. A
+ *  second's resolution is pointless at this size, and it stops while hidden
+ *  because nobody reads a clock they cannot see. */
+function useMinuteNow(): Date {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     let id: ReturnType<typeof setTimeout>;
@@ -156,6 +163,13 @@ function useMinuteClock(): string {
     document.addEventListener("visibilitychange", onVis);
     return () => { clearTimeout(id); document.removeEventListener("visibilitychange", onVis); };
   }, []);
+  return now;
+}
+
+/** The window's own clock. */
+function useMinuteClock(): string {
+  const h24 = useSyncExternalStore(subscribeClock24, clock24, () => true);
+  const now = useMinuteNow();
   const h = now.getHours();
   const hh = h24 ? String(h).padStart(2, "0") : String(h % 12 || 12);
   /*
@@ -225,23 +239,6 @@ function useWindowState(): { max: boolean; full: boolean } {
   return st;
 }
 
-/** A reading: what it is, then what it says. Inline, on one baseline — see the
- *  note at the top of this file for why that is the whole point. */
-function Item({ cap, children, title, dim, hideUnder }: {
-  cap?: string; children: React.ReactNode; title?: string; dim?: boolean;
-  /** Drop below this breakpoint rather than squeezing the row. A strip that
-   *  wraps to two lines on a narrow window is worse than one that says less. */
-  hideUnder?: "sm" | "md";
-}) {
-  const vis = hideUnder === "md" ? "hidden md:flex" : hideUnder === "sm" ? "hidden sm:flex" : "flex";
-  return (
-    <span className={`${vis} items-center gap-1.5 shrink-0`} title={title} style={{ opacity: dim ? 0.45 : 1, transition: "opacity .15s" }}>
-      {cap && <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>{cap}</span>}
-      {children}
-    </span>
-  );
-}
-
 /** Commits moving one way or the other. Direction by shape, so the two readings
  *  are told apart without reading their captions. */
 function Arrow({ up }: { up?: boolean }) {
@@ -255,121 +252,473 @@ function Arrow({ up }: { up?: boolean }) {
   );
 }
 
-function Meter({ pct, tint }: { pct: number; tint: string }) {
+/**
+ * The console's week against the one this PC counted.
+ *
+ * The only sentence on screen that says the local number under-reads — another
+ * machine can spend the same plan — so it sits beside the number it qualifies.
+ * The console is the authority, but reading it needs the person's login, so it
+ * happens behind this button and never on a timer.
+ */
+function ConsoleCalibration({ u }: { u: ProviderUsage }) {
+  const [cue, setCue] = useState<QuotaWindow[] | null>(u.calibration?.windows ?? null);
+  const [busy, setBusy] = useState(false);
+  const week = (ws: QuotaWindow[] | null) => ws?.find((w) => w.minutes === 10080)?.usedPercent ?? null;
+  const consoleWeek = week(cue);
+  const localWeek = week(u.windows);
+  const read = () => {
+    setBusy(true);
+    api.refreshOpenCodeUsage(true)
+      .then((row) => { if (row.available) setCue(row.windows); })
+      .catch(() => {})
+      .finally(() => setBusy(false));
+  };
+  // Wraps rather than shares one line: at the sheet's width the sentence and
+  // the button do not both fit.
   return (
-    <span className="block rounded-full shrink-0" style={{ width: 26, height: 3, background: "color-mix(in srgb, var(--text) 18%, transparent)" }}>
-      <span className="block h-full rounded-full" style={{ width: `${Math.max(2, Math.min(100, pct))}%`, background: tint }} />
-    </span>
+    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1.5 text-[10px]" style={{ color: "var(--text4)" }}>
+      {consoleWeek !== null && localWeek !== null && (
+        <span>Console says the week is {consoleWeek}% used; this PC counted {localWeek}%.</span>
+      )}
+      <button type="button" onClick={read} disabled={busy}
+        className="shrink-0 text-[10px] hover:underline disabled:opacity-50" style={{ color: "var(--text3)" }}>
+        {busy ? "Reading…" : "Read the console"}
+      </button>
+    </div>
   );
 }
 
 /**
- * THE PLAN STRIP: "18% used 48m · 77% used 2d 1h · 17% used Fable".
- *
- * It was `5H ▬ 17%  WEEKLY ▬ 76%  FABLE ▬ 17%` — a caption, a bar and a number
- * for every window, three times over. That is three of everything and it still
- * did not answer the question you actually have when you look up here, which is
- * not "how much is gone" but "how long until I get it back".
- *
- * So each window is one phrase, and the phrase ends with the thing that was
- * missing. One bar, for the tightest window, because a bar is a shape you read
- * without counting and three of them side by side is a chart nobody asked for.
- *
- * The suffix is the RESET TIME, unless another window already showed that same
- * time — then it is the window's own name. Two windows that come back together
- * are usually a weekly bucket and a per-model bucket inside it, and printing
- * "2d 1h" twice says nothing the first one did not; the name says which of the
- * two you are looking at, which is the part in doubt.
+ * OpenCode Go's own detail: per-model spend, the fold its per-model weekly has
+ * no window for. The days live in the sheet's one chart, as every agent's do.
  */
+function OpenCodeLocal({ u }: { u: ProviderUsage }) {
+  const [open, setOpen] = useState(u.windows.length === 0);
+  const [detail, setDetail] = useState<{ model: string; steps: number; costUsd: number }[] | null>(null);
+  const [now] = useState(() => Date.now());
+  useEffect(() => {
+    if (!open || detail) return;
+    let live = true;
+    api.openCodeDetail()
+      .then((r) => { if (live) setDetail(r.detail?.models ?? []); })
+      .catch(() => { if (live) setDetail([]); });
+    return () => { live = false; };
+  }, [open, detail]);
+  const view = openCodePanelWindows(u, now);
+  return (
+    <div className="flex flex-col gap-2" style={{ borderTop: LINE, paddingTop: 10 }}>
+      {u.usageNote && (
+        <span className="text-[10px] leading-snug" style={{ color: "var(--warning)" }}>{u.usageNote}</span>
+      )}
+      {!u.usageKey && (
+        <div className="flex flex-col gap-1.5">
+          <span className="text-[10px] leading-snug" style={{ color: "var(--text4)" }}>{USAGE_KEY_GUIDE}</span>
+          <button type="button" onClick={() => openSettings("engines")}
+            className="self-start text-[10px] hover:underline" style={{ color: "var(--primary)" }}>
+            Set the key in Settings › Agent engines
+          </button>
+        </div>
+      )}
+      {view.estimate && u.source && <span className="self-start chip text-[9.5px] t-dim" title={`These numbers cover this PC, not the whole plan: the console counted more on 31 Oct`}>{u.source}</span>}
+      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}
+        className="self-start text-[10px] hover:underline" style={{ color: "var(--text3)" }}>
+        {open ? "▾" : "▸"} Per-model spend · last 30 days
+      </button>
+      {open && detail === null && <span className="text-[10px]" style={{ color: "var(--text4)" }}>Reading the local stats…</span>}
+      {open && detail?.length === 0 && <span className="text-[10px]" style={{ color: "var(--text4)" }}>The local stats reported no models.</span>}
+      {open && detail?.map((m) => (
+        <div key={m.model} className="flex items-baseline gap-2 text-[10px]">
+          <span className="truncate" style={{ color: "var(--text2)" }}>{m.model}</span>
+          <span className="ml-auto tabular-nums" style={{ color: "var(--text3)" }}>${m.costUsd.toFixed(2)}</span>
+          <span className="tabular-nums" style={{ color: "var(--text4)" }}>{m.steps} steps</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /**
- * The panel behind the strip: every window, spelled out.
+ * The panel behind the chip: every window, spelled out.
  *
- * The strip answers "how much, and how long" in one line and cannot answer
- * anything else — which window is which, when each one actually comes back,
- * whether the reading is current. Those are the questions you have exactly
- * once, at the moment you are deciding whether to keep going, and they were
- * unanswerable without opening Stats.
+ * The strip answers "how much" in one line and cannot answer anything else —
+ * which window is which, when each one actually comes back, whether the reading
+ * is current. Those are the questions you have exactly once, at the moment you
+ * are deciding whether to keep going, and they were unanswerable without
+ * opening Stats.
  *
  * A bar per window, full width, because here there IS room and a row of three
  * short bars is a chart. `resetLabel` rather than the strip's compact form:
  * with the space for it, "Wed 3:00 PM" is more use than "2d 1h" when you are
  * deciding whether to wait.
  */
-function PlanPanel({ u: strip, age: stripAge, at, onClose, onEscape, onRefresh, busy }: {
-  u: ProviderUsage; age: string | null; at: { top: number; right: number; staged?: true };
-  onClose: () => void; onEscape: () => void; onRefresh: () => void; busy: boolean;
+/** A tab is a bank cell, so it carries the short name the cell would. */
+const TAB_LABEL: Record<ProviderUsage["provider"], string> = {
+  anthropic: "Claude", opencode: "OpenCode", codex: "Codex", antigravity: "Antigravity",
+};
+
+/** Ink escalates only when it matters: a plan at 4% is not a green badge. */
+const bankInk = (p: number): string =>
+  p >= 85 ? "var(--error-ink)" : p >= 60 ? "var(--warning-ink)" : "var(--text)";
+
+/** The same rule for a fill: quiet ink until the plan is actually close. */
+const bankFill = (p: number): string =>
+  p >= 85 ? "var(--error)" : p >= 60 ? "var(--warning)" : "var(--text3)";
+
+/** The marks are the engines' own colours, shared across themes. Asked of the
+ *  one table the Settings tiles use, so a new engine is added in one place. */
+const MARK_INK: Record<ProviderUsage["provider"], string> = {
+  anthropic: logoOf("claude"), opencode: logoOf("opencode"), codex: logoOf("codex"), antigravity: logoOf("antigravity"),
+};
+
+function PlanPanel({ u: strip, age: stripAge, tabs, at, onClose, onEscape, onRefresh, busy }: {
+  u: ProviderUsage; age: string | null; tabs: { row: ProviderUsage; age: string | null }[];
+  at: { top: number; right: number; staged?: true };
+  onClose: () => void; onEscape: (provider: ProviderUsage["provider"]) => void; onRefresh: () => void; busy: boolean;
 }) {
-  const acc = useAccountPanel(strip, onClose, onEscape, !at.staged);
-  // The provider the chips moved to, if any, and whether the bars belong to an
-  // account that is not the one in use: its pace history and day chart are the
-  // core's, so they are drawn only for the active one.
+  // The sheet's provider is its own state: opening it from a cell says where to
+  // start, and the tabs are how you move without closing it.
+  const [tabId, setTabId] = useState<ProviderUsage["provider"]>(strip.provider);
+  const tab = tabs.find((t) => t.row.provider === tabId) ?? { row: strip, age: stripAge };
+  // The tab whose row is actually drawn. `tabId` can name a provider that has
+  // left the bar (its switch turned off, or a reading that was not held): the
+  // selected tab, the panel's label and Escape must follow the row on screen,
+  // not the id nothing draws.
+  const activeId = tab.row.provider;
+  const tabEls = useRef(new Map<ProviderUsage["provider"], HTMLButtonElement>());
+  // A list of open folds, so the one control below can open every row at once.
+  // `null` is "nothing chosen yet": the tightest fold is open until the person
+  // says otherwise, and an empty list is every row shut.
+  const [fold, setFold] = useState<string[] | null>(null);
+  const pick = (provider: ProviderUsage["provider"], focus = true) => {
+    setTabId(provider);
+    setFold(null);
+    if (focus) tabEls.current.get(provider)?.focus({ preventScroll: true });
+  };
+  const tabIds = tabs.map((t) => t.row.provider);
+  // Where the focus is decides what ←→ means, so the footer legend asks this:
+  // focus lands on a tab on open (not on an agent's staged open, which leaves
+  // the person's typing alone).
+  const [inTabs, setInTabs] = useState(!at.staged);
+  // ↑↓ is the same axis as the tabs: moving it moves the tab, so the headline,
+  // the aria-label and the chips cannot belong to another provider than the
+  // selected one.
+  const acc = useAccountPanel(tab.row, onClose, () => onEscape(activeId), !at.staged, { providers: tabIds, onPick: pick }, inTabs);
   const u = acc.header;
   const other = acc.show && !acc.atCore;
   const shown = other ? acc.row : u;
-  const age = u === strip && !other ? stripAge : null;
-  const windows = [...(shown?.windows ?? [])].sort((a, b) => a.minutes - b.minutes);
-  const cfg = useSyncExternalStore(subscribePaceConfig, paceConfig, paceConfig);
-  // Read once per open: a panel that re-ticked its own clock would move the
-  // numbers under the eye, and it is closed again within seconds.
-  const [now] = useState(() => Date.now());
+  // An age belongs to the row the sheet was handed; another login of it has
+  // its own reading, and warning ink beside it would date the wrong account.
+  const age = other ? null : tab.age;
+  // One timer, no fetching: the sheet's own clock, so a window whose reset
+  // passes while the sheet is open stops promising "resets in 1m" forever.
+  const now = useMinuteNow().getTime();
+  const view = shown ? openCodePanelWindows(shown, now) : null;
+  const windows = [...(view?.windows ?? [])].sort((a, b) => a.minutes - b.minutes);
+  const estimate = view?.estimate ?? false;
+  const estimatedMinutes = new Set(view?.estimatedMinutes ?? (estimate ? windows.map((w) => w.minutes) : []));
+  const observedAt = !estimate && shown?.calibration ? shown.calibration.at : shown?.observedAt;
+  const worst = shown?.available ? worstWindow({ ...shown, windows }) : null;
+  // A local estimate is this PC's arithmetic, not the plan's number: the
+  // headline says so beside the figure rather than only inside the open fold.
+  const worstEstimated = !!worst && estimatedMinutes.has(worst.minutes);
+  // Past this the number is history: today's clock on a days-old percent would
+  // project a rate the plan may have left behind days ago.
+  const staleReading = !estimate && observedAt != null && now - observedAt > OLD_READING_MS;
+  const groups = groupWindows(windows);
+  const tightest = groups.find((g) => g.windows.some((w) => w.usedPercent === worst?.usedPercent))?.key ?? groups[0]?.key ?? null;
+  const budget = worst ? paceBudget(worst, now) : null;
+  // The age belongs next to the sentence it qualifies: a weeks-old Codex
+  // reading looks exactly like a fresh one otherwise. `ageLabel` already says
+  // "5m ago", so the line adds only the word in front of it.
+  const readAge = observedAt ? ageLabel(observedAt) : null;
+  const readLine = age ? `last read ${age} ago` : readAge ? `read ${readAge}` : "no reading";
+  // Empty list is "every fold shut", so a person who closes the tightest one
+  // is not overruled on the next render.
+  const openKeys = fold ?? (tightest ? [tightest] : []);
+  const toggleFold = (key: string) =>
+    setFold(openKeys.includes(key) ? openKeys.filter((k) => k !== key) : [...openKeys, key]);
+  // Every row the body can draw, so the control's label follows the rows
+  // whether they were opened by hand or by the control itself.
+  const foldKeys = [...groups.map((g) => g.key), ...(shown?.available ? ["days"] : [])];
+  const allOpen = foldKeys.length > 0 && foldKeys.every((k) => openKeys.includes(k));
+  // Subscribed, not read once: the week arrives after the first paint, and a
+  // total computed from `null` used to stay blank for the life of the sheet.
+  const week = useSyncExternalStore(subscribeDayStrip, lastWeek, lastWeek);
+  const weekTotal = week ? dayCells(week, now).reduce((n, c) => n + c.tokens, 0) : null;
+  // Opening the sheet, and every tab moved to, is the one read the console gets
+  // besides the refresh button: no polling, and only when a key is stored. The
+  // local number is already on screen; this is what makes the console line
+  // current — unless it already is, so a held arrow walking in and out of the
+  // tab cannot re-post the read at the keyboard's repeat rate.
+  useEffect(() => {
+    if (activeId !== "opencode" || !(tab.row.usageKey ?? shown?.usageKey)) return;
+    if (shown?.calibration && now - shown.calibration.at < CONSOLE_REREAD_MS) return;
+    void api.refreshOpenCodeUsage().then(() => refreshProviderUsage()).catch(() => {});
+  }, [activeId]);
+
+  // The tabs are the way round this sheet and the keyboard should land on them,
+  // not on the dialog root, or the arrows the legend promises do nothing. Not
+  // when an agent's proposal opened it: the person may be typing elsewhere.
+  useEffect(() => { if (!at.staged) tabEls.current.get(activeId)?.focus({ preventScroll: true }); }, []);
+
   return (
     <Portal z={LAYER.usage}>
       {/* The scrim is what closes it. A panel this small does not deserve a
           key handler of its own and a click anywhere else is what everybody
           already tries. Closed like Escape, so focus goes back to the strip. */}
-      <div className="fixed inset-0" onClick={onEscape} style={{ background: "transparent" }} />
+      <div className="fixed inset-0" onClick={() => onEscape(activeId)} style={{ background: "transparent" }} />
       <div {...acc.rootProps} className="fixed flex flex-col rounded-xl overflow-hidden outline-none"
         style={{
-          top: at.top, right: at.right, width: 300,
+          top: at.top, right: at.right, width: 378, maxHeight: 610,
           background: "var(--surface-card)",
           border: EDGE,
           boxShadow: "0 22px 48px -20px var(--shadow)",
         }}>
-        <div className="flex items-center gap-2 px-3 py-2.5" style={{ borderBottom: LINE }}>
-          <span className="text-[12.5px] font-semibold" style={{ color: "var(--text)" }}>{u.label}</span>
-          {(acc.show ? acc.cand!.plan : u.plan) && <span className="chip text-[10px] t-dim">{acc.show ? acc.cand!.plan : u.plan}</span>}
-          <span className="ml-auto text-[10px]" style={{ color: age ? "var(--warning)" : "var(--text4)" }}>
-            {age ? `last read ${age} ago` : ageLabel(shown?.observedAt)}
-          </span>
-          <button type="button" onClick={() => { onClose(); openSettings("budgets"); }} aria-label="Usage settings…" title="Usage settings…"
+        {/* The providers as tabs, each a mini bank. The place that names them is
+            also the place that switches them. */}
+        <div role="tablist" aria-label="Providers" className="flex gap-0.5 px-2 pt-2 pb-1.5"
+          style={{ borderBottom: LINE }}
+          onFocus={() => setInTabs(true)}
+          onBlur={(ev) => { if (!ev.currentTarget.contains(ev.relatedTarget as Node | null)) setInTabs(false); }}
+          onKeyDown={(ev) => {
+            if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(ev.key)) return;
+            const ids = tabs.map((t) => t.row.provider);
+            // The dialog root maps the arrows to the account candidate: a key
+            // pressed on a tab must move the tab and nothing else, so the row
+            // swallows it even when there is only one tab to move between.
+            ev.preventDefault();
+            ev.stopPropagation();
+            if (ids.length < 2) return;
+            const i = ids.indexOf(activeId);
+            const next = ev.key === "Home" ? ids[0]!
+              : ev.key === "End" ? ids[ids.length - 1]!
+                : ids[(i + (ev.key === "ArrowRight" ? 1 : ids.length - 1)) % ids.length]!;
+            pick(next);
+          }}>
+          {tabs.map(({ row }) => {
+            // The sheet's own clock: a badge recomputed from the wall clock
+            // flipped to the local estimate while the body under it still drew
+            // the console's windows.
+            const v = chipView(row, now);
+            const badge = tabBadge(v);
+            const on = row.provider === activeId;
+            return (
+              <button key={row.provider} role="tab" aria-selected={on} tabIndex={on ? 0 : -1}
+                id={`bank-tab-${row.provider}`} aria-controls="bank-sheet-body"
+                ref={(el) => { if (el) tabEls.current.set(row.provider, el); else tabEls.current.delete(row.provider); }}
+                onClick={() => pick(row.provider)}
+                className="flex-1 min-w-0 flex flex-col justify-center gap-1 rounded-md"
+                style={{
+                  height: 30, padding: "2px 4px",
+                  border: on ? EDGE : undefined,
+                  background: on ? "var(--bg)" : "none",
+                  boxShadow: on ? "0 1px 2px rgba(0,0,0,.05)" : undefined,
+                }}>
+                <span className="flex items-center gap-0.5 min-w-0">
+                  <span className="flex shrink-0" style={{ color: MARK_INK[row.provider] }}>
+                    <ProviderMark provider={row.provider} size={ICON.xs} />
+                  </span>
+                  <span className="text-[9.5px] truncate" style={{ color: on ? "var(--text)" : "var(--text3)", fontWeight: on ? 600 : 400 }}>
+                    {TAB_LABEL[row.provider]}
+                  </span>
+                  <b className="ml-auto text-[9.5px] font-semibold tabular-nums shrink-0"
+                    style={{ color: badge.percent === null ? (v.kind === "spend" ? "var(--text2)" : "var(--text4)") : bankInk(badge.percent) }}>{badge.text}</b>
+                </span>
+                {/* A spend-only provider has dollars and no track, like its cell
+                    on the bar: a dash over an empty track beside a headline of
+                    "$7.07" says "no reading" about a provider that has one. */}
+                {badge.track && (
+                  <span aria-hidden className="block rounded-sm overflow-hidden"
+                    style={{ height: 3, background: "color-mix(in srgb, var(--text) 16%, transparent)" }}>
+                    {badge.percent !== null && <span className="block h-full rounded-sm" style={{ width: `${Math.max(0, Math.min(100, badge.percent))}%`, background: bankFill(badge.percent) }} />}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* The sentence the bar cannot say: what the number belongs to, when it
+            comes back, and what the budget says it should be by now. The tabs
+            above already name the provider, so this line does not repeat it. */}
+        <div className="px-3 py-2.5" style={{ borderBottom: LINE }}>
+          {shown?.available && worst ? (
+            <div className="text-[11.5px] leading-snug" style={{ color: "var(--text2)" }}>
+              <b className="font-sans text-[22px] font-semibold tabular-nums mr-0.5 align-[-2px]"
+                style={{ color: bankInk(worst.usedPercent) }}>{worst.usedPercent}%</b>
+              <span style={{ color: "var(--text2)" }}>{sheetTail(worst, now)}</span>
+            </div>
+          ) : shown?.available && shown.spend ? (
+            /* A spend total is a reading with no window: the dollars are the
+               headline, and "not reporting quota" here would contradict the
+               cell on the bar that is showing them. */
+            <div className="text-[11.5px] leading-snug" style={{ color: "var(--text2)" }}>
+              <b className="font-sans text-[22px] font-semibold tabular-nums mr-0.5 align-[-2px]"
+                style={{ color: "var(--text2)" }}>${shown.spend.usd.toFixed(2)}</b>
+              <span> spent over {shown.spend.window}{shown.source ? `, from ${shown.source}` : ""}</span>
+            </div>
+          ) : (
+            <div className="text-[11.5px] leading-snug" style={{ color: "var(--text)" }}>
+              <b className="font-sans text-[22px] font-semibold tabular-nums mr-0.5 align-[-2px]"
+                style={{ color: "var(--text4)" }}>—</b>
+              {" "}{shown?.label ?? u.label} is not reporting quota.
+            </div>
+          )}
+          {activeId === "opencode" && !other && shown && <ConsoleCalibration u={shown} />}
+          <div className="flex items-center gap-2 mt-1.5 text-[9.5px]" style={{ color: "var(--text4)" }}>
+            {/* Beside every number in this sheet, not only the one inside the
+                open fold: an estimate printed as a plan reading is the lie the
+                12-hour console rule exists to avoid. */}
+            {worstEstimated && <span>estimate · this PC</span>}
+            {shown?.available && worst && (
+              <span>pace budget <b style={{ color: "var(--text3)" }}>{budget === null ? "—" : `${budget}%`}</b></span>
+            )}
+            <span className={shown?.available && worst ? "ml-auto" : ""}
+              style={{ color: age ? "var(--warning)" : "var(--text4)" }}>{readLine}</span>
+            {/* One control for the whole list below, read against the rows
+                themselves so opening them by hand turns it into Collapse all. */}
+            {foldKeys.length > 0 && (
+              <button type="button" onClick={() => setFold(allOpen ? [] : foldKeys)}
+                aria-label={allOpen ? "Collapse all" : "Expand all"} title={allOpen ? "Collapse all" : "Expand all"}
+                aria-pressed={allOpen}
                 className="shrink-0 grid place-items-center rounded hover:bg-white/10"
-                style={{ width: MIN_BOX, height: MIN_BOX, color: "var(--text3)" }}><GearIcon size={ICON.xs} /></button>
-          <RefreshButton onRefresh={onRefresh} busy={busy} title="Read the plan again" />
+                style={{ width: HIT, height: HIT, color: "var(--text3)" }}>
+                <ExpandIcon size={ICON.xs} shrink={allOpen} />
+              </button>
+            )}
+            <button type="button" onClick={() => { onClose(); openSettings("budgets"); }} aria-label="Usage settings…" title="Usage settings…"
+                  className="shrink-0 grid place-items-center rounded hover:bg-white/10"
+                  style={{ width: MIN_BOX, height: MIN_BOX, color: "var(--text3)" }}><GearIcon size={ICON.xs} /></button>
+            <RefreshButton onRefresh={onRefresh} busy={busy} title="Read the plan again" />
+          </div>
         </div>
 
         <AccountChips p={acc} />
 
-        <div className="flex flex-col gap-3 px-3 py-3">
-          {windows.map((w) => {
-            const reset = resetLabel(w.resetsAt);
-            const wp = other ? null : windowPace(u.provider, w, now, cfg);
+        <div id="bank-sheet-body" role="tabpanel" aria-labelledby={`bank-tab-${activeId}`}
+          className="flex flex-col px-3 py-2 overflow-auto" style={{ maxHeight: 420 }}>
+          {shown?.available && groups.map((g) => {
+            const open = openKeys.includes(g.key);
+            const top = Math.max(...g.windows.map((w) => w.usedPercent));
+            // The number beside the reset is the group maximum, so the reset
+            // must be that same window's: the first window put one model's
+            // clock against another model's percent.
+            const tightestWindow = g.windows.find((w) => w.usedPercent === top)!;
             return (
-              <div key={w.label}>
-                <div className="flex items-baseline gap-2">
-                  <span className="text-[11.5px]" style={{ color: "var(--text)" }}>{w.label}</span>
-                  <span className="ml-auto text-[11px] tabular-nums"
-                    style={{ color: usedTextColor(w.usedPercent) }}>{w.usedPercent}% used</span>
-                </div>
-                <span className="block rounded-full mt-1.5 relative" style={{ height: 4, background: "color-mix(in srgb, var(--text) 14%, transparent)" }}>
-                  <span className="block h-full rounded-full" style={{
-                    width: `${Math.max(2, Math.min(100, w.usedPercent))}%`,
-                    background: usedColor(w.usedPercent),
-                  }} />
-                  {wp && <PaceMarker expected={wp.pace.expected} />}
-                </span>
-                {reset && (
-                  <span className="block text-[10px] mt-1" style={{ color: "var(--text4)" }}>
-                    Resets {reset}
+              <div key={g.key} className="relative" style={{
+                borderLeft: LINE,
+                boxShadow: open ? "inset 1px 0 0 color-mix(in srgb, var(--primary) 55%, transparent)" : undefined,
+                marginLeft: 2, paddingLeft: 8,
+              }}>
+                <button type="button" aria-expanded={open}
+                  onClick={() => toggleFold(g.key)}
+                  className="w-full flex items-center gap-2 py-1.5 pr-0.5 text-left"
+                  style={{ paddingLeft: 2 }}>
+                  <span aria-hidden className="text-[10px] shrink-0 transition-transform"
+                    style={{ color: "var(--text4)", transform: open ? "rotate(90deg)" : undefined }}>›</span>
+                  <span className="text-[11.5px]" style={{ color: "var(--text)" }}>{g.title}</span>
+                  {g.windows.length > 1 && <span className="text-[9px]" style={{ color: "var(--text4)" }}>{g.windows.length} models</span>}
+                  <span className="ml-auto flex items-baseline gap-1.5 shrink-0">
+                    <b className="text-[11px] font-semibold tabular-nums" style={{ color: bankInk(top) }}>{top}%</b>
+                    <span className="text-[9.5px] tabular-nums" style={{ color: "var(--text4)", minWidth: "3.6em", textAlign: "right" }}>
+                      {resetShort(tightestWindow.resetsAt)}
+                    </span>
                   </span>
+                </button>
+                {open && (
+                  <div className="pb-2.5">
+                    {g.windows.map((w) => {
+                      const budget = paceBudget(w, now);
+                      // A days-old reading gets neither: both are today's clock
+                      // judging a rate the plan may have left days ago, and the
+                      // meta line beside them already says how old the number is.
+                      const estimated = estimatedMinutes.has(w.minutes);
+                      const verdict = budget === null || staleReading ? null : paceVerdict(w.usedPercent, budget);
+                      const reset = resetWhen(w, now);
+                      // A local estimate is this PC's arithmetic, not the plan's,
+                      // so it gets no projection either: the tag under the row
+                      // already says which number this is.
+                      const pace = staleReading || estimated ? null : runsOut(w, budget, now);
+                      return (
+                        <div key={`${g.key}-${w.label}`} className="mb-2 last:mb-0">
+                          {g.windows.length > 1 && (
+                            <div className="flex items-baseline gap-1.5">
+                              <span className="text-[10.5px]" style={{ color: "var(--text2)" }}>{w.label}</span>
+                              <span className="ml-auto text-[11px] font-semibold tabular-nums" style={{ color: bankInk(w.usedPercent) }}>{w.usedPercent}%</span>
+                            </div>
+                          )}
+                          <span className="block relative rounded-sm mt-1.5" style={{
+                            height: 4, background: "color-mix(in srgb, var(--text) 13%, transparent)",
+                          }}>
+                            <span className="block h-full rounded-sm" style={{
+                              width: `${Math.max(0, Math.min(100, w.usedPercent))}%`,
+                              background: bankFill(w.usedPercent),
+                            }} />
+                            {budget !== null && <PaceMarker expected={budget} />}
+                          </span>
+                          {verdict && (
+                            <div className="text-[9.5px] mt-1 leading-snug" style={{ color: "var(--text4)" }}>
+                              Budget <b style={{ color: "var(--text3)" }}>{budget}%</b> earned by now —{" "}
+                              {/* An estimate is this PC's arithmetic: it keeps the words
+                                  but never the measured pace's green or amber ink. */}
+                              <b style={{ color: estimated ? "var(--text3)" : verdict.tone === "over" ? "var(--warning-ink)" : verdict.tone === "under" ? "var(--success-ink)" : "var(--text3)" }}>
+                                {verdict.text}{estimated ? " (estimate)" : ""}
+                              </b>.
+                            </div>
+                          )}
+                          {reset && <div className="text-[9.5px] leading-snug" style={{ color: "var(--text4)" }}>Resets {reset}</div>}
+                          {pace && <div className="text-[9.5px] leading-snug" style={{ color: "var(--text4)" }}>{pace}</div>}
+                          {estimatedMinutes.has(w.minutes) && (
+                            <div className="text-[9.5px] leading-snug" style={{ color: "var(--text4)" }}>estimate · this PC</div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 )}
-                {wp && <PaceLines wp={wp} now={now} cfg={cfg} oldReading={shown?.observedAt != null && now - shown.observedAt > OLD_READING_MS} />}
               </div>
             );
           })}
-          {!windows.length && (
-            <span className="text-[11.5px]" style={{ color: "var(--text4)" }}>{other ? "No reading yet for this account." : "This provider reports no windows."}</span>
+          {shown?.available && (
+            <div className="relative" style={{
+              borderLeft: LINE,
+              marginLeft: 2, paddingLeft: 8,
+            }}>
+              <button type="button" aria-expanded={openKeys.includes("days")}
+                onClick={() => toggleFold("days")}
+                className="w-full flex items-center gap-2 py-1.5 pr-0.5 text-left" style={{ paddingLeft: 2 }}>
+                <span aria-hidden className="text-[10px] shrink-0 transition-transform"
+                  style={{ color: "var(--text4)", transform: openKeys.includes("days") ? "rotate(90deg)" : undefined }}>›</span>
+                <span className="text-[11.5px]" style={{ color: "var(--text)" }}>Last 7 days</span>
+                <span className="text-[9px]" style={{ color: "var(--text4)" }}>all agents</span>
+                <span className="ml-auto text-[10.5px] font-semibold tabular-nums shrink-0" style={{ color: "var(--text2)" }}>
+                  {weekTotal === null ? "" : fmtTokens(weekTotal)}
+                </span>
+              </button>
+              {openKeys.includes("days") && <div className="pb-2.5"><DayStrip provider="anthropic" all /></div>}
+            </div>
           )}
-          {!other && <DayStrip provider={u.provider} />}
+          {!windows.length && (
+            <span className="text-[11.5px] leading-snug py-1" style={{ color: "var(--text4)" }}>
+              {other ? "No reading yet for this account."
+                : shown?.available && shown.spend
+                  ? `$${shown.spend.usd.toFixed(2)} spent over ${shown.spend.window}${shown.source ? `, from ${shown.source}` : ""}. No quota windows were reported.`
+                : shown?.available ? "This provider reports no windows."
+                /* The cell can only say "no reading" in a tooltip; the sentence
+                   that says why — signed out, page changed — belongs here. */
+                : shown?.note ?? "No reading from this provider right now."}
+            </span>
+          )}
+          {!windows.length && shown?.provider === "opencode" && !shown.usageKey && (
+            <div className="flex flex-col gap-1.5 py-1">
+              <span className="text-[10px] leading-snug" style={{ color: "var(--text4)" }}>{USAGE_KEY_GUIDE}</span>
+              <button type="button" onClick={() => { onClose(); openSettings("engines"); }}
+                className="self-start text-[10px] hover:underline" style={{ color: "var(--primary)" }}>
+                Set the key in Settings › Agent engines
+              </button>
+            </div>
+          )}
+          {!other && shown?.provider === "opencode" && <OpenCodeLocal u={shown} />}
         </div>
         <AccountKeyBar p={acc} />
       </div>
@@ -377,69 +726,78 @@ function PlanPanel({ u: strip, age: stripAge, at, onClose, onEscape, onRefresh, 
   );
 }
 
-function PlanStrip({ u, age, dim, onOpen, btn }: {
-  u: ProviderUsage; age: string | null; dim?: boolean;
-  onOpen: () => void; btn: React.MutableRefObject<HTMLButtonElement | null>;
+/**
+ * One provider's cell in the bank: the mark, its tightest window's number, and
+ * a fill on the baseline the four cells share. The cell is fixed width so the
+ * number never moves the row, and a provider that cannot report keeps a dash
+ * over a dashed track — a hole is a state, not a zero.
+ *
+ * The window the number belongs to is not on the bar: it is in the hover, in
+ * the full sentence, and in the sheet the cell opens.
+ */
+function PlanChip({ u, age, dim, active, first, onOpen, anchor }: {
+  u: ProviderUsage; age: string | null; dim?: boolean; active?: boolean; first?: boolean;
+  onOpen: () => void; anchor: (el: HTMLButtonElement | null) => void;
 }) {
-  const windows = [...u.windows].sort((a, b) => a.minutes - b.minutes);
-  if (!windows.length) return null;
-  const worst = windows.reduce((w, x) => (x.usedPercent > w.usedPercent ? x : w), windows[0]!);
-
-  const seen = new Set<string>();
-  const parts = windows.map((w) => {
-    const reset = resetShort(w.resetsAt);
-    /* The name wins when the time is a repeat — see the note above. */
-    const suffix = reset && !seen.has(reset) ? reset : w.label;
-    if (reset) seen.add(reset);
-    return { key: w.label, pct: w.usedPercent, suffix, hot: w.usedPercent >= 80 };
-  });
-
+  const view = chipView(u);
+  const w = view.kind === "reading" ? view.window : null;
+  const tip = [bankTip(u, w), age ? `Could not refresh — last read ${age} ago.` : ""].filter(Boolean).join(" ");
+  const nil = view.kind === "none";
   return (
-    <button ref={btn} onClick={onOpen}
-      className="flex items-center gap-2 shrink-0 rounded hover:bg-white/5"
-      style={{ opacity: dim ? 0.45 : 1, transition: "opacity .15s", paddingInline: 4, height: 20, ...NO_DRAG }}
-      title={age ? `could not refresh — last read ${age} ago` : `${u.label} plan usage — open for every window`}>
-      <Meter pct={worst.usedPercent} tint={worst.usedPercent >= 80 ? "var(--error)" : "var(--warning)"} />
-      {parts.map((p, i) => (
-        <Fragment key={p.key}>
-          {i > 0 && <span className="text-[9.5px] hidden md:inline" style={{ color: "var(--text4)" }}>·</span>}
-          <span className={`text-[9.5px] tabular-nums whitespace-nowrap ${i === 0 ? "" : "hidden md:inline"}`}
-            style={{ color: "var(--text3)", opacity: age ? 0.55 : 1 }}>
-            <b style={{ color: p.hot ? "var(--error-ink)" : "var(--text2)" }}>{p.pct}%</b> used {p.suffix}
-          </span>
-        </Fragment>
-      ))}
-      {/* The refresh lives in the panel now rather than here: a button inside
-          a button cannot be pressed without pressing both, and the strip had
-          to become the trigger for the panel to exist at all. */}
+    <button onClick={onOpen} ref={anchor} data-bank-cell data-tip={tip} aria-label={tip} aria-expanded={active} aria-haspopup="dialog"
+      className="relative flex flex-col justify-center shrink-0"
+      style={{
+        opacity: dim ? 0.45 : 1, transition: "opacity .15s",
+        // 24 inside the 26 track, as the mockup has it: the two spare pixels
+        // are the box's own border and baseline, not a click target.
+        minWidth: 38, height: 24, padding: "2px 6px", gap: 2,
+        // One border and one baseline for the whole instrument: the divider
+        // between cells is an inset shadow so it costs no width.
+        boxShadow: first ? undefined : "inset 1px 0 0 color-mix(in srgb, var(--text) 8%, transparent)",
+        ...NO_DRAG,
+      }}>
+      <span className="flex items-center justify-center gap-1" style={{ height: 12 }}>
+        <span className="flex" style={{ color: MARK_INK[u.provider] }}>
+          <ProviderMark provider={u.provider} size={ICON.xs} />
+        </span>
+        {view.kind === "reading" ? (
+          <>
+            <b className="text-[10.5px] font-semibold tabular-nums text-right truncate"
+              style={{ minWidth: "2.05em", maxWidth: "2.05em", color: bankInk(view.percent), opacity: age ? 0.55 : 1 }}>{view.percent}%</b>
+            {view.hot && <span aria-hidden className="text-[8px] font-semibold leading-none" style={{ color: "var(--error-ink)" }}>!</span>}
+          </>
+        ) : (
+          <>
+            {/* A spend total is a reading with no window to fill: the dollars,
+                and no track, because a track at zero would say "nothing used".
+                Capped to the width the fold charges a cell, so a six-figure
+                spend cannot push the row past the room it was given. */}
+            <b className="text-[10.5px] tabular-nums text-right truncate"
+              style={{ minWidth: "2.05em", maxWidth: "2.05em", color: view.kind === "spend" ? "var(--text2)" : "var(--text4)" }}>
+              {view.kind === "spend" ? `$${view.usd.toFixed(2)}` : "—"}
+            </b>
+          </>
+        )}
+      </span>
+      {view.kind !== "spend" && (
+        <span aria-hidden className="block rounded-sm overflow-hidden"
+          style={{
+            height: 2,
+            background: nil ? "transparent" : "color-mix(in srgb, var(--text) 13%, transparent)",
+            border: nil ? "1px dashed color-mix(in srgb, var(--text) 26%, transparent)" : undefined,
+          }}>
+          {view.kind === "reading" && (
+            <span className="block h-full rounded-sm" style={{
+              width: `${Math.max(0, Math.min(100, view.percent))}%`,
+              background: bankFill(view.percent),
+            }} />
+          )}
+        </span>
+      )}
     </button>
   );
 }
 
-/**
- * One plan window: how much of it is gone.
- *
- * `age` is set only once the reading has stopped refreshing. It takes over the
- * caption and dims the number, so a stuck meter is legible as stuck at a glance
- * without ever ceasing to answer the question it is there to answer. The
- * alternative — replacing the number with the word "stale" — throws away a true
- * reading half an hour old, which is still the best answer anyone has.
- */
-function PlanMeter({ tag, pct, age, dim, hideUnder }: {
-  tag: string; pct: number; age: string | null; dim?: boolean; hideUnder?: "sm" | "md";
-}) {
-  return (
-    <Item
-      cap={age ? `${tag} · ${age} old` : tag}
-      dim={dim}
-      hideUnder={hideUnder}
-      title={`${pct}% of the ${tag} window${age ? ` — could not refresh, last read ${age} ago` : ""}`}
-    >
-      <Meter pct={pct} tint={pct >= 80 ? "var(--error)" : "var(--warning)"} />
-      <b className="text-[9.5px] tabular-nums" style={{ color: "var(--text2)", opacity: age ? 0.55 : 1 }}>{pct}%</b>
-    </Item>
-  );
-}
 
 export function TopBar({
   workspace, workspaces, onOpenProject, onOpenPalette, onOpenFiles, quiet, needs,
@@ -526,6 +884,8 @@ export function TopBar({
   const metersRef = useRef<HTMLSpanElement>(null);
   const metersWide = useRef(0);
   const [metersHidden, setMetersHidden] = useState(false);
+  const [bankRoom, setBankRoom] = useState(Number.POSITIVE_INFINITY);
+  const plusRef = useRef<HTMLButtonElement>(null);
   useLayoutEffect(() => {
     const slot = slotRef.current, right = rightRef.current, bar = barRef.current;
     if (!slot || !right || !bar) return;
@@ -534,6 +894,11 @@ export function TopBar({
       const r = right.getBoundingClientRect();
       const m = metersRef.current?.getBoundingClientRect().width ?? 0;
       if (m > 0) metersWide.current = m;
+      // The bar's own width, not the bank's: a bank that folds gets narrower
+      // and would feed its new width back in as "there is room", which is the
+      // same loop the collision measure avoids. 430 is the furniture around
+      // it — mark, project, finder, clock.
+      setBankRoom(bar.getBoundingClientRect().width - 430);
       setMetersHidden((hidden) => metersMustHide({
         slotRight: s.right,
         // As if they were showing — see metersWide above.
@@ -560,72 +925,112 @@ export function TopBar({
     return () => ro.disconnect();
   });
 
-  // One gauge, for the provider the dashboard is filtered to. The strip is a
-  // glance, so three providers' meters here would be two too many; the
-  // dashboard box and Stats are where all of them are listed side by side.
+  // A chip per provider — direction A: the number and the window it belongs
+  // to, in the same breath. A provider filter narrows the row to one.
   const [, bumpUsage] = useState(0);
   useEffect(() => subscribeProviderUsage(() => bumpUsage((n) => n + 1)), []);
   const [refreshing, setRefreshing] = useState(false);
   const refreshUsage = useCallback(() => {
     setRefreshing(true);
-    void refreshProviderUsage().finally(() => setRefreshing(false));
+    // The button means "read it now" for every provider: Claude and Codex answer
+    // the GET, and OpenCode's console reading only exists if it is asked for.
+    // Asked only when it has a chip, so a machine without the opencode binary
+    // never opens a page on a button press.
+    const asked = (providerUsage() ?? []).some((r) => r.provider === "opencode");
+    const read = asked ? api.refreshOpenCodeUsage(true).catch(() => {}) : Promise.resolve();
+    void read.finally(() => refreshProviderUsage().finally(() => setRefreshing(false)));
   }, []);
-  /* Anchored off the button's own rect rather than positioned with CSS: the
-     strip is inside a flex row whose width changes with the plan text, so a
-     panel pinned to it in the layout would move every time a percentage did.
-     Same trick the notification panel uses, and for the same reason. */
-  const planBtn = useRef<HTMLButtonElement | null>(null);
-  const [planAt, setPlanAt] = useState<{ top: number; right: number; staged?: true } | null>(null);
-  const openPlan = useCallback(() => {
+  /* Anchored off the chip's own rect rather than positioned with CSS: the strip
+     is inside a flex row whose width changes with the plan text, so a panel
+     pinned to it in the layout would move every time a percentage did. */
+  const chipEls = useRef(new Map<ProviderUsage["provider"], HTMLButtonElement>());
+  // Read through a ref so the fallback below stays a stable callback: a cell
+  // hidden by the fold is unmounted and has no element to return focus to.
+  const hiddenCount = useRef(0);
+  const anchorFor = useCallback((provider?: ProviderUsage["provider"]) =>
+    (provider ? chipEls.current.get(provider) ?? null : null)
+    ?? (hiddenCount.current > 0 ? plusRef.current : null)
+    ?? chipEls.current.values().next().value ?? null, []);
+  const [planAt, setPlanAt] = useState<{ top: number; right: number; provider: ProviderUsage["provider"]; staged?: true } | null>(null);
+  // The sheet is opened from a cell that stands down with the meters; without
+  // this it outlived the strip it belongs to and sat over nothing.
+  useEffect(() => { if (metersHidden) setPlanAt(null); }, [metersHidden]);
+  /* A resize moves the chip (the strip is a flex row that gives cells up as it
+     narrows) and changes how much window is to the right of it. The `right`
+     measured at open then put the 378px sheet at x = -127 in a 427px window. */
+  const planProviderForAnchor = planAt?.provider;
+  useEffect(() => {
+    if (!planProviderForAnchor) return;
+    const place = () => setPlanAt((was) => {
+      if (!was) return was;
+      const b = anchorFor(was.provider);
+      if (!b) return was;
+      const r = b.getBoundingClientRect();
+      return { ...was, top: Math.round(r.bottom + 6), right: Math.round(window.innerWidth - r.right) };
+    });
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [planProviderForAnchor, anchorFor]);
+  const openPlan = useCallback((provider: ProviderUsage["provider"], el: HTMLButtonElement | null) => {
     warmDayStrip().catch(() => {});
     setPlanAt((was) => {
-      if (was) return null;
-      const r = planBtn.current?.getBoundingClientRect();
-      return r ? { top: Math.round(r.bottom + 6), right: Math.round(window.innerWidth - r.right) } : null;
+      if (was?.provider === provider) return null;
+      const r = el?.getBoundingClientRect();
+      return r ? { top: Math.round(r.bottom + 6), right: Math.round(window.innerWidth - r.right), provider } : null;
     });
   }, []);
   // An agent's proposal to switch account: the popover is where it is drawn, so open it.
   // Seen once per request, so closing it is not undone by the next render.
   const seenProposal = useRef(0);
   const hasRow = useRef(false);
+  const liveProvider = useRef<ProviderUsage["provider"] | undefined>(undefined);
+  // The providers the bar has a cell for. A ref because the proposal
+  // subscription is registered once and must read this render's cells.
+  const barIds = useRef<Set<ProviderUsage["provider"]>>(new Set());
   useEffect(() => subscribeStage(() => {
     const r = accountStageOf(peekStage());
     if (!r) return;
     const d = onProposal(seenProposal.current, r.n, hasRow.current);
     seenProposal.current = d.seen;
     if (!d.open) return;
+    const provider = stagedProvider(r.a.provider, (p) => barIds.current.has(p), liveProvider.current);
     setPlanAt((was) => {
       if (was) return was;
-      const b = planBtn.current?.getBoundingClientRect();
-      return b ? { top: Math.round(b.bottom + 6), right: Math.round(window.innerWidth - b.right), staged: true } : null;
+      const b = anchorFor(provider);
+      return b && provider
+        ? { top: Math.round(b.getBoundingClientRect().bottom + 6), right: Math.round(window.innerWidth - b.getBoundingClientRect().right), provider, staged: true }
+        : null;
     });
-  }), []);
+  }), [anchorFor]);
   const ctx = providerInContext(filterProvider);
   /* No context is not "no quota". `providerInContext` answers null whenever the
-     filter names no provider — on the dashboard, in the
-     terminal, in a browser tab — and the meters simply stopped being drawn.
-     Reported as "sometimes it does not appear at all"; it was never about the
-     plan, it was about where you happened to be standing. */
-  const live = (ctx ? usageOf(ctx) : null) ?? (ctx ? null : busiestOf(providerUsage()));
-  // Just after a switch the new login may have no reading yet; the strip keeps
-  // the previous one, marked old, rather than vanishing (usageHold.ts).
-  const { u, held } = stripRow(live, heldRows(ctx ?? undefined));
+     filter names no provider — on the dashboard, in the terminal, in a browser
+     tab — and a single lookup there drew nothing. The row is every provider's
+     chip instead, so the strip still answers when nobody is in focus. */
+  const allRows = rowsInBar((providerUsage() ?? []).filter(isCoreRow));
+  // Just after a switch the new login may have no reading yet; a chip keeps the
+  // previous row, marked old, rather than vanishing (usageHold.ts).
+  const chips = (ctx ? allRows.filter((r) => r.provider === ctx) : allRows).map((row) => {
+    const { u: shown, held } = stripRow(row, heldRows(row.provider));
+    const r = shown ?? row;
+    // Codex's reading only moves when a turn runs, so it can be days old and
+    // the age is the whole difference between a number and a lie.
+    const age = !r.available ? null : held ? heldAgeLabel(r.observedAt, Date.now()) : r.observedAt ? stalenessLabel(r.observedAt) : null;
+    return { row: r, age };
+  });
+  const live = (ctx ? usageOf(ctx) : null) ?? (ctx ? null : busiestOf(rowsInBar(providerUsage() ?? [])));
+  const { u } = stripRow(live, heldRows(ctx ?? undefined));
   hasRow.current = !!u;
+  liveProvider.current = u?.provider;
   // The popover's day chart is answered before the popover exists; see dayStrip.ts.
   const planProvider = u?.provider;
   useEffect(() => { if (planProvider === "anthropic") warmDayStrip().catch(() => {}); }, [planProvider]);
-  // A provider that has no reading to give right now — rate-limited, signed
-  // out, or one that never reports at all. Worth saying out loud: a meter that
-  // silently stops moving reads as "you have used nothing", the opposite of
-  // what is true. The reason is the provider's own sentence, in the tooltip.
-  const unread = !!u && !u.available;
-  // How old the numbers are, and only once that is worth saying. The meters keep
-  // their last good reading through a burst of 429s rather than vanishing, which
-  // is only honest if they also say when it was taken. The clock beside them
-  // re-renders this strip every minute, so this stays current without a timer.
-  // Codex's reading only moves when a turn runs, so it can be days old and the
-  // age is the whole difference between a number and a lie.
-  const age = !u?.available ? null : held ? heldAgeLabel(u.observedAt, Date.now()) : u.observedAt ? stalenessLabel(u.observedAt) : null;
+  const planShown = planAt ? chips.find((c) => c.row.provider === planAt.provider) ?? null : null;
+  const fold = foldCells(bankRoom, chips.length);
+  const shownChips = chips.slice(0, fold.shown);
+  const hiddenChips = chips.slice(fold.shown);
+  hiddenCount.current = hiddenChips.length;
+  barIds.current = new Set(chips.map((c) => c.row.provider));
 
   const alarm = !!needs?.count;
 
@@ -780,23 +1185,67 @@ export function TopBar({
             rather than faded: half the point is the room it frees. */}
         <span ref={metersRef} data-topbar-meters className="flex items-center gap-2.5"
           style={{ display: metersHidden ? "none" : undefined }}>
-        {unread ? (
-          <Item cap="plan" title={u?.note ?? `No plan reading for ${u?.label ?? "this agent"} right now`}>
-            <span className="text-[9.5px]" style={{ color: "var(--warning-ink)" }}>no reading</span>
-          </Item>
-        ) : (
-          <>
-            {/* Every window the provider reports, labelled with whatever it
-                called them — the five-hour and weekly buckets, and for Anthropic
-                the per-model weekly ones too. Not hardcoded to any model name:
-                the plan that has one bucket this week can have another next
-                week, and a bar that only knows last quarter's models quietly
-                stops mentioning your limits. The longest window is the last to
-                go on a narrow screen, being the one that matters at a glance. */}
-            {u && <PlanStrip u={u} age={age} dim={quiet} btn={planBtn} onOpen={openPlan} />}
-          </>
+        {/* One instrument, one cell per provider. The cells share a border and
+            a baseline, so four numbers read as one gauge rather than four
+            chips. Under ~560px of bar the tail folds into "+n", which opens the
+            sheet on the providers it hid — the one width change, at a
+            breakpoint. No provider name is ever on the bar to be cut. */}
+        {/* No chip is no instrument: the box's border and its 26px would be a
+            speck between the project and the finder on a machine that has
+            nothing to report, or with every switch off. */}
+        {(chips.length > 0 || !usageLoaded()) && (
+        <span role="group" aria-label="Plan usage" data-bank
+          onKeyDown={(ev) => {
+            if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(ev.key)) return;
+            const cells = [...(ev.currentTarget.querySelectorAll<HTMLButtonElement>("[data-bank-cell]"))];
+            const i = cells.indexOf(document.activeElement as HTMLButtonElement);
+            if (i < 0 || cells.length < 2) return;
+            ev.preventDefault();
+            const next = ev.key === "Home" ? cells[0]! : ev.key === "End" ? cells[cells.length - 1]!
+              : cells[(i + (ev.key === "ArrowRight" ? 1 : cells.length - 1)) % cells.length]!;
+            next.focus({ preventScroll: true });
+          }}
+          className="flex items-stretch shrink-0"
+          style={{
+            height: 26, borderRadius: 7,
+            border: EDGE,
+            background: "var(--surface-nav)",
+          }}>
+          {!usageLoaded() && chips.length === 0
+            ? Array.from({ length: 4 }, (_, i) => (
+              <span key={i} aria-hidden className="flex flex-col justify-center gap-1 shrink-0"
+                style={{ minWidth: BANK_CELL_PX, height: 24, padding: "2px 6px", boxShadow: i ? "inset 1px 0 0 color-mix(in srgb, var(--text) 8%, transparent)" : undefined }}>
+                <span className="flex items-center justify-center gap-1">
+                  <span className="agx-daybar-pulse rounded" style={{ width: 12, height: 12, background: "color-mix(in srgb, var(--text) 9%, transparent)", animationDelay: `${i * 80}ms` }} />
+                  <span className="agx-daybar-pulse rounded-sm" style={{ width: 22, height: 8, background: "color-mix(in srgb, var(--text) 9%, transparent)", animationDelay: `${i * 80}ms` }} />
+                </span>
+                <span className="agx-daybar-pulse block rounded-sm" style={{ height: 2, background: "color-mix(in srgb, var(--text) 9%, transparent)", animationDelay: `${i * 80}ms` }} />
+              </span>
+            ))
+            : shownChips.map(({ row, age }) => (
+              <PlanChip key={row.provider} u={row} age={age} dim={quiet} active={planAt?.provider === row.provider}
+                first={row.provider === shownChips[0]!.row.provider}
+                anchor={(el) => { if (el) chipEls.current.set(row.provider, el); else chipEls.current.delete(row.provider); }}
+                onOpen={() => openPlan(row.provider, chipEls.current.get(row.provider) ?? null)} />
+            ))}
+          {hiddenChips.length > 0 && (
+            <button type="button" data-bank-cell aria-haspopup="dialog"
+              title={`${hiddenChips.map((c) => c.row.label).join(", ")} — open details`}
+              aria-label={`${hiddenChips.length} more: ${hiddenChips.map((c) => c.row.label).join(", ")} — open details`}
+              onClick={() => openPlan(hiddenChips[0]!.row.provider, plusRef.current)}
+              ref={plusRef}
+              className="text-[9.5px] font-semibold shrink-0"
+              style={{
+                minWidth: 28, height: 24, paddingInline: 6, color: "var(--text3)", ...NO_DRAG,
+                borderLeft: LINE,
+                borderRadius: "0 6px 6px 0",
+              }}>+{hiddenChips.length}</button>
+          )}
+        </span>
         )}
+        {chips.length > 0 && (
         <span className="shrink-0" style={{ width: 1, height: 12, background: "color-mix(in srgb, var(--text) 14%, transparent)" }} />
+        )}
         </span>
         {/* The ⌘K badge that stood here is gone. It was a label for a
             shortcut, not a control anybody pressed — the palette opens on the
@@ -852,10 +1301,10 @@ export function TopBar({
         {/* What you missed. The bar interrupts for one thing at a time in its
             middle; everything else it ever said is still in here. */}
         <NotifyBell noDrag={NO_DRAG} onGoto={onNoteGoto} />
-        {u && planAt && (
-          <PlanPanel u={u} age={age} at={planAt} busy={refreshing}
+        {planShown && planAt && (
+          <PlanPanel u={planShown.row} age={planShown.age} tabs={chips} at={planAt} busy={refreshing}
             onRefresh={refreshUsage} onClose={() => setPlanAt(null)}
-            onEscape={() => { setPlanAt(null); planBtn.current?.focus(); }} />
+            onEscape={(provider) => { setPlanAt(null); anchorFor(provider)?.focus(); }} />
         )}
         {/* An update is worth noticing on the way past, never worth pulling the
             eye off a running fleet. */}

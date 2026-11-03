@@ -99,6 +99,15 @@ describe.skipIf(!HAVE_PY)("arguments, as pure functions", () => {
     });
   });
 
+  test("polaris requests finds an agent's own asks by the stable name, not the audit sentence", () => {
+    const rows = [
+      { kind: "polaris-action", id: "pa_1", asker: 'an agent calling itself "orbit-chair"', askerName: "orbit-chair", state: "approved", type: "sync", number: 7, root: "/work/acme/orbit" },
+      { kind: "polaris-action", id: "pa_2", asker: 'an agent calling itself "orbit-builder"', askerName: "orbit-builder", state: "pending", type: "sync", number: 8, root: "/work/acme/orbit" },
+    ];
+    const listed = py(CLI, "g['http'] = lambda *a, **k: (200, {'requests': D})\nprint(json.dumps(g['polaris']('requests', {'id': 'pa_1'}, 'orbit-chair')))", rows) as { value: { id: string; state: string; type: string; number: number; root: string }[] };
+    expect(listed.value).toEqual([{ id: "pa_1", state: "approved", type: "sync", number: 7, root: "/work/acme/orbit" }]);
+  });
+
   test("--arg splits at the first '=', and refuses a bare word or a repeat", () => {
     const kv = (items: string[]) => py(CLI, "print(json.dumps(g['parse_kv'](D)))", items);
     expect(kv(["page=appearance", "row=a=b"])).toEqual([{ page: "appearance", row: "a=b" }, null]);
@@ -399,8 +408,12 @@ describe.skipIf(!HAVE_PY)("against a running app", () => {
     expect(s.code).toBe(0);
     expect(s.out).toMatchObject({ ok: true, applied: false, pending: { setting: "launch.mode", diff: ["Permission mode agents launch in", 'value: "default" -> "bypassPermissions"'] } });
     expect(((await (await fetch(base + "/launch-permissions")).json()) as { mode: string }).mode).toBe("default");
+    /* `--as` is a label, never proof: a card with no project reads back only to
+       the credential that proves the asker. The person's read still shows it. */
     const q = await cli("settings", "requests");
-    expect(q.out.value.map((r: { who: string }) => r.who)).toEqual(['an agent calling itself "orbit-chair"']);
+    expect(q.out.value).toEqual([]);
+    const atDesk = (await (await fetch(base + "/settings/requests", { headers: { origin: base } })).json()) as { requests: { who: string }[] };
+    expect(atDesk.requests.map((r) => r.who)).toContain('an agent calling itself "orbit-chair"');
     const deny = ((await (await fetch(base + "/launch-permissions")).json()) as { deny: string[] }).deny;
     const n = await cli("settings", "set", "launch.deny", JSON.stringify([...deny, "Bash(curl:*)"]));
     expect(n.out).toMatchObject({ ok: true, applied: true });
@@ -494,6 +507,20 @@ describe.skipIf(!HAVE_PY)("against a running app", () => {
     w.close();
   });
 
+  test("the CLI and the MCP server list the same Polaris verbs, and a vanished request is lost-on-restart", async () => {
+    const help = Bun.spawnSync(["python3", CLI, "polaris", "-h"], { env: env() });
+    const text = new TextDecoder().decode(help.stdout);
+    const mcpSrc = readFileSync(MCP, "utf8");
+    for (const verb of ["items", "act", "requests"]) {
+      expect(text).toContain(verb);
+      expect(mcpSrc).toContain("ui_polaris_");
+    }
+    // The MCP tools come from UI.POLARIS_VERBS, the table the CLI parser reads: no second list to drift.
+    expect(mcpSrc).toContain("UI.POLARIS_VERBS");
+    const r = await cli("--as", "orbit-a", "polaris", "requests", "--id", "pa_gone");
+    expect(r.out.value).toEqual([{ id: "pa_gone", state: "lost-on-restart" }]);
+  });
+
   test("the MCP server lists the registry over stdio and calls a tool through a window", async () => {
     const w = await window_((d) => ({ ok: true, applied: true, value: { echoed: d } }));
     const p = Bun.spawn(["python3", MCP], { env: { ...env(), AGENTGLASS_UI_AS: "orbit-mcp" }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
@@ -510,7 +537,7 @@ describe.skipIf(!HAVE_PY)("against a running app", () => {
     const listed = (await reply(2)).result.tools as { name: string }[];
     // The registry's doors, then the card verbs: those are a route's, not the registry's (see jira-door-routes.test.ts).
     // This server is at the level it starts with, so the verbs that change a Jira site are not on the list.
-    expect(listed.map((t) => t.name)).toEqual([...names2(L2), ...DOOR_VERBS.filter((v) => !isActing(v)).map((v) => `ui_jira_${v}`), "ui_rules_list", "ui_rules_suggest", "ui_rules_set", "ui_flight_plan_list", "ui_flight_plan_show", "ui_flight_plan_run", "ui_flight_plan_go", "ui_flight_plan_no_go", "ui_flight_plan_resolve", ...["new", "list", "show", "set", "mockup", "preflight", "go", "no_go", "launch", "ask", "answer", "integrate_check", "report"].map((v) => `ui_flight_plan_plan_${v}`), "ui_flight_plan_hold", "ui_flight_plan_resume"]);
+    expect(listed.map((t) => t.name)).toEqual([...names2(L2), ...DOOR_VERBS.filter((v) => !isActing(v)).map((v) => `ui_jira_${v}`), "ui_rules_list", "ui_rules_suggest", "ui_rules_set", "ui_polaris_items", "ui_polaris_act", "ui_polaris_requests", "ui_flight_plan_list", "ui_flight_plan_show", "ui_flight_plan_run", "ui_flight_plan_go", "ui_flight_plan_no_go", "ui_flight_plan_resolve", ...["new", "list", "show", "set", "mockup", "preflight", "go", "no_go", "launch", "ask", "answer", "integrate_check", "report"].map((v) => `ui_flight_plan_plan_${v}`), "ui_flight_plan_hold", "ui_flight_plan_resume"]);
     send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "ui_settings_open", arguments: { page: "diff", row: "wrap-long-lines" } } });
     const called = await reply(3);
     expect(called.result.isError).toBeUndefined();

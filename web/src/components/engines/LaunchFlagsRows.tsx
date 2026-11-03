@@ -35,28 +35,36 @@ export function LaunchFlagsRows({ kind, title }: { kind: string; title: string }
     for (const [k, argv] of Object.entries(data.overrides[kind] ?? {})) kept[k] = argv.join(" ");
     save({ ...kept, [m]: text });
   };
+  const set = LAUNCH_MODES.filter((m) => stored(m) !== "");
+  const summary = set.length ? set.map((m) => `${LAUNCH_MODE_LABEL[m]}: ${stored(m)}`).join(" · ") : "No flags: starts in its own default";
   return (
-    <>
-      {LAUNCH_MODES.map((m) => {
-        const bad = parseFlagLine(shown(m));
-        return (
-          <SettingRow key={m}
-            agentNever="the flags an engine starts with in a permission mode: loosening one is an escalation, so an agent asks the settings door and the person answers"
-            label={`${title}: launch flags in ${LAUNCH_MODE_LABEL[m]}`}
-            hint={shown(m) === "" && !data.overrides[kind]?.[m] ? `${title} has no flag for this mode: it starts in its own default.` : undefined}
-            below={
-              <div className="flex flex-col gap-1">
-                <input aria-label={`${title} launch flags in ${LAUNCH_MODE_LABEL[m]}`} value={shown(m)} spellCheck={false}
-                  onChange={(e) => setDraft({ ...draft, [m]: e.target.value })}
-                  onBlur={() => bad.ok && commit(m)} onKeyDown={(e) => { if (e.key === "Enter" && bad.ok) commit(m); }}
-                  className="w-full text-[12px] px-2.5 py-1.5 rounded-lg outline-none font-mono bg-[var(--surface-inset)] text-[var(--text)]" style={INPUT_STYLE} />
-                {!bad.ok && <span className="text-[12px]" role="alert" style={{ color: "var(--error-ink)" }}>{bad.error}</span>}
-              </div>}
-          />
-        );
-      })}
-      <SettingRow agentExempt label="Launch flags" hint={err ?? "Typed over the built-in ones; an empty line starts the engine with no flag."}
-        actions={<Button disabled={!own} onClick={() => save({})}>Reset to default</Button>} />
-    </>
+    <SettingRow agentExempt label="Launch flags"
+      hint={err ?? `${summary}. Typed over the built-in ones; an empty line starts the engine with no flag.`}
+      actions={<Button disabled={!own} onClick={() => save({})}>Reset to default</Button>}
+      detail={{
+        summary: "Edit the flags per permission mode",
+        body: (
+          <div className="agx-steps">
+            {LAUNCH_MODES.map((m) => {
+              const bad = parseFlagLine(shown(m));
+              return (
+                <SettingRow key={m}
+                  agentNever="the flags an engine starts with in a permission mode: loosening one is an escalation, so an agent asks the settings door and the person answers"
+                  label={LAUNCH_MODE_LABEL[m]}
+                  hint={shown(m) === "" && !data.overrides[kind]?.[m] ? `No ${title} flag for this mode.` : undefined}
+                  below={
+                    <div className="flex flex-col gap-1">
+                      <input aria-label={`${title} launch flags in ${LAUNCH_MODE_LABEL[m]}`} value={shown(m)} spellCheck={false} placeholder="none"
+                        onChange={(e) => setDraft({ ...draft, [m]: e.target.value })}
+                        onBlur={() => bad.ok && commit(m)} onKeyDown={(e) => { if (e.key === "Enter" && bad.ok) commit(m); }}
+                        className="w-full text-[12px] px-2.5 py-1.5 rounded-lg outline-none font-mono bg-[var(--surface-inset)] text-[var(--text)]" style={INPUT_STYLE} />
+                      {!bad.ok && <span className="text-[12px]" role="alert" style={{ color: "var(--error-ink)" }}>{bad.error}</span>}
+                    </div>}
+                />
+              );
+            })}
+          </div>
+        ),
+      }} />
   );
 }

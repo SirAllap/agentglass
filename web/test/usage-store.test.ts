@@ -167,10 +167,11 @@ describe("subscribeProviderUsage", () => {
       expect(usageStore.usageLoaded()).toBe(true);
       const usage = usageStore.providerUsage();
       expect(usage).not.toBe(null);
-      expect(usage?.length).toBe(3);
+      expect(usage?.length).toBe(4);
       expect(usage?.[0]?.provider).toBe("anthropic");
       expect(usage?.[1]?.provider).toBe("codex");
-      expect(usage?.[2]?.provider).toBe("antigravity");
+      expect(usage?.[2]?.provider).toBe("opencode");
+      expect(usage?.[3]?.provider).toBe("antigravity");
 
       // Callback should have fired at least once after resolution
       expect(calls.length).toBeGreaterThan(0);

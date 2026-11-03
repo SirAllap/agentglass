@@ -3,7 +3,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { TmuxWindow } from "../../shared/types.ts";
-import { AGENT_COMMAND, appearedWindow, splitKeys } from "../src/lib/newWindow.ts";
+import { agentCommand, appearedWindow, notePickedAgent, pickedAgent, splitKeys } from "../src/lib/newWindow.ts";
 
 const W = (id: string) => ({ id, index: 0, name: id, active: false, flags: "" }) as TmuxWindow;
 
@@ -27,6 +27,13 @@ describe("splitKeys", () => {
   });
 });
 
-test("the agent command is the CLI by name", () => {
-  expect(AGENT_COMMAND).toBe("claude");
+test("the typed command is the agent step 1 picked", () => {
+  notePickedAgent("opencode");
+  expect(pickedAgent()).toBe("opencode");
+  expect(agentCommand()).toBe("opencode");
+  // An id that is not an engine leaves the pick alone rather than typing junk.
+  notePickedAgent("not-an-engine");
+  expect(agentCommand()).toBe("opencode");
+  notePickedAgent("claude");
+  expect(agentCommand()).toBe("claude");
 });

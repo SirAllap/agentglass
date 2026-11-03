@@ -33,91 +33,16 @@ import { flashPlan, type FlashPlan } from "./browserAgentActivity.ts";
  */
 
 /*
- * ────────────────────────────────────────────────────────────────────────────
- * WHO OWNS THE TAB THIS ASK IS ABOUT
- * ────────────────────────────────────────────────────────────────────────────
+ * WHO OWNS THE TAB THIS ASK IS ABOUT — in `shared/browserOwnership.ts`.
  *
- * Reported from the other side first: "another agent was getting into that
- * container and putting its data on that screen... the other agent was going
- * in to take screenshots and could not, because the first one kept
- * overwriting on top of it." A proof-of-life run was being overwritten by an
- * agent that believed it was isolated. It was: isolation here is the TAB an
- * identity holds, and an ask that names no tab is not "unspecified" to the
- * panel — it is "the tab in front", whoever owns it.
- *
- * These are the decisions the panel makes about that, lifted out of the
- * component. Not for tidiness: under `bun test` there is no DOM, effects never
- * run, and the panel's ask handler is unreachable — so a rule that lives
- * inside it is a rule with no lock on it. Out here each one is a function with
- * inputs and an answer, and the suite can break it on purpose.
+ * Moved there because a server test that stands in for the window has to
+ * apply the SAME rule: a stub that answered every verb from any tab is how a
+ * `do` that sent its second step to the person's tab passed its own test.
+ * Re-exported here so every panel import is unchanged.
  */
-
-/** What the panel worked out about one ask before serving it. */
-export interface AskOwnership {
-  /** The tab the panel resolved this ask to. */
-  tab: string;
-  /** That tab's container, under the name `tabs` reports — `default` said out
-   *  loud, never an empty string, because "not set" and "the shared space
-   *  everybody else is also in" are not the same answer. */
-  container: string;
-  /** Who is asking, or empty when the wire carried no identity. */
-  as: string;
-  /** The operator typed `--page`, or named this exact tab with `tab <id>`. */
-  pageExplicit: boolean;
-  /** The verb changes the page, as opposed to only reading it. Stamped beside
-   *  `as` by the server (see `isActing` in server/src/browserdrive.ts) rather
-   *  than kept here as a second copy of that eighteen-verb list. */
-  acts: boolean;
-}
-
-/**
- * Why this ask must not be served, or `null` to serve it.
- *
- * UNVERIFIABLE IS NOT A MISMATCH, and this is the line that keeps every
- * existing client working: the MCP surface and any hand-written caller send no
- * identity at all, and `--shared` deliberately sends none either. An empty
- * `as` means "cannot tell", and cannot-tell is allowed — closing that hole is
- * the CLI's job and the MCP surface's, not this function's.
- *
- * The read/act split is in the PREFIX only, argued rather than assumed. The
- * measured harm from an unowned read here was evidence contamination, not
- * exfiltration: an agent reads 15 KB of somebody else's DOM, gets `ok: true`,
- * and files a conclusion or a proof-of-life screenshot from it — and a picture
- * of the wrong page looks exactly like a picture of the right one, which is
- * what the capture guard further down this file already refuses for. So a read
- * is refused too; it just says so in a way a caller can retry from without a
- * human deciding.
- */
-export function crossContainerRefusal(o: AskOwnership): string | null {
-  if (!o.as) return null;
-  if (o.pageExplicit) return null;
-  if (o.container === o.as) return null;
-  const kind = o.acts ? "cross-container act refused" : "cross-container read refused";
-  return `${kind}: tab ${o.tab} is in container "${o.container}" and you are "${o.as}" — `
-    + "refused rather than acted on, because two agents in one tab is a page that changes "
-    + "under somebody mid-task and neither of you sees it. "
-    + `Open your own with \`open --as ${o.as} <url>\`, or say you meant this one with \`--page ${o.tab}\`.`;
-}
-
-/**
- * Does a tab an ask just minted take the visible pane?
- *
- * It always did — `addTab(...)` then set-active — which is why an agent's
- * routine work moved what the person was looking at, and, before the ownership
- * check above, silently re-aimed every other agent's un-addressed verb at it.
- * "You are giving focus to your container with your tests... you have to work
- * in the background inside your container."
- *
- * Two exceptions and no more. A window with nothing in it has to show the tab
- * it just made, or the person is left looking at an empty pane with no way back
- * to a page that exists. And a caller that asked to be shown gets what it asked
- * for — which is what `--show` now means on a mint, as opposed to the
- * failure-retry it was. A person clicking a link is not an ask at all and never
- * reaches this.
- */
-export function mintTakesThePane(o: { existing: number; show: boolean }): boolean {
-  return o.show || o.existing === 0;
-}
+export {
+  crossContainerRefusal, mintTakesThePane, resolveAskTab, type AskOwnership,
+} from "../../../shared/browserOwnership.ts";
 
 /**
  * The tab and container an answer came from, stamped onto the answer.

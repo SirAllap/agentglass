@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
-import { toPlan, type Plan, type PlanDetail, type Run } from "../../lib/flightPlan.ts";
+import { mergeOpenPlan, toPlan, type Plan, type PlanDetail, type Run } from "../../lib/flightPlan.ts";
 import type { BudgetWire } from "../../lib/flightPilot.ts";
 import { usePoll } from "../../lib/usePoll.ts";
 
@@ -87,9 +87,7 @@ export function useFlightPlan(active: boolean, selected: string | null): FlightD
     const byId = new Map(runs.map((r) => [r.id, r]));
     return plans.map((plan) => {
       const run = plan.preflightRunId ? byId.get(plan.preflightRunId) ?? null : null;
-      /* The open plan is read whole, but what the list adds (the builder tab, when it closed, the slots) comes only from the list. */
-      const { builder, goneAt, stateSince, slotHolders, stopReason, pilot, held, heldBy, heldAt } = plan;
-      return full && full.plan.id === plan.id ? { plan: { ...full.plan, builder, goneAt, stateSince, slotHolders, stopReason, pilot, held, heldBy, heldAt }, run: full.run ?? run } : { plan, run };
+      return full && full.plan.id === plan.id ? { plan: mergeOpenPlan(full.plan, plan), run: full.run ?? run } : { plan, run };
     });
   }, [plans, runs, full]);
 

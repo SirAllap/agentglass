@@ -2,51 +2,50 @@
  * The rail must not push its own way out of the window.
  *
  * Reported from a short window (#466): the Resources button "looks cutoff".
- * The rail is a column of fixed-height buttons with no scroller — it cannot
- * have one, because the tooltips are `::after` pseudo-elements that escape
- * horizontally and any overflow container clips both axes. So the fix is the
- * other direction: every button gives up height, together, before the column
- * overflows, down to a floor the icon fits; the cluster below the hairline
- * (Ports, Resources, Settings, the way back from anywhere) compresses with the
- * rest, because holding its size made the groups above it paint over each other.
+ * A first answer compressed every button down to a 24px floor. That held at
+ * 520px of window and failed below it: at 427x240 the Settings entry was at
+ * y=242 and four 26px icons painted over the button beneath them. The rail
+ * scrolls now — a button keeps its 30px, and the strip moves. The reason it
+ * could not be a scroller has gone: its tooltips are TipHost boxes on the body,
+ * not `::after` pseudo-elements that an overflow container would clip.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { ICON } from "../src/lib/iconSize.ts";
 
 const src = readFileSync(join(new URL(".", import.meta.url).pathname, "..", "src", "components", "workspace", "ViewRail.tsx"), "utf8");
+const css = readFileSync(join(new URL(".", import.meta.url).pathname, "..", "src", "index.css"), "utf8");
 
-describe("the rail in a window shorter than its icons", () => {
-  test("every rail button may compress, and none below a legible floor", () => {
-    const buttons = src.match(/className="agw-tip relative [^"]*"/g) ?? [];
-    expect(buttons.length, "the rail still has its buttons").toBeGreaterThan(3);
+describe("the rail in a window shorter than its buttons", () => {
+  test("every rail button keeps its height, never under the icon it draws", () => {
+    const buttons = src.match(/className="[^"]*agw-tip relative[^"]*"/g) ?? [];
+    expect(buttons.length, "the rail still has its buttons").toBeGreaterThanOrEqual(3);
     for (const cls of buttons) {
-      expect(cls, `a rail button that cannot shrink: ${cls}`).toContain("shrink");
-      expect(cls, `a rail button with no floor: ${cls}`).toContain("min-h-6");
+      expect(cls, `a rail button that may compress: ${cls}`).toContain("shrink-0");
+      const floor = Number(cls.match(/min-h-\[(\d+)px\]/)?.[1] ?? 0);
+      expect(floor, `a rail button with no floor: ${cls}`).toBeGreaterThanOrEqual(ICON.rail + 4);
     }
   });
 
-  test("the group that holds the views may shrink below its content", () => {
-    // Without `min-h-0` a flex child refuses to go under its content height,
-    // and the column grows past the window instead of compressing.
-    // flex-auto, not flex-1: from a zero basis the group never shrinks, so at 520 px it
-    // went to nothing while the groups below kept their size and the buttons overlapped.
-    expect(src).toContain('className="flex-auto min-h-0 flex flex-col gap-1"');
-    expect(src).toContain('className="pt-2 min-h-0 flex flex-col gap-1"');
+  test("the groups keep their buttons, and the views' group still takes the empty run", () => {
+    // flex-[1_0_auto] rather than flex-1: the blank middle below the last icon
+    // is still a drop target, but the group never gives height back.
+    expect(src).toContain('className="flex-[1_0_auto] min-h-0 flex flex-col gap-1"');
+    expect(src).toContain('className="pt-2 min-h-0 shrink-0 flex flex-col gap-1"');
   });
 
-  test("the cluster below the hairline gives way with everything else, to the same floor", () => {
-    // Holding its full size (`shrink-0`) made the groups above it overlap on a short
-    // window: five buttons at 520 px, none once all of them compress together.
-    expect(src).toContain('className="min-h-0 flex flex-col gap-1"');
-    expect(src).not.toContain('className="shrink-0 flex flex-col gap-1"');
+  test("the rail is the scroller, and the cluster below the hairline is reachable through it", () => {
+    expect(src).toContain("overflow-y-auto");
+    expect(src).toContain('className="shrink-0 flex flex-col gap-1"');
   });
 
-  test("the rail itself is still not a scroller, because the tooltips leave it", () => {
-    // `overflow-y: auto` would make overflow-x compute to auto as well, and a
-    // 200px tooltip beside a 52px rail would be clipped to the rail.
-    expect(src).toContain("overflow-visible");
-    expect(src).not.toMatch(/className="[^"]*w-\[52px\][^"]*overflow-(y-)?(auto|scroll)/);
+  test("the rail keeps one width whether or not it can scroll", () => {
+    // The global 7px bar would take a sixth of the 52px strip and move the pill's
+    // edges with the window; the app's own hidden-bar class keeps both still.
+    const nav = src.match(/className="[^"]*overflow-y-auto[^"]*"/)?.[0] ?? "";
+    expect(nav).toContain("agw-noscrollbar");
+    expect(css).toContain(".agw-noscrollbar::-webkit-scrollbar");
   });
 });
 

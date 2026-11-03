@@ -955,7 +955,7 @@ body.scene .sec>.w{position:relative;z-index:1}
    "CI failing" and "ready to merge"; the machine card reads "Connected" when
    the socket is open. There is no tab bar — the destinations are a "Go to"
    list, and the file that removed it says so in its own words: "now that
-   nothing draws a bar". And no held gate: that screen's first paragraph rules
+   nothing draws a bar". And no gate waiting on you: that screen's first paragraph rules
    agents out, because a gate raises its band in the terminal, one of the rows. */
 .phone{--k:.61;position:relative;width:250px;height:528px;border-radius:26px;
  background:linear-gradient(165deg,#23203a,#141221 42%,#1b1830);padding:6px;
@@ -1444,6 +1444,42 @@ body:not([data-route="home"]) .page{padding-top:calc(118px + var(--safe))}
  .appbar{gap:12px;white-space:nowrap}
  .appbar span:nth-child(4),.appbar span:nth-child(5){display:none}
  .kick{font-size:11px;letter-spacing:.14em}}
+/* Version 1.0: the app's own mark drawn in once, small, on this page's dark
+   ground. Same choreography as the app's welcome (web/src/components/
+   Celebration.tsx); it plays when the block scrolls into view. Transform,
+   opacity, clip-path and stroke-dashoffset only, so nothing here moves layout. */
+#v10{text-align:center}
+#v10 h2,#v10 .sub{margin-left:auto;margin-right:auto}
+#v10 .line{display:block;overflow:hidden;padding-bottom:.06em}
+#v10 .line>i{display:block;font-style:normal;will-change:transform}
+#v10 .vis{position:relative}
+#v10 .replay{position:absolute;top:0;right:0;z-index:2;height:34px;padding:0 11px;display:inline-flex;align-items:center;gap:7px;
+ border:1px solid rgba(167,139,250,.18);border-radius:8px;background:rgba(7,6,13,.55);color:var(--dim2);font-size:12.5px;font-family:inherit;cursor:pointer}
+#v10 .replay svg{width:14px;height:14px;display:block}
+#v10 .replay:hover{color:var(--txt);background:rgba(167,139,250,.1);border-color:var(--line2)}
+#v10 .stage{width:min(100%,250px);margin:0 auto;display:grid;place-items:center}
+#v10 .mark{width:100%;height:auto;display:block;overflow:visible}
+#v10 .mark .ground{transform-box:fill-box;transform-origin:center}
+#v10 .mark .arc,#v10 .mark .band{fill:none;stroke-linecap:round;stroke-dasharray:1}
+#v10 .mark .arc.back{stroke:#a78bfa;stroke-opacity:.4;stroke-width:3.2}
+#v10 .mark .arc.front{stroke:#a78bfa;stroke-width:3.2}
+#v10 .mark .band{stroke:#fff;stroke-opacity:.2;stroke-width:1.1}
+#v10 .mark .terminator{fill:#1b0b38;fill-opacity:.42}
+#v10 .mark .sweep{opacity:0}
+#v10 .mark .halo{fill:#34d399;fill-opacity:.18;transform-box:fill-box;transform-origin:center}
+#v10 .mark .contact{fill:#34d399;transform-box:fill-box;transform-origin:center}
+#v10 .mark .world{transform-box:view-box;transform-origin:30px 34px}
+#v10 .vline{display:flex;align-items:center;gap:14px;max-width:720px;margin:18px auto 0}
+#v10 .vline .track{position:relative;flex:1;height:1px;background:var(--line2)}
+#v10 .vline .track i{position:absolute;top:-3px;width:7px;height:7px;border-radius:50%}
+#v10 .vline .track .a{left:0;background:var(--vio)}
+#v10 .vline .track .b{right:0;background:var(--run);box-shadow:0 0 0 4px rgba(52,211,153,.12)}
+#v10 .vline .lab{font:10.5px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--dim2);white-space:nowrap}
+#v10 .vline .lab.end{color:var(--txt);font-size:15px;letter-spacing:-.01em;text-transform:none}
+#v10 .vmid{margin-top:16px;font:10.5px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--dim2)}
+#v10 .vmid b{color:var(--vio);font-weight:500}
+@media (max-width:560px){#v10 .vline .lab:not(.end){display:none}#v10 .replay{top:-6px}}
+@media (prefers-reduced-motion:reduce){#v10 .replay,#v10 .mark .spec,#v10 .mark .sheen{display:none}}
 </style>
 <!-- The deploy writes a cookieless page counter between these when one is
      configured as a repository variable, and nothing at all when it is not,
@@ -1550,7 +1586,7 @@ body:not([data-route="home"]) .page{padding-top:calc(118px + var(--safe))}
 <section class="sec" id="fono"><div class="w">
  <div class="eb">Away from the desk</div>
  <h2>The work waiting on you, in your pocket.</h2>
- <p class="sub">Pull requests, issues and cards &#8212; the three places work arrives from &#8212; counted and then listed. Terminal is one of the rows, and it is the machine at home: a held gate raises its band there, so you can clear it from the sofa. It pairs over your own wifi by a scanned code: no account, and nobody&#8217;s server in between.</p>
+ <p class="sub">Pull requests, issues and cards &#8212; the three places work arrives from &#8212; counted and then listed. Terminal is one of the rows, and it is the machine at home: a gate waiting on you raises its band there, so you can clear it from the sofa. It pairs over your own wifi by a scanned code: no account, and nobody&#8217;s server in between.</p>
  <div class="fonos">
   <div class="fonebox">
    <div class="phone"><span class="btn vu"></span><span class="btn pw"></span>
@@ -1667,6 +1703,92 @@ body:not([data-route="home"]) .page{padding-top:calc(118px + var(--safe))}
   </div>
  </div>
 </div></section>
+
+<!-- Version 1.0, from the approved mockup (variant B: small, centred, this
+     page's dark ground). The mark is the one in web/src/components/Logo.tsx
+     with the app icon's fixed paints, split into parts so the script below can
+     draw it in; the script plays once, when the block is on screen. With
+     reduced motion, or without script, every element rests on its final frame. -->
+<section class="sec" id="v10"><div class="w">
+ <div class="eb">Version 1.0</div>
+ <h2><span class="line"><i>Built to fix a problem of mine.</i></span><span class="line"><i>Shared in case it fixes yours too.</i></span></h2>
+ <p class="sub">Since the first public build on 18 July: 5,285 commits, and one window that stayed on your machine.</p>
+ <div class="vis">
+  <button class="replay" type="button" title="Play the moment again"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.5-3.6"/><path d="M13 2.6V5h-2.4"/></svg>Replay</button>
+  <div class="stage"><svg class="mark" viewBox="0 0 64 64" role="img" aria-label="agentglass: a shaded world, its orbit and one live contact">
+   <defs>
+    <radialGradient id="v10-sheen" cx=".34" cy=".28" r=".82"><stop offset="0" stop-color="#fff" stop-opacity=".72"/><stop offset=".5" stop-color="#fff" stop-opacity=".15"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+    <radialGradient id="v10-ground" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#a78bfa" stop-opacity=".3"/><stop offset=".55" stop-color="#a78bfa" stop-opacity=".12"/><stop offset="1" stop-color="#a78bfa" stop-opacity="0"/></radialGradient>
+    <linearGradient id="v10-sweep" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".5" stop-color="#fff" stop-opacity=".55"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+    <clipPath id="v10-disc"><circle cx="30" cy="34" r="12.5"/></clipPath>
+   </defs>
+   <g class="ground-g"><ellipse class="ground" cx="30" cy="56.6" rx="18.5" ry="4.1" fill="url(#v10-ground)"/></g>
+   <path class="arc back" pathLength="1" d="M14.1 54.9 A29 8 -52 0 1 49.9 9.1"/>
+   <g class="float">
+    <g class="world">
+     <circle cx="30" cy="34" r="12.5" fill="#a78bfa"/>
+     <circle cx="30" cy="34" r="12.5" fill="url(#v10-sheen)"/>
+     <ellipse class="band eq" pathLength="1" cx="30" cy="34" rx="12.5" ry="4.5"/>
+     <ellipse class="band mer" pathLength="1" cx="30" cy="34" rx="6" ry="12.1"/>
+     <path class="terminator" d="M30 21.5 A12.5 12.5 0 0 1 30 46.5 A17.0 17.0 0 0 0 30 21.5 Z"/>
+    </g>
+    <g clip-path="url(#v10-disc)"><g transform="rotate(-18 30 34)">
+     <rect class="sweep spec" x="-26" y="8" width="19" height="52" fill="url(#v10-sweep)"/>
+     <rect class="sweep sheen" x="-30" y="8" width="26" height="52" fill="url(#v10-sweep)"/>
+    </g></g>
+    <path class="arc front" pathLength="1" d="M49.9 9.1 A29 8 -52 0 1 14.1 54.9"/>
+    <circle class="halo" cx="50.8" cy="10.7" r="6.8"/>
+    <circle class="contact" cx="50.8" cy="10.7" r="3.6"/>
+   </g>
+  </svg></div>
+ </div>
+ <div class="vline" aria-hidden="true"><span class="lab">18 July 2026</span><span class="track"><i class="a"></i><i class="b"></i></span><span class="lab end">1.0</span></div>
+ <p class="vmid"><b>5,285 commits</b> · Starboard, Flight plan and Polaris</p>
+</div></section>
+<script>
+(function(){
+ var root=document.getElementById("v10");
+ if(!root||!root.animate)return;
+ var reduce=matchMedia("(prefers-reduced-motion: reduce)").matches;
+ if(reduce)return;
+ var EXPO="cubic-bezier(.16,1,.3,1)",DRAW="cubic-bezier(.22,.8,.24,1)",SPRING="cubic-bezier(.2,1.25,.35,1)",SWEEP="cubic-bezier(.4,0,.2,1)";
+ var anims=[];
+ function all(s){return Array.prototype.slice.call(root.querySelectorAll(s))}
+ function add(s,f,o){all(s).forEach(function(el){o.fill="both";anims.push(el.animate(f,o))})}
+ function build(){
+  anims.forEach(function(a){a.cancel()});anims=[];
+  add(".ground",[{opacity:0,transform:"scaleX(.02)"},{opacity:1,transform:"scaleX(1)"}],{duration:900,easing:EXPO});
+  add(".arc.back",[{strokeDashoffset:"1"},{strokeDashoffset:"0"}],{duration:800,delay:300,easing:DRAW});
+  add(".world",[{opacity:0,transform:"scale(.92)"},{opacity:1,transform:"scale(1)"}],{duration:600,delay:550,easing:EXPO});
+  add(".terminator",[{opacity:0},{opacity:.42}],{duration:600,delay:700,easing:"ease-out"});
+  add(".band.eq",[{strokeDashoffset:"1"},{strokeDashoffset:"0"}],{duration:650,delay:850,easing:DRAW});
+  add(".band.mer",[{strokeDashoffset:"1"},{strokeDashoffset:"0"}],{duration:750,delay:1050,easing:DRAW});
+  add(".arc.front",[{strokeDashoffset:"1"},{strokeDashoffset:"0"}],{duration:650,delay:1150,easing:DRAW});
+  add(".halo",[{opacity:0,transform:"scale(.55)"},{opacity:1,transform:"scale(1)"}],{duration:400,delay:1500,easing:SPRING});
+  add(".contact",[{opacity:0,transform:"scale(.4)"},{opacity:1,transform:"scale(1)"}],{duration:400,delay:1550,easing:SPRING});
+  [[".arc.back",300],[".band.eq",850],[".band.mer",1050],[".arc.front",1150]].forEach(function(p){
+   add(p[0],[{opacity:0},{opacity:1}],{duration:1,delay:p[1],easing:"linear"})});
+  add(".spec",[{transform:"translateX(-26px)",opacity:0},{transform:"translateX(10px)",opacity:.55,offset:.5},{transform:"translateX(72px)",opacity:0}],{duration:800,delay:1600,easing:SWEEP});
+  add(".float",[{transform:"translateY(0)"},{transform:"translateY(-6px)"}],{duration:3200,delay:2000,iterations:Infinity,direction:"alternate",easing:"ease-in-out"});
+  add(".ground-g",[{transform:"scale(1)",opacity:1},{transform:"scale(.94)",opacity:.55}],{duration:3200,delay:2000,iterations:Infinity,direction:"alternate",easing:"ease-in-out"});
+  all("h2 .line").forEach(function(line,i){
+   var o={fill:"both",duration:600,delay:2350+i*70,easing:EXPO};
+   anims.push(line.animate([{clipPath:"inset(100% 0 0 0)"},{clipPath:"inset(-14% 0 0 0)"}],o));
+   anims.push(line.firstChild.animate([{transform:"translateY(110%)",opacity:0},{transform:"translateY(0)",opacity:1}],{fill:"both",duration:600,delay:2350+i*70,easing:EXPO}))});
+  add(".eb",[{opacity:0},{opacity:1}],{duration:400,delay:2100,easing:"ease-out"});
+  add(".sub",[{opacity:0,transform:"translateY(8px)"},{opacity:1,transform:"translateY(0)"}],{duration:500,delay:2500,easing:EXPO});
+  add(".vline",[{opacity:0},{opacity:1}],{duration:500,delay:3000,easing:"ease-out"});
+  add(".vmid",[{opacity:0},{opacity:1}],{duration:500,delay:3100,easing:"ease-out"});
+  add(".sheen",[{transform:"translateX(-26px)",opacity:0,offset:0},{transform:"translateX(-26px)",opacity:0,offset:.01},{transform:"translateX(16px)",opacity:.42,offset:.09},{transform:"translateX(72px)",opacity:0,offset:.18},{transform:"translateX(72px)",opacity:0,offset:1}],{duration:8000,delay:4500,iterations:Infinity,easing:"linear"});
+ }
+ build();
+ anims.forEach(function(a){a.pause();a.currentTime=0});
+ function play(){anims.forEach(function(a){a.currentTime=0;a.play()})}
+ var io=new IntersectionObserver(function(e){if(e[0].isIntersecting){io.disconnect();play()}},{threshold:.35});
+ io.observe(root);
+ root.querySelector(".replay").addEventListener("click",function(){io.disconnect();play()});
+})();
+</script>
 
 
 <!-- The three other pages, on the page people actually land on.
@@ -1871,7 +1993,7 @@ body:not([data-route="home"]) .page{padding-top:calc(118px + var(--safe))}
    <p><code>xattr -dr com.apple.quarantine /Applications/agentglass.app</code></p>
    <p>Signing and notarization are the first item on the roadmap.</p></div></details>
 
-  <details><summary>Can a plugin approve a held gate for me?</summary>
+  <details><summary>Can a plugin approve a gate waiting on me?</summary>
    <div class="an"><p>No, and it is turned away by name rather than by scope. A
    plugin's token is minted by this server and sits in the environment of a child
    process of it, readable by anything else running as the same user — which is

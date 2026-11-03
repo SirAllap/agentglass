@@ -13,7 +13,7 @@ import { deskGated } from "../src/lib/deskGate.ts";
 const server = (await Bun.file(new URL("../../server/src/index.ts", import.meta.url)).text()).split("\n");
 const api = await Bun.file(new URL("../src/lib/api.ts", import.meta.url)).text();
 
-const GUARD = /\b(mayPublishReview|mayChangePolicy|mayHostBrowser|deskKeyOk)\(req\b/;
+const GUARD = /\b(mayPublishReview|mayChangePolicy|mayHostBrowser|mayAnswerSettingsRequest|deskKeyOk)\(req\b/;
 const isComment = (l: string) => /^\s*(\*|\/\/|\/\*)/.test(l);
 
 /** The route a guard sits in: the nearest route test above it that opens a block (a one-line `return` route is a sibling, not the parent). */
@@ -64,6 +64,22 @@ describe("every route the server asks the desk key on gets it from the window", 
     expect(guarded.has("/flight-plan/plans/x")).toBe(true);
     expect(guarded.has("/agent-rules/x/answer")).toBe(true);
     expect(guarded.has("/agent-rules")).toBe(true);
+  });
+
+  /* GET does not consult deskGate.ts the way post/put do, so the window's own list has to send the key by hand. */
+  test("the settings requests read sends the desk key", () => {
+    expect(api).toMatch(/settingsRequests: \(\) => get<[^>]*>\("\/settings\/requests", undefined, deskHeader\(\)\)/);
+  });
+
+  /* The manifest view turned its own buttons off in the app: the read that says
+     who may sign carried no key, and a server the app started asks for nothing else. */
+  test("the manifest read and the verdict carry the desk key", () => {
+    const at = api.indexOf("async function manifestGet");
+    expect(at).toBeGreaterThan(-1);
+    const body = api.slice(at, api.indexOf("\n}\n", at));
+    expect(body).toContain("deskGated(path) ? deskHeader() : {}");
+    expect(deskGated("/manifest")).toBe(true);
+    expect(deskGated("/manifest/signoff")).toBe(true);
   });
 
   test("each guarded route is on deskGate.ts, or keyed by hand as written above", () => {

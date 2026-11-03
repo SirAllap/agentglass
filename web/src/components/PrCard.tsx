@@ -24,6 +24,7 @@ import type { CardFace } from "../lib/cardReviewers.ts";
 import { tipAttr, type TipSpec } from "../lib/tip.ts";
 import { cellTip, faceTip, idTip, labelsTip, noCardTip, noTrackerTip, notesTip, readOnlyTip, ringTip, ticketTip } from "../lib/prCardTips.ts";
 import { chipAria, chipText, stackCounts, type RowTone, type StackRow } from "../lib/prStackChip.ts";
+import { syncCardView, type SyncCardStep, type SyncMark } from "../lib/prSyncCards.ts";
 import { splitTitle } from "../lib/prCardZones.ts";
 import { readingAge } from "../lib/prCardBlock.ts";
 import { externalUrl } from "../lib/externalUrl.ts";
@@ -85,12 +86,14 @@ export interface PrCardProps {
   notesChip: NotesChipView | null;
   /** The event line's tooltip: the sentence, the test that failed, the days of quiet. */
   eventTip: TipSpec;
-  /** Unread remarks on this one, as the sentence the dot carries. */
-  unread: string | null;
   pinned: boolean;
   working: boolean;
   /** Another card's action is running. */
   locked: boolean;
+  /** Where this card stands in a lane's Sync: queued, syncing, done, failed. Absent is its own state. */
+  sync?: SyncCardStep;
+  /** The failed step's Update pressed here: the popover that ran the press re-sends it. */
+  onSyncRetry?: () => void;
   dim?: boolean;
   selected?: boolean;
   lit?: boolean;
@@ -175,6 +178,18 @@ export function PrCard(props: PrCardProps) {
   // A long status plus the copy buttons do not fit the row: then the buttons wait under the pointer instead of sitting on the status.
   const rowRef = useRef<HTMLDivElement>(null);
   const [crowded, setCrowded] = useState(false);
+  // The verdict ellipsizes at the card's width; that is the only place the whole sentence can still be read.
+  const stripRef = useRef<HTMLDivElement>(null);
+  const [cut, setCut] = useState(false);
+  useEffect(() => {
+    const v = stripRef.current?.querySelector<HTMLElement>(".agx-cd-v");
+    if (!v) { setCut(false); return; }
+    const fit = () => setCut(v.scrollWidth > v.clientWidth + 1);
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(v);
+    return () => ro.disconnect();
+  });
   useEffect(() => {
     const row = rowRef.current;
     if (!row) return;
@@ -206,6 +221,8 @@ export function PrCard(props: PrCardProps) {
 
   const stop = (fn: () => void) => (e: React.MouseEvent) => { e.stopPropagation(); fn(); };
   const reading = cv.ring.kind === "reading";
+  /** Where a lane's Sync has this card: null means the card speaks for itself. */
+  const sv = props.sync ? syncCardView(props.sync, p) : null;
   const menuAt = (el: HTMLElement | null, dx: number, dy: number) => {
     const r = el?.getBoundingClientRect();
     if (r) props.onMenu({ x: r.left + dx, y: r.top + dy });
@@ -216,9 +233,13 @@ export function PrCard(props: PrCardProps) {
 
   /* ---- strip ---- */
   const strip = (
-    <div className="agx-cd-h" data-tip={props.stripNote ? tip({ name: cv.strip.text, text: props.stripNote }) : undefined}>
+    <div ref={stripRef} className="agx-cd-h" data-tip={props.stripNote ? tip({ name: cv.strip.text, text: props.stripNote }) : cut ? tip(cv.strip.text) : undefined}>
       <span aria-hidden className="flex shrink-0">{STRIP_ICON[cv.strip.icon](ICON.sm)}</span>
       {reading ? <span aria-hidden className="agx-cd-sk" /> : <span className="agx-cd-v">{cv.strip.text}</span>}
+      {/* After the sentence, not before it: the verdict starts at the same edge on every card, and the count reads as its tail. */}
+      {cv.unread && (
+        <span className="agx-cd-tag" data-ink="strip" style={{ "--c": "var(--accent, var(--primary))" } as CSSProperties} data-tip={tip(cv.unread.title)}>{cv.unread.text}</span>
+      )}
       {cv.strip.threads && (
         <span className="agx-cd-tag" style={{ "--c": "var(--warning)" } as CSSProperties} data-tip={tip({ name: "Open threads", text: cv.strip.threads.title })}>
           <CommentIcon size={ICON.xs} />{cv.strip.threads.text}
@@ -381,7 +402,7 @@ export function PrCard(props: PrCardProps) {
   const cells = (
     <div className="agx-cd-cells">
       {reviewCell}
-      {cell(b.label, b.tone, reading ? skeleton : <span className="agx-cd-vl">{b.word}</span>, cellTip(b.label, b.title))}
+      {cell(b.label, sv?.branch?.tone ?? b.tone, reading ? skeleton : <span className="agx-cd-vl">{sv?.branch?.word ?? b.word}</span>, sv?.branch ? cellTip(b.label, sv.branch.title) : cellTip(b.label, b.title))}
       {cell(third.label, third.tone, thirdBody, cellTip(third.label, third.title))}
     </div>
   );
@@ -421,6 +442,18 @@ export function PrCard(props: PrCardProps) {
         </Button>
         {sec.upToDate ? (
           <span className="agx-cd-utd" data-tip={tip({ name: "Up to date", text: sec.title })}><DoneIcon size={ICON.xs} />{sec.label}</span>
+        ) : sv ? (
+          /* A lane's Sync owns this slot while it runs: the same place, the same
+             shape, and the one press that can still send this branch. Its Retry
+             goes back through the popover that ran the press, so the list's own
+             results learn the branch moved and stop offering it again. */
+          <Button size="hit" tone={SV_TONE[sv.action.mark]} label={sv.action.label}
+            data-tip={tip({ name: sv.action.label, text: sv.action.title })}
+            disabled={sv.action.disabled || locked || working} pending={sv.action.pending}
+            onClick={sv.action.retry ? stop(() => props.onSyncRetry?.()) : undefined}>
+            {!sv.action.pending && SV_ICON[sv.action.mark](ICON.sm)}
+            {sv.action.label}
+          </Button>
         ) : sec.id ? (
           <Button size="hit" tone="plain" data-tip={tip({ name: sec.label, text: sec.title })} disabled={locked || working} onClick={act(sec.id)}>{sec.label}</Button>
         ) : null}
@@ -480,7 +513,7 @@ export function PrCard(props: PrCardProps) {
       aria-label={cv.aria} aria-haspopup="menu"
       data-tone={cv.tone} data-kind={cv.kind}
       data-dim={props.dim ? "1" : undefined} data-lit={props.lit ? "1" : undefined} data-selected={props.selected ? "1" : undefined}
-      data-busy={working ? "1" : undefined} data-chain={props.chain}
+      data-busy={working ? "1" : undefined} data-sync={sv?.running ? "running" : undefined} data-chain={props.chain}
       onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); props.onMenu({ x: e.clientX, y: e.clientY }); }}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
@@ -489,7 +522,6 @@ export function PrCard(props: PrCardProps) {
         else if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) { e.preventDefault(); menuAt(e.currentTarget, 24, 24); }
       }}
       className="agx-cd">
-      {props.unread && <span className="agx-cd-unread" role="img" aria-label={props.unread} data-tip={tip(props.unread)} />}
       {strip}
       {popover}
       <div className="agx-cd-body">
@@ -504,7 +536,7 @@ export function PrCard(props: PrCardProps) {
       {evl}
       {cv.leftover && (
         <div className="agx-cd-lf" data-tone={cv.leftover.tone} data-leftover-line="" data-tip={tip(cv.leftover.title)}>
-          {cv.leftover.tone === "run" ? <i className="agx-cd-lf-bar" aria-hidden /> : <FolderIcon size={ICON.sm} />}<span>{cv.leftover.text}</span>
+          {cv.leftover.tone === "run" ? <i className="agx-cd-lf-bar" aria-hidden /> : cv.leftover.tone === "blocked" ? <WarningIcon size={ICON.sm} /> : <FolderIcon size={ICON.sm} />}<span>{cv.leftover.text}</span>
         </div>
       )}
       {footer}
@@ -520,3 +552,10 @@ export function PrCard(props: PrCardProps) {
 }
 
 const NOTES_INK = { error: "var(--error)", warning: "var(--warning)", ok: "var(--success)", dim: "var(--text3)" } as const;
+
+/** The mark a lane Sync's step puts beside its words: a clock while waiting, then the answer. */
+const SV_ICON: Record<SyncMark, (s: number) => ReactNode> = {
+  waiting: (s) => <ClockIcon size={s} />,
+  done: (s) => <DoneIcon size={s} />, failed: (s) => <WarningIcon size={s} />,
+};
+const SV_TONE: Record<SyncMark, "plain" | "ok" | "warn"> = { waiting: "plain", done: "ok", failed: "warn" };

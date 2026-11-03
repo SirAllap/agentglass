@@ -164,12 +164,12 @@ describe("the page is only there with ClickUp", () => {
     expect(src).not.toContain("Names on your boards");
     expect(src).toContain('onClick={() => openSettings("clickup")}');
   });
-  test("the card skills pattern moved to Agents and shows only with ClickUp", async () => {
+  test("the card skills pattern is a generic block on Agents, with the tracker's default on its page", async () => {
     const src = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url).pathname).text();
-    expect(src).toContain("<CardSkillsRow connected />");
-    expect(src).toContain("skills={cu ? (");
+    expect(src).toContain("skills={<CardSkillsCard connected={cu} />}");
     const pane = await Bun.file(new URL("../src/components/ClickUpPane.tsx", import.meta.url).pathname).text();
-    expect(pane).toContain("if (!connected || !prefs) return null;");
+    expect(pane).toContain('label="Card skills default"');
+    expect(pane).toContain("cardSkills(r.skills ?? [], src).length");
     expect(pane.slice(pane.indexOf("export function ClickUpPane"))).not.toContain("cardSkillPattern");
   });
   test("disconnecting drops the copies the sidebar holds, or it draws a card for a minute after", async () => {
@@ -277,3 +277,4 @@ describe("the ClickUp page's chips", () => {
     expect(src).toContain('<StatusBadge tone={changesOn ? "ok" : "off"}>{changesOn ? "On" : "Read-only"}</StatusBadge>');
   });
 });
+

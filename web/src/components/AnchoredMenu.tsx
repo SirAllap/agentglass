@@ -16,13 +16,13 @@
  *     the React tree to the card that opened it;
  *   - arrows, Home, End, Escape, and focus handed back to the trigger.
  */
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Portal } from "./Portal.tsx";
 import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { LAYER } from "../lib/layers.ts";
 import { menuEventGuards } from "../lib/menuEvents.ts";
 import { isMenuKey, menuIndex } from "../lib/menuNav.ts";
-import { placeMenu, type Placement } from "../lib/menuPlacement.ts";
+import { naturalHeight, placeMenu, type Placement } from "../lib/menuPlacement.ts";
 import { EDGE } from "./workspace/Chrome.tsx";
 
 const ITEMS = '[role="menuitem"]:not(:disabled)';
@@ -55,13 +55,16 @@ export function AnchoredMenu({ anchor, align = "right", minWidth = 216, placeKey
   // there.) A child's effect runs before its parent's, so by the time this one
   // runs the container is in the document. Hidden until then, so the first paint
   // is never a guess.
-  useEffect(() => {
+  const place = useCallback(() => {
     const a = anchor.current?.getBoundingClientRect();
     const el = ref.current;
     if (!a || !el) return;
-    // Natural size: nothing caps the list until this has answered.
-    setPos(placeMenu(a, { width: el.offsetWidth, height: el.offsetHeight }, { width: window.innerWidth, height: window.innerHeight }, align));
-  }, [anchor, align, placeKey]);
+    // The inline ceiling is the last placement's, not this list's size: measured
+    // with it, a list that grew reads short and the side is chosen on that number.
+    setPos(placeMenu(a, { width: el.offsetWidth, height: naturalHeight(el) }, { width: window.innerWidth, height: window.innerHeight }, align));
+  }, [anchor, align]);
+
+  useEffect(() => { place(); }, [place, placeKey]);
 
   // Visible now, so it can take focus; a hidden element cannot.
   useEffect(() => {
@@ -87,13 +90,19 @@ export function AnchoredMenu({ anchor, align = "right", minWidth = 216, placeKey
     };
     window.addEventListener("keydown", key, true);
     window.addEventListener("blur", close);
-    window.addEventListener("resize", close);
     return () => {
       window.removeEventListener("keydown", key, true);
       window.removeEventListener("blur", close);
-      window.removeEventListener("resize", close);
     };
   }, [onClose, anchor, keepTab]);
+
+  // A window that changes size moves the trigger too, and "zoom" is the same
+  // event. Closing on a resize loses the list the person was reading; placing
+  // it again is the same arithmetic that opened it.
+  useEffect(() => {
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [place]);
 
   return (
     <Portal z={LAYER.menu}>

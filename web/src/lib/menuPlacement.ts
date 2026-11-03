@@ -50,3 +50,35 @@ export function placeMenu(
   const left = Math.max(MENU_MARGIN, Math.min(wanted, viewport.width - size.width - MENU_MARGIN));
   return { left, top, maxHeight: room, side };
 }
+
+/**
+ * The height a list takes when no earlier placement's ceiling is on it: the
+ * content's own height plus the border (the menu hides its scrollbar).
+ */
+export function naturalHeight(el: Pick<HTMLElement, "scrollHeight" | "offsetHeight" | "clientHeight">): number {
+  return el.scrollHeight + (el.offsetHeight - el.clientHeight);
+}
+
+/**
+ * A menu's box kept inside the window, for the second time.
+ *
+ * `placeMenu` answers where a list goes when it opens. A window that changes
+ * size afterwards (a resize, and zoom is the same event) leaves that answer
+ * stale: measured, a menu opened at 1440x900 and then shrunk to 640x360 had
+ * its last 79px below the window, and at 427x240 190px. Clamping again with
+ * the menu's own measured size is the whole fix, and it is the same arithmetic
+ * at both moments so the two cannot disagree.
+ */
+export function clampToWindow(
+  at: { left: number; top: number },
+  size: { width: number; height: number },
+  viewport: { width: number; height: number },
+  margin = MENU_MARGIN,
+): { left: number; top: number } {
+  return {
+    left: Math.max(margin, Math.min(at.left, viewport.width - size.width - margin)),
+    // A menu taller than the window cannot be clamped into it; 8 and not a
+    // negative top, so its first row stays under the edge rather than above it.
+    top: Math.max(margin, Math.min(at.top, viewport.height - size.height - margin)),
+  };
+}

@@ -72,6 +72,8 @@ the cost, what stays in YOUR context for the rest of the session is (measured
 Env:
     AGENTGLASS_SERVER            base url (default http://localhost:4000)
     AGENTGLASS_TOKEN             only needed if the server was started with one
+    AGENTGLASS_BROWSER_OFF       set by the app on a window it handed no credential:
+                                 every verb is refused rather than falling back to yours
     AGENTGLASS_BROWSER_STATE_DIR where --since-last remembers its cursor
                                  (default ~/.cache/agentglass-browser)
 """
@@ -228,6 +230,12 @@ def _said_redacted(res):
 TOKEN_PATH = os.path.join(
     os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "agentglass", "token")
 
+# Set by the app on a window it handed no credential. The refusal is the whole
+# contract: without it the CLI reads the person's token file and drives as them.
+BROWSER_OFF = (os.environ.get("AGENTGLASS_BROWSER_OFF") or "").strip().lower() not in ("", "0", "false")
+OFF_REFUSAL = ("browser access is off for this worker: the app handed it no credential, "
+               "and this command does not fall back to the person's")
+
 
 def _token_on_disk():
     """The token the app wrote, read only after the one in the environment was
@@ -322,6 +330,10 @@ def call(op, body):
             return json.loads(r.read() or b"{}")
 
     sent = os.environ.get("AGENTGLASS_TOKEN")
+    # A worker's shell is handed a credential this server minted for it, and it
+    # must never upgrade itself to the person's: the token file is the machine
+    # token. Known from the minted prefix and from the role the app set.
+    worker = bool(re.match(r"wk_", sent or "")) or bool(os.environ.get("AGENTGLASS_ROLE"))
     tried_disk = False
     try:
         return _said_redacted(send(sent))
@@ -329,8 +341,8 @@ def call(op, body):
         # Only 401, and never from a minted scoped token (a seat's `st_`, a
         # clone's `us_`, a plugin's `pg_`) or in a seat's pane: a 403 is an act
         # refused, and the machine token in the file would turn it into a yes.
-        # The same rule as urlopen_fresh in agentglass-ui.
-        if e.code == 401 and not os.environ.get("AGENTGLASS_SEAT") and not re.match(r"[a-z]{2}_", sent or ""):
+        # The same rule as urlopen_fresh in agentglass-ui. A worker never does.
+        if e.code == 401 and not worker and not os.environ.get("AGENTGLASS_SEAT") and not re.match(r"[a-z]{2}_", sent or ""):
             fresh = _token_on_disk()
             tried_disk = bool(fresh)
             if fresh and fresh != sent:
@@ -348,11 +360,18 @@ def call(op, body):
             # An answer somebody can act on. Bare "unauthorized" is what sends
             # a reader to /proc to fish the value out of another process.
             said = dict(said)
-            said["error"] = (
-                f"{said.get('error') or 'unauthorized'} — the token this pane was given is not one the server "
-                f"accepts, and {TOKEN_PATH} "
-                + ("holds one it does not accept either. " if tried_disk else "could not be read. ")
-                + "Open a new pane from agentglass, which hands it the current one.")
+            if worker:
+                said["error"] = (
+                    f"{said.get('error') or 'unauthorized'} — this worker's own credential is not "
+                    f"one the server accepts, and it does not fall back to {TOKEN_PATH}: that file "
+                    f"holds the person's machine token. The worker's credential is minted for its "
+                    f"turn and revoked when the turn ends; start a new worker, or ask the person.")
+            else:
+                said["error"] = (
+                    f"{said.get('error') or 'unauthorized'} — the token this pane was given is not one the server "
+                    f"accepts, and {TOKEN_PATH} "
+                    + ("holds one it does not accept either. " if tried_disk else "could not be read. ")
+                    + "Open a new pane from agentglass, which hands it the current one.")
         return said
     except urllib.error.URLError as e:
         return {"ok": False, "error": f"no agentglass at {SERVER} ({e.reason})"}
@@ -418,7 +437,17 @@ def my_name(explicit=None):
     that fans out hands each child an explicit `--as`.
     """
     if explicit:
+        # The worker's own name is the one its credential was minted for, up to
+        # 64 characters; cutting it made every call a 403. Folded because the
+        # guard in main lets the same worker through under any case.
+        own = worker_identity()
+        if own and explicit.strip().casefold() == own.casefold():
+            return explicit.strip()
         return _capped(explicit, "the name you passed")
+    if (os.environ.get("AGENTGLASS_ROLE") or "").strip() in WORKER_ROLE_IDS:
+        own = worker_identity()
+        if own:
+            return own
     env = os.environ.get("AGENTGLASS_PROFILE")
     if env:
         return _capped(env, "from AGENTGLASS_PROFILE")
@@ -459,6 +488,48 @@ def my_name(explicit=None):
 # accident. A caller who types `--as "(default)"` gets the person's container,
 # which is what those characters now mean.
 SHARED_KEY = "(default)"
+
+# A WORKER DOES NOT NAME THE PERSON'S CONTAINER, IN ANY SPELLING.
+#
+# `stamped` drops `as` when the identity is SHARED_KEY, so `--as "(default)"`
+# is `--shared` on the wire. A lock made of flag prefixes cannot see a value
+# the CLI maps onto the same identity, and `--profile`, AGENTGLASS_PROFILE and
+# a padded or differently-cased spelling are that name too. So the refusal is
+# on the resolved identity, the one place every spelling arrives.
+#
+# The role ids are the four in shared/workerRoles.ts; this CLI is standalone
+# and cannot import them.
+WORKER_ROLE_IDS = frozenset({"scout", "builder", "reviewer", "verifier"})
+
+
+def is_shared_identity(who):
+    """Whether `who` is the person's own container, however it was spelled.
+
+    Exact SHARED_KEY is the one the CLI would send as `--shared`; spacing and
+    case are refused with it because the relay trims the field and the label
+    is the person's, not a name a worker gets to borrow.
+    """
+    return bool(who) and who.strip().casefold() == SHARED_KEY.casefold()
+
+
+def worker_identity():
+    """The name this shell's credential was minted for, as the app handed it over.
+
+    A worker's default identity used to be derived from the project and the
+    session — never the agent name the credential is keyed by — so every call
+    without `--as` was a 403 whose advice named a flag the worker had no value
+    for. `AGENTGLASS_BROWSER_AS` is the browser-only half; `AGENTGLASS_PROFILE`
+    is the identity this CLI already read, so either answers here.
+    """
+    for key in ("AGENTGLASS_BROWSER_AS", "AGENTGLASS_PROFILE"):
+        v = (os.environ.get(key) or "").strip()
+        if v:
+            # NOT `_capped`: the credential was minted for the whole name, and
+            # the relay compares against it. A 64-character agent name cut to 24
+            # here made every call a 403. The cap guards a caller-chosen
+            # container name, and this one is the app's.
+            return v
+    return ""
 
 
 def _tabs_path():
@@ -1149,6 +1220,31 @@ def addressed(a, cmd=None):
     return None, no_tab_refusal(who, cmd or getattr(a, "cmd", "this"))
 
 
+RELAY_REFUSED_VERBS = frozenset({
+    "addInitScript", "audit", "call-tool", "cdp", "checkup", "clipboard", "clock",
+    "cookies", "coverage", "debug", "dialog", "done", "download", "drag", "emulate",
+    "eval", "expose", "exposed", "fake", "handoff", "har", "headers", "intercept",
+    "listeners", "pdf", "permission", "permissions", "profiles", "record", "region",
+    "save", "scrape", "screencast", "script", "session", "settings", "storage",
+    "template", "throttle", "tools", "trace", "upload",
+})
+
+
+def unusable_refusal(verb):
+    """For a verb the relay never runs for a worker, the no-tab sentence would
+    send it to open a tab that changes nothing. Mirrors WORKER_VERBS in
+    server/src/browserdrive.ts; a test keeps the two lists equal."""
+    if (os.environ.get("AGENTGLASS_ROLE") or "").strip() not in WORKER_ROLE_IDS:
+        return None
+    if verb not in RELAY_REFUSED_VERBS:
+        return None
+    return (
+        f'{verb}: this shell runs as a worker, and the relay does not run "{verb}" for a '
+        "worker credential. No tab would change that, so there is nothing to open and "
+        "nothing to address."
+    )
+
+
 def no_tab_refusal(who, verb):
     """THE ONE SENTENCE, said in one place.
 
@@ -1232,6 +1328,22 @@ def split_field(pair):
             return pair[:i], pair[i + 1:]
         i += 1
     return None, None
+
+
+def opens_own_first(steps, who):
+    """Whether the first step of this `do` mints a page in `who`'s own container.
+
+    The relay's walk reads each step's own `profile` for exactly this, and the
+    steps after an `open` may leave the page out because the panel acts on the
+    tab that open just made.
+    """
+    if not steps or not isinstance(steps[0], dict):
+        return False
+    op = steps[0].get("op")
+    args = steps[0].get("args") if isinstance(steps[0].get("args"), dict) else {}
+    profile = args.get("profile")
+    return (op in ("open", "newtab") and isinstance(profile, str) and bool(who)
+            and profile.strip().casefold() == who.strip().casefold())
 
 
 def do_steps(a):
@@ -2379,9 +2491,27 @@ def session_import(a, page):
     return 0
 
 
+def _refuse_locked_abbrev(ap, argv):
+    """A worker's lock names `--shared`, `--active` and `--page` in full, and
+    argparse accepts any unambiguous prefix, so `--share` would walk past it.
+    Only those three are kept whole; every other long option keeps the prefix
+    spelling argparse has always given it (`--summ` is still `--summary`)."""
+    for tok in argv:
+        name = tok.split("=", 1)[0]
+        if name in ("--shared", "--active", "--page") or not name.startswith("--"):
+            continue
+        if any(flag.startswith(name) for flag in ("--shared", "--active", "--page")):
+            ap.error(f"unrecognized arguments: {tok}")
+
+
 def main():
+    # Every verb, before argparse builds a request or `call` reads a file.
+    if BROWSER_OFF:
+        print(f"agentglass-browser: {OFF_REFUSAL}", file=sys.stderr)
+        return 2
     ap = argparse.ArgumentParser(prog="agentglass-browser", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    _refuse_locked_abbrev(ap, sys.argv[1:])
     # The subcommand list is 35 names long and argparse prints it as one
     # unreadable run-on line. The grouped map in the description above IS the
     # index; this stops the wall of text from burying it.
@@ -2454,7 +2584,7 @@ def main():
                          "document (full, with delta:false, after a navigation); plain `observe` is always full")
     ap.add_argument("--summary", action="store_true",
                     help="print one line describing the answer (with --out, alongside the path)")
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub = ap.add_subparsers(dest="cmd", required=True, parser_class=argparse.ArgumentParser)
     p = sub.add_parser("open", help="go to a page and wait for it to load")
     p.add_argument("url")
     p.add_argument("--wait-slot", dest="waitSlot", type=float, default=None, metavar="SECONDS",
@@ -3147,6 +3277,38 @@ def main():
     # `emit`. Identity was not moved with it. It is moved now, and everything
     # below reads THESE variables rather than computing its own answer.
     who = acting_as(a)
+    worker_role = (os.environ.get("AGENTGLASS_ROLE") or "").strip()
+    worker_own = worker_identity() if worker_role in WORKER_ROLE_IDS else ""
+    explicit_as = (getattr(a, "asProfile", None) or "").strip()
+    # The credential names the worker; a different --as is a call the relay
+    # refuses, so it is refused here with a sentence the worker can act on.
+    if worker_own and explicit_as and explicit_as.casefold() != worker_own.casefold():
+        print(
+            f'{a.cmd}: this shell runs as the worker "{worker_own}", the name its credential '
+            f'was minted for, and "--as {explicit_as}" names another identity. The relay serves '
+            f"a worker only the container its own name opened, so that call would be refused. "
+            f"Drop --as and this shell's own name is the one it acts as.",
+            file=sys.stderr,
+        )
+        return 2
+    if worker_own and not explicit_as and not getattr(a, "shared", False) and not getattr(a, "active", False):
+        # The derived project-session name is never the agent name the relay
+        # keys the worker on: a worker with no --as acts as its own name.
+        a.asProfile = worker_own
+        who = acting_as(a)
+    if worker_role in WORKER_ROLE_IDS and (
+            is_shared_identity(who) or getattr(a, "active", False)):
+        print(
+            f'{a.cmd}: this shell runs as a worker role ("{worker_role}", AGENTGLASS_ROLE), '
+            f"and a worker acts only in its own tab. The person's own container is refused "
+            f'here under every spelling: --shared, --as "(default)" (the same identity on '
+            f"the wire), --profile, AGENTGLASS_PROFILE, any spacing or case of that name, "
+            f"and --active, which addresses the person's tab without naming it. "
+            f"--page is allowed: the relay serves only a page this worker opened, and "
+            f"refuses another with a sentence. Use your own lane.",
+            file=sys.stderr,
+        )
+        return 2
     # `--shared` is an identity (the person's container) but NOT a profile
     # name: the panel mints a container for any name it does not know, and the
     # person's session is the EMPTY profile field. So it is remembered like an
@@ -3250,12 +3412,18 @@ def main():
         # no leading `open` to overwrite the page, so on an unaddressed call it
         # returns the other container's page verbatim into this transcript.
         page, refusal = addressed(a, "do")
-        if refusal:
-            print(refusal, file=sys.stderr)
-            return 1
         steps = do_steps(a)
         if steps is None:
             return 2
+        # A DO THAT OPENS ITS OWN PAGE FIRST IS ADDRESSED BY THAT STEP.
+        # `open` then `read` is one request the relay tracks: the page the
+        # first step mints is the one the steps after it act on. Requiring a
+        # remembered tab here refused the sequence before the relay ever saw it.
+        if refusal and worker_own and not getattr(a, "lane", None) and opens_own_first(steps, who):
+            page, refusal = "", None
+        if refusal:
+            print(refusal, file=sys.stderr)
+            return 1
         # `_at` on the outer body AND `steps_at` on the steps. Only the second
         # one reaches the browser — `runSteps` never reads the outer `page`,
         # see `steps_at` — but the two address forms this endpoint accepts
@@ -3991,7 +4159,7 @@ def main():
             # `--active` is the way to say "the tab in front, on purpose": it
             # clears `who` above, so it never reaches this branch. `--page`
             # names a tab explicitly and is already in `body`.
-            print(no_tab_refusal(who, a.cmd), file=sys.stderr)
+            print(unusable_refusal(a.cmd) or no_tab_refusal(who, a.cmd), file=sys.stderr)
             return 1
             #
             # `--shared` is NOT that flag any more and reaches this branch like
@@ -4007,7 +4175,7 @@ def main():
             # exemption `--shared` would have no way of ever getting a tab —
             # a refusal nobody can answer is a refusal that gets worked around.
             if not minting_shared:
-                print(no_tab_refusal(who, a.cmd), file=sys.stderr)
+                print(unusable_refusal(a.cmd) or no_tab_refusal(who, a.cmd), file=sys.stderr)
                 return 1
 
     # WHO IS ASKING, ON EVERY REQUEST — REQ-1's whole point. Written in

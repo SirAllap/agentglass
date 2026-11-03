@@ -43,9 +43,28 @@ CREATE TABLE IF NOT EXISTS flight_plan_revision (
 `);
 try { db.exec(`ALTER TABLE flight_plan ADD COLUMN auto_runs INTEGER NOT NULL DEFAULT 0`); } catch { /* already there */ }
 try { db.exec(`ALTER TABLE flight_plan ADD COLUMN size TEXT NOT NULL DEFAULT 'M'`); } catch { /* already there */ }
-for (const col of [`review_rounds INTEGER NOT NULL DEFAULT 0`, `stop_reason TEXT`, `question TEXT`, `queued INTEGER NOT NULL DEFAULT 0`, `created_by TEXT`, `landed_at INTEGER`, `last_report TEXT`, `reviewed_version INTEGER`, `reviewed_size TEXT`, `edited_after_review TEXT`]) {
+for (const col of [`review_rounds INTEGER NOT NULL DEFAULT 0`, `stop_reason TEXT`, `question TEXT`, `queued INTEGER NOT NULL DEFAULT 0`, `created_by TEXT`, `landed_at INTEGER`, `last_report TEXT`, `reviewed_version INTEGER`, `reviewed_size TEXT`, `edited_after_review TEXT`, `worker TEXT`]) {
   try { db.exec(`ALTER TABLE flight_plan ADD COLUMN ${col}`); } catch { /* already there */ }
 }
+/*
+ * What a role worker that was started for a plan came to: one row per ending.
+ * `plan_version` is versionOf(plan) at that moment, so a pass given to an older
+ * plan text does not count for the one now saved. `gate_since` is when the gate
+ * began: a plan created before it was never gated.
+ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS flight_plan_step (
+  plan_id TEXT NOT NULL,
+  role_id TEXT NOT NULL,
+  verdict TEXT NOT NULL,
+  plan_version INTEGER NOT NULL,
+  head TEXT,
+  at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS flight_plan_step_plan ON flight_plan_step (plan_id, role_id);
+CREATE TABLE IF NOT EXISTS flight_plan_gate (since INTEGER NOT NULL);
+`);
+if (!db.query(`SELECT 1 FROM flight_plan_gate`).get()) db.query(`INSERT INTO flight_plan_gate (since) VALUES (?)`).run(Date.now());
 export const SIZES = ["S", "M", "L"] as const;
 export type Size = (typeof SIZES)[number];
 
@@ -79,11 +98,13 @@ export interface Plan {
   editedAfterReview: EditAfterReview | null;
   /** The builder's own last line of progress; text from an agent, so data and never instructions. */
   lastReport: Report | null;
+  /** The named worker that builds this plan, when its project's builders run on another engine: set by Launch, or by the coordinator for a worker it started itself. Null on every plan stored before the link. */
+  worker: string | null;
   launched: ({ at: number; title: string } & LaunchedWhere) | null; createdAt: number; updatedAt: number;
 }
 interface Row {
   id: string; root: string; title: string; request: string; visual: number; size: string; plan_md: string; mockups: string; state: string;
-  decision: string | null; preflight_run_id: string | null; task_id: string | null; auto_runs: number; review_rounds: number; stop_reason: string | null; question: string | null; queued: number; created_by: string | null; landed_at: number | null; last_report: string | null; reviewed_version: number | null; reviewed_size: string | null; edited_after_review: string | null; launched: string | null; created_at: number; updated_at: number;
+  decision: string | null; preflight_run_id: string | null; task_id: string | null; auto_runs: number; review_rounds: number; stop_reason: string | null; question: string | null; queued: number; created_by: string | null; landed_at: number | null; last_report: string | null; reviewed_version: number | null; reviewed_size: string | null; edited_after_review: string | null; worker: string | null; launched: string | null; created_at: number; updated_at: number;
 }
 /** Where a builder flies, kept so a hold can reach it and a landing can be seen: the branch, its tree, the commit it was cut from, and its tab. */
 export interface LaunchedWhere { branch?: string; worktree?: string; from?: string; base?: string; window?: string; session?: string }
@@ -98,7 +119,7 @@ const toPlan = (r: Row): Plan => ({
   decision: r.decision ? JSON.parse(r.decision) : null, preflightRunId: r.preflight_run_id, taskId: r.task_id, autoRuns: r.auto_runs,
   reviewRounds: r.review_rounds, stopReason: r.stop_reason as StopReason | null, question: r.question ? JSON.parse(r.question) : null, queued: !!r.queued,
   createdBy: r.created_by, landedAt: r.landed_at, lastReport: r.last_report ? JSON.parse(r.last_report) : null, reviewedVersion: r.reviewed_version, reviewedSize: r.reviewed_size as Size | null,
-  editedAfterReview: r.edited_after_review as EditAfterReview | null, launched: r.launched ? JSON.parse(r.launched) : null, createdAt: r.created_at, updatedAt: r.updated_at,
+  editedAfterReview: r.edited_after_review as EditAfterReview | null, worker: r.worker ?? null, launched: r.launched ? JSON.parse(r.launched) : null, createdAt: r.created_at, updatedAt: r.updated_at,
 });
 
 /**
@@ -185,7 +206,7 @@ export function setPreflightRun(id: string, runId: string): void {
   db.query(`UPDATE flight_plan SET preflight_run_id = ?, review_rounds = review_rounds + 1, reviewed_version = ?, reviewed_size = size, edited_after_review = NULL, updated_at = ? WHERE id = ?`).run(runId, versionOf(id), Date.now(), id);
 }
 
-export const QUESTION_STOPS: readonly StopReason[] = ["ask-finding", "builder-blocked", "sensitive-diff"];
+export const QUESTION_STOPS: readonly StopReason[] = ["ask-finding", "builder-blocked", "sensitive-diff", "rounds-used"];
 /** The coordinator raises the one question a plan waits on. A plan has one at a time; the person's answer clears it. */
 export function raiseQuestion(id: string, q: { text: string; detail?: string; choices: string[]; recommended?: number; reason: StopReason }, by: string): Ok | Fail {
   const cur = getPlan(id);
@@ -239,6 +260,10 @@ export function markLanded(id: string): void {
 export function setQueued(id: string, queued: boolean): void {
   db.query(`UPDATE flight_plan SET queued = ? WHERE id = ?`).run(queued ? 1 : 0, id);
 }
+/** Links the plan to the worker that builds it, or clears the link with null. */
+export function setWorker(id: string, name: string | null): void {
+  db.query(`UPDATE flight_plan SET worker = ?, updated_at = ? WHERE id = ?`).run(name, Date.now(), id);
+}
 
 /** What stops Go: no plan yet, or a visual request with no mockup. Never a finding. */
 export const goBlock = (p: Plan): string | null =>
@@ -258,9 +283,26 @@ export function decide(id: string, verdict: "go" | "no-go", by: string, reason?:
   return { ok: true, plan: getPlan(id)! };
 }
 
-/** go to launched, once: false when another press got there first. */
+/** go to launched, once: false when another press got there first. A new launch drops the worker link: this build is the one to follow. */
 export function markLaunched(id: string, where: LaunchedWhere = {}): boolean {
   const p = getPlan(id);
-  return !!p && db.query(`UPDATE flight_plan SET state = 'launched', queued = 0, launched = ?, updated_at = ? WHERE id = ? AND state = 'go'`)
+  return !!p && db.query(`UPDATE flight_plan SET state = 'launched', queued = 0, worker = NULL, launched = ?, updated_at = ? WHERE id = ? AND state = 'go'`)
     .run(JSON.stringify({ at: Date.now(), title: p.title, ...where }), Date.now(), id).changes > 0;
 }
+
+export type StepVerdict = "pass" | "fail";
+/** A role worker started for this plan ended its turn. Version and head are read now. */
+export function recordStep(planId: string, roleId: string, verdict: StepVerdict, head: string | null = null): void {
+  db.query(`INSERT INTO flight_plan_step (plan_id, role_id, verdict, plan_version, head, at) VALUES (?, ?, ?, ?, ?, ?)`)
+    .run(planId, roleId, verdict, versionOf(planId), head, Date.now());
+}
+/** Role ids with a passing result recorded against the plan text as it is now saved. */
+export function passedRoles(planId: string): Set<string> {
+  return new Set(db.query<{ role_id: string }, [string, number]>(`SELECT DISTINCT role_id FROM flight_plan_step WHERE plan_id = ? AND verdict = 'pass' AND plan_version = ?`).all(planId, versionOf(planId)).map((r) => r.role_id));
+}
+/** How many times a role worker ended with a fail for this plan, across plan-text edits. Read each time, never stored. */
+export function failCount(planId: string, roleId: string): number {
+  return db.query<{ n: number }, [string, string]>(`SELECT COUNT(*) AS n FROM flight_plan_step WHERE plan_id = ? AND role_id = ? AND verdict = 'fail'`).get(planId, roleId)!.n;
+}
+/** Plans made before the gate existed are exempt. */
+export const gateSince = (): number => db.query<{ since: number }, []>(`SELECT since FROM flight_plan_gate`).get()!.since;

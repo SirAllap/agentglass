@@ -14,6 +14,7 @@ import { CloseButton } from "../CloseButton.tsx";
 import { GROUP_BY, barSegments, railTitle, rowText, type AreaRow, type GroupBy, type GroupPref, type ThenBy } from "../../lib/jiraAreas.ts";
 import { epicTone, sprintLine } from "../../lib/jiraBoardContext.ts";
 import type { JiraBoardSprint } from "../../../../shared/providers.ts";
+import { PeopleFaces, type TaskPerson } from "./list/PeopleFaces.tsx";
 import { Segmented } from "../workspace/Chrome.tsx";
 import { Select } from "../Select.tsx";
 
@@ -121,8 +122,8 @@ const chip = (tone: "open" | "done" | "plain"): React.CSSProperties => ({
 });
 
 /** Epic header: the title above the key, open / done / sprint as chips beside the bar (they wrap on a narrow pane), the hint as a notice that can be put away for the session. */
-export function JiraAreaHead({ title, fullTitle, sub, chips, hint, done, total, children }: {
-  title: string; fullTitle?: string; sub?: string; chips: { open: string; done: string; sprint: string | null }; hint?: string; done: number; total: number; children?: React.ReactNode;
+export function JiraAreaHead({ title, fullTitle, sub, chips, hint, done, total, people, children }: {
+  title: string; fullTitle?: string; sub?: string; chips: { open: string; done: string; sprint: string | null }; hint?: string; done: number; total: number; people?: readonly TaskPerson[]; children?: React.ReactNode;
 }) {
   const pct = total ? Math.round((done / total) * 100) : 0;
   const [gone, setGone] = useState(hintGone);
@@ -136,6 +137,7 @@ export function JiraAreaHead({ title, fullTitle, sub, chips, hint, done, total, 
         <span style={chip("open")}>{chips.open}</span>
         <span style={chip("done")}>{chips.done}</span>
         {chips.sprint && <span style={chip("plain")}>{chips.sprint}</span>}
+        {people && people.length > 0 && <PeopleFaces people={people} focusable />}
         <span aria-hidden className="rounded-full overflow-hidden shrink" style={{ width: 120, maxWidth: "100%", height: 6, background: "color-mix(in srgb, var(--text) 10%, transparent)" }}>
           <span className="block h-full" style={{ width: `${pct}%`, background: "var(--success)" }} />
         </span>

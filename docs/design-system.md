@@ -502,12 +502,9 @@ Every settings page is built from the blocks in
 - `EmptyState` — one sentence for a card with no rows yet; the action that
   fills it stays in the card header.
 
-- Engine tile (`orchestration/EngineTile.tsx`) — a neutral letter at
-  `CTRL_H.compact`, the engine's name, its model and its state as a dot and a
-  word; the reason is the hover, or a line on the tile when it cannot be
-  picked. "Right now" (`FlowView.tsx`) lays the main agent (200-240px) beside
-  the jobs, whose name column is 150px; below 720px they stack and the wires
-  go. A job a rule moved has a `--success` edge.
+- "Right now" (`FlowView.tsx`) lays the main agent (200-240px) beside the
+  jobs, whose name column is 150px; below 720px they stack and the wires go. A
+  job a rule moved has a `--success` edge.
 - Project bar (`orchestration/ScopeBar.tsx`) — the chips, one line and the one
   action, `sticky top-0 z-10` on `var(--bg)` with a `LINE` under it. It writes
   its height to `--orch-stick`, and a card or row on that page keeps

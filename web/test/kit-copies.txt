@@ -20,8 +20,6 @@ components/git/ui.tsx Chip 1
 components/git/ui.tsx Pill 1
 components/git/ui.tsx Row 1
 components/orchestration/OrchKit.tsx Card 1
-components/orchestration/OrchestrationPane.tsx Field 1
-components/orchestration/QuickSetup.tsx Card 1
 components/plugins/PluginTree.tsx Chip 1
 components/plugins/PluginTree.tsx Row 1
 components/prs/Inbox.tsx Chip 1

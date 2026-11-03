@@ -1,7 +1,8 @@
 /*
  * The head of a lane: 40 high. Fold chevron, the lane's tile, its name, the count, the points, and the "Sort this lane"
- * button. The whole head folds the lane on a click; the chevron is the keyboard's way in. A right click is the lane menu
- * (the host wires it, S3). The sort choices are the lane menu's own sort menu, and what is picked is remembered per view.
+ * button. The whole head folds the lane on a click, the faces included; the chevron is the keyboard's way in. A right
+ * click is the lane menu (the host wires it, S3). The sort choices are the lane menu's own sort menu, and what is picked
+ * is remembered per view.
  */
 import { useState, type MouseEvent } from "react";
 import { BoltIcon, CaretIcon, DoneIcon, FlagIcon, FolderIcon, ListIcon, SortIcon, TargetIcon, UserIcon } from "../../../lib/glyphIcons.tsx";
@@ -10,6 +11,7 @@ import { setLaneSort } from "../../../lib/jiraLaneState.ts";
 import { tipAttr } from "../../../lib/tip.ts";
 import { ListIconBtn } from "./ListControls.tsx";
 import { LANE_SORTS, type LaneSort } from "./laneModel.ts";
+import { PeopleFaces, peopleOf } from "./PeopleFaces.tsx";
 import { JiraMenuView } from "./menus/JiraMenu.tsx";
 import { sortMenu } from "./menus/menuModel.ts";
 import type { JiraLane } from "./model.ts";
@@ -51,6 +53,7 @@ export function JiraLaneHead({ lane, id, viewId, folded, sort, onToggle, onMenu 
       <span className="agx-jl-tile" aria-hidden><Mark lane={lane} /></span>
       <span className="agx-jl-name agx-jl-trunc" data-tip={tipAttr(lane.status)}>{lane.status}</span>
       <span className="agx-jl-count" aria-label={`${lane.cards.length} cards`}>{lane.cards.length}</span>
+      {lane.mark === "area" && <PeopleFaces people={peopleOf(lane.cards)} focusable />}
       <span className="agx-jl-gap" />
       {lane.points > 0 && <span className="agx-jl-pts">{lane.points} pts</span>}
       <ListIconBtn label="Sort this lane" tip={sort === "rank" ? "Sort this lane" : `Sorted by ${how.label.toLowerCase()}`} size={28} on={sort !== "rank"}

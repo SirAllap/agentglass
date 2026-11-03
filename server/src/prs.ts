@@ -4567,7 +4567,7 @@ export async function prDiff(rootIn: unknown, numberIn: unknown, force = false):
    * text from before the push, refreshing in the background for a second
    * request that nobody makes.
    *
-   * It still goes through `fetchDiff`, so a forced read joins an in-flight one
+   * It still goes through `fetchDiff`, so a forced read joins one already running
    * rather than starting a second `gh pr diff` beside it.
    */
   const hit = force ? undefined : diffCache.get(key);

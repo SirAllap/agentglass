@@ -17,7 +17,7 @@ import { CloseIcon } from "../workspace/icons.tsx";
 import { HIT, ICON } from "../../lib/iconSize.ts";
 import type { ClosedToast, CloseAsk } from "../../lib/useWindowClose.ts";
 import { Portal } from "../Portal.tsx";
-import { Button, EDGE, tintEdge } from "../workspace/Chrome.tsx";
+import { Button, LINE, tintEdge } from "../workspace/Chrome.tsx";
 
 /** How long "Closed x · Reopen" stays. */
 export const TOAST_MS = 5000;
@@ -87,7 +87,7 @@ export function ReopenToast({ toast, onReopen, onDismiss }: { toast: ClosedToast
       className="agx-card-in absolute flex items-center gap-3 rounded-xl pl-3 pr-1.5 py-1.5"
       style={{
         left: "50%", translate: "-50% 0", bottom: 56, zIndex: LAYER.pane,
-        color: "var(--text)", background: "var(--surface-card)", border: "1px solid var(--surface-line)",
+        color: "var(--text)", background: "var(--surface-card)", border: LINE,
         boxShadow: "var(--surface-lift)",
       }}>
       <span className="text-[11.5px]">{toast.sentence}</span>

@@ -73,7 +73,9 @@ export function WindowTab({
         if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(); }
       }}
-      className={`group relative flex items-center gap-1.5 pl-2 pr-1 shrink-0 rounded-lg text-[11.5px] cursor-pointer select-none transition-colors ${active ? "" : "hover:bg-[var(--surface-inset)]"}`}
+      // No colour ramp: hover and the selected look measured 197-211 ms to
+      // settle with `transition-colors`; a tab that is not hot yet reads as an ignored click.
+      className={`group relative flex items-center gap-1.5 pl-2 pr-1 shrink-0 rounded-lg text-[11.5px] cursor-pointer select-none ${active ? "" : "hover:bg-[var(--surface-inset)]"}`}
       style={{
         height: CTRL_H.strip,
         maxWidth: 200,
@@ -145,7 +147,7 @@ export function WindowTab({
           </svg>
         </span>
       )}
-      <span className={`shrink-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 ${active ? "opacity-70" : "opacity-0"}`}>
+      <span className={`shrink-0 group-hover:opacity-100 group-focus-within:opacity-100 ${active ? "opacity-70" : "opacity-0"}`}>
         <CloseButton onClick={(e) => { e.stopPropagation(); onClose(); }} title="Close window" size={ICON.xs} hit={MIN_BOX} tabIndex={active ? 0 : -1} />
       </span>
       {active && <span aria-hidden className="absolute left-2 right-2 -bottom-[1.5px] h-[1.5px]" style={{ background: "var(--primary)", clipPath: "polygon(0 50%, 5% 0, 95% 0, 100% 50%, 95% 100%, 5% 100%)" }} />}

@@ -1,23 +1,8 @@
 import { useEffect, useState } from "react";
-import { budgetLine, hourLabel, pct, projectionText, verdictText, type PaceConfig, type Verdict } from "../../../shared/pace.ts";
+import { pct } from "../../../shared/pace.ts";
 import type { UsageDay } from "../../../shared/types.ts";
-import type { WindowPace } from "../lib/usagePace.ts";
 import { EQ_SUFFIX, fmtTokens } from "../lib/format.ts";
 import { dayCells, lastWeek, stripState, STRIP_HEIGHT, warmDayStrip } from "../lib/dayStrip.ts";
-
-/** The verdict wears the colour of what to do about it, not of how full the bar is.
- *  This is TEXT sitting directly on the popover's own surface, not a chip
- *  fill — so it reads through the `-ink` variant `inkTints` already computes,
- *  never the raw tint (which is picked to sit on a dark chip fill and fails
- *  4.5:1 read as plain text on a light theme's cream). */
-const VERDICT_COLOR: Record<Verdict, string> = {
-  room: "var(--success-ink)",
-  "on-pace": "var(--text2)",
-  "cut-back": "var(--warning-ink)",
-  "used-up": "var(--error-ink)",
-  over: "var(--error-ink)",
-  "day-off": "var(--text4)",
-};
 
 /** Where the bar should be by now. Drawn inside the bar's own box so it is
  *  measured on the same scale as the fill and cannot drift from it. */
@@ -32,35 +17,6 @@ export function PaceMarker({ expected }: { expected: number }) {
   );
 }
 
-/** Under the bar: how it compares, what is left today, where it is heading. */
-export function PaceLines({ wp, now, cfg, oldReading }: { wp: WindowPace; now: number; cfg: PaceConfig; oldReading?: boolean }) {
-  const { pace: p, resetsAt } = wp;
-  const tz = cfg.timeZone;
-  const dim = { color: "var(--text4)" };
-  return (
-    <div className="mt-1 flex flex-col gap-0.5 text-[10px] leading-snug">
-      <span style={dim}>{budgetLine(p)}</span>
-      {/* A days-old reading (Codex writes it only when a turn runs) says where the
-          budget is, not what is left today: that would be today's verdict on
-          last week's number. */}
-      {oldReading ? null : <>
-      <span className="text-[11px] font-medium" style={{ color: VERDICT_COLOR[p.today.verdict] }}>
-        {verdictText(p, now, tz)}
-      </span>
-      {p.today.working && (
-        <span style={dim}>
-          Today's share {pct(p.today.share)}{p.today.endsAtHour ? ` · ends ${hourLabel(p.today.endsAtHour)}` : ""}
-        </span>
-      )}
-      <span style={dim}>{projectionText(p, now, resetsAt, tz)}</span>
-      </>}
-      {p.fellBackToEveryHour && cfg.spread === "working" && (
-        <span style={dim}>No working day is ticked, so every hour counts. Settings › Budgets.</span>
-      )}
-    </div>
-  );
-}
-
 /**
  * The last seven days of activity, one bar each.
  *
@@ -72,11 +28,16 @@ export function PaceLines({ wp, now, cfg, oldReading }: { wp: WindowPace; now: n
  * It owns STRIP_HEIGHT in every state. Loading pulses seven quiet slots and
  * empty says so in the same box; neither may change the popover's size.
  */
-export function DayStrip({ provider }: { provider: string }) {
-  const wanted = provider === "anthropic";
+export function DayStrip({ provider, all }: { provider: string; all?: boolean }) {
+  // `all`: the bank's sheet asks for the same all-agents week on every tab,
+  // because the chart is this machine's activity, not one plan's.
+  const wanted = all || provider === "anthropic";
   const [days, setDays] = useState<UsageDay[] | null>(lastWeek());
   useEffect(() => {
     if (!wanted) return;
+    // The fold unmounts this and mounts it again on every open; without this
+    // guard each expand was another GET for a chart that changes daily.
+    if (lastWeek()?.length) return;
     let live = true;
     warmDayStrip().then((d) => { if (live) setDays(d); }).catch(() => { if (live) setDays((d) => d ?? []); });
     return () => { live = false; };

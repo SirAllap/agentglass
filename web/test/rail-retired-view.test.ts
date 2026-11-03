@@ -31,4 +31,18 @@ describe("a saved rail that still names the retired Files view", () => {
     expect(ids.hidden).toContain("pr");
     for (const place of v.RAIL_PLACES) expect(ids[place] as string[]).not.toContain("files");
   });
+
+  it("a rail that still names the retired Ports icon loads without crashing", async () => {
+    // Ports was a rail entry in older builds. It is not a view id any more, so
+    // the id is skipped rather than taking the workspace down; the rail's
+    // machine icon is Resources.
+    store.set("agentglass.workspace.rail", JSON.stringify({
+      work: ["git", "ports"], utility: ["resources"], hidden: [],
+    }));
+    const v = await import(`../src/components/workspace/views.ts?t=${Math.random()}`);
+    const ids = v.railIds(v.loadRail());
+    expect(ids.work[0]).toBe("git");
+    for (const place of v.RAIL_PLACES) expect(ids[place] as string[]).not.toContain("ports");
+    expect(ids.work.length + ids.utility.length + ids.hidden.length).toBe(v.VIEWS.length);
+  });
 });

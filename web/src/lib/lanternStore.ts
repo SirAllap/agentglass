@@ -114,7 +114,7 @@ export const lanternWatch = (): LanternWatch | null => watch;
 /** The provider's prompt-cache window, from Settings — what the cards count down. */
 export const lanternCacheTtlMs = (): number => cacheTtlMin * 60_000;
 /** How many agents CANNOT go on without a person right now — a permission
- *  or a held gate — the rail's number. A turn that merely ended is waiting,
+ *  or a gate waiting on you — the rail's number. A turn that merely ended is waiting,
  *  not blocked, and is not a number that follows you around the app. Sorted
  *  by `attention`, the rule the dashboard's strip counts "needs you" by, so
  *  the pip and the strip are one number. */
@@ -133,7 +133,7 @@ export const lanternNeed = (): number => rows?.filter((r) => attention(r) === "b
  */
 export function groupLantern(rows: LanternRow[]): { need: LanternRow[]; finished: LanternRow[]; working: LanternRow[]; idle: LanternRow[]; gone: LanternRow[] } {
   /* Two kinds of "needs you", and only one of them is urgent. A permission
-     or a held gate is an agent that CANNOT go on without you. A turn that
+     or a gate waiting on you is an agent that CANNOT go on without you. A turn that
      ended is an agent that finished and is waiting for whatever you say next
      — its own group, not a number on the rail. Either outranks everything
      below, gone included: a wait is never collapsed. "Blocked" is

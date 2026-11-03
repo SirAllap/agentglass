@@ -116,7 +116,7 @@ describe("deliver() gated by the notification diet", () => {
     // pinned already in alerts-sink.test.ts — so what this proves is that the
     // frame itself is no longer suppressed at the door: nothing broadcasts
     // here because CENSUS_NO_CLIENT means the frame goes to notify-send
-    // territory, and urgency 0 stops it there, which is the pre-existing
+    // territory, and urgency 0 stops it there, which is the behaviour already there
     // rule this file must not have to re-litigate.
     expect(fallbacks.length).toBe(0);
   });

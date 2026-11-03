@@ -4,6 +4,10 @@
  * so the rail's tips drew nothing on any other view, and two views mounted at
  * once would have drawn two cards. A rule about source is asserted against
  * source: there is no renderer here.
+ *
+ * And no stylesheet may draw one of its own: the Flow editor's `[data-tip]::after`
+ * was unscoped, so every screen painted a box from the attribute — on the rail,
+ * a small "Browser" box 200 ms before the host's card.
  */
 import { describe, expect, test } from "bun:test";
 import { Glob } from "bun";
@@ -22,5 +26,13 @@ describe("one tooltip host", () => {
   });
   test("and it is the app root's", () => {
     expect(mounts[0]).toBe("App.tsx");
+  });
+  test("no stylesheet draws a tooltip from data-tip", () => {
+    const offenders: string[] = [];
+    for (const f of new Glob("**/*.css").scanSync(root)) {
+      const css = readFileSync(root + f, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+      if (/attr\(\s*data-tip\s*\)/.test(css)) offenders.push(f);
+    }
+    expect(offenders).toEqual([]);
   });
 });

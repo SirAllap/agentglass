@@ -33,10 +33,14 @@
 export type DepPlatform = "linux" | "darwin" | "win32";
 
 export type DepId =
-  | "git" | "claude" | "codex" | "agy" | "hermes" | "python" | "tmux" | "gh" | "glab" | "docker" | "nvim" | "task"
+  | "git" | "claude" | "codex" | "opencode" | "agy" | "hermes" | "python" | "tmux" | "gh" | "glab" | "docker" | "nvim" | "task"
   | "whisper"
   | "tailscale"
   | "setsid" | "script" | "ss" | "dbus-monitor" | "notify-send" | "opener" | "pkexec" | "bash" | "bwrap";
+
+/** How much the app wants a tool. `needed` is the only level that decides
+ *  whether the app can do its job; `optional` never counts in "needs you". */
+export type DepLevel = "needed" | "recommended" | "optional";
 
 export interface DepSpec {
   id: DepId;
@@ -48,9 +52,14 @@ export interface DepSpec {
   /** What stops working without it. Written as a consequence, not a category:
    *  "the terminal cannot open" beats "terminal support". */
   what: string;
-  /** Required means the app is visibly broken without it. Optional means one
-   *  feature stands down and the rest carries on. */
-  required: boolean;
+  /** The catalogue's default. An agent CLI's level is decided per run by the
+   *  pick instead — see `levelFor`. */
+  level: DepLevel;
+  /** An agent CLI: it is needed only when it is the agent the person picked. */
+  agent?: true;
+  /** The line that finishes a tool that is installed but unusable (a sign-in,
+   *  a first run). Absent where no one line is true on every machine. */
+  signIn?: string;
   /** The project's own page. Never a package-manager command. */
   url: string;
   /** Absent means every platform. */
@@ -111,20 +120,23 @@ export const isRemoteScript = (cmd: string): boolean =>
 
 /** The catalog. Order is the reading order: the things that break the app
  *  first, then what each feature wants, then the small POSIX pieces. */
-export const DEPS: DepSpec[] = [
+const ROWS: DepSpec[] = [
   {
-    id: "git", bin: "git", title: "Git", required: true,
+    id: "git", bin: "git", title: "Git", level: "needed",
     what: "Source control, file changes, pull requests and worktrees all shell out to it, and the terminal uses it to decide where to open.",
     url: "https://git-scm.com/downloads",
     pkg: { apt: "git", dnf: "git", pacman: "git", zypper: "git", apk: "git", brew: "git" },
   },
   {
-    id: "claude", bin: "claude", title: "Claude Code CLI", required: true,
+    id: "claude", bin: "claude", title: "Claude Code CLI", level: "needed", agent: true,
     what: "Terminal agents run it, and so do Review with Claude and the walkthrough.",
     // Moved host: the old docs.claude.com path 301s here. A link that redirects
     // still works and still rots — this one was found pointing at the old host
     // while reading the page for the install line below.
     url: "https://code.claude.com/docs/en/setup",
+    // The line the engine's own probe names when Claude is installed and not
+    // signed in; kept beside the install so both are resolved from one table.
+    signIn: "claude auth login",
     note: "agentglass reads Claude Code's own transcripts either way, so sessions still show up without it. Only starting agents from the app needs the CLI.",
     // The native installer, which is what the setup page presents as the
     // recommended method on macOS, Linux and WSL. Not a package: there are
@@ -134,14 +146,14 @@ export const DEPS: DepSpec[] = [
     installer: "curl -fsSL https://claude.ai/install.sh | bash",
   },
   {
-    id: "python", bin: "python3", title: "Python 3", required: true,
+    id: "python", bin: "python3", title: "Python 3", level: "needed",
     what: "Two separate jobs: it runs the hook forwarder that streams sessions here live, and it backs the terminal's pseudo-terminal.",
     url: "https://www.python.org/downloads/",
     note: "Without it the hooks stay written but fail on every event, so nothing arrives live and nothing says why. The terminal keeps opening, in a degraded mode where full-screen programs do not render. On Windows the hooks use `py` or `python`.",
     pkg: { apt: "python3", dnf: "python3", pacman: "python", zypper: "python3", apk: "python3", brew: "python" },
   },
   {
-    id: "tmux", bin: "tmux", title: "tmux", required: false,
+    id: "tmux", bin: "tmux", title: "tmux", level: "recommended",
     what: "Runs each agent as a live pane you can attach to from your own terminal, shows your tmux windows as tabs in the terminal panel, and takes the app's theme.",
     url: "https://github.com/tmux/tmux/wiki/Installing",
     platforms: ["linux", "darwin"],
@@ -149,71 +161,82 @@ export const DEPS: DepSpec[] = [
     pkg: { apt: "tmux", dnf: "tmux", pacman: "tmux", zypper: "tmux", apk: "tmux", brew: "tmux" },
   },
   {
-    id: "gh", bin: "gh", title: "GitHub CLI", required: false,
+    id: "gh", bin: "gh", title: "GitHub CLI", level: "recommended",
     what: "Everything in the pull requests panel: the list, the diff, reviews, checks and merges.",
     url: "https://cli.github.com",
+    signIn: "gh auth login",
     note: "Installing it is half the job. It also has to be logged in before the panel can read anything.",
     pkg: { apt: "gh", dnf: "gh", pacman: "github-cli", zypper: "gh", apk: "github-cli", brew: "gh" },
   },
   {
-    id: "glab", bin: "glab", title: "GitLab CLI", required: false,
+    id: "glab", bin: "glab", title: "GitLab CLI", level: "optional",
     what: "Reads merge requests and pipelines from GitLab, the way `gh` does for GitHub.",
     url: "https://gitlab.com/gitlab-org/cli",
+    signIn: "glab auth login",
     note: "Only worth installing if you have a GitLab remote. Like `gh`, it has to be logged in — `glab auth login` — before anything can be read.",
     pkg: { apt: "glab", dnf: "glab", pacman: "glab", zypper: "glab", apk: "glab", brew: "glab" },
   },
   {
-    id: "docker", bin: "docker", title: "Docker", required: false,
+    id: "docker", bin: "docker", title: "Docker", level: "optional",
     what: "The containers, images, volumes and logs panel.",
     url: "https://docs.docker.com/get-started/get-docker/",
     note: "The CLI on its own is not enough: the daemon has to be running for the panel to show anything.",
   },
   {
-    id: "task", bin: "task", title: "Taskwarrior", required: false,
+    id: "task", bin: "task", title: "Taskwarrior", level: "optional",
     what: "The half of the Tasks view that is yours: the local list you add to, edit and tick off. GitHub issues are read over the network and arrive either way.",
     url: "https://taskwarrior.org/download/",
+    // Not a sign-in: one run creates the data store, which is what "not set up"
+    // means for this row.
+    signIn: "task",
     note: "Its absence is the quiet kind — the view opens, the issues load, and the list you were expecting is simply not there. Which is why it is on this page.",
     pkg: { apt: "taskwarrior", dnf: "task", pacman: "task", apk: "taskwarrior", brew: "task" },
   },
   {
-    id: "nvim", bin: "nvim", title: "Neovim", required: false,
+    id: "nvim", bin: "nvim", title: "Neovim", level: "optional",
     what: "Sends a file straight to a running editor from the diff and file panels, and keeps it on the app's theme.",
     url: "https://neovim.io",
     note: "With any other $EDITOR the app hands you the command to paste instead.",
     pkg: { apt: "neovim", dnf: "neovim", pacman: "neovim", zypper: "neovim", apk: "neovim", brew: "neovim" },
   },
   {
-    id: "whisper", bin: "whisper-cli", title: "Whisper (speech to text)", required: false,
+    id: "whisper", bin: "whisper-cli", title: "Whisper (speech to text)", level: "optional",
     what: "Turns a recording from the phone's microphone into text in the terminal's compose field. The phone records; this does the transcribing, because Expo Go carries no speech recogniser.",
     url: "https://github.com/ggml-org/whisper.cpp",
     note: "Either whisper.cpp (whisper-cli) or OpenAI's `whisper`. Missing simply means the microphone button says so instead of appearing to do nothing.",
   },
   {
-    id: "codex", bin: "codex", title: "Codex CLI", required: false,
+    id: "codex", bin: "codex", title: "Codex CLI", level: "optional", agent: true,
     what: "Runs worker agents on OpenAI's Codex, and its usage is read through it.",
     url: "https://developers.openai.com/codex/cli",
     note: "One of the agent CLIs this app can drive. Missing simply means the engine is not offered.",
   },
   {
-    id: "agy", bin: "agy", title: "Antigravity CLI", required: false,
+    id: "opencode", bin: "opencode", title: "OpenCode CLI", level: "optional", agent: true,
+    what: "Runs worker agents on OpenCode, and checks its private server before a run.",
+    url: "https://opencode.ai",
+    note: "Like Codex, its absence removes an option and nothing else.",
+  },
+  {
+    id: "agy", bin: "agy", title: "Antigravity CLI", level: "optional", agent: true,
     what: "Runs worker agents on Antigravity.",
     url: "https://antigravity.google",
     note: "Like Codex, its absence removes an option and nothing else.",
   },
   {
-    id: "hermes", bin: "hermes", title: "Hermes Agent CLI", required: false,
+    id: "hermes", bin: "hermes", title: "Hermes Agent CLI", level: "optional", agent: true,
     what: "Runs worker agents on Hermes Agent.",
     url: "https://hermes-agent.nousresearch.com/docs/",
     note: "Like Codex and Antigravity, its absence removes an option and nothing else.",
   },
   {
-    id: "tailscale", bin: "tailscale", title: "Tailscale", required: false,
+    id: "tailscale", bin: "tailscale", title: "Tailscale", level: "optional",
     what: "Reaching this dashboard from your phone over your own tailnet, without opening a port.",
     url: "https://tailscale.com/download",
     note: "Only needed for remote access. The remote pane reports its absence rather than failing — everything local works without it.",
   },
   {
-    id: "setsid", bin: "setsid", title: "setsid (util-linux)", required: false,
+    id: "setsid", bin: "setsid", title: "setsid (util-linux)", level: "optional",
     what: "Gives every shell its own process group, so closing one takes its children with it.",
     url: "https://github.com/util-linux/util-linux",
     // Used wherever it is found, not only on Linux: the terminal prepends it
@@ -224,14 +247,14 @@ export const DEPS: DepSpec[] = [
     pkg: { apt: "util-linux", dnf: "util-linux", pacman: "util-linux", zypper: "util-linux", apk: "util-linux" },
   },
   {
-    id: "script", bin: "script", title: "script (util-linux)", required: false,
+    id: "script", bin: "script", title: "script (util-linux)", level: "optional",
     what: "The terminal's fallback pseudo-terminal, used when Python 3 is absent.",
     url: "https://github.com/util-linux/util-linux",
     platforms: ["linux"],
     pkg: { apt: "bsdutils", dnf: "util-linux", pacman: "util-linux", zypper: "util-linux", apk: "util-linux" },
   },
   {
-    id: "ss", bin: "ss", title: "ss (iproute2)", required: false,
+    id: "ss", bin: "ss", title: "ss (iproute2)", level: "optional",
     what: "The Ports panel: what is listening on this machine, and which checkout it belongs to.",
     url: "https://github.com/iproute2/iproute2",
     platforms: ["linux"],
@@ -239,7 +262,7 @@ export const DEPS: DepSpec[] = [
     pkg: { apt: "iproute2", dnf: "iproute", pacman: "iproute2", zypper: "iproute2", apk: "iproute2" },
   },
   {
-    id: "dbus-monitor", bin: "dbus-monitor", title: "D-Bus tools", required: false,
+    id: "dbus-monitor", bin: "dbus-monitor", title: "D-Bus tools", level: "optional",
     what: "Mirrors your desktop notifications onto the notch, so Slack and the rest stay visible in fullscreen.",
     url: "https://www.freedesktop.org/wiki/Software/dbus/",
     platforms: ["linux"],
@@ -247,14 +270,14 @@ export const DEPS: DepSpec[] = [
     pkg: { apt: "dbus", pacman: "dbus", zypper: "dbus-1" },
   },
   {
-    id: "notify-send", bin: "notify-send", title: "notify-send (libnotify)", required: false,
+    id: "notify-send", bin: "notify-send", title: "notify-send (libnotify)", level: "optional",
     what: "Raises a desktop alert when an agent needs you and no agentglass window is open to show it.",
     url: "https://gitlab.gnome.org/GNOME/libnotify",
     platforms: ["linux"],
     pkg: { apt: "libnotify-bin", dnf: "libnotify", pacman: "libnotify", zypper: "libnotify-tools", apk: "libnotify" },
   },
   {
-    id: "opener", bin: "xdg-open", title: "Desktop opener", required: false,
+    id: "opener", bin: "xdg-open", title: "Desktop opener", level: "optional",
     what: "Opens the link behind a mirrored notification in your browser.",
     url: "https://www.freedesktop.org/wiki/Software/xdg-utils/",
     platforms: ["linux"],
@@ -262,21 +285,21 @@ export const DEPS: DepSpec[] = [
     pkg: { apt: "xdg-utils", dnf: "xdg-utils", pacman: "xdg-utils", zypper: "xdg-utils", apk: "xdg-utils" },
   },
   {
-    id: "pkexec", bin: "pkexec", title: "polkit", required: false,
+    id: "pkexec", bin: "pkexec", title: "polkit", level: "optional",
     what: "Hands a worktree back to you when its files ended up owned by another user, for example after a container wrote into it.",
     url: "https://gitlab.freedesktop.org/polkit/polkit",
     platforms: ["linux"],
     pkg: { apt: "policykit-1", dnf: "polkit", pacman: "polkit", zypper: "polkit" },
   },
   {
-    id: "bash", bin: "bash", title: "Bash", required: false,
+    id: "bash", bin: "bash", title: "Bash", level: "optional",
     what: "The shell the terminal falls back to when $SHELL is not set, and what the self-update script runs under.",
     url: "https://www.gnu.org/software/bash/",
     platforms: ["linux", "darwin"],
     pkg: { apt: "bash", dnf: "bash", pacman: "bash", zypper: "bash", apk: "bash", brew: "bash" },
   },
   {
-    id: "bwrap", bin: "bwrap", title: "Bubblewrap", required: false,
+    id: "bwrap", bin: "bwrap", title: "Bubblewrap", level: "optional",
     what: "Boxes a plugin that declares a sandbox, so it can see only its own folder, its data folder and the paths it was granted. Without it that plugin still runs, just as you, behind a warning that says why.",
     url: "https://github.com/containers/bubblewrap",
     platforms: ["linux"],
@@ -285,7 +308,17 @@ export const DEPS: DepSpec[] = [
   },
 ];
 
-export const depSpec = (id: DepId): DepSpec | undefined => DEPS.find((d) => d.id === id);
+/** What every caller gets: the row, plus the label the rest of the app asked
+ *  for before levels existed. Derived once here so no caller re-derives it. */
+export interface DepEntry extends DepSpec {
+  /** `level === "needed"`, kept because both catalogue tests and the
+   *  Connections page ask the old question. */
+  required: boolean;
+}
+
+export const DEPS: DepEntry[] = ROWS.map((d) => ({ ...d, required: d.level === "needed" }));
+
+export const depSpec = (id: DepId): DepEntry | undefined => DEPS.find((d) => d.id === id);
 
 // --- what the server found (the wire shape) ---------------------------------
 //
@@ -302,7 +335,7 @@ export const depSpec = (id: DepId): DepSpec | undefined => DEPS.find((d) => d.id
  *  `unsupported` not used on this platform, so there is nothing to do. */
 export type DepStatus = "ok" | "attention" | "missing" | "unsupported";
 
-export interface DepReport extends DepSpec {
+export interface DepReport extends DepEntry {
   status: DepStatus;
   /** A version when we have one cheaply, otherwise why it is not usable.
    *  Written for a reader, and it is the server's words, not a code. */
@@ -316,6 +349,9 @@ export interface DepReport extends DepSpec {
    * the panel falls back to the project's page.
    */
   install?: string;
+  /** tmux only: where the winning binary came from. `none` is not installed;
+   *  the other four mean there is nothing to install, whatever its status. */
+  tmuxSource?: "env" | "custom" | "bundled" | "system" | "none";
 }
 
 export interface DepsResponse {
@@ -332,4 +368,23 @@ export interface DepsResponse {
 /** Whether a tool is used on this platform at all. */
 export function usedOn(spec: DepSpec, platform: string): boolean {
   return !spec.platforms || (spec.platforms as string[]).includes(platform);
+}
+
+/** A tool's level for this run: the pick decides which agent CLI is needed. */
+export function levelFor(d: Pick<DepSpec, "id" | "level" | "agent">, picked: string): DepLevel {
+  if (d.agent) return d.id === picked ? "needed" : "optional";
+  return d.level;
+}
+
+/**
+ * Does this tool need the person before the app can do its job?
+ *
+ * Only `needed` counts. An agent CLI counts when it is the picked one, so a
+ * machine with four agents and one pick has one agent row that matters.
+ */
+export function needsYou(
+  d: Pick<DepReport, "id" | "level" | "agent" | "status">,
+  picked: string,
+): boolean {
+  return levelFor(d, picked) === "needed" && d.status !== "ok" && d.status !== "unsupported";
 }

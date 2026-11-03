@@ -115,6 +115,22 @@ describe("validateStored", () => {
     expect(v.ok).toBe(false);
     if (!v.ok) expect(v.error).toContain("policy.base");
   });
+  test("a policy saved before docker existed reads docker as off, not as a broken file", () => {
+    const old = JSON.parse(JSON.stringify(defaultStored())) as { ceiling: { docker?: boolean }; workerDefault: { docker?: boolean } };
+    delete old.ceiling.docker;
+    delete old.workerDefault.docker;
+    const v = validateStored(old);
+    expect(v.ok).toBe(true);
+    if (v.ok) {
+      expect(v.value.ceiling.docker).toBe(false);
+      expect(v.value.workerDefault.docker).toBe(false);
+    }
+  });
+  test("a docker that is not true or false is refused by name", () => {
+    const v = validateStored({ ...defaultStored(), ceiling: { ...DEFAULT_CEILING, docker: "yes" } });
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.error).toContain("policy.ceiling.docker");
+  });
 });
 
 describe("resolve", () => {
@@ -251,6 +267,7 @@ describe("envelopeWithin, the ceiling's one test", () => {
   test("each lifted switch outside the ceiling is refused", () => {
     expect(envelopeWithin(e({ network: true }), e())).toBe(false);
     expect(envelopeWithin(e({ commit: true }), e())).toBe(false);
+    expect(envelopeWithin(e({ docker: true }), e())).toBe(false);
     expect(envelopeWithin(e({ deny: [] }), e({ deny: ["make deploy"] }))).toBe(false);
     expect(envelopeWithin(e({ deny: ["make deploy", "make db"] }), e({ deny: ["make deploy"] }))).toBe(true);
   });

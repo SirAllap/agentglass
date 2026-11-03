@@ -34,7 +34,9 @@ const post = async (path: string, body: unknown, headers: Record<string, string>
   return { status: res.status, body: (await res.json()) as Record<string, any> };
 };
 type Req = { id: string; setting: string; who: string; diff: string[]; expires: number };
-const requests = async () => (await get<{ requests: Req[] }>("/settings/requests")).requests;
+/** The queue as the person's window reads it. `?as=` is only a label on a
+ *  write, so a card with no project is not read back by the agent that asked. */
+const requests = async () => (await (await fetch(base + "/settings/requests", { headers: fromApp() })).json() as { requests: Req[] }).requests;
 const policy = async () => (await get<{ policy: Policy }>("/orchestration")).policy;
 const launch = () => get<{ mode: string; deny: string[] }>("/launch-permissions");
 const decide = (id: string, approve: boolean, headers: Record<string, string>) => post("/settings/requests/decide", { id, approve }, headers);
@@ -150,6 +152,35 @@ describe("a narrowing from an agent applies at once", () => {
   });
 });
 
+describe("a live Polaris door from an agent is one request, never an applied step", () => {
+  const root = () => `${dir}/orbit-live`;
+  const startSession = async () => (await get<{ value: { mode: string; tries: number } }>(`/settings/door?id=polaris.door.startSession&root=${encodeURIComponent(root())}`)).value;
+  const ask = () => post("/settings/door", { id: "polaris.door.startSession", value: { mode: "click", tries: 3 }, root: root() }, fromAgent);
+
+  test("202 pending, the value unchanged, and the trust switch does not apply it", async () => {
+    expect(await startSession()).toMatchObject({ mode: "off" });
+    const r = await ask();
+    expect(r.status).toBe(202);
+    expect((await startSession()).mode).toBe("off");
+    // The person's switch is on for the project: a live position is still asked.
+    expect((await post("/settings/door", { id: "agents.changeWithoutAsking", value: true, root: root() }, fromApp())).status).toBe(200);
+    expect(await post("/settings/door", { id: "polaris.door.startSession", value: { mode: "off", tries: 1 }, root: root() }, fromAgent)).toMatchObject({ status: 200 });
+    expect((await ask()).status).toBe(202);
+    expect((await startSession()).mode).toBe("off");
+    expect((await requests()).filter((q) => q.setting === "polaris.door.startSession")).toHaveLength(1);
+    // An agent cannot answer its own request, named or not.
+    const [q] = (await requests()).filter((x) => x.setting === "polaris.door.startSession");
+    expect((await decide(q!.id, true, fromAgent)).status).toBe(403);
+    expect((await decide(q!.id, true, namedAgent())).status).toBe(403);
+    expect((await startSession()).mode).toBe("off");
+    // The person's decide applies exactly the value asked for.
+    expect((await decide(q!.id, true, fromApp())).status).toBe(200);
+    expect(await startSession()).toMatchObject({ mode: "click", tries: 3 });
+    expect((await requests()).filter((x) => x.setting === "polaris.door.startSession")).toEqual([]);
+    expect((await post("/settings/door", { id: "agents.changeWithoutAsking", value: false, root: root() }, fromApp())).status).toBe(200);
+  });
+});
+
 describe("the Settings pages' own routes hold an agent to the same classes", () => {
   test("the gate off, a bigger budget, plugins on, a dearer role, a shorter wake: each waits, nothing changes", async () => {
     const before = await requests();
@@ -204,6 +235,18 @@ describe("the person's switch: let my agents change settings without asking", ()
     expect((await post("/settings/door", { id: "launch.mode", value: "bypassPermissions" }, fromAgent)).status).toBe(202);
     for (const q of await requests()) await decide(q.id, false, fromApp());
     expect((await launch()).mode).toBe("auto");
+  });
+
+  /* A root that is not a path names no project, so it is not a question with
+     the global answer in it: the other root-taking routes refuse it with 400. */
+  test("a root that is not an absolute path is refused, not answered with the global switch", async () => {
+    expect((await post("/settings/door", { id: "agents.changeWithoutAsking", value: true }, fromApp())).status).toBe(200);
+    expect((await get<{ trusted: boolean }>("/settings/door")).trusted).toBe(true);
+    const bad = await fetch(base + "/settings/door?root=relative", { headers: auth });
+    expect(bad.status).toBe(400);
+    // And a project with no row of its own reads off, whatever the global says.
+    expect((await get<{ trusted: boolean }>(`/settings/door?root=${encodeURIComponent(`${dir}/orbit-c`)}`)).trusted).toBe(false);
+    expect((await post("/settings/door", { id: "agents.changeWithoutAsking", value: false }, fromApp())).status).toBe(200);
   });
 });
 

@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { api, IS_DEMO } from "../lib/api.ts";
 import { IS_DESKTOP } from "../lib/desktop.ts";
 import { ReleaseNotesModal } from "./ReleaseNotesModal.tsx";
-import { markSeen, onShowWhatsNew, releaseToAnnounce } from "../lib/whatsNew.ts";
+import { Celebration } from "./Celebration.tsx";
+import { emitControl } from "../lib/controlBus.ts";
+import { isCelebrationTag, markSeen, onShowWhatsNew, releaseToAnnounce } from "../lib/whatsNew.ts";
 
 /**
  * What changed, the first time the app runs a version it has not run before.
@@ -25,6 +27,9 @@ import { markSeen, onShowWhatsNew, releaseToAnnounce } from "../lib/whatsNew.ts"
 export function WhatsNew() {
   const [tag, setTag] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
+  // The 1.0 moment replaces the notes modal for that one tag. It needs no notes
+  // (its three lines are its own), so it is decided before they are checked.
+  const [celebrate, setCelebrate] = useState(false);
   // Asked for through the registry's door (lib/whatsNew.ts showWhatsNew): shown
   // as About's button shows them, and never marked as seen.
   const [demand, setDemand] = useState<{ error?: string; loading: boolean } | null>(null);
@@ -44,6 +49,7 @@ export function WhatsNew() {
           if (!live || !r.tag) return;
           const announce = releaseToAnnounce(r.tag);
           if (!announce) return;
+          if (isCelebrationTag(announce)) { setTag(announce); setCelebrate(true); return; }
           if (!r.ok || !r.notes.trim()) { markSeen(r.tag); return; }
           setTag(announce);
           setNotes(r.notes);
@@ -56,6 +62,7 @@ export function WhatsNew() {
   useEffect(() => onShowWhatsNew(() => {
     setTag(null);
     setNotes("");
+    setCelebrate(false);
     setDemand({ loading: true });
     if (IS_DEMO || !IS_DESKTOP) { setDemand({ loading: false, error: "Release notes come with the desktop app" }); return; }
     api.updateNotes()
@@ -71,7 +78,12 @@ export function WhatsNew() {
     if (tag && !demand) markSeen(tag);
     setTag(null);
     setDemand(null);
+    setCelebrate(false);
   };
+
+  if (celebrate && tag) {
+    return <Celebration onClose={close} onOpen={() => { emitControl({ cmd: "view", to: "term" }); close(); }} />;
+  }
 
   return (
     <ReleaseNotesModal open={!!tag || !!demand} tag={tag ?? ""} notes={notes}

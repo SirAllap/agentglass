@@ -118,8 +118,14 @@ async function rulesVerdict(tool, args, dir) {
   const claudeName = name ? name[0].toUpperCase() + name.slice(1) : "";
   if (!/^[A-Za-z][A-Za-z0-9_-]{0,99}$/.test(claudeName)) return null;
   const q = new URLSearchParams({ root: dir, tool: claudeName, input: JSON.stringify(args ?? {}).slice(0, 8000) });
+  // The seat's own credential names it to the server, so a rule scoped to the
+  // seat applies on this CLI too; a worker runs without one.
+  const token = (process.env.AGENTGLASS_TOKEN || "").trim();
   try {
-    const res = await fetch(`${SERVER}/agent-rules/check?${q}`, { signal: AbortSignal.timeout(2000) });
+    const res = await fetch(`${SERVER}/agent-rules/check?${q}`, {
+      signal: AbortSignal.timeout(2000),
+      ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+    });
     if (!res.ok) return null;
     const out = await res.json();
     return out.decision === "never" || out.decision === "ask" ? out : null;

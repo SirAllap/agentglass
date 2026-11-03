@@ -3,7 +3,7 @@
  * decided in lib/leftovers.ts; these pin its words, who gets it, and that the list no longer draws its own rows.
  */
 import { describe, expect, test } from "bun:test";
-import { leftoverLine, type LeftoverState } from "../src/lib/leftovers.ts";
+import { leftoverLine, stateOfRow, type LeftoverState } from "../src/lib/leftovers.ts";
 
 const some = (items: number, bytes: number): LeftoverState => ({ kind: "some", items, bytes, groups: [{ group: "worktree", items, bytes }] });
 const read = (f: string) => Bun.file(new URL(f, import.meta.url)).text();
@@ -29,6 +29,14 @@ describe("the line a finished card shows about this computer", () => {
     expect(leftoverLine({ kind: "computing" }, false)).toBeNull();
     expect(leftoverLine({ kind: "unknown", why: "x" }, false)).toBeNull();
     expect(leftoverLine(undefined, false)).toBeNull();
+  });
+  test("a card the cleanup would refuse says why, from the server's own reason", () => {
+    const s = stateOfRow({ pr: 7, items: 2, bytes: 10, groups: [{ group: "worktree", items: 2, bytes: 10 }], blocked: "Commits on the branch that are not on origin" });
+    const line = leftoverLine(s, false)!;
+    expect(line.tone).toBe("blocked");
+    expect(line.text).toBe("Leftovers: 2 items · 10 B · blocked");
+    expect(line.title).toContain("Commits on the branch that are not on origin");
+    expect(line.title).toContain("Clean up would refuse");
   });
 });
 

@@ -1,8 +1,10 @@
 /*
  * What a click on a container does. One place for the verbs so the row, the
- * menu, the key and the detail bar cannot disagree. Nothing refetches after a
- * verb: Docker reports the change on its event stream and the data hook hears
- * it, which is also how a change made from a terminal shows up.
+ * menu, the key and the detail bar cannot disagree. A single verb does not
+ * refetch: Docker reports the change on its event stream and the data hook
+ * hears it, which is also how a change made from a terminal shows up. A group
+ * is the exception — its events land across the whole loop, so the panel reads
+ * the list once when the loop ends (DockerPanel's runBulk).
  */
 import { useCallback, useRef, useState } from "react";
 import type { DockerActionResult, DockerContainer } from "../../../../shared/types.ts";

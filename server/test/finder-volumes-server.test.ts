@@ -3,10 +3,16 @@
  * PATH (a child process with the PATH already set, so Bun.which finds the stub
  * and never the real tool: nothing here can touch a real disk).
  *
- * Pinned: the list is what the fixture says; an agent with no page is held
- * back from every write and from unlock whatever the level; the passphrase
+ * Pinned: the list is what the fixture says; an agent with no page is refused
+ * every write and unlock whatever the level; the passphrase
  * reaches the tool on stdin and is in no response and no log; a stream client
  * hears one frame when the monitor reports a change that alters the list.
+ *
+ * The two stubs are long-lived (`gio mount -m` loops until a file appears), and
+ * they are exactly what the server's device watch starts. They stop when this
+ * file's server is gone, and the run says so: a helper left behind here is a
+ * process with systemd as its parent, alive for days, which is how 43 of them
+ * were found on one machine.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
@@ -15,6 +21,7 @@ import { join } from "node:path";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
 import { freePort } from "./freePort.ts";
+import { stopNaming, stopServer } from "./tempDirProcesses.ts";
 
 // The credential is built apart so no single line spells out a whole login URL; the string is unchanged.
 const PW = "hunter2";
@@ -53,12 +60,14 @@ beforeAll(async () => {
   mkdirSync(bin);
   writeFileSync(join(dir, "dump.txt"), DUMP);
   // The stub: dump prints the fixture, unlock records its stdin, monitor prints a line when told to.
+  // Both loops also end when $PPID is gone, so a server killed without its exit
+  // hook (a box with no `setpriv --pdeathsig`) leaves nothing behind.
   writeFileSync(join(bin, "udisksctl"), `#!/bin/sh
 case "$1" in
   dump) cat "${dir}/dump.txt";;
   unlock) cat > "${dir}/stdin.txt"; printf '%s\\n' "$*" > "${dir}/argv.txt"; echo "Error unlocking /dev/sdb1: bad passphrase ${SECRET}" >&2; exit 1;;
   mount|unmount|lock|power-off) printf '%s\\n' "$*" >> "${dir}/calls.txt";;
-  monitor) echo "Monitoring the udisks daemon. Press Ctrl+C to exit."; while [ ! -e "${dir}/change" ]; do sleep 0.1; done; echo "00:00:00.000: /org/freedesktop/UDisks2/block_devices/sdb1: Properties Changed";;
+  monitor) echo "Monitoring the udisks daemon. Press Ctrl+C to exit."; while kill -0 "$PPID" 2>/dev/null && [ ! -e "${dir}/change" ]; do sleep 0.1; done; [ -e "${dir}/change" ] && echo "00:00:00.000: /org/freedesktop/UDisks2/block_devices/sdb1: Properties Changed";;
 esac
 `);
   chmodSync(join(bin, "udisksctl"), 0o755);
@@ -66,7 +75,7 @@ esac
   writeFileSync(join(bin, "gio"), `#!/bin/sh
 case "$1 $2" in
   "mount -l") exit 0;;
-  "mount -m") while [ ! -e "${dir}/never" ]; do sleep 1; done;;
+  "mount -m") while kill -0 "$PPID" 2>/dev/null && [ ! -e "${dir}/never" ]; do sleep 1; done;;
   "mount -u") exit 0;;
   "mount sftp://build.example.org/")
     printf '%s\\n' "$*" >> "${dir}/gio-argv.txt"
@@ -100,10 +109,18 @@ exit 1
   throw new Error("the server did not come up");
 }, SERVER_BOOT_MS);
 
-afterAll(() => {
+afterAll(async () => {
   try { claimCtl?.abort(); } catch { /* gone */ }
-  try { proc?.kill(); } catch { /* gone */ }
+  // The server first, and gone before the directory is: it reads the stubs from
+  // there, and its helpers are its children until it exits.
+  await stopServer(proc);
+  const left = await stopNaming(dir);
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* fine */ }
+  // A stub of this file's directory still alive is a process nobody will stop:
+  // systemd adopts it and it runs for days. The scan is read-only; only a pid
+  // whose argv names this mkdtemp path is signalled, which cannot be another
+  // file's.
+  if (left) expect(left).toEqual([]);
 });
 
 const act = (a: string, body: unknown, headers: Record<string, string> = {}) =>
@@ -214,7 +231,7 @@ describe("connecting to a remote, over real pipes", () => {
 
 describe("the desk key, not an Origin header", () => {
   test("a vouched Origin without the key is not enough to act on a device or to answer a connection", async () => {
-    // The desk is held (beforeAll claimed it), so a forged Origin without its key must change nothing.
+    // The desk was claimed in beforeAll, so a forged Origin without its key must change nothing.
     for (const a of ["mount", "unmount", "eject", "lock", "unlock"]) {
       const r = await act(a, { id: "/dev/sdb1", passphrase: SECRET }, { Origin: base });
       expect(r.status).toBe(403);

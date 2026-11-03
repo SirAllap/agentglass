@@ -10,6 +10,7 @@
  * wants a written plan (and a mockup when the plan is visual), and nothing else.
  */
 import type { BuilderState, StopReason } from "../../../shared/types.ts";
+import { engineModelLabel } from "../../../shared/preflightEngine.ts";
 /* A cycle with flightPilot, safe because each side uses the other only inside functions. */
 import { flightGroups, flightItems } from "./flightPilot.ts";
 
@@ -25,6 +26,10 @@ export interface Finding {
 }
 export interface Certificate {
   id: string; createdAt: number; model: string; costUsd: number; capUsd?: number;
+  /** The CLI that read it; absent on a certificate from before this was recorded. */
+  engine?: "claude" | "opencode";
+  /** False when the engine did not say what it spent: `costUsd` is 0 and not a measurement. */
+  costKnown?: boolean;
   files: { path: string; sha256: string; bytes: number; part?: string }[];
   mockups: { path: string; sha256: string; bytes: number; kind: "image" | "html" }[];
   skipped: { path: string; reason: string }[];
@@ -64,12 +69,18 @@ export interface Plan {
   reviewedVersion?: number | null;
   /** What the plans list says about a launched plan's builder tab; absent from a read that does not carry it. */
   builder?: BuilderState;
+  /** The named worker that builds this plan when its builders run on another engine; null or absent on a plan stored before the link. */
+  worker?: string | null;
+  /** What that worker is doing, as the engine read its own row: working, or ended. Absent when the link names no worker this machine ran. */
+  workerState?: "working" | "ended";
   /** When the tab was first seen closed (the server's memory, so a restart restamps it), and when the plan entered its state. */
   goneAt?: number | null; stateSince?: number | null;
   /** Queued only: the builders holding the slots Go waits for. */
   slotHolders?: { id: string; title: string }[];
   /** 1 for the first text the plan had, +1 each time the text was replaced. Only the open plan's read carries it. */
   version?: number;
+  /** Before Go: the model this plan's builder starts on, and one sentence saying why. */
+  launch?: { mode: string; model: string; why: string };
 }
 export interface PlanQuestion { id?: string; text: string; detail?: string; choices: string[]; recommended?: number; by: string; at: number; answer?: { text: string; by: string; at: number } }
 export interface PlanDetail { plan: Plan; run: Run | null }
@@ -109,10 +120,19 @@ export function toPlan(r: Raw): Plan {
     createdAt: Number(pick(r, "createdAt", "created_at") ?? 0), updatedAt: Number(pick(r, "updatedAt", "updated_at") ?? 0),
     reviewedVersion: typeof pick(r, "reviewedVersion", "reviewed_version") === "number" ? (pick(r, "reviewedVersion", "reviewed_version") as number) : null,
     ...(r.builder === "live" || r.builder === "gone" || r.builder === "none" || r.builder === "unknown" ? { builder: r.builder } : {}),
+    ...(typeof r.worker === "string" ? { worker: r.worker } : {}),
+    ...(r.workerState === "working" || r.workerState === "ended" ? { workerState: r.workerState } : {}),
     ...(typeof r.goneAt === "number" ? { goneAt: r.goneAt } : {}),
     ...(typeof r.stateSince === "number" ? { stateSince: r.stateSince } : {}),
     ...(Array.isArray(r.slotHolders) ? { slotHolders: (r.slotHolders as { id: string; title: string }[]).filter((h) => typeof h?.id === "string").map((h) => ({ id: h.id, title: String(h.title ?? "") })) } : {}),
+    ...(r.launch && typeof r.launch === "object" ? { launch: r.launch as Plan["launch"] } : {}),
   };
+}
+
+/** The open plan is read whole (its text, its version); what only the list carries is laid over it. */
+export function mergeOpenPlan(full: Plan, listed: Plan): Plan {
+  const { builder, goneAt, stateSince, slotHolders, stopReason, pilot, held, heldBy, heldAt, launch, worker, workerState } = listed;
+  return { ...full, builder, goneAt, stateSince, slotHolders, stopReason, pilot, held, heldBy, heldAt, launch, worker, workerState };
 }
 
 export interface DiffRow { kind: "same" | "add" | "del"; text: string }
@@ -209,7 +229,7 @@ export type Group = "awaiting" | "progress" | "launched";
 export function groupOf(p: Plan, run: Run | null): Group | null {
   if (p.state === "no-go") return null;
   if (p.state === "launched") return "launched";
-  if (p.state === "draft" || (p.state === "go" && p.queued)) return "progress";
+  if (p.state === "draft" || (p.state === "go" && (p.queued || p.workerState !== undefined))) return "progress";
   if (run && (run.state === "running" || run.state === "awaiting-go")) return "progress";
   return "awaiting";
 }
@@ -256,6 +276,10 @@ export function when(at: number, now: number): string {
 
 export const kb = (bytes: number): string => (bytes >= 1000 ? `${(bytes / 1000).toFixed(1)} KB` : `${bytes} B`);
 export const usd = (n: number): string => `$${n.toFixed(2)}`;
+/** What a run cost, as the person reads it: "cost not reported" when the engine said nothing, never a "$0.00" that reads as a measurement. */
+export const costText = (c: Pick<Certificate, "costUsd" | "costKnown">): string => (c.costKnown === false ? "cost not reported" : usd(c.costUsd));
+/** The engine and model the certificate says really ran; a certificate from before the engine was recorded says the model alone. */
+export const ranOn = (c: Pick<Certificate, "model" | "engine">): string => (c.engine ? engineModelLabel(c.engine, c.model) : c.model);
 
 /**
  * A run the cost cap stopped, in the numbers the error note speaks in: what it
@@ -339,7 +363,7 @@ export function pollRows(p: Plan, run: Run | null, capUsd: number): PollRow[] {
   if (cert) {
     rows.push({ k: "Preflight", v: "fresh reviewer · saw no conversation", light: "go" });
     rows.push(open ? { k: "Findings", v: `${all - open} of ${all} answered · they never block Go`, light: "skip" } : { k: "Findings", v: `${all} of ${all} answered`, light: "go" });
-    rows.push({ k: "Cost", v: `${usd(cert.costUsd)} of the ${usd(capUsd)} cap`, light: "go" });
+    rows.push({ k: "Cost", v: cert.costKnown === false ? "cost not reported" : `${usd(cert.costUsd)} of the ${usd(capUsd)} cap`, light: cert.costKnown === false ? "skip" : "go" });
     if (p.autoRuns >= AUTO_RUNS_MAX) rows.push({ k: "Re-review", v: "on request", light: "skip" });
   } else rows.push({ k: "Preflight", v: run?.state === "running" ? "reading now" : run?.state === "awaiting-go" ? "waits for your go" : "not run for this plan", light: "skip" });
   return rows;

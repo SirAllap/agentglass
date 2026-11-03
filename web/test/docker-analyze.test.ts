@@ -85,7 +85,7 @@ describe("analyzeGate", () => {
 describe("analyzeTitle", () => {
   test("names the agent that will run, or says the setting", () => {
     expect(analyzeTitle("Codex")).toContain("Codex");
-    expect(analyzeTitle(null)).toMatch(/Worker roles/);
+    expect(analyzeTitle(null)).toMatch(/Orchestration/);
   });
 });
 

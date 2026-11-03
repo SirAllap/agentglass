@@ -107,12 +107,12 @@ describe("the page flow", () => {
   test("an old box spans the page until its page moves onto the kit", () => {
     expect(rule(".agx-settings-col .agx-settings-section")).toContain("column-span: all");
   });
-  test("a board is one flow column at its own width, set on the page that holds the rail", () => {
-    expect(css).toContain('.agx-settings-col[data-flow="single"] { columns: 1; }');
-    expect(modal).toContain('data-flow={WIDE_PANES.has(pane) ? "single" : undefined}');
-    // The grid that holds the rail and the column both read the width, so it is set on their ancestor.
-    const page = modal.slice(modal.indexOf('<div className="agx-settings-page"'), modal.indexOf('<div className="agx-settings-content">'));
-    expect(page).toContain('"--agx-settings-col": WIDE_PANES.get(pane)');
+  test("no page opts out of the flow: the column is the page's width", () => {
+    // A board used to leave the flow at a width of its own (WIDE_PANES), which
+    // is the band this page was fixed for. Every page is the column now.
+    expect(css).not.toContain('[data-flow="single"]');
+    expect(modal).not.toContain("WIDE_PANES");
+    expect(modal).not.toContain('"--agx-settings-col"');
   });
   test("a card takes the page's hue for its icon chip from the group of the page", () => {
     const page = modal.slice(modal.indexOf('<div className="agx-settings-page"'), modal.indexOf('<div className="agx-settings-content">'));

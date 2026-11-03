@@ -66,12 +66,24 @@ export interface ContainerFacts {
   healthError: string | null;
   /** Consecutive failing probes, as docker counts them. */
   healthFailures: number;
+  /** Docker's own account of a start that never got as far as running the
+   *  container — a mount source that is not there, a port already taken. */
+  stateError: string | null;
+  /** When the last run ended, for telling its log from the failed attempt. */
+  finishedAt: string | null;
   /** Read-write volume mounts, by volume name. The list side of "who is holding
    *  this volume", without a second call. */
   volumes: { name: string; rw: boolean; destination: string }[];
 }
 
-const EMPTY: ContainerFacts = { startedAt: null, restarts: 0, healthError: null, healthFailures: 0, volumes: [] };
+const EMPTY: ContainerFacts = {
+  startedAt: null, restarts: 0, healthError: null, healthFailures: 0, stateError: null, finishedAt: null, volumes: [],
+};
+
+/** Docker writes 1 January year 1 for a time that never happened; serving it
+ *  would put it in the detail as a real date. */
+const stampOf = (v: unknown): string | null =>
+  typeof v === "string" && v && !v.startsWith("0001-") ? v : null;
 
 /**
  * Parse `docker inspect a b c` — always an array, one entry per container.
@@ -93,9 +105,11 @@ export function parseFacts(stdout: string): Map<string, ContainerFacts> {
     const health = one?.State?.Health;
     const log = Array.isArray(health?.Log) ? health.Log[health.Log.length - 1] : null;
     out.set(id, {
-      startedAt: typeof one?.State?.StartedAt === "string" && !one.State.StartedAt.startsWith("0001-")
-        ? one.State.StartedAt
-        : null,
+      startedAt: stampOf(one?.State?.StartedAt),
+      finishedAt: stampOf(one?.State?.FinishedAt),
+      // Not trimmed to a line or a length: this is the reason, and it is what
+      // the detail shows verbatim behind a fold.
+      stateError: typeof one?.State?.Error === "string" && one.State.Error.trim() ? one.State.Error.trim() : null,
       restarts: Number.isFinite(one?.RestartCount) ? Number(one.RestartCount) : 0,
       // The probe's output, first line only: these end in a stack trace often
       // enough that the whole thing would push the row off screen.

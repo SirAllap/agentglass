@@ -27,7 +27,7 @@ describe("slice 6 nav groups", () => {
     // Pane engine sits under Workspace, beside the Terminal that runs on it, and Plugins closes Library:
     // that is where the approved Settings design files them (see lib/settingsNav.ts).
     expect(idsIn("Workspace")).toEqual(["terminal", "tmux", "diff", "browser", "git", "tasks"]);
-    expect(idsIn("Agents")).toEqual(["hooks", "engines", "orchestration", "lantern", "understudy", "budgets"]);
+    expect(idsIn("Agents")).toEqual(["hooks", "engines", "orchestration", "polaris", "understudy", "budgets", "gaps"]);
     expect(idsIn("Library")).toEqual(["recipes", "review-prompts", "saved-replies", "plugins"]);
     expect(idsIn("Connections")).toEqual(["connections", "clickup", "jira", "remote"]);
     expect(idsIn("System")).toEqual(["privacy", "about"]);

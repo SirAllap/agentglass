@@ -1,8 +1,9 @@
 /**
  * What a key does in the usage popover's account chips, decided without a DOM.
  *
- * The popover has two axes: providers (up and down, only when more than one
- * provider has accounts) and the accounts of the one shown (left and right).
+ * The popover has two axes: providers (up and down, over the tabs the bar has)
+ * and the accounts of the one shown (left and right — except while focus is in
+ * the tab row, where ←→ moves the tab, since that is what a tablist does).
  * `a` asks the plugin to switch to the chip in focus, `m` opens the plugin's
  * own page, Esc closes. When an agent has proposed a switch, the first Esc
  * puts the proposal away and the second closes, so a stray Esc never throws
@@ -14,7 +15,7 @@
  */
 
 export interface KeyState {
-  /** Providers that have an account list and a reading to show. */
+  /** The sheet's tabs, in order: every provider the bar has a cell for. */
   providers: number;
   /** Accounts of the provider shown. */
   accounts: number;
@@ -26,6 +27,8 @@ export interface KeyState {
   proposal: boolean;
   /** A press is still being answered. */
   busy: boolean;
+  /** Focus is in the provider tab row, where ←→ moves the tab and not the account. */
+  inTabs: boolean;
 }
 
 export type KeyAction =
@@ -54,6 +57,32 @@ export function decideKey(s: KeyState, key: string): KeyAction | null {
 /** Move `i` by `step` inside `n` items, wrapping at both ends. */
 export const stepIndex = (i: number, step: 1 | -1, n: number): number => (n <= 0 ? 0 : (i + step + n) % n);
 
+/**
+ * The provider the sheet starts on: the one an agent's proposal names when the
+ * bar has a cell for it, else the row the bar was showing.
+ *
+ * The proposal card and its Switch button are drawn under the tab that is
+ * selected. Opening on a live provider without a cell for the proposal's
+ * provider leaves the card nowhere to be — the request cannot be confirmed at
+ * all, and the sheet shows a provider the agent was not talking about.
+ */
+export function stagedProvider<P extends string>(named: P, hasCell: (p: P) => boolean, live: P | undefined): P | undefined {
+  return hasCell(named) ? named : live;
+}
+
+/**
+ * The provider ↑↓ lands on, from the one the sheet is showing now.
+ *
+ * Computed from the current provider every time, never from a remembered first
+ * pick: a pick keyed on an earlier row came back when the person returned to
+ * it, so the tab row said Claude while the sheet drew another provider.
+ */
+export function nextProvider<P extends string>(providers: readonly P[], current: P, step: 1 | -1): P {
+  const i = providers.indexOf(current);
+  if (i < 0 || providers.length < 2) return current;
+  return providers[stepIndex(i, step, providers.length)]!;
+}
+
 export interface KeyHint {
   keys: string;
   label: string;
@@ -70,8 +99,10 @@ export interface KeyHint {
  */
 export function keyHints(s: KeyState): KeyHint[] {
   const out: KeyHint[] = [];
-  if (s.providers > 1) out.push({ keys: "↑↓", label: "provider", enabled: true });
-  if (s.accounts > 1) out.push({ keys: "←→", label: "account", enabled: true });
+  // The legend names the keys where the focus is: the first press lands on the
+  // tab row on open, and a tablist owns ←→ there.
+  if (s.providers > 1) out.push({ keys: s.inTabs ? "↑↓ ←→" : "↑↓", label: "provider", enabled: true });
+  if (s.accounts > 1 && !s.inTabs) out.push({ keys: "←→", label: "account", enabled: true });
   if (!s.managed) {
     out.push({ keys: "a", label: "switch", act: "switch", enabled: !s.candidateActive && !s.busy && !s.proposal });
     out.push({ keys: "m", label: "manage", act: "manage", enabled: !s.busy && !s.proposal });

@@ -17,11 +17,12 @@ import type { OrchestrationViewProps } from "../src/components/orchestration/Orc
 import { agentProvider } from "../../shared/agentKinds.ts";
 import { composePolicy, defaultStored, type Policy } from "../../shared/orchestration.ts";
 import type { EngineReadiness } from "../../shared/types.ts";
-import { OWN_SETTING, SCOPE_KEY, recallScope, rememberScope, scopeSentence, openingScope, appliedLine, cardUndo, presetDiagram, undoPolicy, applyPreset, backAvailable, backOf, presetInForce, presetOffers, scopeWords } from "../src/components/orchestration/orchestrationCopy.ts";
+import { OWN_SETTING, SCOPE_KEY, recallScope, rememberScope, openingScope, appliedLine, cardUndo, presetDiagram, undoPolicy, applyPreset, backAvailable, backOf, presetInForce, presetOffers, scopeWords } from "../src/components/orchestration/orchestrationCopy.ts";
 
 const DIR = join(import.meta.dir, "..", "src", "components", "orchestration");
 const strip = (s: string) => s.replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 const quick = strip(readFileSync(join(DIR, "QuickSetup.tsx"), "utf8"));
+const layer = strip(readFileSync(join(DIR, "flow", "PresetsLayer.tsx"), "utf8"));
 const copy = strip(readFileSync(join(DIR, "orchestrationCopy.ts"), "utf8"));
 const title = (id: string) => agentProvider(id)!.title;
 
@@ -55,40 +56,6 @@ const rowOf = (html: string, label: string): string => {
 };
 
 describe("the card on the page", () => {
-  test("it is the first card, and every preset says what it sets", () => {
-    const html = view();
-    expect(html.indexOf("Start from a preset")).toBeGreaterThan(-1);
-    expect(html.indexOf("Start from a preset")).toBeLessThan(html.indexOf("Fine-tune who does what"));
-    for (const o of presetOffers([engine("claude"), engine("opencode")])) {
-      const row = rowOf(html, o.title);
-      for (const line of o.says) expect(row).toContain(line.replace(/'/g, "&#x27;"));
-      expect(row).toContain(o.confirm);
-    }
-  });
-  test("an engine that is missing disables the preset, says which and links to Agent engines", () => {
-    const html = view({ readiness: [engine("claude"), OLD] });
-    const row = rowOf(html, `${title("claude")} orchestrates, others work`);
-    expect(row).toContain(`Needs an engine besides ${title("claude")} that can work: ${title("hermes")} needs an update.`);
-    expect(row).toContain("See Agent engines");
-    expect(row).toMatch(/<button[^>]*disabled=""[^>]*>Use this setup<\/button>/);
-    // the one that needs only Claude stays pressable
-    expect(rowOf(html, `All workers on ${title("claude")}`)).not.toMatch(/disabled=""[^>]*>Use this setup</);
-  });
-  test("before the probe answers every Apply is disabled and Check my setup too", () => {
-    const html = view({ readiness: null });
-    expect((html.match(/<button[^>]*disabled=""[^>]*>Use this setup<\/button>/g) ?? []).length).toBe(3);
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Check my setup<\/button>/);
-  });
-  test("a project on the general setting cannot be written, and says what to do", () => {
-    const html = view({ root: "/work/orbit", scope: "global" });
-    expect(html).toContain("Set it for this project first, or pick All projects.");
-    expect((html.match(/<button[^>]*disabled=""[^>]*>Use this setup<\/button>/g) ?? []).length).toBe(3);
-  });
-  test("the server's sentence for a refusal sits in the card", () => {
-    const html = view({ notes: { quick: "policy.workerDefault: is wider than the most the main agent may allow; lower the default or raise that limit on purpose" } });
-    expect(html.indexOf("is wider than the most")).toBeGreaterThan(html.indexOf("Start from a preset"));
-    expect(html.indexOf("is wider than the most")).toBeLessThan(html.indexOf("Fine-tune who does what"));
-  });
 });
 
 describe("the card's source", () => {
@@ -104,11 +71,9 @@ describe("the card's source", () => {
     const body = quick.slice(at, quick.indexOf("\n  };", at));
     expect(body).toContain("p.onSave(undoPolicy(p.policy, back), \"quick\")");
     expect(body.indexOf("writeBack(p.root, null)")).toBeGreaterThan(body.indexOf("if (err) return;"));
-    expect(quick).toContain("{BACK_LABEL}");
-    expect(quick).toContain("cardUndo(");
+    expect(layer).toContain("BACK_LABEL");
   });
-  test("after another edit the way back is dropped and the card says so", () => {
-    expect(quick).toContain("{BACK_GONE}");
+  test("after another edit the way back is dropped", () => {
     const end = quick.indexOf("}, [back, pending");
     const body = quick.slice(quick.lastIndexOf("useEffect", end), end);
     expect(body).toContain("backAvailable(back, p.policy)");
@@ -118,8 +83,8 @@ describe("the card's source", () => {
     expect(quick).toContain("after: JSON.stringify(p.policy)");
   });
   test("Check my setup makes no request, no save and starts nothing", () => {
-    const at = quick.indexOf("Check my setup</Button>");
-    const click = quick.slice(quick.lastIndexOf("<Button", at), at);
+    const at = layer.indexOf("Check my setup</button>");
+    const click = layer.slice(layer.lastIndexOf("<button", at), at);
     expect(click).toContain("setCheck(checkSetup(");
     expect(click).not.toMatch(/onSave|api\.|fetch|apply|undo/);
     const fn = copy.slice(copy.indexOf("export function checkSetup("));
@@ -142,19 +107,10 @@ describe("an applied preset says so", () => {
     expect(offers.find((o) => o.id === "all-on-claude")!.active).toBe(false);
     expect(presetOffers(ready, base()).some((o) => o.active)).toBe(false);
   });
-  test("the card shows a check and the scope instead of an Apply", () => {
-    const applied = applyPreset(base(), "claude-orchestrates", ready)!;
-    const row = rowOf(view({ policy: applied, readiness: ready }), "Claude Code orchestrates, others work");
-    expect(row).toContain("Applied for all projects");
-    expect(row).not.toMatch(/>Use this setup</);
-    expect(rowOf(view({ policy: applied, readiness: ready }), "All workers on Claude Code")).toMatch(/>Use this setup</);
-    expect(scopeWords("/home/me/code/orbit")).toBe("orbit");
-  });
   test("the line under the card says what changed and where the rule is", () => {
     expect(appliedLine("Quick setup: x", true, "/w/orbit")).toBe("Saved for orbit. Nothing running was moved.");
     expect(appliedLine("Quick setup: x", true)).toBe("Saved for all projects. Nothing running was moved.");
     expect(appliedLine("Quick setup: x", false)).toContain("nothing changed");
-    expect(quick).toContain("See it in Conditions below");
     expect(quick).toContain("scrollIntoView");
   });
   test("pressing a preset already in force saves nothing and keeps the way back", () => {
@@ -227,15 +183,8 @@ describe("the side sheet opens where the person is looking", () => {
     expect(body).toContain("onClick={onCancel}");
     expect(body).toContain("nameRef.current?.focus({ preventScroll: true })");
   });
-  test("every button that opens it records itself, and closing returns the focus to it", () => {
-    for (const label of ["Add a fallback rule", ">Edit<", "Add a condition<"]) expect(PANE, label).toContain(label);
-    expect((PANE.match(/openSheet\(/g) ?? []).length).toBeGreaterThanOrEqual(3);
-    const at = PANE.indexOf("const openSheet =");
-    expect(PANE.slice(at, at + 260)).toContain("opener.current = from");
-    expect(PANE).toContain("opener.current.focus()");
-  });
   test("the sheet is not drawn inside the card that lists the conditions", () => {
-    const card = PANE.slice(PANE.indexOf('<SettingsCard title="Conditions"'), PANE.indexOf('<SettingsCard title={SAFETY.title}'));
+    const card = PANE.slice(PANE.indexOf("title={`Conditions (${policy.rules.length})`}"), PANE.indexOf("<SafetySection"));
     expect(card).not.toContain("RuleSheet");
   });
 });
@@ -252,19 +201,6 @@ describe("a preset card shows what changes", () => {
     const plan = presetOffers(ready, base()).find((x) => x.id === "save-my-plan")!;
     expect(presetDiagram(base(), plan.workers).map((r) => r.role)).toEqual(["builder"]);
     expect(presetDiagram(base(), presetOffers(null, base())[0]!.workers)).toEqual([]);
-  });
-  test("each card draws Before and After, with the neutral letters", () => {
-    const row = rowOf(view({ readiness: ready }), `${title("claude")} orchestrates, others work`);
-    expect(row).toContain("Before");
-    expect(row).toContain("After");
-    expect(row).toContain(">O<");
-    expect(row).toContain(">H<");
-  });
-  test("the applied card has the green edge and the Applied word; the others do not", () => {
-    const applied = applyPreset(base(), "claude-orchestrates", ready)!;
-    const html = view({ policy: applied, readiness: ready });
-    expect(rowOf(html, `${title("claude")} orchestrates, others work`)).toContain("border:1px solid var(--success)");
-    expect(rowOf(html, `All workers on ${title("claude")}`)).not.toContain("border:1px solid color-mix(in srgb, var(--success)");
   });
 });
 
@@ -303,11 +239,8 @@ describe("undo", () => {
     expect(JSON.stringify(undoPolicy(b, backB))).toBe(JSON.stringify(a));
   });
   test("the toast says what was saved, where, and carries the Undo; it has no timer", () => {
-    expect(quick).toContain("appliedLine(result.ruleName, result.changed, p.root)");
-    const at = quick.indexOf('role="status"');
-    const toast = quick.slice(at, quick.indexOf("</p>", at) > at ? quick.indexOf("</div>", at) : at + 800);
-    expect(toast).toContain("BACK_LABEL");
-    expect(/\bset(Timeout|Interval)\b/.test(quick)).toBe(false);
+    expect(layer).toContain("BACK_LABEL");
+    expect(/\bset(Timeout|Interval)\b/.test(layer + quick)).toBe(false);
   });
 });
 
@@ -316,34 +249,42 @@ describe("the project bar", () => {
   test("it is the first thing on the page and sticks to the top of it", () => {
     const html = view({ projects: ["/w/orbit"], root: "/w/orbit", scope: "project", overrides: ["/w/orbit"] });
     expect(html.indexOf("data-scope-bar")).toBeGreaterThan(-1);
-    expect(html.indexOf("data-scope-bar")).toBeLessThan(html.indexOf("Right now"));
-    expect(html).not.toContain("Applies to");
-    expect(BAR).toMatch(/className="sticky z-10 /);
+    expect(html.indexOf("data-scope-bar")).toBeLessThan(html.indexOf(`role="tablist"`));
+    expect(BAR).not.toContain("Applies to");
+    expect(BAR).toMatch(/className="sticky /);
     expect(BAR).toContain("--orch-stick");
   });
-  test("it sticks under the sticky page header, at the header's own height, so no card shows above the bar", () => {
-    expect(BAR).toContain('top: "var(--agx-ph-h, 0px)"');
+  test("it pins at the frame's published offset, not at a number of its own", () => {
+    // The band's height is measured, so the bar's offset is a property of the
+    // frame's stack; a literal here is the hand-stacked pair this replaced.
+    expect(BAR).toContain('top: "var(--agx-pin-top, 0px)"');
+    expect(BAR).toContain("--orch-stick");
     const header = readFileSync(join(import.meta.dir, "..", "src", "components", "SettingsPageHeader.tsx"), "utf8");
-    expect(header).toContain('setProperty("--agx-ph-h"');
+    expect(header).not.toContain("--agx-ph-h");
     const modal = readFileSync(join(import.meta.dir, "..", "src", "components", "SettingsModal.tsx"), "utf8");
-    expect(modal).toMatch(/className="agx-settings-main [^"]*overflow-y-auto"/);
-    expect(modal).not.toMatch(/className="agx-settings-main [^"]*\bpt-8\b/);
+    expect(modal).toMatch(/data-settings-scroll/);
+    expect(modal).toMatch(/className="agx-settings-scroll[^"]*"/);
+    expect(modal).not.toMatch(/className="agx-settings-main [^"]*overflow-y-auto"/);
   });
-  test("the bar's own height is what a scrolled-to card keeps clear of", () => {
+  test("the bar's height is published, and no card adds a second offset of its own", () => {
+    expect(BAR).toContain('setProperty("--orch-stick"');
     const css = readFileSync(join(import.meta.dir, "..", "src", "index.css"), "utf8");
-    expect(css).toMatch(/\.agx-orch \.agx-scard[^{]*\{[^}]*scroll-margin-top: calc\(var\(--orch-stick, 0px\)/);
+    // The landing is the scroll region's, derived from the published stack.
+    expect(css).not.toContain("scroll-margin-top");
+    expect(css).toMatch(/\.agx-settings-scroll \{[^}]*scroll-padding-top: calc\(var\(--agx-pin-stack\)/);
   });
   test("a project on the general setting offers to get its own, one with its own offers the way back", () => {
     const inherited = view({ projects: ["/w/orbit"], root: "/w/orbit", scope: "global" });
-    expect(inherited).toContain("Set for this project");
-    expect(inherited).not.toContain("Use the general setting");
-    expect(inherited).toContain(scopeSentence("/w/orbit", true, "orbit").tail);
+    const bar = inherited.slice(inherited.indexOf("data-scope-bar"), inherited.indexOf(`role="tablist"`));
+    expect(bar).toContain("Make it specific to orbit");
+    expect(bar).not.toContain("Use the general setting");
+    expect(inherited).toContain("orbit uses the general setting");
     const own = view({ projects: ["/w/orbit"], root: "/w/orbit", scope: "project", overrides: ["/w/orbit"] });
     expect(own).toContain("Use the general setting");
-    expect(own).toContain("its own setting. Changes are saved for it only.");
+    expect(own).toContain("orbit has its own settings");
     const all = view();
-    expect(all).not.toContain("Set for this project");
-    expect(all).toContain("changes here apply to every project without its own.");
+    expect(all).not.toContain("Use the general setting");
+    expect(all).toContain("The setting every project without its own uses");
   });
   test("a settings search that is listing rows leaves the bar out, and one that is not leaves it in", () => {
     const el = React.createElement(OrchestrationView, {

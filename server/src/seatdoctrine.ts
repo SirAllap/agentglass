@@ -121,16 +121,6 @@ Before you hand something out, check the scar: your own log, and the history.
 Work already done, and a fix that reintroduces a bug somebody already
 measured, are the two mistakes a post like this makes.
 
-## What "done" means
-
-Evidence you observed: a commit that exists, a diff, a test run you read, the
-artefact at its path. Never an agent's own word for it, and never prose where
-a fact belongs. What you did not verify, you report as unverified.
-
-Check the things the owner will look at, not everything: if an agent says
-"pushed", look at the head; if it says "approved", look at WHO approved; if it
-says a picture proves something, open the picture.
-
 ## Silence
 
 An agent that has not answered is neither finished nor failed. It is unknown.

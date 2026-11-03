@@ -617,6 +617,16 @@ export const providerUsage = (): ProviderUsage[] => {
       // here on purpose, so the age label has something to demonstrate.
       observedAt: now - 3 * 3600_000,
     },
+    {
+      provider: "opencode", label: "OpenCode Go", available: true, plan: "Go",
+      windows: [
+        { label: "5h", minutes: 300, usedPercent: 4, resetsAt: new Date(now + 3.7 * 3600_000).toISOString() },
+        { label: "weekly", minutes: 10080, usedPercent: 1, resetsAt: new Date(now + 34 * 3600_000).toISOString() },
+        { label: "monthly", minutes: 43200, usedPercent: 1, resetsAt: new Date(now + 718 * 3600_000).toISOString() },
+      ],
+      // Read off its console through the browser, so the age is the read's.
+      observedAt: now - 60_000,
+    },
     { provider: "antigravity", label: "Antigravity", available: false, windows: [],
       note: "Quota not reported." },
   ];

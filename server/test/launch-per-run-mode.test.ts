@@ -24,7 +24,7 @@ afterAll(() => {
 });
 
 describe("an agent cannot loosen the mode for a run", () => {
-  test("the person's click can; an agent's request is held at the setting", () => {
+  test("the person's click can; an agent's request stops at the setting", () => {
     expect(writeLaunchPermissions({ mode: "default" }).ok).toBe(true);
     expect(launchPerm("bypassPermissions").mode).toBe("bypassPermissions");
     expect(launchPerm("bypassPermissions", false, true).mode).toBe("default");

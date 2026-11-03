@@ -293,7 +293,7 @@ curl -sS http://localhost:4000/control \
 | `panel.open` | `what` | skills, help, palette (old: `open`) |
 | `finder.open` | `path` | the file finder (old: `open finder`) |
 | `settings.open` | `page`, `row?` | Settings on a page, scrolled to a row. The plugin market is inside `page: "plugins"` |
-| `machine.open` | `tab`: `ports`\|`resources`\|`locks` | the machine panel |
+| `machine.open` | `tab`: `ports`\|`resources`\|`locks` | the machine panel (`ports` is the old name for `resources`) |
 | `project.picker`, `windows.switcher`, `bench.toggle` | — | the project picker, the window switcher, the bench |
 | `bench.file`, `peek.file` | `root`: absolute, `path`: under it | a file on the bench / in the viewer (reading) |
 | `bench.board` | `root`, `kind`: `pr`\|`tasks` | a board as a bench tab |
@@ -396,7 +396,7 @@ for a window to say what it did, up to five seconds, instead of answering at onc
 ```bash
 curl -sS http://localhost:4000/control \
   -H "Authorization: Bearer $AGENTGLASS_TOKEN" -H 'content-type: application/json' \
-  -d '{"cmd":"ui","do":"machine.open","args":{"tab":"ports"},"id":"ports-1"}'
+  -d '{"cmd":"ui","do":"machine.open","args":{"tab":"resources"},"id":"machine-1"}'
 # {"ok":true,"applied":true,"id":"ports-1"}
 ```
 

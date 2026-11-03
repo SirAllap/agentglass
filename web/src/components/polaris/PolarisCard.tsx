@@ -5,11 +5,13 @@ import { LockIcon, StarIcon } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { Button, Segmented } from "../workspace/Chrome.tsx";
 import { askBuilderOnBench } from "../../lib/lanternAsk.ts";
+import { JOB } from "../../lib/benchJobs.ts";
+import { BenchJobLine, useBenchJob } from "../BenchJobLine.tsx";
 import { api } from "../../lib/api.ts";
 import { openSettings } from "../../lib/openSettings.ts";
 import { ALSO_NEVER, GUARDRAILS, PRESETS, type PresetId, type SettingsAnswer, type SettingsChange, type StoredPolaris } from "../../../../shared/polaris.ts";
 import {
-  assistPrompt, assistState, changeDoor, formatBadge, formatNotice, groupDoors, groupViews, inheritAll, liveQuestion, pickPreset, presetChoices, presetQuestion, presetShown, resetDoors, scopeOf, stampFormat, storedOf, turnOn, undoStamp,
+  ASSIST_TITLE, assistPrompt, assistState, changeDoor, formatBadge, formatNotice, groupDoors, groupViews, inheritAll, liveQuestion, pickPreset, presetChoices, presetQuestion, presetShown, resetDoors, scopeOf, stampFormat, storedOf, turnOn, undoStamp,
   type AssistState,
 } from "../../lib/polarisView.ts";
 import { usePolarisSettings } from "./usePolaris.ts";
@@ -28,20 +30,27 @@ function GroupHead({ title, sub, note, action }: { title: string; sub: string; n
   );
 }
 
-/** Opens a terminal with the engine set for the builder role and a prompt that reads and sets the doors through the settings door. */
+/** A terminal on the engine set for the builder role. One session per project (JOB.polarisSetup):
+ *  while it is open the button is "Open · Show it" and the row says where the session went. */
 function AssistedSetup({ root }: { root: string }) {
   const [state, setState] = useState<AssistState | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
+  const open = useBenchJob(root, JOB.polarisSetup, ASSIST_TITLE);
   useEffect(() => {
     let live = true;
     void api.workerRoles().then((r) => { if (live) setState(assistState(r)); }).catch(() => { if (live) setState({ ok: false, why: "Could not read which engine is set." }); });
     return () => { live = false; };
   }, []);
+  useEffect(() => { setNote(""); }, [root]);
   const go = async () => {
-    if (!root) return;
+    if (!root || busy) return;
     setBusy(true); setNote("");
-    const r = await askBuilderOnBench(root, assistPrompt(root), "polaris setup");
+    /* Every press goes through the helper, the "Open · Show it" one included:
+       it focuses a live session, adopts a tab from before jobs existed, and
+       replaces one whose session ended. Focusing by id here would show the
+       ended terminal and leave the pre-jobs tab unclaimed for ever. */
+    const r = await askBuilderOnBench(root, assistPrompt(root), ASSIST_TITLE, JOB.polarisSetup, ASSIST_TITLE);
     setBusy(false);
     if (!r.ok) setNote(r.error ?? "Could not open a terminal.");
   };
@@ -54,10 +63,17 @@ function AssistedSetup({ root }: { root: string }) {
       control={
         <span className="inline-flex items-center gap-2">
           {state && !state.ok && <Button onClick={() => openSettings("engines")}>See Agent engines</Button>}
-          <Button tone="primary" pending={busy} disabled={!ready || noProject || busy} title={noProject ? "Pick a project first: the terminal opens in it." : undefined} onClick={() => void go()}>Assisted setup</Button>
+          <Button tone="primary" pending={busy} disabled={!ready || noProject || busy}
+            data-tip={noProject ? "Pick a project first: the terminal opens in it." : open ? "Brings the session to the front. If it ended, starts a fresh one." : undefined}
+            onClick={() => void go()}>{open ? "Open · Show it" : "Assisted setup"}</Button>
         </span>
       }
-      below={note ? <p role="alert" className="m-0 text-[12px]" style={{ color: "var(--error-ink)" }}>{note}</p> : undefined} />
+      below={open || note
+        ? <>
+            <BenchJobLine root={root} job={JOB.polarisSetup} claim={ASSIST_TITLE} what="Assisted setup" />
+            {note && <p role="alert" className="m-0 text-[12px]" style={{ color: "var(--error-ink)" }}>{note}</p>}
+          </>
+        : undefined} />
   );
 }
 
@@ -118,7 +134,7 @@ export function PolarisCard({ root }: { root: string }) {
   const [asking, setAsking] = useState<{ question: string; change: SettingsChange } | null>(null);
   useEffect(() => { setNote(""); setAsking(null); }, [root]);
 
-  const apply = async (change: SettingsChange) => { setAsking(null); setNote((await save(change)) ?? ""); };
+  const apply = async (change: SettingsChange) => { setAsking(null); setNote((await save(change)).error ?? ""); };
   /** A change that puts a door live asks first; the way back never does. */
   const ask = (question: string | null, change: SettingsChange) => (question ? setAsking({ question, change }) : void apply(change));
 

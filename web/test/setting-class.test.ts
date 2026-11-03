@@ -27,6 +27,9 @@ stubGlobal("window", new EventTarget());
 const R = await import("../src/lib/settingsRegistry.ts");
 type Def = import("../src/lib/settingsRegistry.ts").SettingDef;
 
+/** The server's own setting ids, read as source (this window may not import the server). */
+const SERVER_SETTINGS = await Bun.file(new URL("../../server/src/serverSettings.ts", import.meta.url)).text();
+
 /** A def held in memory, with an id of the caller's choosing (the class follows the id). */
 const mem = (id: string, start: string): Def & { now: () => string } => {
   let v = start;
@@ -46,8 +49,11 @@ describe("the class table", () => {
   it("has no window line that names a setting the window no longer has", () => {
     const window = ["appearance.", "diff.", "terminal.", "rail.", "notifications.", "browser.", "tasks.", "keys.", "plugins.sessionReads.", "clickup.statusSpaces.", "jira.statusUnits."];
     const ids = R.SETTING_DEFS.map((d) => d.id);
+    /* A namespace can be held on both sides: `browser.workers` is the server's,
+       reached from the window through its card, so it is not stale here. */
+    const serverIds = new Set([...SERVER_SETTINGS.matchAll(/\bid: "([^"]+)"/g)].map((m) => m[1]!));
     const stale = Object.keys(SETTING_CLASSES)
-      .filter((k) => window.some((p) => k.startsWith(p)))
+      .filter((k) => window.some((p) => k.startsWith(p)) && !serverIds.has(k))
       .filter((k) => (k.includes("*") ? !ids.some((id) => classOf(id) === SETTING_CLASSES[k]) : !ids.includes(k)));
     expect(stale).toEqual([]);
   });
@@ -103,6 +109,31 @@ describe("agentVerdict", () => {
   it("a secret and an unknown id are refused", () => {
     expect(agentVerdict("jira.token", "", "x", true)).toBe("refuse");
     expect(agentVerdict("acme.unknown", "", "x", true)).toBe("refuse");
+  });
+
+  it("a Polaris live position waits as a request, trusted or not; narrowing it still applies", () => {
+    const off = { mode: "off", tries: 3 }, live = { mode: "click", tries: 3 };
+    expect(agentVerdict("polaris.door.startSession", off, live, false)).toBe("ask");
+    expect(agentVerdict("polaris.door.startSession", off, live, true)).toBe("ask");
+    expect(agentVerdict("polaris.door.startSession", live, off, true)).toBe("apply");
+  });
+
+  it("every other personOnlyWhen row still refuses, trusted or not", () => {
+    const cases: [string, unknown, unknown][] = [
+      ["flightPlan.builder.permissions", "acceptEdits", "bypassPermissions"],
+      ["flightPlan.pilot", "copilot", "autopilot"],
+      ["flightPlan.budget.dailyUsd", 10, 20],
+      ["flightPlan.budget.weeklyUsd", 10, 20],
+      ["flightPlan.autopilot.askOnLarge", true, false],
+      ["flightPlan.autopilot.askOnSensitive", true, false],
+      ["flightPlan.held", true, false],
+      ["polaris.enabled", false, true],
+      ["secrets.keyring", true, false],
+    ];
+    for (const [id, a, b] of cases) {
+      expect(agentVerdict(id, a, b, false), id).toBe("refuse");
+      expect(agentVerdict(id, a, b, true), id).toBe("refuse");
+    }
   });
 
   it("narrowing, per setting", () => {

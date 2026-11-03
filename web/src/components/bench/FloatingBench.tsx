@@ -9,9 +9,9 @@
  * goes away with the same chord.
  *
  * What makes it more than a panel is underneath: every tab that runs something
- * is its own tmux session on the engine (see engineBenchArgv). Close the
- * window, close the app, come back tomorrow — the tab reattaches to the session
- * still running whatever it was running. A floating terminal that dies with its
+ * is its own window on the checkout's engine session (see engineBenchArgv).
+ * Close the window, close the app, come back tomorrow — the tab reattaches to
+ * the window still running whatever it was running. A floating terminal that dies with its
  * window would be a worse terminal than the one in the Terminal view; this one
  * is the same terminal, in a place you can reach from anywhere.
  *
@@ -37,10 +37,11 @@ import { focusToRemember, focusToRestore } from "../../lib/benchFocus.ts";
 import { NO_DRAG } from "../../lib/dragRegion.ts";
 import { api } from "../../lib/api.ts";
 import { isLanternTab } from "../../lib/lanternAsk.ts";
+import { coldSlot as freeBenchSlot, newJob, openBenchJob } from "../../lib/benchJobs.ts";
 import { shortPath } from "../../lib/shortPath.ts";
 import { appChordFor, chordLabel } from "../../lib/keybindings.ts";
 import {
-  activateTab, activeTab, addTab, benchRoots, benchState, closeBench, closeTab, freeSlot, openBench,
+  activateTab, activeTab, addTab, benchRoots, benchState, closeBench, closeTab, openBench,
   fabVisible, setBenchFab, setBenchGeom, setBenchGrown, setBenchRoot, showBoard, subscribeBench, tabsFor, zoomBench,
   READER_SLOT, readerSeed, type BenchTab,
 } from "../../lib/benchStore.ts";
@@ -303,16 +304,7 @@ export function FloatingBench() {
    * nothing" was: the agent tab attached to a leftover shell and Claude was
    * never started at all.
    */
-  const coldSlot = useCallback(async (): Promise<number> => {
-    const used = new Set(tabsFor(root).filter((t) => t.slot > 0).map((t) => t.slot));
-    try {
-      const r = await api.benchLive(root);
-      if (r.ok) for (const n of r.slots) used.add(n);
-    } catch { /* tmux could not be asked; the tab list is still a floor */ }
-    used.add(READER_SLOT);
-    for (let n = 1; n <= 99; n++) if (!used.has(n)) return n;
-    return freeSlot(root);
-  }, [root]);
+  const coldSlot = useCallback(async (): Promise<number> => freeBenchSlot(root), [root]);
 
   const newTerm = useCallback(() => {
     if (!root) return;
@@ -322,7 +314,10 @@ export function FloatingBench() {
        to "is this thing tmux?" — it is, always, and there is no version of this
        tab that is not. */
     setMenuOpen(false);
-    void coldSlot().then((slot) => addTab(root, { kind: "term", slot, title: `shell ${slot}` }));
+    void openBenchJob({
+      job: newJob("shell"), root,
+      create: async () => { const slot = await coldSlot(); return { ok: true, root, tab: { kind: "term", slot, title: `shell ${slot}` } }; },
+    });
   }, [root, coldSlot]);
 
   const newNote = useCallback(() => {
@@ -365,19 +360,18 @@ export function FloatingBench() {
     if (!root) return;
     setMenuOpen(false);
     setBusy(`starting ${agent.label}…`);
-    try {
-      const r = await api.termAgentTicket(root, "", false, agent.label);
-      const ticket = (r as { ok?: boolean; ticket?: string; error?: string });
-      if (!ticket.ok || !ticket.ticket) { setBusy(ticket.error ?? `could not start ${agent.label}`); return; }
-      /* A slot with no session on it, or `-A` would reattach a leftover shell
-         and the agent would never run — see coldSlot. */
-      const slot = await coldSlot();
-      addTab(root, { kind: "agent", slot, title: agent.label.toLowerCase(), agent: ticket.ticket });
-      setBusy(null);
-    } catch (e) {
-      setBusy(String(e));
-    }
-  }, [root]);
+    const r = await openBenchJob({
+      job: newJob(`agent.${agent.id}`), root,
+      create: async () => {
+        const ticket = await api.termAgentTicket(root, "", false, agent.label);
+        if (!ticket.ok || !ticket.ticket) return { ok: false, error: ticket.error ?? `could not start ${agent.label}` };
+        /* A slot with no session on it, or `-A` would reattach a leftover shell
+           and the agent would never run — see coldSlot. */
+        return { ok: true, root, tab: { kind: "agent", slot: await coldSlot(), title: agent.label.toLowerCase(), agent: ticket.ticket } };
+      },
+    }).catch((e) => ({ ok: false, error: String(e) }));
+    setBusy(r.ok ? null : r.error ?? `could not start ${agent.label}`);
+  }, [root, coldSlot]);
 
   /* ---------------------------------------------------------- the reader */
 
@@ -854,6 +848,10 @@ const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select
 
 /* ------------------------------------------------------------------ the button */
 
+/** The loose button's box, and how far its drawing stays from the window's edge. */
+const FAB_SIZE = 38;
+const FAB_HALF = FAB_SIZE / 2;
+
 /**
  * The loose button.
  *
@@ -905,8 +903,15 @@ function BenchFab() {
         data-floating-furniture
         className="fixed rounded-xl flex items-center justify-center cursor-grab active:cursor-grabbing"
         style={{
-          left: `${st.fab.x}%`, top: `${st.fab.y}%`, transform: "translate(-50%, -50%)",
-          width: 38, height: 38,
+          /* Its remembered place is a percentage of the window, so a button
+             saved near an edge came back half outside it: 1px below the bottom
+             at 640x360, 2px right and 7px below at 427x240. The clamp keeps the
+             whole 38px inside whatever the window is, and the corner it is
+             stored in is still where it comes back. */
+          left: `clamp(${FAB_HALF + 4}px, ${st.fab.x}%, calc(100% - ${FAB_HALF + 4}px))`,
+          top: `clamp(${FAB_HALF + 4}px, ${st.fab.y}%, calc(100% - ${FAB_HALF + 4}px))`,
+          transform: "translate(-50%, -50%)",
+          width: FAB_SIZE, height: FAB_SIZE,
           background: "var(--bg3)",
           border: `1px solid color-mix(in srgb, var(--primary) ${st.open ? 60 : 34}%, transparent)`,
           color: "var(--primary-ink)",
@@ -939,7 +944,7 @@ function TabBody({ root, tab, active }: { root: string; tab: BenchTab; active: b
   if (tab.kind === "pr" || tab.kind === "tasks") return <BoardSlot kind={tab.kind} place="bench" visible={active} />;
   if (tab.kind === "note") return <BenchNote root={root} active={active} />;
   if (tab.kind === "web") return <BenchWeb active={active} />;
-  return <BenchTerm root={root} slot={tab.slot} agent={tab.kind === "agent" ? tab.agent : undefined} type={tab.type} active={active} />;
+  return <BenchTerm root={root} slot={tab.slot} tabId={tab.id} agent={tab.kind === "agent" ? tab.agent : undefined} type={tab.type} active={active} />;
 }
 
 function Note({ children }: { children: React.ReactNode }) {

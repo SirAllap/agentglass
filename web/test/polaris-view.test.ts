@@ -14,7 +14,7 @@ import {
 
 const answer = (global: StoredPolaris | null, project: StoredPolaris | null = null): SettingsAnswer => {
   const r = resolvePolaris(global, project);
-  return { ok: true, ...r.settings, layers: r.layers, enabledLayer: r.enabledLayer, presetLayer: r.presetLayer };
+  return { ok: true, ...r.settings, layers: r.layers, enabledLayer: r.enabledLayer, presetLayer: r.presetLayer, below: global ?? undefined };
 };
 const guided = withEnabled(null, true);
 const item = (o: Partial<PolarisItem> & { cls: PolarisItem["cls"] }): PolarisItem => ({
@@ -285,6 +285,20 @@ describe("Assisted setup", () => {
     expect(p).toContain("--root /home/me/code/orbit");
     for (const d of DOOR_IDS) expect(p).toContain(`polaris.door.${d}`);
     expect(p).toMatch(/Never merge/);
+  });
+  test("the prompt asks once, sets every group in one pass and files requests instead of sending me to Settings", () => {
+    const p = assistPrompt("/home/me/code/orbit");
+    expect(p).toContain("in ONE message");
+    expect(p).toContain("in one pass over every group");
+    expect(p).toContain("how many requests wait for my click");
+    // A live position goes the same way as any other wider door: no trip to Settings.
+    expect(p).toContain("A live position");
+    expect(p).toContain("is filed the same way");
+    expect(p).toContain("never tell me to change it in Settings");
+    expect(p).toContain("never tell me to change a setting by hand, in Settings or anywhere");
+    expect(p).not.toContain("mine alone from Settings");
+    expect(p).not.toContain("never try to set or file it");
+    expect(p).not.toContain("one group at a time");
   });
   test("with no project the prompt carries no --root", () => {
     expect(assistPrompt("")).not.toContain("--root");

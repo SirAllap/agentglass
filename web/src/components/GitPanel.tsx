@@ -1138,7 +1138,7 @@ export function GitView({ active }: { active: boolean }) {
   // load the data a non-Changes view needs when it (or the repo) becomes active
   //
   // Every one of these ends in `.catch(() => {})` and leaves the previous
-  // view's state in place, so an in-flight fetch and an empty result were the
+  // view's state in place, so a fetch still running and an empty result were the
   // same picture: a blank pane, or worse "no worktrees" under a repo that has
   // three. `busy` marks the view whose request is outstanding, which is all the
   // empty states need to tell the two apart.

@@ -45,6 +45,42 @@ export function wholePlan(report: DiskCleanReport): { ids: string[]; bytes: numb
   return { ids: lines.map((l) => l.id), bytes: lines.reduce((n, l) => n + (l.bytes ?? 0), 0) };
 }
 
+/** What the plan on screen would free in one line, or null when nothing may go. Zero bytes counts items instead of claiming "0 MB". */
+export function reclaimHeadline(plan: { ids: readonly string[]; bytes: number }): string | null {
+  if (!plan.ids.length) return null;
+  if (plan.bytes > 0) return `${fmtBytes(plan.bytes)} can go`;
+  return `${plan.ids.length} item${plan.ids.length === 1 ? "" : "s"} can go`;
+}
+
+/** The disk numbers the Disk dial in the same view draws, in one line: `Disk 71% used · 70 GB free`. Null when the host would not say. */
+export function diskHeadline(m: { diskTotal: number; diskFree: number }): string | null {
+  if (!m.diskTotal) return null;
+  const used = Math.round(((m.diskTotal - m.diskFree) / m.diskTotal) * 100);
+  return `Disk ${used}% used · ${(m.diskFree / 1e9).toFixed(0)} GB free`;
+}
+
+/** The header chip's words, or null when nothing on screen may go: a chip that says "0 B" is one to ignore. */
+export function cleanupChipLabel(plan: { ids: readonly string[]; bytes: number }): string | null {
+  const what = reclaimHeadline(plan);
+  return what ? `Disk cleanup · ${what}` : null;
+}
+
+export type DiskPlan = { ids: readonly string[]; bytes: number };
+/* The scan on screen publishes its plan here, so the header can name what the
+   block below would free without owning the block's state. */
+let planNow: DiskPlan | null = null;
+const planSubs = new Set<() => void>();
+export function publishDiskPlan(plan: DiskPlan | null): void {
+  planNow = plan;
+  for (const f of planSubs) f();
+}
+export const diskPlanNow = (): DiskPlan | null => planNow;
+const subscribePlan = (fn: () => void): (() => void) => { planSubs.add(fn); return () => { planSubs.delete(fn); }; };
+/** What the scan on screen would remove; null until one is made, and after a clean. */
+export function useDiskPlan(): DiskPlan | null {
+  return useSyncExternalStore(subscribePlan, diskPlanNow, () => null);
+}
+
 export type Phase = "idle" | "scanning" | "error" | "empty" | "plan" | "done";
 /** Which face the block shows. A scan in flight wins over everything; a finished clean shows its report until the next scan. */
 export function phaseOf(s: { report: DiskCleanReport | null; scanning: boolean; error: string | null; result: DiskCleanRunResult | null }): Phase {

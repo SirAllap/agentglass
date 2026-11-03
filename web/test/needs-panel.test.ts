@@ -7,6 +7,7 @@ import { LAYER } from "../src/lib/layers.ts";
 
 const topBar = await Bun.file(new URL("../src/components/TopBar.tsx", import.meta.url)).text();
 const popover = await Bun.file(new URL("../src/components/NeedsPopover.tsx", import.meta.url)).text();
+const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
 const code = (src: string) => src.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
 
 describe("needsStaysOpen", () => {
@@ -79,5 +80,22 @@ describe("the chip with flight plans waiting", () => {
   });
   it("closes the panel behind a row that opens its card", () => {
     expect(code(popover)).toContain("onPlan={(id) => { openFlightPlan({ card: id }); onClose(); }}");
+  });
+});
+
+describe("the list scrolls what the heading leaves", () => {
+  it("the panel ends at the window, so the list is never drawn past it", () => {
+    expect(code(popover)).toContain("maxHeight");
+    expect(code(popover)).toContain("window.innerHeight - at.top");
+    expect(code(popover)).toMatch(/className="flex items-center gap-2 px-2\.5 py-1\.5 shrink-0"/);
+  });
+  it("the list fills the panel under the heading instead of a fixed 46vh", () => {
+    expect(code(popover)).toContain('className="agx-inbox-list" data-fill=""');
+    const i = css.indexOf(".agx-inbox-list[data-fill] {");
+    expect(i).toBeGreaterThan(-1);
+    const rule = css.slice(i, css.indexOf("}", i));
+    expect(rule).toContain("max-height: none");
+    expect(rule).toContain("min-height: 0");
+    expect(rule).toContain("flex: 1 1 auto");
   });
 });

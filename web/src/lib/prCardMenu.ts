@@ -12,6 +12,7 @@
 import type { PrSummary } from "../../../shared/types.ts";
 import { finishedKind } from "../../../shared/prClosed.ts";
 import type { CardView } from "./prCardView.ts";
+import { syncCardView, type SyncCardStep } from "./prSyncCards.ts";
 
 export type MenuIcon =
   | "hand" | "user" | "spark" | "link" | "down" | "alert" | "refresh" | "bell" | "merge" | "ext" | "pin"
@@ -97,6 +98,8 @@ export function cardMenu(i: {
   readOnly?: boolean;
   /** The size of what a merged pull request left on this computer, when it is known. */
   leftovers?: string;
+  /** Where a lane's Sync has this card, when one owns it: the menu must not offer the press the footer turned off. */
+  sync?: SyncCardStep | null;
 }): CardMenu {
   const { p, view } = i;
   const live = !finishedKind(p);
@@ -106,6 +109,10 @@ export function cardMenu(i: {
   const finished = i.readOnly ? "Read-only: no write access" : p.state === "MERGED" ? "Already merged"
     : !live ? "Closed: reopen it first" : undefined;
   const merged = p.state === "MERGED";
+  /* The lane's Sync owns the card while it runs, so the menu takes the footer's
+     own sentence for Update instead of inventing a second one. A refused row is
+     not owned: its Retry is the press, and it stays enabled. */
+  const sv = i.sync ? syncCardView(i.sync, p) : null;
 
   const handSub = i.mode === "none" ? "GitHub only: no tracker is connected"
     : i.mode === "unlinked" ? "GitHub only: no card is linked"
@@ -137,7 +144,7 @@ export function cardMenu(i: {
     item("labels", "Edit labels…", "tag", { why: finished }),
     { kind: "rule" },
     { kind: "heading", text: "Branch and checks" },
-    item("update", "Update branch", "down", { why: finished ?? view.reasons.update ?? undefined }),
+    item("update", "Update branch", "down", { why: finished ?? view.reasons.update ?? (sv?.action.disabled ? sv.action.title : undefined) }),
     item("resolve", "Resolve conflicts…", "alert", { why: finished ?? view.reasons.resolve ?? undefined }),
     item("rerun", "Rerun failed checks", "refresh", { why: finished ?? view.reasons.rerun ?? undefined }),
     item("watch", "Watch checks…", "bell", { why: live ? undefined : "Nothing left to watch" }),

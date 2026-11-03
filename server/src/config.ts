@@ -9,6 +9,7 @@
 import type { Budget, GateRule } from "../../shared/types.ts";
 import { agentProvider } from "../../shared/agentKinds.ts";
 import { validateStored, type StoredPolicy } from "../../shared/orchestration.ts";
+import { validateFlow, type Flow } from "../../shared/flow.ts";
 import { resolvePolaris, validateStoredPolaris, type StoredPolaris } from "../../shared/polaris.ts";
 import { DEFAULT_LAUNCH_DENY, isLaunchMode, parseDenyRules, parseFlagLine, type FlagOverrides, type LaunchMode } from "../../shared/launchModes.ts";
 import { GATE_ANSWERERS, GATE_ON_TIMEOUT, isOneOf, type GateAnswerer, type GateOnTimeout } from "../../shared/agentDefaults.ts";
@@ -177,6 +178,10 @@ interface Config {
   /** Whether paired phones raise a notification for a PR watch or a card.
    *  On unless the person turned it off; one switch for every paired phone. */
   phoneAlerts?: boolean;
+  /** Which engines and worker roles may drive the built-in browser
+   *  (shared/browserWorkers.ts). Read as every one when absent, and checked
+   *  field by field because this file is hand-edited. */
+  browserWorkers?: { engines?: unknown; roles?: unknown };
   /** Keep the stored tokens and plugin keys in the system keyring instead of
    *  0600 files. Off unless the person turned it on (server/src/keyringSwitch.ts). */
   secretsKeyring?: boolean;
@@ -194,6 +199,9 @@ interface Config {
   /** Polaris, the pull request abilities (shared/polaris.ts). What a scope set,
    *  keyed like `orchestration`; a door it leaves out reads the next layer. */
   polaris?: { global?: unknown; projects?: Record<string, unknown> };
+  /** The flow (shared/flow.ts): one per project root, and nothing global. Kept
+   *  beside the policy and never inside it, so a policy write cannot lose it. */
+  flow?: { projects?: Record<string, unknown> };
 }
 
 function load(path: string): Config {
@@ -1342,6 +1350,15 @@ export function writePhoneAlerts(on: boolean): { ok: boolean; persisted: boolean
   return mergeConfig({ phoneAlerts: on !== false }, "the phone alerts switch");
 }
 
+/** The stored value for who may drive the browser, unread: `browseraccess.ts` validates it, so a hand-edited file cannot hand a worker a value the page never offered. */
+export function storedBrowserWorkers(): unknown {
+  return config().browserWorkers;
+}
+
+export function writeBrowserWorkers(v: { engines: string[]; roles: string[] }): { ok: boolean; persisted: boolean; error?: string } {
+  return mergeConfig({ browserWorkers: v }, "who may drive the browser");
+}
+
 /** Whether the secrets agentglass stores live in the system keyring: only `true` is on. */
 export function secretsKeyring(): boolean {
   return config().secretsKeyring === true;
@@ -1514,6 +1531,32 @@ export function writeStoredPolicy(root: string | undefined, stored: StoredPolicy
     if (stored) projects[root] = stored; else delete projects[root];
     return { orchestration: { ...cur, projects } };
   }, "the orchestration policy");
+}
+
+/**
+ * The stored flow for one project, or null when it never saved one (or the
+ * file's is unusable: a hand-edited entry that does not validate reads as
+ * absent, and the log says why, rather than as whatever it claims).
+ */
+export function readStoredFlow(root: string): Flow | null {
+  const raw = config().flow?.projects?.[root];
+  if (raw === undefined) return null;
+  const v = validateFlow(raw);
+  if (!v.ok) {
+    console.error(`[config] ignoring the flow for ${root}: ${v.error}`);
+    return null;
+  }
+  return v.value;
+}
+
+/** Write one project's flow, or remove it with null so the template answers again. */
+export function writeStoredFlow(root: string, flow: Flow | null): { ok: boolean; persisted: boolean; error?: string } {
+  return mergeConfig((existing) => {
+    const cur = (existing.flow ?? {}) as { projects?: Record<string, unknown> };
+    const projects = { ...(cur.projects ?? {}) };
+    if (flow) projects[root] = flow; else delete projects[root];
+    return { flow: { ...cur, projects } };
+  }, "the flow");
 }
 
 /** What one scope wrote down for Polaris, or null. An unusable entry reads as absent, like a policy. */

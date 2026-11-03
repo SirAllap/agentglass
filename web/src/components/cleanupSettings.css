@@ -52,7 +52,7 @@
 .agx-cl-mute { color: var(--text3); font-size: 12px; }
 .agx-cl-md { display: grid; grid-template-columns: 252px minmax(0, 1fr); gap: 16px; align-items: start; }
 .agx-cl-detail { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
-.agx-cl-list { position: sticky; top: 0; display: flex; flex-direction: column; gap: 6px; padding: 10px 8px; border-radius: 14px; background: var(--bg); box-shadow: inset 0 0 0 1px var(--surface-line); max-height: calc(100vh - 120px); }
+.agx-cl-list { position: sticky; top: var(--agx-pin-top, 0px); display: flex; flex-direction: column; gap: 6px; padding: 10px 8px; border-radius: 14px; background: var(--bg); box-shadow: inset 0 0 0 1px var(--surface-line); max-height: calc(100vh - 120px); }
 .agx-cl-lhead { display: flex; align-items: center; gap: 8px; padding: 0 6px 6px; border-bottom: 1px solid var(--surface-line); font-size: 12px; }
 .agx-cl-lhead b { font-weight: 600; color: var(--text); }
 .agx-cl-list input[type="checkbox"] { accent-color: var(--primary); width: 15px; height: 15px; flex: none; }
@@ -81,7 +81,7 @@
 .agx-cl-psrch .agx-cl-sin { width: 100%; height: 28px; padding-left: 30px; }
 .agx-cl-sin:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 .agx-cl-sin::-webkit-search-cancel-button { appearance: none; display: none; }
-.agx-cl-bulk { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-height: 48px; padding: 8px 16px; border-radius: 12px; position: sticky; top: 0; z-index: 2; font-size: 12px; background: color-mix(in srgb, var(--primary) 7%, var(--bg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent); }
+.agx-cl-bulk { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-height: 48px; padding: 8px 16px; border-radius: 12px; position: sticky; top: var(--agx-pin-top, 0px); z-index: 2; font-size: 12px; background: color-mix(in srgb, var(--primary) 7%, var(--bg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent); }
 .agx-cl-bulk b { font-weight: 600; color: var(--text); }
 .agx-cl-bacts { margin-left: auto; display: inline-flex; align-items: center; gap: 10px; }
 .agx-cl-bres { display: inline-flex; align-items: center; gap: 10px; }
@@ -94,3 +94,9 @@
 .agx-cl-evrow, .agx-cl-evadd { display: flex; align-items: center; gap: 8px; }
 .agx-cl-evrow code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--text2); }
 .agx-cl-evin { flex: 1; min-width: 0; font-family: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace; }
+
+/* Short window: the bulk bar and the project list are two more rows pinned
+   over a region that barely fits the index band. They scroll with the page. */
+@media (max-height: 960px) {
+  .agx-cl-list, .agx-cl-bulk { position: static; }
+}

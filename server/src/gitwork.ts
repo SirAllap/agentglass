@@ -330,7 +330,7 @@ export const SKIP_DIRS = new Set([
 /** A CI runner keeps its own checkout of the repo it builds — often one per
  *  runner instance. They're the same project, cloned N times, and would crowd
  *  out everything else in the picker. */
-const skipped = (name: string) =>
+export const skippedDir = (name: string) =>
   name.startsWith(".") || SKIP_DIRS.has(name) || name.startsWith("actions-runner") || name === "_work";
 
 /**
@@ -363,14 +363,14 @@ export function reposUnder(baseDir: string, depth = REPO_SCAN_DEPTH): string[] {
     try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const ent of entries) {
       if (!ent.isDirectory() && !ent.isSymbolicLink()) continue;
-      if (skipped(ent.name)) continue;
+      if (skippedDir(ent.name)) continue;
       walk(resolve(dir, ent.name), left - 1);
     }
   };
   try {
     for (const ent of readdirSync(baseDir, { withFileTypes: true })) {
       if (!ent.isDirectory() && !ent.isSymbolicLink()) continue;
-      if (skipped(ent.name)) continue;
+      if (skippedDir(ent.name)) continue;
       walk(resolve(baseDir, ent.name), depth - 1);
     }
   } catch { /* unreadable base dir */ }

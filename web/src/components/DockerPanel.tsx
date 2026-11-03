@@ -4,12 +4,10 @@
 // event stream (useDockerData), so nothing here runs on a timer.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SCROLLBAR_CSS } from "./diff/DiffLines.tsx";
-import { ConsoleStrip, consoleRoot, runInConsole } from "./TerminalPanel.tsx";
+import { consoleRoot, runInConsole } from "./TerminalPanel.tsx";
 import { useSidebarWidth } from "../lib/sidebarWidth.ts";
 import { SidebarGrip } from "./SidebarGrip.tsx";
 import { useDialogs } from "./ConfirmDialog.tsx";
-import { ICON } from "../lib/iconSize.ts";
-import { TerminalIcon } from "../lib/glyphIcons.tsx";
 import { Detail, type DetailSection } from "./docker/Detail.tsx";
 import { Images } from "./docker/Images.tsx";
 import { Networks } from "./docker/Networks.tsx";
@@ -20,10 +18,10 @@ import { Disk } from "./docker/Disk.tsx";
 import { HAS_BROWSER } from "../lib/desktop.ts";
 import { openExternal } from "../lib/externalUrl.ts";
 import { requestBrowserNav } from "../lib/browserNav.ts";
-import { displayName, type MenuItem, type RowVerb } from "../lib/dockerState.ts";
+import { displayName, READ_ONLY_REASON, type MenuItem, type RowVerb } from "../lib/dockerState.ts";
 import type { Answer } from "../lib/dockerTriage.ts";
 import {
-  freshness, groupsView, LAYOUT_KEY, navCounts, portCell, readLayout, scopeLine, situation, stepOf,
+  bulkAsk, bulkTargets, freshness, groupsView, LAYOUT_KEY, navCounts, portCell, readLayout, scopeLine, situation, stepOf,
   type GroupBy, type Layout,
 } from "../lib/dockerView.ts";
 import { useDockerData } from "../lib/useDockerData.ts";
@@ -31,10 +29,13 @@ import { useDiskData } from "../lib/useDiskData.ts";
 import { api } from "../lib/api.ts";
 import { analyzeGate, analyzePrompt, analyzeTitle } from "../lib/dockerAnalyze.ts";
 import { askBuilderOnBench } from "../lib/lanternAsk.ts";
+import { JOB } from "../lib/benchJobs.ts";
+import { BenchJobLine, useBenchJob } from "./BenchJobLine.tsx";
 import { DOCKER_CSS } from "./docker/dockerCss.ts";
 import { DockerHeader } from "./docker/Header.tsx";
 import { Navigator, type View } from "./docker/Navigator.tsx";
 import { ContainersList } from "./docker/ContainersList.tsx";
+import { ConsoleDock } from "./docker/ConsoleDock.tsx";
 import { SplitList } from "./docker/SplitList.tsx";
 import { DaemonBanner, DaemonCard, EmptyCard, ListSkeleton, NotInstalled } from "./docker/States.tsx";
 import { useDockerActions } from "./docker/useDockerActions.ts";
@@ -59,7 +60,7 @@ export function DockerView({ active, onOpenBrowser }: {
   onOpenBrowser?: () => void;
 }) {
   const { ask, dialog } = useDialogs();
-  const { ov, good, failed, liveDown, stats, cap, refreshing, refresh, loadCapability, changed } = useDockerData(active);
+  const { ov, good, failed, liveDown, stats, cap, refreshing, refresh, reload, loadCapability, changed } = useDockerData(active);
   const { busy, toast, flash, act, group } = useDockerActions();
   const splitW = useSidebarWidth(300);
   const frameRef = useRef<HTMLDivElement>(null);
@@ -78,6 +79,7 @@ export function DockerView({ active, onOpenBrowser }: {
   const [selId, setSelId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [confirm, setConfirm] = useState<{ id: string; verb: "stop" | "rm" } | null>(null);
+  const [bulkBusy, setBulkBusy] = useState<"stop" | "start" | null>(null);
   const [sections, setSections] = useState<Record<DetailSection, boolean>>({ env: false, config: false, top: false, compare: false });
   const [tail, setTail] = useState(200);
   const [consoleOpen, setConsoleOpen] = useState(false);
@@ -99,6 +101,7 @@ export function DockerView({ active, onOpenBrowser }: {
   const detail = useDetailData(selected?.id, sections);
   const down = sit === "down";
 
+
   // Which agent "Analyze with agent" will run, for its tooltip. Read when the view opens; the setting does not change under it.
   const [agentName, setAgentName] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
@@ -107,6 +110,12 @@ export function DockerView({ active, onOpenBrowser }: {
     void api.workerRoles().then((w) => setAgentName(w.providers?.find((p) => p.id === w.roles?.builder?.provider)?.title ?? null)).catch(() => {});
   }, [active]);
   const gate = analyzeGate({ readOnly, situation: sit });
+  /* One cleanup session per project. The button stays pressable with a tab
+     open: the helper focuses the live one and replaces one whose session
+     ended. The line under the header says where it is. */
+  const workspace = good?.scope?.workspace ?? "";
+  /* Read here so the padded wrapper below exists only with a session; empty, its 12px was a band under the header. */
+  const dockerJob = useBenchJob(workspace, JOB.dockerAnalyze, "docker cleanup");
   const analyze = async () => {
     const cwd = good?.scope?.workspace;
     if (!good || !cwd) { flash(false, "No project is open to analyze"); return; }
@@ -114,10 +123,48 @@ export function DockerView({ active, onOpenBrowser }: {
     const r = await askBuilderOnBench(cwd, analyzePrompt({
       project: good.scope?.project ?? "", workspace: cwd, containers: good.containers, images: good.images,
       volumes: good.volumes, networks: good.networks.length, disk: disk.d,
-    }), "docker cleanup").catch((e) => ({ ok: false, error: String(e) }));
+    }), "docker cleanup", JOB.dockerAnalyze, "docker cleanup").catch((e) => ({ ok: false, error: String(e) }));
     setAnalyzing(false);
-    flash(r.ok, r.ok ? "Opened in a new tab" : r.error ?? "Could not open the agent");
+    flash(r.ok, r.ok ? "Open on the bench" : r.error ?? "Could not open the agent");
   };
+
+  /* One verb for the project in view, through the action and loop the stack
+     button uses (useDockerActions' group). Only what `bulkTargets` names is
+     touched. The list is read once when the loop ends: the last event of eleven
+     stops can land while a fetch is on the wire, and the stream alone left the
+     rows as they were. */
+  const runBulk = async (verb: "stop" | "start") => {
+    if (readOnly || down) return;
+    const targets = bulkTargets(all, verb);
+    if (!targets.length) return;
+    if (!(await ask(bulkAsk(verb, targets.length)))) return;
+    setBulkBusy(verb);
+    try {
+      await group(targets, verb);
+    } finally {
+      await reload(true);
+      setBulkBusy(null);
+    }
+  };
+
+  /* The stack header's verb, on the same terms: the group runs, then one read. */
+  const onGroup = async (verb: "start" | "stop" | "restart", ids: string[]) => {
+    try { await group(all.filter((c) => ids.includes(c.id)), verb); } finally { await reload(true); }
+  };
+
+  /* Stop all while anything is live, Start all once nothing is. Counted on every
+     render, so the button goes the moment the feed says the last one exited. */
+  const liveN = bulkTargets(all, "stop").length;
+  const stoppedN = bulkTargets(all, "start").length;
+  const bulkVerb: "stop" | "start" | null = liveN ? "stop" : stoppedN ? "start" : null;
+  const bulk = bulkVerb && view === "containers" ? {
+    verb: bulkVerb, n: bulkVerb === "stop" ? liveN : stoppedN,
+    pending: bulkBusy === bulkVerb, disabled: readOnly || down || bulkBusy !== null,
+    title: readOnly ? READ_ONLY_REASON
+      : bulkVerb === "stop" ? "Stop every running container of this project; nothing is deleted"
+        : "Start every stopped container of this project; nothing new is created",
+    onClick: () => void runBulk(bulkVerb),
+  } : null;
 
   const setLayout = (l: Layout) => { setLayoutState(l); write(LAYOUT_KEY, l); setDetailOpen(false); };
   const setGroupBy = (g: GroupBy) => { setGroupByState(g); write(GROUP_KEY, g); };
@@ -218,7 +265,7 @@ export function DockerView({ active, onOpenBrowser }: {
       <ContainersList all={all} groups={groups} stats={stats} readOnly={readOnly} busy={busy} dense={dense} selected={selected?.id ?? null}
         answer={answer} onAnswer={setAnswer} groupBy={groupBy} q={q} onClearQ={() => setQ("")}
         confirm={confirm} onRowConfirm={onRowConfirm} onOpen={open} onVerb={(c, v: RowVerb) => void request(c, v)}
-        onMenuPick={onMenuPick} onGroup={(verb, ids) => void group(all.filter((c) => ids.includes(c.id)), verb)}
+        onMenuPick={onMenuPick} onGroup={(verb, ids) => void onGroup(verb, ids)}
         onToggleGroup={toggleGroup} onOpenPort={openPort}
         down={down ? { error: ov?.error, at: good?.at } : null} onTry={onTry} />
     );
@@ -260,25 +307,18 @@ export function DockerView({ active, onOpenBrowser }: {
         layout={layout} onLayout={setLayout} dense={dense} onDense={() => setDense((v) => !v)}
         readOnly={readOnly} onRefresh={() => void refresh()} refreshing={view === "disk" ? disk.measuring : refreshing} section={view}
         onMeasure={() => void disk.measure(true)}
-        analyze={{ onClick: () => void analyze(), disabled: gate.disabled, pending: analyzing, title: gate.disabled ? gate.reason : analyzeTitle(agentName) }}
+        analyze={{ onClick: () => void analyze(), disabled: gate.disabled, pending: analyzing, tip: gate.disabled ? gate.reason : analyzeTitle(agentName) }}
+        bulk={bulk}
         showFilter={view !== "disk"} showView={view === "containers"} back={detailOpen && !split && view === "containers" ? close : null} />
+      {workspace && dockerJob && <div style={{ padding: "6px 12px" }}><BenchJobLine root={workspace} job={JOB.dockerAnalyze} claim="docker cleanup" what="Docker cleanup" /></div>}
       {sit === "notinstalled" ? <NotInstalled reason={cap?.reason} onCheck={loadCapability} /> : (
         <div className="flex-1 min-h-0 flex">
           <Navigator section={view} counts={navCounts(good)} onPick={(v) => { setView(v); setDetailOpen(false); }} />
           {lead}
         </div>
       )}
-      <ConsoleStrip root={consoleRoot()} open={consoleOpen} height={consoleH} onHeight={setConsoleH} onClose={closeConsole} />
-      {good && view === "containers" && (
-        <div className="dk-dock">
-          <button type="button" className="dk-chip sm" onClick={() => (consoleOpen ? closeConsole() : setConsoleOpen(true))}
-            title="A shell in this project, docked under the logs. It keeps running while you look around.">
-            <TerminalIcon size={ICON.xs} />Console
-          </button>
-          <span className="mut">A shell in this project, docked under the view. It keeps running while you look around.</span>
-          <span className="cr"><i className="dk-live" />Live: changes arrive from Docker's event stream</span>
-        </div>
-      )}
+      <ConsoleDock show={!!good} open={consoleOpen} height={consoleH} onHeight={setConsoleH} onClose={closeConsole}
+        onToggle={() => (consoleOpen ? closeConsole() : setConsoleOpen(true))} />
       {toast && (
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-3.5 py-2 rounded-lg text-[11px] shadow-xl" style={{ zIndex: 40, background: "var(--bg3)", border: `1px solid ${toast.ok ? "color-mix(in srgb, var(--success) 50%, transparent)" : "color-mix(in srgb, var(--error) 50%, transparent)"}`, color: toast.ok ? "var(--success)" : "var(--error)" }}>{toast.msg}</div>
       )}

@@ -14,7 +14,7 @@ import { openSettings } from "../lib/openSettings.ts";
 import { __forgetListMembers } from "../lib/listMembers.ts";
 import { setting } from "../lib/settingsRegistry.ts";
 import { DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN, type ClickUpPrefs, type ClickUpStepBlock, type ProviderStatus } from "../../../shared/providers.ts";
-import { DEFAULT_CARD_SKILL_PATTERN } from "../../../shared/cardSkills.ts";
+import { cardSkills, DEFAULT_CARD_SKILL_PATTERN } from "../../../shared/cardSkills.ts";
 import { SettingRow, Switch, Toggle } from "./SettingRow.tsx";
 import { EmptyState, Field, ProblemNote, SettingsCard, SettingsForm, StatusBadge, helpIdFor } from "./SettingsKit.tsx";
 import { useReportProblem } from "./SettingsPageState.tsx";
@@ -32,18 +32,60 @@ const n = CLICKUP.nouns;
 
 
 /** Which agent skills count as knowing what a card is. It was filed under the tracker's names; it is about agents. */
-export function CardSkillsRow({ connected }: { connected: boolean }) {
+export function CardSkillsRow({ onPattern }: { onPattern?: (pattern: string) => void }) {
   const [prefs, setPrefs] = useState<ClickUpPrefs | null>(null);
-  useEffect(() => { if (connected) void clickupPrefs().then((p) => setPrefs(p)); }, [connected]);
-  if (!connected || !prefs) return null;
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { void clickupPrefs().then(setPrefs).catch(() => setFailed(true)); }, []);
+  /* The field is drawn before (and without) the read: a row that returns null
+     leaves the card's note under no control at all, and saving works anyway. */
   return (
-    <TextRow label="Card skills pattern" hint="Regex on a skill’s name or description: which skills know what a card is."
-      value={prefs.cardSkillPattern} fallback={DEFAULT_CARD_SKILL_PATTERN} placeholder="clickup|\bcu-|-cu\b"
-      onSave={async (v) => {
-        const r = await api.clickupSetPrefs({ cardSkillPattern: v });
-        if (!r.ok || !r.prefs) return r.error ?? "That did not save";
-        setPrefs(r.prefs); clickupPrefsSaved(r.prefs); return null;
-      }} />
+    <>
+      <TextRow label="Card skills pattern" hint="A pattern on a skill’s name or description. Matching skills are offered when a card is open."
+        value={prefs?.cardSkillPattern ?? DEFAULT_CARD_SKILL_PATTERN} fallback={DEFAULT_CARD_SKILL_PATTERN} placeholder={"acme|orbit-\\d{4}"}
+        onSave={async (v) => {
+          const r = await api.clickupSetPrefs({ cardSkillPattern: v });
+          if (!r.ok || !r.prefs) return r.error ?? "That did not save";
+          setPrefs(r.prefs); clickupPrefsSaved(r.prefs); onPattern?.(r.prefs.cardSkillPattern); return null;
+        }} />
+      {failed && (
+        <p className="agx-settings-x m-0 px-4 pb-2 text-[11px]" style={{ color: "var(--error-ink)" }}>
+          Could not read the saved pattern; this is the shipped one, and saving replaces it.
+        </p>
+      )}
+    </>
+  );
+}
+
+/** The Card skills block: the generic pattern, and where the tracker's own default lives. */
+export function CardSkillsCard({ connected }: { connected: boolean }) {
+  const [count, setCount] = useState<number | null>(null);
+  const [pattern, setPattern] = useState("");
+  const read = () => {
+    Promise.all([api.skills(), clickupPrefs()])
+      .then(([r, p]) => {
+        const src = p?.cardSkillPattern ?? DEFAULT_CARD_SKILL_PATTERN;
+        setPattern(src);
+        setCount(cardSkills(r.skills ?? [], src).length);
+      })
+      .catch(() => { /* the field still saves; only the count is unknown */ });
+  };
+  useEffect(read, []);
+  return (
+    <SettingsCard title="Card skills" icon={<SlidersIcon size={ICON.sm} />}
+      desc="Which of your skills know what a card is, so a card can offer them."
+      status={count === null ? undefined : <StatusBadge tone={count ? "info" : "off"}>{count} {count === 1 ? "skill matches" : "skills match"}</StatusBadge>}>
+      <CardSkillsRow onPattern={(p) => { setPattern(p); read(); }} />
+      <div className="agx-card-skills-note">
+        <span className="t-dim text-[11.5px]">
+          {connected
+            ? <>The tracker’s own default lives on the <b>ClickUp</b> page, not on this page.</>
+            : <>Connect ClickUp under <b>Tools &amp; services</b>; its own default lives on its page.</>}
+        </span>
+        <Button onClick={() => openSettings(connected ? "clickup" : "connections")}>
+          {connected ? "Open ClickUp" : "Open Connections"}
+        </Button>
+      </div>
+    </SettingsCard>
   );
 }
 
@@ -392,6 +434,9 @@ export function ClickUpPane() {
             onSave={async (v) => patternSave(await api.clickupSetPrefs({ sprintListPattern: v }), setPrefs)} />
           <TextRow label="Read-only fields pattern" hint="Regex for fields shown but never written." value={prefs.readOnlyFieldPattern} fallback={DEFAULT_READ_ONLY_FIELD_PATTERN} placeholder="do not edit"
             onSave={async (v) => patternSave(await api.clickupSetPrefs({ readOnlyFieldPattern: v }), setPrefs)} />
+          <SettingRow agentExempt label="Card skills default"
+            hint="The tracker’s own naming. Skills matching it are offered when one of your cards is open; the generic pattern is on Settings › Agents."
+            status={<span className="t-mono text-[11px]">{DEFAULT_CARD_SKILL_PATTERN}</span>} />
           <Toggle on={prefs.assigned.includeSubtasks} onClick={() => { void send({ assigned: { includeSubtasks: !prefs.assigned.includeSubtasks } } as never); }}
             agentNever="changes how heavy the shared ClickUp read is against a rate-limited token the owner also works with, so it is the owner's to turn on" label="Subtasks on Assigned to me" hint="Slower: the workspace read can take twice as long." />
         </SettingsCard>

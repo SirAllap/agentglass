@@ -73,7 +73,12 @@ describe("the next engine for a worker whose first turn failed", () => {
   test("an engine it has already been on is never picked again", () => {
     // Moved A to B, and the chain now lists A after B.
     expect(nextEngine({ chain: [B, A], by: { ...B, from: "opencode" }, ask: false, usable: all }).ok).toBe(false);
-    expect(nextEngine({ chain: [B, { engine: "claude", model: "claude-opus-5-5" }], by: B, ask: false, usable: all }).ok).toBe(false);
+    // The same engine with ANOTHER model is a place it has not been: a spent plan falls to its free twin.
+    const twin = { engine: "claude", model: "claude-opus-5-5" };
+    expect(nextEngine({ chain: [B, twin], by: B, ask: false, usable: all })).toEqual({ ok: true, choice: twin, position: 1 });
+    // ... but never back to the entry it is on, and never to an engine it has left.
+    expect(nextEngine({ chain: [B, B], by: B, ask: false, usable: all }).ok).toBe(false);
+    expect(nextEngine({ chain: [A, twin], by: { ...A, from: "claude" }, ask: false, usable: all }).ok).toBe(false);
     expect(nextEngine({ chain: [B, A, C], by: { ...B, from: "opencode" }, ask: false, usable: all })).toEqual({ ok: true, choice: C, position: 2 });
   });
   test("a role the person set to ask is not chosen for them", () => {
@@ -88,7 +93,7 @@ describe("the next engine for a worker whose first turn failed", () => {
 
 describe("zero polling", () => {
   test("the files that arm timers, watch runs and judge failures name no interval", async () => {
-    for (const f of ["../src/agents/ceilings.ts", "../src/agents/failures.ts", "../src/agents/noplan.ts", "../src/agents/policystart.ts"]) {
+    for (const f of ["../src/agents/ceilings.ts", "../src/agents/failures.ts", "../src/agents/noplan.ts", "../src/agents/policystart.ts", "../src/agents/workerend.ts"]) {
       const src = readFileSync(new URL(f, import.meta.url), "utf8").split("\n").filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join("\n");
       expect(src, f).not.toMatch(/setInterval|every\s*\(|Bun\.cron/);
     }

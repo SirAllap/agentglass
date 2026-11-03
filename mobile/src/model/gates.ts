@@ -1,5 +1,5 @@
 /*
- * What a held gate says about itself, in the words a card draws.
+ * What a gate waiting on you says about itself, in the words a card draws.
  *
  * A gate is an agent stopped at a tool call until somebody answers. The card
  * has three things to say and they are not the same thing: WHERE it is (the

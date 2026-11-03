@@ -1,8 +1,9 @@
 /*
  * The Agents entry on the rail wears its own icon (an alien head), not the
  * lantern: the lantern read as "Lantern", the old name of the screen that
- * merged into Agents. Lantern's own settings page keeps the lantern. A rule
- * about source is asserted against source.
+ * merged into Agents. No Settings page draws that glyph any more — Watching
+ * wears the eye — so the import is gone from the modal too. A rule about
+ * source is asserted against source.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -26,7 +27,8 @@ describe("Agents rail icon", () => {
     expect(body).toContain("width={size} height={size}");
     expect(body).not.toMatch(/#[0-9a-f]{3,6}|rgb\(/i);
   });
-  test("Lantern's settings page keeps the lantern", () => {
-    expect(settings).toContain("<LanternIcon");
+  test("no Settings page draws the lantern any more: Watching wears the eye", () => {
+    expect(settings).not.toContain("<LanternIcon");
+    expect(settings).toContain("<EyeIcon");
   });
 });

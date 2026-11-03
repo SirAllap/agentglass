@@ -366,6 +366,8 @@ export interface SettingsAnswer extends PolarisSettings {
   layers: Record<DoorId, Layer>;
   enabledLayer: Layer;
   presetLayer: Layer;
+  /** A project's answer also carries the global layer as stored, so a door this layer drops can be read as what takes its place. */
+  below?: StoredPolaris;
 }
 /** What a PUT /polaris/settings changes: a preset, the switch, or a whole stored layer (null drops a project's own). */
 export type SettingsChange = { preset: PresetId } | { enabled: boolean } | { settings: StoredPolaris | null };
@@ -373,6 +375,38 @@ export type SettingsChange = { preset: PresetId } | { enabled: boolean } | { set
 export type ClickAction = "beacon-draft" | "beacon-edit" | "beacon-discard" | "dock" | "ignore" | "propose" | "sync";
 /** `headSha` and `baseSha` are for a sync: the head the person saw, and the fixed base commit. */
 export interface ActionBody { type: ClickAction; reason?: string; text?: string; paneId?: string; door?: "course" | "cleanup"; headSha?: string; baseSha?: string }
+/** What an agent's ask waits in: pending until the person answers; the rest are how it ended. Requests live in memory, so a restart ends them as lost-on-restart (the CLI says so when an id is gone). */
+export const POLARIS_REQUEST_STATES = ["pending", "approved", "declined", "expired", "lost-on-restart", "changed"] as const;
+export type PolarisRequestState = (typeof POLARIS_REQUEST_STATES)[number];
+/** The two things an agent asks the person for. Everything else it does directly or not at all. */
+export type PolarisAsk = "sync" | "beacon-send-on-click";
+/** One entry of GET /settings/requests with kind "polaris-action". It carries the fields a settings request does, so the existing cards draw it. */
+export interface PolarisActionRequest {
+  kind: "polaris-action";
+  id: string;
+  /** "polaris.sync" or "polaris.beacon-send-on-click": the card's setting column. */
+  setting: string;
+  label: string;
+  root: string;
+  /** Who asked, as the audit line names them. */
+  who: string;
+  asker: string;
+  /** The same asker as a stable token (`orbit-chair`), for the CLI that filters its own asks; `asker` is a sentence. */
+  askerName: string;
+  type: PolarisAsk;
+  number: number;
+  state: PolarisRequestState;
+  /** The head the server recorded when the ask was made. */
+  headSha: string;
+  /** For a send: the draft exactly as it will be typed, and the session it goes to. */
+  draftText?: string;
+  paneId?: string;
+  /** How a decided request ended, in a sentence. */
+  result?: string;
+  diff: string[];
+  at: number;
+  expires: number;
+}
 export interface ActionAnswer { ok: boolean; outcome?: "done" | "skipped-in-dry-run"; error?: string }
 
 const isOk = (c: PolarisCheck) => c.state === "success" || c.state === "skipped" || c.state === "neutral";

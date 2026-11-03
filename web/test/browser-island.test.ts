@@ -26,8 +26,8 @@ describe("island pill", () => {
   });
 
   // The dot next to the agent's name went green, grey, green on every call of a
-  // continuous run: it read the raw in-flight count, which is 0 between two asks.
-  test("the dot is lit on the glass's clock, not on the raw in-flight count", () => {
+  // continuous run: it read the raw count of asks running, which is 0 between two asks.
+  test("the dot is lit on the glass's clock, not on the raw count of asks running", () => {
     expect(island).toContain("const { held } = useGlass(act, live);");
     expect(island).toMatch(/const working = driving && held;/);
     expect(island).not.toMatch(/act!?\.working > 0/);

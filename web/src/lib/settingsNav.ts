@@ -130,7 +130,6 @@ export function navMarks(f: NavFacts): Record<string, PageMark> {
   set("remote", onOff(f.remoteLive));
   set("clickup", f.clickupConnected ? { state: "on" } : null);
   set("jira", onOff(f.jiraConnected));
-  set("lantern", onOff(f.lanternWatching));
   set("notifications", onOff(f.notificationsOn));
   if (f.pluginsNeed) set("plugins", { state: "needs", count: f.pluginsNeed, title: `${f.pluginsNeed} ${f.pluginsNeed === 1 ? "plugin waits" : "plugins wait"} for your approval` });
   else if (f.pluginsRunning) set("plugins", { state: "on", count: f.pluginsRunning, title: `${f.pluginsRunning} running` });
@@ -211,7 +210,6 @@ const STATE_WORDS: Record<string, { on?: string; off?: string }> = {
   hooks: { on: "Hooks wired" },
   tmux: { on: "tmux ready" },
   notifications: { on: "On", off: "Silenced" },
-  lantern: { on: "Watching", off: "Paused" },
   jira: { on: "Connected", off: "Not connected" },
   clickup: { on: "Connected" },
   remote: { on: "Device connected", off: "No device" },

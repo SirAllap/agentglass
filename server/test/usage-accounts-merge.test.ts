@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateAccounts, type AccountsInput } from "../../shared/pluginAccounts.ts";
-import type { AgentProbe, ProviderUsage } from "../../shared/types.ts";
+import type { ProviderUsage } from "../../shared/types.ts";
 import { DEFAULT_PACE_CONFIG, pace } from "../../shared/pace.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "agx-usage-merge-"));
@@ -54,7 +54,7 @@ afterAll(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-const claudeOnly = [{ id: "claude-code", found: true }, { id: "codex", found: false }, { id: "antigravity", found: false }] as unknown as AgentProbe[];
+const claudeOnly = [{ id: "claude-code", found: true }, { id: "codex", found: false }, { id: "antigravity", found: false }];
 
 describe("one row per login", () => {
   test("the active row is the app's reading, whatever the plugin says about it", async () => {

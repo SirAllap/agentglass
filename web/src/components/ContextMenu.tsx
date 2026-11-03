@@ -18,6 +18,7 @@ import { Portal } from "./Portal.tsx";
 import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { menuEventGuards } from "../lib/menuEvents.ts";
 import { isMenuKey, menuIndex } from "../lib/menuNav.ts";
+import { clampToWindow } from "../lib/menuPlacement.ts";
 import { HIT, ICON } from "../lib/iconSize.ts";
 import { EDGE } from "./workspace/Chrome.tsx";
 
@@ -32,15 +33,24 @@ export function ContextMenu({ x, y, onClose, children, width, label, pop, plain 
   useCloseWithOwner(onClose, { at: { x, y } });
 
   // Measured after the first paint, because "does this fall off the bottom of
-  // the window" cannot be answered before it has a height.
+  // the window" cannot be answered before it has a height. Measured again on
+  // every resize: a menu opened before the window shrank otherwise kept its
+  // place and hung its last rows below the edge (79px at 640x360).
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const r = el.getBoundingClientRect();
-    setPos({
-      x: Math.min(x, window.innerWidth - r.width - 8),
-      y: Math.max(8, Math.min(y, window.innerHeight - r.height - 8)),
-    });
+    const place = () => {
+      const r = el.getBoundingClientRect();
+      const at = clampToWindow(
+        { left: x, top: y },
+        { width: r.width, height: r.height },
+        { width: window.innerWidth, height: window.innerHeight },
+      );
+      setPos({ x: at.left, y: at.top });
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
   }, [x, y]);
 
   // Where the keyboard was when it opened, so Escape (or any way out) puts it back

@@ -109,6 +109,11 @@ async function spawnServer(at: string, port: number, seam: boolean) {
       XDG_CONFIG_HOME: at,
       AGENTGLASS_ROOT: at,
       AGENTGLASS_DB: join(at, "f.db"),
+      // The boot reap reads the child ledger under the state directory and
+      // stops what a dead owner left there. Without this the child server
+      // reads the developer's real one, where a running desktop app has live
+      // monitors recorded — see server-boot-jails-state.test.ts.
+      AGENTGLASS_STATE_DIR: join(at, "state"),
       AGENTGLASS_SCAN_DISABLED: "1",
       AGENTGLASS_PORT: String(port),
       // Without this the gate is skipped entirely and every assertion below

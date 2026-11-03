@@ -154,7 +154,7 @@ function finish(
  *  deadline, so a reconnect (or a restart) never extends the window. */
 function arm(id: string, expires: number, failClosed?: boolean): ReturnType<typeof setTimeout> {
   const t = setTimeout(() => finish(id, timeoutOutcome(failClosed), "timeout"), Math.max(0, expires - Date.now()));
-  // Don't let a held gate keep the process alive on its own.
+  // Don't let a gate waiting on you keep the process alive on its own.
   (t as any).unref?.();
   return t;
 }

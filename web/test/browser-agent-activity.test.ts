@@ -28,6 +28,7 @@ describe("agent activity per tab", () => {
     const s = activityReducer(begin({}), { type: "end", tab: "t1", action: null });
     expect(doneMayMark(s.t1, "orbit-ci")).toBe(true);
     expect(doneMayMark(s.t1, " orbit-ci ")).toBe(true);
+    expect(doneMayMark(s.t1, "ORBIT-CI")).toBe(true);
     expect(doneMayMark(s.t1, "acme-bot")).toBe(false);
     expect(doneMayMark(s.t1, undefined)).toBe(false);
     expect(doneMayMark(s.t1, "")).toBe(false);
@@ -348,7 +349,7 @@ describe("the alien's look at the agent's pointer", () => {
 
 describe("whether the agent is still working on a tab", () => {
   const a = { live: true, paused: false, working: 0 };
-  // Between two asks of one run the in-flight count is 0; the dot and the glass blinked with it.
+  // Between two asks of one run the count of asks running is 0; the dot and the glass blinked with it.
   test("holds through the gap between two asks until the quiet window runs out", () => {
     expect(glassHeld({ ...a, working: 1 }, false)).toBe(true);
     expect(glassHeld(a, false)).toBe(true);

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Markdown } from "../../lib/markdown.tsx";
 import { api } from "../../lib/api.ts";
-import { filesWord, kb, lastName, splitPlan, stationStates, written, type PlanDetail } from "../../lib/flightPlan.ts";
+import { costText, filesWord, kb, lastName, splitPlan, stationStates, written, type PlanDetail } from "../../lib/flightPlan.ts";
 import { builderFacts, flightNow, hhmm, lasted, stateSentence, stepsOf, type FlightItem, type Pilot, type PilotSnapshot } from "../../lib/flightPilot.ts";
 import { StateTile } from "./StateBadge.tsx";
 import { MockupThumb } from "./MockupThumb.tsx";
@@ -33,7 +33,7 @@ function Main({ d, it, snap, preflightOn, cap, now, pilot, onChanged, onSettings
   const version = plan.version ?? 1;
   /* The first text is v1; Compare is offered once there is a later one. */
   const compareBtn = version > 1 ? <button type="button" className="btn sm" aria-expanded={compare} onClick={() => setCompare((v) => !v)}>Compare with v1</button> : null;
-  const subs = [plan.taskId ?? "typed", written(plan) ? "written" : "writing", plan.visual ? `${plan.mockups.length} ${plan.mockups.length === 1 ? "screen" : "screens"}` : "", run?.certificate ? `${filesWord(run.certificate.files.length + run.certificate.mockups.length + 1)} · $${run.certificate.costUsd.toFixed(2)}` : "", run?.certificate ? `${run.certificate.findings.filter((f) => f.action && f.action !== "ask").length} of ${run.certificate.findings.length}` : "", plan.state === "launched" ? "Go" : "waiting", ""];
+  const subs = [plan.taskId ?? "typed", written(plan) ? "written" : "writing", plan.visual ? `${plan.mockups.length} ${plan.mockups.length === 1 ? "screen" : "screens"}` : "", run?.certificate ? `${filesWord(run.certificate.files.length + run.certificate.mockups.length + 1)} · ${costText(run.certificate)}` : "", run?.certificate ? `${run.certificate.findings.filter((f) => f.action && f.action !== "ask").length} of ${run.certificate.findings.length}` : "", plan.state === "launched" ? "Go" : "waiting", ""];
   return (
     <section className="main" aria-label="Open plan">
       <button type="button" className="btn sm pv-back" onClick={onBack}><ArrowLeftIcon size={ICON.xs} />Flying</button>

@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { makeTagsOriginCache } from "../src/tagsOriginCache.ts";
 
 describe("tags-origin cache", () => {
-  it("shares one in-flight ask and keeps an unknown answer for 30 s, not 60", async () => {
+  it("shares one ask while it runs, and keeps an unknown answer for 30 s, not 60", async () => {
     let t = 0, asks = 0;
     const c = makeTagsOriginCache(() => t);
     const slow = async () => { asks++; await Bun.sleep(20); return '{"tags":[{"onOrigin":"unknown"}]}'; };

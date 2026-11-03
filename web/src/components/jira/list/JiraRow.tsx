@@ -9,10 +9,8 @@
  */
 import { memo, useState, useSyncExternalStore, type DragEvent, type MouseEvent } from "react";
 import type { ProviderTask } from "../../../../../shared/providers.ts";
-import { avatarSrc } from "../../../lib/avatarSrc.ts";
 import { cardPrInk, cardPrTint, pickCardPr, sortedCardPrs, type CardPr } from "../../../lib/cardPrPick.ts";
 import { cardPrsOf, cardPrVersion, onCardPrs } from "../../../lib/cardPrStore.ts";
-import { chipInk } from "../../../lib/contrast.ts";
 import { BlockedIcon, CommentIcon, CrossIcon, FlagIcon, PullRequestIcon } from "../../../lib/glyphIcons.tsx";
 import { ICON } from "../../../lib/iconSize.ts";
 import { openPr, openPrs, prRefFromUrl } from "../../../lib/openPrs.ts";
@@ -20,6 +18,7 @@ import { dueWords } from "../../../lib/taskGrammar.ts";
 import { tipAttr } from "../../../lib/tip.ts";
 import { ContextMenu, MenuItem } from "../../ContextMenu.tsx";
 import { isSubtask, keyOf, type Cols } from "./laneModel.ts";
+import { PeopleFaces } from "./PeopleFaces.tsx";
 
 /** Story, Bug, Task, Sub-task and Epic have a letter and a tone; any other type wears its first letter in the quiet one. */
 const TYPE_TONE: Record<string, string> = { story: "var(--success)", bug: "var(--error)", task: "var(--info)", epic: "var(--text)" };
@@ -34,31 +33,6 @@ const SubIcon = () => (
     <path d="M6 4v9a3 3 0 0 0 3 3h9M15 13l3 3-3 3" />
   </svg>
 );
-
-function Face({ p }: { p: NonNullable<ProviderTask["people"]>[number] }) {
-  const [broken, setBroken] = useState(false);
-  const tip = p.me ? `${p.name} (you)` : p.name;
-  return (
-    <span className="agx-jl-face" data-me={p.me ? "" : undefined} data-tip={tipAttr(tip)}
-      style={p.color && !(p.avatar && !broken) ? { background: p.color, color: chipInk(p.color) } : undefined}>
-      {p.avatar && !broken
-        ? <img src={avatarSrc(p.avatar)} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(true)} />
-        : p.initials}
-    </span>
-  );
-}
-
-const SHOWN_FACES = 3;
-function Who({ people }: { people: NonNullable<ProviderTask["people"]> }) {
-  if (!people.length) return null;
-  const rest = people.length - SHOWN_FACES;
-  return (
-    <span className="agx-jl-stack">
-      {people.slice(0, SHOWN_FACES).map((p, i) => <Face key={p.key ?? p.id ?? `${p.name}${i}`} p={p} />)}
-      {rest > 0 && <span className="more" data-tip={tipAttr(people.slice(SHOWN_FACES).map((p) => p.name).join(", "))}>+{rest}</span>}
-    </span>
-  );
-}
 
 const prWord = (p: CardPr): string => (p.draft ? "Draft" : p.state === "MERGED" ? "Merged" : p.state === "CLOSED" ? "Closed" : "Open");
 function openPull(p: CardPr): void {
@@ -170,7 +144,7 @@ function RowView({ card: t, cols, third, today, selected, tabbable, nested, dot,
         </div>
       )}
       {cols.pr && <div className="agx-jl-cell"><Pr card={t} /></div>}
-      {cols.who && <div className="agx-jl-cell"><Who people={t.people ?? []} /></div>}
+      {cols.who && <div className="agx-jl-cell"><PeopleFaces people={t.people ?? []} /></div>}
       {cols.due && (
         <div className="agx-jl-cell due" data-tone={due?.tone}>
           {due && due.tone !== "none" && due.tone !== "done" && (<>{due.tone === "late" && <FlagIcon size={ICON.xs} />}{due.text}</>)}

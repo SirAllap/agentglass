@@ -241,7 +241,7 @@ export type QuotaWindow = {
 };
 
 export type ProviderUsage = {
-  provider: "anthropic" | "codex" | "antigravity";
+  provider: "anthropic" | "codex" | "opencode" | "antigravity";
   /** How the provider is named on screen. */
   label: string;
   available: boolean;
@@ -258,6 +258,24 @@ export type ProviderUsage = {
    *  row reads. Label and plan are the plugin's user-chosen words, never an
    *  email or an id. */
   account?: { label: string; plan: string; active: boolean };
+  /** Where the numbers come from, in the provider's own words. OpenCode Go says
+   *  "this PC": its windows are computed from the turns agentglass ran here,
+   *  which under-read the console's own count. */
+  source?: string;
+  /** The console's reading, when the person asked for it. Never the main
+   *  number: it is a calibration line under the local ones. */
+  calibration?: { at: number; windows: QuotaWindow[] };
+  /** Tokens per UTC day from the same recorded steps, newest last. */
+  daily?: { day: string; tokens: number }[];
+  /** A dollar total when the provider has numbers but no quota windows — the
+   *  per-model totals from the engine's own stats. Never a substitute for a
+   *  window: the chip names it as a spend, with the span it covers. */
+  spend?: { usd: number; window: string };
+  /** Whether a console key is stored. Set/unset only: the key itself never
+   *  travels to a browser. */
+  usageKey?: boolean;
+  /** Why the last console read failed, when one did: a sentence, never a number. */
+  usageNote?: string;
 };
 
 export interface SkillUsage {
@@ -565,6 +583,16 @@ export type PtyServerFrame =
    */
   | {
       t: "tmux"; active: boolean; windows: TmuxWindow[]; panes: TmuxPane[]; session?: string | null;
+      /**
+       * The pane tmux has selected in the window on screen — the one this
+       * client is looking at, split or not.
+       *
+       * `panes` is geometry to choose between, so it is empty for a window that
+       * is not split. This is identity, and it is reported either way: a tab is
+       * one pane, and the bar over a worker's tab looks its row up in
+       * `/agents/named` by this id.
+       */
+      pane?: string;
       prefix?: string[]; client?: { cols: number; rows: number } | null;
       /** The tmux socket this shell is on; quoted by the "Can't reach tmux" card. */
       socket?: string;
@@ -784,7 +812,7 @@ type UnionValue<T, K extends PropertyKey> = T extends unknown ? (K extends keyof
  */
 export type PtyClientMessage = { [K in UnionKeys<PtyClientFrame>]?: UnionValue<PtyClientFrame, K> };
 
-/** A tool call held at the gate, awaiting a remote approve/deny. */
+/** A tool call waiting at the gate, awaiting a remote approve/deny. */
 export interface PendingGate {
   id: string;
   source_app: string;
@@ -1172,7 +1200,7 @@ export type Liveness = "working" | "stuck" | "lost" | "unknown";
  * *type*; the UI (web/src/components/workspace/views.ts) attaches the icons,
  * labels and hotkeys and re-exports this so both sides name one set.
  */
-export type ViewId = "dash" | "git" | "diff" | "pr" | "docker" | "term" | "browser" | "tasks" | "agents" | "plugins" | "flightPlan" | "skills";
+export type ViewId = "dash" | "git" | "diff" | "pr" | "docker" | "term" | "browser" | "tasks" | "agents" | "plugins" | "flightPlan" | "skills" | "manifest";
 
 /**
  * A UI-navigation command from an external controller (a Stream Deck, a phone),
@@ -2606,11 +2634,23 @@ export interface DockerContainer {
    *  unhealthy, which today costs a trip nobody makes. */
   healthError?: string | null;
   healthFailures?: number;
+  /** Docker's own `State.Error`, verbatim, from the medium lane's inspect: why
+   *  a start failed. A container that never got as far as running says only that
+   *  it exited with a code, and this is the one place the reason lives. Empty
+   *  when docker has nothing to accuse. */
+  stateError?: string | null;
+  /** `State.FinishedAt` from the same inspect. With `startedAt` it is how a log
+   *  line from an earlier run is told from the attempt that just failed. */
+  finishedAt?: string | null;
   /** The checkout the stack was brought up from, resolved against the
    *  worktrees of the open project. */
   owner?: DockerOwnerRef;
   /** Named volumes this container mounts, from the same batched inspect. */
   mounts?: { name: string; rw: boolean; destination: string }[];
+  /** When this server last asked this container to stop, while that still
+   *  explains an exit. An `Exited (143)` after it is a stop of ours, not a
+   *  crash; the same code with no mark is the container's own failure. */
+  stopAskedAt?: number;
 }
 
 /** One mapping out of the ports column. See server/src/dockerports.ts. */
@@ -4226,6 +4266,81 @@ export interface EnginesReport {
   engines: EngineReadiness[];
 }
 
+/**
+ * What the first run is told about this machine, read once at launch
+ * (GET /setup/state).
+ *
+ * `setupDone` is null until somebody writes it: "never asked" is not "not
+ * finished", and the difference decides whether the machine's own facts are
+ * allowed to answer. The rest are facts no window has to guess at.
+ */
+export interface SetupState {
+  setupDone: boolean | null;
+  /** A setup run was left open: a reload resumes it at step 1. */
+  setupInProgress: boolean;
+  /** The agent a first terminal starts (an engine id). */
+  setupAgent: string;
+  /** The tutorial cards already read, as a comma list. */
+  tutorialSeen: string;
+  projectOpen: boolean;
+  sessionsSeen: boolean;
+  hooksInstalled: boolean;
+  homedir: string;
+}
+
+/** One repository a folder holds, as step 4 lists it: a name, a path, a branch. */
+export interface SetupRepoRow {
+  name: string;
+  root: string;
+  branch: string;
+}
+
+/** What step 4's folder read answers. `exists` false is a folder that is gone;
+ *  `exists` true with no rows is a folder with no git repository in it. */
+export interface SetupRepos {
+  /** The absolute path it read ("" when the text was not a path at all). */
+  path: string;
+  exists: boolean;
+  repos: SetupRepoRow[];
+  /** More repositories were there than were listed (`repos` is the first 200). */
+  capped: boolean;
+}
+
+/** One repository the Finder found: what the row needs and nothing more. */
+export interface SetupScanRow {
+  name: string;
+  root: string;
+  /** The folder the row groups under. */
+  parent: string;
+  branch: string;
+  /** When the checkout was last worked in, epoch ms; 0 when it could not be read. */
+  touchedAt: number;
+}
+
+/** Where a search stands. `stopped` is the cap or the person pressing Stop. */
+export type SetupScanState = "running" | "done" | "stopped" | "failed";
+
+/** What one search found, as `GET /setup/scan?id=` reports it. */
+export interface SetupScan {
+  id: string;
+  state: SetupScanState;
+  /** The folders it looks in, in full. */
+  roots: string[];
+  /** Folders read so far. */
+  folders: number;
+  /** The folder the walk is reading now, for the live line. */
+  current: string;
+  repos: SetupScanRow[];
+  /** Why it stopped early, or null when it reached the end. */
+  capped: "count" | "time" | "person" | null;
+  startedAt: number;
+  elapsedMs: number;
+  /** What it never enters, for the Finder's own sentence. */
+  skips: string[];
+  /** The server's own sentence when the search could not run. */
+  error?: string;
+}
+
 export interface AgentProbe extends KnownAgent {
   /** On PATH right now. */
   found: boolean;
@@ -4549,7 +4664,8 @@ export interface ResourceReport {
   rated: boolean;
 }
 
-/** A process that was left behind by an agent and is still costing the machine. */
+/** A process left behind, with the origin read from its own paths: a checkout,
+ *  an agent scratchpad or a temp wrapper. */
 export interface OrphanProc {
   pid: number;
   comm: string;
@@ -5497,7 +5613,9 @@ export type StopReason =
   | "sensitive"        // touches auth, migrations, secrets, payments, CI or a dependency, while askOnSensitive is on
   | "budget"           // the day's or the week's Flight plan spend reached its cap
   | "builder-blocked"  // a launched builder was denied a tool twice or reported "blocked"
-  | "sensitive-diff";  // the builder's real diff touches what "sensitive" lists: stops at Integrate
+  | "sensitive-diff"   // the builder's real diff touches what "sensitive" lists: stops at Integrate
+  | "required-step"   // a step the saved flow marks required has no passing result: stops at Integrate
+  | "rounds-used";     // a step failed as many times as its fail edge allows: stops at Integrate
 
 /**
  * What the plans list says about a launched plan's builder tab: "live" has a

@@ -217,9 +217,10 @@ def main():
     p.add_argument("--kind", default=None, help="which CLI: claude (default), codex, ...")
     p.add_argument("--role", choices=["scout", "builder", "reviewer", "verifier"],
                    help="a worker role: the CLI and model Settings pick for it, locked against push, commit and merge")
+    p.add_argument("--plan", metavar="FP_ID", help="with --role: the flight plan this worker's result counts for (a step the flow marks required)")
     p.add_argument("--engine", help="with --role: which engine of the policy's chain runs it (the policy decides the choices)")
     p.add_argument("--model", help="with --engine: which model of that chain entry")
-    p.add_argument("--allow", action="append", metavar="network|commit",
+    p.add_argument("--allow", action="append", metavar="network|commit|docker",
                    help="with --role: widen the worker's envelope by one thing, up to the project's ceiling (repeatable or comma-separated)")
     p.add_argument("--yolo", action="store_true", help="skip permissions, if Settings allow it")
     p.add_argument("--remote-control", metavar="NAME", help="Claude's --remote-control NAME")
@@ -388,6 +389,8 @@ def main():
             body["kind"] = a.kind
         if a.role:
             body["role"] = a.role
+        if a.plan:
+            body["plan"] = a.plan
         if a.engine:
             body["engine"] = a.engine
         if a.model:

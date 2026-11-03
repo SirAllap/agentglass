@@ -90,7 +90,7 @@ import type { UnstickFacts, UnstickGate } from "../../../shared/unstick.ts";
 import { factsOf } from "../../../shared/unstick.ts";
 import { updateStanding, awaitingChecksOf, updateHeld, updateHeldTitle, stalledNote, REQUEST_WINDOW_MS, type UpdateStanding } from "../../../shared/justUpdated.ts";
 import { noteKnownBlock } from "../lib/prKnownBlock.ts";
-import { enterFlight, leaveFlight, inFlight } from "../lib/updateFlight.ts";
+import { enterFlight, leaveFlight, flightKey, inFlight } from "../lib/updateFlight.ts";
 import { updateBranchMove, branchNoticeJump, prConflicted, gitSaysClean as cleanMerge, type BranchNotice } from "../lib/updateBranch.ts";
 import { depSpec } from "../../../shared/deps.ts";
 import { CardRef, StatusMove } from "./StepCard.tsx";
@@ -140,6 +140,8 @@ import { applyFilter, checkLabel, checkRowId, checkSpan, checkStatusLine, checkV
 import { conflictVersion, conflictsFrom, learn as learnConflict, onConflict, withConflict } from "../lib/prConflictStore.ts";
 import { askingBehind, behindAnswer, forgetBehind, forgetOneBehind, onBehind, refreshBehind } from "../lib/prBehindStore.ts";
 import { refreshRollup, rollupOf } from "../lib/prRollupStore.ts";
+import { clearRefreshing, markRefreshing, refreshingSince } from "../lib/prRefreshingStore.ts";
+import { refreshMoved } from "../lib/prRefreshing.ts";
 import { trustHead, nextLook, staleness, shortSha } from "../../../shared/prFreshness.ts";
 import { detailWithChecks, rowWithChecks, overlayDetail, reopenedRow, holdReopened, reopenKey, holdEdits, refreshPlan, rowPatch, landedDetail, dropLanded, staleOpen, once, type EditLog, type Landed, type Reopened } from "../lib/prRefresh.ts";
 import {
@@ -1754,7 +1756,7 @@ export function PrView({ active, onReviewInTerminal, jumpTo }: {
   }, [dockRow]);
   const dockState: Dock = { selected, maximized };
   const layout = parts(dockState);
-  /* The width the person dragged the dock to (kept as chosen; the room clamps what is drawn), and the grip's in-flight width. */
+  /* The width the person dragged the dock to (kept as chosen; the room clamps what is drawn), and the grip's width while it is dragged. */
   const [dockChosen, setDockChosen] = useState(dockPref);
   const dockEl = useRef<HTMLDivElement>(null);
   const dockLive = useRef<number | null>(null);
@@ -2110,6 +2112,12 @@ export function PrView({ active, onReviewInTerminal, jumpTo }: {
      request with its own update on the way still greys its OWN other writes. */
   const [updating, setUpdating] = useState<ReadonlySet<string>>(() => new Set());
   const updatingRef = useRef<ReadonlySet<string>>(updating);
+  /** The same flights as numbers, for the lane plan: a lane sync must skip one the card is already sending. */
+  const syncingNumbers = useMemo(() => {
+    const out = new Set<number>();
+    for (const k of updating) if (k.startsWith(`${root}#`)) out.add(Number(k.slice(root.length + 1)));
+    return out;
+  }, [updating, root]);
   const updatingHere = detail != null && inFlight(updating, root, detail.number);
   const busy = running || updatingHere;
   /** The label passed to `act` for the request in flight — see Button `pending`. */
@@ -3590,7 +3598,7 @@ export function PrView({ active, onReviewInTerminal, jumpTo }: {
   }, [parsed]);
 
   const openCommit = useCallback((sha: string) => {
-    const req = ++commitReq.current; // invalidates any in-flight commit diff, whether opening another or closing
+    const req = ++commitReq.current; // invalidates a commit diff still being read, whether opening another or closing
     if (!root || !sha) { setSelCommit(null); return; }
     setSelCommit(sha); setCommitText(""); setCommitBusy(true);
     api.prCommitDiff(root, sha)
@@ -4478,11 +4486,11 @@ export function PrView({ active, onReviewInTerminal, jumpTo }: {
   const doNudge = async () => {
     if (!detail || !root) return;
     const r = await api.prNudge(root, detail.number, true).catch(() => ({ ok: false, error: "the server did not answer" } as { ok: boolean; text?: string; channel?: boolean; sent?: boolean; error?: string }));
-    if (!r.ok || !r.text) { flash(false, r.error ?? "Could not compose the nudge"); return; }
+    if (!r.ok || !r.text) { flash(false, r.error ?? "Could not compose the reminder"); return; }
     let copied = false;
     try { await navigator.clipboard.writeText(r.text); copied = true; } catch { /* the channel may still have taken it */ }
-    if (r.sent) flash(true, copied ? "Nudge sent to the channel, and copied" : "Nudge sent to the channel");
-    else if (copied) flash(true, r.channel ? `Nudge copied — the channel refused: ${r.error ?? "unknown"}` : "Nudge copied — paste it where they will see it (no channel is configured)");
+    if (r.sent) flash(true, copied ? "Reminder sent to the channel, and copied" : "Reminder sent to the channel");
+    else if (copied) flash(true, r.channel ? `Reminder copied — the channel refused: ${r.error ?? "unknown"}` : "Reminder copied — paste it where they will see it (no channel is configured)");
     else flash(false, r.error ?? "Could not reach the clipboard");
   };
 
@@ -4712,6 +4720,77 @@ export function PrView({ active, onReviewInTerminal, jumpTo }: {
      `.then`, before `act` re-reads. */
   /* `from` is a card on the board: the same update, for a pull request whose page is not open.
      Remote only (`syncLocal` false) there, because no checkout was looked at. */
+  /*
+   * The write landed; the list did not. `loadList(true)` answers from the cache
+   * it already has and starts the GitHub read behind it, so the card keeps its
+   * old state until the settle ladder next asks (about 10 s — measured in
+   * lib/prRefreshing.ts). So read THAT pull request now, and hold its card in
+   * "refreshing" until the answer is in.
+   *
+   * Read again while the head is unchanged: GitHub answers 202 for an update it
+   * queued, and the first reads after it return the OLD head, so one read put
+   * the card back on "Update · N" for a merge that was still coming. The ladder
+   * is prSettle's (0.5, 1, 2, 4 s); the store's ceiling ends the hold at 45 s.
+   */
+  const reReadAfterWrite = useCallback((num: number, headBefore?: string) => {
+    if (!root) return;
+    markRefreshing(root, num);
+    const step = async () => {
+      let wait = 0;
+      while (refreshingSince(root, num) !== undefined) {
+        if (wait) await new Promise((r) => setTimeout(r, wait));
+        if (refreshingSince(root, num) === undefined) return; // the ceiling, or another read, cleared it
+        let got: Awaited<ReturnType<typeof api.prDetail>>;
+        try { got = await api.prDetail(root, num, true); } catch { clearRefreshing(root, num); return; }
+        // A failed or 404 read is not a read on its way: say nothing rather than keep claiming one.
+        if (!got.ok || !got.detail) { clearRefreshing(root, num); return; }
+        const d = got.detail;
+        editLog.current.set(num, { at: Date.now(), patch: rowPatch(d) });
+        const put = (cur: PrSummary[]) => openLists(overlayDetail(cur, d));
+        setPrs(put);
+        setBoardMine(put);
+        setBoardReview(put);
+        if (selectedRef.current === num) setDetail((cur) => (cur && cur.number === num ? d : cur));
+        refreshRollup(root, num);
+        refreshBehind(root, num);
+        if (refreshMoved(headBefore, d.headSha)) { clearRefreshing(root, num); return; }
+        wait = Math.min(wait ? wait * 2 : 500, 4000);
+      }
+    };
+    void step();
+  }, [root, openLists]);
+
+  /* The card's Update, one pull request, for a lane's Sync list. The action is
+     the card's: GitHub is always merged; the local copy only when it is clean.
+     The flight is the card's too: a lane press and a card press on the same one
+     were two `gh pr update-branch` calls, and the second came back "head sha
+     didn't match" over a branch that had updated fine. */
+  const syncOne = useCallback(async (p: PrSummary) => {
+    const key = flightKey(root, p.number);
+    const flying = enterFlight(updatingRef.current, key);
+    if (!flying) return { ok: false, detail: "Already on its way — not sent again" };
+    updatingRef.current = flying;
+    setUpdating(flying);
+    try {
+      const answer = behindAnswer(root, p.number);
+      const move = updateBranchMove(answer.behind, p.baseRefName, answer.local ?? undefined);
+      const r = await api.prUpdateBranch(root, p.number, move.syncLocal);
+      if (r.ok) reReadAfterWrite(p.number, r.headBefore);
+      return {
+        ok: r.ok,
+        detail: r.ok
+          ? (r.detail || (move.syncLocal ? "Merged · local copy updated" : "Merged · local copy left alone"))
+          : (r.error || "GitHub refused it"),
+      };
+    } finally {
+      const left = leaveFlight(updatingRef.current, key);
+      updatingRef.current = left;
+      setUpdating(left);
+      loadList(true);
+      refreshBehind(root, p.number);
+    }
+  }, [root, reReadAfterWrite, loadList]);
+
   const doUpdateBranch = (syncLocal: boolean, from?: { number: number; headBefore: string; updatedAt: string }) => {
     const t = from ?? (d ? { number: d.number, headBefore: d.headSha ?? d.commits[d.commits.length - 1]?.oid ?? "", updatedAt: d.updatedAt } : null);
     if (!t) return;
@@ -4734,6 +4813,8 @@ export function PrView({ active, onReviewInTerminal, jumpTo }: {
         saveOwnUpdate(key, own);
       }
       flash(r.ok, r.ok ? (r.detail || `#${num} Update branch — done`) : (r.error || `#${num} Update branch failed`));
+      // Only an accepted write starts the hold: a refusal (conflict, locked branch) changed nothing to wait for.
+      if (r.ok) reReadAfterWrite(num, r.headBefore ?? headBefore);
       return r;
     })
       .catch((e) => { flash(false, String(e)); })
@@ -5229,6 +5310,10 @@ export function PrView({ active, onReviewInTerminal, jumpTo }: {
                     canUndo={!!previousFilter} onUndo={() => { if (previousFilter) { setLaneFilterRaw(previousFilter); setPreviousFilter(null); } }} />,
                 }}
                 viewer={personLogin ?? undefined}
+                me={viewer}
+                onSyncOne={syncOne}
+                syncing={syncingNumbers}
+                readOnly={readOnly}
                 person={personLogin ? { name: knownNames.get(personLogin.toLowerCase()), onBack: backToMine, more: person.state.kind === "ready" && person.state.more, checkedAt: person.state.kind === "ready" ? person.state.at : undefined, closed: { on: personClosedOn, set: setClosedOn, sections: personClosedSections }, follow: { on: sf.focus.isFollowed(personLogin), toggle: () => sf.focus.toggleFollow(personLogin) } } : undefined}
                 others={boardWide && !personLogin ? boardOthersShown : undefined}
                 showEveryone={boardWide && !personLogin}
@@ -8823,7 +8908,7 @@ function Masthead({ band, dockControls, root, repo, d, busy, local, stackUi, onO
                 <MenuItem icon={<TagIcon size={ICON.sm} />} onClick={() => { close(); onLabels(); }}>Edit labels</MenuItem>
                 <MenuSep />
                 {onNudge && d.state === "OPEN" && (
-                  <MenuItem icon={<BellIcon size={ICON.sm} />} onClick={() => { close(); onNudge(); }}>Nudge the reviewers</MenuItem>
+                  <MenuItem icon={<BellIcon size={ICON.sm} />} onClick={() => { close(); onNudge(); }}>Ask the reviewers to look again</MenuItem>
                 )}
                 {d.state !== "MERGED" && <>
                   <MenuSep />

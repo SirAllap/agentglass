@@ -12,13 +12,18 @@ export const DESK_GATED: readonly string[] = [
   // The settings an agent's change waits on the person for: the person's own save
   // and answer carry the key, so the server does not read them as an agent's
   // (index.ts mayPublishReview, the settings door).
-  "/settings/door", "/settings/requests/decide", "/launch-permissions", "/launch-flags", "/seat/settings", "/seat/change", "/seat/wake",
+  // The list is narrowed to the caller's own projects unless the server reads the key (index.ts
+  // mayPublishReview); without it the person's window missed other projects' requests.
+  "/settings/door", "/settings/requests", "/settings/requests/decide", "/launch-permissions", "/launch-flags", "/seat/settings", "/seat/change", "/seat/wake",
   "/hooks/gate", "/budgets/set", "/lantern/settings", "/agents/roles", "/plugins/master", "/plugins/enable", "/plugins/allow-unboxed",
   "/plugins/session-reads", "/jira/writes", "/clickup/writes", "/clickup/prefs",
   // A press of an account chip: only the person in the desktop window, never an agent staging it.
   "/usage/accounts/switch", "/usage/accounts/manage",
   // The person's own press of the keyring switch and of Clean up disk (mayPublishReview).
   "/keyring/toggle", "/keyring/rehydrate", "/machine/disk-clean/run", "/cleanup/run", "/cleanup/build-cache/prune",
+  // The manifest's signOff answer, its verdicts and the start line are mayAnswerSettingsRequest, and on a
+  // server the app started that is the desk key alone: without it the app's own read said sign-off was off.
+  "/manifest", "/manifest/signoff", "/manifest/start",
   // Data & privacy and the Jira write switches, judged the same way.
   "/privacy/retention", "/privacy/erase-history", "/jira/write-kinds",
   // Flight plan: Go, No-go, Launch, a one-run cap and the author tab a new plan starts are the
@@ -26,9 +31,13 @@ export const DESK_GATED: readonly string[] = [
   "/flight-plan/plans", "/flight-plan/plans/", "/flight-plan/runs/",
   // Hold is anyone's; Resume is the person's, and both come from the strip's one button.
   "/flight-plan/hold", "/flight-plan/resume",
+  // A raise lasts until the day (or week) turns over, and raising the budget is the person's (mayPublishReview).
+  "/flight-plan/budget/raise",
   // The project's agent rules: the person's own write applies at once and only the person answers a
   // waiting one (setRule/answer get mayPublishReview); without the key the person waited on themselves.
   "/agent-rules", "/agent-rules/",
+  // A project's flow is the person's, like the policy beside it (index.ts /flow).
+  "/flow",
 ];
 
 export function deskGated(path: string): boolean {

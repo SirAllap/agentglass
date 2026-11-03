@@ -3,6 +3,8 @@ import "./flightPlanView.css";
 import "./pilotView.css";
 import { api } from "../../lib/api.ts";
 import { openTicketOnBench } from "../../lib/lanternAsk.ts";
+import { JOB } from "../../lib/benchJobs.ts";
+import { BenchJobLine } from "../BenchJobLine.tsx";
 import { usd, type PlanDetail } from "../../lib/flightPlan.ts";
 import { answerText, flightGroups, flightItems, needsYou, nextWaiting, stripCounts, stripFor, type FlightItem, type Handled, type Pilot, type PilotQuestion, type PilotSnapshot, type StripButtonId } from "../../lib/flightPilot.ts";
 import { projectRoots } from "../../lib/flightProjects.ts";
@@ -11,6 +13,7 @@ import { subscribeFlightPlanIntent, takeFlightPlanIntent, type FlightPlanTab } f
 import { ICON } from "../../lib/iconSize.ts";
 import { PILOT_KEYS, encode, noteFor } from "../../lib/pilotSettings.ts";
 import { CardPopover } from "./CardPopover.tsx";
+import { useDialogs } from "../ConfirmDialog.tsx";
 import { Composer, type Preset } from "./Composer.tsx";
 import { GoCard, type CardAnswer } from "./GoPoll.tsx";
 import { HistoryTab } from "./HistoryTab.tsx";
@@ -57,6 +60,7 @@ export function FlightPlanView({ active }: { active: boolean }) {
   const [err, setErr] = useState("");
   const [stripBusy, setStripBusy] = useState(false);
   const [stripErr, setStripErr] = useState("");
+  const { askText, dialog } = useDialogs();
   const d = useFlightPlan(active, selected);
   const details: PlanDetail[] = useMemo(() => d.details ?? [], [d.details]);
   const off = d.enabled === false;
@@ -136,16 +140,18 @@ export function FlightPlanView({ active }: { active: boolean }) {
   }, [active, d.reload, pf.read]);
   const open = (r: { id: string; root: string; ticket?: string }) => {
     reloadAll(); setSelected(r.id); setOpened(true); setTab("plans");
-    if (r.ticket) void openTicketOnBench(r.root, r.ticket, "flight plan");
+    /* One author tab per plan: opening the plan again brings its tab forward
+       rather than seating a second agent on the same single-use ticket. */
+    if (r.ticket) void openTicketOnBench(r.root, r.ticket, "flight plan", JOB.flightAuthor(r.id));
   };
 
-  const go = useCallback(async (id: string) => {
+  const go = useCallback(async (id: string, model?: string) => {
     const cur = details.find((x) => x.plan.id === id)?.plan;
     setBusy(true); setErr("");
     try {
       /* Go launches by itself; a launch that could not start leaves the plan at Go with the reason, and the card's Launch button is the retry. */
-      if (cur?.state === "go") { const l = await api.flightPlanLaunch(id); if (!l.ok) setErr(l.error ?? "the launch did not start"); return; }
-      const o = goOutcome(await api.flightPlanGo(id));
+      if (cur?.state === "go") { const l = await api.flightPlanLaunch(id, model); if (!l.ok) setErr(l.error ?? "the launch did not start"); return; }
+      const o = goOutcome(await api.flightPlanGo(id, model));
       if (o.kind === "refused" || o.kind === "retry") setErr(o.error);
     } catch { setErr("could not reach the server"); } finally { setBusy(false); reloadAll(); }
   }, [details, d, pf]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -176,7 +182,7 @@ export function FlightPlanView({ active }: { active: boolean }) {
     const r = await fn().catch(() => ({ ok: false, error: "could not reach the server" }));
     setStripBusy(false);
     if (!r.ok) setStripErr(noteFor(r)?.text ?? r.error ?? "not done");
-    pf.read();
+    reloadAll();
   };
   useEffect(() => {
     if (!stripErr) return;
@@ -190,14 +196,32 @@ export function FlightPlanView({ active }: { active: boolean }) {
   const onStrip = (id: StripButtonId, root: string) => {
     if (id === "hold") void stripAct(root, () => api.flightHold(root));
     else if (id === "resume") void stripAct(root, () => api.flightResume(root));
+    else if (id === "raise") void raiseCap(root);
     else if (id === "review-go" || id === "open-next") next(root);
-    else setTab("settings");
   };
   const toCopilot = (root: string) => void stripAct(root, async () => {
     const k = PILOT_KEYS.pilot;
     const w = await api.settingAtSet(k.id, encode("pilot", "copilot"), k.scope === "project" ? root : "").catch(() => ({ ok: false, error: "could not reach the server" }));
     return w.ok ? api.flightResume(root) : w;
   });
+
+  /* A raise lasts: the strip offers the number, the base cap in Settings is untouched, and midnight (Monday for the week) puts it back by itself. */
+  const raiseCap = async (root: string) => {
+    const sn = snapOf(root);
+    const week = sn.budgetReached === "week";
+    const cap = week ? sn.budget.weeklyUsd : sn.budget.dailyUsd;
+    const used = week ? sn.budget.weekUsd : sn.budget.todayUsd;
+    const typed = await askText({
+      title: week ? "Raise this week's budget?" : "Raise today's budget?",
+      body: `${usd(used)} is spent ${week ? "this week" : "today"} of ${usd(cap)}. The raise lasts until ${week ? "Monday at midnight" : "midnight"}; after that the cap in Settings applies again.`,
+      confirmLabel: "Raise",
+      input: { label: week ? "This week's cap, in dollars" : "Today's cap, in dollars", placeholder: `more than ${usd(cap)}, up to $1000` },
+    });
+    if (typed === null) return;
+    const n = Number(typed.replace(/[$,\s]/g, ""));
+    if (!Number.isFinite(n) || n <= 0) { setStripErr("A cap is a number of dollars."); return; }
+    void stripAct(root, () => api.flightRaiseBudget(n, week ? "week" : "day"));
+  };
 
   const turnOn = async () => {
     const r = await api.settingsDoorSet("flightPlan.enabled", true).catch(() => ({ ok: false, error: "could not reach the server" } as { ok: boolean; applied?: boolean; error?: string }));
@@ -239,7 +263,7 @@ export function FlightPlanView({ active }: { active: boolean }) {
       <GoCard
         plan={it.plan} run={it.run} pilot={pilotFor(id)} handled={it.facts?.handled ?? NO_HANDLED} question={q}
         busy={busy} error={err} popover={popover}
-        onGo={() => void go(id)} onNoGo={(r) => void nogo(id, r)} onAnswer={(a) => q && void answer(id, q, a)}
+        onGo={(m) => void go(id, m)} onNoGo={(r) => void nogo(id, r)} onAnswer={(a) => q && void answer(id, q, a)}
         onTakeOver={() => { takeOver(id); setCard(null); setSelected(id); setOpened(true); }}
         onStop={() => { void nogo(id, "Stopped by you from the orchestrator's question."); setCard(null); }}
         onSee={() => { setCard(null); setSelected(id); setOpened(true); }}
@@ -320,12 +344,14 @@ export function FlightPlanView({ active }: { active: boolean }) {
       <div>
       {header}
       {d.error && d.details !== null && <div className="vbanner"><div className="err-note" role="alert"><span className="sev b" aria-hidden="true">!</span><div><b>{d.error}.</b> What is shown may be out of date; it reads again when you come back to the window or press a tab.</div></div></div>}
+      {selected && <div style={{ padding: "0 12px 10px" }}><BenchJobLine root={sel?.plan.root ?? ""} job={JOB.flightAuthor(selected)} what="The plan's author" /></div>}
       </div>
       {body}
       {cardOk && tab === "plans" && (
         <CardPopover label={`Flight plan: ${items.find((x) => x.plan.id === card)?.plan.title ?? ""}`} onClose={() => setCard(null)}>{renderCard(card!, true)}</CardPopover>
       )}
       {compose && <Composer projects={d.projects} root={d.root} preset={compose} cfg={d.cfg} onClose={() => setCompose(null)} onCreated={(r) => { setCompose(null); open(r); }} />}
+      {dialog}
     </div>
   );
 }

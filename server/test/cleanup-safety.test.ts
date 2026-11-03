@@ -271,6 +271,22 @@ describe("the card's tab", () => {
     expect(existsSync(w.wt)).toBe(false);
   });
 
+  test("a panel's view of the same tab is not a second shell", async () => {
+    w = makeWorld();
+    /* The console and the bench are windows of the engine, and each panel looks
+       at its window through an `agx-view-…` group: `list-panes -a` lists that
+       window once per session, so the same idle shell arrived twice and the
+       tab read as two. */
+    w.panes = [
+      pane(w, "ORBIT-1042", "@5", "bash"),
+      pane(w, "ORBIT-1042", "@5", "bash", { session: "agx-view-4242-abc123", pid: "906" }),
+    ];
+    fakeProcess(w, 905, w.wt);
+    const plan = await planCleanup(w.main, PR, w.cfg(), w.ctx());
+    expect(plan.blocks).toEqual([]);
+    expect(plan.items[0]).toMatchObject({ kind: "tab", detail: "close the tab: 1 idle shell in the checkout" });
+  });
+
   test("a tab with a program running is a live-session block, and nothing is closed", async () => {
     w = makeWorld();
     w.panes = [pane(w, "ORBIT-1042", "@5", "bash"), pane(w, "ORBIT-1042", "@5", "node", { pid: "951" })];

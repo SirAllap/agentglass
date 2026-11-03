@@ -5,7 +5,15 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { classOf } from "../../shared/settingClass.ts";
-import { FAB_MODES, fabVisible } from "../src/lib/benchStore.ts";
+import { DEFAULT_FAB, FAB_MODES, fabVisible } from "../src/lib/benchStore.ts";
+
+describe("the default spot", () => {
+  it("starts below the Starboard's bottom panel header", () => {
+    const HEADER = 88; // percent of the viewport height where that panel's header sits
+    const top = DEFAULT_FAB.y - (38 / 2 / 1080) * 100; // the 38px button's top edge
+    expect(top).toBeGreaterThan(HEADER + 2);
+  });
+});
 
 describe("fabVisible", () => {
   it("always: shown with or without tabs", () => {

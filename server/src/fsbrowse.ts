@@ -100,7 +100,7 @@ export function splitPrefix(input: unknown): { dir: string; partial: string } | 
 }
 
 /** Is this directory a git repo (or a linked worktree, whose `.git` is a file)? */
-function isRepo(dir: string): boolean {
+export function isRepo(dir: string): boolean {
   try { statSync(join(dir, ".git")); return true; } catch { return false; }
 }
 

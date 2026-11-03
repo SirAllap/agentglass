@@ -1,7 +1,7 @@
 /*
  * THE AGENTS SCREEN, AS DECISIONS.
  *
- * Real shapes (a board row, a held gate, a settings request) with invented
+ * Real shapes (a board row, a gate waiting on you, a settings request) with invented
  * names: acme/orbit, ORBIT-1042. Every number on the three cards and every
  * sentence on a waiting card is one of these.
  */
@@ -157,6 +157,8 @@ describe("what waits on a person", () => {
     });
     expect(items.map((i) => i.kind)).toEqual(["task", "report", "report"]);
     expect((items[1] as { text: string }).text).toContain("no longer here");
+    /* The row's own id, so the card can dismiss this report and not the next. */
+    expect((items[1] as { reportId: number }).reportId).toBe(2);
   });
   test("the card's thin rows: the oldest three, the orchestrator by that name, blocked red and the rest amber", () => {
     const items = waitingItems({ ...none, blocked, gates: [gate], needs: [need], requests: [request] });

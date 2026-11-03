@@ -40,8 +40,10 @@ const MODEL_LABELS: [string, string][] = [
   ["gpt-4.5", "GPT-4.5"],
   ["gpt-4-turbo", "GPT-4 Turbo"], ["gpt-4", "GPT-4"], ["gpt-3.5", "GPT-3.5"],
   ["o4-mini", "o4-mini"], ["o3-mini", "o3-mini"], ["o1-mini", "o1-mini"], ["o1", "o1"], ["o3", "o3"],
+  // The vendor name goes first: "deepseek-v4.1-flash" holds the generic "flash" fragment and read as Gemini.
+  ["deepseek", "DeepSeek"],
   ["flash", "Gemini Flash"], ["gemini", "Gemini"],
-  ["deepseek", "DeepSeek"], ["grok", "Grok"], ["mixtral", "Mistral"], ["mistral", "Mistral"],
+  ["grok", "Grok"], ["mixtral", "Mistral"], ["mistral", "Mistral"],
   ["codestral", "Mistral"], ["llama", "Llama"], ["command", "Command"],
 ];
 
@@ -75,6 +77,7 @@ export function providerOf(raw: string | null | undefined): string {
   if (/gpt|davinci|openai|\bo1\b|\bo3\b|\bo4\b/.test(m)) return "OpenAI";
   // The vendor name wins over the generic "flash" family fragment.
   if (/minimax/.test(m)) return "MiniMax";
+  if (/deepseek/.test(m)) return "DeepSeek";
   if (/gemini|palm|bison|flash|google|vertex/.test(m)) return "Google";
   if (/kimi|moonshot/.test(m) || m === "k3" || m.startsWith("k3[")) return "Moonshot";
   if (/deepseek/.test(m)) return "DeepSeek";

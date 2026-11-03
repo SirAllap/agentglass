@@ -157,6 +157,17 @@ export function board(): AgentRow[] {
      the view is open, and a DELETE that finds nothing 719 times out of 720 is
      720 writes' worth of lock for one row's worth of work. */
   if (Date.now() - sweptAt > 60 * 60_000) { sweptAt = Date.now(); sweepAgents(); }
+  return saidRows();
+}
+
+/**
+ * The same lines without the sweep.
+ *
+ * A GET writes nothing: the Manifest view reads this, and a read that prunes a
+ * table is a write a person did not make. `board()` is this plus the hourly
+ * sweep, so there is still one reader of `agent_status`.
+ */
+export function saidRows(): AgentRow[] {
   try {
     return all.all().map((r) => ({
       name: r.name,
@@ -195,6 +206,26 @@ export interface HookSeen {
   cwd: string;
   /** When the hook fired. The freshest sighting per pane decides its state. */
   at: number;
+}
+
+/**
+ * A named agent from `named_agent`, as the board needs it.
+ *
+ * A headless worker runs a CLI as its window's command and exits with it, so
+ * it fires none of the hooks the other rows are built from. The registry is
+ * the only place that knows it exists; `endedAt` and `exitCode` are what tell
+ * a row that is still running from one whose turn is over.
+ */
+export interface WorkerSeen {
+  name: string;
+  kind: string;
+  cwd: string;
+  paneId: string;
+  startedAt: number;
+  /** The role the policy started it as, when one did. Falls back to `kind`. */
+  role?: string;
+  endedAt?: number | null;
+  exitCode?: number;
 }
 
 export interface BoardRow extends AgentRow {
@@ -262,6 +293,12 @@ export interface BoardRow extends AgentRow {
    * — a session that ran anything since is not waiting, whatever it said.
    */
   needsYou?: { kind: "permission" | "input" | "gate"; why: string; since: number };
+  /**
+   * A named agent this app opened headless: its role and when it started.
+   * Such a worker fires no hooks of its own, so its row comes from the
+   * registry (`named_agent`) rather than from a pane sighting.
+   */
+  worker?: { role: string; since: number };
 }
 
 /** A line said this recently is a claim about NOW; older than this it is a
@@ -366,6 +403,15 @@ export function merged(p: {
    *  `latestWaits` in db.ts and the gate. Applies to a seen row and to a said
    *  row whose hook this machine has placed. */
   waiting?: Map<string, { kind: "permission" | "input" | "gate"; why: string; since: number }>;
+  /**
+   * The named agents on this machine, from `named_agent`.
+   *
+   * A headless worker is a window whose command is the CLI: it has no pane a
+   * hook reported from and no status line of its own, so without this the
+   * screen said "no agents yet" while four workers were running. A worker
+   * whose turn has ended or failed is not a row and asks nobody for anything.
+   */
+  named?: WorkerSeen[];
   now?: number;
 }): BoardRow[] {
   const now = p.now ?? Date.now();
@@ -380,6 +426,22 @@ export function merged(p: {
 
   const branchOf = (path: string) => deepest(trees, path)?.branch ?? "";
   const rows = new Map<string, BoardRow>();
+  /*
+   * A WORKER WHOSE TURN HAS SETTLED keeps no wait on the board.
+   *
+   * `named_agent.exit_code` is written the moment a headless turn ends,
+   * whatever its status. A permission wait recorded by a hook just before it
+   * died would otherwise stay on the row as "waiting on you" — the one thing a
+   * finished or failed worker must never count as. The pane and the name are
+   * both checked because either can be what the row carries.
+   */
+  const settledPanes = new Set<string>();
+  const settledNames = new Set<string>();
+  for (const w of p.named ?? []) {
+    if (w.exitCode === undefined) continue;
+    settledPanes.add(w.paneId);
+    settledNames.add(w.name);
+  }
 
   /*
    * THE SEEN ROWS FIRST, so a claim can overwrite an observation and never the
@@ -441,7 +503,8 @@ export function merged(p: {
     if (alive.size > 0 && !alive.has(h.paneId) && h.at <= now - FRESH_MS) continue;
     const tree = deepest(trees, h.cwd);
     const branch = tree?.branch ?? "";
-    const wait = p.waiting?.get(h.sessionId);
+    const settled = settledPanes.has(h.paneId) || settledNames.has(p.names?.get(h.sessionId) ?? "");
+    const wait = settled ? undefined : p.waiting?.get(h.sessionId);
     if (h.sessionId) {
       const had = seenBySession.get(h.sessionId) ?? new Set<string>();
       had.add(h.paneId);
@@ -460,7 +523,7 @@ export function merged(p: {
       /* Waiting outranks working: a hook fired seconds ago is exactly what a
          permission prompt looks like from here, and "working" would be the
          one wrong word for an agent that is stopped. */
-      state: wait ? "waiting" : h.at > now - FRESH_MS ? "working" : "idle",
+      state: wait ? "waiting" : !settled && h.at > now - FRESH_MS ? "working" : "idle",
     });
   }
 
@@ -603,7 +666,8 @@ export function merged(p: {
      * `stillThere` above, same rule.
      */
     const somewhereToGo = !!paneId || p.panes === undefined || p.panes.length === 0;
-    const wait = session && somewhereToGo ? p.waiting?.get(session) : undefined;
+    const settled = settledNames.has(s.name) || (!!paneId && settledPanes.has(paneId));
+    const wait = session && somewhereToGo && !settled ? p.waiting?.get(session) : undefined;
     const wasCalled = alsoKnownAs.get(s.name);
     rows.set(s.name, {
       ...s,
@@ -613,7 +677,7 @@ export function merged(p: {
       ...(wasCalled?.length ? { wasCalled } : null),
       ...isLanded(branch),
       ...(wait ? { needsYou: wait } : null),
-      state: wait ? "waiting" : fresh && stillThere ? "working" : "idle",
+      state: wait ? "waiting" : fresh && stillThere && !settled ? "working" : "idle",
     });
     /*
      * And the anonymous rows for that session go: it is the same agent, now
@@ -642,6 +706,60 @@ export function merged(p: {
       from: "seen",
       state: "working",
     });
+  }
+
+  /*
+   * A RUNNING WORKER THIS APP OPENED, when nothing else on the board drew it.
+   *
+   * A headless worker's window runs the CLI as its command, so it has no
+   * hooks: hooks, panes and status lines all miss it and the Agents screen
+   * showed "No agents yet" while the workers were running. The registry knows
+   * the name, the directory, the role it was started as and when.
+   *
+   * Ended and failed are NOT here. A finished turn has no work to interrupt,
+   * and a failed one is a report waiting for a person (or already cleared):
+   * counting the worker itself would put it in "working" and might map a
+   * lingering board wait onto it, which is exactly the false "waiting on you"
+   * this avoids. Rows that already exist win — a hooked agent's own row says
+   * more than the registry does.
+   */
+  const drawn = new Map<string, string>();
+  for (const [key, r] of rows) { drawn.set(r.name, key); if (r.paneId) drawn.set(r.paneId, key); }
+  for (const w of p.named ?? []) {
+    if (w.endedAt !== null && w.endedAt !== undefined) continue;
+    if (w.exitCode !== undefined) continue;
+    const key = drawn.get(w.name) ?? (w.paneId ? drawn.get(w.paneId) : undefined);
+    const had = key === undefined ? undefined : rows.get(key);
+    if (had && had.state === "working") continue;
+    if (had && key !== undefined) {
+      /* An idle row under the same name is its previous turn's line; the
+         running worker outranks it, and the old line kept it out of Working. */
+      rows.set(key, {
+        ...had,
+        name: w.name,
+        paneId: w.paneId || had.paneId,
+        startedAt: w.startedAt,
+        from: "seen",
+        state: "working",
+        needsYou: undefined,
+        worker: { role: w.role || w.kind, since: w.startedAt },
+      });
+      drawn.set(w.name, key);
+      if (w.paneId) drawn.set(w.paneId, key);
+      continue;
+    }
+    if (key !== undefined) continue;
+    rows.set(w.name, {
+      name: w.name,
+      worktree: w.cwd,
+      paneId: w.paneId,
+      startedAt: w.startedAt,
+      from: "seen",
+      state: "working",
+      worker: { role: w.role || w.kind, since: w.startedAt },
+    });
+    drawn.set(w.name, w.name);
+    if (w.paneId) drawn.set(w.paneId, w.name);
   }
 
   /*

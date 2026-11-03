@@ -81,7 +81,7 @@ export interface CardWrite {
    *  for each other. */
   id: string;
   /**
-   * What is being changed, for the in-flight set the UI reads: `status`, or
+   * What is being changed, for the set still in progress that the UI reads: `status`, or
    * `who:12345`. One key per control, so a spinner lands on the control that is
    * saving and nowhere else.
    */

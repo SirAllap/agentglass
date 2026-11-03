@@ -11,7 +11,8 @@ import { ChevronDownIcon, GroupIcon } from "./settingsNavIcons.tsx";
 function skipToPage() {
   const main = document.querySelector<HTMLElement>(".agx-settings-main");
   const first = main?.querySelector<HTMLElement>("button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex]:not([tabindex='-1'])");
-  (first ?? main)?.focus();
+  // The scroller, not the wrapper: it carries tabindex="-1", so focus lands somewhere.
+  (first ?? main?.querySelector<HTMLElement>("[data-settings-scroll]") ?? main)?.focus();
 }
 
 const LEGEND_WORD = { on: "on", needs: "needs you", off: "off", err: "problem" } as const;

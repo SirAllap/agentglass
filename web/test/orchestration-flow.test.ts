@@ -35,9 +35,9 @@ const thin: PolicyRule = {
 const holds = (on: string[]) => ({ on: (id: string) => on.includes(id) });
 
 describe("role words", () => {
-  test("the chair is the main agent; workers keep their plural", () => {
+  test("the chair is the main agent; a worker is its role name", () => {
     expect(roleWord("orchestrator")).toBe("main agent");
-    expect(roleWord("builder")).toBe("builders");
+    expect(roleWord("builder")).toBe("Builder");
   });
 });
 
@@ -51,7 +51,7 @@ describe("the flow picture", () => {
 
   test("a rule that holds names itself, and only the jobs it names move", () => {
     const nodes = flowNodes(policy([thin]), holds(["thin-week"]), READY);
-    expect(nodes.find((n) => n.field === "builder")!.sentence).toBe(`The builders use ${title("opencode")} big-pickle: Thin week is on.`);
+    expect(nodes.find((n) => n.field === "builder")!.sentence).toBe(`Builder uses ${title("opencode")} big-pickle: Thin week is on.`);
     expect(nodes.find((n) => n.field === "builder")!.chain).toEqual([{ engine: "opencode", model: "big-pickle" }]);
     expect(nodes.find((n) => n.field === "scout")!.because).toBe("no rule is on");
   });
@@ -60,7 +60,7 @@ describe("the flow picture", () => {
     const dead = policy([{ ...thin, workers: { builder: [{ engine: "hermes", model: "" }] } }]);
     const b = flowNodes(dead, holds(["thin-week"]), READY).find((n) => n.field === "builder")!;
     expect(b.ok).toBe(false);
-    expect(b.sentence.startsWith("The builders cannot start: no engine in the chain is ready")).toBe(true);
+    expect(b.sentence.startsWith("Builder cannot start: no engine in the chain is ready")).toBe(true);
     expect(b.chain).toEqual([{ engine: "hermes", model: "" }]);
   });
 
@@ -194,10 +194,16 @@ describe("a draft condition against the clock and the readings", () => {
     const facts = { on: () => false };
     const inside = testDraft(policy(), draft, facts, monday(23), {}, READY);
     expect(inside.holds).toBe("This condition holds right now.");
-    expect(inside.lines.join(" ")).toContain(`The builders use ${title("opencode")}: Night is on.`);
+    expect(inside.lines.join(" ")).toContain(`Builder uses ${title("opencode")}: Night is on.`);
     const outside = testDraft(policy(), draft, facts, monday(12), {}, READY);
     expect(outside.holds).toContain("does not hold right now");
-    expect(outside.lines.join(" ")).toContain(`The builders use ${title("claude")} sonnet: no rule is on.`);
+    expect(outside.lines.join(" ")).toContain(`Builder uses ${title("claude")} sonnet: no rule is on.`);
     expect(testDraft(policy(), draft, facts, monday(12), {}, null).lines).toEqual(["This machine has not been checked yet."]);
   });
+});
+
+test("the model of an engine choice is picked from a list, never typed", async () => {
+  const src = await Bun.file(new URL("../src/components/orchestration/flow/ModelInput.tsx", import.meta.url)).text();
+  expect(src).toContain("<select");
+  expect(src).not.toContain("<input");
 });

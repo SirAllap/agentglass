@@ -42,6 +42,18 @@ export function releaseToAnnounce(tag: string, seen = read()): string | null {
   return tag;
 }
 
+/**
+ * Does this release get the celebration instead of the plain notes?
+ *
+ * Only the first 1.0: `v1.0.0`, with or without the `v`. A later 1.0.x patch is
+ * an ordinary update, and so is 1.1 — the moment is for crossing the line once,
+ * and repeating it for a patch would make it wallpaper. Anything else keeps
+ * the notes modal.
+ */
+export function isCelebrationTag(tag: string): boolean {
+  return /^v?1\.0\.0$/.test(tag.trim());
+}
+
 /** Which release About's notes button opens, and what it must admit to. */
 export type NotesTarget = { tag: string; title: string; footnote?: string };
 

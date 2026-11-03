@@ -19,7 +19,7 @@
  * does not try to be one.
  *
  * What it flags is FACTS, in three kinds, and nothing it has to guess at:
- *   still waiting  — an agent stopped on a person: a permission, a held gate,
+ *   still waiting  — an agent stopped on a person: a permission, a gate waiting on you,
  *                    a turn waiting for its next prompt. The instant alert
  *                    already fired when it happened; this is the "still" —
  *                    fifteen minutes later it is still sitting there.
@@ -65,7 +65,7 @@ export interface Finding {
 export { FORGOTTEN_AFTER_MS };
 
 const waitWord = (w: NonNullable<AgentBoard.BoardRow["needsYou"]>) =>
-  w.kind === "permission" ? "needs your permission" : w.kind === "gate" ? "is held at the gate" : "is waiting for your next prompt";
+  w.kind === "permission" ? "needs your permission" : w.kind === "gate" ? "is waiting at the gate" : "is waiting for your next prompt";
 
 /**
  * What one look at the field says needs a person. Pure: the board, the named

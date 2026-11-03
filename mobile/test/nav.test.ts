@@ -185,7 +185,7 @@ describe("every screen is still reachable", () => {
     //   and `tasks` behind a segmented control, and both of those are now
     //   destinations in their own right. Nothing it showed is gone.
     //
-    //   `now` was DISSOLVED too. A held gate is answered where the agent is,
+    //   `now` was DISSOLVED too. A gate waiting on you is answered where the agent is,
     //   in the terminal (src/terminal/GateCard.tsx), and on the Terminal
     //   screen of a phone that may answer but not type; the queue's other
     //   cards were pull requests, which are PRs' own rows.
