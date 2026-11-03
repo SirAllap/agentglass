@@ -22,8 +22,9 @@ import { Locks } from "./machine/Locks.tsx";
 import { Ports } from "./machine/Ports.tsx";
 import { Resources } from "./machine/Resources.tsx";
 import { usePorts } from "./machine/usePorts.ts";
+import type { MachineTabName } from "../../../shared/uiActions.ts";
 
-export type MachineTab = "ports" | "resources" | "locks";
+export type MachineTab = MachineTabName;
 
 /** One line per tab, under it: what the tab's buttons will and will not do. */
 const FOOT: Record<MachineTab, React.ReactNode> = {

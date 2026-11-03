@@ -75,7 +75,7 @@ export function Ports({ ports, onOpenBrowser }: { ports: PortsState; onOpenBrows
               {/* The row selects; the buttons act. */}
               <div className="pa" data-armed={armed === p.pid || undefined} onClick={(e) => e.stopPropagation()}>
                 {armed === p.pid && p.pid != null
-                  ? <StopConfirm pid={p.pid} onYes={() => void stop(p)} onNo={() => setArmed(null)} />
+                  ? <StopConfirm what={`pid ${p.pid}`} onYes={() => void stop(p)} onNo={() => setArmed(null)} />
                   : (<>
                     <Button size="compact" square tone="quiet" label={HAS_BROWSER && onOpenBrowser ? "Open in the browser tab" : "Open in your browser"} onClick={() => open(p)}>↗</Button>
                     <Button size="compact" square tone="quiet" label="Copy the address" onClick={() => void navigator.clipboard?.writeText(`http://localhost:${p.port}`)}><CopyIcon size={ICON.xs} /></Button>

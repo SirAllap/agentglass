@@ -11,7 +11,7 @@ export function WithPreview({ preview, children }: { preview: ReactNode; childre
   return (
     <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)] gap-4 items-start">
       <div className="min-w-0">{children}</div>
-      <div className="min-w-0 xl:sticky" style={{ top: "calc(var(--agx-ph-h, 0px) + 16px)" }}>{preview}</div>
+      <div className="min-w-0 xl:sticky" style={{ top: "calc(var(--agx-pin-stack, 0px) + var(--agx-pin-gap, 0px))" }}>{preview}</div>
     </div>
   );
 }

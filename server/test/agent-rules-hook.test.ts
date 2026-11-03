@@ -148,6 +148,21 @@ describe.skipIf(!have)("the hook obeys the rules", () => {
     expect(r).toMatchObject({ status: 200, body: { applied: true } });
   });
 
+  test("full access through the same door, and only the person takes a rule out", async () => {
+    for (const match of ["Bash", "Edit", "Write", "Bash(git push --force-with-lease:*)"]) {
+      expect((await post("/agent-rules", { root, match, setting: "allow" }, fromApp())).status).toBe(200);
+    }
+    /* The force push no longer asks, though a never on `git push` is still in force for the plain one. */
+    expect((await hook("git push --force-with-lease origin main")).stdout).toBe("");
+    expect((await hook("git push origin main")).stdout).toContain("deny");
+
+    expect((await post("/agent-rules", { root, match: "Bash", remove: true }, fromAgent())).status).toBe(403);
+    expect((await rules()).learned.some((r) => r.match === "Bash")).toBe(true);
+    expect((await post("/agent-rules", { root, match: "Bash", remove: true }, fromApp())).status).toBe(200);
+    expect((await rules()).learned.some((r) => r.match === "Bash")).toBe(false);
+    expect((await post("/agent-rules", { root, match: "Bash", remove: true }, fromApp())).status).toBe(404);
+  });
+
   test("a server that is not there never stops the agent: the hook exits 0 and says it skipped the check", async () => {
     proc!.kill();
     await proc!.exited;

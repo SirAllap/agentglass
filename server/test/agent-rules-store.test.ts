@@ -10,6 +10,8 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SEAT_CHECKS_ID } from "../../shared/agentRules.ts";
+import { templateFlow } from "../../shared/flowTemplates.ts";
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), "agx-rules-store-")));
 const saved = { cfg: process.env.XDG_CONFIG_HOME, data: process.env.XDG_DATA_HOME, state: process.env.AGENTGLASS_STATE_DIR };
@@ -45,6 +47,7 @@ const bash = (command: string) => ({ command });
 beforeEach(() => {
   cards = []; dropped = [];
   cfg.writeLaunchPermissions({ mode: "default", deny: DEFAULT_LAUNCH_DENY.join("\n") });
+  cfg.writeStoredFlow(ROOT, null);
   store.__resetRulesStore();
   store.__setRulesClock(() => Date.now());
 });
@@ -103,6 +106,17 @@ describe("who may write what", () => {
     expect(r.ok && r.write).toMatchObject({ applied: true, waitsForPerson: false });
     expect(cards).toHaveLength(0);
     expect(store.check(ROOT, "Bash", bash("git push")).decision).toBe("allow");
+  });
+
+  test("the person takes one rule out by its pattern; an agent cannot, and a missing one is not silently fine", async () => {
+    await store.setRule({ root: ROOT, match: "Bash", setting: "allow" }, person);
+    await store.setRule({ root: ROOT, match: "Edit", setting: "allow" }, person);
+    expect(await store.setRule({ root: ROOT, match: "Bash", remove: true }, agent)).toMatchObject({ ok: false, status: 403 });
+    expect(store.view(ROOT).learned.map((r) => r.match)).toContain("Bash");
+    expect(await store.setRule({ root: ROOT, match: "Bash", remove: true }, person)).toMatchObject({ ok: true });
+    expect(store.view(ROOT).learned.map((r) => r.match)).toEqual(["Edit"]);
+    expect(store.check(ROOT, "Bash", bash("npm test")).decision).toBe("unknown");
+    expect(await store.setRule({ root: ROOT, match: "Bash", remove: true }, person)).toMatchObject({ ok: false, status: 404 });
   });
 
   test("answer() refuses anybody but the person, and changes nothing", async () => {
@@ -285,6 +299,16 @@ describe("precedence and room", () => {
     expect(a.ok && a.write.applied).toBe(true);
   });
 
+  test("full access allows a force push and leaves a base never winning", async () => {
+    for (const match of ["Bash", "Edit", "Write", "Bash(git push --force-with-lease:*)"]) {
+      expect(await store.setRule({ root: ROOT, match, setting: "allow" }, person)).toMatchObject({ ok: true });
+    }
+    expect(store.check(ROOT, "Bash", bash("git push --force-with-lease origin main")).decision).toBe("allow");
+    expect(store.check(ROOT, "Bash", bash("git push --force origin main")).decision).toBe("ask");
+    /* A narrower rule still wins: the base never on merging is untouched. */
+    expect(store.check(ROOT, "Bash", bash("gh pr merge 12")).decision).toBe("never");
+  });
+
   test("suggestions never crowd out the person's rules, and keep to their own cap", async () => {
     const { RULES_MAX_PER_PROJECT } = await import("../../shared/agentRules.ts");
     for (let i = 0; i < RULES_MAX_PER_PROJECT + 5; i++) asked(ROOT, "Bash", bash(`tool${i} run`));
@@ -377,5 +401,52 @@ describe("weekly", () => {
     expect(w[7]).toBe(2);
     expect(w[5]).toBe(1);
     expect(w.reduce((a, b) => a + b, 0)).toBe(3);
+  });
+});
+
+describe("the seat and the checks its flow gives away", () => {
+  test("with a Verifier block the seat is refused the checks and told to start the Verifier worker", () => {
+    for (const command of ["bun test", "npx tsc --noEmit", "make check", "cd src && make ci-docker"]) {
+      const d = store.check(ROOT, "Bash", bash(command), undefined, "seat");
+      expect(d.decision, command).toBe("never");
+      expect(d.reason, command).toContain("Verifier");
+    }
+    for (const command of ["git status", "bun run build"]) {
+      expect(store.check(ROOT, "Bash", bash(command), undefined, "seat").decision, command).toBe("unknown");
+    }
+    // every other agent keeps its own answer: the rule is the seat's alone
+    expect(store.check(ROOT, "Bash", bash("make check")).decision).toBe("unknown");
+    expect(store.view(ROOT).derived.map((r) => r.id)).toEqual([SEAT_CHECKS_ID]);
+  });
+
+  test("a flow without the Verifier block gives the seat no rule", () => {
+    const flow = templateFlow();
+    const kept = flow.roster.filter((r) => r.policyRole !== "verifier").map((r) => r.id);
+    flow.roster = flow.roster.filter((r) => r.policyRole !== "verifier");
+    flow.path = flow.path.filter((id) => kept.includes(id));
+    flow.blocks = flow.blocks.filter((b) => kept.includes(b.id));
+    flow.edges = flow.edges.filter((e) => kept.includes(e.from) && kept.includes(e.to));
+    expect(cfg.writeStoredFlow(ROOT, flow).ok).toBe(true);
+    expect(store.view(ROOT).derived).toEqual([]);
+    expect(store.check(ROOT, "Bash", bash("make check"), undefined, "seat").decision).toBe("unknown");
+  });
+
+  test("one pattern can be a rule for every agent and another for the seat", async () => {
+    expect((await store.setRule({ root: ROOT, match: "Bash(npm publish:*)", setting: "allow" }, person)).ok).toBe(true);
+    const scoped = await store.setRule({ root: ROOT, match: "Bash(npm publish:*)", setting: "never", role: "seat" }, person);
+    expect(scoped.ok && scoped.write.rule).toMatchObject({ role: "seat", setting: "never" });
+    expect(store.check(ROOT, "Bash", bash("npm publish")).decision).toBe("allow");
+    expect(store.check(ROOT, "Bash", bash("npm publish"), undefined, "seat").decision).toBe("never");
+
+    expect((await store.setRule({ root: ROOT, match: "Bash(npm publish:*)", role: "seat", remove: true }, person)).ok).toBe(true);
+    expect(store.view(ROOT).learned.some((r) => r.match === "Bash(npm publish:*)" && r.role === "seat")).toBe(false);
+    expect(store.check(ROOT, "Bash", bash("npm publish"), undefined, "seat").decision).toBe("allow");
+  });
+
+  test("role is a closed set, and the permission mode takes none", async () => {
+    expect(await store.setRule({ root: ROOT, match: "Bash(ls:*)", setting: "never", role: "builder" }, person))
+      .toMatchObject({ ok: false, status: 400 });
+    expect(await store.setRule({ root: "*", action: "launch.mode", match: "", setting: "allow", mode: "auto", role: "seat" }, person))
+      .toMatchObject({ ok: false, status: 400 });
   });
 });

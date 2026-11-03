@@ -299,12 +299,13 @@ if (process.argv.includes("--ozone-platform=headless")) {
   app.exit(2);
 }
 
-if (process.platform === "linux") {
-  app.commandLine.appendSwitch(
-    "ozone-platform",
-    process.env.WAYLAND_DISPLAY || process.env.XDG_SESSION_TYPE === "wayland" ? "wayland" : "x11",
-  );
-}
+/* The renderer cannot learn this any other way: the switch below is what
+ * decides it. Null where the app is not drawn through X11 or Wayland at all. */
+const DISPLAY_SERVER = process.platform === "linux"
+  ? (process.env.WAYLAND_DISPLAY || process.env.XDG_SESSION_TYPE === "wayland" ? "wayland" : "x11")
+  : null;
+
+if (DISPLAY_SERVER) app.commandLine.appendSwitch("ozone-platform", DISPLAY_SERVER);
 
 /*
  * GPU-composite the final frame on Linux, unless AGENTGLASS_GPU=0.
@@ -1542,7 +1543,7 @@ async function restartSidecar() {
   // live bindings (web/src/lib/api.ts), so handing it the new pair is enough —
   // the next fetch and the next socket connect use them.
   for (const w of BrowserWindow.getAllWindows()) {
-    try { w.webContents.send("ag:server-changed", { origin: apiOrigin, token: sidecarUp ? currentToken() : null, deskKey }); } catch { /* window went away mid-toggle */ }
+    try { w.webContents.send("ag:server-changed", { origin: apiOrigin, token: sidecarUp ? currentToken() : null, deskKey, preferredPort: PREFERRED_PORT }); } catch { /* window went away mid-toggle */ }
   }
 }
 
@@ -4852,6 +4853,11 @@ app.whenReady().then(async () => {
   // promise could resolve. Safe because the port is settled just below, before
   // any window (and therefore any preload) exists.
   ipcMain.on("ag:apiOrigin", (e) => { e.returnValue = apiOrigin; });
+  // The first run's port strip names the port the shell asked for beside the
+  // one it settled on. Two numbers, no sentence: the words are the renderer's.
+  ipcMain.on("ag:preferredPort", (e) => { e.returnValue = PREFERRED_PORT; });
+  ipcMain.on("ag:serverPort", (e) => { e.returnValue = SERVER_PORT; });
+  ipcMain.on("ag:displayServer", (e) => { e.returnValue = DISPLAY_SERVER; });
   // Same reason as the origin above: api.ts reads the token while its module
   // body runs. Turning remote access on makes the token mandatory for *every*
   // caller, the local renderer included — without this the app would lock

@@ -33,6 +33,14 @@ export function Card({ children, style, ...rest }: { children: ReactNode; style?
   return <div {...rest} className="min-w-0" style={{ ...CARD, ...style }}>{children}</div>;
 }
 
+/**
+ * The mockup's button, for the page's presses: 13px on a 9px radius, a touch
+ * taller than the app's dense kit (11px inside 24), which is what the approved
+ * page looks like. Passed as `style`, because the kit sets both inline.
+ */
+export const PAGE_BTN: CSSProperties = { height: 32, paddingInline: 12, borderRadius: 9, fontSize: 13, fontWeight: 550 };
+export const PAGE_BTN_SM: CSSProperties = { height: 28, paddingInline: 9, borderRadius: 8, fontSize: 12, fontWeight: 550 };
+
 /** A small label above a block, as the mock's "Right now for orbit". */
 export function Eyebrow({ children }: { children: ReactNode }) {
   return <div className="text-[10px] uppercase tracking-wider mb-2" style={{ color: "var(--text3)" }}>{children}</div>;

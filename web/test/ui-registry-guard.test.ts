@@ -22,7 +22,7 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, relative } from "node:path";
-import { UI_ACTIONS, VIEW_IDS, SETTINGS_PAGE_IDS, type UiActionDef } from "../../shared/uiActions.ts";
+import { UI_ACTIONS, VIEW_IDS, SETTINGS_PAGE_IDS, SETTINGS_PAGE_ALIASES, type UiActionDef } from "../../shared/uiActions.ts";
 import { globalStubs } from "./stubGlobal.ts";
 
 // uiActions reaches the settings registry, which reaches pref modules that read
@@ -46,7 +46,9 @@ const NOT_AGENT_DOOR: {
   dialogs: Record<string, string>;
 } = {
   views: {},
-  settingsPages: {},
+  settingsPages: {
+    gaps: "the reference page of what the redesign adds, beside the Orchestration page it describes: it has no setting and no state of its own, so an agent has nothing here to open or read",
+  },
   chords: {
     "windows.waiting": "the owner's keyboard shortcut to the next window waiting on them; an agent reads what waits (agent panes) and moves focus with the focus-pane door, so no new verb stands behind it",
     "terminal.newshell": "the owner's keyboard shortcut for a new tmux window; an agent opens one through the terminal door (`tmux new`), the same command the strip's + sends",
@@ -63,6 +65,7 @@ const NOT_AGENT_DOOR: {
     "terminal/GoList.tsx": "the Go list under the Terminal strip's project chip: a picker over windows the strip already shows. An agent reads the same windows (agent panes) and moves focus with the focus-pane door, so no row of it is a verb of its own",
     "terminal/CloseLayer.tsx": "the question a person answers before an agent window is stopped by a tab close, and the Reopen toast that follows: a person's own click on their own strip; an agent has no tab to close here",
     "terminal/PeekCard.tsx": "the card over a hovered strip tab: a tooltip with no pointer events that hides on any input; an agent reads the same facts (agent panes), so nothing in it is a verb",
+    "PrLaneSync.tsx": "the Sync list under a lane header's Sync count: it lists the cards the lane's Update touches and its confirm is that same per-card Update, a press on the board, so nothing in it is a verb of its own",
     "PrCard.tsx": "the stack popover opened from a board card's stack chip: it lists the same stack rows the pull request views and the PR search already return; an agent reads the stack from the pull request data, so no row of it is a verb",
     "TipHost.tsx": "the one tooltip, drawn above whatever the pointer rests on: it says what the target already says and has no pointer events, so nothing in it is a verb",
     "Portal.tsx": "the portal primitive every dialog draws through, not a dialog itself",
@@ -96,6 +99,11 @@ const NOT_AGENT_DOOR: {
     "jira/JiraMoveForm.tsx": "the form a Jira move opens when its screen asks for fields, opened by picking that move in the status list: the agent's door is `agentglass-ui jira move --fields` (POST /jira/door/move, the same check, route and write gate as the form), and `jira moves` lists each screen",
     "jira/JiraStepDialog.tsx": "the confirmation a Jira step asks before it writes, opened from the step button on one card: the agent's door is `agentglass-ui jira step` (POST /jira/step, same route and same write gate as the press), and opening the dialog alone would only show a plan the agent already reads from GET /jira/steps",
     "orchestration/RuleForm.tsx": "the editor of one condition, opened by Edit or Add on the Orchestration page, which an agent opens and reads: what it writes is the policy, and only a person may write that (the route refuses an agent), so the editor has no door of its own",
+    "orchestration/flow/FlowEditor.tsx": "the flow editor a person opens from the Orchestration page to shape a project's flow: it writes the flow and the policy, and the policy route refuses an agent, so it has no door of its own",
+    "orchestration/flow/WorkerEditor.tsx": "the one worker editor of the flow editor, opened by a card's Configure or by Add worker: it writes the flow and the policy, and the policy route refuses an agent, so it has no door of its own",
+    "orchestration/flow/OrchestratorSheet.tsx": "the orchestrator's sheet, opened by its card's Configure or by the Orchestrator chip: it writes the policy, the pilot and the ceiling, and those routes refuse an agent, so it has no door of its own",
+    "setup/Tutorial.tsx": "the first-run walkthrough over the app, stepped through by pressing Next on its own cards: a person's own onboarding, and an agent has nothing here to open or read",
+    "Celebration.tsx": OUTPUT,
   },
 };
 
@@ -182,8 +190,9 @@ describe("the registry names only things that exist, and the exceptions are not 
     expect(VIEW_IDS.filter((id) => !railIds.includes(id))).toEqual([]);
   });
 
-  it("no Settings page id in the registry is one Settings does not have", () => {
-    expect(SETTINGS_PAGE_IDS.filter((id) => !settingsPageIds.includes(id))).toEqual([]);
+  it("no Settings page id in the registry is one Settings does not have, unless it is an alias to one that exists", () => {
+    const alias = SETTINGS_PAGE_ALIASES as Record<string, string>;
+    expect(SETTINGS_PAGE_IDS.filter((id) => !settingsPageIds.includes(id) && !settingsPageIds.includes(alias[id] ?? ""))).toEqual([]);
   });
 
   it("no `chords` entry names a chord that does not exist", () => {

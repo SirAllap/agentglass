@@ -38,8 +38,9 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { configPath, inScope, workspaceRoot } from "./config.ts";
 import { robotsOn, robotsRefusal } from "./robots.ts";
 import { blockedTarget } from "./net.ts";
+import { agentContainerName, foldWorkerName, isAgentContainer } from "../../shared/workerContainer.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { closeLane, configureLanes, isLaneId, laneKnown, laneRefusal, listLanes, openLane, resetLanes, touchLane } from "./lanes.ts";
+import { closeLane, configureLanes, isLaneId, laneKnown, laneRefusal, listLanes, listOwnedLanes, openLane, resetLanes, touchLane } from "./lanes.ts";
 import { diskAllows, diskEnabled } from "./disk.ts";
 
 /** What the panel can be asked to do. Each one is implemented there; nothing
@@ -409,25 +410,555 @@ function pickTarget(lane: unknown): string | null {
  * tab. Carrying it on each of those hand-built asks is what went missing six
  * times; the request is the one place that knows it, so it is kept there.
  */
-const laneScope = new AsyncLocalStorage<{ lane: string; as?: string; force: boolean }>();
+const laneScope = new AsyncLocalStorage<{ lane: string; as?: string; owner?: string; force: boolean }>();
 
 /**
  * The door for a request that names a lane: refuses at once, by name, one that
  * is closed, unknown or somebody else's, and otherwise puts the lane in scope for
  * the rest of this request. Returns the refusal, or null.
+ *
+ * `principal` is the worker the credential was minted for. A lane it did not
+ * make is refused here, before the id is put in scope, so no verb composed out
+ * of this request can reach it afterwards.
  */
-export function gateLane(op: string, body: unknown): string | null {
+export function gateLane(op: string, body: unknown, principal?: string): string | null {
   const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
   if (b.lane === undefined || op === "lane") return null;
-  const as = typeof b.as === "string" ? b.as : undefined;
-  const msg = !isLaneId(b.lane) ? "lane must be the id `lane new` printed" : laneRefusal(b.lane, as, b.force === true);
+  const owner = typeof principal === "string" && principal.trim() ? foldWorkerName(principal) : undefined;
+  const as = owner ?? (typeof b.as === "string" ? b.as : undefined);
+  const msg = !isLaneId(b.lane) ? "lane must be the id `lane new` printed" : laneRefusal(b.lane, as, b.force === true, !!owner);
   if (msg) {
     recordAudit(op as BrowserOp, { lane: b.lane }, false, msg, false, undefined, as ? { as } : undefined);
     return msg;
   }
-  laneScope.enterWith({ lane: b.lane as string, ...(as ? { as } : {}), force: b.force === true });
+  laneScope.enterWith({ lane: b.lane as string, ...(as ? { as } : {}), ...(owner ? { owner } : {}), force: b.force === true });
   return null;
 }
+
+/** The CLI's identity key for the person's own container (`--shared`, and
+ *  `--as "(default)"`, which it maps onto the same value). */
+const SHARED_KEY = "(default)";
+
+/**
+ * The person's own browser, in every spelling that reaches this relay.
+ *
+ * `bin/agentglass-browser` writes the identity as `as`, and `--shared` sends
+ * none at all; the MCP sends `shared: true`; `open` names the empty profile;
+ * a lane names the container. One container, five fields — a refusal that names
+ * one of them is a refusal somebody walks around with the next flag.
+ */
+export function namesThePerson(body: unknown): boolean {
+  const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+  if (
+    b.shared === true
+    || b.active === true
+    || b.container === "shared"
+    || b.how === "shared"
+    || b.profile === ""
+  ) return true;
+  /* A page id addresses a tab this gate cannot place: the tab may live in the
+     person's container, and asking the window which lane it belongs to is a
+     round trip a refusal cannot make. Agents address tabs through their lane. */
+  if (typeof b.page === "string" && b.page.trim()) return true;
+  if (typeof b.as === "string" && b.as.trim()) return b.as.trim().toLowerCase() === SHARED_KEY;
+  /* A lane being created is a container of its own: `new` defaults to
+     `private`, which names nobody. Every other fall-through is the person's. */
+  if (b.action === "new" && b.container !== "shared") return false;
+  /* No identity at all is the person's container — the CLI sends no `as` for
+     `--shared` — unless the request named a container of its own. */
+  const named = typeof b.profile === "string" && !!b.profile.trim();
+  return !named && b.container !== "named";
+}
+
+/**
+ * Whether a body sent under a WORKER's credential addresses something that is
+ * the worker's own: `as` its name, its own profile, its own page, a lane of its
+ * own. Anything else is refused — a body with no identity is the person's tab
+ * in front, and this gate cannot place a page it was not told the owner of.
+ */
+/* Every verb the CLI parser or the panel's op switch exposes, and what a
+   worker's credential may do with it. `target` is the request field that
+   addresses a tab: `page` is inherited from the call, `id` is the field
+   `tab`/`closetab` carry. An empty list means the verb addresses no tab (it
+   mints one, or answers about the caller). `index` is absent everywhere on
+   purpose — the panel resolves an ordinal against every tab in the window,
+   not against this worker's own pages. */
+export type WorkerVerbPolicy = "own" | "refused";
+export interface WorkerVerbRow {
+  policy: WorkerVerbPolicy;
+  target: readonly ("page" | "id")[];
+  fields: readonly string[];
+}
+const workerPage = (...fields: string[]): WorkerVerbRow => ({ policy: "own", target: ["page"], fields });
+const workerId = (...fields: string[]): WorkerVerbRow => ({ policy: "own", target: ["id"], fields });
+const workerNoTarget = (...fields: string[]): WorkerVerbRow => ({ policy: "own", target: [], fields });
+const WORKER_REFUSED: WorkerVerbRow = { policy: "refused", target: [], fields: [] };
+const refusedVerb = () => WORKER_REFUSED;
+
+const LIST_FIELDS = ["url", "profile", "identity", "show", "ephemeral"];
+const TRACE_FIELDS = ["delta", "limit", "root", "shot", "since", "viewport"];
+
+export const WORKER_VERBS: Readonly<Record<string, WorkerVerbRow>> = {
+  open: workerNoTarget(...LIST_FIELDS),
+  read: workerPage(),
+  markdown: workerPage(),
+  extract: workerPage("fields"),
+  links: workerPage(),
+  count: workerPage("selector"),
+  search: workerPage("query"),
+  interactive: workerPage(),
+  forms: workerPage(),
+  attr: workerPage("selector", "names"),
+  click: workerPage("selector"),
+  type: workerPage("selector", "text", "submit"),
+  wait: workerPage("selector"),
+  shot: workerPage("path", "fullPage", "withInspector", "selector", "clip", "highlight", "label", "marks", "omitBackground"),
+  back: workerPage(),
+  forward: workerPage(),
+  scroll: workerPage("selector", "by", "to"),
+  press: workerPage("key"),
+  text: workerPage("selector"),
+  tabs: workerNoTarget(),
+  tab: workerId("id"),
+  newtab: workerNoTarget(...LIST_FIELDS),
+  closetab: workerId("id"),
+  console: workerPage(...TRACE_FIELDS),
+  network: workerPage(...TRACE_FIELDS),
+  resize: workerPage("width", "height"),
+  zoom: workerPage("factor"),
+  html: workerPage("clean", "max", "selector"),
+  waitfor: workerPage("js", "timeoutMs", "until"),
+  observe: workerPage(...TRACE_FIELDS),
+  select: workerPage("selector", "value"),
+  reload: workerPage("bypassCache"),
+  frames: workerPage(),
+  dblclick: workerPage("selector"),
+  rightclick: workerPage("selector"),
+  hover: workerPage("selector"),
+  focus: workerPage("selector"),
+  blur: workerPage("selector"),
+  check: workerPage("selector", "checked"),
+  fill: workerPage("fields", "submit"),
+  events: workerPage("kinds", "since", "wait", "timeoutMs"),
+  whoami: workerNoTarget("identity", "tab"),
+  health: workerNoTarget(),
+  lane: workerNoTarget("action", "id", "profile", "shared", "force", "ephemeral", "container"),
+  a11y: workerPage(),
+  inspect: workerPage("action"),
+  vitals: workerPage(),
+  /* A step list carries its own verbs and pages; each step is gated below. */
+  do: workerNoTarget("steps", "lanes", "observe"),
+  addInitScript: refusedVerb(), audit: refusedVerb(), "call-tool": refusedVerb(),
+  cdp: refusedVerb(), checkup: refusedVerb(), clipboard: refusedVerb(),
+  clock: refusedVerb(), cookies: refusedVerb(), coverage: refusedVerb(),
+  debug: refusedVerb(), dialog: refusedVerb(), done: refusedVerb(),
+  download: refusedVerb(), drag: refusedVerb(), emulate: refusedVerb(),
+  eval: refusedVerb(), expose: refusedVerb(), exposed: refusedVerb(),
+  fake: refusedVerb(), handoff: refusedVerb(), har: refusedVerb(),
+  headers: refusedVerb(), intercept: refusedVerb(), listeners: refusedVerb(),
+  pdf: refusedVerb(), permission: refusedVerb(), permissions: refusedVerb(),
+  profiles: refusedVerb(), record: refusedVerb(), region: refusedVerb(),
+  save: refusedVerb(), scrape: refusedVerb(), screencast: refusedVerb(),
+  script: refusedVerb(), session: refusedVerb(), settings: refusedVerb(),
+  storage: refusedVerb(), template: refusedVerb(), throttle: refusedVerb(),
+  tools: refusedVerb(), trace: refusedVerb(), upload: refusedVerb(),
+};
+export const WORKER_OPS: ReadonlySet<string> = new Set(
+  Object.entries(WORKER_VERBS)
+    .filter(([op, r]) => r.policy === "own" && op !== "do")
+    .map(([op]) => op),
+);
+/* Deny-by-default: a worker's body may carry only these fields for its op.
+   `observe` and `partial` are request options the CLI writes on any verb
+   (`--observe`, `--max-tokens`), not fields of one verb: refusing them refused
+   the act they rode on. */
+const WORKER_COMMON_FIELDS: ReadonlySet<string> = new Set([
+  "as", "how", "lane", "page", "pageExplicit", "observe", "partial",
+]);
+export const WORKER_OP_FIELDS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
+  Object.entries(WORKER_VERBS)
+    .filter(([, r]) => r.policy === "own")
+    .map(([op, r]) => [op, new Set(r.fields)]),
+);
+const WORKER_LIST_OPS: ReadonlySet<string> = new Set(
+  Object.entries(WORKER_VERBS).filter(([, r]) => !r.target.includes("page")).map(([op]) => op),
+);
+const WORKER_DO_FIELDS: ReadonlySet<string> = new Set(["steps", "lanes", "observe"]);
+const WORKER_LANE_FIELDS: ReadonlySet<string> = new Set(["steps"]);
+const WORKER_STEP_FIELDS: ReadonlySet<string> = new Set(["op", "args"]);
+const WORKER_PAGES = new Map<string, Set<string>>();
+const ASK_WORKER = new Map<string, { worker: string; op: string; target?: string }>();
+
+export function noteWorkerAsk(id: string, worker: string, op: string, target?: string): void {
+  ASK_WORKER.set(id, { worker: foldWorkerName(worker), op, ...(target ? { target } : {}) });
+}
+export function workerOwnsPage(worker: string, page: string): boolean {
+  return WORKER_PAGES.get(foldWorkerName(worker))?.has(page) === true;
+}
+/* A reply that names a page. The walk below is shape-agnostic on purpose: the
+   panel answers `tabs` with a BARE ARRAY (`tabs.list()`), and a filter written
+   against `{tabs: [...]}` never fired on it — a worker read every tab title and
+   URL in the window. So the rule is the field, not the container. */
+const PAGE_FIELDS = ["id", "url", "title"] as const;
+/* The keys a tab or identity answer carries. Anything else at the top level is
+   a shape this cannot attribute, and an unattributable answer is an empty
+   list, never the value itself. */
+const REPLY_KEYS: ReadonlySet<string> = new Set(["tabs", "tab", "activeTab", "you"]);
+
+type Kept = { keep: true; value: unknown } | { keep: false };
+const DROP: Kept = { keep: false };
+
+function namesPage(o: Record<string, unknown>): boolean {
+  return PAGE_FIELDS.some((f) => f in o);
+}
+
+/** A value with every page entry that is not the worker's own removed. An
+ *  entry carrying a page field and no own id is dropped, whatever its shape. */
+function scopeValue(own: (id: string) => boolean, v: unknown): Kept {
+  if (Array.isArray(v)) {
+    const out: unknown[] = [];
+    for (const e of v) {
+      const s = scopeValue(own, e);
+      if (s.keep) out.push(s.value);
+    }
+    return { keep: true, value: out };
+  }
+  if (v && typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    if (namesPage(o)) return typeof o.id === "string" && own(o.id) ? { keep: true, value: o } : DROP;
+    return scopeObject(own, o);
+  }
+  return { keep: true, value: v };
+}
+
+function scopeObject(own: (id: string) => boolean, o: Record<string, unknown>): Kept {
+  const out: Record<string, unknown> = {};
+  let droppedActive = false;
+  let droppedTab = false;
+  for (const [k, val] of Object.entries(o)) {
+    if (k === "tab") {
+      droppedTab = typeof val === "string" && !own(val);
+      out[k] = droppedTab ? null : val;
+      continue;
+    }
+    if (k === "activeTab") {
+      const s = val === null || val === undefined ? DROP : scopeValue(own, val);
+      droppedActive = !s.keep;
+      out[k] = s.keep ? s.value : null;
+      continue;
+    }
+    const s = scopeValue(own, val);
+    if (s.keep) out[k] = s.value;
+  }
+  if (droppedTab) out.tabLive = false;
+  const you = out.you;
+  if (droppedActive && you && typeof you === "object" && !Array.isArray(you)) {
+    out.you = { ...(you as Record<string, unknown>), tabLive: false };
+  }
+  return { keep: true, value: out };
+}
+
+/* The verbs whose answer carries the window's list. One set, read at the one
+   door a reply passes through (`askBrowser`), so a route added later — `do`,
+   `lanes`, whatever comes next — cannot hand a worker the window's list by
+   forgetting to name its verb here. */
+const WORKER_PAGE_REPLY_OPS: ReadonlySet<string> = new Set(["tabs", "tab", "open", "newtab", "closetab", "whoami"]);
+
+/** A worker sees only the tabs it opened. The request gate stops an act on a
+ *  foreign id; this stops a reply from naming one, whatever shape the panel
+ *  answered in — the array `tabs` really sends, the object `open` folds the
+ *  list into, or a nested one. Fail closed: a value it cannot attribute is
+ *  replaced by an empty list. */
+export function workerReply(worker: string, reply: BrowserReply): BrowserReply {
+  if (!reply.ok) return reply;
+  const own = (id: string) => workerOwnsPage(worker, id);
+  const v = reply.value;
+  if (Array.isArray(v)) {
+    const s = scopeValue(own, v);
+    return { ...reply, value: s.keep ? s.value : [] };
+  }
+  if (v && typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    if (!Object.keys(o).some((k) => REPLY_KEYS.has(k))) {
+      return namesPage(o) && typeof o.id === "string" && own(o.id)
+        ? reply
+        : { ...reply, value: [] };
+    }
+    const s = scopeObject(own, o);
+    return { ...reply, value: s.keep ? s.value : [] };
+  }
+  return { ...reply, value: [] };
+}
+/* What a worker's `health` may report: whether each layer is up, never the
+   page itself. The panel's own summary carries `url=<getURL()>`, which is the
+   person's active tab, so the summary is rebuilt from these booleans. */
+const WORKER_HEALTH_FIELDS = ["window", "panel", "ready", "mounted", "hasPage"] as const;
+export function workerHealth(reply: BrowserReply): BrowserReply {
+  if (!reply.ok) return reply;
+  const v = reply.value && typeof reply.value === "object" && !Array.isArray(reply.value)
+    ? reply.value as Record<string, unknown>
+    : {};
+  const value: Record<string, unknown> = {};
+  for (const k of WORKER_HEALTH_FIELDS) if (k in v) value[k] = v[k];
+  const windowOpen = v.window === true || v.panel === true || v.mounted === true || v.hasPage === true;
+  const panelOn = v.panel === true || v.mounted === true;
+  value.summary = `window ${windowOpen ? "open" : "closed"} · panel ${panelOn ? "mounted" : "not mounted"}`
+    + ` · ${v.hasPage === true ? "a page is mounted" : "no page open"}`;
+  return { ...reply, value };
+}
+/** The registry's own door: a test seeds a page the way a reply would. */
+export function noteWorkerPage(worker: string, page: string): void {
+  const w = foldWorkerName(worker);
+  let s = WORKER_PAGES.get(w);
+  if (!s) { s = new Set(); WORKER_PAGES.set(w, s); }
+  s.add(page);
+}
+export function resetWorkerPages(): void {
+  WORKER_PAGES.clear();
+  ASK_WORKER.clear();
+}
+/** Drop a name's pages when its credential is revoked: the next turn under the
+ *  same name must not inherit ids the previous one opened. */
+export function forgetWorkerPages(worker: string): void {
+  const w = foldWorkerName(worker);
+  WORKER_PAGES.delete(w);
+  for (const [id, ask] of ASK_WORKER) if (ask.worker === w) ASK_WORKER.delete(id);
+}
+/** How many asks are still waiting for a window, so a test can prove they do
+ *  not accumulate. */
+export function workerAskCount(): number { return ASK_WORKER.size; }
+/** File the page id a reply names under the worker that asked. An
+ *  `open`/`newtab` names its own page; every other reply only when it says the
+ *  container is the worker's. */
+function recordWorkerReply(id: string, reply: BrowserReply): void {
+  const ask = ASK_WORKER.get(id);
+  if (!ask) return;
+  ASK_WORKER.delete(id);
+  if (!reply.ok) return;
+  const v = reply.value as Record<string, unknown> | undefined;
+  /* `closetab` answers with the whole window's list (a bare array), so the id
+     it closed is the one the ask carried. */
+  if (ask.op === "closetab" && ask.target) {
+    WORKER_PAGES.get(ask.worker)?.delete(ask.target);
+    return;
+  }
+  if (!v || typeof v !== "object") return;
+  if (ask.op === "closetab" && typeof v.tab === "string") {
+    WORKER_PAGES.get(ask.worker)?.delete(v.tab);
+    return;
+  }
+  /* A mint is filed only when the panel says the tab is in the worker's own
+     container, and that container is the RESERVED one the relay asked for. The
+     reply's top-level `profile` is only used when the list has no row for the
+     tab; the row is keyed by the id the mint returned, so the confirmation is
+     about that tab rather than about a name appearing somewhere in the answer.
+     A person's profile cannot take the reserved name (`addProfile` refuses it)
+     and the panel mints it rather than resolving it. */
+  const want = agentContainerName(ask.worker);
+  const minted = typeof v.tab === "string" ? v.tab : typeof v.id === "string" ? v.id : "";
+  const rows = Array.isArray(v.tabs) ? v.tabs : [];
+  const rowOf = minted ? rows.find((t) => (t as Record<string, unknown>)?.id === minted) as Record<string, unknown> | undefined : undefined;
+  const said = rowOf && typeof rowOf.profile === "string"
+    ? foldWorkerName(rowOf.profile)
+    : typeof v.profile === "string" ? foldWorkerName(v.profile) : "";
+  if (minted && said === want && isAgentContainer(want)) noteWorkerPage(ask.worker, minted);
+  for (const t of rows) {
+    const tab = t as Record<string, unknown>;
+    const p = typeof tab.profile === "string" ? foldWorkerName(tab.profile) : "";
+    if (p === want && typeof tab.id === "string" && tab.id) noteWorkerPage(ask.worker, tab.id);
+  }
+}
+export function workerOpRefusal(op: string): string {
+  return "this credential was minted for an agent, and the browser relay runs only the verbs an agent's own "
+    + `container can do: "${op}" is not one of them.`;
+}
+function workerSchemaRefusal(b: Record<string, unknown>, op: string | undefined): string | null {
+  const fields = op === undefined ? WORKER_LANE_FIELDS : op === "do" ? WORKER_DO_FIELDS : WORKER_OP_FIELDS.get(op);
+  if (!fields) {
+    return `this credential was minted for an agent, and "${op}" has no declared fields here: the ask is refused rather than read as some other verb.`;
+  }
+  for (const key of Object.keys(b)) {
+    if (WORKER_COMMON_FIELDS.has(key) || fields.has(key)) continue;
+    return "this credential was minted for an agent, and the ask carries "
+      + `"${key}", which ${op ? `"${op}"` : "a lane"} does not read: refused rather than guessed at, `
+      + "and nothing is addressed by position in the window's list.";
+  }
+  return null;
+}
+function workerAskRefused(
+  b: Record<string, unknown>, own: string, op: string | undefined, page: string | undefined,
+  afterOwnOpen = false, deferAddress = false, laneAddressed = false,
+): string | null {
+  if (b.shared === true || b.active === true) return AGENT_SHARED_REFUSAL;
+  if (b.how === "shared") return AGENT_SHARED_REFUSAL;
+  /* `force` is a lever over somebody else's lane — it lists every caller's
+     lanes and closes one that is not the asker's. A worker already holds every
+     lane it may use, so there is nothing to insist past. */
+  if (b.force === true) {
+    return "this credential was minted for an agent, and `force` is not one of its levers: it overrides "
+      + "the owner of a lane, and the lanes this agent may use are already its own.";
+  }
+  for (const key of ["as", "profile", "name"] as const) {
+    const v = b[key];
+    if (typeof v === "string" && v.trim() && foldWorkerName(v) !== own) return AGENT_SHARED_REFUSAL;
+  }
+  if (typeof b.container === "string" && b.container.trim()) {
+    const c = foldWorkerName(b.container);
+    if (c !== own && c !== "private") return AGENT_SHARED_REFUSAL;
+  }
+  if (op && op !== "do" && !WORKER_OPS.has(op)) return workerOpRefusal(op);
+  const unknown = workerSchemaRefusal(b, op);
+  if (unknown) return unknown;
+  const target = op ? WORKER_VERBS[op]?.target ?? [] : [];
+  const named = typeof b.page === "string" && b.page.trim() ? b.page.trim() : page;
+  if (target.includes("page") && !deferAddress && named && !workerOwnsPage(own, named)) {
+    return "this credential was minted for an agent, and that page is not one it opened: a page id is "
+      + "served only from the pages this agent opened in its own container.";
+  }
+  if (target.includes("id")) {
+    const id = typeof b.id === "string" ? b.id.trim() : "";
+    if (!deferAddress && (!id || !workerOwnsPage(own, id))) {
+      return "this credential was minted for an agent, and that tab is not one it opened: a tab id is "
+        + "served only from the pages this agent opened in its own container.";
+    }
+  }
+  /* A template tab is a tab with somebody's saved cookies in it: minting one is
+     reaching a container this credential was not minted for. */
+  if ((op === "open" || op === "newtab") && b.ephemeral === true) {
+    return "this credential was minted for an agent, and a tab from a template carries the cookies and storage "
+      + "saved from another container: open a plain page of your own instead.";
+  }
+  /* Folded like `as`: an agent name may carry capitals, and comparing `profile`
+     raw left a worker named `Alba` able to `read --as Alba` but never to mint
+     its own page (`profile "Alba" !== own "alba"`).
+     A MINT MUST NAME THE WORKER'S OWN CONTAINER. `newtab` always mints, and an
+     `open` that carries a `profile` string is routed to the mint; both go to
+     whatever container the profile names, and the panel reads `""`/absent as
+     the person's. A page of the worker's own does not stand in for the
+     profile there: the page is only where a plain `open` navigates. */
+  const byLane = laneAddressed || (typeof b.lane === "string" && !!b.lane.trim());
+  const asksContainer = typeof b.profile === "string" ? foldWorkerName(b.profile) : "";
+  const mints = op === "newtab" || (op === "open" && typeof b.profile === "string");
+  if (mints) {
+    /* A lane addressed here is the worker's own (the lane gate refuses anybody
+       else's and any lane with no owner), and its window mints into the lane's
+       partition; there is no person's container behind that door. */
+    if (asksContainer !== own && !byLane) return AGENT_SHARED_REFUSAL;
+  } else if (op === "open"
+      && asksContainer !== own
+      && !byLane
+      && !(named && workerOwnsPage(own, named))) {
+    return AGENT_SHARED_REFUSAL;
+  }
+  /* Taking the pane is the person's screen, not the worker's page: a mint that
+     brings the browser forward pulls the view off whoever is using it. */
+  if ((op === "open" || op === "newtab") && b.show === true) {
+    return "this credential was minted for an agent, and `show` brings the browser view forward in the person's "
+      + "window: a worker's page is opened in the background.";
+  }
+  /* A template lane is the lane twin of a template tab: the saved cookies and
+     storage of whichever container the template came from. */
+  if (op === "lane" && b.ephemeral === true) {
+    return "this credential was minted for an agent, and a lane from a template carries the cookies and storage "
+      + "saved from another container: ask for a plain private lane instead.";
+  }
+  if (op && op !== "do" && !WORKER_LIST_OPS.has(op) && !(op === "open" && typeof b.profile === "string")) {
+    if (!named && !afterOwnOpen && !byLane) {
+      return "this credential was minted for an agent, and the ask names no page of its own: "
+        + "open your own page first and address it, so the ask cannot fall through to the tab in front.";
+    }
+  }
+  return null;
+}
+
+/** Whether this ask would have the panel mint a container. ONE rule: the
+ *  route's walk, `runSteps` and the send door all read it. */
+function mintsInAContainer(op: string | undefined, args: Record<string, unknown>): boolean {
+  return op === "newtab" || (op === "open" && typeof args.profile === "string");
+}
+
+/** Whether this ask mints a page in the worker's own container. ONE rule: the
+ *  route's walk and `runSteps` both ask it, so a `do` whose first step opens
+ *  its own page reads the same here and there. */
+function opensOwnPage(op: string | undefined, args: Record<string, unknown>, own: string | null): boolean {
+  if (own === null || (op !== "open" && op !== "newtab")) return false;
+  return typeof args.profile === "string" && foldWorkerName(args.profile) === own;
+}
+
+export function agentAskRefusal(body: unknown, worker?: string, op?: string, afterOwnOpen = false): string | null {
+  const own = typeof worker === "string" && worker.trim() ? foldWorkerName(worker) : null;
+  /* The ask is not only the top-level body: `do` carries `steps` and
+     `lanes[].steps`, each parsed as a legitimate verb of its own, so a nested
+     `open` with `profile: ""` is the same ask two fields down. Walked with a
+     queue rather than recursion: a shape that could nest forever must not.
+     A step INHERITS the identity and page of the `do`/lane that carries it.
+     A step's ADDRESS is checked when it runs, not here: it is a page the
+     earlier steps have not minted yet. `runSteps` gates every step again with
+     the registry as it stands, so nothing skips the check. */
+  let level: Array<{ item: unknown; page?: string; op?: string; step?: boolean; ownedOpen?: boolean; lane?: boolean }> =
+    [{ item: body, op, ownedOpen: afterOwnOpen }];
+  for (let depth = 0; depth < 3 && level.length; depth++) {
+    const next: Array<{ item: unknown; page?: string; op?: string; step?: boolean; ownedOpen?: boolean; lane?: boolean }> = [];
+    for (const { item, page, op: inheritedOp, step, ownedOpen, lane } of level) {
+      const b = (item && typeof item === "object" ? item : {}) as Record<string, unknown>;
+      const stepOp = typeof b.op === "string" ? b.op : inheritedOp;
+      /* A lane's page is put in scope by `gateLane`, so a step under a lane is
+         addressed without naming one. */
+      const laneHere = lane === true || (typeof b.lane === "string" && !!b.lane.trim());
+      const refused = own
+        ? workerAskRefused(b, own, stepOp, page, ownedOpen === true, step === true, laneHere)
+        : (mintsInAContainer(stepOp, b)
+          ? PLUGIN_MINT_REFUSAL
+          : (namesThePerson(item) ? AGENT_SHARED_REFUSAL : null));
+      if (refused) return refused;
+      const carryPage = typeof b.page === "string" && b.page.trim() ? b.page.trim() : page;
+      /* An `open` of the worker's own container makes that container's tab the
+         one the panel acts on, so the steps after it may leave the page out. */
+      const openedOwn = ownedOpen === true || opensOwnPage(stepOp, b, own);
+      if (Array.isArray(b.lanes)) for (const l of b.lanes) next.push({ item: l, page: carryPage, ownedOpen: openedOwn, lane: laneHere });
+      if (Array.isArray(b.steps)) {
+        /* Each step's own args decide the one after it: a `do` that opens its
+           own page and then reads it is one request, and reading the parent's
+           `profile` refused it because the `do` body carries none. */
+        let stepOwn = openedOwn;
+        for (const s of b.steps) {
+          const st = (s && typeof s === "object" ? s : {}) as Record<string, unknown>;
+          if (own) {
+            for (const key of Object.keys(st)) {
+              if (!WORKER_STEP_FIELDS.has(key)) {
+                return `this credential was minted for an agent, and a step carries "${key}", which a step does not read.`;
+              }
+            }
+            if (typeof st.op !== "string") {
+              return "this credential was minted for an agent, and a step names no verb: refused rather than inherited from the call around it.";
+            }
+            if (st.op === "do") {
+              return "this credential was minted for an agent, and a step cannot be another `do`: refused.";
+            }
+          }
+          const stArgs = (st.args && typeof st.args === "object" ? st.args : {}) as Record<string, unknown>;
+          next.push({
+            item: stArgs, page: carryPage,
+            op: typeof st.op === "string" ? st.op : undefined, step: true, ownedOpen: stepOwn, lane: laneHere,
+          });
+          if (opensOwnPage(typeof st.op === "string" ? st.op : undefined, stArgs, own)) stepOwn = true;
+        }
+      }
+    }
+    level = next;
+  }
+  return null;
+}
+
+const AGENT_SHARED_REFUSAL = "this credential was minted for an agent, and it reaches only that agent's own container, "
+  + "page and lanes: the person's container, and another agent's profile, are not something it reaches. Name "
+  + "your own identity (`--as <name>`, which opens its own container) or your own lane. The shared container "
+  + "holds the person's logins.";
+
+const PLUGIN_MINT_REFUSAL = "this credential was minted for a plugin, and a plugin does not mint a browser container: "
+  + "it drives the person's own tabs, and an ask that names a page is refused like every other ask that "
+  + "names the person's window.";
+
 
 let seq = 0;
 /* Unguessable: a caller that can POST /browser/result must not be able to
@@ -730,7 +1261,7 @@ const OBSERVE_OPS: ReadonlySet<BrowserOp> = new Set([
      no page, so read-only mode has nothing to refuse. */
   "done",
   /* Reading what a page offers looks and runs nothing; `call-tool` is not
-     here, so it acts by default like every unclassified verb. */
+     here, so it acts by default like every verb with no class of its own. */
   "tools",
   /* Opening a lane touches no page and no person's window: it makes a room for
      an agent to work in, which read-only mode has no reason to refuse. */
@@ -1517,7 +2048,9 @@ const NAMED_TABS_MAX = 64;
 function rememberNamedTab(as: string, tab: string): void {
   /* Re-insert rather than update, so the eviction order is "least recently
      said" and not "first ever said" — a long-lived agent that keeps switching
-     tabs must not be the first one thrown out. */
+     tabs must not be the first one thrown out. Keyed under the one fold:
+     `tab t7` as `Alba` and a verb as `alba` are one identity. */
+  as = foldWorkerName(as);
   NAMED_TABS.delete(as);
   NAMED_TABS.set(as, tab);
   while (NAMED_TABS.size > NAMED_TABS_MAX) {
@@ -1527,7 +2060,7 @@ function rememberNamedTab(as: string, tab: string): void {
   }
 }
 
-function namedTabOf(as: string): string | undefined { return NAMED_TABS.get(as); }
+function namedTabOf(as: string): string | undefined { return NAMED_TABS.get(foldWorkerName(as)); }
 
 export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { error: string } {
   if (!BROWSER_OPS.includes(op as BrowserOp)) return { error: `unknown browser operation` };
@@ -1915,7 +2448,7 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
        * `freezeAnimations` are the other two things the spec asks for in the
        * same breath, because a capture taken after a clock jump is only
        * repeatable if nothing ELSE on the page is still free to vary —
-       * `Math.random()`, an in-flight CSS transition, a still-ticking
+       * `Math.random()`, a CSS transition still running, a still-ticking
        * animation frame. `advanceMs: 0` is a legal call: seal or freeze
        * without moving the clock at all.
        */
@@ -3714,8 +4247,9 @@ export async function runLanes(
   lanes: Array<{ page?: string; steps: Array<{ op: unknown; args: unknown }> }>,
   /** `caller` is who asked, threaded down to every step of every lane —
    *  without it a lane is anonymous and the panel's ownership check, which
-   *  reads an absent `as` as "cannot tell", allows it. */
-  opts: { observe?: boolean; caller?: Record<string, unknown> } = {},
+   *  reads an absent `as` as "cannot tell", allows it. `worker` files each
+   *  reply's page id under the worker that opened it. */
+  opts: { observe?: boolean; caller?: Record<string, unknown>; worker?: string } = {},
 ): Promise<{ ok: boolean; lanes: Array<Record<string, unknown>> }> {
   const out = await Promise.all(lanes.map(async (lane, i) => {
     /* The page id rides on every step of its lane, so a caller writes it once
@@ -3894,9 +4428,18 @@ export async function runSteps(
    *
    *  `as`, `how` and `pageExplicit` are the CALLER, and they have to reach
    *  every sub-ask or the batch is anonymous — see the note in the loop. */
-  opts: { observe?: boolean; page?: string; caller?: Record<string, unknown> } = {},
+  opts: { observe?: boolean; page?: string; caller?: Record<string, unknown>; worker?: string } = {},
 ): Promise<{ ok: boolean; steps: Array<Record<string, unknown>>; stoppedAt?: number }> {
   const out: Array<Record<string, unknown>> = [];
+  /* Whether an earlier step opened a tab in the worker's own container: the
+     steps after it may leave the page out. */
+  let openedOwn = false;
+  /* The page the worker's own mint in this `do` returned. The waiver above is
+     only half of it: the panel acts on the tab IN FRONT when an ask names no
+     page, and a mint is born in the background, so without this the next step
+     went to the person's tab and the panel refused it — measured with a `do`
+     of one `open` and one `read`. */
+  let ownPage: string | undefined;
   for (const [i, step] of steps.entries()) {
     /*
      * THE CALLER RIDES INTO EVERY STEP, and the address with it.
@@ -3912,15 +4455,41 @@ export async function runSteps(
      * The step's own arguments win: a step that names its own page is a caller
      * saying something deliberate about that one step.
      */
-    const addressed = { ...(opts.caller ?? {}), ...(opts.page ? { page: opts.page } : {}), ...(step.args as Record<string, unknown> ?? {}) };
+    const args = (step.args as Record<string, unknown> | undefined) ?? {};
+    /* The step's own page is a caller saying something about that one step;
+       after that, the page this `do` minted; then the caller's (a lane's). */
+    const basePage = typeof args.page === "string" && args.page ? args.page : ownPage ?? opts.page;
+    const addressed = { ...(opts.caller ?? {}), ...(basePage ? { page: basePage } : {}), ...args };
     const parsed = parseAsk(step.op, addressed);
     if ("error" in parsed) {
       out.push({ op: step.op, ok: false, error: parsed.error });
       return { ok: false, steps: out, stoppedAt: i };
     }
+    /* The registry as it stands NOW: a page an earlier step opened is the
+       worker's own by the time this one runs, and a step that names somebody
+       else's is still refused before it is sent. */
+    if (opts.worker) {
+      const refused = agentAskRefusal(addressed, opts.worker, parsed.ask.op, openedOwn);
+      if (refused) {
+        out.push({ op: step.op, ok: false, error: refused });
+        return { ok: false, steps: out, stoppedAt: i };
+      }
+      /* The same rule the route's walk reads, on the step's own args. */
+      if (opensOwnPage(parsed.ask.op, addressed, foldWorkerName(opts.worker))) openedOwn = true;
+    }
+    if (opts.worker) noteWorkerAsk(parsed.ask.id, opts.worker, parsed.ask.op,
+      typeof (parsed.ask.args as { id?: unknown }).id === "string" ? (parsed.ask.args as { id: string }).id : undefined);
     const reply = await askBrowser(parsed.ask);
     out.push({ op: step.op, ok: reply.ok, value: reply.value, error: reply.error, diagnosis: reply.diagnosis });
     if (!reply.ok) return { ok: false, steps: out, stoppedAt: i };
+    /* The LAST mint wins: a `do` that opens two pages and then reads one
+       without naming it means the one it opened most recently, which is the
+       tab the window has in front. */
+    if (opts.worker && opensOwnPage(parsed.ask.op, args, foldWorkerName(opts.worker))) {
+      const v = reply.value as { tab?: unknown; id?: unknown } | undefined;
+      const id = typeof v?.tab === "string" ? v.tab : typeof v?.id === "string" ? v.id : undefined;
+      if (id) ownPage = id;
+    }
   }
   /* And what the page looks like now, when asked for. "Every action returns
      the observation after it, not {clicked: true}" is §3's wording; doing it
@@ -3933,7 +4502,8 @@ export async function runSteps(
        a two-lane `do --observe` came back with the same active-tab observation
        twice, and at least one lane's evidence was wrong deterministically,
        with a single agent and entirely correct usage. */
-    const parsed = parseAsk("observe", { ...(opts.caller ?? {}), ...(opts.page ? { page: opts.page } : {}), delta: true });
+    const observePage = ownPage ?? opts.page;
+    const parsed = parseAsk("observe", { ...(opts.caller ?? {}), ...(observePage ? { page: observePage } : {}), delta: true });
     if (!("error" in parsed)) {
       const reply = await askBrowser(parsed.ask);
       out.push({ op: "observe", ok: reply.ok, value: reply.value, error: reply.error });
@@ -4023,7 +4593,7 @@ function activeBlock(rows: readonly TabRow[]): TabRow | null {
 const LAST_OBSERVED = new Map<string, { doc: string; seq: number }>();
 const LAST_OBSERVED_MAX = 256;
 const observedKey = (args: Record<string, unknown>) =>
-  `${typeof args.as === "string" ? args.as : ""}\u0000${typeof args.page === "string" ? args.page : ""}`;
+  `${foldWorkerName(typeof args.as === "string" ? args.as : "")}\u0000${typeof args.page === "string" ? args.page : ""}`;
 
 async function observeTracked(ask: BrowserAsk, send: (a: BrowserAsk) => Promise<BrowserReply>): Promise<BrowserReply> {
   const key = observedKey(ask.args);
@@ -4043,7 +4613,33 @@ async function observeTracked(ask: BrowserAsk, send: (a: BrowserAsk) => Promise<
   return reply;
 }
 
+/* The one door a worker's reply comes through: every route returns what this
+   returns, so scoping lives here rather than in each route's verb list. The
+   worker is read before the wait — that map entry is consumed on the answer. */
 export async function askBrowser(ask: BrowserAsk): Promise<BrowserReply> {
+  const worker = ASK_WORKER.get(ask.id)?.worker;
+  /* The container a worker's mint is sent to, written down here rather than
+     trusted from the body: the panel reads an absent or empty profile as the
+     person's container, so neither may cross this door from a worker. The gate
+     already refuses them; this is the second layer, on the one path every ask
+     takes. */
+  const laneAddressed = typeof ask.args.lane === "string" && !!ask.args.lane.trim();
+  const sent = worker && !laneAddressed && mintsInAContainer(ask.op, ask.args)
+    ? { ...ask, args: { ...ask.args, profile: agentContainerName(worker) } }
+    : ask;
+  try {
+    const reply = await askPanel(sent);
+    if (!worker) return reply;
+    if (ask.op === "health") return workerHealth(reply);
+    return WORKER_PAGE_REPLY_OPS.has(ask.op) ? workerReply(worker, reply) : reply;
+  } finally {
+    /* No window, a composed answer, a timeout before parking: an ask that never
+       reached `settleBrowser` must not stay in the map. */
+    if (worker) ASK_WORKER.delete(ask.id);
+  }
+}
+
+async function askPanel(ask: BrowserAsk): Promise<BrowserReply> {
   if (ask.op === "observe") return observeTracked(ask, (a) => (asker ? asker(a) : askWithRetry(a)));
   if (asker) return asker(ask);
   /* robots.txt, when the operator asked for it — see robots.ts for why it is
@@ -4118,14 +4714,21 @@ async function askWithRetry(ask: BrowserAsk): Promise<BrowserReply> {
   return last;
 }
 
+/** The relay's `whoami` value from a window's tab list. Exported so a test's
+ *  fixture is the real composition rather than a hand-typed shape. */
+export function whoamiValue(args: Record<string, unknown>, tabs: unknown):
+  { you: ReturnType<typeof youBlock>; activeTab: ReturnType<typeof activeBlock> } {
+  const rows = tabRows(tabs);
+  return { you: youBlock(args, rows), activeTab: activeBlock(rows) };
+}
+
 async function composeWhoami(ask: BrowserAsk): Promise<BrowserReply> {
   const tabs = await askBrowser({ id: nextId(), op: "tabs", args: {} });
   if (!tabs.ok) {
     recordAudit("whoami", ask.args, false, tabs.error);
     return tabs;
   }
-  const rows = tabRows(tabs.value);
-  const value = { you: youBlock(ask.args, rows), activeTab: activeBlock(rows) };
+  const value = whoamiValue(ask.args, tabs.value);
   recordAudit("whoami", ask.args, true, undefined);
   return { ok: true, value };
 }
@@ -4178,12 +4781,25 @@ const wireLanes = (): void => configureLanes({
 wireLanes();
 
 async function composeLane(ask: BrowserAsk): Promise<BrowserReply> {
-  const as = typeof ask.args.as === "string" ? ask.args.as : undefined;
+  /* A worker's lane list is its own even when the ask names nobody: the list
+     without `as` names every caller's lane, and the credential already says
+     whose it is. And "its own" is strict — a lane made by a caller with no
+     identity, or with `shared: true`, belongs to the person's side, and the
+     fact that the worker can read the list was the hole. */
+  const principal = ASK_WORKER.get(ask.id)?.worker;
+  const as = principal ?? (typeof ask.args.as === "string" ? ask.args.as : undefined);
   let reply: BrowserReply;
   if (ask.args.action === "list") {
-    reply = { ok: true, value: { lanes: listLanes(ask.args.force === true ? undefined : as) } };
+    reply = {
+      ok: true,
+      value: {
+        lanes: principal
+          ? listOwnedLanes(principal)
+          : listLanes(ask.args.force === true ? undefined : as),
+      },
+    };
   } else if (ask.args.action === "close") {
-    const r = await closeLane(String(ask.args.id), as, ask.args.force === true);
+    const r = await closeLane(String(ask.args.id), as, ask.args.force === true, !!principal);
     reply = r.ok ? { ok: true, value: { closed: ask.args.id } } : { ok: false, error: r.error };
   } else {
     const r = await openLane(as, ask.args.container as "private" | "shared" | "named" | "ephemeral", typeof ask.args.name === "string" ? ask.args.name : undefined);
@@ -4290,8 +4906,15 @@ function askOnce(ask: BrowserAsk): Promise<BrowserReply> {
   const lane = ask.args.lane;
   if (typeof lane === "string") {
     /* Never a fallback to the visible tab: an agent that lost its lane must
-       not start clicking in the person's window. */
-    const msg = laneRefusal(lane, ask.args.as ?? scoped?.as, scoped?.force === true);
+       not start clicking in the person's window. A credential's principal is
+       stricter than the self-asserted `as`: only a lane it made qualifies. */
+    const owner = ASK_WORKER.get(ask.id)?.worker ?? scoped?.owner;
+    const msg = laneRefusal(
+      lane,
+      owner ?? ask.args.as ?? scoped?.as,
+      scoped?.force === true,
+      typeof owner === "string" && !!owner.trim(),
+    );
     if (msg) {
       recordAudit(ask.op, ask.args, false, msg);
       return Promise.resolve({ ok: false, error: msg });
@@ -4368,6 +4991,10 @@ function askOnce(ask: BrowserAsk): Promise<BrowserReply> {
           tab: typeof named?.tab === "string" ? named.tab : undefined,
           owner: typeof named?.profile === "string" ? named.profile : undefined,
         });
+      /* Every ask is forgotten when it settles, timeout and closed socket
+         included: only a reply used to clear it, so a worker could grow the
+         map with asks no window ever answered. */
+      ASK_WORKER.delete(ask.id);
       resolve(redacted);
     };
     const timer = setTimeout(() => {
@@ -4398,11 +5025,12 @@ export function settleBrowser(id: unknown, reply: BrowserReply, from?: string): 
   if (from !== undefined && p.target !== undefined && p.target !== from) return false;
   pending.delete(id);
   clearTimeout(p.timer);
+  recordWorkerReply(id, reply);
   p.resolve(reply);
   return true;
 }
 
-/** A window's socket closed: its in-flight asks will never be answered. Said
+/** A window's socket closed: the asks it already sent will never be answered. Said
  *  now, because a click or a fill may have run before it went and the caller
  *  cannot tell from a timeout. */
 export function dropBrowserTarget(clientId: string): void {
@@ -4418,6 +5046,7 @@ export function resetBrowserDrive(): void {
   ready.clear();
   managers.clear();
   resetLanes();
+  resetWorkerPages();
   wireLanes();
   for (const [, p] of pending) { clearTimeout(p.timer); p.resolve({ ok: false, error: "cancelled" }); }
   pending.clear();

@@ -1,4 +1,5 @@
 import { ICON } from "../lib/iconSize.ts";
+import { FlowIcon as MockupFlowIcon } from "./orchestration/flow/flowIcons.tsx";
 
 /**
  * One glyph per settings page, so the nav is twenty-four shapes instead of
@@ -158,13 +159,7 @@ export function ChipIcon({ size = ICON.md }: P) {
 }
 
 export function FlowIcon({ size = ICON.md }: P) {
-  return (
-    <svg {...svg} width={size} height={size}>
-      <rect x="4" y="4" width="6" height="5" rx="1.5" />
-      <rect x="14" y="15" width="6" height="5" rx="1.5" />
-      <path d="M10 6.5h4a2 2 0 0 1 2 2V15" />
-    </svg>
-  );
+  return <MockupFlowIcon name="hub" size={size} />;
 }
 
 export function LayersIcon({ size = ICON.md }: P) {

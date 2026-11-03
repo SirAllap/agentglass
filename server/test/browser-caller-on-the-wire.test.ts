@@ -146,6 +146,14 @@ describe("`tab <id>` is the operator naming a tab, and it keeps counting", () =>
     expect(args("read", { as: "orbit", page: "t5-4oueyw" }).pageExplicit).toBeUndefined();
   });
 
+  test("and case is one identity, the way it is everywhere else", () => {
+    /* NAMED_TABS was the last map keyed by the raw `as`: `tab` as `Alba` then
+       a verb as `alba` lost the exemption and was refused the tab the caller
+       had just named. */
+    args("tab", { id: "t5-4oueyw", as: "Alba" });
+    expect(args("shot", { as: "alba", page: "t5-4oueyw" }).pageExplicit).toBe(true);
+  });
+
   test("switching away drops the old one — an exemption is a statement, not a licence", () => {
     args("tab", { id: "t5-4oueyw", as: "wf-probe" });
     args("tab", { id: "t9-mine", as: "wf-probe" });

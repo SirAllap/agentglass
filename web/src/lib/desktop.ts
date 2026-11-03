@@ -1,4 +1,5 @@
 import { adoptServer } from "./api.ts";
+import type { ShellNoticeFacts } from "./setupNotices.ts";
 import { partitionsFor } from "./browserProfiles.ts";
 import type { ImportedShelf } from "./browserShelf.ts";
 
@@ -35,7 +36,13 @@ type DesktopBridge = {
   remoteEnabled?: () => Promise<boolean>;
   setRemote?: (on: boolean) => Promise<boolean>;
   revokeRemote?: () => Promise<boolean>;
-  onServerChanged?: (fn: (p: { origin?: string | null; token?: string | null; deskKey?: string | null }) => void) => () => void;
+  onServerChanged?: (fn: (p: { origin?: string | null; token?: string | null; deskKey?: string | null; preferredPort?: number | null }) => void) => () => void;
+  /** The two ports the shell knows, and which display it drew through. All
+   *  absent on a shell built before the first run could say them; null in a
+   *  browser tab, which has no shell to ask. */
+  preferredPort?: number | null;
+  serverPort?: number | null;
+  displayServer?: "wayland" | "x11" | null;
   /** A link somebody clicked on a web page: today only "install this plugin".
    *  Absent on a shell built before the app claimed its own scheme, and in a
    *  browser tab, where there is no scheme to claim. */
@@ -899,6 +906,17 @@ export function followDeepLinks(fn: (link: DeepLink) => void): () => void {
   if (!b) return () => {};
   void b.takeDeepLink?.().then((held) => { if (held) fn(held); }).catch(() => { /* older shell */ });
   return b.onDeepLink?.(fn) ?? (() => {});
+}
+
+/** The shell's own account of the window, for the first run's notices. */
+export function shellNotices(): ShellNoticeFacts & { desktop: boolean } {
+  const b = bridge();
+  return {
+    desktop: b !== null,
+    preferredPort: typeof b?.preferredPort === "number" ? b.preferredPort : null,
+    serverPort: typeof b?.serverPort === "number" ? b.serverPort : null,
+    displayServer: b?.displayServer === "wayland" || b?.displayServer === "x11" ? b.displayServer : null,
+  };
 }
 
 export function followServerChanges(): () => void {

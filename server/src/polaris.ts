@@ -7,15 +7,18 @@
  * dry, and writes every outcome to the actions audit log. There is no code path here for
  * a merge, a comment, a label, a review or a card move; a source test checks that.
  */
+import { randomBytes } from "node:crypto";
 import { basename } from "node:path";
-import { canRelaunch, classifyPr, droppedJob, type BaseRed, type ItemsAnswer, type PolarisCheck, type PolarisItem, type PolarisJob, type PrFacts, type RunRef } from "../../shared/polaris.ts";
+import { canRelaunch, classifyPr, droppedJob, type PolarisActionRequest, type PolarisAsk, type PolarisRequestState, type BaseRed, type ItemsAnswer, type PolarisCheck, type PolarisItem, type PolarisJob, type PrFacts, type RunRef } from "../../shared/polaris.ts";
 export type { ItemsAnswer, PolarisItem, RunRef };
 import { withDoor, type DoorValue } from "../../shared/polaris.ts";
+import { REQUEST_TTL_MS } from "../../shared/settingClass.ts";
 import type { PrCheckRollup, PrSummary } from "../../shared/types.ts";
 import { polarisRoots, readPolaris, readStoredPolaris, writePolaris } from "./config.ts";
 import { recordAction } from "./db.ts";
 import { __requiredCaches, fastForwardLocal, gh, listPrs, localHead, prBranches, prRollup, repoIdFor } from "./prs.ts";
 import { listAgents, promptAgent, screenOf, stateOfScreen } from "./agentops.ts";
+import { projectRootOf } from "./git.ts";
 
 export const ACTION_TYPES = ["relaunch", "beacon-draft", "beacon-edit", "beacon-discard", "beacon-send-on-click", "dock", "ignore", "propose", "sync"] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
@@ -27,8 +30,9 @@ export interface ActionArgs {
   reason?: string;
   run?: RunRef;
   text?: string;
-  /** The session the person picked to receive a beacon. */
+  /** The session the person picked to receive a beacon, and its name as the card says it. */
   paneId?: string;
+  paneName?: string;
   door?: "course" | "cleanup";
   /** For a sync: the head the person saw, and the base commit that fixed the red. */
   headSha?: string;
@@ -55,7 +59,16 @@ export interface PolarisIo {
   updateBranch?(root: string, number: number, expectedHeadSha: string): Promise<{ ok: boolean; status?: number; error?: string }>;
   /** After a sync, bring this machine's copy of the branch up to date, but only by a fast-forward of a clean one. Local git, no network write. */
   localAfter?(root: string, number: number): Promise<{ state: "absent" | "fast-forwarded" | "dirty" | "diverged" | "busy"; branch: string }>;
+  /** A session the agent may hand a send to: live, and in this pull request's project. Null when it is neither. */
+  sessionPane?(root: string, paneId: string): Promise<{ name: string } | null>;
+  /** Test seam for typing into a session (live: promptAgent into an idle one). */
+  sendTo?(paneId: string, text: string): Promise<string>;
+  /** The head commit of an open pull request, read by the server itself: what an agent's ask is bound to. Read only. */
+  headOf?(root: string, number: number): Promise<string | null>;
 }
+
+/** Who is asking for an action. An agent's name is the `--as` label its CLI stamped. */
+export type PolarisWho = { kind: "person" } | { kind: "phone" } | { kind: "agent"; name: string; askerName?: string };
 
 /** Match by branch: a session the board sees on the pull request's head. Two on one branch is no match, so the person picks. */
 export async function sessionFor(root: string, number: number): Promise<string | null> {
@@ -63,6 +76,18 @@ export async function sessionFor(root: string, number: number): Promise<string |
   if (!b) return null;
   const hits = (await listAgents()).filter((x) => x.endedAt === null && x.branch === b.head);
   return hits.length === 1 ? hits[0]!.paneId : null;
+}
+
+/**
+ * The live session behind a pane, when it is in this project: the id an agent named
+ * is checked here, so a card that says "the session working on PR #n" types into a
+ * session of that project rather than any live pane the agent chose.
+ */
+export async function sessionPane(root: string, paneId: string): Promise<{ name: string } | null> {
+  const s = (await listAgents()).find((x) => x.paneId === paneId && x.endedAt === null);
+  if (!s) return null;
+  const inside = s.seatRoot === root || s.cwd === root || s.cwd.startsWith(root.endsWith("/") ? root : `${root}/`) || projectRootOf(s.cwd) === root;
+  return inside ? { name: s.name } : null;
 }
 
 export async function rerunJob(root: string, jobId: number): Promise<{ ok: boolean; error?: string }> {
@@ -134,7 +159,24 @@ async function checksFor(root: string, number: number): Promise<PrCheckRollup | 
   const r = await prRollup(root, number);
   return r.ok && r.checks ? r.checks : null;
 }
-const liveIo: PolarisIo = { rerunJob, readJobs, sessionFor, checksFor, testedBase, baseChecks, updateBranch, localAfter };
+/**
+ * The head of one open pull request, read from GitHub itself: one call, fresh.
+ *
+ * The board's list answers from its cache (`prev.prs`) and starts its refresh
+ * without awaiting it, so a head read there can be two minutes old (a "moved"
+ * check that misses a push) or empty on a cold start (a valid ask refused).
+ */
+export async function headOfPr(root: string, number: number, run: typeof gh = gh): Promise<string | null> {
+  const repo = await repoIdFor(root);
+  if (!repo) return null;
+  const r = await run(["api", `repos/${repo.nameWithOwner}/pulls/${number}`, "--jq", ".head.sha"], root);
+  const sha = r.stdout.trim();
+  return r.code === 0 && /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+}
+async function headOf(root: string, number: number): Promise<string | null> {
+  return headOfPr(root, number);
+}
+const liveIo: PolarisIo = { rerunJob, readJobs, sessionFor, sessionPane, checksFor, testedBase, baseChecks, updateBranch, localAfter, headOf };
 
 /** Drafts and the things said no to, kept in memory: a restart drops them, the safe way to lose one. */
 const drafts = new Map<string, string>();
@@ -149,17 +191,22 @@ const discarded = new Set<string>();
 const proposals = new Map<string, string>();
 const key = (a: ActionArgs) => `${a.root}\0${a.number}\0${a.reason ?? ""}`;
 export const __draftOf = (root: string, number: number, reason: string): string | undefined => drafts.get(key({ root, number, reason }));
+/** A test writes the draft back after an approval, so replay is proven by the state guard and not by the draft being gone. */
+export const __setDraft = (root: string, number: number, reason: string, text: string): void => { drafts.set(key({ root, number, reason }), text); }; // test seam
 export const __syncConflicted = (root: string, number: number, headSha: string): boolean => syncConflict.has(`${root}\0${number}\0${headSha}`);
-export const __resetPolaris = (): void => { drafts.clear(); sent.clear(); ignored.clear(); discarded.clear(); proposals.clear(); syncConflict.clear(); synced.clear(); signalled.clear(); testedCache.clear(); settledBase.clear(); baseSink = null; jobCache.clear(); tried.clear(); lastSweep.clear(); };
+export const __resetPolaris = (): void => { drafts.clear(); sent.clear(); ignored.clear(); discarded.clear(); proposals.clear(); syncConflict.clear(); synced.clear(); signalled.clear(); woken.clear(); requests.clear(); asked.clear(); testedCache.clear(); settledBase.clear(); baseSink = null; jobCache.clear(); tried.clear(); lastSweep.clear(); };
 
 const refuse = (error: string): ActionResult => ({ ok: false, error });
 
 /** Every outside effect of Polaris goes through here, and every outcome is logged. */
-export async function executeAction(type: string, a: ActionArgs, io: PolarisIo = liveIo): Promise<ActionResult> {
+export interface ActionBy { asker?: string; approvedBy?: string }
+export async function executeAction(type: string, a: ActionArgs, io: PolarisIo = liveIo, by?: ActionBy): Promise<ActionResult> {
   const res = await run(type, a, io);
+  const what = res.outcome === "skipped-in-dry-run" ? "skipped-in-dry-run" : res.error ?? res.note ?? null;
+  const who = by?.asker ? `asked by ${by.asker}${by.approvedBy ? `, approved by ${by.approvedBy}` : ""}` : null;
   recordAction({
     actor: "polaris", action: `/polaris/${type}`, target: `${basename(a.root)} #${a.number}`, ok: res.ok,
-    detail: res.outcome === "skipped-in-dry-run" ? "skipped-in-dry-run" : res.error ?? res.note ?? null,
+    detail: who ? [what, who].filter(Boolean).join(" - ") : what,
   });
   return res;
 }
@@ -219,8 +266,9 @@ async function run(type: string, a: ActionArgs, io: PolarisIo): Promise<ActionRe
       // The person's pick wins; the match door only fills in when nothing was picked.
       const pane = a.paneId ?? (mode("match") === "use" ? (await io.sessionFor?.(a.root, a.number)) ?? undefined : undefined);
       if (!pane) return refuse(mode("match") === "use" ? "no single session works on this branch: pick the session" : "beacon-send-on-click: pick the session");
-      if (stateOfScreen(await screenOf(pane)) !== "ready") return refuse("that session is not idle");
-      const out = await promptAgent(pane, text);
+      // A test hands its own sender; live, the session must be idle and the text goes in like a person's paste.
+      if (!io.sendTo && stateOfScreen(await screenOf(pane)) !== "ready") return refuse("that session is not idle");
+      const out = io.sendTo ? await io.sendTo(pane, text) : await promptAgent(pane, text);
       if (out !== "sent") return refuse(`the session did not take it (${out})`);
       drafts.delete(key(a));
       sent.add(key(a));
@@ -256,6 +304,128 @@ async function run(type: string, a: ActionArgs, io: PolarisIo): Promise<ActionRe
       return { ok: true, outcome: "done" };
     }
   }
+}
+
+// ── an agent's ask ──
+
+/** A sync or a send an agent asked for waits here for the person. In memory: a restart loses the lot, which the CLI reports as lost-on-restart. */
+const MAX_REQUESTS = 20;
+/** Reads of a pull request's head one asker may cost per minute per ask, so a loop cannot spend one GitHub call each. */
+const ASK_WINDOW_MS = 60_000;
+const ASK_MAX = 6;
+const asked = new Map<string, number[]>();
+function askAllowed(k: string, now: number): boolean {
+  const recent = (asked.get(k) ?? []).filter((t) => now - t < ASK_WINDOW_MS);
+  if (recent.length >= ASK_MAX) { asked.set(k, recent); return false; }
+  recent.push(now);
+  asked.set(k, recent);
+  for (const [other, ts] of asked) if (other !== k && ts.every((t) => now - t >= ASK_WINDOW_MS)) asked.delete(other);
+  return true;
+}
+interface StoredRequest {
+  id: string; root: string; number: number; type: PolarisAsk; args: ActionArgs; asker: string; askerName: string; draftText?: string;
+  headSha: string; at: number; expires: number; state: PolarisRequestState; result?: string;
+}
+const requests = new Map<string, StoredRequest>();
+let changedSink: (() => void) | null = null;
+let wakeSink: ((root: string, line: string) => void) | null = null;
+/** Told when the list of requests changes, and where a line for the project's orchestrator goes (index.ts: the seat's prompt). */
+export const onPolarisRequests = (fn: (() => void) | null): void => { changedSink = fn; };
+export const onPolarisWake = (fn: ((root: string, line: string) => void) | null): void => { wakeSink = fn; };
+
+/** Expired asks stop being pending; a decided or expired one stays in the list for another 30 minutes so the agent can read how it ended. */
+function prune(now: number): void {
+  for (const [k, r] of requests) {
+    if (r.state === "pending" && r.expires <= now) { r.state = "expired"; r.result = "nobody answered within 30 minutes"; }
+    else if (r.state !== "pending" && r.expires + REQUEST_TTL_MS <= now) requests.delete(k);
+  }
+}
+const publicOf = (r: StoredRequest): PolarisActionRequest => {
+  const head = `PR #${r.number}, head ${r.headSha.slice(0, 7)}`;
+  const label = r.type === "sync" ? `Sync PR #${r.number} with its base branch`
+    : r.args.paneName ? `Send a message to ${r.args.paneName} for PR #${r.number}` : `Send a message to the session working on PR #${r.number}`;
+  return {
+    kind: "polaris-action", id: r.id, setting: `polaris.${r.type}`, label, root: r.root, who: r.asker, asker: r.asker, askerName: r.askerName, type: r.type, number: r.number,
+    state: r.state, headSha: r.headSha, ...(r.draftText !== undefined ? { draftText: r.draftText, ...(r.args.paneId ? { paneId: r.args.paneId } : {}) } : {}),
+    ...(r.result ? { result: r.result } : {}),
+    diff: r.type === "sync" ? [head, "merge the base branch into the pull request's branch on GitHub"] : [head, `type into session ${r.args.paneName ?? r.args.paneId ?? "?"}${r.args.paneName && r.args.paneId ? ` (${r.args.paneId})` : ""}:`, r.draftText ?? ""],
+    at: r.at, expires: r.expires,
+  };
+};
+/** The asks of a project, newest last. Only pending ones unless `all`: the cards draw what waits. */
+export function polarisRequests(opts: { all?: boolean } = {}, now = Date.now()): PolarisActionRequest[] {
+  prune(now);
+  return [...requests.values()].filter((r) => opts.all || r.state === "pending").map(publicOf);
+}
+export const polarisRequestType = (id: unknown): PolarisAsk | null => (typeof id === "string" ? requests.get(id)?.type ?? null : null);
+
+export interface AskResult extends ActionResult { request?: PolarisActionRequest; status?: number }
+/** An agent wants a sync or a send. A request is made only when the action could run now; `dry` runs (and is audited) as a click would, `off` refuses. */
+export async function askAction(type: PolarisAsk, a: ActionArgs, asker: string, io: PolarisIo = liveIo, now = Date.now(), askerName = asker): Promise<AskResult> {
+  const { settings } = readPolaris(a.root);
+  if (!settings.enabled) return refuse("Polaris is off for this project");
+  let args = a;
+  let draftText: string | undefined;
+  if (type === "sync") {
+    // dry and off are answered by the action itself, so they are audited the way a click is.
+    if (settings.doors.relaunch.mode !== "live") return executeAction(type, a, io, { asker });
+    if (!a.headSha || !/^[0-9a-f]{40}$/.test(a.headSha)) return refuse("sync: the head commit you saw is needed");
+  } else {
+    if (settings.doors.beacon.mode === "off") return refuse("the beacon door is off");
+    draftText = drafts.get(key(a));
+    if (!draftText) return refuse("there is no draft for this reason");
+    const pane = a.paneId ?? (settings.doors.match.mode === "use" ? (await io.sessionFor?.(a.root, a.number)) ?? undefined : undefined);
+    if (!pane) return refuse(settings.doors.match.mode === "use" ? "no single session works on this branch: name the session (paneId)" : "beacon-send-on-click: name the session (paneId)");
+    // An id from the body is a claim: it has to be a live session of this project, whatever it is called.
+    const named = a.paneId ? await (io.sessionPane ?? sessionPane)(a.root, a.paneId) : null;
+    if (a.paneId && !named) return refuse("that session is not a live session of this project: name the one working on the pull request (paneId)");
+    args = { ...a, paneId: pane, ...(named ? { paneName: named.name } : {}) };
+  }
+  // A loop of asks replaces its own pending one, so the queue cannot stop it: bound the GitHub read it costs.
+  if (!askAllowed(`${asker}\0${a.root}\0${a.number}\0${type}`, now)) return { ...refuse("too many asks for this pull request from you; wait a moment"), status: 429 };
+  // The server reads the head itself. A sync must name the one it read.
+  const head = (await io.headOf?.(a.root, a.number)) ?? null;
+  if (!head) return refuse("could not read the pull request's head from GitHub");
+  if (type === "sync" && a.headSha !== head) return refuse("the pull request moved since you read it: read it again");
+  prune(now);
+  // A newer ask replaces this agent's own older one; another agent's pending ask is not its to cancel.
+  for (const [k, r] of requests) if (r.state === "pending" && r.root === a.root && r.number === a.number && r.type === type && r.askerName === askerName) requests.delete(k);
+  // A cap per project: a queue in one project must not spend another project's room.
+  if ([...requests.values()].filter((r) => r.state === "pending" && r.root === a.root).length >= MAX_REQUESTS) return { ...refuse(`${MAX_REQUESTS} requests are already waiting for the person in this project; wait for an answer`), status: 429 };
+  const r: StoredRequest = { id: `pa_${randomBytes(12).toString("hex")}`, root: a.root, number: a.number, type, args, asker, askerName, ...(draftText !== undefined ? { draftText } : {}), headSha: head, at: now, expires: now + REQUEST_TTL_MS, state: "pending" };
+  requests.set(r.id, r);
+  changedSink?.();
+  return { ok: true, request: publicOf(r) };
+}
+
+export type PolarisDecision = { ok: true; applied: boolean; setting: string; kind: "polaris-action"; state: PolarisRequestState; outcome?: "done" | "skipped-in-dry-run"; note?: string } | { ok: false; error: string; status: number };
+/** The person's (or the phone's) answer. Who may answer is index.ts's to decide; a send is never approved in bulk. */
+export async function decidePolaris(id: string, approve: boolean, by: "person" | "phone", opts: { bulk?: boolean } = {}, io: PolarisIo = liveIo, now = Date.now()): Promise<PolarisDecision> {
+  prune(now);
+  const r = requests.get(id);
+  if (!r) return { ok: false, error: "no such request", status: 404 };
+  if (r.state !== "pending") return { ok: false, error: `this request is already ${r.state}`, status: 409 };
+  if (approve && opts.bulk && r.type === "beacon-send-on-click") return { ok: false, error: "a send is approved on its own, never with Approve all", status: 403 };
+  const setting = `polaris.${r.type}`;
+  const tell = (line: string) => wakeSink?.(r.root, `Polaris: your ${r.type === "sync" ? "sync" : "send"} request for PR #${r.number} ${line}`);
+  const end = (state: PolarisRequestState, result: string): void => { r.state = state; r.result = result; changedSink?.(); };
+  if (!approve) { end("declined", `declined by ${by === "phone" ? "the person (phone)" : "the person"}`); tell("was declined."); return { ok: true, applied: false, setting, kind: "polaris-action", state: "declined" }; }
+  // Claimed before the first await: a second click while this one reads GitHub answers 409 instead of typing twice.
+  r.state = "approved";
+  // What the person saw is what runs: the head, and for a send the draft, are read again.
+  const head = (await io.headOf?.(r.root, r.number)) ?? null;
+  if (head !== r.headSha) { end("changed", "the pull request moved since the request was made"); tell("was not run: the pull request moved. Read it and ask again."); return { ok: false, error: "the pull request moved since the request was made, so nothing ran; the agent can ask again", status: 409 }; }
+  if (r.type === "beacon-send-on-click" && drafts.get(key(r.args)) !== r.draftText) { end("changed", "the draft changed since the request was made"); tell("was not run: the draft changed. Ask again."); return { ok: false, error: "the draft changed since the request was made, so nothing was sent; the agent can ask again", status: 409 }; }
+  // The pane was checked when the ask was made; the card may be approved up to 30 minutes later, when that session can be gone.
+  if (r.type === "beacon-send-on-click" && r.args.paneId && !(await (io.sessionPane ?? sessionPane)(r.root, r.args.paneId))) {
+    end("changed", "the session is gone");
+    tell("was not run: the session is gone. Ask again.");
+    return { ok: false, error: "the session the card named is gone, so nothing was sent; the agent can ask again", status: 409 };
+  }
+  const res = await executeAction(r.type, r.args, io, { asker: r.asker, approvedBy: by });
+  end("approved", res.ok ? (res.outcome === "skipped-in-dry-run" ? "skipped-in-dry-run" : res.note ?? "done") : res.error ?? "it did not run");
+  tell(res.ok ? `was approved: ${res.outcome === "skipped-in-dry-run" ? "skipped in dry run" : "done"}.` : `was approved but did not run: ${res.error ?? "unknown"}.`);
+  return res.ok ? { ok: true, applied: res.outcome === "done", setting, kind: "polaris-action", state: "approved", ...(res.outcome ? { outcome: res.outcome } : {}), ...(res.note ? { note: res.note } : {}) } : { ok: false, error: res.error ?? "it did not run", status: 409 };
 }
 
 // ── the sweep ──
@@ -398,6 +568,8 @@ export async function polarisItems(root: string, io: PolarisIo = liveIo): Promis
 }
 
 const signalled = new Set<string>();
+/** One line to the orchestrator per pull request, head and reason. After a restart a pull request may be told once more. Never pruned: one string per head and reason for the process lifetime, the same ceiling `signalled` has. */
+const woken = new Set<string>();
 export interface BaseFixed { root: string; base: string; tipSha: string; checks: string[]; canSync: number[] }
 let baseSink: ((s: BaseFixed) => void) | null = null;
 /** Where the signal for a fixed base goes (the server tells the windows and the orchestrator). */
@@ -422,6 +594,20 @@ export async function sweep(root: string, io: PolarisIo = liveIo, now = Date.now
       signalled.add(sk);
       baseSink?.({ root, base: b.base, tipSha: b.tipSha, checks: b.checks, canSync: b.canSync });
     }
+  }
+  // diagnose wakes only in auto (click puts a button before the person); course wakes in any mode but off.
+  const wakes = { failing: settings.doors.diagnose.mode === "auto", behind: settings.doors.course.mode !== "off" };
+  for (const it of items) {
+    // An ignored pull request is one the person asked not to be told about; the wake is what that means.
+    if (it.ignored) continue;
+    const reason = it.reason === "failing" || it.reason === "behind" ? it.reason : null;
+    if (!reason || !wakes[reason]) continue;
+    const wk = `${root}\0${it.number}\0${it.headSha}\0${reason}`;
+    if (woken.has(wk)) continue;
+    woken.add(wk);
+    wakeSink?.(root, reason === "failing"
+      ? `Polaris: PR #${it.number} is red and it is not a dropped job. Read it: agentglass-ui polaris items --root ${root}`
+      : `Polaris: PR #${it.number} fell behind its base branch. Read it: agentglass-ui polaris items --root ${root}`);
   }
   for (const it of items) {
     if (it.reason !== "runner") continue;

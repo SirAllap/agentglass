@@ -140,6 +140,53 @@ describe("starting a role", () => {
     expect(ops.roleStart("scout", roles("codex"), tmpdir())).toEqual({ ok: false, error: "no-lock" });
   });
 
+  step("the same floor on the other start path: a scout has no browser, and no role runs another door", () => {
+    const dir = mkdtempSync(join(tmpdir(), "agx-locks-"));
+    const on = (provider: string) => ({
+      scout: { provider, model: "" }, builder: { provider, model: "" },
+      reviewer: { provider, model: "" }, verifier: { provider, model: "" },
+    });
+    const opencodeBash = (id: string) => {
+      const r = ops.roleStart(id, on("opencode"), dir);
+      if (!r.ok) throw new Error(r.error);
+      // The CLI refuses the person's own identity only when it knows the role.
+      expect(r.env.AGENTGLASS_ROLE).toBe(id);
+      return (JSON.parse(r.env.OPENCODE_CONFIG_CONTENT!) as { permission: { bash: Record<string, string> } }).permission.bash;
+    };
+    for (const id of ["scout", "builder", "reviewer", "verifier"]) {
+      const bash = opencodeBash(id);
+      for (const door of ["agentglass-agent", "agentglass-ui", "agentglass-cockpit-mcp"]) {
+        expect(bash[door]).toBe("deny");
+        expect(bash[`${door} *`]).toBe("deny");
+      }
+    }
+    const scoutBash = opencodeBash("scout");
+    expect(scoutBash["agentglass-browser"]).toBe("deny");
+    expect(scoutBash["agentglass-browser *"]).toBe("deny");
+    for (const id of ["builder", "reviewer", "verifier"]) {
+      const bash = opencodeBash(id);
+      expect(bash["agentglass-browser"]).toBeUndefined();
+      expect(bash["agentglass-browser *"]).toBeUndefined();
+      for (const f of ["--shar", "--acti"]) expect(bash[`*agentglass-browser*${f}*`]).toBe("deny");
+      /* `--page` is allowed on purpose: the relay serves only a page this worker
+         opened and refuses another with a sentence, so the lock must not close
+         the one flag that reaches its own tab. */
+      expect(bash["*agentglass-browser*--pag*"]).toBeUndefined();
+    }
+    const claudeDeny = (id: string) => {
+      const r = ops.roleStart(id, on("claude"), dir);
+      if (!r.ok) throw new Error(r.error);
+      return (JSON.parse(r.args[1]!) as { permissions: { deny: string[] } }).permissions.deny;
+    };
+    expect(claudeDeny("scout")).toContain("Bash(agentglass-browser:*)");
+    expect(claudeDeny("builder")).not.toContain("Bash(agentglass-browser:*)");
+    for (const id of ["scout", "builder"]) {
+      for (const door of ["agentglass-agent", "agentglass-ui", "agentglass-cockpit-mcp"]) expect(claudeDeny(id)).toContain(`Bash(${door}:*)`);
+    }
+    expect(claudeDeny("scout")).toContain("Bash(rm:*)");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   step("an unknown role is refused", () => {
     expect(ops.roleStart("cartographer", roles("claude"), tmpdir())).toEqual({ ok: false, error: "no-role" });
   });

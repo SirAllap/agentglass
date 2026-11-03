@@ -104,12 +104,13 @@ describe("the marks come from real facts, and only those", () => {
     expect(navMarks(facts({ connectionsNeed: 3 })).connections).toMatchObject({ state: "needs", count: 3 });
   });
 
-  test("on and off for the pages that are switched: remote, jira, lantern, notifications", () => {
+  test("on and off for the pages that are switched: remote, jira, notifications; watching rides on Agents", () => {
     const m = navMarks(facts({ remoteLive: false, jiraConnected: true, lanternWatching: false, notificationsOn: true }));
     expect(m.remote).toEqual({ state: "off" });
     expect(m.jira).toEqual({ state: "on" });
-    expect(m.lantern).toEqual({ state: "off" });
     expect(m.notifications).toEqual({ state: "on" });
+    expect(m.lantern).toBeUndefined();
+    expect(m.hooks).toBeUndefined();
   });
 
   test("ClickUp has a mark only while connected (its page is only there then)", () => {

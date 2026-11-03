@@ -9,8 +9,9 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { Portal } from "./Portal.tsx";
 import { LAYER } from "../lib/layers.ts";
 import { ICON } from "../lib/iconSize.ts";
-import { TagIcon } from "../lib/glyphIcons.tsx";
+import { CrossIcon, DoneIcon, TagIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { placeTip, readTip, tipDelay, TIP_DELAY_MS, TIP_QUICK_MS, type TipSpec } from "../lib/tip.ts";
+import type { ChainTip } from "../lib/chainTip.ts";
 
 const SELECTOR = "[data-tip]";
 
@@ -21,8 +22,12 @@ export function TipBody({ spec }: { spec: TipSpec }) {
         <b data-mono={spec.mono ? "1" : undefined}>{spec.name}</b>
         {spec.detail && <span className="agx-tip-m">{spec.detail}</span>}
         {spec.tag && <span className="agx-tip-tg">{spec.tag}</span>}
-        {spec.trust && <span className="agx-tip-tr" data-trust={spec.trust}>{spec.trust}</span>}
+        {/* A number is measured or estimated. "Proposed" is a note about the
+            engine, not a fact about the reading, and it belongs in the plan
+            rather than on the card. */}
+        {spec.trust && spec.trust !== "proposed" && <span className="agx-tip-tr" data-trust={spec.trust}>{spec.trust}</span>}
       </div>
+      {spec.chain && <ChainTipBody tip={spec.chain} />}
       {(spec.from || spec.how || spec.caveat) && (
         <dl className="agx-tip-dl">
           {spec.from && <><dt>From</dt><dd>{spec.from}</dd></>}
@@ -33,7 +38,6 @@ export function TipBody({ spec }: { spec: TipSpec }) {
       {spec.rows && spec.rows.length > 0 && (
         <dl className="agx-tip-dl" data-rows="1">{spec.rows.map((r) => <Fragment key={r.k}><dt>{r.k}</dt><dd>{r.v}</dd></Fragment>)}</dl>
       )}
-      {spec.needs && <div className="agx-tip-need">Needs engine: {spec.needs}</div>}
       {spec.text && (
         <div className="agx-tip-2">
           {spec.dot && <i className="agx-tip-dot" style={{ background: spec.dot }} />}{spec.text}
@@ -48,6 +52,49 @@ export function TipBody({ spec }: { spec: TipSpec }) {
           {spec.hint.right && <span className="agx-tip-r">{spec.hint.right}</span>}
         </div>
       )}
+    </>
+  );
+}
+
+export function ChainTipBody({ tip }: { tip: ChainTip }) {
+  return (
+    <>
+      <div className="agx-tip-sec">In this order</div>
+      <div className="agx-tip-ladder" data-scroll={tip.scrolls ? "1" : undefined}>
+        {tip.steps.map((s, i) => (
+          <Fragment key={s.n}>
+            {i > 0 && <div className="agx-tip-gap">{i === 1 ? tip.gap : tip.gapThen}</div>}
+            <div className="agx-tip-step" data-now={s.now ? "1" : undefined}>
+              <span className="agx-tip-num" aria-hidden="true">{s.n}</span>
+              <span className="agx-tip-eg" aria-hidden="true">{s.engine.slice(0, 1)}</span>
+              <span className="agx-tip-mdl"><small>{s.engine}{s.main ? " · Main" : ""}</small><span>{s.model}</span></span>
+              <span className="agx-tip-tag" data-kind={s.now ? "now" : s.main ? "main" : "fb"}>{s.tag}</span>
+            </div>
+          </Fragment>
+        ))}
+      </div>
+      {tip.noFallback && <p className="agx-tip-why" data-kind="none">{tip.noFallback}</p>}
+      {tip.why && <p className="agx-tip-why"><WarningIcon size={ICON.xs} /><span>{tip.why}</span></p>}
+      {tip.rounds && (
+        <>
+          <div className="agx-tip-sec">Rounds</div>
+          <div className="agx-tip-tries">
+            {tip.rounds.dots.map((on, i) => <i key={i} data-on={on ? "1" : undefined} />)}
+            <span>{tip.rounds.word}</span>
+          </div>
+        </>
+      )}
+      <div className="agx-tip-sec">Then</div>
+      <div className="agx-tip-after">
+        <span data-kind="pass"><DoneIcon size={ICON.xs} />passes to {tip.pass}</span>
+        <span data-kind="fail"><CrossIcon size={ICON.xs} />fails to {tip.fail}</span>
+      </div>
+      <div className="agx-tip-sec">Settings</div>
+      <div className="agx-tip-switch">
+        <span>Ask when it runs</span>
+        <span data-on={tip.ask ? "1" : undefined}><i aria-hidden="true" />{tip.askWord}</span>
+      </div>
+      <div className="agx-tip-foot">{tip.footer}</div>
     </>
   );
 }
@@ -137,7 +184,7 @@ export function TipHost() {
   if (!shown) return null;
   return (
     <Portal z={LAYER.menu}>
-      <div ref={card} role="tooltip" className="agx-tip" data-on={at ? "1" : undefined} data-instant={shown.instant ? "1" : undefined}
+      <div ref={card} role="tooltip" className="agx-tip" data-chain={shown.spec.chain ? "1" : undefined} data-on={at ? "1" : undefined} data-instant={shown.instant ? "1" : undefined}
         style={{ left: at?.left ?? 0, top: at?.top ?? 0, visibility: at ? "visible" : "hidden" }}>
         <TipBody spec={shown.spec} />
       </div>

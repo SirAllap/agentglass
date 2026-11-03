@@ -37,9 +37,18 @@ const LEVEL: Record<Alert["level"], { color: string; icon: ReactNode }> = {
   info: { color: "var(--info-ink)", icon: <InfoIcon size={ICON.xs} /> },
 };
 const SEV: Record<Insight["severity"], string> = { bad: "var(--error)", warn: "var(--warning)", info: "var(--info)" };
-const KIND_ICON: Record<Insight["kind"], ReactNode> = { loop: <RefreshIcon size={ICON.xs} />, spend: <FireIcon size={ICON.xs} />, errors: <CrossIcon size={ICON.xs} />, burn: <BoltIcon size={ICON.xs} />, cache: <DiskIcon size={ICON.xs} /> };
 
-export function Alerts({ alerts, agents = [], onSelectApp, bump, active = true }: { alerts: Alert[]; agents?: AgentCard[]; onSelectApp?: (app: string) => void; bump?: number; active?: boolean }) {
+/** An insight names a session as `app:first8`; a gate carries the full id.
+ *  Either is inside the selection when it names an id the board selected. */
+function refInScope(ref: string | null | undefined, ids: ReadonlySet<string> | undefined): boolean {
+  if (!ids) return true;
+  if (!ref) return false;
+  const short = ref.includes(":") ? ref.slice(ref.lastIndexOf(":") + 1) : ref;
+  for (const id of ids) if (id === short || id.startsWith(short)) return true;
+  return false;
+}const KIND_ICON: Record<Insight["kind"], ReactNode> = { loop: <RefreshIcon size={ICON.xs} />, spend: <FireIcon size={ICON.xs} />, errors: <CrossIcon size={ICON.xs} />, burn: <BoltIcon size={ICON.xs} />, cache: <DiskIcon size={ICON.xs} /> };
+
+export function Alerts({ alerts, agents = [], onSelectApp, bump, active = true, scopeIds }: { alerts: Alert[]; agents?: AgentCard[]; onSelectApp?: (app: string) => void; bump?: number; active?: boolean; scopeIds?: ReadonlySet<string> }) {
   const [insights, setInsights] = useState<Insight[]>([]);
   const [acting, setActing] = useState<Record<string, boolean>>({});
 
@@ -122,6 +131,11 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump, active = true }
     });
   };
 
+  const shownGates = useMemo(() => (scopeIds ? gates.filter((g) => refInScope(g.session_id, scopeIds)) : gates), [gates, scopeIds]);
+  const shownInsights = useMemo(() => (scopeIds ? insights.filter((i) => refInScope(i.session, scopeIds)) : insights), [insights, scopeIds]);
+  const shownAutoResolved = useMemo(() => (scopeIds ? autoResolved.filter((g) => refInScope(g.session_id, scopeIds)) : autoResolved), [autoResolved, scopeIds]);
+  const shownAlerts = useMemo(() => (scopeIds ? alerts.filter((a) => refInScope(a.agent, scopeIds)) : alerts), [alerts, scopeIds]);
+
   /*
    * One list, one count.
    *
@@ -130,11 +144,11 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump, active = true }
    * same selector, so they cannot.
    */
   const attention = useMemo(
-    () => collectAttention({ gates, insights, alerts, agents }),
-    [gates, insights, alerts, agents],
+    () => collectAttention({ gates: shownGates, insights: shownInsights, alerts: shownAlerts, agents }),
+    [shownGates, shownInsights, shownAlerts, agents],
   );
   const openCount = attention.length;
-  const empty = openCount === 0 && insights.length === 0 && autoResolved.length === 0;
+  const empty = openCount === 0 && shownInsights.length === 0 && shownAutoResolved.length === 0;
 
   return (
     <Panel
@@ -156,7 +170,7 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump, active = true }
 
         {/* control plane — pending tool calls awaiting your decision */}
         <AnimatePresence initial={false}>
-          {gates.map((g) => (
+          {shownGates.map((g) => (
             <motion.div
               key={g.id}
               initial={{ opacity: 0, y: -8, scale: 0.98 }}
@@ -199,7 +213,7 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump, active = true }
 
         {autoResolved.length > 0 && (
           <div className="mb-2">
-            {autoResolved.map((g) => (
+            {shownAutoResolved.map((g) => (
               <div
                 key={g.id}
                 className="flex items-start gap-2 rounded-xl px-2.5 py-1.5 mb-1.5"
@@ -222,7 +236,7 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump, active = true }
         )}
 
         <AnimatePresence initial={false}>
-          {alerts.map((a) => {
+          {shownAlerts.map((a) => {
             const l = LEVEL[a.level];
             return (
               <motion.div
@@ -249,11 +263,11 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump, active = true }
           })}
         </AnimatePresence>
 
-        {insights.length > 0 && (
+        {shownInsights.length > 0 && (
           <>
             {alerts.length > 0 && <div className="text-[10px] uppercase tracking-[0.18em] t-dim2 px-1 pt-1 pb-1.5">Insights</div>}
             <AnimatePresence initial={false}>
-              {insights.map((i) => {
+              {shownInsights.map((i) => {
                 const color = SEV[i.severity];
                 return (
                   <motion.div

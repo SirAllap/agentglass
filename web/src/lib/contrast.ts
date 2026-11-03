@@ -11,6 +11,8 @@
 // and lifts only the ones that fall under a contrast target, keeping the hue
 // and keeping the ladder — a lifted `--text3` is never brighter than `--text2`.
 
+import { ACCENTS } from "../../../shared/palettes.ts";
+
 export type Rgb = { r: number; g: number; b: number };
 
 /** The eight ANSI colours a palette can name twice, normal and bright. */
@@ -222,6 +224,52 @@ export function chipInk(fill?: string | null): string {
   return onPrimaryInk(fill) ?? "#fff";
 }
 
+/** The tones a card's strip can be washed in: its four semantic states, the
+ *  muted tier, and `--text4`, which is the strip's default before any state is
+ *  known. `--merged` is not theme data — it is one `:root` colour in index.css,
+ *  the same for every palette. Pinned to that stylesheet by the strip test. */
+export const STRIP_TONES = ["--success", "--warning", "--error", "--info", "--text3", "--text4"] as const;
+export const STRIP_MERGED = "#8b8fe8";
+/** The strip's wash over `--bg3`, and the share of the accent in the tag's own
+ *  fill. Both are written in index.css and asserted there by the strip test. */
+export const STRIP_WASH = 0.12;
+export const STRIP_TAG_TINT = 0.08;
+
+/**
+ * The ink the unread tag's words wear.
+ *
+ * The tag is filled with 8% of the accent over the strip's 12% wash, and the
+ * accent is the person's choice, so a share of the accent in the words cannot
+ * clear 4.5:1 on every palette (measured: 35% failed on 17 of the 37 shipped
+ * themes, worst 2.19:1). The words are the theme's own text instead, lifted
+ * toward the pole against the harshest fill the seven accents and the theme's
+ * own primary can make — a theme already bright enough is left alone.
+ */
+export function stripInk(vars: Record<string, string>, accents: string[]): string | undefined {
+  const text = parseColor(vars["--text"] ?? "");
+  const bg = parseColor(vars["--bg3"] || vars["--bg2"] || vars["--bg"] || "");
+  if (!text || !bg) return undefined;
+  const grounds: Rgb[] = [];
+  for (const tone of [...STRIP_TONES.map((k) => vars[k]), STRIP_MERGED]) {
+    const t = parseColor(tone ?? "");
+    if (!t) continue;
+    const wash = mix(bg, t, STRIP_WASH);
+    for (const a of accents) {
+      const accent = parseColor(a);
+      if (accent) grounds.push(mix(wash, accent, STRIP_TAG_TINT));
+    }
+  }
+  if (!grounds.length) return undefined;
+  const pole: Rgb = luminance(text) >= luminance(bg) ? { r: 255, g: 255, b: 255 } : { r: 0, g: 0, b: 0 };
+  // 40 steps: finer than the eye resolves. The 0.05 over the target is headroom
+  // for the 8-bit rounding between these steps and the fill the browser paints.
+  for (let i = 0; i <= 40; i++) {
+    const c = mix(text, pole, i / 40);
+    if (grounds.every((g) => contrast(c, g) >= 4.55)) return toHex(c);
+  }
+  return toHex(pole);
+}
+
 /**
  * `--success-ink` etc. alongside the tint they are read off — one pass per
  * theme rather than per screen, the same shape as `floorTiers`.
@@ -242,6 +290,8 @@ export function inkTints(vars: Record<string, string>, ansi?: Shades): Record<st
   }
   const on = vars["--primary"] && onPrimaryInk(vars["--primary"], vars["--bg"], text);
   if (on) out["--on-primary"] = on;
+  const strip = stripInk(vars, [...ACCENTS.map((a) => a.primary), vars["--primary"] ?? ""]);
+  if (strip) out["--strip-ink"] = strip;
   return out;
 }
 

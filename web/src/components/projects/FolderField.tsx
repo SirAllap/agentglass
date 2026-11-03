@@ -13,7 +13,9 @@ import { BranchIcon, FolderIcon } from "../../lib/glyphIcons.tsx";
 import { INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
 import { HAIR, HUE, ring, wash, type Hue } from "./ui.tsx";
 
-export function FolderField({ value, onChange, onSubmit, placeholder, autoFocus, tone, trailing, label, describedBy }: {
+export function FolderField({ id, value, onChange, onSubmit, placeholder, autoFocus, tone, trailing, label, describedBy }: {
+  /** So a step's own `<label htmlFor>` names this input instead of nothing. */
+  id?: string;
   value: string; onChange: (v: string) => void; onSubmit?: () => void; placeholder: string; autoFocus?: boolean;
   /** The field's verdict: its edge goes green or red, not only the text under it. */
   tone?: Extract<Hue, "success" | "error">;
@@ -63,7 +65,7 @@ export function FolderField({ value, onChange, onSubmit, placeholder, autoFocus,
   return (
     <div className="min-w-0">
       <div className="relative flex items-center">
-        <input ref={ref} value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={onKey} aria-label={label} aria-describedby={describedBy}
+        <input ref={ref} id={id} value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={onKey} aria-label={label} aria-describedby={describedBy}
           aria-invalid={tone === "error"} data-suggestions={sugg.length ? "1" : undefined} placeholder={placeholder} spellCheck={false} autoComplete="off" autoFocus={autoFocus}
           className={`w-full font-mono ${INPUT}`} style={{ ...INPUT_STYLE, ...edge, paddingRight: trailing ? 34 : undefined }} />
         {trailing && <span className="absolute right-2.5 inline-flex">{trailing}</span>}

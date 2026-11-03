@@ -598,7 +598,7 @@ describe("what you have queued on this file", () => {
 /*
  * The verdict, which is about GitHub and not about CI.
  *
- * Found by the agent that wrote the sections above and left as pre-existing:
+ * Found by the agent that wrote the sections above and left as already there:
  * with `mergeState: "CLEAN"` and nothing reported, this box drew "◯ Not
  * mergeable" over a repository that would have merged it on the spot. The line
  * came from `mergeBlockedWhy`, which answers "why is it blocked" and has no

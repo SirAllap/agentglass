@@ -5,7 +5,7 @@ import {
 } from "./views.ts";
 import { getRailTips, subscribeRailTips } from "../../lib/railTips.ts";
 import { chordFor, chordLabel, chords, subscribeBindings } from "../../lib/keybindings.ts";
-import { PortsIcon, ResourcesIcon } from "../Header.tsx";
+import { ResourcesIcon } from "../Header.tsx";
 import { ContextMenu as RailMenu, MenuItem } from "../ContextMenu.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { railActiveColor } from "../../lib/railAccent.ts";
@@ -25,7 +25,7 @@ const BY_ID = new Map(VIEWS.map((v) => [v.id, v] as const));
  *  list with the dragged view taken out. */
 type Slot = { place: RailPlace; index: number };
 
-export type RailPip = { count?: number };
+export type RailPip = { count?: number; dot?: boolean };
 
 /** Icon-only switcher down the side of the workspace.
  *
@@ -85,9 +85,9 @@ export function ViewRail({
    *  settings. "Close the workspace to change a setting, then open it again"
    *  is not a workflow, it is a missing button. */
   onSettings: () => void;
-  /** Ports and resources, the same pair the header carries, in the same order —
-   *  so the machine is looked at from one place whichever surface you are on. */
-  onMachine: (tab: "ports" | "resources") => void;
+  /** The machine panel. One icon, because Ports, Resources and Locks are tabs
+   *  of that panel rather than three destinations. */
+  onMachine: (tab: "resources") => void;
   pips?: Partial<Record<ViewId, RailPip>>;
 }) {
   // A quiet dot, never a popup or a notification: something left behind is
@@ -235,7 +235,7 @@ export function ViewRail({
           setTimeout(() => setLifted(true), 0);
         }}
         onDragEnd={endDrag}
-        className={`${dragging ? "" : "agw-tip "}relative h-11 min-h-6 shrink w-full grid place-items-center rounded-lg transition-colors`}
+        className={`${dragging ? "" : "agw-tip "}relative h-11 min-h-[30px] shrink-0 w-full grid place-items-center rounded-lg transition-colors`}
         // The modifier binding, not the bare letter. Inside the workspace the
         // letters no longer navigate — they belong to whatever has focus,
         // usually a shell — and a tooltip advertising a key that does nothing
@@ -262,6 +262,12 @@ export function ViewRail({
         {pip?.count ? (
           <span className="absolute top-[5px] right-[6px] min-w-[14px] h-[14px] px-1 grid place-items-center rounded-full text-[10px] font-bold tabular-nums"
             style={{ background: "var(--success)", color: "#06281c" }}>{pip.count}</span>
+        ) : pip?.dot ? (
+          /* A presence dot rather than a number: the count is not what the
+             person acts on, only that something arrived. Same corner as the
+             count, and the ring keeps it legible over the icon. */
+          <span className="absolute top-[6px] right-[7px] w-[6px] h-[6px] rounded-full"
+            style={{ background: "var(--info)", boxShadow: "0 0 0 2px var(--surface-nav)" }} />
         ) : null}
       </button>
     );
@@ -321,7 +327,14 @@ export function ViewRail({
         if (dragId && !e.currentTarget.contains(e.relatedTarget as Node | null)) setSlot(null);
       }}
       onDrop={commit}
-      className="shrink-0 flex flex-col gap-1 p-2 overflow-visible"
+      /* The rail scrolls rather than compress: every button keeps the height
+         its 26px icon needs, and a short window reaches the ones below the fold
+         by scrolling this strip. A 24px floor let four 22px icons paint over the
+         button beneath them at 240px. Tooltips come from TipHost, so nothing is
+         clipped by this box. The bar is hidden, because 7px of a 52px strip is a
+         sixth of it and a pill that narrows with the window is a rhythm change;
+         the wheel and the arrow keys still scroll it. */
+      className="shrink-0 flex flex-col gap-1 p-2 overflow-y-auto agw-noscrollbar"
       style={{
         width: RAIL_W,
         /* THE RAIL IS CHROME, and it was painting the content's own colour.
@@ -345,7 +358,7 @@ export function ViewRail({
           "put it at the bottom of the top group", and a container sized to its
           contents would have quietly refused. */}
       <div
-        className="flex-auto min-h-0 flex flex-col gap-1"
+        className="flex-[1_0_auto] min-h-0 flex flex-col gap-1"
         onDragOver={(e) => overDrawer(e, "work")}
         onDrop={commit}
       >
@@ -353,7 +366,7 @@ export function ViewRail({
       </div>
 
       <div
-        className="pt-2 min-h-0 flex flex-col gap-1"
+        className="pt-2 min-h-0 shrink-0 flex flex-col gap-1"
         style={{ borderTop: "1px solid color-mix(in srgb, var(--primary) 10%, transparent)" }}
         onDragOver={(e) => overDrawer(e, "utility")}
         onDrop={commit}
@@ -371,13 +384,10 @@ export function ViewRail({
         {dragging && !base.utility.length && !at(slot, "utility", 0) && <div className="h-6" />}
       </div>
 
-      {/* This cluster is the way back — Ports, Resources, Settings — and must
-          never be pushed off the bottom: a short window cut Resources off. It
-          once held its size (`shrink-0`) and the work drawer, which could shrink
-          to nothing, painted over the views under it; now every group and every
-          button gives way together, down to a 24 px floor (the icon is 22), so
-          at 520 px nothing overlaps (measured: 5 overlaps before, 0 after). */}
-      <div className="min-h-0 flex flex-col gap-1">
+      {/* This cluster is the way back — Resources and Settings — and it keeps
+          its height: the nav scrolls, so it is reachable at any window height
+          instead of being squeezed or pushed out. */}
+      <div className="shrink-0 flex flex-col gap-1">
         {/* A second hairline, because everything below is not a view at all:
             these open OVER whatever you are in and hand it straight back. A
             divider is the cheapest way to say "these do not change where you
@@ -425,7 +435,7 @@ export function ViewRail({
             data-tip={dragging
               ? "Drop to take it off the rail — it comes back from here"
               : `Hidden views · ${hiddenViews.length} put away`}
-            className="agw-tip relative h-10 min-h-6 shrink w-full grid place-items-center rounded-lg transition-colors"
+            className="agw-tip relative h-10 min-h-[30px] shrink-0 w-full grid place-items-center rounded-lg transition-colors"
             style={{
               color: aimingHidden ? "var(--error)" : restoreAt ? "var(--primary-hover)" : "var(--text4)",
               // Only while something is in the air. A dashed outline the rest of
@@ -448,19 +458,10 @@ export function ViewRail({
         )}
 
         <button
-          onClick={() => onMachine("ports")}
-          aria-label="Ports"
-          data-tip="Ports · what is listening, and from which checkout"
-          className="agw-tip relative h-10 min-h-6 shrink w-full grid place-items-center rounded-lg transition-colors"
-          style={{ color: "var(--text4)" }}
-        >
-          <PortsIcon size={ICON.rail} />
-        </button>
-        <button
           onClick={() => onMachine("resources")}
           aria-label="Resources"
-          data-tip="Resources · CPU, memory and disk, by checkout"
-          className="agw-tip relative h-10 min-h-6 shrink w-full grid place-items-center rounded-lg transition-colors"
+          data-tip="Resources · CPU, memory, disk, listening ports, locks and left-behind processes"
+          className="agw-tip relative h-10 min-h-[30px] shrink-0 w-full grid place-items-center rounded-lg transition-colors"
           style={{ color: "var(--text4)" }}
         >
           <ResourcesIcon size={ICON.rail} />
@@ -474,7 +475,7 @@ export function ViewRail({
           onClick={onSettings}
           aria-label="Settings"
           data-tip="Settings · preferences, exports, shortcuts"
-          className="agw-tip relative h-10 min-h-6 shrink w-full grid place-items-center rounded-lg transition-colors"
+          className="agw-tip relative h-10 min-h-[30px] shrink-0 w-full grid place-items-center rounded-lg transition-colors"
           style={{ color: "var(--text4)" }}
         >
           <RailGear size={ICON.rail} />

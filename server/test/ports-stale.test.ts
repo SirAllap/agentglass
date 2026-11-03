@@ -84,6 +84,19 @@ describe("duplicatePids", () => {
     expect(duplicatePids([row(1, "/tmp/r"), row(1, "/tmp/r")]).size).toBe(0);
   });
 
+  test("one program on one port with two pids is one listener, not a duplicate", () => {
+    // Measured: a chromium opened one port on 127.0.0.1 and ::1 from two pids
+    // with no visible kinship, and Clean up listed the one app as "Duplicates
+    // :9440 x2 keep".
+    const rows = [{ ...row(10, "/home/a/.config/chromium", "chromium"), port: 9440 }, { ...row(11, "/home/a/.config/chromium", "chromium"), port: 9440 }];
+    expect(duplicatePids(rows).size).toBe(0);
+  });
+
+  test("two copies on two ports are still duplicates", () => {
+    const rows = [{ ...row(10, "/code/orbit", "vite"), port: 5173 }, { ...row(11, "/code/orbit", "vite"), port: 5174 }];
+    expect([...duplicatePids(rows)].sort()).toEqual([10, 11]);
+  });
+
   test("different folders, different programs, other users' processes are not", () => {
     expect(duplicatePids([row(1, "/tmp/a"), row(2, "/tmp/b")]).size).toBe(0);
     expect(duplicatePids([row(1, "/code/orbit", "vite"), row(2, "/code/orbit", "bun")]).size).toBe(0);

@@ -21,6 +21,7 @@ import type { PrCheckRollup, PrSummary } from "../../../shared/types.ts";
 import { finishedKind } from "../../../shared/prClosed.ts";
 import { staleApproval } from "../../../shared/mergeBlockers.ts";
 import { suggestedAction, type Filed } from "./prLanes.ts";
+import { unreadTitle, type Unread } from "../../../shared/prUnread.ts";
 import type { TrackerBlock } from "./prCardBlock.ts";
 import type { CardFace, CardReviewers } from "./cardReviewers.ts";
 import { stalledDays } from "./prCardZones.ts";
@@ -107,6 +108,8 @@ export interface CardView {
   third: Cell & { add: number; del: number; addShare: number | null };
   /** A finished card's line about what is left on this computer; null when nobody asked or the answer is not in. */
   leftover: LeftoverLine | null;
+  /** What was said on it since you last looked: `3 new remarks` in the strip, the exact sentence in its tooltip and the card's label. */
+  unread: { text: string; title: string } | null;
   /** The merged card's second cell. */
   mergedInto: Cell | null;
   event: { text: string; empty: boolean };
@@ -284,15 +287,42 @@ function primaryFor(p: Facts, filed: Filed, kind: CardKind, busy: boolean, readO
   return { ...PRIMARY[id], title: lock ? "Read-only: the token has no write access" : PRIMARY[id].title, disabled: busy || lock, lock };
 }
 
+/** The facts the Update slot is decided from: the card's own, and a lane sync's row. */
+export interface UpdateFacts {
+  isDraft: boolean;
+  mergeable: string;
+  baseRefName: string;
+  headRefName: string;
+}
+
+/** Why the Update slot is not offered. `conflict` and `read-only` draw "Open"; `draft` draws "Mark ready"; `up-to-date` is the quiet text. */
+export type UpdateRefusal = "draft" | "read-only" | "conflict" | "up-to-date";
+
+/**
+ * Whether the Update control is offered, and if not, why.
+ *
+ * Extracted so the lane's "Sync N" asks the same question the card's button
+ * answers: one rule, two surfaces. A lane that offered to sync a draft the
+ * card itself will not update would be two answers to one question.
+ */
+export function updateGate(p: Pick<UpdateFacts, "isDraft" | "mergeable">, behind: number | null, readOnly: boolean): { offered: boolean; reason: UpdateRefusal | null } {
+  if (p.isDraft) return { offered: false, reason: "draft" };
+  if (readOnly) return { offered: false, reason: "read-only" };
+  if (p.mergeable === "CONFLICTING") return { offered: false, reason: "conflict" };
+  if (behind && behind > 0) return { offered: true, reason: null };
+  return { offered: false, reason: "up-to-date" };
+}
+
 /** The slot beside it: Mark ready on a draft, Open where nothing else moves, Update when behind, else the quiet "Up to date". */
-function secondaryFor(p: Facts, kind: CardKind, behind: number | null, readOnly: boolean, primary: PrimaryId): Secondary {
+export function secondaryFor(p: UpdateFacts, kind: CardKind, behind: number | null, readOnly: boolean, primary: PrimaryId): Secondary {
   if (kind === "finished") return { id: null, label: "", title: "", upToDate: false };
-  if (p.isDraft) return { id: "draft", label: "Mark ready", title: "Mark this draft ready for review", upToDate: false };
-  if (readOnly || p.mergeable === "CONFLICTING") {
+  const gate = updateGate(p, behind, readOnly);
+  if (gate.offered) return { id: "update", label: `Update · ${behind}`, title: `Merge ${p.baseRefName} into ${p.headRefName}`, upToDate: false };
+  if (gate.reason === "draft") return { id: "draft", label: "Mark ready", title: "Mark this draft ready for review", upToDate: false };
+  if (gate.reason === "read-only" || gate.reason === "conflict") {
     return primary === "open" ? { id: null, label: "", title: "", upToDate: false }
       : { id: "open", label: "Open", title: "Open beside the board", upToDate: false };
   }
-  if (behind && behind > 0) return { id: "update", label: `Update · ${behind}`, title: `Merge ${p.baseRefName} into ${p.headRefName}`, upToDate: false };
   return { id: null, label: "Up to date", title: "Nothing to update", upToDate: true };
 }
 
@@ -337,8 +367,12 @@ export function cardView(o: {
   leftovers?: string;
   /** The local inventory's answer for a merged one; absent (not asked) offers no cleanup. */
   leftoverState?: LeftoverState;
+  /** Remarks from other people since the mark this browser keeps for it; null or absent is silence. */
+  unread?: Unread | null;
   /** A Clean up of it is running now. */
   cleaning?: boolean;
+  /** The update just finished and GitHub is being read for its new state: the event line says so instead of the old one. `expired` is past the ceiling. */
+  refreshing?: "reading" | "expired" | null;
   now?: number;
 }): CardView {
   const { p, filed } = o;
@@ -366,7 +400,8 @@ export function cardView(o: {
   /* Clean up is offered only once the local inventory found something (lib/leftovers.ts): not while it is read, not when it failed, not when there is nothing. */
   const offer = offerFor(o.leftoverState, "card");
   const clean = o.leftovers !== undefined || offer.button;
-  const primary = primaryFor(p, filed, kind, !!o.busy || !!o.cleaning, readOnly, clean);
+  // While the new checks are being read the card still holds the old green; Merge waits for the real state.
+  const primary = primaryFor(p, filed, kind, !!o.busy || !!o.cleaning || o.refreshing === "reading", readOnly, clean);
   const add = p.additions ?? 0, del = p.deletions ?? 0;
   const merged = p.state === "MERGED";
   const review = reviewCell(p, o.reviewers, kind, v);
@@ -378,7 +413,7 @@ export function cardView(o: {
   const b = branchCell(p, kind, behind, checking, !!o.asking && behind === null);
   return {
     kind,
-    aria: `#${p.number} ${p.title}. ${v.text}`,
+    aria: `#${p.number} ${p.title}. ${v.text}${o.unread ? `. ${unreadTitle(o.unread)}` : ""}`,
     tone: v.tone,
     strip: {
       text: v.text, icon: v.icon,
@@ -392,8 +427,13 @@ export function cardView(o: {
     branch: merged ? { label: "Merged", tone: "merged", word: `into ${p.baseRefName}`, title: `Merged into ${p.baseRefName}` } : b,
     third: changes,
     leftover: kind === "finished" ? leftoverLine(o.leftoverState, !!o.cleaning) : null,
+    unread: o.unread ? { text: `${cap99(o.unread.count)} new remark${o.unread.count === 1 ? "" : "s"}`, title: unreadTitle(o.unread) } : null,
     mergedInto: null,
-    event: { text: eventText(p, filed, v.text, quiet), empty: false },
+    event: o.refreshing === "expired"
+      ? { text: "GitHub has not answered in 45 s · showing the last read", empty: false }
+      : o.refreshing === "reading"
+        ? { text: "Reading the new checks from GitHub…", empty: false }
+        : { text: eventText(p, filed, v.text, quiet), empty: false },
     tracker: trackerSlot(o.tracker, o.hasTaskProvider),
     primary,
     secondary: secondaryFor(p, kind, behind, readOnly, primary.id),

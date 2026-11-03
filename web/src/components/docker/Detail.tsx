@@ -63,7 +63,7 @@ export function Detail({
         <FactCards c={c} stat={stat} onOpenPort={onOpenPort} />
       </div>
 
-      <LogView key={`log-${c.id}`} id={c.id} tail={tail} onTail={onTail} running={(c.state || "").toLowerCase() === "running"} errorTick={errorTick} />
+      <LogView key={`log-${c.id}`} id={c.id} tail={tail} onTail={onTail} running={(c.state || "").toLowerCase() === "running"} errorTick={errorTick} container={c} />
 
       <div className="dk-folds" key={`folds-${c.id}`}>
         <Fold id="env" label="Environment" note={env ? envSummary(env) : undefined} open={open.env} onToggle={onToggle}>

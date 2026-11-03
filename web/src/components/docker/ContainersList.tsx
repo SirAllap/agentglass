@@ -58,7 +58,10 @@ export function ContainersList({
   };
 
   return (
-    <div className="agx-scroll" style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "14px 18px 18px" }}>
+    // The extra 44px at the bottom is the floating bench button's box, which
+    // rests in this corner: without it the last container's own actions sit
+    // under the button and the row cannot be scrolled clear of it.
+    <div className="agx-scroll" style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "14px 18px 62px" }}>
       {down && <DaemonBanner error={down.error} age={down.at ? ageWords(Date.now() - down.at) : undefined} onTry={onTry} />}
       <div className={down ? "dk-dimmed" : undefined} aria-disabled={down ? true : undefined}>
         <Say t={t} />

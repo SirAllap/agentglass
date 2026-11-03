@@ -328,8 +328,9 @@ export function Badge({ tint, fill = tint, wash = 10, outlined, tight, clip, onC
  * is on; a box around the group says nothing the tint has not already said.
  */
 export function Segmented<T extends string>({ value, options, onChange, label, track, disabled, compact }: {
-  value: T | undefined;
-  options: readonly { id: T; label: ReactNode; title?: string }[];
+  /** "" is a choice of its own on the rows that offer one ("its default"). */
+  value: T | "" | undefined;
+  options: readonly { id: T; label: ReactNode; title?: string; disabled?: boolean }[];
   onChange: (v: T) => void;
   /** For screen readers — the question the set answers. */
   label: string;
@@ -347,8 +348,8 @@ export function Segmented<T extends string>({ value, options, onChange, label, t
     return (
       <span className="agx-seg" role="group" aria-label={label}>
         {options.map((o) => (
-          <button key={o.id} type="button" title={o.title} onClick={() => onChange(o.id)} disabled={disabled}
-            aria-pressed={value === o.id} className="agx-seg-b disabled:cursor-not-allowed">
+          <button key={o.id} type="button" title={o.title} onClick={() => onChange(o.id)} disabled={disabled || o.disabled}
+            aria-pressed={value === o.id} className="agx-seg-b disabled:cursor-not-allowed disabled:opacity-45">
             {o.label}
           </button>
         ))}

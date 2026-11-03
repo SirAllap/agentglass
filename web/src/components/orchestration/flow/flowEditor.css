@@ -1,0 +1,961 @@
+/* The Flow editor, ported from the approved mockup. Every class carries the fe- prefix: the mockup used bare names (btn, field, col) that other screens own. */
+/* The mockup's sans face, as on the Settings screen; mono stays on the rules
+   that name it, for an engine, a model, a command or a number. */
+.fe-root { --g-general: #6b7bb8; --g-workspace: #3f9a93; --g-agents: #d98a6c; --g-library: #c4982f; --g-connections: #5c8fc4; font-family: var(--font-prose); }
+.fe-badge { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 10px; border-radius: 99px; font-size: 11.5px; font-weight: 600; line-height: 1; white-space: nowrap; flex: none; }
+.fe-badge i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+.fe-badge[data-tone="ok"] { background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--success-ink); }
+.fe-badge[data-tone="warn"] { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning-ink); }
+.fe-badge[data-tone="err"] { background: color-mix(in srgb, var(--error) 14%, transparent); color: var(--error-ink); }
+.fe-badge[data-tone="info"] { background: color-mix(in srgb, var(--info) 14%, transparent); color: var(--info-ink); }
+.fe-badge[data-tone="off"] { box-shadow: inset 0 0 0 1px var(--surface-line); color: var(--text3); }
+.fe-badge[data-tone="off"] i { background: transparent; box-shadow: inset 0 0 0 1.5px currentColor; }
+
+.fe-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 11px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text2);
+  font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.fe-btn:hover { border-color: var(--border2); color: var(--text); background: color-mix(in srgb, var(--text) 3%, var(--bg)); }
+.fe-btn[data-tone="primary"] { background: var(--text); border-color: var(--text); color: var(--bg); }
+.fe-btn[data-tone="primary"]:hover { background: var(--primary-hover); border-color: var(--primary-hover); color: var(--bg); }
+.fe-btn[data-size="sm"] { height: 24px; padding: 0 9px; font-size: 11.5px; border-radius: 7px; }
+.fe-btn[data-tone="quiet"] { border-color: transparent; background: transparent; }
+.fe-btn[data-tone="quiet"]:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+.fe-btn[data-tone="danger"] { color: var(--error-ink); border-color: color-mix(in srgb, var(--error) 34%, var(--border)); }
+.fe-btn:focus-visible, .fe-toc a:focus-visible, .fe-nav-row:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* The square a lone glyph lives in: HIT is 26. */
+.fe-sq { width: 26px; height: 26px; padding: 0; display: inline-grid; place-items: center; border-radius: 7px; border: 1px solid transparent; background: transparent; color: var(--text3); cursor: pointer; }
+.fe-sq:hover { background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); }
+.fe-sq:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+
+/* ── the scope row and its sentence ──────────────────────────────────── */
+.fe-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 2px 0 8px; }
+.fe-seg { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; border-radius: 10px; background: var(--surface-inset); }
+.fe-seg > button { appearance: none; border: 1px solid transparent; background: transparent; cursor: pointer; padding: 4px 11px; border-radius: 8px; font-size: 12px; font-weight: 600; color: var(--text3); white-space: nowrap; }
+.fe-seg > button[aria-pressed="true"] { background: var(--bg); color: var(--text); border-color: var(--border); box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 14%, transparent); }
+.fe-seg .fe-own { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--info); vertical-align: middle; }
+.fe-exit { display: inline-flex; align-items: center; gap: 3px; padding: 1px 5px; border-radius: 4px; background: var(--surface-inset); white-space: nowrap; }
+.fe-exit[data-kind="pass"] { color: var(--success-ink); background: color-mix(in srgb, var(--success) 10%, transparent); }
+.fe-exit[data-kind="fail"] { color: var(--warning-ink); background: color-mix(in srgb, var(--warning) 12%, transparent); }
+.fe-exit[data-kind="wait"] { color: var(--info-ink); background: color-mix(in srgb, var(--info) 10%, transparent); }
+.fe-sel { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px 0 9px; border: 1px solid var(--border2); border-radius: 7px; background: var(--bg); font-size: 11.5px; color: var(--text); min-width: 148px; justify-content: space-between; }
+.fe-sel svg { color: var(--text3); flex: none; }
+.fe-stepper { display: inline-flex; align-items: center; gap: 0; border: 1px solid var(--border2); border-radius: 7px; background: var(--bg); height: 28px; }
+.fe-stepper button { width: 24px; height: 26px; display: grid; place-items: center; border: 0; background: none; color: var(--text3); cursor: pointer; }
+.fe-stepper button:hover { color: var(--text); background: color-mix(in srgb, var(--text) 6%, transparent); }
+.fe-stepper span { min-width: 26px; text-align: center; font-family: var(--font-mono); font-size: 12px; font-weight: 600; }
+.fe-stepper small { padding-right: 8px; font-size: 10.5px; color: var(--text3); }
+.fe-scrim { position: absolute; inset: 0; z-index: 40; display: flex; align-items: stretch; justify-content: flex-end; background: color-mix(in srgb, var(--text) 26%, transparent); }
+.fe-sheethead { flex: none; display: flex; align-items: flex-start; gap: 10px; padding: 14px 16px 12px; border-bottom: 1px solid var(--surface-line); }
+.fe-sheethead .fe-ico { width: 28px; height: 28px; flex: none; border-radius: 9px; display: grid; place-items: center; background: color-mix(in srgb, var(--g-agents) 17%, transparent); color: color-mix(in srgb, var(--g-agents) 74%, var(--text)); }
+.fe-sheethead h2 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+.fe-sheethead p { margin: 2px 0 0; font-size: 11.5px; color: var(--text3); line-height: 1.4; }
+.fe-sheethead .fe-sp { flex: 1; }
+.fe-sheetbody { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 12px 16px 18px; }
+.fe-sheetfoot { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--surface-line); background: color-mix(in srgb, var(--bg2) 40%, var(--bg)); }
+.fe-sheetfoot .fe-sp { flex: 1; }
+
+/* Two paths, side by side as tabs: the same sheet, not two dialogs. */
+
+.fe-field { display: grid; align-content: start; gap: 4px; margin-bottom: 11px; }
+.fe-field > label { font-size: 11.5px; font-weight: 650; color: var(--text2); }
+.fe-field > small { font-size: 10.5px; color: var(--text3); line-height: 1.4; }
+.fe-ta:focus-visible, .fe-sel:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.fe-ta { width: 100%; min-height: 96px; padding: 8px 10px; border: 1px solid var(--border2); border-radius: 7px; background: var(--bg); font-family: var(--font-mono); font-size: 10.5px; line-height: 1.55; color: var(--text2); resize: vertical; }
+.fe-two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.fe-three { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+
+.fe-checks { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--bg2) 40%, var(--bg)); }
+.fe-check { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text2); }
+.fe-check .fe-box { width: 15px; height: 15px; flex: none; border: 1.5px solid var(--border2); border-radius: 4px; display: grid; place-items: center; background: var(--bg); color: transparent; }
+.fe-check[data-on] .fe-box { background: var(--text); border-color: var(--text); color: var(--bg); }
+.fe-check[data-off] { color: var(--text4); }
+.fe-check small { color: var(--text3); font-size: 10.5px; }
+.fe-switch { display: inline-flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text2); }
+.fe-switch .fe-track { width: 32px; height: 18px; flex: none; border-radius: 99px; background: var(--bg4); position: relative; transition: background 0.15s; }
+.fe-switch .fe-track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--bg); box-shadow: 0 1px 2px var(--shadow); transition: transform 0.15s; }
+.fe-switch[data-on] .fe-track { background: var(--success); }
+.fe-switch[data-on] .fe-track::after { transform: translateX(14px); }
+
+/* The chain editor: the mockup's .chain, .link and its numbered Main row. */
+.fe-chainlist { display: grid; gap: 6px; }
+.fe-chainrow { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border: 1px solid var(--surface-line); border-radius: 10px; background: var(--surface-card); font-size: 12.5px; }
+.fe-chainrow .fe-n { width: 20px; height: 20px; flex: none; display: grid; place-items: center; border-radius: 50%; border: 1px solid var(--surface-line); background: var(--surface-inset); font-family: var(--font-mono); font-size: 11px; font-weight: 650; color: var(--text3); }
+.fe-chainrow code { font-family: var(--font-mono); font-size: 12px; }
+.fe-chainrow .fe-sp { flex: 1; }
+.fe-chainrow[data-first] { border-color: color-mix(in srgb, var(--primary) 35%, var(--surface-line)); background: color-mix(in srgb, var(--primary) 8%, var(--surface-card)); }
+.fe-chainrow .fe-tag { padding: 1px 9px; border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--surface-line)); border-radius: 999px; background: color-mix(in srgb, var(--primary) 12%, var(--surface-card)); color: var(--primary); font-size: 11.5px; font-weight: 600; }
+.fe-chainrow .fe-eg { width: 15px; height: 15px; flex: none; display: inline-grid; place-items: center; border-radius: 5px; color: var(--on-primary); font-size: 9px; font-weight: 800; }
+.fe-chainrow .fe-eg[data-engine="claude"] { background: var(--warning); }
+.fe-chainrow .fe-eg[data-engine="opencode"] { background: var(--success); }
+.fe-chainrow .fe-eg[data-engine="codex"] { background: var(--info); }
+.fe-chainrow .fe-fbe { flex: none; min-width: 112px; max-width: 132px; }
+.fe-chainrow .fe-fbm { flex: 1 1 auto; min-width: 0; max-width: 210px; }
+.fe-chainrow .fe-gr { color: var(--text4); cursor: grab; }
+.fe-chainrow .fe-gr:active { cursor: grabbing; }
+.fe-chainadd { display: flex; align-items: center; gap: 6px; justify-self: start; height: 30px; padding: 0 10px; border: 1px solid var(--border2); border-radius: 9px; background: var(--surface-card); color: var(--text); font-size: 12.5px; cursor: pointer; }
+.fe-chainadd:hover { border-color: var(--text2); }
+.fe-chainadd:disabled { opacity: 0.5; cursor: default; }
+
+/* ── the role editor: a dialog, above the sheet ───────────────────────── */
+.fe-dialog { position: absolute; inset: 0; z-index: 50; display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; padding: 24px; background: color-mix(in srgb, var(--text) 30%, transparent); }
+.fe-dlg { width: min(1150px, 100%); max-height: 100%; display: flex; flex-direction: column; min-height: 0; background: var(--bg); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 24px 60px -24px var(--shadow); overflow: hidden; }
+.fe-dlg .fe-sheethead { border-bottom: 1px solid var(--surface-line); }
+.fe-dlg .fe-sheetbody { padding: 14px 18px 16px; }
+.fe-dlg .fe-sheetfoot { padding: 10px 18px; }
+.fe-flabel { font-size: 11.5px; font-weight: 650; color: var(--text2); }
+.fe-ed { position: fixed; inset: 0; display: flex; flex-direction: column; min-height: 0; background: var(--bg); color: var(--text); font-size: 12px; }
+.fe-ed button, .fe-ed input, .fe-ed textarea, .fe-ed select { font-family: inherit; }
+.fe-ed [hidden] { display: none !important; }
+.fe-edtop {
+  flex: none; display: flex; align-items: center; gap: 8px; height: 54px; padding: 0 14px;
+  border-bottom: 1px solid var(--surface-line); background: var(--bg);
+}
+.fe-back { display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 8px 0 5px; border: 1px solid transparent; border-radius: 8px; background: none; color: var(--text2); font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.fe-back:hover { background: var(--surface-inset); color: var(--text); }
+.fe-back:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.fe-eddiv { width: 1px; height: 22px; flex: none; background: var(--surface-line); margin: 0 2px; }
+.fe-edtitle { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.fe-edtitle .fe-ico { width: 28px; height: 28px; flex: none; border-radius: 9px; display: grid; place-items: center; background: color-mix(in srgb, var(--g-agents) 17%, transparent); color: color-mix(in srgb, var(--g-agents) 76%, var(--text)); }
+.fe-edtitle h1 { margin: 0; font-size: 14px; font-weight: 700; letter-spacing: -0.01em; white-space: nowrap; }
+.fe-edtitle small { display: block; font-size: 10.5px; color: var(--text3); margin-top: 1px; white-space: nowrap; }
+.fe-edsp { flex: 1; }
+.fe-teambtn { display: inline-flex; }
+.fe-donebtn { display: inline-flex; }
+
+/* The honesty sentence, under the bar where it cannot be missed. */
+.fe-honest {
+  flex: none; display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 14px;
+  border-bottom: 1px solid var(--surface-line); background: color-mix(in srgb, var(--info) 8%, var(--bg));
+  font-size: 11.5px; color: var(--info);
+}
+.fe-honest svg { flex: none; }
+.fe-honest .fe-sp { flex: 1; }
+.fe-honest .fe-only { white-space: nowrap; }
+
+/* ── the three columns: team, canvas, block ───────────────────────────── */
+.fe-edbody { position: relative; flex: 1 1 auto; min-height: 0; display: flex; }
+
+.fe-rail { width: 230px; flex: none; min-height: 0; display: none; flex-direction: column; border-right: 1px solid var(--surface-line); background: var(--surface-nav); }
+/* The Team button is the drawer's handle at every width: the roster is a column you open, never a column you are stuck with. */
+.fe-ed[data-team] .fe-rail { display: flex; }
+.fe-railh { margin: 0; padding: 12px 14px 4px; display: flex; justify-content: space-between; gap: 8px; font-size: 11px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text3); }
+.fe-railh span { font-weight: 500; }
+.fe-railscroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 6px 10px 10px; display: grid; align-content: start; gap: 6px; }
+.fe-railsec { margin: 0; padding: 6px 2px 0; display: flex; justify-content: space-between; gap: 8px; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text3); }
+.fe-railsec span { font-weight: 500; color: var(--text3); }
+.fe-railsec[data-first] { padding-top: 0; }
+.fe-railadd { width: 100%; justify-content: center; margin-top: 4px; }
+
+/* One role in the rail: the mockup's coloured round square, the name and what runs it. */
+.fe-role { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 8px; align-items: center; padding: 7px 8px; border: 1px solid var(--surface-line); border-radius: 11px; background: var(--bg); font-size: 12px; color: var(--text); text-align: left; cursor: grab; }
+.fe-role:hover { border-color: var(--border2); box-shadow: var(--surface-lift); }
+.fe-role:active { cursor: grabbing; }
+.fe-role:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+/* A role's square is the mockup's brand colour with a white glyph in both themes. */
+.fe-role .fe-rt { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 8px; background: var(--hue); color: #fff; }
+.fe-role b { display: block; font-size: 12.5px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fe-role small { display: block; font-family: var(--font-mono); font-size: 10.5px; color: var(--text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fe-railnote { margin: 0 2px; font-size: 10px; color: var(--text3); line-height: 1.45; }
+
+/* ── the canvas ───────────────────────────────────────────────────────── */
+.fe-stage {
+  position: relative; flex: 1 1 auto; min-width: 0; overflow: hidden; cursor: grab;
+  background-color: color-mix(in srgb, var(--bg) 55%, var(--bg2));
+  background-image: radial-gradient(circle, color-mix(in srgb, var(--text) 7%, transparent) 1px, transparent 1px);
+  background-size: 20px 20px; background-position: 10px 10px;
+}
+.fe-stage[data-panning] { cursor: grabbing; }
+.fe-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.fe-wire { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; z-index: 1; }
+
+/* The path's own label; the orchestrator above it is a card, like the workers. */
+
+.fe-pathlabel {
+  position: absolute; z-index: 3; display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px;
+  border: 1px dashed var(--border2); border-radius: 99px; background: var(--bg); font-size: 10px; font-weight: 600; color: var(--text3);
+  white-space: nowrap;
+}
+.fe-pathlabel b { color: var(--text2); font-weight: 650; }
+
+/* One block: the approved mockup's PR-card family. The unplaced card's size is
+   `flowView.ts`'s BLOCK_W / BLOCK_H; the head is the status strip, then the
+   body with a ring, the route, three cells, the exits and one footer. */
+.fe-blk {
+  position: absolute; z-index: 2; display: flex; flex-direction: column; width: 296px; height: 316px;
+  padding: 0; border: 0; border-radius: 3px 14px 3px 14px; background: var(--surface-card);
+  box-shadow: inset 0 0 0 1px var(--surface-line), var(--surface-lift); cursor: grab; text-align: left; user-select: none;
+  transition: box-shadow 0.16s, transform 0.16s;
+}
+.fe-blk:hover { transform: translateY(-2px); box-shadow: inset 0 0 0 1px var(--border2), var(--surface-lift); }
+.fe-blk[aria-pressed="true"] { outline: 2px solid var(--hue, var(--info)); outline-offset: 3px; }
+.fe-blk[data-dragging] { cursor: grabbing; box-shadow: 0 14px 30px -16px var(--shadow), 0 0 0 3px color-mix(in srgb, var(--hue) 16%, transparent); }
+.fe-blk[data-gate] { --st: var(--warning); }
+.fe-blk[data-required] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--success) 42%, var(--surface-line)), var(--surface-lift); }
+.fe-blk:focus-visible { outline: 2px solid var(--hue, var(--info)); outline-offset: 3px; }
+
+/* The Required pill the rail's rows and the cards share. */
+.fe-req { display: inline-flex; align-items: center; gap: 3px; flex: none; height: 16px; padding: 0 5px; border-radius: 99px; background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--success-ink, var(--success)); font-family: var(--font); font-size: 8px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; white-space: nowrap; }
+.fe-req svg { flex: none; }
+
+/* The strip on top: the live state's colour, said in words beside the glyph. */
+.fe-wk-h {
+  flex: none; display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px;
+  border-radius: 3px 14px 0 0; color: var(--st, var(--text3)); font-size: 12px; font-weight: 620;
+  background: color-mix(in srgb, var(--st, var(--text3)) 12%, var(--bg));
+  border-bottom: 1px solid color-mix(in srgb, var(--st, var(--text3)) 25%, var(--border));
+}
+.fe-wk-h svg { flex: none; }
+.fe-wk[data-tone="run"] { --st: var(--info); }
+.fe-wk[data-tone="wait"] { --st: var(--warning); }
+.fe-wk[data-tone="idle"] { --st: var(--text3); }
+.fe-wk[data-gate] { --st: var(--warning); }
+.fe-wk-h .fe-wk-v { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fe-wk-pulse { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--st); box-shadow: 0 0 0 0 color-mix(in srgb, var(--st) 50%, transparent); animation: fe-pl 1.6s infinite; }
+@keyframes fe-pl { 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+@media (prefers-reduced-motion: reduce) { .fe-wk-pulse { animation: none; } }
+.fe-wk-sk { flex: none; display: inline-flex; gap: 4px; align-items: center; height: 18px; padding: 0 7px; border: 1px solid var(--surface-line); border-radius: 99px; background: var(--bg); color: var(--text2); font-size: 11px; font-weight: 500; }
+
+/* The loop's chip, one per failing block, on its lane. */
+.fe-fchip { position: absolute; z-index: 3; display: inline-flex; align-items: center; gap: 5px; height: 21px; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--error) 35%, var(--border)); border-radius: 8px; background: var(--bg); box-shadow: var(--surface-lift); font-size: 8.5px; color: var(--error); white-space: nowrap; }
+.fe-fchip b { font-weight: 650; }
+.fe-fchip[data-lit] { border-color: color-mix(in srgb, var(--error) 60%, var(--border)); color: var(--error); background: color-mix(in srgb, var(--error) 7%, var(--bg)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--error) 13%, transparent), var(--surface-lift); }
+
+/* The empty canvas keeps the orchestrator and offers the shipped template. */
+.fe-empty {
+  position: absolute; z-index: 4; left: 50%; top: 52%; transform: translate(-50%, -50%);
+  width: min(560px, calc(100% - 40px)); padding: 18px 18px 16px; text-align: center;
+  border: 1px dashed var(--border2); border-radius: 14px; background: color-mix(in srgb, var(--bg) 92%, transparent);
+  box-shadow: var(--surface-lift);
+}
+.fe-empty .fe-eico { width: 38px; height: 38px; margin: 0 auto 8px; border-radius: 12px; display: grid; place-items: center; background: color-mix(in srgb, var(--g-agents) 15%, transparent); color: color-mix(in srgb, var(--g-agents) 80%, var(--text)); }
+.fe-empty h2 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+.fe-empty p { margin: 5px auto 0; max-width: 46ch; font-size: 11.5px; color: var(--text3); line-height: 1.5; }
+.fe-tplrow { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 5px; margin: 13px 0 12px; }
+.fe-tplchip { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); font-size: 9px; color: var(--text2); }
+.fe-tplchip i { width: 6px; height: 6px; border-radius: 2px; background: var(--hue); }
+.fe-tplar { color: var(--text4); font-size: 10px; }
+.fe-empty .fe-acts { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
+
+/* ── the minimap and the zoom controls ────────────────────────────────── */
+.fe-mini { position: absolute; z-index: 5; left: 16px; bottom: 52px; width: 156px; height: 70px; padding: 8px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--bg) 90%, transparent); box-shadow: var(--surface-lift); overflow: hidden; }
+.fe-mini i { position: absolute; border-radius: 2px; background: color-mix(in srgb, var(--text) 24%, transparent); }
+.fe-mini .fe-vp { position: absolute; border: 1.5px solid var(--text); border-radius: 3px; background: color-mix(in srgb, var(--text) 5%, transparent); }
+/* The legend sits over the canvas' foot, as the mockup draws it: pass, fail back, must run. */
+.fe-legend { position: absolute; z-index: 5; left: 16px; bottom: 14px; display: flex; gap: 14px; padding: 4px 12px; border: 1px solid var(--border); border-radius: 99px; background: color-mix(in srgb, var(--bg) 85%, transparent); font-size: 11.5px; color: var(--text3); white-space: nowrap; }
+.fe-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.fe-legend .fe-ar { display: inline-block; width: 22px; border-top: 2px solid var(--text3); }
+.fe-legend .fe-ar-fl { border-top-style: dashed; border-top-color: var(--error); }
+.fe-zoomctl { position: absolute; z-index: 5; right: 16px; bottom: 16px; display: inline-flex; align-items: center; gap: 1px; padding: 3px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); box-shadow: var(--surface-lift); }
+.fe-zoomctl button { width: 26px; height: 26px; display: grid; place-items: center; border: 0; border-radius: 6px; background: none; color: var(--text3); cursor: pointer; }
+.fe-zoomctl button:hover { background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); }
+.fe-zoomctl .fe-pct { min-width: 46px; padding: 0 2px; font-family: var(--font-mono); font-size: 10.5px; text-align: center; color: var(--text2); }
+.fe-zoomctl .fe-sep { width: 1px; height: 16px; margin: 0 2px; background: var(--surface-line); }
+.fe-zoomctl .fe-tidy { margin-right: 4px; }
+
+/* ── the block panel on the right ─────────────────────────────────────── */
+.fe-side { width: clamp(334px, 34vw, 668px); flex: none; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--surface-line); background: var(--bg); }
+.fe-sidehead { flex: none; display: flex; align-items: flex-start; gap: 9px; padding: 12px 12px 11px; border-bottom: 1px solid var(--surface-line); }
+.fe-sidehead .fe-ico { width: 28px; height: 28px; flex: none; border-radius: 9px; display: grid; place-items: center; background: color-mix(in srgb, var(--hue) 14%, var(--bg)); color: color-mix(in srgb, var(--hue) 78%, var(--text)); }
+.fe-sidehead h2 { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: -0.01em; }
+.fe-sidehead p { margin: 2px 0 0; font-size: 10.5px; color: var(--text3); }
+.fe-sidehead .fe-sp { flex: 1; }
+.fe-sidescroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 10px 12px 14px; }
+.fe-side .fe-row { grid-template-columns: minmax(0, 1fr); gap: 4px; min-height: 31px; }
+.fe-side .fe-row > .fe-v { justify-content: flex-start; }
+.fe-side .fe-row > .fe-k { font-size: 11px; }
+.fe-side .fe-row > .fe-k small { font-size: 9.5px; }
+.fe-sidefoot { flex: none; display: flex; align-items: center; gap: 7px; padding: 9px 12px 10px; border-top: 1px solid var(--surface-line); background: color-mix(in srgb, var(--bg2) 40%, var(--bg)); }
+.fe-sidefoot .fe-sp { flex: 1; }
+.fe-reqline { display: flex; align-items: flex-start; gap: 8px; padding: 8px 0 9px; border-bottom: 1px solid var(--surface-line); }
+.fe-reqline .fe-txt { flex: 1; min-width: 0; font-size: 11px; color: var(--text2); line-height: 1.4; }
+.fe-reqline .fe-txt small { display: block; margin-top: 2px; font-size: 10px; color: var(--text3); }
+.fe-reqnote { display: flex; align-items: flex-start; gap: 6px; margin: 8px 0 10px; padding: 6px 8px; border: 1px dashed var(--border2); border-radius: 8px; background: color-mix(in srgb, var(--bg2) 55%, var(--bg)); font-size: 10px; color: var(--text3); line-height: 1.4; }
+.fe-reqnote svg { flex: none; margin-top: 1px; color: var(--text4); }
+.fe-reqnote b { color: var(--text2); font-weight: 650; }
+.fe-sidenote { margin: 8px 0 0; font-size: 10px; color: var(--text3); line-height: 1.45; }
+
+/* ── the board (kanban) ───────────────────────────────────────────────── */
+.fe-boardwrap {
+  position: relative; flex: 1 1 auto; min-width: 0; overflow: auto;
+  background-color: color-mix(in srgb, var(--bg) 55%, var(--bg2));
+  background-image: radial-gradient(circle, color-mix(in srgb, var(--text) 7%, transparent) 1px, transparent 1px);
+  background-size: 20px 20px; background-position: 10px 10px;
+}
+.fe-boardinner { position: relative; min-height: 100%; padding: 0 18px 20px; }
+.fe-brail { position: absolute; z-index: 3; left: 0; right: 0; top: 0; height: var(--railh, 140px); pointer-events: none; }
+.fe-brail svg { position: absolute; left: 0; top: 0; overflow: visible; }
+.fe-elabel { position: absolute; display: inline-flex; align-items: center; gap: 3px; height: 18px; padding: 0 6px; border: 1px solid var(--border); border-radius: 99px; background: var(--bg); font-size: 8.5px; color: var(--text3); white-space: nowrap; transform: translate(-50%, -50%); box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
+.fe-elabel[data-tone="fail"] { border-color: color-mix(in srgb, var(--warning) 55%, var(--border)); color: var(--warning-ink); background: color-mix(in srgb, var(--warning) 6%, var(--bg)); }
+.fe-elabel b { font-weight: 650; }
+.fe-cols { position: relative; z-index: 2; display: flex; align-items: flex-start; gap: 14px; padding-top: var(--railh, 140px); }
+.fe-col { width: 250px; flex: none; display: flex; flex-direction: column; gap: 8px; padding: 8px; border: 1px solid var(--surface-line); border-radius: 12px; background: color-mix(in srgb, var(--bg2) 58%, transparent); }
+.fe-col[data-over] { outline: 2px dashed var(--primary); outline-offset: -2px; }
+.fe-colhead { display: flex; align-items: center; gap: 7px; padding: 7px 8px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); box-shadow: 0 1px 2px rgba(0,0,0,0.05); cursor: grab; }
+.fe-colhead:active { cursor: grabbing; }
+.fe-colhead .fe-dot { width: 7px; height: 7px; flex: none; border-radius: 2px; background: var(--hue); }
+.fe-colhead b { font-size: 11px; font-weight: 700; letter-spacing: 0.02em; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fe-colhead .fe-n { font-family: var(--font-mono); font-size: 9px; color: var(--text4); }
+.fe-colcards { display: grid; gap: 8px; min-height: 46px; }
+.fe-colcards:empty::after { content: "Drop an agent here"; display: grid; place-items: center; height: 46px; border: 1px dashed var(--border); border-radius: 8px; font-size: 10px; color: var(--text4); }
+
+.fe-bcard { display: flex; flex-direction: column; gap: 4px; padding: 8px 9px 8px 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); box-shadow: 0 1px 2px rgba(0,0,0,0.06); cursor: grab; position: relative; }
+.fe-bcard::before { content: ""; position: absolute; left: 0; top: 7px; bottom: 7px; width: 3px; border-radius: 0 3px 3px 0; background: var(--hue); }
+.fe-bcard:active { cursor: grabbing; }
+.fe-bcard[data-dragging] { opacity: 0.45; }
+.fe-bcard[data-required] { border-color: color-mix(in srgb, var(--warning) 50%, var(--border)); }
+.fe-bcard .fe-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.fe-bcard .fe-ico { width: 17px; height: 17px; flex: none; border-radius: 5px; display: grid; place-items: center; background: color-mix(in srgb, var(--hue) 13%, var(--bg)); color: color-mix(in srgb, var(--hue) 76%, var(--text)); }
+.fe-bcard b { font-family: var(--font-mono); font-size: 11px; font-weight: 650; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fe-bcard p { margin: 0; font-size: 9.5px; line-height: 1.35; color: var(--text3); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.fe-bcard .fe-eng { display: inline-flex; align-items: center; gap: 3px; align-self: flex-start; max-width: 100%; padding: 1px 5px; border: 1px solid var(--surface-line); border-radius: 5px; background: var(--bg2); font-family: var(--font-mono); font-size: 8px; color: var(--text2); white-space: nowrap; overflow: hidden; }
+.fe-bcard .fe-eng b { font-size: 8px; font-weight: 650; color: var(--text); }
+.fe-bcard .fe-chain { font-family: var(--font-mono); font-size: 8px; color: var(--text4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fe-bcard .fe-chain b { font-size: 8px; font-weight: 600; color: var(--text2); }
+.fe-bcard .fe-ex { display: flex; flex-wrap: wrap; gap: 3px; }
+.fe-bcard .fe-hrule { display: flex; align-items: center; gap: 3px; font-size: 8.5px; font-weight: 600; line-height: 1.2; color: var(--warning-ink); }
+.fe-bcard .fe-hrule svg { flex: none; }
+
+/* ── the role editor, as a dialog over the editor ─────────────────────── */
+.fe-rolemask { display: flex; align-items: center; gap: 7px; padding: 7px 9px; border-radius: 8px; background: var(--surface-inset); font-size: 10.5px; color: var(--text3); margin-bottom: 10px; }
+.fe-rolemask b { color: var(--text2); font-weight: 600; }
+.fe-rolemask .fe-sp { flex: 1; }
+.fe-promptfoot { display: flex; align-items: center; gap: 8px; margin-top: 5px; font-size: 10px; color: var(--text3); }
+.fe-promptfoot .fe-sp { flex: 1; }
+.fe-chainrow .fe-n { width: 15px; }
+
+/* ── narrow ───────────────────────────────────────────────────────────── */
+@media (max-width: 1400px) {
+  .fe-rail { width: 244px; }
+  .fe-side { width: clamp(310px, 38vw, 560px); }
+  .fe-col { width: 236px; }
+}
+@media (max-width: 1180px) {
+  .fe-edtitle small { display: none; }
+  .fe-honest .fe-only { display: none; }
+  .fe-rail { width: 228px; }
+  .fe-side { width: clamp(292px, 40vw, 480px); }
+  .fe-sidefoot { flex-wrap: wrap; gap: 6px; }
+  .fe-sidefoot .fe-sp { display: none; }
+  .fe-sidefoot .fe-btn { flex: 1 1 100%; justify-content: center; }
+}
+@media (max-width: 1020px) {
+  .fe-donebtn { display: none; }
+  .fe-backtxt { display: none; }
+}
+/* Under 900px the roster would leave the canvas a sliver: it floats over it instead, and the bar wraps rather than crushing its buttons. */
+@media (max-width: 900px) {
+  .fe-ed[data-team] .fe-rail { position: absolute; left: 0; top: 0; bottom: 0; z-index: 7; box-shadow: 18px 0 40px -30px var(--shadow); }
+  /* The legend would sit under the zoom controls at a phone's width: it goes above them, and the minimap steps aside. */
+  .fe-mini { display: none; }
+  .fe-legend { left: 12px; right: 12px; bottom: 52px; gap: 8px; font-size: 10.5px; }
+  .fe-side { width: 100%; }
+  .fe-edsp { display: none; }
+  .fe-honest { flex-wrap: wrap; padding: 6px 10px; row-gap: 4px; }
+  .fe-around > .fe-achip { flex: 1 1 100%; }
+}
+@media (max-height: 760px) {
+  .fe-dialog { padding: 8px; }
+  .fe-edtop { height: 48px; }
+  .fe-honest { min-height: 30px; font-size: 11px; }
+  .fe-col { width: 226px; }
+  .fe-bcard p { -webkit-line-clamp: 1; }
+  .fe-mini { top: 12px; }
+}
+/* After the short-window rule on purpose: this bar wraps, so its height comes from its rows, never from a pinned 48px. */
+@media (max-width: 900px) {
+  .fe-edtop { height: auto; min-height: 54px; flex-wrap: wrap; padding: 6px 10px; row-gap: 6px; }
+}
+
+/* ── the page's read-only preview ─────────────────────────────────────── */
+
+/* The page's team summary, beside the preview. */
+.fe-teamgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 10px 12px 4px; }
+.fe-trow { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 7px; align-items: start; padding: 7px 8px; border: 1px solid var(--surface-line); border-radius: 9px; background: var(--bg); }
+.fe-trow .fe-ico { width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; background: color-mix(in srgb, var(--hue) 13%, var(--bg)); color: color-mix(in srgb, var(--hue) 76%, var(--text)); }
+.fe-trow b { display: flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 650; }
+.fe-trow small { display: block; font-size: 9.5px; color: var(--text3); line-height: 1.35; margin-top: 1px; }
+.fe-trow .fe-req { font-size: 7px; height: 14px; padding: 0 4px; }
+.fe-trow .fe-eng { display: block; margin-top: 2px; font-family: var(--font-mono); font-size: 8px; color: var(--text4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 1360px) {
+}
+@media (max-width: 1180px) { .fe-teamgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.fe-pagelow { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 12px; margin-top: 12px; align-items: start; }
+@media (max-width: 1100px) { .fe-pagelow { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 900px) {
+  .fe-teamgrid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ── parts the mockup kept in its page sheet ──────────────────────────── */
+.fe-row { display: grid; grid-template-columns: 132px minmax(0, 1fr); align-items: center; gap: 10px; min-height: 34px; padding: 5px 0; border-bottom: 1px solid var(--surface-line); }
+.fe-row:last-of-type { border-bottom: 0; }
+.fe-row > .fe-k { font-size: 11.5px; color: var(--text2); font-weight: 600; }
+.fe-row > .fe-k small { display: block; font-size: 10.5px; font-weight: 400; color: var(--text3); line-height: 1.35; margin-top: 1px; }
+.fe-row > .fe-v { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; justify-content: flex-end; }
+.fe-row > .fe-v.fe-wide { justify-content: flex-start; font-size: 11px; color: var(--text2); line-height: 1.45; }
+.fe-small { font-size: 10.5px; color: var(--text2); }
+.fe-quiet { font-size: 10.5px; color: var(--text3); }
+.fe-sp { flex: 1; }
+.fe-switch { appearance: none; border: 0; padding: 0; background: none; cursor: pointer; }
+.fe-switch:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 99px; }
+.fe-switch:disabled { opacity: 0.5; cursor: default; }
+.fe-badge { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 10px; border-radius: 99px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.fe-btn:disabled, .fe-stepper button:disabled, .fe-zoomctl button:disabled { opacity: 0.45; cursor: default; }
+.fe-check { cursor: pointer; background: none; border: 0; padding: 0; text-align: left; }
+.fe-check:focus-visible .fe-box { outline: 2px solid var(--primary); outline-offset: 1px; }
+.fe-ico svg, .fe-bico svg { display: block; }
+.fe-ed * { box-sizing: border-box; }
+.fe-ed h1, .fe-ed h2, .fe-ed p { font-family: inherit; }
+.fe-selwrap { position: relative; display: block; }
+.fe-selwrap select { appearance: none; width: 100%; height: 30px; padding: 0 26px 0 9px; border: 1px solid var(--border2); border-radius: 7px; background: var(--bg); color: var(--text); font-size: 12px; cursor: pointer; }
+.fe-selwrap select:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.fe-selwrap svg { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); color: var(--text3); pointer-events: none; }
+.fe-gapplus { position: absolute; z-index: 4; width: 22px; height: 22px; display: grid; place-items: center; padding: 0; border: 1px solid var(--border2); border-radius: 50%; background: var(--bg); color: var(--text3); cursor: pointer; opacity: 0; transform: scale(0.4); transition: opacity 0.12s, transform 0.12s, border-color 0.12s, color 0.12s; }
+.fe-stage:hover .fe-gapplus, .fe-gapplus:focus-visible { opacity: 0.85; }
+.fe-gapplus:hover, .fe-gapplus:focus-visible { opacity: 1; transform: scale(1); }
+@media (prefers-reduced-motion: reduce) { .fe-gapplus { transition: none; } }
+.fe-gapplus::before { content: ""; position: absolute; inset: -18px; border-radius: 50%; }
+.fe-gapplus:hover { color: var(--text); border-color: var(--text2); }
+.fe-gapplus:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.fe-tplfrag { display: inline-flex; align-items: center; gap: 5px; }
+.fe-bchainpart { display: inline-flex; align-items: center; gap: 3px; }
+.fe-eddlg .fe-field > small { margin-top: 0; }
+.fe-errline { margin: 0 0 10px; padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--error) 40%, var(--border)); border-radius: 8px; background: color-mix(in srgb, var(--error) 8%, var(--bg)); font-size: 11px; color: var(--error-ink, var(--error)); }
+.fe-savestate { font-size: 11px; color: var(--text3); white-space: nowrap; }
+.fe-savestate[data-bad] { color: var(--error-ink, var(--error)); }
+.fe-loading, .fe-failed { display: grid; place-items: center; flex: 1; padding: 24px; text-align: center; color: var(--text3); font-size: 12px; }
+@media (prefers-reduced-motion: reduce) {
+  .fe-ed *, .fe-ed *::before, .fe-ed *::after { transition: none !important; animation: none !important; }
+}
+.fe-soon { margin-left: 6px; padding: 0 5px; border-radius: 99px; background: var(--surface-inset); font-size: 9px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: var(--text3); }
+.fe-seg > button:disabled { cursor: default; opacity: 0.8; }
+.fe-chainwrap { display: grid; gap: 6px; }
+.fe-switchrow { display: inline-flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text2); cursor: pointer; }
+.fe-nonote { position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 6; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); font-size: 11px; color: var(--text3); }
+.fe-note { font-size: 11px; color: var(--text3); line-height: 1.45; }
+.fe-edtop .fe-seg button { white-space: nowrap; }
+.fe-seg > button { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ── the reviewing block's settings in the side panel (292px, rows stack, no sideways scroll) ── */
+.fe-revctl { display: grid; gap: 2px; min-width: 0; padding: 8px 0 4px; border-top: 1px solid var(--surface-line); margin-top: 6px; }
+.fe-revctl * { min-width: 0; }
+.fe-who { display: grid; gap: 4px; }
+.fe-who button { display: flex; align-items: flex-start; gap: 8px; text-align: left; padding: 6px 8px; border: 1px solid var(--surface-line); border-radius: 7px; background: var(--bg); color: var(--text2); cursor: pointer; font-size: 11px; line-height: 1.35; }
+.fe-who button[aria-checked="true"] { border-color: color-mix(in srgb, var(--accent) 55%, var(--surface-line)); background: color-mix(in srgb, var(--accent) 7%, var(--bg)); color: var(--text); }
+.fe-who button i { flex: none; width: 11px; height: 11px; margin-top: 2px; border-radius: 50%; border: 1.5px solid var(--text3); }
+.fe-who button[aria-checked="true"] i { border-color: var(--accent); background: radial-gradient(var(--accent) 38%, transparent 42%); }
+.fe-who button b { display: block; font-weight: 650; overflow-wrap: anywhere; }
+.fe-who button small { display: block; margin-top: 1px; font-size: 10px; color: var(--text3); overflow-wrap: anywhere; }
+.fe-revsecond { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.fe-revsecond .fe-flabel { flex: 1; overflow-wrap: anywhere; }
+
+/* ── "Around the flow": the global chips under the canvas (the panel is 292px: rows stack, min-width 0, no nowrap) ── */
+.fe-center { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.fe-center > .fe-stage { flex: 1 1 auto; min-height: 0; }
+.fe-around { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--surface-line); background: var(--bg); min-width: 0; }
+.fe-aroundtitle { font-size: 10px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text3); }
+.fe-achip { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 5px 10px; border: 1px solid var(--surface-line); border-radius: 8px; background: var(--bg); color: var(--text2); font: inherit; text-align: left; cursor: pointer; }
+.fe-achip[data-dashed] { border-style: dashed; }
+.fe-achip[aria-pressed="true"] { border-color: color-mix(in srgb, var(--accent) 55%, var(--surface-line)); background: color-mix(in srgb, var(--accent) 7%, var(--bg)); }
+.fe-achip[data-kind="gate"] { cursor: default; }
+.fe-achiptxt { display: grid; min-width: 0; }
+.fe-achiptxt b { font-size: 11px; font-weight: 650; color: var(--text); overflow-wrap: anywhere; }
+.fe-achiptxt small { font-size: 10px; color: var(--text3); overflow-wrap: anywhere; }
+.fe-alink { background: none; border: 0; padding: 0; font: inherit; font-size: 10px; color: var(--accent); cursor: pointer; text-decoration: underline; }
+.fe-aroundside * { min-width: 0; }
+.fe-aroundfb, .fe-aroundside .fe-policyctl { display: grid; gap: 8px; }
+.fe-aroundfb .agx-settings-row { grid-template-columns: minmax(0, 1fr); }
+.fe-aroundfb .agx-select { width: 100%; }
+
+/* The rules of a block, in the 292px side panel: stacked, wrapping, never wider than the panel. */
+.fe-rules { min-width: 0; }
+.fe-rules .fe-v { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
+.fe-rulechips { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.fe-rulechip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; min-width: 0; padding: 2px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-inset); color: var(--text2); font: inherit; font-size: 11px; text-align: left; cursor: pointer; }
+.fe-rulechip > span { min-width: 0; overflow-wrap: anywhere; }
+.fe-rulechip:hover { border-color: var(--border2); color: var(--text); }
+.fe-rulechip[data-off] { opacity: 0.7; }
+.fe-rulechip small { color: var(--text3); font-size: 9.5px; }
+.fe-rulechip:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* Rules on the canvas: a mark changes the words inside a block, never its box, so no block moves when a panel opens. */
+.fe-blk[data-mark] { --mk: var(--info); }
+.fe-blk[data-mark="rule"], .fe-blk[data-mark="hit"], .fe-blk[data-mark="preview"], .fe-blk[data-mark="inrule"] {
+  outline: 2px solid var(--mk); outline-offset: 0; box-shadow: 0 8px 20px -10px color-mix(in srgb, var(--mk) 60%, transparent);
+}
+.fe-blk[data-mark="preview"] { outline-style: dashed; }
+.fe-blk[data-mark="faded"] { opacity: 0.45; }
+.fe-blk[data-warn] { box-shadow: inset 0 0 0 1px var(--warning), var(--surface-lift); }
+
+/* The toolbar: Presets and Conditions sit with the other chips, Presets as the primary one. */
+.fe-achip[data-primary] { background: var(--text); color: var(--bg); border-color: var(--text); font-weight: 700; }
+.fe-achip[data-primary] small, .fe-achip[data-primary] b { color: inherit; }
+.fe-achip[data-open] { border-color: var(--info); background: color-mix(in srgb, var(--info) 10%, var(--bg)); }
+.fe-adot { width: 7px; height: 7px; border-radius: 50%; background: var(--warning); flex: none; }
+.fe-asp { flex: 1 1 0; min-width: 0; }
+
+/* The presets drawer: a right column over the canvas, as the mockup draws it,
+   with one card per shipped preset and the way back in a toast. */
+.fe-drawer-scrim { position: absolute; inset: 0; z-index: 29; background: color-mix(in srgb, var(--text) 24%, transparent); }
+.fe-drawer { position: absolute; z-index: 30; right: 0; top: 0; bottom: 0; width: min(430px, 100%); display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: var(--bg); border-left: 1px solid var(--surface-line); box-shadow: -18px 0 40px -18px var(--shadow); }
+.fe-drawerh { flex: none; display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--surface-line); }
+.fe-drawerh b { font-size: 15px; font-weight: 700; }
+.fe-drawerh .fe-sp { flex: 1; }
+.fe-drawerb { min-height: 0; overflow-y: auto; display: grid; align-content: start; gap: 10px; padding: 14px 16px; }
+.fe-drawerf { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--surface-line); background: color-mix(in srgb, var(--bg2) 40%, var(--bg)); }
+.fe-drawerf .fe-sp { flex: 1; }
+
+/* One preset: the mockup's `.lv` card, with the roles it sets under its sentence. */
+.fe-lv { display: grid; gap: 6px; padding: 12px 13px; border: 1px solid var(--surface-line); border-radius: 14px; background: var(--surface-card); }
+.fe-lv[data-active] { border-color: color-mix(in srgb, var(--info) 55%, var(--surface-line)); background: color-mix(in srgb, var(--info) 7%, var(--bg)); }
+.fe-lv:hover { border-color: var(--border2); }
+.fe-lv h4 { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 14px; font-weight: 700; }
+.fe-lvsub { font-size: 12.5px; line-height: 1.45; color: var(--text3); }
+.fe-lv .fe-chip { height: 17px; font-size: 10.5px; }
+.fe-pset { display: grid; gap: 5px; margin: 4px 0; }
+.fe-pset > div { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12.5px; }
+.fe-pset .fe-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; }
+.fe-pset b { font-weight: 600; color: var(--text); white-space: nowrap; }
+.fe-pset .fe-wk-av { width: 16px; height: 16px; font-size: 9px; }
+.fe-pset code { min-width: 0; font-family: var(--font-mono); font-size: 11.5px; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fe-lvdet summary { font-size: 11.5px; color: var(--text3); cursor: pointer; }
+.fe-lvdet ul { margin: 4px 0; padding-left: 16px; font-size: 12px; color: var(--text2); }
+.fe-lvdet p { margin: 4px 0 0; font-size: 11.5px; color: var(--text3); }
+.fe-lvacts { display: flex; gap: 8px; }
+.fe-precheck { display: grid; gap: 2px; margin-top: 8px; padding: 8px 10px; border-radius: 9px; background: var(--surface-inset); color: var(--text2); }
+.fe-toast { position: absolute; z-index: 31; left: 50%; bottom: 64px; transform: translateX(-50%); display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 10px; background: var(--text); color: var(--bg); font-size: 12px; box-shadow: 0 10px 28px -10px var(--shadow); }
+
+/* Conditions panel: one scroll (the panel's), rows that never overflow the 292-360px slot. */
+.fe-condside .fe-sidescroll { display: flex; flex-direction: column; gap: 8px; }
+.fe-condside ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
+.fe-rule { padding: 8px 10px; border: 1px solid var(--surface-line); border-radius: 10px; background: var(--bg); min-width: 0; }
+.fe-rule[data-on] { border-color: var(--info); }
+.fe-rule[data-locked] { background: var(--surface-inset); }
+.fe-rulehead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.fe-rulehead b { min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
+.fe-rulesentence { margin: 4px 0; font-size: 11px; line-height: 1.4; color: var(--text2); overflow-wrap: anywhere; }
+.fe-rulefoot { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; }
+.fe-rulefoot small, .fe-ruleorder { color: var(--text3); font-size: 10px; }
+.fe-ruleorder { display: block; margin-top: 4px; }
+.fe-inherit { display: grid; gap: 6px; padding: 8px 10px; border-radius: 9px; background: var(--surface-inset); color: var(--text2); font-size: 11px; }
+
+/* Rule editor: inside the panel's one scroll, nothing wider than the slot. */
+.fe-ruleeditor { display: grid; gap: 10px; min-width: 0; }
+.fe-edname { display: grid; gap: 4px; }
+.fe-edsec { display: grid; gap: 7px; padding-top: 8px; border-top: 1px solid var(--surface-line); min-width: 0; }
+.fe-edsec h3 { margin: 0; font-size: 11px; color: var(--text2); display: flex; justify-content: space-between; gap: 6px; }
+.fe-edsec h3 small { font-weight: 400; color: var(--text3); }
+.fe-edrole { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--info); border-radius: 9px; background: var(--bg); min-width: 0; }
+.fe-edrole[data-off] { border-color: var(--surface-line); opacity: 0.75; }
+.fe-edrolehead { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; }
+.fe-draftchain { display: grid; gap: 6px; min-width: 0; }
+.fe-draftstep { display: grid; gap: 4px; padding: 6px; border: 1px solid var(--surface-line); border-radius: 8px; background: color-mix(in srgb, var(--bg2) 40%, var(--bg)); min-width: 0; }
+.fe-draftstep .agx-flow-ctl { flex-wrap: wrap; min-width: 0; }
+.fe-draftstep input { max-width: 100%; }
+.fe-stephead { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--text3); }
+.fe-stepadd { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fe-edtest { display: grid; gap: 6px; justify-items: start; }
+.fe-testline { margin: 0; font-size: 11px; color: var(--text); overflow-wrap: anywhere; }
+.fe-edfoot { display: flex; align-items: center; gap: 6px; padding-top: 8px; border-top: 1px solid var(--surface-line); }
+.fe-leave { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--warning); border-radius: 9px; background: color-mix(in srgb, var(--warning) 10%, var(--bg)); font-size: 11px; }
+.fe-leaveacts { display: flex; gap: 6px; }
+.fe-ruleeditor .agx-rule-cond { min-width: 0; }
+.fe-ruleeditor .agx-rule-fields { flex-wrap: wrap; }
+
+/* Block panel: Main takes the theme's info colour, the fallbacks stay neutral, a rule that decides takes the warning colour. Tags size to their text. */
+.fe-main, .fe-fbs, .fe-ruleover { display: flex; flex-direction: column; align-items: stretch; gap: 8px; border-radius: 10px; padding: 10px; margin-bottom: 10px; }
+.fe-main { border: 1.5px solid var(--info); background: color-mix(in srgb, var(--info) 8%, var(--bg2)); }
+.fe-main[data-dim] { opacity: .5; }
+.fe-fbs { border: 1px solid var(--border2); background: var(--surface-inset); }
+.fe-tagmain, .fe-tagfb { align-self: flex-start; display: inline-flex; align-items: center; font-size: 10px; font-weight: 750; letter-spacing: .04em; border-radius: 6px; padding: 2px 8px; margin: 0; }
+.fe-tagmain { background: color-mix(in srgb, var(--info) 22%, transparent); color: var(--info); border: 1px solid color-mix(in srgb, var(--info) 55%, transparent); }
+.fe-tagfb { background: var(--bg3); color: var(--text2); border: 1px solid var(--border2); }
+.fe-ruleover { border: 1.5px solid var(--warning); background: color-mix(in srgb, var(--warning) 10%, var(--bg2)); font-size: 12px; align-items: flex-start; }
+.fe-ruleoff { border: 1px solid var(--warning); border-radius: 7px; padding: 4px 10px; font-weight: 650; background: transparent; color: var(--text2); cursor: pointer; }
+.fe-main .fe-flabel, .fe-fbs .fe-flabel { margin: 0; }
+.fe-policyctl { display: flex; flex-direction: column; gap: 8px; }
+.fe-policyctl > .fe-row2 { border-top: 0; padding: 0; }
+.fe-policyctl > button { align-self: flex-start; }
+
+.fe-rulesum { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+.fe-rulesum > small { color: var(--text3); font-size: 11px; }
+.fe-rulesumrow { display: grid; grid-template-columns: 78px 1fr; gap: 8px; font-size: 11.5px; padding: 4px 0; border-top: 1px solid var(--surface-line); }
+.fe-rulesumrow b { color: var(--text); }
+.fe-rulesumrow span { color: var(--text2); overflow-wrap: anywhere; }
+
+/* ── side panel: drag the left edge ───────────────────────────────────── */
+.fe-side { position: relative; width: var(--fe-side-w, clamp(334px, 34vw, 668px)); }
+@media (max-width: 1400px) { .fe-side { width: var(--fe-side-w, clamp(310px, 38vw, 560px)); } }
+@media (max-width: 1180px) { .fe-side { width: var(--fe-side-w, clamp(292px, 40vw, 480px)); } }
+.fe-grip { position: absolute; left: 0; top: 0; bottom: 0; width: 7px; cursor: col-resize; z-index: 2; touch-action: none; }
+.fe-grip::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 1px; background: transparent; transition: background 120ms; }
+.fe-grip:hover::after, .fe-grip:active::after { background: var(--info); width: 2px; }
+
+/* the block whose settings the pointer is over in the side panel */
+.fe-blk[data-focus] { outline: 3px solid var(--info); outline-offset: 2px; z-index: 4; box-shadow: 0 0 0 6px color-mix(in srgb, var(--info) 22%, transparent), 0 10px 28px -8px color-mix(in srgb, var(--info) 70%, transparent); }
+
+/* every step of a block's chain, one per line: the fallbacks are as important as the first choice */
+.fe-bsteps { margin-top: auto; display: grid; gap: 3px; min-width: 0; }
+.fe-bstep { display: flex; align-items: baseline; gap: 5px; min-width: 0; padding: 2px 6px; border: 1px solid color-mix(in srgb, var(--border) 80%, transparent); border-radius: 6px; background: var(--surface-inset); font-size: 9.5px; line-height: 1.25; }
+.fe-bstep:first-child { border-color: var(--border2); }
+.fe-bstep i { flex: none; width: 10px; font-style: normal; color: var(--text4); }
+.fe-bstep b { flex: none; font-weight: 650; color: var(--text); }
+.fe-bstep span { min-width: 0; font-family: var(--font-mono); color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fe-ruleruns { display: flex; flex-direction: column; gap: 6px; }
+.fe-bsteps[data-wide] { margin-top: 0; }
+.fe-bsteps[data-wide] .fe-bstep { font-size: 11px; padding: 4px 8px; }
+
+/* the view glides to a block and back; plain panning and zooming stay immediate */
+.fe-world[data-glide] { transition: transform 460ms cubic-bezier(0.22, 1, 0.36, 1); }
+@media (prefers-reduced-motion: reduce) { .fe-world[data-glide] { transition: none; } }
+
+/* ── the worker card's own rows ─────────────────────────────────────────────
+   The mockup's PR-card family: the strip (above), the ring and the name, the
+   route's engine badges, three cells, the exits, the one line under them and a
+   footer with one primary action, Configure and the menu. */
+.fe-wk-body { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 10px; padding: 11px 12px 6px; align-items: start; }
+.fe-wk-ring { position: relative; width: 56px; height: 56px; display: block; }
+.fe-wk-ring svg { display: block; width: 56px; height: 56px; }
+.fe-wk-n { position: absolute; inset: 0; display: grid; place-items: center; font-weight: 700; font-size: 15px; line-height: 1; color: var(--text); }
+.fe-wk-n small { display: block; font-size: 9px; font-weight: 500; color: var(--text3); margin-top: -1px; text-align: center; }
+.fe-wk-text { min-width: 0; display: grid; gap: 1px; }
+.fe-wk-nm { display: flex; align-items: center; gap: 6px; font-size: 14.5px; font-weight: 650; line-height: 1.2; color: var(--text); min-width: 0; }
+.fe-wk-num { flex: none; padding: 0 5px; border: 1px solid var(--surface-line); border-radius: 6px; font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: var(--text3); }
+.fe-wk-stg { font-size: 12px; color: var(--text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fe-wk-tk { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 6px; }
+.fe-chip { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 8px; border-radius: 99px; background: var(--surface-inset); box-shadow: inset 0 0 0 1px var(--surface-line); color: var(--text2); font-size: 11px; line-height: 1; white-space: nowrap; }
+.fe-chip svg { flex: none; }
+.fe-chip-ok { background: color-mix(in srgb, var(--success) 13%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--success) 34%, transparent); color: var(--success-ink, var(--success)); }
+.fe-chip-acc { background: color-mix(in srgb, var(--info) 13%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--info) 34%, transparent); color: var(--info-ink, var(--info)); }
+
+/* The route: one badge per engine in the chain, in the mockup's own engine letters. */
+.fe-wk-route { display: flex; align-items: center; gap: 5px; min-width: 0; padding: 0 12px 8px; font-size: 11px; color: var(--text3); overflow: hidden; }
+.fe-wk-avrow { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+.fe-wk-av { flex: none; width: 18px; height: 18px; display: inline-grid; place-items: center; border-radius: 5px; background: var(--text4); color: var(--bg); font-size: 10px; font-weight: 800; font-style: normal; }
+/* The mockup's engine letters and colours; no house token stands for a provider's brand. */
+.fe-wk-av[data-engine="claude"] { background: #cc785c; color: #fff; }
+.fe-wk-av[data-engine="opencode"] { background: #2f7d4f; color: #fff; }
+.fe-wk-av[data-engine="codex"] { background: #3b4a6b; color: #fff; }
+.fe-wk-av-you { background: #6b6fd6; color: #fff; }
+.fe-wk-ar { flex: none; color: var(--text4); }
+.fe-wk-rl { min-width: 0; max-width: 128px; font-family: var(--font-mono); font-size: 11px; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Three cells, the same shapes as the mockup's Last / Tries / Cost. */
+.fe-wk-cells { flex: none; display: grid; grid-template-columns: 1.25fr 0.95fr 0.9fr; gap: 5px; padding: 0 10px 8px; }
+.fe-wk-cells > div { min-width: 0; padding: 4px 7px; border-radius: 8px; background: var(--surface-inset); box-shadow: inset 0 0 0 1px var(--surface-line); }
+.fe-wk-cells > div[data-tone="run"] { background: color-mix(in srgb, var(--info) 8%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--info) 34%, transparent); }
+.fe-wk-cells small { display: block; font-size: 10px; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text3); }
+.fe-wk-cells b { display: block; font-size: 11.5px; font-weight: 620; line-height: 1.25; color: var(--text); overflow-wrap: anywhere; }
+
+/* A rule that moved this block says so in the accent, as the mockup does for the Builder. */
+.fe-wk-reason { flex: none; display: flex; align-items: flex-start; gap: 5px; margin: 0 10px 8px; padding: 4px 8px; border-radius: 9px; background: color-mix(in srgb, var(--info) 9%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--info) 30%, transparent); color: var(--info-ink, var(--info)); font-size: 11px; line-height: 1.35; }
+.fe-wk-reason svg { flex: none; margin-top: 1px; }
+.fe-wk-reason span { min-width: 0; overflow-wrap: anywhere; }
+
+/* Where it passes and where it fails, in the mockup's two pills. */
+.fe-wk-nxt { flex: none; display: flex; gap: 6px; padding: 0 12px 8px; font-size: 11.5px; }
+.fe-wk-nxt > span { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fe-wk-nxt svg { flex: none; }
+.fe-wk-ok { background: color-mix(in srgb, var(--success) 13%, transparent); color: var(--success-ink, var(--success)); }
+.fe-wk-no { background: color-mix(in srgb, var(--error) 13%, transparent); color: var(--error-ink, var(--error)); }
+
+/* The quiet line: what it does, and the three things it may do it with. */
+.fe-wk-evl { flex: none; display: flex; align-items: center; gap: 6px; min-width: 0; padding: 0 12px 8px; font-size: 10.5px; color: var(--text3); overflow: hidden; }
+.fe-wk-does { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fe-wk-evl .fe-sp { flex: 1; }
+.fe-wk-tg { flex: none; display: inline-flex; align-items: center; gap: 3px; height: 18px; padding: 0 5px; border-radius: 6px; background: var(--bg); box-shadow: inset 0 0 0 1px var(--surface-line); color: var(--text2); }
+
+/* One footer: the primary action, Configure, and the menu at the far right. */
+.fe-wk-ft { flex: none; display: flex; align-items: center; gap: 5px; margin-top: auto; padding: 7px; border-top: 1px solid var(--surface-line); }
+.fe-wk-ft .fe-btn { height: 26px; padding: 0 9px; }
+.fe-wk-ft .fe-sp { flex: 1; }
+.fe-btn-primary { background: var(--text); border-color: var(--text); color: var(--bg); }
+.fe-wk-more { width: 26px; height: 26px; border-radius: 7px; }
+.fe-wkmenu { position: absolute; z-index: 8; right: 6px; bottom: 40px; min-width: 198px; display: grid; gap: 1px; padding: 4px; border: 1px solid var(--border2); border-radius: 9px; background: var(--bg); box-shadow: 0 16px 34px -16px var(--shadow); }
+.fe-wkmenu button { display: block; width: 100%; padding: 6px 8px; border: 0; border-radius: 6px; background: none; color: var(--text2); font-size: 11.5px; text-align: left; cursor: pointer; }
+.fe-wkmenu button:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); }
+.fe-wkmenu button:disabled { color: var(--text4); cursor: default; }
+.fe-wkmenu button[data-danger]:not(:disabled) { color: var(--error-ink); }
+.fe-wkmenu button:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.fe-blk .fe-bk-warn { margin: 0 10px 6px; padding: 3px 8px; border-radius: 7px; background: color-mix(in srgb, var(--warning) 14%, transparent); color: var(--warning); font-size: 10px; }
+
+/* ── the orchestrator's card, above the path: the mockup's own `.ob` ── */
+.fe-oc { width: 560px; height: 236px; overflow: visible; cursor: default; background: var(--surface-card); }
+.fe-oc:hover { transform: none; box-shadow: inset 0 0 0 1px var(--border2), var(--surface-lift); }
+.fe-obh { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 30px; padding: 0 14px; border-radius: 3px 14px 0 0;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--g-agents) 14%, var(--bg)), var(--bg)); border-bottom: 1px solid color-mix(in srgb, var(--g-agents) 30%, var(--border)); color: var(--g-agents); font-size: 12px; font-weight: 650; }
+.fe-obs { display: inline-flex; align-items: center; gap: 7px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fe-obs i { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--g-agents); box-shadow: 0 0 0 3px color-mix(in srgb, var(--g-agents) 26%, transparent); }
+.fe-obm { flex: none; padding: 1px 9px; border: 1px solid color-mix(in srgb, var(--g-agents) 34%, var(--border)); border-radius: 99px; background: var(--bg); color: var(--text2); font-size: 11.5px; font-weight: 600; }
+.fe-obb { display: flex; align-items: flex-start; gap: 14px; padding: 14px; }
+.fe-obt { flex: none; width: 56px; height: 56px; display: grid; place-items: center; border-radius: 16px; background: var(--g-agents); color: #fff; }
+.fe-obi { flex: 1; min-width: 0; }
+.fe-obn { display: flex; align-items: baseline; gap: 6px; font-size: 19px; font-weight: 700; color: var(--text); }
+.fe-obn small { font-size: 12px; font-weight: 500; color: var(--text3); }
+.fe-obd { margin-top: 3px; font-size: 12.5px; line-height: 1.5; color: var(--text2); }
+.fe-obd b { display: inline-flex; align-items: center; gap: 3px; font-weight: 650; color: var(--text); }
+.fe-obe { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--text2); min-width: 0; }
+.fe-obe code { min-width: 0; padding: 2px 8px; border: 1px solid var(--surface-line); border-radius: 8px; background: var(--surface-inset); font-family: var(--font-mono); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Scoped to the card: `.fe-eng` is also the worker editor's three-column engine
+   picker, and that grid left this line with one word per column ("cla…"). */
+.fe-obe .fe-eng { display: inline-flex; align-items: center; gap: 6px; flex: none; font-weight: 600; }
+.fe-obe .fe-eng .fe-dot { flex: none; width: 18px; height: 18px; display: grid; place-items: center; border-radius: 6px; background: #cc785c; color: #fff; font-size: 10px; font-weight: 700; font-style: normal; }
+.fe-obc { flex: none; display: grid; gap: 6px; }
+.fe-obc > div { min-width: 104px; padding: 5px 12px; border-radius: 10px; background: var(--surface-inset); box-shadow: inset 0 0 0 1px var(--surface-line); }
+.fe-obc small { display: block; font-size: 10px; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text3); }
+.fe-obc b { font-size: 15px; font-weight: 650; color: var(--text); }
+.fe-obc b span { font-size: 12px; font-weight: 500; color: var(--text3); }
+.fe-obl { flex: none; display: flex; align-items: center; gap: 8px; min-width: 0; padding: 8px 14px; border-top: 1px solid var(--surface-line); background: color-mix(in srgb, var(--bg2) 45%, var(--bg)); font-size: 12px; color: var(--text2); }
+.fe-obx { flex: none; display: inline-flex; color: var(--g-agents); }
+.fe-obl > span:last-child { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fe-obl b { font-weight: 650; color: var(--text); }
+.fe-obf { flex: none; display: flex; align-items: center; gap: 8px; margin-top: auto; padding: 9px 14px; border-top: 1px solid var(--surface-line); }
+.fe-obf .fe-sp { flex: 1; }
+.fe-roster { display: inline-flex; align-items: center; }
+.fe-roster i { width: 20px; height: 20px; margin-left: -6px; border-radius: 50%; border: 2px solid var(--bg); }
+.fe-roster i:first-child { margin-left: 0; }
+.fe-roster em { margin-left: 6px; font-style: normal; font-size: 11px; color: var(--text3); }
+/* The sheet borrows the worker editor's shell: one head, one column, one footer. */
+.fe-os .fe-wedsec h3 { font-size: 12.5px; }
+.fe-os .fe-wedval { font-size: 12px; }
+
+/* ── the one worker editor: a fixed head, a fixed section rail, one scrolling column ──
+   overflow: clip on the dialog keeps a scrolled control from painting over the
+   footer; the footer is relative with a z-index and an opaque background, so a
+   switch at the end of the column never shows through it. */
+.fe-wed { width: min(980px, 100%); overflow: clip; }
+.fe-wedbody { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 186px minmax(0, 1fr); }
+.fe-wednav { display: grid; align-content: start; gap: 2px; min-height: 0; padding: 12px 8px; border-right: 1px solid var(--surface-line); background: var(--surface-nav); }
+.fe-wednav button { padding: 6px 9px; border: 1px solid transparent; border-radius: 7px; background: none; color: var(--text3); font: inherit; font-size: 11.5px; text-align: left; cursor: pointer; }
+.fe-wednav button:hover { background: var(--bg); color: var(--text2); }
+.fe-wednav button[aria-current="true"] { background: var(--bg); border-color: var(--surface-line); color: var(--text); font-weight: 650; }
+.fe-wednav button:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.fe-wedscroll { min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; display: grid; align-content: start; gap: 14px; padding: 12px 18px 18px; }
+.fe-wedsec { display: grid; gap: 8px; min-width: 0; padding-bottom: 12px; border-bottom: 1px solid var(--surface-line); }
+.fe-wedsec:last-child { border-bottom: 0; }
+.fe-wedsec h3 { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; font-weight: 700; }
+.fe-wedinfo { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; color: var(--text4); cursor: help; }
+.fe-wedinfo:hover, .fe-wedinfo:focus-visible { color: var(--text2); outline: 2px solid var(--primary); outline-offset: 1px; }
+.fe-wedrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 28px; }
+.fe-wedtxt { flex: 1; min-width: 0; font-size: 11.5px; color: var(--text2); }
+.fe-wedval { flex: 1; min-width: 0; font-size: 11.5px; color: var(--text2); overflow-wrap: anywhere; }
+.fe-wedquiet { margin: 0; font-size: 11.5px; color: var(--text3); line-height: 1.45; }
+.fe-wedfoot { position: relative; z-index: 2; background: var(--bg); }
+.fe-wedlook summary { display: flex; align-items: center; gap: 6px; list-style: none; cursor: pointer; }
+.fe-wedlook summary::-webkit-details-marker { display: none; }
+.fe-wedlook summary h3 { margin: 0; }
+.fe-wedlook summary .fe-wedh { font-size: 12px; font-weight: 700; }
+.fe-wedlook > * + * { margin-top: 8px; }
+.fe-wedicons { display: flex; flex-wrap: wrap; gap: 2px; }
+.fe-wedicons .fe-sq[aria-pressed="true"] { border-color: var(--text); background: var(--surface-inset); color: var(--text); }
+.fe-wedhues { display: flex; flex-wrap: wrap; gap: 6px; }
+.fe-wedhue { width: 26px; height: 26px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); cursor: pointer; }
+.fe-wedhue i { width: 12px; height: 12px; border-radius: 4px; background: var(--hue); }
+.fe-wedhue[aria-pressed="true"] { border-color: var(--text); box-shadow: 0 0 0 2px color-mix(in srgb, var(--text) 8%, transparent); }
+.fe-wedhue:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+@media (max-width: 900px) {
+  .fe-wedbody { grid-template-columns: minmax(0, 1fr); }
+  .fe-wednav { display: none; }
+}
+@media (max-height: 760px) {
+  .fe-wedscroll { padding: 8px 14px 12px; }
+  .fe-wedsec { gap: 6px; padding-bottom: 8px; }
+}
+
+/* Screen 4: the plan meter, each rule's place in the order, and the Fallback card. */
+.fe-condside .fe-plan { display: grid; gap: 4px; }
+.fe-condside .fe-plan small { color: var(--text3); font-size: 10.5px; }
+.fe-ord { flex: none; display: grid; place-items: center; width: 15px; height: 15px; border: 1px solid var(--surface-line); border-radius: 50%; background: var(--surface-inset); color: var(--text3); font-family: var(--font-mono); font-size: 9.5px; }
+.fe-condside .fe-rulehead b { flex: 1 1 auto; }
+.fe-fbcard { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--surface-line); border-radius: 10px; background: var(--bg); }
+.fe-fbcard h3 { margin: 0; font-size: 12px; font-weight: 700; }
+.fe-fbcard .fe-quiet { margin: 0; }
+.fe-fbrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11.5px; }
+.fe-fbrow > span:first-child { color: var(--text2); }
+.fe-fbrow small { display: block; color: var(--text3); font-size: 10px; }
+.fe-fbchip { padding: 2px 8px; border: 1px solid color-mix(in srgb, var(--info) 45%, transparent); border-radius: 999px; background: color-mix(in srgb, var(--info) 14%, transparent); color: var(--info); font-size: 11px; }
+
+/* Screen 5: how a new worker starts, and the team roles as cards. */
+.fe-wedfrom { display: grid; gap: 8px; }
+.fe-teamcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.fe-teamcard { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 2px 8px; padding: 8px 9px; border: 1px solid var(--surface-line); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.fe-teamcard b { font-size: 11.5px; }
+.fe-teamcard small { grid-column: 2; color: var(--text3); font-size: 10px; line-height: 1.35; overflow-wrap: anywhere; }
+.fe-teamcard:hover { border-color: var(--border2); }
+.fe-teamcard[aria-pressed="true"] { border-color: var(--text); background: var(--surface-inset); }
+.fe-teamcard:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.fe-teamcardico { grid-row: span 2; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; background: var(--surface-inset); color: var(--text2); }
+
+/* ── screens 3, 4 and 5: the mockup's .ed (worker editor) and .sheet (drawers) ──
+   Ported from ~/Documents/projects/agentglass/for-david/orchestration-v3/index.html
+   with the mockup's rules kept whole and only its colours and sizes replaced by the
+   app's tokens, so light and dark both follow the theme rather than one palette. */
+.fe-wed { width: min(1040px, 100%); height: 100%; max-height: 100%; display: grid; overflow: clip;
+  grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; border-radius: 18px; }
+.fe-wed .fe-wedbody { display: grid; grid-template-columns: 200px minmax(0, 1fr) 290px; min-height: 0; }
+.fe-eh { grid-column: 1 / -1; display: flex; gap: 12px; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--surface-line); }
+.fe-tile { width: 36px; height: 36px; border-radius: 11px; display: grid; place-items: center; color: var(--on-primary); flex: none; }
+.fe-eh .fe-tile svg { width: 20px; height: 20px; }
+.fe-ehtitle { display: block; font-size: 17px; font-weight: 650; }
+.fe-ehsub { font-size: 12.5px; color: var(--text3); }
+.fe-wednav { display: grid; gap: 2px; align-content: start; min-height: 0; padding: 10px; overflow: auto; border-right: 1px solid var(--surface-line); background: var(--surface-nav); }
+.fe-wednav button { display: flex; gap: 8px; align-items: center; padding: 8px 9px; border: 1px solid transparent; border-radius: 9px; background: none; color: var(--text2); font: inherit; font-size: 12.5px; white-space: nowrap; text-align: left; cursor: pointer; }
+.fe-wednav button[aria-current="true"] { background: var(--surface-card); box-shadow: inset 3px 0 0 var(--primary), var(--surface-lift); color: var(--text); font-weight: 650; }
+.fe-wednav button:hover { background: var(--surface-card); color: var(--text); }
+.fe-wednav button:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.fe-wednav .fe-danger { color: var(--error-ink, var(--error)); }
+.fe-wednav hr { width: 100%; border: 0; border-top: 1px solid var(--surface-line); margin: 8px 4px; }
+/* The editor's middle column: named for itself, because .fe-main is the MAIN engine box of a block. */
+.fe-wedmain { min-width: 0; min-height: 0; overflow: auto; display: grid; gap: 14px; align-content: start; padding: 16px 18px; background: var(--bg); }
+.fe-sec .fe-ta { min-height: 118px; font-size: 12.5px; }
+.fe-wedmain > * { min-width: 0; }
+.fe-sec { min-width: 0; display: grid; gap: 12px; padding: 16px 18px; border: 1px solid var(--surface-line); border-radius: 14px; background: var(--surface-card); box-shadow: var(--surface-lift); scroll-margin-top: 4px; }
+.fe-sec h3 { display: flex; align-items: center; gap: 6px; margin: 0; padding-bottom: 10px; border-bottom: 1px solid var(--surface-line); font-size: 16px; font-weight: 650; }
+.fe-sec h3 small { margin-left: 6px; font-size: 12.5px; font-weight: 400; color: var(--text3); }
+/* The mockup's .lab above a control: its words, not the canvas key label. */
+.fe-wed .agx-flow-ctl { display: grid; gap: 4px; margin: 0; flex-wrap: nowrap; }
+.fe-wed .agx-flow-fk { display: flex; justify-content: space-between; gap: 8px; min-width: 0; padding: 0; font-family: inherit; font-size: 12px; font-weight: 650; letter-spacing: 0; text-transform: none; color: var(--text2); }
+.fe-wed .agx-flow-fk small { font-weight: 400; color: var(--text3); font-size: 12px; }
+.fe-fbsec { display: grid; gap: 6px; }
+.fe-prev { border-left: 1px solid var(--surface-line); background: var(--surface-nav); padding: 16px; overflow: auto; display: grid; gap: 14px; align-content: start; }
+.fe-prev h5 { margin: 0; font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--text3); }
+.fe-prev p { margin: 6px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--text2); }
+.fe-prevcard { position: relative; zoom: .74; width: 344px; height: 352px; margin: 8px 0 0; pointer-events: none; }
+.fe-ef { grid-column: 1 / -1; display: flex; gap: 10px; align-items: center; padding: 11px 18px; border-top: 1px solid var(--surface-line); background: var(--bg); }
+
+/* the mockup's .in, .lab and .inf inside this editor */
+.fe-in { width: 100%; padding: 7px 10px; color: var(--text); font: inherit; }
+/* The mockup's box, kept over INPUT's 32px: fields in this dialog are 36 at 13px. */
+input.fe-in { height: 36px; border: 1px solid var(--border2); border-radius: 9px; background: var(--surface-card); font-size: 13px; }
+.fe-in:disabled { color: var(--text); opacity: 1; -webkit-text-fill-color: var(--text); }
+.fe-in:focus-visible, .fe-wedallow:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.fe-wedallow { width: 100%; min-height: 62px; padding: 7px 10px; border: 1px solid var(--border2); border-radius: 9px; background: var(--surface-card); color: var(--text); font-family: var(--font-mono); font-size: 12.5px; line-height: 1.5; resize: vertical; }
+.fe-lab { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 4px; font-size: 12px; font-weight: 650; color: var(--text2); }
+.fe-inf { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; border: 1.3px solid var(--text3); color: var(--text3); font-size: 10px; font-weight: 600; cursor: help; }
+.fe-inf:hover, .fe-inf:focus-visible { color: var(--primary); border-color: var(--primary); outline: none; }
+
+/* engines, chain and the rows the mockup lays side by side */
+.fe-eng { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.fe-eng button { display: grid; gap: 2px; padding: 9px 10px; border: 1.5px solid var(--surface-line); border-radius: 12px; background: var(--surface-card); color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.fe-eng button small { color: var(--text3); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fe-eng button[aria-pressed="true"] { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 10%, var(--surface-card)); }
+.fe-eng button:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.fe-exits { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; align-items: start; }
+.fe-exits2 { grid-template-columns: 1.4fr 1fr; }
+.fe-step, .fe-stepper { display: flex; align-items: center; gap: 6px; }
+.fe-row2 { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 0; border-top: 1px solid var(--surface-line); }
+.fe-sec > .fe-row2:first-of-type { border-top: 0; padding-top: 0; }
+.fe-row2 .fe-d { flex: 1; min-width: 0; font-size: 13px; }
+.fe-row2 .fe-d b { font-weight: 650; }
+.fe-row2 .fe-d small { display: block; margin-top: 2px; color: var(--text3); font-size: 12px; line-height: 1.45; }
+
+/* the tools: five tiles, the checked one filled */
+.fe-tools { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.fe-tl { display: flex; gap: 9px; align-items: center; padding: 8px 10px; border: 1px solid var(--surface-line); border-radius: 10px; background: var(--surface-card); color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.fe-tl small { display: block; margin-top: 1px; color: var(--text3); font-size: 11.5px; }
+.fe-tl .fe-ck { width: 18px; height: 18px; flex: none; border: 1.5px solid var(--border2); border-radius: 6px; display: grid; place-items: center; color: transparent; }
+.fe-tl[data-on] .fe-ck { background: var(--success); border-color: var(--success); color: var(--on-primary); }
+.fe-tl:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+
+/* the extra-commands box and what no worker may ever run */
+.fe-xcmd { margin-top: 12px; padding: 12px; border: 1px solid var(--surface-line); border-radius: 12px; background: var(--bg); display: grid; gap: 8px; }
+.fe-xhead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+.fe-xlock { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 2px; padding-top: 9px; border-top: 1px solid var(--surface-line); font-size: 12px; color: var(--text3); }
+.fe-xlock code { padding: 0 6px; border: 1px solid var(--surface-line); border-radius: 6px; background: var(--surface-card); color: var(--text2); font-family: var(--font-mono); font-size: 11.5px; }
+
+/* Name and look: the mockup's picker, its 26 glyphs and its ten colours */
+.fe-picker { display: flex; gap: 14px; align-items: flex-start; padding: 12px; border: 1px solid var(--surface-line); border-radius: 12px; background: var(--surface-card); }
+.fe-pvtile { width: 56px; height: 56px; flex: none; border-radius: 16px; display: grid; place-items: center; color: var(--on-primary); }
+.fe-pvtile svg { width: 30px; height: 30px; }
+.fe-pg2 { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.fe-pico { display: grid; grid-template-columns: repeat(9, 1fr); gap: 6px; }
+.fe-pico button { min-width: 0; aspect-ratio: 1 / 1; display: grid; place-items: center; border: 1px solid var(--surface-line); border-radius: 9px; background: var(--surface-card); color: var(--text2); cursor: pointer; }
+.fe-pico button:hover { background: var(--bg); }
+.fe-pico button[aria-pressed="true"] { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 12%, var(--surface-card)); color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
+.fe-pico button:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.fe-pcol { display: flex; flex-wrap: wrap; gap: 8px; }
+.fe-pcol button { width: 22px; height: 22px; border: 2px solid var(--surface-card); border-radius: 50%; box-shadow: 0 0 0 1px var(--surface-line); cursor: pointer; }
+.fe-pcol button[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--text); }
+.fe-nl > summary { display: flex; align-items: center; gap: 12px; padding: 2px 0; list-style: none; cursor: pointer; }
+.fe-nl > summary::-webkit-details-marker { display: none; }
+.fe-tile.fe-sm { width: 34px; height: 34px; border-radius: 10px; }
+.fe-tile.fe-sm svg { width: 18px; height: 18px; }
+.fe-nls { display: grid; flex: 1; min-width: 0; }
+.fe-nls b { font-size: 14px; }
+.fe-nls small { overflow: hidden; color: var(--text3); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.fe-nle { padding: 5px 10px; border: 1px solid var(--border2); border-radius: 8px; background: var(--surface-card); color: var(--text2); font-size: 12.5px; font-weight: 600; }
+.fe-nl > * + * { margin-top: 10px; }
+
+/* Screen 4: the drawer, its rule cards and the Fallback card */
+.fe-drawer { flex: none; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; border-left: 1px solid var(--surface-line); background: var(--surface-card); box-shadow: -18px 0 40px -18px var(--shadow); }
+.fe-drawerhead { display: flex; gap: 10px; align-items: center; padding: 16px 18px; border-bottom: 1px solid var(--surface-line); }
+.fe-drawerhead .fe-tile { width: 32px; height: 32px; border-radius: 10px; background: var(--accent, var(--primary)); color: var(--on-primary); }
+.fe-drawerhead .fe-tile svg { width: 18px; height: 18px; }
+.fe-drawerhead b { display: block; font-size: 16px; font-weight: 700; }
+.fe-drawerhead small { display: block; font-size: 12px; color: var(--text3); }
+.fe-drawerbody > .fe-btn { justify-self: start; }
+.fe-drawerbody { min-width: 0; padding: 16px 18px; overflow: auto; display: grid; gap: 14px; align-content: start; }
+.fe-drawerfoot { display: flex; gap: 8px; align-items: center; padding: 11px 16px; border-top: 1px solid var(--surface-line); background: var(--bg); }
+.fe-condside { --fe-side-w: 430px; width: var(--fe-side-w); display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+.fe-condside .fe-drawerbody { padding: 16px 18px; }
+.fe-plan { display: grid; gap: 4px; }
+.fe-planhead { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.fe-planhead small { color: var(--text3); font-size: 12px; }
+.fe-planhead small:first-child { color: var(--text2); font-weight: 650; }
+.fe-plannum { font-variant-numeric: tabular-nums; }
+.fe-planbar { position: relative; height: 12px; border: 1px solid var(--surface-line); border-radius: 99px; background: var(--surface-inset); overflow: hidden; }
+.fe-planbar i { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 99px; background: linear-gradient(90deg, var(--success), var(--warning)); }
+.fe-planbar u { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--accent, var(--primary)); }
+.fe-rules { display: grid; gap: 10px; list-style: none; margin: 0; padding: 0; }
+.fe-rule { display: grid; gap: 8px; padding: 11px 12px; border: 1px solid var(--surface-line); border-radius: 13px; background: var(--bg); min-width: 0; }
+.fe-rule[data-off] { opacity: .6; }
+.fe-rulehead { display: flex; gap: 8px; align-items: center; }
+.fe-rulehead b { flex: 1 1 auto; min-width: 0; font-size: 14px; overflow-wrap: anywhere; }
+.fe-ord { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--text); color: var(--bg); font-family: var(--font); font-size: 11px; font-weight: 700; }
+.fe-sent { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13.5px; line-height: 1.5; }
+.fe-when { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
+.fe-tok { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border: 1px dashed var(--accent, var(--primary)); border-radius: 7px; background: color-mix(in srgb, var(--accent, var(--primary)) 10%, var(--bg)); color: var(--accent, var(--primary)); font-size: 13px; font-weight: 600; }
+.fe-rchips { display: flex; flex-wrap: wrap; gap: 6px; }
+.fe-chip { display: inline-flex; align-items: center; gap: 5px; padding: 1px 9px; border: 1px solid var(--surface-line); border-radius: 999px; background: var(--surface-inset); color: var(--text2); font-size: 11.5px; white-space: nowrap; }
+.fe-chipwide { white-space: normal; }
+.fe-ract { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.fe-fbcard { display: grid; gap: 6px; padding: 12px 14px; border: 1px solid var(--surface-line); border-radius: 13px; background: var(--surface-card); }
+.fe-fbcard h3 { margin: 0; font-size: 14px; font-weight: 650; }
+.fe-fbcard .fe-quiet { margin: 0 0 4px; font-size: 13px; }
+.fe-fbrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-top: 1px solid var(--surface-line); font-size: 13px; }
+.fe-fbrow:first-of-type { border-top: 0; }
+.fe-fbrow > span:first-child { color: var(--text2); }
+.fe-fbrow small { display: block; color: var(--text3); font-size: 12px; }
+.fe-fbchip { padding: 2px 8px; border: 1px solid color-mix(in srgb, var(--primary) 45%, transparent); border-radius: 999px; background: color-mix(in srgb, var(--primary) 14%, transparent); color: var(--primary); font-size: 12px; }
+
+@media (max-width: 1180px) {
+  .fe-wed .fe-wedbody { grid-template-columns: 186px minmax(0, 1fr) 250px; }
+  .fe-prevcard { zoom: .62; }
+  .fe-eng { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .fe-sec h3 { flex-wrap: wrap; row-gap: 2px; }
+  /* A phone: six a row, or the last of the nine columns is clipped out of reach. */
+  .fe-pico { grid-template-columns: repeat(6, 1fr); }
+  .fe-chainrow { flex-wrap: wrap; }
+  .fe-chainrow .fe-sp { display: none; }
+  .fe-chainrow .fe-fbe { flex: 0 1 112px; }
+  .fe-chainrow .fe-fbm { flex: 1 1 130px; max-width: none; }
+  .fe-chainrow .fe-gr { margin-left: auto; }
+}
+
+@media (max-width: 900px) {
+  .fe-wed { height: 100%; }
+  .fe-wed .fe-wedbody { grid-template-columns: minmax(0, 1fr); }
+  .fe-wednav, .fe-prev { display: none; }
+  .fe-dialog { padding: 8px; }
+  .fe-wedmain { padding: 12px; }
+  .fe-sec { padding: 12px 14px; }
+  .fe-exits, .fe-exits2, .fe-tools, .fe-eng { grid-template-columns: minmax(0, 1fr); }
+  .fe-eh { flex-wrap: wrap; padding: 10px 12px; }
+  .fe-ef { flex-wrap: wrap; padding: 10px 12px; }
+  .fe-nl > summary, .fe-picker, .fe-eh > div { min-width: 0; flex-wrap: wrap; }
+  .fe-drawer, .fe-condside { width: 100%; }
+}

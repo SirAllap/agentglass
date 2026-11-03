@@ -64,7 +64,7 @@
 .fpv .btn.sm { height: 26px; padding: 0 10px; font-size: 11.2px; }
 
 /* three columns */
-.fpv .cols { display: grid; grid-template-columns: minmax(0, 1fr) 340px; min-height: 0; }
+.fpv .cols { display: grid; grid-template-columns: minmax(0, 1fr) clamp(340px, 20vw, 440px); min-height: 0; }
 
 /* open plan */
 .fpv .main { overflow: auto; scrollbar-gutter: stable; padding: 18px 26px 40px; min-width: 0; }
@@ -198,9 +198,9 @@
 .fpv .ch .ci { width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; background: var(--fp-space-bg); color: var(--primary); }
 .fpv .ch h5 { margin: 0; font-size: 13.8px; flex: 1; font-weight: 700; }
 .fpv .csub { padding: 0 18px 10px; color: var(--text3); font-size: 11.7px; }
-.fpv .doc { padding: 4px 18px 14px; font-size: 12.4px; color: var(--text2); border-top: 1px solid var(--fp-line); background: var(--bg); overflow-wrap: anywhere; }
-.fpv .doc h6 { font-size: 12px; margin: 12px 0 4px; color: var(--text); font-weight: 700; }
-.fpv .doc p, .fpv .doc li { margin: 3px 0; max-width: 80ch; }
+.fpv .doc { padding: 4px 18px 14px; font-size: 13px; columns: 2 520px; column-gap: 40px; color: var(--text2); border-top: 1px solid var(--fp-line); background: var(--bg); overflow-wrap: anywhere; }
+.fpv .doc h6 { font-size: 12px; margin: 12px 0 4px; color: var(--text); font-weight: 700; break-after: avoid; }
+.fpv .doc p, .fpv .doc li { margin: 3px 0; }
 .fpv .doc ul { padding-left: 18px; margin: 4px 0; }
 .fpv .doc code { background: var(--surface-inset); border-radius: 4px; padding: 0 4px; }
 .fpv .doc pre { background: var(--surface-inset); border-radius: 8px; padding: 8px 10px; overflow: auto; }
@@ -262,7 +262,7 @@
 .fpv .err-note .row { display: flex; gap: 8px; margin-top: 9px; }
 
 /* right column */
-.fpv .side { border-left: 1px solid var(--fp-line); background: var(--surface-nav); overflow: auto; padding: 16px 14px; }
+.fpv .side { border-left: 1px solid var(--fp-line); background: var(--surface-nav); overflow: auto; padding: 20px 22px; }
 .fpv .poll { background: var(--bg); border: 1px solid var(--fp-line); border-radius: 13px; box-shadow: var(--fp-lift-lg); overflow: clip; }
 .fpv .poll .hd { padding: 13px 15px 6px; } .fpv .poll .hd b { font-size: 13.8px; }
 .fpv .poll .hd p { margin: 2px 0 0; color: var(--text3); font-size: 11.2px; }
@@ -337,12 +337,9 @@
 .fpv .rq label { font-weight: 650; font-size: 12px; } .fpv .rq .h { color: var(--text3); font-size: 10.9px; margin: 1px 0 6px; }
 .fpv textarea { width: 100%; resize: vertical; border: 1px solid var(--border2); border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 12px; background: var(--bg); color: var(--text); }
 .fpv .srow.flat { border-top: 1px solid var(--fp-line); padding: 11px 15px; }
-.fpv .fp-linkrow { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 14px; background: var(--surface-card); border: 1px solid var(--fp-line); border-radius: 10px; font-size: 11.7px; }
 
 @media (max-width: 1100px) { .fpv .cols { grid-template-columns: minmax(0, 1fr); overflow: auto; } .fpv .side { border-left: 0; border-top: 1px solid var(--fp-line); overflow: visible; } }
 @media (max-width: 760px) { .fpv .cols { grid-template-columns: 1fr; } .fpv .page.two { grid-template-columns: 1fr; } .fpv .hrow { grid-template-columns: 70px 1fr 90px; } .fpv .hrow > :nth-child(n+4) { display: none; } .fpv .mock { grid-template-columns: 1fr; } .fpv .thumb { margin-right: 18px; } .fpv .vh { flex-wrap: wrap; } }
-.fp-linkrow { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 14px; background: var(--surface-card); border: 1px solid var(--surface-line); border-radius: 10px; font-size: 11.7px; }
-.fp-linkrow .btn { white-space: nowrap; display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border2); background: var(--bg); cursor: pointer; font: inherit; font-size: 11.2px; font-weight: 600; }
 .fpv .say.hnone { padding: 14px 18px; background: var(--bg); border-top: 1px solid var(--fp-line); }
 .fpv .money input { height: 100%; padding: 0; border-radius: 0; background: none; }
 .fpv .textlink { border: 0; background: none; padding: 0; font: inherit; color: inherit; text-decoration: underline; cursor: pointer; }

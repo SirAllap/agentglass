@@ -57,7 +57,7 @@ describe("single-flight", () => {
     expect(inflightCount()).toBe(0);
   });
 
-  it("empties the in-flight map once everything settles", async () => {
+  it("empties the map of requests running once everything settles", async () => {
     await Promise.all([
       singleFlight("x", async () => { await Bun.sleep(5); return 1; }),
       singleFlight("y", async () => { await Bun.sleep(5); return 2; }),

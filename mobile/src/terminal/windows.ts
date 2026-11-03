@@ -43,7 +43,7 @@ export function groupOf(tab: Tab): string {
 export const groupKey = (tab: Tab): string => groupOf(tab).toLowerCase();
 
 /** What is being said about a window right now: the server's word, overruled
- *  by a held gate — a gate IS the fact, and the poll may be two seconds behind. */
+ *  by a gate waiting on you — a gate IS the fact, and the poll may be two seconds behind. */
 export function statusOf(tab: Tab, asking: ReadonlySet<string>): WindowStatus | undefined {
   return asking.has(tab.paneId) ? "waiting" : tab.status;
 }

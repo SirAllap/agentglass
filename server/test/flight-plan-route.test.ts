@@ -202,6 +202,27 @@ describe("Go, No-go and answering a finding", () => {
   });
 });
 
+describe("raising the budget cap for today", () => {
+  test("the person's raise is in force until the day turns over; an agent is refused, and so is a number that is not a raise", async () => {
+    expect((await get("/flight-plan/plans")).body.budget).toMatchObject({ dailyCap: 5, reached: null });
+    expect((await post("/flight-plan/budget/raise", { usd: 12, scope: "day" })).status).toBe(403);
+    expect((await post("/flight-plan/budget/raise", { usd: 5, scope: "day" }, fromApp())).status).toBe(400);
+    expect((await post("/flight-plan/budget/raise", { usd: 12, scope: "month" }, fromApp())).status).toBe(400);
+    const r = await post("/flight-plan/budget/raise", { usd: 12, scope: "day" }, fromApp());
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ ok: true, capUsd: 12 });
+    const until = r.body.until as number;
+    expect(until).toBeGreaterThan(Date.now());
+    expect(until - Date.now()).toBeLessThanOrEqual(86_400_000);
+    expect(new Date(until).getMinutes()).toBe(0);
+    expect((await get("/flight-plan/plans")).body.budget).toMatchObject({ dailyCap: 12 });
+    // The base cap is the one the Settings row still holds: raising it later is a separate act, and the higher of the two wins.
+    expect((await get(`/settings/door?id=flightPlan.budget.dailyUsd`)).body.value).toBe(5);
+    expect((await setting("flightPlan.budget.dailyUsd", 30, ROOT)).status).toBe(200);
+    expect((await get("/flight-plan/plans")).body.budget).toMatchObject({ dailyCap: 30 });
+  });
+});
+
 describe("a finished task", () => {
   // The review follows the plan the task came from, so a task is linked to one of the given size first.
   const finish = async (title: string, size?: "M" | "L") => {

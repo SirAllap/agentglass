@@ -10,6 +10,8 @@ import { SERVER_BOOT_MS } from "./serverBoot.ts";
 import { startHarness, type Harness } from "./fixtures/workerHarness.ts";
 import { roleLaunch, workerRole } from "../../shared/workerRoles.ts";
 import { agentProvider } from "../../shared/agentKinds.ts";
+import { DEFAULT_WORKER_ENVELOPE } from "../../shared/orchestration.ts";
+import { deniedFor } from "../src/agents/envelope.ts";
 
 const have = !!Bun.which("tmux") && !!Bun.which("python3");
 let h: Harness;
@@ -23,8 +25,19 @@ describe.skipIf(!have)("a seat's role start with no policy stored", () => {
     expect(r.result?.engine).toBeUndefined();
     const argv = await h.until(async () => readdirSync(h.logs).filter((n) => n.startsWith("tui-") && n.endsWith(".argv"))
       .map((n) => readFileSync(join(h.logs, n), "utf8").split("\0").filter(Boolean)).find((a) => a.includes("--settings") && a.includes("sonnet")));
-    const want = roleLaunch(agentProvider("claude")!, workerRole("builder")!, "sonnet")!.args;
+    // The floor is the same one `compileEnvelope` applies — `roleStart` passes
+    // `deniedFor(...)` rather than the bare DENIED_COMMANDS — so the expected
+    // settings file is built the same way. Built with the default instead, this
+    // compared against a lock that still let a worker run agentglass-agent and
+    // its siblings, which is the hole the start path was fixed to close.
+    const want = roleLaunch(agentProvider("claude")!, workerRole("builder")!, "sonnet",
+      deniedFor(DEFAULT_WORKER_ENVELOPE, workerRole("builder")!))!.args;
     expect(argv[argv.indexOf("--settings") + 1]).toBe(want[1]!);
+    // And the floor is really in it: the browser door is open to a builder, the
+    // three it must not reach are not.
+    const lock = JSON.parse(want[1]!) as { permissions: { deny: string[] } };
+    expect(lock.permissions.deny).toContain("Bash(agentglass-agent:*)");
+    expect(lock.permissions.deny).not.toContain("Bash(agentglass-browser:*)");
     expect(argv).not.toContain("-p");
     const a = await h.row("legacy1");
     expect(a?.seatRoot).toBe(h.dir);

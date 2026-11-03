@@ -235,6 +235,11 @@ export function NeedsPopover({ anchorRef, avoidRef, open, items, onClose, onAppr
   /* Only flights in the list: say it the way the chip does ("needs you · 1 question"); with an agent among them, the plain heading. */
   const asks = items.filter((i) => i.ask).length, goes = items.filter((i) => i.plan && !i.ask).length;
   const heading = asks + goes === items.length ? needsLabel(asks, goes) : "waiting on you";
+  /* The panel ends where the window does, and the list takes whatever is left
+     under the heading. Capped by the list's own 46vh it drew a scroll box half
+     the height it had room for, and near the bottom of a short window the
+     panel's last rows were under the viewport with no scrollbar to reach them. */
+  const maxHeight = Math.max(120, window.innerHeight - at.top - 8);
   return (
     <Portal z={LAYER.needs}>
       <div
@@ -242,18 +247,18 @@ export function NeedsPopover({ anchorRef, avoidRef, open, items, onClose, onAppr
         data-needs-panel=""
         className="fixed flex flex-col rounded-xl overflow-hidden"
         style={{
-          top: at.top, left: at.left, width: NEEDS_PANEL_W,
+          top: at.top, left: at.left, width: NEEDS_PANEL_W, maxHeight,
           background: "var(--surface-card)",
           border: EDGE,
           boxShadow: "0 22px 48px -20px var(--shadow)",
         }}
       >
-        <div className="flex items-center gap-2 px-2.5 py-1.5" style={{ borderBottom: LINE }}>
+        <div className="flex items-center gap-2 px-2.5 py-1.5 shrink-0" style={{ borderBottom: LINE }}>
           <span className="text-[10px] tracking-wider" style={{ color: "var(--text3)" }}>{heading}</span>
           <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>{items.length}</span>
           <CloseButton onClick={onClose} title="Close (Esc)" className="agx-note-btn ml-auto" />
         </div>
-        <div className="agx-inbox-list">
+        <div className="agx-inbox-list" data-fill="">
           {items.map((it) => {
             const { exact, hits } = paneChoices(panes, it);
             return (

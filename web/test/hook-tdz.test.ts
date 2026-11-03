@@ -73,8 +73,9 @@ const code = (l: string) => l
   // `s.done`, `tree?.branch`, `m.at` — a property that happens to share a name
   // with a local is not a read of it, and this file is full of them.
   .replace(/\??\.\s*\w+/g, ".")
-  // `{ key: string; rows: PrSummary[] }` — a type's field, same story.
-  .replace(/\b\w+\s*:/g, ":");
+  // `{ key: string; rows: PrSummary[] }` — a type's field, same story, and
+  // `blocked?: unknown` too: the `?` is part of the field, not a read.
+  .replace(/\b\w+\??\s*:/g, ":");
 
 /** Exported so the test below can prove it catches the real thing. */
 export function findTdzReads(source: string, file = "<src>"): Hit[] {

@@ -97,3 +97,33 @@ describe("the host measures the card once it is in the document", () => {
     expect(src).toContain("window.innerHeight");
   });
 });
+
+describe("what a Starboard card never says", () => {
+  test("no 'Needs engine' block and no PROPOSED badge: those are notes about the engine, not about the number", async () => {
+    const host = readFileSync(new URL("../src/components/TipHost.tsx", import.meta.url), "utf8");
+    const tips = readFileSync(new URL("../src/lib/starboardTips.ts", import.meta.url), "utf8");
+    expect(host).not.toContain("Needs engine");
+    expect(host).not.toContain("agx-tip-need");
+    expect(host).toContain('spec.trust !== "proposed"');
+    expect(tips).not.toContain('needs: "');
+  });
+
+  test("the quota tip is one row per provider, not one run-together line", async () => {
+    const { sbQuotaTip } = await import("../src/lib/starboardTips.ts");
+    const spec = readTip(sbQuotaTip([
+      { label: "Claude", windows: "5 h 2% · week 72%" },
+      { label: "OpenCode Go · this PC only", windows: "5 h 1% · week 0% · 30 d 0%" },
+    ]));
+    expect(spec.rows).toEqual([
+      { k: "Claude", v: "5 h 2% · week 72%" },
+      { k: "OpenCode Go · this PC only", v: "5 h 1% · week 0% · 30 d 0%" },
+    ]);
+    expect(spec.text).toBeUndefined();
+    expect(spec.trust).toBe("estimated");
+  });
+
+  test("a quota card with only provider numbers still says measured", async () => {
+    const { sbQuotaTip } = await import("../src/lib/starboardTips.ts");
+    expect(readTip(sbQuotaTip([{ label: "Claude", windows: "5 h 2% · week 72%" }])).trust).toBe("measured");
+  });
+});

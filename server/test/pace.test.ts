@@ -169,11 +169,25 @@ describe("status against the curve", () => {
     expect(run(now, 10).p.status).toBe("under");
     expect(run(now, 17).p.status).toBe("on");
     expect(run(now, 20).p.status).toBe("ahead");
-    expect(budgetLine(run(now, 10).p)).toBe("budget 17% · under pace");
+    expect(budgetLine(run(now, 10).p)).toBe("budget 17% earned · under pace");
   });
 
   test("too early to judge under 2% expected", () => {
     expect(run(at(23, 15, 30), 0).p.status).toBe("too-early");
+  });
+
+  test("a real reading is not hidden by a small expected share", () => {
+    // A 30-day window opened on a Saturday, so no working time has passed and
+    // the curve earns 0% while the plan already reports 29% used. That reading
+    // is ahead of pace, not "too early to judge".
+    const start = Date.UTC(2026, 9, 31, 12, 19, 3);
+    const resetsAt = Date.parse("2026-11-30T12:19:03Z");
+    const now = Date.parse("2026-11-01T08:00:00Z");
+    const p = pace({ usedPercent: 29, resetsAt, windowMinutes: 43200, now, cfg: cfg() });
+    if (p.state !== "ok") throw new Error(`stale: ${p.why}`);
+    expect(p.expected).toBe(0);
+    expect(p.status).toBe("ahead");
+    expect(budgetLine(p)).toBe("budget 0% earned · ahead of pace");
   });
 });
 

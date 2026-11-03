@@ -79,7 +79,7 @@ describe("the strip", () => {
 });
 
 describe("what a window is doing", () => {
-  test("a held gate says waiting ahead of the poll", () => {
+  test("a gate waiting on you says waiting ahead of the poll", () => {
     expect(statusOf(tab("orbit-1042-sync"), NONE)).toBe("working");
     expect(statusOf(tab("orbit-1042-sync"), new Set([tab("orbit-1042-sync").paneId]))).toBe("waiting");
   });

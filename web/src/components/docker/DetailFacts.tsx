@@ -15,7 +15,11 @@ export function WhyLine({ c, onShowLog }: { c: DockerContainer; onShowLog: () =>
   return (
     <div className="dk-why" role="status" data-tone={w.tone === "amb" ? "amb" : undefined}>
       {w.tone === "amb" ? <RefreshIcon size={ICON.md} /> : <WarningIcon size={ICON.md} />}
-      <span><b>{w.lead}</b>{w.code && <> <code>{w.code}</code></>} {w.rest}</span>
+      <div>
+        <span><b>{w.lead}</b>{w.code && <> <code>{w.code}</code></>} {w.rest}</span>
+        {w.cause && <div className="dk-cause">{w.cause}</div>}
+        {w.raw && <details className="dk-fold"><summary>details</summary><code>{w.raw}</code></details>}
+      </div>
       <button type="button" className="dk-chip sm ghost" onClick={onShowLog} title="Scroll the log to the last error">Show in log</button>
     </div>
   );

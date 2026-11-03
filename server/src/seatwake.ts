@@ -18,6 +18,9 @@
  * file to the next changes the board every few seconds and changes nothing a
  * person needs to know. What changes a finding is somebody stopping, somebody
  * going quiet for an hour, or a window vanishing.
+ *
+ * Two things are not states to compare but events, and they take the same door
+ * at once: a report (wakeForReport) and a worker's end (agents/workerend.ts).
  */
 import * as AgentOps from "./agentops.ts";
 import { inScope, seatWakeHours } from "./config.ts";
@@ -265,6 +268,9 @@ export async function promptSeat(root: string, text: string, deps: {
   }
   await (deps.prompt ?? AgentOps.promptAgent)(a.paneId, text, 10_000, a.kind);
 }
+
+/** index.ts wires onPolarisWake to this: a Polaris decision is typed into the project's chair. */
+export const promptSeatForPolaris = (root: string, line: string, deps: Parameters<typeof promptSeat>[2] = {}): Promise<void> => promptSeat(root, line, deps);
 
 /** Types what was parked for a seat whose box has since emptied. Anything
  *  still blocked parks itself again inside `promptSeat`. */

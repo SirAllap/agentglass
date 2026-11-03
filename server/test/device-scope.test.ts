@@ -88,6 +88,9 @@ describe("deny by default", () => {
     "/git/status",
     // What a phone is for: answering something that is already asked.
     "/gate/decide",
+    // The same act on a settings request: the agent asked, the server computed
+    // the diff from the value it validated, and the phone says yes or no.
+    "/settings/requests/decide",
     // Saying something has been read, which moves a badge on the other devices
     // and nothing else.
     "/marks",

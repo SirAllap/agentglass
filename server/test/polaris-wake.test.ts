@@ -163,7 +163,7 @@ describe("facts the board already has", () => {
 describe("the preset is read from the settings route only", () => {
   test("GET /polaris/settings names the preset and its layer", async () => {
     writePolaris(ROOT, { enabled: true, preset: "guided", doors: guided() });
-    const r = await polarisRoute("GET", "/polaris/settings", new URLSearchParams({ root: ROOT }), {}, false);
+    const r = await polarisRoute("GET", "/polaris/settings", new URLSearchParams({ root: ROOT }), {}, { kind: "agent", name: "builder-orbit" });
     expect(r?.body).toMatchObject({ ok: true, preset: "guided", presetLayer: "project", enabledLayer: "project" });
   });
 });

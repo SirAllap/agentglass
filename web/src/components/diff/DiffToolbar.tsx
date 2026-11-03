@@ -30,7 +30,7 @@ export function DiffToolbar({ split, onSplit, wrap, onWrap, noWs, onNoWs, bold, 
   children?: ReactNode;
 }) {
   return (
-    <div className={`flex items-center gap-1.5 min-w-0 ${className}`.trim()}>
+    <div className={`flex flex-wrap items-center gap-1.5 gap-y-1 min-w-0 ${className}`.trim()}>
       {onNoWs && (
         <Chip on={!!noWs} onClick={() => onNoWs(!noWs)}
           title={noWs

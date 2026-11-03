@@ -20,8 +20,8 @@
  *                 comes back off-screen.
  *   the tabs      per CHECKOUT, not per app. Switching worktree switches which
  *                 set you are looking at, and the other set is not closed — it
- *                 is somewhere else, still running, because its tabs are tmux
- *                 sessions on the engine.
+ *                 is somewhere else, still running, because its tabs are windows
+ *                 on that checkout's engine session.
  *
  * Nothing here talks to the server. A tab is a description of what should be on
  * screen; the components below it are what connect.
@@ -35,7 +35,7 @@ import { announceHidden, BENCH_OWNER } from "./layerOwner.ts";
 export type BenchTabKind = "term" | "file" | "note" | "web" | "agent" | "pr" | "tasks";
 
 /**
- * Every file of a checkout shares ONE editor, and this is its session.
+ * Every file of a checkout shares ONE editor, and this is its window.
  *
  * Not one nvim per file, which is what a viewer does: the buffers accumulate in
  * a single instance, so `:b#` jumps between the two files you are comparing,
@@ -49,7 +49,7 @@ export type BenchTabKind = "term" | "file" | "note" | "web" | "agent" | "pr" | "
  * See BENCH_READER_SLOT on the server; the two must agree.
  */
 export const READER_SLOT = 90;
-/** The note tab's session when it is Neovim: one per checkout, like the reader. */
+/** The note tab's window when it is Neovim: one per checkout, like the reader. */
 export const NOTE_SLOT = 91;
 
 export interface BenchTab {
@@ -57,8 +57,8 @@ export interface BenchTab {
   id: string;
   kind: BenchTabKind;
   /**
-   * Which tmux session on the engine this tab is, 1..99 — its own, never
-   * shared. Only the kinds that run something have one: a note is a file on
+   * Which bench window on the engine session this tab is, 1..99 — its own,
+   * never shared. Only the kinds that run something have one: a note is a file on
    * disk and a web tab is a webview, and neither needs a shell.
    */
   slot: number;
@@ -75,16 +75,22 @@ export interface BenchTab {
   url?: string;
   /** agent: which CLI — the label the server's ticket was minted for. */
   agent?: string;
-  /** term: text put at the prompt when the session is first created, with the
+  /** term: text put at the prompt when the window is first created, with the
    *  Enter left to the person reading it. A recipe arrives this way. */
   type?: string;
+  /**
+   * The job the tab was opened for, when a button opened it — `polaris.assisted-setup`.
+   * A job is ONE session per checkout: the same button pressed again brings this tab
+   * to the front instead of seating a second one. See benchJobs.ts.
+   */
+  job?: string;
 }
 
 export interface BenchGeom { x: number; y: number; w: number; h: number }
 
 export interface BenchState {
   /** Is the window on screen? Closed means the button is, which is not the same
-   *  as nothing running: the tabs are tmux sessions and outlive both. */
+   *  as nothing running: the tabs are windows on the engine and outlive both. */
   open: boolean;
   /** Bigger, for when the tab is a file rather than a glance at a shell. */
   grown: boolean;
@@ -121,8 +127,13 @@ export function fabVisible(mode: FabMode, tabCount: number): boolean {
 const KEY = "agentglass.bench.v1";
 
 const DEFAULT_GEOM: BenchGeom = { x: 18, y: 14, w: 64, h: 68 };
-/** Bottom right, out of the way of the rail on the left and the top bar. */
-const DEFAULT_FAB = { x: 96, y: 88 };
+/**
+ * Bottom right, out of the way of the rail on the left and the top bar, and
+ * below the last panel's header: at { 96, 88 } the button covered the Cost
+ * panel's title on the Starboard (header measured at 88% of the viewport at
+ * 1920x1080 and 2560x1440). 95% keeps it in the panel's empty lower corner.
+ */
+export const DEFAULT_FAB = { x: 96, y: 95 };
 
 const EMPTY: BenchState = {
   open: false, grown: false, zoom: 1, geom: DEFAULT_GEOM, fab: DEFAULT_FAB, fabMode: "always", root: "", byRoot: {},
@@ -242,7 +253,7 @@ export const setBenchFabMode = (fabMode: FabMode) => commit({ ...state, fabMode 
 export const setBenchFab = (fab: { x: number; y: number }) => commit({ ...state, fab: clampFab(fab) });
 
 /** Point the bench at a checkout. The tabs of the one you left are untouched —
- *  they are sessions on the engine, and you will find them there. */
+ *  they are windows on the engine session, and you will find them there. */
 export function setBenchRoot(root: string): void {
   if (!root || root === state.root) return;
   commit({ ...state, root });
@@ -262,7 +273,7 @@ let seq = 0;
 const nextId = (): string => `b${Date.now().toString(36)}${(seq++).toString(36)}`;
 
 /**
- * The smallest session number this checkout is not already using.
+ * The smallest window number this checkout is not already using.
  *
  * Smallest rather than next, so closing tab 2 and opening another one reuses 2
  * instead of walking to 99 over a week — and 99 is where the server clamps, so
@@ -270,8 +281,8 @@ const nextId = (): string => `b${Date.now().toString(36)}${(seq++).toString(36)}
  */
 export function freeSlot(root: string): number {
   const used = new Set(tabsFor(root).filter((t) => t.slot > 0).map((t) => t.slot));
-  // Never the reader's: a shell handed that number would attach to the session
-  // holding somebody's editor, and tmux would mirror the two.
+  // Never the reader's: a shell handed that number would be the SAME window as
+  // the one holding somebody's editor, and both would fight over its size.
   used.add(READER_SLOT);
   used.add(NOTE_SLOT);
   for (let n = 1; n <= 99; n++) if (!used.has(n)) return n;
@@ -333,6 +344,16 @@ export function renameTab(root: string, id: string, title: string): void {
   const held = state.byRoot[root];
   if (!held) return;
   const tabs = held.tabs.map((t) => (t.id === id ? { ...t, title } : t));
+  commit({ ...state, byRoot: { ...state.byRoot, [root]: { ...held, tabs } } });
+}
+
+/** Give a tab the job it belongs to. For the one case a job does not know its
+ *  tab: a session opened before jobs existed is adopted on the first press, so
+ *  the button focuses it instead of seating another beside it (benchJobs.ts). */
+export function claimJob(root: string, id: string, job: string): void {
+  const held = state.byRoot[root];
+  if (!held) return;
+  const tabs = held.tabs.map((t) => (t.id === id ? { ...t, job } : t));
   commit({ ...state, byRoot: { ...state.byRoot, [root]: { ...held, tabs } } });
 }
 

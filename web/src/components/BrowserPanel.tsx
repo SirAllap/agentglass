@@ -39,9 +39,10 @@ import {
 } from "../lib/browserShelf.ts";
 import { forgetProfileTabs, openingStrip, readSession, saveSession, setFor } from "../lib/browserSession.ts";
 import {
-  addProfile, loadProfiles, partitionFor, profileHue, profileName, removeProfile, saveProfiles,
+  addProfile, loadProfiles, mintAgentProfile, partitionFor, profileHue, profileName, removeProfile, saveProfiles,
   type BrowserProfile,
 } from "../lib/browserProfiles.ts";
+import { containerOwner, isAgentContainer } from "../../../shared/workerContainer.ts";
 import { VIEWPORTS, type Viewport } from "../lib/browserViewport.ts";
 import { browserNav, clearBrowserNav, subscribeBrowserNav } from "../lib/browserNav.ts";
 import { clientId, serveBrowserAsk, setBrowserAskHandler } from "../lib/browserBus.ts";
@@ -782,9 +783,13 @@ export function BrowserView({ active: viewOn, scope }: {
        * review-pr-540 whose requests carried the default session. Nothing
        * failed; `tabs` reported the isolated identity it had been asked for.
        */
-      let id = wanted ? known.find((p) => p.name === wanted || p.id === wanted)?.id : undefined;
+      let id = wanted && !isAgentContainer(wanted)
+        ? known.find((p) => p.name === wanted || p.id === wanted)?.id
+        : undefined;
       if (wanted && !id) {
-        const r = addProfile(known, wanted);
+        /* A reserved name is minted, never resolved: see `mintAgentProfile`
+           and `shared/workerContainer.ts`. */
+        const r = isAgentContainer(wanted) ? mintAgentProfile(known, wanted) : addProfile(known, wanted);
         if ("error" in r) return { error: `${r.error} — pick another name for the container, or use one from \`profiles\`` };
         known = r.profiles;
         profilesRef.current = known;
@@ -1095,7 +1100,7 @@ export function BrowserView({ active: viewOn, scope }: {
       if (owner) {
         const refusal = crossContainerRefusal({
           tab: targetId,
-          container: owner.profile ? profileName(profilesRef.current, owner.profile) : "default",
+          container: containerOwner(owner.profile ? profileName(profilesRef.current, owner.profile) : "default"),
           as: typeof ask.args.as === "string" ? ask.args.as : "",
           pageExplicit: ask.args.pageExplicit === true,
           acts: ask.args.acts !== false,

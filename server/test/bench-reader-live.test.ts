@@ -5,9 +5,9 @@
  * Two fixes before this one were proven by unit tests (the viewing door
  * accepts the path; the editor argv holds the path) and the button still
  * opened a shell prompt in the checkout. The defect was never in the command:
- * the checkout's reader session already existed as a plain SHELL — created
- * once, when its first file could not be opened — and `new-session -A`
- * attaches to whatever holds the name and ignores the command. So this drives
+ * the checkout's reader WINDOW already existed as a plain SHELL — created
+ * once, when its first file could not be opened — and an attach reattaches to
+ * whatever holds the name and ignores the command. So this drives
  * a real server over the same socket the button's tab opens
  * (`/terminal/pty?view=…&edit=1&bench=90`) and asks tmux what the pane is
  * running afterwards.
@@ -45,11 +45,20 @@ let project = "";
 let home = "";
 let md = "";
 let json = "";
-const READER = "orbit-bench90";
+const ENGINE = "orbit";
+const READER = `${ENGINE}:bench-90`;
+
+/** Is there a reader WINDOW at all? Asked by name and compared with `===`:
+ *  a `-t` naming a window that is gone answers for the session's current one,
+ *  which is the console — measured, and the first version of this read said a
+ *  reader was still running after the window had been killed. */
+const readerWindow = (): boolean =>
+  out("list-windows", "-t", `=${ENGINE}:`, "-F", "#{window_name}").split("\n").includes("bench-90");
 
 /** What the reader's pane is running, and what it was started with. */
 function reader(): { current: string; start: string; pid: string } | null {
-  const r = out("display-message", "-p", "-t", `=${READER}:`, "#{pane_current_command}\t#{pane_start_command}\t#{pane_pid}");
+  if (!readerWindow()) return null;
+  const r = out("display-message", "-p", "-t", `=${READER}`, "#{pane_current_command}\t#{pane_start_command}\t#{pane_pid}");
   if (!r) return null;
   const [current = "", start = "", pid = ""] = r.split("\t");
   return { current, start, pid };
@@ -136,9 +145,10 @@ const step = story();
 
 describe.skipIf(!HAVE)("the bench reader runs nvim on the file asked for", () => {
   step("a reader session left as a plain shell is replaced by nvim on that exact file", async () => {
-    /* The state the button met: the checkout's reader session exists, and it
-       is a shell (started with no command). */
-    tmux("new-session", "-d", "-s", READER, "-c", project);
+    /* The state the button met: the checkout's engine session exists and its
+       reader window is a shell (started with no command). */
+    tmux("new-session", "-d", "-s", ENGINE, "-n", "console", "-c", project);
+    tmux("new-window", "-d", "-t", `=${ENGINE}:`, "-n", "bench-90", "-c", project);
     expect(reader()?.start).toBe("");
 
     const { ws, frame } = await openReader(md);
@@ -165,7 +175,7 @@ describe.skipIf(!HAVE)("the bench reader runs nvim on the file asked for", () =>
   }, 20_000);
 
   step("with nothing to open, it says so instead of leaving a shell", async () => {
-    tmux("kill-session", "-t", `=${READER}`);
+    tmux("kill-window", "-t", `=${READER}`);
     const { ws, frame } = await openReader(join(home, "Documents", "evidence", "gone.md"));
     ws.close();
     expect(frame.t).toBe("fatal");

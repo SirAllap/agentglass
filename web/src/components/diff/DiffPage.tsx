@@ -918,7 +918,7 @@ function Body({ row, state, mode, split, onSplit, wrap, onWrap, noWs, onNoWs, at
     <>
       {/* The six diff controls live here, once, shared with the commit modal; the list's
           own controls (filter, grouping) live with the list. */}
-      <div className="shrink-0 flex items-center gap-1.5 px-3" style={{ height: 44, borderBottom: LINE }}>
+      <div className="shrink-0 flex flex-wrap items-center gap-1.5 gap-y-1 px-3 py-1.5" style={{ minHeight: 44, borderBottom: LINE }}>
         <DiffToolbar split={split} onSplit={onSplit} wrap={wrap} onWrap={onWrap} noWs={noWs} onNoWs={onNoWs}
           bold={bold} onBold={setBold} themePref={themePref} onTheme={setThemePref} themeError={hiliteError} />
         <span className="flex-1" />

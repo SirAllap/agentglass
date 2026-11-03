@@ -11,7 +11,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { anthropicUsage, installedProviders, allProviderUsage } from "../src/providerusage.ts";
-import type { AgentProbe } from "../../shared/types.ts";
 import type { UsagePayload } from "../src/usage.ts";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
@@ -72,7 +71,7 @@ const providers = async (): Promise<Provider[]> =>
  * that contract is pinned deterministically in the injected-probe tests below.
  * What these check is what must hold for whatever rows do come back.
  */
-const ORDER = ["anthropic", "codex", "antigravity"];
+const ORDER = ["anthropic", "codex", "opencode", "antigravity"];
 
 describe("/usage/providers", () => {
   test("returns known providers, in the fixed order, without repeats", async () => {
@@ -100,6 +99,15 @@ describe("/usage/providers", () => {
 
   test("no filesystem path is in the answer", async () => {
     expect(JSON.stringify(await providers())).not.toContain(dir);
+  });
+
+  test("OpenCode Go is also readable on its own, read-only route", async () => {
+    const row = await fetch(base + "/usage/opencode").then((r) => r.json()) as Provider;
+    expect(row.provider).toBe("opencode");
+    expect(row.label).toBe("OpenCode Go");
+    // Whether it has a reading depends on the machine's browser; a row with no
+    // reading must never carry a number.
+    if (!row.available) expect(row.windows).toEqual([]);
   });
 });
 
@@ -213,8 +221,8 @@ describe("anthropicUsage() — pure conversion", () => {
  * disconnected agent still has a plan that runs out, and still gets a row.
  */
 describe("installedProviders()", () => {
-  /** Only the fields the filter reads; the rest of AgentProbe is irrelevant here. */
-  const probe = (id: string, found: boolean) => ({ id, found }) as unknown as AgentProbe;
+  /** Only the fields the filter reads; the rest of a probe is about events. */
+  const probe = (id: string, found: boolean) => ({ id, found });
 
   test("maps each roster id to its provider", () => {
     const on = installedProviders([
@@ -241,7 +249,7 @@ describe("installedProviders()", () => {
     // The distinction this filter deliberately does not make. Quota does not
     // travel over the event wiring, so unwiring it must not hide the number.
     const on = installedProviders([
-      { id: "codex", found: true, connected: false } as unknown as AgentProbe,
+      { id: "codex", found: true, connected: false },
     ]);
     expect([...on]).toEqual(["codex"]);
   });
@@ -249,10 +257,14 @@ describe("installedProviders()", () => {
   test("the Gemini CLI maps to no provider — it reports no plan window", () => {
     expect(installedProviders([probe("gemini", true)]).size).toBe(0);
   });
+
+  test("OpenCode maps to its Go plan, read from its console", () => {
+    expect([...installedProviders([probe("opencode", true)])]).toEqual(["opencode"]);
+  });
 });
 
 describe("allProviderUsage() with injected probes", () => {
-  const probe = (id: string, found: boolean) => ({ id, found }) as unknown as AgentProbe;
+  const probe = (id: string, found: boolean) => ({ id, found });
 
   test("returns only the installed agents' rows, in the fixed order", async () => {
     const rows = await allProviderUsage([

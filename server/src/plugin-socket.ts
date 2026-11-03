@@ -245,7 +245,7 @@ function socketIsLive(path: string): Promise<boolean> {
  * throws (today: the start fails loudly, not silently through someone
  * else's socket).
  */
-// The in-flight attempt, shared by every concurrent caller until it settles
+// The attempt already running, shared by every concurrent caller until it settles
 // either way — not a lock that stays held, just memoisation of the one
 // promise already running. Cleared in `finally` so the NEXT call (there is
 // always one: `socketServer` is still null after a failed attempt) starts a

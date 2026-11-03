@@ -55,7 +55,7 @@ function write(f: MarksFile | null): void {
 }
 
 /** The agent a photographed pane was running, or null for a plain shell. */
-function agentOf(p: CapturedPane): string | null {
+export function agentOf(p: CapturedPane): string | null {
   if (p.agentSession) return agentKind("claude")?.title ?? null;
   const head = basename(p.startArgv?.[0] ?? "");
   return AGENT_KINDS.find((k) => k.bin === head)?.title ?? null;

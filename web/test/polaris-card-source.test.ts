@@ -17,16 +17,19 @@ const api = await Bun.file(new URL("../src/lib/api.ts", import.meta.url)).text()
 const code = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 const all = code(Object.values(text).join("\n"));
 
-describe("the card in Settings > Orchestration", () => {
-  test("it sits above the first existing card and follows the page's scope", () => {
-    const at = pane.indexOf("<PolarisCard root={root} />");
-    expect(at).toBeGreaterThan(0);
-    expect(at).toBeLessThan(pane.indexOf("<QuickSetup q={q}"));
-    expect(at).toBeGreaterThan(pane.indexOf("<ScopeBar"));
+describe("the view in Settings > Agents > Polaris", () => {
+  test("it is mounted once, on the Polaris page, with that page's scope", async () => {
+    const page = await Bun.file(new URL("../src/components/polaris/PolarisPane.tsx", import.meta.url)).text();
+    expect(page.match(/<PolarisView /g)?.length).toBe(1);
+    expect(page).toContain("<PolarisView root={root} />");
+    const modal = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url)).text();
+    expect(modal).toContain('{show("polaris") && <PolarisPane />}');
+    expect(pane).not.toContain("<PolarisView");
+    expect(pane).not.toContain("<PolarisCard");
   });
-  test("the header comment no longer says nothing on the page has a setting id", () => {
+  test("the Orchestration header comment no longer claims Polaris's setting ids", () => {
     expect(pane).not.toContain("Nothing on this page has a setting id");
-    expect(pane).toContain("polaris.door.<door>");
+    expect(pane).toContain("polaris.*");
   });
   test("the page's comment about polling still stands: nothing in the new files polls", () => {
     expect(all).not.toMatch(/setInterval|setTimeout|requestAnimationFrame/);
@@ -36,7 +39,7 @@ describe("the card in Settings > Orchestration", () => {
 describe("what the Polaris pieces may call", () => {
   test("the only write to the world beyond settings is a click: act, beacon send, edit, discard, settings save", () => {
     const calls = [...all.matchAll(/\bapi\.([a-z]\w*)\(/g)].map((m) => m[1]);
-    expect(new Set(calls)).toEqual(new Set(["polarisSettings", "polarisSettingsSave", "polarisItems", "polarisAct", "polarisBeaconSend", "polarisBeaconEdit", "polarisBeaconDiscard", "workerRoles", "prLocalHead"]));
+    expect(new Set(calls)).toEqual(new Set(["polarisSettings", "polarisSettingsSave", "polarisItems", "polarisAct", "polarisBeaconSend", "polarisBeaconEdit", "polarisBeaconDiscard", "workerRoles", "prLocalHead", "projects"]));
   });
   test("no call pattern for merge, comment, label, review or card move", () => {
     expect(all).not.toMatch(/pr merge["'`]|\/comments|\/labels|\/reviews|moveCard|cardMove/);
@@ -81,7 +84,7 @@ describe("the desk key", () => {
 describe("Assisted setup", () => {
   const card = code(text["PolarisCard.tsx"]!);
   test("it asks the engine of the builder role and is disabled without one, with a link to Agent engines", () => {
-    expect(card).toContain("askBuilderOnBench(root, assistPrompt(root)");
+    expect(card).toContain("askBuilderOnBench(root, assistPrompt(root), ASSIST_TITLE, JOB.polarisSetup, ASSIST_TITLE)");
     expect(card).toContain("disabled={!ready || noProject || busy}");
     expect(card).toContain('openSettings("engines")');
     expect(card).toContain("See Agent engines");
@@ -89,6 +92,13 @@ describe("Assisted setup", () => {
   // Measured in the card's 366px column: two buttons beside the words sat on top of the hint.
   test("its two buttons go under the words, not beside them", () => {
     expect(card).toContain('<SettingRow label="Assisted setup" wide');
+  });
+  // Measured by the person: three presses, three sessions, nothing said. While
+  // one is open the button is "Open · Show it" and the row says where it went.
+  test("one session per project, and the row says where it is", () => {
+    expect(card).toContain("useBenchJob(root, JOB.polarisSetup, ASSIST_TITLE)");
+    expect(card).toContain("Open · Show it");
+    expect(card).toContain('<BenchJobLine root={root} job={JOB.polarisSetup}');
   });
 });
 

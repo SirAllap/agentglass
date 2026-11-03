@@ -326,6 +326,10 @@ async function safetyBlocks(c: CleanupCtx, main: string, wt: string | null, head
 interface Pane { sock: number; session: string; windowId: string; window: string; cwd: string; cmd: string; pid: string }
 const SHELLS = new Set(["bash", "zsh", "fish", "sh", "dash", "ksh", "nu"]);
 const WINDOW_ID = /^@\d+$/;
+/** A panel's ephemeral view session (`agx-view-<pid>-<rand>`), a group of the
+ *  engine. Kept in step by hand because importing tmuxpane.ts here would pull
+ *  the tmux resolver into the settings module for one regex. */
+const PANEL_VIEW = /^agx-view-\d+-[a-z0-9]+$/;
 
 async function panesOf(c: CleanupCtx): Promise<Pane[]> {
   const out: Pane[] = [];
@@ -335,6 +339,11 @@ async function panesOf(c: CleanupCtx): Promise<Pane[]> {
     if (r.code !== 0) continue;
     for (const l of r.stdout.split("\n").filter(Boolean)) {
       const [session = "", windowId = "", window = "", cwd = "", cmd = "", pid = ""] = l.split("\t");
+      /* A panel's view is a session GROUP of the engine: it lists the same
+         windows again, so one idle shell would be counted (and reported) twice
+         and a tab read as two. Not a row of its own — see `VIEW_SESSION` in
+         tmuxpane.ts, which is where the name shape is defined. */
+      if (PANEL_VIEW.test(session)) continue;
       if (WINDOW_ID.test(windowId)) out.push({ sock, session, windowId, window, cwd, cmd, pid });
     }
   }
@@ -926,10 +935,34 @@ export function shouldAutoClean(mode: CleanupMode, plan: Pick<CleanupPlan, "bloc
 /**
  * A row of the Closed list: does this merged or closed PR have anything on this machine? Local only (git, docker, the
  * folders the engine knows), never gh and never per-row `du` of a tab: the branch comes from the list the caller already
- * holds. Docker's listings are asked once for the whole batch. A PR whose answer cannot be read is `null`, which is
- * "unknown", never "nothing". Ceiling: a tab left open is not counted here; the plan still lists it.
+ * holds. Docker's listings and tmux's pane list are asked once for the whole batch. A PR whose answer cannot be read is
+ * `null`, which is "unknown", never "nothing". Ceiling: a tab left open is not counted here; the plan still lists it.
+ *
+ * `blocked` is why a cleanup of this card would be refused, from what this row already reads (git, tmux, /proc).
  */
-export interface Leftover { pr: number; items: number; bytes: number; groups: { group: string; items: number; bytes: number }[] }
+export interface Leftover { pr: number; items: number; bytes: number; groups: { group: string; items: number; bytes: number }[]; blocked?: string }
+
+/**
+ * Local half of the plan's safety, in the block title the dialog wears: dirty worktree, live session, commits not on
+ * origin. The plan also decides from GitHub (another open PR, a stacked one, the main checkout); those are the dialog's.
+ * Ceiling: with no `origin/<branch>` (deleted after the merge) the branch is not judged here.
+ */
+async function localBlock(cx: CleanupCtx, o: { main: string; wt: string | null; slug: string | null; branch: string; tabOk: boolean }): Promise<string | null> {
+  if (o.wt) {
+    const st = await git(cx, o.wt, ["status", "--porcelain"]);
+    if (st.code !== 0) return "git could not read the checkout";
+    if (st.stdout.trim()) return "Uncommitted changes in the worktree";
+  }
+  if ((await liveSessions(cx, o.wt, o.slug, o.tabOk)).blocks.length) return "A live session is working in this worktree";
+  const head = await git(cx, o.main, ["rev-parse", "--verify", "--quiet", `refs/heads/${o.branch}`]);
+  const origin = await git(cx, o.main, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${o.branch}`]);
+  if (head.code === 0 && origin.code === 0) {
+    const anc = await git(cx, o.main, ["merge-base", "--is-ancestor", head.stdout.trim(), origin.stdout.trim()]);
+    if (anc.code === 1) return "Commits on the branch that are not on origin";
+  }
+  return null;
+}
+
 export async function leftoverInventory(repoIn: string, prs: { pr: number; branch: string }[], cfgOf: (main: string) => CleanupConfig, c: CleanupCtx): Promise<(Leftover | { pr: number; unknown: true })[]> {
   const wl = await git(c, repoIn, ["worktree", "list", "--porcelain"]);
   if (wl.code !== 0) throw new CleanupError(`${repoIn} is not a git repository`);
@@ -937,9 +970,11 @@ export async function leftoverInventory(repoIn: string, prs: { pr: number; branc
   const main = list[0]!.path;
   const cfg = cfgOf(main);
   const memo = new Map<string, Promise<Awaited<ReturnType<CleanupCtx["run"]>>>>();
+  const once = (cmd: string, args: string[]): boolean =>
+    (cmd === "docker" && ["ps", "images", "volume"].includes(args[0] ?? "")) || (cmd === "tmux" && args.includes("list-panes"));
   const cx: CleanupCtx = { ...c, run: (cmd, args, opt) => {
-    if (cmd !== "docker" || !["ps", "images", "volume"].includes(args[0] ?? "")) return c.run(cmd, args, opt);
-    const k = args.join(" "); if (!memo.has(k)) memo.set(k, c.run(cmd, args, opt)); return memo.get(k)!;
+    if (!once(cmd, args)) return c.run(cmd, args, opt);
+    const k = [cmd, ...args].join(" "); if (!memo.has(k)) memo.set(k, c.run(cmd, args, opt)); return memo.get(k)!;
   } };
   const def = await git(cx, main, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
   const defaults = new Set(["main", "master", def.code === 0 ? def.stdout.trim().replace(/^origin\//, "") : ""]);
@@ -949,9 +984,11 @@ export async function leftoverInventory(repoIn: string, prs: { pr: number; branc
     try {
       if (!branch || defaults.has(branch)) { out.push({ pr, items: 0, bytes: 0, groups: [] }); continue; }
       const wt = list.find((w) => w.branch === branch && !w.bare && w.path !== main) ?? null;
-      const items = (await localItems(cx, cfg, { main, wt, branch, slug: slugOf(branch), defaults, inc, notes: [] })).filter((i) => GROUP_OF[i.kind]);
+      const slug = slugOf(branch);
+      const items = (await localItems(cx, cfg, { main, wt, branch, slug, defaults, inc, notes: [] })).filter((i) => GROUP_OF[i.kind]);
       const groups = [...new Set(items.map((i) => GROUP_OF[i.kind]!))].map((g) => { const m = items.filter((i) => GROUP_OF[i.kind] === g); return { group: g, items: m.length, bytes: m.reduce((n, i) => n + (i.bytes ?? 0), 0) }; });
-      out.push({ pr, items: items.length, bytes: groups.reduce((n, g) => n + g.bytes, 0), groups });
+      const blocked = items.length ? await localBlock(cx, { main, wt: wt?.path ?? null, slug, branch, tabOk: inc.has("tab") }) : null;
+      out.push({ pr, items: items.length, bytes: groups.reduce((n, g) => n + g.bytes, 0), groups, ...(blocked ? { blocked } : {}) });
     } catch { out.push({ pr, unknown: true }); }
   }
   return out;

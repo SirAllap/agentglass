@@ -12,7 +12,7 @@ import { pickerProjects } from "../../lib/agentRulesView.ts";
  * EVERYTHING THE AGENTS SCREEN READS, in one place.
  *
  * Each source is the one the app already has — the board (lanternStore, one
- * reader for the whole app), a project's `/seat`, the held gates, the settings
+ * reader for the whole app), a project's `/seat`, the gates waiting on you, the settings
  * requests, a scan of listening ports, the schedules — read on the clock that
  * source needs and only while the screen is on show. Nothing is read twice and
  * nothing here decides anything: the decisions are in lib/agentsScreen.ts.

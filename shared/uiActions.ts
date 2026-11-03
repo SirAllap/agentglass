@@ -40,7 +40,7 @@ import { ACCOUNT_ID_RE, ACCOUNT_PROVIDERS } from "./pluginAccounts.ts";
  * 2026-09-08) leaves this list with it, and a renamed one stays reachable by its
  * old name through the aliases.
  */
-export const VIEW_IDS = ["dash", "git", "diff", "pr", "tasks", "docker", "term", "browser", "agents", "plugins", "flightPlan", "skills"] as const;
+export const VIEW_IDS = ["dash", "git", "diff", "pr", "tasks", "docker", "term", "browser", "agents", "plugins", "flightPlan", "skills", "manifest"] as const;
 
 /**
  * THE NAMES THE AGENTS SCREEN HAD BEFORE IT WAS ONE SCREEN.
@@ -59,15 +59,27 @@ export const VIEW_NAMES = [...VIEW_IDS, ...(Object.keys(VIEW_ALIASES) as (keyof 
 export const canonView = (name: string): string => (VIEW_ALIASES as Record<string, string>)[name] ?? name;
 
 /** The pages Settings can be opened on. `plugin:<name>` pages come and go with
- *  the installed plugins and are not a closed set, so they are not here. */
+ *  the installed plugins and are not a closed set, so they are not here.
+ *  `lantern` is in this list only as an alias (see SETTINGS_PAGE_ALIASES): a
+ *  door that names it must still land, and a guard must be able to tell that
+ *  apart from a page Settings has and no longer draws. */
 export const SETTINGS_PAGE_IDS = [
-  "prefs", "appearance", "notifications", "rail", "keys", "terminal", "diff", "browser", "git", "tasks", "hooks", "engines", "orchestration", "lantern",
+  "prefs", "appearance", "notifications", "rail", "keys", "terminal", "diff", "browser", "git", "tasks", "hooks", "engines", "orchestration", "polaris", "lantern",
   "understudy", "budgets", "recipes", "review-prompts", "saved-replies", "connections", "clickup", "jira", "remote", "plugins",
   "tmux", "privacy", "about", "log", "onboarding",
 ] as const;
 
+/** Old page names, and the page each one means. `resolvePane` in
+ *  web/src/lib/openSettings.ts spreads this map, so the two doors cannot drift. */
+export const SETTINGS_PAGE_ALIASES = { lantern: "hooks" } as const;
+
 export const PANEL_IDS = ["skills", "help", "palette"] as const;
+/** The machine panel's tabs. `ports` was a rail icon of its own; the view it
+ *  opened is Resources, and a command written before that still lands there. */
 export const MACHINE_TABS = ["ports", "resources", "locks"] as const;
+export type MachineTabName = (typeof MACHINE_TABS)[number];
+export const canonMachineTab = (tab: MachineTabName): Exclude<MachineTabName, "ports"> =>
+  tab === "ports" ? "resources" : tab;
 export const GIT_MODALS = ["insights", "bisect", "palette"] as const;
 export const BOARD_KINDS = ["pr", "tasks"] as const;
 export const PANE_DOORS = ["git", "diff", "pr", "card"] as const;
@@ -274,7 +286,7 @@ export const UI_ACTIONS = {
     level: 2, kind: "change", surface: "one setting through the same setter its Settings row calls; an escalation that does not narrow waits for the person's Approve (the answer says pending); a setting whose type is json takes the JSON as text",
     args: { id: { t: "slug", max: 80 }, value: { t: "scalar" }, root: { t: "abspath", optional: true } },
   }),
-  "machine.open": def({ modals: ["MachinePanel.tsx"], level: 1, kind: "open", surface: "the machine panel on ports, resources or locks", args: { tab: { t: "enum", values: MACHINE_TABS } } }),
+  "machine.open": def({ modals: ["MachinePanel.tsx"], level: 1, kind: "open", surface: "the machine panel on resources or locks (ports is the old name for resources)", args: { tab: { t: "enum", values: MACHINE_TABS } } }),
   "project.picker": def({ modals: ["projects/ProjectsModal.tsx", "projects/SidePanes.tsx"], level: 1, kind: "open", surface: "the project picker", args: {} }),
   "windows.switcher": def({ modals: ["terminal/WindowSwitcher.tsx"], level: 1, kind: "open", surface: "the window switcher", chords: ["windows.switcher"], args: {} }),
   "bench.toggle": def({ modals: ["bench/FloatingBench.tsx"], level: 1, kind: "open", surface: "the floating bench, shown or hidden", chords: ["bench.toggle"], args: {} }),
@@ -441,6 +453,7 @@ export const UI_READ_NOT_COVERED: Readonly<Record<string, string>> = {
   "settings.jira": "credential pane: the token, the site and the write switch are never read through this channel (the one setting on it is a def, and the steps have their own door, GET /jira/steps)",
   "settings.onboarding": "not a setting",
   "settings.orchestration": "no setting of its own: the page shows the policy GET /orchestration answers, and only a person writes it (the route refuses an agent), so there is nothing here for an agent to read or change",
+  "settings.polaris": "no row of its own: every switch on it is a polaris.* setting, read and written through settings.get and settings.set; the project choice above the view is the window's own",
   "settings.git": "the settings are held by the server per project (cleanup.mode, cleanup.autoCleanDays, cleanup.include): an agent reads and writes them through settings.get and settings.set with the project root, not through the window",
   "settings.engines": "no setting of its own: the page shows what GET /engines measures on this machine, and an agent reads that route (the tests there are a real turn and are not an agent's to start)",
 };

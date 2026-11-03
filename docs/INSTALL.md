@@ -200,7 +200,9 @@ Linux distributions, so how you install software is yours to know.
 **Two more that are not binaries**
 
 - **Linux `.AppImage`**: needs FUSE, which some distributions no longer install
-  by default. The `.deb` has no such requirement.
+  by default. The `.deb` has no such requirement. To start it without FUSE,
+  once, run `./agentglass.AppImage --appimage-extract-and-run`: it unpacks the
+  app into a temporary folder on every launch and is not a way to keep it.
 - **Self-update** ("Install & restart" in Settings ▸ About) builds the new
   version on your machine, so it wants `git`, [Bun](https://bun.sh) and a
   working build toolchain. It is opt-in and never automatic.

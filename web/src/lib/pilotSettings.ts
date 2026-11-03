@@ -33,6 +33,9 @@ export const PILOT_KEYS: Record<Field, { id: string; scope: "project" | "app" }>
 };
 export const FIELDS = Object.keys(PILOT_KEYS) as Field[];
 
+/** The mode the Orchestration hero's chip names, short enough for a chip; the sheet has the long sentence. */
+export const PILOT_CHIP: Record<Pilot, string> = { manual: "Manual", copilot: "Co-pilot", autopilot: "Autopilot" };
+
 /** The engine's defaults (design doc, section 6): what a row shows until its read comes back. */
 export const DEFAULT_PILOT_SETTINGS: PilotSettings = {
   pilot: "copilot",

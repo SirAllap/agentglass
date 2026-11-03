@@ -81,6 +81,16 @@ describe("the three answers", () => {
     expect(t.needNames[1]).toBe("orbit · web");
   });
 
+  /* The card's line is all a failed start shows until the container is opened. */
+  test("a line for a container docker could not start says why, in four words", () => {
+    const t = triage([
+      c({ id: "a", state: "exited", status: "Exited (127) 13 minutes ago", service: "api", stateError: 'exec: "/app/run": stat /app/run: no such file or directory' }),
+      crash("b"),
+    ]);
+    expect(t.needNames[0]).toBe("orbit · api — could not start: command not found");
+    expect(t.needNames[1]).toBe("orbit · b");
+  });
+
   const stat = (id: string, cpu: number, memUsage: string): DockerStat => ({ id, cpu, mem: 1, memUsage, netIO: "", blockIO: "", pids: 1 });
 
   test("the busiest running container and the memory it all adds up to need stats", () => {

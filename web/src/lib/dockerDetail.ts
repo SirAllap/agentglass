@@ -8,7 +8,7 @@
 import type { DockerContainer, DockerStat } from "../../../shared/types.ts";
 import { isSecret } from "../../../shared/dockerSecret.ts";
 import { portLabel, portUrl } from "./dockerRow.ts";
-import { exitCode, kindOf } from "./dockerState.ts";
+import { exitCode, kindOf, startFailure } from "./dockerState.ts";
 import { levelOf } from "./dockerLogFeed.ts";
 import { meterOf } from "./dockerView.ts";
 
@@ -21,6 +21,10 @@ export interface HealthLine {
   /** The probe's own words, when it said any. */
   code?: string;
   rest: string;
+  /** Why the start failed, in one sentence, when docker's error says it. */
+  cause?: string;
+  /** Docker's `State.Error` verbatim, for the fold. */
+  raw?: string;
 }
 
 const plural = (n: number, w: string): string => `${n} ${w}${n === 1 ? "" : "s"}`;
@@ -44,7 +48,13 @@ export function healthLine(c: DockerContainer): HealthLine | null {
     return { tone: "amb", lead: "Restart loop:", rest: `${lead}Docker keeps trying.` };
   }
   if (k === "crash") {
-    return { tone: "bad", lead: `Exited with code ${exitCode(c)}`, rest: `${(c.status || "").replace(/^Exited \(-?\d+\) /, "")}. It was not stopped by you.` };
+    const raw = (c.stateError ?? "").trim();
+    const fail = startFailure(raw);
+    return {
+      tone: "bad", lead: `Exited with code ${exitCode(c)}`, rest: `${(c.status || "").replace(/^Exited \(-?\d+\) /, "")}. It was not stopped by you.`,
+      ...(fail ? { cause: fail.sentence } : {}),
+      ...(raw ? { raw } : {}),
+    };
   }
   if (k === "dead") return { tone: "bad", lead: "Docker marked this container dead.", rest: "It cannot be started again; remove it and recreate it." };
   return null;
@@ -178,6 +188,50 @@ export const pauseLabel = (paused: boolean, waiting: number): string =>
   !paused ? "Pause" : waiting ? `Resume · ${waiting} waiting` : "Resume";
 
 export type StreamKey = "live" | "paused" | "ended" | "snapshot";
+
+/* ---------------------------------------------------------- the older run */
+
+/** The fields a failed start is decided from; a row has all three. */
+export type StartAttempt = Pick<DockerContainer, "stateError" | "startedAt" | "finishedAt">;
+
+const ms = (s: string | null | undefined): number | null => {
+  if (!s) return null;
+  const t = Date.parse(s);
+  return Number.isFinite(t) && t > 0 ? t : null;
+};
+
+/** When the attempt docker complains about ended, in ms. FinishedAt is the
+ *  exact one; StartedAt is the fallback for a container whose exit it never
+ *  stamped. Null when docker left neither, and then nothing can be said. */
+export const failedStartAt = (c: StartAttempt): number | null => ms(c.finishedAt) ?? ms(c.startedAt);
+
+/** The last line that carries a stamp, in ms; null when none does. */
+function lastStampAt(entries: LogEntry[]): number | null {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const at = ms(entries[i]!.stamp);
+    if (at !== null) return at;
+  }
+  return null;
+}
+
+/**
+ * True when `docker logs` is showing lines from before the start that failed.
+ *
+ * A container that never ran has no log of its own, but `docker logs` still
+ * hands back whatever the name kept from an earlier run, which reads as if that
+ * were this attempt's output. The last stamped line settling before the attempt
+ * ended is what tells them apart; a container whose stamps docker left at year
+ * one, or a log with no stamp at all, cannot be decided and stays as it was.
+ */
+export function logFromEarlierRun(c: StartAttempt, entries: LogEntry[]): boolean {
+  if (!(c.stateError ?? "").trim()) return false;
+  const from = failedStartAt(c);
+  const last = lastStampAt(entries);
+  // Both ends have to be known: either one missing is not evidence of anything.
+  return from !== null && last !== null && last < from;
+}
+
+export const NO_LOG_FROM_THIS_START = "No log from this start attempt";
 
 /** What the chip in the log toolbar says. A container that is not running was only ever read once. */
 export function streamChip(i: { running: boolean; ended: string | null; paused: boolean }): { key: StreamKey; word: string } {

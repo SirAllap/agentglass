@@ -4,12 +4,15 @@
  * this hook turns each message into one fetch and nothing else asks.
  *
  * Fetches coalesce: events come in bursts (a compose `up` is a dozen), and a
- * burst must cost one request in flight and at most one behind it, not twelve.
+ * burst must cost one request in flight and at most one behind it, not twelve —
+ * but a request that arrives during a fetch is queued, never dropped, or the
+ * last event of a burst leaves the list stale with nothing left to correct it.
  */
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { DockerCapability, DockerLiveScope, DockerOverview, DockerStat } from "../../../shared/types.ts";
 import { api } from "./api.ts";
 import { noteOverview } from "./dockerCount.ts";
+import { coalescing } from "./dockerQueue.ts";
 import { mergeStats } from "./dockerView.ts";
 import { useDockerLive } from "./useDockerLive.ts";
 
@@ -26,8 +29,6 @@ export function useDockerData(active: boolean) {
      figures went stale, so it is asked again on the event and never on a timer. */
   const [changed, setChanged] = useState<Record<DockerLiveScope, number>>({ containers: 0, images: 0, volumes: 0, networks: 0 });
   const known = useRef<ReadonlySet<string>>(new Set());
-  const inflight = useRef<Promise<void> | null>(null);
-  const trailing = useRef<boolean | null>(null);
 
   const fetchOverview = useCallback(async (fresh: boolean) => {
     try {
@@ -42,19 +43,7 @@ export function useDockerData(active: boolean) {
     }
   }, []);
 
-  const loadOverview = useCallback((fresh = false): Promise<void> => {
-    if (inflight.current) { trailing.current = trailing.current || fresh; return inflight.current; }
-    const run = (async () => {
-      let next: boolean | null = fresh;
-      while (next !== null) {
-        trailing.current = null;
-        await fetchOverview(next);
-        next = trailing.current;
-      }
-    })().finally(() => { inflight.current = null; });
-    inflight.current = run;
-    return run;
-  }, [fetchOverview]);
+  const loadOverview = useMemo(() => coalescing(fetchOverview), [fetchOverview]);
 
   const loadStats = useCallback(async () => {
     try { setStats(mergeStats((await api.dockerStats()).stats, known.current)); }

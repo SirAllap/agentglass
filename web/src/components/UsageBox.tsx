@@ -64,9 +64,15 @@ function UsageRow({ u, first }: { u: ProviderUsage; first: boolean }) {
       {u.available
         ? (u.windows.length
           ? u.windows.map((w) => <Meter key={w.label} label={w.label} used={w.usedPercent} resets={w.resetsAt} />)
-          // The type allows an empty windows array even though upstream never sends
-          // one today — a header with nothing under it is the same blank-row bug.
-          : <span className="text-[10px] t-dim2 leading-snug">No quota windows reported.</span>)
+          : u.spend
+            ? (
+              <span className="text-[10px] leading-snug" style={{ color: "var(--text2)" }}>
+                ${u.spend.usd.toFixed(2)} spent over {u.spend.window}{u.source ? ` — from ${u.source}` : ""}.
+              </span>
+            )
+            // The type allows an empty windows array even though upstream never sends
+            // one today — a header with nothing under it is the same blank-row bug.
+            : <span className="text-[10px] t-dim2 leading-snug">No quota windows reported.</span>)
         // Same bug, other branch: unavailable with no note would render an empty line.
         : <span className="text-[10px] t-dim2 leading-snug">{u.note ?? "No usage note provided."}</span>}
     </Entry>

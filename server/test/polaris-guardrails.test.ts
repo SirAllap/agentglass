@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { PRESETS, classifyPr, type DoorValue } from "../../shared/polaris.ts";
 import { actionLog } from "../src/db.ts";
 import { writePolaris } from "../src/config.ts";
-import { ACTION_TYPES, __draftOf, __resetPolaris, executeAction, factsOf, needsNames, polarisItems, sweep, type PolarisIo, type RunRef } from "../src/polaris.ts";
+import { ACTION_TYPES, __draftOf, __resetPolaris, executeAction, factsOf, needsNames, polarisItems, sweep, type PolarisIo, type PolarisWho, type RunRef } from "../src/polaris.ts";
 import { polarisRoute } from "../src/polarisRoutes.ts";
 import type { PrSummary } from "../../shared/types.ts";
 
@@ -163,26 +163,30 @@ describe("the sweep and its routes", () => {
     expect(await polarisItems(ROOT)).toEqual({ ok: true, enabled: true, items: [] });
   });
 
-  test("an agent cannot write settings or act through the routes", async () => {
+  test("an agent cannot write settings or dock, and a phone cannot act at all", async () => {
+    const agent: PolarisWho = { kind: "agent", name: "builder-orbit" };
+    const args = [new URLSearchParams(), { root: ROOT, enabled: true, type: "dock" }] as const;
+    expect(await polarisRoute("PUT", "/polaris/settings", ...args, agent)).toMatchObject({ status: 403 });
+    expect(await polarisRoute("POST", "/polaris/items/7/action", ...args, agent)).toMatchObject({ status: 403 });
     for (const [m, p] of [["PUT", "/polaris/settings"], ["POST", "/polaris/items/7/action"], ["POST", "/polaris/items/7/beacon/send"], ["POST", "/polaris/items/7/beacon/edit"], ["POST", "/polaris/items/7/beacon/discard"]] as const) {
-      expect(await polarisRoute(m, p, new URLSearchParams(), { root: ROOT, enabled: true, type: "dock" }, false)).toMatchObject({ status: 403 });
+      expect(await polarisRoute(m, p, ...args, { kind: "phone" })).toMatchObject({ status: 403 });
     }
   });
 
   test("the person's route sets a preset and enabling, and refuses a bad door", async () => {
-    const put = (b: Record<string, unknown>) => polarisRoute("PUT", "/polaris/settings", new URLSearchParams(), { root: ROOT, ...b }, true);
+    const put = (b: Record<string, unknown>) => polarisRoute("PUT", "/polaris/settings", new URLSearchParams(), { root: ROOT, ...b }, { kind: "person" });
     expect((await put({ preset: "watchOnly" }))!.body).toMatchObject({ ok: true, preset: "watchOnly", enabled: false });
     expect((await put({ enabled: true }))!.body).toMatchObject({ enabled: true, preset: "watchOnly" });
     expect((await put({ settings: { doors: { relaunch: { mode: "now" } } } }))!.status).toBe(400);
     expect((await put({ preset: "turbo" }))!.status).toBe(400);
-    const got = await polarisRoute("GET", "/polaris/settings", new URLSearchParams({ root: ROOT }), {}, false);
+    const got = await polarisRoute("GET", "/polaris/settings", new URLSearchParams({ root: ROOT }), {}, { kind: "person" });
     expect(got!.body).toMatchObject({ ok: true, enabled: true, layers: { follow: "project" } });
-    expect(await polarisRoute("GET", "/other", new URLSearchParams(), {}, true)).toBeNull();
+    expect(await polarisRoute("GET", "/other", new URLSearchParams(), {}, { kind: "person" })).toBeNull();
   });
 
   test("the person's routes edit and discard a draft; send is its own route and an action body cannot name it", async () => {
     on();
-    const post = (path: string, b: Record<string, unknown>) => polarisRoute("POST", `/polaris/items/7/${path}`, new URLSearchParams(), { root: ROOT, reason: "conflict", ...b }, true);
+    const post = (path: string, b: Record<string, unknown>) => polarisRoute("POST", `/polaris/items/7/${path}`, new URLSearchParams(), { root: ROOT, reason: "conflict", ...b }, { kind: "person" });
     expect((await post("action", { type: "beacon-draft", text: "Merge conflict with main." }))!.status).toBe(200);
     expect((await post("beacon/edit", { text: "Bring main in." }))!.status).toBe(200);
     expect(__draftOf(ROOT, 7, "conflict")).toBe("Bring main in.");
@@ -274,10 +278,11 @@ describe("the source: no way to merge, comment, label, review or move a card", (
     const r = code(SRC["polarisRoutes.ts"]);
     expect(r).not.toMatch(/\bgh\(|promptAgent|rerunJob|recordAction/);
     expect(r.match(/executeAction\(/g)).toHaveLength(1);
-    // The sync is reachable from the click route only, and that route is behind the person check.
+    // The sync is reachable from the click route only. A settings write needs the person; an agent reaches the click route and nothing else.
     expect(r).not.toMatch(/updateBranch/);
-    expect(r.indexOf("if (!person)")).toBeLessThan(r.indexOf("executeAction("));
+    expect(r.indexOf('who.kind !== "person"')).toBeLessThan(r.indexOf("executeAction("));
+    expect(r.indexOf('who.kind !== "person"')).toBeLessThan(r.indexOf("askAction("));
     expect(r.match(/\bwritePolaris\(/g)).toHaveLength(1);
-    expect(r).toMatch(/if \(!person\)/);
+    expect(r).toMatch(/who\.kind === "agent" && m && method === "POST"/);
   });
 });

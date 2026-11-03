@@ -313,7 +313,8 @@ function Editor({ r, saved, repos, busy, pinned, pinRoot, onChange, onSave, onDr
  * surfaces behave the same.
  *
  * There is no "run inside tmux" flag any more, and there is nothing left for one
- * to do: the console runs on the engine, in a session of its own, so every
+ * to do: the console runs on the engine, in the console window of the
+ * checkout's session, so every
  * recipe already outlives the app being closed and comes back where it was. The
  * flag used to type `tmux new-session -A -s …` into the shell first — a bare
  * `tmux`, which is the machine's own server with the machine's own config — and

@@ -3,17 +3,23 @@ import { useEffect, useState } from "react";
 import { api } from "../../lib/api.ts";
 import { openFlightPlan } from "../../lib/flightPlanNav.ts";
 
-/** Settings ▸ Agents: a link row, no settings. Flight plan's own are inside its view. */
+/**
+ * Settings ▸ Agents: a link, no settings. Flight plan's own are inside its view.
+ *
+ * A quiet line in the scope row, not a card: it is one link, and a full-width
+ * card over the page pushed the drawing and the pane below it off a 720px
+ * window. Its state is a word in the line.
+ */
 export function FlightPlanLink({ onGo }: { onGo: () => void }) {
   const [on, setOn] = useState<boolean | null>(null);
   useEffect(() => { api.settingAtGlobal("flightPlan.enabled").then((r) => setOn(r.ok ? r.value === true : null)).catch(() => {}); }, []);
+  const word = on === null ? "" : on ? "On" : "Off";
   return (
-    <div className="fp-linkrow" style={{ marginBottom: 12, fontFamily: "inherit" }}>
-      <div>
-        <div style={{ fontWeight: 650 }}>Flight plan</div>
-        <div style={{ color: "var(--text3)", fontSize: 11 }}>A fresh reviewer reads plans before Launch.{on === null ? "" : on ? " On." : " Off."}</div>
-      </div>
-      <button type="button" className="btn sm" style={{ color: "var(--primary)" }} onClick={() => { onGo(); openFlightPlan(); }}>Open Flight plan →</button>
-    </div>
+    <span className="agx-flow-fp" data-tip={`Flight plan: a fresh reviewer reads plans before Launch.${word ? ` ${word}.` : ""}`}>
+      <span className="agx-flow-fp-k">Flight plan</span>
+      {word && <><span className="agx-flow-fp-s" aria-hidden>·</span><span className="agx-flow-fp-s">{word}</span></>}
+      <span className="agx-flow-fp-s" aria-hidden>·</span>
+      <button type="button" className="agx-flow-fp-go" onClick={() => { onGo(); openFlightPlan(); }}>Open</button>
+    </span>
   );
 }

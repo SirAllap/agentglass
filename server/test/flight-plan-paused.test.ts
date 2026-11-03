@@ -30,6 +30,18 @@ describe("the launch queue counts builders with a tab", () => {
     expect(body).toContain("flyingWithBuilder(plan.root, base)");
     expect(body).not.toContain("FlightPlan.flying(plan.root, base)");
   });
+  // A project whose builders run on OpenCode builds with its own workers: Launch asks the project's
+  // chain first, and only the Claude start opens a tab.
+  test("launchFlightPlan asks the project's builder chain and starts another engine through the policy", () => {
+    const start = index.indexOf("async function launchFlightPlan(");
+    const body = index.slice(start, index.indexOf("\n}\n", start));
+    const ask = body.indexOf("builderEngineFor(plan.root)");
+    expect(ask).toBeGreaterThan(-1);
+    expect(body.slice(ask, ask + 120)).toContain('?? "claude"');
+    expect(ask).toBeLessThan(body.indexOf("flightBase(plan.root)"));
+    expect(body).toContain('if (builderEngine !== "claude")');
+    expect(body).toContain("startThroughPolicy(");
+  });
 });
 
 /* A stubbed tmux: the windows of each session, as `allWindowTrees` lists them. */

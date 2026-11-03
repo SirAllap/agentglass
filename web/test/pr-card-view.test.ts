@@ -56,6 +56,35 @@ describe("the footer's primary action", () => {
   });
 });
 
+describe("the unread pill", () => {
+  test("says how much is waiting in words, and keeps the exact sentence for the tooltip", () => {
+    const u = { count: 3, who: "theo-w", people: ["theo-w"], at: "2026-08-12T09:00:00Z" };
+    expect(view(pr(), filed("land"), { unread: u }).unread).toEqual({
+      text: "3 new remarks",
+      title: "3 new remarks since you last looked, from theo-w",
+    });
+  });
+  test("silence, absent or null, draws nothing", () => {
+    expect(view(pr(), filed("land")).unread).toBeNull();
+    expect(view(pr(), filed("land"), { unread: null }).unread).toBeNull();
+  });
+  test("the number stops growing at 99", () => {
+    const u = { count: 120, who: "theo-w", people: ["theo-w"], at: "2026-08-12T09:00:00Z" };
+    expect(view(pr(), filed("land"), { unread: u }).unread!.text).toBe("99+ new remarks");
+  });
+  test("one remark is a remark, and the unit is never bare `new`", () => {
+    const u = { count: 1, who: "theo-w", people: ["theo-w"], at: "2026-08-12T09:00:00Z" };
+    const text = view(pr(), filed("land"), { unread: u }).unread!.text;
+    expect(text).toBe("1 new remark");
+    expect(text).not.toBe("1 new");
+  });
+  test("the card's own label carries the whole sentence, as the phone's does: the card is one button", () => {
+    const u = { count: 3, who: "theo-w", people: ["theo-w"], at: "2026-08-12T09:00:00Z" };
+    expect(view(pr(), filed("land"), { unread: u }).aria)
+      .toBe("#1042 Retry the relay handshake. Approved · ready to land. 3 new remarks since you last looked, from theo-w");
+  });
+});
+
 describe("the secondary slot", () => {
   test("a draft offers Mark ready", () => {
     expect(view(pr({ isDraft: true }), filed("flight")).secondary).toMatchObject({ id: "draft", label: "Mark ready" });

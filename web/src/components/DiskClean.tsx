@@ -20,7 +20,7 @@ import { ICON } from "../lib/iconSize.ts";
 import { Badge, Button } from "./workspace/Chrome.tsx";
 import type { DiskCleanLine, DiskCleanMount, DiskCleanReport, DiskCleanRunResult } from "../../../shared/types.ts";
 import {
-  VERDICT, cleanable, confirmLabel, fmtBytes, phaseOf, publishDiskMounts, resultView, sortLines, useDiskWarnPct, wholePlan, type Tone,
+  VERDICT, cleanable, confirmLabel, diskHeadline, fmtBytes, phaseOf, publishDiskMounts, publishDiskPlan, reclaimHeadline, resultView, sortLines, useDiskWarnPct, wholePlan, type Tone,
 } from "../lib/diskClean.ts";
 import { groupsOf, mountBar } from "../lib/machineView.ts";
 import { clearDiskStage, needsStageScan, planDiskStage, useDiskStage, type DiskStageRequest } from "../lib/diskStage.ts";
@@ -31,7 +31,7 @@ const TONE_INK: Record<Tone, string> = { ok: "var(--success-ink)", warn: "var(--
 
 type Armed = null | "all" | string;
 
-export function DiskClean() {
+export function DiskClean({ disk }: { disk: { diskTotal: number; diskFree: number } }) {
   const [report, setReport] = useState<DiskCleanReport | null>(null);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -74,6 +74,11 @@ export function DiskClean() {
   }, [report, staged]);
   const phase = phaseOf({ report, scanning, error, result });
   const hold = useStageHold(staged !== null, staged?.n);
+
+  /* The header chip names the plan on screen, and only that: while a scan runs,
+     fails, or has just cleaned, no plan is visible and none is named. */
+  useEffect(() => { publishDiskPlan(phase === "plan" ? view.plan : null); }, [phase, view.plan]);
+  useEffect(() => () => publishDiskPlan(null), []);
 
   /* Escape puts the confirmation away first, and only then lets the panel see the key. */
   useEffect(() => {
@@ -118,22 +123,31 @@ export function DiskClean() {
       armed={armed === l.id} busy={running} onArm={() => setArmed(l.id)} onKeep={() => setArmed(null)} onRun={() => void run([l.id])} />
   );
 
+  const reclaim = phase === "plan" ? reclaimHeadline(view.plan) : null;
+  const diskLine = diskHeadline(disk);
+  const lead = reclaim ?? diskLine ?? "Disk cleanup";
+  const sub = phase === "plan"
+    ? `${view.plan.ids.length} item${view.plan.ids.length === 1 ? "" : "s"} · ${diskLine ?? "the scan is on screen"}`
+    : phase === "error" ? "The scan did not finish."
+    : phase === "empty" ? "Nothing safe to remove right now."
+    : phase === "done" ? "What the clean did, per item and per disk."
+    : "Nothing is scanned until you ask; the scan only reads and nothing is removed.";
+
   return (
-    <section aria-label="Disk cleanup" className="mc-dc">
-      <div className="mc-sect">
-        <DiskIcon size={ICON.sm} />
-        <b>Disk cleanup</b>
-        <span className="t">{summary(phase, view.plan.bytes, view.plan.ids.length, report)}</span>
-        <span className="sp" />
+    <section id="disk-clean" aria-label="Disk cleanup" className="mc-dc">
+      <div className="mc-dc-h">
+        <span className="mc-dc-ic"><DiskIcon size={ICON.md} /></span>
+        <div className="mc-dc-hd">
+          <span className="mc-dc-k">Disk cleanup</span>
+          <b className="mc-dc-n" data-big={reclaim ? true : undefined}>{lead}</b>
+          {phase !== "scanning" && <span className="mc-dc-sub">{sub}</span>}
+        </div>
         {running && <span className="mc-fine" role="status">Removing…</span>}
-        <Button disabled={scanning || running} title="Look at what is on the disks. Reads only; nothing is removed." onClick={() => void scan(true)}>
-          {scanning ? <><span className="mc-spin"><RefreshIcon size={ICON.xs} /></span>Scanning…</> : <><RefreshIcon size={ICON.xs} />{report || error ? "Scan again" : "Scan"}</>}
+        <Button size="hit" tone="primary" disabled={scanning || running} title="Look at what is on the disks. Reads only; nothing is removed." onClick={() => void scan(true)}>
+          {scanning ? <><span className="mc-spin"><RefreshIcon size={ICON.sm} /></span>Scanning…</> : <><RefreshIcon size={ICON.sm} />{report || error ? "Scan again" : "Scan for what can go"}</>}
         </Button>
       </div>
 
-      {phase === "idle" && (
-        <div className="mc-fine">Nothing is scanned until you ask. The scan only reads: nothing is removed, and nothing runs on a timer.</div>
-      )}
       {phase === "scanning" && (
         <div className="mc-fine" role="status">Looking at Docker, checkouts, caches and the trash…
           <div className="mc-ind"><i /></div>Measuring folders can take a minute on a big disk.</div>
@@ -192,17 +206,6 @@ export function DiskClean() {
       )}
     </section>
   );
-}
-
-function summary(phase: ReturnType<typeof phaseOf>, bytes: number, n: number, report: DiskCleanReport | null): string {
-  switch (phase) {
-    case "idle": return "see what is eating the disk, and what can go";
-    case "scanning": return "scanning…";
-    case "error": return "could not scan";
-    case "done": return "report of the clean";
-    case "empty": return report?.lines.length ? "nothing safe to remove" : "nothing found";
-    case "plan": return `${fmtBytes(bytes)} can go, in ${n} item${n === 1 ? "" : "s"}`;
-  }
 }
 
 function PlanGroup({ icon, hue, title, hint, tip, bytes, action, fold, children }: {

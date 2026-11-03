@@ -43,6 +43,7 @@ import { tmux } from "../tmuxpane.ts";
 import { addReport } from "../seatreport.ts";
 import { wakeForReport } from "../seatwake.ts";
 import { turnResult, type RunFiles } from "./headless.ts";
+import { announceWorkerEnd } from "./workerend.ts";
 
 export interface ArmOpts {
   /** Epoch ms at which the turn is over its limit. Null: only the turn's end
@@ -132,17 +133,22 @@ async function overLimit(name: string, me: Armed, o: ArmOpts): Promise<void> {
   AgentOps.settleTurn(row, { exitCode: 124, line: `timeout: still running after ${o.limitMinutes} minutes, so it was stopped` });
   await killTree(row);
   const root = row.seatRoot;
-  if (!root) return;
-  addReport({
-    root, agent: name,
-    text: [
-      `STATE: stopped after ${o.limitMinutes} minutes: the turn limit`,
-      `BLOCKED: it ran past the limit and was killed; whatever it wrote is in ${row.cwd}`,
-      "NEED: decide whether to start it again with a smaller task, continue from its files, or drop it",
-      "COST: one decision",
-    ].join("\n"),
-  });
-  await (o.wake ?? wakeForReport)(root, name);
+  if (root) {
+    addReport({
+      root, agent: name,
+      text: [
+        `STATE: stopped after ${o.limitMinutes} minutes: the turn limit`,
+        `BLOCKED: it ran past the limit and was killed; whatever it wrote is in ${row.cwd}`,
+        "NEED: decide whether to start it again with a smaller task, continue from its files, or drop it",
+        "COST: one decision",
+      ].join("\n"),
+    });
+    await (o.wake ?? wakeForReport)(root, name);
+  }
+  /* After the report's wake, never before it: a wake that starts the seat's
+     turn leaves this notice parked for that same turn to read, and not for the
+     one after. */
+  await announceWorkerEnd(name);
 }
 
 /** Every process under the pane, the pane's own included, leaves first. */

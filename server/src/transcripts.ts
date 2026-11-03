@@ -1278,7 +1278,7 @@ let sweepBusy = false;
  * are *historical backfill*, not live activity, so this sweep deliberately
  * passes no onLive: broadcasting months of old events would flood every
  * client and fire alerts for things long finished (the same reason the
- * startup backfill is silent). Waits out any in-flight sweep first.
+ * startup backfill is silent). Waits out a sweep already running first.
  */
 export async function resyncScope(): Promise<void> {
   if (!scanningEnabled()) return;
@@ -1311,6 +1311,28 @@ export async function resyncScope(): Promise<void> {
     console.error(`[scan] rescope sweep failed: ${e instanceof Error ? e.message : e}`);
   } finally {
     if (!handedOn) sweepBusy = false;
+  }
+}
+
+/** How long the picker may spend waiting for a rescope before it is answered anyway. */
+export const RESYNC_ANSWER_MS = 2_000;
+
+/**
+ * `resyncScope()`, but the caller does not sit through a whole-machine sweep.
+ *
+ * A cold server holds one flag while it backfills everything on disk, and
+ * `resyncScope` waits on it before it starts: measured 40 s for the first
+ * "Open 1" of a fresh instance (32 ms for the same call straight after). The
+ * switch is already applied either way; the page that follows reads what is
+ * there and this keeps filling it.
+ */
+export async function resyncScopeBounded(ms = RESYNC_ANSWER_MS): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<false>((r) => { timer = setTimeout(() => r(false), ms); });
+  try {
+    return await Promise.race([resyncScope().then(() => true), late]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 

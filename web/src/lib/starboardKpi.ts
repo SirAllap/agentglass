@@ -2,6 +2,7 @@
 // from the screen so a test can hold them.
 import type { ProviderUsage, TimeBucket } from "../../../shared/types.ts";
 import type { LanternRow } from "../components/LanternView.tsx";
+import { openCodePanelWindows } from "../../../shared/opencodePanel.ts";
 
 /** Per-bucket estimated cost for the Spend sparkline, oldest first. Null when
  *  there is no line to draw: under two buckets, or nothing spent. */
@@ -19,17 +20,28 @@ export function sparkPath(vals: number[], w = 100, h = 40, pad = 3): string {
 /** The 5-hour window of the first provider that reports one, as the provider said it. */
 export function fiveHour(rows: ProviderUsage[] | null): { used: number; resetsAt: string | null; observedAt?: number; label: string } | null {
   for (const r of rows ?? []) {
-    const w = r.available ? r.windows.find((x) => x.minutes === 300) : undefined;
+    const w = r.available ? openCodePanelWindows(r).windows.find((x) => x.minutes === 300) : undefined;
     if (w) return { used: w.usedPercent, resetsAt: w.resetsAt, observedAt: r.observedAt, label: r.label };
   }
   return null;
 }
 
-/** One line per provider that reports windows: "Claude · 5 h 12% · week 30%". This is where per-provider
- *  quota lives on Starboard (the QUOTA tile's tooltip); a provider that joins later adds a row, not a panel. */
-export function quotaLines(rows: ProviderUsage[] | null): string[] {
+/** One line per provider that reports windows: the provider's name and its
+ *  windows, never joined into one run-on line. OpenCode Go's numbers are this
+ *  PC's worker turns, so its line says so. This is where per-provider quota
+ *  lives on Starboard (the QUOTA tile's tooltip); a provider that joins later
+ *  adds a row, not a panel. */
+export function quotaTipLines(rows: ProviderUsage[] | null): { label: string; windows: string }[] {
   const win = (m: number) => (m === 300 ? "5 h" : m === 10080 ? "week" : m % 1440 === 0 ? `${m / 1440} d` : `${m / 60} h`);
-  return (rows ?? []).filter((r) => r.available && r.windows.length).map((r) => `${r.label} · ${r.windows.map((w) => `${win(w.minutes)} ${Math.round(w.usedPercent)}%`).join(" · ")}`);
+  return (rows ?? []).filter((r) => r.available && r.windows.length).map((r) => {
+    // The same windows the panel and the top bar show: a fresh console reading beats the local count.
+    const view = openCodePanelWindows(r);
+    const local = r.provider === "opencode" && view.estimate && r.source === "this PC";
+    return {
+      label: local ? `${r.label} · this PC only` : r.label,
+      windows: view.windows.map((w) => `${win(w.minutes)} ${Math.round(w.usedPercent)}%`).join(" · "),
+    };
+  });
 }
 
 /** "1 h 52 m" until a reset, or null when the provider gave none or it has passed. */

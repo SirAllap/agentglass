@@ -89,6 +89,7 @@ NOT_HERE = {
     "plan answer": "the person's answer: the server refuses an agent",
     "plan report": "a launched builder's progress line, from the builder's own pane",
     "plan integrate-check": "before bringing a builder's work in: an orchestrator's call",
+    "plan worker": "the named worker that builds it: Launch links the one it started, and a hand-started one is the orchestrator's to link",
 }
 
 

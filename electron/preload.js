@@ -54,6 +54,19 @@ contextBridge.exposeInMainWorld("agentglass", {
   apiToken: (() => {
     try { return ipcRenderer.sendSync("ag:apiToken") || null; } catch { return null; }
   })(),
+  /** The port the shell asked for and the one it settled on, for the first
+   *  run's strip. Two numbers: no sentence crosses this bridge. */
+  preferredPort: (() => {
+    try { return ipcRenderer.sendSync("ag:preferredPort") || null; } catch { return null; }
+  })(),
+  serverPort: (() => {
+    try { return ipcRenderer.sendSync("ag:serverPort") || null; } catch { return null; }
+  })(),
+  /** "wayland" or "x11" on Linux, null elsewhere. The switch in main.js is
+   *  what decides it, so the renderer cannot derive it. */
+  displayServer: (() => {
+    try { return ipcRenderer.sendSync("ag:displayServer") || null; } catch { return null; }
+  })(),
   // The desk's key, which lets a held call go (electron/main.js deskKey). Sync
   // for the same reason as the two above; a restart hands over the next one
   // through onServerChanged.
@@ -103,7 +116,7 @@ contextBridge.exposeInMainWorld("agentglass", {
     ipcRenderer.on("ag:deep-link", h);
     return () => ipcRenderer.removeListener("ag:deep-link", h);
   },
-  /** @param {(p: { origin?: string | null, token?: string | null, deskKey?: string | null }) => void} fn */
+  /** @param {(p: { origin?: string | null, token?: string | null, deskKey?: string | null, preferredPort?: number | null }) => void} fn */
   onServerChanged: (fn) => {
     /** @type {IpcListener} */
     const h = (_e, payload) => { try { fn(payload); } catch { /* renderer's problem */ } };

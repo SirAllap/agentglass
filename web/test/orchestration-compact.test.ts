@@ -1,7 +1,7 @@
 /*
  * The compact Orchestration page: Quick setup as one segmented choice, Switch
  * things automatically as the one plan rule, Always refused as a textarea and
- * the gate's own switch, the save bar, and the chip beside the title.
+ * a pointer to the Gate in the Flow editor, the save bar, and the chip beside the title.
  */
 import { describe, expect, test } from "bun:test";
 import React from "react";
@@ -52,53 +52,10 @@ const card = (html: string, heading: string): string => {
 };
 
 describe("Quick setup is one segmented choice", () => {
-  test("the two setups that always hold are the segments, and none is pressed until one is in force", () => {
-    const q = card(view(), "Quick setup");
-    expect(q).toContain('aria-label="Start from a preset"');
-    expect(q).toContain(">Claude + others</button>");
-    expect(q).toContain(">All on Claude</button>");
-    expect(q).not.toContain('aria-pressed="true"');
-    expect(q).not.toContain(">Save my plan</button>");
-  });
-  test("the setup in force is the pressed segment and says what it does in one line", () => {
-    const q = card(view({ policy: applyPreset(base(), "all-on-claude", READY)! }), "Quick setup");
-    expect(q).toMatch(/aria-pressed="true"[^>]*>All on Claude</);
-    expect(q).toContain(`${title("claude")} runs the main agent and every worker.`);
-  });
-  test("the before-and-after cards, Check my setup and the Undo are one disclosure away, not gone", () => {
-    const q = card(view(), "Quick setup");
-    expect(q).toContain("Before and after, and check my setup");
-    expect(q).toContain("Check my setup");
-    expect(q).toContain("Use this setup");
-  });
-  test("a setup that cannot be built here is a disabled segment that says why", () => {
-    const q = card(view({ readiness: [engine("claude")] }), "Quick setup");
-    expect(q).toMatch(/<button[^>]*title="Needs an engine besides[^"]*"[^>]*disabled=""[^>]*>Claude \+ others</);
-  });
 });
 
-describe("Switch things automatically is the one plan rule", () => {
-  test("with no rule that watches a plan it offers the ready-made one, and every condition stays listed under a disclosure", () => {
-    const s = card(view(), "Switch things automatically");
-    expect(s).toContain("No plan is watched yet");
-    expect(s).toContain("Use this rule");
-    expect(s).toContain("All conditions (0)");
-    expect(s).toContain("+ Add a condition");
-  });
-  test("with one: a threshold select, the fallback select and the Then go back switch, all from the rule", () => {
-    const s = card(view({ policy: { ...base(), rules: [watch()] } }), "Switch things automatically");
-    expect(s).toContain(`When ${title("claude")} has`);
-    expect(s).toContain('aria-label="Plan left, at most"');
-    expect(s).toContain("15 % left");
-    expect(s).toContain('aria-label="Fallback engine"');
-    expect(s).toContain(title("opencode"));
-    expect(s).toMatch(/role="switch" aria-checked="true"[^>]*><span class="min-w-0"><span class="agx-row-name">Then go back/);
-    expect(s).toContain("All conditions (1)");
-  });
-  test("Then go back is the rule's own switch: off keeps the rule and never switches", () => {
-    const s = card(view({ policy: { ...base(), rules: [watch({ enabled: false })] } }), "Switch things automatically");
-    expect(s).toMatch(/aria-checked="false"[^>]*><span class="min-w-0"><span class="agx-row-name">Then go back/);
-  });
+describe("the Fallback block is the one plan rule", () => {
+  // The block's own controls (threshold, engine, Then go back) are asserted in flow-around.test.ts, on FallbackControls.
   test("a threshold the select does not offer is added to it, in order; the pure edits keep what they do not touch", () => {
     expect(thresholdsFor(null)).toEqual([5, 10, 15, 20, 25, 30, 40, 50]);
     expect(thresholdsFor(12)).toEqual([5, 10, 12, 15, 20, 25, 30, 40, 50]);
@@ -109,36 +66,30 @@ describe("Switch things automatically is the one plan rule", () => {
     expect(f.workers?.builder).toEqual([{ engine: "codex", model: "" }, { engine: "hermes", model: "" }]);
     expect(withFallbackEngine({ ...watch(), workers: undefined }, "codex").workers).toBeUndefined();
   });
-  test("an edit goes through the page's own save, and nothing else", () => {
-    expect(paneSrc).toContain("const editWatch = (next: PolicyRule) => void save(withRule(policy, next), \"rules\")");
-  });
 });
 
 describe("Always refused", () => {
-  test("it is a textarea of the worker default's commands, an add field and the gate's switch", () => {
+  test("one textarea holds the worker default's commands, one per line, and there is no second field", () => {
     const p = base(); p.workerDefault = { ...p.workerDefault, deny: ["docker compose down", "git push --force"] };
-    const a = card(view({ policy: p }), "Always refused");
-    expect(a).toMatch(/<textarea[^>]*aria-label="Commands no worker may run"[^>]*>docker compose down\ngit push --force<\/textarea>/);
-    expect(a).toContain('aria-label="Add a command to refuse"');
-    expect(a).toContain("Ask when it runs");
+    const a = view({ policy: p }).slice(view({ policy: p }).indexOf('data-pane="refused"'));
+    expect(a).toMatch(/<textarea[^>]*aria-label="Also refused here: one command per line"[^>]*>docker compose down\ngit push --force<\/textarea>/);
+    expect(a).not.toContain('aria-label="Add a command to refuse"');
+    // A placeholder that reads like a real refusal is not a hint: the box is empty until a person writes in it.
+    expect(a).not.toContain("placeholder=");
     expect(a).toContain("Why this cannot be changed here");
   });
   test("the Safety card no longer repeats the commands of the default group, and the ceiling keeps its own", () => {
-    const s = view().slice(view().indexOf(">Safety and limits</h3>"));
+    const s = view().slice(view().indexOf('data-pane="safety"'));
     expect(s).not.toContain('data-row="also-refuse"');
     expect(s).toContain('data-row="at-most-also-refuse"');
   });
-  test("the switch is the gate's: on, off, not in this build, and not yet read", () => {
-    const sw = (g: OrchestrationViewProps["gate"]) => card(view({ gate: g, onGate: async () => null }), "Always refused");
-    expect(sw({ on: true, bundled: true })).toMatch(/role="switch" aria-checked="true"[^>]*data-row="ask-when-it-runs"/);
-    expect(sw({ on: false, bundled: true })).toMatch(/role="switch" aria-checked="false"[^>]*data-row="ask-when-it-runs"/);
-    expect(sw({ on: false, bundled: false })).toContain("This build ships no gate.");
-    expect(sw({ on: false, bundled: false })).toMatch(/disabled=""[^>]*role="switch"/);
-    expect(sw(null)).toMatch(/disabled=""[^>]*role="switch"/);
-  });
-  test("the page flips the gate through the hooks route and reads it again", () => {
-    expect(paneSrc).toContain("api.hooksGate(on)");
-    expect(paneSrc).toContain("api.hooksStatus()");
+  test("the Gate's switch is in Safety and limits, with the trust switch, and not on the refused tab", () => {
+    const s = view().slice(view().indexOf('data-pane="safety"'), view().indexOf('data-pane="refused"'));
+    expect(s).toContain("Agents and the settings themselves");
+    expect(s).toContain("Gate: ask me before landing");
+    const a = view().slice(view().indexOf('data-pane="refused"'));
+    expect(a).not.toContain("Gate: ask me before landing");
+    expect(a).not.toContain("Ask when it runs");
   });
   test("the lines of the textarea are trimmed, never blank and never repeated", () => {
     expect(denyLines("  git push --force \n\n docker compose down\ngit push --force\n")).toEqual(["git push --force", "docker compose down"]);
@@ -147,10 +98,12 @@ describe("Always refused", () => {
 });
 
 describe("the save bar and the chip", () => {
-  test("the bar ends the column, saves both envelopes together and is disabled until something changed", () => {
-    const html = view();
-    const bar = html.slice(html.indexOf("data-savebar"));
-    expect(bar).toMatch(/disabled=""[^>]*>Save these permissions</);
+  test("the bar ends the column, saves both envelopes together and is drawn only while something changed", () => {
+    // Nothing changed: no bar at all, rather than a bar with a dead button.
+    expect(view()).not.toContain("data-savebar");
+    const bar = paneSrc.slice(paneSrc.indexOf("{dirty && ("));
+    expect(bar).toContain("data-savebar");
+    expect(bar).toContain("Discard");
     expect(paneSrc).toContain('void save(withEnvelopes(policy, env), "envelope")');
   });
   test("the chip beside the scope says the page is saved, for the scope on screen", () => {
@@ -168,16 +121,24 @@ describe("the save bar and the chip", () => {
 describe("the page's own styles", () => {
   test("every rule is scoped to the page and every colour is a theme token", () => {
     const rules = [...cssSrc.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/(^|\})\s*([^{}@]+)\{/g)].map((m) => m[2]!.trim());
-    for (const sel of rules) for (const one of sel.split(",")) expect(/\.agx-orch/.test(one), one).toBe(true);
+    for (const sel of rules) for (const one of sel.split(",")) expect(/\.agx-(orch|flow|count)/.test(one), one).toBe(true);
     expect(/#[0-9a-fA-F]{3,8}\b|rgba?\(/.test(cssSrc.replace(/\/\*[\s\S]*?\*\//g, ""))).toBe(false);
   });
 });
 
-describe("the Orchestration page's font", () => {
-  test("is the app's own monospace like every other settings page: no .agx-orch rule sets a prose family on the page", async () => {
-    const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
-    const rules = [...css.matchAll(/(^|\n)\s*\.agx-orch(?![\w-])[^{]*\{([^}]*)\}/g)].map((m) => m[2]!);
-    expect(rules.length).toBeGreaterThan(0);
-    for (const body of rules) expect(body).not.toMatch(/font-family:\s*var\(--font-prose\)/);
+describe("the orchestration screens' font", () => {
+  test("is the mockup's sans stack, the app's --font-prose, scoped to the orchestration roots", async () => {
+    // The page's rules live in two sheets: the frame's and its own.
+    const css = (await Bun.file(new URL("../src/index.css", import.meta.url)).text())
+      + readFileSync(join(DIR, "orchestration.css"), "utf8");
+    const roots = [...css.matchAll(/(^|\n)\s*\.agx-orch, \.agx-orch-gaps(?![\w-])[^{]*\{([^}]*)\}/g)].map((m) => m[2]!);
+    expect(roots.join(" ")).toContain("font-family: var(--font-prose)");
+    // The Flow editor is its own sheet and its own root.
+    const flow = readFileSync(join(DIR, "flow", "flowEditor.css"), "utf8");
+    const fe = [...flow.matchAll(/(^|\n)\s*\.fe-root\s*\{([^}]*)\}/g)].map((m) => m[2]!);
+    expect(fe.join(" ")).toContain("font-family: var(--font-prose)");
+    // Not the app's body, and not a code value: an engine and a model stay mono.
+    expect(css).not.toMatch(/(^|\n)\s*body\s*\{[^}]*font-family:\s*var\(--font-prose\)/);
+    expect(css).toMatch(/\.agx-flow-hero-engine code\s*\{[^}]*font-family:\s*var\(--font-mono/);
   });
 });

@@ -9,7 +9,7 @@ import { NO_DRAG } from "../../lib/dragRegion.ts";
  * `flex-basis` (and the grip's own aria value): one write per move, no React
  * render of an eight-thousand-line panel, no transition, so the edge is under
  * the pointer 1:1. The width is handed back once, when the pointer goes up.
- * `live` holds the in-flight width so a render that lands mid-drag keeps it.
+ * `live` holds the width while dragging, so a render that lands mid-drag keeps it.
  *
  * Esc during a drag puts the width back (the grip is not focused while the
  * pointer is down, so the key is heard on the window). Double-click is the usual 620.

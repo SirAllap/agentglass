@@ -21,7 +21,7 @@
  * would otherwise stand in for the one this test exists to prove matters.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -30,9 +30,10 @@ import {
 } from "../src/plugin-sandbox.ts";
 import { ensurePluginSocketServer, pluginSocketPath, setPluginSocketHandler, stopPluginSocketServer } from "../src/plugin-socket.ts";
 import { mintPluginToken } from "../src/auth.ts";
-import { boxExtraRo } from "../src/plugins.ts";
+import { boxExtraRo, bridgeExtraRo } from "../src/plugins.ts";
 import type { PluginSandbox } from "../../shared/pluginSandbox.ts";
 import { freePort } from "./freePort.ts";
+import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 
 const roots: string[] = [];
 function scratch(prefix: string): string {
@@ -240,6 +241,22 @@ describe("sandboxArgv, network: agentglass", () => {
     expect(under.join(" ")).not.toContain("--ro-bind-try /home/orbit/app");
   });
 
+  test("a bridge root that contains the data dir does not make it read-only, because the rw bind still comes last", () => {
+    // A checkout with `XDG_CONFIG_HOME` inside it (every test run, and any
+    // dev running the server from a checkout) puts the box's writable bind
+    // under the repository the bridge mounts read-only. Measured: the
+    // entrypoint's first write into AGENTGLASS_PLUGIN_DATA failed with
+    // "Read-only file system", so all three real-box network tests wrote
+    // nothing at all.
+    const under = sandboxArgv(baseInput({ sandbox: NO_SANDBOX, network: { ...network, bridgeRo: ["/home/orbit", "/usr/bin/agentglass-server"] }, extraRo: [] }));
+    const root = exactAt(under, "--ro-bind", "/home/orbit", "/home/orbit");
+    const data = exactAt(under, "--bind", "/home/orbit/.config/agentglass/plugin-data/orbit-plugin", "/home/orbit/.config/agentglass/plugin-data/orbit-plugin");
+    expect(root).toBeGreaterThanOrEqual(0);
+    expect(data).toBeGreaterThan(root);
+    // Still after the tmpfs: the point is order among the binds, not before them.
+    expect(root).toBeGreaterThan(under.lastIndexOf("--tmpfs"));
+  });
+
   test("the entrypoint is wrapped in the bridge, dialling the same box path over the URL's own port", () => {
     expect(argv.slice(-10)).toEqual([
       "/usr/bin/agentglass-server", "plugin-bridge", "--listen", "127.0.0.1:4000", "--socket", PLUGIN_SOCKET_BOX_PATH, "--", "bash", "-c", "python3 -u reviewer.py",
@@ -280,6 +297,35 @@ describe("boxExtraRo — the exported decision buildBoxArgv actually ships", () 
 
   test("a network object of any shape: no resolver at all — the box has no interface to need one on", () => {
     expect(boxExtraRo({ socketHostPath: "/x", bridgeExec: [], bridgeRo: [] })).toEqual([]);
+  });
+});
+
+describe("bridgeExtraRo — what a dev bridge needs mounted, from the function buildBoxArgv ships", () => {
+  test("a worktree whose node_modules is a symlink into another checkout mounts that checkout's modules and store too", () => {
+    const root = scratch("agx-bridge-root-");
+    mkdirSync(join(root, "server", "src"), { recursive: true });
+    writeFileSync(join(root, "server", "src", "index.ts"), "");
+    const other = scratch("agx-bridge-other-");
+    mkdirSync(join(other, "server", "node_modules"), { recursive: true });
+    mkdirSync(join(other, "node_modules", ".bun"), { recursive: true });
+    symlinkSync(join(other, "server", "node_modules"), join(root, "server", "node_modules"));
+    const ro = bridgeExtraRo([process.execPath, join(root, "server", "src", "index.ts")]);
+    expect(ro).toContain(root);
+    // The box binds the repository read-only; a target outside that root
+    // dangles there, and bun resolves every static import of index.ts before
+    // cookieentry.ts can exit.
+    expect(ro).toContain(realpathSync(join(other, "server", "node_modules")));
+    // And bun's isolated store is where that dir's package links point.
+    expect(ro).toContain(realpathSync(join(other, "node_modules")));
+  });
+
+  test("a checkout whose modules live inside it needs nothing beyond the repository", () => {
+    const root = scratch("agx-bridge-root-");
+    mkdirSync(join(root, "server", "src"), { recursive: true });
+    mkdirSync(join(root, "server", "node_modules"), { recursive: true });
+    writeFileSync(join(root, "server", "src", "index.ts"), "");
+    const ro = bridgeExtraRo([process.execPath, join(root, "server", "src", "index.ts")]);
+    expect(ro).toEqual([process.execPath, root]);
   });
 });
 
@@ -550,7 +596,7 @@ describe("ensurePluginSocketServer refuses to steal a live socket", () => {
     // Three enables (or an enable racing the boot resume) landing before the
     // first `ensurePluginSocketServer` settles used to each run their own
     // `rmSync` + `Bun.serve`, unlinking one another's fresh socket. Memoised,
-    // every call made before the in-flight attempt settles gets the exact
+    // every call made before the attempt running settles gets the exact
     // same promise back — reference equality, not just "both eventually
     // resolve" — which is only true if a single attempt ran.
     const first = ensurePluginSocketServer();
@@ -734,7 +780,8 @@ describe("a real box, network: agentglass — only on a host that can build one"
     const dataDir = join(home, "data");
     mkdirSync(installDir, { recursive: true });
     mkdirSync(dataDir, { recursive: true });
-    const network = { socketHostPath: pluginSocketPath(), bridgeExec: [process.execPath, INDEX_TS], bridgeRo: [process.execPath, join(INDEX_TS, "..", "..", "..")] };
+    const bridgeExec = [process.execPath, INDEX_TS];
+    const network = { socketHostPath: pluginSocketPath(), bridgeExec, bridgeRo: bridgeExtraRo(bridgeExec) };
     const argv = sandboxArgv({
       bwrap: probe.bwrap,
       installDir, dataDir, home, entrypoint,
@@ -751,7 +798,7 @@ describe("a real box, network: agentglass — only on a host that can build one"
       network,
     });
     const proc = Bun.spawn(argv, {
-      env: { PATH: "/usr/bin:/bin", HOME: home, AGENTGLASS_READ_TOKEN: pluginToken },
+      env: { PATH: "/usr/bin:/bin", HOME: home, AGENTGLASS_READ_TOKEN: pluginToken, TMUX_TMPDIR: TMUX_TEST_TMPDIR },
       stdio: ["ignore", "ignore", "ignore"],
     });
     await proc.exited;

@@ -19,7 +19,7 @@ stub("fetch", async (url: string) => {
   return Response.json({ ok: true });
 });
 
-const { answerSettingsRequest, settingsRefusals, settingsRequestsChanged, settingsRequests } = await import("../src/lib/settingsRequests.ts");
+const { answerSettingsRequest, answerAllSettingsRequests, settingsRefusals, settingsRequestsChanged, settingsRequests } = await import("../src/lib/settingsRequests.ts");
 const req = { id: "sr_1", setting: "workers.roles", who: "an unnamed agent", diff: ["Worker roles"], expires: Date.now() + 60_000 };
 const about = { who: req.who, title: "Worker roles" };
 
@@ -60,6 +60,27 @@ describe("a refused answer is not lost with its card", () => {
   });
 });
 
+describe("Approve all answers every waiting request", () => {
+  const two = () => [
+    { ...req, id: "sr_a", setting: "polaris.door.startSession", diff: ["Start sessions"] },
+    { ...req, id: "sr_b", setting: "polaris.door.relaunch", diff: ["Relaunch"] },
+  ];
+  test("each one is approved, and none is left waiting", async () => {
+    pending = two(); await settingsRequestsChanged();
+    decide = { status: 200, body: { ok: true, applied: true }, removes: true };
+    expect(await answerAllSettingsRequests(settingsRequests.list())).toBe(2);
+    expect(settingsRequests.list()).toEqual([]);
+    pending = []; await settingsRequestsChanged();
+  });
+  test("a refusal among them is kept with its own card's words", async () => {
+    pending = two(); await settingsRequestsChanged();
+    decide = { status: 409, body: { ok: false, error: "relaunch changed since" }, removes: true };
+    expect(await answerAllSettingsRequests(settingsRequests.list())).toBe(0);
+    expect(settingsRefusals.list().map((x) => x.error)).toEqual(["relaunch changed since", "relaunch changed since"]);
+    for (const x of settingsRefusals.list()) settingsRefusals.dismiss(x.id);
+  });
+});
+
 describe("the chip and the list draw it", () => {
   test("the chip stays up while a refusal waits, and the list renders a card for it", async () => {
     const chip = await Bun.file(new URL("../src/components/AgentChangeChip.tsx", import.meta.url)).text();
@@ -67,5 +88,8 @@ describe("the chip and the list draw it", () => {
     const list = await Bun.file(new URL("../src/components/SettingsRequests.tsx", import.meta.url)).text();
     expect(list).toContain("refused.map((x) => <RefusalCard");
     expect(list).toContain('role="alert"');
+    // One click for a waiting pile; nothing to click for a single card.
+    expect(list).toContain("requests.length > 1 && <ApproveAll");
+    expect(list).toContain("Approve all ({requests.length})");
   });
 });

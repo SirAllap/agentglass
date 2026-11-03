@@ -170,7 +170,7 @@ describe("the issue command", () => {
     const at = terminal.indexOf('if (msg.cmd === "issue") {');
     const block = terminal.slice(at, terminal.indexOf('if (msg.cmd === "resume") {', at))
       .split("\n").filter((l) => !/^\s*(\/\*|\*|\/\/)/.test(l)).join("\n");
-    expect(block.match(/engineWindowOutcome\([^\n]*, here, true, msg\.reuse === true\)/g)?.length).toBe(2);
+    expect(block.match(/engineWindowOutcome\([^\n]*, here, true, msg\.reuse === true, true\)/g)?.length).toBe(2);
     expect(block.match(/answer\(w\.ok, w\.ok \? "" : w\.reason, w\.ok && w\.reused === true\)/g)?.length).toBe(2);
   });
 });

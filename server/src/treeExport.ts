@@ -28,6 +28,7 @@
 import { spawn } from "bun";
 import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync, symlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
+import { trackChild, stopChild } from "./childledger.ts";
 
 export const EXPORT_CAP = 1024 * 1024 * 1024;
 export const BLOB_CAP = 64 * 1024 * 1024;
@@ -183,6 +184,9 @@ export async function exportTree(gitRoot: string, sha: string, dir: string, opts
   } catch { return "a submodule path could not be made"; }
 
   const cat = spawnGit(gitRoot, ["cat-file", "--batch"], "pipe");
+  // A reader left running by an early return below would outlive this server;
+  // measured as 31 orphaned `git` processes on one machine.
+  trackChild(cat, "git object reader");
   cat.stdin!.write(blobs.map((b) => `${b.oid}\n`).join(""));
   void cat.stdin!.end();
   const reader = cat.stdout.getReader();
@@ -217,6 +221,8 @@ export async function exportTree(gitRoot: string, sha: string, dir: string, opts
     return `could not write the commit: ${e instanceof Error ? e.message.slice(0, 100) : "unknown"}`;
   } finally {
     void reader.cancel().catch(() => { /* already done */ });
+    if (cat.pid) stopChild(cat.pid);
+    try { cat.kill(); } catch { /* gone */ }
   }
   for (const l of links) {
     try { ensureParent(dir, l.path); symlinkSync(l.target, join(dir, l.path)); } catch { /* a path something already holds: skipped */ }

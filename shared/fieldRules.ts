@@ -78,7 +78,7 @@ export const isForgotten = <R extends FieldRow>(r: R, now = Date.now()): r is R 
 /**
  * WHAT A ROW ASKS OF A PERSON, for every reader that tells one.
  *
- * - `blocked`: a permission or a held gate — it cannot go on without you, now.
+ * - `blocked`: a permission or a gate waiting on you — it cannot go on without you, now.
  * - `left`: a turn that ended and nobody came back to for an hour. Under the
  *   hour it is nothing: that is most sessions most of the time.
  * - `forgotten`: claimed work gone quiet for an hour (`isForgotten`).

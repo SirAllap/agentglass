@@ -20,7 +20,27 @@ import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
 
 const MCP = new URL("../../bin/agentglass-browser-mcp", import.meta.url).pathname;
+const CLI = new URL("../../bin/agentglass-browser", import.meta.url).pathname;
 const HAVE_PY = !!Bun.which("python3");
+
+/** Ask BOTH binaries, by running them, what the given expressions evaluate to. */
+function askBoth(env: Record<string, string>, exprs: string[]): string[][] {
+  const probe = [
+    "import importlib.machinery, importlib.util, json",
+    `out = []`,
+    `for f in ${JSON.stringify([CLI, MCP])}:`,
+    '    loader = importlib.machinery.SourceFileLoader("under_test", f)',
+    '    spec = importlib.util.spec_from_loader("under_test", loader)',
+    "    m = importlib.util.module_from_spec(spec); loader.exec_module(m)",
+    `    out.append([${exprs.map((e) => `str(${e})`).join(", ")}])`,
+    "print(json.dumps(out))",
+  ].join("\n");
+  const p = Bun.spawnSync(["python3", "-c", probe], {
+    env: { PATH: process.env.PATH ?? "", ...env },
+  });
+  return JSON.parse(p.stdout.toString().trim()) as string[][];
+}
+
 
 let dir = "", base = "", proc: ReturnType<typeof Bun.spawn> | null = null;
 let ws: WebSocket | null = null;
@@ -777,20 +797,47 @@ print(json.dumps(out))
     /* The identity block is a literal copy, and the only lock ran both with
        AGENTGLASS_PROFILE set — which returns on the first line, so the stem,
        the seed chain and both caps were never compared. */
-    const derive = (file: string) => Bun.spawnSync(["python3", "-c", [
-      "import importlib.machinery, importlib.util, sys",
-      `loader = importlib.machinery.SourceFileLoader("under_test", ${JSON.stringify(file)})`,
-      'spec = importlib.util.spec_from_loader("under_test", loader)',
-      "m = importlib.util.module_from_spec(spec); loader.exec_module(m)",
-      "print(m.my_name(None))",
-    ].join("\n")], {
-      env: { PATH: process.env.PATH ?? "", CLAUDE_PROJECT_ROOT: "/tmp/orbit workspace-long-name", CLAUDE_CODE_SESSION_ID: "sess-9f9f9f-ABCDEF123" },
-    }).stdout.toString().trim();
-    const cli = derive(new URL("../../bin/agentglass-browser", import.meta.url).pathname);
-    const mcp = derive(new URL("../../bin/agentglass-browser-mcp", import.meta.url).pathname);
-    expect(cli.length).toBeGreaterThan(0);
+    const [cli, mcp] = askBoth(
+      { CLAUDE_PROJECT_ROOT: "/tmp/orbit workspace-long-name", CLAUDE_CODE_SESSION_ID: "sess-9f9f9f-ABCDEF123" },
+      ["m.my_name(None)"],
+    ).map((row) => row[0]!);
+    expect(cli!.length).toBeGreaterThan(0);
     expect(mcp).toBe(cli);
-    expect(cli.length).toBeLessThanOrEqual(24);
+    expect(cli!.length).toBeLessThanOrEqual(24);
+  });
+
+  /* THE CAP IS FOR A CONTAINER A CALLER CHOSE, NOT FOR THE CREDENTIAL'S NAME.
+     The relay keys a worker on the whole name its credential was minted for
+     (agentops accepts 1..64) and folds both sides, so a name cut to 24 here is
+     a 403 on every ask: the CLI was fixed for this and this literal copy kept
+     the cap. 40 characters because 24 < 40 < 64 is the range that failed. */
+  const WORKER_40 = "reviewer-orbit-8842-worker-browser-names";
+
+  test("a legal 40-character worker name goes out whole, from either binary", () => {
+    expect(WORKER_40.length).toBe(40);
+    const [[cliName, cliOwn], [mcpName, mcpOwn]] = askBoth(
+      { AGENTGLASS_ROLE: "reviewer", AGENTGLASS_PROFILE: WORKER_40 },
+      ["m.my_name(None)", "m.worker_identity()"],
+    );
+    expect(mcpName).toBe(WORKER_40);
+    expect(mcpName).toBe(cliName!);
+    expect(mcpOwn).toBe(WORKER_40);
+    expect(mcpOwn).toBe(cliOwn!);
+  });
+
+  test("the credential's name is recognised whatever its case, so it is not capped", () => {
+    /* The browser-only variable alone, and a spelling that differs in case:
+       the guard in main accepts the worker under either, so the derivation
+       must too, or it caps the name the guard just let through. */
+    const spelled = WORKER_40.toUpperCase();
+    const [[cliName, cliDerived], [mcpName, mcpDerived]] = askBoth(
+      { AGENTGLASS_ROLE: "verifier", AGENTGLASS_BROWSER_AS: WORKER_40 },
+      [`m.my_name(${JSON.stringify(spelled)})`, "m.my_name(None)"],
+    );
+    expect(cliName).toBe(spelled);
+    expect(mcpName).toBe(spelled);
+    expect(mcpDerived).toBe(WORKER_40);
+    expect(mcpDerived).toBe(cliDerived!);
   });
 
   test("two identities on ONE state dir keep two entries — the map is shared, not clobbered", async () => {

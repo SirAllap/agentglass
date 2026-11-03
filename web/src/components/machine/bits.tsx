@@ -37,11 +37,11 @@ export function ActionNote({ children, onDismiss }: { children: ReactNode; onDis
   );
 }
 
-/** "Stop it" / "Keep", mounted only while a stop is armed, so Esc means "keep it" exactly then. */
-export function StopConfirm({ pid, onYes, onNo }: { pid: number; onYes: () => void; onNo: () => void }) {
+/** "Stop it" / "Keep", mounted only while a stop is armed, so Esc means "keep it" exactly then. `what` names the target in the tooltip: one pid, or a folded group of them. */
+export function StopConfirm({ what, label = "Stop it", onYes, onNo }: { what: string; label?: string; onYes: () => void; onNo: () => void }) {
   useEscapeClose(onNo);
   return (<>
-    <Button size="compact" tone="danger" autoFocus title={`Send SIGTERM to pid ${pid}`} onClick={onYes}>Stop it</Button>
-    <Button size="compact" tone="quiet" title="Keep it" onClick={onNo}>Keep</Button>
+    <Button size="compact" tone="danger" autoFocus data-tip={`Send SIGTERM to ${what}`} onClick={onYes}>{label}</Button>
+    <Button size="compact" tone="quiet" data-tip="Keep it" onClick={onNo}>Keep</Button>
   </>);
 }

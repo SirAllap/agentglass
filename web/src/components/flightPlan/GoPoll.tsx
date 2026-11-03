@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
-import { canGo, goBlocker, kb, openCount, usd, type Plan, type Run } from "../../lib/flightPlan.ts";
+import { canGo, costText, goBlocker, kb, openCount, ranOn, usd, type Plan, type Run } from "../../lib/flightPlan.ts";
 import { goSentence, handledLine, hhmm, plural, whoIs, type Handled, type Pilot, type PilotQuestion } from "../../lib/flightPilot.ts";
 import { DoneIcon, FlagIcon, HandIcon } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { CrossIcon, PlaneIcon, SealIcon } from "./fpIcons.tsx";
+import { BUILDER_MODELS, modelLabel } from "../../../../shared/builderModel.ts";
 
 export type CardAnswer = { choiceId: string } | { text: string };
 const PILOT_NAME: Record<Pilot, string> = { manual: "Manual", copilot: "Co-pilot", autopilot: "Autopilot" };
@@ -21,13 +22,16 @@ const PILOT_NAME: Record<Pilot, string> = { manual: "Manual", copilot: "Co-pilot
 export function GoCard({ plan, run, pilot, handled, question, busy, error, popover, onGo, onNoGo, onAnswer, onTakeOver, onStop, onSee, onClose }: {
   plan: Plan; run: Run | null; pilot: Pilot; handled: Handled; question?: PilotQuestion | null;
   busy: boolean; error: string; popover?: boolean;
-  onGo: () => void; onNoGo: (reason: string) => void; onAnswer: (a: CardAnswer) => void; onTakeOver: () => void; onStop: () => void;
+  /** The model this Go asks for, when the person chose one other than the plan's own pick. */
+  onGo: (model?: string) => void; onNoGo: (reason: string) => void; onAnswer: (a: CardAnswer) => void; onTakeOver: () => void; onStop: () => void;
   /** Show the plan with its findings (the popover closes behind it). */
   onSee?: () => void; onClose?: () => void;
 }) {
   const decided = plan.state === "launched" || plan.state === "no-go";
   const variant = decided ? "decided" : question ? (question.answer ? "answered" : "question") : "go";
   const [text, setText] = useState("");
+  const [model, setModel] = useState(() => plan.launch?.model ?? "");
+  useEffect(() => setModel(plan.launch?.model ?? ""), [plan.id, plan.launch?.model]);
   const [pick, setPick] = useState<string | null>(() => question?.choices.find((c) => c.recommended)?.id ?? null);
   const textRef = useRef<HTMLInputElement>(null);
   const armed = useRef(false);
@@ -105,12 +109,20 @@ export function GoCard({ plan, run, pilot, handled, question, busy, error, popov
       <div className="gc-h">{tile(<FlagIcon size={ICON.sm} />)}<div><div className="gc-t" title={plan.title}>{plan.title}</div><div className="gc-from">ready · {answers ? <><b>the orchestrator</b> answered {plural(answers, "finding")}</> : "nothing to answer"} · {PILOT_NAME[pilot]}</div></div><span className="gc-badge">Go?</span>{x}</div>
       <h3 title={plan.title}>{plan.state === "go" ? `Launch “${plan.title}”?` : `Go for “${plan.title}”?`}</h3>
       <p className="gc-ctx">{goSentence(plan, run)}</p>
+      {plan.launch && (
+        <p className="gc-ctx gc-model">
+          <label>Model <select aria-label="The model this builder starts on" value={model} disabled={busy} onChange={(e) => setModel(e.target.value)}>
+            {BUILDER_MODELS.map((m) => <option key={m} value={m}>{modelLabel(m)}</option>)}
+          </select></label>
+          <span>{model === plan.launch.model ? plan.launch.why : `You chose ${modelLabel(model)} for this Go; the plan's own pick is ${modelLabel(plan.launch.model)}.`}</span>
+        </p>
+      )}
       {(why || open > 0) && <p className="gc-ctx" style={{ marginTop: 6, color: "var(--text3)" }}>{why ?? `${plural(open, "finding")} open, advisory. Go launches the plan as written.`}</p>}
       <form onSubmit={(e) => { e.preventDefault(); if (t && !busy) onNoGo(t); }}>
         <div className="gc-free">
           <input ref={textRef} className={INPUT} style={INPUT_STYLE} aria-label="No-go reason, optional" placeholder="No-go reason (optional) — it goes to the orchestrator" value={text} disabled={busy} onChange={(e) => setText(e.target.value)} />
           <button type="button" className="btn nogo field" disabled={busy} onClick={() => onNoGo(t)}>No-go</button>
-          <button type="button" className="btn go" data-big disabled={busy || !canGo(plan)} title={why ?? undefined} onClick={onGo}><PlaneIcon size={ICON.sm} />{plan.state === "go" ? "Launch" : "Go"}</button>
+          <button type="button" className="btn go" data-big disabled={busy || !canGo(plan)} title={why ?? undefined} onClick={() => onGo(model && model !== plan.launch?.model ? model : undefined)}><PlaneIcon size={ICON.sm} />{plan.state === "go" ? "Launch" : "Go"}</button>
         </div>
       </form>
       <p className="gc-err" role="alert">{error}</p>
@@ -135,8 +147,8 @@ export function Certificate({ run, cap, withPlan }: { run: Run; cap: number; wit
         {c.skipped.map((s) => <div key={s.path} className="file"><span>{s.path.split("/").pop()}</span><span>skipped · {s.reason}</span></div>)}
       </div>
       <div className="cfoot">
-        <span>Model</span><span>{c.model}</span>
-        <span>Cost</span><span>{usd(c.costUsd)} of {usd(cap)} cap<div className="costbar"><i style={{ width: `${Math.min(100, (c.costUsd / (cap || 1)) * 100)}%` }} /></div></span>
+        <span>Model</span><span>{ranOn(c)}</span>
+        <span>Cost</span><span>{costText(c)} of {usd(cap)} cap<div className="costbar"><i style={{ width: `${Math.min(100, (c.costUsd / (cap || 1)) * 100)}%` }} /></div></span>
         <span>Isolation</span><span>{c.isolation}</span>
       </div>
     </div>

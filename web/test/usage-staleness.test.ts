@@ -51,11 +51,11 @@ describe("the strip keeps answering the question it exists to answer", () => {
        is guarding has not changed: the AGE reaches the thing that draws the
        reading, so a stuck number is legible as stuck without ever ceasing to
        be the best answer anybody has. */
-    expect(bar).toContain("<PlanStrip u={u} age={age}");
+    expect(bar).toContain("<PlanChip key={row.provider} u={row} age={age}");
     // The age comes from when the reading was taken, which is what the server
     // preserves across a failed refresh — and for Codex is the last turn that
     // ran, which can be days back.
-    expect(bar).toContain("stalenessLabel(u.observedAt)");
+    expect(bar).toContain("stalenessLabel(r.observedAt)");
   });
 
   test("a stale meter is legible as stale without losing its number", () => {
@@ -63,20 +63,20 @@ describe("the strip keeps answering the question it exists to answer", () => {
        the caption it used to hang off ("5H", "WEEKLY") is gone, because the
        phrase now ends with when the window comes back instead of what it is
        called. */
-    expect(bar).toContain("could not refresh — last read ${age} ago");
+    expect(bar).toContain("Could not refresh — last read ${age} ago");
     expect(bar).toContain("opacity: age ? 0.55 : 1");
   });
 
   test('"no reading" is only reachable with no reading at all', () => {
-    // It lives in the `!u.available` arm. The fix is not that the word is gone,
-    // it is that the server almost always has something for the other arm — so
-    // the word now means what it says. It replaced "rate-limited" when the
-    // meters stopped being Anthropic's alone: 429 is one of several reasons a
-    // provider has nothing to say, and the provider's own sentence — in the
-    // tooltip here, in full on the dashboard box and in Stats — tells them
-    // apart instead of guessing.
-    expect(bar).toContain("const unread = !!u && !u.available");
-    expect(bar).toContain("title={u?.note ??");
+    // The chip asks `chipView`, whose `none` arm is the only one that can draw
+    // a dash; it is reachable only from `!u.available` or an empty window list,
+    // and its tooltip is the provider's own sentence. A 0% would be read as
+    // "nothing used" at exactly the moment the truth is "nobody would say".
+    const chips = read("src/lib/usageChips.ts");
+    expect(bar).toContain("const view = chipView(u)");
+    expect(bar).toContain('view.kind === "reading"');
+    expect(chips).toContain("if (!u.available)");
+    expect(chips).toContain("u.note ??");
   });
 
   test("the meters follow the agent you are driving, not one vendor", () => {
@@ -91,12 +91,13 @@ describe("the strip keeps answering the question it exists to answer", () => {
 describe("weekly windows scoped to one model", () => {
   const providers = read("../server/src/providerusage.ts");
 
-  test("the strip draws one meter per window the provider reports", () => {
+  test("the strip shows the tightest window, the panel draws every one", () => {
     // Scoped windows stopped being a second list the strip has to know about:
-    // the server folds them into `windows`, so the bar draws whatever came
-    // back and a new bucket needs no change here.
-    expect(bar).toContain("const windows = [...u.windows]");
-    expect(bar).toContain("{parts.map((p, i) => (");
+    // the server folds them into `windows`, the chip asks `chipView` for the
+    // worst, and the panel draws the list it was given. A new bucket needs no
+    // change here.
+    expect(bar).toContain("const windows = [...(view?.windows ?? [])]");
+    expect(bar).toContain("{g.windows.map((w) => {");
     // No model name may DECIDE anything — mentioning one in a comment is fine,
     // branching on one is the thing that goes stale.
     expect(bar).not.toMatch(/label\s*===\s*['"]/);
@@ -114,13 +115,13 @@ describe("weekly windows scoped to one model", () => {
     // be worse than not drawing it. One list means one call site, so this is
     // now "the call site carries the age" — and that no second one appeared
     // beside it without it.
-    const strips = bar.match(/<PlanStrip[\s\S]*?\/>/g) ?? [];
-    expect(strips.length).toBeGreaterThanOrEqual(1);
-    for (const m of strips) expect(m).toContain("age={age}");
+    const chips = bar.match(/<PlanChip[\s\S]*?\/>/g) ?? [];
+    expect(chips.length).toBeGreaterThanOrEqual(1);
+    for (const m of chips) expect(m).toContain("age={age}");
     /* And the panel behind it, which is the other place a reading is drawn.
        A window that goes stale there while the strip above says so would be
        the same failure one level down. */
-    expect(bar).toContain("<PlanPanel u={u} age={age}");
+    expect(bar).toContain("<PlanPanel u={planShown.row} age={planShown.age}");
   });
 });
 

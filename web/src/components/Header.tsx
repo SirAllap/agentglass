@@ -106,26 +106,6 @@ function SkillsIcon() {
  *  ever written spells that with a cog, which is why it was the one control in
  *  the header nobody could find without hovering everything first. */
 
-/** A plug: something is listening on this machine. */
-export function PortsIcon({ size = ICON.md }: { size?: number }) {
-  /*
-   * A socket, not a plug.
-   *
-   * The plug was a narrow object — 58% of its box across, against the 83% the
-   * rest of the rail fills — so at the same nominal size it read as a smaller
-   * icon, which is what it is a picture of and not what it is a control for.
-   * A socket is the same idea (a port something plugs INTO, which is closer to
-   * what the panel lists anyway) in a shape that fills a square.
-   */
-  return (
-    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="3" width="18" height="18" rx="3.5" />
-      <path d="M9.5 8.5v4M14.5 8.5v4" />
-      <path d="M8.5 16h7" />
-    </svg>
-  );
-}
-
 /** A gauge: how much of the machine is left. */
 export function ResourcesIcon({ size = ICON.md }: { size?: number }) {
   /*
@@ -200,11 +180,10 @@ export function Header({
   onOpenSkills: () => void;
   onOpenWorkspace: () => void;
   onOpenSettings: () => void;
-  /** The machine panel, on the tab that was asked for. Beside settings because
-   *  the three are the same kind of thing — this window's own controls, not the
-   *  fleet's — and because they must sit in one place the workspace can
-   *  reproduce exactly. */
-  onOpenMachine: (tab: "ports" | "resources") => void;
+  /** The machine panel. Beside settings because the two are the same kind of
+   *  thing — this window's own controls, not the fleet's — and because they
+   *  must sit in one place the workspace can reproduce exactly. */
+  onOpenMachine: (tab: "resources") => void;
   onClear: () => void;
   workspace: string | null;
   onOpenProject: () => void;
@@ -344,11 +323,10 @@ export function Header({
         <PowerModeButton />
         {/* Skills demoted to a plain icon */}
         <Button square title="Skills explorer — browse every available skill (k)" onClick={onOpenSkills}><SkillsIcon /></Button>
-        {/* Ports and resources sit next to settings, and the workspace rail
-            repeats exactly these three in the same order — so "where do I look
-            at the machine" has one answer wherever you happen to be. */}
-        <Button square title="Ports — what is listening, and which checkout started it" onClick={() => onOpenMachine("ports")}><PortsIcon /></Button>
-        <Button square title="Resources — CPU, memory and disk, by checkout" onClick={() => onOpenMachine("resources")}><ResourcesIcon /></Button>
+        {/* Resources sits next to settings, and the workspace rail repeats the
+            same pair — so "where do I look at the machine" has one answer
+            wherever you happen to be. Ports and Locks are its tabs. */}
+        <Button square label="Resources" data-tip="Resources · CPU, memory, disk, listening ports, locks and left-behind processes" onClick={() => onOpenMachine("resources")}><ResourcesIcon /></Button>
         <MoreMenu onOpen={onOpenSettings} />
       </div>
     </header>

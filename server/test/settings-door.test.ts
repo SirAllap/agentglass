@@ -283,7 +283,7 @@ describe("every server setting has a class", () => {
   });
 
   test("every server line in the table is a setting there, or one no agent reaches", () => {
-    const windowish = /^(appearance|diff|terminal|rail|notifications|browser|tasks|keys|prefs|about)\.|^plugins\.sessionReads\.|^clickup\.statusSpaces\.|^jira\.statusUnits\.|^jira\.tree\./;
+    const windowish = /^(appearance|diff|terminal|rail|notifications|browser|tasks|keys|prefs|about|usage)\.|^plugins\.sessionReads\.|^clickup\.statusSpaces\.|^jira\.statusUnits\.|^jira\.tree\./;
     const stale = Object.entries(SETTING_CLASSES)
       .filter(([k, row]) => !windowish.test(k) && row.class !== "secret" && !(row.class === "personOnly" && !ids.includes(k)))
       .filter(([k]) => !ids.some((id) => (k.includes("*") ? classOf(id) === SETTING_CLASSES[k] : id === k)))

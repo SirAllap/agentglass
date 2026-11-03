@@ -87,6 +87,19 @@ export function behindOf(root: string, number: number, force = false): number | 
 }
 
 /**
+ * The answer already held, and no ask.
+ *
+ * A lane header counts from the rows the board has already drawn; `behindOf`
+ * queues a comparison per call, so reading a whole lane through it spent one
+ * `gh` spawn on every pull request nobody had looked at yet. The header reads
+ * what the cards asked for and nothing more.
+ */
+export function knownBehind(root: string, number: number): number | null {
+  if (!root || !number) return null;
+  return seen.get(keyOf(root, number))?.behind ?? null;
+}
+
+/**
  * Nobody has an answer for this one yet.
  *
  * Told apart from "up to date" on purpose: both draw no chip, and only one of

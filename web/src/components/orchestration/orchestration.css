@@ -20,31 +20,30 @@
 
 /* A pill track with one raised thumb: the compact "pick one" control. */
 .agx-orch-seg {
-  display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; border-radius: 10px;
-  background: var(--surface-inset); max-width: 100%;
+  display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; border-radius: 11px;
+  border: 1px solid var(--surface-line); background: var(--surface-inset); max-width: 100%;
 }
 .agx-orch-seg > button {
-  appearance: none; border: 1px solid transparent; background: transparent; cursor: pointer;
-  padding: 5px 12px; border-radius: 8px; font: inherit; font-size: 12px; font-weight: 600; line-height: 1.3;
-  color: var(--text3); white-space: nowrap;
+  appearance: none; border: 0; background: transparent; cursor: pointer;
+  padding: 4px 12px; border-radius: 8px; font: inherit; font-size: 13px; font-weight: 500; line-height: 1.3;
+  color: var(--text2); white-space: nowrap;
 }
 .agx-orch-seg > button:hover:not(:disabled):not([aria-pressed="true"]) { color: var(--text); }
 .agx-orch-seg > button[aria-pressed="true"] {
-  background: var(--surface-card, var(--bg)); color: var(--text); border-color: var(--border);
+  background: var(--surface-page); color: var(--text); font-weight: 600;
   box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 14%, transparent);
 }
 .agx-orch-seg > button:disabled { opacity: .45; cursor: default; }
 .agx-orch-seg > button:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
-.agx-orch-own { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--info); vertical-align: middle; }
+.agx-orch-own { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--accent); vertical-align: middle; }
 
 /* What sits under a card's rows: results, notes, the opened conditions list. */
-.agx-orch-after { display: grid; gap: 8px; padding: 6px 18px 14px; }
-.agx-orch-after:empty { display: none; }
 
 /* The commands textarea: the field's ground and edge, the mono face. */
 .agx-orch-ta {
-  width: 100%; box-sizing: border-box; resize: vertical; min-height: 84px; padding: 8px 10px; border-radius: 8px;
-  border: 1px solid var(--border2); background: var(--bg); color: var(--text); font-size: 12px; line-height: 1.5;
+  width: 100%; box-sizing: border-box; resize: vertical; min-height: 76px; padding: 7px 10px; border-radius: 9px;
+  border: 1px solid var(--border2); background: var(--surface-page); color: var(--text);
+  font-family: var(--font-mono, monospace); font-size: 12.5px; line-height: 1.5;
 }
 .agx-orch-ta:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 .agx-orch-ta:disabled { opacity: .6; }
@@ -69,3 +68,774 @@
 .agx-orch-tag { display: inline-block; margin-left: 6px; padding: 0 7px; border-radius: 999px; font-size: 10.5px; font-weight: 600; line-height: 1.7;
   background: var(--surface-inset); color: var(--text3); vertical-align: baseline; }
 .agx-orch-tag[data-tone="err"] { background: color-mix(in srgb, var(--error) 12%, transparent); color: var(--error-ink); }
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * The Flow page: a pinned top region and ONE scroll region under it.
+ *
+ * The page fills the settings frame's content box exactly, so at a window the
+ * pinned region and a usable pane both fit, the frame never scrolls here: the
+ * drawing and the section bar stay and only the section's body moves. Below
+ * that, the pane's floor wins and the frame's region scrolls instead of
+ * squeezing the pane away. The height is read from the frame, never from a
+ * viewport calculation, so no header or band number is repeated in this file.
+ * ───────────────────────────────────────────────────────────────────────── */
+.agx-settings-page:has(.agx-orch.agx-flow) {
+  height: 100%;
+  align-items: stretch;
+}
+/* Under 1760px the index band is a row of its own, and the page gets the rest.
+   The band comes and goes with the view (Polaris draws no cards for it to
+   index), so the row is declared only when the band is really there. */
+@media (max-width: 1759px) {
+  .agx-settings-page:has(.agx-orch.agx-flow) { grid-template-rows: minmax(0, 1fr); }
+  .agx-settings-page:has(.agx-orch.agx-flow):has(> .agx-toc) { grid-template-rows: auto minmax(0, 1fr); }
+}
+@media (min-width: 1760px) {
+  /* The index is a rail beside the cards there, so it adds no row. */
+  .agx-settings-page:has(.agx-orch.agx-flow) { grid-template-rows: minmax(0, 1fr); }
+}
+.agx-settings-page:has(.agx-orch.agx-flow) > .agx-settings-content { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+/* One pane, not a column of cards: the balanced grid would pin it to its
+   measured height and put the frame back to scrolling. */
+.agx-settings-page:has(.agx-orch.agx-flow) .agx-settings-col[data-stable] {
+  display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; min-width: 0;
+  /* The card grid takes back its last 18px gap with a negative margin; here
+     that margin would make the pane 18px taller than the frame's box. */
+  align-items: stretch; margin-bottom: 0;
+}
+
+.agx-orch.agx-flow {
+  /* .agx-orch's own 40px row gap sat between the pinned band and the tabs: 40px of nothing. */
+  display: flex; flex-direction: column; gap: 0; min-height: 0; min-width: 0;
+  flex: 1 1 auto; height: 100%;
+}
+/* The pinned block is its own layer under the band's: in the short-window
+   fallback the frame's region scrolls, and the bar must go under the index
+   band, never over it. */
+.agx-flow-pinned { position: relative; z-index: 0; flex: none; display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
+/* The bar stays pinned under the band, at the offset the band publishes. Taken
+   out of flow it slid up behind the band at 1280x720, and at 620/600 wide its
+   second line ("Showing all projects") went with it. */
+.agx-flow-pinned [data-scope-bar] { position: static; margin-bottom: 0; }
+
+/* The scope row: one line of chrome over the page.
+   It was two rows — the chips and the saved mark, then the sentence and the
+   action — and 87px of a 763px region went to saying what the chips already
+   say. The sentence lives in the info icon's tip now (the words are the same),
+   and the action sits at the row's end, so every control keeps its place when
+   the scope changes: the action is always in the row, only hidden when there
+   is no project to send back. */
+.agx-flow-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 5px 0 7px; }
+.agx-flow-scope .agx-flow-scope-info { flex: none; }
+.agx-flow-scope-note { flex-basis: 100%; }
+/* The Flight plan link, a quiet line in the scope row rather than a card. */
+.agx-flow-fp { display: inline-flex; align-items: center; gap: 5px; min-width: 0; font-size: 11.5px; color: var(--text3); white-space: nowrap; }
+.agx-flow-fp-k { color: var(--text2); font-weight: 600; }
+.agx-flow-fp-go {
+  appearance: none; border: 0; background: none; padding: 1px 2px; border-radius: 4px;
+  font: inherit; font-weight: 600; color: var(--primary); cursor: pointer;
+}
+.agx-flow-fp-go:hover { text-decoration: underline; }
+.agx-flow-fp-go:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+
+/* The row under the project chips: one sentence about what is shown. */
+
+/* The drawing's card: the page's own ground with an edge, as the mock shows. */
+/* A card's head is its h3 and one line under it (see `.agx-flow-card` below). */
+.agx-flow-kbd {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 5px;
+  border: 1px solid var(--border2); border-bottom-width: 2px; border-radius: 5px; background: var(--bg);
+  font-family: var(--font-mono, monospace); font-size: 10px; color: var(--text2);
+}
+
+/* The canvas: the dotted ground the chain is laid on. */
+
+/* Eight columns, two of them the empty slots the chain leaves for a rule's own step. */
+
+/* One block: a button that reads like the mock's card. */
+/* The row gives the name no room of its own; without this it collapses to a letter per line. */
+/* The name keeps its whole word; the chip gives way and ellipsizes instead. */
+/* Below this width the name loses its last letters to the state word; the dot
+   still carries the state, and the block's own label says it in words. */
+.agx-flow-mark {
+  display: inline-flex; align-items: center; height: 15px; padding: 0 6px; border-radius: 99px;
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border));
+  background: color-mix(in srgb, var(--warning) 12%, var(--bg));
+  font-size: 7.5px; letter-spacing: 0.03em; color: var(--warning-ink); white-space: nowrap;
+}
+
+/* The loop's own row: the block below, the cap on the arc, the second reviewer. */
+.agx-flow-second {
+  position: absolute; transform: translateX(-100%); top: 42px; display: inline-flex; align-items: center; justify-content: center;
+  height: 21px; padding: 0 8px; border: 1px dashed var(--border2); border-radius: 7px;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  font-size: 8px; color: var(--text3); cursor: default; white-space: nowrap;
+}
+
+/* The section bar under the drawing: fixed, one line, one set of tabs. The floor
+   is what keeps the pane when the window is shorter than the pinned region: the
+   flow then grows past the frame instead of squeezing this to nothing, and the
+   frame's own region scrolls. */
+.agx-flow-cfg { flex: none; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+.agx-flow-cfgbar {
+  flex: none; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; min-height: 36px; margin: 22px 0 16px;
+  padding: 0; border-bottom: 1px solid var(--surface-line);
+}
+.agx-flow-tabs { display: flex; flex-wrap: wrap; gap: 4px; max-width: 100%; padding: 0; border-radius: 0; background: none; }
+.agx-flow-tabs button {
+  display: inline-flex; align-items: center; gap: 7px; margin-bottom: -1px; padding: 9px 14px; border: 0;
+  border-bottom: 2px solid transparent; border-radius: 0; background: none;
+  color: var(--text2); font-size: 13.5px; white-space: nowrap; cursor: pointer;
+}
+.agx-flow-tabs button:hover { color: var(--text); }
+.agx-flow-tabs button[aria-selected="true"] {
+  background: none; color: var(--text); font-weight: 620; border-color: var(--accent); box-shadow: none;
+}
+.agx-flow-tabs button svg { display: block; }
+.agx-flow-cfgscroll { flex: none; min-height: 0; overflow: visible; padding: 12px 0 18px; }
+/* The Polaris card is the scroller's last child, outside the panes: the scroller's padding is the gap below it and 12px (the panes' own gap) above it. */
+/* `:last-child` is for weight, not meaning: `.agx-settings-col .agx-scard` (margin 0 0 18px) comes later in the bundle at the same
+   specificity and won, so the first version of this gap never showed. */
+.agx-flow-cfgscroll > .agx-scard:last-child { margin: 12px 0 0; }
+.agx-flow-pane { display: flex; flex-direction: column; gap: 16px; }
+/* The tabpanel is hidden with the attribute, and this author display rule would otherwise win over it. */
+.agx-flow-pane[hidden] { display: none; }
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * A SHORT OR NARROW WINDOW: nothing above the section pins.
+ *
+ * The block above buys one pinned drawing and one scrolling section, and it
+ * needs the frame to be at least as tall as the pinned region plus a usable
+ * section. When it is not — a laptop at 150%, a phone-sized pane — the pinned
+ * region alone fills the region, the scope bar stays stuck over the view
+ * switch and the section falls to its 8rem floor: measured at 640x360, a
+ * 1691px section inside a 78px window, with the frame's own region also
+ * scrolling. So under this height the page stops asking for the frame's height,
+ * the scope bar stops pinning, and the section is as tall as its content. The
+ * frame's one region then scrolls the whole page, which every other Settings
+ * page already does.
+ *
+ * 900px is where the floor stops fitting at the widths above: the pinned
+ * region is 466 tall at 1440 wide (476 at 853, 484 at 640) and the frame
+ * leaves it 255px of header, page padding and index band before the section
+ * starts, so the floor alone needs ~850. 960 is where the section is still
+ * under a quarter of the window — the strip this rule exists to remove — so the
+ * pinned layout is kept only above that.
+ * ───────────────────────────────────────────────────────────────────────── */
+/* One scroll for the page: the frame's region. No section keeps a scroller of its own, at any height. */
+.agx-settings-page:has(.agx-orch.agx-flow) { height: auto; }
+.agx-settings-page:has(.agx-orch.agx-flow):has(> .agx-toc) { grid-template-rows: auto auto; }
+.agx-settings-page:has(.agx-orch.agx-flow) .agx-settings-col[data-stable] { flex: none; }
+/* The scope bar's measured height no longer offsets a pin, so a card
+   scrolled to from a link stops under the index band alone. */
+.agx-settings-scroll:has(.agx-orch.agx-flow) { --agx-pin-stack: var(--agx-pin-top); }
+.agx-orch.agx-flow { flex: none; height: auto; }
+/* One scrollbar on this page, and it is the frame's: a section that kept its
+   own scroller here would be the 78px window this rule exists to remove. */
+.agx-flow-cfgscroll { overflow: visible; padding-bottom: 0; }
+.agx-flow-k {
+  margin: 0 0 4px; font-size: 8.5px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--text4);
+}
+.agx-flow-p { margin: 0 0 10px; font-size: 12px; line-height: 1.5; color: var(--text2); }
+.agx-flow-p:last-child { margin-bottom: 0; }
+.agx-flow-when { padding: 8px 9px; border: 1px solid color-mix(in srgb, var(--border) 80%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--bg2) 70%, var(--bg)); }
+.agx-flow-when p:last-child { margin: 0; font-size: 11.5px; line-height: 1.45; color: var(--text2); }
+.agx-flow-ctl { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.agx-flow-ctl[data-focus] { background: color-mix(in srgb, var(--accent) 9%, transparent); outline: 1px solid color-mix(in srgb, var(--accent) 34%, transparent); outline-offset: 3px; border-radius: 5px; }
+.agx-flow-fk {
+  min-width: 42px; padding-top: 6px; font-size: 8.5px;
+  letter-spacing: 0.07em; text-transform: uppercase; color: var(--text4);
+}
+.agx-flow-ask { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 2px 0 10px; }
+.agx-flow-note { font-size: 11px; line-height: 1.45; color: var(--text3); }
+.agx-flow-sp { flex: 1 1 auto; }
+.agx-flow-kv { display: grid; grid-template-columns: 88px minmax(0, 1fr); column-gap: 10px; margin: 9px 0 0; }
+.agx-flow-kv > dt {
+  padding: 4px 0; border-top: 1px solid color-mix(in srgb, var(--surface-line) 78%, transparent);
+  font-size: 8px; letter-spacing: 0.07em; text-transform: uppercase;
+  color: var(--text4); line-height: 1.6;
+}
+.agx-flow-kv > dd {
+  margin: 0; padding: 4px 0; border-top: 1px solid color-mix(in srgb, var(--surface-line) 78%, transparent);
+  font-size: 11.5px; line-height: 1.45; color: var(--text2); min-width: 0;
+}
+.agx-flow-tools { display: flex; flex-wrap: wrap; gap: 4px; }
+.agx-flow-tool {
+  display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--bg); font-size: 8.5px; color: var(--text2);
+}
+.agx-flow-tool[data-no] { border-style: dashed; color: var(--text3); background: none; }
+.agx-flow-who { display: grid; gap: 4px; }
+.agx-flow-who-b {
+  display: flex; align-items: flex-start; gap: 7px; width: 100%; padding: 6px 8px; text-align: left;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg); cursor: pointer;
+}
+.agx-flow-who-b[aria-checked="true"] {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--border));
+  box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--accent) 11%, transparent);
+}
+.agx-flow-radio { width: 13px; height: 13px; flex: none; margin-top: 1px; border-radius: 50%; border: 1.4px solid var(--border2); display: grid; place-items: center; }
+.agx-flow-who-b[aria-checked="true"] .agx-flow-radio { border-color: var(--text); background: var(--text); }
+.agx-flow-who-b[aria-checked="true"] .agx-flow-radio::after { content: ""; width: 4px; height: 4px; border-radius: 50%; background: var(--bg); }
+.agx-flow-who-b b { display: block; font-size: 10.5px; font-weight: 600; line-height: 1.3; color: var(--text); }
+.agx-flow-who-b span > span { display: block; margin-top: 1px; font-size: 9.5px; line-height: 1.3; color: var(--text3); }
+/* The second reviewer's engine and model, under its switch: two labelled controls on one line, wrapping when narrow. */
+.agx-flow-secondpick { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin-top: 2px; }
+.agx-flow-rules { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
+.agx-flow-rchip {
+  display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border-radius: 99px;
+  border: 1px solid color-mix(in srgb, var(--g-agents) 30%, var(--border));
+  background: color-mix(in srgb, var(--g-agents) 7%, var(--bg));
+  font-size: 8.5px; color: var(--text2); cursor: pointer;
+}
+
+/* A number the server keeps (the round cap), framed like a row's stepper. */
+.agx-count { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); overflow: hidden; }
+.agx-count button { width: 22px; height: 22px; border: 0; background: none; color: var(--text3); cursor: pointer; display: grid; place-items: center; font-family: var(--font-mono, monospace); font-size: 12px; line-height: 1; }
+.agx-count button:hover { background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); }
+.agx-count button:disabled { opacity: 0.4; cursor: default; }
+.agx-count > span { min-width: 26px; text-align: center; border-inline: 1px solid var(--surface-line); font-family: var(--font-mono, monospace); font-size: 10.5px; color: var(--text); line-height: 22px; }
+
+/* The section cards: inheritances, limits, refusals. Each is the mockup's
+ * `.card`: the page's own ground with an edge, its heading with one line under
+ * it, and rows separated by hairlines — no header bar, no icon tile. */
+.agx-flow-grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; }
+.agx-flow-grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.agx-flow-card {
+  min-width: 0; padding: 16px 18px; border: 1px solid var(--surface-line); border-radius: 16px;
+  background: var(--surface-page); box-shadow: var(--surface-lift);
+}
+.agx-flow-card h3 { margin: 0 0 2px; display: flex; align-items: center; gap: 7px; font-size: 15px; font-weight: 650; color: var(--text); }
+.agx-flow-card h3 svg { flex: none; color: var(--text2); }
+.agx-flow-cardmark { margin-left: auto; font-weight: 500; }
+.agx-flow-card .sub { margin: 0 0 10px; font-size: 13px; line-height: 1.45; color: var(--text3); }
+.agx-flow-rows, .agx-flow-cardrows { display: grid; grid-template-columns: minmax(0, 1fr); }
+.agx-flow-row {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px;
+  padding: 11px 0; border-top: 1px solid var(--surface-line); font-size: 13px; color: var(--text);
+}
+.agx-flow-row:first-child { border-top: 0; }
+.agx-flow-row .d { min-width: 0; font-size: 13px; color: var(--text); }
+.agx-flow-row .d small { display: block; margin-top: 1px; font-size: 12px; line-height: 1.45; color: var(--text3); }
+/* The kit's rows (a Toggle, a choice) take the same shape inside a card. */
+.agx-orch .agx-flow-cardrows .agx-settings-row {
+  grid-template-columns: minmax(0, 1fr) auto; column-gap: 14px; padding: 11px 0;
+  border: 0; border-top: 1px solid var(--surface-line); background: none; min-width: 0;
+}
+.agx-orch .agx-flow-cardrows > :first-child .agx-settings-row, .agx-orch .agx-flow-cardrows > .agx-settings-row:first-child { border-top: 0; }
+.agx-flow-cardrows .agx-row-name { font-size: 13px; font-weight: 400; color: var(--text); }
+.agx-flow-cardrows .agx-row-help { font-size: 12px; line-height: 1.45; color: var(--text3); }
+/* A limit's stepper: the mockup's two 36px squares around a number. */
+.agx-count { display: inline-flex; align-items: center; gap: 6px; border: 0; background: none; overflow: visible; }
+.agx-count button {
+  width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid var(--border2);
+  border-radius: 8px; background: var(--surface-page); color: var(--text2);
+  font-family: inherit; font-size: 16px; line-height: 1; cursor: pointer;
+}
+.agx-count button:hover:not(:disabled) { background: var(--surface-inset); color: var(--text); }
+.agx-count button:disabled { opacity: 0.4; cursor: default; }
+.agx-count > span {
+  min-width: 24px; border: 0; background: none; text-align: center; line-height: 36px;
+  font-family: inherit; font-size: 13px; font-weight: 650; color: var(--text);
+}
+/* A row whose command chips are all refused: plain chips with no remove. */
+.agx-flow-locked { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; margin-left: auto; max-width: 100%; min-width: 0; }
+.agx-flow-cmd {
+  display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 7px;
+  border: 1px solid var(--surface-line); background: var(--surface-inset);
+  font-family: var(--font-mono, monospace); font-size: 12px; color: var(--text2);
+}
+/* What happens when a limit is reached: a name and its sentence, hairline above. */
+.agx-flow-when3 { display: grid; }
+.agx-flow-whenb { display: flex; flex-direction: column; gap: 2px; padding: 10px 0; border-top: 1px solid var(--surface-line); }
+.agx-flow-whenb:first-child { border-top: 0; }
+.agx-flow-whenb b { font-size: 13px; font-weight: 650; color: var(--text); }
+.agx-flow-whenb span { font-size: 12.5px; line-height: 1.45; color: var(--text3); }
+.agx-flow-refused { display: flex; flex-wrap: wrap; gap: 4px; }
+/* A block's own heading, above the cards it holds: an icon, the title, one line, and the chip that says whose it is. */
+.agx-flow-fixed { display: flex; align-items: center; gap: 12px; min-width: 0; margin: 4px 0 12px; }
+.agx-flow-fixedico { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: var(--text2); color: var(--surface-page); }
+.agx-flow-fixedico[data-tone="acc"] { background: var(--accent); }
+.agx-flow-fixedtext { display: grid; gap: 1px; min-width: 0; }
+.agx-flow-fixedtext b { font-size: 15px; font-weight: 650; color: var(--text); }
+.agx-flow-fixedtext small { font-size: 12.5px; line-height: 1.45; color: var(--text3); }
+.agx-flow-fixed > .agx-flow-chip { margin-left: auto; }
+.agx-flow-side { padding: 10px 14px 4px; }
+.agx-flow-side h4 { margin: 0; font-size: 13px; font-weight: 600; color: var(--text); }
+.agx-flow-side p { margin: 4px 0 0; font-size: 12px; color: var(--text3); }
+.agx-flow-x { margin: 10px 0 0; padding: 0; font-size: 11.5px; line-height: 1.5; color: var(--text3); }
+.agx-flow-savebar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  margin: 12px 0 0; padding: 10px 16px; border-top: 1px solid var(--warning);
+  background: color-mix(in srgb, var(--warning) 10%, var(--surface-page));
+  color: var(--warning-ink, var(--warning)); font-size: 13px;
+}
+.agx-flow-savebar b { font-weight: 650; }
+.agx-flow-savebar .agx-flow-sp { flex: 1 1 auto; }
+
+/* Keys and menus: three columns, then the strip. */
+.agx-flow-keys { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr) minmax(0, 0.9fr); gap: 12px; }
+.agx-flow-klist { padding: 4px 10px 8px; }
+.agx-flow-kl { display: flex; align-items: center; gap: 8px; height: 26px; font-size: 11.5px; color: var(--text2); border-bottom: 1px solid color-mix(in srgb, var(--surface-line) 65%, transparent); }
+.agx-flow-kl:last-child { border-bottom: 0; }
+.agx-flow-kl .kk { margin-left: auto; font-family: var(--font-mono, monospace); font-size: 8.5px; color: var(--text4); }
+.agx-flow-khs { padding: 6px 14px 10px; }
+.agx-flow-kh { display: flex; align-items: center; gap: 8px; height: 27px; font-size: 11.5px; color: var(--text2); }
+.agx-flow-kh > span:last-child { margin-left: auto; display: flex; gap: 3px; }
+.agx-flow-knote { padding: 9px 14px 11px; font-size: 11px; line-height: 1.5; color: var(--text3); }
+.agx-flow-knote p { margin: 0 0 8px; }
+.agx-flow-knote p:last-child { margin: 0; }
+.agx-flow-knote b { color: var(--text2); font-weight: 650; }
+.agx-flow-knote code { font-family: var(--font-mono, monospace); font-size: 9.5px; color: var(--text2); background: var(--surface-inset); border-radius: 4px; padding: 1px 4px; }
+
+/* A menu's own header: whose menu this is, before the seven rows. */
+.agx-flow-mh { display: flex; align-items: center; padding: 5px 8px 7px; margin-bottom: 4px; border-bottom: 1px solid var(--surface-line); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text4); }
+
+@media (max-height: 920px) {
+  .agx-flow-kv > dt, .agx-flow-kv > dd { padding: 3px 0; }
+}
+@media (max-width: 1500px) {
+  .agx-flow-keys { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .agx-flow-keys > .agx-flow-card:last-child { grid-column: 1 / -1; }
+}
+@media (max-width: 1360px) {
+  .agx-flow-cardright .agx-flow-hint { display: none; }
+  .agx-flow-grid3 { grid-template-columns: 1fr; }
+  .agx-flow-keys { grid-template-columns: 1fr; }
+  .agx-flow-keys > .agx-flow-card:last-child { grid-column: auto; }
+}
+/* At 390 wide the four section tabs were one per line: an inline-flex track
+   in a flex row shrinks to its widest button, so nothing could sit beside it.
+   Let the track take the row instead and the buttons fall two per line. */
+@media (max-width: 720px) {
+  .agx-flow-tabs { flex: 1 1 auto; }
+  .agx-flow-tabs button { flex: 0 0 auto; }
+}
+@media (max-width: 1180px) {
+  .agx-flow-grid2 { grid-template-columns: 1fr; }
+}
+/* ─────────────────────────────────────────────────────────────────────────
+ * The rule sheet: one column, WHEN / THEN USE / the sentence / the dry run,
+ * each a section with a hairline above it, one row grammar for every step and
+ * one control that adds one. Nothing here paints its own colour: the sheet
+ * takes the page's ground and the theme's surfaces.
+ * ───────────────────────────────────────────────────────────────────────── */
+.agx-flow .agx-rule-head { display: grid; gap: 6px; padding: 16px 20px 14px; background: var(--bg); }
+.agx-flow .agx-rule-eyebrow { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text3); }
+.agx-flow .agx-rule-body { flex: 1; min-height: 0; display: grid; gap: 0; align-content: start; padding: 0 20px 24px; }
+.agx-flow .agx-rule-sec { display: grid; gap: 12px; padding: 18px 0; border-top: 1px solid var(--surface-line); }
+.agx-flow .agx-rule-sec:first-child { border-top: 0; padding-top: 16px; }
+.agx-flow .agx-rule-sec-head { display: grid; gap: 4px; }
+.agx-flow .agx-rule-sec-h { margin: 0; font-size: 10.5px; font-weight: 650; letter-spacing: 0.09em; text-transform: uppercase; color: var(--text2); }
+.agx-flow .agx-rule-sec-sub { margin: 0; font-size: 12px; line-height: 1.45; color: var(--text3); }
+.agx-flow .agx-rule-note { margin: 0; font-size: 11.5px; line-height: 1.45; color: var(--text3); }
+.agx-flow .agx-rule-grow { flex: 1 1 auto; min-width: 0; }
+.agx-flow .agx-rule-addrow { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.agx-flow .agx-rule-addwrap { display: inline-flex; }
+
+/* One condition: its kind, the fields that kind needs, the strip that shows it. */
+.agx-flow .agx-rule-cond { display: grid; gap: 10px; min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
+.agx-flow .agx-rule-cond-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.agx-flow .agx-rule-cond-top > :first-child { flex: 1 1 auto; min-width: 0; }
+.agx-flow .agx-rule-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.agx-flow .agx-rule-fieldlabel { font-size: 12px; color: var(--text2); }
+
+/* A chain: every step in the same columns, and the controls never wrap. */
+.agx-flow .agx-rule-chain { display: grid; gap: 10px; min-width: 0; }
+.agx-flow .agx-rule-steps { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.agx-flow .agx-rule-step {
+  display: grid; grid-template-columns: 18px minmax(0, 1fr) 168px 28px 28px 28px;
+  align-items: center; gap: 8px; min-width: 0; min-height: 42px; padding: 6px 8px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--bg);
+}
+.agx-flow .agx-rule-step-n { font-size: 10px; font-variant-numeric: tabular-nums; text-align: center; color: var(--text3); }
+.agx-flow .agx-rule-step-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.agx-flow .agx-rule-step-mark {
+  display: inline-grid; place-items: center; flex: none; width: 22px; height: 22px; border-radius: 6px;
+  background: var(--surface-inset); border: 1px solid var(--border); font-size: 11px; font-weight: 600; color: var(--text2);
+}
+.agx-flow .agx-rule-step-title { min-width: 0; font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agx-flow .agx-rule-step-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--warning); }
+.agx-flow .agx-rule-step-dot[data-tone="err"] { background: var(--error); }
+.agx-flow .agx-rule-model { width: 168px; min-width: 0; text-overflow: ellipsis; }
+.agx-flow .agx-rule-step > button { justify-self: end; }
+
+/* One job: its heading (open or folded, on or off) and, open, its steps. */
+.agx-flow .agx-rule-jobs { display: grid; gap: 8px; min-width: 0; }
+.agx-flow .agx-rule-job { min-width: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); overflow: hidden; }
+.agx-flow .agx-rule-job-head { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 8px 6px 10px; }
+.agx-flow .agx-rule-job[data-on] .agx-rule-job-head { border-bottom: 1px solid var(--surface-line); background: color-mix(in srgb, var(--bg2) 45%, var(--bg)); }
+.agx-flow .agx-rule-job-open {
+  display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0;
+  padding: 4px 2px; border: 0; border-radius: 6px; background: none; font: inherit; text-align: left; color: var(--text); cursor: pointer;
+}
+.agx-flow .agx-rule-job-open[data-static] { cursor: default; }
+.agx-flow .agx-rule-job-open:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.agx-flow .agx-rule-caret { flex: none; width: 12px; color: var(--text3); transition: transform 0.14s; }
+.agx-flow .agx-rule-caret[data-open] { transform: rotate(90deg); }
+.agx-flow .agx-rule-caret[data-off] { visibility: hidden; }
+.agx-flow .agx-rule-job-title { font-size: 12.5px; font-weight: 650; color: var(--text); }
+.agx-flow .agx-rule-job-count { font-size: 11px; color: var(--text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agx-flow .agx-rule-job-body { padding: 10px 10px 12px; }
+
+.agx-flow .agx-rule-preview {
+  margin: 0; padding: 12px 14px; border: 1px solid var(--surface-line); border-radius: 10px;
+  background: var(--surface-inset); font-size: 12.5px; line-height: 1.5; color: var(--text); overflow-wrap: anywhere;
+}
+
+/* The footer stays at the sheet's floor; the primary sits last and Delete is alone on the left. */
+.agx-flow .agx-rule-foot { position: sticky; bottom: 0; display: grid; gap: 8px; padding: 12px 20px; background: var(--bg); }
+.agx-flow .agx-rule-foot-row { display: flex; align-items: center; gap: 8px; }
+
+/* The engines menu: name, and one short line for ready or why not. */
+.agx-flow .agx-step-pick {
+  display: flex; align-items: center; gap: 9px; width: 100%; min-height: 42px;
+  padding: 5px 8px; border: 0; border-radius: 8px; background: none; font: inherit; text-align: left; color: var(--text); cursor: pointer;
+}
+.agx-flow .agx-step-pick:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 7%, transparent); }
+.agx-flow .agx-step-pick:focus-visible { outline: 2px solid var(--primary); outline-offset: -1px; }
+.agx-flow .agx-step-pick:disabled { cursor: not-allowed; color: var(--text3); }
+.agx-flow .agx-step-pick:disabled .agx-rule-step-mark { opacity: 0.55; }
+.agx-flow .agx-step-pick:disabled .agx-step-pick-name { color: var(--text3); font-weight: 500; }
+.agx-flow .agx-step-pick-text { display: grid; gap: 1px; min-width: 0; }
+.agx-flow .agx-step-pick-name { font-size: 12px; font-weight: 600; }
+.agx-flow .agx-step-pick-why { font-size: 10.5px; color: var(--text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* The sheet at the narrowest it goes: the model gives up width first, never the remove. */
+@media (max-width: 520px) {
+  .agx-flow .agx-rule-head, .agx-flow .agx-rule-foot { padding-inline: 16px; }
+  .agx-flow .agx-rule-body { padding-inline: 16px; }
+  .agx-flow .agx-rule-step { grid-template-columns: 18px minmax(0, 1fr) 132px 28px 28px 28px; gap: 6px; }
+  .agx-flow .agx-rule-model { width: 132px; }
+}
+@media (max-width: 400px) {
+  .agx-flow .agx-rule-step { grid-template-columns: 16px minmax(0, 1fr) 112px 28px 28px 28px; gap: 6px; }
+  .agx-flow .agx-rule-model { width: 112px; }
+}
+@media (prefers-reduced-motion: reduce) { .agx-flow .agx-rule-caret { transition: none; } }
+
+.agx-flow-cfgbar { margin: 22px 0 16px; border-top: 0; padding-top: 0; }
+.agx-flow-cfgscroll { padding-top: 0; }
+
+/* The Save bar keeps to the foot of the page's scroll region, in the mockup's warning tone. */
+.agx-flow-savebar[data-savebar] { position: sticky; bottom: 0; z-index: 3; margin: 12px 0 0; border-width: 1px 0 0; border-radius: 0; }
+/* The card clips its corners with overflow: hidden, which turns it into the bar's scroll container and the bar never sticks.
+   clip keeps the rounded corners without being a scroll container, so the bar sticks to the page's scroll region. */
+.agx-orch .agx-scard:has([data-savebar]) { overflow: clip; }
+@media (max-height: 440px) { .agx-flow-savebar[data-savebar] { position: static; } }
+/* The rule sheet's own footer stops too, at the height where the sheet is taller than the region. */
+@media (max-height: 440px) { .agx-flow .agx-rule-foot { position: static; } }
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * The settings page, screen 1, ported from the approved mockup
+ * (orchestration-v3, index.html `.pg` / `.bar` / `.mhero` / `.lv` / `.card`).
+ *
+ * `--accent` is the mockup's own c4552d, named once here: the app's themes are
+ * monochrome, and every rule that used to read `var(--accent, var(--primary))`
+ * fell through to --primary, which is why the hero's tile and its call to
+ * action came out black. The tints are mixed with the surface, so a dark theme
+ * gets a deep one instead of a light plaque.
+ * ───────────────────────────────────────────────────────────────────────── */
+/* Every orchestration screen is set in the mockup's sans stack (`--font-prose`
+   is the repo's equal token); mono is kept where it is read as code, an engine,
+   a model or a number, and each of those rules names it. Scoped to the roots,
+   so the rest of the app keeps its mono body. */
+.agx-orch, .agx-orch-gaps { font-family: var(--font-prose); }
+.agx-flow-pg { display: grid; gap: 0; padding: 14px 0 24px; }
+.agx-flow-t { margin: 0; font-size: 21px; font-weight: 700; letter-spacing: -0.015em; color: var(--text); }
+/* The bar over the page: breadcrumb, the project switch, the saved chip. */
+.agx-flow-crumb { min-width: 0; font-size: 13px; color: var(--text3); }
+.agx-flow-crumb b { font-weight: 650; color: var(--text); }
+.agx-flow-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 10px 0; }
+.agx-flow-scope .agx-flow-sp { flex: 1 1 auto; }
+/* The small round "i": the mockup's `.inf`. */
+.agx-flow-inf {
+  display: inline-grid; place-items: center; width: 16px; height: 16px; padding: 0; border-radius: 50%;
+  border: 1.3px solid var(--text3); background: none; color: var(--text3);
+  font: 600 10px/1 var(--font-mono, monospace); cursor: help; vertical-align: 1px;
+}
+.agx-flow-inf:hover, .agx-flow-inf:focus-visible { color: var(--accent); border-color: var(--accent); outline: none; }
+.agx-flow-chip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 1px 9px; border-radius: 999px;
+  border: 1px solid var(--surface-line); background: var(--surface-inset);
+  font-size: 11.5px; font-weight: 400; color: var(--text2); white-space: nowrap;
+}
+.agx-flow-chip[data-tone="acc"] {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--surface-page));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-page)); color: var(--accent);
+}
+.agx-flow-chip[data-tone="info"] {
+  border-color: color-mix(in srgb, var(--info) 28%, var(--surface-page));
+  background: color-mix(in srgb, var(--info) 9%, var(--surface-page)); color: var(--info-ink, var(--info));
+}
+/* The saved pill, in the mockup's four states. */
+.agx-flow-saved {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 99px;
+  font-size: 12px; font-weight: 550; white-space: nowrap;
+  border: 1px solid color-mix(in srgb, var(--success) 32%, var(--surface-page));
+  background: color-mix(in srgb, var(--success) 12%, var(--surface-page)); color: var(--success-ink, var(--success));
+}
+.agx-flow-saved[data-tone="warn"] {
+  border-color: color-mix(in srgb, var(--warning) 38%, var(--surface-page));
+  background: color-mix(in srgb, var(--warning) 13%, var(--surface-page)); color: var(--warning-ink, var(--warning));
+}
+.agx-flow-saved[data-tone="err"] {
+  border-color: color-mix(in srgb, var(--error) 36%, var(--surface-page));
+  background: color-mix(in srgb, var(--error) 11%, var(--surface-page)); color: var(--error-ink, var(--error));
+}
+.agx-flow-saved[data-tone="info"] {
+  border-color: color-mix(in srgb, var(--info) 32%, var(--surface-page));
+  background: color-mix(in srgb, var(--info) 10%, var(--surface-page)); color: var(--info-ink, var(--info));
+}
+/* The banner over the title: inherited (blue) or a project with its own copy. */
+.agx-flow-banner {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0 0 14px; padding: 10px 16px;
+  border: 1px solid var(--surface-line); border-radius: 16px; background: var(--surface-page);
+}
+.agx-flow-banner[data-tone="info"] {
+  border-color: color-mix(in srgb, var(--info) 30%, var(--surface-page));
+  background: color-mix(in srgb, var(--info) 9%, var(--surface-page));
+}
+.agx-flow-banner-d { min-width: 0; font-size: 13px; color: var(--text2); }
+.agx-flow-banner .agx-flow-sp { flex: 1 1 40px; }
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * The hero: who the orchestrator is, the path as one row of discs, and three
+ * numbers about now. Every number is a prop, so a slot with no reading is a
+ * sentence and never a guess.
+ */
+.agx-flow-hero {
+  position: relative; overflow: hidden; margin: 0 0 18px; padding: 18px 22px 16px;
+  display: grid; gap: 14px; border: 1px solid var(--surface-line); border-radius: 18px;
+  background:
+    radial-gradient(circle at 12% -20%, color-mix(in srgb, var(--hero-tint) 55%, var(--surface-page)) 0, transparent 42%),
+    radial-gradient(circle, color-mix(in srgb, var(--text3) 24%, transparent) 1px, transparent 1.5px) 0 0 / 18px 18px,
+    var(--surface-page);
+  box-shadow: var(--surface-lift);
+}
+.agx-flow-hero-top { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.agx-flow-hero-hub {
+  flex: none; display: grid; place-items: center; width: 46px; height: 46px; border-radius: 14px;
+  background: var(--accent); color: var(--surface-page);
+}
+.agx-flow-hero-hub svg { width: 26px; height: 26px; }
+.agx-flow-hero-who { min-width: 0; display: grid; gap: 2px; }
+.agx-flow-hero-who b { font-size: 17px; font-weight: 700; color: var(--text); }
+.agx-flow-hero-engine { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text2); }
+.agx-flow-hero-engine code { font-family: var(--font-mono, monospace); font-size: 11.5px; color: var(--text2); overflow-wrap: anywhere; }
+/* The engine's letter in its own colour: the mockup's `.eg`. On the hero's
+   engine line the mockup lets it inherit that line's 12.5px; in the path it is 9. */
+.agx-flow-eg {
+  flex: none; display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 5px;
+  background: var(--eg, var(--text3)); color: var(--surface-page); font: 800 9px/1 var(--font-prose);
+}
+.agx-flow-hero-engine .agx-flow-eg { font-size: 12.5px; }
+.agx-flow-hero-mode {
+  padding: 1px 9px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--surface-page));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-page));
+  font-size: 11.5px; font-weight: 400; color: var(--accent);
+}
+/* The mockup's chip (`.chip`), the one shape it puts beside the Co-pilot pill. */
+.agx-flow-hero-chip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 1px 9px; border-radius: 999px;
+  border: 1px solid var(--surface-line); background: var(--surface-inset);
+  font-size: 11.5px; color: var(--text2); white-space: nowrap; cursor: pointer;
+}
+.agx-flow-hero-chip:hover { border-color: var(--border2); color: var(--text); }
+.agx-flow-hero-chip:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.agx-flow-hero-chip[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+.agx-flow-hero-top > .agx-btn:last-child { margin-left: auto; }
+/* One row, always: the blocks share the width while they fit and the row scrolls
+   inside the card when they do not (390px), so a long path never wraps. */
+.agx-flow-hero-orbit {
+  position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(96px, 1fr);
+  gap: 8px; margin: 0; padding: 6px 0 2px; list-style: none; overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: thin;
+}
+.agx-flow-hero-orbit::before {
+  content: ""; position: absolute; left: calc(50% / var(--n, 5)); right: calc(50% / var(--n, 5)); top: 38px; height: 0;
+  border-top: 2px dashed color-mix(in srgb, var(--text3) 45%, transparent);
+}
+.agx-flow-hero-node { position: relative; display: grid; justify-items: center; gap: 4px; min-width: 0; text-align: center; }
+.agx-flow-hero-disc {
+  position: relative; display: grid; place-items: center; width: 64px; height: 64px; border-radius: 50%;
+  background: var(--c, var(--text3)); color: var(--surface-page);
+  box-shadow: 0 0 0 6px var(--surface-page), 0 4px 12px color-mix(in srgb, var(--text) 12%, transparent);
+}
+.agx-flow-hero-disc svg { width: 28px; height: 28px; }
+.agx-flow-hero-node[data-run] .agx-flow-hero-disc {
+  box-shadow: 0 0 0 6px var(--surface-page), 0 0 0 8px var(--accent);
+  animation: agx-hero-ring 2s ease-in-out infinite;
+}
+@keyframes agx-hero-ring {
+  50% { box-shadow: 0 0 0 6px var(--surface-page), 0 0 0 13px color-mix(in srgb, var(--accent) 18%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) { .agx-flow-hero-node[data-run] .agx-flow-hero-disc { animation: none; } }
+.agx-flow-hero-n {
+  position: absolute; right: -8px; bottom: -4px; min-width: 28px; height: 24px; padding: 0 7px; border-radius: 99px;
+  display: flex; align-items: center; justify-content: center; background: var(--surface-page);
+  border: 1.5px solid var(--surface-line); font-style: normal;
+  font: 700 12px/1 var(--font-mono, monospace); color: var(--text2);
+}
+.agx-flow-hero-node[data-run] .agx-flow-hero-n { background: var(--accent); border-color: var(--accent); color: var(--surface-page); }
+.agx-flow-hero-node b { font-size: 14px; font-weight: 650; color: var(--text); }
+.agx-flow-hero-eng { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 20px; font-size: 12px; color: var(--text2); }
+.agx-flow-hero-st { font-size: 11.5px; color: var(--text3); }
+.agx-flow-hero-st[data-run] { color: var(--accent); font-weight: 600; }
+.agx-flow-hero-empty { margin: 0; font-size: 11.5px; color: var(--text3); }
+.agx-flow-hero-foot {
+  display: flex; flex-wrap: wrap; align-items: stretch; gap: 12px;
+  margin: 0; padding-top: 14px; border-top: 1px solid var(--surface-line);
+}
+.agx-flow-hero-readouts { display: flex; flex-wrap: wrap; gap: 10px; margin: 0; flex: 1 1 560px; min-width: 0; }
+.agx-flow-hero-readouts > div {
+  display: grid; grid-template-rows: auto auto 14px; align-content: space-between; gap: 3px;
+  flex: 1 1 190px; max-width: 250px; min-width: 0; padding: 8px 12px; box-sizing: border-box;
+  border: 1px solid var(--surface-line); border-radius: 12px; background: var(--surface-page);
+}
+.agx-flow-hero-readouts dt { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text3); }
+.agx-flow-hero-readouts dd { margin: 0; font-size: 19px; font-weight: 650; color: var(--text); }
+.agx-flow-hero-sub { font-size: 11.5px; font-weight: 500; color: var(--text3); }
+/* A reading the page does not have: a sentence in the card's own small face, not a big dash. */
+.agx-flow-hero-off { font-size: 12.5px !important; font-weight: 500 !important; color: var(--text3) !important; }
+.agx-flow-hero-note { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agx-flow-hero-note svg { flex: none; }
+.agx-flow-hero-meter {
+  position: relative; align-self: end; display: block; height: 12px; margin: 0; border-radius: 99px;
+  background: var(--surface-inset); border: 1px solid var(--surface-line); overflow: hidden;
+}
+.agx-flow-hero-meter i {
+  position: absolute; inset: 0 auto 0 0; border-radius: 99px;
+  background: linear-gradient(90deg, var(--success), var(--warning));
+}
+.agx-flow-hero-meter u { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--text2); }
+.agx-flow-hero-actions { flex: none; margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.agx-flow-hero-cta {
+  display: inline-flex; align-items: center; gap: 10px; height: 48px; padding: 0 22px 0 18px;
+  border: 0; border-radius: 14px; color: var(--surface-page); cursor: pointer;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 84%, var(--surface-page)), var(--accent));
+  font: inherit; font-size: 15.5px; font-weight: 700; letter-spacing: 0.01em;
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--surface-page) 35%, transparent) inset, 0 8px 20px color-mix(in srgb, var(--accent) 38%, transparent);
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.agx-flow-hero-cta svg { width: 20px; height: 20px; }
+.agx-flow-hero-cta em { font-style: normal; font-size: 18px; transition: transform 0.15s; }
+.agx-flow-hero-cta:hover { transform: translateY(-1px); box-shadow: 0 1px 0 color-mix(in srgb, var(--surface-page) 35%, transparent) inset, 0 12px 26px color-mix(in srgb, var(--accent) 48%, transparent); }
+.agx-flow-hero-cta:hover em { transform: translateX(3px); }
+.agx-flow-hero-cta:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 40%, transparent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .agx-flow-hero-cta, .agx-flow-hero-cta em { transition: none; } .agx-flow-hero-cta:hover { transform: none; } }
+/* Narrow: the path scrolls inside the card rather than wrapping, and the three numbers stack. */
+@media (max-width: 760px) {
+  .agx-flow-hero { padding: 14px; }
+  .agx-flow-hero-orbit { grid-auto-columns: 96px; }
+  .agx-flow-hero-readouts > div { flex: 1 1 100%; max-width: none; }
+  .agx-flow-hero-actions { margin-left: 0; width: 100%; }
+  .agx-flow-hero-cta { flex: 1 1 auto; justify-content: center; }
+}
+
+/* The presets sheet: the named setups, behind the hero's Presets chip and never
+   in the page body (the mockup keeps them behind a chip). */
+.agx-flow-presets-sheet { margin: -4px 0 14px; }
+.agx-flow-presets-sheet .agx-flow-preset-block { margin: 0; }
+
+/* The three levels: one press sets the worker default's whole envelope. */
+.agx-flow-levels-now { margin: 10px 0 0; font-size: 11.5px; line-height: 1.45; color: var(--text3); }
+.agx-flow-level {
+  display: grid; align-content: start; gap: 6px; min-width: 0; padding: 14px; text-align: left;
+  border: 1.5px solid var(--surface-line); border-radius: 14px; background: var(--surface-page);
+  color: var(--text2); font: inherit; cursor: pointer;
+}
+.agx-flow-level:hover:not(:disabled) { border-color: var(--border2); }
+.agx-flow-level[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-page));
+}
+.agx-flow-level:disabled { cursor: default; opacity: 0.7; }
+.agx-flow-level:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.agx-flow-level h4 { margin: 0; display: flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 650; color: var(--text); }
+.agx-flow-level-ico { display: inline-grid; place-items: center; color: var(--text2); }
+.agx-flow-level .agx-flow-chip { margin-left: 0; }
+.agx-flow-level-says { font-size: 13px; line-height: 1.45; color: var(--text3); }
+.agx-flow-level ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; font-size: 12.5px; color: var(--text2); }
+.agx-flow-level li { display: flex; align-items: center; gap: 6px; }
+.agx-flow-level-mark { display: inline-grid; place-items: center; color: var(--text4); }
+.agx-flow-level li[data-on] .agx-flow-level-mark { color: var(--success-ink, var(--success)); }
+@media (max-width: 900px) { .agx-flow-grid3 { grid-template-columns: minmax(0, 1fr); } }
+
+/* ── Presets: shipped and the person's own, the file preview and the import ── */
+.agx-flow-preset-block { margin: 0 0 14px; padding: 12px 14px 14px; border: 1px solid var(--surface-line); border-radius: var(--r, 13px); background: var(--bg); box-shadow: var(--surface-lift); }
+.agx-flow-preset-block-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.agx-flow-preset-block-top h2 { margin: 0; font-size: 13px; font-weight: 650; color: var(--text); }
+.agx-flow-preset-block-top p { margin: 0; font-size: 11.5px; color: var(--text3); }
+.agx-flow-preset-sp { flex: 1 1 auto; }
+.agx-flow-preset-cards { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 0; }
+.agx-flow-preset-card { display: grid; gap: 2px; min-width: 190px; max-width: 320px; padding: 9px 11px; border: 1px solid var(--surface-line); border-radius: 10px; background: var(--bg2); text-align: left; cursor: pointer; }
+.agx-flow-preset-card b { font-size: 12px; color: var(--text); }
+.agx-flow-preset-card span { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text3); }
+.agx-flow-preset-card small { font-size: 10.5px; line-height: 1.4; color: var(--text2); }
+.agx-flow-preset-card[aria-selected="true"] {
+  border-color: color-mix(in srgb, var(--accent, var(--primary)) 62%, var(--surface-line));
+  background: color-mix(in srgb, var(--accent, var(--primary)) 8%, var(--bg));
+  box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--accent, var(--primary)) 12%, transparent);
+}
+.agx-flow-preset-empty { margin: 10px 0 0; font-size: 11.5px; color: var(--text3); }
+.agx-flow-preset-detail { margin: 10px 0 0; padding: 10px 11px; border-radius: 10px; background: color-mix(in srgb, var(--accent, var(--primary)) 7%, var(--bg)); }
+.agx-flow-preset-parts { display: flex; flex-wrap: wrap; gap: 5px; margin: 6px 0 0; }
+.agx-flow-preset-part { padding: 2px 7px; border-radius: 999px; background: var(--bg3); font-size: 10px; color: var(--text3); }
+.agx-flow-preset-part[data-on] { background: color-mix(in srgb, var(--accent, var(--primary)) 16%, var(--bg)); color: var(--text); }
+.agx-flow-preset-rules { margin: 7px 0 0; padding-left: 16px; font-size: 11px; line-height: 1.5; color: var(--text2); }
+.agx-flow-preset-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 0; }
+.agx-flow-preset-panel { margin: 12px 0 0; padding: 11px 12px; border: 1px solid var(--surface-line); border-radius: 10px; background: var(--bg2); }
+.agx-flow-preset-panel > header { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); }
+.agx-flow-preset-hint { margin: 8px 0 0; font-size: 11px; line-height: 1.45; color: var(--text3); }
+.agx-flow-preset-toggles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 4px 12px; margin: 9px 0 0; }
+.agx-flow-preset-toggle { display: flex; gap: 8px; align-items: flex-start; padding: 5px 0; font-size: 11px; color: var(--text2); }
+.agx-flow-preset-toggle b { display: block; font-weight: 600; color: var(--text); }
+.agx-flow-preset-toggle small { display: block; font-size: 10px; line-height: 1.4; color: var(--text3); }
+.agx-flow-preset-file { max-height: 220px; overflow: auto; margin: 9px 0 0; padding: 9px 10px; border-radius: 8px; background: var(--bg); font-family: var(--font-mono, monospace); font-size: 10px; line-height: 1.45; color: var(--text2); white-space: pre-wrap; }
+.agx-flow-preset-in { width: 100%; margin: 8px 0 0; padding: 7px 9px; border: 1px solid var(--surface-line); border-radius: 8px; background: var(--bg); color: var(--text); font-family: var(--font-mono, monospace); font-size: 11px; }
+.agx-flow-preset-err { margin: 9px 0 0; font-size: 11px; line-height: 1.45; color: var(--error); }
+.agx-flow-preset-link { border: 0; background: none; padding: 0; color: var(--accent, var(--primary)); font: inherit; cursor: pointer; text-decoration: underline; }
+
+/* Nothing set up yet: the mockup's block, centred, with no card around it. */
+.agx-orch-empty {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 34px 26px; text-align: center;
+}
+.agx-orch-empty-art { display: grid; place-items: center; color: var(--text3); line-height: 0; }
+.agx-orch-empty b { font-size: calc(15px * var(--agx-fs, 1)); font-weight: 650; color: var(--text); }
+.agx-orch-empty p { margin: 0; max-width: 46ch; font-size: calc(12.5px * var(--agx-fs, 1)); line-height: 1.5; color: var(--text3); }
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * Gaps and additions: three reference tables on one card. A narrow window
+ * stacks a row's cells and prints the column's own name before each, so the
+ * table never scrolls sideways at 390 px.
+ * ───────────────────────────────────────────────────────────────────────── */
+.agx-orch-gaps {
+  min-width: 0; padding: 22px 26px 30px;
+  border: 1px solid var(--surface-line); border-radius: var(--r, 13px); background: var(--bg); box-shadow: var(--surface-lift);
+}
+.agx-orch-gaps-t { margin: 0; font-size: 21px; font-weight: 700; letter-spacing: -0.015em; color: var(--text); }
+.agx-orch-gaps-sub { margin: 3px 0 0; font-size: 13px; line-height: 1.5; color: var(--text3); }
+.agx-orch-gaps-h { margin: 18px 0 4px; font-size: 16.5px; font-weight: 700; color: var(--text); }
+.agx-orch-gaps-tb + .agx-orch-gaps-h { margin-top: 22px; }
+.agx-orch-gaps-tb { width: 100%; border-collapse: collapse; font-size: 13px; color: var(--text); }
+.agx-orch-gaps-tb th { padding: 6px 8px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text3); }
+.agx-orch-gaps-tb td { padding: 9px 8px; border-top: 1px solid var(--surface-line); vertical-align: top; }
+.agx-orch-gaps-chip {
+  display: inline-flex; padding: 1px 9px; border: 1px solid var(--surface-line); border-radius: 999px;
+  background: var(--surface-inset); font-size: 11.5px; color: var(--text2); white-space: nowrap;
+}
+@media (max-width: 640px) {
+  .agx-orch-gaps { padding: 16px 16px 18px; }
+  .agx-orch-gaps-t { font-size: 18px; }
+  .agx-orch-gaps-tb thead { display: none; }
+  .agx-orch-gaps-tb, .agx-orch-gaps-tb tbody { display: block; }
+  .agx-orch-gaps-tb tbody tr { display: block; padding: 8px 0; border-top: 1px solid var(--surface-line); }
+  .agx-orch-gaps-tb tbody tr > td { display: block; padding: 0 0 3px; border: 0; }
+  .agx-orch-gaps-tb tbody tr > td:last-child { padding-bottom: 0; }
+  .agx-orch-gaps-tb td[data-label]::before {
+    content: attr(data-label) " · "; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text3);
+  }
+}

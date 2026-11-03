@@ -115,19 +115,30 @@ export const REVIEW_OF: Record<string, Review | undefined> = { "before-launch": 
 export const PILOT_VALUES = ["manual", "copilot", "autopilot"] as const;
 
 export const DEFAULTS = {
+  /* The first run: whether it is finished, whether a run is open, which tutorial
+     cards were read, and the agent a first terminal starts. One value for the
+     app (under APP), because they answer before any project is open. */
+  "setup.done": false,
+  "setup.inProgress": false,
+  "setup.tutorial": "",
+  "setup.agent": "claude",
   "flightPlan.pilot": "copilot",
   // Per project: a project the person left out of Flight plan. Unset means in.
   "flightPlan.project.enabled": true,
   "flightPlan.preflight.reviews": ["plan"] as string[],
   "flightPlan.preflight.sizes": "ML",
   "flightPlan.preflight.secondLooks": 1,
-  "flightPlan.preflight.model": "sonnet",
   "flightPlan.preflight.costCapUsd": 0.5,
   // Not per project: the master switch, the house mockup guide, the budget are one value for the app, kept under the root "*".
   "flightPlan.enabled": false,
   "flightPlan.mockupGuide": "",
   "flightPlan.budget.dailyUsd": 5,
   "flightPlan.budget.weeklyUsd": 20,
+  // A raise the person agreed to from the strip: the cap in force until `until`, then the base cap again. 0/0 is no raise.
+  "flightPlan.budget.dailyRaiseUsd": 0,
+  "flightPlan.budget.dailyRaiseUntil": 0,
+  "flightPlan.budget.weeklyRaiseUsd": 0,
+  "flightPlan.budget.weeklyRaiseUntil": 0,
   "flightPlan.maxFlying": 2,
   // Per project, falling back to the app value (then true): one project may stop asking while another keeps asking.
   "flightPlan.autopilot.askOnLarge": true,
@@ -136,6 +147,8 @@ export const DEFAULTS = {
   "flightPlan.held": false,
   // The permission mode a launched builder starts in: one value for the app. Auto, because bypass is the person's to turn on.
   "flightPlan.builder.permissions": "auto",
+  // The model a sensitive or L plan's builder starts on: one value for the app. Any other plan launches on the builder role's model.
+  "flightPlan.builder.strongModel": "opus",
   // Where a builder worktree is cut from: the local trunk (local), or origin/<trunk> (remote). Local, because a project whose merges stay local runs far ahead of its remote.
   "flightPlan.builderBase": "local",
   // Per project: the post-merge cleanup's settings (cleanup.ts CleanupConfig) as JSON text; empty is "nothing configured".
@@ -148,6 +161,15 @@ export const DEFAULTS = {
   "cleanup.evidenceRoots": [] as string[],
   // Per project: patterns (`~/code/orbit-pol-master-{number}*`) for a card's leftovers that do not start with its id; empty finds nothing.
   "cleanup.otherFolders": [] as string[],
+  // Per project, never inherited from the app (agentTrust.ts): a project with no row of its own is off.
+  "agents.changeWithoutAsking": false,
+  // Per project: who reads code and runs tests (never | second | is), the Builder-to-Reviewer round cap, and a second
+  // reviewer as JSON (`{"engine":"...","model":"..."}`) or empty for off. The defaults are how the app already worked.
+  "orchestration.review.who": "second",
+  "orchestration.review.rounds": 3,
+  "orchestration.review.second": "",
+  // Per project: the person's own presets, as JSON text: a list of `.agxpreset` files (shared/preset.ts). Empty is none.
+  "orchestration.presets": "",
 } as const;
 export type SettingKey = keyof typeof DEFAULTS;
 type Value = string | number | boolean | string[];
@@ -157,7 +179,7 @@ export const APP = "*";
 const rowAt = (root: string, key: string) =>
   db.query<{ value: string }, [string, string]>(`SELECT value FROM flight_plan_setting WHERE root = ? AND key = ?`).get(rootKey(root), key);
 /** Set once for the app (under APP) and a project may differ. */
-export const PER_PROJECT: readonly string[] = ["flightPlan.pilot", "flightPlan.preflight.reviews", "flightPlan.project.enabled", "flightPlan.autopilot.askOnLarge", "flightPlan.autopilot.askOnSensitive"];
+export const PER_PROJECT: readonly string[] = ["flightPlan.pilot", "flightPlan.preflight.reviews", "flightPlan.project.enabled", "flightPlan.autopilot.askOnLarge", "flightPlan.autopilot.askOnSensitive", "orchestration.review.who", "orchestration.review.rounds", "orchestration.review.second", "orchestration.presets"];
 
 /*
  * Before Pilot, three keys each said off / ask / auto for one moment. They are
@@ -193,6 +215,22 @@ export const hasSetting = (root: string, key: SettingKey): boolean =>
 export function putSetting(root: string, key: SettingKey, value: Value): void {
   db.query(`INSERT INTO flight_plan_setting (root, key, value) VALUES (?, ?, ?) ON CONFLICT (root, key) DO UPDATE SET value = excluded.value`)
     .run(rootKey(root), key, JSON.stringify(value));
+}
+/**
+ * A key this app stored per project and no longer reads: the model a Preflight
+ * reviews with, which is the Reviewer role's now. It is deliberately absent
+ * from DEFAULTS, so no default is written down twice; only the adoption in
+ * flightPlan reads it, once, and clears it.
+ */
+export const PREFLIGHT_MODEL_ALIAS = "flightPlan.preflight.model";
+/** What the project stored at the retired key, or "" when it has none. */
+export function retiredSetting(root: string, key: typeof PREFLIGHT_MODEL_ALIAS): string {
+  const row = rowAt(root, key);
+  return row ? String(JSON.parse(row.value)) : "";
+}
+/** Takes the project's value at a retired key away, so `retiredSetting` reads "". */
+export function clearRetired(root: string, key: typeof PREFLIGHT_MODEL_ALIAS): void {
+  db.query(`DELETE FROM flight_plan_setting WHERE root = ? AND key = ?`).run(rootKey(root), key);
 }
 
 /**

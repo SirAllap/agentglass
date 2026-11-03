@@ -605,7 +605,8 @@ describe("restart", () => {
       W.subscribeWatchFire((f) => got.push(f.number));
       await W.checkWatches(async () => ({ allDone: true, verdict: "green", all: [{ name: "a", workflow: "", state: "success", done: true }] }));
       console.log(JSON.stringify({ got, queued: W.pendingFires().map((f) => f.number) }));`;
-    const p = Bun.spawn(["bun", "-e", code], {
+    // The child must be the runtime running this suite, not `bun` resolved from PATH.
+    const p = Bun.spawn([process.execPath, "-e", code], {
       env: { ...process.env, AGENTGLASS_DB: DB.dbPath(), AGENTGLASS_SCAN_DISABLED: "1", NODE_ENV: "test" }, stdout: "pipe", stderr: "pipe",
     });
     const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);

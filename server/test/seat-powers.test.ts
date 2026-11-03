@@ -72,6 +72,12 @@ describe("a chair set to assign", () => {
     expect(seatAllows("assign", "POST", "/agents/named/stop")).toBe(true);
   });
 
+  test("may link a plan to the worker it started, and no lower chair may", () => {
+    const link = "/flight-plan/plans/fp_0123456789abcdef/worker";
+    expect(seatAllows("assign", "POST", link)).toBe(true);
+    for (const power of ["speak", "nudge"] as const) expect(seatAllows(power, "POST", link)).toBe(false);
+  });
+
   test("still may not do a thing nobody wrote down", () => {
     /* Deny by default: a route invented next month is out of reach before
        anybody thinks about it. These are real routes the seat has no business
@@ -145,5 +151,19 @@ describe("enlisting a tab is an assigning act", () => {
     expect(seatAllows("speak", "POST", "/agents/named/enlist")).toBe(false);
     expect(seatAllows("nudge", "POST", "/agents/named/enlist")).toBe(false);
     expect(seatAllows("assign", "POST", "/agents/named/enlist")).toBe(true);
+  });
+});
+
+describe("answering a settings request is never the seat's", () => {
+  test("a seat at assign may file one through the door and is refused on decide", () => {
+    const t = mintSeatToken(ROOT, "assign");
+    const { req: r, url } = withToken(t);
+    const caller = callerFor(r, url, t)!;
+    expect(caller).toMatchObject({ principal: "seat" });
+    // Filing is allowed: the request waits for the person, who holds the consent.
+    expect(allowed(caller, "POST", "/settings/door")).toBe(true);
+    // Deciding its own request is not, at the wall and not only at the route.
+    expect(allowed(caller, "POST", "/settings/requests/decide")).toBe(false);
+    revokeSeatTokens(ROOT);
   });
 });

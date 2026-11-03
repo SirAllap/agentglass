@@ -264,7 +264,7 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
     <motion.button
       onClick={() => applyFollow(!follow)}
       whileTap={{ scale: 0.94 }}
-      title={follow ? "Following live — click to pause" : "Paused — click to jump back to live"}
+      data-tip={follow ? "Following live — click to pause" : "Paused — click to jump back to live"}
       className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold cursor-pointer select-none"
       style={follow ? live : newCount > 0 ? attn : paused}
     >
@@ -327,7 +327,8 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Filter events"
-            title="Type to filter events. Regex works, e.g. tool.*fail"
+            data-tip="Type to filter events. Regex works, e.g. tool.*fail"
+            aria-label="Filter events"
             className={`flex-1 min-w-0 ${INPUT}`}
             style={INPUT_STYLE}
           />
@@ -335,7 +336,7 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
             {CATS.map((c) => (
               <Button key={c.key} size="compact" on={cat === c.key} aria-pressed={cat === c.key} onClick={() => setCat(c.key)}>{c.label}</Button>
             ))}
-            <Button size="compact" on={lanes} aria-pressed={lanes} onClick={() => setLanes((l) => !l)} title="One column per session — parallel sessions get their own lane">
+            <Button size="compact" on={lanes} aria-pressed={lanes} onClick={() => setLanes((l) => !l)} data-tip="One column per session — parallel sessions get their own lane">
               <IconLabel icon={<ChartIcon size={ICON.xs} />}>Lanes</IconLabel>
             </Button>
           </div>
@@ -370,7 +371,7 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
         right={
           <div className="flex items-center gap-2.5">
             {!full && followToggle}
-            <Button tone="quiet" size="compact" title="Fullscreen — expand the live feed (Esc closes)" onClick={() => setFull(true)}>
+            <Button tone="quiet" size="compact" data-tip="Fullscreen — expand the live feed (Esc closes)" onClick={() => setFull(true)}>
               <IconLabel icon={<ExpandIcon size={ICON.xs} />}>Expand</IconLabel>
             </Button>
           </div>

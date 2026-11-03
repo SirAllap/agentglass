@@ -92,9 +92,26 @@ describe("a plan an agent staged", () => {
 });
 
 describe("the machine panel", () => {
-  it("mounts the block inside the Resources scroller, after the left-behind list", () => {
-    expect(resources.indexOf("<LeftBehind")).toBeGreaterThan(-1);
-    expect(resources.indexOf("<DiskClean />")).toBeGreaterThan(resources.indexOf("<LeftBehind"));
+  it("mounts the block above the left-behind list, so it is not one more of its rows", () => {
+    expect(resources.indexOf("<DiskClean disk={data.machine} />")).toBeGreaterThan(-1);
+    expect(resources.indexOf("<DiskClean")).toBeLessThan(resources.indexOf("<LeftBehind"));
+  });
+  it("draws the block as a card of its own: the disk's numbers and one primary scan button", () => {
+    expect(block).toContain('className="mc-dc"');
+    expect(block).toContain("diskHeadline(disk)");
+    expect(block).toContain("reclaimHeadline(view.plan)");
+    expect(block).toContain('size="hit" tone="primary"');
+    expect(block).toContain("Scan for what can go");
+    expect(block).not.toContain('className="mc-sect"');
+  });
+  it("puts the disk plan's chip in the tool bar, from what the block publishes, and only when something can go", () => {
+    expect(resources).toContain("useDiskPlan()");
+    expect(resources).toContain("cleanupChipLabel(diskPlan)");
+    expect(resources.indexOf("data-disk-chip")).toBeGreaterThan(resources.indexOf('className="mc-tool"'));
+    expect(resources).toContain('document.getElementById("disk-clean")');
+    expect(block).toContain('publishDiskPlan(phase === "plan" ? view.plan : null)');
+    expect(block).toContain("[phase, view.plan]");
+    expect(block).toContain('id="disk-clean"');
   });
   it("puts one badge on the Resources tab, from the setting and what was last seen, with the sentence as its name", () => {
     expect(panel).toContain("const lowDisk = useLowDisk()");

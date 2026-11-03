@@ -9,7 +9,7 @@
 import { describe, expect, test } from "bun:test";
 import type { DockerContainer } from "../../shared/types.ts";
 import {
-  exitCode, groupMenu, kindOf, KINDS, menuItems, needsYou, READ_ONLY_REASON, rowAction,
+  exitCode, groupMenu, kindOf, KINDS, menuItems, needsYou, READ_ONLY_REASON, rowAction, startFailure,
 } from "../src/lib/dockerState.ts";
 
 const c = (over: Partial<DockerContainer> = {}): DockerContainer => ({
@@ -57,6 +57,35 @@ describe("the nine kinds", () => {
 
   test("a state docker invents later reads as stopped rather than as nothing", () => {
     expect(kindOf(c({ state: "removing" }))).toBe("stop");
+  });
+
+  /* Docker reports a stop of ours as "Exited (143)" (its SIGTERM) or "(137)"
+     (the SIGKILL it sends when the grace period runs out), which is the same
+     sentence a crash of the container's own leaves behind. What separates them
+     is that this server asked for it, and said so on the row. */
+  describe("an exit we asked for", () => {
+    const afterStop = (n: number) => c({ state: "exited", status: `Exited (${n}) a minute ago`, stopAskedAt: Date.now() - 60_000 });
+
+    test("143 after a stop of ours is plainly stopped", () => {
+      expect(kindOf(afterStop(143))).toBe("stop");
+      expect(needsYou(afterStop(143))).toBe(false);
+    });
+
+    test("137 after a stop of ours is stopped too", () => {
+      expect(kindOf(afterStop(137))).toBe("stop");
+      expect(needsYou(afterStop(137))).toBe(false);
+    });
+
+    test("the same codes unexplained stay a crash", () => {
+      expect(kindOf(exited(143))).toBe("crash");
+      expect(kindOf(exited(137))).toBe("crash");
+      expect(needsYou(exited(143))).toBe(true);
+    });
+
+    test("a code that is not a signal is a crash whatever we asked", () => {
+      expect(kindOf(c({ state: "exited", status: "Exited (1) a minute ago", stopAskedAt: Date.now() }))).toBe("crash");
+      expect(kindOf(c({ state: "exited", status: "Exited (0) a minute ago", stopAskedAt: Date.now() }))).toBe("stop");
+    });
   });
 
   test("every kind has a word, a tone and a shape, and no two share the word", () => {
@@ -209,5 +238,55 @@ describe("the group menu", () => {
 
   test("a restart loop counts as running for the button", () => {
     expect(groupMenu([c({ state: "restarting" })]).button.label).toBe("Restart all");
+  });
+});
+
+describe("docker's own account of a start that failed", () => {
+  const shim = (inner: string) => `failed to create shim task: OCI runtime create failed: ${inner}`;
+
+  test("a mount source that is not there names the path it could not mount", () => {
+    const f = startFailure(shim('error mounting "/home/dev/orbit/file.conf" to rootfs at "/app/file.conf": no such file or directory'))!;
+    expect(f.sentence).toBe("Docker could not start it: a file it needs to mount is missing: /home/dev/orbit/file.conf.");
+    expect(f.short).toBe("could not start: a mount is missing");
+  });
+
+  test("a port already taken names the port", () => {
+    const f = startFailure("driver failed programming external connectivity on endpoint api: Bind for 0.0.0.0:8000 failed: port is already allocated")!;
+    expect(f.sentence).toBe("Docker could not start it: a port it needs is already taken: 8000.");
+    expect(f.short).toBe("could not start: its port is taken");
+  });
+
+  test("a command the image does not have names it", () => {
+    const f = startFailure('exec: "/app/start.sh": stat /app/start.sh: no such file or directory')!;
+    expect(f.sentence).toBe("Docker could not start it: the command it runs is not in the image: /app/start.sh.");
+    expect(f.short).toBe("could not start: command not found");
+  });
+
+  /* A mount docker was not allowed to read says both; the one a person can act
+     on is the permission. */
+  test("permission on a path docker needs wins over the mount it was trying", () => {
+    const f = startFailure(shim('error mounting "/srv/orbit" to rootfs at "/app": permission denied'))!;
+    expect(f.sentence).toBe("Docker could not start it: it was not allowed to read or write a path it needs: /srv/orbit.");
+    expect(f.short).toBe("could not start: not allowed to read a path");
+  });
+
+  test("anything else keeps docker's own first 120 characters rather than a guess", () => {
+    const raw = `something odd happened ${"x".repeat(200)}`;
+    const f = startFailure(raw)!;
+    expect(f.sentence).toBe(`Docker could not start it: ${raw.slice(0, 120)}`);
+    expect(f.sentence).toHaveLength("Docker could not start it: ".length + 120);
+    expect(f.short).toBe("could not start");
+  });
+
+  test("no error at all is null, so the caller keeps the text it showed before", () => {
+    expect(startFailure("")).toBeNull();
+    expect(startFailure("   ")).toBeNull();
+    expect(startFailure(null)).toBeNull();
+    expect(startFailure(undefined)).toBeNull();
+  });
+
+  test("a cause with no path still reads as a sentence", () => {
+    expect(startFailure(shim("error mounting something: invalid mount config"))!.sentence)
+      .toBe("Docker could not start it: a file it needs to mount is missing.");
   });
 });

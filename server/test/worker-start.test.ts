@@ -13,7 +13,7 @@ import {
   composePolicy, defaultStored, type Envelope, type EngineChoice, type Policy, type PolicyRule,
 } from "../../shared/orchestration.ts";
 import type { EngineReadiness } from "../../shared/types.ts";
-import { DENIED_COMMANDS, WORKER_ROLES, roleLaunch, workerRole } from "../../shared/workerRoles.ts";
+import { DENIED_COMMANDS, NEVER_LIFTABLE, WORKER_ROLES, roleLaunch, workerRole } from "../../shared/workerRoles.ts";
 import { LIFTS, WORKER_DENIED, compileEnvelope, deniedFor } from "../src/agents/envelope.ts";
 import { headlessRefusal, headlessTurn, prepareRun, runFiles, sessionIdOf, turnResult, wrapped } from "../src/agents/headless.ts";
 import { planWorker } from "../src/agents/workerstart.ts";
@@ -22,8 +22,25 @@ const tmp: string[] = [];
 const scratch = () => { const d = mkdtempSync(join(tmpdir(), "agx-wstart-")); tmp.push(d); return d; };
 afterAll(() => { for (const d of tmp) rmSync(d, { recursive: true, force: true }); });
 
-const NARROW: Envelope = { write: "worktree", network: false, commit: false, deny: [] };
-const WIDE: Envelope = { write: "worktree", network: true, commit: true, deny: [] };
+/** OpenCode reads each bash rule key as a glob over the whole command line. A
+ *  line runs when none of the deny keys matches it. */
+function refusedBy(bash: Record<string, string>, line: string): string | undefined {
+  const lit = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return Object.keys(bash).find((g) => new RegExp(`^${g.split("*").map(lit).join(".*")}$`).test(line));
+}
+
+/** Claude Code and Qwen read a `Bash(...)` rule as a prefix of the line. */
+function prefixRefused(deny: readonly string[], line: string): string | undefined {
+  return deny.find((r) => {
+    const m = /^Bash\((.*?)(:\*|\*)?\)$/.exec(r);
+    if (!m) return undefined;
+    const pre = m[1]!.replace(/\s*\*$/, "");
+    return line === pre || line.startsWith(pre + " ") || line.startsWith(pre + ":") || line.startsWith(pre) ? r : undefined;
+  });
+}
+
+const NARROW: Envelope = { write: "worktree", network: false, commit: false, docker: false, deny: [] };
+const WIDE: Envelope = { write: "worktree", network: true, commit: true, docker: true, deny: [] };
 const builder = workerRole("builder")!;
 const scout = workerRole("scout")!;
 
@@ -36,14 +53,15 @@ describe("the envelope: what can be lifted from the floor", () => {
     for (const c of WORKER_DENIED) expect(d).toContain(c);
   });
 
-  test("the two lifts, entry by entry: nothing else leaves the floor, in any combination", () => {
+  test("the three lifts, entry by entry: nothing else leaves the floor, in any combination", () => {
     expect(LIFTS.commit).toEqual(["git commit"]);
     expect(LIFTS.network).toEqual(["curl", "wget"]);
-    for (const commit of [false, true]) for (const network of [false, true]) {
-      const d = deniedFor({ write: "worktree", commit, network, deny: [] });
+    expect(LIFTS.docker).toEqual(["docker"]);
+    for (const commit of [false, true]) for (const network of [false, true]) for (const docker of [false, true]) {
+      const d = deniedFor({ write: "worktree", commit, network, docker, deny: [] });
       const lifted = DENIED_COMMANDS.filter((c) => !d.includes(c));
-      expect(lifted.sort()).toEqual([...(commit ? LIFTS.commit : []), ...(network ? LIFTS.network : [])].sort());
-      for (const never of ["git push", "gh", "ssh", "scp", "sudo", "rm", "git merge", "git rebase", "git reset", "git tag", "docker", "aws"]) {
+      expect(lifted.sort()).toEqual([...(commit ? LIFTS.commit : []), ...(network ? LIFTS.network : []), ...(docker ? LIFTS.docker : [])].sort());
+      for (const never of ["git push", "gh", "ssh", "scp", "sudo", "rm", "git merge", "git rebase", "git reset", "git tag", "aws"]) {
         expect(d).toContain(never);
       }
     }
@@ -60,8 +78,37 @@ describe("the envelope: what can be lifted from the floor", () => {
     expect(roleLaunch(claude, builder, "sonnet")).toEqual(roleLaunch(claude, builder, "sonnet", DENIED_COMMANDS));
     const old = JSON.parse(roleLaunch(claude, builder, "sonnet")!.args[1]!).permissions.deny as string[];
     const now = JSON.parse(compileEnvelope("claude", builder, NARROW, "sonnet", scratch()).ok ? (compileEnvelope("claude", builder, NARROW, "sonnet", scratch()) as { args: string[] }).args[1]! : "{}").permissions.deny as string[];
-    expect(now.filter((d) => !old.includes(d)).sort()).toEqual([...WORKER_DENIED.map((c) => `Bash(${c}:*)`), "WebFetch", "WebSearch"].sort());
+    expect(now.filter((d) => !old.includes(d)).sort()).toEqual([...WORKER_DENIED.filter((c) => c !== "agentglass-browser").map((c) => `Bash(${c}:*)`), "WebFetch", "WebSearch"].sort());
     expect(old.every((d) => now.includes(d))).toBe(true);
+  });
+});
+
+describe("the envelope: a role's own grant", () => {
+  const ci = { ...builder, title: "CI", allow: ["docker"] };
+
+  test("a granted command leaves that role's lock, and the floor's absolute ones stay", () => {
+    const d = deniedFor(NARROW, ci);
+    expect(d).not.toContain("docker");
+    for (const never of NEVER_LIFTABLE) expect(d).toContain(never);
+    // Written into the engine's own map, not only the list: OpenCode has no docker key at all.
+    const c = compileEnvelope("opencode", ci, NARROW, "opencode/big-pickle", scratch());
+    if (!c.ok) throw new Error(c.error);
+    const bash = (JSON.parse(c.env.OPENCODE_CONFIG_CONTENT!) as { permission: { bash: Record<string, string> } }).permission.bash;
+    expect(bash["docker"]).toBeUndefined();
+    expect(bash["docker *"]).toBeUndefined();
+    expect(bash["git push"]).toBe("deny");
+    expect(bash["git push *"]).toBe("deny");
+  });
+
+  test("a role with no grant, or an empty one, is the lock every role always had", () => {
+    expect(deniedFor(NARROW, { ...builder, allow: [] })).toEqual(deniedFor(NARROW, builder));
+    expect(deniedFor(NARROW, { ...builder, allow: ["docker"] })).toEqual(deniedFor(NARROW, builder).filter((c) => c !== "docker"));
+  });
+
+  test("a never-liftable command is ignored by the lock even when a role names it", () => {
+    for (const never of NEVER_LIFTABLE) {
+      expect(deniedFor(NARROW, { ...builder, allow: [never] })).toContain(never);
+    }
   });
 });
 
@@ -126,7 +173,7 @@ describe("the envelope compiled for each engine", () => {
     const c = compileEnvelope("qwen", builder, NARROW, "qwen3", d);
     expect(c.ok).toBe(true);
     if (!c.ok) return;
-    const path = Object.values(c.env)[0]!;
+    const path = c.env.QWEN_CODE_SYSTEM_SETTINGS_PATH!;
     expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(readFileSync(path, "utf8")).toContain("Bash(git push)");
   });
@@ -152,6 +199,102 @@ describe("the envelope compiled for each engine", () => {
   test("an engine that has no lock is refused, never started unlocked", () => {
     const c = compileEnvelope("gemini", builder, NARROW, "m", dir);
     expect(c.ok).toBe(false);
+  });
+});
+
+// ── the one door a role may use ──────────────────────────────────────────
+
+describe("the app's own doors, per role", () => {
+  const dir = scratch();
+  const opencodeFor = (id: string, e: Envelope = NARROW) => {
+    const c = compileEnvelope("opencode", workerRole(id)!, e, "opencode/big-pickle", dir);
+    if (!c.ok) throw new Error(c.error);
+    return (JSON.parse(c.env.OPENCODE_CONFIG_CONTENT!) as { permission: { bash: Record<string, string> } }).permission.bash;
+  };
+  const browserLines = [
+    "agentglass-browser --as orbit-1 observe",
+    "./bin/agentglass-browser --as orbit-1 observe",
+    "bun bin/agentglass-browser --as orbit-1 observe",
+    "agentglass-browser --as orbit-1 click e17",
+    "agentglass-browser --as orbit-1 read --page t9-ef01",
+  ];
+  // The flags that leave the worker's own tab, wherever they sit in the line.
+  const crossLines = [
+    "agentglass-browser --as orbit-1 read --shared",
+    "agentglass-browser --as orbit-1 read --active",
+    "agentglass-browser --as orbit-1 read --share",
+    "agentglass-browser --as orbit-1 read --acti",
+  ];
+
+  test("a builder, a reviewer and a verifier run the browser CLI bare, by path and through bun", () => {
+    for (const id of ["builder", "reviewer", "verifier"]) {
+      const bash = opencodeFor(id);
+      for (const line of browserLines) expect(refusedBy(bash, line)).toBeUndefined();
+      // Its own named tab only: every way out stays refused, prefix included.
+      for (const line of crossLines) expect(refusedBy(bash, line)).toBeTruthy();
+    }
+  });
+
+  test("a scout keeps the browser closed, and every role keeps the other three doors closed", () => {
+    const scoutBash = opencodeFor("scout");
+    for (const line of browserLines) expect(refusedBy(scoutBash, line)).toBeTruthy();
+    for (const id of ["scout", "builder", "reviewer", "verifier"]) {
+      const bash = opencodeFor(id);
+      for (const line of ["agentglass-agent start orbit-2", "agentglass-ui settings set theme dark", "agentglass-cockpit-mcp sessions"]) {
+        expect(refusedBy(bash, line)).toBeTruthy();
+      }
+    }
+  });
+
+  test("the browser opens nothing else: the network clients, a delete and a kill stay denied", () => {
+    const bash = opencodeFor("builder");
+    for (const line of ["curl http://127.0.0.1:4000/health", "wget http://127.0.0.1:4000/x", "rm -rf .agx-tmp", "kill 1234", "pkill -f opencode", "killall bun", "killall5", "xkill"]) {
+      expect(refusedBy(bash, line)).toBeTruthy();
+    }
+    // An envelope that lets the worker out lifts the clients, not the rest.
+    const wide = opencodeFor("builder", WIDE);
+    expect(refusedBy(wide, "curl http://127.0.0.1:4000/health")).toBeUndefined();
+    for (const line of ["rm -rf .agx-tmp", "kill 1234", "git push", "aws s3 ls"]) {
+      expect(refusedBy(wide, line)).toBeTruthy();
+    }
+  });
+
+  test("Claude: the same door is open to those three roles and closed to a scout", () => {
+    const denyFor = (id: string) => {
+      const c = compileEnvelope("claude", workerRole(id)!, NARROW, "sonnet", dir);
+      if (!c.ok) throw new Error(c.error);
+      return (JSON.parse(c.args[c.args.indexOf("--settings") + 1]!) as { permissions: { deny: string[] } }).permissions.deny;
+    };
+    for (const id of ["builder", "reviewer", "verifier"]) {
+      expect(denyFor(id)).not.toContain("Bash(agentglass-browser:*)");
+      expect(prefixRefused(denyFor(id), "agentglass-browser --as orbit-1 observe")).toBeUndefined();
+      for (const flag of ["--shared", "--share", "--active", "--acti"]) {
+        expect(prefixRefused(denyFor(id), `agentglass-browser ${flag} read`)).toBeTruthy();
+      }
+      expect(prefixRefused(denyFor(id), "agentglass-browser --as orbit-1 read --page t9-ef01")).toBeUndefined();
+    }
+    expect(denyFor("scout")).toContain("Bash(agentglass-browser:*)");
+    expect(prefixRefused(denyFor("scout"), "agentglass-browser --as orbit-1 observe")).toBeTruthy();
+    for (const c of ["agentglass-agent", "agentglass-ui", "agentglass-cockpit-mcp"]) expect(denyFor("builder")).toContain(`Bash(${c}:*)`);
+    for (const c of ["curl", "rm", "kill", "killall5", "xkill", "sudo", "git push"]) expect(denyFor("builder")).toContain(`Bash(${c}:*)`);
+  });
+
+  test("Qwen: the same door and the same flags in the settings file it is pointed at", () => {
+    const denyFor = (id: string) => {
+      const c = compileEnvelope("qwen", workerRole(id)!, NARROW, "qwen3", dir);
+      if (!c.ok) throw new Error(c.error);
+      return (JSON.parse(readFileSync(c.env.QWEN_CODE_SYSTEM_SETTINGS_PATH!, "utf8")) as { permissions: { deny: string[] } }).permissions.deny;
+    };
+    for (const id of ["builder", "reviewer", "verifier"]) {
+      expect(denyFor(id)).not.toContain("Bash(agentglass-browser)");
+      expect(prefixRefused(denyFor(id), "agentglass-browser --as orbit-1 observe")).toBeUndefined();
+      for (const flag of ["--shared", "--share", "--active", "--acti"]) {
+        expect(prefixRefused(denyFor(id), `agentglass-browser ${flag} read`)).toBeTruthy();
+      }
+      expect(prefixRefused(denyFor(id), "agentglass-browser --as orbit-1 read --page t9-ef01")).toBeUndefined();
+    }
+    expect(prefixRefused(denyFor("scout"), "agentglass-browser --as orbit-1 observe")).toBeTruthy();
+    expect(denyFor("builder")).toContain("Bash(killall5)");
   });
 });
 
@@ -184,6 +327,8 @@ describe("planWorker: every refusal is a sentence that names the thing refused",
     const r = planWorker({ role: "builder" }, view(p), none, FLEET, null);
     expect(r.ok && r.choice).toEqual(CLAUDE);
     expect(r.ok && r.envelope).toEqual(NARROW);
+    // docker is a grant of the machine: no default ceiling carries it either.
+    expect(p.ceiling.docker).toBe(false);
     expect(r.ok && r.startedBy).toMatchObject({ rule: "base", role: "builder", engine: "claude", model: "sonnet", headless: true });
   });
 
@@ -264,17 +409,19 @@ describe("planWorker: every refusal is a sentence that names the thing refused",
     expect(planWorker({ role: "builder", engine: "claude" }, view(asked), none, FLEET, null).ok).toBe(true);
   });
 
-  test("--allow: only network and commit exist, and each stops at the ceiling", () => {
+  test("--allow: only network, commit and docker exist, and each stops at the ceiling", () => {
     const bad = planWorker({ role: "builder", allow: ["push"] }, view(p), none, FLEET, null);
     expect(!bad.ok && bad.error).toContain("never granted to a worker");
-    // The default ceiling lets a worker commit and not use the network.
+    // The default ceiling lets a worker commit and neither use the network nor docker.
     const commit = planWorker({ role: "builder", allow: ["commit"] }, view(p), none, FLEET, null);
     expect(commit.ok && commit.envelope).toEqual({ ...NARROW, commit: true });
     const net = planWorker({ role: "builder", allow: ["network"] }, view(p), none, FLEET, null);
     expect(!net.ok && net.error).toContain("beyond this project's ceiling");
     expect(!net.ok && net.error).toContain("Nothing was started");
+    const dock = planWorker({ role: "builder", allow: ["docker"] }, view(p), none, FLEET, null);
+    expect(!dock.ok && dock.error).toContain("workers may not use docker here");
     const open = { ...p, ceiling: { ...WIDE } };
-    expect(planWorker({ role: "builder", allow: ["network", "commit"] }, view(open), none, FLEET, null)).toMatchObject({ ok: true, envelope: { network: true, commit: true } });
+    expect(planWorker({ role: "builder", allow: ["network", "commit", "docker"] }, view(open), none, FLEET, null)).toMatchObject({ ok: true, envelope: { network: true, commit: true, docker: true } });
     expect(planWorker({ role: "builder", allow: "network" }, view(open), none, FLEET, null).ok).toBe(false);
   });
 
@@ -356,6 +503,38 @@ describe("the argv of one headless turn", () => {
     expect(headlessRefusal("emacs")).toContain("not an engine");
     expect(turn("gemini")).toMatchObject({ ok: false });
     expect(headlessRefusal("claude")).toBeNull();
+  });
+});
+
+describe("docker, the third lift, from a start to the lock the engine reads", () => {
+  const started = (allow: string[]) => {
+    const plan = planWorker({ role: "builder", allow }, view({ ...base(CLAUDE), ceiling: { ...WIDE } }), none, FLEET, null);
+    if (!plan.ok) throw new Error(plan.error);
+    const t = turn("opencode", { model: "opencode/big-pickle", envelope: plan.envelope });
+    if (!t.ok) throw new Error(t.error);
+    return (JSON.parse(t.env.OPENCODE_CONFIG_CONTENT!) as { permission: { bash: Record<string, string> } }).permission.bash;
+  };
+
+  test("allowed: no docker deny in the rendered bash map, and the absolutes stay denied", () => {
+    const bash = started(["docker"]);
+    expect(bash.docker).toBeUndefined();
+    expect(bash["docker *"]).toBeUndefined();
+    expect(bash["* docker *"]).toBeUndefined();
+    for (const c of ["git push", "gh", "ssh", "sudo", "rm"]) expect(bash[c]).toBe("deny");
+  });
+
+  test("not allowed: docker is denied bare, with arguments, and wrapped", () => {
+    const bash = started([]);
+    expect(bash.docker).toBe("deny");
+    expect(bash["docker *"]).toBe("deny");
+    expect(bash["* docker *"]).toBe("deny");
+  });
+
+  test("a start that asks for one of the absolutes is refused, ceiling or no ceiling", () => {
+    for (const a of ["git push", "gh", "sudo", "rm"]) {
+      const r = planWorker({ role: "builder", allow: [a] }, view({ ...base(CLAUDE), ceiling: { ...WIDE } }), none, FLEET, null);
+      expect(!r.ok && r.error).toContain("never granted to a worker");
+    }
   });
 });
 

@@ -8,11 +8,25 @@
 // normal ANSI pair is preferred over a mix toward grey when either clears it.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { altShade, contrast, inkFor, inkTints, parseColor, TINT_KEYS } from "../src/lib/contrast.ts";
+import { altShade, contrast, floorTiers, inkFor, inkTints, parseColor, STRIP_MERGED, STRIP_TAG_TINT, STRIP_TONES, STRIP_WASH, TINT_KEYS } from "../src/lib/contrast.ts";
+import { ACCENTS, BASE, cssVars } from "../../shared/palettes.ts";
 
 // Same balanced-brace source scan as contrast-floor.test.ts, for the reason
 // given there: importing themes.ts pulls in the API client.
 const SRC = readFileSync(new URL("../src/lib/themes.ts", import.meta.url), "utf8");
+
+/** A theme's `vars`, including the two written as `{ ...cssVars(BASE.x), … }`,
+ *  which no JSON parse reaches. Every palette is read, not a picked few. */
+function varsFromSource(raw: string): Record<string, string> | null {
+  try { return JSON.parse(raw); } catch { /* the spread form */ }
+  const base = raw.match(/\.\.\.cssVars\(BASE\.(light|dark)\)/);
+  if (!base) return null;
+  const vars: Record<string, string> = { ...cssVars(BASE[base[1] as "light" | "dark"]) };
+  for (const m of raw.replace(/\.\.\.cssVars\(BASE\.(?:light|dark)\)/, "").matchAll(/"(--[\w-]+)":\s*"([^"]*)"/g)) {
+    vars[m[1]!] = m[2]!;
+  }
+  return vars;
+}
 
 function themesFromSource(src: string): { id: string; vars: Record<string, string>; ansi?: Record<string, string> }[] {
   const out: { id: string; vars: Record<string, string>; ansi?: Record<string, string> }[] = [];
@@ -28,8 +42,8 @@ function themesFromSource(src: string): { id: string; vars: Record<string, strin
       else if (src[i] === "}" && --depth === 0) { end = i; break; }
     }
     if (end < 0) continue;
-    let vars: Record<string, string>;
-    try { vars = JSON.parse(src.slice(open, end + 1)); } catch { continue; }
+    const vars = varsFromSource(src.slice(open, end + 1));
+    if (!vars) continue;
     let ansi: Record<string, string> | undefined;
     const aAt = src.indexOf("ansi:", end);
     const nextId = src.indexOf('id: "', end);
@@ -177,5 +191,78 @@ describe("inkFor on data-coloured labels (GitHub labels, ClickUp status pills)",
   test("a label colour that already reads fine is left alone", () => {
     const dark = "#7a1030";
     expect(inkFor(dark, DARK_TEXT, CREAM_BG, TARGET)).toBe(dark);
+  });
+});
+
+// The card strip's unread tag wears the theme's own ink (--strip-ink) over a
+// fill of the chosen accent at 8% on the strip's wash. A share of the accent in
+// the words was measured on four palettes and failed on 17 of the 37 the desk
+// ships, so this sweeps every palette, every accent and every wash.
+describe("the unread tag's word", () => {
+  const CSS = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
+  type C = { r: number; g: number; b: number };
+  const mix = (a: C, b: C, t: number): C => ({
+    r: a.r + (b.r - a.r) * t, g: a.g + (b.g - a.g) * t, b: a.b + (b.b - a.b) * t,
+  });
+  /** The seven offered accents, plus "Theme", which leaves the palette's own. */
+  const accentsOf = (t: { vars: Record<string, string> }) => [...ACCENTS.map((a) => a.primary), t.vars["--primary"]!];
+
+  test("the scan reaches every palette, including the two written as cssVars(BASE)", () => {
+    const declared = (SRC.match(/^\s*\{ id: "[\w-]+"/gm) ?? []).length;
+    expect(declared).toBeGreaterThan(30);
+    expect(THEMES.length).toBe(declared);
+    for (const id of ["github-light", "github-dark"]) expect(THEMES.some((t) => t.id === id)).toBe(true);
+  });
+
+  test("index.css washes the strip with the tones and shares modelled here", () => {
+    for (const key of STRIP_TONES) expect(new RegExp(`--st: var\\(${key}\\)`).test(CSS)).toBe(true);
+    expect(CSS).toContain(`--merged: ${STRIP_MERGED};`);
+    expect(CSS).toContain("background: color-mix(in srgb, var(--c, var(--text)) 8%, transparent);");
+    expect(CSS).toContain("color-mix(in srgb, var(--st) 12%, transparent)");
+  });
+
+  test("every theme, accent and wash clears 4.5:1, both polarities", () => {
+    // The numbers the browser actually paints, read off the stylesheet rather
+    // than from the module that computes the ink.
+    const wash = Number(/color-mix\(in srgb, var\(--st\) (\d+)%, transparent\), color-mix/.exec(CSS)![1]) / 100;
+    const tint = Number(/background: color-mix\(in srgb, var\(--c, var\(--text\)\) (\d+)%, transparent\)/.exec(CSS)![1]) / 100;
+    expect(wash).toBe(STRIP_WASH);
+    expect(tint).toBe(STRIP_TAG_TINT);
+    const failures: string[] = [];
+    let combos = 0;
+    for (const t of THEMES) {
+      const painted = inkTints(floorTiers(t.vars), t.ansi as never);
+      const ink = parseColor(painted["--strip-ink"] ?? "");
+      if (!ink) { failures.push(`${t.id}: no --strip-ink`); continue; }
+      const card = parseColor(painted["--bg3"] ?? "")!;
+      for (const tone of [...STRIP_TONES.map((k) => painted[k] ?? ""), STRIP_MERGED]) {
+        const ground = mix(card, parseColor(tone)!, wash);
+        for (const a of accentsOf(t)) {
+          const fill = mix(ground, parseColor(a)!, tint);
+          const got = contrast(ink, fill);
+          combos++;
+          if (got + 0.005 < TARGET) failures.push(`${t.id} ${a} on ${tone} ${got.toFixed(2)}`);
+        }
+      }
+    }
+    expect(failures).toEqual([]);
+    expect(combos).toBe(THEMES.length * (STRIP_TONES.length + 1) * (ACCENTS.length + 1));
+  });
+
+  test("break it on purpose: the accent left raw is unreadable on a light card", () => {
+    const p = THEMES.find((t) => t.id === "porcelain")!;
+    const teal = parseColor(ACCENTS.find((a) => a.id === "teal")!.primary)!;
+    const ground = mix(parseColor(p.vars["--bg3"]!)!, parseColor(p.vars["--error"]!)!, STRIP_WASH);
+    expect(contrast(teal, mix(ground, teal, STRIP_TAG_TINT))).toBeLessThan(TARGET);
+  });
+
+  test("break it on purpose: plain --text fails on a dim dark palette, so the token lifts it", () => {
+    const p = THEMES.find((t) => t.id === "solarized-dark")!;
+    const teal = parseColor(ACCENTS.find((a) => a.id === "teal")!.primary)!;
+    const fill = mix(mix(parseColor(p.vars["--bg3"]!)!, parseColor(p.vars["--info"]!)!, STRIP_WASH), teal, STRIP_TAG_TINT);
+    const raw = parseColor(p.vars["--text"]!)!;
+    expect(contrast(raw, fill)).toBeLessThan(TARGET);
+    const ink = inkTints(floorTiers(p.vars), p.ansi as never)["--strip-ink"]!;
+    expect(contrast(parseColor(ink)!, fill)).toBeGreaterThanOrEqual(TARGET);
   });
 });

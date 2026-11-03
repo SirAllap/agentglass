@@ -25,7 +25,7 @@ import { readFileSync, readlinkSync, writeFileSync, mkdirSync, existsSync, rmSyn
 import { failed } from "./refused.ts";
 import { join } from "node:path";
 import { tmuxStateDir } from "./tmuxbin.ts";
-import { tmux, validSessionName, tmuxSocket, setCaptureHook, KEPT_MARK } from "./tmuxpane.ts";
+import { tmux, validSessionName, tmuxSocket, setCaptureHook, isPanelViewSession, KEPT_MARK } from "./tmuxpane.ts";
 import { confPath } from "./tmuxconf.ts";
 import { resolveTmuxBin, engineSocketArgs } from "./tmuxbin.ts";
 import { paneAgentNote } from "./panewt.ts";
@@ -35,7 +35,8 @@ import { claudeCode } from "./agents/claudecode.ts";
 import { LANTERN_PROMPT_MARK } from "./lanternmark.ts";
 import { windowTree, allWindowTrees, LAYOUT_RE, type TmuxWindowDetail, type TmuxPaneRow } from "./tmuxlayout.ts";
 import { tmuxResume } from "./config.ts";
-import { noteRestored, dropStaleMarks, restoredMark, dismissRestored } from "./tmuxrestored.ts";
+import { noteRestored, dropStaleMarks, restoredMark, dismissRestored, agentOf } from "./tmuxrestored.ts";
+import { agentWindowGuard } from "./browseraccess.ts";
 
 /** A pane as captured. `startCommand` is the exact argv the pane was born
  *  with — replaying it in "all" mode is what resumes agent sessions. */
@@ -141,10 +142,13 @@ export interface RestoreState {
  * next install brought all nine back by name within seconds.
  *
  * So the guarantee is narrowed rather than weakened: nothing the user made is
- * ever forgotten, and nothing the app made FOR A PHONE is ever rebuilt.
+ * ever forgotten, and nothing the app made FOR A PHONE is ever rebuilt. A
+ * panel's view is not rebuilt for the same reason a mirror is not: it is a
+ * second copy of windows that are in the photograph under the engine's own
+ * name, and it exists for one pty.
  */
 function isEphemeralSession(name: string): boolean {
-  return /^agx-phone-\d+-[a-z0-9]+$/.test(name);
+  return /^agx-phone-\d+-[a-z0-9]+$/.test(name) || isPanelViewSession(name);
 }
 
 const KEEP_UNSEEN_MS = 14 * 24 * 60 * 60 * 1000;
@@ -1242,6 +1246,19 @@ export function runArgs(mode: "lazy" | "all", pane: CapturedPane | undefined, bi
  *  a command line built here. */
 const SESSION_ID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
+/** `runArgs`, through the browser door when the pane was an agent.
+ *
+ *  A restored agent pane is created by a direct tmux call, so it inherits the
+ *  server's environment — including the person's machine token. No credential
+ *  is minted for a restore (there is no turn and no worker name), so the pane is
+ *  marked off and the credential variables are removed: the supplied CLI and
+ *  MCP server then refuse rather than fall back to the identity in the file. A
+ *  person's own command is replayed exactly as it was. */
+function replayArgs(mode: "lazy" | "all", pane: CapturedPane | undefined): string[] {
+  const argv = runArgs(mode, pane);
+  return argv.length && pane && agentOf(pane) ? [...agentWindowGuard(), ...argv] : argv;
+}
+
 /** The id tmux just printed, or "" — `-P -F` gives us the NEW id, which is the
  *  only way to address something we have just made. */
 const printed = (r: { ok: boolean; stdout: string }): string => (r.ok ? r.stdout.trim() : "");
@@ -1255,7 +1272,7 @@ async function restorePanes(name: string, windowId: string, panes: CapturedPane[
   let after = `=${name}:${windowId}`;
   for (const p of panes) {
     const r = await tmux(["split-window", "-d", "-v", "-P", "-F", "#{pane_id}", "-t", after,
-      "-c", p.path || ".", ...runArgs(mode, p)]);
+      "-c", p.path || ".", ...replayArgs(mode, p)]);
     const pid = printed(r);
     if (pid) after = pid;
   }
@@ -1503,7 +1520,7 @@ async function restorePass(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
       for (const w of s.windows) {
         if (here.has(key(w.name, w.panes[0]?.path))) continue;
         const nw = await tmux(["new-window", "-d", "-P", "-F", "#{window_id}", "-t", `=${s.name}:`,
-          ...(w.name ? ["-n", w.name] : []), "-c", w.panes[0]?.path || ".", ...runArgs(mode, w.panes[0])]);
+          ...(w.name ? ["-n", w.name] : []), "-c", w.panes[0]?.path || ".", ...replayArgs(mode, w.panes[0])]);
         const wid = printed(nw);
         made.push({ session: s.name, window: w, id: wid });
         if (!wid) continue;
@@ -1521,7 +1538,7 @@ async function restorePass(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
        session with six windows came back with one and nobody was told. tmux
        hands back the id of what it has just made; everything below uses that. */
     const mk = await tmux(["new-session", "-d", "-P", "-F", "#{window_id}", "-s", s.name,
-      ...(first.name ? ["-n", first.name] : []), "-c", cwd0, ...runArgs(mode, first.panes[0])]);
+      ...(first.name ? ["-n", first.name] : []), "-c", cwd0, ...replayArgs(mode, first.panes[0])]);
     /*
      * RECORDED EVEN WHEN IT COULD NOT BE MADE, and that is the case this
      * whole sweep exists for. A first window whose command exits takes the
@@ -1540,7 +1557,7 @@ async function restorePass(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
 
     for (const w of s.windows.slice(1)) {
       const nw = await tmux(["new-window", "-d", "-P", "-F", "#{window_id}", "-t", `=${s.name}:`,
-        ...(w.name ? ["-n", w.name] : []), "-c", w.panes[0]?.path || ".", ...runArgs(mode, w.panes[0])]);
+        ...(w.name ? ["-n", w.name] : []), "-c", w.panes[0]?.path || ".", ...replayArgs(mode, w.panes[0])]);
       const wid = printed(nw);
       made.push({ session: s.name, window: w, id: wid });
       if (!wid) continue;
@@ -1687,7 +1704,7 @@ async function keepTheDesk(made: Made[], mode: "lazy" | "all"): Promise<number> 
 export async function resumeRestored(windowId: string): Promise<boolean> {
   const mark = restoredMark(windowId);
   if (!/^@\d+$/.test(windowId) || !mark?.pane) return false;
-  const argv = runArgs("all", mark.pane);
+  const argv = replayArgs("all", mark.pane);
   if (!argv.length) return false;
   const rows = await tmux(["list-panes", "-t", windowId, "-F", "#{pane_id}"]);
   const target = rows.ok ? rows.stdout.split("\n").map((l) => l.trim()).filter(Boolean)[mark.paneIndex ?? 0] : undefined;

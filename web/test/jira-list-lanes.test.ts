@@ -10,6 +10,7 @@ import {
   thirdColumn, visibleRows, CLEARED, type LaneInput,
 } from "../src/components/jira/list/laneModel.ts";
 import { NO_FILTERS } from "../src/components/jira/list/model.ts";
+import { SHOWN_FACES, peopleOf } from "../src/components/jira/list/PeopleFaces.tsx";
 import { __resetLaneState, laneFolded, laneSortOf, setLaneFolded, setLaneSort } from "../src/lib/jiraLaneState.ts";
 import { globalStubs } from "./stubGlobal.ts";
 
@@ -148,11 +149,36 @@ describe("what a person did to the lanes", () => {
   });
 });
 
+describe("the faces of an epic's children", () => {
+  const person = (name: string, key?: string) => ({ key: key ?? name.toLowerCase(), name, initials: name.slice(0, 2).toUpperCase() });
+  const three = [person("Ana Li", "acc-1"), person("Sam Rivera", "acc-2"), person("Ola Berg", "acc-3")];
+  test("the same person on three children is drawn once, in card order", () => {
+    const cards = [
+      card("1", "To do", { people: [three[0]!, three[1]!] }),
+      card("2", "To do", { people: [three[0]!, three[2]!] }),
+    ];
+    expect(peopleOf(cards).map((p) => p.name)).toEqual(["Ana Li", "Sam Rivera", "Ola Berg"]);
+  });
+  test("an epic whose children have nobody gives an empty stack", () => {
+    expect(peopleOf([card("1", "To do"), card("2", "Done")])).toEqual([]);
+  });
+  test("no key and no id still tells two people apart by name", () => {
+    const cards = [card("1", "To do", { people: [{ name: "Ana Li", initials: "AL" }, { name: "Ana Li", initials: "AL" }, { name: "Ola Berg", initials: "OB" }] })];
+    expect(peopleOf(cards).map((p) => p.name)).toEqual(["Ana Li", "Ola Berg"]);
+  });
+  test("the epic page's head reads the cards its rows read, write and all", async () => {
+    const src = await Bun.file(import.meta.dir + "/../src/components/TasksPanel.tsx").text();
+    const head = src.split("\n").find((l) => l.includes("<JiraAreaHead ")) ?? "";
+    // The rows draw `over[t.id] ?? t`; a head on the raw read keeps yesterday's people after an assign.
+    expect(head).toContain("people={peopleOf(areaHeld.map((t) => over[t.id] ?? t))}");
+  });
+});
+
 describe("source rules of the screen files", () => {
   const dir = import.meta.dir + "/../src/components/jira/list/";
   const read = (f: string) => Bun.file(dir + f).text();
   const code = (s: string) => s.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
-  const files = ["JiraRow.tsx", "JiraLaneHead.tsx", "JiraLanes.tsx", "JiraStates.tsx", "JiraStrip.tsx", "JiraColumns.tsx"];
+  const files = ["JiraRow.tsx", "JiraLaneHead.tsx", "JiraLanes.tsx", "JiraStates.tsx", "JiraStrip.tsx", "JiraColumns.tsx", "PeopleFaces.tsx"];
   const sources = Promise.all(files.map(async (f) => [f, code(await read(f))] as const));
 
   test("rows report a right-click, sub-task rows through their own door", async () => {
@@ -168,5 +194,39 @@ describe("source rules of the screen files", () => {
   });
   test("no native title tooltip in the new files", async () => {
     for (const [, s] of await sources) expect(s).not.toMatch(/<(?:div|span|button|a|b|img|svg|p|section)\b[^>]*\stitle=/);
+  });
+  test("an epic's head wears the faces of its children, and only an epic's head does", async () => {
+    const head = await read("JiraLaneHead.tsx");
+    expect(head).toContain('lane.mark === "area" && <PeopleFaces people={peopleOf(lane.cards)} focusable />');
+    expect(head).toContain("peopleOf(lane.cards)");
+    // A person or priority lane lists its own people in the column already; faces here would be one each.
+    expect(head.match(/<PeopleFaces /g)?.length).toBe(1);
+  });
+  test("the row and the head share one stack, so an avatar cannot be fixed in one and not the other", async () => {
+    const row = await read("JiraRow.tsx");
+    const faces = await read("PeopleFaces.tsx");
+    expect(row).toContain("import { PeopleFaces } from \"./PeopleFaces.tsx\"");
+    expect(row).not.toContain("<span className=\"agx-jl-face\"");
+    expect(faces).toContain("people.slice(0, SHOWN_FACES)");
+  });
+  test("the stack is one keyboard stop with every name, and the rest keeps its own tip", async () => {
+    const faces = await read("PeopleFaces.tsx");
+    expect(faces).toContain("tabIndex={focusable ? 0 : undefined}");
+    expect(faces).toContain("aria-label={focusable ? `People: ${names}` : undefined}");
+    // The names are the tip's sentence, not its bold title: ten of them as a name is a four-line block.
+    expect(faces).toContain('data-tip={tipAttr({ name: "People", text: names })}');
+    expect(faces).toContain("data-tip={tipAttr({ name: `${rest} more`, text:");
+    expect(SHOWN_FACES).toBe(3);
+  });
+  test("the stack never swallows the click that folds its head", async () => {
+    const faces = await read("PeopleFaces.tsx");
+    // The head folds on a click anywhere in it, faces included; a stop here makes that strip dead.
+    expect(faces).not.toContain("stopPropagation");
+  });
+  test("a head that grows faces does not move when the pointer arrives", async () => {
+    const css = await Bun.file(import.meta.dir + "/../src/index.css").text();
+    expect(css).toContain(".agx-jl-head .agx-jl-stack { flex: none; }");
+    const faces = await read("PeopleFaces.tsx");
+    expect(faces).not.toMatch(/onMouseEnter|onMouseLeave|:hover/);
   });
 });

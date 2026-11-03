@@ -30,7 +30,7 @@
  * `LOOPBACK_ONLY` is false, then connect from 127.0.0.1 and watch the refusal.
  * Under the rule that now exists that caller IS loopback, so it is accepted and
  * the assertion failed — and two commit messages called that failure
- * "pre-existing" and "out of scope". It was neither. It was this branch, three
+ * "already there" and "out of scope". It was neither. It was this branch, three
  * hours old.
  *
  * Checked rather than assumed before the control was rewritten:

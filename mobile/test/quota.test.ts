@@ -8,7 +8,8 @@
  */
 import { describe, expect, it } from "bun:test";
 import {
-  ageLabel, planState, quotaTone, remainingOf, resetLabel, tightestWindow,
+  ageLabel, estimatedWindows, planReadAt, planState, planWindows, quotaTone, readLine, resetLabel, sourceLine,
+  tightestWindow, usedOf,
 } from "../src/model/quota.ts";
 import type { ProviderUsage, QuotaWindow } from "../../shared/types.ts";
 
@@ -23,13 +24,13 @@ const claude = (over: Partial<ProviderUsage> = {}): ProviderUsage => ({
   windows: [window()], observedAt: NOW, ...over,
 });
 
-describe("what is left", () => {
-  it("is the complement of what was used", () => {
-    expect(remainingOf(window({ usedPercent: 62 }))).toBe(38);
+describe("what was used", () => {
+  it("is the percentage the provider reported", () => {
+    expect(usedOf(window({ usedPercent: 62 }))).toBe(62);
   });
 
-  it("never goes negative when a provider overshoots its own limit", () => {
-    expect(remainingOf(window({ usedPercent: 103 }))).toBe(0);
+  it("is clamped when a provider overshoots its own limit", () => {
+    expect(usedOf(window({ usedPercent: 103 }))).toBe(100);
   });
 });
 
@@ -42,7 +43,7 @@ describe("the headline", () => {
     const top = tightestWindow(rows);
     expect(top?.provider).toBe("Claude");
     expect(top?.window.label).toBe("weekly");
-    expect(remainingOf(top!.window)).toBe(29);
+    expect(usedOf(top!.window)).toBe(71);
   });
 
   it("skips a provider that cannot report rather than counting it as spent", () => {
@@ -64,6 +65,87 @@ describe("the headline", () => {
   it("is nothing at all when nothing has answered", () => {
     expect(tightestWindow(null)).toBeNull();
     expect(tightestWindow([])).toBeNull();
+  });
+});
+
+describe("OpenCode Go draws the console's reading, as the desk does", () => {
+  const go = (over: Partial<ProviderUsage> = {}): ProviderUsage => ({
+    provider: "opencode", label: "OpenCode Go", available: true, source: "this PC",
+    // This PC's count from the worker steps: the numbers the phone used to draw.
+    windows: [
+      window({ label: "5h", minutes: 300, usedPercent: 23.5, resetsAt: new Date(NOW + 3600_000).toISOString() }),
+      window({ label: "weekly", minutes: 10080, usedPercent: 60, resetsAt: new Date(NOW + 86_400_000).toISOString() }),
+      window({ label: "monthly", minutes: 43200, usedPercent: 30 }),
+    ],
+    observedAt: NOW - 60 * 60_000,
+    ...over,
+  });
+  const console = [
+    window({ label: "5h", minutes: 300, usedPercent: 0, resetsAt: new Date(NOW + 5 * 3600_000).toISOString() }),
+    window({ label: "weekly", minutes: 10080, usedPercent: 82, resetsAt: new Date(NOW + 15 * 3600_000).toISOString() }),
+    window({ label: "monthly", minutes: 43200, usedPercent: 41, resetsAt: new Date(NOW + 20 * 86_400_000).toISOString() }),
+  ];
+
+  it("takes the console windows and their reset times, not this PC's estimate", () => {
+    const row = go({ usageKey: true, calibration: { at: NOW - 3 * 60_000, windows: console } });
+    expect(planWindows(row, NOW)).toEqual({ windows: console, estimate: false });
+    const top = tightestWindow([row], NOW);
+    expect(top?.window.usedPercent).toBe(82);
+    expect(top?.window.resetsAt).toBe(console[1]!.resetsAt);
+    // The age is the console read's, not the last local step's hour.
+    expect(top?.observedAt).toBe(NOW - 3 * 60_000);
+  });
+
+  it("falls back to this PC once the console reading is a day old, and says so", () => {
+    const row = go({ usageKey: true, calibration: { at: NOW - 13 * 3600_000, windows: console } });
+    const plan = planWindows(row, NOW);
+    expect(plan.estimate).toBe(true);
+    expect(plan.windows.map((w) => w.usedPercent)).toEqual([23.5, 60, 30]);
+    expect(sourceLine(row, plan)).toBe("this PC estimate");
+    // Every bar here is this PC's, so the age is the last step's, not the
+    // thirteen-hour-old read that was thrown away.
+    expect(planReadAt(row, plan)).toBe(row.observedAt);
+  });
+
+  it("tags only the bar this PC filled in, and dates the row by the console read", () => {
+    // A console read old enough to be drawn, with its 5 h window reset since:
+    // the desk replaces that one bar and keeps the other two as the plan's.
+    const row = go({
+      calibration: {
+        at: NOW - 2 * 3600_000,
+        windows: [
+          window({ label: "5h", minutes: 300, usedPercent: 91, resetsAt: new Date(NOW - 3600_000).toISOString() }),
+          console[1]!, console[2]!,
+        ],
+      },
+    });
+    const plan = planWindows(row, NOW);
+    expect(plan.windows.map((w) => w.usedPercent)).toEqual([23.5, 82, 41]);
+    expect([...estimatedWindows(plan)]).toEqual([300]);
+    expect(sourceLine(row, plan)).toBe("console");
+    expect(planReadAt(row, plan)).toBe(NOW - 2 * 3600_000);
+    const top = tightestWindow([row], NOW);
+    expect(top?.window.usedPercent).toBe(82);
+    expect(top?.estimated).toBe(false);
+    expect(top?.observedAt).toBe(NOW - 2 * 3600_000);
+  });
+
+  it("names a console reading as the console, whoever fetched it", () => {
+    // A stored key does not say which read produced these numbers: a page read
+    // saved before the key looks identical, so the label names the reading.
+    const pageRead = go({ usageKey: true, calibration: { at: NOW - 60_000, windows: console } });
+    expect(sourceLine(pageRead, planWindows(pageRead, NOW))).toBe("console");
+    // The CLI's own total is not this PC's rolling windows; it keeps its name.
+    const stats = go({ source: "opencode stats", windows: [] });
+    expect(sourceLine(stats, planWindows(stats, NOW))).toBe("opencode stats");
+    // Nothing a provider says about another plan is renamed here.
+    expect(sourceLine(claude({ source: "opencode stats" }), planWindows(claude(), NOW))).toBe("opencode stats");
+  });
+
+  it("dates the reading in the desk's words, and stays quiet while it is fresh", () => {
+    expect(readLine(NOW - 4 * 60_000, NOW)).toBe("read 4m ago");
+    expect(readLine(NOW - 60_000, NOW)).toBe("read just now");
+    expect(readLine(undefined, NOW)).toBe("");
   });
 });
 

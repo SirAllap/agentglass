@@ -1,47 +1,45 @@
 import { useContext, useEffect, useRef, type ReactNode } from "react";
 import { Filter } from "../SettingRow.tsx";
-import { Button, LINE } from "../workspace/Chrome.tsx";
+import { LINE } from "../workspace/Chrome.tsx";
 import { OrchSeg } from "./OrchKit.tsx";
-import { OWN_LEGEND, OWN_SETTING, scopeSentence } from "./orchestrationCopy.ts";
+import { SHEET_ROWS } from "../../lib/layers.ts";
+import { OWN_SETTING } from "./orchestrationCopy.ts";
 
 const baseName = (root: string) => root.split("/").filter(Boolean).pop() ?? root;
 
 /**
- * Whose setting is on screen: the project chips, one line saying what that
- * means, and the one action that changes it (give a project a setting of its
- * own, or send it back to the general one).
+ * Whose setting is on screen: the breadcrumb, the project chips and the chip
+ * that says whether what is on screen is saved, in one row — the mockup's bar.
  *
- * It stays at the top of the page while the rest scrolls, directly under the
- * page header: the header is sticky too and publishes its height as
- * `--agx-ph-h` on the settings scroller, which is the bar's `top`. With
- * `top-0` the bar slid under the header and the cards scrolled through the gap
- * (measured). It stays because every card below is read for the project it
- * names. It writes its own height onto the
- * page's wrapper as `--orch-stick`, so a card scrolled to from a link stops
- * under the bar and not behind it; the height is measured when the bar
- * changes size, never on a timer.
+ * ONE row, because the scope is chrome: two rows of explanation above the page
+ * cost 87px of a 763px region. The action that changes the scope sits in the
+ * banner over the title, which is where the mockup puts it.
+ *
+ * It sticks under the page's index band, at the offset that band publishes
+ * (`--agx-pin-top`), and writes its own height onto the scroll region as
+ * `--orch-stick`, so a card scrolled to from a link stops under the bar.
  */
-export function ScopeBar({ root, projects, overrides, inherited, busy, note, saved, onRoot, onScope }: {
+export function ScopeBar({ root, projects, overrides, note, saved, lead, onRoot }: {
   root: string;
   projects: string[];
   /** The projects that have a setting of their own. */
   overrides: string[];
-  inherited: boolean;
-  busy: boolean;
   /** The server's sentence when the last change was refused. */
   note: string | undefined;
   /** The chip that says whether what is on screen is saved, beside the choice. */
   saved?: ReactNode;
+  /** A quiet line that belongs to the same row: the Flight plan link. */
+  lead?: ReactNode;
   onRoot: (root: string) => void;
-  /** true: give the project its own setting; false: back to the general one. */
-  onScope: (override: boolean) => void;
 }) {
   const bar = useRef<HTMLDivElement>(null);
   // A settings search lists matching rows only; a bar stuck over them would name a project nothing below is about.
   const searching = useContext(Filter).on;
   useEffect(() => {
     const el = bar.current;
-    const page = el?.parentElement;
+    // Published on the one scroll region, not the page wrapper: the index rail
+    // and the page's own sticky column are siblings of this bar, not children.
+    const page = el?.closest<HTMLElement>("[data-settings-scroll]") ?? el?.parentElement;
     if (!el || !page || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(() => page.style.setProperty("--orch-stick", `${el.offsetHeight}px`));
     ro.observe(el);
@@ -53,23 +51,16 @@ export function ScopeBar({ root, projects, overrides, inherited, busy, note, sav
       ? { id: r, own: true, label: <><span aria-hidden className="agx-orch-own" data-own-dot />{baseName(r)}</>, title: `${r} \u2014 ${OWN_SETTING}` }
       : { id: r, label: baseName(r), title: r })),
   ];
-  const sentence = scopeSentence(root, inherited, baseName(root));
   if (searching) return null;
   return (
-    <div ref={bar} data-scope-bar className="sticky z-10 grid gap-1.5 pt-2 pb-2.5 mb-4 agx-settings-x"
-      style={{ top: "var(--agx-ph-h, 0px)", background: "var(--bg)", borderBottom: LINE }}>
-      <div className="flex flex-wrap items-center gap-2">
-        <OrchSeg label="Settings for" value={root} options={options} onChange={onRoot} />
-        {saved}
-      </div>
-      <div className="flex items-center justify-between gap-3">
-        <p className="m-0 min-w-0 text-[12px]" style={{ color: "var(--text3)" }} aria-live="polite">
-          {overrides.length > 0 && <><span aria-hidden className="agx-orch-own" />{OWN_LEGEND} </>}Showing <b style={{ color: "var(--text)" }}>{sentence.showing}</b>{sentence.tail}
-        </p>
-        {root !== "" && (
-          <Button disabled={busy} className="shrink-0" onClick={() => onScope(inherited)}>{inherited ? "Set for this project" : "Use the general setting"}</Button>)}
-      </div>
-      {note && <div role="alert" className="text-[12px]" style={{ color: "var(--error-ink)" }}>{note}</div>}
+    <div ref={bar} data-scope-bar className="sticky agx-flow-scope agx-settings-x"
+      style={{ top: "var(--agx-pin-top, 0px)", zIndex: SHEET_ROWS.bar, marginTop: "calc(var(--agx-pin-gap, 12px) - var(--agx-page-gap, 18px))", background: "var(--surface-page)", borderBottom: LINE }}>
+      <span className="agx-flow-crumb">Settings {"\u203a"} <b>Orchestration</b></span>
+      <span className="agx-flow-sp" />
+      <OrchSeg label="Settings for" value={root} options={options} onChange={onRoot} />
+      {saved}
+      {lead}
+      {note && <div role="alert" className="agx-flow-scope-note text-[12px]" style={{ color: "var(--error-ink)" }}>{note}</div>}
     </div>
   );
 }

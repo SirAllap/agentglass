@@ -2,7 +2,11 @@
  * The ACTIONS routes against a running server and a stub program on its PATH.
  * Pinned: an agent (the machine token, no desk key) may list and match actions
  * but never define, change, delete or run one; the person's own window may; and a
- * page on another origin may not, whichever it holds.
+ * page on another origin may not, whichever it carries.
+ *
+ * The server is stopped by this file's teardown, and the temp directory it ran
+ * in is the identity searched for afterwards: a helper left alive would be
+ * adopted by systemd and run for days.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -11,6 +15,7 @@ import { join } from "node:path";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
 import { freePort } from "./freePort.ts";
+import { stopNaming, stopServer } from "./tempDirProcesses.ts";
 
 const TOKEN = "orbit-actions-token-0123456789abcdef", AUTH = { authorization: `Bearer ${TOKEN}` };
 const DESK = "x-agentglass-desk", KEY = "k".repeat(48);
@@ -48,10 +53,14 @@ beforeAll(async () => {
   throw new Error("the server did not come up");
 }, SERVER_BOOT_MS);
 
-afterAll(() => {
+afterAll(async () => {
   try { claimCtl?.abort(); } catch { /* gone */ }
-  try { proc?.kill(); } catch { /* gone */ }
+  await stopServer(proc);
+  const left = await stopNaming(dir);
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* fine */ }
+  // Read-only scan of /proc: only a pid whose argv names this mkdtemp path is
+  // ever signalled, so nothing another file started can be touched.
+  if (left) expect(left).toEqual([]);
 });
 
 const post = (route: string, body: unknown, headers: Record<string, string> = {}) =>

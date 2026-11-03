@@ -12,7 +12,7 @@
  * that fails on a machine without it.
  */
 import { describe, expect, test } from "bun:test";
-import { parseFrame, parsePaneGeometry } from "../src/tmuxctl.ts";
+import { framePanes, parseFrame, parsePaneGeometry } from "../src/tmuxctl.ts";
 
 /** One `p` row, as the sweep's format string produces it. */
 const row = (o: {
@@ -70,5 +70,28 @@ describe("the panes of the window on screen", () => {
     // Older servers, and any window whose panes tmux did not report.
     const f = parseFrame("c\t/dev/pts/0\tmain\t$2\nw\t$2\t@1\t1\tone\t1\t*\t", "/dev/pts/0")!;
     expect(f.panes).toEqual([]);
+  });
+});
+
+describe("the pane the window is on, split or not", () => {
+  /* What the bar over a worker's tab is handed. It was handed the terminal
+     session's own key instead, which /agents/named answers 400 to. */
+  test("an unsplit window has no geometry to choose between, and still names its pane", () => {
+    const [only] = parsePaneGeometry([row({ id: "%3", active: "1" })], "$2");
+    expect(framePanes({ panes: [only!] })).toEqual({ panes: [], pane: "%3" });
+  });
+
+  test("a split window sends both the panes and the one selected", () => {
+    const panes = parsePaneGeometry([row({ id: "%1" }), row({ id: "%2", left: 139, active: "1" })], "$2");
+    expect(framePanes({ panes })).toEqual({ panes, pane: "%2" });
+  });
+
+  test("a frame with no panes names none rather than inventing one", () => {
+    expect(framePanes({ panes: [] })).toEqual({ panes: [] });
+    expect(framePanes(null)).toEqual({ panes: [] });
+    // A window whose panes tmux reported without an active flag: identity is
+    // not a guess.
+    const panes = parsePaneGeometry([row({ id: "%1" })], "$2");
+    expect(framePanes({ panes })).toEqual({ panes: [] });
   });
 });

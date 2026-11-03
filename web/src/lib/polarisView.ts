@@ -2,14 +2,22 @@
 // The server stores and acts (server/src/polaris.ts); this turns its answers into rows and its
 // rows back into the one PUT that changes a layer.
 import {
-  DOOR_IDS, DOOR_MODES, DOOR_SINCE, POLARIS_VERSION, PRESETS, isLive, raisesToLive,
+  DOOR_IDS, DOOR_MODES, DOOR_SINCE, POLARIS_VERSION, PRESETS, isLive, raisesToLive, resolvePolaris,
   type BaseRed, type DoorId, type DoorValue, type Layer, type PolarisItem, type PolarisClass, type PresetId, type SettingsAnswer, type SettingsChange, type StoredPolaris,
 } from "../../../shared/polaris.ts";
-import { DOOR_COPY, GROUPS, type GroupId } from "./polarisCopy.ts";
+import { DOOR_COPY, GROUPS, HOURS, PARAM_COPY, type GroupId } from "./polarisCopy.ts";
 
 /** Which stored layer the page edits: a project's own, or the global one. */
 export type Scope = "project" | "global";
 export const scopeOf = (root: string): Scope => (root ? "project" : "global");
+
+/** What a new answer from the server does to the draft: rebase, keep it, or clear it when there is none. */
+export type Reload = "rebase" | "keep" | "clear";
+export function onNewSettings(prev: { hasBase: boolean; dirty: boolean }, next: SettingsAnswer | null): Reload {
+  if (!next) return "clear";
+  if (!prev.hasBase) return "rebase";
+  return prev.dirty ? "keep" : "rebase";
+}
 
 /** The layer being edited, as it is stored: only what that layer contains, never what it inherits. */
 export function storedOf(a: SettingsAnswer, scope: Scope): StoredPolaris {
@@ -60,8 +68,86 @@ export function resetDoors(a: SettingsAnswer, scope: Scope, doors: readonly Door
 }
 export const groupDoors = (group: GroupId): readonly DoorId[] => GROUPS.find((g) => g.id === group)!.doors;
 
+/** The doors of a block this layer owns: what "Use the general setting" takes away, and all it counts. */
+export const ownedDoors = (a: SettingsAnswer, scope: Scope, doors: readonly DoorId[]): readonly DoorId[] =>
+  scope === "project" ? doors.filter((d) => a.layers[d] === "project") : [];
+export const ownCount = (a: SettingsAnswer, scope: Scope, doors: readonly DoorId[]): number => ownedDoors(a, scope, doors).length;
+
+/** The doors the person moved since the answer their draft was built from: whole values, keyed by door. */
+export function doorEdits(draft: Record<DoorId, DoorValue>, base: Record<DoorId, DoorValue>, skip: Iterable<DoorId> = []): Partial<Record<DoorId, DoorValue>> {
+  const dropped = new Set(skip);
+  const edits: Partial<Record<DoorId, DoorValue>> = {};
+  for (const door of DOOR_IDS) if (!dropped.has(door) && JSON.stringify(draft[door]) !== JSON.stringify(base[door])) edits[door] = draft[door];
+  return edits;
+}
+
+/** Whether a patch would change the door at all: a click that patches the value it already has is no edit. */
+export const patchChanges = (cur: DoorValue, patch: Record<string, unknown>): boolean =>
+  Object.entries(patch).some(([key, value]) => JSON.stringify(cur[key]) !== JSON.stringify(value));
+/** The resets without one door, so an edit can take back its own door and leave the others alone. */
+export const withoutDoor = (resets: ReadonlySet<DoorId>, door: DoorId): Set<DoorId> => new Set([...resets].filter((d) => d !== door));
+
+/**
+ * The layer one Save writes, from what the layer already stores plus this save's changes,
+ * in this order:
+ *
+ *  1. the resets: each named door is dropped, so the layer below is in force again;
+ *  2. the preset chosen in this save, if any: all 17 doors, so it supersedes a reset on
+ *     them (a reset must never delete a door the preset just wrote: a project could then
+ *     fall back to a live global position the person never chose);
+ *  3. the door edits: the doors the person moved, whole, on top of both.
+ *
+ * The name stored is the preset chosen; otherwise `custom` when anything moved; otherwise
+ * what the layer already stores, so a door-only save never writes the name it inherits.
+ */
+export function layerToSave(
+  a: SettingsAnswer, scope: Scope, resets: Iterable<DoorId>, preset: PresetId | null, edits: Partial<Record<DoorId, DoorValue>>,
+): StoredPolaris {
+  const stored = storedOf(a, scope);
+  const doors: Partial<Record<DoorId, DoorValue>> = { ...stored.doors };
+  let dropped = false;
+  for (const door of resets) { delete doors[door]; dropped = true; }
+  if (preset) for (const door of DOOR_IDS) doors[door] = structuredClone(PRESETS[preset].doors[door]);
+  for (const [door, value] of Object.entries(edits) as [DoorId, DoorValue][]) doors[door] = value;
+  const moved = Object.keys(edits).length > 0;
+  const name = preset && !moved ? preset : moved || dropped ? "custom" : stored.preset;
+  return { ...stored, ...(name ? { preset: name } : {}), doors };
+}
+
 /** A project's own setting dropped altogether, so the project follows the global one. */
 export const inheritAll = (): SettingsChange => ({ settings: null });
+
+// ── the positions one Save would leave ──
+
+export interface Effective {
+  /** The layer this Save writes. */
+  pending: StoredPolaris;
+  /** Every door's position once that layer is stored, read with the real resolver, inherited ones included. */
+  doors: Record<DoorId, DoorValue>;
+  /** Which layer each door comes from once that layer is stored. */
+  layers: Record<DoorId, Layer>;
+  /** Every door that would act without asking once saved. */
+  live: DoorId[];
+  /** The doors whose live position this Save brings into force or makes this layer's own: what the confirmation names. */
+  consent: DoorId[];
+}
+
+/**
+ * What one Save leaves behind, resolved rather than inferred from the clicks that led to it: a reset
+ * inherits the position below, which can be live, and an edit of an inherited door makes it this
+ * layer's own.
+ */
+export function effectiveAfter(
+  a: SettingsAnswer, scope: Scope, resets: Iterable<DoorId>, preset: PresetId | null, edits: Partial<Record<DoorId, DoorValue>>,
+): Effective {
+  const pending = layerToSave(a, scope, resets, preset, edits);
+  const r = scope === "project" ? resolvePolaris(a.below ?? {}, pending) : resolvePolaris(pending, null);
+  const doors = r.settings.doors;
+  const live = DOOR_IDS.filter((d) => isLive(d, doors[d].mode));
+  const consent = live.filter((d) => !isLive(d, a.doors[d].mode) || (r.layers[d] === scope && a.layers[d] !== scope));
+  return { pending, doors, layers: r.layers, live, consent };
+}
+
 
 // ── door rows ──
 
@@ -72,18 +158,52 @@ export function markOf(door: DoorId, value: DoorValue): Mark {
   return door === "relaunch" && value.mode === "dry" ? "Dry run" : null;
 }
 
+/** A door with "off" and one other position is a switch; every door that starts elsewhere, and every three-position door, says its positions in words. */
+export const twoWay = (door: DoorId): boolean => DOOR_MODES[door].length === 2 && DOOR_MODES[door][0] === "off";
+
 /** Whether a door has settings to draw under its row: the dock always, labels and lookAgain while their mode uses them. The counts live in the Limits group. */
 export const showsParams = (door: DoorId, mode: string): boolean =>
   door === "dock" || (["labels", "lookAgain"].includes(door) && mode !== DOOR_MODES[door][0]);
 
 /** The numbers that cap what a door does, drawn together in the Limits group. */
-export interface LimitSpec { door: DoorId; param: "size" | "cap" | "tries" | "hours"; name: string; hint: string }
+export interface LimitSpec { door: DoorId; param: "size" | "cap" | "tries" | "hours"; name: string; hint: string; /** The words the pinned rail prints after the number, for this limit only. */ rail: string }
 export const LIMITS: readonly LimitSpec[] = [
-  { door: "cards", param: "size", name: "Orbit limit", hint: "Most cards running at once. Beyond it the orchestrator is told to wait." },
-  { door: "relaunch", param: "cap", name: "Attempts per run", hint: "Attempts on one run, the first included. 1 never runs a job again." },
-  { door: "startSession", param: "tries", name: "Start tries", hint: "Tries before it stops and tells you, with a pause between them." },
-  { door: "course", param: "hours", name: "Drifting before a course", hint: "Hours a pull request drifts before a course is proposed." },
+  { door: "cards", param: "size", name: "Orbit limit", rail: "cards at once", hint: "Most cards running at once. Beyond it the orchestrator is told to wait." },
+  { door: "relaunch", param: "cap", name: "Attempts per run", rail: "attempts a run", hint: "Attempts on one run, the first included. 1 never runs a job again." },
+  { door: "startSession", param: "tries", name: "Start tries", rail: "start tries", hint: "Tries before it stops and tells you, with a pause between them." },
+  { door: "course", param: "hours", name: "Drifting before a course", rail: "before a course", hint: "Hours a pull request drifts before a course is proposed." },
 ];
+
+/** The value one − / + press gives. Hours step through the four the server accepts; a number stays inside its own range. */
+export function limitStep(param: LimitSpec["param"], value: number, dir: -1 | 1): number {
+  if (param === "hours") {
+    const i = HOURS.indexOf(value as (typeof HOURS)[number]);
+    if (i < 0) return value;
+    return HOURS[Math.min(HOURS.length - 1, Math.max(0, i + dir))]!;
+  }
+  const copy = PARAM_COPY[param];
+  return Math.min(copy.max, Math.max(copy.min, value + dir));
+}
+
+/** The rail's words for one limit: the number and what it counts. */
+export const railWords = (l: LimitSpec, value: number): string => `${l.param === "hours" ? `${value} h` : value} ${l.rail}`;
+
+/** The dot is on while the door does its thing. A door that starts anywhere but "off" is always doing it: people-only approvals are a protection, not an off switch. */
+export const doorActive = (door: DoorId, value: DoorValue): boolean => (DOOR_MODES[door][0] === "off" ? value.mode !== "off" : true);
+
+export type ParamEditor = "text" | "list" | "rules" | "count" | "minutes";
+/** Which control edits one key of a door. Null means no inline editor: the view has none for it, which a test refuses unless the Limits stepper carries it. */
+export function editorFor(door: DoorId, key: string): ParamEditor | null {
+  if (door === "dock" && key === "label") return "text";
+  if (door === "dock" && key === "excluded") return "list";
+  if (door === "labels" && key === "rules") return "rules";
+  if (door === "lookAgain" && key === "minutes") return "minutes";
+  if (door === "cards" && key === "size") return "count";
+  if (door === "relaunch" && key === "cap") return "count";
+  if (door === "startSession" && key === "tries") return "count";
+  if (door === "lookAgain" && key === "steps") return "count";
+  return null;
+}
 export interface LimitView extends LimitSpec { value: number; on: boolean; layer: Layer; source: string | null; doorName: string }
 export function limitViews(a: SettingsAnswer, scope: Scope): LimitView[] {
   return LIMITS.map((l) => ({
@@ -115,6 +235,13 @@ export const newDoors = (a: SettingsAnswer): DoorId[] =>
 
 export function sourceWords(scope: Scope, layer: Layer): string | null {
   if (layer === "default") return "Not set: it starts in its safe position";
+  if (scope === "project" && layer === "global") return "Inherits global";
+  return null;
+}
+
+/** The same thing short enough for a door row: where the value it shows comes from. */
+export function rowSource(scope: Scope, layer: Layer): string | null {
+  if (layer === "default") return "Not set";
   if (scope === "project" && layer === "global") return "Inherits global";
   return null;
 }
@@ -157,6 +284,9 @@ const LIVE_SENTENCE: Partial<Record<DoorId, (v: DoorValue) => string>> = {
 export function liveQuestion(door: DoorId, prev: DoorValue, next: DoorValue): string | null {
   return raisesToLive(door, prev, next) ? LIVE_SENTENCE[door]?.(next) ?? null : null;
 }
+/** What a live door would do, for the confirmation and the warning: named door, plain words. */
+export const liveSentence = (door: DoorId, value: DoorValue): string =>
+  LIVE_SENTENCE[door]?.(value) ?? `${DOOR_COPY[door].name} would act on its own once saved.`;
 /** The doors a preset would put live that are not live now. */
 export function presetLiveDoors(a: SettingsAnswer, id: PresetId): DoorId[] {
   return DOOR_IDS.filter((d) => isLive(d, PRESETS[id].doors[d].mode) && !isLive(d, a.doors[d].mode));
@@ -375,6 +505,10 @@ export const undoStamp = (before: StoredPolaris): SettingsChange => ({ settings:
 
 // ── Assisted setup ──
 
+/** The name of the bench tab Assisted setup opens. What makes a second press focus the one that is
+ *  open rather than start another is the job (JOB.polarisSetup, benchJobs.ts), not this title. */
+export const ASSIST_TITLE = "polaris setup";
+
 export type AssistState = { ok: true; engine: string; title: string } | { ok: false; why: string };
 /** The engine for Assisted setup is the one set for the builder role; none installed means the button waits. */
 export function assistState(roles: { ok: boolean; roles?: Record<string, { provider: string }>; providers?: { id: string; title: string; installed: boolean }[] } | null): AssistState {
@@ -393,8 +527,8 @@ export function assistPrompt(root: string): string {
     "Help me set up Polaris, the pull request abilities of the orchestrator in agentglass.",
     `Read the current doors with: agentglass-ui settings get polaris.enabled${scope}, then agentglass-ui settings get polaris.door.<door>${scope} for each of ${ids}.`,
     `Change one with: agentglass-ui settings set polaris.door.<door> '<json>'${scope}. A door value is {"mode": "...", ...settings}.`,
-    "Narrowing a door applies at once. Opening one wider, or turning anything live, waits for my click in the app; say so when it does.",
-    "Ask me about my team and repository first (who reviews, which checks gate a merge, whether CI drops jobs), then propose the doors one group at a time: Watching, Landing, Signals, Automatic, Limits.",
+    "Narrowing a door applies at once. Opening one wider is filed as a request I approve with one click in the app, on the desktop or on my paired phone. A live position (a door that acts by itself, such as startSession click or relaunch live) is filed the same way, with agentglass-ui settings set: it is never applied without my click, so ask for it like any other wider door and never tell me to change it in Settings.",
+    "Ask me about my team and repository in ONE message, all questions together (who reviews, which checks gate a merge, whether CI drops jobs, whether the orchestrator owns starting sessions). Then do the whole setup in one pass over every group (Watching, Landing, Signals, Automatic, Limits): set each door your answers imply, file every wider one as a request (a live position too), read all of them back, and end with one short summary of what is set and how many requests wait for my click. Never stop to ask me to say next, never show a table per group, and never tell me to change a setting by hand, in Settings or anywhere: file the request instead.",
     "Never merge, comment, label or post anything. Polaris itself never does.",
   ].join("\n");
 }

@@ -3,7 +3,7 @@
  *
  * Every setting an agent can name, in the window (web/src/lib/settingsRegistry.ts)
  * or on the server (server/src/serverSettings.ts), has a class here, and a test
- * fails for a setting that has none (web/test/settingClass.test.ts,
+ * fails for a setting that has none (web/test/setting-class.test.ts,
  * server/test/settings-door.test.ts). A person's own change never reads this: it
  * applies, as it always did.
  *
@@ -23,6 +23,16 @@
  * row's own sentence, whatever agents.changeWithoutAsking says; the other
  * direction keeps the class.
  *
+ * `askAlways` is the other way of holding the same consent: one direction an
+ * agent MAY file, but that is never applied at once, whatever
+ * agents.changeWithoutAsking says for the project. The request reaches the
+ * person where he already answers requests (the card in the desktop app, or a
+ * paired phone), so he does not have to find the switch in Settings. Narrowing
+ * the row still applies at once: asking before making something safer is the
+ * wrong way round. Ceiling: `askAlways` converts one direction of one row family
+ * (the Polaris doors). No other family is converted; a new one is a decision,
+ * not an inheritance.
+ *
  * `narrows(prev, next)` is true for a change that is safer or cheaper than what
  * it replaces (a gate on, a stricter mode, a longer interval, a list that only
  * loses members). Such a change from an agent applies at once even when the
@@ -32,6 +42,8 @@
  */
 
 import { DOOR_IDS, doorNarrows, raisesToLive, type DoorId } from "./polaris.ts";
+import { roundsNarrows, secondNarrows, whoNarrows } from "./reviewSettings.ts";
+import { browserWorkersNarrow } from "./browserWorkers.ts";
 
 export type SettingClass = "low" | "escalation" | "personOnly" | "secret";
 
@@ -42,6 +54,8 @@ export interface ClassRow {
   narrows?: (prev: unknown, next: unknown) => boolean;
   /** The direction no agent may ask for, and the sentence it is refused with. */
   personOnlyWhen?: { when: (prev: unknown, next: unknown) => boolean; why: string };
+  /** The direction an agent may file but never applies itself, whatever the trust switch says. */
+  askAlways?: { when: (prev: unknown, next: unknown) => boolean; why: string };
 }
 
 /** How long an agent's request waits for the person before it counts as declined. */
@@ -108,7 +122,7 @@ const COST = "decides which model runs and what it spends";
 const doorRow = (door: DoorId): ClassRow => ({
   class: "escalation", why: `how far the ${door} door of Polaris may act: a lower position narrows, a higher one widens what agents may do`,
   narrows: (prev, next) => doorNarrows(door, prev, next),
-  personOnlyWhen: { when: (prev, next) => raisesToLive(door, prev, next), why: "a live position (relaunching jobs, starting sessions, following cards, diagnosing by itself) is the person's alone, from Settings" },
+  askAlways: { when: (prev, next) => raisesToLive(door, prev, next), why: "a live position (relaunching jobs, starting sessions, following cards, diagnosing by itself) is one request: it waits for the person, on the desk or a paired phone, and is never applied by the agent that asked" },
 });
 
 /**
@@ -131,21 +145,46 @@ export const SETTING_CLASSES: Readonly<Record<string, ClassRow>> = {
   "notifications.ciOnlyApproved": LOW(), "notifications.talk": LOW(),
   "browser.searchEngine": LOW(), "tasks.landing": LOW(),
   "prefs.diskWarn": LOW("only when the machine panel draws its quiet low-disk badge: it never deletes or notifies"),
+  "usage.bar.*": LOW("hides a chip from the usage strip: it changes no reading and costs nothing"),
   "about.autoCheck": LOW("only whether this window asks the release feed on a timer"), "clickup.statusSpaces.counted": LOW(), "jira.statusUnits.counted": LOW(), "jira.tree.shapes": LOW("only how this window draws the Jira sidebar: nothing an agent may do changes"),
   "plugins.sessionReads.repos": { class: "escalation", why: "lets review plugins read the authoring session of more repositories", narrows: subsetNarrows },
 
   // ── the server (server/src/serverSettings.ts) ──
   "orchestration.policy": { class: "escalation", why: `which engine and model every worker and the chair run on, and when that changes: ${COST}` },
   "agents.role.*": { class: "escalation", why: `the engine and model a worker role starts with: ${COST}` },
+  // The chair reading code or running tests is the widest part of this row: an
+  // agent's ask for a wider answer always waits, whatever the trust switch says.
+  "orchestration.review.who": {
+    class: "escalation", why: "how much of a change the orchestrator reads or runs by itself: a lower answer has the workers do more, a higher one gives the chair the diff and the test log",
+    narrows: whoNarrows,
+    askAlways: { when: (prev, next) => !whoNarrows(prev, next), why: "letting the orchestrator read code or run tests is one request: it waits for the person, and the agent that asked never applies it" },
+  },
+  "orchestration.review.rounds": { class: "escalation", why: "how many rounds the Builder and the Reviewer run before the task stops: each round spends tokens", narrows: roundsNarrows },
+  "orchestration.review.second": { class: "escalation", why: "a second reviewer reads the same diff on another engine: it spends that engine's tokens", narrows: secondNarrows },
+  // A preset is a document a person saved: it names engines, models, limits and safety, so using it is a widening until the person presses it.
+  "orchestration.presets": { class: "escalation", why: `the setups a person saved, and the engines, models and limits each one names: applying one spends what it names (${COST})` },
   "launch.mode": { class: "escalation", why: `the permission mode every agent the app starts runs in: ${MORE_POWER}`, narrows: modeNarrows },
   "launch.flags.*": { class: "escalation", why: `the flags an engine starts with in each permission mode, typed by hand: ${MORE_POWER}` },
   "launch.deny": { class: "escalation", why: `what every agent the app starts may never do: ${MORE_POWER}`, narrows: supersetNarrows },
+  "browser.workers": {
+    class: "escalation", why: `which engines and worker roles may drive the built-in browser: removing one narrows, adding one ${MORE_POWER}`,
+    narrows: browserWorkersNarrow,
+    askAlways: { when: () => true, why: "widening who may drive the browser is one request: it waits for the person, and is never applied by the agent that asked" },
+  },
+  /* The first run, one value for the app. An agent does not answer for the person
+     whether the setup is finished, what was read in the tutorial, or which agent
+     starts a terminal. */
+  "setup.done": { class: "personOnly", why: "whether the setup is finished is the person's word" },
+  "setup.inProgress": { class: "personOnly", why: "whether a setup run is open is the person's word" },
+  "setup.tutorial": { class: "personOnly", why: "which tutorial cards were read is the person's word" },
+  "setup.agent": { class: "personOnly", why: "the agent a first terminal starts is the person's pick" },
   "flightPlan.enabled": { class: "escalation", why: "turns the Flight plan on: an author agent and a Preflight each spend tokens", narrows: offNarrows },
   "flightPlan.mockupGuide": { class: "escalation", why: "the file a flight plan's author is told to read: it is a path an agent will open", narrows: (_prev, next) => next === "" },
   "flightPlan.builder.permissions": {
     class: "escalation", why: `the permission mode a launched builder starts in: ${MORE_POWER}`, narrows: modeNarrows,
     personOnlyWhen: { when: (_prev, next) => next === "bypassPermissions", why: "bypass lets a builder run every tool without asking: only the person turns it on, from Settings" },
   },
+  "flightPlan.builder.strongModel": { class: "escalation", why: `the model a sensitive or L plan's builder starts on: ${COST}` },
   "flightPlan.builderBase": LOW("which trunk a launched builder starts from: a choice of code, not of power"),
   // Pilot: who flies a project's plans. Autopilot lets the seated coordinator say Go, so reaching it is the person's alone.
   "flightPlan.pilot": {
@@ -229,6 +268,7 @@ export const SETTING_CLASSES: Readonly<Record<string, ClassRow>> = {
   "jira.token": { class: "secret", why: "a credential" },
   "clickup.token": { class: "secret", why: "a credential" },
   "github.token": { class: "secret", why: "a credential" },
+  "opencode.usageKey": { class: "secret", why: "a credential" },
 };
 
 /** The row for an id: its own, else the family it belongs to. A family's `*`
@@ -258,6 +298,9 @@ export function agentVerdict(id: string, prev: unknown, next: unknown, trusted: 
   const narrows = !!row.narrows && row.narrows(prev, next);
   if (row.class === "low" || narrows) return "apply";
   if (row.class === "personOnly") return "refuse";
+  // After `narrows`, so a safer direction still applies; before `trusted`, so the
+  // person's switch never applies this one.
+  if (row.askAlways?.when(prev, next)) return "ask";
   return trusted ? "apply" : "ask";
 }
 
@@ -277,4 +320,16 @@ export interface SettingRequestView {
   diff: string[];
   at: number;
   expires: number;
+  /** "polaris-action" for a pull request ask (server/src/polaris.ts); absent for a setting. */
+  kind?: string;
+  type?: string;
+  number?: number;
 }
+
+/** A Polaris ask. Only its label differs: the card is the same one. */
+export const isPolarisAsk = (r: SettingRequestView): boolean => r.kind === "polaris-action";
+/** A send types into a live session: approved on its own, never by Approve all, never from a phone. */
+export const isPolarisSend = (r: SettingRequestView): boolean => isPolarisAsk(r) && r.type === "beacon-send-on-click";
+/** The card's first line. */
+export const askHeadline = (r: SettingRequestView): string =>
+  isPolarisAsk(r) ? `${r.who} asks to ${r.type === "beacon-send-on-click" ? "send a message into a session" : `${r.type ?? "act"} on pull request #${r.number ?? "?"}`}` : `${r.who} asks to change a setting`;

@@ -211,7 +211,7 @@ export function SkillsModal({ open, onClose }: { open: boolean; onClose: () => v
             <motion.div {...modal}
               initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
               transition={{ type: "spring", stiffness: 330, damping: 30 }}
-              className="w-[min(1320px,96vw)] h-[min(960px,92vh)] rounded-xl flex flex-col pointer-events-auto"
+              className="w-[min(1320px,96vw)] h-[min(960px,92vh)] rounded-xl flex flex-col overflow-y-auto pointer-events-auto"
               style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
             >
               <div className="flex items-center justify-between px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
@@ -262,7 +262,10 @@ export function SkillsModal({ open, onClose }: { open: boolean; onClose: () => v
                 ))}
               </div>
 
-              <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-4">
+              {/* 120px of list, not a sliver: below that the card itself scrolls,
+                  which is the only way the header keeps its own rows readable at
+                  240px of window height. */}
+              <div className="flex-1 min-h-[120px] overflow-y-auto px-5 pb-4">
                 {!skills && <div className="t-dim2 text-center py-10 text-[12px]">Loading catalog…</div>}
                 {skills && shown.length === 0 && <div className="t-dim2 text-center py-10 text-[12px]">Nothing matches</div>}
                 {sections ? (

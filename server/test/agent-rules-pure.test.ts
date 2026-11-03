@@ -4,7 +4,7 @@
  * would write as the rule for a call.
  */
 import { describe, expect, test } from "bun:test";
-import { BASE_RULES, decide, inForceFor, isLooser, isWrapper, isLooserMode, ruleFor, shellSegments, type AgentRule, type RuleSetting } from "../../shared/agentRules.ts";
+import { BASE_RULES, decide, inForceFor, isLooser, isWrapper, isLooserMode, ruleFor, seatChecksRule, shellSegments, type AgentRule, type RuleSetting } from "../../shared/agentRules.ts";
 
 const ROOT = "/work/acme/orbit";
 let n = 0;
@@ -120,6 +120,32 @@ describe("decide", () => {
     expect(decide(rules, ROOT, "Edit", { file_path: "/x/y.ts" }).decision).toBe("ask");
     expect(decide(rules, ROOT, "Write", { file_path: "/etc/hosts" }).decision).toBe("never");
     expect(decide(rules, ROOT, "Write", { file_path: "/tmp/hosts" }).decision).toBe("unknown");
+  });
+
+  test("a rule scoped to the seat decides for the seat and nobody else", () => {
+    const rules = [{ ...rule("Bash(bun test:*)", "never", ROOT), role: "seat" as const }];
+    expect(decide(rules, ROOT, "Bash", { command: "bun test" }, "seat").decision).toBe("never");
+    expect(decide(rules, ROOT, "Bash", { command: "bun test" }).decision).toBe("unknown");
+    // a rule with no role still decides for the seat
+    expect(decide([rule("Bash(git push:*)", "never", ROOT)], ROOT, "Bash", { command: "git push" }, "seat").decision).toBe("never");
+  });
+
+  test("the derived seat rule is one rule over the commands a Verifier runs", () => {
+    const seatRule = seatChecksRule(ROOT, true)!;
+    expect(seatRule).toMatchObject({ role: "seat", setting: "never", project: ROOT });
+    for (const command of ["bun test", "bun test --watch", "npx tsc --noEmit", "npm run typecheck", "make check", "cd src && make ci-docker", "make smoke"]) {
+      const d = decide([seatRule], ROOT, "Bash", { command }, "seat");
+      expect(d.decision, command).toBe("never");
+      expect(d.reason, command).toContain("Verifier");
+      // and it is not a rule for the worker that runs them
+      expect(decide([seatRule], ROOT, "Bash", { command }).decision, command).toBe("unknown");
+    }
+    for (const command of ["git status", "bun run build", "make deploy", "cat test.ts", "npx tscx"]) {
+      expect(decide([seatRule], ROOT, "Bash", { command }, "seat").decision, command).toBe("unknown");
+    }
+    // a project's allow on the same command does not loosen it: the stricter speaks
+    expect(decide([rule("Bash(make check:*)", "allow", ROOT), seatRule], ROOT, "Bash", { command: "make check" }, "seat").decision).toBe("never");
+    expect(seatChecksRule(ROOT, false)).toBeNull();
   });
 });
 

@@ -141,7 +141,7 @@ export function useAmbientNotes(): { note: Note | null; behind: number; ahead: n
     setTimeout(() => advance(), NOTE_MS);
   };
 
-  // A tool call held at the gate. The most interrupting thing here, because an
+  // A tool call waiting at the gate. The most interrupting thing here, because an
   // agent is stopped until it is answered, and unlike everything else it cannot
   // be caught up on later: the hold expires on its own.
   //

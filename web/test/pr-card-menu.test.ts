@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { applyOff, cardMenu, menuHead, trackerNameOf, walkIds, type CardMenu, type MenuItem, type TrackerMode } from "../src/lib/prCardMenu.ts";
 import { cardView } from "../src/lib/prCardView.ts";
 import { cardReviewers } from "../src/lib/cardReviewers.ts";
+import { syncCardView, type SyncCardStep } from "../src/lib/prSyncCards.ts";
 import type { Filed } from "../src/lib/prLanes.ts";
 import type { PrCheckRollup } from "../../shared/types.ts";
 
@@ -14,10 +15,10 @@ const pr = (o: Record<string, unknown> = {}) => ({
   reviewDecision: "APPROVED" as const, checks: roll(), humanReview: undefined, ...o,
 });
 const land: Filed = { lane: "land", reason: "x" };
-const menu = (p = pr(), o: { mode?: TrackerMode; behind?: number | null; pinned?: boolean; stacked?: boolean; filed?: Filed; waiting?: boolean; readOnly?: boolean; leftovers?: string } = {}): CardMenu =>
+const menu = (p = pr(), o: { mode?: TrackerMode; behind?: number | null; pinned?: boolean; stacked?: boolean; filed?: Filed; waiting?: boolean; readOnly?: boolean; leftovers?: string; sync?: SyncCardStep | null } = {}): CardMenu =>
   cardMenu({
     p, pinned: !!o.pinned, mode: o.mode ?? "clickup", tracker: "ClickUp", cardId: "ORBIT-1042", stacked: !!o.stacked,
-    waiting: o.waiting, readOnly: o.readOnly, leftovers: o.leftovers,
+    waiting: o.waiting, readOnly: o.readOnly, leftovers: o.leftovers, sync: o.sync,
     view: cardView({ p, filed: o.filed ?? land, reviewers: cardReviewers(undefined), behind: o.behind ?? null, readOnly: o.readOnly, tracker: "card", hasTaskProvider: true }),
   });
 const items = (m: CardMenu): MenuItem[] => [...m.rows.filter((r): r is MenuItem => r.kind === "item"), ...m.more, m.close];
@@ -127,7 +128,7 @@ describe("a finished pull request", () => {
 });
 
 describe("the entries the page added", () => {
-  test("Nudge reviewers is on only while somebody is asked and has not answered", () => {
+  test("Ask the reviewers to look again is on only while somebody is asked and has not answered", () => {
     expect(get(menu(pr(), { waiting: true }), "nudge").why).toBeUndefined();
     expect(get(menu(), "nudge").why).toBe("Nobody is waiting");
   });
@@ -254,5 +255,28 @@ describe("entries the panel cannot do yet", () => {
   test("nothing to turn off leaves the menu as it was", () => {
     const m = menu();
     expect(applyOff(m, undefined)).toBe(m);
+  });
+});
+
+describe("a lane's Sync owns the Update press, menu included", () => {
+  const step = (phase: SyncCardStep["phase"], detail?: string): SyncCardStep => ({ phase, detail });
+  test("queued: Update branch is off, saying the same sentence the footer button shows", () => {
+    const m = menu(pr(), { behind: 4, sync: step("queued") });
+    expect(get(m, "update").why).toBe(syncCardView(step("queued"), pr())!.action.title);
+    expect(walkIds(m, false)).not.toContain("update");
+  });
+  test("syncing: off, with the sentence that names the branch and the base", () => {
+    const why = get(menu(pr(), { behind: 4, sync: step("syncing") }), "update").why;
+    expect(why).toContain("main into ORBIT-1042-retry-handshake");
+  });
+  test("done: the success flash owns the slot, so the menu waits it out too", () => {
+    expect(get(menu(pr(), { behind: 4, sync: step("done") }), "update").why).toBeTruthy();
+  });
+  test("failed: Retry is the press, so the menu still offers Update", () => {
+    expect(get(menu(pr(), { behind: 4, sync: step("failed", "refused") }), "update").why).toBeUndefined();
+  });
+  test("no step: the card's own rule stands, off only when there is nothing to merge", () => {
+    expect(get(menu(pr(), { behind: 4 }), "update").why).toBeUndefined();
+    expect(get(menu(pr()), "update").why).toBe("Already up to date with main");
   });
 });

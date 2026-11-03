@@ -104,6 +104,7 @@ import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 import { LAYER } from "../lib/layers.ts";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
 import { JiraRailMenu } from "./jira/list/menus/JiraRailMenu.tsx";
+import { peopleOf } from "./jira/list/PeopleFaces.tsx";
 import { useRailHidden, useViewNames } from "./jira/list/menus/viewPrefs.ts";
 import { cardSkills, skillCommand, windowName, skillModes, namedForIt, shortName } from "../../../shared/cardSkills.ts";
 import { subscribeReminders, liveReminders, nudgeReminders } from "../lib/reminderStore.ts";
@@ -3055,7 +3056,7 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
       {!onLooked && inAreaPage && (() => {
         const a = areaList.find((x) => x.key === areaSel);
         return a ? (
-          <JiraAreaHead title={railTitle(a.name)} fullTitle={a.name} hint={ctx?.sprint ? "Epics are not shown on the sprint board; their cards are." : undefined} sub={`${a.key} · ${areas.read?.truncated ? "at least " : ""}${a.total} cards`} done={a.done} total={a.total}
+          <JiraAreaHead title={railTitle(a.name)} fullTitle={a.name} hint={ctx?.sprint ? "Epics are not shown on the sprint board; their cards are." : undefined} sub={`${a.key} · ${areas.read?.truncated ? "at least " : ""}${a.total} cards`} done={a.done} total={a.total} people={peopleOf(areaHeld.map((t) => over[t.id] ?? t))}
             chips={headChips(a, ctx?.sprint?.name, !!areas.read?.truncated)} />
         ) : null;
       })()}

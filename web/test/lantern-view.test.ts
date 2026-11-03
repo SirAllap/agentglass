@@ -31,7 +31,7 @@ describe("an agent stopped on you", () => {
 
   test("a blockage is red; a turn that ended is amber", () => {
     expect(renderToStaticMarkup(React.createElement(NeedsYouCard, { r: waiting("permission") }))).toContain("var(--error)");
-    expect(renderToStaticMarkup(React.createElement(NeedsYouCard, { r: waiting("gate") }))).toContain("held at the gate");
+    expect(renderToStaticMarkup(React.createElement(NeedsYouCard, { r: waiting("gate") }))).toContain("waiting at the gate");
     const input = renderToStaticMarkup(React.createElement(NeedsYouCard, { r: waiting("input") }));
     expect(input).toContain("waiting for your next prompt");
     expect(input).not.toContain("var(--error)");

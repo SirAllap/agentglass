@@ -149,7 +149,7 @@ export class CanvasMotion {
     this.release(el);
     const frames = travelFrames(route, landing).map((f) => ({ offset: f.offset, transform: `translate(${f.dx}px, ${f.dy}px)` }));
     // Distance sets the speed between waypoints, so the curve shapes the whole
-    // ride rather than each leg. A ride that waits its turn is held at the
+    // ride rather than each leg. A ride that waits its turn sits at the
     // start of the route, invisible (fill backwards), and fades in as it
     // leaves: sitting visible at the start, the waiting ones would stack.
     this.start(el, frames, d, easingCss(easing), delay > 0 ? "backwards" : "none", undefined, delay);

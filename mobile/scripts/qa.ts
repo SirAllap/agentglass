@@ -53,7 +53,7 @@ const ROUTES: { path: string; name: string; expect: RegExp; pane?: boolean }[] =
   // Seven: the bar offers four and the other three are routes. Names that were
   // here and are not did not drift out — Chats was deleted with the
   // conversation UI, Review was dissolved into the two destinations it
-  // wrapped, and Now into the terminal, where a held gate is answered. `/` was
+  // wrapped, and Now into the terminal, where a gate waiting on you is answered. `/` was
   // the Inbox and forwards now, to the last destination or the terminal.
   { path: "/", name: "Launch", expect: /Terminal|Attaching|Disconnected|Nothing open|only looks|answers agents/i },
   // Not "Esc". That is on the key bar whatever the terminal is doing, and

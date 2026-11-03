@@ -4,6 +4,7 @@ import { openFlightPlan } from "../../lib/flightPlanNav.ts";
 import { fmtAgo } from "../../lib/format.ts";
 import { jumpToPane } from "../../lib/paneJump.ts";
 import { Ph, type PhName } from "./phosphor.tsx";
+import { ICON } from "../../lib/iconSize.ts";
 import { INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
 import {
   ageWord, agePct, ageShort, doingVerb, askLine, matchFor, ruleTitleOf, spendPct, dollars,
@@ -279,13 +280,24 @@ function WaitCard({ item, root, seat, now, onChanged }: { item: WaitItem; root: 
   }
 
   if (item.kind === "report") {
+    /* A report is a sentence, not a gate: nothing has to be allowed or denied.
+       Dismissing clears the claim and keeps what the agent wrote, and it
+       survives a restart because the row is what changes, not this screen. */
     return (
       <div className="card ask q"><div className="rail" /><div className="in">
         {head("warning-circle", item.name)}
         <div className="what">{item.text}</div>
-        {item.paneId && (
-          <div className="acts"><button type="button" className="btn quiet" onClick={() => jumpToPane(item.paneId!)}><Ph name="terminal-window" size={14} />Open terminal</button></div>
-        )}
+        <div className="acts">
+          {item.paneId && (
+            <button type="button" className="btn quiet" data-tip="Open the terminal this report came from" onClick={() => jumpToPane(item.paneId!)}><Ph name="terminal-window" size={ICON.sm} />Open terminal</button>
+          )}
+          <button type="button" className="btn quiet" disabled={!!busy || !root}
+            data-tip="Clear this row. What the agent wrote stays in the record."
+            onClick={() => void run("dismiss", () => api.seatReportDismiss(root, [item.reportId]))}>
+            <Ph name="x" size={ICON.sm} />Dismiss
+          </button>
+        </div>
+        {problem}
       </div></div>
     );
   }
@@ -361,9 +373,18 @@ function AgentRow({ r, spend, idle }: { r: LanternRow; spend: number[]; idle?: b
       onClick={go} onKeyDown={(e) => { if (r.paneId && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); go(); } }}>
       <div className="nm"><span className={`dot${idle ? " idle" : ""}`} /><span title={r.name}>{r.name}</span></div>
       <div className="act">
-        {verb
-          ? <><span className="v"><Ph name={verb.icon} size={14} />{verb.word}</span><span className="tg" title={target}>{target}</span></>
-          : <span className="tg" title={target}>{target || "no word yet"}</span>}
+        {r.worker ? (
+          /* A headless worker has no tool call to read: it is the CLI running
+             in its window. The role says what it is for, the age how long. */
+          <>
+            <span className="v"><Ph name="robot" size={ICON.sm} />{r.worker.role}</span>
+            <span className="tg" data-tip={`started ${fmtAgo(r.worker.since)}`}>{ageShort(Date.now() - r.worker.since)}</span>
+          </>
+        ) : verb ? (
+          <><span className="v"><Ph name={verb.icon} size={14} />{verb.word}</span><span className="tg" title={target}>{target}</span></>
+        ) : (
+          <span className="tg" title={target}>{target || "no word yet"}</span>
+        )}
       </div>
       <div className="br">{r.branch ? <><Ph name="git-branch" size={14} /><span title={r.branch}>{r.branch}</span></> : null}</div>
       <div className="pulse" title={pulse.length ? `${pulse.reduce((a, b) => a + b, 0)} tool calls in the last hour` : "no reading of the last hour"}>

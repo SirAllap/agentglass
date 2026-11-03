@@ -41,7 +41,10 @@ const decide = (id: string, headers: Record<string, string>) =>
     headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json", ...headers },
     body: JSON.stringify({ id, approve: true }),
   });
-const waiting = async () => ((await (await fetch(base + "/settings/requests", { headers: { authorization: `Bearer ${TOKEN}` } })).json()) as { requests: { id: string }[] }).requests;
+/* Read as the window does: the key is what makes this the person, and only the
+   person's list carries a request filed for a project this server is not open
+   on (`/orbit/app`); the machine token is narrowed to the open project. */
+const waiting = async () => ((await (await fetch(base + "/settings/requests", { headers: { authorization: `Bearer ${TOKEN}`, origin: APP, "x-agentglass-desk": KEY } })).json()) as { requests: { id: string }[] }).requests;
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "agx-orch-desk-"));
@@ -109,5 +112,42 @@ describe("the window sends the key", () => {
     expect(at).toBeGreaterThan(-1);
     const call = src.slice(at, src.indexOf("orchestrationState:", at));
     expect(call).toContain("deskHeader()");
+  });
+
+  test("putFlow and deleteFlow carry it too: the flow has the policy's door", () => {
+    const src = readFileSync(new URL("../../web/src/lib/api.ts", import.meta.url), "utf8");
+    for (const name of ["putFlow:", "deleteFlow:"]) {
+      const at = src.indexOf(name);
+      expect(at).toBeGreaterThan(-1);
+      expect(src.slice(at, src.indexOf("},", at))).toContain("deskHeader()");
+    }
+  });
+});
+
+describe("/flow on a server the desktop app started", () => {
+  const flow = async (headers: Record<string, string>) => {
+    const g = (await (await fetch(`${base}/flow?root=${encodeURIComponent("/orbit/app")}`, { headers: { authorization: `Bearer ${TOKEN}`, "x-agentglass-desk": KEY, origin: APP } })).json()) as { flow: unknown };
+    return fetch(`${base}/flow?root=${encodeURIComponent("/orbit/app")}`, {
+      method: "PUT",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json", ...headers },
+      body: JSON.stringify(g.flow),
+    });
+  };
+
+  test("the app's window, with its key, may save and remove the flow", async () => {
+    expect((await flow({ origin: APP, "x-agentglass-desk": KEY })).status).toBe(200);
+    const gone = await fetch(`${base}/flow?root=${encodeURIComponent("/orbit/app")}`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${TOKEN}`, origin: APP, "x-agentglass-desk": KEY },
+    });
+    expect(gone.status).toBe(200);
+  });
+  test("the machine token with the app's Origin and no key is not the person", async () => {
+    expect((await flow({ origin: APP })).status).toBe(403);
+    const del = await fetch(`${base}/flow?root=${encodeURIComponent("/orbit/app")}`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${TOKEN}`, origin: APP },
+    });
+    expect(del.status).toBe(403);
   });
 });

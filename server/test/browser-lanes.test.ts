@@ -8,8 +8,8 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
-  askBrowser, exportAudit, noteBrowserManager, noteBrowserReady, parseAsk, resetBrowserDrive, setBrowserSink,
-  settleBrowser, type BrowserAsk,
+  askBrowser, exportAudit, gateLane, noteBrowserManager, noteBrowserReady, noteWorkerAsk, parseAsk,
+  resetBrowserDrive, setBrowserSink, settleBrowser, type BrowserAsk,
 } from "../src/browserdrive.ts";
 import { LANE_IDLE_MS, MAX_LANES, listLanes, setHostWaitForTest, sweepLanes } from "../src/lanes.ts";
 
@@ -61,11 +61,15 @@ describe("lane new / list / close", () => {
   });
 
   test("private is the default; shared, a named container and an ephemeral one are asked for by name", async () => {
-    await open({ shared: true });
+    const shared = await open({ shared: true });
     await open({ profile: "orbit-qa" });
     await open({ ephemeral: true });
     expect(sent.filter((s) => "make" in s.args).map((s) => [s.args.container, s.args.name]))
       .toEqual([["shared", undefined], ["named", "orbit-qa"], ["ephemeral", undefined]]);
+    /* The shared container is the person's: a lane there carries no owner, so a
+       credential whose name matches cannot list it as its own. */
+    const listed = (await run("lane", { action: "list" })).value as { lanes: Array<{ id: string; as?: string }> };
+    expect(listed.lanes.find((l) => l.id === shared)?.as).toBeUndefined();
     expect("error" in parseAsk("lane", { action: "new", profile: "a\nb" })).toBe(true);
   });
 
@@ -199,6 +203,37 @@ describe("whose lane it is", () => {
     // A caller that names nobody cannot be told from the MCP with no identity: allowed, like a tab.
     expect((await run("read", { lane: id, as: undefined })).ok).toBe(true);
     expect((await other("lane", { action: "close", id, force: true })).ok).toBe(true);
+  });
+
+  test("the same name in another case drives and lists the lane it opened", async () => {
+    /* A lane is one identity under the one fold: `orbit` opened it and `ORBIT`
+       is the same worker, on the self-asserted path as well as the credential's. */
+    const id = await open();   // opened as orbit
+    expect((await run("read", { lane: id, as: "ORBIT" })).ok).toBe(true);
+    const listed = await run("lane", { action: "list", as: "ORBIT" });
+    expect((listed.value as { lanes: Array<{ id: string }> }).lanes).toMatchObject([{ id }]);
+  });
+});
+
+describe("a credential's name, folded once", () => {
+  test("a name with a capital opens a lane and then names it", async () => {
+    /* The route files the ask under `Alba-Row-89` and `gateLane` reads the same
+       credential: one fold, so the lane table and the gate agree. */
+    const p = parseAsk("lane", { action: "new", as: "Alba-Row-89" });
+    if ("error" in p) throw new Error(p.error);
+    noteWorkerAsk(p.ask.id, "Alba-Row-89", "lane");
+    const made = await askBrowser(p.ask);
+    expect(made.ok).toBe(true);
+    const id = (made.value as { lane: { id: string } }).lane.id;
+    expect((made.value as { lane: { as: string } }).lane.as).toBe("alba-row-89");
+    /* One op that names the lane, through the door the route uses. */
+    expect(gateLane("read", { lane: id }, "Alba-Row-89")).toBeNull();
+    const read = parseAsk("read", { as: "Alba-Row-89", lane: id });
+    if ("error" in read) throw new Error(read.error);
+    noteWorkerAsk(read.ask.id, "Alba-Row-89", "read");
+    const served = await askBrowser(read.ask);
+    expect({ ok: served.ok, error: served.error }).toEqual({ ok: true, error: undefined });
+    expect(sent.at(-1)?.to).toBe(`host-${id}`);
   });
 });
 

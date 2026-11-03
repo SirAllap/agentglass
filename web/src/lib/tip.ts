@@ -10,6 +10,8 @@
 // The ceiling: only the pull-request view hands its hints to this. The rest of
 // the app still uses `title`, and moving it is its own change.
 
+import type { ChainTip } from "./chainTip.ts";
+
 /** The rich form: every part is optional except the name. */
 export interface TipSpec {
   name: string;
@@ -32,10 +34,10 @@ export interface TipSpec {
   from?: string;
   how?: string;
   caveat?: string;
-  /** What the engine must record before this is a fact; shown dashed, "proposed". */
-  needs?: string;
   /** Labelled facts under the name, in order: `[["Assignee", "Lin Tester"]]`. */
   rows?: { k: string; v: string }[];
+  /** A worker's engines as a ladder (lib/chainTip.ts), drawn instead of rows. */
+  chain?: ChainTip;
 }
 
 export type Trust = "measured" | "estimated" | "proposed";

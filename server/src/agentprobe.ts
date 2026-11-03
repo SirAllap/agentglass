@@ -298,7 +298,7 @@ async function runCheap(p: Provider, path: string | null): Promise<EngineFacts> 
 }
 
 /** The few names worth showing from a status line. Never the line. */
-function namesOf(id: string, r: Raw): { provider?: string; account?: string; model?: string } {
+export function namesOf(id: string, r: Raw): { provider?: string; account?: string; model?: string } {
   const clean = (s: string | undefined) => (s ? redact(s.trim()).slice(0, 60) : undefined);
   const text = r.out + "\n" + r.err;
   const out: { provider?: string; account?: string; model?: string } = {};
@@ -310,6 +310,10 @@ function namesOf(id: string, r: Raw): { provider?: string; account?: string; mod
     } catch { /* not JSON: no names */ }
   } else if (id === "codex") {
     out.provider = clean(/Logged in using (.+)/.exec(text)?.[1]);
+  } else if (id === "opencode") {
+    // `auth list` (2.x): one line per saved account, "<provider>  <label>  stored".
+    const saved = [...text.matchAll(/^\s*(.+?)\s{2,}.+?\s+stored\s*$/gm)].map((m) => m[1]!);
+    if (saved.length) out.provider = clean(`${[...new Set(saved)].join(" · ")}${saved.length > 1 ? ` (${saved.length} accounts)` : ""}`);
   } else if (id === "hermes") {
     out.provider = clean(/^\s*(.+?)\s+✓ logged in/m.exec(text)?.[1]);
     out.model = clean(/^\s*Model:\s*(\S+)/im.exec(text)?.[1]);
@@ -489,7 +493,7 @@ const slowSeen = new Map<string, { key: string; facts: EngineFacts; at: number }
  * and `fresh` (Recheck) skips it. Never on an interval.
  */
 export async function probeEngines(
-  o: { fresh?: boolean | readonly string[]; which?: (cmd: string) => string | null } = {},
+  o: { fresh?: boolean | readonly string[]; which?: (cmd: string) => string | null; cachedOnly?: boolean } = {},
 ): Promise<EnginesReport> {
   const which = o.which ?? ((c: string) => Bun.which(c));
   const engines = await Promise.all(engineProviders().map(async (p) => {
@@ -504,6 +508,11 @@ export async function probeEngines(
       if (!facts && held?.key === key && Date.now() - held.at < SLOW_TTL_MS) facts = held.facts;
     }
     if (!facts) {
+      if (o.cachedOnly) {
+        // A caller that must not spawn (the requirements page, which is opened
+        // before any probe) reads what is already known and says nothing else.
+        return deriveReadiness(p, { found: !!path, path, version: null, status: null, check: null }, storedAnswer(p.id));
+      }
       facts = await runCheap(p, path);
       const slow = [facts.version, facts.status, facts.check].some((r) => r?.timedOut);
       if (slow) slowSeen.set(p.id, { key, facts, at: Date.now() });

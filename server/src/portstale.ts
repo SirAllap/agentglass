@@ -53,7 +53,7 @@ export function underTmp(path: string | null): boolean {
   return false;
 }
 
-interface Twinnable { mine: boolean; pid: number | null; proc: string | null; dir: string | null }
+interface Twinnable { mine: boolean; pid: number | null; proc: string | null; dir: string | null; port?: number }
 
 /**
  * The pids that share a folder AND a program with another pid.
@@ -68,19 +68,31 @@ interface Twinnable { mine: boolean; pid: number | null; proc: string | null; di
  * inherit the parent's listener and show up as extra pids on the same port. A
  * pid whose ancestor (by `parentOf`) is in the same set is that ancestor's
  * child, not a twin; without `parentOf` every pid counts.
+ *
+ * Two pids of one program serving one folder on the SAME port are one listener
+ * too, even when nothing in /proc relates them: a browser binds v4 and v6 with
+ * two sockets, and a fork that keeps the inherited socket can outlive its
+ * parent's pid. Only two copies on two ports are twins.
  */
 export function duplicatePids(rows: readonly Twinnable[], parentOf: (pid: number) => number | null = () => null): Set<number> {
-  const by = new Map<string, Set<number>>();
+  const by = new Map<string, Map<number, Set<number>>>();
   for (const r of rows) {
     if (!r.mine || r.pid == null || !r.dir || !r.proc) continue;
     const key = `${r.proc}\0${r.dir}`;
-    (by.get(key) ?? by.set(key, new Set()).get(key)!).add(r.pid);
+    const pids = by.get(key) ?? by.set(key, new Map()).get(key)!;
+    const ports = pids.get(r.pid) ?? pids.set(r.pid, new Set()).get(r.pid)!;
+    if (r.port != null) ports.add(r.port);
   }
   const out = new Set<number>();
   for (const pids of by.values()) {
-    const roots = [...pids].filter((p) => {
+    const holders = new Map<number, number>();
+    for (const ports of pids.values()) for (const port of ports) holders.set(port, (holders.get(port) ?? 0) + 1);
+    const candidates = new Set(
+      [...pids].filter(([pid, ports]) => ![...ports].some((port) => (holders.get(port) ?? 0) > 1)).map(([pid]) => pid),
+    );
+    const roots = [...candidates].filter((p) => {
       let cur = parentOf(p);
-      for (let depth = 0; cur != null && cur > 1 && depth < 16; depth++, cur = parentOf(cur)) if (pids.has(cur)) return false;
+      for (let depth = 0; cur != null && cur > 1 && depth < 16; depth++, cur = parentOf(cur)) if (candidates.has(cur)) return false;
       return true;
     });
     if (roots.length > 1) for (const p of roots) out.add(p);

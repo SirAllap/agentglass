@@ -14,28 +14,39 @@
  */
 import { readFileSync, realpathSync } from "node:fs";
 import { basename } from "node:path";
+import { nodeModulesGap, withDepsLine } from "../checkoutDeps.ts";
 import { readStoredPolicy } from "../config.ts";
-import { projectRootOf } from "../git.ts";
+import { git, projectRootOf } from "../git.ts";
 import { readPolicy } from "../orchestration.ts";
 import { recordAction } from "../db.ts";
 import { ruleStates } from "../orchpolicy.ts";
 import { probeEngines } from "../agentprobe.ts";
-import { addNeed } from "../seatneed.ts";
+import { flowRoleFor, roleLockFor, rolePromptFor, unknownRoleError, withResultContract, withRolePrompt } from "../rolePrompt.ts";
+import { narrowEnvelope } from "./envelope.ts";
+import { addNeed, openNeeds } from "../seatneed.ts";
 import { addReport } from "../seatreport.ts";
 import { wakeForReport } from "../seatwake.ts";
 import { hermesResumeRefusal } from "../hermes.ts";
 import { agentProvider, workerModelFor } from "../../../shared/agentKinds.ts";
-import { workerRole, type RoleId } from "../../../shared/workerRoles.ts";
+import { workerRole, type RoleId, type WorkerRole } from "../../../shared/workerRoles.ts";
 import { chainFor, envelopeWithin, resolve, type RuleFacts } from "../../../shared/orchestration.ts";
 import type { EngineReadiness } from "../../../shared/types.ts";
 import * as AgentOps from "../agentops.ts";
-import { headlessRefusal, headlessTurn, prepareRun, runFiles, turnResult, wrapped } from "./headless.ts";
+import { mintBrowserCredential, withBrowserLine } from "../browseraccess.ts";
+import { revokeWorkerTokens } from "../auth.ts";
+import { forgetWorkerPages } from "../browserdrive.ts";
+import { headlessRefusal, headlessTurn, prepareRun, reportOf, runFiles, turnResult, wrapped } from "./headless.ts";
 import { guardTurn, stopServe, type Serve } from "./opencodeserve.ts";
 import { firstTurnFailure, type FirstTurnFailure } from "./failures.ts";
 import { arm } from "./ceilings.ts";
 import { toldRoots, watchChair } from "./noplan.ts";
 import { pushNoPlanCleared, pushNoPlanLeft } from "../alerts.ts";
-import { nextEngine, planWorker, type StartedBy } from "./workerstart.ts";
+import { nextEngine, planWorker, startedByOf, type StartedBy } from "./workerstart.ts";
+import { announceWorkerEnd, endedWithoutResult, type EndDeps } from "./workerend.ts";
+import { getPlan, recordStep } from "../flightPlanStore.ts";
+import { roundsSpentFor, STOP_SENTENCE } from "../flightPlan.ts";
+
+export { reportOf, startedByOf };
 
 export interface Answer { status: number; body: Record<string, unknown> }
 const refuse = (error: string, status = 400): Answer => ({ status, body: { ok: false, error } });
@@ -48,15 +59,37 @@ export function policyEngaged(root: string | null, b: Record<string, unknown>): 
   return !!((root && readStoredPolicy(root)) || readStoredPolicy());
 }
 
+/**
+ * The role a worker runs as: the built-in one, or for an id that is in the
+ * saved flow and is not built-in, a synthetic one (readOnly from the flow
+ * role). Null when neither. Its `id` is the flow's id as a plain string; the
+ * type says RoleId because the built-ins are what most code here handles.
+ *
+ * `allow` rides on the role because it is the shell the engine is given, not a
+ * narrowing of the envelope: a built-in takes it from the roster role the flow
+ * keeps for it, which is also where `narrowEnvelope` reads the rest.
+ */
+export function roleFor(root: string, id: unknown): WorkerRole | null {
+  const built = workerRole(id);
+  if (built) {
+    const allow = roleLockFor(root, id)?.allow ?? [];
+    return allow.length ? { ...built, allow } : built;
+  }
+  const f = flowRoleFor(root, id);
+  return f ? { id: f.id as RoleId, title: f.name, what: f.does, readOnly: f.readsOnly === true, allow: [...(f.allow ?? [])], default: { provider: "", model: "" } } : null;
+}
+
 const factsNow = (): RuleFacts => {
   const on = new Set(ruleStates().filter((s) => s.active).map((s) => s.ruleId));
   return { on: (id) => on.has(id) };
 };
 
-export const startedByOf = (a: AgentOps.NamedAgent): StartedBy | null => {
-  const s = a.startedBy as Partial<StartedBy> | undefined;
-  return s?.headless === true ? (s as StartedBy) : null;
-};
+/** The engine a project's builder starts on right now (the first step of its chain), or null for an empty
+ *  chain. Flight plan's Launch asks before it cuts a tree: a Claude chain opens a tab, another one starts a worker. */
+export function builderEngineFor(root: string): string | null {
+  const chain = chainFor(readPolicy(root).policy, factsNow(), "builder");
+  return chain[0]?.engine ?? null;
+}
 
 /** The directory a seat's worker may run in, links followed: inside the
  *  project's own tree, or one of its worktrees. Null anywhere else. What comes
@@ -110,7 +143,7 @@ async function startNow(p: {
   seatRoot: string | null; probe?: () => Promise<EngineReadiness[]>;
 }): Promise<Answer> {
   const b = p.body;
-  if (b.role === undefined) return refuse("engine, model and allow go with a role: add --role scout, builder, reviewer or verifier");
+  if (b.role === undefined) return refuse("engine, model and allow go with a role: add --role scout, builder, reviewer, verifier or a role id from the saved flow");
   if (typeof b.kind === "string") return refuse("a start through the policy takes --engine from the role's chain, not a kind");
   if (typeof b.remoteControl === "string") return refuse("a headless worker has no remote-control session: it runs one turn and exits");
   if (b.yolo === true) return refuse("a worker runs under its envelope, and skipping permissions is never combined with one");
@@ -118,22 +151,46 @@ async function startNow(p: {
 
   const view = readPolicy(p.policyRoot);
   const readiness = await (p.probe ?? (async () => (await probeEngines()).engines))();
-  const plan = planWorker(
+  // A custom role is a flow role that is not one of the four built-in ids.
+  const flowRole = workerRole(b.role) ? null : flowRoleFor(p.policyRoot, b.role);
+  if (!workerRole(b.role) && !flowRole) return refuse(unknownRoleError(p.policyRoot));
+  const planned = planWorker(
     { role: b.role, engine: b.engine, model: b.model, allow: b.allow },
     { policy: view.policy, scope: view.scope }, factsNow(), readiness,
     p.seatRoot ? await AgentOps.liveOwnedBy(p.seatRoot) : null,
+    flowRole ? { role: roleFor(p.policyRoot, b.role)!, chain: flowRole.chain } : undefined,
   );
-  if (!plan.ok) {
+  if (!planned.ok) {
+    const plan = planned;
     // The chain ran out: the person has to hear it, and the seat is how.
     if (plan.need && p.seatRoot) addNeed({ root: p.seatRoot, text: plan.error, recommend: "Settings ▸ Orchestration: add an engine to the chain, or sign one in." });
     return refuse(plan.error);
   }
+  /* The saved flow's lock narrows the envelope ONCE, here: the stamp (so resume
+     and engine switch keep it even if the flow is edited later) and the
+     response both carry the narrowed one. */
+  const envelope = narrowEnvelope(planned.envelope, roleLockFor(p.policyRoot, planned.role.id));
+  /* Only a plan of this project counts: an id that is not one is dropped, not an error. */
+  const forPlan = typeof b.plan === "string" && getPlan(b.plan)?.root === p.policyRoot ? b.plan : undefined;
+  /* The loop is the plan's: once a step has failed the most times its fail edge
+     allows, another round of it is the person's call. The person's own start is not held. */
+  if (forPlan && p.seatRoot && roundsSpentFor(getPlan(forPlan)!, planned.role.id)) {
+    const name = planned.role.title;
+    const text = `Flight plan ${forPlan}: ${name} failed the most times the flow allows, so another round is a person's call. Raise the rounds in Flow, or land the work by hand.`;
+    if (!openNeeds(p.seatRoot).some((n) => n.text === text)) addNeed({ root: p.seatRoot, text, recommend: "Raise the rounds in Flow, or land the work by hand." });
+    return refuse(`Rounds used: ${STOP_SENTENCE["rounds-used"]} Another round of ${name} is the person's.`, 409);
+  }
+  const plan = { ...planned, envelope, startedBy: { ...planned.startedBy, envelope, ...(forPlan ? { planId: forPlan } : {}) } };
   const bin = readiness.find((e) => e.id === plan.choice.engine)?.path;
   if (!bin) return refuse(`${plan.choice.engine} is not installed here`);
 
+  /* A worktree cut minutes ago has no node_modules, and its tsc failure is the
+     environment. Said in the answer and as the first line the worker reads. */
+  const deps = nodeModulesGap(p.cwd);
+  const prompt = withDepsLine(withResultContract(withBrowserLine(withRolePrompt(p.prompt, rolePromptFor(p.policyRoot, plan.role.id)), plan.choice.engine, plan.role.id), p.policyRoot, plan.role.id), deps);
   const turn = headlessTurn({
     engine: plan.choice.engine, bin, model: plan.choice.model, role: plan.role, envelope: plan.envelope,
-    limits: view.policy.limits, prompt: p.prompt,
+    limits: view.policy.limits, prompt,
   });
   if (!turn.ok) return refuse(turn.error);
   /* Before the run folder is cleared: a name that is still running keeps its
@@ -147,15 +204,22 @@ async function startNow(p: {
   if (had?.seatRoot && p.seatRoot && had.seatRoot !== p.seatRoot) {
     return refuse(`${p.name} belongs to the seat of ${basename(had.seatRoot)}, not to yours (${basename(p.seatRoot)}). Ask that seat, or the person.`, 403);
   }
+  /* Minted BEFORE the private serve starts, because on OpenCode 2.x the shell
+     tool runs in that serve's process tree and its environment is frozen when
+     it starts (`opencodeserve.ts`). Minting into the client's copy afterwards
+     left the process that runs the worker's shell without a token, so every
+     browser call was a 401. Every refusal below revokes it. */
+  mintBrowserCredential(turn.env, p.name, plan.choice.engine, plan.role.id, { ttlMs: view.policy.limits.turnMinutes * 60_000 });
   const g = await guardTurn(plan.choice.engine, bin, p.cwd, turn);
-  if (!g.ok) return refuse(g.error);
-  const files = prepareRun(p.name, p.prompt, turn.stdin);
+  if (!g.ok) { revokeWorkerTokens(p.name); return refuse(g.error); }
+  const files = prepareRun(p.name, prompt, turn.stdin);
   const r = await startGuarded({
-    root: p.root, name: p.name, cwd: p.cwd, kind: plan.choice.engine, exactArgv: wrapped(files, g.turn.argv),
+    root: p.root, name: p.name, cwd: p.cwd, kind: plan.choice.engine, exactArgv: wrapped(files, g.turn.argv, plan.choice.engine),
     env: g.turn.env, keep: true, lockedRole: true, yoloAllowed: false,
     owner: { seatRoot: p.seatRoot, model: plan.choice.model, startedBy: { ...plan.startedBy, turnMinutes: view.policy.limits.turnMinutes }, resumeId: turn.sessionId ?? null },
   }, g.serve);
   if (!r.ok) {
+    revokeWorkerTokens(p.name);
     if (r.error === "exists") return { status: 409, body: { ok: false, error: "an agent by that name is still running", result: { agent: r.agent } } };
     if (r.error === "lock-loosened") return refuse(`this directory's OpenCode config loosens the worker's lock, so it was not started: ${r.detail}`);
     return refuse(`the worker could not start: ${r.error}`);
@@ -168,18 +232,26 @@ async function startNow(p: {
       result: {
         agent: r.agent, state: "starting", ready: false,
         engine: plan.choice.engine, model: plan.choice.model, because: plan.startedBy.because, envelope: plan.envelope,
+        ...(deps ? { environment: deps.line } : {}),
         ...(turn.partly ? { partly: turn.partly } : {}),
       },
     },
   };
 }
 
+/** A row as a card reads it: the turn's outcome, and whether this worker owes
+ *  a result it did not leave. */
+export type Settled = AgentOps.NamedAgent & { resultMissing?: boolean };
+
 /** Collect a finished turn's outcome into the row. Lazy: asked when somebody
  *  looks, never on a timer. */
-export function settled<T extends AgentOps.NamedAgent>(a: T): T {
-  if (!startedByOf(a) || a.exitCode !== undefined) return a;
-  const s = AgentOps.settleTurn(a, turnResult(runFiles(a.name), a.kind));
-  return s.exitCode === undefined ? a : { ...a, exitCode: s.exitCode, exitLine: s.exitLine };
+export function settled<T extends AgentOps.NamedAgent>(a: T): Settled {
+  let row: AgentOps.NamedAgent = a;
+  if (startedByOf(a) && a.exitCode === undefined) {
+    const s = AgentOps.settleTurn(a, turnResult(runFiles(a.name), a.kind));
+    if (s.exitCode !== undefined) row = { ...a, exitCode: s.exitCode, exitLine: s.exitLine };
+  }
+  return endedWithoutResult(row) ? { ...row, resultMissing: true } : row;
 }
 
 /** `prompt` on a headless worker: its next turn, resumed, on the engine and
@@ -212,9 +284,10 @@ async function resumeTurn(asked: AgentOps.NamedAgent, text: string): Promise<Ans
     const why = hermesResumeRefusal(resume, cwd, "default");
     if (why) return refuse(`${a.name} cannot be resumed: ${why}`);
   }
-  const role = workerRole(by.role);
+  const role = roleFor(a.seatRoot ?? projectRootOf(cwd) ?? cwd, by.role);
+  if (!role) return refuse(`role "${by.role}" is no longer in the flow`);
   const bin = (await probeEngines()).engines.find((e) => e.id === by.engine)?.path;
-  if (!role || !bin) return refuse(`${by.engine} is not installed here any more, so ${a.name} cannot be resumed`);
+  if (!bin) return refuse(`${by.engine} is not installed here any more, so ${a.name} cannot be resumed`);
   const view = readPolicy(a.seatRoot ?? undefined);
   // The engine stays the one it was stamped with; what it may do does not
   // outlive the person narrowing the ceiling since.
@@ -229,21 +302,27 @@ async function resumeTurn(asked: AgentOps.NamedAgent, text: string): Promise<Ans
   if (live >= view.policy.limits.maxWorkers) {
     return refuse(`${live} workers are already running for this seat and the limit is ${view.policy.limits.maxWorkers}. Stop one or wait for one to finish.`);
   }
-  const turn = headlessTurn({ engine: by.engine, bin, model: by.model, role, envelope: by.envelope, limits: view.policy.limits, prompt: text, resume });
+  const gap = nodeModulesGap(cwd);
+  const said = withDepsLine(withResultContract(withBrowserLine(text, by.engine, role.id), a.seatRoot ?? projectRootOf(cwd) ?? cwd, role.id), gap);
+  const turn = headlessTurn({ engine: by.engine, bin, model: by.model, role, envelope: by.envelope, limits: view.policy.limits, prompt: said, resume });
   if (!turn.ok) return refuse(turn.error);
-  // The finished turn's tab is still open under this name; it goes before the next opens.
+  // The finished turn's tab is still open under this name; it goes before the
+  // next opens, and before the next credential is minted (stopAgent revokes
+  // every token for this name, including one minted ahead of it).
   if (await AgentOps.keptTabOf(a)) await AgentOps.stopAgent(a, Date.now(), true);
+  // Before guardTurn: the serve freezes its env, and on 2.x the shell runs in it.
+  mintBrowserCredential(turn.env, a.name, by.engine, role.id, { ttlMs: view.policy.limits.turnMinutes * 60_000 });
   const g = await guardTurn(by.engine, bin, cwd, turn);
-  if (!g.ok) return refuse(g.error);
-  const files = prepareRun(a.name, text, turn.stdin);
+  if (!g.ok) { revokeWorkerTokens(a.name); return refuse(g.error); }
+  const files = prepareRun(a.name, said, turn.stdin);
   const r = await startGuarded({
-    root: a.seatRoot ?? cwd, name: a.name, cwd, kind: by.engine, exactArgv: wrapped(files, g.turn.argv),
+    root: a.seatRoot ?? cwd, name: a.name, cwd, kind: by.engine, exactArgv: wrapped(files, g.turn.argv, by.engine),
     env: g.turn.env, keep: true, lockedRole: true, yoloAllowed: false,
     owner: { seatRoot: a.seatRoot ?? null, model: by.model, startedBy: nextTurn(by, view.policy.limits.turnMinutes), resumeId: resume },
   }, g.serve);
-  if (!r.ok) return refuse(`the next turn could not start: ${r.error}`);
+  if (!r.ok) { revokeWorkerTokens(a.name); return refuse(`the next turn could not start: ${r.error}`); }
   armWorker(AgentOps.agentNamed(a.name) ?? a, view.policy.limits.turnMinutes);
-  return { status: 200, body: { ok: true, result: { name: a.name, outcome: "sent", resumed: resume, ...(turn.partly ? { partly: turn.partly } : {}) } } };
+  return { status: 200, body: { ok: true, result: { name: a.name, outcome: "sent", resumed: resume, ...(gap ? { environment: gap.line } : {}), ...(turn.partly ? { partly: turn.partly } : {}) } } };
 }
 
 // ── the ceiling and the end of a turn ────────────────────────────────────
@@ -302,17 +381,39 @@ export async function workersAfterRestart(): Promise<{ lost: string[]; settled: 
   return { lost, settled: quiet };
 }
 
-/** A worker's turn settled by itself (the timeout is ceilings.ts's own). */
-async function endedTurn(name: string): Promise<void> {
+/**
+ * A worker's turn settled by itself (the timeout is ceilings.ts's own).
+ *
+ * Exported so the watcher's own tests can drive it with a fake send; the
+ * watcher passes the name alone.
+ */
+export async function endedTurn(name: string, deps: EndDeps = {}): Promise<void> {
+  /* The row is read first: a watcher or deadline pass for the PREVIOUS turn
+     arrives under the same name while the next one is live, and revoking by
+     name would kill the credential the resume path just minted. A live row
+     means this pass is about a turn that is not this one. */
   const a = AgentOps.agentNamed(name);
+  if (a && a.exitCode === undefined) return;
+  /* A turn that has ended must not leave its browser credential live, whether
+     or not a row still names it; its page ids go with it, so the next turn
+     under the same name starts with none. */
+  revokeWorkerTokens(name);
+  forgetWorkerPages(name);
   const by = a && startedByOf(a);
-  if (!a || !by || !a.exitCode) return;
-  /* Asked before the seat's turn is taken and told after it is given back:
-     checking the engines can take seconds a command, and every other start and
-     prompt of this seat would wait behind it. */
-  const ready = (await probeEngines()).engines;
-  const tell = await inTurn(a.seatRoot, name, () => failedTurn(a, by, ready));
-  if (tell) await wakeForReport(tell, name);
+  if (!a || !by) return;
+  if (a.exitCode !== 0) {
+    /* Asked before the seat's turn is taken and told after it is given back:
+       checking the engines can take seconds a command, and every other start and
+       prompt of this seat would wait behind it. */
+    const ready = (await probeEngines()).engines;
+    const tell = await inTurn(a.seatRoot, name, () => failedTurn(a, by, ready));
+    if (tell) await wakeForReport(tell, name);
+  }
+  recordStepEnd(name, by);
+  /* A first turn that failed and moved to the next engine is not an ending: the
+     row was stamped again for the same worker, with no status, so nothing is
+     said about it here. */
+  await announceWorkerEnd(name, deps);
 }
 
 /** A plan can only come back by the person's hand: the policy saved, or an
@@ -401,21 +502,26 @@ async function failedTurn(a: AgentOps.NamedAgent, by: StartedBy, ready: readonly
  *  same directory and envelope. True when it started; otherwise why not. */
 async function switchEngine(a: AgentOps.NamedAgent, by: StartedBy, why: FirstTurnFailure, view: ReturnType<typeof readPolicy>, ready: readonly EngineReadiness[]): Promise<true | string> {
   const prompt = readText(runFiles(a.name).prompt);
-  const role = workerRole(by.role);
   const cwd = a.seatRoot ? seatMayUse(a.seatRoot, a.cwd) : a.cwd;
-  if (!role || !prompt || !cwd) return `there was nothing to hand to another engine`;
+  if (!prompt || !cwd) return `there was nothing to hand to another engine`;
+  const flowRoot = a.seatRoot ?? projectRootOf(cwd) ?? cwd;
+  const role = roleFor(flowRoot, by.role);
+  if (!role) return `role "${by.role}" is no longer in the flow`;
   if (!envelopeWithin(by.envelope, view.policy.ceiling)) return "the envelope it started with is beyond this project's ceiling now";
   const facts = factsNow();
   const pathOf = (engine: string) => { const r = ready.find((e) => e.id === engine); return r?.path && r.roles.worker.ok ? r.path : null; };
-  const resolved = resolve(view.policy, facts, ready).workers[role.id];
+  /* A custom role has no policy slot: its own chain as the flow has it now, and it never "asks". */
+  const custom = workerRole(by.role) ? null : flowRoleFor(flowRoot, by.role);
+  const resolved = custom ? null : resolve(view.policy, facts, ready).workers[role.id];
   const next = nextEngine({
-    chain: chainFor(view.policy, facts, role.id), by, ask: resolved.ok && resolved.ask,
+    chain: custom ? custom.chain : chainFor(view.policy, facts, role.id), by, ask: !!resolved && resolved.ok && resolved.ask,
     usable: (c) => !!pathOf(c.engine) && !headlessRefusal(c.engine),
   });
   if (!next.ok) return next.why;
   const bin = pathOf(next.choice.engine)!;
   const model = workerModelFor(next.choice.engine, next.choice.model);
-  const turn = headlessTurn({ engine: next.choice.engine, bin, model, role, envelope: by.envelope, limits: view.policy.limits, prompt });
+  const brief = withResultContract(withBrowserLine(prompt, next.choice.engine, role.id), flowRoot, role.id);
+  const turn = headlessTurn({ engine: next.choice.engine, bin, model, role, envelope: by.envelope, limits: view.policy.limits, prompt: brief });
   if (!turn.ok) return turn.error;
   // The failed turn's tab is still open under this name; it goes before the next opens.
   if (await AgentOps.keptTabOf(a)) await AgentOps.stopAgent(a, Date.now(), true);
@@ -424,11 +530,12 @@ async function switchEngine(a: AgentOps.NamedAgent, by: StartedBy, why: FirstTur
     retries: (by.retries ?? 0) + 1, from: by.engine, turnMinutes: view.policy.limits.turnMinutes,
     because: [...by.because, `${engineTitle(by.engine)} ${WHY[why]}, so the next engine in the chain took over`],
   };
+  mintBrowserCredential(turn.env, a.name, next.choice.engine, role.id, { ttlMs: view.policy.limits.turnMinutes * 60_000 });
   const g = await guardTurn(next.choice.engine, bin, cwd, turn);
-  if (!g.ok) return g.error;
-  const files = prepareRun(a.name, prompt, turn.stdin);
+  if (!g.ok) { revokeWorkerTokens(a.name); return g.error; }
+  const files = prepareRun(a.name, brief, turn.stdin);
   const r = await startGuarded({
-    root: a.seatRoot ?? cwd, name: a.name, cwd, kind: next.choice.engine, exactArgv: wrapped(files, g.turn.argv),
+    root: a.seatRoot ?? cwd, name: a.name, cwd, kind: next.choice.engine, exactArgv: wrapped(files, g.turn.argv, next.choice.engine),
     env: g.turn.env, keep: true, lockedRole: true, yoloAllowed: false,
     owner: { seatRoot: a.seatRoot ?? null, model, startedBy: stamp, resumeId: turn.sessionId ?? null },
   }, g.serve);
@@ -437,7 +544,7 @@ async function switchEngine(a: AgentOps.NamedAgent, by: StartedBy, why: FirstTur
      like any other and its own failure is read by the same path (a second
      failure, which is a need). */
   const started = r.ok ? r.agent : r.error === "died" ? AgentOps.agentNamed(a.name) : null;
-  if (!started) return `the next engine could not start: ${r.ok ? "no row" : r.error}`;
+  if (!started) { revokeWorkerTokens(a.name); return `the next engine could not start: ${r.ok ? "no row" : r.error}`; }
   recordAction({
     actor: "policy", action: "worker/switch", target: a.name, ok: true,
     detail: `${a.name}: ${by.engine} to ${next.choice.engine} (${next.choice.model || "default model"}): ${engineTitle(by.engine)} ${WHY[why]} on its first turn`.slice(0, 300),
@@ -445,3 +552,29 @@ async function switchEngine(a: AgentOps.NamedAgent, by: StartedBy, why: FirstTur
   armWorker(started, stamp.turnMinutes!);
   return true;
 }
+
+/**
+ * A worker started with `--plan` ended its turn: record whether it passed, for
+ * the gate at Integrate. Pass = the turn ended with status 0 and, for a
+ * reviewer (the built-in reviewer or a flow role whose policyRole is reviewer),
+ * its final report has no line starting `BLOCKER`; an unreadable report is not a
+ * pass. Never throws: a worker's end must not break on a book-keeping failure.
+ */
+function recordStepEnd(name: string, by: StartedBy): void {
+  if (!by.planId) return;
+  try {
+    const a = AgentOps.agentNamed(name);
+    if (!a || a.exitCode === undefined) return; // moved to the next engine: not an ending
+    let pass = a.exitCode === 0;
+    const root = a.seatRoot ?? "";
+    if (pass && (by.role === "reviewer" || flowRoleFor(root, by.role)?.policyRole === "reviewer")) {
+      const report = reportOf(readText(runFiles(name).out));
+      pass = report !== null && !report.split("\n").some((l) => l.trimStart().startsWith("BLOCKER"));
+    }
+    const head = git(a.cwd, ["rev-parse", "HEAD"]);
+    recordStep(by.planId, by.role, pass ? "pass" : "fail", head.code === 0 ? head.stdout.trim() : null);
+  } catch (e) {
+    if (!warnedStep) { warnedStep = true; console.warn(`flight plan step not recorded: ${(e as Error).message}`); }
+  }
+}
+let warnedStep = false;

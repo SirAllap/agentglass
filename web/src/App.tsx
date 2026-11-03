@@ -69,7 +69,8 @@ import { FilePalette } from "./components/FilePalette.tsx";
 import { onFinderAt, openFinderAt, type FinderTarget } from "./lib/finderTarget.ts";
 import { WindowSwitcher } from "./components/terminal/WindowSwitcher.tsx";
 import { FloatingBench } from "./components/bench/FloatingBench.tsx";
-import { benchTakesBoard, toggleBench, showFile, addTab } from "./lib/benchStore.ts";
+import { benchTakesBoard, toggleBench, showFile } from "./lib/benchStore.ts";
+import { newJob, openBenchJob } from "./lib/benchJobs.ts";
 import type { BoardKind } from "./lib/boardHost.ts";
 import { PeekFile, isRenderable, type Peek } from "./components/PeekFile.tsx";
 import { clearPeek, peekRequest, subscribePeek } from "./lib/openPeek.ts";
@@ -84,7 +85,7 @@ import { ZoomToast } from "./components/ZoomToast.tsx";
 import { TipHost } from "./components/TipHost.tsx";
 import { UpdateToast } from "./components/UpdateToast.tsx";
 import { AgentChangeChip } from "./components/AgentChangeChip.tsx";
-import { uiOf } from "../../shared/uiActions.ts";
+import { canonMachineTab, uiOf } from "../../shared/uiActions.ts";
 import { back, VIEW_SWITCHERS } from "./lib/agentBack.ts";
 import { subscribeSettings } from "./lib/settingsRegistry.ts";
 import { NoteToasts } from "./components/NoteToasts.tsx";
@@ -94,6 +95,13 @@ import { WhatsNew } from "./components/WhatsNew.tsx";
 import { SessionModal } from "./components/SessionModal.tsx";
 import { ProjectsModal } from "./components/projects/ProjectsModal.tsx";
 import { PICKER_ANSWERED_KEY } from "./lib/projectPick.ts";
+import { factsOf, showSetup } from "./lib/setupGate.ts";
+import { readSetupState } from "./lib/setupState.ts";
+import { notePickedAgent } from "./lib/newWindow.ts";
+import { SetupFlow } from "./components/setup/SetupFlow.tsx";
+import { SetupOffer, Tutorial } from "./components/setup/Tutorial.tsx";
+import { openTutorial } from "./lib/setupTutorial.ts";
+import type { SetupState } from "../../shared/types.ts";
 import { NeedsPopover, type NeedsItem } from "./components/NeedsPopover.tsx";
 import { onShowFlightPlan } from "./lib/flightPlanNav.ts";
 import { getWaiting, subscribeWaiting } from "./lib/flightPlanWaiting.ts";
@@ -280,6 +288,10 @@ export default function App() {
    *  Starboard header and the workspace rail open the same panel, and a
    *  second copy would be a second poll of /proc. */
   const [machine, setMachine] = useState<MachineTab | null>(null);
+  /** Every door that opens the machine lands on Resources when it asks for
+   *  `ports`, the icon that no longer exists. The panel's own Ports tab still
+   *  switches with `setMachine`, which is navigation inside the open view. */
+  const openMachine = (tab: MachineTab) => setMachine(canonMachineTab(tab));
   const [sessionView, setSessionView] = useState<{ id: string; app: string } | null>(null);
   const [sound, setSound] = useState(false);
   // Mirrors the window's zoom for the settings row to read. The scale itself
@@ -320,6 +332,23 @@ export default function App() {
     try { return localStorage.getItem(PICKER_ANSWERED_KEY) !== "1"; } catch { return false; }
   });
   const mountedAt = useRef(Date.now());
+
+  /**
+   * The first run, decided once per launch.
+   *
+   * Pending until `/projects` and `/setup/state` have both answered; then either
+   * the wizard, or the app as it has always been. It is never re-read after
+   * that: Finish and Skip write `setup.done`, and a reload asks again, which is
+   * what brings the wizard back while `setup.inProgress` is set.
+   */
+  const [setupScreen, setSetupScreen] = useState<{ mode: "pending" | "hidden" } | { mode: "shown"; state: SetupState }>({ mode: "pending" });
+  const setupDecided = useRef(false);
+  const [setupNote, setSetupNote] = useState<string | null>(null);
+  /** The cards already read, so the finish toast counts what is left. */
+  const [tutorialSeen, setTutorialSeen] = useState("");
+  /** How many cards the finish offer names; null hides it. */
+  const [offerLeft, setOfferLeft] = useState<number | null>(null);
+  useCoverHold("setup", !IS_DEMO && setupScreen.mode === "pending");
 
   // A live snapshot of "is any panel/overlay open", read by the global key
   // handler so single-letter shortcuts can't stack a second panel on top of an
@@ -441,8 +470,15 @@ export default function App() {
      * not be polled forever at full speed.
      */
     const ask = () => {
-      api.projects().then((p) => {
+      /* The gate's own read starts alongside the projects one and joins this
+         wait: a first run must not see the folder picker open under it. */
+      const setupRead = IS_DEMO ? Promise.resolve(null) : readSetupState();
+      api.projects().then(async (p) => {
         if (!live) return;
+        const setupState = await setupRead;
+        if (!live) return;
+        notePickedAgent(setupState?.setupAgent);
+        if (setupState) setTutorialSeen(setupState.tutorialSeen);
         clearTimeout(release);
         setProjectsAnswered(true);
         setWorkspace(p.workspace);
@@ -454,6 +490,12 @@ export default function App() {
         if (p.workspace) setFilter((f) => (f.app ? { ...f, app: "" } : f));
         let answered = false;
         try { answered = localStorage.getItem(PICKER_ANSWERED_KEY) === "1"; } catch { /* ignore */ }
+        const wizard = !setupDecided.current && showSetup(setupState ? factsOf(setupState, answered) : null);
+        if (!setupDecided.current) {
+          setupDecided.current = true;
+          setSetupScreen(wizard && setupState ? { mode: "shown", state: setupState } : { mode: "hidden" });
+        }
+        if (wizard) { setProjectOpen(false); setAwaitingPick(false); return; }
         if (!p.workspace && !answered) { setProjectOpen(true); if (!gaveUp) setAwaitingPick(true); }
         else setAwaitingPick(false);
       }).catch((e) => {
@@ -1097,7 +1139,7 @@ export default function App() {
       // keystroke cannot disagree about what "zoom" means. There is no pointer
       // in a remote command, so it lands on the window.
       zoom,
-      setMachine,
+      setMachine: openMachine,
       setProjectOpen,
       setWindowsOpen,
       // Looked up in this window's feed first; with a view covering the
@@ -1221,8 +1263,51 @@ export default function App() {
   // same resolver, registered once more under the name that surface knows.
   useEffect(() => { setPaneJump((pane) => { void goFromNote({ kind: "pane", pane }); }); return () => setPaneJump(null); }, [goFromNote]);
 
+  // The one line the app says after a skip, and then forgets.
+  useEffect(() => {
+    if (!setupNote) return;
+    const t = setTimeout(() => setSetupNote(null), 4000);
+    return () => clearTimeout(t);
+  }, [setupNote]);
+
+  // Settings is drawn over both the workspace and the first run: the port
+  // strip's Remote row is inside the wizard, and it has to land somewhere.
+  const settingsModal = (
+    <SettingsModal
+      open={settingsOpen}
+      jump={settingsJump}
+      onClose={() => { setSettingsOpen(false); setSettingsJump(null); }}
+      sound={sound}
+      onSound={() => setSound((s) => !s)}
+      scale={scale}
+      onZoom={zoom}
+      theme={theme}
+      onTheme={setTheme}
+    />
+  );
+
+  // The first run draws instead of the workspace — and instead of the title
+  // bar, which the mock does not have: it is a full-window wizard.
+  if (setupScreen.mode === "shown") {
+    return (
+      <>
+        <SetupFlow state={setupScreen.state} onDone={(note, finished) => {
+          setSetupScreen({ mode: "hidden" });
+          if (finished) {
+            const left = 5 - tutorialSeen.split(",").filter(Boolean).length;
+            setOfferLeft(left > 0 ? left : null);
+            setSetupNote(left > 0 ? null : note);
+          } else {
+            setSetupNote(note);
+          }
+        }} />
+        {settingsModal}
+      </>
+    );
+  }
+
   return (
-    <div className="h-screen overflow-hidden flex flex-col relative">
+    <div className="agx-shell h-screen overflow-hidden flex flex-col relative">
       <div className="aurora" />
       <div className="aurora-grid" />
 
@@ -1233,6 +1318,11 @@ export default function App() {
 
       {/* Above everything, because when it shows, nothing below it is real. */}
       <ServerBanner />
+      {setupNote && <div className="setup-toast" role="status">{setupNote}</div>}
+      {offerLeft != null && (
+        <SetupOffer left={offerLeft} onShow={() => { setOfferLeft(null); openTutorial(); }} onDismiss={() => setOfferLeft(null)} />
+      )}
+      <Tutorial seen={tutorialSeen} onSeen={setTutorialSeen} />
       <GitMissingBanner />
       <DbNoticeBanner />
 
@@ -1274,15 +1364,16 @@ export default function App() {
         // other of those buttons. goView brings the hidden view back first,
         // which is the only honest answer to "open it".
         view={wsView} onView={goView}
+        onOpenProject={() => setProjectOpen(true)}
         onSkills={() => setSkillsOpen(true)}
         onSettings={() => setSettingsOpen(true)}
-        onMachine={setMachine}
+        onMachine={openMachine}
         dashboard={(active) => (
           <LazyPanel label="Starboard">
           <StarboardView
             refreshing={statsPending}
             active={active}
-            events={events} visibleEvents={visibleEvents}
+            visibleEvents={visibleEvents}
             agents={agents} alerts={alerts} stats={stats}
             sessionProvider={sessionProvider} providers={providers}
             windowMs={windowMs} onWindow={setWindowMs}
@@ -1340,8 +1431,10 @@ export default function App() {
         onClose={() => setFilesOpen(false)}
         target={finderTarget}
         onBench={(o) => {
-          if (o.tab === "file") showFile(o.root, o.path, { title: o.title });
-          else addTab(o.root, { kind: "term", title: o.title, type: o.type });
+          if (o.tab === "file") { showFile(o.root, o.path, { title: o.title }); return; }
+          /* A recipe is a new terminal each time it is picked, so its job is
+             unique — the shared helper is still what seats it. */
+          void openBenchJob({ job: newJob("recipe"), root: o.root, create: async () => ({ ok: true, root: o.root, tab: { kind: "term", title: o.title, type: o.type } }) });
         }}
         onOpenFile={async (root, rel, branch, ref) => {
           /*
@@ -1421,17 +1514,7 @@ export default function App() {
       <UpdateToast />
       <CleanupToast />
       <AgentChangeChip onBack={goView} />
-      <SettingsModal
-        open={settingsOpen}
-        jump={settingsJump}
-        onClose={() => { setSettingsOpen(false); setSettingsJump(null); }}
-        sound={sound}
-        onSound={() => setSound((s) => !s)}
-        scale={scale}
-        onZoom={zoom}
-        theme={theme}
-        onTheme={setTheme}
-      />
+      {settingsModal}
       <SessionModal
         sessionId={sessionView?.id ?? null}
         sourceApp={sessionView?.app}

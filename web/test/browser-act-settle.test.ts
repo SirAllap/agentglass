@@ -12,7 +12,7 @@ import { describe, expect, test } from "bun:test";
 import { runBrowserAsk, type DrivableWebview } from "../src/lib/browserDrive.ts";
 
 type Scenario = {
-  /** What the page's mutation counter and in-flight count read on the n-th poll. */
+  /** What the page's mutation counter and count of asks running read on the n-th poll. */
   poll?: (n: number) => [number, number];
   /** Run as the act happens — emit navigation events from here. */
   onAct?: (emit: (type: string, props?: Record<string, unknown>) => void) => void;

@@ -415,8 +415,10 @@ describe("controlReply — what the window answers", () => {
 
   it("an open answers applied with no value", () => {
     const k = ctx();
+    // Ports was a second icon for this view; a command that still names it
+    // lands on Resources rather than opening a tab nobody asked for.
     expect(controlReply(ui("machine.open", { tab: "ports" }), k.c)).toEqual({ ok: true, applied: true });
-    expect(k.calls).toEqual([["setMachine", "ports"]]);
+    expect(k.calls).toEqual([["setMachine", "resources"]]);
   });
 
   it("a frame that names no door, or fails the second look, answers not-applied with a reason", () => {

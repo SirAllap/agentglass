@@ -9,7 +9,7 @@
  * names the new things.
  */
 import { PILOTS, type Pilot, type PilotState, type StopReason } from "../../../shared/types.ts";
-import { findingsOf, groupOf, openCount, projectName, usd, when, written, type Plan, type Run } from "./flightPlan.ts";
+import { costText, findingsOf, groupOf, openCount, projectName, usd, when, written, type Plan, type Run } from "./flightPlan.ts";
 
 export { PILOTS };
 export type { Pilot, PilotState, StopReason };
@@ -126,6 +126,8 @@ export interface FlightFacts {
   report?: { text: string; at: number } | null;
   steps?: { done: number; of: number } | null;
   builder?: { branch: string; tab?: string } | null;
+  /** What the plan's linked worker is doing, when its builders run on another engine. */
+  worker?: "working" | "ended";
 }
 
 /** What the plan and its run already say about a flight (the engine has no separate facts route): who must decide, what the coordinator handled, where the builder flies. */
@@ -138,6 +140,7 @@ export function factsOf(plan: Plan, run: Run | null): FlightFacts {
     ...(plan.landedAt ? { phase: "landed" as const, landedAt: plan.landedAt } : {}),
     ...(plan.lastReport ? { report: { text: plan.lastReport.line, at: plan.lastReport.at }, steps: plan.lastReport.step !== null && plan.lastReport.of ? { done: plan.lastReport.step, of: plan.lastReport.of } : null } : {}),
     builder: plan.state === "launched" && l?.branch ? { branch: l.branch, ...(l.window ? { tab: l.window } : {}) } : null,
+    ...(plan.workerState ? { worker: plan.workerState } : {}),
   };
 }
 
@@ -196,6 +199,8 @@ export const stopCopy = (r: StopReason): string => ({
   large: "This plan is large, so Autopilot asks before Go.",
   sensitive: "This plan touches auth, migrations, secrets, payments, CI or a dependency, so Autopilot asks before Go.",
   "sensitive-diff": "The builder's changes touch auth, migrations, secrets, payments, CI or a dependency, so it stops before Integrate.",
+  "required-step": "A step the flow marks required has no passing result yet, so it stops before Integrate.",
+  "rounds-used": "A step has failed the most times the flow allows, so it stops before Integrate.",
 } satisfies Record<StopReason, string>)[r];
 
 /** "4 handled · 3 fixed, 1 dismissed", or "0 findings". */
@@ -271,12 +276,16 @@ export function stateOf(it: FlightItem, s: ModeFacts | null | undefined, now: nu
   if (plan.state === "launched" && it.stopReason && REFUSING.includes(it.stopReason)) return badge("refused", "stop rule");
   if (plan.state === "go" && s?.held) return badge("held", s.heldBy && s.heldBy !== "you" ? "by the orchestrator's hold" : "by your hold");
   if (plan.state === "go" && s?.budgetReached) return badge("held", "budget reached");
+  /* A plan linked to a named worker follows it, whatever the plan's stored state says: while the
+     worker runs it is Building; once it ended the checks are next, and Ready to land when its steps are done. */
+  const steps = stepsOf(plan, it.facts);
+  const done = steps !== null && steps.k >= steps.n;
+  if (it.facts?.worker === "working") return badge("building", steps ? `${steps.k} of ${steps.n} steps` : null);
+  if (it.facts?.worker === "ended") return done ? badge("ready") : badge("checking");
   if (plan.state === "draft" || plan.state === "no-go") return badge("writing");
   if (plan.state === "ready" && run?.state === "running") return badge("preflight", `round ${Math.max(1, plan.reviewRounds)}`);
   if (plan.state === "ready") return badge("orchestrator");
   if (plan.state === "go") return badge("queued", "for a slot");
-  const steps = stepsOf(plan, it.facts);
-  const done = steps !== null && steps.k >= steps.n;
   const builder = plan.builder ?? "unknown";
   if (builder === "gone") {
     /* Only a report that named a step makes it Paused; the plan's own step counts and an unfinished `of` do not. */
@@ -511,7 +520,7 @@ export function stripCounts(items: FlightItem[], now: number, s?: ModeFacts | nu
   const manualAnswers = g.waiting.filter((it) => unanswered(it) || open(it) > 0);
   return {
     flying: g.flying.filter((it) => it.plan.state === "launched").length, waiting: g.waiting.length,
-    live: items.filter((it) => it.plan.state === "launched" && it.plan.builder === "live" && it.landedAt == null).length, onGround: g.ground.length,
+    live: items.filter((it) => it.landedAt == null && ((it.plan.state === "launched" && it.plan.builder === "live") || it.facts?.worker === "working")).length, onGround: g.ground.length,
     handledToday: handled, askedToday: qs.length,
     goReady: effectivePilot(s) === "manual" ? goCards.filter((it) => open(it) === 0).length : goCards.length,
     needAnswers: manualAnswers.length, findingsToAnswer: manualAnswers.reduce((n, it) => n + open(it), 0),
@@ -564,7 +573,7 @@ export function goSentence(plan: Plan, run: Run | null): string {
   const files = c ? c.files.length + c.mockups.length : 0;
   const shots = plan.mockups.length;
   const what = [plan.size ?? "", files ? `${files} ${files === 1 ? "file" : "files"}` : "", shots ? (shots === 1 ? "one mockup" : `${shots} mockups`) : ""].filter(Boolean).join(" · ");
-  return `${what ? `${what}. ` : ""}${c ? `Preflight ${usd(c.costUsd)}. ` : ""}The builder runs in your permission mode, in its own worktree, and reports to the orchestrator.`;
+  return `${what ? `${what}. ` : ""}${c ? `Preflight ${costText(c)}. ` : ""}The builder runs in your permission mode, in its own worktree, and reports to the orchestrator.`;
 }
 
 /** "you", "the orchestrator", or an agent's name: who a decision or an act belongs to. */

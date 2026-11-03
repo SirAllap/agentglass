@@ -10,6 +10,7 @@
  * start gets the line when it is ready, not before.
  */
 import type { TmuxWindow } from "../../../shared/types.ts";
+import { agentProvider } from "../../../shared/agentKinds.ts";
 import { prefixByte } from "./prefixArmed.ts";
 
 /** The first window in `now` whose id was not in `before`; null when none is new. */
@@ -17,8 +18,18 @@ export function appearedWindow(before: ReadonlySet<string>, now: readonly TmuxWi
   return now.find((w) => !before.has(w.id))?.id ?? null;
 }
 
-/** The command typed for "New agent". */
-export const AGENT_COMMAND = "claude";
+/** The command typed for "New agent": the agent step 1 picked, by its CLI name. */
+let picked = "claude";
+
+/** Remember the picked agent (an engine id). Anything else leaves it alone. */
+export function notePickedAgent(id: string | null | undefined): void {
+  if (id && agentProvider(id)) picked = id;
+}
+
+/** Which agent "New agent" starts. */
+export const pickedAgent = (): string => picked;
+
+export const agentCommand = (): string => agentProvider(picked)?.bin ?? "claude";
 
 /**
  * "Split this window" under tmux: the prefix then tmux's own split binding,

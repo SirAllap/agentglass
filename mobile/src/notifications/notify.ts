@@ -202,7 +202,7 @@ const warned = new Set<Blocked>();
  */
 const SILENT: Blocked = "unsupported";
 
-/** The in-flight or successful setup, kept only while it succeeded. See
+/** The setup still running, or the successful one, kept only while it succeeded. See
  *  ensureSetUp — declared here so everything __setNotificationsModule resets
  *  is above it. */
 let setUp: Promise<Delivery> | null = null;
@@ -287,7 +287,7 @@ function ensureSetUp(): Promise<Delivery> {
           name: "Agent alerts",
           description: "A gate waiting on you, a tool that failed, a run that stopped.",
           importance: N.AndroidImportance.HIGH,
-          // Distinct from the default so a held gate is recognisable from a
+          // Distinct from the default so a gate waiting on you is recognisable from a
           // pocket without reading it.
           vibrationPattern: [0, 220, 120, 220],
           lightColor: "#a78bfa",

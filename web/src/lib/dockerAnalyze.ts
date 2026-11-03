@@ -91,4 +91,4 @@ export function analyzeGate(o: { readOnly: boolean; situation: Situation }): { d
 export const analyzeTitle = (agent: string | null): string =>
   agent
     ? `Opens a new tab where ${agent} reads this Docker setup and proposes a cleanup. It asks before every removal.`
-    : "Opens a new tab with the agent set in Settings, Worker roles (builder), to propose a cleanup. It asks before every removal.";
+    : "Opens a new tab with the agent set in Settings, Orchestration (builder), to propose a cleanup. It asks before every removal.";

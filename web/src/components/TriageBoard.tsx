@@ -48,10 +48,14 @@ import { CleanAllButton } from "./CleanAllButton.tsx";
 import { resultRow, type ResultRow } from "../lib/prResultRow.ts";
 import { repoUsesTracker, trackerBlock } from "../lib/prCardBlock.ts";
 import { Button, CTRL_H, EDGE, LINE, Segmented } from "./workspace/Chrome.tsx";
+import { PrLaneSync } from "./PrLaneSync.tsx";
+import { SYNC_DONE_MS, type SyncCardStep } from "../lib/prSyncCards.ts";
 import { CODE_FONT_STYLE } from "./diff/DiffLines.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { cardReviewers } from "../lib/cardReviewers.ts";
-import { askingBehind, behindOf, onBehind } from "../lib/prBehindStore.ts";
+import { askingBehind, behindOf, knownBehind, onBehind } from "../lib/prBehindStore.ts";
+import { refreshPhase } from "../lib/prRefreshing.ts";
+import { onRefreshing, refreshingSince, refreshingVersion } from "../lib/prRefreshingStore.ts";
 import { askConflict, checkingConflict, onConflict } from "../lib/prConflictStore.ts";
 import { onRollup, rollupOf } from "../lib/prRollupStore.ts";
 import { onKnownBlock, withKnownBlock } from "../lib/prKnownBlock.ts";
@@ -61,7 +65,7 @@ import { stamp } from "../lib/whenStamp.ts";
 import { closedHeader, finishedKind } from "../../../shared/prClosed.ts";
 import { onSeenChange, readSeen } from "../lib/prNew.ts";
 import { cardStep } from "../lib/prKeymap.ts";
-import { unreadOf, unreadTitle, type Unread } from "../lib/prUnread.ts";
+import { unreadOf, type Unread } from "../lib/prUnread.ts";
 import { PrCardMenu } from "./PrCardMenu.tsx";
 import { openCard } from "../lib/openCard.ts";
 import { useTrackerSetup } from "../lib/trackerSetup.ts";
@@ -127,7 +131,7 @@ type ClosedSec = { id: string; label: string; rows: PrSummary[]; total: number |
 export function TriageBoard({
   mine, review, total, hasTaskProvider, pinned,
   onOpen, onTogglePin, onShowTable, onAct, selected, menuOff, busy, acting, loading, settling, failed, hidden, onRetry, lastRead, root, repoKey, repoSlug,
-  onlyUnread, onOnlyUnread, unfiltered, lens, others, showEveryone, results, more, viewer, person,
+  onlyUnread, onOnlyUnread, unfiltered, lens, others, showEveryone, results, more, viewer, person, me, onSyncOne, syncing, readOnly,
 }: {
   /** The `mine` scope, as the panel already has it. */
   mine: PrSummary[];
@@ -271,6 +275,14 @@ export function TriageBoard({
    * which draws exactly as it did before this prop existed.
    */
   viewer?: string;
+  /** The logged-in login: what makes a lane's "Sync N" countable. */
+  me?: string;
+  /** The card's Update, run per pull request by a lane sync. */
+  onSyncOne?: (p: PrSummary) => Promise<{ ok: boolean; detail?: string }>;
+  /** Pull requests whose Update is already on its way, so a lane never sends a second one. */
+  syncing?: ReadonlySet<number>;
+  /** No checkout on this machine: the lane counts nobody, as the card's Update does. */
+  readOnly?: boolean;
   /** Only on a person's board: the way back to the owner's, and whether the
    *  person has more than the first page of either list. */
   person?: {
@@ -403,6 +415,52 @@ export function TriageBoard({
   const isShown = useCallback((n: number) => onBoard.has(n), [onBoard]);
   const stacks = usePrStacks(root, everyone, isShown);
 
+  /*
+   * What each card says while a lane's Sync runs, mirrored up from the popover
+   * (see lib/prSyncCards.ts), and how a card's Retry gets back to the press it
+   * belongs to. A "done" one is dropped after the flash, here rather than in
+   * the card, so a card drawn twice does not flash twice.
+   */
+  const [syncSteps, setSyncSteps] = useState<ReadonlyMap<number, SyncCardStep>>(() => new Map());
+  const flashTimers = useRef(new Map<number, number>());
+  const noteSync = useCallback((n: number, step: SyncCardStep | null) => {
+    const was = flashTimers.current.get(n);
+    if (was !== undefined) { window.clearTimeout(was); flashTimers.current.delete(n); }
+    setSyncSteps((cur) => {
+      const next = new Map(cur);
+      if (step) next.set(n, step); else next.delete(n);
+      return next;
+    });
+    if (step?.phase !== "done") return;
+    flashTimers.current.set(n, window.setTimeout(() => {
+      flashTimers.current.delete(n);
+      setSyncSteps((cur) => {
+        if (cur.get(n)?.phase !== "done") return cur;
+        const next = new Map(cur);
+        next.delete(n);
+        return next;
+      });
+    }, SYNC_DONE_MS));
+  }, []);
+  useEffect(() => {
+    const timers = flashTimers.current;
+    return () => { for (const t of timers.values()) window.clearTimeout(t); timers.clear(); };
+  }, []);
+  /* The press and its results live inside the lane's popover, so it registers
+     here while mounted: a card's Retry must land in those results, not beside
+     them, or re-opening the list repeats a branch that already moved. */
+  const laneRetry = useRef(new Map<LaneId, (n: number) => Promise<void>>());
+  const holdLaneRetry = useCallback((lane: LaneId, retry: ((n: number) => Promise<void>) | null) => {
+    if (retry) laneRetry.current.set(lane, retry); else laneRetry.current.delete(lane);
+  }, []);
+  const retrySync = useCallback((p: PrSummary, lane: LaneId) => {
+    const owner = laneRetry.current.get(lane);
+    if (owner) { void owner(p.number); return; }
+    /* No press to go back to: the card's own Update is still the right send. */
+    noteSync(p.number, null);
+    onAct(p, "update");
+  }, [noteSync, onAct]);
+
   /* THE CARD MENU. What it offers is decided in lib/prCardMenu.ts from the same
      facts the card's footer reads; this only gathers them for the card that was
      pressed, and does the entries that need nothing from the panel. */
@@ -423,6 +481,9 @@ export function TriageBoard({
     return applyOff(cardMenu({
       p, view, pinned: pinned(p.number), mode, leftovers: (() => { const o = root ? offerFor(leftoverFor(root, p.number, p.state), "card") : null; return o?.button ? o.chip ?? "" : undefined; })(), tracker: tracker ?? undefined, cardId, stacked: !!stacks.of(p.number),
       waiting: reviewers.waiting.length > 0,
+      /* The lane's Sync owns the card while it runs: the menu wears the same
+         sentence as the footer button, so a right-click cannot send a second one. */
+      sync: syncSteps.get(p.number),
     }), viewer ? { ...menuOff, hideauthor: HIDE_OFF, hidebranch: HIDE_OFF } : menuOff);
   })();
   const pickFromMenu = (id: CardMenuId) => {
@@ -445,6 +506,11 @@ export function TriageBoard({
         if (shown) openCard(shown.customId || shown.id, shown.customId);
         else if (task) openCard(task.query, task.label);
         return;
+      case "update":
+        /* A row the Sync refused is still the popover's: its Retry owns the
+           re-send, and the same one the card's button presses. */
+        if (syncSteps.get(p.number)?.phase === "failed") { retrySync(p, p.filed.lane); return; }
+        onAct(p, id); return;
       default: onAct(p, id);
     }
   };
@@ -1217,7 +1283,10 @@ const w = lens?.why.get(p.number);
                       {/* The lane's own mark, in its colour: the one thing besides the
                           name that tells five columns apart at a glance. */}
                       <span aria-hidden className="agx-pl-tile">{LANE_GLYPH[l.id]}</span>
-                      <span className="truncate font-semibold" style={{ color: "var(--text)" }}>{l.label}</span>
+                      {/* The only part of the header with no fixed width. Measured in a 359px lane:
+                          tile, count, ⓘ, Sync, sort and fold take 266px, so a 144px name ellipsises into
+                          93px — and into the same 93px at the largest --agx-fs, whose text is 165px. */}
+                      <span className="truncate min-w-0 font-semibold" style={{ color: "var(--text)" }}>{l.label}</span>
                       {/* The lane's count, and the one way to light just this lane: it
                           used to be a chip in a row of its own above the lanes. A
                           lane with nothing in it has nothing to light, so it stays
@@ -1243,6 +1312,15 @@ const w = lens?.why.get(p.number);
                         </button>
                       )}
                       <span className="flex-1" />
+                      {/* Sync N: the lane's own count of what it may update. Its
+                          list opens under this header and never reads another lane. */}
+                      {!waiting && onSyncOne && me !== undefined && all.length > 0 && (
+                        <PrLaneSync lane={{ id: l.id, label: l.label, tint: l.tint }}
+                          rows={(lanes.get(l.id) ?? []).map((p) => ({ p, filed: p.filed }))}
+                          me={me} readOnly={readOnly} syncing={syncing}
+                          behindKnown={(n) => knownBehind(root ?? "", n)} onSyncOne={onSyncOne} onStep={noteSync}
+                          onRetryReady={holdLaneRetry} />
+                      )}
                       {/* Sort: in every lane and in every state, in the same place, so
                           nothing beside it moves. A dot says an order other than the
                           default is on; the menu says which. */}
@@ -1331,6 +1409,7 @@ const w = lens?.why.get(p.number);
                             onAct={onAct} onMenu={(c, at) => setMenu({ p: c, ...at })} busy={busy} acting={acting} selected={selected === p.number}
                             dim={!matches(p) || (onlyLane !== null && onlyLane !== l.id)} root={root}
                             unread={unread.get(p.number)}
+                            sync={syncSteps.get(p.number)} onSyncRetry={() => retrySync(p, l.id)}
                             stack={stacks.of(p.number)} titleOf={titleOf} factsOf={factsOf} lit={lit === p.number} onLit={setLit} onOpenBase={onOpen}
                             chain={chain?.members.has(p.number) ? (chain.me === p.number ? "me" : "on") : undefined} onChain={onChain}
                             rail={rails.get(l.id)?.get(p.number)} gutter={rails.has(l.id)} />
@@ -1480,7 +1559,7 @@ export function medianAge(rows: readonly PrSummary[], now = Date.now()): string 
   return h >= 48 ? `${Math.round(h / 24)} d` : `${h} h`;
 }
 
-function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onOpenFull, onPin, notes, onOpenNotes, onAct, onMenu, busy, acting, dim, selected, root, unread, stack, titleOf, factsOf, lit, onLit, onOpenBase, chain, onChain, rail, gutter, lazyCard }: {
+function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onOpenFull, onPin, notes, onOpenNotes, onAct, onMenu, busy, acting, dim, selected, root, unread, stack, titleOf, factsOf, lit, onLit, onOpenBase, chain, onChain, rail, gutter, lazyCard, sync, onSyncRetry }: {
   p: Card; hasTaskProvider: boolean;
   /** Ask the tracker for this card only once it has been on screen (a person's board: a hundred cards, one request budget). */
   lazyCard?: boolean;
@@ -1492,6 +1571,10 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onOpenFull, on
   unread?: Unread | null;
   /** The pull request whose action is running, so only its card spins. */
   acting?: ReadonlySet<number>;
+  /** Where this one stands in a lane's Sync, from the board's mirror of the popover's job. */
+  sync?: SyncCardStep;
+  /** The card's Retry: the board hands it back to the press that owns the failed step. */
+  onSyncRetry?: () => void;
   /**
    * A find is running and this card is not one of the answers.
    *
@@ -1569,12 +1652,17 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onOpenFull, on
   /* What the card shows in each slot is decided in lib/prCardView.ts, where a
      test can reach it; this only draws it. */
   const working = !!acting?.has(p.number);
+  /* The update finished and GitHub is being read for the new state: the event
+     line says so until that read lands (lib/prRefreshing.ts). */
+  useSyncExternalStore(onRefreshing, refreshingVersion, refreshingVersion);
+  const refreshSince = root ? refreshingSince(root, p.number) : undefined;
+  const refreshing = refreshSince ? refreshPhase(refreshSince, Date.now()) : null;
   const chip = fin ? null : chipFor(notes);
   const leftoverState = useLeftover(root, p);
   const cleaning = useCleaning(root, p.number);
   const cv = cardView({
-    p, filed: p.filed, reviewers, behind, asking, checking: checkingMerge, reading: !fin && stillReading(p), leftoverState, cleaning,
-    busy: working, tracker: block, hasTaskProvider,
+    p, filed: p.filed, reviewers, behind, asking, checking: checkingMerge, reading: !fin && stillReading(p), leftoverState, cleaning, unread,
+    busy: working, refreshing, tracker: block, hasTaskProvider,
     notes: chip && notes ? totalOpen(notes) : undefined, labels: p.labels.map((l) => l.name),
   });
   const hold = notes && p.filed.lane === "land" ? notReadyChip(notes) : null;
@@ -1596,8 +1684,8 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onOpenFull, on
     <PrCard cardRef={cardEl} p={p} cv={cv} card={shown} task={task} prOpen={p.state === "OPEN"} age={ago(p.updatedAt)}
         stripNote={fin ? closedHeader(p, stamp) : undefined} reviewUrl={hr?.url} notesChip={notesChip}
         eventTip={eventTip({ reason: p.filed.reason, test: p.filed.test, author: p.author, quiet: eventLine(p.filed.reason, p.updatedAt).quiet, at: stamp(p.updatedAt) })}
-        unread={unread ? unreadTitle(unread) : null}
         pinned={pinned} working={working} locked={!!busy && !working} dim={dim} selected={selected} lit={lit} chain={chain}
+        sync={sync} onSyncRetry={onSyncRetry}
         stack={stackView} rail={rail ?? null} gutter={gutter}
         onChain={(members) => onChain?.(members, p.number)} onOpenPr={(n) => onOpenBase?.(n)} onLit={onLit}
         onOpen={onOpen} onOpenFull={onOpenFull} onOpenNotes={onOpenNotes} onPin={onPin}

@@ -45,7 +45,7 @@ const STATUS: Record<FakeEngineId, string[]> = {
   claude: ["claude", "auth", "status"],
   codex: ["codex", "login", "status"],
   gemini: ["gemini", "status"],
-  opencode: ["opencode", "providers", "list"],
+  opencode: ["opencode", "auth", "list"],
   hermes: ["hermes", "status"],
   agy: ["agy", "status"],
 };

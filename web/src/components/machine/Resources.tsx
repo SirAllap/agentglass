@@ -11,11 +11,14 @@ import { api } from "../../lib/api.ts";
 import type { GitRepoRef, ResourceReport } from "../../../../shared/types.ts";
 import { CaretIcon } from "../../lib/glyphIcons.tsx";
 import { RING, dialSub, dialsOf, mb, pushSample, resampleDue, ringDash, sparkPoints, treeOf, type Dial } from "../../lib/machineView.ts";
-import { publishMachineDisk } from "../../lib/diskClean.ts";
+import { cleanupChipLabel, publishMachineDisk, useDiskPlan } from "../../lib/diskClean.ts";
 import { useDockerLive } from "../../lib/useDockerLive.ts";
 import { useRefreshOnFocus } from "../../lib/useRefreshOnFocus.ts";
-import { FilterField, RefreshButton } from "../workspace/Chrome.tsx";
+import { Button, FilterField, RefreshButton } from "../workspace/Chrome.tsx";
 import { DiskClean } from "../DiskClean.tsx";
+import { BroomIcon } from "../docker/DockerIcons.tsx";
+import { ICON } from "../../lib/iconSize.ts";
+import { tipAttr } from "../../lib/tip.ts";
 import { DetailPane } from "./DetailPane.tsx";
 import { LeftBehind } from "./LeftBehind.tsx";
 import { Space } from "./Space.tsx";
@@ -108,6 +111,7 @@ export function Resources() {
   }, [data, load]);
 
   const tree = useMemo(() => treeOf(data?.procs ?? [], repos, q), [data, repos, q]);
+  const diskPlan = useDiskPlan();
   // Record this reading against every key on screen, so a line that appears later starts empty.
   // A project and its main checkout share one path, so the project's line gets its own key: one key was one history fed twice per reading and one caret that closed both.
   const projKey = (key: string) => `project:${key}`;
@@ -120,6 +124,7 @@ export function Resources() {
   const otherCpu = data.totalCpu != null && data.oursCpu != null ? Math.max(0, data.totalCpu - data.oursCpu) : null;
   const live = (data.procs ?? []).filter((p) => p.ours).length;
   const dials = dialsOf(data.machine);
+  const cleanupChip = diskPlan ? cleanupChipLabel(diskPlan) : null;
   const flip = (key: string, set: typeof setShut) => set((cur) => { const n = new Set(cur); if (n.has(key)) n.delete(key); else n.add(key); return n; });
 
   return (
@@ -132,14 +137,24 @@ export function Resources() {
             <b>{(data.oursRss / 1024 ** 3).toFixed(2)}<small> GB</small></b>
             <span>Σ RSS · {live} process{live === 1 ? "" : "es"} of ours{!data.rated && " · CPU needs a second sample"}</span>
           </div>
+          {/* The plan is the card at the top of the left column; this names it
+              from the toolbar and takes you there. */}
+          {cleanupChip && (
+            <Button size="regular" tone="quiet" data-disk-chip
+              data-tip={tipAttr({ name: "Disk cleanup", text: "The plan on screen would free this. Nothing is removed until you press Remove there." })}
+              onClick={() => document.getElementById("disk-clean")?.scrollIntoView({ block: "start" })}>
+              <span style={{ display: "inline-flex", color: "var(--success-ink)" }}><BroomIcon size={ICON.sm} /></span>
+              {cleanupChip}
+            </Button>
+          )}
           <RefreshButton onRefresh={refresh} spinning={looking} title="Sample again now" />
         </div>
         <div className="mc-scr mc-res" style={{ flex: 1 }}>
           {dials.length > 0 && <div className="mc-gauges" role="group" aria-label="This machine">{dials.map((d) => <DialCard key={d.key} d={d} />)}</div>}
           <div className="mc-rcols">
             <div className="mc-rcol">
+              <DiskClean disk={data.machine} />
               <LeftBehind tick={tick} />
-              <DiskClean />
             </div>
             <div className="mc-rcol">
               <section aria-label="Processes">

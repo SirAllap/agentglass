@@ -1,4 +1,5 @@
-import { useEffect, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
+import { SHEET_ROWS } from "../lib/layers.ts";
 import { reducedMotion } from "../lib/lookPrefs.ts";
 import { currentToc, tocItems, type TocItem } from "../lib/settingsNav.ts";
 
@@ -25,6 +26,7 @@ export function SettingsToc({ scope, scroller, page }: {
 }) {
   const [items, setItems] = useState<TocItem[]>([]);
   const [cur, setCur] = useState(0);
+  const band = useRef<HTMLElement>(null);
 
   useEffect(() => {
     const root = scope.current;
@@ -51,9 +53,14 @@ export function SettingsToc({ scope, scroller, page }: {
     if (!sc || !items.length) return;
     let raf = 0;
     const look = () => {
-      const head = sc.querySelector<HTMLElement>(".agx-ph")?.getBoundingClientRect().bottom ?? sc.getBoundingClientRect().top;
+      // "Current" is read under the last pinned row: the scope bar where the page
+      // has one, else the band's own bottom (it pins at the region's top edge, so
+      // the region's top edge as a reference reads the card hidden behind it).
+      const bar = sc.querySelector<HTMLElement>("[data-scope-bar]")?.getBoundingClientRect().bottom
+        ?? sc.querySelector<HTMLElement>(".agx-toc")?.getBoundingClientRect().bottom
+        ?? sc.getBoundingClientRect().top;
       const tops = items.map((it) => document.getElementById(it.id)?.getBoundingClientRect().top ?? Infinity);
-      setCur(currentToc(tops, head + 24));
+      setCur(currentToc(tops, bar + 24));
     };
     const soon = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(look); };
     soon();
@@ -61,9 +68,21 @@ export function SettingsToc({ scope, scroller, page }: {
     return () => { sc.removeEventListener("scroll", soon); cancelAnimationFrame(raf); };
   }, [scroller, items]);
 
+  // The band's own height, published on the one scroll region: the scope bar
+  // pins below it and a scrolled-to card lands below both, so the stack is
+  // measured here rather than counted by hand in the stylesheet.
+  useEffect(() => {
+    const region = scroller.current;
+    const el = band.current;
+    if (!region || !el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => region.style.setProperty("--agx-stick-toc", `${el.offsetHeight}px`));
+    ro.observe(el);
+    return () => { ro.disconnect(); region.style.removeProperty("--agx-stick-toc"); };
+  }, [scroller, items.length]);
+
   if (!items.length) return null;
   return (
-    <nav className="agx-toc" aria-label="On this page">
+    <nav ref={band} className="agx-toc" aria-label="On this page" style={{ zIndex: SHEET_ROWS.band }}>
       <div className="agx-toc-lab">On this page</div>
       {items.map((it, i) => (
         <a key={it.id} href={`#${it.id}`} aria-current={i === cur ? "location" : undefined}

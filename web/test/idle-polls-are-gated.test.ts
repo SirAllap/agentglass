@@ -31,7 +31,7 @@ describe("the dashboard's own polls", () => {
 
   test("Starboard hands Alerts its own active flag", async () => {
     const text = await src("components/StarboardView.tsx");
-    expect(text).toContain("<Alerts alerts={alerts} agents={agents} active={active}");
+    expect(text).toMatch(/<Alerts\b[^>]*\bactive=\{active\}/);
   });
 });
 

@@ -1,15 +1,17 @@
-import { useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import "./pilotSettings.css";
 import { api } from "../../lib/api.ts";
 import type { Actor, Pilot, PilotSettings, PilotSnapshot } from "../../lib/flightPilot.ts";
 import { CommentIcon, CrossIcon as XIcon, EditIcon, FlagIcon, HandIcon, LockIcon, MergeIcon, PlusIcon as AddIcon, StarIcon, UserIcon } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
+import { preflightFallbackNote, preflightLabel, type PreflightTarget } from "../../../../shared/preflightEngine.ts";
 import {
   DEFAULT_PILOT_SETTINGS, fmtUsd, meter, nowLine, parseUsd, track,
   type Field, type RowNote, type StationKey, type UsdField,
 } from "../../lib/pilotSettings.ts";
 import { projectName } from "../../lib/flightPlan.ts";
 import { pickProject } from "../../lib/flightProjects.ts";
+import { openSettings } from "../../lib/openSettings.ts";
 import { ShieldIcon } from "../settingsNavIcons.tsx";
 import { EyeIcon, PlaneIcon, TickIcon, WrenchIcon } from "./fpIcons.tsx";
 import { ProjectsCard, type ProjectRow } from "./ProjectsCard.tsx";
@@ -34,7 +36,6 @@ const SUMMARY: Record<Pilot, ReactNode> = {
   copilot: <>In Co-pilot <b>you</b> say Go or No-go, once per plan. <b>The orchestrator</b> writes, runs Preflight, answers it and follows the builder. Nothing leaves this machine.</>,
   autopilot: <>In Autopilot <b>you</b> create plans when you want to and answer <b>one question</b> when asked. <b>The orchestrator</b> does everything else up to merging into your local main. Nothing leaves this machine.</>,
 };
-const MODELS = [["sonnet", "Sonnet 5.5"], ["opus", "Opus"], ["haiku", "Haiku"]] as const;
 const PERMS = [["default", "Ask"], ["auto", "Auto"], ["bypassPermissions", "Bypass"]] as const;
 /** Each fixed refusal; a note says how far it is enforced, and every chip keeps its size. */
 const NEVER: readonly (readonly [string, string?])[] = [["Pushes"], ["Opens a PR"], ["Merges"], ["Releases"], ["Leaves its worktree", "File edits enforced, shell checked, scripts by brief."], ["Changes settings"]];
@@ -126,6 +127,8 @@ export interface PilotSettingsViewProps {
   snapshot?: PilotSnapshot | null;
   /** How many cards would wait for the person under each mode, right now. */
   waiting?: Record<Pilot, number>;
+  /** What a Preflight runs on in the selected project, as the server resolves it; absent until it is read. */
+  target?: PreflightTarget | null;
   project: string;
   notes?: Partial<Record<Field, RowNote>>;
   saving?: Partial<Record<Field, number>>;
@@ -139,11 +142,14 @@ export interface PilotSettingsViewProps {
 }
 
 /** The Settings tab as the approved design draws it: who flies and the track on the left, the limits on the right. */
-export function PilotSettingsView({ settings, snapshot, waiting, project, notes = {}, saving = {}, loadError, onChange, onRetry, extra, top }: PilotSettingsViewProps) {
+export function PilotSettingsView({ settings, snapshot, waiting, target, project, notes = {}, saving = {}, loadError, onChange, onRetry, extra, top }: PilotSettingsViewProps) {
   const gid = useId();
   const [bad, setBad] = useState<Partial<Record<UsdField, string>>>({});
   const s = settings ?? DEFAULT_PILOT_SETTINGS;
   const off = settings === null || !!loadError;
+  /* What Preflight really runs on in this project, resolved by the server from the project's Reviewer chain: the card and the run read one function. */
+  const targetLine = target ? preflightLabel(target) : s.model;
+  const fallback = target ? preflightFallbackNote(target) : null;
   const busy = (f: Field) => (saving[f] ?? 0) > 0;
   const noteOf = (f: Field): RowNote | undefined => {
     const b = (bad as Record<string, string | undefined>)[f];
@@ -162,12 +168,14 @@ export function PilotSettingsView({ settings, snapshot, waiting, project, notes 
   const spend = (f: "dailyUsd" | "weeklyUsd") => {
     const day = f === "dailyUsd";
     const spent = bud ? (day ? bud.todayUsd : bud.weekUsd) : undefined;
-    const m = meter(spent ?? 0, s[f]);
+    /* The cap in force may be a raise the person agreed to for today; the box below still holds the base cap it goes back to. */
+    const raised = Math.max(s[f], (day ? bud?.dailyUsd : bud?.weeklyUsd) ?? 0);
+    const m = meter(spent ?? 0, raised);
     const reached = snapshot?.budgetReached === (day ? "day" : "week");
     const label = day ? "Today" : "This week";
     return {
-      hint: spent === undefined ? <>{label} not read yet · cap ${fmtUsd(s[f])}</> : <>{label} <b>${fmtUsd(spent)}</b> of ${fmtUsd(s[f])}{reached ? " · Autopilot is on Co-pilot" : ""}</>,
-      bar: <div className="ps-bar" role="meter" aria-label={`${label} spend`} aria-valuemin={0} aria-valuemax={s[f]} aria-valuenow={Math.min(spent ?? 0, s[f])} data-tone={m.tone} style={{ ["--p" as string]: m.pct }}><i /></div>,
+      hint: spent === undefined ? <>{label} not read yet · cap ${fmtUsd(s[f])}</> : <>{label} <b>${fmtUsd(spent)}</b> of ${fmtUsd(raised)}{raised > s[f] ? ` · raised from ${fmtUsd(s[f])} until ${day ? "midnight" : "Monday"}` : ""}{reached ? " · Autopilot is on Co-pilot" : ""}</>,
+      bar: <div className="ps-bar" role="meter" aria-label={`${label} spend`} aria-valuemin={0} aria-valuemax={raised} aria-valuenow={Math.min(spent ?? 0, raised)} data-tone={m.tone} style={{ ["--p" as string]: m.pct }}><i /></div>,
     };
   };
   const day = spend("dailyUsd"), week = spend("weeklyUsd");
@@ -225,7 +233,7 @@ export function PilotSettingsView({ settings, snapshot, waiting, project, notes 
           </section>
 
           <section className="ps-card">
-            <Head icon={<EyeIcon size={ICON.md} />} title={`Preflight · ${projectName(project)}`} sub="A fresh reviewer reads the plan and only the files it cites. Small plans skip it. Where it looks, the model and the cap are this project's; sizes and second looks are shared." />
+            <Head icon={<EyeIcon size={ICON.md} />} title={`Preflight · ${projectName(project)}`} sub="A fresh reviewer reads the plan and only the files it cites. Small plans skip it. Where it looks and the cap are this project's; the engine and model, sizes and second looks are shared." />
             <PilotRow title="Reviews" hint="Where it looks. Each look costs one run." note={noteOf("reviews")} saving={busy("reviews")}>
               {(ids) => (
                 <div role="group" aria-labelledby={ids.lb} aria-describedby={ids.db} style={{ display: "contents" }}>
@@ -244,11 +252,10 @@ export function PilotSettingsView({ settings, snapshot, waiting, project, notes 
             <PilotRow title="Second looks" hint="Co-pilot and Manual: after a blocker is fixed, look again at most this often. Autopilot spends to the budget instead, at most 8 looks per plan." note={noteOf("secondLooks")} saving={busy("secondLooks")}>
               {(ids) => <Seg ids={ids} disabled={off} value={s.secondLooks} options={[[0, "0"], [1, "1"], [2, "2"]] as const} onPick={(v) => onChange({ secondLooks: v })} />}
             </PilotRow>
-            <PilotRow title="Model · cap per run" hint="Sonnet reads a plan well for a few cents." note={noteOf("model") ?? noteOf("costCapUsd")} saving={busy("model") || busy("costCapUsd")}>
+            <PilotRow title="Model · cap per run" hint={fallback ?? "The engine and model Preflight runs on, chosen once in Orchestration. OpenCode or Claude reads a plan for a few cents."} note={noteOf("model") ?? noteOf("costCapUsd")} saving={busy("model") || busy("costCapUsd")}>
               {(ids) => <>
-                <select className="sel" aria-label="Model" aria-describedby={ids.db} disabled={off} value={s.model} onChange={(e) => onChange({ model: e.target.value })}>
-                  {[...MODELS, ...(MODELS.some(([k]) => k === s.model) ? [] : [[s.model, s.model] as const])].map(([k, w]) => <option key={k} value={k}>{w}</option>)}
-                </select>
+                <span className="ps-lock" aria-describedby={ids.db}><b className="t-mono">{targetLine}</b><LockIcon size={ICON.xs} /></span>
+                {!fallback && <button type="button" className="btn sm" onClick={() => openSettings("orchestration")}>Change in Orchestration</button>}
                 {usd("costCapUsd", "Cost cap per run, in dollars", ids)}
               </>}
             </PilotRow>
@@ -323,6 +330,15 @@ export function SettingsTab({ enabled, root, onEnabled, onChanged, scope }: {
   const [chosen, setChosen] = useState<string | null>(null);
   const waitingNow = Object.fromEntries(scope.rows.map((r) => [r.root, r.waiting]));
   const picked = pickProject(scope.rows.map((r) => r.root), waitingNow, chosen) || root;
+  /* What the server will run a Preflight on in this project: its Reviewer chain, project rules included. */
+  const [target, setTarget] = useState<PreflightTarget | null>(null);
+  useEffect(() => {
+    let live = true;
+    api.flightPreflightTarget(picked)
+      .then((r) => { if (live && r.ok && r.target) setTarget(r.target); })
+      .catch(() => { /* the row falls back to the model the settings read carries */ });
+    return () => { live = false; };
+  }, [picked]);
   const reloadMoments = useRef<(() => void) | null>(null);
   const p = usePilotSettings(picked, () => { onChanged(); reloadMoments.current?.(); });
   const [onNote, setOnNote] = useState<RowNote | undefined>();
@@ -340,5 +356,5 @@ export function SettingsTab({ enabled, root, onEnabled, onChanged, scope }: {
     </section>
   );
   const top = <ProjectsCard rows={scope.rows} selected={picked} onSelect={setChosen} enabled={enabled} momentsRef={reloadMoments} onWrote={() => { onChanged(); void p.reload(); }} />;
-  return <PilotSettingsView settings={p.settings} snapshot={scope.snapshotFor(picked)} waiting={scope.waitingFor(picked)} project={picked} notes={p.notes} saving={p.saving} loadError={p.loadError} onChange={p.change} onRetry={() => void p.reload()} extra={master} top={top} />;
+  return <PilotSettingsView settings={p.settings} snapshot={scope.snapshotFor(picked)} waiting={scope.waitingFor(picked)} target={target} project={picked} notes={p.notes} saving={p.saving} loadError={p.loadError} onChange={p.change} onRetry={() => void p.reload()} extra={master} top={top} />;
 }

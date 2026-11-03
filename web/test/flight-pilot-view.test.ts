@@ -356,6 +356,45 @@ describe("the state of a flight, one word", () => {
   });
 });
 
+describe("a plan follows the worker that builds it", () => {
+  const MIN = 60_000;
+  const rep = (minAgo: number, step: number | null = 2, of: number | null = 7) => ({ line: "routes wired", step, of, by: "builder", at: NOW - minAgo * MIN });
+  const id = (it: FlightItem, s: PilotSnapshot = snap()) => stateOf(it, s, NOW).id;
+  const linked = (o: Partial<Plan> = {}, extra: Partial<FlightItem> = {}): FlightItem => {
+    const it = flightItems([{ plan: plan({ state: "launched", launched: { at: NOW - 30 * MIN, title: "t", branch: "flight-plan/orbit-search", worktree: "/work/acme/orbit-fp-orbit-search", window: "@7", session: "orbit" }, worker: "fp-orbit-search", ...o }), run: null }])[0]!;
+    return { ...it, ...extra };
+  };
+  const atGo = (o: Partial<Plan> = {}): FlightItem =>
+    flightItems([{ plan: plan({ state: "go", decision: { by: "you", at: NOW - 10 * MIN }, ...o }), run: null }])[0]!;
+
+  test("working is Building while the worker lives, whatever its tab says", () => {
+    const it = atGo({ worker: "fp-orbit-search", workerState: "working" });
+    expect(id(it)).toBe("building");
+    expect(stateOf(it, snap(), NOW).group).toBe("flying");
+    expect(flightGroups([it], NOW, snap()).flying).toHaveLength(1);
+    expect(flightGroups([it], NOW, snap()).ground).toHaveLength(0);
+    // A launched plan whose worker is still working is Building even when its tab is gone.
+    expect(id(linked({ builder: "gone", workerState: "working", lastReport: rep(2) }))).toBe("building");
+  });
+  test("ended is Checking, and Ready to land once its steps are all done", () => {
+    expect(id(linked({ workerState: "ended", lastReport: rep(2, 2, 7) }))).toBe("checking");
+    expect(id(linked({ workerState: "ended", lastReport: rep(2, 7, 7) }))).toBe("ready");
+    expect(id(linked({ workerState: "ended", builder: "gone", lastReport: null }))).toBe("checking");
+  });
+  test("no worker link is Queued at Go, exactly as before", () => {
+    expect(id(atGo({ queued: true }))).toBe("queued");
+    expect(id(atGo({ queued: true, worker: null }))).toBe("queued");
+  });
+  test("a linked plan at Go is not the Go card and not Queued", () => {
+    const it = atGo({ worker: "fp-orbit-search", workerState: "working" });
+    expect(flightGroups([it], NOW, snap()).waiting).toHaveLength(0);
+    expect(rowAction(it, snap(), NOW).kind).not.toBe("go");
+  });
+  test("a link nobody can resolve says nothing: the plan keeps its own state", () => {
+    expect(id(atGo({ queued: true, worker: "fp-gone", workerState: undefined }))).toBe("queued");
+  });
+});
+
 describe("the four groups and what is counted", () => {
   const MIN = 60_000;
   const gone = (id: string, o: Partial<Plan> = {}): FlightItem => item({ plan: plan({ id, state: "launched", builder: "gone", lastReport: { line: "x", step: 3, of: 9, by: "b", at: NOW - MIN }, launched: { at: NOW - 30 * MIN, title: "t", window: "@1", session: "orbit" }, ...o }), run: null });

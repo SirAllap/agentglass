@@ -76,7 +76,7 @@ function defaultDbPath(): string {
   /*
    * A FILE IN THE WORKING DIRECTORY NO LONGER WINS.
    *
-   * It used to: a pre-existing `./agentglass.db` beat the data dir, so a
+   * It used to: a `./agentglass.db` already on disk beat the data dir, so a
    * server started from `server/` in a checkout that once had one read that
    * old history instead of the current one — real sessions, weeks stale, and
    * nothing on screen to say which file it was. The data dir is the answer
@@ -407,7 +407,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(text);
 `);
 
 // `provider` was added after v1. CREATE TABLE IF NOT EXISTS won't add it to a
-// pre-existing sessions table, so ALTER it in before any statement referencing
+// sessions table that is already there, so ALTER it in before any statement referencing
 // it is prepared. Harmless (throws "duplicate column") once it already exists.
 try { db.exec("ALTER TABLE sessions ADD COLUMN provider TEXT"); } catch { /* already present */ }
 
@@ -1538,6 +1538,40 @@ CREATE TABLE IF NOT EXISTS agent_status (
   /** What it last delivered — a commit, a branch, a sentence. */
   left_behind TEXT NOT NULL DEFAULT '',
   at INTEGER NOT NULL DEFAULT 0
+);
+
+/*
+ * WHAT A PERSON SAID ABOUT A COMMIT THEY TESTED.
+ *
+ * Keyed by commit, not by branch or subject: a rebase rewrites the shas and the
+ * old verdict matches no row, which is right — a verdict is about a commit.
+ * Additive, so SCHEMA_GENERATION does not move.
+ */
+CREATE TABLE IF NOT EXISTS signoff (
+  project TEXT NOT NULL,
+  sha TEXT NOT NULL,
+  verdict TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'person',
+  by TEXT NOT NULL DEFAULT '',
+  at INTEGER NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (project, sha)
+);
+`);
+
+/*
+ * WHERE A PROJECT'S MANIFEST COUNT BEGINS.
+ *
+ * One row per project: the trunk commit that was HEAD the first time Manifest
+ * read it, and when. A repository with years of history would otherwise ask a
+ * person to sign off every old commit; the line is what makes the view start at
+ * the person's own arrival. Additive, so SCHEMA_GENERATION does not move.
+ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS manifest_start (
+  project TEXT PRIMARY KEY,
+  sha TEXT NOT NULL,
+  at INTEGER NOT NULL
 );
 `);
 

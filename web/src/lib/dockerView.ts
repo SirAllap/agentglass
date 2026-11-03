@@ -201,6 +201,28 @@ export function stepOf(ids: string[], sel: string | null) {
   return { i: at + 1, n: ids.length, prev: ids[at - 1] ?? null, next: ids[at + 1] ?? null };
 }
 
+/* --------------------------------------------------------------- bulk verbs */
+
+/*
+ * Stop all / Start all act on the list the view is showing. Stop takes the live
+ * ones (docker stop also accepts restarting); start takes the two states docker
+ * start accepts, as groupMenu does. A paused or dead container is in neither.
+ */
+const BULK_STATES = { stop: ["running", "restarting"], start: ["exited", "created"] } as const;
+
+export function bulkTargets(all: DockerContainer[], verb: "stop" | "start"): DockerContainer[] {
+  const states: readonly string[] = BULK_STATES[verb];
+  return all.filter((c) => states.includes((c.state || "").toLowerCase()));
+}
+
+/** The question the dialog asks, and the words its button carries. */
+export function bulkAsk(verb: "stop" | "start", n: number): { title: string; body: string; confirmLabel: string } {
+  const one = n === 1;
+  return verb === "stop"
+    ? { title: `Stop ${n} running container${one ? "" : "s"}?`, body: "Nothing is deleted; Start all brings them back", confirmLabel: "Stop all" }
+    : { title: `Start ${n} stopped container${one ? "" : "s"}?`, body: "Nothing is created; Stop all takes them down again", confirmLabel: "Start all" };
+}
+
 /** The feed samples the whole host; keep the containers this view shows. With none known yet, keep all. */
 export function mergeStats(incoming: DockerStat[], known: ReadonlySet<string>): Record<string, DockerStat> {
   const out: Record<string, DockerStat> = {};

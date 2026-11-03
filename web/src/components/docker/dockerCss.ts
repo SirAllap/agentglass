@@ -173,6 +173,10 @@ button.dk-q:hover{transform:scale(1.15)}
 .dk-why code{background:var(--bg);color:inherit;font-family:var(--font-mono,ui-monospace,monospace);font-size:11px;padding:1px 4px;border-radius:4px}
 .dk-why[data-tone=amb]{background:color-mix(in srgb,var(--warning) 7%,var(--bg));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--warning) 28%,transparent);color:var(--warning-ink,var(--warning))}
 .dk-why[data-tone=amb] svg{color:var(--warning)}
+.dk-why .dk-cause{margin-top:3px;color:var(--text2)}
+.dk-why .dk-fold{margin-top:3px}
+.dk-why .dk-fold summary{cursor:pointer;font-size:10.5px;color:var(--text3);width:max-content}
+.dk-why .dk-fold code{display:block;margin-top:4px;white-space:pre-wrap;word-break:break-word}
 .dk-facts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding:0 16px 12px}
 .dk-fact{padding:8px 10px;border-radius:10px;background:linear-gradient(180deg,color-mix(in srgb,var(--bg2) 60%,var(--bg)),var(--bg2));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--text) 7%,transparent);min-width:0}
 .dk-fact .k{font-size:10px;line-height:1;font-weight:600;color:var(--text3);letter-spacing:.02em}
@@ -209,6 +213,7 @@ button.dk-q:hover{transform:scale(1.15)}
 @keyframes dk-flash{from{background:color-mix(in srgb,var(--error) 30%,transparent)}}
 .dk-jump{position:absolute;left:50%;bottom:12px;transform:translateX(-50%)}
 .dk-logend{padding:8px 14px;font-size:11px;color:var(--text3);border-top:1px dashed var(--surface-line);flex:none}
+.dk-logold{padding:6px 14px;font-size:11px;color:var(--text3);border-bottom:1px dashed var(--surface-line);flex:none;background:color-mix(in srgb,var(--warning) 6%,var(--bg))}
 
 .dk-folds{overflow:auto;flex:none;max-height:46%}
 .dk-acc{border-top:${LINE};flex:none}
@@ -242,6 +247,10 @@ button.dk-q:hover{transform:scale(1.15)}
 /* Mockup base: 12px / 1.4 under everything; the app's body is 16px, which put 3px into every card line box. */
 .dk-root{font-size:12px;line-height:1.4}
 .dk-hdr .agx-seg-b{font-size:11px;padding:0 10px}
+/* The options in a segmented choice are one line, always. Wrapping them (the
+   kit's default for a narrow column) made a 48px bar 96px tall in place, with
+   the two halves of "By stack" over each other: the ROW wraps instead. */
+.dk-hdr .agx-seg{flex-wrap:nowrap}
 .dk-badge{display:inline-flex;align-items:center;gap:4px;height:16px;padding:0 6px;border-radius:5px;font-size:10px;line-height:1;white-space:nowrap;flex:none;color:var(--tint,var(--text3));background:color-mix(in srgb,var(--tint,var(--text3)) 11%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--tint,var(--text3)) 28%,transparent)}
 .dk-badge svg{color:inherit}
 .dk-act{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;border:${EDGE};background:linear-gradient(180deg,var(--bg),var(--bg2));color:var(--tone,var(--text2));box-shadow:0 1px 1px rgba(0,0,0,.04);padding:0;flex:none;cursor:pointer;transition:transform 140ms var(--ease-out,ease),border-color .12s,background .12s}

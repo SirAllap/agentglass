@@ -255,7 +255,10 @@ describe("header layout and progress source rules", async () => {
   });
   it("lets the tab strip yield, so the slot and the right cluster are never the ones squeezed", () => {
     expect(header).toMatch(/data-tabs-strip/);
-    expect(header).toContain("min-w-[96px] flex-1 overflow-x-auto");
+    // The floor is the tabs' own width and the row wraps: a hand-picked floor
+    // (96, then 420) squeezed the strip under the actions (measured 97px of 791).
+    expect(header).toContain("min-w-[fit-content] flex-1 overflow-x-auto");
+    expect(header).toContain("flex-wrap gap-y-1.5");
     expect(header).toContain('className="flex items-center gap-1.5 shrink-0 overflow-hidden" style={{ maxWidth: "40%" }} data-slot');
   });
   it("cuts a long publish target instead of pushing the refresh button off the window", () => {

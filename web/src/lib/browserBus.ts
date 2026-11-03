@@ -1,4 +1,5 @@
 import type { BrowserAskFrame } from "../../../shared/types.ts";
+import { closedReply, openedReply, selectedReply, tabsReply, type TabRow } from "../../../shared/browserTabReplies.ts";
 import { api } from "./api.ts";
 import { captureBrowser, registerBrowserInitScript, browserCdp, browserInput, browserCdpEvents, applySessionSettings, browserDevtools, browserDevtoolsClose, browserDevtoolsShot, browserDevtoolsPanel, browserDevtoolsZoom, setGuestOwner, browserPermission } from "./desktop.ts";
 import { runBrowserAsk, type DrivableWebview } from "./browserDrive.ts";
@@ -66,7 +67,7 @@ export interface TabOps {
    *  gives it: two tabs in different profiles are two different people, with
    *  their own cookies and storage. It was there the whole time and only the
    *  human could reach it. */
-  list(): { id: string; title: string; url: string; active: boolean; profile?: string }[];
+  list(): TabRow[];
   select(which: { index?: number; id?: string }): boolean;
   /* `{ error }` rather than null: the panel knows WHY — "twelve pages awake at
      once is the limit", "that name is taken" — and a caller told only that it
@@ -112,7 +113,7 @@ async function serveTabs(ask: BrowserAskFrame): Promise<{ ok: boolean; value?: u
   };
   switch (ask.op) {
     case "tabs":
-      return { ok: true, value: tabs.list() };
+      return tabsReply(tabs.list());
     case "tab":
       /* A refusal names what it could not find, because the alternative — a
          silent no-op — reads as "the switch worked and the page is the same". */
@@ -132,10 +133,7 @@ async function serveTabs(ask: BrowserAskFrame): Promise<{ ok: boolean; value?: u
       const picked = typeof which.id === "string"
         ? rows.find((t) => t.id === which.id)
         : rows[which.index ?? -1];
-      return {
-        ok: true,
-        value: picked ? rows.map((t) => ({ ...t, active: t.id === picked.id })) : rows,
-      };
+      return selectedReply(rows, picked);
     case "profiles": {
       const a = ask.args as Record<string, unknown>;
       if (typeof a.make === "string") {
@@ -168,12 +166,12 @@ async function serveTabs(ask: BrowserAskFrame): Promise<{ ok: boolean; value?: u
         typeof ask.args.profile === "string" ? ask.args.profile : undefined);
       if (made && "error" in made) return { ok: false, error: made.error };
       return made
-        ? { ok: true, value: { ...made, tabs: tabs.list() } }
+        ? openedReply(made, tabs.list())
         : { ok: false, error: "could not open a tab, and the panel gave no reason" };
     }
     case "closetab":
       return tabs.close(which)
-        ? { ok: true, value: tabs.list() }
+        ? closedReply(tabs.list())
         : { ok: false, error: "no tab with that index or id — call `tabs` for what is open" };
     default:
       return { ok: false, error: "not a tab operation" };

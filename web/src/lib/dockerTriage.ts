@@ -8,7 +8,7 @@
  * and fine in the map.
  */
 import type { DockerContainer, DockerStat } from "../../../shared/types.ts";
-import { displayName, KINDS, kindOf, needsYou, type ContainerKind } from "./dockerState.ts";
+import { displayName, KINDS, kindOf, needsYou, startFailure, type ContainerKind } from "./dockerState.ts";
 import { LOOSE, type DockerStack } from "./dockerStacks.ts";
 
 export type Answer = "need" | "run" | "stop";
@@ -55,7 +55,12 @@ export function triage(all: DockerContainer[], stats: DockerStat[] = []) {
   const total = mib.reduce((a, b) => a + b, 0);
   return {
     all, need, run, stop, lead, rest, why,
-    needNames: need.slice(0, 3).map(labelOf),
+    needNames: need.slice(0, 3).map((c) => {
+      // The card's line is the only place a failed start is visible without
+      // opening the container, so it says the cause in four words.
+      const fail = startFailure(c.stateError);
+      return fail ? `${labelOf(c)} — ${fail.short}` : labelOf(c);
+    }),
     stopNames: stop.slice(0, 2).map(labelOf),
     busiest,
     busiestCpu: busiest ? byId.get(busiest.id)!.cpu : null,

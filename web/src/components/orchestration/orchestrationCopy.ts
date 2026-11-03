@@ -10,10 +10,12 @@
  */
 import { agentProvider, engineProviders, workerModelFor } from "../../../../shared/agentKinds.ts";
 import {
-  CHAIN_MAX, DEFAULT_CEILING, DEFAULT_LIMITS, DEFAULT_WORKER_ENVELOPE, GAUGED_PROVIDERS, ROLE_IDS, resolve,
+  CHAIN_MAX, DEFAULT_CEILING, DEFAULT_LIMITS, DEFAULT_WORKER_ENVELOPE, GAUGED_PROVIDERS, ROLE_IDS, resolve, usageEngine,
   type Chain, type EngineChoice, type Envelope, type Policy, type PolicyRule, type Resolution, type Resolved, type Trigger, type UsageProviderId,
 } from "../../../../shared/orchestration.ts";
-import { WORKER_ROLES, type RoleId } from "../../../../shared/workerRoles.ts";
+import { type RoleId } from "../../../../shared/workerRoles.ts";
+import { PRESET_FORMAT, PRESET_NEVER_INCLUDED, PRESET_VERSION, type PresetFile, type PresetPart } from "../../../../shared/preset.ts";
+import { roleLabel, type FlowLike } from "../../lib/roleLabel.ts";
 import type { EngineReadiness } from "../../../../shared/types.ts";
 import type { PolicyRuleState } from "../../lib/api.ts";
 import { engineState, type EngineState } from "../engines/enginesCopy.ts";
@@ -21,9 +23,7 @@ import type { StatusTone } from "../SettingsKit.tsx";
 
 // ── names that come from data ────────────────────────────────────────────
 
-/** The usage table names Claude's plan "anthropic"; every other provider uses its engine's id. */
-const USAGE_ENGINE: Partial<Record<UsageProviderId, string>> = { anthropic: "claude" };
-export const usageEngine = (p: UsageProviderId): string => USAGE_ENGINE[p] ?? p;
+/** The engine's own title for a usage provider's plan: Claude's provider reads as "Claude Code". */
 export const usageWord = (p: UsageProviderId): string => agentProvider(usageEngine(p))?.title ?? p;
 
 /** "OpenCode big-pickle", or just the engine when the model is its own default. */
@@ -33,8 +33,8 @@ export function choiceWords(c: EngineChoice): string {
 }
 export const chainWords = (c: Chain): string => c.map(choiceWords).join(", then ");
 
-const roleTitle = (id: RoleId): string => WORKER_ROLES.find((r) => r.id === id)?.title ?? id;
-const rolePlural = (id: RoleId): string => `${roleTitle(id).toLowerCase()}s`;
+/** The flow's name for a role (Planner, or whatever the person typed); the shipped title without a flow. */
+const roleName = (id: RoleId, flow?: FlowLike | null): string => roleLabel(id, flow).name;
 
 // ── conditions and rules ─────────────────────────────────────────────────
 
@@ -59,19 +59,19 @@ export function triggerWords(t: Trigger): string {
 }
 
 /** What a rule does, as the clause after the colon. */
-export function thenWords(rule: PolicyRule): string {
+export function thenWords(rule: PolicyRule, flow?: FlowLike | null): string {
   const parts: string[] = [];
   if (rule.orchestrator) parts.push(`the ${MAIN_AGENT} is ${chainWords(rule.orchestrator)}`);
   for (const id of ROLE_IDS) {
     const c = rule.workers?.[id];
-    if (c) parts.push(`${rolePlural(id)} use ${chainWords(c)}`);
+    if (c) parts.push(`${roleName(id, flow)} uses ${chainWords(c)}`);
   }
   return parts.length ? parts.join("; ") : "nothing changes";
 }
 
 /** The sentence under a rule's name: "When 10% or less of the Claude Code weekly plan is left: builders use OpenCode big-pickle, then Hermes." */
-export function ruleLine(rule: PolicyRule): string {
-  return `When ${rule.when.map(triggerWords).join(" and ")}: ${thenWords(rule)}.`;
+export function ruleLine(rule: PolicyRule, flow?: FlowLike | null): string {
+  return `When ${rule.when.map(triggerWords).join(" and ")}: ${thenWords(rule, flow)}.`;
 }
 
 // ── the engine and model choices ─────────────────────────────────────────
@@ -195,6 +195,13 @@ export function withBaseChoice(p: Policy, field: Field, choice: EngineChoice): P
   return { ...p, base: { ...p.base, workers: { ...p.base.workers, [field]: { ...p.base.workers[field], value: [choice] } } } };
 }
 
+/** Set a field's whole chain: first step is the choice, the rest are the fallbacks tried in order. */
+export function withBaseChain(p: Policy, field: Field, chain: Chain): Policy {
+  if (chain.length === 0) return p;
+  if (field === "orchestrator") return { ...p, base: { ...p.base, orchestrator: { ...p.base.orchestrator, value: chain } } };
+  return { ...p, base: { ...p.base, workers: { ...p.base.workers, [field]: { ...p.base.workers[field], value: chain } } } };
+}
+
 /** "Ask when it runs": flips the flag and nothing else. */
 export function withAsk(p: Policy, field: Field, ask: boolean): Policy {
   if (field === "orchestrator") return { ...p, base: { ...p.base, orchestrator: { ...p.base.orchestrator, ask } } };
@@ -269,10 +276,10 @@ export function chainMove(c: Chain, i: number, by: -1 | 1): Chain {
 
 /** The ranges the server's validator takes; it is the authority, this only keeps the stepper inside them. */
 export const LIMIT_RANGE = {
-  maxWorkers: { min: 1, max: 12, label: "Workers at once", hint: "How many workers one main agent may have running together. Example: with 3, a fourth waits for one to finish." },
-  turnMinutes: { min: 1, max: 240, label: "Minutes per turn", hint: "A worker turn that runs longer than this is stopped. Example: with 30, a turn still going at minute 31 is stopped." },
-  maxRetries: { min: 0, max: 5, label: "Retries with the next engine", hint: "How many times a failed start moves on to the next engine in its chain. Example: with 1, a start that fails on one engine is tried once on the next engine in the chain." },
-} as const satisfies Record<keyof Policy["limits"], { min: number; max: number; label: string; hint: string }>;
+  maxWorkers: { min: 1, max: 12, label: "Workers at once", short: "With 3, a fourth waits for one to finish", hint: "The most workers at once: how many one main agent may have running together. Example: with 3, a fourth waits for one to finish." },
+  turnMinutes: { min: 1, max: 240, label: "Minutes per turn", short: "With 30, a turn still going at minute 31 is stopped", hint: "A worker turn that runs longer than this is stopped. Example: with 30, a turn still going at minute 31 is stopped." },
+  maxRetries: { min: 0, max: 5, label: "Retries with the next engine", short: "With 1, a start that fails moves once to the next engine", hint: "How many times a failed start moves on to the next engine in its chain. Example: with 1, a start that fails on one engine is tried once on the next engine in the chain." },
+} as const satisfies Record<keyof Policy["limits"], { min: number; max: number; label: string; short: string; hint: string }>;
 
 /**
  * Safety and limits: one sentence and one example for each thing, in invented
@@ -282,20 +289,24 @@ export const LIMIT_RANGE = {
 export const SAFETY = {
   title: "Safety and limits",
   summary: "Sensible defaults are already on. Open this only to tighten or loosen them.",
-  workers: { title: "What a worker may do by default", note: "What a worker gets when the main agent says nothing. Example: a builder can edit src/app.ts in its own copy of the project but cannot run curl." },
-  most: { title: "The most the main agent may allow", note: "A limit on what the main agent can grant a worker, even if it asks. Example: leave network off here and no worker can ever get it." },
+  workers: { title: "What a worker may do by default", note: "What a worker gets when the main agent says nothing. A builder can edit src/app.ts in its own copy but cannot run curl." },
+  most: { title: "The most the main agent may allow", note: "A limit on what the main agent can grant a worker, even if it asks. With network off here, no worker can ever get it." },
   limits: { title: "Limits", note: "How much the main agent may start at once." },
-  write: "Where a worker may change files. Example: with Nothing, a scout can read src/app.ts but not edit it.",
-  network: "Fetching from the web and calling APIs. Example: with this off, curl https://example.com is refused.",
-  commit: "Local commits only; pushing is never part of this. Example: a builder may commit to its own branch and git push is still refused.",
-  deny: "Commands refused on top of the ones that are always refused. Example: add docker compose down to keep workers from stopping your services.",
-  always: { hint: "Push, pull requests, merges, releases, anything that spends. Example: no worker can open a pull request, whatever a rule says.", more: "Why this cannot be changed here", body: "A worker's permissions have no setting for these, here or anywhere: nothing a main agent or a rule says can grant them. They are done by a person." },
+  hands: { title: "Never in a worker's hands", note: "Push, pull requests, merges, releases, anything that spends. No worker can open a pull request, whatever a rule says; those wait for you at the Gate." },
+  gate: "Show the exact push or PR, wait for your answer",
+  extra: { note: "Off by default. You allow it for the project, then grant it to one worker at a time; nothing runs without your Approve click." },
+  write: "Where a worker may change files",
+  network: "Fetching from the web and calling APIs",
+  commit: "Local only; a push is still refused",
+  docker: "Running containers on this machine. A container runs as you do and can mount the disk. Example: with this on, a worker can run the test suite in a container.",
+  deny: "Commands refused on top of the ones that are always refused.",
+  always: { hint: "Push, pull requests, another machine, sudo, rm and signals are never granted, whatever a role or a rule says. Example: a role may be granted docker, and no role can push or open a pull request.", more: "Why this cannot be changed here", body: "A flow role may be granted a command from the list above that its work needs, for that role's workers only. These it may not: a person does them, and nothing a main agent, a rule or a preset says can grant one." },
 } as const;
 
 /** Nothing in Safety and limits differs from what a fresh install holds. */
 export const safetyIsDefault = (p: Pick<Policy, "workerDefault" | "ceiling" | "limits">): boolean => {
   // Field by field: the server's key order is not the page's, and a byte compare read "defaults" as "changed".
-  const same = (a: Envelope, b: Envelope) => a.write === b.write && a.network === b.network && a.commit === b.commit
+  const same = (a: Envelope, b: Envelope) => a.write === b.write && a.network === b.network && a.commit === b.commit && a.docker === b.docker
     && a.deny.length === b.deny.length && a.deny.every((d) => b.deny.includes(d));
   return same(p.workerDefault, DEFAULT_WORKER_ENVELOPE) && same(p.ceiling, DEFAULT_CEILING)
     && p.limits.maxWorkers === DEFAULT_LIMITS.maxWorkers && p.limits.turnMinutes === DEFAULT_LIMITS.turnMinutes && p.limits.maxRetries === DEFAULT_LIMITS.maxRetries;
@@ -420,16 +431,16 @@ const PRESET_TITLE: Record<PresetId, () => string> = {
 export interface PresetOffer { id: PresetId; title: string; says: string[]; blocked: string | null; confirm: string; ruleName: string | null; active: boolean; workers: Partial<Record<RoleId, Chain>> | null }
 
 /** What each card says it will set, in plain words, and why it cannot apply if it cannot. */
-export function presetOffers(readiness: readonly EngineReadiness[] | null, policy: Policy | null = null): PresetOffer[] {
+export function presetOffers(readiness: readonly EngineReadiness[] | null, policy: Policy | null = null, flow?: FlowLike | null): PresetOffer[] {
   return PRESET_IDS.map((id) => {
     const title = PRESET_TITLE[id]();
     const built = presetRule(id, readiness, policy);
     const confirm = `Adds one rule; nothing already running is moved. ${BACK_LABEL} puts the earlier setup back while nothing else has changed.`;
     if ("blocked" in built) return { id, title, says: [], blocked: built.blocked, confirm, ruleName: null, active: false, workers: null };
     const active = !!policy && presetInForce(policy, id, readiness);
-    const line = `${ruleLine(built.rule)} ${CHAIN_TAIL}`;
+    const line = `${ruleLine(built.rule, flow)} ${CHAIN_TAIL}`;
     const says = id === "claude-orchestrates" ? [`The main agent stays ${claudeTitle()}.`, line]
-      : id === "save-my-plan" ? [line, "Scouts and verifiers keep the engines they have."]
+      : id === "save-my-plan" ? [line, `${roleName("scout", flow)} and ${roleName("verifier", flow)} keep the engines they have.`]
       : [line];
     return { id, title, says, blocked: null, confirm, ruleName: built.rule.name, active, workers: built.rule.workers ?? null };
   });
@@ -531,10 +542,10 @@ function chairNote(rule: PolicyRule, now: Resolution): string {
  * A rule that holds is first-rule-wins per field, so an earlier rule can keep
  * its fields. Says which fields this one wins and who wins the rest.
  */
-function holdingLine(rule: PolicyRule, now: Resolution): string {
+function holdingLine(rule: PolicyRule, now: Resolution, flow?: FlowLike | null): string {
   const named: { field: Resolved; words: string }[] = [];
   if (rule.orchestrator) named.push({ field: now.orchestrator, words: "the main agent" });
-  for (const id of ROLE_IDS) if (rule.workers?.[id]) named.push({ field: now.workers[id], words: rolePlural(id) });
+  for (const id of ROLE_IDS) if (rule.workers?.[id]) named.push({ field: now.workers[id], words: roleName(id, flow) });
   const lost = named.filter((n) => n.field.from !== "rule" || n.field.ruleId !== rule.id);
   if (!lost.length) return "It holds now, so it is already in the answers above.";
   const list = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
@@ -550,7 +561,7 @@ function holdingLine(rule: PolicyRule, now: Resolution): string {
  * the rules' switches and the readings it is handed, and nothing else: no
  * request, no write, nothing started.
  */
-export function checkSetup(policy: Policy, states: readonly PolicyRuleState[], readiness: readonly EngineReadiness[] | null, scope = "global"): SetupCheck {
+export function checkSetup(policy: Policy, states: readonly PolicyRuleState[], readiness: readonly EngineReadiness[] | null, scope = "global", flow?: FlowLike | null): SetupCheck {
   if (!readiness) return { chair: "This machine has not been checked yet, so there is nothing to tell.", roles: [], rules: [] };
   const holds = ruleHolds(states, scope);
   const now = resolve(policy, { on: holds }, readiness);
@@ -559,7 +570,7 @@ export function checkSetup(policy: Policy, states: readonly PolicyRuleState[], r
     : `${choiceWords(now.orchestrator.choice)} would run the main agent${now.orchestrator.from === "rule" ? `, from rule "${now.orchestrator.ruleName ?? now.orchestrator.ruleId}"` : ""}.`;
   const roles = ROLE_IDS.map((id) => {
     const r = now.workers[id];
-    const who = rolePlural(id).replace(/^./, (c) => c.toUpperCase());
+    const who = roleName(id, flow);
     if (!r.ok) return { id, line: `${who} would have nobody: ${stop(r.why)}` };
     const via = r.from === "rule" ? `, from rule "${r.ruleName ?? r.ruleId}"` : "";
     const ran = { ...r.choice, model: workerModelFor(r.choice.engine, r.choice.model) };
@@ -570,13 +581,13 @@ export function checkSetup(policy: Policy, states: readonly PolicyRuleState[], r
   });
 
   const rules = policy.rules.map((rule) => {
-    if (rule.enabled && holds(rule.id)) return { id: rule.id, name: rule.name, line: `${holdingLine(rule, now)}${chairNote(rule, now)}` };
+    if (rule.enabled && holds(rule.id)) return { id: rule.id, name: rule.name, line: `${holdingLine(rule, now, flow)}${chairNote(rule, now)}` };
     const trial = { ...policy, rules: policy.rules.map((r) => (r.id === rule.id ? { ...r, enabled: true } : r)) };
     const then = resolve(trial, { on: (id) => id === rule.id || holds(id) }, readiness);
     const moves: string[] = [];
     if (whoWords(now.orchestrator) !== whoWords(then.orchestrator)) moves.push(`the main agent would move from ${whoWords(now.orchestrator)} to ${whoWords(then.orchestrator)}`);
     for (const id of ROLE_IDS) {
-      if (whoWords(now.workers[id]) !== whoWords(then.workers[id])) moves.push(`${rolePlural(id)} would move from ${whoWords(now.workers[id])} to ${whoWords(then.workers[id])}`);
+      if (whoWords(now.workers[id]) !== whoWords(then.workers[id])) moves.push(`${roleName(id, flow)} would move from ${whoWords(now.workers[id])} to ${whoWords(then.workers[id])}`);
     }
     const what = moves.length ? `${moves.join("; ")}.` : "nothing would change.";
     return { id: rule.id, name: rule.name, line: rule.enabled ? `If it held: ${what}` : `It is off. If it were on and held: ${what}` };
@@ -633,7 +644,7 @@ export function scopeSentence(root: string, inherited: boolean, name: string): {
  * test pins that no heading still says chair, seat, envelope or ceiling.
  */
 export const MAIN_AGENT = "main agent";
-export const roleWord = (f: Field): string => (f === "orchestrator" ? MAIN_AGENT : rolePlural(f));
+export const roleWord = (f: Field, flow?: FlowLike | null): string => (f === "orchestrator" ? MAIN_AGENT : roleName(f, flow));
 
 /** The clause behind "because": a rule's name, or the default. */
 export const becauseWords = (r: Resolved): string => (r.from === "rule" && r.ruleName ? `${r.ruleName} is on` : "no rule is on");
@@ -645,27 +656,27 @@ export interface FlowNode { field: Field; word: string; chain: Chain; ok: boolea
  * What the policy says to run now, per job, as the picture draws it. A refusal
  * keeps the chain it tried so the tiles still show who was skipped.
  */
-export function flowNodes(policy: Policy, facts: { on(ruleId: string): boolean }, readiness: readonly EngineReadiness[]): FlowNode[] {
+export function flowNodes(policy: Policy, facts: { on(ruleId: string): boolean }, readiness: readonly EngineReadiness[], flow?: FlowLike | null): FlowNode[] {
   const res = resolve(policy, facts, readiness);
   const fields: Field[] = ["orchestrator", ...ROLE_IDS];
   return fields.map((f) => {
     const r = f === "orchestrator" ? res.orchestrator : res.workers[f];
-    const word = roleWord(f);
+    const word = roleWord(f, flow);
     const base = f === "orchestrator" ? policy.base.orchestrator.value : policy.base.workers[f].value;
     const ruleChain = r.from === "rule" ? policy.rules.find((x) => x.id === r.ruleId) : undefined;
     const chain = (f === "orchestrator" ? ruleChain?.orchestrator : ruleChain?.workers?.[f]) ?? base;
     const because = becauseWords(r);
     const sentence = r.ok
-      ? `The ${word} ${f === "orchestrator" ? "is" : "use"} ${choiceWords(r.choice)}: ${because}.`
-      : `The ${word} cannot start: ${r.why}.`;
+      ? `${f === "orchestrator" ? `The ${word} is` : `${word} uses`} ${choiceWords(r.choice)}: ${because}.`
+      : `${f === "orchestrator" ? `The ${word}` : word} cannot start: ${r.why}.`;
     return { field: f, word, chain, ok: r.ok, because, sentence, ruleId: r.from === "rule" && r.ruleId ? r.ruleId : null };
   });
 }
 
 /** "Test it now": what a draft policy would run at this moment, on this machine. */
-export function testItNow(policy: Policy, facts: { on(ruleId: string): boolean }, readiness: readonly EngineReadiness[] | null): string[] {
+export function testItNow(policy: Policy, facts: { on(ruleId: string): boolean }, readiness: readonly EngineReadiness[] | null, flow?: FlowLike | null): string[] {
   if (!readiness) return ["This machine has not been checked yet."];
-  return flowNodes(policy, facts, readiness).map((n) => n.sentence);
+  return flowNodes(policy, facts, readiness, flow).map((n) => n.sentence);
 }
 
 /** One engine as a tile shows it: a word and a tone, never colour alone. */
@@ -720,14 +731,14 @@ export const roleBlurb = (f: Field): string => ({
 } as const)[f];
 
 /** The label of the row on the page that sets a job: where its Change button goes. */
-export const fineTuneRow = (f: Field): string => (f === "orchestrator" ? "Orchestrator" : roleTitle(f));
+export const fineTuneRow = (f: Field, flow?: FlowLike | null): string => (f === "orchestrator" ? "Orchestrator" : roleName(f, flow));
 
 /** One role of a preset's before-and-after picture: the engines tried now, and the ones the preset would try. */
 export interface DiagramRow { role: RoleId; word: string; before: string[]; after: string[] }
-export function presetDiagram(policy: Policy, workers: Partial<Record<RoleId, Chain>> | null): DiagramRow[] {
+export function presetDiagram(policy: Policy, workers: Partial<Record<RoleId, Chain>> | null, flow?: FlowLike | null): DiagramRow[] {
   if (!workers) return [];
   return ROLE_IDS.filter((r) => workers[r]).map((r) => ({
-    role: r, word: `${roleTitle(r)}s`,
+    role: r, word: roleLabel(r, flow).plural,
     before: policy.base.workers[r].value.map((c) => c.engine),
     after: workers[r]!.map((c) => c.engine),
   }));
@@ -825,14 +836,14 @@ export function rulesHoldNow(rule: PolicyRule, now: Date, left: Partial<Record<U
  */
 export function testDraft(
   policy: Policy, draft: PolicyRule, facts: { on(ruleId: string): boolean }, now: Date,
-  left: Partial<Record<UsageProviderId, number>>, readiness: readonly EngineReadiness[] | null,
+  left: Partial<Record<UsageProviderId, number>>, readiness: readonly EngineReadiness[] | null, flow?: FlowLike | null,
 ): { holds: string; lines: string[] } {
   const h = rulesHoldNow(draft, now, left);
   const holds = h === true ? "This condition holds right now."
     : h === false ? "This condition does not hold right now, so nothing would change yet."
       : "The page cannot tell yet whether this condition holds (no reading for it), so it is shown as if it did not.";
   const next = withRule(policy, draft);
-  return { holds, lines: testItNow(next, { on: (id) => (id === draft.id ? h === true : facts.on(id)) }, readiness) };
+  return { holds, lines: testItNow(next, { on: (id) => (id === draft.id ? h === true : facts.on(id)) }, readiness, flow) };
 }
 
 // ── the compact page: the one plan rule, the refused commands, the header chip ──
@@ -862,4 +873,21 @@ export function withFallbackEngine(rule: PolicyRule, engine: string): PolicyRule
 export function presetChip(offers: readonly { id: PresetId; active: boolean }[], label: (id: PresetId) => string): { tone: "ok" | "off"; text: string } {
   const on = offers.find((o) => o.active && ALWAYS_PRESETS.includes(o.id)) ?? offers.find((o) => o.active);
   return on ? { tone: "ok", text: label(on.id) } : { tone: "off", text: "No preset" };
+}
+
+/**
+ * The three ready-made setups as `.agxpreset` files on the global page: each
+ * carries just the rule Quick setup adds, so the page card and the editor's chip
+ * write the same policy bytes. The engines are the ones the probe reports ready,
+ * never typed here, and a preset the machine cannot run is not listed.
+ */
+export function shippedPresets(policy: Policy, readiness: readonly EngineReadiness[] | null): PresetFile[] {
+  return PRESET_IDS.flatMap((id) => {
+    const rule = applyPreset(policy, id, readiness)?.rules.find((r) => r.id === presetRuleId(id));
+    if (!rule) return [];
+    return [{
+      format: PRESET_FORMAT, version: PRESET_VERSION, name: PRESET_TITLE[id](),
+      includes: ["rules"] as PresetPart[], policy: { rules: [rule] }, neverIncluded: [...PRESET_NEVER_INCLUDED],
+    }];
+  });
 }

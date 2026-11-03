@@ -10,6 +10,13 @@ help: ## List every make command with what it does
 install: ## Install all workspace dependencies (bun)
 	bun install
 
+# A fresh worktree has no node_modules and bun installs each workspace's own, so
+# `cd web && bun run typecheck` there answers `TS2688 vite/client` — a type error
+# that is the environment. Asked before every check instead, so the answer is one
+# line naming the fix. Exit 2, because a check that could not run is not a pass.
+deps: ## Say "environment: node_modules missing" instead of letting tsc report it as a type error
+	@bun scripts/depscheck.ts
+
 # `trap 'kill 0'` tears the whole process group (concurrently, bun --watch, the
 # server, vite) down on Ctrl-C or a SIGTERM to make, so an abandoned `make dev`
 # leaves nothing behind. The server also carries its own parent-death watchdog
@@ -45,7 +52,7 @@ test: ## Run the server + web test suites (the fast half — `make ci` runs ever
 # not — work-2026-08-05 is never pushed, and a dirty tree is its normal state.
 # It goes first because it is the cheapest thing in this list and the only one
 # that can fail on something none of the others can see.
-ci: ## Run everything CI runs, in CI's order — plus headcheck, which only a local tree needs
+ci: deps ## Run everything CI runs, in CI's order — plus headcheck, which only a local tree needs
 	$(MAKE) headcheck
 	bun scripts/logo.mjs --check
 	$(MAKE) lint
@@ -140,7 +147,7 @@ agx-bench: build ## Scripted agent tasks through the browser CLI on an isolated 
 # unlike the path of a hoisted dependency.
 # Lint and the logo sync run first, as they do in CI: the cheapest steps of the
 # job, and two v0.20.0 reds came from them while this target stayed green.
-check: ## Lint, types AND tests for server, web and mobile — the one thing `bun test` alone cannot answer
+check: deps ## Lint, types AND tests for server, web and mobile — the one thing `bun test` alone cannot answer
 	@set -e; \
 	echo "── lint ──"; \
 	bun scripts/logo.mjs --check; \
@@ -167,7 +174,7 @@ check: ## Lint, types AND tests for server, web and mobile — the one thing `bu
 # and for years that meant the file that mints the auth token and registers
 # every IPC channel was the one file here nothing checked at all — the two
 # halves this target used to name were the typed ones.
-typecheck: ## Type-check all three halves, app and tests (vite build and bun both strip types without checking)
+typecheck: deps ## Type-check all three halves, app and tests (vite build and bun both strip types without checking)
 	cd web && bun run typecheck
 	cd server && bun run typecheck
 	cd electron && bun run typecheck
@@ -262,5 +269,5 @@ desktop-open: ## Open the desktop app scoped to a project — make desktop-open 
 	@test -n "$(DIR)" || { echo "usage: make desktop-open DIR=/path/to/repo" >&2; exit 1; }
 	AGENTGLASS_PROJECT="$(DIR)" ~/.local/share/agentglass-desktop/agentglass
 
-.PHONY: help install dev server web build test ci ci-docker mobile-test smoke trusted-input perf soak loadtest agx-bench lint typecheck headcheck start setup setup-undo connect connect-undo connect-opencode connect-opencode-undo demo-feed assets \
+.PHONY: help install deps dev server web build test ci ci-docker mobile-test smoke trusted-input perf soak loadtest agx-bench lint typecheck headcheck start setup setup-undo connect connect-undo connect-opencode connect-opencode-undo demo-feed assets \
         desktop desktop-dev desktop-dist desktop-dist-linux desktop-install desktop-update desktop-open

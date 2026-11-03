@@ -2,18 +2,21 @@
  * The envelope a policy-started worker runs inside, compiled per engine.
  *
  * One neutral `Envelope` (shared/orchestration.ts) in, one lock out. The
- * floor is DENIED_COMMANDS; an envelope can lift exactly two things from it
- * (`commit` lifts `git commit`, `network` lifts `curl` and `wget`) and add
- * more, and there is no field that lifts anything else. What cannot be
- * expressed cannot be granted by mistake, so no combination of flags takes
- * `git push`, `gh`, `ssh`, history rewrites, `sudo` or `rm` off the list.
+ * floor is DENIED_COMMANDS; an envelope can lift exactly three things from it
+ * (`commit` lifts `git commit`, `network` lifts `curl` and `wget`, `docker`
+ * lifts `docker`) and add more. The one other widening is a flow role's own
+ * `allow` list, which takes prefixes off the floor for that role's workers
+ * only and never one of NEVER_LIFTABLE. What cannot be expressed cannot be
+ * granted by mistake, so no envelope and no role takes `git push`, `gh`, `ssh`, history rewrites, `sudo`
+ * or `rm` off the list.
  *
  * Being on the list is not being impossible. Not a sandbox: the engine applies
  * its own permission system, as the same user as this server, and its rules
  * read a command line as text. Claude Code's match the start of the line, so
  * `git -C . push` or `/usr/bin/git push` is not `git push` to it; OpenCode's
- * are globs a shell can build a line around. The app's own CLIs are on the
- * list the same way, and its token file is readable by anything that runs as
+ * are globs a shell can build a line around. This app's own CLIs are on the
+ * list the same way, except the browser for a role whose work is a page (see
+ * DOORS_FOR_ROLE), and its token file is readable by anything that runs as
  * this user. So no engine's lock is reported as more than "partly" enforced
  * (agentprobe.ts), every start says so, and SECURITY.md says what follows.
  */
@@ -22,22 +25,77 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { agentProvider } from "../../../shared/agentKinds.ts";
 import type { Envelope } from "../../../shared/orchestration.ts";
-import { DENIED_COMMANDS, roleLaunch, type WorkerRole } from "../../../shared/workerRoles.ts";
+import { DENIED_COMMANDS, NEVER_LIFTABLE, roleLaunch, type RoleId, type WorkerRole } from "../../../shared/workerRoles.ts";
 
-/** The two things an envelope may lift from the floor, and nothing else. */
-export const LIFTS: Readonly<Record<"commit" | "network", readonly string[]>> = {
+/** The three things an envelope may lift from the floor, and nothing else. */
+export const LIFTS: Readonly<Record<"commit" | "network" | "docker", readonly string[]>> = {
   commit: ["git commit"],
   network: ["curl", "wget"],
+  docker: ["docker"],
 };
 
 /** What a worker may not reach through its engine: this app's own doors. A
  *  worker that could call them could start workers or change a setting. */
 export const WORKER_DENIED = ["agentglass-agent", "agentglass-ui", "agentglass-browser", "agentglass-cockpit-mcp"] as const;
 
+/** The one door a role may use: the browser CLI, which reaches the person's
+ *  window through the local relay. The other three stay closed to every role,
+ *  and a scout keeps this one closed because it reports and does not interact. */
+export const DOORS_FOR_ROLE: Readonly<Partial<Record<RoleId, readonly string[]>>> = {
+  builder: ["agentglass-browser"],
+  reviewer: ["agentglass-browser"],
+  verifier: ["agentglass-browser"],
+};
+
+/** Every tool of Claude Code / Qwen Code a flow `tools` list can narrow. */
+const ENGINE_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write", "NotebookEdit", "MultiEdit", "Bash", "WebFetch", "WebSearch", "Task"] as const;
+/** The flow editor's words for groups of them; any other entry is an engine tool name. */
+const TOOL_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  read: ["Read", "Glob", "Grep"],
+  run: ["Bash"],
+  commit: ["Bash"],
+  write: ["Edit", "Write", "NotebookEdit", "MultiEdit"],
+  web: ["WebFetch", "WebSearch"],
+};
+
+/** What a worker needs to report (`agentglass-agent need` runs in Bash, the rest reads and messages): no `tools` list removes them. */
+export const ALWAYS_ALLOWED = ["Bash", "Read", "SendMessage"] as const;
+
+/**
+ * Engine tools a flow `tools` list denies: all of ENGINE_TOOLS it does not
+ * name. Empty list = nothing denied. ALWAYS_ALLOWED are never denied. Bash stays open so a worker can report, so a read-only role still has a shell that can write a file: the edit tools are closed, the shell is not a wall. Deny only: an allowed tool the ceiling refuses stays refused.
+ */
+export function toolsDeniedFor(tools: readonly string[] | undefined): string[] {
+  if (!tools?.length) return [];
+  const keep = new Set<string>();
+  for (const n of ALWAYS_ALLOWED) keep.add(n.toLowerCase());
+  for (const t of tools) for (const n of TOOL_ALIASES[t.trim().toLowerCase()] ?? [t.trim()]) keep.add(n.toLowerCase());
+  return ENGINE_TOOLS.filter((n) => !keep.has(n.toLowerCase()));
+}
+
+/** The envelope under a saved flow role's lock: narrower or equal, never wider. */
+export function narrowEnvelope(e: Envelope, lock: { readsOnly: boolean; tools: string[] } | null): Envelope {
+  if (!lock) return e;
+  const out: Envelope = lock.readsOnly ? { ...e, write: "none" } : e;
+  return lock.tools.length ? { ...out, tools: [...lock.tools] } : out;
+}
+
 /** The command prefixes the engine's lock denies for this envelope. */
-export function deniedFor(e: Envelope): string[] {
-  const lifted = new Set<string>([...(e.commit ? LIFTS.commit : []), ...(e.network ? LIFTS.network : [])]);
-  const out = [...DENIED_COMMANDS.filter((c) => !lifted.has(c)), ...WORKER_DENIED, ...e.deny];
+export function deniedFor(e: Envelope, role?: WorkerRole): string[] {
+  const lifted = new Set<string>([
+    ...(e.commit ? LIFTS.commit : []),
+    ...(e.network ? LIFTS.network : []),
+    ...(e.docker ? LIFTS.docker : []),
+  ]);
+  // The role's own grant. NEVER_LIFTABLE is filtered again here, so a flow file
+  // written by hand cannot grant one either.
+  const granted = new Set<string>((role?.allow ?? []).filter((c) => !NEVER_LIFTABLE.includes(c)));
+  const allowed = new Set<string>(role ? DOORS_FOR_ROLE[role.id] ?? [] : []);
+  const out = [
+    ...DENIED_COMMANDS.filter((c) => !lifted.has(c) && !granted.has(c)),
+    ...WORKER_DENIED.filter((c) => !allowed.has(c)),
+    ...e.deny,
+  ];
   return [...new Set(out)];
 }
 
@@ -83,16 +141,18 @@ export function compileEnvelope(
   // A role that only reads, or an envelope that writes nothing, gets no edits.
   const effective: WorkerRole = { ...role, readOnly: role.readOnly || e.write === "none" };
   if (engine === "codex") {
-    return { ok: true, args: [], env: {}, partly: "Codex has no command deny list: the sandbox is the limit, and its network rule is its own" };
+    return { ok: true, args: [], env: { AGENTGLASS_ROLE: role.id }, partly: "Codex has no command deny list: the sandbox is the limit, and its network rule is its own" };
   }
   if (engine === "hermes") {
-    return { ok: true, args: [], env: {}, partly: "Hermes refuses what its own approvals.deny lists; this app checks that list but does not write it" };
+    return { ok: true, args: [], env: { AGENTGLASS_ROLE: role.id }, partly: "Hermes refuses what its own approvals.deny lists; this app checks that list but does not write it" };
   }
   if (!p.lock) return { ok: false, error: `${p.title} has no lock this app can apply, so it cannot run as a worker` };
-  const denied = deniedFor(e);
-  const launch = roleLaunch(p, effective, model, denied);
+  const denied = deniedFor(e, effective);
+  const launch = roleLaunch(p, effective, model, denied, toolsDeniedFor(e.tools));
   if (!launch) return { ok: false, error: `${p.title} has no lock this app can apply, so it cannot run as a worker` };
-  const env = { ...launch.env };
+  // The role the CLI sees, so it can refuse the person's own identity: a
+  // worker only acts in its own tab (bin/agentglass-browser, `is_shared_identity`).
+  const env: Record<string, string> = { ...launch.env, AGENTGLASS_ROLE: role.id };
   if (engine === "claude" && !e.network) {
     // Its shell prefixes do not cover its own network tools, and a settings file
     // of the person's or the repo's may allow them.

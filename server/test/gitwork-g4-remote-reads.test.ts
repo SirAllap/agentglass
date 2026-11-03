@@ -3,7 +3,7 @@
  * files of a stash, and the worktree actions around locks, submodules and
  * busy checkouts. Fixture: a working repo tracking a bare local remote.
  */
-import { afterAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -36,9 +36,13 @@ function build(): void {
 }
 
 // Local-path submodule URLs need protocol.file.allow, for the server's own git calls too.
-process.env.GIT_CONFIG_COUNT = "1";
-process.env.GIT_CONFIG_KEY_0 = "protocol.file.allow";
-process.env.GIT_CONFIG_VALUE_0 = "always";
+// In a hook, not at import: `bun test -t` imports a file whose tests it filters
+// out, and then afterAll never runs to delete these.
+beforeAll(() => {
+  process.env.GIT_CONFIG_COUNT = "1";
+  process.env.GIT_CONFIG_KEY_0 = "protocol.file.allow";
+  process.env.GIT_CONFIG_VALUE_0 = "always";
+});
 
 beforeEach(build);
 afterAll(() => {

@@ -6,7 +6,7 @@
  * like an open: it puts a dialog in front of the person. Only a validated
  * command reaches here, so an argument is already a member of its closed set.
  */
-import { UI_ACTIONS, uiOf, type UiActionDef, type UiActionId, type UiArgs } from "../../../shared/uiActions.ts";
+import { UI_ACTIONS, canonMachineTab, uiOf, type UiActionDef, type UiActionId, type UiArgs } from "../../../shared/uiActions.ts";
 import type { ControlCmd } from "../../../shared/types.ts";
 
 type OpenId = { [K in UiActionId]: (typeof UI_ACTIONS)[K]["kind"] extends "open" | "stage" ? K : never }[UiActionId];
@@ -27,7 +27,7 @@ export const OFFER_LABELS: Labels = {
   "panel.open": (a) => `${words(a.what)}`,
   "finder.open": (a) => `the file finder on ${base(a.path)}`,
   "settings.open": (a) => `Settings > ${words(a.page)}${a.row ? ` > ${words(a.row)}` : ""}`,
-  "machine.open": (a) => `Machine > ${words(a.tab)}`,
+  "machine.open": (a) => `Machine > ${words(canonMachineTab(a.tab))}`,
   "project.picker": () => "the project picker",
   "windows.switcher": () => "the window switcher",
   "bench.toggle": () => "the bench",

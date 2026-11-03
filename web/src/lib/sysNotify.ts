@@ -269,7 +269,7 @@ export function subscribeAppNotify(fn: (on: boolean) => void): () => void {
  * bar, and because the exception is the kind that gets quietly refactored away
  * by someone tidying a condition they do not have the context for.
  *
- * `urgent` means something is STOPPED until you act: a tool call held at the
+ * `urgent` means something is STOPPED until you act: a tool call waiting at the
  * gate, a chat that cannot continue. Those speak with the switch off. Everything
  * else — a turn that finished, commits to pull, checks that went green — waits
  * for you in the bell.

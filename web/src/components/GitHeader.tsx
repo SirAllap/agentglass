@@ -18,7 +18,7 @@ import {
 } from "../lib/gitHeader.ts";
 import { failedRemotes, fetchCard, pullCard, pushCard, type FailCard } from "../lib/gitHeaderErrors.ts";
 import { AnchoredMenu } from "./AnchoredMenu.tsx";
-import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
+import { VIEW_HEADER_H, viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
 import { EDGE } from "./workspace/Chrome.tsx";
 
 /** What the panel hands over for one situational item: the node it draws in the
@@ -254,10 +254,18 @@ export function GitHeader({
     // absolutely positioned inside this row, and clipping the row clipped the
     // menu to a sliver. Overflow is prevented by the tab strip scrolling and
     // the slot being capped, not by cutting off whatever escapes.
-    <div ref={root$} className={viewHeaderClass} style={viewHeaderStyle}>
+    // The row wraps rather than shrinks: below about 1100px the six actions need
+    // more than half the bar, and a strip squeezed beside them is a strip you
+    // cannot reach the end of (measured: 97px of 791 at 853). A wrapped row has
+    // to grow, so it keeps the bar's height only while it fits on one line.
+    <div ref={root$} className={`${viewHeaderClass} flex-wrap gap-y-1.5`}
+      style={{ ...viewHeaderStyle, height: "auto", minHeight: VIEW_HEADER_H, maxHeight: "none", paddingTop: 6, paddingBottom: 6 }}>
       <h2 className="sr-only">Source control</h2>
       {picker}
-      <div ref={strip} className="flex items-center gap-2.5 ml-1 min-w-[96px] flex-1 overflow-x-auto agw-noscrollbar"
+      {/* The floor is the tabs' own width, so the row wraps exactly when the
+          actions cannot leave every tab on the line. A number picked by hand
+          (420) still "fitted" at 1366 and cut the strip at Stashes. */}
+      <div ref={strip} className="flex items-center gap-2.5 ml-1 min-w-[fit-content] flex-1 overflow-x-auto agw-noscrollbar"
         style={clipped ? { WebkitMaskImage: fade, maskImage: fade } : undefined} data-tabs-strip>
         {tabs}
       </div>

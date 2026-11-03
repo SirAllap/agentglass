@@ -65,7 +65,7 @@ const SCOPE: Record<DeviceScope, { name: string; chip: string; what: string }> =
   answer: {
     name: "Answer things",
     chip: "Answers",
-    what: "The above, plus approving a held gate and replying to a running session.",
+    what: "The above, plus approving a gate waiting on you and replying to a running session.",
   },
   full: {
     // Was "Everything" on the sheet's own card, "Full access" on the chip

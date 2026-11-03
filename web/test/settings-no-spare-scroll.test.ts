@@ -16,7 +16,7 @@ test("the index rail shares the content's row instead of spanning spare rows", (
 test("nothing is left under the last card: no gap kept by the column, a short bottom pad", () => {
   expect(css).toMatch(/\.agx-settings-col\[data-stable\] > \.agx-scard \{ margin-bottom: 0; \}/);
   expect(css).toMatch(/\.agx-settings-col\[data-stable\] \{ margin-bottom: calc\(-1 \* var\(--agx-gap\)\); \}/);
-  expect(css).toMatch(/\.agx-settings-page \{ padding: 22px 40px 28px;/);
+  expect(css).toMatch(/\.agx-settings-page \{ --agx-settings-pad-top: 22px; --agx-page-gap: 18px; padding: var\(--agx-settings-pad-top\) 40px 28px;/);
 });
 
 test("the 'Drawn, not a capture' chip is neutral: amber means the person is needed", async () => {

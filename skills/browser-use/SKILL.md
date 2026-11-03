@@ -589,7 +589,7 @@ curl -sS http://localhost:4000/control \
 
 `do` is one of `view.open` (`to`), `panel.open` (`what`: skills, help,
 palette), `finder.open` (`path`), `settings.open` (`page`, optional `row`),
-`machine.open` (`tab`: ports, resources, locks), `project.picker`,
+`machine.open` (`tab`: resources, locks; `ports` is the old name for resources), `project.picker`,
 `windows.switcher`, `bench.toggle`, `bench.file` and `peek.file` (`root`, `path`
 under it), `bench.board` (`root`, `kind`: pr, tasks), `git.modal`
 (`which`: insights, bisect), `git.compare` (`base`), `git.blame` (`path`),

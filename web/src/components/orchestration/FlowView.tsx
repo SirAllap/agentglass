@@ -1,6 +1,7 @@
 import { useId, type KeyboardEvent, type ReactNode } from "react";
 import { SettingsCard, StatusBadge } from "../SettingsKit.tsx";
 import { ICON } from "../../lib/iconSize.ts";
+import { roleLabel, type FlowLike } from "../../lib/roleLabel.ts";
 import { PanesIcon } from "../settingsNavIcons.tsx";
 import { agentProvider } from "../../../../shared/agentKinds.ts";
 import { ROLE_IDS, type Policy, type PolicyRule } from "../../../../shared/orchestration.ts";
@@ -23,6 +24,8 @@ import { JOB_ORDER, engineTileState, flowBecause, flowNodes, roleWord, scopeWord
  * gate node is on or off, not a log of what it held.
  */
 export interface FlowViewProps {
+  /** The flow's role names; the picture and its sentences print these. */
+  flow?: FlowLike | null;
   policy: Policy;
   facts: { on(ruleId: string): boolean };
   readiness: readonly EngineReadiness[] | null;
@@ -41,9 +44,9 @@ export interface FlowViewProps {
 }
 
 /** Before the probe answers there is nothing to resolve: show the chains the policy holds, unjudged. */
-function plainNodes(policy: Policy): FlowNode[] {
+function plainNodes(policy: Policy, flow?: FlowLike | null): FlowNode[] {
   return (["orchestrator", ...ROLE_IDS] as Field[]).map((f) => ({
-    field: f, word: roleWord(f), ok: true, because: "", sentence: "", ruleId: null,
+    field: f, word: roleWord(f, flow), ok: true, because: "", sentence: "", ruleId: null,
     chain: f === "orchestrator" ? policy.base.orchestrator.value : policy.base.workers[f].value,
   }));
 }
@@ -51,7 +54,8 @@ function plainNodes(policy: Policy): FlowNode[] {
 const HUE: Record<Field, string> = {
   orchestrator: "var(--g-agents)", scout: "var(--g-connections)", builder: "var(--g-workspace)", verifier: "var(--g-general)", reviewer: "var(--g-library)",
 };
-const NAME: Record<Field, string> = { orchestrator: "Orchestrator", scout: "Scout", builder: "Builder", verifier: "Verifier", reviewer: "Reviewer" };
+/** The node titles: the flow's name for a role (Planner, Paco...), the shipped title without a flow. */
+const nameOf = (f: Field, flow?: FlowLike | null): string => (f === "orchestrator" ? "Orchestrator" : roleLabel(f, flow).name);
 const TONE: Record<"ok" | "warn" | "err" | "checking", string> = { ok: "var(--success)", warn: "var(--warning)", err: "var(--error)", checking: "var(--text4)" };
 const MONO = "var(--font-mono, ui-monospace, monospace)";
 
@@ -94,7 +98,7 @@ function Wire({ d, dashed, hot, head }: { d: string; dashed?: boolean; hot?: boo
 
 export function FlowView(p: FlowViewProps) {
   const uid = useId().replace(/\W/g, "");
-  const nodes = p.readiness ? flowNodes(p.policy, p.facts, p.readiness) : plainNodes(p.policy);
+  const nodes = p.readiness ? flowNodes(p.policy, p.facts, p.readiness, p.flow) : plainNodes(p.policy, p.flow);
   const main = nodes[0]!;
   const jobs = nodes.slice(1);
   const plain = !nodes.some((n) => n.ruleId);
@@ -124,7 +128,7 @@ export function FlowView(p: FlowViewProps) {
   const rule = fallbackRule(p.policy);
   const usage = rule?.when.find((t) => t.kind === "usage");
   const holds = !!rule && rule.enabled && p.facts.on(rule.id);
-  const moved = rule ? (ROLE_IDS.filter((r) => rule.workers?.[r]).map((r) => roleWord(r)).join(", ") || (rule.orchestrator ? "main agent" : "")) : "";
+  const moved = rule ? (ROLE_IDS.filter((r) => rule.workers?.[r]).map((r) => roleWord(r, p.flow)).join(", ") || (rule.orchestrator ? "main agent" : "")) : "";
   const fbChain = rule ? (rule.workers?.builder ?? ROLE_IDS.map((r) => rule.workers?.[r]).find(Boolean) ?? rule.orchestrator) : undefined;
   const fbEngine = fbChain?.[0]?.engine;
   const trig = usage && usage.kind === "usage" ? `≤ ${usage.remainingAtMost} % left` : "";
@@ -171,12 +175,12 @@ export function FlowView(p: FlowViewProps) {
             <Wire d={`M${B.gate!.x + B.gate!.w} ${B.gate!.y + 29} H780 V${B.you!.y + 27} H${B.you!.x + B.you!.w + 2}`} head={head} dashed={!gateOn} />
 
             <Node clipId={`${uid}a`} box={B.you!} hue="var(--text3)" name="You" sub="decide what is held" />
-            <Node clipId={`${uid}b`} box={B.orch!} hue={HUE.orchestrator} name={NAME.orchestrator} sub={sub(main)} state={stateOf(main)}
+            <Node clipId={`${uid}b`} box={B.orch!} hue={HUE.orchestrator} name={nameOf("orchestrator")} sub={sub(main)} state={stateOf(main)}
               label={`Change the ${main.word}`} onPress={press("orchestrator")} />
             {JOB_ORDER.map((f, i) => (
-              <Node key={f} clipId={`${uid}c${i}`} box={B[f]!} hue={HUE[f]} name={NAME[f]} sub={sub(job(f))} state={stateOf(job(f))}
+              <Node key={f} clipId={`${uid}c${i}`} box={B[f]!} hue={HUE[f]} name={nameOf(f, p.flow)} sub={sub(job(f))} state={stateOf(job(f))}
                 fill={job(f).ruleId ? "color-mix(in srgb, var(--success) 8%, var(--surface-card))" : undefined}
-                label={`Change the ${job(f).word}`} onPress={press(f)} />
+                label={`Change ${job(f).word}`} onPress={press(f)} />
             ))}
             <Node clipId={`${uid}d`} box={B.fb!} hue="var(--warning)" name="Fallback" dashed={!holds} muted={!rule || !rule.enabled}
               fill={holds ? "color-mix(in srgb, var(--warning) 12%, var(--surface-card))" : undefined}

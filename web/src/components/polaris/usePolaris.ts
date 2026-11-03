@@ -30,15 +30,15 @@ export function usePolarisSettings(root: string) {
   useEffect(() => { setAnswer(null); load(); }, [load]);
   useEffect(() => onPolarisChanged(load), [load]);
 
-  /** The server's sentence when it refused, or null when it saved. */
-  const save = useCallback(async (change: SettingsChange): Promise<string | null> => {
+  /** The server's sentence when it refused, and the answer it stored when it saved: the next edit is measured against that. */
+  const save = useCallback(async (change: SettingsChange): Promise<{ error: string | null; answer: SettingsAnswer | null }> => {
     setBusy(true);
     const r = await api.polarisSettingsSave(change, root || undefined).catch(() => ({ ok: false, error: REACH } as const));
-    if (!alive.current) return null;
+    if (!alive.current) return { error: null, answer: null };
     setBusy(false);
-    if (!r.ok) { setError(r.error); return r.error; }
+    if (!r.ok) { setError(r.error); return { error: r.error, answer: null }; }
     setAnswer(r); setError(null);
-    return null;
+    return { error: null, answer: r };
   }, [root]);
 
   return { answer, error, busy, save, reload: load };

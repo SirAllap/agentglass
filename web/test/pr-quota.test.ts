@@ -60,7 +60,9 @@ describe("pull-request panel GitHub budget", () => {
     const press = CODE.slice(at, CODE.indexOf("}} disabled={busy} small", at));
     expect(press).not.toContain("forgetRollups(");
     expect(press).toMatch(/if \(boardShown\) \{\s*boardForce\.current = true;/);
-    expect(press).toContain("const listOnScreen = !boardShown || BOARD_IS_WIDE;");
+    // `boardWide` is the `BOARD_IS_WIDE` constant turned into a per-repository
+    // switch: the list is on screen when the board is not, or when it is wide.
+    expect(press).toContain("const listOnScreen = !boardShown || boardWide;");
     expect(press).toContain("loadList(listOnScreen)");
   });
 });

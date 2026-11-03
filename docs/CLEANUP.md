@@ -73,6 +73,20 @@ placeholder, and if it cannot be read there is no button (the PR panel shows a m
 "Leftovers ?" with the reason). Ceiling: an agent tab left open is not counted here; the
 full plan behind the button still lists it.
 
+**A card that cannot be cleaned up says why.** The same inventory answers whether a cleanup
+of that card would be refused, from what it already reads on this computer: uncommitted
+changes in the worktree, a live session working in it, commits on the branch that are not on
+`origin`. The card's line then wears it — `Leftovers: 4 items · 221 MB · blocked`, with the
+reason on hover — so pressing it is never a mystery. The blocks that need GitHub (another
+open pull request using the branch, one stacked on it) are still the dialog's to list.
+
+**Clean up all** in the Closed tab's header runs that same per-card cleanup, one pull
+request after another, for the cards whose inventory has an item. A card closed without
+merging is included, and runs the way its own dialog opens: its branches and stashes stay
+unticked, and the confirmation says how many of those there are. A card a safety block
+refuses is skipped, counted, and named with its reason; its own button still opens the
+dialog.
+
 The safety blocks below apply in every mode; no setting turns them off.
 
 ## From a terminal or an agent

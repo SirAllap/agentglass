@@ -9,6 +9,8 @@ import { makeTagsOriginCache } from "./tagsOriginCache.ts";
 import type { ServerWebSocket, Server } from "bun";
 import type { ControlCmd, IngestBody, WsFrame, MarkKind, WorkingTree, PanesResponse, AgentSessionRow, GitRepoRef, TreeAuthorsInfo, ChangeRow } from "../../shared/types.ts";
 import { slackReachable } from "./slackreach.ts";
+import { reapRecordedChildren } from "./childledger.ts";
+import { reapOwnHelpers } from "./ownhelpers.ts";
 import { normalize, detectError, clampIngestTimestamp, externalIngestError } from "./ingest.ts";
 import { pricingProvenance, startPricingRefresh } from "./pricing.ts";
 import { db, setBashDoneHook } from "./db.ts";
@@ -45,11 +47,15 @@ import {
 } from "./db.ts";
 import { maybeAlert, setAlertSink, pushDeviceStoreChanged, lanternSnapshot } from "./alerts.ts";
 import { noteAction, actorOf, type ActorSource } from "./actions.ts";
+import * as Manifest from "./manifest.ts";
+import type { ManifestSignOff } from "../../shared/manifest.ts";
 import { getSkills, catalogMarkdown, catalogCsv, usageSince } from "./skills.ts";
 import { getInsights } from "./insights.ts";
 import { getCollisions } from "./collisions.ts";
 import { getUsage, ingestStatusline, syncLogin } from "./usage.ts";
 import { allProviderUsage } from "./providerusage.ts";
+import { opencodeUsage, refreshOpenCodeUsage, openCodeDetail, __resetOpenCodeUsageCache } from "./opencodeusage.ts";
+import { clearUsageKey, hasUsageKey, setUsageKey } from "./usagekey.ts";
 import { claimPaceAlerts, coerceAlertAt } from "./paceAlert.ts";
 import { refreshCodexUsage } from "./codexusage.ts";
 import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, onGateChange, typedReason, GATE_MAX_MS, gateFailClosed, denyByRule, allowByRule, validGateId } from "./gate.ts";
@@ -59,7 +65,7 @@ import { parseControlCmd, controlId, awaitControl, settleControl, parseReply, ne
 import { isReadAction, isWriteKind, describeUiActions, presentOf, argsRefusal, entryOfBody, levelAllows, UI_ACTIONS, type UiKind } from "../../shared/uiActions.ts";
 import { outwardAction, outwardLine } from "./outward.ts";
 import { listLanes } from "./lanes.ts";
-import { gateLane, dropBrowserTarget, askBrowser, browserReadyCount, exportAudit, noteBrowserManager, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp, runSteps, waitForEvents, recordFrames, traceRecording, auditAsScript, downloadFile, runLanes, withObservation, parseScrape, runScrape } from "./browserdrive.ts";
+import { gateLane, agentAskRefusal, dropBrowserTarget, askBrowser, browserReadyCount, exportAudit, noteBrowserManager, noteBrowserReady, noteWorkerAsk, parseAsk, setBrowserSink, settleBrowser, type BrowserOp, runSteps, waitForEvents, recordFrames, traceRecording, auditAsScript, downloadFile, runLanes, withObservation, parseScrape, runScrape } from "./browserdrive.ts";
 import { browserUseStatus, installSkill, refreshSkill } from "./browseruse.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
@@ -217,6 +223,7 @@ import {
   prBranches, githubStatusCached, prsForBranch, prForHead, nodeIdOk, locateRepo, isForeignRoot, headRead, freshHead } from "./prs.ts";
 import { prPinStates } from "./prPinStates.ts";
 import type { HeadRead } from "../../shared/headCompare.ts";
+import type { BuilderModel } from "../../shared/builderModel.ts";
 import { treeAtTar } from "./treeAt.ts";
 import { planCheckOnBase, startCheckOnBase, checkOnBaseStatus, cancelCheckOnBase } from "./checkOnBasePr.ts";
 import { checkoutBranches, repoSpend, spendRows } from "./spend.ts";
@@ -251,16 +258,19 @@ import {
 import { answer as answerRule, check as rulesCheck, ruleRoot as rulesRoot, setRule, setRulesDoor, view as rulesView, writeLaunchBase } from "./agentRulesStore.ts";
 import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings, lanternNudge, lanternWatch, lanternWatchMinutes, cacheTtlMinutes, lanternNudgeMinutes, writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, seatWakeHours, writeSeatSettings, launchMode, launchDeny, writeLaunchPermissions, launchFlagOverrides, writeLaunchFlagOverrides, workerRoles, writeWorkerRole, inScopeReal, agentsChangeWithoutAsking, gateAnswerer, gateOnTimeout } from "./config.ts";
 import { tellChair } from "./gatechair.ts";
+import { nodeModulesGap, withDepsLine } from "./checkoutDeps.ts";
 import { claudeModels } from "./claudemodels.ts";
 import { engineModels } from "./enginemodels.ts";
 import { noteUse, readOpens, recordOpens } from "./usageopens.ts";
 import { startPaneSweeper, reloadEngineConf, engineWindowOutcome, engineWindowRunning, engineSessionName, validSessionName } from "./tmuxpane.ts";
 import { findLiveWindow } from "./livewindow.ts";
 import { reapLeases } from "./panelease.ts";
-import { startScanner, ownsSession, knownProjects, projectsKnownAtStart, resyncScope, scanningEnabled } from "./transcripts.ts";
+import { startScanner, ownsSession, knownProjects, projectsKnownAtStart, resyncScope, resyncScopeBounded, scanningEnabled } from "./transcripts.ts";
 import { conflictPrompt } from "./conflictPrompt.ts";
 import { workspaceRoot, workspaceRoots, setWorkspaceRoot, setWorkspaceRoots, inScope, sessionInScope, chatBypassAllowed, readBudgets, writeBudgets, hiddenProjects, setProjectHidden, setRepoDir, configuredRepoDirs, panelRepoDirs, configPath, repoDirsUnstated, seedRepoDirs, fileRoots, polarisRoots } from "./config.ts";
 import { cloneProject, createProject, precheckFolder } from "./projectadd.ts";
+import { setupRepos } from "./setuprepos.ts";
+import { setupScanGet, setupScanStart, setupScanStop } from "./setupscan.ts";
 import { budgetStatus } from "./budget.ts";
 import type { Budget } from "../../shared/types.ts";
 import { hookStatus, applyHooks, applyGate, hooksDir, hookPython, healGateCommand, gateInstalled } from "./hooksetup.ts";
@@ -271,14 +281,19 @@ import { secretGrant } from "../../shared/pluginSandbox.ts";
 import { privateHost, resolvePeer, originOf, guardedFetch, hostsOnly } from "./net.ts";
 import { DESK_HEADER, claimDesk, deskHeld } from "./desk.ts";
 import { readPolicy, writePolicy } from "./orchestration.ts";
+import { deleteFlow, readFlow, writeFlow } from "./flow.ts";
 import { polarisRoute } from "./polarisRoutes.ts";
-import { onBaseFixed, startPolaris, wakeForRepo } from "./polaris.ts";
+import { decidePolaris, onBaseFixed, onPolarisRequests, onPolarisWake, polarisRequestType, polarisRequests, startPolaris, wakeForRepo, type PolarisWho } from "./polaris.ts";
 import { makeDoor, type DoorAnswer } from "./settingsDoor.ts";
+import { agentsTrusted } from "./agentTrust.ts";
 import { serverSettingDefs, cleanBudgets, cleanupConfigOf } from "./serverSettings.ts";
 import { agentVerdict, classOf, NEEDS_APPROVAL } from "../../shared/settingClass.ts";
-import { policyEngaged, startThroughPolicy, promptHeadless, startedByOf, settled, seatMayUse, workersAfterRestart, chairsAgain } from "./agents/policystart.ts";
+import { builderEngineFor, policyEngaged, startThroughPolicy, promptHeadless, startedByOf, settled, seatMayUse, workersAfterRestart, chairsAgain } from "./agents/policystart.ts";
+import { flowRoleFor, roleLockFor, rolePromptFor, unknownRoleError, withRolePrompt } from "./rolePrompt.ts";
+import { workerRole } from "../../shared/workerRoles.ts";
 import { armedWakeups, evaluate as evaluatePolicy, ruleStates, startPolicyEvaluator } from "./orchpolicy.ts";
-import { resolveToken, healthProof, tokenOk, isIntake, isAuthExempt, callerFor, allowed, mayReadForeignRoot, scopeNeeded, pluginOfRequest, answersFromADevice, deskKeyOk, understudyRequiresToken, UNDERSTUDY_NO_TOKEN_ERROR, tokenlessWarning, type Caller, type Origin } from "./auth.ts";
+import { resolveToken, healthProof, tokenOk, isIntake, isAuthExempt, callerFor, allowed, mayReadForeignRoot, scopeNeeded, pluginOfRequest, answersFromADevice, deskKeyOk, revokeWorkerToken, revokeWorkerTokensExcept, understudyRequiresToken, UNDERSTUDY_NO_TOKEN_ERROR, tokenlessWarning, phoneMayAnswerPolaris, type Caller, type Origin } from "./auth.ts";
+import { mintBrowserCredential, withBrowserLine } from "./browseraccess.ts";
 import {
   listPlugins, masterEnabled, setMaster, installPlugin, installFromCatalogue, updatePlugin, enablePlugin, disablePlugin, removePlugin, setPluginUnboxedConsent, envAllowsUnboxed,
   contributesOf, isRunning, pluginSettings, pluginOwnSettings, savePluginSettings, resumeEnabledPlugins, stopAllPluginsSync, pluginIcon,
@@ -314,6 +329,9 @@ async function polarisWake(repo: string): Promise<void> {
   if (polarisRoots().length) broadcast({ type: "polaris" });
 }
 
+onPolarisRequests(() => broadcast({ type: "settings-requests" }));
+// A pull request that needs thinking, or an ask that was answered, reaches the project's orchestrator through its seat.
+onPolarisWake((root, line) => { void SeatWake.promptSeatForPolaris(root, line).catch(() => {}); });
 // One frame per base fix: the windows show the toast and the orchestrator's chair reads the same frame.
 onBaseFixed((s) => broadcast({ type: "polaris", baseFixed: { base: s.base, tipSha: s.tipSha, canSync: s.canSync.length } }));
 onPrChanged((ev) => {
@@ -542,6 +560,10 @@ import { withEvidence } from "./evidence.ts";
 import { tidyReport } from "./tidy.ts";
 import { publishPort, retractPort } from "./portfile.ts";
 const PORT = Number(process.env.AGENTGLASS_PORT || 4000);
+/* The browser routes only the window itself may call. Checked before their
+   bodies are read and before every other /browser/ POST, so a credential
+   minted for an agent cannot register as the window or forge its replies. */
+const WINDOW_ONLY_OPS: ReadonlySet<string> = new Set(["ready", "result"]);
 // Before anything can log: the errors this server recovers from are the ones
 // nobody was watching stderr for.
 const SERVER_LOG = installServerLog();
@@ -605,7 +627,7 @@ const BUDGET_WRITE_ENABLED = process.env.AGENTGLASS_BUDGET_WRITE_DISABLED !== "1
 // it, forgetting a device revokes its credential and leaves whatever it is
 // already holding — an event stream, a terminal — running until it disconnects
 // on its own, which is a revoke in the list and not on the wire.
-type WsData = ({ kind: "events" } | { kind: "notify" } | { kind: "canvas"; handle?: CanvasHandle } | PtyWsData) & { ip?: string | null; deviceId?: string | null };
+type WsData = ({ kind: "events" } | { kind: "notify" } | { kind: "canvas"; handle?: CanvasHandle } | PtyWsData) & { ip?: string | null; deviceId?: string | null; principal?: string | null };
 /** The docker reads that start a process per request and have no cache or
  *  single-flight in front of them. See spawncap.ts. */
 const DOCKER_SPAWNS = new Set([
@@ -685,7 +707,7 @@ const settingsDoor = makeDoor({
     // a chain with an engine added is a plan back for a chair that had none.
     policyChanged: () => { void evaluatePolicy().catch(() => {}); void chairsAgain().catch(() => {}); },
   }),
-  trusted: agentsChangeWithoutAsking,
+  trusted: agentsTrusted,
   applyWindow: grantedWindowSet,
   changed: () => broadcast({ type: "settings-requests" }),
 });
@@ -729,7 +751,7 @@ function corsFor(req: Request): Record<string, string> {
   return {
     "Access-Control-Allow-Origin": origin || "*",
     Vary: "Origin",
-    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Access-Control-Allow-Methods": "GET,POST,PUT,OPTIONS",
     // The desk's header is the desktop app's renderer answering a gate from its
     // own scheme, which is a cross-origin request here (desk.ts).
     "Access-Control-Allow-Headers": `content-type, authorization, ${DESK_HEADER}`,
@@ -852,7 +874,7 @@ async function underRootLock<T>(root: string, f: () => Promise<T>): Promise<T> {
 }
 
 type LaunchOut =
-  | { ok: true; queued: false; window: string; worktree: string; branch: string }
+  | { ok: true; queued: false; window: string; worktree: string; branch: string; environment?: string; worker?: string }
   | { ok: true; queued: true }
   | { ok: false; error: string; status: number };
 /**
@@ -935,12 +957,24 @@ async function holdBuilders(root: string): Promise<number> {
  * The builder's deny list is part of the argv, so it holds whatever mode and
  * whatever list the person has set.
  */
-async function launchFlightPlan(plan: FlightPlanStore.Plan, auto: boolean): Promise<LaunchOut> {
+async function launchFlightPlan(plan: FlightPlanStore.Plan, auto: boolean, chosen?: { model: string; person: boolean }): Promise<LaunchOut> {
   const fail = (error: string, status = 409): LaunchOut => ({ ok: false, error, status });
   if (plan.state !== "go") return fail(`a ${plan.state} plan cannot launch: it needs Go first`);
   if (FlightPlan.isHeld(plan.root)) return fail("this project is held: nothing launches until the person resumes it");
   if (!TERMINAL_ENABLED) return fail("the terminal is disabled here", 403);
   if (!inScope(plan.root) || !fsExists(plan.root)) return fail("that project is not open", 400);
+  /* A project whose builders run on another engine (its Orchestration chain says so) builds with its
+     own named workers, started through the same policy path `agentglass-agent start --role builder`
+     uses; a Claude chain keeps the tab it always opened. */
+  const builderEngine = builderEngineFor(plan.root) ?? "claude";
+  /* The plan's size and what it touches pick the model, before anything is cut:
+     a model this Go may not choose refuses here, with the plan still at Go.
+     Only the Claude path picks from here; another engine's chain names its own model. */
+  const role = workerRoles().builder;
+  const builder = FlightPlan.builderLaunch(plan, role, String(PreflightStore.getSetting(PreflightStore.APP, "flightPlan.builder.permissions")), String(PreflightStore.getSetting(PreflightStore.APP, "flightPlan.builder.strongModel")));
+  const over = chosen && builderEngine === "claude" ? FlightPlan.builderOverride({ model: builder.model, why: builder.why }, chosen.model, chosen.person) : null;
+  if (over && !over.ok) return fail(over.error, 403);
+  const model: BuilderModel = over?.ok ? over.model : builder.model;
   // One press at a time per plan: the awaits below would otherwise let a second press cut a second tree and open a second window.
   if (launching.has(plan.id)) return fail("that plan was already launched");
   launching.add(plan.id);
@@ -971,8 +1005,31 @@ async function launchFlightPlan(plan: FlightPlanStore.Plan, auto: boolean): Prom
     const { tree } = cut;
     try {
       const coordinator = (await Seat.seated(plan.root))?.name ?? null;
-      const builder = FlightPlan.builderLaunch(workerRoles().builder, String(PreflightStore.getSetting(PreflightStore.APP, "flightPlan.builder.permissions")));
-      const built = issueArgv({ kind: "claude", prompt: FlightPlan.launchPrompt(plan, coordinator), yolo: false, title: sessionTitle(plan.title), perm: launchPerm(builder.mode, undefined, false, FlightPlan.BUILDER_DENY), model: builder.model },
+      if (builderEngine !== "claude") {
+        /* One headless turn under the project's builder role, the way a start from the CLI goes:
+           the tree is its directory, the plan's brief is its prompt, and the branch names it. */
+        const name = FlightPlan.builderWindowName(tree.branch);
+        const r = await startThroughPolicy({
+          root: plan.root, policyRoot: plan.root, name, cwd: tree.path, prompt: FlightPlan.launchPrompt(plan, coordinator),
+          body: { role: "builder" }, seatRoot: null,
+        });
+        if (r.status !== 200) throw new Error(`the worker on ${builderEngine} did not start: ${String(r.body.error ?? "no reason given")}`);
+        const agent = (r.body.result as { agent?: { windowId?: string } } | undefined)?.agent;
+        const session = lastTmuxTarget()?.session || undefined;
+        FlightPlanStore.setWorker(plan.id, name);
+        if (agent?.windowId) FlightPlanStore.setLaunchedTab(plan.id, { window: agent.windowId, ...(session ? { session } : {}) });
+        noteUse("flightPlan:launch");
+        if (coordinator) void SeatWake.promptSeat(plan.root, `A builder was started for flight plan ${plan.id} in ${tree.path} (branch ${tree.branch}, worker "${name}"). It reports to you via SendMessage.`);
+        broadcast({ type: "flight-plan" });
+        return { ok: true, queued: false, window: agent?.windowId ?? "", worktree: tree.path, branch: tree.branch, worker: name };
+      }
+      /* The Claude branch: the window runs exactly this CLI. The provider the role happens to
+         name is not read here. */
+      const engine = "claude" as const;
+      /* The tree was just cut, so it has no node_modules by construction: said in
+         the answer, and ahead of the brief the builder reads first. */
+      const deps = nodeModulesGap(tree.path);
+      const built = issueArgv({ kind: engine, prompt: withDepsLine(withBrowserLine(FlightPlan.launchPrompt(plan, coordinator), engine, "builder"), deps), yolo: false, title: sessionTitle(plan.title), perm: launchPerm(builder.mode, undefined, false, FlightPlan.builderDenyFor(plan.root)), model },
         { canName: supportsSessionName, modelFlags, defaultKind: "claude" });
       if (!built.ok) throw new Error(built.error);
       // A normal tab in the session the person is on (the project's own when none), opened behind the one they are reading: never the bench.
@@ -980,13 +1037,21 @@ async function launchFlightPlan(plan: FlightPlanStore.Plan, auto: boolean): Prom
       const session = lastTmuxTarget()?.session || undefined;
       const scratch = FlightPlan.builderTmp(tree.path);
       mkdirSync(scratch, { recursive: true });
-      const win = await engineWindowOutcome(tree.path, FlightPlan.builderWindowName(tree.branch), built.argv, tree.path, { [FlightPlan.BUILDER_ENV]: tree.path, TMPDIR: scratch }, session, false, false);
+      const name = FlightPlan.builderWindowName(tree.branch);
+      /* Launched by Go, not by a hand: its own browser credential when the
+         builder role may drive the browser, and none at all otherwise — the
+         window would otherwise inherit the server's machine token. The role is
+         handed over too, which is what keeps the supplied CLI from using the
+         machine identity after a 401. */
+      const env: Record<string, string> = { [FlightPlan.BUILDER_ENV]: tree.path, TMPDIR: scratch, AGENTGLASS_ROLE: "builder" };
+      mintBrowserCredential(env, name, engine, "builder");
+      const win = await engineWindowOutcome(tree.path, name, built.argv, tree.path, env, session, false, false);
       if (!win.ok) throw new Error(`the builder's tab did not open: ${win.reason}`);
       FlightPlanStore.setLaunchedTab(plan.id, { window: win.windowId, ...(session ? { session } : {}) });
       noteUse("flightPlan:launch");
       if (coordinator) void SeatWake.promptSeat(plan.root, `A builder was launched for flight plan ${plan.id} in ${tree.path} (branch ${tree.branch}, session "${sessionTitle(plan.title)}"). It reports to you via SendMessage.`);
       broadcast({ type: "flight-plan" });
-      return { ok: true, queued: false, window: win.windowId, worktree: tree.path, branch: tree.branch };
+      return { ok: true, queued: false, window: win.windowId, worktree: tree.path, branch: tree.branch, ...(deps ? { environment: deps.line } : {}) };
     } catch (e) {
       FlightPlanStore.unlaunch(plan.id);
       return fail((e as Error).message);
@@ -994,12 +1059,41 @@ async function launchFlightPlan(plan: FlightPlanStore.Plan, auto: boolean): Prom
   } finally { launching.delete(plan.id); }
 }
 
+/** The rows of the named workers these plans link, after one reconcile stamped the ones whose pane is gone. Null when no plan links one. */
+async function workerRowsOf(names: readonly (string | null | undefined)[]): Promise<{ name: string; endedAt: number | null }[] | null> {
+  const linked = [...new Set(names.filter((n): n is string => !!n))];
+  if (!linked.length) return null;
+  await AgentOps.reconcile();
+  return linked.map((n) => AgentOps.agentNamed(n)).filter((r): r is AgentOps.NamedAgent => r !== null);
+}
+
 /** The worktree a request says it comes from, when a launched flight-plan builder owns it: the CLI of a builder's tab sends it. */
-function builderWorktreeOf(req: Request): string | null {
+function builderPlanOf(req: Request): FlightPlanStore.Plan | null {
   const w = req.headers.get("x-agentglass-builder");
   if (!w || !w.startsWith("/")) return null;
   const real = realish(w);
-  return FlightPlanStore.listPlans({ state: "launched" }).some((p) => p.launched?.worktree && realish(p.launched.worktree) === real) ? w : null;
+  return FlightPlanStore.listPlans({ state: "launched" }).find((p) => !!p.launched?.worktree && realish(p.launched.worktree) === real) ?? null;
+}
+function builderWorktreeOf(req: Request): string | null {
+  const w = req.headers.get("x-agentglass-builder");
+  return w && w.startsWith("/") && builderPlanOf(req) ? w : null;
+}
+
+/**
+ * The projects an agent-class caller belongs to, from what the server bound to
+ * its credential: a seat's chair, or the projects this server is open on. A
+ * header the caller writes (`x-agentglass-agent`, `x-agentglass-builder`) never
+ * picks or widens one: naming a row or a worktree proved nothing, and the
+ * machine token every agent shell holds could name any of them.
+ *
+ * A builder's worktree needs no entry of its own: it resolves to the project it
+ * was cut from (`sessionPane` and `Seat.seatSpeaksFor` do the same), which is
+ * one of the open projects. Empty is a refusal, never "any project".
+ */
+function agentOwnRoots(caller: Caller | null): string[] {
+  if (caller?.principal === "seat") return caller.seat?.root ? [caller.seat.root] : [];
+  if (caller?.principal) return []; // the understudy acts on nothing
+  return workspaceRoots();
 }
 
 function mayPublishReview(req: Request, caller: Caller | null): boolean {
@@ -1008,21 +1102,55 @@ function mayPublishReview(req: Request, caller: Caller | null): boolean {
 }
 
 /**
- * Who asked for a settings change, as the person's request card says it: a
- * worker by the name the registry holds for it, a seat by its project, else the
- * label a CLI stamped (`--as`, the closed charset callerRequestId allows) marked
- * as the caller's own word for itself. Never a free sentence from the body.
+ * Who may answer a settings request: the person at the desk, or a paired
+ * device with the `answer` grant.
+ *
+ * It is the same act as releasing a gate — an agent is stopped until somebody
+ * says yes, and the yes applies a value the server validated from the request
+ * it is holding — so the phone that answers gates answers these. Nothing
+ * weaker: a device needs the grant, and the machine, seat, plugin and
+ * understudy credentials an agent can hold are not devices, so they are refused
+ * by the same test as before.
  */
+function mayAnswerSettingsRequest(req: Request, caller: Caller | null, ask?: string | null): boolean {
+  if (req.headers.get("x-agentglass-agent")) return false;
+  // A send types into a live session: the desk's person approves it, never the phone. A sync may come from the phone.
+  if (phoneMayAnswerPolaris(ask, caller)) return true;
+  // A phone without the answer grant for this ask is refused here, not by the desk's rule below.
+  if (caller?.kind === "device" && !caller.principal) return false;
+  return mayPublishReview(req, caller);
+}
+
 /** How the Lantern and the approval card name a repository: `owner/name`, or the folder when git has no remote. */
 const cleanupRepoLabel = async (main: string): Promise<string> => (await prRepoIdFor(main))?.nameWithOwner ?? main.split("/").pop() ?? main;
 
-function askerOf(req: Request, caller: Caller | null, as: unknown): string {
-  const worker = presentedWorker(req);
-  if (worker) return `worker ${worker}`;
+/** The asker a credential proves: a policy worker's `wk_` name, a seat's
+ *  project, a plugin's name. Null for the machine token every agent shell holds
+ *  and for the understudy. The agent-name header is a name the caller writes
+ *  about itself, so it proves nobody. */
+function provenAsker(req: Request, caller: Caller | null): string | null {
+  if (caller?.principal === "worker" && caller.worker) return `worker ${caller.worker}`;
   if (caller?.principal === "seat" && caller.seat) return `the chair of ${basename(caller.seat.root)}`;
   if (caller?.kind === "plugin") { const name = pluginOfRequest(req, new URL(req.url)); return name ? `plugin ${name}` : "a plugin"; }
+  return null;
+}
+
+/**
+ * Who asked for a settings change, as the person's request card says it: what
+ * the credential proves, else the label a CLI stamped (`--as`, the closed
+ * charset callerRequestId allows) marked as the caller's own word for itself.
+ * Never a free sentence from the body, and never the agent-name header.
+ */
+function askerOf(req: Request, caller: Caller | null, as: unknown): string {
+  const proven = provenAsker(req, caller);
+  if (proven) return proven;
   const label = callerRequestId(as);
   return label ? `an agent calling itself "${label}"` : "an unnamed agent";
+}
+
+/** The asker as the same stable token the sentence is built from, so an agent's own CLI can find its asks. */
+function askerNameOf(req: Request, caller: Caller | null, as: unknown): string {
+  return provenAsker(req, caller) ?? callerRequestId(as) ?? "an unnamed agent";
 }
 
 /**
@@ -1915,6 +2043,11 @@ function buildStamp(): string {
   return stampCache;
 }
 
+/** The answer for a start whose CLI was over before it began, its tab kept
+ *  where the CLI's own words are. */
+const keptTabSentence = (name: string): string =>
+  `the agent CLI exited as soon as it was launched; its tab is kept: agentglass-agent read ${name}`;
+
 /**
  * The main server's whole request handler, factored out of `Bun.serve`'s
  * own `fetch` so the plugin socket (plugin-socket.ts) can hand it a request
@@ -2123,7 +2256,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if ((AUTH_TOKEN || pluginOfRequest(req, url)) && !isAuthExempt(pathname, sinkFrom)) {
       caller = callerFor(req, url, AUTH_TOKEN ?? "");
       if (!caller) return json({ ok: false, error: "unauthorized — pass ?token= or Authorization: Bearer" }, 401);
-      if (!allowed(caller, req.method, pathname)) {
+      if (!allowed(caller, req.method, pathname, agentsTrusted)) {
         /*
          * The understudy answers differently, and the wording is the point.
          *
@@ -2322,7 +2455,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     }
     if (pathname === "/stream") {
       if (!trustedCaller(req, from)) return csrfBlocked();
-      if (srv.upgrade(req, { data: { kind: "events", ip: clientIp ?? null, deviceId: caller?.device?.id ?? null } })) return undefined as unknown as Response;
+      if (srv.upgrade(req, { data: { kind: "events", ip: clientIp ?? null, deviceId: caller?.device?.id ?? null, principal: caller?.principal ?? null } })) return undefined as unknown as Response;
       return new Response("upgrade failed", { status: 426 });
     }
 
@@ -2362,8 +2495,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         fresh: url.searchParams.get("fresh") === "1",
         console: url.searchParams.get("console") === "1",
         // Which tab of the floating bench this is. A small number the client
-        // keeps; the server turns it into a session name, so no client ever
-        // names a session on this engine. See engineBenchArgv.
+        // keeps; the server turns it into the name of a window on the engine
+        // session, so no client ever names one. See engineBenchArgv.
         bench: Math.min(Math.max(Number(url.searchParams.get("bench")) || 0, 0), 99) || undefined,
         note: url.searchParams.get("note") === "1",
         cols: Number(url.searchParams.get("cols") || 80),
@@ -2428,6 +2561,10 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       return json({
         ok: true, service: "agentglass", clients: clients.size,
         notifyWatching: notifyWatching(), build: buildStamp(), proof,
+        // A window can say, where it matters, that this server identifies
+        // nobody: it discloses nothing a caller could not learn by asking any
+        // token-gated route, and a setting that cannot be enforced says so.
+        tokenless: AUTH.source === "none",
       });
     }
 
@@ -2604,6 +2741,106 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     // Pick the projects this cockpit is about (or none → the whole machine).
     // Applied live and persisted for the next launch. `roots` is the list the
     // picker sends; `root` is the one-project shape older clients still send.
+    /**
+     * THE MANIFEST: WHAT LANDED, WHAT IS RUNNING, WHAT WAITS FOR A VERDICT.
+     *
+     * `GET /manifest` with no project is the summary the rail dot reads, cached
+     * for a minute because it costs one git log per open project. With a
+     * project it is that project's rows, uncached, and the project must be one
+     * of the open ones — a root outside them is never read.
+     */
+    if (pathname === "/manifest" && req.method === "GET") {
+      const signOff: ManifestSignOff = trustedCaller(req, from) && mayAnswerSettingsRequest(req, caller, null)
+        ? "yes"
+        : caller?.kind === "device" ? "grant" : "off";
+      const asked = url.searchParams.get("project");
+      if (asked === null) {
+        return json({ ok: true, projects: await Manifest.summarize(Manifest.manifestDeps.now(), signOff === "yes") });
+      }
+      if (!workspaceRoots().includes(asked)) return json({ ok: false, error: "that project is not open" }, 404);
+      return json({ ok: true, ...(await Manifest.readProject(asked, signOff, Manifest.manifestDeps.now())) });
+    }
+    if (pathname === "/manifest/signoff" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { project?: unknown; sha?: unknown; verdict?: unknown; note?: unknown } = {};
+      try { b = await req.json() as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const may = mayAnswerSettingsRequest(req, caller, null);
+      if (!may) {
+        const sentence = "only the person signs off";
+        noteAction(clientIp, "/manifest/signoff", { sha: b.sha }, { ok: false, error: sentence }, asActor(caller));
+        return json({ ok: false, error: sentence }, 403);
+      }
+      const project = typeof b.project === "string" ? b.project : "";
+      const sha = typeof b.sha === "string" ? b.sha : "";
+      const verdict = typeof b.verdict === "string" ? b.verdict : "";
+      if (!workspaceRoots().includes(project)) return json({ ok: false, error: "that project is not open" }, 400);
+      if (!/^[0-9a-f]{40}$/.test(sha)) return json({ ok: false, error: "sha must be 40 hex characters" }, 400);
+      if (verdict !== "tested" && verdict !== "failed" && verdict !== "cleared") {
+        return json({ ok: false, error: "verdict must be tested, failed or cleared" }, 400);
+      }
+      if (b.note != null && typeof b.note !== "string") return json({ ok: false, error: "note must be text" }, 400);
+      const note = typeof b.note === "string" ? b.note : "";
+      if (note.length > Manifest.MANIFEST_NOTE_MAX) {
+        return json({ ok: false, error: `${Manifest.MANIFEST_NOTE_MAX} characters at most` }, 400);
+      }
+      if (verdict === "cleared") {
+        Manifest.clearVerdict(project, sha);
+        Manifest.clearManifestSummary();
+        noteAction(clientIp, "/manifest/signoff", { sha, cleared: true }, { ok: true }, asActor(caller));
+        return json({ ok: true, cleared: true });
+      }
+      /* Signing is about a commit this running build contains. A row that waits
+         for a build cannot be tested in the build that is running. */
+      const now = Manifest.manifestDeps.now();
+      const { branch, commits, head } = await Manifest.readTrunk(project, now);
+      const ancestors = branch ? await Manifest.ancestorsOf(project, Manifest.manifestDeps.buildCommit()) : null;
+      // The write guard reads the same line the view does, so a commit behind
+      // it is not signable even when a request names its sha.
+      const start = branch && head ? Manifest.ensureStartLine(project, head, now) : null;
+      const row = branch
+        ? Manifest.deriveRows({ commits, now, verdicts: Manifest.verdicts(project), ancestors, start }).find((r) => r.sha === sha)
+        : undefined;
+      if (!row) return json({ ok: false, error: "that commit is not one of this project's rows" }, 400);
+      if (row.group === "ready") {
+        return json({ ok: false, error: "merged, not in the build you are looking at" }, 400);
+      }
+      const kind = caller?.kind === "device" ? "phone" : "person";
+      const by = caller?.device?.label || (kind === "phone" ? "phone" : "desk");
+      Manifest.signOff(project, sha, verdict, kind, by, note || null, now);
+      Manifest.clearManifestSummary();
+      noteAction(clientIp, "/manifest/signoff", { sha, verdict }, { ok: true }, asActor(caller));
+      return json({ ok: true, sha, verdict, kind, at: now, note: note || null });
+    }
+    /**
+     * Move a project's start line to the trunk's current commit.
+     *
+     * The line is set by the first read and moved only by the person: it
+     * decides which commits the view asks them to sign, so an agent that could
+     * move it could empty the list. Judged exactly like the sign-off write.
+     */
+    if (pathname === "/manifest/start" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { project?: unknown } = {};
+      try { b = await req.json() as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const may = mayAnswerSettingsRequest(req, caller, null);
+      if (!may) {
+        const sentence = "only the person starts the count from zero";
+        noteAction(clientIp, "/manifest/start", { project: b.project }, { ok: false, error: sentence }, asActor(caller));
+        return json({ ok: false, error: sentence }, 403);
+      }
+      const project = typeof b.project === "string" ? b.project : "";
+      if (!workspaceRoots().includes(project)) return json({ ok: false, error: "that project is not open" }, 400);
+      const now = Manifest.manifestDeps.now();
+      const { branch, head } = await Manifest.readTrunk(project, now);
+      if (!branch || !head) return json({ ok: false, error: "this checkout has no branch to read" }, 400);
+      Manifest.setStartLine(project, head, now);
+      Manifest.clearManifestSummary();
+      noteAction(clientIp, "/manifest/start", { project, sha: head }, { ok: true }, asActor(caller));
+      return json({ ok: true, start: { sha: head, at: now } });
+    }
+    // Pick the projects this cockpit is about (or none → the whole machine).
+    // Applied live and persisted for the next launch. `roots` is the list the
+    // picker sends; `root` is the one-project shape older clients still send.
     if (pathname === "/workspace" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
@@ -2614,7 +2851,9 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // so widening doesn't replay months of backfill as live events. The
       // client reloads on this response; answering earlier would show it a
       // dashboard the backfill hasn't reached yet.
-      if (res.ok) await resyncScope();
+      // Bare `resyncScope()` here waited 40 s cold: the startup backfill holds
+      // the sweep flag and the picker had nothing to show meanwhile.
+      if (res.ok) await resyncScopeBounded();
       return json(res, res.ok ? 200 : 400);
     }
     /**
@@ -2881,6 +3120,49 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     }
 
     if (pathname === "/hooks/status") return json(hookStatus());
+    /*
+     * THE FIRST RUN'S FOUR FACTS, read once at launch.
+     *
+     * `setupDone` is null until somebody writes it, which is how the window tells
+     * "never asked" from "finished". The other facts say whether this machine has
+     * already been set up by somebody; a project, a session row or installed hooks
+     * each answer yes. Nothing here writes, and a first run's own keys are read
+     * under APP (preflightStore.ts) so a second window asks nobody twice.
+     */
+    if (pathname === "/setup/state") {
+      const wroteDone = PreflightStore.hasSetting(PreflightStore.APP, "setup.done");
+      return json({
+        setupDone: wroteDone ? PreflightStore.getSetting(PreflightStore.APP, "setup.done") : null,
+        setupInProgress: PreflightStore.getSetting(PreflightStore.APP, "setup.inProgress"),
+        setupAgent: PreflightStore.getSetting(PreflightStore.APP, "setup.agent"),
+        tutorialSeen: PreflightStore.getSetting(PreflightStore.APP, "setup.tutorial"),
+        projectOpen: workspaceRoots().length > 0,
+        sessionsSeen: !!db.query("SELECT 1 FROM sessions LIMIT 1").get(),
+        hooksInstalled: hookStatus().installed,
+        homedir: osHomedir(),
+      });
+    }
+    if (pathname === "/setup/repos") return json(await setupRepos(url.searchParams.get("path") || ""));
+    /*
+     * `Search this computer`, same-origin like every write. One scan at a
+     * time: a second start answers the one already walking. The id is what a
+     * poll carries, so a stale tab cannot read a newer search's answer.
+     */
+    if (pathname === "/setup/scan" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      return json(setupScanStart());
+    }
+    if (pathname === "/setup/scan") {
+      const scan = setupScanGet(url.searchParams.get("id"));
+      return scan ? json(scan) : json({ error: "That search is not here." }, 404);
+    }
+    if (pathname === "/setup/scan/stop" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
+      const scan = setupScanStop(b?.id);
+      return scan ? json(scan) : json({ error: "That search is not here." }, 404);
+    }
     if ((pathname === "/hooks/install" || pathname === "/hooks/uninstall") && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       return json(applyHooks(pathname === "/hooks/install" ? "install" : "uninstall"));
@@ -2928,6 +3210,13 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     // section and the notch all read this one answer. No desktop-only gate:
     // there is no path on disk in the payload and nothing here can act.
     if (pathname === "/usage/providers") { const plugin = caller?.plugin ?? pluginOfRequest(req, url); return json(await allProviderUsage(undefined, accountsFor(plugin ? { plugin } : "person"))); }
+    // OpenCode Go's reading on its own: the same row /usage/providers carries,
+    // for whoever wants only that one. Read-only; a browser read happens in the
+    // background on the ten-minute mark, never in this request.
+    if (pathname === "/usage/opencode") return json(opencodeUsage());
+    // Per-model spend and the days the engine's own `stats` knows, for the
+    // panel's detail. A local CLI read (no key, no network), only when asked.
+    if (pathname === "/usage/opencode/detail") return json({ ok: true, detail: openCodeDetail(Number(url.searchParams.get("days")) || 30) });
     // What the person opens, counted on this machine only (usageopens.ts): the
     // window posts its batches here and the About page and `ui.read usage` read
     // them back. A write to one small file in the state dir, so the strict gate.
@@ -3049,7 +3338,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // The agent rules (agentRulesStore.ts) first: a "never" is answered now, and an
       // "ask" is held for the person even when a gate rule would let it through.
       let ruled: ReturnType<typeof rulesCheck> | null = null;
-      try { ruled = cwd.startsWith("/") ? rulesCheck(cwd, greq.tool_name, ti) : null; } catch { ruled = null; }
+      try { ruled = cwd.startsWith("/") ? rulesCheck(cwd, greq.tool_name, ti, undefined, caller?.principal === "seat" ? "seat" : undefined) : null; } catch { ruled = null; }
       if (ruled?.decision === "never") return json(denyByRule(greq, ruled.reason ?? "an agentglass rule says never"));
       // The one exception: an outward match made only by a generic MCP verb
       // (`create_entities` on a memory store) is released by an allow rule
@@ -3697,6 +3986,10 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     }
     if (pathname === "/browser-use/install" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
+      /* Installing writes a skill into this machine's tree: not an agent's act. */
+      if (caller?.principal || caller?.kind === "plugin") {
+        return json({ ok: false, error: "this credential was minted for an agent, and installing the browser skill writes into this machine's tree: it is the person's route." }, 403);
+      }
       const res = installSkill();
       return json(res, res.ok ? 200 : 400);
     }
@@ -3723,8 +4016,25 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      * origin fence or read-only mode, or carried out and answered — with
      * secrets already taken out (see redactAsk/redactValue there).
      */
+    /* The browser's DATA routes — history import, the visit record, forget, and
+       the read of everything imported — have no container dimension at all, so
+       there is nothing an agent's ask could name that makes them its own. They
+       are refused to every credential that carries a principal, whatever the
+       body says: a forget or a read of the person's browsing history is not a
+       worker's op. Placed before the fork so GET and POST both meet it. */
+    if ((pathname.startsWith("/browser/places") || pathname === "/browser/visit")
+        && caller && (caller.principal || caller.kind === "plugin")) {
+      return json({ ok: false, error: "this credential was minted for an agent, and the browser's places and visit history are the person's, not something an agent's credential reads, imports or forgets." }, 403);
+    }
     if (pathname === "/browser/audit" && req.method === "GET") {
       if (!trustedCaller(req, from)) return csrfBlocked();
+      /* A worker reads what IT did through the audit of its own work; the
+         relay cannot tell whose rows are whose here (the audit is forensics,
+         not authentication), so the credential that carries a principal does
+         not read the whole list. */
+      if (caller?.principal || caller?.kind === "plugin") {
+        return json({ ok: false, error: "the browser audit is the person's view of every caller; a credential minted for an agent does not read it." }, 403);
+      }
       return json({ ok: true, entries: exportAudit() });
     }
     if (pathname === "/desk/claim" && req.method === "POST") {
@@ -3765,12 +4075,29 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        same gate as the audit; ids and owners, nothing a page said. */
     if (pathname === "/browser/lanes" && req.method === "GET") {
       if (!trustedCaller(req, from)) return csrfBlocked();
+      /* Ids and owners are the person's view of every caller, the same as the
+         audit. A worker reads its own lanes through `lane list`. */
+      if (caller?.principal || caller?.kind === "plugin") {
+        return json({ ok: false, error: "the lane list names every caller's lanes; a credential minted for an agent reads its own through `lane list`." }, 403);
+      }
       return json({ ok: true, lanes: listLanes() });
     }
     const browserDataPost = pathname === "/browser/places" || pathname === "/browser/places/forget" || pathname === "/browser/visit";
     if (pathname.startsWith("/browser/") && req.method === "POST" && !browserDataPost) {
       if (!trustedCaller(req, from)) return csrfBlocked();
+      /* The worker's name, captured before the do/scrape blocks declare their
+         own `caller` field bag — an ask has to be filed under it so its reply
+         can name a page this worker opened. */
+      const askingWorker = caller?.worker;
       const op = pathname.slice("/browser/".length);
+      /* The window's own two routes. Answered before the body gate below
+         because they are not asks — but a credential that carries a principal
+         is refused here, before any body is read: `ready` would otherwise
+         register that caller as the window that receives the person's asks,
+         and `result` would let it answer them. */
+      if (WINDOW_ONLY_OPS.has(op) && caller && (caller.principal || caller.kind === "plugin")) {
+        return json({ ok: false, error: "this credential was minted for an agent, and only the window registers as the browser or answers an ask: neither is an agent's route." }, 403);
+      }
       if (op === "ready") {
         // A window saying it has a browser panel that can answer. Heartbeat, so
         // a window that dies without saying goodbye stops being counted.
@@ -3797,10 +4124,31 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
          somebody else's is a named refusal before anything is asked, and an open
          one is put in scope so every ask this request makes goes to that lane
          and never to the person's tab (browserdrive.ts, laneScope). */
+      let pre: unknown = null;
+      try { pre = await req.clone().json(); } catch { /* the route reports its own bad json */ }
+      /* AN ASK FROM A CREDENTIAL CARRIES ITS IDENTITY. `POST /browser/tabs {}`
+         answered a worker with an empty list, so the "name your own page" rule
+         was enforced by the CLI alone — and the worker owns that process. The
+         name is the credential's, so a body that names none is refused here
+         rather than served as the person's. */
+      if (caller?.worker) {
+        const named = pre && typeof pre === "object" ? (pre as Record<string, unknown>).as : undefined;
+        if (typeof named !== "string" || !named.trim()) {
+          return json({ ok: false, error: "this credential was minted for an agent, and the ask names no identity: a worker's body carries its own `as`, and a body without one is the person's tab in front." }, 403);
+        }
+      }
+      /* The person's own container is refused to an agent's credential HERE, at
+         the relay, whatever the CLI sent and whatever its shell exported. The
+         CLI's own refusal reads AGENTGLASS_ROLE, which the worker owns; this
+         reads the credential this server minted for that worker (mintWorkerToken)
+         or for a plugin. It covers every op below, `do` and `lane` included, and
+         `agentAskRefusal` walks the steps so a nested ask is refused too. */
+      if (caller && (caller.principal || caller.kind === "plugin")) {
+        const shared = agentAskRefusal(pre, caller.worker, op);
+        if (shared) return json({ ok: false, error: shared }, 403);
+      }
       if (op !== "lane") {
-        let pre: unknown = null;
-        try { pre = await req.clone().json(); } catch { /* the route reports its own bad json */ }
-        const refused = gateLane(op, pre);
+        const refused = gateLane(op, pre, caller?.worker);
         if (refused) return json({ ok: false, error: refused });
       }
       if (op === "audit") {
@@ -3960,7 +4308,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
               return json({ ok: false, error: "every lane needs steps: [{op, args}, ...]" }, 400);
             }
           }
-          const r = await runLanes(b.lanes, { observe: b.observe === true, caller });
+          const r = await runLanes(b.lanes, { observe: b.observe === true, caller, worker: askingWorker });
           return json(r);
         }
         if (!Array.isArray(b.steps) || b.steps.length === 0) {
@@ -3973,6 +4321,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
           observe: b.observe === true,
           page: typeof b.page === "string" ? b.page : undefined,
           caller,
+          worker: askingWorker,
         });
         return json(r, r.ok ? 200 : 200);
       }
@@ -3980,6 +4329,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       try { b = await req.json(); } catch { b = {}; }
       const parsed = parseAsk(op as BrowserOp, b);
       if ("error" in parsed) return json({ ok: false, error: parsed.error }, 400);
+      if (askingWorker) noteWorkerAsk(parsed.ask.id, askingWorker, parsed.ask.op, typeof (parsed.ask.args as { id?: unknown }).id === "string" ? (parsed.ask.args as { id: string }).id : undefined);
       const reply = await askBrowser(parsed.ask);
       /* §3: an action can hand back the page it left behind, under `after`.
          Opt-in, because an observation is the tree, the console and the
@@ -6980,6 +7330,36 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (!trustedCaller(req, from)) return csrfBlocked();
       return json(await refreshCodexUsage());
     }
+    // The OpenCode console key: whether one is stored, never the key itself. A
+    // stored key is what makes the console reading cover the whole plan instead
+    // of one browser; nothing here needs it.
+    if (pathname === "/usage/opencode/key") {
+      if (req.method === "GET") return json({ ok: true, set: hasUsageKey() });
+      if (req.method === "POST") {
+        if (!trustedCaller(req, from)) return csrfBlocked();
+        const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+        if (b.clear === true) {
+          clearUsageKey();
+          __resetOpenCodeUsageCache();
+          return json({ ok: true, set: false });
+        }
+        const key = typeof b.key === "string" ? b.key.trim() : "";
+        if (!key) return json({ ok: false, error: "Paste the key first." }, 400);
+        try { setUsageKey(key); } catch (e) {
+          return json({ ok: false, error: failed("usage/opencode/key", e, "the key could not be stored") }, 500);
+        }
+        __resetOpenCodeUsageCache();
+        return json({ ok: true, set: true });
+      }
+      return json({ ok: false, error: "method not allowed" }, 405);
+    }
+    // The same press for OpenCode Go, which reads its console in the browser.
+    // `?force=1` is the person asking now; without it the three-minute cache
+    // answers, so a poll cannot open a tab every five minutes.
+    if (pathname === "/usage/opencode/refresh" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      return json(await refreshOpenCodeUsage(url.searchParams.get("force") === "1"));
+    }
     if (pathname.startsWith("/docker/") && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
@@ -7191,7 +7571,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         const out = await runCleanupGated(String(b.repo ?? ""), Number(b.pr), cleanupConfigOf(await mainCheckout(String(b.repo ?? ""), cx)), cx,
           { planId: String(b.planId ?? ""), exclude, confirmNotMerged: b.confirmNotMerged === true },
           { caller: person ? "person" : "agent", who: askerOf(req, caller, b.as), repoLabel: person ? undefined : await cleanupRepoLabel(await mainCheckout(String(b.repo ?? ""), cx)), ask: (card) => {
-            const r = settingsDoor.askExternal({ setting: "cleanup.run", label: "Clean up a merged pull request", key: card.key, who: card.who, diff: card.diff, apply: card.apply });
+            const r = settingsDoor.askExternal({ setting: "cleanup.run", label: "Clean up a merged pull request", key: card.key, root: String(b.repo ?? ""), who: card.who, diff: card.diff, apply: card.apply });
             return r.ok && !r.applied ? { ok: true, cardId: r.pending.id } : r.ok ? { ok: false, error: "no card was raised", status: 500 } : r;
           } });
         if (out.kind === "approval") {
@@ -8064,7 +8444,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         return json({ ok: false, error: "that project is not open" }, 400);
       }
       const name = basename(root) || "shell";
-      const opened = await engineWindowRunning(root, name, [], root, undefined, undefined, true);
+      const opened = await engineWindowRunning(root, name, [], root, undefined, undefined, true, false, true);
       if (!opened) return json({ ok: false, error: "the engine would not open a window" }, 500);
       return json({ ok: true, pane: opened.paneId, window: opened.windowId, cwd: root, session: engineSessionName(root) });
     }
@@ -8127,8 +8507,10 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      * person's own switches, and turns the rest into a request the person answers
      * on POST /settings/requests/decide. The person is told apart from an agent by
      * the test the orchestration policy always used (mayChangePolicy) plus no agent
-     * name on the request (mayPublishReview): nothing weaker. A seat speaks only
-     * for its own project, as on every /seat route.
+     * name on the request (mayPublishReview), or — on the decide route only — by a
+     * paired device's `answer` grant (mayAnswerSettingsRequest): a phone away from
+     * the desk answers a request the way it answers a gate, and nothing weaker.
+     * A seat speaks only for its own project, as on every /seat route.
      */
     /** A door answer as HTTP: applied 200, waiting for the person 202, refused its own status. */
     /* The action log's verdict: applied is ok; a request waiting for the person is not (yet). */
@@ -8161,15 +8543,21 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (caller?.principal === "seat" && !own) return { error: "this seat's project is not known, so it speaks for none", status: 403 };
       // No root on a per-project Flight plan setting (the pilot, the reviews) is the app-wide value, not the open project's.
       if (!own && PreflightStore.PER_PROJECT.includes(id) && !(typeof raw === "string" && raw)) return { root: PreflightStore.APP };
-      if (classOf(id) && ((id.startsWith("seat.") && id !== "seat.wakeHours") || id.startsWith("flightPlan."))) {
+      // A flight plan setting that is the whole app's (the master switch) is not a
+      // project's: asking which project it belongs to refused the read until one opened.
+      const appWide = id.startsWith("flightPlan.") && !own && !PreflightStore.PER_PROJECT.includes(id) && !(typeof raw === "string" && raw);
+      if (!appWide && classOf(id) && ((id.startsWith("seat.") && id !== "seat.wakeHours") || id.startsWith("flightPlan."))) {
         const g = own ? Seat.seatSpeaksFor(own, raw) : Seat.seatable(typeof raw === "string" && raw ? raw : workspaceRoot());
         return "error" in g ? { error: g.error, status: own ? 403 : 400 } : { root: g.root };
       }
       // the per-project cleanup settings (Settings > Git and pull requests) are held at the project's root like the policy
-      if (id === "orchestration.policy" || id.startsWith("cleanup.") || id.startsWith("polaris.")) {
+      if (id === "orchestration.policy" || id === "agents.changeWithoutAsking" || id.startsWith("cleanup.") || id.startsWith("polaris.") || id.startsWith("orchestration.review.")) {
         if (own) { const g = Seat.seatSpeaksFor(own, raw); return "error" in g ? { error: g.error, status: 403 } : { root: g.root }; }
         const r = policyRoot(raw);
-        return r === null ? { error: "root: has to be an absolute path", status: 400 } : r ? { root: r } : {};
+        if (r === null) return { error: "root: has to be an absolute path", status: 400 };
+        if (r) return { root: r };
+        // The reviews are kept per project, and the app-wide value lives under APP rather than under a project.
+        return id.startsWith("orchestration.review.") ? { root: PreflightStore.APP } : {};
       }
       return {};
     }
@@ -8181,7 +8569,11 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         const v = settingsDoor.value(one, at.root);
         return "error" in v ? json({ ok: false, error: v.error }, 404) : json({ ok: true, id: one, ...(at.root ? { root: at.root } : {}), value: v.value, ...(v.scopedSet !== undefined ? { scopedSet: v.scopedSet } : {}), ...(v.layer ? { layer: v.layer } : {}) });
       }
-      return json({ ok: true, trusted: agentsChangeWithoutAsking(), settings: settingsDoor.list() });
+      /* One reading of `root`, so an unusable one is a refusal and not the
+         global value: `?root=relative` names no project at all. */
+      const at = policyRoot(url.searchParams.get("root"));
+      if (at === null) return json({ ok: false, error: "root: has to be an absolute path" }, 400);
+      return json({ ok: true, trusted: agentsTrusted(at), settings: settingsDoor.list() });
     }
     /*
      * A flight-plan builder never changes settings or rules. Its tab's own CLI says where it comes
@@ -8207,16 +8599,45 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       return doorJson(r);
     }
     if (pathname === "/settings/requests" && req.method === "GET") {
-      // A seat reads its own project's requests and nobody else's.
-      const own = caller?.principal === "seat" ? caller.seat?.root ?? "\0" : null;
-      return json({ ok: true, requests: settingsDoor.pending().filter((r) => own === null || r.root === own) });
+      // A seat reads its own project's requests and nobody else's; an agent reads
+      // the projects it belongs to; the person and every paired device, the
+      // look-only tablet included, read every one.
+      const person = mayPublishReview(req, caller);
+      const device = caller?.kind === "device" && !caller.principal;
+      const own = person || device ? null : agentOwnRoots(caller);
+      /* A card names the project the request was made for, and that can be a
+         repository inside the open folder (or a worktree cut from one). The
+         write path resolves it with seatSpeaksFor; reading one back has to use
+         the same rule, or an agent asks and then never sees its own card. */
+      /* A card with no root names no project to narrow by, so it shows back only
+         to a caller whose credential proves the name on it: a seat, a plugin, or
+         a worker's own `wk_` credential. `?as=` and the agent-name header are
+         labels the caller writes, never identity, so a machine token with no
+         such proof reads no rootless card at all — its own labelled asks
+         included; those wait for the person. */
+      const proven = provenAsker(req, caller);
+      const mine = (r: { root?: string; who?: string; askerName?: string }) => {
+        if (r.root) return !!own && own.some((o) => "root" in Seat.seatSpeaksFor(o, r.root!));
+        return !!proven && (r.askerName ? r.askerName === proven : r.who === proven);
+      };
+      // Polaris asks (kind "polaris-action") ride the same list; only the pending ones unless ?states=all, which is how an agent reads how its own ended.
+      const asks = polarisRequests({ all: url.searchParams.get("states") === "all" });
+      return json({ ok: true, requests: [...settingsDoor.pending(), ...asks].filter((r) => own === null || mine(r)) });
     }
     if (pathname === "/settings/requests/decide" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       let b: { id?: unknown; approve?: unknown } = {};
       try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       if (typeof b.approve !== "boolean") return json({ ok: false, error: "approve: true or false" }, 400);
-      const r = await settingsDoor.decide(b.id, b.approve, mayPublishReview(req, caller));
+      const ask = polarisRequestType(b.id);
+      const may = mayAnswerSettingsRequest(req, caller, ask);
+      if (ask) {
+        const d = may ? await decidePolaris(String(b.id), b.approve, caller?.kind === "device" ? "phone" : "person", { bulk: (b as { bulk?: unknown }).bulk === true }) : null;
+        const pr = d ?? { ok: false as const, error: ask === "beacon-send-on-click" && caller?.kind === "device" ? "a send types into a live session: only the person at the desk approves it" : "only the person answers a request: an agent cannot approve or decline one, its own included", status: 403 };
+        noteAction(clientIp, "/settings/requests/decide", { approve: b.approve, ...(pr.ok ? { setting: pr.setting } : {}) }, pr.ok ? { ok: true } : { ok: false, error: pr.error }, asActor(caller));
+        return pr.ok ? json(pr) : json({ ok: false, error: pr.error }, pr.status);
+      }
+      const r = await settingsDoor.decide(b.id, b.approve, may);
       noteAction(clientIp, "/settings/requests/decide", { approve: b.approve, ...(r.ok ? { setting: r.setting } : {}) }, r.ok ? { ok: true } : { ok: false, error: r.error }, asActor(caller));
       return r.ok ? json(r) : json({ ok: false, error: r.error }, r.status);
     }
@@ -8225,7 +8646,34 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (write && !trustedCaller(req, from)) return csrfBlocked();
       let b: Record<string, unknown> = {};
       if (write) { try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); } }
-      const r = await polarisRoute(req.method, pathname, url.searchParams, b, mayPublishReview(req, caller));
+      const person = mayPublishReview(req, caller);
+      /* A caller nobody can identify is nobody: on a tokenless loopback install no
+         credential resolves, and guessing "agent" from that silence turned a bare
+         local POST into an agent's write (docs/CONFIG.md says Polaris stays the
+         person's there). Reads are open; a write has to say who it is. */
+      if (write && !person && caller === null) return json({ ok: false, error: "no credential: this server has no AGENTGLASS_TOKEN, so nobody is identified as an agent here" }, 403);
+      const who: PolarisWho = person ? { kind: "person" } : caller?.kind === "device" && !caller.principal ? { kind: "phone" } : { kind: "agent", name: askerOf(req, caller, b.as), askerName: askerNameOf(req, caller, b.as) };
+      // Every agent acts on the project it belongs to, never on another: the same
+      // confinement a seat has, for the machine token every agent shell holds too.
+      if (who.kind === "agent" && write) {
+        const owns = agentOwnRoots(caller);
+        let chosen: string | null = null;
+        for (const own of owns) {
+          const g = Seat.seatSpeaksFor(own, b.root);
+          if ("root" in g) { chosen = g.root; break; }
+        }
+        if (chosen === null) {
+          const own = owns[0];
+          const error = caller?.principal === "seat" && own
+            ? (Seat.seatSpeaksFor(own, b.root) as { error: string }).error
+            : own
+              ? `an agent acts on its own project (${basename(own)}), not on another one`
+              : "this caller belongs to no project, so it may not act on one: run it from its project's seat, or open that project in the app";
+          return json({ ok: false, error }, 403);
+        }
+        b.root = chosen;
+      }
+      const r = await polarisRoute(req.method, pathname, url.searchParams, b, who);
       if (r) {
         if (write) noteAction(clientIp, pathname, { ...(typeof b.root === "string" ? { root: b.root } : {}) }, r.body as { ok?: boolean; error?: string }, asActor(caller));
         return json(r.body, r.status);
@@ -8241,7 +8689,21 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (!trustedCaller(req, from)) return csrfBlocked();
       let b: { root?: unknown; policy?: unknown } = {};
       try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
-      const root = policyRoot(b.root);
+      /* A seat speaks for its own project here too (it reaches this route only
+         when that project's switch is on, auth.ts seatAllows): its own policy,
+         never another project's. */
+      const seatOwn = caller?.principal === "seat" ? caller.seat?.root : undefined;
+      let root: string | undefined;
+      if (seatOwn) {
+        const g = Seat.seatSpeaksFor(seatOwn, b.root);
+        if ("error" in g) return json({ ok: false, error: g.error }, 403);
+        root = g.root;
+      } else {
+        const p = policyRoot(b.root);
+        if (p === null) return json({ ok: false, error: "root: has to be an absolute path" }, 400);
+        root = p;
+      }
+      if (root === null) return json({ ok: false, error: "root: has to be an absolute path" }, 400);
       if (root === null) return json({ ok: false, error: "root: has to be an absolute path" }, 400);
       if (!("policy" in b)) return json({ ok: false, error: "policy: is missing" }, 400);
       /* An agent's policy is a request the person answers (the settings door):
@@ -8259,6 +8721,40 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // ...and a chain with an engine added is a plan back for a chair that had none.
       void chairsAgain().catch(() => {});
       return json({ ok: true, scope: r.view.scope, root: r.view.root, overrides: r.view.overrides, policy: r.view.policy });
+    }
+    /**
+     * The flow (shared/flow.ts): the steps a project's orchestrator follows,
+     * in its own record beside the policy so a policy write cannot lose it.
+     * A person's window writes it; every agent credential is refused, because
+     * the flow is what the orchestrator is told to do next.
+     */
+    if (pathname === "/flow" && req.method === "GET") {
+      const root = policyRoot(url.searchParams.get("root"));
+      if (root === null) return json({ ok: false, error: "root: has to be an absolute path" }, 400);
+      if (!root) return json({ ok: false, error: "root: is missing; a flow belongs to one project" }, 400);
+      const v = readFlow(root);
+      return json({ ok: true, scope: v.scope, root: v.root, flow: v.flow });
+    }
+    if (pathname === "/flow" && (req.method === "PUT" || req.method === "DELETE")) {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const root = policyRoot(url.searchParams.get("root"));
+      if (root === null) return json({ ok: false, error: "root: has to be an absolute path" }, 400);
+      if (!root) return json({ ok: false, error: "root: is missing; a flow belongs to one project" }, 400);
+      if (!mayPublishReview(req, caller)) {
+        return json({ ok: false, error: "the flow is the person's: an agent asks for the change, the person makes it" }, 403);
+      }
+      if (req.method === "DELETE") {
+        const r = deleteFlow(root);
+        noteAction(clientIp, "/flow", { root, removed: true }, r.ok ? { ok: true } : r, asActor(caller));
+        if (!r.ok) return json({ ok: false, error: r.error }, 400);
+        return json({ ok: true, scope: r.view.scope, root: r.view.root, flow: r.view.flow });
+      }
+      let b: unknown;
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const r = writeFlow(root, b);
+      noteAction(clientIp, "/flow", { root }, r.ok ? { ok: true } : r, asActor(caller));
+      if (!r.ok) return json({ ok: false, error: r.error }, 400);
+      return json({ ok: true, scope: r.view.scope, root: r.view.root, flow: r.view.flow });
     }
     /**
      * Which rules are on, and why a reading did not change one ("holding: the
@@ -8318,7 +8814,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
           if (v) return json({ ok: true, ...v, gated: gateInstalledCached() });
         }
         // `gated`: the gate hook is installed and holds an "ask" itself, so the forwarder stays quiet on one.
-        return json({ ok: true, ...rulesCheck(root, tool, (url.searchParams.get("input") ?? "").slice(0, 8000), url.searchParams.get("mode") ?? undefined), gated: gateInstalledCached() });
+        return json({ ok: true, ...rulesCheck(root, tool, (url.searchParams.get("input") ?? "").slice(0, 8000), url.searchParams.get("mode") ?? undefined, caller?.principal === "seat" ? "seat" : undefined), gated: gateInstalledCached() });
       } catch (e) {
         // A broken store must not become a decision: the hook reads an error as "no rule".
         return json({ ok: false, decision: "unknown", error: failed("agent-rules/check", e, "the rules could not be read") }, 500);
@@ -8333,7 +8829,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     }
     if (pathname === "/agent-rules" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
-      let b: { root?: unknown; action?: unknown; match?: unknown; setting?: unknown; source?: unknown; mode?: unknown; as?: unknown } = {};
+      let b: { root?: unknown; action?: unknown; match?: unknown; setting?: unknown; source?: unknown; mode?: unknown; as?: unknown; remove?: unknown } = {};
       try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const person = mayPublishReview(req, caller);
       if (!person && !controlWriteLimit.hit(actorOf(clientIp, asActor(caller)))) return json({ ok: false, error: "too many changes from this caller; slow down" }, 429);
@@ -8420,6 +8916,34 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       void SeatWake.promptSeat(root, `This project's flight plans are held${person ? " by the person" : ""}: no new Go, launches frozen. ${told} builder${told === 1 ? " was" : "s were"} told to stop at a safe point.`);
       return json({ ok: true, held: true, told });
     }
+    /*
+     * A higher budget cap until the period turns over: the person's own act, from
+     * the strip's "Raise for today". The base cap is untouched, so midnight (or
+     * Monday) puts it back with nothing to undo.
+     */
+    if (pathname === "/flight-plan/budget/raise" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { usd?: unknown; scope?: unknown } = {};
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (!mayPublishReview(req, caller)) return json({ ok: false, error: "Raising the budget is the person's: an agent asks, the person raises it" }, 403);
+      const scope = b.scope === "day" ? "day" : b.scope === "week" ? "week" : null;
+      if (!scope) return json({ ok: false, error: "scope: day or week" }, 400);
+      const cap = FlightBudget.capAt(scope);
+      if (typeof b.usd !== "number" || !Number.isFinite(b.usd) || b.usd <= cap || b.usd > 1000) {
+        return json({ ok: false, error: `usd: a number above the cap in force (${cap}) and up to 1000` }, 400);
+      }
+      const raised = FlightBudget.raiseCap(scope, b.usd);
+      broadcast({ type: "flight-plan" });
+      noteAction(clientIp, pathname, { scope, usd: raised.capUsd, until: raised.until }, { ok: true }, asActor(caller));
+      return json({ ok: true, ...raised, budget: FlightBudget.budgetState(Date.now(), undefined, true) });
+    }
+    /* What a Preflight in this project will run on, for the Settings card: the
+       same function the run itself uses, so the card cannot name another engine. */
+    if (pathname === "/flight-plan/preflight/target" && req.method === "GET") {
+      const root = policyRoot(url.searchParams.get("root"));
+      if (!root) return json({ ok: false, error: "root: a project's absolute path" }, 400);
+      return json({ ok: true, target: FlightPlan.preflightTargetFor(root) });
+    }
     if (pathname === "/flight-plan/preflight" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       let b: { files?: unknown; mockups?: unknown; pr?: unknown; root?: unknown; moment?: unknown; as?: unknown } = {};
@@ -8453,6 +8977,9 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const listed = await withLanding(FlightPlanStore.listPlans({ state: url.searchParams.get("state") ?? undefined, root }));
       const trees = listed.some((p) => p.state === "launched") ? (await allWindowTrees())?.trees ?? null : null;
       const builders = new Map(listed.filter((p) => p.state === "launched" && !p.landedAt).map((p) => [p.id, FlightPlan.builderOf(p.launched, trees)] as const));
+      /* A plan linked to a named worker follows it: one reconcile read answers every link, and a
+         worker whose pane is gone is stamped ended before anything is said about it. */
+      const workerRows = await workerRowsOf(listed.map((p) => p.worker));
       /* Who holds a slot, per project, only for the projects that have a plan waiting for one. */
       const holders = new Map<string, { id: string; title: string }[]>();
       for (const r of new Set(listed.filter((p) => p.queued).map((p) => p.root))) {
@@ -8460,14 +8987,21 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         holders.set(r, base ? FlightPlan.flying(r, base).filter((p) => FlightPlan.holdsSlot(builders.get(p.id) ?? FlightPlan.builderOf(p.launched, trees))).map((p) => ({ id: p.id, title: p.title })) : []);
       }
       const now = Date.now();
+      const role = workerRoles().builder;
+      const strong = String(PreflightStore.getSetting(PreflightStore.APP, "flightPlan.builder.strongModel"));
+      const perms = String(PreflightStore.getSetting(PreflightStore.APP, "flightPlan.builder.permissions"));
       return json({ ok: true, enabled: FlightPlanStore.enabled(), budget, plans: listed.map(({ planMd, ...rest }) => {
         const builder = builders.get(rest.id);
         const goneAt = FlightPlan.trackGone(builderGone, rest, builder ?? "none", now);
+        const worker = workerRows ? FlightPlan.workerPhase(rest.worker, workerRows) : null;
         return {
           ...rest, planBytes: Buffer.byteLength(planMd), landed: !!rest.landedAt, pilot: FlightPlan.pilotOf(rest.root), held: FlightPlan.isHeld(rest.root), ...heldFields(rest.root),
+          /* A plan before Go says which model its builder starts on, and why, so the Go card can show it and let the person choose another. */
+          ...(rest.state === "launched" ? {} : { launch: FlightPlan.builderLaunch({ size: rest.size, planMd }, role, perms, strong) }),
           /* A launched plan keeps the reason the engine stored (a blocked builder, a diff that tripped a rule); before launch it is computed. */
           stopReason: rest.state === "launched" ? rest.stopReason : FlightPlan.stopReason({ planMd, ...rest }),
           ...(builder ? { builder, goneAt } : {}),
+          ...(worker ? { workerState: worker } : {}),
           stateSince: FlightPlan.stateSinceOf(rest, goneAt),
           ...(rest.queued ? { slotHolders: holders.get(rest.root) ?? [] } : {}),
         };
@@ -8531,7 +9065,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       }
     }
     {
-      const m = /^\/flight-plan\/plans\/(fp_[0-9a-f]{16})(?:\/(preflight|go|no-go|launch|ask|answer|report|integrate-check))?$/.exec(pathname);
+      const m = /^\/flight-plan\/plans\/(fp_[0-9a-f]{16})(?:\/(preflight|go|no-go|launch|ask|answer|report|integrate-check|worker))?$/.exec(pathname);
       if (m && (req.method === "GET" || req.method === "PATCH" || (req.method === "POST" && m[2]))) {
         const plan = FlightPlanStore.getPlan(m[1]!);
         if (!plan) return json({ ok: false, error: "no such flight plan" }, 404);
@@ -8540,10 +9074,11 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         if (req.method === "GET") {
           const run = plan.preflightRunId ? PreflightStore.getRun(plan.preflightRunId) : null;
           const [seen] = await withLanding([plan]);
-          return json({ ok: true, plan: seen, landed: !!seen!.landedAt, version: FlightPlanStore.versionOf(plan.id), run, openFindings: run ? PreflightStore.flagOf(run).openFindings : 0, pilot: FlightPlan.pilotOf(plan.root), held: FlightPlan.isHeld(plan.root), ...heldFields(plan.root), stopReason: plan.state === "launched" ? (!seen!.landedAt && FlightPlan.sensitiveDiff(plan) && PreflightStore.getSetting(plan.root, "flightPlan.autopilot.askOnSensitive") === true ? "sensitive-diff" : null) : FlightPlan.stopReason(plan), budget: FlightBudget.budgetState() });
+          const worker = plan.worker ? FlightPlan.workerPhase(plan.worker, (await workerRowsOf([plan.worker])) ?? []) : null;
+          return json({ ok: true, plan: seen, landed: !!seen!.landedAt, version: FlightPlanStore.versionOf(plan.id), run, openFindings: run ? PreflightStore.flagOf(run).openFindings : 0, pilot: FlightPlan.pilotOf(plan.root), held: FlightPlan.isHeld(plan.root), ...heldFields(plan.root), ...(worker ? { workerState: worker } : {}), stopReason: plan.state === "launched" ? (!seen!.landedAt && FlightPlan.sensitiveDiff(plan) && PreflightStore.getSetting(plan.root, "flightPlan.autopilot.askOnSensitive") === true ? "sensitive-diff" : null) : FlightPlan.stopReason(plan), budget: FlightBudget.budgetState() });
         }
         if (!trustedCaller(req, from)) return csrfBlocked();
-        let b: { title?: unknown; plan_md?: unknown; visual?: unknown; size?: unknown; mockups?: unknown; reason?: unknown; capUsd?: unknown; as?: unknown; question?: unknown; choices?: unknown; answer?: unknown; detail?: unknown; recommended?: unknown; line?: unknown; step?: unknown; of?: unknown } = {};
+        let b: { title?: unknown; plan_md?: unknown; visual?: unknown; size?: unknown; mockups?: unknown; reason?: unknown; capUsd?: unknown; as?: unknown; question?: unknown; choices?: unknown; answer?: unknown; detail?: unknown; recommended?: unknown; line?: unknown; step?: unknown; of?: unknown; model?: unknown; worker?: unknown } = {};
         try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
         const out = (r: { ok: true; plan: FlightPlanStore.Plan } | { ok: false; error: string; status: number }, what: string) => {
           noteAction(clientIp, `/flight-plan/plans/${what}`, { plan: plan.id }, r.ok ? { ok: true } : { ok: false, error: r.error }, asActor(caller));
@@ -8597,7 +9132,22 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
           if (plan.state !== "launched") return json({ ok: false, error: "only a launched plan has a diff to check" }, 409);
           const hit = PreflightStore.getSetting(plan.root, "flightPlan.autopilot.askOnSensitive") === true ? FlightPlan.sensitiveDiff(plan) : null;
           if (hit && !mayPublishReview(req, caller)) return json({ ok: false, stopReason: "sensitive-diff", file: hit, error: `Integrate is the person's here: ${FlightPlan.STOP_SENTENCE["sensitive-diff"]} (${hit})` }, 403);
-          return json({ ok: true, stopReason: hit ? "sensitive-diff" : null, ...(hit ? { file: hit } : {}) });
+          const missing = FlightPlan.requiredMissing(plan);
+          if (missing.length && !mayPublishReview(req, caller)) return json({ ok: false, stopReason: "required-step", missing, error: `Required step not done: ${missing.join(", ")}. ${FlightPlan.STOP_SENTENCE["required-step"]}` }, 403);
+          const spent = FlightPlan.roundsUsed(plan);
+          if (spent.length && !mayPublishReview(req, caller)) return json({ ok: false, stopReason: "rounds-used", roles: spent, error: `Rounds used: ${spent.join(", ")}. ${FlightPlan.STOP_SENTENCE["rounds-used"]}` }, 403);
+          return json({ ok: true, stopReason: hit ? "sensitive-diff" : missing.length ? "required-step" : spent.length ? "rounds-used" : null, ...(hit ? { file: hit } : {}), ...(missing.length ? { missing } : {}) });
+        }
+        // The named worker that builds this plan: set by Launch on another engine, or by the coordinator for a worker it started itself. An empty name clears the link.
+        if (m[2] === "worker") {
+          if (!mayPublishReview(req, caller) && !own) return json({ ok: false, error: "only the project's coordinator or the person links a plan to a worker" }, 403);
+          const name = typeof b.worker === "string" ? b.worker.trim() : b.worker === null ? "" : undefined;
+          if (name === undefined) return json({ ok: false, error: "worker: the worker's name, or null to clear it" }, 400);
+          if (name && !AgentOps.validName(name)) return json({ ok: false, error: "worker: letters, digits, dot, dash or underscore, 64 at most" }, 400);
+          FlightPlanStore.setWorker(plan.id, name || null);
+          broadcast({ type: "flight-plan" });
+          noteAction(clientIp, "/flight-plan/plans/worker", { plan: plan.id }, { ok: true }, asActor(caller));
+          return json({ ok: true, plan: FlightPlanStore.getPlan(plan.id) });
         }
         // The builder's line of progress, for the row's "last report": data from an agent, capped, and it moves nothing.
         if (m[2] === "report") {
@@ -8631,17 +9181,18 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
           // Go launches the builder, whoever said it: the person's button reads "Go — launch". The plan stays at Go with the reason when the launch cannot happen, and `launch` is still there to try again.
           if (r.ok && m[2] === "go") {
             // The coordinator's Go waits its turn behind maxFlying; the person's press does not: the button says launch.
-            const l = await launchFlightPlan(r.plan, !person);
+            const asked = typeof b.model === "string" ? { model: b.model, person } : undefined;
+            const l = await launchFlightPlan(r.plan, !person, asked);
             noteAction(clientIp, "/flight-plan/plans/go", { plan: plan.id }, l.ok ? { ok: true } : { ok: false, error: l.error }, asActor(caller));
-            return json({ ok: true, plan: FlightPlanStore.getPlan(plan.id), ...(l.ok ? { queued: l.queued, ...(l.queued ? {} : { window: l.window, worktree: l.worktree, branch: l.branch }) } : { queued: false, launchError: l.error }) });
+            return json({ ok: true, plan: FlightPlanStore.getPlan(plan.id), ...(l.ok ? { queued: l.queued, ...(l.queued ? {} : { window: l.window, worktree: l.worktree, branch: l.branch, ...(l.environment ? { environment: l.environment } : {}), ...(l.worker ? { worker: l.worker } : {}) }) } : { queued: false, launchError: l.error }) });
           }
           return out(r, m[2]);
         }
         // launch
-        const l = await launchFlightPlan(plan, !person);
+        const l = await launchFlightPlan(plan, !person, typeof b.model === "string" ? { model: b.model, person } : undefined);
         noteAction(clientIp, "/flight-plan/plans/launch", { plan: plan.id }, l.ok ? { ok: true } : { ok: false, error: l.error }, asActor(caller));
         if (!l.ok) return json({ ok: false, error: l.error }, l.status);
-        return json({ ok: true, plan: FlightPlanStore.getPlan(plan.id), queued: l.queued, ...(l.queued ? {} : { window: l.window, worktree: l.worktree, branch: l.branch }) });
+        return json({ ok: true, plan: FlightPlanStore.getPlan(plan.id), queued: l.queued, ...(l.queued ? {} : { window: l.window, worktree: l.worktree, branch: l.branch, ...(l.environment ? { environment: l.environment } : {}), ...(l.worker ? { worker: l.worker } : {}) }) });
       }
     }
     /* Each engine's flags per permission mode: the built-in ones from the engine table, and the person's own words over them. */
@@ -9029,6 +9580,14 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     }
     if (pathname === "/agents/named" && req.method === "GET") {
       const all = url.searchParams.get("all") === "1";
+      /* One pane, for the bar over a worker's tab: the terminal reads this
+         when the bar opens, and the whole list would build the board — git,
+         panes and hooks — for one row. */
+      const pane = url.searchParams.get("pane");
+      if (pane) {
+        if (!/^%\d+$/.test(pane)) return json({ ok: false, error: "pane: a tmux pane id, %7" }, 400);
+        return json({ ok: true, result: { agents: AgentOps.agentsAtPane(pane, all).map(settled) } });
+      }
       return json({ ok: true, result: { agents: (await AgentOps.listAgents(all)).map(settled) } });
     }
     if (pathname.startsWith("/agents/named/") && req.method === "POST") {
@@ -9140,9 +9699,13 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         const clash = had ? notYours(caller, had) : null;
         if (clash && (had!.seatRoot || await AgentOps.paneAlive(had!.paneId))) return say({ ok: false, error: clash }, 403);
         const policyRoot = seatRoot ?? projectRootOf(cwd) ?? workspaceRoot() ?? cwd;
+        /* A worktree cut minutes ago has no node_modules, and its `tsc` failure
+           belongs to the environment. The policy start answers it itself. */
+        const deps = nodeModulesGap(runIn!);
+        const asked = typeof b.prompt === "string" ? b.prompt : "";
         if (policyEngaged(policyRoot, b)) {
           const r = await startThroughPolicy({
-            root: workspaceRoot() || cwd, policyRoot, name, cwd: runIn!, prompt: typeof b.prompt === "string" ? b.prompt : "", body: b, seatRoot,
+            root: workspaceRoot() || cwd, policyRoot, name, cwd: runIn!, prompt: asked, body: b, seatRoot,
           });
           return say(r.body, r.status);
         }
@@ -9151,7 +9714,11 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
            lock is built here from the role table, never taken from the body:
            naming a kind as well is refused unless it is the same one, so a
            caller cannot ask for a role and quietly get another CLI unlocked. */
-        const role = b.role === undefined ? null : AgentOps.roleStart(b.role);
+        /* A flow role the saved flow made is started through the orchestration policy only: it has no TUI lock of its own. */
+        if (b.role !== undefined && !workerRole(b.role)) {
+          return say({ ok: false, error: flowRoleFor(policyRoot, b.role) ? `custom role "${String(b.role)}" needs the orchestration policy on` : unknownRoleError(policyRoot) }, 400);
+        }
+        const role = b.role === undefined ? null : AgentOps.roleStart(b.role, undefined, undefined, roleLockFor(policyRoot, b.role));
         if (role && !role.ok) {
           return say({ ok: false, error: role.error === "no-role" ? "no such role" : "the CLI this role is set to has no lock this app can apply" }, 400);
         }
@@ -9161,9 +9728,23 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         }
         if (!agentKind(wanted)) return say({ ok: false, error: "no such agent" }, 400);
         const args = Array.isArray(b.args) ? b.args.filter((a): a is string => typeof a === "string") : [];
+        /* Minted once the start is committed: every refusal above leaves a
+           running worker's own credential alone. A start with a role is a
+           worker, and it goes out with its own credential rather than
+           inheriting the machine token.
+
+           `replace: false` because a name whose worker is still running is
+           refused by `startAgent` with `exists`; replacing first made that
+           refusal cut the live worker's credential. The token this start minted
+           is revoked by value on failure, so the live one is untouched and no
+           second one is left behind. */
+        let mintedTo: string | null = null;
+        if (role?.ok) {
+          mintedTo = mintBrowserCredential(role.env, name, wanted, role.id, { replace: false });
+        }
         const r = await AgentOps.startAgent({
           root: workspaceRoot() || cwd, name, cwd: runIn!, kind: wanted,
-          prompt: typeof b.prompt === "string" ? b.prompt : "",
+          prompt: role?.ok ? withDepsLine(withBrowserLine(withRolePrompt(asked, rolePromptFor(policyRoot, role.id)), wanted, role.id), deps) : withDepsLine(asked, deps),
           yolo: b.yolo === true, yoloAllowed: chatBypassAllowed(), args,
           remoteControl: typeof b.remoteControl === "string" ? b.remoteControl : undefined,
           keep: b.keep === true,
@@ -9171,14 +9752,13 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
           owner: { seatRoot, model: "", startedBy: null, resumeId: null },
         });
         if (!r.ok) {
+          if (mintedTo) revokeWorkerToken(mintedTo);
           /* `arg-refused` and `lock-loosened` are answered below, with their detail in them. */
           const why: Record<Exclude<AgentOps.StartError, "arg-refused" | "lock-loosened">, string> = {
             exists: "an agent by that name is still running",
             "no-cli": "that agent CLI is not installed here",
             "no-window": "tmux would not open a window for it",
-            died: b.keep === true
-              ? `the agent CLI exited as soon as it was launched; its tab is kept: agentglass-agent read ${name}`
-              : "the agent CLI exited as soon as it was launched",
+            died: b.keep === true ? keptTabSentence(name) : "the agent CLI exited as soon as it was launched",
             "bad-name": "bad name",
             "yolo-refused": "skipping permissions is off in Settings (chatBypass)",
             "yolo-role": "a worker role runs under its lock, and skipping permissions is never combined with one",
@@ -9198,8 +9778,30 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         /* `--timeout` on start is Herdr's "wait until the CLI is up": the
            worker's next verb is a prompt, and a paste into a pane whose CLI has
            not drawn its box yet is a paste into a shell. */
+        if (mintedTo) revokeWorkerTokensExcept(name, mintedTo);
         const wait = timeoutMs > 0 ? await AgentOps.waitFor(r.agent.paneId, ["ready", "working", "needs-you"], timeoutMs, 250, r.agent.kind) : null;
-        return say({ ok: true, result: { agent: r.agent, state: wait?.state ?? "starting", ready: wait?.reached ?? false } });
+        /* A kept tab whose CLI is already over, under a status that is not a
+           one-shot's 0, failed at launch. `startAgent` looks for that the moment
+           the window exists and can miss it: tmux's child has not exec'd the
+           command when `new-window` returns — of twenty windows made in a row,
+           the pane's current command said "exited" in one and the wrapper's
+           line on screen said it in twenty. A caller that asked to wait for the
+           CLI is where that settles; one that did not (`--timeout 0`) still
+           gets the sample taken at launch. */
+        if (b.keep === true && wait?.state === "gone") {
+          const status = await AgentOps.keptExit(r.agent.paneId);
+          if (status && status !== "0") {
+            AgentOps.endKept(name);
+            return say({ ok: false, error: keptTabSentence(name) }, 400);
+          }
+        }
+        return say({
+          ok: true,
+          result: {
+            agent: r.agent, state: wait?.state ?? "starting", ready: wait?.reached ?? false,
+            ...(deps ? { environment: deps.line } : {}),
+          },
+        });
       }
 
       /*
@@ -9822,9 +10424,12 @@ const server = Bun.serve<WsData>({
         /* Named once, and only by a socket that is not a paired device: a phone
            or a dashboard tab has no browser to host, and a socket that could
            rename itself at will would be a way to squat on another window's
-           name. The role itself is granted by /browser/ready, which is gated. */
+           name. The role itself is granted by /browser/ready, which is gated.
+           A credential with a principal is not the window either: a worker
+           holding a full token could claim a client id and take that window's
+           asks, so the hello is refused here as well as at /browser/ready. */
         if (f.type === "hello" && f.browser === true && typeof f.clientId === "string" && f.clientId && f.clientId.length <= 128
-          && !ws.data?.deviceId && !(ws.data as { clientId?: string }).clientId) {
+          && !ws.data?.deviceId && !ws.data?.principal && !(ws.data as { clientId?: string }).clientId) {
           /* A later hello under the same id takes over from a socket that is still
              open, on purpose: a window that reconnects after a network flap says
              hello before the server has noticed the old socket is dead, and
@@ -10126,6 +10731,17 @@ startScanner(({ event, session }) => {
   if (event.hook_event_type === "PreToolUse" || event.hook_event_type.startsWith("PostToolUse")) pushOpenTools();
   maybeAlert(event);
 });
+
+// Stop the monitors a previous run of this server left behind. A desktop
+// install restarts the server each time, and measured over 2.6 days that had
+// collected 39 `udisksctl monitor` processes, the oldest 2.6 days old. Pids are
+// matched against the start time recorded with them, never by name. The ledger
+// has nothing to say about a helper started before it existed, so a second pass
+// finds this app's own command lines under init.
+const reaped = reapRecordedChildren();
+if (reaped) console.log(`🧹 processes: stopped ${reaped} left by a previous run`);
+const stray = reapOwnHelpers();
+if (stray) console.log(`🧹 processes: stopped ${stray} helper${stray === 1 ? "" : "s"} no run had recorded`);
 
 // Bring back the gate requests that were in flight when this process last
 // stopped. Anything still inside its window returns to "what needs you"; the

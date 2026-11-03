@@ -13,7 +13,7 @@
 import { agentProvider, workerModelFor } from "../../../shared/agentKinds.ts";
 import { chainFor, envelopeWithin, resolve, type Chain, type Envelope, type EngineChoice, type Policy, type RuleFacts } from "../../../shared/orchestration.ts";
 import type { EngineReadiness } from "../../../shared/types.ts";
-import { workerRole, type WorkerRole } from "../../../shared/workerRoles.ts";
+import { workerRole, type RoleId, type WorkerRole } from "../../../shared/workerRoles.ts";
 import { headlessRefusal } from "./headless.ts";
 
 /** What a start stamps on the row: who chose, and why. */
@@ -42,6 +42,8 @@ export interface StartedBy {
   retries?: number;
   /** The engine it was moved off, once it has been. */
   from?: string;
+  /** The flight plan this worker's ending is recorded for (`start --plan`). */
+  planId?: string;
 }
 
 export interface WorkerAsk {
@@ -51,11 +53,25 @@ export interface WorkerAsk {
   allow?: unknown;
 }
 
+/** The decision a row carries, when the row is a headless worker this app
+ *  started; null for a person's own tab and for anything started by hand. */
+export const startedByOf = (a: { startedBy?: unknown }): StartedBy | null => {
+  const s = a.startedBy as Partial<StartedBy> | undefined;
+  return s?.headless === true ? (s as StartedBy) : null;
+};
+
 export type Plan =
   | { ok: true; role: WorkerRole; choice: EngineChoice; envelope: Envelope; startedBy: StartedBy }
   | { ok: false; error: string; /** Raise it as a need for the person: the chain ran out. */ need?: true };
 
-const ALLOWS = ["network", "commit"] as const;
+const ALLOWS = ["network", "commit", "docker"] as const;
+
+/** How a refusal names the thing the ceiling does not allow. */
+const BEYOND: Record<(typeof ALLOWS)[number], string> = {
+  network: "workers may not use the network here",
+  commit: "workers may not commit here",
+  docker: "workers may not use docker here",
+};
 
 const label = (c: EngineChoice): string => {
   const t = agentProvider(c.engine)?.title ?? c.engine;
@@ -70,17 +86,19 @@ export function planWorker(
   readiness: readonly EngineReadiness[],
   /** Live workers this seat already owns; null when a person (not a seat) asks. */
   liveForSeat: number | null,
+  /** A custom flow role: the policy has no slot for it, so its own chain is the one asked. */
+  custom?: { role: WorkerRole; chain: Chain },
 ): Plan {
-  const role = workerRole(ask.role);
+  const role = custom?.role ?? workerRole(ask.role);
   if (!role) return { ok: false, error: "no such role" };
   const { policy } = view;
 
   const allow = new Set<string>();
   if (ask.allow !== undefined) {
-    if (!Array.isArray(ask.allow)) return { ok: false, error: "allow: a list of network and commit" };
+    if (!Array.isArray(ask.allow)) return { ok: false, error: "allow: a list of network, commit and docker" };
     for (const a of ask.allow) {
       if (!(ALLOWS as readonly unknown[]).includes(a)) {
-        return { ok: false, error: `--allow ${String(a)}: a worker can be allowed network or commit, nothing else. Pushing, posting, merging and spending are never granted to a worker.` };
+        return { ok: false, error: `--allow ${String(a)}: a worker can be allowed network, commit or docker, nothing else. Pushing, posting, merging and spending are never granted to a worker.` };
       }
       allow.add(a as string);
     }
@@ -89,10 +107,11 @@ export function planWorker(
     ...policy.workerDefault,
     network: policy.workerDefault.network || allow.has("network"),
     commit: policy.workerDefault.commit || allow.has("commit"),
+    docker: policy.workerDefault.docker || allow.has("docker"),
   };
   for (const a of ALLOWS) {
     if (allow.has(a) && !policy.ceiling[a]) {
-      return { ok: false, error: `--allow ${a} is beyond this project's ceiling (Settings ▸ Orchestration): ${a === "commit" ? "workers may not commit here" : "workers may not use the network here"}. Nothing was started.` };
+      return { ok: false, error: `--allow ${a} is beyond this project's ceiling (Settings ▸ Orchestration): ${BEYOND[a]}. Nothing was started.` };
     }
   }
   if (!envelopeWithin(envelope, policy.ceiling)) {
@@ -104,8 +123,8 @@ export function planWorker(
   }
 
   if (ask.model !== undefined && typeof ask.model !== "string") return { ok: false, error: "model: a model name from the chain" };
-  const chain = chainFor(policy, facts, role.id);
-  const resolved = resolve(policy, facts, readiness).workers[role.id];
+  const chain = custom ? custom.chain : chainFor(policy, facts, role.id as RoleId);
+  const resolved = custom ? null : resolve(policy, facts, readiness).workers[role.id as RoleId];
   let choice: EngineChoice;
   let because: string[];
   let position: number;
@@ -124,8 +143,21 @@ export function planWorker(
     if (!r) return { ok: false, error: `${label(choice)}: this machine has not been checked for it yet. Open Settings ▸ Agent engines.` };
     if (!r.roles.worker.ok) return { ok: false, error: `${label(choice)} cannot take the worker role here: ${r.roles.worker.why ?? "not ready"}` };
     because = [`asked for ${label(choice)}, which is in the chain`];
-    rule = { name: resolved.ruleName ?? "base", id: resolved.ruleId };
+    rule = resolved ? { name: resolved.ruleName ?? "base", id: resolved.ruleId } : { name: "flow" };
+  } else if (custom) {
+    if (ask.model !== undefined) return { ok: false, error: "model: it goes with an engine from the chain; say which with --engine" };
+    // Ready is the test the engine switch uses.
+    const at = chain.findIndex((c) => {
+      const r = readiness.find((e) => e.id === c.engine);
+      return !!(r?.path && r.roles.worker.ok) && !headlessRefusal(c.engine);
+    });
+    if (at < 0) return { ok: false, error: `no engine ready for role "${role.id}"` };
+    choice = chain[at]!;
+    position = at;
+    because = [`the ${role.id} flow role's chain: ${label(choice)} is the first one ready`];
+    rule = { name: "flow" };
   } else {
+    if (!resolved) return { ok: false, error: "no such role" };
     if (ask.model !== undefined) return { ok: false, error: "model: it goes with an engine from the chain; say which with --engine" };
     if (!resolved.ok) return { ok: false, error: `no worker can start: ${resolved.why}`, need: true };
     if (resolved.ask) {
@@ -172,11 +204,14 @@ export function nextEngine(p: {
   ask: boolean; usable: (c: EngineChoice) => boolean;
 }): { ok: true; choice: EngineChoice; position: number } | { ok: false; why: string } {
   if (p.ask) return { ok: false, why: "this role is set to ask which engine to use, so the next one was not picked for it" };
-  const tried = new Set([p.by.engine, ...(p.by.from ? [p.by.from] : [])]);
+  // An engine it has left stays out; the one it is on may still be tried again
+  // with another model, which is how a spent plan falls to a free twin.
+  const left = new Set(p.by.from ? [p.by.from] : []);
   const at = p.chain.findIndex((c) => c.engine === p.by.engine && c.model === p.by.model);
   for (let i = at + 1; i < p.chain.length; i++) {
     const c = p.chain[i]!;
-    if (!tried.has(c.engine) && p.usable(c)) return { ok: true, choice: c, position: i };
+    if (left.has(c.engine) || (c.engine === p.by.engine && c.model === p.by.model)) continue;
+    if (p.usable(c)) return { ok: true, choice: c, position: i };
   }
   return { ok: false, why: "no other engine in the chain is ready" };
 }

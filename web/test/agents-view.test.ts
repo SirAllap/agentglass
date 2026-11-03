@@ -43,7 +43,7 @@ describe("what the three cards say", () => {
     expect(html).toContain("reviewer-3 40m");
   });
 
-  test("only a permission or a held gate is 'waiting on you': a turn that ended is idle", () => {
+  test("only a permission or a gate waiting on you is 'waiting on you': a turn that ended is idle", () => {
     const html = screen([row(), row({ name: "tester-6", state: "waiting", paneId: "%8", needsYou: { kind: "input", why: "", since: NOW - 7_200_000 } })]);
     expect(html).toContain('<div class="num">0</div><div><div class="lab">waiting on you</div>');
     expect(html).toContain("1 idle");
@@ -83,6 +83,20 @@ describe("the working table", () => {
     expect(html).toContain(">main<");
     expect(html).toContain("$0.57");
   });
+
+  test("a headless worker is a working row: its name, its role and how long it has run", () => {
+    /* It fires no hooks, has no tool call and no branch, and the registry row
+       says all there is to say. Before this the section read "No agents yet"
+       while the worker was running. */
+    const html = screen([row({
+      name: "go-usage", paneId: "%71", branch: undefined, facts: undefined, pulse: [],
+      worker: { role: "builder", since: NOW - 12 * 60_000 },
+    })]);
+    expect(html).toContain("go-usage");
+    expect(html).toContain(">builder<");
+    expect(html).toContain("12m");
+    expect(html).not.toContain("No agents yet");
+  });
 });
 
 describe("the empty states", () => {
@@ -112,8 +126,12 @@ describe("the empty states", () => {
 describe("the header", () => {
   test("Ask about the agents follows the BENCH, not the board", () => {
     expect(screen([row()])).toContain("Ask about the agents");
+    // A tab from before jobs existed is found by its title, and the button
+    // becomes the one that brings it forward instead of seating a second chat.
     addTab("/w", { kind: "agent", slot: 3, title: "lantern", agent: "t" });
-    expect(screen([row()])).toContain("Back to the session");
+    const html = screen([row()]);
+    expect(html).toContain("Open · Show it");
+    expect(html).toContain("Opened in the bench");
     __resetBench();
   });
   test("the scope is every project when none is open, with the count of projects", () => {

@@ -41,6 +41,8 @@ it. See the "Streamable-HTTP transport" section below.
 Environment:
     AGENTGLASS_SERVER     default http://localhost:4000
     AGENTGLASS_TOKEN      read from ~/.config/agentglass/token when unset, and again after a 401
+    AGENTGLASS_BROWSER_OFF  set by the app when it handed this window no credential:
+                          every tool call is refused rather than falling back to yours
     AGENTGLASS_MCP_HTTP   [HOST:]PORT — serve MCP over Streamable HTTP instead of stdio
     AGENTGLASS_MCP_TOKEN  the Bearer token that endpoint requires (32+ chars);
                           minted for the process, and printed, when unset
@@ -121,6 +123,13 @@ PROTOCOL = "2025-06-18"
 NAME = "agentglass-browser"
 VERSION = "1.0.0"
 
+# Set by the app on a window it handed no credential. Without this the server
+# reads the person's token file and drives as them; the marker is the whole
+# contract, and it carries no secret.
+BROWSER_OFF = (os.environ.get("AGENTGLASS_BROWSER_OFF") or "").strip().lower() not in ("", "0", "false")
+OFF_REFUSAL = ("browser access is off for this worker: the app handed it no credential, "
+               "and this server does not fall back to the person's")
+
 
 def _token_file():
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
@@ -170,6 +179,8 @@ def call(op, body, timeout=120):
     """One verb, through the app's relay. Every failure comes back as an answer
     rather than an exception: the caller is a model, and a stack trace on stdout
     would also break the transport."""
+    if BROWSER_OFF:
+        return {"ok": False, "error": OFF_REFUSAL}
     req = urllib.request.Request(
         f"{SERVER}/browser/{op}",
         data=json.dumps(body).encode(),
@@ -218,6 +229,22 @@ def call(op, body, timeout=120):
 STATE_DIR = (os.environ.get("AGENTGLASS_BROWSER_STATE_DIR")
              or os.path.expanduser("~/.cache/agentglass-browser"))
 
+# The four ids in shared/workerRoles.ts; this server cannot import them.
+WORKER_ROLE_IDS = frozenset({"scout", "builder", "reviewer", "verifier"})
+
+
+def worker_identity():
+    """The name this server's credential was minted for, as the app handed it over.
+
+    The relay compares the body's `as` with this name under one fold, so it
+    must go out whole: agent names run to 64 characters.
+    """
+    for key in ("AGENTGLASS_BROWSER_AS", "AGENTGLASS_PROFILE"):
+        v = (os.environ.get(key) or "").strip()
+        if v:
+            return v
+    return ""
+
 
 def my_name(explicit=None):
     """The identity this server works as.
@@ -228,8 +255,17 @@ def my_name(explicit=None):
     minutes and then quietly stops being kept: "the agents are using the browser
     but not creating their profiles; I have to tell them myself."
     """
+    own = worker_identity()
     if explicit:
+        # The worker's own name is the credential's, folded the way the relay
+        # folds it. Capping it sent a truncated `as` and every ask was a 403.
+        if own and explicit.strip().casefold() == own.casefold():
+            return explicit.strip()
         return explicit[:24]
+    if (os.environ.get("AGENTGLASS_ROLE") or "").strip() in WORKER_ROLE_IDS and own:
+        # Never the derived project-session name: the relay keys a worker on
+        # this one, up to 64 characters.
+        return own
     env = os.environ.get("AGENTGLASS_PROFILE")
     if env:
         return env[:24]

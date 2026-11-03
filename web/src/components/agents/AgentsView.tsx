@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import "./agentsView.css";
 import { fmtAgo } from "../../lib/format.ts";
-import { askLantern, hasLanternTab } from "../../lib/lanternAsk.ts";
-import { subscribeBench } from "../../lib/benchStore.ts";
+import { askLantern, LANTERN_TAB_TITLE } from "../../lib/lanternAsk.ts";
+import { JOB } from "../../lib/benchJobs.ts";
+import { BenchJobLine, useBenchJob } from "../BenchJobLine.tsx";
+import { ICON } from "../../lib/iconSize.ts";
 import { subscribeLantern, lanternChairs } from "../../lib/lanternStore.ts";
 import { openSettings } from "../../lib/openSettings.ts";
 import { openFlightPlan } from "../../lib/flightPlanNav.ts";
@@ -67,7 +69,6 @@ export function AgentsView({ active }: { active: boolean }) {
   const now = useNow(active);
   const auto = useSyncExternalStore(housekeeping.subscribe, housekeeping.list, housekeeping.list);
   const chairs = useSyncExternalStore((l) => subscribeLantern(l, false), lanternChairs, lanternChairs);
-  const lanternOpen = useSyncExternalStore(subscribeBench, hasLanternTab, hasLanternTab);
   const [how, setHow] = useState(readHow);
   const [menu, setMenu] = useState(false);
   const [asking, setAsking] = useState<string | null>(null);
@@ -125,7 +126,14 @@ export function AgentsView({ active }: { active: boolean }) {
     [rows, sorted.gone, change?.root],
   );
 
-  const ask = async () => { setAsking("opening…"); const r = await askLantern(); setAsking(r.ok ? null : r.error ?? "could not open"); };
+  const lantern = useBenchJob("", JOB.lantern, LANTERN_TAB_TITLE);
+  const ask = async () => {
+    /* Always the helper, even with a tab on screen: it focuses a live session
+       and replaces one whose session ended, which focusing by id cannot. */
+    setAsking("opening…");
+    const r = await askLantern();
+    setAsking(r.ok ? null : r.error ?? "could not open");
+  };
   const closeHow = () => { setHow(false); try { localStorage.setItem(HOW_KEY, "closed"); } catch { /* a convenience */ } };
   const pick = (s: string) => { d.setScope(s); setMenu(false); };
 
@@ -186,11 +194,12 @@ export function AgentsView({ active }: { active: boolean }) {
             <button type="button" className="btn quiet" onClick={() => openFlightPlan()}><Ph name="rocket-launch" size={14} />Flight plan <Ph name="arrow-right" size={12} /></button>
             <button type="button" className="btn" onClick={reloadAll}><Ph name="arrows-clockwise" size={14} />{REFRESH}</button>
             <button type="button" className="btn" disabled={asking === "opening…"} onClick={() => void ask()}
-              title="A session on the floating bench that opens with this field as its first message. Ctrl+Alt+A brings it back from any view.">
-              <Ph name="sparkle" size={14} />{asking === "opening…" ? "Opening…" : lanternOpen ? "Back to the session" : "Ask about the agents"}
+              data-tip="A session on the floating bench that opens with this field as its first message. Ctrl+Alt+A brings it back from any view.">
+              <Ph name="sparkle" size={ICON.sm} />{asking === "opening…" ? "Opening…" : lantern ? "Open · Show it" : "Ask about the agents"}
             </button>
             {asking && asking !== "opening…" && <span className="err-line">{asking}</span>}
           </div>
+          <BenchJobLine root="" job={JOB.lantern} claim={LANTERN_TAB_TITLE} what="The Lantern's chat" />
         </div>
 
         <GateScriptBanner active={active} />

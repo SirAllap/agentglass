@@ -174,10 +174,19 @@ describe("the page is in the settings index", () => {
 });
 
 describe("the map has the room it needs", () => {
-  test("Jira's page is as wide as ClickUp's, or the statuses fall under the steps and no line is drawn to them", async () => {
+  test("the page is not capped, so the map has its room, or the statuses go under the steps and the lines are hidden", async () => {
+    // The per-page caps (1900px for Jira and ClickUp) are gone: the page fills
+    // the track, so no page narrows its own map into a letterbox.
     const modal = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url)).text();
-    const wide = modal.slice(modal.indexOf("const WIDE_PANES"), modal.indexOf("]);", modal.indexOf("const WIDE_PANES")));
-    expect(wide).toContain('["jira", "1900px"]');
-    expect(wide).toContain('["clickup", "1900px"]');
+    expect(modal).not.toContain("WIDE_PANES");
+    expect(modal).not.toMatch(/\["(?:clickup|jira)", "\d+px"\]/);
+    // The map keeps a whole row of the page, and when its container is under
+    // 860px it puts the statuses under the steps and hides the lines to them.
+    const groups = await Bun.file(new URL("../src/components/settingsGroupB.css", import.meta.url)).text();
+    expect(groups).toContain(".agx-settings-col > .wfm > section:has(.wfm-grid) { grid-column: 1 / -1; }");
+    const map = await Bun.file(new URL("../src/components/workflowMapStyle.ts", import.meta.url)).text();
+    const narrow = map.slice(map.indexOf("@container agx-settings (max-width:860px)"));
+    expect(narrow).toContain(".wfm-grid{grid-template-columns:minmax(0,1fr)}");
+    expect(narrow).toContain(".wfm-lines{display:none}");
   });
 });

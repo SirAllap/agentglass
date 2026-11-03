@@ -17,6 +17,8 @@
  * anybody already had open stays signed in to what it was signed in to.
  */
 
+import { isAgentContainer } from "../../../shared/workerContainer.ts";
+
 export interface BrowserProfile {
   /** Slug, and the partition suffix. Empty is the default profile. */
   id: string;
@@ -102,10 +104,32 @@ export function mintProfileId(name: string, taken: readonly string[]): string {
   return `p${Date.now().toString(36).slice(-6)}`;
 }
 
-export function addProfile(profiles: readonly BrowserProfile[], rawName: string):
-  { profiles: BrowserProfile[]; profile: BrowserProfile } | { error: string } {
+type Made = { profiles: BrowserProfile[]; profile: BrowserProfile } | { error: string };
+
+/** A person's profile. The reserved namespace is not theirs to take: an agent's
+ *  container and a person's must never be able to collide by name. */
+export function addProfile(profiles: readonly BrowserProfile[], rawName: string): Made {
   const name = rawName.trim().slice(0, 24);
   if (!name) return { error: "give it a name" };
+  if (isAgentContainer(name)) return { error: "that name is reserved for an agent's own container" };
+  return mintNamed(profiles, name);
+}
+
+/** An agent's container. The name arrives namespaced by the relay, and it is
+ *  ALWAYS minted — never resolved against the existing list, which is what put
+ *  a worker named like a person's profile inside the person's logins. */
+export function mintAgentProfile(profiles: readonly BrowserProfile[], rawName: string): Made {
+  /* No cap here: `agent:` + a legal 64-character name is 70, and slicing it
+     made a container the relay's own `agentContainerName` never matched. The
+     relay validates the name; a stored profile name is not a path. */
+  const name = rawName.trim();
+  if (!isAgentContainer(name)) return { error: "an agent's container name is namespaced by the relay" };
+  const mine = profiles.find((p) => p.name.toLowerCase() === name.toLowerCase());
+  if (mine) return { profiles: [...profiles], profile: mine };
+  return mintNamed(profiles, name);
+}
+
+function mintNamed(profiles: readonly BrowserProfile[], name: string): Made {
   if (profiles.length >= MAX_PROFILES) return { error: `${MAX_PROFILES} profiles is the limit` };
   // The default is not in the list and cannot be shadowed by a second "Default".
   if (name.toLowerCase() === DEFAULT_PROFILE.name.toLowerCase()) return { error: "that name is taken" };
@@ -146,7 +170,9 @@ export function loadProfiles(store: Pick<Storage, "getItem" | "setItem"> | null)
       const { id, name, identify } = (p ?? {}) as Record<string, unknown>;
       if (typeof id !== "string" || typeof name !== "string" || !id || !SLUG.test(id)) continue;
       if (out.some((o) => o.id === id)) continue;
-      out.push({ id, name: name.slice(0, 24), ...(identify === true ? { identify: true } : {}) });
+      /* No name cap here either: `addProfile` already bounds a person's name,
+         and an agent's container is `agent:` + a legal 64-character name. */
+      out.push({ id, name, ...(identify === true ? { identify: true } : {}) });
     }
     return out.slice(0, MAX_PROFILES);
   } catch {

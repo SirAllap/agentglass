@@ -673,7 +673,11 @@ describe("taking a card away with you", () => {
   });
   it("sizes the footer's buttons from the kit: HIT, which is also what a touch screen needs", () => {
     const footer = cardSrc.slice(cardSrc.indexOf('<div className="agx-cd-f"'), cardSrc.indexOf("/* ---- stack popover ---- */"));
-    expect(footer.split('size="hit"').length - 1).toBe(5);
+    /* Every Button in the footer, not a fixed number: the slot beside the first
+       one has more than one branch now, and the rule is the size on all of them. */
+    const buttons = footer.split("<Button").length - 1;
+    expect(buttons).toBeGreaterThanOrEqual(5);
+    expect(footer.split('size="hit"').length - 1).toBe(buttons);
     expect(readFileSync(new URL("../src/components/workspace/Chrome.tsx", import.meta.url), "utf8")).toContain("hit: HIT");
   });
 });

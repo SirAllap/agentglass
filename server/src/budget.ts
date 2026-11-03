@@ -156,18 +156,18 @@ export const overBudgetLine = (s: BudgetStatus): string =>
   `Over budget · $${s.spent.toFixed(2)} of $${s.budget.limit.toFixed(2)} ${periodLabel(s.budget.period)} for ${budgetScopeLabel(s.budget)}`;
 
 /**
- * The sentence a person reads while an agent is held at the gate.
+ * The sentence a person reads while an agent is waiting at the gate.
  *
  * Three facts, and the third is the one every spend warning leaves out: the
  * limit, what has gone through it, and what happens if they put the phone down.
- * The gate is fail-open by default — the hold expires and the call proceeds —
+ * The gate is fail-open by default — the wait expires and the call proceeds —
  * so a line that stops after the first two reads like a block, and somebody
  * would go scrambling to approve a call that was never going to be stopped.
  * Under AGENTGLASS_GATE_FAILCLOSED the same silence denies it instead, which is
  * the opposite mistake to make, so the policy in force is what gets said.
  *
  * Opens with the same words as the dashboard insight ("Over budget · $x of $y
- * this month") on purpose: the red bar and the held call are one fact, and two
+ * this month") on purpose: the red bar and the waiting call are one fact, and two
  * phrasings of it read as two problems.
  */
 export function budgetHoldReason(s: BudgetStatus, failClosed = false): string {

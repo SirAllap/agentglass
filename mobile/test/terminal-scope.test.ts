@@ -7,7 +7,7 @@
  * socket the server closed on arrival, and told the connection had been lost.
  *
  * The destination is in the bar for every pairing now, because the Terminal
- * screen is also where an `answer` phone answers held gates. So the claim moved
+ * screen is also where an `answer` phone answers gates waiting on you. So the claim moved
  * from "the list cuts it" to "the screen decides before the pane mounts": the
  * rule (`canRunAgents`) is run, and the screens are READ, the way
  * handoff-carries-an-id.test.ts reads them.
@@ -50,7 +50,7 @@ describe("the screens, read", () => {
     expect(body).not.toContain("useState");
   });
 
-  test("a phone that may answer gets the held gates where the pane would be", async () => {
+  test("a phone that may answer gets the gates waiting on you where the pane would be", async () => {
     const src = await read("../app/(tabs)/terminal.tsx");
     const start = src.indexOf("function TerminalRefused(");
     const end = src.indexOf("function TerminalPane(");

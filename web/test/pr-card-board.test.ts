@@ -87,11 +87,48 @@ describe("the card is reachable and opens its menu without a right button", () =
   it("opens below the dots button, six pixels under it", () => {
     expect(cardSrc).toContain("menuAt(e.currentTarget, 0, e.currentTarget.getBoundingClientRect().height + 6)");
   });
-  it("the unread mark is a dot that carries the count in its tooltip", () => {
-    expect(cardSrc).toContain('className="agx-cd-unread"');
-    expect(cardSrc).toContain("data-tip={tip(props.unread)}");
+  it("what was said since your last look is a pill in words, not a mute dot", () => {
+    const talk = [
+      { at: "2026-08-10T09:00:00Z", who: "mara-k", kind: "comment", mine: true },
+      { at: "2026-08-11T09:00:00Z", who: "theo-w", kind: "comment" },
+    ];
+    const c = card(render({ mine: [pr(7, { talk })] }), 7);
+    expect(c).toContain(">1 new remark</span>");
+    expect(c).toContain("1 new remark since you last looked, from theo-w");
+    expect(c).not.toContain("agx-cd-unread");
+    expect(cardSrc).not.toContain("agx-cd-unread");
     expect(cardSrc).not.toContain("<UnreadBadge");
-    expect(board).toContain("unread={unread ? unreadTitle(unread) : null}");
+    expect(css).not.toContain(".agx-cd-unread");
+    expect(board).toMatch(/\bunread[,}]/);
+  });
+  it("the board's switch counts cards, the pill counts remarks, and they do not share a word", () => {
+    const talk = [
+      { at: "2026-08-10T09:00:00Z", who: "mara-k", kind: "comment", mine: true },
+      { at: "2026-08-11T09:00:00Z", who: "theo-w", kind: "review", lines: 3, says: true },
+    ];
+    const html = render({ mine: [pr(8, { talk })] });
+    expect(card(html, 8)).toContain(">4 new remarks</span>");
+    expect(card(html, 8)).toContain("4 new remarks since you last looked, from theo-w");
+    expect(html).toContain("1 unread");
+  });
+  it("the pill follows the verdict, so every card's verdict starts at the same edge", () => {
+    const strip = cardSrc.slice(cardSrc.indexOf('className="agx-cd-h"'), cardSrc.indexOf("{stack && ("));
+    expect(strip).toContain("cv.unread");
+    expect(strip.indexOf("cv.unread")).toBeGreaterThan(strip.indexOf('className="agx-cd-v"'));
+    expect(strip.indexOf("cv.unread")).toBeLessThan(strip.indexOf("cv.strip.threads"));
+    expect(strip).toContain('"--c": "var(--accent, var(--primary))"');
+  });
+  it("the tag's ink selector and its stylesheet half cannot be renamed apart", () => {
+    const ink = /data-ink="([\w-]+)"/.exec(cardSrc)?.[1];
+    expect(ink).toBe("strip");
+    expect(css).toContain(`.agx-cd-tag[data-ink="${ink}"] { color: var(--strip-ink, var(--text)); }`);
+    // The accent stays on the tint and the dot, never in the words.
+    expect(css).toContain(`.agx-cd-tag[data-ink="${ink}"]::before`);
+    expect(css).toContain("background: var(--c, var(--text)); }");
+  });
+  it("a verdict the strip had to cut keeps its sentence on the strip's tooltip", () => {
+    expect(cardSrc).toContain("v.scrollWidth > v.clientWidth + 1");
+    expect(cardSrc).toContain("cut ? tip(cv.strip.text)");
   });
 });
 

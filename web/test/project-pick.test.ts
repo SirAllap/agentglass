@@ -178,7 +178,7 @@ describe("the first run waits for an answer", () => {
     // app blank — a scoped desktop instance included, whose answer would have
     // been "a project is open, go ahead".
     expect(APP).toMatch(/const release = setTimeout\(\(\) => \{ if \(!live\) return; gaveUp = true; setAwaitingPick\(false\); \}, PICK_WAIT_MS\);/);
-    expect(APP).toMatch(/api\.projects\(\)\.then\(\(p\) => \{\s*if \(!live\) return;\s*clearTimeout\(release\);/);
+    expect(APP).toMatch(/api\.projects\(\)\.then\(async \(p\) => \{\s*if \(!live\) return;\s*const setupState = await setupRead;\s*if \(!live\) return;[\s\S]*?clearTimeout\(release\);/);
     expect(APP).toContain("return () => { live = false; clearTimeout(release); if (timer) clearTimeout(timer); };");
   });
   test("a server that does not answer lets the views in rather than leave them out", () => {

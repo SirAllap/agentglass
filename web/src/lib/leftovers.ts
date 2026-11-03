@@ -17,7 +17,8 @@ export type LeftoverState =
   | { kind: "computing" }
   | { kind: "unknown"; why: string }
   | { kind: "none" }
-  | { kind: "some"; items: number; bytes: number; groups: LeftoverGroup[] };
+  /** `blocked` is why a cleanup would be refused, in a few words (the server's local inventory): the items are there, none of them can go yet. */
+  | { kind: "some"; items: number; bytes: number; groups: LeftoverGroup[]; blocked?: string };
 
 export type Surface = "card" | "closedRow" | "panel" | "lane";
 
@@ -51,11 +52,12 @@ export function offerFor(s: LeftoverState | undefined, surface: Surface): Offer 
 
 /** The server's row, or "unknown" when it said so or sent nothing for this PR. */
 export function stateOfRow(row: unknown): LeftoverState {
-  const r = row as { unknown?: boolean; items?: unknown; bytes?: unknown; groups?: unknown } | null | undefined;
+  const r = row as { unknown?: boolean; items?: unknown; bytes?: unknown; groups?: unknown; blocked?: unknown } | null | undefined;
   if (!r || r.unknown || typeof r.items !== "number") return { kind: "unknown", why: "The local inventory could not be read for this pull request." };
   if (r.items < 1) return { kind: "none" };
   const parts = Array.isArray(r.groups) ? (r.groups as LeftoverGroup[]) : [];
-  return { kind: "some", items: r.items, bytes: typeof r.bytes === "number" ? r.bytes : 0, groups: parts };
+  const blocked = typeof r.blocked === "string" && r.blocked ? { blocked: r.blocked } : {};
+  return { kind: "some", items: r.items, bytes: typeof r.bytes === "number" ? r.bytes : 0, groups: parts, ...blocked };
 }
 
 /**
@@ -75,11 +77,12 @@ export function stateOfPlan(plan: Plan | null, failed: boolean, why = "The plan 
   return { kind: "some", items: rows.length, bytes: groups.reduce((n, g) => n + g.bytes, 0), groups };
 }
 
-export interface LeftoverLine { tone: "none" | "some" | "run"; text: string; title: string }
+export interface LeftoverLine { tone: "none" | "some" | "run" | "blocked"; text: string; title: string }
 
 /**
  * The finished card's quiet line about this computer. Nothing while the inventory is read or when it failed: the card
- * does not claim "No leftovers" over a silence. The Clean up button is the card's own primary action (offerFor).
+ * does not claim "No leftovers" over a silence. The Clean up button is the card's own primary action (offerFor). When the
+ * server says a cleanup would be refused, the line wears the reason: the words on it say blocked, and the tip says why.
  */
 export function leftoverLine(s: LeftoverState | undefined, cleaning: boolean): LeftoverLine | null {
   if (cleaning) return { tone: "run", text: "Cleaning up\u2026", title: "Removing this pull request's local leftovers" };
@@ -87,5 +90,13 @@ export function leftoverLine(s: LeftoverState | undefined, cleaning: boolean): L
   if (s.kind === "none") return { tone: "none", text: "No leftovers", title: "Nothing of this pull request is left on this computer" };
   if (s.items < 1) return { tone: "none", text: "No leftovers", title: "Nothing of this pull request is left on this computer" };
   const size = sizeText(s.bytes);
-  return { tone: "some", text: `Leftovers: ${s.items === 1 ? "1 item" : `${s.items} items`}${size ? ` \u00b7 ${size}` : ""}`, title: tooltipOf(s.groups) };
+  const count = s.items === 1 ? "1 item" : `${s.items} items`;
+  if (s.blocked) {
+    return {
+      tone: "blocked",
+      text: `Leftovers: ${count}${size ? ` \u00b7 ${size}` : ""} \u00b7 blocked`,
+      title: [`${s.blocked}. Clean up would refuse until that is gone.`, tooltipOf(s.groups)].filter(Boolean).join(" "),
+    };
+  }
+  return { tone: "some", text: `Leftovers: ${count}${size ? ` \u00b7 ${size}` : ""}`, title: tooltipOf(s.groups) };
 }

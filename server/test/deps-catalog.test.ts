@@ -107,10 +107,20 @@ describe("the requirements catalogue matches what the app actually runs", () => 
      * thing currently interpreting that page would be furniture.
      */
     bun: "the runtime this server runs in; the work loop runs his own `bun test`",
+    // This app's own browser CLI (bin/agentglass-browser), which its setup puts
+    // on PATH. A row would tell the reader to install the thing they are
+    // running; without it OpenCode Go's console reading says so and no other
+    // pane changes.
+    "agentglass-browser": "agentglass's own CLI, shipped in bin/ and put on PATH by its setup",
     // Handing a file to the desktop's own viewer. Every desktop has one of
     // these and the finder says which it used; with none, the preview pane
     // says so and the file simply stays where it is — nothing else changes.
     open: "the macOS opener; the finder falls back to saying it cannot",
+    // macOS's own boot-clock reader (the children ledger and db.ts's boot id):
+    // read only on darwin, present on every macOS. A row would ask a Linux
+    // reader to install what is already the OS, and a macOS one to install
+    // what shipped with it.
+    sysctl: "macOS's own; read only on darwin, present on every macOS",
     gio: "the GNOME opener, tried beside xdg-open, which has the row",
     // Ties the notification monitor to the server with PR_SET_PDEATHSIG, for
     // the deaths that run no exit hook. Without it the monitor is spawned bare

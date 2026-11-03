@@ -38,6 +38,10 @@ const SKIP_DIR = new Set([
      expression full of Spanish-looking fragments. Somebody else's build output
      is not somebody's writing. */
   "dist-app",
+  /* A builder's scratch directory: the step notes and hit lists of the turn
+     that is making the change. Git-ignored, so it is never in a release, and
+     it names the banned words on purpose. */
+  ".agx-tmp",
 ]);
 const TEXT = /\.(ts|tsx|js|jsx|mjs|cjs|md|json|ya?ml|html|css|sh)$/;
 
@@ -276,6 +280,30 @@ describe("nothing private is in the tree", () => {
       "an unpushed commit message carries a private session link or quotes a "
       + "conversation. Reword it before it leaves: git rebase -i, or squash.",
     ).toEqual([]);
+  });
+
+  /*
+   * THE WORDS THAT READ AS A TEAM'S OWN SHORTHAND.
+   *
+   * The product is read by people who do not work here, and a private
+   * vocabulary leaked into it: an agent stopped on a permission was "held at
+   * the gate", a reminder was a "nudge", a group of requests a "batch". Only
+   * the first is unambiguous enough to lock: `tick`, `hold` and `batch` are
+   * also a checkbox, a dialog that stays open and an API that takes a list, and
+   * a rule that fires on those teaches people to skip it. So this is a
+   * tripwire for the phrase that was actually written, not a dictionary.
+   */
+  const SHORTHAND = /\b(?:babysitt?(?:ing|ed)?|shepherd(?:ing|ed)?|spinoffs?|in-flight|pre-existing|unclassified|meta PRs?|non-gating|infra-rerun)\b|\b[Hh]eld (?:at the gate|gates?)\b/g;
+
+  /* One screen asserts the whole list of words against itself, and a test that
+     holds the list has to quote it; it is the second reader of this rule. */
+  const other = scanned.filter((f) => f.path !== "web/test/browser-who-may-drive-card.test.ts");
+
+  test("no private shorthand for a waiting agent or a reminder", () => {
+    expect(other.flatMap(({ path, text }) => {
+      const found = text.match(SHORTHAND);
+      return found ? [`${path}: ${found[0]}`] : [];
+    })).toEqual([]);
   });
 
   test("and the rules it enforces are written down", () => {

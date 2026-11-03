@@ -80,3 +80,12 @@ export const HIT = 26;
  * shrink to match.
  */
 export const MIN_BOX = 20;
+
+/**
+ * The smallest square a control may be on a touch surface: a phone.
+ *
+ * `HIT` is measured against a desk, whose rows are 22-28px tall. A phone's rows
+ * are pressed with a thumb, so the controls that carry a verdict take this and
+ * nothing else does.
+ */
+export const TOUCH = 40;

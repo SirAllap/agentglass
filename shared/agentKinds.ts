@@ -474,8 +474,11 @@ export const AGENT_PROVIDERS: Provider[] = [
     },
     version: { args: ["--version"], pattern: "(?:^|\\s)v?(\\d+\\.\\d+\\.\\d+)" },
     // Its free catalogue answers with no credential (measured on 1.18.32), so
-    // an empty list of providers is not "signed out".
-    account: { args: ["providers", "list"], signedIn: "[1-9]\\d* credentials?", optional: true },
+    // an empty list of providers is not "signed out". 2.1.4 dropped `providers`
+    // (the word is read as a directory) and lists each saved account as a line
+    // ending in "stored" under `auth list`; 1.x answered "N credentials". Never
+    // `auth export`: it prints the secrets.
+    account: { args: ["auth", "list"], signedIn: "[1-9]\\d* credentials?|\\bstored\\s*$", optional: true },
     headless: { argv: "opencode", form: 'run --format json -m <provider/model> "<prompt>"', resume: "-s" },
     envelope: { via: "config-env" },
     lock: { via: "env", env: "OPENCODE_CONFIG_CONTENT" },

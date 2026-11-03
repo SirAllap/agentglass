@@ -283,28 +283,23 @@
    *
    * The column used to be capped at 1120px and sit against the nav, which was
    * right for one column of rows and left a hole between it and the index rail
-   * on a 2560px window. The cap is now only for the boards (WIDE_PANES in
-   * SettingsModal): their own width, set on the page, so the rail still sits
-   * beside what it indexes.
+   * on a 2560px window. It fills the page now: no page has a width of its own,
+   * so the rail is beside the cards wherever the window is wide.
    */
   .agx-settings-col {
     columns: 1;
     column-gap: 18px;
-    max-width: var(--agx-settings-col, none);
     container-type: inline-size;
     container-name: agx-settings;
   }
   @media (min-width: 1180px) { .agx-settings-col { columns: 2; } }
   @media (min-width: 2300px) { .agx-settings-col { columns: 3; } }
-  /* A board lays out its own cards: one flow column, at the width it chose. */
-  .agx-settings-col[data-flow="single"] { columns: 1; }
   /* Stable columns (useStableFlow): a grid of 1px rows, every card pinned to its
      own column and row by script, so a card that grows moves nothing but what
      sits under it. */
   .agx-settings-col { --agx-cols: 1; --agx-gap: 18px; }
   @media (min-width: 1180px) { .agx-settings-col { --agx-cols: 2; } }
   @media (min-width: 2300px) { .agx-settings-col { --agx-cols: 3; } }
-  .agx-settings-col[data-flow="single"] { --agx-cols: 1; }
   /* The gap under a card is part of its span, so the last one would leave 18px
      of nothing under the page: the column takes it back. */
   .agx-settings-col[data-stable] > .agx-scard { margin-bottom: 0; }
@@ -444,6 +439,15 @@
   --surface-inset: color-mix(in srgb, var(--bg3) 78%, var(--bg2));
   --surface-line: color-mix(in srgb, var(--border) 60%, transparent);
   --surface-lift: 0 1px 2px rgba(0, 0, 0, 0.18), 0 10px 26px -18px var(--shadow);
+  /* The page's own ground. Named so a bar that must cover what scrolls under
+     it uses the page's tone rather than a mix of it: a mix is a window. */
+  --surface-page: var(--bg);
+  /* The two curves everything a pointer touches uses: a strong ease-out for
+     something arriving or opening, and an in-out for something moving from one
+     place to another. Durations stay under 200ms, and the reduced-motion rule
+     at the bottom of this file turns both off. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
 }
 
 /*
@@ -1406,6 +1410,15 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   overflow-y: auto;
   padding: 8px;
 }
+/* The needs popover's list under a heading fixed to the top: the 46vh cap left
+   half the window unused, and against a panel whose own bottom could pass the
+   viewport the rows were clipped with no way to scroll to them. The panel is
+   capped in NeedsPopover now, so the list takes everything left under it. */
+.agx-inbox-list[data-fill] {
+  max-height: none;
+  min-height: 0;
+  flex: 1 1 auto;
+}
 /*
  * A message is a card, with space around it.
  *
@@ -1929,8 +1942,9 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 }
 .agx-scard[data-tone="danger"] .agx-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--error) 10%, transparent) !important; }
 .agx-scard:has(> .agx-scard-body:empty) { display: none; }
-/* The Orchestration page keeps its project bar stuck to the top (ScopeBar writes its height here); a card or row scrolled to stops under it. */
-.agx-orch .agx-scard, .agx-orch [data-row] { scroll-margin-top: calc(var(--orch-stick, 0px) + 8px); }
+/* A scrolled-to card or row stops under the frame's pinned rows: the landing
+   offset is the one the scroll region declares (scroll-padding-top), so nothing
+   here adds a second one. */
 /* The header: an icon chip, the title, the verdict and the one action on a
    line, and the sentence under it. The line below the header is the first
    row's divider (further down), not a border of the header. */
@@ -1973,7 +1987,13 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   flex-wrap: wrap;
   gap: 8px;
   flex-shrink: 0;
+  min-width: 0;
+  max-width: 100%;
 }
+/* A status whose words are a sentence, not a word: it wraps in the column
+   instead of pushing past the page (measured on Usage & budgets at 427x240,
+   where the badge's right edge was 1002 in a 427 page). */
+.agx-slot > .agx-badge { flex: 0 1 auto; height: auto; min-height: 22px; padding-block: 4px; white-space: normal; }
 .agx-settings-row > .agx-slot { justify-self: end; }
 /* What stacks under the description spans both columns. Written with the
    element so it outranks `.agx-settings-row > :last-child`. */
@@ -2134,7 +2154,40 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
 @media (min-width: 2200px) { .agx-settings-shell { --nav-w: 320px; } }
 @media (max-width: 1100px) { .agx-settings-shell { --nav-w: 68px; } }
 .agx-settings-nav { width: var(--nav-w); }
-.agx-settings-main { padding-inline: 0; }
+.agx-settings-main { padding-inline: 0; display: flex; flex-direction: column; min-height: 0; }
+/* The only scrollbar in Settings. `scrollbar-gutter: stable` keeps the content
+   width the same whether a page overflows or not, so moving between pages does
+   not shift every row 7px sideways.
+ *
+ * The frame's sticky stack is declared here, once, and every offset below is
+ * derived from it: the index band pins at the region's top edge, the page's
+ * scope bar pins under the band, and a scrolled-to card lands under both. Each
+ * height is measured and published by the element that owns it (SettingsToc
+ * writes `--agx-stick-toc`, ScopeBar writes `--orch-stick`); stacking either
+ * one by hand is how the band ended up pinned inside the bar. The page header
+ * is outside this region, so its height is not a term.
+ *
+ * The air the band leaves under itself is the band's, painted in its own fill
+ * (see `.agx-toc::after`): an unpainted slot between two opaque rows shows the
+ * cards sliding through it, which is the same defect as a row painted over a
+ * row. It stays in `--agx-pin-top` rather than in the band's height, so the
+ * measured height stays the height of the chips. */
+.agx-settings-scroll {
+  --agx-pin-gap: 12px;
+  --agx-band: var(--agx-stick-toc, 0px);
+  --agx-pin-top: calc(var(--agx-band) + var(--agx-pin-gap));
+  --agx-pin-stack: calc(var(--agx-pin-top) + var(--orch-stick, 0px));
+  flex: 1; min-height: 0; overflow-y: auto; overflow-x: auto; scrollbar-gutter: stable;
+  scroll-padding-top: calc(var(--agx-pin-stack) + var(--agx-pin-gap));
+}
+/* A search can name a page and match none of its rows: the bar draws, the index
+   does not, and the air under the band has nothing to paint it. */
+.agx-settings-scroll:not(:has(.agx-toc)) { --agx-pin-top: 0px; }
+/* From 1760px the index is a rail in the second column, so nothing pins above
+   the bar in its own column. */
+@media (min-width: 1760px) {
+  .agx-settings-scroll { --agx-band: 0px; --agx-pin-top: 0px; --agx-pin-stack: var(--orch-stick, 0px); }
+}
 /* The mockup scales its root font 14 to 15.5px from 2200px; the settings are px, so the page (not the nav, whose
    search popover is positioned by the viewport) takes the same ratio as a zoom. Chromium 128+ reports boxes in
    the zoomed space, so a popover placed from a trigger's rect still lands on it. */
@@ -2250,10 +2303,13 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
 .agx-sp-keys { display: flex; gap: 16px; padding: 8px 16px; border-top: 1px solid var(--surface-line); color: var(--text3); font-size: calc(11px * var(--agx-fs, 1)); }
 .agx-sp-keys span { display: flex; gap: 4px; align-items: center; }
 
-/* the page header */
+/* the page header — outside the scroll region, so it never moves and nothing
+   paints behind it. Opaque: the translucent tone it had let the cards show
+   through a blur, which read as a second layer of the page sliding under a
+   film. */
 .agx-ph {
-  position: sticky; top: 0; z-index: 5; padding: 18px 40px 14px; border-bottom: 1px solid var(--surface-line);
-  background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(8px);
+  flex: none; padding: 18px 40px 14px; border-bottom: 1px solid var(--surface-line);
+  background: var(--surface-page);
 }
 .agx-ph-crumb { display: flex; align-items: center; gap: 6px; font-size: calc(11.48px * var(--agx-fs, 1)); color: var(--text3); }
 .agx-ph-crumb i { width: 8px; height: 8px; border-radius: 3px; background: var(--hue); display: inline-block; }
@@ -2267,10 +2323,112 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
 .agx-ph-sp { flex: 1; }
 .agx-ph-sum { margin: 4px 0 0; color: var(--text3); font-size: calc(14px * var(--agx-fs, 1)); max-width: 90ch; }
 
+/* The one statement a page makes about what its values apply to. Not a
+   selector: these values are machine-wide, and a pill that looked pickable
+   would promise a choice that does not exist. */
+.agx-ph-scope { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 8px; }
+.agx-ph-scope-k { font-size: calc(10px * var(--agx-fs, 1)); letter-spacing: 0.09em; text-transform: uppercase; font-weight: 700; color: var(--text3); }
+.agx-ph-scope-pill {
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border: 1px solid var(--border);
+  border-radius: 99px; background: var(--surface-card); font-size: calc(12px * var(--agx-fs, 1)); font-weight: 600; color: var(--text2);
+}
+.agx-ph-scope-pill svg { color: var(--text3); }
+.agx-ph-scope-note { font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); }
+
+/* ── Settings › Agents ───────────────────────────────────────────────
+   One deliberate column: Watching beside its live preview, two equal cards,
+   then the lists. The frames inside are the house card and row; only the
+   pairings are here. */
+.agx-agents-page { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.agx-agents-pair { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-items: start; }
+@media (min-width: 1180px) {
+  /* The side is the tall one (a live preview), so it stretches; the Watching
+     card beside it does not, or its last row leaves a hollow box under itself. */
+  .agx-settings-col .agx-agents-hero { grid-template-columns: minmax(0, 1fr) 344px; align-items: start; }
+  .agx-agents-hero > .agx-split-side { position: static; align-self: stretch; }
+  .agx-agents-hero > .agx-split-side > .agx-scard { height: 100%; display: flex; flex-direction: column; }
+  .agx-agents-hero > .agx-split-side > .agx-scard > .agx-scard-body { flex: 1; }
+  .agx-agents-pair { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+.agx-agents-foot {
+  display: flex; align-items: center; gap: 8px; padding: 10px 18px 12px; margin-top: auto;
+  border-top: 1px solid var(--surface-line); font-size: calc(11px * var(--agx-fs, 1));
+  color: var(--text3); background: color-mix(in srgb, var(--bg) 50%, var(--surface-card)); flex-wrap: wrap;
+}
+.agx-agents-foot b { color: var(--text2); font-weight: 600; }
+.agx-preview-out { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.agx-preview-out span { flex: 1; min-width: 0; font-size: calc(10.75px * var(--agx-fs, 1)); color: var(--text3); }
+.agx-preview-out .agx-btn { flex: none; }
+
+/* Two checklists in one card, split by a rule: hooks on the left, the browser
+   on the right, one column when the card is narrow. */
+.agx-connect-grid { display: grid; grid-template-columns: minmax(0, 1fr); border-top: 1px solid var(--surface-line); }
+.agx-connect-panel { min-width: 0; padding-bottom: 6px; }
+.agx-connect-panel + .agx-connect-panel { border-top: 1px solid var(--surface-line); }
+@container agx-settings (min-width: 760px) {
+  .agx-connect-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .agx-connect-panel + .agx-connect-panel { border-top: 0; border-left: 1px solid var(--surface-line); }
+}
+.agx-connect-head { display: flex; align-items: center; gap: 8px; padding: 12px 18px 4px; }
+.agx-connect-head b { font-size: calc(12.5px * var(--agx-fs, 1)); font-weight: 750; color: var(--text); }
+.agx-connect-ic {
+  width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; flex: none;
+  background: color-mix(in srgb, var(--hue) 15%, transparent); color: color-mix(in srgb, var(--hue) 76%, var(--text));
+}
+
+/* The gate says why it is off, once, with the way to its board. */
+.agx-gate-strip {
+  display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; margin: 2px 18px 16px; padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--warning) 34%, var(--border)); border-left: 3px solid var(--warning);
+  border-radius: 9px; background: color-mix(in srgb, var(--warning) 7%, var(--bg));
+}
+.agx-gate-strip > svg { color: var(--warning-ink); margin-top: 2px; flex: none; }
+.agx-gate-strip-main { flex: 1; min-width: 220px; }
+.agx-gate-strip-main b { display: block; font-size: calc(12.5px * var(--agx-fs, 1)); color: var(--warning-ink); }
+.agx-gate-strip-main p { margin: 2px 0 0; font-size: calc(11.5px * var(--agx-fs, 1)); line-height: 1.45; color: var(--text2); max-width: 74ch; }
+.agx-gate-strip .agx-btn { flex: none; }
+/* On, the same strip says where the waiting actions are and what waits; the
+   warning tint belongs to the off state only, where something is not stopped. */
+.agx-gate-strip[data-on] {
+  border-color: var(--surface-line); border-left-color: var(--success);
+  background: color-mix(in srgb, var(--text) 4%, var(--bg));
+}
+.agx-gate-strip[data-on] > svg { color: var(--success-ink); }
+.agx-gate-strip[data-on] .agx-gate-strip-main b { color: var(--text); }
+.agx-gate-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.agx-gate-chip {
+  padding: 2px 8px; border: 1px solid var(--surface-line); border-radius: 99px;
+  font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3);
+}
+.agx-gate-dest { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.agx-gate-dest span { font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); }
+/* One wire only (an older shell has no browser panel): do not leave half the
+   grid empty under a head with nothing beneath it. */
+.agx-connect-grid[data-panels="1"] { grid-template-columns: minmax(0, 1fr); }
+
+.agx-card-skills-note {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 18px 12px;
+  border-top: 1px solid var(--surface-line); background: color-mix(in srgb, var(--bg) 55%, var(--surface-card));
+}
+.agx-card-skills-note > span { flex: 1; min-width: 220px; }
+
+
 /* the page under the header: its cards, and the index beside or above them */
-.agx-settings-page { padding: 22px 40px 28px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-items: start; }
-.agx-settings-page .agx-scard, .agx-settings-page .agx-settings-section { scroll-margin-top: calc(var(--agx-ph-h, 112px) + 16px); }
-.agx-toc { display: flex; flex-wrap: wrap; gap: 6px; position: sticky; top: calc(var(--agx-ph-h, 112px) + 12px); z-index: 4; }
+.agx-settings-page { --agx-settings-pad-top: 22px; --agx-page-gap: 18px; padding: var(--agx-settings-pad-top) 40px 28px; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--agx-page-gap); align-items: start; }
+/* `top: 0` and not `--agx-pin-top`: the band is the first pinned row, and a top
+   greater than its resting offset is what pushed it down into the bar.
+ *
+ * The band paints the air `--agx-pin-top` leaves under it, so the slot between
+   the two pinned rows is the band's own box rather than a hole content scrolls
+   through. The pixel covers the fraction `--agx-stick-toc` loses when it is
+   rounded to a whole number; the band is above the bar's pinned block and
+   paints over it, which is why the bar pins under the band's air and not the
+   reverse. */
+.agx-toc { display: flex; flex-wrap: wrap; gap: 6px; position: sticky; top: 0; background: var(--surface-page); }
+.agx-toc::after {
+  content: ""; position: absolute; left: 0; right: 0; top: 100%;
+  height: calc(var(--agx-pin-gap, 12px) + 1px); background: var(--surface-page);
+}
 .agx-toc-lab { display: none; font-size: calc(11px * var(--agx-fs, 1)); letter-spacing: 0.09em; text-transform: uppercase; color: var(--text3); font-weight: 700; margin: 0 0 8px; }
 .agx-toc a {
   display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text2);
@@ -2282,23 +2440,35 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
 .agx-toc-dot[data-tone="warn"] { background: var(--warning); }
 .agx-toc-dot[data-tone="err"] { background: var(--error); }
 @media (min-width: 1760px) {
-  /* The content track is the page's own width where a board set one
-     (--agx-settings-col, on the page), else what is left; and the rail sits
-     against it, so on a 2560px window it is beside the cards, not at the far
-     edge of a capped column. */
-  .agx-settings-page { grid-template-columns: minmax(0, var(--agx-settings-col, 1fr)) 224px; justify-content: start; }
+  /* The content track is what is left and the rail sits against it, so on a
+     2560px window it is beside the cards, not at the far edge of a capped
+     column. No page has a width of its own to place. */
+  .agx-settings-page { grid-template-columns: minmax(0, 1fr) 224px; justify-content: start; }
   .agx-settings-page:not(:has(.agx-toc)) { grid-template-columns: minmax(0, 1fr); }
   /* Same row as the content, not a span of twenty: every implicit row carried the
      page's 18px gap, so a page that fitted the window still scrolled ~340px. */
   .agx-settings-page > .agx-toc {
-    grid-column: 2; grid-row: 1; flex-direction: column; flex-wrap: nowrap; gap: 0; top: calc(var(--agx-ph-h, 112px) + 16px);
-    border-left: 1px solid var(--surface-line); padding-left: 16px;
+    grid-column: 2; grid-row: 1; flex-direction: column; flex-wrap: nowrap; gap: 0; top: calc(var(--agx-pin-top, 0px) + 16px);
+    border-left: 1px solid var(--surface-line); padding-left: 16px; background: none;
   }
+  /* A rail beside the cards pins nothing above the bar, so it leaves no air to paint. */
+  .agx-settings-page > .agx-toc::after { content: none; }
   .agx-toc-lab { display: block; }
   .agx-toc a { border: 0; border-radius: 8px; background: none; padding: 6px 10px; margin-left: -10px; }
   .agx-toc a:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
   .agx-toc a[aria-current] { background: none; color: var(--text); font-weight: 700; box-shadow: inset 3px 0 var(--hue); }
   .agx-settings-page > .agx-settings-content { grid-column: 1; grid-row: 1; }
+  /* The Agents page handed its cards to wrappers of its own (the hero, the pair
+     of cards) and carried a width to match them; from here the wrappers give
+     their cards to the page's flow, so it takes two columns, three from 2300px,
+     like every other page, and the hero is a pair like the pairs below it.
+     Below this it keeps its one deliberate column, which is what the cap kept. */
+  .agx-agents-page, .agx-agents-pair, .agx-agents-hero { display: contents; }
+  .agx-agents-hero > .agx-split-side { display: contents; }
+  .agx-agents-hero > .agx-split-side > .agx-scard { height: auto; }
+  /* The gap is the grid's, not the card's: the rule for a card the column owns
+     directly cannot reach one whose wrapper has no box. */
+  .agx-settings-col[data-stable] .agx-agents-page .agx-scard { margin-bottom: 0; }
 }
 .agx-settings-content { min-width: 0; }
 
@@ -2323,9 +2493,17 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
   .agx-sn-it { justify-content: center; padding: 8px; }
   .agx-sn-sys { padding: 6px; }
   .agx-ph { padding: 14px 18px 12px; }
-  .agx-settings-page { padding: 16px 18px 40px; }
+  .agx-settings-page { --agx-settings-pad-top: 16px; --agx-page-gap: 18px; padding: var(--agx-settings-pad-top) 18px 40px; }
   .agx-sp-pop { left: 12px; top: 56px; width: calc(100vw - 24px); }
   .agx-sp-scrim { inset: 0; }
+}
+/* A window this short has no room for a second pinned row: the header and the
+   index band together were 187 of 240px at 300%, leaving the page 53. The band
+   then scrolls with the page, and the header keeps only what names it. */
+@media (max-height: 440px) {
+  .agx-settings-scroll { --agx-band: 0px; --agx-pin-top: 0px; --agx-pin-stack: var(--orch-stick, 0px); }
+  .agx-settings-page > .agx-toc { position: static; }
+  .agx-ph-sum { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .agx-sn-it, .agx-sn-caret { transition: none; } }
 
@@ -3989,6 +4167,10 @@ html[data-reduce-motion] #ag-cover * { animation: none !important; }
 /* While a tile is opened its neighbours keep their own height: equal rows are for the collapsed page, and stretching a closed tile to the height of an open one leaves a hole in it. */
 .agx-tiles:has(.agx-tile-d) { align-items: start; }
 .agx-tile-d { margin: 0 -18px -16px; border-top: 1px solid var(--surface-line); background: color-mix(in srgb, var(--surface-inset) 40%, transparent); }
+/* That panel is the inset already: a disclosure body inside it repaints
+   --surface-inset at full strength and leaves its rows on a second tone. The
+   OpenCode tile is where it showed, its key guide opening by default. */
+.agx-tile-d .agx-disclosure-b { background: transparent; }
 .agx-tile-add { align-items: stretch; justify-content: center; min-height: 200px; }
 .agx-tile-addb { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; flex: 1; border: 0; background: none; color: var(--text3); cursor: pointer; font: inherit; }
 .agx-tile-addb b { font-size: calc(14px * var(--agx-fs, 1)); color: var(--text); }
@@ -4018,7 +4200,7 @@ html[data-reduce-motion] #ag-cover * { animation: none !important; }
 /* The nav's "Skip to the page": out of sight until the keyboard lands on it (see SettingsNav). */
 .agx-skip { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; padding: 0; }
 .agx-skip:focus-visible { position: static; width: auto; height: auto; clip-path: none; margin: 6px 12px 0; padding: 6px 10px; border-radius: 8px; background: var(--surface-inset); color: var(--text); font-size: calc(12px * var(--agx-fs, 1)); text-align: left; }
-.agx-settings-main:focus { outline: none; }
+.agx-settings-scroll:focus { outline: none; }
 
 /* A filled primary button is the same blue as the focus ring, so a ring drawn inside it vanished (measured on
    "Turn the gate on": focus-visible matched, nothing to see). Outside the edge instead, 2px clear of it. */
@@ -4381,13 +4563,12 @@ html[data-reduce-motion] #ag-cover * { animation: none !important; }
 .agx-cd[data-chain="me"] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent), 0 0 0 4px color-mix(in srgb, var(--accent, var(--primary)) 28%, transparent), 0 8px 18px -10px color-mix(in srgb, var(--accent, var(--primary)) 50%, transparent); }
 .agx-cd[data-chain="me"]::after { box-shadow: inset 0 0 0 2.5px var(--accent, var(--primary)); }
 .agx-cd[data-busy] { cursor: progress; }
+/* A card a lane's Sync is merging right now: the same progress cursor a card's own Update wears, and one quiet accent inset — the weight of the chain's ring, without its outer glow. */
+.agx-cd[data-sync="running"] { cursor: progress; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent, var(--primary)) 30%, transparent), 0 1px 2px color-mix(in srgb, var(--shadow) 40%, transparent); }
+.agx-cd[data-sync="running"]::after { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent, var(--primary)) 60%, transparent); }
 .agx-cd[data-dim] { opacity: .32; filter: saturate(.25); }
 @media (prefers-reduced-motion: reduce) { .agx-cd, .agx-cd::after { transition: none; } }
 
-.agx-cd-unread {
-  position: absolute; left: 3px; top: 11px; z-index: 5; width: 7px; height: 7px; border-radius: 50%;
-  background: var(--accent, var(--primary)); box-shadow: 0 0 0 1.5px var(--surface-card);
-}
 .agx-cd-h {
   /* The face (20px + its 3px ring) is centred 16px from the top and the right: the card's 14px corner arc and the ring share a centre, so the gap to the curve is even. */
   display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 6px 0 10px; min-width: 0; border-radius: 3px 14px 0 0;
@@ -4404,6 +4585,10 @@ html[data-reduce-motion] #ag-cover * { animation: none !important; }
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c, var(--text)) 22%, transparent);
 }
 .agx-cd-tag > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* The tag's words wear the theme's text lifted for the washes under them (--strip-ink):
+   a share of the accent cannot clear 4.5:1 on all 37 palettes. The accent stays on the tint and the dot. */
+.agx-cd-tag[data-ink="strip"] { color: var(--strip-ink, var(--text)); }
+.agx-cd-tag[data-ink="strip"]::before { content: ""; flex: none; width: 4px; height: 4px; border-radius: 50%; background: var(--c, var(--text)); }
 .agx-cd-tag b { font: inherit; flex: none; }
 .agx-cd-sk-chip {
   flex: none; display: inline-flex; align-items: center; gap: 3px; height: 20px; padding: 0 6px 0 5px; margin-left: 2px; border-radius: 3px 8px 3px 8px;
@@ -4500,6 +4685,7 @@ button.agx-cd-tk:hover { color: var(--text); background: color-mix(in srgb, var(
 .agx-cd-lf > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agx-cd-lf svg { flex: none; }
 .agx-cd-lf[data-tone="some"], .agx-cd-lf[data-tone="run"] { color: var(--primary-ink, var(--primary)); font-weight: 600; background: color-mix(in srgb, var(--primary) 6%, transparent); }
+.agx-cd-lf[data-tone="blocked"] { color: var(--warning-ink, var(--warning)); font-weight: 600; background: color-mix(in srgb, var(--warning) 8%, transparent); }
 .agx-cd-lf-bar { flex: none; width: 120px; height: 5px; border-radius: 3px; background: color-mix(in srgb, var(--primary) 22%, transparent); position: relative; overflow: hidden; }
 .agx-cd-lf-bar::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 40%; border-radius: 3px; background: var(--primary); animation: agx-cd-lf-run 1.1s ease-in-out infinite alternate; }
 @keyframes agx-cd-lf-run { to { transform: translateX(150%); } }
@@ -4585,6 +4771,46 @@ button.agx-cd-tk:hover { color: var(--text); background: color-mix(in srgb, var(
 }
 .agx-tip-3 kbd { flex: none; padding: 2px 6px; border-radius: 3px 6px 3px 6px; background: color-mix(in srgb, var(--tip-ink) 10%, transparent); font: 600 calc(10px * var(--agx-fs, 1)) var(--font-mono, ui-monospace, monospace); color: var(--tip-ink); }
 .agx-tip-r { margin-left: auto; color: color-mix(in srgb, var(--tip-ink) 52%, transparent); }
+
+/* The chain tip (lib/chainTip.ts): a worker's engines as a ladder. Wider than the 272px card because a model name is
+   the readable part of a step, and it wraps anywhere instead of stretching the card. */
+.agx-tip[data-chain] { width: 340px; }
+.agx-tip-sec { margin: 10px 0 5px; font-size: calc(10px * var(--agx-fs, 1)); letter-spacing: .08em; text-transform: uppercase; color: color-mix(in srgb, var(--tip-ink) 52%, transparent); }
+.agx-tip-ladder { display: grid; }
+/* Capped so the footer stays under it. The card takes no pointer (the tip would close as the pointer moved onto it), so a
+   chain longer than four steps is clipped here rather than scrolled by the wheel; `CHAIN_MAX` is 4 today. */
+.agx-tip-ladder[data-scroll] { max-height: 260px; overflow-y: auto; overscroll-behavior: contain; }
+.agx-tip-step { display: grid; grid-template-columns: 22px 18px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 4px 6px; border-radius: 8px; }
+.agx-tip-step[data-now] { background: color-mix(in srgb, var(--success) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--success) 45%, transparent); }
+.agx-tip-num { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: calc(10.5px * var(--agx-fs, 1)); font-weight: 650; font-variant-numeric: tabular-nums; background: color-mix(in srgb, var(--tip-ink) 12%, transparent); }
+.agx-tip-eg { width: 18px; height: 18px; border-radius: 5px; display: grid; place-items: center; font-size: calc(10.5px * var(--agx-fs, 1)); font-weight: 700; text-transform: uppercase; background: color-mix(in srgb, var(--tip-ink) 18%, transparent); }
+.agx-tip-mdl { min-width: 0; font: calc(11.5px * var(--agx-fs, 1)) var(--font-mono, ui-monospace, monospace); overflow-wrap: anywhere; }
+.agx-tip-mdl small { display: block; font-family: var(--font-sans, inherit); font-size: calc(10px * var(--agx-fs, 1)); color: color-mix(in srgb, var(--tip-ink) 58%, transparent); }
+.agx-tip-tag { padding: 2px 7px; border-radius: 99px; white-space: nowrap; font-size: calc(10px * var(--agx-fs, 1)); font-weight: 650; }
+.agx-tip-tag[data-kind="now"] { background: var(--success); color: var(--tip-bg); }
+.agx-tip-tag[data-kind="main"] { background: color-mix(in srgb, var(--tip-ink) 16%, transparent); }
+.agx-tip-tag[data-kind="fb"] { border: 1px solid color-mix(in srgb, var(--tip-ink) 24%, transparent); color: color-mix(in srgb, var(--tip-ink) 62%, transparent); }
+.agx-tip-gap { height: 22px; margin-left: 21px; padding-left: 16px; border-left: 2px dashed color-mix(in srgb, var(--tip-ink) 26%, transparent); display: flex; align-items: center; font-size: calc(10.5px * var(--agx-fs, 1)); color: color-mix(in srgb, var(--tip-ink) 52%, transparent); }
+.agx-tip-why { margin: 7px 0 0; padding: 7px 9px; border-radius: 8px; overflow-wrap: anywhere; font-size: calc(11.5px * var(--agx-fs, 1)); display: flex; align-items: flex-start; gap: 6px; background: color-mix(in srgb, var(--warning) 15%, transparent); border: 1px solid color-mix(in srgb, var(--warning) 38%, transparent); color: color-mix(in srgb, var(--tip-ink) 92%, transparent); }
+.agx-tip-why > svg { flex: none; margin-top: 1px; color: var(--warning); }
+.agx-tip-why[data-kind="none"] { background: color-mix(in srgb, var(--tip-ink) 7%, transparent); border-color: color-mix(in srgb, var(--tip-ink) 14%, transparent); color: color-mix(in srgb, var(--tip-ink) 62%, transparent); }
+.agx-tip-tries { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; font-size: calc(11px * var(--agx-fs, 1)); color: color-mix(in srgb, var(--tip-ink) 68%, transparent); }
+.agx-tip-tries i { width: 9px; height: 9px; border-radius: 50%; background: color-mix(in srgb, var(--tip-ink) 18%, transparent); }
+.agx-tip-tries i[data-on] { background: var(--success); }
+.agx-tip-tries span { margin-left: 4px; }
+.agx-tip-after { display: flex; gap: 6px; flex-wrap: wrap; }
+.agx-tip-after span { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 99px; font-size: calc(11px * var(--agx-fs, 1)); border: 1px solid color-mix(in srgb, var(--tip-ink) 24%, transparent); }
+.agx-tip-after svg { flex: none; }
+.agx-tip-after span[data-kind="pass"] { color: var(--success); border-color: color-mix(in srgb, var(--success) 45%, transparent); }
+.agx-tip-after span[data-kind="fail"] { color: var(--error); border-color: color-mix(in srgb, var(--error) 45%, transparent); }
+.agx-tip-switch { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; align-items: center; font-size: calc(11px * var(--agx-fs, 1)); }
+.agx-tip-switch > span:first-child { color: color-mix(in srgb, var(--tip-ink) 58%, transparent); }
+.agx-tip-switch > span:last-child { display: inline-flex; align-items: center; gap: 6px; }
+.agx-tip-switch i { position: relative; flex: none; width: 26px; height: 15px; border-radius: 99px; background: color-mix(in srgb, var(--tip-ink) 18%, transparent); }
+.agx-tip-switch i::after { content: ""; position: absolute; left: 2px; top: 2px; width: 11px; height: 11px; border-radius: 50%; background: color-mix(in srgb, var(--tip-ink) 70%, transparent); }
+.agx-tip-switch [data-on] i { background: var(--success); }
+.agx-tip-switch [data-on] i::after { left: 13px; background: #fff; }
+.agx-tip-foot { margin-top: 9px; padding-top: 8px; border-top: 1px solid color-mix(in srgb, var(--tip-ink) 10%, transparent); font-size: calc(11px * var(--agx-fs, 1)); color: color-mix(in srgb, var(--tip-ink) 56%, transparent); }
 
 /* People on a card: a face with a ring in the colour of what they said. */
 .agx-cd-face {
@@ -4757,6 +4983,9 @@ button.agx-cd-chip:hover, button.agx-cd-chip:focus-visible { background: color-m
 .agx-jl-pr:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .agx-jl-stack { display: inline-flex; align-items: center; padding-left: 4px; }
 .agx-jl-stack > * { margin-left: -4px; }
+.agx-jl-head .agx-jl-stack { flex: none; }
+.agx-jl-stack[data-focus] { border-radius: 999px; }
+.agx-jl-stack[data-focus]:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .agx-jl-stack .more { margin-left: 4px; font-size: calc(10px * var(--agx-fs, 1)); color: var(--text4); }
 .agx-jl-face {
   --r: transparent; flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; overflow: hidden;
@@ -4823,7 +5052,6 @@ button.agx-cd-chip:hover, button.agx-cd-chip:focus-visible { background: color-m
 .agx-tip-dl dd { margin: 0; color: color-mix(in srgb, var(--tip-ink) 86%, transparent); }
 .agx-tip-dl[data-rows] { grid-template-columns: max-content 1fr; column-gap: 10px; }
 .agx-tip-1 > .agx-tip-m, .agx-tip-1 > .agx-tip-tg { white-space: nowrap; flex-shrink: 0; }
-.agx-tip-need { margin-top: 8px; padding: 5px 8px; border-radius: 6px; border: 1px dashed #93b0f5; color: #b9ccf8; }
 
 /* ===== Starboard (components/StarboardView.tsx) =====
    Three levels chosen by the view's own width: md under 1700px, lg to 2300px, xl above.
@@ -4917,6 +5145,7 @@ button.agx-cd-chip:hover, button.agx-cd-chip:focus-visible { background: color-m
 .sb-card[data-st="ask"]::before { background: var(--warning); }
 .sb-card[data-st="ask"] { border-color: color-mix(in srgb, var(--warning) 40%, transparent); background: color-mix(in srgb, var(--warning) 8%, var(--surface-card)); }
 .sb-card[data-st="done"] { opacity: .8; }
+.sb-card[data-sel] { box-shadow: inset 0 0 0 1.5px var(--primary); }
 .sb-r1 { display: flex; align-items: center; gap: .5em; min-width: 0; }
 .sb-nm { flex: 1 1 auto; min-width: 6em; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
 .sb-pill { font: 600 .7em var(--font-mono, ui-monospace, monospace); padding: .2em .55em; border-radius: 99px; border: 1px solid var(--surface-line); background: var(--bg2); color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 8em; flex: 0 1 auto; min-width: 0; }
@@ -4947,8 +5176,9 @@ button.agx-cd-chip:hover, button.agx-cd-chip:focus-visible { background: color-m
 .sb-body[data-st="ask"] .sb-disc { fill: color-mix(in srgb, var(--warning) 14%, var(--surface-card)); stroke: var(--warning); stroke-width: 3; }
 .sb-body[data-st="quiet"] .sb-disc { fill: var(--surface-card); stroke-dasharray: 3 4; }
 .sb-bn { font-weight: 600; fill: var(--text); } .sb-body[data-st="done"] .sb-bn { fill: var(--text3); }
-/* The generic .sb [data-tip] ring (0,3,0) beat the plain .sb-body rule and drew a box around the whole <g>, halo and labels included, which grows with a working body. */
-.sb-body { cursor: default; } .sb .sb-body[data-tip]:focus-visible { outline: none; } .sb-body:focus-visible .sb-disc { stroke: var(--primary); stroke-width: 4; }
+/* A click focuses the <g> without :focus-visible, and Chromium's SVG stylesheet still rings any focused SVG element (`:focus { outline: auto }`): the native two-tone box around the whole group, halo and labels included. So the reset is not scoped to :focus-visible; it is `!important` to beat the global ring too. Keyboard focus shows on the disc instead. */
+.sb-body { cursor: default; } .sb .sb-body[data-tip] { outline: none !important; } .sb-body:focus-visible .sb-disc { stroke: var(--primary); stroke-width: 4; }
+.sb-body[data-dim] { opacity: .25; }
 .sb-halo, .sb-spin { fill: none; stroke: var(--success); stroke-width: 1.5; transform-box: fill-box; transform-origin: center; }
 .sb-spin { stroke-width: 3.2; stroke-linecap: round; animation: sb-spin 5s linear infinite; }
 .sb-halo { animation: sb-halo 2.4s ease-out infinite; }
@@ -4984,12 +5214,666 @@ html[data-reduce-motion] .sb-spin, html[data-reduce-motion] .sb-halo { animation
 /* The quota panel is text and sizes to its content, which the grid cell cannot always hold: scroll inside, never cut. The throughput panel is a chart: a chart is never scrolled, it gets the height that is left. */
 .sb-slot[data-glyph="quota"] > .panel > .panel-h + div { overflow-y: auto; }
 .sb-slot[data-glyph="thru"] > .panel > .panel-h + div { min-height: 0; overflow: hidden; }
+/* A range or provider whose numbers are still on the way says so in words: the
+   dim alone read as a drawing glitch. The space is reserved so the selects do
+   not jump while it comes and goes. */
+.sb-recalc { display: inline-flex; align-items: center; justify-content: center; min-width: 1.6em; height: 2.2em; }
+/* Under 1700 the header cannot hold the brand, four chips, seven window buttons,
+   three selects, Clear and the clock on one line: with a filter on, Clear was
+   drawn over the clock. The controls take a line of their own. */
+@container sb (max-width: 1699px) {
+  .sb-screen { grid-template-rows: 66px 84px minmax(0, 1.5fr) minmax(0, 1fr); }
+  .sb-head { flex-wrap: wrap; row-gap: .35em; }
+  .sb-brand, .sb-verdict, .sb-clock { order: 1; }
+  .sb-controls { order: 2; flex: 1 0 100%; }
+}
 /* Below the grid's own minimum (1100) the three columns used to run off the right edge. Two columns instead, stacked in the order they read; the page scrolls down, never sideways. */
 @container sb (max-width: 1099px) {
-  .sb-screen { min-width: 0; height: auto; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto auto 460px 340px 380px 300px;
+  /* The orrery gets the crew column's height: at 340 the session labels, their
+     second line and the ring names could not all fit at 900x700 once the type
+     was raised, and the packer had nowhere to put them but outside the box. */
+  .sb-screen { min-width: 0; height: auto; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto auto 460px 460px 380px 300px;
     grid-template-areas: "head head" "kpi kpi" "crew right" "orrery orrery" "feed feed" "bot bot"; }
   .sb-head { flex-wrap: wrap; row-gap: .6em; }
   .sb-verdict { flex: 1 1 auto; justify-content: flex-start; }
   .sb-controls { flex-wrap: wrap; }
   .sb-kpi { grid-auto-flow: row; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: 84px; }
+}
+
+/*
+ * A window shorter than a rail: 600px of height is where the rail's buttons
+ * plus a 480px view stop fitting, and below it the shell used to clip instead
+ * of scroll — the Settings entry and the git commit box were simply outside
+ * and no ancestor could bring them back. 480 is the view's floor, not the
+ * window's: the rail scrolls inside it (ViewRail).
+ */
+@media (max-height: 600px) {
+  .agx-shell { overflow-y: auto; }
+  .agx-shell-grow { flex: 1 1 auto; min-height: 480px; }
+}
+
+/* ── the first run ───────────────────────────────────────────────────────────
+   A full-window wizard: a rail, a body and a footer, drawn from the mockup
+   (.agx-tmp/mock/). Type is 12px at its smallest — under that a badge beside a
+   14px mark stops reading, and this screen is read once, quickly. */
+.setup-shell {
+  display: flex;
+  height: 100vh;
+  min-height: 0;
+  background: var(--surface-page);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: calc(12px * var(--agx-fs, 1));
+}
+.setup-rail {
+  width: 248px;
+  flex: none;
+  background: var(--surface-nav);
+  border-right: 1px solid var(--surface-line);
+  padding: 18px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.setup-brand { display: flex; align-items: center; gap: 8px; padding: 0 6px 16px; }
+.setup-brand-drop {
+  width: 22px; height: 22px; flex: none; border-radius: 7px; display: grid; place-items: center;
+  background: var(--surface-inset); color: var(--text2); box-shadow: inset 0 0 0 1px var(--surface-line);
+}
+.setup-brand-name { display: block; font-weight: 800; font-size: calc(14px * var(--agx-fs, 1)); letter-spacing: -0.01em; }
+.setup-brand-sub { display: block; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text4); letter-spacing: 0.06em; text-transform: uppercase; }
+.setup-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.setup-step {
+  display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px;
+  color: var(--text3); font-size: calc(12px * var(--agx-fs, 1));
+}
+.setup-step-n {
+  width: 22px; height: 22px; flex: none; border-radius: 50%; display: grid; place-items: center;
+  font-size: calc(12px * var(--agx-fs, 1)); font-weight: 700;
+  background: var(--bg); box-shadow: inset 0 0 0 1px var(--surface-line); color: var(--text4);
+}
+.setup-step[data-state="current"] { background: var(--bg); color: var(--text); font-weight: 650; box-shadow: inset 0 0 0 1px var(--surface-line); }
+.setup-step[data-state="current"] .setup-step-n { background: var(--primary); color: var(--on-primary); box-shadow: none; }
+.setup-step[data-state="done"] { color: var(--text2); }
+.setup-step[data-state="done"] .setup-step-n {
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+  color: color-mix(in srgb, var(--success) 80%, var(--text));
+  box-shadow: none;
+}
+.setup-step-what { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.setup-step-what small { font-size: calc(12px * var(--agx-fs, 1)); color: var(--text4); font-weight: 400; }
+.setup-rail-foot {
+  margin-top: auto; padding: 10px 8px 0; border-top: 1px solid var(--surface-line);
+  font-size: calc(12px * var(--agx-fs, 1)); color: var(--text4); line-height: 1.5;
+}
+.setup-rail-foot b { color: var(--text2); font-weight: 650; }
+
+.setup-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.setup-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 20px 26px 8px; scrollbar-width: thin; }
+.setup-inner { max-width: 660px; margin: 0 auto; }
+.setup-foot {
+  flex: none; display: flex; align-items: center; gap: 10px;
+  padding: 12px 26px; border-top: 1px solid var(--surface-line);
+  background: color-mix(in srgb, var(--bg) 92%, var(--bg2));
+}
+.setup-foot-inner { display: flex; align-items: center; gap: 10px; width: 100%; }
+.setup-grow { flex: 1 1 auto; }
+.setup-tally { font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); }
+.setup-tally b { color: var(--text); font-weight: 650; }
+
+.setup-eyebrow { font-size: calc(12px * var(--agx-fs, 1)); font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text4); }
+.setup-h1 { font-size: calc(24px * var(--agx-fs, 1)); line-height: 1.2; font-weight: 800; letter-spacing: -0.02em; margin: 6px 0 0; }
+.setup-lede {
+  font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: calc(13px * var(--agx-fs, 1)); line-height: 1.55; color: var(--text2); margin: 8px 0 0; max-width: 60ch;
+}
+.setup-hint { font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.5; color: var(--text4); margin: 10px 0 0; }
+.setup-note { font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.5; color: var(--text3); margin: 8px 0 0; }
+.setup-link {
+  border: 0; background: none; padding: 0; color: var(--primary); font: inherit; font-weight: 650;
+  cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
+}
+.setup-link:disabled { opacity: 0.6; cursor: default; }
+.setup-link:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 2px; }
+
+.setup-group { margin-top: 16px; }
+.setup-group-head { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.setup-group-title { font-size: calc(12px * var(--agx-fs, 1)); font-weight: 700; color: var(--text2); }
+.setup-group-why { font-size: calc(12px * var(--agx-fs, 1)); color: var(--text4); }
+
+/* The tile: agent, theme, later a project. 160x120 is the floor. */
+.setup-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; margin-top: 12px; }
+.setup-tiles-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.setup-tile {
+  position: relative; display: flex; flex-direction: column; gap: 8px;
+  min-height: 120px; padding: 12px; border-radius: 12px;
+  background: var(--surface-card); border: 1px solid var(--surface-line);
+  transition: border-color 150ms var(--ease-out), background-color 150ms var(--ease-out), transform 120ms var(--ease-out);
+}
+.setup-tile:hover { border-color: color-mix(in srgb, var(--text) 22%, var(--surface-line)); }
+.setup-tile:active { transform: scale(0.985); }
+.setup-tile[data-on="1"] { box-shadow: inset 0 0 0 1.5px var(--primary); border-color: transparent; }
+.setup-tile-pick {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
+  width: 100%; flex: 1 1 auto; border: 0; background: none; padding: 0; margin: 0;
+  text-align: left; color: inherit; cursor: pointer; font: inherit;
+}
+.setup-tile-pick:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; border-radius: 8px; }
+.setup-tile-mark {
+  width: 40px; height: 40px; flex: none; border-radius: 10px; display: grid; place-items: center;
+  background: color-mix(in srgb, var(--setup-hue, var(--text3)) 14%, transparent);
+  color: var(--setup-hue, var(--text3));
+}
+.setup-tile-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.setup-tile-name { font-size: calc(13px * var(--agx-fs, 1)); font-weight: 750; color: var(--text); }
+.setup-tile-what { font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.4; color: var(--text3); }
+.setup-tile-check {
+  position: absolute; top: 8px; right: 8px; width: 18px; height: 18px; border-radius: 50%;
+  display: grid; place-items: center; background: var(--primary); color: var(--on-primary);
+  font-size: calc(12px * var(--agx-fs, 1)); font-weight: 800;
+}
+.setup-tile-foot { margin-top: auto; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.setup-badge {
+  display: inline-flex; align-items: center; min-height: 20px; padding: 2px 8px; border-radius: 999px;
+  font-size: calc(12px * var(--agx-fs, 1)); font-weight: 600; line-height: 1.3; max-width: 100%;
+}
+.setup-badge-ok { background: color-mix(in srgb, var(--success) 12%, transparent); color: color-mix(in srgb, var(--success) 80%, var(--text)); }
+.setup-badge-warn { background: color-mix(in srgb, var(--warning) 14%, transparent); color: color-mix(in srgb, var(--warning) 80%, var(--text)); }
+.setup-badge-off { box-shadow: inset 0 0 0 1px var(--surface-line); color: var(--text3); }
+
+/* A theme tile's mark is a little window: ground, card and three lines. */
+.setup-tile-theme { min-height: 120px; }
+.setup-tile-preview { display: block; width: 100%; flex: none; }
+.setup-prev {
+  display: flex; height: 54px; border-radius: 8px; overflow: hidden;
+  box-shadow: inset 0 0 0 1px var(--surface-line);
+}
+.setup-prev-side { width: 30%; background: #f6f8fa; }
+.setup-prev[data-kind="dark"] .setup-prev-side { background: #161b22; }
+.setup-prev-side[data-half="dark"] { background: #0d1117; }
+.setup-prev-main { flex: 1; padding: 8px; display: flex; flex-direction: column; gap: 6px; background: #ffffff; }
+.setup-prev[data-kind="dark"] .setup-prev-main { background: #0d1117; }
+.setup-prev-line { height: 5px; border-radius: 3px; background: #d0d7de; }
+.setup-prev[data-kind="dark"] .setup-prev-line { background: #30363d; }
+
+.setup-palettes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.setup-pal {
+  display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 6px 10px;
+  border-radius: 9px; background: var(--surface-card); border: 1px solid var(--surface-line);
+  color: var(--text); font: inherit; font-size: calc(12px * var(--agx-fs, 1)); text-align: left; cursor: pointer;
+  transition: border-color 150ms var(--ease-out);
+}
+.setup-pal:hover { border-color: color-mix(in srgb, var(--text) 22%, var(--surface-line)); }
+.setup-pal:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.setup-pal[data-on="1"] { box-shadow: inset 0 0 0 1.5px var(--primary); border-color: transparent; }
+.setup-pal-sw { display: flex; flex: none; border-radius: 5px; overflow: hidden; box-shadow: inset 0 0 0 1px var(--surface-line); }
+.setup-pal-sw i { width: 11px; height: 20px; display: block; }
+.setup-pal-name { font-weight: 650; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setup-pal-check { margin-left: auto; display: grid; place-items: center; color: var(--primary); flex: none; }
+.setup-pal-why { margin-left: auto; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text4); flex: none; }
+
+.setup-cmd { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.setup-cmd code {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  background: var(--surface-inset); border-radius: 7px; padding: 8px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: calc(12px * var(--agx-fs, 1));
+}
+
+/* Step 3: two counters and one row per tool. */
+.setup-tools-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+.setup-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.setup-group-count {
+  font-size: calc(12px * var(--agx-fs, 1)); color: var(--text4); font-variant-numeric: tabular-nums;
+  min-width: 14px; text-align: right;
+}
+.setup-group-toggle {
+  margin-left: auto; border: 0; background: transparent; color: var(--text3);
+  font: inherit; font-size: calc(12px * var(--agx-fs, 1)); cursor: pointer; padding: 0 2px; border-radius: 4px;
+}
+.setup-group-toggle:hover { color: var(--text); }
+.setup-group-toggle:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.setup-tool-card {
+  margin-top: 8px; border-radius: 10px; overflow: hidden;
+  background: var(--surface-card); box-shadow: inset 0 0 0 1px var(--surface-line);
+}
+.setup-tool-row {
+  display: grid; grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 4px 10px; align-items: start; padding: 10px 12px;
+  border-top: 1px solid var(--surface-line);
+}
+.setup-tool-row:first-child { border-top: 0; }
+.setup-tool-row:hover { background: color-mix(in srgb, var(--text) 3%, transparent); }
+.setup-tool-mark {
+  display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px;
+  font-size: calc(12px * var(--agx-fs, 1)); font-weight: 750;
+  background: color-mix(in srgb, var(--text4) 14%, transparent); color: var(--text3);
+}
+.setup-tool-row[data-tone="ok"] .setup-tool-mark {
+  background: color-mix(in srgb, var(--success) 14%, transparent); color: color-mix(in srgb, var(--success) 80%, var(--text));
+}
+.setup-tool-row[data-tone="warn"] .setup-tool-mark {
+  background: color-mix(in srgb, var(--warning) 16%, transparent); color: color-mix(in srgb, var(--warning) 80%, var(--text));
+}
+.setup-tool-what { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.setup-tool-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: calc(13px * var(--agx-fs, 1)); font-weight: 700; color: var(--text); }
+.setup-tool-name .setup-badge { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.setup-tool-help { font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.45; color: var(--text3); max-width: 62ch; }
+.setup-tool-end { display: flex; align-items: center; gap: 6px; flex: none; }
+.setup-tool-cmd { grid-column: 2 / -1; padding: 2px 0 4px; }
+.setup-tool-cmd .setup-cmd { margin-top: 0; }
+.setup-tool-empty { margin: 0; padding: 10px 12px; }
+
+/* Step 4: the folder entry, the folder row and one checkbox per repository. */
+.setup-picks { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+.setup-pick {
+  display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+  min-height: 64px; padding: 12px 14px; border-radius: 10px; cursor: pointer;
+  font: inherit; color: var(--text);
+  background: var(--surface-card); border: 1px solid var(--surface-line);
+  transition: border-color 150ms var(--ease-out), transform 120ms var(--ease-out);
+}
+.setup-pick:hover:not(:disabled) { border-color: color-mix(in srgb, var(--text) 22%, var(--surface-line)); }
+.setup-pick:active:not(:disabled) { transform: scale(0.985); }
+.setup-pick:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+.setup-pick:disabled { opacity: 0.6; cursor: default; }
+.setup-pick-mark {
+  display: grid; place-items: center; width: 30px; height: 30px; flex: none; border-radius: 8px;
+  color: var(--primary); background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.setup-pick-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.setup-pick-name { font-size: calc(13px * var(--agx-fs, 1)); font-weight: 750; }
+.setup-pick-what { font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.45; color: var(--text3); }
+.setup-typed { display: flex; flex-direction: column; gap: 6px; }
+.setup-typed-label { font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); }
+.setup-folder {
+  display: flex; align-items: center; gap: 8px; margin-top: 14px;
+  padding: 8px 10px 8px 12px; border-radius: 9px;
+  background: var(--surface-inset); box-shadow: inset 0 0 0 1px var(--surface-line);
+}
+.setup-folder-mark { display: grid; place-items: center; flex: none; color: var(--text3); }
+.setup-folder code {
+  flex: 1 1 auto; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: calc(12px * var(--agx-fs, 1)); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.setup-repos-head { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.setup-repos-count { margin: 0; flex: 1 1 auto; min-width: 0; }
+.setup-repos-count code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.setup-repolist {
+  margin-top: 8px; border-radius: 10px; overflow: hidden;
+  background: var(--surface-card); box-shadow: inset 0 0 0 1px var(--surface-line);
+}
+.setup-repo {
+  display: flex; align-items: center; gap: 10px; min-height: 30px; padding: 8px 12px;
+  border-top: 1px solid var(--surface-line); cursor: pointer;
+}
+.setup-repo:first-child { border-top: 0; }
+.setup-repo:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+.setup-repo:focus-within { background: color-mix(in srgb, var(--primary) 7%, transparent); }
+.setup-repobox {
+  width: 14px; height: 14px; flex: none; margin: 0; cursor: pointer;
+  accent-color: var(--primary); border-radius: 4px;
+}
+.setup-repobox:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.setup-repomark { display: grid; place-items: center; flex: none; color: var(--text3); }
+.setup-reponame { font-size: calc(12px * var(--agx-fs, 1)); font-weight: 650; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setup-repobranch {
+  margin-left: auto; flex: none; max-width: 42%;
+  font-size: calc(12px * var(--agx-fs, 1)); color: var(--text4); white-space: nowrap; overflow: hidden;
+}
+
+/* Step 4's two ways in sit side by side; at 960 they keep their shape and the
+   body scrolls rather than the cards shrinking into each other. */
+.setup-picks-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: stretch; }
+.setup-pick-go {
+  margin-left: auto; flex: none; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3);
+  padding: 4px 10px; border-radius: 7px; background: var(--surface-inset);
+  box-shadow: inset 0 0 0 1px var(--surface-line);
+}
+.setup-pick-search { color: var(--text3); background: color-mix(in srgb, var(--text) 8%, transparent); }
+
+/* ── the Finder ──────────────────────────────────────────────────────────────
+   A mode of the window, not a sheet: its own head, body and bottom bar. The
+   commit action keeps the bottom-right corner in every state. */
+.finder-shell {
+  height: 100vh; min-height: 0; display: flex; flex-direction: column;
+  background: var(--surface-page); color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: calc(12px * var(--agx-fs, 1)); outline: none;
+}
+.finder-head {
+  flex: none; display: flex; align-items: center; gap: 10px;
+  min-height: 46px; padding: 6px 18px 6px 12px;
+  border-bottom: 1px solid var(--surface-line); background: var(--surface-nav);
+}
+.finder-back {
+  display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px 0 4px;
+  border: 0; border-radius: 7px; background: transparent; color: var(--text2);
+  font: inherit; font-size: calc(12px * var(--agx-fs, 1)); font-weight: 650; cursor: pointer;
+}
+.finder-back:hover { background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--text); }
+.finder-back:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.finder-title { margin: 0; font-size: calc(14px * var(--agx-fs, 1)); font-weight: 750; letter-spacing: -0.01em; color: var(--text); }
+.finder-badge {
+  display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px;
+  border-radius: 999px; color: var(--text3); box-shadow: inset 0 0 0 1px var(--surface-line);
+  font-size: calc(12px * var(--agx-fs, 1)); white-space: nowrap;
+}
+.finder-grow { flex: 1 1 auto; }
+.finder-icon {
+  width: 26px; height: 26px; flex: none; display: grid; place-items: center;
+  border: 0; border-radius: 8px; background: transparent; color: var(--text3); cursor: pointer;
+}
+.finder-icon:hover { background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); }
+.finder-icon:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.finder-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 16px 22px 10px; scrollbar-width: thin; }
+.finder-inner { max-width: 980px; margin: 0 auto; }
+.finder-card {
+  margin-top: 12px; padding: 14px 16px; border-radius: 12px;
+  background: var(--surface-card); box-shadow: inset 0 0 0 1px var(--surface-line);
+}
+.finder-h2 { margin: 0; font-size: calc(13px * var(--agx-fs, 1)); font-weight: 750; color: var(--text); }
+.finder-copy { margin: 6px 0 0; font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.55; color: var(--text3); max-width: 78ch; }
+.finder-quiet { color: var(--text4); }
+.finder-scan { max-width: 560px; }
+.finder-scan-top { display: flex; align-items: baseline; gap: 10px; }
+.finder-time { margin-left: auto; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text4); font-variant-numeric: tabular-nums; }
+.finder-bar {
+  height: 6px; margin-top: 12px; border-radius: 999px; overflow: hidden;
+  background: var(--surface-inset); box-shadow: inset 0 0 0 1px var(--surface-line);
+}
+.finder-bar span { display: block; height: 100%; border-radius: 999px; background: var(--primary); transition: width 300ms var(--ease-out); }
+.finder-count { margin: 10px 0 0; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); }
+.finder-count b { color: var(--text); font-weight: 700; }
+.finder-where {
+  margin: 4px 0 0; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text4);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.finder-stop { margin-top: 12px; }
+.finder-filters { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+.finder-searchbox {
+  display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0;
+  height: 32px; padding: 0 10px; border-radius: 8px;
+  background: var(--surface-inset); box-shadow: inset 0 0 0 1px var(--surface-line); color: var(--text4);
+}
+.finder-searchbox:focus-within { box-shadow: inset 0 0 0 1px var(--primary); color: var(--text2); }
+.finder-filter {
+  flex: 1 1 auto; min-width: 0; border: 0; outline: none; background: transparent;
+  font: inherit; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text);
+}
+.finder-filter::placeholder { color: var(--text4); }
+.finder-kbd {
+  flex: none; min-width: 18px; text-align: center; padding: 1px 6px; border-radius: 5px;
+  font: inherit; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text4);
+  box-shadow: inset 0 0 0 1px var(--surface-line);
+}
+.finder-note { margin: 10px 0 0; font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.5; color: var(--text3); }
+.finder-group { margin-top: 14px; }
+.finder-group-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; padding: 0 2px; }
+.finder-parent { font-size: calc(12px * var(--agx-fs, 1)); color: var(--text2); font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.finder-group-n { font-size: calc(12px * var(--agx-fs, 1)); color: var(--text4); }
+.finder-group-picked { font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); }
+.finder-rows {
+  margin-top: 6px; border-radius: 11px; overflow: hidden;
+  background: var(--surface-card); box-shadow: inset 0 0 0 1px var(--surface-line);
+}
+.finder-row {
+  display: grid; grid-template-columns: 16px minmax(92px, 1fr) minmax(0, 1.35fr) minmax(64px, auto) 84px;
+  gap: 12px; align-items: center; min-height: 34px; padding: 6px 12px;
+  border-top: 1px solid var(--surface-line); cursor: pointer;
+}
+.finder-row:first-child { border-top: 0; }
+.finder-row:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+.finder-row[data-on="1"] { background: color-mix(in srgb, var(--primary) 6%, transparent); }
+.finder-row:focus-within { background: color-mix(in srgb, var(--primary) 8%, transparent); }
+.finder-row-name { font-size: calc(12px * var(--agx-fs, 1)); font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.finder-row-path { font-size: calc(12px * var(--agx-fs, 1)); color: var(--text4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.finder-row-branch {
+  display: inline-flex; align-items: center; gap: 6px; min-width: 0; justify-self: start;
+  max-width: 100%; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); white-space: nowrap;
+}
+.finder-row-branch svg { flex: none; }
+.finder-row-age { justify-self: end; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text4); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.finder-foot {
+  flex: none; display: flex; align-items: center; gap: 10px;
+  padding: 10px 22px; border-top: 1px solid var(--surface-line);
+  background: color-mix(in srgb, var(--bg) 92%, var(--bg2));
+}
+.finder-foot-left { font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); }
+
+/* The Fix all sheet: a dialog over the wizard, Esc closes it and nothing else. */
+.setup-scrim {
+  position: fixed; inset: 0; display: grid; place-items: center; padding: 24px;
+  background: color-mix(in srgb, var(--bg) 40%, rgba(0, 0, 0, 0.45));
+}
+.setup-sheet {
+  width: min(560px, 100%); max-height: min(86vh, 640px); display: flex; flex-direction: column;
+  background: var(--bg); border: 1px solid var(--surface-line); border-radius: 14px;
+  box-shadow: var(--surface-lift); outline: none;
+}
+.setup-sheet-head { padding: 16px 18px 4px; }
+.setup-sheet-title { font-size: calc(15px * var(--agx-fs, 1)); font-weight: 800; letter-spacing: -0.01em; color: var(--text); }
+.setup-sheet-lead { margin: 4px 0 0; font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.5; color: var(--text3); }
+.setup-sheet-body { padding: 10px 18px 6px; overflow-y: auto; min-height: 0; scrollbar-width: thin; }
+.setup-sheet-line { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; border-top: 1px solid var(--surface-line); }
+.setup-sheet-line:first-child { border-top: 0; }
+.setup-sheet-what { display: flex; flex-direction: column; gap: 2px; min-width: 120px; }
+.setup-sheet-name { font-size: calc(13px * var(--agx-fs, 1)); font-weight: 700; color: var(--text); }
+.setup-sheet-tier { font-size: calc(12px * var(--agx-fs, 1)); color: var(--text4); }
+.setup-sheet-cmd { display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; }
+.setup-sheet-cmd code {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  background: var(--surface-inset); border-radius: 7px; padding: 6px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text);
+}
+.setup-sheet-note { flex: 1 1 auto; font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.45; color: var(--text3); }
+.setup-sheet-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--surface-line); }
+
+.setup-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 30px; padding: 0 12px; border-radius: 8px; cursor: pointer;
+  font: inherit; font-size: calc(12px * var(--agx-fs, 1)); font-weight: 650; white-space: nowrap;
+  border: 0; background: transparent; color: var(--text);
+  transition: background-color 150ms var(--ease-out), transform 120ms var(--ease-out);
+}
+.setup-btn:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+.setup-btn:active:not(:disabled) { transform: scale(0.97); }
+.setup-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.setup-btn:disabled { opacity: 0.55; cursor: default; }
+.setup-btn-primary { background: var(--primary); color: var(--on-primary); }
+.setup-btn-primary:hover { background: color-mix(in srgb, var(--primary) 86%, var(--text)); color: var(--on-primary); }
+.setup-btn-secondary { background: var(--surface-inset); box-shadow: inset 0 0 0 1px var(--surface-line); color: var(--text); }
+.setup-btn-quiet { color: var(--text3); padding: 0 8px; }
+.setup-btn-xs { height: 24px; padding: 0 8px; font-size: calc(12px * var(--agx-fs, 1)); border-radius: 7px; }
+/* The small size is a size: a primary keeps its fill and its own ink, which a
+   later `background` here painted over (white on #eee). */
+.setup-btn-xs:not(.setup-btn-primary) { background: var(--surface-inset); box-shadow: inset 0 0 0 1px var(--surface-line); }
+.setup-kbd {
+  /* Sits on the primary button, so it is tinted from that button's own ink:
+     `--bg` gave a grey chip with grey text once the primary turned white. */
+  background: color-mix(in srgb, var(--on-primary) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--on-primary) 18%, transparent);
+  color: color-mix(in srgb, var(--on-primary) 72%, transparent);
+  border-radius: 5px; padding: 1px 6px; font-size: calc(12px * var(--agx-fs, 1)); font-weight: 500;
+}
+/* The window's own notes on step 1: the port the shell moved to, and the
+   display it draws through. The strip is the mock's banner, and its numbers are
+   the shell's. */
+.setup-banner {
+  display: flex; align-items: flex-start; flex-wrap: wrap; gap: 10px;
+  margin: 0 0 14px; padding: 10px 12px; border-radius: 10px;
+  background: color-mix(in srgb, var(--warning) 9%, var(--bg));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning) 35%, transparent);
+}
+.setup-banner-ic {
+  display: grid; place-items: center; flex: none; margin-top: 2px;
+  color: color-mix(in srgb, var(--warning) 80%, var(--text));
+}
+.setup-banner-tx { flex: 1 1 280px; min-width: 0; font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.5; color: var(--text2); }
+.setup-banner-tx b { color: var(--text); font-weight: 700; }
+.setup-banner-acts { display: flex; align-items: center; gap: 6px; margin-left: auto; flex: none; }
+.setup-banner-x { width: 26px; height: 26px; padding: 0; display: grid; place-items: center; }
+.setup-display { margin-top: 10px; }
+
+.setup-toast {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+  z-index: 60; padding: 8px 14px; border-radius: 9px;
+  background: var(--surface-card); border: 1px solid var(--surface-line); box-shadow: var(--surface-lift);
+  color: var(--text2); font-size: calc(12px * var(--agx-fs, 1));
+}
+
+/* 960 and below: the rail keeps its width and the body loses the margins it
+   cannot afford. Nothing wraps into a second line that the footer would clip. */
+@media (max-width: 900px) {
+  .finder-body { padding: 14px 16px 8px; }
+  .finder-head { padding: 6px 12px; }
+  .finder-foot { padding: 10px 16px; }
+  .finder-row { grid-template-columns: 16px minmax(80px, 1fr) minmax(0, 1fr) minmax(56px, auto) 74px; gap: 8px; }
+}
+@media (max-width: 900px) {
+  .setup-rail { width: 214px; padding: 16px 10px 12px; }
+  .setup-body, .setup-foot { padding-left: 18px; padding-right: 18px; }
+  .setup-tiles { grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); }
+}
+html[data-reduce-motion] .setup-tile,
+html[data-reduce-motion] .setup-btn,
+html[data-reduce-motion] .setup-pick,
+html[data-reduce-motion] .setup-pal,
+html[data-reduce-motion] .finder-bar span { transition: none; }
+html[data-reduce-motion] .setup-tile:active,
+html[data-reduce-motion] .setup-pick:active,
+html[data-reduce-motion] .setup-btn:active { transform: none; }
+
+/* Step 5: the project tiles, the command, and the pane it will look like. */
+.setup-projects { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+.setup-project {
+  display: flex; flex-direction: column; gap: 4px; min-height: 84px; padding: 10px 12px;
+  border-radius: 10px; background: var(--surface-card); border: 1px solid var(--surface-line);
+  color: var(--text); font: inherit; text-align: left; cursor: pointer;
+  transition: border-color 150ms var(--ease-out), background-color 150ms var(--ease-out);
+}
+.setup-project:hover { border-color: color-mix(in srgb, var(--text) 22%, var(--surface-line)); }
+.setup-project:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.setup-project[data-on="1"] { box-shadow: inset 0 0 0 1.5px var(--primary); border-color: transparent; background: color-mix(in srgb, var(--primary) 7%, var(--surface-card)); }
+.setup-project-name { font-size: calc(13px * var(--agx-fs, 1)); font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setup-project-branch { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); }
+.setup-project-branch svg { flex: none; }
+.setup-project-worked { margin-top: auto; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text4); }
+.setup-run { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.5; color: var(--text2); }
+.setup-run code { background: var(--surface-inset); border-radius: 5px; padding: 2px 6px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text); }
+.setup-lock { display: flex; align-items: flex-start; gap: 6px; }
+.setup-lock svg { flex: none; margin-top: 2px; color: var(--text4); }
+.setup-preview { margin-top: 12px; border-radius: 11px; overflow: hidden; background: var(--surface-card); box-shadow: inset 0 0 0 1px var(--surface-line); }
+.setup-preview-bar {
+  display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--surface-line);
+  background: var(--surface-inset); font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); min-width: 0;
+}
+.setup-preview-bar > span:first-of-type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setup-preview-branch { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setup-preview-screen { padding: 10px 12px 12px; font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.7; }
+.setup-preview-dim { color: var(--text4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setup-preview-cmd { color: var(--text); }
+.setup-preview-ok { color: color-mix(in srgb, var(--success) 80%, var(--text)); }
+.setup-preview-blue { color: var(--primary); }
+.setup-preview-cursor {
+  display: inline-block; width: 6px; height: 12px; background: var(--text2); vertical-align: -2px;
+  animation: setup-cursor 1.1s steps(2, start) infinite;
+}
+@keyframes setup-cursor { 50% { opacity: 0; } }
+.setup-noproject { margin-top: 14px; padding: 14px; border-radius: 11px; background: var(--surface-card); box-shadow: inset 0 0 0 1px var(--surface-line); }
+.setup-noproject-acts { display: flex; gap: 8px; margin-top: 10px; }
+
+/* The finish offer, in the corner the mock puts it, with its own actions. */
+.setup-offer {
+  position: fixed; right: 14px; bottom: 14px; width: 340px; max-width: calc(100vw - 28px);
+  z-index: 60; padding: 12px; border-radius: 12px; background: var(--bg);
+  border: 1px solid var(--surface-line); box-shadow: var(--surface-lift);
+}
+.setup-offer-title { font-size: calc(12.5px * var(--agx-fs, 1)); font-weight: 750; color: var(--text); }
+.setup-offer-body { margin-top: 4px; font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.5; color: var(--text3); }
+.setup-offer-acts { display: flex; gap: 6px; margin-top: 10px; }
+
+/* The tutorial: a centred card over the dimmed app. */
+.tut-scrim {
+  position: fixed; inset: 0; display: grid; place-items: center; padding: 20px;
+  background: color-mix(in srgb, var(--text) 26%, transparent);
+}
+.tut {
+  width: min(880px, 100%); max-height: 100%; display: flex; flex-direction: column;
+  background: var(--bg); border-radius: 14px; overflow: hidden;
+  border: 1px solid var(--surface-line); box-shadow: var(--surface-lift);
+}
+.tut-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--surface-line); }
+.tut-title { font-size: calc(13px * var(--agx-fs, 1)); font-weight: 800; }
+.tut-where { font-size: calc(12px * var(--agx-fs, 1)); color: var(--text4); }
+.tut-body { display: flex; min-height: 0; flex: 1 1 auto; }
+.tut-list { width: 244px; flex: none; border-right: 1px solid var(--surface-line); background: var(--surface-nav); padding: 10px 8px; }
+.tut-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px; border: 0;
+  border-radius: 7px; background: none; color: var(--text3); font: inherit; font-size: calc(12px * var(--agx-fs, 1));
+  text-align: left; cursor: pointer;
+}
+.tut-item:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
+.tut-item:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.tut-item[data-state="on"] { background: var(--bg); box-shadow: inset 0 0 0 1px var(--surface-line); color: var(--text); font-weight: 650; }
+.tut-n {
+  width: 20px; height: 20px; flex: none; border-radius: 50%; display: grid; place-items: center;
+  font-size: calc(12px * var(--agx-fs, 1)); font-weight: 700; box-shadow: inset 0 0 0 1px var(--surface-line); color: var(--text4);
+}
+.tut-item[data-state="on"] .tut-n { background: var(--primary); color: var(--on-primary); box-shadow: none; }
+.tut-item[data-state="done"] .tut-n { background: color-mix(in srgb, var(--success) 15%, transparent); color: color-mix(in srgb, var(--success) 80%, var(--text)); box-shadow: none; }
+.tut-detail { flex: 1 1 auto; min-width: 0; padding: 16px 18px; overflow-y: auto; scrollbar-width: thin; }
+.tut-h2 { margin: 6px 0 0; font-size: calc(18px * var(--agx-fs, 1)); line-height: 1.25; font-weight: 800; letter-spacing: -0.01em; }
+.tut-detail p { font-size: calc(12.5px * var(--agx-fs, 1)); line-height: 1.55; color: var(--text2); margin: 8px 0 0; max-width: 62ch; }
+.tut-foot { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--surface-line); }
+.tut-said { margin: 0; }
+.tut-art { margin-top: 12px; }
+.tut-art-card { padding: 12px; border-radius: 11px; background: var(--surface-card); box-shadow: inset 0 0 0 1px var(--surface-line); }
+.tut-art-head { display: flex; align-items: center; gap: 8px; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); }
+.tut-art-head b { color: var(--text); font-weight: 700; }
+.tut-art-head .setup-badge { margin-left: auto; }
+.tut-art-body { margin-top: 6px; font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.5; color: var(--text2); }
+.tut-art-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+.tut-art-row + .tut-art-row { border-top: 1px solid var(--surface-line); }
+.tut-art-tile { width: 26px; height: 26px; flex: none; border-radius: 7px; display: grid; place-items: center; background: var(--surface-inset); box-shadow: inset 0 0 0 1px var(--surface-line); color: var(--text2); font-size: calc(12px * var(--agx-fs, 1)); font-weight: 700; }
+.tut-art-tile[data-tone="warn"] { color: color-mix(in srgb, var(--warning) 80%, var(--text)); }
+.tut-art-name { display: block; font-size: calc(12px * var(--agx-fs, 1)); font-weight: 650; color: var(--text); }
+.tut-art-sub { display: block; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text4); }
+.setup-icon-btn {
+  width: 26px; height: 26px; flex: none; display: grid; place-items: center; padding: 0;
+  border: 0; border-radius: 7px; background: none; color: var(--text3); cursor: pointer;
+}
+.setup-icon-btn:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
+.setup-icon-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.tut-said { max-width: 34ch; }
+
+@media (prefers-reduced-motion: reduce) {
+  .setup-preview-cursor { animation: none; }
+}
+
+@media (max-width: 1100px) {
+  .setup-projects { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tut-list { width: 196px; }
+  .tut-detail { padding: 14px; }
+  .tut-said { display: none; }
+}
+
+/* A first-run window at 960: the rail gives the body its width back, and the
+   step's own spacing tightens before anything has to scroll. */
+@media (max-width: 1100px) {
+  .setup-rail { width: 206px; padding: 14px 10px; }
+  .setup-brand-sub { display: none; }
+  .setup-body { padding: 16px 18px 6px; }
+  .setup-foot { padding: 10px 18px; }
+}
+@media (max-height: 620px) {
+  .setup-body { padding-top: 12px; }
+  .setup-h1 { font-size: calc(21px * var(--agx-fs, 1)); }
+  .setup-lede { font-size: calc(12px * var(--agx-fs, 1)); margin-top: 6px; }
+  .setup-group { margin-top: 10px; }
+  .setup-hint { margin-top: 6px; }
+  .setup-preview { margin-top: 8px; }
+  .setup-preview-screen { padding: 8px 10px 8px; line-height: 1.55; }
+  .tut-detail p { margin-top: 6px; }
 }

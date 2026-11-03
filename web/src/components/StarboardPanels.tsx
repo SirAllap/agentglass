@@ -8,14 +8,15 @@
 // under prefers-reduced-motion in index.css.
 import { useSyncExternalStore, useMemo, useRef, useState, useLayoutEffect } from "react";
 import type { ReactNode } from "react";
-import type { StatsSummary } from "../../../shared/types.ts";
+import type { StatsSummary, CostByModel, ToolLatencyStat } from "../../../shared/types.ts";
 import { subscribeLantern, lanternRows } from "../lib/lanternStore.ts";
 import { attention } from "../../../shared/fieldRules.ts";
 import type { LanternRow } from "./LanternView.tsx";
 import type { AgentCard } from "../lib/derive.ts";
 import { tipAttr, type TipSpec } from "../lib/tip.ts";
 import { sbTip, type SbTip } from "../lib/starboardTips.ts";
-import { crewState, ageWord, baseName, orreryLayout, RINGS, CREW_ORDER, CREW_WORD, type CrewState } from "../lib/starboardCrew.ts";
+import { crewState, ageWord, baseName, orreryPlan, compareCrew, CREW_WORD, type CrewState } from "../lib/starboardCrew.ts";
+import { isScoped, rowMatches, type Scope } from "../lib/starboardScope.ts";
 import { SbGlyphIcon, type SbGlyph } from "../lib/starboardGlyphs.tsx";
 import { fmtUsd, fmtMs, modelLabelOf, modelColor } from "../lib/format.ts";
 import { Button } from "./workspace/Chrome.tsx";
@@ -68,10 +69,13 @@ const DOT: Record<CrewState, string> = { working: "ok", ask: "warn", quiet: "off
 const cardOf = (r: LanternRow, cards: readonly AgentCard[]) => cards.find((a) => a.session_id === r.session);
 const ctxOf = (c: AgentCard | undefined): number => (c && c.ctxLimit > 0 ? Math.min(1, c.ctxTokens / c.ctxLimit) : 0);
 
-export function Crew({ cards, now }: { cards: readonly AgentCard[]; now: number }) {
+export function Crew({ cards, now, scope, onPickSession, onPickWorker }: {
+  cards: readonly AgentCard[]; now: number; scope: Scope;
+  onPickSession: (session: string) => void; onPickWorker: (worker: string) => void;
+}) {
   const rows = useBoard();
   const list = useMemo(() => rows.map((r) => ({ r, ...crewState(r, now) }))
-    .sort((a, b) => CREW_ORDER[a.state] - CREW_ORDER[b.state] || (b.r.facts?.cost ?? 0) - (a.r.facts?.cost ?? 0)), [rows, now]);
+    .sort((a, b) => compareCrew({ ...a, cost: a.r.facts?.cost ?? 0 }, { ...b, cost: b.r.facts?.cost ?? 0 })), [rows, now]);
   const projects = new Set(rows.map((r) => r.project ?? r.worktree ?? "")).size;
   return (
     <Panel area="crew" tip="crew" glyph="crew" title="Crew" meta={`${rows.length} sessions · ${projects} project${projects === 1 ? "" : "s"}`}>
@@ -81,8 +85,17 @@ export function Crew({ cards, now }: { cards: readonly AgentCard[]; now: number 
             const age = ageWord(since, now);
             const f = r.facts; const pulse = r.pulse ?? [];
             const peak = Math.max(1, ...pulse); const card = cardOf(r, cards); const ctx = ctxOf(card); const risk = riskChip(card?.risks);
+            const picked = (!!r.session && r.session === scope.session) || (!!r.worker && r.name === scope.worker);
+            /* A headless worker fires no hooks, so it has no session to scope
+               the feed by: its row opens the tab its own reader draws. */
+            const pick = r.session ? () => onPickSession(r.session!)
+              : r.worker && !r.gone ? () => onPickWorker(r.name) : undefined;
             return (
-              <div key={r.name + (r.session ?? "")} className="sb-card" data-st={state} data-tip={sessionTip(r, state, age)} tabIndex={0}>
+              <div key={r.name + (r.session ?? "")} className="sb-card" data-st={state} data-sel={picked ? "1" : undefined}
+                data-tip={sessionTip(r, state, age)} tabIndex={0} role={pick ? "button" : undefined} aria-pressed={pick ? picked : undefined}
+                style={pick ? { cursor: "pointer" } : undefined}
+                onClick={pick}
+                onKeyDown={pick ? (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); pick(); } } : undefined}>
                 <div className="sb-r1">
                   <i className="sb-dot" data-s={DOT[state]} data-ring={state === "quiet" ? "1" : undefined} />
                   <span className="sb-nm" data-tip={r.name}>{r.name}</span>
@@ -123,69 +136,50 @@ function useBox(): [React.RefObject<HTMLDivElement>, { w: number; h: number; u: 
   return [ref, box];
 }
 
-/** The angle on a ring (upper half) farthest from every body on it, so the ring's
- *  name label does not sit on a session. */
-function labelAngle(angles: number[]): number {
-  let best = -90, gap = -1;
-  for (let c = -150; c <= -30; c += 6) {
-    const d = Math.min(360, ...angles.map((a) => Math.abs((((a - c) % 360) + 540) % 360 - 180)));
-    if (d > gap) { gap = d; best = c; }
-  }
-  return best;
-}
-
-const doingOf = (row: LanternRow, st: CrewState, age: string): string =>
-  st === "ask" ? row.needsYou?.why || "waiting for you" : st === "done" ? `finished ${age} ago` : st === "quiet" ? `quiet ${age}` : row.doing ?? "no status line";
-const clip = (t: string, n: number) => (t.length > n ? t.slice(0, n - 1) + "…" : t);
-
-export function Orrery({ now, working }: { now: number; working: number }) {
+export function Orrery({ now, working, scope }: { now: number; working: number; scope: Scope }) {
   const rows = useBoard();
   const [ref, { w, h, u }] = useBox();
-  const { placed, projects, projectCount } = useMemo(() => orreryLayout(rows.filter((r) => !r.gone).slice(0, MAX_BODIES)), [rows]);
+  const drawn = useMemo(() => rows.filter((r) => !r.gone).slice(0, MAX_BODIES), [rows]);
+  const plan = useMemo(() => orreryPlan(drawn, now, w, h, u), [drawn, now, w, h, u]);
   const live = rows.filter((r) => !r.gone).length;
-  const hidden = live - placed.length;
+  const hidden = live - drawn.length;
   const finished = rows.length - live;
-  const ringName = (p: string, i: number) => (i === RINGS - 1 && projectCount > RINGS ? `${projectCount - RINGS + 1} other projects` : clip(baseName(p), 18));
-  const CX = w / 2, CY = h / 2, RXM = Math.max(80, w / 2 - 190 * u), RYM = Math.max(70, h / 2 - 50 * u);
-  const frac = (i: number) => (projects.length === 1 ? 0.7 : 0.34 + (0.66 * i) / (projects.length - 1));
+  const { cx: CX, cy: CY, r: coreR } = plan.core;
+  const { nameFs, subFs, ringFs, coreFs, lineGap } = plan;
   return (
-    <Panel area="orrery" tip="orrery" glyph="core" title="Orrery" meta={`${placed.length} sessions${finished ? ` · ${finished} finished not drawn` : ""} · body size = estimated spend`}>
+    <Panel area="orrery" tip="orrery" glyph="core" title="Orrery" meta={`${plan.bodies.length} sessions${finished ? ` · ${finished} finished not drawn` : ""}${plan.dropped ? ` · ${plan.dropped} ${plan.dropped === 1 ? "name" : "names"} on hover` : ""} · body size = estimated spend`}>
       {rows.length === 0 ? <div className="sb-empty">No sessions on the board. An agent takes an orbit around its project.</div> : (
         <div className="sb-orrery" ref={ref}>
           <svg viewBox={`0 0 ${w} ${h}`} role="group" aria-label="Sessions by project">
-            {projects.map((p, i) => {
-              const la = (labelAngle(placed.filter((q) => q.ring === i).map((q) => q.angle)) * Math.PI) / 180;
-              const lx = CX + Math.cos(la) * RXM * frac(i), ly = CY + Math.sin(la) * RYM * frac(i);
-              return (
-                <g key={p}>
-                  <ellipse className="sb-ring" cx={CX} cy={CY} rx={RXM * frac(i)} ry={RYM * frac(i)} />
-                  <rect x={lx - 60 * u} y={ly - 9 * u} width={120 * u} height={18 * u} rx={9 * u} className="sb-rl" />
-                  <text x={lx} y={ly + 4 * u} textAnchor="middle" className="sb-rt" fontSize={11 * u}>{ringName(p, i)}</text>
-                </g>
-              );
-            })}
-            <circle cx={CX} cy={CY} r={66 * u} className="sb-core" />
-            <text x={CX} y={CY - 24 * u} textAnchor="middle" className="sb-core-l" fontSize={9.5 * u}>{placed.length} ON BOARD</text>
+            {plan.rings.map(({ project, rx, ry, pill }) => (
+              <g key={project}>
+                <ellipse className="sb-ring" cx={CX} cy={CY} rx={rx} ry={ry} />
+                {pill && <>
+                  <rect x={pill.box.x0} y={pill.box.y0} width={pill.w} height={pill.h} rx={9 * u} className="sb-rl" />
+                  <text x={pill.lx} y={pill.ly + 4 * u} textAnchor="middle" className="sb-rt" fontSize={ringFs}>{pill.text}</text>
+                </>}
+              </g>
+            ))}
+            <circle cx={CX} cy={CY} r={coreR} className="sb-core" />
+            {plan.bodies.map(({ row, state, age, x, y, r, label }) => (
+              <g key={row.name + (row.session ?? "")} className="sb-body" data-st={state} data-dim={isScoped(scope) && !rowMatches(row, scope) ? "1" : undefined} data-tip={sessionTip(row, state, age)} tabIndex={0} role="img" aria-label={`${row.name}: ${CREW_WORD[state]}`}>
+                {state === "working" && <circle className="sb-halo" cx={x} cy={y} r={r} />}
+                <circle className="sb-disc" cx={x} cy={y} r={r} />
+                {state === "working" && <circle className="sb-spin" cx={x} cy={y} r={r} strokeDasharray={`${(r * 2.6).toFixed(0)} 400`} />}
+                {label && <>
+                  <text x={label.lx} y={label.ly} textAnchor={label.anchor} className="sb-bn" fontSize={nameFs}>{label.name}</text>
+                  {label.sub && <text x={label.lx} y={label.ly + lineGap} textAnchor={label.anchor} className="sb-bs" fontSize={subFs}>{label.sub}</text>}
+                </>}
+                <circle cx={x} cy={y} r={r + 4} fill="transparent" />
+              </g>
+            ))}
+            {/* The count is painted last: bodies are laid out clear of its box,
+                and a body that grazes the edge must never cover the number. */}
+            <text x={CX} y={CY - 24 * u} textAnchor="middle" className="sb-core-l" fontSize={coreFs}>{plan.bodies.length} ON BOARD</text>
             <text x={CX} y={CY + 14 * u} textAnchor="middle" className="sb-core-n" style={{ fontSize: 44 * u }}>{working}</text>
-            <text x={CX} y={CY + 34 * u} textAnchor="middle" className="sb-core-l" fontSize={10.5 * u}>WORKING</text>
-            {placed.map(({ row, ring, angle }) => {
-              const { state, since } = crewState(row, now);
-              const age = ageWord(since, now);
-              const a = (angle * Math.PI) / 180; const x = CX + Math.cos(a) * RXM * frac(ring); const y = CY + Math.sin(a) * RYM * frac(ring);
-              const r = (12 + Math.sqrt(Math.max(0, row.facts?.cost ?? 0)) * 3.1) * u;
-              const right = Math.cos(a) >= -0.1; const lx = right ? x + r + 8 * u : x - r - 8 * u;
-              return (
-                <g key={row.name + (row.session ?? "")} className="sb-body" data-st={state} data-tip={sessionTip(row, state, age)} tabIndex={0} role="img" aria-label={`${row.name}: ${CREW_WORD[state]}`}>
-                  {state === "working" && <circle className="sb-halo" cx={x} cy={y} r={r} />}
-                  <circle className="sb-disc" cx={x} cy={y} r={r} />
-                  {state === "working" && <circle className="sb-spin" cx={x} cy={y} r={r} strokeDasharray={`${(r * 2.6).toFixed(0)} 400`} />}
-                  <text x={lx} y={y} textAnchor={right ? "start" : "end"} className="sb-bn" fontSize={13.5 * u}>{clip(row.name, 20)}</text>
-                  <text x={lx} y={y + 14 * u} textAnchor={right ? "start" : "end"} className="sb-bs" fontSize={10.5 * u}>{clip(doingOf(row, state, age), 26)}</text>
-                  <circle cx={x} cy={y} r={r + 4} fill="transparent" />
-                </g>
-              );
-            })}
-            {hidden > 0 && <text x={w - 10} y={h - 10} textAnchor="end" className="sb-rt" fontSize={11 * u}>+{hidden} more not drawn</text>}
+            <text x={CX} y={CY + 34 * u} textAnchor="middle" className="sb-core-l" fontSize={coreFs}>WORKING</text>
+
+            {hidden > 0 && <text x={w - 10} y={h - 10} textAnchor="end" className="sb-rt" fontSize={ringFs}>+{hidden} more not drawn</text>}
           </svg>
         </div>
       )}
@@ -201,7 +195,7 @@ export function NeedsYou({ onOpenLantern, now }: { onOpenLantern: () => void; no
         <div className="sb-needs">
           {rows.map((r) => (
             <div key={r.name + (r.session ?? "")} className="sb-need">
-              <div className="sb-nt" data-tip={`${r.name}: ${r.needsYou?.why || (r.needsYou?.kind === "gate" ? "held at the gate" : "needs your permission")}`}>{r.name}: {r.needsYou?.why || (r.needsYou?.kind === "gate" ? "held at the gate" : "needs your permission")}</div>
+              <div className="sb-nt" data-tip={`${r.name}: ${r.needsYou?.why || (r.needsYou?.kind === "gate" ? "waiting at the gate" : "needs your permission")}`}>{r.name}: {r.needsYou?.why || (r.needsYou?.kind === "gate" ? "waiting at the gate" : "needs your permission")}</div>
               <div className="sb-ns">{baseName(r.project ?? r.worktree ?? "no project")} · waiting {ageWord(r.needsYou?.since ?? now, now)}</div>
               <Button size="compact" onClick={onOpenLantern}>Open</Button>
             </div>
@@ -213,8 +207,8 @@ export function NeedsYou({ onOpenLantern, now }: { onOpenLantern: () => void; no
 }
 
 const MIX_TOP = 6;
-export function Tools({ stats }: { stats: StatsSummary | null }) {
-  const tl = stats?.tool_latency ?? [];
+export function Tools({ stats, latency }: { stats: StatsSummary | null; latency?: ToolLatencyStat[] }) {
+  const tl = latency ?? stats?.tool_latency ?? [];
   const total = tl.reduce((s, t) => s + t.calls, 0);
   const top = tl.slice(0, MIX_TOP);
   const rest = tl.slice(MIX_TOP).reduce((s, t) => s + t.calls, 0);
@@ -243,8 +237,8 @@ export function Tools({ stats }: { stats: StatsSummary | null }) {
   );
 }
 
-export function Cost({ stats }: { stats: StatsSummary | null }) {
-  const models = (stats?.by_model ?? []).filter((m) => m.cost_usd > 0 || m.input_tokens > 0);
+export function Cost({ stats, models: scoped }: { stats: StatsSummary | null; models?: CostByModel[] }) {
+  const models = scoped ?? (stats?.by_model ?? []).filter((m) => m.cost_usd > 0 || m.input_tokens > 0);
   const total = models.reduce((s, m) => s + m.cost_usd, 0);
   const C = 2 * Math.PI * 38; let off = 0;
   return (

@@ -1,18 +1,19 @@
 /*
  * "Clean up all" in the Closed tab: the same per-PR cleanup the card's button runs (plan, then POST /cleanup/run with
  * that plan's id and the dialog's default selection), one pull request after another. Serial on purpose: the engine
- * answers once per run and two runs of one repository at once race the same worktrees. A plan that needs a person's
- * look (a block, or a pull request closed without merging) is not run here; it is listed, and the card's own button
- * still opens the review dialog for it. Ceiling: the pull requests counted are the cards whose inventory was read,
- * which is the ones loaded so far; "Load more" brings more into the count.
+ * answers once per run and two runs of one repository at once race the same worktrees. A plan a safety block refuses is
+ * not run here; it is listed with the reason the plan gave, and the card's own button still opens the review dialog for
+ * it. A pull request closed without merging runs the way its dialog opens: branches and stashes stay unticked, and the
+ * run carries the confirmation the bulk dialog asked for. Ceiling: the pull requests counted are the cards whose
+ * inventory was read, which is the ones loaded so far; "Load more" brings more into the count.
  */
 import { humanSize } from "../../../shared/dockerSize.ts";
 import { api } from "./api.ts";
 import { beginRun, endRun } from "./cleanupEvents.ts";
-import { defaultOff, excludeOf, needsLook, plural, type Report } from "./cleanupPr.ts";
+import { blockViews, defaultOff, excludeOf, plural, type Report } from "./cleanupPr.ts";
 import type { LeftoverState } from "./leftovers.ts";
 
-export interface CleanTarget { pr: number; items: number; bytes: number }
+export interface CleanTarget { pr: number; items: number; bytes: number; /** Closed without merging: its branches and stashes stay, and the dialog's confirmation is what lets it run at all. */ closedUnmerged: boolean }
 export interface CleanFailure { pr: number; why: string }
 export interface CleanSummary { done: number; freed: number; failed: CleanFailure[] }
 
@@ -23,7 +24,7 @@ export function cleanTargets(rows: readonly { number: number; state: string }[],
     if (r.state === "OPEN" || seen.has(r.number)) continue; // a number twice must not run twice
     seen.add(r.number);
     const s = stateOf(r.number, r.state);
-    if (s?.kind === "some" && s.items >= 1) out.push({ pr: r.number, items: s.items, bytes: s.bytes });
+    if (s?.kind === "some" && s.items >= 1) out.push({ pr: r.number, items: s.items, bytes: s.bytes, closedUnmerged: r.state === "CLOSED" });
   }
   return out;
 }
@@ -32,10 +33,11 @@ export const totalsOf = (t: readonly CleanTarget[]): { prs: number; items: numbe
   ({ prs: t.length, items: t.reduce((n, x) => n + x.items, 0), bytes: t.reduce((n, x) => n + x.bytes, 0) });
 
 export const confirmBody = (t: readonly CleanTarget[]): string => {
-  const x = totalsOf(t);
+  const x = totalsOf(t), closed = t.filter((c) => c.closedUnmerged).length;
   return `${plural(x.prs, "pull request")} · ${plural(x.items, "item")}${x.bytes > 0 ? ` · ${humanSize(x.bytes)}` : ""}\n`
     + "Each one is cleaned the way its own Clean up button does it, one after another. Nothing on GitHub changes. "
-    + "A pull request that needs a look (a block, or closed without merging) is skipped and listed at the end.";
+    + (closed ? `${plural(closed, "pull request")} ${closed === 1 ? "was" : "were"} closed without merging, so ${closed === 1 ? "its branch and stashes" : "their branches and stashes"} stay. ` : "")
+    + "One that a safety block refuses is skipped and listed at the end.";
 };
 
 export const progressWord = (at: number, of: number): string => `Cleaning ${at} of ${of}…`;
@@ -54,11 +56,13 @@ export async function cleanAll(repo: string, prs: readonly number[], onStep: (n:
     try {
       const r = await api.cleanupPlan(repo, pr);
       if (!r.ok || !r.plan) { sum.failed.push({ pr, why: r.error ?? "The plan could not be read." }); continue; }
-      const look = needsLook(r.plan);
-      if (look === "block" || look === "not-merged") { sum.failed.push({ pr, why: look === "block" ? "Blocked: open it to see why." : "Closed without merging: open it to review." }); continue; }
+      const block = blockViews(r.plan)[0];
+      if (block) { sum.failed.push({ pr, why: `Blocked: ${block.title}.` }); continue; }
       if (!beginRun(repo, pr)) { sum.failed.push({ pr, why: "Already being cleaned up." }); continue; }
       began = true;
-      const out = await api.cleanupRun(repo, pr, r.plan.id, excludeOf(r.plan, defaultOff(r.plan)), false);
+      /* The dialog's own default selection: a pull request closed without merging keeps its branches and stashes, and the
+         person's "Clean up all" is the confirmation its run needs. */
+      const out = await api.cleanupRun(repo, pr, r.plan.id, excludeOf(r.plan, defaultOff(r.plan)), r.plan.notMerged);
       if (out.items) { report = out as Report; sum.freed += report.freedBytes; if (report.failed > 0) sum.failed.push({ pr, why: `${plural(report.failed, "item")} failed.` }); else sum.done++; }
       else sum.failed.push({ pr, why: out.error ?? "The cleanup was refused." });
     } catch (e) { sum.failed.push({ pr, why: String((e as Error).message ?? e) }); }

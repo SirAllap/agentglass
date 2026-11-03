@@ -257,6 +257,17 @@ export function AgentsIcon({ size = ICON.md }: P) {
   );
 }
 
+/** A page with lines, folded at the corner: the Manifest view's own glyph. */
+export function ManifestIcon({ size = ICON.md }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <path d="M6 4h9l5 5v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" />
+      <path d="M14 4v6h6" />
+      <path d="M9 14h6M9 17.5h4" />
+    </svg>
+  );
+}
+
 /** A gear: settings and configuration. The line icon every "⚙" in the app
  *  becomes — the emoji draws in colour on some systems and matches nothing. */
 export function GearIcon({ size = ICON.md }: P) {

@@ -5,7 +5,7 @@
  * The reviewer is preflightStub.ts, as in flight-plan-route.test.ts.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freePort } from "./freePort.ts";
@@ -13,6 +13,7 @@ import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
 import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
 import { BUILDER_DENY, authorPrompt, builderLaunch, builderWindowName, cutBuilderWorktree, launchPrompt, reportingBlock } from "../src/flightPlan.ts";
+import { BROWSER_ENGINES, BROWSER_ROLES } from "../../shared/browserWorkers.ts";
 import type { Plan } from "../src/flightPlanStore.ts";
 
 // Launch opens a real tab: on a tmux socket of this file's own, killed when it ends.
@@ -35,10 +36,16 @@ beforeAll(async () => {
   ROOT = join(dir, "root"); mkdirSync(ROOT);
   // Launch cuts a worktree from the project's main branch, so the project is a repository with one commit.
   for (const a of [["init", "-q", "-b", "main"], ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "init"]]) Bun.spawnSync(["git", ...a], { cwd: ROOT, env: { ...process.env, HOME: dir } });
+  // A checkout that installs, so a worktree cut from it is the one Launch really
+  // gets: the manifests are there, the installs are not.
+  writeFileSync(join(ROOT, "package.json"), JSON.stringify({ name: "orbit", private: true, workspaces: ["web"] }));
+  mkdirSync(join(ROOT, "web"));
+  writeFileSync(join(ROOT, "web", "package.json"), JSON.stringify({ name: "orbit-web", dependencies: { "orbit-shared": "1.0.0" } }));
+  for (const a of [["add", "package.json", "web/package.json"], ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "checkout"]]) Bun.spawnSync(["git", ...a], { cwd: ROOT, env: { ...process.env, HOME: dir } });
   shot = join(dir, "screen.png"); writeFileSync(shot, Buffer.from([137, 80, 78, 71]));
   writeFileSync(join(dir, "reply.txt"), "### F1 - Major - Unclear limit\nQuote: q\nEvidence: e");
-  // A stand-in `claude` first on PATH: Launch opens a real tmux tab with it, and the tab must not start the real agent.
-  mkdirSync(join(dir, "bin")); writeFileSync(join(dir, "bin", "claude"), "#!/bin/sh\ncase \"$1\" in --help|--version) echo \"--name --model --effort\"; exit 0;; esac\nexec sleep 30\n", { mode: 0o755 });
+  // A stand-in `claude` first on PATH: Launch opens a real tmux tab with it, and the tab must not start the real agent. It writes the argv it got, so a test can read the brief Launch hands over.
+  mkdirSync(join(dir, "bin")); writeFileSync(join(dir, "bin", "claude"), `#!/bin/sh\ncase "$1" in --help|--version) echo "--name --model --effort"; exit 0;; esac\nprintf '%s\\n' "$@" > '${join(dir, "argv.txt")}'\nenv | grep '^AGENTGLASS_' | sort > '${join(dir, "env.txt")}'\nexec sleep 30\n`, { mode: 0o755 });
   const port = await freePort();
   base = `http://127.0.0.1:${port}`;
   proc = Bun.spawn(["bun", "run", new URL("../src/index.ts", import.meta.url).pathname], {
@@ -204,16 +211,37 @@ describe("Launch", () => {
   test("only from Go, once: it hands back a ticket and the plan is launched", async () => {
     const p = await makePlan();
     await call("PATCH", `/flight-plan/plans/${p.id}`, { plan_md: "# plan" });
+    // Before Go the list says which model the builder starts on and why; a launched plan has no next Go to make.
+    const listed = async () => (await call("GET", "/flight-plan/plans")).body.plans.find((x: { id: string }) => x.id === p.id);
+    expect((await listed()).launch).toEqual({ mode: "auto", model: "sonnet", why: "Sonnet: this plan is M and touches nothing sensitive, so it launches on the builder role's model." });
     expect((await person("POST", `/flight-plan/plans/${p.id}/launch`, {})).status).toBe(409);
     await goOnly(p.id);
     const before = await uses("flightPlan:launch");
+    rmSync(join(dir, "argv.txt"), { force: true });
     const r = await person("POST", `/flight-plan/plans/${p.id}/launch`, {});
     expect(r.status).toBe(200);
+    expect((await listed()).launch).toBeUndefined();
     expect(r.body.window).toStartWith("@");
     expect(r.body.plan).toMatchObject({ state: "launched", launched: { title: p.title } });
+    // The tree was cut a moment ago and has no install, so the answer says it and
+    // the brief the builder reads opens with it.
+    expect(String(r.body.environment)).toStartWith("environment: node_modules missing (node_modules, web/node_modules)");
+    let brief = "";
+    for (let i = 0; i < 100 && !brief; i++) { try { brief = readFileSync(join(dir, "argv.txt"), "utf8"); } catch { await Bun.sleep(50); } }
+    expect(brief).toContain("environment: node_modules missing (node_modules, web/node_modules)");
+    expect(brief.indexOf("environment: node_modules missing")).toBeLessThan(brief.indexOf(`# ${p.title}`));
     expect(await uses("flightPlan:launch")).toBe(before + 1);
     expect((await person("POST", `/flight-plan/plans/${p.id}/launch`, {})).status).toBe(409);
     expect((await call("PATCH", `/flight-plan/plans/${p.id}`, { title: "new" })).status).toBe(409);
+  });
+
+  test("a new launch drops the link to the worker of an earlier build", async () => {
+    const p = await makePlan({ title: "Relink" });
+    await call("PATCH", `/flight-plan/plans/${p.id}`, { plan_md: "# plan" });
+    expect((await person("POST", `/flight-plan/plans/${p.id}/worker`, { worker: "fp-orbit-search" })).body.plan.worker).toBe("fp-orbit-search");
+    await goOnly(p.id);
+    expect((await person("POST", `/flight-plan/plans/${p.id}/launch`, {})).status).toBe(200);
+    expect((await call("GET", `/flight-plan/plans/${p.id}`)).body.plan.worker).toBeNull();
   });
 
   test("the brief a worker starts with is the plan, and the author's is the request and the door verbs", () => {
@@ -232,11 +260,14 @@ describe("Launch", () => {
     expect(at).toBeGreaterThan(-1);
     // to the function's own closing brace, never a fixed window
     const route = src.slice(at, src.indexOf("\n}\n", at));
-    expect(route).toContain("prompt: FlightPlan.launchPrompt(plan, coordinator)");
+    expect(route).toContain("nodeModulesGap(tree.path)");
+    expect(route).toContain("withDepsLine(withBrowserLine(FlightPlan.launchPrompt(plan, coordinator)");
     expect(route).toContain("perm: launchPerm(builder.mode");
     // the deny list is part of the argv, so it holds whatever mode and list the person has set
-    expect(route).toContain("FlightPlan.BUILDER_DENY");
-    expect(route).toContain("model: builder.model");
+    expect(route).toContain("FlightPlan.builderDenyFor(");
+    // the model the person picked at Go (or the plan's own) is what reaches the argv call, not builder.model
+    expect(route).toContain("const model: BuilderModel = over?.ok ? over.model : builder.model");
+    expect(route).toContain("FlightPlan.builderDenyFor(plan.root)), model }");
     // A normal tab in a session, behind what the person is reading: select=false, and not a bench ticket.
     expect(route).toMatch(/engineWindowOutcome\(tree\.path, [^\n]*, false, false\)/);
     expect(route).not.toContain("mintAgentTicket");
@@ -264,6 +295,29 @@ describe("Launch", () => {
     expect(ls).not.toContain("bench");
   });
 
+  test("the Launch env is the engine it runs, its role, and a marker when the browser is off", async () => {
+    const envFile = join(dir, "env.txt"), argvFile = join(dir, "argv.txt");
+    const all = { engines: BROWSER_ENGINES.map((e) => e.id), roles: BROWSER_ROLES.map((r) => r.id) };
+    expect((await person("POST", "/settings/door", { id: "browser.workers", value: { ...all, engines: all.engines.filter((e) => e !== "claude") } })).status).toBe(200);
+    try {
+      rmSync(envFile, { force: true });
+      const p = await makePlan({ title: "Browser off" });
+      await call("PATCH", `/flight-plan/plans/${p.id}`, { plan_md: "# plan" });
+      expect((await person("POST", `/flight-plan/plans/${p.id}/go`, {})).status).toBe(200);
+      let env = "";
+      for (let i = 0; i < 100 && !env; i++) { try { env = readFileSync(envFile, "utf8"); } catch { /* not yet */ } if (!env) await Bun.sleep(50); }
+      // claude is off, whatever the role's provider says: no credential, and the marker the CLIs refuse under.
+      expect(env).toContain("AGENTGLASS_BROWSER_OFF=1");
+      expect(env).toContain("AGENTGLASS_ROLE=builder");
+      for (const v of ["AGENTGLASS_TOKEN=", "AGENTGLASS_WORKER_TOKEN=", "AGENTGLASS_PROFILE=", "AGENTGLASS_BROWSER_AS="]) expect(env).not.toContain(v);
+      const brief = readFileSync(argvFile, "utf8");
+      expect(brief).toContain("Claude Code workers are off in Settings ▸ Browser");
+      expect(brief).toContain("no credential for the built-in browser");
+    } finally {
+      await person("POST", "/settings/door", { id: "browser.workers", value: all });
+    }
+  });
+
   test("a project that cannot give a worktree does not launch on the shared checkout", async () => {
     const plain = mkdtempSync(join(dir, "plain-"));
     const r = cutBuilderWorktree(plain, "Cap webhooks", "main");
@@ -278,10 +332,11 @@ describe("Launch", () => {
   });
 
   test("the builder starts in the chosen permission mode (Auto by default, never an unknown word) and on Sonnet unless the builder role names an alias", () => {
-    expect(builderLaunch({ provider: "claude", model: "" }, "auto")).toEqual({ mode: "auto", model: "sonnet" });
-    expect(builderLaunch({ provider: "claude", model: "opus" }, "bypassPermissions")).toEqual({ mode: "bypassPermissions", model: "opus" });
-    expect(builderLaunch({ provider: "codex", model: "gpt-x" }, "default")).toEqual({ mode: "default", model: "sonnet" });
-    expect(builderLaunch({ provider: "claude", model: "claude-opus-5-5" }, "nonsense")).toEqual({ mode: "auto", model: "sonnet" });
+    const quiet = { size: "M" as const, planMd: "# Rename a heading\n" };
+    expect(builderLaunch(quiet, { provider: "claude", model: "" }, "auto", "opus")).toEqual({ mode: "auto", model: "sonnet", why: "Sonnet: this plan is M and touches nothing sensitive, so it launches on the builder role's model." });
+    expect(builderLaunch(quiet, { provider: "claude", model: "opus" }, "bypassPermissions", "opus")).toEqual({ mode: "bypassPermissions", model: "opus", why: "Opus: this plan is M and touches nothing sensitive, so it launches on the builder role's model." });
+    expect(builderLaunch(quiet, { provider: "codex", model: "gpt-x" }, "default", "opus")).toEqual({ mode: "default", model: "sonnet", why: "Sonnet: this plan is M and touches nothing sensitive, so it launches on the builder role's model." });
+    expect(builderLaunch(quiet, { provider: "claude", model: "claude-opus-5-5" }, "nonsense", "opus")).toEqual({ mode: "auto", model: "sonnet", why: "Sonnet: this plan is M and touches nothing sensitive, so it launches on the builder role's model." });
   });
 
   test("the setting: Auto shipped, an agent never raises it to Bypass, it may lower it", async () => {
@@ -430,6 +485,24 @@ describe("B3: the server does what the view used to be trusted to do", () => {
     expect((await call("GET", `/flight-plan/plans/${p.id}/mockups/3`)).status).toBe(404);
     rmSync(png);
     expect((await call("GET", `/flight-plan/plans/${p.id}/mockups/1`)).status).toBe(403);
+  });
+});
+
+describe("a plan's worker link", () => {
+  beforeAll(noReviews);
+  test("an old plan reads with no link; the person or the coordinator sets one, and an empty name clears it", async () => {
+    const p = await makePlan();
+    expect((await call("GET", `/flight-plan/plans/${p.id}`)).body.plan.worker ?? null).toBeNull();
+    const linked = await person("POST", `/flight-plan/plans/${p.id}/worker`, { worker: "fp-orbit-search" });
+    expect(linked.status).toBe(200);
+    expect(linked.body.plan.worker).toBe("fp-orbit-search");
+    const listed = (await call("GET", "/flight-plan/plans")).body.plans as { id: string; worker: string | null; workerState?: string }[];
+    expect(listed.find((x) => x.id === p.id)?.worker).toBe("fp-orbit-search");
+    // A name no worker here has run says nothing about the plan's state.
+    expect(listed.find((x) => x.id === p.id)?.workerState).toBeUndefined();
+    expect((await person("POST", `/flight-plan/plans/${p.id}/worker`, { worker: "" })).body.plan.worker).toBeNull();
+    expect((await person("POST", `/flight-plan/plans/${p.id}/worker`, { worker: "not a name!" })).status).toBe(400);
+    expect((await person("POST", `/flight-plan/plans/${p.id}/worker`, {})).status).toBe(400);
   });
 });
 

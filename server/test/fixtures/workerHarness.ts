@@ -117,6 +117,7 @@ echo x > "${logs}/answered-$(echo "$TMUX_PANE" | tr -d %)"
 sleep 300
 fi
 printf '%s\\0' "$@" > "${logs}/tui-$$.argv"
+env | sed -e 's/=.*//' > "${logs}/tui-$$.envnames"
 [ -n "$AGENTGLASS_SEAT" ] && printf '%s' "$AGENTGLASS_TOKEN" > "${logs}/seat.token"
 printf '\\033[2J\\033[H❯ '
 sleep 300
@@ -139,6 +140,10 @@ sleep 300
       AGENTGLASS_TMUX_SOCKET: SOCKET,
       AGENTGLASS_CHAT_BYPASS: "1",
       AGENTGLASS_TOKEN: MACHINE,
+      /* The person's own shell may carry these; a window inherits the server's
+         environment, so a worker must be handed its own name or none. */
+      AGENTGLASS_PROFILE: "the-person",
+      AGENTGLASS_BROWSER_AS: "the-person",
     },
     stdout: "ignore", stderr: "pipe",
   });
@@ -181,7 +186,7 @@ sleep 300
       const cur = await get<{ policy: Policy }>("/orchestration");
       cur.policy.rules = (o.rules ?? []) as Policy["rules"];
       cur.policy.limits = { maxWorkers: 3, turnMinutes: 30, maxRetries: 1, ...o.limits };
-      cur.policy.ceiling = { write: "worktree", network: false, commit: true, deny: [], ...o.ceiling };
+      cur.policy.ceiling = { write: "worktree", network: false, commit: true, docker: false, deny: [], ...o.ceiling };
       const r = await post("/orchestration", { policy: cur.policy }, MACHINE);
       if (!r.ok) throw new Error(`policy refused: ${r.error}`);
     },

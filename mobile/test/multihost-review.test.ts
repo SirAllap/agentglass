@@ -54,7 +54,7 @@ describe("the list in React and the list in the keystore", () => {
     const me = between(provider, "const loadMe = useCallback", "const refresh = useCallback");
     expect(me).toContain("activeId.current === which.id");
   });
-  test("the marks read is per computer, not one shared in-flight request", () => {
+  test("the marks read is per computer, not one shared request still running", () => {
     expect(read("src/state/read-marks.ts")).toMatch(/loadingEpoch/);
   });
 });

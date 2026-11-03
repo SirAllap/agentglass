@@ -19,10 +19,14 @@
 // /proc/<pid>/stat per process this user owns (about 2N syscalls), and here
 // also a readlink of cwd and a read of cmdline per process (2N more). On the
 // machine measured, N is a few hundred, so roughly 50,000 syscalls an hour,
-// about the cost of two opens of the Resources tab. The panel asks for a fresh
-// sample only when it is open, and never faster than ORPHAN_MIN_RESAMPLE_MS.
+// about the cost of two opens of the Resources tab. A helper row skips the
+// allow list and asks `worktreeOf` about every path on its command line, which
+// is one `stat` per ancestor per path: on the machine measured that is 47 rows
+// instead of 0, and it is the widest part of the walk. The panel asks for a
+// fresh sample only when it is open, and never faster than ORPHAN_MIN_RESAMPLE_MS.
 
 import { cmdlineOf, cwdOf, ownedByMe, walkProcs } from "./machine.ts";
+import { underTmp } from "./portstale.ts";
 import type { OrphanProc, OrphanReport, OrphanStopResult } from "../../shared/types.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -49,6 +53,11 @@ export interface OrphanConfig {
   hotCpu: number;
   /** An average over fewer samples than this is not "sustained". */
   minCpuSamples: number;
+  /** A helper is flagged only once it is this old, so a `sleep 1` never
+   *  surfaces. This is the process's own age (`uptime - start`), not the time
+   *  since its parent went: /proc records no such time, so no reason sentence
+   *  may claim one. Seconds. */
+  helperFloorSec: number;
 }
 
 export const DEFAULT_ORPHAN_CONFIG: OrphanConfig = {
@@ -56,6 +65,7 @@ export const DEFAULT_ORPHAN_CONFIG: OrphanConfig = {
   oneShotMaxSec: 2 * 3600,
   hotCpu: 30,
   minCpuSamples: 3,
+  helperFloorSec: 60,
 };
 
 /** One process as the classifier sees it: the walk's row plus the reads that
@@ -137,6 +147,38 @@ const RUNTIME = /^(bun|node|nodejs|deno|python\d*(\.\d+)?|tsc|vite|esbuild|npm|n
 
 const base = (p: string) => p.split("/").filter(Boolean).pop() ?? p;
 
+/**
+ * Helpers that only exist to serve another process. Measured left behind with
+ * systemd as their parent: 39 `udisksctl monitor`, 43 `gio`, 31 `git` object
+ * readers and fsmonitor daemons, 16 `inotifywait`, and a run that left dozens
+ * of `sleep 1`. Every desktop app hangs from `systemd --user`, so these are
+ * named one by one instead of flagging re-parenting in general.
+ */
+const HELPER = /^(sleep|gio|git|inotifywait|udisksctl)$/;
+
+/** Long-lived by design: the process exists to serve commands that arrive
+ *  later, so the one that started it exiting is its normal start path, not
+ *  evidence that anything was abandoned. `git fsmonitor--daemon` detaches at
+ *  once and is respawned by the next git command, so a row for it returns after
+ *  every Stop; `git gc` and `git maintenance` run as children of a systemd
+ *  timer. */
+const DETACHED = [/--detach\b/, /\bfsmonitor--daemon\b/, /\bgit\s+(gc|maintenance)\b/, /\bgit-daemon\b/];
+
+/** `udisksctl` is said "you-disks", so it takes "a"; `inotifywait` takes "an". */
+const AN_HELPER = new Set(["inotifywait"]);
+
+function helperOf(r: OrphanRow): string | null {
+  const exe = base(r.cmd.split(/\s+/)[0] ?? "");
+  if (HELPER.test(exe)) return exe;
+  return HELPER.test(r.comm) ? r.comm : null;
+}
+
+/** A temp wrapper a harness wrote (`/tmp/agx-volumes-x/bin/gio`), so the row
+ *  can say where a helper with no checkout came from. */
+function throwawayWrapper(r: OrphanRow, name: string): boolean {
+  return r.cmd.split(/\s+/).some((p) => base(p) === name && underTmp(p));
+}
+
 function allowed(r: OrphanRow, ctx: OrphanContext): boolean {
   if (r.pid === ctx.selfPid) return true;
   const exe = base(r.cmd.split(/\s+/)[0] ?? "");
@@ -177,32 +219,61 @@ function span(sec: number): string {
  *   - its working directory was deleted (also for a language runtime with no
  *     other origin: a `bun` whose checkout is gone is a leftover).
  *
+ * One more way, for the named helpers in `HELPER`: a helper with an ORIGIN
+ * (checkout, scratchpad, temp wrapper) whose parent is gone and which is past
+ * `helperFloorSec`. The origin is required because a name and a re-parented
+ * parent are not evidence: `git fsmonitor--daemon` detaches on purpose to serve
+ * later commands and returns after every signal, and a `git gc` under a systemd
+ * timer hangs from the same parent. The modes that detach by design are
+ * excluded in `DETACHED` for that reason.
+ *
  * Re-parenting alone NEVER flags: every desktop app hangs from `systemd --user`.
  * An unknown command with no origin is never flagged.
  *
  * WHAT IT CANNOT DO: a leftover started from an ordinary directory outside any
  * checkout and doing nothing is not flagged, and a daemon an agent detached on
  * purpose inside a worktree and pegged is, with the reason saying what was seen.
+ * A helper with no origin is not flagged either, which leaves the desktop's own
+ * `inotifywait -m` under `~` alone (16 were measured on one machine) and any
+ * helper started from a plain home directory.
  */
 export function classifyOrphans(rows: OrphanRow[], ctx: OrphanContext, cfg: OrphanConfig = DEFAULT_ORPHAN_CONFIG): OrphanProc[] {
   const out: OrphanProc[] = [];
   for (const r of rows) {
-    if (allowed(r, ctx)) continue;
+    if (r.pid === ctx.selfPid) continue;
+    const helper = helperOf(r);
+    if (!helper && allowed(r, ctx)) continue;
     const gone = r.cwd !== null && DELETED.test(r.cwd);
     const cwd = r.cwd === null ? null : r.cwd.replace(DELETED, "");
     const reparented = ctx.initPids.includes(r.ppid);
     const scratch = SCRATCH.exec(`${cwd ?? ""} ${r.cmd}`);
     const paths = [cwd, ...(r.cmd.match(/\/[^\s"']+/g) ?? [])];
     let root: string | null = null;
-    for (const p of paths) { if (p && (root = worktreeOf(p, ctx))) break; }
-    const origin = scratch ? "an agent scratchpad" : root ? `worktree ${base(root)}` : null;
+    let rootFromCwd = false;
+    for (const p of paths) {
+      if (!p) continue;
+      const found = worktreeOf(p, ctx);
+      if (!found) continue;
+      root = found;
+      rootFromCwd = p === cwd;
+      break;
+    }
+    const origin = scratch ? "an agent scratchpad" : root ? `worktree ${base(root)}`
+      : helper && throwawayWrapper(r, helper) ? "a throwaway wrapper in a temp directory" : null;
     const hot = r.cpu !== null && r.cpuSamples >= cfg.minCpuSamples && r.cpu >= cfg.hotCpu;
     const age = r.ageSec;
     const oneShot = ONE_SHOT.some((re) => re.test(r.cmd)) && !WATCHING.test(r.cmd);
     const runtime = RUNTIME.test(r.comm) || RUNTIME.test(base(r.cmd.split(/\s+/)[0] ?? ""));
+    const orphanHelper = helper !== null && origin !== null && reparented
+      && age !== null && age >= cfg.helperFloorSec && !DETACHED.some((re) => re.test(r.cmd));
 
     const why: string[] = [];
-    if (gone && (origin || runtime)) why.push("its working directory was deleted, so the checkout it ran in is gone");
+    // Only a cwd that resolved to a checkout may be called one; a temp wrapper's
+    // cwd never was.
+    const where = root && rootFromCwd ? "the checkout" : null;
+    if (gone && where) why.push(`its working directory was deleted, so ${where} it ran in is gone`);
+    else if (gone && runtime) why.push("its working directory was deleted");
+    if (orphanHelper) why.push(`${AN_HELPER.has(helper) ? "an" : "a"} ${helper} helper that outlived the process that started it`);
     if (origin && reparented && hot) why.push(`its parent is gone and it averages ${Math.round(r.cpu!)}% of a core`);
     if (origin && oneShot && age !== null && age >= cfg.oneShotMaxSec) {
       why.push(`a command that should finish (${base(r.cmd.split(/\s+/)[0] ?? r.comm)}) has been running for ${span(age)}`);

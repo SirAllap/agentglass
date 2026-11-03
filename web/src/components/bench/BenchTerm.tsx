@@ -2,12 +2,12 @@
  * One tab of the bench, as a terminal.
  *
  * Every tab that runs something is this: a shell, an agent CLI, an editor on a
- * file. What changes is what the tmux session was told to run — the server
+ * file. What changes is what the tab's window was told to run — the server
  * decides that from the query (see engineBenchArgv), and from here it is one
  * socket and one xterm either way.
  *
- * The tab is bound to a SESSION, not to this socket. Closing the window
- * disconnects; the session keeps running on the engine and the next connection
+ * The tab is bound to a WINDOW, not to this socket. Closing the window
+ * disconnects; the window keeps running on the engine and the next connection
  * with the same slot reattaches to it. That is the whole promise of the bench,
  * and it is why this component is allowed to be as small as it is: persistence
  * is tmux's job, not React's.
@@ -20,16 +20,17 @@ import { termOptions } from "../../lib/termPrefs.ts";
 import { isAppChord } from "../../lib/termKeys.ts";
 import { termShown, termInputGuard } from "../../lib/termInputGuard.ts";
 import { themeFromCss } from "../TerminalPanel.tsx";
+import { sessionSettled } from "../../lib/benchJobs.ts";
 
-export function BenchTerm({ root, slot, view, line, edit, agent, type, note, active, onTitle, onEnd }: {
+export function BenchTerm({ root, slot, view, line, edit, agent, type, note, active, tabId, onTitle, onEnd }: {
   root: string;
-  /** Which bench session this tab is. See engineBenchArgv. */
+  /** Which bench window this tab is. See engineBenchArgv. */
   slot: number;
-  /** A file for the session to open instead of a shell. */
+  /** A file for the window to open instead of a shell. */
   view?: string;
   line?: number;
   edit?: boolean;
-  /** A single-use ticket for an agent CLI to start in this session. */
+  /** A single-use ticket for an agent CLI to start in this window. */
   agent?: string;
   /**
    * Text put at the prompt, with the Enter left to you.
@@ -53,6 +54,9 @@ export function BenchTerm({ root, slot, view, line, edit, agent, type, note, act
    * agent mid-run.
    */
   active?: boolean;
+  /** The bench tab this terminal belongs to, so a tab that is still waiting for
+   *  its session is not mistaken for a dead one (benchJobs.ts). */
+  tabId?: string;
   /** What the session turned out to be, when the server says so — so a tab can
    *  stop saying "starting…" without the window polling for it. */
   onTitle?: (title: string) => void;
@@ -134,6 +138,7 @@ export function BenchTerm({ root, slot, view, line, edit, agent, type, note, act
       try { msg = JSON.parse(ev.data); } catch { return; }
       if (msg.t === "ready") {
         setState("live");
+        if (tabId) sessionSettled(tabId);
         settle();
         setTimeout(() => { if (!disposed) settle(); }, 150);
         setTimeout(() => { if (!disposed) settle(); }, 500);
@@ -156,12 +161,13 @@ export function BenchTerm({ root, slot, view, line, edit, agent, type, note, act
         }
         return;
       }
-      if (msg.t === "fatal") { setWhy(msg.error ?? "the session could not be opened"); setState("gone"); }
+      if (msg.t === "fatal") { setWhy(msg.error ?? "the session could not be opened"); setState("gone"); if (tabId) sessionSettled(tabId); }
     };
-    ws.onerror = () => { if (!disposed) setState((s) => (s === "live" ? s : "gone")); };
+    ws.onerror = () => { if (!disposed) setState((s) => (s === "live" ? s : "gone")); if (tabId) sessionSettled(tabId); };
     ws.onclose = () => {
       if (disposed) return;
       setState((s) => (s === "live" ? "gone" : s));
+      if (tabId) sessionSettled(tabId);
       onEndRef.current?.();
     };
 
@@ -194,10 +200,10 @@ export function BenchTerm({ root, slot, view, line, edit, agent, type, note, act
       disposed = true;
       ro.disconnect();
       off.dispose();
-      /* Closed, and that is not the same as killed: the socket goes, the tmux
-         session stays. Leaving the socket open for a tab nobody is looking at
-         would keep a client attached to that session — which is what makes two
-         clients mirror, the bug this app has already paid for twice. */
+      /* Closed, and that is not the same as killed: the socket goes, the
+         window stays. Leaving the socket open for a tab nobody is looking at
+         would keep a client attached to it — and a client is a view of the
+         engine session that only goes when its pty does. */
       try { ws.close(); } catch { /* already gone */ }
       term.dispose();
       if (termRef.current === term) termRef.current = null;

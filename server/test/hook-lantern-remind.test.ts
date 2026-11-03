@@ -85,16 +85,14 @@ describe("the hook says what the session is", () => {
     expect(src).toContain('role = os.environ.get("AGENTGLASS_ROLE")');
     expect(src).toContain('body["role"] = role');
   });
-  test("the bench hands the Lantern's ticket role to its tmux session with -e, and a bare pty gets it in the environment", async () => {
+  test("the bench hands the Lantern's ticket role to its window with -e, and a bare pty gets it in the environment", async () => {
     const term = await Bun.file(new URL("../src/terminal.ts", import.meta.url)).text();
-    expect(term).toContain("engineBenchArgv(startIn, d.bench, benchRuns, ticket?.role ? { AGENTGLASS_ROLE: ticket.role } : undefined)");
+    /* The role is set when the tab's WINDOW is made, not on an attach argv: a
+       window outlives every panel that looks at it, and `-e` has to be there
+       when its first pane is forked. The variable reaching the pane is measured
+       against a real tmux in engine-panels.test.ts. */
+    expect(term).toContain("env: d.bench && ticket?.role ? { AGENTGLASS_ROLE: ticket.role } : undefined,");
     expect(term).toContain("if (ticket?.role) env = { ...env, AGENTGLASS_ROLE: ticket.role };");
-    const { engineBenchArgv } = await import("../src/tmuxpane.ts");
-    const argv = engineBenchArgv("/tmp/some-root", 3, ["claude", "--name", "Lantern"], { AGENTGLASS_ROLE: "lantern" }) ?? [];
-    const at = argv.indexOf("-e");
-    expect(at).toBeGreaterThan(-1);
-    expect(argv[at + 1]).toBe("AGENTGLASS_ROLE=lantern");
-    expect(argv.indexOf("claude"), "the variable goes BEFORE the command, or tmux hands it to claude").toBeGreaterThan(at);
     const index = await Bun.file(new URL("../src/index.ts", import.meta.url)).text();
     expect(index).toContain('title: "Lantern", kind: "claude", role: "lantern" }');
   });

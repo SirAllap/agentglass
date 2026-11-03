@@ -103,6 +103,9 @@ button.mc-gh[aria-expanded=false] svg{transform:rotate(-90deg)}
 
 .mc-lbr{display:grid;grid-template-columns:minmax(0,1fr) 56px 56px auto;gap:10px;align-items:center;padding:6px 8px;border-radius:8px;border:${EDGE}}
 .mc-lbr+.mc-lbr{margin-top:4px}
+.mc-lbr[data-grp=true]{grid-template-columns:16px minmax(0,1fr) 56px 56px auto}
+.mc-lbr[data-child=true]{margin-left:16px;border-left:${LINE};border-radius:0 8px 8px 0}
+.mc-lbmore{display:flex;justify-content:flex-end;padding-top:6px}
 .mc-lbr .lm{display:flex;flex-direction:column;min-width:0}
 .mc-lbr .lm b{font-size:12px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mc-lbr .lm small{font-size:10px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -111,12 +114,15 @@ button.mc-gh[aria-expanded=false] svg{transform:rotate(-90deg)}
 .mc-r.hot{color:var(--warning-ink,var(--warning))}
 .mc-fine{font-size:10.5px;color:var(--text3)}
 
-.mc-sect{display:flex;align-items:center;gap:8px;min-height:28px}
-.mc-sect svg{color:var(--text3)}
-.mc-sect b{font-size:13px;font-weight:600;color:var(--text)}
-.mc-sect .t{font-size:12px;color:var(--text3);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.mc-sect .sp{flex:1}
-.mc-dc{display:flex;flex-direction:column;gap:10px}
+.mc-dc{display:flex;flex-direction:column;gap:10px;padding:12px 14px;border-radius:12px;background:linear-gradient(180deg,color-mix(in srgb,var(--primary) 8%,var(--surface-card)),var(--surface-card));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--primary) 34%,var(--surface-line)),var(--surface-lift)}
+.mc-dc-h{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:10px;align-items:center}
+.mc-dc-ic{display:inline-grid;place-items:center;width:32px;height:32px;border-radius:9px;color:var(--primary-ink,var(--primary));background:color-mix(in srgb,var(--primary) 14%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--primary) 28%,transparent)}
+.mc-dc-hd{display:flex;flex-direction:column;gap:1px;min-width:0}
+.mc-dc-k{font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--text3);font-weight:600}
+.mc-dc-n{font-size:15px;line-height:1.25;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mc-dc-n[data-big=true]{font-size:22px;letter-spacing:-.01em}
+.mc-dc-sub{font-size:11px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mc-dc .mc-note{margin:0}
 .mc-mounts{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:8px}
 .mc-mount{padding:9px 10px;border-radius:10px;border:${EDGE};min-width:0}
 .mc-mount .a{display:flex;justify-content:space-between;gap:8px;font:11px ${MONO};color:var(--text2);white-space:nowrap}
@@ -188,6 +194,10 @@ button.mc-trow:hover{background:var(--surface-inset)}
 .mc-bar2{height:6px;border-radius:3px;background:var(--bg3);display:flex;overflow:hidden}
 .mc-bar2 i{display:block;background:var(--text3)}
 .mc-bar2 i[data-rb=true]{background:var(--warning)}
+
+/* Must stay after the base .mc-mod/.mc-spf rules: same specificity, so only
+   source order makes the short window win. */
+@media (max-height:480px){.mc-mod{top:1vh;bottom:1vh}.mc-spf{max-height:30%;padding:6px 10px}}
 
 .mc-locks{flex:1;min-width:0;overflow:auto}
 .mc-lock{display:grid;grid-template-columns:14px minmax(0,1fr) minmax(0,auto) 92px;gap:10px;align-items:center;min-height:46px;padding:4px 14px;border-top:${LINE};position:relative}

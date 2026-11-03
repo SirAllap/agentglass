@@ -610,10 +610,12 @@ async function enrich(list: DockerContainer[]): Promise<DockerContainer[]> {
   // Resolved once for the whole batch: worktreeFamily is cached, but asking it
   // per container would still be twelve map lookups and twelve array builds.
   const family = scopeRoots();
+  const now = Date.now();
   return list.map((c) => {
     const f = factsFor(facts, c.id);
     const ports = parsePorts(c.ports);
     const owner = ownerOf(c.workingDir, family, workspaceRoots());
+    const asked = stopAskedAt(c.id, now);
     return {
       ...c,
       ...(ports.length ? { portList: ports } : {}),
@@ -621,10 +623,13 @@ async function enrich(list: DockerContainer[]): Promise<DockerContainer[]> {
       uptime: uptimeOf(c.status),
       restarts: f.restarts,
       startedAt: f.startedAt,
+      finishedAt: f.finishedAt,
+      stateError: f.stateError,
       healthError: f.healthError,
       healthFailures: f.healthFailures,
       ...(f.volumes.length ? { mounts: f.volumes } : {}),
       ...(owner ? { owner } : {}),
+      ...(asked != null ? { stopAskedAt: asked } : {}),
     };
   });
 }
@@ -713,6 +718,33 @@ function guard(id: string): DockerActionResult | null {
   if (!ID_RE.test(id)) return { ok: false, error: "invalid container id" };
   return null;
 }
+
+/*
+ * A container we asked to stop is not a failure because it died of the signal
+ * docker sent it: `Exited (143)` is SIGTERM, `Exited (137)` the SIGKILL docker
+ * sends when the grace period runs out. The code alone cannot tell those from a
+ * crash, so a stop of ours is remembered here and rides along on the row. Kept
+ * short and in memory: it is an explanation for the next few minutes, not a
+ * record of what happened.
+ */
+export const STOP_ASKED_MS = 10 * 60_000;
+const stopAsked = new Map<string, number>();
+
+/** The server asked this container to stop. */
+export function noteStopAsked(id: string, at = Date.now()): void { stopAsked.set(id, at); }
+
+/** Something else was asked of it, so an exit is its own business again. */
+export function forgetStopAsked(id: string): void { stopAsked.delete(id); }
+
+/** When we asked, while that still explains an exit; null once it does not. */
+export function stopAskedAt(id: string, now = Date.now()): number | null {
+  const at = stopAsked.get(id);
+  if (at == null) return null;
+  const age = now - at;
+  if (age < 0 || age > STOP_ASKED_MS) { stopAsked.delete(id); return null; }
+  return at;
+}
+
 /** `stop` and `restart` wait out the container's grace period — ten seconds of
  *  a frozen UI if this blocks, on a button the user pressed and is watching. */
 async function action(verb: string, id: string, extra: string[] = []): Promise<DockerActionResult> {
@@ -723,6 +755,10 @@ async function action(verb: string, id: string, extra: string[] = []): Promise<D
   // the button did nothing.
   overviewCache = null;
   if (r.code !== 0) return { ok: false, error: r.stderr.trim() || r.stdout.trim() || `docker ${verb} failed` };
+  // Only a stop explains a signal exit, and only until something else is asked
+  // of the container: a start, a restart or a removal clears the mark, so a
+  // later 143 is read as the crash it is.
+  if (verb === "stop") noteStopAsked(id); else forgetStopAsked(id);
   return { ok: true, output: r.stdout.trim() || `${verb} ${id.slice(0, 12)}` };
 }
 

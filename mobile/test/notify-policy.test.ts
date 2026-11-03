@@ -28,7 +28,7 @@ const ctx = (over: Partial<{ foreground: boolean; lastSeen: Map<string, number>;
 });
 
 describe("when to buzz", () => {
-  test("a held gate, with the phone in a pocket", () => {
+  test("a gate waiting on you, with the phone in a pocket", () => {
     expect(shouldNotify(gate(), ctx())).toEqual({ notify: true });
   });
 

@@ -14,12 +14,13 @@ const label = (id: string) => SETTINGS_PAGES.find((p) => p.id === id)?.label;
 const rowsOn = (pane: string) => SETTINGS_ROWS.filter((r) => r.pane === pane).map((r) => r.label);
 
 describe("slice 5: Lantern split, usage, data", () => {
-  test("Lantern is its own page and its section is not on Agents", () => {
-    expect(block("lantern")).toContain("<LanternSection");
-    expect(block("hooks")).not.toContain("LanternSection");
-    expect(src).toContain('id: "lantern", label: "Lantern"');
-    expect(src).toContain("icon: LanternIcon");
-    expect(label("lantern")).toBe("Lantern");
+  test("Lantern is one block of Agents, with its live card beside Watching", () => {
+    expect(block("hooks")).toContain("<AgentsPage");
+    expect(src).toContain('title="Watching"');
+    expect(src).toContain("<LanternPreview");
+    expect(src).not.toContain('id: "lantern", label: "Lantern"');
+    expect(src).not.toContain('show("lantern")');
+    expect(label("lantern")).toBeUndefined();
   });
 
   test("labels", () => {
@@ -41,15 +42,20 @@ describe("slice 5: Lantern split, usage, data", () => {
     expect(src).not.toContain('show("export")');
   });
 
-  test("old ids resolve: export -> privacy, open -> prefs, live ids stay", () => {
+  test("old ids resolve: export -> privacy, open -> prefs, lantern -> hooks, live ids stay", () => {
     expect(resolvePane("export")).toBe("privacy");
     expect(resolvePane("open")).toBe("prefs");
-    for (const id of ["hooks", "budgets", "lantern", "privacy"]) expect(resolvePane(id)).toBe(id);
+    expect(resolvePane("lantern")).toBe("hooks");
+    for (const id of ["hooks", "budgets", "privacy"]) expect(resolvePane(id)).toBe(id);
   });
 
-  test("the index puts Lantern rows on lantern, not hooks", () => {
-    expect(rowsOn("lantern").length).toBeGreaterThan(0);
-    expect(rowsOn("hooks").some((l) => /lantern/i.test(l))).toBe(false);
+  test("the index puts the Lantern settings on hooks, and no row on a lantern page", () => {
+    expect(rowsOn("lantern")).toEqual([]);
+    expect(rowsOn("hooks")).toEqual(expect.arrayContaining([
+      "Watch the agents and notify me",
+      "Ask sessions what they are working on",
+      "Wake the orchestrator at least every",
+    ]));
     expect(rowsOn("export")).toEqual([]);
     expect(rowsOn("privacy").some((l) => /Events/.test(l))).toBe(true);
   });

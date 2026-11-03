@@ -11,6 +11,8 @@
  * the sender does not know whether the receiver is mounted, and does not have
  * to. A request left here is picked up by App, which owns the modal.
  */
+import { SETTINGS_PAGE_ALIASES } from "../../../shared/uiActions.ts";
+
 export type SettingsPane = string;
 /** A row's anchor — see settingsIndex.ts's rowId. Optional and additive: every
  *  one-argument `openSettings(pane)` caller keeps opening on the page with
@@ -34,8 +36,10 @@ export function openSettings(pane?: SettingsPane, row?: SettingsRowId): void {
 }
 
 /** Pages that were folded into another. A remembered pane or an old
- *  `openSettings(id)` caller lands on the new home instead of nowhere. */
-const PANE_ALIAS: Record<string, string> = { open: "prefs", export: "privacy" };
+ *  `openSettings(id)` caller lands on the new home instead of nowhere. The
+ *  shared map is the same one the agent door validates against. `polaris` is not
+ *  here: a stored link to it now lands on the page Polaris has of its own. */
+const PANE_ALIAS: Record<string, string> = { open: "prefs", export: "privacy", ...SETTINGS_PAGE_ALIASES };
 export const resolvePane = (id: string): string => PANE_ALIAS[id] ?? id;
 
 /** The ClickUp page exists only while ClickUp is connected; asked for without
