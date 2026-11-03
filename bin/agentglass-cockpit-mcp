@@ -684,7 +684,7 @@ _TOOLS = [
           {"state": {"type": "string", "enum": ["working", "waiting", "idle"]}}),
     _tool("cockpit_attention", t_attention,
           "What asks something of a person right now, by the dashboard's own rule; each agent says which in "
-          "`attention`: blocked (a permission prompt or a held gate), left (a turn that ended and nobody came "
+          "`attention`: blocked (a permission prompt or a gate waiting for you), left (a turn that ended and nobody came "
           "back to for an hour) or forgotten (claimed work quiet for an hour). A turn that ended under the hour "
           "is not here, as it is not on the dashboard's line; cockpit_agents with state=waiting lists every one. "
           "Plus the gates held for a decision. Read-only: nothing here answers or approves them."),
