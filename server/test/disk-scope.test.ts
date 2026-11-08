@@ -109,6 +109,20 @@ describe("what the machine search may touch", () => {
     } finally { delete process.env.AGENTGLASS_DISK_ROOTS; }
   });
 
+  test("a root reached through a symlink (e.g. macOS /var -> /private/var) is allowed", () => {
+    const linkedRoot = join(home, "linked-mount");
+    symlinkSync(outside, linkedRoot);
+    process.env.AGENTGLASS_DISK_ROOTS = linkedRoot;
+    try {
+      expect(diskAllows(linkedRoot)).toBe(true);
+      expect(diskAllows(join(linkedRoot, "secret.txt"))).toBe(true);
+      expect(diskAllows(join(outside, "secret.txt"))).toBe(true);
+    } finally {
+      delete process.env.AGENTGLASS_DISK_ROOTS;
+      rmSync(linkedRoot, { force: true });
+    }
+  });
+
   test("the switch turns all of it off", () => {
     process.env.AGENTGLASS_DISK_DISABLED = "1";
     try {
