@@ -185,6 +185,17 @@ def uninstall_statusline(cfg):
         del cfg["statusLine"]
 
 
+def _ps_quote(value):
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _command_hook(command):
+    hook = {"type": "command", "command": command}
+    if os.name == "nt":
+        hook["shell"] = "powershell"
+    return hook
+
+
 def hook_command(python, send_event, event, add_chat):
     """One event's command line, and the `|| exit 0` that keeps it advisory.
 
@@ -203,10 +214,17 @@ def hook_command(python, send_event, event, add_chat):
     # Quote the script path unconditionally: a clone living under a spaced
     # path ("/Users/x/My Projects/…", "C:\Users\…") breaks the hook command
     # on every platform, not just Windows.
+    if os.name == "nt":
+        cmd = f"& {_ps_quote(python)} {_ps_quote(send_event)} --event-type {event}"
+        if add_chat:
+            cmd += " --add-chat"
+        # Claude Code may default to Git Bash. The entry explicitly selects
+        # PowerShell; catch interpreter lookup errors as well as script failures.
+        return "try { " + cmd + " } catch {}; exit 0"
     cmd = f'{python} "{send_event}" --event-type {event}'
     if add_chat:
         cmd += " --add-chat"
-    return cmd + (" || exit /b 0" if os.name == "nt" else " || exit 0")
+    return cmd + " || exit 0"
 
 
 def _is_gate(entry):
@@ -222,7 +240,9 @@ def gate_command(python, gate):
     Kept identical to `gateCommand` in server/src/hooksetup.ts.
     """
     if os.name == "nt":
-        return 'if exist "%s" (%s "%s") else (exit /b 0)' % (gate, python, gate)
+        return (f"if (Test-Path -LiteralPath {_ps_quote(gate)} -PathType Leaf) {{ "
+                f"& {_ps_quote(python)} {_ps_quote(gate)}; exit $LASTEXITCODE "
+                "} else { exit 0 }")
     return '[ -f "%s" ] || exit 0; %s "%s"' % (gate, python, gate)
 
 
@@ -230,7 +250,7 @@ def install_gate(cfg):
     """One PreToolUse entry, matcher `*`, replacing any earlier one of ours."""
     hooks = cfg.setdefault("hooks", {})
     arr = [e for e in hooks.get("PreToolUse", []) if not _is_gate(e)]
-    arr.append({"matcher": "*", "hooks": [{"type": "command", "command": gate_command(_hook_python(), GATE)}]})
+    arr.append({"matcher": "*", "hooks": [_command_hook(gate_command(_hook_python(), GATE))]})
     hooks["PreToolUse"] = arr
 
 
@@ -253,11 +273,17 @@ def do_install(cfg):
     for event, (matcher, add_chat) in EVENTS.items():
         arr = [e for e in hooks.get(event, []) if not _is_ours(e)]
         cmd = hook_command(python, SEND_EVENT, event, add_chat)
-        entry = {"hooks": [{"type": "command", "command": cmd}]}
+        entry = {"hooks": [_command_hook(cmd)]}
         if matcher is not None:
             entry["matcher"] = matcher
         arr.append(entry)
         hooks[event] = arr
+    if os.name == "nt":
+        for entry in hooks.get("PreToolUse", []):
+            for h in entry.get("hooks", []):
+                m = re.fullmatch(r'if exist "([^"]*gate_event\.py)" \(([\w.-]+) "\1"\) else \(exit /b 0\)', h.get("command", ""))
+                if m:
+                    h.update(_command_hook(gate_command(m[2], m[1])))
     install_statusline(cfg)
 
 
