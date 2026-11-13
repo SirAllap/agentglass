@@ -115,7 +115,7 @@ const DENY_TREES: readonly (readonly string[])[] = [
 const DENY_NAMES = /^(\.netrc|_netrc|\.git-credentials|\.npmrc|\.pypirc|\.pgpass|\.env(\..*)?|\.credentials\.json|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|.*\.(pem|key|kdbx)|.*_history|\.histfile)$/i;
 
 function underDenied(p: string): boolean {
-  const roots = diskRoots();
+  const roots = diskRoots().flatMap((r) => [r, realish(r)]);
   const segs = (r: string) => relative(r, p).split(sep);
   const hit = roots.some((r) => {
     const rel = relative(r, p);
@@ -129,7 +129,7 @@ function underDenied(p: string): boolean {
 /** Home-rooted, dotted, and not a secret store: what the local door adds. */
 function dottedAllows(abs: string, real: string): boolean {
   if (!diskEnabled()) return false;
-  const roots = diskRoots();
+  const roots = diskRoots().flatMap((r) => [r, realish(r)]);
   const inRoot = (p: string) => roots.some((r) => {
     const rel = relative(r, p);
     return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
@@ -239,7 +239,7 @@ export function browseReal(p: unknown, local = false): string | null {
    * what the test that caught it now pins.
    */
   const roots = workspaceRoots();
-  return roots.length && inScope(real, roots) ? real : null;
+  return roots.length && (inScope(real, roots) || inScope(real, roots.map(realish))) ? real : null;
 }
 
 /** The folder above, unless that would leave everywhere this may look. */
