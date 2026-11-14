@@ -1,11 +1,11 @@
 // FIRST, and it must stay first: `agentglass-server cookies …` is answered
 // here, before the imports below open the database and start their timers.
 import "./cookieentry.ts";
-import { isRuleRoot } from "./agentRulesPath.ts";
 // SECOND, for the same reason: it reads the desktop app's key off the pipe the
 // app started this process with and closes it, before any import below can
 // spawn a child that would inherit the descriptor (desk.ts).
 import "./desk.ts";
+import { isRuleRoot } from "./agentRulesPath.ts";
 import { makeTagsOriginCache } from "./tagsOriginCache.ts";
 import type { ServerWebSocket, Server } from "bun";
 import type { ControlCmd, IngestBody, WsFrame, MarkKind, WorkingTree, PanesResponse, AgentSessionRow, GitRepoRef, TreeAuthorsInfo, ChangeRow } from "../../shared/types.ts";
