@@ -115,7 +115,8 @@ export function diskAllows(p: unknown): boolean {
   if (!abs) return false;
   const real = realish(abs);
   if (agentglassPrivate(abs)) return false;
-  return diskRoots().some((root) => {
+  return diskRoots().some((r) => {
+    const root = realish(r);
     if (!within(real, root)) return false;
     // Hidden is measured from the ROOT, not from "/": a root the operator named
     // may itself be dotted, and that is their call — see diskRoots.
