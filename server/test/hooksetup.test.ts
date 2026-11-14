@@ -3,7 +3,7 @@
 // port of hooks/install_hooks.py — so the property that matters most is that the
 // two AGREE: either can undo the other, and neither disturbs a third party's
 // hooks. Every case here is one a real settings.json can be in.
-import { describe, expect, test, beforeEach } from "bun:test";
+import { describe, expect, test, beforeEach, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,14 @@ const { doInstall, doUninstall, isOurs, EVENTS, MARKER, gateCommand } = _interna
 // ~/.claude via os.homedir()) touch a throwaway tree, never the real one.
 // hooksetup reads homedir() at call time, not import time, so setting it here
 // is enough — no module cache to fight.
+const savedHome = process.env.HOME;
+const savedProfile = process.env.USERPROFILE;
+afterAll(() => {
+  if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome;
+  if (savedProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = savedProfile;
+});
+const windows = process.platform === "win32";
+const python = windows ? "py" : "python3";
 let HOME = "";
 function settingsFile() { return join(HOME, ".claude", "settings.json"); }
 function writeSettings(obj: unknown) {
@@ -30,7 +38,7 @@ function readSettings(): any {
 beforeEach(() => {
   HOME = mkdtempSync(join(tmpdir(), "agx-hooks-"));
   process.env.HOME = HOME;
-  delete process.env.USERPROFILE; // homedir() prefers this on some platforms
+  process.env.USERPROFILE = HOME; // Windows must also use the disposable profile
 });
 
 describe("merge logic (pure, no disk)", () => {
@@ -49,7 +57,7 @@ describe("merge logic (pure, no disk)", () => {
     expect(cmd("SessionEnd")).toContain("--add-chat");
     expect(cmd("SessionStart")).not.toContain("--add-chat");
     // the script path is quoted (spaced paths break the command otherwise)
-    expect(cmd("Stop")).toContain('"/x/hooks/send_event.py"');
+    expect(cmd("Stop")).toContain(windows ? "'/x/hooks/send_event.py'" : '"/x/hooks/send_event.py"');
   });
 
   test("every command fails open, on every event", () => {
@@ -62,15 +70,13 @@ describe("merge logic (pure, no disk)", () => {
     const cfg: any = {};
     doInstall(cfg, "/x/hooks/send_event.py", "python3");
     for (const [event] of EVENTS) {
-      expect(cfg.hooks[event][0].hooks[0].command, event).toEndWith("|| exit 0");
+      expect(cfg.hooks[event][0].hooks[0].command, event).toEndWith(windows ? "; exit 0" : "|| exit 0");
     }
   });
 
   test("and on Windows, in the shell Windows actually runs", () => {
-    // `|| exit 0` in cmd.exe exits the whole shell, not the command — `exit /b`
-    // is the one that returns a status. Passed explicitly so this holds on the
-    // machine running the suite rather than only on a Windows one.
-    expect(hookCommand("py", "C:\\ag\\send_event.py", "Stop", true, true)).toEndWith("|| exit /b 0");
+    expect(hookCommand("py", "C:\\ag\\send_event.py", "Stop", true, true)).toBe(
+      "try { & 'py' 'C:\\ag\\send_event.py' --event-type Stop --add-chat } catch {}; exit 0");
     expect(hookCommand("python3", "/x/send_event.py", "Stop", true, false)).toEndWith("|| exit 0");
   });
 
@@ -212,7 +218,7 @@ describe("applyHooks / hookStatus (on disk)", () => {
 // demand a byte-identical settings.json. If the two ever drift, this fails.
 // Skipped only where python3 is genuinely absent (never on CI).
 describe("golden parity with install_hooks.py", () => {
-  const py = spawnSync("python3", ["--version"]);
+  const py = spawnSync(python, ["--version"]);
   const havePython = py.status === 0;
   const repoHooks = hooksDir();
 
@@ -229,7 +235,7 @@ describe("golden parity with install_hooks.py", () => {
     const proj = mkdtempSync(join(tmpdir(), "agx-pyproj-"));
     mkdirSync(join(proj, ".claude"), { recursive: true });
     writeFileSync(join(proj, ".claude", "settings.json"), JSON.stringify(seed, null, 2));
-    const run = spawnSync("python3", [join(repoHooks!, "install_hooks.py"), "--project", proj], { encoding: "utf8" });
+    const run = spawnSync(python, ["-X", "utf8", join(repoHooks!, "install_hooks.py"), "--project", proj], { encoding: "utf8" });
     expect(run.status).toBe(0);
     const pyOut = JSON.parse(readFileSync(join(proj, ".claude", "settings.json"), "utf8"));
     rmSync(proj, { recursive: true, force: true });
@@ -282,7 +288,7 @@ describe("the gate switch", () => {
     const cmd = ((readSettings() as any).hooks.PreToolUse as any[])[0].hooks[0].command as string;
     expect(cmd).toContain("gate_event.py");
     expect(cmd).not.toMatch(/\|\| exit( \/b)? 0\s*$/);
-    expect(cmd).toMatch(/^\[ -f ".*gate_event\.py" \] \|\| exit 0; \S+ ".*gate_event\.py"$/);
+    if (!windows) expect(cmd).toMatch(/^\[ -f ".*gate_event\.py" \] \|\| exit 0; \S+ ".*gate_event\.py"$/);
   });
 
   test.if(process.platform !== "win32")("run through sh: a moved script passes, a real refusal still refuses", () => {
@@ -321,7 +327,8 @@ describe("the gate switch", () => {
   });
 
   test("the Windows spelling guards the same way", () => {
-    expect(gateCommand("py", "C:\\x\\gate_event.py", true)).toBe('if exist "C:\\x\\gate_event.py" (py "C:\\x\\gate_event.py") else (exit /b 0)');
+    expect(gateCommand("py", "C:\\x\\gate_event.py", true)).toBe(
+      "if (Test-Path -LiteralPath 'C:\\x\\gate_event.py' -PathType Leaf) { & 'py' 'C:\\x\\gate_event.py'; exit $LASTEXITCODE } else { exit 0 }");
   });
 
   test("status says when the wired gate script is no longer there", () => {
@@ -361,7 +368,7 @@ describe("the gate switch", () => {
 });
 
 describe("golden parity with install_hooks.py --gate", () => {
-  const py = spawnSync("python3", ["--version"]);
+  const py = spawnSync(python, ["--version"]);
   const havePython = py.status === 0;
   const repoHooks = hooksDir();
 
@@ -374,13 +381,13 @@ describe("golden parity with install_hooks.py --gate", () => {
     const proj = mkdtempSync(join(tmpdir(), "agx-pygate-"));
     mkdirSync(join(proj, ".claude"), { recursive: true });
     writeFileSync(join(proj, ".claude", "settings.json"), JSON.stringify(seed, null, 2));
-    const run = spawnSync("python3", [join(repoHooks!, "install_hooks.py"), "--gate", "--project", proj], { encoding: "utf8" });
+    const run = spawnSync(python, ["-X", "utf8", join(repoHooks!, "install_hooks.py"), "--gate", "--project", proj], { encoding: "utf8" });
     expect(run.status, run.stderr).toBe(0);
     const pyOut = JSON.parse(readFileSync(join(proj, ".claude", "settings.json"), "utf8"));
     expect(pyOut).toEqual(tsOut);
 
     /* And either one undoes the other. */
-    const undo = spawnSync("python3", [join(repoHooks!, "install_hooks.py"), "--gate", "--uninstall", "--project", proj], { encoding: "utf8" });
+    const undo = spawnSync(python, ["-X", "utf8", join(repoHooks!, "install_hooks.py"), "--gate", "--uninstall", "--project", proj], { encoding: "utf8" });
     expect(undo.status, undo.stderr).toBe(0);
     applyGate("uninstall");
     expect(JSON.parse(readFileSync(join(proj, ".claude", "settings.json"), "utf8"))).toEqual(readSettings());
@@ -403,3 +410,65 @@ describe("the interpreter's version, for the Agents page's chip", () => {
     expect(pythonVersion("py-throws", 1_000_000, () => { throw new Error("ENOENT"); })).toBeNull();
   });
 });
+
+// Execute the declared Windows shell, including stdin and a path that would
+// expand or split if it were interpolated rather than quoted literally.
+test.if(windows)("PowerShell commands preserve input, deny status and fail-open telemetry", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agx hook '$-"));
+  const script = join(dir, "gate_event.py");
+  const run = (command: string) => spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], { encoding: "utf8", input: '{"tool_name":"Read"}' });
+  try {
+    expect(run(gateCommand("py", script)).status).toBe(0);
+    writeFileSync(script, "import sys, json\nassert json.load(sys.stdin)['tool_name'] == 'Read'\nsys.exit(2)\n");
+    expect(run(gateCommand("py", script)).status).toBe(2);
+    expect(run(hookCommand("py", script, "PreToolUse", false)).status).toBe(0);
+    expect(run(hookCommand("missing-agentglass-python", script, "PreToolUse", false)).status).toBe(0);
+    rmSync(script);
+    expect(run(hookCommand("py", script, "PreToolUse", false)).status).toBe(0);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 20000);
+
+test.if(windows)("reinstall migrates cmd hooks without enabling the gate or losing other hooks", () => {
+  const gate = 'if exist "C:\\old\\gate_event.py" (py "C:\\old\\gate_event.py") else (exit /b 0)';
+  const cfg: any = { hooks: { PreToolUse: [{ hooks: [{ type: "command", command: gate }] }, { hooks: [{ type: "command", command: 'py "C:\\old\\send_event.py" --event-type PreToolUse || exit /b 0' }] }, { hooks: [{ type: "command", command: "custom-hook" }] }] } };
+  doInstall(cfg, "C:\\new\\send_event.py", "py");
+  expect(cfg.hooks.PreToolUse).toHaveLength(3);
+  expect(cfg.hooks.PreToolUse[0].hooks[0]).toEqual({ type: "command", shell: "powershell", command: gateCommand("py", "C:\\old\\gate_event.py") });
+  expect(cfg.hooks.PreToolUse[1].hooks[0].command).toBe("custom-hook");
+  expect(cfg.hooks.PreToolUse[2].hooks[0].shell).toBe("powershell");
+  writeSettings({ hooks: { PreToolUse: [{ hooks: [{ type: "command", command: gate }] }] } });
+  expect(healGateCommand()).toBe(true);
+  expect(healGateCommand()).toBe(false);
+});
+
+test.if(windows)("Python telemetry reinstall also repairs a legacy cmd gate", () => {
+  const proj = mkdtempSync(join(tmpdir(), "agx-migrate-"));
+  try {
+    mkdirSync(join(proj, ".claude"));
+    const file = join(proj, ".claude", "settings.json");
+    const seed: any = { hooks: { PreToolUse: [{ hooks: [{ type: "command", command: 'if exist "C:\\old\\gate_event.py" (py "C:\\old\\gate_event.py") else (exit /b 0)' }] }] } };
+    writeFileSync(file, JSON.stringify(seed));
+    const result = spawnSync(python, ["-X", "utf8", join(hooksDir()!, "install_hooks.py"), "--project", proj], { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    doInstall(seed, join(hooksDir()!, "send_event.py"), "py");
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(seed);
+  } finally { rmSync(proj, { recursive: true, force: true }); }
+});
+
+test.if(windows && existsSync("C:/Program Files/Git/bin/bash.exe"))("Git Bash can launch the declared PowerShell commands with stdin intact", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agx-bash-hook-"));
+  const script = join(dir, "gate_event.py");
+  const run = (command: string) => spawnSync("C:/Program Files/Git/bin/bash.exe", ["-c", `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(command, "utf16le").toString("base64")}`], { encoding: "utf8", input: '{"tool_name":"Read"}' });
+  try {
+    expect(run(gateCommand("py", script)).status).toBe(0);
+    writeFileSync(script, "import sys, json\nassert json.load(sys.stdin)['tool_name'] == 'Read'\nsys.exit(2)\n");
+    expect(run(gateCommand("py", script)).status).toBe(2);
+    expect(run(hookCommand("py", script, "PreToolUse", false)).status).toBe(0);
+    writeFileSync(script, `print('{"hookSpecificOutput":{"permissionDecision":"deny"}}')\n`);
+    const denied = run(gateCommand("py", script));
+    expect(denied.status).toBe(0);
+    expect(denied.stdout).toContain('"permissionDecision":"deny"');
+    rmSync(script);
+    expect(run(hookCommand("py", script, "PreToolUse", false)).status).toBe(0);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 20000);
