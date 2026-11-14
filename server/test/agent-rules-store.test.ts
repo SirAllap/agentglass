@@ -450,3 +450,19 @@ describe("the seat and the checks its flow gives away", () => {
       .toMatchObject({ ok: false, status: 400 });
   });
 });
+
+test.if(process.platform === "win32")("drive-letter rule writes and reads agree across slash styles", async () => {
+  for (const root of [ROOT, ROOT.replaceAll("\\", "/")]) {
+    const result = await store.setRule({ root, match: "Bash(git push:*)", setting: "never" }, person);
+    expect(result.ok).toBe(true);
+    expect(store.check(ROOT, "Bash", bash("git push")).decision).toBe("never");
+    expect(store.ruleRoot(root)).toBe(store.ruleRoot(ROOT));
+  }
+});
+
+test("rule writes reject relative and traversal roots", async () => {
+  for (const root of ["orbit", "D:orbit", "D:/code/../orbit", "D:\\code\\..\\orbit", "/work/../orbit"]) {
+    const result = await store.setRule({ root, match: "Bash(git push:*)", setting: "never" }, person);
+    expect(result).toMatchObject({ ok: false, status: 400 });
+  }
+});

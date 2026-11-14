@@ -1,6 +1,7 @@
 // FIRST, and it must stay first: `agentglass-server cookies …` is answered
 // here, before the imports below open the database and start their timers.
 import "./cookieentry.ts";
+import { isRuleRoot } from "./agentRulesPath.ts";
 // SECOND, for the same reason: it reads the desktop app's key off the pipe the
 // app started this process with and closes it, before any import below can
 // spawn a child that would inherit the descriptor (desk.ts).
@@ -3338,7 +3339,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // The agent rules (agentRulesStore.ts) first: a "never" is answered now, and an
       // "ask" is held for the person even when a gate rule would let it through.
       let ruled: ReturnType<typeof rulesCheck> | null = null;
-      try { ruled = cwd.startsWith("/") ? rulesCheck(cwd, greq.tool_name, ti, undefined, caller?.principal === "seat" ? "seat" : undefined) : null; } catch { ruled = null; }
+      try { ruled = isRuleRoot(cwd, false) ? rulesCheck(cwd, greq.tool_name, ti, undefined, caller?.principal === "seat" ? "seat" : undefined) : null; } catch { ruled = null; }
       if (ruled?.decision === "never") return json(denyByRule(greq, ruled.reason ?? "an agentglass rule says never"));
       // The one exception: an outward match made only by a generic MCP verb
       // (`create_entities` on a memory store) is released by an allow rule
@@ -8803,11 +8804,11 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/agent-rules/check" && req.method === "GET") {
       const root = url.searchParams.get("root") ?? "";
       const tool = url.searchParams.get("tool") ?? "";
-      if (!root.startsWith("/") || !/^[A-Za-z][A-Za-z0-9_-]{0,99}$/.test(tool)) return json({ ok: false, error: "root: an absolute path; tool: a tool name" }, 400);
+      if (!isRuleRoot(root, false) || !/^[A-Za-z][A-Za-z0-9_-]{0,99}$/.test(tool)) return json({ ok: false, error: "root: an absolute path; tool: a tool name" }, 400);
       try {
         // A flight-plan builder's tab carries its worktree: its file writes stay inside it. Only a worktree some launched plan was cut at counts, so a made-up one binds nobody but its sender.
         const bound = url.searchParams.get("bound") ?? "";
-        const boundReal = bound.startsWith("/") ? realish(bound) : "";
+        const boundReal = isRuleRoot(bound, false) ? realish(bound) : "";
         const owner = boundReal ? FlightPlanStore.listPlans({ state: "launched" }).find((p) => p.launched?.worktree && realish(p.launched.worktree) === boundReal) : undefined;
         if (owner) {
           const v = FlightPlan.builderVerdict(boundReal, root, tool, url.searchParams.get("input") ?? "", owner.launched?.base ?? null);
@@ -8823,7 +8824,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/agent-rules" && req.method === "GET") {
       const own = caller?.principal === "seat" ? caller.seat?.root : undefined;
       const root = url.searchParams.get("root") ?? own ?? "";
-      if (!(root === "*" || root.startsWith("/"))) return json({ ok: false, error: 'root: a project\'s absolute path, or "*"' }, 400);
+      if (!isRuleRoot(root)) return json({ ok: false, error: 'root: a project\'s absolute path, or "*"' }, 400);
       if (own && rulesRoot(root) !== rulesRoot(own) && root !== "*") return json({ ok: false, error: "a seat reads its own project's rules" }, 403);
       return json({ ok: true, ...rulesView(root) });
     }
