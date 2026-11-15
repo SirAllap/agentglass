@@ -8,6 +8,7 @@
  * build reading the same config sees the same list. A write through either
  * door lands in both.
  */
+import { isRuleRoot, rulePathSpelling } from "./agentRulesPath.ts";
 import { randomBytes } from "node:crypto";
 import { db } from "./db.ts";
 import { launchDeny, launchMode, writeLaunchPermissions } from "./config.ts";
@@ -98,9 +99,10 @@ const rootCache = new Map<string, string>();
  */
 export function ruleRoot(path: string): string {
   if (path === BASE_PROJECT) return path;
+  path = rulePathSpelling(path);
   const hit = rootCache.get(path);
   if (hit) return hit;
-  const r = projectRootOf(path) ?? path.replace(/\/+$/, "");
+  const r = projectRootOf(path) ?? path;
   if (rootCache.size > 500) rootCache.clear();
   rootCache.set(path, r);
   return r;
@@ -262,7 +264,7 @@ export async function setRule(
   who: { person: boolean; by: string },
 ): Promise<RulesAnswer> {
   ensureBase();
-  if (typeof b.root !== "string" || !(b.root === BASE_PROJECT || b.root.startsWith("/"))) return { ok: false, error: 'root: a project\'s absolute path, or "*" for every project', status: 400 };
+  if (!isRuleRoot(b.root)) return { ok: false, error: 'root: a project\'s absolute path, or "*" for every project', status: 400 };
   if (b.role !== undefined && !isRuleScope(b.role)) return { ok: false, error: 'role: "seat", or left out for every agent', status: 400 };
   const role: RuleScope | "" = isRuleScope(b.role) ? b.role : "";
   const root = ruleRoot(b.root);
