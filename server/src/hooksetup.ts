@@ -107,6 +107,12 @@ function asArray(v: unknown): any[] {
   return Array.isArray(v) ? v : [];
 }
 
+function psQuote(value: string): string { return "'" + value.replace(/'/g, "''") + "'"; }
+
+function commandHook(command: string): { type: string; command: string; shell?: string } {
+  return { type: "command", command, ...(process.platform === "win32" ? { shell: "powershell" } : {}) };
+}
+
 /**
  * One event's command line, and the `|| exit 0` that keeps it advisory.
  *
@@ -126,9 +132,12 @@ function asArray(v: unknown): any[] {
 export function hookCommand(python: string, sendEvent: string, event: string, addChat: boolean, windows = process.platform === "win32"): string {
   // Quote the script path unconditionally: a clone under a spaced path breaks
   // the hook command on every platform, not only Windows.
+  // Pin PowerShell in the entry: Claude Code otherwise prefers Git Bash.
+  // Literal quoting also protects paths containing apostrophes or dollar signs.
+  if (windows) return `try { & ${psQuote(python)} ${psQuote(sendEvent)} --event-type ${event}${addChat ? " --add-chat" : ""} } catch {}; exit 0`;
   let cmd = `${python} "${sendEvent}" --event-type ${event}`;
   if (addChat) cmd += " --add-chat";
-  return cmd + (windows ? " || exit /b 0" : " || exit 0");
+  return cmd + " || exit 0";
 }
 
 // Append our forwarder to each event after stripping any prior agentglass entry
@@ -138,11 +147,12 @@ function doInstall(cfg: any, sendEvent: string, python: string, statusline?: str
   for (const [event, matcher, addChat] of EVENTS) {
     const arr = asArray(hooks[event]).filter((e) => !isOurs(e));
     const cmd = hookCommand(python, sendEvent, event, addChat);
-    const entry: any = { hooks: [{ type: "command", command: cmd }] };
+    const entry: any = { hooks: [commandHook(cmd)] };
     if (matcher !== null) entry.matcher = matcher;
     arr.push(entry);
     hooks[event] = arr;
   }
+  upgradeWindowsGate(cfg);
   if (statusline) installStatusLine(cfg, statusline);
 }
 
@@ -286,8 +296,19 @@ const isGate = (e: any): boolean => asArray(e?.hooks).some((h: any) => String(h?
 
 export function gateCommand(python: string, script: string, windows = process.platform === "win32"): string {
   return windows
-    ? `if exist "${script}" (${python} "${script}") else (exit /b 0)`
+    ? `if (Test-Path -LiteralPath ${psQuote(script)} -PathType Leaf) { & ${psQuote(python)} ${psQuote(script)}; exit $LASTEXITCODE } else { exit 0 }`
     : `[ -f "${script}" ] || exit 0; ${python} "${script}"`;
+}
+
+// Only the exact legacy generated shape is migrated; custom gate arguments stay intact.
+function upgradeWindowsGate(cfg: any): boolean {
+  if (process.platform !== "win32") return false;
+  let changed = false;
+  for (const e of asArray(cfg?.hooks?.PreToolUse)) for (const h of asArray(e?.hooks)) {
+    const m = /^if exist "([^"]*gate_event\.py)" \(([\w.-]+) "\1"\) else \(exit \/b 0\)$/.exec(String(h?.command ?? ""));
+    if (m) { Object.assign(h, commandHook(gateCommand(m[2]!, m[1]!))); changed = true; }
+  }
+  return changed;
 }
 
 /** The gate script a wired gate command names, and whether that command has the missing-file guard. */
@@ -295,6 +316,8 @@ function gateScriptInfo(cfg: any): { path: string; guarded: boolean } | null {
   for (const e of asArray(cfg?.hooks?.PreToolUse).filter(isGate)) {
     for (const h of asArray(e?.hooks)) {
       const cmd = String(h?.command ?? "");
+      const ps = /^if \(Test-Path -LiteralPath '((?:[^']|'')*gate_event\.py)' -PathType Leaf\)/.exec(cmd);
+      if (ps) return { path: ps[1]!.replace(/''/g, "'"), guarded: true };
       const m = /"([^"]*gate_event\.py)"/.exec(cmd);
       if (m) return { path: m[1]!, guarded: /^(\[ -f |if exist )/.test(cmd) };
     }
@@ -312,11 +335,11 @@ export function healGateCommand(): boolean {
   const path = settingsPath();
   const r = readCfg(path);
   if (!("cfg" in r)) return false;
-  let changed = false;
+  let changed = upgradeWindowsGate(r.cfg);
   for (const e of asArray(r.cfg?.hooks?.PreToolUse).filter(isGate)) {
     for (const h of asArray(e?.hooks)) {
       const m = /^([\w.-]+) "([^"]*gate_event\.py)"$/.exec(String(h?.command ?? ""));
-      if (m) { h.command = gateCommand(m[1]!, m[2]!); changed = true; }
+      if (m) { Object.assign(h, commandHook(gateCommand(m[1]!, m[2]!))); changed = true; }
     }
   }
   if (!changed) return false;
@@ -332,7 +355,7 @@ export function installGate(cfg: any, script: string, python: string): void {
   /* Any earlier entry of ours goes first, so re-installing from a moved build
      re-points the path instead of leaving two. */
   const arr = asArray(hooks.PreToolUse).filter((e) => !isGate(e));
-  arr.push({ matcher: "*", hooks: [{ type: "command", command: gateCommand(python, script) }] });
+  arr.push({ matcher: "*", hooks: [commandHook(gateCommand(python, script))] });
   hooks.PreToolUse = arr;
 }
 
