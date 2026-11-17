@@ -101,9 +101,15 @@ export function coerceNotifyPrefs(raw: unknown): NotifyPrefs {
 }
 
 /** The one question every emitter asks before it does anything: is THIS kind
- *  allowed on THIS channel, right now. */
-export function notifies(p: NotifyPrefs, kind: NotifyKind, channel: NotifyChannel): boolean {
-  return !p.none && p.kinds[kind] && p.channels[channel];
+ *  allowed on THIS channel, right now.
+ *
+ *  Silence all (`none`) stops everything except an agent blocked on you: it
+ *  says "leave me alone", not "let an agent sit held until it times out and
+ *  say nothing". Settings says so under the switch. Something the person
+ *  asked for by hand (`asked`, a PR watch) gets through it too: they asked
+ *  to be told, and the contract is that it always pops up. */
+export function notifies(p: NotifyPrefs, kind: NotifyKind, channel: NotifyChannel, o: { asked?: boolean } = {}): boolean {
+  return (!p.none || kind === "blocked" || !!o.asked) && p.kinds[kind] && p.channels[channel];
 }
 
 /**

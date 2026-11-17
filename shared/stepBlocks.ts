@@ -38,9 +38,9 @@ export const BLOCK_TYPES: readonly BlockType[] = ["move", "unassign", "assign", 
 
 /** A kind only some trackers have. It is not in BLOCK_INFO: that list is ClickUp's, and a tracker that lacks a kind refuses it by name. */
 export const LINK_BLOCK = { type: "link", name: "Link the pull request on the card", blurb: "Put the pull request on the card as a link, once.", built: true } as const;
-/** What the block list can hold on one tracker. ClickUp's is BLOCK_INFO as it was. */
+/** What the block list can hold on one tracker. ClickUp's is BLOCK_INFO as it was; Jira's adds the link it can write. */
 export const blockInfoFor = (tracker: string): readonly { type: string; name: string; blurb: string; built: boolean }[] =>
-  tracker === "jira" ? [...BLOCK_INFO.filter((b) => b.type !== "field"), LINK_BLOCK] : BLOCK_INFO;
+  tracker === "jira" ? [...BLOCK_INFO, LINK_BLOCK] : BLOCK_INFO;
 
 /** The longest a comment template, a field's name and a field's value may be: a settings file is not a document. */
 export const MAX_COMMENT = 2000;

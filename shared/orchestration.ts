@@ -35,6 +35,8 @@ export type Chain = EngineChoice[];
 /** "Ask when it runs": the default is preselected, and a person may pick. */
 export interface AskOr<T> { value: T; ask: boolean }
 
+import { ACCOUNT_ID_RE } from "./usageAccounts.ts";
+
 export type UsageProviderId = ProviderUsage["provider"];
 /** The providers that report a quota window. Antigravity reports none, so a
  *  rule cannot watch it and the validator says so. */
@@ -49,8 +51,8 @@ export const usageProvider = (engine: string): UsageProviderId =>
 
 export type Trigger =
   | { kind: "always" }
-  | { kind: "usage"; provider: UsageProviderId; window: "5h" | "weekly" | "either"; remainingAtMost: number }
-  | { kind: "limit"; provider: UsageProviderId }
+  | { kind: "usage"; provider: UsageProviderId; account?: string; window: "5h" | "weekly" | "either"; remainingAtMost: number }
+  | { kind: "limit"; provider: UsageProviderId; account?: string }
   | { kind: "hours"; days: number[]; from: string; to: string }
   | { kind: "budget" };
 
@@ -76,6 +78,14 @@ export interface Envelope {
   /** The `docker` command itself. A container shares this machine, so this is
    *  wider than the worktree and off everywhere until a person turns it on. */
   docker: boolean;
+  /** `git merge`, `git reset`, `git checkout`, `git switch`, `git clean` and
+   *  `git worktree remove`/`prune`/`list`. These name whatever path the
+   *  command line gives them, not only this worker's worktree; what holds
+   *  them to it is the sandbox's own write roots, not the prefix lock.
+   *  Optional on read: a policy saved before this field existed reads as off.
+   *  Holds only on Claude Code's own sandbox (see `sandboxHolds`); every other
+   *  engine keeps these denied whatever this says. */
+  worktreeOps?: boolean;
   /** Extra command prefixes on top of DENIED_COMMANDS. Can only add. */
   deny: string[];
   /** The flow role's tool list, when its role has one: every engine tool not
@@ -111,11 +121,20 @@ export const CHAIN_MAX = 4;
 export const RULES_MAX = 20;
 export const TRIGGERS_MAX = 4;
 
-/** Narrow by default: a worker writes in its own worktree and does nothing
- *  else. The ceiling lets an orchestrator add local commits and nothing more:
- *  `docker` is a grant of the machine, so a person turns it on scope by scope. */
-export const DEFAULT_WORKER_ENVELOPE: Envelope = { write: "worktree", network: false, commit: false, docker: false, deny: [] };
-export const DEFAULT_CEILING: Envelope = { write: "worktree", network: false, commit: true, docker: false, deny: [] };
+/** A worker's powers default to its seat's: it writes in its own worktree and
+ *  may commit and move its own checkout. A seat narrows it at start (flags
+ *  off); what a person keeps from both lives in the agent rules.
+ *
+ *  `network` and `docker` stay off by default for ONE reason: turning either
+ *  on drops Claude Code's sandbox (it cannot be given the open internet or the
+ *  docker socket), and the sandbox is the only wall around the app's own token.
+ *  They are flags the seat sets at start, not refusals: the sandbox still lets
+ *  a worker reach GitHub and the package hosts (see `sandboxDomains`). */
+export const DEFAULT_WORKER_ENVELOPE: Envelope = { write: "worktree", network: false, commit: true, docker: false, worktreeOps: true, deny: [] };
+export const DEFAULT_CEILING: Envelope = { write: "worktree", network: true, commit: true, docker: true, worktreeOps: true, deny: [] };
+/** What a worker on an engine that runs none of the person's hooks (OpenCode, Codex) starts with: the defaults before a worker had its seat's powers. */
+export const LEGACY_WORKER_ENVELOPE: Envelope = { write: "worktree", network: false, commit: false, docker: false, worktreeOps: false, deny: [] };
+export const LEGACY_CEILING: Envelope = { write: "worktree", network: false, commit: true, docker: false, worktreeOps: false, deny: [] };
 export const DEFAULT_LIMITS: Policy["limits"] = { maxWorkers: 3, turnMinutes: 30, maxRetries: 1 };
 
 export const defaultStored = (): StoredPolicy => ({
@@ -213,14 +232,15 @@ function validAskChain(v: unknown, field: string): Validated<AskOr<Chain>> {
 }
 
 export function validEnvelope(v: unknown, field: string): Validated<Envelope> {
-  // `docker` is not required: a policy saved before it existed reads as off,
-  // rather than as a broken file that the whole scope loses.
-  const o = closed(v, field, ["write", "network", "commit", "docker", "deny"], ["write", "network", "commit", "deny"]);
+  // `docker` and `worktreeOps` are not required: a policy saved before either
+  // existed reads as off, rather than as a broken file that the whole scope loses.
+  const o = closed(v, field, ["write", "network", "commit", "docker", "worktreeOps", "deny"], ["write", "network", "commit", "deny"]);
   if (failed(o)) return o;
   if (o.write !== "none" && o.write !== "worktree") return bad(`${field}.write`, 'has to be "none" or "worktree"; nothing wider exists');
   if (typeof o.network !== "boolean") return bad(`${field}.network`, "has to be true or false");
   if (typeof o.commit !== "boolean") return bad(`${field}.commit`, "has to be true or false");
   if (o.docker !== undefined && typeof o.docker !== "boolean") return bad(`${field}.docker`, "has to be true or false");
+  if (o.worktreeOps !== undefined && typeof o.worktreeOps !== "boolean") return bad(`${field}.worktreeOps`, "has to be true or false");
   if (!Array.isArray(o.deny) || o.deny.length > 40) return bad(`${field}.deny`, "has to be a list of up to 40 command prefixes");
   const deny: string[] = [];
   for (let i = 0; i < o.deny.length; i++) {
@@ -229,7 +249,7 @@ export function validEnvelope(v: unknown, field: string): Validated<Envelope> {
     if (looksLikeSecret(d.trim())) return bad(`${field}.deny[${i}]`, "looks like a key; this field takes a command prefix");
     if (!deny.includes(d.trim())) deny.push(d.trim());
   }
-  return { ok: true, value: { write: o.write, network: o.network, commit: o.commit, docker: o.docker === true, deny } };
+  return { ok: true, value: { write: o.write, network: o.network, commit: o.commit, docker: o.docker === true, worktreeOps: o.worktreeOps === true, deny } };
 }
 
 /** Whether `inner` asks for nothing `outer` does not allow. The one test the
@@ -239,7 +259,39 @@ export function envelopeWithin(inner: Envelope, outer: Envelope): boolean {
     && (outer.network || !inner.network)
     && (outer.commit || !inner.commit)
     && (outer.docker || !inner.docker)
+    && (outer.worktreeOps || !inner.worktreeOps)
     && outer.deny.every((d) => inner.deny.includes(d));
+}
+
+/** `inner` cut to what `outer` allows: the one envelope within both, never
+ *  wider than either. Used to resume a worker whose stored envelope the
+ *  ceiling no longer allows in full, instead of refusing the turn outright. */
+export function clampEnvelope(inner: Envelope, outer: Envelope): Envelope {
+  return {
+    write: inner.write === "none" || outer.write === "none" ? "none" : "worktree",
+    network: inner.network && outer.network,
+    commit: inner.commit && outer.commit,
+    docker: inner.docker && outer.docker,
+    worktreeOps: !!inner.worktreeOps && !!outer.worktreeOps,
+    deny: [...new Set([...inner.deny, ...outer.deny])],
+    // A tool list only narrows (absent or empty = no extra denial) and a
+    // ceiling has none, so the clamp keeps the stored one as it is. Dropping
+    // it would hand a resumed worker back the tools its role had taken away.
+    ...(inner.tools ? { tools: inner.tools } : {}),
+  };
+}
+
+/** The field names `clampEnvelope` narrowed, for the answer a resume gives:
+ *  which parts of the stored envelope were cut to fit the ceiling. */
+export function clampedFields(before: Envelope, after: Envelope): string[] {
+  const out: string[] = [];
+  if (before.write !== after.write) out.push("write");
+  if (before.network !== after.network) out.push("network");
+  if (before.commit !== after.commit) out.push("commit");
+  if (before.docker !== after.docker) out.push("docker");
+  if (!!before.worktreeOps !== !!after.worktreeOps) out.push("worktreeOps");
+  if (after.deny.length !== before.deny.length) out.push("deny");
+  return out;
 }
 
 /** The three numbers a policy shares with a preset file (shared/preset.ts), so neither grows a second range. */
@@ -252,12 +304,17 @@ export function validLimits(v: unknown, field: string): Validated<Policy["limits
   return { ok: true, value: { maxWorkers: l.maxWorkers, turnMinutes: l.turnMinutes, maxRetries: l.maxRetries } };
 }
 
-function validTrigger(v: unknown, field: string): Validated<Trigger> {
+export function validTrigger(v: unknown, field: string): Validated<Trigger> {
   if (!isObj(v)) return bad(field, "has to be an object");
   const provider = (p: unknown, at: string): Validated<UsageProviderId> =>
     typeof p === "string" && (GAUGED_PROVIDERS as readonly string[]).includes(p)
       ? { ok: true, value: p as UsageProviderId }
       : bad(at, `has to be one of ${GAUGED_PROVIDERS.join(", ")}; the others report no quota, so a rule cannot watch them`);
+  /** Absent or "default" is the default account and is not written back, so an old rule stays byte-identical. */
+  const account = (a: unknown, at: string): Validated<{ account?: string }> =>
+    a === undefined || a === "default" ? { ok: true, value: {} }
+      : typeof a === "string" && ACCOUNT_ID_RE.test(a) ? { ok: true, value: { account: a } }
+      : bad(at, "has to be an account id, lowercase letters, digits and dashes");
   switch (v.kind) {
     case "always": {
       const o = closed(v, field, ["kind"]); if (failed(o)) return o;
@@ -268,16 +325,18 @@ function validTrigger(v: unknown, field: string): Validated<Trigger> {
       return { ok: true, value: { kind: "budget" } };
     }
     case "limit": {
-      const o = closed(v, field, ["kind", "provider"]); if (failed(o)) return o;
+      const o = closed(v, field, ["kind", "provider", "account"], ["kind", "provider"]); if (failed(o)) return o;
       const p = provider(o.provider, `${field}.provider`); if (!p.ok) return p;
-      return { ok: true, value: { kind: "limit", provider: p.value } };
+      const a = account(o.account, `${field}.account`); if (!a.ok) return a;
+      return { ok: true, value: { kind: "limit", provider: p.value, ...a.value } };
     }
     case "usage": {
-      const o = closed(v, field, ["kind", "provider", "window", "remainingAtMost"]); if (failed(o)) return o;
+      const o = closed(v, field, ["kind", "provider", "account", "window", "remainingAtMost"], ["kind", "provider", "window", "remainingAtMost"]); if (failed(o)) return o;
       const p = provider(o.provider, `${field}.provider`); if (!p.ok) return p;
+      const a = account(o.account, `${field}.account`); if (!a.ok) return a;
       if (o.window !== "5h" && o.window !== "weekly" && o.window !== "either") return bad(`${field}.window`, 'has to be "5h", "weekly" or "either"');
       if (!wholeIn(o.remainingAtMost, 1, 99)) return bad(`${field}.remainingAtMost`, "has to be a whole number of percent from 1 to 99");
-      return { ok: true, value: { kind: "usage", provider: p.value, window: o.window, remainingAtMost: o.remainingAtMost } };
+      return { ok: true, value: { kind: "usage", provider: p.value, ...a.value, window: o.window, remainingAtMost: o.remainingAtMost } };
     }
     case "hours": {
       const o = closed(v, field, ["kind", "days", "from", "to"]); if (failed(o)) return o;
@@ -374,7 +433,7 @@ export function validPolicyRules(v: unknown, field: string): Validated<PolicyRul
 }
 
 /** The fields a policy and its stored form share. */
-function validParts(o: Record<string, unknown>, at: string): Validated<Parts> {
+function validParts(o: Record<string, unknown>, at: string, clampDefault = false): Validated<Parts> {
   const rules = validPolicyRules(o.rules, `${at}.rules`);
   if (!rules.ok) return rules;
 
@@ -382,7 +441,10 @@ function validParts(o: Record<string, unknown>, at: string): Validated<Parts> {
   if (!ceiling.ok) return ceiling;
   const workerDefault = validEnvelope(o.workerDefault, `${at}.workerDefault`);
   if (!workerDefault.ok) return workerDefault;
-  if (!envelopeWithin(workerDefault.value, ceiling.value)) {
+  /* A stored file is read with the ceiling a person kept: a worker default that
+     became wider than it (a new power on by default) is cut to fit, never refused. */
+  if (clampDefault) workerDefault.value = clampEnvelope(workerDefault.value, ceiling.value);
+  else if (!envelopeWithin(workerDefault.value, ceiling.value)) {
     return bad(`${at}.workerDefault`, "is wider than the most the main agent may allow; lower the default or raise that limit on purpose");
   }
 
@@ -413,7 +475,7 @@ export function validateStored(raw: unknown): Validated<StoredPolicy> {
     if (typeof aw[r] !== "boolean") return bad(`policy.ask.workers.${r}`, "has to be true or false");
     workers[r] = aw[r] as boolean;
   }
-  const rest = validParts(o, "policy");
+  const rest = validParts(o, "policy", true);
   if (!rest.ok) return rest;
   return { ok: true, value: { ...rest.value, ask: { orchestrator: a.orchestrator, workers } } };
 }
@@ -575,10 +637,10 @@ export function triggerSentence(t: Trigger): string {
   switch (t.kind) {
     case "always": return "always";
     case "budget": return "the project's budget is used up";
-    case "limit": return `${PROVIDER_WORD[t.provider]} has no plan left in a window`;
+    case "limit": return `${PROVIDER_WORD[t.provider]}${t.account ? ` (${t.account})` : ""} has no plan left in a window`;
     case "usage": {
       const w = t.window === "either" ? "either window" : t.window === "5h" ? "the 5 h window" : "the weekly window";
-      return `${PROVIDER_WORD[t.provider]} has ${t.remainingAtMost}% or less left in ${w}`;
+      return `${PROVIDER_WORD[t.provider]}${t.account ? ` (${t.account})` : ""} has ${t.remainingAtMost}% or less left in ${w}`;
     }
     case "hours": {
       const days = t.days.length === 7 ? "every day" : t.days.map((d) => DAYS[d]).join(", ");

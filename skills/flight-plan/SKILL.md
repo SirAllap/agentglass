@@ -24,7 +24,7 @@ and Co-pilot, and for every agent that is not the seat, the paragraph above hold
 | Size | What it looks like | Do |
 |---|---|---|
 | S | quick fix, one or two files, an obvious bug | no flight plan; hand it to a worker |
-| M | a feature, several files, a design | flight plan |
+| M | a feature, several files, a design | flight plan; Preflight only if the project's sizes setting includes M |
 | L | security, data, concurrency, a visual change with a mockup | flight plan, and read the findings twice |
 
 An S plan is not worth a Preflight: it costs tokens, and a cold reader has

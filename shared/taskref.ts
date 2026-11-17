@@ -52,6 +52,9 @@ export interface TaskRef {
   from: Evidence;
   /** Named ONLY by its own address. Never inferred from an id's shape. */
   tracker: TrackerId | null;
+  /** A second item the pull request named, which lost to this one: read-only,
+   *  because somebody pasted it on purpose and it must stay reachable. */
+  also?: { label: string; query: string; url?: string; tracker: TrackerId };
 }
 
 /**
@@ -103,6 +106,34 @@ function keyIn(text: string, keys: string[], anyCase: boolean): string | null {
   if (!alt) return null;
   const m = new RegExp(`(?<![A-Za-z0-9_])(${alt})-(\\d+)(?![A-Za-z0-9_]|-\\d)`, anyCase ? "i" : "").exec(text || "");
   return m ? `${m[1]!.toUpperCase()}-${m[2]}` : null;
+}
+
+/**
+ * The body's `Card reference` section: that heading and the lines under it,
+ * until the next heading. It is where a template asks for the card, so a key
+ * written there is this pull request's and not a passing mention.
+ */
+function referenceSection(body: string): string {
+  const lines: string[] = [];
+  let inside = false;
+  for (const line of (body || "").split(/\r?\n/)) {
+    if (/^\s*#{1,6}\s/.test(line)) inside = /card\s+reference/i.test(line);
+    if (inside) lines.push(line);
+  }
+  return lines.join("\n");
+}
+
+/** A listed key written in the body, read as the title is — capitals, because
+ *  a lower-case id in prose is a word. The reference section is asked first, so
+ *  the card the template was filled in with beats one mentioned further down;
+ *  then the prose, without the list items and quotations `addresses` also
+ *  skips. */
+function keyInBody(body: string, keys: string[]): string | null {
+  const text = body || "";
+  const prose = text.split(/\r?\n/)
+    .filter((line) => !/^\s*(?:[-*+>]|\d+[.)])\s/.test(line))
+    .join("\n");
+  return keyIn(referenceSection(text), keys, false) ?? keyIn(prose, keys, false);
 }
 
 /** `https://<site>/browse/KEY-1`, for a Jira that is not on atlassian.net (the built-in pattern only knows that host). */
@@ -245,17 +276,46 @@ export function readTaskRef(
   pr: { headRefName?: string; title?: string; body?: string; url?: string },
   jira?: JiraReach,
 ): TaskRef | null {
-  // The label people recognise, wherever it turns up. Branch first: it is
-  // written by the tool that cut it, so it is the id far more often than a
-  // title somebody typed.
-  const branch = nativeId(pr.headRefName ?? "") ?? human(pr.headRefName ?? "");
-  const keyedBranch = jira ? keyIn(pr.headRefName ?? "", jira.keys, true) : null;
-  // The list row reads a Jira key from the branch before it reads the title
-  // (server/src/prs.ts jiraCardFor), so this reads in the same order: branch
-  // `orbit-7-retry` with title `Fix CVE-2026-1234` is ORBIT-7 on both screens.
-  const named = branch ?? keyedBranch ?? nativeId(pr.title ?? "") ?? human(pr.title ?? "")
-    ?? (jira ? keyIn(pr.title ?? "", jira.keys, false) : null);
+  // The label people recognise, wherever it turns up. Inside one field the
+  // branch goes first: it is written by the tool that cut it, so it is the id
+  // far more often than a title somebody typed.
+  const branchId = nativeId(pr.headRefName ?? "") ?? human(pr.headRefName ?? "");
+  const titleId = nativeId(pr.title ?? "") ?? human(pr.title ?? "");
+  // Across fields a Jira key goes first, wherever it is written: the branch, the
+  // title, or the body (its `Card reference` section before the prose). A key
+  // the connected site itself listed is not a guess, and a branch cut from an
+  // old ClickUp prefix (`LEGACY-123-fix`) must not beat a key somebody wrote in
+  // the title or the body. Without a Jira site all three are null and the order
+  // is the one it always was.
+  const branchKey = jira ? keyIn(pr.headRefName ?? "", jira.keys, true) : null;
+  const titleKey = jira ? keyIn(pr.title ?? "", jira.keys, false) : null;
+  const bodyKey = jira ? keyInBody(pr.body ?? "", jira.keys) : null;
+  // A key in brackets that OPENS the title (`[ORBIT-1042] - …`), then one in the body's
+  // `Card reference` section, beat the branch. Both are written on purpose, and
+  // both can be changed later; a branch cannot — renaming a pull request's head
+  // branch closes the pull request — so a card that was re-pointed after the
+  // branch was cut kept showing the old card. Only the bracketed form: a bare key at the start of a title
+  // ("ORBIT-1042 the sequel") is as likely a mention as a claim, and the branch keeps it.
+  const leadKey = jira ? keyIn(/^\s*\[\s*[A-Za-z][A-Za-z0-9_]*-\d+\s*\]/.exec(pr.title ?? "")?.[0] ?? "", jira.keys, false) : null;
+  const refKey = jira ? keyIn(referenceSection(pr.body ?? ""), jira.keys, false) : null;
+  const key = leadKey ?? refKey ?? branchKey ?? titleKey ?? bodyKey;
+  const keyFrom: Evidence = leadKey ? "title" : refKey ? "body" : branchKey ? "branch" : titleKey ? "title" : "body";
+  const named = key ?? branchId ?? titleId;
   const [only, ...rest] = addresses(pr.body ?? "", jira ? [siteAddress(jira.site)] : []);
+
+  /*
+   * A Jira key beats a ClickUp address, wherever each of them is written — the
+   * key in the branch, the title or the body, the address in the body. The key
+   * is a project the connected site itself listed; the address is one somebody
+   * pasted, often from the ClickUp card the team left. The address is kept on
+   * the side so the old card is still one click away, read-only.
+   */
+  if (only && !rest.length && key && only.tracker === "clickup") {
+    return {
+      label: key, query: key, from: keyFrom, tracker: null,
+      also: { label: only.id, query: only.id, url: only.url, tracker: only.tracker },
+    };
+  }
 
   if (only && !rest.length) {
     return { label: named ?? only.id, query: only.id, url: only.url, from: "url", tracker: only.tracker };
@@ -276,12 +336,14 @@ export function readTaskRef(
     // Where this stops: ClickUp's GitHub integration also posts a comment on the
     // pull request with the task's link, and that comment is NOT read. It would
     // cost one extra `gh` call per pull request (25 for a board of 25), which is
-    // not worth a link the branch, the title or the description already carries
-    // whenever the integration is the one that wrote the comment.
+    // not worth a link the branch, the title or the body (its `Card reference`
+    // line included) already carries whenever the integration is the one that
+    // wrote the comment.
     const inBody = nativeIdInBody(pr.body ?? "");
     return inBody ? { label: inBody, query: inBody, from: "body", tracker: "clickup" } : null;
   }
-  return { label: named, query: named, from: named === (branch ?? keyedBranch) ? "branch" : "title", tracker: native(named) ? "clickup" : null };
+  const from: Evidence = key ? keyFrom : branchId ? "branch" : "title";
+  return { label: named, query: named, from, tracker: native(named) ? "clickup" : null };
 }
 
 /** `…/owner/repo/pull/91` → `…/owner/repo/issues/12`, and the same for a

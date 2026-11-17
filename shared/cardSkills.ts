@@ -20,6 +20,7 @@
  * grouping and the invocation line are one thing, in one file, and both
  * products import it.
  */
+import { itemFromUrl } from "./taskref.ts";
 import type { SkillInfo } from "./types.ts";
 
 /** `cu` on its own is a word in too many places; as a hyphenated part of a
@@ -89,8 +90,58 @@ export function skillCommand(skill: string, card: { id: string; customId?: strin
   return `${name} ${card.customId || card.id}`;
 }
 
-/** A tmux window name that says which card it is, and survives `tmux ls`. */
-export function windowName(card: { id: string; customId?: string }): string {
+/** A card a tab can be named for: the id people use, and its own address when the tracker gave one. */
+export interface CardTabCard {
+  id: string;
+  customId?: string;
+  url?: string;
+}
+
+/** What the caller knows of where the tab opens. */
+export interface CardTabContext {
+  /** The project the tab opens in: a checkout's path, or just its folder name. */
+  project?: string | null;
+}
+
+/**
+ * The Jira key this card is about, or null.
+ *
+ * Only the card's own address makes it certain. An id's shape is not enough:
+ * `ORBIT-1042` is also the shape of a ClickUp custom id. Asking `/jira/status`
+ * was the obvious second opinion, and it made the name depend on an answer that
+ * had not arrived — the same card was `orbit-1042` for a moment and
+ * `orbit-ORBIT-1042` after that. A name cannot be a race, so the address
+ * decides and nothing else does.
+ */
+export function cardJiraKey(card: CardTabCard): string | null {
+  const at = itemFromUrl(card.url);
+  return at?.tracker === "jira" ? at.id.toUpperCase() : null;
+}
+
+/** A project's own name, as a window can carry it: the folder's leaf, lower case, no dot. */
+function projectPart(project: string | null | undefined): string {
+  const leaf = (project ?? "").split(/[\\/]/).filter(Boolean).pop() ?? "";
+  return leaf.toLowerCase().replace(/[^a-z0-9-]/g, "").replace(/^-+|-+$/g, "").slice(0, 24);
+}
+
+/**
+ * A tmux window name that says which card it is, and survives `tmux ls`.
+ *
+ * A card whose address is Jira is named `<project>-<JIRA-KEY>` —
+ * `orbit-ORBIT-1042` — because that key is what everybody says out loud and
+ * what the branch, the commit and the pull request all carry. A ClickUp card
+ * keeps the id it has, even when that id has the shape of a key: the name is
+ * one answer from the card alone, the same on every surface, before and after
+ * any tracker status.
+ */
+export function windowName(card: CardTabCard, context: CardTabContext = {}): string {
+  const key = cardJiraKey(card);
+  if (key) {
+    /* With no project named, the key's own prefix is the project: `ORBIT-1042`
+       in `orbit` is `orbit-ORBIT-1042`, which is the name people read. */
+    const project = projectPart(context.project) || (key.split("-")[0] ?? "").toLowerCase();
+    return `${project}-${key}`.slice(0, 63);
+  }
   const raw = (card.customId || card.id).toLowerCase();
   // tmux treats a dot as a pane separator in target strings, so a window named
   // with one is a window that cannot be selected by name later.

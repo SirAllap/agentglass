@@ -22,7 +22,12 @@ export interface JiraSpace {
   avatarUrl?: string;
   /** Cards in the space, when a tree read has counted them. Absent is not zero. */
   count?: number;
+  /** Which of the project's boards a non-board view reads its column order from. Absent is "Automatic". */
+  columnBoard?: string;
 }
+
+/** One of a project's own boards, by id and name: what the column-order picker lists. */
+export interface JiraProjectBoard { id: string; name: string }
 
 /** GET /jira/spaces */
 export interface JiraSpacesOut { ok: true; spaces: JiraSpace[] }
@@ -88,6 +93,8 @@ export interface JiraSpaceTree {
   hidDone: number;
   /** When Jira was last asked, epoch ms. */
   readAt: number;
+  /** Reads (components, epics, cards) that failed while the rest loaded; the tree is drawn without them. */
+  missing?: string[];
 }
 
 /** GET /jira/space-tree?space=KEY&fresh=0|1&showDone=0|1 — a failure is that space's own, never the whole answer's. */

@@ -11,6 +11,8 @@
  * Shared because the server decides with it, the hook route answers with it
  * and the web shows the same words; the matching lives here once.
  */
+import { agentProvider } from "./agentKinds.ts";
+import { brokenBaseRule } from "./shellShape.ts";
 import { DENY_MAX, type LaunchMode } from "./launchModes";
 
 export const RULE_SETTINGS = ["allow", "ask", "never"] as const;
@@ -118,11 +120,29 @@ export type RuleDecision = RuleSetting | "unknown";
 /** What `GET /agent-rules/check` answers. */
 export interface RuleCheck { decision: RuleDecision; ruleId?: string; reason?: string }
 
-/** The base set a fresh install starts with: merging and releasing stay a person's, the rest is visible. */
+/**
+ * The base set a project starts with: merging and releasing stay a person's, and
+ * so does a push to the trunk. These are rules, not a floor: they apply to the
+ * seat and to its workers alike, and the person edits them in `agentglass-ui rules`.
+ * A worker's lock used to refuse `git push` and `gh` outright; these are what
+ * replaced that, so a push to a feature branch works and one to the trunk does not.
+ * No `ask` on `git push --force`: the most specific rule wins over a stricter
+ * one, so it would loosen a person's own `never` on `git push`.
+ */
 export const BASE_RULES: readonly { action: string; match: string; setting: RuleSetting }[] = [
   { action: "git.push", match: "Bash(git push:*)", setting: "allow" },
+  { action: "git.push.main", match: "Bash(git push origin main:*)", setting: "never" },
+  { action: "git.push.master", match: "Bash(git push origin master:*)", setting: "never" },
+  { action: "git.push.main.u", match: "Bash(git push -u origin main:*)", setting: "never" },
+  { action: "git.push.master.u", match: "Bash(git push -u origin master:*)", setting: "never" },
+  { action: "git.push.head.main", match: "Bash(git push origin HEAD:main:*)", setting: "never" },
+  { action: "git.push.head.master", match: "Bash(git push origin HEAD:master:*)", setting: "never" },
   { action: "gh.pr.merge", match: "Bash(gh pr merge:*)", setting: "never" },
   { action: "gh.release", match: "Bash(gh release:*)", setting: "never" },
+  // Exact matches, not prefixes: `rm -rf /tmp/x` still runs.
+  { action: "rm.rf.root", match: "Bash(rm -rf /)", setting: "never" },
+  { action: "rm.rf.home", match: "Bash(rm -rf ~)", setting: "never" },
+  { action: "sudo", match: "Bash(sudo:*)", setting: "ask" },
 ];
 
 const RANK: Record<RuleSetting, number> = { allow: 0, ask: 1, never: 2 };
@@ -184,12 +204,15 @@ function arithEnd(s: string, i: number): number {
   return s.length;
 }
 
+/** One command a line runs; `text` when it is only a heredoc body's substitution, which bash runs but nobody typed as a call. */
+interface ShellCall { cmd: string; text?: boolean }
+
 /**
  * Text where only substitutions run: inside double quotes (`end` is `"`) or a
  * heredoc body whose tag is unquoted (`end` is ""). The commands of each
  * `$(...)` and backtick go to `out`; the rest is text. Returns past `end`.
  */
-function quotedText(s: string, i: number, end: string, out: string[]): number {
+function quotedText(s: string, i: number, end: string, out: ShellCall[]): number {
   while (i < s.length) {
     const c = s[i]!;
     if (c === "\\") i += 2;
@@ -210,12 +233,12 @@ function quotedText(s: string, i: number, end: string, out: string[]): number {
  * command, listed after the one it sits in. `close` is the `)` or backtick
  * this call stops at; it returns the index past it.
  */
-function scanShell(s: string, i: number, close: ")" | "`" | "", out: string[]): number {
+function scanShell(s: string, i: number, close: ")" | "`" | "", out: ShellCall[]): number {
   let cur = "";
-  let inner: string[] = [];
+  let inner: ShellCall[] = [];
   let depth = 0;
   const docs: { tag: string; strip: boolean; expand: boolean }[] = [];
-  const flush = () => { out.push(cur, ...inner); cur = ""; inner = []; };
+  const flush = () => { out.push({ cmd: cur }, ...inner); cur = ""; inner = []; };
   while (i < s.length) {
     const c = s[i]!;
     const start = i;
@@ -251,7 +274,11 @@ function scanShell(s: string, i: number, close: ")" | "`" | "", out: string[]): 
             if ((d.strip ? line.replace(/^\t+/, "") : line) === d.tag) break;
             body += `${line}\n`;
           }
-          if (d.expand) quotedText(body, 0, "", out);
+          if (d.expand) {
+            const from = out.length;
+            quotedText(body, 0, "", out);
+            for (let k = from; k < out.length; k++) out[k]!.text = true;
+          }
         }
       }
       continue;
@@ -297,10 +324,15 @@ function skipGlobalFlags(seg: string): string {
  * `do`/`then`/`else` stays. `case` patterns (`a) cmd`) are not unpicked.
  */
 export function shellSegments(command: string): string[] {
-  const raw: string[] = [];
+  return shellCalls(command).map((s) => s.cmd);
+}
+
+/** The same commands, each saying whether it was read out of a heredoc body: bash runs that, but nobody typed it as a call. */
+export function shellCalls(command: string): ShellCall[] {
+  const raw: ShellCall[] = [];
   scanShell(command, 0, "", raw);
-  return raw.flatMap((s) => unwrapped(s))
-    .filter((s) => s && !SHELL_WORDS.has(s) && !/^(?:for|select|case|function)\b/.test(s));
+  return raw.flatMap((s) => unwrapped(s.cmd).map((cmd) => ({ cmd, text: s.text })))
+    .filter((s) => s.cmd && !SHELL_WORDS.has(s.cmd) && !/^(?:for|select|case|function)\b/.test(s.cmd));
 }
 
 /**
@@ -380,9 +412,9 @@ function unwrapped(raw: string, depth = 0): string[] {
   const c = SHELL_C.exec(s);
   const line = c ? shellWords(c[1]!)[0] : /^eval\s/.test(s) ? shellWords(s.slice(5)).join(" ") : undefined;
   if (line !== undefined) {
-    const raws: string[] = [];
+    const raws: ShellCall[] = [];
     scanShell(line, 0, "", raws);
-    return [s, ...raws.flatMap((r) => unwrapped(r, depth + 1))];
+    return [s, ...raws.flatMap((r) => unwrapped(r.cmd, depth + 1))];
   }
   return [skipGlobalFlags(s)];
 }
@@ -455,22 +487,43 @@ const namesForce = (match: string): boolean => /--force|--delete|\s-[A-Za-z]*[fd
 const LINE_RANK: Record<RuleDecision, number> = { allow: 0, unknown: 1, ask: 2, never: 3 };
 
 /**
+ * A flow's delegation rule carries the bare tool, so a stored `Agent(*)` allow is
+ * narrower on paper and would speak for the seat's call. The derived rule stays.
+ */
+function withDelegation(live: readonly AgentRule[], tool: string, seg: string, best: AgentRule | null): AgentRule | null {
+  if (best?.setting === "never") return best;
+  return live.find((r) => r.id === SEAT_DELEGATES_ID && r.setting === "never" && (r.matches ?? [r.match]).some((p) => matchesOne(p, tool, seg))) ?? best;
+}
+
+/**
  * The decision for one tool call. A Bash line is every command in it, and the
  * strictest wins: never, then ask, then a command no rule covers (`unknown`),
- * then allow. So `cd pkg && npm publish` asks when publishing asks.
+ * then allow. So `cd pkg && npm publish` asks when publishing asks. A heredoc
+ * body's substitution is text: a never stops it, an ask does not fire on it.
  */
 export function decide(rules: readonly AgentRule[], root: string, tool: string, input: unknown, role?: RuleScope): RuleCheck {
   const live = rulesFor(rules, root, role);
   const text = primaryInput(input);
-  const segments = tool === "Bash" ? shellSegments(text) : [text];
-  if (segments.length === 0) segments.push("");
+  const calls: ShellCall[] = tool === "Bash" ? shellCalls(text) : [{ cmd: text }];
+  if (calls.length === 0) calls.push({ cmd: "" });
   let line: RuleCheck = { decision: "allow" };
   let any = false;
-  for (const seg of segments) {
-    const r = winner(live, tool, seg);
+  for (const call of calls) {
+    const seg = call.cmd;
+    const r = withDelegation(live, tool, seg, winner(live, tool, seg));
     let here: RuleCheck = r ? { decision: r.setting, ruleId: r.id, reason: reasonFor(r) } : { decision: "unknown" };
+    if (tool === "Bash" && call.text && here.decision === "ask") here = { decision: "unknown" };
     if (tool === "Bash" && isForcePush(seg) && LINE_RANK[here.decision] < LINE_RANK.ask && !(r && namesForce(r.match))) {
       here = { decision: "ask", ...(r ? { ruleId: r.id } : {}), reason: "a force push or a remote delete asks first, whatever allows git push; a rule that names --force or --delete can change that." };
+    }
+    // A base never read by what the line does, so a spelling the prefix rule misses is still never. A person who set that
+    // same action to something else for a project keeps their choice. A broader rule does not count: a project that
+    // allows `git push` for its card branches had every push to master let through with it.
+    if (tool === "Bash" && !call.text && LINE_RANK[here.decision] < LINE_RANK.never) {
+      const broken = brokenBaseRule(seg);
+      const own = broken ? live.find((x) => x.action === broken.action && x.project !== BASE_PROJECT) : undefined;
+      const base = broken && !own ? live.find((x) => x.action === broken.action && x.project === BASE_PROJECT) : undefined;
+      if (broken && base?.setting === "never") here = { decision: "never", ruleId: base.id, reason: broken.why };
     }
     if (!any || LINE_RANK[here.decision] > LINE_RANK[line.decision]) line = here;
     any = true;
@@ -489,6 +542,45 @@ export function inForceFor(rules: readonly AgentRule[], root: string, match: str
   const call = (m[2] ?? "").replace(/:\*$/, "").replace(/\*+/g, "");
   const d = decide(rules, root, m[1]!, m[1] === "Bash" ? { command: call } : call, role).decision;
   return d === "unknown" ? null : d;
+}
+
+/** A pattern's tool and its call with the wildcards taken off: `Bash(gh pr:*)` is ["Bash", "gh pr"], a bare tool is [tool, ""]. */
+const callOf = (match: string): [string, string] | null => {
+  const m = RULE_SHAPE.exec(match);
+  return m ? [m[1]!, (m[2] ?? "").replace(/:\*$/, "").replace(/\*+/g, "")] : null;
+};
+
+/**
+ * The deny list one launch in one project carries (`--disallowedTools`): the
+ * whole global list, plus what the project's own rules say never. A project
+ * rule may only tighten: it can never loosen or drop a global entry, because
+ * the hook before each call fails open when the server does not answer.
+ *
+ * - every global entry stays, whatever a project allows or asks under it;
+ * - a project never goes in when the rules hold it never as a whole; one a
+ *   narrower allow or ask opens part of (`never gh`, `allow gh pr view`) is
+ *   left to the hook, since a CLI deny beats every allow;
+ * - a pending rule, a seat's own and the permission mode never count here.
+ *
+ * Without a project (`root` empty) the global list comes back unchanged.
+ */
+export function launchDenyFor(rules: readonly AgentRule[], root: string, globalDeny: readonly string[]): string[] {
+  if (!root) return [...new Set(globalDeny)];
+  const live = rulesFor(rules, root);
+  const opened = (match: string): boolean => {
+    const c = callOf(match);
+    if (!c) return false;
+    return live.some((r) => r.setting !== "never" && (r.matches ?? [r.match]).some((p) => {
+      const o = callOf(p);
+      return !!o && o[0] === c[0] && o[1] !== c[1] && o[1].startsWith(c[1]);
+    }));
+  };
+  const out = [...new Set(globalDeny)];
+  for (const r of live) {
+    if (r.project !== root || r.setting !== "never") continue;
+    for (const m of r.matches ?? [r.match]) if (!out.includes(m) && !opened(m) && inForceFor(rules, root, m) === "never") out.push(m);
+  }
+  return out;
 }
 
 const reasonFor = (r: AgentRule): string =>
@@ -521,6 +613,75 @@ export function seatChecksRule(project: string, hasVerifier: boolean): AgentRule
     role: "seat", setting: "never", source: "base", by: "agentglass", at: 0,
     why: "the checks belong to this project's Verifier block: start a Verifier worker (`agentglass-agent start <name> --cwd <checkout> --role verifier`) and let it run the test, typecheck and CI replica.",
   };
+}
+
+/** The tools a Claude session spawns a subagent with: `Agent` in the hook's payload, `Task` in the older name the launcher disables. */
+export const SEAT_DELEGATES_MATCHES: readonly string[] = ["Agent", "Task"];
+export const SEAT_DELEGATES_TOOL = SEAT_DELEGATES_MATCHES[0]!;
+export const SEAT_DELEGATES_ID = "seat.delegates";
+
+/**
+ * The worker role a block starts, by the kind the flow gives it: the four
+ * `agentglass-agent start --role` choices. A step a person made is a builder.
+ */
+export const BLOCK_ROLE: Readonly<Record<string, string>> = { verifier: "verifier", reviewer: "reviewer", builder: "builder", scout: "scout" };
+export const blockRole = (kind: string | undefined): string => BLOCK_ROLE[kind ?? ""] ?? "builder";
+
+/** One placed block, as the seat's rules read it: what it is called, what kind it is, where it runs. */
+export interface SeatBlock {
+  /** The name the block draws. */
+  name: string;
+  /** The kind from the flow (`policyRole`), never its id: a person may rename a block. */
+  kind?: string;
+  /** The engine it starts on, `claude` or `opencode`. */
+  engine: string;
+  /** On the suggested path, in its order. */
+  onPath: boolean;
+}
+
+/** The flow as the caller reads it once: what the seat's rules are derived from. */
+export interface SeatFlow {
+  hasVerifier: boolean;
+  /** Every placed worker block, path order first. */
+  blocks: SeatBlock[];
+  /** The engine the chair sits on. */
+  seatEngine: string;
+}
+
+const engineName = (engine: string): string => agentProvider(engine)?.title ?? engine;
+
+/**
+ * One rule a flow gives the seat when a worker block runs on another engine:
+ * that job is the worker's, and a Claude subagent would do it in the seat
+ * instead. null when no block runs elsewhere (or there is none): then nobody
+ * else owns the job and the Agent tool stays the seat's.
+ */
+export function seatDelegatesRule(project: string, blocks: readonly SeatBlock[], seatEngine: string): AgentRule | null {
+  const elsewhere = blocks.filter((b) => b.engine && b.engine !== seatEngine);
+  if (!elsewhere.length) return null;
+  const path = elsewhere.filter((b) => b.onPath);
+  const named = path[0] ?? elsewhere[0]!;
+  const listed = (path.length ? path : elsewhere).map((b) => `${b.name} (${engineName(b.engine)})`);
+  const workers = path.length ? `The path's workers: ${listed.join(", ")}.` : `The team's workers: ${listed.join(", ")}.`;
+  return {
+    id: SEAT_DELEGATES_ID, project, action: "seat.delegates", match: SEAT_DELEGATES_TOOL, matches: [...SEAT_DELEGATES_MATCHES],
+    role: "seat", setting: "never", source: "base", by: "agentglass", at: 0,
+    why: [
+      `this project's flow gives this job to its ${named.name} block (${engineName(named.engine)}): start it with \`agentglass-agent start <name> --cwd <checkout> --role ${blockRole(named.kind)}\`.`,
+      workers,
+      `Refused when the session runs through agentglass's hook, while flow.delegationGuard is on: a read-only subagent included, and a person turns the guard off in Settings.`,
+    ].join("\n"),
+  };
+}
+
+/** The rules a flow derives for the seat, never stored. Pure: the caller reads the flow and the guard. */
+export function seatRules(project: string, flow: SeatFlow, guard: boolean): AgentRule[] {
+  const out: AgentRule[] = [];
+  const checks = seatChecksRule(project, flow.hasVerifier);
+  if (checks) out.push(checks);
+  const delegated = guard ? seatDelegatesRule(project, flow.blocks, flow.seatEngine) : null;
+  if (delegated) out.push(delegated);
+  return out;
 }
 
 /** Tools that only read, and read-only shell words: they never become a suggestion. */

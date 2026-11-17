@@ -21,6 +21,14 @@ export type ManifestSignOff = "yes" | "grant" | "off";
 /** A row's place in the view. The sets are decided on the server once. */
 export type ManifestGroup = "toTest" | "done" | "ready";
 
+/** One test step from a commit's `Test: run|look|do` line. */
+export interface ManifestStep {
+  kind: "run" | "look" | "do";
+  text: string;
+  /** The backticked part, copyable; null when the line has none. */
+  command: string | null;
+}
+
 export interface ManifestRow {
   /** Full commit sha: the row's identity and the key of its verdict. */
   sha: string;
@@ -29,6 +37,7 @@ export interface ManifestRow {
   time: number;
   /** `ORBIT-1042`, when the subject names one. */
   ticket: string | null;
+  steps: ManifestStep[];
   /**
    * In the build that is running. `null` when this project has no install
    * boundary, which is not the same as "not in the build".

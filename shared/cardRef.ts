@@ -78,3 +78,31 @@ export function mentionsCardId(text: string, digits: string): boolean {
   if (!text || !digits) return false;
   return new RegExp(`(^|[^\\w])[A-Za-z][\\w]*-${digits}(?!\\w)`).test(text);
 }
+
+/**
+ * Every card id a text names, as one short string.
+ *
+ * `mentionsCardId` gives the same answer on this string as on the text it was
+ * taken from, for any number: a token here is exactly what that rule matches
+ * (a word that starts with a letter, a hyphen, digits, and no word character
+ * after them). So a store that keeps a text only to ask "does it mention card
+ * N" can keep this instead.
+ */
+export function cardRefsIn(text: string): string {
+  if (!text) return "";
+  const seen = new Set<string>();
+  for (const m of text.matchAll(/(?<!\w)[A-Za-z]\w*-\d+(?!\w)/g)) seen.add(m[0]);
+  return [...seen].join(" ");
+}
+
+/**
+ * Whether a string can be a ClickUp list id at all: ClickUp's are digits only.
+ *
+ * A task from another tracker carries its own idea of a "list" in the same
+ * field (a Jira task's is its project key, `ORBIT`), and a ClickUp control
+ * handed such a task asked ClickUp for the list `ORBIT`: a 400 every time it
+ * was drawn. A string that is not this shape never goes to ClickUp.
+ */
+export function clickupListIdShape(id: unknown): id is string {
+  return typeof id === "string" && /^\d{1,32}$/.test(id);
+}
