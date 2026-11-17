@@ -30,17 +30,19 @@ export function findChrome(): string {
   throw new Error("no Chrome found — set CHROME_PATH");
 }
 
-export async function connect(port: number, tries = 80): Promise<CDP> {
+export async function connect(port: number, tries = 80, pick?: (t: any) => boolean): Promise<CDP> {
   let targets: any[] = [];
   for (let i = 0; i < tries; i++) {
     // Cast, because `.json()` is `unknown` and this file is typechecked now:
     // the CDP target list has no schema we control, and the shape we need is
     // asserted a line later by the `find` below.
-    try { targets = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()) as any[]; if (targets.length) break; }
+    // `pick` (Electron: the target whose URL is agentglass://app) is waited for;
+    // without it the first non-empty list is taken, as before.
+    try { targets = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()) as any[]; if (pick ? targets.some(pick) : targets.length) break; }
     catch { /* not up yet */ }
     await Bun.sleep(250);
   }
-  const page = targets.find((t) => t.type === "page");
+  const page = targets.find(pick ?? ((t) => t.type === "page"));
   if (!page) throw new Error("no page target");
   const ws = new WebSocket(page.webSocketDebuggerUrl);
   let id = 1;

@@ -68,7 +68,7 @@ Every view, and what each one is for: [**docs/WORKSPACE.md**](docs/WORKSPACE.md)
 
 | Platform | Status | You want | Worth knowing |
 | --- | --- | --- | --- |
-| **Linux** | ✅ Working | `.AppImage` · `.deb` | — |
+| **Linux** | ✅ Working | `.AppImage` · `.deb` | The AppImage needs FUSE 2 (`libfuse2`); without it, start it with `scripts/run-appimage.sh` |
 | **macOS** | ✅ Working, unsigned | `.dmg` — Apple silicon & Intel | One `xattr` command on first launch, below |
 | **Windows** | 🧪 Not verified on real metal | `.exe` | Builds and passes CI; a confirmation on hardware is [wanted](https://github.com/SirAllap/agentglass/issues/231) |
 | **Android** | ✅ Working | `.apk`, signed | Companion app, paired by a code you scan |

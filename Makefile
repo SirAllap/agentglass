@@ -98,6 +98,18 @@ soak: ## Run the server hard for a few minutes and fail if its memory keeps clim
 loadtest: ## Hammer the server (many clients × every panel) against a copy of the REAL DB and fail if the PTY stutters (AGX_LOAD_CLIENTS=10 for heavier)
 	trap 'kill 0' INT TERM; bun scripts/loadtest.ts
 
+# 20 agents (printing panes, growing transcripts, hook events) against an
+# isolated server; fails when a number in scripts/perf-budget.txt is exceeded.
+# NOT in `make check` or CI on purpose: the budget is not met today, and a gate
+# that is red on day one teaches nobody. Wire it in once the fixes land.
+perf-gate: ## Load test with N agents (AGX_LOAD_AGENTS) against scripts/perf-budget.txt; not part of make check yet
+	trap 'kill 0' INT TERM; AGX_LOAD_AGENTS=$${AGX_LOAD_AGENTS:-10} AGX_LOAD_SECONDS=$${AGX_LOAD_SECONDS:-60} AGX_LOAD_TX_MB=$${AGX_LOAD_TX_MB:-20} AGX_LOAD_BUDGET=1 bun scripts/loadtest.ts
+
+# The CI-sized load: 20 agents, 10 desk tabs, panels, 2 flooding, 45 s. Needs
+# tmux. Thresholds and what they were measured against: scripts/perfci.ts.
+perf-ci: ## CI-sized load (20 agents, 10 tabs, panels, flood) — fails on a server stall >1 s, echo p99 >150 ms or panel p95 >1.5 s
+	trap 'kill 0' INT TERM; bun scripts/perfci.ts
+
 # The browser benchmark needs the whole desktop app, so it boots an isolated
 # instance of it first (scripts/agx-bench/instance.sh: its own port, data and
 # tmux, the window sent silently to a workspace nobody is looking at under
@@ -257,9 +269,15 @@ task-static: ## Build the static Taskwarrior this app bundles (TARGET=bun-linux-
 desktop-install: ## Install the built app for this user (no root)
 	electron/install-local.sh
 
+# The dependency install runs through install-local.sh's low_priority (the same
+# 5 lines, duplicated here): minutes of CPU and disk while agents are running.
 desktop-update: ## Pull the latest and reinstall the desktop app (fast-forward only)
 	git pull --ff-only
-	bun install
+	@set -e; low_priority() { \
+	  if command -v nice >/dev/null 2>&1; then set -- nice -n 10 "$$@"; fi; \
+	  if command -v ionice >/dev/null 2>&1; then set -- ionice -c3 "$$@"; fi; \
+	  "$$@"; \
+	}; low_priority bun install
 	$(MAKE) desktop-install
 
 # Open the cockpit for ONE project: only that repo (and its worktrees) appear,
@@ -269,5 +287,5 @@ desktop-open: ## Open the desktop app scoped to a project — make desktop-open 
 	@test -n "$(DIR)" || { echo "usage: make desktop-open DIR=/path/to/repo" >&2; exit 1; }
 	AGENTGLASS_PROJECT="$(DIR)" ~/.local/share/agentglass-desktop/agentglass
 
-.PHONY: help install deps dev server web build test ci ci-docker mobile-test smoke trusted-input perf soak loadtest agx-bench lint typecheck headcheck start setup setup-undo connect connect-undo connect-opencode connect-opencode-undo demo-feed assets \
+.PHONY: help install deps dev server web build test ci ci-docker mobile-test smoke trusted-input perf soak loadtest perf-gate agx-bench lint typecheck headcheck start setup setup-undo connect connect-undo connect-opencode connect-opencode-undo demo-feed assets \
         desktop desktop-dev desktop-dist desktop-dist-linux desktop-install desktop-update desktop-open

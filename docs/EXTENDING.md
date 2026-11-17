@@ -402,8 +402,9 @@ curl -sS http://localhost:4000/control \
 
 `ok` means a window took it and `applied` that it ran it (a seam with nothing
 listening is a no-op, so this is "the handler ran", not "the pixels changed").
-No window answering in time is `504`, a window that could not run it is `200`
-with `ok:false` and an `error`.
+A read has no `applied`: there was nothing to apply. No window answering in
+time is `504`, a window that could not run it is `200` with `ok:false` and an
+`error`.
 
 The two reads below always wait, whether or not they carry an `id`. They show
 nothing: no view changes, no window rises, no focus moves.
@@ -426,7 +427,8 @@ curl -sS http://localhost:4000/control \
   -d '{"cmd":"ui","do":"ui.read","args":{"panel":"bench"}}'
 ```
 
-The answer is `{"ok":true,"applied":true,"value":{"state":{…},"untrusted":{…},"see":[…]}}`:
+The answer is `{"ok":true,"value":{"state":{…},"untrusted":{…},"see":[…]}}`; a
+read carries no `applied`:
 
 - **`state`** holds what the app minted or the owner chose from a closed set:
   booleans, numbers, ids, enum words. Safe to act on.

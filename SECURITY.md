@@ -481,6 +481,8 @@ a session that ended without saying so; and `POST /bench/note` with empty text
 deletes that checkout's bench note, a file of its own under the data directory.
 None of the three touches an event, a session or a decision.
 
+The scanner also drops two caches of its own, `transcript_resume` (where it stopped reading a transcript) and `transcript_refused` (files it declined): neither holds anything you wrote, and both are rebuilt by re-reading the transcript.
+
 One route is named as if it did: `/browser/places/forget` throws away the
 browsing history you imported from your own browser. That history is kept in
 its own file rather than in the events database — `places.db` beside it —
@@ -741,7 +743,7 @@ The agent door (`agentglass-ui jira`, `ui_jira_*`, `POST /jira/door/<verb>`)
 calls what the routes call, so the Jira switch is the screen's switch and its
 refusal is the screen's sentence. It adds:
 
-- **A second switch, and the default is off.** `step`, `link`, `edit`, `comment`, `comment-edit`, `comment-delete`, `move`, `subtask`, `relate`, `unrelate`, `weblink`, `unweblink`, `worklog`, `worklog-edit`, `worklog-delete`, `watch`, `vote`, `rank`, `attach` and `unattach` change a
+- **A second switch, and the default is off.** `step`, `link`, `edit`, `comment`, `comment-edit`, `comment-delete`, `move`, `subtask`, `relate`, `unrelate`, `weblink`, `unweblink`, `worklog`, `worklog-edit`, `worklog-delete`, `watch`, `vote`, `rank`, `sprint-move`, `attach` and `unattach` change a
   shared site with no click of yours, so they need `AGENTGLASS_CONTROL_LEVEL=3`
   **and** the Jira write switch. The Jira switch alone is not enough: you turn
   it on to use the Jira screen yourself, and that must not hand your cards to
@@ -1251,6 +1253,28 @@ What the server holds, and what a test asserts, in the order it matters:
 - **A worker is turned away from the chair.** The CLI sends the worker's
   name with every request, and the server refuses a caller that presents a
   worker's name when it tries to start agents or seat anything. Its wrapper unsets the token and seat variables before the engine starts.
+- **Adopting a chair is the person's click.** A session it did not start is
+  adopted through one approval card on the person's screen, and only the app's
+  own desk key applies one without a card: an `Origin` is a header any process
+  can write, so on a server with no desk key held (one started by hand or by
+  systemd) an agent's own `adopt` becomes the same card as any other agent's.
+  That card is answered by the same person signal and no other — the desk key,
+  or a paired phone with the answer grant — so the `Origin` of the agent that
+  asked cannot answer it, its own card included. On such a server with no app
+  open on it and no phone paired there is nobody to answer, and the card
+  expires unanswered: adopting a chair is for a person, and an unattended
+  server has none. A pane other than the one the row already holds cannot take
+  a chair somebody is in, and a tab re-linked by the seat's window name still
+  asks before it carries the chair's credential. The limit: once the person has
+  clicked, the pane the row holds takes its credential back without asking, so
+  the click chooses WHICH session is the chair and not who may run inside it —
+  a pane id is not a secret from the same user, and whoever names that live pane
+  gets a seat credential. A re-attach does not revoke a credential handed to
+  that pane earlier; it hands out another, so each one adds a live credential
+  and the earlier ones are not taken back until the chair is stood down. A
+  process of the same user that read the occupant's credential out of the pane's
+  environment keeps it through a re-adoption; standing the chair down is what
+  revokes it.
 - **An engine in the chair is held to what its workers are.** Claude Code's
   chair goes through the gate hook; OpenCode has none, so its chair starts
   under the deny list an OpenCode worker gets (no push, pull request, merge,
@@ -1534,7 +1558,7 @@ the full list and defaults:
 | `AGENTGLASS_UNDERSTUDY=0` | the Clone, whatever its settings file says — the variable can force it off, never on |
 | `AGENTGLASS_TMUX_OBSERVE_ONLY` | every tmux command that writes to a session — see [docs/BLAST-RADIUS.md](docs/BLAST-RADIUS.md) |
 | `AGENTGLASS_CLICKUP_WRITE=1` | *(opposite sense)* turns **on** writes to a ClickUp board, which are off by default |
-| `AGENTGLASS_JIRA_WRITE=1` | *(opposite sense)* turns **on** writes to a Jira site, which are off by default; the agent door's `step`, `link`, `edit`, `comment`, `comment-edit`, `comment-delete`, `move`, `subtask`, `relate`, `unrelate`, `weblink`, `unweblink`, `worklog`, `worklog-edit`, `worklog-delete`, `watch`, `vote`, `rank`, `attach` and `unattach` need `AGENTGLASS_CONTROL_LEVEL=3` as well |
+| `AGENTGLASS_JIRA_WRITE=1` | *(opposite sense)* turns **on** writes to a Jira site, which are off by default; the agent door's `step`, `link`, `edit`, `comment`, `comment-edit`, `comment-delete`, `move`, `subtask`, `relate`, `unrelate`, `weblink`, `unweblink`, `worklog`, `worklog-edit`, `worklog-delete`, `watch`, `vote`, `rank`, `sprint-move`, `attach` and `unattach` need `AGENTGLASS_CONTROL_LEVEL=3` as well |
 | `AGENTGLASS_GATE_FAILCLOSED=1` | *(opposite sense)* makes the gate deny on timeout instead of allowing |
 
 The `/control` channel, which drives the app's own window, has a level switch
@@ -1568,7 +1592,7 @@ value; only an unset variable is the default. What each level means:
   filled in; it may not call a route that writes. The person's click is the
   effect. There are no automatic grants, so `AGENTGLASS_CONTROL_LEVEL=3` lets an
   agent prepare something and never perform it, with one exception outside
-  `/control`: the Jira card door's `step`, `link`, `edit`, `comment`, `comment-edit`, `comment-delete`, `move`, `subtask`, `relate`, `unrelate`, `weblink`, `unweblink`, `worklog`, `worklog-edit`, `worklog-delete`, `watch`, `vote`, `rank`, `attach` and `unattach`, which perform at level 3
+  `/control`: the Jira card door's `step`, `link`, `edit`, `comment`, `comment-edit`, `comment-delete`, `move`, `subtask`, `relate`, `unrelate`, `weblink`, `unweblink`, `worklog`, `worklog-edit`, `worklog-delete`, `watch`, `vote`, `rank`, `sprint-move`, `attach` and `unattach`, which perform at level 3
   when the Jira write switch is also on (see "Jira, and the agent door to a
   card"). Eight doors ship, five on one pull
   request, one in the Finder, one in the machine panel and one in the usage popover: `pr.merge.stage` (method, commit subject and body), `pr.comment.stage`

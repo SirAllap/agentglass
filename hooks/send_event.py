@@ -73,24 +73,44 @@ def _agentglass_local_only(url):
 
 
 def read_transcript(path):
-    """Return (chat_lines, model_name) from a Claude Code transcript JSONL."""
-    chat, model = [], None
+    """Return (chat, model_name) from a Claude Code transcript JSONL.
+
+    The server only ever sums token usage and cost out of `chat`, per model. A
+    transcript runs to hundreds of MB, and holding every line made this hook
+    peak at ~1.7 GB per call. So it streams the file one line at a time and
+    keeps one running usage total per model, sent as one synthetic
+    `{"message": {"model", "usage"}}` entry each: the same sums, a few KB.
+    """
+    totals, model = {}, None
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
-                line = line.strip()
-                if not line:
+                if '"usage"' not in line and '"model"' not in line:
                     continue
                 try:
                     obj = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                chat.append(obj)
-                msg = obj.get("message") or {}
-                if isinstance(msg, dict) and msg.get("model"):
-                    model = msg["model"]
+                msg = obj.get("message") if isinstance(obj, dict) else None
+                if not isinstance(msg, dict):
+                    continue
+                m = msg.get("model")
+                if m:
+                    model = m
+                usage = msg.get("usage")
+                if isinstance(usage, dict):
+                    acc = totals.setdefault(m if isinstance(m, str) else None, {})
+                    for k, v in usage.items():
+                        if isinstance(v, (int, float)) and not isinstance(v, bool):
+                            acc[k] = acc.get(k, 0) + v
     except OSError:
         pass
+    chat = []
+    for m, usage in totals.items():
+        entry = {"usage": usage}
+        if m:
+            entry["model"] = m
+        chat.append({"message": entry})
     return chat, model
 
 

@@ -1,0 +1,11 @@
+# Budget for `make perf-gate` (scripts/loadagents.ts). One number per line:
+# `key value`. This file is the one place the numbers live, like
+# scripts/tranche-floors.txt. Not met on main today; see the Makefile comment.
+#
+# Worst event-loop stall (server watchdog, ping max) the terminal may see.
+loop_stall_max_ms 100
+# p99 of a keystroke's echo through the real terminal WebSocket.
+echo_p99_ms 50
+# Server RSS high-water mark. The plan names no figure; this is a starting
+# guess to be tightened against the baseline.
+rss_peak_mb 1024

@@ -109,6 +109,20 @@ be its value there.
 | `LAYER` | viewer 10020 up to alarm 10300 | `web/src/lib/layers.ts` |
 | `COLLAPSE_FROM` | 7 | `web/src/lib/prStack.ts` |
 | `MAX_TIERS` | 64 | `web/src/lib/prStack.ts` |
+| `CARD_W` | comfortable 280, compact 232: a Jira board column, never stretched | `web/src/components/jira/list/boardModel.ts` |
+| `BOARD_GAP` | 12 | `web/src/components/jira/list/boardModel.ts` |
+| `RAIL_W` | 34 | `web/src/components/jira/list/boardModel.ts` |
+| `RAIL_PEEK_MS` | 150 | `web/src/components/jira/list/boardModel.ts` |
+| `JQL_REST_MS` | 400: the search box rests this long before JQL goes to the site | `web/src/components/jira/list/boardModel.ts` |
+| `JQL_TTL_MS` | 30000: one JQL query or view count kept on the server | `server/src/jiraJql.ts` |
+| `FOLD` | labels 820, tabs 800, lanes 1160, row 900, stack 560: the widths of the Jira board column where it folds (container queries, `jcq`) | `web/src/components/jira/list/tabsModel.ts` |
+| `MAX_TABS` | 5: saved-view tabs before the rest fold into More | `web/src/components/jira/list/tabsModel.ts` |
+| `DOCK_MIN` | 380: the card dock never gets narrower; the sidebar rail folds first | `web/src/components/jira/list/tabsModel.ts` |
+| `DOCK_MAX` | 540: the dock width on a wide window | `web/src/components/jira/list/tabsModel.ts` |
+| `JD_DOT` | 10: a timeline event's dot in the detail panel | `web/src/components/jira/detail/metrics.ts` |
+| `JD_TREE_STEP` | 16: how far a sub-task is indented under its card in the detail tree | `web/src/components/jira/detail/metrics.ts` |
+| `ROW_FOLD` | 900: under it a list row's PR sits under the title | `web/src/components/jira/list/laneModel.ts` |
+| `--jira-accent` | follows the theme's `--primary` (hover `--primary-hover`, ink `--on-primary`): the Jira board's chosen things only (selected card, "+N columns" pill, pressed toggles via `.agx-jacc`) | `web/src/index.css` |
 | `--surface-nav` | the nav, leaning to `--bg2` | `web/src/index.css` |
 | `--surface-card` | a card, panel, dialog or popover body | `web/src/index.css` |
 | `--surface-inset` | a well inside a card that takes input | `web/src/index.css` |
@@ -237,7 +251,7 @@ select is its natural width unless the field is `block`.
 One surface. The identity line carries the forge's mark, the number that copies
 itself, the author and age, and, at its end, a 28px tracker block: the work
 item's mark, its id as a button that opens it inside the app, its status in the
-shared `StatusPill` (never truncated, dimmed with its age when stale) and up to
+shared `StatusPill` (tracker statuses keep the tracker's own case: always upper case, through `statusText`; never truncated, dimmed with its age when stale) and up to
 five faces, then `+N`. The block is drawn per repository: a repository that
 links no work items gets the plain pull-request card, with nothing reserved and
 no hint; one that does, and a pull request without a card, gets the same box
@@ -429,6 +443,63 @@ inside can come to overlap text at another width.
   reduced transparency makes the plates near-solid and drops the sheen; more
   contrast makes them solid with a defined ring.
 
+### The Jira sidebar's sections
+
+Top to bottom: Starred filters (a star, the name, a "Jira" tag for a site filter, a right-aligned count; `g` then 1-9 opens
+the Nth), Assigned to me, Spaces (a ring and a second
+line `KEY · done/total · n components`) and More (sprint, Looked up, the boards from before spaces). A count is an en dash
+while it is asked or failed, `N+` when the server stopped at its page. Starred rows are 28px, a space row 44px, the
+ring 18px, the count column 24px wide at least; the accent is `--jira-accent`, else `--primary`. The styles are the
+`jira sidebar sections` block at the end of `index.css`.
+
+The project's team lives in the list toolbar instead, beside the search box (`AssigneePicker`): the first five faces of
+the project's own assignable roster (0-card members included), then a "+N" chip, the whole cluster opening the one
+people-pick dropdown the app already uses elsewhere, capped and scrolled on its own. Picking people there builds
+`assignee in (...)` over the board's cards; it is the fix for the sidebar's old unbounded Team row, which listed every
+assignable person on the site and pushed Spaces out of view.
+
+The sidebar fills the Spaces rows for every space, not only an opened one: each listed space is read once in the background,
+one at a time and the first 8 at most, so its ring has a number while it is closed. The category of the third item
+is the `n components` count; the site's own project category is not read.
+
+### The card panel's modes (Jira)
+
+The panel has three places and a maximize, kept per window (`agentglass.jira.dock`, and `jiraCardMode` for the pop-out):
+docked right (the list's width rule: the dock between 380 and 540, the board never under two columns, the rail folds first), a
+floating window (520 wide, two thirds of the screen tall, 380 at least, kept whole inside the viewport, moved by its grip or the
+arrow keys, 10 and 40 with Shift), and a pop-out over the board (1100 wide at most; Esc returns it, a second Esc closes). `f`
+inside the panel maximizes it to the whole list pane; Ctrl+Shift+D cycles dock, float, pop out. The panel's strip is 32px tall,
+8px padding and gap, a 24px grip, the buttons 26px with a 2px gap; the float's shadow and the pop-out's are the dialog's.
+The styles are the `jira dock d2` block at the end of `index.css`.
+
+The sidebar has, under the starred rows, "Sync with Jira filters": a 28px row with the shared `.agx-switch` (on is the Jira accent,
+not the success green), 4px above it, radius 6px. With the setting on, the site's favourite filters join the starred rows with the
+"Jira" tag; a team row is a button when the person has an account id, and a click filters the board to them. Focus is a 2px
+accent outline drawn inside the row. Styles are the `jira sidebar r3` block at the end of `index.css`.
+
+### The Jira board's folding
+
+The board column is a container (`.agx-jcq`, named `jcq`), so it folds by its own width, not the window's. Under 820 the
+sprint chip shrinks to "S14" and keeps the full words in its tooltip; under 800 "+ Save view" and "More views" fold to "+" and
+"More"; under 1160 the swimlane hint folds into one "i" tooltip; under 900 a list row's PR moves under the card title, and
+under 560 the row wraps as a stack. The tab strip shows a fade on the edge that has more to scroll to. The card dock takes what
+is left after three columns, never under 380 and never over 540, so the board keeps three columns at 1600 with a card open;
+under that the sidebar rail folds first. A board card carries a "..." in its corner on hover or focus, and a saved search a
+"..." with Rename, Duplicate, Copy JQL, Share as team and Remove (local only: nothing in Jira changes). Styles are the
+`jira board r3` block at the end of `index.css`.
+
+## States
+
+Five states, one component each, in `web/src/components/tasks/BoardState.tsx`. A screen never writes its own "None", its own spinner or its own error box.
+
+- **Empty, with a next action** (`BoardEmpty`): only when the person can act. A card, one bold line for what is missing, one dim line for why it matters, one primary button. Page level only: a column or a section never gets this.
+- **Empty, collapses** (`StateCollapse`, `StateFold`): a field, section or list the person cannot fill from here draws nothing. One that can shows its label with a quiet "+ Add". Three or more empty sections in a row merge into one line, "Empty: sub-tasks, links, web links, files", with one Add.
+- **Loading** (`BoardSkeleton`): bars shaped like the content, drawn after 150 ms. No bare "Loading…" text and no spinner in a pane; a spinner lives only inside a button. Reduced motion stops the pulse.
+- **Error** (`StateError`): what failed, the cause in one plain line, Try again, and where to change it.
+- **Disconnected** (`StateDisconnected`): a page state, not a badge. It names the service and why, has the one button that connects, and keeps the cached rows below, dimmed, with their age.
+
+The hide rule is `fieldRule` in `web/src/lib/stateRule.ts`. An empty field hides when it cannot be filled here and its emptiness is not a verdict ("No reviewers" on a PR that needs one stays). A fillable one shows its prompt. "None" is never shown.
+
 ## Settings pages
 
 Every settings page is built from the blocks in
@@ -455,7 +526,7 @@ Every settings page is built from the blocks in
   text goes in `detail` (named "Details"), a `Disclosure` under the help; on a
   row that is itself a button (a `Toggle`) it is drawn as the next sibling,
   `.agx-row-more`, so the row keeps one click target. A card is 13px radius with
-  the mockup's soft lower shadow; its header is a 22px icon chip, the title
+  a soft lower shadow; its header is a 22px icon chip, the title
   15.96px bold, and the sentence under it 12.04px; the page title is 23.1px bold.
   The control column is
   `status` first, then `control` or `actions`, as wide as its content and no
@@ -525,7 +596,7 @@ still sits beside it. A page still on the old `Section` box spans every column
 until it moves. The rows of a card answer to the card's width, not the
 window's.
 
-From 2200px the page is zoomed 1.107 (the mockup's 14 to 15.5px root), the nav
+From 2200px the page is zoomed 1.107 (a 14 to 15.5px root), the nav
 is not. Below 1100px the nav is a 68px icon rail: labels, counts and legend go,
 and the one mark kept is a red dot (`data-keep`) on a page that failed, because
 nothing else says so there. Two pages must not share a glyph for the same reason.
@@ -553,6 +624,12 @@ the 640px window still has a column.
 Pages still on the old `Section` box are listed with their counts in
 `web/test/settings-ratchet.txt`; a page that moves keeps its card titles (the
 search index keys rows by them) and goes in the test's `MIGRATED` list.
+
+## The Jira view's own look
+
+- The Jira screen wears the approved mockup's layout and faces whatever the app theme is: `.agx-jmock` on the Tasks panel's wrapper reads the app's own tokens (`--bg`, `--text`, `--surface-*`, ...) instead of redefining them, so it is light on a light theme and dark on a dark one, popovers included.
+- The layout and non-color rules live in `web/src/jiraMock.css`, outside the tokens-only block at the end of `index.css`. Inter for text, mono only for keys and code.
+- The board scrolls one column at a time: the head stays, only that column's cards move.
 
 ## Guards
 
