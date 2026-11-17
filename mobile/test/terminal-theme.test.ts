@@ -84,7 +84,7 @@ describe("the bridge repaints in place", () => {
      * `doc`, is the reload coming back.
      */
     expect(view.match(/terminalDocument\(/g)?.length).toBe(1);
-    expect(view).toContain("useState(() => terminalDocument({ palette, columns }))");
+    expect(view).toContain("useState(() => terminalDocument({ palette, columns, cursor: termCursor() }))");
     expect(view).toContain('useMemo(() => ({ html: doc, baseUrl: "about:blank" }), [doc])');
   });
 
@@ -98,5 +98,14 @@ describe("the bridge repaints in place", () => {
      */
     expect(view).toContain("const themeJson = JSON.stringify(terminalTheme(palette));");
     expect(view).toMatch(/inject\(`window\.AGX && window\.AGX\.theme\(\$\{themeJson\}\)`\);\s*\}, \[themeJson, inject\]\);/);
+  });
+});
+
+describe("cursor shape after a WebView reload", () => {
+  test("the ready handler re-injects AGX.cursor(termCursor())", () => {
+    const src = readFileSync(join(import.meta.dir, "../src/terminal/TerminalView.tsx"), "utf8");
+    const ready = src.slice(src.indexOf('message.t === "ready"'));
+    const body = ready.slice(0, ready.indexOf("return;"));
+    expect(body).toContain("window.AGX.cursor(${JSON.stringify(termCursor())})");
   });
 });

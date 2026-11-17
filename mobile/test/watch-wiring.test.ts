@@ -56,7 +56,7 @@ describe("the tap", () => {
 describe("the setting", () => {
   const settings = src("app", "(tabs)", "settings.tsx");
   test("sits in the Notifications group, waits for the computer's answer, and is the computer's to change only with full access", () => {
-    const group = settings.slice(settings.indexOf('<GroupTitle text="Notifications" />'), settings.indexOf('<GroupTitle text="Appearance"'));
+    const group = settings.slice(settings.indexOf('<Eyebrow text="Notifications" />'), settings.indexOf('<Eyebrow text="Appearance" />'));
     expect(group).toContain('title="Alerts on this phone"');
     expect(group).toContain("phoneAlerts === null");
     expect(settings).toContain('host?.scope === "full"');

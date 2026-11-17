@@ -1,5 +1,6 @@
 /*
- * Whether this machine tracks work anywhere, and what that costs the bar.
+ * Whether this machine tracks work anywhere, which tracker the Tasks tab
+ * reads, and which sources its pill offers.
  *
  * ── the question is not "is ClickUp connected" ───────────────────────────
  * ClickUp is one task provider of several. `shared/providers.ts` already lists
@@ -9,35 +10,35 @@
  * SOMETHING. A check spelled `clickup` would be the app deciding that one
  * workspace's tool is what a task is.
  *
- * ── and the answer changes the bar, which the desk's does not ────────────
- * `web/src/lib/taskConnected.ts` answers the same question and reaches a
- * different conclusion on purpose, so the difference is worth stating rather
- * than looking like drift. Its rule is:
+ * ── the answer no longer moves the bar ───────────────────────────────────
+ * It used to: a machine tracking work nowhere lost the Cards destination. It
+ * cannot lose Tasks now, because Tasks also reads GitHub issues, and a
+ * repository needs no provider. What the answer decides is narrower and
+ * stated in `taskSources`: whether the tracker is one of the pill's sources,
+ * and which tracker the tab reads when it is. `tracksWork` still answers for
+ * the pull-request screens, which draw a linked tracker card only on a machine
+ * that has one.
  *
- *   nothing set up   show every task source — this is a fresh install, and
- *                    the bar is the only advertisement the feature has
- *
- * That argument holds at a desk because an unconnected tab there LINKS to the
- * pane that connects it. It does not hold here, and the reason is a rule this
- * app spends its scope on elsewhere: a phone cannot set a provider up. There
- * is no Integrations pane on it, deliberately — the same refusal that makes
- * Troubleshooting print an install line rather than run it. So an empty Cards
- * tab on a phone advertises something you cannot act on from the device you
- * are holding, and it spends a fifth of a five-item bar doing it.
+ * ── and the phone is stricter than the desk ──────────────────────────────
+ * `web/src/lib/taskConnected.ts` shows every task source on a fresh install,
+ * because an unconnected tab at the desk LINKS to the pane that connects it.
+ * That route does not exist here: a phone cannot set a provider up (the same
+ * refusal that makes Troubleshooting print an install line rather than run
+ * one), so a tracker source on a machine without one is an advertisement for
+ * something this device cannot do.
  *
  * ── a broken provider still counts ───────────────────────────────────────
  * Taken from the desk verbatim, because it is right there too: "ClickUp
  * refused this token" is not the same as "you do not use ClickUp", and hiding
- * the tab would remove the one surface that was going to say so.
+ * the source would remove the one surface that was going to say so.
  */
 import { PROVIDERS, type ProviderId, type ProviderSpec, type ProviderState, type ProviderStatus } from "../../../shared/providers.ts";
 
 /** The ids that feed the work-you-owe half, read from the catalogue rather
  *  than listed — a list here would be wrong the first time somebody adds a
- *  provider, and wrong silently. Jira is the one named exception: the computer
- *  can connect it, but nothing here reads a Jira card yet, and a Cards tab
- *  switched on by a tracker it cannot show is worse than a hidden one. */
-const TASK_IDS = new Set(PROVIDERS.filter((p) => p.kind === "task" && p.id !== "jira").map((p) => p.id));
+ *  provider, and wrong silently. Jira is in it since Phase 4: the phone reads
+ *  its board and its cards (src/jira/*), so a Jira machine has a Tasks tab. */
+const TASK_IDS = new Set(PROVIDERS.filter((p) => p.kind === "task").map((p) => p.id));
 
 /**
  * Whether a provider counts as "this person uses this".
@@ -56,9 +57,9 @@ export const setUp = (state: ProviderState): boolean => state === "connected" ||
  *
  * `null` when it cannot be told — no answer yet, or an answer with no task
  * provider mentioned in it at all. Null is NOT "no": a provider the server did
- * not name is unknown rather than absent, and taking somebody's tab away on a
- * missing answer is the one failure here with no way back from the device
- * looking at it.
+ * not name is unknown rather than absent, and dropping the linked-card row on
+ * a missing answer is the failure with no way back from the device looking at
+ * it.
  */
 export function tracksWork(statuses: ProviderStatus[] | null | undefined): boolean | null {
   if (!statuses) return null;
@@ -68,7 +69,7 @@ export function tracksWork(statuses: ProviderStatus[] | null | undefined): boole
 }
 
 /**
- * Which task provider the Cards tab reads from, and what it is called.
+ * Which task provider the Tasks tab reads from, and what it is called.
  *
  * The tab used to read `/clickup/views` and `/clickup/view` whoever you were,
  * and print "Open in ClickUp" on every card — a phone paired to a machine that
@@ -77,8 +78,10 @@ export function tracksWork(statuses: ProviderStatus[] | null | undefined): boole
  *
  *   ClickUp connected            → the board, its saved views, its cards
  *   another tracker set up       → `/tasks/list`, the provider-neutral route
- *   nothing set up               → `null`, and the tab says so
- *   no answer                    → `undefined`, and the tab waits
+ *   Jira set up                  → its own source, `jira`: four lanes, its own
+ *                                  card screen, and no `/tasks/list`
+ *   nothing set up               → `null`, and no tracker is offered
+ *   no answer                    → `undefined`, and the pill waits
  *
  * ClickUp beats the rest whenever it is set up at all, `error` included — it
  * is the one with views to choose from, and a person with both wants the board
@@ -94,13 +97,68 @@ export function tracksWork(statuses: ProviderStatus[] | null | undefined): boole
  */
 export function taskProvider(statuses: ProviderStatus[] | null | undefined): ProviderSpec | null | undefined {
   if (!statuses) return undefined;
-  const known = statuses.filter((p) => TASK_IDS.has(p.id) && setUp(p.state));
   if (!statuses.some((p) => TASK_IDS.has(p.id))) return undefined;
-  if (!known.length) return null;
+  const best = bestSetUp(statuses);
+  return best ? PROVIDERS.find((p) => p.id === best.id) ?? null : null;
+}
+
+/** The set-up task provider the phone would read, if there is one. ClickUp
+ *  beats the rest whenever it is set up at all; state only breaks a tie between
+ *  two non-ClickUp trackers. See `taskProvider` for why.
+ *
+ *  Jira is ranked last here rather than first: its source is its own row in the
+ *  pill (a board, not a list) and `taskSources` places it; this is only the
+ *  fallback for a machine whose only tracker is Jira. */
+function bestSetUp(statuses: ProviderStatus[]): ProviderStatus | undefined {
+  const known = statuses.filter((p) => TASK_IDS.has(p.id) && setUp(p.state));
   const rank = (p: ProviderStatus): number =>
-    (p.id === "clickup" ? 0 : 2) + (p.state === "connected" ? 0 : 1);
-  const best = [...known].sort((a, b) => rank(a) - rank(b))[0]!;
-  return PROVIDERS.find((p) => p.id === best.id) ?? null;
+    (p.id === "clickup" ? 0 : p.id === "jira" ? 3 : 2) + (p.state === "connected" ? 0 : 1);
+  return [...known].sort((a, b) => rank(a) - rank(b))[0];
+}
+
+/** One source the Tasks tab can read, as the pill names it. */
+export type TaskSourceId = "jira" | "tracker" | "issues";
+
+export interface TaskSource {
+  id: TaskSourceId;
+  /** The pill's word: the tracker's own name, or "GitHub issues". */
+  title: string;
+  /** Which tracker, when this is the tracker source. Jira's own source is
+   *  `jira`, because the phone draws a board for it and a list for the rest. */
+  provider?: ProviderId;
+}
+
+/** GitHub issues needs no provider: it is read from each checkout's remote, so
+ *  every machine with a repository has it. */
+export const ISSUES_SOURCE: TaskSource = { id: "issues", title: "GitHub issues" };
+
+/** The board source. Its own id rather than `tracker` with a provider, because
+ *  what the tab draws and reads is different: four lanes from a Jira view, not
+ *  `/tasks/list`. */
+export const JIRA_SOURCE: TaskSource = { id: "jira", title: "Jira", provider: "jira" };
+
+/**
+ * The sources the Tasks tab offers, in the order the pill lists them.
+ *
+ * `undefined` is not "no": before the provider list answers, the pill has
+ * nothing to offer and the tab waits. `[]` never happens — GitHub issues is
+ * always there — which is why an empty Tasks tab is a read failure to explain
+ * rather than a machine with nothing to do.
+ *
+ * Jira first when it is set up, because it is the one source with a board; then
+ * the other tracker, named after itself; then issues. A machine with both
+ * ClickUp and Jira is offered both: the pill switches between them, and neither
+ * silently wins the tab.
+ */
+export function taskSources(statuses: ProviderStatus[] | null | undefined): TaskSource[] | undefined {
+  if (!statuses) return undefined;
+  const jira = statuses.find((p) => p.id === "jira" && TASK_IDS.has(p.id) && setUp(p.state));
+  const other = bestSetUp(statuses.filter((p) => p.id !== "jira"));
+  return [
+    ...(jira ? [JIRA_SOURCE] : []),
+    ...(other ? [{ id: "tracker" as const, title: providerTitle(other.id), provider: other.id }] : []),
+    ISSUES_SOURCE,
+  ];
 }
 
 /** "ClickUp", "Taskwarrior" — the catalogue's spelling, for "Open in …" and

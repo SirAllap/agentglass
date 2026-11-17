@@ -26,7 +26,7 @@ export default function TrackersScreen(): React.ReactNode {
             key={r.id}
             title={r.title}
             sub={r.reason}
-            lead={<Glyph name="list" color={r.badge === "soon" ? C.text4 : C.text2} size={20} />}
+            lead={<Glyph name="list" color={C.text2} size={20} />}
             trail={<Chip label={r.badge} tone={r.badge === "on" ? "good" : "neutral"} />}
           />
         ))}

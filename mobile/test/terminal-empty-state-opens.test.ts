@@ -55,16 +55,34 @@ describe("the empty state", () => {
     expect(openLine).toContain("pendingTab(pendingOpen.current, active)");
   });
 
-  test("the card offers a button per paired project, not just Look again", () => {
+  test("the tile offers a button per paired project, not just Look again", () => {
     const at = screen.indexOf('emptyRepos?.length ? (');
     expect(at, "the empty-state list moved").toBeGreaterThan(-1);
     const card = screen.slice(at, screen.indexOf("Look again", at));
     expect(card).toContain("openShellIn(r.root)");
-    expect(card).toContain("Open a shell in");
+    expect(card).toContain("New window");
+  });
+
+  /*
+   * The report's symptom: with more projects than fit, the first "Open a
+   * shell in" card sat under the clock. The header already paid the inset;
+   * what covered it was a card centred past the top of a `View` it was taller
+   * than. Both halves are held here, because either one alone brings it back.
+   */
+  test("the empty tile scrolls under a header that pays the top inset", () => {
+    const header = between(screen, "The inset has to be paid here instead", "backgroundColor: K.bg");
+    expect(header).toContain("paddingTop: insets.top");
+
+    const empty = between(screen, "The drawing's empty state", "</ScrollView>");
+    expect(empty).toContain("<ScrollView");
+    expect(empty).toContain("flexGrow: 1");
+    // The mock's tile: the icon in a rounded square, the sentence, and the
+    // accent button under it — not a card explaining itself.
+    expect(empty).toContain("width: 64, height: 64");
   });
 
   test("the copy no longer assumes the reader knows what tmux is", () => {
-    const at = screen.indexOf("Nothing is open on the computer");
+    const at = screen.indexOf("Start one here, or attach a window");
     expect(at, "the empty-state sentence moved").toBeGreaterThan(-1);
     const sentence = screen.slice(at, at + 200);
     expect(sentence).not.toContain("tmux");
@@ -74,10 +92,12 @@ describe("the empty state", () => {
     expect(screen).toContain('label="Look again"');
   });
 
-  /* The header's own `+`, which this test's own opening comment refers to. */
-  test("the header's + is disabled with no pane, because it reads the project off one", () => {
-    const at = screen.indexOf("A new window, with an agent already running in it.");
-    expect(at, "the comment moved").toBeGreaterThan(-1);
-    expect(screen.slice(at, at + 800)).toContain("disabled={!open || opening}");
+  /* The window strip's `+`, which replaces the header's: it opens the windows
+     on the computer, and the switcher's own New window is the agent picker. */
+  test("the strip's + opens the windows on the computer", () => {
+    const at = screen.indexOf('accessibilityLabel="All windows on the computer"');
+    expect(at, "the strip's + moved").toBeGreaterThan(-1);
+    // The label sits after the handler, so read the Pressable it belongs to.
+    expect(screen.slice(at - 400, at)).toContain("setSessionsOpen(true)");
   });
 });

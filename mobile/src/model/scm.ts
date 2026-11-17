@@ -9,16 +9,31 @@
 import type { GitBranch } from "../../../shared/types.ts";
 
 /** The segments, in reading order: what I changed, what I landed, where I can
- *  go, what I put aside, what is waiting for review. Short labels: five must
- *  fit one row at phone width. */
+ *  go, and the two that carry no daily errand. Four, so every label fits one
+ *  row at phone width without ellipsis; Stash and Pull requests live behind
+ *  More (the mock's own split). */
 export const VIEWS = [
   { id: "changes", label: "Changes" },
   { id: "log", label: "Log" },
   { id: "branches", label: "Branches" },
-  { id: "stash", label: "Stash" },
-  { id: "pr", label: "PR" },
+  { id: "more", label: "More" },
 ] as const;
-export type ScmView = (typeof VIEWS)[number]["id"];
+export type ScmTab = (typeof VIEWS)[number]["id"];
+/** The two the More menu opens. Reachable, one tap in, and out of the row of
+ *  four so every segment label fits without ellipsis. */
+export const MORE_VIEWS = ["stash", "pr"] as const;
+export type ScmMoreView = (typeof MORE_VIEWS)[number];
+/** Every view of the checkout: the four segments, and the two More opens. */
+export type ScmView = ScmTab | ScmMoreView;
+
+/** Which segment is lit while this view is open. */
+export function tabOf(view: ScmView): ScmTab {
+  return view === "stash" || view === "pr" ? "more" : view;
+}
+
+export function inMore(view: ScmView): view is ScmMoreView {
+  return view === "stash" || view === "pr";
+}
 
 /** git's `[ahead 4, behind 53]` as the arrows the header already uses. */
 export function trackWords(track: string): string {

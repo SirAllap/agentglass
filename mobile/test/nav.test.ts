@@ -14,7 +14,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { BAR, OFF_BAR, PUSHED, launchRoute, taskDestinations, type TabRoute } from "../src/nav/bar.ts";
+import { BAR, OFF_BAR, PUSHED, launchRoute, type TabRoute } from "../src/nav/bar.ts";
 
 /**
  * How wide each word is, in dp, at the bar's 10px in the weight it is drawn.
@@ -56,10 +56,17 @@ const DP_AT_10PX: Record<string, number> = {
   // tightest, "Issues", ellipsises at 219% on a 360dp phone against the 194%
   // that "Review" already survives on, so the bar has more headroom than the
   // one this replaced, not less.
-  Inbox: 25.26,
   PRs: 16.60,
-  Issues: 28.36,
-  Cards: 26.27,
+  /*
+   * "Tasks" is a real reading, taken on this machine with the method above
+   * except for one substitution worth writing down: the only Roboto here is
+   * `/usr/share/doc/pdfio/examples/Roboto-Regular.ttf`, so the word was laid
+   * out from its `hmtx` advances at 10px — 26.80 — and then multiplied by the
+   * 1.3% the note above gives for Medium (the inactive labels are 500). That
+   * is 27.16, and it is an over-estimate of the reading a variable Roboto would
+   * give, which is the safe direction for the room check below.
+   */
+  Tasks: 27.16,
 };
 
 /** The narrowest phone worth designing for, and the emulator this was looked
@@ -73,10 +80,12 @@ const ITEM_PADDING = 10;
 const slot = (screenDp: number, items: number): number => screenDp / items - ITEM_PADDING;
 
 describe("the bar", () => {
-  test("four destinations, the terminal first", () => {
+  test("three destinations, the terminal first", () => {
     // First is where the app lands when it has nothing remembered, and the
-    // terminal is what the phone is opened for.
-    expect(BAR.map((d) => d.route)).toEqual(["terminal", "prs", "issues", "tasks"]);
+    // terminal is what the phone is opened for. Issues is a source inside
+    // Tasks now, not a peer: one destination over work, with a pill that says
+    // which tracker or repository it is reading.
+    expect(BAR.map((d) => d.route)).toEqual(["terminal", "prs", "tasks"]);
   });
 
   test("every destination carries a label", () => {
@@ -92,10 +101,6 @@ describe("the bar", () => {
     }
   });
 
-  test("a machine that tracks work nowhere loses Cards and nothing else", () => {
-    expect(taskDestinations(BAR, false).map((d) => d.route)).toEqual(["terminal", "prs", "issues"]);
-    expect(taskDestinations(BAR, null)).toBe(BAR);
-  });
 });
 
 describe("where the app opens", () => {
@@ -106,10 +111,11 @@ describe("where the app opens", () => {
 
   test("the terminal when nothing was remembered, or it is gone", () => {
     expect(launchRoute(null, BAR)).toBe("terminal");
-    // Cards remembered on a machine that has since stopped tracking work.
-    expect(launchRoute("tasks", taskDestinations(BAR, false))).toBe("terminal");
     // A value an older build wrote: the Inbox, which no longer exists.
     expect(launchRoute("index", BAR)).toBe("terminal");
+    // And the Issues destination that became a source: the bar no longer
+    // offers it, so a phone that was last there lands on the terminal.
+    expect(launchRoute("issues", BAR)).toBe("terminal");
     expect(launchRoute("settings", BAR)).toBe("terminal");
   });
 });
@@ -135,11 +141,11 @@ describe("the width that decided the count", () => {
     expect(terminal * 1.3).toBeGreaterThan(slot(411.4, 7));
   });
 
-  test("four, at twelve points, still leave every label room near the top of Android's scale", () => {
+  test("three, at twelve points, still leave every label room near the top of Android's scale", () => {
     /*
      * The bar is drawn by hand now (src/nav/TabBar.tsx): each item is an equal
      * share of the width with no padding of its own, and the labels are 12
-     * points, not the stock 10. So a label's room is screen / 4 and its width
+     * points, not the stock 10. So a label's room is screen / 3 and its width
      * is the 10-point reading above times 1.2.
      *
      * The tightest is "Terminal" on a 360dp phone: 90dp against 47.2, which

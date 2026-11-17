@@ -15,19 +15,21 @@ const host = await src("src/state/host-context.tsx");
 const terminal = await src("app/(tabs)/terminal.tsx");
 const prs = await src("app/(tabs)/prs.tsx");
 const talk = await src("src/state/pr-talk.ts");
+const page = await src("src/terminal/terminal-html.ts");
+const checks = await src("app/pr/checks.tsx");
 
 test("the pull-request pass runs only in the foreground and catches up on return", () => {
-  expect(host).toMatch(/setInterval\(\(\) => \{ if \(AppState\.currentState === "active"\) void loadPrs\(host\); \}, SLOW_POLL_MS\)/);
+  expect(host).toContain("foregroundInterval(AppState, () => { void loadPrs(host); }, SLOW_POLL_MS)");
   expect(host).toContain("if (Date.now() - prsAt.current >= SLOW_POLL_MS) void loadPrs(host);");
 });
 
 test("the terminal tab's pane read follows AppState as well as focus", () => {
-  expect(terminal).toMatch(/if \(busy \|\| AppState\.currentState !== "active"\) return;\s*busy = true;\s*void load\(true\)\.finally\(\(\) => \{ busy = false; \}\);\s*\}, 2000\)/);
+  expect(terminal).toMatch(/foregroundInterval\(AppState, \(\) => \{\s*if \(busy\) return;\s*busy = true;\s*void load\(true\)\.finally\(\(\) => \{ busy = false; \}\);\s*\}, 2000\)/);
 });
 
 test("the dirty dot's read is foreground-only and never stacks", () => {
-  expect(terminal).toMatch(/if \(busy \|\| AppState\.currentState !== "active"\) return;\s*busy = true;\s*void look\(\)\.finally/);
-  expect(terminal).toContain("setInterval(tick, 4000)");
+  expect(terminal).toMatch(/if \(busy\) return;\s*busy = true;\s*void look\(\)\.finally/);
+  expect(terminal).toContain("foregroundInterval(AppState, tick, 4000)");
 });
 
 test("the queue's pass and the Pull requests tab read the same lists through one memo", () => {
@@ -43,4 +45,14 @@ test("a burst of talk ticks reloads once, after it goes quiet", () => {
   expect(talk).toContain("RELOAD_QUIET_MS");
   expect(talk).toContain("setTimeout(() => { timer.current = null; void latest.current(); }, RELOAD_QUIET_MS)");
   expect(talk).not.toMatch(/if \(was\.scope !== scope \|\| was\.tick === tick\) return;\s*void reload\(\)/);
+});
+
+test("the terminal page's two 1 s timers do nothing while the page is hidden", () => {
+  expect(page).toContain("setInterval(function () { if (!document.hidden) reportLine(); }, 1000)");
+  expect(page).toContain("setInterval(function () { if (!document.hidden) dress(); }, 1000)");
+});
+
+test("the checks poll skips when the app is not active and reads at once on return", () => {
+  expect(checks).toContain('if (AppState.currentState === "active") void loadJobs(); }, wait)');
+  expect(checks).toContain('AppState.addEventListener("change", (s) => { if (s === "active") void loadJobs(); })');
 });

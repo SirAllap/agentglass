@@ -69,12 +69,17 @@ describe("the request", () => {
 const screen = (await Bun.file(new URL("../app/(tabs)/terminal.tsx", import.meta.url)).text())
   .split("\n").filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("*") && !l.trim().startsWith("/*")).join("\n");
 
+const sheets = (await Bun.file(new URL("../src/terminal/WindowSheets.tsx", import.meta.url)).text())
+  .split("\n").filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("*") && !l.trim().startsWith("/*")).join("\n");
+
 const switcher = await Bun.file(new URL("../src/terminal/Switcher.tsx", import.meta.url)).text();
 
 describe("the Terminal screen", () => {
   test("every window row in the switcher has a way to rename or close it", () => {
-    expect(switcher).toContain("Rename or close ${tab.label}");
-    expect(switcher).toContain("onManage(tab)");
+    // s05's rows are one tap to attach, so rename and close sit on a long
+    // press — still the same door, and still the same sheet.
+    expect(switcher).toContain("onLongPress={onManage ? () => onManage(tab) : undefined}");
+    expect(switcher).toContain("onManage?: (tab: Tab) => void");
     expect(screen).toContain("onManage={(tab) => {");
     expect(screen).toContain("setManaging(tab)");
   });
@@ -84,10 +89,15 @@ describe("the Terminal screen", () => {
     expect(screen).toContain("windowRequest(tab, op, title)");
   });
 
-  test("closing asks first, and with the model's sentence", () => {
-    const at = screen.indexOf('"Close this window?"');
-    expect(at).toBeGreaterThan(-1);
-    expect(screen.slice(at, at + 200)).toContain("closeWords(managing)");
+  test("closing routes through the policy: a HoldButton, never a tap or an Alert", () => {
+    // `window.kill` is a hold in the policy, so the sheet has to draw the hold
+    // the other destructive writes use. A Btn plus `Alert.alert` was the tap
+    // path, and it left the policy's row a protection no screen read.
+    expect(sheets).toContain('action="window.kill"');
+    expect(sheets).toContain("closeWords(managing)");
+    expect(sheets).toContain("onRelease={(said) => setManageWhy(said)}");
+    expect(sheets).not.toMatch(/Alert\.alert\(\s*"Close this window\?"/);
+    expect(sheets).not.toMatch(/label="Close window"/);
   });
 
   test("a window that is no longer the one the sheet opened on is not touched", () => {

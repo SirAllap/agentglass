@@ -232,18 +232,24 @@ describe("when the poll runs", () => {
      * go on polling from Settings and behind a locked phone. `useFocusEffect`
      * is the honest question, and its cleanup runs on leaving the tab.
      */
-    const at = source.indexOf("useFocusEffect(useCallback(");
-    expect(at, "the poll is not on focus any more").toBeGreaterThan(0);
-    const block = source.slice(at, source.indexOf("}, [load]));", at));
-    expect(block).toContain("setInterval(");
-    expect(block).toContain("clearInterval(timer)");
+    // The timers now go through `foregroundInterval(AppState, …)`, which also
+    // pauses them while the phone is in the background; the rule this test
+    // guards is unchanged: each one starts inside a focus effect and is
+    // stopped by that effect's cleanup.
+    const blocks = [...source.matchAll(/useFocusEffect\(useCallback\(/g)].map((m) => {
+      const from = m.index ?? 0;
+      const next = source.indexOf("useFocusEffect(useCallback(", from + 1);
+      return source.slice(from, next === -1 ? source.length : next);
+    });
+    const polling = blocks.filter((b) => b.includes("foregroundInterval("));
     // Two timers in the whole screen: the pane list, and the dirty dot on the
     // Git icon (four seconds, see the note on it). Each lives in a focus effect
-    // and is cleared by it — a third, started from a mount effect, is the leak
+    // and is stopped by it — a third, started from a mount effect, is the leak
     // this test exists to refuse.
-    expect([...source.matchAll(/setInterval\(/g)]).toHaveLength(2);
-    expect([...source.matchAll(/clearInterval\(timer\)/g)]).toHaveLength(2);
-    expect([...source.matchAll(/useFocusEffect\(useCallback\(/g)].length).toBeGreaterThanOrEqual(2);
+    expect(polling, "a poll is not on focus any more").toHaveLength(2);
+    for (const block of polling) expect(block).toContain("stopTimer()");
+    expect([...source.matchAll(/foregroundInterval\(/g)]).toHaveLength(2);
+    expect([...source.matchAll(/setInterval\(/g)]).toHaveLength(0);
   });
 
   test("no faster than a second, because the server pays for every tick", () => {

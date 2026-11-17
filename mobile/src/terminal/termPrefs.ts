@@ -36,7 +36,7 @@ const KEY = "agentglass.term.v1";
  *
  * TWO rungs, and the reason is measured rather than conservative. The note over
  * `columns` in app/(tabs)/terminal.tsx has the numbers: at this phone's 412
- * CSS px, 60 columns is a 6.85px cell and 80 is 5.15px, but 120 is 3.43px —
+ * CSS px, 50 columns is an 8.2px cell and 80 is 5.15px, but 120 is 3.43px —
  * above the font floor, so nothing overlaps and a screenshot merely looks like
  * small text. It is not small text. At that size the glyph is clipped inside
  * its own cell and characters change identity: `#472` read back as `#4/2` and
@@ -49,8 +49,97 @@ const KEY = "agentglass.term.v1";
  * are on it — rather than of any pane, so re-choosing it on every attach was
  * work nobody should have to repeat.
  */
-export const COLUMNS = [60, 80] as const;
-export const DEFAULT_COLUMNS = 80;
+export const COLUMNS = [50, 80] as const;
+/**
+ * The column count the drawing's 12.5 pt comes out as on a 390-wide phone,
+ * which is the frame it was drawn in. 80 columns was 8.3 pt and, measured on
+ * the emulator, glyphs clipped inside their own cells.
+ */
+export const DEFAULT_COLUMNS = 50;
+/** The band a column count may come from. Wider than COLUMNS because the text
+ *  size below asks for counts the two rungs do not offer, and a stored 57 is a
+ *  working pane rather than a value to refuse. */
+export const MIN_COLUMNS = 20;
+export const MAX_COLUMNS = 400;
+
+/**
+ * The text sizes the ⋯ sheet steps through, in points.
+ *
+ * The same five the mock draws, and all of them bigger than this app has ever
+ * had: 60 columns on a 412px phone is about 11.4pt, so the small end of this
+ * scale starts where the width control's big end already was, and the scale
+ * exists for reading a pane from a distance rather than for seeing all of it.
+ *
+ * Still one dial, read from the other end. Columns are what goes down the
+ * socket, so a size here is turned into the column count that fits at it (see
+ * columnsForText) and nothing else is stored: two stored numbers that both
+ * decide a width is two values that can disagree.
+ */
+export const TEXT_STEPS = [11.5, 12.5, 14, 15.5, 17] as const;
+
+/** How wide a cell is as a fraction of its point size.
+ *
+ *  0.6 is what the page's own probe falls back to, and what this app measured
+ *  on Android: 60 columns on a 412px screen is a 6.85px cell at 11.4pt. */
+export const CELL_RATIO = 0.6;
+
+/** The room the page's grid does not have: `#screen { inset: 0 8px }` in
+ *  terminal-html.ts, both sides, because a phone's last glyph was ending on the
+ *  bezel. Columns are counted inside it, so a width that ignores it asks for
+ *  one column too many. */
+const GUTTER = 16;
+
+const clampColumns = (n: unknown): number =>
+  typeof n === "number" && Number.isInteger(n) && n >= MIN_COLUMNS && n <= MAX_COLUMNS
+    ? n
+    : DEFAULT_COLUMNS;
+
+/** How many columns fit across a screen of this width at this size. */
+export function columnsForText(width: number, size: number): number {
+  const usable = Math.max(0, width - GUTTER);
+  const cols = Math.round(usable / (Math.max(4, size) * CELL_RATIO));
+  return Math.min(MAX_COLUMNS, Math.max(MIN_COLUMNS, cols));
+}
+
+/** The size those columns actually came out at, in points, one decimal.
+ *
+ *  Not the step that was asked for: a column count is whole, so asking for 17pt
+ *  on a 412px phone lands on 39 columns, which is 16.9pt. Reporting the size the
+ *  pane really got is the difference between a control and a decoration. */
+export function textSizeFor(columns: number, width: number): number {
+  const usable = Math.max(0, width - GUTTER);
+  const pt = usable / Math.max(1, columns) / CELL_RATIO;
+  return Math.round(pt * 10) / 10;
+}
+
+/** The column count one step up or down the scale, or the same count at an end
+ *  of it — never past 11.5 or 17.
+ *
+ *  A step moves at least one column. Two adjacent sizes often round to the same
+ *  count (15.35pt and 15.5pt are both 43 columns on a 412px phone), and a `+`
+ *  that returned 43 for 43 is a button that does nothing for one press in five. */
+export function stepColumns(columns: number, width: number, dir: 1 | -1): number {
+  const now = textSizeFor(columns, width);
+  const top = TEXT_STEPS[TEXT_STEPS.length - 1]!;
+  const bottom = TEXT_STEPS[0]!;
+  // At an end of the scale, the press changes nothing — a size control that
+  // walks past 17 is one that lies about what it offers.
+  if (dir > 0 ? now >= top - 0.1 : now <= bottom + 0.1) return columns;
+  // 0.1 of tolerance: a column count is a whole number, so a size can sit a
+  // hundredth from a step it is already on, and stepping "to" it again would be
+  // a press that does nothing.
+  const order = dir > 0 ? [...TEXT_STEPS] : [...TEXT_STEPS].reverse();
+  const next = order.find((s) => (dir > 0 ? s > now + 0.1 : s < now - 0.1)) ?? (dir > 0 ? top : bottom);
+  const want = columnsForText(width, next);
+  // Two adjacent steps can round to the same count; then the press moves one
+  // column in its direction rather than not at all.
+  return want === columns ? (dir > 0 ? columns - 1 : columns + 1) : want;
+}
+
+/** "12.5 pt · 53 characters across", the sheet's one line. */
+export function textLabel(columns: number, width: number): string {
+  return `${textSizeFor(columns, width).toFixed(1)} pt · ${columns} characters across`;
+}
 
 /**
  * Whether the phone's keyboard may help while composing a line.
@@ -69,10 +158,16 @@ export const DEFAULT_COLUMNS = 80;
  * the pane without passing through a composer, so there is nothing for a
  * suggestion to act on.
  */
+export const CURSORS = ["block", "bar", "underline"] as const;
+export type CursorShape = typeof CURSORS[number];
+export const parseCursor = (v: unknown): CursorShape => (CURSORS as readonly unknown[]).includes(v) ? (v as CursorShape) : "block";
+
 interface Prefs {
   layout: KeyLayout;
   columns: number;
   assist: boolean;
+  /** How the pane's cursor is drawn. */
+  cursor: CursorShape;
   /** Keys somebody added. See customKeys.ts for the rules; this only stores
    *  them, and reads them back through the same parser so a value written by
    *  an older build cannot reach the bar malformed. */
@@ -102,12 +197,13 @@ export function keystore(): KeystoreModule | null {
   }
 }
 
-let prefs: Prefs = { layout: DEFAULT_LAYOUT, columns: DEFAULT_COLUMNS, assist: false, custom: [] };
+let prefs: Prefs = { layout: DEFAULT_LAYOUT, columns: DEFAULT_COLUMNS, assist: false, cursor: "block", custom: [] };
 const listeners = new Set<() => void>();
 
 export const keyLayout = (): KeyLayout => prefs.layout;
 export const termColumns = (): number => prefs.columns;
 export const termAssist = (): boolean => prefs.assist;
+export const termCursor = (): CursorShape => prefs.cursor;
 export const customKeys = (): CustomKey[] => prefs.custom;
 
 /** Told, rather than polled. The terminal and the settings screen are both on
@@ -129,8 +225,24 @@ export function setTermColumns(next: number): void {
   save({ ...prefs, columns: want });
 }
 
+/**
+ * A column count this phone computed from a text size, kept as it came.
+ *
+ * `setTermColumns` above is the two-rung width control and refuses anything
+ * else, which is right for that control and wrong for this one: 12.5pt is 53
+ * columns, and clamping it back to 80 would make the size stepper a button that
+ * undoes itself. The band is still enforced, because this number ends up in the
+ * same `resize-window`. */
+export function setTermTextColumns(next: number): void {
+  save({ ...prefs, columns: clampColumns(next) });
+}
+
 export function setTermAssist(on: boolean): void {
   save({ ...prefs, assist: on });
+}
+
+export function setTermCursor(next: CursorShape): void {
+  save({ ...prefs, cursor: parseCursor(next) });
 }
 
 export function setCustomKeys(next: CustomKey[]): void {
@@ -144,6 +256,7 @@ function save(next: Prefs): void {
     layout: JSON.parse(serialise(next.layout)) as unknown,
     columns: next.columns,
     assist: next.assist,
+    cursor: next.cursor,
     custom: next.custom,
   }))
     .catch(() => {
@@ -166,13 +279,11 @@ void (async () => {
     const raw = await keystore()?.getItemAsync(KEY);
     if (!raw) return;
     const stored = JSON.parse(raw) as {
-      layout?: unknown; columns?: unknown; assist?: unknown; custom?: unknown;
+      layout?: unknown; columns?: unknown; assist?: unknown; cursor?: unknown; custom?: unknown;
     };
     const layout = parse(stored.layout ? JSON.stringify(stored.layout) : null);
-    const columns = typeof stored.columns === "number"
-      && COLUMNS.includes(stored.columns as typeof COLUMNS[number])
-      ? stored.columns : DEFAULT_COLUMNS;
-    prefs = { layout, columns, assist: stored.assist === true, custom: parseCustom(stored.custom) };
+    const columns = clampColumns(stored.columns);
+    prefs = { layout, columns, assist: stored.assist === true, cursor: parseCursor(stored.cursor), custom: parseCustom(stored.custom) };
     for (const fn of [...listeners]) fn();
   } catch {
     // Left at the default, which is a working bar.

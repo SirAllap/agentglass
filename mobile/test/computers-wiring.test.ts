@@ -72,16 +72,28 @@ describe("the provider", () => {
   });
 });
 
-describe("the chip is on all four destinations", () => {
-  test("pull requests, issues and cards take it from the shared header", () => {
-    expect(tabsLayout).toContain("ComputerChip");
-    expect(tabsLayout).toMatch(/headerTitle: \(\) => <ComputerChip/);
-    for (const name of ["prs", "issues", "tasks"]) {
-      expect(tabsLayout).toMatch(new RegExp(`name="${name}" options=\\{\\{[^}]*\\.\\.\\.destination`));
-    }
+describe("the chip is on every destination", () => {
+  test("pull requests draw their own header, and keep the chip in their menu", () => {
+    // Mock 28's header is the repository, the search, the filter, the Inbox and
+    // the menu: the board pays for its own chrome row, so the navigator's is off.
+    // The chip has to stay reachable, and it is a row of that menu.
+    expect(tabsLayout).toMatch(/name="prs" options=\{\{[^}]*headerShown: false/);
+    expect(read("app/(tabs)/prs.tsx")).toContain("<ComputerChip");
   });
-  test("the terminal draws it in its own header", () => {
-    expect(read("app/(tabs)/terminal.tsx")).toContain("<ComputerChip");
+  test("tasks draw their own header too, with the chip in it", () => {
+    // The mock's tasks screen carries the computer, the search, the filter and
+    // the source menu over the board; a navigator header above that is a third
+    // of the screen spent on chrome.
+    expect(tabsLayout).toMatch(/name="tasks" options=\{\{[^}]*headerShown: false/);
+    expect(read("src/tasks/TasksTop.tsx")).toContain("<ComputerChip");
+  });
+  test("the terminal draws the computer's state and keeps its door in the ··· sheet", () => {
+    // The mock's header leads with the project, not the machine's name: the
+    // computer is a dot beside that name and one row down in the sheet.
+    const screen = read("app/(tabs)/terminal.tsx");
+    expect(screen).toContain("<ComputerDot");
+    expect(screen).toContain("<ComputerSheet");
+    expect(screen).toContain("setComputersOpen(true)");
   });
 });
 
@@ -138,11 +150,12 @@ describe("what hangs off one computer is keyed by it", () => {
   });
 });
 
-describe("the four destinations say why there is nothing to show", () => {
+describe("every destination says why there is nothing to show", () => {
   for (const [file, label] of [
     ["app/(tabs)/terminal.tsx", "terminal"],
     ["app/(tabs)/prs.tsx", "prs"],
-    ["app/(tabs)/issues.tsx", "issues"],
+    // The issue list lives inside Tasks now; it still draws the card itself.
+    ["src/issues/IssueList.tsx", "issues"],
     ["app/(tabs)/tasks.tsx", "tasks"],
   ] as const) {
     test(`${label} shows the removed/offline card instead of an empty list`, () => {

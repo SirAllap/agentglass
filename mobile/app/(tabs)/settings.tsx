@@ -3,23 +3,29 @@
  *
  * ── what is here, and what left ──────────────────────────────────────────
  * Five groups — Computer, Notifications, Appearance, Terminal, Help — and
- * nothing that is not a setting. The screen used to be three things at once: a
- * settings page, a plan-usage card and a menu of other screens ("Elsewhere":
- * the queue, the working tree). The plan is the chip on every header now, the
+ * nothing that is not a setting. The plan is the chip on every header, the
  * queue is answered in the terminal, and Source control opens from the
- * terminal it belongs to. What stayed is what somebody comes here to change.
+ * terminal it belongs to.
+ *
+ * ── the shape ────────────────────────────────────────────────────────────
+ * A row states the setting and, on its right, its value; the control that
+ * changes it is behind the row, in a sheet. The exception is the switch, which
+ * IS the value and would be a tap wasted to open a sheet for it. The app used
+ * to draw every choice inline — three look cards, eight accent swatches, a
+ * segmented width — so the page was longer than the screen and the answer to
+ * "what is it set to" had to be found among the controls instead of read on
+ * the row.
  *
  * The scope is not editable here and never will be: it was chosen at the
  * computer by somebody looking at the request, and a phone that could widen its
  * own grant would make that choice decorative. It is said, in the computer's
  * sheet, with what would change it.
- *
- * The terminal's width and keyboard help moved here from the key bar's screen:
- * they are preferences, and the key bar screen is about the keys.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, AppState, Linking, Pressable, ScrollView, Text, View } from "react-native";
-import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import {
+  Alert, AppState, Linking, Pressable, ScrollView, Text, View, useWindowDimensions,
+} from "react-native";
+import { useFocusEffect, useNavigation, useRouter } from "expo-router";
 import Constants from "expo-constants";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
@@ -35,7 +41,10 @@ import {
 } from "../../src/notifications/keepAlive.ts";
 import { onTalkPref, setTalkPref, talkPref, type TalkPref } from "../../src/notifications/talkPref.ts";
 import { readPhoneAlerts, setPhoneAlerts } from "../../src/notifications/phoneAlertsPref.ts";
-import { Btn, Group, GroupTitle, Note, Row, Sheet, Switch, TAP, useFlash } from "../../src/ui.tsx";
+import { onQuietPref, quietPref } from "../../src/notifications/quietPref.ts";
+import { quietText, type QuietPref } from "../../src/model/quietHours.ts";
+import { QuietHoursSheet } from "../../src/settings/QuietHoursSheet.tsx";
+import { Btn, Eyebrow, Group, Note, Row, Sheet, Switch, TAP, useFlash } from "../../src/ui.tsx";
 import { Glyph, type GlyphName } from "../../src/nav/glyphs.tsx";
 import { KeyboardIcon } from "../../src/nav/icons.tsx";
 import {
@@ -50,8 +59,10 @@ import { ACCESSORY_KEYS } from "../../src/terminal/keys.ts";
 import { rows as keyRows } from "../../src/terminal/keyLayout.ts";
 import { bytesFor } from "../../src/terminal/customKeys.ts";
 import {
-  COLUMNS, customKeys, keyLayout, onTermPrefs, setTermAssist, setTermColumns, termAssist, termColumns,
+  CURSORS, customKeys, keyLayout, onTermPrefs, setTermAssist, setTermColumns, setTermCursor, stepColumns, termAssist,
+  termColumns, termCursor, textSizeFor, type CursorShape,
 } from "../../src/terminal/termPrefs.ts";
+import { density, onUiPrefs, reducesMotion, setUiPrefs, type Density } from "../../src/uiPrefs.ts";
 
 /** The same three words the Remote pane uses, so the phone and the computer
  *  describe one grant the same way. `chip` is the short form the computer's
@@ -76,7 +87,21 @@ const SCOPE: Record<DeviceScope, { name: string; chip: string; what: string }> =
   },
 };
 
-const Lead = ({ name }: { name: GlyphName }): React.ReactNode => <Glyph name={name} color={C.text2} size={20} />;
+/** A leading mark on the one row that is about a thing rather than a setting:
+ *  the computer. The rest of the page is text, as the mock draws it. */
+const Lead = ({ name }: { name: GlyphName }): React.ReactNode => (
+  <View style={{
+    width: 30, height: 30, borderRadius: 9, alignItems: "center", justifyContent: "center",
+    backgroundColor: tint(C.primary, 0.14),
+  }}>
+    <Glyph name={name} color={C.primary} size={16} />
+  </View>
+);
+
+/** The value at the end of a row: "Match the computer", "22:00 – 07:00". */
+function Val({ text }: { text: string }): React.ReactNode {
+  return <Text numberOfLines={1} style={{ color: C.text3, fontSize: 13 }}>{text}</Text>;
+}
 
 function Fact({ name, value }: { name: string; value: string }): React.ReactNode {
   return (
@@ -228,6 +253,14 @@ function LookCards(): React.ReactNode {
   );
 }
 
+/** What "Look" answers on its row. */
+const LOOK_WORD: Record<ThemeMode, string> = {
+  desk: "Match the computer",
+  light: "Light",
+  dark: "Dark",
+  system: "Match this phone",
+};
+
 /** The computer: what it is called, where it is, and what this phone may do
  *  to it. A sheet, because it is looked at and dismissed. */
 function ComputerSheet({ open, onClose, onForget, going }: {
@@ -327,10 +360,36 @@ export default function SettingsScreen(): React.ReactNode {
   const { host, live, forget } = useAgentglass();
   const computer = useComputer(host);
   const router = useRouter();
+  const navigation = useNavigation();
+  const { width } = useWindowDimensions();
   const [going, setGoing] = useState(false);
   const [sheet, setSheet] = useState(false);
+  const [lookSheet, setLookSheet] = useState(false);
+  const [quietSheet, setQuietSheet] = useState(false);
   const look = currentLook();
   const providers = useProviders(host);
+
+  /* Done in the header, as the mock draws it: this screen is pushed from the
+     terminal or a header gear, and the way out is worth naming when the page is
+     longer than the screen. */
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerRight: () => (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Done"
+          onPress={() => router.back()}
+          style={({ pressed }) => ({
+            minHeight: TAP, minWidth: TAP, paddingHorizontal: SPACE.md, alignItems: "center", justifyContent: "center",
+            borderRadius: RADIUS.md, backgroundColor: pressed ? C.bg3 : "transparent",
+          })}
+        >
+          <Text style={{ color: C.primary, fontSize: T.body, fontWeight: "600" }}>Done</Text>
+        </Pressable>
+      ),
+    });
+  }, [navigation, router]);
+
   /*
    * Whether an alert can actually be DELIVERED — not whether permission was
    * once granted.
@@ -360,6 +419,14 @@ export default function SettingsScreen(): React.ReactNode {
      read once at module scope, told when it changes. */
   const [talk, setTalk] = useState<TalkPref>(talkPref);
   useEffect(() => onTalkPref(() => setTalk(talkPref())), []);
+
+  /* Quiet hours and the two appearance choices, mirrored the same way: they
+     are module singletons the socket and ui.tsx read, and this page is only
+     one of their writers. */
+  const [quiet, setQuiet] = useState<QuietPref>(quietPref);
+  useEffect(() => onQuietPref(() => setQuiet(quietPref())), []);
+  const [prefs, setPrefs] = useState(() => ({ density: density(), motion: !reducesMotion() }));
+  useEffect(() => onUiPrefs(() => setPrefs({ density: density(), motion: !reducesMotion() })), []);
 
   /* "Alerts on this phone" is the computer's value (phoneAlertsPref.ts), so the
      desk shows the same switch. null until it answers: the row waits rather than
@@ -395,9 +462,10 @@ export default function SettingsScreen(): React.ReactNode {
      these are the local mirrors that make this screen repaint. */
   const [cols, setCols] = useState(termColumns);
   const [assist, setAssist] = useState(termAssist);
+  const [cursor, setCursor] = useState<CursorShape>(termCursor);
   const [keys, setKeys] = useState(() => ({ layout: keyLayout(), mine: customKeys() }));
   useEffect(() => onTermPrefs(() => {
-    setCols(termColumns()); setAssist(termAssist()); setKeys({ layout: keyLayout(), mine: customKeys() });
+    setCols(termColumns()); setAssist(termAssist()); setCursor(termCursor()); setKeys({ layout: keyLayout(), mine: customKeys() });
   }), []);
   const onBar = useMemo(() => keyRows(keys.layout, [
     ...ACCESSORY_KEYS,
@@ -452,36 +520,27 @@ export default function SettingsScreen(): React.ReactNode {
 
   const supported = notificationsSupported();
   const status = live === "open" ? "Connected" : live === "connecting" ? "Connecting…" : "Offline";
+  const canType = host.scope === "answer" || host.scope === "full";
+  // The bar under the size: the same place on it whatever the pane is asked
+  // for. Concrete columns are the unit (see termPrefs.ts), and the size is
+  // what those columns came out as on this phone.
+  const size = textSizeFor(cols, width);
+  const fill = Math.max(6, Math.min(100, Math.round(((size - 11.5) / (17 - 11.5)) * 100)));
 
   return (
     <ScrollView contentContainerStyle={{ padding: SPACE.lg, paddingTop: SPACE.xs, gap: SPACE.xs, paddingBottom: SPACE.xl }}>
-      <Group>
+      <Eyebrow text="Computer" />
+      <Group inset={50}>
         <Row
           title={computer}
-          sub={`${status} · ${host.origin.replace(/^https?:\/\//, "")}`}
-          lead={
-            <View style={{
-              width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center",
-              backgroundColor: tint(C.primary, 0.16),
-            }}>
-              <Glyph name="computer" color={C.primary} size={22} />
-            </View>
-          }
-          trail={
-            <View style={{
-              flexDirection: "row", alignItems: "center", gap: 4, height: 28, paddingHorizontal: 10,
-              borderRadius: 14, backgroundColor: tint(C.primary, 0.16),
-            }}>
-              <Glyph name="shield" color={C.primary} size={14} />
-              <Text style={{ color: C.primary, fontSize: T.small, fontWeight: "600" }}>{SCOPE[host.scope].chip}</Text>
-            </View>
-          }
+          sub={`${status} · ${host.origin.replace(/^https?:\/\//, "")} · ${canType ? "this phone can type" : "this phone may look"}`}
+          lead={<Lead name="computer" />}
           chevron
           onPress={() => setSheet(true)}
         />
       </Group>
 
-      <GroupTitle text="Notifications" />
+      <Eyebrow text="Notifications" />
       <Group inset={50}>
         <Row
           title="Agent alerts"
@@ -489,9 +548,8 @@ export default function SettingsScreen(): React.ReactNode {
              these used to be drawn as either "off" or — worse, when the
              permission was granted and something else had failed — as ON. */
           sub={alerts === null ? "Checking…"
-            : alerts.ok ? "When an agent waits on you, fails or stops"
+            : alerts.ok ? "When an agent waits, fails or stops"
             : blockedText(alerts.why)}
-          lead={<Lead name="bell" />}
           checked={!!alerts?.ok}
           trail={<Switch on={!!alerts?.ok} disabled={!supported} />}
           disabled={asking || !supported}
@@ -510,17 +568,13 @@ export default function SettingsScreen(): React.ReactNode {
             // phone's keystore (talkPref.ts) rather than at the computer, so
             // pairing a second phone starts it at Off again. Bots never reach
             // this either way — the server drops them before a "talk" note
-            // exists (see mapTalk in prs.ts). While alerts cannot be raised
-            // the row says what it waits on, not the reason again: that is
-            // written on the row above.
-            sub={alerts?.ok ? "This phone only, never for a bot. The «new» badges show either way."
-              : "Needs agent alerts on first"}
-            lead={<Lead name="comment" />}
+            // exists (see mapTalk in prs.ts).
+            sub={alerts?.ok ? "This phone only, never for a bot" : "Needs agent alerts on first"}
             disabled={!alerts?.ok}
           />
           {/* Below the text, as the accent swatches are: three options beside
               a title this long truncated it to "Comments on you…". */}
-          <View style={{ paddingLeft: 50, paddingRight: SPACE.md, paddingBottom: SPACE.md, alignItems: "flex-start", opacity: alerts?.ok ? 1 : 0.45 }}>
+          <View style={{ paddingLeft: SPACE.lg, paddingRight: SPACE.md, paddingBottom: SPACE.md, alignItems: "flex-start", opacity: alerts?.ok ? 1 : 0.45 }}>
             <Pick<TalkPref>
               value={talk}
               onChange={(v) => { if (alerts?.ok) setTalkPref(v); }}
@@ -534,6 +588,13 @@ export default function SettingsScreen(): React.ReactNode {
           </View>
         </View>
         <Row
+          title="Quiet hours"
+          sub={quiet.on ? "Nothing rings; the Inbox still fills" : "Off: every alert rings, whatever the hour"}
+          trail={<Val text={quietText(quiet)} />}
+          chevron
+          onPress={() => setQuietSheet(true)}
+        />
+        <Row
           title="Alerts on this phone"
           /* Which pull requests and cards: the ones the person armed or follows,
              nothing else. One switch for every phone paired to the computer, so
@@ -543,7 +604,6 @@ export default function SettingsScreen(): React.ReactNode {
             : phoneAlerts === null ? "Checking…"
             : mayChangePhone ? "Your pull request watches and card comments. Same for every paired phone."
             : "Paired read-only: change it on the computer."}
-          lead={<Lead name="pr" />}
           checked={watchOk?.ok === true && phoneAlerts === true}
           trail={<Switch on={watchOk?.ok === true && phoneAlerts === true} disabled={watchOk?.ok === true && (phoneAlerts === null || !mayChangePhone)} />}
           /* Waiting for an answer, or nothing to press: the OS prompt and Android's settings are the way out of a
@@ -564,14 +624,12 @@ export default function SettingsScreen(): React.ReactNode {
           // even been asked once is the bug this row used to have.
           <Row
             title="Open Android's settings"
-            lead={<Lead name="external" />}
             onPress={() => { void Linking.openSettings(); }}
           />
         ) : null}
         {alerts?.ok ? (
           <Row
             title="Send a test notification"
-            lead={<Lead name="spark" />}
             onPress={() => {
               // Through the real path, with the app in the foreground — which
               // the policy would normally suppress, so this calls `raise`
@@ -589,7 +647,6 @@ export default function SettingsScreen(): React.ReactNode {
           <Row
             title="Stay connected in the background"
             sub="A silent notification keeps alerts coming with the app closed"
-            lead={<Lead name="shield" />}
             checked={keepAlive}
             trail={<Switch on={keepAlive} />}
             onPress={() => toggleKeepAlive(!keepAlive)}
@@ -614,58 +671,83 @@ export default function SettingsScreen(): React.ReactNode {
         </View>
       ) : null}
 
-      <GroupTitle text="Appearance" />
-      <Group inset={50}>
-        <View>
-          <Row title="Look" lead={<Lead name="contrast" />} />
-          <LookCards />
-        </View>
-        <View>
-          <Row
-            title="Accent"
-            sub="The cursor, the tab you are on, a button that does something"
-            lead={<Lead name="type" />}
-          />
-          <Swatches />
-        </View>
-      </Group>
-      <Note>
-        “Match the computer” is the default: pull requests, cards, files and the terminal all wear the same theme as
-        the desk. Light and Dark pin it to this phone.
-      </Note>
-
-      <GroupTitle text="Terminal" />
+      <Eyebrow text="Appearance" />
       <Group inset={50}>
         <Row
-          title="Width"
-          /* 60 to read, 80 to work. There is no wider rung on purpose: measured
-             on this screen, 120 columns clips each glyph inside its own cell
-             and characters change identity — a seven loses its bar and reads as
-             a slash, so a commit hash comes back wrong. And it is what the pane
-             is RESIZED to while the phone looks at it, not a zoom on the glass:
-             a wider pane is shown from its left edge, and the terminal says so. */
-          sub="Columns asked of the pane while you look"
-          lead={<Lead name="fit" />}
+          title="Look"
+          sub="The app, not the pane: the terminal wears the desk's colours"
+          trail={<Val text={LOOK_WORD[look.mode]} />}
+          chevron
+          onPress={() => setLookSheet(true)}
+        />
+        <Row
+          title="Density"
+          sub={prefs.density === "roomier" ? "Roomier: the one step above the 44 px floor" : "Default: the 44 px floor"}
           trail={
-            <Pick
-              label="Width"
-              value={String(cols)}
-              options={COLUMNS.map((n) => ({ id: String(n), name: String(n) }))}
-              onChange={(v) => { const n = Number(v); setTermColumns(n); setCols(n); }}
+            <Pick<Density>
+              label="Density"
+              value={prefs.density}
+              options={[{ id: "default", name: "Default" }, { id: "roomier", name: "Roomier" }]}
+              onChange={(d) => setUiPrefs({ density: d })}
             />
           }
         />
         <Row
-          title="Keyboard suggestions"
-          /* Off by default because the field usually holds a command: a
-             keyboard that helps rewrites flags, paths and branch names into
-             English, silently, and the first you know is a command that did not
-             run — or one that ran differently. */
-          sub={assist ? "Autocorrect may rewrite what you compose" : "Off keeps commands exactly as typed"}
-          lead={<Lead name="spark" />}
-          checked={assist}
-          trail={<Switch on={assist} />}
-          onPress={() => { setTermAssist(!assist); setAssist(!assist); }}
+          title="Reduce motion"
+          sub="No spring, no slide; the sheet just appears"
+          checked={!prefs.motion}
+          trail={<Switch on={!prefs.motion} />}
+          onPress={() => setUiPrefs({ reduceMotion: prefs.motion })}
+        />
+      </Group>
+
+      <Eyebrow text="Terminal" />
+      <Group inset={SPACE.lg}>
+        <View style={{ paddingHorizontal: SPACE.lg, paddingVertical: SPACE.md, gap: SPACE.sm }}>
+          <View style={{ flexDirection: "row", alignItems: "baseline", gap: SPACE.sm }}>
+            <Text style={{ flex: 1, color: C.text, fontSize: 14.5, fontWeight: "600" }}>Text size</Text>
+            <Text style={{ color: C.text3, fontSize: 13 }}>{cols} characters across</Text>
+          </View>
+          {/* What the choice looks like, in the pane's own face: a number of
+              columns says nothing to somebody deciding whether their commit
+              hash is readable. */}
+          <View style={{
+            backgroundColor: C.bg, borderWidth: 1, borderColor: C.border, borderRadius: RADIUS.sm,
+            paddingHorizontal: SPACE.sm, paddingVertical: 6,
+          }}>
+            <Text numberOfLines={1} style={{ color: C.text2, fontSize: 12, fontFamily: MONO }}>$ git status --short</Text>
+            <Text numberOfLines={1} style={{ color: C.warning, fontSize: 12, fontFamily: MONO }}> M src/settings/rail.tsx</Text>
+          </View>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm }}>
+            <Btn
+              label="A−"
+              style={{ width: TAP, paddingHorizontal: 0 }}
+              onPress={() => { const n = stepColumns(cols, width, -1); setTermColumns(n); setCols(n); }}
+            />
+            <View style={{ flex: 1, height: 6, borderRadius: 3, backgroundColor: C.bg3 }}>
+              <View style={{ height: 6, borderRadius: 3, width: `${fill}%`, backgroundColor: C.primary }} />
+            </View>
+            <Btn
+              label="A+"
+              style={{ width: TAP, paddingHorizontal: 0 }}
+              onPress={() => { const n = stepColumns(cols, width, 1); setTermColumns(n); setCols(n); }}
+            />
+          </View>
+          <Note>
+            56 to 120 columns. Above 120 a hash reads as the wrong characters on this phone.
+          </Note>
+        </View>
+        <Row
+          title="Cursor"
+          sub="Takes effect the next time a pane opens"
+          trail={(
+            <Pick
+              label="Cursor"
+              value={cursor}
+              options={CURSORS.map((id) => ({ id, name: id[0]!.toUpperCase() + id.slice(1) }))}
+              onChange={(v) => { setTermCursor(v); setCursor(v); }}
+            />
+          )}
         />
         <Row
           title="Key bar"
@@ -674,36 +756,66 @@ export default function SettingsScreen(): React.ReactNode {
           chevron
           onPress={() => router.push("/terminal-settings")}
         />
+        <Row
+          title="Keyboard suggestions"
+          /* Off by default because the field usually holds a command: a
+             keyboard that helps rewrites flags, paths and branch names into
+             English, silently, and the first you know is a command that did not
+             run — or one that ran differently. */
+          sub={assist ? "Autocorrect may rewrite what you compose" : "Off keeps commands exactly as typed"}
+          checked={assist}
+          trail={<Switch on={assist} />}
+          onPress={() => { setTermAssist(!assist); setAssist(!assist); }}
+        />
       </Group>
 
-      <GroupTitle text="Help" />
+      <Eyebrow text="Help" />
       <Group inset={50}>
         <Row
-          title="Task trackers"
+          title="Task sources"
           sub={trackersSummary(providers)}
-          lead={<Lead name="list" />}
           chevron
           onPress={() => router.push("/trackers")}
         />
         <Row
           title="Troubleshooting"
           sub="What this computer has, and what is missing"
-          lead={<Lead name="wrench" />}
           chevron
           onPress={() => router.push("/troubleshoot")}
         />
         <Row
-          title="Version"
-          lead={<Lead name="info" />}
+          title="About"
+          sub="agentglass for the phone"
           trail={
-            <Text style={{ color: C.text3, fontSize: T.body, fontFamily: MONO }}>
+            <Text style={{ color: C.text3, fontSize: 13, fontFamily: MONO }}>
               {Constants.expoConfig?.version ?? "unknown"}
             </Text>
           }
         />
+        <Row
+          title="Open the dashboard"
+          sub="This leaves the app for a browser"
+          trail={<Btn label="Show it" onPress={() => { void Linking.openURL(host.origin); }} />}
+        />
       </Group>
 
       <ComputerSheet open={sheet} onClose={() => setSheet(false)} onForget={onForget} going={going} />
+
+      {/* Look: the three modes as cards that show what they paint, and the
+          accent under them — the same question ("what does this phone wear"),
+          so one sheet rather than two rows that both opened something. */}
+      <Sheet open={lookSheet} onClose={() => setLookSheet(false)} title="Look" subtitle="Match the computer, or pin it to this phone">
+        <LookCards />
+        <View style={{ paddingHorizontal: SPACE.md, paddingBottom: SPACE.xs }}>
+          <Text style={{ color: C.text, fontSize: T.body, fontWeight: "600" }}>Accent</Text>
+          <Text style={{ color: C.text3, fontSize: T.small, paddingTop: 2 }}>
+            The cursor, the tab you are on, a button that does something.
+          </Text>
+        </View>
+        <Swatches />
+      </Sheet>
+
+      <QuietHoursSheet open={quietSheet} onClose={() => setQuietSheet(false)} />
     </ScrollView>
   );
 }

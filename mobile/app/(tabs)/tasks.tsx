@@ -23,12 +23,26 @@
  * workspace spells it. Renaming somebody's workflow is not ours to do, and a
  * board's colours are how its people read it at a glance. What the app decides
  * for itself is only `statusKind` — open, done, other — because status NAMES
- * are per-list and a workspace may have four words for "doing", so nothing may
- * branch on them.
+ * are per-list and a workspace may have four words for "doing", so no done-ness
+ * rule branches on them. Names are compared (without case) only to group the
+ * cards somebody is looking at and to match the statuses they ticked.
+ *
+ * ── the source pill ──────────────────────────────────────────────────────
+ * Tasks is one destination over three kinds of work: Jira's board, the other
+ * tracker's list and GitHub issues, which used to be a destination of its own.
+ * The pill above the list says which one you are reading and is the ONLY way to
+ * change it — a title that is secretly a picker is a control nobody finds. The
+ * issue list is the same component the old screen drew (src/issues/IssueList.tsx).
+ *
+ * Jira has its own source because what it draws is a board, not rows
+ * (src/jira/Board.tsx, four lanes folded by shared/jiraLanes.ts); the other
+ * tracker keeps `/tasks/list`. A machine with both is offered both, and the
+ * pill is where you choose — see model/taskProviders.ts. The choice outlives
+ * the visit: the tab reopens on the source last used (model/tasksLanding.ts).
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FlatList, Pressable, RefreshControl, Text, View } from "react-native";
-import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { ASSIGNED_VIEW_ID, type ClickUpBoards, type ListPlace, type ListStatus, type ProviderTask, type SavedView } from "../../../shared/providers.ts";
@@ -39,11 +53,12 @@ import { withCard } from "../../src/state/card-edits.ts";
 import { useCardChanges } from "../../src/state/useCardChanges.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
-import { useTaskProvider } from "../../src/state/use-tracks-work.ts";
+import { useProviders, useTaskProvider } from "../../src/state/use-tracks-work.ts";
 import { localMeta, visibleLocal } from "../../src/model/localTasks.ts";
 import { projectNames, scopeLocal } from "../../src/model/taskScope.ts";
 import { matchesQuery } from "../../../shared/taskref.ts";
-import { Btn, Card, Label, ListEmpty, Note, Segmented, groupEdge } from "../../src/ui.tsx";
+import { Btn, Card, Label, ListEmpty, Note, Segmented, Sheet, SheetRow, Switch, TAP, groupEdge } from "../../src/ui.tsx";
+import { readSourceOn, setSourceOn, sourceSettingId, sourcesOn, switchReads } from "../../src/model/sourceSwitch.ts";
 import { dueIn } from "../../src/lib/dates.ts";
 import { openHttp } from "../../src/lib/openHttp.ts";
 import { BoardHeader } from "../../src/cards/BoardHeader.tsx";
@@ -51,6 +66,7 @@ import { CardFilterSheet } from "../../src/cards/CardFilterSheet.tsx";
 import { CardRow } from "../../src/cards/CardRow.tsx";
 import { ListSheet } from "../../src/cards/ListSheet.tsx";
 import { SectionHead } from "../../src/cards/SectionHead.tsx";
+import { SearchField, SourcePill, TasksTop, type TopMenuItem } from "../../src/tasks/TasksTop.tsx";
 import { PrSearchRow } from "../../src/review/PrSearchRow.tsx";
 import { useLearnedCardPrs } from "../../src/state/card-links.ts";
 import {
@@ -58,7 +74,13 @@ import {
 } from "../../src/model/cardBoard.ts";
 import { boardPath, listTarget } from "../../src/model/cardSelector.ts";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
+import { ChevronIcon, IssuesIcon, TasksIcon } from "../../src/nav/icons.tsx";
+import { Glyph } from "../../src/nav/glyphs.tsx";
+import { IssueList } from "../../src/issues/IssueList.tsx";
+import { taskSources, type TaskSource } from "../../src/model/taskProviders.ts";
+import { lastTaskSource, openTaskSource, readTaskSource, rememberTaskSource } from "../../src/model/tasksLanding.ts";
 import { ComputerGone } from "../../src/nav/ComputerGone.tsx";
+import { JiraTasks } from "../../src/jira/Board.tsx";
 
 /*
  * `/clickup/views` answers `ClickUpBoards` — the shared type the server
@@ -143,7 +165,16 @@ const EMPTY_TEXT = {
   "all-done": "Nothing is still open. The switch above shows the rest.",
 } as const;
 
-/** The screen, behind the card that says so when its computer is gone. */
+/**
+ * The screen, behind the card that says so when its computer is gone.
+ *
+ * Two sources, one header. Jira draws the header itself (`src/tasks/TasksTop`
+ * from inside `src/jira/Board`), because the search, the filter and the menu
+ * above a board are about that board; the issue list and the tracker list get
+ * the same header here and the source pill under it, the way the mock draws
+ * them. Which sources exist is `model/taskProviders.ts`'s rule, not this
+ * file's.
+ */
 export default function TasksScreen(): React.ReactNode {
   return <ComputerGone><TasksScreenBody /></ComputerGone>;
 }
@@ -151,7 +182,6 @@ export default function TasksScreen(): React.ReactNode {
 function TasksScreenBody(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
   const { host } = useAgentglass();
-  const navigation = useNavigation();
   const router = useRouter();
   const [views, setViews] = useState<ViewsAnswer | null>(null);
   const [chosen, setChosen] = useState<string | null>(null);
@@ -182,12 +212,44 @@ function TasksScreenBody(): React.ReactNode {
      one project should not start on the whole machine's task store. */
   const [names, setNames] = useState<string[] | null>(null);
   const [everything, setEverything] = useState(false);
-  /* Which tracker this machine keeps its work in — the same read the Inbox
-     uses to decide whether to offer this screen at all. `undefined` while it
-     is in the air, `null` when there is none; either way nothing is fetched
-     until it is known, because fetching ClickUp's board on a Taskwarrior
-     machine is the bug this screen had. */
+  /* Which tracker this machine keeps its work in — the same read the source
+     pill uses, from the one provider cache. `undefined` while it is in the
+     air, `null` when there is none; either way nothing is fetched until it is
+     known, because fetching ClickUp's board on a Taskwarrior machine is the
+     bug this screen had. */
   const provider = useTaskProvider(host);
+  /*
+   * Which of the sources this tab reads.
+   *
+   * `source` is what somebody picked on this visit; the remembered source is
+   * the one the last visit ended on, per computer. `jump` is a deep link, which
+   * is an errand: it wins over both until a person picks one themselves, and
+   * picking is what gets remembered. `openTaskSource` has the whole order.
+   */
+  const sources = taskSources(useProviders(host));
+  const [source, setSource] = useState<TaskSource["id"] | null>(null);
+  /* Each source's switch, as the computer keeps it (`tasks.source.<id>`);
+     absent until read, and a failed write puts the old value back. */
+  const [sourceOn, setSourceOnState] = useState<Record<string, boolean>>({});
+  const [switchErr, setSwitchErr] = useState<string | null>(null);
+  const reads = useRef(switchReads()).current;
+  const [jump, setJump] = useState<string | null>(null);
+  /*
+   * The source the last visit ended on, per computer. Read from this run at
+   * once, then from the phone's own copy (model/tasksLanding.ts): the first
+   * frame of a relaunch may still open on the ranking, and the read lands long
+   * before the provider list says what the pill can offer.
+   */
+  const [lastId, setLastId] = useState<string | null>(() => lastTaskSource(host?.id));
+  useEffect(() => {
+    const id = host?.id;
+    if (!id) { setLastId(null); return; }
+    let gone = false;
+    setLastId(lastTaskSource(id));
+    void readTaskSource(id).then((was) => { if (!gone) setLastId(was); });
+    return () => { gone = true; };
+  }, [host?.id]);
+  const [sourcing, setSourcing] = useState(false);
   /*
    * An id handed over from somewhere else — today, the chip on a pull request
    * that names the item it came from.
@@ -201,10 +263,33 @@ function TasksScreenBody(): React.ReactNode {
    * it is typed text rather than a sticky mode, so it cannot still be
    * filtering tomorrow.
    */
-  const { q } = useLocalSearchParams<{ q?: string }>();
+  const { q, source: wanted } = useLocalSearchParams<{ q?: string; source?: string }>();
   useEffect(() => { if (q && q.trim()) setSearch(q.trim()); }, [q]);
-  const board = provider?.id === "clickup";
-  const localList = !!provider && !board;
+  // `/tasks?source=issues` is how the retired Issues route lands here, and a
+  // notification about a Jira card names its source the same way.
+  useEffect(() => {
+    if (wanted === "issues" || wanted === "tracker" || wanted === "jira") setJump(wanted);
+  }, [wanted]);
+  const pickedId = sources
+    ? openTaskSource({
+      available: sourcesOn(sources, sourceOn),
+      current: source,
+      last: lastId,
+      explicit: jump,
+    })
+    : null;
+  const picked = sources?.find((s) => s.id === pickedId);
+  /* The pill writes the memory: the next visit opens here. It also clears a
+     jump, because choosing a source is a change of mind and the link is not. */
+  const pick = useCallback((id: string): void => {
+    setJump(null);
+    setSource(id as TaskSource["id"]);
+    rememberTaskSource(host?.id, id);
+  }, [host?.id]);
+  const onIssues = picked?.id === "issues";
+  const onJira = picked?.id === "jira";
+  const board = picked?.id === "tracker" && provider?.id === "clickup";
+  const localList = picked?.id === "tracker" && !!provider && !board;
 
   /* Another computer (re-paired, or switched) is another board: nothing chosen
      or read from the old one may be drawn, filtered or searched on the new. */
@@ -214,6 +299,8 @@ function TasksScreenBody(): React.ReactNode {
     origin.current = host?.origin;
     setViews(null); setChosen(null); setTasks(null); setLocal(null); setStatuses([]); setPlace(undefined);
     setTruncated(false); setError(null); setNotice(null); setFilters(NO_CARD_FILTERS); setSearch("");
+    setSource(null); setJump(null);
+    setSourceOnState({}); setSwitchErr(null); reads.reset();
   }, [host?.origin]);
 
   useEffect(() => {
@@ -275,8 +362,12 @@ function TasksScreenBody(): React.ReactNode {
 
   /* Done cards are the bulk of any board and none of them are work you owe.
      Kept behind the Open / All switch rather than dropped, because "did I
-     close that?" is a real question somebody asks from a sofa. */
-  const { shown, counts } = useMemo(() => openAllView(tasks ?? [], search, filters, openOnly), [tasks, search, filters, openOnly]);
+     close that?" is a real question somebody asks from a sofa. Done-ness is
+     the card's own fold — see model/cardBoard.ts. */
+  const { shown, counts } = useMemo(
+    () => openAllView(tasks ?? [], search, filters, openOnly),
+    [tasks, search, filters, openOnly],
+  );
   const items = useMemo(() => flatItems(cardSections(shown, statuses, filters.group)), [shown, statuses, filters.group]);
   const scoped = !!names?.length && !everything;
   const shownLocal = useMemo(
@@ -291,11 +382,6 @@ function TasksScreenBody(): React.ReactNode {
   }, [load]);
 
   const view = views?.views.find((v) => v.id === chosen) ?? null;
-
-  /* The screen is "Cards" on the board, like every destination is its own
-     name. On the machine's own list it is the tracker's name, because that is
-     what the list IS. Which list is open is the selector under the title: a
-     title that is secretly a picker is a control nobody finds. */
 
   /* Choosing another list: the filters and the search were about the old one. */
   const choose = useCallback((id: string): void => {
@@ -320,185 +406,345 @@ function TasksScreenBody(): React.ReactNode {
         choose(added.id);
       });
   }, [host, views, choose]);
-  useLayoutEffect(() => {
-    navigation.setOptions({ title: board || !provider ? "Cards" : provider.title });
-  }, [navigation, board, provider]);
-
   const cut = board && tasks ? truncatedNote(tasks.length, truncated) : null;
+  /* The search field is the header's, and only one source at a time uses it:
+     Jira keeps its own (in `src/jira/Board`), the issue list takes this one,
+     and the tracker board keeps the row it drew before. */
+  const [issuesSearching, setIssuesSearching] = useState(false);
+
+  const sourceKeys = (sources ?? []).map((s) => sourceSettingId(s)).filter((k): k is string => !!k).join(",");
+  useEffect(() => {
+    if (!host || !sourceKeys) return;
+    let gone = false;
+    void (async () => {
+      for (const id of sourceKeys.split(",")) {
+        const keep = reads.begin(id);
+        const on = keep(await readSourceOn(host, id));
+        if (gone) return;
+        if (on !== null) setSourceOnState((was) => ({ ...was, [id]: on }));
+      }
+    })();
+    return () => { gone = true; };
+  }, [sourcing, host, sourceKeys]); // re-read when the sheet opens or closes: the desk may have flipped one
+
+  const flip = (s: TaskSource): void => {
+    const id = sourceSettingId(s);
+    if (!id || !host) return;
+    const was = sourceOn[id] ?? true;
+    setSwitchErr(null);
+    reads.flipped(id);
+    setSourceOnState((all) => ({ ...all, [id]: !was }));
+    void setSourceOn(host, id, !was).then((r) => {
+      if (r.ok) return;
+      reads.flipped(id);
+      setSourceOnState((all) => ({ ...all, [id]: was }));
+      setSwitchErr(r.error);
+    });
+  };
 
   if (!host) return null;
 
+  const menu: TopMenuItem[] = [
+    { key: "source", label: "Where the cards come from", icon: "list", note: picked?.title, onPress: () => setSourcing(true) },
+    { key: "refresh", label: "Read the list again", icon: "refresh", onPress: () => { void load(); } },
+    { key: "settings", label: "Settings", icon: "sliders", gap: true, onPress: () => router.push("/settings") },
+  ];
+
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
-      {/* Open / All is a segment, because it was never a filter among filters —
-          it is the only two-state thing on the screen, and a chip that toggles
-          looks exactly like a chip that selects. Two segments say which of two
-          lists you are looking at, and on the board each says how many. */}
-      {/* And not drawn over the "no tracker" card: a switch between two views
-          of nothing is the filter that card warns people not to go looking for. */}
-      {provider !== null ? (
-        <View style={{ paddingHorizontal: SPACE.lg, paddingTop: SPACE.md, gap: SPACE.md }}>
-          {board ? (
-            <>
-              <BoardHeader path={boardPath(view ?? undefined, place)} name={view?.name ?? "…"} onPress={() => setPicking(true)} />
-              <PrSearchRow
-                value={search} onChange={setSearch} active={activeFacets(filters)} onFilters={() => setFiltering(true)}
-                placeholder="Search this board" label="Search this board"
-              />
-            </>
-          ) : (
-            <PrSearchRow value={search} onChange={setSearch} placeholder="Search this list" label="Search this list" />
-          )}
-          <Segmented
-            value={openOnly ? "open" : "all"}
-            onChange={(id) => setOpenOnly(id === "open")}
-            options={[
-              { id: "open" as const, label: "Open", count: board && tasks ? boardCount(counts.open, truncated) : undefined },
-              { id: "all" as const, label: "All", count: board && tasks ? boardCount(counts.all, truncated) : undefined },
-            ]}
+      <Sheet
+        open={sourcing} onClose={() => setSourcing(false)} title="Sources for this phone"
+        subtitle={
+          sources && sources.length > 1
+            ? "Issues and Cards fold into Tasks: the source is chosen here, and the board behind this sheet changes with it."
+            : "The one source this computer offers."
+        }
+        footer={<View style={{ flex: 1 }}><Btn label="Done" onPress={() => setSourcing(false)} /></View>}
+      >
+        {(sources ?? []).map((s) => (
+          <SourceRow
+            key={s.id}
+            source={s}
+            on={sourceOn[sourceSettingId(s) ?? ""] ?? true}
+            switchable={sourceSettingId(s) !== null}
+            sub={s.id === "issues"
+              ? "Across every repository on this computer"
+              : s.id === "jira"
+              ? "The board saved on the computer"
+              : "The tracker connected on the computer"}
+            onPress={() => flip(s)}
           />
-          {cut ? <Note>{cut}</Note> : null}
-          {localList && names?.length ? (
-            <Segmented
-              value={everything ? "everything" : "project"}
-              onChange={(id) => setEverything(id === "everything")}
-              options={[
-                { id: "project" as const, label: names.join(", ") },
-                { id: "everything" as const, label: "Everything" },
-              ]}
-            />
-          ) : null}
-          {notice ? <Note tone="bad">{notice}</Note> : null}
-        </View>
-      ) : null}
-
-      {board ? (
-        <>
-          <ListSheet
-            open={picking} onClose={() => setPicking(false)} host={host} views={views?.views ?? []} current={chosen}
-            onBoard={choose} onList={openList}
+        ))}
+        {switchErr ? <Note tone="bad">{switchErr}</Note> : null}
+        {sources && !sources.some((s) => s.id === "tracker" || s.id === "jira") ? (
+          <SheetRow
+            label="No tracker on this computer"
+            sub="Connect Jira, ClickUp or Taskwarrior on the computer and it appears here."
+            disabled
+            onPress={() => {}}
           />
-          <CardFilterSheet
-            open={filtering} onClose={() => setFiltering(false)} scope={view?.name ?? "This board"}
-            filters={filters} onApply={setFilters} cards={tasks ?? []} statuses={statuses}
-            query={search} openOnly={openOnly} truncated={truncated}
-          />
-        </>
-      ) : null}
+        ) : null}
+        <Note>
+          One tab, several sources. A source the computer has nothing for is not offered: this phone
+          cannot sign in to one itself, so a row for it would be a row that leads nowhere.
+        </Note>
+      </Sheet>
 
-      {/*
-        Three states, where there were two.
-
-        "No board is connected" used to be drawn as "this view has no cards
-        that are still open", which asserts two things that are both false on
-        a machine with no tracker: that there is a board, and that it is
-        empty. Somebody reading it would go looking for a filter.
-
-        `provider === null` is the tracker-less machine, said in words that
-        name no product. `undefined` — still asking — draws nothing, because
-        the wrong empty state for a second reads as a flash of a lie.
-      */}
-      {provider === null ? (
-        <View style={{ padding: SPACE.lg }}>
-          <Card>
-            <Label text="No tracker on this computer" />
-            <Note>
-              Cards come from ClickUp or Taskwarrior, and neither is connected. Connect one on the
-              computer and this tab fills in by itself.
-            </Note>
-            <View style={{ paddingTop: SPACE.sm }}>
-              <Btn label="See why in Settings" onPress={() => router.push("/trackers")} />
-            </View>
-          </Card>
-        </View>
-      ) : localList ? (
-        <FlatList
-          data={shownLocal}
-          keyExtractor={(task) => task.uuid}
-          contentContainerStyle={{ padding: SPACE.lg, paddingBottom: SPACE.xl }}
-          refreshControl={<RefreshControl refreshing={pulling} onRefresh={onRefresh} tintColor={C.text3} />}
-          ListEmptyComponent={
-            local === null ? null : (
-              <ListEmpty
-                error={error}
-                errorTitle="Cannot read the list"
-                emptyTitle="Nothing here"
-                emptyText={scoped
-                  ? "Nothing for this project. Tap Everything above to see the rest of the machine."
-                  : "Nothing is still open. The switch above shows the rest."}
-                onRetry={() => { void load(); }}
-              />
-            )
-          }
-          renderItem={({ item, index }) => (
-            <View style={groupEdge(index === 0, index === shownLocal.length - 1)}>
-              <LocalRow
-                task={item}
-                onCopied={(id) => { setSaid(id); setTimeout(() => setSaid(null), 1600); }}
-              />
-            </View>
-          )}
+      {onJira ? (
+        <JiraTasks
+          initialQuery={q?.trim() ?? ""}
+          onOtherSource={() => pick("issues")}
+          onSourcing={() => setSourcing(true)}
         />
       ) : (
-        <FlatList
-          data={items}
-          keyExtractor={(item) => item.key}
-          extraData={learned}
-          contentContainerStyle={{ padding: SPACE.lg, paddingTop: SPACE.sm, paddingBottom: SPACE.xl }}
-          refreshControl={<RefreshControl refreshing={pulling} onRefresh={onRefresh} tintColor={C.text3} />}
-          ListEmptyComponent={
-            tasks === null ? null : (
-              <ListEmpty
-                error={error}
-                errorTitle="Cannot read the board"
-                emptyTitle="Nothing here"
-                emptyText={EMPTY_TEXT[whyEmpty(tasks, search, filters, openOnly) ?? "none"]}
-                onRetry={() => { void load(); }}
-              />
-            )
-          }
-          renderItem={({ item }) => item.kind === "head" ? (
-            <SectionHead label={item.section.label ?? ""} color={item.section.color} count={item.section.cards.length} />
+        <>
+          <TasksTop
+            search={search}
+            onSearch={setSearch}
+            searching={issuesSearching}
+            onOpenSearch={() => setIssuesSearching(true)}
+            onCloseSearch={() => setIssuesSearching(false)}
+            items={menu}
+          />
+          {picked ? (
+            <SourcePill
+              title={picked.title}
+              icon={picked.id === "issues" ? "tag" : "list"}
+              onPress={() => setSourcing(true)}
+            />
+          ) : null}
+          {onIssues ? (
+            <IssueList
+              search={search}
+              searching={issuesSearching}
+              onSearch={setSearch}
+              onCloseSearch={() => setIssuesSearching(false)}
+              onJira={sources && sourcesOn(sources, sourceOn).includes("jira") ? () => { pick("jira"); setSourcing(false); } : undefined}
+            />
           ) : (
-            <View style={{ paddingBottom: SPACE.sm }}>
-              <CardRow
-                task={item.card}
-                prs={prCount(item.card, learned(item.card.id))}
-                query={search}
-                showList={chosen === ASSIGNED_VIEW_ID}
-                onCopied={(id) => { setSaid(id); setTimeout(() => setSaid(null), 1600); }}
-                onOpen={() => router.push({ pathname: "/card/[id]", params: { id: item.card.id } })}
-              />
+            <View style={{ flex: 1 }}>
+              {/* Open / All is a segment, because it was never a filter among filters —
+                  it is the only two-state thing on the screen, and a chip that toggles
+                  looks exactly like a chip that selects. Two segments say which of two
+                  lists you are looking at, and on the board each says how many. */}
+              {provider !== null && !onJira ? (
+                <View style={{ paddingHorizontal: SPACE.lg, paddingTop: SPACE.md, gap: SPACE.md }}>
+                  {board ? (
+                    <>
+                      <BoardHeader path={boardPath(view ?? undefined, place)} name={view?.name ?? "…"} onPress={() => setPicking(true)} />
+                      <PrSearchRow
+                        value={search} onChange={setSearch} active={activeFacets(filters)} onFilters={() => setFiltering(true)}
+                        placeholder="Search this board" label="Search this board"
+                      />
+                    </>
+                  ) : (
+                    <PrSearchRow value={search} onChange={setSearch} placeholder="Search this list" label="Search this list" />
+                  )}
+                  <Segmented
+                    value={openOnly ? "open" : "all"}
+                    onChange={(id) => setOpenOnly(id === "open")}
+                    options={[
+                      { id: "open" as const, label: "Open", count: board && tasks ? boardCount(counts.open, truncated) : undefined },
+                      { id: "all" as const, label: "All", count: board && tasks ? boardCount(counts.all, truncated) : undefined },
+                    ]}
+                  />
+                  {cut ? <Note>{cut}</Note> : null}
+                  {localList && names?.length ? (
+                    <Segmented
+                      value={everything ? "everything" : "project"}
+                      onChange={(id) => setEverything(id === "everything")}
+                      options={[
+                        { id: "project" as const, label: names.join(", ") },
+                        { id: "everything" as const, label: "Everything" },
+                      ]}
+                    />
+                  ) : null}
+                  {notice ? <Note tone="bad">{notice}</Note> : null}
+                </View>
+              ) : null}
+
+              {board ? (
+                <>
+                  <ListSheet
+                    open={picking} onClose={() => setPicking(false)} host={host} views={views?.views ?? []} current={chosen}
+                    onBoard={choose} onList={openList}
+                  />
+                  <CardFilterSheet
+                    open={filtering} onClose={() => setFiltering(false)} scope={view?.name ?? "This board"}
+                    filters={filters} onApply={setFilters} cards={tasks ?? []} statuses={statuses}
+                    query={search} openOnly={openOnly} truncated={truncated}
+                  />
+                </>
+              ) : null}
+
+              {/*
+                Three states, where there were two.
+
+                "No board is connected" used to be drawn as "this view has no cards
+                that are still open", which asserts two things that are both false on
+                a machine with no tracker: that there is a board, and that it is
+                empty. Somebody reading it would go looking for a filter.
+              */}
+              {provider === null ? (
+                <NoTracker onSettings={() => router.push("/trackers")} />
+              ) : localList ? (
+                <FlatList
+                  data={shownLocal}
+                  keyExtractor={(task) => task.uuid}
+                  contentContainerStyle={{ padding: SPACE.lg, paddingBottom: SPACE.xl }}
+                  refreshControl={<RefreshControl refreshing={pulling} onRefresh={onRefresh} tintColor={C.text3} />}
+                  ListEmptyComponent={
+                    local === null ? null : (
+                      <ListEmpty
+                        error={error}
+                        errorTitle="Cannot read the list"
+                        emptyTitle="Nothing here"
+                        emptyText={scoped
+                          ? "Nothing for this project. Tap Everything above to see the rest of the machine."
+                          : "Nothing is still open. The switch above shows the rest."}
+                        onRetry={() => { void load(); }}
+                      />
+                    )
+                  }
+                  renderItem={({ item, index }) => (
+                    <View style={groupEdge(index === 0, index === shownLocal.length - 1)}>
+                      <LocalRow
+                        task={item}
+                        onCopied={(id) => { setSaid(id); setTimeout(() => setSaid(null), 1600); }}
+                      />
+                    </View>
+                  )}
+                />
+              ) : (
+                <FlatList
+                  data={items}
+                  keyExtractor={(item) => item.key}
+                  extraData={learned}
+                  contentContainerStyle={{ padding: SPACE.lg, paddingTop: SPACE.sm, paddingBottom: SPACE.xl }}
+                  refreshControl={<RefreshControl refreshing={pulling} onRefresh={onRefresh} tintColor={C.text3} />}
+                  ListEmptyComponent={
+                    tasks === null ? null : (
+                      <ListEmpty
+                        error={error}
+                        errorTitle="Cannot read the board"
+                        emptyTitle="Nothing here"
+                        emptyText={EMPTY_TEXT[whyEmpty(tasks, search, filters, openOnly) ?? "none"]}
+                        onRetry={() => { void load(); }}
+                      />
+                    )
+                  }
+                  renderItem={({ item }) => item.kind === "head" ? (
+                    <SectionHead label={item.section.label ?? ""} color={item.section.color} count={item.section.cards.length} />
+                  ) : (
+                    <View style={{ paddingBottom: SPACE.sm }}>
+                      <CardRow
+                        task={item.card}
+                        prs={prCount(item.card, learned(item.card.id))}
+                        query={search}
+                        showList={chosen === ASSIGNED_VIEW_ID}
+                        onCopied={(id) => { setSaid(id); setTimeout(() => setSaid(null), 1600); }}
+                        onOpen={() => router.push({ pathname: "/card/[id]", params: { id: item.card.id } })}
+                      />
+                    </View>
+                  )}
+                />
+              )}
+
+              {/* A snackbar, over the list and above the bar, rather than a strip
+                  pushed in at the top: the strip moved every row down by its height
+                  under the thumb that had just long-pressed one of them. */}
+              {said ? (
+                <View
+                  accessibilityLiveRegion="polite"
+                  style={{
+                    position: "absolute", left: SPACE.lg, right: SPACE.lg, bottom: SPACE.xl + SPACE.lg,
+                    minHeight: 48, justifyContent: "center", paddingHorizontal: SPACE.lg,
+                    borderRadius: RADIUS.sm, backgroundColor: C.text,
+                  }}
+                >
+                  <Text style={{ color: C.bg, fontSize: T.body }}>{said} copied</Text>
+                </View>
+              ) : null}
+
+              {provider && !onJira ? (
+                <View style={{ paddingHorizontal: SPACE.lg, paddingBottom: SPACE.sm }}>
+                  <Note>
+                    {board
+                      ? "Tap opens the card here. Hold copies its id."
+                      : "Tap opens a task's link, when it has one. Hold copies its id."}
+                  </Note>
+                </View>
+              ) : null}
             </View>
           )}
-        />
+        </>
       )}
+    </View>
+  );
+}
 
-      {/* A snackbar, over the list and above the bar, rather than a strip
-          pushed in at the top: the strip moved every row down by its height
-          under the thumb that had just long-pressed one of them. */}
-      {said ? (
-        <View
-          accessibilityLiveRegion="polite"
-          style={{
-            position: "absolute", left: SPACE.lg, right: SPACE.lg, bottom: SPACE.xl + SPACE.lg,
-            minHeight: 48, justifyContent: "center", paddingHorizontal: SPACE.lg,
-            borderRadius: RADIUS.sm, backgroundColor: C.text,
-          }}
-        >
-          <Text style={{ color: C.bg, fontSize: T.body }}>{said} copied</Text>
-        </View>
-      ) : null}
+/** One source in the sheet, as mock 11 draws it: the mark of what it reads, its
+ *  name, what the tab does with it, and the switch that shows or hides it. */
+function SourceRow({ source, sub, on, switchable, onPress }: {
+  source: TaskSource;
+  sub: string;
+  /** The switch: whether the computer shows this source in Tasks. */
+  on: boolean;
+  /** The desk has a switch for it; a tracker without one draws none. */
+  switchable: boolean;
+  onPress: () => void;
+}): React.ReactNode {
+  return (
+    <Pressable
+      accessibilityRole="switch"
+      accessibilityState={{ checked: on, disabled: !switchable }}
+      accessibilityLabel={`${source.title}. ${sub}`}
+      onPress={switchable ? onPress : undefined}
+      style={({ pressed }) => ({
+        minHeight: TAP + 10, flexDirection: "row", alignItems: "center", gap: SPACE.md,
+        paddingVertical: SPACE.sm, borderBottomWidth: 1, borderBottomColor: C.border,
+        opacity: pressed ? 0.6 : 1,
+      })}
+    >
+      <View style={{
+        width: 34, height: 34, borderRadius: RADIUS.md, alignItems: "center", justifyContent: "center",
+        backgroundColor: on ? C.bg4 : C.bg3,
+      }}>
+        <Glyph name={source.id === "issues" ? "tag" : "list"} color={on ? C.primary : C.text2} size={18} />
+      </View>
+      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+        <Text numberOfLines={1} style={{ color: C.text, fontSize: T.body, fontWeight: "600" }}>{source.title}</Text>
+        <Text numberOfLines={2} style={{ color: C.text3, fontSize: T.small }}>{sub}</Text>
+      </View>
+      {switchable ? <Switch on={on} /> : null}
+    </Pressable>
+  );
+}
 
-      {provider ? (
-        <View style={{ paddingHorizontal: SPACE.lg, paddingBottom: SPACE.sm }}>
-          <Note>
-            {board
-              ? "Tap opens the card here. Hold copies its id."
-              : "Tap opens a task's link, when it has one. Hold copies its id."}
-          </Note>
+/** A machine tracking work nowhere: a mark, what is missing, and the one place
+ *  the answer lives. The tablet of the app — this phone cannot connect a
+ *  tracker, so the card says where it is done rather than offering to do it. */
+function NoTracker({ onSettings }: { onSettings: () => void }): React.ReactNode {
+  return (
+    <View style={{ flex: 1, justifyContent: "center", padding: SPACE.xl, gap: SPACE.md }}>
+      <View style={{ alignItems: "center", gap: SPACE.md }}>
+        <View style={{
+          width: 52, height: 52, borderRadius: RADIUS.lg, alignItems: "center", justifyContent: "center",
+          backgroundColor: C.bg3,
+        }}>
+          <Glyph name="list" color={C.text2} size={24} />
         </View>
-      ) : null}
+        <Text accessibilityRole="header" style={{ color: C.text, fontSize: T.title, fontWeight: "700", textAlign: "center" }}>
+          No tracker on this computer
+        </Text>
+        <Text style={{ color: C.text3, fontSize: T.small, lineHeight: 19, textAlign: "center" }}>
+          Work comes from Jira, ClickUp, Taskwarrior or GitHub issues. None of them is connected, and
+          this phone never asks for the password: the sign-in lives in the app on the computer.
+        </Text>
+      </View>
+      <View style={{ alignItems: "center", paddingTop: SPACE.sm }}>
+        <Btn label="See why in Settings" onPress={onSettings} />
+      </View>
     </View>
   );
 }

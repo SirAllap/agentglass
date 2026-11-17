@@ -82,6 +82,13 @@ describe("what the card hand-off puts on the socket", () => {
     expect(card).toContain("shared/cardSkills.ts");
   });
 
+  test("it asks for the card's own tab and says which card it is", () => {
+    /* A tab renamed by hand is still this card's work, and a second card whose
+       name happens to look the same is not. */
+    expect(sent[0]).toContain("reuse: true");
+    expect(sent[0]).toContain("cardId: card.id");
+  });
+
   test("it does not ask the server to skip permission prompts", () => {
     /* `yolo` buys exactly one flag — `--dangerously-skip-permissions` — and no
        screen on this phone asks for it. A skill's own `[autonomous | yolo]`

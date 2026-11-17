@@ -51,8 +51,7 @@ export const ALL_KEYS: readonly KeyGroup[] = [
     id: "move", title: "Move",
     keys: [
       ...fromBar(["home", "end", "pageUp", "pageDown", "shiftTab", "delete"]),
-      built("insert", "Ins", "insert", "Insert"),
-      ...fromBar(["enter"]),
+      ...fromBar(["up", "down"]),
     ],
   },
   { id: "symbols", title: "Symbols", keys: SYMBOLS.map(([id, ch, spoken]) => built(id, ch, ch, spoken)) },

@@ -97,16 +97,11 @@ describe("the bar", () => {
   test("opens with what a thumb reaches for first", () => {
     /*
      * The bar scrolls, so the order is the design: whatever is past the fold
-     * is effectively not there.
-     *
-     * Seven, because seven is what fits — measured on a 411dp screen with the
-     * prefix key present and the two width pills pinned at the end. This used
-     * to assert the first three and the fold fell after the FIFTH, which is how
-     * Ctrl+C and both horizontal arrows ended up behind a swipe while the file
-     * that ordered them said they were the ones that had to be reachable.
+     * is effectively not there. The approved drawing's fold is Esc, Tab, Ctrl,
+     * ←, ↑, ↓, → and |; the rest of the catalogue follows one swipe behind.
      */
-    const fold = ACCESSORY_KEYS.slice(0, 6).map((k) => k.id);
-    expect(fold).toEqual(["escape", "ctrlC", "up", "down", "tab", "shiftTab"]);
+    const fold = ACCESSORY_KEYS.slice(0, 8).map((k) => k.id);
+    expect(fold).toEqual(["escape", "tab", "ctrl", "left", "up", "down", "right", "pipe"]);
   });
 
   test("the keys that are narrow are the ones that are one glyph", () => {

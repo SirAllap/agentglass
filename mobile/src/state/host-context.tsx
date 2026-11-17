@@ -42,9 +42,12 @@ import { createWatchAlerts } from "../notifications/watchRuntime.ts";
 import { alertTitle, nameOf } from "../model/computers.ts";
 import { learnName } from "./use-computer.ts";
 import { watchHost, type WatchEvents } from "./watch-host.ts";
+import { inboxHeard } from "./use-inbox.ts";
 import { keepAliveRunning, loadKeepAlivePref, onKeepAliveReconnect, setLinkOffline, syncKeepAlive, wantKeepAlive } from "../notifications/keepAlive.ts";
 import { noteChecks, noteTalk } from "./pr-talk.ts";
 import { talkPref } from "../notifications/talkPref.ts";
+import { foregroundInterval } from "../lib/foreground-interval.ts";
+import { quietPref } from "../notifications/quietPref.ts";
 import { applyMarks, loadPrMarks, resetMarks } from "./read-marks.ts";
 import { setDeskTheme } from "../theme.ts";
 
@@ -265,7 +268,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
       // Never "foreground": the person is looking at another computer, which
       // is the case this socket exists for.
       const now = Date.now();
-      if (shouldNotify(alert, { foreground: false, lastSeen: seen.current, now, hostId: id }).notify) buzz(from, alert, now);
+      if (shouldNotify(alert, { foreground: false, lastSeen: seen.current, now, hostId: id, quiet: quietPref() }).notify) buzz(from, alert, now);
     },
     onWatch: (id: string, frame: WsFrame): void => {
       const from = listRef.current.hosts.find((h) => h.id === id);
@@ -471,7 +474,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
        21 requests in 10 minutes at three repositories, 100% identical, for a
        screen nobody had open. Returning to the app asks at once when the last
        pass is older than the interval (the AppState effect below). */
-    const slow = setInterval(() => { if (AppState.currentState === "active") void loadPrs(host); }, SLOW_POLL_MS);
+    const stopSlow = foregroundInterval(AppState, () => { void loadPrs(host); }, SLOW_POLL_MS);
 
     const handle = openLive(host, {
       onState: (state) => {
@@ -496,6 +499,8 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
          */
         // A read on another device: the desk, or another phone. See state/read-marks.ts.
         if (frame.type === "marks") applyMarks(frame.data);
+        // A settings request or a plan answered elsewhere: the Inbox drops it now.
+        inboxHeard(host, frame);
         onWatchFrame(host, frame);
 
         if (frame.type === "alert" && frame.data) {
@@ -506,6 +511,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
             lastSeen: seen.current,
             now,
             hostId: host.id,
+            quiet: quietPref(),
           });
           if (verdict.notify) {
             /*
@@ -557,6 +563,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
             lastSeen: seen.current,
             now,
             hostId: host.id,
+            quiet: quietPref(),
           });
           if (verdict.notify) {
             const alert: AlertNote = { title: talkSummary(note), body: talkBody(note), urgency: talkUrgency(note) };
@@ -582,7 +589,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
 
     return () => {
       if (timer) clearTimeout(timer);
-      clearInterval(slow);
+      stopSlow();
       unsubReconnect();
       setLinkOffline(false);
       handle.close();

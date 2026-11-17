@@ -13,6 +13,7 @@
  */
 import type { AlertNote, PrTalkNote } from "../../../shared/types.ts";
 import { talkBody, talkSummary } from "../../../shared/talkWords.ts";
+import { heldByQuiet, type QuietPref } from "../model/quietHours.ts";
 import type { TalkPref } from "./talkPref.ts";
 
 /**
@@ -42,6 +43,9 @@ export interface NotifyContext {
   /** Which computer it came from. The same words from two computers are two
    *  alerts, so the window is per computer; absent means "the only one". */
   hostId?: string;
+  /** This phone's quiet hours. Absent is "asked nothing": a caller that has not
+   *  read the preference must not invent one. */
+  quiet?: QuietPref;
 }
 
 /** What makes two alerts the same one. Title and body, because urgency can be
@@ -54,7 +58,7 @@ export const alertKey = (alert: Pick<AlertNote, "title" | "body">, hostId = ""):
 
 export type Verdict =
   | { notify: true }
-  | { notify: false; because: "foreground" | "repeat" | "low" | "empty" | "redraw" };
+  | { notify: false; because: "foreground" | "repeat" | "low" | "empty" | "redraw" | "quiet" };
 
 /**
  * Should this one buzz?
@@ -69,6 +73,8 @@ export type Verdict =
  *   * `low` — urgency 0 is the server's own "worth knowing, not worth
  *     stopping for". A phone is the wrong place for those: it is the one
  *     screen where every interruption costs attention somewhere else.
+ *   * `quiet` — inside this phone's quiet hours, unless the alert is a stopped
+ *     agent and the sheet lets one through. The Inbox still fills.
  *   * `empty` — nothing to show. A notification with no title is a buzz with
  *     no explanation, which teaches people to ignore the next one.
  *   * `redraw` — a keyed card being updated in place or removed (the
@@ -80,6 +86,12 @@ export function shouldNotify(alert: AlertNote, ctx: NotifyContext): Verdict {
   if (alert.update || alert.clear) return { notify: false, because: "redraw" };
   if (ctx.foreground) return { notify: false, because: "foreground" };
   if ((alert.urgency ?? 1) < 1) return { notify: false, because: "low" };
+  // After `low`: something the server already called "not worth stopping for"
+  // is not a thing quiet hours needed to decide, and the reason reported should
+  // be the first one that is true.
+  if (ctx.quiet && heldByQuiet(ctx.quiet, alert.urgency, new Date(ctx.now))) {
+    return { notify: false, because: "quiet" };
+  }
 
   const seen = ctx.lastSeen.get(alertKey(alert, ctx.hostId));
   if (seen !== undefined && ctx.now - seen < SAME_ALERT_MS) return { notify: false, because: "repeat" };
@@ -89,7 +101,7 @@ export function shouldNotify(alert: AlertNote, ctx: NotifyContext): Verdict {
 
 export type TalkVerdict =
   | { notify: true }
-  | { notify: false; because: "off" | "pref-mismatch" | "foreground" | "repeat" };
+  | { notify: false; because: "off" | "pref-mismatch" | "foreground" | "repeat" | "quiet" };
 
 /**
  * Should a new pull-request remark buzz THIS phone?
@@ -116,11 +128,15 @@ export type TalkVerdict =
  */
 export function shouldNotifyTalk(
   note: PrTalkNote,
-  ctx: { pref: TalkPref; foreground: boolean; lastSeen: Map<string, number>; now: number; hostId?: string },
+  ctx: {
+    pref: TalkPref; foreground: boolean; lastSeen: Map<string, number>; now: number; hostId?: string;
+    quiet?: QuietPref;
+  },
 ): TalkVerdict {
   if (ctx.pref === "off") return { notify: false, because: "off" };
   if (ctx.pref === "reviews" && note.kind !== "review") return { notify: false, because: "pref-mismatch" };
   if (ctx.foreground) return { notify: false, because: "foreground" };
+  if (ctx.quiet && heldByQuiet(ctx.quiet, 1, new Date(ctx.now))) return { notify: false, because: "quiet" };
 
   const key = alertKey({ title: talkSummary(note), body: talkBody(note) }, ctx.hostId);
   const seen = ctx.lastSeen.get(key);

@@ -130,6 +130,24 @@ export function TasksIcon({ color, size = 20 }: IconProps): React.ReactNode {
 }
 
 /**
+ * The Inbox: a bell, because it is the one mark in the header that says
+ * "something is waiting" rather than where you are.
+ *
+ * Its mouth is open on purpose — a closed outline at 22px reads as a bag, and
+ * the clapper is what makes the shape a bell. The badge sits on this icon, so
+ * the drawing is deliberately thin: two strokes at 2.1 units leave a hole you
+ * can see a number through the corner of.
+ */
+export function BellIcon({ color, size = 20 }: IconProps): React.ReactNode {
+  return (
+    <Svg {...line} {...box(size)} color={color}>
+      <Path d="M6.5 10a5.5 5.5 0 0 1 11 0c0 4 1.5 5.5 1.5 5.5H5S6.5 14 6.5 10z" />
+      <Path d="M10 18.5a2.2 2.2 0 0 0 4 0" />
+    </Svg>
+  );
+}
+
+/**
  * Three faders, because the cog does not survive this weight.
  *
  * A cog's teeth cannot be drawn wider than the stroke, and eight of them on a
