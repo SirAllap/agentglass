@@ -15,12 +15,14 @@ import { PROVIDERS, ASSIGNED_VIEW_ID, type ProviderId, type ProviderStatus, type
 import { savedViews, addView, removeView, cachedFor, putCache, setCurrent as setCurrentView, addFolder, savedFolders, forgetCached } from "./clickupviews.ts";
 import { ghCapability } from "./prs.ts";
 import { taskCapability } from "./tasks.ts";
-import { hasCredential, redacted, storeCredential, clearCredential, dropCredentialSecret, notConnected } from "./credentials.ts";
+import { hasCredential, redacted, storeCredential, clearCredential, dropCredentialSecret, notConnected, accountsOf, redactedAccount, setDefaultAccount } from "./credentials.ts";
 import { reasonOf, unlockFirst } from "./keyring.ts";
 import { whoAmI, workspaces, clickupTasks, clickupCached, forgetAll, credentialGeneration, applyCommentCounts as applyCounts, seedCommentCounts as seedCounts } from "./clickup.ts";
+import { clickupAccount, clickupNotConnected } from "./clickupAccount.ts";
 import { cardWatchTrouble, forgetWatch } from "./clickupwatch.ts";
 import { forget as forgetClickupIndex } from "./clickupindex.ts";
-import { disconnectJira, jiraRefused, storedCreds as jiraCreds } from "./jira.ts";
+import { disconnectJira, forgetJira, jiraRefused, storedCreds as jiraCreds } from "./jira.ts";
+import { forgetCached as forgetJiraViews } from "./jiraviews.ts";
 import { forgetJiraWatch } from "./jirawatch.ts";
 
 const found = (bin: string): boolean => !!Bun.which(bin);
@@ -141,6 +143,28 @@ async function statusOf(id: ProviderId): Promise<ProviderStatus> {
 const clock = (ms: number): string =>
   new Date(ms).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 
+/** One stored account as a settings page draws it: who it is, never the token. */
+export interface AccountRow { accountKey: string; isDefault: boolean; account?: string; workspace?: string; site?: string; email?: string }
+
+/** The accounts stored for a provider, default first. Identity only. */
+export function accountRows(id: ProviderId): AccountRow[] {
+  const rows = accountsOf(id).map((a): AccountRow => {
+    const r = redactedAccount(id, a.accountKey);
+    return { accountKey: a.accountKey, isDefault: a.isDefault, ...(r?.account ? { account: r.account } : null), ...(r?.workspace ? { workspace: r.workspace } : null), ...(r?.site ? { site: r.site } : null), ...(r?.email ? { email: r.email } : null) };
+  });
+  return rows.sort((a, b) => Number(b.isDefault) - Number(a.isDefault) || a.accountKey.localeCompare(b.accountKey));
+}
+
+/** Make a stored account the default. A name that is not stored is a sentence, not a throw. */
+export function makeDefaultAccount(id: ProviderId, accountKey: string): { ok: true; accounts: AccountRow[] } | { ok: false; error: string } {
+  if (!accountsOf(id).some((a) => a.accountKey === accountKey)) return { ok: false, error: `No account called ${accountKey}` };
+  setDefaultAccount(id, accountKey);
+  // The default's cached board is the old default's; the next read asks again.
+  if (id === "clickup") forgetAll();
+  if (id === "jira") { forgetJira(); forgetJiraViews(); }
+  return { ok: true, accounts: accountRows(id) };
+}
+
 export interface ConnectResult {
   ok: boolean;
   error?: string;
@@ -155,7 +179,7 @@ export interface ConnectResult {
  * pasted it has already moved on. Here it is checked, and only then written —
  * so the badge means what it says from the first second.
  */
-export async function connectProvider(id: ProviderId, token: string): Promise<ConnectResult> {
+export async function connectProvider(id: ProviderId, token: string, accountKey?: string): Promise<ConnectResult> {
   // Jira needs the email and the site as well as the token, so it has its own
   // door (`connectJira`); a bare token cannot be checked against anything.
   if (id === "jira") return { ok: false, error: "Jira needs your email and site as well. Use the Jira connection form" };
@@ -181,7 +205,7 @@ export async function connectProvider(id: ProviderId, token: string): Promise<Co
       workspace: first?.name,
       workspaceId: first?.id,
       verifiedAt: Date.now(),
-    });
+    }, accountKey);
   } catch (e) {
     // The keyring is on and would not keep it: nothing was stored, and the
     // token is not written to a file instead.
@@ -204,18 +228,22 @@ export async function connectProvider(id: ProviderId, token: string): Promise<Co
   return { ok: true, status: await statusOf(id) };
 }
 
-export async function disconnectProvider(id: ProviderId, o: { forgetBoards?: boolean } = {}): Promise<ConnectResult> {
+export async function disconnectProvider(id: ProviderId, o: { forgetBoards?: boolean; accountKey?: string } = {}): Promise<ConnectResult> {
   // The keyring's copy goes first: if it cannot be removed, nothing is, and the
   // token the person meant to disconnect is not left in the keyring alone.
-  try { await dropCredentialSecret(id); } catch (e) { return { ok: false, error: unlockFirst(e, "disconnect") ?? reasonOf(e), status: await statusOf(id) }; }
+  let dropped: string | null = null;
+  // Disconnecting an account that is not the default must not wipe what the default's board cached on disk.
+  const wasDefault = o.accountKey === undefined || accountsOf(id).some((a) => a.isDefault && a.accountKey === o.accountKey);
+  try { dropped = await dropCredentialSecret(id, o.accountKey); } catch (e) { return { ok: false, error: unlockFirst(e, "disconnect") ?? reasonOf(e), status: await statusOf(id) }; }
   // Jira keeps its own memory (holds, memo, refused latch) beside the credential.
-  if (id === "jira") { disconnectJira(); forgetJiraWatch(); } else clearCredential(id);
+  if (id === "jira") { disconnectJira(dropped ?? undefined, { wasDefault }); if (wasDefault) forgetJiraWatch(); } else clearCredential(id, dropped ?? undefined);
   // The cached list goes too. Leaving it would show somebody else's tasks after
   // a disconnect, which is the one thing a disconnect must not do.
   if (id === "clickup") {
     /* Memory first, and a new generation, so a read that is still in flight
        drops what it fetched instead of writing it back after the forgetting. */
     forgetAll();
+    if (!wasDefault) return { ok: true, status: await statusOf(id) };
     /* The in-memory list was only half of it. Tasks cached on disk, the last-
        seen map of the card watch and the two search tables were all read with
        this token, and the pull request list drew a card from them for a day
@@ -229,20 +257,20 @@ export async function disconnectProvider(id: ProviderId, o: { forgetBoards?: boo
 
 /** Which workspaces this token can see, for the picker. Never includes the
  *  token in what it returns. */
-export async function providerWorkspaces(id: ProviderId): Promise<{ ok: boolean; workspaces?: { id: string; name: string }[]; error?: string }> {
+export async function providerWorkspaces(id: ProviderId, accountKey?: string): Promise<{ ok: boolean; workspaces?: { id: string; name: string }[]; error?: string }> {
   if (id !== "clickup") return { ok: false, error: "That provider has no workspaces" };
   const { secretFor } = await import("./credentials.ts");
-  const token = secretFor("clickup");
-  if (!token) return { ok: false, error: notConnected("clickup", "ClickUp is not connected") };
+  const token = secretFor("clickup", accountKey);
+  if (!token) return { ok: false, error: notConnected("clickup", accountKey ? `The ClickUp account "${accountKey}" is not connected` : "ClickUp is not connected", accountKey) };
   const r = await workspaces(token);
   return r.ok ? { ok: true, workspaces: r.data } : { ok: false, error: r.error };
 }
 
 /** Point an existing credential at a different workspace. */
-export async function chooseWorkspace(id: ProviderId, workspaceId: string, name: string): Promise<ConnectResult> {
+export async function chooseWorkspace(id: ProviderId, workspaceId: string, name: string, accountKey?: string): Promise<ConnectResult> {
   if (id !== "clickup") return { ok: false, error: "That provider has no workspaces" };
   const { annotate } = await import("./credentials.ts");
-  annotate("clickup", { workspaceId, workspace: name });
+  annotate("clickup", { workspaceId, workspace: name }, accountKey);
   forgetAll();
   return { ok: true, status: await statusOf(id) };
 }
@@ -262,8 +290,8 @@ export async function chooseWorkspace(id: ProviderId, workspaceId: string, name:
 export async function addViewByUrl(url: string): Promise<{ ok: boolean; error?: string; view?: SavedView }> {
   const { parseViewUrl, viewMeta, listMeta } = await import("./clickup.ts");
   const { secretFor } = await import("./credentials.ts");
-  const token = secretFor("clickup");
-  if (!token) return { ok: false, error: notConnected("clickup", "Connect ClickUp first") };
+  const token = secretFor("clickup", clickupAccount());
+  if (!token) return { ok: false, error: clickupNotConnected("Connect ClickUp first") };
 
   const parsed = parseViewUrl(url);
   /*
@@ -362,13 +390,13 @@ export async function addViewByUrl(url: string): Promise<{ ok: boolean; error?: 
 export async function addClickupFolder(folderId: string, spaceName = ""): Promise<{ ok: boolean; error?: string; folder?: SavedFolder }> {
   const { clickupFolderLists } = await import("./clickup.ts");
   const { secretFor } = await import("./credentials.ts");
-  if (!secretFor("clickup")) return { ok: false, error: notConnected("clickup", "Connect ClickUp first") };
+  if (!secretFor("clickup", clickupAccount())) return { ok: false, error: clickupNotConnected("Connect ClickUp first") };
   const id = String(folderId || "").trim();
   if (!/^[0-9]+$/.test(id)) return { ok: false, error: "That is not a folder id" };
 
   const r = await clickupFolderLists(id);
   if (!r.ok || !r.data) return { ok: false, error: r.error || "ClickUp did not answer for that folder" };
-  const me = (await import("./credentials.ts")).redacted("clickup");
+  const me = (await import("./credentials.ts")).redactedAccount("clickup", clickupAccount());
   const folder: SavedFolder = {
     id,
     name: r.data.name || `Folder ${id}`,
@@ -396,7 +424,7 @@ export async function addClickupFolder(folderId: string, spaceName = ""): Promis
 export async function refreshClickupFolders(): Promise<void> {
   const { clickupFolderLists } = await import("./clickup.ts");
   const { secretFor } = await import("./credentials.ts");
-  if (!secretFor("clickup")) return;
+  if (!secretFor("clickup", clickupAccount())) return;
   for (const f of savedFolders()) {
     const r = await clickupFolderLists(f.id);
     if (!r.ok || !r.data) continue;
@@ -557,8 +585,8 @@ export async function readView(viewId: string, force = false): Promise<ViewTasks
     };
   };
 
-  const token = secretFor("clickup");
-  if (!token) return shown({ error: notConnected("clickup", "ClickUp is not connected") });
+  const token = secretFor("clickup", clickupAccount());
+  if (!token) return shown({ error: clickupNotConnected("ClickUp is not connected") });
 
   const held = cachedFor(viewId);
   const age = held ? Date.now() - held.at : Number.POSITIVE_INFINITY;
@@ -654,7 +682,7 @@ async function doRefresh(view: SavedView, token: string, force: boolean): Promis
   const { viewTasks, listMeta } = await import("./clickup.ts");
   const { redacted } = await import("./credentials.ts");
   const held = cachedFor(view.id);
-  const me = redacted("clickup")?.accountId;
+  const me = redactedAccount("clickup", clickupAccount())?.accountId;
   const gen = credentialGeneration();
   // What the last run counted, taken back off the board it wrote. Without this
   // the first sweep after a restart blanks a column that was already right.

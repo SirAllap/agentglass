@@ -24,7 +24,7 @@
  *   * `git gc` repacks. It is the same maintenance git runs on its own.
  *   * Stashes get NO deletion command at all — see the finding.
  */
-import { git } from "./git.ts";
+import { gitAsync } from "./git.ts";
 
 import type { TidyFinding, TidyReport } from "../../shared/types.ts";
 export type { TidyFinding, TidyReport };
@@ -77,23 +77,34 @@ export function vetCommand(cmd: string | null): { command: string | null; refuse
 const branchName = (line: string): string => line.replace(/^[*+]\s*/, "").trim().split(/\s+/)[0] ?? "";
 
 /** The checkout's own idea of its default branch, not ours. */
-function baseBranch(root: string): string {
-  const head = git(root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]);
+async function baseBranch(root: string): Promise<string> {
+  const head = await gitAsync(root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]);
   if (head.code === 0) {
     const short = head.stdout.trim().replace(/^origin\//, "");
     if (short) return short;
   }
   for (const guess of ["main", "master"]) {
-    if (git(root, ["rev-parse", "--verify", "--quiet", guess]).code === 0) return guess;
+    if ((await gitAsync(root, ["rev-parse", "--verify", "--quiet", guess])).code === 0) return guess;
   }
   return "main";
 }
 
-export function tidyReport(root: string): TidyReport {
-  const inside = git(root, ["rev-parse", "--is-inside-work-tree"]);
+/*
+ * Async: every read below waits for git beside the server's loop.
+ *
+ * This was ten blocking `git()` calls in a row (a spawn with a 15 s limit
+ * each) on the server's only thread, behind `GET /git/tidy`. `branch
+ * --merged`, twice, walks the graph, and `worktree list` and `count-objects`
+ * grow with the repository: on a large one the whole server waited for them.
+ * A blocking spawn of the same kind was measured holding the installed app
+ * for 9.7 s and 19.9 s. The calls stay one after another, in the same order,
+ * so the report is the one the blocking version wrote.
+ */
+export async function tidyReport(root: string): Promise<TidyReport> {
+  const inside = await gitAsync(root, ["rev-parse", "--is-inside-work-tree"]);
   if (inside.code !== 0) return { root, base: "main", findings: [], error: "not a git checkout" };
 
-  const base = baseBranch(root);
+  const base = await baseBranch(root);
 
   /**
    * Branches a worktree has checked out.
@@ -107,7 +118,7 @@ export function tidyReport(root: string): TidyReport {
    */
   const checkedOut = new Set<string>();
   {
-    const wl = git(root, ["worktree", "list", "--porcelain"]);
+    const wl = await gitAsync(root, ["worktree", "list", "--porcelain"]);
     if (wl.code === 0) {
       for (const line of wl.stdout.split("\n")) {
         if (line.startsWith("branch ")) checkedOut.add(line.slice(7).trim().replace(/^refs\/heads\//, ""));
@@ -133,7 +144,7 @@ export function tidyReport(root: string): TidyReport {
    */
   const mergedSet = new Set<string>();
   {
-    const m = git(root, ["branch", "--merged", base, "--format=%(refname:short)"]);
+    const m = await gitAsync(root, ["branch", "--merged", base, "--format=%(refname:short)"]);
     if (m.code === 0) for (const b of m.stdout.split("\n").map((x) => x.trim()).filter(Boolean)) mergedSet.add(b);
   }
   const holdReason = (b: string): string | null =>
@@ -160,7 +171,7 @@ export function tidyReport(root: string): TidyReport {
   // ---- branches whose upstream is gone -----------------------------------
   // The clearest signal a branch is finished: the remote it tracked has been
   // deleted, which is what happens when its pull request merges.
-  const vv = git(root, ["branch", "-vv"]);
+  const vv = await gitAsync(root, ["branch", "-vv"]);
   const gone = vv.code === 0
     ? vv.stdout.split("\n").filter((l) => l.includes(": gone]")).map(branchName).filter(Boolean)
     : [];
@@ -184,7 +195,7 @@ export function tidyReport(root: string): TidyReport {
   });
 
   // ---- branches already merged into the base ------------------------------
-  const merged = git(root, ["branch", "--merged", base, "--format=%(refname:short)"]);
+  const merged = await gitAsync(root, ["branch", "--merged", base, "--format=%(refname:short)"]);
   const mergedNames = merged.code === 0
     ? merged.stdout.split("\n").map((s) => s.trim()).filter((s) => s && s !== base && !gone.includes(s))
     : [];
@@ -209,7 +220,7 @@ export function tidyReport(root: string): TidyReport {
   });
 
   // ---- worktrees whose directory is gone ----------------------------------
-  const wt = git(root, ["worktree", "list", "--porcelain"]);
+  const wt = await gitAsync(root, ["worktree", "list", "--porcelain"]);
   const stale: string[] = [];
   if (wt.code === 0) {
     let current = "";
@@ -238,7 +249,7 @@ export function tidyReport(root: string): TidyReport {
   // ---- stashes -------------------------------------------------------------
   // Deliberately no command. A stash is uncommitted work, and it is the one
   // thing here that no other copy of exists.
-  const stash = git(root, ["stash", "list", "--format=%gd  %cs  %s"]);
+  const stash = await gitAsync(root, ["stash", "list", "--format=%gd  %cs  %s"]);
   const stashes = stash.code === 0 ? stash.stdout.split("\n").map((s) => s.trim()).filter(Boolean) : [];
   add({
     id: "stashes", all: stashes,
@@ -258,7 +269,7 @@ export function tidyReport(root: string): TidyReport {
   });
 
   // ---- housekeeping --------------------------------------------------------
-  const objs = git(root, ["count-objects", "-v"]);
+  const objs = await gitAsync(root, ["count-objects", "-v"]);
   const loose = Number(/^count: (\d+)/m.exec(objs.stdout ?? "")?.[1] ?? 0);
   const sizeKb = Number(/^size-pack: (\d+)/m.exec(objs.stdout ?? "")?.[1] ?? 0);
   add({

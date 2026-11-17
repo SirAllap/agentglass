@@ -10,8 +10,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { notePaneAgent, paneHeldSessions } from "../src/panewt.ts";
 import {
-  WINDOW_MS, SIGNED_TO_TEST_MS, ancestorsOf, deriveRows, readTrunk, ticketOf, type Commit, type Verdict,
+  WINDOW_MS, SIGNED_TO_TEST_MS, ancestorsOf, deriveRows, inProgress, readTrunk, stillRunning, ticketOf, type Commit, type Verdict,
 } from "../src/manifest.ts";
 
 const NOW = Date.UTC(2026, 0, 10, 12, 0, 0);
@@ -150,6 +151,46 @@ describe("reading a real trunk", () => {
     const head = git("rev-parse", "HEAD").stdout.trim();
     expect(await ancestorsOf(dir, head)).toEqual(new Set([head]));
     expect(await ancestorsOf(dir, "f".repeat(40))).toBeNull();
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("in progress", () => {
+  test("a session that has ended is not listed; one still live, or with no id, is", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "agx-manifest3-"));
+    spawnSync("git", ["-C", dir, "init", "-q", "-b", "main"]);
+    const said = [
+      { name: "orbit-live", worktree: dir, session: "s-live", saidAt: NOW, from: "said" as const },
+      { name: "orbit-gone", worktree: dir, session: "s-gone", saidAt: NOW, from: "said" as const },
+      { name: "orbit-anon", worktree: dir, saidAt: NOW, from: "said" as const },
+    ];
+    const names = (await inProgress(dir, said, (s) => s === "s-live")).map((r) => r.name);
+    expect(names).toEqual(["orbit-live", "orbit-anon"]);
+    // A live set that could not be read keeps every row.
+    expect((await inProgress(dir, said, null)).length).toBe(3);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("still running", () => {
+  test("idle 2 h on a server nobody is attached to stays listed; a killed pane leaves", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "agx-manifest4-"));
+    spawnSync("git", ["-C", dir, "init", "-q", "-b", "main"]);
+    const twoHours = NOW - 2 * 60 * 60_000;
+    const unattached = "/tmp/tmux-1000/agx-orbit,4303";
+    notePaneAgent({ pane: "%9951", sessionId: "s-idle", transcriptPath: "/t.jsonl", cwd: dir, server: unattached, at: twoHours });
+    notePaneAgent({ pane: "%9952", sessionId: "s-killed", transcriptPath: "/t.jsonl", cwd: dir, server: unattached, at: twoHours });
+    // What every-server list-panes answers: %9951 still runs its agent, %9952 is gone.
+    const held = paneHeldSessions([{ paneId: "%9951", agentCwds: [dir], server: unattached }]);
+    const said = [
+      { name: "orbit-idle", worktree: dir, session: "s-idle", saidAt: twoHours, from: "said" as const },
+      { name: "orbit-killed", worktree: dir, session: "s-killed", saidAt: twoHours, from: "said" as const },
+      // Never in a pane: nothing to ask, so it stays until its SessionEnd.
+      { name: "orbit-nopane", worktree: dir, session: "s-nopane", saidAt: twoHours, from: "said" as const },
+      { name: "orbit-ended", worktree: dir, session: "s-ended", saidAt: twoHours, from: "said" as const },
+    ];
+    const alive = stillRunning(held, (s) => s === "s-ended");
+    expect((await inProgress(dir, said, alive)).map((r) => r.name)).toEqual(["orbit-idle", "orbit-nopane"]);
     rmSync(dir, { recursive: true, force: true });
   });
 });

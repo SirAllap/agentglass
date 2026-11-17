@@ -62,7 +62,7 @@ describe("where it looks", () => {
     expect(ff.dirs.some((d) => d.startsWith(".var/app/"))).toBe(true);
     // Chromium-family stores are found and probed, never decrypted.
     expect(LINUX_SOURCES.filter((s) => s.kind === "chromium").map((s) => s.id).sort())
-      .toEqual(["brave", "chrome", "chromium"]);
+      .toEqual(["brave", "chrome", "chromium", "edge", "opera", "vivaldi"]);
   });
 
   const HOME = join(tmpdir(), `agx-zen-home-${process.pid}`);

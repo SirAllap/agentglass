@@ -53,6 +53,16 @@ export interface ElectronCookie {
   sameSite: ElectronSameSite;
 }
 
+/** CDP's partition key for a CHIPS / total-cookie-protection cookie. */
+export interface PartitionKey { topLevelSite: string; hasCrossSiteAncestor: boolean }
+
+/** A cookie that may be partitioned. `cookies.set` has no partition
+ *  parameter, so one with `partitionKey` goes through CDP `Network.setCookie`
+ *  and must never be handed to `cookies.set` as is. */
+export interface ImportedCookie extends ElectronCookie {
+  partitionKey?: PartitionKey;
+}
+
 export type SourceKind = "firefox" | "chromium";
 
 export type SkipReason =
@@ -61,7 +71,8 @@ export type SkipReason =
   | "partitioned"
   | "encrypted"
   | "not-selected"
-  | "bad-host";
+  | "bad-host"
+  | "other-container";
 
 /** A row as it comes out of either family's database, already normalised to
  *  names that mean the same thing on both sides. */
@@ -75,9 +86,14 @@ export interface CookieRow {
   secure: boolean;
   httpOnly: boolean;
   sameSite: number;
-  /** Firefox's container/partition attributes, or Chromium's partition key.
-   *  Anything non-empty means the cookie is not a plain one. */
+  /** Origin attributes this cannot carry (Firefox `firstPartyDomain`, an
+   *  unparsed partition key). Anything non-empty means the cookie is skipped. */
   partition?: string;
+  /** Firefox `userContextId`: WHICH container the cookie lives in, "0" or
+   *  absent for none. A container is a separate jar, not a partition. */
+  container?: string;
+  /** The top-level site a partitioned cookie is keyed to. */
+  partitionKey?: PartitionKey;
   /** Chromium rows arrive with nothing readable in `value`. */
   encrypted?: boolean;
 }
@@ -117,6 +133,62 @@ export function sameSiteOf(kind: SourceKind, raw: number): ElectronSameSite {
   return table[raw] ?? "unspecified";
 }
 
+/**
+ * Firefox's `originAttributes` column, split.
+ *
+ * `^userContextId=2&partitionKey=%28https%2Cacme.test%29` is two different
+ * facts: which container (a whole separate jar) and which partition (CHIPS /
+ * total cookie protection). Treating any non-empty column as "partitioned"
+ * dropped every first-party login made inside a container.
+ */
+export function parseOriginAttributes(raw: string): { container: string; partitionKey?: string; other: string } {
+  const out: { container: string; partitionKey?: string; other: string } = { container: "0", other: "" };
+  const rest: string[] = [];
+  for (const pair of raw.replace(/^\^/, "").split("&").filter(Boolean)) {
+    const eq = pair.indexOf("=");
+    const k = eq < 0 ? pair : pair.slice(0, eq);
+    const v = eq < 0 ? "" : decodeURIComponent(pair.slice(eq + 1));
+    if (k === "userContextId") out.container = v || "0";
+    else if (k === "partitionKey") { if (v) out.partitionKey = v; }
+    // Private-browsing rows never reach disk; one that did is not a login to copy.
+    else rest.push(pair);
+  }
+  out.other = rest.join("&");
+  return out;
+}
+
+/**
+ * The sameSite to set, which is not always the one read.
+ *
+ * Chromium refuses `SameSite=None` on a cookie that is not Secure; older
+ * Firefox rows hold exactly that, and each one used to land in `failed` with
+ * only a count to show for it. Unspecified is what Chromium itself treats such
+ * a cookie as, so the login survives with the meaning the browser gives it.
+ */
+export function sameSiteFor(kind: SourceKind, raw: number, secure: boolean): ElectronSameSite {
+  const s = sameSiteOf(kind, raw);
+  return s === "no_restriction" && !secure ? "unspecified" : s;
+}
+
+/**
+ * Firefox's `partitionKey` attribute, `(https,acme.test)` with an optional
+ * port and an `f` flag for a cross-site ancestor, as CDP wants it. Null for
+ * anything else, which then stays an un-carryable partition.
+ */
+export function firefoxPartitionKey(raw: string): PartitionKey | null {
+  const m = /^\(([a-z]+),([^,()]+)((?:,[^,()]*)*)\)$/.exec(raw.trim());
+  if (!m) return null;
+  const extra = (m[3] ?? "").split(",").filter(Boolean);
+  const port = extra.find((x) => /^\d+$/.test(x));
+  return { topLevelSite: `${m[1]}://${m[2]}${port ? `:${port}` : ""}`, hasCrossSiteAncestor: extra.includes("f") };
+}
+
+/** Chromium's `top_frame_site_key` (`https://acme.test`). The column carries
+ *  no ancestor bit, so it is false (Preflight decision F11). */
+export function chromiumPartitionKey(raw: string): PartitionKey | null {
+  return /^[a-z]+:\/\/[^/]+$/.test(raw) ? { topLevelSite: raw, hasCrossSiteAncestor: false } : null;
+}
+
 /** A leading dot is how both families say "and every subdomain". */
 export const isHostOnly = (host: string): boolean => !host.startsWith(".");
 
@@ -152,13 +224,15 @@ const TWO_LABEL_SUFFIXES = new Set([
  */
 export function siteOf(host: string): string {
   const bare = host.replace(/^\./, "").toLowerCase();
+  /* An address is its own site: "127.0.0.1" split by dots became "0.1". */
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(bare) || bare.includes(":")) return bare;
   const parts = bare.split(".").filter(Boolean);
   if (parts.length <= 2) return bare;
   const lastTwo = parts.slice(-2).join(".");
   return TWO_LABEL_SUFFIXES.has(lastTwo) ? parts.slice(-3).join(".") : lastTwo;
 }
 
-export type Converted = { ok: true; cookie: ElectronCookie } | { ok: false; reason: SkipReason };
+export type Converted = { ok: true; cookie: ImportedCookie } | { ok: false; reason: SkipReason };
 
 /**
  * One row into one cookie, or the named reason it cannot be.
@@ -166,38 +240,50 @@ export type Converted = { ok: true; cookie: ElectronCookie } | { ok: false; reas
  * `nowSeconds` is passed rather than read so that "already expired" is a
  * decision a test can make.
  */
-export function toElectronCookie(row: CookieRow, kind: SourceKind, nowSeconds: number): Converted {
+export function toElectronCookie(
+  row: CookieRow, kind: SourceKind, nowSeconds: number, opts: { keepPartitioned?: boolean; keepSession?: boolean } = {},
+): Converted {
   if (row.encrypted) return { ok: false, reason: "encrypted" };
-  // Containers (Firefox) and CHIPS (Chromium) have no representation in
-  // `cookies.set` — there is no partition parameter — so importing one
-  // unpartitioned changes what it means.
+  // A partitioned cookie only into a store that can set it partitioned (the
+  // vault, poured in through CDP); the person's jar via cookies.set cannot.
+  if (row.partitionKey && !opts.keepPartitioned) return { ok: false, reason: "partitioned" };
+  // Partition attributes have no representation in `cookies.set` — there is
+  // no partition parameter — so importing one unpartitioned changes what it
+  // means. Containers are not this: see `container`.
   if (row.partition) return { ok: false, reason: "partitioned" };
   if (!row.host || !row.name) return { ok: false, reason: "bad-host" };
-  // A session cookie outlives nothing: the browser it came from will drop it,
-  // and copying it here is copying a login that is already half gone.
-  if (!row.expires) return { ok: false, reason: "session-only" };
-  if (row.expires <= nowSeconds) return { ok: false, reason: "expired" };
+  // A session cookie into the person's jar is refused: the browser it came
+  // from will drop it. The vault keeps it (decision F9 labels it), because a
+  // login that is only a session cookie is otherwise never importable.
+  if (!row.expires && !opts.keepSession) return { ok: false, reason: "session-only" };
+  const session = !row.expires;
+  if (!session && row.expires <= nowSeconds) return { ok: false, reason: "expired" };
 
   const path = row.path && row.path.startsWith("/") ? row.path : "/";
-  const cookie: ElectronCookie = {
+  const cookie: ImportedCookie = {
     url: cookieUrl(row.host, path, row.secure),
     name: row.name,
     value: row.value,
     path,
     secure: row.secure,
     httpOnly: row.httpOnly,
-    expirationDate: row.expires,
-    sameSite: sameSiteOf(kind, row.sameSite),
+    ...(session ? {} : { expirationDate: row.expires }),
+    sameSite: sameSiteFor(kind, row.sameSite, row.secure),
   };
   // Present only for a domain cookie. `__Host-` names are rejected outright by
   // Chromium unless the domain is absent, the path is `/`, secure is true and
   // the url is https — which falls out of carrying the flag across honestly.
   if (!isHostOnly(row.host)) cookie.domain = row.host;
+  if (row.partitionKey) {
+    cookie.partitionKey = row.partitionKey;
+    // CHIPS requires Secure; a partitioned cookie that is not is refused anyway.
+    if (!cookie.secure) return { ok: false, reason: "partitioned" };
+  }
   return { ok: true, cookie };
 }
 
 export interface ImportPlan {
-  install: ElectronCookie[];
+  install: ImportedCookie[];
   skipped: Record<SkipReason, number>;
   /** Every site in the source, with how many live cookies it has — what the
    *  picker lists, and it carries no names and no values. */
@@ -205,7 +291,7 @@ export interface ImportPlan {
 }
 
 const noSkips = (): Record<SkipReason, number> =>
-  ({ expired: 0, "session-only": 0, partitioned: 0, encrypted: 0, "not-selected": 0, "bad-host": 0 });
+  ({ expired: 0, "session-only": 0, partitioned: 0, encrypted: 0, "not-selected": 0, "bad-host": 0, "other-container": 0 });
 
 /**
  * What would be imported, and what would not, and why.
@@ -218,15 +304,18 @@ const noSkips = (): Record<SkipReason, number> =>
 export function planImport(
   rows: CookieRow[],
   kind: SourceKind,
-  opts: { sites: string[]; nowSeconds: number },
+  opts: { sites: string[]; nowSeconds: number; container?: string; keepPartitioned?: boolean; keepSession?: boolean },
 ): ImportPlan {
+  const want = opts.container ?? "0";
   const chosen = new Set(opts.sites.map((s) => s.toLowerCase()));
   const skipped = noSkips();
-  const install: ElectronCookie[] = [];
+  const install: ImportedCookie[] = [];
   const perSite = new Map<string, number>();
 
   for (const row of rows) {
-    const conv = toElectronCookie(row, kind, opts.nowSeconds);
+    // One plan is one jar: a container's cookies never land in another's.
+    if ((row.container ?? "0") !== want) { skipped["other-container"] += 1; continue; }
+    const conv = toElectronCookie(row, kind, opts.nowSeconds, { keepPartitioned: opts.keepPartitioned, keepSession: opts.keepSession });
     if (!conv.ok) { skipped[conv.reason] += 1; continue; }
     const site = siteOf(row.host);
     perSite.set(site, (perSite.get(site) ?? 0) + 1);

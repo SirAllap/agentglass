@@ -107,7 +107,7 @@ describe("a scratch popup on the same server", () => {
 
   step("closing it takes the floating window and leaves the session running", async () => {
     const desk = clients().find((c) => c.session === "desk")!.tty;
-    closePopup(SOCK, desk);
+    await closePopup(SOCK, desk);
     await until(1);
 
     expect(clients()).toHaveLength(1);
@@ -127,11 +127,11 @@ describe("a scratch popup on the same server", () => {
     await until(2);
     expect(clients()).toHaveLength(2);
 
-    closePopup(SOCK, null);
+    await closePopup(SOCK, null);
     await sleep(600);
     expect(clients()).toHaveLength(2);
 
-    closePopup(SOCK, clients().find((c) => c.session === "desk")!.tty);
+    await closePopup(SOCK, clients().find((c) => c.session === "desk")!.tty);
     await until(1);
     expect(clients()).toHaveLength(1);
   }, 25_000);
@@ -155,7 +155,7 @@ describe("opening a tab while the scratch is up", () => {
     const target = { socket: SOCK, id: sessionId } as unknown as TmuxTarget;
     // Exactly what the terminal does when you press `+` or a review opens a
     // tab — including the client it passes, which is the half that was missing.
-    expect(runAction(target, "new", undefined, undefined, undefined, undefined, false, undefined, desk)).toBe(true);
+    expect(await runAction(target, "new", undefined, undefined, undefined, undefined, false, undefined, desk)).toBe(true);
     await until(1);
 
     expect(clients()).toHaveLength(1);
@@ -166,7 +166,7 @@ describe("opening a tab while the scratch is up", () => {
 });
 
 describe("which client the app aims at", () => {
-  step("a nested client is never mistaken for the desk", () => {
+  step("a nested client is never mistaken for the desk", async () => {
     /* The rule the rest of this file already used for sessions: a client
        started inside another tmux reports a tmux TERM. `outerClientTty` returns
        null rather than guessing when every client looks nested — the caller

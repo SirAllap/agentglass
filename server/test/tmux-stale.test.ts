@@ -49,9 +49,10 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
 import { story } from "./story.ts";
+import { agxTestBase } from "./tmuxTmp.ts";
 
 // Short, for the 108-byte unix socket path limit.
-const TMPDIR = `/tmp/agx-tmux-stale-${process.pid}`;
+const TMPDIR = agxTestBase("agx-tmux-stale");
 const SOCK = [...TMUX_ISOLATED, "-L", "agx-stale-test"];
 const REAL_TMPDIR = process.env.TMUX_TMPDIR;
 const has = !!Bun.which("tmux");
@@ -120,10 +121,10 @@ describe.if(has)("a run that was killed does not leave tmux broken", () => {
     expect(before).toContain("command-prompt");
   });
 
-  step("the next run gives it back, without having been told what it took", () => {
+  step("the next run gives it back, without having been told what it took", async () => {
     // No in-memory state is handed over — releaseStale is given only a client,
     // exactly as a fresh process would have it.
-    ctl.releaseStale(client());
+    await ctl.releaseStale(client());
     expect(out(["show-options", "-t", mine, "-v", "status"])).toBe("");
     expect(opt(mine, "@agx-owned")).toBe("");
     const back = keyLine(",");
@@ -133,13 +134,13 @@ describe.if(has)("a run that was killed does not leave tmux broken", () => {
     expect(back).toContain('command-prompt -I "#W"');
   });
 
-  step("it sweeps once per server, so it cannot fight a live panel", () => {
+  step("it sweeps once per server, so it cannot fight a live panel", async () => {
     // Second call on the same socket must be a no-op: by then this process may
     // legitimately own a session, and a sweep that ran again would release a
     // status line out from under a panel that is still using it.
     ctl.setStatusLine(target(), false);
     expect(opt(mine, "@agx-owned")).toBe("1");
-    ctl.releaseStale(client());
+    await ctl.releaseStale(client());
     expect(opt(mine, "@agx-owned")).toBe("1");
     ctl.setStatusLine(target(), true);
   });

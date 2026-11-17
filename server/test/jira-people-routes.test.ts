@@ -67,7 +67,7 @@ afterAll(async () => {
 const headers = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
 let seen = "";
 const call = async (method: string, path: string, body?: unknown, extra: Record<string, string> = {}) => {
-  const r = await fetch(base + path, { method, headers: { ...headers, ...extra }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const r = await fetch(base + path, { method, headers: { ...headers, origin: base, ...extra }, body: body === undefined ? undefined : JSON.stringify(body) });
   const text = await r.text();
   seen += text;
   return { status: r.status, body: JSON.parse(text) as Record<string, any> };
@@ -98,7 +98,7 @@ describe("the people and hand-off routes", () => {
     fake.requests.length = 0;
     const r = await call("GET", "/jira/assignable?key=ORBIT-1042&q=gr&transition=21");
     expect(r.status).toBe(200);
-    expect(r.body).toEqual({ ok: true, people: [{ key: "acc-0002", id: "acc-0002", name: "Grace Sample", avatar: "https://avatar.acme.example/acc-0002/48.png" }] });
+    expect(r.body).toEqual({ ok: true, people: [{ key: "acc-0002", id: "acc-0002", name: "Grace Sample", avatar: "https://avatar.acme.example/acc-0002/48.png", accountType: "atlassian" }] });
     expect(fake.requests[0]!.query).toMatchObject({ issueKey: "ORBIT-1042", query: "gr", actionDescriptorId: "21" });
   });
 
@@ -151,7 +151,7 @@ describe("the people and hand-off routes", () => {
     expect(s.body).toEqual({ ok: true, writes: true, handoff: { ORBIT: rule } });
     expect((await call("POST", "/jira/settings", { project: "ORBIT" })).status).toBe(400);
     const st = await call("GET", "/jira/project-statuses?project=ORBIT");
-    expect(st.body.statuses.map((x: { name: string }) => x.name)).toEqual(["To Do", "In Progress", "In Review", "QA", "Done"]);
+    expect(st.body.statuses.map((x: { name: string }) => x.name)).toEqual(["To Do", "In Progress", "In Review", "QA", "Done", "In staging", "Ready for deployment"]);
   });
 
   step("the hand-off by the setting: moved, nobody on it, and remembered as our move", async () => {

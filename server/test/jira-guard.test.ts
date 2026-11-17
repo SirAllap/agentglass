@@ -248,9 +248,15 @@ describe("the source says the same", () => {
   });
 
   test("no sentence is built from a response", () => {
-    // Bodies are cancelled, never read for text; only a JSON success is parsed, and the
-    // second parse is tenant_info, of which only a UUID-shaped `cloudId` is kept.
-    expect(code.match(/\.text\(\)/g)).toBeNull();
-    expect(code.match(/res\.json\(\)/g)?.length).toBe(2);
+    // The body is read as text in ONE place, only to test for empty and to JSON.parse it.
+    // The sentence builder takes no body, and the text variable never reaches an error or a template.
+    expect(code.match(/\.text\(\)/g)?.length).toBe(1);
+    expect(code).toContain("export function unreadableSentence(method: string, pathname: string, status: number, type: string | null): string");
+    const name = code.match(/(\w+) = await res\.text\(\)/)![1]!;
+    for (const l of code.split("\n").filter((x) => new RegExp(`\\b${name}\\b`).test(x))) {
+      expect(l).not.toMatch(new RegExp(`error:[^;]*\\b${name}\\b|\\$\\{[^}]*\\b${name}\\b`));
+    }
+    // The only other parse is tenant_info, of which only a UUID-shaped `cloudId` is kept.
+    expect(code.match(/res\.json\(\)/g)?.length).toBe(1);
   });
 });

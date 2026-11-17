@@ -1,3 +1,4 @@
+import { spawnSyncAs } from "./loopwatch.ts";
 /*
  * The kernel's parent-death signal, proved before it is used.
  *
@@ -20,7 +21,7 @@ export function deathTie(): string[] {
   const setpriv = Bun.which("setpriv");
   const tie = setpriv ? [setpriv, "--pdeathsig", "TERM", "--"] : [];
   let ok = false;
-  try { ok = !!setpriv && Bun.spawnSync([...tie, "true"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0; } catch { /* not runnable */ }
+  try { ok = !!setpriv && spawnSyncAs("setpriv probe", [...tie, "true"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0; } catch { /* not runnable */ }
   proved = ok ? tie : [];
   return proved;
 }

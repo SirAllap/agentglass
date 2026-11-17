@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { spawnSyncAs } from "../loopwatch.ts";
 import { join } from "node:path";
 import type { LaunchSpec, PaneAgent } from "../paneagent.ts";
 
@@ -52,7 +53,7 @@ export function supportsSessionName(bin: string | null): boolean {
   namesSessions = false;
   if (!bin) return false;
   try {
-    const r = Bun.spawnSync([bin, "--help"], { stdout: "pipe", stderr: "pipe" });
+    const r = spawnSyncAs("probe claude --help", [bin, "--help"], { stdout: "pipe", stderr: "pipe" });
     // `-n, --name <name>` in the options list. Matched on the long form only:
     // `-n` alone is too short to look for in a page of help text.
     namesSessions = /--name\b/.test(r.stdout.toString() + r.stderr.toString());
@@ -108,8 +109,14 @@ export const claudeCode: PaneAgent = {
      *
      * Only for `unattended`, so the chats he is sitting in front of keep the
      * tool — there, a subagent that stalls is a thing he can see and stop.
+     *
+     * A role whose flow entry says `mayStartSubagents` is the exception: the
+     * switch is a person's explicit grant (it has its own approval card), and
+     * without it /simplify and /code-review ran degraded in a builder worker
+     * ("Agent tool is off, so no fan-out"). The tool is `Agent` in current
+     * Claude Code and `Task` in older ones, so both names are denied.
      */
-    if (spec.unattended) argv.push("--disallowed-tools", "Task");
+    if (spec.unattended && !spec.subagents) argv.push("--disallowed-tools", "Agent Task");
     /* One element, and before the mode flag that closes the variadic list: a
        rule list left open would swallow whatever follows it as more tools. */
     if (spec.deny?.length) argv.push("--disallowedTools", spec.deny.join(" "));

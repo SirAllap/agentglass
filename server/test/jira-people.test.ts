@@ -135,6 +135,30 @@ function suite(flavor: FakeFlavor) {
       });
     });
 
+    describe("the project's own roster", () => {
+      test("the project, not a card, is what is asked; a repeat costs nothing", async () => {
+        const r = await J.projectMembersStored("ORBIT");
+        expect(r.ok).toBe(true);
+        expect(wire()).toEqual(["GET /user/assignable/search"]);
+        expect(fake.requests[0]!.query.project).toBe("ORBIT");
+        expect(fake.requests[0]!.query.issueKey).toBeUndefined();
+        expect(r.data!.length).toBeGreaterThan(0);
+        await J.projectMembersStored("ORBIT");
+        expect(fake.requests.length).toBe(1);
+      });
+
+      test("not a project key sends nothing", async () => {
+        expect((await J.projectMembersStored("not a key")).ok).toBe(false);
+        expect(fake.requests.length).toBe(0);
+      });
+
+      test("a failure is a sentence, never silence", async () => {
+        fake.fail({ path: "/user/assignable/search", status: 500 });
+        const r = await J.projectMembersStored("ORBIT");
+        expect(r).toMatchObject({ ok: false, error: "Could not reach Jira" });
+      });
+    });
+
     describe("setting the assignee", () => {
       test("a card whose updated cannot be read is refused and nothing is written", async () => {
         const at = upd("ORBIT-1042");
@@ -349,10 +373,18 @@ function suite(flavor: FakeFlavor) {
         const r = await J.projectStatusesStored("ORBIT");
         expect(r.data!.map((s) => [s.id, s.name, s.kind])).toEqual([
           ["1", "To Do", "open"], ["2", "In Progress", "open"], ["3", "In Review", "open"], ["4", "QA", "open"], ["5", "Done", "done"],
+          ["6", "In staging", "done"], ["7", "Ready for deployment", "done"],
         ]);
         await J.projectStatusesStored("ORBIT");
-        expect(wire()).toEqual(["GET /project/ORBIT/statuses"]);
+        // One more cold read: the site's issue types list (hierarchy level per type, so no epic-only status becomes a column); remembered, so the second call costs none.
+        expect(wire()).toEqual(["GET /project/ORBIT/statuses", "GET /issuetype"]);
         expect((await J.projectStatusesStored("not a key")).ok).toBe(false);
+      });
+
+      test("a project that refuses the read keeps its error for the settings row", async () => {
+        const r = await J.projectStatusesStored("NOPE");
+        expect(r.ok).toBe(false);
+        expect(r.error).toBeTruthy();
       });
 
       test("a rule is kept beside the write switch, and flipping the switch keeps the rule", () => {
@@ -379,6 +411,54 @@ function suite(flavor: FakeFlavor) {
 
 suite("cloud");
 suite("datacenter");
+
+/*
+ * An automation account is assignable in Jira and is not a person to put a card on.
+ * Cloud names the kind of account; Data Center names none, so there is nothing to
+ * tell one apart and every account it offers is kept.
+ */
+describe("the accounts a card can be given to", () => {
+  let fake: FakeJira;
+  beforeAll(() => { fake = startFakeJira({ flavor: "cloud", assignableScanCap: 6 }); });
+  afterAll(async () => { await fake.stop(); });
+  beforeEach(async () => {
+    fake.reset();
+    C.__setCredentialsPath(credFile);
+    C.__clearAll();
+    J.__setJiraBase(fake.base);
+    J.__setJiraGuard(null);
+    expect((await J.connectJira({ email: FAKE_EMAIL, site: "acme.atlassian.net", token: FAKE_TOKEN })).ok).toBe(true);
+    fake.requests.length = 0;
+  });
+  afterEach(() => {
+    J.__setJiraBase(null);
+    C.__clearAll();
+  });
+
+  test("an automation account is left out, and the connected account is marked", async () => {
+    const r = await J.assignableStored("ORBIT-1042", "");
+    expect(r.ok).toBe(true);
+    expect(r.data!.map((p) => p.name)).toEqual(["Ada Example", "Grace Sample", "Lin Tester", "Margaret Hidden"]);
+    expect(r.data!.find((p) => p.id === "acc-0001")).toMatchObject({ accountType: "atlassian", me: true });
+    expect(r.data!.find((p) => p.id === "acc-0002")!.me).toBeUndefined();
+  });
+
+  test("Data Center names no account type, so nothing there is hidden", async () => {
+    const dc = startFakeJira({ flavor: "datacenter", assignableScanCap: 6 });
+    try {
+      J.__setJiraBase(dc.base);
+      C.__clearAll();
+      expect((await J.connectJira({ site: "jira.acme.example", token: FAKE_PAT })).ok).toBe(true);
+      const r = await J.assignableStored("ORBIT-1042", "");
+      expect(r.ok).toBe(true);
+      expect(r.data!.every((p) => p.accountType === undefined)).toBe(true);
+      expect(r.data!.some((p) => p.name === "Orbit Automation")).toBe(true);
+    } finally {
+      await dc.stop();
+      J.__setJiraBase(null);
+    }
+  });
+});
 
 test("not connected: every call is the sentence, and nothing is asked", async () => {
   C.__setCredentialsPath(credFile);

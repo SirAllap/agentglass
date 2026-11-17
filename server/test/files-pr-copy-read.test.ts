@@ -10,21 +10,21 @@ import { makeViewTempDir } from "../src/viewtemp.ts";
 import { fileText } from "../src/files.ts";
 
 describe("fileText on a pull request's temp copy", () => {
-  it("reads it whatever the root is", () => {
+  it("reads it whatever the root is", async () => {
     const file = join(makeViewTempDir("pr"), "abc1234-notes.md");
     writeFileSync(file, "# orbit\n");
     for (const root of ["gh:acme/orbit", "", "/no/such/dir"]) {
-      const r = fileText(root, file);
+      const r = await fileText(root, file);
       expect(r.ok, root).toBe(true);
       expect(r.text).toBe("# orbit\n");
     }
   });
-  it("does not admit other temp files, or a link out of the copy's directory", () => {
+  it("does not admit other temp files, or a link out of the copy's directory", async () => {
     const plain = join(mkdtempSync(join(tmpdir(), "orbit-plain-")), "x.md");
     writeFileSync(plain, "x");
-    expect(fileText("gh:acme/orbit", plain).ok).toBe(false);
+    expect((await fileText("gh:acme/orbit", plain)).ok).toBe(false);
     const link = join(makeViewTempDir("pr"), "out.md");
     symlinkSync(plain, link);
-    expect(fileText("gh:acme/orbit", link).ok).toBe(false);
+    expect((await fileText("gh:acme/orbit", link)).ok).toBe(false);
   });
 });

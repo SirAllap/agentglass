@@ -24,13 +24,18 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, normalize } from "node:path";
 import type { TmuxWindow, TmuxPane, AgentPane } from "../../shared/types.ts";
 import { parsePanes, PANE_FORMAT } from "./paneloc.ts";
-import { validSessionName, isPanelViewSession } from "./tmuxpane.ts";
+import { validSessionName, isPanelViewSession, GIVEN_OPTION, CARD_OPTION } from "./tmuxpane.ts";
 import { PLACE_FORMAT, parsePlaceWindows, placeArgs } from "./tmuxplace.ts";
 import { isLocked } from "./tmuxlock.ts";
 import { findTmuxBelow } from "./procchildren.ts";
+import { startTicksOf } from "./machine.ts";
 import { recall } from "./tmuxmemory.ts";
 import { engineSocketArgs } from "./tmuxbin.ts";
 import { mirrorLeases, recordMirrorLease, forgetMirrorLease, type MirrorLease } from "./mirrorlease.ts";
+import { agentShellEnv, agentWindowDrops, BROWSER_CREDENTIAL_VARS, BROWSER_OFF_VAR, personPaneEnv, withoutBrowserWindowVars } from "./browseraccess.ts";
+import { envLimit } from "./config.ts";
+import { setIntervalAs, spawnSyncAs, waitedFor } from "./loopwatch.ts";
+import { runChild } from "./broker/brokerRun.ts";
 
 /** How long a tmux call may take before we give up on it. Generous for a local
  *  socket, and short enough that a wedged tmux server cannot stall the poll. */
@@ -180,7 +185,7 @@ function observeOnly(): boolean {
    * `.trim()` for a stray space out of a `.env` or a systemd `Environment=`
    * line, which is the mistake this actually meets in the wild.
    */
-  const raw = (process.env[OBSERVE_ONLY_ENV] ?? "").trim().toLowerCase();
+  const raw = (envLimit(OBSERVE_ONLY_ENV) ?? "").trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 
@@ -373,10 +378,225 @@ function tmuxRefused(socket: string[], args: string[]): boolean {
 
 /** The locale floor described on `tmux` below: an existing setting is kept. */
 export function tmuxEnv(): Record<string, string | undefined> {
-  return process.env.LC_ALL || process.env.LANG || process.env.LC_CTYPE
+  const env = process.env.LC_ALL || process.env.LANG || process.env.LC_CTYPE
     ? process.env
     : { ...process.env, LC_ALL: "C.UTF-8" };
+  return withoutBrowserWindowVars(env);
 }
+
+/** The credential variables, taken out of the GLOBAL environment of a server
+ *  this app did not start — one a person was already running, or one born
+ *  before this rule existed — because a pane can ask it for any variable by
+ *  name. Remembered per SERVER, not per process: a server that died and came
+ *  back is a new process whose global environment a client we did not spawn may
+ *  have seeded, so the sweep has to happen again. */
+const sweptServers = new Map<string, { pid: number; ticks: number }>();
+
+/* `ticks`, not just a live pid: `process.kill(pid, 0)` cannot tell this
+ * server from a different process that reused its pid after it died, so a
+ * reborn server seeded by a non-app client would be read as already swept.
+ * `captureLayoutSync` (tmuxrestore.ts) already compares the same field. */
+function serverAlive(pid: number, ticks: number): boolean {
+  const now = startTicksOf(pid);
+  return now !== null && now === ticks;
+}
+
+/** One call's answer on a socket, or null when there is no server to answer. */
+function tmuxAnswered(socket: string[], args: string[], bin = "tmux"): string | null {
+  try {
+    const r = waitedFor(`tmux ${args[0] ?? ""}`, () => Bun.spawnSync([bin, ...socket, ...args],
+      { stdout: "pipe", stderr: "ignore", env: tmuxEnv(), timeout: TMUX_TIMEOUT_MS }));
+    if (r.exitedDueToTimeout) slowUntil.set(socket.join(" "), Date.now() + SLOW_COOLDOWN_MS);
+    return r.exitCode === 0 ? r.stdout.toString() : null;
+  } catch { return null; }
+}
+
+/** Verbs that cannot start a process: they only read or set state, so they
+ *  never wait for the strip. EVERY other verb strips first. This is an
+ *  allowlist on purpose: tmux takes any unique prefix (`new-s`, `split`) and
+ *  runs a shell from more verbs than `new-window` (`pipe-pane`, `display-popup`,
+ *  `source-file`, `command-prompt`, `confirm-before`), so a denylist leaks. An
+ *  unknown verb is treated as one that spawns. */
+const NO_PROCESS_VERBS = new Set(["display-message", "display", "set-option", "set", "set-window-option", "setw", "capture-pane", "capturep", "send-keys", "send", "move-window", "movew", "has-session", "has", "refresh-client", "refresh", "clear-history", "clearhist", "copy-mode"]);
+const NO_PROCESS_PREFIX = /^(show|list|select|resize|kill|rename)-/;
+export const spawnsPane = (args: string[]): boolean => {
+  const v = args[0] ?? "";
+  /* A format string can run a shell (`#(cmd)`) from any verb, even a read one. */
+  if (args.some((a) => a.includes("#("))) return true;
+  return !(NO_PROCESS_VERBS.has(v) || NO_PROCESS_PREFIX.test(v));
+};
+
+/** Only these tmux messages mean "there is no server to leak from". */
+const NO_SERVER_RE = /no server running|error connecting/i;
+
+/** The server pid, or why there is none: `noServer` is true only when tmux
+ *  said so. Any other failure (timeout, EAGAIN, a server starting) is not clean. */
+function parsePid(out: string, err: string, timedOut: boolean): { pid: number; noServer: boolean } {
+  const pid = Number(out.trim());
+  /* A probe that exits non-zero and says nothing did not answer, so there is no
+     server holding a credential to leak: a tmux that cannot connect always
+     words it, and a stand-in that fails silently is the same case. */
+  return { pid, noServer: !timedOut && !(Number.isInteger(pid) && pid > 1) && (NO_SERVER_RE.test(err) || err.trim() === "") };
+}
+function pidProbe(socket: string[], bin = "tmux"): { pid: number; noServer: boolean } {
+  try {
+    const r = spawnSyncAs("tmux display-message pid", [bin, ...socket, "display-message", "-p", "#{pid}"],
+      { stdout: "pipe", stderr: "pipe", env: tmuxEnv(), timeout: TMUX_TIMEOUT_MS });
+    if (r.exitedDueToTimeout) slowUntil.set(socket.join(" "), Date.now() + SLOW_COOLDOWN_MS);
+    return parsePid(r.exitCode === 0 ? r.stdout.toString() : "", r.stderr.toString(), !!r.exitedDueToTimeout);
+  } catch { return { pid: NaN, noServer: false }; }
+}
+async function pidProbeAsync(socket: string[], bin = "tmux"): Promise<{ pid: number; noServer: boolean }> {
+  try {
+    // Started by the spawn broker (broker/brokerRun.ts), not a fork of this server.
+    const p = await runChild([bin, ...socket, "display-message", "-p", "#{pid}"], { env: tmuxEnv(), timeoutMs: TMUX_TIMEOUT_MS, read: true });
+    if (p.signal) slowUntil.set(socket.join(" "), Date.now() + SLOW_COOLDOWN_MS);
+    // A spawn that failed, a timeout or a lost broker never asked tmux: not "no server".
+    if (p.error || p.timedOut || p.code === null) return { pid: NaN, noServer: false };
+    return parsePid(p.code === 0 ? p.stdout : "", p.stderr, !!p.signal);
+  } catch { return { pid: NaN, noServer: false }; }
+}
+
+/** The `tmuxAnswered` of the async strip: same call, no blocked loop. */
+async function tmuxAnsweredAsync(socket: string[], args: string[], bin = "tmux"): Promise<string | null> {
+  try {
+    // Started by the spawn broker (broker/brokerRun.ts), not a fork of this server.
+    const p = await runChild([bin, ...socket, ...args], { env: tmuxEnv(), timeoutMs: TMUX_TIMEOUT_MS });
+    if (p.signal) slowUntil.set(socket.join(" "), Date.now() + SLOW_COOLDOWN_MS);
+    return p.code === 0 ? p.stdout : null;
+  } catch { return null; }
+}
+
+/** Already swept and the same server still there? */
+function sweptAlready(key: string): boolean {
+  const known = sweptServers.get(key);
+  if (known !== undefined && serverAlive(known.pid, known.ticks)) return true;
+  // A server that died (restart) or never was: the socket's one sync turn is new again.
+  sweptServers.delete(key);
+  syncStripTaken.delete(key);
+  return false;
+}
+
+/** `ticks` is read by the caller right after the pid, before the strip's
+ *  awaits: reading it later could pin a process that reused a dead pid. */
+function recordSwept(key: string, pid: number, ticks: number | null): void {
+  if (ticks !== null) sweptServers.set(key, { pid, ticks });
+}
+
+/** True when the socket is clean or has no server to leak from; false when the
+ *  strip did not land and a pane must not start. */
+function stripGlobalBrowserCredentials(socket: string[], ignoreSlow = false, bin = "tmux"): boolean {
+  const key = socket.join(" ");
+  if (sweptAlready(key)) return true;
+  /* A server that just timed out is not asked the five-call sweep on top: that
+     was up to 6 x 2 s before the call the caller actually wanted. A pane verb
+     retries with `ignoreSlow`. */
+  if (!ignoreSlow && Date.now() < (slowUntil.get(key) ?? 0)) return false;
+  /* `display-message` starts nothing, so a socket with no server yet is left to
+     the call that starts it — that one must ask again. */
+  const { pid, noServer } = pidProbe(socket, bin);
+  const ticks = Number.isInteger(pid) && pid > 1 ? startTicksOf(pid) : null;
+  if (!Number.isInteger(pid) || pid <= 1) return noServer;
+  for (const v of BROWSER_CREDENTIAL_VARS) {
+    tmuxAnswered(socket, ["set-environment", "-g", "-u", v], bin);
+    if (!ignoreSlow && Date.now() < (slowUntil.get(key) ?? 0)) return false;
+  }
+  /* The names it holds NOW, rather than four exit codes: a server that still
+     carries one is not one to stop asking about. */
+  const left = tmuxAnswered(socket, ["show-environment", "-g"], bin);
+  const names = new Set((left ?? "").split("\n").map((l) => l.split("=")[0] ?? ""));
+  // An empty answer is a server with an empty global env: nothing to strip.
+  if (left === null || BROWSER_CREDENTIAL_VARS.some((v) => names.has(v))) return false;
+  recordSwept(key, pid, ticks);
+  return true; // clean; with no ticks it is not memoized, so the next spawn verb strips fresh
+}
+
+/** Sockets whose one sync strip has been taken. The loop blocks at most once per
+ *  tmux socket; every later strip on it is the async one. */
+const syncStripTaken = new Set<string>();
+export function takeSyncStripTurn(key: string, taken: Set<string> = syncStripTaken): boolean {
+  if (taken.has(key)) return false;
+  taken.add(key);
+  return true;
+}
+
+/** Known clean: answer at once. First time on a socket: strip synchronously ONCE
+ *  (never refuses just for being first). Later: the async strip is kicked and the
+ *  sync answer is whatever it has landed so far. */
+function syncStripOrKick(socket: string[], bin = "tmux"): boolean {
+  const key = socket.join(" ");
+  if (sweptAlready(key)) return true;
+  if (!syncStripTaken.has(key)) {
+    const ok = stripGlobalBrowserCredentials(socket, false, bin);
+    /* True with no swept server recorded means no server existed yet: the turn is
+       not spent, so the next new-window on the live server still gets its sync strip. */
+    if (ok && !sweptServers.has(key)) return true;
+    takeSyncStripTurn(key);
+    if (ok) return true;
+  }
+  void stripGlobalBrowserCredentialsAsync(socket, true, bin);
+  return false;
+}
+
+/** For a caller outside this file that spawns through tmux itself
+ *  (`source-file` runs a shell): true when the socket is clean. */
+export async function credentialsStripped(socket: string[], bin = "tmux"): Promise<boolean> {
+  return (await stripGlobalBrowserCredentialsAsync(socket, false, bin)) || stripGlobalBrowserCredentialsAsync(socket, true, bin);
+}
+export function credentialsStrippedSync(socket: string[], bin = "tmux"): boolean {
+  return syncStripOrKick(socket, bin);
+}
+/** Starts the async strip without waiting: for a verb that cannot start a pane. */
+export function kickCredentialStrip(socket: string[], bin = "tmux"): void {
+  void stripGlobalBrowserCredentialsAsync(socket, false, bin);
+}
+
+/** One strip in flight per socket: every caller shares the promise, so the
+ *  up-to-7 spawns run once, off the loop. It uses `tmuxAnsweredAsync`, never
+ *  `tmuxAsync`, so it cannot start itself. */
+const stripInFlight = new Map<string, Promise<boolean>>();
+
+function stripGlobalBrowserCredentialsAsync(socket: string[], ignoreSlow = false, bin = "tmux"): Promise<boolean> {
+  const key = socket.join(" ");
+  if (sweptAlready(key)) return Promise.resolve(true);
+  const running = stripInFlight.get(key);
+  if (running) return running;
+  const p = (async (): Promise<boolean> => {
+    if (!ignoreSlow && Date.now() < (slowUntil.get(key) ?? 0)) return false;
+    const { pid, noServer } = await pidProbeAsync(socket, bin);
+    const ticks = Number.isInteger(pid) && pid > 1 ? startTicksOf(pid) : null;
+    if (!Number.isInteger(pid) || pid <= 1) return noServer;
+    for (const v of BROWSER_CREDENTIAL_VARS) {
+      await tmuxAnsweredAsync(socket, ["set-environment", "-g", "-u", v], bin);
+      if (!ignoreSlow && Date.now() < (slowUntil.get(key) ?? 0)) return false;
+    }
+    const left = await tmuxAnsweredAsync(socket, ["show-environment", "-g"], bin);
+    const names = new Set((left ?? "").split("\n").map((l) => l.split("=")[0] ?? ""));
+    // An empty answer is a server with an empty global env: nothing to strip.
+    if (left === null || BROWSER_CREDENTIAL_VARS.some((v) => names.has(v))) return false;
+    recordSwept(key, pid, ticks);
+    return true;
+  })().catch(() => false).finally(() => { stripInFlight.delete(key); });
+  stripInFlight.set(key, p);
+  return p;
+}
+
+/*
+ * A tmux server that timed out is not asked again, blocking, for a moment.
+ *
+ * Measured on the installed app: server-stall.log held stalls of 11.6 s, 11.8 s
+ * and 6.3 s labelled `tmux show-options`, and typing in a terminal tab froze
+ * for 5-7 s. Those callers read in a loop (a prefix, a key, a window), each
+ * `Bun.spawnSync` waits up to TMUX_TIMEOUT_MS on a slow server, and the loop
+ * paid it N times over. After one timeout the READ verbs below answer null at
+ * once for SLOW_COOLDOWN_MS, which is the same answer a timeout gives, minus
+ * the wait. Writes are never skipped: dropping a set-option would lose state.
+ */
+const SLOW_COOLDOWN_MS = 3000;
+const SLOW_SKIPS = new Set(["show-options", "show-window-options", "show-environment", "list-sessions", "list-windows", "list-panes", "list-clients", "list-keys", "display-message"]);
+const slowUntil = new Map<string, number>();
+/** Test seam: the cooldown is per socket and per process. */
+export function __resetSlowTmux(): void { slowUntil.clear(); }
 
 /** What a finished tmux command answers, shared by `tmux` and `tmuxAsync`. */
 function tmuxResult(socket: string[], exitCode: number | null, out: string, err: string, keepPartial: boolean): string | null {
@@ -418,10 +638,22 @@ function tmuxResult(socket: string[], exitCode: number | null, out: string, err:
  */
 function tmux(socket: string[], args: string[], keepPartial = false): string | null {
   if (tmuxRefused(socket, args)) return null;
+  const slowKey = socket.join(" ");
+  if (SLOW_SKIPS.has(args[0] ?? "") && Date.now() < (slowUntil.get(slowKey) ?? 0)) return null;
+  /* Only a verb that starts a pane waits for the strip, synchronously: it must
+     land first. Any other verb starts the async strip and goes on. */
+  if (spawnsPane(args)) {
+    if (!syncStripOrKick(socket)) {
+      console.error(`tmux ${args[0] ?? ""} refused: the credential strip did not land on ${slowKey}`);
+      return null;
+    }
+  } else void stripGlobalBrowserCredentialsAsync(socket);
+  if (SLOW_SKIPS.has(args[0] ?? "") && Date.now() < (slowUntil.get(slowKey) ?? 0)) return null;
   try {
-    const r = Bun.spawnSync(["tmux", ...socket, ...args], {
+    const r = waitedFor(`tmux ${args[0] ?? ""}`, () => Bun.spawnSync(["tmux", ...socket, ...args], {
       stdout: "pipe", stderr: "pipe", timeout: TMUX_TIMEOUT_MS, env: tmuxEnv(),
-    });
+    }));
+    if (r.exitedDueToTimeout) slowUntil.set(slowKey, Date.now() + SLOW_COOLDOWN_MS);
     return tmuxResult(socket, r.exitCode, r.stdout.toString(), r.stderr.toString(), keepPartial);
   } catch { return null; }
 }
@@ -433,14 +665,23 @@ function tmux(socket: string[], args: string[], keepPartial = false): string | n
  */
 async function tmuxAsync(socket: string[], args: string[], keepPartial = false): Promise<string | null> {
   if (tmuxRefused(socket, args)) return null;
+  const slowKey = socket.join(" ");
+  const skip = () => SLOW_SKIPS.has(args[0] ?? "") && Date.now() < (slowUntil.get(slowKey) ?? 0);
+  if (skip()) return null;
+  /* The one-shot async strip: awaited only before a verb that starts a pane. */
+  const stripping = stripGlobalBrowserCredentialsAsync(socket);
+  if (spawnsPane(args) && !(await stripping) && !(await stripGlobalBrowserCredentialsAsync(socket, true))) {
+    console.error(`tmux ${args[0] ?? ""} refused: the credential strip did not land on ${slowKey}`);
+    return null;
+  }
+  if (skip()) return null;
   try {
-    const p = Bun.spawn(["tmux", ...socket, ...args], {
-      stdout: "pipe", stderr: "pipe", timeout: TMUX_TIMEOUT_MS, env: tmuxEnv(),
-    });
-    const [out, err, code] = await Promise.all([
-      new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited,
-    ]);
-    return tmuxResult(socket, code, out, err, keepPartial);
+    /* `timeout` kills the child, so a hung tmux settles every await below with
+       a signal instead of holding the caller for ever. */
+    // Started by the spawn broker (broker/brokerRun.ts), not a fork of this server.
+    const p = await runChild(["tmux", ...socket, ...args], { timeoutMs: TMUX_TIMEOUT_MS, env: tmuxEnv() });
+    if (p.signal) slowUntil.set(slowKey, Date.now() + SLOW_COOLDOWN_MS);
+    return tmuxResult(socket, p.code, p.stdout, p.stderr, keepPartial);
   } catch { return null; }
 }
 
@@ -478,7 +719,7 @@ export function parseWindows(out: string): TmuxWindow[] {
     if (!line.trim()) continue;
     // Tab-separated, because window names routinely contain spaces and a
     // space-separated format would split "npm run dev" into three windows.
-    const [id, index, name, active, flags, ask, width, height, , group, pin, cwd, dead, deadStatus, deadTime] = line.split("\t");
+    const [id, index, name, active, flags, ask, width, height, , group, pin, cwd, dead, deadStatus, deadTime, , given, card, deadSignal] = line.split("\t");
     const i = Number(index);
     if (!WINDOW_ID.test(id ?? "") || !Number.isInteger(i)) continue;
     const asked = (ask ?? "").trim();
@@ -498,12 +739,17 @@ export function parseWindows(out: string): TmuxWindow[] {
       ...(sanitizeGroupName(group) ? { group: sanitizeGroupName(group)! } : {}),
       ...((pin ?? "").trim() === "1" ? { pinned: true } : {}),
       ...((cwd ?? "").trim() ? { cwd: cwd!.trim() } : {}),
+      ...((given ?? "").trim() ? { given: given!.trim() } : {}),
+      ...((card ?? "").trim() ? { card: card!.trim() } : {}),
       // The active pane's corpse, when tmux kept one (`remain-on-exit failed`).
       // Appended after `cwd` like the rest; absent for a live pane.
       ...((dead ?? "").trim() === "1" ? {
         dead: true,
         exit: Number(deadStatus) || 0,
         ...(Number(deadTime) > 0 ? { diedAt: Number(deadTime) * 1000 } : {}),
+        // A pane killed by a signal has status 0, so the status alone read "exited with status 0" over a pane
+        // the out-of-memory guard had killed with SIGKILL.
+        ...(Number(deadSignal) > 0 ? { signal: Number(deadSignal) } : {}),
       } : {}),
     });
   }
@@ -616,14 +862,18 @@ function frameFromRaw(out: string, c: TmuxClient): TmuxFrame | null {
   return f ? { target: { pid: c.pid, socket: c.socket, session: f.session, id: f.id }, windows: f.windows, sessions: f.sessions, panes: f.panes, client: f.client, status: f.status, owned: f.owned, windowOfPane: f.windowOfPane, prefix: parsePrefix(out), attached: f.attached, popup: f.popup } : null;
 }
 
-const frameRawCache = new Map<string, { at: number; out: string | null }>();
+/** One raw read of a socket. `phones` is set only by the async refresh the sweep
+ *  uses (see `readFrameSwept`); the sync read leaves it unset. */
+interface RawRead { at: number; out: string | null; phones?: Map<string, number> }
+
+const frameRawCache = new Map<string, RawRead>();
 
 interface CachedParsedFrame {
   /** The raw read it was parsed from, by identity. A parse is only ever reused
    *  against that same read: keyed on its own clock, a fresh read that
    *  `notBefore` forced would be handed the parse of the stale one it
    *  replaced, which is the stale answer again. */
-  src: { at: number; out: string | null };
+  src: RawRead;
   /** Only what is the session's: `client` and `popup` are per client and are
    *  taken from each call's own parse, never from here. */
   parsed: { session: string; id: string; status: string; owned: boolean; windows: TmuxWindow[]; panes: TmuxPane[]; windowOfPane: Map<string, string>; attached: Set<string>; sessions: { id: string; name: string; windows: number; created?: number }[] };
@@ -631,6 +881,33 @@ interface CachedParsedFrame {
 }
 
 const frameParsedCache = new Map<string, CachedParsedFrame>();
+
+/**
+ * Why this cache has a ceiling (rssprobe, 2026-11-14).
+ *
+ * Keyed by (socket, session id), and an id is never reused: every tmux session
+ * a desk ever attached to adds a key, and nothing removed one. Each entry holds
+ * the parse of that session's frame AND `src`, the whole raw `list-windows -a`
+ * / `list-panes -a` answer it was parsed from, so a retired session pinned a
+ * stale copy of the socket's full listing for the life of the process.
+ * `frameRawCache` itself keeps one read per socket; this map was the only
+ * holder in the tmux path that grew with uptime. Measured in an isolated server
+ * (200k events, 50MB of transcripts, every GET route 5x, 6 stream clients): RSS
+ * settled at ~250MB and no JS cache grew, so the 1.2GB seen live is not the
+ * routes. Evicting the oldest costs a re-parse, never a wrong answer (a hit is
+ * checked against `src` by identity). 128 is far above the ~30 sessions a desk
+ * keeps live.
+ */
+const FRAME_PARSED_MAX = 128;
+export function rememberParsedFrame(key: string, e: CachedParsedFrame): void {
+  frameParsedCache.delete(key);
+  frameParsedCache.set(key, e);
+  for (const k of frameParsedCache.keys()) {
+    if (frameParsedCache.size <= FRAME_PARSED_MAX) break;
+    frameParsedCache.delete(k);
+  }
+}
+export function __frameParsedSize(): number { return frameParsedCache.size; }
 
 /**
  * `readFrame`, but the raw answer is shared for `ttlMs` across every client
@@ -669,14 +946,47 @@ const frameParsedCache = new Map<string, CachedParsedFrame>();
  */
 export function readFrameCached(c: TmuxClient, ttlMs: number, notBefore = 0): TmuxFrame | null {
   const socketKey = c.socket.join(" ");
-  const now = Date.now();
+  const cur = frameRawCache.get(socketKey);
+  /* A stale read is served at once and refreshed off the loop (one refresh in
+     flight per socket, shared with the sweep's). It used to spawn tmux right
+     here, on the server's main loop, whenever the read was older than `ttlMs`:
+     the picker commands (`session`, `locksession`) ran it on a person's click.
+     Null only when there never was a read, or when the one held is older than
+     `notBefore`: that is the caller saying "not this one", and serving it would
+     be the stale answer `notBefore` exists to refuse. The next call finds the
+     refresh landed. */
+  if (!cur || Date.now() - cur.at >= ttlMs || cur.at < notBefore) refreshFrame(c, socketKey, notBefore, false, () => {});
+  if (!cur || cur.at < notBefore) return null;
+  return frameFromRead(cur, c, socketKey);
+}
 
-  // Get or fetch raw output (shared per socket)
-  let cachedRaw = frameRawCache.get(socketKey);
-  if (!cachedRaw || now - cachedRaw.at >= ttlMs || cachedRaw.at < notBefore) {
-    cachedRaw = { at: now, out: tmux(c.socket, FRAME_ARGV, true) };
-    frameRawCache.set(socketKey, cachedRaw);
+/** `readFrameCached` for a click: with no read yet it waits for the first one to
+ *  land instead of answering null, so the first press is not lost. */
+export async function readFrameCachedWaiting(c: TmuxClient, ttlMs: number): Promise<TmuxFrame | null> {
+  const first = readFrameCached(c, ttlMs);
+  if (first) return first;
+  await new Promise<void>((done) => refreshFrame(c, c.socket.join(" "), 0, true, () => done()));
+  return readFrameCached(c, ttlMs);
+}
+
+/** `readFrameCached`'s old behaviour, for the one caller that must not act on a
+ *  frame older than `ttlMs`: `endsession` reads `frame.target.session` as the
+ *  session the client is ON, to refuse ending it, and a client that switched
+ *  inside the TTL would be read as being where it no longer is. A click, not a
+ *  poll, so the one sync spawn it costs is the person's own. */
+export function readFrameFresh(c: TmuxClient, ttlMs: number): TmuxFrame | null {
+  const socketKey = c.socket.join(" ");
+  let cur = frameRawCache.get(socketKey);
+  if (!cur || Date.now() - cur.at >= ttlMs) {
+    cur = { at: Date.now(), out: tmux(c.socket, FRAME_ARGV, true), phones: cur?.phones };
+    frameRawCache.set(socketKey, cur);
   }
+  return frameFromRead(cur, c, socketKey);
+}
+
+/** The parse half of `readFrameCached`: one raw read in, this client's frame out,
+ *  with the parse shared per (socket, session) as described there. */
+function frameFromRead(cachedRaw: RawRead, c: TmuxClient, socketKey: string): TmuxFrame | null {
   const out = cachedRaw.out;
 
   if (!out) return null;
@@ -717,7 +1027,7 @@ export function readFrameCached(c: TmuxClient, ttlMs: number, notBefore = 0): Tm
 
   // Not cached, parse and cache it
   const prefix = parsePrefix(out);
-  frameParsedCache.set(cacheKey, {
+  rememberParsedFrame(cacheKey, {
     src: cachedRaw,
     parsed: {
       session: parsed.session,
@@ -746,6 +1056,87 @@ export function readFrameCached(c: TmuxClient, ttlMs: number, notBefore = 0): Tm
     attached: parsed.attached,
     popup: parsed.popup,
   };
+}
+
+const frameRefreshing = new Map<string, Promise<void>>();
+/** A sweep waiting on the refresh in flight. One per client (its tty), so a
+ *  refresh that takes seconds holds one closure per session, not one per tick.
+ *  `pending` is a sweep that had nothing to serve and must run when the read
+ *  lands; the rest were served an older read and run only if the new one differs. */
+interface FrameWaiter { fn: (notBefore: number) => void; notBefore: number; pending: boolean }
+const frameWaiters = new Map<string, Map<string, FrameWaiter>>();
+
+/**
+ * Read the socket's frame (and the phones on it) without holding the event
+ * loop, single-flight per socket. A refresh already running is joined, never
+ * doubled: the caller's waiter rides on it and fires when it lands.
+ *
+ * The phones are resolved here, once per refresh, from the sessions the frame
+ * itself lists as attached — each phone's `display-message` async and in
+ * parallel. Resolved per desk per tick they were phones x desks sync spawns
+ * (measured: 30 phone mirrors took 90% of the loop and stalled it 5-8 s).
+ */
+function refreshFrame(c: TmuxClient, socketKey: string, notBefore: number, pending: boolean, onFresh: (notBefore: number) => void): void {
+  let waiters = frameWaiters.get(socketKey);
+  if (!waiters) frameWaiters.set(socketKey, (waiters = new Map()));
+  // The strictest `notBefore` of a client's waiting calls wins, and a call that
+  // had nothing to serve stays pending whatever a later one was served.
+  const was = waiters.get(c.tty);
+  waiters.set(c.tty, { fn: onFresh, notBefore: Math.max(was?.notBefore ?? 0, notBefore), pending: pending || !!was?.pending });
+  if (frameRefreshing.has(socketKey)) return;
+  const task = (async () => {
+    const at = Date.now();
+    const out = await tmuxAsync(c.socket, FRAME_ARGV, true);
+    const phones = new Map<string, number>();
+    const attached = out ? parseFrame(out, c.tty)?.attached : undefined;
+    if (attached) {
+      const names = [...attached].filter((name) => PHONE_SESSION.test(name));
+      const ids = await Promise.all(names.map((name) => tmuxAsync(c.socket, ["display-message", "-p", "-t", name, "#{window_id}"])));
+      for (const raw of ids) {
+        const window = raw?.trim();
+        if (window && WINDOW_ID.test(window)) phones.set(window, (phones.get(window) ?? 0) + 1);
+      }
+    }
+    const prev = frameRawCache.get(socketKey);
+    frameRawCache.set(socketKey, { at, out, phones });
+    const same = !!prev && prev.out === out && [...phones].join() === [...(prev.phones ?? [])].join();
+    const landed = frameWaiters.get(socketKey);
+    frameWaiters.delete(socketKey);
+    frameRefreshing.delete(socketKey); // a waiter below may start the next one
+    for (const w of landed?.values() ?? []) {
+      if (!w.pending && same) continue;
+      try { w.fn(w.notBefore); } catch { /* a closed session */ }
+    }
+  })();
+  // `tmuxAsync` never rejects, so nothing is caught here; the bookkeeping is
+  // released on the way out if parsing ever throws.
+  const tracked: Promise<void> = task.finally(() => { if (frameRefreshing.get(socketKey) === tracked) frameRefreshing.delete(socketKey); });
+  frameRefreshing.set(socketKey, tracked);
+}
+
+/**
+ * `readFrameCached` for the periodic sweep, with no spawn on the caller's
+ * path: it answers from the latest read, and when that read is older than
+ * `ttlMs` (or has no phones yet) it starts an async refresh. A caller that had
+ * nothing to serve is swept again when the read lands; one that was served an
+ * older read is swept again only if the new one differs from it.
+ *
+ * `notBefore` keeps its meaning: a read taken before it is never returned. The
+ * answer is "pending" until a newer one lands, and the caller must do nothing
+ * with it (not even treat it as tmux being gone, which `null` means).
+ * A read inside the TTL but older than `notBefore` is not served stale.
+ *
+ * A read the sync `readFrameCached` wrote has no phones of its own; it carries
+ * the previous ones over, and a missing set is a reason to refresh, never to
+ * wait: the phones read as none until the refresh lands.
+ */
+export function readFrameSwept(c: TmuxClient, ttlMs: number, notBefore: number, onFresh: (notBefore: number) => void): { frame: TmuxFrame | null; phones: Map<string, number> } | "pending" {
+  const socketKey = c.socket.join(" ");
+  const cur = frameRawCache.get(socketKey);
+  const usable = !!cur && cur.at >= notBefore;
+  if (!usable || !cur.phones || Date.now() - cur.at >= ttlMs) refreshFrame(c, socketKey, notBefore, !usable, onFresh);
+  if (!usable) return "pending";
+  return { frame: frameFromRead(cur, c, socketKey), phones: cur.phones ?? new Map() };
 }
 
 /** The line `readFrame` puts between the prefix it asked for and the frame.
@@ -819,7 +1210,7 @@ export const FRAME_ARGV: string[] = [
      strip writes (see runAction) so they outlive agentglass and can be set
      from tmux's own command line; `pane_current_path` is the ACTIVE pane's
      directory, which is what a window is grouped by. */
-  "-F", "w\t#{session_id}\t#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{window_raw_flags}\t#{@agx-ask}\t#{window_width}\t#{window_height}\t#{session_name}\t#{@agx-group}\t#{@agx-pin}\t#{pane_current_path}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_dead_time}\t#{session_created}",
+  "-F", "w\t#{session_id}\t#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{window_raw_flags}\t#{@agx-ask}\t#{window_width}\t#{window_height}\t#{session_name}\t#{@agx-group}\t#{@agx-pin}\t#{pane_current_path}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_dead_time}\t#{session_created}\t#{@agx-given}\t#{@agx-card}\t#{pane_dead_signal}",
   ";",
   // Panes ride along for the same reason `@agx-ask` does: this runs twice a
   // second per attached client, and it is already ONE subprocess with three
@@ -1078,13 +1469,13 @@ export function prefixKeys(t: TmuxTarget): string[] {
 const healedAt = new Map<string, number>();
 const HEAL_EVERY_MS = 30_000;
 
-export function healPrefix(t: TmuxTarget, want: string, conf: string, seen: string[] = prefixKeys(t)): string[] | null {
+export async function healPrefix(t: TmuxTarget, want: string, conf: string, seen: string[] = prefixKeys(t)): Promise<string[] | null> {
   const now = Date.now();
   const key = t.socket.join(" ");
   if (seen[0] === want) return null;
   if (now - (healedAt.get(key) ?? 0) < HEAL_EVERY_MS) return null;
   healedAt.set(key, now);
-  tmux(t.socket, ["source-file", conf]);
+  await tmuxAsync(t.socket, ["source-file", conf]);
   return prefixKeys(t);
 }
 
@@ -1220,6 +1611,28 @@ export function nextAgentName(taken: readonly string[]): string {
   return `AI${String(n).padStart(2, "0")}`;
 }
 
+/** What a window opened by an action carries. The person's own window is handed
+ *  their credential explicitly, because the client no longer carries these
+ *  variables. An agent's gets the OFF marker instead, or a supplied CLI in it
+ *  falls back to the person's token file. */
+function paneEnvArgs(person: boolean): string[] {
+  /* `{}` for an agent, not `process.env`: only the two marker variables are
+     handed over, and the rest is removed from the command by `agentShellArgv`.
+     A marker set on top of a copy of the whole environment would put every
+     variable on the tmux command line and hand the pane what it must not have. */
+  const env = person ? personPaneEnv() : agentShellEnv({});
+  return Object.entries(env).flatMap(([k, v]) => (v === undefined ? [] : ["-e", `${k}=${v}`]));
+}
+
+/** A shell for an agent's window with the credential the SESSION holds removed:
+ *  the person's own window put it there with `-e`, and tmux has no way to unset
+ *  a variable on a pane. Empty for the person, whose shell keeps what it had. */
+function agentShellArgv(person: boolean): string[] {
+  if (person) return [];
+  const drops = agentWindowDrops({ [BROWSER_OFF_VAR]: "1" });
+  return ["env", ...drops.flatMap((v) => ["-u", v]), process.env.SHELL || "/bin/sh"];
+}
+
 /**
  * A closed window's plain shell, back in its slot: the "Reopen" the strip
  * offers for five seconds after a close. Next to the window that was beside it
@@ -1227,14 +1640,22 @@ export function nextAgentName(taken: readonly string[]): string {
  * selected. An anchor that is gone falls back to the end of the session.
  * Nothing of the old process comes back; that is what "plain shell" says.
  */
-export function reopenWindow(t: TmuxTarget, name: string | undefined, cwd: string | undefined, anchor: string | undefined, after: boolean): boolean {
+export async function reopenWindow(t: TmuxTarget, name: string | undefined, cwd: string | undefined, anchor: string | undefined, after: boolean, given?: string, card?: string, person = true): Promise<boolean> {
   const clean = sanitizeWindowName(name) ?? "shell";
-  const near = anchor && WINDOW_ID.test(anchor) && windowOnSocket(t.socket, anchor) ? anchor : null;
-  const made = tmux(t.socket, ["new-window", "-P", "-F", "#{window_id}", "-n", clean,
-    ...(near ? [after ? "-a" : "-b", "-t", near] : ["-t", t.id]), ...(cwd ? ["-c", cwd] : [])]);
+  const near = anchor && WINDOW_ID.test(anchor) && await windowOnSocketAsync(t.socket, anchor) ? anchor : null;
+  const made = await tmuxAsync(t.socket, ["new-window", "-P", "-F", "#{window_id}", "-n", clean,
+    ...paneEnvArgs(person),
+    ...(near ? [after ? "-a" : "-b", "-t", near] : ["-t", t.id]), ...(cwd ? ["-c", cwd] : []),
+    ...agentShellArgv(person)]);
   if (made === null) return false;
   const born = made.trim().split("\n").find((l) => WINDOW_ID.test(l.trim()))?.trim();
-  if (born) tmux(t.socket, ["set-window-option", "-t", born, "automatic-rename", "off"]);
+  if (born) {
+    await tmuxAsync(t.socket, ["set-window-option", "-t", born, "automatic-rename", "off"]);
+    /* The same pins the window had before it was closed, so Reopen puts back
+       the card's tab and not merely a shell with its name. */
+    if (given) await tmuxAsync(t.socket, ["set-option", "-w", "-t", born, GIVEN_OPTION, given]);
+    if (card) await tmuxAsync(t.socket, ["set-option", "-w", "-t", born, CARD_OPTION, card]);
+  }
   return true;
 }
 
@@ -1244,15 +1665,62 @@ export function reopenWindow(t: TmuxTarget, name: string | undefined, cwd: strin
  * (that is what exited), and only a pane that is dead: a live one is never
  * killed by this.
  */
-export function restartWindow(t: TmuxTarget, windowId: string): boolean {
-  if (!WINDOW_ID.test(windowId) || !windowOnSocket(t.socket, windowId)) return false;
-  const row = tmux(t.socket, ["display-message", "-p", "-t", windowId, "#{pane_dead}\t#{pane_current_path}"]);
+export async function restartWindow(t: TmuxTarget, windowId: string, person = true): Promise<boolean> {
+  if (!WINDOW_ID.test(windowId) || !(await windowOnSocketAsync(t.socket, windowId))) return false;
+  const row = await tmuxAsync(t.socket, ["display-message", "-p", "-t", windowId, "#{pane_dead}\t#{pane_current_path}"]);
   const [dead, path] = (row ?? "").replace(/\n$/, "").split("\t");
   if (dead !== "1") return false;
-  return tmux(t.socket, ["respawn-pane", "-k", "-t", windowId, ...(path ? ["-c", path] : []), process.env.SHELL || "/bin/sh"]) !== null;
+  return await tmuxAsync(t.socket, ["respawn-pane", "-k", "-t", windowId, ...paneEnvArgs(person), ...(path ? ["-c", path] : []),
+    ...(person ? [process.env.SHELL || "/bin/sh"] : agentShellArgv(person))]) !== null;
 }
 
-export function runAction(
+async function windowOnSocketAsync(socket: string[], windowId: string): Promise<boolean> {
+  const out = await tmuxAsync(socket, ["list-windows", "-a", "-F", "#{window_id}"]);
+  if (out === null) return false;
+  return out.split("\n").some((l) => l.trim() === windowId);
+}
+
+async function outerClientTtyAsync(socket: string[]): Promise<string | null> {
+  const out = await tmuxAsync(socket, ["list-clients", "-F", "#{client_tty}\t#{client_termname}\t#{client_activity}"]);
+  if (out === null) return null;
+  let best: { tty: string; at: number } | null = null;
+  for (const line of out.split("\n")) {
+    const [tty, term, activity] = line.split("\t");
+    if (!tty || !term || term.startsWith("tmux")) continue;
+    const at = Number(activity) || 0;
+    if (!best || at > best.at) best = { tty, at };
+  }
+  return best?.tty ?? null;
+}
+
+async function closePopupAsync(socket: string[], tty?: string | null): Promise<void> {
+  if (!tty) return;
+  await tmuxAsync(socket, ["display-popup", "-C", "-c", tty]);
+}
+
+async function clearSizeMarkAsync(socket: string[], windowId: string): Promise<void> {
+  if (!WINDOW_ID.test(windowId)) return;
+  await tmuxAsync(socket, ["set-option", "-uw", "-t", windowId, HAD_SIZE]);
+  await tmuxAsync(socket, ["set-option", "-uw", "-t", windowId, HAD_SIZE_BY]);
+}
+
+/** ONE chain per tmux session, shared by runActionInOrder and setStatusLineAsync,
+ *  so a click's action and a status hide/show cannot interleave their commands. */
+const sessionChains = new Map<string, Promise<unknown>>();
+
+/** `runAction`, one at a time per session, so clicks land in the order made. */
+export function runActionInOrder(t: TmuxTarget, ...args: Parameters<typeof runAction> extends [unknown, ...infer R] ? R : never): Promise<boolean> {
+  const key = `${t.socket.join(" ")}\u0000${t.id}`;
+  const prev = sessionChains.get(key) ?? Promise.resolve();
+  const run = prev.then(() => runAction(t, ...args), () => runAction(t, ...args));
+  const onErr = (e: unknown) => { console.warn(`[tmux] action ${String(args[0])} failed on ${t.id}: ${e instanceof Error ? e.message : String(e)}`); return false; };
+  const tail = run.catch(onErr);
+  sessionChains.set(key, tail);
+  void tail.then(() => { if (sessionChains.get(key) === tail) sessionChains.delete(key); });
+  return tail;
+}
+
+export async function runAction(
   t: TmuxTarget, action: TmuxAction, window?: string, name?: string,
   /** The asking client's grid. Only `fit` uses it — see that case for why an
    *  explicit size is the only honest answer to "size it to what I see". */
@@ -1267,7 +1735,11 @@ export function runAction(
    *  does. Used to close a floating scratch that would otherwise be drawn on
    *  top of the tab this is about to select, holding the keyboard. */
   clientTty?: string | null,
-): boolean {
+  /** The caller is the person, not an agent's credential. Only `new` uses it:
+   *  a person's window is handed their credential explicitly, an agent's is
+   *  not handed the machine's. */
+  person = true,
+): Promise<boolean> {
   // Windows are addressed by tmux's id, never by the index the tab is showing.
   // The strip is up to a poll out of date, and an index is not a name: kill
   // window 2 with `renumber-windows` on and what was 3 becomes 2, so a click
@@ -1280,16 +1752,19 @@ export function runAction(
      `kill` landing on the wrong window is somebody's work. */
   const changes = action === "kill" || action === "rename" || action === "move"
     || action === "fit" || action === "takeover" || action === "group" || action === "pin";
-  const id = shaped !== null && (!changes || windowOnSocket(t.socket, shaped)) ? shaped : null;
+  const id = shaped !== null && (!changes || await windowOnSocketAsync(t.socket, shaped)) ? shaped : null;
   switch (action) {
     case "select":
       if (id === null) return false;
       // A tab you clicked has to be the thing you end up looking at. With a
       // floating scratch open it is drawn underneath it, and the keyboard stays
       // with the popup — see closePopup().
-      closePopup(t.socket, clientTty ?? outerClientTty(t.socket));
-      return tmux(t.socket, ["select-window", "-t", id]) !== null;
+      await closePopupAsync(t.socket, clientTty ?? await outerClientTtyAsync(t.socket));
+      return await tmuxAsync(t.socket, ["select-window", "-t", id]) !== null;
     case "new":
+      // Not in the per-session chain: fit/reclaim/sweep resizes. A sweep resize
+      // can land between resize-window and clearSizeMarkAsync. Accepted: the
+      // sweep re-asserts the size on its next tick.
       // Next to its group (tmuxplace.ts), else at the end, which is tmux's
       // default and where the button is. The paragraph below is why it is not
       // simply "next to the current window".
@@ -1316,7 +1791,7 @@ export function runAction(
       // would be a different one.
       // Same as `select`: a new tab that opens behind the floating scratch is a
       // tab nobody can type into.
-      closePopup(t.socket, clientTty ?? outerClientTty(t.socket));
+      await closePopupAsync(t.socket, clientTty ?? await outerClientTtyAsync(t.socket));
       {
         /*
          * NAMED AT BIRTH, AND TMUX IS NOT ALLOWED TO CHANGE IT.
@@ -1331,22 +1806,22 @@ export function runAction(
          * changes what any window somebody else opened is called; a rename by
          * hand still works and still wins, because it writes the same field.
          */
-        const names = (tmux(t.socket, ["list-windows", "-t", t.id, "-F", "#{window_name}"]) ?? "")
+        const names = ((await tmuxAsync(t.socket, ["list-windows", "-t", t.id, "-F", "#{window_name}"])) ?? "")
           .split("\n").map((l) => l.trim()).filter(Boolean);
         const mine = nextAgentName(names);
-        const where = placeArgs(parsePlaceWindows(tmux(t.socket, ["list-windows", "-t", t.id, "-F", PLACE_FORMAT]) ?? ""), mine, t.id, id ?? undefined);
-        const made = tmux(t.socket, ["new-window", "-P", "-F", "#{window_id}", "-n", mine, ...where, ...(cwd ? ["-c", cwd] : [])]);
+        const where = placeArgs(parsePlaceWindows((await tmuxAsync(t.socket, ["list-windows", "-t", t.id, "-F", PLACE_FORMAT])) ?? ""), mine, t.id, id ?? undefined);
+        const made = await tmuxAsync(t.socket, ["new-window", "-P", "-F", "#{window_id}", "-n", mine, ...paneEnvArgs(person), ...where, ...(cwd ? ["-c", cwd] : []), ...agentShellArgv(person)]);
         if (made === null) return false;
         const born = made.trim().split("\n").find((l) => WINDOW_ID.test(l.trim()))?.trim();
-        if (born) tmux(t.socket, ["set-window-option", "-t", born, "automatic-rename", "off"]);
+        if (born) await tmuxAsync(t.socket, ["set-window-option", "-t", born, "automatic-rename", "off"]);
         return true;
       }
     case "kill":
-      return id === null ? false : tmux(t.socket, ["kill-window", "-t", id]) !== null;
+      return id === null ? false : await tmuxAsync(t.socket, ["kill-window", "-t", id]) !== null;
     case "rename": {
       const clean = sanitizeWindowName(name);
       if (id === null || !clean) return false;
-      return tmux(t.socket, ["rename-window", "-t", id, clean]) !== null;
+      return await tmuxAsync(t.socket, ["rename-window", "-t", id, clean]) !== null;
     }
     /*
      * Which tab group a window is in, overriding its folder — or, with no
@@ -1357,14 +1832,14 @@ export function runAction(
     case "group": {
       if (id === null) return false;
       const clean = sanitizeGroupName(name);
-      return tmux(t.socket, clean
+      return await tmuxAsync(t.socket, clean
         ? ["set-option", "-w", "-t", id, "@agx-group", clean]
         : ["set-option", "-w", "-u", "-t", id, "@agx-group"]) !== null;
     }
     /* First in its group, whatever its index. `after` is the switch. */
     case "pin":
       if (id === null) return false;
-      return tmux(t.socket, after
+      return await tmuxAsync(t.socket, after
         ? ["set-option", "-w", "-t", id, "@agx-pin", "1"]
         : ["set-option", "-w", "-u", "-t", id, "@agx-pin"]) !== null;
     case "move": {
@@ -1403,10 +1878,10 @@ export function runAction(
        * end of the strip, which is the only way to make a window the last one.
        */
       const where = after ? "-a" : "-b";
-      if (tmux(t.socket, ["move-window", where, "-s", id, "-t", `${t.id}:${to}`]) === null) return false;
+      if (await tmuxAsync(t.socket, ["move-window", where, "-s", id, "-t", `${t.id}:${to}`]) === null) return false;
       // A failure here is not a failed move: the window is where it was asked
       // to go and the numbers are merely untidy.
-      tmux(t.socket, ["move-window", "-r", "-t", t.id]);
+      await tmuxAsync(t.socket, ["move-window", "-r", "-t", t.id]);
       return true;
     }
     /*
@@ -1445,7 +1920,7 @@ export function runAction(
        */
       if (id === null) return false;
       if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols! < 20 || rows! < 5 || cols! > 1000 || rows! > 500) return false;
-      unzoomWindow(t.socket, t.id, id);
+      await unzoomWindowAsync(t.socket, t.id, id);
       /*
        * Session-qualified, never a bare `@id` — the same target `fitWindow`
        * uses, and for the same measured reason: `resize-window -t @0` answers
@@ -1459,7 +1934,7 @@ export function runAction(
        * That gap read as "the fit only takes on a view-switch, never on the
        * initial one". `${t.id}` is our own session; `id` is the window id.
        */
-      const ok = tmux(t.socket, ["resize-window", "-t", `${t.id}:${id}`, "-x", String(cols), "-y", String(rows)]) !== null;
+      const ok = await tmuxAsync(t.socket, ["resize-window", "-t", `${t.id}:${id}`, "-x", String(cols), "-y", String(rows)]) !== null;
       /*
        * The person at the desk has just asked for `manual` on this window, and
        * from here on it is theirs and not ours to put back.
@@ -1473,7 +1948,7 @@ export function runAction(
        * After the resize, not before: dropping the claim on a command that then
        * fails would abandon a window we may still have pinned.
        */
-      if (ok) clearSizeMark(t.socket, id);
+      if (ok) await clearSizeMarkAsync(t.socket, id);
       return ok;
     }
     case "takeover": {
@@ -1528,15 +2003,15 @@ export function runAction(
        * zoomed" and this does nothing, and a take-over must not fail because
        * of it.
        */
-      unzoomWindow(t.socket, t.id, id);
-      if (tmux(t.socket, ["resize-window", "-A", "-t", id]) === null) return false;
-      if (tmux(t.socket, ["set-option", "-w", "-t", id, "window-size", "largest"]) === null) return false;
+      await unzoomWindowAsync(t.socket, t.id, id);
+      if (await tmuxAsync(t.socket, ["resize-window", "-A", "-t", id]) === null) return false;
+      if (await tmuxAsync(t.socket, ["set-option", "-w", "-t", id, "window-size", "largest"]) === null) return false;
       claimed.set(claimKey(t.socket, id), Date.now());
       // Same handover as `fit` above, and for the same reason with a longer
       // fuse: the in-memory claim expires after ten seconds but the `largest`
       // it wrote does not, so a mark left behind would let a boot months later
       // put the phone's captured value back over the user's take-over.
-      clearSizeMark(t.socket, id);
+      await clearSizeMarkAsync(t.socket, id);
       return true;
     }
     default:
@@ -1621,6 +2096,9 @@ function statusInConfig(t: TmuxTarget): string {
  * `/terminal/panes` is a list, and "the newest row" is whatever the desk
  * created in the same second. `-P -F` is tmux's own answer to that question,
  * asked in the command that already runs.
+ *
+ * `-d`: nothing here is a button somebody pressed and is waiting on, so the
+ * window lands in the background and the tab on screen stays on screen.
  */
 export function newWindowRunning(
   t: TmuxTarget, cwd: string, name: string, argv: string[],
@@ -1630,7 +2108,7 @@ export function newWindowRunning(
   // contain spaces, and neither of these two fields can contain a tab.
   const where = placeArgs(parsePlaceWindows(tmux(t.socket, ["list-windows", "-t", t.id, "-F", PLACE_FORMAT]) ?? ""), clean || name, t.id);
   const out = tmux(t.socket, [
-    "new-window", "-P", "-F", "#{pane_id}\t#{window_id}", ...where, "-c", cwd,
+    "new-window", "-d", "-P", "-F", "#{pane_id}\t#{window_id}", ...where, "-c", cwd,
     ...(clean ? ["-n", clean] : []),
     ...argv,
   ]);
@@ -1807,6 +2285,18 @@ export function clearAsk(t: TmuxTarget, window: string): void {
 /** Sockets this process has already swept. See releaseStale. */
 const swept = new Set<string>();
 
+/*
+ * When this process last took or gave back each session's status line, as a
+ * tick of one counter. The sweep reads the counter before it lists sessions and
+ * skips any session touched after that: such a claim is this process's own (a
+ * panel that opened while `list-sessions` was in flight), not a dead run's, and
+ * releasing it would put the bar back under a live panel. Keyed like
+ * `sessionChains`.
+ */
+let statusTick = 0;
+const statusTouched = new Map<string, number>();
+const touchStatus = (t: TmuxTarget): void => { statusTouched.set(`${t.socket.join(" ")}\u0000${t.id}`, ++statusTick); };
+
 /**
  * Give back every status line a previous run of this app took and never
  * returned.
@@ -1829,7 +2319,7 @@ const swept = new Set<string>();
  * process that set them, which is the whole reason they live there instead of
  * in a variable.
  */
-export function releaseStale(c: TmuxClient): void {
+export async function releaseStale(c: TmuxClient): Promise<void> {
   /*
    * The window sizes go back on the same trigger, and it is not the same sweep:
    * `sweepPinnedWindows` runs at boot over every socket in TMUX_TMPDIR, and
@@ -1847,16 +2337,20 @@ export function releaseStale(c: TmuxClient): void {
   const key = c.socket.join(" ");
   if (swept.has(key)) return;
   swept.add(key);
-  const out = tmux(c.socket, ["list-sessions", "-F", "#{session_id}\t#{@agx-owned}"]);
+  const started = statusTick;
+  const out = await tmuxAsync(c.socket, ["list-sessions", "-F", "#{session_id}\t#{@agx-owned}"]);
   if (!out) return;
   for (const line of out.split("\n")) {
     const [id, owned] = line.split("\t");
     if (!id || owned?.trim() !== "1") continue;
-    setStatusLine({ pid: c.pid, socket: c.socket, session: "", id }, true);
+    // Read right before the show is queued, after every await above.
+    if ((statusTouched.get(`${key}\u0000${id}`) ?? 0) > started) continue;
+    await setStatusLineAsync({ pid: c.pid, socket: c.socket, session: "", id }, true);
   }
 }
 
 export function setStatusLine(t: TmuxTarget, visible: boolean): boolean {
+  touchStatus(t);
   if (visible) {
     releasePrompts(t);
     tmux(t.socket, ["set-option", "-t", t.id, "-u", "@agx-owned"]);
@@ -1910,6 +2404,123 @@ export function setStatusLine(t: TmuxTarget, visible: boolean): boolean {
   ].map(([opt, val]) => tmux(t.socket, ["set-option", "-t", t.id, opt!, val!]) !== null).every(Boolean);
   if (!kept) { releasePrompts(t); tmux(t.socket, ["set-option", "-t", t.id, "-u", "@agx-owned"]); }
   return kept;
+}
+
+/*
+ * The same take-and-give-back, without holding the event loop.
+ *
+ * Measured on a server with 30 desk terminals and 10 agents flooding: 1.9 s of
+ * the main thread in spawnSync, all of it `takePrompts` (a `list-keys`, then up
+ * to four `set-option`s and two `bind-key`s) under `setStatusLine`, on the
+ * sweep's path and on the socket handlers'. This is that function awaited.
+ * `setStatusLine` stays for the two exits that must finish before the process
+ * does (`releaseStale`, which runs once per server on first contact, and the
+ * shutdown path in terminal.ts); everything the loop serves while it is up
+ * goes through here.
+ */
+async function bindingsForAsync(t: TmuxTarget, keys: readonly string[]): Promise<Map<string, { line: string; cmd: string }>> {
+  const found = new Map<string, { line: string; cmd: string }>();
+  const out = await tmuxAsync(t.socket, ["list-keys", "-T", "prefix"]);
+  if (!out) return found;
+  for (const line of out.split("\n")) {
+    const b = parseBinding(line);
+    if (!b || !keys.includes(b.key) || found.has(b.key)) continue;
+    found.set(b.key, { line: line.trim(), cmd: b.cmd });
+  }
+  return found;
+}
+
+async function takePromptsAsync(t: TmuxTarget): Promise<void> {
+  const had = await bindingsForAsync(t, PROMPTS.map((p) => p.key));
+  for (const { key, ask } of PROMPTS) {
+    const was = had.get(key);
+    const ours = !!was && isOurs(was.cmd);
+    if (was && !ours) await tmuxAsync(t.socket, ["set-option", "-t", t.id, `@agx-had-${ask}`, was.line]);
+    let stored = ours
+      ? parseBinding((await tmuxAsync(t.socket, ["show-options", "-qv", "-t", t.id, `@agx-had-${ask}`]) || "").trim())?.cmd
+      : was?.cmd;
+    if (ours && !stored) {
+      const recovered = ourFalseBranch(was!.cmd);
+      if (recovered) {
+        stored = recovered;
+        await tmuxAsync(t.socket, ["set-option", "-t", t.id, `@agx-had-${ask}`, `bind-key -T prefix ${key} ${recovered}`]);
+      }
+    }
+    await tmuxAsync(t.socket, [
+      "bind-key", "-T", "prefix", key,
+      "if-shell", "-F", "#{@agx-owned}",
+      `set-option -w @agx-ask ${ask}`,
+      stored ?? (ask === "rename"
+        ? 'command-prompt -I "#W" "rename-window -- %%"'
+        : 'command-prompt "move-window -t \'%%\'"'),
+    ]);
+  }
+}
+
+async function releasePromptsAsync(t: TmuxTarget): Promise<void> {
+  const lines: string[] = [];
+  const now = await bindingsForAsync(t, PROMPTS.map((p) => p.key));
+  for (const { key, ask } of PROMPTS) {
+    const had = (await tmuxAsync(t.socket, ["show-options", "-qv", "-t", t.id, `@agx-had-${ask}`]) || "").trim();
+    if (had.startsWith("bind-key")) lines.push(had);
+    else {
+      const cmd = now.get(key)?.cmd;
+      const recovered = cmd && isOurs(cmd) ? ourFalseBranch(cmd) : null;
+      if (recovered) lines.push(`bind-key -T prefix ${key} ${recovered}`);
+    }
+    await tmuxAsync(t.socket, ["set-option", "-t", t.id, "-u", `@agx-had-${ask}`]);
+  }
+  if (!lines.length) return;
+  let dir: string | null = null;
+  try {
+    dir = mkdtempSync(join(tmpdir(), "agentglass-tmuxkeys-"));
+    const f = join(dir, "restore.conf");
+    writeFileSync(f, `${lines.join("\n")}\n`, { mode: 0o600, flag: "wx" });
+    await tmuxAsync(t.socket, ["source-file", f]);
+  } catch { /* the bindings stay conditional on a flag that is now unset, which behaves as before */ }
+  finally { if (dir) try { rmSync(dir, { recursive: true, force: true }); } catch { /* gone */ } }
+}
+
+/* A hide and a show queued one after the other run in that order even though
+   each is many awaits long. Without a chain two calls interleave their
+   `set-option`s and the last write is whichever tmux answered last. The chain
+   is `sessionChains`, shared with runActionInOrder. */
+
+/** Same answer as `setStatusLine`, same order of tmux commands, not on the loop. */
+export function setStatusLineAsync(t: TmuxTarget, visible: boolean): Promise<boolean> {
+  touchStatus(t);
+  const key = `${t.socket.join(" ")}\u0000${t.id}`;
+  const prev = sessionChains.get(key) ?? Promise.resolve();
+  const run = prev.then(() => applyStatusLine(t, visible), () => applyStatusLine(t, visible));
+  const tail = run.catch(() => false);
+  sessionChains.set(key, tail);
+  void tail.then(() => { if (sessionChains.get(key) === tail) sessionChains.delete(key); });
+  return run.catch(() => false);
+}
+
+async function applyStatusLine(t: TmuxTarget, visible: boolean): Promise<boolean> {
+  if (visible) {
+    await releasePromptsAsync(t);
+    await tmuxAsync(t.socket, ["set-option", "-t", t.id, "-u", "@agx-owned"]);
+    const done: boolean[] = [];
+    for (const opt of BORROWED) done.push(await tmuxAsync(t.socket, ["set-option", "-t", t.id, "-u", opt]) !== null);
+    return done.every(Boolean);
+  }
+  await tmuxAsync(t.socket, ["set-option", "-t", t.id, "@agx-owned", "1"]);
+  await takePromptsAsync(t);
+  // See `setStatusLine`: with no bar in the config, hidden is already true.
+  if (((await tmuxAsync(t.socket, ["show-options", "-gv", "status"])) || "").trim() === "off") return true;
+  // The row kept and blanked, not switched off: the reasons are in `setStatusLine`.
+  const kept: boolean[] = [];
+  for (const [opt, val] of [["status", "on"], ["status-format[0]", ""], ["status-style", "bg=default,fg=default"]] as const) {
+    kept.push(await tmuxAsync(t.socket, ["set-option", "-t", t.id, opt, val]) !== null);
+  }
+  if (!kept.every(Boolean)) {
+    await releasePromptsAsync(t);
+    await tmuxAsync(t.socket, ["set-option", "-t", t.id, "-u", "@agx-owned"]);
+    return false;
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -2572,6 +3183,21 @@ function attachedSessions(socket: string[]): Set<string> {
   return out === null ? new Set() : attachedFrom(out);
 }
 
+/**
+ * Whether a session must be treated as attached, given what `list-clients`
+ * answered: null means tmux did not answer, and that is not "nobody is there".
+ *
+ * The orphan sweep kills a phone mirror nobody is attached to. A read that
+ * timed out, or was skipped for the 3 s after any call on that socket timed
+ * out (SLOW_SKIPS), came back null, null read as "not attached", and the next
+ * line was kill-session: under load, exactly when tmux is slow, a mirror with
+ * a phone on it could be closed. A session the sweep could not ask about is
+ * kept; the sweep comes round again.
+ */
+export function attachedOrUnknown(out: string | null, session: string): boolean {
+  return out === null || attachedFrom(out).has(session);
+}
+
 /* `client_control_mode` is last: a control client (the tab strip's sidecar, see
    tmuxwatch.ts) has no tty and reports a tmux TERM, so unmarked it reads as a
    nested client and turns a session someone works in into a popup. */
@@ -2728,7 +3354,7 @@ function isOurSocket(socket: string[], remembered: string | null): boolean {
  * a terminal that stopped echoing for as long as the walk took. Rows come back
  * in `tmuxSockets` order, the known server first.
  */
-export async function listPanes(known?: string[]): Promise<PaneWireRow[]> {
+export async function listPanes(known?: string[], o: { everyServer?: boolean } = {}): Promise<PaneWireRow[]> {
   /* The server we were last on, read once rather than per socket. Null when
      nothing is remembered, which is exactly how this behaved before. */
   const ours = recall()?.socket ?? null;
@@ -2754,7 +3380,10 @@ export async function listPanes(known?: string[]): Promise<PaneWireRow[]> {
      * through. Everything else is unchanged. See tmuxmemory.ts.
      */
     const mine = isOurSocket(socket, ours);
-    if (!mine && !(await tmuxAsync(socket, CLIENT_TTYS))?.trim()) return [];
+    /* `everyServer` is for asking "is this agent still running", not "where can
+       I send you": an agent idle on a server nobody is attached to is still
+       alive, and only its pane going away says it has ended. */
+    if (!o.everyServer && !mine && !(await tmuxAsync(socket, CLIENT_TTYS))?.trim()) return [];
     const [out, clients, sessions] = await Promise.all([
       tmuxAsync(socket, ["list-panes", "-a", "-F", PANE_FORMAT]),
       tmuxAsync(socket, ["list-clients", "-F", NESTED_FORMAT]),
@@ -2816,30 +3445,30 @@ export function listPanesSync(known?: string[]): PaneWireRow[] {
  * grid could say anything. This is the same single `list-panes` call, unpicked
  * rather than filtered.
  */
-export async function panesWithPids(known: string[] | undefined, windowId: string): Promise<{ paneId: string; pid: number; active: boolean; socket: string[] }[]> {
+export async function panesWithPids(known: string[] | undefined, windowId: string): Promise<{ paneId: string; pid: number; active: boolean; socket: string[]; path: string }[]> {
   if (!WINDOW_ID.test(windowId)) return [];
   for (const { socket, out } of await windowPanesEverywhere(known, windowId)) {
     if (!out) continue;
-    const rows: { paneId: string; pid: number; active: boolean; socket: string[] }[] = [];
+    const rows: { paneId: string; pid: number; active: boolean; socket: string[]; path: string }[] = [];
     for (const line of out.split("\n")) {
-      const [active, paneId, pid] = line.split("\t");
+      const [active, paneId, pid, path] = line.split("\t");
       const n = Number(pid);
-      if (paneId && PANE_ID.test(paneId) && Number.isFinite(n) && n > 0) rows.push({ paneId, pid: n, active: active === "1", socket });
+      if (paneId && PANE_ID.test(paneId) && Number.isFinite(n) && n > 0) rows.push({ paneId, pid: n, active: active === "1", socket, path: path ?? "" });
     }
     if (rows.length) return rows;
   }
   return [];
 }
 
-export async function activePane(known: string[] | undefined, windowId: string): Promise<{ paneId: string; pid: number; socket: string[] } | null> {
+export async function activePane(known: string[] | undefined, windowId: string): Promise<{ paneId: string; pid: number; socket: string[]; path: string } | null> {
   if (!WINDOW_ID.test(windowId)) return null;
   for (const { socket, out } of await windowPanesEverywhere(known, windowId)) {
     if (!out) continue;
     for (const line of out.split("\n")) {
-      const [active, paneId, pid] = line.split("\t");
+      const [active, paneId, pid, path] = line.split("\t");
       const n = Number(pid);
       if (active === "1" && paneId && PANE_ID.test(paneId) && Number.isFinite(n) && n > 0) {
-        return { paneId, pid: n, socket };
+        return { paneId, pid: n, socket, path: path ?? "" };
       }
     }
   }
@@ -2860,7 +3489,7 @@ async function windowPanesEverywhere(known: string[] | undefined, windowId: stri
   const sockets = tmuxSockets(known);
   if (sockets.length === 0) return [];
   const ask = (socket: string[]) =>
-    tmuxAsync(socket, ["list-panes", "-t", windowId, "-F", "#{pane_active}\t#{pane_id}\t#{pane_pid}"]);
+    tmuxAsync(socket, ["list-panes", "-t", windowId, "-F", "#{pane_active}\t#{pane_id}\t#{pane_pid}\t#{pane_current_path}"]);
   const first = sockets[0]!;
   const firstOut = await ask(first);
   if (firstOut && firstOut.trim().length > 0) return [{ socket: first, out: firstOut }];
@@ -2925,16 +3554,15 @@ export function outerClientTty(socket: string[]): string | null {
  * everything running in it — verified — so this costs one keystroke to undo
  * and never any work.
  */
-export function closePopup(socket: string[], tty?: string | null): void {
+export function closePopup(socket: string[], tty?: string | null): Promise<void> {
   // Without `-c` this does nothing at all — measured on an isolated server,
   // where `display-popup -C` with no client left both clients standing. tmux
   // resolves "the client" to the popup itself, and a popup cannot close itself
   // from outside its own command. So no client, no attempt: a silent no-op is
   // better than a command that looks like it worked.
-  if (!tty) return;
   // With one, `-C` closes any popup on that client and is a no-op when there is
   // none — safe to call on every focus rather than asking first.
-  tmux(socket, ["display-popup", "-C", "-c", tty]);
+  return closePopupAsync(socket, tty);
 }
 
 /**
@@ -2952,9 +3580,9 @@ export function closePopup(socket: string[], tty?: string | null): void {
  * Exact-match target: a bare name prefix-matches its way onto a different
  * session, and this one comes off a page.
  */
-export function switchClientToSession(socket: string[], clientTty: string, session: string): boolean {
+export async function switchClientToSession(socket: string[], clientTty: string, session: string): Promise<boolean> {
   if (!clientTty || !validSessionName(session)) return false;
-  return tmux(socket, ["switch-client", "-c", clientTty, "-t", `=${session}`]) !== null;
+  return await tmuxAsync(socket, ["switch-client", "-c", clientTty, "-t", `=${session}`]) !== null;
 }
 
 /**
@@ -2983,7 +3611,7 @@ export function killSessionByName(socket: string[], session: string, clientOn: s
   return tmux(socket, ["kill-session", "-t", `=${session}`]) !== null;
 }
 
-export function focusPane(socket: string[], sessionId: string, windowId: string, paneId: string, clientTty?: string | null): boolean {
+export async function focusPane(socket: string[], sessionId: string, windowId: string, paneId: string, clientTty?: string | null): Promise<boolean> {
   if (!SESSION_ID.test(sessionId) || !WINDOW_ID.test(windowId) || !PANE_ID.test(paneId)) return false;
   /*
    * Which client, said explicitly.
@@ -3002,11 +3630,11 @@ export function focusPane(socket: string[], sessionId: string, windowId: string,
   // The caller's own client when it has one — the heuristic is a fallback, not
   // the answer: a client that reports a tmux TERM for any other reason would
   // make it guess wrong, and this decides where somebody's screen goes.
-  const desk = clientTty ?? outerClientTty(socket);
-  closePopup(socket, desk);
-  if (tmux(socket, ["switch-client", ...(desk ? ["-c", desk] : []), "-t", sessionId]) === null) return false;
-  if (tmux(socket, ["select-window", "-t", windowId]) === null) return false;
-  return tmux(socket, ["select-pane", "-t", paneId]) !== null;
+  const desk = clientTty ?? await outerClientTtyAsync(socket);
+  await closePopupAsync(socket, desk);
+  if (await tmuxAsync(socket, ["switch-client", ...(desk ? ["-c", desk] : []), "-t", sessionId]) === null) return false;
+  if (await tmuxAsync(socket, ["select-window", "-t", windowId]) === null) return false;
+  return await tmuxAsync(socket, ["select-pane", "-t", paneId]) !== null;
 }
 
 /**
@@ -3024,6 +3652,9 @@ export function selectPane(t: TmuxTarget, paneId: string): boolean {
   if (!PANE_ID.test(paneId)) return false;
   return tmux(t.socket, ["select-pane", "-t", paneId]) !== null;
 }
+
+/** The most a phone scroll moves in one run, summed bursts included. */
+const SCROLL_TOTAL_MAX = 5000;
 
 /**
  * Move a phone's pane through its own scrollback, in tmux's copy mode.
@@ -3064,36 +3695,89 @@ export function selectPane(t: TmuxTarget, paneId: string): boolean {
  */
 export function scrollPhonePane(
   socket: string[], phoneSession: string, lines: number,
-): { paneId: string; entered: boolean; inMode: boolean } | null {
-  if (!PHONE_SESSION.test(phoneSession)) return null;
-  // A count, not a nudge: `-N` takes it, so a drag of forty lines is one tmux
-  // call rather than forty. Clamped because it arrives from the UI and ends up
-  // as an argument — and 500 is already more than any phone screen holds.
+  once: ScrollOnce = scrollPhonePaneOnce,
+): Promise<ScrollResult | null> {
+  if (!PHONE_SESSION.test(phoneSession)) return Promise.resolve(null);
   const by = Math.trunc(Number(lines));
-  if (!Number.isFinite(by) || by === 0) return null;
+  if (!Number.isFinite(by) || by === 0) return Promise.resolve(null);
+  /*
+   * One scroll in flight per phone session, and ONE pending slot behind it. A
+   * drag sends a message per frame; each used to run five sync tmux spawns on
+   * the server loop. Now a burst costs at most two runs: the one in flight and a
+   * single follow-up carrying the sum of what arrived meanwhile (a sum, so the
+   * finger's distance is not lost). Every waiter gets the follow-up's answer.
+   * The first caller is answered BEFORE the follow-up runs, so the callers'
+   * `.then`s see results in scroll order. A sum of zero spawns nothing, and a
+   * throw frees the key and answers every waiter null.
+   */
+  const key = socket.join(" ") + "\0" + phoneSession;
+  const slot = scrollFlight.get(key);
+  if (slot) {
+    if (slot.pending) { slot.pending.by += by; return new Promise((r) => slot.pending!.waiters.push(r)); }
+    return new Promise((r) => { slot.pending = { by, waiters: [r] }; });
+  }
+  const mine: ScrollSlot = { pending: null };
+  scrollFlight.set(key, mine);
+  return new Promise<ScrollResult | null>((resolveFirst, rejectFirst) => {
+    void (async () => {
+      let batch: ScrollSlot["pending"] = null;
+      try {
+        // Clamped per call (it arrives from the UI); the rest of the distance loops.
+        // The total is capped too: a UI value or a long burst summing to millions
+        // would otherwise loop thousands of spawns and hold the queue for minutes.
+        const run = async (total: number): Promise<ScrollResult | null> => {
+          let rem = Math.sign(total) * Math.min(SCROLL_TOTAL_MAX, Math.abs(total)), last: ScrollResult | null = null, entered = false;
+          while (rem !== 0) {
+            const step = Math.sign(rem) * Math.min(500, Math.abs(rem));
+            const got = await once(socket, phoneSession, step);
+            // A later chunk failing must not forget a copy mode an earlier one entered.
+            if (!got) return last && { ...last, entered };
+            last = got;
+            entered ||= last.entered;
+            rem -= step;
+          }
+          return last && { ...last, entered };
+        };
+        const first = await run(by);
+        resolveFirst(first);
+        while (mine.pending) {
+          batch = mine.pending;
+          mine.pending = null;
+          const r = batch.by === 0 ? null : await run(batch.by);
+          for (const w of batch.waiters) w(r);
+          batch = null;
+        }
+      } catch (e) {
+        for (const w of batch?.waiters ?? []) w(null);
+        for (const w of mine.pending?.waiters ?? []) w(null);
+        mine.pending = null;
+        rejectFirst(e);
+        console.error("[tmuxctl] phone scroll failed:", e);
+      } finally { scrollFlight.delete(key); }
+    })();
+  });
+}
+
+type ScrollOnce = (socket: string[], phoneSession: string, by: number) => Promise<ScrollResult | null>;
+type ScrollSlot = { pending: { by: number; waiters: Array<(v: ScrollResult | null) => void> } | null };
+type ScrollResult = { paneId: string; entered: boolean; inMode: boolean };
+const scrollFlight = new Map<string, ScrollSlot>();
+
+async function scrollPhonePaneOnce(socket: string[], phoneSession: string, by: number): Promise<ScrollResult | null> {
+  // A count, not a nudge: `-N` takes it. Clamped because it arrives from the UI.
   const count = Math.min(500, Math.abs(by));
 
-  const pane = tmux(socket, ["display-message", "-p", "-t", phoneSession, "#{pane_id}"])?.trim();
+  const pane = (await tmuxAsync(socket, ["display-message", "-p", "-t", phoneSession, "#{pane_id}"]))?.trim();
   if (!pane || !PANE_ID.test(pane)) return null;
-  const inMode = tmux(socket, ["display-message", "-p", "-t", pane, "#{pane_in_mode}"])?.trim() === "1";
+  const inMode = (await tmuxAsync(socket, ["display-message", "-p", "-t", pane, "#{pane_in_mode}"]))?.trim() === "1";
 
-  /*
-   * Scrolling forward when nothing is scrolled back is not a request, it is the
-   * finger travelling the other way at the bottom of a screen. Entering copy
-   * mode to answer it would put the desk's pane into copy mode for a gesture
-   * that has nothing to show.
-   */
+  // Scrolling forward with nothing scrolled back is not a request.
   if (by > 0 && !inMode) return { paneId: pane, entered: false, inMode: false };
-  if (!inMode && tmux(socket, ["copy-mode", "-e", "-t", pane]) === null) return null;
-  const moved = tmux(socket, ["send-keys", "-X", "-t", pane, "-N", String(count), by < 0 ? "scroll-up" : "scroll-down"]);
+  if (!inMode && (await tmuxAsync(socket, ["copy-mode", "-e", "-t", pane])) === null) return null;
+  const moved = await tmuxAsync(socket, ["send-keys", "-X", "-t", pane, "-N", String(count), by < 0 ? "scroll-up" : "scroll-down"]);
   if (moved === null) return null;
-  /*
-   * Only a forward scroll can have ended the mode, so only a forward scroll
-   * pays for asking. Going back into history cannot leave copy mode, and a
-   * second `display-message` on every request of a drag is a tmux call per
-   * frame of somebody's finger for an answer that is known.
-   */
-  const still = by < 0 || tmux(socket, ["display-message", "-p", "-t", pane, "#{pane_in_mode}"])?.trim() === "1";
+  // Only a forward scroll can have ended the mode, so only it pays for asking.
+  const still = by < 0 || (await tmuxAsync(socket, ["display-message", "-p", "-t", pane, "#{pane_in_mode}"]))?.trim() === "1";
   return { paneId: pane, entered: !inMode, inMode: still };
 }
 
@@ -3129,7 +3813,7 @@ export async function focusPaneAnywhere(known: string[] | undefined, _sessionId:
   // rather than the ones the click carried — which, coming from the same
   // duplicated list, may be the group's.
   const row = (await listPanes(known)).find((r) => r.paneId === paneId && !isOursGroup(r.session));
-  return row ? focusPane(row.socket, row.sessionId, row.windowId, paneId) : false;
+  return row ? await focusPane(row.socket, row.sessionId, row.windowId, paneId) : false;
 }
 
 /**
@@ -3613,14 +4297,6 @@ export function isPhoneSession(session: string | null | undefined): boolean {
 const isOursGroup = (session: string | null | undefined): boolean =>
   isPhoneSession(session) || isPanelViewSession(session ?? "");
 
-/** How many phones are attached: the mirror sessions among the ones a client
- *  is on. The frame already carries that set, so this costs no tmux call. */
-export function phonesAttached(sessions: Iterable<string>): number {
-  let n = 0;
-  for (const name of sessions) if (isPhoneSession(name)) n++;
-  return n;
-}
-
 /**
  * Put the phone's view back on one of OUR mirrors when its client has
  * wandered onto a session that is not ours.
@@ -3654,14 +4330,14 @@ export function phonesAttached(sessions: Iterable<string>): number {
  * it is load-bearing: a mirror ever remounted for a desk client would need its
  * own prefix, not a silent fifth reader of this one.
  */
-export function remountPhoneClient(c: TmuxClient, target: TmuxTarget): boolean {
+export async function remountPhoneClient(c: TmuxClient, target: TmuxTarget): Promise<boolean> {
   if (!SESSION_ID.test(target.id)) return false;
   if (isPhoneSession(target.session)) return false;
   // The digits the regex needs are the client's own pid; the suffix is random
   // so two remounts on the same client cannot collide.
   const name = `agx-phone-${c.pid}-${Math.random().toString(36).slice(2, 8)}`;
   const token = randomBytes(16).toString("hex");
-  const created = tmux(c.socket, [
+  const created = await tmuxAsync(c.socket, [
     "new-session", "-d", "-t", target.id, "-s", name,
     ";", "set-option", "-t", name, "window-size", "largest",
     ";", "set-option", "-t", name, "status", "off",
@@ -3675,12 +4351,12 @@ export function remountPhoneClient(c: TmuxClient, target: TmuxTarget): boolean {
   // back — the same field `readFrame` matches on. The flags are the 3.7 order:
   // `-c` is the target client, `-t` the target session (`focusPane` uses only
   // `-t`, so it never met the swap).
-  if (tmux(c.socket, ["switch-client", "-c", c.tty, "-t", name]) === null) {
-    tmux(c.socket, ["kill-session", "-t", name]);
+  if (await tmuxAsync(c.socket, ["switch-client", "-c", c.tty, "-t", name]) === null) {
+    await tmuxAsync(c.socket, ["kill-session", "-t", name]);
     return false;
   }
   // The client is on it now, so the mirror dies when the phone leaves.
-  tmux(c.socket, ["set-option", "-t", name, "destroy-unattached", "on"]);
+  await tmuxAsync(c.socket, ["set-option", "-t", name, "destroy-unattached", "on"]);
   // Recorded durably — on disk, not just in this process — the same reason
   // `takeLease` writes through immediately: the failure this exists for is
   // this server dying before the mirror does, and the record is what a
@@ -3738,19 +4414,37 @@ export function remountPhoneClient(c: TmuxClient, target: TmuxTarget): boolean {
 const MIRROR_SWEEP_MS = 2 * 60_000;
 let mirrorSweep: ReturnType<typeof setInterval> | null = null;
 
-export function startMirrorSweeper(socket: string[], every = MIRROR_SWEEP_MS): void {
+/* One record reap at a time. It is async now, so the startup reap and a timer
+   tick could otherwise walk the same records at once and both kill or forget. */
+let recordReap: Promise<string[]> | null = null;
+export function reapMirrorSessionsOnce(reap: () => Promise<string[]> = () => reapMirrorSessions()): Promise<string[]> {
+  return recordReap ??= reap().finally(() => { recordReap = null; });
+}
+
+let sweeping = false;
+/** `deps`: the two reaps, injected so a test can hold a tick open. */
+export function startMirrorSweeper(
+  socket: string[], every = MIRROR_SWEEP_MS,
+  deps: { once?: () => Promise<string[]>; orphans?: (socket: string[]) => Promise<string[]> } = {},
+): void {
   if (mirrorSweep) return;
-  mirrorSweep = setInterval(() => {
+  const once = deps.once ?? (() => reapMirrorSessionsOnce());
+  const orphans = deps.orphans ?? ((s: string[]) => reapOrphanedMirrors(s));
+  mirrorSweep = setIntervalAs("tmux mirror sweep", async () => {
+    /* A tick that outlives the interval (every call timing out) is not doubled. */
+    if (sweeping) return;
+    sweeping = true;
     try {
       /* Both rules, and in this order: the record is the cheaper and more
          certain one, and what it leaves behind is what the second is for. */
-      for (const s of reapMirrorSessions()) {
+      for (const s of await once()) {
         console.log(`   tmux  → closed mirror session ${s}: the phone that opened it is gone`);
       }
-      for (const s of reapOrphanedMirrors(socket)) {
+      for (const s of await orphans(socket)) {
         console.log(`   tmux  → closed mirror session ${s}: ours by its stamp, with nobody attached and no record left`);
       }
     } catch { /* a sweeper that can throw is one more thing that stops */ }
+    finally { sweeping = false; }
   }, every);
   mirrorSweep.unref?.();
 }
@@ -3759,19 +4453,45 @@ export function stopMirrorSweeper(): void {
   if (mirrorSweep) { clearInterval(mirrorSweep); mirrorSweep = null; }
 }
 
-export function reapOrphanedMirrors(
+/**
+ * The three calls the orphan sweep makes, each allowed to answer late.
+ *
+ * Async because this runs on a 2-minute timer on the server's one event loop.
+ * Measured in server-stall.log (perf-audit-2026-11-11, finding 1): spawnSync of
+ * `tmux list-sessions` held the loop 12 times for 92.6 s in all, worst 26 s,
+ * and `show-options` 34 times for 146 s, worst 13 s, while the machine was
+ * under disk or memory load. A sync io (the tests') is awaited just the same.
+ * `reapMirrorSessions` is async for the same reason; most of the rest of this
+ * file stays sync: it runs once at startup or sits inside the 500 ms sweep,
+ * which needs a synchronous answer and already carries the prefix on its frame.
+ */
+export type OrphanIo = {
+  readStamp: (socket: string[], session: string) => string | Promise<string>;
+  attached: (socket: string[], session: string) => boolean | Promise<boolean>;
+  kill: (socket: string[], session: string) => void | Promise<void>;
+};
+
+const ASYNC_ORPHAN_IO: OrphanIo = {
+  readStamp: async (socket, session) => ((await tmuxAsync(socket, ["show-options", "-v", "-t", session, MIRROR_LEASE_OPTION])) ?? "").trim(),
+  attached: async (socket, session) => {
+    return attachedOrUnknown(await tmuxAsync(socket, ATTACHED_ARGV), session);
+  },
+  kill: async (socket, session) => { await tmuxAsync(socket, ["kill-session", "-t", session]); },
+};
+
+export async function reapOrphanedMirrors(
   socket: string[],
-  io: MirrorLeaseIo = REAL_MIRROR_IO,
-  names: (socket: string[]) => string[] = (sk) =>
-    (tmux(sk, ["list-sessions", "-F", "#{session_name}"]) ?? "").split("\n").map((n) => n.trim()).filter(Boolean),
-): string[] {
+  io: OrphanIo = ASYNC_ORPHAN_IO,
+  names: (socket: string[]) => string[] | Promise<string[]> = async (sk) =>
+    ((await tmuxAsync(sk, ["list-sessions", "-F", "#{session_name}"])) ?? "").split("\n").map((n) => n.trim()).filter(Boolean),
+): Promise<string[]> {
   const killed: string[] = [];
-  for (const name of names(socket)) {
+  for (const name of await names(socket)) {
     if (!isPhoneSession(name)) continue;
     // Ours, provably — never the name alone.
-    if (!io.readStamp(socket, name)) continue;
-    if (io.attached(socket, name)) continue;
-    io.kill(socket, name);
+    if (!(await io.readStamp(socket, name))) continue;
+    if (await io.attached(socket, name)) continue;
+    await io.kill(socket, name);
     forgetMirrorLease(socket, name);
     killed.push(name);
   }
@@ -3784,9 +4504,9 @@ export function reapOrphanedMirrors(
  *  whatever the developer had open. */
 export interface MirrorLeaseIo {
   /** The stamp currently on that session, or "" if it has none / is gone. */
-  readStamp: (socket: string[], session: string) => string;
-  attached: (socket: string[], session: string) => boolean;
-  kill: (socket: string[], session: string) => void;
+  readStamp: (socket: string[], session: string) => string | Promise<string>;
+  attached: (socket: string[], session: string) => boolean | Promise<boolean>;
+  kill: (socket: string[], session: string) => void | Promise<void>;
   /**
    * Does that session exist at all?
    *
@@ -3800,14 +4520,17 @@ export interface MirrorLeaseIo {
    * stamp from a session that was about to exist. The record went; the session
    * stayed; nothing would ever look at it again. Nine of them, 13 GB.
    */
-  exists: (socket: string[], session: string) => boolean;
+  exists: (socket: string[], session: string) => boolean | Promise<boolean>;
 }
 
+/* Async for the reason `ASYNC_ORPHAN_IO` is: the sweeper calls this every two
+   minutes on the server's one event loop, and a live probe caught that loop in
+   kernel_clone/do_wait under a `tmux` child during 1-4 s stalls. */
 const REAL_MIRROR_IO: MirrorLeaseIo = {
-  readStamp: (socket, session) => (tmux(socket, ["show-options", "-v", "-t", session, MIRROR_LEASE_OPTION]) ?? "").trim(),
-  attached: (socket, session) => attachedSessions(socket).has(session),
-  kill: (socket, session) => { tmux(socket, ["kill-session", "-t", session]); },
-  exists: (socket, session) => (tmux(socket, ["has-session", "-t", `=${session}`]) ?? null) !== null,
+  readStamp: async (socket, session) => ((await tmuxAsync(socket, ["show-options", "-v", "-t", session, MIRROR_LEASE_OPTION])) ?? "").trim(),
+  attached: async (socket, session) => attachedOrUnknown(await tmuxAsync(socket, ATTACHED_ARGV), session),
+  kill: async (socket, session) => { await tmuxAsync(socket, ["kill-session", "-t", session]); },
+  exists: async (socket, session) => ((await tmuxAsync(socket, ["has-session", "-t", `=${session}`])) ?? null) !== null,
 };
 
 /**
@@ -3864,7 +4587,7 @@ function unzoomFor(rec: MirrorLease): void {
   } catch { /* the server went away: nothing left to unzoom */ }
 }
 
-export function reapMirrorSessions(io: MirrorLeaseIo = REAL_MIRROR_IO, now = Date.now()): string[] {
+export async function reapMirrorSessions(io: MirrorLeaseIo = REAL_MIRROR_IO, now = Date.now()): Promise<string[]> {
   const killed: string[] = [];
   for (const rec of mirrorLeases()) {
     /*
@@ -3883,7 +4606,7 @@ export function reapMirrorSessions(io: MirrorLeaseIo = REAL_MIRROR_IO, now = Dat
      * left for the next pass, and the sweeper runs every two minutes now
      * rather than once.
      */
-    if (!io.exists(rec.socket, rec.session)) {
+    if (!(await io.exists(rec.socket, rec.session))) {
       /*
        * GONE — SO TAKE THE ZOOM OFF ON ITS WAY OUT.
        *
@@ -3903,7 +4626,7 @@ export function reapMirrorSessions(io: MirrorLeaseIo = REAL_MIRROR_IO, now = Dat
       forgetMirrorLease(rec.socket, rec.session);
       continue;
     }
-    const stamp = io.readStamp(rec.socket, rec.session);
+    const stamp = await io.readStamp(rec.socket, rec.session);
     /* AN EMPTY STAMP ON A SESSION THAT IS THERE means we could not read it, not
        that it is not ours — the stamp is written in the same argv that makes
        the session, so a session of ours without one is a session mid-spawn.
@@ -3928,8 +4651,8 @@ export function reapMirrorSessions(io: MirrorLeaseIo = REAL_MIRROR_IO, now = Dat
       continue;
     }
     if (stamp !== rec.token) { forgetMirrorLease(rec.socket, rec.session); continue; }
-    if (io.attached(rec.socket, rec.session)) continue;
-    io.kill(rec.socket, rec.session);
+    if (await io.attached(rec.socket, rec.session)) continue;
+    await io.kill(rec.socket, rec.session);
     forgetMirrorLease(rec.socket, rec.session);
     killed.push(rec.session);
   }
@@ -4532,22 +5255,34 @@ const freeSince = new Map<string, number>();
  * is driving. `@agx-had-size` says the size was taken by us and what it was
  * before, which is the same proof the boot sweep insists on.
  */
-export function reclaimPinnedWindow(socket: string[], sessionId: string, windowId: string, free: boolean): boolean {
+export async function reclaimPinnedWindow(socket: string[], sessionId: string, windowId: string, freeNow: boolean | (() => boolean)): Promise<boolean> {
+  // The pty path calls this with `void`; a rejection there would be unhandled.
+  try { return await reclaimPinnedWindowNow(socket, sessionId, windowId, freeNow); } catch { return false; }
+}
+
+async function reclaimPinnedWindowNow(socket: string[], sessionId: string, windowId: string, freeNow: boolean | (() => boolean)): Promise<boolean> {
+  const free = typeof freeNow === "function" ? freeNow() : freeNow;
   if (!SESSION_ID.test(sessionId) || !WINDOW_ID.test(windowId)) return false;
   const key = claimKey(socket, windowId);
   if (!free) { freeSince.delete(key); return false; }
   const at = freeSince.get(key);
   if (at === undefined) { freeSince.set(key, Date.now() + RECLAIM_AFTER_MS); return false; }
   if (Date.now() < at) return false;
-  const mark = tmux(socket, ["show-options", "-qwv", "-t", windowId, HAD_SIZE])?.trim();
+  // Off the loop: this runs inside the sweep, and a slow tmux here stalled the
+  // server for over a second. The next tick must not start a second check while
+  // this one is out, so the wait is pushed on before the first await.
+  freeSince.set(key, Date.now() + RECHECK_MS);
+  const mark = (await tmuxAsync(socket, ["show-options", "-qwv", "-t", windowId, HAD_SIZE]))?.trim();
   // Not ours, which is the commonest answer: somebody narrowed their own
   // window. Asked again in a minute rather than on the next tick — see
   // RECHECK_MS.
-  if (!mark) { freeSince.set(key, Date.now() + RECHECK_MS); return false; }
+  if (!mark) return false;
   freeSince.delete(key);
   // A value this code cannot act on stops being a reason to come back.
-  if (mark !== HAD_NOTHING && !WINDOW_SIZE_VALUE.test(mark)) { clearSizeMark(socket, windowId); return false; }
+  if (mark !== HAD_NOTHING && !WINDOW_SIZE_VALUE.test(mark)) { await clearSizeMarkAsync(socket, windowId); return false; }
   const want = mark === HAD_NOTHING ? "" : mark;
+  // A phone may have attached during the awaits above: ask again before touching the window.
+  if (typeof freeNow === "function" && !freeNow()) return false;
   /*
    * `-A` first, the option second. Measured into `restoreWindows` and repeated
    * in the boot sweep: setting the option alone leaves the window squeezed
@@ -4555,14 +5290,14 @@ export function reclaimPinnedWindow(socket: string[], sessionId: string, windowI
    * has), and `resize-window` in either form writes `manual`, so the other
    * order puts the squeeze back over the restore.
    */
-  tmux(socket, ["resize-window", "-A", "-t", `${sessionId}:${windowId}`]);
-  tmux(socket, want
+  await tmuxAsync(socket, ["resize-window", "-A", "-t", `${sessionId}:${windowId}`]);
+  await tmuxAsync(socket, want
     ? ["set-option", "-w", "-t", windowId, "window-size", want]
     : ["set-option", "-uw", "-t", windowId, "window-size"]);
-  clearSizeMark(socket, windowId);
+  await clearSizeMarkAsync(socket, windowId);
   // A pane whose size ends where it started is not redrawn by tmux, and a
   // program that drew itself at 80 columns stays drawn that way.
-  tmux(socket, ["refresh-client"]);
+  await tmuxAsync(socket, ["refresh-client"]);
   return true;
 }
 
@@ -4587,6 +5322,16 @@ export function reclaimPinnedWindow(socket: string[], sessionId: string, windowI
 export function redrawClient(socket: string[], tty: string): void {
   if (!tty) return;
   tmux(socket, ["refresh-client", "-t", tty]);
+}
+
+/**
+ * Same call as `redrawClient`, off the event loop. First contact with a tmux
+ * server happens on the request path of the sweep, where a blocking spawn is a
+ * terminal that stops echoing while a slow tmux answers.
+ */
+export async function redrawClientAsync(socket: string[], tty: string): Promise<void> {
+  if (!tty) return;
+  await tmuxAsync(socket, ["refresh-client", "-t", tty]);
 }
 
 /**
@@ -4792,6 +5537,89 @@ export function restoreWindows(
   // itself for the wrong width in between, and tmux does not redraw a pane
   // whose size ends up where it started — which is exactly this case.
   tmux(socket, ["refresh-client"]);
+}
+
+/**
+ * `restoreWindows` for the socket-close path, off the server loop.
+ *
+ * Measured (server --cpu-prof, 30 desk terminals closing together: a reload,
+ * the window going away): the sync version cost 16 s of self time on the main
+ * thread, one stall of 13.2 s, because every window runs about six `tmux`
+ * spawns (show-options, resize-window, set-option, show-options, two for
+ * clearSizeMark) and thirty sockets run back to back. Here the windows of one
+ * attach run in parallel and nothing holds the loop.
+ *
+ * The decisions are the ones `restoreWindows` documents and are kept in the
+ * same order: a window another phone is on is left alone, a window the desk
+ * just took back is left alone, a window that already carries `had` has only
+ * its mark cleared, a value that is not ours (`manual` / `largest`) is left,
+ * the zoom comes off first (only the pane this attach zoomed), `-A` before the
+ * option, the mark cleared last and only when the read-back proves it. The
+ * sync `restoreWindows` stays for `shutdownTerminals`, which has to finish
+ * before the process exits.
+ */
+export async function restoreWindowsAsync(
+  socket: string[], sessionId: string, hadWindowSize: Record<string, string>,
+  zoomed?: { windowId: string; paneId: string } | null,
+): Promise<void> {
+  if (!SESSION_ID.test(sessionId)) return;
+  const busy = await phoneWindowsAsync(socket);
+  const sizeOf = async (id: string) => ((await tmuxAsync(socket, ["show-options", "-qwv", "-t", id, "window-size"])) ?? "").trim();
+  await Promise.all(Object.entries(hadWindowSize).map(async ([id, had]) => {
+    if (!WINDOW_ID.test(id) || busy.has(id)) return;
+    if (deskClaimed(socket, id)) return;
+    /* The mark as it stood when this pass began. Awaits give a new attach (or a
+       desk take-over) room to run between our steps, which the sync version
+       never allowed: so the claim and the phones are asked again right before
+       each write, and the mark is only cleared if it still holds this value,
+       because a newer attach rewrites it and its owner still needs it. */
+    const mark0 = ((await tmuxAsync(socket, ["show-options", "-qwv", "-t", id, HAD_SIZE])) ?? "").trim();
+    const now = await sizeOf(id);
+    if (now === (had ?? "")) { await clearIfUnchanged(socket, id, mark0); return; }
+    if (now !== "manual" && now !== "largest") return;
+    if (zoomed && zoomed.windowId === id) {
+      if (deskClaimed(socket, id) || (await phoneWindowsAsync(socket)).has(id)) return;
+      await unzoomWindowAsync(socket, sessionId, id, zoomed.paneId);
+    }
+    if (deskClaimed(socket, id) || (await phoneWindowsAsync(socket)).has(id)) return;
+    await tmuxAsync(socket, ["resize-window", "-A", "-t", id]);
+    await tmuxAsync(socket, had
+      ? ["set-option", "-w", "-t", id, "window-size", had]
+      : ["set-option", "-uw", "-t", id, "window-size"]);
+    if ((await sizeOf(id)) === (had ?? "")) await clearIfUnchanged(socket, id, mark0);
+  }));
+  await tmuxAsync(socket, ["refresh-client"]);
+}
+
+/** Clear the size mark and its owner claim only if the mark still holds `mark0`,
+ *  the value read when the pass began, and no desk claim or phone has arrived. */
+async function clearIfUnchanged(socket: string[], id: string, mark0: string): Promise<void> {
+  if (!WINDOW_ID.test(id) || deskClaimed(socket, id)) return;
+  const nowMark = ((await tmuxAsync(socket, ["show-options", "-qwv", "-t", id, HAD_SIZE])) ?? "").trim();
+  if (nowMark !== mark0) return;
+  await Promise.all([
+    tmuxAsync(socket, ["set-option", "-uw", "-t", id, HAD_SIZE]),
+    tmuxAsync(socket, ["set-option", "-uw", "-t", id, HAD_SIZE_BY]),
+  ]);
+}
+
+async function phoneWindowsAsync(socket: string[]): Promise<Set<string>> {
+  const out = await tmuxAsync(socket, ATTACHED_ARGV);
+  const live = out === null ? new Set<string>() : attachedFrom(out);
+  const phones = [...live].filter((name) => PHONE_SESSION.test(name));
+  const ids = await Promise.all(phones.map(async (session) =>
+    (await tmuxAsync(socket, ["display-message", "-p", "-t", session, "#{window_id}"]))?.trim()));
+  return new Set(ids.filter((w): w is string => !!w && WINDOW_ID.test(w)));
+}
+
+async function unzoomWindowAsync(socket: string[], sessionId: string, windowId: string, onlyPane?: string): Promise<boolean> {
+  if (!SESSION_ID.test(sessionId) || !WINDOW_ID.test(windowId)) return false;
+  if (onlyPane !== undefined && !PANE_ID.test(onlyPane)) return false;
+  const target = `${sessionId}:${windowId}`;
+  const [flag, active] = ((await tmuxAsync(socket, ["display-message", "-p", "-t", target, "#{window_zoomed_flag}\t#{pane_id}"])) ?? "").trim().split("\t");
+  if (flag !== "1") return false;
+  if (onlyPane !== undefined && active !== onlyPane) return false;
+  return (await tmuxAsync(socket, ["resize-pane", "-Z", "-t", target])) !== null;
 }
 
 /** Servers whose leftover marks this process has already dealt with. Separate
@@ -5057,8 +5885,8 @@ export function sweepPinnedWindows(sockets: string[][]): number {
  * Attached only. A session left behind by a phone that lost its network is not
  * somebody looking, and marking it would make the mark mean nothing.
  */
-export function phoneWindows(socket: string[], attached?: Set<string>): Set<string> {
-  const windows = new Set<string>();
+export function phonesByWindow(socket: string[], attached?: Set<string>): Map<string, number> {
+  const windows = new Map<string, number>();
   // The sweep already knows: its frame lists every client on this server with
   // the session it sits on, which is the same question `attachedSessions` asks
   // in a command of its own. Passing it in costs one `list-sessions` less per
@@ -5084,7 +5912,28 @@ export function phoneWindows(socket: string[], attached?: Set<string>): Set<stri
    */
   for (const session of phones) {
     const window = tmux(socket, ["display-message", "-p", "-t", session, "#{window_id}"])?.trim();
-    if (window && WINDOW_ID.test(window)) windows.add(window);
+    if (window && WINDOW_ID.test(window)) windows.set(window, (windows.get(window) ?? 0) + 1);
   }
   return windows;
+}
+
+/** Which windows on this server a phone is looking at right now. */
+export function phoneWindows(socket: string[], attached?: Set<string>): Set<string> {
+  return new Set(phonesByWindow(socket, attached).keys());
+}
+
+/**
+ * Put the phone mark on exactly the windows a phone is on, and take it off
+ * every other one.
+ *
+ * Clearing matters because the frame's window objects are shared between every
+ * client on a session for the life of one read: a mark written on the previous
+ * sweep survives into this one, so a phone that moved would leave its old tab
+ * marked as well as the new one.
+ */
+export function markPhoneWindows(windows: readonly TmuxWindow[], phones: ReadonlyMap<string, number>): void {
+  for (const w of windows) {
+    if (phones.has(w.id)) w.phone = true;
+    else delete w.phone;
+  }
 }

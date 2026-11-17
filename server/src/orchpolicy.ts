@@ -34,8 +34,10 @@ import { anthropicUsage } from "./providerusage.ts";
 import { codexUsage } from "./codexusage.ts";
 import { policyRoots, readStoredPolicy } from "./config.ts";
 import { db, recordAction } from "./db.ts";
+import { usageAccounts } from "./usageaccounts.ts";
 import { onUsageReading } from "./usageevents.ts";
 import { peekUsage } from "./usage.ts";
+import { setTimeoutAs } from "./loopwatch.ts";
 
 /** How far past the threshold a reading has to climb before a rule goes off. */
 export const HYSTERESIS = 5;
@@ -103,7 +105,8 @@ export function nextHoursEdge(t: Extract<Trigger, { kind: "hours" }>, ms: number
 
 /** One provider's reading, with a flag for "the last poll failed". */
 export interface UsageRead { usage: ProviderUsage; error?: string }
-export type UsageSource = (provider: UsageProviderId) => UsageRead | null;
+/** `account` absent is the default account; only that one has a held reading yet. */
+export type UsageSource = (provider: UsageProviderId, account?: string) => UsageRead | null;
 
 /** What this process already knows, never a request. */
 export async function heldUsage(): Promise<UsageSource> {
@@ -111,7 +114,7 @@ export async function heldUsage(): Promise<UsageSource> {
   const anthropic: UsageRead | null = payload
     ? { usage: anthropicUsage(payload), ...(payload.error ? { error: payload.error } : {}) }
     : null;
-  return (p) => (p === "anthropic" ? anthropic : p === "codex" ? { usage: codexUsage() } : null);
+  return (p, account) => (account ? null : p === "anthropic" ? anthropic : p === "codex" ? { usage: codexUsage() } : null);
 }
 
 const age = (ms: number): string => (ms < 120 * MIN ? `${Math.max(1, Math.round(ms / MIN))} min` : `${Math.round(ms / (60 * MIN))} h`);
@@ -133,12 +136,14 @@ function windowsOf(u: ProviderUsage, want: "5h" | "weekly" | "either" | "any"): 
  *  (the same at 0). */
 function gauge(
   provider: UsageProviderId, want: "5h" | "weekly" | "either" | "any", atMost: number,
-  prev: Mem | undefined, now: number, read: UsageSource,
+  prev: Mem | undefined, now: number, read: UsageSource, account?: string, accountGone = false,
 ): Answer {
   const was = prev ?? { on: false };
   const keep = (hold: string): Answer => ({ on: was.on, mem: was, hold });
-  const r = read(provider);
-  if (!r || !r.usage.available) return keep(`no usage reading for ${provider === "anthropic" ? "Claude" : "Codex"} yet`);
+  /* A rule on a named account that was since removed would read null forever: say so. */
+  if (account && accountGone) return keep(`account missing: ${account} is no longer on this machine`);
+  const r = read(provider, account);
+  if (!r || !r.usage.available) return keep(`no usage reading for ${provider === "anthropic" ? "Claude" : "Codex"}${account ? ` account ${account}` : ""} yet`);
   if (r.error) return keep(`the last usage poll failed (${r.error}); keeping the last state`);
   const ws = windowsOf(r.usage, want);
   if (!ws.length) return keep(`the reading has no ${want === "any" ? "" : want + " "}window`);
@@ -170,6 +175,8 @@ export interface EvalDeps {
   tz?: string;
   scopes?: ScopeRules[];
   usage?: UsageSource;
+  /** Whether a named account is still on this machine. Default: the stored accounts. */
+  accountKnown?: (provider: UsageProviderId, id: string) => boolean;
   budgetOver?: (root?: string) => boolean;
   /** Where wake-ups go. The default is `setTimeout`; a test records them. */
   schedule?: (at: number, fn: () => void) => unknown;
@@ -226,7 +233,7 @@ function arm(key: string, at: number, now: number, d: Required<Pick<EvalDeps, "s
 export const armedWakeups = (): { key: string; at: number }[] => [...timers].map(([key, v]) => ({ key, at: v.at }));
 
 const realSchedule = (at: number, fn: () => void): unknown => {
-  const h = setTimeout(fn, Math.max(0, at - Date.now()));
+  const h = setTimeoutAs("boot:policy-evaluator:timer", fn, Math.max(0, at - Date.now()));
   h.unref?.();
   return h;
 };
@@ -241,6 +248,8 @@ export async function evaluate(deps: EvalDeps = {}): Promise<{ flips: Flip[] }> 
   const scopes = deps.scopes ?? storedScopes();
   const needsGauge = scopes.some((s) => s.rules.some((r) => r.enabled && r.when.some((t) => t.kind === "usage" || t.kind === "limit")));
   const usage = deps.usage ?? (needsGauge ? await heldUsage() : () => null);
+  const known = deps.accountKnown ?? ((p, id) => usageAccounts().some((a) => a.provider === p && a.id === id));
+  const gone = (t: { provider: UsageProviderId; account?: string }) => !!t.account && !known(t.provider, t.account);
   const budgetOver = deps.budgetOver ?? budgetOverFor;
   const sched = { schedule: deps.schedule ?? realSchedule, cancel: deps.cancel ?? ((h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>)) };
   const rerun = () => { void evaluate(deps).catch((e) => console.error("[policy] evaluate failed:", e instanceof Error ? e.message : e)); };
@@ -272,8 +281,8 @@ export async function evaluate(deps: EvalDeps = {}): Promise<{ flips: Flip[] }> 
               a = { on, mem: { on }, wake: nextHoursEdge(t, now, deps.tz) };
               break;
             }
-            case "usage": a = gauge(t.provider, t.window, t.remainingAtMost, prev[i], now, usage); break;
-            case "limit": a = gauge(t.provider, "any", 0, prev[i], now, usage); break;
+            case "usage": a = gauge(t.provider, t.window, t.remainingAtMost, prev[i], now, usage, t.account, gone(t)); break;
+            case "limit": a = gauge(t.provider, "any", 0, prev[i], now, usage, t.account, gone(t)); break;
           }
           mem[i] = a.mem;
           if (a.reading) readings.push(a.reading);

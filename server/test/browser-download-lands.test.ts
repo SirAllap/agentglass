@@ -83,7 +83,12 @@ describe("a download that actually lands", () => {
   test("a download nobody asked for is left alone", () => {
     // The handler is on the session, which is shared. A person saving a file
     // from a page must not have it silently redirected into an agent's folder.
-    expect(bare).toContain("if (!dir) return");
+    expect(bare).toContain("if (!target) return");
+    expect(bare, "only a lane tab counts as an agent's").toContain("agent: laneGuests.has(wc)");
+  });
+
+  test("an agent's own tab saves into its folder instead of a Save dialog", () => {
+    expect(bare).toContain("agent-downloads");
   });
 
   test("the handler is wired once per session", () => {

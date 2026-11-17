@@ -97,7 +97,7 @@ beforeEach(() => {
 afterEach(() => { tmux("kill-server"); });
 
 describe("who decides how big the window is", () => {
-  it("fits the only client attached", () => {
+  it("fits the only client attached", async () => {
     attach(80, 24);
     settleClients(1);
     settleRows((r) => r === 23);
@@ -105,7 +105,7 @@ describe("who decides how big the window is", () => {
     expect(geom().paneRows).toBe(23);
   });
 
-  it("hands the window to a bigger client, leaving the small one looking at a corner", () => {
+  it("hands the window to a bigger client, leaving the small one looking at a corner", async () => {
     attach(80, 24);
     settleClients(1);
     settleRows((r) => r === 23);
@@ -123,7 +123,7 @@ describe("who decides how big the window is", () => {
     expect(shared - alone).toBeGreaterThan(20);
   });
 
-  it("gives it back when this client asks to be fitted", () => {
+  it("gives it back when this client asks to be fitted", async () => {
     attach(80, 24);
     settleClients(1);
     settleRows((r) => r === 23);
@@ -165,7 +165,7 @@ describe("who decides how big the window is", () => {
  * its target the same way, so the initial fit takes where it used to be skipped.
  */
 describe("the fit action sizes the window to the client, not taller", () => {
-  it("lands on a window a grouped session shares, and it sticks", () => {
+  it("lands on a window a grouped session shares, and it sticks", async () => {
     // A grouped session sharing probe's window — the phone-attached shape, the
     // one an unqualified window id misses.
     tmux("new-session", "-d", "-t", "probe", "-s", "grp");
@@ -186,7 +186,7 @@ describe("the fit action sizes the window to the client, not taller", () => {
     // narrower AND shorter than the 267x65 client still attached, so both
     // dimensions are proven independently. A width that matched the client would
     // land whether or not the fit set it; 200 can only be there if it did.
-    const ok = runAction({ pid: 0, socket: ["-S", SOCK], session: "probe", id: sid }, "fit", win, undefined, 200, 59);
+    const ok = await runAction({ pid: 0, socket: ["-S", SOCK], session: "probe", id: sid }, "fit", win, undefined, 200, 59);
     expect(ok).toBe(true);
     until(() => geom().window === "200x59");
 

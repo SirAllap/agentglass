@@ -203,3 +203,21 @@ describe("a flag the author wants on by default", () => {
     expect(R.renderSteps(r, { fe: "0" }).steps[0]).toBe("make build ");
   });
 });
+
+describe("the list is read from disk once", () => {
+  it("a second call does not re-read the file, and gives the same answer", () => {
+    const file = join(dir, "many.json");
+    const many = Array.from({ length: 500 }, (_, i) => ({
+      ...base, id: `r${i}`, name: `thing-${i}`, params: [],
+    }));
+    writeFileSync(file, JSON.stringify({ recipes: many }));
+    R.__setRecipesPath(file);
+    const first = R.recipes();
+    expect(first.length).toBe(500);
+    // Rewrite the file under it. A re-read would see one recipe, not 500.
+    writeFileSync(file, JSON.stringify({ recipes: [many[0]] }));
+    const second = R.recipes();
+    expect(second).toBe(first);
+    expect(R.recipesFor("/anywhere").length).toBe(500);
+  });
+});

@@ -148,6 +148,14 @@ describe("the session you left is on offer again", () => {
     expect(stray).toBeTruthy();
   });
 
+  it("asked for every server, a detached one that is not ours is listed too", async () => {
+    // In progress asks "is this agent still running", and an agent idle on a
+    // server nobody is attached to is. Only that question widens the walk.
+    detachedServer("not-ours");
+    expect((await listPanes([], { everyServer: true })).map((r) => r.session)).toContain("not-ours");
+    expect((await listPanes([])).map((r) => r.session)).not.toContain("not-ours");
+  });
+
   it("shows nothing extra when nothing is remembered", async () => {
     // The behaviour this app had before the file existed, asserted so that a
     // machine with no memory yet cannot start seeing stray servers.

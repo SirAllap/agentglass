@@ -21,12 +21,15 @@ const MASK = 0x100 /* create */ | 0x200 /* delete */ | 0x40 /* moved from */ | 0
 export const IN_ISDIR = 0x40000000;
 export const IN_Q_OVERFLOW = 0x4000;
 export const IN_IGNORED = 0x8000;
+export const IN_MODIFY = 0x2;
 export const IN_CREATE = 0x100, IN_DELETE = 0x200, IN_MOVED_FROM = 0x40, IN_MOVED_TO = 0x80, IN_DELETE_SELF = 0x400, IN_MOVE_SELF = 0x800;
 
 export interface WatchEvent { wd: number; mask: number; name: string }
 export interface Watcher {
   /** The watch number for a folder, or -1 when the kernel refused (the limit on watches, usually). */
   add(path: string): number;
+  /** Drop one watch the kernel still holds (a folder that was renamed away keeps its watch otherwise). */
+  rm(wd: number): void;
   close(): void;
 }
 
@@ -46,12 +49,17 @@ export function parseEvents(buf: Buffer, carry: Buffer | null): { events: WatchE
   return { events, rest: at < all.length ? Buffer.from(all.subarray(at)) : null };
 }
 
-export function openWatcher(onEvents: (events: WatchEvent[]) => void): Watcher | null {
+/** `mask` defaults to names only; the transcript watcher adds IN_MODIFY (an append). */
+/** Pause between reads of the inotify descriptor; events queue in the kernel. */
+const READ_GAP_MS = 1000;
+
+export function openWatcher(onEvents: (events: WatchEvent[]) => void, mask: number = MASK): Watcher | null {
   if (process.platform !== "linux") return null;
   try {
     const { symbols: c } = dlopen("libc.so.6", {
       inotify_init1: { args: [FFIType.i32], returns: FFIType.i32 },
       inotify_add_watch: { args: [FFIType.i32, FFIType.ptr, FFIType.u32], returns: FFIType.i32 },
+      inotify_rm_watch: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 },
     });
     const fd = c.inotify_init1(0);
     if (fd < 0) return null;
@@ -61,10 +69,16 @@ export function openWatcher(onEvents: (events: WatchEvent[]) => void): Watcher |
       const r = parseEvents(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk), carry);
       carry = r.rest;
       if (r.events.length) onEvents(r.events);
+      // Each read costs a thread hop (~1 ms of CPU). A busy tree is 50+ events
+      // a second; pausing lets the kernel queue them so one read takes a burst.
+      stream.pause();
+      // loop-ok: only resumes a paused stream; the read it allows is counted where it runs.
+      setTimeout(() => stream.resume(), READ_GAP_MS).unref?.();
     });
     stream.on("error", () => { /* a closed descriptor ends the stream; nothing to report */ });
     return {
-      add: (path) => c.inotify_add_watch(fd, ptr(Buffer.from(path + "\0")), MASK),
+      add: (path) => c.inotify_add_watch(fd, ptr(Buffer.from(path + "\0")), mask),
+      rm: (wd) => { c.inotify_rm_watch(fd, wd); },
       close: () => { stream.destroy(); },
     };
   } catch { return null; }

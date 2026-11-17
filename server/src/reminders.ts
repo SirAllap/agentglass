@@ -20,7 +20,7 @@
  * 360 wake-ups an hour on a machine with no reminders at all.
  */
 import { randomUUID } from "node:crypto";
-import { db } from "./db.ts";
+import { db, durably } from "./db.ts";
 import { pushReminder } from "./alerts.ts";
 import { entered } from "./loopwatch.ts";
 import { createWakeup, type Wakeup } from "./wakeup.ts";
@@ -110,25 +110,25 @@ export function addReminder(input: {
     root: input.root ?? null, civil: input.civil, zone, due, created: Date.now(),
     fired_at: null, acked_at: null, cancelled_at: null, snooze_of: input.snoozeOf ?? null,
   };
-  db.run(
+  durably(() => db.run(
     `INSERT INTO reminders (id, task_uuid, title, root, civil, zone, due, created, snooze_of)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [row.id, row.task_uuid, row.title, row.root, row.civil, row.zone, row.due, row.created, row.snooze_of],
-  );
+  ));
   wake?.arm();   // an earlier due time is the one change a sleeping timer cannot see
   return { ok: true, reminder: toReminder(row) };
 }
 
 /** Idempotent: acknowledging twice is what a double click is. */
 export function ackReminder(id: string): { ok: boolean } {
-  db.run(`UPDATE reminders SET acked_at = ? WHERE id = ? AND acked_at IS NULL`, [Date.now(), id]);
+  durably(() => db.run(`UPDATE reminders SET acked_at = ? WHERE id = ? AND acked_at IS NULL`, [Date.now(), id]));
   return { ok: true };
 }
 
 /** Cancellation is in the claim predicate, so a cancelled reminder cannot fire
  *  on the next tick — or the next boot. */
 export function cancelReminder(id: string): { ok: boolean } {
-  db.run(`UPDATE reminders SET cancelled_at = ? WHERE id = ? AND cancelled_at IS NULL`, [Date.now(), id]);
+  durably(() => db.run(`UPDATE reminders SET cancelled_at = ? WHERE id = ? AND cancelled_at IS NULL`, [Date.now(), id]));
   return { ok: true };
 }
 

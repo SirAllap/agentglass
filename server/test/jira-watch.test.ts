@@ -42,21 +42,39 @@ const card = (id: string, status: string, updated: number, o: Partial<Task> = {}
 } as Task);
 
 type Answer = Awaited<ReturnType<import("../src/jirawatch.ts").JiraReader>>;
+type CommentAnswer = Awaited<ReturnType<import("../src/jirawatch.ts").JiraCommentReader>>;
 let queue: Answer[] = [];
 let asked: string[] = [];
+/** Comments by card key, and every key whose comments were read in one poll. */
+let threads: Record<string, CommentAnswer["data"]> = {};
+let opened: string[] = [];
+/** Answers to the follow look, which is asked once per poll after the first. */
+let follow: Answer[] = [];
 const say = (tasks: Task[], truncated = false): Answer => ({ ok: true, data: { tasks, truncated } });
 
 beforeEach(() => {
   W.__setJiraWatchPath(watchFile);
   rmSync(watchFile, { force: true });
   W.__resetJiraTrouble();
-  queue = []; asked = [];
-  W.__setJiraReader(async (jql) => { asked.push(jql); return queue.shift() ?? say([]); });
+  W.__setJiraMe(["acc-0001"]);
+  queue = []; asked = []; threads = {}; opened = []; follow = [];
+  W.__setJiraReader(async (jql) => {
+    asked.push(jql);
+    // The follow look is answered empty unless a test queues one for it.
+    if (jql.startsWith("(reporter")) return follow.shift() ?? say([]);
+    return queue.shift() ?? say([]);
+  });
+  W.__setJiraCommentReader(async (key) => {
+    opened.push(key);
+    return { ok: true, data: threads[key] ?? { comments: [] } };
+  });
 });
-afterEach(() => { W.__setJiraReader(null); });
+afterEach(() => { W.__setJiraMover(null); W.__setJiraReader(null); W.__setJiraCommentReader(null); W.__setJiraMe(null); });
 afterAll(() => {
   W.__setJiraWatchPath(null);
   W.__setJiraReader(null);
+  W.__setJiraCommentReader(null);
+  W.__setJiraMe(null);
   for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
   rmSync(dir, { recursive: true, force: true });
 });
@@ -105,6 +123,89 @@ describe("what is said", () => {
     const notes = await W.pollJira(T0 + 6 * MIN);
     expect(notes).toHaveLength(8);
     expect(notes.map((n) => n.id)).toEqual(many.slice(4).map((t) => t.customId!));
+  });
+});
+
+describe("who moved a card", () => {
+  const moveTwice = async (): Promise<Awaited<ReturnType<typeof W.pollJira>>> => {
+    queue = [say([card("1", "To Do", T0 - 3 * 24 * 60 * MIN)]), say([card("1", "In Progress", T0 + 2 * MIN)])];
+    await W.pollJira(T0);
+    return W.pollJira(T0 + 6 * MIN);
+  };
+
+  test("someone else's move names them and is not mine", async () => {
+    const asked2: string[] = [];
+    W.__setJiraMover(async (key, to) => { asked2.push(`${key}>${to}`); return { who: "Grace", whoId: "acc-0002" }; });
+    const notes = await moveTwice();
+    expect(notes.map((n) => [n.kind, n.who, n.byMe])).toEqual([["status", "Grace", false]]);
+    expect(asked2).toEqual(["ORBIT-1>In Progress"]);
+  });
+
+  test("my own move says so, and an unreadable changelog claims nothing", async () => {
+    W.__setJiraMover(async () => ({ who: "Ada", whoId: "ACC-0001" }));
+    expect((await moveTwice()).map((n) => n.byMe)).toEqual([true]);
+    rmSync(watchFile, { force: true }); W.__setJiraWatchPath(watchFile);
+    W.__setJiraMover(async () => null);
+    const n = (await moveTwice())[0]!;
+    expect(n.who).toBeUndefined();
+    expect(n.byMe).toBeUndefined();
+  });
+});
+
+describe("who moved a card: the changelog", () => {
+  const ev = (to: string, whoId: string): any => ({ who: whoId, whoId, edit: { field: "status", toString: to } });
+  /** A 10-per-page changelog of `n` events, oldest first; `at(i)` makes event i. */
+  const pages = (n: number, at: (i: number) => any, log: number[]) => async (_k: string, from: number): Promise<any> => {
+    log.push(from);
+    const events = Array.from({ length: Math.min(10, n - from) }, (_, j) => at(from + j));
+    return { ok: true, data: { events, total: n, ...(from + 10 < n ? { next: from + 10 } : {}) } };
+  };
+  afterEach(() => W.__setJiraHistory(null));
+  const moveTwice = async (): Promise<Awaited<ReturnType<typeof W.pollJira>>> => {
+    queue = [say([card("1", "To Do", T0 - 3 * 24 * 60 * MIN)]), say([card("1", "In Progress", T0 + 2 * MIN)])];
+    await W.pollJira(T0);
+    return W.pollJira(T0 + 6 * MIN);
+  };
+
+  test("on a long card the latest move into the status wins, not an older one", async () => {
+    const log: number[] = [];
+    // Event 3 and event 44 both move into Done; 44 is the latest.
+    W.__setJiraHistory(pages(45, (i) => (i === 3 ? ev("Done", "old") : i === 44 ? ev("Done", "new") : ev("x", "z")), log));
+    expect(await W.latestMover("ORBIT-1", "Done")).toEqual({ who: "new", whoId: "new" });
+    expect(log).toEqual([0, 40]);
+  });
+
+  test("reads at most three pages, from the end", async () => {
+    const log: number[] = [];
+    W.__setJiraHistory(pages(100, () => ev("x", "z"), log));
+    expect(await W.latestMover("ORBIT-1", "Done")).toBeNull();
+    expect(log).toEqual([0, 90, 80]);
+  });
+
+  test("a short card is one request", async () => {
+    const log: number[] = [];
+    W.__setJiraHistory(pages(4, (i) => (i === 2 ? ev("Done", "acc") : ev("x", "z")), log));
+    expect((await W.latestMover("ORBIT-1", "Done"))?.whoId).toBe("acc");
+    expect(log).toEqual([0]);
+  });
+
+  test("with no account id of mine, a move is never called not-mine", async () => {
+    W.__setJiraMe([]);
+    W.__setJiraMover(async () => ({ who: "Ada", whoId: "ACC-0001" }));
+    const n = (await moveTwice())[0]!;
+    expect(n.who).toBe("Ada");
+    expect(n.byMe).toBeUndefined();
+  });
+
+  test("one poll asks the changelog of four cards, no more", async () => {
+    let calls = 0;
+    W.__setJiraMover(async () => { calls++; return { who: "G", whoId: "acc-2" }; });
+    const was = Array.from({ length: 6 }, (_, i) => card(String(200 + i), "To Do", T0 - 3 * 24 * 60 * MIN));
+    const now = Array.from({ length: 6 }, (_, i) => card(String(200 + i), "In Progress", T0 + (i + 1) * 1000));
+    queue = [say(was), say(now)];
+    await W.pollJira(T0);
+    expect(await W.pollJira(T0 + 6 * MIN)).toHaveLength(6);
+    expect(calls).toBe(4);
   });
 });
 
@@ -221,11 +322,94 @@ describe("failures are said once, and lose nothing", () => {
 
 });
 
+describe("what somebody wrote on a card", () => {
+  /** A card comment as the reader hands it back. */
+  const note = (id: string, at: number, o: Partial<NonNullable<CommentAnswer["data"]>["comments"][number]> = {}) => ({
+    id, who: "Grace Sample", text: `Comment ${id}`, at, initials: "GS", ...o,
+  });
+  const seed = async () => {
+    queue = [say([card("1", "To Do", T0)])];
+    await W.pollJira(T0);
+  };
+
+  test("a comment on a card of mine is said once, with who wrote it and what they said", async () => {
+    await seed();
+    queue = [say([card("1", "To Do", T0 + 5 * MIN)])];
+    threads = { "ORBIT-1": { comments: [note("c1", T0 + 4 * MIN)] } };
+    const notes = await W.pollJira(T0 + 6 * MIN);
+    expect(notes.map((n) => [n.kind, n.label, n.who, n.said])).toEqual([["comment", "ORBIT-1", "Grace Sample", "Comment c1"]]);
+    expect(notes[0]!.tracker).toBe("jira");
+    // The window carries a minute twice, so the same comment comes back: still one note.
+    queue = [say([card("1", "To Do", T0 + 11 * MIN)])];
+    expect(await W.pollJira(T0 + 12 * MIN)).toEqual([]);
+  });
+
+  test("a comment that names me is a mention, not a comment", async () => {
+    await seed();
+    queue = [say([card("1", "To Do", T0 + 5 * MIN)])];
+    threads = { "ORBIT-1": { comments: [note("c2", T0 + 4 * MIN, { mentions: [{ id: "acc-0001", name: "Ada Example" }] })] } };
+    const notes = await W.pollJira(T0 + 6 * MIN);
+    expect(notes.map((n) => [n.kind, n.said])).toEqual([["mention", "Comment c2"]]);
+  });
+
+  test("my own comment is not news", async () => {
+    await seed();
+    queue = [say([card("1", "To Do", T0 + 5 * MIN)])];
+    threads = { "ORBIT-1": { comments: [note("c3", T0 + 4 * MIN, { mine: true, who: "Ada Example" })] } };
+    expect(await W.pollJira(T0 + 6 * MIN)).toEqual([]);
+  });
+
+  test("a comment older than the last look is not announced, however late the read", async () => {
+    await seed();
+    queue = [say([card("1", "To Do", T0 + 5 * MIN)])];
+    threads = { "ORBIT-1": { comments: [note("c4", T0 - MIN)] } };
+    expect(await W.pollJira(T0 + 6 * MIN)).toEqual([]);
+  });
+
+  test("a mention on somebody else's card is news; their plain comment is not", async () => {
+    await seed();
+    // The follow look finds a card I reported: not mine, so only a comment that names me is worth a note.
+    follow = [say([card("2", "In Progress", T0 + 5 * MIN, { mine: false })])];
+    threads = { "ORBIT-2": { comments: [note("c5", T0 + 4 * MIN), note("c6", T0 + 4 * MIN, { mentions: [{ id: "acc-0001", name: "Ada Example" }] })] } };
+    const notes = await W.pollJira(T0 + 6 * MIN);
+    expect(notes.map((n) => [n.kind, n.label])).toEqual([["mention", "ORBIT-2"]]);
+  });
+
+  test("the first look reads no comments at all", async () => {
+    queue = [say([card("1", "To Do", T0)])];
+    threads = { "ORBIT-1": { comments: [note("c7", T0 - MIN)] } };
+    await W.pollJira(T0);
+    expect(opened).toEqual([]);
+    expect(asked).toEqual([J.MINE_JQL]);
+  });
+
+  test("a quiet tick reads no comments: the reads follow the cards that changed", async () => {
+    await seed();
+    queue = [say([])];
+    await W.pollJira(T0 + 6 * MIN);
+    expect(opened).toEqual([]);
+    // And the follow look is asked beside the window, never instead of it.
+    expect(asked.slice(1)).toEqual([W.windowJql(T0, T0 + 6 * MIN), W.followJql(T0, T0 + 6 * MIN)]);
+  });
+
+  test("a read cut short at twelve cards still reads the rest next time", async () => {
+    await seed();
+    const many = Array.from({ length: 14 }, (_, i) => card(String(200 + i), "To Do", T0 + (i + 1) * 1000));
+    queue = [say(many)];
+    await W.pollJira(T0 + 6 * MIN);
+    expect(opened).toHaveLength(12);
+  });
+});
+
 describe("the window", () => {
   test("is relative to the site's clock, with the minute re-read, oldest change first", () => {
     expect(W.windowJql(T0, T0 + 6 * MIN)).toBe("assignee = currentUser() AND updated >= -8m ORDER BY updated ASC");
     expect(W.windowJql(T0, T0 + 1)).toBe("assignee = currentUser() AND updated >= -3m ORDER BY updated ASC");
     expect(W.windowJql(T0, T0 + 3 * 24 * 60 * MIN)).toContain("-4322m");
+  });
+
+  test("the follow look asks about the cards I report or watch over the same window", () => {
+    expect(W.followJql(T0, T0 + 6 * MIN)).toBe("(reporter = currentUser() OR watcher = currentUser()) AND updated >= -8m ORDER BY updated ASC");
   });
 
   test("a read cut short advances the mark to the last card read, not past it", async () => {
@@ -309,16 +493,23 @@ for (const flavor of ["cloud", "datacenter"] as const) {
     afterEach(() => { J.__setJiraBase(null); C.__clearAll(); C.__setCredentialsPath(null); });
 
     const searches = () => fake.requests.filter((r) => /\/search/.test(r.path));
+    const reads = () => fake.requests.filter((r) => /\/comment/.test(r.path));
 
-    test("the first look and the next are one search each, and nothing else is asked", async () => {
+    test("the first look is one search; the next is the window and the follow look, and nothing else on a quiet site", async () => {
+      // Nothing here is reported or watched by me, so the follow look is empty and
+      // no comment is read: the only requests of a quiet tick are the two searches.
+      for (const i of Object.values(fake.state.issues)) i.reporter = "acc-0002";
       expect(await W.pollJira(T0)).toEqual([]);
       expect(fake.requests).toHaveLength(1);
       expect(searches()).toHaveLength(1);
       expect(proxy.jql[0]).toBe(J.MINE_JQL);
+      expect(reads()).toHaveLength(0);
 
       expect(await W.pollJira(T0 + 6 * MIN)).toEqual([]);
-      expect(fake.requests).toHaveLength(2);
+      expect(searches()).toHaveLength(3);
       expect(proxy.jql[1]).toBe("assignee = currentUser() AND updated >= -8m ORDER BY updated ASC");
+      expect(proxy.jql[2]).toBe("(reporter = currentUser() OR watcher = currentUser()) AND updated >= -8m ORDER BY updated ASC");
+      expect(reads()).toHaveLength(0);
     });
 
     test("a card that moved on the site is announced once with the status it left", async () => {
@@ -347,6 +538,46 @@ for (const flavor of ["cloud", "datacenter"] as const) {
     });
   });
 }
+
+describe("against a site: a comment that names me", () => {
+  let fake: FakeJira;
+  let proxy: JiraProxy;
+  beforeAll(() => { fake = startFakeJira({ flavor: "cloud", pageSize: 50 }); proxy = startJiraProxy(fake.base); });
+  afterAll(async () => { await proxy.stop(); await fake.stop(); });
+  beforeEach(async () => {
+    fake.reset();
+    proxy.jql.length = 0;
+    W.__setJiraReader(null);
+    W.__setJiraCommentReader(null);
+    C.__setCredentialsPath(credFile);
+    C.__clearAll();
+    J.__setJiraBase(proxy.base);
+    J.__setJiraGuard(null);
+    expect((await J.connectJira({ email: FAKE_EMAIL, site: "acme.atlassian.net", token: FAKE_TOKEN })).ok).toBe(true);
+    fake.requests.length = 0;
+  });
+  afterEach(() => { J.__setJiraBase(null); C.__clearAll(); C.__setCredentialsPath(null); });
+
+  test("a mention on my card is announced with the author and the words, and read once", async () => {
+    await W.pollJira(T0);
+    const issue = fake.state.issues["ORBIT-1042"]!;
+    const at = new Date(T0 + 5 * MIN).toISOString();
+    issue.comments.push({
+      id: "30200", author: "acc-0002", created: at, updated: at,
+      body: { version: 1, type: "doc", content: [{ type: "paragraph", content: [
+        { type: "mention", attrs: { id: "acc-0001", text: "@Ada Example" } },
+        { type: "text", text: " can you take a look at the retry loop?" },
+      ] }] },
+    });
+    fake.requests.length = 0;
+    const notes = await W.pollJira(T0 + 6 * MIN);
+    expect(notes.map((n) => [n.kind, n.label, n.who])).toEqual([["mention", "ORBIT-1042", "Grace Sample"]]);
+    expect(notes[0]!.said).toContain("can you take a look");
+    // The card's comments are read once; the other cards the window returned are theirs.
+    expect(fake.requests.filter((r) => r.path === "/issue/ORBIT-1042/comment")).toHaveLength(1);
+    expect(await W.pollJira(T0 + 12 * MIN)).toEqual([]);
+  });
+});
 
 describe("a second page only when the first was full", () => {
   let fake: FakeJira;

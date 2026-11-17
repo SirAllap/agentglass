@@ -31,6 +31,7 @@ import { homedir } from "node:os";
 import { resolve, join, dirname, basename, sep } from "node:path";
 import { SKIP_DIRS } from "./gitwork.ts";
 import type { FsEntry, FsCompletion } from "../../shared/types.ts";
+import { envLimit } from "./config.ts";
 
 /** Enough to pick from, few enough that a home directory full of junk can't
  *  turn one keystroke into a megabyte of JSON (or a scrolling wall in the UI).
@@ -40,7 +41,7 @@ const MAX_ENTRIES = 60;
 
 /** Kill switch for operators who don't want the machine's directory tree
  *  readable over the wire, independent of whether the terminal is enabled. */
-export const FS_BROWSE_ENABLED = process.env.AGENTGLASS_FS_BROWSE_DISABLED !== "1";
+export const fsBrowseEnabled = (): boolean => envLimit("AGENTGLASS_FS_BROWSE_DISABLED") !== "1";
 
 // `repo` is a cheap `.git` stat per entry. Worth it: "which of these forty
 // folders is actually a project" is the question the user is really asking.

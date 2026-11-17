@@ -22,6 +22,10 @@
 import { networkInterfaces } from "node:os";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import type { ServeResult } from "../../shared/types.ts";
+import { runChild } from "./broker/brokerRun.ts";
+
+/** A tailscale call that names no limit of its own ends after this. */
+const TAILSCALE_DEFAULT_LIMIT_MS = 30_000;
 
 /**
  * A non-loopback address that has talked to us, and what we know about it.
@@ -372,13 +376,26 @@ function socketKey(addr: string, port: number): string {
   return `${addr}:${port}`;
 }
 
+/** Rows that got the full split; a test reads it to prove the cheap reject works. */
+let rowsParsed = 0;
+export function __procRowsParsed(): number { return rowsParsed; }
+
 function socketOwners(ourPort: number, now = Date.now()): Map<string, number> {
   if (tableCache && tableCache.port === ourPort && now - tableCache.at < 1000) return tableCache.map;
   const map = new Map<string, number>();
+  const hex = Number.isInteger(ourPort) && ourPort >= 0 && ourPort <= 0xffff
+    ? ourPort.toString(16).padStart(4, "0") : "";
+  const sufUp = hex ? ":" + hex.toUpperCase() : "";
+  const sufLo = hex ? ":" + hex : "";
   for (const file of procNetFiles) {
     let text: string;
     try { text = readFileSync(file, "utf8"); } catch { continue; }
     for (const line of text.split("\n").slice(1)) {
+      // Cheap reject first: a row can only match when its remote port, the
+      // field's last 4 hex digits, is ours, so ":PORT" must appear in the line.
+      // A necessary condition only; every row that passes is parsed as before.
+      if (sufUp && !line.includes(sufUp) && !line.includes(sufLo!)) continue;
+      rowsParsed++;
       const c = line.trim().split(/\s+/);
       if (c.length < 10) continue;
       // Every state a live client can be in while its request is handled, not
@@ -677,13 +694,10 @@ async function tsCmd(args: string[], opts: { stderr?: boolean; timeoutMs?: numbe
   const bin = Bun.which("tailscale", { PATH: process.env.PATH ?? "" });
   if (!bin) return { absent: true, code: null, out: "" };
   try {
-    const p = Bun.spawn([bin, ...args], { stdout: "pipe", stderr: opts.stderr ? "pipe" : "ignore" });
-    let timedOut = false;
-    const timer = opts.timeoutMs ? setTimeout(() => { timedOut = true; p.kill(); }, opts.timeoutMs) : null;
-    const [out, err] = await Promise.all([new Response(p.stdout).text(), opts.stderr ? new Response(p.stderr).text() : ""]);
-    await p.exited;
-    if (timer) clearTimeout(timer);
-    return { code: p.exitCode, out, ...(opts.stderr ? { err } : {}), ...(timedOut ? { timedOut } : {}) };
+    // Through the spawn broker: a fork of the server stalls every request. A call with no limit of its own gets one.
+    const r = await runChild([bin, ...args], { timeoutMs: opts.timeoutMs || TAILSCALE_DEFAULT_LIMIT_MS });
+    if (r.code === null && !r.timedOut && !r.signal && r.error) return { code: null, out: "", why: r.error.slice(0, 120) };
+    return { code: r.code, out: r.stdout, ...(opts.stderr ? { err: r.stderr } : {}), ...(r.timedOut ? { timedOut: true } : {}) };
   } catch (e) {
     return { code: null, out: "", why: String((e as Error)?.message ?? e).slice(0, 120) };
   }

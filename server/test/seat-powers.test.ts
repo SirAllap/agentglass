@@ -78,6 +78,24 @@ describe("a chair set to assign", () => {
     for (const power of ["speak", "nudge"] as const) expect(seatAllows(power, "POST", link)).toBe(false);
   });
 
+  test("may answer a finding; a lower chair may not, same ceiling as Go and Launch", () => {
+    const answer = "/flight-plan/runs/pf_0123456789abcdef/findings/F8";
+    expect(seatAllows("assign", "POST", answer)).toBe(true);
+    for (const power of ["speak", "nudge"] as const) expect(seatAllows(power, "POST", answer)).toBe(false);
+  });
+
+  test("the live call: `agentglass-ui flight-plan resolve <id> F8 fix` builds /flight-plan/runs/<pf_id>/findings/F8, and allowed() (the wall, not seatAllows alone) grants it to a real minted assign seat", () => {
+    // Exact path shape bin/agentglass-ui's flight_plan() builds for the resolve
+    // verb: `_fp(f"/flight-plan/runs/{q(a.id)}/findings/{q(a.finding)}", ...)`.
+    const path = "/flight-plan/runs/pf_0123456789abcdef/findings/F8";
+    const t = mintSeatToken(ROOT, "assign");
+    const caller = callerFor(new Request("http://x/", { headers: { Authorization: `Bearer ${t}` } }), new URL("http://x" + path), "the-machine-token")!;
+    expect(caller.principal).toBe("seat");
+    expect(caller.seat?.powers).toBe("assign");
+    expect(allowed(caller, "POST", path)).toBe(true);
+    revokeSeatTokens(ROOT);
+  });
+
   test("still may not do a thing nobody wrote down", () => {
     /* Deny by default: a route invented next month is out of reach before
        anybody thinks about it. These are real routes the seat has no business

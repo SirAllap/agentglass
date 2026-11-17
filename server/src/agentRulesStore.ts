@@ -9,17 +9,54 @@
  * door lands in both.
  */
 import { randomBytes } from "node:crypto";
-import { db } from "./db.ts";
+import { db as realDb, durably } from "./db.ts";
 import { launchDeny, launchMode, writeLaunchPermissions } from "./config.ts";
 import { projectRootOf } from "./git.ts";
 import { DEFAULT_LAUNCH_DENY, isLaunchMode, parseDenyRules, type LaunchMode } from "../../shared/launchModes.ts";
 import {
-  BASE_PROJECT, BASE_RULES, MODE_ACTION, RULES_MAX_PER_PROJECT, decide, inForceFor, isLooser, isLooserMode, isRuleScope, ruleFor, seatChecksRule, shellSegments, primaryInput, wouldPrompt,
-  type AgentRule, type AgentRulesView, type RuleChange, type RuleCheck, type RuleScope, type RuleSetting, type RuleSource, type RuleWrite,
+  BASE_PROJECT, BASE_RULES, MODE_ACTION, RULES_MAX_PER_PROJECT, decide, inForceFor, launchDenyFor, isLooser, isLooserMode, isRuleScope, ruleFor, seatRules, shellCalls, primaryInput, wouldPrompt,
+  type AgentRule, type AgentRulesView, type RuleChange, type RuleCheck, type RuleScope, type RuleSetting, type RuleSource, type RuleWrite, type SeatFlow,
 } from "../../shared/agentRules.ts";
-import { hasVerifierBlock } from "../../shared/flow.ts";
+import { chainOf, hasVerifierBlock } from "../../shared/flow.ts";
 import { readFlow } from "./flow.ts";
+import { baseChoices } from "./orchestration.ts";
+import { getSetting } from "./preflightStore.ts";
 import type { Applied, DoorAnswer } from "./settingsDoor.ts";
+
+/*
+ * EVERY WRITE IN THIS FILE GOES THROUGH HERE, SO THE READ BELOW CAN BE KEPT.
+ *
+ * `/gate` asks `check` before every tool call of every session, and `check`
+ * read every live rule of every project from SQLite each time: one
+ * synchronous query on the server's only thread per tool call, in a database
+ * whose cold pages cost seconds to read back after memory pressure. The rules
+ * change when a person or an agent writes one, which is rare; so the rows are
+ * kept until something here writes.
+ *
+ * A kept list that missed a write would let through a call a rule had just
+ * forbidden, so the bump is not left to each of the thirty-odd statements to
+ * remember: this file's `db` is this wrapper, and a statement that can write
+ * cannot be made without moving the epoch. It moves when the statement is
+ * made, which is before it runs; nothing reads rules between the two (every
+ * site is `db.query(sql).run(...)`). A transaction moves it once more when it
+ * ends, committed or not, so rows read inside one that rolled back are not
+ * kept either.
+ *
+ * Ceiling: a write to these tables from outside this file, or from another
+ * process on the same database file, is not seen until the next write here or
+ * a restart. Nothing in server/src, bin or scripts does either today, and
+ * `__resetRulesStore` is what a test that writes rows by hand already calls.
+ */
+let rulesEpoch = 0;
+const WRITES = /^\s*(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER)\b/i;
+const db = {
+  query: (sql: string) => { if (WRITES.test(sql)) rulesEpoch++; return realDb.query(sql); },
+  exec: (sql: string): void => { rulesEpoch++; realDb.exec(sql); },
+  transaction: (fn: () => void): (() => void) => {
+    const tx = realDb.transaction(fn);
+    return () => { try { tx(); } finally { rulesEpoch++; } };
+  },
+};
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS agent_rules (
@@ -110,7 +147,18 @@ function note(ruleId: string, project: string, from: RuleSetting | null, to: Rul
   db.query("INSERT INTO agent_rule_changes VALUES (?,?,?,?,?,?,?,?)").run(ruleId, project, from, to, by, now(), applied ? 1 : 0, waits ? 1 : 0);
 }
 
-const all = (): Row[] => db.query("SELECT * FROM agent_rules_all WHERE dismissed = 0").all() as Row[];
+/** How many times the live rules were really read from SQLite. Counted so a test can hold the gate to "once per change". */
+export let rulesReads = 0;
+let rowsMemo: { epoch: number; rows: Row[] } | null = null;
+/** Every live row, read once per change (see the wrapper above). Callers filter and map; none changes a row in place. */
+const all = (): Row[] => {
+  if (rowsMemo && rowsMemo.epoch === rulesEpoch) return rowsMemo.rows;
+  const epoch = rulesEpoch;
+  rulesReads++;
+  const rows = realDb.query("SELECT * FROM agent_rules_all WHERE dismissed = 0").all() as Row[];
+  rowsMemo = { epoch, rows };
+  return rows;
+};
 const one = (id: string) => db.query("SELECT * FROM agent_rules_all WHERE id = ?").get(id) as Row | null;
 const byKey = (project: string, action: string, match: string, role = "") =>
   db.query("SELECT * FROM agent_rules_all WHERE project = ? AND action = ? AND match = ? AND role = ?").get(project, action, match, role) as Row | null;
@@ -148,11 +196,20 @@ function dropOnce(name: string) {
   db.query("DELETE FROM agent_rules WHERE pending = 1 AND source = 'first-seen'").run();
 }
 
+/** A base rule added after an install seeded its base: inserted once, never over a row the person already has for the pattern. */
+export function topUpBase() {
+  for (const b of BASE_RULES) {
+    if (db.query("SELECT 1 FROM agent_rules_all WHERE project = ? AND match = ? AND role = ''").get(BASE_PROJECT, b.match)) continue;
+    db.query("INSERT INTO agent_rules (id, project, action, match, setting, source, by_name, at, mode) VALUES (?,?,?,?,?,?,?,?,?)")
+      .run(newId(), BASE_PROJECT, b.action, b.match, b.setting, "base", "agentglass", now(), null);
+  }
+}
+
 export function ensureBase() {
   if (seeded) return;
   seeded = true;
   dropOldSplitSuggestions();
-  if (db.query("SELECT 1 FROM agent_rules WHERE project = ? LIMIT 1").get(BASE_PROJECT)) return;
+  if (db.query("SELECT 1 FROM agent_rules WHERE project = ? LIMIT 1").get(BASE_PROJECT)) { topUpBase(); return; }
   const deny = launchDeny();
   const insert = (action: string, match: string, setting: RuleSetting, source: RuleSource, mode: LaunchMode | null) => {
     const id = newId();
@@ -196,11 +253,55 @@ export function liveRules(): AgentRule[] {
   return all().map(toRule);
 }
 
+/** The deny list a launch in this checkout carries: `launch.deny` read through its project's rules (shared/agentRules.ts launchDenyFor). No checkout, the global list. */
+export function launchDenyIn(rootIn: string): string[] {
+  return launchDenyFor(liveRules(), rootIn ? ruleRoot(rootIn) : "", launchDeny());
+}
+
+/** The shell commands this project's rules say never, as the engine's prefix lock reads them: `git push origin main:*` is a prefix, `rm -rf /` is the exact line. */
+export function neverBash(rootIn: string): { prefixes: string[]; exact: string[] } {
+  const v = view(rootIn);
+  const prefixes: string[] = [], exact: string[] = [];
+  for (const r of [...v.base, ...v.learned]) {
+    if (r.setting !== "never") continue;
+    for (const m of r.matches ?? [r.match]) {
+      const hit = /^Bash\((.+)\)$/.exec(m);
+      if (!hit) continue;
+      if (hit[1].endsWith(":*")) prefixes.push(hit[1].slice(0, -2)); else exact.push(hit[1]);
+    }
+  }
+  return { prefixes: [...new Set(prefixes)], exact: [...new Set(exact)] };
+}
+
+/** The flow as the seat's rules read it once: its placed workers, path order first, and the chair's engine. */
+function seatFlowOf(root: string): SeatFlow {
+  const flow = readFlow(root).flow;
+  const placed = new Set(flow.blocks.map((b) => b.id));
+  const rank = (id: string) => (flow.path.includes(id) ? flow.path.indexOf(id) : flow.path.length);
+  return {
+    hasVerifier: hasVerifierBlock(flow),
+    seatEngine: baseChoices(root).orchestrator.engine,
+    blocks: flow.roster
+      .filter((r) => placed.has(r.id) && r.actor !== "person")
+      .sort((a, b) => rank(a.id) - rank(b.id))
+      .flatMap((r) => {
+        const engine = chainOf(r)[0]?.engine ?? "";
+        return engine ? [{ name: r.name, kind: r.policyRole, engine, onPath: flow.path.includes(r.id) }] : [];
+      }),
+  };
+}
+
+/** The rules a flow derives for the seat, never stored: the checks, and the jobs a block on another engine owns. */
+function derivedRules(root: string): AgentRule[] {
+  const guard = getSetting(root, "flow.delegationGuard") !== false;
+  return seatRules(root, seatFlowOf(root), guard);
+}
+
 export function check(rootIn: string, tool: string, input: unknown, mode?: string, role?: RuleScope): RuleCheck {
   const root = ruleRoot(rootIn);
   const rules = liveRules();
-  const derived = role === "seat" ? seatChecksRule(root, hasVerifierBlock(readFlow(root).flow)) : null;
-  const live = derived ? [...rules, derived] : rules;
+  const derived = role === "seat" ? derivedRules(root) : [];
+  const live = derived.length ? [...rules, ...derived] : rules;
   const verdict = decide(live, root, tool, input, role);
   if (verdict.decision === "unknown" && wouldPrompt(mode, tool)) firstSeen(live, root, tool, input, role);
   return verdict;
@@ -209,10 +310,11 @@ export function check(rootIn: string, tool: string, input: unknown, mode?: strin
 /**
  * One quiet suggestion per action a project has no rule for. Never more than
  * one, never back once dismissed. Waiting suggestions keep to their own cap,
- * oldest out first, so they never crowd out a rule the person writes.
+ * oldest out first, so they never crowd out a rule the person writes. Text out
+ * of a heredoc body suggests nothing: prose is not a call anybody made.
  */
 function firstSeen(rules: AgentRule[], root: string, tool: string, input: unknown, role?: RuleScope) {
-  const calls = tool === "Bash" ? shellSegments(primaryInput(input)).map((s) => ({ command: s })) : [input];
+  const calls = tool === "Bash" ? shellCalls(primaryInput(input)).filter((s) => !s.text).map((s) => ({ command: s.cmd })) : [input];
   for (const c of calls) {
     if (decide(rules, root, tool, c, role).decision !== "unknown") continue;
     const s = ruleFor(tool, c);
@@ -245,8 +347,8 @@ export function view(rootIn: string): AgentRulesView {
     return learned.filter((r) => r.at > end - WEEK && r.at <= end).length;
   });
   const mode = base.find((r) => r.action === MODE_ACTION)?.mode ?? launchMode();
-  const rule = root === BASE_PROJECT ? null : seatChecksRule(root, hasVerifierBlock(readFlow(root).flow));
-  return { root, mode, base, learned, suggested, derived: rule ? [rule] : [], history, weekly };
+  const derived = root === BASE_PROJECT ? [] : derivedRules(root);
+  return { root, mode, base, learned, suggested, derived, history, weekly };
 }
 
 export type RulesAnswer = { ok: true; write: RuleWrite } | { ok: false; error: string; status: number };
@@ -257,10 +359,13 @@ export type RulesAnswer = { ok: true; write: RuleWrite } | { ok: false; error: s
  * stored pending and put on the approval card, and nothing changes until the
  * person answers it. `remove: true` takes the rule out instead, the person's alone.
  */
-export async function setRule(
+export async function setRule(b: Parameters<typeof setRuleNow>[0], who: { person: boolean; by: string }): Promise<RulesAnswer> {
+  return durably(() => setRuleNow(b, who));
+}
+function setRuleNow(
   b: { root?: unknown; action?: unknown; match?: unknown; setting?: unknown; source?: unknown; mode?: unknown; remove?: unknown; role?: unknown },
   who: { person: boolean; by: string },
-): Promise<RulesAnswer> {
+): RulesAnswer {
   ensureBase();
   if (typeof b.root !== "string" || !(b.root === BASE_PROJECT || b.root.startsWith("/"))) return { ok: false, error: 'root: a project\'s absolute path, or "*" for every project', status: 400 };
   if (b.role !== undefined && !isRuleScope(b.role)) return { ok: false, error: 'role: "seat", or left out for every agent', status: 400 };
@@ -371,6 +476,9 @@ export async function setRule(
  * rule in force; `dismiss` drops a suggestion for good (it is not suggested again).
  */
 export function answer(id: string, b: { setting?: unknown; dismiss?: unknown }, person: boolean): RulesAnswer {
+  return durably(() => answerNow(id, b, person));
+}
+function answerNow(id: string, b: { setting?: unknown; dismiss?: unknown }, person: boolean): RulesAnswer {
   if (!person) return { ok: false, error: "only the person answers a rule: an agent cannot approve one, its own included", status: 403 };
   const cur = one(id);
   if (!cur) return { ok: false, error: "no such rule", status: 404 };
@@ -402,6 +510,9 @@ export function answer(id: string, b: { setting?: unknown; dismiss?: unknown }, 
  * shipped base rules and goes away when somebody had added it.
  */
 export function writeLaunchBase(fields: { mode?: unknown; deny?: unknown }, by = "you"): { ok: boolean; persisted: boolean; error?: string } {
+  return durably(() => writeLaunchBaseNow(fields, by));
+}
+function writeLaunchBaseNow(fields: { mode?: unknown; deny?: unknown }, by = "you"): { ok: boolean; persisted: boolean; error?: string } {
   ensureBase();
   const w = writeLaunchPermissions(fields);
   if (!w.ok) return w;
@@ -441,5 +552,6 @@ export function writeLaunchBase(fields: { mode?: unknown; deny?: unknown }, by =
 export function __resetRulesStore() {
   seeded = false;
   rootCache.clear();
+  rowsMemo = null;
   db.exec("DELETE FROM agent_rules; DELETE FROM agent_role_rules; DELETE FROM agent_rule_changes;");
 }

@@ -94,7 +94,11 @@ export function whyNot(state: KeyringState): string {
 }
 
 /** How each store names a secret in the keyring. Ids, not values. */
-export const credentialId = (provider: string): string => `credentials/${provider}`;
+export function credentialId(provider: string, accountKey: string): string {
+  // An undefined key must never read as `primary`: that is how a second account's token lands on the first's item.
+  if (typeof accountKey !== "string" || !accountKey) throw new Error("credentialId needs an account key");
+  return accountKey === "primary" ? `credentials/${provider}` : `credentials/${provider}/${accountKey}`;
+}
 export const pluginKeyId = (plugin: string, key: string): string => `plugin/${plugin}/${key}`;
 
 /** A file's value for a secret, turned into the secret: itself, or the keyring's
@@ -197,7 +201,7 @@ export async function hydrateKeyring(ids: string[]): Promise<void> {
     }
   })();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const cap = new Promise<void>((res) => { timer = setTimeout(() => { if (lastState === "unknown") lastState = "unavailable"; res(); }, 5000); });
+  const cap = new Promise<void>((res) => { timer = setTimeout(() => { if (lastState === "unknown") lastState = "unavailable"; res(); }, 5000); }); // loop-ok: sets a flag and resolves
   try { await Promise.race([work, cap]); } catch { /* lastState already says why */ } finally { clearTimeout(timer); }
 }
 

@@ -58,7 +58,7 @@ async function ask(card: string, task: string) {
   const proc = Bun.spawn([process.execPath, "-e", script], {
     env: {
       PATH: `${dir}:${process.env.PATH}`, HOME: dir, NODE_ENV: "test", XDG_CONFIG_HOME: dir, XDG_DATA_HOME: dir, XDG_CACHE_HOME: dir,
-      AGENTGLASS_STATE_DIR: dir, AGENTGLASS_DB: join(dir, "t.db"), AGX_STUB_CALLS: calls, AGX_STUB_ROWS: join(dir, "rows.json"),
+      TMPDIR: dir, AGENTGLASS_STATE_DIR: dir, AGENTGLASS_DB: join(dir, "t.db"), AGX_STUB_CALLS: calls, AGX_STUB_ROWS: join(dir, "rows.json"),
     },
     stdout: "pipe", stderr: "pipe",
   });
@@ -120,7 +120,7 @@ esac
     const script = `import { cardPullRequests } from ${JSON.stringify(new URL("../src/clickup.ts", import.meta.url).pathname)};
       console.log(JSON.stringify(await cardPullRequests("ORBIT-1042", undefined, ${JSON.stringify(d2)}, "")));`;
     const proc = Bun.spawn([process.execPath, "-e", script], {
-      env: { PATH: `${d2}:${process.env.PATH}`, HOME: d2, NODE_ENV: "test", XDG_CONFIG_HOME: d2, XDG_DATA_HOME: d2, XDG_CACHE_HOME: d2, AGENTGLASS_STATE_DIR: d2, AGENTGLASS_DB: join(d2, "t.db") },
+      env: { PATH: `${d2}:${process.env.PATH}`, HOME: d2, NODE_ENV: "test", XDG_CONFIG_HOME: d2, XDG_DATA_HOME: d2, XDG_CACHE_HOME: d2, TMPDIR: d2, AGENTGLASS_STATE_DIR: d2, AGENTGLASS_DB: join(d2, "t.db") },
       stdout: "pipe", stderr: "pipe",
     });
     const [out] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);

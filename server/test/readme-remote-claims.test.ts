@@ -107,7 +107,8 @@ describe("what the README tells people about reaching this from elsewhere", () =
     expect(section).toContain("AGENTGLASS_ALLOWED_HOSTS");
     // Same trap: index.ts also names it in the 403 body it returns when the
     // guard fires, so the bare string survives the variable being renamed.
-    expect(repo("server/src/index.ts")).toContain("process.env.AGENTGLASS_ALLOWED_HOSTS");
+    // The guard reads it through envLimit since the limits became settings (e77c68e6f).
+    expect(repo("server/src/index.ts")).toContain('envLimit("AGENTGLASS_ALLOWED_HOSTS")');
   });
 
   test("and it still says a tunnel is not the recommended answer", () => {

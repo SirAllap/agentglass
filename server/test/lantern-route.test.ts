@@ -12,6 +12,7 @@
  * environment, a scratch config dir, a scratch database, no scanner.
  */
 import { afterAll, beforeAll, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -259,4 +260,16 @@ step("a person can clear a line whoever posted it — through the authenticated 
   expect(await names()).not.toContain("orbit-2001-migration");
   const again = await post("/agents/forget", { name: "orbit-2001-migration" });
   expect(again.status, "nothing left by that name").toBe(404);
+});
+
+step("a session in a pane an agent was started in is not asked to post its status", async () => {
+  const hook = (session_id: string, tmux_pane: string) =>
+    post("/ingest", { source_app: "orbit", session_id, hook_event_type: "UserPromptSubmit", tmux_pane,
+      payload: { transcript_path: join(dir, `${session_id}.jsonl`), cwd: dir, prompt: "hi" } })
+      .then((r) => r.json() as Promise<{ remind?: string }>);
+  const db = new Database(join(dir, "lantern.db"));
+  db.run(`INSERT INTO named_agent (name, kind, cwd, pane_id, window_id, started_at, ended_at) VALUES ('orbit-named', 'claude', ?, '%91', '@91', ?, NULL)`, [dir, Date.now()]);
+  db.close();
+  expect((await hook("named-one", "%91")).remind, "named: no ask").toBeUndefined();
+  expect((await hook("loose-one", "%92")).remind, "loose session is still asked").toBeDefined();
 });

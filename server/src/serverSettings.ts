@@ -24,30 +24,44 @@ import {
   readBudgets, writeBudgets, policyRoots, lanternNudge, lanternNudgeMinutes, lanternWatch, lanternWatchMinutes, cacheTtlMinutes,
   gateAnswerer, gateOnTimeout, writeAgentDefaults,
   writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, phoneAlerts, writePhoneAlerts,
+  terminalRelaySetting, writeTerminalRelay,
 } from "./config.ts";
+import { relayHeldByEnv } from "./relay/wire.ts";
 import { agentsTrusted, agentsTrustSetAt, writeAgentsTrusted } from "./agentTrust.ts";
+import { cleanAllowList, cleanVerbGroups } from "../../shared/browserLimits.ts";
+import { storedAllowList, workerVerbGroups, writeBrowserLimit } from "./browserLimits.ts";
 import { browserWorkersNow, saveBrowserWorkers, validateBrowserWorkers } from "./browseraccess.ts";
+import type { BrowserWorkers } from "../../shared/browserWorkers.ts";
 import { readPolicy, writePolicy } from "./orchestration.ts";
+import { checkAccountDir } from "./claudeAccount.ts";
 import {
   REVIEW_ROUNDS_MAX, REVIEW_ROUNDS_MIN, checkSecondReviewer, isReviewWho, secondFromStored,
 } from "../../shared/reviewSettings.ts";
-import { readPolaris, readStoredPolaris, writePolaris } from "./config.ts";
+import { envLimitHeldBy, readPolaris, readStoredPolaris, scopeConfig, storedEnvLimit, writeEnvLimit, writePolaris, writeScopeMemoryMax } from "./config.ts";
+import { SWITCHABLE_COMMANDS } from "../../shared/workerRoles.ts";
+import { ENV_LIMITS, type EnvLimit } from "../../shared/envLimits.ts";
+import { validSize } from "./scopes.ts";
 import { DOOR_IDS, checkDoor, withDoor, withEnabled, type DoorValue } from "../../shared/polaris.ts";
 import { CLEANUP_MODES, EMPTY_CLEANUP_CONFIG, parseCleanupConfig, parseCleanupEvidenceRoots, parseCleanupInclude, parseCleanupOtherFolders, type CleanupConfig } from "./cleanup.ts";
 import { BUILDER_MODELS } from "../../shared/builderModel.ts";
 import * as Seat from "./seat.ts";
 import { ruleRoot } from "./agentRulesStore.ts";
-import { APP, REVIEWS, getSetting, hasSetting, markHeld, putSetting, type SettingKey } from "./preflightStore.ts";
+import { APP, APP_DOORS, REVIEWS, UNIX_SOCKETS, getSetting, hasSetting, markHeld, putSetting, type SettingKey } from "./preflightStore.ts";
+import { configuredMcpServerNames } from "./workerMcp.ts";
+import { MCP_READONLY_DENY, mcpModesOf } from "../../shared/mcpReadonly.ts";
 import { preflightModel } from "./flightPlan.ts";
 import { hookStatus, applyGate } from "./hooksetup.ts";
 import { masterEnabled, setMaster, listPlugins, enablePlugin, disablePlugin, setPluginUnboxedConsent } from "./plugins.ts";
 import { jiraWriteEnabled, jiraWriteKinds, setJiraWrites, setJiraWriteKind, type JiraWriteKind } from "./jira.ts";
 import { clickupWriteEnabled } from "./clickup.ts";
-import { RETENTION_DAYS, setRetentionDays } from "./retention.ts";
+import { RETENTION_DAYS, setRetentionDays, CLICKUP_CARD_DAYS, setClickupCardDays, UNDERSTUDY_STUB_DAYS, setLedgerStubDays } from "./retention.ts";
 import { setWritesAllowed } from "./clickupviews.ts";
 import { keyringEnabled } from "./keyring.ts";
 import { setKeyringEnabled } from "./keyringSwitch.ts";
 import { clickupPrefs, setClickupPrefs } from "./clickupPrefs.ts";
+import { clickupWritesByRepo, setClickupWrites, setTrackerChoice, trackerChoiceFor } from "./trackerProjects.ts";
+import { repoNameOf } from "./prs.ts";
+import { TRACKER_CHOICES } from "../../shared/providers.ts";
 import type { Applied, ServerSettingDef } from "./settingsDoor.ts";
 
 type Check = { value: unknown } | { error: string };
@@ -61,7 +75,13 @@ export function cleanupConfigOf(root: string): CleanupConfig {
     const inc = parseCleanupInclude(getSetting(root, "cleanup.include"));
     const roots = parseCleanupEvidenceRoots(getSetting(root, "cleanup.evidenceRoots"));
     const other = parseCleanupOtherFolders(getSetting(root, "cleanup.otherFolders"));
-    return { ...EMPTY_CLEANUP_CONFIG, ...(c && "value" in c ? c.value : {}), ...("value" in inc ? { include: inc.value } : {}), ...("value" in roots ? { evidenceRoots: roots.value } : {}), ...("value" in other ? { otherFolders: other.value } : {}) };
+    return {
+      ...EMPTY_CLEANUP_CONFIG, ...(c && "value" in c ? c.value : {}), ...("value" in inc ? { include: inc.value } : {}),
+      ...("value" in roots ? { evidenceRoots: roots.value } : {}), ...("value" in other ? { otherFolders: other.value } : {}),
+      orphanAutoRemove: getSetting(root, "cleanup.orphanAutoRemove") === true,
+      moveCard: getSetting(root, "cleanup.moveCard") === true,
+      moveCardStatus: String(getSetting(root, "cleanup.moveCardStatus") ?? ""),
+    };
   } catch { return EMPTY_CLEANUP_CONFIG; }
 }
 const capUsd = (raw: unknown): Check => (typeof raw === "number" && raw > 0 && raw <= 1000 ? { value: raw } : { error: "a number above 0 and up to 1000" });
@@ -71,7 +91,25 @@ const minutes = (lo: number, hi: number) => (raw: unknown): Check => {
   return Number.isFinite(n) ? { value: Math.min(hi, Math.max(lo, Math.round(n))) } : { error: `a number from ${lo} to ${hi}` };
 };
 /** A config write's answer as the door wants it. */
+/** What the row shows: the stored value in the shape the page edits. A switch not yet stored reads off. */
+function envLimitValue(l: EnvLimit): boolean | number | string {
+  const stored = storedEnvLimit(l.env);
+  if (l.kind === "switch") return stored === "1";
+  if (l.kind === "number") return stored === "" ? 0 : Number(stored);
+  return stored;
+}
+function validateEnvLimit(l: EnvLimit, raw: unknown): Check {
+  if (l.kind === "switch") return bool(raw);
+  if (l.kind === "number") {
+    return typeof raw === "number" && Number.isFinite(raw) && raw >= (l.min ?? 0) && raw <= (l.max ?? Number.MAX_SAFE_INTEGER)
+      ? { value: raw } : { error: `a number from ${l.min ?? 0} to ${l.max ?? "any"}` };
+  }
+  return typeof raw === "string" && raw.length <= 2000 ? { value: raw } : { error: "text, or empty for none" };
+}
 const saved = (r: { ok: boolean; error?: string }): Applied => (r.ok ? { ok: true } : { ok: false, error: r.error ?? "could not save it" });
+/** The repository a project's checkout is, or null when `--root` names no checkout. */
+const repoOfRoot = (root?: string): string | null => (root ? repoNameOf(root) : null);
+const NOT_A_CHECKOUT = "the project named by --root is not a checkout of a repository on this machine (its remote, upstream or origin), so there is no repository to keep this for";
 const done = async (f: () => unknown): Promise<Applied> => {
   try { await f(); return { ok: true }; } catch (e) { return { ok: false, error: (e as Error).message || "could not save it" }; }
 };
@@ -198,6 +236,19 @@ export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
       apply: (v) => saved(writeWorkerRole(role.id, v)),
     })),
     {
+      /* The stored half of the relay switch; the server reads it once, at boot (index.ts, relayWanted).
+         AGENTGLASS_TERMRELAY=1 or =0 in the server's environment wins, and then a write here would be a
+         choice that does nothing: refused with the reason, the way retention refuses under its variable. */
+      id: "terminal.relay", page: "terminal", label: "Terminals run in a process of their own (applies at the next app start)", type: "boolean",
+      read: () => terminalRelaySetting(),
+      validate: bool,
+      apply: (v) => {
+        const held = relayHeldByEnv(process.env.AGENTGLASS_TERMRELAY);
+        if (held) return { ok: false, error: `AGENTGLASS_TERMRELAY=${held} is set in the environment this server started from, and it wins: unset it to choose here` };
+        return saved(writeTerminalRelay(v === true));
+      },
+    },
+    {
       id: "launch.mode", page: "terminal", label: "Permission mode agents launch in", type: "string",
       read: () => launchMode(),
       validate: (raw) => (isLaunchMode(raw) ? { value: raw } : { error: "default, acceptEdits, auto or bypassPermissions" }),
@@ -268,6 +319,75 @@ export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
       apply: (v) => put(APP, "flightPlan.builder.permissions", v),
     },
     {
+      id: "agents.permissionMode", page: "orchestration", label: "Permission mode a worker role starts in (dontAsk or bypassPermissions)", scoped: true, type: "string",
+      read: (root) => getSetting(root ?? APP, "agents.permissionMode"),
+      // Only a mode that never draws a dialog is valid: nobody sits at a worker's pane.
+      validate: (raw) => (raw === "" || raw === "dontAsk" || raw === "bypassPermissions" ? { value: raw } : { error: "dontAsk or bypassPermissions" }),
+      apply: (v, root) => put(root ?? APP, "agents.permissionMode", v),
+      isSet: (root) => hasSetting(root ?? APP, "agents.permissionMode") && getSetting(root ?? APP, "agents.permissionMode") !== "",
+    },
+    {
+      id: "workers.claudeConfigDir", page: "orchestration", label: "Claude Code account this project's agents use, as a config folder; empty is the default", scoped: true, type: "string",
+      read: (root) => getSetting(root ?? APP, "workers.claudeConfigDir"),
+      validate: (raw) => checkAccountDir(raw),
+      apply: (v, root) => put(root ?? APP, "workers.claudeConfigDir", v),
+      isSet: (root) => hasSetting(root ?? APP, "workers.claudeConfigDir") && getSetting(root ?? APP, "workers.claudeConfigDir") !== "",
+    },
+    {
+      id: "workers.unixSockets", page: "orchestration", label: "Unix sockets a worker's sandbox may reach (off or all)", scoped: true, type: "string",
+      read: (root) => getSetting(root ?? APP, "workers.unixSockets"),
+      validate: (raw) => ((UNIX_SOCKETS as readonly unknown[]).includes(raw) ? { value: raw } : { error: "off or all" }),
+      apply: (v, root) => put(root ?? APP, "workers.unixSockets", v),
+      isSet: (root) => hasSetting(root ?? APP, "workers.unixSockets"),
+    },
+    {
+      id: "workers.projectSkills", page: "orchestration", label: "A worker role's turn loads the checkout's own skills and commands", scoped: true, type: "boolean",
+      read: (root) => getSetting(root ?? APP, "workers.projectSkills"), validate: bool, apply: (v, root) => put(root ?? APP, "workers.projectSkills", v),
+    },
+    {
+      id: "workers.noClaude", page: "orchestration", label: "No Claude in workers: a worker role set to Claude starts on the project's other engine, or is refused when none is ready", scoped: true, type: "boolean",
+      read: (root) => getSetting(root ?? APP, "workers.noClaude"), validate: bool, apply: (v, root) => put(root ?? APP, "workers.noClaude", v),
+      isSet: (root) => hasSetting(root ?? APP, "workers.noClaude"),
+    },
+    {
+      id: "workers.mcpServers", page: "orchestration", label: "The person's configured MCP servers a worker role's turn may use, and whether each is read-only or may write", scoped: true, type: "json",
+      // Normalized, never the raw stored shape: a project that chose servers
+      // before per-server modes existed has a plain list there still, and
+      // `mcpModesOf` reads each one as "all" — exactly what it had — so the
+      // door's `prev` for an agent's change (shared/settingClass.ts
+      // `mcpNarrows`) and the page both see the same map a fresh write would.
+      read: (root) => mcpModesOf(getSetting(root ?? APP, "workers.mcpServers")),
+      validate: (raw) => {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { error: "a map of configured MCP server name to \"readOnly\" or \"all\"" };
+        const known = configuredMcpServerNames();
+        const out: Record<string, "readOnly" | "all"> = {};
+        for (const [name, mode] of Object.entries(raw as Record<string, unknown>)) {
+          if (!known.includes(name)) return { error: `unknown MCP server ${JSON.stringify(name)}: one of ${known.join(", ") || "(none configured)"}` };
+          if (mode !== "readOnly" && mode !== "all") return { error: `${name}: "readOnly" or "all"` };
+          if (mode === "readOnly" && !MCP_READONLY_DENY[name]) return { error: `${name}: Read-only is only offered for a server this app knows how to hold to reading` };
+          out[name] = mode;
+        }
+        return { value: out };
+      },
+      apply: (v, root) => put(root ?? APP, "workers.mcpServers", v),
+      isSet: (root) => hasSetting(root ?? APP, "workers.mcpServers") && Object.keys(mcpModesOf(getSetting(root ?? APP, "workers.mcpServers"))).length > 0,
+    },
+    {
+      id: "workers.plannerWrite", page: "orchestration", label: "The built-in scout (planner) may write its own worktree and .agx-tmp (AGENTGLASS_PLANNER_WRITE holds it)", scoped: true, type: "boolean",
+      read: (root) => getSetting(root ?? APP, "workers.plannerWrite") === true, validate: bool,
+      apply: (v, root) => put(root ?? APP, "workers.plannerWrite", v),
+      isSet: (root) => hasSetting(root ?? APP, "workers.plannerWrite"),
+    },
+    {
+      /* Read-only: the person's own list, for the Settings page to offer as
+         choices. An agent cannot set what MCP servers are configured, so this
+         setting has no `apply` — a write is refused rather than silently kept. */
+      id: "workers.mcpServers.available", page: "orchestration", label: "The person's configured MCP servers (read-only)", type: "json",
+      read: () => configuredMcpServerNames(),
+      validate: () => ({ error: "this list is read from ~/.claude.json, and is not written here" }),
+      apply: () => ({ ok: false, error: "this list is read from ~/.claude.json, and is not written here" }),
+    },
+    {
       id: "flightPlan.builder.strongModel", page: "orchestration", label: "The model a sensitive or L plan's builder starts on (haiku, sonnet or opus)", type: "string",
       read: () => getSetting(APP, "flightPlan.builder.strongModel"),
       validate: (raw) => (BUILDER_MODELS.includes(raw as never) ? { value: raw } : { error: `one of ${BUILDER_MODELS.join(", ")}` }),
@@ -303,7 +423,7 @@ export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
       isSet: (root) => hasSetting(root ?? APP, "flightPlan.preflight.reviews"),
     },
     {
-      id: "flightPlan.preflight.sizes", page: "orchestration", label: "Which plan sizes get a Preflight (L, or ML for M and L)", type: "string",
+      id: "flightPlan.preflight.sizes", page: "orchestration", label: "Which plan sizes are plans, and get a Preflight (L, or ML for M and L): another size goes straight to a worker", type: "string",
       read: () => getSetting(APP, "flightPlan.preflight.sizes"),
       validate: (raw) => (raw === "L" || raw === "ML" ? { value: raw } : { error: "L or ML" }),
       apply: (v) => put(APP, "flightPlan.preflight.sizes", v),
@@ -366,8 +486,14 @@ export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
       apply: (v, root) => put(root, "flightPlan.preflight.costCapUsd", v),
     },
     {
+      id: "flightPlan.preflight.fileCapBytes", page: "orchestration", label: "Bytes a plan-named file with no cited line goes whole up to, before only its head is sent (0: no cap, always whole)", scoped: true, type: "number",
+      read: (root) => (root ? getSetting(root, "flightPlan.preflight.fileCapBytes") : 0),
+      validate: (raw) => (typeof raw === "number" && raw >= 0 && Number.isFinite(raw) ? { value: raw } : { error: "a number, 0 or above" }),
+      apply: (v, root) => put(root, "flightPlan.preflight.fileCapBytes", v),
+    },
+    {
       id: "cleanup.config", page: "orchestration", label: "What cleaning up after a merged pull request may remove", scoped: true, type: "json",
-      read: (root) => { const { include: _kinds, evidenceRoots: _roots, otherFolders: _other, ...body } = root ? cleanupConfigOf(root) : EMPTY_CLEANUP_CONFIG; return body; },
+      read: (root) => { const { include: _kinds, evidenceRoots: _roots, otherFolders: _other, orphanAutoRemove: _auto, ...body } = root ? cleanupConfigOf(root) : EMPTY_CLEANUP_CONFIG; return body; },
       validate: (raw) => parseCleanupConfig(raw),
       apply: (v, root) => put(root, "cleanup.config", JSON.stringify(v)),
       isSet: (root) => hasSetting(root, "cleanup.config"),
@@ -379,6 +505,14 @@ export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
       apply: (v, root) => saved(writePolaris(root, withEnabled(readStoredPolaris(root), v === true))),
       isSet: (root) => typeof readStoredPolaris(root)?.enabled === "boolean",
       layer: (root) => readPolaris(root).enabledLayer,
+    },
+    {
+      id: "polaris.botReviewers", page: "orchestration", label: "Polaris: the bot logins whose review and check summaries are counted on a head commit", scoped: true, type: "json",
+      read: (root) => readPolaris(root).settings.botReviewers,
+      validate: (raw) => (Array.isArray(raw) && raw.length <= 20 && raw.every((b) => typeof b === "string" && b.length > 0 && b.length <= 100)
+        ? { value: raw } : { error: "botReviewers: up to 20 bot logins" }),
+      apply: (v, root) => saved(writePolaris(root, { ...(readStoredPolaris(root) ?? {}), botReviewers: v as string[] })),
+      isSet: (root) => Array.isArray(readStoredPolaris(root)?.botReviewers),
     },
     ...DOOR_IDS.map((d): ServerSettingDef => ({
       id: `polaris.door.${d}`, page: "orchestration", label: `Polaris door ${d}: its mode and settings`, scoped: true, type: "json",
@@ -395,6 +529,13 @@ export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
       validate: (raw) => ((CLEANUP_MODES as readonly unknown[]).includes(raw) ? { value: raw } : { error: `one of ${CLEANUP_MODES.join(", ")}` }),
       apply: (v, root) => put(root, "cleanup.mode", v),
       isSet: (root) => hasSetting(root, "cleanup.mode"),
+    },
+    {
+      id: "cleanup.orphanAutoRemove", page: "orchestration", label: "Docker leftovers: remove the orphan images and volumes the sweep lists by itself, when Docker > Disk loads", scoped: true, type: "boolean",
+      read: (root) => (root ? getSetting(root, "cleanup.orphanAutoRemove") : false),
+      validate: bool,
+      apply: (v, root) => put(root, "cleanup.orphanAutoRemove", v),
+      isSet: (root) => hasSetting(root, "cleanup.orphanAutoRemove"),
     },
     {
       id: "cleanup.autoCleanDays", page: "orchestration", label: "Days after a merge when its leftovers are cleaned by themselves (0 = never)", scoped: true, type: "number",
@@ -423,6 +564,25 @@ export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
       validate: (raw) => parseCleanupOtherFolders(raw),
       apply: (v, root) => put(root, "cleanup.otherFolders", v as string[]),
       isSet: (root) => hasSetting(root, "cleanup.otherFolders"),
+    },
+    {
+      id: "cleanup.moveCard", page: "orchestration", label: "After a merge, move the card too (through the move door, jira.writes.move)", scoped: true, type: "boolean",
+      read: (root) => (root ? getSetting(root, "cleanup.moveCard") === true : false),
+      validate: bool, apply: (v, root) => put(root, "cleanup.moveCard", v),
+      isSet: (root) => hasSetting(root, "cleanup.moveCard"),
+    },
+    {
+      id: "cleanup.moveCardStatus", page: "orchestration", label: "The status a merge's cleanup moves the card to, as the tracker names it", scoped: true, type: "string",
+      read: (root) => (root ? String(getSetting(root, "cleanup.moveCardStatus") ?? "") : ""),
+      validate: (raw) => (typeof raw === "string" && raw.length <= 120 ? { value: raw } : { error: "a status name, 120 characters or fewer" }),
+      apply: (v, root) => put(root, "cleanup.moveCardStatus", v),
+      isSet: (root) => hasSetting(root, "cleanup.moveCardStatus") && getSetting(root, "cleanup.moveCardStatus") !== "",
+    },
+    {
+      id: "flow.delegationGuard", page: "orchestration", label: "The flow owns its jobs: the orchestrator may not spawn a Claude subagent for work a worker block takes", scoped: true, type: "boolean",
+      read: (root) => getSetting(root ?? APP, "flow.delegationGuard"),
+      validate: bool, apply: (v, root) => put(root ?? APP, "flow.delegationGuard", v),
+      isSet: (root) => hasSetting(root ?? APP, "flow.delegationGuard"),
     },
     {
       id: "seat.model", page: "orchestration", label: "The chair's model", scoped: true, type: "string",
@@ -514,7 +674,7 @@ export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
     { id: "lantern.watch", page: "lantern", label: "Wake the orchestrator", type: "boolean", read: () => lanternWatch(), validate: bool, apply: (v) => saved(writeLanternSettings({ lanternWatch: v === true })) },
     { id: "lantern.watchMinutes", page: "lantern", label: "Minutes between the orchestrator's wakes", type: "number", read: () => lanternWatchMinutes(), validate: minutes(LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN), apply: (v) => saved(writeLanternSettings({ lanternWatchMinutes: Number(v) })) },
     { id: "lantern.cacheTtlMinutes", page: "lantern", label: "Prompt cache window, minutes", type: "number", read: () => cacheTtlMinutes(), validate: minutes(1, 120), apply: (v) => saved(writeLanternSettings({ cacheTtlMinutes: Number(v) })) },
-    { id: "jira.writes", page: "jira", label: "Let agentglass write to Jira", type: "boolean", read: () => jiraWriteEnabled(), validate: bool, apply: (v) => done(() => setJiraWrites(v === true)) },
+    { id: "jira.writes", page: "jira", label: "Let agentglass write to Jira (always on while AGENTGLASS_JIRA_WRITE=1)", type: "boolean", read: () => jiraWriteEnabled(), validate: bool, apply: (v) => done(() => setJiraWrites(v === true)) },
     jiraKindSetting({ id: "jira.writes.move", kind: "move", label: "Move cards between steps" }),
     jiraKindSetting({ id: "jira.writes.comment", kind: "comment", label: "Comment on a card" }),
     jiraKindSetting({ id: "jira.writes.link", kind: "link", label: "Link a pull request to its card" }),
@@ -525,11 +685,42 @@ export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
       validate: (raw) => (typeof raw === "number" && Number.isInteger(raw) && raw >= 0 && raw <= 3650 ? { value: raw } : { error: "a whole number of days, 0 to 3650 (0 keeps everything)" }),
       apply: (v) => saved(setRetentionDays(Number(v))),
     },
-    { id: "clickup.writes", page: "clickup", label: "Let agentglass write to ClickUp", type: "boolean", read: () => clickupWriteEnabled(), validate: bool, apply: (v) => done(() => setWritesAllowed(v === true)) },
+    {
+      id: "privacy.clickupCardDays", page: "privacy", label: "How long a ClickUp card stays in the local index after it was last seen", type: "number",
+      read: () => CLICKUP_CARD_DAYS,
+      validate: (raw) => (typeof raw === "number" && Number.isInteger(raw) && raw >= 0 && raw <= 3650 ? { value: raw } : { error: "a whole number of days, 0 to 3650 (0 keeps everything)" }),
+      apply: (v) => saved(setClickupCardDays(Number(v))),
+    },
+    {
+      id: "privacy.ledgerStubDays", page: "privacy", label: "How long the understudy ledger keeps a bare write record", type: "number",
+      read: () => UNDERSTUDY_STUB_DAYS,
+      validate: (raw) => (typeof raw === "number" && Number.isInteger(raw) && raw >= 0 && raw <= 3650 ? { value: raw } : { error: "a whole number of days, 0 to 3650 (0 keeps everything)" }),
+      apply: (v) => saved(setLedgerStubDays(Number(v))),
+    },
+    { id: "clickup.writes", page: "clickup", label: "Let agentglass write to ClickUp (always on while AGENTGLASS_CLICKUP_WRITE=1)", type: "boolean", read: () => clickupWriteEnabled(), validate: bool, apply: (v) => done(() => setWritesAllowed(v === true)) },
     {
       id: "clickup.includeSubtasks", page: "clickup", label: "Subtasks on Assigned to me", type: "boolean",
       read: () => clickupPrefs().assigned.includeSubtasks, validate: bool,
       apply: (v) => { const r = setClickupPrefs({ assigned: { includeSubtasks: v === true } }); return r.ok ? { ok: true } : { ok: false, error: r.error }; },
+    },
+    /* A repository's tracker and its ClickUp-writes switch, kept per repository:
+       `--root` names the project whose checkout carries it (trackerProjects.ts). */
+    {
+      id: "tracker.choice", page: "tasks", label: "Which tracker a project's repository keeps its cards in (auto, ClickUp or Jira)", scoped: true, type: "string",
+      read: (root) => trackerChoiceFor(repoOfRoot(root)),
+      validate: (raw, root) => {
+        if (!repoOfRoot(root)) return { error: NOT_A_CHECKOUT };
+        return typeof raw === "string" && (TRACKER_CHOICES as readonly string[]).includes(raw) ? { value: raw } : { error: "auto, clickup or jira" };
+      },
+      apply: (v, root) => saved(setTrackerChoice(repoOfRoot(root), v)),
+      isSet: (root) => trackerChoiceFor(repoOfRoot(root)) !== "auto",
+    },
+    {
+      id: "tracker.clickupWrites", page: "tasks", label: "ClickUp changes on a project's repository (off: its ClickUp cards are read-only)", scoped: true, type: "boolean",
+      read: (root) => { const repo = repoOfRoot(root); return !!repo && clickupWritesByRepo()[repo.toLowerCase()] === true; },
+      validate: (raw, root) => (repoOfRoot(root) ? bool(raw) : { error: NOT_A_CHECKOUT }),
+      apply: (v, root) => saved(setClickupWrites(repoOfRoot(root), v === true)),
+      isSet: (root) => { const repo = repoOfRoot(root); return !!repo && clickupWritesByRepo()[repo.toLowerCase()] === true; },
     },
     {
       id: "secrets.keyring", page: "privacy", label: "Keep secrets in the system keyring", type: "boolean",
@@ -546,7 +737,144 @@ export function serverSettingDefs(env: ServerSettingsEnv): ServerSettingDef[] {
     {
       id: "browser.workers", page: "browser", label: "Who may drive the built-in browser (engines and worker roles)", type: "json",
       read: () => browserWorkersNow(), validate: (raw) => validateBrowserWorkers(raw),
-      apply: (v) => saveBrowserWorkers(v as { engines: string[]; roles: string[] }),
+      apply: (v) => saveBrowserWorkers(v as BrowserWorkers),
+    },
+    {
+      id: "browser.origins.allow", page: "browser", label: "Origins a worker's browser may be pointed at (host or host:port; * is every origin; AGENTGLASS_BROWSER_ORIGINS wins when set)", type: "json",
+      read: () => storedAllowList("origins"), validate: (raw) => cleanAllowList(raw, "origins"),
+      apply: (v) => saved(writeBrowserLimit("origins", v as string[])),
+    },
+    {
+      id: "browser.profiles.allow", page: "browser", label: "Named profiles a worker's browser may use (* is every profile; AGENTGLASS_BROWSER_PROFILES wins when set)", type: "json",
+      read: () => storedAllowList("profiles"), validate: (raw) => cleanAllowList(raw, "profiles"),
+      apply: (v) => saved(writeBrowserLimit("profiles", v as string[])),
+    },
+    {
+      id: "browser.workerVerbs", page: "browser", label: "Which groups of browser verbs a worker may run (read, act, devtools, cookies-storage, eval)", type: "json",
+      read: () => workerVerbGroups(), validate: (raw) => cleanVerbGroups(raw),
+      apply: (v) => saved(writeBrowserLimit("verbs", v as string[])),
+    },
+    {
+      id: "workers.gitInternals", page: "orchestration", label: "A worker's shell may write the directory core.hooksPath names and submodule git dirs", scoped: true, type: "boolean",
+      read: (root) => getSetting(root ?? APP, "workers.gitInternals") === true, validate: bool,
+      apply: (v, root) => put(root ?? APP, "workers.gitInternals", v),
+      isSet: (root) => hasSetting(root ?? APP, "workers.gitInternals"),
+    },
+    {
+      id: "workers.unwalledEngines", page: "orchestration", label: "Run engines with no read wall (Hermes) as workers", scoped: true, type: "boolean",
+      read: (root) => getSetting(root ?? APP, "workers.unwalledEngines") === true, validate: bool,
+      apply: (v, root) => put(root ?? APP, "workers.unwalledEngines", v),
+      isSet: (root) => hasSetting(root ?? APP, "workers.unwalledEngines"),
+    },
+    /* One per app door a worker's shell is denied (`WORKER_DENIED`, the browser aside, which
+       browser.workers drives). Opening one only lifts the shell's deny rule: the CLI runs under
+       the worker's own, whole-machine-scoped credential, the same one every other door checks —
+       so this switch does not hand it a credential of its own, only a wider shell. */
+    ...APP_DOORS.map((door): ServerSettingDef => ({
+      id: `workers.appDoors.${door}`, page: "orchestration", label: `A worker's shell may run ${door} — its own routes, still under the worker's shared credential`, scoped: true, type: "boolean",
+      read: (root) => getSetting(root ?? APP, `workers.appDoors.${door}` as SettingKey) === true,
+      validate: bool, apply: (v, root) => put(root ?? APP, `workers.appDoors.${door}` as SettingKey, v),
+      isSet: (root) => hasSetting(root ?? APP, `workers.appDoors.${door}` as SettingKey),
+    })),
+    /* The commands a project may close to every worker's shell: open by default (a worker does what its seat does).
+       Closing is narrowing, so anyone may; opening again is only the person's (the class row). */
+    ...SWITCHABLE_COMMANDS.map((cmd): ServerSettingDef => {
+      const key = `workers.commands.${cmd.replace(/ /g, "-")}` as SettingKey;
+      return {
+        id: `workers.commands.${cmd.replace(/ /g, "-")}`, page: "orchestration", label: `A worker's shell may run ${cmd}`, scoped: true, type: "boolean",
+        read: (root) => getSetting(root ?? APP, key) !== false,
+        validate: bool, apply: (v, root) => put(root ?? APP, key, v),
+        isSet: (root) => hasSetting(root ?? APP, key),
+        pin: true,
+      };
+    }),
+    /* A limit the environment used to hold alone (shared/envLimits.ts). The row edits the stored value; a
+       variable that is set wins, and the door says so (`envLimitHeldBy`) so the page locks the row. */
+    ...ENV_LIMITS.map((l): ServerSettingDef => ({
+      id: l.id, page: "orchestration", label: `${l.label} (${l.env})`, type: l.kind === "switch" ? "boolean" : l.kind === "number" ? "number" : "string",
+      read: () => envLimitValue(l),
+      validate: (raw) => validateEnvLimit(l, raw),
+      apply: (v) => {
+        const held = envLimitHeldBy(l.env);
+        if (held) return { ok: false, error: `${held.name} is set in the environment and holds this limit: unset it to change it here` };
+        return saved(writeEnvLimit(l.env, l.kind === "switch" ? (v === true ? "1" : "0") : String(v)));
+      },
+    })),
+    {
+      /* The stored value, not the effective one: "" is automatic. The environment's
+         AGENTGLASS_SCOPE_MEMORY_MAX wins over it, and the page says so (`memoryMaxEnv`). */
+      id: "workers.memoryMax", page: "orchestration", label: "Memory one worker may hold (AGENTGLASS_SCOPE_MEMORY_MAX), like 20G; empty is automatic", type: "string",
+      read: () => scopeConfig().memoryMax ?? "",
+      validate: (raw) => {
+        if (raw === "" || raw === null) return { value: "" };
+        const v = validSize(raw);
+        return v ? { value: v } : { error: "a size like 20G, 512M or 2T, or empty for automatic" };
+      },
+      apply: (v) => saved(writeScopeMemoryMax(v as string)),
+    },
+    {
+      id: "flow.agentEdit", page: "orchestration", label: "Let this project's orchestrator edit its own flow and roster", scoped: true, type: "boolean",
+      read: (root) => (root ? getSetting(root, "flow.agentEdit") === true : false),
+      validate: bool, apply: (v, root) => put(root, "flow.agentEdit", v),
+      isSet: (root) => hasSetting(root, "flow.agentEdit"),
+    },
+    {
+      id: "flow.sessionStart.move", page: "orchestration", label: "The flow's Session start step moves the card to a status (through the move door, jira.writes.move)", scoped: true, type: "boolean",
+      read: (root) => (root ? getSetting(root, "flow.sessionStart.move") === true : false),
+      validate: bool, apply: (v, root) => put(root, "flow.sessionStart.move", v),
+      isSet: (root) => hasSetting(root, "flow.sessionStart.move"),
+    },
+    {
+      id: "flow.autoContinue", page: "orchestration", label: "A worker's end, with no trailing question, starts the next flow role in the same tab", scoped: true, type: "boolean",
+      read: (root) => (root ? getSetting(root, "flow.autoContinue") === true : false),
+      validate: bool, apply: (v, root) => put(root, "flow.autoContinue", v),
+      isSet: (root) => hasSetting(root, "flow.autoContinue"),
+    },
+    {
+      id: "flow.enforce", page: "orchestration", label: "Hold workers to the flow", scoped: true, type: "boolean",
+      read: (root) => (root ? getSetting(root, "flow.enforce") === true : false),
+      validate: bool, apply: (v, root) => put(root, "flow.enforce", v),
+      isSet: (root) => hasSetting(root, "flow.enforce"),
+    },
+    {
+      id: "flow.notifyPrReviews", page: "orchestration", label: "Tell the seat about a bot review on an open pull request", scoped: true, type: "boolean",
+      read: (root) => (root ? getSetting(root, "flow.notifyPrReviews") === true : false),
+      validate: bool, apply: (v, root) => put(root, "flow.notifyPrReviews", v),
+      isSet: (root) => hasSetting(root, "flow.notifyPrReviews"),
+    },
+    {
+      id: "flow.notifyPrReviews.bots", page: "orchestration", label: "Extra logins that count as a bot's review, one per line", scoped: true, type: "string",
+      read: (root) => (root ? String(getSetting(root, "flow.notifyPrReviews.bots") ?? "") : ""),
+      validate: (v) => (typeof v === "string" && v.length <= 2000 ? { value: v } : { error: "a list of logins, 2000 characters or fewer" }),
+      apply: (v, root) => put(root, "flow.notifyPrReviews.bots", v),
+      isSet: (root) => hasSetting(root, "flow.notifyPrReviews.bots"),
+    },
+    {
+      id: "flow.nextCard.enabled", page: "orchestration", label: "Start a scout for every unclaimed card a saved filter shows", scoped: true, type: "boolean",
+      read: (root) => (root ? getSetting(root, "flow.nextCard.enabled") === true : false),
+      validate: bool, apply: (v, root) => put(root, "flow.nextCard.enabled", v),
+      isSet: (root) => hasSetting(root, "flow.nextCard.enabled"),
+    },
+    {
+      id: "flow.nextCard.filterId", page: "orchestration", label: "The saved Jira filter to read, by its id", scoped: true, type: "string",
+      read: (root) => (root ? String(getSetting(root, "flow.nextCard.filterId") ?? "") : ""),
+      validate: (v) => (typeof v === "string" && /^\d{0,12}$/.test(v) ? { value: v } : { error: "a Jira filter id (digits only), or empty" }),
+      apply: (v, root) => put(root, "flow.nextCard.filterId", v),
+      isSet: (root) => hasSetting(root, "flow.nextCard.filterId"),
+    },
+    {
+      id: "flow.nextCard.cap", page: "orchestration", label: "The most scouts this runs at once for the filter", scoped: true, type: "number",
+      read: (root) => (root ? getSetting(root, "flow.nextCard.cap") : 2),
+      validate: (raw) => (typeof raw === "number" && Number.isInteger(raw) && raw >= 1 && raw <= 10 ? { value: raw } : { error: "a whole number from 1 to 10" }),
+      apply: (v, root) => put(root, "flow.nextCard.cap", v),
+      isSet: (root) => hasSetting(root, "flow.nextCard.cap"),
+    },
+    {
+      id: "flow.sessionStart.moveStatus", page: "orchestration", label: "The status Session start moves the card to, as the tracker names it", scoped: true, type: "string",
+      read: (root) => (root ? String(getSetting(root, "flow.sessionStart.moveStatus") ?? "") : ""),
+      validate: (raw) => (typeof raw === "string" && raw.length <= 120 ? { value: raw } : { error: "a status name, 120 characters or fewer" }),
+      apply: (v, root) => put(root, "flow.sessionStart.moveStatus", v),
+      isSet: (root) => hasSetting(root, "flow.sessionStart.moveStatus") && getSetting(root, "flow.sessionStart.moveStatus") !== "",
     },
     /* Held per project (agentTrust.ts): a root names the project the page is
        editing, and no root is the global value that a request naming no project

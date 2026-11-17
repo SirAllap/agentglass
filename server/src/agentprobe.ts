@@ -4,8 +4,10 @@ import { join } from "node:path";
 import type { AgentProbe, EngineFix, EngineReadiness, EngineVerdict, EnginesReport, KnownAgent } from "../../shared/types.ts";
 import { AGENT_PROVIDERS, ENGINE_IDS, engineProviders, type Provider } from "../../shared/agentKinds.ts";
 import { extractVersion, versionAtLeast } from "../../shared/semverLite.ts";
-import { db } from "./db.ts";
+import { withoutBrowserCredentials } from "./browseraccess.ts";
+import { db, eventsEpoch } from "./db.ts";
 import { hookStatus } from "./hooksetup.ts";
+import { scopeArgv, systemdRun } from "./scopes.ts";
 
 /**
  * The agents this machine already has, and whether any of them is talking.
@@ -115,13 +117,37 @@ function wired(a: Roster, path: string, found: boolean): boolean {
  * this app does not choose it and cannot pin it. The fragment is the part that
  * does not change.
  */
-function lastSeen(match: string, q: typeof db = db): number | null {
-  const r = q
-    .query<{ t: number | null }, [string]>(
-      "SELECT MAX(timestamp) AS t FROM events WHERE source_app LIKE '%' || ? || '%'"
+let seenMemo = { epoch: "", rows: null as { app: string; t: number }[] | null };
+export function lastSeen(match: string, q: typeof db = db): number | null {
+  // One walk over the distinct source_app values (idx_events_app_cov), not one
+  // LIKE '%x%' table scan per agent: that scan was ~35 ms per agent over 500k
+  // rows, on the main loop, per GET /agents. The rows are kept until an event
+  // is written or deleted (no timer, nothing polled).
+  if (q !== db) return pick(appRows(q), match);
+  const epoch = eventsEpoch();
+  let rows = seenMemo.rows;
+  if (seenMemo.epoch !== epoch || !rows) seenMemo = { epoch, rows: (rows = appRows(q)) };
+  return pick(rows, match);
+}
+function appRows(q: typeof db): { app: string; t: number }[] {
+  return q
+    .query<{ app: string; t: number }, []>(
+      `WITH RECURSIVE apps(a) AS (
+         SELECT MIN(source_app) FROM events
+         UNION ALL
+         SELECT (SELECT MIN(source_app) FROM events WHERE source_app > apps.a) FROM apps WHERE a IS NOT NULL
+       )
+       SELECT a AS app, (SELECT MAX(timestamp) FROM events WHERE source_app = a) AS t FROM apps WHERE a IS NOT NULL`
     )
-    .get(match);
-  return r?.t ?? null;
+    .all();
+}
+// Case-insensitive substring, as the LIKE it replaces was. One difference, chosen on purpose: LIKE read % and _ in the
+// fragment as wildcards; includes reads them as the literal characters, which is what a source_app name means.
+function pick(rows: { app: string; t: number }[], match: string): number | null {
+  const m = match.toLowerCase();
+  let best: number | null = null;
+  for (const r of rows) if (r.app.toLowerCase().includes(m) && (best === null || r.t > best)) best = r.t;
+  return best;
 }
 
 /** Every agent this app knows how to connect, with what is true of it here. */
@@ -196,11 +222,13 @@ export interface EngineFacts {
   check: Raw | null;
 }
 
-/** The server's environment minus the one secret every probe could print. */
+/** The server's environment minus every browser variable a probed CLI could
+ *  print, or hold: a scoped credential and a container name are as much the
+ *  person's as the machine token is. */
 function probeEnv(): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && k !== "AGENTGLASS_TOKEN") env[k] = v;
-  return env;
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
+  return withoutBrowserCredentials(env) as Record<string, string>;
 }
 
 /** Cut anything token-shaped out of a line before it leaves this module. */
@@ -217,14 +245,19 @@ const firstLine = (r: Raw): string => {
 };
 
 /** Run one command with a ceiling, in its own process group so the ceiling
- *  takes whatever it started with it. */
+ *  takes whatever it started with it. A probe also gets its own transient
+ *  scope: it is the command an engine is asked to answer, and a runaway one
+ *  must not be able to take the app's cgroup with it (scopes.ts). It is not
+ *  remembered for the exit stop — the ceiling is its owner. */
 export async function runCommand(
   argv: string[], timeoutMs: number, o: { cwd?: string; env?: Record<string, string> } = {},
 ): Promise<Raw> {
   let timedOut = false;
   let proc: ReturnType<typeof Bun.spawn>;
+  const env = o.env ?? probeEnv();
   try {
-    proc = Bun.spawn(argv, { cwd: o.cwd, env: o.env ?? probeEnv(), stdin: "ignore", stdout: "pipe", stderr: "pipe", detached: true });
+    const launch = scopeArgv(argv, { run: systemdRun(env) });
+    proc = Bun.spawn(launch.argv, { cwd: o.cwd, env, stdin: "ignore", stdout: "pipe", stderr: "pipe", detached: true });
   } catch (e) {
     return { out: "", err: String((e as Error).message ?? e), code: null, timedOut: false };
   }

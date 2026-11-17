@@ -28,6 +28,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { resolveTmuxBin, tmuxStateDir, tmuxVersion } from "./tmuxbin.ts";
 import { tmuxConfMode, tmuxOverride, writeTmuxSettings, tmuxConfBroken, setTmuxConfBroken, tmuxPrefix, configPath, configDirRedirected } from "./config.ts";
+import { spawnSyncAs } from "./loopwatch.ts";
 
 /** The generated base config. Kept here rather than in tmuxpane.ts because the
  *  generation, the validation gate and the override all belong to one seam. */
@@ -67,6 +68,10 @@ setw -g pane-base-index 1
 set -g renumber-windows on
 # Claude Code asks for this by name and warns in the pane without it.
 set -g focus-events on
+# A tab click is select-window: tmux redraws the whole screen into the SAME
+# xterm, clear first, rows after, over several frames. With sync the redraw is
+# wrapped in DEC 2026 BSU/ESU and xterm.js holds the frame until it is whole.
+if-shell 'tmux show -sv terminal-features | grep -q "[*]:sync"' "" 'set -as terminal-features ",*:sync"'
 `;
 
 /**
@@ -173,7 +178,7 @@ export function confPath(): string {
  *
  * Returns how many it removed, for a log line worth reading once.
  */
-export function sweepStaleConfs(): number {
+export async function sweepStaleConfs(): Promise<number> {
   let gone = 0;
   try {
     const dir = tmuxStateDir();
@@ -181,8 +186,8 @@ export function sweepStaleConfs(): number {
     /* Whatever is running RIGHT NOW, by the `-f` it was started with. A conf in
        use is a conf that must not be removed, however old the file looks. */
     try {
-      const ps = Bun.spawnSync(["ps", "-eo", "args"], { stdout: "pipe", stderr: "pipe" });
-      for (const m of ps.stdout.toString().matchAll(/-f\s+(\S*tmux-[0-9a-f]{8}\.conf)/g)) live.add(m[1]!);
+      const ps = await probe(["ps", "-eo", "args"]);
+      for (const m of ps.stdout.matchAll(/-f\s+(\S*tmux-[0-9a-f]{8}\.conf)/g)) live.add(m[1]!);
     } catch { /* no ps: the age check below still holds */ }
     for (const name of readdirSync(dir)) {
       if (!/^tmux-[0-9a-f]{8}\.conf$/.test(name)) continue;
@@ -353,7 +358,7 @@ export function validationSandbox(now: number, socket: string, base = tmpdir(), 
  * override) fails the gate — the UI owns the status bar, that is the one
  * invariant a config must not be allowed to break.
  */
-export function validateConf(text: string, now = Date.now(), socket = `agx-val-${now}`): { ok: boolean; stderr: string } {
+export async function validateConf(text: string, now = Date.now(), socket = `agx-val-${now}`): Promise<{ ok: boolean; stderr: string }> {
   const bin = resolveTmuxBin();
   if (!bin) return { ok: false, stderr: "tmux is not installed" };
   const { sandbox } = validationSandbox(now, socket);
@@ -362,10 +367,38 @@ export function validateConf(text: string, now = Date.now(), socket = `agx-val-$
   writeFileSync(conf, text);
   const env = { ...process.env, TMUX_TMPDIR: sandbox };
   try {
-    const r = Bun.spawnSync([bin, "-L", socket, "-f", conf, "new-session", "-d"], { env, stdout: "pipe", stderr: "pipe" });
+    const r = await probe([bin, "-L", socket, "-f", conf, "new-session", "-d"], env);
+    if (r.exitCode !== 0) return { ok: false, stderr: r.stderr.trim() || `exit ${r.exitCode}` };
+    const shown = await probe([bin, "-L", socket, "show", "-g", "status"], env);
+    await probe([bin, "-L", socket, "kill-server"], env);
+    if (shown.exitCode !== 0) return { ok: false, stderr: shown.stderr.trim() || `exit ${shown.exitCode}` };
+    if (shown.stdout.trim() !== "status off") {
+      return { ok: false, stderr: "the config leaves tmux's status bar on — it must stay off, the UI owns it" };
+    }
+    return { ok: true, stderr: "" };
+  } catch (e) {
+    return { ok: false, stderr: String(e) };
+  } finally {
+    try { rmSync(sandbox, { recursive: true, force: true }); } catch { /* already gone */ }
+  }
+}
+
+/** `validateConf`, blocking. Only for `confHealth`'s once-per-process check
+ *  when nothing ran `checkConfAtBoot` first: its callers are sync. Each step
+ *  has a time limit, so a stuck tmux holds the loop for seconds, not for ever. */
+function validateConfSync(text: string, now = Date.now(), socket = `agx-val-${now}`): { ok: boolean; stderr: string } {
+  const bin = resolveTmuxBin();
+  if (!bin) return { ok: false, stderr: "tmux is not installed" };
+  const { sandbox } = validationSandbox(now, socket);
+  try { mkdirSync(sandbox, { recursive: true }); } catch { /* raced */ }
+  const conf = join(sandbox, "tmux.conf");
+  writeFileSync(conf, text);
+  const env = { ...process.env, TMUX_TMPDIR: sandbox };
+  try {
+    const r = spawnSyncAs("tmux probe new-session", [bin, "-L", socket, "-f", conf, "new-session", "-d"], { env, stdout: "pipe", stderr: "pipe", timeout: 4000 });
     if (r.exitCode !== 0) return { ok: false, stderr: r.stderr.toString().trim() || `exit ${r.exitCode}` };
-    const probe = Bun.spawnSync([bin, "-L", socket, "show", "-g", "status"], { env, stdout: "pipe", stderr: "pipe" });
-    Bun.spawnSync([bin, "-L", socket, "kill-server"], { env, stdout: "pipe", stderr: "pipe" });
+    const probe = spawnSyncAs("tmux probe show", [bin, "-L", socket, "show", "-g", "status"], { env, stdout: "pipe", stderr: "pipe", timeout: 4000 });
+    spawnSyncAs("tmux probe kill", [bin, "-L", socket, "kill-server"], { env, stdout: "pipe", stderr: "pipe", timeout: 4000 });
     if (probe.exitCode !== 0) return { ok: false, stderr: probe.stderr.toString().trim() || `exit ${probe.exitCode}` };
     if (probe.stdout.toString().trim() !== "status off") {
       return { ok: false, stderr: "the config leaves tmux's status bar on — it must stay off, the UI owns it" };
@@ -378,6 +411,15 @@ export function validateConf(text: string, now = Date.now(), socket = `agx-val-$
   }
 }
 
+/** One probe command, without holding the event loop. `timeout` kills a hung
+ *  tmux, so every await settles. */
+async function probe(argv: string[], env: Record<string, string | undefined> = process.env): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
+  const p = Bun.spawn(argv, { env, stdout: "pipe", stderr: "pipe", timeout: 10_000 });
+  const [stdout, stderr, exitCode] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+  return { exitCode, stdout, stderr };
+}
+
+
 /** Apply a new override (or mode change) from the settings panel.
  *
  *  Validates the would-be generated conf first — a broken override never lands
@@ -386,7 +428,7 @@ export function validateConf(text: string, now = Date.now(), socket = `agx-val-$
  *  config at server creation, so live panes keep their current one until the
  *  server restarts, which is the safe direction).
  */
-export function applyTmuxConf(mode: "append" | "replace", override: string): { ok: boolean; error?: string; appliedAtNextStart: boolean } {
+export async function applyTmuxConf(mode: "append" | "replace", override: string): Promise<{ ok: boolean; error?: string; appliedAtNextStart: boolean }> {
   /*
    * Read what is there BEFORE writing over it.
    *
@@ -400,7 +442,7 @@ export function applyTmuxConf(mode: "append" | "replace", override: string): { o
   const write = writeTmuxSettings({ tmuxConfMode: mode, tmuxOverride: override });
   if (!write.ok) return { ok: false, error: write.error, appliedAtNextStart: false };
   const full = confContent();
-  const check = validateConf(full);
+  const check = await validateConf(full);
   if (!check.ok) {
     // Do not leave the bad override on disk: put back what was there, and
     // regenerate so the file on disk and the settings cannot disagree.
@@ -436,20 +478,34 @@ export function confHealth(): { ok: boolean; reason: string } {
    */
   if (!bootChecked) {
     bootChecked = true;
-    const check = validateConf(readFileSync(confPath(), "utf8"));
-    if (!check.ok) {
-      setTmuxConfBroken(true, check.stderr);
-      return { ok: false, reason: `tmux config is broken (${check.stderr}) — reset it in the settings panel` };
-    }
-    // `.broken`, not the object. `tmuxConfBroken()` returns
-    // `{ broken, reason }` — always truthy — so this and the line below read
-    // "rejected" for every config that had ever been written. That is why the
-    // panel said "Pane engine unavailable" on a machine whose config passed the
-    // gate by hand, and why the engine's socket never existed.
-    if (tmuxConfBroken().broken) setTmuxConfBroken(false);
-    return { ok: true, reason: "" };
+    return settleBootCheck(validateConfSync(readFileSync(confPath(), "utf8")));
   }
   if (tmuxConfBroken().broken) return { ok: false, reason: "tmux config was rejected — reset it in the settings panel" };
+  return { ok: true, reason: "" };
+}
+
+/**
+ * `confHealth`'s once-per-process check, off the loop. The server calls this
+ * before it listens, so no request pays for the blocking twin. While it runs,
+ * `confHealth` answers from the flag the last run left.
+ */
+export async function checkConfAtBoot(): Promise<void> {
+  if (bootChecked || !existsSync(confPath())) return;
+  bootChecked = true;
+  try { settleBootCheck(await validateConf(readFileSync(confPath(), "utf8"))); } catch { /* the flag stands */ }
+}
+
+function settleBootCheck(check: { ok: boolean; stderr: string }): { ok: boolean; reason: string } {
+  if (!check.ok) {
+    setTmuxConfBroken(true, check.stderr);
+    return { ok: false, reason: `tmux config is broken (${check.stderr}) — reset it in the settings panel` };
+  }
+  // `.broken`, not the object. `tmuxConfBroken()` returns
+  // `{ broken, reason }` — always truthy — so this and the line below read
+  // "rejected" for every config that had ever been written. That is why the
+  // panel said "Pane engine unavailable" on a machine whose config passed the
+  // gate by hand, and why the engine's socket never existed.
+  if (tmuxConfBroken().broken) setTmuxConfBroken(false);
   return { ok: true, reason: "" };
 }
 

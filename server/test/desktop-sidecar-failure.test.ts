@@ -33,7 +33,7 @@
  * `expect(said).toHaveLength(2)` fails in a file nobody touched.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync, chmodSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync, chmodSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { freePort } from "./freePort.ts";
@@ -217,5 +217,45 @@ os._exit(3)
     expect(said[1]).toMatchObject({ reason: "exited" });
     expect(String(said[1]!.what)).toContain("was running and stopped");
     expect(String(said[1]!.detail)).toContain("the database went away");
+  }, 60_000);
+
+  test("a server killed from outside is restarted, and the banner clears when it answers again", async () => {
+    const home = scratch();
+    const fake = join(home, "bin", "bun");
+    // First run: no marker yet, so write it and SIGKILL itself after ~2 s.
+    // Second run: leaves its own file and stays up.
+    writeFileSync(fake, `#!/usr/bin/env python3
+import http.server, socketserver, threading, os, signal, time
+home = os.environ["HOME"]
+first = os.path.join(home, "first-ran")
+second = os.path.join(home, "second-ran")
+socketserver.TCPServer.allow_reuse_address = True
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        b = b'{"service": "agentglass", "ok": true, "clients": 0}'
+        self.send_response(200); self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b)
+    def log_message(self, *a): pass
+srv = socketserver.TCPServer(("127.0.0.1", int(os.environ["AGENTGLASS_PORT"])), H)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+if not os.path.exists(first):
+    open(first, "w").write("1")
+    time.sleep(2)
+    os.kill(os.getpid(), signal.SIGKILL)
+open(second, "w").write("1")
+time.sleep(60)
+`);
+    chmodSync(fake, 0o755);
+    const r = await runShell({ path: `${join(home, "bin")}:${SYS_PATH}`, port: await freePort(), home, expect: 3 });
+
+    expect(r.code).toBe(0);
+    const said = failure(r);
+    expect(said).toHaveLength(3);
+    expect(said[0]).toBeNull();
+    expect(said[1]).toMatchObject({ reason: "exited" });
+    expect(String(said[1]!.what)).toContain("Restarting it.");
+    expect(said[2]).toBeNull();
+    expect(existsSync(join(home, "first-ran"))).toBe(true);
+    expect(existsSync(join(home, "second-ran"))).toBe(true);
   }, 60_000);
 });

@@ -35,6 +35,24 @@ export function seatPanes(): Set<string> {
   return out;
 }
 
+export type SeatPower = "speak" | "nudge" | "assign";
+const POWERS = ["speak", "nudge", "assign"] as const;
+const isPower = (s: unknown): s is SeatPower => (POWERS as readonly unknown[]).includes(s);
+
+const openRows = db.query<{ root: string; name: string; kind: string; powers: string }, []>(
+  `SELECT root, name, kind, powers FROM seat WHERE ended_at IS NULL AND (adopted_pane IS NULL OR adopted_pane = '')`);
+
+/**
+ * The chairs this app opened that are still open, with the name their window
+ * carries. An ADOPTED chair is somebody's own session and is left out on
+ * purpose: a restore hands it back to the person who opened it.
+ */
+export function openSeatRows(): { root: string; name: string; kind: string; powers: SeatPower }[] {
+  try {
+    return openRows.all().map((r) => ({ root: r.root, name: r.name, kind: r.kind || "claude", powers: isPower(r.powers) ? r.powers : "speak" }));
+  } catch { return []; /* before the tables exist, nobody is seated */ }
+}
+
 const adoptedRoots = db.query<{ r: string; p: string }, []>(
   `SELECT root AS r, adopted_pane AS p FROM seat WHERE ended_at IS NULL AND adopted_pane <> ''`);
 const openedRoots = db.query<{ r: string; p: string }, [string]>(

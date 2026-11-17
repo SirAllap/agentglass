@@ -17,5 +17,6 @@ test("the watcher looks every six minutes", () => {
 });
 
 test("and the timer is the one that uses it", () => {
-  expect(src).toContain("setInterval(() => { void tick(); }, WATCH_MS)");
+  // The tick runs under its stall-log label; what this pins is the interval.
+  expect(src).toContain('setInterval(() => { waitedFor("clickup card watch", () => void tick()); }, WATCH_MS)');
 });

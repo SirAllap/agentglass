@@ -10,8 +10,9 @@
 // place that needs to say it: the start answer of a worker, its first prompt
 // line, and `bun scripts/depscheck.ts` (what `make typecheck` and `make check`
 // run first). Read-only: it installs nothing and starts nothing.
-import { readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, symlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { runChild } from "./broker/brokerRun.ts";
 
 export interface CheckoutDeps {
   /** Repo-relative directories with no node_modules, the root as "" — `["", "web"]`. */
@@ -95,4 +96,58 @@ export function nodeModulesGap(dir: string): CheckoutDeps | null {
 export function withDepsLine(prompt: string, gap: CheckoutDeps | null): string {
   if (!gap || !prompt.trim() || prompt.startsWith(gap.line)) return prompt;
   return `${gap.line}\n\n${prompt}`;
+}
+
+/**
+ * Before a worker's first turn: give a fresh worktree its node_modules, so the
+ * "node_modules missing" sentence is only said when this could not.
+ *
+ * The sandbox cannot run `bun install` (no network), so it is done here, outside
+ * it. When the main checkout this worktree belongs to (`git worktree list`, first
+ * entry) has the same `bun.lock` and the directory, each missing one is linked to
+ * it; a link is read-only to the turn, since its target is outside the sandbox's
+ * write roots. Otherwise `bun install --frozen-lockfile` runs in the worktree.
+ * Returns what it did, for the caller's log; the gap is asked again afterwards.
+ */
+export function ensureCheckoutDeps(dir: string): Promise<"none" | "linked" | "installed" | "failed"> {
+  /* One at a time per directory. Why: the install is awaited now, so two turns
+     in one checkout (a start and a resume, or two seats) ran two `bun install`s
+     into the same node_modules at once; the second now waits for the first. */
+  const root = resolve(dir);
+  const running = ensuring.get(root);
+  if (running) return running;
+  const mine = ensureOnce(root).finally(() => { if (ensuring.get(root) === mine) ensuring.delete(root); });
+  ensuring.set(root, mine);
+  return mine;
+}
+const ensuring = new Map<string, Promise<"none" | "linked" | "installed" | "failed">>();
+
+async function ensureOnce(root: string): Promise<"none" | "linked" | "installed" | "failed"> {
+  const gap = nodeModulesGap(root);
+  if (!gap) return "none";
+  const main = await mainCheckoutOf(root);
+  const lock = (d: string): string | null => { try { return readFileSync(join(d, "bun.lock"), "utf8"); } catch { return null; } };
+  if (main && main !== root && lock(main) !== null && lock(main) === lock(root)) {
+    try {
+      for (const d of gap.missing) {
+        const from = join(main, d, "node_modules");
+        if (!isDir(from)) throw new Error("main checkout has none");
+        symlinkSync(from, join(root, d, "node_modules"));
+      }
+      if (!nodeModulesGap(root)) return "linked";
+    } catch { /* fall through to an install */ }
+  }
+  if (!existsSync(join(root, "bun.lock"))) return "failed";
+  // Through the spawn broker and awaited: a sync install held the server's one thread for up to 240 s.
+  const r = await runChild(["bun", "install", "--frozen-lockfile", "--ignore-scripts"], { cwd: root, timeoutMs: 240_000, maxBytes: 256 * 1024 });
+  return r.code === 0 && !nodeModulesGap(root) ? "installed" : "failed";
+}
+
+/** The main checkout a linked worktree belongs to: the first entry of `git worktree list`. */
+async function mainCheckoutOf(root: string): Promise<string | null> {
+  // Through the spawn broker: a sync git here froze the server at every worker start.
+  const r = await runChild(["git", "worktree", "list", "--porcelain"], { cwd: root, timeoutMs: 10_000, read: true });
+  if (r.code !== 0) return null;
+  const first = /^worktree (.+)$/m.exec(r.stdout);
+  return first ? resolve(first[1]!) : null;
 }

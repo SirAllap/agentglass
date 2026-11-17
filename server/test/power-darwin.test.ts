@@ -41,6 +41,7 @@ async function drive(platform: string, script: string): Promise<Trace> {
   mkdirSync(join(scratch, "emptybin"), { recursive: true });
   mkdirSync(join(scratch, "node_modules", "electron"), { recursive: true });
   copyFileSync(POWER, join(scratch, "power.js"));
+  copyFileSync(new URL("../../electron/power-rules.js", import.meta.url).pathname, join(scratch, "power-rules.js"));
   writeFileSync(join(scratch, "node_modules", "electron", "index.js"), `
     const calls = { started: [], stopped: [] };
     const types = new Map();

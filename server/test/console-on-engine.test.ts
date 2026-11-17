@@ -89,3 +89,14 @@ describe("how the server decides", () => {
     expect(terminal).toContain('plain && tmuxTerminal() === "engine" ? plainEngineArgv(startIn) : null');
   });
 });
+
+describe("the console's argv takes no command after attach", () => {
+  it("withPersonEnv leaves a chained panel view alone", async () => {
+    const { withPersonEnv } = await import("../src/tmuxpane.ts");
+    const env = { AGENTGLASS_TOKEN: "t", PATH: "/bin" };
+    const view = ["tmux", "-L", "agx-x", "new-session", "-d", "-t", "=s", "-s", "v", ";", "attach", "-t", "=v"];
+    expect(withPersonEnv(view, env)).toEqual(view);
+    const plain = ["tmux", "-L", "agx-x", "new-session", "-A", "-s", "s", "-c", "/r"];
+    expect(withPersonEnv(plain, env).length).toBeGreaterThan(plain.length);
+  });
+});

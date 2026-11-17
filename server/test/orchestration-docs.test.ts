@@ -41,7 +41,7 @@ describe("the routes the policy docs list are served", () => {
 });
 
 describe("the CLI flags the docs and the skill name are the CLI's", () => {
-  for (const flag of ["--role", "--engine", "--model", "--allow", "--cwd", "--prompt"]) {
+  for (const flag of ["--role", "--flow-role", "--engine", "--model", "--allow", "--cwd", "--prompt"]) {
     test(flag, () => {
       expect(policy).toContain(flag);
       expect(skill).toContain(flag);

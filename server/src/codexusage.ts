@@ -17,6 +17,7 @@ import { windowLabel } from "../../shared/quota.ts";
 import { codexHome, CODEX_ENABLED, codexModels } from "./codex.ts";
 import { singleFlight } from "./singleflight.ts";
 import { usageRead } from "./usageevents.ts";
+import { runChild } from "./broker/brokerRun.ts";
 
 /**
  * How many rollout files to open before giving up.
@@ -183,10 +184,8 @@ export async function refreshCodexUsage(): Promise<{ ok: boolean; error?: string
     const args = ["exec", "--sandbox", "read-only"];
     if (model) args.push("--model", model);
     args.push("Reply with the single word: ok");
-    const proc = Bun.spawn(["codex", ...args], {
-      stdout: "ignore", stderr: "ignore", timeout: REFRESH_TIMEOUT_MS,
-    });
-    const code = await proc.exited;
+    // Through the spawn broker: a timer and a click reach this, and a fork of the server stalls it.
+    const { code } = await runChild(["codex", ...args], { timeoutMs: REFRESH_TIMEOUT_MS, maxBytes: 64 * 1024 });
     // The turn's OUTPUT is worthless — the point is the rate_limits it wrote
     // on its way past. Drop the cache so the next read sees the new file.
     __resetCodexUsageCache();

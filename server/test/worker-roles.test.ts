@@ -101,7 +101,7 @@ describe("the lock, as each CLI is told it", () => {
     expect(claudeDeny(builder)).not.toContain("Edit");
     expect(claudeDeny(workerRole("verifier")!)).toContain("Edit");
     expect(claudeDeny(workerRole("reviewer")!)).toContain("Edit");
-    expect(claudeDeny(workerRole("reviewer")!)).toContain("Bash(git push:*)");
+    expect(claudeDeny(workerRole("reviewer")!)).toContain("Bash(sudo:*)");
     const oc = JSON.parse(roleLaunch(row("opencode"), builder, "")!.env.OPENCODE_CONFIG_CONTENT!) as { permission: { edit?: string } };
     expect(oc.permission.edit).toBeUndefined();
   });
@@ -132,8 +132,30 @@ describe("starting a role", () => {
     const path = r.env.QWEN_CODE_SYSTEM_SETTINGS_PATH!;
     expect(path.startsWith(dir)).toBe(true);
     expect(statSync(path).mode & 0o777).toBe(0o600);
-    expect(readFileSync(path, "utf8")).toContain("Bash(git push)");
+    expect(readFileSync(path, "utf8")).toContain("Bash(sudo)");
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  step("a role started straight from /agents/named/start (no orchestration policy) is sandboxed the same as a policy-started turn", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "agx-sandbox-cwd-"));
+    try {
+      const r = ops.roleStart("builder", roles("claude"), tmpdir(), null, { cwd, runDir: join(cwd, ".run") });
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      const settings = JSON.parse(r.args[1]!) as { sandbox?: { enabled?: boolean; network?: { allowedDomains?: string[]; strictAllowlist?: boolean } } };
+      expect(settings.sandbox?.enabled).toBe(true);
+      expect(settings.sandbox?.network?.allowedDomains).toEqual([]);
+      expect(settings.sandbox?.network?.strictAllowlist).toBe(true);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  step("without the sandbox param (every caller before this one), roleStart adds no sandbox: unchanged for a flow-role caller that does not pass it", () => {
+    const r = ops.roleStart("builder", roles("claude"), tmpdir());
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect((JSON.parse(r.args[1]!) as { sandbox?: unknown }).sandbox).toBeUndefined();
   });
 
   step("a role set to a CLI without a lock is refused, never started unlocked", () => {
@@ -183,7 +205,7 @@ describe("starting a role", () => {
     for (const id of ["scout", "builder"]) {
       for (const door of ["agentglass-agent", "agentglass-ui", "agentglass-cockpit-mcp"]) expect(claudeDeny(id)).toContain(`Bash(${door}:*)`);
     }
-    expect(claudeDeny("scout")).toContain("Bash(rm:*)");
+    expect(claudeDeny("scout")).toContain("Bash(sudo:*)");
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -284,20 +306,20 @@ describe("the OpenCode lock, as OpenCode merged it", () => {
   });
 
   step("a project key the lock reuses leaves a broader allow after it, and that is caught", () => {
-    const merged = lockRules({ "git push *": "deny", "git *": "allow", ...own() });
+    const merged = lockRules({ "sudo *": "deny", "sudo -u *": "allow", ...own() });
     const r = ops.lockLoosened([DEFAULT, ...merged], lock());
     expect(r).not.toBeNull();
-    expect(r!.subject.startsWith("git push")).toBe(true);
-    expect(r!.rule).toEqual({ permission: "bash", pattern: "git *", action: "allow" });
+    expect(r!.subject.startsWith("sudo")).toBe(true);
+    expect(r!.rule).toEqual({ permission: "bash", pattern: "sudo -u *", action: "allow" });
   });
 
   step("any later rule that reaches a denied command: a wildcard permission, a narrower pattern, a glob, an ask", () => {
     for (const late of [
       { permission: "*", pattern: "*", action: "allow" },
-      { permission: "bash", pattern: "git push --force *", action: "allow" },
-      { permission: "bash", pattern: "git pu?h *", action: "allow" },
-      { permission: "bash", pattern: "*push*", action: "allow" },
-      { permission: "bash", pattern: "rm -rf build", action: "ask" },
+      { permission: "bash", pattern: "sudo -u root *", action: "allow" },
+      { permission: "bash", pattern: "sud? *", action: "allow" },
+      { permission: "bash", pattern: "*sudo*", action: "allow" },
+      { permission: "bash", pattern: "sudo rm", action: "ask" },
       { permission: "task", pattern: "general", action: "allow" },
     ]) {
       expect(ops.lockLoosened([...clean(), late], lock()), JSON.stringify(late)).not.toBeNull();

@@ -44,58 +44,58 @@ function pushToOrigin(): void {
 describe("amend", () => {
   beforeEach(build);
 
-  it("amendInfo hands back the tip's title and body to prefill", () => {
-    const i = amendInfo(repo);
+  it("amendInfo hands back the tip's title and body to prefill", async () => {
+    const i = await amendInfo(repo);
     expect(i).toMatchObject({ ok: true, title: "feat two", body: "why two" });
     expect(i.refusal).toBeUndefined();
   });
 
-  it("rewrites the tip with the staged file and the new message", () => {
+  it("rewrites the tip with the staged file and the new message", async () => {
     const before = out("rev-parse", "HEAD");
     writeFileSync(join(repo, "c.txt", ), "three\n");
-    expect(stage(repo, ["c.txt"]).ok).toBe(true);
-    expect(amendCommit(repo, "feat two and three", "").ok).toBe(true);
+    expect((await stage(repo, ["c.txt"])).ok).toBe(true);
+    expect((await amendCommit(repo, "feat two and three", "")).ok).toBe(true);
     expect(out("rev-parse", "HEAD")).not.toBe(before);
     expect(out("log", "-1", "--format=%s")).toBe("feat two and three");
     expect(out("show", "--name-only", "--format=", "HEAD").split("\n").sort()).toEqual(["b.txt", "c.txt"]);
     expect(out("rev-list", "--count", "HEAD")).toBe("3");
   });
 
-  it("refuses when the tip is already on a remote, and moves nothing", () => {
+  it("refuses when the tip is already on a remote, and moves nothing", async () => {
     pushToOrigin();
     writeFileSync(join(repo, "c.txt"), "three\n");
-    stage(repo, ["c.txt"]);
+    await stage(repo, ["c.txt"]);
     const before = out("rev-parse", "HEAD");
-    const r = amendCommit(repo, "reworded", "");
+    const r = await amendCommit(repo, "reworded", "");
     expect(r.ok).toBe(false);
     expect(r.error).toContain("already on a remote");
     expect(out("rev-parse", "HEAD")).toBe(before);
-    expect(amendInfo(repo).refusal).toContain("already on a remote");
+    expect((await amendInfo(repo)).refusal).toContain("already on a remote");
   });
 
-  it("allows it again once the branch has a new local commit on top of the pushed one", () => {
+  it("allows it again once the branch has a new local commit on top of the pushed one", async () => {
     pushToOrigin();
     writeFileSync(join(repo, "c.txt"), "three\n");
     git("add", "-A"); git("commit", "-qm", "feat three");
-    expect(amendInfo(repo).refusal).toBeUndefined();
+    expect((await amendInfo(repo)).refusal).toBeUndefined();
   });
 
-  it("refuses on a detached HEAD", () => {
+  it("refuses on a detached HEAD", async () => {
     git("checkout", "-q", "--detach");
     writeFileSync(join(repo, "c.txt"), "three\n");
-    stage(repo, ["c.txt"]);
-    const r = amendCommit(repo, "reworded", "");
+    await stage(repo, ["c.txt"]);
+    const r = await amendCommit(repo, "reworded", "");
     expect(r.ok).toBe(false);
     expect(r.error).toContain("not on a branch");
   });
 
-  it("refuses mid-merge, naming the state", () => {
+  it("refuses mid-merge, naming the state", async () => {
     git("checkout", "-qb", "other", "HEAD~1");
     writeFileSync(join(repo, "b.txt"), "other\n");
     git("add", "-A"); git("commit", "-qm", "other b");
     git("merge", "feature");
     expect(out("status", "--porcelain")).toContain("b.txt");
-    const r = amendCommit(repo, "reworded", "");
+    const r = await amendCommit(repo, "reworded", "");
     expect(r.ok).toBe(false);
     expect(r.error).toContain("merging");
   });
@@ -105,16 +105,16 @@ describe("reset soft and mixed", () => {
   beforeEach(build);
   const prev = () => out("rev-parse", "HEAD~1");
 
-  it("soft moves the branch, keeps the dropped change staged and the files intact", () => {
-    expect(resetTo(repo, prev(), "soft").ok).toBe(true);
+  it("soft moves the branch, keeps the dropped change staged and the files intact", async () => {
+    expect((await resetTo(repo, prev(), "soft")).ok).toBe(true);
     expect(out("log", "-1", "--format=%s")).toBe("feat one");
     expect(out("diff", "--cached", "--name-only")).toBe("b.txt");
     expect(out("diff", "--name-only")).toBe("");
     expect(readFileSync(join(repo, "b.txt"), "utf8")).toBe("two\n");
   });
 
-  it("mixed moves the branch, keeps the dropped change unstaged and the files intact", () => {
-    expect(resetTo(repo, prev(), "mixed").ok).toBe(true);
+  it("mixed moves the branch, keeps the dropped change unstaged and the files intact", async () => {
+    expect((await resetTo(repo, prev(), "mixed")).ok).toBe(true);
     expect(out("log", "-1", "--format=%s")).toBe("feat one");
     expect(out("diff", "--cached", "--name-only")).toBe("");
     expect(out("status", "--porcelain")).toBe("?? b.txt");

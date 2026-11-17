@@ -7,6 +7,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
 import { MACHINE, nights, startHarness, type Harness } from "./fixtures/workerHarness.ts";
+import { SUBAGENTS_OFF_NOTE } from "../src/rolePrompt.ts";
 
 const have = !!Bun.which("tmux") && !!Bun.which("python3");
 let h: Harness;
@@ -48,17 +49,25 @@ describe.skipIf(!have)("start --role <custom flow role> through the policy", () 
     expect(miss.error).toContain("devops");
 
     const r = await h.asSeat("/agents/named/start", { name: "w-devops", cwd: h.wt, role: "devops", prompt: "look at port 4000" });
-    expect(r.ok).toBe(true);
+    expect(r.ok, JSON.stringify(r)).toBe(true);
     expect(r.result).toMatchObject({ engine: "opencode", model: "opencode/big-pickle", envelope: { write: "none" } });
     const done = await h.exited("w-devops");
     expect(done.startedBy).toMatchObject({ role: "devops", engine: "opencode", headless: true });
 
     const call = h.callsOf("opencode").at(-1)!;
-    expect(call.argv.at(-1)).toBe("check ports\n\nlook at port 4000");
+    // Measured on the m40 run: a custom role with no base opens with the no-browser note
+    // (withNoBaseNote) and, being a role without the Agent tool, ends with SUBAGENTS_OFF_NOTE.
+    expect(call.argv.at(-1)).toBe(`"DevOps" has no base role: no browser. Set one in Settings ▸ Flow ▸ DevOps ▸ Works like.\n\ncheck ports\n\nlook at port 4000\n\n${SUBAGENTS_OFF_NOTE}`);
     const cfg = JSON.parse(call.env.OPENCODE_CONFIG_CONTENT!) as { permission: { edit?: string; bash: Record<string, string> } };
     expect(cfg.permission.edit).toBe("deny");
     expect(cfg.permission.bash["git push"]).toBe("deny");
     // No browser credential and no browser line for a custom id.
+    // Decided (least privilege): a role with no base gets no browser credential. Earlier runs
+    // (m41) measured the credential issued (AGENTGLASS_BROWSER_AS = "w-devops", no BROWSER_OFF)
+    // because browserAskContextFor fell a role with no base back to `builder`'s row. It now
+    // passes base "", so the window carries BROWSER_OFF=1 and no browser credential; the note
+    // above says why, and the envelope's doors (keyed on role.base ?? role.id) stay as they were.
+    expect(call.env.AGENTGLASS_BROWSER_OFF).toBe("1");
     expect(call.env.AGENTGLASS_BROWSER_AS).toBeUndefined();
     expect(call.argv.at(-1)).not.toContain("Browser access");
   }, 40_000);

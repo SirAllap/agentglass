@@ -49,7 +49,10 @@ beforeAll(async () => {
 // assert on what is *absent* (scope.test.ts uses not.toContain), and in CI,
 // where the files run in a different order than locally, these sessions showed
 // up in their results. So take the rows back out.
-const FIXTURES = ["s-append", "s-pair", "s-tool", "s-usage", "s-title", "s-rewrite", "s-partial", "s-nonewline", "s-cold"];
+const FIXTURES = [
+  "s-append", "s-pair", "s-tool", "s-usage", "s-title", "s-rewrite", "s-partial", "s-nonewline", "s-cold",
+  ...Array.from({ length: 80 }, (_, i) => `s-fleet-${i}`),
+];
 afterAll(() => {
   if (!db) return;
   const marks = FIXTURES.map(() => "?").join(",");
@@ -265,5 +268,25 @@ describe("incremental transcript sweep", () => {
     append("cold", [prompt(sid, "c3")]);
     await sweep();
     expect(prompts(sid)).toEqual(["c1", "c2", "c3"]);
+  });
+
+  test("a fleet bigger than the old 64-tail cap still grows incrementally", async () => {
+    // The bug this guards: a machine running an orchestrator plus a fleet of
+    // builder/reviewer/flight-plan agents routinely has well over 64
+    // transcripts growing in the same minute. With MAX_TAILS too small, the
+    // oldest-touched tails are evicted before their next append and are
+    // re-read WHOLE on growth — the full-sweep sawtooth measured on the
+    // installed server. 80 is chosen to sit above the old cap of 64.
+    const FLEET = 80;
+    const names = Array.from({ length: FLEET }, (_, i) => `fleet-${i}`);
+    const sids = names.map((n) => `s-${n}`);
+    scan.__dropTailCache();
+    for (let i = 0; i < FLEET; i++) write(names[i], [prompt(sids[i], "one")]);
+    await sweep();
+    scan.__resetColdRereadCount();
+    for (let i = 0; i < FLEET; i++) append(names[i], [prompt(sids[i], "two")]);
+    await sweep();
+    for (let i = 0; i < FLEET; i++) expect(prompts(sids[i])).toEqual(["one", "two"]);
+    expect(scan.__coldRereadCount()).toBe(0);
   });
 });

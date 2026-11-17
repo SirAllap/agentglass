@@ -179,6 +179,21 @@ describe.skipIf(!HAVE_PY)("agentglass-browser lane", () => {
     expect(seen).toHaveLength(0);
   }, 20_000);
 
+  step("`lane new --ephemeral --vault NAME` sends the vault, and the lane records it", async () => {
+    const r = await cli("lane", "new", "--ephemeral", "--vault", "Work");
+    expect(r.code).toBe(0);
+    const eph = JSON.parse(r.out).lane.id;
+    const rec = JSON.parse((await cli("lane", "list")).out).lanes.find((l: any) => l.id === eph);
+    expect(rec).toMatchObject({ container: "ephemeral", vault: "Work" });
+    expect((await cli("lane", "close", eph)).code).toBe(0);
+    // Without --ephemeral it is refused before any request: only an in-memory lane is signed in.
+    seen.length = 0;
+    const plain = await cli("lane", "new", "--vault", "Work");
+    expect(plain.code).toBe(2);
+    expect(plain.err).toContain("needs --ephemeral");
+    expect(seen).toHaveLength(0);
+  }, 20_000);
+
   step("`lane close` without an id, and an id that is not one, are refused before any request", async () => {
     expect((await cli("lane", "close")).code).not.toBe(0);
     expect((await cli("read", "--lane", "../x")).code).not.toBe(0);

@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { rolePromptFor } from "./rolePrompt.ts";
 import type { PreflightEngine } from "../../shared/preflightEngine.ts";
+import { runChild } from "./broker/brokerRun.ts";
 
 export const FILE_LIMIT_BYTES = 5 * 1024 * 1024;
 export const NAMED_FILES_MAX = 12;
@@ -25,7 +26,7 @@ export const NAMED_BYTES_MAX = 400 * 1024;
 /** A cited line gets this many lines around it; the first IMPORT_LINES of a file are always sent (its imports). */
 export const SLICE_CONTEXT = 40;
 export const IMPORT_LINES = 30;
-/** A named file with no line is sent whole up to this size, else only its first UNCITED_HEAD_LINES. */
+/** A named file with no line is sent whole up to this size, else only its first UNCITED_HEAD_LINES. The default when `PreflightInput.fileCapBytes` is absent (direct `sliceOf` calls, e.g. in tests). 0 means no cap: always whole. */
 export const WHOLE_FILE_MAX = 40 * 1024;
 export const UNCITED_HEAD_LINES = 200;
 export const ISOLATION = "claude -p, auto-memory off, project settings only, read-only tools";
@@ -75,6 +76,8 @@ export interface PreflightInput {
   /** The CLI that reads it (shared/preflightEngine.ts). Absent is claude, which is what every caller before this asked for. */
   engine?: PreflightEngine;
   budgetUsd: number;
+  /** A file named with no line goes whole up to this many bytes, else only its head (see `sliceOf`). 0 means no cap: always whole. Absent falls back to `WHOLE_FILE_MAX`. */
+  fileCapBytes?: number;
   /** Absolute paths of mockups (.png .jpg .webp .html), copied to mockup/<basename>. */
   mockups?: string[];
   /** Text written at the top of the directory; with no `pr`, the first is the material. */
@@ -140,15 +143,16 @@ export function namedFiles(text: string, root: string): { files: string[]; range
 /**
  * What of a file the reviewer is given. Cited lines go in with SLICE_CONTEXT lines around them and the first
  * IMPORT_LINES of the file, each window under a `… lines A-B …` marker; a file named with no line goes whole
- * under WHOLE_FILE_MAX and as its first UNCITED_HEAD_LINES above it. shortcut: windows are by line, a cited
+ * up to `capBytes` (default WHOLE_FILE_MAX, 0 meaning no cap), else only its first UNCITED_HEAD_LINES, with a
+ * trailing note naming the cut so the reader never mistakes what was not sent for what is missing. shortcut: windows are by line, a cited
  * line inside a 5,000-character line still sends that whole line.
  */
-export function sliceOf(data: Buffer, cited: [number, number][] | undefined): { data: Buffer; part: string } {
+export function sliceOf(data: Buffer, cited: [number, number][] | undefined, capBytes: number = WHOLE_FILE_MAX): { data: Buffer; part: string } {
   const text = data.toString("utf8"), lines = text.split("\n");
   const last = lines.length > 1 && lines[lines.length - 1] === "" ? lines.length - 1 : lines.length;
   let wins: [number, number][];
   if (cited?.length) wins = [[1, Math.min(IMPORT_LINES, last)], ...cited.map(([a, b]): [number, number] => [Math.max(1, a - SLICE_CONTEXT), Math.min(last, b + SLICE_CONTEXT)])];
-  else if (data.length <= WHOLE_FILE_MAX) return { data, part: "whole" };
+  else if (capBytes <= 0 || data.length <= capBytes) return { data, part: "whole" };
   else wins = [[1, Math.min(UNCITED_HEAD_LINES, last)]];
   wins = wins.filter(([a, b]) => a <= b).sort((x, y) => x[0] - y[0]);
   const merged: [number, number][] = [];
@@ -158,7 +162,9 @@ export function sliceOf(data: Buffer, cited: [number, number][] | undefined): { 
   }
   if (merged.length === 1 && merged[0]![0] === 1 && merged[0]![1] >= last) return { data, part: "whole" };
   const out = merged.map(([a, b]) => `… lines ${a}-${b} …\n${lines.slice(a - 1, b).join("\n")}`).join("\n");
-  return { data: Buffer.from(out + "\n"), part: cited?.length ? "lines " + merged.map(([a, b]) => `${a}–${b}`).join(", ") : "partial" };
+  const shown = merged[merged.length - 1]![1];
+  const cutNote = shown < last ? `\n… cut after line ${shown}: the file has ${last} lines in total, the rest was not sent …\n` : "\n";
+  return { data: Buffer.from(out + cutNote), part: cited?.length ? "lines " + merged.map(([a, b]) => `${a}–${b}`).join(", ") : "partial" };
 }
 
 const HEADING = /^### F(\d+) - (Blocker|Major|Nit) - (.+?)\s*$/i;
@@ -273,10 +279,10 @@ export function parseOpenCodeTurn(out: string): OpenCodeTurn {
 }
 
 async function defaultGh(args: string[], cwd: string): Promise<string> {
-  const p = Bun.spawn(["gh", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
-  const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
-  if ((await p.exited) !== 0) throw new Error(`gh ${args.slice(0, 2).join(" ")} failed: ${err.slice(0, 200)}`);
-  return out;
+  // Through the spawn broker: a fork of the server stalls every request.
+  const r = await runChild(["gh", ...args], { cwd, timeoutMs: 120_000 });
+  if (r.code !== 0) throw new Error(`gh ${args.slice(0, 2).join(" ")} failed: ${(r.stderr || r.error || (r.timedOut ? "timed out" : "")).slice(0, 200)}`);
+  return r.stdout;
 }
 
 /**
@@ -315,7 +321,7 @@ export async function runPreflight(input: PreflightInput, deps: PreflightDeps = 
         data = readFileSync(p);
       } catch { skipped.push({ path: p, reason: "unreadable" }); continue; }
       const rel = base && resolve(p).startsWith(resolve(base) + "/") ? relative(resolve(base), resolve(p)) : resolve(p).replace(/^\/+/, "");
-      const cut = input.ranges && !(first && !input.pr && !input.extraText?.length) ? sliceOf(data, input.ranges[p]) : null;
+      const cut = input.ranges && !(first && !input.pr && !input.extraText?.length) ? sliceOf(data, input.ranges[p], input.fileCapBytes ?? WHOLE_FILE_MAX) : null;
       if (cut) data = cut.data;
       put(join("files", rel), data, true);
       files.push({ path: p, sha256: createHash("sha256").update(data).digest("hex"), bytes: data.length, ...(cut ? { part: cut.part } : {}) });
@@ -376,13 +382,9 @@ export async function runPreflight(input: PreflightInput, deps: PreflightDeps = 
         ...bin, "-p", "--setting-sources", "project", "--model", input.model, "--output-format", "json",
         "--max-budget-usd", String(input.budgetUsd), "--tools", "Read,Grep,Glob", "--allowedTools", "Read", "Grep", "Glob", "--", prompt,
       ];
-    const p = Bun.spawn(argv, { cwd: work, env: env as Record<string, string>, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-    const timer = setTimeout(() => { try { p.kill(); } catch { /* already gone */ } }, deps.timeoutMs ?? 10 * 60_000);
-    let out: string, err: string, code: number;
-    try {
-      [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
-      code = await p.exited;
-    } finally { clearTimeout(timer); }
+    // Through the spawn broker: a fork of the server stalls every request.
+    const ran = await runChild(argv, { cwd: work, env: env as Record<string, string>, timeoutMs: deps.timeoutMs ?? 10 * 60_000 });
+    const out = ran.stdout, err = ran.stderr || (ran.error ?? ""), code = ran.code ?? 1;
 
     /* A run that failed still spent: the error carries what it cost, so the budget counts it (flightBudget.ts). With no reply to read the cost from, it is billed at its cap. */
     const billed = (message: string, costUsd: number) => Object.assign(new Error(message), { costUsd });

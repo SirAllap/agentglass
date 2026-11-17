@@ -37,16 +37,36 @@ async function run(env: Record<string, string>, ...args: string[]) {
   return { code: await p.exited, out, err };
 }
 
+/* The server computes the real reason at mint time and hands it over as
+ * AGENTGLASS_BROWSER_OFF_REASON (server/src/browseraccess.ts, agentWindowEnv);
+ * the CLI prints exactly that, naming the row of Settings ▸ Browser ▸ "Who
+ * may drive the browser" that is really off there — never a made-up sentence
+ * claiming a control ("this project's seat row") the UI did not have. */
+const CARD_TABS_OFF_REASON = '"Card tabs" is off in Settings ▸ Browser ▸ Who may drive the browser, '
+  + "so this tab has no credential for the built-in browser and cannot drive it";
+
 describe.skipIf(!python)("a worker whose browser access is off", () => {
-  test("refuses every verb without a request and without the person's token file", async () => {
+  test("refuses every verb without a request and without the person's token file, naming the real reason", async () => {
     calls = 0;
     for (const argv of [["health"], ["read"], ["observe", "--shot"], ["--shared", "open", "https://example.test/"]]) {
-      const r = await run({ AGENTGLASS_BROWSER_OFF: "1" }, ...argv);
+      const r = await run({ AGENTGLASS_BROWSER_OFF: "1", AGENTGLASS_BROWSER_OFF_REASON: CARD_TABS_OFF_REASON }, ...argv);
       expect({ argv, code: r.code }).toEqual({ argv, code: 2 });
-      expect(r.err).toContain("browser access is off for this worker");
+      expect(r.err).toContain(CARD_TABS_OFF_REASON);
+      expect(r.err, "the refusal names a control that exists in Settings ▸ Browser").toContain("Who may drive the browser");
       expect(r.err).not.toContain("mk_person_example_never_sent");
       expect(r.out).not.toContain("mk_person_example_never_sent");
     }
+    expect(calls).toBe(0);
+  });
+
+  test("off with no reason at all reads as a bug, not a setting", async () => {
+    // An older window, or one the door never minted a reason for at all: there
+    // is no row to name, so claiming one would be worse than saying nothing.
+    calls = 0;
+    const r = await run({ AGENTGLASS_BROWSER_OFF: "1" }, "health");
+    expect(r.code).toBe(2);
+    expect(r.err).toContain("bug, not a setting");
+    expect(r.err).not.toContain(CARD_TABS_OFF_REASON);
     expect(calls).toBe(0);
   });
 

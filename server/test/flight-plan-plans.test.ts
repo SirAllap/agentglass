@@ -100,16 +100,18 @@ describe("the state machine", () => {
     expect(await uses("flightPlan:created")).toBe(before + 2);
   });
 
-  test("size is S, M or L, M by default; set on create and by PATCH, refused otherwise", async () => {
+  test("size is S, M or L, M by default; the setting refuses the sizes that are not plans, and an agent never lowers one", async () => {
     expect((await makePlan()).size).toBe("M");
     const l = await makePlan({ size: "L" });
     expect(l.size).toBe("L");
-    // An agent may raise a size, never lower it; the person may do both.
+    // An agent may raise a size, never lower it. The person may raise one too; a size the setting does not cover is the door's to refuse.
     expect((await call("PATCH", `/flight-plan/plans/${l.id}`, { size: "S" })).status).toBe(403);
-    expect((await person("PATCH", `/flight-plan/plans/${l.id}`, { size: "S" })).body.plan.size).toBe("S");
-    expect((await call("PATCH", `/flight-plan/plans/${l.id}`, { size: "M" })).body.plan.size).toBe("M");
-    expect((await person("PATCH", `/flight-plan/plans/${l.id}`, { size: "S" })).body.plan.size).toBe("S");
-    expect((await call("GET", `/flight-plan/plans/${l.id}`)).body.plan.size).toBe("S");
+    const small = await person("PATCH", `/flight-plan/plans/${l.id}`, { size: "S" });
+    expect(small.status).toBe(409);
+    expect(small.body.error).toContain("flightPlan.preflight.sizes");
+    expect(small.body.error).toContain("agentglass-agent start");
+    expect((await person("PATCH", `/flight-plan/plans/${l.id}`, { size: "M" })).body.plan.size).toBe("M");
+    expect((await call("PATCH", `/flight-plan/plans/${l.id}`, { size: "L" })).body.plan.size).toBe("L");
     expect((await call("PATCH", `/flight-plan/plans/${l.id}`, { size: "XL" })).status).toBe(400);
     expect((await person("POST", "/flight-plan/plans", { root: ROOT, request: "x", size: "m" })).status).toBe(400);
   });
@@ -235,13 +237,15 @@ describe("Launch", () => {
     expect((await call("PATCH", `/flight-plan/plans/${p.id}`, { title: "new" })).status).toBe(409);
   });
 
-  test("a new launch drops the link to the worker of an earlier build", async () => {
+  test("a new launch replaces the link to the worker of an earlier build with its own", async () => {
     const p = await makePlan({ title: "Relink" });
     await call("PATCH", `/flight-plan/plans/${p.id}`, { plan_md: "# plan" });
     expect((await person("POST", `/flight-plan/plans/${p.id}/worker`, { worker: "fp-orbit-search" })).body.plan.worker).toBe("fp-orbit-search");
     await goOnly(p.id);
     expect((await person("POST", `/flight-plan/plans/${p.id}/launch`, {})).status).toBe(200);
-    expect((await call("GET", `/flight-plan/plans/${p.id}`)).body.plan.worker).toBeNull();
+    const now = (await call("GET", `/flight-plan/plans/${p.id}`)).body.plan.worker;
+    expect(now).not.toBe("fp-orbit-search");
+    expect(typeof now === "string" && now.length > 0).toBe(true);
   });
 
   test("the brief a worker starts with is the plan, and the author's is the request and the door verbs", () => {
@@ -267,7 +271,8 @@ describe("Launch", () => {
     expect(route).toContain("FlightPlan.builderDenyFor(");
     // the model the person picked at Go (or the plan's own) is what reaches the argv call, not builder.model
     expect(route).toContain("const model: BuilderModel = over?.ok ? over.model : builder.model");
-    expect(route).toContain("FlightPlan.builderDenyFor(plan.root)), model }");
+    // The checkout rides along, so the project's own rules shape the deny list (8a89ea36e).
+    expect(route).toContain("FlightPlan.builderDenyFor(plan.root), tree.path), model }");
     // A normal tab in a session, behind what the person is reading: select=false, and not a bench ticket.
     expect(route).toMatch(/engineWindowOutcome\(tree\.path, [^\n]*, false, false\)/);
     expect(route).not.toContain("mintAgentTicket");
@@ -320,13 +325,13 @@ describe("Launch", () => {
 
   test("a project that cannot give a worktree does not launch on the shared checkout", async () => {
     const plain = mkdtempSync(join(dir, "plain-"));
-    const r = cutBuilderWorktree(plain, "Cap webhooks", "main");
+    const r = await cutBuilderWorktree(plain, "Cap webhooks", "main");
     expect(r.ok).toBe(false);
-    expect(cutBuilderWorktree(ROOT, "x", null)).toMatchObject({ ok: false });
+    expect(await cutBuilderWorktree(ROOT, "x", null)).toMatchObject({ ok: false });
   });
 
-  test("a second tree for the same title gets a suffix, never the first one's path", () => {
-    const a = cutBuilderWorktree(ROOT, "Same title", "main"), b = cutBuilderWorktree(ROOT, "Same title", "main");
+  test("a second tree for the same title gets a suffix, never the first one's path", async () => {
+    const a = await cutBuilderWorktree(ROOT, "Same title", "main"), b = await cutBuilderWorktree(ROOT, "Same title", "main");
     expect(a.ok && b.ok).toBe(true);
     if (a.ok && b.ok) { expect(b.path).not.toBe(a.path); expect(b.branch).toBe(`${a.branch}-2`); }
   });
@@ -416,17 +421,41 @@ describe("B3: the server does what the view used to be trusted to do", () => {
     }
   });
 
-  test("an S plan is never reviewed, and a Preflight pressed on it is refused; an M plan is, by default", async () => {
+  test("the size setting is the door's: an uncovered plan is refused, and its Preflight is too", async () => {
     await mode("auto");
-    const s = await makePlan({ size: "S" });
-    await call("PATCH", `/flight-plan/plans/${s.id}`, { plan_md: "# Plan\nOne." });
-    expect((await call("GET", `/flight-plan/plans/${s.id}`)).body.run).toBeNull();
-    const press = await person("POST", `/flight-plan/plans/${s.id}/preflight`, {});
-    expect(press.status).toBeGreaterThanOrEqual(400);
-    expect(press.body.error).toContain("S plan");
-    const m = await makePlan({ size: "M" });
-    await call("PATCH", `/flight-plan/plans/${m.id}`, { plan_md: "# Plan\nOne." });
-    expect((await call("GET", `/flight-plan/plans/${m.id}`)).body.run).not.toBeNull();
+    const sizes = (v: string) => person("POST", "/settings/door", { id: "flightPlan.preflight.sizes", value: v });
+    const make = (s: string) => person("POST", "/flight-plan/plans", { root: ROOT, request: `A ${s} plan`, size: s });
+    try {
+      // An M plan made while the setting allows it stays; the setting then says L only.
+      const m = await make("M");
+      expect(m.status).toBe(200);
+      expect((await sizes("L")).status).toBe(200);
+      for (const s of ["S", "M"]) {
+        const r = await make(s);
+        expect(r.status, s).toBe(409);
+        expect(r.body.error, s).toContain("flightPlan.preflight.sizes");
+        expect(r.body.error, s).toContain("agentglass-agent start");
+      }
+      expect((await make("L")).body.plan.size).toBe("L");
+      // The M plan that already exists is not reviewed in that setting, pressed or not.
+      await call("PATCH", `/flight-plan/plans/${m.body.plan.id}`, { plan_md: "# Plan\nOne." });
+      const press = await person("POST", `/flight-plan/plans/${m.body.plan.id}/preflight`, {});
+      expect(press.status).toBe(409);
+      expect(press.body.error).toContain("flightPlan.preflight.sizes");
+      // An L plan is.
+      const l = await make("L");
+      await call("PATCH", `/flight-plan/plans/${l.body.plan.id}`, { plan_md: "# Plan\nTwo." });
+      const lPress = await person("POST", `/flight-plan/plans/${l.body.plan.id}/preflight`, {});
+      expect(lPress.status).toBe(200);
+      expect(lPress.body.run.state).toMatch(/running|done/);
+      // ML: M is a plan again and is reviewed, S never is.
+      expect((await sizes("ML")).status).toBe(200);
+      expect((await make("S")).status).toBe(409);
+      const m2 = await make("M");
+      expect(m2.status).toBe(200);
+      await call("PATCH", `/flight-plan/plans/${m2.body.plan.id}`, { plan_md: "# Plan\nThree." });
+      expect((await call("GET", `/flight-plan/plans/${m2.body.plan.id}`)).body.run).not.toBeNull();
+    } finally { await sizes("ML"); }
   });
 
   test("a plan reports its pilot, whether its project is held, why it stops and the budget; Co-pilot is the default", async () => {
@@ -503,6 +532,48 @@ describe("a plan's worker link", () => {
     expect((await person("POST", `/flight-plan/plans/${p.id}/worker`, { worker: "" })).body.plan.worker).toBeNull();
     expect((await person("POST", `/flight-plan/plans/${p.id}/worker`, { worker: "not a name!" })).status).toBe(400);
     expect((await person("POST", `/flight-plan/plans/${p.id}/worker`, {})).status).toBe(400);
+  });
+});
+
+describe("a worker's own credential", () => {
+  beforeAll(noReviews);
+  // Launch cuts a real worktree and opens a real tab, so one launch here really
+  // does mint the `wk_` token index.ts's report check reads, the same way a
+  // launched builder's own `agentglass-ui` CLI would hold it.
+  const launchedWorkerToken = async (title: string) => {
+    rmSync(join(dir, "env.txt"), { force: true });
+    const p = await makePlan({ title });
+    await call("PATCH", `/flight-plan/plans/${p.id}`, { plan_md: "# plan" });
+    await person("POST", `/flight-plan/plans/${p.id}/go`, {});
+    let env = "";
+    for (let i = 0; i < 100 && !env; i++) { try { env = readFileSync(join(dir, "env.txt"), "utf8"); } catch { /* not yet */ } if (!env) await Bun.sleep(50); }
+    const m = env.match(/AGENTGLASS_TOKEN=(\S+)/);
+    if (!m) throw new Error("no AGENTGLASS_TOKEN in env.txt");
+    const row = (await call("GET", `/flight-plan/plans/${p.id}`)).body.plan;
+    if (!row.worker) throw new Error("plan never got a worker");
+    return { id: p.id, worker: row.worker as string, token: m[1]! };
+  };
+  const asWorker = (token: string) => ({ Authorization: `Bearer ${token}`, "Content-Type": "application/json" });
+
+  test("the worker launched for plan X may report on plan X, never on plan Y, and never Go, No-go or Launch", async () => {
+    rmSync(join(dir, "env.txt"), { force: true });
+    const x = await launchedWorkerToken("Plan X");
+    rmSync(join(dir, "env.txt"), { force: true });
+    const y = await launchedWorkerToken("Plan Y");
+
+    const onOwn = await call("POST", `/flight-plan/plans/${x.id}/report`, { line: "step 5 done", step: 5, of: 6 }, asWorker(x.token));
+    expect(onOwn.status).toBe(200);
+    expect(onOwn.body.plan.lastReport?.line).toBe("step 5 done");
+
+    const onOther = await call("POST", `/flight-plan/plans/${y.id}/report`, { line: "not mine" }, asWorker(x.token));
+    expect(onOther.status).toBe(403);
+    expect(onOther.body.error).toContain("not the one");
+
+    for (const verb of ["go", "no-go", "launch"]) {
+      const r = await call("POST", `/flight-plan/plans/${x.id}/${verb}`, {}, asWorker(x.token));
+      expect(r.status, verb).toBe(403);
+      expect(r.body.error, verb).toContain("person");
+    }
   });
 });
 

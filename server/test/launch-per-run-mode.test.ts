@@ -46,11 +46,14 @@ describe("an agent cannot loosen the mode for a run", () => {
     const calls = term.match(/launchPerm\([^\n]*\)/g) ?? [];
     const fromMsg = calls.filter((c) => c.includes("msg.mode"));
     expect(fromMsg.length).toBe(4);
-    // Inline, or through the one const that reads the same field.
-    for (const c of fromMsg) expect(c.includes("(ws.data as PtyWsData).worker") || c.includes("fromWorker")).toBe(true);
-    expect(term).toContain("const fromWorker = !!(ws.data as PtyWsData).worker;");
+    /* All four go through the one helper, and the helper reads the credential's
+       principal — a seat is an agent too, and the older `worker` field said it
+       was the person. */
+    for (const c of fromMsg) expect(c.includes("agentCaller(ws)")).toBe(true);
+    expect(term).toContain("function agentCaller(ws: PtyWs): boolean {\n  return !!(ws.data as PtyWsData).principal;\n}");
     const idx = await Bun.file(new URL("../src/index.ts", import.meta.url).pathname).text();
-    expect(idx).toContain("worker: presentedWorker(req),");
+    expect(idx).toContain('worker: caller?.principal === "worker" ? caller.worker ?? "worker" : null,');
+    expect(idx).toContain("principal: caller?.principal ?? null,");
   });
 });
 

@@ -171,6 +171,12 @@ export function loginNames(people: unknown[]): Record<string, string> {
 /** Jira stamps `updated` a moment after `created` on a comment nobody touched; a second is the margin. */
 export const edited = (created: number, updated: number): boolean => created > 0 && updated - created >= 1000;
 
+/** Who changed a comment last, by name, when Jira says (`updateAuthor`); the author when the field is missing. */
+const editor = (c: Record<string, unknown>, author: Record<string, unknown>): string => {
+  const u = isObj(c.updateAuthor) ? c.updateAuthor : author;
+  return str(u.displayName) || str(u.name);
+};
+
 /** The comments of one answer as the pane draws them, oldest first, and the names its authors went by. */
 export function commentRows(raw: Record<string, unknown>[], v: 2 | 3, me: string | undefined, others: unknown[] = []): { comments: TaskDetail["comments"]; names: Record<string, string> } {
   const names = loginNames([...others, ...raw.map((c) => c.author)]);
@@ -184,7 +190,8 @@ export function commentRows(raw: Record<string, unknown>[], v: 2 | 3, me: string
     const seen = isObj(c.visibility) ? str(c.visibility.value) || str(c.visibility.identifier) : "";
     return {
       id: str(c.id) || String(c.id ?? ""),
-      ...(edited(made, changed) ? { edited: true as const } : {}),
+      // When and by whom, so the pane can say "(edited 12 Nov, 17:05)" and name who changed it on hover.
+      ...(edited(made, changed) ? { edited: true as const, editedAt: changed, ...(editor(c, a) ? { editedBy: editor(c, a) } : {}) } : {}),
       ...(seen ? { restricted: seen.slice(0, 80) } : {}),
       // A number on a real site, a string in the docs.
       ...(idText(c.parentId) ? { parentId: idText(c.parentId) } : {}),

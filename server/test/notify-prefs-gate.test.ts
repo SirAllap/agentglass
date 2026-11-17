@@ -94,11 +94,15 @@ describe("deliver() gated by the notification diet", () => {
     expect(fallbacks[0]?.title).toContain("finished the task");
   });
 
-  test("none blocks blocked too — the one kind that is otherwise always on", () => {
+  test("none silences everything but a gate hold: an agent that waits on you still reaches you", () => {
     notifyPrefs.writeNotifyPrefs({ ...DEFAULT_NOTIFY_PREFS, none: true });
-    alerts.pushGate("app:g2", "Bash", "ls none-blocks-everything");
-    expect(broadcasts.length).toBe(0);
+    alerts.maybeAlert({
+      hook_event_type: "Notification", session_id: "s-none-1", source_app: "app",
+      payload: { message: "Claude finished the task" },
+    } as any);
     expect(fallbacks.length).toBe(0);
+    alerts.pushGate("app:g2", "Bash", "ls none-still-gates");
+    expect(broadcasts.length + fallbacks.length).toBeGreaterThan(0);
   });
 
   test("a tool error stays off by default (failures), and turning it on reaches the desktop", () => {

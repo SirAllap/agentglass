@@ -11,18 +11,19 @@ import type {
   DockerOverview, DockerScope, DockerActionResult, DockerCapability,
   DockerDisk, DockerVolumeDetail,
 } from "../../shared/types.ts";
-import { scopeKey, scopeRoots, workspaceRoots } from "./config.ts";
+import { scopeKey, scopeRoots, workspaceRoots, envLimit } from "./config.ts";
 import { parseFacts, factsFor, healthOf, uptimeOf, type ContainerFacts } from "./dockerfacts.ts";
 import { ownerOf } from "./dockerowner.ts";
 import { parsePorts } from "./dockerports.ts";
 import { forget, ledgerAll, ledgerFor } from "./dockerledger.ts";
-import { diskUsage, mountedBy, peekVolume } from "./dockervolumes.ts";
+import { diskUsage, mountedBy, peekVolume, type DiskUsage } from "./dockervolumes.ts";
 import { startVolumeWatch } from "./dockerwatch.ts";
 import { envDiff, type EnvDiffRow } from "./dockerenv.ts";
 import { backoff, currentLabel, resumedAs } from "./loopwatch.ts";
 import { withSpawnSlot } from "./spawnpool.ts";
+import { runChild } from "./broker/brokerRun.ts";
 
-export const DOCKER_WRITE_ENABLED = process.env.AGENTGLASS_DOCKER_WRITE_DISABLED !== "1";
+export const DOCKER_WRITE_ENABLED = envLimit("AGENTGLASS_DOCKER_WRITE_DISABLED") !== "1";
 // Container id (hex) or name (compose names: letters/digits . _ -).
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 
@@ -55,12 +56,10 @@ async function runDocker(args: string[], timeoutMs: number): Promise<Res> {
     // spawn resolves against a PATH snapshotted at process start (the same trap
     // dockerBin() documents), so the two could disagree about which docker is
     // even being run. Falls back to the bare name only when nothing was resolved.
-    const proc = Bun.spawn([dockerBin() ?? "docker", ...args], { stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
-    const [stdout, stderr, code] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
+    // Started by the spawn broker (broker/brokerRun.ts), not a fork of this server.
+    const r = await runChild([dockerBin() ?? "docker", ...args], { timeoutMs });
+    if (r.error !== undefined) return { code: 1, stdout: "", stderr: r.error };
+    const { stdout, stderr, code } = r;
     // A timeout kill and a refusal are both "non-zero", and they mean opposite
     // things: the CLI answering "cannot connect to the daemon" is a fact, while
     // a SIGTERM at the deadline says only that we ran out of patience. Callers
@@ -72,7 +71,7 @@ async function runDocker(args: string[], timeoutMs: number): Promise<Res> {
     // daemon reads as "still trying" forever. The signal is the honest witness —
     // a timeout kill lands as SIGTERM (signalCode set, exitCode null); a normal
     // exit, zero or not, has no signal.
-    return { code: code ?? 1, stdout, stderr, killed: proc.signalCode != null };
+    return { code: code ?? 1, stdout, stderr, killed: r.signal != null };
   } catch (e) {
     return { code: 1, stdout: "", stderr: String(e) };
   }
@@ -341,7 +340,7 @@ export function applyScope(all: ScopedContainer[], keyIn: DockerScopeKey | Docke
   const keys = keyIn ? (Array.isArray(keyIn) ? keyIn : [keyIn]) : [];
   if (!keys.length) return { containers: all.map(strip) };
   const mine = all.filter((c) => keys.some((k) => containerInScope(c, k)));
-  const scope: DockerScope = { workspace: keys[0].dir, project: keys[0].project, matched: mine.length, showingAll: mine.length === 0 };
+  const scope: DockerScope = { workspace: keys[0].dir, project: keys[0].project, matched: mine.length, showingAll: mine.length === 0, hidden: mine.length ? all.length - mine.length : 0 };
   return { containers: (mine.length ? mine : all).map(strip), scope };
 }
 
@@ -812,7 +811,7 @@ export async function top(id: string): Promise<{ ok: boolean; text: string; erro
  * carries the moment it was taken so the panel can say how old it is.
  * ------------------------------------------------------------------------ */
 
-let diskCache: { at: number; data: DockerDisk } | null = null;
+let diskCache: { at: number; data: DockerDisk; usage: DiskUsage } | null = null;
 /** Long: this is a number people read, not one they watch. A minute old is
  *  fine; paying seconds of daemon time to shave that is not. */
 const DISK_TTL_MS = 60_000;
@@ -872,10 +871,18 @@ export async function disk(force = false): Promise<DockerDisk | null> {
   const data: DockerDisk = {
     images: usage.images, containers: usage.containers, volumes: usage.volumes,
     buildCache: usage.buildCache, reclaimable: usage.reclaimable,
-    orphans, volumes_: usage.perVolume, at: Date.now(),
+    imageCount: usage.imageCount, imageReclaimable: usage.imageReclaimable, reclaimableBy: usage.reclaimableBy,
+    orphans, perImage: usage.perImage.map((i) => ({ id: i.id, bytes: i.bytes, unique: i.unique, created: i.created })),
+    volumes_: usage.perVolume, at: Date.now(),
   };
-  diskCache = { at: Date.now(), data };
+  diskCache = { at: Date.now(), data, usage };
   return data;
+}
+
+/** The per-image (repository, tag, unique size) and per-volume rows of the same cached walk: the orphan sweep reads them, it never walks again. */
+export async function diskRows(force = false): Promise<Pick<DiskUsage, "perImage" | "perVolume"> | null> {
+  if (!(await disk(force))) return null;
+  return diskCache ? { perImage: diskCache.usage.perImage, perVolume: diskCache.usage.perVolume } : null;
 }
 
 /** Per-volume sizes, out of the CACHED disk walk — never a second one. */

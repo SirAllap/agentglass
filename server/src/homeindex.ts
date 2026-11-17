@@ -59,11 +59,23 @@ export interface IndexStatus {
   builtAt: number;
   buildMs: number;
   bytes: number;
+  /** The index hit its row cap and left names out. */
+  capped?: boolean;
 }
 export interface Hit { path: string; dir: boolean; score: number }
 export interface SearchResult { ok: true; hits: Hit[]; scanned: number; ms: number; building: boolean; truncated: boolean }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * The most rows one index holds. Measured: 709k entries held about 41 MB of typed
+ * arrays and names, plus about 4 MB in `byWatch`, and nothing bounded it: the arrays
+ * double, so a home just past a power of two paid for a whole extra doubling.
+ * Readers (`search`, `status`, the event path) only walk rows, so no row is special;
+ * a full index keeps what it has and drops new names, and says so in `status().capped`.
+ * 1.5M is a real home of 1,027,596 entries plus half again, about 85 MB at the top.
+ */
+export const MAX_ROWS = 1_500_000;
 
 /** The rows. */
 class Rows {
@@ -83,16 +95,21 @@ class Rows {
   /** watch number -> row, for the events. */
   byWatch = new Map<number, number>();
   dead = 0;
+  /** A name was refused because the index was at its cap. */
+  full = false;
+  constructor(readonly max = MAX_ROWS) {}
 
   private grow() {
-    const cap = this.cap * 2;
+    const cap = Math.min(this.cap * 2, this.max);
     const g = <T extends Int32Array | Uint8Array | Uint32Array | Uint16Array>(a: T): T => { const b = new (a.constructor as new (n: number) => T)(cap); b.set(a); return b; };
     this.parent = g(this.parent); this.first = g(this.first); this.next = g(this.next); this.wd = g(this.wd);
     this.flags = g(this.flags); this.off = g(this.off); this.len = g(this.len);
     this.cap = cap;
   }
 
+  /** The new row, or -1 when the index is at its cap. */
   add(parent: number, name: string, isDir: boolean): number {
+    if (this.n >= this.max) { this.full = true; return -1; }
     if (this.n === this.cap) this.grow();
     const bytes = Buffer.byteLength(name);
     if (this.nameEnd + bytes > this.names.length) {
@@ -163,7 +180,7 @@ export class HomeIndex {
   private stale = false;
   private events: Promise<void> = Promise.resolve();
   /** Tests give it a root of their own; production takes the disk roots. */
-  constructor(private roots: () => string[] = diskRoots, private mounts: () => string = () => { try { return readFileSync("/proc/self/mountinfo", "utf8"); } catch { return ""; } }) {}
+  constructor(private roots: () => string[] = diskRoots, private mounts: () => string = () => { try { return readFileSync("/proc/self/mountinfo", "utf8"); } catch { return ""; } }, private maxRows = MAX_ROWS) {}
 
   status(): IndexStatus {
     const r = this.current ?? this.building;
@@ -171,7 +188,7 @@ export class HomeIndex {
       state: this.building && !this.current ? "building" : this.current ? "ready" : "idle",
       entries: r?.live ?? 0, dirs: r?.dirs ?? 0, watched: r?.byWatch.size ?? 0,
       degraded: this.degraded || (this.watcherTried && !this.watcher),
-      builtAt: this.builtAt, buildMs: this.buildMs, bytes: r?.bytes ?? 0,
+      builtAt: this.builtAt, buildMs: this.buildMs, bytes: r?.bytes ?? 0, capped: r?.full ?? false,
     };
   }
 
@@ -189,7 +206,7 @@ export class HomeIndex {
 
   private async build() {
     const t0 = performance.now();
-    const rows = new Rows();
+    const rows = new Rows(this.maxRows);
     this.building = rows;
     this.stale = false;
     if (!this.watcherTried) { this.watcherTried = true; this.watcher = openWatcher((evs) => this.onEvents(evs)); }
@@ -200,7 +217,7 @@ export class HomeIndex {
       try { real = await realpath(r); } catch { continue; }
       if (roots.some((i) => real === rows.name(i) || real.startsWith(rows.name(i) + "/"))) continue;
       const i = rows.add(-1, real, true);
-      roots.push(i);
+      if (i >= 0) roots.push(i);
     }
     const stack = [...roots];
     const skipMounts = new Set<string>(); for (const i of roots) for (const m of mountsUnder(rows.name(i), mountTable)) skipMounts.add(m);
@@ -245,6 +262,7 @@ export class HomeIndex {
       const dir = e.isDirectory();
       if (dir && skipMounts.has(join(abs, e.name))) continue;
       const c = rows.add(d, e.name, dir);
+      if (c < 0) break; // at the cap: the rest of this folder is left out
       mine = c;
       if (dir) stack.push(c);
     }
@@ -276,6 +294,7 @@ export class HomeIndex {
           let dir = (ev.mask & IN_ISDIR) !== 0;
           if (!dir) { try { dir = (await lstat(abs)).isDirectory(); } catch { continue; } }
           const c = rows.add(at, ev.name, dir);
+          if (c < 0) continue;
           if (dir) {
             const stack = [c];
             let sliceStart = performance.now();
@@ -287,7 +306,7 @@ export class HomeIndex {
     }
     // A quarter of the rows dead: not worth carrying. A rebuild is the compaction.
     const r = this.current;
-    if (r && r.dead > 10_000 && r.dead > r.n / 4) this.stale = true;
+    if (r && ((r.dead > 10_000 && r.dead > r.n / 4) || (r.full && r.dead > 10_000))) this.stale = true;
   }
 
   /* ---- search -------------------------------------------------------- */

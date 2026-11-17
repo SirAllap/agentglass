@@ -15,10 +15,10 @@ const DESK = "x-agentglass-desk", KEY = "k".repeat(48);
 let fx: Fixture;
 let sessions: Record<string, string> = {};
 interface Booted { base: string; proc: ReturnType<typeof Bun.spawn>; claim: AbortController | null }
-let desk: Booted, bare: Booted;
+let desk: Booted, bare: Booted, cold: Booted;
 
 /** A real server on the fakes. `claim`: the desktop app has adopted it and holds its desk. */
-async function boot(claim: boolean): Promise<Booted> {
+async function boot(claim: boolean, name = claim ? "desk" : "bare"): Promise<Booted> {
   const port = await freePort();
   const base = `http://127.0.0.1:${port}`;
   const proc = Bun.spawn(["bun", "run", new URL("../src/index.ts", import.meta.url).pathname], {
@@ -28,7 +28,7 @@ async function boot(claim: boolean): Promise<Booted> {
       TMUX_TMPDIR: TMUX_TEST_TMPDIR, CLAUDE_CONFIG_DIR: join(fx.dir, ".claude"), AGENTGLASS_ROOT: fx.dir,
       AGENTGLASS_SCAN_DISABLED: "1", AGENTGLASS_PORT: String(port), AGENTGLASS_TOKEN: TOKEN,
       // a state dir and database of its own, so two servers do not share one
-      AGENTGLASS_STATE_DIR: join(fx.dir, claim ? "state-desk" : "state-bare"), AGENTGLASS_DB: join(fx.dir, claim ? "desk.db" : "bare.db"),
+      AGENTGLASS_STATE_DIR: join(fx.dir, `state-${name}`), AGENTGLASS_DB: join(fx.dir, `${name}.db`),
     },
     stdout: "ignore", stderr: "pipe",
   });
@@ -52,9 +52,11 @@ beforeAll(async () => {
   sessions = populateHome(fx).sessions;
   desk = await boot(true);
   bare = await boot(false);
-}, SERVER_BOOT_MS * 2);
+  // a process whose disk-clean cache is still empty, for the first-read answer
+  cold = await boot(false, "cold");
+}, SERVER_BOOT_MS * 3);
 afterAll(() => {
-  for (const b of [desk, bare]) { try { b?.claim?.abort(); } catch { /* gone */ } try { b?.proc.kill(); } catch { /* already gone */ } }
+  for (const b of [desk, bare, cold]) { try { b?.claim?.abort(); } catch { /* gone */ } try { b?.proc.kill(); } catch { /* already gone */ } }
   rmSync(fx.dir, { recursive: true, force: true });
 });
 // The tests share one booted server and one call log: each starts from a clean log and the disks as the fixture left them.
@@ -85,6 +87,40 @@ describe("GET /machine/disk-clean", () => {
     const paths = rep.lines.flatMap((l) => (l.target && "path" in l.target ? [l.target.path] : []));
     expect(paths.length).toBeGreaterThan(0);
     for (const p of paths) expect(p.startsWith(fx.home + "/")).toBe(true);
+  });
+});
+
+describe("GET /machine/disk-clean: a pane read never waits for the scan", () => {
+  const read = async (b: Booted = cold) => {
+    const t0 = performance.now();
+    const r = await fetch(b.base + "/machine/disk-clean", { headers: AUTH });
+    return { ms: performance.now() - t0, status: r.status, rep: (await r.json()) as DiskCleanReport };
+  };
+  const scans = () => calls().filter((l) => l === "docker system df --format {{json .}}").length;
+
+  test("the first read with no cache says it is scanning at once, and every read while it runs joins that one scan", async () => {
+    const first = await read();
+    expect(first.status).toBe(200);
+    expect(first.rep).toMatchObject({ state: "scanning", generatedAt: null, lines: [], mounts: [], safeBytes: 0 });
+    expect(first.rep.note ?? "").toBe("scanning, ask again in a few seconds");
+    expect(first.ms).toBeLessThan(1000);
+    const more = await Promise.all([read(), read(), read()]);
+    for (const r of more) expect(["scanning", "ready"]).toContain(r.rep.state ?? "");
+    let ready = first.rep;
+    for (let i = 0; i < 200 && ready.state !== "ready"; i++) { await Bun.sleep(25); ready = (await read()).rep; }
+    expect(ready.state ?? "").toBe("ready");
+    expect(ready.generatedAt ?? 0).toBeGreaterThan(0);
+    expect(ready.lines.length).toBeGreaterThan(0);
+    expect(scans()).toBe(1);
+  });
+
+  test("a cached report answers at once with the time it was generated, and starts no scan", async () => {
+    const r = await read();
+    expect(r.rep.state).toBe("ready");
+    expect(typeof r.rep.generatedAt).toBe("number");
+    expect(Date.now() - r.rep.generatedAt!).toBeLessThan(60_000);
+    expect(r.ms).toBeLessThan(1000);
+    expect(scans()).toBe(0);
   });
 });
 

@@ -43,6 +43,11 @@ import { SOURCE, label, mutates, readRoutes } from "./routeTable.ts";
  * that takes a POST because the question needs a body.
  */
 const EXEMPT = new Map<string, string>([
+  ["POST /gh/read",
+    "The read-only gh door for a walled worker (ghdoor.ts). Its caller is a " +
+    "subprocess with no Origin; the handler refuses anyone but a worker or seat " +
+    "(isConfinedCaller) and runs only read verbs. Measured: the route is " +
+    "guarded by the caller's credential, which the origin check cannot see."],
   ["POST /ingest",
     "The Claude Code hooks POST here from a subprocess. No browser, no Origin " +
     "header to send, and turning them away turns off the product's own intake."],

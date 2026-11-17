@@ -28,7 +28,7 @@ import { safeAbs } from "./git.ts";
 import { inScopeReal } from "./config.ts";
 import { diskAllows } from "./disk.ts";
 import { isViewTemp } from "./viewtemp.ts";
-import { benchWindowName, engineSessionName, tmux, tmuxSync } from "./tmuxpane.ts";
+import { benchWindowName, closablePanelCorpse, engineSessionName, PANEL_OPTION, tmux, tmuxSync } from "./tmuxpane.ts";
 
 /** Big enough for a page of notes, small enough that this is not a file store:
  *  the thing being written is a paragraph you will read tomorrow. */
@@ -139,23 +139,23 @@ export interface BenchLive {
 }
 
 /** A window of the engine session, with whether every pane in it is dead. */
-interface BenchWindow { id: string; name: string; dead: boolean }
+interface BenchWindow { id: string; name: string; dead: boolean; panel: string }
 
 /** Grouped from one `list-panes -s`: a window is dead only when every pane in
  *  it is, and a bench tab is one pane, so the two answers never disagree. */
 function windowRowsFrom(out: string): BenchWindow[] {
   const by = new Map<string, BenchWindow>();
   for (const line of out.split("\n")) {
-    const [id = "", name = "", dead = ""] = line.split("\t");
+    const [id = "", name = "", dead = "", panel = ""] = line.split("\t");
     if (!id.startsWith("@")) continue;
-    const row = by.get(id) ?? { id, name, dead: true };
+    const row = by.get(id) ?? { id, name, dead: true, panel };
     row.dead = row.dead && dead === "1";
     by.set(id, row);
   }
   return [...by.values()];
 }
 
-const WINDOWS_FORMAT = "#{window_id}\t#{window_name}\t#{pane_dead}";
+const WINDOWS_FORMAT = `#{window_id}\t#{window_name}\t#{pane_dead}\t#{${PANEL_OPTION}}`;
 
 /**
  * Every window of this checkout's engine session, by exact name.
@@ -215,7 +215,12 @@ export async function benchLive(rootIn: unknown): Promise<BenchLive> {
        next open starts the command again. An attach reattaches to whatever
        holds the name, corpse included, and would report it live for as long
        as it stood. */
-    if (w.dead) { await tmux(["kill-window", "-t", w.id]); continue; }
+    if (w.dead) {
+      /* Closed only when this app opened it as that slot: a person's own dead
+         pane that merely carries the name is theirs (`closablePanelCorpse`). */
+      if (closablePanelCorpse(w, benchWindowName(n))) await tmux(["kill-window", "-t", w.id]);
+      continue;
+    }
     slots.push(n);
   }
   return { ok: true, slots };

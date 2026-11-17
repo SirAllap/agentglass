@@ -38,30 +38,30 @@ afterAll(() => {
 });
 
 describe("reflogEnable", () => {
-  test("turns core.logAllRefUpdates on where it was false, and the list stops reporting it off", () => {
+  test("turns core.logAllRefUpdates on where it was false, and the list stops reporting it off", async () => {
     git(REPO, "config", "core.logAllRefUpdates", "false");
-    expect(gw.reflogIsOff(REPO)).toBe(true);
-    expect(gw.reflogEnable(REPO).ok).toBe(true);
+    expect(await gw.reflogIsOff(REPO)).toBe(true);
+    expect((await gw.reflogEnable(REPO)).ok).toBe(true);
     expect(git(REPO, "config", "--get", "core.logAllRefUpdates").out).toBe("true");
-    expect(gw.reflogIsOff(REPO)).toBe(false);
+    expect(await gw.reflogIsOff(REPO)).toBe(false);
   });
-  test("is ok when it is already on", () => {
-    expect(gw.reflogEnable(REPO).ok).toBe(true);
+  test("is ok when it is already on", async () => {
+    expect((await gw.reflogEnable(REPO)).ok).toBe(true);
     expect(git(REPO, "config", "--get", "core.logAllRefUpdates").out).toBe("true");
   });
-  test("an unset setting is not off", () => {
+  test("an unset setting is not off", async () => {
     git(REPO, "config", "--unset", "core.logAllRefUpdates");
-    expect(gw.reflogIsOff(REPO)).toBe(false);
+    expect(await gw.reflogIsOff(REPO)).toBe(false);
   });
-  test("refuses a folder that is not a repository, like fetch does", () => {
-    const r = gw.reflogEnable(PLAIN);
+  test("refuses a folder that is not a repository, like fetch does", async () => {
+    const r = await gw.reflogEnable(PLAIN);
     expect(r.ok).toBe(false);
-    expect(r.error).toBe(gw.fetch(PLAIN).error);
+    expect(r.error).toBe((await gw.fetch(PLAIN)).error);
     expect(git(PLAIN, "config", "--get", "core.logAllRefUpdates").out).toBe("");
   });
   test("the route is wired next to fetch", async () => {
     const idx = await Bun.file(new URL("../src/index.ts", import.meta.url)).text();
-    expect(idx).toContain('case "/git/reflog-enable": res = gitReflogEnable(root); break;');
+    expect(idx).toContain('case "/git/reflog-enable": res = await gitReflogEnable(root); break;');
   });
 });
 

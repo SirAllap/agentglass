@@ -36,17 +36,17 @@ function build(): void {
 }
 
 /** Play the bisect like a person: mark good when the marker is absent. */
-function walkToVerdict(): { verdict: string; steps: number } {
+async function walkToVerdict(): Promise<{ verdict: string; steps: number }> {
   let steps = 0;
   for (;;) {
-    const st = bisectStatus(repo);
+    const st = await bisectStatus(repo);
     expect(st.ok).toBe(true);
     expect(st.bisecting).toBe(true);
     if (st.firstBad) return { verdict: st.firstBad.subject, steps };
     expect(st.current?.sha).toHaveLength(40);
     expect(steps++).toBeLessThan(10);
     const buggy = readFileSync(join(repo, "bug.txt"), "utf8").includes("yes");
-    const r = bisectMark(repo, buggy ? "bad" : "good");
+    const r = await bisectMark(repo, buggy ? "bad" : "good");
     expect(r.ok).toBe(true);
   }
 }
@@ -55,67 +55,67 @@ beforeEach(build);
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("bisect", () => {
-  it("reports not bisecting on a plain repo", () => {
-    const st = bisectStatus(repo);
+  it("reports not bisecting on a plain repo", async () => {
+    const st = await bisectStatus(repo);
     expect(st).toEqual({ ok: true, bisecting: false });
   });
 
-  it("refuses an unknown bad ref", () => {
-    const r = bisectStart(repo, "nope", "HEAD~4");
+  it("refuses an unknown bad ref", async () => {
+    const r = await bisectStart(repo, "nope", "HEAD~4");
     expect(r.ok).toBe(false);
     expect(r.error).toContain("not a commit");
-    expect(bisectStatus(repo).bisecting).toBe(false);
+    expect((await bisectStatus(repo)).bisecting).toBe(false);
   });
 
-  it("starts and lands on the first bad commit", () => {
-    const r = bisectStart(repo, "HEAD", "HEAD~4");
+  it("starts and lands on the first bad commit", async () => {
+    const r = await bisectStart(repo, "HEAD", "HEAD~4");
     expect(r.ok).toBe(true);
-    const st = bisectStatus(repo);
+    const st = await bisectStatus(repo);
     expect(st.bisecting).toBe(true);
     expect(st.remaining).toBeGreaterThan(0);
-    const { verdict, steps } = walkToVerdict();
+    const { verdict, steps } = await walkToVerdict();
     expect(verdict).toBe("third");
     expect(steps).toBeGreaterThan(0);
-    expect(bisectStatus(repo).bisecting).toBe(true); // git keeps state until reset
+    expect((await bisectStatus(repo)).bisecting).toBe(true); // git keeps state until reset
   });
 
-  it("reset returns to the branch tip and clears the state", () => {
-    bisectStart(repo, "HEAD", "HEAD~4");
-    walkToVerdict();
-    const r = bisectReset(repo);
+  it("reset returns to the branch tip and clears the state", async () => {
+    await bisectStart(repo, "HEAD", "HEAD~4");
+    await walkToVerdict();
+    const r = await bisectReset(repo);
     expect(r.ok).toBe(true);
-    expect(bisectStatus(repo)).toEqual({ ok: true, bisecting: false });
+    expect(await bisectStatus(repo)).toEqual({ ok: true, bisecting: false });
     expect(subj()).toBe("fifth");
   });
 
-  it("rejects a mark that is not good or bad", () => {
-    const r = bisectMark(repo, "maybe");
+  it("rejects a mark that is not good or bad", async () => {
+    const r = await bisectMark(repo, "maybe");
     expect(r.ok).toBe(false);
     expect(r.error).toBe("mark must be good or bad");
   });
 
-  it("mid-walk reset returns to the branch", () => {
-    bisectStart(repo, "HEAD", "HEAD~4");
+  it("mid-walk reset returns to the branch", async () => {
+    await bisectStart(repo, "HEAD", "HEAD~4");
     // Step part-way through the walk, then abandon.
     for (let i = 0; i < 2; i++) {
-      const st = bisectStatus(repo);
+      const st = await bisectStatus(repo);
       expect(st.bisecting).toBe(true);
       const buggy = readFileSync(join(repo, "bug.txt"), "utf8").includes("yes");
-      expect(bisectMark(repo, buggy ? "bad" : "good").ok).toBe(true);
+      expect((await bisectMark(repo, buggy ? "bad" : "good")).ok).toBe(true);
     }
-    expect(bisectStatus(repo).bisecting).toBe(true);
-    const r = bisectReset(repo);
+    expect((await bisectStatus(repo)).bisecting).toBe(true);
+    const r = await bisectReset(repo);
     expect(r.ok).toBe(true);
-    expect(bisectStatus(repo)).toEqual({ ok: true, bisecting: false });
+    expect(await bisectStatus(repo)).toEqual({ ok: true, bisecting: false });
     expect(subj()).toBe("fifth");
   });
 
-  it("status on a root that is no repo", () => {
-    expect(bisectStatus("/nope")).toEqual({ ok: false, bisecting: false, error: "not a git repository root" });
+  it("status on a root that is no repo", async () => {
+    expect(await bisectStatus("/nope")).toEqual({ ok: false, bisecting: false, error: "not a git repository root" });
   });
 
-  it("BISECT_LOG drives treeState", () => {
-    bisectStart(repo, "HEAD", "HEAD~4");
+  it("BISECT_LOG drives treeState", async () => {
+    await bisectStart(repo, "HEAD", "HEAD~4");
     const gd = git("rev-parse", "--git-dir").stdout.toString().trim();
     expect(existsSync(join(repo, gd, "BISECT_LOG"))).toBe(true);
   });

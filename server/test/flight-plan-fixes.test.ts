@@ -50,13 +50,13 @@ afterAll(() => {
 describe("1. a coordinator cannot lift its own stops by answering findings", () => {
   const answer = (runId: string, fid: string, action: string | null, note: string | null, bySeat: boolean) => Store.setFindingAction(runId, fid, action as never, note, bySeat ? "coordinator:chair" : "you", bySeat);
 
-  test("an Ask finding changes only by the person", () => {
+  test("an Ask finding changes only by the person", async () => {
     const run = reviewed(plan(), [finding("F1", "major", "ask")]);
     for (const a of ["dismiss", "fix", "contest", null]) expect(answer(run.id, "F1", a, "because", true)).toMatchObject({ ok: false, status: 403 });
     expect(answer(run.id, "F1", "dismiss", "settled in chat", false).ok).toBe(true);
   });
 
-  test("a coordinator may not dismiss a blocker, but may fix it, contest it, or ask", () => {
+  test("a coordinator may not dismiss a blocker, but may fix it, contest it, or ask", async () => {
     const run = reviewed(plan(), [finding("F1", "blocker"), finding("F2", "blocker"), finding("F3", "blocker"), finding("F4", "major")]);
     expect(answer(run.id, "F1", "dismiss", "not a problem", true)).toMatchObject({ ok: false, status: 403 });
     expect(answer(run.id, "F2", "fix", null, true).ok).toBe(true);
@@ -65,13 +65,13 @@ describe("1. a coordinator cannot lift its own stops by answering findings", () 
     expect(answer(run.id, "F1", "dismiss", "not a problem", false).ok).toBe(true);   // the person may
   });
 
-  test("a coordinator's answer is stamped with its seat", () => {
+  test("a coordinator's answer is stamped with its seat", async () => {
     const run = reviewed(plan(), [finding("F1", "minor")]);
     const r = answer(run.id, "F1", "fix", null, true);
     expect(r.ok && r.run.certificate!.findings[0]).toMatchObject({ action: "fix", by: "coordinator:chair" });
   });
 
-  test("the stop an Ask finding makes stays after a failed attempt to lift it", () => {
+  test("the stop an Ask finding makes stays after a failed attempt to lift it", async () => {
     Store.putSetting(ROOT, "flightPlan.pilot", "autopilot");
     const p = plan();
     const run = reviewed(p, [finding("F1", "major", "ask")]);
@@ -83,7 +83,7 @@ describe("1. a coordinator cannot lift its own stops by answering findings", () 
 describe("2/3. Go needs a review of the plan as it is now", () => {
   const block = (p: ReturnType<typeof plan>) => Flight.reviewBlock(Plans.getPlan(p.id)!);
 
-  test("no run, a running one and a failed one each stop Go with their own sentence", () => {
+  test("no run, a running one and a failed one each stop Go with their own sentence", async () => {
     const p = plan();
     expect(block(p)).toContain("has not been reviewed");
     const run = Store.createRun({ root: ROOT, moment: "before-launch", state: "running", by: "t", input: { files: [], mockups: [], root: ROOT, model: "sonnet", budgetUsd: 1 } as never });
@@ -93,7 +93,7 @@ describe("2/3. Go needs a review of the plan as it is now", () => {
     expect(block(p)).toContain("did not finish");
   });
 
-  test("a review of the plan as it stands lets Go through; any edit afterwards, to the text or the size, takes it back", () => {
+  test("a review of the plan as it stands lets Go through; any edit afterwards, to the text or the size, takes it back", async () => {
     const p = plan();
     reviewed(p);
     expect(block(p)).toBeNull();
@@ -105,7 +105,7 @@ describe("2/3. Go needs a review of the plan as it is now", () => {
     expect(block(p)).toContain("changed after its last Preflight");
   });
 
-  test("an edit made after every finding had its answer is the answer: Go goes through, and the plan and the Go record say edited after Preflight", () => {
+  test("an edit made after every finding had its answer is the answer: Go goes through, and the plan and the Go record say edited after Preflight", async () => {
     const p = plan();
     const run = reviewed(p, [finding("F1", "blocker"), finding("F2", "minor")]);
     Store.setFindingAction(run.id, "F1", "fix", null, "coordinator:chair", true);
@@ -122,7 +122,7 @@ describe("2/3. Go needs a review of the plan as it is now", () => {
     expect(clean.ok && clean.plan.decision?.editedAfterPreflight).toBeUndefined();
   });
 
-  test("a finding still open at Go, or taken back after the edit, refuses it", () => {
+  test("a finding still open at Go, or taken back after the edit, refuses it", async () => {
     const p = plan();
     reviewed(p, [finding("F1", "blocker", "fix"), finding("F2", "major")]);
     Plans.patchPlan(p.id, { planMd: "# Plan\nChange the footer and the header." });
@@ -135,7 +135,7 @@ describe("2/3. Go needs a review of the plan as it is now", () => {
     expect(block(q)).toContain("changed after its last Preflight");
   });
 
-  test("an edit made while a finding was open stays refused after the finding is answered; so does an edit after a Go, and an edit after a clean run", () => {
+  test("an edit made while a finding was open stays refused after the finding is answered; so does an edit after a Go, and an edit after a clean run", async () => {
     const p = plan();
     const run = reviewed(p, [finding("F1", "blocker")]);
     Plans.patchPlan(p.id, { planMd: "# Plan\nChange the footer and the header." });
@@ -159,14 +159,14 @@ describe("2/3. Go needs a review of the plan as it is now", () => {
     expect(block(c)).toContain("changed after its last Preflight");
   });
 
-  test("an answered edit never excuses a change of size", () => {
+  test("an answered edit never excuses a change of size", async () => {
     const p = plan();
     reviewed(p, [finding("F1", "minor", "fix")]);
     Plans.patchPlan(p.id, { planMd: "# Plan\nChange the footer, answered.", size: "L" });
     expect(block(p)).toContain("changed after its last Preflight");
   });
 
-  test("an S plan, an M plan when only L is reviewed, and a project that does not review plans are not held to it", () => {
+  test("an S plan, an M plan when only L is reviewed, and a project that does not review plans are not held to it", async () => {
     expect(block(plan({ size: "S" }))).toBeNull();
     expect(block(plan({ size: "M" }))).toContain("has not been reviewed");
     Store.putSetting(APP(), "flightPlan.preflight.sizes", "L");
@@ -181,7 +181,7 @@ const APP = () => Store.APP;
 describe("2b. the builder's real diff", () => {
   const sh = (cwd: string, ...a: string[]) => Bun.spawnSync(["git", "-c", "user.email=a@b.c", "-c", "user.name=orbit", ...a], { cwd }).stdout.toString().trim();
 
-  test("a sensitive path in what the builder changed stops Integrate; a plain one does not", () => {
+  test("a sensitive path in what the builder changed stops Integrate; a plain one does not", async () => {
     const repo = mkdtempSync(join(tmpdir(), "agx-diff-"));
     try {
       sh(repo, "init", "-q", "-b", "main"); writeFileSync(join(repo, "a.ts"), "1"); sh(repo, "add", "."); sh(repo, "commit", "-q", "-m", "one");
@@ -189,21 +189,21 @@ describe("2b. the builder's real diff", () => {
       sh(repo, "checkout", "-q", "-b", "flight-plan/footer"); writeFileSync(join(repo, "a.ts"), "2"); sh(repo, "commit", "-q", "-am", "plain");
       const p = plan({ root: repo });
       const at = { ...Plans.getPlan(p.id)!, launched: { at: 1, title: "Footer", branch: "flight-plan/footer", from } };
-      expect(Flight.sensitiveDiff(at)).toBeNull();
+      expect(await Flight.sensitiveDiff(at)).toBeNull();
       mkdirSync(join(repo, "db", "migrations"), { recursive: true });
       writeFileSync(join(repo, "db", "migrations", "0001_add_thing.sql"), "x"); sh(repo, "add", "."); sh(repo, "commit", "-q", "-m", "migration");
-      expect(Flight.sensitiveDiff(at)).toBe("db/migrations/0001_add_thing.sql");
-      expect(Flight.builderDiff(at)).toEqual(["a.ts", "db/migrations/0001_add_thing.sql"]);
+      expect(await Flight.sensitiveDiff(at)).toBe("db/migrations/0001_add_thing.sql");
+      expect(await Flight.builderDiff(at)).toEqual(["a.ts", "db/migrations/0001_add_thing.sql"]);
     } finally { rmSync(repo, { recursive: true, force: true }); }
   });
 
-  test("a plan with no recorded start has no diff to read", () => {
-    expect(Flight.builderDiff({ ...plan(), launched: null })).toEqual([]);
+  test("a plan with no recorded start has no diff to read", async () => {
+    expect(await Flight.builderDiff({ ...plan(), launched: null })).toEqual([]);
   });
 });
 
 describe("5. the queue is not a way round the rules", () => {
-  test("a hold key is the project's root, however the path is spelled", () => {
+  test("a hold key is the project's root, however the path is spelled", async () => {
     Store.putSetting(Flight.heldKey("/work/orbit/"), "flightPlan.held", true);
     expect(Flight.isHeld("/work/orbit")).toBe(true);
     expect(Flight.isHeld("/work/orbit/")).toBe(true);
@@ -212,7 +212,7 @@ describe("5. the queue is not a way round the rules", () => {
 });
 
 describe("6. the budget", () => {
-  test("a turn counts when it ran in a launched plan's tree, with or without the branch", () => {
+  test("a turn counts when it ran in a launched plan's tree, with or without the branch", async () => {
     const rows = [
       { branch: "feat/renamed", dir: "/work/orbit-fp-footer/web", session_id: "a", usd: 2, last_ts: 1 },
       { branch: "", dir: "/work/orbit-fp-footer", session_id: "b", usd: 1, last_ts: 1 },
@@ -223,13 +223,13 @@ describe("6. the budget", () => {
     expect(total).toBeCloseTo(3.75);
   });
 
-  test("a Go reads the books as they are: the cache never answers it", () => {
+  test("a Go reads the books as they are: the cache never answers it", async () => {
     Store.putSetting(Store.APP, "flightPlan.budget.dailyUsd", 5);
     Budget.forgetBudget();
-    expect(Budget.budgetState().reached).toBeNull();            // cached: nothing spent
+    expect(Budget.budgetState().reached).toBeNull();            // nothing spent
     const run = Store.createRun({ root: ROOT, moment: "before-launch", state: "running", by: "t", input: { files: [], mockups: [], root: ROOT, model: "sonnet", budgetUsd: 1 } as never });
     Store.finish(run.id, { ...(cert([]) as object), costUsd: 9 } as never);
-    expect(Budget.budgetState().reached).toBeNull();            // a view still reads the cache
+    expect(Budget.budgetState().reached).toBe("daily");         // no cache: the totals are read live
     Store.putSetting(ROOT, "flightPlan.pilot", "autopilot");
     const p = plan(); reviewed(p);
     expect(Flight.seatMayFly(Plans.getPlan(p.id)!)).toMatchObject({ ok: false, error: expect.stringContaining("budget") });

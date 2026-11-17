@@ -102,9 +102,11 @@ beforeAll(async () => {
   try { line.query("INSERT OR REPLACE INTO manifest_start (project, sha, at) VALUES (?, ?, 0)").run(repo, "e".repeat(40)); }
   finally { line.close(); }
 
+  /* Adoption is the person's click: the app's Origin and the desk key, the
+     same headers every other person request in this file sends. */
   const r = await fetch(base + "/seat/adopt", {
     method: "POST",
-    headers: { authorization: `Bearer ${TOKEN}`, origin: base, ...json },
+    headers: { authorization: `Bearer ${TOKEN}`, origin: APP, "x-agentglass-desk": KEY, ...json },
     body: JSON.stringify({ root: repo, session: "s-manifest-desk", pane: await handTab(repo), powers: "assign" }),
   });
   const b = (await r.json()) as Record<string, any>;

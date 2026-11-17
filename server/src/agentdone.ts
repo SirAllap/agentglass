@@ -56,6 +56,55 @@ const extraBySession = new Map<string, SessionExtra>();
 const OPEN_CAP = 64;
 const CLOSED_CAP = 256;
 
+/*
+ * How many sessions the two maps above hold. Every event lands here, the boot
+ * backfill included, so without a bound each session this machine ever ran
+ * stays in memory for the life of the process — with up to CLOSED_CAP ids
+ * each. A tab only asks about the session in its pane, which is a recent one,
+ * so the sessions whose latest event is oldest go first. Pruned in one pass
+ * down to PRUNE_TO, so the sort runs once per few hundred new sessions, not
+ * on every event.
+ */
+export const SESSION_CAP = 2000;
+const PRUNE_TO = Math.floor(SESSION_CAP * 0.9);
+
+/** A session seen this recently is never let go: it may be live and quiet. */
+const KEEP_RECENT_MS = 30 * 60_000;
+
+/** Past this the cap is a cap again: the oldest go even if recent or open. */
+const HARD_CAP = SESSION_CAP * 2;
+
+function pruneSessions(): void {
+  if (latestBySession.size <= SESSION_CAP) return;
+  const now = Date.now();
+  if (latestBySession.size > HARD_CAP) {
+    const oldest = [...latestBySession].sort((a, b) => a[1].ts - b[1].ts);
+    for (const [sid] of oldest.slice(0, oldest.length - PRUNE_TO)) { latestBySession.delete(sid); extraBySession.delete(sid); }
+    return;
+  }
+  // Oldest last-seen first. A session with an open tool call, or seen in the
+  // last KEEP_RECENT_MS, is skipped: dropping it would lose its open/endedAt
+  // state, and its next event would recreate it empty (a stale "busy").
+  // Nothing older than KEEP_RECENT_MS: nothing can go, so skip the sort.
+  let prunable = false;
+  for (const last of latestBySession.values()) if (now - last.ts >= KEEP_RECENT_MS) { prunable = true; break; }
+  if (!prunable) return;
+  const byAge = [...latestBySession].sort((a, b) => a[1].ts - b[1].ts);
+  let excess = byAge.length - PRUNE_TO;
+  for (const [sid, last] of byAge) {
+    if (excess <= 0) break;
+    if (now - last.ts < KEEP_RECENT_MS || (extraBySession.get(sid)?.open.size ?? 0) > 0) continue;
+    latestBySession.delete(sid);
+    extraBySession.delete(sid);
+    excess--;
+  }
+}
+
+/** Test seam: how many sessions are held. */
+export function __sessionsHeld(): number {
+  return latestBySession.size;
+}
+
 /** Feed the latest-event map. Called for every event insertEvent takes, live or
  *  backfilled, so it is kept by max timestamp rather than call order — a cold
  *  backfill replays history out of order and must not leave an old event as the
@@ -97,6 +146,8 @@ export function noteEvent(
     if (ts > x.endedAt) x.endedAt = ts;
     for (const [k, at] of x.open) if (at <= ts) x.open.delete(k);
   }
+  // Last, so a new session's two entries exist before a prune can take them.
+  if (!cur) pruneSessions();
 }
 
 /** The desk is looking at these panes now: acknowledge up to each agent's latest

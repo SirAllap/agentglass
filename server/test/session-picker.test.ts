@@ -75,32 +75,32 @@ step("the frame carries EVERY session, not only the client's", () => {
   expect(f?.windows.length, "the strip is still the client's own session").toBe(2);
 });
 
-step("choosing another session moves the client, and back again", () => {
+step("choosing another session moves the client, and back again", async () => {
   expect(where()).toBe("alfa");
-  expect(switchClientToSession(sock, tty(), "beta")).toBe(true);
+  expect(await switchClientToSession(sock, tty(), "beta")).toBe(true);
   expect(where()).toBe("beta");
   /* The half that makes this different from the app doing it unasked. */
-  expect(switchClientToSession(sock, tty(), "alfa")).toBe(true);
+  expect(await switchClientToSession(sock, tty(), "alfa")).toBe(true);
   expect(where(), "the way back has to work or this is a trap").toBe("alfa");
 });
 
-step("a session that does not exist moves nobody", () => {
+step("a session that does not exist moves nobody", async () => {
   const before = where();
-  switchClientToSession(sock, tty(), "not-a-session");
+  await switchClientToSession(sock, tty(), "not-a-session");
   expect(where()).toBe(before);
 });
 
-step("a dangerous name is refused before it reaches tmux", () => {
+step("a dangerous name is refused before it reaches tmux", async () => {
   /* The value comes off a page and ends up in a tmux target. */
   const before = where();
   for (const bad of ["beta; rm -rf /", "beta rm", "", "-beta"]) {
-    expect(switchClientToSession(sock, tty(), bad), bad).toBe(false);
+    expect(await switchClientToSession(sock, tty(), bad), bad).toBe(false);
   }
   expect(where()).toBe(before);
 });
 
-step("no client tty, no switch", () => {
-  expect(switchClientToSession(sock, "", "beta")).toBe(false);
+step("no client tty, no switch", async () => {
+  expect(await switchClientToSession(sock, "", "beta")).toBe(false);
 });
 
 step("ending a session from the picker actually ends it", () => {

@@ -13,8 +13,9 @@ const code = body.split("\n").filter((l) => !l.trim().startsWith("//") && !l.tri
 describe("tmux poll backoff", () => {
   test("is self-rescheduling, not a fixed interval", () => {
     expect(from).toBeGreaterThan(0);
-    expect(code).toContain("setTimeout(");
-    expect(code).not.toContain("setInterval(");
+    // The labelled forms (setTimeoutAs) are the same calls, named for the loop watch.
+    expect(code).toMatch(/setTimeout(As)?\(/);
+    expect(code).not.toMatch(/setInterval(As)?\(/);
   });
   test("slows only on a session tmux is already known for", () => {
     expect(code).toMatch(/quiet >= QUIET_SWEEPS && \(session\.tmux \|\| session\.onEngine\) \? SLOW_MS : 500/);

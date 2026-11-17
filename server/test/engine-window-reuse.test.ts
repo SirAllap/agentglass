@@ -170,7 +170,8 @@ describe("the issue command", () => {
     const at = terminal.indexOf('if (msg.cmd === "issue") {');
     const block = terminal.slice(at, terminal.indexOf('if (msg.cmd === "resume") {', at))
       .split("\n").filter((l) => !/^\s*(\/\*|\*|\/\/)/.test(l)).join("\n");
-    expect(block.match(/engineWindowOutcome\([^\n]*, here, true, msg\.reuse === true, true\)/g)?.length).toBe(2);
+    expect(block.match(/engineWindowOutcome\([^\n]*cred\.env, here, true, msg\.reuse === true, false, typeof msg\.cardId === "string" \? msg\.cardId : ""\)/g)?.length, "the agent's window, with the door's environment").toBe(1);
+    expect(block.match(/engineWindowOutcome\([^\n]*undefined, here, true, msg\.reuse === true, true, typeof msg\.cardId === "string" \? msg\.cardId : ""\)/g)?.length, "the shell fallback, which is the person's own").toBe(1);
     expect(block.match(/answer\(w\.ok, w\.ok \? "" : w\.reason, w\.ok && w\.reused === true\)/g)?.length).toBe(2);
   });
 });

@@ -32,9 +32,11 @@
 import { statSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import * as AgentOps from "./agentops.ts";
-import { tmux } from "./tmuxpane.ts";
+import { tmux, engineWindowName } from "./tmuxpane.ts";
 import type * as AgentBoard from "./agentboard.ts";
-import { mintSeatToken, revokeSeatTokens } from "./auth.ts";
+import { revokeSeatTokens } from "./auth.ts";
+import { agentWindowEnv, browserHealthLine } from "./browseraccess.ts";
+import { seatWindowEnv } from "./seatwindow.ts";
 import { claudeModels } from "./claudemodels.ts";
 import { chatBypassAllowed, inScope, workspaceRoots } from "./config.ts";
 import { db } from "./db.ts";
@@ -128,12 +130,19 @@ export interface Seat {
    *  rather than one this app opened. Liveness is still the pane. */
   adoptedSession: string;
   adoptedPane: string;
+  /** The adopted pane's `pid.start_time` at the moment it was adopted (see
+   *  `AgentOps.paneIdentity`), empty on a row adopted before this existed.
+   *  `seatPaneVerdict` is the only reader that needs it. */
+  adoptedPaneIdentity: string;
+  /** The person's click on the adoption card. `adoptedPane` is not it: `seated`
+   *  re-links the row by window name before anybody clicks. */
+  adoptedApproved: boolean;
 }
 
 interface Row {
   root: string; name: string; kind: string; model: string; powers: string;
   started_at: number; ended_at: number | null; last_line: string; last_turn_at: number;
-  adopted_session: string; adopted_pane: string;
+  adopted_session: string; adopted_pane: string; adopted_pane_identity: string; adopted_approved: number;
 }
 
 const toSeat = (r: Row): Seat => ({
@@ -142,6 +151,8 @@ const toSeat = (r: Row): Seat => ({
   startedAt: r.started_at, endedAt: r.ended_at,
   lastLine: r.last_line, lastTurnAt: r.last_turn_at,
   adoptedSession: r.adopted_session ?? "", adoptedPane: r.adopted_pane ?? "",
+  adoptedPaneIdentity: r.adopted_pane_identity ?? "",
+  adoptedApproved: r.adopted_approved === 1,
 });
 
 const one = db.query<Row, [string]>(`SELECT * FROM seat WHERE root = ?`);
@@ -163,14 +174,16 @@ const settings = db.query<never, [string, string, string, string]>(`
 `);
 const settingKind = db.query<never, [string, string]>(`UPDATE seat SET kind = ? WHERE root = ?`);
 const closeRow = db.query<never, [number, string]>(`UPDATE seat SET ended_at = ? WHERE root = ?`);
-const adoptRow = db.query<never, [string, string, string, string, string, number]>(`
-  INSERT INTO seat (root, name, powers, adopted_session, adopted_pane, started_at, ended_at)
-  VALUES (?, ?, ?, ?, ?, ?, NULL)
+const adoptRow = db.query<never, [string, string, string, string, string, string, number, number]>(`
+  INSERT INTO seat (root, name, powers, adopted_session, adopted_pane, adopted_pane_identity, started_at, ended_at, adopted_approved)
+  VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)
   ON CONFLICT(root) DO UPDATE SET
     adopted_session = excluded.adopted_session, adopted_pane = excluded.adopted_pane,
+    adopted_pane_identity = excluded.adopted_pane_identity,
+    adopted_approved = excluded.adopted_approved,
     kind = 'claude', started_at = excluded.started_at, ended_at = NULL
 `);
-const unadopt = db.query<never, [string]>(`UPDATE seat SET adopted_session = '', adopted_pane = '' WHERE root = ?`);
+const unadopt = db.query<never, [string]>(`UPDATE seat SET adopted_session = '', adopted_pane = '', adopted_pane_identity = '', adopted_approved = 0 WHERE root = ?`);
 const saidRow = db.query<never, [string, number, string]>(`UPDATE seat SET last_line = ?, last_turn_at = ? WHERE root = ?`);
 /* Every line, not only the latest. The row keeps the last one because the
    header reads it on every poll and a join for one string is a join too many;
@@ -189,6 +202,17 @@ const recentLines = db.query<{ line: string; at: number }, [string, number]>(
 const SEAT_PREFIX = "orchestrator-";
 export function seatName(root: string): string {
   return `${SEAT_PREFIX}${doctrineSlug(root).slice(0, 40)}`;
+}
+
+/** The prompt with its browser line, after the mark: the seat's first line is
+ *  what says it is a seat, and a health line above it would hide that. The
+ *  line is the door's own answer for the engine, not a second reading of the
+ *  engine list: a chair Settings ▸ Browser cannot name is handed a credential,
+ *  and its brief must not say it has none. */
+function seatHealthLine(prompt: string, kind: string): string {
+  const line = browserHealthLine(kind, "");
+  const at = prompt.indexOf("\n");
+  return at < 0 ? `${prompt}\n\n${line}` : `${prompt.slice(0, at)}\n\n${line}${prompt.slice(at)}`;
 }
 
 /**
@@ -231,6 +255,28 @@ export function seatRow(root: string): Seat | null {
 }
 
 export function everySeat(): Seat[] { return all.all().map(toSeat); }
+
+/**
+ * The root a seat for this project is keyed at, given any spelling of it.
+ *
+ * A chair is a row per checkout root and its NAME is a hash of that root, so a
+ * seat working in a linked worktree (`~/code/orbit-1042` beside `~/code/orbit`)
+ * and a chair seated at the project spell the same project two ways — and a
+ * wake that hashed the other spelling found nobody and said nothing.
+ *
+ * The git common dir is asked first (`projectRootOf`), then the rows
+ * themselves: a chair may legitimately be keyed AT a worktree (the open project
+ * was one), and folding every answer to the main checkout would hide it.
+ */
+export function seatHome(root: string): string {
+  if (seatRow(root)) return root;
+  const project = projectRootOf(root) ?? root;
+  if (project !== root) {
+    if (seatRow(project)) return project;
+    for (const s of everySeat()) if ((projectRootOf(s.root) ?? s.root) === project) return s.root;
+  }
+  return project;
+}
 
 /**
  * A root a seat may be opened at, or a refusal.
@@ -277,22 +323,60 @@ export function seatable(rootIn: unknown): { root: string } | { error: string } 
 }
 
 /**
+ * Whether a %id this row calls its adopted pane is still THAT pane, not just
+ * some other pane a tmux restart handed the same reused id.
+ *
+ * Pure: the two reads `adoptedPaneVerdict` makes, decided without touching
+ * tmux again.
+ * - "dead": the engine confirmed the pane is gone, or confirmed a DIFFERENT
+ *   pane now answers to this id — the id was reused.
+ * - "unknown": the engine could not be asked (liveness or identity unread),
+ *   or the row predates this column (`storedIdentity` empty) — never a
+ *   match, because there is nothing to match against.
+ * - "alive": the engine confirmed the same pane, by its `pid.start_time`.
+ */
+export function seatPaneVerdict(
+  liveness: "alive" | "dead" | "unknown",
+  storedIdentity: string,
+  liveIdentity: string | null,
+): "alive" | "dead" | "unknown" {
+  if (liveness !== "alive") return liveness;
+  if (!storedIdentity || liveIdentity === null) return "unknown";
+  return liveIdentity === storedIdentity ? "alive" : "dead";
+}
+
+/** `seatPaneVerdict`, with the tmux reads it needs. The identity is asked
+ *  only once liveness says the id itself is on the engine: a dead pane has no
+ *  identity worth reading. */
+async function adoptedPaneVerdict(paneId: string, storedIdentity: string): Promise<"alive" | "dead" | "unknown"> {
+  const liveness = await AgentOps.paneLiveness(paneId);
+  const identity = liveness === "alive" ? await AgentOps.paneIdentity(paneId) : null;
+  return seatPaneVerdict(liveness, storedIdentity, identity);
+}
+
+/**
  * Whether an agent is in the chair right now — the pane, never the row.
  *
  * Two ways to be in it, one answer. A seat this app opened is a named agent
  * and `reconcile` closes it the moment its pane is gone. A seat that was
  * ADOPTED is a session that was already working when the chair was built: its
  * pane is checked the same way, so an adopted orchestrator that dies stops
- * being the orchestrator exactly as fast as one this app started.
+ * being the orchestrator exactly as fast as one this app started — and a pane
+ * whose %id tmux handed to somebody else after a restart is "dead" too (see
+ * `seatPaneVerdict`), not an unrelated window wearing the orchestrator's mark.
  */
 export async function seated(root: string): Promise<AgentOps.NamedAgent | null> {
-  const name = seatName(root);
+  /* One project, whatever spelling the caller has: a workplace is not a chair
+     (see `seatHome`). */
+  const at = seatHome(root);
+  const name = seatName(at);
   await AgentOps.reconcile();
   const a = AgentOps.agentNamed(name);
   if (a && a.endedAt === null) return a;
 
-  const row = seatRow(root);
-  let pane = row?.adoptedPane && await AgentOps.paneAlive(row.adoptedPane) ? row.adoptedPane : "";
+  const row = seatRow(at);
+  const verdict = row?.adoptedPane ? await adoptedPaneVerdict(row.adoptedPane, row.adoptedPaneIdentity) : "dead";
+  let pane = row?.adoptedPane && verdict !== "dead" ? row.adoptedPane : "";
   if (!pane && row && row.startedAt > 0 && row.endedAt === null) {
     /*
      * A RELAUNCHED ORCHESTRATOR IS THE SAME CHAIR.
@@ -305,22 +389,46 @@ export async function seated(root: string): Promise<AgentOps.NamedAgent | null> 
      * re-links the row; `closeSeat` sets `endedAt`, so a deliberate stand-down
      * is never undone by this.
      */
-    pane = (await orchestratorPane(root)) ?? "";
-    if (pane) adoptRow.run(root, row.name || seatName(root), row.powers, row.adoptedSession, pane, row.startedAt);
+    pane = (await orchestratorPane(at)) ?? "";
+    /* 0, not the old row's answer: a name is not the person's click, so the
+       re-linked pane still asks once before it carries the chair's credential. */
+    if (pane) {
+      const identity = (await AgentOps.paneIdentity(pane)) ?? "";
+      adoptRow.run(at, row.name || seatName(at), row.powers, row.adoptedSession, pane, identity, row.startedAt, 0);
+    }
   }
   if (!pane) {
     if (row?.adoptedPane) {
       /* Its pane is gone. The row keeps its settings and its lines; what it
          stops claiming is that somebody is sitting there. */
-      unadopt.run(root);
-      revokeSeatTokens(root);
+      unadopt.run(at);
+      revokeSeatTokens(at);
     }
     return null;
   }
   return {
-    name: row?.name || "orchestrator", kind: occupantKind(row), cwd: root,
+    name: row?.name || "orchestrator", kind: occupantKind(row), cwd: at,
     paneId: pane, windowId: "", startedAt: row?.startedAt ?? 0, endedAt: null,
   };
+}
+
+/**
+ * Drop a persisted seat credential for every adopted chair whose pane is gone
+ * at boot, so a window closed while the server was down does not leave a
+ * token answering for a chair nobody sits in. `seated()` already does this on
+ * demand per project; this is the one pass over every row so a restart does
+ * not wait for the first request against each one to notice.
+ */
+export async function reapDeadSeatTokens(): Promise<void> {
+  for (const s of everySeat()) {
+    if (!s.adoptedPane || s.endedAt !== null) continue;
+    /* "unknown" (the engine could not be asked) skips, same as "alive" —
+       revoking only on a CONFIRMED dead/reused pane is the whole point of the
+       identity check; see `seatPaneVerdict`. */
+    if ((await adoptedPaneVerdict(s.adoptedPane, s.adoptedPaneIdentity)) !== "dead") continue;
+    unadopt.run(s.root);
+    revokeSeatTokens(s.root);
+  }
 }
 
 /**
@@ -363,8 +471,8 @@ const occupantKind = (row: Seat | null): string =>
  * there is something to edit, and an adopted seat is told where they are
  * rather than handed them.
  */
-export async function adoptSeat(p: { root: string; session: string; pane: string; powers?: Power; now?: number }):
-Promise<{ ok: true; seat: Seat; already: boolean; token: string } | { ok: false; error: string }> {
+export async function adoptSeat(p: { root: string; session: string; pane: string; powers?: Power; now?: number; approved?: boolean }):
+Promise<{ ok: true; seat: Seat; already: boolean; token: string } | { ok: false; error: string; needsPerson?: true }> {
   const gate = seatable(p.root);
   if ("error" in gate) return { ok: false, error: gate.error };
   const pane = String(p.pane ?? "").trim();
@@ -375,22 +483,48 @@ Promise<{ ok: true; seat: Seat; already: boolean; token: string } | { ok: false;
   if (there && there.paneId !== pane) {
     return { ok: false, error: `${there.name} is already in this project's chair; stand it down first` };
   }
-  const row = seatRow(gate.root);
+  const raw = one.get(gate.root);
+  const row = raw ? toSeat(raw) : null;
+  const name = row?.name || seatName(gate.root);
+  /* The chair's credential for a session that is already running: the same door
+     every agent tab goes through, minted for the tab and handed over in the
+     answer, because an environment is fixed at exec. A seat always gets one —
+     the door mints on both the allowed and the off branch, the marker being
+     about browsing rather than about the chair. */
+  const credentialFor = (powers: Power): string =>
+    agentWindowEnv({ name: engineWindowName(name) ?? name, engine: "claude", seat: { root: gate.root, powers } }).token ?? "";
+  /* The row's own pane takes its credential back: that is a restart, not a
+     claimant. A pane id is not a secret, so this proves WHICH pane, not who. */
+  const reattach = !!raw && raw.ended_at === null && raw.adopted_pane === pane && raw.adopted_approved === 1;
+  if (reattach) {
+    /* Never revoke: naming a pane must not kill the credential the occupant
+       is already using. */
+    const token = credentialFor(row!.powers);
+    return { ok: true, seat: row!, already: true, token };
+  }
+  /* Adopting hands the chair's credential to a session that is already
+     running, so it is the person's click. No approval, no row. */
+  if (!p.approved) {
+    return { ok: false, needsPerson: true, error: "putting a session in this project's chair is the person's click; ask them, then adopt again" };
+  }
+  const identity = (await AgentOps.paneIdentity(pane)) ?? "";
   adoptRow.run(
     gate.root,
-    row?.name || seatName(gate.root),
+    name,
     p.powers ?? row?.powers ?? "speak",
     String(p.session ?? ""),
     pane,
+    identity,
     p.now ?? Date.now(),
+    1,
   );
   /* A seat this app starts is handed its credential in its environment; an
-     adopted one was already running, so it is handed the same kind in the
-     answer. Without it the session's calls arrive on the machine token and
+     adopted one was already running, so it is handed one from the same door in
+     the answer. Without it the session's calls arrive on the machine token and
      the Go door cannot tell it from any other agent. The powers on the token
      are the row's, so `assign` is still what Go and Launch need. */
   revokeSeatTokens(gate.root);
-  const token = mintSeatToken(gate.root, seatRow(gate.root)!.powers);
+  const token = credentialFor(seatRow(gate.root)!.powers);
   return { ok: true, seat: seatRow(gate.root)!, already: there !== null, token };
 }
 
@@ -557,7 +691,7 @@ export async function openSeat(p: {
   if (there && p.kind && p.kind !== there.kind) {
     return { ok: false, error: `${there.name} (${there.kind}) already sits in this chair; stand it down or change the chair before seating ${p.kind}` };
   }
-  if (there) return { ok: true, seat: row ?? toSeat({ root, name: there.name, kind: there.kind, model: "", powers: "speak", started_at: there.startedAt, ended_at: null, last_line: "", last_turn_at: 0, adopted_session: "", adopted_pane: "" }), agent: there, already: true };
+  if (there) return { ok: true, seat: row ?? toSeat({ root, name: there.name, kind: there.kind, model: "", powers: "speak", started_at: there.startedAt, ended_at: null, last_line: "", last_turn_at: 0, adopted_session: "", adopted_pane: "", adopted_pane_identity: "", adopted_approved: 0 }), agent: there, already: true };
 
   /* Stood down in the app, but its session is still running: seating again
      would put a second orchestrator on the project. */
@@ -588,17 +722,16 @@ export async function openSeat(p: {
    * An agent this server starts inherits the environment, and the machine
    * token is in it — so without this the seat would ask as the machine, with
    * `full` scope, and `powers` would be a sentence in a prompt rather than a
-   * wall. The token is minted here, carried in the window's environment (which
-   * `AGENTGLASS_TOKEN` takes precedence over the token file for), and revoked
-   * when the chair is emptied.
+   * wall. The window's environment is built by the one door every agent tab
+   * uses (`seatWindowEnv` → `agentWindowEnv`), and revoked when the chair is
+   * emptied.
    */
   revokeSeatTokens(root);
-  const token = mintSeatToken(root, powers);
   const r = await AgentOps.startAgent({
-    root, name, cwd: root, kind, prompt,
+    root, name, cwd: root, kind, prompt: seatHealthLine(prompt, kind),
     yolo: true, yoloAllowed: chatBypassAllowed(),
     args: seatModelArgs(kind, model),
-    env: { ...AgentOps.chairLock(kind), AGENTGLASS_TOKEN: token, AGENTGLASS_SEAT: root },
+    env: seatWindowEnv({ root, powers, kind, name }).env,
     now: p.now,
   });
   if (!r.ok) {
@@ -607,6 +740,7 @@ export async function openSeat(p: {
       exists: "an agent is already running under the seat's name",
       "no-cli": "that agent CLI is not installed here",
       "no-window": "tmux would not open a window for the seat",
+      "prompt-too-long": "the seat's brief was too long for tmux to carry, even after the big one was moved to a file",
       died: "the seat's CLI exited as soon as it was launched",
       "bad-name": "the seat's name is not one tmux can carry",
       "yolo-refused": "the seat runs unattended, and skipping permissions is off in Settings",
@@ -626,15 +760,19 @@ export async function openSeat(p: {
 /** Empty the chair. The row stays: its settings and its last line are what the
  *  next seating starts from. */
 export async function closeSeat(root: string, now = Date.now()): Promise<{ ok: boolean; was: boolean }> {
-  const row = seatRow(root);
   const there = await seated(root);
+  /* Read AFTER `seated`: it re-links a relaunched orchestrator's row to the
+     window it found by name, and the row read before that still names the
+     old pane, so the guard below missed and the person's tab was closed. */
+  const row = seatRow(root);
   closeRow.run(now, root);
   revokeSeatTokens(root);
   if (!there) return { ok: true, was: false };
   /* An ADOPTED seat is somebody else's session doing its own work. Standing it
      down means this app stops calling it the orchestrator; killing it would be
-     killing a day of somebody's context because a button said "stand down". */
-  if (row?.adoptedPane && there.paneId === row.adoptedPane) {
+     killing a day of somebody's context because a button said "stand down".
+     A seat this app did not launch has no window id (`seated`): never ours. */
+  if ((row?.adoptedPane && there.paneId === row.adoptedPane) || !there.windowId) {
     unadopt.run(root);
     return { ok: true, was: true };
   }

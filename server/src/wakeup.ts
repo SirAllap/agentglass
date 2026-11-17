@@ -1,3 +1,4 @@
+import { setTimeoutAs } from "./loopwatch.ts";
 /*
  * One timer, set for the next thing that is due.
  *
@@ -45,7 +46,7 @@ export function createWakeup(opts: {
     try { at = opts.next(); } catch { at = Date.now() + opts.capMs; }
     if (at === null) return;
     const delay = Math.min(opts.capMs, Math.max(FLOOR_MS, at - Date.now() + SLACK_MS));
-    timer = setTimeout(fire, delay);
+    timer = setTimeoutAs("wakeup fire", fire, delay);
     (timer as unknown as { unref?: () => void }).unref?.();
   };
 

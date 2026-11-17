@@ -23,6 +23,7 @@
  */
 import { readdirSync, statSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { claudeAccountDir } from "./claudeAccount.ts";
 import { claudeHome, projectSlug } from "./agents/claudecode.ts";
 import { worktrees } from "./gitwork.ts";
 import { inScope } from "./config.ts";
@@ -181,10 +182,12 @@ function titleFrom(head: string): string {
  */
 export async function sessionsForProject(root: string, limit = LIMIT): Promise<AgentSession[]> {
   if (!root || !inScope(root)) return [];
-  const projects = join(claudeHome(), "projects");
-  if (!existsSync(projects)) return [];
+  // The chosen account's folder and the default one: switching accounts must not hide the old sessions.
+  const homes = [...new Set([claudeAccountDir(root), claudeHome()].filter((h): h is string => !!h).map((h) => join(h, "projects")))].filter((d) => existsSync(d));
+  if (!homes.length) return [];
   const rows: AgentSession[] = [];
-  for (const cwd of await checkoutsOf(root)) {
+  const fileOf = new Map<AgentSession, string>();
+  for (const cwd of await checkoutsOf(root)) for (const projects of homes) {
     const dir = join(projects, projectSlug(cwd));
     let names: string[];
     try { names = readdirSync(dir); } catch { continue; }
@@ -194,16 +197,20 @@ export async function sessionsForProject(root: string, limit = LIMIT): Promise<A
       let st;
       try { st = statSync(file); } catch { continue; }
       if (!st.isFile() || st.size === 0) continue;
-      rows.push({ id: n.slice(0, -".jsonl".length), title: "", opening: "", last: "", cwd, at: st.mtimeMs, size: st.size });
+      const row = { id: n.slice(0, -".jsonl".length), title: "", opening: "", last: "", cwd, at: st.mtimeMs, size: st.size };
+      rows.push(row);
+      fileOf.set(row, file);
     }
   }
   rows.sort((a, b) => b.at - a.at);
-  const shown = rows.slice(0, limit);
+  // The same id can sit in both account folders after a switch; the newest copy is the one to resume.
+  const seen = new Set<string>();
+  const shown = rows.filter((r) => !seen.has(r.id) && !!seen.add(r.id)).slice(0, limit);
   // Titles only for what is actually shown. A machine with a thousand
   // transcripts would otherwise pay a read per session to fill a menu of forty.
   await Promise.all(shown.map(async (s) => {
     try {
-      const f = Bun.file(join(projects, projectSlug(s.cwd), `${s.id}.jsonl`));
+      const f = Bun.file(fileOf.get(s)!);
       const head = await f.slice(0, Math.min(HEAD_BYTES, s.size)).text();
       const tail = s.size > TAIL_BYTES ? await f.slice(Math.max(0, s.size - TAIL_BYTES), s.size).text() : head;
       // A name somebody typed beats a summary the CLI guessed, which beats the

@@ -93,10 +93,13 @@ const baseFor = (verb: string): string[] => {
   const steps = join(dir, "steps.json");
   return verb === "do" ? ["--steps-file", steps]
     : verb === "extract" || verb === "fill" ? ["--field", "#email=orbit@example.test"]
-      : [];
+      /* `vault` needs --site unless it is `--list`; argparse cannot say "required
+         unless", so the CLI checks it at runtime and the table shows it optional. */
+      : verb === "vault" ? ["--site", "acme.test"]
+        : [];
 };
 /** A flag that is only legal beside another one. */
-const PAIRS: Record<string, string[]> = { label: ["--highlight", "#go"] };
+const PAIRS: Record<string, string[]> = { label: ["--highlight", "#go"], "lane:vault": ["--ephemeral"], "lane:ephemeral": ["--vault", "orbit"] };
 /** Flags the CLI itself refuses beside each other at runtime. */
 const EXCLUSIVE: Record<string, string[]> = { observe: ["root", "viewport"] };
 
@@ -116,7 +119,7 @@ function argvFor(verb: string, spec: Spec, opts: { globals?: boolean; only?: Spe
     argv.push(...rep(p.dest, p.type, p.choices));
   }
   const skip = new Set(opts.only ? [] : (EXCLUSIVE[verb] ?? []));
-  if (opts.only && PAIRS[opts.only.dest]) argv.push(...PAIRS[opts.only.dest]);
+  { const pair = opts.only && (PAIRS[`${verb}:${opts.only.dest}`] ?? PAIRS[opts.only.dest]); if (pair) argv.push(...pair); }
   const chosen = (opts.only ? [opts.only] : spec.options.filter((o) => !GLOBAL_DESTS.has(o.dest) && !BY_POLICY.has(o.dest)))
     .filter((o) => !skip.has(o.dest));
   /* A prerequisite the verb will not send without — unless this very run is
@@ -131,6 +134,12 @@ function argvFor(verb: string, spec: Spec, opts: { globals?: boolean; only?: Spe
       argv.push(first.flags[0]);
       if (first.kind !== "flag") argv.push(rep(first.dest, first.type, first.choices)[0]);
     }
+  }
+  /* A flag the CLI marks required on its own goes in too. */
+  for (const o of spec.options) {
+    if (!o.required || chosen.some((c) => c.dest === o.dest)) continue;
+    argv.push(o.flags[0]);
+    if (o.kind !== "flag") argv.push(rep(o.dest, o.type, o.choices)[0]);
   }
   const base = baseFor(verb);
   for (let i = 0; i < base.length; i += 2) if (!named.has(base[i])) argv.push(base[i], base[i + 1]);

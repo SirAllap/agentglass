@@ -318,7 +318,7 @@ describe("the switch is not agent-writable (source)", () => {
   });
 
   test("only control.ts reads the variables; everything else only talks about them", () => {
-    const reads = files.filter((f) => /process\.env[.[][^;\n]*AGENTGLASS_CONTROL_|env\.AGENTGLASS_CONTROL_/.test(code(readFileSync(f, "utf8")))).map((f) => relative(ROOT, f));
+    const reads = files.filter((f) => /process\.env[.[][^;\n]*AGENTGLASS_CONTROL_|env\.AGENTGLASS_CONTROL_|envLimit\("AGENTGLASS_CONTROL_/.test(code(readFileSync(f, "utf8")))).map((f) => relative(ROOT, f));
     expect(reads).toEqual(["server/src/control.ts"]);
   });
 

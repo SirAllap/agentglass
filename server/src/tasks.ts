@@ -14,11 +14,14 @@
  */
 import { statSync, mkdirSync, openSync, closeSync, writeFileSync, accessSync, constants } from "node:fs";
 import { homedir } from "node:os";
+import { agentglassCacheDir } from "./cachedir.ts";
 import { join, dirname } from "node:path";
 import { withSpawnSlot } from "./spawnpool.ts";
 import { singleFlight } from "./singleflight.ts";
-import { entered, backoff, resumedAs, currentLabel } from "./loopwatch.ts";
+import { backoff, currentLabel, entered, resumedAs, setIntervalAs } from "./loopwatch.ts";
 import type { TaskCapability, LocalTask } from "../../shared/types.ts";
+import { envLimit } from "./config.ts";
+import { runChild } from "./broker/brokerRun.ts";
 
 export type TaskResult = { code: number; stdout: string; stderr: string; killed?: boolean };
 
@@ -102,7 +105,6 @@ export async function task(args: string[]): Promise<TaskResult> {
   if (!bin) return { code: 127, stdout: "", stderr: "task is not installed" };
   return withSpawnSlot(async () => {
     const label = currentLabel();
-    let proc: ReturnType<typeof Bun.spawn>;
     try {
       // `env` passed explicitly, and this is not decoration. Bun.spawn's default
       // is the environment captured when THIS process started, not the live
@@ -111,20 +113,11 @@ export async function task(args: string[]): Promise<TaskResult> {
       // Found the honest way: a test that built its own disposable store read
       // the developer's real one instead, and passed. Same hazard `git.ts:97`
       // documents for `Bun.which` and PATH.
-      proc = Bun.spawn([bin, ...args], { env: { ...process.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-    } catch (e) {
-      return { code: 127, stdout: "", stderr: String(e) };
-    }
-    const kill = setTimeout(() => { try { proc.kill(); } catch { /* already gone */ } }, TIMEOUT_MS);
-    try {
-      const [stdout, stderr, code] = await Promise.all([
-        new Response(proc.stdout as ReadableStream).text(),
-        new Response(proc.stderr as ReadableStream).text(),
-        proc.exited,
-      ]);
-      return { code, stdout, stderr, killed: proc.signalCode != null };
+      // Through the spawn broker: a fork of the server stalls every request.
+      const r = await runChild([bin, ...args], { env: { ...process.env }, timeoutMs: TIMEOUT_MS });
+      if (r.code === null && !r.timedOut && !r.signal && r.error) return { code: 127, stdout: "", stderr: r.error };
+      return { code: r.code ?? 1, stdout: r.stdout, stderr: r.stderr, killed: r.signal != null || r.timedOut };
     } finally {
-      clearTimeout(kill);
       resumedAs(label);
     }
   });
@@ -372,7 +365,7 @@ export function startTaskSweep(): void {
     } catch { /* the next tick tries again */ } finally { sweeping = false; }
   };
   void tick(); // one eager run, so the first minute is not a lie
-  sweeper = setInterval(() => { void tick(); }, 45_000);
+  sweeper = setIntervalAs("tasks sweep", () => { void tick(); }, 45_000);
   (sweeper as unknown as { unref?: () => void }).unref?.();
 }
 export function stopTaskSweep(): void { if (sweeper) clearInterval(sweeper); sweeper = null; sweeping = false; }
@@ -389,7 +382,7 @@ export function stopTaskSweep(): void { if (sweeper) clearInterval(sweeper); swe
  * not behind it: the schedule is ours and is safe to write even when the task
  * store is not.
  */
-export const TASK_WRITE_ENABLED = process.env.AGENTGLASS_TASK_WRITE_DISABLED !== "1";
+export const TASK_WRITE_ENABLED = envLimit("AGENTGLASS_TASK_WRITE_DISABLED") !== "1";
 
 /**
  * The Taskwarrior majors this writes to: 2 and 3.
@@ -441,7 +434,7 @@ async function writeGuard(): Promise<string | null> {
  * Advisory, and best effort. A lock we cannot take is a reason to be careful,
  * not a reason to refuse — Taskwarrior itself takes none.
  */
-const LOCK_PATH = join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "agentglass", "task.lock");
+const LOCK_PATH = join(agentglassCacheDir(), "task.lock");
 let chain: Promise<unknown> = Promise.resolve();
 
 async function withTaskLock<T>(fn: () => Promise<T>): Promise<T> {

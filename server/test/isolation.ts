@@ -147,6 +147,8 @@ function passwdHome(): string {
 const REAL_HOME = process.env.AGX_TEST_REAL_HOME
   || (process.env.HOME && !scratch(process.env.HOME) ? process.env.HOME : passwdHome());
 process.env.AGX_TEST_REAL_HOME = REAL_HOME;
+/* The marker tmuxbin.ts `engineRefused` needs besides NODE_ENV=test. */
+process.env.AGX_UNDER_BUN_TEST = "1";
 
 const XDG = [
   ["XDG_CONFIG_HOME", ".config"],

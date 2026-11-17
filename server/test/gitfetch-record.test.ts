@@ -27,23 +27,23 @@ const mk = (name: string): string => {
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("last fetch", () => {
-  it("records time, remotes and how many remote refs moved", () => {
+  it("records time, remotes and how many remote refs moved", async () => {
     const bare = join(dir, "origin.git"); git(dir, "init", "-q", "--bare", "-b", "main", bare);
     const up = mk("up"); commit(up, "feat: one"); git(up, "remote", "add", "origin", bare); git(up, "push", "-q", "origin", "main");
     const me = join(dir, "me"); git(dir, "clone", "-q", bare, me);
-    expect(lastFetch(me)).toBeNull();
+    expect(await lastFetch(me)).toBeNull();
     const t0 = Date.now();
-    expect(fetch(me).ok).toBe(true);
-    const first = lastFetch(me)!;
+    expect((await fetch(me)).ok).toBe(true);
+    const first = (await lastFetch(me))!;
     expect(first.remotes).toEqual(["origin"]);
     expect(first.news).toBe(0);
     expect(first.at).toBeGreaterThanOrEqual(t0);
     commit(up, "feat: two"); git(up, "push", "-q", "origin", "main");
-    expect(fetch(me, "origin").ok).toBe(true);
-    expect(lastFetch(me)!.news).toBe(1);
+    expect((await fetch(me, "origin")).ok).toBe(true);
+    expect((await lastFetch(me))!.news).toBe(1);
   });
 
-  it("merges legs of one fetch: remotes are unioned and news summed", () => {
+  it("merges legs of one fetch: remotes are unioned and news summed", async () => {
     const a = join(dir, "ra.git"), b = join(dir, "rb.git");
     git(dir, "init", "-q", "--bare", "-b", "main", a); git(dir, "init", "-q", "--bare", "-b", "main", b);
     // `up` pushes; `me` has never fetched, so each remote brings one new ref.
@@ -51,23 +51,23 @@ describe("last fetch", () => {
     git(up, "remote", "add", "alpha", a); git(up, "remote", "add", "beta", b);
     git(up, "push", "-q", "alpha", "main"); git(up, "push", "-q", "beta", "main");
     const me = mk("legs"); git(me, "remote", "add", "alpha", a); git(me, "remote", "add", "beta", b);
-    expect(fetch(me, "alpha").ok).toBe(true);
-    expect(fetch(me, "beta").ok).toBe(true);
-    const rec = lastFetch(me)!;
+    expect((await fetch(me, "alpha")).ok).toBe(true);
+    expect((await fetch(me, "beta")).ok).toBe(true);
+    const rec = (await lastFetch(me))!;
     expect(rec.remotes.sort()).toEqual(["alpha", "beta"]);
     expect(rec.news).toBe(2);
   });
 
-  it("keeps 50 repositories and drops the oldest", () => {
+  it("keeps 50 repositories and drops the oldest", async () => {
     const roots: string[] = [];
     for (let i = 0; i < 52; i++) {
       const r = mk(`cap-${i}`); commit(r, "x"); git(r, "remote", "add", "origin", join(dir, "origin.git"));
-      roots.push(r); fetch(r);
+      roots.push(r); await fetch(r);
     }
-    expect(lastFetch(roots[0])).toBeNull();
-    expect(lastFetch(roots[1])).toBeNull();
-    expect(lastFetch(roots[2])).not.toBeNull();
-    expect(lastFetch(roots[51])).not.toBeNull();
+    expect(await lastFetch(roots[0])).toBeNull();
+    expect(await lastFetch(roots[1])).toBeNull();
+    expect(await lastFetch(roots[2])).not.toBeNull();
+    expect(await lastFetch(roots[51])).not.toBeNull();
   });
 });
 
@@ -105,8 +105,8 @@ describe("auto-fetch record", () => {
     const start = src.indexOf("async function fetchOne(");
     const body = src.slice(start, src.indexOf("\nexport function startAutoFetch"));
     expect(start).toBeGreaterThan(-1);
-    expect(body).toContain("proc.exitCode === 0");
-    expect(body).toContain("recordFetch(root, reached,");
+    expect(body).toContain("(await run).code === 0");
+    expect(body).toContain("recordFetch(r, reached,");
     expect(body).not.toContain("recordFetch(root, fetchArgvs(root)");
   });
 });

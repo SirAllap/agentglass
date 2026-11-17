@@ -18,9 +18,9 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { safeAbs } from "./git.ts";
-import { inScope, inScopeReal } from "./config.ts";
+import { inScope, inScopeReal, envLimit } from "./config.ts";
 
-export const EDITOR_ENABLED = process.env.AGENTGLASS_EDITOR_DISABLED !== "1";
+export const EDITOR_ENABLED = envLimit("AGENTGLASS_EDITOR_DISABLED") !== "1";
 
 /** Where nvim drops its default sockets. */
 function runtimeDir(): string {

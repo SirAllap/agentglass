@@ -38,6 +38,7 @@ import { ROSTER } from "../agentprobe.ts";
 import { AGENT_PROVIDERS, type RunSpelling } from "../../../shared/agentKinds.ts";
 import { agentArgv } from "../agentticket.ts";
 import { supportsSessionName } from "./claudecode.ts";
+import { spawnSyncAs } from "../loopwatch.ts";
 
 /** The roster id of the agent every path here defaults to. Named rather than
  *  written out at each call site, so "which agent is this?" is a variable that
@@ -98,7 +99,7 @@ export function supportsFlag(bin: string, flag: string): boolean {
   if (cached !== undefined) return cached;
   let ok = false;
   try {
-    const r = Bun.spawnSync([bin, "--help"], { stdout: "pipe", stderr: "pipe", timeout: 3000 });
+    const r = spawnSyncAs("probe agent --help", [bin, "--help"], { stdout: "pipe", stderr: "pipe", timeout: 3000 });
     // Help text is written for people, so the flag can be followed by a comma,
     // a space, an `=` or the end of a line. A word boundary is enough, and
     // anchoring on more would start reporting a supported flag as missing.

@@ -55,6 +55,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { db } from "./db.ts";
+import { waitedFor } from "./loopwatch.ts";
 import { repoRootOf } from "./git.ts";
 import { extraSourceError } from "./understudy-sources.ts";
 import { wilsonLower } from "../../shared/wilson.ts";
@@ -1928,11 +1929,40 @@ function blockedFor(def: UnderstudyClass, s: ClassStats, base?: Baseline): strin
  * baseline is the thing we are trying to beat, is the direction of error that
  * quietly turns a real result into a fake one.
  */
+/*
+ * Measured against a real ledger: 134 MB of understudy_ledger is on the order
+ * of a million scored rows, and `baselines()` used to read every one of them
+ * into a single JS array with one `.all()` — the whole table, at once, on
+ * every scoreboard update (coalesced to once a second, but still the whole
+ * table each time).
+ *
+ * Two separate costs, two separate fixes:
+ *
+ *  - PEAK MEMORY. The expanding window needs every row, in order, but it does
+ *    not need them all held at once: it only ever looks at the row in front
+ *    of it and a running tally per class. An earlier version of this fix paged
+ *    with LIMIT/OFFSET, which is worse than the single `.all()` it replaced —
+ *    SQLite has to walk and discard every row before an OFFSET before it can
+ *    hand back a page, so 5,000-row pages over a million rows is on the order
+ *    of a hundred million row-visits for one call, not one. `.iterate()`
+ *    streams the same single ordered scan a plain `.all()` does, one row at a
+ *    time, with no OFFSET and no re-walk — so peak memory is one row, not the
+ *    whole table, for the same single pass `.all()` already paid for.
+ *  - REPEAT WORK. `.iterate()` fixes the memory, not the "every second, the
+ *    whole ledger" part. So the answer is cached, and recomputed only when a
+ *    cheap fingerprint — COUNT(*) and the newest scored timestamp — says the
+ *    scored rows have actually changed. A call between two scoreboard pushes
+ *    with no new decision is one tiny aggregate query, not a scan.
+ */
+const fingerprint = db.query<{ n: number; maxAt: number | null }, []>(
+  `SELECT COUNT(*) AS n, MAX(COALESCE(actual_at, sealed_at)) AS maxAt
+     FROM understudy_ledger WHERE ${SCORED}`,
+);
 const scoredRows = db.query<{ class: string; actual: string; verdict: string | null; at: number }, []>(
   `SELECT class, actual, verdict, COALESCE(actual_at, sealed_at) AS at
      FROM understudy_ledger
     WHERE ${SCORED}
-    ORDER BY at ASC`,
+    ORDER BY at ASC, id ASC`,
 );
 
 export interface Baseline {
@@ -1942,40 +1972,59 @@ export interface Baseline {
   raw: number;
 }
 
+let baselineCache: { fp: string; result: Record<string, Baseline> } | null = null;
+/** Bumped every time the cache below misses and a real scan runs — the only
+ *  thing a test can check without instrumenting SQLite itself. */
+export let baselineScans = 0;
+/** Exported for tests: a fresh process would start here anyway, but a suite
+ *  sharing one ledger across files needs to force the next call to scan. */
+export function __resetBaselineCache(): void { baselineCache = null; }
+
 export function baselines(): Record<string, Baseline> {
-  const out: Record<string, Baseline> = {};
-  let rows: { class: string; actual: string; verdict: string | null; at: number }[] = [];
+  let fp: string;
   try {
-    rows = scoredRows.all();
+    const f = fingerprint.get();
+    fp = `${f?.n ?? 0}:${f?.maxAt ?? 0}`;
   } catch {
-    return out;
+    return {};
   }
+  if (baselineCache && baselineCache.fp === fp) return baselineCache.result;
 
+  const out: Record<string, Baseline> = {};
   const seen = new Map<string, Map<string, number>>();
-  for (const r of rows) {
-    const tally = seen.get(r.class) ?? new Map<string, number>();
+  try {
+    // All-or-nothing, like the single `.all()` this replaced: a scan that
+    // throws mid-way must not leave `out` holding a partial answer, so
+    // nothing is cached or returned until the whole scan has read clean.
+    waitedFor("understudy baselines scan", () => { for (const r of scoredRows.iterate()) {
+      const tally = seen.get(r.class) ?? new Map<string, number>();
 
-    // What the majority rule WOULD have said, knowing only what came before.
-    let modal = "";
-    let modalN = 0;
-    for (const [k, n] of tally) if (n > modalN) { modal = k; modalN = n; }
+      // What the majority rule WOULD have said, knowing only what came before.
+      let modal = "";
+      let modalN = 0;
+      for (const [k, n] of tally) if (n > modalN) { modal = k; modalN = n; }
 
-    const b = out[r.class] ?? { n: 0, hits: 0, raw: 0 };
-    // A baseline with no history yet has no answer, and an empty guess is not
-    // a hit. Counted in the denominator all the same, because the model was
-    // scored on this row too and the two have to share a denominator or the
-    // comparison is between different questions.
-    b.n += 1;
-    if (modal && modal === r.actual) b.hits += 1;
-    out[r.class] = b;
+      const b = out[r.class] ?? { n: 0, hits: 0, raw: 0 };
+      // A baseline with no history yet has no answer, and an empty guess is not
+      // a hit. Counted in the denominator all the same, because the model was
+      // scored on this row too and the two have to share a denominator or the
+      // comparison is between different questions.
+      b.n += 1;
+      if (modal && modal === r.actual) b.hits += 1;
+      out[r.class] = b;
 
-    tally.set(r.actual, (tally.get(r.actual) ?? 0) + 1);
-    seen.set(r.class, tally);
+      tally.set(r.actual, (tally.get(r.actual) ?? 0) + 1);
+      seen.set(r.class, tally);
+    } });
+  } catch {
+    return {};
   }
   for (const k of Object.keys(out)) {
     const b = out[k]!;
     b.raw = b.n ? b.hits / b.n : 0;
   }
+  baselineScans++;
+  baselineCache = { fp, result: out };
   return out;
 }
 

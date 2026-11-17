@@ -57,6 +57,26 @@ describe("lifeSigns", () => {
     db.insertEvent(ev("s-stop", "Stop", NOW - MIN, { agent_id: "a9" }) as any);
     expect(lantern.lifeSigns(["s-stop"], NOW).get("s-stop")?.lastStop).toBe(NOW - 3 * MIN);
   });
+
+  test("lastStop is the newest main-turn Stop per session, several sessions in one read, none for a session without one", () => {
+    for (const t of [9, 5, 7]) db.insertEvent(ev("s-many-a", "Stop", NOW - t * MIN) as any);
+    db.insertEvent(ev("s-many-a", "Stop", NOW - MIN, { agent_id: "a1" }) as any);
+    db.insertEvent(ev("s-many-b", "Stop", NOW - 2 * MIN, { agent_id: "" }) as any);
+    db.insertEvent(ev("s-many-c", "PreToolUse", NOW - MIN) as any);
+    const got = lantern.lifeSigns(["s-many-a", "s-many-b", "s-many-c"], NOW);
+    expect(got.get("s-many-a")?.lastStop).toBe(NOW - 5 * MIN);
+    expect(got.get("s-many-b")?.lastStop).toBe(NOW - 2 * MIN);
+    expect(got.get("s-many-c")?.lastStop).toBeUndefined();
+  });
+
+  /* The shape that stopped a 400-700 ms stall every 15 minutes: one index seek per session that stops at
+     the first main-turn Stop, never a read of every Stop row. A GROUP BY / MAX() plan has no subquery. */
+  test("lastStop reads one row per session, not every Stop (query plan keeps the correlated seek)", () => {
+    const plan = (db.db.query(`EXPLAIN QUERY PLAN ${lantern.LIFE_STOP_SQL}`).all(JSON.stringify(["s-stop"])) as { detail: string }[]).map((r) => r.detail).join(" | ");
+    expect(plan).toContain("CORRELATED SCALAR SUBQUERY");
+    expect(plan).toContain("USING INDEX idx_events_first_prompt");
+    expect(lantern.LIFE_STOP_SQL).not.toContain("GROUP BY");
+  });
 });
 
 describe("isStalled", () => {

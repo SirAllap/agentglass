@@ -1,7 +1,7 @@
 import type { BudgetStatus, GateRule } from "../../shared/types.ts";
 import { inScope, isWithin, readBudgets, readGateRules } from "./config.ts";
 import { mainWorktree } from "./worktree.ts";
-import { budgetStatus, overBudgetFor, overBudgetLine, sessionCwd } from "./budget.ts";
+import { budgetStatus, gateSpend, overBudgetFor, overBudgetLine, sessionCwd } from "./budget.ts";
 
 /**
  * The gate deciding a call by rule, without waiting for a person.
@@ -214,7 +214,7 @@ export function gateRuleFor(tool: string, cwd: string): RuleVerdict {
     // Only budgets on every model. The gate payload carries no model, so a
     // limit on one model that is over would otherwise stop the agents on all
     // the others in the project.
-    const over = rulesFor(cwd, rules) ? overBudgetFor(cwd, budgetStatus(readBudgets().filter((b) => !b.model))) : null;
+    const over = rulesFor(cwd, rules) ? overBudgetFor(cwd, budgetStatus(readBudgets().filter((b) => !b.model), undefined, gateSpend)) : null;
     return gateRuleVerdict(tool, cwd, rules, over);
   } catch (e) {
     console.warn("[gate] rules skipped:", e instanceof Error ? e.message : e);

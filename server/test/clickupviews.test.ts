@@ -163,6 +163,7 @@ describe("a folder on the sidebar", () => {
   });
 });
 
+
 describe("the statuses a filter can offer", () => {
   const st = (status: string, type: string, orderindex: number) => ({ status, type, orderindex });
   const cached = (id: string, statuses: ReturnType<typeof st>[]) => V.putCache({

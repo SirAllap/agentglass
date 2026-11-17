@@ -15,6 +15,7 @@ import { failed } from "./refused.ts";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { HookSetupStatus, HookSetupResult } from "../../shared/types.ts";
+import { spawnSyncAs } from "./loopwatch.ts";
 
 // event -> [matcher | null, attach transcript for token/cost]. Mirrors
 // install_hooks.py:EVENTS exactly; drift here would let a PR read one way in the
@@ -418,7 +419,7 @@ function gateScriptState(r: ReturnType<typeof readCfg>): { gateScriptMissing: bo
 
 /** `python3 --version` as "3.12", or null when the interpreter does not answer. Asked at most once a minute: the status is read often and a process spawn is not free. */
 let pyAsked: { at: number; cmd: string; v: string | null } | null = null;
-export function pythonVersion(cmd = hookPython(), now = Date.now(), run: (cmd: string) => string = (c) => { const r = Bun.spawnSync([c, "--version"], { stdout: "pipe", stderr: "pipe", timeout: 2000 }); return r.exitCode === 0 ? `${r.stdout}${r.stderr}` : ""; }): string | null {
+export function pythonVersion(cmd = hookPython(), now = Date.now(), run: (cmd: string) => string = (c) => { const r = spawnSyncAs("python version", [c, "--version"], { stdout: "pipe", stderr: "pipe", timeout: 2000 }); return r.exitCode === 0 ? `${r.stdout}${r.stderr}` : ""; }): string | null {
   if (pyAsked && pyAsked.cmd === cmd && now - pyAsked.at < 60_000) return pyAsked.v;
   let v: string | null = null;
   try { v = /Python (\d+\.\d+)/.exec(run(cmd))?.[1] ?? null; } catch { /* not on PATH: null says so */ }

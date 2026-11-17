@@ -11,7 +11,7 @@ const PW = "p";
 
 const okPlugin = {
   id: "someone.watcher",
-  source: { kind: "git", url: "https://example.com/someone/watcher.git", ref: "v1.0.0" },
+  source: { kind: "git", url: "https://example.com/someone/watcher.git", ref: "0123456789abcdef0123456789abcdef01234567" },
   description: "watches the gate",
   categories: ["monitoring"],
 };

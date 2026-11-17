@@ -54,8 +54,8 @@ afterEach(() => {
 });
 
 describe("what a name search answers with", () => {
-  it("names the folder, not only its contents", () => {
-    const r = findFiles(dir, "guest-checkout-v2");
+  it("names the folder, not only its contents", async () => {
+    const r = await findFiles(dir, "guest-checkout-v2");
     expect(r.ok).toBe(true);
     expect(r.dirs).toContain("docs/projects/guest-checkout-v2");
     // The files inside it still come back — that was never wrong, it was just
@@ -63,27 +63,27 @@ describe("what a name search answers with", () => {
     expect(r.files.some((f) => f.endsWith("risk-monitoring.md"))).toBe(true);
   });
 
-  it("finds a folder nested under another match", () => {
-    const r = findFiles(dir, "guest-checkout");
+  it("finds a folder nested under another match", async () => {
+    const r = await findFiles(dir, "guest-checkout");
     expect(r.dirs).toContain("docs/projects/guest-checkout-v2");
     expect(r.dirs).toContain("docs/projects/guest-checkout-v2/reports");
   });
 
-  it("keeps the two apart, because opening one is a different action", () => {
+  it("keeps the two apart, because opening one is a different action", async () => {
     // A file opens in the viewer; a directory moves the tree. One list of both
     // would make the caller guess which it had.
-    const r = findFiles(dir, "reports");
+    const r = await findFiles(dir, "reports");
     expect(r.dirs).toContain("docs/projects/guest-checkout-v2/reports");
     expect(r.files).not.toContain("docs/projects/guest-checkout-v2/reports");
   });
 
-  it("answers with nothing rather than everything for an empty query", () => {
-    const r = findFiles(dir, "  ");
+  it("answers with nothing rather than everything for an empty query", async () => {
+    const r = await findFiles(dir, "  ");
     expect(r.files).toEqual([]);
     expect(r.dirs).toEqual([]);
   });
 
-  it("matches the PATH, not just the file name", () => {
+  it("matches the PATH, not just the file name", async () => {
     /*
      * The defect this was reported for. `fd` compares the basename unless told
      * otherwise, so a query naming a FOLDER — the ordinary way anybody refers
@@ -91,29 +91,52 @@ describe("what a name search answers with", () => {
      * fallback answered correctly. Two backends, two behaviours, whichever
      * happened to be installed.
      */
-    const r = findFiles(dir, "guest-checkout-v2/reports");
+    const r = await findFiles(dir, "guest-checkout-v2/reports");
     expect(r.files).toContain("docs/projects/guest-checkout-v2/reports/2026-08-07.md");
   });
 
-  it("matches a path segment anywhere, not just the last one", () => {
+  it("matches a path segment anywhere, not just the last one", async () => {
     // `docs/projects/...` — the query names a folder near the root and the
     // things under it are what you are looking for.
-    const r = findFiles(dir, "projects");
+    const r = await findFiles(dir, "projects");
     expect(r.dirs).toContain("docs/projects");
   });
 });
 
 describe("the root is not part of what is searched", () => {
-  it("a query found only in the checkout's own folder name answers with nothing", () => {
+  it("a query found only in the checkout's own folder name answers with nothing", async () => {
     // fd matches the ABSOLUTE path, so the mkdtemp name of this very folder
     // matched every file in it: a search for the repository's own name, or for
     // `-H` when the random part happens to start with an H, listed everything.
     const own = basename(dir);
     for (const q of [own, own.slice(0, 5)]) {
-      const r = findFiles(dir, q);
+      const r = await findFiles(dir, q);
       expect(r.ok).toBe(true);
       expect(r.files, q).toEqual([]);
       expect(r.dirs, q).toEqual([]);
     }
+  });
+});
+
+// The same class as the search that froze the installed app for 20 s at a
+// time: a blocking spawn, once per pause in typing, on the server's one thread.
+const filesSource = await Bun.file(new URL("../src/files.ts", import.meta.url)).text();
+
+describe("a name search does not hold the server", () => {
+  it("runs beside the loop: a timer ticks while fd walks", async () => {
+    let ticks = 0;
+    const timer = setInterval(() => { ticks++; }, 1);
+    const r = await findFiles(dir, "guest-checkout-v2");
+    clearInterval(timer);
+    expect(r.ok).toBe(true);
+    if (r.via === "fd") expect(ticks).toBeGreaterThan(0);
+  });
+
+  it("has no blocking spawn left, and a newer search of the checkout ends the older", () => {
+    const at = filesSource.indexOf("export async function findFiles(");
+    expect(at).toBeGreaterThan(-1);
+    const code = filesSource.slice(at, filesSource.indexOf("\n}\n", at)).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+    expect(code).not.toContain("spawnSync");
+    expect(code).toContain("latest: `files-find:${at.root}`");
   });
 });

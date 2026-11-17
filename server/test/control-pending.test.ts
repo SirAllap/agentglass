@@ -67,7 +67,11 @@ describe("awaitControl / settleControl", () => {
 describe("parseReply", () => {
   test("keeps the closed shape and drops everything else a window might add", () => {
     expect(parseReply({ ok: true, applied: true, value: { a: 1 }, error: "x", extra: "no", rid: "y" })).toEqual({ ok: true, applied: true, value: { a: 1 }, error: "x" });
-    expect(parseReply({ ok: "yes", applied: 1 })).toEqual({ ok: false, applied: false });
+    expect(parseReply({ ok: "yes", applied: 1 })).toEqual({ ok: false });
+  });
+
+  test("a read that sends no applied gets none invented for it", () => {
+    expect(parseReply({ ok: true, value: { state: {} } })).toEqual({ ok: true, value: { state: {} } });
   });
 
   test("not an object is no reply", () => {

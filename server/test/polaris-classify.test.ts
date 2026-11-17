@@ -140,7 +140,7 @@ describe("presets", () => {
 
   test("Watch only", () => {
     expect(modes("watchOnly")).toEqual({
-      follow: "on", dock: "on", cards: "off", cleared: "quiet", labels: "on", approvals: "people", redsNamed: "name", signals: "off", diagnose: "off",
+      follow: "on", dock: "on", cards: "off", cleared: "quiet", labels: "on", approvals: "people", redsNamed: "name", signals: "on", diagnose: "off",
       relaunch: "off", rerunButton: "off", beacon: "off", match: "use", course: "off", cleanup: "off", startSession: "off", lookAgain: "on",
     });
     expect(PRESETS.watchOnly.doors.lookAgain).toMatchObject({ minutes: 30, steps: 1 });

@@ -68,7 +68,8 @@ for (const flavor of ["cloud", "datacenter"] as const) {
       try { rmSync(dir, { recursive: true, force: true }); } catch { /* fine */ }
     });
 
-    const headers = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
+    // The person speaks from the app window, so every call names the server's own origin (the machine token alone is every agent shell).
+    const headers = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json", get origin() { return base; } };
     const get = async (path: string) => {
       const r = await fetch(base + path, { headers });
       const text = await r.text();
@@ -112,7 +113,7 @@ for (const flavor of ["cloud", "datacenter"] as const) {
       const c = await get("/jira/view-choices");
       expect(c.body.ok).toBe(true);
       expect(c.body.boards.map((b: any) => b.id)).toEqual(["1", "2", "3", "4"]);
-      expect(c.body.filters.map((f: any) => f.id)).toEqual(["10020", "10030"]);
+      expect(c.body.filters.map((f: any) => f.id)).toEqual(["10020", "10030", "10050"]);
       expect(count(/^\/rest\/agile\/1\.0\/board$/)).toBe(1);
       expect((await get("/jira/view-choices?q=sprint")).body.boards.map((b: any) => b.id)).toEqual(["2", "3"]);
       const p = await get("/jira/project-choices");

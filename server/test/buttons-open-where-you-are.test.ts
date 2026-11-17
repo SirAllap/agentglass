@@ -58,6 +58,25 @@ function topLevelArgs(call: string): string[] {
   return out.map((a) => a.trim()).filter(Boolean);
 }
 
+/** Every `engineWindowOutcome`/`engineWindowRunning` call in a file, balanced to
+ *  its own closing paren — a regex stops at the first bracket it meets, and the
+ *  resume path has two calls on one line. */
+function openers(src: string): string[] {
+  const out: string[] = [];
+  const re = /engineWindow(?:Running|Outcome)\(/g;
+  for (let m = re.exec(src); m; m = re.exec(src)) {
+    /* The exported wrapper's own definition is not a call site. */
+    if (src.slice(Math.max(0, m.index - 40), m.index).includes("export async function")) continue;
+    let depth = 1, i = re.lastIndex;
+    for (; i < src.length && depth > 0; i++) {
+      if (src[i] === "(") depth++;
+      else if (src[i] === ")") depth--;
+    }
+    out.push(src.slice(m.index, i));
+  }
+  return out;
+}
+
 describe("who gets a session of their own", () => {
   test("every button a person presses opens in the session they are on", () => {
     /* Anything the machine opens for itself, by the window name it uses. */
@@ -146,12 +165,17 @@ test("selecting the new window is opt-in, and the clone does not opt in", () => 
 
 test("and the buttons a person presses DO opt in", () => {
   /* The other half of the same rule: a window opened because somebody pressed
-     something is a window they are waiting to see. */
+     something is a window they are waiting to see. The seventh argument is
+     `select`; the last one is `person`, which is false for an agent's tab now
+     that the door hands it a credential of its own. */
   const term = readFileSync(new URL("../src/terminal.ts", import.meta.url), "utf8");
-  const calls = [...term.matchAll(/engineWindow(?:Running|Outcome)\(([^;]*?)\)\s*[;.]/gs)];
+  const calls = openers(term);
   expect(calls.length, "the terminal's openers moved").toBeGreaterThan(3);
-  for (const m of calls) {
-    expect(m[1]!.trimEnd().endsWith("true"), `a person's window must select — ${m[1]!.slice(0, 50)}`).toBe(true);
+  for (const call of calls) {
+    /* Comments inside the argument list are stripped first: a comma in one of
+       them is not a separator. */
+    const args = topLevelArgs(call.replace(/^\s*\/\/.*$/gm, ""));
+    expect(args[6], `a person's window must select — ${call.slice(0, 60)}`).toBe("true");
   }
 
   /* The empty state's "Open a shell in <project>" has no pane, and so no

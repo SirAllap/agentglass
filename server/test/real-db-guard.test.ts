@@ -184,17 +184,40 @@ describe("schema generation", () => {
  * diff parser's "rename to"), and a key changed by editing a `CREATE TABLE` or
  * `CREATE UNIQUE INDEX` in place is not a statement this can see.
  */
-const FROZEN = 1;
+const FROZEN = 2;
 const FROZEN_KEYS = [
   "db.ts: DROP INDEX IF EXISTS idx_events_project",
   "db.ts: DROP INDEX IF EXISTS idx_events_cwd",
   "db.ts: DROP INDEX IF EXISTS idx_events_type_cov",
+  "db.ts: DROP INDEX IF EXISTS idx_events_source",
+  "db.ts: DROP INDEX IF EXISTS idx_events_type",
+  "db.ts: DROP INDEX IF EXISTS idx_events_model",
+  "flightPlanStore.ts: DROP INDEX IF EXISTS flight_plan_signoff_final",
 ];
 const ALLOWED: Record<string, number> = {
   // Plain lookup indexes, never unique, dropped before generation 1 existed.
   "db.ts: DROP INDEX IF EXISTS idx_events_project": 0,
   "db.ts: DROP INDEX IF EXISTS idx_events_cwd": 0,
   "db.ts: DROP INDEX IF EXISTS idx_events_type_cov": 0,
+  // Prefix-redundant lookup indexes (dbdiet); an older build only recreates them.
+  "db.ts: DROP INDEX IF EXISTS idx_events_source": 0,
+  "db.ts: DROP INDEX IF EXISTS idx_events_type": 0,
+  "db.ts: DROP INDEX IF EXISTS idx_events_model": 0,
+  // A UNIQUE index replaced by a wider one (adds base_sha). An older build creates the narrow one again
+  // and its inserts name it, so this is generation 2: that build stops with a sentence instead.
+  "flightPlanStore.ts: DROP INDEX IF EXISTS flight_plan_signoff_final": 2,
+};
+
+/*
+ * A table dropped and made again with the same definition in the same
+ * transaction is not a change an older build can see: it finds the table it
+ * expects, empty. Each entry names the statement that makes it again, and the
+ * test below reads that statement out of the source, on the same line.
+ */
+const REMADE: Record<string, string> = {
+  // emptyDeadEventsFts: nothing has written or searched it since the search
+  // moved off it; only the retention deletes still name it.
+  "db.ts: DROP TABLE events_fts": 'db.run("DROP TABLE events_fts"); db.run("CREATE VIRTUAL TABLE events_fts USING fts5(text)");',
 };
 
 function sourceFiles(dir: string): string[] {
@@ -214,7 +237,17 @@ describe("backward compatible schema", () => {
         if (m) found.push(`${rel}: ${m[0].trim()}`);
       }
     }
-    const unexplained = found.filter((f) => !(f in ALLOWED) || ALLOWED[f]! > SCHEMA_GENERATION);
+    const db = readFileSync(join(SRC, "db.ts"), "utf8");
+    // Bound to the line, not to the file: each remade statement appears once
+    // in all of server/src, and on the line that makes the table again.
+    for (const [key, again] of Object.entries(REMADE)) {
+      expect(found.filter((f) => f === key).length, `${key} appears more than once`).toBe(1);
+      const line = db.split("\n").find((l) => l.includes(key.slice("db.ts: ".length)));
+      expect(line, `${key} is not on the line that makes it again`).toContain(again);
+    }
+    // The definition it is made again with is the one the schema creates it with.
+    expect(db).toContain("CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(text);");
+    const unexplained = found.filter((f) => !(f in REMADE) && (!(f in ALLOWED) || ALLOWED[f]! > SCHEMA_GENERATION));
     expect(unexplained).toEqual([]);
     const sneaked = Object.keys(ALLOWED).filter((k) => ALLOWED[k]! <= FROZEN && !FROZEN_KEYS.includes(k));
     expect(sneaked).toEqual([]);

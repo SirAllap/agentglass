@@ -271,7 +271,11 @@ describe.skipIf(!PY)("a worker drives the browser with no --as at all", () => {
     await run("open", "https://example.test/");
     const r = await run("tabs");
     expect(r.code).toBe(0);
-    expect(r.out).toContain("t7-orbit");
+    /* Its first mint, from the flow above, is still its page. Not `t7-orbit`:
+       the flow closed that one, and only the stub's list keeps the row. An
+       `open` reply used to fold in the whole window, so the relay re-learned
+       the closed tab from it; it now lists only the made tab's container. */
+    expect(r.out).toContain(mintedIds[0]!);
     expect(r.out).not.toContain("t1-personal");
     expect(r.out).not.toContain("t4-other");
   }, 30_000);

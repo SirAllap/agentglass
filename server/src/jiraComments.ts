@@ -90,13 +90,19 @@ export function toDetail(issue: unknown, task: ProviderTask, v: 2 | 3, me?: stri
 
 export interface JiraDetail { detail: TaskDetail; more: number }
 
-/** One card with its words. One request, plus the priority list when it is not remembered. */
-export async function readDetail(creds: JiraCreds, key: string, o: { fresh?: boolean; /** Ask which comment answers which; the read-back after a comment skips it. */ threads?: boolean } = {}): Promise<JiraResult<JiraDetail>> {
+/** One card with its words. One request, plus the priority list when it is not remembered; a read carrying the caller's abort is a brief's and asks for the card alone. */
+export async function readDetail(creds: JiraCreds, key: string, o: { fresh?: boolean; /** Ask which comment answers which; the read-back after a comment skips it. */ threads?: boolean; /** The caller's own abort: a read it gave up on stops asking. */ signal?: AbortSignal } = {}): Promise<JiraResult<JiraDetail>> {
   if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
   const v = apiOf(creds);
-  // The site's own sprint and points fields, learned once and remembered. Where they cannot be read the card comes without them.
-  const found = await siteFields(creds);
-  const ids = found.ok && found.data ? found.data : null;
+  /*
+   * A read carrying the caller's abort is a brief's: it needs the card's own
+   * words and nothing a pane adds. The site's field ids, the priority list and
+   * the edit screen's fields are each one more request the deadline could leave
+   * in the air, and a 429 on one of them would set the app-wide hold for a read
+   * nobody is waiting on.
+   */
+  const found = o.signal ? null : await siteFields(creds);
+  const ids = found && found.ok && found.data ? found.data : null;
   const ask = { sprint: ids?.sprint, points: cardPointsField(ids) };
   const more = [ids?.start, ids?.flag, ids?.team].filter((x): x is string => !!x);
   const fields = [
@@ -106,20 +112,20 @@ export async function readDetail(creds: JiraCreds, key: string, o: { fresh?: boo
   ].join(",");
   // `editmeta` says which Details this card's edit screen offers; it rides on the same read.
   const [r, base] = await Promise.all([
-    jiraCall<unknown>(creds, `/rest/api/${v}/issue/${encodeURIComponent(key)}?fields=${fields}&expand=editmeta`, { fresh: o.fresh }),
-    taskContext(creds),
+    jiraCall<unknown>(creds, `/rest/api/${v}/issue/${encodeURIComponent(key)}?fields=${fields}&expand=editmeta`, { fresh: o.fresh, signal: o.signal }),
+    o.signal ? Promise.resolve<TaskContext>({ site: creds.site, priorities: null }) : taskContext(creds),
   ]);
   if (!r.ok) return { ...r, data: undefined };
   const cx = { ...base, fields: ask };
   const task = toTask(r.data, cx);
   if (!task) return { ok: false, error: "Jira answered with something that is not a card" };
   const read = toDetail(r.data, task, v, cx.me, cx, ids ?? undefined);
-  if (v === 3 && o.threads !== false && read.detail.comments.length) await threadParents(creds, key, read.detail.comments);
+  if (v === 3 && o.threads !== false && read.detail.comments.length) await threadParents(creds, key, read.detail.comments, o.signal);
   // What this card lets a person change is only said while writing to Jira is on: with it off there is no control to draw.
   const offered = offeredFields(r.data);
   rememberOffered(key, offered);
   rememberFiles(creds, key, isObj(r.data) && isObj(r.data.fields) ? r.data.fields : {}, cx.me ?? "");
-  if (jiraWriteEnabled()) {
+  if (jiraWriteEnabled() && !o.signal) {
     const list = await priorities(creds);
     const edit = editOf(offered, { start: ids?.start, flag: ids?.flag }, list.ok && list.data ? list.data : null, v, isObj(r.data) && isObj(r.data.fields) ? r.data.fields : undefined);
     if (edit) read.detail.edit = edit;
@@ -132,8 +138,8 @@ export async function readDetail(creds: JiraCreds, key: string, o: { fresh?: boo
  * site; only the comment list does), so a card with comments costs one more request to draw its threads. It asks for as
  * many as the issue read carried, in the same order, and a failure leaves the comments flat rather than failing the card.
  */
-async function threadParents(creds: JiraCreds, key: string, rows: TaskDetail["comments"]): Promise<void> {
-  const r = await jiraCall<unknown>(creds, `/rest/api/3/issue/${encodeURIComponent(key)}/comment?orderBy=created&maxResults=${Math.min(rows.length, 100)}`);
+async function threadParents(creds: JiraCreds, key: string, rows: TaskDetail["comments"], signal?: AbortSignal): Promise<void> {
+  const r = await jiraCall<unknown>(creds, `/rest/api/3/issue/${encodeURIComponent(key)}/comment?orderBy=created&maxResults=${Math.min(rows.length, 100)}`, { signal });
   const list = r.ok && isObj(r.data) && Array.isArray(r.data.comments) ? r.data.comments : [];
   const parent = new Map<string, string>();
   // `id` is a string and `parentId` a number on a real site; either is read as text.

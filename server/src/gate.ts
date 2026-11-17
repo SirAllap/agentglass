@@ -18,6 +18,8 @@ import { recordGate, recordRuleGate, resolveGateRow, undecidedGates, getGate } f
 // db.ts is already an edge of this module, so this adds no load-time weight —
 // the thing submitGate's comment below is careful about.
 import { isMachineActor, MACHINE_ACTOR } from "./actions.ts";
+import { envLimit } from "./config.ts";
+import { setTimeoutAs } from "./loopwatch.ts";
 export type GateDecision = "allow" | "deny";
 export type GateOutcome = { decision: GateDecision; reason: string };
 
@@ -39,7 +41,7 @@ interface Pending extends PendingGate {
 // blocks an agent. Set this to invert that — a tool call that no human decides
 // within the timeout is DENIED. Opt-in, because it means a slow or absent human
 // stops the fleet; that is the point for security-sensitive use.
-const FAIL_CLOSED = process.env.AGENTGLASS_GATE_FAILCLOSED === "1";
+const FAIL_CLOSED = envLimit("AGENTGLASS_GATE_FAILCLOSED") === "1";
 /** Exported so the route wording the budget reason says the same thing this
  *  module will actually do when nobody answers. */
 export const gateFailClosed = (): boolean => FAIL_CLOSED;
@@ -59,7 +61,7 @@ export const gateFailClosed = (): boolean => FAIL_CLOSED;
 // two different numbers means the wait somebody configured is not the wait they
 // get. server/test/gate-defaults.test.ts reads the Python file and fails if the
 // two part company.
-export const GATE_DEFAULT_MS = (Number(process.env.AGENTGLASS_GATE_TIMEOUT) || 300) * 1000;
+export const GATE_DEFAULT_MS = (Number(envLimit("AGENTGLASS_GATE_TIMEOUT")) || 300) * 1000;
 
 // The clamp is a DoS guard (each waiter pins a held connection + timer), but a
 // hard 120s silently defeated the documented AGENTGLASS_GATE_TIMEOUT knob: an
@@ -153,7 +155,7 @@ function finish(
 /** Arm the expiry timer for a pending request. Anchored to the *original*
  *  deadline, so a reconnect (or a restart) never extends the window. */
 function arm(id: string, expires: number, failClosed?: boolean): ReturnType<typeof setTimeout> {
-  const t = setTimeout(() => finish(id, timeoutOutcome(failClosed), "timeout"), Math.max(0, expires - Date.now()));
+  const t = setTimeoutAs("gate timeout", () => finish(id, timeoutOutcome(failClosed), "timeout"), Math.max(0, expires - Date.now()));
   // Don't let a gate waiting on you keep the process alive on its own.
   (t as any).unref?.();
   return t;
@@ -239,7 +241,7 @@ export function submitGate(
       w.reminders = ([1, 2] as const).map((n) => {
         // A plain comparison, not Math.min: it is the bound the analyser reads as one.
         const at = Math.floor((wait * n) / 3);
-        const t = setTimeout(() => {
+        const t = setTimeoutAs("gate sweep timer", () => {
           if (!waiters.has(id)) return;
           pushGate(where, tool_name, `Still waiting (${n} of 2) · ${line}`, pane ?? undefined);
           try { askAgain(n); } catch { /* a callback that throws must not touch the hold */ }

@@ -415,6 +415,57 @@ describe("adding", () => {
   });
 });
 
+describe("set many: the board's bulk Tell me when", () => {
+  const types = (n: number) => W.listWatches().watches.filter((w) => w.number === n && w.active).map((w) => w.rule.type).sort();
+  it("each PR ends with exactly the chosen card rules, and prev is what each had", () => {
+    add({ type: "ci-fail" }, { number: 8 });
+    add({ type: "comment" }, { number: 9 });
+    const r = W.setManyWatches("acme/orbit", "/x/orbit", [7, 8, 9].map((number) => ({ number, title: `t${number}`, rules: [{ type: "ci-pass" }] })));
+    expect(r.ok).toBe(true);
+    expect([7, 8, 9].map(types)).toEqual([["ci-pass"], ["ci-pass"], ["ci-pass"]]);
+    expect(r.prev.map((p) => p.rules.map((x) => x.type))).toEqual([[], ["ci-fail"], ["comment"]]);
+  });
+  it("sending prev back undoes exactly what was set", () => {
+    add({ type: "ci-pass", ignore: ["lint"] }, { number: 8 });
+    const r = W.setManyWatches("acme/orbit", "/x/orbit", [7, 8].map((number) => ({ number, title: "t", rules: [{ type: "comment" }] })));
+    W.setManyWatches("acme/orbit", "/x/orbit", r.prev);
+    expect(types(7)).toEqual([]);
+    expect(W.listWatches().watches.filter((w) => w.number === 8).map((w) => w.rule)).toEqual([{ type: "ci-pass", ignore: ["lint"] }]);
+  });
+  it("an Undo with expect skips a PR changed since Apply, and names it", () => {
+    const r = W.setManyWatches("acme/orbit", "/x/orbit", [7, 8].map((number) => ({ number, title: "t", rules: [{ type: "ci-pass" }] })));
+    W.setManyWatches("acme/orbit", "/x/orbit", [{ number: 8, title: "t", rules: [{ type: "ci-pass" }, { type: "comment" }] }]);
+    const u = W.setManyWatches("acme/orbit", "/x/orbit", r.prev.map((p) => ({ ...p, expect: [{ type: "ci-pass" }] })));
+    expect(u.ok).toBe(true);
+    expect(u.skipped).toEqual([8]);
+    expect(types(7)).toEqual([]);
+    expect(types(8)).toEqual(["ci-pass", "comment"]);
+  });
+  it("a partial failure names every failed PR, not only the first", () => {
+    for (const number of [7, 9]) for (let i = 0; i < 20; i++) add({ type: "check", match: `c${i}`, on: "fail" }, { number });
+    const r = W.setManyWatches("acme/orbit", "/x/orbit", [7, 8, 9].map((number) => ({ number, title: "t", rules: [{ type: "ci-pass" }] })));
+    expect(r.ok).toBe(false);
+    expect(r.failed).toEqual([7, 9]);
+    expect(r.error).toContain("#7");
+    expect(r.error).toContain("#9");
+    expect(types(8)).toEqual(["ci-pass"]);
+  });
+  it("a rule kept keeps its ignore list, and a per-check rule is never touched", () => {
+    add({ type: "ci-pass", ignore: ["lint"] });
+    add({ type: "check", match: "evals", on: "fail" });
+    W.setManyWatches("acme/orbit", "/x/orbit", [{ number: 7, title: "t", rules: [{ type: "ci-pass" }] }]);
+    expect(W.listWatches().watches.map((w) => w.rule).sort((a, b) => a.type.localeCompare(b.type)))
+      .toEqual([{ type: "check", match: "evals", on: "fail" }, { type: "ci-pass", ignore: ["lint"] }]);
+  });
+  it("no rules removes the card rules; a bad list is refused", () => {
+    add({ type: "ci-pass" });
+    expect(W.setManyWatches("acme/orbit", "/x/orbit", [{ number: 7, title: "t", rules: [] }]).ok).toBe(true);
+    expect(types(7)).toEqual([]);
+    expect(W.setManyWatches("acme/orbit", "/x/orbit", []).ok).toBe(false);
+    expect(W.setManyWatches("acme/orbit", "/x/orbit", [{ number: -1, title: "", rules: [] }]).ok).toBe(false);
+  });
+});
+
 describe("presets", () => {
   it("apply puts the saved rules on a PR in one call, and is idempotent", () => {
     W.setPreset("acme/orbit", [{ type: "ci-pass" }, { type: "check", match: "evals", on: "fail" }, { type: "bogus" }], false);
@@ -724,5 +775,19 @@ describe("the alert behind a fire", () => {
     W.onTalkSeen("acme/orbit", 7, "t", [{ at: new Date(t + 60_000).toISOString(), who: "ana", kind: "comment" } as PrTalk]);
     W.onTalkSeen("acme/orbit", 7, "t", [{ at: new Date(t + 120_000).toISOString(), who: "bo", kind: "comment" } as PrTalk]);
     expect(A.openAsked()).toHaveLength(2);
+  });
+});
+
+describe("wakeDelayMs: the watch sleeps to the next due read", () => {
+  it("nothing watched sleeps for the safety tick", async () => {
+    const W = await import("../src/prNotifyWatch.ts");
+    expect(W.wakeDelayMs(1_000, [], new Map())).toBe(W.IDLE_WAKE_MS);
+  });
+  it("sleeps until the earliest read, never under 1 s or over a minute; an unread PR is due now", async () => {
+    const W = await import("../src/prNotifyWatch.ts");
+    const next = new Map([["acme/orbit#1", { next: 31_000 }], ["acme/orbit#2", { next: 400_000 }]]);
+    expect(W.wakeDelayMs(1_000, ["acme/orbit#1", "acme/orbit#2"], next)).toBe(30_000);
+    expect(W.wakeDelayMs(1_000, ["acme/orbit#2"], next)).toBe(60_000);
+    expect(W.wakeDelayMs(1_000, ["acme/orbit#1", "acme/orbit#3"], next)).toBe(1_000);
   });
 });

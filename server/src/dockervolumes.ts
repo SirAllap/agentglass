@@ -13,16 +13,16 @@
  * The fast-lane lock (test/docker-fast-lane.test.ts) exists to keep it that way.
  */
 import { dockerBin } from "./docker.ts";
+import { parseDockerDf } from "./diskclean.ts";
 
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 
 async function run(args: string[], timeoutMs: number): Promise<{ code: number; stdout: string; stderr: string }> {
   try {
-    const p = Bun.spawn([dockerBin() ?? "docker", ...args], { stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
-    const [stdout, stderr, code] = await Promise.all([
-      new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited,
-    ]);
-    return { code: code ?? 1, stdout, stderr };
+    // Started by the spawn broker (broker/brokerRun.ts), not a fork of this server.
+    const p = await runChild([dockerBin() ?? "docker", ...args], { timeoutMs });
+    if (p.error !== undefined && p.error !== "lost") return { code: 1, stdout: "", stderr: p.error };
+    return { code: p.code ?? 1, stdout: p.stdout, stderr: p.stderr };
   } catch (e) {
     return { code: 1, stdout: "", stderr: String(e) };
   }
@@ -31,11 +31,28 @@ async function run(args: string[], timeoutMs: number): Promise<{ code: number; s
 /* Formatting and parsing live in shared/dockerSize.ts: the panel prints and
    reads these too, and two roundings that disagree make one of them look wrong. */
 import { parseSize } from "../../shared/dockerSize.ts";
+import { runChild } from "./broker/brokerRun.ts";
 export { humanSize, parseSize } from "../../shared/dockerSize.ts";
 
 export interface VolumeUsage { name: string; bytes: number | null; links: number }
+export type ReclaimableBy = { images: number; containers: number; volumes: number; buildCache: number };
+
+/** Reclaimable bytes per kind out of one `docker system df` read (no extra call). */
+export function reclaimableByKind(stdout: string): ReclaimableBy {
+  const df = parseDockerDf(stdout);
+  return {
+    images: df.Images?.reclaimable ?? 0, containers: df.Containers?.reclaimable ?? 0,
+    volumes: df["Local Volumes"]?.reclaimable ?? 0, buildCache: df["Build Cache"]?.reclaimable ?? 0,
+  };
+}
+
 export interface DiskUsage {
   images: number; containers: number; volumes: number; buildCache: number; reclaimable: number;
+  /** Images only, from the same non-verbose call: unique IDs and their own
+   *  reclaimable, never the per-tag row count a naive sum would give. */
+  imageCount: number; imageReclaimable: number;
+  /** Docker's own reclaimable for each kind, from the same non-verbose call. */
+  reclaimableBy: ReclaimableBy;
   /** Per-volume, from the same call — asking twice would double the cost. */
   perVolume: VolumeUsage[];
   /** Images with no repository tag, and images whose tag names a worktree that
@@ -43,7 +60,10 @@ export interface DiskUsage {
   /** `bytes` is docker's `Size`, which counts shared layers once per image —
    *  useful for "how big is this image", useless for "how much would I get
    *  back". `unique` is what deleting it actually frees. */
-  perImage: { id: string; repository: string; tag: string; bytes: number | null; unique: number | null; containers: number }[];
+  /** `created` is Unix seconds when docker's `-v` row gave one, parseable and
+   *  finite; null otherwise. 0, negative or unparseable are never "fixed up"
+   *  here — the reader decides what "it did not say" looks like. */
+  perImage: { id: string; repository: string; tag: string; bytes: number | null; unique: number | null; created: number | null; containers: number }[];
 }
 
 /**
@@ -102,20 +122,27 @@ export async function diskUsage(): Promise<DiskUsage | null> {
 
   const images = Array.isArray(j.Images) ? j.Images : [];
   const volumes = Array.isArray(j.Volumes) ? j.Volumes : [];
+  const imagesDf = parseDockerDf(totalsRes.code === 0 ? totalsRes.stdout : "").Images;
 
   return {
     ...parseTotals(totalsRes.code === 0 ? totalsRes.stdout : ""),
+    imageCount: imagesDf?.total ?? 0,
+    imageReclaimable: imagesDf?.reclaimable ?? 0,
+    reclaimableBy: reclaimableByKind(totalsRes.code === 0 ? totalsRes.stdout : ""),
     perVolume: volumes.map((v: any) => ({
       name: String(v?.Name ?? ""),
       bytes: parseSize(v?.Size),
       links: Number(v?.Links ?? 0) || 0,
     })).filter((v: VolumeUsage) => v.name),
     perImage: images.map((i: any) => ({
-      id: String(i?.ID ?? "").slice(0, 12),
+      // `system df -v` marshals the raw API struct: its ID is the full
+      // "sha256:<64 hex>", while `docker images` rows carry the 12-hex short id.
+      id: String(i?.ID ?? "").replace(/^sha256:/, "").slice(0, 12),
       repository: String(i?.Repository ?? ""),
       tag: String(i?.Tag ?? ""),
       bytes: parseSize(i?.Size),
       unique: parseSize(i?.UniqueSize),
+      created: Number.isFinite(Number(i?.Created)) && i?.Created != null ? Number(i.Created) : null,
       containers: Number(i?.Containers ?? 0) || 0,
     })).filter((i: { id: string }) => i.id),
   };

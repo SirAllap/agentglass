@@ -52,7 +52,7 @@ const quoted = (v: string): string => JSON.stringify(v.replace(/[\u0000-\u001f\u
  */
 export function controlSwitch(env: Record<string, string | undefined> = process.env): ControlSwitch {
   const warnings: string[] = [];
-  const rawLevel = env.AGENTGLASS_CONTROL_LEVEL;
+  const rawLevel = envLimit("AGENTGLASS_CONTROL_LEVEL", env);
   let asked: UiLevel = DEFAULT_CONTROL_LEVEL;
   if (rawLevel !== undefined) {
     const t = rawLevel.trim();
@@ -63,7 +63,7 @@ export function controlSwitch(env: Record<string, string | undefined> = process.
     }
   }
   let readonly = false;
-  const rawRo = env.AGENTGLASS_CONTROL_READONLY;
+  const rawRo = envLimit("AGENTGLASS_CONTROL_READONLY", env);
   if (rawRo !== undefined) {
     const t = rawRo.trim().toLowerCase();
     if (["1", "true", "yes", "on"].includes(t)) readonly = true;
@@ -191,6 +191,8 @@ export function changedSetting(cmd: ControlCmd): string | null {
 
 import { stripSecrets } from "../../shared/scrub.ts";
 import { UI_REPLY_MAX_BYTES, type UiReply } from "../../shared/uiActions.ts";
+import { envLimit } from "./config.ts";
+import { setTimeoutAs } from "./loopwatch.ts";
 
 /** How long a command waits for a window. A read is a few store lookups, an open
  *  is one setState; five seconds is a window that is gone or frozen. */
@@ -212,7 +214,7 @@ export const nextControlRid = (): string => `c${++seq}-${crypto.randomUUID()}`;
  */
 export function awaitControl(rid: string, send: () => void, timeoutMs = CONTROL_REPLY_MS): Promise<UiReply> {
   return new Promise<UiReply>((resolve) => {
-    const timer = setTimeout(() => {
+    const timer = setTimeoutAs("control timer", () => {
       parked.delete(rid);
       resolve({ ok: false, applied: false, error: CONTROL_TIMEOUT_ERROR });
     }, timeoutMs);
@@ -236,11 +238,13 @@ function scrub(v: unknown, depth = 0): unknown {
   return o;
 }
 
-/** What a window posted, as a reply: a closed shape, bounded, scrubbed. */
+/** What a window posted, as a reply: a closed shape, bounded, scrubbed. A read
+ *  sends no `applied` (it had nothing to apply), and none is invented for it. */
 export function parseReply(b: unknown): UiReply | null {
   if (!b || typeof b !== "object" || Array.isArray(b)) return null;
   const r = b as Record<string, unknown>;
-  const reply: UiReply = { ok: r.ok === true, applied: r.applied === true };
+  const reply: UiReply = { ok: r.ok === true };
+  if (typeof r.applied === "boolean") reply.applied = r.applied;
   if (r.queued === true && reply.ok && !reply.applied) reply.queued = true;
   if (typeof r.error === "string") reply.error = stripSecrets(r.error).slice(0, 300);
   if (r.value !== undefined) {

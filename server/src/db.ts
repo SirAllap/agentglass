@@ -1,3 +1,11 @@
+// First, so that the database is never opened in a helper role. The entry point
+// imports these gates before db.ts, but bun 1.3.14 evaluates a sibling import
+// while an earlier one's top-level await is still pending, so the relay opened
+// the file. A module that imports a gate cannot run until the gate settles,
+// and in the relay, broker and reader roles it never does.
+import "./relay/gate.ts";
+import "./broker/gate.ts";
+import "./reader/gate.ts";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, chmodSync, readFileSync, copyFileSync, linkSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, hostname, tmpdir } from "node:os";
@@ -18,10 +26,14 @@ import type {
 } from "../../shared/types.ts";
 import type { NormalizedEvent } from "./ingest.ts";
 import { costUsd, modelLabel, hasPrice, equivalentTokens } from "./pricing.ts";
+import { resumedAs, setIntervalAs, setTimeoutAs, spawnSyncAs, waitedFor } from "./loopwatch.ts";
+import { DAY_TOTALS, READS, dailyUsageRead, serverZone, skillUsageRead, statsSummaryRead, type DailyCtx, type ReadName, type ReadVia, type StatsCtx } from "./reader/reads.ts";
 import { providerOf as sharedProviderOf, UNKNOWN as UNKNOWN_MODEL } from "../../shared/models.ts";
+import { changesMemo, changesAffectedBy } from "./changesMemo.ts";
 import { workspaceRoots, scopeKey, scopeRoots, isWithin, sessionInScope, type Scope } from "./config.ts";
-import { RETENTION_DAYS, RETENTION_FROM_ENV, setRetentionDays } from "./retention.ts";
+import { RETENTION_DAYS, RETENTION_FROM_ENV, setRetentionDays, UNDERSTUDY_STUB_DAYS, setLedgerStubDays } from "./retention.ts";
 import { changeRisks, sessionRisks, SESSION_RISK_CAP } from "../../shared/riskFlags.ts";
+import { COLD_AFTER_MS, dropRepeatedIterations, RESPONSE_CAP, sameInput, slimColdEvent, slimForInsert, slimToolInput, slimToolResponse } from "./payloadslim.ts";
 
 /**
  * Where the database lives.
@@ -303,7 +315,19 @@ db.exec("PRAGMA busy_timeout = 5000;");
  * `real-db-guard.test.ts` lists every statement in the source that an older
  * build could not survive, and fails on one that arrives without a bump.
  */
-export const SCHEMA_GENERATION = 1;
+export const SCHEMA_GENERATION = 2;
+/*
+ * auto_vacuum = INCREMENTAL, so retention can give pages back in small steps
+ * (see shrinkFreePages) instead of the file keeping its high-water mark for ever.
+ *
+ * Before journal_mode AND before the schema_generation table below, on purpose: that table is the first page written, and the
+ * mode sticks only if nothing has been written yet (measured: a fresh fixture file read 0 with this after it).
+ * Before journal_mode too: on a fresh file the mode sticks only if it is
+ * set before the first page is written (checked: set before WAL it reads back 2,
+ * after it reads back 0). On an existing file this does nothing by itself — the
+ * mode changes only at the next VACUUM, which reclaimFreePages runs once.
+ */
+db.exec("PRAGMA auto_vacuum = INCREMENTAL;");
 {
   const has = db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_generation'").get();
   const found = has
@@ -334,6 +358,49 @@ export const SCHEMA_GENERATION = 1;
 }
 
 db.exec("PRAGMA journal_mode = WAL;");
+/*
+ * synchronous = NORMAL: in WAL mode a commit no longer fsyncs the log.
+ *
+ * The default, FULL, fsyncs the WAL at every commit, on the event loop, and on
+ * btrfs an fsync can wait for a whole transaction commit. Measured on the
+ * installed app, 15 h of /proc wchan samples of the server's main thread: during
+ * terminal freezes of 5-31 s it sat in state D in write_all_supers (the btrfs
+ * commit behind an fsync) in 11 samples and in folio_wait_bit (a page read) in
+ * 22, with CPU at 100-300 ms and no memory pressure. WAL + NORMAL cannot corrupt
+ * the database; a power cut can lose the last commits, and checkpoints still
+ * fsync. History and cockpit state are not worth a frozen terminal.
+ */
+db.exec("PRAGMA synchronous = NORMAL;");
+/*
+ * The price of NORMAL is that a power cut or an OS crash can lose the last few
+ * commits. Most rows are rebuildable (events are re-read from transcripts; PR,
+ * CI, ClickUp and Jira state are caches). A few are a person's decision or a
+ * credential that nothing can rebuild: a gate answer, a Go, a sign-off, an
+ * agent rule, a seat token. Those writes go through durably(), which makes the
+ * commit fsync before it returns. They are rare and paced by a person, so the
+ * wait is affordable there and nowhere else.
+ *
+ * PRAGMA synchronous is a no-op inside an open transaction, so durably() has to
+ * wrap the call that opens the transaction, never a statement inside one; called
+ * inside one it just runs, and that write stays at NORMAL. A depth counter keeps
+ * a nested call from putting NORMAL back under the outer one.
+ */
+let durableDepth = 0;
+let warnedInTransaction = false;
+// `run` must be synchronous: FULL goes back to NORMAL when it returns, so a
+// Promise's write would land after that. `T extends Promise` is rejected.
+export function durably<T>(run: () => T extends PromiseLike<unknown> ? never : T): T {
+  if (durableDepth > 0) return run();
+  if (db.inTransaction) {
+    // Said once: a caller that lands here is a durable write left at NORMAL.
+    if (!warnedInTransaction) { warnedInTransaction = true; console.warn("durably() called inside a transaction: this write stays at synchronous = NORMAL"); }
+    return run();
+  }
+  durableDepth++;
+  db.exec("PRAGMA synchronous = FULL;");
+  try { return run(); }
+  finally { durableDepth--; db.exec("PRAGMA synchronous = NORMAL;"); }
+}
 /*
  * Cap the WAL file, which SQLite otherwise never shrinks.
  *
@@ -374,9 +441,7 @@ CREATE TABLE IF NOT EXISTS events (
   payload TEXT NOT NULL DEFAULT '{}',
   timestamp INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_events_source ON events(source_app);
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
-CREATE INDEX IF NOT EXISTS idx_events_type ON events(hook_event_type);
 CREATE INDEX IF NOT EXISTS idx_events_tool ON events(tool_name);
 CREATE INDEX IF NOT EXISTS idx_events_tooluse ON events(tool_use_id);
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp);
@@ -481,10 +546,8 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_events_project_ts ON events(project_path
 // /changes; and, as above, timestamp folded in keeps the scan inside the window.
 db.exec("DROP INDEX IF EXISTS idx_events_cwd");
 db.exec("CREATE INDEX IF NOT EXISTS idx_events_cwd_ts ON events(cwd_path, timestamp)");
-// `model_name` had none, so the filter dropdown's third query — SELECT DISTINCT
-// over it — was the one full scan with a temp B-tree in that endpoint. Cheap
-// index, and the covering scan it enables is what the other two already had.
-db.exec("CREATE INDEX IF NOT EXISTS idx_events_model ON events(model_name)");
+// `model_name`: SELECT DISTINCT over it is served by idx_events_model_cov below,
+// which leads with it. See the DROP block after idx_events_type_cov_scoped.
 
 // Provider per EVENT, not per session. `sessions.provider` is one column set
 // first-non-null-wins, so a session that ran Opus then GPT reported all of it
@@ -518,10 +581,20 @@ try {
 } catch { /* already present */ }
 db.exec("CREATE INDEX IF NOT EXISTS idx_events_pre_open ON events(session_id, tool_name, paired, id)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_events_provider_ts ON events(provider, timestamp)");
+// The per-agent "last seen" walk in agentprobe.ts (distinct source_app, then its newest timestamp) is served by
+// idx_events_app_cov below: (source_app, timestamp) is its leftmost prefix, so idx_events_app_ts is redundant. It is NOT
+// dropped: a DROP INDEX would need a SCHEMA_GENERATION bump and lock older builds out. Named ceiling: it stays on installed
+// DBs and costs one index write per event.
 // Finding a session's FIRST prompt: the list asks for up to two hundred of
 // them at once, and without this it is a scan of every UserPromptSubmit on the
 // machine per refresh. See firstPrompts().
 db.exec("CREATE INDEX IF NOT EXISTS idx_events_first_prompt ON events(hook_event_type, session_id, timestamp)");
+// GET /agents/board counts each drawn session's last hour (seatpulse.ts) on every poll. With only
+// idx_events_session the plan read EVERY event of each session to test its timestamp: measured on a
+// fake DB of 430k events over 20 sessions (30k in the last hour), 175 ms of blocked loop per poll,
+// and it grows with history, not with the hour. With (session_id, timestamp) it is a covering range
+// seek: 5 ms, same rows. idx_events_session is now redundant but, as above, is not dropped.
+db.exec("CREATE INDEX IF NOT EXISTS idx_events_session_ts ON events(session_id, timestamp)");
 
 // Covering indexes for /stats — the endpoint that freezes the terminal.
 //
@@ -588,6 +661,100 @@ db.exec("DROP INDEX IF EXISTS idx_events_type_cov");
 db.exec(`CREATE INDEX IF NOT EXISTS idx_events_type_cov_scoped ON events(
   hook_event_type, timestamp, project_path, cwd_path, tool_name, duration_ms, is_error)`); // by_type + tool-latency durations
 
+// Three single-column indexes are the leftmost prefix of a wider one above, so
+// every query they served is served by that one, and each cost a write on every
+// inserted event. EXPLAIN QUERY PLAN on a 275,315-page copy of a real cockpit
+// (86,099 events, 1.07 GB), with the three dropped:
+//   idx_events_source (1.5 MB) -> idx_events_app_cov   (source_app = ? [AND timestamp ...], DISTINCT scan)
+//   idx_events_type   (1.7 MB) -> idx_events_type_cov_scoped / idx_events_first_prompt (hook_event_type = ?)
+//   idx_events_model  (1.5 MB) -> idx_events_model_cov (model_name = ?, DISTINCT scan)
+// Every plan stays an index-only search; only the DISTINCT scans read the wider
+// leaves (about 4x the pages of a few MB). Dropping them took 0.7 s on that copy
+// and ran once, at module load before the server serves; later boots find
+// nothing to drop. 4.7 MB of 1,075 MB: the saving that matters is three fewer
+// b-trees to update per insert, not the file size.
+// NOT dropped, measured: idx_events_ts (without it `ORDER BY timestamp DESC, id
+// DESC LIMIT n` falls to idx_events_stats and adds a TEMP B-TREE for the id
+// term) and idx_events_session (session lookups such as the boot backfill's EXISTS).
+db.exec("DROP INDEX IF EXISTS idx_events_source");
+db.exec("DROP INDEX IF EXISTS idx_events_type");
+db.exec("DROP INDEX IF EXISTS idx_events_model");
+
+/** Empty the old full-text index of events, once. True when there was something to empty. */
+export function emptyDeadEventsFts(): boolean {
+  try {
+    // Rows, or index segments left behind by rows long deleted (an empty fts5 table keeps two records).
+    const rows = !!db.query("SELECT 1 FROM events_fts LIMIT 1").get();
+    const segments = (db.query("SELECT COUNT(*) AS n FROM events_fts_data").get() as { n: number }).n;
+    if (!rows && segments <= 2) return false;
+    // Dropped and made again: fts5's own 'delete-all' is for contentless tables only, and a DELETE
+    // of the rows leaves the segments, which are the 58 MB.
+    db.transaction(() => { db.run("DROP TABLE events_fts"); db.run("CREATE VIRTUAL TABLE events_fts USING fts5(text)"); })();
+    return true;
+  } catch { return false; }
+}
+// An older build that still fills events_fts (bf9517ce6 did, at boot, for
+// every event missing from it) puts the rows back on its first start after
+// this one ran: about 1.29 M on the copy measured, and the 58 MB with them.
+// That costs a downgrade time and disk once; it does not break it, and an
+// empty fts5 table answers MATCH with no rows, not an error.
+// Nothing has written or searched events_fts since the search moved off it:
+// there is no INSERT and no MATCH left in server/src, only the two retention
+// deletes that keep it in step with `events`. Measured on a copy of a real
+// database: 7 rows, every rowid below the oldest event still kept (72,431
+// against 1,291,600), and 58 MB of index pages under them, in a file the
+// server's only thread re-reads from disk after memory pressure. The table
+// stays (the retention deletes name it); its content goes, and the freed
+// pages return through shrinkFreePages. Later boots find it empty and do
+// nothing.
+emptyDeadEventsFts();
+
+/**
+ * The boot backfill of one sessions column from its events.
+ *
+ * The guard is an EXISTS driven from the (few) sessions still NULL, probing
+ * idx_events_session, not `session_id IN (SELECT … FROM events WHERE col IS NOT
+ * NULL)`: that form materialised every distinct session of the events table on
+ * every boot, a full scan of events. Measured on a copy of the live DB (173,425
+ * events, 863 sessions, 40 with no project_path, 0 rows to fill): 957 ms for
+ * project_path and 205 ms for cwd_path with IN, 12 ms and under 1 ms with EXISTS.
+ * Same rows either way. It was 1.7 s of a 1.9 s boot (cpu-prof).
+ */
+export function sessionBackfillSql(col: "project_path" | "cwd_path", limit?: number): string {
+  const guard = `${col} IS NULL
+      AND EXISTS (SELECT 1 FROM events e WHERE e.session_id = sessions.session_id AND e.${col} IS NOT NULL)`;
+  // A slice: only the first `limit` sessions that still qualify. A session with no events never
+  // qualifies, so it cannot fill the window and starve the ones behind it.
+  const slice = limit ? `\n      AND session_id IN (SELECT session_id FROM sessions WHERE ${guard} LIMIT ${Math.floor(limit)})` : "";
+  return `
+    UPDATE sessions SET ${col} = (
+      SELECT e.${col} FROM events e
+       WHERE e.session_id = sessions.session_id AND e.${col} IS NOT NULL
+       ORDER BY e.id DESC LIMIT 1
+    ) WHERE ${guard}${slice}`;
+}
+
+/** Sessions one backfill slice fills before it hands the loop back. */
+export const SESSION_BACKFILL_CHUNK = 200;
+/**
+ * Fill sessions.project_path / cwd_path from their events, a slice at a time with the loop free in
+ * between. It was one statement at import: 1.27 s on 200k events for a database that predates the
+ * columns, and nothing could answer until it finished. Same rows in the end; a session reads NULL
+ * until its slice runs, which is what it already read for a session with no events.
+ */
+export async function backfillSessionPaths(chunk = SESSION_BACKFILL_CHUNK): Promise<number> {
+  let filled = 0;
+  for (const col of ["project_path", "cwd_path"] as const) {
+    for (;;) {
+      const n = waitedFor("boot:session-path-backfill:slice", () => db.run(sessionBackfillSql(col, chunk)).changes);
+      filled += n;
+      if (n < chunk) break;
+      await new Promise<void>((r) => setImmediate(r));
+    }
+  }
+  return filled;
+}
+
 // Sessions have no payload of their own, so these are real columns, written at
 // upsert and backfilled from the session's events for rows that predate them.
 //
@@ -595,22 +762,13 @@ db.exec(`CREATE INDEX IF NOT EXISTS idx_events_type_cov_scoped ON events(
 // `project_path` folds every checkout onto the one repo — which is right for
 // grouping, and useless for telling two agents apart when a user has a dozen
 // worktrees open at once and wants to know which card each one is working.
-for (const col of ["project_path", "cwd_path"]) {
+for (const col of ["project_path", "cwd_path"] as const) {
   try { db.exec(`ALTER TABLE sessions ADD COLUMN ${col} TEXT`); } catch { /* already present */ }
-  // The `IN` guard is what stops this from being a permanent startup cost.
   // Most sessions legitimately have no cwd — it's only recorded when the turn
   // ran somewhere other than the repo root — so `WHERE cwd_path IS NULL` alone
-  // never stops matching them, and the correlated subquery would re-run for
-  // every one of them on every single boot, forever. Driving from the indexed
-  // event columns bounds the work to sessions that actually have an answer,
-  // which after the first run is none.
-  db.exec(`
-    UPDATE sessions SET ${col} = (
-      SELECT e.${col} FROM events e
-       WHERE e.session_id = sessions.session_id AND e.${col} IS NOT NULL
-       ORDER BY e.id DESC LIMIT 1
-    ) WHERE ${col} IS NULL
-      AND session_id IN (SELECT session_id FROM events WHERE ${col} IS NOT NULL)`);
+  // never stops matching them. The guard in sessionBackfillSql is what stops
+  // this from being a permanent startup cost; see the note there. The fill itself is
+  // backfillSessionPaths(), run in slices after boot.
 }
 db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_path)");
 
@@ -675,7 +833,7 @@ const CLAIM_ENABLED = process.env.AGENTGLASS_DB_CLAIM !== "0";
  *  no file to read and the answer has to be asked for. */
 function ask(argv: string[]): string {
   try {
-    const r = Bun.spawnSync(argv, { stdout: "pipe", stderr: "ignore" });
+    const r = spawnSyncAs("db spawn", argv, { stdout: "pipe", stderr: "ignore" });
     return r.success ? new TextDecoder().decode(r.stdout) : "";
   } catch { return ""; }
 }
@@ -1874,6 +2032,57 @@ db.run(`CREATE INDEX IF NOT EXISTS seat_need_root ON seat_need (root, done_at, c
  */
 try { db.exec("ALTER TABLE seat ADD COLUMN adopted_session TEXT NOT NULL DEFAULT ''"); } catch { /* already present */ }
 try { db.exec("ALTER TABLE seat ADD COLUMN adopted_pane TEXT NOT NULL DEFAULT ''"); } catch { /* already present */ }
+/* Whether the adoption on this row passed the person's click. A re-link from a
+   window named like the seat clears it: the name is not an approval. */
+try { db.exec("ALTER TABLE seat ADD COLUMN adopted_approved INTEGER NOT NULL DEFAULT 0"); } catch { /* already present */ }
+/*
+ * THE PANE'S IDENTITY, NOT JUST ITS %id.
+ *
+ * tmux renumbers panes from %0 on a fresh server, so after a restart an
+ * unrelated pane can get the same id an adopted seat's row still names. This
+ * is that pane's `pid.start_time` at the moment it was adopted (see
+ * `paneIdentity` in agentops.ts) — empty on a row adopted before this column
+ * existed, which `seatPaneVerdict` in seat.ts reads as "unknown", never a
+ * match.
+ */
+try { db.exec("ALTER TABLE seat ADD COLUMN adopted_pane_identity TEXT NOT NULL DEFAULT ''"); } catch { /* already present */ }
+
+/*
+ * A SEAT'S CREDENTIAL, SURVIVING A RESTART.
+ *
+ * `seatTokens` in auth.ts is in-memory, so a restart used to 401 every adopted
+ * orchestrator's own token — the seat lost Go/resolve and the person had to
+ * approve the adoption card again. Only the hash is kept here, the same way
+ * devices.ts keeps a paired phone's: the raw token is never written to disk,
+ * and a row proves nothing without the token that made it. Dropped on
+ * release/re-adopt (`revokeSeatTokens`) and when the adopted pane this row
+ * named is gone at boot — see `reapDeadSeatTokens` in seat.ts.
+ */
+db.run(`
+CREATE TABLE IF NOT EXISTS seat_credential (
+  hash TEXT PRIMARY KEY,
+  root TEXT NOT NULL,
+  powers TEXT NOT NULL
+);
+`);
+db.run(`CREATE INDEX IF NOT EXISTS seat_credential_root ON seat_credential (root)`);
+
+/* A worker's `wk_` credential across a restart. It lived only in memory, so
+   every app restart or install turned the browser calls of a live worker into
+   `unauthorized` mid-turn, and the worker stopped. Same shape as
+   seat_credential: only the hash is kept, plus the name, root and the expiry
+   the credential already had; a row proves nothing without the token. Dropped
+   with the in-memory entry on every revoke and at expiry. */
+db.run(`
+CREATE TABLE IF NOT EXISTS worker_credential (
+  hash TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  root TEXT,
+  expires_at INTEGER NOT NULL
+);
+`);
+db.run(`CREATE INDEX IF NOT EXISTS worker_credential_name ON worker_credential (name)`);
+
 /*
  * A NAMED AGENT THIS APP DID NOT START.
  *
@@ -1891,6 +2100,11 @@ try { db.exec("ALTER TABLE named_agent ADD COLUMN adopted INTEGER NOT NULL DEFAU
 for (const col of ["seat_root TEXT", "model TEXT", "started_by TEXT", "resume_id TEXT", "exit_code INTEGER", "exit_line TEXT"]) {
   try { db.exec(`ALTER TABLE named_agent ADD COLUMN ${col}`); } catch { /* already present */ }
 }
+/* The worker role it was started as, kept for a start that did not go through
+   the orchestration policy: that row has no `started_by` stamp, so the board
+   had nothing to count it by and a project's Flow read "0 in flight" with its
+   builders running. */
+try { db.exec("ALTER TABLE named_agent ADD COLUMN role TEXT"); } catch { /* already present */ }
 
 /* What a run's branch pointed at when something last looked at it.
  *
@@ -2028,13 +2242,15 @@ export function resolveGateRow(
   /** Only ever set for a human. The clock is not an actor. */
   decided_by: string | null = null,
 ): void {
-  gateResolve.run({
+  const write = () => gateResolve.run({
     $id: id, $decision: decision, $reason: reason, $resolution: resolution,
     $decided_at: decided_at,
     // Belt as well as braces: the callers pass null for a timeout, and so does
     // this, so an actor cannot arrive attached to an outcome nobody chose.
     $decided_by: resolution === "human" ? decided_by : null,
   } as any);
+  // A person's answer is a decision nothing can rebuild; a timeout or a restart is the clock's and is.
+  if (resolution === "human") durably(write); else write();
 }
 
 export function getGate(id: string): GateRow | null {
@@ -2120,7 +2336,12 @@ export function pathSet(seed: () => string[]) {
 const recorded = pathSet(() => {
   const seen = new Set<string>();
   for (const col of ["project_path", "cwd_path"] as const) {
-    for (const r of db.query<{ p: string | null }, []>(`SELECT DISTINCT ${col} AS p FROM events`).all()) {
+    // Skip scan: one index seek per distinct path instead of walking all of the column's index (143 ms on
+    // 785k rows, cold; the DISTINCT it replaces read every entry just to see the same handful of values).
+    for (const r of db.query<{ p: string | null }, []>(
+      `WITH RECURSIVE t(p) AS (SELECT MIN(${col}) FROM events
+         UNION ALL SELECT (SELECT MIN(${col}) FROM events WHERE ${col} > t.p) FROM t WHERE t.p IS NOT NULL)
+       SELECT p FROM t WHERE p IS NOT NULL`).all()) {
       if (r.p) seen.add(r.p);
     }
   }
@@ -2195,6 +2416,19 @@ function sessionScopeClause(scope: Scope = workspaceRoots()): { clause: string; 
   return scopeClause(scope);
 }
 
+/*
+ * WHETHER A SESSION'S EVENTS CHANGED SINCE SOMEBODY LAST LOOKED.
+ *
+ * Bumped per session by every insert and for everybody by an erase or a
+ * retention pass, so a reader that keeps a per-session answer (lantern.ts,
+ * the board's facts) can tell an idle session from one that moved without
+ * asking the table. An idle session's index pages go cold, and re-reading
+ * them on every poll was most of what GET /agents/board read from disk.
+ */
+const sessionGens = new Map<string, number>();
+let eventEpoch = 0;
+export function sessionEventStamp(id: string): string { return `${eventEpoch}.${sessionGens.get(id) ?? 0}`; }
+
 const insertStmt = db.query(`
   INSERT INTO events (
     source_app, session_id, event_id, hook_event_type, tool_name, tool_use_id,
@@ -2212,6 +2446,21 @@ const insertStmt = db.query(`
   RETURNING id
 `);
 
+/** The claimed Pre, with its input as JSON text, so the Post can tell whether
+ *  it carries the same input (and the Pre's copy can go: see payloadslim.ts). */
+type PreClaim = { id: number; timestamp: number; ti: string | null };
+const slimPreInput = db.query<unknown, [string, number]>(
+  `UPDATE events SET payload = json_set(payload, '$.tool_input', json(?), '$.tool_input_slim', json('true')) WHERE id = ?`);
+/** Drop the big fields of a Pre's input when its Post carries the same input. */
+function slimPairedPre(pre: PreClaim, postInput: unknown): void {
+  if (!pre.ti || !postInput || typeof postInput !== "object") return;
+  let preInput: unknown;
+  try { preInput = JSON.parse(pre.ti); } catch { return; }
+  if (!sameInput(preInput, postInput)) return;
+  const slim = slimToolInput(preInput);
+  if (slim) slimPreInput.run(JSON.stringify(slim), pre.id);
+}
+
 // Find the matching PreToolUse for a Post event: by tool_use_id when present,
 // otherwise the most recent unpaired Pre for the same session+tool.
 /**
@@ -2222,12 +2471,12 @@ const insertStmt = db.query(`
  * both measured from the newest Pre and one of the two durations was simply
  * lost.
  */
-const claimPreById = db.query<{ timestamp: number }, [string]>(
+const claimPreById = db.query<PreClaim, [string]>(
   `UPDATE events SET paired = 1
    WHERE id = (SELECT id FROM events
                WHERE hook_event_type = 'PreToolUse' AND tool_use_id = ? AND paired = 0
                ORDER BY id DESC LIMIT 1)
-   RETURNING timestamp`
+   RETURNING id, timestamp, json_extract(payload, '$.tool_input') AS ti`
 );
 /**
  * The fallback, for sources with no usable tool_use_id — hook payloads that
@@ -2241,13 +2490,13 @@ const claimPreById = db.query<{ timestamp: number }, [string]>(
  * all of history and pair with a Pre from hours ago; now it finds nothing and
  * records NULL, which the percentiles already know how to skip.
  */
-const claimPreByTool = db.query<{ timestamp: number }, [string, string, number, number]>(
+const claimPreByTool = db.query<PreClaim, [string, string, number, number]>(
   `UPDATE events SET paired = 1
    WHERE id = (SELECT id FROM events
                WHERE hook_event_type = 'PreToolUse' AND session_id = ? AND tool_name = ?
                  AND paired = 0 AND timestamp <= ? AND timestamp >= ?
                ORDER BY id ASC LIMIT 1)
-   RETURNING timestamp`
+   RETURNING id, timestamp, json_extract(payload, '$.tool_input') AS ti`
 );
 
 interface SessionTokenRow {
@@ -2265,7 +2514,6 @@ const getSessionTokens = db.query<SessionTokenRow, [string]>(
    FROM sessions WHERE session_id = ?`
 );
 
-const rowToEvent = db.query<any, [number]>(`SELECT * FROM events WHERE id = ?`);
 const eventByExternalId = db.query<any, [string, string, string]>(
   `SELECT * FROM events WHERE source_app = ? AND session_id = ? AND event_id = ? LIMIT 1`
 );
@@ -2282,10 +2530,14 @@ const sessionById = db.query<Record<string, unknown>, [string]>(`SELECT * FROM s
  * the prices are.
  */
 function parseEventRow(r: any): WatchEvent {
+  return withParsedPayload(r, safeJson(r.payload));
+}
+
+function withParsedPayload(r: any, payload: Record<string, unknown>): WatchEvent {
   return {
     ...r,
     equiv_tokens: equivalentTokens(r, r.model_name),
-    payload: safeJson(r.payload),
+    payload,
   } as WatchEvent;
 }
 
@@ -2346,8 +2598,10 @@ export { RETENTION_DAYS, RETENTION_FROM_ENV, setRetentionDays };
 export const UNDERSTUDY_SNAPSHOT_DAYS = 30;
 
 /** How long the bare fact of a write is kept. Decision and fence rows never
- *  expire: they are the score, and a score with holes in it is not a score. */
-export const UNDERSTUDY_STUB_DAYS = 90;
+ *  expire: they are the score, and a score with holes in it is not a score.
+ *  A live setting (see retention.ts) with its own default of 90, re-exported
+ *  here so every sweep below reads the one binding. */
+export { UNDERSTUDY_STUB_DAYS, setLedgerStubDays };
 
 /**
  * Fold every event older than `cutoff` into daily_rollup.
@@ -2358,7 +2612,7 @@ export const UNDERSTUDY_STUB_DAYS = 90;
  * it expires and must not be double-counted if a prune is run twice — the
  * DELETE that follows is what guarantees each event is folded exactly once.
  */
-function foldExpiringEvents(cutoff: number): number {
+function foldExpiringEvents(cutoff: number, hts = Number.MAX_SAFE_INTEGER, hid = Number.MAX_SAFE_INTEGER): number {
   const r = db.run(
     `INSERT INTO daily_rollup (
        day, project_path, session_id, source_app, model_name, provider,
@@ -2378,7 +2632,7 @@ function foldExpiringEvents(cutoff: number): number {
             SUM(COALESCE(cost_usd, 0)),
             SUM(COALESCE(duration_ms, 0)),
             SUM(CASE WHEN duration_ms IS NOT NULL THEN 1 ELSE 0 END)
-     FROM events WHERE timestamp < ?
+     FROM events WHERE timestamp < ? AND (timestamp, id) <= (?, ?)
      GROUP BY 1, 2, 3, 4, 5, 6
      ON CONFLICT(day, project_path, session_id, model_name, provider) DO UPDATE SET
        events = events + excluded.events,
@@ -2392,7 +2646,7 @@ function foldExpiringEvents(cutoff: number): number {
        cost_usd = cost_usd + excluded.cost_usd,
        duration_ms_total = duration_ms_total + excluded.duration_ms_total,
        timed_calls = timed_calls + excluded.timed_calls`,
-    [cutoff]
+    [cutoff, hts, hid]
   );
   return r.changes;
 }
@@ -2446,15 +2700,202 @@ export function trimWal(): { busy: boolean; ms: number } {
   return { busy, ms: performance.now() - started };
 }
 
+/**
+ * The routine checkpoint, moved off the event loop.
+ *
+ * SQLite's auto-checkpoint runs inside whichever commit pushes the WAL past
+ * 1000 pages, on the connection that committed: here, the event loop. It copies
+ * the WAL into the database and fsyncs both files, and on this btrfs disk an
+ * fsync waits for whatever else is writing. Measured on an isolated 200 MB copy
+ * with ingest-shaped writes every 20 ms and a 16 MB write+fsync loop beside it
+ * (a test suite's disk load): loop delay p99 28.6 / 54.5 ms, max 427 ms, and
+ * every slow tick was a slow insert. Auto-checkpoint off, same load: p99 1.9 /
+ * 1.8 ms, max 105 / 45 ms. The server's "no JS was running" stalls during test
+ * runs are this: an unlabelled insert waiting on the disk.
+ *
+ * So a worker thread with its own connection runs a PASSIVE checkpoint every
+ * few seconds. PASSIVE never takes the write lock, so the loop's writers do not
+ * wait on it, and its busy_timeout is 0 so it never waits on them. Only once the
+ * worker says it is up does this connection stop auto-checkpointing; if the
+ * worker cannot start or dies, auto-checkpoint comes back, so the WAL is never
+ * left without anyone to fold it in. A watchdog on this loop treats silence
+ * (3 intervals), 3 errors in a row, or a WAL past WAL_CAP_FRAMES the same way,
+ * says so once in the server log, and starts a new worker with backoff. The worker's source is a string because a
+ * second file is not carried by `bun build --compile`; a Blob URL is.
+ *
+ * The WAL only starts over at the top when a write begins with every frame
+ * already copied back. Under steady writes the worker's fsync outlasts the gap
+ * between two inserts, so that moment never comes: measured, the WAL grew to
+ * 117 MB in 25 s. So when the worker reports more than CATCHUP_FRAMES in the
+ * log, this connection runs one PASSIVE itself: it copies only the frames
+ * written since the worker's pass, and the next write restarts the log. That is
+ * one loop fsync per ~32 MB written instead of one per 4 MB, and none at all
+ * while writes leave gaps.
+ */
+const CHECKPOINT_EVERY_MS = 2_000;
+const CATCHUP_FRAMES = 2_048;
+export const WAL_PACE_FRAMES = CATCHUP_FRAMES;
+/** ~256 MB of 4 KB pages: past this the worker is not keeping up, whatever it reports. */
+const WAL_CAP_FRAMES = 65_536;
+/** Errors in a row before the worker counts as broken. A PASSIVE busy does not throw, so these are real: IOERR, CORRUPT, read-only. */
+const MAX_ERRORS = 3;
+const RESTART_MAX_MS = 5 * 60_000;
+let checkpointer: Worker | null = null;
+let watchdog: ReturnType<typeof setInterval> | null = null;
+let restartTimer: ReturnType<typeof setTimeout> | null = null;
+let ckpt = { every: CHECKPOINT_EVERY_MS, code: "", lastReport: 0, errors: 0, backoff: 0, said: false, fresh: true };
+/** The worker's last pass: frames in the WAL and frames it copied back, plus failures and restarts. For /health and the test. */
+let lastPass = { passes: 0, log: 0, copied: 0, failures: 0, restarts: 0 };
+export const checkpointerPass = () => ({ ...lastPass });
+const CHECKPOINT_WORKER = `import { Database } from "bun:sqlite";
+self.onmessage = (e) => {
+  let d;
+  try { d = new Database(e.data.path); d.exec("PRAGMA busy_timeout = 0;"); }
+  catch (err) { postMessage({ failed: String(err) }); return; }
+  postMessage({ ready: true });
+  setInterval(() => { // loop-ok: runs in the checkpoint worker thread, not the server loop
+    try { const r = d.prepare("PRAGMA wal_checkpoint(PASSIVE)"); const row = r.get(); r.finalize(); postMessage({ busy: row?.busy ?? 0, log: row?.log ?? 0, copied: row?.checkpointed ?? 0 }); }
+    catch (err) { postMessage({ error: "wal_checkpoint threw: " + (err?.message ?? "") }); }
+  }, e.data.every);
+};`;
+const autoCheckpointOn = () => { try { db.exec("PRAGMA wal_autocheckpoint = 1000;"); } catch { /* closed */ } };
+/**
+ * One catch-up step: a PASSIVE checkpoint on this connection. SQLite has no page
+ * limit on it, so the bound is the WAL itself: callers run a step before more
+ * than CATCHUP_FRAMES are unwritten back, so one step copies at most about that
+ * many pages (8 MB), not the 28 MB that stalled the loop 0.5-7.5 s on a first
+ * cold cut. Returns frames in the log and frames copied back, or null if busy.
+ */
+export const walStepStats = { steps: 0, longestMs: 0, maxLog: 0, bigSteps: 0 };
+const BIG_STEP_FRAMES = CATCHUP_FRAMES * 4;
+function checkpointStep(): { log: number; copied: number } | null {
+  return waitedFor("wal catch-up checkpoint", () => {
+    const t0 = performance.now();
+    try {
+      const row = db.query("PRAGMA wal_checkpoint(PASSIVE)").get() as { log?: number; checkpointed?: number } | null;
+      const log = row?.log ?? 0;
+      const copied = row?.checkpointed ?? 0;
+      const before = lastPass.log <= log ? lastPass.copied : 0; // frames already copied from this WAL
+      if (log - before > BIG_STEP_FRAMES) walStepStats.bigSteps++;
+      lastPass.log = log;
+      lastPass.copied = copied;
+      walStepStats.steps++;
+      walStepStats.maxLog = Math.max(walStepStats.maxLog, log);
+      return { log, copied };
+    } catch { return null; /* busy: next check */ }
+    finally { walStepStats.longestMs = Math.max(walStepStats.longestMs, performance.now() - t0); }
+  });
+}
+function catchUp(): void {
+  if (!checkpointer || lastPass.log - lastPass.copied < CATCHUP_FRAMES) return;
+  checkpointStep();
+}
+/**
+ * Pace a bulk writer by WAL growth: before the next slice, if more than
+ * CATCHUP_FRAMES are written and not yet copied back, run bounded steps (the
+ * loop is handed back after each) until the log has caught up. Gives up after a
+ * few tries so a reader that pins the WAL cannot hold the cut forever.
+ */
+let paceSkip = 0;
+let lastPaceStepAt = 0;
+const PACE_BACKOFF_SLICES = 8;
+const PACE_RECHECK_MS = 20;
+export async function paceByWal(): Promise<void> {
+  if (!checkpointer) return;
+  if (paceSkip > 0) { paceSkip--; return; }
+  // Known backlog small and checked a moment ago: no PASSIVE (it fsyncs on the loop).
+  if (lastPass.log - lastPass.copied < CATCHUP_FRAMES && performance.now() - lastPaceStepAt < PACE_RECHECK_MS) return;
+  lastPaceStepAt = performance.now();
+  for (let tries = 0; tries < 20; tries++) {
+    const s = checkpointStep();
+    if (!s || s.log - s.copied < CATCHUP_FRAMES) return;
+    await new Promise<void>((res) => setTimeoutAs("wal pace", res as () => void, 10)); // loop-ok: one-shot yield inside a running pass, not a periodic timer
+  }
+  paceSkip = PACE_BACKOFF_SLICES; // a reader pins the WAL: do not pay the wait on every slice
+}
+/** The worker is gone or not doing its job: auto-checkpoint back on, say so once, try a new worker later. */
+function checkpointerFailed(why: string): void {
+  const w = checkpointer;
+  checkpointer = null;
+  if (w) w.terminate();
+  autoCheckpointOn();
+  lastPass.failures++;
+  if (!ckpt.said) { ckpt.said = true; console.warn(`[db] checkpoint worker failed (${why}); auto-checkpoint is back on, retrying the worker with backoff`); }
+  if (restartTimer || !watchdog) return;
+  ckpt.backoff = Math.min(RESTART_MAX_MS, ckpt.backoff ? ckpt.backoff * 2 : ckpt.every * 4);
+  restartTimer = setTimeoutAs("boot:checkpointer:restart", () => { restartTimer = null; lastPass.restarts++; spawnCheckpointer(); }, ckpt.backoff);
+  (restartTimer as { unref?: () => void }).unref?.();
+}
+function spawnCheckpointer(): void {
+  ckpt.lastReport = Date.now();
+  ckpt.errors = 0;
+  ckpt.fresh = true;
+  try {
+    const w = new Worker(URL.createObjectURL(new Blob([ckpt.code], { type: "application/javascript" })));
+    checkpointer = w;
+    w.onmessage = (e: MessageEvent<{ ready?: boolean; failed?: string; error?: string; busy?: number; log?: number; copied?: number }>) => {
+      if (checkpointer !== w) return;
+      ckpt.lastReport = Date.now();
+      if (e.data?.ready) db.exec("PRAGMA wal_autocheckpoint = 0;");
+      else if (e.data?.log !== undefined) {
+        ckpt.errors = 0;
+        lastPass = { ...lastPass, passes: lastPass.passes + 1, log: e.data.log, copied: e.data.copied ?? 0 };
+        // The first pass of a new worker sees the WAL its dead predecessor left: judge the second.
+        const first = ckpt.fresh;
+        ckpt.fresh = false;
+        if (!first && lastPass.log >= WAL_CAP_FRAMES) return checkpointerFailed(`WAL at ${lastPass.log} frames`);
+        if (!e.data.busy) { ckpt.backoff = 0; ckpt.said = false; }
+        catchUp();
+      } else if (e.data?.error !== undefined) {
+        if (++ckpt.errors >= MAX_ERRORS) checkpointerFailed(`${ckpt.errors} errors in a row: ${e.data.error}`);
+      } else checkpointerFailed(`could not open: ${e.data?.failed}`);
+    };
+    w.onerror = (e) => { if (checkpointer === w) checkpointerFailed(`threw: ${(e as ErrorEvent)?.message ?? e}`); };
+    w.addEventListener("close", () => { if (checkpointer === w) checkpointerFailed("exited"); });
+    w.unref();
+    w.postMessage({ path: DB_PATH, every: ckpt.every });
+  } catch (e) { checkpointer = null; checkpointerFailed(`could not start: ${(e as Error)?.message ?? e}`); }
+}
+/** `code` replaces the worker's source: only the test uses it, to fake a broken or hung worker. */
+export function startCheckpointer(every = CHECKPOINT_EVERY_MS, code = CHECKPOINT_WORKER): void {
+  if (watchdog || DB_PATH === ":memory:") return;
+  ckpt = { every, code, lastReport: Date.now(), errors: 0, backoff: 0, said: false, fresh: true };
+  // The watchdog: a worker that hangs never posts an error, so silence counts as failure too.
+  watchdog = setIntervalAs("checkpoint watchdog", () => {
+    if (!checkpointer) return;
+    if (Date.now() - ckpt.lastReport > 3 * ckpt.every) return checkpointerFailed(`no report for ${Math.round((Date.now() - ckpt.lastReport) / 1000)} s`);
+    catchUp();
+  }, every);
+  (watchdog as { unref?: () => void }).unref?.();
+  spawnCheckpointer();
+}
+/** Stop the worker and its timers, and give the checkpoint back to SQLite. */
+export function stopCheckpointer(): void {
+  if (watchdog) clearInterval(watchdog);
+  if (restartTimer) clearTimeout(restartTimer);
+  watchdog = restartTimer = null;
+  const w = checkpointer;
+  checkpointer = null;
+  w?.terminate();
+  autoCheckpointOn();
+}
+
 export function reclaimFreePages(): { freed: number; ms: number } | null {
   try {
     const pageCount = Number((db.query("PRAGMA page_count").get() as { page_count?: number } | null)?.page_count ?? 0);
     const freelist = Number((db.query("PRAGMA freelist_count").get() as { freelist_count?: number } | null)?.freelist_count ?? 0);
     const pageSize = Number((db.query("PRAGMA page_size").get() as { page_size?: number } | null)?.page_size ?? 0);
-    if (!pageCount || !pageSize || freelist / pageCount <= 0.3) return null;
+    const mode = Number((db.query("PRAGMA auto_vacuum").get() as { auto_vacuum?: number } | null)?.auto_vacuum ?? 0);
+    /* A file that is not yet INCREMENTAL gets its one conversion VACUUM at 10% free instead of 30%: the
+       rewrite is paid once, and after it shrinkFreePages keeps the file small in 4 MB steps. Measured on
+       a copy of a real 1.13 GB file (13% free, auto_vacuum off): VACUUM 14 s on a loaded machine, 1.13 GB
+       -> 0.96 GB, auto_vacuum reads 2 afterwards. This runs once, at boot before the first request (index.ts),
+       never during use; the ceiling is that one boot waits that long on a file this size. */
+    const floor = mode === 2 ? 0.3 : 0.1;
+    if (!pageCount || !pageSize || freelist / pageCount <= floor) return null;
     if (!process.env.SQLITE_TMPDIR) process.env.SQLITE_TMPDIR = dirname(DB_PATH);
     const started = Date.now();
-    db.exec("VACUUM");
+    waitedFor("vacuum", () => db.exec("VACUUM"));
     // VACUUM just wrote the whole database through the WAL; give that back now
     // rather than waiting for the journal_size_limit to bring it down to 64 MB.
     trimWal();
@@ -2463,6 +2904,40 @@ export function reclaimFreePages(): { freed: number; ms: number } | null {
     // A vacuum that cannot run is not a reason to fail a boot: the database is
     // correct either way, and the only thing lost is disk that was already lost.
     return null;
+  }
+}
+
+/** Pages one incremental step returns to the OS. Measured on a copy: 1000 pages (4 MB) took 42 ms. */
+export const SHRINK_STEP_PAGES = 1000;
+let shrinkTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Give freed pages back one small step at a time, with the loop free in between.
+ *
+ * Only on an auto_vacuum = INCREMENTAL file; on any other mode `incremental_vacuum` is a no-op and this
+ * returns 0 without scheduling. Returns the pages released by this step. After a step that left more on
+ * the freelist it schedules the next one a second later, so a big retention delete (100 MB is 25 steps,
+ * about a second of work in total) is handed back without one long block. The timer is unref'd and
+ * single: a second call while one is pending does not stack another.
+ *
+ * Ceiling: it releases the freelist; it does not compact a file whose live pages are scattered (that is
+ * VACUUM), and a WAL write per step is left for trimWal's hourly checkpoint.
+ */
+export function shrinkFreePages(step = SHRINK_STEP_PAGES): number {
+  try {
+    const mode = Number((db.query("PRAGMA auto_vacuum").get() as { auto_vacuum?: number } | null)?.auto_vacuum ?? 0);
+    if (mode !== 2) return 0;
+    const before = Number((db.query("PRAGMA freelist_count").get() as { freelist_count?: number } | null)?.freelist_count ?? 0);
+    if (before === 0) return 0;
+    db.query(`PRAGMA incremental_vacuum(${Math.max(1, Math.floor(step))})`).all();
+    const after = Number((db.query("PRAGMA freelist_count").get() as { freelist_count?: number } | null)?.freelist_count ?? 0);
+    if (after > 0 && !shrinkTimer) {
+      shrinkTimer = setTimeoutAs("db shrink free pages", () => { shrinkTimer = null; shrinkFreePages(step); }, 1_000);
+      shrinkTimer.unref?.();
+    }
+    return before - after;
+  } catch {
+    return 0;
   }
 }
 
@@ -2479,10 +2954,21 @@ export function reclaimFreePages(): { freed: number; ms: number } | null {
  */
 export function eraseHistory(): { events: number; sessions: number; days: number } {
   rollupPathCache = null;
+  changedPathsMemo.drop(); changeListMemo.drop();
+  spendWrites++;
+  promptNames.clear();
+  eventEpoch++;
+  sessionGens.clear();
+  eventWrites++;
   const out = db.transaction(() => {
     db.run(`DELETE FROM events_fts`);
     const ev = db.run(`DELETE FROM events`);
     recorded.forget();
+    facets = { all: newFacet(), byPath: new Map() };
+    // A fill already running holds pre-erase values: drop it and start a fresh one.
+    if (facetTimer) clearTimeout(facetTimer);
+    facetTimer = null; facetsBuilding = null; facetRecountPending = false;
+    startFacetFill(FACET_YIELD_MS);
     const se = db.run(`DELETE FROM sessions`);
     const days = db.run(`DELETE FROM daily_rollup`);
     db.run(`DELETE FROM gates WHERE decision IS NOT NULL`);
@@ -2510,183 +2996,233 @@ export function eraseHistory(): { events: number; sessions: number; days: number
   return out;
 }
 
-export function pruneOldRows(): { events: number; sessions: number; rolled: number; snapshots: number; stubs: number } {
-  /*
-   * The understudy's two sweeps run ABOVE the early return, and the placement is
-   * the point rather than an accident of ordering.
-   *
-   * AGENTGLASS_RETENTION_DAYS is a number the user sets, and 0 is a legitimate
-   * value meaning "keep the events for ever". Hanging the understudy's expiry
-   * off that switch would mean somebody turning event pruning off silently
-   * turned off the expiry of the sealed situations too — a store that holds the
-   * material the understudy was reading, growing without bound, because of a
-   * setting about something else entirely. That is the worst failure available
-   * in this file, so these two are unconditional and carry their own windows.
-   *
-   * Outside the transaction below on purpose: they share no invariant with the
-   * fold-then-delete pair, and a snapshot sweep has no business being able to
-   * roll back a day of rollup.
-   */
-  const snapCut = Date.now() - UNDERSTUDY_SNAPSHOT_DAYS * 86_400_000;
-  const snapshots = db.run(`DELETE FROM understudy_snapshots WHERE at < ?`, [snapCut]).changes;
-  // Stubs only. A `decision` row is the score and a `fence` row is a refusal we
-  // promised to be able to show; neither has an expiry, at any age.
-  const stubCut = Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000;
-  const stubs = db.run(`DELETE FROM understudy_ledger WHERE kind = 'stub' AND sealed_at < ?`, [stubCut]).changes;
-
-  /*
-   * The queue, the shifts and the acts, which arrived with the actuator and
-   * arrived without an expiry.
-   *
-   * Every other table in this feature had a window decided when it was written.
-   * These three did not, which is how a store grows without bound: not by
-   * anybody deciding to keep everything, but by three tables being added on an
-   * afternoon when the interesting question was whether the thing worked.
-   *
-   * THE WINDOWS ARE NOT THE SAME, for the same reason the two above are not.
-   *
-   * A RESOLVED proposal is scaffolding — it was drafted, it was pressed or
-   * thrown away, and a month later nobody wants the JSON body it would have
-   * sent. A pending one never expires: it is the understudy waiting on a
-   * person, and expiring it would answer on their behalf by doing nothing.
-   *
-   * An ACT is the record of something that happened on somebody's machine
-   * without them pressing anything. That is the last row in this feature that
-   * should quietly disappear, so it keeps the longest window — and an act that
-   * has NOT been undone is never swept at all, because the undo recipe is the
-   * only way back and deleting it is deciding on their behalf that they no
-   * longer want one.
-   */
-  const proposalCut = Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000;
-  const proposals = db.run(
-    `DELETE FROM understudy_proposals WHERE state <> 'pending' AND created_at < ?`,
-    [proposalCut],
+/** Rows one stub sweep removes before it hands the thread back. */
+export const STUB_PRUNE_CHUNK = 20_000;
+/**
+ * One bounded slice of the stubs older than `cut`; the caller repeats while it returns a full chunk.
+ *
+ * It used to be a single DELETE. A stub is written for every write request, so the ledger held 1.74M rows
+ * (135 MB plus 77 MB of indexes) and the hourly sweep deleted whatever had aged past the window in one
+ * statement that no other work can interleave with.
+ */
+export function pruneStubsChunk(cut: number, limit = STUB_PRUNE_CHUNK): number {
+  return db.run(
+    `DELETE FROM understudy_ledger WHERE id IN (SELECT id FROM understudy_ledger WHERE kind = 'stub' AND sealed_at < ? LIMIT ?)`,
+    [cut, limit],
   ).changes;
-  /*
-   * THE RECORD OF WHAT RAN UNATTENDED honours the user's switch; the rest of
-   * this feature does not, and the split is deliberate.
-   *
-   * Everything above and below this block is scaffolding the understudy made
-   * for itself — sealed situations, stubs, drafted proposals, the queue's
-   * bookkeeping, a role, a schedule — and it expires on its own clock precisely
-   * so that a setting about EVENTS cannot make it grow without bound. That
-   * reasoning was written for those tables and it is still right for them.
-   *
-   * Shifts, acts and runs are a different kind of row. Each one says that an
-   * agent did something on this machine, at night, with permissions skipped,
-   * and nobody watching. The retention switch set to 0 is the user saying "keep
-   * my history for ever", and until this block existed the three tables that
-   * ARE the history of the unattended work were the ones that ignored him: the
-   * raw prompts he typed himself were kept, and the record of what ran in his
-   * name without him was swept at ninety days. Read aloud, that is backwards.
-   * So these three, and only these three, keep for ever when the switch is 0
-   * and otherwise keep their ninety-day window unchanged.
-   *
-   * Still above the early return on RETENTION_DAYS below, because that return
-   * is about the fold-then-delete transaction on events and these share
-   * nothing with it — the placement tests in understudy-retention.test.ts and
-   * retention-promises.test.ts pin exactly this shape (and they find the guard
-   * by its source text, which is why this comment does not quote it).
-   */
-  const keepsTheRecord = RETENTION_DAYS === 0;
-  if (!keepsTheRecord) {
-    db.run(`DELETE FROM understudy_shifts WHERE state <> 'running' AND started_at < ?`, [proposalCut]);
-    db.run(
-      `DELETE FROM understudy_acts WHERE undone_at IS NOT NULL AND at < ?`,
-      [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000],
-    );
-  }
-  /*
-   * The work loop's two tables, and this is the SECOND time this exact gap has
-   * been opened in this feature.
-   *
-   * The proposals, the shifts and the acts arrived without a window and were
-   * given one. Then the work loop arrived with two more tables and no window,
-   * by the same route: tables added on an afternoon when the interesting
-   * question was whether the thing worked at all. Writing the reasoning down
-   * once changed nothing, because a comment is only read by somebody already
-   * looking at the file — so the rule is enumerated in a test now, which walks
-   * every understudy table and fails on one nobody has decided about.
-   *
-   * The exceptions match the ones above, for the same reasons. A FINISHED run
-   * ages out; a RUNNING one never does, because "started, never finished" is
-   * the only record that an agent was killed mid-task, and it is exactly the
-   * row somebody wants when they find a worktree they do not recognise. A task
-   * still QUEUED never expires either: it is a person waiting to be worked
-   * for, and expiring it answers on their behalf by doing nothing.
-   *
-   * TWO RECORDS OF THE SAME FACT, and the queue's sweep reads both — the same
-   * reason the queue's own reader does. `taken_at` is this table's mark and the
-   * run table is the loop's, and for a while nothing wrote the first: rows
-   * worked start to finish kept a NULL there. The reader consults both, so
-   * those rows correctly stop being offered as work; a sweep trusting
-   * `taken_at` alone would leave exactly them immortal — invisible in the app,
-   * permanent on disk, which is the shape of bug this sweep exists to close,
-   * reappearing inside the fix for it.
-   *
-   * Which makes the ORDER of the two statements load-bearing, and that is not
-   * visible from either one alone. Sweeping the runs first deletes the evidence
-   * the queue's sweep needs to read. The queue goes first; both use the same
-   * cutoff, so a run old enough to be swept is one the queue has finished with.
-   */
-  db.run(
-    `DELETE FROM understudy_asked
-      WHERE at < ?
-        AND (taken_at IS NOT NULL
-             OR ('asked:' || id) IN (SELECT item_id FROM understudy_work WHERE source = 'asked'))`,
-    [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000],
-  );
-  /* The run table is the third of the three that honour the switch — see the
-     shifts/acts block above. The queue's sweep just above it does NOT: it reads
-     the run table to know what was worked, and a kept run keeps answering that
-     question for it. */
-  if (!keepsTheRecord) {
-    db.run(
-      `DELETE FROM understudy_work WHERE state <> 'running' AND started_at < ?`,
-      [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000],
-    );
-  }
-  /* A named agent that has ENDED is a fact about a window that no longer
-     exists; ninety days is plenty to read back what ran. A live one is never
-     swept — its pane is the record that it is still working. */
-  db.run(
-    `DELETE FROM named_agent WHERE ended_at IS NOT NULL AND ended_at < ?`,
-    [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000],
-  );
-  /* The seat's own reports. A line is what it said at the time and the view
-     shows the last few; past ninety days it is a log nobody reads. Its task
-     rows are NOT swept: an item still waiting is a person's intent, and a
-     finished one is the record of what was asked and what came back. */
-  db.run(`DELETE FROM seat_line WHERE at < ?`, [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000]);
-  /* A worker's report, kept the same ninety days as the seat's own lines: it is
-     the other half of the same conversation. */
-  db.run(`DELETE FROM seat_report WHERE at < ?`, [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000]);
-  /* A decision the seat asked for, ONCE IT HAS BEEN TAKEN — the same ninety
-     days. One still waiting is never swept, whatever its age: an unanswered
-     question that quietly disappeared is exactly the failure this table was
-     built to end. */
-  db.run(`DELETE FROM seat_need WHERE done_at IS NOT NULL AND done_at < ?`, [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000]);
-  /* A role outlives its session by ninety days, then nothing needs it. */
-  db.run(`DELETE FROM session_role WHERE at < ?`, [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000]);
-  /* A schedule that fired or was cancelled is a record, kept ninety days; one
-     still waiting is a person's intent and is never swept. */
-  db.run(`DELETE FROM agent_schedule WHERE (fired_at IS NOT NULL OR cancelled_at IS NOT NULL) AND created < ?`, [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000]);
-  /*
-   * Answered questions age out; an OPEN one never does.
-   *
-   * Same ruling the queue above makes, and for the same reason: a row still
-   * waiting on a person is a person who has not answered yet, and expiring it
-   * answers on their behalf by doing nothing. That is precisely the silence
-   * this table was added to end, so it may not come back in through the sweep
-   * that is supposed to keep the table small.
-   */
-  db.run(
-    `DELETE FROM understudy_help WHERE answered_at IS NOT NULL AND at < ?`,
-    [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000],
-  );
-  void proposals;
+}
 
-  if (!RETENTION_DAYS) return { events: 0, sessions: 0, rolled: 0, snapshots, stubs };
+export function pruneOldRows(): { events: number; sessions: number; rolled: number; snapshots: number; stubs: number } {
+  const { more: _more, ...r } = pruneOldRowsNow();
+  // What the deletes just freed goes back in small steps (see shrinkFreePages); a no-op unless auto_vacuum is INCREMENTAL.
+  shrinkFreePages();
+  return r;
+}
+
+/** Events one retention slice folds and deletes before it hands the loop back. */
+export const RETENTION_CHUNK = 250;
+
+type PruneResult = { events: number; sessions: number; rolled: number; snapshots: number; stubs: number };
+
+/**
+ * The same prune, a slice of events at a time with the loop free in between. Each slice folds and
+ * deletes its own rows in one transaction, so the fold-then-delete pair stays atomic; the roll-up is
+ * additive, so the sums are what one big pass writes. The other tables go on the first slice.
+ */
+export async function pruneOldRowsYielding(chunk = RETENTION_CHUNK): Promise<PruneResult> {
+  let total: PruneResult | undefined;
+  for (let first = true; ; first = false) {
+    const { more, ...r } = waitedFor("retention prune slice", () => pruneOldRowsNow(chunk, first));
+    total = total ? { ...total, events: total.events + r.events, sessions: total.sessions + r.sessions, rolled: total.rolled + r.rolled } : r;
+    if (!more) break;
+    await new Promise<void>((res) => setImmediate(res));
+  }
+  await slimColdEventsYielding();
+  resumedAs("retention prune end");
+  waitedFor("db shrink free pages", () => shrinkFreePages());
+  return total!;
+}
+
+function pruneOldRowsNow(chunk = 0, first = true): PruneResult & { more: boolean } {
+  let snapshots = 0, stubs = 0;
+  if (first) {
+    /*
+     * The understudy's two sweeps run ABOVE the early return, and the placement is
+     * the point rather than an accident of ordering.
+     *
+     * AGENTGLASS_RETENTION_DAYS is a number the user sets, and 0 is a legitimate
+     * value meaning "keep the events for ever". Hanging the understudy's expiry
+     * off that switch would mean somebody turning event pruning off silently
+     * turned off the expiry of the sealed situations too — a store that holds the
+     * material the understudy was reading, growing without bound, because of a
+     * setting about something else entirely. That is the worst failure available
+     * in this file, so these two are unconditional and carry their own windows.
+     *
+     * Outside the transaction below on purpose: they share no invariant with the
+     * fold-then-delete pair, and a snapshot sweep has no business being able to
+     * roll back a day of rollup.
+     */
+    const snapCut = Date.now() - UNDERSTUDY_SNAPSHOT_DAYS * 86_400_000;
+    snapshots = db.run(`DELETE FROM understudy_snapshots WHERE at < ?`, [snapCut]).changes;
+    // Stubs only. A `decision` row is the score and a `fence` row is a refusal we
+    // promised to be able to show; neither has an expiry, at any age.
+    const stubCut = Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000;
+    stubs = pruneStubsChunk(stubCut);
+
+    /*
+     * The queue, the shifts and the acts, which arrived with the actuator and
+     * arrived without an expiry.
+     *
+     * Every other table in this feature had a window decided when it was written.
+     * These three did not, which is how a store grows without bound: not by
+     * anybody deciding to keep everything, but by three tables being added on an
+     * afternoon when the interesting question was whether the thing worked.
+     *
+     * THE WINDOWS ARE NOT THE SAME, for the same reason the two above are not.
+     *
+     * A RESOLVED proposal is scaffolding — it was drafted, it was pressed or
+     * thrown away, and a month later nobody wants the JSON body it would have
+     * sent. A pending one never expires: it is the understudy waiting on a
+     * person, and expiring it would answer on their behalf by doing nothing.
+     *
+     * An ACT is the record of something that happened on somebody's machine
+     * without them pressing anything. That is the last row in this feature that
+     * should quietly disappear, so it keeps the longest window — and an act that
+     * has NOT been undone is never swept at all, because the undo recipe is the
+     * only way back and deleting it is deciding on their behalf that they no
+     * longer want one.
+     */
+    const proposalCut = Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000;
+    const proposals = db.run(
+      `DELETE FROM understudy_proposals WHERE state <> 'pending' AND created_at < ?`,
+      [proposalCut],
+    ).changes;
+    /*
+     * THE RECORD OF WHAT RAN UNATTENDED honours the user's switch; the rest of
+     * this feature does not, and the split is deliberate.
+     *
+     * Everything above and below this block is scaffolding the understudy made
+     * for itself — sealed situations, stubs, drafted proposals, the queue's
+     * bookkeeping, a role, a schedule — and it expires on its own clock precisely
+     * so that a setting about EVENTS cannot make it grow without bound. That
+     * reasoning was written for those tables and it is still right for them.
+     *
+     * Shifts, acts and runs are a different kind of row. Each one says that an
+     * agent did something on this machine, at night, with permissions skipped,
+     * and nobody watching. The retention switch set to 0 is the user saying "keep
+     * my history for ever", and until this block existed the three tables that
+     * ARE the history of the unattended work were the ones that ignored him: the
+     * raw prompts he typed himself were kept, and the record of what ran in his
+     * name without him was swept at ninety days. Read aloud, that is backwards.
+     * So these three, and only these three, keep for ever when the switch is 0
+     * and otherwise keep their ninety-day window unchanged.
+     *
+     * Still above the early return on RETENTION_DAYS below, because that return
+     * is about the fold-then-delete transaction on events and these share
+     * nothing with it — the placement tests in understudy-retention.test.ts and
+     * retention-promises.test.ts pin exactly this shape (and they find the guard
+     * by its source text, which is why this comment does not quote it).
+     */
+    const keepsTheRecord = RETENTION_DAYS === 0;
+    if (!keepsTheRecord) {
+      db.run(`DELETE FROM understudy_shifts WHERE state <> 'running' AND started_at < ?`, [proposalCut]);
+      db.run(
+        `DELETE FROM understudy_acts WHERE undone_at IS NOT NULL AND at < ?`,
+        [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000],
+      );
+    }
+    /*
+     * The work loop's two tables, and this is the SECOND time this exact gap has
+     * been opened in this feature.
+     *
+     * The proposals, the shifts and the acts arrived without a window and were
+     * given one. Then the work loop arrived with two more tables and no window,
+     * by the same route: tables added on an afternoon when the interesting
+     * question was whether the thing worked at all. Writing the reasoning down
+     * once changed nothing, because a comment is only read by somebody already
+     * looking at the file — so the rule is enumerated in a test now, which walks
+     * every understudy table and fails on one nobody has decided about.
+     *
+     * The exceptions match the ones above, for the same reasons. A FINISHED run
+     * ages out; a RUNNING one never does, because "started, never finished" is
+     * the only record that an agent was killed mid-task, and it is exactly the
+     * row somebody wants when they find a worktree they do not recognise. A task
+     * still QUEUED never expires either: it is a person waiting to be worked
+     * for, and expiring it answers on their behalf by doing nothing.
+     *
+     * TWO RECORDS OF THE SAME FACT, and the queue's sweep reads both — the same
+     * reason the queue's own reader does. `taken_at` is this table's mark and the
+     * run table is the loop's, and for a while nothing wrote the first: rows
+     * worked start to finish kept a NULL there. The reader consults both, so
+     * those rows correctly stop being offered as work; a sweep trusting
+     * `taken_at` alone would leave exactly them immortal — invisible in the app,
+     * permanent on disk, which is the shape of bug this sweep exists to close,
+     * reappearing inside the fix for it.
+     *
+     * Which makes the ORDER of the two statements load-bearing, and that is not
+     * visible from either one alone. Sweeping the runs first deletes the evidence
+     * the queue's sweep needs to read. The queue goes first; both use the same
+     * cutoff, so a run old enough to be swept is one the queue has finished with.
+     */
+    db.run(
+      `DELETE FROM understudy_asked
+        WHERE at < ?
+          AND (taken_at IS NOT NULL
+               OR ('asked:' || id) IN (SELECT item_id FROM understudy_work WHERE source = 'asked'))`,
+      [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000],
+    );
+    /* The run table is the third of the three that honour the switch — see the
+       shifts/acts block above. The queue's sweep just above it does NOT: it reads
+       the run table to know what was worked, and a kept run keeps answering that
+       question for it. */
+    if (!keepsTheRecord) {
+      db.run(
+        `DELETE FROM understudy_work WHERE state <> 'running' AND started_at < ?`,
+        [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000],
+      );
+    }
+    /* A named agent that has ENDED is a fact about a window that no longer
+       exists; ninety days is plenty to read back what ran. A live one is never
+       swept — its pane is the record that it is still working. */
+    db.run(
+      `DELETE FROM named_agent WHERE ended_at IS NOT NULL AND ended_at < ?`,
+      [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000],
+    );
+    /* The seat's own reports. A line is what it said at the time and the view
+       shows the last few; past ninety days it is a log nobody reads. Its task
+       rows are NOT swept: an item still waiting is a person's intent, and a
+       finished one is the record of what was asked and what came back. */
+    db.run(`DELETE FROM seat_line WHERE at < ?`, [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000]);
+    /* A worker's report, kept the same ninety days as the seat's own lines: it is
+       the other half of the same conversation. */
+    db.run(`DELETE FROM seat_report WHERE at < ?`, [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000]);
+    /* A decision the seat asked for, ONCE IT HAS BEEN TAKEN — the same ninety
+       days. One still waiting is never swept, whatever its age: an unanswered
+       question that quietly disappeared is exactly the failure this table was
+       built to end. */
+    db.run(`DELETE FROM seat_need WHERE done_at IS NOT NULL AND done_at < ?`, [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000]);
+    /* A role outlives its session by ninety days, then nothing needs it. */
+    db.run(`DELETE FROM session_role WHERE at < ?`, [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000]);
+    /* A schedule that fired or was cancelled is a record, kept ninety days; one
+       still waiting is a person's intent and is never swept. */
+    db.run(`DELETE FROM agent_schedule WHERE (fired_at IS NOT NULL OR cancelled_at IS NOT NULL) AND created < ?`, [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000]);
+    /*
+     * Answered questions age out; an OPEN one never does.
+     *
+     * Same ruling the queue above makes, and for the same reason: a row still
+     * waiting on a person is a person who has not answered yet, and expiring it
+     * answers on their behalf by doing nothing. That is precisely the silence
+     * this table was added to end, so it may not come back in through the sweep
+     * that is supposed to keep the table small.
+     */
+    db.run(
+      `DELETE FROM understudy_help WHERE answered_at IS NOT NULL AND at < ?`,
+      [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000],
+    );
+    void proposals;
+  }
+
+  if (!RETENTION_DAYS) return { events: 0, sessions: 0, rolled: 0, snapshots, stubs, more: false };
   const cutoff = Date.now() - RETENTION_DAYS * 86_400_000;
   // One transaction: the fold and the delete are the same decision, and a
   // crash between them would delete a day nobody had summarised.
@@ -2697,7 +3233,13 @@ export function pruneOldRows(): { events: number; sessions: number; rolled: numb
   // failed. See rollupPaths().
   rollupPathCache = null;
   return db.transaction(() => {
-    const rolled = foldExpiringEvents(cutoff);
+    // This slice ends at the chunk-th qualifying row in index order (timestamp, id): no sort, no
+    // rescan of what is left. No such row means this is the last slice.
+    const hi = chunk
+      ? db.query<{ timestamp: number; id: number }, [number, number]>(`SELECT timestamp, id FROM events WHERE timestamp < ? ORDER BY timestamp, id LIMIT 1 OFFSET ?`).get(cutoff, chunk - 1)
+      : null;
+    const hts = hi?.timestamp ?? Number.MAX_SAFE_INTEGER, hid = hi?.id ?? Number.MAX_SAFE_INTEGER;
+    const rolled = foldExpiringEvents(cutoff, hts, hid);
     // The risk roll-up drops only the flags whose own edit is about to go.
     // Clearing all of it on every run, deleted or not, made the next poll
     // re-parse every listed session's whole edit history on the event loop
@@ -2709,9 +3251,9 @@ export function pruneOldRows(): { events: number; sessions: number; rolled: numb
     // it shadowed stays lost until the session is read again. A session at the
     // cap may have dropped flags this would let back in, so it is re-read.
     const expiring = new Map<string, Set<number>>();
-    for (const { session_id, id } of db.query<{ session_id: string; id: number }, [number]>(
+    for (const { session_id, id } of db.query<{ session_id: string; id: number }, [number, number, number]>(
       `SELECT session_id, id FROM events
-       WHERE timestamp < ? AND hook_event_type='PostToolUse' AND tool_name IN ('Edit','Write','MultiEdit')`).all(cutoff)) {
+       WHERE timestamp < ? AND (timestamp, id) <= (?, ?) AND hook_event_type='PostToolUse' AND tool_name IN ('Edit','Write','MultiEdit')`).all(cutoff, hts, hid)) {
       if (!riskMemo.has(session_id)) continue;
       const g = expiring.get(session_id);
       if (g) g.add(id); else expiring.set(session_id, new Set([id]));
@@ -2726,9 +3268,18 @@ export function pruneOldRows(): { events: number; sessions: number; rolled: numb
         for (const id of gone) m.where.delete(id);
       }
     }
-    db.run(`DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE timestamp < ?)`, [cutoff]);
-    const ev = db.run(`DELETE FROM events WHERE timestamp < ?`, [cutoff]);
+    db.run(`DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE timestamp < ? AND (timestamp, id) <= (?, ?))`, [cutoff, hts, hid]);
+    const ev = db.run(`DELETE FROM events WHERE timestamp < ? AND (timestamp, id) <= (?, ?)`, [cutoff, hts, hid]);
+    eventWrites++;
+    changedPathsMemo.drop(); changeListMemo.drop();
+    spendWrites++;
+    // The slice was full: the rest of the prune, and the cache wipe, wait for the last one.
+    if (hi) return { events: ev.changes, sessions: 0, rolled, snapshots, stubs, more: true };
+    promptNames.clear();
+    eventEpoch++;
+    sessionGens.clear();
     recorded.forget();
+    recountFacets();
     const se = db.run(`DELETE FROM sessions WHERE last_seen < ?`, [cutoff]);
     // Resolved gates only — a pending one is a live request, never retention's
     // business no matter how old its row looks.
@@ -2736,7 +3287,7 @@ export function pruneOldRows(): { events: number; sessions: number; rolled: numb
     // Acknowledged reminders age out; a live one is never retention's business
     // however old its row looks — the same ruling the gates line above makes.
     db.run(`DELETE FROM reminders WHERE (acked_at IS NOT NULL OR cancelled_at IS NOT NULL) AND due < ?`, [cutoff]);
-    return { events: ev.changes, sessions: se.changes, rolled, snapshots, stubs };
+    return { events: ev.changes, sessions: se.changes, rolled, snapshots, stubs, more: false };
   })();
 }
 
@@ -2804,17 +3355,6 @@ function rollupScopeClause(scope: Scope = workspaceRoots()): { clause: string; a
 
 /** The per-day aggregate shared by rollupDays() and dailyUsage(), so the two
  *  cannot drift into answering the same question differently. */
-const DAY_TOTALS = `SELECT day,
-        SUM(events) AS events, SUM(tool_calls) AS tool_calls,
-        SUM(tool_errors) AS tool_errors, SUM(errors) AS errors,
-        SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
-        SUM(cache_creation_tokens) AS cache_creation_tokens,
-        SUM(cache_read_tokens) AS cache_read_tokens,
-        SUM(cost_usd) AS cost_usd,
-        COUNT(DISTINCT session_id) AS sessions,
-        CASE WHEN SUM(timed_calls) > 0
-             THEN CAST(SUM(duration_ms_total) / SUM(timed_calls) AS INTEGER)
-             ELSE 0 END AS avg_ms`;
 
 /**
  * Daily totals from the rollup alone, scoped like every other metric.
@@ -2858,54 +3398,32 @@ export function rollupDays(fromDay?: string, toDay?: string): UsageDay[] {
  * shifting it would put spend on a different day than the rollup recorded it.
  */
 export function dailyUsage(fromDay?: string, toDay?: string): UsageDay[] {
-  const rs = rollupScopeClause();
-  const es = scopeClause();
-  const rWhere: string[] = [];
-  const rArgs: any[] = [];
-  const eWhere: string[] = [];
-  const eArgs: any[] = [];
-  if (fromDay) {
-    rWhere.push("day >= ?"); rArgs.push(fromDay);
-    // Bounded on `timestamp` rather than on date(timestamp), so the events half
-    // can use the timestamp index instead of computing a date per row. With
-    // retention disabled this table holds everything, and "all time" is exactly
-    // when that matters.
-    eWhere.push("timestamp >= CAST(strftime('%s', ?) AS INTEGER) * 1000"); eArgs.push(fromDay);
-  }
-  if (toDay) {
-    rWhere.push("day <= ?"); rArgs.push(toDay);
-    eWhere.push("timestamp < (CAST(strftime('%s', ?) AS INTEGER) + 86400) * 1000"); eArgs.push(toDay);
-  }
-  const rc = ` WHERE 1${rWhere.length ? ` AND ${rWhere.join(" AND ")}` : ""}${rs.clause}`;
-  const ec = ` WHERE 1${eWhere.length ? ` AND ${eWhere.join(" AND ")}` : ""}${es.clause}`;
-  return db
-    .query<UsageDay, any[]>(
-      `WITH merged AS (
-         SELECT day, session_id, events, tool_calls, tool_errors, errors,
-                input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
-                cost_usd, duration_ms_total, timed_calls
-         FROM daily_rollup${rc}
-         UNION ALL
-         -- Folded the same way foldExpiringEvents() folds, down to the date
-         -- expression: a day that is half here and half in the rollup has to
-         -- land on the same key in both halves or it splits into two days.
-         SELECT date(timestamp / 1000, 'unixepoch') AS day, session_id,
-                COUNT(*),
-                SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') THEN 1 ELSE 0 END),
-                SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') AND is_error = 1 THEN 1 ELSE 0 END),
-                SUM(COALESCE(is_error, 0)),
-                SUM(COALESCE(input_tokens, 0)), SUM(COALESCE(output_tokens, 0)),
-                SUM(COALESCE(cache_creation_tokens, 0)), SUM(COALESCE(cache_read_tokens, 0)),
-                SUM(COALESCE(cost_usd, 0)),
-                SUM(COALESCE(duration_ms, 0)),
-                SUM(CASE WHEN duration_ms IS NOT NULL THEN 1 ELSE 0 END)
-         FROM events${ec}
-         GROUP BY 1, 2
-       )
-       ${DAY_TOTALS} FROM merged GROUP BY day ORDER BY day`
-    )
-    .all(...rArgs, ...rs.args, ...eArgs, ...es.args);
+  return dailyUsageRead(db, dailyUsageCtx(), fromDay, toDay);
 }
+/** What dailyUsage reads from this module's state, so the reader process can be handed it. */
+export function dailyUsageCtx(): DailyCtx {
+  return { rollup: rollupScopeClause(), events: scopeClause() };
+}
+
+/**
+ * Counts the writes that can change what `spendBetween` answers: an event
+ * that carries a cost, the retention fold with its delete, and an erase. A
+ * reader that kept an answer compares this (and SQLite's data_version, for a
+ * write from another process) instead of summing again. Events without a
+ * cost do not count, on purpose: a tool call's own Pre event lands just
+ * before its gate check, and counting it would drop the answer every time.
+ */
+let spendWrites = 0;
+/**
+ * Counts every write that can change which events exist (an insert, an erase,
+ * the retention delete). Like `spendEpoch` but for any event, so a reader of
+ * "when did X last speak" can keep its answer until this moves.
+ */
+let eventWrites = 0;
+export const eventsEpoch = (): string =>
+  `${eventWrites}:${(db.query("PRAGMA data_version").get() as { data_version: number } | null)?.data_version ?? 0}`;
+export const spendEpoch = (): string =>
+  `${spendWrites}:${(db.query("PRAGMA data_version").get() as { data_version: number } | null)?.data_version ?? 0}`;
 
 /**
  * What was spent, over a window, by one project and optionally one model.
@@ -3029,6 +3547,7 @@ let bashDoneHook: ((cwd: string, command: string) => void) | null = null;
 export function setBashDoneHook(fn: (cwd: string, command: string) => void): void { bashDoneHook = fn; }
 
 export function insertEvent(n: NormalizedEvent): InsertResult {
+  const stored = slimForInsert(slimToolResponse(n.payload) ?? n.payload, n.hook_event_type) ?? slimToolResponse(n.payload) ?? n.payload ?? {};
   const model = n.model_name;
   // Every event, before any dedup/rollup below: the derived view keeps by max
   // timestamp, so replaying a duplicate or an out-of-order backfill is harmless.
@@ -3068,19 +3587,26 @@ export function insertEvent(n: NormalizedEvent): InsertResult {
         );
   const eventCost = n.reported_cost_usd ?? estimatedEventCost;
 
-  // --- latency pairing ----------------------------------------------------
-  let duration_ms: number | null = null;
-  if (isToolPost(n.hook_event_type)) {
-    let pre: { timestamp: number } | null = null;
-    if (n.tool_use_id) pre = claimPreById.get(n.tool_use_id) ?? null;
-    if (!pre && n.tool_name) {
-      // Same ceiling the open-tool card uses to call a call lost.
-      pre = claimPreByTool.get(n.session_id, n.tool_name, n.timestamp, n.timestamp - OPEN_TOOL_MAX_MS) ?? null;
-    }
-    if (pre) duration_ms = Math.max(0, n.timestamp - pre.timestamp);
-  }
-
   const write = (): InsertResult => {
+    // --- latency pairing ---------------------------------------------------
+    // Inside the transaction, not before it: the claim below is a write, and
+    // it has to commit or roll back with the row it is measuring (see the
+    // note on the transaction call). Run here instead of ahead of it, it was
+    // its own implicit transaction — a second lock wait stacked onto the
+    // insert's, which is what turned one busy_timeout into two on a
+    // contended database (measured: an 11.3s loop stall on a single /ingest).
+    let duration_ms: number | null = null;
+    if (isToolPost(n.hook_event_type)) {
+      let pre: PreClaim | null = null;
+      if (n.tool_use_id) pre = claimPreById.get(n.tool_use_id) ?? null;
+      if (!pre && n.tool_name) {
+        // Same ceiling the open-tool card uses to call a call lost.
+        pre = claimPreByTool.get(n.session_id, n.tool_name, n.timestamp, n.timestamp - OPEN_TOOL_MAX_MS) ?? null;
+      }
+      if (pre) duration_ms = Math.max(0, n.timestamp - pre.timestamp);
+      if (pre) slimPairedPre(pre, (n.payload as { tool_input?: unknown } | null)?.tool_input);
+    }
+
     const inserted = insertStmt.get({
       $source_app: n.source_app,
       $session_id: n.session_id,
@@ -3101,10 +3627,14 @@ export function insertEvent(n: NormalizedEvent): InsertResult {
       $cache_read_tokens: dCr,
       $cost_usd: eventCost,
       $summary: n.summary,
-      $payload: JSON.stringify(n.payload ?? {}),
+      // Stored with its answer cut to what is read: see slimToolResponse, slimForInsert.
+      $payload: JSON.stringify(stored),
       $timestamp: n.timestamp,
     }) as { id: number } | null;
 
+    if (inserted) { eventWrites++; sessionGens.set(n.session_id, (sessionGens.get(n.session_id) ?? 0) + 1); }
+    if (inserted && eventCost) spendWrites++;
+    if (n.hook_event_type === "UserPromptSubmit") promptNames.delete(n.session_id);
     if (!inserted) {
       const existing = n.event_id
         ? eventByExternalId.get(n.source_app, n.session_id, n.event_id)
@@ -3113,19 +3643,55 @@ export function insertEvent(n: NormalizedEvent): InsertResult {
       return duplicateResult(existing);
     }
 
-    const event = parseEventRow(rowToEvent.get(inserted.id));
+    // Built from the values just bound, not re-read: the SELECT * plus the
+    // payload parse cost a row round-trip and a 2-10 KB parse per event. The
+    // generated columns (project_path, cwd_path) are what the payload says.
+    const sp = stored as Record<string, unknown>;
+    const event = withParsedPayload(
+      {
+        id: inserted.id,
+        source_app: n.source_app,
+        session_id: n.session_id,
+        event_id: n.event_id,
+        hook_event_type: n.hook_event_type,
+        tool_name: n.tool_name,
+        tool_use_id: n.tool_use_id,
+        agent_id: n.agent_id,
+        agent_type: n.agent_type,
+        model_name: model,
+        provider: providerOf(model),
+        is_error: n.is_error ? 1 : 0,
+        error_text: n.error_text,
+        duration_ms,
+        input_tokens: dIn,
+        output_tokens: dOut,
+        cache_creation_tokens: dCw,
+        cache_read_tokens: dCr,
+        cost_usd: eventCost,
+        summary: n.summary,
+        timestamp: n.timestamp,
+        project_path: sp.project_path ?? null,
+        cwd_path: sp.cwd ?? null,
+        paired: 0,
+      },
+      sp
+    );
     const session = upsertSession(n, dIn, dOut, dCw, dCr, eventCost, estimatedEventCost);
     return { event, session, inserted: true };
   };
 
   // One transaction on every path, not only the retry-key one.
   //
-  // The Pre claim above is a write, and it has to commit or roll back with the
-  // row it is measuring — otherwise two concurrent Posts can each claim a Pre
-  // and then one of the inserts fails, leaving a Pre marked answered by an
-  // event that does not exist. It also has to be in the *same* transaction as
-  // the claim, which is why the claim is not lifted out of insertEvent.
-  const result = db.transaction(write)();
+  // The Pre claim inside `write` is a write, and it has to commit or roll back
+  // with the row it is measuring — otherwise two concurrent Posts can each
+  // claim a Pre and then one of the inserts fails, leaving a Pre marked
+  // answered by an event that does not exist. It also has to be in the *same*
+  // transaction as the insert, which is why it is run inside `write` rather
+  // than ahead of this call — see the note where it is defined. Named for the
+  // loop watchdog: a database locked by the scanner's sweep or the retention
+  // prune waits here through busy_timeout, and the stall should say so rather
+  // than naming whatever request happened to be last.
+  const result = waitedFor(`insertEvent ${n.hook_event_type}`, () => db.transaction(write)());
   if (!result.inserted) return result;
   const { event } = result;
 
@@ -3138,13 +3704,14 @@ export function insertEvent(n: NormalizedEvent): InsertResult {
   // Same rule, same place, for the filter dropdowns: three Set lookups per
   // event, and the memo behind them is dropped only when this event carries a
   // value those lists do not have. See getFilterOptions.
-  noteFilterValues(n.source_app, n.hook_event_type, n.model_name);
+  noteFacets(n.payload?.project_path, (n.payload as { cwd?: unknown } | undefined)?.cwd, n.source_app, n.hook_event_type, n.model_name);
   // A Pre opens a call and a Post closes one, so the open-tool memo the fleet
   // draws from just went stale. Drop it here, the single write chokepoint, so
   // the next read — the push that fires right after this returns — is fresh,
   // while an idle machine with no tool traffic never invalidates and so never
   // re-runs that scoped scan on the tick.
   if (n.hook_event_type === "PreToolUse" || isToolPost(n.hook_event_type)) invalidateOpenTools();
+  if (changesAffectedBy(n)) { changedPathsMemo.drop(); changeListMemo.drop(); }
   return result;
 }
 
@@ -3420,87 +3987,129 @@ export function openToolCalls(): OpenToolCall[] {
   return data;
 }
 
-/**
- * The filter dropdowns' contents, cached.
- *
- * Measured by the loop watchdog on a real cockpit: 1432ms of blocked event
- * loop, five times in two minutes — the single worst freeze in the app, and
- * every millisecond of it is a terminal that has stopped echoing, because the
- * PTY rides this same thread.
- *
- * Three `SELECT DISTINCT` over 35k rows should be instant, and would be if the
- * scope filter did not expand to one four-way OR group per checkout of the
- * project. Eighteen worktrees is seventy-two predicates, half of them LIKE, on
- * every row — which no index survives. Fixing that clause is worth doing and is
- * not a thing to rush; caching what it feeds is worth doing anyway, because
- * this is the contents of a dropdown. A new app or model appearing thirty
- * seconds late costs nothing; the freeze costs the terminal.
- */
 /*
- * The dropdowns only change when a value nobody has seen before arrives.
- *
- * This was a 30-second memo, so an idle machine recomputed three scoped
- * SELECT DISTINCTs about once every forty seconds for ever, to produce the list
- * it produced last time. The pattern that fits is the one `notePath` already
- * uses two hundred lines up: hold what has been seen, test the event at the
- * single write chokepoint, and drop the memo only on a miss — "so an idle
- * machine with no tool traffic never invalidates".
- *
- * It is also better behaviour, not merely cheaper. A new agent or a new model
- * appears in the dropdown on its FIRST event instead of up to thirty seconds
- * later, which is the same argument `notePath` makes for a new worktree.
- *
- * The long TTL stays as the net for the one case a write cannot signal:
- * retention pruning deleting the last event that carried a value, which is a
- * DELETE, not an insert. Ten minutes of a dropdown offering a value whose rows
- * have just aged out is a filter that finds nothing, not a wrong answer.
+ * The facet values (source_app, hook_event_type, model_name) are a tiny set, kept per recorded path
+ * (project_path and cwd_path) and overall, in memory. Nothing is indexed for them: a synchronous
+ * CREATE INDEX at boot on the real 785k-row table blocks the only thread for seconds and adds ~120 MB.
+ *  - fill: a background walk over id slices after boot, each slice timed and sized to stay near 25 ms,
+ *    with a setTimeoutAs yield between slices (facetStats.maxMs is the proof);
+ *  - insertEvent adds the row's values (noteFacets), so a new agent or model shows on its FIRST event;
+ *  - retention deletes cannot remove a value from a set, so they start a recount into a fresh set
+ *    (same slices) that replaces the live one when done; inserts during it go to both;
+ *  - the route never scans: before the first fill it answers from what it has with `partial: true`.
  */
-const FILTER_TTL_MS = 10 * 60_000;
-let filterCache: { at: number; scope: string; data: ReturnType<typeof computeFilterOptions> } | null = null;
-/** The values the memo was built from, so an event can be tested against them
- *  without a query. Rebuilt with the memo; null while there is none. */
-let filterSeen: { apps: Set<string>; types: Set<string>; models: Set<string> } | null = null;
+type Facet = { apps: Set<string>; types: Set<string>; models: Set<string> };
+const newFacet = (): Facet => ({ apps: new Set(), types: new Set(), models: new Set() });
+let facets = { all: newFacet(), byPath: new Map<string, Facet>() };
+let facetsBuilding: typeof facets | null = null;
+let facetRecountPending = false;
+let facetsFilled = false;
+let facetTimer: ReturnType<typeof setTimeoutAs> | null = null;
+const FACET_SLICE_MS = 25, FACET_YIELD_MS = 10;
+export const facetStats = { slices: 0, maxMs: 0, maxRows: 0, fills: 0, errors: 0 };
+/** Test hook: make the next N slices throw; backoff base in ms. */
+export const facetTest = { failSlices: 0, backoffMs: 1000 };
+const FACET_MAX_ROWS = 4000; // one slice of json_extract rows must stay under FACET_SLICE_MS even on a cold disk
+let facetWaiters: Array<() => void> = [];
 
-/** One ingested event, against the lists the dropdowns are showing. A value
- *  that is not in them makes the memo stale — and nothing else does. */
-function noteFilterValues(app: unknown, type: unknown, model: unknown): void {
-  if (!filterSeen) return;
-  const missing =
-    (typeof app === "string" && app && !filterSeen.apps.has(app)) ||
-    (typeof type === "string" && type && !filterSeen.types.has(type)) ||
-    (typeof model === "string" && model && !filterSeen.models.has(model));
-  if (missing) { filterCache = null; filterSeen = null; }
-}
-
-export function getFilterOptions() {
-  const scope = scopeKey();
-  if (filterCache && filterCache.scope === scope && Date.now() - filterCache.at < FILTER_TTL_MS) return filterCache.data;
-  const data = computeFilterOptions();
-  filterCache = { at: Date.now(), scope, data };
-  filterSeen = {
-    apps: new Set(data.source_apps),
-    types: new Set(data.hook_event_types),
-    models: new Set(data.models),
+function addFacet(t: typeof facets, paths: unknown[], app: unknown, type: unknown, model: unknown): void {
+  const into = (f: Facet) => {
+    if (typeof app === "string" && app) f.apps.add(app);
+    if (typeof type === "string" && type) f.types.add(type);
+    if (typeof model === "string" && model) f.models.add(model);
   };
-  return data;
+  into(t.all);
+  for (const p of paths) {
+    if (typeof p !== "string" || !p) continue;
+    let f = t.byPath.get(p);
+    if (!f) t.byPath.set(p, (f = newFacet()));
+    into(f);
+  }
+}
+function noteFacets(project: unknown, cwd: unknown, app: unknown, type: unknown, model: unknown): void {
+  addFacet(facets, [project, cwd], app, type, model);
+  if (facetsBuilding) addFacet(facetsBuilding, [project, cwd], app, type, model);
 }
 
-function computeFilterOptions() {
-  // Scoped too, or the dropdowns keep offering apps and models that the feed
-  // behind them can no longer show — picking one would just empty the panel.
+/** Walk the events in id slices into a fresh set; swap it in at the end. Idempotent while one runs. */
+function startFacetFill(delayMs = 0): void {
+  if (facetsBuilding) return;
+  facetsBuilding = { all: newFacet(), byPath: new Map() };
+  let maxId = -1; // read on the first slice, not here: the fill is scheduled at module load
+  const q = db.query<{ p: string | null; c: string | null; a: string; t: string; m: string | null }, [number, number]>(
+    `SELECT DISTINCT project_path p, cwd_path c, source_app a, hook_event_type t, model_name m FROM events WHERE id > ? AND id <= ?`);
+  // The slice's upper id is the id of the size-th row past the cursor, not cursor+size: retention leaves
+  // the ids sparse (a day of Stop rows is millions of ids), and stepping ids from 0 walked every empty
+  // range at one slice per 4000 ids, 10 ms of CPU each (10,078 slices, ~100 s at full CPU on a 300k-row table).
+  const hiQ = db.query<{ h: number | null }, [number, number, number]>(`SELECT MAX(id) h FROM (SELECT id FROM events WHERE id > ? AND id <= ? ORDER BY id LIMIT ?)`);
+  let cursor = 0, size = 100; // first slice small: the file is cold at boot and a slice that size is unmeasured
+  let failures = 0;
+  const step = () => {
+    facetTimer = null;
+    try { slice(); } catch {
+      // A busy/locked DB must not wedge the fill: reset and retry with backoff.
+      facetStats.errors++; failures++;
+      facetsBuilding = null;
+      startFacetFill(Math.min(facetTest.backoffMs * 2 ** (failures - 1), 30_000));
+    }
+  };
+  const slice = () => {
+    const t0 = performance.now();
+    if (facetTest.failSlices > 0) { facetTest.failSlices--; throw new Error("facet slice test failure"); }
+    if (maxId < 0) maxId = db.query<{ m: number | null }, []>("SELECT MAX(id) m FROM events").get()?.m ?? 0;
+    const hi = hiQ.get(cursor, maxId, size)?.h ?? maxId; // no row left in range: the rest is empty
+    for (const r of q.all(cursor, hi)) addFacet(facetsBuilding!, [r.p, r.c], r.a, r.t, r.m);
+    facetStats.maxRows = Math.max(facetStats.maxRows, size);
+    cursor = hi;
+    const ms = performance.now() - t0;
+    facetStats.slices++; facetStats.maxMs = Math.max(facetStats.maxMs, ms);
+    size = ms < FACET_SLICE_MS / 2 ? Math.min(size * 2, FACET_MAX_ROWS) : ms > FACET_SLICE_MS ? Math.max(50, size >> 1) : size;
+    if (cursor < maxId) { facetTimer = setTimeoutAs("boot:facets:slice", step, FACET_YIELD_MS); (facetTimer as { unref?: () => void }).unref?.(); return; }
+    facets = facetsBuilding!; facetsBuilding = null; facetsFilled = true; facetStats.fills++;
+    const w = facetWaiters; facetWaiters = []; for (const f of w) f();
+    // Retention deleted rows while this fill ran: it had already read them, so count again.
+    if (facetRecountPending) { facetRecountPending = false; startFacetFill(FACET_YIELD_MS); }
+  };
+  facetTimer = setTimeoutAs("boot:facets:slice", step, delayMs);
+  (facetTimer as { unref?: () => void }).unref?.();
+}
+/** Retention deleted rows: a value may be gone, so recount in the background. */
+function recountFacets(): void {
+  // A fill running now has read rows that are gone: it cannot see the delete, so it recounts when it ends.
+  if (facetsBuilding) { facetRecountPending = true; return; }
+  startFacetFill(FACET_YIELD_MS);
+}
+/** Resolves once the next fill (first or recount) has been swapped in. */
+export function whenFacetsFilled(): Promise<void> {
+  return facetsFilled && !facetsBuilding ? Promise.resolve() : new Promise((r) => facetWaiters.push(r));
+}
+startFacetFill(250); // after boot, off the module-load path
+/** For the tests: forget the facet set as a fresh boot would, and schedule the first fill `delayMs` from now.
+ *  `bun test` runs every file in one process, so the set, the timer and the filled flag outlive the file. */
+export function __resetFacets(delayMs = 250): void {
+  if (facetTimer) clearTimeout(facetTimer);
+  facetTimer = null; facetsBuilding = null; facetsFilled = false; facetRecountPending = false;
+  facets = { all: newFacet(), byPath: new Map() };
+  facetTest.failSlices = 0; facetTest.backoffMs = 1000;
+  startFacetFill(delayMs);
+}
+
+export function getFilterOptions(): { source_apps: string[]; hook_event_types: string[]; models: string[]; partial?: true } {
+  // Scoped too, or the dropdowns keep offering apps and models that the feed behind them can no
+  // longer show. scopeClause's args are [...paths, ...paths]; unscoped has no clause.
   const s = scopeClause();
-  const distinct = <T,>(col: string, extra = "") =>
-    db
-      .query<Record<string, T>, string[]>(
-        `SELECT DISTINCT ${col} FROM events WHERE 1=1${extra}${s.clause} ORDER BY 1`
-      )
-      .all(...s.args)
-      .map((r) => r[col] as T);
-  return {
-    source_apps: distinct<string>("source_app"),
-    hook_event_types: distinct<string>("hook_event_type"),
-    models: distinct<string>("model_name", " AND model_name IS NOT NULL"),
-  };
+  let apps: Set<string>, types: Set<string>, models: Set<string>;
+  if (!s.clause) ({ apps, types, models } = facets.all);
+  else {
+    apps = new Set(); types = new Set(); models = new Set();
+    for (const p of s.args.slice(0, s.args.length / 2)) {
+      const f = facets.byPath.get(p);
+      if (f) { f.apps.forEach((x) => apps.add(x)); f.types.forEach((x) => types.add(x)); f.models.forEach((x) => models.add(x)); }
+    }
+  }
+  const sorted = (x: Set<string>) => [...x].sort();
+  const out = { source_apps: sorted(apps), hook_event_types: sorted(types), models: sorted(models) };
+  return facetsFilled ? out : { ...out, partial: true };
 }
 
 /**
@@ -3538,19 +4147,52 @@ const sessionsCache = new Map<string, { at: number; data: SessionRollup[] }>();
  */
 function firstPrompts(ids: string[]): Map<string, string> {
   const out = new Map<string, string>();
-  if (!ids.length) return out;
-  const holes = ids.map(() => "?").join(",");
+  // A session's first prompt never changes once it is in, so a found one is
+  // kept: the list asks again on every poll, and re-reading the prompt
+  // payloads of a hundred sessions each time was cold disk work on the
+  // server's only thread after every restart.
+  const want: string[] = [];
+  for (const id of ids) {
+    const p = firstPromptMemo.get(id);
+    if (p !== undefined) out.set(id, p); else want.push(id);
+  }
+  if (!want.length) return out;
+  const holes = want.map(() => "?").join(",");
   for (const r of db.query<{ session_id: string; payload: string }, string[]>(
-    `SELECT session_id, payload, MIN(timestamp) FROM events
+    `SELECT session_id, substr(payload, 1, ${FIRST_PROMPT_CHARS}) AS payload, MIN(timestamp) FROM events
      WHERE hook_event_type = 'UserPromptSubmit' AND session_id IN (${holes})
-     GROUP BY session_id`).all(...ids)) {
+     GROUP BY session_id`).all(...want)) {
     try {
-      const p = JSON.parse(r.payload)?.prompt;
-      if (typeof p === "string" && p.trim()) out.set(r.session_id, p);
+      const p = promptOfPayloadHead(r.payload);
+      if (typeof p === "string" && p.trim()) {
+        out.set(r.session_id, p);
+        if (firstPromptMemo.size >= FIRST_PROMPT_MEMO_MAX) firstPromptMemo.delete(firstPromptMemo.keys().next().value!);
+        firstPromptMemo.set(r.session_id, p);
+      }
     } catch { /* a payload we cannot read is not a name */ }
   }
   return out;
 }
+/* The caller takes the first plain line of the prompt and clips it to 60
+   characters (shared/sessionTitle.ts: promptTitle, clipTitle). The hook
+   envelope before the prompt is a few hundred characters, so 4096 leaves
+   ~3.5 K of prompt to find that line past a short fence or quote. A prompt
+   that opens with more than that of fenced text has no title, as before for
+   an unreadable payload; the old read pulled the whole payload (hundreds of
+   KB, cold disk) on the loop to say the same thing. */
+const FIRST_PROMPT_CHARS = 4096;
+/** The prompt out of a payload that may have been cut: whole JSON parses as
+ *  before; a cut one gives the part of the prompt string that survived. */
+function promptOfPayloadHead(head: string): unknown {
+  try { return JSON.parse(head)?.prompt; } catch { /* cut: read the string by hand */ }
+  const m = /"prompt"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(head);
+  if (!m) return undefined;
+  // A cut can leave a lone backslash or half a \uXXXX at the end.
+  const body = m[1].replace(/\\(?:u[0-9a-fA-F]{0,3})?$/, "");
+  return JSON.parse(`"${body}"`);
+}
+const firstPromptMemo = new Map<string, string>();
+const FIRST_PROMPT_MEMO_MAX = 2000;
 
 /**
  * A short name for each of these sessions, by the same rule `getSessions`
@@ -3630,6 +4272,31 @@ function decentPrompt(p: string): boolean {
 }
 
 /**
+ * The name found for a session with no title, kept until its prompts change.
+ *
+ * The Lantern asks for these on every `GET /agents/board`, which the rail
+ * polls every 5 to 20 s for as long as the app is open. For each untitled
+ * session the query read EVERY prompt the session ever had, payload and all,
+ * to look at the first six: a long-running session holds hundreds, some with
+ * pasted text in them. Measured on the installed app: "event loop blocked
+ * 4516 ms by GET /agents/board, waiting", 981,584 blocks (about 480 MB) read
+ * back from disk and 1,979 ms of CPU, in one request. Two changes: the query
+ * stops at six rows per session (idx_events_first_prompt gives them in
+ * order), and the answer is kept. It can only change when a prompt of that
+ * session is written (dropped in insertEvent) or rows are removed (cleared by
+ * the retention pass and by an erase), so what is kept is what a fresh read
+ * would say. "" is kept too: no name yet is an answer.
+ */
+const promptNames = new Map<string, string>();
+const PROMPT_NAMES_MAX = 2000;
+/** Reads that went to the table, for the test that counts them. */
+export let promptNameReads = 0;
+const firstSixPrompts = db.query<{ payload: string }, [string]>(
+  `SELECT payload FROM events
+    WHERE hook_event_type = 'UserPromptSubmit' AND session_id = ?
+    ORDER BY timestamp ASC, id ASC LIMIT 6`);
+
+/**
  * The first prompt a person could recognise the session by, per session.
  *
  * `firstPrompts` above takes the earliest prompt and is what the sessions page
@@ -3638,21 +4305,23 @@ function decentPrompt(p: string): boolean {
  */
 function firstDecentPrompts(ids: string[]): Map<string, string> {
   const out = new Map<string, string>();
-  if (!ids.length) return out;
-  const holes = ids.map(() => "?").join(",");
-  const seen = new Map<string, number>();
-  for (const r of db.query<{ session_id: string; payload: string }, string[]>(
-    `SELECT session_id, payload FROM events
-     WHERE hook_event_type = 'UserPromptSubmit' AND session_id IN (${holes})
-     ORDER BY timestamp ASC, id ASC`).all(...ids)) {
-    if (out.has(r.session_id)) continue;
-    const n = (seen.get(r.session_id) ?? 0) + 1;
-    seen.set(r.session_id, n);
-    if (n > 6) continue; // six prompts in and still nothing to call it: the pane id will do
-    let p = "";
-    try { p = String(JSON.parse(r.payload)?.prompt ?? ""); } catch { continue; }
-    if (!decentPrompt(p)) continue;
-    out.set(r.session_id, p.replace(/\s+/g, " ").trim().slice(0, 80));
+  for (const id of ids) {
+    let name = promptNames.get(id);
+    if (name === undefined) {
+      name = "";
+      promptNameReads++;
+      // Six prompts in and still nothing to call it: the pane id will do.
+      for (const r of firstSixPrompts.all(id)) {
+        let p = "";
+        try { p = String(JSON.parse(r.payload)?.prompt ?? ""); } catch { continue; }
+        if (!decentPrompt(p)) continue;
+        name = p.replace(/\s+/g, " ").trim().slice(0, 80);
+        break;
+      }
+      if (promptNames.size >= PROMPT_NAMES_MAX) promptNames.delete(promptNames.keys().next().value!);
+      promptNames.set(id, name);
+    }
+    if (name) out.set(id, name);
   }
   return out;
 }
@@ -3684,13 +4353,66 @@ const roleUpsert = db.query<never, [string, string, number]>(`INSERT INTO sessio
 const roleAll = db.query<{ session_id: string; role: string }, []>(`SELECT session_id, role FROM session_role`);
 export function setSessionRole(sessionId: string, role: string, at = Date.now()): void { if (sessionId) roleUpsert.run(sessionId, role, at); }
 export function sessionRoles(): Map<string, string> { return new Map(roleAll.all().map((r) => [r.session_id, r.role])); }
-/** Sessions whose first prompt carries a marker — how the Lantern's chats
- *  from before the role existed are found, once, at boot. */
-export function sessionsWhosePromptStarts(mark: string): string[] {
-  const out = new Set<string>();
-  for (const r of db.query<{ session_id: string }, [string]>(
-    `SELECT DISTINCT session_id FROM events WHERE hook_event_type = 'UserPromptSubmit' AND payload LIKE ?`).all(`%${mark}%`)) out.add(r.session_id);
-  return [...out];
+/**
+ * HOW THE LANTERN'S AND THE SEAT'S CHATS FROM BEFORE THE ROLE EXISTED ARE FOUND.
+ *
+ * It was `SELECT DISTINCT session_id ... payload LIKE '%mark%'`, run by the first
+ * `isLanternSession` call, which is the first POST /ingest after a start: every
+ * UserPromptSubmit payload on the file read from disk inside that request
+ * (measured on a 785k-row, 1.6 GB copy with the page cache evicted: 2.4 s of the
+ * 3.1 s first ingest, ~190 MB read). Now: once per database (`boot_once`), in the
+ * background, one session at a time. A session's first prompt is one seek on
+ * idx_events_first_prompt and one row, so the work follows the number of sessions
+ * and not the size of the table, and each slice yields after ~25 ms.
+ *
+ * Whatever a hook says about a NEW chat (hookSaysLantern / hookSaysSeat) is
+ * unchanged and persists its role at once; only chats that predate roles wait
+ * for this walk, a few seconds after a start, one time.
+ */
+db.exec(`CREATE TABLE IF NOT EXISTS boot_once (name TEXT PRIMARY KEY, at INTEGER NOT NULL)`);
+const firstPromptOf = db.query<{ prompt: string | null }, [string]>(
+  `SELECT json_extract(payload, '$.prompt') AS prompt FROM events
+    WHERE hook_event_type = 'UserPromptSubmit' AND session_id = ? ORDER BY timestamp LIMIT 1`);
+const sessionIdsAfter = db.query<{ session_id: string }, [string, number]>(
+  `SELECT session_id FROM sessions WHERE session_id > ? ORDER BY session_id LIMIT ?`);
+export const legacyScanStats = { slices: 0, maxMs: 0, sessions: 0 };
+/** Test hook: how long before the first slice, the slice budget, the wait before a retry. */
+export const legacyScanTest = { delayMs: 3000, budgetMs: 25, retryMs: 1000 };
+const LEGACY_SCAN_RETRIES = 5;
+export function scheduleLegacyPromptScan(name: string, mark: string, found: (sessionId: string) => void): void {
+  const done = () => { try { return db.query("SELECT 1 FROM boot_once WHERE name = ?").get(name) !== null; } catch { return true; } };
+  let cursor = "";
+  let failures = 0;
+  const later = (ms: number): void => { const t = setTimeoutAs(`boot:${name}:slice`, step, ms); (t as { unref?: () => void }).unref?.(); };
+  function step(): void {
+    const t0 = performance.now();
+    let delay = 10;
+    try {
+      if (cursor === "" && done()) return;
+      // The budget is checked after EACH session: one first prompt can be hundreds of KB to parse.
+      let finished = false;
+      while (!finished) { // at least one session per slice, so a tiny budget still makes progress
+        const ids = sessionIdsAfter.all(cursor, 20);
+        if (ids.length === 0) { db.query("INSERT OR REPLACE INTO boot_once (name, at) VALUES (?, ?)").run(name, Date.now()); return; }
+        for (const { session_id } of ids) {
+          legacyScanStats.sessions++;
+          const prompt = firstPromptOf.get(session_id)?.prompt;
+          if (typeof prompt === "string" && prompt.trimStart().startsWith(mark)) found(session_id);
+          cursor = session_id;
+          if (performance.now() - t0 >= legacyScanTest.budgetMs) { finished = true; break; }
+        }
+      }
+      failures = 0;
+    } catch (e) {
+      // A transient BUSY must not end the walk: the slice is retried from the same cursor, a few times.
+      if (++failures > LEGACY_SCAN_RETRIES) { console.warn(`[boot:${name}] legacy scan gave up after ${LEGACY_SCAN_RETRIES} retries; it runs again at the next start`, e); return; }
+      console.warn(`[boot:${name}] legacy scan slice failed (retry ${failures}/${LEGACY_SCAN_RETRIES})`, e);
+      delay = legacyScanTest.retryMs;
+    }
+    legacyScanStats.slices++; legacyScanStats.maxMs = Math.max(legacyScanStats.maxMs, performance.now() - t0);
+    later(delay);
+  }
+  later(legacyScanTest.delayMs);
 }
 
 /**
@@ -3779,7 +4501,7 @@ export function noteWaitFromHook(e: { session_id?: unknown; hook_event_type?: un
      person asked it something and it answered. Its notifications are dropped
      here, and any wait it once recorded is cleared. */
   if (e.role === "lantern") {
-    if (typeof e.session_id === "string" && e.session_id) db.run(`DELETE FROM session_wait WHERE session_id = ?`, [e.session_id]);
+    if (typeof e.session_id === "string" && e.session_id) clearWait(e.session_id);
     return;
   }
   const session = typeof e.session_id === "string" ? e.session_id : "";
@@ -3789,13 +4511,49 @@ export function noteWaitFromHook(e: { session_id?: unknown; hook_event_type?: un
     const kind = notificationKind(msg);
     if (!kind) return;
     try {
+      waitingSessions().add(session);
       db.query("INSERT OR REPLACE INTO session_wait (session_id, kind, why, at) VALUES (?, ?, ?, ?)")
         .run(session, kind, msg.replace(/\s+/g, " ").trim().slice(0, 160), at);
     } catch { /* the board says a little less; the event still lands */ }
     return;
   }
-  try { db.query("DELETE FROM session_wait WHERE session_id = ?").run(session); } catch { /* same */ }
+  clearWait(session);
 }
+
+/*
+ * WHO HAS A ROW IN session_wait, KEPT IN MEMORY SO "NOBODY" COSTS NOTHING.
+ *
+ * Anything a session does after a wait clears the wait, so every hook event
+ * that is not a wait-shaped notification ran a DELETE: a write transaction on
+ * the server's only thread, per event, two events per tool call, that removed
+ * no row nearly every time (a session waits a few times an hour and works the
+ * rest). The set is read from the table once and kept in step by the two
+ * writers above, which are the only ones; `waitDeletes` counts the statements
+ * that really ran, for the test.
+ *
+ * The ceiling: a row another process puts in this table is not seen here, so
+ * this process would not clear it. Nothing else writes the table today (the
+ * hooks of a machine post to one server), so this names a limit, not a known
+ * case.
+ */
+let waiting: Set<string> | null = null;
+export let waitDeletes = 0;
+function waitingSessions(): Set<string> {
+  if (!waiting) {
+    waiting = new Set();
+    try { for (const r of db.query<{ session_id: string }, []>("SELECT session_id FROM session_wait").all()) waiting.add(r.session_id); } catch { /* an empty set only skips a delete */ }
+  }
+  return waiting;
+}
+function clearWait(session: string): void {
+  const set = waitingSessions();
+  if (!set.has(session)) return;
+  set.delete(session);
+  waitDeletes++;
+  try { db.query("DELETE FROM session_wait WHERE session_id = ?").run(session); } catch { /* the board says a little less; the event still lands */ }
+}
+/** For the tests: read the table again at the next event. */
+export function __forgetWaits(): void { waiting = null; }
 
 /** Which of these sessions are stopped on a person right now, and why. */
 export function latestWaits(ids: string[]): Map<string, SessionWait> {
@@ -3841,19 +4599,14 @@ export function getSessions(limit = 100, provider?: string): SessionRollup[] {
       if (p) d.first_prompt = p;
     }
   }
-  attachRisks(data);
-  sessionsCache.set(key, { at: Date.now(), data });
+  // A list that left sessions for the warm turns is not kept: the next poll
+  // reads it again and finds their flags.
+  if (attachRisks(data, RISK_WARM_BATCH) === 0) sessionsCache.set(key, { at: Date.now(), data });
   // One entry per (limit, provider, scope); the limit set is tiny and scope
   // rarely changes, so prune stale entries anyway so a long-lived server cannot
   // leak.
   if (sessionsCache.size > 64) for (const [k, v] of sessionsCache) if (Date.now() - v.at >= SESSIONS_TTL_MS) sessionsCache.delete(k);
   return data;
-}
-
-function percentile(sorted: number[], p: number): number {
-  if (!sorted.length) return 0;
-  const idx = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length));
-  return sorted[idx];
 }
 
 /**
@@ -3900,321 +4653,40 @@ export function statsSummary(windowMs = 24 * 3600 * 1000, provider?: string, tz?
 }
 
 function computeStatsSummary(windowMs: number, provider?: string, tz?: string): StatsSummary {
-  const since = Date.now() - windowMs;
-  const { clause: prov, args: pa } = providerScope(provider);
-  const { clause: sc, args: sa } = scopeClause();
-  // Every query below appends `pf` and binds `A` in this order, so folding the
-  // project filter in here reaches all of them at once.
-  const pf = prov + sc;
-  const A = [since, ...pa, ...sa]; // bind order: timestamp, provider (if any), project (if any)
+  return statsSummaryRead(db, statsCtx(provider), windowMs, tz);
+}
+/** What statsSummary and skillUsageDetail read from this module's state and the clock. */
+export function statsCtx(provider?: string | null): StatsCtx {
+  return { now: Date.now(), provider: providerScope(provider), events: scopeClause(), zone: serverZone() };
+}
 
-  // Every total here is from events within the window — cost and tokens
-  // included — because /stats is a windowed view (last 15m / 1h / …), not a
-  // lifetime one: cost_usd summed over the window's events is the spend in that
-  // window, which is what the dashboard asks for. (The sessions table holds the
-  // authoritative lifetime totals; those are what getSessions serves per row,
-  // not what a window summary wants.) One pass, not several: counts, errors,
-  // sessions, tokens and cost all cover exactly these rows, and over a wide
-  // window each separate pass would be another full scan.
-  const totals = db
-    .query<any, any[]>(
-      `SELECT COUNT(*) AS events,
-              SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') THEN 1 ELSE 0 END) AS tool_calls,
-              SUM(is_error) AS errors,
-              -- Errors that were actually a tool failing, which is the only
-              -- numerator tool_calls can honestly serve as a denominator for.
-              -- The errors column counts every errored event, and an LLM span
-              -- or a notification can carry is_error too (otlp.ts sets it on
-              -- "Turn complete") — dividing that by tool calls produced a
-              -- health ring below zero, and insights reading "6 of 4 tool
-              -- calls failed". Both ship; each answers its own question.
-              SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') AND is_error = 1 THEN 1 ELSE 0 END) AS tool_errors,
-              COUNT(DISTINCT session_id) AS sessions,
-              SUM(input_tokens) AS input_tokens,
-              SUM(output_tokens) AS output_tokens,
-              SUM(cache_creation_tokens) AS cache_creation_tokens,
-              SUM(cache_read_tokens) AS cache_read_tokens,
-              SUM(cost_usd) AS cost_usd
-       FROM events WHERE timestamp >= ?${pf}`
-    )
-    .get(...A)!;
-  const evtTotals = totals as { events: number; tool_calls: number; errors: number; tool_errors: number };
-  const tokTotals = totals;
+/**
+ * statsSummary with the computation done somewhere else when `via` answers.
+ *
+ * Same key, same one-second memo and same result as the sync function; only
+ * where the queries run differs. `via` answering null (reader off, down, slow
+ * or in error) is today's path on this thread.
+ */
+export async function statsSummaryAsync(via: ReadVia, windowMs = 24 * 3600 * 1000, provider?: string, tz?: string): Promise<StatsSummary> {
+  const key = `${windowMs}|${provider ?? ""}|${scopeKey()}|${tz ?? ""}`;
+  const hit = statsCache.get(key);
+  if (hit && Date.now() - hit.at < STATS_TTL_MS) return hit.data;
+  const remote = (await via("statsSummary", statsCtx(provider), [windowMs, tz ?? null])) as StatsSummary | null;
+  const data = remote ?? computeStatsSummary(windowMs, provider, tz);
+  statsCache.set(key, { at: Date.now(), data });
+  if (statsCache.size > 64) for (const [k, v] of statsCache) if (Date.now() - v.at >= STATS_TTL_MS) statsCache.delete(k);
+  return data;
+}
 
-  // Per-model breakdown (from events so it respects the window).
-  const modelRows = db
-    .query<any, any[]>(
-      `SELECT model_name,
-              SUM(input_tokens) AS input_tokens,
-              SUM(output_tokens) AS output_tokens,
-              SUM(cache_creation_tokens) AS cache_creation_tokens,
-              SUM(cache_read_tokens) AS cache_read_tokens,
-              SUM(cost_usd) AS cost_usd,
-              COUNT(DISTINCT session_id) AS sessions
-       FROM events WHERE timestamp >= ?${pf}
-       GROUP BY model_name`
-    )
-    .all(...A);
-  /**
-   * Fold the raw ids into their labels before the panel sees them.
-   *
-   * The SQL groups by `model_name`, which is the raw id, and the label is
-   * applied after — so two ids that share a label ("claude-opus-4-1" and
-   * "claude-opus-4-5" both being Opus) arrived as two rows reading "Opus",
-   * each carrying part of that model's spend, under the same name and the
-   * same colour. The donut's centre was right and no legend row was.
-   *
-   * `sessions` is the one column that cannot be summed: it is a
-   * COUNT(DISTINCT session_id) per raw id, so a session that switched model
-   * version mid-run counts once in each row and twice in the fold. It is
-   * counted over distinct pairs instead, below.
-   */
-  const sessionRows = db
-    .query<{ model_name: string | null; session_id: string }, any[]>(
-      `SELECT DISTINCT model_name, session_id FROM events
-       WHERE timestamp >= ? AND model_name IS NOT NULL${pf}`
-    )
-    .all(...A);
-  const sessionsByLabel = new Map<string, Set<string>>();
-  for (const r of sessionRows) {
-    const label = modelLabel(r.model_name);
-    const set = sessionsByLabel.get(label) ?? new Set<string>();
-    set.add(r.session_id);
-    sessionsByLabel.set(label, set);
-  }
+/** One of READS on this module's own connection: the answer the reader's must equal, to the byte. */
+export function readHere(fn: ReadName, ctx: unknown, args: unknown[]): unknown {
+  return READS[fn](db, ctx, args);
+}
 
-  const modelFold = new Map<string, CostByModel>();
-  for (const r of modelRows) {
-    const label = modelLabel(r.model_name);
-    const e = modelFold.get(label) ?? {
-      model_name: label,
-      input_tokens: 0, output_tokens: 0, cache_creation_tokens: 0, cache_read_tokens: 0,
-      equiv_tokens: 0, cost_usd: 0, sessions: 0, unpriced: false,
-    };
-    // Any contributing id without a rate makes the whole row's cost partly a
-    // fallback — the honest reading, since the row is one number.
-    if (!hasPrice(r.model_name)) e.unpriced = true;
-    e.input_tokens += r.input_tokens ?? 0;
-    e.output_tokens += r.output_tokens ?? 0;
-    e.cache_creation_tokens += r.cache_creation_tokens ?? 0;
-    e.cache_read_tokens += r.cache_read_tokens ?? 0;
-    /*
-     * Weighted here, inside the loop, against the RAW id.
-     *
-     * Two ids can fold into one label and be priced differently — that is the
-     * whole reason the fold exists — so weighting the folded row would apply
-     * one model's ratios to another's tokens. Per raw id and then summed is
-     * exact, and keeps the identity that makes this number worth leading with:
-     * equivalent tokens times the base input rate is the cost.
-     */
-    e.equiv_tokens = (e.equiv_tokens ?? 0) + equivalentTokens(r, r.model_name);
-    e.cost_usd += r.cost_usd ?? 0;
-    modelFold.set(label, e);
-  }
-  for (const [label, e] of modelFold) e.sessions = sessionsByLabel.get(label)?.size ?? 0;
-  /*
-   * The window's one comparable number, summed from the same rows the
-   * breakdown is built from.
-   *
-   * Deliberately not a separate query. The headline and the legend under it are
-   * the two figures somebody checks against each other, and computing them from
-   * two SQL statements is how they come to disagree — `modelRows` has no
-   * `model_name IS NOT NULL` filter, so this covers events with no model too,
-   * which fall to the fallback rate exactly as their cost already does.
-   */
-  const equivTotal = [...modelFold.values()].reduce((n, e) => n + (e.equiv_tokens ?? 0), 0);
-  // Ordered on the way out: the query has no ORDER BY, and the panel renders
-  // the array in the order it arrives, so without this the donut's slices
-  // reshuffle between refreshes for no reason the viewer can see.
-  const by_model: CostByModel[] = [...modelFold.values()].sort((a, b) => b.cost_usd - a.cost_usd);
-
-  // Tool latency — pull durations per tool and compute percentiles in JS.
-  const durRows = db
-    .query<{ tool_name: string; duration_ms: number; is_error: number }, any[]>(
-      `SELECT tool_name, duration_ms, is_error FROM events
-       WHERE timestamp >= ? AND hook_event_type IN ('PostToolUse','PostToolUseFailure')
-         AND tool_name IS NOT NULL${pf}`
-    )
-    .all(...A);
-  const byTool = new Map<string, { durs: number[]; errors: number; count: number }>();
-  for (const r of durRows) {
-    const e = byTool.get(r.tool_name) ?? { durs: [], errors: 0, count: 0 };
-    e.count++; // every PostToolUse is an invocation, even without a paired duration (e.g. OTLP-logs sources)
-    if (typeof r.duration_ms === "number") e.durs.push(r.duration_ms);
-    if (r.is_error) e.errors++;
-    byTool.set(r.tool_name, e);
-  }
-  const tool_latency: ToolLatencyStat[] = [...byTool.entries()]
-    .map(([tool_name, { durs, errors, count }]) => {
-      const sorted = [...durs].sort((a, b) => a - b);
-      const total = sorted.reduce((a, b) => a + b, 0);
-      return {
-        tool_name,
-        calls: count,
-        // The percentile sample, which is not the call count: a Post with no
-        // paired Pre is an invocation with no duration. Shipped so the panel
-        // can say when a p95 rests on two measurements.
-        timed: sorted.length,
-        errors,
-        p50_ms: percentile(sorted, 50),
-        p95_ms: percentile(sorted, 95),
-        max_ms: sorted.length ? sorted[sorted.length - 1] : 0,
-        avg_ms: sorted.length ? Math.round(total / sorted.length) : 0,
-        total_ms: total,
-      };
-    })
-    .sort((a, b) => b.total_ms - a.total_ms);
-
-  // Most-used skills with attributed cost and per-bucket activity.
-  const top_skills: SkillUsage[] = skillUsageDetail(since, 12, provider).slice(0, 20);
-
-  // Per-app rollup within the window.
-  /*
-   * Grouped by app AND model, then folded.
-   *
-   * `tokens` used to be `SUM(input_tokens + output_tokens)`, which is not a
-   * quantity: it adds a token that costs five to a token that costs a tenth and
-   * drops the cache classes entirely. Weighting needs the model, and the model
-   * is not in a group keyed on the app alone — so the group carries it and the
-   * fold puts the apps back together. The extra rows are apps × models, which
-   * is single digits times single digits.
-   */
-  const appRows = db
-    .query<any, any[]>(
-      `SELECT source_app, model_name,
-              COUNT(*) AS events,
-              SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') THEN 1 ELSE 0 END) AS tool_calls,
-              SUM(cost_usd) AS cost_usd,
-              SUM(input_tokens) AS input_tokens,
-              SUM(output_tokens) AS output_tokens,
-              SUM(cache_creation_tokens) AS cache_creation_tokens,
-              SUM(cache_read_tokens) AS cache_read_tokens
-       FROM events WHERE timestamp >= ?${pf}
-       GROUP BY source_app, model_name`
-    )
-    .all(...A);
-  // `sessions` is a COUNT(DISTINCT), which does not survive a fold: a session
-  // that used two models would be counted once per model and twice in the sum.
-  const appSessions = db
-    .query<{ source_app: string; sessions: number }, any[]>(
-      `SELECT source_app, COUNT(DISTINCT session_id) AS sessions
-       FROM events WHERE timestamp >= ?${pf} GROUP BY source_app`
-    )
-    .all(...A);
-  const appFold = new Map<string, AppUsage>();
-  for (const r of appRows) {
-    const e = appFold.get(r.source_app) ?? { source_app: r.source_app, events: 0, sessions: 0, tool_calls: 0, cost_usd: 0, tokens: 0 };
-    e.events += r.events ?? 0;
-    e.tool_calls += r.tool_calls ?? 0;
-    e.cost_usd += r.cost_usd ?? 0;
-    e.tokens += equivalentTokens(r, r.model_name);
-    appFold.set(r.source_app, e);
-  }
-  for (const r of appSessions) { const e = appFold.get(r.source_app); if (e) e.sessions = r.sessions ?? 0; }
-  const by_app: AppUsage[] = [...appFold.values()].sort((a, b) => b.cost_usd - a.cost_usd || b.events - a.events);
-
-  // Event-type mix within the window.
-  const by_type: TypeCount[] = db
-    .query<TypeCount, any[]>(
-      `SELECT hook_event_type, COUNT(*) AS count
-       FROM events WHERE timestamp >= ?${pf}
-       GROUP BY hook_event_type ORDER BY count DESC`
-    )
-    .all(...A);
-
-  // Timeline buckets.
-  const bucketCount = 60;
-  const bucketMs = Math.max(1000, Math.floor(windowMs / bucketCount));
-  const start = Math.floor(since / bucketMs) * bucketMs;
-  // The buckets are aligned DOWN from `since`, so they span [start, start +
-  // 60*bucketMs), whose upper edge is <= now — the most recent up-to-one-bucket
-  // of events (an event at `now` always) fell past the last bucket and vanished
-  // from the chart while still counting in the totals. Fold anything at or past
-  // the last bucket into it, so every event in the window lands somewhere and
-  // sum(bucket events) == totals.events.
-  const lastKey = start + (bucketCount - 1) * bucketMs;
-  const buckets = new Map<number, TimeBucket>();
-  for (let i = 0; i < bucketCount; i++) {
-    const t = start + i * bucketMs;
-    buckets.set(t, { t, events: 0, errors: 0, cost_usd: 0, tokens: 0 });
-  }
-  const tlRows = db
-    .query<any, any[]>(
-      // model_name and both cache columns come along so the bucket's `tokens`
-      // can be weighted per row — see the fold below and equivalentTokens().
-      `SELECT timestamp, is_error, cost_usd, model_name,
-              input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens
-         FROM events WHERE timestamp >= ?${pf}`
-    )
-    .all(...A);
-  /**
-   * The heatmap is a weekday x hour grid, and neither exists without a clock.
-   *
-   * It used to bucket with getDay()/getHours(), which read the *server*
-   * process's zone, while the timeline beside it buckets UTC epochs and is
-   * rendered in the viewer's. So the cell labelled "Tue 14:00" and the tick
-   * labelled 14:00 described different real hours whenever the two clocks
-   * differed — shifted by the offset, with whole day columns moving when it
-   * crossed midnight. Remote access and the phone companion exist precisely
-   * so that the viewer is not on the server, so this was reachable rather
-   * than theoretical.
-   *
-   * The formatter is built once: formatToParts per event over a wide window
-   * is thousands of calls. An absent or unknown zone falls back to the old
-   * behaviour rather than throwing — the server's clock is still better than
-   * a 500.
-   */
-  const heatmap = new Array(168).fill(0);
-  const WEEKDAY: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-  let fmt: Intl.DateTimeFormat | null = null;
-  if (tz) {
-    try {
-      fmt = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", hour: "2-digit", hour12: false });
-    } catch { fmt = null; }
-  }
-  const cellOf = (ms: number): number => {
-    if (!fmt) { const d = new Date(ms); return d.getDay() * 24 + d.getHours(); }
-    const parts = fmt.formatToParts(ms);
-    const wd = WEEKDAY[parts.find((x) => x.type === "weekday")?.value ?? "Sun"] ?? 0;
-    // hour12:false spells midnight "24" in some locales.
-    const hr = Number(parts.find((x) => x.type === "hour")?.value ?? 0) % 24;
-    return wd * 24 + hr;
-  };
-  for (const r of tlRows) {
-    const t = Math.min(lastKey, Math.floor(r.timestamp / bucketMs) * bucketMs);
-    const b = buckets.get(t);
-    if (b) {
-      b.events++;
-      b.errors += r.is_error;
-      b.cost_usd += r.cost_usd ?? 0;
-      b.tokens += equivalentTokens(r, r.model_name);
-    }
-    heatmap[cellOf(r.timestamp)]++;
-  }
-
-  return {
-    totals: {
-      events: evtTotals.events ?? 0,
-      sessions: tokTotals.sessions ?? 0,
-      tool_calls: evtTotals.tool_calls ?? 0,
-      errors: evtTotals.errors ?? 0,
-      tool_errors: evtTotals.tool_errors ?? 0,
-      cost_usd: tokTotals.cost_usd ?? 0,
-      input_tokens: tokTotals.input_tokens ?? 0,
-      output_tokens: tokTotals.output_tokens ?? 0,
-      cache_creation_tokens: tokTotals.cache_creation_tokens ?? 0,
-      cache_read_tokens: tokTotals.cache_read_tokens ?? 0,
-      equiv_tokens: equivTotal,
-    },
-    by_model,
-    tool_latency,
-    timeline: [...buckets.values()].sort((a, b) => a.t - b.t),
-    top_skills,
-    by_app,
-    by_type,
-    heatmap,
-    window_ms: windowMs,
-  };
+/** dailyUsage, computed somewhere else when `via` answers; null from it is today's path. */
+export async function dailyUsageAsync(via: ReadVia, fromDay?: string, toDay?: string): Promise<UsageDay[]> {
+  const remote = (await via("dailyUsage", dailyUsageCtx(), [fromDay ?? null, toDay ?? null])) as UsageDay[] | null;
+  return remote ?? dailyUsage(fromDay, toDay);
 }
 
 /**
@@ -4225,71 +4697,7 @@ function computeStatsSummary(windowMs: number, provider?: string, tz?: string): 
  * running /code-review actually cost?".
  */
 export function skillUsageDetail(since = 0, bucketCount = 12, provider?: string): SkillUsage[] {
-  const { clause: pf, args: pa } = providerScope(provider);
-  // Project scope, same as every other aggregation in computeStatsSummary. Its
-  // absence here leaked top_skills — and the cost charged to them — from every
-  // other project on the machine into a cockpit opened for one.
-  const { clause: sc, args: sa } = scopeClause();
-  const invocations = db
-    .query<{ session_id: string; timestamp: number; skill: string }, any[]>(
-      `SELECT session_id, timestamp, json_extract(payload, '$.tool_input.skill') AS skill
-       FROM events
-       WHERE hook_event_type = 'PreToolUse' AND tool_name = 'Skill'
-         AND json_extract(payload, '$.tool_input.skill') IS NOT NULL AND timestamp >= ?${pf}${sc}
-       ORDER BY session_id, timestamp`
-    )
-    .all(since, ...pa, ...sa);
-  if (!invocations.length) return [];
-
-  const bySession = new Map<string, { timestamp: number; skill: string }[]>();
-  for (const inv of invocations) {
-    const arr = bySession.get(inv.session_id) ?? [];
-    arr.push(inv);
-    bySession.set(inv.session_id, arr);
-  }
-
-  const acc = new Map<string, { calls: number; cost_usd: number; last_used: number; buckets: number[] }>();
-  const get = (skill: string) => {
-    let a = acc.get(skill);
-    if (!a) {
-      a = { calls: 0, cost_usd: 0, last_used: 0, buckets: new Array(bucketCount).fill(0) };
-      acc.set(skill, a);
-    }
-    return a;
-  };
-
-  const start = since || invocations.reduce((m, i) => Math.min(m, i.timestamp), Date.now());
-  const bucketMs = Math.max(1, (Date.now() - start) / bucketCount);
-  for (const inv of invocations) {
-    const a = get(inv.skill);
-    a.calls++;
-    a.last_used = Math.max(a.last_used, inv.timestamp);
-    const idx = Math.min(bucketCount - 1, Math.max(0, Math.floor((inv.timestamp - start) / bucketMs)));
-    a.buckets[idx]++;
-  }
-
-  // Charge each cost-bearing event to the running skill at that moment — scoped
-  // too, or an out-of-project session's spend is attributed to an in-project
-  // skill it never ran.
-  const costRows = db
-    .query<{ session_id: string; timestamp: number; cost_usd: number }, any[]>(
-      `SELECT session_id, timestamp, cost_usd FROM events WHERE cost_usd > 0 AND timestamp >= ?${sc}`
-    )
-    .all(since, ...sa);
-  for (const c of costRows) {
-    const invs = bySession.get(c.session_id);
-    if (!invs) continue;
-    let owner: string | null = null;
-    for (const inv of invs) {
-      if (inv.timestamp <= c.timestamp) owner = inv.skill;
-      else break;
-    }
-    if (owner) get(owner).cost_usd += c.cost_usd;
-  }
-
-  return [...acc.entries()]
-    .map(([skill, a]) => ({ skill, ...a }))
-    .sort((a, b) => b.calls - a.calls || b.cost_usd - a.cost_usd);
+  return skillUsageRead(db, statsCtx(provider), since, bucketCount);
 }
 
 type ChangeRow = { id: number; timestamp: number; source_app: string; session_id: string; tool_name: string; payload: string };
@@ -4389,9 +4797,9 @@ function parseChange(r: ChangeRow, withRisks = true): import("../../shared/types
  * the list was stale and then never read again, because the watermark had moved
  * past it. So the memo keeps every flag with where its edit ran.
  *
- * Its ceilings: the first poll after the server starts still reads every listed
- * session from 0 in one go, and spreading that over several polls is the next
- * step and is not here. The per-session cap applies before the scope, so a
+ * Its ceilings: the first poll after the server starts reads at most
+ * RISK_WARM_BATCH sessions from 0 and leaves the rest to the warm turns, so
+ * those carry no flag for a poll or two. The per-session cap applies before the scope, so a
  * session with more than SESSION_RISK_CAP flagged files outside the project can
  * crowd out one inside it.
  */
@@ -4399,8 +4807,318 @@ type RiskWhere = { project_path: string | null; cwd_path: string | null };
 const riskMemo = new Map<string, { through: number; flags: import("../../shared/types.ts").SessionRisk[]; where: Map<number, RiskWhere> }>();
 const RISK_MEMO_MAX = 2000;
 
-function attachRisks(rows: import("../../shared/types.ts").SessionRollup[]): void {
-  if (!rows.length) return;
+/** Sessions read per turn of the loop while the flags are warmed after a start.
+ *  Measured at boot on a copy of the live DB (173k events): one turn of 20 sessions
+ *  blocked the loop 1,103 ms, between the listener binding (~0.8 s) and the first
+ *  /health answer (1.9 s). 5 keeps each turn near 275 ms. */
+export const RISK_WARM_BATCH = 5;
+/** The wait before the first warm turn: past first paint, so boot answers /health
+ *  and the first poll before this read starts. A list asked for sooner still reads
+ *  what is owed (attachRisks), as before. */
+export const RISK_WARM_START_MS = 3000;
+const riskWarmQueue = new Set<string>();
+let riskWarmTimer: ReturnType<typeof setTimeout> | null = null;
+/** Sessions read from nothing so far, for the test that counts them. */
+export let riskColdReads = 0;
+
+/**
+ * Read the flags of the newest sessions before anybody asks for the list.
+ *
+ * The first `GET /sessions` after a start found every listed session at
+ * watermark 0, and read and JSON-parsed every edit each one ever made in a
+ * single call: measured on the installed app two seconds after a boot, "event
+ * loop blocked 427 ms by GET /sessions, computing", 411 ms of it CPU. That is
+ * the ceiling the comment above names. The work is the same; it is done here
+ * instead, RISK_WARM_BATCH sessions per turn with the loop free in between,
+ * starting when the server does. `attachRisks` is unchanged: a list asked for
+ * before this has finished still reads whatever is left in line, so no
+ * answer ever lacks a flag; it is only shorter work the later it comes.
+ * Ceiling: a list asked for in the first instant still pays for what is not
+ * warm yet, and sessions beyond `limit` are read when first listed, as before.
+ */
+export function warmSessionRisks(limit = 100, startMs = RISK_WARM_START_MS): void {
+  try {
+    for (const r of db.query<{ session_id: string }, [number]>(`SELECT session_id FROM sessions ORDER BY last_seen DESC LIMIT ?`).all(limit)) {
+      if (!riskMemo.has(r.session_id)) riskWarmQueue.add(r.session_id);
+    }
+  } catch { return; }
+  scheduleRiskWarm(startMs);
+}
+/** Start the warm turns over whatever is in line, unless they are already running. */
+function scheduleRiskWarm(startMs: number): void {
+  if (riskWarmTimer || !riskWarmQueue.size) return;
+  const step = () => {
+    riskWarmTimer = null;
+    const batch = [...riskWarmQueue].slice(0, RISK_WARM_BATCH);
+    for (const id of batch) riskWarmQueue.delete(id);
+    if (batch.length) attachRisks(batch.map((session_id) => ({ session_id }) as import("../../shared/types.ts").SessionRollup), Infinity, RISK_WARM_SPAN);
+    if (riskWarmQueue.size) { riskWarmTimer = setTimeoutAs("boot:session-risk-warm:step", step, 20); (riskWarmTimer as { unref?: () => void }).unref?.(); }
+  };
+  riskWarmTimer = setTimeoutAs("boot:session-risk-warm:step", step, startMs);
+  (riskWarmTimer as { unref?: () => void }).unref?.();
+}
+/**
+ * The one-time pass that takes the two repeats out of rows stored before ingest
+ * stopped writing them (see payloadslim.ts): a Pre's input already on its Post,
+ * and a `usage.iterations` that copies its own usage.
+ *
+ * Resumable: `events_slim_pass` holds the last id done and the newest id that
+ * existed when the pass began (rows after it were written slim). A step reads a
+ * window of SLIM_PASS_WINDOW ids, rewrites the rows it changes and moves the mark,
+ * in one transaction, so a quit between steps loses nothing and redoes nothing.
+ * No table is dropped: the test database is shared and other code counts rows.
+ * The space comes back through shrinkFreePages after the last step.
+ */
+export const SLIM_PASS_WINDOW = 500;
+db.exec(`CREATE TABLE IF NOT EXISTS events_slim_pass (
+  k INTEGER PRIMARY KEY CHECK (k = 1),
+  last_id INTEGER NOT NULL,
+  top_id INTEGER NOT NULL,
+  done INTEGER NOT NULL DEFAULT 0
+)`);
+const slimPassState = db.query<{ last_id: number; top_id: number; done: number }, []>(
+  `SELECT last_id, top_id, done FROM events_slim_pass WHERE k = 1`);
+const slimPassRows = db.query<{ id: number; hook_event_type: string; session_id: string; tool_use_id: string | null; payload: string }, [number, number]>(
+  `SELECT id, hook_event_type, session_id, tool_use_id, payload FROM events
+    WHERE id > ? AND id <= ?
+      AND (hook_event_type = 'PreToolUse' OR instr(payload, '"iterations":[') > 0)`);
+const slimPassPost = db.query<{ ti: string | null }, [string, string]>(
+  `SELECT json_extract(payload, '$.tool_input') AS ti FROM events
+    WHERE tool_use_id = ? AND session_id = ? AND hook_event_type IN ('PostToolUse','PostToolUseFailure')
+    ORDER BY id LIMIT 1`);
+const slimPassWrite = db.query<unknown, [string, number]>(`UPDATE events SET payload = ? WHERE id = ?`);
+
+/** One window of the pass. Returns true while more is owed.
+ *  The mark is read inside an IMMEDIATE transaction, so a second server on the
+ *  same file waits for the write lock and then sees the mark this one moved,
+ *  instead of redoing a window from a mark it read before the lock. */
+export function slimOldEventsStep(window = SLIM_PASS_WINDOW): boolean {
+  const state = db.transaction((): "done" | "last" | "more" => {
+    let st = slimPassState.get();
+    if (!st) {
+      const top = (db.query(`SELECT COALESCE(MAX(id), 0) AS m FROM events`).get() as { m: number }).m;
+      db.run(`INSERT OR IGNORE INTO events_slim_pass (k, last_id, top_id, done) VALUES (1, 0, ?, 0)`, [top]);
+      st = slimPassState.get()!;
+    }
+    if (st.done) return "done";
+    const from = st.last_id, to = Math.min(st.top_id, st.last_id + Math.max(1, window));
+    for (const r of slimPassRows.all(from, to)) {
+      let p: Record<string, unknown>;
+      try { p = JSON.parse(r.payload); } catch { continue; }
+      if (!p || typeof p !== "object") continue;
+      let changed = dropRepeatedIterations(p);
+      if (r.hook_event_type === "PreToolUse" && r.tool_use_id && p.tool_input_slim !== true) {
+        const post = slimPassPost.get(r.tool_use_id, r.session_id);
+        let postInput: unknown = null;
+        try { postInput = post?.ti ? JSON.parse(post.ti) : null; } catch { /* leave the Pre whole */ }
+        const slim = postInput && sameInput(p.tool_input, postInput) ? slimToolInput(p.tool_input) : null;
+        if (slim) { p.tool_input = slim; p.tool_input_slim = true; changed = true; }
+      }
+      if (changed) slimPassWrite.run(JSON.stringify(p), r.id);
+    }
+    db.run(`UPDATE events_slim_pass SET last_id = ?, done = ? WHERE k = 1`, [to, to >= st.top_id ? 1 : 0]);
+    return to >= st.top_id ? "last" : "more";
+  }).immediate();
+  if (state === "last") shrinkFreePages();
+  return state === "more";
+}
+
+/** For the tests, on a shared database: aim the pass at their own id range. */
+export function __setSlimPass(lastId: number, topId: number): void {
+  db.run(`INSERT OR REPLACE INTO events_slim_pass (k, last_id, top_id, done) VALUES (1, ?, ?, 0)`, [lastId, topId]);
+}
+
+/**
+ * The same cut for rows stored before slimToolResponse ran at insert.
+ *
+ * Its own resumable mark, `events_resp_pass`, shaped like events_slim_pass: the
+ * slim pass may already be done on a database, and this one still owes every
+ * row. A window reads only rows whose payload is long enough to hold something
+ * to cut and names a tool_response, so a window of short rows costs no parse.
+ * It runs once over the table, behind the slim pass on the same timer; rows
+ * written after it began were stored cut.
+ */
+db.exec(`CREATE TABLE IF NOT EXISTS events_resp_pass (
+  k INTEGER PRIMARY KEY CHECK (k = 1),
+  last_id INTEGER NOT NULL,
+  top_id INTEGER NOT NULL,
+  done INTEGER NOT NULL DEFAULT 0
+)`);
+const respPassState = db.query<{ last_id: number; top_id: number; done: number }, []>(
+  `SELECT last_id, top_id, done FROM events_resp_pass WHERE k = 1`);
+const respPassRows = db.query<{ id: number; payload: string }, [number, number, number]>(
+  `SELECT id, payload FROM events
+    WHERE id > ? AND id <= ? AND length(payload) > ? AND instr(payload, '"tool_response"') > 0`);
+
+/** One window of the response pass. Returns true while more is owed. */
+export function slimOldResponsesStep(window = SLIM_PASS_WINDOW): boolean {
+  const state = db.transaction((): "done" | "last" | "more" => {
+    let st = respPassState.get();
+    if (!st) {
+      const top = (db.query(`SELECT COALESCE(MAX(id), 0) AS m FROM events`).get() as { m: number }).m;
+      db.run(`INSERT OR IGNORE INTO events_resp_pass (k, last_id, top_id, done) VALUES (1, 0, ?, 0)`, [top]);
+      st = respPassState.get()!;
+    }
+    if (st.done) return "done";
+    const from = st.last_id, to = Math.min(st.top_id, st.last_id + Math.max(1, window));
+    for (const r of respPassRows.all(from, to, RESPONSE_CAP)) {
+      let p: Record<string, unknown>;
+      try { p = JSON.parse(r.payload); } catch { continue; }
+      if (!p || typeof p !== "object") continue;
+      const slim = slimToolResponse(p);
+      if (slim) slimPassWrite.run(JSON.stringify(slim), r.id);
+    }
+    db.run(`UPDATE events_resp_pass SET last_id = ?, done = ? WHERE k = 1`, [to, to >= st.top_id ? 1 : 0]);
+    return to >= st.top_id ? "last" : "more";
+  }).immediate();
+  if (state === "last") { shrinkFreePages(); changedPathsMemo.drop(); changeListMemo.drop(); }
+  return state === "more";
+}
+
+/** For the tests, on a shared database: aim the response pass at their own id range. */
+export function __setRespPass(lastId: number, topId: number): void {
+  db.run(`INSERT OR REPLACE INTO events_resp_pass (k, last_id, top_id, done) VALUES (1, ?, ?, 0)`, [lastId, topId]);
+}
+
+/**
+ * The cut for events past the hot window (see slimColdEvent), a slice at a time.
+ *
+ * Unlike the two one-shot passes above, rows go cold as the clock moves, so this
+ * one keeps a cursor, `events_cold_pass.last_id`, and walks ids upward until it
+ * meets a row still inside the window. Events are written in id order and stamped
+ * at write time, so that row is the edge; a row re-inserted out of order behind
+ * the cursor keeps its fat payload until retention takes it. One slice is its own
+ * short transaction (COLD_SLICE rows read, the changed ones rewritten); the caller
+ * hands the loop back between slices. Never a VACUUM: the freed pages go back
+ * through shrinkFreePages in small steps.
+ */
+export const COLD_SLICE = 200;
+/** Payload bytes one slice reads before it stops: a row count does not bound the work when rows are 64 KB. */
+export const COLD_SLICE_BYTES = 400_000;
+db.exec(`CREATE TABLE IF NOT EXISTS events_cold_pass (
+  k INTEGER PRIMARY KEY CHECK (k = 1),
+  last_id INTEGER NOT NULL
+)`);
+// Sizes first, payloads one by one: the budget decides how many payloads are read.
+const coldRows = db.query<{ id: number; timestamp: number; hook_event_type: string; tool_name: string | null; n: number }, [number, number]>(
+  `SELECT id, timestamp, hook_event_type, tool_name, length(payload) AS n FROM events WHERE id > ? ORDER BY id LIMIT ?`);
+const coldPayload = db.query<{ payload: string }, [number]>(`SELECT payload FROM events WHERE id = ?`);
+/** One slice. Returns true while more cold rows are owed. */
+export function slimColdEventsStep(slice = COLD_SLICE, now = Date.now()): boolean {
+  const cut = now - COLD_AFTER_MS;
+  return db.transaction((): boolean => {
+    const last = (db.query(`SELECT last_id FROM events_cold_pass WHERE k = 1`).get() as { last_id: number } | null)?.last_id ?? 0;
+    const rows = coldRows.all(last, Math.max(1, slice));
+    let mark = last, reachedEdge = false, bytes = 0;
+    for (const r of rows) {
+      if (r.timestamp >= cut) { reachedEdge = true; break; }
+      // Stop before a row that would pass the budget; the first row is always taken.
+      if (bytes > 0 && bytes + r.n > COLD_SLICE_BYTES) break;
+      mark = r.id;
+      bytes += r.n;
+      if (r.n < 300) continue;
+      let p: Record<string, unknown>;
+      try { p = JSON.parse(coldPayload.get(r.id)?.payload ?? ""); } catch { continue; }
+      const slim = slimColdEvent(p, r.hook_event_type, r.tool_name);
+      if (slim) slimPassWrite.run(JSON.stringify(slim), r.id);
+    }
+    if (mark !== last) db.run(`INSERT INTO events_cold_pass (k, last_id) VALUES (1, ?) ON CONFLICT(k) DO UPDATE SET last_id = excluded.last_id`, [mark]);
+    return !reachedEdge && mark !== last;
+  }).immediate();
+}
+
+/** Run the cold cut to the edge with the loop free between slices. Returns the slice count. */
+export async function slimColdEventsYielding(slice = COLD_SLICE, now = Date.now()): Promise<number> {
+  let n = 0;
+  for (;;) {
+    n++;
+    if (!waitedFor("cold events slice", () => slimColdEventsStep(slice, now))) break;
+    await new Promise<void>((res) => setImmediate(res));
+    resumedAs("cold events pace");
+    await paceByWal();
+  }
+  if (n > 1) { changedPathsMemo.drop(); changeListMemo.drop(); }
+  return n;
+}
+
+/** Both old-row passes, one window per turn: the slim pass first, then this one. */
+export function oldEventsStep(): boolean {
+  return slimOldEventsStep() || slimOldResponsesStep();
+}
+
+let slimPassTimer: ReturnType<typeof setTimeout> | null = null;
+/** Run the pass in the background, one window per turn with the loop free in
+ *  between, starting well after boot. Single and unref'd. A step that throws
+ *  (another process holding the lock past busy_timeout, a full disk) is said
+ *  once and tried again after retryMs, doubling up to retryMaxMs; a good step
+ *  resets the wait. */
+export function startSlimOldEvents(startMs = 60_000, gapMs = 50, retryMs = 10 * 60_000, retryMaxMs = 6 * 3_600_000, step1: () => boolean = oldEventsStep): void {
+  if (slimPassTimer) return;
+  let wait = retryMs, said = false;
+  const next = (ms: number) => { slimPassTimer = setTimeoutAs("boot:slim-old-events:pass", step, ms); (slimPassTimer as { unref?: () => void }).unref?.(); };
+  const step = () => {
+    slimPassTimer = null;
+    let more = false;
+    try { more = step1(); } catch (e) {
+      if (!said) { said = true; console.warn(`[db] events slim pass step failed, retrying in ${Math.round(wait / 1000)} s and backing off: ${(e as Error)?.message ?? e}`); }
+      next(wait); wait = Math.min(wait * 2, retryMaxMs);
+      return;
+    }
+    wait = retryMs;
+    if (more) next(gapMs);
+  };
+  next(startMs);
+}
+
+/** For the tests: whether a background read is still owed. */
+export const __risksWarming = (): boolean => riskWarmQueue.size > 0 || riskWarmTimer !== null;
+
+/** The edits of `n` sessions with ids in (mark, top]: see attachRisks. */
+export function riskReadSql(n: number): string {
+  return `SELECT id, timestamp, source_app, session_id, tool_name, payload, project_path, cwd_path FROM events INDEXED BY idx_events_pre_open
+           WHERE session_id IN (${Array(n).fill("?").join(",")}) AND tool_name IN ('Edit','Write','MultiEdit') AND id > ? AND id <= ?
+             AND hook_event_type='PostToolUse'
+           ORDER BY id DESC`;
+}
+
+/**
+ * Event ids one warm turn reads. Measured on a copy of the live DB (page cache
+ * dropped, 1.66 GB file): the first warm turn, 3 s after a boot, blocked the loop
+ * 1,065 ms ("unlabelled ... waiting cpu=365ms diskblk=372376", server-stall.log).
+ * The turn was 5 sessions, but two of them hold 3,446 and 1,203 edits and read
+ * 496 ms and 327 ms alone, cold: a session count does not bound the work. Nor does
+ * a row limit: the filter on hook_event_type sends every candidate to the table, so
+ * LIMIT 400 still cost 719 ms. The id range is tested on the index before the table,
+ * so a span of ids does bound it: the same first 5 sessions in 20,000-id spans, cold,
+ * worst turn 93 ms (63 turns, 1,073 ms in all, loop free between them).
+ */
+export const RISK_WARM_SPAN = 20_000;
+
+/**
+ * Where one read of (mark, top] stops: `span` ids past the first row any of the
+ * sessions has (nothing lies below `firstId`, so the empty stretch costs no turn),
+ * or `top`. Everything up to it is read; the rest is owed. Pure, for the test.
+ */
+export function riskChunkTop(mark: number, firstId: number | null, top: number, span: number): number {
+  if (!Number.isFinite(span)) return top;
+  return Math.min(top, Math.max(mark, (firstId ?? top) - 1) + span);
+}
+
+/**
+ * Puts each session's flags on its row. Returns how many sessions it left for
+ * the warm turns: at most `coldBudget` sessions never read before are read on
+ * this call, the rest go in line (see warmSessionRisks) and carry no flag yet.
+ *
+ * The budget is the request path's. The first `GET /sessions` after a start
+ * arrived before the warm turns were done and read every session still owed in
+ * one call: "event loop blocked 1468ms by GET /sessions, waiting ... 298416
+ * blocks read from disk", four seconds after a boot (server-stall.log,
+ * 2026-11-13), and again after each of the next restarts. A flag that shows up
+ * one poll later is the price of a list that never freezes the terminal.
+ */
+function attachRisks(rows: import("../../shared/types.ts").SessionRollup[], coldBudget = Infinity, span = Infinity): number {
+  if (!rows.length) return 0;
+  let deferred = 0;
   try {
     const top = db.query<{ m: number | null }, []>(`SELECT MAX(id) m FROM events`).get()?.m ?? 0;
     const ids = rows.map((r) => r.session_id);
@@ -4408,25 +5126,37 @@ function attachRisks(rows: import("../../shared/types.ts").SessionRollup[]): voi
     // just appeared starts at 0, and that must not make every other listed
     // session re-read its whole history.
     const byMark = new Map<number, string[]>();
+    let cold = 0;
     for (const id of ids) {
       const mark = riskMemo.get(id)?.through ?? 0;
       if (mark >= top) continue;
+      if (!riskMemo.has(id) && ++cold > coldBudget) { riskWarmQueue.add(id); deferred++; continue; }
       const g = byMark.get(mark);
       if (g) g.push(id); else byMark.set(mark, [id]);
     }
     if (byMark.size) {
       const fresh = new Map<string, import("../../shared/types.ts").FileChange[]>();
+      const throughOf = new Map<number, number>();
       const freshWhere = new Map<number, RiskWhere>();
       for (const [mark, group] of byMark) {
-        const holes = group.map(() => "?").join(",");
         // INDEXED BY: left to itself SQLite picks idx_events_type, and a new
         // session's first read (mark 0) then walks every PostToolUse row in the
         // table — measured 21 ms on 28k rows, against 1 ms by session.
-        for (const r of db.query<ChangeRow, any[]>(
-          `SELECT id, timestamp, source_app, session_id, tool_name, payload, project_path, cwd_path FROM events INDEXED BY idx_events_session
-           WHERE session_id IN (${holes}) AND id > ? AND id <= ?
-             AND hook_event_type='PostToolUse' AND tool_name IN ('Edit','Write','MultiEdit')
-           ORDER BY id DESC`).all(...group, mark, top) as (ChangeRow & RiskWhere)[]) {
+        // idx_events_pre_open (session_id, tool_name, paired, id), not
+        // idx_events_session: by session alone every event row of the session
+        // was fetched from the table to test its tool, so a cold read paid for
+        // the whole history to find the few edits. "GET /sessions stall 663 ms,
+        // 129808 blocks read from disk" (server-stall.log, 2026-11-13). On 5
+        // sessions of 20k events, 200 edits each, page cache dropped: 159.5 MB
+        // and 1703 ms read by session, 3.2 MB and 41 ms by session and tool.
+        // The id range is tested on the index too, so a warm read stays cheap.
+        const first = Number.isFinite(span)
+          ? db.query<{ m: number | null }, string[]>(`SELECT MIN(id) m FROM events WHERE session_id IN (${group.map(() => "?").join(",")})`).get(...group)?.m ?? null
+          : null;
+        const upTo = riskChunkTop(mark, first, top, span);
+        throughOf.set(mark, upTo);
+        const read = db.query<ChangeRow, any[]>(riskReadSql(group.length)).all(...group, mark, upTo) as (ChangeRow & RiskWhere)[];
+        for (const r of read) {
           const c = parseChange(r);
           if (!c?.risks) continue;
           freshWhere.set(r.id, { project_path: r.project_path, cwd_path: r.cwd_path });
@@ -4434,7 +5164,10 @@ function attachRisks(rows: import("../../shared/types.ts").SessionRollup[]): voi
           if (list) list.push(c); else fresh.set(r.session_id, [c]);
         }
       }
-      for (const group of byMark.values()) for (const id of group) {
+      for (const [mark, group] of byMark) for (const id of group) {
+        const through = throughOf.get(mark) ?? top;
+        // A chunk that stopped short of `top` leaves the rest of this session in line.
+        if (through < top) riskWarmQueue.add(id);
         const prev = riskMemo.get(id);
         const old = prev?.flags ?? [];
         const add = fresh.get(id) ?? [];
@@ -4447,8 +5180,9 @@ function attachRisks(rows: import("../../shared/types.ts").SessionRollup[]): voi
           const w = f.change != null ? freshWhere.get(f.change) ?? prev?.where.get(f.change) : undefined;
           if (w) where.set(f.change!, w);
         }
+        if (!prev) riskColdReads++;
         riskMemo.delete(id);
-        riskMemo.set(id, { through: top, flags, where });
+        riskMemo.set(id, { through, flags, where });
       }
       // Insertion order is recency of reading, so the front is the stalest.
       for (const k of riskMemo.keys()) {
@@ -4471,6 +5205,21 @@ function attachRisks(rows: import("../../shared/types.ts").SessionRollup[]): voi
       if (f.length) r.risks = f;
     }
   } catch { /* flags are advisory; a database that cannot answer must not lose the list */ }
+  if (deferred) scheduleRiskWarm(20);
+  return deferred;
+}
+
+/** For the tests: read one session from nothing in spans of `span` ids; the flags and the turns it took. */
+export function __riskChunkedFlagsForTest(sessionId: string, span: number): { flags: import("../../shared/types.ts").SessionRisk[]; turns: number } {
+  riskMemo.delete(sessionId);
+  let turns = 0;
+  do {
+    riskWarmQueue.delete(sessionId);
+    attachRisks([{ session_id: sessionId } as import("../../shared/types.ts").SessionRollup], Infinity, span);
+    turns++;
+  } while (riskWarmQueue.has(sessionId) && turns < 1000);
+  riskWarmQueue.delete(sessionId);
+  return { flags: riskMemo.get(sessionId)?.flags ?? [], turns };
 }
 
 /**
@@ -4500,17 +5249,42 @@ function changesWithFlagged(sessionId: string, limit: number): import("../../sha
  *  `withRisks: false` for a caller that only wants the paths — the rules read
  *  every added line, and on 500 changes that was half the call. */
 export function getChanges(limit = 200, sessionId?: string, withRisks = true): import("../../shared/types.ts").FileChange[] {
+  // The unscoped-by-session list (GET /changes) is held until an edit is
+  // ingested or rows are deleted, the same drops as the path list: an unchanged
+  // call costs no query and no JSON.parse. One slot, keyed by what it was asked.
+  if (sessionId) return readChanges(limit, sessionId, withRisks);
+  return [...changeListMemo.get(`${scopeKey()}|${limit}|${withRisks}`, () => readChanges(limit, undefined, withRisks))];
+}
+
+function readChanges(limit: number, sessionId: string | undefined, withRisks: boolean): import("../../shared/types.ts").FileChange[] {
   const chg = scopeClause();
   const rows = sessionId
     ? db.query<ChangeRow, any[]>(
         `SELECT id, timestamp, source_app, session_id, tool_name, payload FROM events
          WHERE hook_event_type='PostToolUse' AND tool_name IN ('Edit','Write','MultiEdit') AND session_id = ?${chg.clause}
          ORDER BY timestamp DESC, id DESC LIMIT ?`).all(sessionId, ...chg.args, limit)
+    // The newest `limit` ids are picked from index leaves alone, and only those rows' payloads are read.
+    // Selecting the payload in the same query put it in the sorter for EVERY Edit/Write of the whole
+    // history: 156 ms against 3 ms on a 785k-row copy (40k edits), and on a real cold disk the
+    // multi-second GET /plugins/session-reads stall (this list feeds openProjectRepos).
     : db.query<ChangeRow, any[]>(
         `SELECT id, timestamp, source_app, session_id, tool_name, payload FROM events
-         WHERE hook_event_type='PostToolUse' AND tool_name IN ('Edit','Write','MultiEdit')${chg.clause}
-         ORDER BY timestamp DESC, id DESC LIMIT ?`).all(...chg.args, limit);
+         WHERE id IN (SELECT id FROM events
+           WHERE hook_event_type='PostToolUse' AND tool_name IN ('Edit','Write','MultiEdit')${chg.clause}
+           ORDER BY timestamp DESC, id DESC LIMIT ?)
+         ORDER BY timestamp DESC, id DESC`).all(...chg.args, limit);
   return rows.map((r) => parseChange(r, withRisks)).filter((c): c is import("../../shared/types.ts").FileChange => c !== null);
+}
+
+const changedPathsMemo = changesMemo<readonly string[]>();
+const changeListMemo = changesMemo<readonly import("../../shared/types.ts").FileChange[]>();
+
+/** File paths of the newest 300 Edit/Write changes, cached until an edit is
+ *  ingested (see changesMemo.ts for the measured why). Callers that only need
+ *  paths use this instead of getChanges(300, undefined, false). */
+export function recentChangedPaths(): string[] {
+  // A copy: the callers hand it to functions that take a plain array, and the kept one must not be theirs to change.
+  return [...changedPathsMemo.get(scopeKey(), () => getChanges(300, undefined, false).map((c) => c.file_path))];
 }
 
 /** Everything we know about one session — the deep-dive. */
@@ -4718,6 +5492,24 @@ export function exportRows(limit = 100_000): WatchEvent[] {
     .query<any, any[]>(`SELECT * FROM events WHERE 1=1${s.clause} ORDER BY id ASC LIMIT ?`)
     .all(...s.args, limit)
     .map(parseEventRow);
+}
+
+/** The same rows as exportRows, read one page at a time (keyset on id) so an
+ *  export never holds the whole table. Same order, same scope, same cap. */
+export function* exportPages(pageSize = 2_000, limit = 100_000): Generator<WatchEvent[]> {
+  const s = scopeClause();
+  const q = db.query<any, any[]>(
+    `SELECT * FROM events WHERE id > ?${s.clause} ORDER BY id ASC LIMIT ?`,
+  );
+  let after = -1;
+  let left = limit;
+  while (left > 0) {
+    const raw = q.all(after, ...s.args, Math.min(pageSize, left));
+    if (raw.length === 0) return;
+    after = raw[raw.length - 1].id;
+    left -= raw.length;
+    yield raw.map(parseEventRow);
+  }
 }
 
 export { db };

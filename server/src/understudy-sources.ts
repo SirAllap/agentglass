@@ -28,6 +28,7 @@
  * decision would be the whole feature's worst mistake.
  */
 import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import type { UnderstudySource } from "../../shared/types.ts";
@@ -119,9 +120,10 @@ function survey(path: string, maxDepth = 3): { files: number; bytes: number } {
   let bytes = 0;
   const walk = (dir: string, depth: number): void => {
     if (depth > maxDepth || files > 20_000) return;
+    // Sorted: past the cap the total depends on walk order, so surveyAsync sorts the same way.
     let entries: string[];
     try {
-      entries = readdirSync(dir);
+      entries = readdirSync(dir).sort();
     } catch {
       return;
     }
@@ -151,6 +153,58 @@ function survey(path: string, maxDepth = 3): { files: number; bytes: number } {
     // and `.gitconfig` carry no extension and are two of the best sources here.
     if (st.isFile()) return { files: 1, bytes: st.size };
     walk(path, 0);
+  } catch {
+    return { files: 0, bytes: 0 };
+  }
+  return { files, bytes };
+}
+
+/**
+ * `survey` beside the loop. The consent screen's `GET /understudy/sources`
+ * surveyed every candidate with readdirSync/statSync on the server's only
+ * thread: measured on a real home (983 rows), 2 s cold and ~90 ms warm with no
+ * timer able to fire. Same walk, same caps, same answer; the stats of one
+ * directory go out together, in slices, so a huge folder is not a thousand
+ * open handles at once.
+ */
+async function surveyAsync(path: string, maxDepth = 3): Promise<{ files: number; bytes: number }> {
+  let files = 0;
+  let bytes = 0;
+  const walk = async (dir: string, depth: number): Promise<void> => {
+    if (depth > maxDepth || files > 20_000) return;
+    let entries: string[];
+    try {
+      entries = (await readdir(dir)).sort();
+    } catch {
+      return;
+    }
+    const names = entries.filter((e) => !(e.startsWith(".") && e !== ".claude"));
+    for (let i = 0; i < names.length; i += 64) {
+      const slice = names.slice(i, i + 64);
+      const stats = await Promise.all(slice.map((e) => stat(join(dir, e)).catch(() => null)));
+      // In listing order, walking a folder where `survey` does: the cap is
+      // checked when a walk starts, so counting a folder's own files before its
+      // subfolders gives a different total past 20,000 (25,001 vs 20,001 for a
+      // 5,000-file a/ listed ahead of 20,001 root files).
+      for (let k = 0; k < slice.length; k++) {
+        const st = stats[k];
+        if (!st) continue;
+        const e = slice[k]!;
+        if (st.isDirectory()) await walk(join(dir, e), depth + 1);
+        else {
+          const dot = e.lastIndexOf(".");
+          if (dot > 0 && READABLE.has(e.slice(dot))) {
+            files++;
+            bytes += st.size;
+          }
+        }
+      }
+    }
+  };
+  try {
+    const st = await stat(path);
+    if (st.isFile()) return { files: 1, bytes: st.size };
+    await walk(path, 0);
   } catch {
     return { files: 0, bytes: 0 };
   }
@@ -415,6 +469,55 @@ export function listSources(
   for (const e of extra) {
     const found = existsSync(e.path);
     const { files, bytes } = found ? survey(e.path) : { files: 0, bytes: 0 };
+    rows.push({
+      id: e.id,
+      label: e.label || e.path.replace(HOME, "~"),
+      path: e.path,
+      kind: e.kind || "precedents",
+      what: "A place you pointed it at yourself.",
+      found,
+      files,
+      bytes,
+      allowed: allow[e.id] === true,
+      added: true,
+      // Somewhere the person pointed at deliberately. We do not second-guess
+      // it, and we do not put it in the recommended set either.
+      sensitive: false,
+      recommended: false,
+    });
+  }
+
+  return rows;
+}
+
+/** `listSources` for a request: the same rows, surveyed without holding the loop (see surveyAsync). */
+export async function listSourcesAsync(
+  allow: Record<string, boolean>,
+  extra: { id: string; path: string; label?: string; kind?: "rules" | "precedents" }[] = [],
+): Promise<UnderstudySource[]> {
+  const rows: UnderstudySource[] = [];
+
+  for (const c of candidates()) {
+    const found = existsSync(c.path);
+    const { files, bytes } = found ? await surveyAsync(c.path) : { files: 0, bytes: 0 };
+    // A source with nothing in it is not a choice, it is a row of furniture.
+    // The first version listed every project directory it found, including
+    // scratchpads with zero readable files, and the screen read as a wall.
+    if (found && files === 0) continue;
+    rows.push({
+      ...c,
+      found,
+      files,
+      bytes,
+      allowed: allow[c.id] === true,
+      added: false,
+      ...judge(c),
+    });
+  }
+
+  for (const e of extra) {
+    const found = existsSync(e.path);
+    const { files, bytes } = found ? await surveyAsync(e.path) : { files: 0, bytes: 0 };
     rows.push({
       id: e.id,
       label: e.label || e.path.replace(HOME, "~"),

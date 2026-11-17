@@ -1,6 +1,7 @@
 // Normalize a raw hook POST body into structured, storable fields.
 import type { IngestBody } from "../../shared/types.ts";
 import { costUsd, type TokenUsage } from "./pricing.ts";
+import { dropRepeatedIterations } from "./payloadslim.ts";
 
 const MAX_FIELD = 64 * 1024;
 export const MAX_REPORTED_COST_USD = 100_000;
@@ -350,6 +351,9 @@ export function normalize(body: IngestBody): NormalizedEvent {
   // every dashboard. Cap the free-text fields that a hostile or broken sender
   // can inflate before any of that happens.
   capPayload(payload);
+  // Usage was read above; its one-entry `iterations` copy of itself is not
+  // stored (see payloadslim.ts).
+  dropRepeatedIterations(payload);
 
   // Every string that becomes its own column is bounded too: these do NOT pass
   // through capPayload, so an unbounded top-level `summary` (the field this most

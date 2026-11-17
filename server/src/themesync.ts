@@ -23,7 +23,7 @@ import { join, dirname } from "node:path";
 import { liveNvimSockets } from "./editor.ts";
 // One rule for "may a tmux command reach this socket", not a second copy of it
 // here. tmuxctl.ts does not import this file, so the edge is one-way.
-import { socketPath, tmuxSocketAllowed, tmuxSocketConfined } from "./tmuxctl.ts";
+import { socketPath, tmuxSocketAllowed, tmuxSocketConfined, credentialsStripped } from "./tmuxctl.ts";
 import { resolveTmuxBin, tmuxSocket, engineSocketArgs } from "./tmuxbin.ts";
 
 /*
@@ -649,7 +649,7 @@ export async function syncTheme(vars: Record<string, unknown>, themeName: string
    */
   const tmuxTarget = themeTmuxTarget();
   const tmuxBin = resolveTmuxBin();
-  if (tmuxBin && !isTest() && tmuxSocketAllowed(tmuxTarget) && tmuxSocketConfined(tmuxTarget)) try {
+  if (tmuxBin && !isTest() && tmuxSocketAllowed(tmuxTarget) && tmuxSocketConfined(tmuxTarget) && await credentialsStripped(tmuxTarget)) try {
     const p = Bun.spawn([tmuxBin, ...tmuxTarget, "source-file", TMUX_THEME], { stdout: "ignore", stderr: "ignore" });
     const t = setTimeout(() => { try { p.kill(); } catch { /* gone */ } }, 2000);
     if ((await p.exited) === 0) reloaded.push("tmux");
@@ -743,7 +743,7 @@ export function tmuxConfPath(): string {
  * snippet, this file is what their config asked for and a repaint is what they
  * signed up for; without it, we stay inside the engine's socket.
  */
-export function applyThemeTo(socket: string[]): boolean {
+export async function applyThemeTo(socket: string[]): Promise<boolean> {
   const TMUX_THEME = tmuxThemePath();
   /*
    * A test may open a terminal; it may not repaint the machine's tmux.
@@ -766,11 +766,12 @@ export function applyThemeTo(socket: string[]): boolean {
   if (isTest() || !tmuxSocketAllowed(socket) || !tmuxSocketConfined(socket)) return false;
   if (!themeRepaintAllowed(socket)) return false;
   if (!existsSync(TMUX_THEME)) return false;
+  if (!(await credentialsStripped(socket))) return false;
   try {
-    const p = Bun.spawnSync(["tmux", ...socket, "source-file", "-q", TMUX_THEME], {
+    const p = Bun.spawn(["tmux", ...socket, "source-file", "-q", TMUX_THEME], {
       stdout: "ignore", stderr: "ignore", timeout: 2000,
     });
-    return p.exitCode === 0;
+    return (await p.exited) === 0;
   } catch { return false; }
 }
 

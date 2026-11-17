@@ -3,13 +3,14 @@
 // for a project whose setting does not ask for it. Docker, tmux and gh are the
 // fixture's fakes; git is real, in a temporary repository.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { EMPTY_CLEANUP_CONFIG, type CleanupMode } from "../src/cleanup.ts";
 import { claimAuto, markInterrupted } from "../src/cleanupState.ts";
-import { __resetSweeps, cleanMerged, onPrsGone, sweepOld, waitingAuto, type AutoDeps } from "../src/cleanupAuto.ts";
+import { __resetSweeps, cleanMerged, onPrsGone, sweepOld, sweepSkipReason, waitingAuto, type AutoDeps } from "../src/cleanupAuto.ts";
 import { autoRow, autoRows } from "../src/cleanupState.ts";
 import { db } from "../src/db.ts";
-import { PR, makeWorld, type World } from "./cleanupFixture.ts";
+import { PR, fakeProcess, makeWorld, type World } from "./cleanupFixture.ts";
 
 let w: World;
 beforeEach(() => { db.exec("DELETE FROM cleanup_auto"); __resetSweeps(); });
@@ -65,6 +66,19 @@ describe("automatic cleanup", () => {
     expect(existsSync(w.wt)).toBe(false);
   });
 
+  test("auto: gh cannot read the pull request: the reason is kept for the panel and it is asked again after the hour", async () => {
+    w = makeWorld();
+    const real = w.ctx();
+    const broken = { ...real, gh: async () => ({ code: 1, stdout: "", stderr: "gh: To get started with GitHub CLI, please run: gh auth login\n" }) };
+    expect(await cleanMerged(deps("auto", 0, { ctx: () => broken }), w.main, PR)).toBe("blocked");
+    expect(existsSync(w.wt)).toBe(true);
+    expect(autoRow(w.main, PR)).toMatchObject({ state: "blocked", waiting: 1 });
+    expect(autoRow(w.main, PR)!.reason).toMatch(/gh could not read pull request/);
+    const later = deps("auto", 0, { ctx: () => w.ctx({ now: real.now + 2 * 3_600_000 }) });
+    expect(await cleanMerged(later, w.main, PR)).toBe("cleaned");
+    expect(existsSync(w.wt)).toBe(false);
+  });
+
   test("a project that never cleans on its own costs no gh, docker or tmux call", async () => {
     w = makeWorld();
     for (const mode of ["off", "ask", "atMerge"] as const) await onPrsGone(deps(mode, 0), "acme/orbit", [PR]);
@@ -112,6 +126,21 @@ describe("automatic cleanup", () => {
     const before = w.calls.length;
     expect(await cleanMerged(d, w.main, PR)).toBe("skipped");
     expect(w.calls.length).toBe(before);
+  });
+
+  test("the age sweep that gh cannot feed says why it skipped, token removed, and clears on a good read", async () => {
+    w = makeWorld();
+    let bad = true;
+    const gh = async (args: string[]) => (args[1] === "list" && bad ? { code: 1, stdout: "", stderr: "HTTP 401 Bearer ghp_SECRET123\nmore" } : w.ctx().gh(args));
+    const d = deps("ask", 14, { ctx: () => w.ctx({ gh }) });
+    expect(await sweepOld(d, w.main)).toBe(0);
+    const why = sweepSkipReason(w.main)!;
+    expect(why).toMatch(/age sweep skipped: gh could not list the merged pull requests \(HTTP 401/);
+    expect(why).not.toMatch(/SECRET|more/);
+    bad = false;
+    const later = deps("ask", 14, { ctx: () => w.ctx({ gh, now: w.ctx().now + 2 * 3_600_000 }) });
+    await sweepOld(later, w.main);
+    expect(sweepSkipReason(w.main)).toBeNull();
   });
 
   test("the age rule asks GitHub for the newest merged ones once an hour and cleans only the old", async () => {
@@ -171,6 +200,75 @@ describe("automatic cleanup", () => {
     expect(out).toBe("failed");
     expect(autoRow(w.main, PR)!.state).toBe("failed");
     expect(await cleanMerged(d, w.main, PR)).toBe("skipped");
+  });
+
+  test("a pull request blocked only by a live session is cleaned by the next read once the tab is gone", async () => {
+    w = makeWorld();
+    fakeProcess(w, 4242, w.wt);
+    const d = deps("auto");
+    expect(await cleanMerged(d, w.main, PR)).toBe("blocked");
+    expect(existsSync(w.wt)).toBe(true);
+    const row = autoRow(w.main, PR)!;
+    expect(row.state).toBe("blocked");
+    expect(row.waiting).toBe(1);
+    expect(row.reason).toMatch(/running in this card's checkout or tab/);
+
+    // Inside the hour no read asks again: nothing is planned, nothing moves.
+    const views = () => w.calls.filter((c) => c.startsWith("gh pr view")).length;
+    expect(views()).toBe(1);
+    await onPrsGone(deps("auto", 0, { ctx: () => w.ctx({ now: w.ctx().now + 1_800_000 }) }), "acme/orbit", []);
+    expect(views()).toBe(1);
+    expect(existsSync(w.wt)).toBe(true);
+
+    // The hour is up and the tab is still there: one re-plan, and it is asked no more often than that.
+    const before = w.calls.length;
+    await onPrsGone(deps("auto", 0, { ctx: () => w.ctx({ now: w.ctx().now + 2 * 3_600_000 }) }), "acme/orbit", []);
+    expect(existsSync(w.wt)).toBe(true);
+    expect(autoRow(w.main, PR)!.state).toBe("blocked");
+    // Measured: one retry that still finds the tab is two gh (the view and the open list), three docker (ps, images,
+    // volume ls) and one tmux (list-panes), plus the git reads the plan makes. The sweep's own gh is not the retry's.
+    const retry = w.calls.slice(before).filter((c) => !c.startsWith("gh pr list --state merged"));
+    expect(retry.length).toBe(6);
+    expect(retry.filter((c) => c.startsWith("gh ")).length).toBe(2);
+
+    // The tab closes, and the next read (an hour on) cleans it on its own.
+    rmSync(join(w.procDir, "4242"), { recursive: true, force: true });
+    await onPrsGone(deps("auto", 0, { ctx: () => w.ctx({ now: w.ctx().now + 4 * 3_600_000 }) }), "acme/orbit", []);
+    expect(existsSync(w.wt)).toBe(false);
+    expect(autoRow(w.main, PR)!.state).toBe("cleaned");
+  });
+
+  test("a waiting row whose tab closed but is still too recent stops waiting, so later reads do not plan it again", async () => {
+    w = makeWorld();
+    fakeProcess(w, 4242, w.wt);
+    // Merged 28 days before the fixture's clock; the age rule asks for 60.
+    expect(await cleanMerged(deps("atMerge", 60), w.main, PR)).toBe("blocked");
+    expect(autoRow(w.main, PR)!.waiting).toBe(1);
+    rmSync(join(w.procDir, "4242"), { recursive: true, force: true });
+    await onPrsGone(deps("atMerge", 60, { ctx: () => w.ctx({ now: w.ctx().now + 2 * 3_600_000 }) }), "acme/orbit", []);
+    expect(autoRow(w.main, PR)!.waiting).toBe(0);
+    const views = () => w.calls.filter((c) => c.startsWith("gh pr view")).length;
+    const seen = views();
+    for (const hours of [4, 8]) {
+      await onPrsGone(deps("atMerge", 60, { ctx: () => w.ctx({ now: w.ctx().now + hours * 3_600_000 }) }), "acme/orbit", []);
+    }
+    expect(views()).toBe(seen);
+    expect(existsSync(w.wt)).toBe(true);
+  });
+
+  test("a pull request blocked for any other reason is never retried by a later read", async () => {
+    w = makeWorld();
+    await Bun.write(`${w.wt}/dirty.txt`, "x");
+    const d = deps("auto");
+    expect(await cleanMerged(d, w.main, PR)).toBe("blocked");
+    expect(autoRow(w.main, PR)!.waiting).toBe(0);
+    // The dirty file is gone, so only the hour and the read stand in the way of a retry: it must still not happen.
+    await Bun.spawn(["rm", `${w.wt}/dirty.txt`]).exited;
+    for (const hours of [2, 8]) {
+      await onPrsGone(deps("auto", 0, { ctx: () => w.ctx({ now: w.ctx().now + hours * 3_600_000 }) }), "acme/orbit", []);
+      expect(autoRow(w.main, PR)!.state).toBe("blocked");
+      expect(existsSync(w.wt)).toBe(true);
+    }
   });
 });
 

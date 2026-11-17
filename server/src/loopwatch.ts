@@ -15,6 +15,16 @@
 // Deliberately in-memory and bounded, like the git command log: this is a live
 // view of the current session, not an audit trail, and the value is entirely in
 // the last few minutes.
+//
+// One line, past LOG_MS, also goes to disk (see stallTrace.ts): the ring dies
+// with the process, and "no trace of why it froze" is exactly the bug a crash
+// or a kill -9 must not reproduce.
+
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { stateDir } from "./childledger.ts";
+import { appendStallLine } from "./stallTrace.ts";
+import { runChild } from "./broker/brokerRun.ts";
 
 /**
  * How often the heartbeat is supposed to fire.
@@ -67,6 +77,18 @@ export interface Stall {
   majorFaults: number;
   /** Blocks read from disk rather than the page cache: a synchronous read, or SQLite, gone cold. */
   diskReads: number;
+  /**
+   * An unlabelled wait: the kernel's tally of where the main thread sat
+   * ("kernel: S do_wait 3/5 (a child process)"). Its own field, never in
+   * `what`, which stalls are grouped by: a count there made each one a group.
+   */
+  kernel?: string;
+  /**
+   * Unlabelled stalls only: the last label that finished and how long before
+   * the stall began ("boot:x 12ms before the stall"). Its own field for the same
+   * reason as `kernel`: a changing number in `what` would make each stall a group.
+   */
+  after?: string;
 }
 
 const ring: Stall[] = [];
@@ -83,6 +105,42 @@ let seq = 0;
  * window below says outright rather than guessing.
  */
 const BACKGROUND = "(background — a timer, a stream, or GC)";
+
+/** The first frame of a stack, trimmed: where the loop was when it came back. */
+export function topFrame(stack: string | undefined): string {
+  const f = (stack ?? "").split("\n").map((l) => l.trim()).find((l) => l.startsWith("at "));
+  return f ? f.slice(3) : "no frame";
+}
+
+/** The stack at this call site; the tick always asks from here, so its top frame never varies. */
+function tickStack(): string | undefined { return new Error().stack; }
+
+/** How an unlabelled stall is named: by the frame it was caught in, never blank. */
+export function unlabelledWhat(stack: string | undefined, waiting = false, ownFrame = "", openBoot: readonly string[] = []): string {
+  const frame = topFrame(stack);
+  const head = unlabelledHead(openBoot);
+  // The stack of a timer callback is the callback. When it is this watcher's own
+  // tick, and the loop was waiting rather than computing, no JS was blocking:
+  // the process was not scheduled (swap, disk, CPU contention). Say that
+  // instead of pointing at the watcher, which was a false lead.
+  // The compiled server has no file names (`/$bunfs/root/agentglass-server:3793:116`),
+  // so the name test alone missed it there and a 1.9 s wait was filed as a JS
+  // block at the watcher's own line. `ownFrame` is that frame, learned on a
+  // tick that did not stall.
+  if (waiting && (frame.includes("loopwatch") || (ownFrame !== "" && frame === ownFrame))) return `${head}: no JS was running (process waited on the OS: swap, disk or CPU)`;
+  // The tick samples its own stack, so a computing stall reads "tickStack (…:LINE:COL)":
+  // the watcher's own function, never the work that blocked it. A bundle position there
+  // (5 installs, 5 different numbers) sent a hunt to the wrong place. Say what is known
+  // instead: every boot step still open, since the last one opened is not always the one running.
+  if (frame.startsWith("tickStack")) return `${head}: no JS frame (the watcher only sees itself)${openBoot.length > 1 ? `; open boot steps: ${openBoot.join(", ")}` : ""}`;
+  return `${head}: ${frame}`;
+}
+
+/** "unlabelled", or "unlabelled (inside boot:x)" naming the last boot step started and not yet finished. */
+export function unlabelledHead(openBoot: readonly string[]): string {
+  const inside = openBoot[openBoot.length - 1];
+  return inside ? `unlabelled (inside ${inside})` : "unlabelled";
+}
 /** A label, when it began, and when it answered (0 while still running). */
 export interface Mark { what: string; at: number; done: number }
 let recent: Mark | null = null;
@@ -181,7 +239,89 @@ export function entered(what: string): Mark {
  */
 export function finished(mark: Mark): void {
   mark.done = Date.now();
+  lastFinished = mark;
 }
+
+/** The last label to finish: what ran just before an unlabelled stall is the first suspect. */
+let lastFinished: Mark | null = null;
+
+/** "boot:x ended 12ms before the stall" (or "ended 40ms into it"); empty with nothing finished yet. */
+export function afterNote(mark: Mark | null, stallStartedAt: number): string {
+  if (!mark || !mark.done) return "";
+  const d = Math.round(stallStartedAt - mark.done);
+  return d >= 0 ? `after ${mark.what}, ended ${d}ms before the stall` : `after ${mark.what}, ended ${-d}ms into the stall`;
+}
+
+/**
+ * Run a synchronous child wait under a label, so a stall during it is blamed
+ * on the wait rather than on whatever `entered()` the loop last — see the
+ * blame note in watchLoop. Label like "tmux list-panes": argv[0] plus the
+ * command's first verb, not every flag.
+ */
+export function waitedFor<T>(label: string, run: () => T): T {
+  const mark = entered(label);
+  try {
+    return run();
+  } finally {
+    finished(mark);
+  }
+}
+
+/** How long a step that has not settled still counts as "inside" for stall attribution. */
+export const BOOT_OPEN_MAX_MS = 60_000;
+/** Boot steps that started and have not finished, oldest first. */
+const openBoot: { label: string }[] = [];
+/** The open boot steps, for tests and the stall line. */
+export const openBootSteps = (): readonly string[] => openBoot.map((e) => e.label);
+
+/**
+ * One startup step, under a stable label "boot:<name>": a stall inside it is
+ * named by it, and a stall in work it left running unlabelled is attributed to
+ * it as "(inside boot:<name>)" until it finishes (a promise counts as running
+ * until it settles). Same label mechanism as waitedFor; the step is unchanged.
+ */
+export function bootStep<T>(name: string, run: () => T, maxOpenMs = BOOT_OPEN_MAX_MS): T {
+  const label = `boot:${name}`;
+  // Each call owns one entry: closing by label would let an old call's timer close a newer step with the same label.
+  const entry = { label };
+  openBoot.push(entry);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const close = () => { clearTimeout(timer); const i = openBoot.indexOf(entry); if (i >= 0) openBoot.splice(i, 1); };
+  let r: T;
+  try { r = waitedFor(label, run); } catch (e) { close(); throw e; }
+  if (r && typeof (r as { then?: unknown }).then === "function") {
+    // A promise that never settles must not name every later stall "(inside boot:x)" forever.
+    timer = setTimeout(close, maxOpenMs);
+    (timer as { unref?: () => void }).unref?.();
+    (r as unknown as Promise<unknown>).then(close, close);
+  }
+  else close();
+  return r;
+}
+
+/**
+ * `setTimeout` whose callback runs under a label, so a stall inside it names
+ * the job instead of falling to BACKGROUND. Same arguments, same handle back
+ * (`.unref()` still works); the job itself is unchanged.
+ */
+export function setTimeoutAs<A extends unknown[]>(label: string, fn: (...a: A) => unknown, ms?: number, ...args: A): ReturnType<typeof setTimeout> {
+  return setTimeout(() => { countFire(label); waitedFor(label, () => fn(...args)); }, ms);
+}
+
+/** How many times each labelled timer has fired: an idle server's count must stay bounded (see timers-bounded.test.ts). */
+const fires = new Map<string, number>();
+const countFire = (label: string) => { fires.set(label, (fires.get(label) ?? 0) + 1); };
+export function timerFires(): Record<string, number> { return Object.fromEntries(fires); }
+
+/** `setInterval` under a label — see setTimeoutAs. */
+export function setIntervalAs<A extends unknown[]>(label: string, fn: (...a: A) => unknown, ms?: number, ...args: A): ReturnType<typeof setInterval> {
+  return setInterval(() => { countFire(label); waitedFor(label, () => fn(...args)); }, ms);
+}
+
+/** `Bun.spawnSync` under a label: the wait on the child is the stall. */
+export const spawnSyncAs = ((label: string, ...a: Parameters<typeof Bun.spawnSync>) =>
+  waitedFor(label, () => (Bun.spawnSync as (...x: unknown[]) => unknown)(...a))) as unknown as
+  { (label: string, ...a: Parameters<typeof Bun.spawnSync>): ReturnType<typeof Bun.spawnSync> & { stdout: Buffer; stderr: Buffer } };
 
 /**
  * Whether a "stall" was the machine asleep rather than the loop held.
@@ -203,13 +343,158 @@ export function suspended(ms: number, cpuMs: number): boolean {
   return ms > SUSPEND_MIN_MS && cpuMs < ms / 100;
 }
 
+/**
+ * What the kernel says about memory stalls, as one short line: the avg10 of
+ * `some` and `full` from /proc/pressure/memory. A stall that reads "waiting,
+ * not computing" is the host paging; this says how hard, at that moment.
+ * Empty when the file is missing (non-Linux, PSI off).
+ */
+export function pressureLine(text: string): string {
+  const pick = (kind: string) => text.match(new RegExp(`^${kind} avg10=([0-9.]+)`, "m"))?.[1];
+  const some = pick("some"), full = pick("full");
+  return some && full ? `mem-pressure some=${some} full=${full}` : "";
+}
+
+/** The three biggest processes by resident memory, from `ps -eo rss=,comm=` output. */
+export function topRss(ps: string): string {
+  return ps.split("\n").map((l) => l.trim().match(/^(\d+)\s+(.+)$/)).filter((m): m is RegExpMatchArray => !!m)
+    .sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 3)
+    .map((m) => `${m[2]}=${Math.round(Number(m[1]) / 1024)}M`).join(" ");
+}
+
+/** Only a stall this long is worth a process listing; the listing is async so it cannot add to one. */
+const WITNESS_MS = 1000;
+
+/** avg10 of `some` from one /proc/pressure file, as `io=1.32`; empty when absent. */
+export function somePressure(kind: string, text: string): string {
+  const v = text.match(/^some avg10=([0-9.]+)/m)?.[1];
+  return v ? `${kind}=${v}` : "";
+}
+
+/** How the stall itself looked, for the log line: a held loop burns its own
+ *  length in CPU, a waiting one (disk, lock, child, scheduler) burns almost
+ *  none. Measured on this server's own log, 868 of 953 stalls over 1.5 s were
+ *  waiting, with tens of ms of CPU inside seconds, so a stall with no cause in
+ *  the code is not a stall to fix by moving compute off the loop. The file used
+ *  to keep only the label, which made that split invisible once the console
+ *  line scrolled away. */
+export function stallDetail(s: { cpuMs: number; waiting: boolean; majorFaults: number; diskReads: number }): string {
+  return [s.waiting ? "waiting" : "computing", `cpu=${s.cpuMs}ms`, s.majorFaults ? `swapin=${s.majorFaults}` : "", s.diskReads ? `diskblk=${s.diskReads}` : ""].filter(Boolean).join(" ");
+}
+
+function witness(ms: number): void {
+  let pressure = "";
+  const read = (f: string) => { try { return readFileSync(f, "utf8"); } catch { return ""; } };
+  try { pressure = [pressureLine(read("/proc/pressure/memory")), somePressure("io", read("/proc/pressure/io")), somePressure("cpu", read("/proc/pressure/cpu"))].filter(Boolean).join(" "); } catch { /* no PSI */ }
+  const write = (top: string) => appendStallLine(join(stateDir(), "server-stall.log"),
+    `${new Date().toISOString()}   after ${ms}ms: ${[pressure, top && `top-rss ${top}`].filter(Boolean).join(" ")}\n`);
+  try {
+    // In the broker (broker/brokerRun.ts): a stall is the worst moment to fork this server.
+    void runChild(["ps", "-eo", "rss=,comm="], { timeoutMs: 5_000, read: true })
+      .then((r) => write(topRss(r.stdout)), () => write(""));
+  } catch { write(""); }
+}
+
+// --- what the kernel says the main thread is waiting on ------------------------
+//
+// 203 of the 222 stalls over 1 s logged on 2026-11-13 read "unlabelled: no JS
+// was running": no request, timer or child wait was labelled, and CPU was about
+// 14% of the stall. 73 of them came with memory pressure under 0.1, so swap is
+// not the whole story. The JS side cannot say more: while the thread is held,
+// nothing on it runs. The kernel can. /proc/<pid>/task/<pid>/wchan names the
+// kernel function the main thread is asleep in, and stat says how (D: disk, S:
+// sleep, R: runnable but not on a CPU). That is how the 15 h study behind
+// `synchronous = NORMAL` in db.ts found write_all_supers and folio_wait_bit.
+//
+// So a small worker thread (about 9 MB RSS, measured) looks at the main thread,
+// and only while the heartbeat below is late: it reads one int every
+// SAMPLE_EVERY_MS and touches /proc only mid-stall. The tally goes back through
+// a SharedArrayBuffer, because a message would arrive after the tick that
+// reports the stall. The worker source is a string for the same reason the
+// checkpointer's is: `bun build --compile` does not carry a second file.
+const SAMPLE_EVERY_MS = 200;
+/** A heartbeat older than this means the main thread is held right now. */
+const LATE_MS = 450;
+/** [0] heartbeat (Date.now() & 0x7fffffff), [1] bytes of tally text; then the text. */
+const SAMPLE_BYTES = 512;
+const SAMPLER = `const S=${SAMPLE_EVERY_MS},L=${LATE_MS},M=${SAMPLE_BYTES - 8};
+import { readFileSync } from "node:fs";
+self.onmessage = (e) => {
+  const { sab, pid } = e.data, h = new Int32Array(sab, 0, 2), out = new Uint8Array(sab, 8), enc = new TextEncoder();
+  const base = "/proc/" + pid + "/task/" + pid + "/";
+  let tally = new Map(), n = 0;
+  setInterval(() => {
+    const age = ((Date.now() & 0x7fffffff) - Atomics.load(h, 0)) & 0x7fffffff;
+    if (age < L) { if (n) { tally = new Map(); n = 0; } return; }
+    let key = "?";
+    try {
+      const st = readFileSync(base + "stat", "utf8"), state = st.slice(st.lastIndexOf(")") + 2, st.lastIndexOf(")") + 3);
+      const w = readFileSync(base + "wchan", "utf8").trim();
+      key = state + " " + (w && w !== "0" ? w : "-");
+    } catch {}
+    tally.set(key, (tally.get(key) || 0) + 1); n++;
+    const text = [...tally].sort((a, b) => b[1] - a[1]).map(([k, c]) => k + " " + c + "/" + n).join(", ");
+    const b = enc.encode(text).slice(0, M); out.set(b); Atomics.store(h, 1, b.length);
+  }, S);
+};`;
+let sampler: Worker | null = null;
+let sampleBuf: Int32Array | null = null;
+let sampleText: Uint8Array | null = null;
+
+/** Plain words for the kernel waits seen on this machine; the raw name stays beside them. */
+const WCHAN_MEANS: [RegExp, string][] = [
+  [/^folio_wait|^wait_on_page|^filemap_fault|^do_swap_page|^swap_/, "a page read from disk or swap"],
+  [/^write_all_supers|^btrfs_|^jbd2|^wait_current_trans|^wait_for_commit|^file_write_and_wait|^do_fsync/, "an fsync behind a filesystem commit"],
+  [/^do_wait$/, "a child process the loop waited for"],
+  [/^futex/, "a lock held by another thread (GC, sqlite, a worker)"],
+  [/^pipe_|^unix_stream|^wait_woken|^sk_wait/, "a pipe or socket read with nothing to read"],
+  [/^ep_poll|^do_epoll/, "the loop's own idle wait"],
+  [/^rwsem|^mutex|^rt_mutex|^down_/, "a kernel lock (mmap_lock under paging, an inode)"],
+];
+/** `D folio_wait_bit 4/5` -> the same, plus what it means when we know. */
+export function explainKernelWait(tally: string): string {
+  const first = tally.split(", ")[0] ?? "";
+  const [state, wchan] = first.split(" ");
+  if (state === "R") return `kernel: ${tally} (runnable, waiting for a CPU)`;
+  const means = WCHAN_MEANS.find(([re]) => re.test(wchan ?? ""))?.[1];
+  return `kernel: ${tally}${means ? ` (${means})` : ""}`;
+}
+
+/** The tally since the last call, and clear it. Empty when the main thread was never late. */
+function takeKernelWait(): string {
+  if (!sampleBuf || !sampleText) return "";
+  const len = Atomics.load(sampleBuf, 1);
+  if (!len) return "";
+  Atomics.store(sampleBuf, 1, 0);
+  return new TextDecoder().decode(sampleText.slice(0, len));
+}
+
+function startSampler(): void {
+  if (sampler || process.platform !== "linux" || process.env.AGENTGLASS_STALL_SAMPLER === "0") return;
+  try {
+    const sab = new SharedArrayBuffer(SAMPLE_BYTES);
+    sampleBuf = new Int32Array(sab, 0, 2);
+    sampleText = new Uint8Array(sab, 8);
+    Atomics.store(sampleBuf, 0, Date.now() & 0x7fffffff);
+    const w = new Worker(URL.createObjectURL(new Blob([SAMPLER], { type: "application/javascript" })));
+    w.postMessage({ sab, pid: process.pid });
+    w.unref?.();
+    sampler = w;
+  } catch { sampler = null; sampleBuf = null; sampleText = null; }
+}
+
 export function watchLoop(): void {
   if (timer) return;
   started = Date.now();
   last = performance.now();
   let usage = process.resourceUsage();
+  let ownFrame = "";
+  startSampler();
   timer = setInterval(() => {
     const now = performance.now();
+    if (sampleBuf) Atomics.store(sampleBuf, 0, Date.now() & 0x7fffffff);
+    const kernel = takeKernelWait();
+    if (!ownFrame) ownFrame = topFrame(tickStack());
     const drift = now - last - TICK_MS;
     const was = usage;
     usage = process.resourceUsage();
@@ -239,11 +524,17 @@ export function watchLoop(): void {
     // "background". Which is exactly what happened, and what this comment is
     // paid for.
     const quick = !!recent?.done && recent.done - recent.at < ms / 2;
-    const what = recent && !quick && recent.at >= freeAt - BLAME_MARGIN_MS ? recent.what : BACKGROUND;
     const waiting = cpuMs < ms / 2;
+    const labelled = recent && !quick && recent.at >= freeAt - BLAME_MARGIN_MS ? recent.what : "";
+    // Unlabelled and waiting, the kernel's view is the only witness there is:
+    // keep it beside the name, not in it. Not when computing: the thread is
+    // then on a CPU running JS, and "R" would read as CPU starvation.
+    const what = labelled || unlabelledWhat(tickStack(), waiting, ownFrame, openBootSteps());
+    const kernelWhy = !labelled && waiting && kernel ? explainKernelWait(kernel) : "";
+    const after = labelled ? "" : afterNote(lastFinished, freeAt);
     const majorFaults = usage.majorPageFault - was.majorPageFault;
     const diskReads = usage.fsRead - was.fsRead;
-    const entry: Stall = { id: ++seq, at: Date.now(), ms, what, cpuMs, waiting, majorFaults, diskReads };
+    const entry: Stall = { id: ++seq, at: Date.now(), ms, what, cpuMs, waiting, majorFaults, diskReads, ...(kernelWhy ? { kernel: kernelWhy } : {}), ...(after ? { after } : {}) };
     ring.push(entry);
     const max = cap();
     if (ring.length > max) ring.splice(0, ring.length - max);
@@ -253,7 +544,10 @@ export function watchLoop(): void {
             majorFaults ? `${majorFaults} pages read back from swap` : "",
             diskReads ? `${diskReads} blocks read from disk` : ""].filter(Boolean).join(", ")})`
         : "computing";
-      console.warn(`⏱  event loop blocked ${ms}ms by ${what}, ${how} — the terminal was frozen for that long`);
+      const by = [what, after, kernelWhy].filter(Boolean).join(" — ");
+      console.warn(`⏱  event loop blocked ${ms}ms by ${by}, ${how} — the terminal was frozen for that long`);
+      appendStallLine(join(stateDir(), "server-stall.log"), `${new Date().toISOString()} server stall ms=${ms} last=${by} ${stallDetail(entry)}\n`);
+      if (ms >= WITNESS_MS) witness(ms);
     }
   }, TICK_MS);
   // Never hold the process open for this.

@@ -341,7 +341,13 @@ describe("the route does not ask the configured workspace root", () => {
     const at = src.indexOf("export async function boardNow(");
     const handler = src.slice(at, src.indexOf("export function fieldReadout(", at));
     expect(handler).not.toContain("workspaceRoot()");
-    expect(handler).toContain('"rev-parse", "--git-common-dir"');
+    // Each row's checkout goes to dirsOf, which asks git in that checkout (kept
+    // per checkout while its .git still points at the same place).
+    expect(handler).toContain("await dirsOf(at)");
+    const d = src.indexOf("async function dirsOf(");
+    const dirsOf = src.slice(d, src.indexOf("\n}\n", d));
+    expect(dirsOf).not.toContain("workspaceRoot()");
+    expect(dirsOf).toContain('"--git-common-dir"], at)');
     const route = await Bun.file(new URL("../src/index.ts", import.meta.url)).text();
     const r = route.indexOf('pathname === "/agents/board"');
     expect(route.slice(r, r + 400)).toContain("await boardNow()");
@@ -993,7 +999,25 @@ describe("a headless worker this app started", () => {
     expect(rows[0]!.state).toBe("idle");
   });
 
-  test("a row another source already drew wins: the same worker is not drawn twice", () => {
+  test("a row another source already drew wins, and keeps the role the registry started it as", () => {
+    /* One card per worker, and the card the Flow counts is only countable while
+       it says which role ran. Measured on this rule's first version: the pane's
+       own row won and the role went with the registry's row, so the Flow's
+       block read Idle while the Agents list had the worker as working. */
+    const rows = Board.merged({
+      hooks: [{ paneId: "%71", sessionId: "s-1", cwd: wt, at: now - MIN }],
+      trees: [{ path: wt, branch: "feat/orbit-1042" }],
+      named: [worker({ role: "builder-orbit" })], now,
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.worker).toEqual({ role: "builder-orbit", since: now - 5 * MIN });
+  });
+
+  test("but a tab that named no role keeps its card: a kind is not a role to count", () => {
+    /* An enlisted tab is in the registry with no role of its own. Stamping the
+       CLI's name on it would be the Flow's business done with somebody else's
+       row — and the Agents card would print "claude" where it prints the tool
+       the session is on. */
     const rows = Board.merged({
       hooks: [{ paneId: "%71", sessionId: "s-1", cwd: wt, at: now - MIN }],
       trees: [{ path: wt, branch: "feat/orbit-1042" }],

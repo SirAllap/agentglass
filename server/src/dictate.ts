@@ -164,7 +164,7 @@ async function run(
      by hanging rather than by exiting, which without this is a request that
      never returns and a spinner that never stops. */
   let timedOut = false;
-  const timer = setTimeout(() => {
+  const timer = setTimeout(() => { // loop-ok: kills a child on timeout
     timedOut = true;
     try { child.kill(); } catch { /* already gone */ }
   }, DEADLINE_MS);

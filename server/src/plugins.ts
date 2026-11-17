@@ -20,6 +20,7 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fsyncDir } from "./fsyncDir.ts";
+import { waitedFor } from "./loopwatch.ts";
 import { homedir, tmpdir } from "node:os";
 import { mintPluginToken, revokePluginToken } from "./auth.ts";
 import { dropCanvases } from "./plugin-canvas.ts";
@@ -35,6 +36,7 @@ import type { PluginUpdateReport } from "../../shared/types.ts";
 import { blockedEntry, type BlockEntry } from "./plugin-blocklist.ts";
 import { type Contributes, type Field, RESERVED_KEYS, redactSecrets, validateContributes } from "../../shared/pluginUi.ts";
 import { redactText } from "../../shared/scrub.ts";
+import { pinnedRefError } from "../../shared/pluginSafe.ts";
 import { type PluginSandbox, validateSandbox } from "../../shared/pluginSandbox.ts";
 import { boxPlan, type BoxPlan } from "../../shared/pluginBoxPlan.ts";
 import { versionAtLeast } from "../../shared/semverLite.ts";
@@ -47,6 +49,8 @@ import { ensurePluginSocketServer, pluginSocketPath, stopPluginSocketServer } fr
 import { KEYRING_MARK, KeyringError, dropValue, exclusive, keyringEnabled, priorValue, putBack, pluginKeyId, reasonOf, sealValue, unlockFirst, unsealed } from "./keyring.ts";
 import { coerceSettings, dropNotesOf, fieldsWithOptions, forgetPlugin, pushEvent, resolveSettings, setLivenessCheck } from "./plugin-ui.ts";
 import { boundPort } from "./portfile.ts";
+import { envLimit } from "./config.ts";
+import { runChild } from "./broker/brokerRun.ts";
 
 /** What a plugin folder must carry at its root, translated from `orca-plugin.json`
  *  in the decision doc into a name that names nothing but this app. */
@@ -417,7 +421,7 @@ function read(): Store {
   const p = pluginsPath();
   if (offLimits(p) || !existsSync(p)) return { ...DEFAULT_STORE, plugins: [] };
   try {
-    const parsed = JSON.parse(readFileSync(p, "utf8")) as Partial<Store>;
+    const parsed = waitedFor("plugins.json read", () => JSON.parse(readFileSync(p, "utf8"))) as Partial<Store>;
     const kept = parsed.keptSettings;
     const store: Store = {
       master: typeof parsed.master === "boolean" ? parsed.master : true,
@@ -770,7 +774,7 @@ function watchStderr(stream: ReadableStream<Uint8Array>): StderrWindow {
   let open = true;
   let release: () => void = () => {};
   const settled = new Promise<void>((r) => { release = r; });
-  const timer = setTimeout(() => { open = false; headBuf = Buffer.alloc(0); tailBuf = Buffer.alloc(0); release(); }, EARLY_EXIT_MS);
+  const timer = setTimeout(() => { open = false; headBuf = Buffer.alloc(0); tailBuf = Buffer.alloc(0); release(); }, EARLY_EXIT_MS); // loop-ok: drops buffers and releases a gate
   (async () => {
     try {
       for (;;) {
@@ -1139,10 +1143,9 @@ export { pluginGitEnv, PLUGIN_GIT_CONFIG };
  */
 async function git(args: string[], cwd: string, timeoutMs: number): Promise<{ ok: boolean; err: string }> {
   try {
-    const p = Bun.spawn(["git", ...PLUGIN_GIT_CONFIG, "-c", "core.autocrlf=false", "-c", "core.eol=lf", ...args], { cwd, env: pluginGitEnv(), stdout: "pipe", stderr: "pipe", stdin: "ignore" });
-    const timer = setTimeout(() => { try { p.kill(); } catch { /* already gone */ } }, timeoutMs);
-    const [code, err] = await Promise.all([p.exited, new Response(p.stderr).text()]);
-    clearTimeout(timer);
+    // Through the spawn broker: a fork of the server stalls every request.
+    const r = await runChild(["git", ...PLUGIN_GIT_CONFIG, "-c", "core.autocrlf=false", "-c", "core.eol=lf", ...args], { cwd, env: pluginGitEnv(), timeoutMs });
+    const code = r.code, err = r.stderr || (r.error ?? "");
     return code === 0 ? { ok: true, err: "" } : { ok: false, err: err.trim().split("\n").slice(-3).join(" ").slice(0, 400) };
   } catch (e) {
     return { ok: false, err: e instanceof Error ? e.message : String(e) };
@@ -1209,7 +1212,7 @@ function planFor(rec: PluginRecord): BoxPlan {
 /** `AGENTGLASS_PLUGINS_UNBOXED=1`, read in one place so the start path and
  *  the Settings notice cannot disagree about whether the hatch is open. */
 export function envAllowsUnboxed(): boolean {
-  return process.env.AGENTGLASS_PLUGINS_UNBOXED === "1";
+  return envLimit("AGENTGLASS_PLUGINS_UNBOXED") === "1";
 }
 
 /** Outside a box now, or enabled and about to be: a plugin that is not running
@@ -1269,9 +1272,29 @@ export function listPlugins(opts: { keyExposure?: boolean } = {}): PublicPlugin[
   });
 }
 
-/** What a plugin declared, for the routes that check a draw against it. */
+/**
+ * What a plugin declared, for the routes that check a draw against it.
+ *
+ * Kept by the file's mtime, not by calling `read()` fresh: a live canvas
+ * calls this on every single operation (`/plugin/self/panel/<id>/ops`), and
+ * `read()` parses the whole store back into objects — measured as the
+ * dominant disk cost behind that route. `contributes` is written once, at
+ * install or update, and nothing mutates it in place the way `settings` is
+ * mutated by `setPluginSettings`, so caching it (unlike the whole store) runs
+ * no risk of serving a value a failed write never actually saved.
+ */
+let contributesCache: { path: string; mtimeMs: number; by: Map<string, Contributes> } | null = null;
+
 export function contributesOf(name: string): Contributes {
-  return read().plugins.find((p) => p.name === name)?.contributes ?? {};
+  const p = pluginsPath();
+  let mtimeMs: number;
+  try { mtimeMs = statSync(p).mtimeMs; } catch { return read().plugins.find((pl) => pl.name === name)?.contributes ?? {}; }
+  if (!contributesCache || contributesCache.path !== p || contributesCache.mtimeMs !== mtimeMs) {
+    const by = new Map<string, Contributes>();
+    for (const pl of read().plugins) by.set(pl.name, pl.contributes ?? {});
+    contributesCache = { path: p, mtimeMs, by };
+  }
+  return contributesCache.by.get(name) ?? {};
 }
 
 export function isRunning(name: string): boolean {
@@ -1433,9 +1456,9 @@ export type InstallInput =
 
 async function resolveHead(dir: string): Promise<string | null> {
   try {
-    const p = Bun.spawn(["git", ...PLUGIN_GIT_CONFIG, "rev-parse", "HEAD"], { cwd: dir, env: pluginGitEnv(), stdout: "pipe", stderr: "ignore", stdin: "ignore" });
-    const [code, out] = await Promise.all([p.exited, new Response(p.stdout).text()]);
-    return code === 0 ? out.trim() : null;
+    // Through the spawn broker: a fork of the server stalls every request.
+    const r = await runChild(["git", ...PLUGIN_GIT_CONFIG, "rev-parse", "HEAD"], { cwd: dir, env: pluginGitEnv(), timeoutMs: 15_000, read: true });
+    return r.code === 0 ? r.stdout.trim() : null;
   } catch {
     return null;
   }
@@ -1454,8 +1477,10 @@ async function resolveHead(dir: string): Promise<string | null> {
  * content hash by the same walk `finishInstall` does, and a mismatch is
  * refused before anything is copied or recorded.
  */
-async function fetchInto(staging: string, url: string, ref: string | null, sha256?: string): Promise<{ ok: true } | { ok: false; error: string }> {
+async function fetchInto(staging: string, url: string, ref: string | null, sha256?: string, requirePin = false): Promise<{ ok: true } | { ok: false; error: string }> {
   const TEN_MINUTES = 10 * 60 * 1000;
+  // A catalogue install installs exactly one commit; a branch is never cloned on its say-so.
+  if (requirePin) { const bad = pinnedRefError(ref); if (bad) return { ok: false, error: bad }; }
   if (ref && FULL_COMMIT.test(ref)) {
     for (const args of [["init", "-q"], ["fetch", "-q", "--depth", "1", "--", url, ref], ["checkout", "-q", "--detach", "FETCH_HEAD"]]) {
       const r = await git(args, staging, TEN_MINUTES);
@@ -1719,7 +1744,7 @@ export async function installFromCatalogue(
 
   const staging = mkdtempSync(join(tmpdir(), "agx-plugin-"));
   try {
-    const r = await fetchInto(staging, entry.source.url, entry.source.ref, entry.sha256);
+    const r = await fetchInto(staging, entry.source.url, entry.source.ref, entry.sha256, true);
     if (!r.ok) return r;
     const resolvedCommit = await resolveHead(staging);
     const source: InstallSource = {
@@ -1792,9 +1817,13 @@ export async function updatePlugin(
     };
   }
 
+  // An update must not blame "a catalogue entry": the plugin on disk is what is wrong.
+  if (source.kind === "marketplace" && pinnedRefError(target.ref)) {
+    return { ok: false, error: `${name} was installed from a branch; reinstall it from the catalogue to pin a commit` };
+  }
   const staging = mkdtempSync(join(tmpdir(), "agx-plugin-"));
   try {
-    const r = await fetchInto(staging, target.url, target.ref, target.sha256);
+    const r = await fetchInto(staging, target.url, target.ref, target.sha256, source.kind === "marketplace");
     if (!r.ok) return r;
     if (source.kind === "marketplace") source.marketplace.resolvedCommit = await resolveHead(staging);
     // Updated in place: whatever arrives must still be the plugin that is

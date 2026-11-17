@@ -47,7 +47,7 @@ describe("the + on the tab strip", () => {
     const live = await settled(() => paneCwd(SOCK, a), (v) => v === A);
     expect(live).toBe(A);
 
-    expect(runAction(target, "new", a, undefined, undefined, undefined, false, live ?? undefined)).toBe(true);
+    expect(await runAction(target, "new", a, undefined, undefined, undefined, false, live ?? undefined)).toBe(true);
     const rows = () => tmux("list-windows", "-t", "orbit", "-F", "#{window_index}\t#{window_id}\t#{pane_current_path}")
       .split("\n").map((l) => l.split("\t"));
     const idxA = Number(rows().find((r) => r[1] === a)![0]);

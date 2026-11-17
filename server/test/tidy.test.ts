@@ -87,32 +87,32 @@ afterAll(() => {
   if (liveWt) rmSync(liveWt, { recursive: true, force: true });
 });
 
-const find = (r: ReturnType<typeof tidyReport>, id: string) => r.findings.find((f) => f.id === id);
+const find = (r: Awaited<ReturnType<typeof tidyReport>>, id: string) => r.findings.find((f) => f.id === id);
 
 describe("what it reports", () => {
-  test("it uses the checkout's own default branch, not a guess", () => {
+  test("it uses the checkout's own default branch, not a guess", async () => {
     // `master` here, `main` there. Comparing against a branch that does not
     // exist would report every branch as unmerged, which is the same as
     // reporting nothing while looking like it worked.
-    expect(tidyReport(repo).base).toBe("main");
+    expect((await tidyReport(repo)).base).toBe("main");
   });
 
-  test("a merged branch is listed; a branch with its own work is not", () => {
-    const merged = find(tidyReport(repo), "merged");
+  test("a merged branch is listed; a branch with its own work is not", async () => {
+    const merged = find((await tidyReport(repo)), "merged");
     expect(merged?.items).toContain("already-merged");
     expect(merged?.items).not.toContain("has-own-work");
   });
 
-  test("a branch whose remote is gone is listed, with a command to match", () => {
-    const gone = find(tidyReport(repo), "gone");
+  test("a branch whose remote is gone is listed, with a command to match", async () => {
+    const gone = find((await tidyReport(repo)), "gone");
     expect(gone?.items).toContain("was-on-the-remote");
     // The command has to exist for the safety tests below to be testing
     // anything at all — that is the whole point of building the remote.
     expect(gone?.command).toContain("git branch -d");
   });
 
-  test("a worktree whose directory is gone is found, with the exact safe command", () => {
-    const w = find(tidyReport(repo), "worktrees");
+  test("a worktree whose directory is gone is found, with the exact safe command", async () => {
+    const w = find((await tidyReport(repo)), "worktrees");
     expect(w?.items.length).toBe(1);
     // Asserted exactly, not by pattern: this is the assertion that turns red
     // if somebody swaps the command for something destructive, which is the
@@ -120,8 +120,8 @@ describe("what it reports", () => {
     expect(w?.command).toBe("git worktree prune -v");
   });
 
-  test("a branch a live worktree owns is listed, held back, and kept out of the command", () => {
-    const merged = find(tidyReport(repo), "merged");
+  test("a branch a live worktree owns is listed, held back, and kept out of the command", async () => {
+    const merged = find((await tidyReport(repo)), "merged");
     // In the list, because it IS merged — hiding it would be a different lie.
     expect(merged?.items).toContain("held-by-worktree");
     const held = merged?.blocked.find((b) => b.name === "held-by-worktree");
@@ -135,14 +135,14 @@ describe("what it reports", () => {
     expect(merged?.command ?? "").not.toContain("held-by-worktree");
   });
 
-  test("a branch nothing has checked out is still in the command", () => {
+  test("a branch nothing has checked out is still in the command", async () => {
     // The other half: holding back must be the exception, not a habit.
-    const merged = find(tidyReport(repo), "merged");
+    const merged = find((await tidyReport(repo)), "merged");
     expect(merged?.blocked.some((b) => b.name === "already-merged")).toBe(false);
     expect(merged?.command).toContain("already-merged");
   });
 
-  test("a gone upstream is not taken as proof the work landed", () => {
+  test("a gone upstream is not taken as proof the work landed", async () => {
     /**
      * The correction this whole mechanism exists for. A deleted remote branch
      * was being treated as "its PR merged", and on a real checkout three of
@@ -159,7 +159,7 @@ describe("what it reports", () => {
     git(remoteDir, ["--git-dir=.", "update-ref", "-d", "refs/heads/gone-but-unmerged"]);
     git(repo, ["fetch", "-q", "--prune"]);
 
-    const gone = find(tidyReport(repo), "gone");
+    const gone = find((await tidyReport(repo)), "gone");
     // Listed — its upstream really is gone, which is worth knowing.
     expect(gone?.items).toContain("gone-but-unmerged");
     // Held, with the reason that actually applies.
@@ -169,19 +169,19 @@ describe("what it reports", () => {
     expect(gone?.command ?? "").not.toContain("gone-but-unmerged");
   });
 
-  test("stashes are found and shown", () => {
-    const s = find(tidyReport(repo), "stashes");
+  test("stashes are found and shown", async () => {
+    const s = find((await tidyReport(repo)), "stashes");
     expect(s?.items.length).toBe(1);
     expect(s?.items[0]).toContain("wip");
   });
 
-  test("a directory that is not a checkout says so instead of throwing", () => {
-    const r = tidyReport(tmpdir());
+  test("a directory that is not a checkout says so instead of throwing", async () => {
+    const r = (await tidyReport(tmpdir()));
     expect(r.error).toBeTruthy();
     expect(r.findings).toEqual([]);
   });
 
-  test("there is no finding for remote-tracking refs", () => {
+  test("there is no finding for remote-tracking refs", async () => {
     /**
      * Pinned because it was there, and because the reason it went is subtle
      * enough to be re-added in good faith.
@@ -196,28 +196,28 @@ describe("what it reports", () => {
      * A busy repository is not a dirty one. Anything that comes back here
      * needs a signal that can tell those apart.
      */
-    expect(tidyReport(repo).findings.some((f) => /remote-tracking/i.test(f.title))).toBe(false);
-    for (const f of tidyReport(repo).findings) {
+    expect((await tidyReport(repo)).findings.some((f) => /remote-tracking/i.test(f.title))).toBe(false);
+    for (const f of (await tidyReport(repo)).findings) {
       expect(f.command ?? "").not.toContain("fetch --prune");
     }
   });
 
-  test("findings with nothing in them are absent, not empty", () => {
+  test("findings with nothing in them are absent, not empty", async () => {
     // An empty section per category is furniture, and furniture is what
     // teaches people to skim past the section that matters.
-    for (const f of tidyReport(repo).findings) expect(f.items.length).toBeGreaterThan(0);
+    for (const f of (await tidyReport(repo)).findings) expect(f.items.length).toBeGreaterThan(0);
   });
 });
 
 describe("the commands it is willing to hand over", () => {
-  test("branch deletion is always -d, never -D", () => {
+  test("branch deletion is always -d, never -D", async () => {
     /**
      * The single most important line in this file. `-d` refuses to delete a
      * branch whose work is not merged and names it; `-D` deletes it and the
      * commits with it. Every branch command here must be the one whose worst
      * case is a refusal.
      */
-    for (const f of tidyReport(repo).findings) {
+    for (const f of (await tidyReport(repo)).findings) {
       if (!f.command) continue;
       expect(f.command).not.toMatch(/\bbranch\b.*\s-D\b/);
       expect(f.command).not.toMatch(/--force\b/);
@@ -225,21 +225,21 @@ describe("the commands it is willing to hand over", () => {
     }
   });
 
-  test("no command can drop a stash", () => {
+  test("no command can drop a stash", async () => {
     // Uncommitted work is the one thing in a checkout that exists nowhere
     // else, so the panel offers no way to lose it and says why instead.
-    const s = find(tidyReport(repo), "stashes");
+    const s = find((await tidyReport(repo)), "stashes");
     expect(s?.command).toBeNull();
     expect(s?.note).toContain("on purpose");
-    for (const f of tidyReport(repo).findings) {
+    for (const f of (await tidyReport(repo)).findings) {
       expect(f.command ?? "").not.toContain("stash drop");
       expect(f.command ?? "").not.toContain("stash clear");
     }
   });
 
-  test("nothing offered can rewrite history or discard a working tree", () => {
+  test("nothing offered can rewrite history or discard a working tree", async () => {
     const forbidden = [/reset\s+--hard/, /clean\s+-[a-z]*f/, /push\s+--force/, /filter-branch/, /reflog\s+expire/, /prune\s+--expire/];
-    for (const f of tidyReport(repo).findings) {
+    for (const f of (await tidyReport(repo)).findings) {
       for (const bad of forbidden) expect(f.command ?? "").not.toMatch(bad);
     }
   });
@@ -252,8 +252,8 @@ describe("what a finding has to be able to explain", () => {
    * found and then hand over a shell — not what the command would do, not what
    * evidence put the row there, and not what happens when it goes wrong.
    */
-  test("every finding answers why, what and what-could-go-wrong", () => {
-    for (const f of tidyReport(repo).findings) {
+  test("every finding answers why, what and what-could-go-wrong", async () => {
+    for (const f of (await tidyReport(repo)).findings) {
       // The evidence, not a restatement of the title: this is the half that
       // makes the finding checkable rather than trusted.
       expect(f.why.length).toBeGreaterThan(40);
@@ -262,22 +262,22 @@ describe("what a finding has to be able to explain", () => {
     }
   });
 
-  test("the evidence names the command that produced it", () => {
+  test("the evidence names the command that produced it", async () => {
     // "git said this" beats "we think this", and it lets somebody go and check.
-    for (const f of tidyReport(repo).findings) expect(f.why).toContain("git ");
+    for (const f of (await tidyReport(repo)).findings) expect(f.why).toContain("git ");
   });
 
-  test("anything with a button has a drawing", () => {
+  test("anything with a button has a drawing", async () => {
     // The situations here are all shapes — something still pointing at
     // something that is gone — and a shape is read faster than its sentence.
-    for (const f of tidyReport(repo).findings) {
+    for (const f of (await tidyReport(repo)).findings) {
       if (!f.command) continue;
       expect(f.diagram.length).toBeGreaterThan(1);
     }
   });
 
-  test("the stashes finding explains its own refusal instead of going quiet", () => {
-    const s = find(tidyReport(repo), "stashes");
+  test("the stashes finding explains its own refusal instead of going quiet", async () => {
+    const s = find((await tidyReport(repo)), "stashes");
     expect(s?.command).toBeNull();
     expect(s?.risk).toContain("no way back");
     // It still gets a drawing: the point being made is visual — nothing else
@@ -336,7 +336,7 @@ describe("the guard that makes those rules total", () => {
 });
 
 describe("it reads and does not write", () => {
-  test("asking for the report changes nothing in the repository", () => {
+  test("asking for the report changes nothing in the repository", async () => {
     /**
      * The promise the whole module is built on, checked rather than asserted
      * in prose: take the repository's full state, ask for the report several
@@ -351,7 +351,7 @@ describe("it reads and does not write", () => {
       file: readFileSync(join(repo, "a.txt"), "utf8"),
     });
     const before = state();
-    tidyReport(repo); tidyReport(repo); tidyReport(repo);
+    await tidyReport(repo); await tidyReport(repo); await tidyReport(repo);
     expect(state()).toBe(before);
   });
 });

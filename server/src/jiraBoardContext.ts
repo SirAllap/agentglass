@@ -19,7 +19,7 @@
  * active sprints shows the first); no velocity, no burndown; epics are read for
  * their colour and name and the first 50 are enough for a board's header.
  */
-import type { JiraBoardContext, JiraBoardEpic, JiraBoardSprint, JiraQuickFilter } from "../../shared/providers.ts";
+import type { JiraBoardContext, JiraBoardEpic, JiraBoardNextSprint, JiraBoardSprint, JiraQuickFilter } from "../../shared/providers.ts";
 import { epoch, jiraCall, memoOk, type JiraCreds, type JiraResult } from "./jira.ts";
 
 const AGILE = "/rest/agile/1.0";
@@ -60,6 +60,41 @@ export function activeSprint(creds: JiraCreds, board: string): Promise<JiraResul
   }, true);
 }
 
+/** Most pages of future sprints read: 5 x 50 is more than any board plans ahead. */
+const FUTURE_PAGES = 5;
+const sprintRow = (s: Record<string, unknown>): JiraBoardNextSprint => ({ id: idText(s.id), name: str(s.name), start: epoch(s.startDate), end: epoch(s.endDate) });
+
+/**
+ * Every future sprint of the board, in the board's own order, paged through (`isLast`). Jira lets a card go into any
+ * of them, so the card menu's Sprint row lists them all. A kanban board's 400 is none.
+ */
+export function futureSprints(creds: JiraCreds, board: string): Promise<JiraResult<JiraBoardNextSprint[]>> {
+  if (!NUM.test(board)) return Promise.resolve({ ok: true, data: [] });
+  return memoOk<JiraBoardNextSprint[]>(creds, `futuresprints:${board}`, async () => {
+    const out: JiraBoardNextSprint[] = [];
+    for (let page = 0, at = 0; page < FUTURE_PAGES; page++) {
+      const r = await jiraCall<unknown>(creds, `${AGILE}/board/${board}/sprint?state=future&startAt=${at}&maxResults=50`);
+      if (!r.ok) {
+        if (page > 0) break; // a later page that fails keeps what the first ones gave
+        return r.status === 400 || r.status === 404 ? { ok: true, data: [] } : { ...r, data: undefined };
+      }
+      const rows = rowsOf(r.data);
+      out.push(...rows.filter((x) => NUM.test(idText(x.id)) && str(x.name) && str(x.state || "future").toLowerCase() === "future").map(sprintRow));
+      if (!rows.length || (isObj(r.data) && r.data.isLast !== false)) break;
+      at += rows.length;
+    }
+    return { ok: true, data: out };
+  }, true);
+}
+
+/** The soonest future sprint. Sprints come in the board's own order; the first dated one is the next, else the first. */
+export async function nextSprint(creds: JiraCreds, board: string): Promise<JiraResult<JiraBoardNextSprint | null>> {
+  const r = await futureSprints(creds, board);
+  if (!r.ok) return { ...r, data: undefined };
+  const rows = r.data ?? [];
+  return { ok: true, data: rows.find((x) => x.start) ?? rows[0] ?? null };
+}
+
 /**
  * What an epic is called. The agile read gives `name` (the "Epic Name" field, which a project may leave empty)
  * and `summary` (the issue title, always there): measured on a site whose epics had no Epic Name, every row of the
@@ -82,16 +117,23 @@ export function boardEpics(creds: JiraCreds, board: string): Promise<JiraResult<
 }
 
 /** The three reads together, as the screen draws them. One that failed leaves its part empty and says why. */
-export async function boardContext(creds: JiraCreds, view: string): Promise<JiraBoardContext> {
+export async function boardContext(creds: JiraCreds, view: string, kindOf?: (creds: JiraCreds, board: string) => Promise<JiraResult<{ type: string }>>): Promise<JiraBoardContext> {
   // The screen knows a board as the view id it was saved under (`board:3`); the site knows it as 3.
   const board = view.replace(/^board:/, "");
   const [f, s, e] = await Promise.all([quickFilterRows(creds, board), activeSprint(creds, board), boardEpics(creds, board)]);
+  // The next sprint is read whether or not one is active: with none the chip says what is next, and with one the card menu's
+  // Sprint row offers it. Both it and the board's kind are kept reads, so this is one future-sprint read per ten minutes.
+  const [fs, cfg] = await Promise.all([futureSprints(creds, board), s.data ? Promise.resolve(null) : kindOf ? kindOf(creds, board) : Promise.resolve(null)]);
   const failed = [f, s, e].find((x) => !x.ok);
+  const next = fs.data ? (fs.data.find((x) => x.start) ?? fs.data[0]) : undefined;
   return {
     ok: !failed,
     ...(failed ? { error: failed.error ?? "Jira did not answer" } : {}),
     filters: (f.data ?? []).map(({ jql: _jql, ...q }) => q),
     ...(s.data ? { sprint: s.data } : {}),
+    ...(next ? { next } : {}),
+    ...(fs.data?.length ? { futures: fs.data } : {}),
+    ...(cfg?.data?.type ? { boardType: cfg.data.type.toLowerCase() } : {}),
     epics: e.data ?? [],
   };
 }

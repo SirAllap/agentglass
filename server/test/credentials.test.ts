@@ -109,6 +109,6 @@ describe("a store that got damaged", () => {
     C.__setCredentialsPath(file);
     expect(C.hasCredential("clickup")).toBe(false);
     C.setCredential("clickup", { token: "pk_1_X" });
-    expect(JSON.parse(readFileSync(file, "utf8")).clickup.token).toBe("pk_1_X");
+    expect(JSON.parse(readFileSync(file, "utf8")).accounts.clickup.primary.token).toBe("pk_1_X");
   });
 });

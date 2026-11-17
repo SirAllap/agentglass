@@ -19,6 +19,7 @@ import { basename } from "node:path";
 import { dockerBin } from "./docker.ts";
 import { branchOfCheckout } from "./dockerowner.ts";
 import { noteWrite } from "./dockerledger.ts";
+import { runChild } from "./broker/brokerRun.ts";
 
 /** What one container's exit tells us. Exported for the test, which drives this
  *  with recorded docker output rather than a daemon. */
@@ -184,9 +185,9 @@ async function onEvent(line: string, bin: string): Promise<void> {
   // The container is exiting, not gone: inspect still works, and this is the
   // only moment its mounts and its checkout are both still readable.
   try {
-    const p = Bun.spawn([bin, "inspect", id], { stdout: "pipe", stderr: "ignore" });
-    const out = await new Response(p.stdout).text();
-    if ((await p.exited) !== 0) return;
-    recordExit(exitFacts(out));
+    // Started by the spawn broker (broker/brokerRun.ts), not a fork of this server.
+    const p = await runChild([bin, "inspect", id], { timeoutMs: 20_000, read: true });
+    if (p.code !== 0) return;
+    recordExit(exitFacts(p.stdout));
   } catch { /* the container was removed first: nothing to record */ }
 }

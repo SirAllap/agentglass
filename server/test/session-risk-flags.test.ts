@@ -271,10 +271,14 @@ describe("what a second review found", () => {
 });
 
 const src = await Bun.file(new URL("../src/db.ts", import.meta.url)).text();
-step("the roll-up's first read of a session goes through the session index, not the event-type one", () => {
-  // Measured: without the hint SQLite picks idx_events_type and a new session's
-  // first read walks every PostToolUse row in the table (21 ms on 28k rows
-  // against 1 ms).
+step("the roll-up reads a session's edits by session and tool, never every event of the session", () => {
+  // Without a hint SQLite picks idx_events_type and walks every PostToolUse row
+  // in the table (21 ms on 28k rows against 1 ms). By session alone it fetched
+  // every event row of the session to test its tool: 159.5 MB read from disk
+  // for 5 sessions of 20k events, against 3.2 MB by session and tool.
   const fn = src.slice(src.indexOf("function attachRisks("), src.indexOf("\n}\n", src.indexOf("function attachRisks(")));
-  expect(fn).toContain("INDEXED BY idx_events_session");
+  expect(fn).toContain("riskReadSql(");
+  const plan = db.db.query<{ detail: string }, []>(`EXPLAIN QUERY PLAN ${db.riskReadSql(3)}`).all().map((r) => r.detail).join(" | ");
+  expect(plan).toContain("idx_events_pre_open (session_id=? AND tool_name=?)");
+  expect(plan).not.toContain("SCAN events");
 });

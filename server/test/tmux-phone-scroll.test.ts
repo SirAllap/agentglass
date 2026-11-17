@@ -19,8 +19,10 @@
  * until they were measured — that `-N` takes a repeat count, that `copy-mode`
  * is idempotent, and that `-e` leaves the mode at the bottom of the history.
  */
+import { mkdirSync } from "node:fs";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { leaveCopyMode, scrollPhonePane } from "../src/tmuxctl.ts";
+import { TMUX_TEST_TMPDIR, socketDirUnder } from "./tmuxTmp.ts";
 
 /*
  * A server per test, on a socket of its own.
@@ -83,7 +85,8 @@ const SCROLLBACK = 277;
 const history = (): number => Number(tmux("display-message", "-p", "-t", "probe", "#{history_size}") || 0);
 
 beforeEach(() => {
-  sock = `/tmp/agx-pscroll-${process.pid}-${++seq}.sock`;
+  mkdirSync(socketDirUnder(TMUX_TEST_TMPDIR), { recursive: true, mode: 0o700 });
+  sock = `${socketDirUnder(TMUX_TEST_TMPDIR)}/agx-pscroll-${process.pid}-${++seq}.sock`;
   SOCKET = ["-f", "/dev/null", "-S", sock];
   started.push(sock);
   // Three hundred lines to scroll through, then a process that stays put so the
@@ -98,7 +101,7 @@ beforeEach(() => {
    * nothing to show, and the test that assumed it had gone back 40 lines read
    * `inMode: false`:
    *
-   *     expect(scrollPhonePane(SOCKET, PHONE, 10)?.inMode).toBe(true)
+   *     expect((await scrollPhonePane(SOCKET, PHONE, 10))?.inMode).toBe(true)
    *     Expected: true / Received: false
    *
    * That is the code being right and the fixture being late. Waiting for the
@@ -121,69 +124,69 @@ afterEach(() => { tmux("kill-server"); });
 afterAll(() => { for (const s of started) on(s, ["kill-server"]); });
 
 describe("a finger asking the machine to scroll", () => {
-  it("enters copy mode and moves back by exactly the count it was given", () => {
+  it("enters copy mode and moves back by exactly the count it was given", async () => {
     expect(state().inMode).toBe(false);
-    const did = scrollPhonePane(SOCKET, PHONE, -20);
+    const did = await scrollPhonePane(SOCKET, PHONE, -20);
     expect(did?.entered).toBe(true);
     expect(state()).toEqual({ inMode: true, at: 20 });
   });
 
-  it("keeps going without entering again", () => {
-    scrollPhonePane(SOCKET, PHONE, -20);
-    const more = scrollPhonePane(SOCKET, PHONE, -15);
+  it("keeps going without entering again", async () => {
+    await scrollPhonePane(SOCKET, PHONE, -20);
+    const more = await scrollPhonePane(SOCKET, PHONE, -15);
     // `entered` is what the caller owes back, so a second request must not
     // claim a debt it did not create.
     expect(more?.entered).toBe(false);
     expect(state().at).toBe(35);
   });
 
-  it("comes forward again, and leaves the mode at the bottom by itself", () => {
-    scrollPhonePane(SOCKET, PHONE, -40);
-    expect(scrollPhonePane(SOCKET, PHONE, 10)?.inMode).toBe(true);
+  it("comes forward again, and leaves the mode at the bottom by itself", async () => {
+    await scrollPhonePane(SOCKET, PHONE, -40);
+    expect((await scrollPhonePane(SOCKET, PHONE, 10))?.inMode).toBe(true);
     expect(state().at).toBe(30);
     // The `-e` on copy-mode. This is the ordinary end of a scroll — somebody
     // reads back and then comes down again — and it means the common case owes
     // nothing on the way out.
-    const home = scrollPhonePane(SOCKET, PHONE, 500);
+    const home = await scrollPhonePane(SOCKET, PHONE, 500);
     expect(home?.inMode).toBe(false);
     expect(state().inMode).toBe(false);
   });
 
-  it("does not open copy mode to answer a forward drag at the bottom", () => {
+  it("does not open copy mode to answer a forward drag at the bottom", async () => {
     // A finger travelling that way at the end of the history is not a request.
     // Entering copy mode for it would put the DESK's pane into copy mode — the
     // mode is a property of the shared pane — for a gesture with nothing to
     // show.
-    const did = scrollPhonePane(SOCKET, PHONE, 25);
+    const did = await scrollPhonePane(SOCKET, PHONE, 25);
     expect(did).toEqual({ paneId: did!.paneId, entered: false, inMode: false });
     expect(state().inMode).toBe(false);
   });
 
-  it("does nothing at all for a session that is not one of ours", () => {
+  it("does nothing at all for a session that is not one of ours", async () => {
     // The session name is the only thing addressing this, and it is ours: the
     // client sends a count and nothing else. A name of any other shape is how
     // this would become a way to reach somebody else's pane.
-    expect(scrollPhonePane(SOCKET, "probe", -20)).toBe(null);
-    expect(scrollPhonePane(SOCKET, "agx-phone-1-abcdef; kill-server", -20)).toBe(null);
+    expect(await scrollPhonePane(SOCKET, "probe", -20)).toBe(null);
+    expect(await scrollPhonePane(SOCKET, "agx-phone-1-abcdef; kill-server", -20)).toBe(null);
     expect(state().inMode).toBe(false);
   });
 
-  it("refuses a count that is not one", () => {
-    expect(scrollPhonePane(SOCKET, PHONE, 0)).toBe(null);
-    expect(scrollPhonePane(SOCKET, PHONE, Number.NaN)).toBe(null);
+  it("refuses a count that is not one", async () => {
+    expect(await scrollPhonePane(SOCKET, PHONE, 0)).toBe(null);
+    expect(await scrollPhonePane(SOCKET, PHONE, Number.NaN)).toBe(null);
     expect(state().inMode).toBe(false);
   });
 });
 
 describe("handing copy mode back", () => {
-  it("cancels the mode this phone opened", () => {
-    const did = scrollPhonePane(SOCKET, PHONE, -20);
+  it("cancels the mode this phone opened", async () => {
+    const did = await scrollPhonePane(SOCKET, PHONE, -20);
     expect(state().inMode).toBe(true);
     expect(leaveCopyMode(SOCKET, did!.paneId)).toBe(true);
     expect(state().inMode).toBe(false);
   });
 
-  it("and says so rather than acting when the pane is not in one", () => {
+  it("and says so rather than acting when the pane is not in one", async () => {
     // The debt is only owed while the mode is on. Called on a pane somebody has
     // since left, this must not send `cancel` into whatever they are doing now.
     const pane = tmux("display-message", "-p", "-t", "probe", "#{pane_id}");

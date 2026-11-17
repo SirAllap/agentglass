@@ -51,25 +51,25 @@ function build(): void {
   git("add", "-A"); git("commit", "-qm", "feat three");
 }
 const base = () => hash("HEAD~3");
-const stepsOf = () => rebaseSteps(repo, base()).steps!;
+const stepsOf = async () => (await rebaseSteps(repo, base())).steps!;
 
 describe("rebaseSteps", () => {
   beforeEach(build);
 
-  it("enumerates base..HEAD oldest first", () => {
-    const r = rebaseSteps(repo, base());
+  it("enumerates base..HEAD oldest first", async () => {
+    const r = await rebaseSteps(repo, base());
     expect(r.ok).toBe(true);
     expect(r.steps!.map((s) => s.subject)).toEqual(["feat one", "feat two", "feat three"]);
     expect(r.steps!.every((s) => s.action === "pick")).toBe(true);
   });
 
-  it("refuses a base that is not an ancestor", () => {
+  it("refuses a base that is not an ancestor", async () => {
     git("checkout", "-q", "-b", "side", "HEAD~1");
     writeFileSync(join(repo, "d.txt"), "side\n");
     git("add", "-A"); git("commit", "-qm", "side work");
     const side = hash("HEAD");
     git("checkout", "-q", "main");
-    const r = rebaseSteps(repo, side);
+    const r = await rebaseSteps(repo, side);
     expect(r.ok).toBe(false);
     expect(r.error).toContain("not an ancestor");
   });
@@ -78,9 +78,9 @@ describe("rebaseSteps", () => {
 describe("runRebase", () => {
   beforeEach(build);
 
-  it("reorders — the plan's order is the result's order", () => {
-    const s = stepsOf();
-    const r = runRebase(repo, base(), [s[2]!, s[0]!, s[1]!]);
+  it("reorders — the plan's order is the result's order", async () => {
+    const s = await stepsOf();
+    const r = await runRebase(repo, base(), [s[2]!, s[0]!, s[1]!]);
     expect(r.ok).toBe(true);
     // Newest first in the log: two, one, three.
     expect(subject("HEAD")).toBe("feat two");
@@ -91,10 +91,10 @@ describe("runRebase", () => {
     expect(git("status", "--porcelain").stdout.toString().trim()).toBe("");
   });
 
-  it("squash folds two steps into one with their combined tree", () => {
+  it("squash folds two steps into one with their combined tree", async () => {
     const b = base();
-    const s = stepsOf();
-    const r = runRebase(repo, b, [s[0]!, { ...s[1]!, action: "squash" }, s[2]!]);
+    const s = await stepsOf();
+    const r = await runRebase(repo, b, [s[0]!, { ...s[1]!, action: "squash" }, s[2]!]);
     expect(r.ok).toBe(true);
     expect(subject("HEAD")).toBe("feat three");
     // The squash keeps the first commit of the group as its message.
@@ -104,18 +104,18 @@ describe("runRebase", () => {
     expect(at("HEAD~1", "b.txt")).toBe("two\n");
   });
 
-  it("fixup keeps the folded commit's subject", () => {
-    const s = stepsOf();
-    const r = runRebase(repo, base(), [s[0]!, { ...s[1]!, action: "fixup" }, s[2]!]);
+  it("fixup keeps the folded commit's subject", async () => {
+    const s = await stepsOf();
+    const r = await runRebase(repo, base(), [s[0]!, { ...s[1]!, action: "fixup" }, s[2]!]);
     expect(r.ok).toBe(true);
     expect(subject("HEAD~1")).toBe("feat one"); // the fixup's own message is discarded
     expect(at("HEAD~1", "a.txt")).toBe("two\n");
   });
 
-  it("drop removes the commit and its change", () => {
+  it("drop removes the commit and its change", async () => {
     const b = base();
-    const s = stepsOf();
-    const r = runRebase(repo, b, [s[0]!, { ...s[1]!, action: "drop" }, s[2]!]);
+    const s = await stepsOf();
+    const r = await runRebase(repo, b, [s[0]!, { ...s[1]!, action: "drop" }, s[2]!]);
     expect(r.ok).toBe(true);
     expect(subject("HEAD")).toBe("feat three");
     expect(git("rev-list", "--count", b + "..HEAD").stdout.toString().trim()).toBe("2");
@@ -123,64 +123,64 @@ describe("runRebase", () => {
     expect(at("HEAD~1", "a.txt")).toBe("one\n");
   });
 
-  it("reword replaces the message without touching the change", () => {
-    const s = stepsOf();
-    const r = runRebase(repo, base(), [{ ...s[0]!, action: "reword", newMessage: "renamed one" }, s[1]!, s[2]!]);
+  it("reword replaces the message without touching the change", async () => {
+    const s = await stepsOf();
+    const r = await runRebase(repo, base(), [{ ...s[0]!, action: "reword", newMessage: "renamed one" }, s[1]!, s[2]!]);
     expect(r.ok).toBe(true);
     expect(subject("HEAD~2")).toBe("renamed one");
     expect(at("HEAD~2", "a.txt")).toBe("one\n");
   });
 
-  it("refuses a plan that misses a commit", () => {
-    const s = stepsOf();
-    const r = runRebase(repo, base(), [s[0]!, s[1]!]);
+  it("refuses a plan that misses a commit", async () => {
+    const s = await stepsOf();
+    const r = await runRebase(repo, base(), [s[0]!, s[1]!]);
     expect(r.ok).toBe(false);
     expect(r.error).toContain("missing");
   });
 
-  it("refuses a plan that repeats a commit", () => {
-    const s = stepsOf();
-    const r = runRebase(repo, base(), [s[0]!, s[0]!, s[1]!, s[2]!]);
+  it("refuses a plan that repeats a commit", async () => {
+    const s = await stepsOf();
+    const r = await runRebase(repo, base(), [s[0]!, s[0]!, s[1]!, s[2]!]);
     expect(r.ok).toBe(false);
     expect(r.error).toContain("more than once");
   });
 
-  it("pauses as `rebasing` on a conflict, and continue finishes it", () => {
+  it("pauses as `rebasing` on a conflict, and continue finishes it", async () => {
     // Reordering "feat two" ahead of "feat one" collides on a.txt: two's diff
     // expects one's content and finds the seed's. Continuing replays the next
     // step, which collides again — the rebase stops once per conflicting
     // commit, exactly like any rebase -i.
-    const s = stepsOf();
-    const r = runRebase(repo, base(), [s[2]!, s[1]!, s[0]!]);
+    const s = await stepsOf();
+    const r = await runRebase(repo, base(), [s[2]!, s[1]!, s[0]!]);
     expect(r.ok).toBe(false);
-    expect(conflicts(repo).state).toBe("rebasing");
-    expect(resolveWith(repo, "a.txt", "theirs").ok).toBe(true);
-    let fin = mergeContinue(repo);
+    expect((await conflicts(repo)).state).toBe("rebasing");
+    expect((await resolveWith(repo, "a.txt", "theirs")).ok).toBe(true);
+    let fin = await mergeContinue(repo);
     expect(fin.ok).toBe(true);
     // Stopped again on the next conflicting commit — the run advanced, it did
     // not fail. One more resolution finishes it.
-    expect(conflicts(repo).state).toBe("rebasing");
-    expect(resolveWith(repo, "a.txt", "theirs").ok).toBe(true);
-    fin = mergeContinue(repo);
+    expect((await conflicts(repo)).state).toBe("rebasing");
+    expect((await resolveWith(repo, "a.txt", "theirs")).ok).toBe(true);
+    fin = await mergeContinue(repo);
     expect(fin.ok).toBe(true);
-    expect(conflicts(repo).state).toBe("clean");
+    expect((await conflicts(repo)).state).toBe("clean");
     expect(subject()).toBe("feat one");
     expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("one\n");
     expect(readFileSync(join(repo, "b.txt"), "utf8")).toBe("two\n");
   });
 
-  it("abort restores the branch exactly", () => {
-    const s = stepsOf();
+  it("abort restores the branch exactly", async () => {
+    const s = await stepsOf();
     const before = subject();
-    runRebase(repo, base(), [s[2]!, s[1]!, s[0]!]);
-    expect(conflicts(repo).state).toBe("rebasing");
-    expect(mergeAbort(repo).ok).toBe(true);
+    await runRebase(repo, base(), [s[2]!, s[1]!, s[0]!]);
+    expect((await conflicts(repo)).state).toBe("rebasing");
+    expect((await mergeAbort(repo)).ok).toBe(true);
     expect(subject()).toBe(before);
     expect(git("status", "--porcelain").stdout.toString().trim()).toBe("");
     expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("two\n");
   });
 
-  it("refuses a range that holds a merge commit and leaves no rebase behind", () => {
+  it("refuses a range that holds a merge commit and leaves no rebase behind", async () => {
     // A merge in base..HEAD made git reject the todo ("'pick' does not accept
     // merge commits") after it had already started, stranding a rebase.
     const b = base();
@@ -189,8 +189,8 @@ describe("runRebase", () => {
     git("add", "-A"); git("commit", "-qm", "side work");
     git("checkout", "-q", "main");
     git("merge", "--no-ff", "-qm", "merge side", "side");
-    const s = rebaseSteps(repo, b).steps!;
-    const r = runRebase(repo, b, s);
+    const s = (await rebaseSteps(repo, b)).steps!;
+    const r = await runRebase(repo, b, s);
     expect(r.ok).toBe(false);
     expect(r.error).toContain("merge commit");
     expect(git("status", "--porcelain=v2", "--branch").stdout.toString()).toContain("main");

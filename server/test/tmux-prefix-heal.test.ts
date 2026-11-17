@@ -47,7 +47,7 @@ afterAll(() => {
 const step = story();
 
 describe("an engine server that never read the config", () => {
-  step("comes up on tmux's own prefix, which is the bug as the user sees it", () => {
+  step("comes up on tmux's own prefix, which is the bug as the user sees it", async () => {
     tmux("kill-server");
     // Born WITHOUT `-f`: this is the shape every path that is not the engine's
     // own attach produces, and the reason `-f` on the attach cannot save it.
@@ -55,44 +55,44 @@ describe("an engine server that never read the config", () => {
     expect(prefixKeys({ socket: SOCK } as TmuxTarget)).toEqual(["C-b"]);
   });
 
-  step("the config is put back, and the prefix with it", () => {
+  step("the config is put back, and the prefix with it", async () => {
     __resetHeal();
     const t = { socket: SOCK } as TmuxTarget;
-    expect(healPrefix(t, "C-f", conf)).toEqual(["C-f"]);
+    expect(await healPrefix(t, "C-f", conf)).toEqual(["C-f"]);
     // Not just what the function returned — what tmux now says.
     expect(tmux("show-options", "-gqv", "prefix")).toBe("C-f");
   });
 
-  step("a server that already agrees is left alone", () => {
+  step("a server that already agrees is left alone", async () => {
     __resetHeal();
     // null, not `["C-f"]`: the caller keeps what it read, and nothing is sent
     // to a server that is already right. This runs on every attach.
-    expect(healPrefix({ socket: SOCK } as TmuxTarget, "C-f", conf)).toBe(null);
+    expect(await healPrefix({ socket: SOCK } as TmuxTarget, "C-f", conf)).toBe(null);
   });
 
-  step("the prefix the caller already read is not read again", () => {
+  step("the prefix the caller already read is not read again", async () => {
     /* The sweep holds the prefix from its own frame. Re-reading it here was two
        show-options spawns per engine shell every half second. Handed a prefix
        that agrees, it must answer from that alone, whatever tmux would say. */
     __resetHeal();
     tmux("set-option", "-g", "prefix", "C-b");
-    expect(healPrefix({ socket: SOCK } as TmuxTarget, "C-f", conf, ["C-f"])).toBe(null);
+    expect(await healPrefix({ socket: SOCK } as TmuxTarget, "C-f", conf, ["C-f"])).toBe(null);
     expect(tmux("show-options", "-gqv", "prefix")).toBe("C-b");
     tmux("set-option", "-g", "prefix", "C-f");
   });
 
-  step("and a config that cannot take is not re-sourced on every attach", () => {
+  step("and a config that cannot take is not re-sourced on every attach", async () => {
     /* Throttled per socket: a conf tmux refuses would otherwise turn every
        attach into a failed re-source for as long as the session lives. */
     __resetHeal();
     const t = { socket: SOCK } as TmuxTarget;
     const empty = join(dir, "empty.conf");
     writeFileSync(empty, "# nothing that moves the prefix\n");
-    expect(healPrefix(t, "M-x", empty)).toEqual(["C-f"]);  // tried, did not take
-    expect(healPrefix(t, "M-x", empty)).toBe(null);        // and does not try again
+    expect(await healPrefix(t, "M-x", empty)).toEqual(["C-f"]);  // tried, did not take
+    expect(await healPrefix(t, "M-x", empty)).toBe(null);        // and does not try again
   });
 
-  step("an empty `have` from an aborted frame must not be passed through as a confirmed read", () => {
+  step("an empty `have` from an aborted frame must not be passed through as a confirmed read", async () => {
     /* A frame that aborted mid-parse before finishing show-options hands the
        sweep `[]`, not the server's real prefix. Passed straight through as
        `have`, it never equals `want` and keeps forcing a resource on every
@@ -101,9 +101,9 @@ describe("an engine server that never read the config", () => {
        `undefined` tells healPrefix to go read the truth for itself. */
     __resetHeal();
     tmux("set-option", "-g", "prefix", "C-f"); // the server already agrees
-    expect(healPrefix({ socket: SOCK } as TmuxTarget, "C-f", conf, [])).not.toBe(null); // [] : forced anyway, the bug
+    expect(await healPrefix({ socket: SOCK } as TmuxTarget, "C-f", conf, [])).not.toBe(null); // [] : forced anyway, the bug
     __resetHeal();
-    expect(healPrefix({ socket: SOCK } as TmuxTarget, "C-f", conf, undefined)).toBe(null); // undefined: reads and sees it already agrees
+    expect(await healPrefix({ socket: SOCK } as TmuxTarget, "C-f", conf, undefined)).toBe(null); // undefined: reads and sees it already agrees
   });
 });
 

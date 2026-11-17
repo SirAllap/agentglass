@@ -23,6 +23,7 @@ import { ErrorStreaks, STOP_QUIET_MS, lanternStep, lanternState, type ErrorAlert
 import { webhookDestination } from "./egress.ts";
 import { kindOfNotification, type NotifyKind } from "../../shared/notifyPrefs.ts";
 import { readNotifyPrefs } from "./notifyPrefs.ts";
+import { setTimeoutAs, waitedFor } from "./loopwatch.ts";
 
 // Resolved once, here, because the boot line below reports it and a boot line
 // that describes a destination the process is no longer using would be worse
@@ -142,10 +143,11 @@ async function deliver(
   // The diet, checked once, here, rather than in every push* function: every
   // alert in this file funnels through deliver, so this is the one place a
   // kind turned off actually has to stop something. `none` short-circuits
-  // everything, `blocked` by default is the only kind that reaches here at
-  // all — the rest are off until a person turns them on in Settings.
+  // everything but `blocked` (Silence all still lets an agent that waits on
+  // you through), and `blocked` by default is the only kind that reaches here
+  // at all — the rest are off until a person turns them on in Settings.
   const prefs = readNotifyPrefs();
-  if (prefs.none || !prefs.kinds[kind]) return;
+  if ((prefs.none && kind !== "blocked") || !prefs.kinds[kind]) return;
   // Not awaited. The clients' frames go out in the order things happened, and
   // a slow or hung webhook ahead of them would deliver an announcement after
   // the clear that followed it — bringing back a card for work that finished.
@@ -187,21 +189,9 @@ async function deliver(
   // pings keeps `live > 0`, so this returns before `notify-send` exactly as it
   // always did.
   const { attached, live } = sink?.census() ?? { attached: 0, live: 0 };
-  if (sink && attached > 0) sink.broadcast({ title, body, urgency, notifyKind: kind, ...(pane ? { pane } : {}), ...(extra ?? {}) });
-  if (live > 0 || redraw) return;
-  // `notify-send` paints the desktop, which is what the "desktop" channel
-  // means — gated on top of the kind check above, not instead of it, so
-  // turning the channel off never turns "desktop" into "everywhere else too".
-  if (DESKTOP && !prefs.channels.desktop) return;
-  if (DESKTOP) {
-    // Urgency 0 is a row in a list, not a thing to put on somebody's screen.
-    // With no window open there is no list to put it in either, so it waits
-    // there until one opens rather than being drawn over his work.
-    //
-    // ABOVE the seam on purpose. Behind it is the real `notify-send` in the
-    // app and an injected recorder in the suite, and a guard that only covered
-    // the real one would have left the suite unable to see this rule at all.
-    if (urgency === 0) return;
+  const route = routeAlert({ attached, live, redraw, desktop: DESKTOP, desktopChannel: prefs.channels.desktop, urgency });
+  if (sink && route.broadcast) sink.broadcast({ title, body, urgency, notifyKind: kind, ...(pane ? { pane } : {}), ...(extra ?? {}) });
+  if (route.popup) {
     if (notifier) { notifier({ title, body, urgency }); return; }
     // No seam installed and this is a test run: say nothing. A suite must never
     // put an approval prompt on somebody's desktop for a hold that never
@@ -224,6 +214,33 @@ async function deliver(
 }
 
 let warnedNoNotifySend = false;
+
+/**
+ * Where one note goes: to the attached pages, to the desktop popup, or both.
+ *
+ * Notifications v2 shows every note in ONE place. A page that is open —
+ * focused or only visible — answers pings, so it counts as `live` and shows
+ * the note itself; the popup is only for when nobody live is there.
+ * Both at once happens only for a page that is attached but deaf (a frozen
+ * phone): its frame waits in the socket, and nobody was told yet.
+ *
+ * - `live > 0` or a redraw: no popup. A redraw is not news.
+ * - `notify-send` paints the desktop, which is what the "desktop" channel
+ *   means — gated on top of the kind check, not instead of it.
+ * - Urgency 0 is a row in a list, not a thing to put on somebody's screen.
+ *   Checked here, above the notifier seam, so the suite sees the rule too.
+ */
+export function routeAlert(i: {
+  attached: number; live: number; redraw: boolean;
+  /** AGENTGLASS_NOTIFY=1 */ desktop: boolean;
+  /** The person's "desktop" channel switch. */ desktopChannel: boolean;
+  urgency: 0 | 1 | 2;
+}): { broadcast: boolean; popup: boolean } {
+  return {
+    broadcast: i.attached > 0,
+    popup: i.live === 0 && !i.redraw && i.desktop && i.desktopChannel && i.urgency !== 0,
+  };
+}
 
 /**
  * Text as an AppleScript string literal.
@@ -404,6 +421,11 @@ export function pushNoPlanCleared(project: string) {
   deliver(`${project} has a plan again`, "", 0, undefined, { source: "orchestration", key: `noplan:${project}`, clear: true }, "blocked");
 }
 
+/** The disk is almost full. A blocked kind: the one that is on by default, because builds and pulls are about to fail. The once-per-crossing rule lives in diskclean.ts. */
+export function pushDiskCritical(text: string) {
+  deliver("Disk almost full", text, 2, undefined, { source: "disk" }, "blocked");
+}
+
 export function pushReminder(id: string, title: string, when: string) {
   if (shouldSend(`remind:${id}`)) deliver(`⏰ ${title}`, when, 2, undefined, { kind: "reminder", id, source: "reminder" }, "reminders");
 }
@@ -482,7 +504,7 @@ function paneLabel(pane: string): string {
   try {
     // Cached for a few seconds because this spawns tmux, and a burst of alerts
     // from one stopped agent would otherwise spawn one per alert.
-    paneCache ??= listPanesSync();
+    paneCache ??= waitedFor("tmux list-panes (alert)", listPanesSync);
     const row = paneCache.find((r) => r.paneId === pane);
     if (!row) return pane;
     const name = row.windowName ? ` «${row.windowName}»` : "";
@@ -569,7 +591,7 @@ export function maybeAlert(e: WatchEvent) {
   // Stop alone is not enough.
   if (e.hook_event_type === "Stop") {
     const session = e.session_id;
-    const t = setTimeout(() => {
+    const t = setTimeoutAs("alert hold timer", () => {
       const ended = errorStreaks.settle(session);
       if (ended && shouldSend(`stopped:${session}`)) sayFailed(ended, agent, pane);
     }, STOP_QUIET_MS + 50);

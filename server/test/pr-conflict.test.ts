@@ -58,8 +58,8 @@ beforeEach(() => { repo = build(); });
 afterAll(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe("preparing a conflict", () => {
-  it("merges in a worktree of its own and names the files in conflict", () => {
-    const r = prepareConflictMerge(repo, "feature", "main");
+  it("merges in a worktree of its own and names the files in conflict", async () => {
+    const r = await prepareConflictMerge(repo, "feature", "main");
     expect(r.ok).toBe(true);
     expect(r.conflicts).toEqual(["f.txt"]);
     expect(r.root).toBe(`${repo}-conflict-feature`);
@@ -68,27 +68,27 @@ describe("preparing a conflict", () => {
     expect(readFileSync(join(r.root!, "f.txt"), "utf8")).toContain("<<<<<<<");
   });
 
-  it("leaves the checkout you are standing in exactly as it was", () => {
+  it("leaves the checkout you are standing in exactly as it was", async () => {
     // The whole reason this uses a worktree. A button that rewrites the tree
     // somebody is working in is a button they learn not to press.
     const before = readFileSync(join(repo, "f.txt"), "utf8");
     const head = git(repo, "rev-parse", "HEAD").stdout.toString();
-    prepareConflictMerge(repo, "feature", "main");
+    await prepareConflictMerge(repo, "feature", "main");
     expect(readFileSync(join(repo, "f.txt"), "utf8")).toBe(before);
     expect(git(repo, "rev-parse", "HEAD").stdout.toString()).toBe(head);
     expect(git(repo, "status", "--porcelain").stdout.toString()).toBe("");
   });
 
-  it("pressed twice is the same as pressed once", () => {
+  it("pressed twice is the same as pressed once", async () => {
     // Both buttons prepare, and somebody will press the other one.
-    const a = prepareConflictMerge(repo, "feature", "main");
-    const b = prepareConflictMerge(repo, "feature", "main");
+    const a = await prepareConflictMerge(repo, "feature", "main");
+    const b = await prepareConflictMerge(repo, "feature", "main");
     expect(b.ok).toBe(true);
     expect(b.root).toBe(a.root);
     expect(b.conflicts).toEqual(["f.txt"]);
   });
 
-  it("says the merge was clean rather than inventing a conflict", () => {
+  it("says the merge was clean rather than inventing a conflict", async () => {
     // A branch that is only BEHIND merges through. Reporting that is the
     // difference between "push it" and a resolver opened on an empty list.
     const root = build();
@@ -97,57 +97,57 @@ describe("preparing a conflict", () => {
     git(root, "add", "-A"); git(root, "commit", "-qm", "elsewhere");
     git(root, "checkout", "-q", "main");
     git(root, "fetch", "-q", "origin");
-    const r = prepareConflictMerge(root, "tidy", "main");
+    const r = await prepareConflictMerge(root, "tidy", "main");
     expect(r.ok).toBe(true);
     expect(r.clean).toBe(true);
     expect(r.conflicts).toEqual([]);
   });
 
-  it("uses the checkout that already has the branch, instead of refusing", () => {
+  it("uses the checkout that already has the branch, instead of refusing", async () => {
     // The first version answered "already checked out at …", which is a fact
     // and not an instruction — and the wrong answer anyway: that checkout is
     // exactly where the merge belongs, and where somebody would do it by hand.
     const held = `${repo}-feature`;
     git(repo, "worktree", "add", held, "feature");
-    const r = prepareConflictMerge(repo, "feature", "main");
+    const r = await prepareConflictMerge(repo, "feature", "main");
     expect(r.ok).toBe(true);
     expect(r.root).toBe(held);
     expect(r.conflicts).toEqual(["f.txt"]);
     expect(readFileSync(join(held, "f.txt"), "utf8")).toContain("<<<<<<<");
   });
 
-  it("refuses that checkout only when it has work in it, and says how to fix it", () => {
+  it("refuses that checkout only when it has work in it, and says how to fix it", async () => {
     // Merging into somebody's half-finished work is the one thing this whole
     // design exists to avoid — so the refusal carries the two words that clear
     // it rather than a description of the situation.
     const held = `${repo}-feature`;
     git(repo, "worktree", "add", held, "feature");
     writeFileSync(join(held, "f.txt"), "half a thought\n");
-    const r = prepareConflictMerge(repo, "feature", "main");
+    const r = await prepareConflictMerge(repo, "feature", "main");
     expect(r.ok).toBe(false);
     expect(r.error).toContain(held);
     expect(r.error).toContain("commit or stash");
   });
 
-  it("pressed again mid-merge reports where it stands", () => {
+  it("pressed again mid-merge reports where it stands", async () => {
     // `git merge` refuses while one is in progress and says nothing useful; the
     // list of conflicts is what the caller wanted either way.
-    const first = prepareConflictMerge(repo, "feature", "main");
-    const again = prepareConflictMerge(repo, "feature", "main");
+    const first = await prepareConflictMerge(repo, "feature", "main");
+    const again = await prepareConflictMerge(repo, "feature", "main");
     expect(again.ok).toBe(true);
     expect(again.root).toBe(first.root);
     expect(again.conflicts).toEqual(["f.txt"]);
   });
 
-  it("says what to do when the branch is not in this checkout, not the raw git line", () => {
-    const r = prepareConflictMerge(repo, "orbit-1046-settings-keys", "main");
+  it("says what to do when the branch is not in this checkout, not the raw git line", async () => {
+    const r = await prepareConflictMerge(repo, "orbit-1046-settings-keys", "main");
     expect(r.ok).toBe(false);
     expect(r.error).toContain("not fetched");
     expect(r.error).not.toContain("fatal:");
   });
 
-  it("refuses a branch name that is not one", () => {
-    expect(prepareConflictMerge(repo, "feature; rm -rf /", "main").ok).toBe(false);
-    expect(prepareConflictMerge(repo, "feature", "--upload-pack=evil").ok).toBe(false);
+  it("refuses a branch name that is not one", async () => {
+    expect((await prepareConflictMerge(repo, "feature; rm -rf /", "main")).ok).toBe(false);
+    expect((await prepareConflictMerge(repo, "feature", "--upload-pack=evil")).ok).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 /*
- * The four Jira read routes, through a real server.
+ * The Jira read routes, through a real server.
  *
  * The server is a separate process whose Jira base is the stand-in behind a
  * pass-through (the stand-in cannot read `text ~`), so what is asserted is what
@@ -71,7 +71,8 @@ afterAll(async () => {
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* fine */ }
 });
 
-const headers = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
+// The person speaks from the app window, so every call names the server's own origin (the machine token alone is every agent shell).
+const headers = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json", get origin() { return base; } };
 const get = async (path: string) => {
   const r = await fetch(base + path, { headers });
   const text = await r.text();
@@ -85,7 +86,7 @@ const step = story();
 
 describe("the read routes", () => {
   step("not connected is an answer, not a failed request, and nothing is sent", async () => {
-    for (const p of ["/jira/task?id=ORBIT-1042", "/jira/find?q=ORBIT-1042", "/jira/mine", "/jira/search?q=sync"]) {
+    for (const p of ["/jira/task?id=ORBIT-1042", "/jira/find?q=ORBIT-1042", "/jira/mine", "/jira/search?q=sync", "/jira/child-cards?key=ORBIT-1042"]) {
       const r = await get(p);
       expect(r.status).toBe(200);
       expect(r.body).toEqual({ ok: false, error: "Jira is not connected" });
@@ -116,6 +117,24 @@ describe("the read routes", () => {
     expect(found2.body.ok).toBe(true);
     expect(found2.body.tasks.length).toBeGreaterThan(0);
     expect(proxy.jql.at(-1)).toBe('project in ("ORBIT", "ACME") AND text ~ "sync board" ORDER BY updated DESC');
+  });
+
+  step("a parent's sub-tasks are full rows, one search at the site", async () => {
+    const seed = fake.state.issues["ORBIT-1043"]!;
+    fake.state.issues["ORBIT-1060"] = {
+      ...seed, id: "20060", key: "ORBIT-1060", summary: "Retry the export", issueType: "Sub-task", parentKey: "ORBIT-1042",
+      dueDate: "2026-11-10", assignee: "acc-0002",
+    };
+    fake.requests.length = 0;
+    const r = await get("/jira/child-cards?key=ORBIT-1042");
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ ok: true, truncated: false });
+    expect(r.body.tasks).toHaveLength(1);
+    expect(r.body.tasks[0]).toMatchObject({ customId: "ORBIT-1060", title: "Retry the export", issueType: "Sub-task", due: "2026-11-10" });
+    expect(r.body.tasks[0].people[0]).toMatchObject({ name: "Grace Sample" });
+    // One search for the parent, and no card read per child.
+    expect(fake.requests.filter((q) => q.path === "/search/jql").length).toBe(1);
+    expect(fake.requests.filter((q) => q.path.startsWith("/issue/")).length).toBe(0);
   });
 
   step("the list is kept for a minute, and Refresh (fresh=1) asks again", async () => {

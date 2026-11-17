@@ -12,14 +12,10 @@
  * not quietly become a gigabyte.
  */
 import { mkdirSync, writeFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { agentglassCacheDir } from "./cachedir.ts";
 
-const DIR = join(
-  process.env.XDG_CACHE_HOME || join(homedir(), ".cache"),
-  "agentglass",
-  "shots",
-);
+const DIR = join(agentglassCacheDir(), "shots");
 
 /** Test seam, so a suite never writes into the developer's own cache. */
 let override: string | null = null;

@@ -45,16 +45,17 @@ import { readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { safeAbs } from "./git.ts";
-import { agentglassPrivate, realish } from "./config.ts";
+import { agentglassPrivate, realish, envLimit } from "./config.ts";
 import type { FindReport } from "./files.ts";
 import type { GrepHit, GrepReport } from "../../shared/types.ts";
+import { spawnOut } from "./spawnOut.ts";
 
 /** Kill switch, independent of the terminal's and of the file browser's.
  *
  *  A function rather than a constant read at import: a constant is decided by
  *  whichever test file imported this module first, and a switch nobody can
  *  toggle is a switch nobody can test. Reading an env var is nothing. */
-export const diskEnabled = (): boolean => process.env.AGENTGLASS_DISK_DISABLED !== "1";
+export const diskEnabled = (): boolean => envLimit("AGENTGLASS_DISK_DISABLED") !== "1";
 
 /** Enough to pick from; few enough that "e" cannot turn one keystroke into a
  *  megabyte of JSON. `fd --max-results` stops the walk at this number rather
@@ -91,7 +92,7 @@ const expandHome = (p: string): string =>
  */
 export function diskRoots(): string[] {
   if (!diskEnabled()) return [];
-  const extra = (process.env.AGENTGLASS_DISK_ROOTS || "")
+  const extra = (envLimit("AGENTGLASS_DISK_ROOTS") || "")
     .split(":").map((s) => s.trim()).filter(Boolean)
     .map((p) => resolve(expandHome(p)));
   return [home(), ...extra];
@@ -204,7 +205,7 @@ export function fdPathArgs(root: string, q: string): string[] {
  * `git ls-files` — every one of which is right there and wrong here. The two
  * hand back the same shape and answer different questions.
  */
-export function diskFind(rootIn: unknown, qIn: unknown, limit = MAX_RESULTS): FindReport {
+export async function diskFind(rootIn: unknown, qIn: unknown, limit = MAX_RESULTS): Promise<FindReport> {
   const no = (error: string): FindReport => ({ ok: false, files: [], dirs: [], truncated: false, via: "", error });
   if (!diskEnabled()) return no("searching the machine is disabled (AGENTGLASS_DISK_DISABLED=1)");
 
@@ -237,8 +238,13 @@ export function diskFind(rootIn: unknown, qIn: unknown, limit = MAX_RESULTS): Fi
     const args = [fd, "--full-path", "--max-results", String(limit + 1)];
     for (const s of SKIP) args.push("--exclude", s);
     args.push(...fdPathArgs(root, q));
-    const r = Bun.spawnSync(args, { cwd: root, stdout: "pipe", stderr: "pipe", timeout: 10_000 });
-    const all = new TextDecoder().decode(r.stdout).split("\n").map((s) => s.trim()).filter(Boolean);
+    // Beside the loop, and the latest search of a folder ends the one before
+    // it (spawnOut). This was a blocking spawn with a 10 s limit on the
+    // server's only thread: the box sends a search per pause in typing, and
+    // each one held every panel until fd had walked the folder. Its sibling,
+    // the content search, was measured doing exactly that for 20 s at a time.
+    const r = await spawnOut(args, { cwd: root, timeoutMs: 10_000, latest: `disk-find:${root}` });
+    const all = r.stdout.split("\n").map((s) => s.trim()).filter(Boolean);
     const dirs: string[] = [];
     const files: string[] = [];
     for (const line of all.slice(0, limit)) {
@@ -307,7 +313,25 @@ export function diskWalk(root: string, q: string, limit = MAX_RESULTS, keep: (re
 /** Hits per search. Past this it is not a result, it is a corpus. */
 const MAX_GREP_HITS = 200;
 
-export function diskGrep(rootIn: unknown, qIn: unknown, limit = MAX_GREP_HITS): GrepReport {
+/** The search in flight, so the next one can end it. */
+let grepRunning: { kill: () => void } | null = null;
+/** How long one search may run. */
+export const GREP_TIMEOUT_MS = 20_000;
+
+/**
+ * Async, and one at a time.
+ *
+ * This was `Bun.spawnSync` with a 20 s limit, on the server's only thread.
+ * Measured on the installed app (server-stall.log, 2026-11-11): two stalls in
+ * a row labelled `GET /disk/grep`, 9,705 ms and 19,933 ms, with one `rg`
+ * child alive in every one-second sample and the thread waiting on it: a
+ * search of a large folder froze every panel and the event stream until
+ * ripgrep finished or the limit killed it. The search now runs beside the
+ * loop. A second search ends the first, because the box sends one per pause
+ * in typing and only the last answer is read; without that, ten letters are
+ * ten ripgreps walking the same tree.
+ */
+export async function diskGrep(rootIn: unknown, qIn: unknown, limit = MAX_GREP_HITS): Promise<GrepReport> {
   const empty = { ok: false, hits: [] as GrepHit[], files: 0, truncated: false, via: "" };
   if (!diskEnabled()) return { ...empty, error: "searching the machine is disabled (AGENTGLASS_DISK_DISABLED=1)" };
   const root = safeAbs(rootIn);
@@ -327,13 +351,32 @@ export function diskGrep(rootIn: unknown, qIn: unknown, limit = MAX_GREP_HITS): 
     // `grep -r` is the fallback, not the plan: it has no size limit and no
     // binary skip worth the name, so the caps below do the work instead.
     : ["grep", "-rInI", "--", q, root];
-  const r = Bun.spawnSync(argv, { stdout: "pipe", stderr: "pipe", timeout: 20_000 });
+  grepRunning?.kill();
+  const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+  const mine = { kill: () => { try { proc.kill(); } catch { /* already gone */ } } };
+  grepRunning = mine;
+  const limitTimer = setTimeout(mine.kill, GREP_TIMEOUT_MS);
+  /* Read as it arrives and stop ripgrep once there is more than a page of hits: past `limit` the answer is
+     "truncated" whatever else is found, and on a large folder the rest of the walk was the wait. A search
+     ended by the limit or by the next search answers with what had arrived, not with nothing. */
+  let out = "";
+  try {
+    const dec = new TextDecoder();
+    let lines = 0;
+    for await (const chunk of proc.stdout as unknown as AsyncIterable<Uint8Array>) {
+      out += dec.decode(chunk, { stream: true });
+      for (let i = 0; i < chunk.length; i++) if (chunk[i] === 10) lines++;
+      if (lines > limit) { mine.kill(); break; }
+    }
+  } catch { /* killed: whatever arrived is the answer */ }
+  clearTimeout(limitTimer);
+  if (grepRunning === mine) grepRunning = null;
 
   const hits: GrepHit[] = [];
   const files = new Set<string>();
   const needle = q.toLowerCase();
   let truncated = false;
-  for (const line of r.stdout.toString().split("\n")) {
+  for (const line of out.split("\n")) {
     if (!line) continue;
     if (hits.length >= limit) { truncated = true; break; }
     // path:line:text — and a Windows-style drive letter cannot appear here, so

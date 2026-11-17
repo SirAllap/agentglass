@@ -87,7 +87,7 @@ describe.skipIf(!have)("the splits", () => {
     restore.__resetRestoreState();
     const mk = await pane.tmux(["new-session", "-d", "-s", S, "-x", "200", "-y", "50", "-c", "/tmp", "sleep 60"]);
     expect(mk.ok, mk.stderr).toBe(true);
-    const split = await pane.tmux(["split-window", "-h", "-d", "-t", `${S}:0`, "-c", "/tmp", "sleep 60"]);
+    const split = await pane.tmux(["split-window", "-h", "-d", "-t", `=${S}:`, "-c", "/tmp", "sleep 60"]);
     expect(split.ok, split.stderr).toBe(true);
     const before = await layoutOf(S);
     expect(shape(before), before).toBe("P{P,P}");
@@ -110,7 +110,7 @@ describe.skipIf(!have)("the splits", () => {
     restore.__resetRestoreState();
     const mk = await pane.tmux(["new-session", "-d", "-s", S, "-x", "200", "-y", "50", "-c", "/tmp", "sleep 60"]);
     expect(mk.ok, mk.stderr).toBe(true);
-    await pane.tmux(["split-window", "-v", "-d", "-t", `${S}:0`, "-c", "/tmp", "sleep 60"]);
+    await pane.tmux(["split-window", "-v", "-d", "-t", `=${S}:`, "-c", "/tmp", "sleep 60"]);
     await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-c", "/tmp", "sleep 60"]);
     const before = await pane.tmux(["list-windows", "-t", `=${S}`, "-F", "#{window_layout}"]);
     const [stacked = "", single = ""] = before.stdout.trim().split("\n");

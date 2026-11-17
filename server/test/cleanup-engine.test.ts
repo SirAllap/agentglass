@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { CLEANUP_GROUPS, CleanupError, matchesSlug, parseCleanupConfig, parseCleanupInclude, planCleanup, runCleanup, shouldAutoClean, slugOf, type CleanupConfig, type CleanupGroup, type CleanupPlan } from "../src/cleanup.ts";
+import { CLEANUP_GROUPS, CleanupError, matchesSlug, parseCleanupConfig, parseCleanupInclude, planCleanup, runCleanup, shouldAutoClean, slugOf, undoArchivedBriefs, type CleanupConfig, type CleanupGroup, type CleanupPlan } from "../src/cleanup.ts";
 import { BRANCH, PR, SLUG, URL77, makeWorld, put, read, type World } from "./cleanupFixture.ts";
 
 let w: World;
@@ -84,6 +84,36 @@ describe("merged pull request, everything configured", () => {
     expect(read(join(w.home, "briefs", "archive", "ORBIT-1042-brief.md"))).toBe("brief");
     expect(read(join(w.home, "worklog", "2026-10-29.md"))).toBe(`- PR merged: Fix the thing ${URL77}\n`);
     expect(w.forgot).toEqual([{ repo: w.main, pr: PR, worktree: w.wt }]);
+  });
+
+  test("the briefs a run moved to archive/ are the part of it that can be put back", async () => {
+    const { cfg } = busyWorld();
+    const ctx = w.ctx();
+    const plan = await planCleanup(w.main, PR, cfg, ctx);
+    const rep = await runCleanup(w.main, PR, cfg, ctx, { planId: plan.id });
+    const brief = join(w.home, "briefs", "ORBIT-1042-brief.md");
+    expect(existsSync(brief)).toBe(false);
+    const r = undoArchivedBriefs(rep.items);
+    expect(r).toEqual({ restored: [brief], refused: [] });
+    expect(read(brief)).toBe("brief");
+    // A second undo has nothing left to move and does not invent one.
+    expect(undoArchivedBriefs(rep.items)).toEqual({ restored: [], refused: [brief] });
+    // Nothing else in the report is a brief.
+    expect(rep.items.filter((i) => i.kind === "brief").length).toBe(1);
+  });
+
+  test("an undo refuses a destination that is not that brief's own archive, and a target taken again", async () => {
+    w = makeWorld();
+    const brief = put(join(w.home, "briefs", "ORBIT-1042-brief.md"), "brief");
+    const elsewhere = put(join(w.home, "elsewhere", "ORBIT-1042-brief.md"), "moved");
+    const items = [{ id: "brief:x", kind: "brief" as const, target: brief, status: "done" as const, detail: `moved to ${elsewhere}` }];
+    expect(undoArchivedBriefs(items)).toEqual({ restored: [], refused: [brief] });
+    expect(existsSync(elsewhere)).toBe(true);
+    const arch = join(w.home, "briefs", "archive");
+    put(join(arch, "ORBIT-1042-brief.md"), "archived");
+    const taken = [{ ...items[0]!, detail: `moved to ${join(arch, "ORBIT-1042-brief.md")}` }];
+    expect(undoArchivedBriefs(taken)).toEqual({ restored: [], refused: [brief] });
+    expect(read(brief)).toBe("brief");
   });
 
   test("a second plan finds the pull request already in the worklog", async () => {

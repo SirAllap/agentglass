@@ -38,7 +38,7 @@ function server(p: {
   return { io, names, killed };
 }
 
-test("nine mirrors and an empty record: all nine go", () => {
+test("nine mirrors and an empty record: all nine go", async () => {
   const mirrors = [
     "agx-phone-1-70d2or", "agx-phone-1-e128tr", "agx-phone-1-fscfga",
     "agx-phone-3-qxhb81", "agx-phone-4-61fyjs", "agx-phone-40-sd0f7o",
@@ -46,47 +46,47 @@ test("nine mirrors and an empty record: all nine go", () => {
   ];
   const f = server({ sessions: [...mirrors, "orbit", "scratch"] });
 
-  const killed = reapOrphanedMirrors(SOCK, f.io, f.names);
+  const killed = await reapOrphanedMirrors(SOCK, f.io, f.names);
 
   expect(killed.length, "THE MACHINE FILLED UP because an empty record meant an empty sweep").toBe(9);
   expect(f.killed.sort()).toEqual([...mirrors].sort());
 });
 
-test("the user's own sessions are never touched, whatever else is going on", () => {
+test("the user's own sessions are never touched, whatever else is going on", async () => {
   const f = server({ sessions: ["orbit", "scratch", "agentglass-understudy", "orbit-console"] });
-  expect(reapOrphanedMirrors(SOCK, f.io, f.names)).toEqual([]);
+  expect(await reapOrphanedMirrors(SOCK, f.io, f.names)).toEqual([]);
   expect(f.killed).toEqual([]);
 });
 
-test("a phone-SHAPED name without our stamp is somebody else's session", () => {
+test("a phone-SHAPED name without our stamp is somebody else's session", async () => {
   /* The one rule that keeps this out of a socket that may be the user's own:
      the name proves nothing, the stamp proves it is ours. */
   const f = server({ sessions: ["agx-phone-1-abcdef"], stamped: [] });
-  expect(reapOrphanedMirrors(SOCK, f.io, f.names)).toEqual([]);
+  expect(await reapOrphanedMirrors(SOCK, f.io, f.names)).toEqual([]);
   expect(f.killed, "A HEURISTIC ON THE NAME would kill a session we did not make").toEqual([]);
 });
 
-test("a mirror with a phone actually looking at it is left alone", () => {
+test("a mirror with a phone actually looking at it is left alone", async () => {
   const f = server({ sessions: ["agx-phone-7-live01"], attached: ["agx-phone-7-live01"] });
-  expect(reapOrphanedMirrors(SOCK, f.io, f.names)).toEqual([]);
+  expect(await reapOrphanedMirrors(SOCK, f.io, f.names)).toEqual([]);
 });
 
-test("attached and orphaned mirrors in one pass: only the orphans go", () => {
+test("attached and orphaned mirrors in one pass: only the orphans go", async () => {
   const f = server({
     sessions: ["agx-phone-1-aaa111", "agx-phone-2-bbb222", "orbit"],
     attached: ["agx-phone-2-bbb222"],
   });
-  expect(reapOrphanedMirrors(SOCK, f.io, f.names)).toEqual(["agx-phone-1-aaa111"]);
+  expect(await reapOrphanedMirrors(SOCK, f.io, f.names)).toEqual(["agx-phone-1-aaa111"]);
 });
 
-test("a name that only looks like the shape is not the shape", () => {
+test("a name that only looks like the shape is not the shape", async () => {
   const f = server({ sessions: ["agx-phone", "agx-phone-", "agx-phone-x-abc", "agx-phone-1-ABCDEF"] });
-  expect(reapOrphanedMirrors(SOCK, f.io, f.names), "the regex is the contract").toEqual([]);
+  expect(await reapOrphanedMirrors(SOCK, f.io, f.names), "the regex is the contract").toEqual([]);
 });
 
-test("no sessions at all is not an error", () => {
+test("no sessions at all is not an error", async () => {
   const f = server({ sessions: [] });
-  expect(reapOrphanedMirrors(SOCK, f.io, f.names)).toEqual([]);
+  expect(await reapOrphanedMirrors(SOCK, f.io, f.names)).toEqual([]);
 });
 
 /**
@@ -102,7 +102,7 @@ test("no sessions at all is not an error", () => {
 import { reapMirrorSessions } from "../src/tmuxctl.ts";
 import { recordMirrorLease, mirrorLeases, __resetMirrorLeases } from "../src/mirrorlease.ts";
 
-test("a lease whose session has not spawned YET is kept, not forgotten", () => {
+test("a lease whose session has not spawned YET is kept, not forgotten", async () => {
   __resetMirrorLeases();
   const sock = [...TMUX_ISOLATED, "-L", "agx-mirror-race-test"];
   recordMirrorLease({ socket: sock, session: "agx-phone-1-pending", token: "tok", opened: 0 });
@@ -114,13 +114,13 @@ test("a lease whose session has not spawned YET is kept, not forgotten", () => {
     kill: () => { throw new Error("must not kill a session that is not there"); },
     exists: () => false,
   };
-  reapMirrorSessions(io);
+  await reapMirrorSessions(io);
 
   // It IS dropped here — we can see it is gone, so the record is stale.
   expect(mirrorLeases().length).toBe(0);
 });
 
-test("a lease whose session EXISTS but cannot be read keeps its record", () => {
+test("a lease whose session EXISTS but cannot be read keeps its record", async () => {
   __resetMirrorLeases();
   const sock = [...TMUX_ISOLATED, "-L", "agx-mirror-race-test"];
   /* Recorded a moment ago: this is the spawn window, which is exactly when a
@@ -138,14 +138,14 @@ test("a lease whose session EXISTS but cannot be read keeps its record", () => {
     kill: () => { killed++; },
     exists: () => true,
   };
-  reapMirrorSessions(io, justNow + 1_000);
+  await reapMirrorSessions(io, justNow + 1_000);
 
   expect(killed, "it must not kill on a read it could not make").toBe(0);
   expect(mirrorLeases().length,
     "THE RECORD WAS DROPPED and the session became immortal — nothing else looks it up by name").toBe(1);
 });
 
-test("but a session that has been stampless for a MINUTE is a stale record, not a spawn", () => {
+test("but a session that has been stampless for a MINUTE is a stale record, not a spawn", async () => {
   __resetMirrorLeases();
   const sock = [...TMUX_ISOLATED, "-L", "agx-mirror-race-test"];
   const longAgo = Date.now() - 10 * 60_000;
@@ -158,7 +158,7 @@ test("but a session that has been stampless for a MINUTE is a stale record, not 
     kill: () => { killed++; },
     exists: () => true,
   };
-  reapMirrorSessions(io);
+  await reapMirrorSessions(io);
 
   /* Still never killed — an unstamped session is not provably ours — but the
      record stops naming it, which is the honest end of a lease we cannot

@@ -251,43 +251,6 @@ export const cachedFor = (id: string): CachedView | undefined => load().cache[id
  * whether `ABC-12` is one of ours and being sure it is not.
  */
 /**
- * EVERY STATUS THESE BOARDS HAVE, not the handful currently on screen.
- *
- * The board's filter offered the statuses it could see on the pull requests it
- * had loaded — two of them, out of a workflow with eleven. "Faltan muchos
- * statuses", and he was right: a filter that can only offer what is already
- * visible cannot answer "show me the ones I am NOT looking at", which is half
- * of what it is for.
- *
- * Free, because it is already on disk: every cached board was stored with the
- * list's own statuses beside its tasks, so this is a read of a file the app
- * keeps anyway rather than a call to anybody.
- *
- * In workflow order and deduplicated by name and type across boards, because
- * that is how a person reads them — Backlog, then Planned, then In progress
- * — and two boards sharing a status share its place in the line. The type is
- * part of the key: a "Review" that is open on one list and done on another is
- * two statuses to whatever filters on them.
- */
-export function knownStatuses(): ListStatus[] {
-  const s = load();
-  const out: ListStatus[] = [];
-  const seen = new Set<string>();
-  for (const v of savedViews()) {
-    for (const st of s.cache[v.id]?.statuses ?? []) {
-      const name = st.status.trim().toLowerCase();
-      /* Name AND type: two lists can both have a "Review", one open and one
-         done, and the first board's type must not stand in for the other's. */
-      const key = `${name}\u0000${st.type}`;
-      if (!name || seen.has(key)) continue;
-      seen.add(key);
-      out.push(st);
-    }
-  }
-  return out;
-}
-
-/**
  * Has this machine read cards, and does none of them carry a custom id?
  *
  * Custom task ids are a paid ClickApp an admin switches on, so a free
@@ -416,3 +379,41 @@ export function patchCachedTask(t: ProviderTask): void {
 
 /** For a test's own teardown. */
 export function __clear(): void { cache = { views: [], cache: {} }; }
+
+/**
+ * EVERY STATUS THESE BOARDS HAVE, not the handful currently on screen.
+ *
+ * The board's filter offered the statuses it could see on the pull requests it
+ * had loaded — two of them, out of a workflow with eleven. "Faltan muchos
+ * statuses", and he was right: a filter that can only offer what is already
+ * visible cannot answer "show me the ones I am NOT looking at", which is half
+ * of what it is for.
+ *
+ * Free, because it is already on disk: every cached board was stored with the
+ * list's own statuses beside its tasks, so this is a read of a file the app
+ * keeps anyway rather than a call to anybody.
+ *
+ * In workflow order and deduplicated by name and type across boards, because
+ * that is how a person reads them — Backlog, then Planned, then In progress
+ * — and two boards sharing a status share its place in the line. The type is
+ * part of the key: a "Review" that is open on one list and done on another is
+ * two statuses to whatever filters on them.
+ */
+export function knownStatuses(): ListStatus[] {
+  const s = load();
+  const out: ListStatus[] = [];
+  const seen = new Set<string>();
+  for (const v of savedViews()) {
+    for (const st of s.cache[v.id]?.statuses ?? []) {
+      const name = st.status.trim().toLowerCase();
+      /* Name AND type: two lists can both have a "Review", one open and one
+         done, and the first board's type must not stand in for the other's. */
+      const key = `${name}\u0000${st.type}`;
+      if (!name || seen.has(key)) continue;
+      seen.add(key);
+      out.push(st);
+    }
+  }
+  return out;
+}
+

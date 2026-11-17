@@ -18,9 +18,12 @@
 
 import { existsSync, readdirSync, readFileSync, readlinkSync, statSync, statfsSync } from "node:fs";
 import { failed } from "./refused.ts";
+import { spawnOut } from "./spawnOut.ts";
 import {
   duplicatePids, foldSample, folderOf, idleFor, parseEstablished, readLastSeen, underTmp, writeLastSeen,
 } from "./portstale.ts";
+import { spawnSyncAs } from "./loopwatch.ts";
+import { runChild } from "./broker/brokerRun.ts";
 
 /** One listening TCP socket. */
 export interface PortEntry {
@@ -194,7 +197,7 @@ const MY_UID = typeof process.getuid === "function" ? process.getuid() : -1;
 export function listPorts(): PortsReport {
   let out: string;
   try {
-    const r = Bun.spawnSync(["ss", "-ltnpH"], { stdout: "pipe", stderr: "pipe", timeout: 5_000 });
+    const r = spawnSyncAs("ss listen", ["ss", "-ltnpH"], { stdout: "pipe", stderr: "pipe", timeout: 5_000 });
     if (!r.success && !r.stdout.length) {
       return { ports: [], mine: 0, external: 0, error: new TextDecoder().decode(r.stderr).trim() || "ss failed" };
     }
@@ -240,8 +243,10 @@ export function splitSockets(out: string): { listening: string; established: str
 export async function listPortsAsync(): Promise<PortsReport> {
   let out: string;
   try {
-    const p = Bun.spawn(["ss", "-tnapH"], { stdout: "pipe", stderr: "pipe", timeout: 5_000 });
-    const [stdout, stderr, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    // Started by the spawn broker (broker/brokerRun.ts), not a fork of this server.
+    const p = await runChild(["ss", "-tnapH"], { timeoutMs: 5_000, read: true });
+    if (p.error !== undefined && p.error !== "lost") throw new Error(p.error);
+    const { stdout, stderr, code } = p;
     if (code !== 0 && !stdout.length) return { ports: [], mine: 0, external: 0, error: stderr.trim() || "ss failed" };
     out = stdout;
   } catch {
@@ -647,7 +652,7 @@ const RECLAIMABLE = new Set([
  * directory because it *looks* rebuildable is one mislabelled entry away from
  * taking someone's work, and the shell is two keystrokes away.
  */
-export function spaceFor(rootIn: unknown, dir = true): SpaceReport {
+export async function spaceFor(rootIn: unknown, dir = true): Promise<SpaceReport> {
   const root = typeof rootIn === "string" ? rootIn : "";
   const empty: SpaceReport = { root, bytes: 0, freeable: 0, dirs: [] };
   if (!root) return { ...empty, error: "no directory given" };
@@ -658,9 +663,14 @@ export function spaceFor(rootIn: unknown, dir = true): SpaceReport {
   // headline and its breakdown can never disagree with each other. No `-s`
   // alongside it: `du` refuses the pair outright ("summarizing conflicts with
   // --max-depth"), which is a warning on stderr and an empty report.
-  const r = Bun.spawnSync(["du", "-b", "--max-depth=1", root], { stdout: "pipe", stderr: "pipe", timeout: 120_000 });
-  const text = new TextDecoder().decode(r.stdout);
-  if (!text.trim()) return { ...empty, error: new TextDecoder().decode(r.stderr).trim() || "du returned nothing" };
+  //
+  // Beside the loop (spawnOut). It was a blocking spawn with a 120 s limit: on
+  // the server's one thread, the "seconds on a repository with a node_modules"
+  // above were seconds in which nothing else was answered, and a large home
+  // folder could hold everything for the full two minutes.
+  const r = await spawnOut(["du", "-b", "--max-depth=1", root], { timeoutMs: 120_000 });
+  const text = r.stdout;
+  if (!text.trim()) return { ...empty, error: r.stderr.trim() || "du returned nothing" };
 
   const dirs: SpaceDir[] = [];
   let total = 0;
@@ -706,20 +716,29 @@ export function cwdOf(pid: number): string | null {
  * or brackets, so the fields are counted from the LAST `)` — splitting the
  * whole line on whitespace is the classic way to read this file wrong.
  */
-export function ageSecOf(pid: number): number | null {
+/** Field 22 of `/proc/<pid>/stat` itself: clock ticks since boot, exact and
+ *  stable for a pid's whole life — unlike an age in seconds, it needs no
+ *  rounding tolerance to tell "the same process" from "a different one that
+ *  reused this pid a moment later". */
+export function startTicksOf(pid: number): number | null {
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
     const rest = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
     // stat[22] is the 22nd field overall; fields 1 and 2 are before the split.
     const ticks = Number(rest[19]);
-    if (!Number.isFinite(ticks)) return null;
-    const uptime = Number(readFileSync("/proc/uptime", "utf8").split(" ")[0]);
-    if (!Number.isFinite(uptime)) return null;
-    // 100 Hz is the value Linux has shipped for every architecture this runs
-    // on; there is no syscall to read it from a process that is not us.
-    const age = Math.round(uptime - ticks / 100);
-    return age >= 0 ? age : null;
+    return Number.isFinite(ticks) ? ticks : null;
   } catch { return null; }
+}
+
+export function ageSecOf(pid: number): number | null {
+  const ticks = startTicksOf(pid);
+  if (ticks === null) return null;
+  const uptime = Number(readFileSync("/proc/uptime", "utf8").split(" ")[0]);
+  if (!Number.isFinite(uptime)) return null;
+  // 100 Hz is the value Linux has shipped for every architecture this runs
+  // on; there is no syscall to read it from a process that is not us.
+  const age = Math.round(uptime - ticks / 100);
+  return age >= 0 ? age : null;
 }
 
 /** The mark a coding agent's tool call leaves on the shell it runs commands in.

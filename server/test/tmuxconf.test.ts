@@ -71,36 +71,36 @@ step("append mode runs the override after the base and re-asserts status off las
   expect(statusOff).toBeGreaterThanOrEqual(2); // base + the re-assertion
 });
 
-step("a valid override passes the gate", () => {
-  const r = conf.validateConf(conf.confContent());
+step("a valid override passes the gate", async () => {
+  const r = await conf.validateConf(conf.confContent());
   expect(r.ok).toBe(true);
 });
 
-step("a config that turns the status bar on is rejected by the probe", () => {
+step("a config that turns the status bar on is rejected by the probe", async () => {
   // tmux 3.6a silently swallows most junk in a config (unknown commands,
   // unknown options, unterminated quotes all exit 0), so the gate probes the
   // value the config actually applied: the bar must stay off.
-  const r = conf.validateConf("set -g status on\n");
+  const r = await conf.validateConf("set -g status on\n");
   expect(r.ok).toBe(false);
   expect(r.stderr).toContain("status bar");
 });
 
-step("an override cannot hand the bar back even in replace mode", () => {
+step("an override cannot hand the bar back even in replace mode", async () => {
   // The enforcement is structural: the generated config re-asserts status off
   // after whatever the user wrote, in both modes.
-  const r = conf.applyTmuxConf("replace", "# my bare server\nset -g status on\n");
+  const r = await conf.applyTmuxConf("replace", "# my bare server\nset -g status on\n");
   expect(r.ok).toBe(true);
   expect(conf.confContent()).toMatch(/\nset -g status off\n$/);
 });
 
-step("applyTmuxConf accepts a good override and writes it", () => {
-  const r = conf.applyTmuxConf("append", "# my customisation\nset -g prefix C-z\n");
+step("applyTmuxConf accepts a good override and writes it", async () => {
+  const r = await conf.applyTmuxConf("append", "# my customisation\nset -g prefix C-z\n");
   expect(r.ok).toBe(true);
   expect(r.appliedAtNextStart).toBe(true);
   expect(cfg.tmuxOverride()).toContain("C-z");
 });
 
-step("a rejected override leaves the one that was working in place", () => {
+step("a rejected override leaves the one that was working in place", async () => {
   /*
    * The revert used to read the settings back AFTER writing them, so it saved
    * the values it had just saved: a no-op wearing the shape of a rollback. The
@@ -108,7 +108,7 @@ step("a rejected override leaves the one that was working in place", () => {
    * next open, and was regenerated into the conf at the next start — which is
    * how a machine ended up with the engine off and the bad line still on screen.
    */
-  const good = conf.applyTmuxConf("append", "# keep me\nset -g prefix C-z\n");
+  const good = await conf.applyTmuxConf("append", "# keep me\nset -g prefix C-z\n");
   expect(good.ok).toBe(true);
 
   /* What the gate can actually catch, measured on tmux 3.6a: nothing in a
@@ -117,7 +117,7 @@ step("a rejected override leaves the one that was working in place", () => {
      is the probe, and `set -g status on` alone loses to the footer that
      re-asserts it off. A hook fires AFTER that footer, which is how a plugin
      would take the bar back, and is exactly the case worth refusing. */
-  const bad = conf.applyTmuxConf("append", '# nope\nset-hook -g after-new-session "set -g status on"\n');
+  const bad = await conf.applyTmuxConf("append", '# nope\nset-hook -g after-new-session "set -g status on"\n');
   expect(bad.ok).toBe(false);
   expect(bad.appliedAtNextStart).toBe(false);
 
@@ -128,13 +128,13 @@ step("a rejected override leaves the one that was working in place", () => {
   expect(conf.confContent()).toContain("C-z");
 });
 
-step("a mark left by a config that has since been fixed does not keep the engine off", () => {
+step("a mark left by a config that has since been fixed does not keep the engine off", async () => {
   /*
    * `confHealth` short-circuited on the flag, so once set it was permanent:
    * the panel read "Pane engine unavailable" while the conf on disk passed the
    * gate by hand. The file is the truth; the flag is a note about the file.
    */
-  expect(conf.applyTmuxConf("append", "# fine\nset -g prefix C-z\n").ok).toBe(true);
+  expect((await conf.applyTmuxConf("append", "# fine\nset -g prefix C-z\n")).ok).toBe(true);
   conf.ensureConf();
   cfg.setTmuxConfBroken(true, "something that is no longer true");
   conf.__resetTmuxConfState();
@@ -144,7 +144,7 @@ step("a mark left by a config that has since been fixed does not keep the engine
   expect(cfg.tmuxConfBroken().broken).toBe(false);
 });
 
-step("a healthy engine is not reported as rejected on every read after the first", () => {
+step("a healthy engine is not reported as rejected on every read after the first", async () => {
   /*
    * The check that was missing, and the bug it hid: `tmuxConfBroken()` returns
    * `{ broken, reason }` — an object, so always truthy — and both readers here
@@ -156,7 +156,7 @@ step("a healthy engine is not reported as rejected on every read after the first
    * The first call takes the validate path, which is why it has to be asked
    * twice: the second read is the one that consults the flag.
    */
-  expect(conf.applyTmuxConf("append", "# healthy\nset -g prefix C-z\n").ok).toBe(true);
+  expect((await conf.applyTmuxConf("append", "# healthy\nset -g prefix C-z\n")).ok).toBe(true);
   conf.ensureConf();
   cfg.setTmuxConfBroken(false);
   conf.__resetTmuxConfState();
@@ -182,7 +182,7 @@ step("a config that really is broken still says so, in tmux's own words", () => 
   conf.__resetTmuxConfState();
 });
 
-step("the prefix is written as the three lines tmux needs, not one", () => {
+step("the prefix is written as the three lines tmux needs, not one", async () => {
   /*
    * `set -g prefix` alone leaves C-b bound, so both keys work and the change
    * reads as half-applied; `send-prefix` is what lets the new chord be typed
@@ -194,10 +194,10 @@ step("the prefix is written as the three lines tmux needs, not one", () => {
   expect(content).toContain("unbind C-b");
   expect(content).toContain("set -g prefix C-a");
   expect(content).toContain("bind C-a send-prefix");
-  expect(conf.validateConf(content).ok).toBe(true);
+  expect((await conf.validateConf(content)).ok).toBe(true);
 });
 
-step("choosing the default writes it out, rather than saying nothing", () => {
+step("choosing the default writes it out, rather than saying nothing", async () => {
   /*
    * The bug this replaces: leaving the block out when the setting was empty.
    * A saved config is handed to the RUNNING server with `source-file`, which
@@ -210,7 +210,7 @@ step("choosing the default writes it out, rather than saying nothing", () => {
   const content = conf.confContent();
   expect(content).toContain("set -g prefix C-b");
   expect(content).toContain("bind C-b send-prefix");
-  expect(conf.validateConf(content).ok).toBe(true);
+  expect((await conf.validateConf(content)).ok).toBe(true);
 });
 
 step("only a key name can reach the config file", () => {
@@ -234,8 +234,8 @@ step("only a key name can reach the config file", () => {
   cfg.writeTmuxSettings({ tmuxPrefix: "" });
 });
 
-step("replace mode makes the override the whole config", () => {
-  const r = conf.applyTmuxConf("replace", "# bare\nset -g default-terminal screen-256color\n");
+step("replace mode makes the override the whole config", async () => {
+  const r = await conf.applyTmuxConf("replace", "# bare\nset -g default-terminal screen-256color\n");
   expect(r.ok).toBe(true);
   const content = conf.confContent();
   expect(content).toContain("screen-256color");
@@ -243,10 +243,10 @@ step("replace mode makes the override the whole config", () => {
   expect(content).not.toContain("mouse");
 });
 
-step("the generated config is a template literal, and stays one", () => {
+step("the generated config is a template literal, and stays one", async () => {
   // Append, because an earlier test leaves the mode on "replace" — where the
   // base is deliberately absent. The suite shares one config file.
-  conf.applyTmuxConf("append", "");
+  await conf.applyTmuxConf("append", "");
   /*
    * A backtick in a COMMENT inside BASE closed the template literal early and
    * the file stopped parsing — caught by the type checker, which is the only
@@ -261,11 +261,11 @@ step("the generated config is a template literal, and stays one", () => {
   expect(conf.confContent()).toContain("set -g base-index 1");
 });
 
-step("tabs are numbered from 1, where the number keys are", () => {
+step("tabs are numbered from 1, where the number keys are", async () => {
   // tmux counts from 0 and nobody binds a prefix to 0. renumber-windows is the
   // other half: without it, closing tab 2 of four leaves 1, 3, 4 and the keys
   // stop matching what is drawn.
-  conf.applyTmuxConf("append", "");
+  await conf.applyTmuxConf("append", "");
   const content = conf.confContent();
   expect(content).toContain("set -g base-index 1");
   expect(content).toContain("setw -g pane-base-index 1");
@@ -277,5 +277,5 @@ step("tabs are numbered from 1, where the number keys are", () => {
      as a window that failed to close. It also makes closing agree with
      dragging, which renumbers already. */
   expect(content).toContain("set -g renumber-windows on");
-  expect(conf.validateConf(content).ok).toBe(true);
+  expect((await conf.validateConf(content)).ok).toBe(true);
 });

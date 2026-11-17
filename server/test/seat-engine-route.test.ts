@@ -59,7 +59,7 @@ describe.skipIf(!have)("the engine in the chair, by the routes", () => {
     await h.asPerson("/seat/close", { root: h.dir });
     await h.asPerson("/seat/settings", { root: h.dir, kind: "opencode" });
     const pane = await h.handTab(h.dir);
-    const r = await h.asPerson("/seat/adopt", { root: h.dir, session: "s-adopted", pane, powers: "speak" });
+    const r = await h.adoptAsPerson({ root: h.dir, session: "s-adopted", pane, powers: "speak" });
     expect(r.ok).toBe(true);
     expect((r as any).seat.kind).toBe("claude");
     /* A setting made while a session sits is the next seating's, so the

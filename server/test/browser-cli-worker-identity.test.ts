@@ -67,6 +67,15 @@ describe.skipIf(!python)("a worker's browser CLI refuses the person's own contai
     expect(r.err).not.toContain("runs as a worker role");
   });
 
+  test("guide start --shared needs no --page; a read --shared still names its tab", async () => {
+    const env = { AGENTGLASS_ROLE: "builder", AGENTGLASS_BROWSER_AS: "orbit-1", AGENTGLASS_SERVER: "http://127.0.0.1:9" };
+    const start = await run(env, "guide", "start", "Post the launch note", "--shared");
+    expect(start.err).not.toContain("runs as a worker role");
+    const read = await run(env, "read", "--shared");
+    expect(read.code).toBe(2);
+    expect(read.err).toContain('guide start "<why>" --shared takes the tab in front');
+  });
+
   test("a verb the relay never runs for a worker is not sent to open a tab", async () => {
     const env = { AGENTGLASS_ROLE: "builder", AGENTGLASS_BROWSER_AS: "orbit-1", AGENTGLASS_SERVER: "http://127.0.0.1:9" };
     for (const argv of [["eval", "1+1"], ["cookies"], ["trace"]]) {

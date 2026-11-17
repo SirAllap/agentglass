@@ -21,6 +21,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { REQUEST_TTL_MS, SETTING_CLASSES, agentVerdict, classOf, refusalWhy } from "../../shared/settingClass.ts";
+import { setTimeoutAs } from "./loopwatch.ts";
 
 export type Applied = { ok: true } | { ok: false; error: string };
 
@@ -38,6 +39,8 @@ export interface ServerSettingDef {
   apply(value: unknown, root?: string): Applied | Promise<Applied>;
   /** For a per-project setting: whether this project says it itself, or the value is inherited. */
   isSet?(root: string): boolean;
+  /** An explicit write is stored even when it equals today's default, whoever makes it: a pin that must survive a change of default. */
+  pin?: true;
   /** Which layer the value read comes from (project, global, default), when the setting has layers. */
   layer?(root: string): string;
   /** What will be in force once `value` is applied, when that is not the value
@@ -153,6 +156,9 @@ export interface Door {
   /** One setting's value, never a secret's. */
   value(id: string, root?: string): { value: unknown; scopedSet?: boolean; layer?: string } | { error: string };
   pending(): PublicRequest[];
+  /** The setting a pending request is for: the card's subject, so the route can
+   *  ask who may answer that one. Null when it is gone or was never there. */
+  settingOf(rid: unknown): string | null;
   /** The person's answer. Refused for anybody else, whatever the route. */
   decide(rid: unknown, approve: boolean, person: boolean): Promise<{ ok: true; applied: boolean; setting: string } | { ok: false; error: string; status: number }>;
   list(): { id: string; label: string; page: string; scoped: boolean; type: string; class: string; why: string; value?: unknown }[];
@@ -173,7 +179,7 @@ export function makeDoor(deps: {
   later?: (ms: number, fn: () => void) => void;
 }): Door {
   const now = deps.now ?? Date.now;
-  const later = deps.later ?? ((ms, fn) => { const t = setTimeout(fn, ms); (t as { unref?: () => void }).unref?.(); });
+  const later = deps.later ?? ((ms, fn) => { const t = setTimeoutAs("settings door later", fn, ms); (t as { unref?: () => void }).unref?.(); });
   const defOf = (id: string) => deps.defs().find((d) => d.id === id);
   const requests = new Map<string, SettingRequest>();
   const view = (r: SettingRequest): PublicRequest => ({
@@ -212,7 +218,7 @@ export function makeDoor(deps: {
       const prev = def.read(root);
       // The person's write of a value equal to the default is still a write when
       // nothing was stored: without the row, `setup.done` reads "never asked" for ever.
-      if (same(prev, v.value) && (!person || (def.isSet?.(root ?? "") ?? true))) return { ok: true, applied: true, setting: id, prev, value: v.value, unchanged: true };
+      if (same(prev, v.value) && (!(person || def.pin) || (def.isSet?.(root ?? "") ?? true))) return { ok: true, applied: true, setting: id, prev, value: v.value, unchanged: true };
       let verdict = person ? "apply" : agentVerdict(id, prev, v.value, deps.trusted(root));
       // A seat speaks for its own project: what is the whole machine's waits for the person.
       if (verdict === "apply" && !person && confined && !def.scoped && !(id === "orchestration.policy" && root)) verdict = "ask";
@@ -254,6 +260,10 @@ export function makeDoor(deps: {
     pending() {
       if (prune()) deps.changed();
       return [...requests.values()].map(view);
+    },
+    /** What a pending request is for, so the route can ask who may answer it. */
+    settingOf(rid: unknown): string | null {
+      return typeof rid === "string" ? requests.get(rid)?.setting ?? null : null;
     },
     async decide(rid, approve, person) {
       if (!person) return { ok: false, error: "only the person answers a settings request: an agent cannot approve or decline one, its own included", status: 403 };

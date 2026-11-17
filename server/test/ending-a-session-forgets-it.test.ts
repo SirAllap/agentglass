@@ -12,13 +12,19 @@
  * inside the test.
  */
 import { test, expect, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { story } from "./story.ts";
+import { agxTestBase } from "./tmuxTmp.ts";
 
 const SOCK = `agx-forget-${process.pid}`;
 const STATE = mkdtempSync(join(tmpdir(), "agx-forget-"));
+// Private TMUX_TMPDIR, set before the modules load: the tmux guard refuses an engine socket outside one.
+const PRIVATE_TMUX = agxTestBase("agx-forget-tmux");
+mkdirSync(PRIVATE_TMUX, { recursive: true, mode: 0o700 });
+const prevTmuxTmp = process.env.TMUX_TMPDIR;
+process.env.TMUX_TMPDIR = PRIVATE_TMUX;
 const sock = ["-f", "/dev/null", "-L", SOCK];
 const sh = (a: string[]) => Bun.spawnSync(["tmux", ...sock, ...a], { stdout: "pipe", stderr: "pipe" });
 const live = () => sh(["list-sessions", "-F", "#{session_name}"]).stdout.toString().trim().split("\n").filter(Boolean).sort();
@@ -45,6 +51,8 @@ afterAll(() => {
   sh(["kill-server"]);
   try { rmSync(join(process.env.TMUX_TMPDIR || `/tmp/tmux-${process.getuid?.() ?? 0}`, SOCK), { force: true }); } catch { /* gone */ }
   try { rmSync(STATE, { recursive: true, force: true }); } catch { /* gone */ }
+  if (prevTmuxTmp === undefined) delete process.env.TMUX_TMPDIR; else process.env.TMUX_TMPDIR = prevTmuxTmp;
+  try { rmSync(PRIVATE_TMUX, { recursive: true, force: true }); } catch { /* gone */ }
 });
 
 const step = story();

@@ -13,12 +13,15 @@
 // version mid-run appears in both rows and would be counted twice by the fold.
 import { describe, expect, test, beforeAll } from "bun:test";
 import { mkdtempSync, mkdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const dir = mkdtempSync(join(tmpdir(), "agx-bymodel-"));
 const ROOT = join(dir, "proj");
 mkdirSync(ROOT, { recursive: true });
+// Own repo: a TMPDIR under the checkout would widen this scope to the whole repo.
+spawnSync("git", ["init", "-q", ROOT]);
 process.env.AGENTGLASS_DB = join(dir, "bymodel.db");
 process.env.AGENTGLASS_ROOT = ROOT;
 process.env.XDG_CONFIG_HOME = dir;

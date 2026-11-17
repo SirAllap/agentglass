@@ -42,37 +42,47 @@ function build(): void {
 describe("compareRefs", () => {
   beforeEach(build);
 
-  it("counts ahead/behind between two diverged branches", () => {
-    const r = compareRefs(repo, "main", "feature");
+  // Six git calls in a row used to block the server's only thread for their sum.
+  it("leaves the loop free while git runs", async () => {
+    let ticks = 0;
+    const timer = setInterval(() => { ticks++; }, 1);
+    const r = await compareRefs(repo, "main", "feature");
+    clearInterval(timer);
+    expect(r.ok).toBe(true);
+    expect(ticks).toBeGreaterThan(0);
+  });
+
+  it("counts ahead/behind between two diverged branches", async () => {
+    const r = await compareRefs(repo, "main", "feature");
     expect(r.ok).toBe(true);
     // main is one commit ahead (main work), one behind (feature work).
     expect(r.ahead!.map((c) => c.subject)).toEqual(["main work"]);
     expect(r.behind!.map((c) => c.subject)).toEqual(["feature work"]);
   });
 
-  it("flips with the refs", () => {
-    const r = compareRefs(repo, "feature", "main");
+  it("flips with the refs", async () => {
+    const r = await compareRefs(repo, "feature", "main");
     expect(r.ahead!.map((c) => c.subject)).toEqual(["feature work"]);
     expect(r.behind!.map((c) => c.subject)).toEqual(["main work"]);
   });
 
-  it("diff is the three-dot diff: only your side's changes", () => {
-    const r = compareRefs(repo, "main", "feature");
+  it("diff is the three-dot diff: only your side's changes", async () => {
+    const r = await compareRefs(repo, "main", "feature");
     expect(r.ok).toBe(true);
     // other...base = feature...main = changes on main since they diverged.
     expect(r.diff!.map((f) => f.file_path)).toEqual([join(repo, "main.txt")]);
   });
 
-  it("identical refs are empty everywhere", () => {
-    const r = compareRefs(repo, "main", "main");
+  it("identical refs are empty everywhere", async () => {
+    const r = await compareRefs(repo, "main", "main");
     expect(r.ok).toBe(true);
     expect(r.ahead).toEqual([]);
     expect(r.behind).toEqual([]);
     expect(r.diff).toEqual([]);
   });
 
-  it("refuses garbage refs", () => {
-    const r = compareRefs(repo, "main", "no-such-ref-zzz");
+  it("refuses garbage refs", async () => {
+    const r = await compareRefs(repo, "main", "no-such-ref-zzz");
     expect(r.ok).toBe(false);
     expect(r.error).toContain("no-such-ref-zzz is not a commit");
   });
