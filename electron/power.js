@@ -26,18 +26,22 @@
  * mid-turn the menu entry answered "Operation inhibited" and nothing happened,
  * with nothing on screen saying why. Measured on a laptop.
  *
- * `block-weak` arrived in systemd 257. An older logind refuses the mode at
- * once ("Invalid mode specification", exit 1, measured on 261 with a bogus
- * mode), and the lock is then taken in plain BLOCK mode instead — which,
- * before 257, is the same thing under the old name: org.freedesktop.login1(5)
- * says block locks were "honoured only by unprivileged users, excluding the
- * user owning the inhibitor", and that 257 enforces them on everyone and
- * offers the old behaviour as block-weak. So on a logind too old for the
- * weak spelling, block already lets the owner's own suspend through. The
- * first version fell back to DELAY, which holds a suspend for
- * InhibitDelayMaxSec and then lets it go — nothing at all, on every Debian 12
- * and Ubuntu 24.04 (systemd 252 and 255). The lid switch has no weak or
- * delay mode in logind, and blocking it is what was wanted.
+ * `block-weak` arrived in systemd 257. Below 257 the sleep lock is NOT held
+ * at all — never plain `block`. Plain block is weak there only by an accident
+ * of history; a logind that is updated, or a distro that backports the 257
+ * behaviour, turns it into the hard lock that answers "Operation inhibited"
+ * to the person's own suspend, with nothing on screen saying why. A person
+ * who wants to suspend must always win. On an old logind only the IDLE lock
+ * is kept (logind's own idle action does not fire); the lid lock is
+ * unchanged. The mode choice lives in power-rules.js.
+ *
+ * "Let it sleep" (`release()`) lets every lock go until the next agent turn
+ * starts, so a person who sees the machine is held can end it. That includes
+ * the handle-lid-switch lock: it is `--mode=block` on purpose (staying awake
+ * on lid close while an agent works is deliberate on the laptop), but after
+ * "Let it sleep" the lid suspends the machine as ever, and the lock is NOT
+ * re-taken until the next agent turn starts. The poll that sees that turn
+ * keeps running while released, in every mode.
  *
  * Three failure modes are the whole difference between this working and this
  * being a lie, and each gets its own paragraph below: `systemd-inhibit` not
@@ -62,7 +66,8 @@
 const electron = require("electron");
 const powerMonitor = electron.powerMonitor ?? null;
 const powerSaveBlocker = electron.powerSaveBlocker ?? null;
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
+const rules = require("./power-rules.js");
 const fs = require("fs");
 const path = require("path");
 
@@ -82,7 +87,7 @@ let getToken = () => "";
  * sleep is the bug above.
  * @type {{ sleep: import("child_process").ChildProcess | null, lid: import("child_process").ChildProcess | null }}
  */
-const inhibitChild = { sleep: null, lid: null };
+const inhibitChild = { sleep: null, lid: null, idle: null };
 /** The mode each running child was spawned with, for `status`: the sleep
  *  lock's is `block-weak` or, on a logind too old for it, `block`. */
 const modeOfChild = new WeakMap();
@@ -133,18 +138,29 @@ function saveMode(m) {
 
 /** Set once logind has refused `block-weak` (systemd before 257). */
 let weakRefused = false;
+/** The systemd major version, read once; null when it cannot be read. */
+let systemdVersion;
+function getSystemdVersion() {
+  if (systemdVersion !== undefined) return systemdVersion;
+  try {
+    const r = spawnSync("systemctl", ["--version"], { encoding: "utf8", timeout: 2000 });
+    systemdVersion = rules.parseSystemdVersion(r.stdout);
+  } catch { systemdVersion = null; }
+  return systemdVersion;
+}
+/** "Let it sleep" is in force: no lock is held until the next turn starts. */
+let released = false;
 
 /**
  * Spawn one lock. Idempotent: a second call while it is already running is a
  * no-op, not a leaked second lock.
- * @param {"sleep" | "lid"} which
- * @param {string} [mode] the logind mode; the sleep lock's default is
- *   `block-weak`, and `block` is what it falls back to when logind refuses it
- *   (see the header: before 257, block is weak).
+ * @param {"sleep" | "lid" | "idle"} which
+ * @param {string} [mode] the logind mode; the sleep lock is only ever
+ *   `block-weak` (see the header), the lid and idle locks `block`.
  */
-function spawnInhibit(which, mode = which === "sleep" && !weakRefused ? "block-weak" : "block") {
+function spawnInhibit(which, mode = which === "sleep" ? "block-weak" : "block") {
   if (inhibitChild[which] || inhibitUnavailable) return;
-  const what = which === "sleep" ? "--what=sleep" : "--what=handle-lid-switch";
+  const what = `--what=${which === "lid" ? "handle-lid-switch" : which}`;
   const child = spawn(
     "systemd-inhibit",
     [what, "--who=agentglass", "--why=Agents are working", `--mode=${mode}`, "sleep", "infinity"],
@@ -162,6 +178,7 @@ function spawnInhibit(which, mode = which === "sleep" && !weakRefused ? "block-w
   child.on("error", (e) => {
     if (inhibitChild[which] === child) inhibitChild[which] = null;
     if (/** @type {NodeJS.ErrnoException} */ (e).code === "ENOENT") inhibitUnavailable = true;
+    notify(); // a lock the header showed as held is gone
   });
   child.on("exit", (code) => {
     // A suspend does not necessarily leave this child alive to see the
@@ -173,16 +190,16 @@ function spawnInhibit(which, mode = which === "sleep" && !weakRefused ? "block-w
     // is the resume handler's to replace.
     if (mode === "block-weak" && code === 1 && !releasedByUs.has(child) && held) {
       /* The logind's version spoke, and it does not change while the app
-         runs: every later lock — the resume handler re-asserts them all —
-         goes straight to block. */
+         runs: no sleep lock from here on, only the idle one. */
       weakRefused = true;
-      spawnInhibit(which, "block");
+      spawnInhibit("idle");
     }
+    notify();
   });
 }
 
 /** Idempotent, and ESRCH — the process already gone — is not an error.
- *  @param {"sleep" | "lid"} which */
+ *  @param {"sleep" | "lid" | "idle"} which */
 function killInhibit(which) {
   const child = inhibitChild[which];
   inhibitChild[which] = null;
@@ -192,12 +209,15 @@ function killInhibit(which) {
 }
 
 function assertLinuxInhibit() {
-  spawnInhibit("sleep");
+  const plan = rules.sleepLockPlan({ version: getSystemdVersion(), weakRefused });
+  if (plan.sleep) spawnInhibit("sleep", plan.sleep);
+  if (plan.idle) spawnInhibit("idle");
   spawnInhibit("lid");
 }
 
 function releaseLinuxInhibit() {
   killInhibit("sleep");
+  killInhibit("idle");
   killInhibit("lid");
 }
 
@@ -259,6 +279,7 @@ function releaseAwake() {
 }
 
 function desired() {
+  if (released) return false;
   if (mode === "on") return true;
   if (mode === "agent") return lastKnownWorking;
   return false;
@@ -266,8 +287,25 @@ function desired() {
 
 function sync() {
   const want = desired();
-  if (want === held) return;
-  if (want) assertAwake(); else releaseAwake();
+  if (want !== held) { if (want) assertAwake(); else releaseAwake(); }
+  notify();
+}
+
+/*
+ * Tell the window when what the header shows has changed. The header asked
+ * every 5s for the life of the app (timers audit 2026-11-13) while this module
+ * already knew the moment anything moved, because every change runs through
+ * sync(). Only a different answer is sent, so a still machine sends nothing.
+ */
+let onChange = null;
+let lastSent = "";
+function notify() {
+  if (!onChange) return;
+  const s = status();
+  const k = JSON.stringify(s);
+  if (k === lastSent) return;
+  lastSent = k;
+  try { onChange(s); } catch { /* a closed window must not break the power state */ }
 }
 
 async function pollWorking() {
@@ -280,9 +318,13 @@ async function pollWorking() {
     });
     if (!res.ok) return; // a hiccup — hold last known state rather than flap on it
     const body = await res.json();
-    lastKnownWorking = body.working === true;
+    const working = body.working === true;
+    if (released && !rules.releaseStillApplies({ released, wasWorking: polledOnce ? lastKnownWorking : null, working })) released = false;
+    polledOnce = true;
+    lastKnownWorking = working;
     lastKnownWhy = body.why && typeof body.why === "object" ? body.why : null;
-    sync();
+    sync(); // and sync() tells the window if `why` moved
+    if (!pollNeeded()) stopPolling(); // the release ended and the mode does not poll
   } catch { /* server not up yet, or the request timed out — try again next tick */ } finally {
     clearTimeout(timer);
   }
@@ -294,20 +336,27 @@ function startPolling() {
   pollTimer = setInterval(() => { void pollWorking(); }, POLL_MS);
 }
 
+/** `agent` mode always polls; any mode polls while released, to see the next turn start. */
+function pollNeeded() { return mode === "agent" || released; }
+/** A poll has answered since polling last started: the baseline a turn start is measured from. */
+let polledOnce = false;
+
 function stopPolling() {
+  polledOnce = false;
   if (!pollTimer) return;
   clearInterval(pollTimer);
   pollTimer = null;
 }
 
 function applyMode() {
-  if (mode === "agent") startPolling(); else stopPolling();
-  if (mode !== "agent") { lastKnownWorking = false; lastKnownWhy = null; }
+  if (pollNeeded()) startPolling(); else stopPolling();
+  if (mode !== "agent" && !released) { lastKnownWorking = false; lastKnownWhy = null; }
   sync();
 }
 
-/** @param {{ configDir: string, apiOrigin: () => string, token: () => string, platform?: string }} opts */
+/** @param {{ configDir: string, apiOrigin: () => string, token: () => string, platform?: string, onChange?: (s: ReturnType<typeof status>) => void }} opts */
 function init(opts) {
+  onChange = opts.onChange ?? null;
   cfgPath = path.join(opts.configDir, "power.json");
   getApiOrigin = opts.apiOrigin;
   getToken = opts.token;
@@ -325,6 +374,7 @@ function init(opts) {
     if (!desired()) return;
     releaseAwake();
     assertAwake();
+    notify();
   });
   /*
    * And the moment logind announces the suspend, the sleep lock is let go.
@@ -336,7 +386,7 @@ function init(opts) {
    * asleep. `held` is left as it is: the resume handler above re-asserts
    * everything on the way back.
    */
-  powerMonitor?.on("suspend", () => { killInhibit("sleep"); });
+  powerMonitor?.on("suspend", () => { killInhibit("sleep"); notify(); });
   applyMode();
 }
 
@@ -344,8 +394,18 @@ function init(opts) {
 function setMode(m) {
   if (!MODES.includes(m)) return status();
   mode = m;
+  released = false;
   saveMode(m);
   applyMode();
+  return status();
+}
+
+/** "Let it sleep": drop every lock until the next agent turn starts (the poll
+ *  going from idle to working), or until the mode is changed. */
+function release() {
+  released = true;
+  startPolling(); // `on` mode does not poll otherwise, and the locks would never come back
+  sync();
   return status();
 }
 
@@ -369,9 +429,11 @@ function status() {
     locks: {
       sleep: sleepChild ? modeOfChild.get(sleepChild) ?? null : null,
       lid: !!inhibitChild.lid,
+      idle: !!inhibitChild.idle,
       display: displayBlockerId !== null,
       app: suspensionBlockerId !== null,
     },
+    released,
     inhibitMissing: platform === "linux" && inhibitUnavailable,
     platform,
   };
@@ -382,4 +444,4 @@ function shutdown() {
   releaseAwake();
 }
 
-module.exports = { init, setMode, status, shutdown, MODES };
+module.exports = { init, setMode, release, status, shutdown, MODES };

@@ -78,6 +78,17 @@ contextBridge.exposeInMainWorld("agentglass", {
     ipcRenderer.invoke("ag:laneOpen", id, slug, ephemeral),
   laneClose: (/** @type {string} */ id) => ipcRenderer.invoke("ag:laneClose", id),
   laneKeep: (/** @type {string[]} */ ids) => ipcRenderer.invoke("ag:laneKeep", ids),
+  /** Each lane's one tab, its address and title, read off the lane's window. */
+  laneTabs: () => ipcRenderer.invoke("ag:laneTabs"),
+  /** Start or stop the frames of one lane, for the person to watch it. */
+  laneWatch: (/** @type {string} */ id, /** @type {boolean} */ on) => ipcRenderer.invoke("ag:laneWatch", id, on),
+  /** @param {(f: { id: string, src: string, url: string, title: string }) => void} fn */
+  onLaneFrame: (fn) => {
+    /** @type {IpcListener} */
+    const h = (_e, payload) => { try { fn(payload); } catch { /* renderer's problem */ } };
+    ipcRenderer.on("ag:laneFrame", h);
+    return () => ipcRenderer.removeListener("ag:laneFrame", h);
+  },
   /** `newtab --from-template`'s visible-tab jar: mint one before the tab's
    *  `<webview>` is created (its `partition` has to be right the first time a
    *  guest attaches), and wipe it once the tab closes. */
@@ -188,6 +199,11 @@ contextBridge.exposeInMainWorld("agentglass", {
   winToggleMaximize: (why) => ipcRenderer.invoke("ag:winToggleMaximize", why),
   winClose: () => ipcRenderer.invoke("ag:winClose"),
   winIsMaximized: () => ipcRenderer.invoke("ag:winIsMaximized"),
+  /** One diagnostic line for `window.log` — the renderer's half of the hang
+   *  watchdog, beside the shell's unresponsive/responsive events. Fire-and-
+   *  forget: a log must never make the renderer wait. */
+  /** @param {string} line */
+  windowLog: (line) => ipcRenderer.send("ag:windowLog", String(line ?? "")),
   winState: () => ipcRenderer.invoke("ag:winState"),
   /** Pop the app menu under the "⋯" in our own bar. There is no menu bar —
    *  see main.js — so this is the only route to it.
@@ -221,6 +237,19 @@ contextBridge.exposeInMainWorld("agentglass", {
     ipcRenderer.on("ag:browser-open-tab", h);
     return () => ipcRenderer.removeListener("ag:browser-open-tab", h);
   },
+  /** A link the window would have handed to the OS (target=_blank, window.open,
+   *  an off-app navigation). The "Open web links in" setting lives in the
+   *  renderer, so the renderer decides; it answers with openOnMachine.
+   * @param {(url: string) => void} fn */
+  onOpenLink: (fn) => {
+    /** @type {IpcListener} */
+    const h = (_e, url) => fn(String(url));
+    ipcRenderer.on("ag:open-link", h);
+    ipcRenderer.send("ag:link-route-ready");
+    return () => ipcRenderer.removeListener("ag:open-link", h);
+  },
+  /** @param {string} url */
+  openOnMachine: (url) => { void ipcRenderer.invoke("ag:open-machine", String(url)); },
   /** A browser chord pressed while a PAGE had the focus — `t`, `l` or `f`.
    *  The guest is its own Chromium and its keys never reach us, so the shell
    *  forwards the three that need this app's own chrome: a new tab, the address
@@ -337,6 +366,30 @@ contextBridge.exposeInMainWorld("agentglass", {
   /** And take them out again — these sites only, not the whole profile.
    * @param {{ sites: string[]; partitions?: string[] }} req */
   forgetCookies: (req) => ipcRenderer.invoke("ag:forgetCookies", req),
+  /** Empty these containers' whole jars — for a container that is dropped.
+   * @param {{ partitions: string[] }} req */
+  wipeContainers: (req) => ipcRenderer.invoke("ag:wipeContainers", req),
+  /** The login vault (electron/main.js `ag:vault*`). Every answer is counts,
+   *  names and settings; values never cross to this side.
+   *  A sensitive site is OKed by main's own dialog; nothing sent from here
+   *  can stand in for it.
+   * @param {{ lane: string; site: string; agent?: string; vault?: string }} req */
+  vaultPull: (req) => ipcRenderer.invoke("ag:vaultPull", req),
+  /** @param {{ container: string; cookies: unknown[]; site?: string; agent?: string; why?: string }} req */
+  vaultWipe: (req) => ipcRenderer.invoke("ag:vaultWipe", req),
+  vaultList: () => ipcRenderer.invoke("ag:vaultList"),
+  /** @param {{ source: string; sites: string[] }} req */
+  vaultImport: (req) => ipcRenderer.invoke("ag:vaultImport", req),
+  /** @param {Record<string, unknown>} req */
+  vaultSettings: (req) => ipcRenderer.invoke("ag:vaultSettings", req),
+  /** @param {{ vault?: string; site?: string; all?: boolean }} req */
+  vaultRemove: (req) => ipcRenderer.invoke("ag:vaultRemove", req),
+  /** @param {{ vault: string; sites?: string[] }} req */
+  vaultUseInMyBrowser: (req) => ipcRenderer.invoke("ag:vaultUseInMyBrowser", req),
+  vaultLanes: () => ipcRenderer.invoke("ag:vaultLanes"),
+  vaultSignedIn: () => ipcRenderer.invoke("ag:vaultSignedIn"),
+  /** @param {{ lane: string }} req */
+  vaultSignOut: (req) => ipcRenderer.invoke("ag:vaultSignOut", req),
   /** A screenshot of the built-in browser, taken by the shell because a pane
    *  nobody is looking at produces no frames for the panel to capture. Null
    *  when there is no browser open. */
@@ -349,6 +402,16 @@ contextBridge.exposeInMainWorld("agentglass", {
    *  replaces it. `{ ok, error? }`.
    * @param {string} name @param {string} source @param {number} [guestId] */
   registerInitScript: (name, source, guestId) => ipcRenderer.invoke("ag:browserRegisterInitScript", { name, source, guestId }),
+  /* Guide mode: watch the pointed element from an isolated world; `{stop:true}` takes it down. */
+  /** @param {Record<string, unknown>} req */
+  guideObserve: (req) => ipcRenderer.invoke("ag:browserGuideObserve", req),
+  /** The observer's reports: `{kind:"guide", tab, phase, target?, clicked?, navigated?}`. @param {(ev: unknown) => void} fn */
+  onGuideObserved: (fn) => {
+    /** @type {IpcListener} */
+    const h = (_e, ev) => fn(ev);
+    ipcRenderer.on("ag:guide-observed", h);
+    return () => ipcRenderer.removeListener("ag:guide-observed", h);
+  },
   /* §5: the DevTools protocol, relayed whole. `drain` takes the events that
      arrived since the last drain instead of sending a command. */
   /** @param {string} method @param {unknown} [params] @param {number} [guestId] */
@@ -427,6 +490,15 @@ contextBridge.exposeInMainWorld("agentglass", {
     return () => ipcRenderer.removeListener("ag:notifyPress", h);
   },
   powerStatus: () => ipcRenderer.invoke("ag:powerStatus"),
+  /** @param {(s: unknown) => void} fn */
+  onPowerChanged: (fn) => {
+    /** @type {IpcListener} */
+    const h = (_e, payload) => { try { fn(payload); } catch { /* renderer's problem */ } };
+    ipcRenderer.on("ag:power-changed", h);
+    return () => ipcRenderer.removeListener("ag:power-changed", h);
+  },
   /** @param {"on" | "agent" | "off"} mode */
   setPowerMode: (mode) => ipcRenderer.invoke("ag:setPowerMode", mode),
+  /** "Let it sleep": release the locks until the next agent turn. */
+  releasePower: () => ipcRenderer.invoke("ag:releasePower"),
 });

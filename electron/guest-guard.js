@@ -403,7 +403,29 @@ function uniqueSavePath(dir, name, exists) {
   return at;
 }
 
+/** Where a guest's download goes. An armed directory wins; an agent's tab with
+ *  none armed gets its own folder under `baseDir`; the person's tab gets null,
+ *  which means Electron's default (its Save dialog, on the person's screen).
+ * @param {{ armedDir?: string, agent: boolean, agentName?: string, baseDir: string }} a
+ * @returns {{ dir: string, armed: boolean } | null} */
+// An arming is for the click the verb is about to make. One that nobody used
+// within this long is stale: a later page download must not take it.
+const ARM_TTL_MS = 30_000;
+/** An arming nobody used in time is not armed: the caller deletes it. @param {{ at?: number } | undefined} e @param {number} [now] */
+function armingFresh(e, now = Date.now()) {
+  return !!e && !(e.at != null && now - e.at > ARM_TTL_MS);
+}
+function downloadTarget(a) {
+  const stale = a.armedAt != null && (a.now == null ? Date.now() : a.now) - a.armedAt > ARM_TTL_MS;
+  if (a.armedDir && !stale) return { dir: a.armedDir, armed: true };
+  if (!a.agent) return null;
+  const name = String(a.agentName || "agent").replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "") || "agent";
+  return { dir: `${a.baseDir}/${name}`, armed: false };
+}
+
 module.exports = {
+  downloadTarget,
+  armingFresh,
   BROWSER_PARTITION,
   BROWSER_PARTITION_RE,
   EPHEMERAL_PARTITION_RE,
