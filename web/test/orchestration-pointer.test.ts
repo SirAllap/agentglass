@@ -42,7 +42,7 @@ describe("the page after the per-block tab left", () => {
   test("nothing sits between the project row and the tabs but the hero, and its call to action is the page's only one", () => {
     const bar = html.indexOf("data-scope-bar");
     const hero = html.indexOf("data-hero");
-    const tabs = html.indexOf('role="tablist"');
+    const tabs = html.indexOf('data-section="session"');
     expect(bar).toBeGreaterThan(-1);
     expect(hero).toBeGreaterThan(bar);
     expect(hero).toBeLessThan(tabs);
@@ -53,31 +53,29 @@ describe("the page after the per-block tab left", () => {
     expect(read("OrchestrationPane.tsx")).toContain('useReportHead("orchestration", null)');
     expect(read("OrchestrationPane.tsx")).not.toContain('label: "Open the Flow editor"');
   });
-  test("exactly two tabs, Safety and limits first and selected", () => {
-    expect(tabsOf(html)).toEqual([["Safety and limits", "true"], ["Always refused", "false"]]);
-  });
-  test("Alt+1 and Alt+2 open Safety and Refused, and Alt+3 is nothing", () => {
-    const src = read("OrchestrationPane.tsx");
-    expect(src).toContain('["1", "2"].indexOf(e.key)');
-    expect(src).not.toContain('"3"');
-    const order = [...src.slice(src.indexOf("const SECTIONS")).matchAll(/id: "(\w+)", label/g)].map((m) => m[1]);
-    expect(order.slice(0, 2)).toEqual(["safety", "refused"]);
+  test("no tabs: Safety and Always refused moved to Permissions > Workers", () => {
+    expect(tabsOf(html)).toEqual([]);
+    expect(html).not.toContain('data-pane="safety"');
+    expect(html).not.toContain('data-pane="refused"');
+    const pv = view({ part: "permWorkers" });
+    expect(pv).toContain('data-pane="safety"');
+    expect(pv).toContain('data-pane="refused"');
   });
   test("a saved or linked section called block or keys falls back to Safety and limits", () => {
     expect(asSection("block")).toBe("safety");
     expect(asSection(undefined)).toBe("safety");
     expect(asSection("keys")).toBe("safety");
-    expect(tabsOf(view({ section: "block" }))[0]).toEqual(["Safety and limits", "true"]);
   });
   test("the page keeps no Conditions, Quick setup, Polaris or per-block card; the project row stays", () => {
-    for (const gone of ["Conditions (", "Quick setup", "Polaris", "Per-block settings live", "This block", "Active flow", "agx-flow-bp", 'id="agx-flow-block"', "Turn the Gate"]) expect(html, gone).not.toContain(gone);
+    for (const gone of ["Conditions (", "Quick setup", "Per-block settings live", "This block", "Active flow", "agx-flow-bp", 'id="agx-flow-block"', "Turn the Gate"]) expect(html, gone).not.toContain(gone);
     expect(html).toContain("data-scope-bar");
   });
   test("Always refused is the fixed list and one box, and no switch: the Gate's switch is in Safety and limits", () => {
-    const pane = html.slice(html.indexOf('data-pane="refused"'));
+    const pv = view({ part: "permWorkers" });
+    const pane = pv.slice(pv.indexOf('data-pane="refused"'));
     expect(pane).toContain("Fixed for everyone");
     expect(pane).toContain("not editable");
-    for (const t of ["Git", "Network and other machines", "This machine"]) expect(pane, t).toContain(`>${t}</h3>`);
+    for (const t of ["Git", "Network", "This machine"]) expect(pane, t).toContain(`>${t}</h3>`);
     expect(pane).toContain("Only for all projects");
     expect(pane.match(/<textarea/g)).toHaveLength(1);
     expect(pane).not.toContain('role="switch"');
@@ -113,19 +111,18 @@ describe("the page's chrome after the cards left", () => {
     const src = read("flow/FlowSections.tsx");
     expect(src).not.toContain("data-savebar");
     const pane = read("OrchestrationPane.tsx");
-    const bar = pane.indexOf("data-savebar");
-    expect(bar).toBeGreaterThan(pane.indexOf('id="agx-flow-refused"'));
-    expect(pane.slice(pane.indexOf("const dirty ="), bar)).toContain("dirty");
+    expect(pane).not.toContain("data-savebar");
     expect(src).not.toContain("What the page counts as one change");
     expect(src).not.toContain("lives on the Reviewer block");
     expect(src).not.toContain("The most review rounds is set on the reviewing block");
-    expect(readFileSync(join(SRC, "..", "SettingsModal.tsx"), "utf8")).toMatch(/const NO_TOC[^\n]*"orchestration"/);
+    expect(readFileSync(join(SRC, "..", "SettingsModal.tsx"), "utf8")).not.toContain("SettingsToc");
   });
-  test("Use the general setting is drawn only for a project that has a value of its own", () => {
-    const own = view({ projects: ["/w/orbit"], root: "/w/orbit", scope: "project", overrides: ["/w/orbit"] });
-    const none = view({ projects: ["/w/orbit"], root: "/w/orbit", scope: "global", overrides: [] });
-    expect(own).toContain("Use the general setting");
-    expect(none).not.toContain("Use the general setting");
+  test("the old per-project badges are gone: the shared control shows the project, rows carry the tags", () => {
+    const own = view({ projects: ["/w/orbit"], root: "/w/orbit", scope: "project" });
+    expect(own).toContain('<span class="whitespace-nowrap">orbit</span><span aria-hidden="true" class="inline-flex opacity-70"><svg');
+    expect(own).not.toContain("Only orbit");
+    expect(own).not.toContain("Use the general setting");
+    expect(own).not.toContain("has its own settings");
   });
 });
 
@@ -149,7 +146,8 @@ describe("the review settings stay findable and open the Flow editor on the revi
     } as OrchestrationViewProps);
     const under = (on: boolean) => renderToStaticMarkup(React.createElement(Filter.Provider, { value: { on, q: "review", seen() {} } }, el));
     const quiet = under(false);
-    for (const [, id] of ROWS) expect(quiet).not.toContain(`data-setting-id="${id}"`);
+    // The review rows are part of the Flow & review page now: drawn with their button whether or not a search is on.
+    for (const [, id] of ROWS) expect(quiet).toContain(`data-setting-id="${id}"`);
     const html = under(true);
     for (const [label, id] of ROWS) {
       const at = html.indexOf(`data-setting-id="${id}"`);
@@ -157,7 +155,7 @@ describe("the review settings stay findable and open the Flow editor on the revi
       expect(html.slice(at, at + 900)).toContain("Open at the reviewing block");
     }
     const src = read("OrchestrationPane.tsx");
-    expect(src.match(/openFlowEditor\("reviewer"\)/g)).toHaveLength(3);
+    expect(src.match(/openFlowEditor\("reviewer"\)/g)).toHaveLength(1);
     expect(src).toContain("setEditBlock(block)");
     expect(read("flow/FlowSlot.tsx")).toContain("select={editBlock}");
     expect(read("flow/FlowEditor.tsx")).toContain("r.policyRole === p.select");

@@ -15,7 +15,7 @@ import type { JiraMergeCard } from "../src/lib/mergeJira.ts";
 import type { JiraSteps } from "../../shared/providers.ts";
 
 const off = { enabled: false, blocks: [] };
-const steps = (o: Partial<JiraSteps>): JiraSteps => ({ handoff: off, review: off, merge: off, ...o });
+const steps = (o: Partial<JiraSteps>): JiraSteps => ({ handoff: off, review: off, merge: off, people: off, note: off, ...o });
 const card = { status: "Building" };
 
 describe("which buttons a card gets", () => {
@@ -44,6 +44,14 @@ describe("which buttons a card gets", () => {
     const o = stepOffers(s, card)[0]!;
     expect(o).toMatchObject({ key: "review", label: "Review…", asksStatus: true, asksClear: true, asksAssign: true, asksComment: true, to: null, comment: "{pr_url}" });
     expect(hasQuestions(o)).toBe(true);
+  });
+
+  test("a review step with no assign block still asks who to give the card to, and its button says where it goes", () => {
+    const s = steps({ review: { enabled: true, blocks: [{ type: "move", statusNames: ["Peer check"] }] } });
+    expect(stepOffers(s, card)[0]).toMatchObject({ key: "review", label: "Transition to Peer check", asksAssign: true });
+    // A step that already names somebody does not ask: that is the step's own row.
+    const fixed = steps({ review: { enabled: true, blocks: [{ type: "move", statusNames: ["Peer check"] }, { type: "assign", who: "me" }] } });
+    expect(stepOffers(fixed, card)[0]).toMatchObject({ asksAssign: false });
   });
 
   test("the merge step is not a button: it runs from the merge dialog", () => {
@@ -137,7 +145,7 @@ describe("the panel is wired to the routes", () => {
   test("a Jira card on a pull request gets the step buttons with the pull request's own address", async () => {
     const s = await code("components/PrPanel.tsx");
     expect(s).toContain("<JiraStepButtons task={task} query={query}");
-    expect(s).toContain("pr={{ url: d.url, title: d.title, number: d.number, author: d.author }}");
+    expect(s).toContain("pr={{ url: d.url, title: d.title, number: d.number, author: d.author, reviewers: d.reviewers.filter((r) => !r.isTeam).map((r) => r.login) }}");
     expect(s).toContain('api.jiraRunStep(move.id, move.updated, "merge"');
   });
 
@@ -152,6 +160,8 @@ describe("the panel is wired to the routes", () => {
     const s = await code("components/jira/JiraStepButtons.tsx");
     expect(s).toContain("api.jiraRunStep(");
     expect(s).not.toMatch(/api\.jira(HandOff|Transition|SetAssignee)\(/);
+    // The confirmation draws the review step's optional assign, so the pick in it has a row and a button.
+    expect(s).toContain("blocks: dialogBlocks(offer.key, blocks)");
     // Nothing runs while writes are off, whatever was pressed.
     expect(s).toContain("if (busy || !writes) return;");
     // The switch's sentence waits for the settings: while they load, writes may be on and the line would be false.

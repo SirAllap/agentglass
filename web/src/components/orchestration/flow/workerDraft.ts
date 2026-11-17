@@ -13,6 +13,7 @@ import {
   FLOW_HUES, FLOW_PROMPT_MAX, FLOW_ROUNDS_MAX, roleById, validateFlow, type Flow, type FlowRole,
 } from "../../../../../shared/flow.ts";
 import type { Chain } from "../../../../../shared/orchestration.ts";
+import type { RoleId } from "../../../../../shared/workerRoles.ts";
 import { addRole, clearFail, freshRoleId, setFail, setRequired, updateRole } from "../../../lib/flowEdit.ts";
 import { ENGINE_CHOICES } from "./flowScreenCopy.ts";
 
@@ -22,16 +23,32 @@ export interface WorkerDraft {
   stage: string;
   does: string;
   prompt: string;
+  /** Sent as the turn's own first line, e.g. `/jira-fix-card {card}`; empty runs no command. */
+  firstCommand: string;
   chain: Chain;
   tools: string[];
   readsOnly: boolean;
   /** Commands this role may run that the floor refuses; one per line in the editor. */
   allow: string[];
+  /** May call the Agent tool: off by default, and turning it on waits for the
+   *  person's one-click approval when an agent is the one saving the flow. */
+  mayStartSubagents: boolean;
   required: boolean;
   failTo: string;
   rounds: number;
   ico: string;
   hue: string;
+  /** "Works like": the built-in role a role of its own chain is given as its
+   *  base, empty for none. Only ever read for a role with no `policyRole` and
+   *  no `actor` yet (`ownChain`); a role that already has one keeps it, set
+   *  through `PolicyRoleControls` instead. Picking one here writes it on save
+   *  and clears the chain, same as the CLI's `--policy-role` does — a base
+   *  role's chain is the policy's, not a second answer stored here. Without a
+   *  base, a custom role has no `base` for `DOORS_FOR_ROLE` to key off
+   *  (agents/envelope.ts) and so no browser, silently; the picker is how a
+   *  person gives it one.
+   */
+  basePolicyRole: RoleId | "";
 }
 
 /** Where a new role goes: on the path after `index - 1`, or only in the team. */
@@ -71,18 +88,22 @@ export const generatedPrompt = (name: string, does: string): string =>
 export function draftOf(flow: Flow, role: FlowRole): WorkerDraft {
   const edge = flow.edges.find((e) => e.on === "fail" && e.from === role.id);
   return {
-    id: role.id, name: role.name, stage: role.stage, does: role.does, prompt: role.prompt,
+    id: role.id, name: role.name, stage: role.stage, does: role.does, prompt: role.prompt, firstCommand: role.firstCommand ?? "",
     chain: [...(role.resolvedChain ?? role.chain)], tools: [...role.tools], readsOnly: role.readsOnly, allow: [...(role.allow ?? [])],
+    mayStartSubagents: role.mayStartSubagents === true,
     required: role.required, failTo: edge?.to ?? "", rounds: edge?.maxRounds ?? 2, ico: role.ico, hue: role.hue,
+    basePolicyRole: role.policyRole ?? "",
   };
 }
 
 export function freshDraft(flow: Flow): WorkerDraft {
   const engine = ENGINE_CHOICES[0]!;
   return {
-    id: "", name: "", stage: flow.stages[0]!.id, does: "", prompt: "",
+    id: "", name: "", stage: flow.stages[0]!.id, does: "", prompt: "", firstCommand: "",
     chain: [{ engine: engine.id, model: engine.models[0] ?? "" }], tools: ["read", "run"], readsOnly: false, allow: [],
+    mayStartSubagents: false,
     required: false, failTo: "", rounds: 2, ico: "terminal", hue: FLOW_HUES[flow.roster.length % FLOW_HUES.length]!,
+    basePolicyRole: "",
   };
 }
 
@@ -91,8 +112,10 @@ export function draftFromTeam(flow: Flow, roleId: string, draft: WorkerDraft): W
   const from = roleById(flow, roleId);
   if (!from) return draft;
   return {
-    ...draft, name: from.name, stage: from.stage, does: from.does, prompt: from.prompt,
+    ...draft, name: from.name, stage: from.stage, does: from.does, prompt: from.prompt, firstCommand: from.firstCommand ?? "",
     chain: [...(from.resolvedChain ?? from.chain)], tools: [...from.tools], readsOnly: from.readsOnly, ico: from.ico, hue: from.hue,
+    mayStartSubagents: from.mayStartSubagents === true,
+    basePolicyRole: from.policyRole ?? "",
   };
 }
 
@@ -112,10 +135,14 @@ export function applyDraft(flow: Flow, draft: WorkerDraft, place: WorkerPlace | 
   let id = draft.id;
   if (existing) {
     const ownChain = !existing.policyRole && !existing.actor;
+    // Only a role with no base yet can take one here: an existing base is
+    // PolicyRoleControls' to change, and a person's step owns neither.
+    const givenBase = ownChain && draft.basePolicyRole ? draft.basePolicyRole : undefined;
     next = updateRole(flow, existing.id, {
-      name, stage: draft.stage, does, prompt: draft.prompt.trim(), tools: [...draft.tools], readsOnly: draft.readsOnly, allow: [...draft.allow],
+      name, stage: draft.stage, does, prompt: draft.prompt.trim(), firstCommand: draft.firstCommand.trim(), tools: [...draft.tools], readsOnly: draft.readsOnly, allow: [...draft.allow],
+      mayStartSubagents: draft.mayStartSubagents,
       ico: draft.ico, hue: draft.hue,
-      ...(ownChain ? { chain: [...draft.chain] } : {}),
+      ...(givenBase ? { policyRole: givenBase, chain: [] } : ownChain ? { chain: [...draft.chain] } : {}),
     });
     const onPath = next.path.includes(existing.id);
     next = setRequired(next, existing.id, onPath && draft.required);
@@ -125,8 +152,11 @@ export function applyDraft(flow: Flow, draft: WorkerDraft, place: WorkerPlace | 
     const role: FlowRole = {
       id, name, does, stage: draft.stage,
       prompt: (draft.prompt.trim() || generatedPrompt(name, does)).slice(0, FLOW_PROMPT_MAX),
-      chain: [...draft.chain], tools: [...draft.tools], readsOnly: draft.readsOnly, allow: [...draft.allow], required: false,
+      firstCommand: draft.firstCommand.trim(),
+      chain: draft.basePolicyRole ? [] : [...draft.chain], tools: [...draft.tools], readsOnly: draft.readsOnly, allow: [...draft.allow], required: false,
+      mayStartSubagents: draft.mayStartSubagents,
       ico: draft.ico, hue: draft.hue,
+      ...(draft.basePolicyRole ? { policyRole: draft.basePolicyRole } : {}),
     };
     const added = addRole(flow, role, place?.kind === "path" ? place.index : undefined);
     if (!added.ok) return added;
@@ -135,7 +165,8 @@ export function applyDraft(flow: Flow, draft: WorkerDraft, place: WorkerPlace | 
     if (place?.kind === "path" && draft.failTo) next = setFail(next, id, draft.failTo, Math.min(draft.rounds, FLOW_ROUNDS_MAX));
   }
 
-  const checked = validateFlow(next);
+  // The Gate-last rule is the editor's and the server's, judged against the flow before: a role edit on an older flow with a mid-path Gate must still save.
+  const checked = validateFlow(next, { legacyGate: true });
   return checked.ok ? { ok: true, flow: checked.value, id } : { ok: false, error: checked.error };
 }
 

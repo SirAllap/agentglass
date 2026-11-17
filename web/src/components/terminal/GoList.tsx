@@ -132,7 +132,7 @@ export function GoList({
         style={{ height: ROW_H, background: lit ? "var(--surface-inset)" : "transparent" }}>
         <span className="shrink-0 w-3.5 flex justify-center">{m.mark && <WindowMarkIcon mark={m.mark} label={m.title} />}</span>
         <span className="min-w-0 truncate font-semibold" style={{ color: "var(--text)" }}>{r.window.name || "shell"}</span>
-        {r.branch && <span className="min-w-0 truncate text-[10.5px]" style={{ color: "var(--text3)" }} title={r.branch}>{r.branch}</span>}
+        {r.branch && <span className="min-w-0 truncate text-[10.5px]" style={{ color: "var(--text3)" }} data-tip={r.branch}>{r.branch}</span>}
         <span className="ml-auto shrink-0 text-[10.5px]"
           style={{ color: m.mark === "needs-you" ? "var(--warning-ink)" : m.mark === "failed" ? "var(--error-ink)" : m.mark === "working" ? "var(--primary-ink)" : "var(--text3)", fontWeight: m.mark === "needs-you" ? 600 : undefined }}>
           {m.title}

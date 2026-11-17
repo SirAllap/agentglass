@@ -50,7 +50,7 @@ beforeAll(async () => {
   usage = await import("../src/lib/usageStore.ts");
 });
 afterAll(() => { Object.assign(api.api as object, saved); usage.__resetUsageStore(); });
-beforeEach(() => { timers.length = 0; asks = 0; usage.__resetUsageStore(); });
+beforeEach(() => { timers.length = 0; asks = 0; usage.__resetUsageStore(); accounts.__resetAccounts(); });
 
 async function switchedWithNoReading(): Promise<void> {
   served = [list("acme-a")]; reply = [row(41)];

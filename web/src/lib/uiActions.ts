@@ -13,7 +13,7 @@
  * phone, a tab with another project): every seam here is a no-op with nothing
  * listening, which is why none of these throws.
  */
-import { UI_ACTIONS, canonMachineTab, canonView, parseArgs, uiOf, type UiActionId, type UiArgs, type UiReply } from "../../../shared/uiActions.ts";
+import { UI_ACTIONS, canonMachineTab, canonView, isReadAction, parseArgs, uiOf, type UiActionId, type UiArgs, type UiReply } from "../../../shared/uiActions.ts";
 import type { ControlCmd, ViewId } from "../../../shared/types.ts";
 import { openSettings } from "./openSettings.ts";
 import { openFinderAt } from "./finderTarget.ts";
@@ -24,6 +24,8 @@ import { requestPrJump } from "./prJump.ts";
 import { latchUnstick } from "./unstickIntent.ts";
 import { filterGet, filterSet, viewsDelete, viewsList, viewsSave } from "./prFilterDoor.ts";
 import { showWhatsNew } from "./whatsNew.ts";
+import { askTestNote } from "./notifyTestDoor.ts";
+import type { TestKind } from "./notePolicy.ts";
 import { toggleBench, showFile, showBoard } from "./benchStore.ts";
 import { openPeek } from "./openPeek.ts";
 import { THEMES } from "./themes.ts";
@@ -140,6 +142,7 @@ export const UI_HANDLERS: { [Id in UiActionId]: Handler<Id> } = {
   "git.rebase": (a, c) => { latchGitModal({ which: "rebase", base: a.base, ...paneCheckout(c) }); },
   "event.open": async (a, c) => { if (!(await c.openEvent(a.id))) throw new Error("no recent event has that id"); },
   "session.open": (a, c) => c.openSession(a.id, a.app),
+  "notify.test": (a) => { const kind: TestKind = a.kind; askTestNote(kind, a.in ?? 5); },
   "whatsnew.open": () => showWhatsNew(),
   "lantern.schedule": (_a, c) => { latchViewModal("lantern.schedule"); c.goView("agents"); },
   "agents.change": (_a, c) => { latchViewModal("agents.change"); c.goView("agents"); },
@@ -212,20 +215,27 @@ export const LATE_READ_MS = 4000;
 const isThenable = (v: unknown): v is PromiseLike<unknown> => typeof (v as { then?: unknown } | null)?.then === "function";
 
 const fail = (e: unknown): UiReply => ({ ok: false, applied: false, error: e instanceof Error ? e.message : "the handler failed" });
-const done = (value: unknown): UiReply => ({ ok: true, applied: true, ...(value === undefined ? {} : { value }) });
+/** A read answers with what it read; only a write says it was applied. */
+const done = (id: UiActionId, value: unknown): UiReply => ({
+  ok: true,
+  ...(isReadAction(id) ? {} : { applied: true }),
+  ...(value === undefined ? {} : { value }),
+});
 
 /**
  * The answer to POST /control/result for one command: what this window did.
- * `applied` means the handler ran without throwing; a seam with nothing
- * listening is a no-op by design (see above), so it cannot say more than that.
- * A handler that answers later (a pane the server holds) is `controlReplyLater`'s.
+ * `applied` is on writes only, and means the handler ran without throwing; a
+ * read answers what it read and has nothing to apply. A seam with nothing
+ * listening is a no-op by design (see above), so `applied` cannot say more than
+ * that. A handler that answers later (a pane the server holds) is
+ * `controlReplyLater`'s.
  */
 export function controlReply(cmd: ControlCmd, ctx: UiCtx): UiReply {
   try {
     const r = execControl(cmd, ctx);
     if (!r) return { ok: false, applied: false, error: "this window does not know that door" };
     if (isThenable(r.value)) return { ok: false, applied: false, error: "that door answers later" };
-    return done(r.value);
+    return done(r.id, r.value);
   } catch (e) {
     return fail(e);
   }
@@ -244,7 +254,7 @@ export async function controlReplyLater(cmd: ControlCmd, ctx: UiCtx, waitMs: num
       late,
       new Promise<never>((_, no) => { timer = setTimeout(() => no(new Error("the app's own server did not answer for that pane in time")), waitMs); }),
     ]);
-    return done(value);
+    return done(r.id, value);
   } catch (e) {
     return fail(e);
   } finally {

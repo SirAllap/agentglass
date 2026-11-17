@@ -18,7 +18,7 @@ import { ContextMenu } from "./ContextMenu.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import {
   ArrowIcon, BoltIcon, BranchIcon, CaretIcon, CommentIcon, CopyIcon, CrossIcon, EditIcon, ExpandIcon, EyeOffIcon, HandIcon, LinkIcon,
-  ListIcon, MergeIcon, PinIcon, PullRequestIcon, RefreshIcon, SparkleIcon, TagIcon, TerminalIcon, UserIcon, WarningIcon,
+  ListIcon, LockIcon, MergeIcon, PinIcon, PullRequestIcon, RefreshIcon, SparkleIcon, TagIcon, TerminalIcon, UserIcon, WarningIcon,
 } from "../lib/glyphIcons.tsx";
 import { BellIcon } from "./settingsNavIcons.tsx";
 import { scrollForPress, thumbFor, TRACK_INSET, type Thumb } from "../lib/scrollThumb.ts";
@@ -57,6 +57,7 @@ const glyph = (i: MenuIcon): ReactNode => {
     case "box": return <BoxIcon size={s} />;
     case "layers": return <LayersIcon size={s} />;
     case "eyeon": return <EyeIcon size={s} />;
+    case "lock": return <LockIcon size={s} />;
   }
 };
 

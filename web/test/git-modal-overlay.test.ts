@@ -67,7 +67,7 @@ describe("the Git view serves them while hidden", () => {
 
   it("does not poll, take focus or hold the cover for a view nobody is looking at", () => {
     expect(git).toContain('useCoverHold("git", active &&');
-    expect(git).toContain("usePoll(active && !!root && !busy, () => loadTree(root));");
+    expect(git).toContain("usePoll(active && !!root && !busy, () => loadTree(root), TREE_POLL_MS);");
     expect(git).toContain("usePoll(active && !!root && !busy, loadView, 10_000);");
     expect(git).toContain("if (active) requestAnimationFrame(() => frameRef.current?.focus());");
   });

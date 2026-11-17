@@ -1,12 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { useNow } from "./visibleInterval.ts";
 
 /** A clock that ticks every second — returns elapsed ms since `start`. */
 export function useTicker(start: number): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
+  const now = useNow(true, 1000);
   return Math.max(0, now - start);
 }
 

@@ -201,3 +201,11 @@ export function runsOf(rows: ReturnType<typeof mergeActivity>): ActivityRun[] {
   return out;
 }
 
+
+/**
+ * A day heading's section id. The day is display text ("3 days ago", "12 Nov"); an id with spaces made
+ * Section's aria-labelledby a list of three ids that do not exist, so the heading had no accessible name.
+ */
+export function dayId(day: string): string {
+  return `day-${day.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}`;
+}

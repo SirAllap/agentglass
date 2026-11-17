@@ -2,7 +2,7 @@
  * How a diff opens, before anybody touches the toggles.
  *
  * Three panels show diffs — file changes, source control, pull requests — and
- * all three opened side-by-side with no wrapping, hardcoded, in three separate
+ * all three opened side-by-side with no wrapping (now Unified by default; Split is opt-in), hardcoded, in three separate
  * `useState` calls. That is a defensible default and it is not everyone's: a
  * 13" screen has no room for two columns, and long prose lines in a markdown
  * diff are unreadable without wrapping.
@@ -27,8 +27,8 @@ const write = (k: string, on: boolean, dflt: boolean) => {
   catch { /* private mode */ }
 };
 
-/** Side by side, as it has always been. */
-export const DEFAULT_SPLIT = true;
+/** One column: Split needs room two columns of code do not have in a side panel, so it is opt-in. */
+export const DEFAULT_SPLIT = false;
 /** Off, as it has always been: a wrapped diff loses the column alignment that
  *  makes a change scannable, so it is worth asking for rather than assuming. */
 export const DEFAULT_WRAP = false;
@@ -49,3 +49,16 @@ export function setDiffNoWhitespace(on: boolean): void { write(NOWS_KEY, on, DEF
  *  Same key the diff views persist, so Settings and a diff toolbar are one store. */
 export const diffThemePref = (): string => read(THEME_KEY) || "auto";
 export const setDiffThemePref = (v: string): void => { try { localStorage.setItem(THEME_KEY, v); } catch { /* private mode */ } };
+
+/** The Diff page's own list choices, stored under the keys DiffPage reads at mount (agentglass.diff.v3.*). */
+const GROUP_KEY = "agentglass.diff.v3.groupBy";
+const IGNORED_KEY = "agentglass.diff.v3.showIgnored";
+const OUTSIDE_KEY = "agentglass.diff.v3.showOutside";
+export type DiffGroupBy = "worktree" | "time" | "folder";
+export const DEFAULT_GROUP_BY: DiffGroupBy = "worktree";
+export const diffGroupBy = (): DiffGroupBy => { const r = read(GROUP_KEY); return r === "time" || r === "folder" ? r : DEFAULT_GROUP_BY; };
+export const setDiffGroupBy = (v: DiffGroupBy): void => { try { localStorage.setItem(GROUP_KEY, v); } catch { /* private mode */ } };
+export const diffShowIgnored = (): boolean => read(IGNORED_KEY) === "1";
+export const setDiffShowIgnored = (on: boolean): void => { try { localStorage.setItem(IGNORED_KEY, on ? "1" : "0"); } catch { /* private mode */ } };
+export const diffShowOutside = (): boolean => read(OUTSIDE_KEY) === "1";
+export const setDiffShowOutside = (on: boolean): void => { try { localStorage.setItem(OUTSIDE_KEY, on ? "1" : "0"); } catch { /* private mode */ } };

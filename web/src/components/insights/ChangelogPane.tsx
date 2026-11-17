@@ -45,7 +45,7 @@ export function ChangelogPane({ changelog, counts, refs, from, to, onFrom, onTo,
     <div className="flex flex-col min-h-0 h-full">
       <div className="shrink-0 flex items-center gap-2 px-4 pt-3 pb-2">
         <span className="text-[13px] font-semibold" style={{ color: "var(--text)" }}>Changelog</span>
-        <button type="button" onClick={press} disabled={!md} title={cv.tip} aria-describedby="agx-copy-live"
+        <button type="button" onClick={press} disabled={!md} data-tip={cv.tip} aria-describedby="agx-copy-live"
           className="ml-auto inline-flex items-center gap-1.5 px-2.5 rounded-lg text-[12px] font-medium disabled:opacity-40"
           style={{ ...btn, color: copy === "copied" ? "var(--success)" : copy === "failed" ? "var(--error-ink)" : "var(--text)", width: 172, whiteSpace: "nowrap", justifyContent: "center" }}>
           {copy === "copied" ? <DoneIcon size={ICON.sm} /> : copy === "failed" ? <WarningIcon size={ICON.sm} /> : <CopyIcon size={ICON.sm} />}{cv.label}

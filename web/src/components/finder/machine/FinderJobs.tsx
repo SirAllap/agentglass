@@ -10,15 +10,16 @@ import type { FsJob } from "../../../../../shared/types.ts";
 import { EDGE } from "../../workspace/Chrome.tsx";
 import { Popover } from "./Popover.tsx";
 import { StrataIcon } from "./StrataIcon.tsx";
+import { useNow } from "../../../lib/visibleInterval.ts";
 
 const BAR = "color-mix(in srgb, var(--text) 12%, transparent)";
 
 export function JobsIndicator({ jobs, onCancel, onClear, onDone }: { jobs: readonly FsJob[]; onCancel: (id: string) => void; onClear: () => void; onDone: (j: FsJob) => void }) {
-  const [now, setNow] = useState(() => Date.now());
   const [open, setOpen] = useState<DOMRect | null>(null);
   const [more, setMore] = useState<string | null>(null);
   const seen = useRef(new Set<string>());
   const running = jobs.filter((j) => j.state === "running").length;
+  const now = useNow(running > 0, 1000);
   // A job that was already over when the finder opened is history, not news: only one seen running is reported.
   useEffect(() => {
     for (const j of jobs) {
@@ -26,14 +27,13 @@ export function JobsIndicator({ jobs, onCancel, onClear, onDone }: { jobs: reado
       else if (seen.current.has(`run:${j.id}`) && !seen.current.has(j.id)) { seen.current.add(j.id); onDone(j); }
     }
   }, [jobs, onDone]);
-  useEffect(() => { if (!running) return; const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, [running]);
   const label = jobsLabel(jobs);
   if (!label) return null;
   const finished = jobs.length - running;
   return (
     <>
       <button type="button" className="agx-btn rounded-md px-2 inline-flex items-center gap-1.5 shrink-0" style={{ minHeight: HIT - 6, color: "var(--text2)" }}
-        title="Show background jobs" aria-haspopup="dialog" aria-expanded={!!open} onClick={(e) => setOpen(open ? null : e.currentTarget.getBoundingClientRect())}>
+        data-tip="Show background jobs" aria-haspopup="dialog" aria-expanded={!!open} onClick={(e) => setOpen(open ? null : e.currentTarget.getBoundingClientRect())}>
         {label}
       </button>
       {open && (

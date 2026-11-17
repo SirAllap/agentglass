@@ -18,7 +18,7 @@
  * the Portal appends its container in its own effect, after this input's commit,
  * so the focus lands on a detached node. A frame later it is in the document.
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Portal } from "../Portal.tsx";
 import { Avatar } from "../Avatar.tsx";
 import { useCloseWithOwner } from "../../lib/layerOwner.ts";
@@ -26,6 +26,11 @@ import { ICON } from "../../lib/iconSize.ts";
 import { CrossIcon, DoneIcon, SearchIcon, UserIcon, WarningIcon } from "../../lib/glyphIcons.tsx";
 import { dropLast, stepRow, type AskMode, type AskRow, type AskView } from "../../lib/prAskWho.ts";
 import { Button, EDGE, INPUT, INPUT_STYLE, LINE, Segmented } from "./Chrome.tsx";
+import { PersonLine } from "../PersonLine.tsx";
+import { dedupePeople } from "../../lib/personRow.ts";
+import { placeInBox, type PickerPlacement } from "../../lib/pickerBox.ts";
+import { naturalHeight } from "../../lib/menuPlacement.ts";
+import { LAYER } from "../../lib/layers.ts";
 import type { ReviewerState } from "../../lib/prReviewers.ts";
 
 export type PickerLoad = "ready" | "loading" | "error";
@@ -54,9 +59,13 @@ function Face({ row, size = 22 }: { row: Pick<AskRow, "kind" | "id">; size?: num
 /** The dialog's own cap. It was 640, under the 857px a hand-over takes with the card half and its "Link …" box open; the viewport still caps it. */
 const PP_MAX_H = 880;
 
+/** Without a panel to sit in (a hand-over from a card's menu), the window is the box. */
+const viewportBox = () =>
+  typeof window === "undefined" ? { left: 0, top: 0, right: 0, bottom: 0 } : { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight };
+
 export function PeoplePicker({
-  title, hint, mode, onMode, view, query, onQuery, load, onRetry, repo, locked, dismissible = true,
-  onToggle, onRemoveChip, onPopChip, onRerequest, onRemoveHeld, onDone, onClose, anchor, children, footer,
+  title, hint, mode, onMode, view, query, onQuery, load, onRetry, repo, locked, dismissible = true, trigger,
+  onToggle, onRemoveChip, onPopChip, onRerequest, onRemoveHeld, onDone, onClose, anchor, panelBox, children, footer,
 }: {
   title: string;
   /** One line under the title (the hand-over sentence, or why the author is not offered). */
@@ -75,6 +84,8 @@ export function PeoplePicker({
   locked?: boolean;
   /** False while a request is in flight: Escape and a click outside leave it be. */
   dismissible?: boolean;
+  /** The button that opens it: a press there is the button's own toggle, not a press outside. */
+  trigger?: RefObject<Element | null>;
   onToggle: (row: AskRow) => void;
   onRemoveChip: (id: string) => void;
   /** Backspace in an empty box. */
@@ -85,6 +96,8 @@ export function PeoplePicker({
   onDone: () => void;
   onClose: () => void;
   anchor: DOMRect;
+  /** The box the picker must stay inside (the pull request's body); the window when there is none. */
+  panelBox?: { left: number; top: number; right: number; bottom: number } | null;
   /** The card half, under the list and a hairline. */
   children?: ReactNode;
   /** The summary and the buttons. */
@@ -100,7 +113,20 @@ export function PeoplePicker({
   const canClose = useRef(dismissible); canClose.current = dismissible;
   useCloseWithOwner(onClose, { from: box });
 
-  const rows = view.rows;
+  /* Placed in the box it was opened from (the pull request's body, not the
+     window: the pencil's column is 248px wide and the panel's edge cut it),
+     anchored to the pencil, and measured once it is on screen. */
+  const [place, setPlace] = useState<PickerPlacement>(() => placeInBox(anchor, { width: W, height: 320 }, panelBox ?? viewportBox()));
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    setPlace(placeInBox(anchor, { width: W, height: naturalHeight(el) }, panelBox ?? viewportBox()));
+  }, [anchor, panelBox]);
+
+  const rows = useMemo(
+    () => dedupePeople(view.rows, (r) => (r.kind === "person" && r.login ? r.login.toLowerCase() : r.id)),
+    [view.rows],
+  );
   /* A typed box makes the first row that can be chosen current, so Enter picks the top match;
      an empty box starts with none. */
   useEffect(() => { setCur(query.trim() ? stepRow(rows, -1, 1) : -1); }, [query]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -117,12 +143,15 @@ export function PeoplePicker({
     const away = (e: MouseEvent) => {
       const t = e.target as Element | null;
       if (box.current?.contains(t as Node)) return;
+      if (trigger?.current?.contains(t as Node)) return;
       /* A menu opened FROM this picker (the card's status list) is not outside it. */
       if (t?.closest?.("[data-menu-layer]")) return;
       if (canClose.current) closeRef.current();
     };
     const key = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      /* The card half's own person box closes its list on Escape first: the same key must not take the dialog with it. */
+      if ((e.target as Element | null)?.closest?.("[data-card-people]")) return;
       e.preventDefault(); e.stopPropagation();
       if (canClose.current) closeRef.current();
     };
@@ -163,9 +192,10 @@ export function PeoplePicker({
     }
   };
 
-  const left = Math.round(Math.max(8, Math.min(anchor.right - W, window.innerWidth - W - 8)));
-  const top = Math.round(Math.min(anchor.bottom + 6, window.innerHeight - 140));
+  const left = place.left;
+  const top = place.top;
   const index = useMemo(() => new Map(rows.map((r, n) => [r.id, n])), [rows]);
+  const drawn = new Set(rows.map((r) => r.id));
 
   const renderRow = (r: AskRow) => {
     const n = index.get(r.id) ?? -1;
@@ -174,10 +204,7 @@ export function PeoplePicker({
       return (
         <div key={r.id} role="group" aria-label={`${r.label}${tag ? `, ${tag.said}` : ""}`} className="flex items-center gap-2 px-2 rounded-lg" style={{ minHeight: 40 }}>
           <Face row={r} />
-          <div className="flex-1 min-w-0 grid">
-            <b className="text-[12.5px] font-medium truncate"><Marked row={r} /></b>
-            {r.sub && <small className="text-[11px] truncate" style={{ color: "var(--text3)" }}>{r.sub}</small>}
-          </div>
+          <PersonLine name={<Marked row={r} />} email={r.email} login={r.login} source={r.source} sub={r.sub} />
           {tag && <span className="text-[10.5px] font-medium px-1.5 rounded-md" style={{ color: tag.ink, background: `color-mix(in srgb, ${tag.ink} 12%, transparent)` }}>{tag.said}</span>}
           {r.canRerequest && onRerequest && <Button size="compact" disabled={locked} label={`Ask ${r.id} again`} onClick={() => onRerequest(r)}>Re-request</Button>}
           {r.canRemove && onRemoveHeld && <Button size="compact" disabled={locked} label={`Take ${r.id} off`} onClick={() => onRemoveHeld(r)}>Remove</Button>}
@@ -187,7 +214,7 @@ export function PeoplePicker({
     const on = r.picked;
     return (
       <div key={r.id} id={`pp-${n}`} data-i={n} role="option" aria-selected={on} aria-disabled={!!r.disabled || undefined}
-        title={r.disabled}
+        data-tip={r.disabled}
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => { if (!locked && !r.disabled) { onToggle(r); input.current?.focus(); } }}
         className="flex items-center gap-2 px-2 rounded-lg"
@@ -197,20 +224,18 @@ export function PeoplePicker({
           boxShadow: n === cur ? "inset 0 0 0 1.5px var(--primary)" : undefined,
         }}>
         <Face row={r} />
-        <div className="flex-1 min-w-0 grid">
-          <b className="text-[12.5px] font-medium truncate" style={{ color: "var(--text)" }}><Marked row={r} /></b>
-          {(r.disabled || r.sub) && <small className="text-[11px] truncate" style={{ color: r.disabled ? "var(--text4)" : "var(--text3)" }}>{r.disabled ?? r.sub}</small>}
-        </div>
+        <PersonLine name={<Marked row={r} />} email={r.email} login={r.login} source={r.source}
+          sub={r.disabled ?? r.sub} muted={!!r.disabled} />
         {on && <span style={{ color: "var(--primary)" }}><DoneIcon size={ICON.sm} /></span>}
       </div>
     );
   };
 
   return (
-    <Portal>
+    <Portal z={LAYER.menu}>
       <div ref={box} role="dialog" aria-label={title} className="agx-pp fixed rounded-lg flex flex-col gap-2 p-2.5"
         style={{
-          left, top, width: W, maxHeight: `min(${PP_MAX_H}px, calc(100vh - ${top + 12}px))`, overflowY: "auto", overflowX: "hidden",
+          left, top, width: place.width, maxHeight: `min(${PP_MAX_H}px, ${place.maxHeight}px)`, overflowY: "auto", overflowX: "hidden",
           border: EDGE, background: "color-mix(in srgb, var(--bg2) 98%, black)", boxShadow: "0 18px 44px -18px rgba(0,0,0,.8)",
         }}>
         <div className="flex items-center gap-2">
@@ -225,7 +250,7 @@ export function PeoplePicker({
         <div className="flex flex-wrap items-center gap-1" style={{ minHeight: 24 }} aria-label="Picked">
           {view.chips.length ? view.chips.map((c) => (
             <span key={c.id} className="inline-flex items-center gap-1 pl-1 pr-0.5 text-[11.5px] font-medium rounded-full" style={{ height: 24, background: "var(--surface-inset)", boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent)" }}>
-              {c.team ? <UserIcon size={ICON.xs} /> : <Avatar login={c.id} size={16} />}
+              {c.team ? <UserIcon size={ICON.xs} /> : <Avatar login={c.id} size={ICON.md} />}
               {c.label}
               <button type="button" aria-label={c.remove} disabled={locked} onClick={() => onRemoveChip(c.id)}
                 className="inline-flex items-center justify-center rounded-full disabled:opacity-40" style={{ width: 16, height: 16, color: "var(--text3)" }}>
@@ -267,7 +292,7 @@ export function PeoplePicker({
           ) : view.sections.map((s) => (
             <div key={s.id} role="presentation" className="grid gap-px">
               {s.title && <div className="text-[10px] font-semibold uppercase tracking-wide px-2 pt-2 pb-0.5" style={{ color: "var(--text4)" }}>{s.title}</div>}
-              {s.rows.map(renderRow)}
+              {s.rows.filter((r) => drawn.has(r.id)).map(renderRow)}
             </div>
           ))}
         </div>

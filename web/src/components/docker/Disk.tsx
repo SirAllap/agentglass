@@ -26,6 +26,7 @@ import { useEscapeClose } from "../../lib/useDismiss.ts";
 import { Button } from "../workspace/Chrome.tsx";
 import { BroomIcon, CylinderIcon, LayersIcon } from "./DockerIcons.tsx";
 import { Square } from "./Glyphs.tsx";
+import { Orphans } from "./Orphans.tsx";
 
 const TINT: Record<string, string> = { images: "var(--info)", cache: "var(--warning)", volumes: "var(--merged)", containers: "var(--success)" };
 const LABEL: Record<string, string> = { images: "Images", cache: "Build cache", volumes: "Volumes", containers: "Containers" };
@@ -50,6 +51,7 @@ export function Disk({ state, images, writeEnabled, flash }: {
   state: DiskState; images: DockerImage[]; writeEnabled: boolean; flash: (ok: boolean, msg: string) => void;
 }) {
   const { d, error, measure } = state;
+  const left = state.left ?? [];
   const [armed, setArmed] = useState<ReclaimKey | null>(null);
   /* What is running. Removing 25 images is 25 sequential `docker image rm`
      calls and can take the better part of a minute, during which the old
@@ -123,14 +125,14 @@ export function Disk({ state, images, writeEnabled, flash }: {
         </div>
         <div className="dk-stackbar" role="img" aria-label={aria}>
           {widths.map((w) => (
-            <i key={w.key} data-go={w.stripe || undefined} style={{ ...tint(SEG_TINT(w.key)), width: `${w.pct}%` }} title={w.stripe ? `${humanSize(w.bytes)} can go` : undefined} />
+            <i key={w.key} data-go={w.stripe || undefined} style={{ ...tint(SEG_TINT(w.key)), width: `${w.pct}%` }} data-tip={w.stripe ? `${humanSize(w.bytes)} can go` : undefined} />
           ))}
         </div>
         <div className="dk-legend">
           {m.legend.map((l) => (
             <div className="dk-lg" key={l.key}>
               <i style={tint(TINT[l.key]!)} />
-              <div>{LABEL[l.key]}<small>{humanSize(l.bytes)}{l.canGo ? ` · ${humanSize(l.canGo)} can go` : l.note ? ` · ${l.note}` : ""}</small></div>
+              <div>{LABEL[l.key]}<small>{humanSize(l.bytes)}{l.canGo ? ` · ${humanSize(l.canGo)} can go` : l.note ? ` · ${l.note}` : ""}{l.dockerSays > l.canGo ? ` · Docker says ${humanSize(l.dockerSays)} reclaimable` : ""}</small></div>
             </div>
           ))}
         </div>
@@ -189,6 +191,7 @@ export function Disk({ state, images, writeEnabled, flash }: {
           </div>
         </div>
       </div>
+      <Orphans left={left} readOnly={readOnly} flash={flash} onDone={() => void measure(true)} />
       {readOnly && <span className="dk-xe">This instance is read-only, so the buttons are off.</span>}
     </div>
   );

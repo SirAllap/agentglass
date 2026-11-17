@@ -16,10 +16,11 @@ import type { PrCheck, PrComment, PrReview, PrWatchRule } from "../../../shared/
 import { api } from "../lib/api.ts";
 import { ago } from "../lib/fileRecents.ts";
 import { CommentIcon, DoneIcon, SearchIcon, SparkleIcon, UndoIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { openExternal } from "../lib/externalUrl.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { placePop } from "../lib/prWatchPlace.ts";
 import {
-  bellState, checkFamilies, ciPassRule, failRuleOf, firedLabel, firedOk, fmtMs, ignoredOf, markFireSeen, presetOf, ruleLabel, runChecks,
+  bellState, checkFamilies, checksPageUrl, ciPassRule, failRuleOf, firedLabel, firedOk, fmtMs, ignoredFailures, ignoredOf, markFireSeen, onlyRequiredIgnore, presetOf, rerunCommand, ruleLabel, runChecks,
   sameRule, splitCheck, suggestSkips, toggleIgnored, useFireSeen, usePrWatchState, waitTally, watchPhase, watchesOf, type RunCheck, type RunState,
 } from "../lib/prWatchStore.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
@@ -111,6 +112,17 @@ export function PrWatchMenu({ root, repo, d, iconOnly }: {
   const tally = waitTally(checks, ignored);
   const failedNow = checks.filter((c) => c.state === "fail").length;
   const suggest = useMemo(() => suggestSkips(checks, preset?.rules.flatMap((r) => (r.type === "ci-pass" ? r.ignore ?? [] : [])) ?? []), [checks, preset]);
+  const onlyReq = useMemo(() => onlyRequiredIgnore(checks), [checks]);
+  const hidden = useMemo(() => ignoredFailures(d.checksAll, ignored), [d.checksAll, ignored]);
+  const [copied, setCopied] = useState<string | null>(null); // the command copied, so only its own row says "Copied"
+  /* Never runs gh: with a run id it copies the command for the person's own terminal, else it opens the checks page. */
+  const rerun = (cmd: string | null) => {
+    if (!cmd) return openExternal(checksPageUrl(repo, d.number));
+    const failed = () => setErr("could not copy the command");
+    if (!navigator.clipboard) return failed();
+    void navigator.clipboard.writeText(cmd).then(() => { setErr(""); setCopied(cmd); }).catch(failed);
+  };
+  useEffect(() => { if (!open) setCopied(null); }, [open]); // no timer: "Copied" stays until the popover closes
   const toSkip = suggest.filter((n) => !ignored.includes(n));
   const reqOf = (n: string) => checks.find((c) => c.name === n)?.required;
   const allNotRequired = toSkip.every((n) => reqOf(n) === false);
@@ -274,6 +286,30 @@ export function PrWatchMenu({ root, repo, d, iconOnly }: {
                 </div>
               )}
 
+              {onlyReq.some((n) => !ignored.includes(n)) && (
+                <div className="pw-sug" data-pw-preset="required">
+                  <span className="pw-st"><b>Only required checks</b><span>wait for {checks.length - onlyReq.length}, skip {onlyReq.length}</span></span>
+                  <Button size="compact" onClick={() => setIgnored([...new Set([...ignored, ...onlyReq])])}>Use</Button>
+                </div>
+              )}
+
+              {hidden.length > 0 && (
+                <div className="pw-warn" data-pw-warn role="status">
+                  {hidden.map((f) => {
+                    const cmd = rerunCommand(repo, f.url);
+                    return (
+                      <div key={f.name} className="pw-wrow" data-kind={f.kind}>
+                        <span className="pw-st"><b>{f.name}</b> failed, and it is not waited for
+                          <span>{f.kind === "flake" ? "Looks like a runner flake, not your code" : f.kind === "real" ? "It wrote a real finding. Look before you merge" : "No reason written. Look before you merge"}</span></span>
+                        {f.kind === "flake" && (
+                          <Button size="compact" onClick={() => rerun(cmd)}>{cmd && copied === cmd ? "Copied" : cmd ? "Copy re-run" : "Open checks"}</Button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
               <label className="pw-search"><SearchIcon size={ICON.sm} />
                 <input ref={search} value={q} placeholder="Find a check by name" aria-label="Find a check by name" onChange={(e) => setQ(e.target.value)} />
                 {query && <span className="pw-n">{hits.length} found</span>}
@@ -332,6 +368,22 @@ export function PrWatchMenu({ root, repo, d, iconOnly }: {
         </div>
       )}
     </div>
+  );
+}
+
+/** One of the three "Tell me when…" cards, for the board's bulk popover (PrBulkWatch.tsx): the same markup and .pw-* look as
+ *  `card` above, which can also be drawn "mixed". */
+export function WatchCard({ type, checked, hue, icon, tt, ex, now, onClick }: {
+  type: PrWatchRule["type"]; checked: boolean | "mixed"; hue: string; icon: React.ReactNode; tt: string; ex: string; now: React.ReactNode; onClick: () => void;
+}) {
+  return (
+    /* A switch has no "mixed"; a checkbox does, so the half-on card is announced as one. */
+    <button type="button" role={checked === "mixed" ? "checkbox" : "switch"} aria-checked={checked} className="pw-card" style={{ "--hue": hue } as React.CSSProperties}
+      onClick={onClick} data-pr-watch-card={type}>
+      <span className="pw-ic">{icon}</span>
+      <span className="pw-tx"><span className="pw-tt">{tt}</span><span className="pw-ex">{ex}</span><span className="pw-now"><span className="pw-lbl">Now</span>{now}</span></span>
+      <span className="pw-tick"><Tick /></span>
+    </button>
   );
 }
 

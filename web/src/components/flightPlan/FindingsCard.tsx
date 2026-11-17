@@ -60,7 +60,7 @@ function FindingRow({ f, runId, onChanged, ro }: { f: Finding; runId: string; on
       )}
       {!ro && <div className="acts" role="group" aria-label={`Resolve: ${f.title}`}>
         {ACTS.map(({ k, label, css, Icon, tip }) => (
-          <button key={k} type="button" className={`act ${css}`} aria-pressed={f.action === k} title={tip} disabled={busy} onClick={() => press(k)}><Icon size={13} />{label}</button>
+          <button key={k} type="button" className={`act ${css}`} aria-pressed={f.action === k} data-tip={tip} disabled={busy} onClick={() => press(k)}><Icon size={13} />{label}</button>
         ))}
       </div>}
       {noting && (

@@ -187,7 +187,7 @@ describe("the screen, against its source", () => {
     expect(src).toMatch(/useEffect\(\(\) => \{ void load\(root, job\.id, hints\); \}, \[root, job\.id\]\)/);
   });
   test("the panel is mounted for every expanded failed check, with or without a job (a passing row opened by Log shows only the log): it always says something", () => {
-    expect(prPanel).toMatch(/\{expanded && bad && <CheckFailuresPanel root=\{root\} check=\{k\} job=\{job\}\s+sameRun=\{failedInRun\(k, d\.checksAll\)/);
+    expect(prPanel).toMatch(/\{expanded && bad && <CheckFailuresPanel root=\{root\} check=\{k\} job=\{job\}[^>]*?\s+sameRun=\{failedInRun\(k, d\.checksAll\)/);
     expect(src).toContain("This check does not say which job ran it");
   });
   test("an aggregator says what it is and names the failed jobs; the raw tail stays one click away", () => {

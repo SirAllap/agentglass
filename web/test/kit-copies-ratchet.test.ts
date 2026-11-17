@@ -26,7 +26,7 @@ import { join } from "node:path";
 
 const SRC = new URL("../src", import.meta.url).pathname;
 const NAMES = ["Btn", "IconBtn", "Chip", "Pill", "Tag", "Field", "Section", "Card", "Row", "ListRow"] as const;
-const KIT_FILES = ["components/workspace/Chrome.tsx", "components/SettingsKit.tsx"];
+const KIT_FILES = ["components/workspace/Chrome.tsx", "components/SettingsKit.tsx", "components/settings/shell/Section.tsx"];
 
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
@@ -44,7 +44,7 @@ function stripComments(src: string): string {
 
 /** How many times `src` defines or uses a local `name`; 0 when the name is the kit's. */
 export function copies(src: string, name: string): number {
-  const fromKit = new RegExp(`import\\s[^;]*\\b${name}\\b[^;]*from\\s+"[^"]*(?:workspace/Chrome|/Chrome|SettingsKit)(?:\\.tsx)?"`);
+  const fromKit = new RegExp(`import\\s[^;]*\\b${name}\\b[^;]*from\\s+"[^"]*(?:workspace/Chrome|/Chrome|SettingsKit|settings/shell/Section|shell/Section)(?:\\.tsx)?"`);
   if (fromKit.test(src)) return 0;
   const defs = src.match(new RegExp(`\\b(?:function|const) ${name}\\b`, "g"))?.length ?? 0;
   const uses = src.match(new RegExp(`<${name}(?=[\\s/>])`, "g"))?.length ?? 0;

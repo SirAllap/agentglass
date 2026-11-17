@@ -21,7 +21,10 @@ function body(text: string, header: string): string {
   const i = text.indexOf(header);
   expect(i).toBeGreaterThan(-1);
   let depth = 0;
-  for (let j = text.indexOf(") {\n", i) + 2; j < text.length; j++) {
+  // The body opens at the first brace that ends a line: a signature like
+  // `(g, where?: "bench" | "view") => {` has no ") {" of its own, and the
+  // first one after it belongs to an inner `if`.
+  for (let j = text.indexOf("{\n", i); j < text.length; j++) {
     if (text[j] === "{") depth++;
     else if (text[j] === "}" && --depth === 0) return text.slice(i, j + 1);
   }
@@ -77,9 +80,12 @@ describe("the router", () => {
 
 describe("the toast card", () => {
   it("has a real button for its destination, and acting takes the card down", () => {
-    expect(toasts).toContain("GO_LABEL[n.goto.kind]");
-    const go = toasts.slice(toasts.indexOf("const go ="), toasts.indexOf("const go =") + 120);
-    expect(go).toContain("onGone(); onGoto(n.goto!)");
+    // The label names where the press lands (noteCard.ts's cardAction).
+    expect(toasts).toContain("cardAction(n, {");
+    // Every press, the split button's menu included, goes through goTo, and goTo drops the card first.
+    expect(toasts).toContain("const goTo = (where?: Where) => { onGone(); onGoto(n.goto!, where); };");
+    const go = toasts.slice(toasts.indexOf("const go ="), toasts.indexOf("const go =") + 160);
+    expect(go).toContain("() => goTo(");
   });
 });
 

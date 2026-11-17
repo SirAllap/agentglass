@@ -3,6 +3,8 @@
 @tailwind utilities;
 
 :root {
+  /* Room a footer bar leaves for the floating bench button: its 38px (FAB_SIZE) plus a 16px margin. */
+  --fab-reserve: 54px;
   /*
    * The face for somebody's WRITING, as opposed to the machine's.
    *
@@ -26,6 +28,10 @@
   --border: #30363d;
   --border2: #444c56;
   --primary: #58a6ff;
+  /* The Jira board's accent follows the theme's own accent, like the PR board (docs/design-system.md). */
+  --jira-accent: var(--primary);
+  --jira-accent-hover: var(--primary-hover);
+  --jira-accent-on: var(--on-primary);
   --on-primary: #0d1117;
   --primary-hover: #79c0ff;
   --success: #3fb950;
@@ -286,31 +292,13 @@
    * on a 2560px window. It fills the page now: no page has a width of its own,
    * so the rail is beside the cards wherever the window is wide.
    */
+  /* One column, always: a settings page is its own centred group (SettingsPage), so the column no longer
+     splits into 2-3 CSS columns and no script pins cards to rows. That pinning measured each card, then
+     re-placed them for 800 ms, which is why a page used to grow over ~1.5 s after it opened. */
   .agx-settings-col {
     columns: 1;
-    column-gap: 18px;
     container-type: inline-size;
     container-name: agx-settings;
-  }
-  @media (min-width: 1180px) { .agx-settings-col { columns: 2; } }
-  @media (min-width: 2300px) { .agx-settings-col { columns: 3; } }
-  /* Stable columns (useStableFlow): a grid of 1px rows, every card pinned to its
-     own column and row by script, so a card that grows moves nothing but what
-     sits under it. */
-  .agx-settings-col { --agx-cols: 1; --agx-gap: 18px; }
-  @media (min-width: 1180px) { .agx-settings-col { --agx-cols: 2; } }
-  @media (min-width: 2300px) { .agx-settings-col { --agx-cols: 3; } }
-  /* The gap under a card is part of its span, so the last one would leave 18px
-     of nothing under the page: the column takes it back. */
-  .agx-settings-col[data-stable] > .agx-scard { margin-bottom: 0; }
-  .agx-settings-col[data-stable] { margin-bottom: calc(-1 * var(--agx-gap)); }
-  .agx-settings-col[data-stable] {
-    columns: auto;
-    display: grid;
-    grid-template-columns: repeat(var(--agx-cols), minmax(0, 1fr));
-    grid-auto-rows: 1px;
-    column-gap: var(--agx-gap);
-    align-items: start;
   }
 
 
@@ -814,6 +802,9 @@ button.agx-badge:hover { background: color-mix(in srgb, var(--text) 8%, var(--su
   /* horizontal scroll without a visible scrollbar (header controls zone) */
   .agw-noscrollbar { scrollbar-width: none; -ms-overflow-style: none; }
   .agw-noscrollbar::-webkit-scrollbar { display: none; }
+  /* A short window scrolls the rail; stop on whole icons, never half of one at the edge. */
+  .agw-rail-snap { scroll-snap-type: y mandatory; scroll-padding: 8px; }
+  .agw-rail-snap [data-view] { scroll-snap-align: start; }
   .shimmer {
     background: linear-gradient(
       90deg,
@@ -959,6 +950,15 @@ button.agx-badge:hover { background: color-mix(in srgb, var(--text) 8%, var(--su
 }
 :root[data-idle="1"] [style*="agx-phone-pulse"],
 :root[data-idle="1"] [style*="agx-attention"] {
+  animation-play-state: paused !important;
+}
+/* Backstop for every endless loop in the app, the ones named above and any added
+   later: a window nobody is looking at draws no frames. The launch cover is the
+   one exception, because it already steps on its own 1 s grid and must keep going
+   until the app is ready. `test/idle-animations.test.ts` pins this rule. */
+:root[data-idle="1"] :not(#ag-cover, #ag-cover *),
+:root[data-idle="1"] :not(#ag-cover, #ag-cover *)::before,
+:root[data-idle="1"] :not(#ag-cover, #ag-cover *)::after {
   animation-play-state: paused !important;
 }
 
@@ -1918,6 +1918,21 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
    content clipped. A page that still wraps its cards leaves the flow until it
    hands them to the column directly. */
 .agx-settings-col > :not(.agx-scard) { column-span: all; }
+/* The placeholder a Settings page shows when it takes longer than the hold to read (settings/shell/pageLoad.tsx):
+   heading bars and row blocks in the page's own surfaces. No spinner; a slow pulse, and none under reduced motion. */
+.agx-page-skel { background: var(--surface-page); }
+.agx-page-skel .agx-skel-bar,
+.agx-page-skel .agx-skel-row { display: block; border-radius: 6px; background: var(--surface-inset); }
+.agx-page-skel .agx-skel-card {
+  display: flex; flex-direction: column; gap: 1px; overflow: hidden;
+  border: 1px solid var(--surface-line); border-radius: 12px; background: var(--surface-line);
+}
+.agx-page-skel .agx-skel-row { height: 52px; border-radius: 0; background: var(--surface-card); }
+@media (prefers-reduced-motion: no-preference) {
+  .agx-page-skel .agx-skel-bar, .agx-page-skel .agx-skel-row { animation: agx-skel-pulse 1.6s steps(2) infinite; }
+  :root[data-idle="1"] .agx-page-skel .agx-skel-bar, :root[data-idle="1"] .agx-page-skel .agx-skel-row { animation-play-state: paused; }
+}
+@keyframes agx-skel-pulse { 50% { opacity: 0.6; } }
 /* A card that needs the person to decide: amber along its top edge, and a
    warm edge all round. The danger zone is the opposite end: a red-tinted card
    of its own, with outline buttons only. */
@@ -2036,6 +2051,12 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 .agx-savebar-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--text4); }
 .agx-savebar[data-dirty] .agx-savebar-state { color: var(--text2); }
 .agx-savebar[data-dirty] .agx-savebar-state i { background: var(--warning); }
+/* The shortcuts as one table: the action, its chord, its single key. */
+.agx-keytable { width: 100%; border-collapse: collapse; font-size: calc(12.5px * var(--agx-fs, 1)); }
+.agx-keytable th, .agx-keytable td { text-align: left; padding: 8px 18px; border-top: 1px solid var(--surface-line); vertical-align: middle; }
+.agx-keytable thead th { border-top: 0; font-size: calc(10px * var(--agx-fs, 1)); letter-spacing: 0.08em; text-transform: uppercase; color: var(--text3); font-weight: 600; }
+.agx-keytable tbody th { font-weight: 500; color: var(--text); }
+.agx-keytable small { display: block; font-weight: 400; font-size: calc(11px * var(--agx-fs, 1)); letter-spacing: 0; text-transform: none; color: var(--text3); }
 /* A shortcut as keycaps: one cap per key, joined by a plus. The group is the button that starts recording. */
 .agx-keycaps { display: inline-flex; align-items: center; gap: 4px; background: none; border: 0; padding: 0; cursor: pointer; font: inherit; }
 .agx-keycaps kbd {
@@ -2150,6 +2171,7 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
   --g-library: #c4982f;
   --g-connections: #5c8fc4;
   --g-system: var(--text4);
+  --g-advanced: var(--text4);
 }
 @media (min-width: 2200px) { .agx-settings-shell { --nav-w: 320px; } }
 @media (max-width: 1100px) { .agx-settings-shell { --nav-w: 68px; } }
@@ -2162,27 +2184,18 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
  * The frame's sticky stack is declared here, once, and every offset below is
  * derived from it: the index band pins at the region's top edge, the page's
  * scope bar pins under the band, and a scrolled-to card lands under both. Each
- * height is measured and published by the element that owns it (SettingsToc
- * writes `--agx-stick-toc`, ScopeBar writes `--orch-stick`); stacking either
- * one by hand is how the band ended up pinned inside the bar. The page header
- * is outside this region, so its height is not a term.
- *
- * The air the band leaves under itself is the band's, painted in its own fill
- * (see `.agx-toc::after`): an unpainted slot between two opaque rows shows the
- * cards sliding through it, which is the same defect as a row painted over a
- * row. It stays in `--agx-pin-top` rather than in the band's height, so the
- * measured height stays the height of the chips. */
+ * height is measured and published by the element that owns it (ScopeBar
+ * writes `--orch-stick`); stacking it by hand is how a band ended up pinned
+ * inside the bar. The page header is outside this region, so its height is
+ * not a term. */
 .agx-settings-scroll {
   --agx-pin-gap: 12px;
-  --agx-band: var(--agx-stick-toc, 0px);
+  --agx-band: 0px;
   --agx-pin-top: calc(var(--agx-band) + var(--agx-pin-gap));
   --agx-pin-stack: calc(var(--agx-pin-top) + var(--orch-stick, 0px));
   flex: 1; min-height: 0; overflow-y: auto; overflow-x: auto; scrollbar-gutter: stable;
   scroll-padding-top: calc(var(--agx-pin-stack) + var(--agx-pin-gap));
 }
-/* A search can name a page and match none of its rows: the bar draws, the index
-   does not, and the air under the band has nothing to paint it. */
-.agx-settings-scroll:not(:has(.agx-toc)) { --agx-pin-top: 0px; }
 /* From 1760px the index is a rail in the second column, so nothing pins above
    the bar in its own column. */
 @media (min-width: 1760px) {
@@ -2221,7 +2234,10 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
   background: color-mix(in srgb, var(--hue) 17%, transparent);
   color: color-mix(in srgb, var(--hue) 78%, var(--text));
 }
-.agx-sn-gn { flex: 1; font-weight: 700; font-size: calc(11px * var(--agx-fs, 1)); letter-spacing: 0.09em; text-transform: uppercase; color: var(--text2); }
+.agx-sn-gn { flex: 1; font-weight: 600; font-size: calc(13px * var(--agx-fs, 1)); color: var(--text2); }
+/* A thin-line label that heads a run of pages inside a group: a rule, then the words in the sentence case the group names use. */
+.agx-sn-sub { display: flex; align-items: center; gap: 8px; margin: 8px 0 2px; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); }
+.agx-sn-sub::after { content: ""; flex: 1; height: 1px; background: var(--surface-line); }
 .agx-sn-caret { display: flex; color: var(--text4); transition: transform 150ms; }
 .agx-sn-grp[data-shut] .agx-sn-caret { transform: rotate(-90deg); }
 .agx-sn-roll { display: none; gap: 4px; }
@@ -2251,7 +2267,7 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
 }
 .agx-sn-cnt[data-tone="info"] { background: color-mix(in srgb, var(--info) 16%, transparent); color: var(--info-ink); }
 .agx-sn-pin {
-  display: flex; align-items: center; gap: 8px; width: 100%; margin: 2px 0 6px; padding: 8px 10px; border-radius: 8px;
+  display: flex; align-items: center; gap: 8px; width: calc(100% - 20px); margin: 6px 10px 8px; padding: 8px 10px; border-radius: 8px;
   font-size: calc(13px * var(--agx-fs, 1)); text-align: left; color: var(--text2); background: none; border: 1px solid var(--surface-line); cursor: pointer;
 }
 .agx-sn-pin[data-on] { background: color-mix(in srgb, var(--primary) 15%, transparent); color: var(--text); border-color: transparent; }
@@ -2262,7 +2278,7 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
   display: flex; gap: 12px; padding: 8px 14px 10px; border-top: 1px solid var(--surface-line); font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3);
 }
 .agx-sn-legend span { display: flex; align-items: center; gap: 4px; }
-.agx-sn-it:focus-visible, .agx-sn-gh:focus-visible, .agx-sn-pin:focus-visible, .agx-toc a:focus-visible, .agx-sp-seg button:focus-visible {
+.agx-sn-it:focus-visible, .agx-sn-gh:focus-visible, .agx-sn-pin:focus-visible, .agx-sp-seg button:focus-visible {
   outline: 2px solid var(--primary); outline-offset: 2px;
 }
 
@@ -2321,7 +2337,8 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
 .agx-ph-title { margin: 0; font-size: calc(23.1px * var(--agx-fs, 1)); font-weight: 700; letter-spacing: -0.01em; color: var(--text); }
 .agx-ph-chips { display: flex; gap: 6px; align-items: center; }
 .agx-ph-sp { flex: 1; }
-.agx-ph-sum { margin: 4px 0 0; color: var(--text3); font-size: calc(14px * var(--agx-fs, 1)); max-width: 90ch; }
+/* No measure cap: the header spans the page, and a 90ch cap wrapped a one-sentence summary onto two lines with half the header empty beside it. */
+.agx-ph-sum { margin: 4px 0 0; color: var(--text3); font-size: calc(14px * var(--agx-fs, 1)); }
 
 /* The one statement a page makes about what its values apply to. Not a
    selector: these values are machine-wide, and a pill that looked pickable
@@ -2415,48 +2432,12 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
 
 /* the page under the header: its cards, and the index beside or above them */
 .agx-settings-page { --agx-settings-pad-top: 22px; --agx-page-gap: 18px; padding: var(--agx-settings-pad-top) 40px 28px; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--agx-page-gap); align-items: start; }
-/* `top: 0` and not `--agx-pin-top`: the band is the first pinned row, and a top
-   greater than its resting offset is what pushed it down into the bar.
- *
- * The band paints the air `--agx-pin-top` leaves under it, so the slot between
-   the two pinned rows is the band's own box rather than a hole content scrolls
-   through. The pixel covers the fraction `--agx-stick-toc` loses when it is
-   rounded to a whole number; the band is above the bar's pinned block and
-   paints over it, which is why the bar pins under the band's air and not the
-   reverse. */
-.agx-toc { display: flex; flex-wrap: wrap; gap: 6px; position: sticky; top: 0; background: var(--surface-page); }
-.agx-toc::after {
-  content: ""; position: absolute; left: 0; right: 0; top: 100%;
-  height: calc(var(--agx-pin-gap, 12px) + 1px); background: var(--surface-page);
-}
-.agx-toc-lab { display: none; font-size: calc(11px * var(--agx-fs, 1)); letter-spacing: 0.09em; text-transform: uppercase; color: var(--text3); font-weight: 700; margin: 0 0 8px; }
-.agx-toc a {
-  display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text2);
-  border-radius: 99px; padding: 4px 10px; font-size: calc(12.5px * var(--agx-fs, 1)); text-decoration: none; cursor: pointer;
-}
-.agx-toc a:hover { border-color: var(--text2); }
-.agx-toc a[aria-current] { background: var(--text); color: var(--bg); border-color: var(--text); }
-.agx-toc-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--success); }
-.agx-toc-dot[data-tone="warn"] { background: var(--warning); }
-.agx-toc-dot[data-tone="err"] { background: var(--error); }
 @media (min-width: 1760px) {
   /* The content track is what is left and the rail sits against it, so on a
      2560px window it is beside the cards, not at the far edge of a capped
      column. No page has a width of its own to place. */
-  .agx-settings-page { grid-template-columns: minmax(0, 1fr) 224px; justify-content: start; }
-  .agx-settings-page:not(:has(.agx-toc)) { grid-template-columns: minmax(0, 1fr); }
-  /* Same row as the content, not a span of twenty: every implicit row carried the
-     page's 18px gap, so a page that fitted the window still scrolled ~340px. */
-  .agx-settings-page > .agx-toc {
-    grid-column: 2; grid-row: 1; flex-direction: column; flex-wrap: nowrap; gap: 0; top: calc(var(--agx-pin-top, 0px) + 16px);
-    border-left: 1px solid var(--surface-line); padding-left: 16px; background: none;
-  }
-  /* A rail beside the cards pins nothing above the bar, so it leaves no air to paint. */
-  .agx-settings-page > .agx-toc::after { content: none; }
-  .agx-toc-lab { display: block; }
-  .agx-toc a { border: 0; border-radius: 8px; background: none; padding: 6px 10px; margin-left: -10px; }
-  .agx-toc a:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
-  .agx-toc a[aria-current] { background: none; color: var(--text); font-weight: 700; box-shadow: inset 3px 0 var(--hue); }
+  /* No second track: it was the old index's 224 px column, and with the index gone it stayed as
+     empty space on the right, so every centred page sat 121 px left of the middle. */
   .agx-settings-page > .agx-settings-content { grid-column: 1; grid-row: 1; }
   /* The Agents page handed its cards to wrappers of its own (the hero, the pair
      of cards) and carried a width to match them; from here the wrappers give
@@ -2468,12 +2449,11 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
   .agx-agents-hero > .agx-split-side > .agx-scard { height: auto; }
   /* The gap is the grid's, not the card's: the rule for a card the column owns
      directly cannot reach one whose wrapper has no box. */
-  .agx-settings-col[data-stable] .agx-agents-page .agx-scard { margin-bottom: 0; }
 }
 .agx-settings-content { min-width: 0; }
 
 @media (max-width: 1100px) {
-  .agx-sn-back span, .agx-sp-box kbd, .agx-sn-gn, .agx-sn-caret, .agx-sn-lbl, .agx-sn-meta, .agx-sn-legend, .agx-sn-pin { display: none; }
+  .agx-sn-sub, .agx-sn-back span, .agx-sp-box kbd, .agx-sn-gn, .agx-sn-caret, .agx-sn-lbl, .agx-sn-meta, .agx-sn-legend, .agx-sn-pin { display: none; }
   .agx-sn-back { justify-content: center; padding-inline: 0; min-height: 36px; }
   .agx-sn-backwrap { padding: 8px 8px 8px; }
   /* The box is an icon in the rail; its input stays in the tree (a hidden one cannot take focus) and
@@ -2485,8 +2465,12 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
     background: var(--bg); border: 1px solid var(--primary); border-radius: 9px;
   }
   .agx-sn-top { padding: 0 8px 10px; }
-  .agx-sn-scroll { padding: 4px 6px; }
+  .agx-sn-scroll { padding: 4px 6px; scroll-snap-type: y mandatory; scroll-padding: 4px; }
+  .agx-sn-scroll .agx-sn-it, .agx-sn-scroll .agx-sn-gh { scroll-snap-align: start; }
   .agx-sn-grp[data-shut] .agx-sn-items { display: block; }
+  /* Every slot of the scroller is one height, so a visible height of 8px + n slots (SettingsNav trims it) shows n whole icons. */
+  .agx-sn-scroll .agx-sn-grp { margin: 0; }
+  .agx-sn-scroll .agx-sn-gh, .agx-sn-scroll .agx-sn-it { box-sizing: border-box; height: 36px; padding-block: 0; }
   .agx-sn-gh { justify-content: center; padding: 10px 0 4px; pointer-events: none; }
   .agx-sn-roll { display: none !important; }
   .agx-sn-items { margin: 0; border: 0; padding: 0; }
@@ -2502,7 +2486,6 @@ details[open] > .agx-scard-head.agx-fold { padding-bottom: 4px; }
    then scrolls with the page, and the header keeps only what names it. */
 @media (max-height: 440px) {
   .agx-settings-scroll { --agx-band: 0px; --agx-pin-top: 0px; --agx-pin-stack: var(--orch-stick, 0px); }
-  .agx-settings-page > .agx-toc { position: static; }
   .agx-ph-sum { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .agx-sn-it, .agx-sn-caret { transition: none; } }
@@ -3121,9 +3104,15 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
   align-self: center;
 }
 
-/* The usage popover's day chart while its answer is on the way: seven quiet
-   slots breathing in a stagger, opacity only. */
-.agx-daybar-pulse { animation: agx-breathe 1.4s ease-in-out infinite; }
+/* The usage placeholders (top bar bank cells, the popover's day chart) while the
+   answer is on the way: quiet slots breathing, opacity only. STEPPED and on the
+   shared clock (lib/sharedPhase.ts, set inline as the delay): a smooth ease
+   repaints every frame, and with no usage answer these sit in the top bar for as
+   long as the window is open, so the idle shell drew 60 frames a second. Two
+   steps a cycle is ~1.4 draws/s however many slots there are. Paused when idle. */
+.agx-daybar-pulse { animation: agx-daybar-step 1.4s steps(1, end) infinite; }
+@keyframes agx-daybar-step { 0% { opacity: 0.3; } 50% { opacity: 0.85; } }
+:root[data-idle="1"] .agx-daybar-pulse, :root[data-ws="1"] .agx-daybar-pulse { animation-play-state: paused !important; }
 @media (prefers-reduced-motion: reduce) {
   .agx-daybar-pulse { animation: none; opacity: 0.6; }
 }
@@ -3245,6 +3234,10 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
   padding: 8px 12px; border-radius: 10px; background: var(--bg); cursor: pointer;
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent), var(--surface-lift);
   transition: box-shadow .16s cubic-bezier(.23, 1, .32, 1);
+  /* Every pull request on a board is one of these, mounted at once. `content-visibility: auto` skips layout and paint for
+     the ones off screen (the same platform feature as `.agx-row`; find-in-page, focus and scrollIntoView still reach them).
+     It paints with containment, which would clip the 2px focus ring drawn outside the row, so the clip box is given the ring's room. */
+  content-visibility: auto; contain-intrinsic-size: auto 52px; overflow-clip-margin: 4px;
 }
 /* Beside the docked detail the list is ~400px: the route and tags drop under the title instead of taking its column, and the age rides on the title's line. Asked of the results box, which is the list's own width. */
 [data-results] { container: agx-res / inline-size; }
@@ -3276,6 +3269,9 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-irow {
   position: relative; display: grid; grid-template-columns: 18px 22px minmax(0, 1fr) auto auto; gap: 10px; align-items: center;
   min-height: 50px; padding: 6px 12px; border-radius: 10px; cursor: pointer;
+  /* An inbox of several hundred notifications is all mounted; the browser skips layout and paint for the ones off screen
+     (see `.agx-row`). 50px is the min-height above, so the guess is the floor. */
+  content-visibility: auto; contain-intrinsic-size: auto 50px;
 }
 .agx-irow:hover, .agx-irow:focus-within { background: color-mix(in srgb, var(--text) 4%, transparent); }
 .agx-irow[data-ghost] { opacity: .62; }
@@ -3523,7 +3519,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 /* Cards in the width there is: one under 760px of page, two from there, three on a wide screen. */
 .agx-plugin-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: stretch; }
 @container agx-settings (min-width: 760px) { .agx-plugin-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@container agx-settings (min-width: 1500px) { .agx-plugin-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+/* Two tiles a row at most, as in the mockup: the page column is 720 px whatever the window, and a third column left each tile too narrow for its name. */
 .agx-plugin-add {
   grid-column: 1 / -1; display: flex; align-items: center; justify-content: center; gap: 8px 14px; flex-wrap: wrap; padding: 16px; border-radius: 13px; cursor: pointer;
   background: transparent; border: 1px dashed var(--surface-line); color: var(--text2); font: inherit; transition: background-color 120ms ease, border-color 120ms ease;
@@ -3571,19 +3567,134 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-presence-label { position: absolute; left: 18px; top: 20px; white-space: nowrap; font-size: calc(11px * var(--agx-fs, 1)); font-weight: 500; line-height: 1; padding: 4px 8px; border-radius: 7px;
   color: color-mix(in srgb, var(--agx-mark) 70%, var(--text)); background: color-mix(in srgb, var(--bg) 86%, transparent);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--agx-mark) 22%, transparent), 0 6px 16px -8px rgba(40, 20, 90, .35); }
+/* Guide mode: the chip grown into a speech bubble, placed from the TARGET's live
+   rect (bubblePlace), so it follows resize, scroll and reflow. Wraps, never clips;
+   too tall for either side, the text scrolls and the buttons stay. */
+.agx-presence-bubble { position: absolute; left: 0; top: 0; z-index: 3; pointer-events: auto; display: flex; flex-direction: column; box-sizing: border-box;
+  padding: 10px 12px; border-radius: 14px; background: var(--bg); color: var(--text);
+  border: 1.5px solid color-mix(in srgb, var(--agx-mark) 60%, var(--border));
+  box-shadow: 0 10px 28px -14px rgba(40, 20, 90, .55), 0 2px 4px rgba(40, 20, 90, .08);
+  transform-origin: var(--tail, 24px) 0; }
+/* Placed with `translate`. No transition across anchors: a new step is a new card (leave, then
+   arrive, by the Web Animations in AgentPresence). Only a settled card follows its own target's scroll. */
+.agx-presence-bubble.is-settled { transition: translate 420ms var(--agx-move); }
+.agx-presence-bubble.is-above { transform-origin: var(--tail, 24px) 100%; }
+.agx-presence-bubble.is-right { transform-origin: 0 var(--tail, 24px); }
+.agx-presence-bubble.is-left { transform-origin: 100% var(--tail, 24px); }
+.agx-presence-bubble.is-leaving, .agx-presence-bubble.is-leaving * { pointer-events: none !important; }
+/* The person is typing in the target: the card steps aside for a dot beside the field. */
+.agx-presence-bubble.is-folded { opacity: 0; pointer-events: none; transition: opacity 120ms var(--ease-out); }
+.agx-presence-bubble.is-folded * { pointer-events: none !important; }
+.agx-bubble-dot { position: absolute; left: 0; top: 0; z-index: 3; padding: 0; border: 0; background: none; cursor: pointer; display: grid; place-items: center; pointer-events: auto; }
+.agx-bubble-dot::after { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--agx-mark); box-shadow: 0 0 0 2px var(--bg), 0 2px 6px rgba(40, 20, 90, .35); }
+.agx-bubble-dot:focus-visible { outline: 2px solid #a78bfa; outline-offset: 2px; border-radius: 50%; }
+@keyframes agx-bubble-in { from { opacity: 0; scale: .92; filter: blur(2px); } }
+.agx-presence-bubble::before { content: ""; position: absolute; left: calc(var(--tail, 24px) - 7px); top: -8px; width: 13px; height: 13px; background: var(--bg);
+  border-left: 1.5px solid color-mix(in srgb, var(--agx-mark) 60%, var(--border)); border-top: 1.5px solid color-mix(in srgb, var(--agx-mark) 60%, var(--border));
+  transform: rotate(45deg); border-top-left-radius: 3px; }
+.agx-presence-bubble.is-above::before { top: auto; bottom: -8px; transform: rotate(225deg); }
+.agx-presence-bubble.is-right::before { left: -8px; top: calc(var(--tail, 24px) - 7px); transform: rotate(-45deg); }
+.agx-presence-bubble.is-left::before { left: auto; right: -8px; top: calc(var(--tail, 24px) - 7px); transform: rotate(135deg); }
+/* Still over the target (no side had room): clicks pass to the page; only the buttons take them. */
+.agx-presence-bubble.is-through { pointer-events: none; }
+.agx-presence-bubble.is-through .agx-bubble-foot button { pointer-events: auto; }
+.agx-bubble-head { font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); margin-bottom: 4px; }
+.agx-bubble-text { margin: 0; font-size: calc(13px * var(--agx-fs, 1)); line-height: 1.45; overflow-wrap: anywhere; white-space: pre-wrap; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.agx-bubble-text.is-clipped { scrollbar-width: thin; padding-bottom: 14px; mask-image: linear-gradient(to bottom, black calc(100% - 26px), transparent); }
+.agx-bubble-caret { display: inline-block; width: 2px; height: 1em; vertical-align: -2px; margin-left: 1px; background: var(--agx-mark); animation: agx-blink 900ms steps(1) infinite; }
+@keyframes agx-blink { 50% { opacity: 0; } }
+.agx-bubble-note { margin: 6px 0 0; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text2); }
+.agx-bubble-summary { flex: none; margin-top: 8px; padding: 6px 8px; border-radius: 8px; background: var(--surface-inset); border: 1px solid var(--surface-line); }
+.agx-bubble-summary-head { display: block; font-size: calc(10.5px * var(--agx-fs, 1)); font-weight: 600; color: var(--text2); }
+.agx-bubble-summary-text { margin: 2px 0 0; max-height: calc(9 * 1.45em); overflow-y: auto; font-size: calc(11.5px * var(--agx-fs, 1)); line-height: 1.45; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.agx-bubble-copy { flex: none; display: flex; align-items: flex-start; gap: 8px; margin-top: 8px; padding: 6px 6px 6px 8px; border-radius: 8px; background: var(--surface-inset); border: 1px solid var(--surface-line); }
+.agx-bubble-copy-text { flex: 1; min-width: 0; margin: 0; font-family: var(--font-mono); font-size: calc(11.5px * var(--agx-fs, 1)); line-height: 1.4; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+.agx-bubble-copy.is-draft { flex-direction: column; align-items: stretch; }
+.agx-bubble-copy-text.is-draft { font-family: inherit; -webkit-line-clamp: 4; line-clamp: 4; }
+.agx-bubble-copy.is-draft > .agx-bubble-chip { align-self: flex-end; }
+.agx-bubble-draft-ask { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.agx-bubble-draft-row { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+.agx-bubble-draft-note { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.agx-bubble-draft-input { flex: 1 1 140px; min-width: 0; padding: 0 8px; border-radius: 8px; border: 1px solid var(--surface-line); background: var(--bg); color: var(--text); font: inherit; font-size: calc(12px * var(--agx-fs, 1)); }
+.agx-bubble-draft-input:focus-visible { outline: 2px solid #a78bfa; outline-offset: 1px; }
+.agx-bubble-chip.is-primary { color: var(--agx-mark); border-color: var(--agx-mark); }
+.agx-bubble-copy-text.is-stale { opacity: 0.5; }
+.agx-bubble-chip { flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--surface-line); background: transparent; color: var(--text2); font: inherit; font-size: calc(12px * var(--agx-fs, 1)); font-weight: 600; cursor: pointer; }
+.agx-bubble-chip:hover { background: var(--bg2); color: var(--text); }
+.agx-bubble-chip.is-done { color: var(--agx-mark); }
+.agx-bubble-chip:focus-visible { outline: 2px solid #a78bfa; outline-offset: 2px; }
+.agx-presence-bubble.is-through .agx-bubble-chip { pointer-events: auto; }
+.agx-bubble-foot { flex: none; display: flex; align-items: center; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+.agx-bubble-wait { flex: 1; min-width: 120px; display: inline-flex; align-items: center; gap: 6px; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); }
+.agx-bubble-wait i { width: 6px; height: 6px; border-radius: 50%; background: var(--agx-contact); animation: agx-breathe 1.6s ease-in-out infinite; }
+@keyframes agx-breathe { 50% { opacity: .35; } }
+.agx-bubble-sp { flex: 1; }
+.agx-bubble-foot button { height: 26px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--surface-line); background: transparent; color: var(--text2); font: inherit; font-size: calc(12px * var(--agx-fs, 1)); font-weight: 600; cursor: pointer; }
+.agx-bubble-foot button:hover { background: var(--bg2); color: var(--text); }
+.agx-bubble-foot button.is-ok { background: var(--agx-mark); border-color: transparent; color: #fff; padding: 0 14px; }
+.agx-bubble-foot button.is-ok:hover { background: #9a70f8; }
+.agx-bubble-foot button:focus-visible { outline: 2px solid #a78bfa; outline-offset: 2px; }
+/* The ring on the pointed target, drawn over the guest, never in it. Nothing else is dimmed. */
+.agx-presence-ring { position: absolute; left: 0; top: 0; z-index: 1; border-radius: 8px; pointer-events: none;
+  box-shadow: 0 0 0 2px var(--agx-mark), 0 0 0 6px color-mix(in srgb, var(--agx-mark) 18%, transparent);
+  transition: transform 420ms var(--agx-move), width 420ms var(--agx-move), height 420ms var(--agx-move); animation: agx-ring 1.8s ease-in-out infinite; }
+@keyframes agx-ring { 50% { box-shadow: 0 0 0 2px var(--agx-mark), 0 0 0 9px color-mix(in srgb, var(--agx-mark) 6%, transparent); } }
+/* Got it: the person's click presses the ring (.97, 100 ms), it turns green and fades in 150 ms. */
+.agx-presence-ring.is-got { box-shadow: 0 0 0 2px var(--agx-contact), 0 0 0 6px color-mix(in srgb, var(--agx-contact) 22%, transparent); animation: agx-ring-got 250ms var(--ease-out) forwards; }
+@keyframes agx-ring-got { 0% { scale: 1; opacity: 1; } 40% { scale: .97; opacity: 1; } 100% { scale: 1; opacity: 0; } }
+/* The person's audit card at the guide's end: only their own steps. */
+.agx-presence-audit { position: absolute; left: 50%; bottom: 76px; transform: translateX(-50%); width: min(380px, calc(100% - 32px)); z-index: 4; pointer-events: none; box-sizing: border-box; transition: opacity 300ms var(--agx-out);
+  max-height: calc(100% - 100px); overflow-y: auto; border-radius: 16px; padding: 12px 14px; color: #f2f0f7; background: rgba(22, 19, 31, .97);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 0 0 1px rgba(255, 255, 255, .1), 0 18px 40px -18px rgba(40, 20, 90, .55); animation: agx-bubble-in 300ms var(--agx-out); }
+/* A record, never in the way: clicks pass through to the page; only its Resume takes them. */
+.agx-presence-audit .agx-bubble-foot { pointer-events: auto; }
+.agx-presence-audit.is-fading { opacity: 0; }
+/* Resume still valid: only the list fades, and a small card keeps Resume. */
+.agx-presence-audit.is-fading-list .agx-audit-why, .agx-presence-audit.is-fading-list ol { opacity: 0; transition: opacity 300ms var(--agx-out); }
+.agx-presence-audit.is-small { width: auto; min-width: 200px; display: flex; align-items: center; gap: 12px; padding: 8px 8px 8px 14px; }
+.agx-presence-audit.is-small .agx-bubble-foot { margin-top: 0; }
+.agx-presence-audit .agx-bubble-foot button.agx-audit-x { padding: 0; display: inline-flex; align-items: center; justify-content: center; border-color: transparent; }
+.agx-presence-audit.is-done h3 { display: flex; align-items: center; gap: 6px; color: var(--agx-contact); }
+.agx-presence-audit h3 { margin: 0; font-size: calc(13px * var(--agx-fs, 1)); }
+.agx-presence-audit .agx-audit-why { font-size: calc(11px * var(--agx-fs, 1)); color: rgba(242, 240, 247, .6); margin: 2px 0 10px; overflow-wrap: anywhere; }
+.agx-presence-audit ol { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+/* A long list scrolls: the list takes the wheel, the rest of the card lets clicks through to the page. */
+.agx-presence-audit ol { pointer-events: auto; max-height: min(320px, calc(100vh - 220px)); overflow-y: auto; overscroll-behavior: contain; }
+.agx-presence-audit li { display: grid; grid-template-columns: 18px 1fr auto; gap: 8px; align-items: baseline; font-size: calc(12px * var(--agx-fs, 1)); }
+.agx-presence-audit li > span { overflow-wrap: anywhere; }
+.agx-presence-audit .agx-audit-k, .agx-presence-audit .agx-audit-t { color: rgba(242, 240, 247, .5); font-size: calc(11px * var(--agx-fs, 1)); font-variant-numeric: tabular-nums; }
+.agx-presence-audit .agx-audit-s { color: rgba(242, 240, 247, .62); display: block; font-size: calc(11px * var(--agx-fs, 1)); margin-top: 1px; }
 /* The dock: the island's own glass, so the agent's two places on the page read
    as one object. Dark in both themes, like the island. */
 .agx-presence-dock { pointer-events: auto; position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px;
-  max-width: calc(100% - 32px); padding: 6px; border-radius: 22px; color: #f2f0f7; --agx-dock-mark: #a78bfa; --agx-dock-yours: #fbbf24; --agx-dock-take: #f59e0b;
+  width: max-content; max-width: calc(100% - 32px); box-sizing: border-box; padding: 6px; border-radius: 22px; color: #f2f0f7; --agx-dock-mark: #a78bfa; --agx-dock-yours: #fbbf24; --agx-dock-take: #f59e0b;
   transition: box-shadow 300ms var(--agx-out);
   z-index: 2; background: rgba(22, 19, 31, .97);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 0 0 1px color-mix(in srgb, var(--agx-mark) 34%, transparent), 0 18px 40px -18px rgba(40, 20, 90, .55);
   animation: agx-dock-in 360ms var(--agx-ease); }
 @keyframes agx-dock-in { from { opacity: 0; transform: translate(-50%, 8px) scale(.98); filter: blur(2px); } }
+/* During a guide the dock is placed off the ring (dockPlace sets left/top). */
+.agx-presence-dock.is-placed { bottom: auto; transform: none; animation-name: agx-dock-in-placed; transition: box-shadow 300ms var(--agx-out), left 420ms var(--agx-move), top 420ms var(--agx-move); }
+.agx-presence-dock.is-through { pointer-events: none; }
+/* Clicks pass to the page round the dock, but End guide and the menu still answer. */
+.agx-presence-dock.is-through button { pointer-events: auto; }
+@keyframes agx-dock-in-placed { from { opacity: 0; transform: translateY(8px) scale(.98); filter: blur(2px); } }
 .agx-presence-well { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 16px;
   background: color-mix(in srgb, var(--agx-dock-mark) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--agx-dock-mark) 26%, transparent); }
 .agx-presence-mark { flex: none; transition: color 300ms var(--agx-out); }
 .agx-presence-dock.is-yours { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 0 0 1px color-mix(in srgb, var(--agx-dock-yours) 45%, transparent), 0 18px 40px -18px rgba(40, 20, 90, .55); --agx-dock-mark: var(--agx-dock-yours); }
+/* Guiding: contact green, the person's hand on the page with the agent talking. */
+.agx-presence-dock.is-guiding { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 0 0 1px color-mix(in srgb, var(--agx-contact) 45%, transparent), 0 18px 40px -18px rgba(40, 20, 90, .55); --agx-dock-mark: var(--agx-contact); }
+.agx-presence-dock.is-guiding .agx-presence-state { color: #6ee7b7; background: color-mix(in srgb, var(--agx-contact) 18%, transparent); }
+.agx-presence-dock button.is-guide { background: rgba(255, 255, 255, .1); color: #f2f0f7; padding: 0 16px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08); }
+.agx-presence-dock button.is-guide:hover { background: rgba(255, 255, 255, .16); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .1); }
+.agx-presence-dock button.agx-dock-more { width: 40px; padding: 0; justify-content: center; background: transparent; color: rgba(242, 240, 247, .72); box-shadow: none; }
+.agx-presence-dock button.agx-dock-more:hover { background: rgba(255, 255, 255, .1); box-shadow: none; }
+.agx-dock-menu { position: absolute; right: 6px; bottom: calc(100% + 6px); padding: 4px; border-radius: 12px; background: rgba(22, 19, 31, .97);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .1), 0 12px 28px -12px rgba(40, 20, 90, .6); }
+.agx-presence-dock .agx-dock-menu button { height: 26px; padding: 0 10px; border-radius: 8px; background: transparent; color: #f2f0f7; font-size: calc(12px * var(--agx-fs, 1)); font-weight: 600; box-shadow: none; white-space: nowrap; }
+.agx-presence-dock .agx-dock-menu button:hover { background: rgba(255, 255, 255, .1); box-shadow: none; }
 .agx-presence-who { display: flex; flex-direction: column; gap: 4px; min-width: 112px; }
 .agx-presence-task { font-size: calc(12.5px * var(--agx-fs, 1)); font-weight: 600; letter-spacing: -.005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* As wide as the longest word, so the dock and Take over stay put as the state changes. */
@@ -3591,7 +3702,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
   font-size: calc(11px * var(--agx-fs, 1)); font-weight: 500; letter-spacing: .01em; color: #c4b5fd; background: color-mix(in srgb, var(--agx-mark) 18%, transparent);
   transition: background-color 280ms ease-out, color 280ms ease-out; }
 .agx-presence-dock.is-thinking .agx-presence-state, .agx-presence-dock.is-waiting .agx-presence-state, .agx-presence-dock.is-working .agx-presence-state { color: rgba(242, 240, 247, .72); background: rgba(255, 255, 255, .08); }
-.agx-presence-dock.is-yours .agx-presence-state { color: var(--agx-dock-yours); background: color-mix(in srgb, var(--agx-dock-yours) 16%, transparent); }
+.agx-presence-dock.is-yours .agx-presence-state, .agx-presence-dock.is-handoff .agx-presence-state { color: var(--agx-dock-yours); background: color-mix(in srgb, var(--agx-dock-yours) 16%, transparent); }
 /* Yours: the person is using the page, so the dock steps back from what it covers until the pointer comes to it. */
 .agx-presence-dock.is-yours:not(:hover):not(:focus-within) { opacity: .45; }
 .agx-presence-dock.is-yours { transition: box-shadow 300ms var(--agx-out), opacity 200ms ease-out; }
@@ -3660,6 +3771,8 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-presence-dock button:active .agx-sp-lift { transform: rotate(0) scale(.86); }
 @media (prefers-reduced-motion: reduce) {
   .agx-presence-ghost { transition-property: opacity; }
+  .agx-presence-bubble, .agx-presence-ring, .agx-presence-audit { transition: none; }
+  .agx-presence-bubble, .agx-presence-ring, .agx-presence-audit, .agx-bubble-caret, .agx-bubble-wait i { animation: none; }
   .agx-presence-dock, .agx-presence-state, .agx-presence-state *, .agx-presence-dock button * { animation: none; }
   .agx-swap { transition-duration: 1ms; }
   .agx-swap-lay.is-out { opacity: 0; }
@@ -3768,6 +3881,24 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-isl-doing { display: flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0; max-width: 58%; font-size: calc(11px * var(--agx-fs, 1)); color: #c4b5fd; }
 .agx-isl-doing-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agx-isl-status .agx-isl-num { flex: none; margin-left: 2px; }
+/* A guide in the pill (direction A): glyph + step at rest in a fixed 30 px slot; hover is 470 wide. */
+.agx-isl-gl { width: 12px; height: 12px; flex: none; display: block; color: #c4b5fd; }
+.agx-isl-gl.is-done { color: #6ee7b7; }
+.agx-isl-gl.is-stopped { color: rgba(242, 240, 247, .6); }
+.agx-isl-compact .agx-isl-step { min-width: 30px; text-align: center; white-space: nowrap; }
+.agx-isl.is-guide:not(.is-open):is(:hover, .is-peek), .agx-isl.is-guide:not(.is-open):focus-within { clip-path: inset(0px calc(50% - 235px) calc(100% - 36px) calc(50% - 235px) round 18px); }
+.agx-isl-status.is-guide { width: 470px; max-width: calc(100% - 16px); padding: 0 6px 0 12px; cursor: default; }
+.agx-isl-open { flex: 1; min-width: 0; height: 100%; display: flex; align-items: center; gap: 8px; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+.agx-isl-doing b { color: #ede9fe; font-weight: 600; }
+.agx-isl-sep { color: rgba(242, 240, 247, .35); flex: none; }
+.agx-isl-chip { flex: none; height: 20px; padding: 0 8px; border-radius: 10px; display: inline-flex; align-items: center; background: rgba(167, 139, 250, .16); color: #ddd6fe; font-size: calc(11px * var(--agx-fs, 1)); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.agx-isl-plus { flex: none; height: 18px; padding: 0 6px; border-radius: 9px; display: inline-flex; align-items: center; background: rgba(255, 255, 255, .08); color: #d4d0dc; font-size: calc(11px * var(--agx-fs, 1)); font-weight: 600; }
+.agx-isl-end { flex: none; height: 26px; margin-left: 8px; padding: 0 12px; border-radius: 13px; border: 0; font: inherit; font-size: calc(12px * var(--agx-fs, 1)); font-weight: 600; color: #f2f0f7; cursor: pointer;
+  background: linear-gradient(rgba(255, 255, 255, .14), rgba(255, 255, 255, .07)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08); }
+.agx-isl-end:hover { background: linear-gradient(rgba(255, 255, 255, .2), rgba(255, 255, 255, .1)); }
+.agx-isl-end:active { transform: scale(.96); }
+.agx-isl-end:focus-visible, .agx-isl-open:focus-visible { outline: 2px solid #a78bfa; outline-offset: 2px; }
+.agx-isl-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .agx-isl-bar { width: 600px; height: 40px; gap: 2px; padding: 0 8px; }
 .agx-isl-ib { flex: none; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 7px; border: 0; background: none; color: #cfcad9; cursor: pointer; }
 .agx-isl-ib svg { width: 16px; height: 16px; }
@@ -3820,6 +3951,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-isl-state.is-waiting { color: var(--text2); background: color-mix(in srgb, var(--text) 8%, transparent); }
 .agx-isl-state.is-done { color: var(--ink-ok); background: rgba(16, 185, 129, .16); }
 .agx-isl-state.is-yours { color: var(--ink-you); background: rgba(245, 158, 11, .16); }
+.agx-isl-state.is-handoff { color: var(--ink-you); background: rgba(245, 158, 11, .16); }
 /* The working island wears the mark's orbit: a violet halo that breathes round
    its edge and the green contact travelling it (a lead dot and two fading
    behind), the same pair the page wears while it is driven. Only these animate. */
@@ -3855,6 +3987,8 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-isl-drv { position: absolute; left: 5px; top: 5px; z-index: 1; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 11px; color: #fff; background: var(--ink-agent); box-shadow: 0 1px 4px rgba(30, 20, 60, .4); }
 .agx-isl-tag { align-self: flex-start; max-width: 100%; box-sizing: border-box; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 8px; border-radius: 8px; font-size: calc(10.5px * var(--agx-fs, 1)); font-weight: 700; line-height: 1.4; }
 .agx-isl-tag.is-agent { color: #fff; background: var(--ink-agent); }
+/* The lane an agent asked the person to look at: a ring on its box, never a view over their page. */
+.agx-isl-box.is-called { box-shadow: 0 0 0 2px var(--ink-agent); }
 .agx-isl-tag.is-you { color: var(--text); background: color-mix(in srgb, var(--ink-you) 28%, transparent); }
 @media (prefers-reduced-motion: reduce) { .agx-isl-card.is-driven .agx-isl-thumb { animation: none; } }
 .agx-isl-card:focus-visible .agx-isl-thumb { outline: 2px solid var(--ring); outline-offset: 3px; }
@@ -4076,6 +4210,7 @@ html[data-ui-font] body { font-size: calc(13px * var(--agx-fs)); }
 [data-ui-font] [class~="text-[28px]"] { font-size: calc(28px * var(--agx-fs)); }
 [data-ui-font] [class~="text-[30px]"] { font-size: calc(30px * var(--agx-fs)); }
 [data-ui-font] [class~="text-[32px]"] { font-size: calc(32px * var(--agx-fs)); }
+[data-ui-font] [class~="text-[34px]"] { font-size: calc(34px * var(--agx-fs)); }
 
 /*
  * TRANSLUCENT: the rail, the top bar and the settings nav (all --surface-nav)
@@ -4181,8 +4316,9 @@ html[data-reduce-motion] #ag-cover * { animation: none !important; }
 
 /* ── plugins: the count pill, the market's bar and its notes ── */
 .agx-tag { display: inline-flex; align-items: center; height: 22px; padding: 0 10px; border: 1px solid var(--surface-line); border-radius: 999px; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text2); }
-.agx-mbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 0 0 14px; }
-.agx-msearch { position: relative; display: flex; align-items: center; flex: 1 1 420px; max-width: 640px; }
+.agx-mbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
+.agx-msearch { position: relative; display: flex; align-items: center; flex: 1 1 100%; }
+/* The Market search has its own row, the filters the row under it, as in the mockup. */
 .agx-msearch > svg { position: absolute; left: 10px; color: var(--text3); pointer-events: none; }
 .agx-msearch > input { width: 100%; padding-left: 30px !important; padding-right: 44px !important; height: 32px; }
 .agx-msearch > kbd { position: absolute; right: 8px; padding: 0 6px; border: 1px solid var(--surface-line); border-radius: 5px; font: inherit; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); pointer-events: none; }
@@ -4193,6 +4329,87 @@ html[data-reduce-motion] #ag-cover * { animation: none !important; }
 .agx-linkbtn:hover { color: var(--text); background: color-mix(in srgb, var(--text) 7%, transparent); }
 .agx-pnote { display: flex; gap: 8px; align-items: flex-start; margin: 14px 2px 0; font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.5; color: var(--text3); }
 .agx-pnote > svg { flex: none; margin-top: 2px; }
+/* Settings > Plugins (mockup v2). Installed rows: mark, name, then a fixed
+   column each for the state chip, the switch and View more, so no control
+   moves between rows whatever the name or the state says. */
+.agx-plug-row { display: grid; grid-template-columns: 40px minmax(0, 1fr) 156px 34px 96px; column-gap: 12px; align-items: center; padding: 10px 14px; min-height: 60px; border-top: 1px solid var(--surface-line); }
+.agx-plug-row[data-off] > span:first-child { filter: saturate(.25); opacity: .7; }
+.agx-plug-top { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.agx-plug-name { font-size: calc(13px * var(--agx-fs, 1)); font-weight: 500; color: var(--text); overflow-wrap: anywhere; }
+.agx-plug-ver { font-size: calc(10.5px * var(--agx-fs, 1)); height: 18px; padding: 0 6px; border-radius: 5px; background: var(--surface-inset); color: var(--text2); display: inline-flex; align-items: center; white-space: nowrap; }
+.agx-plug-by { font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text3); overflow-wrap: anywhere; }
+.agx-plug-desc { font-size: calc(12px * var(--agx-fs, 1)); color: var(--text2); display: -webkit-box; -webkit-line-clamp: 1; line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+.agx-plug-more { width: 96px; justify-content: center; }
+.agx-plug-group { padding: 6px 14px; font-size: calc(10.5px * var(--agx-fs, 1)); letter-spacing: .05em; text-transform: uppercase; color: var(--text3); background: var(--surface-inset); border-top: 1px solid var(--surface-line); display: flex; justify-content: space-between; }
+/* The band sits under its row, inset past the mark, with its one fix inside it. */
+.agx-plug-bandrow { padding: 0 14px 12px 66px; }
+.agx-plug-band { --hue: var(--warning); display: flex; gap: 12px; align-items: flex-start; padding: 10px 12px; border-radius: 9px; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text2);
+  background: color-mix(in srgb, var(--hue) 8%, var(--surface-card)); border: 1px solid color-mix(in srgb, var(--hue) 28%, transparent); }
+.agx-plug-band[data-band="stopped"] { --hue: var(--error); }
+.agx-plug-band[data-band="update"] { --hue: var(--info); }
+.agx-plug-band-ic { color: color-mix(in srgb, var(--hue) 75%, var(--text)); margin-top: 2px; flex: none; display: inline-flex; }
+.agx-plug-band-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.agx-plug-band-tx > strong { color: color-mix(in srgb, var(--hue) 75%, var(--text)); font-weight: 600; }
+.agx-plug-band-act { display: flex; gap: 6px; flex: none; }
+.agx-plug-note { padding: 0 2px; }
+.agx-plug-tools { display: flex; align-items: center; gap: 8px; padding: 10px 14px; }
+.agx-plug-tools > .agx-msearch { max-width: none; flex: 1 1 auto; }
+.agx-plug-tools > .agx-msearch > input { padding-right: 10px !important; height: 30px; }
+.agx-plug-add { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; column-gap: 12px; align-items: center; padding: 10px 14px; min-height: 52px; border-top: 1px solid var(--surface-line); }
+.agx-plug-plus { width: 40px; height: 40px; border-radius: 10px; border: 1.5px dashed var(--border2); display: grid; place-items: center; color: var(--text3); }
+.agx-plug-add-t { font-size: calc(13px * var(--agx-fs, 1)); font-weight: 500; color: var(--text); }
+.agx-plug-add-s { font-size: calc(12px * var(--agx-fs, 1)); color: var(--text2); }
+.agx-plug-w { min-width: 104px; justify-content: center; }
+.agx-plug-form { padding: 12px 14px 14px 66px; display: flex; flex-direction: column; gap: 8px; background: var(--surface-inset); border-radius: 0 0 8px 8px; }
+.agx-plug-hint { font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text3); }
+/* The status card: the worst thing first, then five counts. */
+.agx-plug-sys { padding: 16px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px 16px; align-items: center; }
+.agx-plug-sys-sub { grid-column: 1; margin-top: -10px; color: var(--text2); font-size: calc(12.5px * var(--agx-fs, 1)); }
+.agx-plug-sys .agx-plug-tally { grid-column: 1 / -1; }
+.agx-plug-swl { display: flex; align-items: center; gap: 10px; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text2); white-space: nowrap; }
+.agx-plug-swl > button { display: inline-flex; align-items: center; }
+.agx-plug-swl > button:disabled { cursor: not-allowed; }
+.agx-plug-note-row { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text2); border-top: 1px solid var(--surface-line); }
+.agx-plug-note-row > svg { margin-top: 2px; flex: none; }
+.agx-plug-note-row:last-child { border-radius: 0 0 8px 8px; }
+.agx-plug-note-row b { font-weight: 500; }
+.agx-plug-note-row[data-tone="warn"] { background: color-mix(in srgb, var(--warning) 8%, var(--surface-card)); }
+.agx-plug-note-row[data-tone="warn"] > svg, .agx-plug-note-row[data-tone="warn"] b { color: var(--warning-ink); }
+.agx-plug-note-row[data-tone="err"] { background: color-mix(in srgb, var(--error) 7%, var(--surface-card)); }
+.agx-plug-note-row[data-tone="err"] > svg, .agx-plug-note-row[data-tone="err"] b { color: var(--error-ink); }
+.agx-plug-sys-head { display: flex; align-items: center; gap: 10px; font-size: calc(15px * var(--agx-fs, 1)); font-weight: 600; color: var(--text); min-height: 22px; }
+.agx-plug-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text4); flex: none; }
+.agx-plug-dot[data-tone="ok"] { background: var(--success); }
+.agx-plug-dot[data-tone="warn"] { background: var(--warning); }
+.agx-plug-dot[data-tone="err"] { background: var(--error); }
+.agx-plug-dot[data-tone="info"] { background: var(--info); }
+.agx-plug-tally { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-radius: 10px; background: var(--surface-inset); overflow: hidden; }
+.agx-plug-tally > div { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; min-width: 0; }
+.agx-plug-tally > div + div { border-left: 1px solid var(--surface-line); }
+.agx-plug-tally b { font-size: calc(20px * var(--agx-fs, 1)); line-height: 1.1; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 6px; }
+.agx-plug-tally small { font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agx-plug-tally [data-zero] b, .agx-plug-tally [data-zero] small { color: var(--text4); }
+.agx-plug-tally [data-zero] .agx-plug-dot { background: var(--bg4); }
+/* Nothing installed: what a plugin is, and the three steps to one. */
+.agx-plug-empty { padding: 22px 20px; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 18px; align-items: center; }
+.agx-plug-empty-pic, .agx-plug-unreach-pic { width: 52px; height: 52px; border-radius: 14px; display: grid; place-items: center; background: var(--surface-inset); color: var(--primary); }
+.agx-plug-empty b, .agx-plug-unreach b { display: flex; gap: 8px; align-items: center; font-size: calc(14px * var(--agx-fs, 1)); font-weight: 600; color: var(--text); }
+.agx-plug-empty p { margin: 2px 0 0; color: var(--text2); font-size: calc(12.5px * var(--agx-fs, 1)); max-width: 470px; }
+.agx-plug-steps { display: flex; gap: 18px; margin: 10px 0 0; padding: 0; list-style: none; counter-reset: agx-step; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text2); flex-wrap: wrap; }
+.agx-plug-steps li { display: inline-flex; gap: 6px; align-items: center; counter-increment: agx-step; }
+.agx-plug-steps li::before { content: counter(agx-step); width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-inset); font-size: calc(10.5px * var(--agx-fs, 1)); font-weight: 600; color: var(--text); }
+/* The market did not answer: a whole card, the error as it came, and what still works. */
+.agx-plug-unreach { padding: 26px 20px; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 18px; align-items: center; border-radius: 8px; background: var(--surface-card); border: 1px solid var(--surface-line); }
+.agx-plug-unreach-pic { background: color-mix(in srgb, var(--error) 10%, var(--surface-inset)); color: var(--error-ink); }
+.agx-plug-unreach p { margin: 2px 0 10px; font-size: calc(12.5px * var(--agx-fs, 1)); color: var(--text2); }
+.agx-plug-unreach code { font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text); background: var(--surface-inset); padding: 1px 4px; border-radius: 4px; overflow-wrap: anywhere; }
+/* Three lines and a floor of three, so the tiles in a row line up. */
+.agx-mtile-hd { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-width: 0; }
+.agx-mtile-who { flex: 1 1 128px; min-width: 128px; }
+.agx-mtile-name { font-size: calc(14px * var(--agx-fs, 1)); font-weight: 600; color: var(--text); overflow-wrap: break-word; }
+.agx-mtile-by { font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agx-mtile-chip { flex: none; display: inline-flex; }
+.agx-mtile-desc { display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; min-height: calc(3 * 1.375em); }
 
 /* A backticked word in a hint or a status line (`Ticks`): code, drawn as code. The fill is the inset surface the segmented controls sit on, so it follows the theme. */
 .agx-ticks { padding: 0 4px; border-radius: 4px; background: var(--surface-inset); color: var(--text2); font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.94em; }
@@ -4342,6 +4559,9 @@ html[data-reduce-motion] #ag-cover * { animation: none !important; }
 .pw-st { flex: 1; min-width: 0; font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text2); }
 .pw-st b { font-weight: 600; color: var(--text); }
 .pw-st span { display: block; margin-top: 1px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(10.5px * var(--agx-fs, 1)); line-height: 1.4; color: var(--text3); }
+.pw-warn { display: grid; gap: 6px; margin-top: 12px; }
+.pw-wrow { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--warning) 10%, var(--bg)); border: 1px solid color-mix(in srgb, var(--warning) 30%, transparent); font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text2); }
+.pw-wrow[data-kind="real"] { background: color-mix(in srgb, var(--error) 8%, var(--bg)); border-color: color-mix(in srgb, var(--error) 30%, transparent); }
 .pw-done { display: flex; align-items: center; gap: 6px; margin-top: 12px; font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text3); }
 .pw-done svg { flex: none; color: var(--success); }
 .pw-link { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 4px; border: 0; background: none; border-radius: 6px; font: inherit; font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text3); cursor: pointer; }
@@ -4379,9 +4599,100 @@ html[data-reduce-motion] #ag-cover * { animation: none !important; }
 .pw-sw { position: relative; flex: none; width: 26px; height: 15px; padding: 0; border: 0; border-radius: 9px; background: var(--bg4); cursor: pointer; transition: background 150ms; }
 .pw-sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; border-radius: 50%; background: var(--bg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); transition: transform 180ms var(--agx-out); }
 .pw-sw[aria-checked="true"] { background: var(--primary); }
+
+/* The board's bulk "Tell me when…": the lane header's Select all, the selection bar, its popover and the toast. */
+.agx-pl-selall { flex: none; height: 26px; padding: 0 8px; border: 0; border-radius: 8px; background: none; font: inherit; font-size: calc(11px * var(--agx-fs, 1)); font-weight: 500; color: var(--text3); white-space: nowrap; cursor: pointer; visibility: hidden; }
+.agx-pl-selall:hover { background: var(--bg3); color: var(--text); }
+.agx-pl-head:hover .agx-pl-selall, .agx-pl-selall:focus-visible, .agx-pl-selall[data-on], [data-any-picked] .agx-pl-selall { visibility: visible; }
+[data-bulk-bar] [data-lane-scroll],
+[data-board]:has([data-bulk-toast]) [data-lane-scroll] { padding-bottom: 64px; } /* room for the bar, and for the toast that outlives it: the last card is never under either */
+.agx-bulk-bar { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; align-items: center; gap: 4px; max-width: calc(100% - 24px);
+  height: 42px; padding: 0 6px 0 12px; border-radius: 12px; background: var(--bg); white-space: nowrap; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text2);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent), 0 1px 2px rgba(0, 0, 0, 0.08), 0 18px 40px -18px rgba(0, 0, 0, 0.5); animation: agx-bulk-in 200ms var(--agx-out); }
+@keyframes agx-bulk-in { from { opacity: 0; transform: translate(-50%, 8px); } }
+.agx-bulk-bar .agx-bulk-n { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; min-width: 78px; }
+.agx-bulk-bar .agx-bulk-sep { flex: none; width: 1px; height: 18px; background: var(--surface-line, var(--border)); margin: 0 4px; }
+.agx-bulk-note { min-width: 0; padding: 0 6px; display: inline-flex; align-items: center; gap: 4px; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); overflow: hidden; text-overflow: ellipsis; }
+.agx-bulk-note svg { flex: none; color: var(--merged, var(--primary)); }
+.agx-bulk-kbd { font-size: calc(10px * var(--agx-fs, 1)); color: var(--text4); padding: 0 4px; height: 16px; border-radius: 4px; box-shadow: inset 0 0 0 1px var(--surface-line, var(--border)); display: inline-grid; place-items: center; }
+.pw-pop[data-bulk] { right: auto; left: 50%; bottom: calc(100% + 8px); width: min(440px, calc(100vw - 24px)); transform: translateX(-50%); transform-origin: bottom center; animation: agx-bulk-pop 200ms var(--agx-out); white-space: normal; }
+@keyframes agx-bulk-pop { from { opacity: 0; transform: translate(-50%, 6px) scale(0.97); } }
+.pw-mix { display: flex; align-items: center; gap: 6px; margin: -4px 2px 10px; font-size: calc(11px * var(--agx-fs, 1)); color: var(--warning-ink, var(--warning)); }
+.pw-card[aria-checked="mixed"] { border-color: color-mix(in srgb, var(--primary) 55%, transparent); border-style: dashed; background: color-mix(in srgb, var(--primary) 5%, var(--bg)); }
+.pw-card[aria-checked="mixed"] .pw-ic { background: color-mix(in srgb, var(--hue) 14%, var(--bg)); color: var(--hue); }
+.pw-card[aria-checked="mixed"] .pw-tick { border-color: var(--primary); }
+.pw-card[aria-checked="mixed"] .pw-tick svg { display: none; }
+.pw-card[aria-checked="mixed"] .pw-tick::after { content: ""; width: 8px; height: 2px; border-radius: 1px; background: var(--primary); }
+.pw-list { display: flex; flex-direction: column; max-height: 196px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; margin: 0 -4px; }
+.pw-list .pw-row { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto 62px; flex: none; }
+.pw-list .pw-num { color: var(--text3); font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(11px * var(--agx-fs, 1)); }
+.pw-list .pw-tt { font-weight: 400; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pw-list .pw-ck { font-size: calc(10.5px * var(--agx-fs, 1)); color: var(--text3); text-align: right; font-variant-numeric: tabular-nums; }
+.pw-list .pw-was { display: inline-flex; align-items: center; gap: 4px; font-size: calc(10px * var(--agx-fs, 1)); color: var(--text3); white-space: nowrap; }
+.pw-list .pw-row[data-gone] .pw-tt { text-decoration: line-through; color: var(--text4); }
+.agx-bulk-toast { position: absolute; right: 16px; bottom: 16px; display: flex; align-items: center; gap: 10px; max-width: min(460px, calc(100% - 32px)); padding: 10px 8px 10px 12px; border-radius: 12px; background: var(--bg); overflow: hidden;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent), 0 18px 40px -18px rgba(0, 0, 0, 0.5); animation: agx-bulk-toast 220ms var(--agx-out); }
+@keyframes agx-bulk-toast { from { opacity: 0; transform: translateY(8px); } }
+.agx-bulk-toast > svg { flex: none; color: var(--success); }
+.agx-bulk-toast .agx-bulk-msg { min-width: 0; font-size: calc(12.5px * var(--agx-fs, 1)); line-height: 1.35; color: var(--text); }
+.agx-bulk-toast .agx-bulk-life { position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--primary); transform-origin: left; animation: agx-bulk-life var(--life, 6s) linear forwards; }
+@keyframes agx-bulk-life { to { transform: scaleX(0); } }
+@media (prefers-reduced-motion: reduce) { .agx-bulk-bar, .pw-pop[data-bulk], .agx-bulk-toast, .agx-bulk-toast .agx-bulk-life { animation: none; } }
 .pw-sw[aria-checked="true"]::after { transform: translateX(11px); }
 .pw-sw:disabled { opacity: 0.5; cursor: default; }
 .pw-sw:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+/* Bulk "Request review…" (PrBulkAsk.tsx): the blocks under the people picker, and the per-PR results. */
+.rr-pop[data-bulk] { width: min(470px, calc(100vw - 24px)); }
+.rr-h { display: flex; align-items: baseline; gap: 8px; margin: 12px 2px 6px; font-weight: 600; font-size: calc(10.5px * var(--agx-fs, 1)); line-height: 1; letter-spacing: .04em; text-transform: uppercase; color: var(--text4); }
+.rr-h span { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--text3); }
+.rr-skip, .rr-none { margin: 6px 2px 0; display: flex; gap: 6px; align-items: flex-start; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); }
+.rr-skip svg, .rr-none svg { margin-top: 1px; flex: none; }
+.rr-grp { margin-top: 8px; padding: 8px; border-radius: 10px; background: var(--surface-inset); display: flex; flex-direction: column; gap: 6px; }
+.rr-gh { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text3); }
+.rr-gh .ids { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(10.5px * var(--agx-fs, 1)); }
+.rr-sw { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 8px; align-items: start; padding: 6px; border-radius: 8px; text-align: left; background: var(--bg); box-shadow: inset 0 0 0 1px var(--surface-line); }
+button.rr-sw:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 24%, transparent); }
+.rr-sw[aria-disabled="true"] { cursor: default; }
+.rr-sw .trk { display: block; width: 28px; height: 16px; border-radius: 8px; background: var(--bg4); position: relative; margin-top: 1px; transition: background .15s var(--agx-out); }
+.rr-sw .trk::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--bg); box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .15s var(--agx-out); }
+.rr-sw[aria-checked="true"] .trk, .rr-trk-btn[aria-checked="true"] .trk { background: var(--primary); }
+.rr-sw[aria-checked="true"] .trk::after, .rr-trk-btn[aria-checked="true"] .trk::after { transform: translateX(12px); }
+.rr-sw:focus-visible, .rr-trk-btn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.rr-trk-btn { display: block; padding: 0; border-radius: 8px; }
+.rr-sw .tt { display: block; font-weight: 600; font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.3; color: var(--text); }
+.rr-sw .ex { display: block; margin-top: 2px; font-size: calc(11px * var(--agx-fs, 1)); line-height: 1.35; color: var(--text3); }
+.rr-sw .ex b { color: var(--text2); font-weight: 600; }
+.rr-sw .ex .warn { color: var(--warning-ink); }
+.rr-link { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 6px; border-radius: 6px; color: var(--text); box-shadow: inset 0 0 0 1px var(--surface-line); cursor: pointer; vertical-align: middle; }
+.rr-link:hover { background: var(--bg2); }
+.rr-link:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.rr-linkbox { display: flex; flex-direction: column; gap: 2px; padding: 6px; border-radius: 8px; background: var(--bg); box-shadow: inset 0 0 0 1px var(--surface-line); }
+.rr-p { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 6px; border-radius: 7px; text-align: left; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text2); }
+.rr-p:hover { background: var(--bg2); }
+.rr-p .lg { margin-left: 6px; color: var(--text3); font-size: calc(10.5px * var(--agx-fs, 1)); }
+.rr-sel { height: 20px; padding: 0 4px; margin-left: 4px; border: 0; border-radius: 6px; font-weight: 500; font-size: calc(11px * var(--agx-fs, 1)); color: var(--info); vertical-align: 1px;
+  background: color-mix(in srgb, var(--info) 12%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--info) 30%, transparent); }
+.rr-sum { display: flex; gap: 6px; align-items: flex-start; padding: 8px 10px; border-radius: 8px; background: var(--surface-inset); color: var(--text); font-size: calc(12px * var(--agx-fs, 1)); line-height: 1.35; }
+.rr-sum .ok { color: var(--success); margin-top: 1px; }
+.rr-cf { display: flex; gap: 6px; align-items: flex-start; font-size: calc(11px * var(--agx-fs, 1)); line-height: 1.35; color: var(--text3); }
+.rr-cf svg { margin-top: 1px; flex: none; }
+.rr-foot { display: flex; flex-direction: column; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--surface-line); background: var(--bg); }
+.rr-foot .act { display: flex; align-items: center; gap: 8px; }
+.rr-foot .act .sp { flex: 1; }
+.rr-res { display: flex; flex-direction: column; margin: 0 -4px; }
+.rr-r { display: grid; grid-template-columns: 46px minmax(0, 1fr); gap: 2px 8px; padding: 6px 4px; border-radius: 7px; }
+.rr-r + .rr-r { border-top: 1px solid var(--surface-line); }
+.rr-r .num { color: var(--text3); font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(11px * var(--agx-fs, 1)); line-height: 18px; }
+.rr-r .tt { font-size: calc(12px * var(--agx-fs, 1)); line-height: 18px; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rr-r .cells { grid-column: 2; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.rr-c { display: flex; gap: 6px; align-items: flex-start; min-width: 0; font-size: calc(11px * var(--agx-fs, 1)); line-height: 1.35; color: var(--text3); }
+.rr-c svg { margin-top: 1px; flex: none; }
+.rr-c b { color: var(--text2); font-weight: 600; }
+.rr-c[data-st="done"] svg { color: var(--success); }
+.rr-c[data-st="failed"] svg { color: var(--error); }
+.rr-c[data-st="failed"] .why { color: var(--error-ink); }
+.rr-c[data-st="skipped"] svg { color: var(--text4); }
+.rr-c[data-st="busy"] svg { color: var(--warning); }
 
 /* A card field as the mockup draws it: the label on the left in a fixed column, the
    value beside it. Label text is sentence case and quiet, not an eyebrow. */
@@ -4454,6 +4765,15 @@ html[data-reduce-motion] #ag-cover * { animation: none !important; }
 .agx-pcm-lbl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .agx-pcm-sub { font-size: calc(10.5px * var(--agx-fs, 1)); font-weight: 400; color: var(--text3); }
 .agx-pcm-key { flex: none; margin-left: auto; font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(10.5px * var(--agx-fs, 1)); color: var(--text4); }
+.agx-pcm-filter { flex: none; padding: 8px 8px 0; }
+.agx-pcm-filter input { width: 100%; height: 28px; padding: 0 8px; border-radius: 6px; background: var(--bg2); box-shadow: inset 0 0 0 1px var(--surface-line); color: var(--text); font-size: calc(12px * var(--agx-fs, 1)); outline: none !important; }
+.agx-pcm-filter input:focus-visible { box-shadow: inset 0 0 0 1.5px var(--accent, var(--primary)); }
+.agx-pcm-item[data-on] { background: var(--bg2); color: var(--text); }
+.agx-pcm-none { padding: 10px; color: var(--text3); font-size: calc(12px * var(--agx-fs, 1)); }
+.agx-pcm-why { flex: none; padding: 6px 12px 8px; border-top: 1px solid var(--surface-line); color: var(--text3); font-size: calc(10.5px * var(--agx-fs, 1)); }
+.agx-pcm-fly { max-height: min(360px, calc(100vh - 16px)); border-radius: 11px; background: var(--bg); overflow: hidden;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent), 0 2px 6px rgba(0,0,0,0.08), 0 14px 34px -14px rgba(0,0,0,0.35); }
+.agx-pcm-fly .agx-pcm-scroll { padding: 6px; }
 .agx-pcm-more { margin-left: 14px; border-left: 2px solid var(--border); animation: agx-pcm-in .16s cubic-bezier(.23, 1, .32, 1); }
 @keyframes agx-pcm-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) {
@@ -4514,10 +4834,13 @@ html[data-reduce-motion] #ag-cover * { animation: none !important; }
 .agx-sk {
   display: block; border-radius: 6px;
   background: linear-gradient(90deg, var(--surface-inset) 25%, color-mix(in srgb, var(--surface-inset) 55%, var(--surface-card)) 50%, var(--surface-inset) 75%);
-  background-size: 200% 100%; animation: agx-sk 1.3s linear infinite;
+  background-size: 200% 100%; animation: agx-sk 1.2s steps(4) infinite;
 }
 @keyframes agx-sk { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 @media (prefers-reduced-motion: reduce) { .agx-sk { animation: none; } }
+:root[data-idle="1"] .agx-sk { animation-play-state: paused; }
+/* The launch cover hides everything under it: no shimmer or pulse draws there. */
+:root.ag-covering :is(.agx-sk, .agx-skel, .agx-skeleton, .agx-page-skel .agx-skel-bar, .agx-page-skel .agx-skel-row) { animation: none; }
 
 /*
  * THE PULL-REQUEST CARD, direction "Facet" (components/PrCard.tsx).
@@ -4558,6 +4881,20 @@ html[data-reduce-motion] #ag-cover * { animation: none !important; }
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent), 0 0 0 4px color-mix(in srgb, var(--st) 20%, transparent), 0 10px 22px -10px color-mix(in srgb, var(--st) 60%, transparent);
 }
 .agx-cd:focus-visible::after, .agx-cd[data-selected]::after { box-shadow: inset 0 0 0 2px var(--st); }
+/* Picked for a bulk action (the board's multi-select). The accent, not the tone: the tone ring above already means "docked beside the board". */
+.agx-cd[data-picked] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent), 0 0 0 3px color-mix(in srgb, var(--primary) 22%, transparent); }
+.agx-cd[data-picked]::after { box-shadow: inset 0 0 0 2px var(--primary); }
+/* The strip's icon slot doubles as the checkbox: a 26px hit box that lays out as the 14px glyph (negative margins), so the strip text never moves. */
+.agx-cd-pick { position: relative; flex: none; width: 26px; height: 26px; margin: 0 -6px; padding: 0; border: 0; background: none; color: inherit; display: grid; place-items: center; border-radius: 7px; cursor: pointer; }
+.agx-cd-pick > * { grid-area: 1 / 1; transition: opacity 120ms; }
+.agx-cd-pick .agx-cd-bx { width: 16px; height: 16px; border-radius: 4px; display: grid; place-items: center; opacity: 0; background: var(--bg); box-shadow: inset 0 0 0 1.5px var(--border2); color: var(--on-primary); }
+.agx-cd-pick .agx-cd-bx svg { opacity: 0; }
+.agx-cd:hover .agx-cd-pick .agx-cd-gl, .agx-cd[data-picked] .agx-cd-pick .agx-cd-gl, [data-any-picked] .agx-cd-pick .agx-cd-gl, .agx-cd-pick:focus-visible .agx-cd-gl { opacity: 0; }
+.agx-cd:hover .agx-cd-pick .agx-cd-bx, .agx-cd[data-picked] .agx-cd-pick .agx-cd-bx, [data-any-picked] .agx-cd-pick .agx-cd-bx, .agx-cd-pick:focus-visible .agx-cd-bx { opacity: 1; }
+.agx-cd-pick:hover .agx-cd-bx { box-shadow: inset 0 0 0 1.5px var(--primary); }
+.agx-cd[data-picked] .agx-cd-pick .agx-cd-bx { background: var(--primary); box-shadow: none; }
+.agx-cd[data-picked] .agx-cd-pick .agx-cd-bx svg { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .agx-cd-pick > * { transition: none; } }
 .agx-cd[data-chain] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent), 0 0 0 3px color-mix(in srgb, var(--accent, var(--primary)) 30%, transparent); }
 .agx-cd[data-chain]::after { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent, var(--primary)) 70%, transparent); }
 .agx-cd[data-chain="me"] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent), 0 0 0 4px color-mix(in srgb, var(--accent, var(--primary)) 28%, transparent), 0 8px 18px -10px color-mix(in srgb, var(--accent, var(--primary)) 50%, transparent); }
@@ -4591,11 +4928,20 @@ html[data-reduce-motion] #ag-cover * { animation: none !important; }
 .agx-cd-tag[data-ink="strip"]::before { content: ""; flex: none; width: 4px; height: 4px; border-radius: 50%; background: var(--c, var(--text)); }
 .agx-cd-tag b { font: inherit; flex: none; }
 .agx-cd-sk-chip {
-  flex: none; display: inline-flex; align-items: center; gap: 3px; height: 20px; padding: 0 6px 0 5px; margin-left: 2px; border-radius: 3px 8px 3px 8px;
+  flex: none; display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px 0 5px; margin-left: 2px; border-radius: 3px 8px 3px 8px;
   color: var(--st); background: var(--surface-card); font: 700 calc(10.5px * var(--f))/1 var(--font-mono, ui-monospace, monospace);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--st) 38%, transparent); cursor: pointer;
 }
 .agx-cd-sk-chip:hover, .agx-cd-sk-chip:focus-visible { background: color-mix(in srgb, var(--st) 10%, var(--surface-card)); outline: none; }
+/* The elbow to a card's true parent: the line the rail does not draw. */
+.agx-elbows { position: absolute; left: 0; top: 0; bottom: 0; width: 28px; pointer-events: none; z-index: 1; }
+.agx-elbow path { fill: none; stroke: var(--success); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 400; stroke-dashoffset: 0; animation: agx-elbow-in .32s var(--agx-out, ease-out); }
+.agx-elbow circle { fill: var(--success); }
+@keyframes agx-elbow-in { from { stroke-dashoffset: 400; } to { stroke-dashoffset: 0; } }
+@media (prefers-reduced-motion: reduce) { .agx-elbow path { animation: none; } }
+:root[data-reduce-motion] .agx-elbow path { animation: none; }
+.agx-cd-sk-chip [data-fork] { font-weight: 500; color: var(--text2); }
+.agx-cd-sk-lone { flex: none; font: 500 calc(10.5px * var(--f))/1 var(--font-mono, ui-monospace, monospace); color: var(--text2); white-space: nowrap; }
 .agx-cd-faces { display: flex; align-items: center; flex: none; }
 .agx-cd-faces > * { margin-left: -4px; }
 .agx-cd-faces > :first-child { margin-left: 0; }
@@ -4610,7 +4956,7 @@ html[data-reduce-motion] #ag-cover * { animation: none !important; }
 @media (prefers-reduced-motion: reduce) { .agx-cd-seg-run { animation: none; } }
 .agx-cd-main { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .agx-cd-t {
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere;
   font-size: calc(13px * var(--f)); font-weight: 600; line-height: 1.35; color: var(--text);
 }
 .agx-cd-n { margin-right: 5px; padding: 0; border-radius: 4px; font: 500 calc(11px * var(--f)) var(--font-mono, ui-monospace, monospace); color: var(--text3); }
@@ -4654,7 +5000,7 @@ button.agx-cd-tk:hover { color: var(--text); background: color-mix(in srgb, var(
 
 .agx-cd-cells { display: grid; grid-template-columns: 1.15fr 1fr 1fr; gap: 5px; padding: 8px 10px 0; }
 .agx-cd-cell {
-  --tc: var(--text3); display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 5px 7px 6px; border-radius: 3px 8px 3px 8px;
+  --tc: var(--text3); display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 5px 7px 6px; border-radius: 3px 8px 3px 8px;
   background: color-mix(in srgb, var(--tc) 8%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tc) 24%, transparent);
 }
 .agx-cd-cell[data-tone="ok"] { --tc: var(--success); }
@@ -4858,6 +5204,17 @@ button.agx-cd-chip:hover, button.agx-cd-chip:focus-visible { background: color-m
 }
 @media (prefers-reduced-motion: reduce) { .agx-prgrip::after { transition: none; } }
 
+/* The grip on the docked Jira card's left edge: same shape as .agx-prgrip above. */
+.agx-jdgrip { position: absolute; top: 0; bottom: 0; left: -4px; width: 8px; z-index: 6; cursor: col-resize; touch-action: none; outline: none; }
+.agx-jdgrip::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; border-radius: 1px;
+  background: transparent; transition: background 0.12s ease;
+}
+.agx-jdgrip:hover::after, .agx-jdgrip:focus-visible::after, .agx-jdgrip[data-dragging]::after {
+  background: color-mix(in srgb, var(--primary) 55%, transparent);
+}
+@media (prefers-reduced-motion: reduce) { .agx-jdgrip::after { transition: none; } }
+
 /* Automatic cleanup, in the window bar while it runs: the Finder button's
    height and ground, a hairline of progress along its floor. */
 .agx-topbar-clean {
@@ -4885,7 +5242,9 @@ button.agx-cd-chip:hover, button.agx-cd-chip:focus-visible { background: color-m
 /* Jira list: lanes and rows (S2). Spacing steps 2 4 6 8 12 16 24 (10 only as a control's inline padding); colours are tokens. */
 .agx-jl-scroll {
   flex: 1; min-height: 0; overflow: auto; padding: 0 24px;
-  --jl-cols: 22px minmax(280px, 2fr) minmax(160px, 1fr) 120px 96px 96px 48px;
+  /* The first track is the row's chevron gutter: on every row, so one with sub-tasks to open and one without share every
+     column, and opening a parent moves none of them. */
+  --jl-cols: 42px 22px minmax(280px, 2fr) minmax(160px, 1fr) 120px 96px 96px 48px;
 }
 /* The captions live in the scroller and stick to its top, so they share the rows' width to the pixel, scrollbar or none. */
 .agx-jl-caps { position: sticky; top: 0; z-index: 2; padding-bottom: 12px; background: var(--bg); }
@@ -4940,6 +5299,10 @@ button.agx-cd-chip:hover, button.agx-cd-chip:focus-visible { background: color-m
 .agx-jl-row:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--info) 50%, transparent); }
 .agx-jl-row[data-ctx] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--info) 50%, transparent); }
 .agx-jl-row[aria-selected="true"] { box-shadow: inset 0 0 0 1.5px var(--primary); }
+/* An agent waiting on you: a warning edge on the left, drawn as a background so it leaves the hover and selection
+   rings alone, and ::before free for the sub-task tree line and the drop edge. */
+.agx-jl-row[data-needs] { background-image: linear-gradient(var(--warning), var(--warning)); background-size: 3px calc(100% - 16px); background-position: left center; background-repeat: no-repeat; }
+.agx-jl-row[data-stuck] { background-image: linear-gradient(var(--error), var(--error)); background-size: 3px calc(100% - 16px); background-position: left center; background-repeat: no-repeat; }
 .agx-jl-row:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .agx-jl-row[data-edge="top"]::before, .agx-jl-row[data-edge="bottom"]::after {
   content: ""; position: absolute; left: 0; right: 0; height: 2px; border-radius: 2px; background: var(--primary); pointer-events: none;
@@ -4947,8 +5310,26 @@ button.agx-cd-chip:hover, button.agx-cd-chip:focus-visible { background: color-m
 .agx-jl-row[data-edge="top"]::before { top: -4px; }
 .agx-jl-row[data-edge="bottom"]::after { bottom: -4px; }
 .agx-jl-row[draggable="true"]:active { cursor: grabbing; }
-.agx-jl-row.is-sub .agx-jl-main { padding-left: 24px; position: relative; }
-.agx-jl-elbow { position: absolute; left: 4px; top: 4px; color: var(--text4); }
+/* A sub-task's whole card steps in, as Jira's own list does, so it reads as hanging from the parent above: one level is 28px,
+   with a thin guide line (this row's own ::before) running from the row above down to this row's middle, so a chain of
+   children reads as one continuous line. The title track is the flexible one, so only it gives up the width and the columns
+   to its right stay aligned with the header. */
+.agx-jl-row.is-sub { margin-left: 28px; }
+.agx-jl-row.is-sub::before {
+  content: ""; position: absolute; left: -14px; top: -9px; bottom: 50%; width: 1px;
+  background: color-mix(in srgb, var(--text) 16%, transparent); pointer-events: none;
+}
+.agx-jl-row .agx-jl-twist { color: var(--text4); }
+.agx-jl-row .agx-jl-twist:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
+.agx-jl-row .agx-jl-twist[aria-expanded="false"] { transform: rotate(-90deg); }
+/* The gutter is the row's own first track: the checkbox and the chevron are ordinary flex items in it, each a fixed 20px,
+   so one never lands on the other and neither moves when the other appears or disappears. */
+.agx-jl-gutter { display: flex; align-items: center; gap: 2px; }
+/* In the title's own flow (not absolute), so it can never sit on top of the text next to it. */
+.agx-jl-elbow { display: inline-flex; flex: none; align-items: center; height: 1.35em; color: var(--text4); }
+/* A long title wraps; the elbow stays level with its first line instead of centring beside the whole block (it read as standing above the text). */
+.agx-jl-row.is-sub .agx-jl-title { align-items: flex-start; }
+.agx-jl-open-note { padding: 0 0 8px 36px; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); }
 .agx-jl-main { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .agx-jl-title {
   display: flex; align-items: center; gap: 6px; min-width: 0;
@@ -4979,12 +5360,16 @@ button.agx-cd-chip:hover, button.agx-cd-chip:focus-visible { background: color-m
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 28%, transparent); opacity: 0.55;
 }
 .agx-jl-row:hover .agx-jl-pr, .agx-jl-row[aria-selected="true"] .agx-jl-pr, .agx-jl-pr:focus-visible { opacity: 1; }
+/* A child's pull request is its own card's, and the rest state's fade made it read as greyed next to a hovered parent. */
+.agx-jl-row.is-sub .agx-jl-pr { opacity: 1; }
 .agx-jl-pr:hover { background: color-mix(in srgb, var(--c) 18%, transparent); }
 .agx-jl-pr:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .agx-jl-stack { display: inline-flex; align-items: center; padding-left: 4px; }
 .agx-jl-stack > * { margin-left: -4px; }
 .agx-jl-head .agx-jl-stack { flex: none; }
 .agx-jl-stack[data-focus] { border-radius: 999px; }
+.agx-jl-stack[data-pick] { cursor: pointer; border-radius: 999px; }
+.agx-jl-stack[data-pick]:hover { box-shadow: 0 0 0 2px var(--bg3); }
 .agx-jl-stack[data-focus]:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .agx-jl-stack .more { margin-left: 4px; font-size: calc(10px * var(--agx-fs, 1)); color: var(--text4); }
 .agx-jl-face {
@@ -5001,6 +5386,27 @@ button.agx-cd-chip:hover, button.agx-cd-chip:focus-visible { background: color-m
 }
 .agx-jl-row:hover .agx-jl-ghost, .agx-jl-ghost:focus-visible { opacity: 1; }
 .agx-jl-ghost:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
+.agx-jl-cb {
+  flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; color: var(--text4);
+  background: transparent; opacity: 0;
+}
+.agx-jl-row:hover .agx-jl-cb, .agx-jl-row:focus-within .agx-jl-cb, .agx-jl-cb[data-on], .agx-jl-cb:focus-visible { opacity: 1; }
+.agx-jl-cb[data-on] { color: var(--primary); }
+.agx-jl-cb:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
+
+.agx-jbulk {
+  position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 5; display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border-radius: 12px; background: var(--surface-card); box-shadow: inset 0 0 0 1px var(--primary), 0 10px 40px rgba(0, 0, 0, 0.4);
+}
+.agx-jbulk { flex-wrap: wrap; justify-content: center; max-width: calc(100% - 24px); }
+.agx-jbulk-menu { position: relative; }
+.agx-jbulk-menu .agx-jb-selmenu { bottom: calc(100% + 6px); max-height: 260px; overflow-y: auto; min-width: 180px; }
+.agx-jbulk-n { font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(12px * var(--agx-fs, 1)); color: var(--text); }
+.agx-jbulk-b {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 8px; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text2);
+  background: transparent; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 18%, transparent);
+}
+.agx-jbulk-b:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
 .agx-jl-more {
   display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; height: 40px; margin: 4px 0 8px;
   border-radius: 10px; background: transparent; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text2);
@@ -5015,7 +5421,9 @@ button.agx-cd-chip:hover, button.agx-cd-chip:focus-visible { background: color-m
 .agx-jl-skrow b { display: block; height: 12px; border-radius: 6px; }
 .agx-jl-skrow .tile { flex: none; width: 22px; height: 22px; border-radius: 7px; }
 
-.agx-jl-ld { flex: none; height: 2px; margin: 0 24px; border-radius: 2px; overflow: hidden; background: color-mix(in srgb, var(--primary) 8%, transparent); }
+.agx-jl-ld { flex: none; height: 3px; margin: 0 24px; border-radius: 2px; overflow: hidden; background: color-mix(in srgb, var(--primary) 14%, transparent); }
+/* A read in flight dims the cards it is about to replace: the 2px line alone went unseen, and a view switch looked like nothing happened. */
+[data-slot="strip"][data-busy="true"] ~ * { opacity: .55; transition: opacity .15s ease-out; }
 .agx-jl-ld i { display: block; width: 30%; height: 100%; border-radius: 2px; background: var(--primary); animation: agx-jl-slide 1.2s ease-in-out infinite; }
 @keyframes agx-jl-slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
 @media (prefers-reduced-motion: reduce) { .agx-jl-ld i { animation: none; } }
@@ -5042,6 +5450,378 @@ button.agx-cd-chip:hover, button.agx-cd-chip:focus-visible { background: color-m
 .agx-jl-empty p { max-width: 46ch; font-size: calc(11.5px * var(--agx-fs, 1)); }
 .agx-jl-empty .acts { display: flex; gap: 6px; margin-top: 4px; }
 
+/* The Jira board (jira/list/JiraBoard.tsx). One column width per density, never stretched: --jb-w is 280 or 232 and
+   the leftover room stays empty on the right. Sideways overflow is told by the fades, the "+N columns" pill and snap. */
+.agx-jb { position: relative; display: flex; flex: 1; min-height: 0; min-width: 0; container-type: inline-size; }
+/* The Jira board's accent (the mockup's violet), on what is chosen: the selected card, the pill, a pressed toggle. */
+.agx-jacc { --primary: var(--jira-accent); --primary-hover: var(--jira-accent-hover); --primary-ink: var(--jira-accent); }
+.agx-jb-scroll {
+  display: flex; flex-direction: column; align-items: flex-start; flex: 1; min-width: 0; overflow: auto; padding: 0 12px 12px;
+  /* `proximity`, not `mandatory`: a mandatory snap fights a trackpad swipe or a wheel notch smaller than one column, snapping
+     straight back to where it was, so only a scripted scrollTo (the "+N columns" pill) ever moved it. Proximity still snaps
+     once a gesture settles near a column, but a normal scroll, in flight, is never pulled back.
+     Proximity was still not enough: a short sideways scroll that ended within Chrome's proximity range was pulled back to a
+     column's edge after the gesture, so the board followed one scroll and ignored the next. No snap at all now; the
+     "+N columns" pill computes its own column edge (nextColumnLeft) and never needed one. */
+  scroll-snap-type: none;
+  scrollbar-width: thin; scrollbar-color: transparent transparent;
+}
+.agx-jb-scroll:hover { scrollbar-color: color-mix(in srgb, var(--text) 24%, transparent) transparent; }
+.agx-jb-scroll::-webkit-scrollbar { height: 6px; width: 6px; }
+.agx-jb-scroll::-webkit-scrollbar-thumb { background: transparent; }
+.agx-jb-scroll:hover::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--text) 24%, transparent); }
+.agx-jb-heads, .agx-jb-row { display: flex; align-items: flex-start; gap: 12px; }
+.agx-jb-heads { position: sticky; top: 0; z-index: 2; padding-bottom: 8px; background: var(--bg); }
+.agx-jb-col { flex: 0 0 var(--jb-w); width: var(--jb-w); min-width: var(--jb-w); max-width: var(--jb-w); scroll-snap-align: start; display: flex; flex-direction: column; gap: 8px; }
+.agx-jb-lane { display: flex; flex-direction: column; gap: 8px; padding-bottom: 12px; }
+/* A lane's name runs as wide as the board's visible width (container .agx-jb), not one column: a long epic name was
+   cut to its first words. */
+.agx-jb-lanehead {
+  position: sticky; left: 0; display: inline-flex; align-items: center; gap: 8px; max-width: 100cqi; height: 24px; padding: 0 2px;
+  font-size: calc(11px * var(--agx-fs, 1)); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text3);
+}
+.agx-jb-colhead {
+  flex-direction: row; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border-radius: 8px; white-space: nowrap;
+  background: var(--surface-card); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent);
+}
+.agx-jb-colname { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(12px * var(--agx-fs, 1)); font-weight: 600; color: var(--text); }
+.agx-jb-count { flex: none; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); font-variant-numeric: tabular-nums; }
+.agx-jb-wip {
+  flex: none; height: 20px; line-height: 18px; padding: 0 6px; border-radius: 4px; font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: calc(10.5px * var(--agx-fs, 1)); color: var(--text3); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 18%, transparent);
+}
+/* An empty board says so once; the empty columns stay slim and the whole column takes a drop. */
+.agx-jb-hint { margin: 4px 8px 8px; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); }
+.agx-jb-wip[data-over] { color: var(--warning-ink); box-shadow: inset 0 0 0 1px var(--warning); }
+/* A folded column (JiraBoard toggleFold): a 44px strip with its caret, dot and count; the name runs down it. */
+.agx-jb-fold { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-left: -6px; border-radius: 4px; color: var(--text3); }
+.agx-jb-fold:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
+.agx-jb-fold svg { transition: transform .15s ease-out; }
+.agx-jb-colhead[data-folded] .agx-jb-fold svg { transform: rotate(-90deg); }
+.agx-jb-fold[data-folded] svg { transform: rotate(-90deg); }
+button.agx-jb-lanehead { cursor: pointer; border-radius: 6px; }
+button.agx-jb-lanehead:hover { color: var(--text); }
+button.agx-jb-lanehead:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.agx-jb-lanehead .agx-jb-fold { margin-left: 0; width: 16px; height: 16px; }
+.agx-jb-col[data-folded] { flex-basis: 44px; width: 44px; min-width: 44px; max-width: 44px; }
+.agx-jb-colhead[data-folded] { flex-direction: column; justify-content: flex-start; height: auto; min-height: 160px; padding: 8px 0; gap: 8px; }
+.agx-jb-colhead[data-folded] .agx-jb-fold { margin-left: 0; }
+.agx-jb-colhead[data-folded] .agx-jb-colname { writing-mode: vertical-rl; max-height: 240px; }
+.agx-jb-colhead[data-folded] .agx-jb-gap, .agx-jb-colhead[data-folded] .agx-jb-wip { display: none; }
+/* The whole bar (and the open header) is the click target. */
+.agx-jb-colhead[role="button"] { cursor: pointer; }
+.agx-jb-colhead[role="button"]:hover { background: color-mix(in srgb, var(--text) 6%, var(--surface-card)); }
+.agx-jb-colhead[role="button"]:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+/* A column opening or closing: width + fade, ease-out. */
+.agx-jb-col { transition: flex-basis .18s ease-out, width .18s ease-out, min-width .18s ease-out, max-width .18s ease-out; }
+.agx-jb-col[data-jb-dragopen] { animation: agx-jb-open .18s ease-out; }
+@keyframes agx-jb-open { from { opacity: 0; } to { opacity: 1; } }
+/* Dragging: a column opened for the card shows where it can land; the bars it cannot take look unavailable. */
+.agx-jb-droptip {
+  padding: 10px 12px; border-radius: 8px; border: 1.5px dashed var(--jira-accent); background: color-mix(in srgb, var(--jira-accent) 10%, transparent);
+  font-size: calc(12px * var(--agx-fs, 1)); color: var(--text2); pointer-events: none;
+}
+/* While a card is dragged the columns snap, so the ones to the right never slide under the pointer mid-measure. */
+.agx-jb[data-jb-dragging] .agx-jb-col { transition: none; animation: none; }
+.agx-jb[data-jb-dragging] .agx-jb-col[data-folded] { opacity: .5; }
+.agx-jb[data-jb-dragging] .agx-jb-colhead[data-folded] { pointer-events: none; }
+@media (prefers-reduced-motion: reduce) {
+  .agx-jb-fold svg { transition: none; }
+  .agx-jb-col { transition: none; animation: none; }
+  .agx-jb-col[data-jb-dragopen] { animation: none; }
+}
+.agx-jb-card {
+  position: relative; display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 12px; border-radius: 8px; background: var(--surface-card); cursor: pointer;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent);
+}
+/* The comfortable Jira tile under its title (JiraTile.tsx): the one thing that needs you, read-only PR tickets, Jira actions.
+   House tokens only, so it holds in every theme; --HIT is the 26px control height. */
+.agx-jt-attn { display: flex; align-items: center; gap: 6px; min-height: 22px; font-size: calc(11px * var(--agx-fs, 1)); font-weight: 600; color: var(--c); }
+.agx-jt-now { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; padding: 4px 6px; border-radius: 8px; background: var(--surface-sunken, var(--bg2)); font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--c); }
+.agx-jt-now .k { flex: none; font-size: calc(9.5px * var(--agx-fs, 1)); letter-spacing: .06em; color: var(--text3); }
+.agx-jt-now .ring { flex: 0 100 36px; min-width: 0; display: inline-flex; gap: 1px; width: 36px; height: 6px; border-radius: 3px; overflow: hidden; background: var(--border); }
+.agx-jt-now .ring i { display: block; min-width: 3px; }
+.agx-jt-now .ring i[data-k="ok"] { background: var(--success-ink); }
+.agx-jt-now .ring i[data-k="bad"] { background: var(--error-ink); }
+.agx-jt-now .ring i[data-k="run"] { background: var(--warning-ink); }
+.agx-jt-now[data-action="fix-conflicts"] button, .agx-jt-now[data-action="start"] button { background: var(--warning); border-color: var(--warning); color: #fff; }
+.agx-jt-now button { display: inline-flex; align-items: center; gap: 4px; }
+.agx-jt-now .w .key { color: var(--error-ink); font-weight: 700; }
+.agx-jt-now .w { color: var(--text); }
+.agx-jt-now .ring[data-baton] i[data-k="off"] { background: transparent; }
+.agx-jt-now .ring[data-baton] i[data-k="run"] { background: var(--warning); }
+.agx-jt-wait { padding: 2px 6px; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); font-family: var(--jm-mono, ui-monospace, monospace); }
+.agx-jt-now button[aria-disabled="true"] { opacity: .6; cursor: default; }
+.agx-jt-now .w { flex: 1 1 auto; min-width: 0; font-family: var(--jm-mono, ui-monospace, monospace); font-weight: 600; }
+.agx-jt-now button { flex: none; white-space: nowrap; min-width: max-content; border: 1px solid var(--border); background: var(--surface-card); color: var(--text); border-radius: 6px; padding: 1px 8px; font: inherit; cursor: pointer; }
+.agx-jt-attn .x { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agx-jt-attn .tm { margin-left: auto; font-weight: 400; color: var(--text3); font-size: calc(10.5px * var(--agx-fs, 1)); white-space: nowrap; }
+.agx-jchg { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; font-size: calc(10.5px * var(--agx-fs, 1)); color: var(--text2); }
+.agx-jchg b { flex: none; padding: 0 6px; border-radius: 8px; font-weight: 600; font-size: calc(9.5px * var(--agx-fs, 1)); letter-spacing: .04em; text-transform: uppercase; color: var(--accent, var(--primary)); background: color-mix(in srgb, var(--accent, var(--primary)) 16%, transparent); }
+.agx-jl-title .agx-jchg { margin-left: 8px; flex: 0 1 auto; }
+.agx-jt-attn + .agx-jchg { margin: 2px 0 4px; }
+.agx-jchg[data-kind="comments"] b { text-transform: none; letter-spacing: 0; font-size: calc(10.5px * var(--agx-fs, 1)); }
+.agx-jnew { flex: none; padding: 0 6px; border-radius: 8px; font-weight: 600; font-size: calc(9.5px * var(--agx-fs, 1)); letter-spacing: .04em; text-transform: uppercase; color: var(--accent, var(--primary)); background: color-mix(in srgb, var(--accent, var(--primary)) 16%, transparent); }
+.agx-jnew-tab { margin-left: 6px; text-transform: none; letter-spacing: 0; }
+@keyframes agx-jfound { from { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, var(--primary)) 55%, transparent); } to { box-shadow: 0 0 0 3px transparent; } }
+.agx-jfound { animation: agx-jfound 1100ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .agx-jfound { animation: none; outline: 2px solid var(--accent, var(--primary)); outline-offset: 2px; } }
+.agx-jchg .r { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agx-jt-prs { display: flex; align-items: stretch; gap: 6px; min-width: 0; }
+.agx-jt-prs:has(.agx-jt-more) > .agx-jt-pr { flex: 1 1 0; }
+.agx-jt-prs:not(:has(.agx-jt-more)) { flex-direction: column; }
+.agx-jt-prs:not(:has(.agx-jt-more)) > .agx-jt-pr { flex: 0 0 auto; }
+/* Compact density keeps one chip: the lead PR's number and CI, and +N for the rest. */
+.agx-jt-cmp { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; max-width: 100%; min-height: 20px; padding: 0 6px; border-radius: 6px; font-size: calc(11px * var(--agx-fs, 1)); color: var(--c); background: color-mix(in srgb, var(--c) 9%, var(--bg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 28%, transparent); cursor: pointer; white-space: nowrap; }
+.agx-jt-cmp .n { font-weight: 600; }
+.agx-jt-cmp .rt { font-variant-numeric: tabular-nums; }
+.agx-jt-cmp .m { color: var(--text3); }
+.agx-jt-pr {
+  position: relative; display: flex; flex-direction: column; gap: 1px; min-width: 0; padding: 2px 8px 2px 12px; border-radius: 6px; overflow: hidden; text-align: left; cursor: pointer;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--c) 9%, var(--bg)), color-mix(in srgb, var(--c) 4%, var(--bg)));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 28%, transparent); color: var(--text2);
+}
+.agx-jt-pr::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--c); }
+.agx-jt-pr:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 55%, transparent); }
+.agx-jt-pr:focus-visible { outline: 2px solid var(--jira-accent); outline-offset: 2px; }
+.agx-jt-pr .r1 { display: flex; align-items: center; gap: 6px; min-height: 22px; font-size: calc(11px * var(--agx-fs, 1)); white-space: nowrap; }
+.agx-jt-pr .n { font-weight: 600; color: var(--c); }
+.agx-jt-pr .base { display: inline-flex; align-items: center; gap: 4px; min-width: 0; color: var(--text3); overflow: hidden; }
+.agx-jt-pr .rt { margin-left: auto; color: var(--c); font-variant-numeric: tabular-nums; }
+.agx-jt-pr .rt[data-ci="unknown"] { color: var(--text3); }
+.agx-jt-pr .r2 { display: flex; align-items: center; gap: 8px; min-height: 18px; font-size: calc(10.5px * var(--agx-fs, 1)); color: var(--text2); white-space: nowrap; overflow: hidden; }
+.agx-jt-none {
+  display: flex; align-items: center; min-height: var(--HIT, 26px); padding: 2px 8px; border-radius: 6px; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text4, var(--text3));
+  border: 1.5px dashed color-mix(in srgb, var(--text) 28%, transparent);
+}
+.agx-jt-kids { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: calc(10.5px * var(--agx-fs, 1)); color: var(--text3); }
+.agx-jt-kids .bar { flex: 1 1 30px; min-width: 30px; height: 6px; border-radius: 4px; background: var(--bg4, var(--bg3)); overflow: hidden; }
+.agx-jt-kids .bar i { display: block; height: 100%; background: var(--success); }
+.agx-jt-kids .sq { display: flex; flex-wrap: wrap; gap: 2px; max-width: 50%; align-items: center; }
+.agx-jt-kids .sq i { width: 10px; height: 10px; border-radius: 2px; background: var(--bg4, var(--bg3)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 20%, transparent); }
+.agx-jt-kids .sq i[data-k="done"] { background: var(--success); }
+.agx-jt-kids .sq i[data-k="progress"] { background: var(--jira-accent); }
+.agx-jt-kids .sq i[data-k="blocked"] { background: var(--error); }
+.agx-jt-kids .sq em { font-style: normal; color: var(--text3); }
+.agx-jt-err { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 6px; font-size: calc(10.5px * var(--agx-fs, 1)); color: var(--error-ink); background: color-mix(in srgb, var(--error) 8%, var(--bg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--error) 30%, transparent); }
+.agx-jt-err button { margin-left: auto; min-height: var(--HIT, 26px); color: var(--error-ink); font-weight: 600; text-decoration: underline; }
+.agx-jt-err button:focus-visible { outline: 2px solid var(--jira-accent); outline-offset: 2px; }
+.agx-jt-act[data-busy] { cursor: progress; }
+.agx-jt-spin { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 50%; border: 2px solid color-mix(in srgb, currentColor 30%, transparent); border-top-color: currentColor; animation: agx-jt-spin 1s linear infinite; }
+@keyframes agx-jt-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .agx-jt-spin { animation: none; } }
+:root[data-reduce-motion] .agx-jt-spin { animation: none; }
+.agx-jt-more, .agx-jt-ment, .agx-jt-dots {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: var(--HIT, 26px); min-width: var(--HIT, 26px); padding: 0 8px; border-radius: 8px;
+  font-size: calc(11px * var(--agx-fs, 1)); font-weight: 600; color: var(--text2); background: var(--bg);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 22%, transparent);
+}
+/* The pull requests that mention a card: a quiet chip as high as the buttons beside it. It was dashed, which reads as a drop zone, and its digit sat off centre on the mono baseline; line-height 1 and tabular digits put it in the middle. */
+.agx-jt-ment { font-weight: 500; color: var(--text3); line-height: 1; font-variant-numeric: tabular-nums; padding: 0 8px; min-width: 0; }
+.agx-jt-dots { padding: 0; }
+.agx-jt-more:hover, .agx-jt-ment:hover, .agx-jt-dots:hover { background: var(--bg3); color: var(--text); }
+.agx-jt-more:focus-visible, .agx-jt-ment:focus-visible, .agx-jt-dots:focus-visible, .agx-jt-act:focus-visible { outline: 2px solid var(--jira-accent); outline-offset: 2px; }
+.agx-jt-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: var(--HIT, 26px); }
+.agx-jt-act {
+  display: inline-flex; align-items: center; min-height: var(--HIT, 26px); padding: 0 10px; border-radius: 8px; font-size: calc(11px * var(--agx-fs, 1)); font-weight: 600; white-space: nowrap;
+  /* A label is never cut: the button keeps its padding and only the text inside gives way (the second button is folded into the menu when the row cannot hold both, see foldSecondary). */
+  flex: 0 0 auto; min-width: max-content;
+  color: var(--warning-ink); background: color-mix(in srgb, var(--warning) 12%, var(--bg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning) 45%, transparent);
+}
+.agx-jt-lbl { min-width: max-content; white-space: nowrap; }
+.agx-jt-act[data-kind="assign"] { flex: none; }
+.agx-jt-act[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
+.agx-jt-act[data-kind="assign"] { color: var(--text2); background: var(--bg); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 22%, transparent); }
+.agx-jt-act[data-kind="move-next"] { color: var(--jira-accent-on); background: var(--jira-accent); box-shadow: none; }
+.agx-jt-hov { display: none; }
+.agx-jb-card:hover .agx-jt-hov, .agx-jb-card:focus-within .agx-jt-hov { display: inline-flex; align-items: center; }
+.agx-jt-pr .ext { color: var(--text3); font-size: calc(10px * var(--agx-fs, 1)); margin-left: -4px; }
+.agx-jt-act[data-kind="open-worker"] { color: var(--jira-accent-on); background: var(--jira-accent); box-shadow: none; }
+.agx-jt-pop {
+  position: fixed; display: flex; flex-direction: column; padding: 8px; border-radius: 10px; background: var(--bg); max-height: 320px; overflow-y: auto;
+  box-shadow: inset 0 0 0 1px var(--surface-line), 0 2px 4px rgba(0, 0, 0, .08), 0 18px 34px -14px var(--shadow);
+}
+.agx-jt-pop .gh { display: flex; justify-content: space-between; padding: 6px 4px 2px; font-size: calc(10.5px * var(--agx-fs, 1)); color: var(--text2); }
+.agx-jt-pop .gh.mu { color: var(--text3); border-top: 1px solid var(--surface-line); margin-top: 4px; }
+.agx-jt-pop .pr { display: flex; align-items: center; gap: 6px; min-height: var(--HIT, 26px); padding: 0 6px; border-radius: 6px; font-size: calc(11px * var(--agx-fs, 1)); white-space: nowrap; color: var(--text2); text-align: left; }
+.agx-jt-pop .pr:hover { background: var(--bg3); }
+.agx-jt-pop .pr:focus-visible { outline: 2px solid var(--jira-accent); outline-offset: -2px; }
+.agx-jt-pop .pr .n { font-weight: 600; color: var(--c); }
+.agx-jt-pop .pr .rt { margin-left: auto; color: var(--c); font-variant-numeric: tabular-nums; }
+.agx-jt-pop .pr.m { color: var(--text3); }
+
+.agx-jb-card[data-density="compact"] { gap: 4px; padding: 6px 8px; }
+/* A card assigned to you is tinted a shade toward the accent: found at a glance on a shared board, without a second bar beside the family one. */
+.agx-jb-card[data-mine] { background: color-mix(in srgb, var(--primary) 5%, var(--surface-card)); }
+/* An agent waiting on you: the list row's warning edge, as a background image so it survives data-mine's tint. */
+.agx-jb-card[data-needs] { background-image: linear-gradient(var(--warning), var(--warning)); background-size: 3px calc(100% - 16px); background-position: left center; background-repeat: no-repeat; }
+/* The same edge in red for an agent stalled or errored, so a stuck card stands out of a column before its dot is read. */
+.agx-jb-card[data-stuck] { background-image: linear-gradient(var(--error), var(--error)); background-size: 3px calc(100% - 16px); background-position: left center; background-repeat: no-repeat; }
+.agx-jb-card:hover, .agx-jb-card[data-ctx] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 26%, transparent); }
+.agx-jb-card[aria-selected="true"] { box-shadow: inset 0 0 0 2px var(--jira-accent); }
+.agx-jb-card:focus-visible { outline: 2px solid var(--jira-accent); outline-offset: 2px; }
+.agx-jb-head { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; white-space: nowrap; }
+/* Never clips: the key, tile, status and priority keep their size; only the chips shrink and ellipsize. */
+.agx-jb-head > * { flex-shrink: 0; }
+.agx-jb-head > :is(.agx-jb-parent, .agx-jb-epic) { flex: 0 1 auto; min-width: 0; }
+.agx-jb-key { flex: none; font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(12px * var(--agx-fs, 1)); font-weight: 500; color: var(--jira-accent); }
+.agx-jb-epic {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; height: 20px; line-height: 20px; padding: 0 6px; border-radius: 4px;
+  font-family: var(--font-prose); font-size: calc(11px * var(--agx-fs, 1)); color: color-mix(in srgb, var(--e) 55%, var(--text));
+  background: color-mix(in srgb, var(--e) 16%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--e) 45%, transparent);
+}
+/* A sub-task's parent is a card, not an epic: an outline chip with the key (never cut), so it never reads like the filled epic chip. */
+.agx-jb-parent {
+  flex: 0 1 auto; min-width: 40px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; height: 20px; line-height: 20px; padding: 0 6px; border: 0; border-radius: 4px; cursor: pointer; background: transparent;
+  font-family: var(--font-prose); font-size: calc(11px * var(--agx-fs, 1)); color: var(--jira-accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--jira-accent) 55%, transparent);
+}
+.agx-jb-parent:hover { background: color-mix(in srgb, var(--jira-accent) 12%, transparent); }
+.agx-jb-parent:focus-visible { outline: 2px solid var(--jira-accent); outline-offset: 1px; }
+/* The open card's family: a thin left bar on its parent or its sub-tasks (a pseudo-element, so the selected ring keeps the box-shadow). */
+.agx-jb-card[data-jb-family]::before {
+  content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 0 2px 2px 0; pointer-events: none;
+  background: color-mix(in srgb, var(--jira-accent) 70%, transparent);
+}
+/* The blocker warning line (the card's Family block and the pull request panel). */
+.agx-fam-warn{display:inline-flex;align-items:center;gap:4px;min-width:0;height:20px;padding:0 6px;border-radius:4px;font-size:calc(11px * var(--agx-fs, 1));color:var(--error-ink);background:color-mix(in srgb,var(--error) 10%,transparent)}
+.agx-jb-gap { flex: 1 1 0; min-width: 0; }
+.agx-jb-pri, .agx-jb-flag { flex: none; display: inline-grid; place-items: center; }
+.agx-jb-flag { color: var(--warning-ink); }
+.agx-jb-stale { flex: none; display: inline-grid; place-items: center; color: var(--text4); }
+.agx-jb-title {
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere;
+  font-family: var(--font-prose); font-size: calc(13.5px * var(--agx-fs, 1)); line-height: 1.4; font-weight: 400; color: var(--text);
+}
+.agx-jb-card[data-density="compact"] .agx-jb-title { font-size: calc(12.5px * var(--agx-fs, 1)); line-height: 1.35; }
+.agx-jb-blk {
+  display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; max-width: 100%; height: 20px; padding: 0 6px; border-radius: 4px;
+  font-size: calc(10.5px * var(--agx-fs, 1)); color: var(--error-ink); background: color-mix(in srgb, var(--error) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--error) 40%, transparent);
+}
+.agx-jb-trunc { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agx-jb-prrow {
+  display: inline-flex; align-items: center; gap: 8px; align-self: flex-start; max-width: 100%; height: 24px; padding: 0 2px; border-radius: 6px;
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(11px * var(--agx-fs, 1));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 16%, transparent);
+}
+.agx-jb-prrow[data-ci="failing"] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--error) 55%, transparent); }
+.agx-jb-prrow[data-ci="passing"] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--success) 45%, transparent); }
+.agx-jb-prrow[data-ci="running"] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning) 55%, transparent); }
+.agx-jb-card .agx-jl-pr { opacity: 1; }
+.agx-jb-ci { display: inline-flex; align-items: center; gap: 4px; flex: none; padding-right: 6px; color: var(--c); white-space: nowrap; }
+.agx-jb-ci-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--c); }
+.agx-jb-ci-word { color: var(--text3); }
+.agx-jb-work { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text2); }
+.agx-jb-work-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--text4); }
+.agx-jb-work-dot[data-live] { background: var(--success); }
+.agx-jb-work-dot[data-needs] { background: var(--warning); }
+.agx-jb-work-dot[data-stuck] { background: var(--error); }
+.agx-jb-colneeds { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--warning); }
+.agx-jb-colneeds[data-live] { background: var(--success); }
+.agx-jb-colneeds[data-stuck] { background: var(--error); }
+.agx-jb-work[data-ended] { color: var(--text3); }
+.agx-jb-work[data-ended] svg { flex: none; color: var(--success); }
+.agx-jb-work[data-ended] .agx-jb-work-name { color: var(--text3); font-family: inherit; }
+.agx-jb-work-name { font-family: var(--font-mono, ui-monospace, monospace); color: var(--text); }
+.agx-jb-work-role { flex: none; color: var(--text3); }
+.agx-jb-work-role[data-needs] { color: var(--warning-ink); font-weight: 600; }
+.agx-jb-cost { flex: none; font-family: var(--font-mono, ui-monospace, monospace); color: var(--text3); font-variant-numeric: tabular-nums; }
+.agx-jb-foot { display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 24px; overflow: hidden; }
+/* A tile's due date, shown only when it is late, today or tomorrow. */
+/* Sub-tasks done, as a bar beside the count; the same 40 px the sidebar's epic bars use. */
+.agx-jd-subbar { display: inline-block; width: 40px; height: 4px; border-radius: 99px; overflow: hidden; background: color-mix(in srgb, var(--text) 12%, transparent); }
+.agx-jd-subbar > i { display: block; height: 100%; background: var(--success); }
+.agx-jb-due { flex-shrink: 0; font-size: calc(10.5px * var(--agx-fs, 1)); white-space: nowrap; color: var(--warning-ink); }
+.agx-jb-due[data-tone="late"] { color: var(--error-ink); font-weight: 600; }
+.agx-jb-pill {
+  flex: none; height: 20px; line-height: 20px; padding: 0 6px; border-radius: 4px; white-space: nowrap; font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(10.5px * var(--agx-fs, 1)); color: var(--text3); background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+.agx-jb-pill-line { display: inline-flex; align-items: center; gap: 4px; background: transparent; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 18%, transparent); }
+.agx-jb-label { flex: 0 1 auto; min-width: 0; max-width: 112px; height: 20px; line-height: 20px; padding: 0 6px; border-radius: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(10.5px * var(--agx-fs, 1)); color: var(--text2); background: color-mix(in srgb, var(--text) 7%, transparent); }
+.agx-jb-fade { position: absolute; top: 0; bottom: 12px; width: 96px; pointer-events: none; opacity: 0; transition: opacity 150ms ease; z-index: 3; }
+.agx-jb-fade.r { right: 0; background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--bg) 82%, transparent) 60%, var(--bg)); }
+.agx-jb-fade.l { left: 0; background: linear-gradient(270deg, transparent, color-mix(in srgb, var(--bg) 82%, transparent) 60%, var(--bg)); }
+.agx-jb-fade[data-on] { opacity: 1; }
+.agx-jb-more {
+  position: absolute; right: 16px; bottom: 24px; z-index: 4; display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 12px;
+  border-radius: 16px; white-space: nowrap; font-size: calc(12px * var(--agx-fs, 1)); font-weight: 600; color: var(--jira-accent-on);
+  background: var(--jira-accent); box-shadow: var(--surface-lift);
+}
+.agx-jb-more:hover { background: var(--jira-accent-hover); }
+.agx-jb-more:focus-visible { outline: 2px solid var(--jira-accent); outline-offset: 2px; }
+.agx-jb-keys {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 12px; min-height: 28px; padding: 4px 24px; overflow: hidden;
+  font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 10%, transparent);
+}
+.agx-jb-keys-i { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.agx-jb-keys-g { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1 1 auto; overflow: hidden; }
+.agx-jb-keys-grp, .agx-jmock .agx-jm-hints .agx-jb-keys-grp { display: inline-flex; align-items: center; gap: 12px; flex: none; }
+.agx-jb-keys-grp + .agx-jb-keys-grp { padding-left: 12px; box-shadow: inset 1px 0 0 color-mix(in srgb, var(--text) 12%, transparent); }
+.agx-jb-keys-all { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 6px; border-radius: 6px; color: var(--text3); white-space: nowrap; }
+.agx-jb-keys-all:hover:not(:disabled) { color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); }
+.agx-jb-keys-all:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+
+/* Pointer drag: the ghost slot a card would land in, the dimmed source it is lifted from, the clone that
+   follows the pointer, and the quick confirm bar a drop waits on (JiraBoard.tsx, dragModel.ts). */
+.agx-jb-col[data-jb-dropcol], .agx-jb-cards[data-jb-dropcol] { cursor: grab; }
+.agx-jb-col[data-jb-refused], .agx-jb-cards[data-jb-refused] { cursor: not-allowed; }
+.agx-jb[data-jb-dragging] { user-select: none; }
+.agx-jb-ghost {
+  display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 12px; border-radius: 8px;
+  border: 1.5px dashed var(--jira-accent); background: color-mix(in srgb, var(--jira-accent) 10%, transparent); opacity: .7;
+}
+.agx-jb-ghost .agx-jb-key { opacity: .55; }
+.agx-jb-ghost-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .45; font-family: var(--font-prose); font-size: calc(12.5px * var(--agx-fs, 1)); color: var(--text); }
+.agx-jb-card[data-jb-drag-source] { opacity: .4; box-shadow: inset 0 0 0 1.5px dashed color-mix(in srgb, var(--text) 30%, transparent); outline: 1.5px dashed color-mix(in srgb, var(--text) 30%, transparent); outline-offset: -1.5px; cursor: grabbing; }
+.agx-jb-lift-wrap { position: fixed; z-index: 50; pointer-events: none; transform: rotate(var(--tilt, 0deg)); }
+.agx-jb-lift {
+  position: relative; height: 100%; display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 8px;
+  background: var(--surface-card); box-shadow: var(--surface-lift); opacity: .96;
+}
+/* A batch drag: two offset cards behind the lifted one, same shape, so the stack reads without extra chrome. */
+.agx-jb-lift-shadow { position: absolute; inset: 0; border-radius: 8px; background: var(--surface-card); box-shadow: var(--surface-lift); }
+.agx-jb-lift-shadow.s1 { transform: translate(5px, 5px); z-index: -1; }
+.agx-jb-lift-shadow.s2 { transform: translate(10px, 10px); z-index: -2; opacity: .8; }
+.agx-jb-lift-badge {
+  position: absolute; top: -8px; right: -8px; display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px;
+  font-size: calc(11px * var(--agx-fs, 1)); font-weight: 700; color: var(--jira-accent-on); background: var(--jira-accent); box-shadow: var(--surface-lift);
+}
+@media (prefers-reduced-motion: reduce) { .agx-jb-lift-wrap { transform: none; } }
+:root[data-reduce-motion] .agx-jb-lift-wrap { transform: none; }
+.agx-jb-card[data-jb-pending] { box-shadow: inset 0 0 0 2px var(--jira-accent); }
+.agx-jb-card[data-jb-multisel] { box-shadow: inset 0 0 0 2px var(--jira-accent); }
+.agx-jb-multidot {
+  position: absolute; bottom: 6px; right: calc(var(--HIT, 26px) + 12px); z-index: 1; display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
+  color: var(--jira-accent-on); background: var(--jira-accent); box-shadow: var(--surface-lift);
+}
+/* While a batch move is pending: every card in it dims, with a small clock mark, so the hold reads on all of them
+   and not only the one carrying the confirm bar. */
+.agx-jb-card[data-jb-batch-wait] { opacity: .55; }
+.agx-jb-waitdot {
+  position: absolute; top: -7px; left: -7px; z-index: 1; display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
+  color: var(--text3); background: var(--surface-card); box-shadow: var(--surface-lift);
+}
+.agx-jb-selmove { position: relative; }
+.agx-jb-selmenu {
+  position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 5; display: flex; flex-direction: column; gap: 2px; min-width: 160px; max-height: 240px; overflow: auto;
+  margin: 0; padding: 6px; list-style: none; border-radius: 8px; background: var(--surface-card); box-shadow: var(--surface-lift);
+}
+.agx-jb-selmenu button { display: block; width: 100%; text-align: left; padding: 6px 8px; border-radius: 6px; font-size: calc(12.5px * var(--agx-fs, 1)); color: var(--text); }
+.agx-jb-selmenu button:hover { background: color-mix(in srgb, var(--text) 10%, transparent); }
+.agx-jb-confirm {
+  position: absolute; inset: auto 8px 8px 8px; display: flex; align-items: center; gap: 6px; min-width: 0; height: 28px; padding: 0 6px 0 10px; border-radius: 7px;
+  background: var(--jira-accent); box-shadow: var(--surface-lift); cursor: default;
+}
+.agx-jb-confirm-txt { flex: 1 1 0; min-width: 0; font-size: calc(11.5px * var(--agx-fs, 1)); font-weight: 600; color: var(--jira-accent-on); }
+.agx-jb-confirm-btn {
+  flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%;
+  color: var(--jira-accent-on); background: color-mix(in srgb, var(--jira-accent-on) 18%, transparent);
+}
+.agx-jb-confirm-btn:hover { background: color-mix(in srgb, var(--jira-accent-on) 30%, transparent); }
+.agx-jb-confirm-btn:focus-visible { outline: 2px solid var(--jira-accent-on); outline-offset: 1px; }
+
 /* Starboard hover cards: provenance rows and the trust badge (TipHost + lib/tip.ts). */
 .agx-tip-tr { margin-left: auto; padding: 2px 8px; border-radius: 99px; font: 600 calc(9.5px * var(--agx-fs, 1)) var(--font-mono, ui-monospace, monospace); letter-spacing: .06em; text-transform: uppercase; background: color-mix(in srgb, var(--tip-ink) 12%, transparent); }
 .agx-tip-tr[data-trust="measured"] { color: #6ee7a0; }
@@ -5058,7 +5838,7 @@ button.agx-cd-chip:hover, button.agx-cd-chip:focus-visible { background: color-m
    Sizes in em off one --sb-u, so one design serves three widths (as the mockup does). */
 .sb { container-type: inline-size; container-name: sb; overflow: auto; }
 .sb-screen { --sb-u: .8; --sb-g: 11px; --sb-p: 14px; font-size: calc(13px * var(--sb-u)); height: 100%; min-height: 640px; box-sizing: border-box; display: grid; gap: var(--sb-g); padding: var(--sb-p);
-  min-width: 1100px; background: var(--bg);
+  padding-bottom: max(var(--sb-p), var(--fab-reserve)); min-width: 1100px; background: var(--bg);
   grid-template-columns: minmax(250px, 340px) 1fr minmax(300px, 400px); grid-template-rows: 42px 84px minmax(0, 1.5fr) minmax(0, 1fr);
   grid-template-areas: "head head head" "kpi kpi kpi" "crew orrery right" "crew feed bot"; }
 .sb-screen > * { min-width: 0; min-height: 0; }
@@ -5464,6 +6244,9 @@ html[data-reduce-motion] .sb-spin, html[data-reduce-motion] .sb-halo { animation
 .setup-tool-cmd { grid-column: 2 / -1; padding: 2px 0 4px; }
 .setup-tool-cmd .setup-cmd { margin-top: 0; }
 .setup-tool-empty { margin: 0; padding: 10px 12px; }
+.setup-tool-row[data-tone="bad"] .setup-tool-mark {
+  background: color-mix(in srgb, var(--error) 14%, transparent); color: color-mix(in srgb, var(--error) 80%, var(--text));
+}
 
 /* Step 4: the folder entry, the folder row and one checkbox per repository. */
 .setup-picks { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
@@ -5840,6 +6623,29 @@ html[data-reduce-motion] .setup-btn:active { transform: none; }
 .tut-art-tile[data-tone="warn"] { color: color-mix(in srgb, var(--warning) 80%, var(--text)); }
 .tut-art-name { display: block; font-size: calc(12px * var(--agx-fs, 1)); font-weight: 650; color: var(--text); }
 .tut-art-sub { display: block; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text4); }
+/* The tour: a hole in the dim around a real control, and a coach card beside it.
+   Clicks pass through the dim, so the person can try the control it points at. */
+.tour { position: fixed; inset: 0; pointer-events: none; }
+.tour-dim { position: absolute; inset: 0; background: color-mix(in srgb, var(--shadow) 72%, transparent); }
+.tour-hole {
+  position: absolute; border-radius: 8px;
+  box-shadow: 0 0 0 2px var(--primary), 0 0 0 9999px color-mix(in srgb, var(--shadow) 72%, transparent);
+  transition: left 160ms ease, top 160ms ease, width 160ms ease, height 160ms ease;
+}
+.tour-coach {
+  position: absolute; width: 280px; pointer-events: auto; padding: 12px;
+  border-radius: 10px; background: var(--surface-card); color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--surface-line), 0 10px 26px -12px var(--shadow);
+}
+.tour-coach p { margin: 0 0 10px; font-size: calc(12.5px * var(--agx-fs, 1)); line-height: 1.5; color: var(--text2); }
+.tour-pips { display: flex; gap: 4px; margin-bottom: 8px; }
+.tour-pips i { width: 16px; height: 3px; border-radius: 2px; background: var(--bg4); }
+.tour-pips i[data-on] { background: var(--primary); }
+.tour-top { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.tour-top b { font-size: calc(13px * var(--agx-fs, 1)); font-weight: 700; }
+.tour-of { margin-left: auto; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text4); }
+.tour-acts { display: flex; align-items: center; gap: 6px; }
+@media (prefers-reduced-motion: reduce) { .tour-hole { transition: none; } }
 .setup-icon-btn {
   width: 26px; height: 26px; flex: none; display: grid; place-items: center; padding: 0;
   border: 0; border-radius: 7px; background: none; color: var(--text3); cursor: pointer;
@@ -5877,3 +6683,563 @@ html[data-reduce-motion] .setup-btn:active { transform: none; }
   .setup-preview-screen { padding: 8px 10px 8px; line-height: 1.55; }
   .tut-detail p { margin-top: 6px; }
 }
+
+/* The Jira sidebar folded to its rail (jira/JiraFoldedRail.tsx): a square per view, a count badge when one is known. */
+.agx-jr { display: flex; flex-direction: column; align-items: center; gap: 6px; flex: 1; min-height: 0; overflow-y: auto; padding: 8px 0; }
+.agx-jr-sq { position: relative; flex: none; display: grid; place-items: center; border-radius: 8px; color: var(--text3); }
+.agx-jr-sq:hover { color: var(--text); background: color-mix(in srgb, var(--text) 6%, transparent); }
+.agx-jr-sq[data-on] { color: var(--text); background: color-mix(in srgb, var(--primary) 18%, transparent); }
+.agx-jr-sq:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.agx-jr-letter { font-size: calc(12px * var(--agx-fs, 1)); font-weight: 600; }
+
+
+/* jira sidebar sections */
+.agx-jsb-cap { height: 22px; padding: 0 8px; margin-top: 12px; gap: 6px; font-size: calc(10.5px * var(--agx-fs, 1)); letter-spacing: 0.04em; text-transform: uppercase; color: var(--text4); }
+.agx-jsb-cap[data-first] { margin-top: 0; }
+.agx-jsb-kbd { padding: 0 4px; margin-left: 2px; border-radius: 4px; font: inherit; letter-spacing: 0; text-transform: none; color: var(--text3); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 20%, transparent); }
+.agx-jsb-tag { padding: 0 4px; border-radius: 4px; font-size: calc(9.5px * var(--agx-fs, 1)); line-height: 14px; color: var(--jira-accent, var(--primary)); background: color-mix(in srgb, var(--jira-accent, var(--primary)) 14%, transparent); }
+.agx-jsb-count { min-width: 24px; text-align: right; font-size: calc(10.5px * var(--agx-fs, 1)); color: var(--text4); }
+.agx-jsb-count[data-count="ok"], .agx-jsb-count[data-count="more"] { color: var(--text3); }
+.agx-jsb-count[data-count="stale"] { color: var(--text4); opacity: 0.6; }
+.agx-jsb-jql { display: none; font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); }
+/* A starred view shows its JQL in place of its name only under the pointer, and only when it has JQL to show. The swap
+   used to hold on focus and on selection too, so a clicked view kept its JQL up, and a Jira filter whose JQL was not
+   read yet showed neither: the selected row was a star, a count and nothing. */
+.agx-rail-row:hover:has(.agx-jsb-jql) .agx-jsb-name { display: none; }
+.agx-rail-row:hover .agx-jsb-jql { display: block; }
+.agx-jsb-person { height: 28px; padding: 0 8px; gap: 8px; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text2); }
+.agx-jsb-ring { color: var(--text3); }
+
+/* jira sidebar r3 */
+.agx-jsb-person-btn { border-radius: 6px; cursor: pointer; text-align: left; }
+.agx-jsb-person-btn:hover { color: var(--text); background: color-mix(in srgb, var(--text) 5%, transparent); }
+.agx-jsb-person-btn:focus-visible { outline: 2px solid var(--jira-accent, var(--primary)); outline-offset: -2px; }
+
+/* jira board r3 */
+/* The board column is the container: its width, not the window's, folds the tabs, the swimlane hint and the list rows. */
+.agx-jcq { container-type: inline-size; container-name: jcq; }
+.agx-jt { display: flex; align-items: center; gap: 8px; padding: 0 24px; min-width: 0; }
+.agx-jt-wrap { position: relative; min-width: 0; flex: 0 1 auto; }
+.agx-jt-strip { display: flex; align-items: center; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+.agx-jt-strip::-webkit-scrollbar { display: none; }
+/* The edge fade: only on the side that has more to scroll to. */
+.agx-jt-wrap::before, .agx-jt-wrap::after { content: ""; position: absolute; top: 0; bottom: 0; width: 40px; transition: opacity .15s ease-out; pointer-events: none; opacity: 0; z-index: 1; }
+.agx-jt-wrap::before { left: 0; background: linear-gradient(90deg, var(--bg) 30%, transparent); }
+.agx-jt-wrap::after { right: 0; background: linear-gradient(270deg, var(--bg) 30%, transparent); }
+.agx-jt-wrap[data-l]::before, .agx-jt-wrap[data-r]::after { opacity: 1; }
+.agx-jt-tabw { position: relative; flex: none; display: inline-flex; align-items: center; border-radius: 8px; }
+.agx-jt-tab {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 8px; white-space: nowrap;
+  font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); background: transparent;
+}
+.agx-jt-tab:hover { color: var(--text); background: color-mix(in srgb, var(--text) 6%, transparent); }
+.agx-jt-tab[aria-selected="true"] { color: var(--text); font-weight: 600; box-shadow: inset 0 -2px 0 var(--jira-accent); border-radius: 8px 8px 0 0; }
+.agx-jt-tab:focus-visible { outline: 2px solid var(--jira-accent); outline-offset: -2px; }
+.agx-jt-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.agx-jt-n { font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(10.5px * var(--agx-fs, 1)); font-weight: 400; color: var(--text4); }
+.agx-jt-grip { width: 8px; margin-right: -4px; font-size: calc(10px * var(--agx-fs, 1)); letter-spacing: -2px; line-height: 1; color: var(--text4); opacity: 0; cursor: grab; user-select: none; }
+.agx-jt-tabw:hover .agx-jt-grip, .agx-jt-tabw:focus-within .agx-jt-grip { opacity: 1; }
+.agx-jt-plus { width: 28px; padding: 0; justify-content: center; margin-left: -4px; }
+/* The chips line: one thin line, only while something is applied. */
+.agx-jf-line > * { flex: none; }
+.agx-jf-line > .agx-jf-jql { flex: 0 1 auto; min-width: 0; }
+.agx-jf-chip { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 4px 0 8px; border-radius: 99px; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text2); background: var(--surface-inset); box-shadow: inset 0 0 0 1px var(--surface-line); }
+.agx-jf-chip[data-on] { padding-right: 8px; color: var(--jira-accent); background: color-mix(in srgb, var(--jira-accent) 10%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--jira-accent) 30%, transparent); }
+.agx-jf-chip i { font: normal calc(10.5px * var(--agx-fs, 1)) var(--font-mono, ui-monospace, monospace); margin-left: 2px; padding: 0 6px; border-radius: 99px; background: var(--surface-card); color: var(--text3); }
+.agx-jf-chip button { width: 14px; height: 14px; line-height: 14px; border-radius: 99px; color: var(--text3); text-align: center; }
+.agx-jf-chip button:hover { background: color-mix(in srgb, var(--text) 10%, transparent); }
+.agx-jf-jql { max-width: 300px; height: 20px; padding: 0 8px; border-radius: 99px; font: calc(11px * var(--agx-fs, 1)) var(--font-mono, ui-monospace, monospace); color: var(--jira-accent); background: color-mix(in srgb, var(--jira-accent) 10%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--jira-accent) 30%, transparent); cursor: pointer; }
+.agx-jf-jql:hover { background: color-mix(in srgb, var(--jira-accent) 18%, transparent); }
+.agx-jf-sep { width: 1px; height: 14px; margin: 0 2px; background: var(--surface-line); }
+.agx-jf-clear { height: 20px; padding: 0 6px; border-radius: 6px; font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); }
+.agx-jf-clear:hover { color: var(--text); background: color-mix(in srgb, var(--text) 6%, transparent); }
+.agx-jf-search { box-shadow: inset 0 0 0 1px transparent; }
+.agx-jf-search:focus-within { background: var(--bg); box-shadow: inset 0 0 0 1px var(--jira-accent), 0 0 0 2px color-mix(in srgb, var(--jira-accent) 25%, transparent); }
+.agx-jf-count { font-family: var(--font-mono, ui-monospace, monospace); font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); white-space: nowrap; padding-left: 6px; }
+.agx-jf-count b { font-weight: 600; color: var(--text2); }
+.agx-jt-tab[aria-selected="true"] .agx-jt-n { color: var(--text3); }
+.agx-jtab-dots {
+  display: grid; place-items: center; width: 20px; height: 20px; margin-left: -6px; border-radius: 6px; color: var(--text3); opacity: 0;
+}
+.agx-jt-tabw:hover .agx-jtab-dots, .agx-jtab-dots:focus-visible, .agx-jt-tabw:focus-within .agx-jtab-dots { opacity: 1; }
+.agx-jtab-dots:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
+.agx-jtab-act {
+  display: inline-flex; align-items: center; gap: 4px; flex: none; height: 28px; padding: 0 10px; border-radius: 8px; white-space: nowrap;
+  font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3);
+}
+.agx-jtab-act:hover:not(:disabled) { color: var(--text); background: color-mix(in srgb, var(--text) 6%, transparent); }
+.agx-jtab-act:disabled { opacity: 0.5; cursor: not-allowed; }
+.agx-jtab-act:focus-visible { outline: 2px solid var(--jira-accent); outline-offset: 2px; }
+.agx-jt-sprint {
+  display: inline-flex; align-items: center; gap: 6px; flex: none; height: 22px; padding: 0 10px; border-radius: 99px; white-space: nowrap;
+  font-size: calc(10.5px * var(--agx-fs, 1)); font-weight: 500; color: var(--info-ink); background: color-mix(in srgb, var(--info) 12%, transparent);
+}
+.agx-jt-sprint[data-late] { color: var(--warning-ink); background: color-mix(in srgb, var(--warning) 12%, transparent); }
+@container jcq (max-width: 820px) {
+  .agx-jt-sprint .agx-jt-sl { display: none; }
+  .agx-jt-sprint .agx-jt-short { display: inline; }
+}
+
+@container jcq (max-width: 800px) {
+  .agx-jt-grip { display: none; }
+}
+
+/* A board card's "..." menu: in the corner on hover or focus, always reachable by the keyboard (Shift+F10 / Menu on the card). */
+.agx-jb-dots {
+  position: absolute; top: 4px; right: 4px; z-index: 1; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px;
+  color: var(--text3); background: var(--surface-card); opacity: 0;
+}
+.agx-jb-card:hover .agx-jb-dots, .agx-jb-card:focus-within .agx-jb-dots, .agx-jb-card[data-ctx] .agx-jb-dots { opacity: 1; }
+.agx-jb-dots:hover { color: var(--text); background: color-mix(in srgb, var(--text) 10%, var(--surface-card)); }
+.agx-jb-dots:focus-visible { outline: 2px solid var(--jira-accent); outline-offset: 1px; }
+
+/* List rows: under 900 the PR sits under the title (the column is dropped in laneModel.columnsFor); under 560 the row wraps as a stack. */
+.agx-jl-pr { display: inline-flex; align-items: center; }
+@container jcq (max-width: 560px) {
+  .agx-jl-row { display: flex; flex-wrap: wrap; align-items: flex-start; row-gap: 4px; }
+  .agx-jl-row .agx-jl-main { flex: 1 1 100%; order: 3; }
+  .agx-jl-row .agx-jl-title, .agx-jl-row .agx-jl-trunc { white-space: normal; }
+  .agx-jl-row .agx-jl-cell { order: 2; }
+  .agx-jl-meta { flex-wrap: wrap; }
+}
+
+/* jira dock d2 */
+.agx-jdk-grip { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 8px; color: var(--text3); cursor: grab; touch-action: none; }
+.agx-jdk-grip:hover:not(:disabled) { color: var(--text); background: color-mix(in srgb, var(--text) 6%, transparent); }
+.agx-jdk-grip:active:not(:disabled) { cursor: grabbing; }
+.agx-jdk-grip:disabled { cursor: default; opacity: 0.4; }
+.agx-jdk-grip:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.agx-jdk-btns { display: inline-flex; align-items: center; gap: 6px; }
+/* One tidy group: every square the same size, with the same border, the grip and the close included. */
+.agx-jdk-btns > button, .agx-jdk-btns > a, .agx-jd-sq { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent); }
+aside[data-slot="dock"][data-mode="float"] { max-width: calc(100vw - 16px); }
+
+/* jira detail d2 */
+.agx-jd-path { font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); }
+.agx-jd-worker {
+  display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; height: 26px; padding: 0 8px; border-radius: 8px;
+  font-size: calc(11px * var(--agx-fs, 1)); color: var(--text2); background: color-mix(in srgb, var(--success) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--success) 35%, transparent);
+  border: 0; font-family: inherit; cursor: pointer;
+}
+.agx-jd-worker:hover { color: var(--text); }
+.agx-jd-worker[data-ended] { color: var(--text3); background: transparent; box-shadow: inset 0 0 0 1px var(--border2); }
+.agx-jd-worker[data-ended] svg { flex: none; color: var(--success); }
+.agx-jd-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--text4); }
+.agx-jd-dot[data-live], .agx-jd-worker[data-live] .agx-jd-dot { background: var(--success); }
+.agx-jd-cost { flex: none; color: var(--success-ink); }
+.agx-jd-needs { flex: none; color: var(--warning-ink); font-weight: 600; }
+.agx-jd-wait {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding: 6px 8px; border-radius: 8px; font-size: calc(12px * var(--agx-fs, 1)); color: var(--warning-ink);
+  background: color-mix(in srgb, var(--warning) 12%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning) 40%, transparent);
+}
+.agx-jd-wait .agx-jd-dot { background: var(--warning); }
+.agx-jd-wait[data-stuck] { color: var(--error-ink); background: color-mix(in srgb, var(--error) 12%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--error) 40%, transparent); }
+.agx-jd-wait[data-stuck] .agx-jd-dot { background: var(--error); }
+.agx-jd-tabneeds { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--warning); vertical-align: middle; }
+.agx-jd-worker[data-needs] .agx-jd-dot { background: var(--warning); }
+/* Stalled or errored: red, as the board's column dot draws it, instead of the grey of no status at all. */
+.agx-jd-worker[data-stuck] .agx-jd-dot, .agx-jd-dot[data-stuck] { background: var(--error); }
+.agx-jd-dot[data-needs] { background: var(--warning); }
+.agx-jd-primary { flex: none; white-space: nowrap; min-width: max-content; }
+
+/* The Card tab's work block (mockup variant C): one block, tone only where the person is needed. */
+.agx-jd-work { display: flex; flex-direction: column; gap: 12px; padding: 14px; border-radius: 12px; background: var(--surface-card); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent); }
+.agx-jd-work[data-tone="warn"] { background: color-mix(in srgb, var(--warning) 12%, var(--surface-card)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning) 45%, transparent); }
+.agx-jd-work[data-tone="bad"] { background: color-mix(in srgb, var(--error) 10%, var(--surface-card)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--error) 45%, transparent); }
+.agx-jd-work .agx-jd-next-t { font-size: calc(17px * var(--agx-fs, 1)); line-height: 1.25; }
+.agx-jd-work .agx-jd-next-b { font-size: calc(12px * var(--agx-fs, 1)); }
+.agx-jd-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.agx-jd-chip { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border-radius: 8px; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text2); background: var(--surface-inset); }
+.agx-jd-chip b { font-weight: 650; color: var(--text); }
+.agx-jd-chip[data-tone="ok"] b { color: var(--success-ink); }
+.agx-jd-chip[data-tone="bad"] b { color: var(--error-ink); }
+.agx-jd-chip[data-open]:hover { color: var(--text); }
+.agx-jd-chip:focus-visible, .agx-jd-more:focus-visible { outline: 2px solid var(--jira-accent); outline-offset: 2px; }
+.agx-jd-seg { display: flex; gap: 4px; }
+.agx-jd-seg > i { flex: 1; height: 6px; border-radius: 3px; background: var(--surface-line); }
+.agx-jd-seg > i[data-state="done"] { background: var(--success); }
+.agx-jd-seg > i[data-state="current"] { background: var(--jira-accent); }
+.agx-jd-seg > i[data-bad] { background: var(--error); }
+.agx-jd-seg > i[data-state="skipped"] { background: repeating-linear-gradient(90deg, var(--surface-line) 0 3px, transparent 3px 6px); }
+.agx-jd-segl { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text3); }
+.agx-jd-status { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 6px; font-size: calc(10.5px * var(--agx-fs, 1)); font-weight: 650; letter-spacing: 0.04em; color: var(--text2); background: var(--surface-inset); }
+.agx-jd-more { align-self: flex-start; font-size: calc(12px * var(--agx-fs, 1)); padding: 2px 0; color: var(--jira-accent); text-decoration: underline; text-underline-offset: 3px; }
+.agx-jd-steps { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.agx-jd-steps > li { display: grid; grid-template-columns: 12px 1fr auto; gap: 10px; align-items: center; min-height: 26px; font-size: calc(12px * var(--agx-fs, 1)); color: var(--text3); }
+.agx-jd-step-m { width: 10px; height: 10px; border-radius: 50%; box-shadow: inset 0 0 0 1.6px var(--text4); }
+.agx-jd-steps > li[data-state="done"] .agx-jd-step-m { background: var(--success); box-shadow: none; }
+.agx-jd-steps > li[data-state="current"] .agx-jd-step-m { background: var(--jira-accent); box-shadow: none; }
+.agx-jd-steps > li[data-state="skipped"] .agx-jd-step-m { box-shadow: inset 0 0 0 1.6px var(--text4); opacity: .6; }
+.agx-jd-steps > li[data-state="current"] .agx-jd-step-l { color: var(--text); font-weight: 650; }
+.agx-jd-step-s { color: var(--text4); }
+.agx-jd-next-t { font-size: calc(13px * var(--agx-fs, 1)); font-weight: 650; color: var(--text); }
+.agx-jd-next-b { font-size: calc(11px * var(--agx-fs, 1)); color: var(--text2); overflow-wrap: anywhere; }
+
+
+
+.agx-jd-roles { display: flex; flex-wrap: wrap; gap: 6px; }
+.agx-jd-role { font-size: calc(10.5px * var(--agx-fs, 1)); padding: 2px 8px; border-radius: 6px; color: var(--text2); background: color-mix(in srgb, var(--rc, var(--text3)) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rc, var(--text3)) 30%, transparent); }
+.agx-jd-role[aria-pressed="true"] { color: var(--text); box-shadow: inset 0 0 0 1px var(--rc, var(--text3)); font-weight: 650; }
+.agx-jd-role:focus-visible, .agx-jd-link:focus-visible { outline: 2px solid var(--jira-accent); outline-offset: 1px; }
+.agx-jd-role-tag { font-size: calc(10px * var(--agx-fs, 1)); padding: 0 6px; border-radius: 4px; color: var(--text); background: color-mix(in srgb, var(--rc, var(--text3)) 22%, transparent); }
+[data-role="planner"] { --rc: var(--jira-accent); }
+[data-role="builder"] { --rc: var(--success); }
+[data-role="reviewer"] { --rc: var(--warning); }
+[data-role="verifier"] { --rc: var(--info); }
+[data-role="landing"] { --rc: var(--text2); }
+
+.agx-jd-tl { position: relative; display: flex; flex-direction: column; gap: 12px; margin: 0; padding: 0 0 0 24px; list-style: none; }
+.agx-jd-tl::before { content: ""; position: absolute; left: 4px; top: 4px; bottom: 4px; width: 2px; background: var(--surface-line); }
+.agx-jd-ev { position: relative; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.agx-jd-ev-dot { position: absolute; left: -24px; top: 2px; width: var(--jd-dot, 10px); height: var(--jd-dot, 10px); border-radius: 50%; background: var(--bg); box-shadow: inset 0 0 0 2px var(--text4); }
+.agx-jd-ev[data-tone="ok"] .agx-jd-ev-dot { box-shadow: inset 0 0 0 2px var(--success); }
+.agx-jd-ev[data-tone="bad"] .agx-jd-ev-dot { box-shadow: inset 0 0 0 2px var(--error); }
+.agx-jd-ev[data-tone="warn"] .agx-jd-ev-dot { box-shadow: inset 0 0 0 2px var(--warning); }
+.agx-jd-ev[data-tone="info"] .agx-jd-ev-dot { box-shadow: inset 0 0 0 2px var(--jira-accent); }
+.agx-jd-ev-t { font-size: calc(12px * var(--agx-fs, 1)); font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+.agx-jd-ev-at { font-size: calc(10.5px * var(--agx-fs, 1)); color: var(--text3); }
+.agx-jd-ev-d { font-size: calc(11px * var(--agx-fs, 1)); color: var(--text3); overflow-wrap: anywhere; }
+.agx-jd-link { align-self: flex-start; font-size: calc(11px * var(--agx-fs, 1)); padding: 2px 8px; border-radius: 6px; color: var(--text2); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent); }
+.agx-jd-link:hover { color: var(--text); }
+
+/* Sub-tasks hang under the card: a rail down the left and a stub into each row. */
+/* The sub-tasks read like the Family block above them: one framed list of quiet rows (key, title, pull request, state,
+   who), not five boxed cards hung off a tree line. Five boxes of 36 took twice the height and said less. */
+.agx-jsb-hit { background: color-mix(in srgb, var(--primary) 22%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }
+.agx-jd-tree .agx-dk-stack { gap: 1px; padding: 4px; border-radius: 8px; background: var(--surface-card); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent); }
+.agx-jd-tree .agx-dk-mini { min-height: 30px; padding: 0 6px; border-radius: 6px; background: transparent; box-shadow: none; }
+/* An empty card section that can take one (JiraJoins EmptyAdd): one dashed row, the way in, never a second Add. */
+.agx-jd-emptyadd { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 30px; padding: 0 10px; border-radius: 8px; font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text3); border: 1px dashed color-mix(in srgb, var(--text) 18%, transparent); background: transparent; text-align: left; }
+.agx-jd-emptyadd:hover { color: var(--primary-ink, var(--text)); border-color: color-mix(in srgb, var(--primary) 50%, transparent); background: color-mix(in srgb, var(--primary) 6%, transparent); }
+.agx-jd-emptyadd-go { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--text2); }
+.agx-jd-emptyadd:hover .agx-jd-emptyadd-go { color: var(--primary-ink, var(--text)); }
+.agx-jd-emptyadd:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.agx-jd-tree .agx-dk-mini:hover { background: color-mix(in srgb, var(--text) 6%, transparent); box-shadow: none; }
+.agx-jd-tree .agx-dk-k { font-family: var(--font-mono, ui-monospace, monospace); color: var(--jira-accent); }
+.agx-jl-face-none { background: transparent; color: var(--text4); box-shadow: inset 0 0 0 1px var(--surface-line); border: 0; cursor: pointer; }
+.agx-jl-face-none:hover { color: var(--text); background: var(--bg3); }
+
+/* The folded "Details" block of the pull request panel. Three groups (people, pull request, Jira) are
+   columns that wrap to two and then one as the panel narrows; inside a column every row is
+   label | value | action on one line. The group header is the anchor, so row labels are quiet:
+   sentence case, normal weight.
+   Jira's own rows sit on the same three columns through subgrid. Under 18rem the label goes above the value. */
+[data-lbl-short], [data-side-lbl] { display: none; }
+details[open] [data-side-digest] { display: none; }
+[data-side-group-title] { margin: 0 0 .25rem; padding-bottom: .125rem; line-height: 1.5rem; border-bottom: 1px solid var(--surface-line); }
+/* The three facts of the review, as one strip under the summary line. */
+[data-side-strip] { padding-bottom: .625rem; border-bottom: 1px solid var(--surface-line); }
+
+/* Family row on a parent card: one row of dots and "N of M done", opening in place to its sub-tasks. */
+.agx-jb-fam { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.agx-jb-famsum { display: flex; align-items: center; gap: 8px; width: 100%; height: 26px; padding: 0 8px; border: 0; border-radius: 8px; cursor: pointer; text-align: left;
+  background: var(--surface-inset, var(--bg3)); color: var(--text2); font-size: calc(11px * var(--agx-fs, 1)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent); }
+.agx-jb-famsum .dots { display: inline-flex; gap: 4px; flex: 1; min-width: 0; }
+.agx-jb-famsum .dots i, .agx-jb-kid .st i { width: 8px; height: 8px; border-radius: 50%; background: var(--bg4, var(--text3)); flex: none; }
+.agx-jb-famsum .dots i[data-k="done"], .agx-jb-kid .st[data-k="done"] i { background: var(--success); }
+.agx-jb-famsum .dots i[data-k="progress"], .agx-jb-kid .st[data-k="progress"] i { background: var(--jira-accent); }
+.agx-jb-famsum .dots i[data-k="blocked"], .agx-jb-kid .st[data-k="blocked"] i { background: var(--error); }
+.agx-jb-famsum svg { transition: transform 180ms var(--ease-settle, ease-out); }
+.agx-jb-famsum[aria-expanded="true"] svg { transform: rotate(180deg); }
+.agx-jb-famsum:focus-visible, .agx-jb-kid:focus-visible { outline: 2px solid var(--jira-accent); outline-offset: 2px; }
+.agx-jb-famlist { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 8px; list-style: none; border-radius: 8px; background: var(--surface-inset, var(--bg3)); }
+.agx-jb-kid { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 26px; padding: 2px 8px; border: 0; border-radius: 8px; background: transparent; cursor: pointer; text-align: left; color: var(--text2); font-size: calc(12px * var(--agx-fs, 1)); }
+.agx-jb-kid .key { flex: none; font-family: var(--font-mono, ui-monospace, monospace); color: var(--jira-accent); }
+.agx-jb-kid .t { flex: 1 1 0; min-width: 2ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agx-jb-kid .st { flex: 0 1 auto; min-width: 0; max-width: 45%; display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 6px; border-radius: 8px; font-size: calc(11px * var(--agx-fs, 1)); white-space: nowrap; background: color-mix(in srgb, var(--text) 8%, transparent); }
+.agx-jb-kid .st .stt { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.agx-jb-kid { overflow: hidden; }
+.agx-jb-famlist { min-width: 0; box-sizing: border-box; }
+.agx-jb-famlist li { min-width: 0; }
+@media (hover: hover) and (pointer: fine) { .agx-jb-kid:hover, .agx-jb-famsum:hover { background: color-mix(in srgb, var(--text) 8%, var(--surface-inset, transparent)); } }
+/* The family lit: an opacity dim and a ring, no bar or glow. The child hovered in a parent's list is lit stronger. */
+.agx-jb[data-jb-lit] .agx-jb-card { opacity: .45; }
+.agx-jb[data-jb-lit] .agx-jb-card[data-jb-in] { opacity: 1; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--jira-accent) 70%, transparent); }
+.agx-jb .agx-jb-card[data-jb-child] { opacity: 1; box-shadow: inset 0 0 0 2px var(--jira-accent); }
+@media (prefers-reduced-motion: no-preference) { .agx-jb-card { transition: opacity 180ms var(--ease-settle, ease-out); } }
+/* Both chips on a sub-task: when the card is narrow the epic gives way first. */
+.agx-jb-head > .agx-jb-parent ~ .agx-jb-epic { flex-shrink: 8; }
+
+/* The Settings page shell: one sans (the house prose face) for headings, labels and help; mono stays on the
+   values that already ask for it (.font-mono, .t-mono, <code>, <pre>). */
+[data-settings-page] { font-family: var(--font-prose); }
+[data-settings-page] .font-mono, [data-settings-page] .t-mono, [data-settings-page] code, [data-settings-page] pre,
+[data-settings-page] input[data-mono], [data-settings-page] .agx-mono { font-family: var(--font-mono, ui-monospace, monospace); }
+/* One card level. A legacy card (SettingsCard) that stands in the page by itself looks like a Section card: a
+   14/600 heading, no icon chip, no shadow. One that sits inside a Section card is flattened into it: its rows
+   become the section's rows and its title a plain line, never a card inside a card. */
+[data-settings-page] .agx-scard { border-radius: 8px; box-shadow: none; margin: 0 0 24px; }
+[data-settings-page] .agx-scard-ic { display: none; }
+[data-settings-page] .agx-scard-top > .agx-settings-head-t { font-size: calc(14px * var(--agx-fs, 1)); font-weight: 600; letter-spacing: 0; }
+[data-settings-page] .agx-scard-head { padding: 10px 12px 4px; }
+[data-settings-page] [data-section-kind] .agx-scard { background: none; border: 0; border-radius: 0; margin: 0; overflow: visible; }
+[data-settings-page] [data-section-kind] .agx-scard + .agx-scard { border-top: 1px solid var(--surface-line); }
+
+/* A card's first row sits on the card's own border: a row's top line there would draw a second line over it. */
+[data-section-card] > [data-row]:first-child { border-top: 0 !important; }
+
+/* "On this page" entries: hover feedback like the other nav buttons; the active entry keeps its own look. */
+[data-rail-entry] { cursor: pointer; }
+[data-rail-entry]:not([aria-current="true"]):hover { background: color-mix(in srgb, var(--text) 7%, transparent) !important; color: var(--text) !important; }
+/* "On this page": the section a rail jump landed on, marked for 1.2 s (RAIL_FLASH_MS). Outline and background only, so nothing moves. */
+[data-section][data-rail-flash] { border-radius: 10px; animation: agx-rail-flash 1.2s ease-out forwards; }
+@keyframes agx-rail-flash {
+  from { outline: 2px solid color-mix(in srgb, var(--primary) 45%, transparent); outline-offset: 6px; background: color-mix(in srgb, var(--primary) 8%, var(--surface-page)); }
+  to { outline: 2px solid transparent; outline-offset: 6px; background: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* No fade: a static tint for the same 1.2 s, then gone. */
+  [data-section][data-rail-flash] { animation-timing-function: step-end; }
+}
+/* The app's own Reduce motion setting cuts every animation to 0.01ms; the mark keeps its 1.2 s, static. */
+html[data-reduce-motion] [data-section][data-rail-flash] { animation: agx-rail-flash 1.2s step-end forwards !important; }
+
+/* The picker card scales in from 0.97 to 1 (180 ms ease-out); none under reduced motion. */
+@keyframes agx-pick-in { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: scale(1); } }
+.agx-pick-in { transform-origin: top left; animation: agx-pick-in 180ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .agx-pick-in { animation: none; } }
+
+/* ---------- Pull request panel (components/pr/*) ----------
+   Laid out on the panel's own width, not the window's. A container query cannot read var(), so the
+   breakpoints are literals; lib/prPanelLimits.ts names them and test/pr-panel-limits.test.ts reads this
+   block and fails when one drifts. */
+.prx { container: pr / inline-size; }
+.prx-g { --gut: 12px; --pad: var(--gut); padding-inline: var(--pad); }
+/* The full page uses the whole window on every tab, with the 12px gutter the Files tab has: header, gates, tab strip and body share one left and one right edge, so nothing moves when the tab changes. No centred column anywhere. */
+.prx[data-dock="full"] .prx-g { --pad: 12px; }
+@container pr (min-width: 440px) { .prx-g { --gut: 16px; } }
+@container pr (min-width: 720px) { .prx-g { --gut: 24px; } }
+@container pr (min-width: 960px) { .prx-g { --gut: 32px; } }
+.prx [data-tone="ok"] { --tone: var(--success); } .prx [data-tone="warn"] { --tone: var(--warning); } .prx [data-tone="bad"] { --tone: var(--error); }
+.prx [data-tone="merged"] { --tone: var(--merged); } .prx [data-tone="idle"] { --tone: var(--text3); } .prx [data-tone="info"] { --tone: var(--primary); }
+
+.prx-head { display: grid; gap: 10px; padding-block: 14px 12px; }
+.prx-r1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.prx-state { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 10px 0 8px; border-radius: 11px; font: 600 calc(12px * var(--agx-fs, 1)) var(--font-prose); color: var(--tone); background: color-mix(in srgb, var(--tone) 15%, transparent); flex: none; }
+.prx-ref { color: var(--text3); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; font: calc(12px * var(--agx-fs, 1)) var(--font-prose); }
+.prx-ref b { color: var(--text2); font-weight: 500; }
+.prx-title { margin: 0; font: 600 calc(17px * var(--agx-fs, 1))/1.28 var(--font-prose); letter-spacing: -0.012em; color: var(--text); overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; text-wrap: pretty; }
+@container pr (min-width: 720px) { .prx-title { font-size: calc(20px * var(--agx-fs, 1)); } }
+@container pr (min-width: 960px) { .prx-title { font-size: calc(24px * var(--agx-fs, 1)); -webkit-line-clamp: 3; } }
+.prx-facts { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; color: var(--text3); min-width: 0; font: calc(12px * var(--agx-fs, 1)) var(--font-prose); }
+.prx-facts > * { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.prx-branchrow { flex-basis: 100%; gap: 8px; flex-wrap: wrap; }
+.prx-branch { max-width: 100%; display: inline-flex; align-items: center; gap: 6px; padding: 2px 4px 2px 8px; background: var(--surface-inset); border-radius: 6px; color: var(--text2); min-width: 0; font: calc(11.5px * var(--agx-fs, 1)) var(--font-mono); }
+.prx-branch > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* The trunk (main, master) never truncates; a stacked pull request's feature base may. */
+.prx-base { flex: none; white-space: nowrap; }
+.prx-acts { display: flex; gap: 2px; flex: none; align-items: center; }
+.prx-acts .prx-t { display: none; }
+@container pr (min-width: 720px) { .prx-acts .prx-t { display: inline-flex; } }
+.prx-crumb { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; color: var(--text3); font: calc(12px * var(--agx-fs, 1)) var(--font-prose); }
+
+.prx-gates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding-bottom: 12px; }
+@container pr (min-width: 720px) { .prx-gates { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; } }
+.prx-gate { position: relative; overflow: hidden; text-align: left; display: grid; gap: 2px; padding: 8px 10px 10px; border-radius: 8px; background: var(--surface-card); min-width: 0; transition: background 120ms var(--ease-out), transform 120ms var(--ease-out); }
+.prx-gate { box-shadow: inset 0 2px 0 color-mix(in srgb, var(--tone) 90%, transparent); }
+.prx-gate:hover { background: var(--bg3); } .prx-gate:active { transform: scale(0.985); }
+.prx-gate[data-tone="idle"] { box-shadow: inset 0 2px 0 color-mix(in srgb, var(--tone) 35%, transparent); }
+.prx-gate .k { font: calc(11px * var(--agx-fs, 1)) var(--font-prose); color: var(--text3); display: flex; gap: 6px; align-items: center; }
+.prx-gate .k svg { color: var(--tone); }
+.prx-gate .v { font: 600 calc(12.5px * var(--agx-fs, 1)) var(--font-prose); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The header scrolls with the page; `contents` lets the zero-height slot stick to the scroller, not to the header. */
+.prx-header { display: contents; }
+/* Above every sticky row a tab body draws (the Files toolbar is z-30, hunk and file heads lower): those scroll under the strip, never over it. */
+.prx-minislot { position: sticky; top: 0; z-index: 41; height: 0; }
+/* Overlay, so it appearing moves nothing: shown only once the full title has scrolled out. */
+.prx-mini { position: absolute; inset: 0 0 auto 0; display: flex; align-items: center; gap: 8px; height: 40px; background: var(--surface-page, var(--bg)); box-shadow: 0 1px 0 var(--surface-line); opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 120ms var(--ease-out); }
+/* inherit, never visible: inactive workspace views are visibility: hidden, and a child set to visible paints through them (the PR bar showed over Tasks). */
+.prx-header[data-gone="1"] .prx-mini { opacity: 1; visibility: inherit; pointer-events: auto; }
+.prx-mini .ttl { flex: 1 1 0; min-width: 0; margin: 0; font: 600 calc(13px * var(--agx-fs, 1)) var(--font-prose); color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prx-mini .state { height: 20px; padding: 0 8px 0 6px; font-size: calc(11.5px * var(--agx-fs, 1)); }
+@container pr (max-width: 439px) { .prx-mini .state { padding: 0 6px; } .prx-mini .state > span { display: none; } }
+.prx-dots { display: flex; gap: 2px; flex: none; }
+.prx-dot { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 6px; transition: background 120ms var(--ease-out), transform 120ms var(--ease-out); }
+.prx-dot:hover { background: color-mix(in srgb, var(--tone) 16%, transparent); } .prx-dot:active { transform: scale(0.94); }
+.prx-dot i { width: 10px; height: 10px; border-radius: 50%; background: var(--tone); }
+
+/* Tabs: sticky under the header, scroll sideways when they must, never wrap. */
+/* Sticky at the height of the title bar, which is drawn over the 40px above it once the title has left. */
+.prx-tabsbar { display: flex; align-items: center; gap: 8px; position: sticky; top: 40px; z-index: 40; background: var(--surface-page, var(--bg)); }
+/* The hairline is the column's, not the window's: drawn inside the padding so it starts and ends where the tabs do. */
+.prx-tabsbar::after { content: ""; position: absolute; left: var(--pad, 0px); right: var(--pad, 0px); bottom: 0; height: 1px; background: var(--surface-line); pointer-events: none; }
+.prx-tabs { position: relative; flex: 1 1 auto; min-width: 0; margin-inline: -10px; }
+.prx-tabs::-webkit-scrollbar { display: none; }
+.prx-tabs .agx-tab { min-height: 36px; padding-inline: 10px; font-size: calc(12.5px * var(--agx-fs, 1)); }
+
+/* The dock: the merge answer is always in view. */
+.prx-dock { position: relative; flex: none; background: var(--surface-nav); box-shadow: 0 -1px 0 var(--surface-line), 0 -12px 24px -20px var(--shadow); }
+.prx-dock .in { display: flex; align-items: center; gap: 8px; min-height: 52px; flex-wrap: nowrap; padding-block: 10px; }
+/* One row at every width: the chip gives way (ellipsis), the buttons do not wrap. */
+.prx-dock .in > :not(.prx-verdict):not(.sp) { flex: none; }
+/* Tight panels: Merge is its icon and caret, the label stays in aria-label; "Add your review" says "Review". */
+.prx-add-short { display: none; }
+.prx-dock .agx-merge-lbl, .prx-dock .agx-merge-mid { display: none; }
+.prx-dock .agx-merge-mid { display: inline; }
+@container pr (min-width: 720px) { .prx-dock .agx-merge-lbl { display: inline; } .prx-dock .agx-merge-mid { display: none; } }
+@container pr (max-width: 439px) { .prx-dock .agx-merge-mid { display: none; } .prx-add-long { display: none; } .prx-add-short { display: inline; } }
+.prx-dock [data-merge-button] { min-width: 0; }
+@container pr (min-width: 720px) { .prx-dock [data-merge-button] { min-width: 172px; } }
+.prx-verdict { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px 0 8px; border-radius: 8px; min-width: min-content; flex: 0 1 auto; background: color-mix(in srgb, var(--tone) 13%, transparent); color: var(--text); font: 600 calc(12.5px * var(--agx-fs, 1)) var(--font-prose); transition: background 120ms var(--ease-out), transform 120ms var(--ease-out); }
+.prx-verdict:hover { background: color-mix(in srgb, var(--tone) 22%, transparent); } .prx-verdict:active { transform: scale(0.98); }
+.prx-verdict > svg:first-child { color: var(--tone); flex: none; }
+.prx-verdict .lab { white-space: nowrap; flex: none; }
+.prx-verdict .lab-s { display: none; }
+@container pr (max-width: 439px) { .prx-verdict .lab-l { display: none; } .prx-verdict .lab-s { display: inline; } }
+/* The sentence is capped, so the chip's least width is icon, label and at most this much: it never shrinks under its own text. */
+.prx-verdict .sub { max-width: 22ch; font-weight: 400; color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: none; }
+@container pr (min-width: 720px) { .prx-verdict .sub { display: inline; } }
+.prx-verdict .caret { color: var(--text3); flex: none; transition: transform 200ms var(--ease-out); }
+.prx-verdict[aria-expanded="true"] .caret { transform: rotate(180deg); }
+.prx-dock .sp { flex: 1 1 0; min-width: 0; }
+.prx-dock .opt { display: inline-flex; }
+/* Update branch by width: full sentence, "Update · N", then icon and N. */
+.prx-dock .agx-upd-lbl, .prx-dock .agx-upd-mid { display: none; }
+.prx-dock .agx-upd-min { display: inline; }
+@container pr (min-width: 560px) { .prx-dock .agx-upd-min { display: none; } .prx-dock .agx-upd-mid { display: inline; } }
+@container pr (min-width: 720px) { .prx-dock .agx-upd-mid { display: none; } .prx-dock .agx-upd-lbl { display: inline; } }
+/* What the dock hides under 440px lives in the sheet then, and only then: one place at a time. */
+.prx-tight-only { display: none; }
+@container pr (max-width: 439px) { .prx-tight-only { display: inline-flex; } }
+@container pr (max-width: 439px) { .prx-dock .opt { display: none; } .prx-dock .in { gap: 6px; } }
+
+.prx-sheet { position: absolute; left: var(--gut, 12px); right: var(--gut, 12px); bottom: calc(100% + 8px); max-width: 560px; max-height: min(560px, 78vh); overflow: auto; border-radius: 12px; background: var(--surface-nav); border: 1px solid var(--surface-line); box-shadow: var(--surface-lift, 0 8px 24px var(--shadow)), 0 24px 48px -24px var(--shadow); animation: prx-sheet-in 180ms var(--ease-out); }
+@container pr (min-width: 960px) { .prx-sheet { left: auto; right: var(--pad, var(--gut)); } }
+@keyframes prx-sheet-in { from { opacity: 0; transform: translateY(6px); } }
+@media (prefers-reduced-motion: reduce) { .prx-sheet { animation: none; } }
+.prx-sheet .h1 { padding: 12px 14px 4px; font: 600 calc(13px * var(--agx-fs, 1)) var(--font-prose); display: flex; gap: 8px; align-items: center; color: var(--text); }
+.prx-sheet .grp { padding: 4px 14px 12px; }
+.prx-sheet .grp + .grp { padding-top: 12px; box-shadow: inset 0 1px 0 var(--surface-line); }
+.prx-sheet h5 { margin: 0 0 6px; font: 500 calc(11.5px * var(--agx-fs, 1)) var(--font-prose); color: var(--text3); }
+.prx-sheet .need { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; min-height: 32px; font: calc(12.5px * var(--agx-fs, 1))/1.4 var(--font-prose); color: var(--text2); }
+.prx-sheet .need > svg { color: var(--tone); }
+.prx-sheet .need b { color: var(--text); font-weight: 600; margin-right: 6px; }
+.prx-sheet .radio label { display: flex; gap: 8px; align-items: center; min-height: 28px; font: calc(12.5px * var(--agx-fs, 1)) var(--font-prose); color: var(--text2); }
+.prx-sheet .radio input { accent-color: var(--primary); margin: 0; }
+.prx-sheet .msg { width: 100%; background: var(--surface-inset); border: 1px solid var(--surface-line); border-radius: 8px; color: var(--text2); font: calc(12px * var(--agx-fs, 1))/1.5 var(--font-mono); padding: 8px 10px; resize: none; }
+.prx-sheet .sw { display: flex; align-items: center; gap: 10px; min-height: 30px; font: calc(12.5px * var(--agx-fs, 1)) var(--font-prose); color: var(--text2); }
+.prx-sheet .sw > :last-child { margin-left: auto; }
+
+/* ---------- Pull request Overview body (components/pr/*) ----------
+   Layout answers to the panel's own width, not the window's: `.prov-wrap` is the container.
+   Container queries cannot read var(), so the breakpoints below are literals;
+   lib/prPanelLimits.test.ts fails when one drifts from lib/prPanelLimits.ts
+   (BP_SIDE 440, BP_WIDE 720, BP_PAGE 960, BP_XL 1280). */
+.prov-wrap { container: prov / inline-size; min-width: 0; }
+.prov-callout { margin: -8px 0 0; font: calc(12px * var(--agx-fs, 1))/1.45 var(--font-prose); color: var(--text3); }
+.prov-callout[data-tone="warn"] { color: var(--warning-ink); }
+.prov-cols { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr); }
+@container prov (min-width: 960px) { .prov-cols.prov-two { grid-template-columns: minmax(0, 1fr) var(--prov-rail-w, 320px); gap: 40px; } }
+@container prov (min-width: 1280px) { .prov-cols.prov-two { --prov-rail-w: 360px; } }
+.prov-main { display: grid; gap: 24px; min-width: 0; align-content: start; }
+.prov-rail { display: grid; gap: 20px; min-width: 0; align-content: start; }
+@container prov (min-width: 720px) and (max-width: 959px) { .prov-rail { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 24px; } }
+.prov-sec { min-width: 0; }
+.prov-sh { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; min-height: 26px; }
+.prov-sh h3 { margin: 0; font: 600 12.5px var(--font-prose); color: var(--text); }
+.prov-sh .prov-cnt { margin-right: auto; font: 11.5px var(--font-mono, monospace); color: var(--text3); }
+.prov-sh > :last-child:not(h3):not(.prov-cnt) { margin-left: auto; }
+.prov-sh h3 + :not(.prov-cnt) { margin-left: auto; }
+.prov-railsec { padding-top: 16px; border-top: 1px solid var(--surface-line); }
+.prov-railsec:empty { display: none; }
+.prov-rail > .prov-railsec:first-child { border-top: 0; padding-top: 0; }
+@container prov (min-width: 720px) and (max-width: 959px) { .prov-rail > .prov-railsec:nth-child(2) { border-top: 0; padding-top: 0; } }
+.prov-dots { display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; color: var(--text3); }
+.prov-dots:hover { background: var(--surface-inset); color: var(--text); }
+
+/* blockers */
+.prov-needs { display: grid; border-radius: 10px; background: var(--surface-card); overflow: hidden; }
+.prov-need { --tone: var(--text3); display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 12px; font: 12.5px/1.4 var(--font-prose); color: var(--text2); }
+.prov-need[data-tone="bad"] { --tone: var(--error-ink, var(--error)); }
+.prov-need[data-tone="warn"] { --tone: var(--warning-ink, var(--warning)); }
+.prov-need + .prov-need { box-shadow: inset 0 1px 0 var(--surface-line); }
+.prov-need-i { display: flex; color: var(--tone); }
+.prov-need b { color: var(--text); font-weight: 600; }
+.prov-mono { font-family: var(--font-mono, monospace); font-size: calc(11.5px * var(--agx-fs, 1)); color: var(--text); }
+@container prov (max-width: 439px) { .prov-need { grid-template-columns: auto minmax(0, 1fr); } .prov-need > :last-child:not(.prov-need-t) { grid-column: 2; justify-self: start; } }
+
+/* story: the prose face; it fills the column it is given */
+.prov-story { font: 13.5px/1.6 var(--font-prose); color: var(--text2); overflow-wrap: anywhere; }
+
+/* checks summary */
+.prov-bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; gap: 2px; margin-bottom: 10px; }
+.prov-bar i { display: block; background: var(--c); min-width: 3px; }
+.prov-list { display: grid; }
+.prov-row { --tone: var(--text3); display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; min-height: 32px; padding: 4px 0; font: 12.5px var(--font-prose); color: var(--text2); }
+.prov-row[data-tone="ok"] { --tone: var(--success-ink, var(--success)); }
+.prov-row[data-tone="bad"] { --tone: var(--error-ink, var(--error)); }
+.prov-row[data-tone="warn"] { --tone: var(--warning-ink, var(--warning)); }
+.prov-row + .prov-row { box-shadow: inset 0 1px 0 var(--surface-line); }
+.prov-row-i { display: flex; color: var(--tone); }
+.prov-nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prov-dur { font: 11.5px var(--font-mono, monospace); color: var(--text3); }
+
+/* latest in the conversation */
+.prov-tl { display: grid; gap: 14px; }
+.prov-ev { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; }
+.prov-ev-gl { display: flex; justify-content: center; }
+.prov-ev + .prov-ev .prov-ev-gl { position: relative; }
+.prov-ev + .prov-ev .prov-ev-gl::before { content: ""; position: absolute; left: 50%; top: -14px; height: 14px; width: 1px; background: var(--surface-line); }
+.prov-ev-hd { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; font: 12px var(--font-prose); color: var(--text3); }
+.prov-ev-hd b { color: var(--text); font-weight: 600; }
+.prov-ev-tx { font: 13px/1.5 var(--font-prose); color: var(--text2); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* rail details */
+.prov-kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; font: 12.5px var(--font-prose); align-items: center; margin: 0; }
+.prov-kv dt { color: var(--text3); }
+.prov-kv dd { margin: 0; color: var(--text2); min-width: 0; display: flex; align-items: center; gap: 6px; }
+.prov-kv dd > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.prov-kv dd[data-none] > span { color: var(--text3); }
+.prov-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.prov-sub { padding-top: 12px; }
+.prov-sub .prov-sh { margin-bottom: 4px; }
+.prov-sub .prov-sh h3 { font-weight: 500; color: var(--text3); }
+.prov-chip { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: 11px; font: 11.5px var(--font-prose); color: var(--text2); background: color-mix(in srgb, var(--c, var(--text3)) 16%, transparent); max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prov-chip i { width: 8px; height: 8px; border-radius: 50%; background: var(--c, var(--text3)); flex: none; }
+.prov-none { font: 12.5px var(--font-prose); color: var(--text3); }
+.prov-link { font: 12px var(--font-mono, monospace); color: var(--primary); }
+.prov-note { display: block; margin-top: 6px; font: 11.5px/1.4 var(--font-prose); color: var(--text3); }
+
+/* ---------- Pull request Files, other tabs, error (components/pr/*) ----------
+   `.prf-wrap` is the container; its breakpoint is BP_WIDE (720), checked by test/pr-files-layout.test.ts. */
+.prf-wrap { container: prf / inline-size; }
+.prf-split { padding-inline: 12px; display: flex; flex-direction: column; gap: 12px; align-items: stretch; }
+.prf-tree { display: block; max-height: 176px; overflow: auto; border-radius: 10px; background: var(--surface-card); padding: 4px; }
+/* Row layout from 480px (BP_WIDE), not 720: below 720 the list used to stack above the diffs as a ~230x176 box with its own
+   scrollbar and names cut to eight characters, in One file and All files alike. A column that is narrow but
+   full height reads better than a box, and the stacked box stays only for a truly tiny panel. The column pins under
+   the toolbar (--agx-tree-top is its height) and takes the panel's height (--agx-tree-max). */
+@container prf (min-width: 480px) {
+  .prf-split { flex-direction: row; align-items: flex-start; gap: 12px; }
+  .prf-tree { flex: none; width: clamp(150px, 30%, 280px); max-height: var(--agx-tree-max, 60vh); position: sticky; top: var(--agx-tree-top, 76px); background: transparent; padding: 0 4px 0 0; }
+}
+
+.prf-row { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; gap: 10px; align-items: center; width: 100%; min-height: 40px; padding: 4px 8px; border-radius: 6px; text-align: left; color: var(--text2); }
+.prf-row:hover { background: var(--surface-card); }
+.prf-row[data-sel="1"] { background: var(--surface-card); box-shadow: inset 2px 0 0 var(--primary); }
+.prf-row[data-seen="1"] { color: var(--text3); }
+.prf-p { display: grid; gap: 1px; min-width: 0; }
+.prf-fn { font: 12px var(--font-mono, monospace); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prf-dir { order: 2; font: 11px var(--font-mono, monospace); color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prf-ds { font: 11px var(--font-mono, monospace); white-space: nowrap; }
+.prf-dot { width: 8px; height: 8px; border-radius: 2px; background: var(--c, var(--text3)); }
+.prf-err { display: grid; gap: 10px; justify-items: start; padding: 20px 0; max-width: 56ch; font: 13px/1.5 var(--font-prose); color: var(--text2); }
+.prf-err h3 { margin: 0; font: 600 15px var(--font-prose); color: var(--text); }
+.prf-err code { font: 12px var(--font-mono, monospace); background: var(--surface-inset); padding: 2px 6px; border-radius: 4px; overflow-wrap: anywhere; }
+.prf-err-acts { display: flex; flex-wrap: wrap; gap: 8px; }
+.prf-sk { border-radius: 6px; background: linear-gradient(90deg, var(--bg3), color-mix(in srgb, var(--bg3) 60%, var(--bg4)), var(--bg3)); background-size: 200% 100%; animation: prf-sh 1.4s linear infinite; }
+@keyframes prf-sh { to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .prf-sk { animation: none; } }
+.prf-card { border-radius: 10px; background: var(--surface-card); }
+.prf-thread { margin: 6px 12px 8px; border-radius: 8px; background: var(--surface-inset); }
+
+/* Tall panel (full page, data-tall set by PrPanel): the header and the tab strip stay pinned, only the tab body scrolls. The title never leaves, so the compact bar never shows. */
+[data-pr-scroller][data-tall="1"] .prx-top { position: sticky; top: 0; z-index: 42; background: var(--surface-page, var(--bg)); }
+[data-pr-scroller][data-tall="1"] .prx-tabsbar { top: var(--prx-head-h, 0px); }
+[data-pr-scroller] { --prx-stick: calc(40px + var(--prx-strip-h, 0px)); }
+[data-pr-scroller][data-tall="1"] { --prx-stick: calc(var(--prx-head-h, 0px) + var(--prx-strip-h, 0px)); }
+/* The excerpt is markdown now: its blocks sit tight inside the 3-line clamp. */
+.prov-ev-tx > * { margin: 0; }
+.prov-ev-tx ul, .prov-ev-tx ol { padding-left: 1.2em; }

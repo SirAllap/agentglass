@@ -3,7 +3,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { DockerContainer, DockerImage, DockerNetwork } from "../../shared/types.ts";
-import { imageKind, imagesView, isBuiltInNetwork, networkKind, networkMemberCounts, networksView } from "../src/lib/dockerResources.ts";
+import { imageKind, imagesView, sum, isBuiltInNetwork, networkKind, networkMemberCounts, networksView } from "../src/lib/dockerResources.ts";
 
 const ct = (image: string, over: Partial<DockerContainer> = {}): DockerContainer => ({
   id: image, name: "orbit-api-1", image, state: "running", status: "Up 1 hour", ports: "", project: "orbit",
@@ -78,6 +78,44 @@ describe("images", () => {
     expect(v.bytes.use).toBe(780e6 + 430e6);
     expect(v.bytes.dang).toBe(200e6);
   });
+
+  /* The repro: `docker images` lists one row per tag and its `Size` counts
+     shared layers once per row. 3 builds of one app image, 6.1 GB each (6 GB
+     of shared base layers plus 0.1 GB each of their own), sum to 18.3 GB —
+     `docker system df` itself calls that 6.3 GB. Reverting the fix (dropping
+     the `disk` argument here) goes back to summing the rows and turns this
+     red: 18.3 GB, 3 images, not 6.3 GB, 3 images, matching 3, not df's 3. */
+  describe("totals come from `docker system df`, not from summing the rows", () => {
+    const tag = (n: string, over: Partial<DockerImage> = {}): DockerImage => img(n, "acme/orbit-api", n, "6.1GB", over);
+    const shared = [tag("v1"), tag("v2"), tag("v3")];
+    const perImage = shared.map((i) => ({ id: i.id, bytes: 6_100_000_000, unique: 100_000_000 }));
+    const disk = { images: 6_300_000_000, imageCount: 3, imageReclaimable: 6_300_000_000, perImage };
+
+    test("with disk data: the daemon's own total and count", () => {
+      const v = imagesView(shared, [], [], disk);
+      expect(v.lead).toBe("3 images, 6.3 GB.");
+      expect(v.rest).toBe("6.3 GB unused.");
+    });
+
+    test("without it yet (first paint): the old per-row sum, not a crash", () => {
+      const v = imagesView(shared, [], [], null);
+      expect(v.lead).toBe("3 images, 18.3 GB.");
+    });
+
+    test("each card gets its own unique and shared bytes, not the full row size", () => {
+      const v = imagesView(shared, [], [], disk);
+      const v1 = v.items.find((i) => i.image.id === "v1")!;
+      expect(v1.unique).toBe(100_000_000);
+      expect(v1.shared).toBe(6_000_000_000);
+      expect(v1.bytes).toBe(6_100_000_000);
+    });
+  });
+
+  test("gone-with-worktree bytes come from the orphan list's own unique size, not the row's full size", () => {
+    const bloated = [img("cc", "acme/orbit-api", "old", "6.1GB")];
+    const v = imagesView(bloated, [], [{ id: "cc", tag: "acme/orbit-api:old", bytes: 100_000_000, worktree: "billing-fix" }]);
+    expect(v.rest).toBe("6.1 GB unused, 100 MB of it gone with its worktree.");
+  });
 });
 
 describe("networks", () => {
@@ -128,5 +166,17 @@ describe("networks", () => {
     expect(v.groups.use.map((i) => i.network.name)).toEqual(["a"]);
     expect(v.groups.none.map((i) => i.network.name)).toEqual(["b"]);
     expect(v.groups.built.map((i) => i.network.name)).toEqual(["bridge"]);
+  });
+});
+
+describe("image bytes per id", () => {
+  test("two tags of one image id count its size once, a second id adds its own", () => {
+    // Two tags of one 6 GB build: `docker images` prints the full size on each row.
+    const rows = [
+      { bytes: 6e9, image: { id: "a1b2c3d4e5f6" } },
+      { bytes: 6e9, image: { id: "a1b2c3d4e5f6" } },
+      { bytes: 1e9, image: { id: "0f9e8d7c6b5a" } },
+    ];
+    expect(sum(rows)).toBe(7e9);
   });
 });

@@ -30,14 +30,14 @@ export const ProjectChip = forwardRef<HTMLButtonElement, {
       aria-haspopup="dialog"
       aria-expanded={open}
       aria-label={`${name}, ${count} ${count === 1 ? "window" : "windows"}. Projects and windows`}
-      title={`Projects and windows  ${chord}`}
+      data-tip={`Projects and windows  ${chord}`}
       className="shrink-0 min-w-0 max-w-[40%] inline-flex items-center gap-1.5 px-2 rounded-lg text-[11px] font-semibold whitespace-nowrap transition-colors hover:brightness-125"
       style={{ height: CTRL_H.strip, color: "var(--text)", background: "var(--surface-inset)", border: EDGE }}>
       <span className="flex shrink-0" style={{ color: "var(--text3)" }}><FolderIcon size={ICON.xs} /></span>
       <span className="min-w-0 truncate">{name}</span>
       <span className="shrink-0 text-[10px] font-normal tabular-nums" style={{ color: "var(--text3)" }}>{count}</span>
       <span className="flex shrink-0" style={{ color: "var(--text3)" }}><CaretIcon size={ICON.xs} /></span>
-      {locked && <span className="flex shrink-0" style={{ color: "var(--warning)" }} title="This session is locked: it cannot be ended"><LockIcon size={ICON.xs} /></span>}
+      {locked && <span className="flex shrink-0" style={{ color: "var(--warning)" }} data-tip="This session is locked: it cannot be ended"><LockIcon size={ICON.xs} /></span>}
     </button>
   );
 });

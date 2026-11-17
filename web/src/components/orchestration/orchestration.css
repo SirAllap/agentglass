@@ -88,7 +88,6 @@
    index), so the row is declared only when the band is really there. */
 @media (max-width: 1759px) {
   .agx-settings-page:has(.agx-orch.agx-flow) { grid-template-rows: minmax(0, 1fr); }
-  .agx-settings-page:has(.agx-orch.agx-flow):has(> .agx-toc) { grid-template-rows: auto minmax(0, 1fr); }
 }
 @media (min-width: 1760px) {
   /* The index is a rail beside the cards there, so it adds no row. */
@@ -224,7 +223,6 @@
  * ───────────────────────────────────────────────────────────────────────── */
 /* One scroll for the page: the frame's region. No section keeps a scroller of its own, at any height. */
 .agx-settings-page:has(.agx-orch.agx-flow) { height: auto; }
-.agx-settings-page:has(.agx-orch.agx-flow):has(> .agx-toc) { grid-template-rows: auto auto; }
 .agx-settings-page:has(.agx-orch.agx-flow) .agx-settings-col[data-stable] { flex: none; }
 /* The scope bar's measured height no longer offsets a pin, so a card
    scrolled to from a link stops under the index band alone. */
@@ -427,7 +425,7 @@
 .agx-flow .agx-rule-sec { display: grid; gap: 12px; padding: 18px 0; border-top: 1px solid var(--surface-line); }
 .agx-flow .agx-rule-sec:first-child { border-top: 0; padding-top: 16px; }
 .agx-flow .agx-rule-sec-head { display: grid; gap: 4px; }
-.agx-flow .agx-rule-sec-h { margin: 0; font-size: 10.5px; font-weight: 650; letter-spacing: 0.09em; text-transform: uppercase; color: var(--text2); }
+.agx-flow .agx-rule-sec-h { margin: 0; font-size: 12px; font-weight: 650; color: var(--text2); }
 .agx-flow .agx-rule-sec-sub { margin: 0; font-size: 12px; line-height: 1.45; color: var(--text3); }
 .agx-flow .agx-rule-note { margin: 0; font-size: 11.5px; line-height: 1.45; color: var(--text3); }
 .agx-flow .agx-rule-grow { flex: 1 1 auto; min-width: 0; }
@@ -436,8 +434,10 @@
 
 /* One condition: its kind, the fields that kind needs, the strip that shows it. */
 .agx-flow .agx-rule-cond { display: grid; gap: 10px; min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
-.agx-flow .agx-rule-cond-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.agx-flow .agx-rule-cond-top > :first-child { flex: 1 1 auto; min-width: 0; }
+.agx-flow .agx-rule-cond-top { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.agx-flow .agx-rule-cond-top > :first-child { flex: none; }
+.agx-flow .agx-rule-cond-top > .agx-rule-fields { flex: 1 1 auto; min-width: 0; }
+.agx-flow .agx-rule-cond-top > button { flex: none; margin-left: auto; }
 .agx-flow .agx-rule-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .agx-flow .agx-rule-fieldlabel { font-size: 12px; color: var(--text2); }
 
@@ -650,7 +650,7 @@
    inside the card when they do not (390px), so a long path never wraps. */
 .agx-flow-hero-orbit {
   position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(96px, 1fr);
-  gap: 8px; margin: 0; padding: 6px 0 2px; list-style: none; overflow-x: auto; overflow-y: hidden;
+  gap: 8px; margin: -10px 0 0; padding: 16px 0 2px; list-style: none; overflow-x: auto; overflow-y: hidden; /* the running node's halo reaches 13px: the top padding keeps it inside the clip (it was cut flat at 6px) */
   scrollbar-width: thin;
 }
 .agx-flow-hero-orbit::before {
@@ -839,3 +839,16 @@
     content: attr(data-label) " · "; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text3);
   }
 }
+
+/* The one table: what a worker may do, a column for the default and one for the ceiling. */
+.agx-flow-pgw { overflow-x: auto; }
+.agx-flow-pg { width: 100%; border-collapse: collapse; font-size: 12px; }
+.agx-flow-pg th, .agx-flow-pg td { padding: 8px 12px; text-align: left; vertical-align: middle; border-bottom: 1px solid var(--border); }
+.agx-flow-pg thead th { color: var(--text2); font-weight: 600; }
+.agx-flow-pg th small { display: block; color: var(--text3); font-weight: 400; }
+.agx-flow-pg tbody th { font-weight: 400; color: var(--text); }
+.agx-flow-pg tbody th b { font-weight: 600; }
+.agx-flow-pg tbody tr:last-child th, .agx-flow-pg tbody tr:last-child td { border-bottom: 0; }
+
+/* Inside a Settings section the section is the one card: the flow draws flat in it on 12px, no second frame. */
+[data-section] .agx-orch .agx-flow-pg { padding: 12px; }

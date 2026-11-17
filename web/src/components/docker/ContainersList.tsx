@@ -21,11 +21,11 @@ type Menu = { kind: "row"; id: string } | { kind: "group"; key: string } | null;
 type GroupAsk = { key: string; verb: "restart" | "stop"; ids: string[] } | null;
 
 export function ContainersList({
-  all, groups, stats, readOnly, busy, dense, selected, answer, onAnswer, groupBy, q, onClearQ,
+  all, groups, stats, readOnly, busy, selected, answer, onAnswer, groupBy, q, onClearQ,
   confirm, onRowConfirm, onOpen, onVerb, onMenuPick, onGroup, onToggleGroup, onOpenPort, down, onTry,
 }: {
   all: DockerContainer[]; groups: GroupView[]; stats: Record<string, DockerStat>;
-  readOnly: boolean; busy: string | null; dense: boolean; selected: string | null;
+  readOnly: boolean; busy: string | null; selected: string | null;
   answer: Answer | null; onAnswer: (a: Answer | null) => void;
   groupBy: GroupBy; q: string; onClearQ: () => void;
   confirm: { id: string; verb: "stop" | "rm" } | null;
@@ -61,7 +61,7 @@ export function ContainersList({
     // The extra 44px at the bottom is the floating bench button's box, which
     // rests in this corner: without it the last container's own actions sit
     // under the button and the row cannot be scrolled clear of it.
-    <div className="agx-scroll" style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "14px 18px 62px" }}>
+    <div className="agx-scroll" style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "14px 18px 62px", paddingBottom: "calc(62px + var(--fab-reserve))" }}>
       {down && <DaemonBanner error={down.error} age={down.at ? ageWords(Date.now() - down.at) : undefined} onTry={onTry} />}
       <div className={down ? "dk-dimmed" : undefined} aria-disabled={down ? true : undefined}>
         <Say t={t} />
@@ -75,8 +75,8 @@ export function ContainersList({
             onMenu={open({ kind: "group", key: g.key })}
             onGroupVerb={(verb, ids) => groupVerb(g.key, verb, ids)}
             onConfirm={(yes) => { const a = ask; setAsk(null); if (yes && a) onGroup(a.verb, a.ids); }}>
-            {g.containers.map((c) => (
-              <ContainerRow key={c.id} c={c} stat={stats[c.id]} selected={selected === c.id} dense={dense}
+            {(project: string | null) => (project ? g.containers.filter((c) => c.project === project) : g.containers).map((c) => (
+              <ContainerRow key={c.id} c={c} stat={stats[c.id]} selected={selected === c.id}
                 readOnly={readOnly || !!down} busy={busy === c.id}
                 confirm={confirm?.id === c.id ? confirm.verb : null}
                 menuOpen={menu?.kind === "row" && menu.id === c.id}

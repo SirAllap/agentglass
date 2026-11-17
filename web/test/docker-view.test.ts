@@ -6,8 +6,8 @@
 import { describe, expect, test } from "bun:test";
 import type { DockerCapability, DockerContainer, DockerOverview, DockerStat } from "../../shared/types.ts";
 import {
-  ageWords, freshness, groupsView, LAYOUT_KEY, mapGroups, meterOf, navCounts, needFirst, portCell, readLayout,
-  scopeLine, situation, stepOf, mergeStats, whyOf,
+  ageWords, freshness, groupLabel, groupsView, LAYOUT_KEY, mapGroups, meterOf, navCounts, needFirst, portCell,
+  readLayout, scopeLine, situation, stepOf, mergeStats, whyOf, shortImage,
 } from "../src/lib/dockerView.ts";
 
 const c = (over: Partial<DockerContainer> & { id: string }): DockerContainer => ({
@@ -146,10 +146,26 @@ describe("groups", () => {
     expect(g[0]!.summary.text).toBe("2/2 up · 1 needs you");
     expect(g[0]!.label).toBe("orbit · orbit-1042");
   });
-  test("the chip is the checkout in stack mode and the stack in worktree mode", () => {
+  test("the chip is the checkout in stack mode and the branch in worktree mode", () => {
     expect(groupsView(fleet, { groupBy: "stack", q: "", answer: null, open: {} })[0]!.chip).toMatchObject({ text: "orbit-1042" });
     const w = groupsView(fleet, { groupBy: "worktree", q: "", answer: null, open: {} });
-    expect(w.find((x) => x.key === "orbit-1042")!.chip).toMatchObject({ text: "orbit" });
+    expect(w.find((x) => x.key === "orbit-1042")!.chip).toMatchObject({ text: "b" });
+  });
+  test("two compose projects sharing one working_dir: the chip is the branch, and each project is named", () => {
+    const shared = [
+      c({ id: "w1", project: "orbit", owner: { worktree: "orbit", branch: "main", foreign: false, path: "/p" } }),
+      c({ id: "w2", project: "orbit-live", owner: { worktree: "orbit", branch: "main", foreign: false, path: "/p" } }),
+    ];
+    const g = groupsView(shared, { groupBy: "worktree", q: "", answer: null, open: {} });
+    expect(g).toHaveLength(1);
+    expect(g[0]!.chip).toMatchObject({ text: "main" });
+    expect(g[0]!.projects).toEqual(["orbit", "orbit-live"]);
+  });
+  test("groupLabel: a single project in worktree mode names none", () => {
+    expect(groupLabel(
+      { project: "orbit", containers: [c({ id: "a", project: "orbit" })], up: 1, total: 1, worst: "ok", owner: null, foreign: false },
+      "worktree",
+    ).projects).toBeNull();
   });
   test("the filter and the answer both narrow, and open every stack", () => {
     const g = groupsView(fleet, { groupBy: "stack", q: "", answer: "need", open: {} });
@@ -205,5 +221,17 @@ describe("the layout choice", () => {
     expect(readLayout(() => "split")).toBe("split");
     expect(readLayout(() => "nonsense")).toBe("list");
     expect(readLayout(() => { throw new Error("private mode"); })).toBe("list");
+  });
+});
+
+describe("shortImage", () => {
+  const hex = "83872a05" + "b".repeat(50) + "f80959";
+  test("a digest shows 12 hex characters without sha256:", () => {
+    expect(shortImage(`sha256:${hex}`)).toBe("83872a05bbbb");
+    expect(shortImage(hex)).toBe("83872a05bbbb");
+  });
+  test("a named image is left alone", () => {
+    expect(shortImage("nginx:1.27")).toBe("nginx:1.27");
+    expect(shortImage("repo@sha256:" + hex)).toBe("repo@sha256:" + hex);
   });
 });

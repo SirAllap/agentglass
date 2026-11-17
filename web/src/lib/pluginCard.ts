@@ -57,3 +57,21 @@ export function pageSummary(total: number, updates: number, needsYou: number): s
   return [`${total} installed`, updates ? `${updates} update${updates === 1 ? "" : "s"}` : "", needsYou ? `${needsYou} need${needsYou === 1 ? "s" : ""} you` : ""]
     .filter(Boolean).join(" · ");
 }
+
+type MarketRead = "loading" | "ok" | "error";
+
+/** The Market's line under its title: what is listed once read, where the list comes from otherwise. */
+export function marketSummary(read: MarketRead, listed: number, notInstalled: number): string {
+  if (read !== "ok") return "Plugins listed on this project's plugin page.";
+  return `${listed} ${listed === 1 ? "plugin" : "plugins"} · ${notInstalled} not installed`;
+}
+
+/** What the "On this page" rail shows beside Market: the listed count, "offline" when the market did not answer, nothing while it reads. */
+export function marketRailCount(read: MarketRead, listed: number): string | undefined {
+  return read === "ok" ? String(listed) : read === "error" ? "offline" : undefined;
+}
+
+/** The chip beside a market tile's name: a plugin you have is marked, one the listing moved past says so in the update colour (info, as on the Installed band); one to install has none. */
+export function tileChip(mode: "install" | "update" | "installed"): { tone: "ok" | "info"; label: string } | null {
+  return mode === "installed" ? { tone: "ok", label: "Installed" } : mode === "update" ? { tone: "info", label: "Update available" } : null;
+}

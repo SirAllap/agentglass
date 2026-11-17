@@ -7,8 +7,9 @@ import { describe, expect, test } from "bun:test";
 import type { PrSummary } from "../../shared/types.ts";
 import {
   parseQuery, serializeQuery, applyFilters, buildFacets, toggleFacet, activeCount, DEFAULT_SORT,
-  readPrField, builderFields,
+  readPrField, builderFields, FACETS,
 } from "../src/lib/prFilter.ts";
+import { FACET_FIELDS } from "../../shared/prFilterFields.ts";
 import { applyWith } from "../src/components/tasks/filters.ts";
 
 let seq = 100;
@@ -397,25 +398,128 @@ describe("the statuses the filter offers", () => {
   test("offers every status the boards know, not the ones on this page", () => {
     const rows = [carded("in development"), carded("code review")];
     const opts = buildFacets(rows, parseQuery(""), seeded).find((f) => f.queryKey === "cardstatus")?.options ?? [];
-    expect(opts.map((o) => o.value)).toEqual(["to do", "in development", "code review", "ready for qa"]);
+    expect(opts.map((o) => o.value)).toEqual(["TO DO", "IN DEVELOPMENT", "CODE REVIEW", "READY FOR QA"]);
+  });
+
+  test("a Jira-only board lists every Jira status (0 counts too), no ClickUp one, and keeps a stale selected one marked", () => {
+    const mixed = {
+      ...seeded,
+      cardStatuses: [
+        { status: "BACKLOG", trackers: ["jira"] }, { status: "IN QA", trackers: ["jira"] }, { status: "DONE", trackers: ["jira", "clickup"] },
+        { status: "WON'T DO", trackers: ["jira"] }, { status: "PRE QA", trackers: ["jira", "clickup"] }, { status: "IN PRODUCTION", trackers: ["clickup"] }, { status: "TO DO", trackers: ["clickup"] },
+      ],
+    };
+    const row = pr({ card: { id: "ORBIT-1042", title: "x", status: "In QA", priority: null, tracker: "jira" } });
+    const f = buildFacets([row], parseQuery("cardstatus:\"OLD STATE\""), mixed).find((x) => x.queryKey === "cardstatus")!;
+    expect(f.options.map((o) => o.value)).toEqual(["BACKLOG", "IN QA", "DONE", "WON'T DO", "PRE QA", "OLD STATE"]);
+    expect(f.options.find((o) => o.value === "OLD STATE")?.label).toContain("not in the workflow");
+    expect(f.options.find((o) => o.value === "BACKLOG")?.count).toBe(0);
+    const click = buildFacets([carded("to do")], parseQuery(""), mixed).find((x) => x.queryKey === "cardstatus")!;
+    expect(click.options.map((o) => o.value)).toContain("IN PRODUCTION");
   });
 
   test("each one carries the colour the card draws it in", () => {
     // So the option reads as the chip it filters rather than as a grey word.
     const opts = buildFacets([carded("to do")], parseQuery(""), seeded).find((f) => f.queryKey === "cardstatus")?.options ?? [];
-    expect(opts.find((o) => o.value === "ready for qa")?.tint).toBe("#e05194");
+    expect(opts.find((o) => o.value === "READY FOR QA")?.tint).toBe("#e05194");
   });
 
   test("a status on a card but not in the seeded list is still offered", () => {
     // The seed is a cache; a board read since could hold a status it predates,
     // and dropping it would hide rows that are on screen.
     const opts = buildFacets([carded("invented today")], parseQuery(""), seeded).find((f) => f.queryKey === "cardstatus")?.options ?? [];
-    expect(opts.map((o) => o.value)).toContain("invented today");
+    expect(opts.map((o) => o.value)).toContain("INVENTED TODAY");
   });
 
   test("no tracker, no statuses, no field", () => {
     const opts = buildFacets([pr()], parseQuery(""), { authors: [], assignees: [], labels: [], milestones: [], bases: [] })
       .find((f) => f.queryKey === "cardstatus")?.options ?? [];
     expect(opts.length).toBe(0);
+  });
+});
+
+describe("the facet table and the field table are one list", () => {
+  test("every facet has a reader and every reader a facet", () => {
+    // They were derived from one another before the readers moved to shared/.
+    // Drift now reads as an unknown field: the desk hides every row, the phone
+    // keeps every row. A facet added to FACETS alone fails here.
+    expect(new Set(FACETS.map((f) => f.queryKey))).toEqual(new Set(Object.keys(FACET_FIELDS)));
+  });
+});
+
+describe("card status spelled in different cases", () => {
+  const carded = (status: string) => pr({
+    card: { id: "c1", title: "a card", status, priority: null, people: [] } as unknown as PrSummary["card"],
+  });
+  const rows = [carded("Ready for QA"), carded("ready for qa"), carded("Ready for QA "), carded("QA complete")];
+
+  test("two spellings are one picker entry, upper case, count summed", () => {
+    const opts = buildFacets(rows, parseQuery(""), null).find((v) => v.key === "cardStatus")!.options;
+    expect(opts.map((o) => o.value).sort()).toEqual(["QA COMPLETE", "READY FOR QA"]);
+    expect(opts.find((o) => o.value === "READY FOR QA")!.count).toBe(3);
+  });
+
+  test("a rule stored lower case hides every spelling, not QA complete", () => {
+    const rule = { join: "and" as const, rules: [{ field: "cardstatus", op: "not" as const, values: ["ready for qa"] }] };
+    const left = applyWith(rows, rule as never, (p, f) => readPrField(p, f));
+    expect(left.map((p) => p.card!.status)).toEqual(["QA complete"]);
+  });
+
+  test("SHOW ONLY 'ready for qa' keeps a Jira 'Ready for QA' and an old-tracker 'ready for qa'", () => {
+    const rule = { join: "and" as const, rules: [{ field: "cardstatus", op: "is" as const, values: ["ready for qa", "pre qa"] }] };
+    const kept = applyWith(rows, rule as never, (p, f) => readPrField(p, f));
+    expect(kept.map((p) => p.card!.status)).toEqual(["Ready for QA", "ready for qa", "Ready for QA "]);
+  });
+});
+
+describe("statusesForCards: Jira cards", () => {
+  const all = [
+    { status: "IN DEVELOPMENT", trackers: ["jira", "clickup"] },
+    { status: "READY FOR QA", trackers: ["jira"] },
+    { status: "WON'T FIX / OBSOLETE", trackers: ["clickup"] },
+  ];
+  const pr = (tracker?: "jira") => ({ card: { id: "1", title: "t", status: "x", ...(tracker ? { tracker } : {}) } }) as unknown as PrSummary;
+  test("a Jira card hides ClickUp-only statuses", async () => {
+    const { statusesForCards } = await import("../src/lib/prFilter.ts");
+    expect(statusesForCards([pr("jira")], all)).toEqual(["IN DEVELOPMENT", "READY FOR QA"]);
+  });
+  test("a card with no tracker never counts as ClickUp", async () => {
+    const { statusesForCards } = await import("../src/lib/prFilter.ts");
+    expect(statusesForCards([pr()], all)).toEqual(["IN DEVELOPMENT", "READY FOR QA", "WON'T FIX / OBSOLETE"]);
+    expect(statusesForCards([pr("jira"), pr()], all)).toEqual(["IN DEVELOPMENT", "READY FOR QA"]);
+  });
+});
+
+describe("the rule's card status list is the project's whole workflow", () => {
+  test("15 Jira statuses, two on screen: all 15 offered", () => {
+    const flow = Array.from({ length: 15 }, (_, i) => ({ status: `STATUS ${i + 1}`, trackers: ["jira"] }));
+    const repo = { authors: [], assignees: [], labels: [], milestones: [], bases: [], cardStatuses: [...flow, { status: "TO DO", trackers: ["clickup"] }] };
+    const rows = [1, 2].map((n) => pr({ card: { id: `ORBIT-${n}`, title: "x", status: `Status ${n}`, priority: null, tracker: "jira" } }));
+    const f = buildFacets(rows, parseQuery(""), repo).find((x) => x.queryKey === "cardstatus")!;
+    expect(f.options.length).toBe(15);
+    expect(f.options.some((o) => o.label.includes("not in the workflow"))).toBe(false);
+  });
+});
+
+// The board's tabs are lane filters over the same rows: a Main tab that hides a
+// card status and a QA tab that shows only it must split the rows (check-pr.ts relies on this).
+describe("tab lanes and card status", () => {
+  test("Main hides a status, QA shows it", async () => {
+    const { evalLanes } = await import("../../shared/prFilterEval.ts");
+    const { emptyLanes } = await import("../../shared/prFilter.ts");
+    const { viewFieldReader } = await import("../src/lib/prFilter.ts");
+    const lane = (lane: "show" | "hide", id: string) => {
+      const l = emptyLanes();
+      l[lane].children = [{ id, field: "cardstatus", op: "is", values: ["QA"] }];
+      return l;
+    };
+    const main = lane("hide", "a");
+    const qa = lane("show", "b");
+    const rows = [
+      pr({ number: 1, card: { status: "QA" } } as any),
+      pr({ number: 2, card: { status: "In Progress" } } as any),
+    ];
+    expect(evalLanes(rows, main, viewFieldReader).kept.map((p) => p.number)).toEqual([2]);
+    expect(evalLanes(rows, qa, viewFieldReader).kept.map((p) => p.number)).toEqual([1]);
   });
 });

@@ -77,7 +77,7 @@ export function JsonGraph({ data }: { data: unknown }) {
         Each object and array is a box sized to its own text; what it nests is the next column. Values are cut inside their box.
         {g.omitted > 0 && ` ${g.omitted} more boxes are not drawn (the first ${g.maxNodes} are).`}
         <button type="button" className="agx-btn ml-2 px-2 rounded-md text-[10.5px]" style={{ minHeight: HIT - 8, border: EDGE, color: "var(--text2)" }}
-          aria-pressed={!fit} onClick={() => setFit((v) => !v)} title={fit ? "Draw at full size and scroll" : "Fit the whole graph in the pane"}>{fit ? "Full size" : "Fit"}</button>
+          aria-pressed={!fit} onClick={() => setFit((v) => !v)} data-tip={fit ? "Draw at full size and scroll" : "Fit the whole graph in the pane"}>{fit ? "Full size" : "Fit"}</button>
       </p>
       <div className="min-w-0 min-h-0 flex-1 agx-scroll overflow-auto rounded-lg" style={{ border: EDGE, background: "var(--bg)", maxWidth: "100%" }}>
         <svg role="img" aria-label="JSON graph" viewBox={`0 0 ${frame.w} ${frame.h}`} style={{ display: "block", ...(fit ? { width: "100%", maxWidth: frame.w, height: "auto" } : { width: frame.w, height: frame.h }), fontFamily: "ui-monospace, 'SF Mono', Menlo, monospace", fontSize: 10.5 }}>

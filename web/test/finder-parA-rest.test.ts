@@ -141,7 +141,7 @@ describe("list: row 103, Strata's heading look and arrow", async () => {
     const v = await read("components/finder/machine/FolderViews.tsx");
     expect(v).toContain('fontSize: "0.82em", fontWeight: 700');
     expect(v).toContain("minHeight: 28");
-    expect(v).toContain('name={sortWay === "asc" ? "arrow-up" : "arrow-down"} size={12}');
+    expect(v).toContain('name={sortWay === "asc" ? "arrow-up" : "arrow-down"} size={ICON.xs}');
     expect(v).not.toContain('" ↑" : " ↓"');
     expect(css).toContain(".agx-list-heading:hover { background: color-mix(in srgb, var(--primary) 15%, transparent)");
     expect(css).toContain(".agx-list-heading:active");

@@ -8,11 +8,12 @@
  * these lives in a component that needs the app around it to render.
  */
 import { describe, expect, test } from "bun:test";
+import { modalSource } from "./settingsSource.ts";
 import { readFileSync } from "node:fs";
 import { VIEWS, LETTER_TO_VIEW } from "../src/components/workspace/views.ts";
 
 const read = (p: string) => readFileSync(new URL("../" + p, import.meta.url).pathname, "utf8");
-const settings = read("src/components/SettingsModal.tsx");
+const settings = modalSource();
 const api = read("src/lib/api.ts");
 const workspace = read("src/components/workspace/Workspace.tsx");
 const understudy = read("src/components/understudy/UnderstudyPanel.tsx");
@@ -102,7 +103,7 @@ describe("the Lantern section in Settings", () => {
   test("exists on the merged Agents page, and is searchable from it", () => {
     expect(settings).not.toContain('{show("lantern") &&');
     expect(settings).toContain('{show("hooks") && (');
-    const kw = /id: "hooks", label: "Agents", group: "Agents", kw: "([^"]*)"/.exec(settings)?.[1] ?? "";
+    const kw = /id: "hooks", label: "Watching", group: "Agents", kw: "([^"]*)"/.exec(settings)?.[1] ?? "";
     for (const word of ["lantern", "reminder", "needs you"]) expect(kw, word).toContain(word);
   });
 

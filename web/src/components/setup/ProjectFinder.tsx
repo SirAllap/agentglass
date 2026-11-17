@@ -14,6 +14,7 @@ import type { SetupScan, SetupScanRow } from "../../../../shared/types.ts";
 import { SETUP_SCAN_MS } from "../../../../shared/setupScan.ts";
 import { ICON } from "../../lib/iconSize.ts";
 import { api } from "../../lib/api.ts";
+import { intervalWhileVisible } from "../../lib/visibleInterval.ts";
 import { tildify } from "../../lib/projectsPaths.ts";
 import { branchLabel } from "../../lib/setupRepos.ts";
 import {
@@ -64,12 +65,13 @@ export function ProjectFinder({ homedir, ticked, onTicked, onBack, onAdd }: {
   useEffect(() => {
     if (!scan || scan.state !== "running") return;
     let live = true;
-    const timer = setInterval(() => {
+    // Not while the window is hidden: nobody sees the rows; coming back reads once.
+    const stop = intervalWhileVisible(() => {
       void api.setupScan(scan.id)
         .then((s) => { if (live) setScan(s); })
         .catch(() => { if (live) setFailure("The search stopped answering."); });
     }, 350);
-    return () => { live = false; clearInterval(timer); };
+    return () => { live = false; stop(); };
   }, [scan?.id, scan?.state]);
 
   // Focus the title first, so Tab starts at the head and nothing below is
@@ -190,7 +192,7 @@ export function FinderScreen({ homedir, scan, failure, filter, ticked, adding, a
                   <b>{rows.length}</b> {rows.length === 1 ? "repository" : "repositories"} so far ·{" "}
                   <b>{scan.folders}</b> {scan.folders === 1 ? "folder" : "folders"} read
                 </p>
-                <p className="finder-where" title={scan.current}>{tildify(scan.current) || "…"}</p>
+                <p className="finder-where" data-tip={scan.current}>{tildify(scan.current) || "…"}</p>
                 <button type="button" className="setup-btn setup-btn-secondary finder-stop" onClick={onStop}>
                   <StopMark /> Stop
                 </button>
@@ -257,7 +259,7 @@ export function FinderScreen({ homedir, scan, failure, filter, ticked, adding, a
                 return (
                   <section className="finder-group" key={g.parent} aria-label={tildify(g.parent)}>
                     <div className="finder-group-head">
-                      <code className="finder-parent" title={g.parent}>{tildify(g.parent)}</code>
+                      <code className="finder-parent" data-tip={g.parent}>{tildify(g.parent)}</code>
                       <span className="finder-group-n">{g.rows.length}</span>
                       {picked > 0 && <span className="finder-group-picked">· {picked} selected</span>}
                     </div>
@@ -306,9 +308,9 @@ function ScanRow({ row, on, onTick }: { row: SetupScanRow; on: boolean; onTick: 
     <label className="finder-row" data-on={on ? "1" : "0"}>
       <input type="checkbox" className="setup-repobox" checked={on} onChange={() => onTick(row.root)}
         aria-label={`${row.name}, on ${row.branch}, last commit ${age}`} />
-      <span className="finder-row-name" title={row.name}>{row.name}</span>
-      <span className="finder-row-path" title={row.root}>{tildify(row.root)}</span>
-      <span className="finder-row-branch" title={row.branch} aria-label={row.branch}><BranchMark /> {cut}</span>
+      <span className="finder-row-name" data-tip={row.name}>{row.name}</span>
+      <span className="finder-row-path" data-tip={row.root}>{tildify(row.root)}</span>
+      <span className="finder-row-branch" data-tip={row.branch} aria-label={row.branch}><BranchMark /> {cut}</span>
       <span className="finder-row-age">{age}</span>
     </label>
   );

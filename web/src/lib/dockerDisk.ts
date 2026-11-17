@@ -18,6 +18,29 @@ export const BUILD_CACHE_BUDGET = 60_000_000_000;
 /** An image's size in bytes; 0 when docker did not say, so a sum is never NaN. */
 export const imageBytes = (i: Pick<DockerImage, "size">): number => parseSize(i.size) ?? 0;
 
+/** Per-image unique/shared split, from `disk.perImage` (`system df -v`),
+ *  keyed by id. Several rows can share an id — one per tag of the same
+ *  image — and they carry the same numbers, so the first one wins. */
+export function imageSizeIndex(perImage: DockerDisk["perImage"]): Map<string, { unique: number | null; shared: number | null; created: number | null }> {
+  const out = new Map<string, { unique: number | null; shared: number | null; created: number | null }>();
+  for (const p of perImage ?? []) {
+    if (out.has(p.id)) continue;
+    out.set(p.id, {
+      unique: p.unique, created: p.created ?? null,
+      shared: p.bytes != null && p.unique != null ? Math.max(0, p.bytes - p.unique) : null,
+    });
+  }
+  return out;
+}
+
+/** Every orphan's own (already-unique) size, summed once — the "gone with
+ *  their worktree" figure. The Images banner and the Disk view's orphan card
+ *  both read it from here, fed the same `disk.orphans`, so they can never
+ *  print two different numbers for the same list. */
+export function orphanUniqueBytes(orphans: DockerDisk["orphans"]): number {
+  return orphans.reduce((n, o) => n + (o.bytes ?? 0), 0);
+}
+
 export type SegmentKey = "images" | "orphans" | "dangling" | "cache" | "cache-over" | "volumes" | "containers";
 
 export function diskMath(disk: DockerDisk, images: DockerImage[], budget = BUILD_CACHE_BUDGET) {
@@ -27,11 +50,11 @@ export function diskMath(disk: DockerDisk, images: DockerImage[], budget = BUILD
   /* `docker images` counts a shared layer once per image, so the pieces can add
      up to more than the daemon's own images figure. Capping them at it keeps
      every segment inside its slice and the bar inside 100 %. */
-  const orphanBytes = Math.min(disk.images, disk.orphans.reduce((n, o) => n + (o.bytes ?? 0), 0));
+  const orphanBytes = Math.min(disk.images, orphanUniqueBytes(disk.orphans));
   const danglingBytes = Math.min(disk.images - orphanBytes, dangling.reduce((n, i) => n + imageBytes(i), 0));
   const cacheOver = Math.max(0, disk.buildCache - budget);
   const underBudget = cacheOver === 0;
-  const back = cacheOver + orphanBytes + danglingBytes;
+  const by = disk.reclaimableBy;
   const total = disk.images + disk.containers + disk.volumes + disk.buildCache;
 
   const segments: { key: SegmentKey; bytes: number; stripe: boolean }[] = ([
@@ -44,12 +67,24 @@ export function diskMath(disk: DockerDisk, images: DockerImage[], budget = BUILD
     ["containers", disk.containers, false],
   ] as const).map(([key, bytes, stripe]) => ({ key, bytes, stripe })).filter((s) => s.bytes > 0);
 
+  /* The Images header shows `disk.imageReclaimable` (the daemon's own
+     reclaimable for images) as "unused"; the legend's images row has to show
+     the same number, not its own sum of the orphan/dangling rows — those are
+     only a subset (a plain idle image that is neither orphaned nor dangling
+     is reclaimable too, and would otherwise make the two views disagree). */
+  const imagesCanGo = by?.images ?? disk.imageReclaimable ?? (orphanBytes + danglingBytes);
+
+  /* canGo is what a button on this view really frees: cache = the budget prune,
+     containers and volumes 0 (no prune button). Docker's own reclaimable is only
+     the secondary `dockerSays` line, never the promise. */
   const legend = [
-    { key: "images", bytes: disk.images, canGo: orphanBytes + danglingBytes, note: "" },
-    { key: "cache", bytes: disk.buildCache, canGo: cacheOver, note: underBudget ? "under the budget" : "" },
-    { key: "volumes", bytes: disk.volumes, canGo: 0, note: "kept" },
-    { key: "containers", bytes: disk.containers, canGo: 0, note: "" },
+    { key: "images", bytes: disk.images, canGo: imagesCanGo, dockerSays: 0, note: "" },
+    { key: "cache", bytes: disk.buildCache, canGo: cacheOver, dockerSays: by?.buildCache ?? 0, note: underBudget ? "under the budget" : "" },
+    { key: "volumes", bytes: disk.volumes, canGo: 0, dockerSays: 0, note: "kept" },
+    { key: "containers", bytes: disk.containers, canGo: 0, dockerSays: by?.containers ?? 0, note: "" },
   ] as const;
+  /* The headline is the sum of the legend's own numbers, so the two cannot disagree. */
+  const back = legend.reduce((n, l) => n + l.canGo, 0);
 
   const plural = (n: number) => `${n} image${n === 1 ? "" : "s"}`;
   const cards = [

@@ -163,7 +163,7 @@ describe("the three columns", () => {
      */
     expect(css).toContain("overflow-x: hidden");
     expect(src).not.toContain('sticky top-0 z-30 -mx-3 px-3 py-2');
-    expect(src).toContain('tab === "files" ? "overflow-hidden p-0" : "overflow-y-auto p-3"');
+    expect(src).toContain('tab === "files" ? "flex flex-col overflow-hidden" : "overflow-y-auto overflow-x-hidden"');
   });
 
   it("does not also sit inside a scrolling page", () => {
@@ -310,7 +310,7 @@ describe("the bar that walks you through what is new", () => {
   it("is pinned to the top of the scroller, because it is a control", () => {
     /* Reported the moment it worked: "Next" sends you three screens down and
        the button that says Next is now three screens up. */
-    expect(src).toContain('position: "sticky", top: 0, zIndex: 8, background: "var(--bg)", boxShadow: "0 -12px 0 0 var(--bg)"');
+    expect(src).toContain('position: "sticky", top: "var(--prx-stick, 0px)", zIndex: 8, background: "var(--bg)", boxShadow: "0 -12px 0 0 var(--bg)"');
     // Opaque (the page background, not a tint): comment text slides under it.
     expect(src).toContain('data-conv-toolbar');
   });
@@ -486,8 +486,8 @@ describe("waiting for a pull request", () => {
   it("waits in the shape of the thing, not as a spinner in the middle", () => {
     // A centred word replaced by a masthead, a tab row and a page of text is
     // every element on screen moving at once.
-    expect(src).toContain("<DetailSkeleton number={selected} />");
-    expect(src).toContain("function DetailSkeleton({ number }");
+    expect(src).toContain("<DetailSkeleton number={selected} checks={");
+    expect(src).toContain("function DetailSkeleton({ number, checks }");
     expect(src).not.toContain("<Loading label={`Loading #${selected}…`} fill />");
   });
 
@@ -558,7 +558,7 @@ describe("each tab keeps its own place", () => {
      * and stepping to Overview landed you at the bottom of a page you had never
      * scrolled. Reported exactly that way.
      */
-    expect(src).toContain("tabScroll.current[tab] = y;");
+    expect(src).toContain("tabScroll.current[tab] = el.scrollTop;");
     // Before paint: after it, the old offset is on screen for a frame and the
     // jump is the thing you see instead of the thing you asked for.
     expect(src).toContain("const want = tabScroll.current[tab] ?? 0;");
@@ -661,7 +661,7 @@ describe("how far behind, on the page and on the board", () => {
   it("re-asks while you are looking at it, and on Refresh", () => {
     // Five minutes is right for a board of twelve and far too long for the page
     // in front of you.
-    expect(src).toContain("const slow = setInterval(() => { if (looking()) again(); }, 30_000);");
+    expect(src).toContain("pollWhileLooking(again, 30_000)");
     expect(src).toContain("forgetBehind();");
   });
 });
@@ -792,6 +792,6 @@ describe("what Refresh asks for", () => {
     // That cache is what makes this board cost two calls; a forced poll would
     // spend a `gh` run every twenty seconds for nothing.
     expect(src).toContain("const force = boardForce.current;\n    boardForce.current = false;");
-    expect(src).toContain('api.prList(root, "mine", stateSel, force)');
+    expect(src).toContain("loadBoardLists(root, stateSel, force)");
   });
 });

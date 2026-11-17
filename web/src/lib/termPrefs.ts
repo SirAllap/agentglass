@@ -117,6 +117,8 @@ const FONT_KEY = "agentglass-term-font";
 const SCROLLBACK_KEY = "agentglass-term-scrollback";
 const WORDSEP_KEY = "agentglass-term-wordsep";
 const COPY_ON_SELECT_KEY = "agentglass-term-copy-on-select";
+const BENCH_LINKS_KEY = "agentglass-bench-links";
+const OTHER_LINKS_KEY = "agentglass-other-links";
 const RIGHT_CLICK_PASTE_KEY = "agentglass-term-right-click-paste";
 const NOTE_EDITOR_KEY = "agentglass-note-editor";
 const SIZE_KEY = "agentglass-term-size";
@@ -162,6 +164,28 @@ export const currentWordSeparators = (): string => {
  * terminal has always done. The switch exists for the one case it gets wrong:
  * a machine where the clipboard is shared with something that reacts to it.
  */
+/**
+ * Pull request and card links clicked in a terminal open on the bench instead
+ * of switching the whole view. OFF by default: that is what a click has always
+ * done, and the bench is for people who keep their boards on it.
+ */
+export const benchLinks = (): boolean => read(BENCH_LINKS_KEY) === "1";
+export function setBenchLinks(on: boolean): void { write(BENCH_LINKS_KEY, on ? "1" : ""); }
+
+/**
+ * Where a web link opens when it is not a pull request or
+ * a card: the machine's browser (what a click has always done), the agentglass
+ * browser as a view, or the agentglass browser on the bench.
+ */
+export type OtherLinks = "default" | "view" | "bench";
+export const OTHER_LINKS: { v: OtherLinks; label: string }[] = [
+  { v: "default", label: "Your default browser" },
+  { v: "view", label: "agentglass browser" },
+  { v: "bench", label: "agentglass browser, on the bench" },
+];
+export const otherLinks = (): OtherLinks => { const v = read(OTHER_LINKS_KEY); return v === "view" || v === "bench" ? v : "default"; };
+export function setOtherLinks(v: OtherLinks): void { write(OTHER_LINKS_KEY, v === "default" ? "" : v); }
+
 export const copyOnSelect = (): boolean => read(COPY_ON_SELECT_KEY) !== "0";
 
 /**

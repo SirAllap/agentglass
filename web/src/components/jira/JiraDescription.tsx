@@ -22,11 +22,15 @@ import type { CardEdit } from "../../../../shared/providers.ts";
 import { CommentAction } from "../tasks/CardEdit.tsx";
 import { Button, Textarea } from "../workspace/Chrome.tsx";
 import { JiraSection } from "./JiraSections.tsx";
+import { StateCollapse } from "../tasks/BoardState.tsx";
+import type { AddAsk } from "../../lib/stateRule.ts";
 
 const PENCIL = "M4 20h4l10-10a2.8 2.8 0 0 0-4-4L4 16v4z";
 export const LOCKED_SAYS = "This description has parts Markdown cannot keep (a table, a panel, an image or a colour), so it is changed in Jira.";
 
-export function JiraDescription({ text, edit, writes, url, busy, onSave }: {
+export function JiraDescription({ text, edit, writes, url, busy, onSave, folded, ask }: {
+  /** The card folded its empty blocks into one line: an empty description then draws nothing until that line asks for it. */
+  folded?: boolean; ask?: AddAsk;
   text: string;
   edit: CardEdit | undefined;
   writes: boolean;
@@ -45,6 +49,7 @@ export function JiraDescription({ text, edit, writes, url, busy, onSave }: {
   // The text under the box changed (a read, an Undo): the box is not open on a stale copy.
   useEffect(() => { if (!open) setDraft(text); }, [text, open]);
   useEffect(() => { if (mode !== "edit") setOpen(false); }, [mode]);
+  useEffect(() => { if (ask?.k === "description" && mode === "edit") { setDraft(text); setOpen(true); } }, [ask?.n]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = async () => {
     if (busy) return;
@@ -53,6 +58,7 @@ export function JiraDescription({ text, edit, writes, url, busy, onSave }: {
     if (landed && !gone.current) setOpen(false);
   };
 
+  if (folded && !text.trim() && !open) return null;
   return (
     <JiraSection id="description" title="Description" aside={mode === "none" ? undefined : (
       <CommentAction iconOnly label="Edit" busy={mode === "locked"} on={open} tone="var(--primary)"
@@ -64,7 +70,8 @@ export function JiraDescription({ text, edit, writes, url, busy, onSave }: {
           <Textarea value={draft} autoFocus rows={8} disabled={busy} aria-label="Change the description"
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void save(); }
+              // Ctrl+S too: the reflex of anyone who just wrote a paragraph, and the page has nothing else to save.
+              if ((e.key === "Enter" || e.key === "s") && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) { e.preventDefault(); void save(); }
               // Escape closes the box and nothing else: it must not reach the pane behind it.
               if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setOpen(false); }
             }}
@@ -77,7 +84,7 @@ export function JiraDescription({ text, edit, writes, url, busy, onSave }: {
         </div>
       ) : (
         <div className="agx-cu-body min-w-0 break-words" style={{ fontFamily: "var(--font-prose)", fontSize: 13, lineHeight: 1.55 }}>
-          {text.trim() ? <Markdown text={text} /> : <span style={{ color: "var(--text4)" }}>No description.</span>}
+          {text.trim() ? <Markdown text={text} /> : <StateCollapse />}
         </div>
       )}
       {mode === "locked" && (

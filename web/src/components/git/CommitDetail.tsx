@@ -55,9 +55,9 @@ export function FilesBlock({ files }: { files: FilesState }) {
           const hue = STATUS_HUE[f.status];
           return (
             <div key={i} className="grid items-center gap-2 min-h-[24px] text-[11.5px]" style={{ gridTemplateColumns: "18px minmax(0, 1fr) auto", fontFamily: MONO, color: "var(--text2)" }}>
-              <span className="grid place-items-center font-semibold text-[10px]" title={f.status}
+              <span className="grid place-items-center font-semibold text-[10px]" data-tip={f.status}
                 style={{ width: 18, height: 18, borderRadius: 5, color: hue ? `var(${hue})` : "var(--text3)", background: wash(hue ?? "--text", 10), boxShadow: `inset 0 0 0 1px ${wash(hue ?? "--text", 30)}` }}>{f.status}</span>
-              <span className="truncate text-left" title={f.dir + f.name} style={{ direction: "rtl" }}>
+              <span className="truncate text-left" data-tip={f.dir + f.name} style={{ direction: "rtl" }}>
                 <bdi style={{ direction: "ltr" }}><span style={{ color: "var(--text4)" }}>{f.dir}</span>{f.name}</bdi>
               </span>
               <span className="inline-flex gap-px" aria-label={`${f.add} added, ${f.del} deleted`}>

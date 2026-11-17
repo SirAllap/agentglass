@@ -167,7 +167,7 @@ export function Select({
       <button
         type="button"
         ref={btnRef}
-        title={title}
+        data-tip={title}
         disabled={disabled}
         onClick={() => { if (disabled || busy) return; if (open) close(); else { setOpen(true); onOpen?.(); } }}
         role="combobox"

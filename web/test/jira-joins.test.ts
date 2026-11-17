@@ -73,22 +73,22 @@ describe("the controls, drawn", () => {
     const h = html(React.createElement(SubtasksBlock, { rows: [], parent, writable: true, act }));
     expect(h).toContain("Subtasks");
     expect(h).toContain("Add a sub-task");
-    expect(h).toContain("No sub-tasks yet.");
+    expect(h).not.toContain("No sub-tasks yet.");
   });
   test("a sub-task has no way to add one, and with no rows no section", () => {
     expect(html(React.createElement(SubtasksBlock, { rows: [], parent: task({ issueType: "Sub-task" }), writable: true, act }))).toBe("");
   });
   test("each sub-task row carries its own status control; read-only keeps the plain pill", () => {
     const rows = [task({ id: "1", customId: "ORBIT-1051", title: "Draft" })];
-    expect(html(React.createElement(SubtasksBlock, { rows, parent, writable: true, act }))).toContain('title="Move this card to another step"');
-    expect(html(React.createElement(SubtasksSection, { rows }))).not.toContain('title="Move this card to another step"');
+    expect(html(React.createElement(SubtasksBlock, { rows, parent, writable: true, act }))).toContain('data-tip="Move this card to another step"');
+    expect(html(React.createElement(SubtasksSection, { rows }))).not.toContain('data-tip="Move this card to another step"');
   });
   test("linked work items offer a way to link and a way to take each off, and say there are none when there are none", () => {
     const linked = [{ id: "77", phrase: "blocks", type: "Blocks", direction: "out", task: task() }] as CardLinked[];
     const h = html(React.createElement(LinkedBlock, { linked, card: "ORBIT-1042", writable: true, act }));
     expect(h).toContain("Link another work item");
     expect(h).toContain("Take off the link to ORBIT-1043");
-    expect(html(React.createElement(LinkedBlock, { linked: [], card: "ORBIT-1042", writable: true, act }))).toContain("No linked work items.");
+    expect(html(React.createElement(LinkedBlock, { linked: [], card: "ORBIT-1042", writable: true, act }))).not.toContain("No linked work items.");
     expect(html(React.createElement(LinkedBlock, { linked: [], card: "ORBIT-1042", writable: false, act }))).toBe("");
     expect(html(React.createElement(LinkedBlock, { linked, card: "ORBIT-1042", writable: false, act }))).not.toContain("Take off");
   });
@@ -106,9 +106,9 @@ describe("the rules the controls keep, read from source", () => {
   test("the plus is the last thing in the header, after the line a change says, in every state", async () => {
     const src = await read("components/jira/JiraJoins.tsx");
     const aside = src.slice(src.indexOf("function Aside("), src.indexOf("/** A one-line form"));
-    expect(aside.indexOf("{said ? (")).toBeLessThan(aside.indexOf("{canAdd && <CommentAction"));
+    expect(aside.indexOf("{said ? (")).toBeLessThan(aside.indexOf("{canAdd && <span"));
     expect(aside).toContain("Undo");
-    expect(aside).toContain('title="Put it back"');
+    expect(aside).toContain('data-tip="Put it back"');
   });
   test("a removal asks in place and says what goes before anything is sent; it is never one click", async () => {
     const src = await read("components/jira/JiraJoins.tsx");
@@ -128,7 +128,8 @@ describe("the rules the controls keep, read from source", () => {
     for (const call of ["api.jiraSubtask(", "api.jiraRelate(", "api.jiraUnrelate(", "api.jiraWebLink(", "api.jiraWebUnlink("]) expect(card).toContain(call);
     expect(card).toContain("setDetail((d) => (d ? { ...sent, comments: d.comments } : sent))");
     expect(card).toContain("setJiraWeb(key, r.web)");
-    expect(card).toContain("writes ? <SubtasksBlock");
+    expect(card).toContain("<SubtaskTree");
+    expect(await read("components/jira/detail/SubtaskTree.tsx")).toContain("writes ? <SubtasksBlock");
   });
   test("a sub-task's menu opens inward from the right edge", async () => {
     expect(await read("components/jira/JiraJoins.tsx")).toContain('align="right"');

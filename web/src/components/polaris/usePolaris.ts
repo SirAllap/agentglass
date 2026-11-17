@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
 import { onPolarisChanged } from "../../lib/polarisLive.ts";
+import { enabledOf } from "../../lib/polarisView.ts";
 import type { ItemsAnswer, SettingsAnswer, SettingsChange } from "../../../../shared/polaris.ts";
 
 /*
@@ -57,7 +58,7 @@ export function usePolarisItems(root: string, active: boolean) {
       if (!alive.current) return;
       if (!s.ok) { setSettings(null); setItems(null); setError(s.error); return; }
       setSettings(s);
-      if (!s.enabled) { setItems(null); setError(null); return; }
+      if (!enabledOf(s)) { setItems(null); setError(null); return; }
       const i = await api.polarisItems(root);
       if (!alive.current) return;
       if (i.ok) { setItems(i); setError(null); } else setError(i.error);

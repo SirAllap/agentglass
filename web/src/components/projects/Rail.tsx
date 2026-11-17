@@ -20,7 +20,7 @@ function Item({ on, icon, label, count, title, onClick, trailing, hot }: {
     <div className="agx-rail-item group flex items-center gap-2 rounded-md min-w-0"
       style={{ minHeight: 32, padding: "0 4px 0 8px", color: on ? "var(--primary-hover)" : "var(--text2)", fontWeight: 600,
         background: on ? "color-mix(in srgb, var(--primary) 10%, transparent)" : hot ? "var(--bg3)" : "transparent" }}>
-      <button onClick={onClick} title={title} aria-current={on ? "true" : undefined} className="flex items-center gap-2 min-w-0 flex-1 text-left h-8 bg-transparent border-0 p-0 cursor-pointer" style={{ color: "inherit", font: "inherit", fontSize: 12.5 }}>
+      <button onClick={onClick} data-tip={title} aria-current={on ? "true" : undefined} className="flex items-center gap-2 min-w-0 flex-1 text-left h-8 bg-transparent border-0 p-0 cursor-pointer" style={{ color: "inherit", font: "inherit", fontSize: 12.5 }}>
         <span className="shrink-0 flex">{icon}</span>
         <span className="min-w-0 flex-1 truncate">{label}</span>
         {count !== undefined && <span className="text-[11px] font-medium" style={{ color: "var(--text4)" }}>{count}</span>}
@@ -50,7 +50,7 @@ export function Rail({ source, setSource, counts, folders, ghCount, onForgetFold
           <Item key={f} on={same(source, { kind: "folder", root: f })} icon={<FolderIcon size={ICON.sm} />} label={railLabel(f)} count={counts.perFolder[f] ?? 0}
             title={`${tildify(f)}\n${f}`} onClick={() => setSource({ kind: "folder", root: f.replace(/\/+$/, "") })}
             trailing={
-              <button onClick={() => onForgetFolder(f)} disabled={busy} title="Forget this folder — its files are not touched" aria-label={`Forget ${f}`}
+              <button onClick={() => onForgetFolder(f)} disabled={busy} data-tip="Forget this folder — its files are not touched" aria-label={`Forget ${f}`}
                 className="agx-forget grid place-items-center shrink-0 rounded-md bg-transparent border-0 cursor-pointer" style={{ width: 22, height: 22, color: "var(--text3)" }}>
                 <CloseIcon size={ICON.xs} />
               </button>} />

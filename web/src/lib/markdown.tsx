@@ -16,8 +16,10 @@
 // become markup.
 import { createContext, memo, useContext, type ReactNode } from "react";
 import { externalUrl } from "./externalUrl.ts";
-import { openInApp } from "./linkRouter.ts";
+import { openInApp, wantsExternal } from "./linkRouter.ts";
+import { openExternal } from "./externalUrl.ts";
 import { CodeBlock } from "./mdCode.tsx";
+import { mentionParts } from "./jiraCommentView.ts";
 import { EDGE, LINE } from "../components/workspace/Chrome.tsx";
 
 /*
@@ -82,12 +84,37 @@ const CODE_BG = "color-mix(in srgb, var(--text) 13%, transparent)";
  */
 const CODE_INK = "color-mix(in srgb, var(--error) 78%, var(--text))";
 
+/*
+ * WHO A MENTION IS, when something around the markdown knows the people.
+ *
+ * A Jira comment names people as `@Name`, with the names beside the text. The
+ * card provides them here and draws each as a chip; everywhere else nothing
+ * is provided and an `@` is a character. Same reason for a context as
+ * OpenImage: `inline()` cannot hold a hook. Only a run with an `@` in it pays
+ * for the lookup, so agent messages keep their plain strings.
+ */
+export interface MentionChips { names: readonly string[]; chip: (name: string, key: string) => ReactNode }
+const Mentions = createContext<MentionChips | null>(null);
+export function MarkdownMentions({ value, children }: { value: MentionChips; children: ReactNode }) {
+  return <Mentions.Provider value={value}>{children}</Mentions.Provider>;
+}
+function MentionText({ text, k }: { text: string; k: string }) {
+  const m = useContext(Mentions);
+  if (!m || !m.names.length) return <>{text}</>;
+  return <>{mentionParts(text, m.names).map((p, n) => (typeof p === "string" ? p : m.chip(p.mention, `${k}-m${n}`)))}</>;
+}
+const plain = (s: string, k: string): ReactNode => (s.includes("@") ? <MentionText key={k} text={s} k={k} /> : s);
+
 /** One link. A pull request or a card the app can show opens in it; see
  *  linkRouter.ts. Anything else leaves by `target`, as it always did. */
 function mdLink(k: string, href: string, label: ReactNode) {
   return (
     <a key={k} href={href} target="_blank" rel="noreferrer noopener" style={{ color: "var(--primary-hover)", textDecoration: "underline" }}
-      onClick={(e) => { if (openInApp(href, e, { strict: true })) e.preventDefault(); }}>{label}</a>
+      onClick={(e) => {
+        if (openInApp(href, e, { strict: true })) e.preventDefault();
+        // Ctrl/Cmd/Shift/Alt/middle: the machine's browser, whatever the setting says.
+        else if (wantsExternal(e, true)) { e.preventDefault(); openExternal(href, { machine: true }); }
+      }}>{label}</a>
   );
 }
 
@@ -124,9 +151,9 @@ function inline(text: string, keyBase: string, depth = 0): ReactNode[] {
   let m: RegExpExecArray | null;
   let i = 0;
   while ((m = re.exec(text))) {
-    if (m.index > last) out.push(text.slice(last, m.index));
     const tok = m[0];
     const k = `${keyBase}-i${i++}`;
+    if (m.index > last) out.push(plain(text.slice(last, m.index), `${k}-t`));
     if (tok.length === 2 && tok.startsWith("\\")) {
       out.push(tok[1]);
     } else if (tok.startsWith("![")) {
@@ -191,7 +218,7 @@ function inline(text: string, keyBase: string, depth = 0): ReactNode[] {
     }
     last = m.index + tok.length;
   }
-  if (last < text.length) out.push(text.slice(last));
+  if (last < text.length) out.push(plain(text.slice(last), `${keyBase}-tail`));
   return out;
 }
 

@@ -62,6 +62,10 @@ export function clientId(): string {
  * one-slot idiom `onOpenSettings` uses, and a verb with nobody listening says
  * so rather than failing silently.
  */
+/** A tab an `open`/`newtab` made: the container id it is in, and whether this
+ *  call minted that container (the relay's record of who made it). */
+export type Opened = { id: string; container?: string; minted?: boolean; agentMade?: boolean };
+
 export interface TabOps {
   /** `profile` is §9's isolated context, under the name the panel already
    *  gives it: two tabs in different profiles are two different people, with
@@ -78,7 +82,7 @@ export interface TabOps {
      `ag:tabEphemeralOpen`), which is a round trip no other `open` has ever
      needed. An ordinary mint still returns the plain value; `serveTabs`
      awaits either shape the same way. */
-  open(url: string, profile?: string): { id: string } | { error: string } | null | Promise<{ id: string } | { error: string } | null>;
+  open(url: string, profile?: string): Opened | { error: string } | null | Promise<Opened | { error: string } | null>;
   close(which: { index?: number; id?: string }): boolean;
   /** Every container the panel knows about, so an agent can pick one by name
    *  instead of guessing at a string the panel would silently reject. */

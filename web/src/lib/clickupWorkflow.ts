@@ -24,7 +24,7 @@ export const CLICKUP: TrackerAdapter = {
     /* What reviewStatus does with no names: an open status with "review" in it. */
     menu: (all) => all.find((s) => s.type !== "done" && s.type !== "closed" && /review/i.test(s.name))?.name ?? null,
   },
-  sample: { id: "ORBIT-1042", title: "Retry the webhook when the queue is full", status: "code review", who: "Ada Test", others: "Sam Rivera" },
+  sample: { id: "ORBIT-1042", title: "Retry the webhook when the queue is full", status: "code review", who: "Ada Test", others: "Sam Orbit" },
 };
 
 /** A settings patch, in the shape the server's save takes. */

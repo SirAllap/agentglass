@@ -146,7 +146,7 @@ describe("the source and the screen", () => {
     // No kept copy is asked for, and none is waited on: the whole board's minute is not the narrowed one's.
     expect(asked.some((a) => a.includes("cached=1"))).toBe(false);
     expect(body).toContain("source.read(id, false, quickRef.current[id])");
-    expect(body).toContain("source.read(id, force, id ? quickRef.current[id] : undefined)");
+    expect(body).toContain("source.read(id, force, id ? quickRef.current[id] : undefined, ac.signal)");
     // Never a filter over the rows already on screen.
     expect(body).not.toMatch(/rows\.filter\([^)]*quick/);
   });

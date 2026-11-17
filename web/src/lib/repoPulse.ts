@@ -9,8 +9,13 @@
 
 import type { GitRepoRef } from "../../../shared/types.ts";
 
-/** How often the focused pane's checkout is re-read while the window is looked at. */
-export const PILL_POLL_MS = 3000;
+/** How often the focused pane's checkout is re-read while the window is looked at.
+ *  Measured idle (.agx-tmp/measured.md, 2026-11-05): 3s matched one open pane
+ *  to ~5 `git status --branch` calls per 17.6s; 8s keeps the pill current
+ *  without being the fastest poll in the panel. Since 2026-11-16 20s: a write the
+ *  server makes (and a `git` frame it pushes) re-reads the pill at once, so the
+ *  poll only catches an edit made outside the app. */
+export const PILL_POLL_MS = 20_000;
 
 /**
  * `repos` with the row for `fresh.root` brought up to date, and the SAME array

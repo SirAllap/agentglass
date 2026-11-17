@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from "react";
 import { anchorLabel, failedSendNote, inReviewOrder, type Review, type ReviewComment, type StaleFile } from "../../lib/diffReview.ts";
 import { MOD_KEY } from "../../lib/format.ts";
 import { openSettings } from "../../lib/openSettings.ts";
+import { ICON } from "../../lib/iconSize.ts";
 import { Badge, Button, EDGE, NoteRow } from "../workspace/Chrome.tsx";
 
 const CARD = {
@@ -82,7 +83,7 @@ export function CommentCard({ c, stale, onEdit, onRemove }: {
 function StaleTag() {
   return (
     <span className="shrink-0 px-1.5 rounded text-[10px]"
-      title="The code at this line has changed since the comment was written. The review still sends the code it was written against."
+      data-tip="The code at this line has changed since the comment was written. The review still sends the code it was written against."
       style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>
       stale
     </span>
@@ -146,7 +147,7 @@ export function ReviewTray({ where, review, staleIds, staleFiles, checking, targ
       <div className="flex items-center gap-2 pl-3.5 pr-3 py-1.5 shrink-0" style={{ ...gutter, minHeight: 46 }}>
         <button onClick={() => setOpen((v) => !v)} aria-expanded={open}
           className="min-w-0 flex-1 flex items-center gap-2 text-left text-[12px] font-semibold" style={{ height: 28, color: "var(--text)" }}>
-          <svg width={12} height={12} viewBox="0 0 12 12" fill="none" aria-hidden className="shrink-0"
+          <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" aria-hidden className="shrink-0"
             style={{ transform: open ? "none" : "rotate(180deg)", transition: "transform .12s" }}>
             <path d="M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
@@ -170,7 +171,7 @@ export function ReviewTray({ where, review, staleIds, staleFiles, checking, targ
                 return (
                   <>
                     <span><b>{note.title}</b> {note.body}</span>
-                    {note.kind === "missing-cli" && <Button size="compact" onClick={() => openSettings("engines")}>Open Settings</Button>}
+                    {note.kind === "missing-cli" && <Button size="compact" onClick={() => openSettings("engines")}>Open settings</Button>}
                   </>
                 );
               })()}
@@ -204,7 +205,7 @@ export function ReviewTray({ where, review, staleIds, staleFiles, checking, targ
               {inReviewOrder(review.comments).map((c) => (
                 <li key={c.id} className="flex items-center gap-2 text-[11px] rounded-lg px-2 py-1.5"
                   style={{ background: "var(--bg)", boxShadow: `inset 0 0 0 1px var(--surface-line)` }}>
-                  <button onClick={() => onJump(c)} className="min-w-0 flex-1 text-left" title="Show this line">
+                  <button onClick={() => onJump(c)} className="min-w-0 flex-1 text-left" data-tip="Show this line">
                     <span className="flex items-center gap-2">
                       <span className="truncate text-[10.5px]" style={{ color: "var(--text3)" }}>{anchorLabel(c)}</span>
                       {staleIds.has(c.id) && <StaleTag />}

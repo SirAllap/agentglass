@@ -1,6 +1,7 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useId, useContext, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { pushScope } from "../lib/findScope.ts";
+import { overlayOpen } from "../lib/overlays.ts";
 
 /**
  * The lowest layer a portal may take, set by whoever hosts the panel.
@@ -52,15 +53,32 @@ export function Portal({ children, z = 9999, find }: {
    */
   const [el] = useState<HTMLElement | null>(() => (typeof document === "undefined" ? null : document.createElement("div")));
   const floor = useContext(PortalFloor);
+  const id = useId();
   /* Below zero is under the app on purpose — the closed bench, see
      FloatingBench — and lifting it to a floor would put it back over the view. */
   const layer = z < 0 ? z : Math.max(z, floor);
-  useEffect(() => {
+  /* A portal lifted to the bench-overlay floor is a menu or popup drawn over the
+     browser inside the bench; the shell's native inspector view would sit over it,
+     so it says it is there and the view yields (lib/overlays.ts). */
+  useEffect(() => (z >= 0 && floor > 0 ? overlayOpen("bench-portal-" + id) : undefined), [z, floor]);
+  /* The node goes into the page BEFORE anything is drawn into it. Drawn into a
+     detached node, an `autoFocus` input was focused while outside the
+     document, which does nothing: the Jira jump palette opened with the caret
+     nowhere, and any other autoFocus field behind a Portal did the same.
+     Attached here, in render, and not in a layout effect followed by a second
+     pass: that second pass mounted the children one commit late, so an effect
+     OUTSIDE the portal that reads a ref inside it ran while the ref was still
+     null and never ran again — the bench opened without the keyboard. The
+     append is idempotent (the same node, only while detached), so a render
+     that runs twice draws once. The layout effect puts it back after a
+     StrictMode unmount-remount and takes it out on the real one. */
+  if (el && !el.isConnected) document.body.appendChild(el);
+  useLayoutEffect(() => {
     if (!el) return;
     el.style.position = "relative";
-    document.body.appendChild(el);
+    if (!el.isConnected) document.body.appendChild(el);
     return () => {
-      document.body.removeChild(el);
+      el.remove();
     };
   }, [el]);
   /* Its own effect, so a board moving in or out of the bench restacks an open

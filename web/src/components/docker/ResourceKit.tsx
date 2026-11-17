@@ -34,14 +34,14 @@ const DRAW: Record<ShapeKey, (t: string) => ReactNode> = {
 
 export function Shape({ worn }: { worn: Worn }) {
   return (
-    <span className="dk-g" role="img" aria-label={worn.word} title={worn.word}>
+    <span className="dk-g" role="img" aria-label={worn.word} data-tip={worn.word}>
       <svg viewBox="0 0 16 16" aria-hidden>{DRAW[worn.shape](SHAPES[worn.shape].tone)}</svg>
     </span>
   );
 }
 
 export function Badge({ tone, title, children }: { tone: string; title?: string; children: ReactNode }) {
-  return <span className="dk-badge" style={tint(tone)} title={title}>{children}</span>;
+  return <span className="dk-badge" style={tint(tone)} data-tip={title}>{children}</span>;
 }
 
 /* ---- containers named on a card ---- */
@@ -49,7 +49,7 @@ export function ContainerChip({ c, onGo, label }: { c: DockerContainer; onGo: (i
   const kind = kindOf(c);
   const title = `${c.name} · ${KINDS[kind].word}. Open it in Containers`;
   return (
-    <button type="button" className="dk-cav" title={title} aria-label={title} onClick={(e) => { e.stopPropagation(); onGo(c.id); }}>
+    <button type="button" className="dk-cav" data-tip={title} aria-label={title} onClick={(e) => { e.stopPropagation(); onGo(c.id); }}>
       <GlyphSvg kind={kind} /><span>{label ?? displayName(c)}</span>
     </button>
   );
@@ -61,7 +61,7 @@ export function ContainerChips({ cs, none, onGo }: { cs: DockerContainer[]; none
   return (
     <span className="dk-avs">
       {cs.slice(0, 3).map((c) => <ContainerChip key={c.id} c={c} onGo={onGo} />)}
-      {cs.length > 3 && <span className="dk-cav" data-rest title={cs.slice(3).map((c) => c.name).join(", ")}>+{cs.length - 3}</span>}
+      {cs.length > 3 && <span className="dk-cav" data-rest data-tip={cs.slice(3).map((c) => c.name).join(", ")}>+{cs.length - 3}</span>}
     </span>
   );
 }
@@ -79,7 +79,7 @@ export function RemoveButton({ label, off, reason, readOnly, pending, onClick, l
 }) {
   const tip = readOnly ? READ_ONLY_REASON : off ? reason : "Remove…";
   return (
-    <button type="button" className="dk-act" style={{ "--tone": "var(--error)" } as CSSProperties} aria-label={label} title={tip} aria-busy={pending || undefined}
+    <button type="button" className="dk-act" style={{ "--tone": "var(--error)" } as CSSProperties} aria-label={label} data-tip={tip} aria-busy={pending || undefined}
       disabled={off || readOnly || pending} onClick={(e) => { e.stopPropagation(); onClick(); }}>
       {lock ? <LockIcon size={ICON.sm} /> : <TrashIcon size={ICON.sm} />}
     </button>
@@ -88,7 +88,7 @@ export function RemoveButton({ label, off, reason, readOnly, pending, onClick, l
 
 export function MoreButton({ label, open, onMenu }: { label: string; open: boolean; onMenu: (el: HTMLElement) => void }) {
   return (
-    <button type="button" className="dk-more" data-open={open || undefined} aria-label={`More for ${label}`} aria-haspopup="menu" aria-expanded={open} title="More"
+    <button type="button" className="dk-more" data-open={open || undefined} aria-label={`More for ${label}`} aria-haspopup="menu" aria-expanded={open} data-tip="More"
       onClick={(e) => { e.stopPropagation(); onMenu(e.currentTarget); }}>
       <MoreIcon size={ICON.sm} />
     </button>

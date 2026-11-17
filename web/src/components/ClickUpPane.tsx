@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api } from "../lib/api.ts";
+import { StateDisconnected } from "./tasks/BoardState.tsx";
 import { clickupPrefs, clickupPrefsSaved } from "../lib/clickupPrefs.ts";
 import { __forgetClickupSetup, clickupSetup } from "../lib/clickupSetup.ts";
 import { __forgetClickupSpaces, PENDING_CARDS, useClickupSpaces } from "../lib/clickupSpaces.ts";
@@ -21,6 +22,7 @@ import { useReportProblem } from "./SettingsPageState.tsx";
 import { problemChip } from "../lib/settingsStates.ts";
 import { Button, INPUT, INPUT_STYLE, RefreshButton, Segmented } from "./workspace/Chrome.tsx";
 import { Dot, StatusPopover, type PanelView } from "./StatusPanel.tsx";
+import { AccountsSection } from "./AccountsSection.tsx";
 import { ListEye, WorkflowMap } from "./WorkflowMap.tsx";
 import { WFM_CSS } from "./workflowMapStyle.ts";
 import { CountedPicker, CardView, PrView, TextRow, Tagged, ago, hint } from "./TrackerMapParts.tsx";
@@ -117,7 +119,9 @@ export function ConnectCard({ refused, error, onDone }: { refused: boolean; erro
      same at the window's narrowest. */
   return (
     <SettingsCard title={n.name} icon={<PlugIcon size={ICON.sm} />} desc="Link it once and a pull request knows its card."
-      status={<StatusBadge tone={refused ? "err" : "off"}>{refused ? "Token refused" : "Not connected"}</StatusBadge>}>
+      >
+      <StateDisconnected service={n.name} why={refused ? "The token was refused." : "Add a personal API token and a pull request knows its card."} connectLabel="Connect"
+        onConnect={() => document.getElementById("cu-token")?.focus()} />
       <SettingRow agentExempt label="Connect with a token" hint={`${n.name} reads with a personal API token, kept on this machine.`}
         below={
           <SettingsForm label={`Connect ${n.name}`} onSubmit={() => void go()}>
@@ -211,7 +215,20 @@ function DisconnectBar({ onDone }: { onDone: () => void }) {
   );
 }
 
-export function ClickUpPane() {
+/** What the shell page (settings/pages/ClickUpPage.tsx) draws from; the pane keeps the reads and the saves. */
+export interface ClickUpView {
+  prefs: ClickUpPrefs; changesOn: boolean; state: ReturnType<typeof useClickupSpaces>["state"]; units: MapSpace[]; part: Partition;
+  panel: PanelView; steps: ReturnType<typeof resolveImplicit>; live: ReturnType<typeof resolveImplicit>; frozen: boolean; reading: boolean;
+  chosen: boolean; asOf: number | undefined; reread: () => void; count: (ids: string[]) => void; toggleCounted: (u: MapSpace) => void;
+  send: (patch: PrefsPatch) => Promise<boolean>; setChanges: (on: boolean) => Promise<void>; readPeople: ReturnType<typeof useCallback>;
+  readFields: () => Promise<FieldChoice[] | null>; source: ReactNode; note: string | null; hover: StepKind | null; setHover: (k: StepKind | null) => void;
+  linked: boolean; setLinked: (v: boolean) => void; countWord: string; prefix: string | undefined;
+  /** Disconnect, keeping the saved boards and steps; the pane re-reads after. */
+  disconnect: () => Promise<void>;
+}
+export type ClickUpRender = (v: { kind: "out"; connect: ReactNode } | { kind: "on"; v: ClickUpView }) => ReactNode;
+
+export function ClickUpPane({ render }: { render?: ClickUpRender } = {}) {
   const [prefs, setPrefs] = useState<ClickUpPrefs | null>(null);
   /* The read of the saved settings answered nothing (the server was down). Without this the page said "Reading your settings…" for good. */
   const [prefsFailed, setPrefsFailed] = useState(false);
@@ -325,6 +342,7 @@ export function ClickUpPane() {
   const countWord = (c: Partition) => (reading ? "reading which ones your cards live in…" : c.counted.length ? c.counted.map((u) => u.name).join(", ") : "none");
 
   if (st === "out" || st === "refused") {
+    if (render) return <>{render({ kind: "out", connect: <ConnectCard refused={st === "refused"} error={state.kind === "error" ? state.error : null} onDone={() => { setEpoch((e) => e + 1); reread(); }} /> })}</>;
     return (
       <div className="wfm">
         <style>{WFM_CSS}</style>
@@ -334,6 +352,15 @@ export function ClickUpPane() {
     );
   }
 
+  if (render) {
+    return <>{render({ kind: "on", v: { prefs, changesOn, state, units, part, panel, steps, live, frozen, reading, chosen, asOf, reread, count, toggleCounted, send, setChanges,
+      readPeople: readPeople as never, readFields, source, note, hover, setHover, linked, setLinked, countWord: countWord(part), prefix,
+      disconnect: async () => {
+        await api.providerDisconnect("clickup", { forgetBoards: false }).catch(() => undefined);
+        __forgetClickupSetup(); __forgetClickupPrefs(); __forgetClickupSpaces();
+        setEpoch((e) => e + 1); reread();
+      } } })}</>;
+  }
   return (
     <div className="wfm">
       <style>{WFM_CSS}</style>
@@ -345,13 +372,12 @@ export function ClickUpPane() {
       <SettingsCard title={n.name} icon={<PlugIcon size={ICON.sm} />} desc={provider?.detail ?? undefined}
         status={<StatusBadge tone="ok">Connected</StatusBadge>}
         actions={<Button onClick={() => openSettings("connections")}>Manage connection</Button>}>
-        <SettingRow label={<span id="cu-changes-l">{`Changes in ${n.name}`}</span>}
-          hint={changesOn ? `Only the steps below can change a ${n.item}, one at a time, when you press their button.` : steps.length ? "agentglass only reads. Turn this on to let the steps below act." : "agentglass only reads. Adding your first step turns this on."}
+        <SettingRow agentExempt label={`Changes in ${n.name}`} hint={changesOn ? "On. Set on Permissions › Changes outside." : "Read-only. Turn it on at Permissions › Changes outside."}
           status={<span data-guard={changesOn ? "on" : "off"}><StatusBadge tone={changesOn ? "ok" : "off"}>{changesOn ? "On" : "Read-only"}</StatusBadge></span>}
-          control={<button type="button" role="switch" aria-checked={changesOn} aria-labelledby="cu-changes-l" disabled={writes === null}
-            onClick={() => void setChanges(!changesOn)} className="agx-switch-hit inline-flex items-center rounded-full" style={{ minHeight: HIT }}><Switch on={changesOn} /></button>} />
+          onClick={() => openSettings("permOut")} />
         <DisconnectBar onDone={() => { setEpoch((e) => e + 1); reread(); }} />
       </SettingsCard>
+      <AccountsSection provider="clickup" label={n.name} onChanged={() => { __forgetClickupSetup(); __forgetClickupPrefs(); __forgetClickupSpaces(); __forgetListMembers(); setEpoch((e) => e + 1); reread(); }} />
 
       <SettingsCard icon={<SearchIcon size={ICON.sm} />} title="What we found" fold={{ open: foundOpen ?? steps.length === 0, onToggle: setFoundOpen }}
         desc={reading ? undefined : `${part.counted.length} ${n.lists} count · ${distinct} statuses${part.folded.length ? ` · ${part.folded.length} ignored` : ""}${prefs.prLinkField ? ` · PR link ${prefs.prLinkField}` : ""}${prefs.swatchField ? ` · swatch ${prefs.swatchField}` : ""}`}
@@ -437,8 +463,7 @@ export function ClickUpPane() {
           <SettingRow agentExempt label="Card skills default"
             hint="The tracker’s own naming. Skills matching it are offered when one of your cards is open; the generic pattern is on Settings › Agents."
             status={<span className="t-mono text-[11px]">{DEFAULT_CARD_SKILL_PATTERN}</span>} />
-          <Toggle on={prefs.assigned.includeSubtasks} onClick={() => { void send({ assigned: { includeSubtasks: !prefs.assigned.includeSubtasks } } as never); }}
-            agentNever="changes how heavy the shared ClickUp read is against a rate-limited token the owner also works with, so it is the owner's to turn on" label="Subtasks on Assigned to me" hint="Slower: the workspace read can take twice as long." />
+          <Toggle settingId="clickup.includeSubtasks" on={prefs.assigned.includeSubtasks} onClick={() => { void send({ assigned: { includeSubtasks: !prefs.assigned.includeSubtasks } } as never); }} label="Subtasks on Assigned to me" hint="Slower: the workspace read can take twice as long." />
         </SettingsCard>
       </div>
     </div>

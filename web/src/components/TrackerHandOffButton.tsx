@@ -127,7 +127,7 @@ export function TrackerHandOffButton({ tracker, task, query, onSaid, onTask }: {
   return (
     <>
       <Button size="compact" onClick={() => { void press(); }} pending={busy} disabled={busy}
-        title={`${offer.label.replace("…", "")}${rule.clear && !rule.askClear ? ", taking the assignee off" : ""}`}>
+        data-tip={`${offer.label.replace("…", "")}${rule.clear && !rule.askClear ? ", taking the assignee off" : ""}`}>
         {offer.label}
       </Button>
       {dialog}

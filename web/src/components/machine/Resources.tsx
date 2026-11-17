@@ -15,6 +15,7 @@ import { cleanupChipLabel, publishMachineDisk, useDiskPlan } from "../../lib/dis
 import { useDockerLive } from "../../lib/useDockerLive.ts";
 import { useRefreshOnFocus } from "../../lib/useRefreshOnFocus.ts";
 import { Button, FilterField, RefreshButton } from "../workspace/Chrome.tsx";
+import { scanPillLabel, useDiskScan } from "../../lib/diskScan.ts";
 import { DiskClean } from "../DiskClean.tsx";
 import { BroomIcon } from "../docker/DockerIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
@@ -23,6 +24,9 @@ import { DetailPane } from "./DetailPane.tsx";
 import { LeftBehind } from "./LeftBehind.tsx";
 import { Space } from "./Space.tsx";
 import { Pad } from "./bits.tsx";
+import { AskAboutButton } from "../AskAboutButton.tsx";
+import { machineSeed } from "../../lib/askSeed.ts";
+import { askDir } from "../../lib/askAbout.ts";
 
 /** Between two readings asked for by the stats feed. */
 const RESAMPLE_GAP_MS = 5000;
@@ -39,7 +43,7 @@ function DialCard({ d }: { d: Dial }) {
       </svg>
       <div style={{ minWidth: 0 }}>
         <div className="k">{d.label}</div><div className="v">{d.value}</div>
-        <div className="s" title={d.hot && d.word ? `${d.sub} · ${d.word}` : d.sub}>{dialSub(d)}</div>
+        <div className="s" data-tip={d.hot && d.word ? `${d.sub} · ${d.word}` : d.sub}>{dialSub(d)}</div>
       </div>
     </div>
   );
@@ -51,9 +55,9 @@ function TreeRow({ kind, label, cpu, rss, spark, caret, shut, onClick, selected,
 }) {
   const El = onClick ? "button" : "div";
   return (
-    <El {...(onClick ? { type: "button" as const, onClick } : {})} className="mc-trow" data-k={kind} data-sel={selected || undefined} title={title}>
+    <El {...(onClick ? { type: "button" as const, onClick } : {})} className="mc-trow" data-k={kind} data-sel={selected || undefined} data-tip={title}>
       <span className="tl">
-        {caret && <i className="mc-car" data-shut={shut || undefined}><CaretIcon size={12} /></i>}
+        {caret && <i className="mc-car" data-shut={shut || undefined}><CaretIcon size={ICON.xs} /></i>}
         {dot && <i className="mc-gd" />}
         <span className="tn">{label}</span>{aside && <small>{aside}</small>}
       </span>
@@ -76,6 +80,7 @@ export function Resources() {
   const [showAll, setShowAll] = useState<Set<string>>(new Set());
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<number | null>(null);
+  const [askSaid, setAskSaid] = useState("");
   /** CPU over time per group key. A ref: written on every reading and read by the render that reading caused. */
   const history = useRef<Map<string, number[]>>(new Map());
   const inFlight = useRef(false);
@@ -112,6 +117,7 @@ export function Resources() {
 
   const tree = useMemo(() => treeOf(data?.procs ?? [], repos, q), [data, repos, q]);
   const diskPlan = useDiskPlan();
+  const diskScan = useDiskScan();
   // Record this reading against every key on screen, so a line that appears later starts empty.
   // A project and its main checkout share one path, so the project's line gets its own key: one key was one history fed twice per reading and one caret that closed both.
   const projKey = (key: string) => `project:${key}`;
@@ -124,7 +130,7 @@ export function Resources() {
   const otherCpu = data.totalCpu != null && data.oursCpu != null ? Math.max(0, data.totalCpu - data.oursCpu) : null;
   const live = (data.procs ?? []).filter((p) => p.ours).length;
   const dials = dialsOf(data.machine);
-  const cleanupChip = diskPlan ? cleanupChipLabel(diskPlan) : null;
+  const cleanupChip = scanPillLabel(diskScan) ?? (diskPlan ? cleanupChipLabel(diskPlan) : null);
   const flip = (key: string, set: typeof setShut) => set((cur) => { const n = new Set(cur); if (n.has(key)) n.delete(key); else n.add(key); return n; });
 
   return (
@@ -147,6 +153,9 @@ export function Resources() {
               {cleanupChip}
             </Button>
           )}
+          <AskAboutButton what="The process list" cwd={askDir} onSaid={(_ok, t) => setAskSaid(t)}
+            seed={() => machineSeed({ procs: data.procs, on: "Machine > Resources" })} />
+          {askSaid && <span className="mc-fine" role="status">{askSaid}</span>}
           <RefreshButton onRefresh={refresh} spinning={looking} title="Sample again now" />
         </div>
         <div className="mc-scr mc-res" style={{ flex: 1 }}>

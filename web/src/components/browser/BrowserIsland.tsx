@@ -26,10 +26,14 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { BrowserTab } from "../../lib/browserTabs.ts";
 import type { Activity } from "../../lib/browserAgentActivity.ts";
-import { boxState, tabState, type AgentStateKey } from "../../lib/browserAgentActivity.ts";
+import { boxState, GUIDE_PILL_END_MS, guidePill, tabState, type AgentStateKey } from "../../lib/browserAgentActivity.ts";
 import { LivingMark } from "../Logo.tsx";
 import { StateIcon, useAgentLive, useGlass, useSteadyState } from "./AgentPresence.tsx";
 import { CloseIcon } from "./icons.tsx";
+import { useNow } from "../../lib/visibleInterval.ts";
+import { useViewActive } from "../../lib/viewActive.ts";
+import { ICON } from "../../lib/iconSize.ts";
+import { overviewCounts, type IslandLane } from "../../lib/laneView.ts";
 
 /** How long "You have this tab" stays where the person is looking before the island tucks away. */
 export const TUCK_AFTER_MS = 2500;
@@ -67,7 +71,20 @@ export interface IslandProps {
   lastPicture: (id: string) => string | null;
   /** Tells the panel when the island has tucked, so the dock goes too. */
   onTucked: (tucked: boolean) => void;
+  /** The person pressed End guide in the pill (the guide's only End, now the bottom bar is gone). */
+  onEndGuide?: (tab: string) => void;
+  /** Agents' lanes: each its own window, listed here as a box like a container. */
+  lanes?: IslandLane[];
+  /** Watch a lane's tab live (LaneWatch). */
+  onShowLane?: (id: string) => void;
+  /** The lane an agent asked the person to look at (--show): marked, for them to open. */
+  calledLane?: string | null;
 }
+
+/* The guide in the pill (mockup direction A): a compass for on, a tick for done, a square for stopped. Shape, never colour alone. */
+const GuideGlyph = () => <svg className="agx-isl-gl" viewBox="0 0 16 16" fill="none" aria-hidden><circle cx="8" cy="8" r="6.2" stroke="currentColor" strokeWidth="1.6" /><path d="m10.8 5.2-1.7 3.9-3.9 1.7 1.7-3.9z" fill="currentColor" /></svg>;
+const DoneGlyph = () => <svg className="agx-isl-gl is-done" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="m3.5 8.5 3 3 6-7" /></svg>;
+const StopGlyph = () => <svg className="agx-isl-gl is-stopped" viewBox="0 0 16 16" aria-hidden><rect x="4" y="4" width="8" height="8" rx="2" fill="currentColor" /></svg>;
 
 /* Islands drift a few px off one line so the archipelago does not read as a table. */
 const DRIFT = [6, -12, 8, -6, 10, -8];
@@ -94,8 +111,22 @@ export function BrowserIsland(p: IslandProps) {
   const driving = !!act && !act.paused && live;
   /* The glass's clock, not the raw count: the dot stays lit through the gap between two asks. */
   const working = driving && held;
-  /* The page is the person's when no agent is acting on it, or when they took it. */
-  const yours = !driving;
+  /* A guide owns the pill while it runs and for GUIDE_PILL_END_MS after: step at rest, End guide on hover. */
+  const [, bump] = useState(0);
+  const gp = guidePill(act, Date.now());
+  const ended = act?.guide && !act.guide.on ? act.guide.endedAt : undefined;
+  useEffect(() => {
+    if (ended === undefined) return;
+    const left = ended + GUIDE_PILL_END_MS - Date.now();
+    if (left <= 0) return;
+    const t = setTimeout(() => bump((n) => n + 1), left);
+    return () => clearTimeout(t);
+  }, [ended]);
+  const guideOn = gp?.kind === "on";
+  /* Another agent this tab names (the name it kept across a restart): "+1", the tip says who. */
+  const others = gp && active?.agent && active.agent !== gp.agent ? [active.agent] : [];
+  /* The page is the person's when no agent is acting on it, or when they took it; never while the pill says a guide. */
+  const yours = !driving && !gp;
 
   useEffect(() => {
     if (!yours || open) { setTucked(false); return; }
@@ -107,8 +138,8 @@ export function BrowserIsland(p: IslandProps) {
   /* One box per container, in the order the tabs are in; who holds each tab is
      the live ask if there is one, else the name the tab kept across a restart. */
   /* The overview's states age (Thinking turns Done), and nothing else re-renders it while it is open. */
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => { if (!open) return; setNow(Date.now()); const t = setInterval(() => setNow(Date.now()), 5000); return () => clearInterval(t); }, [open]);
+  const viewOn = useViewActive();
+  const now = useNow(open && viewOn, 5000);
   const groups = useMemo(() => {
     const by = new Map<string, BrowserTab[]>();
     for (const t of tabs) { const k = t.profile || ""; if (!by.has(k)) by.set(k, []); by.get(k)!.push(t); }
@@ -128,7 +159,13 @@ export function BrowserIsland(p: IslandProps) {
   /* A container whose name matches keeps all its tabs; otherwise only the tabs that match. */
   const visible = useMemo(() => (q ? groups.map((g) => ({ ...g, list: g.name.toLowerCase().includes(q) ? g.list : g.list.filter((t) => `${t.title} ${t.url} ${acts[t.id]?.agent || t.agent || ""}`.toLowerCase().includes(q)) })).filter((g) => g.list.length) : groups), [groups, q, acts]);
   const many = groups.length > 3 || tabs.length > 24;
-  const busyAgents = agents.filter((a) => groups.some((g) => g.list.some((t) => (acts[t.id]?.agent || t.agent) === a && isWork(g.states[t.id]?.key)))).length;
+  /* A lane is a container with one tab and one agent: counted the same way. */
+  const lanes = p.lanes ?? [];
+  const shownLanes = q ? lanes.filter((l) => `${l.name} ${l.agent} ${l.title} ${l.url}`.toLowerCase().includes(q)) : lanes;
+  const sum = overviewCounts({
+    agents, containers: groups.length, tabs: tabs.length,
+    busy: agents.filter((a) => groups.some((g) => g.list.some((t) => (acts[t.id]?.agent || t.agent) === a && isWork(g.states[t.id]?.key)))),
+  }, lanes);
   const heldTabs = tabs.filter((t) => acts[t.id]?.agent || t.agent).length;
   const heldBoxes = groups.filter((g) => g.held).length;
 
@@ -149,7 +186,7 @@ export function BrowserIsland(p: IslandProps) {
   /* The shape starts at the size of the pill that was clicked and ends at the
      resting capsule, whose icons fade in over its last stretch: it lands as
      the capsule, never as an empty dark pill waiting for its content. */
-  const PILL = yours ? { w: 300, h: 40, r: 20 } : { w: 210, h: 36, r: 18 };
+  const PILL = yours ? { w: 300, h: 40, r: 20 } : guideOn ? { w: 235, h: 36, r: 18 } : { w: 210, h: 36, r: 18 };
   const CAPSULE = { w: 52, h: 30, r: 15 };
   const [morph, setMorph] = useState(PILL);
   const finish = useCallback(() => {
@@ -226,7 +263,7 @@ export function BrowserIsland(p: IslandProps) {
   }, [peek, yours]);
   useEffect(() => { if (!tucked || open) setPeek(false); }, [tucked, open]);
 
-  const cls = "agx-isl" + (open ? " is-open" : "") + (shown ? " is-shown" : "") + (snap ? " is-snap" : "") + (tucked ? " is-tucked" : "") + (peek || p.menuOpen ? " is-peek" : "") + (yours ? " is-yours" : "") + (act?.paused ? " is-taken" : "");
+  const cls = "agx-isl" + (open ? " is-open" : "") + (shown ? " is-shown" : "") + (snap ? " is-snap" : "") + (tucked ? " is-tucked" : "") + (peek || p.menuOpen ? " is-peek" : "") + (yours ? " is-yours" : "") + (act?.paused ? " is-taken" : "") + (guideOn ? " is-guide" : "");
   const sbv = { "--sbr": `${gut.r}px`, "--sbb": `${gut.b}px` } as React.CSSProperties;
   const dot = act?.paused ? "is-taken" : working ? "is-working" : "";
   return (
@@ -242,11 +279,17 @@ export function BrowserIsland(p: IslandProps) {
         {/* the collapsed island is never unmounted: it only changes opacity, so no frame waits for it */}
         {(
           <>
-            <span className="agx-isl-compact" aria-hidden>
-              <LivingMark size={16} style={{ color: "#a78bfa" }} />
-              <span className={"agx-isl-dot " + dot} />
-              <span className="agx-isl-num" title={`${tabs.length} tabs open`}>{tabs.length}</span>
+            {/* the pill's own box (the island clips to it): the guide's dock keeps off it (data-agx-overlay) */}
+            <span className={"agx-isl-compact" + (gp ? " is-guide" : "")} data-agx-overlay aria-hidden>
+              <LivingMark size={ICON.md} style={{ color: "#a78bfa" }} />
+              {gp ? (
+                /* The step in a fixed 30 px slot, so "3/5", "12/14" and "Step 3" keep the pill at 104. */
+                <>{gp.kind === "on" ? <GuideGlyph /> : gp.kind === "done" ? <DoneGlyph /> : <StopGlyph />}<span className="agx-isl-num agx-isl-step">{gp.step}</span></>
+              ) : (
+                <><span className={"agx-isl-dot " + dot} /><span className="agx-isl-num" data-tip={`${tabs.length} tabs open`}>{tabs.length}</span></>
+              )}
             </span>
+            {gp && <span className="agx-isl-sr" role="status">{gp.label}</span>}
             <span className="agx-isl-tuck" aria-hidden>
               <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m4 6 4 4 4-4" /></svg>
             </span>
@@ -259,17 +302,29 @@ export function BrowserIsland(p: IslandProps) {
                     ? <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="m4 4 8 8M12 4l-8 8" /></svg>
                     : <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 2.5v3h-3" /></svg>}
                 </button>
-                <button type="button" className="agx-isl-addr" onClick={p.onAddress} title="Type an address (Ctrl+L)">{p.address || "Type an address"}</button>
+                <button type="button" className="agx-isl-addr" onClick={p.onAddress} data-tip="Type an address (Ctrl+L)">{p.address || "Type an address"}</button>
                 <button type="button" className="agx-isl-ib" aria-label="Menu" onClick={(e) => p.onMenu(e.currentTarget.getBoundingClientRect(), e.detail === 0)}><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="3.5" cy="8" r="1.2" /><circle cx="8" cy="8" r="1.2" /><circle cx="12.5" cy="8" r="1.2" /></svg></button>
                 <button type="button" className="agx-isl-count" aria-label="Show every tab" onClick={show}>{tabs.length}</button>
                 {act?.paused && <button type="button" className="agx-isl-hand" onClick={() => active && p.onToggle(active.id)}>Hand back</button>}
+              </div>
+            ) : guideOn ? (
+              /* Title · Guiding · agent · step · End guide. End is right-most, off the title, so a click on the title still opens Every tab. */
+              <div className="agx-isl-status is-guide" role="group" aria-label={`Guiding: ${gp!.agent}, ${gp!.step}`}>
+                <button type="button" className="agx-isl-open" aria-label="Show every tab" onClick={show}>
+                  <LivingMark size={17} style={{ color: "#a78bfa" }} />
+                  <span className="agx-isl-title">{active?.title || (active ? host(active.url) : "")}</span>
+                  <span className="agx-isl-doing"><GuideGlyph /><b>Guiding</b><span className="agx-isl-sep" aria-hidden>·</span><span className="agx-isl-doing-t" data-tip={`${gp!.agent} (this agent's container name)`}>{gp!.agent}</span></span>
+                  {others.length > 0 && <span className="agx-isl-plus" data-tip={`${others.length} more: ${others.join(", ")}`}>+{others.length}</span>}
+                  <span className="agx-isl-chip">{gp!.step}</span>
+                </button>
+                <button type="button" className="agx-isl-end" onClick={() => active && p.onEndGuide?.(active.id)}>End guide</button>
               </div>
             ) : (
               <button type="button" className="agx-isl-status" aria-label="Show every tab" onClick={show}>
                 <LivingMark size={17} style={{ color: "#a78bfa" }} />
                 <span className="agx-isl-title">{active?.title || (active ? host(active.url) : "")}</span>
-                <span className="agx-isl-doing"><span className={"agx-isl-dot " + dot} /><span className="agx-isl-doing-t" title={`${act!.agent} (this agent's container name)`}>{act!.agent}</span></span>
-                <span className="agx-isl-num" title={`${tabs.length} tabs open`}>{tabs.length}</span>
+                <span className="agx-isl-doing"><span className={"agx-isl-dot " + dot} /><span className="agx-isl-doing-t" data-tip={`${act!.agent} (this agent's container name)`}>{act!.agent}</span></span>
+                <span className="agx-isl-num" data-tip={`${tabs.length} tabs open`}>{tabs.length}</span>
               </button>
             )}
           </>
@@ -277,18 +332,45 @@ export function BrowserIsland(p: IslandProps) {
         {open && (
           <div className="agx-isl-mc">
             <div className="agx-isl-head">
-              <p className="agx-isl-sum" title={agents.join(", ") || undefined}>
-                <strong>{busyAgents}</strong> {agents.length === 1 ? "agent" : "agents"} {busyAgents === agents.length ? "working" : `working of ${agents.length}`} <i>·</i> <strong>{groups.length}</strong> {groups.length === 1 ? "container" : "containers"} <i>·</i> <strong>{tabs.length}</strong> {tabs.length === 1 ? "tab" : "tabs"}
+              <p className="agx-isl-sum" data-tip={[...new Set([...agents, ...lanes.map((l) => l.agent)])].join(", ") || undefined}>
+                <strong>{sum.busy}</strong> {sum.agents === 1 ? "agent" : "agents"} {sum.busy === sum.agents ? "working" : `working of ${sum.agents}`} <i>·</i> <strong>{sum.containers}</strong> {sum.containers === 1 ? "container" : "containers"} <i>·</i> <strong>{sum.tabs}</strong> {sum.tabs === 1 ? "tab" : "tabs"}
               </p>
               {many && <input className="agx-isl-find" type="search" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Find a tab" aria-label="Find a tab, container or agent" />}
               <button type="button" className="agx-isl-ib agx-isl-away" aria-label="Close" onClick={() => hide()}><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="m4 4 8 8M12 4l-8 8" /></svg></button>
             </div>
             <div className={"agx-isl-boxes" + (many ? " is-dense" : "")}>
-              {q && visible.length === 0 && <p className="agx-isl-none">No tab matches “{filter.trim()}”.</p>}
-              {groups.length === 0 && (
+              {q && visible.length === 0 && shownLanes.length === 0 && <p className="agx-isl-none">No tab matches “{filter.trim()}”.</p>}
+              {shownLanes.map((l, i) => (
+                /* An agent's lane: its own window, so the card opens the live view, not a tab of the pane. */
+                <section key={"lane-" + l.id} data-lane={l.id} className={"agx-isl-box is-agent" + (l.busy ? " is-live" : "") + (p.calledLane === l.id ? " is-called" : "")}
+                  style={{ "--i": Math.min(i, 3), "--dy": `${DRIFT[i % DRIFT.length]}px`, "--ph": (i * 3.7) % 12 } as React.CSSProperties}>
+                  {l.busy && <><span className="agx-isl-halo" aria-hidden /><i className="agx-isl-sat t2" aria-hidden /><i className="agx-isl-sat t1" aria-hidden /><i className="agx-isl-sat" aria-hidden /></>}
+                  <header>
+                    <span className="agx-isl-bn">{l.name}</span>
+                    <span className="agx-isl-bc" data-tip={`agent on 1 · ${l.agent}`}>1 tab</span>
+                  </header>
+                  <div className="agx-isl-row">
+                    <div data-lane-tab={l.id} role="button" tabIndex={0} className={"agx-isl-card" + (l.busy ? " is-driven" : "")}
+                      onClick={() => { hide(); p.onShowLane?.(l.id); }}
+                      onKeyDown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); hide(); p.onShowLane?.(l.id); } }}>
+                      <div className="agx-isl-shot">
+                        <div className="agx-isl-thumb">
+                          <span className="agx-isl-mono">{(l.title || host(l.url) || "?").slice(0, 1).toUpperCase()}</span>
+                        </div>
+                      </div>
+                      <div className="agx-isl-cap" data-tip={`${l.agent} · ${l.busy ? "working" : "idle"} · click to watch`}>
+                        <span className="agx-isl-who is-agent" aria-hidden />
+                        <span className="agx-isl-name">{l.title || host(l.url) || "Blank page"}</span>
+                      </div>
+                      <div className="agx-isl-tag is-agent">{`${l.agent} · ${l.busy ? "working" : "idle"}`}</div>
+                    </div>
+                  </div>
+                </section>
+              ))}
+              {groups.length === 0 && lanes.length === 0 && (
                 <section className="agx-isl-box">
                   <div className="agx-isl-row">
-                    <button type="button" className="agx-isl-add" aria-label="New tab" title="New tab" onClick={() => { setOpen(false); p.onNew(); }}><PlusIcon /></button>
+                    <button type="button" className="agx-isl-add" aria-label="New tab" data-tip="New tab" onClick={() => { setOpen(false); p.onNew(); }}><PlusIcon /></button>
                   </div>
                 </section>
               )}
@@ -300,7 +382,7 @@ export function BrowserIsland(p: IslandProps) {
                   {work && <><span className="agx-isl-halo" aria-hidden /><i className="agx-isl-sat t2" aria-hidden /><i className="agx-isl-sat t1" aria-hidden /><i className="agx-isl-sat" aria-hidden /></>}
                   <header>
                     <span className="agx-isl-bn">{g.name}</span>
-                    <span className="agx-isl-bc" title={g.held ? `agent on ${g.held}` : undefined}>{q && g.list.length !== groups.find((x) => x.profile === g.profile)!.list.length ? `${g.list.length} of ${groups.find((x) => x.profile === g.profile)!.list.length}` : g.list.length} {g.list.length === 1 ? "tab" : "tabs"}</span>
+                    <span className="agx-isl-bc" data-tip={g.held ? `agent on ${g.held}` : undefined}>{q && g.list.length !== groups.find((x) => x.profile === g.profile)!.list.length ? `${g.list.length} of ${groups.find((x) => x.profile === g.profile)!.list.length}` : g.list.length} {g.list.length === 1 ? "tab" : "tabs"}</span>
                     <BoxState k={g.state?.key ?? null} />
                   </header>
                   <div className="agx-isl-row">
@@ -318,10 +400,10 @@ export function BrowserIsland(p: IslandProps) {
                             <div className="agx-isl-thumb">
                               {driven && st && <span className="agx-isl-drv" aria-hidden><StateIcon k={st.key} /></span>}
                               {pics[t.id] ? <img src={pics[t.id]} alt="" /> : <span className="agx-isl-mono">{(t.title || host(t.url) || "?").slice(0, 1).toUpperCase()}{t.asleep && <small>Asleep</small>}</span>}
-                              <button type="button" className="agx-isl-x" aria-label={`Close ${t.title || "tab"}`} onClick={(e) => { e.stopPropagation(); p.onClose(t.id); }}><CloseIcon size={12} /></button>
+                              <button type="button" className="agx-isl-x" aria-label={`Close ${t.title || "tab"}`} onClick={(e) => { e.stopPropagation(); p.onClose(t.id); }}><CloseIcon size={ICON.xs} /></button>
                             </div>
                           </div>
-                          <div className="agx-isl-cap" title={st ? `${who ?? "You"} · ${st.word}` : who ?? "You"}>
+                          <div className="agx-isl-cap" data-tip={st ? `${who ?? "You"} · ${st.word}` : who ?? "You"}>
                             <span className={"agx-isl-who" + (who ? " is-agent" : "")} aria-hidden />
                             <span className="agx-isl-name">{t.title || host(t.url)}</span>
                           </div>
@@ -329,7 +411,7 @@ export function BrowserIsland(p: IslandProps) {
                         </div>
                       );
                     })}
-                    <button type="button" className="agx-isl-add" aria-label="New tab" title="New tab" onClick={() => { setOpen(false); p.onNew(g.profile); }}><PlusIcon /></button>
+                    <button type="button" className="agx-isl-add" aria-label="New tab" data-tip="New tab" onClick={() => { setOpen(false); p.onNew(g.profile); }}><PlusIcon /></button>
                   </div>
                 </section>
                 );

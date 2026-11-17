@@ -69,8 +69,8 @@ export async function clickupSetStatus(task: ProviderTask, opt: StatusOption): P
  * answer for a missing permission as much as for a finished workflow, so it is
  * an error with the server's sentence: "You cannot move ORBIT-1042".
  */
-export async function jiraStatusOptions(task: ProviderTask): Promise<StatusOptionsResult> {
-  const r = await api.jiraTransitions(task.customId || task.id).catch(() => null);
+export async function jiraStatusOptions(task: ProviderTask, repo?: string): Promise<StatusOptionsResult> {
+  const r = await api.jiraTransitions(task.customId || task.id, repo).catch(() => null);
   if (!r?.ok) return { ok: false, error: r?.error || UNREACHABLE, ...(r?.throttled ? { throttled: true } : null) };
   const moves = (r.options ?? []).filter((m) => m.toStatus !== task.status);
   if (!moves.length) return { ok: false, error: r.cannot || `You cannot move ${task.customId || task.id}` };
@@ -89,9 +89,9 @@ export async function jiraStatusOptions(task: ProviderTask): Promise<StatusOptio
   };
 }
 
-export async function jiraSetStatus(task: ProviderTask, opt: StatusOption, fields?: Record<string, string | string[]>): Promise<StatusWriteResult> {
+export async function jiraSetStatus(task: ProviderTask, opt: StatusOption, fields?: Record<string, string | string[]>, repo?: string): Promise<StatusWriteResult> {
   // A move that asks, asked with nothing: said here and not sent (the form is how it is given).
   if (opt.needs?.length && !fields) return { ok: false, error: `That move needs ${opt.needs.join(", ")}` };
-  return api.jiraTransition(task.customId || task.id, opt.key, task.updated, fields)
+  return api.jiraTransition(task.customId || task.id, opt.key, task.updated, fields, repo)
     .catch(() => ({ ok: false, error: UNREACHABLE, task: undefined } as StatusWriteResult));
 }

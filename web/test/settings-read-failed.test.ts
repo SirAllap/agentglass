@@ -15,7 +15,9 @@ describe("a read that fails is drawn, not left as a loading line", () => {
   });
   test("Knowledge keeps a failed read of its sources and offers Try again", () => {
     const body = teach.slice(teach.indexOf("export function Teach("));
-    expect((body.match(/setLoadFailed\(true\)/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    // The read goes through the Settings cache: a non-ok answer and a body that is not a sources list both throw, and the cache marks the read failed.
+    expect(teach).toContain("failed: loadFailed");
+    expect((teach.match(/throw new Error/g) ?? []).length).toBeGreaterThanOrEqual(2);
     expect(body).toContain("Could not read what is on this machine");
     expect(body).toContain("Try again");
   });

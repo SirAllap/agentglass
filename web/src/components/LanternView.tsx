@@ -9,6 +9,8 @@ import { BenchJobLine, useBenchJob } from "./BenchJobLine.tsx";
 import { LINE, Badge, Button } from "./workspace/Chrome.tsx";
 import { ICON, MIN_BOX } from "../lib/iconSize.ts";
 import { CloseButton } from "./CloseButton.tsx";
+import { AskAboutButton } from "./AskAboutButton.tsx";
+import { lanternSeed } from "../lib/askSeed.ts";
 
 /**
  * THE LANTERN'S ROWS. What the board says about one agent, and the card that
@@ -139,14 +141,14 @@ function Where({ r }: { r: LanternRow }) {
   if (!r.worktree && !r.branch) return null;
   return (
     <div className="flex items-baseline gap-1.5 min-w-0 text-[10.5px]" style={{ color: "var(--text4)" }}>
-      {r.worktree && <span className="truncate" title={r.worktree}>{here(r.worktree)}</span>}
+      {r.worktree && <span className="truncate" data-tip={r.worktree}>{here(r.worktree)}</span>}
       {r.worktree && r.branch && <span aria-hidden className="shrink-0">·</span>}
-      {r.branch && <span className="truncate" style={{ color: "var(--primary-ink)" }} title={`branch ${r.branch}`}>{r.branch}</span>}
+      {r.branch && <span className="truncate" style={{ color: "var(--primary-ink)" }} data-tip={`branch ${r.branch}`}>{r.branch}</span>}
       {r.branch && r.landed === true && (
-        <span className="shrink-0" style={{ color: "var(--success-ink)" }} title={`already merged into ${r.landedInto || "the base"}`}>· in {r.landedInto || "the base"}</span>
+        <span className="shrink-0" style={{ color: "var(--success-ink)" }} data-tip={`already merged into ${r.landedInto || "the base"}`}>· in {r.landedInto || "the base"}</span>
       )}
       {r.branch && r.landed === false && (
-        <span className="shrink-0" style={{ color: "var(--warning-ink)" }} title={`nobody has merged this into ${r.landedInto || "the base"}`}>· not in {r.landedInto || "the base"}</span>
+        <span className="shrink-0" style={{ color: "var(--warning-ink)" }} data-tip={`nobody has merged this into ${r.landedInto || "the base"}`}>· not in {r.landedInto || "the base"}</span>
       )}
     </div>
   );
@@ -173,7 +175,7 @@ function Label({ children, tone }: { children: React.ReactNode; tone?: string })
 /** One fact, as "number word", digits lined up. */
 function Fact({ n, word, tone, title }: { n: string | number; word: string; tone?: string; title?: string }) {
   return (
-    <span className="inline-flex items-baseline gap-1 tabular-nums" title={title} style={{ color: tone ?? "var(--text3)" }}>
+    <span className="inline-flex items-baseline gap-1 tabular-nums" data-tip={title} style={{ color: tone ?? "var(--text3)" }}>
       <span className="font-medium" style={{ color: tone ?? "var(--text2)" }}>{n}</span>
       <span>{word}</span>
     </span>
@@ -236,7 +238,8 @@ function HandOffKind({ session, kind }: { session: string; kind: { id: string; t
   );
 }
 
-export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r: LanternRow; onJump?: (paneId: string) => void; onClear?: (name: string) => void; quiet?: boolean; cacheTtlMs?: number; kinds?: { id: string; title: string }[] }) {
+export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds, ask = true }: { ask?: boolean; r: LanternRow; onJump?: (paneId: string) => void; onClear?: (name: string) => void; quiet?: boolean; cacheTtlMs?: number; kinds?: { id: string; title: string }[] }) {
+  const [askSaid, setAskSaid] = useState("");
   const w = r.needsYou;
   const cache = cacheTtlMs ? cacheLeft(r, cacheTtlMs) : null;
   const tone = toneOf(r);
@@ -258,12 +261,12 @@ export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r:
         <span aria-hidden className="shrink-0 rounded-full mt-1" style={{ width: 8, height: 8, background: tone, boxShadow: w || r.state === "working" ? `0 0 8px ${tone}` : "none" }} />
         <div className="flex-1 min-w-0 flex flex-col gap-0.5">
           <div className="flex items-center gap-2 min-w-0">
-            <span className={`${quiet ? "text-[12px]" : "text-[13.5px]"} font-semibold truncate`} style={{ color: w || r.state === "working" ? "var(--text)" : "var(--text2)" }} title={r.name}>{r.name}</span>
+            <span className={`${quiet ? "text-[12px]" : "text-[13.5px]"} font-semibold truncate`} style={{ color: w || r.state === "working" ? "var(--text)" : "var(--text2)" }} data-tip={r.name}>{r.name}</span>
             {r.role === "lantern" && <Badge outlined tight tint="var(--text4)" title="The Lantern's own session">lantern</Badge>}
             <span className="ml-auto shrink-0 flex items-center gap-1.5">
               {!w && <Badge outlined tight tint={tone} title={r.state === "working" ? "something ran in the last ten minutes" : "nothing has run for ten minutes"}>{r.state}</Badge>}
               {model && <Badge outlined tight tint="var(--text3)" title={f?.model}>{model}</Badge>}
-              {since ? <span className="text-[10.5px] tabular-nums" style={{ color: "var(--text4)" }} title={new Date(since).toLocaleString()}>{fmtAgo(since)}</span> : null}
+              {since ? <span className="text-[10.5px] tabular-nums" style={{ color: "var(--text4)" }} data-tip={new Date(since).toLocaleString()}>{fmtAgo(since)}</span> : null}
               {/* A line a person can take off the board, whoever posted it.
                   Only a said line: a seen row is a hook's sighting and leaves
                   with its pane. Never on a card stopped on you. */}
@@ -276,9 +279,9 @@ export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r:
           {(r.startedBy || r.orphaned || (r.under && w)) && (
             <div className="flex items-center gap-1.5 min-w-0 text-[10.5px]" style={{ color: "var(--text4)" }}>
               {/* What is wrong comes first, so a long origin cuts its own tail and never the warning. */}
-              {r.orphaned && <span className="shrink-0" style={{ color: "var(--warning-ink)" }} title="The orchestrator that started this worker is not in its chair, so nobody is reading its reports">its orchestrator is gone</span>}
-              {r.under && w && <span className="shrink-0" title="Its orchestrator's project">under {here(r.under)}'s chair</span>}
-              {r.startedBy && <span className="truncate min-w-0" title={originLine(r.startedBy)}>{r.orphaned || (r.under && w) ? "· " : ""}{originLine(r.startedBy)}</span>}
+              {r.orphaned && <span className="shrink-0" style={{ color: "var(--warning-ink)" }} data-tip="The orchestrator that started this worker is not in its chair, so nobody is reading its reports">its orchestrator is gone</span>}
+              {r.under && w && <span className="shrink-0" data-tip="Its orchestrator's project">under {here(r.under)}'s chair</span>}
+              {r.startedBy && <span className="truncate min-w-0" data-tip={originLine(r.startedBy)}>{r.orphaned || (r.under && w) ? "· " : ""}{originLine(r.startedBy)}</span>}
             </div>
           )}
           <div className="flex items-center gap-1.5 min-w-0">
@@ -295,7 +298,7 @@ export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r:
              */}
             {r.wasCalled?.length ? (
               <span className="text-[10px] shrink-0" style={{ color: "var(--text4)" }}
-                title={`Same session, earlier names: ${r.wasCalled.join(", ")}`}>
+                data-tip={`Same session, earlier names: ${r.wasCalled.join(", ")}`}>
                 · was {r.wasCalled[0]}{r.wasCalled.length > 1 ? ` +${r.wasCalled.length - 1}` : ""}
               </span>
             ) : null}
@@ -309,7 +312,7 @@ export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r:
           <div className="flex-1 min-w-0 flex flex-col gap-0.5">
             <div className="flex items-baseline gap-2 min-w-0">
               <span className="text-[10px] uppercase tracking-wide shrink-0 font-medium" style={{ color: tone }}>{waitWord(w)}</span>
-              <span className="ml-auto text-[10.5px] tabular-nums shrink-0" style={{ color: tone }} title={`Stopped on you since ${new Date(w.since).toLocaleString()}`}>for {fmtAgo(w.since)}</span>
+              <span className="ml-auto text-[10.5px] tabular-nums shrink-0" style={{ color: tone }} data-tip={`Stopped on you since ${new Date(w.since).toLocaleString()}`}>for {fmtAgo(w.since)}</span>
             </div>
             {/* The notification's own words — a paragraph somebody's session wrote,
                 not a label the app composed, so it reads in the prose face like a
@@ -326,7 +329,7 @@ export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r:
             <div className="flex items-start gap-2 min-w-0">
               <Label tone={r.state === "working" ? "var(--success)" : undefined}>now</Label>
               <div className="flex-1 min-w-0 flex flex-col">
-                <span className="text-[11.5px] leading-snug line-clamp-2" style={{ color: "var(--text)", fontFamily: "var(--font-prose)" }} title={now.text}>{now.text}</span>
+                <span className="text-[11.5px] leading-snug line-clamp-2" style={{ color: "var(--text)", fontFamily: "var(--font-prose)" }} data-tip={now.text}>{now.text}</span>
                 <span className="text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>
                   {now.tag}{now.at ? ` · ${fmtAgo(now.at)} ago` : ""}
                 </span>
@@ -336,7 +339,7 @@ export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r:
           {!quiet && f?.lastAsk && (
             <div className="flex items-start gap-2 min-w-0">
               <Label>asked</Label>
-              <span className="flex-1 min-w-0 text-[11px] leading-snug line-clamp-2" style={{ color: "var(--text3)", fontFamily: "var(--font-prose)" }} title={f.lastAsk.text}>{f.lastAsk.text}</span>
+              <span className="flex-1 min-w-0 text-[11px] leading-snug line-clamp-2" style={{ color: "var(--text3)", fontFamily: "var(--font-prose)" }} data-tip={f.lastAsk.text}>{f.lastAsk.text}</span>
             </div>
           )}
         </div>
@@ -352,7 +355,7 @@ export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r:
                 {g.ahead > 0 && <Fact n={g.ahead} word={g.ahead === 1 ? "commit ahead" : "commits ahead"} tone="var(--primary)" title="commits on this branch its base does not have" />}
                 {g.dirty > 0 && <Fact n={g.dirty} word={g.dirty === 1 ? "file changed" : "files changed"} tone="var(--warning)" title="changed and not committed" />}
                 {!quiet && g.lastCommit && g.ahead > 0 && (
-                  <span className="min-w-0 truncate" style={{ color: "var(--text3)" }} title={`${g.lastCommit.subject} · ${new Date(g.lastCommit.at).toLocaleString()}`}>
+                  <span className="min-w-0 truncate" style={{ color: "var(--text3)" }} data-tip={`${g.lastCommit.subject} · ${new Date(g.lastCommit.at).toLocaleString()}`}>
                     last: {g.lastCommit.subject}
                   </span>
                 )}
@@ -362,7 +365,7 @@ export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r:
           {r.left && (
             <div className="flex items-start gap-2 min-w-0">
               <Label>left</Label>
-              <span className="flex-1 min-w-0 text-[11px] truncate" style={{ color: "var(--text2)" }} title={r.left}>{r.left}</span>
+              <span className="flex-1 min-w-0 text-[11px] truncate" style={{ color: "var(--text2)" }} data-tip={r.left}>{r.left}</span>
             </div>
           )}
         </div>
@@ -378,12 +381,15 @@ export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r:
           {f && f.cost > 0 && <Fact n={money(f.cost)} word="" title="what this session has cost so far" />}
           {f?.permissionMode === "bypassPermissions" && <Badge outlined tight tint="var(--warning)" title="running with permission prompts off">yolo</Badge>}
           {cache && !quiet && (cache.warm
-            ? <span className="tabular-nums" style={{ color: "var(--success-ink)" }} title="The prompt cache is still warm: a turn sent now is the cheap one (Settings → Agents sets the window)">cache {mmss(cache.leftMs)}</span>
-            : <span style={{ color: "var(--text4)" }} title="The prompt cache has gone cold: the next turn pays to rebuild it">cache cold</span>)}
-          {f?.startedAt && !quiet && <span style={{ color: "var(--text4)" }} title={new Date(f.startedAt).toLocaleString()}>started {agoSentence(f.startedAt)}</span>}
+            ? <span className="tabular-nums" style={{ color: "var(--success-ink)" }} data-tip="The prompt cache is still warm: a turn sent now is the cheap one (Settings → Agents sets the window)">cache {mmss(cache.leftMs)}</span>
+            : <span style={{ color: "var(--text4)" }} data-tip="The prompt cache has gone cold: the next turn pays to rebuild it">cache cold</span>)}
+          {f?.startedAt && !quiet && <span style={{ color: "var(--text4)" }} data-tip={new Date(f.startedAt).toLocaleString()}>started {agoSentence(f.startedAt)}</span>}
           {!quiet && r.session && r.role !== "lantern" && kinds && kinds.length > 0 && <HandOff session={r.session} kinds={kinds} />}
         </div>
+        {ask && w && r.worktree && <AskAboutButton cwd={r.worktree} what={`Agent ${r.name}`} onSaid={(_ok, t) => setAskSaid(t)}
+          seed={() => lanternSeed({ name: r.name, doing: r.doing, branch: r.branch, worktree: r.worktree, needsYou: w })} />}
         <Go paneId={r.paneId} onJump={onJump} big={!!w} />
+        {askSaid && <span className="text-[10.5px]" role="status" style={{ color: "var(--text3)" }}>{askSaid}</span>}
       </div>
       )}
     </div>

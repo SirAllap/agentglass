@@ -11,6 +11,19 @@ import { ClockIcon } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { sharedPhase } from "../../lib/sharedPhase.ts";
 import type { Mark } from "../../lib/windowMark.ts";
+import type { SeatTone } from "../../lib/seatGlyph.ts";
+import { AlienGlyph } from "../workspace/icons.tsx";
+
+/** The seat's tab: the alien glyph instead of the dot, still in the dot's own
+ *  colour (lib/seatGlyph.ts decides which) so the state is not lost. */
+export function SeatMarkIcon({ tone, label }: { tone: SeatTone; label: string }) {
+  const color = tone === "needs-you" ? "var(--warning)" : tone === "working" ? "var(--primary)" : "var(--text4)";
+  return (
+    <span className="shrink-0" role="img" aria-label={label} style={{ color }}>
+      <AlienGlyph size={ICON.xs} />
+    </span>
+  );
+}
 
 export function WindowMarkIcon({ mark, label }: { mark: Mark; label: string }) {
   if (mark === "restored") return <span className="flex shrink-0" style={{ color: "var(--text4)" }} role="img" aria-label={label}><ClockIcon size={ICON.xs} /></span>;

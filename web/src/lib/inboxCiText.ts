@@ -17,7 +17,7 @@
  * to a wrong one.
  */
 import type { CheckFailureSummary, InboxItem, PrSummary } from "../../../shared/types.ts";
-import { failureHint } from "./prFailureHint.ts";
+import { failureHint } from "../../../shared/prFailureHint.ts";
 
 export interface SuiteTitle { workflow: string; branch: string }
 

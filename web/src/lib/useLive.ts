@@ -1,10 +1,16 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { WatchEvent, WsFrame, WsClientHello, OpenToolCall } from "../../../shared/types.ts";
-import { WS_URL, IS_DEMO, hasToken, probeAuth, whenServerUp } from "./api.ts";
+import { api, WS_URL, IS_DEMO, hasToken, probeAuth, whenServerUp } from "./api.ts";
 import * as demo from "./demo.ts";
 import { gitChanged } from "./gitBus.ts";
+import { cardChanged } from "./remoteStore.ts";
 import { notifyFlightPlanChanged } from "./flightPlanWaiting.ts";
 import { volumesChanged } from "./finderVolumes.ts";
+import { diskExplainChanged } from "./diskExplainBus.ts";
+import { applyKept, latestOnly } from "./diskScan.ts";
+
+const diskAsk = latestOnly();
+import { showCleanupNote } from "./cleanupEvents.ts";
 import { desktopPaletteMoved } from "./themes.ts";
 import { emitControl } from "./controlBus.ts";
 import { settingsRequestsChanged } from "./settingsRequests.ts";
@@ -13,8 +19,12 @@ import { clientId, emitBrowserAsk } from "./browserBus.ts";
 import { emitUnderstudy } from "./understudyBus.ts";
 import { emitPlugin } from "./pluginBus.ts";
 import { showAsked, closedElsewhere, restoreAsked } from "./askedBanners.ts";
-import { recordNote, fireDesktopAlert, firePopupOnly, fireWatchAlert, deliverPendingWatchFires } from "./sysNotify.ts";
+import { receiveDesktopDnd } from "./desktopDnd.ts";
+import { recordNote, recordNews, fireDesktopAlert, firePopupOnly, fireWatchAlert, deliverPendingWatchFires } from "./sysNotify.ts";
 import { publishPolarisChanged } from "./polarisLive.ts";
+import { publishTabRoot } from "./tabRootStore.ts";
+import { publishLanes } from "./laneView.ts";
+import { paneDirsChanged } from "./paneDirsBus.ts";
 import { setPrWatchState, publishChecksRead, hasActiveWatch, reloadPrWatches } from "./prWatchStore.ts";
 import { pollGatesNow } from "./gateStore.ts";
 import { ciShouldNotify } from "./ciNotifyPref.ts";
@@ -24,9 +34,10 @@ import { nudgeReminders } from "./reminderStore.ts";
 import { receiveNotifyPrefs } from "./notifyPrefsStore.ts";
 import { showPaceAlert } from "./paceAlert.ts";
 import { applyMarkRows, syncMarks } from "./marksSync.ts";
+import { idleFlag } from "./usePoll.ts";
+import { closeTools, flushDelay, foldTools, isPost } from "./liveFlush.ts";
 
 const MAX_EVENTS = 2000;
-const FLUSH_MS = 220; // coalesce bursts into ~5 renders/sec
 // Stop *hammering* a server that won't come back. ~2 minutes of failed
 // reconnects (the backoff tops out at 8s) is long enough to ride out a restart.
 const GIVE_UP_MS = 120_000;
@@ -93,7 +104,7 @@ export interface LiveData {
  * this was the piece left behind, and four comments here went on describing a
  * caller that no longer existed.
  */
-export function useLive(paused = false): LiveData {
+export function useLive(paused = false, slow = false): LiveData {
   const [events, setEvents] = useState<WatchEvent[]>([]);
   const [conn, setConn] = useState<ConnState>("connecting");
   const [lastEvent, setLastEvent] = useState<WatchEvent | null>(null);
@@ -123,6 +134,13 @@ export function useLive(paused = false): LiveData {
   // without the callback being rebuilt on each toggle.
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
+  // Same shape: the flush timer reads it when it is armed. See SLOW_FLUSH_MS in liveFlush.ts.
+  const slowRef = useRef(slow);
+  slowRef.current = slow;
+  // Window focus: visible but unfocused flushes at the slow rate (never paused).
+  const focusedRef = useRef(typeof document === "undefined" || document.hasFocus());
+  // The server's latest whole open-tool list, applied by the next flush with the events.
+  const pendingTools = useRef<OpenToolCall[] | null>(null);
 
   const flush = useCallback(() => {
     flushScheduled.current = false;
@@ -130,6 +148,12 @@ export function useLive(paused = false): LiveData {
     // bounded. Nothing is lost: uncovering flushes at once.
     if (pausedRef.current || (typeof document !== "undefined" && document.hidden)) {
       if (pending.current.length > MAX_EVENTS) {
+        // What is about to be dropped still closes its tools: a Post trimmed
+        // here would otherwise leave its call marked "running" until the
+        // server's next whole list. At most one update per flush, and none
+        // when the dropped events closed nothing.
+        const posts = pending.current.slice(0, -MAX_EVENTS).filter(isPost);
+        if (posts.length) setOpenTools((cur) => closeTools(cur, posts));
         pending.current = pending.current.slice(-MAX_EVENTS);
         // Rebuild the dedup set too, or it grows one id per event for the whole
         // time the tab is backgrounded. Keep the ids already displayed (events)
@@ -140,8 +164,14 @@ export function useLive(paused = false): LiveData {
       return;
     }
     const batch = pending.current;
-    if (!batch.length) return;
+    const toolsFrame = pendingTools.current;
+    if (!batch.length && !toolsFrame) return;
     pending.current = [];
+    pendingTools.current = null;
+    // With the events, so a batch is one render whatever it closes. See closeTools.
+    const posts = batch.filter(isPost);
+    if (posts.length || toolsFrame) setOpenTools((cur) => foldTools(cur, toolsFrame, posts));
+    if (!batch.length) return;
     setLastEvent(batch[batch.length - 1]);
     setEvents((prev) => {
       const next = prev.length ? prev.concat(batch) : batch;
@@ -157,7 +187,17 @@ export function useLive(paused = false): LiveData {
   const scheduleFlush = useCallback(() => {
     if (flushScheduled.current) return;
     flushScheduled.current = true;
-    timer.current = setTimeout(flush, FLUSH_MS);
+    timer.current = setTimeout(flush, flushDelay(slowRef.current, focusedRef.current));
+  }, [flush]);
+
+  // Focus and blur are events, not a poll. Regaining focus drains what the
+  // slow rate was still holding.
+  useEffect(() => {
+    const on = () => { focusedRef.current = true; if (!slowRef.current) flush(); };
+    const off = () => { focusedRef.current = false; };
+    window.addEventListener("focus", on);
+    window.addEventListener("blur", off);
+    return () => { window.removeEventListener("focus", on); window.removeEventListener("blur", off); };
   }, [flush]);
 
   const connect = useCallback(() => {
@@ -175,8 +215,17 @@ export function useLive(paused = false): LiveData {
       // A request asked for while this socket was down announced itself to nobody.
       void settingsRequestsChanged();
       void housekeepingChanged();
+      // A `git` frame sent while this socket was down (server restart, sleep) is
+      // never replayed: say git changed, so every git view re-reads once.
+      gitChanged();
       // Name this window, so a browser ask is addressed to it and not broadcast.
       try { ws.send(JSON.stringify({ type: "hello", clientId: clientId(), browser: true } satisfies WsClientHello)); } catch { /* closing */ }
+      // Tell the server whether this window is on screen: a hidden one does not
+      // need the background git fetch. Sent now and on every change (an event, not a poll).
+      const say = () => { try { ws.send(JSON.stringify({ type: "visibility", visible: document.visibilityState !== "hidden" })); } catch { /* closing */ } };
+      say();
+      document.addEventListener("visibilitychange", say);
+      ws.addEventListener("close", () => document.removeEventListener("visibilitychange", say));
       // Marks that moved elsewhere while this socket was down were broadcast to
       // nobody here; ask for them. A no-op in a window that never started sync.
       void syncMarks();
@@ -241,6 +290,18 @@ export function useLive(paused = false): LiveData {
         void settingsRequestsChanged();
         return;
       }
+      if (frame.type === "disk-explain") {
+        // The disk report moved: only a pointer, the panel re-reads the kept scan.
+        diskExplainChanged();
+        // The scan itself runs on after the panel closes: the toast and the pill do not depend on it being open.
+        const fresh = diskAsk();
+        void api.machineDiskCleanKept().then((k) => {
+          if (!fresh()) return; // a later ask is on its way, and its answer is newer than this one
+          const text = applyKept(k);
+          if (text) showCleanupNote({ key: "disk-scan", text, tone: "ok", lines: [] });
+        }).catch(() => { /* the next frame asks again */ });
+        return;
+      }
       if (frame.type === "cleanup-auto") {
         // The automatic cleanup moved a step: only a pointer, the rows are re-read.
         void housekeepingChanged();
@@ -253,6 +314,7 @@ export function useLive(paused = false): LiveData {
         emitControl(frame.data, frame.rid, { present: frame.present, as: frame.as, level: frame.level, ...(frame.grant === true ? { grant: true as const, ...(frame.expect !== undefined ? { expect: frame.expect } : {}) } : {}) });
         return;
       }
+      if (frame.type === "notify-dnd") { receiveDesktopDnd(frame.data); return; }
       if (frame.type === "notify-prefs") {
         // Saved from this tab (the round trip), another tab, or another
         // device open on the same server — all three arrive the same way, so
@@ -335,6 +397,7 @@ export function useLive(paused = false): LiveData {
            needs is somewhere to go — which it has, because the note carries the
            card and the bell knows how to open one. */
         const c = frame.data;
+        cardChanged(c.tracker, c.id, c.label);
         // Four sentences, and each says only what the API actually answered.
         // A comment carries its author, so it names one; an assignment does
         // not, so it never does.
@@ -384,6 +447,9 @@ export function useLive(paused = false): LiveData {
         return;
       }
       if (frame.type === "prwatch") { setPrWatchState(frame.data); return; }
+      if (frame.type === "tabroot") { publishTabRoot(frame.data); return; }
+      if (frame.type === "panedirs") { paneDirsChanged(); return; }
+      if (frame.type === "lanes") { publishLanes(frame.data); return; }
       if (frame.type === "prchecks") { publishChecksRead(frame.data); return; }
       if (frame.type === "prwatchfire") { fireWatchAlert(frame.data); return; }
       if (frame.type === "askedalert") { showAsked(frame.data); return; }
@@ -402,7 +468,8 @@ export function useLive(paused = false): LiveData {
         // whole suite. Naming the failures is the point: "1 failing" without a
         // name is what sends you to the browser.
         const v = frame.data;
-        recordNote({
+        // News: a card on screen, a desktop popup when agentglass is away (whereItShows).
+        recordNews({
           app: "agentglass",
           summary: `${v.repo}#${v.number} — checks ${v.verdict}`,
           body: v.verdict === "red" && v.failing.length
@@ -424,6 +491,7 @@ export function useLive(paused = false): LiveData {
       if (frame.type === "initial") {
         // A socket that just (re)opened may have missed a change while it was down.
         void pollGatesNow();
+        void settingsRequestsChanged();
         // Fires decided while no window was open, and a watch list that could not be read the first time.
         void deliverPendingWatchFires();
         // What the person asked for and has not dealt with: a reload or a restart brings it back.
@@ -433,6 +501,7 @@ export function useLive(paused = false): LiveData {
         // calls have already aged out of the buffer, and it rides on the same
         // first frame — so it is read before the events, not instead of them.
         setOpenTools(frame.openTools ?? []);
+        pendingTools.current = null;
         const initial = frame.data.slice(-MAX_EVENTS);
         seen.current = new Set(initial.map((e) => e.id));
         pending.current = [];
@@ -442,22 +511,15 @@ export function useLive(paused = false): LiveData {
         // The whole list, re-read with fresh evidence. Replaces rather than
         // merges: the server's answer is authoritative about what is open, and
         // a call missing from it has closed.
-        setOpenTools(frame.data);
+        // Held for the next flush: five frames in one window are one render.
+        pendingTools.current = frame.data;
+        scheduleFlush();
       } else if (frame.type === "event") {
         if (seen.current.has(frame.data.id)) return; // duplicate delivery
         seen.current.add(frame.data.id);
         pending.current.push(frame.data);
+        // The tool this may close is closed in the flush, with the events: see closeTools.
         scheduleFlush();
-        // A Post closes its tool: drop the matching seed so it can't keep a
-        // finished tool marked "running" after its Post later evicts the buffer.
-        const ev = frame.data;
-        if (ev.hook_event_type === "PostToolUse" || ev.hook_event_type === "PostToolUseFailure") {
-          setOpenTools((cur) =>
-            cur.length && cur.some((s) => s.session_id === ev.session_id && (!ev.tool_name || s.tool_name === ev.tool_name) && ev.timestamp >= s.since)
-              ? cur.filter((s) => !(s.session_id === ev.session_id && (!ev.tool_name || s.tool_name === ev.tool_name) && ev.timestamp >= s.since))
-              : cur
-          );
-        }
       }
       // `session` frames fall through on purpose. They were announced on a
       // `sessionBus` for the browser companion, whose polls were tuned for
@@ -490,20 +552,20 @@ export function useLive(paused = false): LiveData {
   useEffect(() => {
     if (!paused) flush();
   }, [paused, flush]);
+  // And the moment the Starboard comes on screen: what the slow flush is still
+  // holding is drawn now, not up to a second later.
+  useEffect(() => {
+    if (!slow) flush();
+  }, [slow, flush]);
 
   useEffect(() => {
     const sync = () => {
-      const looking = !document.hidden && document.hasFocus();
-      document.documentElement.dataset.idle = looking ? "0" : "1";
+      document.documentElement.dataset.idle = idleFlag(document.hidden);
     };
     sync();
     document.addEventListener("visibilitychange", sync);
-    window.addEventListener("focus", sync);
-    window.addEventListener("blur", sync);
     return () => {
       document.removeEventListener("visibilitychange", sync);
-      window.removeEventListener("focus", sync);
-      window.removeEventListener("blur", sync);
     };
   }, []);
 

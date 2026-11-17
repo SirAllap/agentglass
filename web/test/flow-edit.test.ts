@@ -96,8 +96,8 @@ describe("flow edits keep the flow valid", () => {
   });
 
   test("a fail arrow whose target moved after its source is dropped, not left dangling", () => {
-    const f = ok(movePath(shipped(), "builder", 4));
-    expect(f.path).toEqual(["planner", "inspector", "verifier", "landing", "builder"]);
+    const f = ok(movePath(shipped(), "builder", 3));
+    expect(f.path).toEqual(["planner", "inspector", "verifier", "builder", "landing"]);
     expect(f.edges.filter((e) => e.on === "fail")).toEqual([]);
   });
 
@@ -146,7 +146,7 @@ describe("flow edits keep the flow valid", () => {
   });
 
   test("counts say blocks, stages and team", () => {
-    expect(flowCounts(shipped())).toEqual({ blocks: 5, stages: 5, team: 14 });
+    expect(flowCounts(shipped())).toEqual({ blocks: 5, stages: 5, team: 15 });
   });
 });
 
@@ -283,11 +283,11 @@ describe("a rule about source: the flow screens", () => {
     }
   });
 
-  test("the Board toggle is drawn disabled and says Coming soon, and no board code is imported", async () => {
+  test("the Board toggle is on and switches the view over the same flow", async () => {
     const editor = (await SRC).find(([n]) => n.endsWith("FlowEditor.tsx"))![1];
-    expect(editor).toContain("Coming soon");
-    expect(editor).toMatch(/Board[\s\S]{0,200}disabled|disabled[\s\S]{0,200}Board/);
-    expect(editor).not.toMatch(/import .*Board/);
+    expect(editor).not.toContain("Coming soon");
+    expect(editor).toContain('onClick={() => setView("board")}');
+    expect(editor).toMatch(/import \{ FlowBoard \} from "\.\/FlowBoard\.tsx"/);
   });
 
   test("the honesty line is on the editor, word for word", async () => {

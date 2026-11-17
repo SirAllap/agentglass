@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { cardView } from "../src/lib/prCardView.ts";
 import { cardReviewers } from "../src/lib/cardReviewers.ts";
-import type { Filed } from "../src/lib/prLanes.ts";
+import type { Filed } from "../../shared/prLanes.ts";
 
 const p = {
   number: 1042, title: "Retry the relay handshake", author: "mara-k", state: "OPEN" as const, isDraft: false,

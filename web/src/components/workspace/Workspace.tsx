@@ -18,37 +18,61 @@
 // opened does not exist yet. On a fresh window that is one view rather than
 // eight, and the dashboard — fourteen panels and a poll every four seconds — is
 // not among them until you ask for it.
-import { PluginsView } from "../plugins/PluginsView.tsx";
-import { FlightPlanView } from "../flightPlan/FlightPlanView.tsx";
-import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { hiddenOnly } from "./hiddenOnly.ts";
 import { ViewRail, type RailPip } from "./ViewRail.tsx";
+import { paneBoxMode, offscreenSize, paneVisibility } from "../../lib/agentScreen.ts";
+import { agentsWithoutScreen } from "../../lib/browserPrefs.ts";
 import { subscribeSummary, summarySnapshot, summaryHasLeft } from "../../lib/manifest.ts";
 import { railBadgesKey, subscribeRailBadges, visiblePips } from "../../lib/railBadges.ts";
 import { pushScope } from "../../lib/findScope.ts";
 import { VIEWS, saveLastView, type ViewId } from "./views.ts";
 import { ViewBoundary } from "./ViewBoundary.tsx";
-import { TasksView } from "../TasksPanel.tsx";
 import { subscribeReminders, firedCount } from "../../lib/reminderStore.ts";
 import { hasGitModal, subscribeGitModal } from "../../lib/gitModalIntent.ts";
-import { GitView } from "../GitPanel.tsx";
-import { DiffPage } from "../diff/DiffPage.tsx";
 import { PrView } from "../PrPanel.tsx";
-import { DockerView } from "../DockerPanel.tsx";
+import { LazyPanel } from "../LazyPanel.tsx";
+
+/*
+ * Views that are not the terminal or the browser arrive in their own chunks.
+ *
+ * Every one of them is mounted only when first visited (`visited` above), so
+ * their code was parsed at launch for a screen most sessions never open. The
+ * entry chunk measured 6.87 MB before this and the eight views below are the
+ * bulk of what is not needed for the first paint. `term` and `browser` stay
+ * eager: they are KEEP_RUNNING, mounted at boot. The PR board stays eager too,
+ * because the inbox, saved replies and plugin actions import it directly, so
+ * splitting it would only move the bytes, not defer them.
+ */
+// Each written out, not through a helper: `lazy` takes the view's own type from
+// the module, and a helper generic over the export name lost it (a memo or
+// forwardRef view did not fit one prop type).
+const PluginsView = lazy(() => import("../plugins/PluginsView.tsx").then((m) => ({ default: m.PluginsView })));
+const FlightPlanView = lazy(() => import("../flightPlan/FlightPlanView.tsx").then((m) => ({ default: m.FlightPlanView })));
+const TasksView = lazy(() => import("../TasksPanel.tsx").then((m) => ({ default: m.TasksView })));
+const GitView = lazy(() => import("../GitPanel.tsx").then((m) => ({ default: m.GitView })));
+const DiffPage = lazy(() => import("../diff/DiffPage.tsx").then((m) => ({ default: m.DiffPage })));
+const DockerView = lazy(() => import("../DockerPanel.tsx").then((m) => ({ default: m.DockerView })));
+const AgentsView = lazy(() => import("../agents/AgentsView.tsx").then((m) => ({ default: m.AgentsView })));
+const ManifestView = lazy(() => import("../ManifestView.tsx").then((m) => ({ default: m.ManifestView })));
 import { TermView } from "../TerminalPanel.tsx";
 import { BrowserView } from "../BrowserPanel.tsx";
-import { AgentsView } from "../agents/AgentsView.tsx";
-import { ManifestView } from "../ManifestView.tsx";
 import { subscribeLantern, lanternNeed } from "../../lib/lanternStore.ts";
 import { requestTermReview } from "../../lib/termReview.ts";
 import { requestTermIssue } from "../../lib/termIssue.ts";
 import type { SendOpts } from "../../lib/sendOptions.ts";
+import {
+  benchWantsBrowser, browserActive, browserFrame, browserPlace, registerBrowserSlot, type BrowserFrame, setBrowserSlotVisible, subscribeBrowser,
+} from "../../lib/browserHost.ts";
+import { browserRailFacts, subscribeBrowserRail } from "../../lib/browserRail.ts";
+import { closeBench } from "../../lib/benchStore.ts";
 import { benchWants, boardActive, boardNode, boardPlace, subscribeBoards, type BoardKind } from "../../lib/boardHost.ts";
 import { BoardSlot } from "./BoardSlot.tsx";
 import { PortalFloor } from "../Portal.tsx";
 import { BENCH_OWNER, LayerOwner } from "../../lib/layerOwner.ts";
 import { LAYER } from "../../lib/layers.ts";
+import { ViewActive } from "../../lib/viewActive.ts";
 
 /**
  * Views that keep running with the door shut.
@@ -84,7 +108,24 @@ const KEEP_RUNNING = new Set<ViewId>(["term", "browser"]);
  * every view and costs no width at all.
  */
 
-export function Workspace({
+/*
+ * Skipped while its props are the same.
+ *
+ * The root re-renders on every flush of the live socket, up to five times a
+ * second with agents working, and this shell is its largest child: the rail,
+ * every mounted view, both boards. Nothing it is given changes on a flush
+ * (the Starboard's data no longer comes through here, see lib/dashFeed.ts),
+ * so it is compared by identity and left alone. `tick` is the exception on
+ * purpose: the root's ten-second clock, passed so the view on screen is still
+ * re-drawn on it (a label that says how long ago moves without new props, see
+ * hiddenOnly.ts); the hidden views stay skipped. That only holds while the
+ * root hands it held callbacks: an arrow written in the root's JSX would be a
+ * new prop every time and quietly undo this, which is what
+ * web/test/workspace-shell-skipped.test.ts reads the source for.
+ */
+export const Workspace = memo(WorkspaceImpl);
+
+function WorkspaceImpl({
   view, onView, onSkills, onSettings, onMachine, onOpenProject, dashboard, prJump, cardJump, issueJump,
 }: {
   view: ViewId;
@@ -103,12 +144,15 @@ export function Workspace({
   /** The same errand the other way round — see lib/openCard.ts. */
   cardJump?: import("../../lib/openCard.ts").CardJump | null;
   issueJump?: import("../../lib/openIssue.ts").IssueJump | null;
+  /** The root's slow clock. Not read here: a new value is what re-draws the view on screen. */
+  tick?: number;
 }) {
   /* Held, not inlined. The hidden views are behind a memo that compares props
      by identity, and a fresh arrow on every render of this component makes that
      comparison fail for all seven of them — which is the memo doing nothing at
      all. */
   const openBrowser = useCallback(() => onView("browser"), [onView]);
+  const openTerminal = useCallback(() => onView("term"), [onView]);
 
   /** Send a pull request review to a window on the ENGINE, and go there to
    *  watch it. It used to go to the user's own tmux, and refused outright when
@@ -130,7 +174,10 @@ export function Workspace({
 
   // A count the person turned off in Settings (Sidebar) is not drawn.
   useSyncExternalStore(subscribeRailBadges, railBadgesKey, railBadgesKey);
+  const browserFacts = useSyncExternalStore(subscribeBrowserRail, browserRailFacts, browserRailFacts);
   const pips: Partial<Record<ViewId, RailPip>> = {
+    // Open tabs at the top-right, an agent holding one at the top-left.
+    browser: { ...(browserFacts.tabs > 0 ? { count: browserFacts.tabs } : null), ...(browserFacts.driven ? { driven: true } : null) },
     // The lantern lights: how many agents are stopped on a person right now.
     // Not how many agents there are — twenty working is a normal afternoon.
     agents: lanternWaiting > 0 ? { count: lanternWaiting } : {},
@@ -164,10 +211,11 @@ export function Workspace({
      when the bench lets go of it. See lib/boardHost.ts. */
   const benchPr = useSyncExternalStore(subscribeBoards, () => benchWants("pr"), () => false);
   const benchTasks = useSyncExternalStore(subscribeBoards, () => benchWants("tasks"), () => false);
+  const benchBrowser = useSyncExternalStore(subscribeBrowser, benchWantsBrowser, () => false);
   useEffect(() => {
-    const want = [benchPr && "pr", benchTasks && "tasks"].filter(Boolean) as ViewId[];
+    const want = [benchPr && "pr", benchTasks && "tasks", benchBrowser && "browser"].filter(Boolean) as ViewId[];
     setVisited((cur) => (want.every((k) => cur.has(k)) ? cur : new Set([...cur, ...want])));
-  }, [benchPr, benchTasks]);
+  }, [benchPr, benchTasks, benchBrowser]);
 
   /* A Git modal asked for through /control mounts the Git view without showing
      it: the modals are portals over whatever view is up, so the person stays
@@ -179,6 +227,19 @@ export function Workspace({
     mountGit();
     return subscribeGitModal(mountGit);
   }, []);
+
+  /* The browser's own place in the view. Going to it while the bench holds the
+     browser is asking to read it here, so the bench gets out of the way, as
+     it does for the boards. See lib/browserHost.ts. */
+  useLayoutEffect(() => {
+    return registerBrowserSlot("rail", "rail", null, view === "browser");
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    if (view === "browser" && browserPlace() === "bench" && browserActive()) closeBench();
+    setBrowserSlotVisible("rail", view === "browser");
+  }, [view]);
+  const benchHoldsBrowser = useSyncExternalStore(subscribeBrowser, () => browserPlace() === "bench" && browserActive(), () => false);
+  const floating = useSyncExternalStore(subscribeBrowser, browserFrame, () => null);
 
   const mounted = useMemo(
     () => VIEWS.filter((v) => visited.has(v.id) || KEEP_RUNNING.has(v.id)),
@@ -200,10 +261,13 @@ export function Workspace({
       <div className="agx-ws-content relative flex-1 min-w-0">
         {mounted.map((v) => {
           const active = v.id === view;
+          const isBrowser = v.id === "browser";
           return (
             <ViewBox
               key={v.id}
-              active={active}
+              active={isBrowser ? active || benchHoldsBrowser : active}
+              frame={isBrowser ? floating : null}
+              parked={paneBoxMode(isBrowser, isBrowser ? active || benchHoldsBrowser : active, agentsWithoutScreen()) === "offscreen"}
               // `visibility`, not `display:none`: xterm's fit addon measures its
               // container, and a display:none parent measures 0x0 — which is how
               // a hidden terminal comes back reflowed to a single column.
@@ -222,8 +286,10 @@ export function Workspace({
               <ViewBoundary label={v.label}>
                 {v.id === "dash"
                   ? dashboard(active)
-                  : <Body id={v.id} active={active}
-                      openBrowser={openBrowser} onOpenProject={onOpenProject} />}
+                  : <LazyPanel label={v.label}>
+                      <Body id={v.id} active={isBrowser ? active || benchHoldsBrowser : active}
+                        openBrowser={openBrowser} openTerminal={openTerminal} onOpenProject={onOpenProject} />
+                    </LazyPanel>}
               </ViewBoundary>
             </ViewBox>
           );
@@ -248,8 +314,18 @@ export function Workspace({
  * out; anything that opens OVER it (a card, Settings, the file viewer) pushes
  * itself on top at a higher rank. See findScope.ts.
  */
-function ViewBox({ active, children }: { active: boolean; children: React.ReactNode }) {
+function ViewBox({ active, frame, parked, children }: { active: boolean; frame?: BrowserFrame | null; parked?: boolean; children: React.ReactNode }) {
   const box = useRef<HTMLDivElement>(null);
+  /* Last size the pane had while on screen: a parked pane keeps it, so the page
+     inside does not reflow when an agent drives it with the pane closed. */
+  const lastSize = useRef<{ w: number; h: number } | null>(null);
+  useEffect(() => {
+    const el = box.current;
+    if (!active || !el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => { const r = el.getBoundingClientRect(); if (r.width > 0 && r.height > 0) lastSize.current = { w: r.width, h: r.height }; });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [active, parked]);
   useEffect(() => {
     if (!active || !box.current) return;
     return pushScope(box.current, 0);
@@ -266,23 +342,39 @@ function ViewBox({ active, children }: { active: boolean; children: React.ReactN
       // would swallow clicks meant for the active one beneath it.
       // `visibility: hidden` does not.
       className="absolute inset-0 flex flex-col min-h-0"
-      style={{ visibility: active ? "visible" : "hidden" }}
+      style={{
+        visibility: paneVisibility(active, !!parked, !!frame),
+        /* The browser while the bench shows it: the same box, laid over the
+           bench's slot. Moving its element would kill the page. */
+        ...(frame ? { position: "fixed", inset: "auto", left: frame.x, top: frame.y, width: frame.w, height: frame.h, zIndex: LAYER.benchOverlay } : null),
+        /* "No screen" (browser.agentsWithoutScreen): a hidden pane stacked at
+           `inset-0` gets no paint from the compositor, so an agent's webviews
+           stall and capturePage times out. Parked instead: still mounted, off
+           the viewport, at an explicit size (the last visible one, else
+           1280x800), so the guests keep painting. Electron cannot give a hidden
+           webContents a size on its own, hence the explicit one. */
+        ...(parked && !frame ? { position: "fixed", inset: "auto", left: -100000, top: 0, width: offscreenSize(lastSize.current).w, height: offscreenSize(lastSize.current).h, pointerEvents: "none" } : null),
+      }}
       aria-hidden={!active}
       /* Findable from outside React: a screenshot of a pane nobody is looking
          at has to make that pane paint for a moment, and the thing it flips is
          this box's visibility. See panePainting.ts. */
       data-agx-viewbox=""
     >
-      {children}
+      {/* Read by clocks deep inside the view (a card, a plugin canvas) that
+          `document.hidden` and an IntersectionObserver both call visible. */}
+      <ViewActive.Provider value={active}>{children}</ViewActive.Provider>
     </div>
   );
 }
 
 /** The non-dashboard views, and the props each one wants. Split out so the map
  *  above stays about mounting rather than about plumbing. */
-function BodyImpl({ id, active, openBrowser, onOpenProject }: {
+function BodyImpl({ id, active, openBrowser, openTerminal, onOpenProject }: {
   id: ViewId; active: boolean;
   onOpenProject: () => void;
+  /** Bring the terminal forward — the Manifest's "Show it" lands on the pane it named. */
+  openTerminal: () => void;
   /** Bring the browser view forward — the Docker panel asks for it when you
    *  open a container's port, so a dev server lands in a tab of this app
    *  instead of somewhere else. */
@@ -301,7 +393,7 @@ function BodyImpl({ id, active, openBrowser, onOpenProject }: {
     /* The Lantern and the project's chair, as one screen. Its chat is a tab on
        the floating bench — see lanternAsk.ts. Nothing to hand it. */
     case "agents": return <AgentsView active={active} />;
-    case "manifest": return <ManifestView active={active} onOpenProject={onOpenProject} />;
+    case "manifest": return <ManifestView active={active} onOpenProject={onOpenProject} onTerminal={openTerminal} />;
     case "plugins": return <PluginsView active={active} />;
     case "flightPlan": return <FlightPlanView active={active} />;
     default: return null;
@@ -334,7 +426,9 @@ function BoardInstance({ kind, ...props }: Omit<BoardBodyProps, "active">) {
     <PortalFloor.Provider value={inBench ? LAYER.benchOverlay : 0}>
       <LayerOwner.Provider value={inBench ? BENCH_OWNER : null}>
         <ViewBoundary label={VIEWS.find((v) => v.id === kind)?.label ?? kind}>
-          <BoardBody kind={kind} active={active} {...props} />
+          <ViewActive.Provider value={active}>
+            <BoardBody kind={kind} active={active} {...props} />
+          </ViewActive.Provider>
         </ViewBoundary>
       </LayerOwner.Provider>
     </PortalFloor.Provider>,
@@ -354,7 +448,7 @@ interface BoardBodyProps {
 function BoardBodyImpl({ kind, active, openBrowser, reviewInTerminal, prJump, cardJump, issueJump }: BoardBodyProps) {
   return kind === "pr"
     ? <PrView active={active} onReviewInTerminal={reviewInTerminal} jumpTo={prJump} />
-    : <TasksView active={active} onOpenBrowser={openBrowser} cardJump={cardJump} issueJump={issueJump} />;
+    : <LazyPanel label="Tasks"><TasksView active={active} onOpenBrowser={openBrowser} cardJump={cardJump} issueJump={issueJump} /></LazyPanel>;
 }
 
 const BoardBody = memo(BoardBodyImpl, hiddenOnly);

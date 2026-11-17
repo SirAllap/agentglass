@@ -12,7 +12,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { refKey, refsIn, refToken, refPlaces, refWhy, withBranchHits } from "../src/lib/prRefs.ts";
 import { toServerQuery, singleLogin, SEARCH_HINT } from "../src/lib/prSearch.ts";
 import { TriageBoard, PersonBanner } from "../src/components/TriageBoard.tsx";
-import { lanesFor, LANES, board, fileInLane } from "../src/lib/prLanes.ts";
+import { lanesFor, LANES, board, fileInLane } from "../../shared/prLanes.ts";
 import type { PrSummary } from "../../shared/types.ts";
 
 const row = (o: Partial<PrSummary> = {}): PrSummary => ({

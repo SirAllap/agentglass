@@ -38,6 +38,8 @@ export interface CardRef {
   /** Named only by its own address, never guessed from an id's shape. Null
    *  means "an id, from we cannot say where". */
   tracker: TrackerId | null;
+  /** The item this one beat, kept reachable and read-only (see `readTaskRef`). */
+  also?: { label: string; query: string; url?: string; tracker: TrackerId };
 }
 
 /**

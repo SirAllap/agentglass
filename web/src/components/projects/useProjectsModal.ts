@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { GitRepoRef } from "../../../../shared/types.ts";
 import { api } from "../../lib/api.ts";
+import { invalidateScannedRepos } from "../settings/scope/useScope.ts";
 import { autoPick, withOpenFolders, clickScope, explainOpen, initialTicks, markAnswered, nextScope, rootsToAdd, type OpenRow } from "../../lib/projectPick.ts";
 import { SOURCE_ALL, tabsByRoot, type Source } from "../../lib/projectsView.ts";
 import { folderToJoin, tildify } from "../../lib/projectsPaths.ts";
@@ -154,7 +155,7 @@ export function useProjectsModal(o: { open: boolean; workspaces: readonly string
     flip(!wasHidden);
     if (!wasHidden) say(`Forgot ${name ?? root} · files untouched`, { undo: () => toggleHidden(root, name) });
     api.hideProject(root, !wasHidden)
-      .then((r) => { if (r.ok) setHidden(r.hidden); else { flip(wasHidden); setError(r.error || "Could not save that"); } })
+      .then((r) => { if (r.ok) { setHidden(r.hidden); invalidateScannedRepos(); } else { flip(wasHidden); setError(r.error || "Could not save that"); } })
       .catch((e) => { flip(wasHidden); setError(String(e)); });
   };
 

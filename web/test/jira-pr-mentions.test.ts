@@ -69,7 +69,7 @@ describe("the GitHub tab", () => {
   test("both kinds are drawn with their labels", () => {
     expect(html).toContain("#2198");
     expect(html).toContain("#9");
-    expect(html).toContain("linked on the card");
-    expect(html).toContain("mentioned in a comment");
+    expect(html).toContain("Linked");
+    expect(html).toContain("Mentions this card");
   });
 });

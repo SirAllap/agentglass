@@ -14,6 +14,7 @@ import { epicTone, sprintLine, type ParentGroup } from "../../lib/jiraBoardConte
 import { EDGE } from "../workspace/Chrome.tsx";
 import { ON_CHIP } from "../tasks/chipStyle.ts";
 import { TypeMark } from "./JiraSections.tsx";
+import { tipAttr } from "../../lib/tip.ts";
 
 const CHIP = "text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap";
 const idle = { border: EDGE, color: "var(--text2)" } as const;
@@ -31,7 +32,7 @@ export function JiraSprintHeader({ sprint, now, totals }: { sprint: JiraBoardSpr
     sprint.goal,
   ].filter(Boolean).join(" · ");
   return (
-    <span className="shrink-0 inline-flex items-center gap-1.5 whitespace-nowrap rounded-full tabular-nums" data-testid="jira-sprint" title={detail || sprint.name}
+    <span className="shrink-0 inline-flex items-center gap-1.5 whitespace-nowrap rounded-full tabular-nums" data-testid="jira-sprint" data-tip={tipAttr(detail || sprint.name)}
       style={{
         height: 18, padding: "0 8px", fontSize: 10.5, fontWeight: 500,
         color: line.late ? "var(--warning-ink)" : "var(--info-ink, var(--primary-ink))",
@@ -50,7 +51,7 @@ export function JiraQuickChips({ filters, picked, onToggle }: { filters: readonl
       {filters.map((q) => {
         const on = picked.includes(q.id);
         return (
-          <button key={q.id} onClick={() => onToggle(q.id)} aria-pressed={on} title={q.description || q.name}
+          <button key={q.id} onClick={() => onToggle(q.id)} aria-pressed={on} data-tip={tipAttr(q.description || q.name)}
             className={CHIP} style={on ? ON_CHIP : idle}>{q.name}</button>
         );
       })}
@@ -66,8 +67,8 @@ export function ParentLabel({ g, tone }: { g: ParentGroup; tone: string | undefi
       <span aria-hidden className="shrink-0 rounded-full" style={{ width: 8, height: 8, background: `var(${epicTone(tone)})` }} />
       <TypeMark type={g.type} />
       <span className="tabular-nums shrink-0" style={{ color: "var(--text3)" }}>{g.key}</span>
-      <span className="truncate min-w-0" style={{ color: "var(--text)" }} title={g.title}>{g.title}</span>
-      <span className="tabular-nums shrink-0" style={{ color: "var(--text3)" }} title={`${g.done} of ${g.rows.length} done`}>{g.done}/{g.rows.length}</span>
+      <span className="truncate min-w-0" style={{ color: "var(--text)" }} data-tip={tipAttr(g.title)}>{g.title}</span>
+      <span className="tabular-nums shrink-0" style={{ color: "var(--text3)" }} data-tip={tipAttr(`${g.done} of ${g.rows.length} done`)}>{g.done}/{g.rows.length}</span>
     </span>
   );
 }

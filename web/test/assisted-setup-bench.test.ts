@@ -262,7 +262,7 @@ describe("every starter press goes through the helper", () => {
     expect(await src("components/agents/AgentsView.tsx")).toContain('data-tip="A session on the floating bench');
     expect(await src("components/agents/AgentsView.tsx")).toContain('<Ph name="sparkle" size={ICON.sm} />');
     expect(await src("components/LanternView.tsx")).toContain('data-tip="Hand this conversation');
-    expect(await src("components/docker/Header.tsx")).toContain("data-tip={analyze.tip}");
+    expect(await src("components/docker/Header.tsx")).toContain("reason={analyze.tip}");
     expect(await src("components/DockerPanel.tsx")).toContain("tip: gate.disabled ? gate.reason");
   });
 });

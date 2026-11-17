@@ -14,7 +14,7 @@
 import { describe, expect, it, beforeEach } from "bun:test";
 import type { PrDetail, PrSummary } from "../../shared/types.ts";
 import type { ProviderTask } from "../../shared/providers.ts";
-import { putCard, withCard, forgetCards } from "../src/lib/prCardStore.ts";
+import { putCard, withCard, forgetCards, cardOnScreen, cardOf, freshestCard } from "../src/lib/prCardStore.ts";
 import { holdEdits, overlayDetail, rowPatch, type EditLog } from "../src/lib/prRefresh.ts";
 import { assigneesPatch, reviewersPatch, milestonePatch, draftPatch, titlePatch } from "../src/lib/prOptimistic.ts";
 
@@ -41,6 +41,39 @@ describe("the ClickUp chip", () => {
     putCard("ORBIT-1042", task("code review"));
     const newer = row({ card: { ...row().card!, status: "done", at: Date.now() + 5_000 } });
     expect(withCard(newer, true).card?.status).toBe("done");
+  });
+});
+
+describe("a Jira step's answer, on every surface", () => {
+  const jiraRow = (at: number): PrSummary => row({
+    card: { id: "c1", customId: "ORBIT-1042", title: "thing", url: "", status: "in development", priority: null, tracker: "jira", at },
+  });
+
+  it("the board chip, the PR header chip and the panel all say the status Jira answered", () => {
+    putCard("ORBIT-1042", task("code review"));
+    const stale = jiraRow(Date.now() - 240_000);
+    // The board card (TriageBoard draws `withCard`).
+    expect(withCard(stale, true).card?.status).toBe("code review");
+    // The pull request's own header chip.
+    expect(cardOnScreen("ORBIT-1042", stale.card, "jira")?.status).toBe("code review");
+    // The side panel, which reads the store itself.
+    expect(cardOf("ORBIT-1042", undefined, "jira")?.task?.status).toBe("code review");
+  });
+
+  it("a board read taken before the write does not put the old status back", () => {
+    putCard("ORBIT-1042", task("code review"));
+    // The poll lands AFTER the press, carrying the copy read before it.
+    const late = jiraRow(Date.now() - 60_000);
+    expect(withCard(late, true).card?.status).toBe("code review");
+    expect(cardOnScreen("ORBIT-1042", late.card, "jira")?.status).toBe("code review");
+  });
+
+  it("the newer of the two readings wins, whichever arrived at the screen last", () => {
+    const mine = { ...row().card!, at: 1_000 };
+    expect(freshestCard(mine, { at: 2_000, task: task("code review"), error: "" })?.task).toMatchObject({ status: "code review" });
+    expect(freshestCard(mine, { at: 500, task: task("in development"), error: "" })).toBeNull();
+    // A held miss is not a newer reading: the row's copy still stands.
+    expect(freshestCard(mine, { at: 9_000, task: null, error: "could not find it" })).toBeNull();
   });
 });
 

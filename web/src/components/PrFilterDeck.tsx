@@ -5,8 +5,8 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { PrSummary } from "../../../shared/types.ts";
 import { emptyLanes, isGroup, type FilterNode, type FilterRule, type LaneFilter } from "../../../shared/prFilter.ts";
-import type { FieldSpec, ReadField } from "./tasks/filters.ts";
-import { evalLanes, type LaneResult } from "../lib/prFilterEval.ts";
+import type { FieldSpec } from "./tasks/filters.ts";
+import { evalLanes, type LaneResult, type ReadField } from "../lib/prFilterEval.ts";
 import { parseRuleText, suggestCards } from "../lib/prFilterSyntax.ts";
 import { addParsed, newNodeId, removeNode, replaceRule } from "../lib/prFilterTree.ts";
 import {

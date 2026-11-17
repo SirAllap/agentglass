@@ -44,9 +44,11 @@ describe("needsPanelLeft", () => {
 });
 
 describe("wiring", () => {
-  it("the panel sits on its own layer, under every sheet and menu", () => {
+  it("the panel sits on its own layer, above the note cards, under the Settings dialogs and menus", () => {
     expect(LAYER.needs).toBeGreaterThan(LAYER.palette);
-    expect(LAYER.needs).toBeLessThan(LAYER.catalog);
+    expect(LAYER.needs).toBeGreaterThan(LAYER.noteToasts);
+    expect(LAYER.needs).toBeLessThan(LAYER.settingsDialog);
+    expect(LAYER.needs).toBeLessThan(LAYER.menu);
     expect(code(popover)).toContain("<Portal z={LAYER.needs}>");
   });
   it("the panel closes when the window loses focus to a webview or iframe", () => {

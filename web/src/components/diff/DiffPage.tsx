@@ -22,7 +22,7 @@
  * occasionally and the file list is the thing you came for.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useCloseWithOwner } from "../../lib/layerOwner.ts";
 import type { ChangeRow } from "../../../../shared/types.ts";
 import {
@@ -34,6 +34,8 @@ import { useIncremental } from "../../lib/useIncremental.ts";
 import { openPeek } from "../../lib/openPeek.ts";
 import { groupHunks } from "../../lib/changeGroups.ts";
 import { useSidebarWidth } from "../../lib/sidebarWidth.ts";
+import { EMBEDDED_LIST_DEFAULT_PX, EMBEDDED_LIST_FOLD_PX, EMBEDDED_LIST_MIN_PX, embeddedListMax, listWidthOf, menuShift, setListWidth } from "../../lib/sidePane.ts";
+import { SideFileList, newestFirst } from "./SideFileList.tsx";
 import { SidebarGrip } from "../SidebarGrip.tsx";
 import { HIT, ICON } from "../../lib/iconSize.ts";
 import { Badge, Button, CHIP_ICON, FilterField, IconChip, Segmented, LINE } from "../workspace/Chrome.tsx";
@@ -66,24 +68,27 @@ const K_OUTSIDE = "agentglass.diff.v3.showOutside";
  *  year of reading cannot grow the entry without bound; the OLDEST go, because
  *  the tick you set five minutes ago is the one you are using. */
 const REVIEW_MAX = 2000;
-
 const read = <T,>(key: string, fallback: T, parse: (raw: string) => T): T => {
   try { const raw = localStorage.getItem(key); return raw == null ? fallback : parse(raw); } catch { return fallback; }
 };
 const write = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* private mode */ } };
 
-export function DiffPage({ active }: { active: boolean }) {
+export function DiffPage({ active, embedded }: {
+  active: boolean;
+  /** Beside a terminal: starts on this filter, ignores the shared worktree jump the full page serves, and answers keys only from inside the pane. */
+  embedded?: { filter: string; tab: string; onTotals?: (t: { files: number; add: number; del: number }) => void };
+}) {
   const [mode, setMode] = useState<DiffMode>(() => read(K_MODE, "working", (r) => (r === "committed" ? "committed" : "working")));
   const [groupBy, setGroupBy] = useState<GroupBy>(() =>
     read(K_GROUP, "worktree", (r) => (r === "time" || r === "folder" ? (r as GroupBy) : "worktree")));
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(embedded?.filter ?? "");
   const [showIgnored, setShowIgnored] = useState(() => read(K_IGNORED, false, (r) => r === "1"));
   const [showOutside, setShowOutside] = useState(() => read(K_OUTSIDE, false, (r) => r === "1"));
   const [selKey, setSelKey] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const [reviewed, setReviewed] = useState<ReadonlySet<string>>(() =>
     new Set(read<string[]>(K_REVIEW, [], (r) => JSON.parse(r) as string[])));
-  const [split, setSplit] = useState(diffSplit);
+  const [split, setSplit] = useState(() => (embedded ? false : diffSplit()));
   const [wrap, setWrap] = useState(diffWrap);
   /* The same preference the pull request panel reads, so the two surfaces open the
      same way — a toggle that means one thing in one panel and nothing in the other is
@@ -114,7 +119,7 @@ export function DiffPage({ active }: { active: boolean }) {
   const wtJump = useSyncExternalStore(subscribeWorktreeJump, worktreeJump);
   const wtServed = useRef(0);
   useEffect(() => {
-    if (!wtJump || wtJump.view !== "diff" || wtJump.n === wtServed.current) return;
+    if (embedded || !wtJump || wtJump.view !== "diff" || wtJump.n === wtServed.current) return;
     wtServed.current = wtJump.n;
     /* An empty filter is a real request — "show me everything" — so it is applied
        rather than skipped, which is the difference between this and a guard on
@@ -127,6 +132,11 @@ export function DiffPage({ active }: { active: boolean }) {
   }, [wtJump]);
 
   const sidebarW = useSidebarWidth();
+  const rowRef = useRef<HTMLDivElement>(null);
+  /* Own width per tab: the shared one is the full page's and was capped here, so dragging it moved nothing. */
+  const [ownW, setOwnW] = useState(() => listWidthOf(embedded?.tab ?? ""));
+  const setOwn = (px: number) => { setOwnW(px); setListWidth(embedded?.tab ?? "", px); };
+  const listW = embedded ? Math.min(ownW, embeddedListMax(rowRef.current?.clientWidth ?? 9999)) : sidebarW;
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => write(K_MODE, mode), [mode]);
@@ -148,7 +158,29 @@ export function DiffPage({ active }: { active: boolean }) {
     [rows, showIgnored, showOutside, q],
   );
   const groups = useMemo(() => groupRows(shown, groupBy), [shown, groupBy]);
+  const [rowW, setRowW] = useState(9999);
+  useLayoutEffect(() => {
+    const el = rowRef.current;
+    if (!el || !embedded) return;
+    const ro = new ResizeObserver(() => setRowW(el.clientWidth));
+    ro.observe(el);
+    setRowW(el.clientWidth);
+    return () => ro.disconnect();
+  }, [!!embedded]);
+  /* Under the fold width the column cannot show a name: the list becomes a dropdown. */
+  const folded = !!embedded && rowW < EMBEDDED_LIST_FOLD_PX;
   const totals = useMemo(() => totalsOf(shown, reviewed), [shown, reviewed]);
+  /* The badge counts the checkout's whole change, not what the pane's own filter box leaves on screen; a failed read reports nothing. */
+  const onTotals = embedded?.onTotals;
+  const embeddedFilter = embedded?.filter ?? "";
+  const checkoutTotals = useMemo(
+    () => (onTotals ? totalsOf(filterRows(visibleRows(rows, showIgnored, showOutside), embeddedFilter), reviewed) : null),
+    [onTotals, rows, showIgnored, showOutside, embeddedFilter, reviewed],
+  );
+  useEffect(() => {
+    if (!onTotals || !checkoutTotals || loading || error) return;
+    onTotals({ files: checkoutTotals.files, add: checkoutTotals.add, del: checkoutTotals.del });
+  }, [onTotals, loading, error, checkoutTotals?.files, checkoutTotals?.add, checkoutTotals?.del]);
 
   // The selection heals to something that is on screen — but only when what it
   // pointed at has actually gone, so a poll cannot move the reader.
@@ -287,7 +319,7 @@ export function DiffPage({ active }: { active: boolean }) {
   /* Walking the list with the keyboard, over the FLAT order the eye sees rather
      than per section — a reader pressing j does not think about which section
      they are about to leave. */
-  const flat = useMemo(() => groups.flatMap((g) => (collapsed.has(g.key) ? [] : g.rows)), [groups, collapsed]);
+  const flat = useMemo(() => groups.flatMap((g) => (collapsed.has(g.key) ? [] : embedded ? newestFirst(g.rows) : g.rows)), [groups, collapsed, !!embedded]);
   const step = useCallback((dir: 1 | -1) => {
     if (!flat.length) return;
     const i = flat.findIndex((r) => r.key === selected?.key);
@@ -308,15 +340,16 @@ export function DiffPage({ active }: { active: boolean }) {
       // Never steal a key from something being typed into — the filter box is
       // right there, and j/k are letters.
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (embedded && !t?.closest?.("[data-side-pane]")) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "j" || e.key === "ArrowDown") { e.preventDefault(); step(1); }
       else if (e.key === "k" || e.key === "ArrowUp") { e.preventDefault(); step(-1); }
-      else if (e.key === "n") { e.preventDefault(); goNextUnread(); }
-      else if (e.key === " " && selected) { e.preventDefault(); toggleReviewed(selected); }
+      else if (e.key === "n" && !embedded) { e.preventDefault(); goNextUnread(); }
+      else if (e.key === " " && selected && !embedded) { e.preventDefault(); toggleReviewed(selected); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, step, goNextUnread, selected, toggleReviewed]);
+  }, [active, !!embedded, step, goNextUnread, selected, toggleReviewed]);
 
   // Keep the selected row in view when the keyboard moved it, and only then:
   // scrolling on every render fights the mouse.
@@ -342,7 +375,7 @@ export function DiffPage({ active }: { active: boolean }) {
               <span><b>{totals.files}</b> {totals.files === 1 ? "file" : "files"}</span>
               <span style={{ color: "var(--success-ink)" }}>+{totals.add}</span>
               <span style={{ color: "var(--error-ink)" }}>−{totals.del}</span>
-              <span aria-hidden className="w-px h-3.5" style={{ background: "var(--surface-line)" }} />
+              {!embedded && <><span aria-hidden className="w-px h-3.5" style={{ background: "var(--surface-line)" }} />
               {/* An object, not only a number: how far through the list you are. */}
               <span className="inline-flex items-center gap-1.5" style={{ color: "var(--text3)" }}>
                 <span role="progressbar" aria-label="Files read" aria-valuemin={0} aria-valuemax={totals.files} aria-valuenow={totals.done}
@@ -350,15 +383,15 @@ export function DiffPage({ active }: { active: boolean }) {
                   <span className="block h-full" style={{ width: `${totals.files ? (totals.done / totals.files) * 100 : 0}%`, background: "var(--success)" }} />
                 </span>
                 {totals.done} read
-              </span>
+              </span></>}
             </>
           )}
         </span>
       </div>
 
-      <div className="flex-1 min-h-0 flex">
-        <div className="shrink-0 flex flex-col min-h-0 agx-sidelist" style={{ width: sidebarW }}>
-          <div className="px-2 py-2 shrink-0 flex items-center gap-1.5 relative">
+      <div ref={rowRef} className="flex-1 min-h-0 flex">
+        {!folded && <div className="shrink-0 flex flex-col min-h-0 agx-sidelist" style={{ width: listW }}>
+          {!embedded && <div className="px-2 py-2 shrink-0 flex items-center gap-1.5 relative">
             <FilterField value={q} onChange={setQ} className="min-w-0 flex-1"
               placeholder="Filter by file, folder or branch…" label="Filter the list" />
             <IconChip on={menu} onClick={() => setMenu((v) => !v)} title="List options" expanded={menu} hasPopup>
@@ -374,9 +407,11 @@ export function DiffPage({ active }: { active: boolean }) {
                 onClose={() => setMenu(false)}
               />
             )}
-          </div>
+          </div>}
 
-          <List
+          {embedded ? (
+            <SideFileList groups={groups} selKey={selected?.key ?? null} onSelect={setSelKey} />
+          ) : <List
             ref={listRef}
             groups={groups} collapsed={collapsed} onToggleSection={toggleSection}
             selKey={selected?.key ?? null} onSelect={setSelKey}
@@ -413,25 +448,32 @@ export function DiffPage({ active }: { active: boolean }) {
               : mode === "committed" ? "No commits in the checkouts in scope"
               : "Nothing uncommitted anywhere"}
             notice={notices({ truncated, failed, hiddenIgnored, hiddenOutside, showIgnored, showOutside })}
-          />
+          />}
 
           {/* Where you are in the reading, and the way to the next file you have
               not ticked: the list is walked in order with j/k, and the unread ones
               are what is left to do. */}
-          <div className="shrink-0 flex items-center gap-2 px-2 py-2 text-[11px]" style={{ borderTop: LINE }}>
+          {!embedded && <div className="shrink-0 flex items-center gap-2 px-2 py-2 text-[11px]" style={{ borderTop: LINE }}>
             <span className="flex-1 truncate" style={{ color: "var(--text3)" }}>
               {shown.length ? `${unread} unread of ${shown.length}` : ""}
             </span>
             <Button disabled={!unread} onClick={goNextUnread} title="Next file you have not marked read (n)">Next unread ↓</Button>
-          </div>
-        </div>
+          </div>}
+        </div>}
 
-        <SidebarGrip />
+        {!folded && <SidebarGrip own={embedded ? { width: listW, min: EMBEDDED_LIST_MIN_PX, max: () => embeddedListMax(rowRef.current?.clientWidth ?? 9999), onWidth: setOwn, onReset: () => setOwn(EMBEDDED_LIST_DEFAULT_PX) } : undefined} />}
 
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+          {folded && flat.length > 0 && (
+            <select aria-label="Changed file" value={selected?.key ?? ""} onChange={(e) => setSelKey(e.target.value)}
+              className="shrink-0 mx-2 my-1.5 text-[11px] rounded px-1 py-1 min-w-0"
+              style={{ background: "var(--surface-inset)", color: "var(--text2)", border: LINE }}>
+              {flat.map((r) => <option key={r.key} value={r.key}>{`${STATUS_STYLE[r.status].ch}  ${r.path}  +${r.additions} −${r.deletions}`}</option>)}
+            </select>
+          )}
           {selected
-            ? <Body row={selected} state={body} mode={mode}
-                split={split} onSplit={(v) => { setSplit(v); setDiffSplit(v); }}
+            ? <Body row={selected} state={body} mode={mode} narrow={!!embedded}
+                split={split} onSplit={(v) => { setSplit(v); if (!embedded) setDiffSplit(v); }}
                 wrap={wrap} onWrap={(v) => { setWrap(v); setDiffWrap(v); }}
                 noWs={noWs} onNoWs={(v) => { setNoWs(v); setDiffNoWhitespace(v); }}
                 at={flat.length ? `${Math.max(0, flat.findIndex((r) => r.key === selected.key)) + 1} / ${flat.length}` : ""}
@@ -497,6 +539,14 @@ function Menu({
 }) {
   const box = useRef<HTMLDivElement>(null);
   useCloseWithOwner(onClose, { from: box });
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const bound = el.closest("[data-side-pane]")?.getBoundingClientRect();
+    const dx = menuShift(r.left, r.right, bound?.left ?? 0, bound?.right ?? window.innerWidth);
+    if (dx) el.style.transform = `translateX(${dx}px)`;
+  }, []);
   useEffect(() => {
     const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) onClose(); };
     const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -517,8 +567,8 @@ function Menu({
       {GROUPS.map((g) => (
         <button
           key={g.id} role="menuitemradio" aria-checked={groupBy === g.id}
-          onClick={() => onGroupBy(g.id)} title={g.hint}
-          className="w-full text-left px-3 py-1.5 text-[11.5px] flex items-center gap-2 hover:bg-white/5"
+          onClick={() => onGroupBy(g.id)} data-tip={g.hint}
+          className="w-full text-left px-3 py-1.5 text-[11.5px] flex items-center gap-2 agx-hover"
           style={{ color: groupBy === g.id ? "var(--text)" : "var(--text2)" }}
         >
           <Tick on={groupBy === g.id} />
@@ -531,14 +581,14 @@ function Menu({
           <p className="px-3 pb-1.5 text-[10px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>Also show</p>
           {(hiddenIgnored > 0 || showIgnored) && (
             <button role="menuitemcheckbox" aria-checked={showIgnored} onClick={onShowIgnored}
-              className="w-full text-left px-3 py-1.5 text-[11.5px] flex items-center gap-2 hover:bg-white/5" style={{ color: "var(--text2)" }}>
+              className="w-full text-left px-3 py-1.5 text-[11.5px] flex items-center gap-2 agx-hover" style={{ color: "var(--text2)" }}>
               <Tick on={showIgnored} />
               Files git ignores{hiddenIgnored > 0 && <span className="ml-auto tabular-nums" style={{ color: "var(--text4)" }}>{hiddenIgnored}</span>}
             </button>
           )}
           {(hiddenOutside > 0 || showOutside) && (
             <button role="menuitemcheckbox" aria-checked={showOutside} onClick={onShowOutside}
-              className="w-full text-left px-3 py-1.5 text-[11.5px] flex items-center gap-2 hover:bg-white/5" style={{ color: "var(--text2)" }}>
+              className="w-full text-left px-3 py-1.5 text-[11.5px] flex items-center gap-2 agx-hover" style={{ color: "var(--text2)" }}>
               <Tick on={showOutside} />
               Files outside this project{hiddenOutside > 0 && <span className="ml-auto tabular-nums" style={{ color: "var(--text4)" }}>{hiddenOutside}</span>}
             </button>
@@ -608,7 +658,7 @@ function List({
                 <span className="flex items-baseline gap-2 min-w-0">
                   <span className="text-[12px] font-semibold truncate shrink-0 max-w-[85%]" style={{ color: "var(--text)" }}>{g.label}</span>
                   {h && (
-                    <span className={h.shared ? "text-[9.5px] px-1 rounded shrink-0" : "text-[10px] truncate min-w-0"} title={h.title}
+                    <span className={h.shared ? "text-[9.5px] px-1 rounded shrink-0" : "text-[10px] truncate min-w-0"} data-tip={h.title}
                       style={h.shared
                         ? { color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 15%, transparent)" }
                         : { color: "var(--text3)", flex: "1 1 0" }}>
@@ -642,7 +692,7 @@ function List({
         );
       })}
       {inc.more && (
-        <button onClick={inc.showAll} className="w-full py-2 text-[11px] rounded-md hover:bg-white/5" style={{ color: "var(--text3)" }}>
+        <button onClick={inc.showAll} className="w-full py-2 text-[11px] rounded-md agx-hover" style={{ color: "var(--text3)" }}>
           Show the rest
         </button>
       )}
@@ -679,7 +729,7 @@ function FileRow({ r, selected, reviewed, onSelect, onToggleReviewed, authors }:
       data-sel={selected ? "1" : undefined}
       role="button" tabIndex={-1}
       onClick={onSelect}
-      title={r.path}
+      data-tip={r.path}
       className="w-full flex items-center gap-2 pl-3 pr-1.5 py-1.5 cursor-default"
       style={{
         minHeight: 46,
@@ -726,12 +776,12 @@ function FileRow({ r, selected, reviewed, onSelect, onToggleReviewed, authors }:
 
       <button
         onClick={(e) => { e.stopPropagation(); onToggleReviewed(); }}
-        title={reviewed ? "Mark as not read" : "Mark as read"}
+        data-tip={reviewed ? "Mark as not read" : "Mark as read"}
         aria-pressed={reviewed}
         className="shrink-0 inline-flex items-center justify-center rounded-lg"
         style={{ width: HIT, height: HIT, color: reviewed ? "var(--success)" : "var(--text4)" }}
       >
-        <svg width={16} height={16} viewBox="0 0 16 16" fill="none" aria-hidden>
+        <svg width={ICON.md} height={ICON.md} viewBox="0 0 16 16" fill="none" aria-hidden>
           <circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.4" fill={reviewed ? "currentColor" : "none"} opacity={reviewed ? 1 : 0.6} />
           {reviewed && <path d="M5 8.3l2 2 4-4.4" stroke="var(--bg)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />}
         </svg>
@@ -745,7 +795,7 @@ function FileRow({ r, selected, reviewed, onSelect, onToggleReviewed, authors }:
 function StatusLetter({ r, size = 18 }: { r: ChangeRow; size?: number }) {
   const s = STATUS_STYLE[r.status];
   return (
-    <span aria-hidden title={statusWord(r) || r.status} className="shrink-0 inline-flex items-center justify-center rounded-md font-bold"
+    <span aria-hidden data-tip={statusWord(r) || r.status} className="shrink-0 inline-flex items-center justify-center rounded-md font-bold"
       style={{
         width: size, height: size, fontSize: size > 18 ? 11 : 10, color: s.c,
         background: `color-mix(in srgb, ${s.c} 13%, transparent)`, boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${s.c} 30%, transparent)`,
@@ -755,9 +805,11 @@ function StatusLetter({ r, size = 18 }: { r: ChangeRow; size?: number }) {
 
 /* ── the diff ─────────────────────────────────────────────────────────────── */
 
-function Body({ row, state, mode, split, onSplit, wrap, onWrap, noWs, onNoWs, at, onStep, comments, staleIds, jumpTo, onJumped }: {
+function Body({ row, state, mode, narrow, split, onSplit, wrap, onWrap, noWs, onNoWs, at, onStep, comments, staleIds, jumpTo, onJumped }: {
   row: ChangeRow;
   state: DiffState;
+  /** Drawn beside a terminal: the file header wraps its buttons under the name instead of clipping them. */
+  narrow?: boolean;
   split: boolean; onSplit: (v: boolean) => void;
   wrap: boolean; onWrap: (v: boolean) => void;
   /** Fold whitespace-only changes into context — see diffNoWhitespace.ts. */
@@ -862,7 +914,7 @@ function Body({ row, state, mode, split, onSplit, wrap, onWrap, noWs, onNoWs, at
     const end = start + (side === "RIGHT" ? h.newLines : h.oldLines) - 1;
     return (
       <button onClick={() => { if (ready) startDraft(side, start, end, true); }} className="agx-btn rounded px-1.5 text-[10.5px]"
-        title="Comment on this whole hunk" style={{ color: "var(--text3)", fontFamily: "var(--font-sans, inherit)" }}>
+        data-tip="Comment on this whole hunk" style={{ color: "var(--text3)", fontFamily: "var(--font-sans, inherit)" }}>
         Comment
       </button>
     );
@@ -918,7 +970,7 @@ function Body({ row, state, mode, split, onSplit, wrap, onWrap, noWs, onNoWs, at
     <>
       {/* The six diff controls live here, once, shared with the commit modal; the list's
           own controls (filter, grouping) live with the list. */}
-      <div className="shrink-0 flex flex-wrap items-center gap-1.5 gap-y-1 px-3 py-1.5" style={{ minHeight: 44, borderBottom: LINE }}>
+      {!narrow && <div className="shrink-0 flex flex-wrap items-center gap-1.5 gap-y-1 px-3 py-1.5" style={{ minHeight: 44, borderBottom: LINE }}>
         <DiffToolbar split={split} onSplit={onSplit} wrap={wrap} onWrap={onWrap} noWs={noWs} onNoWs={onNoWs}
           bold={bold} onBold={setBold} themePref={themePref} onTheme={setThemePref} themeError={hiliteError} />
         <span className="flex-1" />
@@ -929,9 +981,16 @@ function Body({ row, state, mode, split, onSplit, wrap, onWrap, noWs, onNoWs, at
         <Button square tone="quiet" label="Next file (j)" title="Next file (j)" onClick={() => onStep(1)}>
           <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" aria-hidden><path d="M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
         </Button>
-      </div>
+      </div>}
 
-      <div className="flex items-center gap-2.5 px-3.5 py-2.5 shrink-0" style={{ borderBottom: LINE, background: "var(--surface-card)" }}>
+      {narrow && (
+        <div className="shrink-0 flex items-center gap-2 px-3 py-1.5 min-w-0" style={{ borderBottom: LINE, background: "var(--surface-card)" }}>
+          <StatusLetter r={row} />
+          <span className="truncate min-w-0 text-[11.5px] font-semibold" style={{ color: "var(--text)" }} data-tip={row.path}>{row.path}</span>
+        </div>
+      )}
+
+      {!narrow && <div className="flex items-center gap-2.5 px-3.5 py-2.5 shrink-0" style={{ borderBottom: LINE, background: "var(--surface-card)" }}>
         <StatusLetter r={row} size={22} />
         <div className="min-w-0 flex-1">
           <p className="flex flex-wrap items-center gap-2 text-[13px] font-semibold" style={{ color: "var(--text)" }}>
@@ -939,7 +998,7 @@ function Body({ row, state, mode, split, onSplit, wrap, onWrap, noWs, onNoWs, at
             {statusWord(row) && <Badge tint={STATUS_STYLE[row.status].c} wash={15} tight>{statusWord(row)}</Badge>}
             {row.branch && <Badge tint="var(--text3)" tight>{row.branch}</Badge>}
           </p>
-          <p className="mt-0.5 text-[11px] truncate" style={{ color: "var(--text3)" }} title={`${row.repoRoot}/${row.path}`}>
+          <p className="mt-0.5 text-[11px] truncate" style={{ color: "var(--text3)" }} data-tip={`${row.repoRoot}/${row.path}`}>
             {row.path}
             {row.oldPath && <> · renamed from {row.oldPath}</>}
             {row.commit && <> · {row.commit.subject}</>}
@@ -952,11 +1011,13 @@ function Body({ row, state, mode, split, onSplit, wrap, onWrap, noWs, onNoWs, at
             The line is the first hunk's, not line 1: opening a 900-line file
             you came to BECAUSE of a diff and landing at the top means scrolling
             back to where you already were. */}
-        <Button onClick={openFile} disabled={row.status === "deleted"} title="Open it here, at its first change">
-          <IconLabel icon={<FileIcon size={ICON.xs} />}>Open</IconLabel>
-        </Button>
-        <Button onClick={copy} tint={copied ? "var(--success)" : undefined} title="Copy the full path">{copied ? "Copied" : "Copy path"}</Button>
-      </div>
+        <div className={`flex items-center gap-2.5 shrink-0 ${narrow ? "w-full justify-end" : ""}`}>
+          <Button onClick={openFile} disabled={row.status === "deleted"} title="Open it here, at its first change">
+            <IconLabel icon={<FileIcon size={ICON.xs} />}>Open</IconLabel>
+          </Button>
+          <Button onClick={copy} tint={copied ? "var(--success)" : undefined} title="Copy the full path">{copied ? "Copied" : "Copy path"}</Button>
+        </div>
+      </div>}
 
       <div ref={scroller} className="agx-scroll flex-1 min-h-0 overflow-auto">
         {state.loading && !state.diff && <Blank title="Reading the diff…" icon="doc" />}
@@ -1001,7 +1062,7 @@ function Blank({ title, icon, tone, children }: { title: string; icon: "doc" | "
       <div className="max-w-[440px] flex flex-col items-center gap-2.5 text-center text-[12px]" style={{ color: tone === "error" ? "var(--error)" : "var(--text3)" }}>
         <span aria-hidden className="flex items-center justify-center rounded-xl"
           style={{ width: 46, height: 46, background: "var(--surface-inset)", boxShadow: "inset 0 0 0 1px var(--surface-line)" }}>
-          <svg width={22} height={22} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <svg width={ICON.xl} height={ICON.xl} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             {icon === "doc" && <path d="M4 1.5h5l3.5 3.5v9H4ZM9 1.5V5h3.5" />}
             {icon === "info" && <><circle cx="8" cy="8" r="6" /><path d="M8 7.5V11M8 5v.2" /></>}
             {icon === "img" && <><rect x="2" y="3" width="12" height="10" rx="1.5" /><circle cx="6" cy="7" r="1.2" /><path d="M2.5 12l4-3.5 3 2.5 2-1.5 2 2" /></>}

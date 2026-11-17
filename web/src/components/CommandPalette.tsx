@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { THEMES, chooseTheme } from "../lib/themes.ts";
@@ -7,7 +7,11 @@ import { useModalDialog } from "../lib/focusTrap.ts";
 import { api } from "../lib/api.ts";
 import { openSettings } from "../lib/openSettings.ts";
 import { openFlightPlan } from "../lib/flightPlanNav.ts";
+import { openTutorial } from "../lib/setupTutorial.ts";
 import { INPUT, INPUT_STYLE, EDGE, ListRow } from "./workspace/Chrome.tsx";
+import { jiraQueriesNow, onJiraQueries } from "../lib/jiraQueryPalette.ts";
+import { setJiraSearch } from "../lib/jiraSearchBus.ts";
+import { rankQueries } from "./jira/list/tabsModel.ts";
 
 interface Cmd {
   id: string;
@@ -54,6 +58,7 @@ export function CommandPalette({
 }) {
   const [q, setQ] = useState("");
   const modal = useModalDialog(open, "Command palette");
+  const queries = useSyncExternalStore(onJiraQueries, jiraQueriesNow, jiraQueriesNow);
   const [sel, setSel] = useState(0);
 
   const cmds = useMemo<Cmd[]>(() => {
@@ -66,6 +71,9 @@ export function CommandPalette({
     list.push({ id: "terminal", group: "View", label: "Terminal — a real shell in any repo/worktree", run: () => onTerminal() });
     // Settings used to carry a page of links to these; the palette is where they live now.
     list.push({ id: "help", group: "View", label: "Legend & shortcuts — what the colours mean, every key binding", run: () => onHelp() });
+    // The Help entries the tour and the setup checks promise: resume from the first step not seen.
+    list.push({ id: "tutorial", group: "View", label: "Resume tutorial — the short tour, from where you stopped", run: () => openTutorial() });
+    list.push({ id: "setup-checks", group: "View", label: "Setup checks — is it all working", run: () => openSettings("about") });
     // Activity has no place in the settings nav; this and a row on Data & privacy open it.
     list.push({ id: "activity-log", group: "View", label: "Activity log — what the app itself has been doing", run: () => openSettings("log") });
     // Flight plan has no rail icon: the palette is a permanent way in, beside the chip, the Agents link and Settings.
@@ -93,10 +101,12 @@ export function CommandPalette({
     return list;
   }, [apps, types, onFilter, onWindow, onTheme, onHelp, onSkills, onChanges, onGit, onPr, onDocker, onTerminal, onClear, onZoom]);
 
-  const filtered = useMemo(
-    () => (q ? cmds.filter((c) => (c.group + " " + c.label).toLowerCase().includes(q.toLowerCase())) : cmds),
-    [cmds, q]
-  );
+  /* The Jira view publishes its saved searches only while it is on screen. For a typed query they come first, matched on
+     the name only (long JQL would match most command words); an empty query lists the app's commands as it always did. */
+  const filtered = useMemo(() => {
+    const saved: Cmd[] = q ? rankQueries(queries.map((s) => ({ ...s, jql: s.name, search: s.jql })), q).map((s) => ({ id: "jira-query:" + s.id, group: "Jira saved search", label: s.name, hint: s.search, run: () => setJiraSearch(s.search) })) : [];
+    return [...saved, ...(q ? cmds.filter((c) => (c.group + " " + c.label).toLowerCase().includes(q.toLowerCase())) : cmds)];
+  }, [cmds, q, queries]);
 
   useEffect(() => {
     setSel(0);

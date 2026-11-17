@@ -17,7 +17,7 @@ export function MapStrip({ groups, inFilter, selected, onPick }: {
     <div className="dk-fmap" role="group" aria-label="One square per container">
       {groups.map((g) => (
         <div className="dk-mg" key={g.key}>
-          <span className="l" title={g.label}>{g.label}</span>
+          <span className="l" data-tip={g.label}>{g.label}</span>
           <div className="sq">
             {stackMap(g.containers, { inFilter, selected }).map((s) => {
               const c = g.containers.find((x) => x.id === s.id)!;

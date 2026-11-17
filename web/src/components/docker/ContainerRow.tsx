@@ -41,7 +41,7 @@ export function ActionButton({ c, readOnly, busy, onVerb, labelled }: {
   const icon = busy ? <span className="dk-spin" style={{ display: "flex" }}><RefreshIcon size={ICON.sm} /></span> : ICONS[a.verb];
   return (
     <button type="button" className={labelled ? "dk-chip" : "dk-act"} data-tone={labelled ? "" : undefined} style={{ "--tone": a.tone } as CSSProperties}
-      data-verb={a.verb} aria-label={`${a.label} ${displayName(c)}`} title={a.reason ?? `${a.label}${a.verb === "rm" ? "…" : ""}`}
+      data-verb={a.verb} aria-label={`${a.label} ${displayName(c)}`} data-tip={a.reason ?? `${a.label}${a.verb === "rm" ? "…" : ""}`}
       disabled={a.disabled || busy} aria-busy={busy || undefined}
       onClick={(e) => { e.stopPropagation(); onVerb(a.verb); }}>
       {icon}{labelled && a.label}
@@ -52,15 +52,15 @@ export function ActionButton({ c, readOnly, busy, onVerb, labelled }: {
 export function MoreButton({ c, open, onMenu, chip }: { c: DockerContainer; open: boolean; onMenu: (el: HTMLElement) => void; chip?: boolean }) {
   return (
     <button type="button" className={chip ? "dk-chip sq" : "dk-more"} data-open={open || undefined} aria-label={`More for ${displayName(c)}`}
-      aria-haspopup="menu" aria-expanded={open} title="More"
+      aria-haspopup="menu" aria-expanded={open} data-tip="More"
       onClick={(e) => { e.stopPropagation(); onMenu(e.currentTarget); }}>
       <MoreIcon size={ICON.sm} />
     </button>
   );
 }
 
-export function ContainerRow({ c, stat, selected, dense, readOnly, busy, confirm, menuOpen, onSelect, onVerb, onMenu, onOpenPort, onConfirm }: {
-  c: DockerContainer; stat?: DockerStat; selected: boolean; dense: boolean; readOnly: boolean; busy: boolean;
+export function ContainerRow({ c, stat, selected, readOnly, busy, confirm, menuOpen, onSelect, onVerb, onMenu, onOpenPort, onConfirm }: {
+  c: DockerContainer; stat?: DockerStat; selected: boolean; readOnly: boolean; busy: boolean;
   /** The verb waiting for a yes, inline under this row. */
   confirm: "stop" | "rm" | null;
   menuOpen: boolean;
@@ -81,9 +81,9 @@ export function ContainerRow({ c, stat, selected, dense, readOnly, busy, confirm
   return (
     <>
       <div role="row" tabIndex={0} className="dk-cols dk-r" aria-label={`${name}, ${KINDS[kind].word}`}
-        data-sel={selected || undefined} data-need={needsYou(c) || undefined} data-off={off || undefined} data-dense={dense || undefined}
+        data-sel={selected || undefined} data-need={needsYou(c) || undefined} data-off={off || undefined}
         data-cid={selected ? "active" : undefined}
-        title={[c.name, c.image, c.status, c.ports, c.owner ? ownerTitle(c.owner) : "",
+        data-tip={[c.name, c.image, c.status, c.ports, c.owner ? ownerTitle(c.owner) : "",
           c.healthError ? `health: ${c.healthError}` : "", c.restarts ? `restarted ${c.restarts}×` : ""].filter(Boolean).join("\n")}
         onClick={onSelect}
         onKeyDown={(e) => { if (e.key === "Enter" && e.target === e.currentTarget) { e.preventDefault(); onSelect(); } }}>
@@ -100,15 +100,15 @@ export function ContainerRow({ c, stat, selected, dense, readOnly, busy, confirm
               </Badge>
             )}
           </div>
-          {!dense && <span className="dk-sb"><span data-tone={why.tone || undefined}>{why.text}</span></span>}
+          <span className="dk-sb"><span data-tone={why.tone || undefined}>{why.text}</span></span>
         </div>
         <Meter label="CPU" v={m.cpu} hot={m.cpuHot} />
         <Meter label="Memory" v={m.mem} hot={m.memHot} sub={m.memSub} />
         <div style={portStyle}>
           {port.kind === "web"
-            ? <button type="button" className="dk-port" data-port="web" title={`${port.title} in the browser tab`} aria-label={`Open ${port.label}`}
-              onClick={(e) => { e.stopPropagation(); onOpenPort(port.url!); }}><ExtIcon size={12} />{port.label}</button>
-            : <span className="dk-port" data-port={port.kind} title={port.title} aria-label={port.kind === "none" ? "no port" : undefined}>{port.label}</span>}
+            ? <button type="button" className="dk-port" data-port="web" data-tip={`${port.title} in the browser tab`} aria-label={`Open ${port.label}`}
+              onClick={(e) => { e.stopPropagation(); onOpenPort(port.url!); }}><ExtIcon size={ICON.xs} />{port.label}</button>
+            : <span className="dk-port" data-port={port.kind} data-tip={port.title} aria-label={port.kind === "none" ? "no port" : undefined}>{port.label}</span>}
         </div>
         <ActionButton c={c} readOnly={readOnly} busy={busy} onVerb={onVerb} />
         <MoreButton c={c} open={menuOpen} onMenu={onMenu} />

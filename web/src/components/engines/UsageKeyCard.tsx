@@ -2,11 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../../lib/api.ts";
 import { USAGE_KEY_STEPS } from "../../lib/usageKeyGuide.ts";
 import { Button, INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
-import { SettingsCard, StatusBadge } from "../SettingsKit.tsx";
+import { StatusBadge } from "../SettingsKit.tsx";
 import { SettingRow } from "../SettingRow.tsx";
+import { SettingRow as ShellRow } from "../settings/shell/SettingRow.tsx";
 import type { ProviderUsage } from "../../../../shared/types.ts";
 import { keyStatusChip, lastReading } from "../../lib/opencodeKey.ts";
 import { openSettings } from "../../lib/openSettings.ts";
+import { usePageLoading } from "../settings/shell/pageLoad.tsx";
 
 /**
  * The optional console key, as a field on the engines page.
@@ -104,13 +106,17 @@ export function UsageKeyFields({ set, setSet, onChanged }: {
 export function OpenCodeGoCard() {
   const { set, setSet } = useOpenCodeKey();
   const [row, setRow] = useState<ProviderUsage | null>(null);
+  // `row` stays null when OpenCode has no reading, so "read once" is its own flag.
+  const [readOnce, setReadOnce] = useState(false);
+  usePageLoading("opencode/usage", !readOnce);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
   const load = useCallback(() => {
     void api.providerUsage()
       .then((rows) => setRow(rows.find((r) => r.provider === "opencode") ?? null))
-      .catch(() => setRow(null));
+      .catch(() => setRow(null))
+      .finally(() => setReadOnce(true));
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -127,19 +133,19 @@ export function OpenCodeGoCard() {
   const chip = keyStatusChip(set, row);
   const last = lastReading(row);
   return (
-    <SettingsCard title="OpenCode Go" desc="This PC's worker turns are counted without a key; a console key adds the whole plan's own numbers."
-      status={<StatusBadge tone={chip.tone}>{chip.text}</StatusBadge>}>
-      <SettingRow label="Usage key" hint="The key is kept with the engine it belongs to."
-        control={<Button onClick={() => openSettings("engines")}>{set ? "Manage in Agent engines" : "Add in Agent engines"}</Button>} />
-      <SettingRow label="Last reading" hint={row?.usageNote}
-        status={<StatusBadge tone={last.tone}>{last.value}</StatusBadge>}
+    <>
+      <ShellRow kind="control" agentExempt label="OpenCode Go usage key" help="The key lives with its engine in Agent engines."
+        control={<span className="flex items-center gap-2"><StatusBadge tone={chip.tone}>{chip.text}</StatusBadge>
+          <Button onClick={() => openSettings("engines")}>{set ? "Manage in Agent engines" : "Add in Agent engines"}</Button></span>} />
+      <ShellRow kind="control" agentExempt label="Last reading" help={row?.usageNote || (!row?.available && row?.note) || "The newest plan numbers agentglass has."}
         control={<span className="flex items-center gap-2">
+          <StatusBadge tone={last.tone}>{last.value}</StatusBadge>
           {last.source && <span className="chip text-[10px] t-dim">{last.source}</span>}
           {last.age && <span className="text-[10px] t-dim">{last.age}</span>}
         </span>} />
-      <SettingRow label="Read the console now" hint="One read of the console with the stored key, or the signed-in page."
+      <ShellRow kind="control" agentExempt label="Read the console now" help="Reads the console once, with the stored key or your sign-in."
         control={<Button onClick={() => void calibrate()} pending={busy}>Read the console now</Button>} />
-      {note && <div role="alert" className="agx-field-e" style={{ padding: "0 18px 12px" }}>{note}</div>}
-    </SettingsCard>
+      {note && <div role="alert" className="agx-field-e px-3 pb-2.5">{note}</div>}
+    </>
   );
 }

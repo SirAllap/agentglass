@@ -25,7 +25,7 @@ export function PortNoticeBar({ notice, onOpenSettings, onDismiss }: {
         <button type="button" className="setup-btn setup-btn-secondary setup-btn-xs" onClick={onOpenSettings}>
           Open Settings › Remote
         </button>
-        <button type="button" className="setup-btn setup-btn-quiet setup-banner-x" aria-label="Dismiss" title="Dismiss" onClick={onDismiss}>
+        <button type="button" className="setup-btn setup-btn-quiet setup-banner-x" aria-label="Dismiss" data-tip="Dismiss" onClick={onDismiss}>
           <X />
         </button>
       </span>

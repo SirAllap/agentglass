@@ -17,7 +17,7 @@ describe("re-request review from the sidebar", () => {
     expect(body).toContain("!r.isBot");
     expect(body).toContain("!r.isTeam");
     expect(body).toContain("r.login !== author");
-    expect(body).toContain('title={ask && ask !== "busy" ? `Could not ask again: ${ask}` : "Re-request review"}');
+    expect(body).toContain('data-tip={ask && ask !== "busy" ? `Could not ask again: ${ask}` : "Re-request review"}');
   });
 
   test("asks through the reviewers endpoint, adding that one login, behind the layer", () => {

@@ -680,9 +680,9 @@ describe("the tracker block is there in a tracker repository, and only there", (
     return i < 0 ? "" : html.slice(html.lastIndexOf("<div", i), html.indexOf('data-pr="8"', i) > 0 ? html.indexOf('data-pr="8"', i) : undefined);
   };
 
-  test("says so when this pull request names no card but its repository links them", () => {
-    expect(inCard({ headRefName: "chore/release-notes" })).toContain("No card");
-    expect(tips(inCard({ headRefName: "chore/release-notes" }))).toContainEqual({ name: "No card linked", text: "Nothing in Tasks points to this pull request yet." });
+  test("draws nothing when this pull request names no card but its repository links them", () => {
+    // The user cannot fill it from the card: the states mockup collapses it.
+    expect(inCard({ headRefName: "chore/release-notes" })).not.toContain("No card");
   });
 
   test("and tells that apart from a card nobody has cached", () => {
@@ -709,8 +709,8 @@ describe("the tracker block is there in a tracker repository, and only there", (
 
   test("and not when nothing is connected, whatever the branches say", () => {
     const html = render({ mine: [pr(7, { headRefName: "ORBIT-1042-a-thing" })], total: 1, hasTaskProvider: false });
-    /* It says so, in a dashed slot of the same height, instead of drawing a card, an id or a hint it cannot back. */
-    expect(html).toContain("No tracker");
+    /* Nothing is drawn: no card, id or hint it cannot back, and no "No tracker" note. */
+    expect(html).not.toContain("No tracker");
     expect(html).not.toContain("<span>not found</span>");
     expect(html).not.toContain("Open ORBIT-1042 in Tasks");
   });

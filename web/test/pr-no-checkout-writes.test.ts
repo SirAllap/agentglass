@@ -43,7 +43,8 @@ describe("a checkout-less pull request", () => {
     for (const s of ["CLEAN", "UNSTABLE", "HAS_HOOKS"]) expect(githubWillMerge(s)).toBe(true);
     for (const s of ["BLOCKED", "DIRTY", "DRAFT", "BEHIND", "UNKNOWN"]) expect(githubWillMerge(s)).toBe(false);
     expect(code(src)).toMatch(/const canMerge = githubWillMerge\(d\.mergeState\);/);
-    expect(code(src)).toMatch(/const mergeDisabled = busy \|\| !!mergeWork \|\| !!refusal \|\| conflicted \|\| \(!canMerge && !isBehind\);/);
+    // 43528472c added the person's merge lock (`|| !!held`) on purpose: a locked PR greys Merge too.
+    expect(code(src)).toMatch(/const mergeDisabled = busy \|\| !!mergeWork \|\| !!landing \|\| !!refusal \|\| conflicted \|\| \(!canMerge && !isBehind\) \|\| !!held;/);
   });
 
   test("the strip says what is true", () => {

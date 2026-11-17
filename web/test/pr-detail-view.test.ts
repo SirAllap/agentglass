@@ -47,6 +47,12 @@ describe("dockReason", () => {
     expect(dockReason({ ...base, state: "MERGED" })).toEqual({ kind: "closed", text: "Already merged" });
     expect(dockReason({ ...base, state: "CLOSED" }).kind).toBe("closed");
   });
+  test("only checks and review missing: the footer says what unlocks Merge", () => {
+    expect(dockReason({ ...base, canMerge: false, missing: { checks: true, review: true } }).text).toBe("Merge unlocks when the required checks pass and one reviewer approves.");
+    expect(dockReason({ ...base, canMerge: false, missing: { checks: false, review: true } }).text).toBe("Merge unlocks when one reviewer approves.");
+    expect(dockReason({ ...base, canMerge: false, otherBlockers: true, missing: { checks: true, review: true } }).text).toBe(base.blockedWhy);
+    expect(dockReason({ ...base, canMerge: false, missing: { checks: false, review: false } }).text).toBe("Checks are failing");
+  });
   test("merging", () => expect(dockReason({ ...base, merging: true }).text).toBe("Merging…"));
 });
 
@@ -90,5 +96,22 @@ describe("dockSlots: three slots, dimmed in place", () => {
     const x = dockSlots({ ...s, state: "MERGED", canUpdate: true, conflicted: true });
     expect(x.update.enabled).toBe(false);
     expect(x.resolve.enabled).toBe(false);
+  });
+});
+
+describe("a merge running on another pull request", () => {
+  // One merge at a time: a second pull request opened while the first one's card
+  // is still moving waits for it, and must not read as merging itself.
+  const base = { state: "OPEN" as const, merging: false, canMerge: true, isBehind: false, base: "main", blockedWhy: "" };
+  test("says which one it waits for", () => expect(dockReason({ ...base, landing: 1042 })).toEqual({ kind: "blocked", text: "Waiting for #1042 to finish landing" }));
+  test("its own merge still says merging", () => expect(dockReason({ ...base, merging: true, landing: 1042 }).text).toBe("Merging…"));
+});
+
+describe("the panel's merge progress belongs to one pull request", () => {
+  const src = require("node:fs").readFileSync(new URL("../src/components/PrPanel.tsx", import.meta.url), "utf8") as string;
+  test("the state carries the number, and the overview gets it only for that number", () => {
+    expect(src).toContain("useState<{ n: number; what: string } | null>(null)");
+    expect(src).toContain('mergeWork={mergeWork?.n === d.number ? mergeWork.what : ""}');
+    expect(src).not.toContain("busy={busy || !!mergeWork}");
   });
 });

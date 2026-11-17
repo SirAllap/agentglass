@@ -6,6 +6,7 @@
  * the same way.
  */
 import { api } from "./api.ts";
+import { intervalWhileVisible } from "./visibleInterval.ts";
 import { isPolarisSend, type SettingRequestView } from "../../../shared/settingClass.ts";
 
 let items: readonly SettingRequestView[] = [];
@@ -13,8 +14,24 @@ const subs = new Set<() => void>();
 
 export const settingsRequests = {
   list: (): readonly SettingRequestView[] => items,
-  subscribe(fn: () => void): () => void { subs.add(fn); return () => { subs.delete(fn); }; },
+  subscribe(fn: () => void): () => void {
+    subs.add(fn);
+    if (!net) net = intervalWhileVisible(() => { void settingsRequestsChanged(); }, SAFETY_MS);
+    return () => {
+      subs.delete(fn);
+      if (subs.size === 0 && net) { net(); net = null; }
+    };
+  },
 };
+
+/* The delivery path is the `settings-requests` frame, plus a refetch at every socket (re)connect
+   (useLive.ts) and on return to a hidden window. This is only the net under it: a frame lost
+   with the socket still up would leave an agent waiting on the person with nothing shown.
+   Worst-case delay 60 s, visible window only. It was a 5 s poll in the agents view and was
+   dropped for idle CPU (renderer ~2.6% idle, measured); the frames carry no sequence number, so
+   a gap cannot be detected and this stays. */
+export const SAFETY_MS = 60_000;
+let net: (() => void) | null = null;
 
 /** Fetch the list again; a failed read keeps what was shown. */
 export async function settingsRequestsChanged(): Promise<void> {
@@ -27,7 +44,18 @@ export async function settingsRequestsChanged(): Promise<void> {
 /** An answer the server refused after the request had already left its list: the card is gone, so
  *  the refusal is kept here for the person to read (measured: Approve on a setting that changed since
  *  made the card vanish with no word, and it looked applied). */
-export interface SettingRefusal { id: string; who: string; title: string; approve: boolean; error: string }
+export interface SettingRefusal { id: string; who: string; title: string; approve: boolean; error: string; at: number }
+
+/** A refusal is news about an ask that is already over: nothing waits on the person, so it
+ *  leaves by itself rather than being one more card to find and close. */
+export const REFUSAL_MS = 15_000;
+
+/** Which refusals are still on screen at `now`. Pure, so the life of the card is tested
+ *  without a clock or a render (web/test/settings-refusals.test.ts). */
+export function liveRefusals(list: readonly SettingRefusal[], now: number): readonly SettingRefusal[] {
+  return list.filter((x) => now - x.at < REFUSAL_MS);
+}
+
 let refusals: readonly SettingRefusal[] = [];
 export const settingsRefusals = {
   list: (): readonly SettingRefusal[] => refusals,
@@ -42,7 +70,7 @@ export async function answerSettingsRequest(id: string, approve: boolean, about:
   await settingsRequestsChanged();
   const error = r?.ok ? null : r?.error ?? "the server did not answer";
   if (error && !items.some((x) => x.id === id)) {
-    refusals = [...refusals.filter((x) => x.id !== id), { id, ...about, approve, error }];
+    refusals = [...refusals.filter((x) => x.id !== id), { id, ...about, approve, error, at: Date.now() }];
     for (const f of subs) f();
   }
   return error;

@@ -5,12 +5,12 @@
  * filter, its state and its counts are gone. Open is the whole board.
  */
 import { describe, expect, it } from "bun:test";
-import { BOARD_IS_WIDE } from "../src/lib/prLanes.ts";
+import { BOARD_IS_WIDE } from "../../shared/prLanes.ts";
 
 const read = (rel: string) => Bun.file(new URL(rel, import.meta.url)).text();
 const board = await read("../src/components/TriageBoard.tsx");
 const panel = await read("../src/components/PrPanel.tsx");
-const lanes = await read("../src/lib/prLanes.ts");
+const lanes = await read("../../shared/prLanes.ts");
 
 describe("no board views", () => {
   it("the filter code is gone from the lanes, the board and the panel", () => {

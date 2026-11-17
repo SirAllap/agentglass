@@ -27,30 +27,83 @@ import { trackerSetup, type TrackerSetup } from "./trackerSetup.ts";
 export interface TrackerView {
   setup: TrackerSetup;
   choice: TrackerChoice;
+  /** The repository's ClickUp-writes switch: off until somebody turns it on,
+   *  and absent reads as off. A fallback tracker is read-only without it (see
+   *  `clickupReadOnly`). */
+  writesOn?: boolean;
 }
 
 type Choices = Record<string, Exclude<TrackerChoice, "auto">>;
+type Writes = Record<string, true>;
 const TTL = 60_000;
-let held: { at: number; value: Choices } | null = null;
-let inflight: Promise<Choices> | null = null;
+let held: { at: number; value: { choices: Choices; writes: Writes } } | null = null;
+let inflight: Promise<{ choices: Choices; writes: Writes }> | null = null;
 
-export function trackerChoices(): Promise<Choices> {
+/** Both answers come in one read, so a screen asking for either never
+ *  fetches twice. A failed read is "auto everywhere, writes off", and is not
+ *  kept: the next ask tries again. */
+function load(): Promise<{ choices: Choices; writes: Writes }> {
   if (held && Date.now() - held.at < TTL) return Promise.resolve(held.value);
-  // A failed read is "auto everywhere", and is not kept: the next ask tries again.
   inflight ??= api.trackerProjects()
-    .then((r) => { const value = r.projects ?? {}; if (r.ok) held = { at: Date.now(), value }; return value; })
-    .catch(() => ({} as Choices))
+    .then((r) => {
+      const value = { choices: r.projects ?? {}, writes: r.clickupWrites ?? {} };
+      if (r.ok) held = { at: Date.now(), value };
+      return value;
+    })
+    .catch(() => ({ choices: {}, writes: {} }))
     .finally(() => { inflight = null; });
   return inflight;
 }
 
+export function trackerChoices(): Promise<Choices> {
+  return load().then((a) => a.choices);
+}
+
+/** The repositories whose ClickUp writes were turned back on. */
+export function clickupWrites(): Promise<Writes> {
+  return load().then((a) => a.writes);
+}
+
 /** Settings calls this after a save so the next reader sees it at once. */
-export function rememberTrackerChoices(value: Choices): void { held = { at: Date.now(), value }; }
+export function rememberClickupWrites(value: Writes): void {
+  held = { at: Date.now(), value: { choices: held?.value.choices ?? {}, writes: value } };
+}
+
+/** The same, for a saved tracker choice. */
+export function rememberTrackerChoices(value: Choices): void {
+  held = { at: Date.now(), value: { choices: value, writes: held?.value.writes ?? {} } };
+}
 export function __forgetTrackerChoices(): void { held = null; inflight = null; }
 
 /** The choice for one repository; "auto" for none, or for one never chosen. */
 export const choiceFor = (all: Choices, repo: string | undefined): TrackerChoice =>
   (repo && all[repo.toLowerCase()]) || "auto";
+
+/** Whether ClickUp writes are turned back on for one repository; off for none,
+ *  and off for one that was never turned on. */
+export const clickupWritesOn = (all: Writes, repo: string | undefined): boolean =>
+  !!(repo && all[repo.toLowerCase()]);
+
+/**
+ * One row of Settings > Card tracker: the repository and both values in force
+ * for it.
+ *
+ * Absence is a value — Auto, Read-only — and the row says it, because a blank
+ * where a default applies reads as "not set" rather than as what happens. The
+ * order is the server's (the open project's own repository first), not the
+ * alphabet's, and two spellings of one repository are one row.
+ */
+export function trackerRows(repos: readonly string[], choices: Choices, writes: Writes): { repo: string; tracker: TrackerChoice; writesOn: boolean }[] {
+  const out: { repo: string; tracker: TrackerChoice; writesOn: boolean }[] = [];
+  const seen = new Set<string>();
+  for (const repo of repos) {
+    const key = repo.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ repo, tracker: choiceFor(choices, repo), writesOn: clickupWritesOn(writes, repo) });
+  }
+  return out;
+}
 
 /**
  * Null unless Jira is connected: the old path, untouched.
@@ -62,7 +115,7 @@ export const choiceFor = (all: Choices, repo: string | undefined): TrackerChoice
  */
 export function useTrackerView(repo?: string): TrackerView | null {
   const [setup, setSetup] = useState<TrackerSetup | null>(null);
-  const [all, setAll] = useState<Choices | null>(null);
+  const [all, setAll] = useState<{ choices: Choices; writes: Writes } | null>(null);
   useEffect(() => {
     let live = true;
     void trackerSetup().then((v) => { if (live) setSetup(v.jira ? v : null); });
@@ -72,11 +125,15 @@ export function useTrackerView(repo?: string): TrackerView | null {
   useEffect(() => {
     if (!hasJira) return;
     let live = true;
-    void trackerChoices().then((v) => { if (live) setAll(v); });
+    // Both are one read; asking for either first never fetches twice.
+    void Promise.all([trackerChoices(), clickupWrites()])
+      .then(([choices, writes]) => { if (live) setAll({ choices, writes }); });
     return () => { live = false; };
   }, [hasJira]);
   return useMemo(
-    () => (setup && all ? { setup, choice: choiceFor(all, repo) } : null),
+    () => (setup && all
+      ? { setup, choice: choiceFor(all.choices, repo), writesOn: clickupWritesOn(all.writes, repo) }
+      : null),
     [setup, all, repo],
   );
 }

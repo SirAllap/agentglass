@@ -163,7 +163,7 @@ describe("what a row says", () => {
       onFilter: () => {}, onTick: () => {}, onAll: () => {}, onNone: () => {},
       onStart: () => {}, onStop: () => {}, onBack: () => {}, onAdd: () => {},
     }));
-    expect(html).toContain(`title="${long}"`);
+    expect(html).toContain(`data-tip="${long}"`);
     expect(html).toContain(`aria-label="${long}"`);
     expect(html).not.toContain(`>${long}<`);
   });

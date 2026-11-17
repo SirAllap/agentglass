@@ -4,6 +4,8 @@
  * file as of that commit; clicking a blame line opens that commit's diff.
  */
 import { useEffect, useMemo, useState } from "react";
+import { DotStrip } from "./git/DotStrip.tsx";
+import { blameDots } from "../lib/gitStrips.ts";
 import { GitDialog, DialogError, DialogSkeleton } from "./GitDialog.tsx";
 import { UNREACHABLE } from "../lib/gitDialog.ts";
 import { api } from "../lib/api.ts";
@@ -57,12 +59,14 @@ export function BlameModal({ root, path, onClose, onOpenCommit }: {
   const fmt = (t: number) => (t ? new Date(t * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "");
 
   return (
-    <GitDialog title={repoRelative(root, path)} tone="neutral" width={920} cancelLabel="Close" onClose={onClose} initialFocus="none"
+    <GitDialog title={`Who wrote ${repoRelative(root, path)}?`} tone="neutral" width={920} cancelLabel="Close" onClose={onClose} initialFocus="none"
       reason="Read-only. A click on a line opens its commit."
       subtitle={<span className="inline-flex items-center gap-2">Who wrote each line, as of
         <span className="rounded px-1.5 py-px text-[10px] font-mono" style={{ color: "var(--info-ink)", border: "1px solid color-mix(in srgb, var(--info) 30%, transparent)" }}>{at}</span>
         {at !== "HEAD" && <Button size="compact" onClick={() => reblame("HEAD", "HEAD")}>back to HEAD</Button>}
       </span>}>
+    {history.length > 0 && <div className="mb-3"><DotStrip dots={blameDots(history, at)} tone="primary" label="The file's history, oldest first"
+      caption={`${history.length} commit${history.length === 1 ? "" : "s"} touched this file${at === "HEAD" ? "" : ` · read at ${at}`}`} /></div>}
     <div className="flex gap-3" style={{ height: "clamp(220px, 56vh, 560px)" }}>
       {/* History — the file's commits; a click reblames as of it. */}
       <div className="w-72 shrink-0 min-h-0 flex flex-col rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: EDGE }}>
@@ -93,7 +97,7 @@ export function BlameModal({ root, path, onClose, onOpenCommit }: {
               return (
                 <button key={l.line} onClick={() => { if (l.sha) onOpenCommit(l.sha, meta?.subject || ""); }}
                   className="w-full flex items-baseline gap-2 text-left rounded-sm hover:bg-[color-mix(in_srgb,var(--primary)_10%,transparent)]"
-                  title={l.sha ? `${l.sha.slice(0, SHORT)} · ${meta?.subject ?? ""} · ${meta?.author ?? ""}` : "not yet committed"}>
+                  data-tip={l.sha ? `${l.sha.slice(0, SHORT)} · ${meta?.subject ?? ""} · ${meta?.author ?? ""}` : "not yet committed"}>
                   <span className="shrink-0 w-7 text-right select-none" style={{ color: "var(--text3)" }}>{l.line}</span>
                   <span className="shrink-0 w-[4.6rem] truncate" style={{ color: l.sha ? "var(--info)" : "var(--warning)" }}>{l.sha ? l.sha.slice(0, SHORT) : "local"}</span>
                   <span className="shrink-0 w-20 truncate" style={{ color: "var(--text3)" }}>{meta?.author ?? ""}</span>

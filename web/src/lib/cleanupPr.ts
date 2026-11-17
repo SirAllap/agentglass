@@ -200,8 +200,8 @@ export function cleanupStep(mode: CleanupMode, via: CleanupVia, plan: Plan): Cle
   return needsLook(plan) ? "dialog" : "direct";
 }
 
-/** The toast that closes a run: one line, and the lines Details unfolds. */
-export interface CleanupNote { key: string; text: string; tone: "ok" | "warn" | "run"; lines: string[] }
+/** The toast that closes a run: one line, and the lines Details unfolds. `undo` is offered only for what a run can put back. */
+export interface CleanupNote { key: string; text: string; tone: "ok" | "warn" | "run"; lines: string[]; undo?: { label: string; run: () => void } }
 /** The quiet progress line of a run that has no dialog: the toast says it is working, and the result replaces it. */
 export const runningNote = (plan: Pick<Plan, "slug" | "pr">): CleanupNote => ({ key: `${plan.pr}`, text: `Cleaning ${name(plan)}\u2026`, tone: "run", lines: [] });
 export function noteOf(plan: Pick<Plan, "slug" | "pr">, r: Report): CleanupNote {

@@ -6,17 +6,18 @@ import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { emptyLanes, type PrView } from "../../shared/prFilter.ts";
 import { PrViewsBar, VISIBLE_CHIPS, failureText } from "../src/components/PrViewsBar.tsx";
+import { reviewedByQuery, singleLogin, toServerQuery } from "../src/lib/prSearch.ts";
 import type { PrViewsApi } from "../src/components/usePrViews.ts";
 
 const mk = (n: number): PrView[] => Array.from({ length: n }, (_, i) => ({ id: `v${i}`, name: `View ${i}`, filter: emptyLanes(), order: i }));
-function paint(views: PrView[], activeIdx: number | null, live = emptyLanes()) {
+function paint(views: PrView[], activeIdx: number | null, live = emptyLanes(), reviewedByMe?: () => void) {
   const api: PrViewsApi = {
     views, loading: false, active: activeIdx === null ? null : views[activeIdx]!, setActive() {}, save: () => null, saveNew: () => null,
     remove() {}, rename: () => null, move() {}, undo: null, restore() {},
   };
   return renderToStaticMarkup(React.createElement(PrViewsBar, {
     api, counts: new Map(views.map((v, i) => [v.id, i + 1])), live, setLive() {}, hotkeys: false,
-    sort: { options: [{ value: "a", label: "A" }], value: "a", onPick() {} },
+    sort: { options: [{ value: "a", label: "A" }], value: "a", onPick() {} }, reviewedByMe,
   }));
 }
 
@@ -57,13 +58,34 @@ describe("the views bar, first paint", () => {
   });
 });
 
+describe("the Reviewed by me chip", () => {
+  test("drawn beside the views, and only when the row has somewhere to send the press", () => {
+    expect(paint(mk(2), 0, emptyLanes(), () => {})).toContain("Reviewed by me");
+    expect(paint(mk(2), 0)).not.toContain("Reviewed by me");
+  });
+  test("the search it starts is reviewed-by minus the person's own pull requests", () => {
+    expect(reviewedByQuery()).toBe("reviewed-by:@me -author:@me");
+    expect(reviewedByQuery("ada")).toBe("reviewed-by:ada -author:ada");
+    expect(reviewedByQuery("ada lovelace")).toBe("reviewed-by:adalovelace -author:adalovelace");
+    expect(reviewedByQuery("")).toBe("reviewed-by:@me -author:@me");
+    expect(toServerQuery(reviewedByQuery())).toBe("reviewed-by:@me -author:@me");
+    /* Two tokens: never a person's board, with a login or without. */
+    expect(singleLogin(reviewedByQuery())).toBeNull();
+    expect(singleLogin(reviewedByQuery("ada"))).toBeNull();
+  });
+  test("the panel hands it the signed-in login and the box's own search", () => {
+    const panel = readFileSync(new URL("../src/components/PrPanel.tsx", import.meta.url), "utf8");
+    expect(panel).toContain("reviewedByMe={() => searchText(reviewedByQuery(viewer))}");
+  });
+});
+
 describe("the board is wired to it", () => {
   const panel = readFileSync(new URL("../src/components/PrPanel.tsx", import.meta.url), "utf8");
   test("PrPanel draws the views bar and counts through the board's own evaluation", () => {
     expect(panel).toContain("usePrViews(repoSlug)");
     expect(panel).toContain("<PrViewsBar api={viewsApi}");
     const counts = panel.slice(panel.indexOf("const viewCounts"), panel.indexOf("Neither list has answered yet"));
-    expect(counts).toContain("evalExempt(deckRows, v.filter, readPrField, isRuleExempt)");
+    expect(counts).toContain("evalExempt(deckRows, v.filter, viewFieldReader, isRuleExempt)");
   });
   test("the old preset row and builder are not on the PR board any more", () => {
     expect(panel).not.toContain("<FilterPresets");

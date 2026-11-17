@@ -13,6 +13,7 @@
  */
 
 import { LANE_WIDTH_PX, RAIL_WIDTH_PX } from "./prSearch.ts";
+import { PANEL_DEFAULT, PANEL_MIN } from "./prPanelLimits.ts";
 
 export type Dock = {
   /** The pull request open, or null when only the list is. */
@@ -24,14 +25,14 @@ export type Dock = {
 export const NOTHING_OPEN: Dock = { selected: null, maximized: false };
 
 /** Docked detail width. The mockup's CSS says 580 and then overrides it with 620. */
-export const DOCK_PX = 620;
+export const DOCK_PX = PANEL_DEFAULT;
 /** The panel width at or under which there is no room for a board beside the detail: full screen only. */
 export const FULL_ONLY_PX = 560;
 /** What the board keeps beside a docked detail before the detail gives way. */
 export const BOARD_MIN_PX = 240;
 
-/** The narrowest dock: the width the panel keeps when it is only just wider than full-screen-only. Header row, tab strip and dock were measured to fit whole here (lib/prTabFit.ts). */
-export const DOCK_MIN_PX = FULL_ONLY_PX - BOARD_MIN_PX;
+/** The narrowest dock: the width the panel keeps when it is only just wider than full-screen-only. Header row, tab strip and dock were measured to fit whole here. */
+export const DOCK_MIN_PX = PANEL_MIN;
 /** The board scroller's own padding (TriageBoard's `p-3`), both sides. */
 export const BOARD_PAD_PX = 24;
 /**
@@ -44,7 +45,7 @@ export const LANE_PX = LANE_WIDTH_PX + RAIL_WIDTH_PX + BOARD_PAD_PX;
 export const DOCK_STEP_PX = 16;
 export const DOCK_BIG_STEP_PX = 64;
 
-/** The widest dock for a panel this wide: all but one lane, and never under the narrowest. */
+/** The widest dock for a panel this wide: all but one lane, with no other cap, and never under the narrowest. */
 export function dockMax(panelPx: number): number {
   return Math.max(DOCK_MIN_PX, Math.floor(panelPx - LANE_PX));
 }

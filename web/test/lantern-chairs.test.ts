@@ -86,9 +86,11 @@ describe("the view asks for nothing new", () => {
     const hook = await Bun.file(new URL("../src/components/agents/useAgents.ts", import.meta.url)).text();
     expect(view).toContain("lanternChairs");
     expect(view).not.toContain("api.seat(");
-    /* The four sources and the clock that ages them: nothing else polls. */
-    expect((hook.match(/setInterval\(/g) ?? []).length).toBe(4);
-    expect((view.match(/setInterval\(/g) ?? []).length).toBe(1);
+    /* Three polled sources (the asks arrive by push) and the clock that ages them, each paused while
+       hidden: nothing else polls, and no bare timer keeps running behind a hidden window. */
+    expect((hook.match(/useVisibleInterval\(/g) ?? []).length).toBe(3);
+    expect((view.match(/useNow\(/g) ?? []).length).toBe(1);
+    expect((hook + view).match(/setInterval\(/g)).toBeNull();
   });
 
   test("a chair that is in its seat is never told its orchestrator is gone", async () => {

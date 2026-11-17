@@ -58,19 +58,22 @@ describe("the chords", () => {
 
 describe("what it acts on", () => {
   test("the card resolves the way the chip beside it does", () => {
-    // One answer about where a card lives, not two that can disagree.
+    // One answer about where a card lives, not two that can disagree: the
+    // SAME tab record the bar and the side pane both read.
     const term = read("components/TerminalPanel.tsx");
-    expect(term).toContain("cardRef({ headRefName: chipWt.branch })");
-    expect(term).toContain("chipAction(ref, cuSetup)");
+    expect(term).toContain("tabCardRef(named, branch,");
+    expect(term).toContain("chipAction(ref, setup)");
   });
 
   test("the focused pane, read when the key is pressed", () => {
-    /* Not closed over: this hook is set once on mount and the pull request
-       behind the focused pane changes several times a minute. */
+    /* Not closed over as a value: the pull request behind the focused pane
+       changes several times a minute, so the door reads `liveTabFacts` live,
+       by the tab id a ref keeps current — never a value this hook captured
+       once on mount. */
     const term = read("components/TerminalPanel.tsx");
     expect(term).toContain("export function openFocusedPaneDoor(which: PaneDoor): boolean");
-    expect(term).toContain("const at = prRef.current;");
-    expect(term).toContain("useEffect(() => { prRef.current = chipPr; }, [chipPr]);");
+    expect(term).toContain("const pr = liveTabFacts.get(identTabIdRef.current)?.pr;");
+    expect(term).toContain("useEffect(() => { identTabIdRef.current = identTabId; }, [identTabId]);");
   });
 
   test("and the key falls through when there is nothing to open", () => {

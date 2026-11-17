@@ -63,11 +63,11 @@ describe("the window follows the controls", () => {
   });
 
   test("the previews pass their values through", () => {
-    const a = html(h(AppearancePreview, { theme: "porcelain", accent: "", density: "roomy", fontPx: 14, translucent: false, view: "lantern" }));
+    const a = html(h(AppearancePreview, { theme: "porcelain", accent: "", density: "roomy", fontPx: 14, translucent: false }));
     expect(a).toContain('data-density="roomy"');
     expect(a).toContain('data-ui-font="14"');
-    expect(a).toContain('data-view-body="lantern"');
-    const w = html(h(WindowPreview, { zoomPct: 110, fullscreen: false, startAtLogin: false, launchAnimation: false, showClock: false, codexQuota: false, view: "diff" }));
+    expect(a).toContain('data-view-body="diff"');
+    const w = html(h(WindowPreview, { zoomPct: 110, fullscreen: false, startAtLogin: false, launchAnimation: false, showClock: false, codexQuota: false }));
     expect(w).toContain('data-view-body="diff"');
     expect(w).toContain(`width:${LIVE_BASE_W / 1.1}px`);
   });

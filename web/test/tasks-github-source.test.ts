@@ -71,14 +71,16 @@ describe("Finish question", () => {
 
 describe("All tab", () => {
   it("heads the issues the way the Local block is headed, only when they sit under it", () => {
-    expect(issues).toContain("{onOpenSource && (");
+    // Also when the block has to say which checkout it shows and why: that is
+    // the one case where the heading carries a sentence of its own.
+    expect(issues).toContain("{(onOpenSource || repoNote) && (");
     expect(issues).toContain("GitHub issues</b>");
     expect(issues).toContain(">Open GitHub</Button>");
-    expect(src).toContain('onOpenSource={source === "all" ? () => setSource("github") : undefined}');
+    expect(src).toContain('onOpenSource={() => setSource("github")}');
   });
   it("draws the Local block with a count, Open Local, and a line for the rest", () => {
     const strip = from("function LocalStrip(");
-    for (const s of ["Local due soon", "Open Local", "open the Local tab"]) expect(strip).toContain(s);
+    for (const s of ["Local due soon", "Open local", "open the Local tab"]) expect(strip).toContain(s);
   });
   it("asks nothing new of ClickUp or Jira: the All tab has no boards block", () => {
     const all = from('{source === "all" && <NowBand', "No repository to read issues from.");

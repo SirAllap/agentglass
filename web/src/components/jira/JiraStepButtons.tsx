@@ -1,14 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "../workspace/Chrome.tsx";
 import { useStepDialog } from "./JiraStepDialog.tsx";
 import { api } from "../../lib/api.ts";
+import { loadPairs, type JiraPair } from "../../lib/jiraPairs.ts";
 import { putCard } from "../../lib/prCardStore.ts";
 import { projectOf, ruleFor, useJiraSettings } from "../../lib/jiraSettings.ts";
 import { STEPS_OFF, stepOffers, useJiraSteps, type StepOffer } from "../../lib/jiraStepUi.ts";
 import { TRACKERS } from "../../lib/trackerApi.ts";
 import { fillTemplate } from "../../../../shared/stepBlocks.ts";
 import { addJiraLink, readJiraLinks } from "../../lib/jiraLinks.ts";
-import { alreadyLinked, assignable, onCard, ruleBlocks } from "../../lib/jiraStepPlan.ts";
+import { alreadyLinked, assignable, dialogBlocks, onCard, ruleBlocks } from "../../lib/jiraStepPlan.ts";
 import type { StatusOption } from "../../lib/trackerStatus.ts";
 import type { JiraPerson, JiraStepChoice, JiraStepPr, ProviderTask, StepBlock } from "../../../../shared/providers.ts";
 
@@ -28,6 +29,9 @@ export function JiraStepButtons({ task, query, pr, onSaid, onTask }: {
   const settings = useJiraSettings();
   const { show, dialog } = useStepDialog();
   const [busy, setBusy] = useState(false);
+  /* What this machine learned: a reviewer's Jira account, offered first in the picker. Read once; a failed read is no suggestion. */
+  const [pairs, setPairs] = useState<JiraPair[]>([]);
+  useEffect(() => { let live = true; void loadPairs().then((p) => { if (live) setPairs(p); }); return () => { live = false; }; }, []);
   const offers = stepOffers(steps, task, { project: projectOf(task), overrides: read?.overrides ?? [], rules: settings?.handoff ?? {} });
   if (!offers.length) return dialog;
   const writes = settings?.writes === true;
@@ -69,9 +73,10 @@ export function JiraStepButtons({ task, query, pr, onSaid, onTask }: {
       await show({
         verb: offer.label.replace("…", ""),
         card: { key, title: task.title, status: task.status, statusColor: task.statusColor, assignee: onCard(task.people?.[0]) },
-        blocks, to: offer.to, moves, comment: start, pr, linked, writes,
+        blocks: dialogBlocks(offer.key, blocks), to: offer.to, moves, comment: start, pr, linked, writes,
         asks: { status: offer.asksStatus, clear: offer.asksClear, assign: offer.asksAssign, comment: offer.asksComment },
         people: people.map(assignable),
+        reviewers: pr?.reviewers ?? [], pairs,
         run: async (choice: JiraStepChoice) => {
           onSaid(`${offer.label.replace("…", "")}…`);
           const r = await api.jiraRunStep(key, task.updated, offer.key, choice, pr).catch(() => ({ ok: false, error: "Could not reach the server" } as const));
@@ -92,8 +97,10 @@ export function JiraStepButtons({ task, query, pr, onSaid, onTask }: {
     <>
       {offers.map((o) => (
         <Button key={o.key} size="compact" data-step={o.key} onClick={() => { void press(o); }} pending={busy} disabled={busy || !writes}
-          title={writes ? o.label.replace("…", "") : STEPS_OFF}>
-          {o.label}
+          data-tip={writes ? o.label.replace("…", "") : STEPS_OFF} aria-label={o.label.replace("…", "")}>
+          {/* The folded Details grid shows the target only (index.css); the full wording stays in the tip and the label. */}
+          <span data-lbl-full>{o.label}</span>
+          <span data-lbl-short>{o.label.replace(/^Transition to /, "").replace("…", "")}</span>
         </Button>
       ))}
       {settings && !writes && (

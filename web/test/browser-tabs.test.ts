@@ -9,7 +9,7 @@
  */
 import { beforeEach, describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
-import { addTab, closeTab, pickSleeper, wake, SLEEP_GRACE_MS, type Recency, popupHome, isBlank, listable, MAX_TABS, newTab, patchTab, pruneBlank, stepTab, tabLabel, withInspected, __resetTabIds } from "../src/lib/browserTabs.ts";
+import { addTab, closeTab, paneTab, pickSleeper, wake, SLEEP_GRACE_MS, type Recency, popupHome, isBlank, listable, MAX_TABS, newTab, patchTab, pruneBlank, stepTab, tabLabel, withInspected, __resetTabIds, type BrowserTab } from "../src/lib/browserTabs.ts";
 
 beforeEach(__resetTabIds);
 
@@ -397,5 +397,33 @@ describe("the popup is wired from the page to the panel", () => {
     const panel = read("../src/components/BrowserPanel.tsx");
     expect(panel).toContain("popupHome(tabsRef.current, idOf, opener, activeId)");
     expect(panel).toContain("open(url, home.from, home.profile, undefined, (id) => { if (opener !== undefined) openedBy.set(id, opener); else openedBy.delete(id); notePopup(opener, id, url); }, home.partition)");
+  });
+});
+
+describe("the person's pane never falls onto an agent's tab", () => {
+  beforeEach(() => __resetTabIds());
+  const agent = (t: BrowserTab) => t.profile === "agentorbitbot";
+
+  it("closing the person's last page leaves nothing in front, not the worker's page beside it", () => {
+    const mine = newTab("https://docs.example.test/", "");
+    const theirs = newTab("https://en.wikipedia.org/wiki/Orbit", "agentorbitbot");
+    const r = closeTab([mine, theirs], mine.id, { agent });
+    expect(r.activeId).toBe("");
+  });
+
+  it("skips the worker's page for the person's next one", () => {
+    const a = newTab("https://a.example.test/", "");
+    const w = newTab("https://w.example.test/", "agentorbitbot");
+    const b = newTab("https://b.example.test/", "");
+    expect(closeTab([a, w, b], a.id, { agent }).activeId).toBe(b.id);
+  });
+
+  it("draws nothing rather than an agent's tab that happens to be first", () => {
+    const w = newTab("https://w.example.test/", "agentorbitbot");
+    expect(paneTab([w], "", "", agent)).toBeUndefined();
+    const mine = newTab("https://docs.example.test/", "");
+    expect(paneTab([w, mine], "", "", agent)?.id).toBe(mine.id);
+    // The person chose the worker's tab: that is theirs to look at.
+    expect(paneTab([w, mine], w.id, "", agent)?.id).toBe(w.id);
   });
 });

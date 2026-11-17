@@ -167,12 +167,12 @@ export function FileView({ file, branch, jump, initialTop, onTop, onBench, onOpe
 
   const toolbar = (
     <div className="flex items-center gap-2 px-4 shrink-0 text-[11px]" style={{ minHeight: 42, borderBottom: LINE, color: "var(--text3)" }}>
-      <span className="min-w-0 truncate" title={file.source?.abs ?? file.source?.rel}>
+      <span className="min-w-0 truncate" data-tip={file.source?.abs ?? file.source?.rel}>
         {crumb.map((c, i) => (
           <span key={c.path}>
             {i > 0 && <span style={{ color: "var(--text4)" }}> / </span>}
             <button type="button" className="agx-pal-hit rounded px-0.5" onClick={() => onGoTo?.(c.path)} disabled={c.last || !onGoTo}
-              aria-current={c.last ? "location" : undefined} title={c.path}
+              aria-current={c.last ? "location" : undefined} data-tip={c.path}
               style={c.last ? { color: "var(--text)", fontWeight: 600 } : { color: "inherit" }}>{c.label}</button>
           </span>
         ))}
@@ -181,16 +181,16 @@ export function FileView({ file, branch, jump, initialTop, onTop, onBench, onOpe
       {isText && (
         <span className="ml-auto flex items-center gap-2 shrink-0">
           <span className="flex items-center rounded-md overflow-hidden" style={{ border: EDGE }} role="group" aria-label="Face">
-            <button className="agx-btn px-2.5 py-1 text-[10.5px]" style={segStyle(true)} aria-pressed title="Read it here">Reading</button>
+            <button className="agx-btn px-2.5 py-1 text-[10.5px]" style={segStyle(true)} aria-pressed data-tip="Read it here">Reading</button>
             <button className="agx-btn px-2.5 py-1 text-[10.5px]" style={segStyle(false)} onClick={onBench}
-              title="Edit in nvim on the bench — the finder does not edit">Editing</button>
+              data-tip="Edit in nvim on the bench — the finder does not edit">Editing</button>
           </span>
           <span className="flex items-center gap-1">
             <span className="text-[9.5px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>Text</span>
             <span className="flex items-center rounded-md overflow-hidden" style={{ border: EDGE }}>
-              <button onClick={() => setSize((n) => n - 1)} disabled={size <= SIZE_MIN} title="Smaller" className="agx-btn px-1.5 py-1 text-[10.5px] disabled:opacity-30" style={{ color: "var(--text2)" }}>A−</button>
+              <button onClick={() => setSize((n) => n - 1)} disabled={size <= SIZE_MIN} data-tip="Smaller" aria-label="Smaller" className="agx-btn px-1.5 py-1 text-[10.5px] disabled:opacity-30" style={{ color: "var(--text2)" }}>A−</button>
               <span className="px-1 text-[10.5px] tabular-nums" style={{ color: "var(--text3)" }}>{size}</span>
-              <button onClick={() => setSize((n) => n + 1)} disabled={size >= SIZE_MAX} title="Bigger" className="agx-btn px-1.5 py-1 text-[10.5px] disabled:opacity-30" style={{ color: "var(--text2)" }}>A+</button>
+              <button onClick={() => setSize((n) => n + 1)} disabled={size >= SIZE_MAX} data-tip="Bigger" aria-label="Bigger" className="agx-btn px-1.5 py-1 text-[10.5px] disabled:opacity-30" style={{ color: "var(--text2)" }}>A+</button>
             </span>
           </span>
           <span className="flex items-center gap-1">
@@ -198,11 +198,11 @@ export function FileView({ file, branch, jump, initialTop, onTop, onBench, onOpe
             <span className="flex items-center rounded-md overflow-hidden" style={{ border: EDGE }}>
               {WIDTHS.map((w) => (
                 <button key={w} onClick={() => setWidth(w)} className="agx-btn px-1.5 py-1 text-[10.5px]" style={segStyle(w === width)}
-                  title={w === 0 ? "Use the whole pane" : `${w} characters a line`}>{widthLabel(w)}</button>
+                  data-tip={w === 0 ? "Use the whole pane" : `${w} characters a line`}>{widthLabel(w)}</button>
               ))}
             </span>
           </span>
-          <button onClick={openFind} disabled={disabled} title="Find in this file (Ctrl+F or /)" className="agx-btn rounded-md px-2 py-1 text-[10.5px]"
+          <button onClick={openFind} disabled={disabled} data-tip="Find in this file (Ctrl+F or /)" className="agx-btn rounded-md px-2 py-1 text-[10.5px]"
             style={{ color: findOpen ? "var(--primary-hover)" : "var(--text2)", border: EDGE, opacity: disabled ? 0.4 : 1 }}>
             <IconLabel icon={<SearchIcon size={ICON.xs} />}>Find <span style={{ color: "var(--text4)" }}>/</span></IconLabel>
           </button>
@@ -358,7 +358,7 @@ function FolderPane({ file, onGoTo }: { file: LoadedFile; onGoTo?: (abs: string)
       <div className="px-5 pt-5 pb-3 shrink-0" style={{ borderBottom: LINE }}>
         <div className="flex items-center gap-2 min-w-0">
           <span className="shrink-0 flex" style={{ color: "var(--primary-ink)" }}><FolderIcon size={ICON.md} /></span>
-          <span className="min-w-0 truncate text-[14px]" style={{ color: "var(--text)", fontWeight: 600 }} title={abs ?? undefined}>{p.name}</span>
+          <span className="min-w-0 truncate text-[14px]" style={{ color: "var(--text)", fontWeight: 600 }} data-tip={abs ?? undefined}>{p.name}</span>
         </div>
         <div className="mt-1 text-[11px]" style={{ color: "var(--text3)" }}>
           {p.count}{p.modified ? ` · modified ${p.modified}` : ""}
@@ -377,7 +377,7 @@ function FolderPane({ file, onGoTo }: { file: LoadedFile; onGoTo?: (abs: string)
         {p.rows.map((r) => (
           <li key={r.name} style={{ opacity: r.locked ? 0.55 : 1 }}>
             <button type="button" className="agx-pal-hit w-full flex items-center gap-3 px-5 text-[12.5px] text-left" style={{ minHeight: 34 }}
-              onClick={() => abs && onGoTo?.(previewChild(abs, r.name))} title={r.isDir ? "Go into it" : "Open it"}>
+              onClick={() => abs && onGoTo?.(previewChild(abs, r.name))} data-tip={r.isDir ? "Go into it" : "Open it"}>
               <span className="shrink-0 flex" style={{ color: FOLDER_INK[r.kind] }}><FolderGlyph kind={r.kind} /></span>
               <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text)", fontWeight: 500 }}>{r.name}{r.isDir ? "/" : ""}</span>
               <span className="shrink-0 text-[11px] tabular-nums" style={{ color: "var(--text3)" }}>{r.meta}</span>

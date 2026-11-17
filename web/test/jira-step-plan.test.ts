@@ -6,8 +6,8 @@
  * differs between them and a row compares it with who is on the card.
  */
 import { describe, expect, test } from "bun:test";
-import { actionLabel, alreadyLinked, assignable, onCard, planRows, tintOf, plainFailure, ruleBlocks, settleRows, type PlanInput, type PlanPerson } from "../src/lib/jiraStepPlan.ts";
-import type { StepBlock } from "../../shared/providers.ts";
+import { actionLabel, alreadyLinked, assignRows, assignStart, assignSuggestions, assignable, dialogBlocks, onCard, planRows, tintOf, plainFailure, ruleBlocks, settleRows, type PlanInput, type PlanPerson } from "../src/lib/jiraStepPlan.ts";
+import type { JiraPair, StepBlock } from "../../shared/providers.ts";
 
 const who = (key: string, name: string, me = false): PlanPerson => ({ key, name, initials: name.split(" ").map((w) => w[0]).join(""), ...(me ? { me: true } : null) });
 
@@ -84,7 +84,7 @@ for (const { flavor, ada, lin } of FLAVORS) {
 
     test("assign me, a named person, nobody on it already", () => {
       const me = planRows(input([{ type: "assign", who: "me" }]))[0]!;
-      expect(me.sentence).toBe("Assign the card to Ada Tester");
+      expect(me.sentence).toBe("Assign the card to Ada Tester, replacing whoever is assigned");
       expect(me.people).toEqual([ada]);
       const named = planRows(input([{ type: "assign", who: "person", person: { id: lin.key, name: "Lin Tester" } }]))[0]!;
       expect(named.noop).toBe("Lin Tester is already on the card");
@@ -94,11 +94,52 @@ for (const { flavor, ada, lin } of FLAVORS) {
 
     test("assign that asks: left as is, nobody, or the person picked", () => {
       const b: StepBlock[] = [{ type: "assign", who: "none", ask: true }];
-      expect(planRows(input(b))[0]!.noop).toBe("Left as it is: nobody is picked");
+      expect(planRows(input(b))[0]!.noop).toBe("Nobody is picked, so the assignee stays as it is");
       expect(planRows(input(b, { choice: { assign: null } }))[0]!.sentence).toBe("Take the assignee off the card");
       const to = planRows(input(b, { choice: { assign: ada.key }, card: card({ assignee: null }) }))[0]!;
-      expect(to.sentence).toBe("Assign the card to Ada Tester");
+      expect(to.sentence).toBe("Assign the card to Ada Tester, replacing whoever is assigned");
       expect(to.people).toEqual([ada]);
+    });
+
+    test("a status change and an assignee change are two rows, in that order, named together on the button", () => {
+      const blocks: StepBlock[] = [{ type: "move", statusNames: ["Code review"] }, { type: "assign", ask: true, who: "none" }];
+      const move = { target: "Code review" } as const;
+      const picked = planRows(input(blocks, { ...move, choice: { assign: ada.key }, card: card({ assignee: lin }) }));
+      expect(picked.map((r) => r.kind)).toEqual(["move", "assign"]);
+      expect(picked.every((r) => !r.noop)).toBe(true);
+      expect(actionLabel(picked)).toBe("Move to Code review and assign Ada Tester");
+      // Left as is: the assign row says so and the button names only the move.
+      const left = planRows(input(blocks, { ...move, choice: {} }));
+      expect(left.map((r) => r.kind)).toEqual(["move", "assign"]);
+      expect(left[1]!.noop).toBe("Nobody is picked, so the assignee stays as it is");
+      expect(actionLabel(left)).toBe("Move to Code review");
+    });
+
+    test("a review step that only moves the card still offers an assign, and the default writes nobody", () => {
+      const blocks = dialogBlocks("review", [{ type: "move", statusNames: ["Code review"] }]);
+      const move = { target: "Code review" } as const;
+      const left = planRows(input(blocks, move));
+      expect(left.map((r) => r.kind)).toEqual(["move", "assign"]);
+      expect(left[1]!.noop).toBe("Nobody is picked, so the assignee stays as it is");
+      // The row says it whole: the dialog does not put "Nothing happens here" in front of it.
+      expect(left[1]!.alone).toBe(true);
+      expect(actionLabel(left)).toBe("Move to Code review");
+      const picked = planRows(input(blocks, { ...move, choice: { assign: ada.key }, card: card({ assignee: lin }) }));
+      expect(picked.every((r) => !r.noop)).toBe(true);
+      expect(actionLabel(picked)).toBe("Move to Code review and assign Ada Tester");
+    });
+
+    test("that optional assign is only for a review step that says nothing about who is on the card", () => {
+      const blocks: StepBlock[] = [{ type: "move", statusNames: ["Code review"] }];
+      expect(dialogBlocks("review", blocks).map((b) => b.type)).toEqual(["move", "assign"]);
+      // It starts at the reviewer: on a review step that is usually who the card goes to.
+      expect(dialogBlocks("review", blocks)[1]).toEqual({ type: "assign", who: "reviewer", ask: true });
+      const assigned: StepBlock[] = [...blocks, { type: "assign", who: "me" }];
+      expect(dialogBlocks("review", assigned)).toEqual(assigned);
+      const takenOff: StepBlock[] = [...blocks, { type: "unassign", who: "all" }];
+      expect(dialogBlocks("review", takenOff)).toEqual(takenOff);
+      // The hand-off does not ask: its own blocks are the whole of what it does.
+      expect(dialogBlocks("handoff", blocks)).toEqual(blocks);
     });
 
     test("an assign that writes a person makes a take-off in the same step redundant, and says so", () => {
@@ -124,6 +165,20 @@ for (const { flavor, ada, lin } of FLAVORS) {
       expect(r!.detail).toBe("By hand");
     });
 
+    test("a field is a row of its own, after the comment and before the link", () => {
+      const rows = planRows(input([{ type: "link" }, { type: "field", field: "Team", value: "Blue" }, { type: "comment", text: "Opened {pr}" }]));
+      expect(rows.map((r) => r.kind)).toEqual(["comment", "field", "link"]);
+      const field = rows.find((r) => r.kind === "field")!;
+      expect(field.sentence).toBe("Set “Team” to Blue on ORBIT-1042");
+      expect(field.outcome).toBe("field");
+      expect(field.noop).toBeNull();
+    });
+
+    test("a field with no value saved says the step is refused, not that it does nothing", () => {
+      const [r] = planRows(input([{ type: "field", field: "Team", value: "" }]));
+      expect(r!.noop).toBeNull();
+      expect(r!.note).toBe("No value is saved for this field, so Jira refuses the whole step");
+    });
     test("link: once, and a card that has it already says so", () => {
       const fresh = planRows(input([{ type: "link" }]))[0]!;
       expect(fresh.sentence).toBe("Link pull request #2198 on the card");
@@ -197,6 +252,67 @@ describe("settling rows from what the server answered", () => {
   });
 });
 
+describe("the people a Give it to question suggests, and where it starts", () => {
+  const ada = who("acc-0001", "Ada Tester", true);
+  const lin = who("acc-0003", "Lin Tester");
+  const grace = who("acc-0002", "Grace Sample");
+  const pair = (login: string, accountId: string, n = 1): JiraPair => ({ login, accountId, name: accountId, n, at: 1 });
+  const logins = ["ada-dev", "@acme/reviewers"];
+
+  test("the reviewer's learned account comes first with the reviewer's login, then you", () => {
+    expect(assignSuggestions([grace, lin, ada], { logins, pairs: [pair("ada-dev", "acc-0003")] })).toEqual([
+      { person: lin, why: "paired with reviewer ada-dev", kind: "reviewer" },
+      { person: ada, why: "you", kind: "me" },
+    ]);
+  });
+
+  test("a pair for somebody not in the list, or for a team, suggests nobody; with no pair the question has nobody first", () => {
+    expect(assignSuggestions([grace], { logins, pairs: [pair("ada-dev", "acc-0003")] })).toEqual([]);
+    expect(assignSuggestions([grace, lin], { logins, pairs: [pair("@acme/reviewers", "acc-0003")] })).toEqual([]);
+    expect(assignSuggestions([grace, lin], { logins, pairs: [] })).toEqual([]);
+  });
+
+  test("the list puts the suggested people under one heading, then everybody else, each person once", () => {
+    const rows = assignRows([grace, lin, ada], { logins, pairs: [pair("ada-dev", "acc-0003")] });
+    expect(rows.map((r) => [r.person.name, r.heading ?? null, r.why ?? null])).toEqual([
+      ["Lin Tester", "Suggested", "paired with reviewer ada-dev"],
+      ["Ada Tester", null, "you"],
+      ["Grace Sample", null, null],
+    ]);
+    // You are on the reviewer's pair too here: one row, with the reason that put the pair there.
+    const both = assignRows([ada], { logins, pairs: [pair("ada-dev", "acc-0001")] });
+    expect(both).toEqual([{ person: ada, why: "paired with reviewer ada-dev", heading: "Suggested" }]);
+  });
+
+  test("where the question starts: the block's own Start at, or nothing picked", () => {
+    const suggested = assignSuggestions([lin, ada], { logins, pairs: [pair("ada-dev", "acc-0003")] });
+    // "me" starts at the account the server marked as the connection's.
+    expect(assignStart({ type: "assign", who: "me", ask: true }, [lin, ada], suggested)).toBe("acc-0001");
+    // "the reviewer" starts at the learned pair, and at nothing when there is no pair.
+    expect(assignStart({ type: "assign", who: "reviewer", ask: true }, [lin, ada], suggested)).toBe("acc-0003");
+    expect(assignStart({ type: "assign", who: "reviewer", ask: true }, [lin, ada], [])).toBeUndefined();
+    // "nobody" picks no one, and neither does a block that does not ask.
+    expect(assignStart({ type: "assign", who: "none", ask: true }, [lin, ada], suggested)).toBeUndefined();
+    expect(assignStart({ type: "assign", who: "me" }, [lin, ada], suggested)).toBeUndefined();
+    // A person is where it starts when the list holds them, by the card's id or the write's key.
+    expect(assignStart({ type: "assign", who: "person", ask: true, person: { id: "acc-0003", name: "Lin Tester" } }, [lin, ada], suggested)).toBe("acc-0003");
+    expect(assignStart({ type: "assign", who: "person", ask: true, person: { id: "acc-9999", name: "Gone" } }, [lin, ada], suggested)).toBeUndefined();
+  });
+
+  test("a Data Center pair names the login while the card carries another id, and the account is still found", () => {
+    const person: PlanPerson = { key: "JIRAUSER10002", writeKey: "lin", name: "Lin Tester", initials: "LT" };
+    const suggested = assignSuggestions([person], { logins: ["ada-dev"], pairs: [pair("ada-dev", "lin")] });
+    expect(suggested).toEqual([{ person, why: "paired with reviewer ada-dev", kind: "reviewer" }]);
+    expect(assignStart({ type: "assign", who: "reviewer", ask: true }, [person], suggested)).toBe("lin");
+  });
+
+  test("a Jira person is chosen by what a write sends, not by the id the card carries", () => {    const person = assignable({ key: "lin", id: "lin-id", name: "Lin Tester", me: true });
+    const rows = assignRows([person], { logins, pairs: [] });
+    expect(rows).toEqual([{ person, why: "you", heading: "Suggested" }]);
+    expect(assignStart({ type: "assign", who: "me", ask: true }, [person], assignSuggestions([person], { logins, pairs: [] }))).toBe("lin");
+  });
+});
+
 describe("the button that confirms names what it will do", () => {
   const ada = who("acc-0001", "Ada Tester", true);
   const base = (blocks: StepBlock[], over: Partial<PlanInput> = {}): PlanInput => ({
@@ -249,7 +365,7 @@ describe("people, as the rows draw them", () => {
   test("a chosen person is found by the key a write sends", () => {
     const lin = assignable({ key: "lin", id: "lin-id", name: "Lin Tester" });
     const [r] = planRows({ blocks: [{ type: "assign", who: "none", ask: true }], card: { key: "ORBIT-1042", title: "t", status: "To Do", assignee: null }, target: null, choice: { assign: "lin" }, linked: null, people: [lin] });
-    expect(r!.sentence).toBe("Assign the card to Lin Tester");
+    expect(r!.sentence).toBe("Assign the card to Lin Tester, replacing whoever is assigned");
     expect(r!.people).toEqual([lin]);
   });
   test("a person already on the card is noticed whichever form the picker holds", () => {

@@ -136,4 +136,12 @@ describe("composer picks the project", () => {
     expect(l).toContain("<h4>No flights</h4>");
     expect(l).toContain("New flight plan");
   });
+  test("S is not offered, and only a size the create door accepts is", () => {
+    const c = code(composer);
+    expect(c).toContain("planSizes(cfg[proj]?.sizes");
+    expect(c).toContain("sizes.map((s) =>");
+    expect(c).toContain("size: picked");
+    expect(c).not.toContain("size: size");
+    expect(c).not.toContain('"Small plans launch without Preflight."');
+  });
 });

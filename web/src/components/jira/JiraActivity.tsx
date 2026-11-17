@@ -14,8 +14,11 @@
  *
  * Comments: threads one level deep (Cloud), a reply box at the pane's foot that
  * says whom it answers, your own comment changed in place or deleted after one
- * sentence that says it cannot come back, an "edited" marker and a marker on a
- * comment restricted to a role.
+ * sentence that says it cannot come back, the exact date and "(edited <date>)"
+ * with who changed it on hover, a marker on a comment restricted to a role, the
+ * people it mentions as chips, and a copy link to the comment in Jira. A change
+ * is made in the same composer as a new comment, so `@` picks people there too.
+ * No reactions: Jira's public REST has none to read or write.
  *
  * Ceiling: the rows are Jira's words as Jira wrote them. A changed comment is
  * sent as Markdown with the people it named, so what Markdown cannot say (a
@@ -24,18 +27,23 @@
  * nested.
  */
 import { tipAttr } from "../../lib/tip.ts";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
 import { fmtAgo } from "../../lib/format.ts";
-import { Markdown } from "../../lib/markdown.tsx";
+import { Markdown, MarkdownMentions, type MentionChips } from "../../lib/markdown.tsx";
+import { commentLink, editedLabel, editedTip, exactDate } from "../../lib/jiraCommentView.ts";
+import { initialsOf } from "../../lib/avatarColour.ts";
+import type { Mentionable } from "../../lib/mentions.ts";
+import { Composer } from "../tasks/Composer.tsx";
 import { ACTIVITY_TABS, allRows, eventsFor, needsHistory, type ActivityTab } from "../../lib/jiraActivityRows.ts";
 import { answeredBy, threadsOf } from "../../lib/jiraThreads.ts";
+import { reducedMotion } from "../../lib/lookPrefs.ts";
 import type { CardEvent, TaskDetail } from "../../../../shared/providers.ts";
 import { EventRun } from "../CardEventRun.tsx";
 import { CommentAction } from "../tasks/CardEdit.tsx";
 import { Spinner } from "../Spinner.tsx";
 import { ICON } from "../../lib/iconSize.ts";
-import { Button, EDGE, Segmented, Textarea } from "../workspace/Chrome.tsx";
+import { Button, EDGE, Segmented } from "../workspace/Chrome.tsx";
 import { JiraSection } from "./JiraSections.tsx";
 import { Author } from "./Author.tsx";
 import { WorklogPanel } from "./JiraWorklog.tsx";
@@ -84,13 +92,33 @@ export interface CommentAct {
   replyingTo: string | null;
   onReply: (c: Comment | null) => void;
   edit: (c: Comment, text: string) => Promise<string | null>;
+  /** The people `@` offers while a comment is changed, from the card's own search; absent, `@` is only a character. */
+  people?: (Mentionable & { initials?: string; avatar?: string })[] | null;
+  onPeopleQuery?: (q: string) => void;
   remove: (c: Comment) => Promise<string | null>;
 }
+
+/** The ids of the comments to mark "new" (written by somebody else since the card was last looked at). */
+const FreshCtx = createContext<ReadonlySet<string>>(new Set());
+const commentAnchor = (id: string): string => `jc-${id}`;
+/** The card's key and Jira address, for the link to one comment. */
+const CardCtx = createContext<{ key: string; url?: string }>({ key: "" });
+const LINK_SHOWN_MS = 2000;
+
+/** A person a comment names, drawn as Jira draws one: a pill with their initials. */
+export const chip = (name: string, key: string) => (
+  <span key={key} className="inline-flex items-center gap-1 rounded-full align-baseline whitespace-nowrap" data-testid="jira-mention"
+    style={{ padding: "0 6px 0 2px", lineHeight: "18px", fontSize: "0.95em", background: "color-mix(in srgb, var(--primary) 16%, transparent)", color: "var(--primary-ink, var(--primary))" }}>
+    <span aria-hidden className="inline-flex items-center justify-center rounded-full" style={{ width: 14, height: 14, fontSize: 7, fontWeight: 500, background: "var(--bg4)", color: "var(--text2)" }}>{initialsOf(name)}</span>
+    {name}
+  </span>
+);
 
 const LOCK = "M7 11V8a5 5 0 0 1 10 0v3M5 11h14v9H5z";
 
 /** One comment's card: who and when (edited, restricted), its words or the box they are changed in, and what can be done to it. */
 function CommentCard({ c, act, root, answers }: { c: Comment; act?: CommentAct; root: Comment; answers?: string }) {
+  const fresh = useContext(FreshCtx).has(c.id);
   const [mode, setMode] = useState<"read" | "edit" | "delete">("read");
   const [draft, setDraft] = useState(c.text);
   const [busy, setBusy] = useState(false);
@@ -98,6 +126,15 @@ function CommentCard({ c, act, root, answers }: { c: Comment; act?: CommentAct; 
   useEffect(() => { if (mode === "read") setDraft(c.text); }, [c.text, mode]);
   const gone = useRef(false);
   useEffect(() => { gone.current = false; return () => { gone.current = true; }; }, []);
+  const card = useContext(CardCtx);
+  const link = commentLink(card.url, card.key, c.id);
+  const [copied, setCopied] = useState<"" | "ok" | "no">("");
+  useEffect(() => { if (!copied) return; const t = setTimeout(() => setCopied(""), LINK_SHOWN_MS); return () => clearTimeout(t); }, [copied]);
+  const copy = async () => {
+    if (!link) return;
+    try { await navigator.clipboard.writeText(link); if (!gone.current) setCopied("ok"); } catch { if (!gone.current) setCopied("no"); }
+  };
+  const named = useMemo<MentionChips | null>(() => (c.mentions?.length ? { names: c.mentions.map((m) => m.name), chip } : null), [c.mentions]);
 
   const save = async () => {
     if (!act || busy) return;
@@ -119,11 +156,12 @@ function CommentCard({ c, act, root, answers }: { c: Comment; act?: CommentAct; 
   };
 
   return (
-    <div className="agx-card rounded-xl min-w-0" style={{ border: EDGE, padding: "8px 12px" }}>
+    <div id={commentAnchor(c.id)} className="agx-card rounded-xl min-w-0" style={{ border: EDGE, padding: "8px 12px" }}>
       <div className="text-[10.5px] mb-1 flex items-center gap-x-1 flex-wrap">
         <span className="font-semibold" style={{ color: "var(--text2)" }}>{c.who}</span>
-        {c.at > 0 && <span style={{ color: "var(--text4)" }} data-tip={tipAttr(new Date(c.at).toLocaleString())}>{" · "}{fmtAgo(c.at)} ago</span>}
-        {c.edited && <span style={{ color: "var(--text4)" }} data-tip={tipAttr("Changed after it was written")}>{" · "}edited</span>}
+        {fresh && <span className="agx-jnew" data-testid="jira-comment-new">new</span>}
+        {c.at > 0 && <span style={{ color: "var(--text4)" }} data-tip={tipAttr(`${new Date(c.at).toLocaleString(undefined, { dateStyle: "full", timeStyle: "short" })} · ${fmtAgo(c.at)} ago`)}>{" · "}{exactDate(c.at)}</span>}
+        {c.edited && <span style={{ color: "var(--text4)" }} data-tip={tipAttr(editedTip(c.editedAt, c.editedBy))}>{editedLabel(c.at, c.editedAt)}</span>}
         {answers && <span style={{ color: "var(--text4)" }}>{" · "}replying to {answers}</span>}
         {c.restricted && (
           <span className="inline-flex items-center gap-1 rounded px-1" style={{ color: "var(--warning-ink)", border: EDGE }} data-tip={tipAttr(`Only ${c.restricted} can see this comment`)}>
@@ -133,32 +171,29 @@ function CommentCard({ c, act, root, answers }: { c: Comment; act?: CommentAct; 
         )}
       </div>
       {mode === "edit" ? (
-        <div className="flex flex-col gap-1.5">
-          <Textarea value={draft} autoFocus rows={4} disabled={busy} aria-label="Change this comment"
-            onChange={(e) => { setDraft(e.target.value); setErr(""); }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void save(); }
-              // Escape closes the box and nothing else: it must not reach the pane behind it.
-              if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setMode("read"); setErr(""); }
-            }}
-            className="w-full" style={{ minHeight: 64 }} />
-          <div className="flex items-center gap-2 text-[10.5px]">
-            <Button size="compact" disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : "Save"}</Button>
-            <Button size="compact" tone="quiet" disabled={busy} onClick={() => { setMode("read"); setErr(""); }}>Cancel</Button>
-            <span style={{ color: "var(--text4)" }}>Markdown · Ctrl+Enter saves</span>
-          </div>
-        </div>
+        <Composer value={draft} autoFocus busy={busy} sendLabel="Save" placeholder="Change this comment. Markdown, and @ to mention somebody."
+          onChange={(v) => { setDraft(v); setErr(""); }}
+          onSend={() => void save()}
+          onCancel={() => { setMode("read"); setErr(""); }}
+          people={act?.people}
+          onNeedPeople={act?.onPeopleQuery ? () => act.onPeopleQuery!("") : undefined}
+          onPeopleQuery={act?.onPeopleQuery} />
       ) : (
-        <div className="agx-cu-body agx-cu-note min-w-0 break-words"><Markdown text={c.text} /></div>
+        <div className="agx-cu-body agx-cu-note min-w-0 break-words">{named ? <MarkdownMentions value={named}><Markdown text={c.text} /></MarkdownMentions> : <Markdown text={c.text} />}</div>
       )}
       {err && <div className="text-[10.5px] mt-1" role="alert" style={{ color: "var(--error-ink)" }}>{err}</div>}
-      {act && mode === "read" && (
-        <div className="flex items-center gap-1 mt-1.5">
-          {act.reply && (
+      {mode === "read" && (act || link) && (
+        <div className="flex items-center gap-1 mt-1.5 flex-wrap">
+          {act?.reply && (
             <CommentAction iconOnly label="Reply" title={`Answer ${root.who} in this thread`} d="M9 14l-5-5 5-5M4 9h9a7 7 0 0 1 7 7v4"
               on={act.replyingTo === root.id} tone="var(--primary)" onClick={() => act.onReply(act.replyingTo === root.id ? null : root)} />
           )}
-          {c.mine && (
+          {link && (
+            <CommentAction iconOnly label="Copy link" title="Copy a link to this comment in Jira" d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"
+              onClick={() => void copy()} />
+          )}
+          {copied && <span className="text-[10.5px]" role="status" style={{ color: copied === "ok" ? "var(--success)" : "var(--error-ink)" }}>{copied === "ok" ? "Link copied" : "Could not copy the link"}</span>}
+          {act && c.mine && (
             <>
               <CommentAction iconOnly label="Edit" title="Change this comment" d="M4 20h4l10-10a2.8 2.8 0 0 0-4-4L4 16v4z" onClick={() => { setDraft(c.text); setMode("edit"); }} />
               <span aria-hidden className="mx-0.5" style={{ width: 1, height: 16, background: "color-mix(in srgb, var(--text) 12%, transparent)" }} />
@@ -216,8 +251,14 @@ const EMPTY: Record<ActivityTab, string> = {
 };
 
 
-export function JiraActivity({ cardKey, comments, moreComments, onMoreComments, worklog, worklogMore, act, tracking, work }: {
+export function JiraActivity({ cardKey, cardUrl, comments, moreComments, onMoreComments, worklog, worklogMore, act, tracking, work, fresh = [], onMarkRead }: {
   cardKey: string;
+  /** The card's address in Jira, which a comment's link is built on. */
+  cardUrl?: string;
+  /** The comments new to the person, oldest first: they wear a "new" mark, and Jump to new walks them. */
+  fresh?: readonly Comment[];
+  /** Mark read: everything on the card counts as read. */
+  onMarkRead?: () => void;
   /** What can be done to the comments; absent where they are only read. */
   act?: CommentAct;
   comments: Comment[];
@@ -234,6 +275,36 @@ export function JiraActivity({ cardKey, comments, moreComments, onMoreComments, 
   work?: JiraWorkUi;
 }) {
   const [tab, setTab] = useState<ActivityTab>("comments");
+  const freshIds = useMemo(() => new Set(fresh.map((c) => c.id)), [fresh]);
+  const cardCtx = useMemo(() => ({ key: cardKey, url: cardUrl }), [cardKey, cardUrl]);
+  const [cursor, setCursor] = useState(-1);
+  useEffect(() => { setCursor(-1); }, [cardKey, fresh.length]);
+  /* The walk of the pull request's conversation, at this pane's size: each press lands on the next new comment. */
+  const jump = useCallback((to: number) => {
+    if (!fresh.length) return;
+    const n = ((to % fresh.length) + fresh.length) % fresh.length;
+    setCursor(n);
+    const go = () => {
+      const el = document.getElementById(commentAnchor(fresh[n]!.id));
+      if (!el) return;
+      el.scrollIntoView({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
+      el.classList.remove("agx-jfound"); void el.offsetWidth; el.classList.add("agx-jfound");
+    };
+    if (tab !== "comments" && tab !== "all") { setTab("comments"); requestAnimationFrame(() => requestAnimationFrame(go)); } else go();
+  }, [fresh, tab]);
+  /* n and p, as on the pull request; ignored while typing. */
+  useEffect(() => {
+    if (!fresh.length) return;
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+      if (e.key === "n") { e.preventDefault(); jump(cursor + 1); }
+      else if (e.key === "p") { e.preventDefault(); jump(cursor - 1); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [fresh.length, cursor, jump]);
   const [newest, setNewest] = useState(readNewest);
   const [history, setHistory] = useState<History>(NO_HISTORY);
   const [extraLog, setExtraLog] = useState<{ events: CardEvent[]; left: number | null; busy: boolean; error: string }>({ events: [], left: null, busy: false, error: "" });
@@ -385,17 +456,30 @@ export function JiraActivity({ cardKey, comments, moreComments, onMoreComments, 
 
   return (
     <JiraSection id="activity" title="Activity" bare>
+      <CardCtx.Provider value={cardCtx}>
+      <FreshCtx.Provider value={freshIds}>
       <style>{JTL_CSS}</style>
-      {/* The strip stays under the pane's top while the thread scrolls under it. */}
-      <div className="sticky top-0 z-[2] -mx-4 px-4 pb-1.5 mb-2" style={{ background: "var(--bg)" }}>
-        <Segmented track label="What to show" value={tab} onChange={setTab} options={tabs.map((x) => ({ id: x.id, label: x.count ? `${x.label} ${x.count}` : x.label }))} />
-        <div className="flex justify-end mt-1">
+      {/* The strip stays under the pane's top while the thread scrolls under it. The card's scroller has 4 px of padding above its content and a sticky box
+          stops at the edge of that content, so with top 0 the thread showed in a 4 px band between the section tabs and this strip. top -4 with 4 px of own
+          padding puts the strip's opaque background on the scroller's very edge. The Newest/Oldest button is inside the strip, so the two rows are one bar. */}
+      <div className="sticky z-[2] -mx-4 px-4 pt-1 pb-1.5 mb-2" style={{ top: -4, background: "var(--bg)" }}>
+        <Segmented track label="What to show" value={tab} onChange={setTab} options={tabs.map((x) => ({ id: x.id, label: <>{x.count ? `${x.label} ${x.count}` : x.label}{x.id === "comments" && fresh.length > 0 && <span className="agx-jnew agx-jnew-tab" data-testid="jira-comments-new">{fresh.length} new</span>}</> }))} />
+        <div className="flex justify-end gap-1 mt-1">
+          {/* Both verbs stay drawn, disabled with the reason, as the pull request's bar does. */}
+          <Button size="compact" disabled={!fresh.length} onClick={() => jump(cursor + 1)} data-tip={tipAttr(fresh.length ? "Go to the next new comment (n), the one before with p" : "Nothing new since you last looked")}>
+            {cursor < 0 ? "Jump to new" : "Next new"}
+          </Button>
+          <Button size="compact" disabled={!fresh.length || !onMarkRead} onClick={onMarkRead} data-tip={tipAttr(fresh.length ? "Clear these marks: everything here counts as read" : "Nothing new to mark")}>
+            Mark read
+          </Button>
           <Button size="compact" onClick={flip} aria-pressed={newest} data-tip={tipAttr("Switch between oldest and newest first")} className="shrink-0">
             {newest ? "Newest first" : "Oldest first"}
           </Button>
         </div>
       </div>
       {body}
+      </FreshCtx.Provider>
+      </CardCtx.Provider>
     </JiraSection>
   );
 }

@@ -2,12 +2,13 @@ import { expect, test } from "bun:test";
 
 const src = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
 
-test("the masthead's meta row wraps in every band, so its chips never draw over each other", () => {
-  const at = src.indexOf('<div className={`flex items-center gap-y-1.5 text-[12px]');
+test("the masthead's meta row wraps in every band, so its chips never draw over each other", async () => {
+  const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
+  const at = css.indexOf(".prx-facts {");
   expect(at).toBeGreaterThan(-1);
-  const line = src.slice(at, src.indexOf("\n", at));
-  expect(line).toContain("flex-wrap");
-  expect(line).not.toContain("flex-nowrap");
+  const rule = css.slice(at, css.indexOf("}", at));
+  expect(rule).toContain("flex-wrap: wrap");
+  expect(src).toContain("<PrHeader");
 });
 
 test("the one lane the narrow board shows is centred, so the dock's rail allowance is air on both sides", async () => {

@@ -123,9 +123,9 @@ describe("the pinned rail says what each number counts", () => {
 
 describe("a reload never eats a draft", () => {
   const answer = { doors: {} } as unknown as SettingsAnswer;
-  test("a dirty draft is kept and the person is told why", () => {
+  test("a dirty draft is kept, and the view rebases it on its own (no Reload to press)", () => {
     expect(onNewSettings({ hasBase: true, dirty: true }, answer)).toBe("keep");
-    expect(view).toContain("STALE");
+    expect(view).not.toContain("STALE");
   });
   test("a clean draft follows the stored setting", () => {
     expect(onNewSettings({ hasBase: true, dirty: false }, answer)).toBe("rebase");
@@ -231,8 +231,8 @@ describe("the layer one Save writes: resets, then preset, then door edits", () =
   });
 
   test("the view saves through that one function, with the doors this person moved", () => {
-    expect(view).toContain("const { plan: p, layer } = saveCommit(state, answer, scope);");
-    expect(view).toContain("save({ settings: layer })");
+    expect(src("lib/polarisAutosave.ts")).toContain("const { plan: p, layer } = saveCommit(state, answer, scope);");
+    expect(src("lib/polarisAutosave.ts")).toContain("save({ settings: layer })");
     expect(draftSrc).toContain("doorEdits(s.draft.doors, s.base.doors, s.resets)");
     expect(view).not.toContain("for (const door of resets) delete doors[door]");
   });
@@ -343,7 +343,7 @@ describe("the rest of the third cold review", () => {
     const saved = layerToSave(fresh, "project", [], null, doorEdits(draft, base.doors));
     expect(saved.doors?.labels).toEqual({ mode: "off", rules: [] });
     expect(saved.doors?.dock).toEqual(dockOff);
-    expect(view).toContain("let cur = answer;");
+    expect(src("lib/polarisAutosave.ts")).toContain("let cur = answer;");
   });
 
   test("a label field follows the stored value instead of writing back what it never saw", () => {
@@ -464,7 +464,7 @@ describe("a save is decided from the positions it leaves, not from the click tha
 
   test("the view refuses the first Save and asks with a confirmation that names the door", () => {
     expect(view).toContain("if (p.consent.length > 0) { setConfirm(p.consent); return; }");
-    expect(view).toContain("onClick={askSave}>Save changes");
+    expect(view).toContain("autoRef.current = () => {");
     expect(view).toContain('role="alertdialog"');
     expect(view).toContain("consentSentence(d, plan.effective)");
     expect(view).toContain("plan.dirty && plan.live.length > 0");
@@ -515,8 +515,8 @@ describe("the fifth cold review's small fixes", () => {
     expect(css).toMatch(/\.agx-pol-power \{[^}]*min-height: 26px/);
   });
   test("Save decides from one plan: the confirmation and the layer come out of it together", () => {
-    expect(view).toContain("const { plan: p, layer } = saveCommit(state, answer, scope);");
-    expect(view).toContain("if (p.consent.some((d) => !allowed.includes(d))) { setConfirm(p.consent); return; }");
+    expect(src("lib/polarisAutosave.ts")).toContain("const { plan: p, layer } = saveCommit(state, answer, scope);");
+    expect(src("lib/polarisAutosave.ts")).toContain("if (p.consent.some((d) => !allowed.includes(d))) { return { kind: \"ask\", consent: p.consent }; }");
     expect(view).toContain("onClick={() => void commit(confirm)}");
     expect(draftSrc).toContain("const plan = savePlan({ ...s, base: answer }, scope);");
   });

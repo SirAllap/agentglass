@@ -1,4 +1,5 @@
 import { useSyncExternalStore, useState, useEffect, useRef, type ReactNode } from "react";
+import { railTrim, VIEW_SLOT } from "../../lib/settingsNav.ts";
 import {
   VIEWS, SHIPPED_RAIL, loadRail, saveRail, subscribeRail, railIds, withMove, moveView,
   type RailPlace, type ViewDef, type ViewId,
@@ -25,7 +26,7 @@ const BY_ID = new Map(VIEWS.map((v) => [v.id, v] as const));
  *  list with the dragged view taken out. */
 type Slot = { place: RailPlace; index: number };
 
-export type RailPip = { count?: number; dot?: boolean };
+export type RailPip = { count?: number; dot?: boolean; /** An agent is driving this view: a dot at the top-left. */ driven?: boolean };
 
 /** Icon-only switcher down the side of the workspace.
  *
@@ -269,6 +270,10 @@ export function ViewRail({
           <span className="absolute top-[6px] right-[7px] w-[6px] h-[6px] rounded-full"
             style={{ background: "var(--info)", boxShadow: "0 0 0 2px var(--surface-nav)" }} />
         ) : null}
+        {pip?.driven && (
+          <span className="absolute top-[6px] left-[7px] w-[6px] h-[6px] rounded-full"
+            style={{ background: "var(--primary)", boxShadow: "0 0 0 2px var(--surface-nav)" }} />
+        )}
       </button>
     );
   };
@@ -310,6 +315,27 @@ export function ViewRail({
     return out;
   };
 
+  // A short window (800x500, the 200 % zoom case) scrolls the top groups; the visible height must be
+  // whole icon slots (44px button + 4px gap) or the last icon shows cut. The scroller is flex-1, so a
+  // bottom margin is what shortens it: size = free space - margin.
+  const navEl = useRef<HTMLElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const n = navEl.current, el = scroller.current;
+    if (!n || !el || typeof ResizeObserver === "undefined") return;
+    const fit = () => {
+      el.style.marginBottom = "0px";
+      // Only when it overflows: on a rail whose icons all fit, the trim was an empty band above the bottom cluster's line.
+      if (el.scrollHeight > el.clientHeight) el.style.marginBottom = `${railTrim(el.clientHeight, VIEW_SLOT, 8)}px`;
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(n);
+    // The pinned cluster changing height (a badge, one more icon) resizes the scroller, not the nav.
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const hiddenViews = rail.hidden;
   /** The drop target is aimed at, so the button can turn red before the drop
    *  rather than after it. */
@@ -334,7 +360,8 @@ export function ViewRail({
          clipped by this box. The bar is hidden, because 7px of a 52px strip is a
          sixth of it and a pill that narrows with the window is a rhythm change;
          the wheel and the arrow keys still scroll it. */
-      className="shrink-0 flex flex-col gap-1 p-2 overflow-y-auto agw-noscrollbar"
+      className="shrink-0 flex flex-col overflow-x-hidden overflow-y-auto agw-noscrollbar"
+      ref={navEl}
       style={{
         width: RAIL_W,
         /* THE RAIL IS CHROME, and it was painting the content's own colour.
@@ -353,6 +380,10 @@ export function ViewRail({
         background: "var(--surface-nav)",
       }}
     >
+      {/* Only this part scrolls, trimmed to whole icon slots so none shows cut
+          (railTrim, the helper the settings rail uses); the cluster below it
+          is pinned. */}
+      <div ref={scroller} style={{ minHeight: VIEW_SLOT + 8 }} className="flex-1 shrink-0 basis-0 flex flex-col gap-1 px-2 pt-2 overflow-y-auto agw-noscrollbar agw-rail-snap">
       {/* flex-1 so the empty run below the last icon still belongs to this
           drawer: dropping into the blank middle of the rail obviously means
           "put it at the bottom of the top group", and a container sized to its
@@ -387,7 +418,9 @@ export function ViewRail({
       {/* This cluster is the way back — Resources and Settings — and it keeps
           its height: the nav scrolls, so it is reachable at any window height
           instead of being squeezed or pushed out. */}
-      <div className="shrink-0 flex flex-col gap-1">
+      </div>
+
+      <div className="shrink-0 flex flex-col gap-1 px-2 pb-2">
         {/* A second hairline, because everything below is not a view at all:
             these open OVER whatever you are in and hand it straight back. A
             divider is the cheapest way to say "these do not change where you

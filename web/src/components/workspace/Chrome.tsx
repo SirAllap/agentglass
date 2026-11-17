@@ -268,7 +268,7 @@ export function Chip({
     <button
       type="button"
       onClick={onClick}
-      title={title}
+      data-tip={title}
       aria-label={ariaLabel}
       disabled={disabled}
       {...(tab ? { role: "tab", "aria-selected": !!on } : hasState ? { "aria-pressed": !!(pressed ?? on) } : {})}
@@ -305,7 +305,7 @@ export function Badge({ tint, fill = tint, wash = 10, outlined, tight, clip, onC
 }) {
   return (
     <span
-      title={title}
+      data-tip={title}
       onClick={onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined}
       className={`text-[9.5px]${tight ? " leading-none" : ""} ${outlined ? "py-0.5" : "py-px"} px-1.5 rounded-md whitespace-nowrap ${clip ? "min-w-0 truncate" : "shrink-0"}${onClick ? " cursor-pointer" : ""}`}
       style={{
@@ -348,7 +348,7 @@ export function Segmented<T extends string>({ value, options, onChange, label, t
     return (
       <span className="agx-seg" role="group" aria-label={label}>
         {options.map((o) => (
-          <button key={o.id} type="button" title={o.title} onClick={() => onChange(o.id)} disabled={disabled || o.disabled}
+          <button key={o.id} type="button" data-tip={o.title} onClick={() => onChange(o.id)} disabled={disabled || o.disabled}
             aria-pressed={value === o.id} className="agx-seg-b disabled:cursor-not-allowed disabled:opacity-45">
             {o.label}
           </button>
@@ -362,7 +362,7 @@ export function Segmented<T extends string>({ value, options, onChange, label, t
     // slips between two 28px targets.
     <div className="flex items-center gap-1.5 shrink-0" role="group" aria-label={label}>
       {options.map((o) => (
-        <Chip key={o.id} on={value === o.id} resting compact={compact} disabled={disabled} onClick={() => onChange(o.id)} title={o.title}>{o.label}</Chip>
+        <Chip key={o.id} on={value === o.id} resting compact={compact} disabled={disabled || o.disabled} onClick={() => onChange(o.id)} title={o.title}>{o.label}</Chip>
       ))}
     </div>
   );
@@ -417,7 +417,7 @@ export function Tabs<T extends string>({ value, options, onChange, label, panelI
             aria-controls={panelId}
             // Roving: the strip is one tab stop, and the arrows move inside it.
             tabIndex={on ? 0 : -1}
-            title={o.title}
+            data-tip={o.title}
             onClick={() => onChange(o.id)}
             onKeyDown={(e) => move(e, i)}
             className="agx-tab text-[12px] px-3 min-h-[32px] inline-flex items-center whitespace-nowrap transition-colors"
@@ -503,8 +503,8 @@ export function ScopeChip({ label, kind, trailing = "none", on, onClick, title, 
   const style = on ? chipTone(true) : CHIP_SURFACE;
   const safe = href ? externalUrl(href) : undefined;
   return safe
-    ? <a href={safe} target="_blank" rel="noreferrer" title={title} className={cls} style={style}>{inner}</a>
-    : <button type="button" onClick={onClick} title={title} className={cls} style={style}>{inner}</button>;
+    ? <a href={safe} target="_blank" rel="noreferrer" data-tip={title} className={cls} style={style}>{inner}</a>
+    : <button type="button" onClick={onClick} data-tip={title} className={cls} style={style}>{inner}</button>;
 }
 
 /**
@@ -536,7 +536,7 @@ export function IconChip({ onClick, title, label, children, on, bare, disabled, 
     <button
       type="button"
       onClick={onClick}
-      title={title}
+      data-tip={title}
       aria-label={label ?? title}
       disabled={disabled}
       {...(expanded !== undefined ? { "aria-expanded": expanded } : {})}
@@ -684,7 +684,7 @@ export function Button({
   };
   if (href !== undefined) {
     return (
-      <a href={download === undefined ? externalUrl(href) : href} download={download} title={title ?? label} aria-label={label}
+      <a href={download === undefined ? externalUrl(href) : href} download={download} data-tip={title ?? label} aria-label={label}
         {...(download === undefined ? { target: "_blank", rel: "noreferrer noopener" } : null)}
         className={shape} style={look}>
         {children}
@@ -693,11 +693,11 @@ export function Button({
   }
   return (
     <button
+      data-tip={pending ? "Working…" : title ?? label}
       type="button"
       {...rest}
       disabled={disabled || pending}
       /* A button that carries `data-tip` is explained by the one tooltip (TipHost), never by a native title as well. */
-      title={"data-tip" in rest ? undefined : pending ? "Working…" : title ?? label}
       aria-label={label}
       aria-busy={pending || undefined}
       data-tone={tint || on !== undefined ? undefined : tone}
@@ -728,7 +728,7 @@ export function Button({
  * a refresh that changed nothing on screen still needs to say that it ran —
  * opt-in, because every other caller has nothing to report back.
  */
-export function RefreshButton({ onRefresh, busy, spinning, done, title, disabled, iconSize = CHIP_ICON }: {
+export function RefreshButton({ onRefresh, busy, spinning, done, title, disabled, label, iconSize = CHIP_ICON }: {
   onRefresh: () => void;
   busy?: boolean;
   /** The refresh's own request is out. `busy` also greys the button for work
@@ -738,6 +738,8 @@ export function RefreshButton({ onRefresh, busy, spinning, done, title, disabled
   done?: boolean;
   title: string;
   disabled?: boolean;
+  /** Words beside the glyph, in the primary tint: for the one refresh a screen has two of, so it says which. */
+  label?: string;
   /** The glyph's size; a bar with its own icon rung passes it. */
   iconSize?: number;
 }) {
@@ -748,18 +750,20 @@ export function RefreshButton({ onRefresh, busy, spinning, done, title, disabled
       type="button"
       onClick={onRefresh}
       disabled={disabled ?? (busy || spinning)}
-      title={title}
+      data-tip={title}
       aria-label={title}
-      className="grid place-items-center rounded-lg shrink-0 transition-colors disabled:opacity-60"
+      className={`${label ? "inline-flex items-center gap-1.5 px-2.5 text-[11.5px] font-semibold" : "grid place-items-center"} rounded-lg shrink-0 transition-colors disabled:opacity-60`}
       style={{
-        width: CTRL_H.regular, height: CTRL_H.regular,
+        ...(label ? {} : { width: CTRL_H.regular }), height: CTRL_H.regular,
         ...CHIP_SURFACE,
-        color: showDone ? "var(--success)" : CHIP_SURFACE.color,
+        ...(label ? { background: "color-mix(in srgb, var(--primary) 14%, transparent)", border: tintEdge("var(--primary)", 40) } : {}),
+        color: showDone ? "var(--success)" : label ? "var(--primary-ink, var(--primary))" : CHIP_SURFACE.color,
       }}
     >
       {showDone
         ? <DoneIcon size={iconSize} />
         : <RefreshIcon size={iconSize} className={turning ? "agx-turn" : undefined} />}
+      {label}
     </button>
   );
 }
@@ -855,7 +859,7 @@ export function ListRow({ children, onClick, current, hot, disabled, leading, tr
       {...rest}
       onClick={onClick}
       disabled={disabled}
-      title={title}
+      data-tip={title}
       aria-current={current || undefined}
       className={`agx-chip flex w-full min-w-0 items-center ${two ? "gap-2.5 py-1.5" : "gap-1.5"} px-2.5 text-left text-[11px] ${CTRL_RADIUS} transition-colors disabled:opacity-40 ${className}`.trim()}
       style={{

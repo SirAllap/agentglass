@@ -4,6 +4,7 @@
  * once per row on a board with both trackers connected.
  */
 import { beforeEach, describe, expect, it } from "bun:test";
+import type { PrSummary } from "../../shared/types.ts";
 
 const calls: string[] = [];
 const mod = await import("../src/lib/api.ts");
@@ -12,7 +13,7 @@ const saved = { clickupFind: a.clickupFind, jiraFind: a.jiraFind };
 a.clickupFind = (q: string) => { calls.push(`clickup:${q}`); return Promise.resolve({ ok: false, error: "no" }); };
 a.jiraFind = (q: string) => { calls.push(`jira:${q}`); return Promise.resolve({ ok: true, task: { id: "10007", customId: q, title: "Retry the export", status: "In Review" } }); };
 
-const { cardOf, forgetCards, withCard } = await import("../src/lib/prCardStore.ts");
+const { cardOf, forgetCards, withCard, putCard } = await import("../src/lib/prCardStore.ts");
 const settle = () => new Promise((r) => setTimeout(r, 30));
 
 import { afterAll } from "bun:test";
@@ -37,6 +38,15 @@ describe("which tracker answers for a card", () => {
   it("does not ask ClickUp about a row whose card the server already named as Jira's", async () => {
     const row = { headRefName: "fix/ORBIT-1042-x", title: "x", card: { id: "1", title: "t", status: "Open", priority: null, tracker: "jira" as const, at: 1 } };
     expect(withCard(row as never, true)).toBe(row as never);
+    await settle();
+    expect(calls).toEqual([]);
+  });
+
+  it("takes the status a step just wrote, on a Jira row, still without asking ClickUp", async () => {
+    const task = { id: "1", customId: "ORBIT-1042", title: "t", url: "", status: "Code review" };
+    putCard("ORBIT-1042", task as never);
+    const row = { headRefName: "fix/ORBIT-1042-x", title: "x", card: { id: "1", customId: "ORBIT-1042", title: "t", status: "In development", priority: null, tracker: "jira" as const, at: Date.now() - 60_000 } };
+    expect(withCard(row as unknown as PrSummary, true).card?.status).toBe("Code review");
     await settle();
     expect(calls).toEqual([]);
   });

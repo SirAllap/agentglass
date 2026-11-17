@@ -27,11 +27,14 @@ import { CloseButton } from "../CloseButton.tsx";
 import { Portal } from "../Portal.tsx";
 import { Button, EDGE, LINE, Badge } from "../workspace/Chrome.tsx";
 import type { SessionInfo } from "./SessionSwitcher.tsx";
+import { moveSlot, saveOrder, savedOrder, slotOrder } from "../../lib/sessionSlots.ts";
 
 type Asking = { kind: "end"; name: string } | { kind: "cleanup" } | null;
 
-export function ManageSessions({ sessions, current, engine, prefix, needsYou, onEnd, onLock, onClose }: {
+export function ManageSessions({ sessions: listed, current, engine, prefix, needsYou, onSwitch, onEnd, onLock, onClose }: {
   sessions: readonly SessionInfo[];
+  /** Go to that session (a row's name, or its slot number typed here). */
+  onSwitch: (name: string) => void;
   current: string;
   /** Whose tmux this is, and the key it listens to: the header says both. */
   engine: boolean;
@@ -45,6 +48,10 @@ export function ManageSessions({ sessions, current, engine, prefix, needsYou, on
   const modal = useModalDialog(true, "Manage tmux sessions");
   const [panes, setPanes] = useState<AgentPane[]>([]);
   const [asking, setAsking] = useState<Asking>(null);
+  // The person's order: row N is Ctrl+Alt+N. Moving a row saves the whole shown order.
+  const [order, setOrder] = useState<string[]>(() => savedOrder());
+  const sessions = useMemo(() => slotOrder(listed, order), [listed, order]);
+  const move = (name: string, by: -1 | 1) => { const next = moveSlot(sessions.map((x) => x.name), name, by); saveOrder(next); setOrder(next); };
 
   useEffect(() => {
     let live = true;
@@ -55,13 +62,20 @@ export function ManageSessions({ sessions, current, engine, prefix, needsYou, on
   }, []);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
+      // A plain digit goes to that slot, the way the dialog numbers its rows.
+      const d = !e.ctrlKey && !e.altKey && !e.metaKey && /^Digit([1-9])$/.exec(e.code);
+      if (d && !asking) {
+        const s = sessions[Number(d[1]) - 1];
+        if (s) { e.stopPropagation(); e.preventDefault(); onClose(); if (s.name !== current) onSwitch(s.name); }
+        return;
+      }
       if (e.key !== "Escape") return;
       e.stopPropagation(); e.preventDefault();
       if (asking) setAsking(null); else onClose();
     };
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
-  }, [asking, onClose]);
+  }, [asking, onClose, onSwitch, sessions, current]);
 
   const by = useMemo(() => windowsBySession(panes), [panes]);
   const namesOf = (name: string) => (by.get(name) ?? []).map((w) => w.name);
@@ -101,7 +115,7 @@ export function ManageSessions({ sessions, current, engine, prefix, needsYou, on
         )}
 
         <div className="overflow-y-auto agx-scroll p-1.5 flex flex-col min-h-0">
-          {sessions.map((s) => {
+          {sessions.map((s, i) => {
             const here = s.name === current;
             const names = namesOf(s.name);
             const why = endBlockedWhy(s, current);
@@ -110,20 +124,23 @@ export function ManageSessions({ sessions, current, engine, prefix, needsYou, on
             return (
               <div key={s.id}>
                 <div className="grid items-center gap-2 rounded-lg px-1.5 py-1.5"
-                  style={{ gridTemplateColumns: "18px 1fr auto 54px 26px 26px", background: here ? "color-mix(in srgb, var(--primary) 6%, transparent)" : undefined }}>
-                  <span className="flex justify-center">{here && <span aria-hidden className="rounded-full" style={{ width: 7, height: 7, background: "var(--primary)" }} />}</span>
-                  <span className="min-w-0 flex flex-col gap-px">
+                  style={{ gridTemplateColumns: "18px 1fr auto 54px 26px 26px 26px 26px", background: here ? "color-mix(in srgb, var(--primary) 6%, transparent)" : undefined }}>
+                  <span className="flex justify-center text-[11px] font-semibold tabular-nums" data-tip={i < 9 ? `Ctrl+Alt+${i + 1}` : undefined}
+                    style={{ color: here ? "var(--primary-ink)" : "var(--text3)" }}>{i < 9 ? i + 1 : ""}</span>
+                  <span className="min-w-0 flex flex-col gap-px cursor-pointer" onClick={() => { onClose(); if (!here) onSwitch(s.name); }}>
                     <span className="flex items-center gap-1.5 min-w-0">
                       <span className="truncate text-[12px] font-semibold" style={{ color: "var(--text)" }}>{s.name}</span>
                       {here && <span className="uppercase"><Badge tint="var(--text3)" tight>here</Badge></span>}
                     </span>
-                    {names.length > 0 && <span className="text-[10.5px] truncate" style={{ color: "var(--text3)" }} title={names.map((n) => n || "shell").join(", ")}>{namesText(names)}</span>}
+                    {names.length > 0 && <span className="text-[10.5px] truncate" style={{ color: "var(--text3)" }} data-tip={names.map((n) => n || "shell").join(", ")}>{namesText(names)}</span>}
                   </span>
                   <span className="text-right text-[11px] tabular-nums flex flex-col" style={{ color: "var(--text2)" }}>
                     {s.windows === 1 ? "1 window" : `${s.windows} windows`}
                     {here && needsYou > 0 && <span className="text-[10.5px] font-semibold" style={{ color: "var(--warning-ink)" }}>{needsYou} need{needsYou === 1 ? "s" : ""} you</span>}
                   </span>
                   <span className="text-[10.5px] tabular-nums" style={{ color: "var(--text3)" }}>{age}</span>
+                  <Button size="compact" tone="quiet" square label={`Move ${s.name} up`} disabled={i === 0} onClick={() => move(s.name, -1)}>↑</Button>
+                  <Button size="compact" tone="quiet" square label={`Move ${s.name} down`} disabled={i === sessions.length - 1} onClick={() => move(s.name, 1)}>↓</Button>
                   <Button size="compact" tone="quiet" square label={s.locked ? `Unlock ${s.name}` : `Lock ${s.name} so it cannot be ended`}
                     title={s.locked ? `${s.name} is protected. Click to allow ending it.` : `Protect ${s.name} from being ended`}
                     style={{ color: s.locked ? "var(--text)" : "var(--text4)", background: s.locked ? "var(--surface-inset)" : undefined }}
@@ -150,7 +167,7 @@ export function ManageSessions({ sessions, current, engine, prefix, needsYou, on
         </div>
 
         <div className="shrink-0 flex items-center gap-2 px-4 py-2 text-[10.5px]" style={{ borderTop: LINE, color: "var(--text3)" }}>
-          <span className="min-w-0">Locked sessions cannot be ended. New sessions made by tools show up here.</span>
+          <span className="min-w-0">Ctrl+Alt+1–9 or 1–9 here goes to that session; ↑↓ change its number. Hold Ctrl+Alt to open this.</span>
           <kbd className="ml-auto shrink-0 px-1 rounded" style={{ background: "var(--surface-inset)" }}>Esc</kbd>
         </div>
       </div>

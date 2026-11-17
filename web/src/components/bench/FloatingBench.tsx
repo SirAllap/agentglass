@@ -30,9 +30,10 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType } from "react";
 import { motion } from "motion/react";
-import { Portal } from "../Portal.tsx";
+import { Portal, PortalFloor } from "../Portal.tsx";
 import { openFind, useFindScope } from "../../lib/findScope.ts";
 import { LAYER } from "../../lib/layers.ts";
+import { fabLift } from "../../lib/fabDodge.ts";
 import { focusToRemember, focusToRestore } from "../../lib/benchFocus.ts";
 import { NO_DRAG } from "../../lib/dragRegion.ts";
 import { api } from "../../lib/api.ts";
@@ -49,12 +50,13 @@ import { claimZoom } from "../../lib/zoomOwner.ts";
 import { BenchTerm } from "./BenchTerm.tsx";
 import { BenchNote } from "./BenchNote.tsx";
 import { BenchWeb } from "./BenchWeb.tsx";
+import { remeasureBrowser } from "../../lib/browserHost.ts";
 import { BoardSlot } from "../workspace/BoardSlot.tsx";
 import type { BoardKind } from "../../lib/boardHost.ts";
 import { RAIL_W } from "../workspace/ViewRail.tsx";
 import { TOP_BAR_H } from "../TopBar.tsx";
 import type { GitRepoRef } from "../../../../shared/types.ts";
-import { ICON } from "../../lib/iconSize.ts";
+import { HIT, ICON } from "../../lib/iconSize.ts";
 import { AgentIcon, ExpandIcon, FileIcon, NoteIcon, SearchIcon } from "../../lib/glyphIcons.tsx";
 import { BrowserIcon, IssuesIcon, PrIcon, TerminalIcon } from "../workspace/icons.tsx";
 import { CloseIcon } from "../CloseButton.tsx";
@@ -135,6 +137,9 @@ const AGENTS: { id: string; label: string }[] = [
   { id: "claude", label: "Claude" },
 ];
 
+/** A rect percentage as whole pixels: a fractional edge clips a tab's border. */
+export const wholePx = (pct: number) => `round(${pct}%, 1px)`;
+
 export function FloatingBench() {
   const st = useSyncExternalStore(subscribeBench, benchState);
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
@@ -210,6 +215,16 @@ export function FloatingBench() {
     const a = document.activeElement as HTMLElement | null;
     cameFrom.current = focusToRemember(a, a === document.body, !!winRef.current?.contains(a));
   }, [st.open]);
+  /* Opened over a terminal, the keyboard stayed in that terminal behind the
+     window: a board's own keys ("/", j, k) went to the shell until a click
+     moved it. On open the window takes the focus itself, a frame later so a
+     terminal inside that focuses itself keeps it. */
+  useEffect(() => {
+    const el = winRef.current;
+    if (!st.open || !el) return;
+    const id = requestAnimationFrame(() => { if (!el.contains(document.activeElement)) el.focus({ preventScroll: true }); });
+    return () => cancelAnimationFrame(id);
+  }, [st.open, built]);
   useLayoutEffect(() => {
     const el = winRef.current;
     if (st.open || !el) return;
@@ -544,6 +559,7 @@ export function FloatingBench() {
   const onBarUp = (e: React.PointerEvent) => {
     dragFrom.current = null;
     try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch { /* already released */ }
+    remeasureBrowser();
   };
 
   /*
@@ -586,6 +602,7 @@ export function FloatingBench() {
   const onEdgeUp = (e: React.PointerEvent) => {
     sizeFrom.current = null;
     try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch { /* already released */ }
+    remeasureBrowser();
   };
 
   /* ----------------------------------------------------------------- keys */
@@ -624,22 +641,28 @@ export function FloatingBench() {
     <>
         {built && (
           <Portal z={away ? UNDER_THE_APP : LAYER.bench}>
+            {/* Everything drawn from inside the bench (a tab's menu, a picker) portals
+                to body at its own number, 9999 by default: under the bench. The floor
+                lifts every one of them to the bench-overlay layer. */}
+            <PortalFloor.Provider value={away || !st.open ? 0 : LAYER.benchOverlay}>
             <motion.div
               ref={winRef}
-              data-find-anchor="" {...{ [OWNER_ATTR]: "" }}
+              tabIndex={-1}
+              data-find-anchor="" data-bench-window="" {...{ [OWNER_ATTR]: "" }}
               initial={HIDDEN}
               animate={st.open ? SHOWN : HIDDEN}
+              onAnimationComplete={remeasureBrowser}
               transition={{ duration: FADE_MS / 1000, ease: [0.16, 1, 0.3, 1] }}
-              className="fixed flex flex-col overflow-hidden rounded-xl"
+              className="fixed flex flex-col overflow-hidden rounded-xl outline-none"
               /* No scrim, and that is the point: the view underneath stays
                  usable and visible. A bench that dimmed the diff you opened it
                  to work on would be a modal, and a modal is the thing this is
                  not. */
               style={{
-                left: st.grown ? RAIL_W + GROWN_GAP : `${st.geom.x}%`,
-                top: st.grown ? GROWN_TOP : `${st.geom.y}%`,
-                width: st.grown ? `calc(100% - ${RAIL_W + 2 * GROWN_GAP}px)` : `${st.geom.w}%`,
-                height: st.grown ? `calc(100% - ${GROWN_TOP + GROWN_GAP}px)` : `${st.geom.h}%`,
+                left: st.grown ? RAIL_W + GROWN_GAP : wholePx(st.geom.x),
+                top: st.grown ? GROWN_TOP : wholePx(st.geom.y),
+                width: st.grown ? `calc(100% - ${RAIL_W + 2 * GROWN_GAP}px)` : wholePx(st.geom.w),
+                height: st.grown ? `calc(100% - ${GROWN_TOP + GROWN_GAP}px)` : wholePx(st.geom.h),
                 background: "var(--surface-card)",
                 border: "1px solid color-mix(in srgb, var(--primary) 38%, transparent)",
                 boxShadow: "0 30px 70px -18px #000",
@@ -691,20 +714,20 @@ export function FloatingBench() {
                   aria-expanded={menuOpen}
                   className="shrink-0 text-[15px]">+</Button>
 
-                <div className="flex items-center gap-1 min-w-0 overflow-x-auto agx-scroll">
+                <div className="flex items-center gap-1 min-w-0 overflow-x-auto agx-scroll" style={{ height: HIT }}>
                   {tabs.map((t) => {
                     const on = t.id === active?.id;
                     const Glyph = GLYPH[t.kind];
                     return (
-                      <span key={t.id} className="shrink-0 flex items-center rounded-md overflow-hidden"
+                      <span key={t.id} className="shrink-0 flex items-center rounded-md box-border"
                         style={on
-                          ? { background: "var(--surface-card)", border: EDGE }
-                          : { background: "color-mix(in srgb, var(--text) 4%, transparent)", border: EDGE }}>
+                          ? { height: HIT, background: "var(--surface-card)", border: EDGE }
+                          : { height: HIT, background: "color-mix(in srgb, var(--text) 4%, transparent)", border: EDGE }}>
                         <button
                           onClick={() => activateTab(root, t.id)}
-                          className="agx-bench-hit flex items-center gap-2 text-[11.5px] px-2.5 max-w-[200px]"
-                          style={{ height: 28, color: on ? "var(--text)" : "var(--text3)" }}
-                          title={tabTitle(t, root, cold(t, liveSlots))}>
+                          className="agx-bench-hit flex items-center gap-2 text-[11.5px] px-2.5 max-w-[200px] h-full rounded-md"
+                          style={{ color: on ? "var(--text)" : "var(--text3)" }}
+                          data-tip={tabTitle(t, root, cold(t, liveSlots))}>
                           <span className="shrink-0 flex" style={{ color: on ? "var(--text2)" : "var(--text3)" }}><Glyph size={ICON.sm} /></span>
                           <span className="truncate" style={cold(t, liveSlots) ? { opacity: 0.6 } : undefined}>{t.title}</span>
                           {t.readonly && <span className="shrink-0 text-[9px]" style={{ color: "var(--warning-ink)" }}>ro</span>}
@@ -719,9 +742,10 @@ export function FloatingBench() {
                             were trying to close. */}
                         {on && (
                           <button onClick={() => { if (isLanternTab(t)) void api.benchEnd(root, t.slot); closeTab(root, t.id); }}
-                            title={isLanternTab(t) ? "Close the Lantern's chat (ends it)" : "Forget this tab (what it runs keeps running)"}
+                            data-tip={isLanternTab(t) ? "Close the Lantern's chat (ends it)" : "Forget this tab (what it runs keeps running)"}
+                            aria-label={isLanternTab(t) ? "Close the Lantern's chat (ends it)" : "Forget this tab (what it runs keeps running)"}
                             className="agx-bench-hit shrink-0 flex items-center justify-center rounded-md"
-                            style={{ width: 26, height: 26, color: "var(--text3)" }}><CloseIcon size={ICON.sm} /></button>
+                            style={{ width: HIT - 2, height: HIT - 2, color: "var(--text3)" }}><CloseIcon size={ICON.sm} /></button>
                         )}
                       </span>
                     );
@@ -776,7 +800,7 @@ export function FloatingBench() {
                     element, not the window, so it costs nothing to restyle. */}
                 {root && tabs.filter((t) => t.kind !== "file" && seen.has(t.id)).map((t) => (
                   <div key={t.id} className="absolute inset-0" style={{ visibility: t.id === active?.id && !(away && t.kind === "web") ? "visible" : "hidden" }}>
-                    <TabBody root={root} tab={t} active={st.open && t.id === active?.id} />
+                    <TabBody root={root} tab={t} active={st.open && t.id === active?.id && !(away && t.kind === "web")} />
                   </div>
                 ))}
                 {root && seed && seen.has(reader) && (
@@ -822,6 +846,7 @@ export function FloatingBench() {
                 </svg>
               )}
             </motion.div>
+          </PortalFloor.Provider>
           </Portal>
         )}
 
@@ -867,6 +892,29 @@ function BenchFab() {
   const st = useSyncExternalStore(subscribeBench, benchState);
   const from = useRef<{ x: number; y: number; f: { x: number; y: number }; moved: boolean } | null>(null);
   const live = useMemo(() => benchRoots().reduce((n, r) => n + tabsFor(r).length, 0), [st.byRoot]);
+  /* A bar marked data-fab-avoid (the pull request dock) is never sat on: the button is drawn above it. */
+  const btn = useRef<HTMLButtonElement>(null);
+  const [lift, setLift] = useState(0);
+  useEffect(() => {
+    let raf = 0;
+    const measure = () => {
+      const el = btn.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const home = { left: r.left, right: r.right, top: r.top + lift, bottom: r.bottom + lift };
+      const next = Math.round(fabLift(home, [...document.querySelectorAll("[data-fab-avoid]")].map((e) => e.getBoundingClientRect())));
+      if (next !== lift) setLift(next);
+    };
+    const soon = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(measure); };
+    soon();
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(soon);
+    ro?.observe(document.body);
+    document.querySelectorAll("[data-fab-avoid]").forEach((e) => ro?.observe(e));
+    const mo = typeof MutationObserver === "undefined" ? null : new MutationObserver(soon);
+    mo?.observe(document.body, { childList: true, subtree: true });
+    window.addEventListener("resize", soon);
+    return () => { cancelAnimationFrame(raf); ro?.disconnect(); mo?.disconnect(); window.removeEventListener("resize", soon); };
+  }, [lift]);
 
   const down = (e: React.PointerEvent) => {
     from.current = { x: e.clientX, y: e.clientY, f: st.fab, moved: false };
@@ -893,8 +941,9 @@ function BenchFab() {
   return (
     <Portal z={LAYER.bench}>
       <button
+        ref={btn}
         onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}
-        title={`The bench (${chordLabel(appChordFor("bench.toggle"))}) — drag me anywhere`}
+        data-tip={`The bench (${chordLabel(appChordFor("bench.toggle"))}) — drag me anywhere`}
         aria-label="The bench"
         /* Furniture that floats over a view, and can be dragged into any
            corner: anything else that places itself in a corner has to know
@@ -910,7 +959,7 @@ function BenchFab() {
              stored in is still where it comes back. */
           left: `clamp(${FAB_HALF + 4}px, ${st.fab.x}%, calc(100% - ${FAB_HALF + 4}px))`,
           top: `clamp(${FAB_HALF + 4}px, ${st.fab.y}%, calc(100% - ${FAB_HALF + 4}px))`,
-          transform: "translate(-50%, -50%)",
+          transform: `translate(-50%, calc(-50% - ${lift}px))`,
           width: FAB_SIZE, height: FAB_SIZE,
           background: "var(--bg3)",
           border: `1px solid color-mix(in srgb, var(--primary) ${st.open ? 60 : 34}%, transparent)`,
@@ -929,7 +978,7 @@ function BenchFab() {
               background: "var(--bg)", color: "var(--primary-ink)",
               border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)",
             }}
-            title={`${live} tab${live === 1 ? "" : "s"} on the bench`}>{live}</span>
+            data-tip={`${live} tab${live === 1 ? "" : "s"} on the bench`}>{live}</span>
         )}
       </button>
     </Portal>

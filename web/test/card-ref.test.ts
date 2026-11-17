@@ -238,18 +238,18 @@ describe("the card door on the pane's block", () => {
    * is unchanged: read the id off the branch with `cardRef`, and let
    * `chipAction` decide whether this machine can reach that tracker at all.
    */
-  it("resolves the card from the focused pane's branch", () => {
-    expect(termSrc).toContain("cardRef({ headRefName: chipWt.branch })");
-    expect(termSrc).toContain("chipAction(ref, cuSetup)");
+  it("resolves the card from the tab's own branch, in the one writer every tab shares", () => {
+    expect(termSrc).toContain("tabCardRef(named, branch,");
+    expect(termSrc).toContain("chipAction(ref, setup)");
   });
 
   it("is no door at all when the branch carries no id it can resolve", () => {
-    // Rather than a dead one in permanent residence.
-    expect(termSrc).toContain("cardGoRef.current = ref && go");
-    expect(termSrc).toContain("      : null;");
+    // Rather than a dead one in permanent residence: the record's own `card`
+    // field is null, and `paneDoor`'s "card" branch declines on that alone.
+    expect(termSrc).toContain("if (!card?.action) return false;");
   });
 
   it("opens Tasks when the card lives here, and the tracker when it does not", () => {
-    expect(termSrc).toContain('if (go.in === "tasks") openCard(ref.query, ref.label, go.tracker); else openExternal(go.url);');
+    expect(termSrc).toContain('if (card.action.in === "tasks") openCard(card.query, card.label, card.tracker); else openExternal(card.action.url);');
   });
 });

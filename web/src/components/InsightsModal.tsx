@@ -155,7 +155,7 @@ export function InsightsModal({ root, onClose, onGoToChanges, onOpenLog }: { roo
                   {view.people.length === 0 && <div className="text-[11.5px]" style={{ color: "var(--text3)" }}>No commits in this window.</div>}
                   <div className="flex flex-col gap-2">
                     {view.people.map((c, i) => (
-                      <div key={`${c.name}\x00${c.email}`} className="grid items-center gap-2.5 text-[12px]" style={{ gridTemplateColumns: "22px minmax(0,1fr) 64px auto" }} title={`+${c.added} −${c.deleted}`}>
+                      <div key={`${c.name}\x00${c.email}`} className="grid items-center gap-2.5 text-[12px]" style={{ gridTemplateColumns: "22px minmax(0,1fr) 64px auto" }} data-tip={`+${c.added} −${c.deleted}`}>
                         <span aria-hidden className="grid place-items-center rounded-full text-[9.5px] font-semibold" style={{ width: 22, height: 22, background: "var(--surface-inset)", color: "var(--text2)" }}>{initials(c)}</span>
                         <span className="truncate" style={{ color: "var(--text)" }}>{c.name || c.email}</span>
                         <Bar s={view.peopleBars[i]} />
@@ -172,7 +172,7 @@ export function InsightsModal({ root, onClose, onGoToChanges, onOpenLog }: { roo
                       const note = renameNote(h);
                       return (
                         <div key={h.path} className="grid items-center gap-2.5 text-[12px]" style={{ gridTemplateColumns: "minmax(0,1fr) 48px auto" }}>
-                          <span className="min-w-0 flex flex-col font-mono" title={h.path}>
+                          <span className="min-w-0 flex flex-col font-mono" data-tip={h.path}>
                             {/* rtl + bdi: the head of a long path is what gets cut, the file name stays whole. */}
                             <span className="overflow-hidden whitespace-nowrap text-left" style={{ direction: "rtl", textOverflow: "ellipsis", color: "var(--text3)" }}><bdi style={{ color: "var(--text3)" }}>{dir}<span style={{ color: "var(--text)" }}>{file}</span></bdi></span>
                             {note && <span className="overflow-hidden whitespace-nowrap text-left text-[10.5px] font-sans" style={{ direction: "rtl", textOverflow: "ellipsis", color: "var(--text3)" }}><bdi>{note}</bdi></span>}

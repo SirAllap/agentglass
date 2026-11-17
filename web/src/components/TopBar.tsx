@@ -17,7 +17,7 @@
 import type { SystemNote } from "../lib/sysNotify.ts";
 import type { ProviderUsage, QuotaWindow } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { api } from "../lib/api.ts";
 import { subscribeProviderUsage, usageOf, busiestOf, providerUsage, usageLoaded, heldRows, resetShort, ageLabel, refreshProviderUsage } from "../lib/usageStore.ts";
 import { providerInContext } from "../lib/providerContext.ts";
@@ -44,21 +44,22 @@ import { USAGE_KEY_GUIDE } from "../lib/usageKeyGuide.ts";
 import { openCodePanelWindows, CONSOLE_REREAD_MS } from "../../../shared/opencodePanel.ts";
 import { LAYER } from "../lib/layers.ts";
 import { AccountChips, AccountKeyBar, useAccountPanel } from "./AccountChips.tsx";
-import { isCoreRow } from "../lib/accountStore.ts";
+import { isCoreRow, subscribeAccounts } from "../lib/accountStore.ts";
 import { chipView, tabBadge, worstWindow } from "../lib/usageChips.ts";
 import { bankTip, BANK_CELL_PX, foldCells, groupWindows, paceBudget, paceVerdict, resetWhen, runsOut, sheetTail } from "../lib/usageBank.ts";
 import { OLD_READING_MS } from "../lib/usagePace.ts";
-import { rowsInBar } from "../lib/usageBarPref.ts";
+import { rowsInBar, subscribeUsageBar } from "../lib/usageBarPref.ts";
 import { ProviderMark } from "./ProviderMark.tsx";
 import { logoOf } from "./engines/enginesCopy.ts";
 import { accountStageOf, peekStage, subscribeStage } from "../lib/stageIntent.ts";
 import { onProposal, stagedProvider } from "../lib/accountKeys.ts";
 import { GearIcon } from "./workspace/icons.tsx";
 import { openSettings } from "../lib/openSettings.ts";
-import { appChordFor, chordLabel } from "../lib/keybindings.ts";
+import { appChordFor, chordLabel, subscribeBindings } from "../lib/keybindings.ts";
 import { ExpandIcon, FolderIcon, SearchIcon } from "../lib/glyphIcons.tsx";
 import { scopeAria, scopeLabel, scopeTitle } from "../lib/projectPick.ts";
 import { RefreshButton, EDGE, LINE } from "./workspace/Chrome.tsx";
+import { sharedPhase } from "../lib/sharedPhase.ts";
 
 export const TOP_BAR_H = 30;
 
@@ -799,7 +800,27 @@ function PlanChip({ u, age, dim, active, first, onOpen, anchor }: {
 }
 
 
-export function TopBar({
+/*
+ * Compared by identity, so the live socket does not draw the bar.
+ *
+ * The root renders on every flush of the socket (up to five a second on the
+ * Starboard, one a second elsewhere) and the bar rendered with it each time:
+ * 280 lines of body, the quota strip's arithmetic and every chip under it,
+ * for a strip whose content had not changed. The root now hands it held
+ * callbacks and values that keep their identity while their content is the
+ * same (lib/keptValue.ts), and this boundary skips the rest.
+ *
+ * What the bar reads without being handed it must therefore tell the bar
+ * itself: the plan readings already did (subscribeProviderUsage); the account
+ * lists, the key bindings and the bar's own switches used to be picked up by
+ * the next render from above and are subscribed below. `tick` is the root's
+ * ten-second clock: the "read 8m ago" labels are computed from the time now
+ * during render, and it is what moves them.
+ *
+ * Ceiling: a child of the bar that reads a module-level value without
+ * subscribing to it is now up to ten seconds late instead of up to one.
+ */
+export const TopBar = memo(function TopBar({
   workspace, workspaces, onOpenProject, onOpenPalette, onOpenFiles, quiet, needs,
   needsList, onNeedApprove, onNeedProject, onNeedTerminal, onNoteGoto, onOpenLantern,
   filterProvider = "",
@@ -840,6 +861,8 @@ export function TopBar({
   /** The dashboard's provider filter, which decides whose plan the meters
    *  show. */
   filterProvider?: string;
+  /** The root's ten-second clock. Read by nothing: a new value is what lets the age labels move. */
+  tick?: number;
 }) {
   const time = useMinuteClock();
   const win = useWindowState();
@@ -929,6 +952,12 @@ export function TopBar({
   // to, in the same breath. A provider filter narrows the row to one.
   const [, bumpUsage] = useState(0);
   useEffect(() => subscribeProviderUsage(() => bumpUsage((n) => n + 1)), []);
+  // Read in render below and never handed down: see the note on the memo above.
+  useEffect(() => {
+    const again = () => bumpUsage((n) => n + 1);
+    const offs = [subscribeAccounts(again), subscribeBindings(again), subscribeUsageBar(again)];
+    return () => { for (const off of offs) off(); };
+  }, []);
   const [refreshing, setRefreshing] = useState(false);
   const refreshUsage = useCallback(() => {
     setRefreshing(true);
@@ -1072,7 +1101,7 @@ export function TopBar({
           edge, a hover state and a pressable surface — and the open project
           carries the weight, since "which project am I in" is the one thing
           this corner exists to answer. */}
-      <button onClick={onOpenProject} aria-label={scopeAria(open, workspace)} className="agx-btn flex items-center gap-1.5 shrink-0 min-w-0 rounded-md pl-1.5 pr-1"
+      <button data-project-button onClick={onOpenProject} aria-label={scopeAria(open, workspace)} className="agx-btn flex items-center gap-1.5 shrink-0 min-w-0 rounded-md pl-1.5 pr-1"
         title={workspace ? `${scopeTitle(open)}\nClick to switch project` : workspace === null ? "Every repo on this machine — click to open projects" : "Reading the open project…"}
         style={{
           ...NO_DRAG,
@@ -1216,10 +1245,10 @@ export function TopBar({
               <span key={i} aria-hidden className="flex flex-col justify-center gap-1 shrink-0"
                 style={{ minWidth: BANK_CELL_PX, height: 24, padding: "2px 6px", boxShadow: i ? "inset 1px 0 0 color-mix(in srgb, var(--text) 8%, transparent)" : undefined }}>
                 <span className="flex items-center justify-center gap-1">
-                  <span className="agx-daybar-pulse rounded" style={{ width: 12, height: 12, background: "color-mix(in srgb, var(--text) 9%, transparent)", animationDelay: `${i * 80}ms` }} />
-                  <span className="agx-daybar-pulse rounded-sm" style={{ width: 22, height: 8, background: "color-mix(in srgb, var(--text) 9%, transparent)", animationDelay: `${i * 80}ms` }} />
+                  <span className="agx-daybar-pulse rounded" style={{ width: 12, height: 12, background: "color-mix(in srgb, var(--text) 9%, transparent)", animationDelay: sharedPhase(1400) }} />
+                  <span className="agx-daybar-pulse rounded-sm" style={{ width: 22, height: 8, background: "color-mix(in srgb, var(--text) 9%, transparent)", animationDelay: sharedPhase(1400) }} />
                 </span>
-                <span className="agx-daybar-pulse block rounded-sm" style={{ height: 2, background: "color-mix(in srgb, var(--text) 9%, transparent)", animationDelay: `${i * 80}ms` }} />
+                <span className="agx-daybar-pulse block rounded-sm" style={{ height: 2, background: "color-mix(in srgb, var(--text) 9%, transparent)", animationDelay: sharedPhase(1400) }} />
               </span>
             ))
             : shownChips.map(({ row, age }) => (
@@ -1316,4 +1345,4 @@ export function TopBar({
       </div>
     </div>
   );
-}
+});

@@ -96,7 +96,8 @@ describe("feedback and the file manager", () => {
 describe("open in browser", () => {
   test("the pane offers it, the palette falls back to the system opener, and Enter is untouched", () => {
     expect(code(preview)).toContain("viewerActions(");
-    expect(code(palette)).toContain("onOpenBrowser(withToken(pageUrl(SERVER, p)))");
+    expect(code(palette)).toContain("onOpenBrowser(pageUrl(SERVER, l.path))");
+    expect(code(palette).includes("withToken(pageUrl")).toBe(false);
     expect(code(palette)).toContain("api.previewOpen(p)");
     const open = code(bodyOf(palette, "const openRow = useCallback("));
     expect(open.includes("onOpenBrowser")).toBe(false);

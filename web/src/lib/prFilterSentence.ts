@@ -21,6 +21,8 @@ function vals(vs: string[], word = "or"): Seg[] {
 const CHECKS: Record<string, string> = { green: "passing", red: "failing", pending: "running" };
 const REVIEW: Record<string, string> = { approved: "approved", "changes-requested": "changes-requested", required: "awaiting review", none: "unreviewed" };
 
+const PEOPLE_REVIEW: Record<string, string> = { approved: "approved", "changes-requested": "changes-requested", commented: "commented", pending: "pending", none: "none" };
+
 /** One rule as a phrase that follows "PRs" (show) or "any" (hide). */
 export function rulePhrase(r: FilterRule, lane: Lane): Seg[] {
   const neg = r.op === "not" || r.op === "unset";
@@ -53,6 +55,9 @@ export function rulePhrase(r: FilterRule, lane: Lane): Seg[] {
     ? [t("with checks that are not "), ...vals(v.map((x) => CHECKS[x] ?? x))]
     : [t("with "), ...vals(v.map((x) => CHECKS[x] ?? x)), t(" checks")];
   if (f === "review") return [t(neg ? "whose review is not " : "whose review is "), ...vals(v.map((x) => REVIEW[x] ?? x))];
+  if (f === "humanreviewer") return [t(neg ? "whose human reviewer is not " : "whose human reviewer is "), ...vals(v)];
+  if (f === "humanreview") return [t(neg ? "whose human review is not " : "whose human review is "), ...vals(v.map((x) => PEOPLE_REVIEW[x] ?? x))];
+  if (f === "botreview") return [t(neg ? "whose bot review is not " : "whose bot review is "), ...vals(v.map((x) => PEOPLE_REVIEW[x] ?? x))];
   if (f === "is") return [t(neg ? "that are not " : "that are "), ...vals(v)];
   return [t(`whose ${fieldLabel(f).toLowerCase()} ${opWord(r.op, f)} `), ...vals(v)];
 }

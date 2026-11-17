@@ -46,14 +46,14 @@ export function PublishReview({ run, notes, root, head, superseded = false }: {
         <Button size="compact" tone="primary" disabled={st.disabled} title={st.tooltip} onClick={() => setOpen(true)}>{st.label}</Button>
         {st.staleChip && (
           <span className="rounded px-1.5 text-[10px] leading-none inline-flex items-center whitespace-nowrap" style={{ height: CTRL_H.compact, color: AMBER, border: tintEdge(AMBER, 45) }}
-            title="The pull request has new commits since this review. Publishing posts it as it is.">stale review · head moved</span>
+            data-tip="The pull request has new commits since this review. Publishing posts it as it is.">stale review · head moved</span>
         )}
         {st.supersededChip && (
           <span className="rounded px-1.5 text-[10px] leading-none inline-flex items-center whitespace-nowrap" style={{ height: CTRL_H.compact, color: "var(--text3)", border: EDGE }}
-            title="A newer review covers the current head">superseded by a newer review</span>
+            data-tip="A newer review covers the current head">superseded by a newer review</span>
         )}
         {st.published && (
-          <button type="button" onClick={() => openExternal(st.published!.url)} title="Open the published comment on GitHub"
+          <button type="button" onClick={() => openExternal(st.published!.url)} data-tip="Open the published comment on GitHub"
             className="rounded px-1.5 text-[10px] leading-none inline-flex items-center gap-1 whitespace-nowrap hover:brightness-125"
             style={{ height: CTRL_H.compact, color: "var(--text2)", border: EDGE, background: "transparent" }}>
             published to GitHub · {ago(st.published.at)}

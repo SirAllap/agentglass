@@ -75,8 +75,26 @@ export function ruleTitle(r: Pick<AgentRule, "match" | "action">): string {
   return tool === "Bash" ? `Run ${code}` : `Use ${code}`;
 }
 
+/**
+ * A learned rule that narrows a known command is titled by what it adds, so it
+ * never reads like the base row: "Push to master", not "Push code". A command
+ * outside the vocabulary keeps `ruleTitle`'s words.
+ */
+export function narrowTitle(r: Pick<AgentRule, "match" | "action">): string {
+  const code = ruleCode(r);
+  const key = Object.keys(TITLE).find((k) => code.startsWith(`${k} `));
+  if (!key) return ruleTitle(r);
+  const rest = code.slice(key.length).trim();
+  const push = key === "git push" ? /^origin\s+(\S+)(.*)$/.exec(rest) : null;
+  if (push) return `Push to ${push[1]}${push[2]}`;
+  return key === "git push" ? `Push ${rest}` : `${TITLE[key]}: ${rest}`;
+}
+
 /** A pattern's name when only the pattern is known (a request's diff line). */
 export const titleOfMatch = (match: string): string => ruleTitle({ match, action: "" });
+
+/** Loosening a Never to Allow is the one click that asks again; Ask to Allow is one click. */
+export const confirmAllow = (from: RuleSetting | null, to: RuleSetting): boolean => from === "never" && to === "allow";
 
 /** "deploy to staging": the half of a suggestion's headline after "New in acme/orbit:". */
 export function suggestionPhrase(r: Pick<AgentRule, "match" | "action">): string {
@@ -109,22 +127,23 @@ export function ruleIcon(r: Pick<AgentRule, "match" | "action">): PhName {
 
 /* ── where it came from, and when ─────────────────────────────────────── */
 
-export type ChipKind = "chat" | "first" | "always" | "plain";
+export type ChipKind = "chat" | "first" | "always" | "all" | "plain";
 export interface SourceChip { kind: ChipKind; icon: PhName; label: string }
 
 /**
  * The chip of a rule's origin. A base rule is a base rule whoever last touched
- * it; the `you` source (a rule written with the person's own hand, through the
- * CLI or a click on a row) has no chip in the approved design and is the one
- * extra word here.
+ * it, and it says the scope that matters when it sits beside a project's rows:
+ * every project. The `you` source (a rule written with the person's own hand,
+ * through the CLI or a click on a row) has no chip in the approved design and
+ * is the one extra word here.
  */
 export function sourceChip(r: Pick<AgentRule, "source">, base = false): SourceChip {
-  if (base) return { kind: "plain", icon: "circle-dashed", label: "base rule" };
+  if (base) return { kind: "all", icon: "circle-dashed", label: "all projects" };
   switch (r.source) {
     case "chat": return { kind: "chat", icon: "chat-circle-text", label: "you said it in chat" };
     case "first-seen": return { kind: "first", icon: "sparkle", label: "seen for the first time" };
     case "always-allow": return { kind: "always", icon: "check-circle", label: "you pressed Always allow here" };
-    case "base": return { kind: "plain", icon: "circle-dashed", label: "base rule" };
+    case "base": return { kind: "all", icon: "circle-dashed", label: "all projects" };
     default: return { kind: "plain", icon: "user-circle", label: "you set it" };
   }
 }
@@ -187,8 +206,14 @@ const MODE_WORD: Record<LaunchMode, string> = {
 
 /** "4 base rules are on: no push, no merge, no release, ask before risky things." The base set in one breath, from what is set now. */
 export function baseSummary(base: readonly AgentRule[], mode: LaunchMode): { count: number; lead: string; rest: string } {
-  const words = base.filter((r) => r.action !== MODE_ACTION && r.setting !== "allow")
-    .map((r) => (r.setting === "never" ? known(NEVER_WORD, ruleCode(r)) ?? `no ${ruleCode(r)}` : `ask before ${ruleCode(r)}`));
+  /* The short word only for the bare command; `git push --force` keeps its own words, so six push rules do not read "no push" six times. */
+  const label = (r: AgentRule): string => {
+    const code = ruleCode(r);
+    return r.setting === "never" ? NEVER_WORD[code] ?? `no ${code}` : `ask before ${code}`;
+  };
+  const seen = new Map<string, number>();
+  for (const r of base) if (r.action !== MODE_ACTION && r.setting !== "allow") { const w = label(r); seen.set(w, (seen.get(w) ?? 0) + 1); }
+  const words = [...seen].map(([w, n]) => (n > 1 ? `${w} (${n} kinds)` : w));
   const count = base.length;
   return { count, lead: `${count} base ${count === 1 ? "rule is" : "rules are"} on:`, rest: `${[...words, MODE_WORD[mode]].join(", ")}.` };
 }

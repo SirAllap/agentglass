@@ -93,12 +93,12 @@ describe("targets", () => {
     expect(targetLabel({ kind: "card", id: "abc", label: "ORBIT-1042" })).toBe("Open card");
     expect(targetLabel({ kind: "url", url: "https://example.com" })).toBe("Open link");
   });
-  it("every kind the app has a view for routes in-app; only a bare link has no destination", () => {
+  it("every kind routes in-app; a bare link goes to the agentglass browser", () => {
     expect(gotoOfTarget({ kind: "pr", repo: "acme/orbit", number: 1 })).toEqual({ kind: "pr", repo: "acme/orbit", number: 1 });
     expect(gotoOfTarget({ kind: "pane", pane: "%3" })).toEqual({ kind: "pane", pane: "%3" });
     expect(gotoOfTarget({ kind: "file", root: "/x/orbit", path: "a/b.md" })).toEqual({ kind: "file", root: "/x/orbit", path: "a/b.md" });
     expect(gotoOfTarget({ kind: "card", id: "abc", label: "ORBIT-1042" })).toEqual({ kind: "card", id: "abc", label: "ORBIT-1042" });
-    expect(gotoOfTarget({ kind: "url", url: "https://example.com" })).toBeNull();
+    expect(gotoOfTarget({ kind: "url", url: "https://example.com" })).toEqual({ kind: "web", url: "https://example.com" });
   });
   it("oneLine leaves a short text alone", () => { expect(oneLine("  a   b ", 10)).toBe("a b"); });
   it("the event key is the PR, the head and the verdict", () => {

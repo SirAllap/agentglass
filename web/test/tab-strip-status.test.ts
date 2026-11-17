@@ -20,7 +20,8 @@ describe("the tab's mark", () => {
     // What counts as a mark is lib/windowMark.ts (tested there); the strip only feeds it.
     expect(strip).toContain("mark={tabMark(w)}");
     expect(strip).toContain("dead: w.dead, exitCode: w.exit, restored: w.restored, wasRunning: w.was");
-    expect(tab).toContain("{mark.mark && <WindowMarkIcon mark={mark.mark} label={mark.title} />}");
+    // The seat's alien face takes the mark's place on an orchestrator's tab (3cccc2046); the plain mark is now the ternary's else branch, not a standalone expression.
+    expect(tab).toContain(": mark.mark && <WindowMarkIcon mark={mark.mark} label={mark.title} />}");
     // Before the name, so every name stays where it was whatever the state.
     const at = tab.indexOf("<WindowMarkIcon");
     expect(tab.indexOf('{w.name || "shell"}', at)).toBeGreaterThan(at);

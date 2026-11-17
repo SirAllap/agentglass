@@ -206,7 +206,7 @@ describe("the header's drawing, as source", () => {
     expect(header).toContain("reasons.pull ??");
     expect(header).toContain("reasons.push ??");
   });
-  it("insights is icon-only with a name", () => expect(header).toContain('aria-label="Insights" title="Insights"'));
+  it("insights is icon-only with a name", () => expect(header).toContain('aria-label="Insights" data-tip="Insights"'));
   it("fetch walks the remotes one by one", () => expect(code(header)).toContain("fetchEach("));
   it("pull-then-push runs pull and then push", () => {
     const body = header.slice(header.indexOf("const doPull ="), header.indexOf("const doPush ="));
@@ -231,10 +231,11 @@ describe("the header's drawing, as source", () => {
     expect(header).toContain('tone === "dark" ? { background: "var(--text)", color: "var(--bg)"');
     expect(header).toContain('facts.ahead > 0 || (!facts.hasUpstream && !off("push")) ? "dark"');
   });
-  it("the tab strip scrolls and fades at the right edge only while clipped", () => {
-    expect(header).toContain("overflow-x-auto");
-    expect(header).toContain("maskImage: fade");
-    expect(header).toContain("clipped ?");
+  it("the tab strip wraps; it never hides tabs behind a scroll or a fade", () => {
+    const strip = header.split("\n").find((l) => l.includes("data-tabs-strip")) ?? "";
+    expect(strip).toContain("flex-wrap");
+    expect(strip).not.toContain("overflow-x-auto");
+    expect(header).not.toContain("maskImage");
   });
   it("the slot is capped at 40% and two items", () => {
     expect(header).toContain('maxWidth: "40%"');
@@ -257,7 +258,7 @@ describe("header layout and progress source rules", async () => {
     expect(header).toMatch(/data-tabs-strip/);
     // The floor is the tabs' own width and the row wraps: a hand-picked floor
     // (96, then 420) squeezed the strip under the actions (measured 97px of 791).
-    expect(header).toContain("min-w-[fit-content] flex-1 overflow-x-auto");
+    expect(header).toContain("min-w-[min(fit-content,100%)] flex-1");
     expect(header).toContain("flex-wrap gap-y-1.5");
     expect(header).toContain('className="flex items-center gap-1.5 shrink-0 overflow-hidden" style={{ maxWidth: "40%" }} data-slot');
   });

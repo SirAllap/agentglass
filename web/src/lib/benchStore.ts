@@ -425,6 +425,42 @@ export function benchTakesBoard(kind: BoardKind): boolean {
   return true;
 }
 
+/** Show the browser in the bench: this checkout's browser tab, or a new one. Opens the bench. */
+export function showBrowser(root: string): BenchTab {
+  const held = state.byRoot[root];
+  const same = held?.tabs.find((t) => t.kind === "web");
+  if (same) {
+    commit({ ...state, root, open: true, byRoot: { ...state.byRoot, [root]: { ...held!, active: same.id } } });
+    return same;
+  }
+  return addTab(root, { kind: "web", slot: 0, title: "Browser" });
+}
+/** True when it did; false (no checkout yet) leaves the caller to use the view. */
+export function showBrowserOnBench(): boolean {
+  if (!state.root) return false;
+  showBrowser(state.root);
+  return true;
+}
+
+/* "Open the next board request on the bench", set by a terminal link when the
+ * setting is on and taken by the one request that follows. */
+let benchWished = 0;
+export function wantBenchNext(): void { benchWished = Date.now(); }
+
+/**
+ * The bench opens on a board because a link asked for it, whether or not it
+ * was open. True when it did; false leaves the caller to go to the view.
+ * Consumes the wish either way, so one link never claims the next request.
+ */
+export function benchOpensWishedBoard(kind: BoardKind): boolean {
+  const fresh = Date.now() - benchWished < 2000;
+  benchWished = 0;
+  if (!fresh) return false;
+  if (!state.root) return false;
+  showBoard(state.root, kind);
+  return true;
+}
+
 /** Test seam: forget everything, including what is in localStorage. */
 export function __resetBench(): void {
   try { localStorage.removeItem(KEY); } catch { /* non-fatal */ }

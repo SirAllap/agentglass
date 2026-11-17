@@ -64,6 +64,136 @@ export function isolatedDoc(html: string): string {
   return meta + html;
 }
 
+/*
+ * The pictures a rendered page keeps beside itself.
+ *
+ * The frame may fetch nothing, so `<img src="01-shot.png">` drew as its alt
+ * text: a report written as one page plus the screenshots next to it showed
+ * no screenshot at all. The frame stays as closed as it was. The app, which
+ * may already read that folder, reads the pictures and hands them to the page
+ * as `data:` URIs, the one image source the policy above allows.
+ *
+ * Ceiling: `<img src>` only (no `srcset`, no CSS `url()`), files in the page's
+ * own folder or below it, and the caps below. A picture past a cap, outside
+ * the folder, or on the network keeps its alt text.
+ */
+export const PAGE_IMAGE_MAX = 40;
+export const PAGE_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+export const PAGE_IMAGES_TOTAL_BYTES = 32 * 1024 * 1024;
+
+const IMG_SRC = /(<img\b[^>]*?\ssrc\s*=\s*)(?:"([^"]*)"|'([^']*)')/gi;
+
+/** A page's `src` as a path under the page's own folder, or null: anything with a scheme, an absolute path, or a climb out of the folder is not ours to read. */
+export function siblingPath(pagePath: string, src: string): string | null {
+  const raw = src.split(/[?#]/)[0] ?? "";
+  if (!raw || /^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith("/") || raw.startsWith("\\")) return null;
+  let rel: string;
+  try { rel = decodeURIComponent(raw); } catch { return null; }
+  const out: string[] = [];
+  for (const part of rel.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") return null;
+    out.push(part);
+  }
+  if (!out.length) return null;
+  const dir = pagePath.slice(0, pagePath.lastIndexOf("/"));
+  return `${dir}/${out.join("/")}`;
+}
+
+/** The distinct picture sources of a page that sit beside it, in page order, capped. */
+export function pageImages(html: string, pagePath: string): { src: string; path: string }[] {
+  const seen = new Map<string, string>();
+  for (const m of html.matchAll(IMG_SRC)) {
+    const src = m[2] ?? m[3] ?? "";
+    if (seen.has(src)) continue;
+    const path = siblingPath(pagePath, src);
+    if (path) seen.set(src, path);
+    if (seen.size >= PAGE_IMAGE_MAX) break;
+  }
+  return [...seen].map(([src, path]) => ({ src, path }));
+}
+
+/** The page with each read picture in place of its file name; a source with no entry is left as written. */
+export function withPageImages(html: string, data: ReadonlyMap<string, string>): string {
+  return html.replace(IMG_SRC, (all, lead: string, a?: string, b?: string) => {
+    const uri = data.get(a ?? b ?? "");
+    return uri ? `${lead}"${uri}"` : all;
+  });
+}
+
+/*
+ * A page with its pictures in place is one string, and a heavy one: 22
+ * screenshots of 0.6 MB beside a page are about 18 MB of base64 in the frame's
+ * `srcdoc`, and the frame decodes every one at full size (the widest measured
+ * 4774 by 1072, about 5 megapixels) to show it in a pane a fraction as wide.
+ * It was rebuilt from 22 fetches each time the page was selected, and a
+ * selection that had already moved on did not stop the reads.
+ *
+ * The frame's policy is `img-src data:` and stays that: a `blob:` URL would
+ * mean widening it. So the string is made lighter and made once:
+ *  - a large raster picture is drawn down to PAGE_IMAGE_EDGE before it is
+ *    inlined, in its own format;
+ *  - the finished page is kept, the last one only, for PAGE_MEMO_MS;
+ *  - the reads are few at a time and stop when the selection leaves.
+ *
+ * Ceilings, chosen: one page is kept, so going between two pages rebuilds
+ * both; the key is the PAGE's time and size, so a picture replaced beside an
+ * unchanged page shows its old self until PAGE_MEMO_MS passes; an animated
+ * GIF and an SVG are never drawn down.
+ */
+/** The longest side a page's picture is inlined at. Wider than any preview pane at 2x. */
+export const PAGE_IMAGE_EDGE = 2000;
+/** Under this a picture is inlined as it is: drawing it down would cost a decode to save little. */
+export const PAGE_IMAGE_SHRINK_MIN_BYTES = 200 * 1024;
+/** Pictures read at once for one page. */
+export const PAGE_IMAGE_PARALLEL = 3;
+/** How long the last built page is believed. */
+export const PAGE_MEMO_MS = 2 * 60_000;
+/** The page's text is on screen this long before its pictures start to be read. */
+export const PAGE_IMAGES_AFTER_MS = 60;
+
+/** The format a page's picture is drawn down in, or null when it is inlined as it is. */
+export function pageImageShrink(mime: string, bytes: number): { type: string; quality?: number } | null {
+  if (bytes < PAGE_IMAGE_SHRINK_MIN_BYTES) return null;
+  if (mime === "image/png") return { type: "image/png" };
+  if (mime === "image/jpeg") return { type: "image/jpeg", quality: 0.85 };
+  if (mime === "image/webp") return { type: "image/webp", quality: 0.9 };
+  return null;
+}
+
+/** Changes when the page file does. */
+export function pageDocKey(path: string, mtime: number, bytes: number): string {
+  return `${mtime}|${bytes}|${path}`;
+}
+
+/** The last built page, and only that one, while it is fresh. */
+export function makePageMemo(ttl = PAGE_MEMO_MS) {
+  let held: { key: string; doc: string; at: number } | null = null;
+  return {
+    get(key: string, now: number): string | undefined {
+      if (!held || held.key !== key) return undefined;
+      if (now - held.at > ttl) { held = null; return undefined; }
+      return held.doc;
+    },
+    set(key: string, doc: string, now: number): void { held = { key, doc, at: now }; },
+  };
+}
+
+/*
+ * A selection that is passing through is not previewed. Holding an arrow key
+ * down a folder of 22 screenshots asked for the facts of each one and then
+ * mounted its picture: 22 whole files of 0.6 MB fetched and decoded at up to
+ * 5 megapixels, each thrown away by the next key repeat (about 30 ms later).
+ * A click, or one key press, is not held back: it waits only when the one
+ * before it was this recent.
+ */
+/** Shorter than a person notices after a key is let go; longer than a key repeat. */
+export const PREVIEW_SETTLE_MS = 110;
+/** How long a new selection waits before its preview is read, given how long ago the last one was. */
+export function previewWait(sinceLastMs: number): number {
+  return sinceLastMs >= 0 && sinceLastMs < PREVIEW_SETTLE_MS ? PREVIEW_SETTLE_MS : 0;
+}
+
 /** Strata: a plain click on a file while the preview is closed opens it again. A folder opens as a column, and a modified click is a selection. */
 export function reopensPreview(o: { open: boolean; folder: boolean; modified: boolean }): boolean {
   return !o.open && !o.folder && !o.modified;

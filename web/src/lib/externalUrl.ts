@@ -1,3 +1,6 @@
+import { routeLink } from "./otherLinks.ts";
+import { openOnMachine } from "./desktop.ts";
+
 // Opening a URL that arrived over the wire.
 //
 // Every outbound link in the pull request panel — the pull request itself, a
@@ -29,14 +32,22 @@ export function externalUrl(raw: string | null | undefined): string | undefined 
 }
 
 /**
- * Open one in a new tab, if it is safe to.
+ * Open one, if it is safe to: where "Open web links in" says (the agentglass
+ * browser, or the machine's), falling back to the machine's browser when the
+ * agentglass browser cannot take it. `machine` skips the setting: a Ctrl-click
+ * or an explicit "Open in your own browser".
  *
  * `noopener` matters beyond the scanner: without it the page we open keeps a
  * handle on ours through `window.opener` and can navigate it.
  */
-export function openExternal(raw: string | null | undefined): boolean {
+export function openExternal(raw: string | null | undefined, opts: { machine?: boolean } = {}): boolean {
   const href = externalUrl(raw);
   if (!href) return false;
+  if (!opts.machine && routeLink(href)) return true;
+  // In the desktop shell the machine's browser is asked for directly: a
+  // window.open would come back through the shell's escape handler and be
+  // routed by the setting again.
+  if (openOnMachine(href)) return true;
   window.open(href, "_blank", "noopener,noreferrer");
   return true;
 }

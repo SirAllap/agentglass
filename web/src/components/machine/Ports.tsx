@@ -66,12 +66,12 @@ export function Ports({ ports, onOpenBrowser }: { ports: PortsState; onOpenBrows
               <b className="pn">{p.port}</b>
               <div className="pm">
                 <span className="pp">{p.proc ?? "—"}
-                  {p.ancestry.length > 0 && <small title={`Started by: ${p.ancestry.map((a) => `${a.name} (pid ${a.pid})`).join(" ← ")}`}> ← {p.ancestry.map((a) => a.name).join(" ← ")}</small>}
+                  {p.ancestry.length > 0 && <small data-tip={`Started by: ${p.ancestry.map((a) => `${a.name} (pid ${a.pid})`).join(" ← ")}`}> ← {p.ancestry.map((a) => a.name).join(" ← ")}</small>}
                 </span>
                 <span className="pd2">{p.addr}:{p.port}{p.pid != null && ` · pid ${p.pid}`}{p.ageSec != null && ` · up ${forAge(p.ageSec)}`}</span>
               </div>
               <div className="pf">{portFlags(p).map((f) => <FlagTag key={f.key} tone={f.tone} title={f.title}>{f.label}</FlagTag>)}</div>
-              <span className="pc">{checkoutName(p) && <span className="mc-tag" data-co style={{ "--tint": "var(--info)" } as React.CSSProperties} title={checkoutTitle(p)}>{checkoutName(p)}</span>}</span>
+              <span className="pc">{checkoutName(p) && <span className="mc-tag" data-co style={{ "--tint": "var(--info)" } as React.CSSProperties} data-tip={checkoutTitle(p)}>{checkoutName(p)}</span>}</span>
               {/* The row selects; the buttons act. */}
               <div className="pa" data-armed={armed === p.pid || undefined} onClick={(e) => e.stopPropagation()}>
                 {armed === p.pid && p.pid != null

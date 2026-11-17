@@ -41,6 +41,9 @@ export async function refreshAccounts(): Promise<void> {
   if (changed && was) for (const w of activeWatchers) w();
 }
 
+/** For tests: forget the lists, so the next read is a first read and not a switch. */
+export function __resetAccounts(): void { snapshot = []; }
+
 /** Delays of the two reads after a press: the plugin answers by posting its new list, and nothing pushes that to the window. */
 export const FOLLOW_UP_MS = [1_500, 5_000] as const;
 

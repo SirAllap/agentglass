@@ -84,6 +84,16 @@ export function rowId(label: string): string {
   return label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
+/** The anchor a search hit jumps to. The label's id, unless another row of the same page has the same label: then the setting's own id,
+ *  which SettingRow also renders as `data-setting-id`, so the jump lands on the right one of the two. */
+const LABEL_SECTIONS = new Map<string, Set<string>>();
+function rowAnchor(row: { pane: string; label: string; section: string; settingId?: string }): string {
+  if (LABEL_SECTIONS.size === 0) for (const r of SETTINGS_ROWS) { const k = `${r.pane}/${rowId(r.label)}`; (LABEL_SECTIONS.get(k) ?? LABEL_SECTIONS.set(k, new Set()).get(k)!).add(r.section); }
+  // One row drawn two ways (on / locked) is listed twice in one section: that is not a clash.
+  const dup = (LABEL_SECTIONS.get(`${row.pane}/${rowId(row.label)}`)?.size ?? 0) > 1;
+  return dup && row.settingId && !row.settingId.endsWith("*") ? row.settingId : rowId(row.label);
+}
+
 /**
  * Does this row's text answer this query?
  *
@@ -187,7 +197,7 @@ export function searchSettings(ql: string, pages: SettingsPage[]): RowResult[] {
     if (!ok) continue;
     // The row named by the whole query beats one that merely contains it ("Font size" over "Interface font size").
     if (row.label.toLowerCase() === words.join(" ")) total += LABEL_IS_QUERY;
-    out.push({ pane: row.pane, section: row.section, label: row.label, row: rowId(row.label), score: total, viaSynonym });
+    out.push({ pane: row.pane, section: row.section, label: row.label, row: rowAnchor(row), score: total, viaSynonym });
   }
 
   // A page with no row of its own that matches, but whose title or `kw` bag

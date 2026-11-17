@@ -40,11 +40,13 @@ const FRESH_ENOUGH_MS = 5 * 60_000;
 const AT_ONCE = 2;
 
 /** `by` is the tracker that was asked, when a lookup (not a write) made it. */
-type Entry = { at: number; task: ProviderTask | null; error: string; by?: "clickup" | "jira" };
+export type Entry = { at: number; task: ProviderTask | null; error: string; by?: "clickup" | "jira" };
 
 const seen = new Map<string, Entry>();
 /** The queries whose card is Jira's: asked of Jira, not of ClickUp. A key is one tracker's for as long as the page is open. */
 const jiraOwned = new Set<string>();
+/** The repo a Jira key was asked for, so the account that repo chose answers; none means the default account. */
+const jiraRepo = new Map<string, string>();
 const inflight = new Set<string>();
 const waiting: string[] = [];
 const listeners = new Set<() => void>();
@@ -83,7 +85,7 @@ function pump(): void {
     running++;
     inflight.add(query);
     const jira = jiraOwned.has(query);
-    (jira ? api.jiraFind(query) : api.clickupFind(query))
+    (jira ? api.jiraFind(query, undefined, jiraRepo.get(query)) : api.clickupFind(query))
       .then((r) => {
         hold(query, {
           at: Date.now(),
@@ -125,9 +127,9 @@ function heldFor(query: string, tracker: "clickup" | "jira"): Entry | undefined 
  * about yet puts it in the queue. The thing that knows a card is on screen is
  * the thing drawing it.
  */
-export function cardOf(query: string, maxAgeMs: number = TTL_MS, tracker: "clickup" | "jira" = "clickup"): Entry | null {
+export function cardOf(query: string, maxAgeMs: number = TTL_MS, tracker: "clickup" | "jira" = "clickup", repo?: string): Entry | null {
   if (!query) return null;
-  if (tracker === "jira") jiraOwned.add(query);
+  if (tracker === "jira") { jiraOwned.add(query); if (repo) jiraRepo.set(query, repo); }
   const hit = heldFor(query, tracker);
   if (hit && Date.now() - hit.at < maxAgeMs) return hit;
   if (!inflight.has(query) && !waiting.includes(query)) {
@@ -158,13 +160,63 @@ export function askingCard(query: string): boolean {
 export function putCard(query: string, task: ProviderTask | undefined | null): void {
   if (!query) return;
   if (!task) { forgetCard(query); return; }
-  hold(query, { at: Date.now(), task, error: "" });
+  const { names, entry } = writtenReading(query, task, Date.now());
+  for (const k of names) seen.set(k, entry);
   tell();
 }
 
+/**
+ * The reading a write's answer becomes, apart from the store: stamped now,
+ * held under every name the card goes by.
+ */
+function writtenReading(query: string, task: ProviderTask, now: number): { names: string[]; entry: Entry } {
+  return { names: namesOf(query, task), entry: { at: now, task, error: "" } };
+}
+
+/**
+ * The newer of two readings of one card, or null when the one held says nothing
+ * or is no newer than the copy already on screen.
+ *
+ * A poll that lands after a write carries the board read from BEFORE it; the
+ * write's own answer has the later `at`, so the row's late copy cannot put the
+ * old status back.
+ */
+export function freshestCard(mine: PrSummary["card"] | undefined, held: Entry | null): Entry | null {
+  if (!held?.task) return null;
+  return !mine?.at || held.at > mine.at ? held : null;
+}
+
+/** A task as the card a row draws. */
+function cardFromTask(k: ProviderTask, at: number): NonNullable<PrSummary["card"]> {
+  return {
+    id: k.id, customId: k.customId, title: k.title, url: k.url,
+    status: k.status, statusColor: k.statusColor, statusKind: k.statusKind,
+    priority: k.priority,
+    people: k.people?.slice(0, CARD_PEOPLE_MAX),
+    at,
+  };
+}
+
+/**
+ * The card as a surface should draw it, asking nobody: the copy the row
+ * carries, or a newer reading this session holds (a write's answer).
+ *
+ * The board card and the pull request's header chip are one datum: a step that
+ * moved the card used to reach the side panel (which reads the store itself)
+ * while both chips went on saying what the board said before the press.
+ */
+export function cardOnScreen(
+  query: string,
+  mine: PrSummary["card"] | undefined,
+  tracker: "clickup" | "jira" = "clickup",
+): PrSummary["card"] | undefined {
+  const winner = freshestCard(mine, query ? peekCard(query, tracker) : null);
+  return winner?.task ? cardFromTask(winner.task, winner.at) : mine;
+}
+
 /** What is held for this card, without asking for it. */
-export function peekCard(query: string): Entry | null {
-  return seen.get(query) ?? null;
+export function peekCard(query: string, tracker: "clickup" | "jira" = "clickup"): Entry | null {
+  return heldFor(query, tracker) ?? null;
 }
 
 /**
@@ -189,6 +241,7 @@ export function forgetCard(query: string): void {
 export function forgetCards(): void {
   seen.clear();
   jiraOwned.clear();
+  jiraRepo.clear();
   waiting.length = 0;
   tell();
 }
@@ -209,8 +262,9 @@ export function forgetCards(): void {
  */
 export function withCard<T extends PrSummary>(p: T, hasTaskProvider: boolean): T {
   /* A Jira card is read from the Jira views cache by the server, and asking
-     ClickUp for a Jira key is a request that can only come back empty. */
-  if (p.card?.tracker === "jira") return p;
+     ClickUp for a Jira key is a request that can only come back empty. Its
+     session reading — a step's own answer — still outranks the row's copy. */
+  const jira = p.card?.tracker === "jira";
   const t = taskLink(p, hasTaskProvider);
   if (!t) return p;
   /* A reading young enough to stand behind is left alone — that is the free
@@ -222,21 +276,11 @@ export function withCard<T extends PrSummary>(p: T, hasTaskProvider: boolean): T
      an assignee edited in the detail, or a poll that brought the server's older
      board reading back over it. The newer reading wins whichever way round the
      two arrived, and peeking asks nobody. */
-  const held = peekCard(t.query);
-  const heldWins = !!held?.task && (!mine?.at || held.at > mine.at);
-  if (!heldWins && mine?.at && Date.now() - mine.at < FRESH_ENOUGH_MS) return p;
-  const hit = heldWins ? held : cardOf(t.query, FRESH_ENOUGH_MS);
+  const shown = cardOnScreen(t.query, mine, jira ? "jira" : "clickup");
+  if (shown !== mine) return { ...p, card: shown };
+  if (jira || (mine?.at && Date.now() - mine.at < FRESH_ENOUGH_MS)) return p;
+  const hit = cardOf(t.query, FRESH_ENOUGH_MS);
   const k = hit?.task;
   if (!k) return p;
-  return {
-    ...p,
-    card: {
-      id: k.id, customId: k.customId, title: k.title, url: k.url,
-      status: k.status, statusColor: k.statusColor, statusKind: k.statusKind,
-      priority: k.priority,
-      people: k.people?.slice(0, CARD_PEOPLE_MAX),
-      /* Read just now, by definition: this path IS the fresh read. */
-      at: hit.at,
-    },
-  };
+  return { ...p, card: cardFromTask(k, hit.at) };
 }

@@ -142,23 +142,22 @@ function tagAt(html: string, anchor: string): El {
 describe("the tabpanels the page renders, against the stylesheet that paints them", () => {
   const sheet = rules(CSS);
   const html = view();
-  const ids = ["agx-flow-safety", "agx-flow-refused"];
-  const panels = ids.map((id) => ({ id, el: tagAt(html, `id="${id}"`) }));
+  // The page used to carry two tabpanels (Safety and limits, Always refused); it is one Permissions page now and carries
+  // none. Whatever panel a page does render must still compute display: none when it is hidden.
+  const panels = [...html.matchAll(/<section\b[^>]*role="tabpanel"[^>]*>/g)].map((m) => ({ id: /id="([^"]*)"/.exec(m[0])?.[1] ?? "", el: tagAt(html, m[0]) }));
 
-  test("each tabpanel is a section, and the closed one carries the attribute", () => {
-    for (const p of panels) expect(p.el.tag).toBe("section");
-    // The first section (Safety and limits) is the one open on arrival; Always refused is closed.
-    expect(panels[0]!.el.attrs.hidden).toBeUndefined();
-    for (const p of panels.slice(1)) expect(p.el.attrs.hidden).toBeDefined();
+  test("a tabpanel the page renders is a section, and a hidden one computes display: none", () => {
+    for (const p of panels) {
+      expect(p.el.tag).toBe("section");
+      const closed = { ...p.el, attrs: { ...p.el.attrs, hidden: "" } };
+      expect(`${p.id}: ${display(closed, sheet)}`).toBe(`${p.id}: none`);
+    }
   });
 
-  test("a closed tabpanel computes display: none, and only one panel computes visible", () => {
-    for (const p of panels.slice(1)) expect(`${p.id}: ${display(p.el, sheet)}`).toBe(`${p.id}: none`);
-    // The same element with the attribute on it: the Safety panel closed, which is what the other tab shows.
-    const closed = { ...panels[0]!.el, attrs: { ...panels[0]!.el.attrs, hidden: "" } };
-    expect(display(closed, sheet)).toBe("none");
-    const visible = panels.map((p) => display(p.el, sheet)).filter((d) => d !== "none");
-    expect(visible).toHaveLength(1);
+  test("no panel is left hidden with nothing to open it", () => {
+    expect(html).not.toContain('id="agx-flow-safety"');
+    expect(html).not.toContain('id="agx-flow-refused"');
+    expect(panels.filter((p) => p.el.attrs.hidden !== undefined)).toHaveLength(0);
   });
 });
 

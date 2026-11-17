@@ -49,5 +49,6 @@ export function lastReading(u: ProviderUsage | null, now = Date.now()): {
   if (u.available && u.spend) {
     return { value: `$${u.spend.usd.toFixed(2)} over ${u.spend.window}`, tone: "ok", source, age };
   }
-  return { value: u.available ? "No quota windows or spend reported" : u.note ?? "No reading yet", tone: "off", source, age };
+  // The chip stays short; the long note (u.note) goes in the row's help text, never in the chip.
+  return { value: u.available ? "No quota windows or spend reported" : "No reading yet", tone: "off", source, age };
 }

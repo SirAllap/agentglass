@@ -26,20 +26,20 @@ const keyOf = (t: ProviderTask): string => t.customId || t.id;
 /** How long typing has to pause before the site is asked. */
 export const PEOPLE_WAIT_MS = 300;
 
-export async function jiraPeople(task: ProviderTask, query: string, transition = ""): Promise<PeopleResult> {
-  const r = await api.jiraAssignable(keyOf(task), query.trim(), transition).catch(() => null);
+export async function jiraPeople(task: ProviderTask, query: string, transition = "", repo?: string): Promise<PeopleResult> {
+  const r = await api.jiraAssignable(keyOf(task), query.trim(), transition, repo).catch(() => null);
   if (!r?.ok) return { ok: false, error: r?.error || UNREACHABLE, ...(r?.throttled ? { throttled: true } : null) };
   return { ok: true, data: r.people ?? [] };
 }
 
 /** One person on, or nobody (`set: null`), with the stamp the person saw. */
-export async function jiraSetPeople(task: ProviderTask, change: { set: string | null }): Promise<CardWriteResult> {
-  return api.jiraSetAssignee(keyOf(task), change.set, task.updated)
+export async function jiraSetPeople(task: ProviderTask, change: { set: string | null }, repo?: string): Promise<CardWriteResult> {
+  return api.jiraSetAssignee(keyOf(task), change.set, task.updated, repo)
     .catch(() => ({ ok: false, error: UNREACHABLE } as CardWriteResult));
 }
 
-export async function jiraHandOff(task: ProviderTask, choice: { to?: string; clear?: boolean } = {}): Promise<CardWriteResult> {
-  return api.jiraHandOff(keyOf(task), task.updated, choice)
+export async function jiraHandOff(task: ProviderTask, choice: { to?: string; clear?: boolean } = {}, repo?: string): Promise<CardWriteResult> {
+  return api.jiraHandOff(keyOf(task), task.updated, choice, repo)
     .catch(() => ({ ok: false, error: UNREACHABLE } as CardWriteResult));
 }
 

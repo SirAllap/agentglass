@@ -107,7 +107,16 @@ export type SpaceRead =
   | { state: "error"; error: string; throttled?: boolean; staleAt?: number; tree?: JiraSpaceTree };
 
 /** A saved board, filter or search, as the rail draws it. */
-export interface TreeView { id: string; label: string; kind: "board" | "filter" | "jql"; count?: number; spaceKey?: string; url?: string }
+export interface TreeView {
+  id: string; label: string; kind: "board" | "filter" | "jql"; count?: number; spaceKey?: string; url?: string;
+  /** A favourite filter from the site that is not saved here: it gets the "Jira" badge, and a click saves it first. */
+  fav?: boolean;
+  /** Saved with the team scope: listed under Team instead of Starred filters. */
+  team?: boolean;
+}
+
+/** A card already loaded in the panel, under the epic it belongs to. */
+export interface TreeChild { key: string; id: string }
 
 export type TreeRow =
   | { key: string; kind: "caption"; label: string; level: 0 }
@@ -117,7 +126,7 @@ export type TreeRow =
   | { key: string; kind: "space"; level: 0; space: JiraSpace; open: boolean; count?: number; error?: string; throttled?: boolean; loading: boolean }
   | { key: string; kind: "components"; level: 1; space: string; hid: number; hideEmpty: boolean; canHide: boolean; shape: TreeShape }
   | { key: string; kind: "component"; level: 1; space: string; name: string; issues: number; empty: boolean; none: boolean; open: boolean; hasKids: boolean }
-  | { key: string; kind: "epic"; level: 1 | 2; space: string; component?: string; epic: JiraTreeEpic; shared: boolean; also: string[]; dim: boolean }
+  | { key: string; kind: "epic"; level: 1 | 2; space: string; component?: string; epic: JiraTreeEpic; shared: boolean; also: string[]; dim: boolean; hint?: string; card?: TreeChild }
   | { key: string; kind: "noepic"; level: 1 | 2; space: string; component?: string; n: number }
   | { key: string; kind: "more"; level: 1 | 2; space: string; component?: string; n: number }
   | { key: string; kind: "note"; level: 0 | 1 | 2; text: string; error?: boolean }
@@ -141,9 +150,34 @@ export interface TreeInput {
   listed: boolean;
   /** The list of spaces failed to read. */
   listError?: string;
+  /** Cards the panel already holds, by epic key: a key typed in the filter may name one of them. */
+  children?: Record<string, TreeChild[]>;
 }
 
 const has = (s: string, q: string): boolean => s.toLowerCase().includes(q);
+
+/** A card key, or the bare number of one: `ORBIT-256` and `256` both ask for that card. */
+export function looksLikeCardKey(q: string): string | null {
+  const t = q.trim().toUpperCase();
+  return /^(?:[A-Za-z][A-Za-z0-9_]*-\d+|\d{3,})$/.test(t) ? t : null;
+}
+
+/** The loaded child a query names, when this epic is the one that holds it. */
+function childMatch(e: JiraTreeEpic, q: string, children: TreeInput["children"]): TreeChild | undefined {
+  const want = looksLikeCardKey(q);
+  if (!want || !children) return undefined;
+  return (children[e.key.toUpperCase()] ?? []).find((c) =>
+    want.includes("-") ? c.key.toUpperCase() === want : c.key.toUpperCase().endsWith(`-${want}`));
+}
+
+const epicShown = (e: JiraTreeEpic, q: string, children: TreeInput["children"]): boolean =>
+  has(e.summary, q) || has(e.key, q) || !!childMatch(e, q, children);
+
+/** The row fields that explain a hit on one of the epic's cards. */
+function childHint(e: JiraTreeEpic, q: string, children: TreeInput["children"]): { hint?: string; card?: TreeChild } {
+  const card = childMatch(e, q, children);
+  return card ? { hint: `contains ${card.key}`, card } : {};
+}
 
 /** Which components start open: the first space, and in it the first with something. */
 export function isSpaceOpen(i: TreeInput, space: JiraSpace, idx: number): boolean {
@@ -166,13 +200,15 @@ function epicOnlyRows(i: TreeInput, space: JiraSpace, tree: JiraSpaceTree, out: 
   const seen = new Set<string>();
   const all = tree.components.flatMap((c) => c.epics).filter((e) => !seen.has(e.key) && !!seen.add(e.key));
   const epics = pinFirst(all.filter((e) => !i.prefs.hidden[keyE(sk, undefined, e.key)]), (e) => keyE(sk, undefined, e.key), i.prefs.pinned);
-  const list = q ? epics.filter((e) => has(e.summary, q) || has(e.key, q)) : epics;
+  const list = q ? epics.filter((e) => epicShown(e, q, i.children)) : epics;
   const ck = keyC(sk, undefined);
-  if (!q) out.push({ key: `cap:${sk}`, kind: "components", level: 1, space: sk, hid: 0, hideEmpty: false, canHide: false, shape: "epics" });
+  if (!q) {
+    out.push({ key: `cap:${sk}`, kind: "components", level: 1, space: sk, hid: 0, hideEmpty: false, canHide: false, shape: "epics" });
+  }
   if (!epics.length && !tree.noEpic) { out.push({ key: `note:${sk}`, kind: "note", level: 1, text: "This space has no epics yet." }); return; }
   const cap = q || i.prefs.all[ck] ? list.length : EPICS_PER_COMPONENT;
   for (const e of list.slice(0, cap)) {
-    out.push({ key: keyE(sk, undefined, e.key), kind: "epic", level: 1, space: sk, epic: e, shared: false, also: [], dim: e.status.category === "done" });
+    out.push({ key: keyE(sk, undefined, e.key), kind: "epic", level: 1, space: sk, epic: e, shared: false, also: [], dim: e.status.category === "done", ...(q ? childHint(e, q, i.children) : {}) });
   }
   if (list.length > cap) out.push({ key: `more:${ck}`, kind: "more", level: 1, space: sk, n: list.length - cap });
   if (tree.noEpic > 0 && !q) out.push({ key: `noepic:${ck}`, kind: "noepic", level: 1, space: sk, n: tree.noEpic });
@@ -189,7 +225,9 @@ function componentRows(i: TreeInput, space: JiraSpace, tree: JiraSpaceTree, out:
   const empties = shown.filter((c) => c.empty && c.id !== undefined);
   const canHide = empties.length > 0;
   const firstWithKids = shown.findIndex((c) => c.issues > 0);
-  if (!q) out.push({ key: `cap:${sk}`, kind: "components", level: 1, space: sk, hid: hideEmpty ? empties.length : 0, hideEmpty, canHide, shape });
+  if (!q) {
+    out.push({ key: `cap:${sk}`, kind: "components", level: 1, space: sk, hid: hideEmpty ? empties.length : 0, hideEmpty, canHide, shape });
+  }
   if (!shown.length) { out.push({ key: `note:${sk}`, kind: "note", level: 1, text: "This space has no epics yet." }); return; }
   shown.forEach((c, ci) => {
     const none = c.id === undefined;
@@ -197,7 +235,7 @@ function componentRows(i: TreeInput, space: JiraSpace, tree: JiraSpaceTree, out:
     if (hideEmpty && c.empty && !none && !q) return;
     const epics = pinFirst(c.epics.filter((e) => !i.prefs.hidden[keyE(sk, none ? undefined : c.name, e.key)]), (e) => keyE(sk, none ? undefined : c.name, e.key), i.prefs.pinned);
     const kids = epics.length + (c.noEpic > 0 ? 1 : 0);
-    const matchedEpics = q ? epics.filter((e) => has(e.summary, q) || has(e.key, q)) : epics;
+    const matchedEpics = q ? epics.filter((e) => epicShown(e, q, i.children)) : epics;
     const selfMatch = q ? has(c.name, q) : true;
     if (q && !selfMatch && !matchedEpics.length) return;
     const open = q ? true : i.prefs.open[ck] ?? ci === firstWithKids;
@@ -207,7 +245,7 @@ function componentRows(i: TreeInput, space: JiraSpace, tree: JiraSpaceTree, out:
     const cap = q || i.prefs.all[ck] ? list.length : EPICS_PER_COMPONENT;
     for (const e of list.slice(0, cap)) {
       const also = alsoUnder(e, none ? undefined : c.name);
-      out.push({ key: keyE(sk, none ? undefined : c.name, e.key), kind: "epic", level: 2, space: sk, component: none ? undefined : c.name, epic: e, shared: also.length > 0, also, dim: e.status.category === "done" });
+      out.push({ key: keyE(sk, none ? undefined : c.name, e.key), kind: "epic", level: 2, space: sk, component: none ? undefined : c.name, epic: e, shared: also.length > 0, also, dim: e.status.category === "done", ...(q ? childHint(e, q, i.children) : {}) });
     }
     if (list.length > cap) out.push({ key: `more:${ck}`, kind: "more", level: 2, space: sk, component: none ? undefined : c.name, n: list.length - cap });
     if (c.noEpic > 0 && (!q || selfMatch)) out.push({ key: `noepic:${ck}`, kind: "noepic", level: 2, space: sk, component: none ? undefined : c.name, n: c.noEpic });
@@ -252,7 +290,7 @@ export function buildRows(i: TreeInput): TreeRow[] {
       if (!read || (read.state === "loading" && !tree)) {
         out.push({ key: `sk:${s.key}`, kind: "skeleton", level: 0, widths: [58, 44, 66] });
       } else if (tree) componentRows(i, s, tree, out);
-      else if (read.state === "error") out.push({ key: `note:${s.key}`, kind: "note", level: 1, text: "Could not read this space.", error: true });
+      else if (read.state === "error") out.push({ key: `note:${s.key}`, kind: "note", level: 1, text: read.error || "Could not read this space.", error: true });
       if (own.length) {
         out.push({ key: `capv:${s.key}`, kind: "caption", label: "Boards and filters", level: 0 });
         for (const v of own) out.push({ key: `v:${v.id}`, kind: "view", level: 1, view: v, space: s.key });
@@ -346,7 +384,7 @@ export function epicTip(e: JiraTreeEpic, also: string[]): TipSpec {
 
 export type TreeMenuId =
   | "open" | "jira" | "under" | "pin" | "hide" | "reread" | "copykey" | "copylink" | "copyaddr"
-  | "collapse" | "hideempty" | "showhidden" | "takeoff" | "hideme" | "rename" | "edit"
+  | "collapse" | "hideempty" | "showhidden" | "takeoff" | "hideme" | "rename" | "edit" | "syncfrom" | "syncto"
   | "shape:both" | "shape:epics" | "shape:components" | "shape:flat";
 type TItem = MenuItem<TreeMenuId>;
 type TRow = MenuRow<TreeMenuId>;
@@ -418,6 +456,9 @@ export function viewMenu(v: TreeView, f: MenuFacts): CardMenu<TreeMenuId> {
     sect(`${what} · ${v.label}`, it("open", "Open", "lines", { sub: v.count != null ? `${v.count} cards` : undefined, hint: "⏎", strong: true }), it("jira", "Open in Jira", "ext", f.site ? { sub: `The ${what.toLowerCase()}, in your browser`, hint: "O" } : { why: "No site connected", hint: "O" })),
     sect("Edit", it("rename", "Rename", "edit", { sub: "Only in this sidebar", hint: "N" }), it("edit", "Edit the search", "lines", { why: "Change it in Jira", hint: "E" })),
     sect("Copy", it("copyaddr", "Copy address", "copy", { hint: "L" })),
+    ...(v.kind === "filter" ? [sect("Jira filter",
+      it("syncfrom", "Sync from Jira filter", "refresh", { sub: "Read its name and search again", hint: "S" }),
+      it("syncto", "Sync to Jira filter", "ext", { sub: "Writes its search in Jira, after you confirm", hint: "J" }))] : []),
   ), it("takeoff", "Take off this bar", "x", { sub: "Only here, Jira keeps everything", danger: true }));
 }
 
@@ -438,3 +479,124 @@ export function toneOf(key: string): string {
   for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   return `var(--graph-${(h % 8) + 1})`;
 }
+
+/** What the server counted for one saved view; "err" is a view it could not count. Absent means not asked yet. */
+/** A count the site gave; `stale` is the last one given, shown dimmed while a newer read is on its way or has failed. */
+export type ViewCount = { n: number; more: boolean; stale?: boolean } | "err";
+
+/** The count column of a starred row: an en dash while unknown or failed, "N+" when the server stopped at its page. */
+export function countLabel(c: ViewCount | undefined): string {
+  if (!c || c === "err") return "—";
+  return c.more ? `${c.n}+` : String(c.n);
+}
+
+/** The query held by a starred row's address, when it holds one; null for a board or a filter with no `jql` param. */
+export function viewJql(v: Pick<TreeView, "url">): string | null {
+  if (!v.url) return null;
+  try { return new URL(v.url).searchParams.get("jql")?.trim() || null; } catch { return null; }
+}
+
+/** Done and total cards of a space, when a tree read has counted them; null while it has not. */
+export function spaceProgress(read: SpaceRead | undefined): { done: number; total: number; components: number } | null {
+  const t = read?.tree;
+  if (!t || !t.total) return t ? { done: 0, total: 0, components: t.components.length } : null;
+  return { done: t.done, total: t.total, components: t.components.length };
+}
+
+/** Spaces whose ring is drawn closed as well as open: this many are read in the background, one at a time. */
+export const RING_READS = 8;
+
+/** The next space to read so its ring has a number: the first unread one, and none while a read is in flight. */
+export function nextRingRead(spaces: readonly { key: string }[], reads: Record<string, { state: string } | undefined>, cap = RING_READS): string | null {
+  const among = spaces.slice(0, cap);
+  if (among.some((s) => reads[s.key]?.state === "loading")) return null;
+  return among.find((s) => !reads[s.key])?.key ?? null;
+}
+
+export interface TeamMember { name: string; count: number; /** The account id (or login key) a search by this person is written with. */ key?: string; avatar?: string }
+
+/**
+ * The people holding cards of the open board, most cards first. A card with two holders counts for both.
+ * Grouped by account id when a card's `people` names one — two people sharing a display name stay two rows,
+ * never merged into one count — and by display name only for a card with no id to go on.
+ */
+export function teamOf(tasks: readonly { assignees: readonly string[]; people?: readonly { key?: string; name: string; avatar?: string }[] }[]): TeamMember[] {
+  const by = new Map<string, TeamMember>();
+  for (const t of tasks) {
+    const byName = new Map(t.people?.map((p) => [p.name, p] as const) ?? []);
+    const ids = new Set<string>();
+    for (const a of new Set(t.assignees)) {
+      if (!a.trim()) continue;
+      const p = byName.get(a);
+      const id = p?.key ?? a;
+      if (ids.has(id)) continue;
+      ids.add(id);
+      const cur = by.get(id);
+      if (cur) cur.count++;
+      else by.set(id, { name: a, count: 1, ...(p?.key ? { key: p.key } : null), ...(p?.avatar ? { avatar: p.avatar } : null) });
+    }
+  }
+  return [...by.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
+
+/**
+ * The Team row's real list: every person the project will accept a card for, each with the loaded cards' own
+ * count (0 included), not only the ones already holding a card. A card holder the project list left out (gone
+ * from it since, or a mismatch) still keeps their count, appended after the roster.
+ */
+export function mergeTeam(members: readonly { key: string; name: string; avatar?: string }[], cardTeam: readonly TeamMember[]): TeamMember[] {
+  const byKey = new Map(cardTeam.map((m) => [m.key, m.count] as const));
+  const byName = new Map(cardTeam.map((m) => [m.name, m.count] as const));
+  const seen = new Set<string>();
+  const out: TeamMember[] = members.map((p) => {
+    seen.add(p.key); seen.add(p.name);
+    return { name: p.name, key: p.key, count: byKey.get(p.key) ?? byName.get(p.name) ?? 0, ...(p.avatar ? { avatar: p.avatar } : null) };
+  });
+  for (const m of cardTeam) if (!seen.has(m.key ?? m.name) && !seen.has(m.name)) out.push(m);
+  return out.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
+
+/**
+ * The people the Assignee list offers: everyone seen in this scope so far, plus the ones read now. A Team view with people
+ * picked asks Jira for just those people, so the cards that come back are theirs alone and the list built from them shrank to
+ * the picked names: nobody could add a second person. People seen earlier stay (with no cards counted until they come back),
+ * and the scope changing starts a new roster.
+ */
+export function rosterOf(prev: readonly TeamMember[], now: readonly TeamMember[]): TeamMember[] {
+  const id = (m: TeamMember): string => m.key ?? m.name;
+  const by = new Map<string, TeamMember>(prev.map((m) => [id(m), { ...m, count: 0 }]));
+  for (const m of now) by.set(id(m), m);
+  return [...by.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
+
+/** The starred rows: the local ones, then (sync on) the site's favourite filters that are not saved here. Off, only the local ones. */
+export function starredViews(local: readonly TreeView[], favourites: readonly { id: string; name: string }[], saved: ReadonlySet<string>, sync: boolean): TreeView[] {
+  if (!sync) return [...local];
+  const have = new Set([...saved, ...local.map((v) => v.id)]);
+  return [...local, ...favourites.filter((f) => !have.has(`filter:${f.id}`)).map((f): TreeView => ({ id: `filter:${f.id}`, label: f.name, kind: "filter", fav: true }))];
+}
+
+/** The search a click on a team row puts in the board's search chip. The id is quoted, and a quote or backslash in it is escaped. */
+export const assigneeSearch = (key: string): string => `assignee = "${key.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+
+/** The count request for a team member: the server writes the query from this id. */
+export const assigneeCountId = (key: string): string => `assignee:${key}`;
+
+/**
+ * The tree's rows regrouped for the sidebar's sections: starred views, "Assigned to me", the spaces, and a "More" group
+ * (sprint, Looked up). Every row survives; only the captions the sections replace are dropped.
+ */
+export function sectionRows(rows: TreeRow[]): { views: TreeRow[]; team: TreeRow[]; me: TreeRow[]; spaces: TreeRow[]; more: TreeRow[] } {
+  const views: TreeRow[] = [], team: TreeRow[] = [], me: TreeRow[] = [], spaces: TreeRow[] = [], more: TreeRow[] = [];
+  for (const r of rows) {
+    if (r.kind === "view") (r.view.team ? team : views).push(r);
+    else if (r.kind === "me") me.push(r);
+    else if (r.kind === "sprint" || r.kind === "looked" || r.key === "cap:sprints" || r.key === "cap:looked") more.push(r);
+    else if (r.key === "cap:spaces" || r.key === "cap:views" || r.key.startsWith("capv:")) continue;
+    else spaces.push(r);
+  }
+  return { views, team, me, spaces, more };
+}
+
+/** The Nth starred row (1-based) a `g` then a digit opens; null past the end. */
+export const starredAt = <T,>(rows: readonly T[], digit: string): T | null => (/^[1-9]$/.test(digit) ? rows[Number(digit) - 1] ?? null : null);

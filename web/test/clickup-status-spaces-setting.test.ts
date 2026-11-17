@@ -5,7 +5,7 @@
  * and not one request to ClickUp itself (the spaces are re-answered by this
  * server from what it holds).
  */
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, onTestFinished, test } from "bun:test";
 import type { ClickUpPrefs } from "../../shared/providers.ts";
 import { globalStubs } from "./stubGlobal.ts";
 
@@ -137,6 +137,8 @@ describe("the pick of counted spaces, in words", () => {
     expect(R.settings.display(ID, "")).toBe("the spaces my cards live in");
   });
   test("ids become the names of the spaces last read; one not read stays its id; nothing is invented", async () => {
+    const fetchBefore = globalThis.fetch;
+    onTestFinished(() => { (globalThis as { fetch: unknown }).fetch = fetchBefore; });
     (globalThis as { fetch: unknown }).fetch = async () => new Response(JSON.stringify({ ok: true, source: "tasks", spaces: [
       { id: "901", name: "Platform", statuses: [] }, { id: "902", name: "Orbit", statuses: [] }, { id: "list:7", name: "Platform / Inbox", statuses: [], fromList: true, spaceId: "901" },
     ] }), { headers: { "content-type": "application/json" } });

@@ -66,7 +66,10 @@ export function noteReadings(rows: readonly ProviderUsage[]): void {
     seen[u.provider as UsageBarProvider] = true;
     changed = true;
   }
-  if (changed) write(SEEN, seen);
+  if (changed) {
+    write(SEEN, seen);
+    for (const fn of [...barListeners]) fn();
+  }
 }
 
 export function showInBar(p: UsageBarProvider): boolean {
@@ -80,8 +83,17 @@ export function barSwitches(): Record<UsageBarProvider, boolean> {
   return Object.fromEntries(USAGE_BAR_PROVIDERS.map((p) => [p.id, showInBar(p.id)])) as Record<UsageBarProvider, boolean>;
 }
 
+/* Who is told when a switch moves. The strip used to learn of it from the next render of the whole window,
+   which the live socket caused several times a second; the strip no longer renders on those, so it asks. */
+const barListeners = new Set<() => void>();
+export function subscribeUsageBar(fn: () => void): () => void {
+  barListeners.add(fn);
+  return () => { barListeners.delete(fn); };
+}
+
 export function setShowInBar(p: UsageBarProvider, on: boolean): void {
   write(KEY, { ...read(KEY), [p]: on });
+  for (const fn of [...barListeners]) fn();
 }
 
 /** The rows the strip draws: a provider hidden by the switch, or never read on

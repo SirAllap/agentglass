@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { cap99, cardView, FAR_BEHIND, kFormat, mergeReason, STALE_DAYS, STRIP_FACES, trackerSlot } from "../src/lib/prCardView.ts";
 import { cardReviewers } from "../src/lib/cardReviewers.ts";
-import type { Filed } from "../src/lib/prLanes.ts";
+import type { Filed } from "../../shared/prLanes.ts";
 import type { LeftoverState } from "../src/lib/leftovers.ts";
 import type { PrCheckRollup } from "../../shared/types.ts";
 
@@ -137,7 +137,10 @@ describe("the verdict strip: one sentence and one colour per state", () => {
     expect(dismissed.tone).toBe("run");
     expect(dismissed.review).toMatchObject({ word: "stale", tone: "run" });
     const again = { ...hr, askedAgain: true, people: [{ login: "theo-w", state: "again" }] };
-    expect(view(pr({ humanReview: again }), filed("land"), { reviewers: cardReviewers(again) }).tone).toBe("run");
+    const asked = view(pr({ humanReview: again }), filed("others"), { reviewers: cardReviewers(again) });
+    expect(asked.tone).toBe("run");
+    expect(asked.strip.text).toBe("Re-review asked of theo-w");
+    expect(asked.review).toMatchObject({ word: "asked again", tone: "run" });
   });
   test("changes asked for and not answered: red, with who, never 'no review asked'", () => {
     const one = people(["theo-w", "changes"], ["kofi-o", "approved"]);
@@ -211,8 +214,18 @@ describe("the strip's threads, faces and the 99+ cap", () => {
     expect(word(["a-one", "approved"], ["b-two", "await"])).toMatchObject({ word: "1 waiting", tone: "run" });
     expect(word(["a-one", "approved"])).toMatchObject({ word: "approved", tone: "ok" });
     expect(word(["a-one", "comment"])).toMatchObject({ word: "commented", tone: "mute" });
-    expect(word()).toMatchObject({ word: "nobody asked", tone: "mute" });
-    expect(view(pr({ isDraft: true }), filed("flight")).review.word).toBe("nobody asked");
+    const asked = (o: Parameters<typeof pr>[0]) => view(pr(o), filed("others"), { reviewers: people() }).review;
+    expect(asked({ reviewDecision: "REVIEW_REQUIRED" })).toMatchObject({ word: "nobody asked", tone: "mute" });
+    expect(view(pr({ isDraft: true, reviewDecision: "REVIEW_REQUIRED" }), filed("flight")).review.word).toBe("nobody asked");
+  });
+  test("approved with nobody human on the review is marked as a bot's approval", () => {
+    const bot = view(pr(), filed("land"), { reviewers: people() }).review;
+    expect(bot).toMatchObject({ word: "bot approved", tone: "run", bot: true });
+    expect(view(pr(), filed("land"), { reviewers: people(["a-one", "approved"]) }).review.bot).toBeUndefined();
+  });
+  test("changes requested with nobody human on the review is marked as a bot's request", () => {
+    const bot = view(pr({ reviewDecision: "CHANGES_REQUESTED" }), filed("flight"), { reviewers: people() }).review;
+    expect(bot).toMatchObject({ word: "bot: changes", tone: "bad", bot: true });
   });
 });
 
@@ -362,5 +375,18 @@ describe("the rest of the card", () => {
     expect(view(pr({ isDraft: true }), filed("flight")).kind).toBe("draft");
     expect(view(pr({ state: "CLOSED" }), filed("others")).kind).toBe("finished");
     expect(view(pr({ state: "MERGED" }), filed("land")).kind).toBe("finished");
+  });
+});
+
+// Seen after a failed cleanup: one finished card offered "Open", the others "Clean up local leftovers".
+describe("a finished card whose cleanup failed", () => {
+  const failed = { state: "failed" as const, done: 1, total: 3, freed: 0, failed: 1, what: "teardown-script" };
+  test("offers Clean up whether or not its inventory has been read back", () => {
+    const states: (LeftoverState | undefined)[] = [{ kind: "some", items: 1, bytes: 0, groups: [] }, { kind: "computing" }, { kind: "unknown", why: "x" }];
+    for (const leftoverState of states) expect(view(pr({ state: "MERGED" }), filed("land"), { leftoverState, autoRun: failed }).primary.id).toBe("clean");
+  });
+  test("goes back to Open once the computer is clean; with no failed run an unread inventory offers nothing", () => {
+    expect(view(pr({ state: "MERGED" }), filed("land"), { leftoverState: { kind: "none" }, autoRun: failed }).primary.id).toBe("open");
+    expect(view(pr({ state: "MERGED" }), filed("land"), { leftoverState: { kind: "computing" } }).primary.id).toBe("open");
   });
 });

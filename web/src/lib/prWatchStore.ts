@@ -35,6 +35,7 @@ export function usePrWatchState(): PrWatchState {
   return useSyncExternalStore(
     (fn) => { subs.add(fn); return () => { subs.delete(fn); }; },
     () => state,
+    () => state, // server render (the board's tests): the same list, no fetch to wait for
   );
 }
 
@@ -136,6 +137,37 @@ export function waitTally(all: RunCheck[], ignored: string[]): { pass: number; r
 export function suggestSkips(all: RunCheck[], presetIgnore: string[] = []): string[] {
   return all.filter((c) => c.required !== true && (c.state === "skip" || (c.required === false && presetIgnore.includes(c.name)))).map((c) => c.name);
 }
+
+/** The "Only required checks" preset: wait for what GitHub will not merge without, skip every other check. A check
+ *  GitHub was not asked about (required undefined) is kept in: we cannot tell it is safe to skip. */
+export const onlyRequiredIgnore = (all: RunCheck[]): string[] => all.filter((c) => c.required === false).map((c) => c.name);
+
+/** What a runner flake writes in a check's own title (a clone that dropped, not a finding about the code). */
+const FLAKE = /HTTP 40[08]\b|RPC failed|expected 'packfile'|promisor remote|early EOF|Could not resolve host|connection reset/i;
+
+/** Told apart from the check's own title: "flake" = the runner broke, "real" = it wrote a finding, "unknown" = it wrote nothing. */
+export const failKind = (c: { title?: string }): "flake" | "real" | "unknown" =>
+  !c.title?.trim() ? "unknown" : FLAKE.test(c.title) ? "flake" : "real";
+
+/** The ignored checks that are red now, each with its kind: what the green light would hide. */
+export const ignoredFailures = (all: PrCheck[], ignored: string[]): { name: string; kind: ReturnType<typeof failKind>; url?: string }[] =>
+  runChecks(all).filter((c) => c.state === "fail" && ignored.includes(c.name)).map((c) => {
+    /* The same job runs once per event: judge ALL its red runs, and let a real finding outrank a flake. */
+    const reds = all.filter((x) => x.name === c.name && x.state === "failure");
+    const kinds = reds.map(failKind);
+    const kind = kinds.includes("real") ? "real" : kinds.includes("unknown") ? "unknown" : "flake";
+    const raw = reds.find((x) => failKind(x) === kind) ?? reds[0];
+    return { name: c.name, kind, ...(raw?.url ? { url: raw.url } : null) };
+  });
+
+/** The gh command that re-runs the failed jobs of the run behind a check's URL. Only builds text: it is never run from here. */
+export function rerunCommand(repo: string, url: string | undefined): string | null {
+  const id = /\/actions\/runs\/(\d+)/.exec(url ?? "")?.[1];
+  return id ? `gh run rerun ${id} --failed -R ${repo}` : null;
+}
+
+/** The PR's checks page, where GitHub's own "Re-run failed jobs" button lives. */
+export const checksPageUrl = (repo: string, number: number): string => `https://github.com/${repo}/pull/${number}/checks`;
 
 /** The first argument of `name (a, b)` and the family before it, for a search row; null when there are no parens. */
 export const splitCheck = (name: string): { arg: string; family: string } | null => {

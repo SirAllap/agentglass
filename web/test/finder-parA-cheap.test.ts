@@ -17,7 +17,7 @@ const css = await read("index.css");
 describe("rows 70 and 72: a column's header", () => {
   test("31 px tall, bold, padded 5 5 4 12 under the 3 px bar", () => {
     expect(column).toContain('minHeight: 31, padding: "5px 5px 4px 12px"');
-    expect(column).toMatch(/title=\{folderPath\} aria-label=\{title\}[^>]*fontWeight: 700/);
+    expect(column).toMatch(/data-tip=\{folderPath\} aria-label=\{title\}[^>]*fontWeight: 700/);
   });
   test("a long title gives way in the middle and keeps its last characters", () => {
     expect(middleSplit("report")).toEqual(["report", ""]);

@@ -9,11 +9,15 @@
 .agx-mg-chips { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; margin-top: 6px; color: var(--text3); }
 .agx-mg-chip { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 11px; background: var(--surface-inset); box-shadow: inset 0 0 0 1px var(--surface-line); color: var(--text2); font-size: 11px; font-weight: 600; white-space: nowrap; flex: none; }
 .agx-mg-chip[data-ref] { font-family: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace; font-weight: 500; font-size: 10.5px; }
-.agx-mg-chip[data-head] { flex: 1000 1 auto; min-width: 9ch; display: inline-flex; }
-.agx-mg-chip[data-head] > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
-.agx-mg-chip[data-head] > span:last-child { flex: none; white-space: nowrap; }
-.agx-mg-chip[data-base] { flex: 0 0 auto; max-width: 55%; overflow-wrap: anywhere; white-space: normal; height: auto; min-height: 22px; padding-block: 2px; }
 .agx-mg-chips svg { flex: none; }
+/* Branches: their own block, full width, so any length fits. Wraps at the <wbr>
+   after a separator; anywhere only for one unbroken piece longer than the line. */
+.agx-mg-refs { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.agx-mg-ref { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.agx-mg-reflbl { flex: none; width: 3.2em; padding-top: 2px; font-size: 11px; color: var(--text3); }
+.agx-mg-refname { flex: 1; min-width: 0; padding: 1px 6px; border-radius: 6px; background: var(--surface-inset); box-shadow: inset 0 0 0 1px var(--surface-line); color: var(--text2); font-family: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace; font-size: 10.5px; line-height: 1.5; overflow-wrap: anywhere; white-space: normal; }
+.agx-mg-refcopy { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; color: var(--text3); background: transparent; border: 0; cursor: pointer; }
+.agx-mg-refcopy:hover, .agx-mg-refcopy:focus-visible { color: var(--text); background: var(--surface-inset); }
 .agx-mg-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; overflow-x: hidden; min-height: 0; }
 .agx-mg-sec { display: flex; flex-direction: column; gap: 6px; }
 .agx-mg-cap { display: flex; align-items: baseline; gap: 8px; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text3); }
@@ -68,6 +72,15 @@
 .agx-mg-keys kbd { font-family: inherit; display: inline-block; padding: 0 5px; border-radius: 5px; background: var(--surface-inset); box-shadow: inset 0 0 0 1px var(--surface-line); color: var(--text3); font-size: 10.5px; line-height: 17px; margin-right: 4px; }
 .agx-mg-act { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .agx-mg-reason { color: var(--text3); font-size: 11px; text-align: right; }
+.agx-mg-fold { border-radius: 12px; background: var(--surface-nav); box-shadow: inset 0 0 0 1px var(--surface-line); }
+.agx-mg-foldhd { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 14px; border: 0; background: none; font: inherit; color: var(--text); cursor: pointer; text-align: left; }
+.agx-mg-foldhd:focus-visible { outline: 2px solid var(--md-accent); outline-offset: -2px; border-radius: 12px; }
+.agx-mg-foldhd .agx-mg-count { margin-left: auto; font-family: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace; font-size: 11px; }
+.agx-mg-chev { display: inline-block; color: var(--text3); transition: transform 0.12s; }
+.agx-mg-fold[data-open] .agx-mg-chev { transform: rotate(90deg); }
+.agx-mg-foldbd { padding: 0 14px 14px; display: flex; flex-direction: column; gap: 12px; }
+.agx-mg-foldbd[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { .agx-mg-chev { transition: none; } }
 @media (max-width: 640px) {
   .agx-mg-strat { grid-template-columns: 1fr; }
   .agx-mg-foot { flex-wrap: wrap; }

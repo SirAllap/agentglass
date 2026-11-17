@@ -369,7 +369,8 @@ describe("a pane the server holds answers later, and says so when it cannot", ()
     const k = ctx();
     k.c.sources = fixture;
     const r = await controlReplyLater(ui("ui.read", { panel: "settings.lantern" }), k.c);
-    expect(r).toMatchObject({ ok: true, applied: true, value: { state: { minutes: 20 } } });
+    expect(r).toMatchObject({ ok: true, value: { state: { minutes: 20 } } });
+    expect(r).not.toHaveProperty("applied");
   });
 
   it("a route that fails is a sentence, and one that never answers is cut short", async () => {
@@ -393,7 +394,7 @@ describe("controlReply — what the window answers", () => {
     for (const cmd of [ui("ui.state"), ...READ_PANELS.map((panel) => ui("ui.read", { panel }))]) {
       const r = await controlReplyLater(cmd, k.c);
       expect(r.ok, JSON.stringify(cmd)).toBe(true);
-      expect(r.applied).toBe(true);
+      expect(r).not.toHaveProperty("applied");
       expect(Object.keys((r.value ?? {}) as object)).toEqual(expect.arrayContaining(["state", "untrusted"]));
     }
     expect(k.calls).toEqual([]);

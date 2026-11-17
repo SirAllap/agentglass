@@ -9,8 +9,8 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
-  CHANNEL, connectorPath, coveragePill, coverageRows, lineContrast, lineInk, notInUnit, overlappingPairs, overlaps,
-  pageState, partitionUnits, pickView, planConnectors, statusHome,
+  CHANNEL, connectorPath, coveragePill, coverageRows, lineContrast, lineInk, mapScale, notInUnit, overlappingPairs, overlaps,
+  pageState, partitionUnits, pickView, planConnectors, statusHome, wireEnds,
 } from "../src/lib/workflowLayout.ts";
 import { CLICKUP } from "../src/lib/clickupWorkflow.ts";
 import { moments, type MapSpace, type Step } from "../src/lib/workflowMap.ts";
@@ -178,6 +178,56 @@ describe("connectors", () => {
   });
   test("nothing to draw is nothing drawn", () => {
     expect(planConnectors([], 620)).toEqual([]);
+  });
+});
+
+describe("where a connector lands on a zoomed page", () => {
+  /* The map at 100%, in its own pixels: a card ending at 760, a status control 330–362, a dot
+     at 824–836 inside a row 336–368. */
+  const LOCAL = {
+    grid: { left: 120, top: 80, right: 1080, bottom: 900 },
+    card: { left: 140, top: 200, right: 760, bottom: 420 },
+    pick: { left: 300, top: 330, right: 520, bottom: 362 },
+    dot: { left: 824, top: 346, right: 836, bottom: 358 },
+    row: { left: 816, top: 336, right: 1080, bottom: 368 },
+  };
+  type Rect = typeof LOCAL.grid;
+  const box = (b: Rect, scale: number) => ({
+    left: b.left * scale, top: b.top * scale, right: b.right * scale, bottom: b.bottom * scale,
+    width: (b.right - b.left) * scale, height: (b.bottom - b.top) * scale,
+  });
+  /* What the browser reports once the page is zoomed: viewport pixels, every one of them scaled. */
+  const at = (scale: number) => ({
+    scale,
+    grid: box(LOCAL.grid, scale), card: box(LOCAL.card, scale), pick: box(LOCAL.pick, scale),
+    dot: box(LOCAL.dot, scale), row: box(LOCAL.row, scale),
+  });
+  const centre = (r: Rect) => ({ x: (r.left + r.right) / 2 - LOCAL.grid.left, y: (r.top + r.bottom) / 2 - LOCAL.grid.top });
+
+  test("at 67%, 100% and 125% the line ends on the centre of its status row, in the map's pixels", () => {
+    for (const scale of [0.67, 1, 1.25]) {
+      const l = at(scale);
+      const ends = wireEnds(l);
+      expect(ends.to.y).toBeCloseTo(centre(LOCAL.row).y, 6);
+      expect(ends.to.x).toBeCloseTo(centre(LOCAL.dot).x, 6);
+      expect(ends.from.x).toBeCloseTo(LOCAL.card.right - LOCAL.grid.left, 6);
+      expect(ends.from.y).toBeCloseTo(centre(LOCAL.pick).y, 6);
+    }
+  });
+
+  test("read as the map's own pixels, a zoomed rect puts the end off its row by the zoom factor", () => {
+    const l = at(0.67);
+    const ends = wireEnds({ ...l, scale: 1 });
+    expect(ends.to.y).not.toBeCloseTo(centre(LOCAL.row).y, 1);
+    expect(ends.to.y).toBeCloseTo(centre(LOCAL.row).y * 0.67, 6);
+  });
+
+  test("the scale is the grid's drawn width over its layout width, and one when there is nothing to divide", () => {
+    expect(mapScale(at(0.67).grid, 960)).toBeCloseTo(0.67, 6);
+    expect(mapScale(at(1.25).grid, 960)).toBeCloseTo(1.25, 6);
+    expect(mapScale(at(1).grid, 960)).toBe(1);
+    expect(mapScale({ width: 0 }, 960)).toBe(1);
+    expect(mapScale({ width: 960 }, 0)).toBe(1);
   });
 });
 

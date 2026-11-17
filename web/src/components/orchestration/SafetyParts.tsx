@@ -5,6 +5,7 @@ import { CloseIcon } from "../CloseButton.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { api } from "../../lib/api.ts";
 import type { Envelope, Policy } from "../../../../shared/orchestration.ts";
+import { Switch } from "./flow/Switch.tsx";
 import { denyLines, LIMIT_RANGE, SAFETY } from "./orchestrationCopy.ts";
 
 /**
@@ -21,7 +22,7 @@ export function Note({ text }: { text: string | undefined }) {
 }
 
 /** A list of command prefixes a worker is also refused, with one field to add to it. */
-function DenyList({ id, deny, disabled, onChange }: { id: string; deny: string[]; disabled: boolean; onChange: (d: string[]) => void }) {
+export function DenyList({ id, deny, disabled, onChange }: { id: string; deny: string[]; disabled: boolean; onChange: (d: string[]) => void }) {
   const [text, setText] = useState("");
   const add = () => {
     const t = text.trim();
@@ -66,7 +67,9 @@ export function DenyBox({ deny, disabled, onChange }: { deny: string[]; disabled
   return (
     <div className="grid gap-2 agx-settings-x pt-2 pb-3.5">
       <textarea value={text} rows={3} spellCheck={false} disabled={disabled} aria-label="Also refused here: one command per line"
-        className="agx-orch-ta t-mono" onChange={(e) => { setText(e.target.value); onChange(denyLines(e.target.value)); }} />
+        className="agx-orch-ta t-mono" onChange={(e) => setText(e.target.value)}
+        // Text commits on blur, never per keystroke: a half-typed command would be saved as a refusal.
+        onBlur={() => { if (denyLines(text).join("\n") !== deny.join("\n")) onChange(denyLines(text)); }} />
     </div>
   );
 }
@@ -163,4 +166,57 @@ export function PickRow<T extends string>({ label, value, options, disabled, onC
 /** "Ask when it runs", as the hand-off rule words it: a chip on the picker. */
 export function AskChip({ on, disabled, onToggle, hint }: { on: boolean; disabled: boolean; onToggle: () => void; hint: string }) {
   return <Chip on={on} resting disabled={disabled} title={hint} onClick={onToggle}>Ask when it runs</Chip>;
+}
+
+/**
+ * What a worker may do, as one table: a row per power, a column for what a new
+ * worker starts with and one for the most any role can be given. Docker and the
+ * git ops are one switch that sets both columns, because a default wider than
+ * the ceiling is a policy the server refuses. Same fields, same writes as the
+ * rows this replaced.
+ */
+export function EnvelopeTable({ workerDefault, ceiling, locked, onChange }: {
+  workerDefault: Envelope; ceiling: Envelope; locked: boolean;
+  onChange: (next: { workerDefault: Envelope; ceiling: Envelope }) => void;
+}) {
+  const set = (col: "workerDefault" | "ceiling", patch: Partial<Envelope>) => {
+    if (locked) return;
+    onChange({ workerDefault: col === "workerDefault" ? { ...workerDefault, ...patch } : workerDefault, ceiling: col === "ceiling" ? { ...ceiling, ...patch } : ceiling });
+  };
+  const both = (patch: Partial<Envelope>) => {
+    if (locked) return;
+    onChange({ workerDefault: { ...workerDefault, ...patch }, ceiling: { ...ceiling, ...patch } });
+  };
+  const write = (col: "workerDefault" | "ceiling", e: Envelope) => (
+    <Segmented label={`Write files, ${col === "workerDefault" ? "default" : "ceiling"}`} value={e.write}
+      options={[{ id: "none", label: "Nothing" }, { id: "worktree", label: "Its own copy" }]} onChange={(w) => set(col, { write: w })} />
+  );
+  const sw = (label: string, on: boolean, flip: () => void) => <Switch on={on} label={label} disabled={locked} onChange={flip} />;
+  const row = (what: string, hint: string, a: React.ReactNode, b: React.ReactNode, key: string) => (
+    <tr key={key} data-envelope-row={key}>
+      <th scope="row"><b>{what}</b>{hint && <small>{hint}</small>}</th>
+      <td>{a}</td>
+      <td>{b}</td>
+    </tr>
+  );
+  return (
+    <div className="agx-flow-pgw" data-envelope-table>
+      <table className="agx-flow-pg">
+        <thead>
+          <tr>
+            <th scope="col">What</th>
+            <th scope="col">Default<small>a new worker starts with</small></th>
+            <th scope="col">Ceiling<small>no role can go past this</small></th>
+          </tr>
+        </thead>
+        <tbody>
+          {row("Write files", SAFETY.write, write("workerDefault", workerDefault), write("ceiling", ceiling), "write")}
+          {row("Commit", SAFETY.commit, sw("Commit, default", workerDefault.commit, () => set("workerDefault", { commit: !workerDefault.commit })), sw("Commit, ceiling", ceiling.commit, () => set("ceiling", { commit: !ceiling.commit })), "commit")}
+          {row("Network", SAFETY.network, sw("Network, default", workerDefault.network, () => set("workerDefault", { network: !workerDefault.network })), sw("Network, ceiling", ceiling.network, () => set("ceiling", { network: !ceiling.network })), "network")}
+          {row("Docker", "One switch sets both", sw("Docker, default", workerDefault.docker, () => both({ docker: !workerDefault.docker })), sw("Docker, ceiling", ceiling.docker, () => both({ docker: !workerDefault.docker })), "docker")}
+          {row("Worktree ops", "One switch sets both", sw("Worktree ops, default", !!workerDefault.worktreeOps, () => both({ worktreeOps: !workerDefault.worktreeOps })), sw("Worktree ops, ceiling", !!ceiling.worktreeOps, () => both({ worktreeOps: !workerDefault.worktreeOps })), "worktreeOps")}
+        </tbody>
+      </table>
+    </div>
+  );
 }

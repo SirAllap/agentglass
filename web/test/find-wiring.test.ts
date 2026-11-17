@@ -37,7 +37,7 @@ describe("what a search is pointed at", () => {
     // Every visited view stays mounted, hidden with `visibility`. Searching the
     // document would walk all of them.
     expect(workspace).toContain("pushScope(box.current, 0)");
-    expect(workspace).toContain('style={{ visibility: active ? "visible" : "hidden" }}');
+    expect(workspace).toContain("visibility: paneVisibility(active, !!parked, !!frame)");
   });
 
   it("lets a surface that opens over one take over, and only if it says so", () => {

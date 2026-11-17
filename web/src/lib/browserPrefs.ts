@@ -80,6 +80,17 @@ export function setSearchEngine(engine: SearchEngine): void {
   write(ENGINE_KEY, engine);
 }
 
+export const AGENTS_WITHOUT_SCREEN_KEY = "agentglass.browser.agentsWithoutScreen";
+
+/** Off unless chosen: an agent's browse with the pane closed behaves as before. */
+export function agentsWithoutScreen(): boolean {
+  return read(AGENTS_WITHOUT_SCREEN_KEY) === "1";
+}
+
+export function setAgentsWithoutScreen(on: boolean): void {
+  write(AGENTS_WITHOUT_SCREEN_KEY, on ? "1" : "");
+}
+
 
 /**
  * How far the built-in browser is zoomed, as Electron's logarithmic LEVEL

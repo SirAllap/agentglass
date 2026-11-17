@@ -46,18 +46,10 @@ const count = (html: string, needle: string) => html.split(needle).length - 1;
 
 describe("the page's frame", () => {
   const html = view();
-  test("a pinned region with the scope bar, then two sections in order, in ONE scroll region", () => {
-    const tabs = ["Safety and limits", "Always refused"];
-    const bar = html.slice(html.indexOf("agx-flow-cfgbar"), html.indexOf("agx-flow-cfgscroll"));
-    let at = -1;
-    for (const t of tabs) {
-      const n = bar.indexOf(`>${t}<`);
-      expect(n, t).toBeGreaterThan(at);
-      at = n;
-    }
-    expect(html.indexOf(`role="tablist"`)).toBeLessThan(html.indexOf("agx-flow-cfgscroll"));
-    for (const id of ["agx-flow-safety", "agx-flow-refused"]) expect(html.indexOf("agx-flow-cfgscroll")).toBeLessThan(html.indexOf(`id="${id}"`));
-    expect(html.indexOf("agx-flow-cfgscroll")).toBeGreaterThan(html.indexOf("data-hero"));
+  test("a pinned region with the scope bar, then the sections in ONE scroll region, no tabs", () => {
+    // Lot 7: Safety and Always refused left for Permissions > Workers, with their tabs.
+    expect(html).not.toContain(`role="tablist"`);
+    expect(html.indexOf('data-section="session"')).toBeGreaterThan(html.indexOf("data-hero"));
   });
   test("the old unnumbered cards are gone", () => {
     for (const old of [">Main agent</h3>", ">Workers</h3>", ">Switch things automatically<"]) expect(html).not.toContain(old);
@@ -84,10 +76,12 @@ describe("the clock bar and the plan meter are drawn from the rule", () => {
 describe("the project line and the picture's legend", () => {
   test("the line says what the dot means, then which project is shown", () => {
     expect(scopeSentence("/w/orbit", false, "orbit")).toEqual({ showing: "orbit", tail: ": its own setting. Changes are saved for it only." });
-    const html = view({ projects: ["/w/orbit"], root: "/w/orbit", scope: "project", overrides: ["/w/orbit"] });
-    // The mockup has no info button in the bar: the dot and the project's title say whose setting it is.
-    expect(html).toContain('title="/w/orbit — has its own setting"');
-    expect(html).toContain("data-own-dot");
+    // The pills and their dot are gone: the shared control names the project, the row tags say what differs.
+    const html = view({ projects: ["/w/orbit"], root: "/w/orbit", scope: "project" });
+    expect(html).not.toContain("data-own-dot");
+    expect(html).not.toContain("has its own setting");
+    expect(html).toContain('<span class="whitespace-nowrap">orbit</span><span aria-hidden="true" class="inline-flex opacity-70"><svg');
+    expect(html).not.toContain("Only orbit");
   });
   test("an engine whose plan reads 0% left is still read as limited", () => {
     const st = (reading: string) => [{ scope: "global", ruleId: "x", name: "", active: false, since: 0, reading, readingAt: 1, holding: "" }] as PolicyRuleState[];
@@ -98,7 +92,7 @@ describe("the project line and the picture's legend", () => {
 
 describe("the states before there is a page", () => {
   test("a failed read says what the server answered and offers Retry; the wait is a skeleton; nothing open offers All projects", () => {
-    for (const w of ["Could not load the setting for", "Retry", 'aria-busy="true"', "Nothing is set up yet", "Set up for all projects"]) expect(PANE + STATES).toContain(w);
+    for (const w of ["Could not load the setting for", "Retry", 'aria-busy="true"', "No workers are set up yet", "Set up for all projects"]) expect(PANE + STATES).toContain(w);
   });
 });
 
@@ -118,32 +112,25 @@ describe("the mockup's own page", () => {
     return at < 0 ? "" : CSS.slice(at, CSS.indexOf("}", at));
   };
 
-  test("the bar reads Settings > Orchestration, then the project switch, then the saved chip", () => {
-    const html = view({ root: "/w/orbit", scope: "project", overrides: ["/w/orbit"], projects: ["/w/orbit"] });
-    const bar = html.slice(html.indexOf("data-scope-bar"), html.indexOf("data-hero"));
+  test("the bar is the shared Applies to control: the label, then one dropdown button naming the project, with its caret", () => {
+    const html = view({ root: "/w/orbit", scope: "project", projects: ["/w/orbit"] });
+    const bar = html.slice(html.indexOf("data-scope-bar"), html.indexOf("agx-flow-pg"));
     let at = -1;
-    for (const s of ["Settings \u203a <b>Orchestration</b>", 'aria-label="Settings for"', "Saved for orbit"]) {
+    for (const s of ["Applies to", "data-scope-trigger", '<span class="whitespace-nowrap">orbit</span><span aria-hidden="true" class="inline-flex opacity-70"><svg']) {
       const n = bar.indexOf(s);
       expect(n, s).toBeGreaterThan(at);
       at = n;
     }
-  });
-
-  test("the bar is the mockup's three things, with no extra info button, and the project's dot is the accent", () => {
-    const html = view({ root: "/w/orbit", scope: "project", overrides: ["/w/orbit"], projects: ["/w/orbit"] });
-    const bar = html.slice(html.indexOf("data-scope-bar"), html.indexOf("agx-flow-pg"));
+    expect(bar).not.toContain("Only orbit");
     expect(bar).not.toContain("agx-flow-inf");
-    expect(bar).toContain("data-own-dot");
-    // The mockup's `.seg` dot is `--accent`; the page names its accent on `.agx-orch`.
-    expect(rule(".agx-orch-own")).toContain("background: var(--accent)");
+    expect(bar).not.toContain("Saved for");
   });
 
-  test("the title over the hero is the page's name with the mockup's info, and the scope banner sits above it", () => {
-    const html = view({ root: "/w/orbit", scope: "project", overrides: ["/w/orbit"], projects: ["/w/orbit"] });
+  test("the title over the hero is the page's name with the mockup's info, and no banner sits above it", () => {
+    const html = view({ root: "/w/orbit", scope: "project", projects: ["/w/orbit"] });
     expect(html).toContain('<h2 class="agx-flow-t">Orchestration <span class="agx-flow-inf"');
-    expect(html.indexOf("data-specific-note")).toBeGreaterThan(-1);
-    expect(html.indexOf("data-specific-note")).toBeLessThan(html.indexOf('class="agx-flow-t"'));
-    expect(html).toContain("orbit has its own settings");
+    expect(html).not.toContain("data-specific-note");
+    expect(html).not.toContain("has its own settings");
   });
 
   test("the five blocks on the path keep the mockup's colour, by role id, in one place", () => {
@@ -205,7 +192,7 @@ describe("the mockup's own page", () => {
   test("the current level is tinted, outlined and says Now, and the page is set in the mockup's sans stack", () => {
     const balanced = base();
     balanced.workerDefault = { ...balanced.workerDefault, write: "worktree", commit: true, network: false, docker: false };
-    const html = view({ policy: balanced });
+    const html = view({ policy: balanced, part: "permWorkers" });
     const level = html.slice(html.indexOf('data-level="balanced"'), html.indexOf("</button>", html.indexOf('data-level="balanced"')));
     expect(level).toContain('aria-pressed="true"');
     expect(level).toContain(">Now<");

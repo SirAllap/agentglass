@@ -59,10 +59,37 @@ describe("trackerChoices", () => {
     expect(await mod.trackerChoices()).toEqual({ "acme/orbit": "jira" });
   });
 
+  test("the ClickUp-writes switch comes in the same read, per repository", async () => {
+    answer = () => Response.json({ ok: true, projects: {}, clickupWrites: { "acme/orbit": true } });
+    expect(await mod.clickupWrites()).toEqual({ "acme/orbit": true });
+    expect(await mod.trackerChoices()).toEqual({});
+    expect(calls).toEqual(["/tracker/projects"]);
+  });
+
   test("a save in Settings is what the next screen reads, with no request", async () => {
     mod.rememberTrackerChoices({ "acme/orbit": "jira" });
     expect(await mod.trackerChoices()).toEqual({ "acme/orbit": "jira" });
     expect(calls).toEqual([]);
+  });
+});
+
+describe("the rows Settings draws, one per repository", () => {
+  test("a repository with no stored choice is a row saying Auto and Read-only", () => {
+    expect(mod.trackerRows(["acme/orbit"], {}, {})).toEqual([{ repo: "acme/orbit", tracker: "auto", writesOn: false }]);
+  });
+
+  test("a stored choice is the row's value, whichever case the repository is spelled in", () => {
+    expect(mod.trackerRows(["Acme/Orbit"], { "acme/orbit": "jira" }, { "acme/orbit": true }))
+      .toEqual([{ repo: "Acme/Orbit", tracker: "jira", writesOn: true }]);
+  });
+
+  test("the order is the one the server sent — the open project first — not the alphabet", () => {
+    expect(mod.trackerRows(["someuser/tool", "acme/orbit"], {}, {}).map((r) => r.repo))
+      .toEqual(["someuser/tool", "acme/orbit"]);
+  });
+
+  test("one repository is one row, whatever the spelling of the case", () => {
+    expect(mod.trackerRows(["acme/orbit", "Acme/Orbit"], {}, {}).map((r) => r.repo)).toEqual(["acme/orbit"]);
   });
 });
 
@@ -73,7 +100,8 @@ describe("the view is null until Jira is connected", () => {
     expect(src).toContain("if (!hasJira) return;");
     // a "no" is stored as null, so a machine without Jira never redraws for the answer
     expect(src).toContain("setSetup(v.jira ? v : null)");
-    expect(src).toContain("setup && all ? { setup, choice: choiceFor(all, repo) } : null");
+    expect(src).toContain("choice: choiceFor(all.choices, repo)");
+    expect(src).toContain("writesOn: clickupWritesOn(all.writes, repo)");
   });
 
   test("an owner is only attached from a view, and the setup is otherwise itself", () => {
@@ -91,14 +119,15 @@ describe("where it is wired", () => {
     // These literals are what the older card tests pin; ownership rides on the setup, not on new arguments.
     expect(pr).toContain("const ref = useMemo(() => mergeCardRefOrRow(d, setup), [d.headRefName, d.title, d.body, d.card, setup]);");
     expect(pr).toContain("const go = chipAction(ref, setup);");
-    expect(term).toContain("chipAction(ref, cuSetup)");
+    expect(term).toContain("chipAction(ref, setup)");
   });
 
   test("every place that reads a card id takes its setup through useOwnerSetup", () => {
-    expect(pr.match(/useOwnerSetup\(useClickupSetup\(\)/g)!.length).toBe(5);
+    expect(pr.match(/useOwnerSetup\(useClickupSetup\(\)/g)!.length).toBe(6);
     expect(pr).toContain("const clickup = useOwnerSetup(useClickupSetup(), repo?.nameWithOwner);");
+    // One writer now, shared by the bar and the side pane alike — not two
+    // separate card lookups that could disagree.
     expect(term).toContain("const setup = useOwnerSetup(useClickupSetup());");
-    expect(term).toContain("const cuSetup = useOwnerSetup(useClickupSetup());");
   });
 
   test("a Jira card is not looked up in ClickUp for its colour", () => {

@@ -53,11 +53,11 @@ export function StateBanner({ state, conflicts, busy, onAbort, onContinue }: {
       {/* Abort first, and always available: the one move that is safe from any stopped state. */}
       <button data-banner-abort onClick={onAbort} disabled={busy} className="text-[10.5px] px-2 py-0.5 rounded-lg whitespace-nowrap"
         style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}
-        title="Throw it away and put the tree back exactly as it was">abort</button>
+        data-tip="Throw it away and put the tree back exactly as it was">abort</button>
       {b.canContinue && (
         <button data-banner-continue onClick={onContinue} disabled={busy || !!b.continueWhy} className="text-[10.5px] px-2 py-0.5 rounded-lg whitespace-nowrap"
           style={{ color: "var(--success-ink)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)", opacity: b.continueWhy ? 0.4 : 1 }}
-          title={b.continueWhy ?? "commit the merge"}>continue</button>
+          data-tip={b.continueWhy ?? "commit the merge"}>continue</button>
       )}
     </div>
   );
@@ -190,10 +190,10 @@ export function GitHeader({
     ...slot,
     "add-remote": { label: "Add a remote…", run: onOpenRemotes, node: (
       <button data-control="add-remote" onClick={onOpenRemotes} className={CTL} style={ctl()}
-        title="Open the Remotes tab, where a remote is added"><PlusIcon size={ICON.xs} />Add a remote…</button>) },
+        data-tip="Open the Remotes tab, where a remote is added"><PlusIcon size={ICON.xs} />Add a remote…</button>) },
     "make-branch": { label: "Make a branch here", run: onMakeBranch, node: (
       <button data-control="make-branch" onClick={onMakeBranch} disabled={!writeEnabled || busy} className={CTL} style={ctl("plain", !writeEnabled || busy)}
-        title="Not on a branch. New commits here belong to no branch until you name one."><PlusIcon size={ICON.xs} />Make a branch here</button>) },
+        data-tip="Not on a branch. New commits here belong to no branch until you name one."><PlusIcon size={ICON.xs} />Make a branch here</button>) },
   };
   // Give up one thing at a time while the row is wider than the window; see headerShape.
   const [squeeze, setSqueeze] = useState(0);
@@ -232,27 +232,12 @@ export function GitHeader({
   const fetched = fetchedLabel(last, Date.now());
   const fetchTitle = reasons.fetch ?? (fetched ? `${fetched.title}${fetched.sub ? `\n${fetched.sub}` : ""}` : "Fetch every remote, one after another");
 
-  // The strip scrolls rather than shoves; it fades at the right edge only while
-  // something is hidden there.
-  const strip = useRef<HTMLDivElement>(null);
-  const [clipped, setClipped] = useState(false);
-  useEffect(() => {
-    const el = strip.current; if (!el) return;
-    const measure = () => setClipped(el.scrollWidth - el.clientWidth - el.scrollLeft > 1);
-    measure();
-    el.addEventListener("scroll", measure, { passive: true });
-    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
-    ro?.observe(el);
-    return () => { el.removeEventListener("scroll", measure); ro?.disconnect(); };
-  }, []);
-
-  const fade = "linear-gradient(90deg, #000 88%, transparent)";
   const running1 = (op: "fetch" | "pull" | "push") => running === op;
 
   return (
     // No overflow-hidden here, ever: the checkout picker's dropdown is
     // absolutely positioned inside this row, and clipping the row clipped the
-    // menu to a sliver. Overflow is prevented by the tab strip scrolling and
+    // menu to a sliver. Overflow is prevented by the tab strip wrapping (a clipped strip hid tabs at 200 % zoom) and
     // the slot being capped, not by cutting off whatever escapes.
     // The row wraps rather than shrinks: below about 1100px the six actions need
     // more than half the bar, and a strip squeezed beside them is a strip you
@@ -265,14 +250,13 @@ export function GitHeader({
       {/* The floor is the tabs' own width, so the row wraps exactly when the
           actions cannot leave every tab on the line. A number picked by hand
           (420) still "fitted" at 1366 and cut the strip at Stashes. */}
-      <div ref={strip} className="flex items-center gap-2.5 ml-1 min-w-[fit-content] flex-1 overflow-x-auto agw-noscrollbar"
-        style={clipped ? { WebkitMaskImage: fade, maskImage: fade } : undefined} data-tabs-strip>
+      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 ml-1 min-w-[min(fit-content,100%)] flex-1" data-tabs-strip>
         {tabs}
       </div>
       <div className="ml-auto flex items-center gap-1.5 shrink-0" style={{ opacity: treeStale ? 0.5 : 1, transition: "opacity .18s ease" }}>
         {/* Switched worktrees — say the numbers are being recomputed rather than
             leave the old branch's sync count sitting there looking current. */}
-        {treeStale && <span className="animate-spin shrink-0 text-[12px]" style={{ color: "var(--text3)" }} title="Reading the branch you switched to…"><RefreshIcon size={ICON.xs} /></span>}
+        {treeStale && <span className="animate-spin shrink-0 text-[12px]" style={{ color: "var(--text3)" }} data-tip="Reading the branch you switched to…"><RefreshIcon size={ICON.xs} /></span>}
         {/* Never wider than 40% of the header, and never more than two items:
             the six controls to its right do not move for any state. */}
         {visible.length + overflow.length > 0 && (
@@ -281,7 +265,7 @@ export function GitHeader({
             {overflow.length > 0 && (
               <span ref={moreAnchor} className="shrink-0">
                 <button data-control="slot-more" onClick={() => setMoreOpen((o) => !o)} aria-haspopup="menu" aria-expanded={moreOpen}
-                  className={CTL} style={ctl()} title={overflow.map((id) => entries[id]!.label).join("\n")}>
+                  className={CTL} style={ctl()} data-tip={overflow.map((id) => entries[id]!.label).join("\n")}>
                   <MoreIcon size={ICON.xs} />+{overflow.length}
                 </button>
               </span>
@@ -297,7 +281,7 @@ export function GitHeader({
             ))}
           </AnchoredMenu>
         )}
-        <button data-control="insights" onClick={onOpenInsights} disabled={busy} aria-label="Insights" title="Insights"
+        <button data-control="insights" onClick={onOpenInsights} disabled={busy} aria-label="Insights" data-tip="Insights"
           className={`${CTL} !px-0 w-[26px] justify-center`} style={ctl("plain", busy)}><ChartIcon size={ICON.xs} /></button>
         {chip && (
           // One line, always. A ticket-shaped branch name is 60 characters and
@@ -308,7 +292,7 @@ export function GitHeader({
             <button data-control="chip" className={`${CTL} min-w-0 max-w-[min(30vw,340px)] !gap-1`}
               style={{ ...ctl("plain"), ...(chip.detached ? { color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" } : { color: "var(--text)" }), fontFamily: "var(--font-mono, inherit)" }}
               onClick={() => { if (!chip.detached && branch) navigator.clipboard?.writeText(branch.name).then(() => onCopied(branch.name)).catch(() => { /* no clipboard permission */ }); }}
-              title={(chip.detached ? `Not on a branch: checked out at ${sha ?? "a commit"}.\nNew commits here belong to no branch.` : `${branch!.name}${branch!.upstream ? `\ntracking ${branch!.upstream}` : "\nno upstream, nothing to compare against"}\n\nclick to copy the branch name`)
+              data-tip={(chip.detached ? `Not on a branch: checked out at ${sha ?? "a commit"}.\nNew commits here belong to no branch.` : `${branch!.name}${branch!.upstream ? `\ntracking ${branch!.upstream}` : "\nno upstream, nothing to compare against"}\n\nclick to copy the branch name`)
                 // What the squeezed row no longer draws is still said here.
                 + (shape.badges ? "" : notes.map((n) => `\n${n.text}`).join("")) + (chip.state && !shape.chipState ? `\n${chip.state}` : "")}>
               {chip.detached ? <CommitIcon size={ICON.xs} /> : <BranchIcon size={ICON.xs} />}
@@ -317,26 +301,26 @@ export function GitHeader({
               {/* Behind first, then ahead: it reads "pull this many, push that many". */}
               {chip.sync && chip.sync.behind > 0 && <span style={{ color: "var(--warning-ink)" }}>↓{chip.sync.behind}</span>}
               {chip.sync && chip.sync.ahead > 0 && <span style={{ color: "var(--success-ink)" }}>↑{chip.sync.ahead}</span>}
-              {chip.sync?.inSync && <span className="flex" style={{ color: "var(--success-ink)" }} title="in sync with upstream"><DoneIcon size={ICON.xs} /></span>}
+              {chip.sync?.inSync && <span className="flex" style={{ color: "var(--success-ink)" }} data-tip="in sync with upstream"><DoneIcon size={ICON.xs} /></span>}
             </button>
-            {shape.badges && notes.map((n) => <span key={n.label} className={CTL} style={ctl("dashed")} title={n.text}>{n.label}</span>)}
+            {shape.badges && notes.map((n) => <span key={n.label} className={CTL} style={ctl("dashed")} data-tip={n.text}>{n.label}</span>)}
           </>
         )}
         {/* Each says what it is doing while it does it, and why it is off when it is. */}
         <span ref={fetchAnchor} className="shrink-0" onMouseEnter={loadLast}>
-          <button data-control="fetch" onClick={() => void doFetch()} disabled={off("fetch")} title={fetchTitle}
+          <button data-control="fetch" onClick={() => void doFetch()} disabled={off("fetch")} data-tip={fetchTitle}
             className={CTL} style={ctl(failed === "fetch" ? "err" : "plain", off("fetch") && !running1("fetch"))}>
             {running1("fetch") ? <><Spin />fetching…</> : failed === "fetch" ? <><span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--error)" }} />fetch</> : <><RefreshIcon size={ICON.xs} />fetch</>}
           </button>
         </span>
         <span ref={pullAnchor} className="shrink-0">
-          <button data-control="pull" onClick={() => void doPull()} disabled={off("pull")} title={reasons.pull ?? "Bring the upstream's new commits down"}
+          <button data-control="pull" onClick={() => void doPull()} disabled={off("pull")} data-tip={reasons.pull ?? "Bring the upstream's new commits down"}
             className={CTL} style={ctl(failed === "pull" ? "err" : "plain", off("pull") && !running1("pull"))}>
             {running1("pull") ? <><Spin />pulling…</> : <>{failed === "pull" && <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--error)" }} />}↓ pull{facts.behind > 0 && <span style={{ color: "var(--text3)" }}>{facts.behind}</span>}</>}
           </button>
         </span>
         <span ref={pushAnchor} className="shrink-0">
-          <button data-control="push" onClick={() => void doPush()} disabled={off("push")} title={reasons.push ?? (facts.hasUpstream ? "Send your commits up" : `Send ${branch?.name ?? "this branch"} to its remote`)}
+          <button data-control="push" onClick={() => void doPush()} disabled={off("push")} data-tip={reasons.push ?? (facts.hasUpstream ? "Send your commits up" : `Send ${branch?.name ?? "this branch"} to its remote`)}
             className={CTL} style={ctl(failed === "push" ? "err" : facts.ahead > 0 || (!facts.hasUpstream && !off("push")) ? "dark" : "plain", off("push") && !running1("push"))}>
             {running1("push") ? <><Spin />pushing…</> : <>{failed === "push" && <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--error)" }} />}↑ <span className="truncate max-w-[22ch]">{pushLabel}</span>{facts.ahead > 0 && <span style={{ opacity: 0.7 }}>{facts.ahead}</span>}</>}
           </button>
@@ -390,7 +374,7 @@ export function GitHeader({
                 </button>
               )}
               {card.next.id !== "open-remotes" && card.op === "fetch" && (
-                <button onClick={() => { closeCard(); onOpenRemotes(); }} className={CTL} style={ctl()}><FolderIcon size={ICON.xs} />Open Remotes</button>
+                <button onClick={() => { closeCard(); onOpenRemotes(); }} className={CTL} style={ctl()}><FolderIcon size={ICON.xs} />Open remotes</button>
               )}
               <span className="flex-1" />
               <button data-card-log onClick={() => { closeCard(); onOpenLog(); }} className={CTL} style={{ ...ctl(), border: "1px solid transparent", background: "transparent", color: "var(--text3)" }}>

@@ -22,6 +22,9 @@ import { CaretIcon } from "../../lib/glyphIcons.tsx";
 import { useRefreshOnFocus } from "../../lib/useRefreshOnFocus.ts";
 import { Button } from "../workspace/Chrome.tsx";
 import { Group, StopConfirm } from "./bits.tsx";
+import { AskAboutButton } from "../AskAboutButton.tsx";
+import { machineSeed } from "../../lib/askSeed.ts";
+import { askDir } from "../../lib/askAbout.ts";
 
 /** `tick` moves when the person pressed Refresh: one fresh sample, since the server's own sampling is every few minutes. */
 export function LeftBehind({ tick }: { tick: number }) {
@@ -71,6 +74,12 @@ export function LeftBehind({ tick }: { tick: number }) {
   return (
     <section aria-label="Left behind">
       <Group label="Left behind" count={procs.length} hint="processes that outlived whoever started them" />
+      {procs.length > 0 && (
+        <div className="flex justify-end px-2 pb-1">
+          <AskAboutButton what="The left-behind list" cwd={askDir} onSaid={(_ok, t) => setNote(t)}
+            seed={() => machineSeed({ left: procs, on: "Machine > Left behind" })} />
+        </div>
+      )}
       {shown.rows.map((g) => (
         <Fragment key={g.key}>
           {g.count === 1 ? (

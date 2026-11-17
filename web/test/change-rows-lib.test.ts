@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import {
-  dayLabel, filterRows, folderOf, groupRows, rowsDiffer, statusWord, totalsOf, visibleRows, whenLabel,
+  dayLabel, filterRows, folderOf, groupRows, hasUnseenPush, mergeRows, mustReadOnShow, skipDelay, rowsDiffer, statusWord, totalsOf, visibleRows, whenLabel,
 } from "../src/lib/changeRows.ts";
 import type { ChangeRow } from "../../shared/types.ts";
 
@@ -165,5 +165,77 @@ describe("the smaller rules", () => {
     expect(folderOf("src/app.ts")).toBe("src");
     expect(folderOf("a/b/c/d/app.ts")).toBe("…/c/d");
     expect(folderOf("app.ts")).toBe("./");
+  });
+});
+
+describe("side pane: a refresh merges, a tab switch reuses", () => {
+  it("keeps the identity of every row that did not change", () => {
+    const prev = Array.from({ length: 40 }, (_, i) => row({ path: `src/f${i}.ts` }));
+    const next = prev.map((r, i) => (i === 7 ? { ...r, additions: 99 } : { ...r }));
+    const merged = mergeRows(prev, next);
+    const reused = merged.filter((r, i) => r === prev[i]).length;
+    expect(reused).toBe(39); // before the merge helper: 0 of 40 (the whole list was replaced)
+    expect(merged[7]!.additions).toBe(99);
+  });
+  it("returns the same list when nothing differs", () => {
+    const prev = [row(), row({ path: "b.ts" })];
+    expect(mergeRows(prev, prev.map((r) => ({ ...r })))).toBe(prev);
+  });
+  it("follows the new order and drops removed rows", () => {
+    const a = row({ path: "a.ts" }), b = row({ path: "b.ts" });
+    const out = mergeRows([a, b], [{ ...b }, row({ path: "c.ts" })]);
+    expect(out.map((r) => r.path)).toEqual(["b.ts", "c.ts"]);
+    expect(out[0]).toBe(b);
+  });
+  it("a tab switch sends nothing when no git push came and the last read is recent", () => {
+    let calls = 0;
+    const show = (last: number | null, dirty: boolean, now: number) => { if (mustReadOnShow(last, dirty, now)) calls++; };
+    show(null, false, 0); // first show reads
+    for (let i = 0; i < 10; i++) show(1000, false, 1000 + i * 500); // ten switches in 5 s
+    expect(calls).toBe(1); // before: 11
+  });
+  it("reads again after a git push or past the safety window", () => {
+    expect(mustReadOnShow(1000, true, 1500)).toBe(true);
+    expect(mustReadOnShow(1000, false, 1000 + 15_000)).toBe(true);
+  });
+  it("sees a change to branch or oldPath, and merge hands back the new object", () => {
+    expect(rowsDiffer([row()], [row({ branch: "other" })])).toBe(true);
+    expect(rowsDiffer([row({ oldPath: "a.ts" })], [row({ oldPath: "b.ts" })])).toBe(true);
+    expect(rowsDiffer([row({ binary: false })], [row({ binary: true })])).toBe(true);
+    const prev = [row(), row({ path: "b.ts" })];
+    const out = mergeRows(prev, [row({ branch: "other" }), { ...prev[1]! }]);
+    expect(out[0]!.branch).toBe("other");
+    expect(out[1]).toBe(prev[1]);
+  });
+  it("a failed read leaves the pushes unseen; a push during a read stays unseen", () => {
+    let seq = 0, seen = 0;
+    seq++; // hidden git push
+    // read fails: seen is not moved
+    expect(hasUnseenPush(seq, seen)).toBe(true);
+    const at = seq; seq++; // read starts, a push lands, read succeeds
+    seen = at;
+    expect(hasUnseenPush(seq, seen)).toBe(true);
+    seen = seq;
+    expect(hasUnseenPush(seq, seen)).toBe(false);
+  });
+  it("a skipped show reads when the last read's 15 s ends, not 15 s after the show", () => {
+    expect(skipDelay(0, 14_000)).toBe(1_000); // before: next poll at 29 s
+    expect(skipDelay(0, 20_000)).toBe(0);
+    expect(mustReadOnShow(5_000, false, 1_000)).toBe(true); // clock set back
+  });
+});
+
+describe("what sameRow may assume about a row", () => {
+  it("every field is a primitive except commit, so a new object field fails here", () => {
+    const full: Required<ChangeRow> = { ...row(), oldPath: "src/old.ts", commit: { hash: "abc1234", subject: "add thing", author: "Ada", at: 1 } };
+    for (const [k, v] of Object.entries(full)) {
+      if (k === "commit") continue;
+      expect(v === null || typeof v !== "object", `${k} is an object: teach sameRow to compare it`).toBe(true);
+    }
+  });
+  it("a changed commit field is a change, an equal copy is not", () => {
+    const c = { hash: "a", subject: "s", author: "u", at: 1 };
+    expect(rowsDiffer([row({ commit: c })], [row({ commit: { ...c } })])).toBe(false);
+    expect(rowsDiffer([row({ commit: c })], [row({ commit: { ...c, at: 2 } })])).toBe(true);
   });
 });

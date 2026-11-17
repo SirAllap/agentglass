@@ -99,6 +99,6 @@ describe("the picker opens the form and does not refuse", () => {
     expect(code).toContain("form.show(");
     // The list is read on first open: until it lands a row says so, in the place the moves will be.
     expect(code).toContain("Reading what this card can do");
-    expect(code).toContain("tracker.setStatus(task, opt, values)");
+    expect(code).toContain("tracker.setStatus(task, opt, values, repo)");
   });
 });

@@ -121,7 +121,7 @@ describe("a tab's badge is the same reading as the cell and the headline", () =>
 
 describe("the strip draws nothing numeric for a chip with no reading", () => {
   test("the number is inside the reading branch only", () => {
-    const chip = topbar.slice(topbar.indexOf("function PlanChip"), topbar.indexOf("export function TopBar"));
+    const chip = topbar.slice(topbar.indexOf("function PlanChip"), topbar.indexOf("export const TopBar = memo("));
     const none = chip.slice(chip.indexOf('{view.kind === "reading" ? ('), chip.indexOf("</button>"));
     expect(none).toContain("view.percent");
     // The other branch's NUMBER is a dash (or the dollars of a spend reading);

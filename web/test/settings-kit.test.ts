@@ -52,9 +52,8 @@ describe("SettingsCard tone", () => {
   });
 
   test("the page's index marks a decision card amber and the danger zone red", () => {
-    const toc = readFileSync(join(SRC, "components", "SettingsToc.tsx"), "utf8");
-    expect(toc).toContain('const CARD_DOT: Record<string, string> = { decision: "warn", danger: "err" };');
-    expect(toc).toContain("CARD_DOT[el.dataset.tone");
+    // The old index is gone: PageRail is the only rail and draws no card dots.
+    expect(readFileSync(join(SRC, "components", "SettingsModal.tsx"), "utf8")).not.toContain("SettingsToc");
   });
 
   test("an icon is a tinted chip before the title, and absent when not given", () => {
@@ -91,10 +90,9 @@ describe("the chip family", () => {
 });
 
 describe("the page flow", () => {
-  test("one column, two from 1180px, three from 2300px", () => {
+  test("one column at every width (the page centres its own group)", () => {
     expect(rule(".agx-settings-col")).toContain("columns: 1;");
-    expect(css).toMatch(/@media \(min-width: 1180px\) \{ \.agx-settings-col \{ columns: 2; \} \}/);
-    expect(css).toMatch(/@media \(min-width: 2300px\) \{ \.agx-settings-col \{ columns: 3; \} \}/);
+    expect(css).not.toMatch(/\.agx-settings-col \{ columns: [23]; \}/);
   });
   test("a card never splits across columns, and is the container its rows answer to", () => {
     const card = rule(".agx-settings-col .agx-scard");
@@ -133,6 +131,6 @@ describe("a wide control", () => {
     expect(row(true)).toContain("agx-row-wide");
     expect(row()).not.toContain("agx-row-wide");
     expect(css).toMatch(/@container agx-settings \(max-width: 560px\) \{\s*\.agx-settings-row\.agx-row-wide \{ grid-template-columns: 1fr; \}/);
-    expect(modal).toContain("wide={wide ?? choiceIsWide(options.map((o) => o.label))}");
+    expect(modal + readFileSync(join(SRC, "components", "SettingChoice.tsx"), "utf8")).toContain("wide={wide ?? choiceIsWide(options.map((o) => o.label))}");
   });
 });

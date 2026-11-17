@@ -32,26 +32,34 @@ import { api } from "../lib/api.ts";
 import { subscribeGitChanged } from "../lib/gitBus.ts";
 import { pollWhileLooking } from "../lib/usePoll.ts";
 import { notesWorthyRepos } from "../lib/gitNote.ts";
-import { answerGate, gateForNote, listGates, subscribeGates, subscribeNewGates } from "../lib/gateStore.ts";
+import { answerGate, gateForNote, listGates, subscribeGates } from "../lib/gateStore.ts";
 import { enqueue, dequeue } from "../lib/toastQueue.ts";
 import {
   subscribeNotifyHistory, notifyHistory, notifyUnread,
   markNotifyRead, dismissNote, clearNotes, openNote, recordNote,
-  notifyQuiet, setNotifyQuiet, subscribeNotifyQuiet,
-  appNotify, subscribeAppNotify, shouldInterrupt,
+  notifyQuiet, subscribeNotifyQuiet,
+  shouldInterrupt,
   sysNotifyOn, setSysNotifyOn, subscribeSysNotifyMode, notifyCapability,
   type SystemNote, type NotifyCapability,
 } from "../lib/sysNotify.ts";
 import { openPr, openPrs } from "../lib/openPrs.ts";
 import { Portal } from "./Portal.tsx";
-import { CloseButton } from "./CloseButton.tsx";
+import { LAYER } from "../lib/layers.ts";
+import { CloseButton, CloseIcon } from "./CloseButton.tsx";
 import { appLinkFor } from "../lib/appLink.ts";
 import { ICON, MIN_BOX } from "../lib/iconSize.ts";
 import { GearIcon } from "./workspace/icons.tsx";
 import { openSettings } from "../lib/openSettings.ts";
 import { EDGE, LINE } from "./workspace/Chrome.tsx";
+import { Switch } from "./SettingRow.tsx";
+import { breakThrough, desktopDnd, refreshDesktopDnd, setDesktopDnd, subscribeDesktopDnd } from "../lib/desktopDnd.ts";
+import { getNotifyPrefs, subscribeNotifyPrefs } from "../lib/notifyPrefsStore.ts";
+import { levelFrom, notifyStates } from "../lib/notifyStates.ts";
+import { rowId } from "../lib/settingsIndex.ts";
+import { dayLabel } from "../lib/noteCard.ts";
 import {
   canMute, groupNotes, laneOf, mutedSources, setMuted, sourceLabel, sourceOf, subscribeMuted,
+  appRules, ruleFor, subscribeAppRules, OUR_RULE,
   type Lane,
 } from "../lib/notePolicy.ts";
 
@@ -141,25 +149,9 @@ export function useAmbientNotes(): { note: Note | null; behind: number; ahead: n
     setTimeout(() => advance(), NOTE_MS);
   };
 
-  // A tool call waiting at the gate. The most interrupting thing here, because an
-  // agent is stopped until it is answered, and unlike everything else it cannot
-  // be caught up on later: the hold expires on its own.
-  //
-  // The store raises the history entry; this is only the toast. The Approve
-  // buttons live on the dashboard's "What needs you", so the toast names the
-  // tool and points there rather than pretending to be actionable itself.
-  useEffect(() => subscribeNewGates((g) => {
-    push({
-      id: `gate-${g.id}`,
-      kind: "blocked",
-      color: "var(--warning-ink)",
-      title: `Approve ${g.tool_name}?`,
-      sub: `${g.source_app}:${g.session_id.slice(0, 8)} is waiting on you`,
-      // Ahead of the chatter, and never dropped for being late: the hold is
-      // still holding.
-      urgent: true,
-    });
-  }), []);
+  // A tool call waiting at the gate is not a caption here any more: gateStore's
+  // row is an agentglass card with Allow / Deny (NoteToasts), or one desktop
+  // popup when nobody is looking. A toast here as well was the same hold twice.
 
   // A PR watch the person armed is not a caption here any more: it is a banner
   // that waits for them (AskedBanners.tsx), because a caption that wipes away in
@@ -409,6 +401,7 @@ function HistoryRow({ n, onGone, onGoto, onMute }: {
     if (g.kind === "pr") return { label: `${g.repo}#${g.number}`, title: `Open ${g.repo}#${g.number}` };
     if (g.kind === "pane") return { label: "The terminal", title: "Go to the pane this is about" };
     if (g.kind === "file") return { label: "The file", title: `Open ${g.path} in the Finder` };
+    if (g.kind === "web") return { label: `agentglass browser · ${hostOf(g.url)}`, title: `Open ${g.url} in the agentglass browser` };
     return { label: "Settings", title: `Open Settings · ${g.pane}` };
   })();
   /*
@@ -471,7 +464,11 @@ function HistoryRow({ n, onGone, onGoto, onMute }: {
             <Cap>{sourceLabel(sourceOf(n))}</Cap>
             <Cap dim>{ago(n.at)}</Cap>
             {(n.count ?? 1) > 1 && <Cap dim>×{n.count}</Cap>}
-            {n.urgency === 2 && <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--error-ink)" }}>urgent</span>}
+            {n.urgency === 2 && <span className="text-[10px] px-1 rounded" style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 14%, transparent)" }}>Agent waits</span>}
+            {/* Said on the row, so a note that did not pop up never looks like one that was lost. */}
+            {n.urgency < 2 && ruleFor(sourceOf(n), appRules()) === "bell" && (
+              <span className="text-[10px] px-1 rounded" style={{ color: "var(--text3)", background: "var(--surface-2)" }}>Bell only</span>
+            )}
           </span>
           {/* The title unwraps too. Expanding has to mean "show me all of it",
               and a summary cut at one line with an ellipsis is part of "all of
@@ -606,7 +603,7 @@ const LANES: { id: LaneFilter; label: string; hint: string }[] = [
   { id: "urgent", label: "Needs you", hint: "Only what is stopped until you act" },
   { id: "agents", label: "Agents", hint: "Approvals, the Lantern, agents asking or failing" },
   { id: "work", label: "Work", hint: "Branches, checks, pull requests, cards, updates" },
-  { id: "desktop", label: "Desktop", hint: "Mirrored from this machine's own notifications" },
+  { id: "desktop", label: "Other apps", hint: "Slack, mail and the rest, collected from this machine's own notifications" },
 ];
 const inLane = (n: SystemNote, l: LaneFilter): boolean =>
   l === "all" ? true : l === "urgent" ? n.urgency === 2 : laneOf(sourceOf(n)) === l;
@@ -631,6 +628,30 @@ function writeLaneFilter(l: LaneFilter): void {
   try { localStorage.setItem(LANE_KEY, l); } catch { /* the choice lasts the session */ }
 }
 
+/** A state row in the bell's header: the name, one plain sentence for what it means now, "on"/"off", and the switch. */
+function ModeRow({ icon, label, switchLabel, said, on, onChange }: { icon: React.ReactNode; label: string; switchLabel?: string; said: string; on: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <div className="flex items-center gap-2.5 px-3 py-2">
+      <span style={{ color: "var(--text3)" }} aria-hidden>{icon}</span>
+      <span className="flex flex-col min-w-0 flex-1">
+        <span className="text-[12px]" style={{ color: "var(--text)" }}>{label}</span>
+        <span className="text-[11px]" style={{ color: "var(--text3)" }}>{said}</span>
+      </span>
+      <button type="button" role="switch" aria-checked={on} aria-label={switchLabel ?? label} className="agx-btn" onClick={() => onChange(!on)}>
+        <Switch on={on} />
+      </button>
+    </div>
+  );
+}
+
+export function MoonGlyph({ size = ICON.xs }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
+    </svg>
+  );
+}
+
 export function NotifyBell({ noDrag, onGoto }: {
   noDrag?: React.CSSProperties;
   /** Take me to what this note is about. The bar does not know how; the shell
@@ -644,8 +665,15 @@ export function NotifyBell({ noDrag, onGoto }: {
   const unread = useSyncExternalStore(subscribeNotifyHistory, notifyUnread, () => 0);
   const quiet = useSyncExternalStore(subscribeNotifyQuiet, notifyQuiet, () => false);
   const mirroring = useSyncExternalStore(subscribeSysNotifyMode, sysNotifyOn, () => false);
-  const own = useSyncExternalStore(subscribeAppNotify, appNotify, () => true);
+  const dnd = useSyncExternalStore(subscribeDesktopDnd, desktopDnd, desktopDnd);
+  const rules = useSyncExternalStore(subscribeAppRules, appRules, appRules);
   const muted = useSyncExternalStore(subscribeMuted, mutedSources, mutedSources);
+  const prefs = useSyncExternalStore(subscribeNotifyPrefs, getNotifyPrefs, getNotifyPrefs);
+  const breaks = useSyncExternalStore(subscribeDesktopDnd, breakThrough, breakThrough);
+  const waiting = useSyncExternalStore(subscribeGates, listGates, listGates).length;
+  // The chip, the bell rows and Settings ▸ Pop-ups say one answer (lib/notifyStates.ts).
+  const states = notifyStates({ dnd: dnd.on, silenced: prefs.none, level: levelFrom(prefs.none, quiet, ruleFor(OUR_RULE, rules) === "popup"), waiting, breakThrough: breaks });
+  const toSettings = (row: string) => { setOpen(false); openSettings("notifications", rowId(row)); };
   const [lane, setLane] = useState<LaneFilter>(readLaneFilter);
   const pickLane = (l: LaneFilter) => { setLane(l); writeLaneFilter(l); };
   const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(new Set());
@@ -664,6 +692,8 @@ export function NotifyBell({ noDrag, onGoto }: {
   // Looking at them is what marks them read. `hist` is in the deps so a note
   // arriving while the panel is open does not silently re-arm the badge.
   useEffect(() => { if (open) markNotifyRead(); }, [open, hist]);
+  // The desktop's DND can change outside agentglass; opening the bell asks again.
+  useEffect(() => { if (open) void refreshDesktopDnd(); }, [open]);
 
   const place = useCallback(() => {
     const r = btn.current?.getBoundingClientRect();
@@ -705,17 +735,35 @@ export function NotifyBell({ noDrag, onGoto }: {
   const shown = visible.filter((n) => inLane(n, lane));
   const groups = groupNotes(shown);
   const mutedHere = [...muted].sort();
+  // The apps that land here without a pop-up: a rule the person set, or the low-value default, for apps actually in the list.
+  const bellOnly = [...new Set(visible.filter((n) => n.urgency < 2).map((n) => sourceOf(n)))]
+    .filter((src) => ruleFor(src, rules) === "bell").map((src) => (src.startsWith("desktop:") ? src : "agentglass")).filter((v, i, a) => a.indexOf(v) === i).sort();
+  let lastDay = "";
+  const now = Date.now();
 
   return (
     <>
+      {/* The desktop's DND, said in the bar, so its state never has to be guessed. Opens the bell, where the switch is. */}
+      <button type="button" onClick={() => setOpen(true)} className="chip shrink-0 inline-flex items-center gap-1"
+        style={{ height: 18, fontSize: 10.5, padding: "0 8px", ...noDrag, ...(dnd.on ? { background: "var(--primary)", borderColor: "var(--primary)", color: "var(--on-primary)", fontWeight: 600 } : null) }}
+        aria-label={states.chip}>
+        <MoonGlyph />{states.chip}
+      </button>
+      {/* Silence all said in the bar too, so a quiet app is never a mystery. */}
+      {states.silencedChip && (
+        <button type="button" onClick={() => setOpen(true)} className="chip shrink-0 inline-flex items-center gap-1" aria-label="Silenced: Silence all is on"
+          style={{ height: 18, fontSize: 10.5, padding: "0 8px", ...noDrag, color: "var(--warning)", borderColor: "color-mix(in srgb, var(--warning) 50%, transparent)" }}>
+          <MuteGlyph />Silenced
+        </button>
+      )}
       <button
         ref={btn}
         onClick={() => setOpen((v) => !v)}
         aria-label="Notifications"
-        title={
+        data-tip={
           hist.length
-            ? `${hist.length} notification${hist.length === 1 ? "" : "s"}${unread ? ` — ${unread} since you last looked` : ""}${quiet ? " (quiet)" : ""}`
-            : "Notifications — nothing yet"
+            ? `${hist.length} notification${hist.length === 1 ? "" : "s"}${unread ? `, ${unread} since you last looked` : ""}`
+            : "Notifications: nothing yet"
         }
         /* 22x22 and a 14px bell, up from 20x18 and 12px.
          *
@@ -743,10 +791,14 @@ export function NotifyBell({ noDrag, onGoto }: {
             }}
           >{unread > 9 ? "9+" : unread}</span>
         )}
+        {/* A grey dot while Desktop DND is on. */}
+        {dnd.on && unread === 0 && (
+          <span aria-hidden className="absolute rounded-full" style={{ bottom: 2, right: 2, width: 5, height: 5, background: "var(--text4)" }} />
+        )}
       </button>
 
       {open && at && (
-        <Portal z={10050}>
+        <Portal z={LAYER.notesPanel}>
           <div
             data-notify-panel=""
             className="fixed flex flex-col rounded-xl overflow-hidden"
@@ -760,26 +812,44 @@ export function NotifyBell({ noDrag, onGoto }: {
             <div className="flex items-center gap-2 px-3 py-2.5" style={{ borderBottom: LINE }}>
               <Cap>notifications</Cap>
               <Cap dim>{visible.length}</Cap>
-              {/* Silencing without saying so is how you end up asking why you
-                  were never told. It is also the switch, so the place that
-                  reveals the state is the place that undoes it. */}
-              <button
-                className="agx-note-btn"
-                role="switch"
-                aria-checked={quiet}
-                onClick={() => setNotifyQuiet(!quiet)}
-                title={quiet
-                  ? "Quiet: only what is stopped — an approval, a blocked agent — interrupts. Everything else collects here. Click to let news interrupt too."
-                  : "News interrupts as well as what is stopped. Click for Quiet: only what is stopped interrupts."}
-                style={quiet ? { color: "var(--text2)" } : undefined}
-              >
-                {quiet ? "Quiet on" : "Quiet"}
-              </button>
               <button className="agx-note-btn ml-auto" onClick={() => { clearNotes(); setOpen(false); }}>Clear all</button>
-              <button type="button" onClick={() => { setOpen(false); openSettings("notifications"); }} aria-label="Notification settings…" title="Notification settings…"
+              <button type="button" onClick={() => { setOpen(false); openSettings("notifications"); }} aria-label="Notification settings" data-tip="Notification settings"
                 className="shrink-0 grid place-items-center rounded hover:bg-white/10"
                 style={{ width: MIN_BOX, height: MIN_BOX, color: "var(--text3)" }}><GearIcon size={ICON.xs} /></button>
               <CloseButton onClick={() => setOpen(false)} title="Close (Esc)" className="agx-note-btn" />
+            </div>
+            {/* The two controls, said as states: a label, what it means now, and the switch.
+                Silencing without saying so is how you end up asking why you were never told. */}
+            <div className="flex flex-col" style={{ borderBottom: LINE }}>
+              <ModeRow icon={<MoonGlyph size={ICON.sm} />} label={states.bell.dnd.label} switchLabel="Desktop DND" on={dnd.on} onChange={(v) => void setDesktopDnd(v)}
+                said={states.bell.dnd.said} />
+              <div className="flex items-center gap-2.5 px-3 py-2" style={{ borderTop: LINE }}>
+                <span className="inline-flex" style={{ color: "var(--text3)" }} aria-hidden>
+                  {prefs.none ? <MuteGlyph /> : <BellGlyph width={ICON.sm} height={ICON.sm} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />}
+                </span>
+                <span className="flex flex-col min-w-0 flex-1">
+                  <span className="text-[12px]" style={{ color: "var(--text)" }}>{states.bell.pops.label}</span>
+                  <span className="text-[11px]" style={{ color: "var(--text3)" }}>{states.bell.pops.said}</span>
+                </span>
+                <button type="button" className="agx-note-btn shrink-0" onClick={() => toSettings("What pops up")}>Change</button>
+              </div>
+              <div className="px-3 py-1.5 text-[11px]" style={{ borderTop: LINE, color: "var(--text3)" }}>
+                <button type="button" className="underline" style={{ color: "var(--primary)" }} onClick={() => toSettings("Which switch wins")}>Which switch wins?</button>
+                {" "}· opens Settings ▸ Pop-ups
+              </div>
+              {/* Collecting is the precondition for all of it, so off is never silent. */}
+              {!mirroring && (
+                <div className="flex items-center gap-2.5 px-3 py-2" style={{ borderTop: LINE }}>
+                  <span className="inline-flex shrink-0" style={{ color: "var(--error-ink)" }} aria-hidden><CloseIcon size={ICON.sm} /></span>
+                  <span className="flex flex-col min-w-0 flex-1">
+                    <span className="text-[12px]" style={{ color: "var(--error-ink)" }}>Other apps: not collected</span>
+                    <span className="text-[11px]" style={{ color: "var(--text3)" }}>
+                      {cap && !cap.supported ? `Unavailable here: ${cap.reason}` : "Slack, mail and the rest do not reach agentglass at all."}
+                    </span>
+                  </span>
+                  {cap?.supported && <button className="agx-note-btn shrink-0" onClick={() => setSysNotifyOn(true)}>Turn on</button>}
+                </div>
+              )}
             </div>
             {/* Which lane to read. Only drawn when there is more than one to
                 choose between, and each says how many it holds, so a filter
@@ -810,8 +880,12 @@ export function NotifyBell({ noDrag, onGoto }: {
                     if (next.has(g.lead.id)) next.delete(g.lead.id); else next.add(g.lead.id);
                     return next;
                   });
+                  const day = dayLabel(g.lead.at, now);
+                  const newDay = day !== lastDay;
+                  lastDay = day;
                   return (
                     <div key={g.lead.id} className="agx-note-group">
+                      {newDay && <div className="px-3 pt-2 pb-1 text-[10.5px] font-semibold" style={{ color: "var(--text3)" }}>{day}</div>}
                       <HistoryRow n={g.lead} onGone={() => dismissNote(g.lead.id)} onMute={mute}
                         onGoto={(gt) => { setOpen(false); onGoto(gt); }} />
                       {/* The digest line: the older rows from the same source,
@@ -845,29 +919,9 @@ export function NotifyBell({ noDrag, onGoto }: {
               // over a feature that is switched off is the same screen as
               // "nothing has happened", and they call for opposite actions.
               <div className="px-3 py-4 text-[11px] flex flex-col gap-2.5" style={{ color: "var(--text3)" }}>
-                <span>
-                  Nothing yet. Agents that block and branches that fall
-                  behind land here{mirroring ? " — your desktop's own notifications too." : "."}
-                </span>
-                {/* The switch, where you notice it is off.
-                    Telling someone their notifications are off and then sending
-                    them to a modal three panes deep is how this feature spent
-                    months looking broken to someone who had simply never turned
-                    it on. Supported hosts get the button; the rest get the
-                    reason, which is not their fault and not fixable here. */}
-                {!mirroring && (cap?.supported
-                  ? (
-                    <button className="agx-note-link self-start"
-                      onClick={() => setSysNotifyOn(true)}
-                      title="Mirror this machine's notifications into agentglass — Slack, mail, whatever else pops up while the app is covering your screen">
-                      Turn on desktop notifications
-                    </button>
-                  )
-                  : cap && (
-                    <span style={{ color: "var(--text4)" }}>
-                      Desktop notifications unavailable — {cap.reason}
-                    </span>
-                  ))}
+                <span style={{ color: "var(--text2)" }}>Nothing yet</span>
+                <span>A blocked agent, a finished check or a Slack message lands here.</span>
+                <span>This is the only notification history on this machine.</span>
               </div>
             )}
             {/* Standing state, said out loud wherever the list is read. Two
@@ -877,29 +931,20 @@ export function NotifyBell({ noDrag, onGoto }: {
             {/* What is muted, said where the list is read, and undone here.
                 A mute hides rows rather than deleting them, so unmuting brings
                 back what was already collected. */}
-            {mutedHere.length > 0 && (
+            {(mutedHere.length > 0 || bellOnly.length > 0) && (
               <div className="px-2.5 py-1.5 text-[10px] flex items-center gap-1 flex-wrap"
                 style={{ borderTop: LINE, color: "var(--text4)" }}>
-                <span className="mr-1">Muted</span>
+                {bellOnly.length > 0 && <span className="mr-1">Bell only</span>}
+                {bellOnly.map((src) => (
+                  <span key={src} className="chip text-[10px]" style={{ height: 18 }}>{sourceLabel(src)}</span>
+                ))}
+                {mutedHere.length > 0 && <span className={bellOnly.length ? "ml-auto mr-1" : "mr-1"}>Muted</span>}
                 {mutedHere.map((src) => (
                   <button key={src} className="agx-note-btn inline-flex items-center gap-1" onClick={() => setMuted(src, false)}
-                    title={`Unmute ${sourceLabel(src)}`} aria-label={`Unmute ${sourceLabel(src)}`}>
+                    data-tip={`Unmute ${sourceLabel(src)}`} aria-label={`Unmute ${sourceLabel(src)}`}>
                     <MuteGlyph />{sourceLabel(src)}
                   </button>
                 ))}
-              </div>
-            )}
-            {hist.length > 0 && (!own || !mirroring) && (
-              <div className="px-2.5 py-1.5 text-[9.5px] flex items-center gap-2"
-                style={{ borderTop: LINE, color: "var(--text4)" }}>
-                <span>
-                  {!own && !mirroring ? "Both lanes are quiet — nothing interrupts, everything still collects here."
-                    : !own ? "agentglass's own alerts are not interrupting — they still collect here."
-                    : "Your desktop's notifications are not being mirrored."}
-                </span>
-                {!mirroring && cap?.supported && (
-                  <button className="agx-note-btn ml-auto shrink-0" onClick={() => setSysNotifyOn(true)}>Turn on</button>
-                )}
               </div>
             )}
           </div>

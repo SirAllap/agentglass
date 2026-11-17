@@ -40,7 +40,9 @@ describe("where the answer comes from", () => {
   });
 
   test("another card's answer is never shown on this one", () => {
-    expect(code(hook)).toContain("w && w.name === name ? w : null");
+    // By the name it shows, and by the name it was opened as: a tab the person
+    // renamed is still this card's work, and it keeps the name they gave it.
+    expect(code(hook)).toContain("w && (w.name === name || w.given === name) ? w : null");
   });
 
   test("a failed read keeps the last answer, because a silent server is not a closed window", () => {
@@ -91,12 +93,12 @@ describe("reuse is asked for, never the default", () => {
      a name that does not stand for ONE piece of work must not reuse. */
   const issue = code(termIssueSrc);
   test("requestTermIssue does not reuse unless told to", () => {
-    expect(issue).toContain(`effort = "", reuse = false, kind = "", mode?: LaunchMode)`);
+    expect(issue).toContain(`effort = "", reuse = false, kind = "", mode?: LaunchMode, cardId = "", subject = "")`);
   });
   test("the handoffs whose window is one piece of work ask for it", () => {
     expect(code(pr)).toContain('h.model, h.effort, true)');
     // The check goes through the shared helper, which is what asks for reuse (and starts the default engine).
-    expect(code(pr)).toContain('sendToTerminal(r.cwd, prompt, `check-${detail.number}`)');
+    expect(code(pr)).toContain('toTerminal(r.cwd, prompt, `check-${detail.number}`)');
     expect(sendTo).toContain('requestTermIssue(cwd, windowNameFor(title), prompt, true, false, title, "", "", true,');
     expect(code(git)).toContain('h.model, h.effort, true)');
   });

@@ -24,7 +24,7 @@ import { DoneIcon, RefreshIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { CODE_FONT_STYLE } from "./diff/DiffLines.tsx";
 import { confirmLabel, confirmOff, laneSyncPlan, mergeResult, retryFromRow, retryItems, retryRow, runLaneSync, serialRetry, syncTally, withoutResults, SYNC_AT_ONCE, SYNC_REASON, type SyncItem, type SyncResult } from "../lib/prSyncLane.ts";
 import type { SyncCardStep } from "../lib/prSyncCards.ts";
-import type { LaneId } from "../lib/prLanes.ts";
+import type { LaneId } from "../../../shared/prLanes.ts";
 import type { PrSummary } from "../../../shared/types.ts";
 
 /** The list's width, from the mockup: four rows of #number + title fit, and it stays narrower than a lane. */
@@ -35,8 +35,10 @@ export interface LaneSyncRow {
   filed: { lane: LaneId };
 }
 
-export function PrLaneSync({ lane, rows, me, readOnly, syncing, behindKnown, onSyncOne, onStep, onRetryReady }: {
+export function PrLaneSync({ lane, rows, me, readOnly, syncing, checking, behindKnown, onSyncOne, onStep, onRetryReady }: {
   lane: { id: LaneId; label: string; tint: string };
+  /** A card in this lane is still being checked (conflict or behind): Sync waits, or it would update on a guess. */
+  checking?: boolean;
   /** The whole board: the plan reads only this lane's rows. */
   rows: readonly LaneSyncRow[];
   /** The logged-in login. Empty means nothing is "mine" and the button says None. */
@@ -174,11 +176,11 @@ export function PrLaneSync({ lane, rows, me, readOnly, syncing, behindKnown, onS
      send a second `gh pr update-branch` for a branch that already moved. */
   const again = tally && !tally.ok ? retryItems(plan, results ?? []) : plan.eligible;
   const label = running ? `${doneCount}/${run.length || plan.eligible.length}` : plan.eligible.length ? `Sync ${plan.eligible.length}` : "None";
-  const reason = plan.eligible.length ? `Sync ${plan.eligible.length} pull requests in ${lane.label}` : nothingToDo(plan.skipped.map((s) => s.reason));
+  const reason = checking ? "Waiting for the cards in this column to finish checking" : plan.eligible.length ? `Sync ${plan.eligible.length} pull requests in ${lane.label}` : nothingToDo(plan.skipped.map((s) => s.reason));
 
   return (
     <>
-      <Button buttonRef={btn} size="hit" tint={lane.tint} disabled={!plan.eligible.length || running}
+      <Button buttonRef={btn} size="hit" tint={lane.tint} disabled={!plan.eligible.length || running || !!checking}
         aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? listId : undefined}
         label={reason} title={reason}
         onClick={(e) => { e.stopPropagation(); if (open) close(); else setOpen(true); }}

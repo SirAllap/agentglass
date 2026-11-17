@@ -107,7 +107,7 @@ describe("what a pick writes, and what Continue does not", () => {
   });
 
   test("Continue writes that a run is open, never the agent", () => {
-    const next = block("const next = async () =>", "const skip");
+    const next = block("const move = async", "const next = ()");
     expect(next).toContain('settingsDoorSet("setup.inProgress", true)');
     expect(next).not.toContain("setup.agent");
   });

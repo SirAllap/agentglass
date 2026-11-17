@@ -20,6 +20,11 @@ describe("what Settings says follows what is connected", () => {
   it("the note-on-card prompt is listed only where ClickUp is connected", () => {
     expect(pane).toContain('hasCards || r.id !== "note-on-card"');
     // Both the rows and the 'everything hidden' count go through it.
-    expect(pane.match(/&& offered\(r\)/g)?.length).toBe(2);
+    expect(pane).toContain("offered(r) && (kind ===");
+    expect(pane).toContain("hiddenList.filter((r) => offered(r) && matches(r)");
+    expect(pane).toContain("list.filter(offered).length");
+    // A list the page draws without offered() would show the hidden prompt: no bare `list.map(`, and `offered` is used in exactly the six places that count or list.
+    expect(pane).not.toMatch(/\b(?:list|hiddenList)\.map\(/);
+    expect((pane.match(/\boffered\(|filter\(offered\)/g) ?? []).length).toBe(6);
   });
 });

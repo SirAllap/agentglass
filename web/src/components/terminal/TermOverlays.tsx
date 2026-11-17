@@ -24,7 +24,6 @@ import { PaneCard, PaneSheet } from "./PaneCard.tsx";
 import { EmptyCard, ErrorCard, LoadingCard, NoTmuxNote } from "./PaneStates.tsx";
 import { RestoreBannerPill } from "./RestoreBanner.tsx";
 
-const BANNER_KEY = "agentglass-restore-banner";
 const NOTE_KEY = "agentglass-no-tmux-note";
 const read = (k: string): string | null => { try { return localStorage.getItem(k); } catch { return null; } };
 const write = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* private mode: it comes back next load */ } };
@@ -53,7 +52,10 @@ export interface TermOverlaysProps {
 export function TermOverlays(p: TermOverlaysProps) {
   const { windows, cmd, closer } = p;
   const banner = restoredBanner(windows);
-  const [hiddenStamp, setHiddenStamp] = useState<string | null>(() => read(BANNER_KEY));
+  /* Only for the frame between the click and the server's answer: the record
+     is what keeps it away, so a reload, another window or the phone is quiet
+     too (see tmuxrestored's dismissRestoredBanner). */
+  const [hiddenStamp, setHiddenStamp] = useState<string | null>(null);
   const bannerOn = !!banner && hiddenStamp !== String(banner.stamp);
   const win = windows.find((w) => w.id === p.active) ?? null;
 
@@ -63,7 +65,11 @@ export function TermOverlays(p: TermOverlaysProps) {
     if (banner && !bannerOn && win?.restored && !win.was) cmd({ cmd: "restored", how: "dismiss", window: win.id });
   }, [banner, bannerOn, win?.id, win?.restored, win?.was, cmd]);
 
-  const notNow = () => { if (banner) { write(BANNER_KEY, String(banner.stamp)); setHiddenStamp(String(banner.stamp)); } };
+  const notNow = () => {
+    if (!banner) return;
+    setHiddenStamp(String(banner.stamp));
+    cmd({ cmd: "restored", how: "notnow" });
+  };
   const tabOf = (id: string) => document.querySelector(`[data-window="${id}"]`);
   const where = win ? checkoutOf(win.repo, win.cwd ?? "") || (win.cwd ?? "").split("/").filter(Boolean).pop() || null : null;
   const card = win ? paneCard(win, where, Date.now()) : null;

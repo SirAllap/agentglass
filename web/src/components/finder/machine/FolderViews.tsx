@@ -53,7 +53,7 @@ export function IconsView({ cut, density, display, dir, thumb, selName, chosen, 
               className="flex flex-col items-center justify-start rounded-lg cursor-pointer min-w-0"
               style={{ opacity: cut?.has(r.name) ? CUT_OPACITY : undefined, width: tile.w - (airy ? 6 : CARD.spacing), height: tile.h - (airy ? 6 : CARD.spacing), ...(airy ? { padding: "5px 7px", margin: 3 } : { padding: "2px 4px", marginRight: CARD.spacing }), color: r.locked ? "var(--text4)" : "var(--text)", ...selStyle(r.name === selName || !!chosen?.has(r.name)) }}>
               <span data-icon className="agx-tile-part flex items-center justify-center rounded-md shrink-0" style={{ padding: CARD.pad, color: isFolder(r) ? "var(--warning-ink)" : "var(--text3)" }}>
-                {!r.locked && !isFolder(r) && isThumbable(r.name) ? <Thumb path={joinPath(dir, r.name)} size={thumb} radius={6} fallback={<RowIcon row={r} dir={dir} size={ICON.xl} />} /> : <RowIcon row={r} dir={dir} size={Math.max(ICON.xl, Math.round(thumb * 0.6))} />}
+                {!r.locked && !isFolder(r) && isThumbable(r.name) ? <Thumb path={joinPath(dir, r.name)} name={r.name} mtime={r.mtime} bytes={r.bytes} size={thumb} radius={6} fallback={<RowIcon row={r} dir={dir} size={ICON.xl} />} /> : <RowIcon row={r} dir={dir} size={Math.max(ICON.xl, Math.round(thumb * 0.6))} />}
               </span>
               <span data-name className="agx-tile-part w-full text-center text-[11.5px] line-clamp-2 break-all rounded-md shrink-0" style={{ marginTop: CARD.gap, lineHeight: `${CARD.line}px`, maxHeight: CARD.line * CARD.lines }} {...tip.bind(r.name)}>{rowLabel(r.name)}</span>
               <span data-details className="w-full text-center truncate text-[0.82em] shrink-0" style={{ height: CARD.details, lineHeight: `${CARD.details}px`, color: "var(--text3)" }}>{isFolder(r) ? itemsLabel(r.items) : r.bytes !== null ? formatSize(r.bytes) : ""}</span>
@@ -116,9 +116,9 @@ export function ListView({ widths, onWidths, cut, dir, display, selName, chosen,
       <div data-hcell={col} className="relative flex" style={{ borderRight: "1px solid color-mix(in srgb, var(--surface-line) 26%, transparent)", minWidth: 0 }}>
         <button className="agx-list-heading flex-1 min-w-0 flex items-center gap-1 text-left" style={{ color: here ? "var(--text)" : undefined, minHeight: 28, padding: "0 12px" }} onClick={() => onSort(k)} aria-sort={here ? (sortWay === "asc" ? "ascending" : "descending") : "none"}>
           <span className="flex-1 min-w-0 truncate" style={{ textAlign: right ? "right" : "left" }}>{t}</span>
-          {here && <StrataIcon set="act" name={sortWay === "asc" ? "arrow-up" : "arrow-down"} size={12} />}
+          {here && <StrataIcon set="act" name={sortWay === "asc" ? "arrow-up" : "arrow-down"} size={ICON.xs} />}
         </button>
-        <div role="separator" aria-orientation="vertical" aria-label={`Resize ${t}`} title="Drag to resize, double-click to fit" className="absolute top-0 bottom-0" style={{ right: 0, width: 7, cursor: "col-resize", touchAction: "none" }}
+        <div role="separator" aria-orientation="vertical" aria-label={`Resize ${t}`} data-tip="Drag to resize, double-click to fit" className="absolute top-0 bottom-0" style={{ right: 0, width: 7, cursor: "col-resize", touchAction: "none" }}
           onDoubleClick={() => {
             const cells = [...(box.current?.querySelectorAll<HTMLElement>(`[data-cell="${col}"] > span`) ?? [])];
             const label = box.current?.querySelector<HTMLElement>(`[data-hcell="${col}"] button > span`);
@@ -155,7 +155,7 @@ export function ListView({ widths, onWidths, cut, dir, display, selName, chosen,
               <span data-cell={0} className="flex items-center gap-2 min-w-0" style={{ padding: "0 12px" }}><span data-icon className="shrink-0 flex"><RowIcon row={r} dir={dir} /></span><span data-name className="truncate">{rowLabel(r.name)}</span></span>
               <span data-cell={1} className="min-w-0" style={{ padding: "0 12px", textAlign: "right" }}><span className="inline-block max-w-full truncate tabular-nums text-[11px] align-middle" style={{ color: "var(--text3)" }}>{isFolder(r) ? itemsLabel(r.items) : r.bytes !== null ? formatSize(r.bytes) : ""}</span></span>
               <span data-cell={2} className="min-w-0" style={{ padding: "0 12px" }}><span className="inline-block max-w-full truncate text-[11px] align-middle" style={{ color: "var(--text3)" }}>{kindWord(r)}</span></span>
-              <span data-cell={3} className="min-w-0" style={{ padding: "0 12px" }}><span className="inline-block max-w-full truncate text-[11px] align-middle" style={{ color: "var(--text3)" }} title={new Date(r.mtime).toLocaleString()}>{strataWhen(r.mtime)}</span></span>
+              <span data-cell={3} className="min-w-0" style={{ padding: "0 12px" }}><span className="inline-block max-w-full truncate text-[11px] align-middle" style={{ color: "var(--text3)" }} data-tip={new Date(r.mtime).toLocaleString()}>{strataWhen(r.mtime)}</span></span>
             </div>
           );
         }} />

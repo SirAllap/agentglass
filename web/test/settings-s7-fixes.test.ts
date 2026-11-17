@@ -3,11 +3,12 @@
  * is no renderer here). Each one is a defect measured in a 1440px shot.
  */
 import { describe, expect, test } from "bun:test";
+import { modalSource } from "./settingsSource.ts";
 import { readFileSync } from "node:fs";
 
 const at = (p: string) => readFileSync(new URL(p, import.meta.url).pathname, "utf8");
 const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-const modal = strip(at("../src/components/SettingsModal.tsx"));
+const modal = strip(modalSource());
 const theme = strip(at("../src/components/ThemePicker.tsx"));
 const teach = strip(at("../src/components/understudy/Teach.tsx"));
 const diffPreview = strip(at("../src/components/settings/previews/DiffPreview.tsx"));
@@ -17,13 +18,14 @@ describe("settings s7 fixes", () => {
     expect(theme).toMatch(/settingId="appearance\.mode"\s+wide\b/);
   });
   test("Diff default view drops under its long hint instead of stacking its own options", () => {
-    expect(modal).toMatch(/settingId="diff\.split" wide\b/);
+    // The shell row (SettingRow kind="control") drops a long hint above its control by itself.
+    expect(modal).toMatch(/<SettingRow kind="control" \{\.\.\.row\("diff\.split"\)\}/);
     expect(modal).toContain("wide={wide ?? choiceIsWide(");
   });
   test("a shortcut row has a Rebind verb, single-chip rows and app chords", () => {
     expect(modal).toContain("function RebindButton(");
-    // One per key: the view chords, the single keys and the held app chords.
-    expect(modal.match(/<RebindButton /g)?.length).toBe(3);
+    // The shortcuts tables rebind by clicking the key itself; the held app chords keep the verb.
+    expect(modal.match(/<RebindButton /g)?.length).toBe(1);
   });
   test("precedents are capped behind a Show all button", () => {
     expect(teach).toContain("const PRECEDENT_ROWS = 8;");

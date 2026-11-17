@@ -70,6 +70,8 @@ export type DockReason = { kind: "ok" | "blocked" | "closed"; text: string };
 export function dockReason(i: {
   state: "OPEN" | "MERGED" | "CLOSED";
   merging: boolean;
+  /** Another pull request still landing; this one waits for it and is not merging. */
+  landing?: number;
   /** The first refusal's title, when something forbids the merge. */
   refusal?: string;
   /** GitHub would merge it. */
@@ -78,14 +80,27 @@ export function dockReason(i: {
   base: string;
   /** GitHub's own words for why it cannot (mergeBlockedWhy). */
   blockedWhy: string;
+  /** What is still missing, when it is only checks and/or a review: the footer then reads "Merge unlocks when ..." (mockup 05). */
+  missing?: { checks: boolean; review: boolean };
+  /** Something besides checks and review also blocks: then the "Merge unlocks when" promise would be false. */
+  otherBlockers?: boolean;
 }): DockReason {
   if (i.state === "MERGED") return { kind: "closed", text: "Already merged" };
   if (i.state === "CLOSED") return { kind: "closed", text: "This pull request is closed" };
   if (i.merging) return { kind: "ok", text: "Merging…" };
+  if (i.landing) return { kind: "blocked", text: `Waiting for #${i.landing} to finish landing` };
   if (i.refusal) return { kind: "blocked", text: i.refusal };
   if (i.canMerge) return { kind: "ok", text: "Ready to land" };
   if (i.isBehind) return { kind: "ok", text: `Ready to land, but ${i.base} has moved on` };
+  const m = i.missing;
+  if (m && !i.otherBlockers && (m.checks || m.review)) return { kind: "blocked", text: unlocksWhen(m) };
   return { kind: "blocked", text: i.blockedWhy };
+}
+
+/** "Merge unlocks when the required checks pass and one reviewer approves." */
+export function unlocksWhen(m: { checks: boolean; review: boolean }): string {
+  const parts = [m.checks ? "the required checks pass" : "", m.review ? "one reviewer approves" : ""].filter(Boolean);
+  return `Merge unlocks when ${parts.join(" and ")}.`;
 }
 
 /**

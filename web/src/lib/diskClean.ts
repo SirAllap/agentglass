@@ -7,7 +7,8 @@
 // The server checks the same thing again on the press; this is what decides
 // which buttons exist at all.
 import { useSyncExternalStore } from "react";
-import type { DiskCleanLine, DiskCleanLineResult, DiskCleanMount, DiskCleanReport, DiskCleanRunResult, DiskCleanVerdict } from "../../../shared/types.ts";
+import type { DiskCleanLine, DiskCleanLineResult, DiskCleanMount, DiskCleanReport, DiskCleanRunResult, DiskCleanVerdict, DiskExplain, DiskExplainItem } from "../../../shared/types.ts";
+import { longAge } from "./prFreshness.ts";
 import { subscribeSettings } from "./settingsRegistry.ts";
 import { DISK_WARN_DEFAULT, diskWarnPct, freePct, lowDiskMounts } from "./diskWarnPref.ts";
 
@@ -89,6 +90,12 @@ export function phaseOf(s: { report: DiskCleanReport | null; scanning: boolean; 
   if (s.error) return "error";
   if (!s.report) return "idle";
   return wholePlan(s.report).ids.length ? "plan" : "empty";
+}
+
+/** "Scanned 4 min ago" for the scan on screen, or null while there is no finished one. Nothing re-draws it on a timer: it is read when the panel draws. */
+export function scannedAgo(report: DiskCleanReport | null, now: number): string | null {
+  const at = report?.generatedAt;
+  return at ? `Scanned ${longAge(now - at)}` : null;
 }
 
 /** What a button that has been pressed once says. Named, so nobody confirms what they did not read. */
@@ -175,3 +182,27 @@ export function useLowDisk(): string | null {
 export function useDiskWarnPct(): number {
   return useSyncExternalStore(subscribeSettings, diskWarnPct, () => DISK_WARN_DEFAULT);
 }
+
+// ------------------------------------------------- the engine's report ----
+
+export interface ReportRow { line: DiskCleanLine; item: DiskExplainItem }
+export interface ReportGroup { rows: ReportRow[]; bytes: number }
+/** The scan's lines under the engine's verdicts, biggest first. `rest` are lines the report did not cover (the long tail, or info-only lines): they keep the scan's own groups. */
+export function reportGroups(lines: readonly DiskCleanLine[], explain: DiskExplain | undefined): { safe: ReportGroup; check: ReportGroup; keep: ReportGroup; rest: DiskCleanLine[] } {
+  const by = new Map((explain?.items ?? []).map((i) => [i.id, i]));
+  const rows: ReportRow[] = [];
+  const rest: DiskCleanLine[] = [];
+  for (const l of sortLines(lines)) { const item = by.get(l.id); if (item) rows.push({ line: l, item }); else rest.push(l); }
+  const pick = (v: DiskExplainItem["verdict"]): ReportGroup => {
+    const r = rows.filter((x) => x.item.verdict === v).sort((a, b) => (b.line.bytes ?? 0) - (a.line.bytes ?? 0));
+    return { rows: r, bytes: r.reduce((n, x) => n + (x.line.bytes ?? 0), 0) };
+  };
+  return { safe: pick("safe"), check: pick("check"), keep: pick("keep"), rest };
+}
+
+const kTokens = (n: number): string => (n >= 1000 ? `${Math.round(n / 100) / 10}k` : String(n));
+/** What the exchange is expected to cost in tokens, said before it runs. Dollars are only quoted once the engine has reported them. */
+export function explainEstimate(e: Pick<DiskExplain, "count" | "estIn" | "estOut">): string {
+  return `${e.count} item${e.count === 1 ? "" : "s"} · est. ${kTokens(e.estIn)} tokens in, ${kTokens(e.estOut)} out`;
+}
+export const explainSpent = (e: Pick<DiskExplain, "costUsd">): string | null => (e.costUsd ? `$${e.costUsd < 0.01 ? e.costUsd.toFixed(3) : e.costUsd.toFixed(2)}` : null);

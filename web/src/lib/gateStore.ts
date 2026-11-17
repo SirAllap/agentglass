@@ -1,4 +1,5 @@
 import { api } from "./api.ts";
+import { intervalWhileVisible } from "./visibleInterval.ts";
 import { clearNote, recordNote } from "./sysNotify.ts";
 import { getNotifyPrefs } from "./notifyPrefsStore.ts";
 import { notifies } from "../../../shared/notifyPrefs.ts";
@@ -313,7 +314,7 @@ export function __resetGateStore(): void {
    * `started` is cleared too, so the next subscriber begins a fresh poll
    * rather than finding the flag set and never polling again.
    */
-  if (timer) { clearTimeout(timer); timer = null; }
+  stopPoll?.(); stopPoll = null;
   started = false;
 }
 
@@ -327,17 +328,14 @@ export function __resetGateStore(): void {
 // must not look alike when one of them means an agent is still waiting.
 // ---------------------------------------------------------------------------
 
-let timer: ReturnType<typeof setTimeout> | null = null;
+let stopPoll: (() => void) | null = null;
 
+// Hidden: no timer at all (the shared helper clears it), and one read on return.
 async function tick() {
-  timer = null;
-  if (typeof document === "undefined" || !document.hidden) {
-    try {
-      const { gates } = await api.gatePending();
-      ingestGates(gates);
-    } catch { /* offline or starting up: keep the last known list */ }
-  }
-  timer = setTimeout(tick, POLL_MS);
+  try {
+    const { gates } = await api.gatePending();
+    ingestGates(gates);
+  } catch { /* offline or starting up: keep the last known list */ }
 }
 
 /**
@@ -388,15 +386,6 @@ function startPolling() {
   if (started || typeof window === "undefined") return;
   started = true;
   void tick();
-  // A test that stubs `window` alone has no `document`; bun runs every test
-  // file in one process, so that stub reaches this module from another file.
-  if (typeof document === "undefined") return;
-  // Coming back to a hidden tab should not wait out the remaining interval:
-  // a gate raised while you were away is exactly what you returned to answer.
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden || !timer) return;
-    clearTimeout(timer);
-    timer = null;
-    void tick();
-  });
+  // A test that stubs `window` alone has no `document`; the helper then treats it as always visible.
+  stopPoll = intervalWhileVisible(() => { void tick(); }, POLL_MS);
 }

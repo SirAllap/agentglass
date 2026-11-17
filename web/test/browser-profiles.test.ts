@@ -16,8 +16,8 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  addProfile, DEFAULT_PROFILE, isProfileId, loadProfiles, MAX_PROFILES, mintAgentProfile, mintProfileId,
-  partitionFor, partitionsFor, profileHue, profileName, removeProfile, saveProfiles,
+  addProfile, DEFAULT_PROFILE, droppable, droppedNote, FULL_REFUSAL, IDLE_DROP_MS, isProfileId, unusedFromStore, loadProfiles, MAX_PROFILES, mintAgentProfile, mintProfileId,
+  partitionFor, retiredIds, retireIds, touchProfiles, partitionsFor, profileHue, profileName, removeProfile, saveProfiles,
 } from "../src/lib/browserProfiles.ts";
 import { agentContainerName } from "../../shared/workerContainer.ts";
 
@@ -115,7 +115,7 @@ describe("naming a profile", () => {
     }
     if ("error" in list) throw new Error("should have fitted");
     expect(list.profiles.length).toBe(MAX_PROFILES);
-    expect(addProfile(list.profiles, "one more")).toEqual({ error: `${MAX_PROFILES} profiles is the limit` });
+    expect(addProfile(list.profiles, "one more")).toEqual({ error: FULL_REFUSAL });
   });
 
   test("forgetting one leaves the others alone", () => {
@@ -404,5 +404,150 @@ describe("an agent's container is namespaced and never borrowed (M2)", () => {
     expect(second.profile.name).not.toBe(first.profile.name);
     expect(second.profile.id).not.toBe(first.profile.id);
     expect(partitionFor(BASE, second.profile.id)).not.toBe(partitionFor(BASE, first.profile.id));
+  });
+});
+
+describe("a full container list makes room", () => {
+  const NOW = Date.UTC(2026, 10, 13);
+  const DAY = IDLE_DROP_MS;
+  const none = new Set<string>();
+  /** A full list: the given containers, then person-made fillers up to the cap. */
+  const full = (head: { id: string; name: string; usedAt?: number }[]) => {
+    const fill = Array.from({ length: MAX_PROFILES - head.length }, (_, i) => ({ id: `p${i}`, name: `mine ${i}` }));
+    return [...head, ...fill];
+  };
+
+  test("the oldest idle agent container goes first", () => {
+    const list = full([
+      { id: "agenta", name: "agent:a", usedAt: NOW - 3 * DAY },
+      { id: "agentb", name: "agent:b", usedAt: NOW - 9 * DAY },
+      { id: "agentc", name: "agent:c", usedAt: NOW - 2 * DAY },
+    ]);
+    const r = mintAgentProfile(list, "agent:new", { busy: none, lanes: none, now: NOW });
+    if ("error" in r) throw new Error(r.error);
+    expect(r.dropped?.id).toBe("agentb");
+    expect(r.profiles.length).toBe(MAX_PROFILES);
+    expect(r.profiles.some((p) => p.id === "agentb")).toBe(false);
+    expect(r.profile.usedAt).toBe(NOW);
+  });
+
+  test("one saved before use was recorded counts as the oldest", () => {
+    const list = full([{ id: "agenta", name: "agent:a", usedAt: NOW - 9 * DAY }, { id: "agentold", name: "agent:old" }]);
+    expect(droppable(list, { busy: none, lanes: none, now: NOW })[0]?.id).toBe("agentold");
+  });
+
+  test("a person's container, one with a tab, one a lane uses, one used today: all kept", () => {
+    const list = full([
+      { id: "agenttab", name: "agent:tab", usedAt: NOW - 9 * DAY },
+      { id: "agentlane", name: "agent:lane", usedAt: NOW - 9 * DAY },
+      { id: "agentnew", name: "agent:fresh", usedAt: NOW - DAY / 2 },
+      { id: "work", name: "Work", usedAt: NOW - 90 * DAY },
+    ]);
+    const room = { busy: new Set(["agenttab"]), lanes: new Set(["agentlane"]), now: NOW };
+    expect(droppable(list, room)).toEqual([]);
+    expect(mintAgentProfile(list, "agent:new", room)).toEqual({ error: FULL_REFUSAL });
+  });
+
+  test("the refusal names the limit and where to free room", () => {
+    expect(FULL_REFUSAL).toBe(`${MAX_PROFILES} containers is the limit: Settings ▸ Browser ▸ Containers ▸ Remove unused`);
+  });
+
+  test("a person's new container may also take an idle agent's place", () => {
+    const list = full([{ id: "agenta", name: "agent:a", usedAt: NOW - 3 * DAY }]);
+    const r = addProfile(list, "Client", { busy: none, lanes: none, now: NOW });
+    if ("error" in r) throw new Error(r.error);
+    expect(r.dropped?.id).toBe("agenta");
+  });
+
+  test("the log line says which and since when", () => {
+    expect(droppedNote({ id: "agenta", name: "agent:a", usedAt: NOW - 3 * DAY })).toBe("dropped container agent:a, idle since 2026-11-10");
+    expect(droppedNote({ id: "agenta", name: "agent:a" })).toBe("dropped container agent:a, idle since before use was recorded");
+  });
+
+  test("usedAt survives a save and a load", () => {
+    const mem = new Map<string, string>();
+    const store = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v); } };
+    saveProfiles(store, [{ id: "agenta", name: "agent:a", usedAt: NOW }]);
+    expect(loadProfiles(store)).toEqual([{ id: "agenta", name: "agent:a", usedAt: NOW, agentMade: true }]);
+  });
+
+  test("Remove unused with no panel: a saved strip keeps a container", () => {
+    const mem = new Map<string, string>();
+    const store = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v); } };
+    saveProfiles(store, [
+      { id: "agenta", name: "agent:a", usedAt: NOW - 3 * DAY },
+      { id: "agentb", name: "agent:b", usedAt: NOW - 3 * DAY },
+      { id: "work", name: "Work" },
+    ]);
+    const r = unusedFromStore(store, (id) => (id === "agentb" ? 2 : 0), none, NOW);
+    expect(r.gone.map((p) => p.id)).toEqual(["agenta"]);
+    expect(r.kept.map((p) => p.id)).toEqual(["agentb", "work"]);
+  });
+
+  /* Finding 1: `agent:review-pr-540` and `agent:review-pr-541` slug to the same
+     12 letters. The dropped one's partition is being wiped while the next agent
+     opens its tab, so the next one must never be handed that id. */
+  test("a dropped container's id is never handed to the next agent", () => {
+    const mem = new Map<string, string>();
+    const store = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v); } };
+    const list = full([{ id: "agentreviewp", name: "agent:review-pr-540", usedAt: NOW - 3 * DAY }]);
+    const r = mintAgentProfile(list, "agent:review-pr-541", { busy: none, lanes: none, now: NOW });
+    if ("error" in r) throw new Error(r.error);
+    expect(r.dropped?.id).toBe("agentreviewp");
+    expect(r.profile.id).not.toBe("agentreviewp");
+    // And later, from a list that no longer holds it: retired, not free.
+    retireIds(store, ["agentreviewp"]);
+    const again = mintAgentProfile([], "agent:review-pr-540", { busy: none, lanes: none, now: NOW, retired: retiredIds(store) });
+    if ("error" in again) throw new Error(again.error);
+    expect(again.profile.id).not.toBe("agentreviewp");
+  });
+
+  /* Finding 2: a tab sat 30 h in a container and the strip never changed, so
+     the stamp was 30 h old when the tab closed. Idle starts at the close. */
+  test("idle starts when the last tab closes, not when it opened", () => {
+    const list = [{ id: "agentx", name: "agent:x", usedAt: NOW - 30 * 3_600_000 }];
+    const after = touchProfiles(list, none, NOW, new Set(["agentx"]));
+    expect(after[0]?.usedAt).toBe(NOW);
+    expect(droppable(after, { busy: none, lanes: none, now: NOW + 1000 })).toEqual([]);
+  });
+
+  /* Finding 3: the confirm said one number and remove() counted again. */
+  test("Remove unused takes only the containers the confirm counted", () => {
+    const mem = new Map<string, string>();
+    const store = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v); } };
+    saveProfiles(store, [
+      { id: "agenta", name: "agent:a", usedAt: NOW - 3 * DAY },
+      { id: "agentb", name: "agent:b", usedAt: NOW - DAY + 1000 },
+    ]);
+    const shown = unusedFromStore(store, () => 0, none, NOW).gone.map((p) => p.id);
+    expect(shown).toEqual(["agenta"]);
+    // agent:b passes 24 h while the confirm is open.
+    const r = unusedFromStore(store, () => 0, none, NOW + 5000, shown);
+    expect(r.gone.map((p) => p.id)).toEqual(["agenta"]);
+    expect(r.kept.map((p) => p.id)).toEqual(["agentb"]);
+  });
+});
+
+describe("who made a container rides on the profile, not the id", () => {
+  const mem = () => { const m = new Map<string, string>(); return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v) }; };
+
+  test("a person's container never carries agentMade, an agent's always does", () => {
+    const person = addProfile([], "orbit box");
+    const agent = addProfile([], "orbit-box", undefined, "agent");
+    const reserved = mintAgentProfile([], agentContainerName("orbit-bot"));
+    if ("error" in person || "error" in agent || "error" in reserved) throw new Error("mint failed");
+    /* Same id from either name: the flag is what tells them apart. */
+    expect(person.profile.id).toBe(agent.profile.id);
+    expect(person.profile.agentMade).toBeUndefined();
+    expect(agent.profile.agentMade).toBe(true);
+    expect(reserved.profile.agentMade).toBe(true);
+  });
+
+  test("the flag survives a restart, and a reserved name reads as an agent's even saved before it", () => {
+    const store = mem();
+    saveProfiles(store, [{ id: "orbitbox", name: "orbit-box", agentMade: true }, { id: "work", name: "work" },
+      { id: "agentorbitbot", name: agentContainerName("orbit-bot") }]);
+    const back = loadProfiles(store);
+    expect(back.map((p) => p.agentMade === true)).toEqual([true, false, true]);
   });
 });

@@ -3,8 +3,8 @@
 import { emptyLanes, isGroup, VIEW_LIMITS, type FilterGroup, type FilterNode, type FilterOp, type FilterRule, type LaneFilter } from "../../../shared/prFilter.ts";
 import { FACETS } from "./prFilter.ts";
 import type { FieldSpec } from "../components/tasks/filters.ts";
-import { evalLanes, type LaneResult } from "./prFilterEval.ts";
-import type { ReadField } from "../components/tasks/filters.ts";
+import { type LaneResult } from "./prFilterEval.ts";
+export { evalExempt } from "./prFilterEval.ts";
 import { lanesToText } from "./prFilterSyntax.ts";
 
 export type LaneName = "show" | "hide";
@@ -252,26 +252,6 @@ export function culpritName(f: LaneFilter, id: string): string {
 /** The live filter differs from what the active view saved. Compared as text: ids and order of equal rules do not count. */
 export function viewDirty(live: LaneFilter, saved: LaneFilter | null): boolean {
   return lanesToText(live) !== lanesToText(saved ?? emptyLanes());
-}
-
-/**
- * evalLanes, minus one exemption the board has always had: a row with something
- * unread on it is never dropped by a rule the person built. The row stays in
- * `kept`, its culprit entry is removed, and the counts still add up.
- */
-export function evalExempt<T>(rows: T[], filter: LaneFilter, read: ReadField<T>, exempt: (row: T) => boolean): LaneResult<T> {
-  const r = evalLanes(rows, filter, read);
-  if (!r.culprit.size) return r;
-  const spared = rows.filter((row) => r.culprit.has(row) && exempt(row));
-  if (!spared.length) return r;
-  const culprit = new Map(r.culprit);
-  const hiddenBy = new Map(r.hiddenBy);
-  for (const row of spared) {
-    const id = culprit.get(row)!;
-    culprit.delete(row);
-    hiddenBy.set(id, (hiddenBy.get(id) ?? 1) - 1);
-  }
-  return { kept: rows.filter((row) => !culprit.has(row)), culprit, hiddenBy };
 }
 
 /** For the board's lanes: each hidden PR's number to the rule that hid it, in words and colour. */

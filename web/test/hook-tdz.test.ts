@@ -57,6 +57,24 @@ function bodyStart(lines: string[], declLine: number, indent: number): number {
   return 0;
 }
 
+/** Block comments are comments too, and one written inline in a parameter list
+ *  (`o: { above?: Task /** the card it hangs under *\/ }`) was enough to accuse a
+ *  `const card` further down. Blanked rather than removed, so every line and
+ *  column keeps its number. */
+function blankBlockComments(source: string): string {
+  let open = false;
+  return source.split("\n").map((line) => {
+    let out = "";
+    for (let i = 0; i < line.length; i++) {
+      const pair = line.slice(i, i + 2);
+      if (!open && pair === "/*") open = true;
+      else if (open && pair === "*/") { open = false; out += "  "; i++; continue; }
+      out += open ? " " : line[i];
+    }
+    return out;
+  }).join("\n");
+}
+
 /** Quoted text and comments are not reads. `scopeSessions(s, "live")` is not a
  *  use of a variable called `live`. */
 const code = (l: string) => l
@@ -79,7 +97,7 @@ const code = (l: string) => l
 
 /** Exported so the test below can prove it catches the real thing. */
 export function findTdzReads(source: string, file = "<src>"): Hit[] {
-  const lines = source.split("\n");
+  const lines = blankBlockComments(source).split("\n");
   const hits: Hit[] = [];
   const decls: { name: string; line: number; indent: number }[] = [];
   lines.forEach((l, i) => {
@@ -165,6 +183,20 @@ export function TasksView() {
     const hit = findTdzReads(broken);
     expect(hit).toHaveLength(1);
     expect(hit[0]!.name).toBe("lit");
+  });
+
+  it("does not read a name that only appears in a comment", () => {
+    /* A type literal's comment sits on the `const` line the scanner looks at,
+       and a prose mention of `card` is not a read of the `const card` below —
+       which is how a Jira row was accused while it drew them in the right
+       order. */
+    const fine = `
+export function P({ a }: { a: number }) {
+  const row = (o: { above?: string /* the card it hangs under */ } = {}) => o;
+  const card = a;
+  return card;
+}`;
+    expect(findTdzReads(fine)).toEqual([]);
   });
 
   it("leaves deferred callbacks alone", () => {

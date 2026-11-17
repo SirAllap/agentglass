@@ -442,6 +442,7 @@ const diskClean = (r: DiskCleanReport): UiSnapshot => {
   const row = (l: DiskCleanReport["lines"][number]) => ({ id: l.id, kind: l.kind, verdict: l.verdict, label: l.label, why: l.why, bytes: l.bytes, mount: at.get(l.mount) ?? null });
   return {
     state: {
+      state: r.state ?? "ready", generatedAt: r.generatedAt ?? null,
       lines: r.lines.length, safe: safe.count, safeBytes: r.safeBytes, planShown: safe.shown, keptShown: rest.shown, scannedAt: r.at, problems: r.problems.length,
       byVerdict: count(r.lines, (l) => l.verdict),
       mounts: mounts.map((m, n) => ({ n, size: m.size, free: m.free, freePct: m.size > 0 ? Math.round((m.free / m.size) * 1000) / 10 : null, safeBytes: m.safeBytes })),

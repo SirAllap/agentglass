@@ -41,7 +41,7 @@ describe("every other anchor that carries a provider's or a plugin's address", (
   });
   it("a plugin tree's link, so a middle click does not follow the raw value", async () => {
     const tree = await read("plugins/PluginTree.tsx");
-    expect(tree).toContain("<a href={externalUrl(node.href)}");
+    expect(tree).toContain("<a href={httpsLink(node.href)}");
     expect(tree).not.toContain("<a href={node.href}");
   });
   it("the scope chip's link", async () => {

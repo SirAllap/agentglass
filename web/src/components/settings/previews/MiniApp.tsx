@@ -1,6 +1,7 @@
 import type { ComponentType, CSSProperties } from "react";
 import { VIEWS, SHIPPED_RAIL, type RailLayout } from "../../workspace/views.ts";
 import { densityPad, fontScale, railBadge, railDrawers, type Density, type RailItem } from "./logic.ts";
+import { ICON } from "../../../lib/iconSize.ts";
 
 export type MiniView = "dash" | "pr" | "diff" | "term";
 export const MINI_VIEWS: { id: MiniView; label: string }[] = [
@@ -38,9 +39,9 @@ export function MiniRail({ items, selected }: { items: readonly RailItem[]; sele
     const b = railBadge(i);
     const on = i.id === selected;
     return (
-      <span key={i.id} data-rail-item={i.id} title={i.name} className="agx-pv-ic relative inline-flex items-center justify-center"
+      <span key={i.id} data-rail-item={i.id} data-tip={i.name} className="agx-pv-ic relative inline-flex items-center justify-center"
         style={{ width: "2.1em", height: "2.1em", borderRadius: "0.5em", color: on ? "var(--primary)" : "var(--text3)", background: on ? "color-mix(in srgb, var(--primary) 14%, transparent)" : "transparent" }}>
-        {Icon ? <Icon size={16} /> : null}
+        {Icon ? <Icon size={ICON.md} /> : null}
         {b !== "none" && (
           <b style={{ position: "absolute", top: "0.1em", right: "0.1em", minWidth: b === "dot" ? "0.7em" : "1.3em", height: b === "dot" ? "0.7em" : "1.3em", borderRadius: "999px", background: "var(--error)", color: "var(--bg)", fontSize: "0.7em", lineHeight: "1.3em", textAlign: "center" }}>{b === "dot" ? "" : b}</b>
         )}

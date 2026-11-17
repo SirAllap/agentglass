@@ -71,10 +71,60 @@ export const rememberTaskSource = (id: string): void => write(LAST_KEY, id);
  * landing on a tab that is not on the bar is how the view ends up blank.
  */
 export function landingSource(available: string[], mode = taskLanding(), last = lastTaskSource()): string {
-  const ok = (v: string | null | undefined): v is string => !!v && available.includes(v);
-  if (mode === "last") return ok(last) ? last : (available[0] ?? "all");
-  return ok(mode) ? mode : (available[0] ?? "all");
+  return openTaskSource({ available, landing: mode, last, settled: true });
 }
+
+export interface TaskOpen {
+  /** The bar as it stands, in its saved order. */
+  available: readonly string[];
+  /** The saved landing preference. */
+  landing: TaskLanding;
+  /** The tab on screen while the view stays mounted, so "last used" does not
+   *  jump backwards to a tab saved by an earlier visit. */
+  current?: string | null;
+  /** The last tab a hand wrote. Read from the store unless given. */
+  last?: string | null;
+  /** A card or issue jump naming a source: an errand, not a change of mind. */
+  explicit?: string | null;
+  /**
+   * Whether every source the preference names has had its chance to appear.
+   * False while the server is still answering which sources are set up: the
+   * bar then deliberately leaves optional sources off for a frame, and treating
+   * that as "the tab is gone" is what landed a pinned Jira on "All".
+   */
+  settled?: boolean;
+}
+
+/**
+ * Which tab the Tasks view opens on.
+ *
+ * Precedence, and why it is this order:
+ *
+ *  1. an explicit target (a chip click, a deep link naming a card or tracker)
+ *     — somebody asked for that card, and it is not a statement about where
+ *     they want to live between errands;
+ *  2. the saved landing — a pinned source is a choice about every open that
+ *     outranks the tab you happened to leave behind, so a stale last-visited
+ *     tab never overrides it;
+ *  3. otherwise the first tab on the bar (or "all" when there is no bar yet).
+ *
+ * The last-visited tab only decides anything when the landing itself is
+ * "last", which is the default rather than an exception to rule 2.
+ */
+export function openTaskSource({ available, landing, current, last = lastTaskSource(), explicit, settled = true }: TaskOpen): string {
+  const ok = (v: string | null | undefined): v is string => !!v && available.includes(v);
+  if (explicit) return explicit;
+  if (landing === "last") {
+    if (ok(current)) return current;
+    return ok(last) ? last : (available[0] ?? "all");
+  }
+  if (ok(landing)) return landing;
+  // An unsettled bar is missing tabs it has not been told about yet, not tabs
+  // that are gone. Hold the landing; the caller steps off once it settles.
+  if (!settled) return landing;
+  return available[0] ?? "all";
+}
+
 
 const listeners = new Set<() => void>();
 

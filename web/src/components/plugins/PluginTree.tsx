@@ -3,7 +3,8 @@ import type { Field, UiAction, UiNode, UiOpenPr } from "../../lib/pluginTypes.ts
 import type { Tone } from "../../../../shared/pluginUi.ts";
 import { openPr } from "../../lib/openPrs.ts";
 import { Markdown } from "../../lib/markdown.tsx";
-import { externalUrl, openExternal } from "../../lib/externalUrl.ts";
+import { openExternal } from "../../lib/externalUrl.ts";
+import { httpsLink } from "../../../../shared/pluginSafe.ts";
 import { ago } from "../../lib/fileRecents.ts";
 import { Select } from "../Select.tsx";
 import { Switch } from "../SettingRow.tsx";
@@ -144,7 +145,7 @@ function Node({ node, ctx }: { node: UiNode; ctx: Ctx }): ReactNode {
           {node.items.map((it, i) => (
             <div key={i} className="contents">
               <dt className="text-[11px]" style={{ color: "var(--text3)" }}>{it.label}</dt>
-              <dd className="text-[12px] m-0 truncate" style={{ color: TONE_COLOR[it.tone ?? "default"] }} title={it.value}>{it.value}</dd>
+              <dd className="text-[12px] m-0 truncate" style={{ color: TONE_COLOR[it.tone ?? "default"] }} data-tip={it.value}>{it.value}</dd>
             </div>
           ))}
         </dl>
@@ -183,7 +184,7 @@ function Node({ node, ctx }: { node: UiNode; ctx: Ctx }): ReactNode {
                   {it.title}
                 </button>
                 {it.badges?.map((b, i) => <Badge key={i} text={b.text} tone={b.tone} />)}
-                {it.at && <span className="text-[10.5px] tabular-nums" style={{ color: "var(--text4)" }} title={new Date(it.at).toLocaleString()}>{ago(it.at)}</span>}
+                {it.at && <span className="text-[10.5px] tabular-nums" style={{ color: "var(--text4)" }} data-tip={new Date(it.at).toLocaleString()}>{ago(it.at)}</span>}
               </div>
               {it.body && <div className="agx-prose text-[12px] mt-1 min-w-0" style={{ color: "var(--text2)" }}><Markdown text={it.body} /></div>}
             </li>
@@ -215,8 +216,8 @@ function Node({ node, ctx }: { node: UiNode; ctx: Ctx }): ReactNode {
       );
     case "link":
       return (
-        <a href={externalUrl(node.href)} onClick={(e) => { e.preventDefault(); openExternal(node.href); }}
-          className="text-[12px] hover:underline inline-flex items-center gap-1" style={{ color: "var(--primary-ink)" }} title={node.href}>
+        <a href={httpsLink(node.href)} onClick={(e) => { e.preventDefault(); if (httpsLink(node.href)) openExternal(node.href); }}
+          className="text-[12px] hover:underline inline-flex items-center gap-1" style={{ color: "var(--primary-ink)" }} data-tip={node.href}>
           {node.text} <ExternalIcon size={ICON.xs} />
         </a>
       );
@@ -403,7 +404,7 @@ export function FieldRow({ field, value, onChange, onCommit, secretSet }: {
     <div className="min-w-0">
       <div className="text-[12px] font-medium" style={{ color: "var(--text)" }}>{field.label}</div>
       {field.description && (
-        <div className="text-[11px] mt-0.5" title={field.description} style={{
+        <div className="text-[11px] mt-0.5" data-tip={field.description} style={{
           color: "var(--text3)",
           display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden",
         }}>{field.description}</div>
@@ -534,7 +535,7 @@ function MultiPick({ field, value, onChange }: { field: Field; value: string[]; 
                 background: "color-mix(in srgb, var(--primary) 12%, transparent)",
                 border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)",
               }}
-              title={known.has(v) || options.length === 0 ? v : `${v} — not in the list any more`}>
+              data-tip={known.has(v) || options.length === 0 ? v : `${v} — not in the list any more`}>
               <span className="t-mono">{options.find((o) => o.value === v)?.label ?? v}</span>
               <button type="button" onClick={() => toggle(v)} aria-label={`Remove ${v}`}
                 className="agx-btn rounded grid place-items-center" style={{ color: "var(--text3)", width: ICON.md, height: ICON.md }}><CloseIcon size={ICON.xs} /></button>

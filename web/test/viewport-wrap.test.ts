@@ -30,8 +30,8 @@ describe("a header row wraps instead of squeezing its controls", () => {
     // The ten tabs need 778px at 1366x768 (x=328..1106); a hand-picked floor
     // (420) could still share the line with the actions and drew the strip cut
     // at Stashes. `fit-content` is that 778, so the row wraps before it clips.
-    const strip = git.split("\n").find((l) => l.includes("ref={strip}")) ?? "";
-    expect(strip).toContain("min-w-[fit-content]");
+    const strip = git.split("\n").find((l) => l.includes("data-tabs-strip")) ?? "";
+    expect(strip).toContain("min-w-[min(fit-content,100%)]");
     expect(strip).not.toMatch(/min-w-\[[^\]]*\d+px/);
     expect(git).toContain("${viewHeaderClass} flex-wrap gap-y-1.5");
     expect(git).toMatch(/height: "auto", minHeight: VIEW_HEADER_H, maxHeight: "none"/);

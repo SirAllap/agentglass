@@ -17,7 +17,7 @@ import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 import { CloseButton } from "./CloseButton.tsx";
 import { clear as clearHighlights } from "../lib/mdFind.ts";
 import { SearchIcon } from "../lib/glyphIcons.tsx";
-import { ICON } from "../lib/iconSize.ts";
+import { ICON, MIN_BOX } from "../lib/iconSize.ts";
 
 export function FindBar() {
   const st = useSyncExternalStore(subscribeFind, findState, findState);
@@ -37,22 +37,36 @@ export function FindBar() {
      painted on a board with no bar in sight. */
   useEffect(() => () => clearHighlights(), []);
 
-  // The window can be dragged or resized while the bar is up: follow it. Only a
-  // changed rectangle sets state, so a still window costs a read per frame.
+  // The window can be dragged or resized while the bar is up: follow it. This
+  // was a rAF loop reading the anchor's rectangle every frame — 60 layout reads
+  // a second for as long as an anchor existed, open bar or not, focused window
+  // or not (timers audit 2026-11-13). Now it reads on the events that move the
+  // anchor, and only while open: a resize of the anchor, its parent or the page
+  // (a side pane sliding in shifts the anchor at the same size, and resizes the
+  // parent's row), a window resize, any scroll, and the end of any CSS
+  // transition or animation (a transform moves it without a resize).
   const [, moved] = useState("");
   const anchor = topScope()?.closest<HTMLElement>("[data-find-anchor]") ?? null;
   useEffect(() => {
-    if (!anchor) return;
-    let raf = 0, last = "";
-    const tick = () => {
+    if (!anchor || !st.open) return;
+    let last = "";
+    const read = () => {
       const b = anchor.getBoundingClientRect();
       const k = `${b.top}|${b.right}`;
       if (k !== last) { last = k; moved(k); }
-      raf = requestAnimationFrame(tick);
     };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [anchor]);
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(anchor);
+    if (anchor.parentElement) ro.observe(anchor.parentElement);
+    ro.observe(document.documentElement);
+    const moves = ["resize", "scroll", "transitionend", "animationend"] as const;
+    for (const e of moves) window.addEventListener(e, read, true);
+    return () => {
+      ro.disconnect();
+      for (const e of moves) window.removeEventListener(e, read, true);
+    };
+  }, [anchor, st.open]);
   // After every hook: returning before one changes how many run (React #310).
   if (!st.open || findHidden()) return null;
   const nothing = !!st.query && st.total === 0;
@@ -100,11 +114,11 @@ export function FindBar() {
 export function FindArrow({ dir, disabled, onClick }: { dir: 1 | -1; disabled: boolean; onClick: () => void }) {
   return (
     <button onClick={onClick} disabled={disabled}
-      title={dir === 1 ? "Next (Enter)" : "Previous (Shift+Enter)"}
+      data-tip={dir === 1 ? "Next (Enter)" : "Previous (Shift+Enter)"}
       aria-label={dir === 1 ? "Next match" : "Previous match"}
       className="inline-flex items-center justify-center rounded hover:bg-white/10 shrink-0"
-      style={{ width: 20, height: 20, color: "var(--text3)", opacity: disabled ? 0.35 : 1 }}>
-      <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor"
+      style={{ width: MIN_BOX, height: MIN_BOX, color: "var(--text3)", opacity: disabled ? 0.35 : 1 }}>
+      <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor"
         strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
         <path d={dir === 1 ? "M4 6l4 4 4-4" : "M4 10l4-4 4 4"} />
       </svg>

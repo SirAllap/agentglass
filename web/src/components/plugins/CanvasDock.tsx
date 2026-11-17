@@ -4,6 +4,7 @@ import { arcPath, fraction, liveText, polar } from "../../lib/canvasGeometry.ts"
 import { gaugeLit } from "../../lib/canvasOrbit.ts";
 import { useFoldPhase } from "../../lib/canvasView.ts";
 import { TONE_COLOR, TONE_INK } from "../../lib/pluginTones.ts";
+import { ICON } from "../../lib/iconSize.ts";
 import { int, num, str, toneOf } from "./canvasRead.ts";
 import type { Ctx } from "./PluginCanvas.tsx";
 import "./canvasDock.css";
@@ -156,7 +157,7 @@ export function Fold({ node: n, ctx, refCb }: { node: CanvasNode; ctx: Ctx; refC
     <section ref={refCb} className="cv-fold" data-open={open ? "true" : "false"}>
       <button type="button" className="cv-fold-bar" aria-expanded={open} aria-controls={id} disabled={ctx.stopped}
         onClick={(e) => { e.stopPropagation(); ctx.view.setFold(n.id, !open); if (n.action) void ctx.onAction(n.action as CanvasAction); }}>
-        <svg width={12} height={12} viewBox="0 0 12 12" aria-hidden style={{ transform: `rotate(${-90 * (1 - phase)}deg)` }}><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" /></svg>
+        <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" aria-hidden style={{ transform: `rotate(${-90 * (1 - phase)}deg)` }}><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" /></svg>
         <span className="cv-fold-label">{str(n.label)}</span>
       </button>
       <div id={id} className="cv-fold-clip" style={{ height: h * phase }} aria-hidden={!open || undefined} {...(open ? {} : { inert: "" } as object)}>

@@ -257,11 +257,11 @@ const slice = (src: string, head: string) => { const at = src.indexOf(head); exp
 
 describe("what a truncated or coloured thing still says", () => {
   test("a token's, a title's and a hint's full text is its name and its tooltip", () => {
-    expect(slice(BOARD_SRC, "function TokenChip(")).toContain('role="img" aria-label={label} title={label}');
+    expect(slice(BOARD_SRC, "function TokenChip(")).toContain('role="img" aria-label={label} data-tip={label}');
     const part = slice(BOARD_SRC, "function PartView(");
-    expect(part).toContain('className="bd-hd-title" title={title}');
-    expect(part).toContain('className="bd-hint" title={hint}');
-    expect(slice(BOARD_SRC, "export function ItemView(")).toContain('className="bd-row-t" title={title}');
+    expect(part).toContain('className="bd-hd-title" data-tip={title}');
+    expect(part).toContain('className="bd-hint" data-tip={hint}');
+    expect(slice(BOARD_SRC, "export function ItemView(")).toContain('className="bd-row-t" data-tip={title}');
   });
 
   test("a pressable part is named even without a title, and every pressable thing has a focus ring", () => {

@@ -4,9 +4,15 @@
 // tab-completion, colors, vim/htop/lazygit. Shell sessions are kept alive in a
 // module-level store, so closing the panel (or switching repos) never kills a
 // running job — reopening reattaches to the live session, scrollback intact.
+import { onTabRoot } from "../lib/tabRootStore.ts";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { usePoll } from "../lib/usePoll.ts";
 import { PILL_POLL_MS, withFreshRepo } from "../lib/repoPulse.ts";
+import { subscribeGitChanged } from "../lib/gitBus.ts";
+import { subscribePaneDirsChanged } from "../lib/paneDirsBus.ts";
+
+/** The pane-directory BACKSTOP: the server pushes a `panedirs` frame when tmux reports a window or active-pane path change (a cd in a pane that is not the active one is not announced, so this still catches it within a minute). */
+const PANE_BEAT_MS = 60_000;
 import { subscribeTermReview, termReview, clearTermReview } from "../lib/termReview.ts";
 import { subscribeTermIssue, termIssue, clearTermIssue, resolveTermIssue, type TermIssue } from "../lib/termIssue.ts";
 import { setupPane, subscribeSetupPane, takeSetupPane } from "../lib/setupFirstWork.ts";
@@ -20,15 +26,16 @@ import { SearchIcon } from "../lib/glyphIcons.tsx";
 import type { TmuxCmdBody } from "../lib/tmuxCmd.ts";
 import { StripFrame, TermStrip } from "./terminal/TermStrip.tsx";
 import { TermOverlays, noTmuxNoteDismissed } from "./terminal/TermOverlays.tsx";
-import { WorkerBar } from "./terminal/WorkerBar.tsx";
 import { SkeletonTabs } from "./terminal/PaneStates.tsx";
 import { useWindowClose } from "../lib/useWindowClose.ts";
 import { termState } from "../lib/termStates.ts";
 import { CommandsPopover } from "./terminal/CommandsPopover.tsx";
 import { PrPinsButton } from "./terminal/StripButtons.tsx";
-import { chipWorktree, pickWorktree, paneCandidates, paneNote, nextSeen, vouchedSeen, bookPanes, unlistedWorktree, type PaneSeen, type PaneBookEntry, readPaneSeen, writePaneSeen } from "../lib/paneWorktree.ts";
+import { bookedFor, chipWorktree, namedWorktree, paneCandidates, paneNote, bookPanes, unlistedWorktree, type PaneBookEntry } from "../lib/paneWorktree.ts";
+import { liveTabFacts, resolveCardId, resolveWorktree } from "../lib/tabFacts.ts";
 import { readBranchPrs, writeBranchPrs, readCardPrios, writeCardPrios, type RememberedPr, type RememberedPrio } from "../lib/paneFacts.ts";
 import { lanternRows } from "../lib/lanternStore.ts";
+import { base64Of, pastedImageType, pathPaste, takesImagePaste } from "../lib/terminalImagePaste.ts";
 import { askOnBench } from "../lib/lanternAsk.ts";
 import { JOB } from "../lib/benchJobs.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
@@ -49,31 +56,41 @@ import { answerDecrqm } from "../lib/xtermDecrqm.ts";
 import { openExternal } from "../lib/externalUrl.ts";
 import { registerPathLinks } from "../lib/termPathLinks.ts";
 import { TERM_URL } from "../lib/termUrls.ts";
-import { followLink, oscLinkHandler } from "../lib/linkRouter.ts";
+import { followTerminalLink, oscLinkHandler } from "../lib/linkRouter.ts";
 import type { GitRepoRef, GitBranch, PrBranchSummary, TerminalCommands, TmuxWindow, TmuxPane, PtyServerFrame, PtyClientFrame } from "../../../shared/types.ts";
 import { chipTarget } from "../lib/chipTarget.ts";
 import { openPr } from "../lib/openPrs.ts";
 import { openCard } from "../lib/openCard.ts";
+import { SidePane, SideDivider, type BadgeTone, type SideSubject } from "./terminal/SidePane.tsx";
+import {
+  forgetTab, closedWindows, sideCanShow, SIDE_SCROLLBAR_PX, SIDE_PAIR_GAP_PX, SIDE_OVERLAY_MARGIN_PX, SIDE_CELL_FALLBACK_PX, openSide, paneWidth, dragWidth, setWidth as setSideWidth, sectionForKey, setSection as setSideSection, setCompact,
+  sidePaneVersion, subscribeSidePane, viewOf, MIN_TERM_COLS, SIDE_MIN, SIDE_USABLE, pendingResolved, resolveActiveWindow, type SideSection,
+} from "../lib/sidePane.ts";
+import { checksWords } from "../lib/paneChip.ts";
+import { planPaneMount } from "../lib/paneMount.ts";
 import { cardRef, chipAction } from "../lib/cardRef.ts";
 import { useOwnerSetup } from "../lib/trackerView.ts";
 import { PaneBar, BAR_MIN_H, BAR_MIN_W, SEAM_ZONE } from "./terminal/PaneBar.tsx";
 import { bufferPlacement, cardSquare, checksOf, freshestPr, prForPane, prState, reviewOf, STRIP_H } from "../lib/paneChip.ts";
 import { notePrs, onPrFacts, prFactOf, prFactsVersion } from "../lib/prFacts.ts";
+import { noteFocusedPane } from "../lib/hangWatch.ts";
 import { onChecksRead } from "../lib/prWatchStore.ts";
 import { peekRollup, putRollup, rollupOf, onRollup } from "../lib/prRollupStore.ts";
 import { cardOf, cardVersion, onCard } from "../lib/prCardStore.ts";
-import { paneFoot } from "../lib/paneBox.ts";
+import { tabCardRef, twins } from "../lib/tabCard.ts";
+import { paneAtCorner, paneFoot } from "../lib/paneBox.ts";
 import { paneActionsMode, paneMarker, subscribePaneActions } from "../lib/paneActionsPref.ts";
 import { useClickupSetup } from "../lib/clickupSetup.ts";
-import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt, whenServerUp } from "../lib/api.ts";
+import { api, IS_DEMO, onRelay, ptyWsUrl, relayReady, relayTicketSoon, relayTurnedAway, hasToken, probeAuth, reauthPrompt, whenServerUp } from "../lib/api.ts";
 import { coverIsUp, refusalFinal, useCoverHold } from "../lib/cover.ts";
 import { shellSettled } from "../lib/coverStep.ts";
 import { playDemoSession } from "../lib/demoTerm.ts";
 import { CommandBar, loadCommands } from "./CommandBar.tsx";
 import { SCROLLBAR_CSS } from "./diff/DiffLines.tsx";
-import { wantsWebgl, wantsCanvas, fallBackToCanvas } from "../lib/termRenderer.ts";
+import { wantsWebgl, wantsCanvas, fallBackToCanvas, rendererToHold, renderersToPark } from "../lib/termRenderer.ts";
 import { isPluckChord, isFindChord, isAppChord, altDigit } from "../lib/termKeys.ts";
 import { stripUp } from "../lib/termStripHost.ts";
+import { ctrlAltDigit } from "../lib/sessionSlots.ts";
 import { prefixStep } from "../lib/prefixArmed.ts";
 import { registerClaim } from "../lib/findScope.ts";
 import { typingWouldLandInApp } from "../lib/termForeground.ts";
@@ -82,7 +99,9 @@ import { deriveAnsi } from "../lib/termPalette.ts";
 import { termOptions, copyOnSelect, rightClickPaste } from "../lib/termPrefs.ts";
 import { useModernWidths } from "../lib/termUnicode.ts";
 import { dragHold } from "../lib/dragHold.ts";
+import { osc52Text } from "../lib/osc52.ts";
 import { mouseModeGuard, type MouseModeGuard } from "../lib/mouseModeGuard.ts";
+import { holdRelease, holdStart, holdTake, mayHoldWrites, newWriteHold, shouldHoldWrites, type WriteHold } from "../lib/hiddenWrites.ts";
 import { gridOk, termShown, termInputGuard } from "../lib/termInputGuard.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { FindArrow } from "./FindBar.tsx";
@@ -204,10 +223,18 @@ type Sess = {
    * Null while parked. See `attachRenderer` / `parkRenderer`.
    */
   canvasAddon?: CanvasAddon | null;
+  /** The WebGL renderer, held only while on screen like `canvasAddon`. A
+   *  browser caps live GL contexts (~16); 30 sessions each holding one is how
+   *  terminals go black and lose glyphs. */
+  webglAddon?: WebglAddon | null;
   /** The pending `parkRenderer` timer, so a pane being MOVED between slots —
    *  which unmounts and remounts within the same frame — never actually loses
    *  its renderer. */
   parkTimer?: ReturnType<typeof setTimeout> | null;
+  /** Has shown a rendered frame: never hidden for a first frame again. */
+  painted?: boolean;
+  /** Output kept back while the terminal view is hidden: see lib/hiddenWrites.ts. */
+  hold?: WriteHold;
   /** A tmux client is running in this shell — the panel hides its own tabs and
    *  split while that's true, since tmux owns those. */
   tmux: boolean;
@@ -309,6 +336,13 @@ if (typeof document !== "undefined") {
   });
 }
 
+/** Whether the window is minimized: a shell's output then waits (see the hold effect in TerminalPanel). */
+const windowIsHidden = () => typeof document !== "undefined" && document.hidden;
+function subscribeWindowHidden(fn: () => void): () => void {
+  document.addEventListener("visibilitychange", fn);
+  return () => document.removeEventListener("visibilitychange", fn);
+}
+
 /**
  * Fits owed to terminals the user is currently dragging inside.
  *
@@ -361,7 +395,7 @@ function releaseTermDrag() {
   // no gesture left for it to interrupt.
   for (const [s, guard] of modeGuards) {
     const held = guard.flush();
-    if (held.length) try { s.term.write(held); } catch { /* disposed mid-drag */ }
+    if (held.length) try { writeOut(s, held); } catch { /* disposed mid-drag */ }
   }
 }
 function armTermDrag() {
@@ -598,6 +632,31 @@ function applyThemeLive(s: Sess): () => void {
  */
 const ptyFrame = (frame: PtyClientFrame): string => JSON.stringify(frame);
 
+/** The focused tmux pane of this shell is a worker's. */
+function workerPane(s: Sess): boolean {
+  const paneId = s.tmuxPanes.find((p) => p.active)?.id ?? (s.tmuxPanes.length === 1 ? s.tmuxPanes[0]?.id : undefined);
+  return !!paneId && takesImagePaste((lanternRows() ?? []).find((r) => r.paneId === paneId));
+}
+
+/** Ctrl+V in a worker's pane: a picture on the clipboard becomes a file and its
+ *  path; anything else is the key itself, which is what the pane got before.
+ *  When the picture cannot be saved the key goes through too, and the CLI's
+ *  own "no image" stands: a reason typed into the prompt line would be sent. */
+async function pasteImageOrKey(s: Sess): Promise<void> {
+  const send = (d: string) => { if (s.ws?.readyState === WebSocket.OPEN) s.ws.send(ptyFrame({ t: "in", d })); };
+  try {
+    for (const item of await navigator.clipboard.read()) {
+      const type = pastedImageType(item.types);
+      if (!type) continue;
+      const bytes = new Uint8Array(await (await item.getType(type)).arrayBuffer());
+      const saved = await api.terminalImage(base64Of(bytes));
+      if (saved.ok && saved.file) { send(pathPaste(saved.file, !!s.term.modes?.bracketedPasteMode)); return; }
+      break;
+    }
+  } catch { /* no clipboard permission, or the server refused: the key goes through */ }
+  send("\x16");
+}
+
 /**
  * Mark a shell settled once it has drawn and, on the app's own tmux, its window
  * strip has come in. The strip rides the server's sweep, a beat after the
@@ -621,6 +680,29 @@ function connect(s: Sess) {
   if (s.ws || IS_DEMO) return;
   s.status = "connecting";
   notify(s);
+  // The first terminal of a page would beat its relay ticket to the door: see relayReady.
+  const wait = relayReady();
+  if (wait) { void wait.then(() => { if (!s.ws && s.status === "connecting") openSocket(s); }); return; }
+  openSocket(s);
+}
+
+/** The shell's bytes on their way to the terminal: straight in, or kept while its view is hidden. */
+function writeOut(s: Sess, bytes: Uint8Array): void {
+  if (!s.hold) { s.term.write(bytes); return; }
+  for (const chunk of holdTake(s.hold, bytes)) s.term.write(chunk);
+}
+
+/** Write whatever was kept and stop keeping. Called wherever the terminal must be current: the view is
+ *  back, the terminal is mounted somewhere, a socket opens or closes, the shell ends. */
+function releaseHeld(s: Sess): void {
+  if (!s.hold) return;
+  for (const chunk of holdRelease(s.hold)) { try { s.term.write(chunk); } catch { /* disposed */ } }
+}
+
+function openSocket(s: Sess) {
+  if (s.ws) return;
+  // A new socket starts with tmux and the terminal talking to each other: nothing of that may wait.
+  releaseHeld(s);
   const ticket = s.agentTicket ?? undefined;
   // Spent here, not on arrival: a reconnect after a drop must open a shell,
   // not start the agent a second time in the same worktree.
@@ -634,7 +716,7 @@ function connect(s: Sess) {
       const bytes = new Uint8Array(ev.data as ArrayBuffer);
       // Only while the user is dragging inside a terminal — see mouseModeGuard.
       // Every other chunk of every other second goes through untouched.
-      s.term.write(fitHold.active() ? guardFor(s).filter(bytes) : bytes);
+      writeOut(s, fitHold.active() ? guardFor(s).filter(bytes) : bytes);
       if (!s.drawn) { s.drawn = true; settle(s); }
       return;
     }
@@ -668,6 +750,7 @@ function connect(s: Sess) {
       // tab strip nobody can see until the next visibilitychange.
       ws.send(ptyFrame({ t: "visible", hidden: document.hidden }));
       notify(s);
+      void moveToRelay(s, ws);
     } else if (f.t === "tmux") {
       s.tmuxEngine = f.engine === true;
       if (typeof f.socket === "string") s.tmuxSocket = f.socket;
@@ -703,6 +786,7 @@ function connect(s: Sess) {
       notify(s);
     } else if (f.t === "exit" || f.t === "fatal") {
       s.status = f.t === "exit" ? "exited" : "error";
+      releaseHeld(s); // the note below goes after the shell's last output, not before it
       if (f.t === "exit") s.term.write(`\r\n\x1b[2m— shell exited (${f.code ?? "?"}) · press Enter for a new one —\x1b[0m\r\n`);
       else s.term.writeln(`\r\n\x1b[31m${f.error || "terminal error"}\x1b[0m`);
       s.ws = null; // detach now so Enter can reconnect without waiting for onclose
@@ -714,6 +798,8 @@ function connect(s: Sess) {
     if (s.ws !== ws) return; // stale socket — the session already moved on
     const wasLive = s.status === "live";
     s.ws = null;
+    releaseHeld(s); // "disconnected" is written after what the shell had already said
+    relayTurnedAway(ws.url, wasLive); // the retry below then takes the old door
     if (s.status === "connecting" || s.status === "live") {
       s.status = "error";
       notify(s);
@@ -725,6 +811,31 @@ function connect(s: Sess) {
       maybeReconnect(s, wasLive);
     }
   };
+}
+
+/**
+ * A terminal that came up on the old door moves to the relay once a ticket is in hand.
+ *
+ * The first connect waits for a ticket only briefly (relayReady), and on a cold
+ * start that wait lost the race: the relay was up 337 ms after the server and
+ * the window's one terminal was still bridged by the server, for its whole
+ * life, so a server freeze froze typing again. Here the terminal is already
+ * live, so it can wait; then it reconnects quietly: tmux re-attaches the same
+ * session and keys typed in the gap are queued (`pending`), as on any reconnect.
+ *
+ * No loop: a relay that turns the new socket away keeps the old door for 60 s
+ * (relayTurnedAway), so the retry lands there and relayTicketSoon says no.
+ * What it does not do: a terminal that stays on the old door after that is not
+ * moved again until its next reconnect.
+ */
+async function moveToRelay(s: Sess, ws: WebSocket): Promise<void> {
+  if (onRelay(ws.url)) return;
+  if (!(await relayTicketSoon())) return;
+  if (s.ws !== ws || s.status !== "live") return; // closed, replaced or exited meanwhile
+  s.ws = null; // the old socket is stale from here: its close does not reconnect or say "disconnected"
+  try { ws.close(); } catch { /* already gone */ }
+  s.status = "connecting";
+  openSocket(s);
 }
 
 /** Reconnect delay, backing off so a server that's down for a while isn't
@@ -829,7 +940,7 @@ function createSession(root: string, agentTicket?: string): Sess {
   answerDecrqm(term as never);
   // A pull request or a ClickUp card opens in the app; Ctrl/Cmd-click still
   // goes to the browser. See linkRouter.ts.
-  term.loadAddon(new WebLinksAddon((e, uri) => { followLink(uri, e); }, { urlRegex: TERM_URL }));
+  term.loadAddon(new WebLinksAddon((e, uri) => { followTerminalLink(uri, e); }, { urlRegex: TERM_URL }));
   // A path that exists opens in the finder. `root` is where this shell began.
   // Ceiling: after a `cd`, or over ssh, a relative path that ALSO exists under
   // `root` links to that one. Absolute and ~/ paths are exact.
@@ -851,25 +962,30 @@ function createSession(root: string, agentTicket?: string): Sess {
    * bug report. Neither case is worth a message: the shell keeps running and
    * the user has nothing to decide.
    */
-  if (wantsWebgl()) {
-    try {
-      const gl = new WebglAddon();
-      // A lost context can leave the terminal blank-white with no repaint. Drop
-      // off the GPU app-wide and remember it — to canvas, not the slow DOM
-      // renderer — so no new shell hits it and none crawls either.
-      gl.onContextLoss(() => { fallBackToCanvas(); try { gl.dispose(); } catch { /* already gone */ } });
-      term.loadAddon(gl);
-    } catch { /* no WebGL2 here — canvas below, or the DOM renderer */ }
-  }
+  // Neither GPU nor canvas renderer is loaded here (WebGL used to be: one GL
+  // context per session, never given back, past the browser's ~16 cap).
   // The canvas renderer is NOT loaded here. It is loaded when the shell is put
   // on screen and disposed a few seconds after it leaves — see attachRenderer.
   // A session created and never shown, or shown and then parked behind another
   // view, holds no canvases at all.
 
+  // A program's own copy (a worker CLI behind the wall has no wl-copy): OSC 52 to the clipboard.
+  term.parser.registerOscHandler(52, (data) => {
+    const text = osc52Text(data);
+    if (text) navigator.clipboard?.writeText(text).catch(() => { /* no clipboard permission */ });
+    return true;
+  });
+
   // Shift+Esc closes the panel — plain Esc belongs to the shell (vim, fzf…).
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== "keydown") return true;
     if (e.key === "Escape" && e.shiftKey) { panelClose(); return false; }
+    // Ctrl+V in a worker's pane: the CLI behind the wall cannot read the clipboard, so a picture is saved here and its path typed. See terminalImagePaste.ts.
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && (e.key === "v" || e.key === "V") && workerPane(sess)) {
+      e.preventDefault();
+      void pasteImageOrKey(sess);
+      return false;
+    }
     /*
      * Ctrl+Shift+C copies the branch — when there is nothing selected.
      *
@@ -892,6 +1008,8 @@ function createSession(root: string, agentTicket?: string): Sess {
     // the palette opens and the shell never hears about it.
     // Alt+1..9 picks a strip tab; xterm would send it to the pane as Esc+digit.
     if (altDigit(e) && stripUp()) return false;
+    // Ctrl+Alt+1..9 is a session slot (the strip answers it); keep it out of the pane too.
+    if (ctrlAltDigit(e) && stripUp()) return false;
     if (isAppChord(e)) return false;
     return true;
   });
@@ -995,6 +1113,11 @@ type TermCore = {
   };
 };
 
+/** The exact CSS cell size, or undefined before the first render: the fit and the side pane's 80-column floor read it the same way. */
+function cellSizeOf(term: unknown): { width: number; height: number } | undefined {
+  return (term as TermCore | undefined)?._core?._renderService?.dimensions?.css?.cell;
+}
+
 /**
  * Give this shell its renderer back, because it is on screen again.
  *
@@ -1008,22 +1131,56 @@ type TermCore = {
  * when `terminal.element` is missing, and here the terminal was opened long ago
  * — a detached element would have it measure a zero-size screen.
  *
- * Only the canvas renderer. WebGL is left exactly as it was: its context is
- * created once and a machine that has one is not the machine this was measured
- * on, and cycling GL contexts per view switch is a different risk for a saving
- * nobody has measured.
+ * WebGL is held the same way now: its contexts are capped by the browser, and
+ * one per session for 30 sessions exceeded the cap. See `rendererToHold`.
  */
+/** Opacity 0 until the next render after the GL addon loads (or 400 ms, whichever first). */
+function hideUntilFirstFrame(s: Sess): void {
+  if (s.painted) return; // already showed frames: hiding it again IS the flicker
+  s.painted = true;
+  s.holder.style.opacity = "0";
+  let done = false;
+  let sub: { dispose(): void } | undefined;
+  const show = () => { if (done) return; done = true; sub?.dispose(); clearTimeout(timer); s.holder.style.opacity = ""; };
+  sub = s.term.onRender(() => requestAnimationFrame(show));
+  const timer = setTimeout(show, 400);
+}
+
 export function attachRenderer(s: Sess): void {
   if (s.parkTimer) { clearTimeout(s.parkTimer); s.parkTimer = null; }
-  if (s.canvasAddon || wantsWebgl() || !wantsCanvas()) return;
-  try {
-    const addon = new CanvasAddon();
-    s.term.loadAddon(addon);
-    s.canvasAddon = addon;
-  } catch {
-    // The DOM renderer takes over and the shell never noticed — the same
-    // fallback this had when the addon was loaded at creation time.
-    s.canvasAddon = null;
+  recentlyParked = recentlyParked.filter((x) => x !== s); // on screen again: it keeps its renderer, no re-creation
+  const want = rendererToHold(wantsWebgl(), wantsCanvas(), true);
+  if (want === "webgl" && !s.webglAddon) {
+    try {
+      const gl = new WebglAddon();
+      // Rebuilt renderer: xterm paints the DOM renderer first. Keep the shell
+      // invisible (opacity, not display:none, so fit still measures) until the
+      // GL addon has drawn its first frame, then show it in one step.
+      hideUntilFirstFrame(s);
+      // A lost context can leave the terminal blank-white with no repaint. Drop
+      // off the GPU app-wide and remember it, to canvas rather than slow DOM.
+      gl.onContextLoss(() => {
+        fallBackToCanvas();
+        try { gl.dispose(); } catch { /* already gone */ }
+        if (s.webglAddon === gl) s.webglAddon = null;
+        // attachRenderer cancels a pending park; a shell lost during the park grace
+        // window is off screen (disposeRenderer's own test) and must stay parked.
+        if (s.holder.parentElement) attachRenderer(s);
+      });
+      s.term.loadAddon(gl);
+      s.webglAddon = gl;
+    } catch {
+      s.holder.style.opacity = ""; /* no WebGL2 here: the DOM renderer, or canvas on the next attach */ }
+  }
+  if (want === "canvas" && !s.canvasAddon) {
+    try {
+      const addon = new CanvasAddon();
+      s.term.loadAddon(addon);
+      s.canvasAddon = addon;
+    } catch {
+      // The DOM renderer takes over and the shell never noticed.
+      s.canvasAddon = null;
+    }
   }
 }
 
@@ -1048,12 +1205,39 @@ export function attachRenderer(s: Sess): void {
  */
 export function parkRenderer(s: Sess): void {
   if (s.parkTimer) clearTimeout(s.parkTimer);
+  // A tab switch parks one shell and attaches another. Disposing the parked
+  // one's renderer meant the next switch back built a new GL context and
+  // atlas: DOM paint, then GL paint, then a refit — the flicker. The last few
+  // shells you left keep their renderer (bounded, well under the context cap).
+  const { keep, release } = renderersToPark(recentlyParked, s, RECENT_RENDERERS_KEPT);
+  recentlyParked = keep;
+  for (const old of release) disposeRenderer(old);
   s.parkTimer = setTimeout(() => {
     s.parkTimer = null;
-    const addon = s.canvasAddon;
-    s.canvasAddon = null;
-    try { addon?.dispose(); } catch { /* already gone with the terminal */ }
+    if (recentlyParked.includes(s)) return;
+    disposeRenderer(s);
   }, PARK_RENDERER_MS);
+}
+
+/** The shells left most recently, newest last; they keep their renderer. */
+let recentlyParked: Sess[] = [];
+/**
+ * Chromium caps live ~16 WebGL contexts per page and silently kills the
+ * oldest past that (a blank terminal). 12 recent shells keep theirs, leaving
+ * headroom for the console strip, the side pane and the browser's own use.
+ */
+export const RECENT_RENDERERS_KEPT = 12;
+
+function disposeRenderer(s: Sess): void {
+  if (s.holder.parentElement) return; // on screen again: never strip a visible shell
+  const addon = s.canvasAddon;
+  const gl = s.webglAddon;
+  s.canvasAddon = null;
+  s.webglAddon = null;
+  try { addon?.dispose(); } catch { /* already gone with the terminal */ }
+  // Frees the GL context. Parks the RENDERER only: the socket stays open and
+  // bytes still parse into the xterm buffer, so nothing is redrawn from tmux.
+  try { gl?.dispose(); } catch { /* already gone with the terminal */ }
 }
 
 /** Long enough that switching views and coming straight back keeps the
@@ -1080,8 +1264,7 @@ function fitTerm(s: Sess) {
   if (fitHold.hold(s)) return;
   const el = s.term.element;
   const parent = el?.parentElement;
-  const core = (s.term as unknown as TermCore)._core;
-  const cell = core?._renderService?.dimensions?.css?.cell;
+  const cell = cellSizeOf(s.term);
   // Before the first render there is no cell size to divide by; the addon has
   // its own guards for that, so let it decide there's nothing to do yet.
   if (!el || !parent || !cell?.width || !cell?.height) { s.fit.fit(); return; }
@@ -1093,7 +1276,7 @@ function fitTerm(s: Sess) {
   const cols = Math.max(2, Math.floor(w / cell.width));
   const rows = Math.max(1, Math.floor(h / cell.height));
   if (cols === s.term.cols && rows === s.term.rows) return;
-  core?._renderService?.clear?.(); // as the addon does — drop the old grid before reflowing
+  (s.term as unknown as TermCore)._core?._renderService?.clear?.(); // as the addon does — drop the old grid before reflowing
   s.term.resize(cols, rows);
   /*
    * And back to the bottom, every time.
@@ -1264,7 +1447,7 @@ function BlockedNotice({ cmd, onSend, onDismiss }: { cmd: string; onSend: () => 
   return (
     <div className="flex items-center gap-2 text-[10.5px] px-2 py-1 rounded-lg min-w-0"
       style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--warning) 12%, var(--surface-card))", border: tintEdge("var(--warning)", 35), boxShadow: "0 8px 22px -10px var(--shadow)" }}>
-      <span className="truncate" title={`Not sent: ${cmd}`}>
+      <span className="truncate" data-tip={`Not sent: ${cmd}`}>
         A full-screen program is running — <b className="font-mono">{cmd}</b> was not typed
       </span>
       <Button size="compact" onClick={onSend} className="shrink-0">Send anyway</Button>
@@ -1469,6 +1652,7 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
     const el = slot.current;
     if (!s || !el) return;
     el.appendChild(s.holder);
+    releaseHeld(s); // on screen here, whatever the terminal view is doing
     if (!s.opened) { s.term.open(s.holder); s.opened = true; }
     // On screen: it gets its canvases. Before the fit below, so the first
     // measurement is the one the renderer that will draw it makes.
@@ -1659,89 +1843,24 @@ function detectPaneWorktree(term: Terminal | undefined, worktrees: GitRepoRef[])
 
 
 /**
- * The pull request of one pane's live branch, or nothing.
+ * Resolves one tab's card, pull request and checks, and writes them into
+ * that tab's own record (lib/tabFacts.ts) — nothing here is returned for a
+ * caller to build props from on every render. `root`/`branch` are this tab's
+ * own, already resolved (see the detection effect below, and `SlotBar`); this
+ * hook is what used to be `usePaneFacts`, changed only in where the answer
+ * goes.
  *
- * Used by the focused pane and by every other pane under Always open, each with
- * its own root and branch. A reading carries the root and branch it was asked
- * for, and one that is not this pane's is nothing (prForPane), so a branch
- * switch drops the old one at once and two panes never share an answer.
+ * `active` gates the one real fetch (the pull request itself, and its
+ * checks) — see `refreshTargets` in lib/tabFacts.ts: only the active tab
+ * pays for either, and an inactive tab simply keeps whatever this hook wrote
+ * the last time it WAS active.
  */
-function useBranchPr(open: boolean, prRoot: string, prBranch: string, worktree: boolean) {
-  const [raw, setChipPr] = useState<{ repo: string; pr: PrBranchSummary; root: string; branch: string } | null>(null);
-  useEffect(() => {
-    if (!open || IS_DEMO || !prRoot || !prBranch) { setChipPr(null); return; }
-    const key = `${prRoot}\u0000${prBranch}`;
-    const mine = (repo: string, pr: PrBranchSummary) => ({ repo, pr, root: prRoot, branch: prBranch });
-    const seen = branchPrCache.get(key);
-    if (seen && Date.now() - seen.at < BRANCH_PR_TTL) {
-      const t = chipTarget(seen.repo, seen.pr);
-      setChipPr(t.kind === "open" ? mine(t.repo, t.pr) : null);
-      return;
-    }
-    // Not "keep the last one until the new answer lands": that is the same
-    // stale-under-a-new-tab bug the worktree read just stopped having.
-    setChipPr(null);
-    let live = true;
-    void (async () => {
-      const r = await api.prsForBranch(prRoot, prBranch);
-      let from = r.from ?? null;
-      /* `for-branch` answers OPEN pull requests only. A branch whose pull
-         request has landed would draw nothing, so when there is no open one the
-         branch is asked once more in any state (a cached call on the server).
-         A main checkout has no branch of its own to ask about. */
-      if (!from && worktree && r.repo) {
-        const h = await api.prForHead(prRoot, prBranch).catch(() => null);
-        const found = h?.ok ? h.pr : null;
-        if (found && found.state !== "OPEN") from = { number: found.number, title: "", author: "", state: found.state, isDraft: found.isDraft, headRefName: found.headRefName, baseRefName: found.baseRefName, url: found.url, updatedAt: "", reviewDecision: null };
-      }
-      branchPrCache.set(key, { at: Date.now(), repo: r.repo ?? null, pr: from });
-      if (r.repo && from) notePrs(r.repo, [from]);
-      if (!live) return;
-      const t = chipTarget(r.repo, from);
-      setChipPr(t.kind === "open" ? mine(t.repo, t.pr) : null);
-    })()
-      /* No GitHub, no auth, no network: the chip simply has no pull request to
-         offer. The Source control header is where that distinction is drawn and
-         explained; repeating it in the terminal's chrome would be noise. */
-      .catch(() => { if (live) setChipPr(null); });
-    return () => { live = false; };
-  }, [open, prRoot, prBranch, worktree]);
-  return prForPane(raw, prRoot, prBranch);
-}
-
-/**
- * The bar for one pane: the facts it needs, and where they come from.
- *
- * Split out of the panel for the same reason the card chip was: the ClickUp
- * lookup is a HOOK, and a hook called inside the panel's own JSX is a hook that
- * stops running the day that branch takes an early return.
- */
-function PaneBarFor({ foot, near, blocked, flash, mode, marker, pill, at, more, pr, prRoot, onDown, onGit, onDiff, onPr, onCopy, onEscape, selection, onAsk }: {
-  foot: { left: number; top: number; width: number };
-  near: boolean;
-  blocked: boolean;
-  flash: number;
-  mode: "edge" | "summary" | "always";
-  marker: "line" | "arrow";
-  pill: { lift: boolean; translucent: boolean };
-  at: GitRepoRef;
-  /** Other checkouts the session worked in lately: drawn as "+n" after the branch. */
-  more?: number;
-  pr: { repo: string; pr: PrBranchSummary } | null;
-  prRoot: string;
-  onDown: (e: React.MouseEvent) => void;
-  onGit: () => void;
-  onDiff: () => void;
-  onPr: () => void;
-  onCopy: () => void;
-  onEscape: () => void;
-  /** The focused pane's selection, when there is one — the bar offers to ask about it. */
-  selection?: string;
-  onAsk?: () => void;
-}) {
+function useTabFactsWriter(tabId: string, root: string | null, branch: string, worktreeOf: string | null | undefined, active: boolean, named?: string | null) {
   const setup = useOwnerSetup(useClickupSetup());
-  const main = !at.worktreeOf;
-  const ref = useMemo(() => cardRef({ headRefName: at.branch }), [at.branch]);
+  /* The card the start named wins over the branch guess; an old key from the
+     branch shows its Jira twin (lib/tabCard.ts, looked up once per key). */
+  const twinV = useSyncExternalStore(twins.subscribe, twins.version, () => 0);
+  const ref = useMemo(() => tabCardRef(named, branch, setup?.jira ? twins.twinOf : () => null, setup?.jira), [named, branch, twinV, setup?.jira]);
   const go = chipAction(ref, setup);
   /* The card comes from the SAME store the card view reads (prCardStore), so a
      status changed there is the status drawn here and nothing in this file keeps
@@ -1757,28 +1876,108 @@ function PaneBarFor({ foot, near, blocked, flash, mode, marker, pill, at, more, 
   const task = gated && ref ? cardOf(ref.query)?.task ?? null : null;
   useEffect(() => { if (gated && ref && task) rememberPrio(ref.query, task.priority ?? null); }, [gated, ref?.query, task?.priority]);
   const prio = (task?.priority ?? (gated && ref ? cardPrioCache.get(ref.query)?.priority : null) ?? null);
+  const square = cardSquare(task?.status, task?.statusColor);
 
-  /* The pull request: this pane's own read, and the newest of it and whatever
-     the Pull requests view has heard since. Keyed by the pane's live branch, so
-     a branch switch drops the old one at once. */
+  /* The pull request itself: this tab's own fetch, kept warm for a minute
+     (BRANCH_PR_TTL) so switching tabs several times a minute costs nothing.
+     Only while `active` — an inactive tab's record is left exactly as this
+     ran it last. */
+  const [raw, setRawPr] = useState<{ repo: string; pr: PrBranchSummary; root: string; branch: string } | null>(null);
+  useEffect(() => {
+    if (!active || IS_DEMO || !root || !branch) { setRawPr(null); return; }
+    const key = `${root}\u0000${branch}`;
+    const mine = (repo: string, pr: PrBranchSummary) => ({ repo, pr, root, branch });
+    const seen = branchPrCache.get(key);
+    if (seen && Date.now() - seen.at < BRANCH_PR_TTL) {
+      const t = chipTarget(seen.repo, seen.pr);
+      setRawPr(t.kind === "open" ? mine(t.repo, t.pr) : null);
+      return;
+    }
+    setRawPr(null);
+    let live = true;
+    void (async () => {
+      const r = await api.prsForBranch(root, branch);
+      let from = r.from ?? null;
+      /* `for-branch` answers OPEN pull requests only. A branch whose pull
+         request has landed would draw nothing, so when there is no open one the
+         branch is asked once more in any state. A main checkout has no branch of
+         its own to ask about. */
+      if (!from && worktreeOf !== undefined && r.repo) {
+        const h = await api.prForHead(root, branch).catch(() => null);
+        const found = h?.ok ? h.pr : null;
+        if (found && found.state !== "OPEN") from = { number: found.number, title: "", author: "", state: found.state, isDraft: found.isDraft, headRefName: found.headRefName, baseRefName: found.baseRefName, url: found.url, updatedAt: "", reviewDecision: null };
+      }
+      rememberBranchPr(key, { at: Date.now(), repo: r.repo ?? null, pr: from });
+      if (r.repo && from) notePrs(r.repo, [from]);
+      if (!live) return;
+      const t = chipTarget(r.repo, from);
+      setRawPr(t.kind === "open" ? mine(t.repo, t.pr) : null);
+    })().catch(() => { if (live) setRawPr(null); });
+    return () => { live = false; };
+  }, [active, root, branch, worktreeOf]);
+  const pr = prForPane(raw, root ?? "", branch);
+
   useSyncExternalStore(onPrFacts, prFactsVersion, () => 0);
-  useSyncExternalStore(onRollup, () => peekRollup(prRoot, pr?.pr.number ?? 0)?.at ?? 0, () => 0);
+  useSyncExternalStore(onRollup, () => peekRollup(root ?? "", pr?.pr.number ?? 0)?.at ?? 0, () => 0);
   const prNumber = pr?.pr.number ?? 0;
   const read = pr ? freshestPr(pr.pr, 0, prFactOf(pr.repo, pr.pr.number)) : null;
-  const rollup = prNumber ? peekRollup(prRoot, prNumber) : null;
+  const rollup = prNumber ? peekRollup(root ?? "", prNumber) : null;
   const checks = checksOf(rollup);
   /* The server's watch reads checks for pull requests somebody follows; when it
      says so, the store takes it with no request. */
   useEffect(() => {
     if (!pr) return;
-    return onChecksRead((r) => { if (r.repo === pr.repo && r.number === pr.pr.number) putRollup(prRoot, r.number, r.checks); });
-  }, [pr?.repo, prNumber, prRoot]);
-  /* Always open shows the disc without a hover, so it reads the checks once per
-     pull request (the store dedups and holds them a minute). */
-  useEffect(() => { if (mode === "always" && prNumber && !blocked) rollupOf(prRoot, prNumber); }, [mode, prNumber, prRoot, blocked]);
+    return onChecksRead((r) => { if (r.repo === pr.repo && r.number === pr.pr.number) putRollup(root ?? "", r.number, r.checks); });
+  }, [pr?.repo, prNumber, root]);
+  /* Reads the checks once per pull request while active (the store dedups and
+     holds them a minute); an inactive tab is left with its last answer. */
+  useEffect(() => { if (active && prNumber) rollupOf(root ?? "", prNumber); }, [active, prNumber, root]);
   const reviewWord = read?.reviewDecision === "APPROVED" ? "Approved" : read?.reviewDecision === "CHANGES_REQUESTED" ? "Changes requested" : read?.reviewDecision === "REVIEW_REQUIRED" ? "Review required" : undefined;
   const status = pr && read ? { number: pr.pr.number, title: pr.pr.title, state: prState(read), author: pr.pr.author, base: pr.pr.baseRefName } : null;
-  const square = cardSquare(task?.status, task?.statusColor);
+
+  useEffect(() => {
+    liveTabFacts.write(tabId, {
+      card: ref ? {
+        label: ref.label, query: ref.query, ...(go?.in === "tasks" && go.tracker ? { tracker: go.tracker } : {}),
+        status: square?.title ?? null, color: square?.color ?? null, priority: prio, action: go,
+      } : null,
+      pr: status ? { repo: pr!.repo, number: status.number, title: status.title, state: status.state, author: status.author, base: status.base, checks, review: read ? reviewOf(read.reviewDecision, status.state) : "none", ...(reviewWord ? { reviewWord } : {}) } : null,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabId, ref?.label, ref?.query, go, square?.title, square?.color, prio, status?.number, status?.title, status?.state, status?.author, status?.base, checks.state, checks.passed, checks.total, reviewWord]);
+}
+
+/**
+ * The bar for one pane: a pure reader of its own tab's record
+ * (lib/tabFacts.ts) — card, pull request and checks are drawn exactly as
+ * `useTabFactsWriter` last resolved them for `tabId`, never re-derived here.
+ */
+function PaneBarFor({ foot, near, blocked, flash, mode, marker, pill, at, tabId, onDown, onGit, onDiff, onPr, onCopy, onEscape, selection, onAsk, onSide }: {
+  foot: { left: number; top: number; width: number; atRight?: boolean };
+  near: boolean;
+  blocked: boolean;
+  flash: number;
+  mode: "edge" | "summary" | "always";
+  marker: "line" | "arrow";
+  pill: { lift: boolean; translucent: boolean };
+  at: GitRepoRef;
+  /** Which tab's own record to read. */
+  tabId: string;
+  onDown: (e: React.MouseEvent) => void;
+  onGit: () => void;
+  onDiff: () => void;
+  onPr: () => void;
+  onCopy: () => void;
+  onEscape: () => void;
+  /** The focused pane's selection, when there is one — the bar offers to ask about it. */
+  selection?: string;
+  onAsk?: () => void;
+  /** Card, pull request and Diff open the pane beside the terminal on that section; the full views are its pop out. */
+  onSide?: (section: SideSection) => void;
+}) {
+  useSyncExternalStore(liveTabFacts.subscribe, liveTabFacts.version, () => 0);
+  const card = liveTabFacts.get(tabId)?.card ?? null;
+  const pr = liveTabFacts.get(tabId)?.pr ?? null;
   return (
     <PaneBar
       foot={foot}
@@ -1788,103 +1987,134 @@ function PaneBarFor({ foot, near, blocked, flash, mode, marker, pill, at, more, 
       near={near}
       blocked={blocked}
       flash={flash}
-      kind={main ? "main" : "worktree"}
+      kind={at.worktreeOf ? "worktree" : "main"}
       repo={at.name}
-      branch={(at.branch || at.name) + (more ? ` +${more}` : "")}
+      branch={at.branch || at.name}
       dirty={at.dirty}
       ahead={at.ahead}
       behind={at.behind}
       onDown={onDown}
       onGit={onGit}
-      onDiff={onDiff}
+      onDiff={onSide ? () => onSide("diff") : onDiff}
       onCopy={onCopy}
       onEscape={onEscape}
       ask={selection && onAsk ? { lines: selection.split("\n").length, onAsk } : null}
-      pr={status}
-      checks={checks}
-      review={read && status ? reviewOf(read.reviewDecision, status.state) : "none"}
-      reviewWord={reviewWord}
-      onPr={pr ? onPr : undefined}
-      onPrReach={pr ? () => { rollupOf(prRoot, pr.pr.number); } : undefined}
-      card={ref && go ? { id: ref.label, priority: prio ? prio.toLowerCase() : null, status: square?.title ?? null, statusColor: square?.color ?? null, inApp: go.in === "tasks" } : null}
-      onCard={ref && go ? () => { if (go.in === "tasks") openCard(ref.query, ref.label, go.tracker); else openExternal(go.url); } : undefined}
+      pr={pr ? { number: pr.number, title: pr.title, state: pr.state, author: pr.author, base: pr.base } : null}
+      checks={pr?.checks}
+      review={pr?.review ?? "none"}
+      reviewWord={pr?.reviewWord}
+      onPr={pr ? (onSide ? () => onSide("pr") : onPr) : undefined}
+      onPrReach={pr ? () => { rollupOf(at.root, pr.number); } : undefined}
+      card={card ? { id: card.label, priority: card.priority ? card.priority.toLowerCase() : null, status: card.status, statusColor: card.color, inApp: card.action?.in === "tasks" } : null}
+      onCard={card?.action ? () => {
+        if (card.action!.in === "tasks") { if (onSide) onSide("card"); else openCard(card.query, card.label, card.tracker); } else openExternal(card.action!.url);
+      } : undefined}
     />
   );
+}
+
+interface SidePaneFactsProps {
+  tab: string;
+  view: ReturnType<typeof viewOf>;
+  width: number;
+  active: boolean;
+  at: GitRepoRef | null;
+  overlay: boolean;
+  hidden?: boolean;
+  onPopOut: (section: SideSection) => void;
+  focusTerm: () => void;
+  onType: (text: string) => void;
+}
+
+/**
+ * The side pane for the focused pane's checkout — a pure reader of the SAME
+ * tab record the bar reads, keyed by `tab`, so the two never disagree and a
+ * switch never fetches, spins or shows an empty frame: the record is read as
+ * it stands, and a background refresh (`useTabFactsWriter`, above) can only
+ * update the ACTIVE tab's own row.
+ */
+function SidePaneFor(p: SidePaneFactsProps) {
+  return <SidePaneWithFacts {...p} />;
+}
+
+function SidePaneWithFacts({ tab, view, width, active, at, overlay, hidden, onPopOut, focusTerm, onType }: SidePaneFactsProps) {
+  useSyncExternalStore(liveTabFacts.subscribe, liveTabFacts.version, () => 0);
+  const facts = liveTabFacts.get(tab);
+  const pr = facts?.pr ?? null;
+  const card = facts?.card ?? null;
+  const tone: BadgeTone = !pr ? "accent"
+    : pr.checks.state === "failing" ? "bad" : pr.checks.state === "passing" ? "good" : pr.checks.state === "running" ? "warn" : "none";
+  const prText = !pr ? "new"
+    : pr.checks.state === "failing" ? `${pr.checks.failing.length} failing`
+    : pr.checks.state === "passing" ? "passing" : pr.checks.state === "running" ? "running" : `#${pr.number}`;
+  const subject: SideSubject | null = !at ? null : {
+    key: `${at.root}:${at.branch}`,
+    root: at.root,
+    branch: at.branch || at.name,
+    card: card ? { query: card.query, label: card.label, ...(card.tracker ? { tracker: card.tracker } : null) } : null,
+    cardStatus: card?.status ?? null,
+    cardColor: card?.color ?? null,
+    pr: pr ? { repo: pr.repo, number: pr.number, title: pr.title } : null,
+    prText,
+    prTone: tone,
+    reviewText: pr ? [pr.reviewWord, pr.checks.state === "none-read-yet" ? "" : checksWords(pr.checks)].filter(Boolean).join(" · ") : "",
+    diffText: at.dirty ? `${at.dirty} changed` : "clean",
+    filter: dirName(at.root),
+  };
+  return <SidePane tab={tab} view={view} width={width} active={active} subject={subject} overlay={overlay} hidden={hidden} onPopOut={onPopOut} focusTerm={focusTerm} onType={onType} />;
 }
 
 /**
  * The chip under a pane that is NOT the focused one, in Always open.
  *
- * Every pane reads for itself — which checkout it is in, its pull request, its
- * card — keyed by its own session and live branch, so two panes never share an
- * answer. The focused pane keeps the richer read in TermView (it remembers an
- * agent's worktree between turns); this one asks the server where the pane is
- * standing and takes the candidate checkout that contains it. Ceiling: no
- * stickiness between agent turns, and a plain shell with no tmux is read from
- * its own scrollback only when the server cannot say.
+ * A pure reader, like the bar and the pane above: it draws `liveTabFacts`'s
+ * record for this slot's own tmux window, and fetches nothing — only the
+ * ACTIVE tab refreshes (`useTabFactsWriter`, bound to the focused pane
+ * below), so an inactive slot shows exactly what was last resolved for it,
+ * which in practice is "whatever it answered the last time it WAS the
+ * focused tab" (every window is focused once, the moment it is made). A
+ * window nothing has ever focused shows nothing, honestly, rather than a
+ * guess — see `TabFactsStore.get` in lib/tabFacts.ts. A plain shell with no
+ * tmux window at all still falls back to its own scrollback scan, as before.
  */
-function SlotBar({ sessId, foot, repos, project, open, flash, onOpenProject, onFocusMe }: {
+function SlotBar({ sessId, foot, repos, project, open, canSide, flash, onOpenProject, onFocusMe, onSide }: {
   sessId: string;
-  foot: { left: number; top: number; width: number };
+  foot: { left: number; top: number; width: number; atRight?: boolean };
   repos: GitRepoRef[];
   project: string;
   open: boolean;
+  /** False when the pane cannot draw (commands off, no root): the chips keep their full-view jumps. */
+  canSide: boolean;
   flash: number;
   onOpenProject: (name: string) => void;
   onFocusMe: () => void;
+  /** `tab` is the clicked slot's own window: the focus has not moved yet when this runs. */
+  onSide: (section: SideSection, tab: string) => void;
 }) {
   const sess = sessions.get(sessId);
   const win = sess?.tmuxWindows?.find((w) => w.active)?.id ?? "";
-  const pane = sess?.tmuxPanes?.find((p) => p.active)?.id ?? "";
-  const [seen, setSeen] = useState<{ key: string; wt: GitRepoRef | null; dir: string | null; outside: string } | null>(null);
-  const key = `${sessId}:${win}:${pane}`;
-  /* The focused pane's rule, here too: the worktree is kept while the SAME
-     agent is in the pane, so a quiet turn does not drop the chip to the
-     checkout. Keyed by the slot's pane so another pane never reads it. */
-  const kept = useRef<{ key: string; seen: PaneSeen } | null>(null);
-  const read = useCallback(async () => {
-    const cands = paneCandidates(repos, project);
-    let wt: GitRepoRef | null = null, dir: string | null = null, outside = "", agent = "", answered = true;
-    if (win) {
-      try {
-        const r = await api.paneDirs(win);
-        dir = r.dirs[0] ?? null; outside = r.outside ?? ""; agent = r.agent ?? "";
-        wt = pickWorktree(r.work ?? [], r.dirs, cands).hit;
-      } catch { answered = false; /* server busy: the scan below still answers for a plain shell */ }
-    } else if (sess) {
-      wt = detectPaneWorktree(sess.term, cands);
-    }
-    const prev = kept.current?.key === key ? kept.current.seen : undefined;
-    const keep = win ? nextSeen(prev, wt?.root ?? null, agent, answered) : null;
-    kept.current = keep ? { key, seen: keep } : null;
-    if (keep && !wt) wt = cands.find((c) => c.root === keep.root) ?? null;
-    setSeen({ key, wt, dir: wt ? null : dir, outside });
-  }, [repos, project, win, key, sess]);
-  useEffect(() => { if (open) void read(); }, [open, read]);
-  // Slower than the focused pane's 4 s: nobody is typing here.
-  usePoll(open, () => { void read(); }, 8000);
-  const mine = seen && seen.key === key ? seen : null;
-  const wt = mine?.wt ?? null;
-  const pr = useBranchPr(open, wt?.root ?? "", wt?.branch ?? "", !!wt?.worktreeOf);
-  const outsideRepo = mine?.outside ? repos.find((r) => r.name === mine.outside || dirName(r.root) === mine.outside) ?? null : null;
+  useSyncExternalStore(liveTabFacts.subscribe, liveTabFacts.version, () => 0);
+  const facts = win ? liveTabFacts.get(win) : undefined;
+  const cands = useMemo(() => paneCandidates(repos, project), [repos, project]);
+  const scanned = !win && sess ? detectPaneWorktree(sess.term, cands) : null;
+  const wt = facts?.root ? cands.find((r) => r.root === facts.root) ?? null : scanned;
   const focusMine = (e: React.MouseEvent) => { onFocusMe(); keepTermFocus(e); };
   if (!wt) {
     return (
       <PaneBar foot={foot} mode="always" marker="line" pill={{ lift: false, translucent: false }} near={false} blocked={!!sess?.tmuxPopup} branch="" dirty={0}
-        kind={!mine ? "loading" : mine.dir ? "none" : mine.outside ? "outside" : "none"} loading={!mine}
-        note={paneNote(!mine, mine?.dir ?? null, mine?.outside ?? "", dirName(project))}
-        noteAction={mine && !mine.dir && mine.outside && outsideRepo ? { label: "Open its project", onClick: () => onOpenProject(outsideRepo.name) } : undefined}
+        kind="none" loading={false}
+        note={win ? "Not opened yet — select this tab once" : paneNote(false, null, "", dirName(project))}
         onDown={focusMine} onGit={() => {}} onDiff={() => {}} onCopy={() => {}} onEscape={() => { try { sess?.term.focus(); } catch { /* disposed */ } }} />
     );
   }
   return (
     <PaneBarFor
       foot={foot} mode="always" marker="line" pill={{ lift: false, translucent: false }} near={false} blocked={!!sess?.tmuxPopup} flash={flash}
-      at={wt} pr={pr} prRoot={wt.root}
+      at={wt} tabId={win} onSide={canSide ? (sec) => { onFocusMe(); onSide(sec, win || sessId); } : undefined}
       onDown={focusMine}
       onGit={() => requestWorktreeJump({ view: "git", root: wt.root })}
       onDiff={() => requestWorktreeJump({ view: "diff", filter: dirName(wt.root) })}
-      onPr={() => { if (pr) openPr(pr.repo, pr.pr.number); }}
+      onPr={() => { if (facts?.pr) openPr(facts.pr.repo, facts.pr.number); }}
       onCopy={() => { void navigator.clipboard?.writeText(wt.worktreeOf ? wt.branch : wt.name).catch(() => { /* no permission */ }); }}
       onEscape={() => { try { sess?.term.focus(); } catch { /* disposed */ } }}
     />
@@ -1911,7 +2141,8 @@ const rememberPrio = (key: string, priority: string | null) => {
  * back shows it, and long enough that flipping between tabs costs nothing.
  *
  * Module-level, so it survives the panel being closed and reopened. Keyed by
- * root AND branch: the same branch name in two checkouts is two branches.
+ * root AND branch: the same branch name in two checkouts is two branches. Not
+ * cwd- or focus-keyed, so it was never part of the cross-tab bug and is kept.
  */
 const branchPrCache = new Map<string, { at: number; repo: string | null; pr: PrBranchSummary | null }>(
   readBranchPrs() as [string, { at: number; repo: string | null; pr: PrBranchSummary | null }][]);
@@ -1964,47 +2195,21 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   // top, which is a question the server answers (see panewt.ts) rather than one
   // this end guesses from the pane's own directory: that is the parent repo for
   // every agent in a fleet, which is what made it look unanswerable.
-  /** The worktree the focused pane's agent is working in — shown compact in the
-   *  status bar and pinned atop the picker. */
-  const [detectedWt, setDetectedWt] = useState<GitRepoRef | null>(null);
-  /** Other checkouts the pane's session worked in lately; see pickWorktree. */
-  const [wtMore, setWtMore] = useState(0);
-  /** No answer for the pane in front of you YET. Distinct from "no worktree":
-   *  the first is a read in flight and says so, the second is silence. Without
-   *  it a tab switch either kept the previous tab's worktree on screen or fell
-   *  back to the panel's own checkout, and both are confident wrong answers. */
+  /** No stored record for the focused tab YET. Distinct from "no worktree":
+   *  the first is a read in flight and says so, the second is silence. Shown
+   *  only on a genuine first visit — a tab `liveTabFacts` already has a
+   *  record for (lib/tabFacts.ts) never shows this, whatever the read in
+   *  flight finds. */
   const [wtDetecting, setWtDetecting] = useState(false);
   /** Where the pane says it is, when that is somewhere this app has no repo for.
    *  A pane in a checkout nobody scanned is not "no checkout": it is a place,
    *  and saying the place is both true and useful. */
   const [paneDir, setPaneDir] = useState<string | null>(null);
   const [paneOutside, setPaneOutside] = useState("");
-  /** The tmux window+pane the current detection belongs to, so a read that comes
-   *  up empty keeps the last worktree (an agent between turns names nothing)
-   *  rather than flickering it away — but moving the focus starts fresh. */
-  const detectedWinRef = useRef("");
-  /** Focus key → the worktree last read there, AND the agent that named it.
-   *  Coming back to a tab you have already been in answers from this instantly,
-   *  so the "reading" state is only ever paid once per pane; the agent is what
-   *  says whether that answer is still somebody's — see paneWorktree.ts. */
-  /*
-   * What each pane was last seen working in.
-   *
-   * Kept across RESTARTS now, which is the half that was missing: the memory
-   * lived in this component, so every relaunch started with six unknown panes
-   * and each one had to be discovered again as the pointer reached it —
-   * "it takes ages… especially after a restart… it gets stuck on Reading
-   * this pane". The answer is keyed by pane AND by the agent that gave it, so a
-   * `/clear` or a new session still throws it away (see nextSeen); a stale
-   * entry cannot survive that check, which is what makes writing it to disk
-   * safe.
-   */
   const wtRunRef = useRef<(() => void) | null>(null);
   const fillRef = useRef<(() => void) | null>(null);
-  const wtSeen = useRef(new Map<string, PaneSeen>(readPaneSeen()));
-  const rememberSeen = useCallback(() => { writePaneSeen(wtSeen.current); }, []);
   /*
-   * And the whole window's panes, asked for once instead of one per hover.
+   * The whole window's panes, asked for once instead of one per hover.
    *
    * The detection below needs the dirs of the pane under the pointer, and the
    * route answers about the pane tmux has SELECTED — so it could only be asked
@@ -2013,6 +2218,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    * first hover of every pane is already answered.
    */
   const paneBook = useRef(new Map<string, PaneBookEntry>());
+  const paneBookWin = useRef("");
   /** Directories the repo list has already been asked about — see
    *  `unlistedWorktree`. */
   const askedRepos = useRef(new Map<string, number>());
@@ -2074,12 +2280,16 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   useEffect(() => { setOnScreenSessions(paneIds); }, [paneIds]);
   const [focusIdx, setFocusIdx] = useState(0);
   const paneRefs = useRef<(HTMLDivElement | null)[]>([]);
+  type Mounted = { s: Sess; el: HTMLDivElement; ro: ResizeObserver; unTheme: () => void; stopFit: () => void };
+  const mountedRef = useRef(new Map<string, Mounted>());
+  const mountedIdsRef = useRef<string[]>([]);
+  const unmountAllRef = useRef<() => void>(() => {});
   /*
    * The four buttons drawn ON a pane — see components/terminal/PaneActions.
    *
    * Two pieces of state and no new data: WHICH slot the pointer is in, and
    * where the block goes inside it. Everything the buttons open is already
-   * resolved for the bar at the top (chipWt, chipPr, the card off the branch),
+   * resolved for the bar at the top (chipWt, and the tab's own record for its card and pull request),
    * because the pane under the pointer is the pane tmux has just been told to
    * select — the same one the bar is describing.
    *
@@ -2089,9 +2299,9 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    */
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [actionsIdx, setActionsIdx] = useState<number | null>(null);
-  const [footBox, setFootBox] = useState<{ left: number; top: number; width: number } | null>(null);
+  const [footBox, setFootBox] = useState<{ left: number; top: number; width: number; atRight?: boolean } | null>(null);
   /** Always open draws under EVERY pane: each slot's own foot (null when too narrow). */
-  const [slotFoots, setSlotFoots] = useState<({ left: number; top: number; width: number } | null)[]>([]);
+  const [slotFoots, setSlotFoots] = useState<({ left: number; top: number; width: number; atRight?: boolean } | null)[]>([]);
   /* The pointer is in the seam's zone. Kept here rather than in the bar because
      the seam takes no pointer events at all — the terminal's bottom rows keep
      every click — so the pane slot, which is already watching the pointer for
@@ -2100,7 +2310,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   /* A stamp rather than a boolean: two copies in a row are two answers, and a
      boolean that is already true has nothing to say the second time. */
   const [copyFlash, setCopyFlash] = useState(0);
-  const footRef = useRef<{ left: number; top: number; width: number } | null>(null);
+  const footRef = useRef<{ left: number; top: number; width: number; atRight?: boolean } | null>(null);
   const wrapRect = useRef<{ left: number; top: number } | null>(null);
   const [actionsMode, setActionsMode] = useState(paneActionsMode);
   const [marker, setMarker] = useState(paneMarker);
@@ -2151,6 +2361,8 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     try { s.term.clearSelection(); } catch { /* fine */ }
     if (!agentHere) { void askOnBench(s.root, text, "ask", undefined, JOB.askAboutSelection(text)); return; }
     if (s.status !== "live" || s.ws?.readyState !== WebSocket.OPEN) return;
+    /* A shell that never asked for bracketed paste would print the markers as text. */
+    if (!s.term.modes?.bracketedPasteMode) { s.ws.send(ptyFrame({ t: "in", d: text })); return; }
     s.ws.send(ptyFrame({ t: "in", d: `\x1b[200~${text}\x1b[201~` }));
     setTimeout(() => { if (s.ws?.readyState === WebSocket.OPEN) s.ws.send(ptyFrame({ t: "in", d: "\r" })); }, 120);
   }, [paneIds, focusIdx, askText]);
@@ -2175,118 +2387,88 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   // pane, see terminal.ts), so the focus is a value this render already holds:
   // read it here, key the effect on it, and the re-ask happens on the switch.
   const focusSess = sessions.get(paneIds[focusIdx] ?? "");
-  const focusWin = focusSess?.tmuxWindows?.find((w) => w.active)?.id ?? "";
+  /*
+   * The window a click already jumped to, ahead of tmux's own confirmation —
+   * see `resolveActiveWindow` in lib/sidePane.ts. Declared here, not only
+   * where the strip reads it (`activeWindow` below): `focusWin` used to read
+   * tmux's own (not yet updated) active window on its own, so the chip bar
+   * and the side pane kept the window the click just left on screen for as
+   * long as the select-and-push round trip to the server took, under the tab
+   * the strip had already flipped to. One state, one function, read by both.
+   */
+  const [pendingWindow, setPendingWindow] = useState<string | null>(null);
+  const focusWin = resolveActiveWindow(pendingWindow, focusSess?.tmuxWindows ?? []) ?? "";
   // Panes are only reported while the window is split, so this is "" for an
   // unsplit window — which is right: there is nothing to move between. When
   // there is, `^f o` changes the answer without changing the window, and the
   // server reads the ACTIVE pane of the window it is given.
   const focusPane = focusSess?.tmuxPanes?.find((p) => p.active)?.id ?? "";
   const focusKey = focusWin ? `${focusWin}:${focusPane}` : "";
+  // What the hang watchdog reports as "the pane": the tmux window:pane when the
+  // window is split, otherwise the shell's own id, which is the pane a person
+  // points at either way.
+  useEffect(() => { noteFocusedPane(focusKey || paneIds[focusIdx] || ""); }, [focusKey, paneIds, focusIdx]);
+  /** The tab this record is written and read under: the tmux window when
+   *  there is one, the session's own id for a plain shell (never a cwd,
+   *  never a pane id, never a "currently focused" slot — see tabFacts.ts). */
+  const identTabId = focusWin || paneIds[focusIdx] || "";
   useEffect(() => {
     if (!open || IS_DEMO) return;
     const project = here?.worktreeOf || here?.root || root;
     const cands = paneCandidates(repos, project);
-    /*
-     * The focus moved. Answer from what this pane read last time if we have it,
-     * and otherwise say we are reading.
-     *
-     * Done here, in the effect's body, rather than when the read comes back:
-     * leaving the previous pane's worktree up while the new one is being read
-     * is the wrong answer with a click target on it, and "Reading…" for the
-     * ~100ms a first visit costs is the honest one.
-     */
-    if (focusKey !== detectedWinRef.current) {
-      detectedWinRef.current = focusKey;
-      const vouched = vouchedSeen(focusKey ? wtSeen.current.get(focusKey) : undefined, paneBook.current.get(focusPane)?.agent);
-      const known = vouched ? cands.find((r) => r.root === vouched.root) ?? null : null;
-      setDetectedWt(known);
-      setWtDetecting(!known);
+    /* A plain shell has no tmux window to bind a card to and no pane to ask
+       the server about: its own checkout is the only answer there is, known
+       synchronously already — nothing to detect. */
+    if (!focusWin) {
+      if (identTabId) liveTabFacts.write(identTabId, { root: here?.root ?? null, branch: here?.branch ?? "" });
+      setWtDetecting(false);
+      return;
     }
+    /* A revisit shows this tab's own stored record at once — see
+       lib/tabFacts.ts. The skeleton below is for a genuine first visit only:
+       a fresh read neither blanks what is already correct nor waits for one
+       before showing it. */
+    setWtDetecting(!liveTabFacts.get(focusWin));
+    /* The tab's own bound card, pinned at launch and never touched by pane
+       content — see `namedWorktree`. Decides ahead of the pane's own cwd
+       whenever it names one of `cands`' own branches; this is what still
+       tells two tabs apart once their cwd stops discriminating (several
+       workers started in the SAME parent checkout, each reaching into its
+       own worktree by absolute path rather than `cd`). */
+    const win = focusSess?.tmuxWindows?.find((w) => w.id === focusWin);
+    const { cardId } = resolveCardId(win?.name, win?.card, (s) => cardRef({ headRefName: s })?.label ?? null);
     let stopped = false;
-    /* Whatever happens in here, the spinner comes down.
-       It is a read with two halves — the server's answer and a scan of the
-       pane's own buffer — and only the first was inside a try. A throw in the
-       second (a terminal disposed mid-scan is the one that has happened) left
-       `wtDetecting` true, and nothing else ever sets it false: the bar said
-       "Reading this pane…" for twenty minutes, on a pane that had been read
-       long before. */
     const run = async () => {
-      try { await readOnce(); } finally { if (!stopped) setWtDetecting(false); }
-    };
-    const readOnce = async () => {
-      const s = sessions.get(paneIds[focusIdx] ?? "");
-      let d: GitRepoRef | null = null;
-      /** Which agent answered. "" is a pane with nobody working in it, and it
-       *  is what ends the memory below rather than a gap in it. */
-      let agent = "";
-      /** Whether the server answered at all. A read that did not happen is not
-       *  news — see `nextSeen`. */
-      let read = true;
-      let more = 0;
-      if (focusWin) {
+      try {
+        /* The book first: it holds every pane of this window and is filled
+           while nobody is waiting. A hover that finds its pane there costs
+           nothing at all; one that does not falls back to the single-pane
+           call, which is the case for a pane that appeared since. */
+        /* Only an answer that was read for THIS window: on a tab switch this effect runs before the fill effect clears the book, and the previous tab's active pane (under "") answered for the new one. */
+        const booked = bookedFor(paneBook.current, paneBookWin.current, focusWin, focusPane);
+        let dirs: string[] = [];
+        let outside = "";
         try {
-          /* The book first: it holds every pane of this window and is filled
-             while nobody is waiting. A hover that finds its pane there costs
-             nothing at all; one that does not falls back to the single-pane
-             call, which is the case for a pane that appeared since. */
-          const booked = paneBook.current.get(focusPane);
-          const { dirs, work, outside, agent: who } = booked ?? await api.paneDirs(focusWin);
-          agent = who ?? "";
-          // Newest first, so this is where the pane is working right now.
-          setPaneDir(dirs[0] ?? null);
-          setPaneOutside(outside ?? "");
-          // In the order the server gave them: newest first, so an agent that
-          // has moved between worktrees answers with the one it is in now.
-          const picked = pickWorktree(work ?? [], dirs, cands);
-          d = picked.hit; more = picked.more;
-          /* The agent stands somewhere no candidate names: a worktree cut since
-             the list was read. Read it again, once for that directory. */
-          if (!d && unlistedWorktree(dirs, cands, askedRepos.current)) {
-            api.gitRepos().then(({ repos: rr }) => setRepos(rr)).catch(() => { /* next open re-reads it anyway */ });
-          }
-        } catch { read = false; /* server busy or offline — the buffer scan below still works */ }
-      }
-      if (stopped) return;
-      /* The scrollback only for a shell the server cannot read. In a tmux pane
-         the buffer still holds what an ENDED session printed, and a hit here
-         was stored under the current agent's id — see chipWorktree. */
-      if (!d && !focusWin) d = detectPaneWorktree(s?.term, cands);
-      if (stopped) return;
-      /*
-       * Sticky while the SAME agent is in the pane, and not a moment longer.
-       *
-       * A worktree does not vanish because the agent stopped naming it between
-       * turns — that is what the memory is for. But `/clear` starts a new
-       * session with a new transcript, and the chip went on naming the branch
-       * of a conversation that no longer existed until you switched panes.
-       * Measured: after a clear the pane's transcript had zero tool calls, the
-       * server answered with nothing, and nothing here dropped the old answer.
-       * See paneWorktree.ts. Across a switch it is not sticky at all — that is
-       * the reset above.
-       */
-      const found = d;
-      const keep = nextSeen(focusKey ? wtSeen.current.get(focusKey) : undefined, found?.root ?? null, agent, read);
-      if (focusKey) {
-        if (keep) wtSeen.current.set(focusKey, keep); else wtSeen.current.delete(focusKey);
-        rememberSeen();
-      }
-      const now = keep ? cands.find((r) => r.root === keep.root) ?? found : null;
-      setDetectedWt((prev) => (prev?.root === now?.root ? prev : now ?? null));
-      setWtMore(now ? more : 0);
+          const r = booked ?? await api.paneDirs(focusWin);
+          dirs = r.dirs; outside = r.outside ?? "";
+        } catch { /* server busy or offline: the cwd fallback below is simply unknown this round */ }
+        if (stopped) return;
+        setPaneDir(dirs[0] ?? null);
+        setPaneOutside(outside);
+        const cwd = dirs[0] ?? project;
+        const wt = resolveWorktree(cardId, cwd, cands, namedWorktree);
+        /* The pane stands somewhere no candidate names: a worktree cut since
+           the list was read. Read it again, once for that directory. */
+        if (!wt && unlistedWorktree(dirs, cands, askedRepos.current)) {
+          api.gitRepos().then(({ repos: rr }) => setRepos(rr)).catch(() => { /* next open re-reads it anyway */ });
+        }
+        liveTabFacts.write(focusWin, { root: wt?.root ?? null, branch: wt?.branch ?? "" });
+      } finally { if (!stopped) setWtDetecting(false); }
     };
     void run();
     wtRunRef.current = () => { void run(); };
     return () => { stopped = true; wtRunRef.current = null; };
-  }, [open, focusIdx, paneIds, repos, root, here?.worktreeOf, here?.root, focusKey, focusWin]);
-  /**
-   * What the header chip and the status bar both name: the worktree the focused
-   * pane is working in, and the panel's own checkout only as a fallback for a
-   * shell no agent is reporting from.
-   *
-   * The fallback is deliberately NOT used while a read is in flight — see
-   * `wtDetecting`. Falling back mid-switch made the chip flash the parent repo
-   * between two worktrees, which reads as the app having lost the answer.
-   */
+  }, [open, focusWin, focusPane, identTabId, paneIds, focusIdx, repos, root, here?.worktreeOf, here?.root, here?.branch]);
   /* Filled for the whole window as soon as there is one, and again when its
      panes change — a split, a new agent, a pane that went. Cheap: one request,
      one `list-panes`, and it runs while the pointer is somewhere else. */
@@ -2295,12 +2477,14 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     let live = true;
     // The last window's panes must not answer for this one while the first read is out.
     paneBook.current = new Map();
+    paneBookWin.current = focusWin;
     const fill = () => {
       void api.paneDirsAll(focusWin).then((r) => {
         if (!live || !r?.ok) return;
         /* Replaced, not added to: a pane that went must not answer for the
            pane that gets its id next. */
         paneBook.current = bookPanes(r.panes ?? []);
+        paneBookWin.current = focusWin;
       }).catch(() => { /* the per-pane call still answers */ });
     };
     fill();
@@ -2312,56 +2496,58 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
      `pane-dirs?all=1` requests a minute (one `list-panes` each) for a window
      nobody had focused. The ceiling: an agent that moves worktree while the
      window is unfocused shows on the next focus, which polls at once. */
-  usePoll(open, () => { wtRunRef.current?.(); fillRef.current?.(); }, 4000);
+  usePoll(open, () => { wtRunRef.current?.(); fillRef.current?.(); }, PANE_BEAT_MS);
+  /* The server says a git write happened (or a re-root), or tmux said a window opened/closed or a pane's directory moved (`panedirs`): read at once, so the beat is only the backstop for a change nobody pushes. */
+  useEffect(() => open ? subscribeGitChanged(() => { wtRunRef.current?.(); fillRef.current?.(); }) : undefined, [open]);
+  useEffect(() => open ? subscribePaneDirsChanged(() => { wtRunRef.current?.(); fillRef.current?.(); }) : undefined, [open]);
+  /* A re-root (recwd, enlist) is pushed by the server: read this pane and the
+     repo list NOW. The directory is forgotten as "asked" so the list is read
+     again for it; nothing waits for the 4 s beat or the 60 s retry. */
+  useEffect(() => onTabRoot((n) => {
+    askedRepos.current.delete(n.cwd);
+    api.gitRepos().then(({ repos: rr }) => setRepos(rr)).catch(() => { /* the poll asks again */ }).finally(() => { fillRef.current?.(); wtRunRef.current?.(); });
+  }), []);
 
-  const chipWt = chipWorktree(detectedWt, wtDetecting, !!focusWin, here);
+  /* The first render after a tab switch still holds the previous tab's answer (the effect that
+     replaces it runs after paint); a checkout read for another pane is nothing for this one.
+     `liveTabFacts` stands in for that gap instead of leaving it blank: keyed by `identTabId`
+     alone, it already holds this exact tab's own last resolved answer (never another one's —
+     nothing here is keyed by cwd, by the focused pane, or by a "current" slot), so a revisit
+     shows it at once instead of waiting for a fresh read. */
+  useSyncExternalStore(liveTabFacts.subscribe, liveTabFacts.version, () => 0);
+  const identCands = paneCandidates(repos, here?.worktreeOf || here?.root || root);
+  const storedRoot = identTabId ? liveTabFacts.get(identTabId)?.root ?? null : null;
+  const rawWt = storedRoot ? identCands.find((r) => r.root === storedRoot) ?? null : null;
+  const chipWt = chipWorktree(rawWt, wtDetecting, !!focusSess?.tmux, here);
   /** The scanned project a checkout outside this window's own belongs to, when this app knows one by that name. */
   const outsideRepo = paneOutside ? repos.find((r) => r.name === paneOutside || dirName(r.root) === paneOutside) ?? null : null;
-  useEffect(() => { wtRef.current = chipWt; }, [chipWt]);
-  /* The card behind the focused pane's branch, resolved the way the chip beside
-     it resolves one: the same `cardRef` + `chipAction` pair, so the key and the
-     chip cannot disagree about where a card lives. */
-  const cuSetup = useOwnerSetup(useClickupSetup());
-  useEffect(() => {
-    const ref = chipWt?.branch ? cardRef({ headRefName: chipWt.branch }) : null;
-    const go = ref ? chipAction(ref, cuSetup) : null;
-    cardGoRef.current = ref && go
-      ? () => { if (go.in === "tasks") openCard(ref.query, ref.label, go.tracker); else openExternal(go.url); }
-      : null;
-  }, [chipWt?.branch, cuSetup]);
-  /**
-   * The pull request out of the chip's branch, when there is one.
-   *
-   * Same question Source control's header chip asks, and the same answer, so
-   * the two agree: `prsForBranch` + `chipTarget`, which is where the "opens a
-   * search box instead of the pull request" bug was fixed once already.
-   */
-  /** The same answers, readable from outside React — see `paneDoor`. */
-  const prRef = useRef<{ repo: string; pr: PrBranchSummary } | null>(null);
   const wtRef = useRef<GitRepoRef | null>(null);
+  useEffect(() => { wtRef.current = chipWt; }, [chipWt]);
+  /** The same tab id, readable from outside React — see `paneDoor`, which
+   *  reads `liveTabFacts.get(identTabIdRef.current)` directly rather than
+   *  shadowing the card/pull-request fields in refs of their own. */
+  const identTabIdRef = useRef("");
+  useEffect(() => { identTabIdRef.current = identTabId; }, [identTabId]);
+  /* The card, the pull request and their checks: resolved and written into
+     this tab's own record by `useTabFactsWriter` (above) — the bar and the
+     side pane both read it from there, never from a hook each one calls for
+     itself. */
+  useTabFactsWriter(identTabId, storedRoot, chipWt?.branch ?? "", chipWt?.worktreeOf, open, focusSess?.tmuxWindows?.find((w) => w.id === focusWin)?.card);
   /* The pill's own beat: the focused pane's checkout, re-read through the
      single-row route so a rename or an edit shows in seconds. Same gate as the
      poll above (the window is looked at); the list the row lives in is held by
      the server for 15 s and was read once, on open. See repoPulse.ts. */
-  usePoll(open && !IS_DEMO, () => {
+  const readPill = () => {
     const at = wtRef.current?.root;
     if (!at) return;
     void api.gitRepo(at).then((r) => setRepos((cur) => withFreshRepo(cur, r.repo))).catch(() => { /* the next beat asks again */ });
-  }, PILL_POLL_MS);
-  /** Not `cardRef` — that name is the lib function this file already uses to
-   *  turn a branch into a card reference. */
-  const cardGoRef = useRef<(() => void) | null>(null);
-  const prRoot = chipWt?.root ?? "";
-  const prBranch = chipWt?.branch ?? "";
-  /* Only ever the pull request of THIS pane's live branch: a reading carries
-     the root and branch it was asked for, and one that is not this pane's is
-     nothing (prForPane), so a branch switch drops the old one at once. */
-  const chipPr = useBranchPr(open, prRoot, prBranch, !!chipWt?.worktreeOf);
-  useEffect(() => { prRef.current = chipPr; }, [chipPr]);
+  };
+  usePoll(open && !IS_DEMO, readPill, PILL_POLL_MS);
+  useEffect(() => open && !IS_DEMO ? subscribeGitChanged(readPill) : undefined, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
   const barMode = actionsMode === "off" ? "edge" : actionsMode;
-  const focusedBar = (foot: { left: number; top: number; width: number }) => (
+  const focusedBar = (foot: { left: number; top: number; width: number; atRight?: boolean }) => (
                   !chipWt ? (
                     <PaneBar foot={foot} mode={barMode} marker={marker} pill={pill} near={seamNear} blocked={!!sess?.tmuxPopup} branch="" dirty={0}
                       kind={wtDetecting ? "loading" : paneDir ? "none" : paneOutside ? "outside" : "none"}
@@ -2379,17 +2565,16 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       blocked={!!sess?.tmuxPopup}
                       flash={copyFlash}
                       at={chipWt}
-                      more={wtMore}
-                      pr={chipPr}
-                      prRoot={prRoot}
+                      tabId={identTabId}
                       onDown={keepTermFocus}
                       onGit={() => requestWorktreeJump({ view: "git", root: chipWt.root })}
                       onDiff={() => requestWorktreeJump({ view: "diff", filter: dirName(chipWt.root) })}
-                      onPr={() => { if (chipPr) openPr(chipPr.repo, chipPr.pr.number); }}
+                      onPr={() => { const pr = liveTabFacts.get(identTabId)?.pr; if (pr) openPr(pr.repo, pr.number); }}
                       onCopy={() => { copyPaneBranch(); }}
                       onEscape={focusTerm}
                       selection={selection}
                       onAsk={() => { void askAboutSelection(); }}
+                      onSide={sideCan ? (sec) => openSide(sideTab, sec) : undefined}
                     />
                   )
   );
@@ -2545,7 +2730,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
        repaints a terminal. */
     wrapRect.current = { left: w.left, top: w.top };
     footRef.current = foot;
-    setFootBox((prev) => (prev && prev.left === foot.left && prev.top === foot.top && prev.width === foot.width ? prev : foot));
+    setFootBox((prev) => (prev && prev.left === foot.left && prev.top === foot.top && prev.width === foot.width && prev.atRight === foot.atRight ? prev : foot));
   }, [actionsIdx, focusIdx, actionsMode, actionsTick, paneIds, sessTick]);
 
   /* Is the pointer on the seam? Arithmetic against the rectangle measured
@@ -2647,15 +2832,15 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     paneDoor = (which) => {
       const wt = wtRef.current;
       if (which === "pr") {
-        const at = prRef.current;
-        if (!at) return false;
-        openPr(at.repo, at.pr.number);
+        const pr = liveTabFacts.get(identTabIdRef.current)?.pr;
+        if (!pr) return false;
+        openPr(pr.repo, pr.number);
         return true;
       }
       if (which === "card") {
-        const go = cardGoRef.current;
-        if (!go) return false;
-        go();
+        const card = liveTabFacts.get(identTabIdRef.current)?.card;
+        if (!card?.action) return false;
+        if (card.action.in === "tasks") openCard(card.query, card.label, card.tracker); else openExternal(card.action.url);
         return true;
       }
       if (!wt) return false;
@@ -2672,14 +2857,38 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
        is why the panel's own chord is Ctrl+Shift+F and why the shell's bar
        never offers to search a canvas. */
     const unclaim = registerClaim(() => { setFindOpen(true); return true; });
-    const mounted: { s: Sess; el: HTMLDivElement; ro: ResizeObserver; unTheme: () => void; stopFit: () => void }[] = [];
+    /* Only what changed moves: `planPaneMount` says which holders left their slot and which are
+       new. A holder that stays is never taken out of the DOM or parked, so a tab switch never
+       blanks the pane next to it. The entries live in `mountedRef`, not in this run, because this
+       run's cleanup must not detach them (the `[open]` effect below does that). */
+    const mounted = mountedRef.current;
+    const unmountPane = (id: string) => {
+      const m = mounted.get(id);
+      if (!m) return;
+      mounted.delete(id);
+      m.ro.disconnect(); m.stopFit(); m.unTheme();
+      m.s.subs.delete(force);
+      if (m.s.holder.parentElement === m.el) m.el.removeChild(m.s.holder);
+      parkRenderer(m.s);
+    };
+    const plan = planPaneMount(mountedIdsRef.current, paneIds);
+    const stale = new Set(plan.leave);
+    paneIds.forEach((id, i) => { const m = mounted.get(id); if (m && m.el !== paneRefs.current[i]) stale.add(id); });
+    for (const id of stale) { unmountPane(id); }
+    for (const id of mountedIdsRef.current) if (!paneIds.includes(id)) unmountPane(id);
+    mountedIdsRef.current = paneIds;
+    unmountAllRef.current = () => { for (const id of [...mounted.keys()]) unmountPane(id); };
     paneIds.forEach((id, i) => {
+      if (mounted.has(id)) return; // kept: never re-appended. A slot that could not mount yet retries here.
       const s = sessions.get(id);
       const el = paneRefs.current[i];
       if (!s || !el) return;
       el.appendChild(s.holder);
       if (!s.opened) { s.term.open(s.holder); s.opened = true; }
       attachRenderer(s); // see the console strip above
+      // A kept renderer is blank for a frame after the holder moves; repaint
+      // before the next paint rather than after the observer notices.
+      try { s.term.refresh(0, s.term.rows - 1); } catch { /* not open yet */ }
       s.term.options.theme = themeFromCss(); // pick up theme switches between opens
       const unTheme = applyThemeLive(s);
       s.subs.add(force);
@@ -2712,29 +2921,65 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
       }
       const ro = new ResizeObserver(fitSoon);
       ro.observe(el);
-      mounted.push({ s, el, ro, unTheme, stopFit: () => { if (fitTimer) clearTimeout(fitTimer); } });
+      mounted.set(id, { s, el, ro, unTheme, stopFit: () => { if (fitTimer) clearTimeout(fitTimer); } });
     });
-    const focused = sessions.get(paneIds[focusIdx] ?? "");
-    if (focused) requestAnimationFrame(() => focused.term.focus());
     return () => {
       panelClose = () => {};
       paneRootNow = () => null;
       panelFind = () => false;
       panelPluck = () => false;
       unclaim();
-      for (const { s, el, ro, unTheme, stopFit } of mounted) {
-        ro.disconnect();
-        stopFit();
-        unTheme();
-        s.subs.delete(force);
-        if (s.holder.parentElement === el) el.removeChild(s.holder);
-        parkRenderer(s);
-      }
     };
     // `onClose` deliberately absent: see closeRef above. Re-running this for a
     // callback identity detaches a live terminal, which loses the selection you
     // were dragging and cycles focus mid-keystroke.
+  }, [open, paneIds]);
+  // Closing the view (or leaving) detaches every holder; a mere change of panes does not.
+  useEffect(() => () => {
+    unmountAllRef.current();
+    mountedIdsRef.current = [];
+  }, [open]);
+
+  // Focus follows the focused pane without touching any holder. without touching any holder.
+  useEffect(() => {
+    if (!open) return;
+    const focused = sessions.get(paneIds[focusIdx] ?? "");
+    if (focused) requestAnimationFrame(() => focused.term.focus());
   }, [open, paneIds, focusIdx]);
+
+  /* Output waits (lib/hiddenWrites.ts has the why, the cap and the ceilings) for a shell nobody can see:
+     the shells in these panes while another view is on screen, and, while this view is shown, any shell
+     that is in none of its panes (another checkout's, a closed side pane). Layout, not passive: what was
+     kept is handed to xterm before the view is painted again, and before a pane that takes a held shell
+     paints it, because the cleanup runs when `paneIds` changes. `visibility:hidden` still counts as on
+     screen to xterm, which is why a hidden view needs this at all. That also means it runs before the
+     mount effect above in the same commit, so a view that mounts hidden holds nothing until it has been
+     shown once (its holders are not in their panes yet): a shell is only ever held from a pane it was
+     already drawn in. `focusIdx` is here because the mount effect re-runs on it and takes the holders out
+     and back. A minimized window (`document.hidden`) holds every shell, this view's or not: its frames
+     stop, so xterm draws nothing, but it still parsed every byte. */
+  const windowHidden = useSyncExternalStore(subscribeWindowHidden, windowIsHidden, () => false);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const held: Sess[] = [];
+    const take = (s: Sess, inOwnPane: boolean, inShownPane: boolean) => {
+      if (!shouldHoldWrites({ open, viewActive: active, canHold: mayHoldWrites(s), inOwnPane, inShownPane, holderAttached: !!s.holder.parentElement, windowHidden })) return;
+      holdStart(s.hold ??= newWriteHold());
+      held.push(s);
+    };
+    if (active || windowHidden) {
+      const shown = new Set(paneIds);
+      for (const [id, s] of sessions) take(s, false, shown.has(id));
+    } else {
+      paneIds.forEach((id, i) => {
+        const s = sessions.get(id);
+        const el = paneRefs.current[i];
+        // In this view's own pane, and not lent to the console strip or anywhere else that shows it.
+        if (s && el && s.holder.parentElement === el) take(s, true, true);
+      });
+    }
+    return () => { for (const s of held) releaseHeld(s); };
+  }, [active, open, paneIds, focusIdx, windowHidden]);
 
   // Return the keyboard focus to the shell when the terminal view becomes
   // visible again — e.g. after clicking the left sidebar to another view and
@@ -2837,9 +3082,59 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    * where the user already knows what the answer will be. Cleared on the next
    * frame, so if tmux disagrees (the window went away underneath), tmux wins.
    */
-  const [pendingWindow, setPendingWindow] = useState<string | null>(null);
-  useEffect(() => { setPendingWindow(null); }, [tmuxWindows]);
-  const activeWindow = pendingWindow ?? tmuxWindows.find((w) => w.active)?.id ?? null;
+  useEffect(() => { if (pendingResolved(pendingWindow, tmuxWindows)) setPendingWindow(null); }, [tmuxWindows, pendingWindow]);
+  const activeWindow = resolveActiveWindow(pendingWindow, tmuxWindows);
+
+  /* THE SIDE PANE. A tab is the tmux window (the focused shell without tmux); what it remembers lives in lib/sidePane.
+     Identity must be something tmux never reuses and never shares between tabs. `root` is the project's own path —
+     the SAME string for every window of this project — so it is only the answer for a shell with no tmux at all.
+     While tmux is active, a window list that has not caught up with a just-made switch answers with the window id
+     this tab had a moment ago, never with a pane id (a different kind of identity) or the shared project path:
+     either one would hand this tab's cached facts to the next tab that landed on the same fallback key. */
+  const lastActiveWindow = useRef<string | null>(null);
+  if (activeWindow) lastActiveWindow.current = activeWindow;
+  const sideTab = activeWindow ?? (tmuxActive ? lastActiveWindow.current : null) ?? paneIds[focusIdx] ?? root;
+  /* A window that closed takes what the pane remembered about it. */
+  const knownWindows = useRef<{ sid: string; ids: string[] } | null>(null);
+  const focusSid = paneIds[focusIdx] ?? "";
+  /* The list is one tmux SESSION's windows: switching session inside the same pty swaps it wholesale, and the
+     windows of the session left are not closed, so the key carries the session name or they would be forgotten. */
+  const listKey = `${focusSid}\t${sess?.tmuxSession ?? ""}`;
+  useEffect(() => {
+    const ids = tmuxWindows.map((w) => w.id);
+    closedWindows(knownWindows.current, listKey, ids).forEach((id) => { forgetTab(id); });
+    knownWindows.current = { sid: listKey, ids };
+  }, [tmuxWindows, listKey]);
+  useSyncExternalStore(subscribeSidePane, sidePaneVersion, () => 0);
+  const sideView = viewOf(sideTab);
+  const [rowEl, setRowEl] = useState<HTMLDivElement | null>(null);
+  const [rowW, setRowW] = useState(0);
+  useEffect(() => {
+    if (!rowEl) return;
+    const ro = new ResizeObserver(() => setRowW(rowEl.clientWidth));
+    ro.observe(rowEl);
+    setRowW(rowEl.clientWidth);
+    return () => ro.disconnect();
+  }, [rowEl]);
+  const sideCell = cellSizeOf(sessions.get(paneIds[focusIdx] ?? "")?.term)?.width || SIDE_CELL_FALLBACK_PX;
+  const sideCols = paneIds.length > 1 ? 2 : 1;
+  /* The terminal keeps 80 columns per pane (plus the scrollbar xterm reserves); the pane takes what is left, never more. */
+  const termMinPx = sideCols * (MIN_TERM_COLS * sideCell + SIDE_SCROLLBAR_PX) + (sideCols > 1 ? SIDE_PAIR_GAP_PX : 0);
+  const sideCan = sideCanShow(!!root, !IS_DEMO && !!cmds && !cmds.enabled, rowW);
+  const sideOn = sideView.open && sideCan;
+  const sideSeen = useRef(false);
+  if (sideOn) sideSeen.current = true;
+  const sideFit = sideOn ? paneWidth(sideView.maxWidth ? Infinity : sideView.width, rowW, termMinPx, sideView.compact) : 0;
+  /* A window with no room for the pane AND 80 columns gets the pane over the terminal instead of squeezing it. */
+  const sideOverlay = sideOn && sideFit < SIDE_USABLE;
+  const sideW = sideOverlay ? Math.min(SIDE_MIN, Math.max(0, rowW - SIDE_OVERLAY_MARGIN_PX)) : sideFit;
+  const typeIntoPane = useCallback((text: string) => {
+    const s = sessions.get(paneIds[focusIdx] ?? "");
+    if (!s || s.status !== "live" || s.ws?.readyState !== WebSocket.OPEN) return;
+    /* A shell that never asked for bracketed paste would print the markers as text. */
+    if (!s.term.modes?.bracketedPasteMode) { s.ws.send(ptyFrame({ t: "in", d: text })); return; }
+    s.ws.send(ptyFrame({ t: "in", d: `\x1b[200~${text}\x1b[201~` }));
+  }, [paneIds, focusIdx]);
   /*
    * The strip's groups (lib/tabGroups.ts): by project, the one you are in open,
    * the rest folded into chips. Null draws the strip flat — grouping switched
@@ -2910,6 +3205,10 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   })();
   // Narrowed or zoomed by somebody else — see heldWindow for what counts.
   const held = heldWindow(tmuxActive, tmuxWindows, activeWindow, tmuxClient);
+  /* Corner-ness comes from the focused pane's cells, not from footBox: that is null before the first measure and in the "off" and "always" modes. */
+  const cardSess = sessions.get(paneIds[actionsIdx ?? focusIdx ?? 0] ?? "");
+  const cardPane = cardSess && cardSess.tmuxPanes.length > 1 ? (cardSess.tmuxPanes.find((x) => x.active) ?? null) : null;
+  const cardAtCorner = !cardSess || paneAtCorner(cardPane, cardSess.term.cols, cardSess.term.rows);
   /**
    * The state the card is describing, as one string.
    *
@@ -3005,7 +3304,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     // slot is cleared here: a second press must not be blocked waiting on the
     // first one's answer.
     lastIssue.current = issue;
-    tmuxCmd({ cmd: "issue", n: issue.n, cwd: issue.cwd, name: issue.name, prompt: issue.prompt, agent: issue.agent, yolo: issue.yolo, title: issue.title, model: issue.model, effort: issue.effort, reuse: issue.reuse, kind: issue.kind, ...(issue.mode ? { mode: issue.mode } : {}) });
+    tmuxCmd({ cmd: "issue", n: issue.n, cwd: issue.cwd, name: issue.name, prompt: issue.prompt, agent: issue.agent, yolo: issue.yolo, title: issue.title, model: issue.model, effort: issue.effort, reuse: issue.reuse, kind: issue.kind, ...(issue.mode ? { mode: issue.mode } : {}), ...(issue.cardId ? { cardId: issue.cardId } : {}), ...(issue.subject ? { subject: issue.subject } : {}) });
     clearTermIssue();
   }, [issue, socketLive, tmuxCmd]);
 
@@ -3224,7 +3523,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
       {/* Pinned pull requests keep their own button; Commands is one quiet icon
           (the console has the full control, the terminal the quiet one); the
           gear is Settings. All 24 px, so the right end is one rhythm. */}
-      <PrPinsButton repo={chipPr?.repo} />
+      <PrPinsButton repo={liveTabFacts.get(identTabId)?.pr?.repo} />
       <CommandsPopover root={root} disabled={disabled} font={TERM_FONT} onRun={run} runTargetInTmux={!!sess?.tmux}
         onFind={() => setFindOpen(true)} onClose={focusTerm} />
       <Button size="strip" tone="quiet" square label="Terminal settings" title="Terminal settings…" onClick={() => openSettings("terminal")}><GearIcon size={ICON.sm} /></Button>
@@ -3305,7 +3604,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                     active={activeWindow} activeGroup={activeGroup} kept={keptOpen} onToggleKept={toggleKeptOpen}
                     session={{ name: tmuxSessionName, list: sess?.tmuxSessions ?? [], engine: !!sess?.tmuxEngine, prefix: sess?.tmuxPrefix ?? [] }}
                     phones={sess?.tmuxPhones ?? 0} clientCols={tmuxClient?.cols ?? null} prefixArmed={prefixArmed}
-                    activePr={chipPr ? prText(chipPr.pr) : null}
+                    activePr={(() => { const pr = liveTabFacts.get(identTabId)?.pr; return pr ? prText(pr) : null; })()}
                     root={root} focusWin={focusWin} cmd={tmuxCmd} onPick={pickWindow} focusTerm={focusTerm}
                     closeWindows={closer.request} askText={askText} plus={plus}
                     onUseTmuxBar={() => setTmuxBar(true)} right={barRight} />
@@ -3325,14 +3624,9 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                   </StripFrame>
                 )}
 
-                {/* A worker's tab is a reading pane: its events are drawn as
-                    lines, what is typed there reaches nobody, and the only move
-                    is the stop the CLI gives. The pane is tmux's own id, not
-                    the shell's key in `sessions` — /agents/named refuses that. */}
-                {tmuxActive && !IS_DEMO && <WorkerBar paneId={focusSess?.tmuxPane ?? null} open={open} />}
-
                 {/* the terminals — one slot per visible pane */}
-                <div ref={wrapRef} className="flex-1 min-h-0 relative" style={{ background: "var(--bg)" }}
+                <div ref={setRowEl} className="flex-1 min-h-0 min-w-0 flex relative">
+                <div ref={wrapRef} className="flex-1 min-w-0 min-h-0 relative" style={{ background: "var(--bg)" }}
                   onMouseLeave={() => { setActionsIdx(null); setSeamNear(false); }}>
                   {/* Find and the pluck palette float over the shell, in the pane area
                       and not over the tab strip, so More and the gear stay reachable.
@@ -3453,7 +3747,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                     return i === focusIdx
                       ? <Fragment key={id}>{focusedBar(foot)}</Fragment>
                       : <SlotBar key={id} sessId={id} foot={foot} repos={repos} project={here?.worktreeOf || here?.root || root}
-                          open={open} flash={0} onFocusMe={() => setFocusIdx(i)}
+                          open={open} canSide={sideCan} flash={0} onFocusMe={() => setFocusIdx(i)} onSide={(sec, tab) => openSide(tab, sec)}
                           onOpenProject={(name) => { const r = repos.find((x) => x.name === name || dirName(x.root) === name); if (r) setRoot(r.root); }} />;
                   })}
                   {/* Not in the demo any more. The overlay is for a terminal
@@ -3499,9 +3793,11 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       anywhere else on the pane still selects text as usual. */}
                   {held && heldKey !== heldHidden && (
                     <div onMouseDown={keepTermFocus} role="status"
-                      className="absolute bottom-3 right-3 max-w-[21rem] flex flex-col gap-2 px-3.5 py-2.5 rounded-xl text-[10.5px] leading-relaxed"
+                      className="absolute bottom-3 max-w-[21rem] flex flex-col gap-2 px-3.5 py-2.5 rounded-xl text-[10.5px] leading-relaxed"
                       style={{
                         zIndex: LAYER.pane,
+                        // The bench button sits at the window's bottom-right: the card clears it when the focused pane reaches that corner.
+                        right: cardAtCorner ? "var(--fab-reserve)" : 12,
                         color: "var(--text2)",
                         // Opaque rather than blurred: this sits over a terminal
                         // that repaints constantly, and a backdrop-filter here
@@ -3576,6 +3872,19 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       </Button>
                     </div>
                   )}
+                </div>
+                {sideOn && !sideOverlay && (
+                  <SideDivider rowLeft={() => rowEl?.getBoundingClientRect().left ?? 0}
+                    onWidth={(x) => { setCompact(false); setSideWidth(sideTab, dragWidth(x, rowW, termMinPx)); }}
+                    onReset={() => setSideWidth(sideTab, null)} />
+                )}
+                {(sideOn || sideSeen.current) && (
+                  <div className={sideOverlay ? "absolute top-0 bottom-0 right-0 flex" : "flex shrink-0 min-h-0"}
+                    style={!sideOn ? { display: "none" } : sideOverlay ? { boxShadow: "-10px 0 24px -12px var(--shadow)" } : undefined}>
+                    <SidePaneFor tab={sideTab} view={sideView} width={sideW} active={open && sideOn} hidden={!sideOn} at={chipWt} overlay={sideOverlay}
+                      onPopOut={(sec) => { void paneDoor(sec); }} focusTerm={focusTerm} onType={typeIntoPane} />
+                  </div>
+                )}
                 </div>
 
                 {/*

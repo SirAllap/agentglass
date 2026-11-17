@@ -91,10 +91,10 @@ describe("the draft becomes the flow, or the validator's sentence", () => {
   });
 
   test("a command no role may ever be granted is refused at save, with the command named", () => {
-    const r = applyDraft(f, { ...draftOf(f, roleById(f, "builder")!), allow: ["docker", "git push"] }, null);
+    const r = applyDraft(f, { ...draftOf(f, roleById(f, "builder")!), allow: ["docker", "sudo"] }, null);
     expect(r.ok).toBe(false);
     if (r.ok) return;
-    expect(r.error).toContain('"git push" is never granted to a worker');
+    expect(r.error).toContain('"sudo" is never granted to a worker');
   });
 
   test("MAIN replaces the first step, and a fallback that repeated it is dropped", () => {
@@ -103,6 +103,50 @@ describe("the draft becomes the flow, or the validator's sentence", () => {
     expect(withFirstStep(chain, "claude", "haiku")).toEqual([{ engine: "claude", model: "haiku" }, { engine: "opencode", model: "glm" }, { engine: "codex", model: "gpt" }]);
     const r = applyDraft(f, { ...freshDraft(f), name: "CI", does: "Runs the suite.", chain: withFirstStep(chain, "opencode", "glm") }, null);
     expect(r.ok).toBe(true);
+  });
+});
+
+describe("Works like: a role of its own chain can take a base", () => {
+  test("a fresh draft has no base, as a role of its own chain always did", () => {
+    expect(freshDraft(f).basePolicyRole).toBe("");
+  });
+
+  test("picking one on a new role stores policyRole and drops the chain it offered", () => {
+    const r = applyDraft(f, { ...freshDraft(f), name: "QA", does: "Checks it.", basePolicyRole: "verifier" }, null);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const role = roleById(r.flow, r.id)!;
+    expect(role.policyRole).toBe("verifier");
+    expect(role.chain).toEqual([]);
+    expect(validateFlow(r.flow).ok).toBe(true);
+  });
+
+  test("picking one on a saved role of its own chain does the same, by Save role", () => {
+    const made = applyDraft(f, { ...freshDraft(f), name: "Ports", does: "Checks ports." }, null);
+    expect(made.ok).toBe(true);
+    if (!made.ok) return;
+    const role = roleById(made.flow, made.id)!;
+    expect(role.policyRole).toBeUndefined();
+    const r = applyDraft(made.flow, { ...draftOf(made.flow, role), basePolicyRole: "builder" }, null);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(roleById(r.flow, made.id)!.policyRole).toBe("builder");
+    expect(roleById(r.flow, made.id)!.chain).toEqual([]);
+  });
+
+  test("a role that already has a base keeps it: this field is not read for it", () => {
+    const role = roleById(f, "builder")!;
+    const r = applyDraft(f, { ...draftOf(f, role), basePolicyRole: "verifier" }, null);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(roleById(r.flow, "builder")!.policyRole).toBe("builder");
+  });
+
+  test("the editor shows a picker for a role of its own chain, with the no-base note", () => {
+    const src = code("WorkerEditor.tsx");
+    expect(src).toContain('id="fe-wed-base"');
+    expect(src).toContain("basePolicyRole: e.target.value");
+    expect(src).toContain("No base role: no browser, no base walls.");
   });
 });
 
@@ -159,7 +203,7 @@ describe("the sections and who checks", () => {
     expect(src).toContain("Extra commands this role may run");
     expect(src).toContain("set({ allow })");
     // What no worker may ever run is named beside the box, from the shipped list rather than typed here.
-    expect(src).toContain("NEVER_LIFTABLE");
+    expect(src).toContain("FIXED_COMMANDS");
   });
 
   test("a role of one's own picks an engine in the mockup's three tiles and ladders its fallbacks", () => {
@@ -182,6 +226,25 @@ describe("the sections and who checks", () => {
     expect(h).toContain("OpenCode Go plan");
     expect(h).toContain("your Codex plan");
     expect(h).toContain("4 offered · its own default if you pick none");
+  });
+
+  test("Reads only says when a role's kind forces it, and which switch lifts it", async () => {
+    stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
+    const React = (await import("react")).default;
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { WorkerEditor } = await import("../src/components/orchestration/flow/WorkerEditor.tsx");
+    const render = (id: string) => renderToStaticMarkup(React.createElement(WorkerEditor, {
+      project: "orbit", root: "", around: {} as never, flow: f, edit: { kind: "role", id },
+      onClose() {}, onSave() {}, onReviewRounds: async () => true, onOpenRole() {},
+    }));
+    // "planner" runs as scout: the one floor a project setting can lift.
+    expect(render("planner")).toContain("Worker planner write");
+    // "inspector" runs as reviewer: forced read-only, no setting lifts it.
+    const inspector = render("inspector");
+    expect(inspector).toContain("no project setting lifts it");
+    expect(inspector).not.toContain("Worker planner write");
+    // "qa-only" has no policyRole: nothing built-in to say is forced.
+    expect(render("qa-only")).not.toContain("forces read-only");
   });
 
   test("a fallback is a row with its own engine and model, a Main badge and a drag handle", () => {

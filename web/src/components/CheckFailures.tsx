@@ -9,6 +9,8 @@
  * them. The decisions are in lib/checkFailures.ts; the requests in
  * lib/checkFailuresStore.ts; the cutting in server/src/ciFailures.ts.
  */
+import { AskAboutButton } from "./AskAboutButton.tsx";
+import { checkSeed } from "../lib/askSeed.ts";
 import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import type { CiFailure, PrCheck, PrCheckJob } from "../../../shared/types.ts";
 import { verdictLabel, type TestVerdict } from "../../../shared/failureVerdict.ts";
@@ -186,7 +188,7 @@ function StateBox({ tag, title, children }: { tag: ReactNode; title: string; chi
 }
 
 /** Whatever the row is, it says something: with no job to read, it says why and where to go. */
-export function CheckFailuresPanel({ root, check, job, sameRun, refs, rowAction }: { root: string; check: PrCheck; job?: PrCheckJob; sameRun?: SameRun[]; refs?: PrRefs; rowAction?: (f: CiFailure) => ReactNode }) {
+export function CheckFailuresPanel({ root, check, job, sameRun, refs, rowAction, pr, onAsked }: { root: string; check: PrCheck; job?: PrCheckJob; sameRun?: SameRun[]; refs?: PrRefs; rowAction?: (f: CiFailure) => ReactNode; pr?: number; onAsked?: (ok: boolean, text: string) => void }) {
   if (!job) {
     return (
       <div className="mx-2.5 mb-2 rounded-xl overflow-hidden text-[11px]" style={{ border: EDGE, background: "var(--surface-card)" }}>
@@ -197,13 +199,13 @@ export function CheckFailuresPanel({ root, check, job, sameRun, refs, rowAction 
       </div>
     );
   }
-  return <JobFailures root={root} check={check} job={job} sameRun={sameRun ?? []} refs={refs} rowAction={rowAction} />;
+  return <JobFailures root={root} check={check} job={job} sameRun={sameRun ?? []} refs={refs} rowAction={rowAction} pr={pr} onAsked={onAsked} />;
 }
 
 /** A check that failed in the same run, and what opens its detail. */
 export interface SameRun { label: string; open: () => void }
 
-function JobFailures({ root, check, job, sameRun, refs, rowAction }: { root: string; check: PrCheck; job: PrCheckJob; sameRun: SameRun[]; refs?: PrRefs; rowAction?: (f: CiFailure) => ReactNode }) {
+function JobFailures({ root, check, job, sameRun, refs, rowAction, pr, onAsked }: { root: string; check: PrCheck; job: PrCheckJob; sameRun: SameRun[]; refs?: PrRefs; rowAction?: (f: CiFailure) => ReactNode; pr?: number; onAsked?: (ok: boolean, text: string) => void }) {
   useFailureStore();
   const key = failureKey(root, job.id);
   const hints = { attempt: job.attempt, step: job.failedStep };
@@ -236,6 +238,8 @@ function JobFailures({ root, check, job, sameRun, refs, rowAction }: { root: str
               {view.notice === "unlogged" && <Tag tone="warn" title="GitHub holds no log for this job; what is shown is what its annotations kept"><FileIcon size={ICON.xs} />No log</Tag>}
               {view.notice === "toolarge" && <Tag tone="warn" title="The log was too large to read; what is shown is what its annotations kept"><FileIcon size={ICON.xs} />Too large</Tag>}
               {r.cached && <Tag title="Read earlier and kept: opening it again made no request">cached</Tag>}
+              {r.failures.length > 0 && <AskAboutButton cwd={root} what={`The ${check.name} check`} onSaid={onAsked}
+                seed={() => checkSeed({ pr, name: check.name, workflow: check.workflow, summary: check.title, url: check.url, failures: r.failures })} />}
             </span>
           </div>
           {r.failures.map((f, i) => <FailureRow key={`${i}-${f.signature}`} f={f} action={rowAction?.(f)} verdict={notable(r.verdicts[i])} refs={refs} first={i === 0} open={openRows.has(i)} onToggle={() => toggle(i)} />)}

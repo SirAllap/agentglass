@@ -119,6 +119,6 @@ describe("the section", () => {
   });
   test("the card draws the block with the write switch, and the pane keeps the section's place after the description", async () => {
     const src = await read("components/jira/JiraCard.tsx");
-    expect(src).toContain("<AttachmentsBlock files={detail.attachments ?? []} card={key} writable={writes} act={fileAct} />");
+    expect(src).toContain("<AttachmentsBlock files={detail.attachments ?? []} card={key} writable={writes} act={fileAct} folded={fold.on} ask={ask} />");
   });
 });

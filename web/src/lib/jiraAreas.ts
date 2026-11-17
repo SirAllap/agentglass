@@ -12,7 +12,8 @@
 import type { JiraBoardEpic, ProviderTask } from "../../../shared/providers.ts";
 import { groupByParent, type ParentGroup } from "./jiraBoardContext.ts";
 
-export type GroupBy = "status" | "area" | "sprint" | "priority" | "person";
+/** `agent` and `project` are the list's own: the sidebar's grouping never offers them (`GROUP_BY`, `parsePref`). */
+export type GroupBy = "status" | "area" | "sprint" | "priority" | "person" | "project" | "agent";
 /** What each group is split by next. `area` under status is the Sprint view's outline. */
 export type ThenBy = "none" | "status" | "area";
 export interface GroupPref { by: GroupBy; split: ThenBy }
@@ -25,7 +26,7 @@ export const GROUP_BY: readonly { id: GroupBy; label: string }[] = [
 /** The sprint view is an outline of status then area; any other board starts flat. */
 export const defaultPref = (sprintView: boolean): GroupPref => ({ by: "status", split: sprintView ? "area" : "none" });
 
-const BYS = new Set<string>(GROUP_BY.map((g) => g.id));
+const BYS = new Set<string>([...GROUP_BY.map((g) => g.id), "project"]);
 
 /**
  * What was kept for a board, read back. The first version kept a bare word (`status`, `parent`); it is honoured, with
@@ -98,6 +99,8 @@ export function areaLine(total: number, inSprint: number, sprintName: string | u
 export interface KeyGroup { key: string; title: string; rows: ProviderTask[]; done: number }
 
 const PRIORITY_ORDER = ["urgent", "high", "normal", "low"] as const;
+const AGENT_ORDER = ["needs", "working", "finished", ""] as const;
+const AGENT_TITLE: Record<string, string> = { needs: "Agent needs you", working: "Agent working", finished: "Agent finished", "": "No agent" };
 const PRIORITY_TITLE: Record<string, string> = { urgent: "Urgent", high: "High", normal: "Medium", low: "Low", none: "No priority" };
 
 /**
@@ -105,7 +108,7 @@ const PRIORITY_TITLE: Record<string, string> = { urgent: "Urgent", high: "High",
  * priority by its weight, a sprint by name, a person by name, and the cards with none of it last. Status and area are
  * the board's own (`groupByStatus`, `groupByParent`).
  */
-export function groupKeyed(rows: readonly ProviderTask[], by: "sprint" | "priority" | "person"): KeyGroup[] {
+export function groupKeyed(rows: readonly ProviderTask[], by: "sprint" | "priority" | "person" | "agent", agentOf: (t: ProviderTask) => string | null = () => null): KeyGroup[] {
   const by_ = new Map<string, KeyGroup>();
   const put = (key: string, title: string, t: ProviderTask) => {
     const g = by_.get(key) ?? by_.set(key, { key, title, rows: [], done: 0 }).get(key)!;
@@ -114,13 +117,15 @@ export function groupKeyed(rows: readonly ProviderTask[], by: "sprint" | "priori
   };
   for (const t of rows) {
     if (by === "sprint") put(t.sprint || "", t.sprint || "No sprint", t);
+    else if (by === "agent") { const a = agentOf(t) ?? ""; put(a, AGENT_TITLE[a] ?? "No agent", t); }
     else if (by === "priority") put(t.priority ?? "none", PRIORITY_TITLE[t.priority ?? "none"]!, t);
     else if (t.assignees.length) for (const a of t.assignees.slice(0, 1)) put(a, a, t);
     else put("", "Unassigned", t);
   }
-  const rank = (g: KeyGroup) => (by === "priority" ? (g.key === "none" ? 99 : PRIORITY_ORDER.indexOf(g.key as (typeof PRIORITY_ORDER)[number])) : 0);
+  const rank = (g: KeyGroup) => (by === "agent" ? AGENT_ORDER.indexOf(g.key as (typeof AGENT_ORDER)[number]) : by === "priority" ? (g.key === "none" ? 99 : PRIORITY_ORDER.indexOf(g.key as (typeof PRIORITY_ORDER)[number])) : 0);
   return [...by_.values()].sort((a, b) => {
-    const empty = (g: KeyGroup) => (by === "priority" ? g.key === "none" : g.key === "");
+    // By agent, "No agent" is last by its rank, not by being empty: the rank already orders all four.
+    const empty = (g: KeyGroup) => (by === "agent" ? false : by === "priority" ? g.key === "none" : g.key === "");
     return Number(empty(a)) - Number(empty(b)) || rank(a) - rank(b) || a.title.localeCompare(b.title);
   });
 }

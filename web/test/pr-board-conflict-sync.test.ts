@@ -10,7 +10,7 @@
 import { describe, expect, it } from "bun:test";
 import type { PrDetail, PrSummary } from "../../shared/types.ts";
 import { holdEdits, overlayDetail, rowPatch, type EditLog } from "../src/lib/prRefresh.ts";
-import { board, stakeFrom } from "../src/lib/prLanes.ts";
+import { board, stakeFrom } from "../../shared/prLanes.ts";
 
 const row = (over: Partial<PrSummary> = {}): PrSummary => ({
   number: 7, title: "ORBIT-1042 thing", author: "ana", state: "OPEN", isDraft: false,

@@ -25,7 +25,7 @@ export function SplitList({ groups, stats, selected, answer, onSelect, onClearAn
         {groups.length ? groups.map((g) => (
           <div key={g.key}>
             <div className="dk-lh">
-              <span className="t" title={g.label}>{g.label}</span>
+              <span className="t" data-tip={g.label}>{g.label}</span>
               <span className="dk-mini">{stackMap(g.containers).map((s) => <Square key={s.id} kind={s.kind} small />)}</span>
             </div>
             {g.containers.map((c) => {
@@ -35,7 +35,7 @@ export function SplitList({ groups, stats, selected, answer, onSelect, onClearAn
               return (
                 <div key={c.id} role="row" tabIndex={0} className="dk-lr" aria-label={`${displayName(c)}, ${KINDS[k].word}`}
                   data-sel={c.id === selected || undefined} data-off={k === "stop" || k === "made" || undefined} data-cid={c.id === selected ? "active" : undefined}
-                  title={`${c.name}\n${c.image}`} onClick={() => onSelect(c.id)}
+                  data-tip={`${c.name}\n${c.image}`} onClick={() => onSelect(c.id)}
                   onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onSelect(c.id); } }}>
                   <Glyph kind={k} />
                   <span className="nm">{displayName(c)}</span>

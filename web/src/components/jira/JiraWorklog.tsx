@@ -21,6 +21,7 @@
  * be taken off from here.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { tipAttr } from "../../lib/tip.ts";
 import { Select } from "../Select.tsx";
 import { Markdown } from "../../lib/markdown.tsx";
 import { fmtAgo } from "../../lib/format.ts";
@@ -175,11 +176,11 @@ function WorkRow({ e, entry, work }: { e: CardEvent; entry?: WorkEntry; work?: J
   return (
     <div className="agx-card rounded-lg px-3 py-2 min-w-0" style={{ border: EDGE, background: "var(--surface-card)" }} data-work-entry={entry?.id ?? ""}>
       <div className="flex items-center gap-1.5 min-w-0 text-[10.5px]">
-        <Author who={e.who ?? "Someone"} avatar={e.avatar} initials={(e.who ?? "?").split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase()} size={18} />
+        <Author who={e.who ?? "Someone"} avatar={e.avatar} initials={(e.who ?? "?").split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase()} size={ICON.lg} />
         <span className="min-w-0 truncate"><span className="font-semibold" style={{ color: "var(--text2)" }}>{e.who || "Someone"}</span>
           <span style={{ color: "var(--text3)" }}> logged </span><b style={{ color: "var(--text)" }}>{spent}</b></span>
         <span className="flex-1" />
-        <span className="shrink-0 tabular-nums" style={{ color: "var(--text4)" }} title={new Date(e.at).toLocaleString()}>{fmtAgo(e.at)} ago</span>
+        <span className="shrink-0 tabular-nums" style={{ color: "var(--text4)" }} data-tip={tipAttr({ name: "Logged", text: new Date(e.at).toLocaleString() })}>{fmtAgo(e.at)} ago</span>
         {/* The controls stay where they are in every state; the one in use shows as pressed. */}
         {own && (
           <span className="shrink-0 inline-flex items-center gap-1">
@@ -211,10 +212,10 @@ export function WorklogPanel({ events, tracking, work, newest }: {
       {tracking && (
         <>
           <div className="flex items-center gap-2 mb-1 min-h-[26px] text-[10.5px]" data-work-bar="">
-            <span className="min-w-0 truncate" style={{ color: "var(--text3)" }} title={readout}>{readout || "No estimate or time yet"}</span>
+            <span className="min-w-0 truncate" style={{ color: "var(--text3)" }} data-tip={readout ? tipAttr({ name: "Time on this card", text: readout }) : undefined}>{readout || "No estimate or time yet"}</span>
             <span className="flex-1" />
             {work && (
-              <Button size="compact" tint={adding ? "var(--primary)" : undefined} onClick={() => setAdding((a) => !a)} aria-pressed={adding} title="Log time on this card"
+              <Button size="compact" tint={adding ? "var(--primary)" : undefined} onClick={() => setAdding((a) => !a)} aria-pressed={adding} data-tip="Log time on this card"
                 className="shrink-0 min-w-[76px]">Log time</Button>
             )}
           </div>

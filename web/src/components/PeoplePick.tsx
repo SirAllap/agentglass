@@ -4,10 +4,10 @@ import { Portal } from "./Portal.tsx";
 import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { usePopoverKeys } from "../lib/focusTrap.ts";
 import { menuUnder, PICK_W, PICK_H } from "../lib/menuPos.ts";
+import { placeInBox } from "../lib/pickerBox.ts";
 import type { ListMember } from "../../../shared/providers.ts";
-import { DoneIcon } from "../lib/glyphIcons.tsx";
-import { ICON } from "../lib/iconSize.ts";
-import { INPUT, INPUT_STYLE, LINE, ListRow } from "./workspace/Chrome.tsx";
+import { PickerCard, type PickerItem } from "./PickerCard.tsx";
+import { dedupePeople, subline, type PersonSource } from "../lib/personRow.ts";
 
 /*
  * The picker this app uses to put somebody on a card.
@@ -51,20 +51,29 @@ export interface PeoplePickProps {
   locked?: (m: ListMember) => string | undefined;
   /** A few words after a name, for why somebody is up the list ("pull request author · on the card"). */
   note?: (m: ListMember) => string | undefined;
+  /** The line under a name, when the caller has its own to say (a reason, not an email). */
+  sub?: (m: ListMember) => string | undefined;
+  /** A name for the popover, for a caller that draws it as a question ("Give the card to"). */
+  label?: string;
+  /** Which side to open on when there is room: above is for a trigger that sits over something that must stay visible. */
+  prefer?: "below" | "above";
   /** After the list, outside the scroll: a choice that is not a person ("Nobody"). */
   footer?: ReactNode;
   /** Below this many names the filter box is noise. */
   filterOver?: number;
   empty?: string;
+  /** The ask failed: said in the card, instead of the empty line. */
+  error?: string | null;
   /** The people are asked of the tracker by what is typed (it has no roster to
    *  hand over): the box is always there, its text goes to the caller, and the
    *  rows are drawn as given, not filtered here. */
   onQuery?: (q: string) => void;
+  /** Which system the names came from, for the line under a name with no email. */
+  source?: PersonSource;
 }
 
 export function PeoplePick(p: PeoplePickProps) {
-  const [pos, setPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
-  const [q, setQ] = useState("");
+  const [pos, setPos] = useState<{ top: number; left: number; maxHeight: number }>({ top: 0, left: 0, maxHeight: PICK_H });
   const box = useRef<HTMLDivElement>(null);
   useCloseWithOwner(p.onClose, { from: p.anchor });
   usePopoverKeys(box, p.onClose);
@@ -74,61 +83,62 @@ export function PeoplePick(p: PeoplePickProps) {
   useLayoutEffect(() => {
     const place = () => {
       const el = p.anchor.current;
-      if (el) setPos(menuUnder(el.getBoundingClientRect(), window.innerWidth, window.innerHeight));
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      if (p.prefer === "above") {
+        const at = placeInBox(r, { width: PICK_W, height: PICK_H }, { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight }, undefined, undefined, "above");
+        setPos({ top: at.top, left: at.left, maxHeight: Math.min(PICK_H, at.maxHeight) });
+      } else {
+        setPos({ ...menuUnder(r, window.innerWidth, window.innerHeight), maxHeight: Math.min(PICK_H, window.innerHeight - 16) });
+      }
     };
     place();
     window.addEventListener("resize", place);
     return () => window.removeEventListener("resize", place);
-  }, [p.anchor]);
+  }, [p.anchor, p.prefer]);
 
-  const all = p.members ?? [];
-  const shown = q.trim() && !p.onQuery
-    ? all.filter((m) => m.name.toLowerCase().includes(q.trim().toLowerCase()))
-    : all;
+  const all = dedupePeople(p.members ?? [], (m) => `id:${String(m.id)}`);
+  // Rows → the one card's rows. The caller's order stands (keep): the card's own
+  // people first, and ticking never moves a row. A heading or a rule between two
+  // groups becomes a group; the first segment, when it has no heading, sits loose.
+  const byId = new Map(all.map((m) => [String(m.id), m]));
+  const items = (() => {
+    let group: string | undefined;
+    return all.map((m, i): PickerItem => {
+      const prev = all[i - 1];
+      const heading = p.groupBefore?.(m, prev);
+      if (heading) group = heading;
+      else if (i > 0 && p.dividerBefore?.(m, prev!)) group = "Everyone";
+      const saving = p.isSaving?.(m) ?? false;
+      const lock = p.locked?.(m);
+      const note = p.note?.(m);
+      return {
+        id: String(m.id), label: m.name, ...(group ? { group } : null),
+        sub: (p.sub ? p.sub(m) : subline({ email: m.email, source: p.source, sub: m.me ? "you" : undefined })) || undefined,
+        leading: p.face(m), on: p.isOn(m), disabled: saving || !!lock, title: lock ?? m.name,
+        ...(note ? { note } : null),
+        trailing: <>
+          {note && <span className="text-[10px]">{note}</span>}
+          {saving && <span className="agx-spin" aria-label="Applying" style={{ width: 10, height: 10, borderWidth: 1.5, borderColor: "var(--text3)", borderTopColor: "transparent" }} />}
+        </>,
+      };
+    });
+  })();
 
   return (
     <Portal>
       <div data-menu-layer className="fixed inset-0" style={{ zIndex: 9998 }} onClick={p.onClose} />
-      <div ref={box} data-menu-layer data-people-pick
-        className="agx-scroll fixed rounded-lg shadow-2xl flex flex-col overflow-y-auto p-1"
-        style={{ ...pos, zIndex: 9999, background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--text) 28%, transparent)", width: PICK_W, maxHeight: Math.min(PICK_H, window.innerHeight - 16) }}>
-        {(p.onQuery || (!p.busy && all.length > (p.filterOver ?? 12))) && (
-          <input value={q} onChange={(e) => { setQ(e.target.value); p.onQuery?.(e.target.value); }} autoFocus
-            placeholder={p.onQuery ? "Find somebody…" : "Filter people…"} spellCheck={false}
-            className={`mb-1 shrink-0 ${INPUT}`}
-            style={INPUT_STYLE} />
-        )}
-        {p.busy && <div className="px-1.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>Reading the team…</div>}
-        {!p.busy && all.length === 0 && (
-          <div className="px-1.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>{p.empty ?? "Nobody is a member of this list."}</div>
-        )}
-        {!p.busy && shown.map((m, i) => {
-          const on = p.isOn(m);
-          const saving = p.isSaving?.(m) ?? false;
-          const divide = i > 0 && !!p.dividerBefore?.(m, shown[i - 1]!);
-          const heading = p.groupBefore?.(m, shown[i - 1]);
-          return (
-            <div key={m.id}>
-              {divide && <div className="my-1" style={{ borderTop: LINE }} />}
-              {heading && <div className="px-1 pt-1.5 pb-0.5 text-[9.5px] uppercase tracking-[0.1em]" style={{ color: "var(--text4)" }}>{heading}</div>}
-              <ListRow
-                disabled={saving || !!p.locked?.(m)} title={p.locked?.(m)} onClick={() => p.onPick(m)}
-                leading={p.face(m)}
-                trailing={<>
-                  {p.note?.(m) && <span className="text-[10px]">{p.note(m)}</span>}
-                  {saving
-                    ? <span className="agx-spin" aria-label="Applying" style={{ width: 10, height: 10, borderWidth: 1.5, borderColor: "var(--text3)", borderTopColor: "transparent" }} />
-                    : on ? <span className="flex" style={{ color: "var(--success-ink)" }}><DoneIcon size={ICON.xs} /></span> : null}
-                </>}>
-                <span title={m.name} style={{ color: on ? "var(--success)" : undefined }}>{m.name}{m.me ? " · you" : ""}</span>
-              </ListRow>
-            </div>
-          );
-        })}
-        {!p.busy && !shown.length && all.length > 0 && (
-          <div className="px-1.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>Nobody matches that.</div>
-        )}
-        {p.footer && <div className="mt-1 pt-1" style={{ borderTop: LINE }}>{p.footer}</div>}
+      <div ref={box} data-menu-layer data-people-pick role={p.label ? "dialog" : undefined} aria-label={p.label}
+        style={{ display: "contents" }}>
+        <PickerCard
+          items={items} keep remote={!!p.onQuery} onQuery={p.onQuery}
+          search={!!p.onQuery || (!p.busy && all.length > (p.filterOver ?? 12))}
+          foldable={false} loading={p.busy} error={p.error ?? null}
+          onPick={(id) => { const m = byId.get(id); if (m) p.onPick(m); }} onClose={p.onClose}
+          placeholder={p.onQuery ? "Find somebody…" : "Filter people…"} noun="person" label={p.label ?? "Pick somebody"}
+          emptyText={p.empty ?? "Nobody is a member of this list."}
+          footer={p.footer ? <div className="w-full py-1">{p.footer}</div> : undefined}
+          room={pos.maxHeight} width={PICK_W + 60} style={{ top: pos.top, left: pos.left }} />
       </div>
     </Portal>
   );

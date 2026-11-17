@@ -7,7 +7,7 @@
 // same check rollup, and the tracker status the card store already has.
 
 import type { PrSummary } from "../../../shared/types.ts";
-import { fileInLane, type LaneId } from "./prLanes.ts";
+import { fileInLane, type LaneId } from "../../../shared/prLanes.ts";
 import type { StackPr } from "./prStack.ts";
 import type { Facts, Rung } from "./prStackWords.ts";
 import { standing } from "./prCardZones.ts";

@@ -6,11 +6,14 @@
  * the panel and both sheets read it and hand back a new one, and every change
  * is stored as it is made, so Done only closes.
  *
- * Its ceiling, stated: the Board is drawn and off ("Coming soon"); a flow
- * belongs to one project, so there is no "All projects" flow to edit.
+ * Canvas and Board are two views of that one value: the board lays the same
+ * flow out as stage columns and edits it through the same functions.
+ *
+ * Its ceiling, stated: a flow belongs to one project, so there is no "All
+ * projects" flow to edit.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { roleById, type Flow } from "../../../../../shared/flow.ts";
+import { gatePathWhy, roleById, type Flow } from "../../../../../shared/flow.ts";
 import { templateFlow } from "../../../../../shared/flowTemplates.ts";
 import { api } from "../../../lib/api.ts";
 import { endIndex, failOf, flowCounts, moveBlock, movePath, placeOnPath, removeFromPath, setFail } from "../../../lib/flowEdit.ts";
@@ -18,12 +21,17 @@ import { flowViewState, organicBlocks } from "../../../lib/flowView.ts";
 import { LAYER } from "../../../lib/layers.ts";
 import { ICON } from "../../../lib/iconSize.ts";
 import { Portal } from "../../Portal.tsx";
+import { writeReviewSetting } from "../../../lib/reviewRounds.ts";
 import { REVIEW_SETTING_IDS, isReviewWho, type ReviewWho } from "../../../../../shared/reviewSettings.ts";
 import { AroundRow, AroundSide, useAround, type AroundId } from "./AroundFlow.tsx";
 import { OrchestratorSheet } from "./OrchestratorSheet.tsx";
 import { MOCKUP_INK } from "../OrchestratorHero.tsx";
 import type { OrchestratorCardData } from "../../../lib/orchestratorCardView.ts";
 import { FlowCanvas } from "./FlowCanvas.tsx";
+import { FlowBoard } from "./FlowBoard.tsx";
+import { FlowList } from "./FlowList.tsx";
+import { AddStepSheet } from "./AddStepSheet.tsx";
+import { checkPath, removeStep, resumeDraft, type StepDraft } from "../../../lib/flowMove.ts";
 import { conditionCounts, marksHit, marksInForce, marksPreview, marksReadiness, mergeMarks } from "./canvasRules.ts";
 import { applyPreset, ruleHolds, usageLeft, type PresetId } from "../orchestrationCopy.ts";
 import { PresetsLayer } from "./PresetsLayer.tsx";
@@ -54,7 +62,7 @@ export function FlowEditor(p: { root: string; projects: string[]; onClose: () =>
   const [root, setRoot] = useState(p.root);
   const [all, setAll] = useState(!!p.allProjects);
   const policyRoot = all ? "" : root;
-  const { load, scope, reload } = useFlow(root);
+  const { load, scope, reload, undo, noteWrite, undoLast } = useFlow(root);
   const [edited, setFlow] = useState<Flow | null>(null);
   // Until the effect below has taken the answer, the answer itself is the flow: no frame of the empty screen between the two.
   const flow: Flow | null = edited ?? (load.state === "loaded" ? load.flow : null);
@@ -68,6 +76,13 @@ export function FlowEditor(p: { root: string; projects: string[]; onClose: () =>
   const seq = useRef(0);
   const [fromTemplate, setFromTemplate] = useState(false);
   const [around, setAround] = useState<AroundId | null>(null);
+  const [view, setView] = useState<"canvas" | "board" | "list">("canvas");
+  const [addStepOpen, setAddStepOpen] = useState(false);
+  // What was typed in "Add a step" while the worker editor makes a new role; the sheet opens again with it.
+  // `stepDraft` is the sheet's draft while a worker editor is open on its behalf; it is spent the moment the editor saves or closes, and `sheetDraft` is what the reopened sheet starts from.
+  const [stepDraft, setStepDraft] = useState<StepDraft | null>(null);
+  const [sheetDraft, setSheetDraft] = useState<StepDraft | null>(null);
+  const [listNote, setListNote] = useState<string | null>(null);
   const aroundData = useAround(policyRoot);
   const [presetsAt, setPresetsAt] = useState<HTMLElement | null>(null);
   const [presetsOpen, setPresetsOpen] = useState(false);
@@ -122,14 +137,21 @@ export function FlowEditor(p: { root: string; projects: string[]; onClose: () =>
     // Stores go out in the order they were made, so a slow answer never lands over a newer one.
     queue.current = queue.current.then(() => api.putFlow(root, next)).then((r) => {
       if (mine !== seq.current) return;
+      if (r.ok) noteWrite(r.undo);
       setSave(r.ok ? { state: "saved" } : { state: "failed", error: r.error ?? "The server did not take it." });
     }).catch(() => { if (mine === seq.current) setSave({ state: "failed", error: "Could not reach the server." }); });
-  }, [root]);
+  }, [root, noteWrite]);
+
+  /** A move from the Board or the Canvas: the Gate rule first, so a refused drop is said and nothing is saved. */
+  const commitPath = useCallback((next: Flow) => {
+    const r = checkPath(next, flow ?? undefined);
+    if (r.ok) commit(r.flow); else setSave({ state: "failed", error: r.error });
+  }, [commit, flow]);
 
   /** The reviewing block's cap lives in `orchestration.review.rounds`; the flow only shows it, so nothing goes to /flow. */
   const saveReviewRounds = useCallback(async (id: string, n: number): Promise<boolean> => {
     try {
-      const r = await api.settingAtSet(REVIEW_SETTING_IDS.rounds, n, root);
+      const r = await writeReviewSetting(REVIEW_SETTING_IDS.rounds, n, root);
       if (!r.ok) { setSave({ state: "failed", error: r.error ?? "The server did not take it." }); return false; }
       setFlow((f) => { const e = f && failOf(f, id); return f && e ? setFail(f, id, e.to, n) : f; });
       setSave({ state: "saved" });
@@ -212,6 +234,14 @@ export function FlowEditor(p: { root: string; projects: string[]; onClose: () =>
 
   const counts = flow ? flowCounts(flow) : null;
   const name = projectName(root);
+  const undoTheLast = async () => {
+    if (!undo) return;
+    setSave({ state: "saving" });
+    const why = await undoLast();
+    setSave(why ? { state: "failed", error: why } : { state: "saved" });
+    setSelected(null);
+    setWorker(null);
+  };
   // The rail's two lists, in the mockup's order: the path, then the team that has no place on it yet.
   const onPath = drawn.path.map((id) => roleById(drawn, id)).filter((r): r is NonNullable<typeof r> => !!r);
   const offPath = drawn.roster.filter((r) => !drawn.path.includes(r.id));
@@ -254,12 +284,13 @@ export function FlowEditor(p: { root: string; projects: string[]; onClose: () =>
             </span>
           )}
           <span className="fe-seg" role="group" aria-label="Look at the flow as">
-            <button type="button" aria-pressed="true"><FlowIcon name="loop" size={12} />Canvas</button>
-            <button type="button" aria-pressed="false" disabled title="The board is coming">
-              <FlowIcon name="grid" size={12} />Board<span className="fe-soon">Coming soon</span>
-            </button>
+            <button type="button" aria-pressed={view === "canvas"} onClick={() => setView("canvas")}><FlowIcon name="loop" size={12} />Canvas</button>
+            <button type="button" aria-pressed={view === "board"} onClick={() => setView("board")}><FlowIcon name="grid" size={12} />Board</button>
+            <button type="button" aria-pressed={view === "list"} onClick={() => setView("list")}><FlowIcon name="grip" size={12} />List</button>
           </span>
           <button className="fe-btn" data-tone="primary" type="button" disabled={!flow} onClick={() => flow && setWorker({ kind: "new", index: endIndex(flow) })}><FlowIcon name="plus" size={12} />Add worker</button>
+          {view === "list" && <button className="fe-btn" type="button" disabled={!flow} onClick={() => setAddStepOpen(true)}><FlowIcon name="plus" size={12} />Add a step</button>}
+          <button className="fe-btn" type="button" disabled={!undo} title={undo ? `Undo the change ${undo.who} made` : "Nothing to undo"} onClick={() => void undoTheLast()}><FlowIcon name="undo" size={ICON.xs} />Undo</button>
           <button className="fe-btn fe-donebtn" type="button" onClick={p.onClose}>Done</button>
         </header>
 
@@ -268,8 +299,10 @@ export function FlowEditor(p: { root: string; projects: string[]; onClose: () =>
           <span>The orchestrator follows this flow; agentglass does not force it step by step. If it skips a block, it leaves one line saying why.</span>
           <span className="fe-sp" />
           {save.state === "failed" && <span className="fe-savestate" data-bad title={save.error}>Not saved: {save.error}</span>}
+          {flow && gatePathWhy(flow.path) && <span className="fe-savestate" data-bad>The Gate must be last. Drag the Gate to the end.</span>}
           {save.state === "saving" && <span className="fe-savestate">Saving…</span>}
           {save.state === "saved" && <span className="fe-savestate">Saved for {name}</span>}
+          {undo && <span className="fe-savestate">Last change: {undo.who}. Undo puts it back.</span>}
           {fromTemplate && save.state === "idle" && <span className="fe-savestate">Saved on your first change</span>}
           <span className="fe-only">{counts ? `${counts.blocks} blocks · ${counts.stages} stages · ${counts.team} in the team · ${fromTemplate ? "Saved on your first change" : "Saved"}` : "No blocks yet"}</span>
         </div>
@@ -298,6 +331,21 @@ export function FlowEditor(p: { root: string; projects: string[]; onClose: () =>
               </aside>
 
               <div className="fe-center">
+              {view === "list" ? (
+                <div className="fl-wrap">
+                  <FlowList flow={drawn} onNote={setListNote}
+                    onMove={(next) => flow && commit(next)}
+                    onConfigure={(id) => setWorker({ kind: "role", id })}
+                    onRemove={(id) => { if (!flow) return; const r = removeStep(flow, id); if (r.ok) { commit(r.flow); setSelected(null); setListNote(null); } else setListNote(r.error); }} />
+                  {listNote && <p className="fl-note" role="status">{listNote}</p>}
+                </div>
+              ) : view === "board" ? (
+                <FlowBoard flow={drawn} selected={selected}
+                  onSelect={(id) => { setAround(null); setConditions(false); setSelected(id); }}
+                  onConfigure={(id) => setWorker({ kind: "role", id })}
+                  onReorder={(id, i) => flow && commitPath(movePath(flow, id, i))}
+                  onRemove={(id) => { if (!flow) return; commit(removeFromPath(flow, id)); setSelected(null); }} />
+              ) : (
               <FlowCanvas marks={marks} counts={p.counts} project={root ? name : undefined} ask={aroundData.policy?.base.workers ?? null} orchestrator={orchestratorData} onConfigureOrchestrator={openOrchestrator} onOpenOrchestratorTab={openChairTab} zoomToId={focusField === "orchestrator" ? "orchestrator" : focusField ? flow?.roster.find((r) => r.policyRole === focusField)?.id ?? null : null} flow={drawn} selected={selected}
                 onSelect={(id) => {
                   if (edit) { const f = flow && id ? roleById(flow, id)?.policyRole : null; if (f) joinRule(f); return; }
@@ -305,12 +353,13 @@ export function FlowEditor(p: { root: string; projects: string[]; onClose: () =>
                 }} onOrchestrator={edit ? () => joinRule("orchestrator") : undefined} onConfigure={(id) => setWorker({ kind: "role", id })}
                 onAddAfter={(index) => setWorker({ kind: "new", index })}
                 onRemove={(id) => { if (!flow) return; commit(removeFromPath(flow, id)); setSelected(null); }}
-                onReorder={(id, i) => flow && commit(movePath(flow, id, i))}
+                onReorder={(id, i) => flow && commitPath(movePath(flow, id, i))}
                 onMove={(id, x, y) => flow && commit(moveBlock(flow, id, x, y))} onTidy={() => flow && commit({ ...flow, blocks: [] })} onFlowLayout={() => flow && commit({ ...flow, blocks: organicBlocks(flow) })}
-                onPlace={(id, i) => flow && commit(placeOnPath(flow, id, i))}
+                onPlace={(id, i) => flow && commitPath(placeOnPath(flow, id, i))}
                 onUseTemplate={() => root && commit({ ...template, blocks: [] })}
                 onAddAt={(index) => setWorker({ kind: "new", index })}
                 onAddFirst={() => setWorker({ kind: "new", index: 0 })} templateNames={templateNames} />
+              )}
                 <AroundRow tools={{ presetsOpen, conditionsOpen: conditions, editing: !!edit, count: cc.on, off: aroundData.policy ? Math.max(0, aroundData.policy.rules.length - cc.on) : 0, acting: cc.acting,
                   onPresets: (el) => { setPresetsAt(el); if (presetsOpen) setPreview(null); else setChecked(false); setPresetsOpen(!presetsOpen); }, onConditions: () => { setPresetsOpen(false); setPreview(null); setSelected(null); setAround(null); setHoverRule(null); if (conditions) guard(() => { closeEdit(); setConditions(false); }); else setConditions(true); } }} a={aroundData} open={around} onOpen={(id) => guard(() => { closeEdit(); setSelected(null); setConditions(false); setAround(around === id ? null : id); })} />
               </div>
@@ -343,10 +392,15 @@ export function FlowEditor(p: { root: string; projects: string[]; onClose: () =>
         )}
         {shownFlow && worker && (
           <WorkerEditor flow={shownFlow} edit={worker} project={name} root={root} around={aroundData} onRuleSaved={p.onPolicySaved}
-            onClose={() => setWorker(null)}
-            onSave={(next, id) => { commit(next); setWorker(null); setSelected(next.path.includes(id) ? id : null); }}
+            onClose={() => { setWorker(null); if (stepDraft) { setSheetDraft(stepDraft); setAddStepOpen(true); } setStepDraft(null); }}
+            onSave={(next, id) => { commit(next); setWorker(null); setSelected(next.path.includes(id) ? id : null); if (stepDraft) { setSheetDraft(resumeDraft(next, stepDraft, id)); setAddStepOpen(true); } setStepDraft(null); }}
             onReviewRounds={(id, n) => saveReviewRounds(id, n)}
             onOpenRole={(id) => setWorker({ kind: "role", id })} />
+        )}
+        {flow && addStepOpen && (
+          <AddStepSheet flow={flow} initial={sheetDraft} onClose={() => { setAddStepOpen(false); setSheetDraft(null); }}
+            onNewRole={(d) => { setStepDraft(d); setAddStepOpen(false); setWorker({ kind: "new", index: endIndex(flow) }); }}
+            onAdd={(next, id) => { commit(next); setAddStepOpen(false); setSheetDraft(null); setSelected(id); }} />
         )}
         {around === "orchestrator" && (
           <OrchestratorSheet a={aroundData} flow={drawn} root={policyRoot} reviewWho={reviewWho} onClose={() => setAround(null)} />

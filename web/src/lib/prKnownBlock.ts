@@ -19,24 +19,27 @@
 
 import type { PrSummary } from "../../../shared/types.ts";
 
-export interface KnownBlock { conflicted: boolean; requiredMissing: boolean }
+export interface KnownBlock { conflicted: boolean; requiredMissing: boolean; behindBlocks?: boolean;
+  /** The detail has what a verdict needs (which checks are required, GitHub's merge state). Without it "nothing blocks" is not an answer, and is not stored. */
+  settled?: boolean }
 
 const seen = new Map<string, KnownBlock & { head: string }>();
 const listeners = new Set<() => void>();
 const keyOf = (root: string, number: number) => `${root}::${number}`;
 
-/** The detail's conclusion for `number` at `head`. Rings the board only when it changed. */
+/**
+ * The detail's conclusion for `number` at `head`. Rings the board only when it changed.
+ * Kept even when it finds nothing: the detail is the one that asked GitHub which checks
+ * are required, so "nothing blocks" must be able to cancel a guess the list made.
+ */
 export function noteKnownBlock(root: string, number: number, head: string, b: KnownBlock): void {
   if (!root || !head) return;
+  if (!b.conflicted && !b.requiredMissing && !b.behindBlocks && b.settled === false) return;
   const k = keyOf(root, number);
   const old = seen.get(k);
-  if (!b.conflicted && !b.requiredMissing) {
-    if (!old || old.head !== head) return;
-    seen.delete(k);
-  } else {
-    if (old && old.head === head && old.conflicted === b.conflicted && old.requiredMissing === b.requiredMissing) return;
-    seen.set(k, { head, ...b });
-  }
+  const next = { conflicted: b.conflicted, requiredMissing: b.requiredMissing, behindBlocks: !!b.behindBlocks };
+  if (old && old.head === head && old.conflicted === next.conflicted && old.requiredMissing === next.requiredMissing && old.behindBlocks === next.behindBlocks) return;
+  seen.set(k, { head, ...next });
   for (const l of listeners) l();
 }
 
@@ -49,10 +52,14 @@ export function onKnownBlock(fn: () => void): () => void {
 export function withKnownBlock(root: string, p: PrSummary): PrSummary {
   const k = seen.get(keyOf(root, p.number));
   if (!k || !p.headSha || k.head !== p.headSha) return p;
+  const required = k.requiredMissing || undefined;
+  const behind = k.behindBlocks || undefined;
+  if (!k.conflicted && behind === p.behindBlocks && required === p.requiredMissing) return p;
   return {
     ...p,
     ...(k.conflicted ? { mergeable: "CONFLICTING" as const } : {}),
-    ...(k.requiredMissing ? { requiredMissing: true } : {}),
+    requiredMissing: required,
+    behindBlocks: behind,
   };
 }
 

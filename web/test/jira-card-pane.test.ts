@@ -74,27 +74,27 @@ describe("with writes on", () => {
 describe("the subtasks section", () => {
   test("each subtask is its key, its title and its status, under a progress line", () => {
     const html = renderToStaticMarkup(React.createElement(SubtasksSection, { rows: [card({ id: "1", customId: "ORBIT-1046", title: "Write the retry test", status: "To Do" })] }));
-    for (const w of ["ORBIT-1046", "Write the retry test", "To Do", "0 of 1 done"]) expect(html).toContain(w);
+    for (const w of ["ORBIT-1046", "Write the retry test", ">TO DO<", "0 of 1 done"]) expect(html).toContain(w);
   });
 });
 
 describe("the pane's shape, read from source", () => {
   const src = async (p: string) => (await Bun.file(new URL(p, import.meta.url)).text()).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  test("the card has Card, Activity, Files and GitHub tabs, and each body shows only on its own tab", async () => {
+  test("the card has Card, Work, Dev and Activity tabs, and each body shows only on its own tab", async () => {
     const c = await src("../src/components/jira/JiraCard.tsx");
     expect(c).toContain("<DockTabs");
     const at = (w: string) => c.indexOf(w);
-    // Card tab: facts, description, then the relations; the other three own one block each.
-    const card = ['tab === "card" && <JiraProps', "<JiraDescription", "<SubtasksSection", "<LinkedSection", "<WebLinksSection"];
+    // Card tab: the lifecycle, then the facts, description and relations; the other three own one block each.
+    const card = ["<LifecycleBlocks", 'tab === "card" && <JiraProps', "<JiraDescription", "<SubtaskTree", "<LinkedSection", "<WebLinksSection"];
     for (const w of card) expect(at(w)).toBeGreaterThan(-1);
     const found = card.map(at);
     expect(found).toEqual(found.toSorted((x, y) => x - y));
-    for (const w of ['tab === "files" && <AttachmentsBlock', 'tab === "github"', 'id="development"', 'tab === "activity" && ']) expect(at(w)).toBeGreaterThan(-1);
+    for (const w of ['tab === "work" && <WorkTab', "<AttachmentsBlock", 'tab === "dev"', 'id="development"', 'tab === "activity" && ']) expect(at(w)).toBeGreaterThan(-1);
   });
 
-  test("a card that has no files offers no Files tab unless writes are on", async () => {
+  test("a card that has no files offers no Files block on Work unless writes are on", async () => {
     const c = await src("../src/components/jira/JiraCard.tsx");
-    expect(c).toContain('...(nFiles || writes ? [{ id: "files" as const');
+    expect(c).toContain("nFiles || writes ? <AttachmentsBlock");
   });
 
   test("the composer and its sentence exist only with writes on, on the Activity tab", async () => {

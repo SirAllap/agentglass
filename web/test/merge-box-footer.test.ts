@@ -22,13 +22,13 @@ describe("the merge box no longer holds buttons", () => {
 
 describe("the dock", () => {
   const dock = between("function PrDock(", "\n}\n");
-  it("holds merge, the reason, the branch moves (update, resolve, terminal) and To draft / Close, in that order", () => {
-    const order = ["{mergeNode}", "reason.text", "{updateNode}{conflictNode}", "{autoNode}", "{cornerNode}"].map((k) => dock.indexOf(k));
+  it("holds the verdict chip, the update move (resolve and terminal live in the sheet), the closed-state corner and Merge, in that order", () => {
+    const order = ["data-pr-verdict", "{updateNode}</span>", "{cornerNode}", "mergeNode}"].map((k) => dock.indexOf(k));
     expect(order.every((i) => i > 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
   it("is drawn after the tab body, so it is on every tab", () => {
-    expect(panel.indexOf("<PrDock band={band} />")).toBeGreaterThan(panel.indexOf("</CommitJumpCtx.Provider>"));
+    expect(panel.indexOf("<PrDock band={band} onGo=")).toBeGreaterThan(panel.indexOf("</CommitJumpCtx.Provider>"));
   });
   it("To draft and Close are not in the branch-move row", () => {
     const extra = between("const updateNode = (", "const cornerNode = (");

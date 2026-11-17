@@ -37,7 +37,7 @@ import {
 import { findRanges, paint as paintFind, clear as clearFind, step as stepFind, reveal as revealFind } from "../lib/mdFind.ts";
 import { groupAt, groupLabel, groupTotals, type ChangeGroup } from "../lib/changeGroups.ts";
 import { IconLabel, SearchIcon } from "../lib/glyphIcons.tsx";
-import { ICON } from "../lib/iconSize.ts";
+import { ICON, MIN_BOX } from "../lib/iconSize.ts";
 import { cursorDelay } from "../lib/cursorPace.ts";
 import { INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 
@@ -157,7 +157,7 @@ function ChangeRail({ groups, fileLines, cursor, onGo }: {
       {/* Where the cursor is, in the file's own words. Blank until the editor
           answers, rather than a guess that would be wrong half the time. */}
       {here?.symbol && (
-        <div className="px-2 pt-2 pb-1 text-[10px] leading-tight truncate" style={{ color: "var(--text2)" }} title={here.symbol}>
+        <div className="px-2 pt-2 pb-1 text-[10px] leading-tight truncate" style={{ color: "var(--text2)" }} data-tip={here.symbol}>
           {here.symbol}
         </div>
       )}
@@ -166,7 +166,7 @@ function ChangeRail({ groups, fileLines, cursor, onGo }: {
           {totals.places} {totals.places === 1 ? "place" : "places"}
         </span>
         <span className="ml-auto text-[9.5px] tabular-nums flex gap-1">
-          {totals.added > 0 && <span style={{ color: "var(--success, #98c379)" }}>+{totals.added}</span>}
+          {totals.added > 0 && <span style={{ color: "var(--success)" }}>+{totals.added}</span>}
           {totals.removed > 0 && <span style={{ color: "var(--error-ink)" }}>−{totals.removed}</span>}
         </span>
       </div>
@@ -176,7 +176,7 @@ function ChangeRail({ groups, fileLines, cursor, onGo }: {
             that answers "are the changes together or all over it". */}
         {fileLines > 0 && (
           <button className="relative shrink-0 rounded"
-            title="The whole file — press to jump to that part of it"
+            data-tip="The whole file — press to jump to that part of it" aria-label="The whole file — press to jump to that part of it"
             style={{ width: 10, background: "color-mix(in srgb, var(--text) 8%, transparent)" }}
             onClick={(e) => {
               const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -189,7 +189,7 @@ function ChangeRail({ groups, fileLines, cursor, onGo }: {
                 style={{
                   top: `${pc(g.from)}%`,
                   height: `${Math.max(1.2, pc(g.to) - pc(g.from))}%`,
-                  background: g.added && !g.removed ? "var(--success, #98c379)"
+                  background: g.added && !g.removed ? "var(--success)"
                     : g.removed && !g.added ? "var(--error)" : "var(--warning)",
                   opacity: i === at ? 1 : 0.55,
                 }} />
@@ -207,7 +207,7 @@ function ChangeRail({ groups, fileLines, cursor, onGo }: {
             <div key={`${g.from}-${i}`} className="min-w-0">
               <button onClick={() => go(i)} data-on={i === at ? "1" : undefined}
                 onDoubleClick={() => setOpen(open === i ? null : i)}
-                title={`${groupLabel(g)}${g.symbol ? ` · ${g.symbol}` : ""} — double-click for the lines`}
+                data-tip={`${groupLabel(g)}${g.symbol ? ` · ${g.symbol}` : ""} — double-click for the lines`}
                 className="w-full rounded px-1.5 py-1 text-left"
                 style={{
                   background: i === at ? "color-mix(in srgb, var(--primary) 20%, transparent)" : "transparent",
@@ -216,7 +216,7 @@ function ChangeRail({ groups, fileLines, cursor, onGo }: {
                 <span className="flex items-baseline gap-1.5">
                   <span className="text-[10.5px] tabular-nums" style={{ color: i === at ? "var(--text)" : "var(--text2)" }}>{groupLabel(g)}</span>
                   <span className="ml-auto text-[9.5px] tabular-nums shrink-0">
-                    {g.added > 0 && <span style={{ color: "var(--success, #98c379)" }}>+{g.added}</span>}
+                    {g.added > 0 && <span style={{ color: "var(--success)" }}>+{g.added}</span>}
                     {g.removed > 0 && <span style={{ color: "var(--error-ink)" }}> −{g.removed}</span>}
                   </span>
                 </span>
@@ -229,7 +229,7 @@ function ChangeRail({ groups, fileLines, cursor, onGo }: {
                   {g.lines.map((n) => (
                     <button key={n} onClick={() => { setSel(i); onGo(n); }}
                       className="agx-btn rounded text-[9.5px] tabular-nums px-1"
-                      style={{ color: "var(--text3)" }} title={`Line ${n}`}>{n}</button>
+                      style={{ color: "var(--text3)" }} data-tip={`Line ${n}`}>{n}</button>
                   ))}
                 </div>
               )}
@@ -240,13 +240,13 @@ function ChangeRail({ groups, fileLines, cursor, onGo }: {
 
       <div className="flex items-center justify-between px-2 py-1" style={{ borderTop: LINE }}>
         <span className="flex items-center gap-1">
-          <button className="agx-btn rounded grid place-items-center" style={{ width: 20, height: 20, color: "var(--text3)" }}
-            title="Previous place (p)" onClick={() => step(-1)}>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M6 14l6-6 6 6" /></svg>
+          <button className="agx-btn rounded grid place-items-center" style={{ width: MIN_BOX, height: MIN_BOX, color: "var(--text3)" }}
+            data-tip="Previous place (p)" aria-label="Previous place (p)" onClick={() => step(-1)}>
+            <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M6 14l6-6 6 6" /></svg>
           </button>
-          <button className="agx-btn rounded grid place-items-center" style={{ width: 20, height: 20, color: "var(--text3)" }}
-            title="Next place (n)" onClick={() => step(1)}>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M6 10l6 6 6-6" /></svg>
+          <button className="agx-btn rounded grid place-items-center" style={{ width: MIN_BOX, height: MIN_BOX, color: "var(--text3)" }}
+            data-tip="Next place (n)" aria-label="Next place (n)" onClick={() => step(1)}>
+            <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M6 10l6 6 6-6" /></svg>
           </button>
         </span>
         <span className="text-[9.5px] tabular-nums" style={{ color: "var(--text4)" }}>{at + 1} / {groups.length}</span>
@@ -690,13 +690,13 @@ export function PeekFile({ peek, onClose, topPx }: {
                   working, because there was nothing on screen that said so. The
                   key is named on it, which is also how anybody learns it. */}
               <button onClick={openFind} disabled={text === null}
-                title="Find in this document (Ctrl+F)"
+                data-tip="Find in this document (Ctrl+F)"
                 className="agx-btn rounded px-2 py-0.5 text-[10px]"
                 style={{ color: findOpen ? "var(--primary-hover)" : "var(--text2)", border: EDGE, opacity: text === null ? 0.4 : 1 }}>
                 <IconLabel icon={<SearchIcon size={ICON.xs} />}>Find</IconLabel>
               </button>
               <button onClick={copy} disabled={text === null}
-                title="Copy the markdown source, not the rendering"
+                data-tip="Copy the markdown source, not the rendering"
                 className="agx-btn rounded px-2 py-0.5 text-[10px]"
                 style={{ color: copied ? "var(--success)" : "var(--text2)", border: EDGE, opacity: text === null ? 0.4 : 1 }}>
                 {copied ? "Copied" : "Copy"}
@@ -711,11 +711,11 @@ export function PeekFile({ peek, onClose, topPx }: {
                     read the same `size` and the second step is lost. A person
                     hammering A+ is exactly who is trying to change it a lot. */}
                 <button onClick={() => setSize((n) => setMdSize(n - 1))} disabled={size <= SIZE_MIN}
-                  title="Smaller" className="agx-btn px-1.5 py-0.5 text-[11px] disabled:opacity-30"
+                  data-tip="Smaller" aria-label="Smaller" className="agx-btn px-1.5 py-0.5 text-[11px] disabled:opacity-30"
                   style={{ color: "var(--text2)" }}>A−</button>
                 <span className="px-1 text-[10px] tabular-nums" style={{ color: "var(--text3)" }}>{size}</span>
                 <button onClick={() => setSize((n) => setMdSize(n + 1))} disabled={size >= SIZE_MAX}
-                  title="Bigger" className="agx-btn px-1.5 py-0.5 text-[11px] disabled:opacity-30"
+                  data-tip="Bigger" aria-label="Bigger" className="agx-btn px-1.5 py-0.5 text-[11px] disabled:opacity-30"
                   style={{ color: "var(--text2)" }}>A+</button>
               </span>
 
@@ -725,7 +725,7 @@ export function PeekFile({ peek, onClose, topPx }: {
                 style={{ border: EDGE }}>
                 {WIDTHS.map((w) => (
                   <button key={w} onClick={() => setWidth(setMdWidth(w))}
-                    title={w === 0 ? "Use the whole pane" : `${w} characters a line`}
+                    data-tip={w === 0 ? "Use the whole pane" : `${w} characters a line`}
                     className="agx-btn px-1.5 py-0.5 text-[10px]"
                     style={w === width
                       ? { background: "color-mix(in srgb, var(--primary) 22%, transparent)", color: "var(--text)" }
@@ -738,7 +738,7 @@ export function PeekFile({ peek, onClose, topPx }: {
               {/* Where it lives. Only where there is a file manager to ask —
                   a browser tab has none, and a dead button is worse than none. */}
               {canReveal() && (
-                <button onClick={() => void reveal()} title="Show this file in the file manager"
+                <button onClick={() => void reveal()} data-tip="Show this file in the file manager"
                   className="agx-btn rounded px-2 py-0.5 text-[10px]"
                   style={{ color: revealed ? "var(--error)" : "var(--text2)", border: EDGE }}>
                   {revealed ?? "Show in folder"}
@@ -756,7 +756,7 @@ export function PeekFile({ peek, onClose, topPx }: {
               toggle is replaced by the fact. */}
           {atRef && (
             <span className="shrink-0 text-[10px] px-2 py-0.5 rounded ml-auto"
-              title={`Read from ${peek.ref} — this checkout is not on that branch`}
+              data-tip={`Read from ${peek.ref} — this checkout is not on that branch`}
               style={{ color: "var(--info-ink)", border: "1px solid color-mix(in srgb, var(--info) 32%, transparent)" }}>
               read-only · {peek.ref}
             </span>
@@ -764,14 +764,14 @@ export function PeekFile({ peek, onClose, topPx }: {
           {canRender && !atRef && (
             <span className={`shrink-0 flex items-center rounded overflow-hidden ${reading ? "" : "ml-auto"}`}
               style={{ border: EDGE }}>
-              <button onClick={() => setReading(true)} title="Render it as markdown"
+              <button onClick={() => setReading(true)} data-tip="Render it as markdown"
                 className="agx-btn text-[10px] px-2 py-0.5"
                 style={reading
                   ? { background: "color-mix(in srgb, var(--primary) 22%, transparent)", color: "var(--text)" }
                   : { color: "var(--text3)" }}>
                 Reading
               </button>
-              <button onClick={() => setReading(false)} title="Open it in the editor"
+              <button onClick={() => setReading(false)} data-tip="Open it in the editor"
                 className="agx-btn text-[10px] px-2 py-0.5"
                 style={!reading
                   ? { background: "color-mix(in srgb, var(--primary) 22%, transparent)", color: "var(--text)" }
@@ -806,7 +806,7 @@ export function PeekFile({ peek, onClose, topPx }: {
               });
               onClose();
             }}
-            title={noCheckout
+            data-tip={noCheckout
               ? "This repository is only on GitHub here, so the bench has no folder to work in. Clone it and add it as a project to open files on the bench."
               : "Open this file on the bench — it stays open there when you leave this view"}
             className={`agx-btn shrink-0 text-[10px] px-2 py-0.5 rounded ${canRender || atRef ? "" : "ml-auto"} ${noCheckout ? "opacity-50 cursor-not-allowed" : ""}`}
@@ -931,9 +931,9 @@ export function FindBar({ inputRef, value, onValue, hit, hits, onStep, onClose }
       <span className="tabular-nums shrink-0" style={{ color: none ? "var(--error)" : "var(--text3)" }}>
         {value.trim() ? (hits ? `${hit} / ${hits}` : "no matches") : ""}
       </span>
-      <button onClick={() => onStep(-1)} disabled={!hits} title="Previous (Shift+Enter)"
+      <button onClick={() => onStep(-1)} disabled={!hits} data-tip="Previous (Shift+Enter)" aria-label="Previous (Shift+Enter)"
         className="agx-btn shrink-0 rounded px-1.5" style={{ color: hits ? "var(--text2)" : "var(--text4)" }}>↑</button>
-      <button onClick={() => onStep(1)} disabled={!hits} title="Next (Enter)"
+      <button onClick={() => onStep(1)} disabled={!hits} data-tip="Next (Enter)" aria-label="Next (Enter)"
         className="agx-btn shrink-0 rounded px-1.5" style={{ color: hits ? "var(--text2)" : "var(--text4)" }}>↓</button>
       <CloseButton onClick={onClose} title="Close find (esc)"
         style={{ color: "var(--text2)", border: EDGE }}

@@ -24,22 +24,19 @@ const line = (src: string, needle: string) => {
 describe("target branch chip", () => {
   it("detail header: the base is a shrink-0 nowrap chip, but for a feature base in a one-row header", () => {
     const tag = line(panel, "data-base-chip");
-    expect(tag).toContain("shrink-0 whitespace-nowrap");
-    // The trunk (main, master) never truncates; a stacked PR's feature base may,
-    // and only where the header is one row, so its name stays in the tooltip.
-    expect(tag).toContain('plan.metaOneRow && !isTrunk(d.baseRefName) ? "truncate min-w-0" : "shrink-0 whitespace-nowrap"');
+    // The trunk (main, master) never truncates (.prx-base is flex: none); a stacked PR's feature base may.
+    expect(tag).toContain('isTrunk(d.baseRefName) ? "prx-branch prx-base" : "prx-branch"');
   });
   it("detail header: the route chip's head may shrink, the trunk base chip never does", () => {
-    const i = panel.indexOf("data-base-chip");
-    const base = panel.slice(panel.lastIndexOf("<span", i), panel.indexOf("</span>", i));
-    expect(base).toContain("shrink-0 whitespace-nowrap");
-    expect(panel).toContain('className="px-1 py-0.5 rounded text-[10.5px] truncate min-w-0"');
+    const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
+    expect(css).toMatch(/\.prx-base \{ flex: none; white-space: nowrap; \}/);
+    expect(css).toMatch(/\.prx-branch > span \{[^}]*text-overflow: ellipsis/);
   });
   it("the list row is gone: the board's cards are the only list", () => {
     expect(panel).not.toContain("Merges into ${p.baseRefName}");
   });
   it("board card: the base is never truncated", () => {
-    const tag = line(board, "title={`${p.headRefName} → ${p.baseRefName}`}");
+    const tag = line(board, "data-tip={`${p.headRefName} → ${p.baseRefName}`}");
     /* The base is a chip that never shrinks: its class says `flex: none`, the branch it came from is the one that gives way. */
     expect(tag).toContain("agx-pc-dest");
     expect(readFileSync(new URL("../src/index.css", import.meta.url), "utf8")).toMatch(/\.agx-pc-dest \{ flex: none; white-space: nowrap;/);

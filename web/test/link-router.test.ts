@@ -9,7 +9,7 @@
  * credentials.
  */
 import { describe, expect, it } from "bun:test";
-import { classifyLink, isShortRef, openInApp, wantsExternal, type RouteDeps } from "../src/lib/linkRouter.ts";
+import { classifyLink, isShortRef, openInApp, wantsExternal, linkSurface, otherLinkSurface, openNoteLink, type RouteDeps } from "../src/lib/linkRouter.ts";
 import { renderInline } from "../src/lib/prBody.ts";
 import { Markdown } from "../src/lib/markdown.tsx";
 import { createElement } from "react";
@@ -82,7 +82,7 @@ describe("a ClickUp card", () => {
 });
 
 const settle = () => new Promise((r) => setTimeout(r, 0));
-function harnessFor(opts: { checkout?: boolean; clickup?: boolean; known?: boolean; jira?: string | null } = {}) {
+function harnessFor(opts: { other?: "default" | "view" | "bench"; noBrowser?: boolean; checkout?: boolean; clickup?: boolean; known?: boolean; jira?: string | null; bench?: boolean } = {}) {
   const calls: string[] = [];
   const answer = (v: boolean) => (opts.known ? v : Promise.resolve(v));
   const deps: RouteDeps = {
@@ -92,6 +92,10 @@ function harnessFor(opts: { checkout?: boolean; clickup?: boolean; known?: boole
     openPr: (repo, n, o) => { calls.push(`pr ${repo}#${n}${o?.fallback ? ` else ${o.fallback}` : ""}${o?.anchor ? ` at ${o.anchor}` : ""}`); },
     openCard: (q, _l, t) => { calls.push(`card ${q}${t ? ` in ${t}` : ""}`); },
     openExternal: (u) => { calls.push(`out ${u}`); return true; },
+    wantBench: () => { calls.push("bench"); },
+    benchLinks: () => !!opts.bench,
+    otherLinks: () => opts.other ?? "default",
+    openInBrowser: (u, w) => { if (opts.noBrowser) return false; calls.push(`browser ${w} ${u}`); return true; },
   };
   return { calls, deps };
 }
@@ -316,7 +320,7 @@ const [TERMINAL, MARKDOWN, PR_PANEL] = (await Promise.all(
 
 describe("the three places that draw links all ask the router", () => {
   it("the terminal's URL addon, the shared markdown and the pull request body", () => {
-    expect(/new WebLinksAddon\(\(e, uri\) => \{ followLink\(uri, e\); \}, \{ urlRegex: TERM_URL \}\)/.test(TERMINAL)).toBe(true);
+    expect(/new WebLinksAddon\(\(e, uri\) => \{ followTerminalLink\(uri, e\); \}, \{ urlRegex: TERM_URL \}\)/.test(TERMINAL)).toBe(true);
     expect(MARKDOWN.includes("openInApp(href, e, { strict: true })")).toBe(true);
     expect(PR_PANEL.includes("openInApp(href, e, { shortRef: isShortRef(a!.textContent) })")).toBe(true);
   });
@@ -345,5 +349,102 @@ describe("a bare URL in shared markdown is a link", () => {
 
   it("and never for a scheme that is not http(s)", () => {
     expect(hrefs(html("javascript:alert(1) and data:text/html,x"))).toEqual([]);
+  });
+});
+
+describe("open PR and card links on the bench", () => {
+  const pr = "https://github.com/acme/orbit/pull/7";
+  it("pure: only PR and card links from a terminal, only with the setting on", () => {
+    for (const k of ["pr", "ref", "card", "jira"] as const) {
+      expect(linkSurface(k, true, true)).toBe("bench");
+      expect(linkSurface(k, true, false)).toBe("view");
+      expect(linkSurface(k, false, true)).toBe("view");
+    }
+    expect(linkSurface("external", true, true)).toBe("view");
+  });
+  it("on: a terminal PR link asks for the bench before it opens", () => {
+    const h = harnessFor({ known: true, bench: true });
+    expect(openInApp(pr, undefined, { fromTerminal: true }, h.deps)).toBe(true);
+    expect(h.calls).toEqual(["bench", "pr acme/orbit#7"]);
+  });
+  it("on: a Jira key link from a terminal too", () => {
+    const h = harnessFor({ known: true, bench: true, jira: "acme.atlassian.net" });
+    expect(openInApp("https://acme.atlassian.net/browse/ORBIT-1042", undefined, { fromTerminal: true }, h.deps)).toBe(true);
+    expect(h.calls).toEqual(["bench", "card ORBIT-1042 in jira"]);
+  });
+  it("off (the default), or not from a terminal: today's route", () => {
+    const off = harnessFor({ known: true });
+    openInApp(pr, undefined, { fromTerminal: true }, off.deps);
+    expect(off.calls).not.toContain("bench");
+    const other = harnessFor({ known: true, bench: true });
+    openInApp(pr, undefined, {}, other.deps);
+    expect(other.calls).not.toContain("bench");
+  });
+});
+
+describe("other web links", () => {
+  const term = { fromTerminal: true };
+  it("default keeps today's behaviour: the caller opens the system browser", () => {
+    const { calls, deps } = harnessFor({ known: true });
+    expect(openInApp("https://example.com/a", undefined, term, deps)).toBe(false);
+    expect(calls).toEqual([]);
+  });
+  it("view and bench open a new agentglass browser tab", () => {
+    for (const where of ["view", "bench"] as const) {
+      const { calls, deps } = harnessFor({ known: true, other: where });
+      expect(openInApp("http://127.0.0.1:8765/x", undefined, term, deps)).toBe(true);
+      expect(calls).toEqual([`browser ${where} http://127.0.0.1:8765/x`]);
+    }
+  });
+  it("Ctrl held is not touched; a click outside a terminal follows the setting too", () => {
+    const { calls, deps } = harnessFor({ known: true, other: "view" });
+    expect(openInApp("https://example.com/", { ctrlKey: true }, term, deps)).toBe(false);
+    expect(calls).toEqual([]);
+  });
+  it("a click outside a terminal follows the setting", () => {
+    const { calls, deps } = harnessFor({ known: true, other: "view" });
+    expect(openInApp("https://example.com/", undefined, {}, deps)).toBe(true);
+    expect(calls).toEqual(["browser view https://example.com/"]);
+  });
+  it("loopback dev servers are allowed", () => {
+    for (const u of ["http://localhost:18030/", "http://127.0.0.1:8000/", "http://[::1]:8000/"]) expect(otherLinkSurface(u, "bench"), u).toBe("bench");
+  });
+  it("a URL the egress guard refuses falls back to the default browser, with no error", () => {
+    for (const u of ["file:///etc/passwd", "javascript:alert(1)", "mailto:a@b.example", "http://169.254.169.254/latest", "http://[fe80::1]/", "http://[::ffff:169.254.169.254]/", "http://[::ffff:a9fe:a9fe]/", "http://[0:0:0:0:0:ffff:a9fe:a9fe]/", "http://[::FFFF:A9FE:A9FE]/", "http://[::a9fe:a9fe]/", "http://[FE80:0:0:0:1::1]/", "http://[::]/", "http://0.0.0.0/", "http://[::ffff:0.0.0.0]/", `https://user:${PW}@example.com/`]) {
+      expect(otherLinkSurface(u, "bench"), u).toBe("default");
+      const { calls, deps } = harnessFor({ known: true, other: "bench" });
+      expect(openInApp(u, undefined, term, deps), u).toBe(false);
+      expect(calls, u).toEqual([]);
+    }
+  });
+  it("no browser to open it in (web build, no bench yet) also falls back", () => {
+    const { deps } = harnessFor({ known: true, other: "view", noBrowser: true });
+    expect(openInApp("https://example.com/", undefined, term, deps)).toBe(false);
+  });
+  it("pull requests and cards keep their own setting", () => {
+    const { calls, deps } = harnessFor({ known: true, other: "view" });
+    expect(openInApp("https://github.com/acme/orbit/pull/7", undefined, term, deps)).toBe(true);
+    expect(calls.some((c) => c.startsWith("browser"))).toBe(false);
+  });
+});
+
+describe("a notification's link (openNoteLink)", () => {
+  it("opens in the agentglass browser even when web links go to the default browser", async () => {
+    const h = harnessFor({ other: "default", known: true });
+    openNoteLink("https://docs.example.dev/guide", h.deps);
+    await settle();
+    expect(h.calls).toEqual(["browser view https://docs.example.dev/guide"]);
+  });
+  it("keeps the bench when that is where web links go", async () => {
+    const h = harnessFor({ other: "bench", known: true });
+    openNoteLink("https://docs.example.dev/guide", h.deps);
+    await settle();
+    expect(h.calls).toEqual(["browser bench https://docs.example.dev/guide"]);
+  });
+  it("falls back to the default browser only when the agentglass browser refuses", async () => {
+    const h = harnessFor({ other: "default", known: true, noBrowser: true });
+    openNoteLink("https://docs.example.dev/guide", h.deps);
+    await settle();
+    expect(h.calls).toEqual(["out https://docs.example.dev/guide"]);
   });
 });

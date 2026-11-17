@@ -11,11 +11,10 @@ const code = src.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("
 
 describe("the review prompts page", () => {
   test("New prompt is the page header's action, and the empty states keep their own", () => {
-    expect(code).toContain('useReportHead("review-prompts", { action: { label: "New prompt" } }');
-    // The bar no longer carries a second one beside the search.
-    const bar = code.slice(code.indexOf("<ListBar"), code.indexOf("</ListBar>"));
-    expect(bar).not.toContain("<NewButton");
-    expect(code).toContain("<NothingSelected");
+    expect(code).toContain('useReportHead("review-prompts", list && !editing ? { action: { label: "New prompt" } } : null');
+    // No second "Write a new prompt" row beside it; only the empty state keeps a button.
+    expect(code).not.toContain('label="Write a new prompt"');
+    expect(code.match(/>New prompt<\/Button>/g)!.length).toBe(1);
   });
 
   test("no field is a native select: the kit's themed select draws every list", () => {
@@ -26,13 +25,13 @@ describe("the review prompts page", () => {
 
   test("a hidden built-in is listed, and Offer again is the same call as Reset", () => {
     expect(code).toContain("hiddenList");
-    expect(code).toContain("onOffer={editing.hidden ? () => void offerAgain(editing) : undefined}");
+    expect(code).toContain("onClick={() => void offerAgain(r)}>Offer again");
     const offer = code.slice(code.indexOf("const offerAgain"), code.indexOf("if (!list)"));
     expect(offer).toContain("api.prPromptReset(r.id)");
   });
 
   test("Edited is the server's word, not a guess made here", () => {
-    expect(code).toContain("...(r.edited ? [{ tone: \"warn\" as const, text: \"Edited\" }] : [])");
+    expect(code).toContain('r.edited ? "Edited" : ""');
   });
 
   test("the prompt is previewed with a demo pull request and sized in tokens", () => {

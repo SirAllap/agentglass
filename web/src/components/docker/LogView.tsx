@@ -33,7 +33,7 @@ export const TAILS = [100, 200, 400, 1000, 2000];
 function Line({ e, q, first, cur, lastErr }: { e: LogEntry; q: string; first: number; cur: number; lastErr: boolean }) {
   return (
     <span className="ln" data-lv={e.level} data-tag={e.tagged || undefined} data-lasterr={lastErr || undefined}>
-      {e.time && <span className="ts" title={e.stamp ?? undefined}>{e.time}</span>}
+      {e.time && <span className="ts" data-tip={e.stamp ?? undefined}>{e.time}</span>}
       {markSegments(e.text, q, first).map((s, i) => s.hit === null ? s.t
         : <mark key={i} data-hit={s.hit} data-cur={s.hit === cur || undefined}>{s.t}</mark>)}
       {!e.text && !e.time && "\u200b"}
@@ -138,7 +138,7 @@ export function LogView({ id, tail, onTail, running, errorTick = 0, container }:
     <>
       <div className="dk-lt">
         <span className="dk-st" data-k={chip.key} role="status"
-          title={ended ?? (running ? "following this container" : "the container is not running")}>
+          data-tip={ended ?? (running ? "following this container" : "the container is not running")}>
           <i />{chip.word}
         </span>
         <Segmented track label="Log level" value={pick} onChange={setPick}
@@ -173,7 +173,7 @@ export function LogView({ id, tail, onTail, running, errorTick = 0, container }:
 
       <div className="dk-logwrap">
         {earlierRun && (
-          <div className="dk-logold" role="status" title="Docker could not start this container, so it wrote no log of its own. What is below came from the run before.">
+          <div className="dk-logold" role="status" data-tip="Docker could not start this container, so it wrote no log of its own. What is below came from the run before.">
             {NO_LOG_FROM_THIS_START}. Every line below was written by an earlier run.
           </div>
         )}

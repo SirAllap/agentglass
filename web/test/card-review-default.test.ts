@@ -76,9 +76,9 @@ describe("the sidebar gates on the settings", () => {
     expect(picker).toContain("reviewPrefs?.assignReviewer === true");
     expect(picker).toContain("const mirror = mirrorSet ?? (handOver ? true : side.defaults.mirror);");
   });
-  test("the note button needs noteOnCard, and unknown reads as off", () => {
+  test("the note button needs noteOnCard, and unknown reads as off, and a read-only card never draws it", () => {
     const body = slice("function CardFacts(", "\n/** Who the note is for");
     expect(body).toContain("useClickupPrefs()?.flows.noteOnCard === true");
-    expect(body).toContain("{noteOnCard && (");
+    expect(body).toContain("{noteOnCard && !readOnly && (");
   });
 });

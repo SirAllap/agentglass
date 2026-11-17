@@ -31,7 +31,7 @@ const plural = (n: number, w: string): string => `${n} ${w}${n === 1 ? "" : "s"}
 const bare = (s: string | undefined): string => (s ?? "").replace(/^Up /, "").replace(/ \([^)]*\)$/, "");
 
 /** Why a container needs you, in a sentence; null when it does not. */
-export function healthLine(c: DockerContainer): HealthLine | null {
+export function healthLine(c: DockerContainer, recent?: number | null): HealthLine | null {
   const k = kindOf(c);
   const restarts = c.restarts === undefined ? "" : `, ${plural(c.restarts, "restart")}`;
   if (k === "unhealthy") {
@@ -44,7 +44,8 @@ export function healthLine(c: DockerContainer): HealthLine | null {
   }
   if (k === "restarting") {
     const last = /^Restarting \((-?\d+)\)/.exec(c.status || "")?.[1];
-    const lead = c.restarts === undefined ? "" : `${plural(c.restarts, "restart")}${last ? `, last exit code ${last}` : ""}. `;
+    const lead = recent ? `${plural(recent, "restart")} in 10 min${last ? `, last exit code ${last}` : ""}. `
+      : c.restarts === undefined ? "" : `${plural(c.restarts, "restart")}${last ? `, last exit code ${last}` : ""}. `;
     return { tone: "amb", lead: "Restart loop:", rest: `${lead}Docker keeps trying.` };
   }
   if (k === "crash") {

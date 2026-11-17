@@ -315,17 +315,18 @@ describe("Always open draws a chip under every pane, each with its own data", ()
     // The focused slot keeps the richer read; the others are not left empty.
     expect(term).toContain("i === focusIdx");
   });
-  test("a slot reads for itself, keyed by its own session, window and pane", () => {
-    const slot = term.slice(term.indexOf("function SlotBar("), term.indexOf("/** Priority → the colour the chip wears."));
-    expect(slot).toContain("const key = `${sessId}:${win}:${pane}`;");
-    // A reading that is not this slot's key is nothing: no answer crosses panes.
-    expect(slot).toContain("seen && seen.key === key ? seen : null");
-    expect(slot).toContain("useBranchPr(open, wt?.root");
+  test("a slot reads for itself, keyed by its own window — never a cwd, never another slot's", () => {
+    const slot = term.slice(term.indexOf("function SlotBar("), term.indexOf("/** Card id → its priority,"));
+    // A pure reader: no fetch, no local seen/kept state, just this slot's own
+    // tmux window read out of the one shared record store.
+    expect(slot).toContain("const facts = win ? liveTabFacts.get(win) : undefined;");
+    expect(slot).not.toContain("usePoll(");
   });
-  test("the pull request of a pane is that pane's live branch's, through one hook for every pane", () => {
-    expect(term).toContain("function useBranchPr(");
-    expect(term).toContain("return prForPane(raw, prRoot, prBranch);");
-    expect(term).toContain("const chipPr = useBranchPr(open, prRoot, prBranch,");
+  test("the pull request of a pane is that pane's own tab record's, never re-fetched by the slot itself", () => {
+    // `useTabFactsWriter` is the one place any tab's pull request is fetched —
+    // bound to the FOCUSED pane only, so only the active tab pays for it.
+    expect(term).toContain("useTabFactsWriter(identTabId, storedRoot, chipWt?.branch ?? \"\", chipWt?.worktreeOf, open, ");
+    expect(term).toContain("onPr={() => { if (facts?.pr) openPr(facts.pr.repo, facts.pr.number); }}");
   });
 });
 

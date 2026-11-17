@@ -18,17 +18,20 @@ import { StartFlightPlan } from "../flightPlan/StartFlightPlan.tsx";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { api } from "../../lib/api.ts";
 import { dayToMs, msToDay } from "../../lib/cardEdits.ts";
+import { fieldRule } from "../../lib/stateRule.ts";
 import { canEdit, parseEstimate, parseParent, parseTitle, priorityOptions, stepFor } from "../../lib/jiraEdit.ts";
 import { fmtAgo } from "../../lib/format.ts";
 import { openCard } from "../../lib/openCard.ts";
 import { Flag, CardFace, prioLook } from "../../lib/priority.tsx";
 import { TRACKERS } from "../../lib/trackerApi.ts";
 import { tipAttr } from "../../lib/tip.ts";
+import { ageLabel, useMinuteTick } from "../../lib/remoteStore.ts";
 import { CopyIcon, DoneIcon, LinkIcon, LockIcon, RefreshIcon } from "../../lib/glyphIcons.tsx";
+import type { AddAsk } from "../../lib/stateRule.ts";
 import type { CardFact, ProviderTask } from "../../../../shared/providers.ts";
 import { Button, EDGE } from "../workspace/Chrome.tsx";
 import { CloseIcon } from "../CloseButton.tsx";
-import { ICON } from "../../lib/iconSize.ts";
+import { ICON, MIN_BOX } from "../../lib/iconSize.ts";
 import { TrackerStatusPick } from "../TrackerStatusPick.tsx";
 import { TrackerPeoplePick } from "../TrackerPeoplePick.tsx";
 import { TrackerHandOffButton } from "../TrackerHandOffButton.tsx";
@@ -51,7 +54,7 @@ function Said({ said }: { said: string }) {
 }
 
 /** What stays above the tabs: the key and the icon controls, the title, the one state chip (which is the move menu) and when it last moved. */
-export function JiraHead({ t, writable, onTask, onRefresh, refreshing, ed, follow, nav, onClose }: {
+export function JiraHead({ t, writable, onTask, onRefresh, refreshing, ed, follow, nav, onClose, updatedAt }: {
   t: ProviderTask; writable: boolean; onTask: (t: ProviderTask) => void;
   onRefresh?: () => void; refreshing?: boolean;
   /** Watching and voting, with what the last press said; absent until the card is read. */
@@ -62,7 +65,10 @@ export function JiraHead({ t, writable, onTask, onRefresh, refreshing, ed, follo
   nav?: ReactNode;
   /** Close the card. */
   onClose?: () => void;
+  /** The cache's own read time (remoteStore entry's `at`), for "Updated N min ago" beside Refresh; 0 or absent draws nothing. */
+  updatedAt?: number;
 }) {
+  useMinuteTick();
   const key = t.customId ?? t.id;
   const [copied, copy] = useCopied();
   const [said, setSaid] = useState("");
@@ -74,7 +80,7 @@ export function JiraHead({ t, writable, onTask, onRefresh, refreshing, ed, follo
   return (
     <div className="flex flex-col min-w-0" style={{ background: "var(--bg)", padding: "12px 16px 0", gap: 8 }}>
       <div className="flex items-center min-w-0" style={{ gap: 6 }}>
-        <TypeMark type={t.issueType} size={22} />
+        <TypeMark type={t.issueType} size={ICON.xl} />
         <button type="button" onClick={() => void copy(key, "id")} data-tip={tipAttr({ name: key, mono: true, text: "Copy the card id: for a branch, a commit or a colleague." })} aria-label={`Copy ${key}`}
           className="agx-btn tabular-nums rounded-md font-semibold min-w-0 truncate" style={{ fontSize: 11.5, color: "var(--info-ink)" }}>
           {copied === "id" ? "copied" : key}
@@ -89,6 +95,11 @@ export function JiraHead({ t, writable, onTask, onRefresh, refreshing, ed, follo
           </DockIcon>
         )}
         {t.url && <DockIcon tip={{ name: "Open in Jira", text: "This card, in your browser." }} href={t.url}><ExtIcon /></DockIcon>}
+        {!!updatedAt && (
+          <span className="text-[10.5px] shrink-0" style={{ color: "var(--text4)" }} data-tip={tipAttr({ name: "Last read", text: "When this card was last asked for, whatever is on screen." })}>
+            {ageLabel(updatedAt)}
+          </span>
+        )}
         <DockIcon tip={{ name: "Read this card again", text: "Asks Jira for it now." }} onClick={onRefresh ?? (() => undefined)} disabled={!!refreshing}>
           <RefreshIcon size={ICON.md} className={refreshing ? "agx-turn" : undefined} />
         </DockIcon>
@@ -104,7 +115,7 @@ export function JiraHead({ t, writable, onTask, onRefresh, refreshing, ed, follo
         <span style={{ whiteSpace: "nowrap" }}>{editable ? "" : t.title.slice(cut)}
           <button type="button" onClick={() => void copy(t.title, "title")} data-tip={tipAttr({ name: "Copy the title" })} aria-label={copied === "title" ? "Title copied" : "Copy the title"}
             className="inline-flex items-center justify-center align-middle ml-1.5 rounded-md hover:bg-[color-mix(in_srgb,var(--text)_6%,transparent)]"
-            style={{ width: 20, height: 20, color: copied === "title" ? "var(--success)" : "var(--text4)" }}>
+            style={{ width: MIN_BOX, height: MIN_BOX, color: copied === "title" ? "var(--success)" : "var(--text4)" }}>
             {copied === "title" ? <DoneIcon size={ICON.sm} /> : <CopyIcon size={ICON.sm} />}
           </button>
         </span>
@@ -130,11 +141,11 @@ export function JiraHead({ t, writable, onTask, onRefresh, refreshing, ed, follo
  * server/src/jiraCardRead.ts), so nothing here chooses rows.
  */
 export function FactValue({ f }: { f: CardFact }) {
-  if (!f.value) return <span style={{ color: "var(--text4)" }}>None</span>;
+  if (!f.value) return null;
   if (f.id === "reporter") {
     return (
       <span className="inline-flex items-center gap-1.5 min-w-0" style={{ color: "var(--text2)" }}>
-        <CardFace p={{ name: f.value, initials: f.initials ?? "?", avatar: f.avatar }} size={18} />
+        <CardFace p={{ name: f.value, initials: f.initials ?? "?", avatar: f.avatar }} size={ICON.lg} />
         <span className="min-w-0 truncate">{f.value}</span>
       </span>
     );
@@ -152,7 +163,7 @@ function FlagToggle({ f, ed }: { f: CardFact; ed: JiraEditUi }) {
     <span className="inline-flex items-center gap-x-2 gap-y-1 min-w-0 flex-wrap">
       <FactValue f={f} />
       <Button size="compact" className="shrink-0" disabled={busy}
-        title={on ? "Take the flag off this card" : "Flag this card as blocked"}
+        data-tip={on ? "Take the flag off this card" : "Flag this card as blocked"}
         onClick={() => { const s = stepFor("flag", { value: !on }, ed.now); if (s) ed.run(s); }}>
         {busy ? "Saving…" : on ? "Remove flag" : "Add flag"}
       </Button>
@@ -206,7 +217,7 @@ function Tile({ label, tone, locked, onAllow, children }: { label: string; tone?
 
 const Val = ({ children, dim }: { children: ReactNode; dim?: boolean }) => <span className="truncate min-w-0" style={dim ? { color: "var(--text4)", fontWeight: 400 } : undefined}>{children}</span>;
 
-export function JiraProps({ t, writable, onTask, facts, ed, onAllow }: { t: ProviderTask; writable: boolean; onTask: (t: ProviderTask) => void; facts?: CardFact[]; onAllow?: () => void; ed?: JiraEditUi }) {
+export function JiraProps({ t, writable, onTask, facts, ed, onAllow, onOpenByKey, folded, estFolded, ask }: { /** The card's fold put the estimate in its "Empty:" line: only then is an empty estimate fact not drawn. */ estFolded?: boolean; /** The empty estimate, parent and labels are in the card's one "Empty:" line; the Add that asked for one shows it. */ folded?: boolean; ask?: AddAsk; t: ProviderTask; writable: boolean; onTask: (t: ProviderTask) => void; facts?: CardFact[]; onAllow?: () => void; ed?: JiraEditUi; /** Opens the Parent field's card in place; absent falls back to the cross-view jump. */ onOpenByKey?: (key: string) => void }) {
   const query = t.customId ?? t.id;
   const [said, setSaid] = useState("");
   useEffect(() => { setSaid(""); }, [t.id]);
@@ -222,7 +233,12 @@ export function JiraProps({ t, writable, onTask, facts, ed, onAllow }: { t: Prov
   const byId = (id: string) => facts?.find((f) => f.id === id);
   const reporter = byId("reporter");
   const components = byId("components");
-  const rest = (facts ?? []).filter((f) => f.id !== "reporter" && f.id !== "components");
+  /* The hide rule: a Detail with no value that cannot be typed here is not drawn; one that can keeps its prompt. */
+  const hid = (k: "estimate" | "parent" | "labels") => !!folded && ask?.k !== k;
+  const isEst = (f: CardFact) => f.field === "originalEstimate" || f.field === "remainingEstimate";
+  const rest = (facts ?? []).filter((f) => f.id !== "reporter" && f.id !== "components"
+    && !(isEst(f) && !(f.value ?? "").trim() && estFolded && ask?.k !== "estimate")
+    && fieldRule({ value: f.value, canFill: !!f.field && !!live && canEdit(live.edit, f.field) }) !== "hide");
   const epicLike = t.parent?.type ? /epic/i.test(t.parent.type) : false;
   return (
     <div className="flex flex-col min-w-0" style={{ gap: 12 }}>
@@ -235,12 +251,12 @@ export function JiraProps({ t, writable, onTask, facts, ed, onAllow }: { t: Prov
             ? <TrackerPeoplePick tracker={TRACKERS.jira} task={t} query={query} onSaid={setSaid} onTask={onTask} bare />
             : (
               <span className="inline-flex items-center gap-1.5 min-w-0" style={{ color: t.mine ? "var(--success-ink)" : "var(--text)" }}>
-                {person && <CardFace p={{ name: person.name, initials: person.initials, color: person.color, avatar: person.avatar, me: person.me }} size={18} />}
+                {person && <CardFace p={{ name: person.name, initials: person.initials, color: person.color, avatar: person.avatar, me: person.me }} size={ICON.lg} />}
                 <Val>{t.mine ? "You" : (t.assignees.join(", ") || "Nobody")}</Val>
               </span>
             )}
         </Tile>
-        {reporter && <Tile label="Reporter"><FactValue f={reporter} /></Tile>}
+        {reporter?.value && <Tile label="Reporter"><FactValue f={reporter} /></Tile>}
         {(t.priority || can("priority")) && (
           <Tile label="Priority" tone={look?.c} locked={lockable("priority")} onAllow={onAllow}>
             {can("priority") && live!.edit?.priority
@@ -258,22 +274,24 @@ export function JiraProps({ t, writable, onTask, facts, ed, onAllow }: { t: Prov
           </Tile>
         )}
         {t.sprint && <Tile label="Sprint" tone="var(--info)"><Val>{t.sprint}</Val></Tile>}
-        {(t.parent || can("parent")) && (
+        {(t.parent || (can("parent") && !hid("parent"))) && (
           <Tile label={epicLike ? "Epic" : "Parent"}>
-            {can("parent")
-              ? <EditText value={t.parent?.key ?? ""} empty="Add a parent" title="Change the parent card: a card id, or empty to take it off" busy={live!.busy === "parent"} parse={parseParent}
-                  onSave={(raw) => { const s = stepFor("parent", { value: raw }, live!.now); if (s) live!.run(s); }} />
-              : t.parent && (
-                <button type="button" onClick={() => openCard(t.parent!.key, t.parent!.key, "jira")} data-tip={tipAttr({ name: t.parent.key, mono: true, text: t.parent.title || "Open the card this one sits under." })}
-                  className="agx-btn min-w-0 truncate text-left" style={{ color: "inherit", font: "inherit" }}>
-                  <span className="tabular-nums">{t.parent.key}</span>{t.parent.title ? ` ${t.parent.title}` : ""}
-                </button>
-              )}
+            {can("parent") && (
+              <EditText value={t.parent?.key ?? ""} empty="Add a parent" title="Change the parent card: a card id, or empty to take it off" busy={live!.busy === "parent"} parse={parseParent}
+                onSave={(raw) => { const s = stepFor("parent", { value: raw }, live!.now); if (s) live!.run(s); }} />
+            )}
+            {!can("parent") && t.parent && (
+              <button type="button" onClick={() => (onOpenByKey ? onOpenByKey(t.parent!.key) : openCard(t.parent!.key, t.parent!.key, "jira"))}
+                data-tip={tipAttr({ name: t.parent.key, mono: true, text: t.parent.title || "Open the card this one sits under." })}
+                className="agx-btn min-w-0 truncate text-left hover:underline" style={{ color: "inherit", font: "inherit" }}>
+                <span className="tabular-nums">↳ {t.parent.key}</span>{t.parent.title ? ` ${t.parent.title}` : ""}
+              </button>
+            )}
           </Tile>
         )}
         {typeof t.points === "number" && <Tile label="Points"><span className="tabular-nums">{t.points}</span></Tile>}
-        {components && <Tile label="Components"><FactValue f={components} /></Tile>}
-        {(!!t.tags.length || can("labels")) && (
+        {components?.value && <Tile label="Components"><FactValue f={components} /></Tile>}
+        {(!!t.tags.length || (can("labels") && !hid("labels"))) && (
           <Tile label="Labels" locked={lockable("labels")} onAllow={onAllow}>
             {can("labels")
               ? <LabelEdit t={t} ed={live!} />

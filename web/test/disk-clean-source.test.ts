@@ -51,6 +51,10 @@ describe("what a press sends", () => {
     const calls = [...block.matchAll(/scan\((true|false)\)/g)].map((m) => m[1]);
     expect(calls.sort()).toEqual(["false", "true"]);
   });
+  it("a read that says it is scanning is waited for, not drawn as an empty plan", () => {
+    expect(block).toContain('r.state === "scanning"');
+    expect(block).toContain("api.machineDiskClean(false)");
+  });
   it("every press that removes goes through run(), which puts the confirmation away first", () => {
     const run = body(block, "const run = async");
     expect(run.indexOf("setArmed(null)")).toBeGreaterThan(-1);
@@ -125,4 +129,37 @@ describe("the machine panel", () => {
     expect(resources).toContain("publishMachineDisk(d.machine)");
     expect(read("lib/diskClean.ts")).toContain('publishDiskMounts("tile"');
   });
+});
+
+describe("a scan running on the server when the panel opens", () => {
+  // The scan outlives the dialog. Reopening must show "Scanning…", then the result from a pushed frame, never a timer.
+  it("the open-time read of the kept scan sets the scanning state from the server's answer", () => {
+    expect(block).toMatch(/machineDiskCleanKept\(\)\.then\(\(k\) => \{[\s\S]*?setServerScan\(k\.scanning === true\)/);
+  });
+  it("the pushed frame re-reads it, so the end of the scan is shown without a clock", () => {
+    expect(block).toMatch(/onDiskExplainChanged\([\s\S]*?setServerScan\(k\.scanning === true\)/);
+    expect(block).not.toMatch(/setInterval/);
+  });
+  it("the scanning state the button and the bar read includes the server's scan", () => {
+    expect(block).toMatch(/const scanning = ownScan \|\| serverScan/);
+  });
+});
+
+it("a scan with no report says so and offers to write one, so it does not look like the old scan", () => {
+  const src = read("components/DiskClean.tsx");
+  const note = src.slice(src.indexOf("function ReportNote"), src.indexOf("function PlanGroup"));
+  expect(note).toContain("No report yet");
+  expect(note).toContain("Write report");
+  expect(src).toContain("hasItems");
+});
+
+it("a kept scan with no report starts one on open, once, and each row can be asked about", () => {
+  const src = read("components/DiskClean.tsx");
+  const open = src.slice(src.indexOf("On open, the scan the server kept"), src.indexOf("}, []);", src.indexOf("On open, the scan the server kept")));
+  expect(open).toContain("startRef.current()");
+  expect(open).toContain("!k.report.explain");
+  const rowFn = src.slice(src.indexOf("function LineRow"), src.indexOf("function Done"));
+  expect(rowFn).toContain("onAsk");
+  expect(rowFn).toContain("Ask about");
+  expect(src).toContain("diskSeed(report, { on: l.label })");
 });

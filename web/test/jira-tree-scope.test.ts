@@ -113,3 +113,38 @@ describe("the list's filters know components and epics", () => {
     expect(apply(cards, rule("component", ["Api", "Docs"])).length).toBe(4);
   });
 });
+
+describe("an epic page", () => {
+  test("reads the whole epic, whatever its cards' components", () => {
+    expect(scopeJql({ space: "ORB", component: "Api", epic: "ORB-1" })).toBe("project = ORB AND issuetype != Epic AND parent = ORB-1 ORDER BY updated DESC");
+    expect(scopeJql({ space: "ORB", component: "Api" })).toContain('component = "Api"');
+  });
+  test("starts with done cards shown on an epic or component page, hidden on a space page", async () => {
+    const { startFilters } = await import("../src/components/jira/list/model.ts");
+    expect(startFilters("scope:ORB|c:Api|e:ORB-1").showDone).toBe(true);
+    expect(startFilters("scope:ORB|c:Api").showDone).toBe(true);
+    expect(startFilters("scope:ORB").showDone).toBe(false);
+    expect(startFilters("board:12").showDone).toBe(false);
+  });
+  test("hands back the same object every call, so a render does not change the filters' identity", async () => {
+    // A fresh object per call made the list's effects fire on every render: the epic page crashed with React error 185.
+    const { startFilters } = await import("../src/components/jira/list/model.ts");
+    expect(startFilters("scope:ORB|c:Api|e:ORB-1")).toBe(startFilters("scope:ORB|c:Api|e:ORB-1"));
+    expect(startFilters("board:12", "area:1")).toBe(startFilters("board:12", "area:2"));
+  });
+});
+
+describe("an Area page starts from empty filters", () => {
+  test("whatever the view had, and with done shown", async () => {
+    const { startFilters, isAreaScope, NO_FILTERS } = await import("../src/components/jira/list/model.ts");
+    expect(isAreaScope("scope:ORB|c:Api|e:ORB-1")).toBe(true);
+    expect(isAreaScope("scope:ORB|n")).toBe(false);
+    const f = startFilters("scope:ORB|e:ORB-1");
+    expect(f).toEqual({ ...NO_FILTERS, showDone: true });
+    expect(f.assigneePick).toEqual([]);
+    expect(f.spaces).toBeUndefined();
+    expect(f.quick).toEqual([]);
+    expect(f.viewJql).toBeUndefined();
+    expect(startFilters("board:12", "ORB-1").showDone).toBe(true);
+  });
+});

@@ -25,6 +25,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CloseButton } from "../CloseButton.tsx";
 import { Button, CTRL_H, EDGE } from "../workspace/Chrome.tsx";
+import { BROWSER } from "../../lib/layers.ts";
 
 export interface Rect { x: number; y: number; width: number; height: number }
 
@@ -261,7 +262,7 @@ export function Shooter({ view, onNote, onDone }: {
   const showing = sel ?? hover;
 
   return (
-    <div ref={box} className="absolute inset-0" style={{ zIndex: 32, cursor: sel ? "default" : "crosshair" }}
+    <div ref={box} className="absolute inset-0" style={{ zIndex: BROWSER.shooter, cursor: sel ? "default" : "crosshair" }}
       onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp}>
       {/* Everything outside the selection, dimmed. Four panels rather than one
           box with a hole: a hole needs a mask, and a mask over a `<webview>` is

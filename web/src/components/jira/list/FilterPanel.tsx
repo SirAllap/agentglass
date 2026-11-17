@@ -10,9 +10,9 @@ export function FilterPanel({ cards, value, onChange }: { cards: readonly Provid
   return (
     <FilterBuilder fields={fields} value={value} onChange={onChange}
       trigger={({ ref, toggle, open, count }) => (
-        <Ctl btnRef={ref} pressed={count > 0} aria-haspopup="dialog" aria-expanded={open} onClick={toggle}
-          tip={{ name: "Filters", text: "Build a filter: a field, is or is not, and its values." }}>
-          <FunnelIcon /> Filters {count > 0 && <small className="tabular-nums" style={{ fontSize: 10.5, color: "var(--text3)" }}>{count}</small>}
+        <Ctl btnRef={ref} compact pressed={count > 0} aria-haspopup="dialog" aria-expanded={open} onClick={toggle}
+          tip={{ name: "Rules", text: "Build a rule: a field, is or is not, and its values." }}>
+          <FunnelIcon /> Rules {count > 0 && <small className="tabular-nums" style={{ fontSize: 10.5, color: "var(--text3)" }}>{count}</small>}
         </Ctl>
       )} />
   );

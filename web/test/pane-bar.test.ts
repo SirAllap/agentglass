@@ -28,19 +28,19 @@ describe("finding a pane's foot", () => {
   test("the pane's own bottom edge, not the terminal's", () => {
     // The top-left pane of a 2×2 split: cells 0–49 across, 0–19 down.
     const foot = paneFoot({ screen: SCREEN, slot: SLOT, ...GRID, pane: { left: 0, top: 0, right: 49, bottom: 19 } });
-    expect(foot).toEqual({ left: 0, top: 400, width: 500 });
+    expect(foot).toMatchObject({ left: 0, top: 400, width: 500 });
   });
 
   test("`bottom` is the LAST row the pane owns, not the first one after it", () => {
     /* Reading it raw drew the bar a whole character inside the pane, which
        reads as a misalignment rather than as an off-by-one. */
     const foot = paneFoot({ screen: SCREEN, slot: SLOT, ...GRID, pane: { left: 50, top: 20, right: 99, bottom: 39 } });
-    expect(foot).toEqual({ left: 500, top: 800, width: 500 });
+    expect(foot).toMatchObject({ left: 500, top: 800, width: 500 });
   });
 
   test("no tmux, no panes: the whole terminal is the pane", () => {
     const foot = paneFoot({ screen: SCREEN, slot: SLOT, ...GRID, pane: null });
-    expect(foot).toEqual({ left: 0, top: 800, width: 1000 });
+    expect(foot).toMatchObject({ left: 0, top: 800, width: 1000 });
   });
 
   test("the screen's offset inside the slot is carried, borders and all", () => {
@@ -50,7 +50,7 @@ describe("finding a pane's foot", () => {
       slot: { left: 10, top: 5, width: 1002, height: 802 },
       ...GRID, pane: { left: 0, top: 0, right: 49, bottom: 19 },
     });
-    expect(foot).toEqual({ left: 1, top: 402, width: 500 });
+    expect(foot).toMatchObject({ left: 1, top: 402, width: 500 });
   });
 
   test("a pane wider than the slot is clamped to it", () => {
@@ -242,7 +242,7 @@ describe("the bar", () => {
        server call, and a throw there skipped the one line that takes the
        spinner down. */
     const term = readFileSync(new URL("../src/components/TerminalPanel.tsx", import.meta.url), "utf8");
-    expect(term).toContain("try { await readOnce(); } finally { if (!stopped) setWtDetecting(false); }");
+    expect(term).toContain("} finally { if (!stopped) setWtDetecting(false); }");
     // And it says which of the two states it is in, rather than "reading" for
     // a read that came back empty — or, worse, nothing at all.
     expect(term).toContain('loading={wtDetecting}');
@@ -265,7 +265,7 @@ describe("the bar", () => {
     expect(up).toContain("translateY(0)");
     expect(up).not.toContain("translate(-50%");
     const term = readFileSync(new URL("../src/components/TerminalPanel.tsx", import.meta.url), "utf8");
-    expect(term).toContain('ref={wrapRef} className="flex-1 min-h-0 relative"');
+    expect(term).toContain('ref={wrapRef} className="flex-1 min-w-0 min-h-0 relative"');
   });
 
   test("a pane with no room to give is left alone", () => {

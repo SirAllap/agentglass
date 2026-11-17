@@ -1,5 +1,6 @@
 import { adoptServer } from "./api.ts";
 import type { ShellNoticeFacts } from "./setupNotices.ts";
+import type { LaneTab } from "../../../shared/types.ts";
 import { partitionsFor } from "./browserProfiles.ts";
 import type { ImportedShelf } from "./browserShelf.ts";
 
@@ -32,7 +33,10 @@ type DesktopBridge = {
   raiseWindow?: () => Promise<boolean>;
   /** Absent on shells built before the machine could stay awake for an agent. */
   powerStatus?: () => Promise<PowerStatus>;
+  /** Pushed by the main process when the power state changes. Absent on older shells. */
+  onPowerChanged?: (fn: (s: PowerStatus) => void) => () => void;
   setPowerMode?: (mode: PowerMode) => Promise<PowerStatus>;
+  releasePower?: () => Promise<PowerStatus>;
   remoteEnabled?: () => Promise<boolean>;
   setRemote?: (on: boolean) => Promise<boolean>;
   revokeRemote?: () => Promise<boolean>;
@@ -54,6 +58,11 @@ type DesktopBridge = {
   laneOpen?: (id: string, slug: string, ephemeral?: boolean) => Promise<{ ok: boolean; error?: string }>;
   laneClose?: (id: string) => Promise<{ ok: boolean; error?: string }>;
   laneKeep?: (ids: string[]) => Promise<number>;
+  /** Each lane's one tab, read off its window (main answers the app window only). */
+  laneTabs?: () => Promise<LaneTab[]>;
+  /** Start or stop one lane's frames, for the person to watch it. */
+  laneWatch?: (id: string, on: boolean) => Promise<{ ok: boolean; error?: string }>;
+  onLaneFrame?: (fn: (f: LaneFrame) => void) => () => void;
   /** `newtab --from-template`'s visible-tab jar: the in-memory partition
    *  string is minted by the main process, not the renderer — unlike a lane,
    *  where the id comes from the server first. `tabEphemeralOpen` must
@@ -68,6 +77,9 @@ type DesktopBridge = {
   winToggleMaximize?: (why?: string) => Promise<boolean>;
   winClose?: () => Promise<void>;
   winIsMaximized?: () => Promise<boolean>;
+  /** A line for the shell's `window.log`. Absent on shells built before the
+   *  renderer's hang watchdog existed, and in a browser tab. */
+  windowLog?: (line: string) => void;
   winState?: () => Promise<{ max: boolean; full: boolean }>;
   appMenu?: (x: number, y: number) => Promise<void>;
   onWinState?: (fn: (st: { max: boolean; full: boolean }) => void) => () => void;
@@ -76,6 +88,9 @@ type DesktopBridge = {
   /** Absent on shells built before the browser could zoom. */
   onBrowserZoom?: (fn: (level: number) => void) => () => void;
   onBrowserOpenTab?: (fn: (url: string, opener?: number) => void) => () => void;
+  /** The shell's own escapes (target=_blank, window.open) arrive here instead of going to the OS. Absent on older shells. */
+  onOpenLink?: (fn: (url: string) => void) => () => void;
+  openOnMachine?: (url: string) => void;
   onBrowserGuestAttached?: (fn: (guestId: number) => void) => () => void;
   /** Absent on shells built before the browser had its own keyboard. */
   onBrowserKey?: (fn: (key: string, guest?: number) => void) => () => void;
@@ -106,6 +121,10 @@ type DesktopBridge = {
     Promise<string | null | { png: string | null; why?: string; cut?: boolean }>;
   /** Absent on shells built before §4 — addInitScript/expose. */
   registerInitScript?: (name: string, source: string, guestId?: number) => Promise<{ ok: boolean; error?: string }>;
+  /** Guide mode: watch the pointed element from an isolated world (electron/guide-observer.js); `stop` takes it down. */
+  guideObserve?: (req: Record<string, unknown>) => Promise<{ ok: boolean; found?: boolean; error?: string; reason?: string }>;
+  /** The observer's reports, `ag:guide-observed`. Returns the unsubscribe. */
+  onGuideObserved?: (fn: (ev: unknown) => void) => () => void;
   /** Absent on shells built before §5 — the DevTools protocol, relayed whole. */
   cdp?: (method: string, params?: unknown, guestId?: number) => Promise<{ ok: boolean; result?: unknown; error?: string }>;
   browserInput?: (req: BrowserInputReq, guestId: number) => Promise<{ ok: boolean; sent?: number; error?: string }>;
@@ -122,7 +141,37 @@ type DesktopBridge = {
   cookieSources?: () => Promise<CookieSourcesReply>;
   importCookies?: (req: { source: string; sites: string[] }) => Promise<CookieImportReply>;
   forgetCookies?: (req: { sites: string[]; partitions?: string[] }) => Promise<{ ok: boolean; removed?: number; profiles?: number; error?: string }>;
+  wipeContainers?: (req: { partitions: string[] }) => Promise<{ ok: boolean; wiped?: number }>;
+  /** All absent on shells built before the login vault existed. */
+  vaultPull?: (req: { lane: string; site: string; agent?: string; vault?: string; onVisit?: boolean; budgetMs?: number; deadlineAt?: number; container?: string; held?: boolean }) => Promise<VaultAnswer>;
+  /** Remove exactly the vault's cookies (name, domain, path) from an agent's container. */
+  vaultWipe?: (req: { container: string; cookies: unknown[]; site?: string; agent?: string; why?: string; sweep?: boolean }) => Promise<VaultAnswer>;
+  vaultList?: () => Promise<VaultAnswer>;
+  vaultImport?: (req: { source: string; sites: string[] }) => Promise<VaultAnswer>;
+  vaultSettings?: (req: Record<string, unknown>) => Promise<VaultAnswer>;
+  vaultRemove?: (req: { vault?: string; site?: string; all?: boolean }) => Promise<VaultAnswer>;
+  vaultUseInMyBrowser?: (req: { vault: string; sites?: string[] }) => Promise<VaultAnswer>;
+  vaultLanes?: () => Promise<string[]>;
+  vaultSignedIn?: () => Promise<{ lane: string; agent: string; sites: string[] }[]>;
+  vaultSignOut?: (req: { lane: string }) => Promise<VaultAnswer>;
 };
+
+/** What main answers about the vault: counts, names, settings — never a value. */
+export type VaultAnswer = { ok: boolean; code?: string; error?: string; [k: string]: unknown };
+
+/** One call into the vault, or a sentence saying this shell has none. */
+export async function vaultCall<K extends "vaultPull" | "vaultList" | "vaultImport" | "vaultSettings" | "vaultRemove" | "vaultUseInMyBrowser" | "vaultSignOut" | "vaultWipe">(
+  verb: K, ...req: Parameters<NonNullable<DesktopBridge[K]>>
+): Promise<VaultAnswer> {
+  const f = bridge()?.[verb] as ((...a: unknown[]) => Promise<VaultAnswer>) | undefined;
+  if (!f) return { ok: false, error: "this build has no login vault" };
+  try { return await f(...req); } catch (e) { return { ok: false, error: String(e) }; }
+}
+
+/** The lanes signed in from the vault right now (names only), or none. */
+export async function vaultSignedIn(): Promise<{ lane: string; agent: string; sites: string[] }[]> {
+  try { const r = await bridge()?.vaultSignedIn?.(); return Array.isArray(r) ? r : []; } catch { return []; }
+}
 
 /** A page another browser knows about. History and bookmarks arrive as one
  *  shape, because the address bar treats them as one list. */
@@ -179,6 +228,16 @@ export async function forgetCookies(sites: string[], profileIds: readonly string
   try { return await b.forgetCookies({ sites, partitions }); } catch (e) { return { ok: false, error: String(e) }; }
 }
 
+/** A dropped container's cookies and storage go with it — the whole jar, not
+ *  a list of sites. The default jar is never in it: main refuses it too. */
+export async function wipeContainers(profileIds: readonly string[]): Promise<void> {
+  const b = bridge();
+  if (!b?.wipeContainers) return;
+  const partitions = partitionsFor(BROWSER_PARTITION, profileIds).filter((p) => p !== BROWSER_PARTITION);
+  if (!partitions.length) return;
+  try { await b.wipeContainers({ partitions }); } catch { /* best effort: the name is already gone */ }
+}
+
 /** Whether this shell can make lanes, which is what lets it register as the window that does. */
 export const CAN_MAKE_LANES = typeof (typeof window !== "undefined"
   ? (window as unknown as { agentglass?: { laneOpen?: unknown } }).agentglass?.laneOpen
@@ -193,6 +252,24 @@ export async function openLaneWindow(id: string, slug: string, ephemeral = false
 /** The lanes the server still knows: every other host of this app is destroyed. */
 export async function keepLaneWindows(ids: string[]): Promise<void> {
   try { await bridge()?.laneKeep?.(ids); } catch { /* the next heartbeat says it again */ }
+}
+
+/** One frame of a lane being watched, with the page it shows. */
+export interface LaneFrame { id: string; src: string; url: string; title: string }
+
+/** Each lane's tab; empty outside the desktop app. */
+export async function laneTabs(): Promise<LaneTab[]> {
+  try { const t = await bridge()?.laneTabs?.(); return Array.isArray(t) ? t : []; } catch { return []; }
+}
+
+/** Watch one lane: frames go to `onFrame` until the returned stop is called.
+ *  Looking only — nothing is sent to the lane's page. */
+export function watchLane(id: string, onFrame: (f: LaneFrame) => void): (() => void) | null {
+  const b = bridge();
+  if (!b?.laneWatch || !b.onLaneFrame) return null;
+  const off = b.onLaneFrame((f) => { if (f && f.id === id) onFrame(f); });
+  void b.laneWatch(id, true).catch(() => { /* the lane closed */ });
+  return () => { off(); void b.laneWatch?.(id, false).catch(() => { /* already gone */ }); };
 }
 
 export async function closeLaneWindow(id: string): Promise<{ ok: boolean; error?: string }> {
@@ -224,6 +301,23 @@ function bridge(): DesktopBridge | null {
 
 /** True when running inside the desktop app rather than a browser tab. */
 export const IS_DESKTOP = bridge() !== null;
+
+/** Whether this shell can write to its `window.log`. Absent in a browser tab
+ *  and on shells older than the renderer hang watchdog. */
+export const HAS_WINDOW_LOG = typeof bridge()?.windowLog === "function";
+
+/**
+ * One diagnostic line for the shell's window log, beside the window events the
+ * main process writes itself (electron/main.js). Fire-and-forget by contract:
+ * a log is never something the renderer waits on, and never something it
+ * throws over.
+ */
+export function noteWindowLog(line: string): void {
+  const b = bridge();
+  if (!b?.windowLog) return;
+  try { b.windowLog(line); } catch { /* a log is not worth a throw */ }
+}
+
 /** The shell's notification half, when this shell has one. See macNotify.ts. */
 export function bridgeNotify(): { notify: NonNullable<DesktopBridge["notify"]>; onPress: NonNullable<DesktopBridge["onNotifyPress"]> } | null {
   const b = bridge();
@@ -428,6 +522,19 @@ export function onBrowserGuestAttached(fn: (guestId: number) => void): () => voi
   return b?.onBrowserGuestAttached ? b.onBrowserGuestAttached(fn) : () => {};
 }
 
+export function onOpenLink(fn: (url: string) => void): () => void {
+  const b = bridge();
+  return b?.onOpenLink ? b.onOpenLink(fn) : () => {};
+}
+
+/** Hands an http(s) URL to the OS browser. False when there is no shell to do it (a plain web tab). */
+export function openOnMachine(url: string): boolean {
+  const b = bridge();
+  if (!b?.openOnMachine) return false;
+  b.openOnMachine(url);
+  return true;
+}
+
 export function onBrowserOpenTab(fn: (url: string, opener?: number) => void): () => void {
   const b = bridge();
   return b?.onBrowserOpenTab ? b.onBrowserOpenTab(fn) : () => {};
@@ -527,6 +634,19 @@ export async function captureBrowser(
     if (typeof r === "string" || r === null) return { png: r, why: r ? "" : "the pane produced no frame" };
     return { png: r.png, why: r.why ?? "", cut: r.cut, url: (r as { url?: string }).url };
   } catch { return { png: null, why: "the capture did not answer" }; }
+}
+
+/** Guide mode's observer in Electron main; `{ok:false}` on a shell without one (the panel draws the last rect). */
+export async function guideObserve(req: Record<string, unknown>): Promise<{ ok: boolean; found?: boolean; error?: string; reason?: string }> {
+  const b = bridge();
+  if (!b?.guideObserve) return { ok: false, error: "this shell has no guide observer" };
+  try { return await b.guideObserve(req); } catch { return { ok: false, error: "the shell did not answer" }; }
+}
+
+/** The observer's reports, as they arrive. A shell without them never calls `fn`. */
+export function onGuideObserved(fn: (ev: unknown) => void): () => void {
+  const b = bridge();
+  return b?.onGuideObserved ? b.onGuideObserved(fn) : () => {};
 }
 
 /** §4: register a named init script with the shell — see
@@ -674,7 +794,9 @@ export interface PowerStatus {
   why?: { hooked: number; named: number } | null;
   /** What is held now: the logind sleep lock's mode (null when none is
    *  held), the lid switch, the screen, and on a Mac App Nap. */
-  locks?: { sleep: string | null; lid: boolean; display: boolean; app: boolean };
+  locks?: { sleep: string | null; lid: boolean; display: boolean; app: boolean; idle?: boolean };
+  /** "Let it sleep" is in force until the next agent turn starts. */
+  released?: boolean;
   /** Linux without systemd-inhibit: only the screen can be held. */
   inhibitMissing?: boolean;
   /** The shell's `process.platform`, which decides what a held lock means. */
@@ -726,12 +848,33 @@ export function powerReadout(s: PowerStatus): { tone: "held" | "idle" | "warn"; 
   return { tone: "held", title: `${head}.${held ? ` ${held}` : ""} ${click}` };
 }
 
+/** Calls `fn` whenever the main process reports a new power state. A no-op stop where there is no push. */
+export function onPowerChanged(fn: (s: PowerStatus) => void): () => void {
+  return bridge()?.onPowerChanged?.(fn) ?? (() => {});
+}
+
 /** Null in a browser tab, or on a shell built before this existed. */
 export async function powerStatus(): Promise<PowerStatus | null> {
   const b = bridge();
   if (!b?.powerStatus) return null;
   try {
     return await b.powerStatus();
+  } catch {
+    return null;
+  }
+}
+
+/** The one line shown while the machine is held, or null when it is not. */
+export function powerKeepAwakeLine(s: PowerStatus): string | null {
+  return s.awake && !s.released ? "Keeping the computer awake while agents work" : null;
+}
+
+/** "Let it sleep": drop the locks until the next agent turn. */
+export async function releasePower(): Promise<PowerStatus | null> {
+  const b = bridge();
+  if (!b?.releasePower) return null;
+  try {
+    return await b.releasePower();
   } catch {
     return null;
   }

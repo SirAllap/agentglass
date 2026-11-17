@@ -1,0 +1,33 @@
+/*
+ * FROZEN EXCERPT — not a copy of the whole file.
+ *
+ * This is every line `tab-switch-latency.test.ts` actually extracts and
+ * runs, verbatim, from the `TerminalPanel.tsx` this branch (sidepane4)
+ * started from — before round 4's fixes. It is not meant to compile or be
+ * imported; it exists only so the test's `rhsOf()` / `knownBlockOf()` slicers
+ * have real "before" source text to extract from. See round4's two fixes in
+ * the live file for what each block became:
+ *
+ *  - `focusWin` / `activeWindow`: two separate expressions over the same
+ *    `tmuxWindows`, neither sharing a function — the stale-tab bug.
+ *  - the `vouched`/`known` block: only `vouchedSeen` (live-agent memory) fed
+ *    `known`, never the warm `identityOf` store — the visible-reload bug.
+ *  - `lastFacts`: a per-tab shadow cache in `SidePaneFor`, written from
+ *    whatever `at` this render happened to hold, whether or not it belonged
+ *    to `p.tab` — deleted outright once the other two fixes make it moot.
+ */
+
+const focusWin = focusSess?.tmuxWindows?.find((w) => w.active)?.id ?? "";
+
+const activeWindow = pendingWindow ?? tmuxWindows.find((w) => w.active)?.id ?? null;
+
+const vouched = vouchedSeen(focusKey ? wtSeen.current.get(focusKey) : undefined, paneBook.current.get(focusPane)?.agent);
+const known = vouched ? cands.find((r) => r.root === vouched.root) ?? null : null;
+setDetectedWt(known);
+
+const lastFacts = new Map<string, { at: GitRepoRef; pr: SidePaneFactsProps["pr"]; prRoot: string }>();
+function SidePaneFor(p: SidePaneFactsProps) {
+  if (p.at) lastFacts.set(p.tab, { at: p.at, pr: p.pr, prRoot: p.prRoot });
+  const kept = p.at ? null : lastFacts.get(p.tab) ?? null;
+  return <SidePaneWithFacts {...p} {...(kept ?? null)} />;
+}

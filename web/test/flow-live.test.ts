@@ -119,10 +119,83 @@ test("a rename in another project does not fold this project's worker away", () 
   expect(liveByRole(rows, flow, orbit).builder).toEqual({ run: 1, wait: 0, cost: 5 });
 });
 
+test("a worker started with --flow-role counts on that role's block, not on the policy role it maps to", () => {
+  /* The Flow a project whose path uses its own roles has: `builder-orbit` is
+     the builder step, `planner-orbit` the scout one. Each id is its own block. */
+  const orbit = {
+    ...flow,
+    roster: [
+      ...flow.roster,
+      { ...flow.roster[1]!, id: "builder-orbit", name: "Builder orbit" },
+      { ...flow.roster[0]!, id: "planner-orbit", name: "Planner orbit" },
+    ],
+  };
+  const counts = liveByRole([
+    worker("orbit-builder", "builder-orbit", { state: "working" }),
+    // The other field the server answers on, once the stamp is all a row has.
+    row("orbit-planner", { state: "working", startedBy: { role: "planner-orbit" } }),
+    worker("acme-builder", "builder", { state: "working" }),
+  ], orbit, PROJECT);
+  expect(counts["builder-orbit"]).toEqual({ run: 1, wait: 0, cost: 0 });
+  expect(counts["planner-orbit"]).toEqual({ run: 1, wait: 0, cost: 0 });
+  // The built-in block still counts only its own worker.
+  expect(counts.builder).toEqual({ run: 1, wait: 0, cost: 0 });
+  expect(counts.planner).toEqual({ run: 0, wait: 0, cost: 0 });
+  expect(inFlight(counts, { maxWorkers: 6 })).toEqual({ n: 3, of: 6 });
+});
+
 test("a built-in flow role answers to the policy role it runs as", () => {
   const counts = liveByRole([worker("planner", "scout", { state: "working" }), worker("inspector", "reviewer", { state: "working" })], flow, PROJECT);
   expect(counts.planner!.run).toBe(1);
   expect(counts.inspector!.run).toBe(1);
+});
+
+test("a project's own builder step owns a builder-stamped worker, ahead of the built-in the path does not use", () => {
+  /* The canvas draws the path, and this project's builder step is its own
+     `builder-orbit`; the shipped `builder` is still in the team, off the path.
+     A start for that step can carry the policy role instead of the id — a
+     flight plan's Launch asks for `builder`, a seat's `--role builder` — and a
+     count that lands on the built-in block is a count nobody can see: the
+     block on the path reads Idle while the hero says one is in flight. */
+  const orbit = {
+    ...flow,
+    roster: [...flow.roster, { ...flow.roster[1]!, id: "builder-orbit", name: "Builder orbit" }],
+    path: flow.path.map((id) => (id === "builder" ? "builder-orbit" : id)),
+    blocks: flow.blocks.map((b) => (b.id === "builder" ? { ...b, id: "builder-orbit" } : b)),
+  };
+  const counts = liveByRole([worker("builder-orbit", "builder", { state: "working" })], orbit, PROJECT);
+  expect(counts["builder-orbit"]).toEqual({ run: 1, wait: 0, cost: 0 });
+  expect(counts.builder).toEqual({ run: 0, wait: 0, cost: 0 });
+  expect(inFlight(counts, { maxWorkers: 3 })).toEqual({ n: 1, of: 3 });
+});
+
+test("a custom flow-role worker in a worktree outside the project folder counts on its block", () => {
+  /* A worker runs where its worktree was cut: an OpenCode worktree lives under
+     the app's own data directory, not under the project. The server rolls the
+     checkout up to the project it belongs to, and that is what this reads, so
+     the block counts it and the hero's one number includes it. */
+  const orbit = {
+    ...flow,
+    roster: [...flow.roster, { ...flow.roster[1]!, id: "builder-orbit", name: "Builder orbit" }],
+    path: [...flow.path, "builder-orbit"],
+    blocks: [...flow.blocks, { id: "builder-orbit", x: 0, y: 240 }],
+  };
+  const elsewhere = "/home/somebody/.local/share/opencode/worktree/desk/orbit";
+  const counts = liveByRole([
+    worker("orbit-builder", "builder-orbit", { state: "working", worktree: elsewhere, project: PROJECT }),
+  ], orbit, PROJECT);
+  expect(counts["builder-orbit"]).toEqual({ run: 1, wait: 0, cost: 0 });
+  expect(inFlight(counts, { maxWorkers: 3 })).toEqual({ n: 1, of: 3 });
+});
+
+test("a row the board drew without its role counts nowhere, whatever its checkout says", () => {
+  /* What a row drawn from a pane sighting looks like when the registry's role
+     is not carried onto it: it is this project's worker, in this project's
+     worktree, and still nothing the block can count. */
+  const counts = liveByRole([
+    row("orbit-builder", { state: "working", worktree: "/work/acme/.worktrees/orbit" }),
+  ], flow, PROJECT);
+  expect(Object.values(counts).every((c) => c.run === 0)).toBe(true);
 });
 
 test("two roles on one policy role go to the first in the roster, and only one of them", () => {
@@ -166,4 +239,26 @@ test("a worker's role is the registry's answer, and never its name", () => {
   expect(roleOf(row("claimed", { startedBy: { role: "verifier" } }))).toBe("verifier");
   expect(roleOf(row("builder notes"))).toBeNull();
   expect(roleOf(row("builder", { worker: { role: "  " } }))).toBeNull();
+});
+
+test("a worker started as the shipped team role counts on the path step that does the same job", () => {
+  /* The path's review step is this project's own `inspector-orbit` (a
+     reviewer); the shipped `inspector` (also a reviewer) is still in the team,
+     off the path. Workers started as `inspector` counted on the team role: the
+     path block read Idle while "Workers in flight" counted them. */
+  const shipped = flow.roster.find((r) => r.id === "inspector")!;
+  const orbit = {
+    ...flow,
+    roster: [...flow.roster, { ...shipped, id: "inspector-orbit", name: "Inspector orbit" }],
+    path: flow.path.map((id) => (id === "inspector" ? "inspector-orbit" : id)),
+    blocks: flow.blocks.map((b) => (b.id === "inspector" ? { ...b, id: "inspector-orbit" } : b)),
+  };
+  const counts = liveByRole([worker("orbit-inspect", "inspector", { state: "working" })], orbit, PROJECT);
+  expect(counts["inspector-orbit"]).toEqual({ run: 1, wait: 0, cost: 0 });
+  expect(counts.inspector).toEqual({ run: 0, wait: 0, cost: 0 });
+  // A path step with no job of its own is not guessed at: the worker stays on the role it named.
+  const bare = { ...orbit, roster: orbit.roster.map((r) => (r.id === "inspector-orbit" ? { ...r, policyRole: undefined } : r)) };
+  const still = liveByRole([worker("orbit-inspect", "inspector", { state: "working" })], bare, PROJECT);
+  expect(still.inspector!.run).toBe(1);
+  expect(still["inspector-orbit"]!.run).toBe(0);
 });

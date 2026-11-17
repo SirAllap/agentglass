@@ -60,6 +60,9 @@ const EXCLUDED_TYPE = /type=["']?(checkbox|radio|range|hidden|file)\b/;
  * reformatting.
  */
 const ALLOWED: { file: string; marker: string; why: string }[] = [
+  { file: "AddStepSheet.tsx", marker: 'id="fl-name"',
+    why: "the flow editor draws the name field and its n/max counter inside one .fl-field border; on the input the counter would sit outside it" },
+
   { file: "JiraTree.tsx", marker: 'aria-label="Rename"',
     why: "the rename field replaces a label inside a 28px rail row, so the row keeps its height; INPUT is 32 and would push the rows below it" },
 
@@ -89,8 +92,10 @@ const ALLOWED: { file: string; marker: string; why: string }[] = [
 
   { file: "TasksPanel.tsx", marker: "ref={searchBox} value={q}",
     why: "icon and a clear-button segment welded to the field's right edge share the pill's one border and clip radius with the input" },
-  { file: "JiraSearch.tsx", marker: 'aria-label="Filter this board"',
-    why: "icon and a clear-button segment welded to the field's right edge share the pill's one border and clip radius with the input, as in the board search above it" },
+  { file: "JiraCardMenu.tsx", marker: 'aria-label="Filter actions"',
+    why: "the menu's filter row is styled by `.agx-pcm-filter input` at 28px inside the popover, the same filter row as the other Jira menus; INPUT is 32 and would grow the popover" },
+  { file: "JiraJump.tsx", marker: 'aria-label="Jump to card or epic, or type JQL"',
+    why: "the field is the palette's own header row, an icon and a borderless input above the result list; INPUT would draw a box inside the dialog" },
   { file: "SearchSheet.tsx", marker: 'aria-label="Search the whole Jira site"',
     why: "the field sits inside the sheet's own 32px inset pill beside a close button; INPUT would draw a second border inside the first" },
   { file: "TasksPanel.tsx", marker: 'placeholder="8:30"',
@@ -159,6 +164,9 @@ const ALLOWED: { file: string; marker: string; why: string }[] = [
 
   { file: "setup/ProjectFinder.tsx", marker: 'className="finder-filter"',
     why: "the finder's filter sits inside `.finder-searchbox`, which draws one border around the search mark and the field; the input inside it is transparent, as the other finder filters are" },
+
+  { file: "jira/list/JiraSearch.tsx", marker: 'aria-label="Filter this board"',
+    why: "the board's own filter box: a search icon and the field share its one 32px inset pill border; the input inside it is transparent" },
 
 ];
 

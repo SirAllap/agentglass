@@ -13,15 +13,16 @@ import type { PrSummary } from "../../../shared/types.ts";
 import { finishedKind } from "../../../shared/prClosed.ts";
 import type { CardView } from "./prCardView.ts";
 import { syncCardView, type SyncCardStep } from "./prSyncCards.ts";
+import { APPROVE_RUNS_LABEL } from "../../../shared/heldRuns.ts";
 
 export type MenuIcon =
   | "hand" | "user" | "spark" | "link" | "down" | "alert" | "refresh" | "bell" | "merge" | "ext" | "pin"
   | "pr" | "max" | "copy" | "branch" | "term" | "edit" | "eye" | "x" | "plug" | "megaphone" | "tag" | "lines" | "sparkles"
-  | "box" | "layers" | "eyeon";
+  | "box" | "layers" | "eyeon" | "lock";
 
 export type CardMenuId =
   | "clean" | "hand" | "reviewers" | "nudge" | "agent" | "card" | "linkcard" | "connect" | "title" | "labels"
-  | "update" | "resolve" | "rerun" | "watch" | "merge"
+  | "update" | "resolve" | "rerun" | "approve" | "watch" | "merge" | "lock"
   | "github" | "copylink" | "pin"
   | "open" | "full" | "copycard" | "copycardname" | "copycardlink" | "squash" | "rebase" | "copynum" | "copybranch" | "base" | "term" | "draft" | "unstick"
   | "hideauthor" | "hidebranch" | "close";
@@ -83,7 +84,7 @@ const item = (id: CardMenuId, label: string, icon: MenuIcon, o: Partial<MenuItem
   ({ kind: "item", id, label, icon, ...o });
 
 export function cardMenu(i: {
-  p: Pick<PrSummary, "number" | "title" | "author" | "state" | "isDraft" | "baseRefName" | "headRefName" | "mergeable" | "reviewDecision" | "checks">;
+  p: Pick<PrSummary, "number" | "title" | "author" | "state" | "isDraft" | "baseRefName" | "headRefName" | "mergeable" | "reviewDecision" | "checks"> & Pick<Partial<PrSummary>, "isCrossRepository">;
   view: Pick<CardView, "reasons">;
   pinned: boolean;
   mode: TrackerMode;
@@ -100,11 +101,13 @@ export function cardMenu(i: {
   leftovers?: string;
   /** Where a lane's Sync has this card, when one owns it: the menu must not offer the press the footer turned off. */
   sync?: SyncCardStep | null;
+  /** The person's merge lock: whether one is set, and its sentence while it holds (lib/mergeLocks.ts). */
+  mergeLock?: { set: boolean; reason: string | null };
 }): CardMenu {
   const { p, view } = i;
   const live = !finishedKind(p);
   const tn = i.tracker ?? "ClickUp";
-  const mw = (i.readOnly ? "Read-only: no write access" : view.reasons.merge) ?? undefined;
+  const mw = (i.readOnly ? "Read-only: no write access" : i.mergeLock?.reason ?? view.reasons.merge) ?? undefined;
   /* What switches the edits off, in the words the page uses for each kind of finished. */
   const finished = i.readOnly ? "Read-only: no write access" : p.state === "MERGED" ? "Already merged"
     : !live ? "Closed: reopen it first" : undefined;
@@ -147,8 +150,15 @@ export function cardMenu(i: {
     item("update", "Update branch", "down", { why: finished ?? view.reasons.update ?? (sv?.action.disabled ? sv.action.title : undefined) }),
     item("resolve", "Resolve conflicts…", "alert", { why: finished ?? view.reasons.resolve ?? undefined }),
     item("rerun", "Rerun failed checks", "refresh", { why: finished ?? view.reasons.rerun ?? undefined }),
+    /* A fork's pull request is where GitHub holds workflows for a maintainer
+       (shared/heldRuns.ts). The list cannot see held runs, so the entry is there
+       for every open one and the server says when nothing is waiting. */
+    ...(p.isCrossRepository === true && live ? [item("approve", APPROVE_RUNS_LABEL, "refresh", { why: finished, sub: "A contributor's pull request" })] : []),
     item("watch", "Watch checks…", "bell", { why: live ? undefined : "Nothing left to watch" }),
     item("merge", "Merge…", "merge", { why: mw }),
+    item("lock", i.mergeLock?.set ? "Edit merge lock…" : "Lock merge…", "lock", {
+      why: finished, sub: i.mergeLock?.reason ?? (i.mergeLock?.set ? "Every condition holds" : undefined),
+    }),
     { kind: "rule" },
     item("github", "Open on GitHub", "ext", { hint: "G" }),
     item("copylink", "Copy link", "link", { hint: "L" }),

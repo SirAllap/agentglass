@@ -51,4 +51,10 @@ describe("where Reopen puts it back", () => {
   test("nothing to put back for ids that are not windows", () => {
     expect(reopenPlan(row, ["@9"])).toEqual([]);
   });
+  test("a card's tab keeps the pins that say which card it is", () => {
+    const card = w("@1", 1, { name: "my notes", given: "orbit-ORBIT-1042", card: "ORBIT-1042" });
+    expect(reopenPlan([card], ["@1"])).toEqual([{
+      name: "my notes", given: "orbit-ORBIT-1042", card: "ORBIT-1042", after: true,
+    }]);
+  });
 });

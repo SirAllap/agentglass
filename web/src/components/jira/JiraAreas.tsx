@@ -17,6 +17,7 @@ import type { JiraBoardSprint } from "../../../../shared/providers.ts";
 import { PeopleFaces, type TaskPerson } from "./list/PeopleFaces.tsx";
 import { Segmented } from "../workspace/Chrome.tsx";
 import { Select } from "../Select.tsx";
+import { tipAttr } from "../../lib/tip.ts";
 
 /** What the rail's Sprints entry and an Area are called when picked: an epic's key, or this. */
 export const SPRINTS = "@sprints";
@@ -55,7 +56,7 @@ export function JiraAreaRail({ project, areas, sprint, now, points, sel, onPick,
     const txt = rowText(a, truncated);
     return (
       <button key={a.key} onClick={() => onPick(sel === a.key ? null : a.key)} aria-pressed={sel === a.key}
-        title={txt.title} className="agx-rail-row w-full flex items-start gap-2.5 text-left" style={row(sel === a.key)}>
+        data-tip={tipAttr(txt.title)} className="agx-rail-row w-full flex items-start gap-2.5 text-left" style={row(sel === a.key)}>
         <span aria-hidden className="shrink-0 rounded-full" style={{ width: 8, height: 8, marginTop: 6, background: `var(${epicTone(a.color)})` }} />
         <span className="min-w-0 flex-1 flex flex-col" style={{ gap: 4 }}>
           <span style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", overflowWrap: "anywhere", lineHeight: 1.3 }}>{railTitle(a.name)}</span>
@@ -130,7 +131,7 @@ export function JiraAreaHead({ title, fullTitle, sub, chips, hint, done, total, 
   return (
     <div className="px-4 pt-2.5 pb-1.5 min-w-0" data-testid="jira-area-head">
       <div className="flex items-baseline flex-wrap gap-x-2.5 min-w-0">
-        <span className="font-extrabold min-w-0" title={fullTitle} style={{ fontSize: 17, color: "var(--text)", overflowWrap: "anywhere" }}>{title}</span>
+        <span className="font-extrabold min-w-0" data-tip={fullTitle ? tipAttr(fullTitle) : undefined} style={{ fontSize: 17, color: "var(--text)", overflowWrap: "anywhere" }}>{title}</span>
         {sub && <span className="text-[11px] font-normal" style={{ color: "var(--text3)" }}>{sub}</span>}
       </div>
       <div className="flex items-center flex-wrap gap-x-2 gap-y-1 mt-1 min-w-0">

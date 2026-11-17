@@ -20,7 +20,8 @@
  *      connected: that one. This is the only way to settle an id both claim.
  *   3. The id's prefix against each connected tracker's: Jira's are the
  *      project keys its site reported, ClickUp's is the prefix read from its
- *      cards. One claim wins; none or two is nobody's.
+ *      cards. One claim wins; two is Jira's, because a key the site itself
+ *      listed is not a guess; none is nobody's.
  *
  * "Nobody's" is `null`, and `null` means say nothing and offer no write: a
  * chip that opens the wrong tracker is believed, which is worse than no chip.
@@ -38,7 +39,7 @@
  */
 import type { TrackerChoice } from "../../../shared/providers.ts";
 import { looksLikeCardId } from "../../../shared/cardRef.ts";
-import { looksLikeOurs, type CardRef } from "./cardRef.ts";
+import { cardRef, looksLikeOurs, type CardRef } from "./cardRef.ts";
 import type { TrackerSetup } from "./trackerSetup.ts";
 import type { ProviderTask } from "../../../shared/providers.ts";
 import {
@@ -71,9 +72,9 @@ export interface Tracker {
   id: TrackerId;
   caps: TrackerCaps;
   /** Where the card can go from here: ClickUp's list statuses, Jira's moves. An error is a sentence for the person. */
-  statusOptions(task: ProviderTask): Promise<StatusOptionsResult>;
+  statusOptions(task: ProviderTask, repo?: string): Promise<StatusOptionsResult>;
   /** One move, with the stamp the person saw (`task.updated`). The answer carries the card as it is afterwards. */
-  setStatus(task: ProviderTask, opt: StatusOption, fields?: Record<string, string | string[]>): Promise<StatusWriteResult>;
+  setStatus(task: ProviderTask, opt: StatusOption, fields?: Record<string, string | string[]>, repo?: string): Promise<StatusWriteResult>;
   /*
    * People and the hand-off, for a tracker with one assignee. ClickUp has
    * neither here: its multi-person picker and its hand-off button keep the
@@ -81,14 +82,14 @@ export interface Tracker {
    * one shape, not one for both.
    */
   /** Who the card can be given to, by what was typed; `transition` asks for during that move. */
-  people?(task: ProviderTask, query: string, transition?: string): Promise<PeopleResult>;
+  people?(task: ProviderTask, query: string, transition?: string, repo?: string): Promise<PeopleResult>;
   /** One person on (`set: key`) or nobody (`set: null`), with the stamp the person saw. */
-  setPeople?(task: ProviderTask, change: { set: string | null }): Promise<CardWriteResult>;
+  setPeople?(task: ProviderTask, change: { set: string | null }, repo?: string): Promise<CardWriteResult>;
   /** The hand-off, as one request; a choice left out is the project's setting. */
-  handOff?(task: ProviderTask, choice?: { to?: string; clear?: boolean }): Promise<CardWriteResult>;
+  handOff?(task: ProviderTask, choice?: { to?: string; clear?: boolean }, repo?: string): Promise<CardWriteResult>;
   /** One comment, Markdown. `mentions` are the people named in it by the id the
    *  tracker's people search gave; ClickUp finds them itself and ignores it. */
-  comment(task: ProviderTask, markdown: string, mentions?: CommentMention[], replyTo?: string): Promise<CommentResult>;
+  comment(task: ProviderTask, markdown: string, mentions?: CommentMention[], replyTo?: string, repo?: string): Promise<CommentResult>;
 }
 
 const CLICKUP: Tracker = {
@@ -169,8 +170,39 @@ export function trackerFor(
     ? keys.some((k) => k.toUpperCase() === pre)
     : whenUnknown && !cu);
 
-  if (claimsClickup === claimsJira) return null;
+  if (claimsClickup === claimsJira) {
+    /* Two claims is Jira's: its claim is a project key the site itself listed,
+       and a ClickUp prefix is learned from cards. A repository that really
+       works the other way says so with its own choice above. */
+    return claimsJira ? JIRA : null;
+  }
   return claimsClickup ? CLICKUP : JIRA;
+}
+
+/**
+ * Which tracker's tab a pull request card's chip opens, when it is not
+ * ClickUp's. `null` is ClickUp: the tab `openCard` lands on with no tracker.
+ *
+ * The board decided this by doing nothing, and doing nothing is ClickUp, so a
+ * Jira key hovered "in Tasks" and opened the wrong tracker's tab. The rule is
+ * `trackerFor`'s, plus the one fact the board holds and the masthead does not:
+ * a card the server read out of the Jira views is Jira's whatever its id looks
+ * like — that is why a pull request naming both a key and a ClickUp address
+ * still opens the card somebody linked.
+ */
+export function prCardTracker(
+  pr: { headRefName?: string; title?: string; body?: string; url?: string },
+  card: { tracker?: "jira" } | undefined,
+  setup: TrackerSetup | null,
+  choice: TrackerChoice = "auto",
+): "jira" | null {
+  if (card?.tracker === "jira") return "jira";
+  if (!setup) return null;
+  const ref = cardRef(pr, setup.jira ? { keys: setup.jira.prefixes, site: setup.jira.site } : undefined);
+  const found = ref ? trackerFor(ref, setup, choice) : null;
+  if (found) return found.id === "jira" ? "jira" : null;
+  // No tracker claims the id, and there is only one to look in.
+  return setup.jira && !setup.clickup ? "jira" : null;
 }
 
 /** Is `q` a card id as THIS tracker spells them? `ORBIT-7` is one for Jira and not for ClickUp. */

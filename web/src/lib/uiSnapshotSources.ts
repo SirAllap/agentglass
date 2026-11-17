@@ -11,7 +11,7 @@ import {
   currentTermFont, currentTermSize, currentTermCursor, currentTermLineHeight, currentScrollback,
   currentWordSeparators, copyOnSelect, currentNoteEditor,
 } from "./termPrefs.ts";
-import { homePage, searchEngine, zoomLevel, importHistory, importBookmarks } from "./browserPrefs.ts";
+import { homePage, searchEngine, agentsWithoutScreen, zoomLevel, importHistory, importBookmarks } from "./browserPrefs.ts";
 import { getNotifyPrefs } from "./notifyPrefsStore.ts";
 import {
   readPrefs, readRail, readKeys, readTasks, readAppearance, readUnderstudy, readHooks, readLantern, readBudgets, readRecipes,
@@ -27,7 +27,7 @@ export const liveSources = (app: () => AppSlice): Sources => ({
     font: currentTermFont(), size: currentTermSize(), cursor: currentTermCursor(), lineHeight: currentTermLineHeight(),
     scrollback: currentScrollback(), wordSeparators: currentWordSeparators(), copyOnSelect: copyOnSelect(), noteEditor: currentNoteEditor(),
   }),
-  browser: () => ({ home: homePage(), engine: searchEngine(), zoomLevel: zoomLevel(), importHistory: importHistory(), importBookmarks: importBookmarks() }),
+  browser: () => ({ home: homePage(), engine: searchEngine(), agentsWithoutScreen: agentsWithoutScreen(), zoomLevel: zoomLevel(), importHistory: importHistory(), importBookmarks: importBookmarks() }),
   notify: getNotifyPrefs,
   prefs: readPrefs,
   rail: readRail,

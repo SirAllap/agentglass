@@ -7,9 +7,10 @@
  * source, the way every other "which card shows" rule in this project is.
  */
 import { describe, expect, test } from "bun:test";
+import { modalSource } from "./settingsSource.ts";
 import { readFileSync } from "node:fs";
 
-const page = readFileSync(new URL("../src/components/SettingsModal.tsx", import.meta.url), "utf8");
+const page = modalSource();
 const card = readFileSync(new URL("../src/components/engines/UsageKeyCard.tsx", import.meta.url), "utf8");
 
 describe("Usage & budgets", () => {
@@ -25,14 +26,16 @@ describe("Usage & budgets", () => {
 
   test("has one Usage bar switch per provider, on the agent-changeable setting", () => {
     for (const p of ["anthropic", "codex", "opencode"]) {
-      expect(page).toContain(`settingId="usage.bar.${p}"`);
+      // The Engines & usage page draws the four rows from one table; each row carries its id.
+      expect(page).toContain(`setting("usage.bar.${p}").set(`);
     }
+    expect(page).toContain("settingId={`usage.bar.${b.id}`}");
     expect(page).toContain('title="Usage bar"');
   });
 
   test("the Codex card shows only after Codex has had a reading here", () => {
     expect(page).toContain('everSeen("codex")');
-    expect(page).toContain("Codex only reports its quota while a Codex turn runs.");
-    expect(page).toContain("that turn spends a little of the quota it measures.");
+    // The Engines & usage page says the cost in its one-line help (copy rule), not in a fold.
+    expect(page).toContain("Runs one small turn each hour, which spends a little quota.");
   });
 });

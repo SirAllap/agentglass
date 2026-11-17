@@ -23,7 +23,7 @@
 import type { HandoffUnassign, ListMember } from "../../../shared/providers.ts";
 import { handoffRemovals } from "./cardMove.ts";
 
-export type AssignWho = "none" | "me" | "author" | "person";
+export type AssignWho = "none" | "me" | "author" | "person" | "reviewer";
 export interface Assign { who: AssignWho; person?: { id: number; name: string } }
 export const NO_ASSIGN: Assign = { who: "none" };
 
@@ -32,8 +32,9 @@ export const ASSIGN_LABEL: Record<AssignWho, string> = {
   me: "me — whoever presses it",
   author: "the pull request’s author",
   person: "a person…",
+  reviewer: "the reviewer — learned Jira account",
 };
-export const ASSIGN_WHO: readonly AssignWho[] = ["none", "me", "author", "person"];
+export const ASSIGN_WHO: readonly AssignWho[] = ["none", "me", "author", "person", "reviewer"];
 
 /** What the control row's button says: the person's own name once one is chosen. */
 export const assignLabel = (a: Assign): string => (a.who === "person" && a.person ? a.person.name : ASSIGN_LABEL[a.who]);
@@ -130,7 +131,10 @@ export function stepChanges(o: {
 /** Who "also assign" means, in a sentence; null when it assigns nobody. */
 export function assignWords(a: Assign | undefined): string | null {
   if (!a || a.who === "none") return null;
-  return a.who === "me" ? "whoever presses it" : a.who === "author" ? "the pull request’s author" : (a.person?.name ?? "a person");
+  return a.who === "me" ? "whoever presses it"
+    : a.who === "author" ? "the pull request’s author"
+    : a.who === "reviewer" ? "the reviewer’s Jira account"
+    : (a.person?.name ?? "a person");
 }
 
 /** The words a step's saved choices make, for the map's "Press it:" line. */

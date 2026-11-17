@@ -46,7 +46,7 @@ test("the board is handed the filtered lists, not the raw fetches", () => {
   /* `evalExempt`, not `evalLanes` directly: a pull request with something unread
      on it survives a rule that would otherwise drop it (see pr-filter-view.test.ts).
      One evaluation over every card, and each list keeps what passed. */
-  expect(src).toContain("evalExempt(boardCardsAll, laneFilter, readPrField, isRuleExempt)");
+  expect(src).toContain("evalExempt(boardCardsAll, laneFilter, viewFieldReader, isRuleExempt)");
   expect(src).toContain("boardMineCards.filter((p) => boardKept.has(p.number))");
   expect(src).toContain("boardReviewCards.filter((p) => boardKept.has(p.number))");
   // Wiring pinned: a person's board has its own lists (not the owner's rules);

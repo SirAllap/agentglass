@@ -16,16 +16,16 @@
 import type { Flow, FlowBlock } from "../../../shared/flow.ts";
 
 export const BLOCK_W = 296;
-export const BLOCK_H = 316;
+export const BLOCK_H = 332;
 export const BLOCK_GAP = 40;
 export const CANVAS_PAD = 40;
 export const ORCH_W = 560;
-export const ORCH_H = 236;
+export const ORCH_H = 284;
 /** How far under the pass arrow's line a loop's wire enters and leaves a block. */
 const FAIL_DY = 16;
 
 /** Where the first row starts: under the orchestrator's card. */
-export const ROWS_TOP = 276;
+export const ROWS_TOP = 324;
 export const LANE_STEP = 28;
 export const ZOOM_MIN = 0.35;
 export const ZOOM_MAX = 1.8;

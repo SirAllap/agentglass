@@ -31,18 +31,34 @@ export const noCardTip = (): TipSpec => ({ name: "No card linked", text: "Nothin
 
 export const noTrackerTip = (): TipSpec => ({ name: "No tracker connected", text: "Connect one in Settings and cards that name a ticket link to it." });
 
-export function ticketTip(c: { id: string; status: string; priority?: string | null; color?: string }, hasCopy: boolean): TipSpec {
+/** Which tracker a chip opens, when the board knows it is not ClickUp's tab. */
+export type ChipTracker = "jira" | null;
+
+const whereOf = (tracker: ChipTracker): string | null => (tracker === "jira" ? "Jira" : null);
+
+export function ticketTip(
+  c: { id: string; status: string; priority?: string | null; color?: string },
+  hasCopy: boolean,
+  tracker: ChipTracker = null,
+): TipSpec {
+  /* Named, because a hover that says "in Tasks" over a key that opens Jira is
+     the lie that sent people to the wrong tracker. */
+  const where = whereOf(tracker);
   return {
-    name: c.id, mono: true, detail: "in Tasks", dot: c.color || "var(--text3)",
+    name: c.id, mono: true, detail: where ? `in ${where}` : "in Tasks", dot: c.color || "var(--text3)",
     text: `${c.status}${c.priority ? ` · ${c.priority} priority` : " · no priority"}`,
-    hint: { key: "Click", text: "Open the card in Tasks", right: hasCopy ? "copy ID, name, link: right" : undefined },
+    hint: { key: "Click", text: `Open the card in ${where ?? "Tasks"}`, right: hasCopy ? "copy ID, name, link: right" : undefined },
   };
 }
 
-export const idTip = (id: string): TipSpec => ({
-  name: id, mono: true, detail: "in Tasks", text: "No card by this id on your boards yet.",
-  hint: { key: "Click", text: "Look for it in Tasks" },
-});
+export const idTip = (id: string, tracker: ChipTracker = null): TipSpec => {
+  const where = whereOf(tracker);
+  return {
+    name: id, mono: true, detail: where ? `in ${where}` : "in Tasks",
+    text: where ? `No card by this key on the ${where} board yet.` : "No card by this id on your boards yet.",
+    hint: { key: "Click", text: `Look for it in ${where ?? "Tasks"}` },
+  };
+};
 
 export const faceTip = (f: CardFace): TipSpec => {
   const [name, ...rest] = f.title.split(" — ");

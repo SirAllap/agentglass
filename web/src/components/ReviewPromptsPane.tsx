@@ -24,19 +24,20 @@ import { api } from "../lib/api.ts";
 import { taskConnected } from "../lib/taskConnected.ts";
 import { CONFLICT_EFFORTS, CONFLICT_MODELS, type ConflictEffort, type ConflictModel } from "../../../shared/types.ts";
 import type { ReviewRecipe, ReviewRecipeGroup, ReviewRecipeWhen, SkillInfo } from "../../../shared/types.ts";
-import { SettingRow } from "./SettingRow.tsx";
-import { EmptyState, FIELD_SELECT, Field, SettingsCard, SettingsForm, StatusBadge, helpIdFor } from "./SettingsKit.tsx";
-import { EditorFoot, EditorPanel, ListBar, ListEditorSplit, ListPanel, NewButton, NothingSelected, differs } from "./SettingsListEditor.tsx";
-import { ReviewIcon } from "./settingsNavIcons.tsx";
+import { FormInput } from "./settings/shell/FormInput.tsx";
+import { Section } from "./settings/shell/Section.tsx";
+import { SettingRow } from "./settings/shell/SettingRow.tsx";
+import { DangerAction, GroupActions, pushSaveToast } from "./settings/save/index.ts";
+import { FIELD_SELECT } from "./SettingsKit.tsx";
+import { differs } from "./SettingsListEditor.tsx";
 import { useReportHead, useReportSaving } from "./SettingsPageState.tsx";
 import { previewParts, sizeWords } from "../lib/reviewPreview.ts";
-import { ICON } from "../lib/iconSize.ts";
 import { bumpReviewRecipes } from "./PrPanel.tsx";
-import { Button, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { Button, INPUT, INPUT_STYLE, LINE, Segmented } from "./workspace/Chrome.tsx";
 import { Select } from "./Select.tsx";
-import { LaunchModeBadge, LaunchModeSelect } from "./LaunchMode.tsx";
+import { BoardSkeleton } from "./tasks/BoardState.tsx";
+import { LaunchModeSelect } from "./LaunchMode.tsx";
 import { SELECT_BOX } from "./SettingsKit.tsx";
-import { Toggle } from "./SettingRow.tsx";
 import { setting } from "../lib/settingsRegistry.ts";
 import { useSessionReads } from "../lib/sessionReads.ts";
 
@@ -121,18 +122,22 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   useReportSaving("review-prompts", busy);
+  /* New prompt is the page header's one action; the empty state below keeps its own. */
+  useReportHead("review-prompts", list && !editing ? { action: { label: "New prompt" } } : null, () => setEditing(blank("reviewing")));
   /* The note on the card is written to a ClickUp card, so it is offered only
      where there is one. Unknown counts as connected: taskConnected fails open. */
   const [hasCards, setHasCards] = useState(true);
-  /* New prompt is the page's one action, so it is in the header, where every page keeps its own. */
-  useReportHead("review-prompts", { action: { label: "New prompt" } }, () => setEditing(blank("reviewing")));
 
   /* Which repositories review plugins may read the authoring session of. Nothing until the
      person adds one; the server holds the list and refuses every other repository. */
   const reads = useSessionReads();
   const allowed = reads?.repos ?? [];
   const pickable = (reads?.known ?? []).filter((r) => !allowed.includes(r));
-  const setAllowed = (next: string[]) => { setting("plugins.sessionReads.repos").set(next.join(",")); };
+  const setAllowed = (next: string[]) => {
+    const before = allowed;
+    setting("plugins.sessionReads.repos").set(next.join(","));
+    pushSaveToast("Saved", () => { setting("plugins.sessionReads.repos").set(before.join(",")); });
+  };
 
   const load = useCallback(async () => {
     try {
@@ -156,14 +161,6 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
     // since a worktree is the same project under another name.
     api.gitRepos().then((r) => setProjects((r.repos ?? []).filter((x) => !x.worktreeOf).map((x) => ({ root: x.root, name: x.name })))).catch(() => {});
   }, [open, load]);
-
-  /* The first prompt is open when the page is: an editor with nothing in it, beside a list, reads as broken. */
-  useEffect(() => {
-    if (!editing && list) {
-      const f = GROUPS.flatMap((g) => list.filter((r) => r.group === g.id && (hasCards || r.id !== "note-on-card")))[0];
-      if (f) setEditing(f);
-    }
-  }, [list, editing, hasCards]);
 
   const after = async (text: string, ok = true, keep?: string) => {
     setNote({ ok, text });
@@ -196,10 +193,9 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
     await after(`${r.title} is offered on pull requests again`, true, r.id);
   };
 
-  if (!list) return <SettingsCard title="Review prompts"><EmptyState>Reading your prompts…</EmptyState></SettingsCard>;
+  if (!list) return <Section id="review" title="Review sessions"><BoardSkeleton label="Reading your prompts…" widths={[70, 50]} dots={false} /></Section>;
 
   const offered = (r: ReviewRecipe) => hasCards || r.id !== "note-on-card";
-  const hidden = GROUPS.flatMap((g) => list.filter((r) => r.group === g.id && offered(r))).length;
   const ql = q.trim().toLowerCase();
   const matches = (r: ReviewRecipe) =>
     offered(r) && (kind === "all" || (kind === "builtin") === !!r.builtIn)
@@ -209,124 +205,91 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
   const hiddenShown = hiddenList.filter((r) => offered(r) && matches(r) && (group === "all" || r.group === group));
   const saved = editing?.id ? list.find((x) => x.id === editing.id) ?? hiddenList.find((x) => x.id === editing.id) : undefined;
   const common = { skills, projects, busy, onChange: setEditing, onSave: save, onCancel: () => setEditing(saved ?? null) };
-  const entry = (r: ReviewRecipe, g: ReviewRecipeGroup) => ({
-    id: r.id, title: r.title,
-    badge: g === "conflicts" ? undefined : <LaunchModeBadge mode={r.permissionMode} />,
-    sub: <>
-      {r.skill && <span className="t-mono">Skill {r.skill} · </span>}
-      {g === "conflicts"
-        ? `${r.repo ? `Only in ${projects.find((p) => p.root === r.repo)?.name ?? r.repo.split("/").pop()}` : "Every project"} · ${r.model && r.model !== "auto" ? r.model : "model from the conflict"}`
-        : WHEN.find((w) => w.id === r.when)?.label}
-      {!r.builtIn && " · yours"}
-    </>,
-  });
+  const helpOf = (r: ReviewRecipe, g: ReviewRecipeGroup) => [
+    r.skill ? `Skill ${r.skill}` : "",
+    g === "conflicts"
+      ? `${r.repo ? `Only in ${projects.find((p) => p.root === r.repo)?.name ?? r.repo.split("/").pop()}` : "Every project"}, ${r.model && r.model !== "auto" ? r.model : "model from the conflict"}`
+      : WHEN.find((w) => w.id === r.when)?.label ?? "",
+    r.builtIn ? "" : "yours",
+    r.edited ? "Edited" : "",
+  ].filter(Boolean).join(". ") + ".";
+  const promptRow = (r: ReviewRecipe, g: ReviewRecipeGroup, isHidden = false) => (
+    <div key={`${isHidden ? "h" : "v"}-${r.id}`} data-prompt-id={r.id}>
+      <SettingRow kind="control" label={r.title} help={isHidden ? "Not offered on pull requests." : helpOf(r, g)}
+        control={<>
+          <Button onClick={() => setEditing(r)}>Edit</Button>
+          {isHidden && <Button onClick={() => void offerAgain(r)}>Offer again</Button>}
+          {!isHidden && r.builtIn && r.edited && <DangerAction label="Reset to built-in" onConfirm={() => reset(r)} />}
+          {!isHidden && r.builtIn && <Button onClick={() => void drop(r)}>Hide</Button>}
+          {!isHidden && !r.builtIn && <DangerAction label="Delete" onConfirm={() => drop(r)} />}
+        </>} />
+    </div>
+  );
 
   return (
     <>
-      {note && (
-        <div role={note.ok ? "status" : "alert"} className="pb-4 text-[12px]"
-          style={{ color: note.ok ? "var(--success-ink)" : "var(--error-ink)" }}>
-          {note.text}
-        </div>
-      )}
-
-      {/* One list, grouped, with the editor beside it. It was a card per group with the
-          editor opening under the row, which made the page a scroll through fifteen
-          prompts to find the form. The group filter is the seg; what a prompt is
-          (built in, or yours) is the select, and a hidden built-in is one tap away. */}
-      <ListBar<"all" | ReviewRecipeGroup> q={q} onQ={setQ} placeholder={`Filter ${count} prompts`} label="Filter review prompts"
-        filters={[
-          { id: "all", label: `All ${count}` },
-          ...GROUPS.map((g) => ({ id: g.id, label: `${GROUP_PILL[g.id]} ${list.filter((r) => offered(r) && r.group === g.id).length}` })),
-        ]}
-        filter={group} onFilter={setGroup}>
-        <Select title="Whose prompts" className={`${FIELD_SELECT} agx-le-kind`} value={kind} onChange={(v) => setKind(v as Kind)}
-          options={[
-            { value: "all", label: "Any kind" },
-            { value: "builtin", label: `Built in ${list.filter((r) => offered(r) && r.builtIn).length}` },
-            { value: "mine", label: `Yours ${list.filter((r) => offered(r) && !r.builtIn).length}` },
-          ]} />
-        {hiddenList.length > 0 && (
-          <button type="button" className="agx-le-chipb" aria-pressed={showHidden} onClick={() => setShowHidden((v) => !v)}
-            title={showHidden ? "Stop listing the hidden prompts" : "List the built-in prompts you hid, to offer them again"}>
-            <StatusBadge tone={showHidden ? "info" : "off"}>{showHidden ? "Showing " : ""}{hiddenList.length} hidden</StatusBadge>
-          </button>
+      <Section id="review" title="Review sessions" intro="The prompts the review button offers on a pull request, and what a reviewer may read.">
+        {count === 0 && !hiddenList.length && (
+          <SettingRow kind="control" label="No review prompts" help="Every built-in was hidden. Write your own."
+            control={<Button onClick={() => setEditing(blank("reviewing"))}>New prompt</Button>} />
         )}
-      </ListBar>
-
-      <ListEditorSplit
-        list={<ListPanel selected={editing ? editing.id || null : null}
-          onSelect={(id) => { const r = list.find((x) => x.id === id) ?? hiddenList.find((x) => x.id === id); if (r) setEditing(r); }}
-          nothing="Nothing matches."
-          blank={count === 0 && !hiddenList.length ? {
-            icon: <ReviewIcon size={ICON.xl} />, title: "No review prompts",
-            text: "Every built-in was hidden and none of yours is saved, so the review button has nothing to offer. Make one.",
-            action: <NewButton onClick={() => setEditing(blank("reviewing"))}>New prompt</NewButton>,
-          } : undefined}
-          sections={[
-            ...GROUPS.filter((g) => group === "all" || group === g.id).map((g) => ({
-              id: g.id, title: g.label, onAdd: () => setEditing(blank(g.id)), addLabel: `New prompt in ${g.label}`,
-              entries: list.filter((r) => r.group === g.id && visible(r)).map((r) => entry(r, g.id)),
-              empty: !list.some((r) => r.group === g.id && offered(r)) ? "Nothing here: the built-ins were hidden." : undefined,
-            })),
-            ...(showHidden && hiddenShown.length ? [{
-              id: "hidden", title: "Hidden",
-              entries: hiddenShown.map((r) => ({ ...entry(r, r.group), sub: "Not offered on pull requests" })),
-            }] : []),
-          ]} />}
-        editor={!editing ? (
-          <NothingSelected noun="prompt" label="Review prompt" onNew={() => setEditing(blank("reviewing"))} />
-        ) : (
-          <Editor r={editing} saved={saved} presets={editing.id ? [] : list.filter((x) => x.builtIn && (x.group === "conflicts") === (editing.group === "conflicts"))} {...common}
-            onReset={editing.builtIn && !editing.hidden ? () => void reset(editing) : undefined}
-            onOffer={editing.hidden ? () => void offerAgain(editing) : undefined}
-            onDrop={editing.id && !editing.hidden ? () => void drop(editing) : undefined} />
-        )} />
-
-      {/* Not a prompt, and here because this is the page about handing a pull request to a
-          reviewer: what else the reviewer may be given. Off for every repository until added. */}
-      <SettingsCard title="Review sessions"
-        desc="A review plugin that asks for it can read a short summary of the agent session that wrote a pull request.">
-        <SettingRow
-          settingId="plugins.sessionReads.repos"
-          label="Let review plugins read the authoring session"
-          hint="Shared for the repositories below only, as a short summary"
-          detail={{ summary: "Details", body: "The first request, the files the agent wrote, how many tools it used, and its closing summary — cut short, with home paths hidden. Never the transcript or any tool output. If anything in it looks like a secret, nothing is shared and the plugin is told why." }}
-          control={<Select
-            align="right"
-            style={SELECT_BOX}
-            value=""
-            placeholder={pickable.length ? "Add a repository…" : "No other repository"}
-            disabled={!pickable.length}
-            onChange={(v) => { if (v && !allowed.includes(v)) setAllowed([...allowed, v]); }}
-            options={pickable.map((r) => ({ value: r, label: r }))}
-          />} />
-        {allowed.map((r) => (
-          <Toggle key={r} on label={r} hint="Allowed. Turn off to stop sharing from this repository."
-            onClick={() => setAllowed(allowed.filter((x) => x !== r))} />
-        ))}
-        {!allowed.length && <EmptyState>No repository is shared. Review plugins are told it is not allowed.</EmptyState>}
-      </SettingsCard>
-
-      {!hidden && (
-        <div className="pb-4 text-[12px]" style={{ color: "var(--text4)" }}>
-          Every built-in is hidden. Reset one from the list, or write your own.
+        {count > 6 && (
+          <SettingRow kind="control" label="Filter prompts" help={`Search ${count} prompts by title, text or skill.`}
+            control={<>
+              <FormInput aria-label="Search prompts" placeholder="Search prompts" value={q} onChange={(e) => setQ(e.target.value)} className={INPUT} style={{ ...INPUT_STYLE, width: 160 }} />
+              <Select title="Group" className={FIELD_SELECT} value={group} onChange={(v) => setGroup(v as "all" | ReviewRecipeGroup)}
+                options={[{ value: "all", label: `All ${count}` }, ...GROUPS.map((g) => ({ value: g.id, label: `${GROUP_PILL[g.id]} ${list.filter((r) => offered(r) && r.group === g.id).length}` }))]} />
+              <Select title="Whose prompts" className={FIELD_SELECT} value={kind} onChange={(v) => setKind(v as Kind)}
+                options={[
+                  { value: "all", label: "Any kind" },
+                  { value: "builtin", label: `Built in ${list.filter((r) => offered(r) && r.builtIn).length}` },
+                  { value: "mine", label: `Yours ${list.filter((r) => offered(r) && !r.builtIn).length}` },
+                ]} />
+            </>} />
+        )}
+        {GROUPS.filter((g) => group === "all" || group === g.id).map((g) => {
+          const rows = list.filter((r) => r.group === g.id && visible(r));
+          return rows.length ? (
+            <div key={g.id} data-prompt-group={g.id}>
+              <div className="px-3 pt-2.5 pb-1 text-[11px] font-medium" style={{ color: "var(--text2)", borderTop: LINE }}>{g.label}</div>
+              {rows.map((r) => promptRow(r, g.id))}
+            </div>
+          ) : null;
+        })}
+        {hiddenList.length > 0 && (
+          <SettingRow kind="control" label="Hidden built-in prompts" help={showHidden ? `${hiddenList.length} hidden. Offer one again from its row.` : `${hiddenList.length} hidden from the review menu.`}
+            control={<Button onClick={() => setShowHidden((v) => !v)}>{showHidden ? "Stop listing" : "List them"}</Button>} />
+        )}
+        {showHidden && hiddenShown.map((r) => promptRow(r, r.group, true))}
+        {note && (
+          <div role={note.ok ? "status" : "alert"} className="px-3 py-2 text-[12px]" style={{ color: note.ok ? "var(--success-ink)" : "var(--error-ink)" }}>{note.text}</div>
+        )}
+        <SettingRow kind="control" settingId="plugins.sessionReads.repos" label="Let review plugins read the authoring session"
+          help="A short summary, for the repositories below only."
+          control={<Select align="right" style={SELECT_BOX} value="" placeholder={pickable.length ? "Add a repository…" : "No other repository"}
+            disabled={!pickable.length} onChange={(v) => { if (v && !allowed.includes(v)) setAllowed([...allowed, v]); }}
+            options={pickable.map((r) => ({ value: r, label: r }))} />} />
+        <div className="px-3 pb-2 text-[12px]" style={{ color: "var(--text2)" }}>
+          What is shared: the first request, the files the agent wrote, how many tools it used, and its closing summary, cut short, with home paths hidden.
+          Never the transcript or any tool output. If anything in it looks like a secret, nothing is shared.
         </div>
+        {allowed.map((r) => (
+          <SettingRow key={r} kind="control" label={r} help="Allowed. Stop sharing from this repository."
+            control={<Button onClick={() => setAllowed(allowed.filter((x) => x !== r))}>Stop sharing</Button>} />
+        ))}
+        {!allowed.length && <div className="px-3 py-2 text-[12px]" style={{ color: "var(--text2)" }}>No repository is shared. Review plugins are told it is not allowed.</div>}
+      </Section>
+      {editing && (
+        <ReviewPromptEditor r={editing} saved={saved} presets={editing.id ? [] : list.filter((x) => x.builtIn && (x.group === "conflicts") === (editing.group === "conflicts"))} {...common} />
       )}
     </>
   );
 }
 
-/**
- * The editor: the fields on one side, the prompt on the other (the prompt
- * first when the card is narrow), and one primary Save in the foot. What undoes
- * the prompt (Reset, Hide or Delete) is at the far end of the head, apart from
- * Save and Cancel.
- */
-function Editor({ r, saved, skills, projects, presets, busy, onChange, onSave, onCancel, onReset, onOffer, onDrop }: {
+/** The editor: a section of rows (fields, then the prompt) and one primary Save. Hide, Delete and Reset are on the list row. */
+function ReviewPromptEditor({ r, saved, skills, projects, presets, busy, onChange, onSave, onCancel }: {
   r: ReviewRecipe; saved?: ReviewRecipe; skills: SkillInfo[]; projects: { root: string; name: string }[]; presets: ReviewRecipe[]; busy: boolean;
   onChange: (r: ReviewRecipe) => void; onSave: (r: ReviewRecipe) => void; onCancel: () => void;
-  onReset?: () => void; onOffer?: () => void; onDrop?: () => void;
 }) {
   const set = (patch: Partial<ReviewRecipe>) => onChange({ ...r, ...patch });
   const uid = useId();
@@ -340,6 +303,7 @@ function Editor({ r, saved, skills, projects, presets, busy, onChange, onSave, o
   }, [skills]);
   const chosen = ordered.find((s) => r.skill?.slice(1).split(/\s/)[0] === s.name);
   const tokens = r.group === "conflicts" ? CONFLICT_TOKENS : TOKENS;
+  const [tab, setTab] = useState<"edit" | "preview">("edit");
   const parts = useMemo(() => previewParts(r.body, r.group), [r.body, r.group]);
   /* The preview is a glance, not a second editor: the first 600 characters of the filled-in prompt. */
   const shown = useMemo(() => {
@@ -348,137 +312,91 @@ function Editor({ r, saved, skills, projects, presets, busy, onChange, onSave, o
     for (const p of parts) { if (left <= 0) break; out.push(p.text.length > left ? { ...p, text: p.text.slice(0, left) } : p); left -= p.text.length; }
     return out;
   }, [parts]);
-
+  const wide = { minWidth: 260 };
   return (
-    <EditorPanel label="Review prompt" title={r.title || "New prompt"}
-      chips={[
-        ...(r.id && r.builtIn ? [{ tone: "off" as const, text: "Built in" }] : []),
-        ...(r.edited ? [{ tone: "warn" as const, text: "Edited" }] : []),
-        ...(!r.id ? [{ tone: "info" as const, text: "Draft" }] : []),
-      ]}
-      actions={<>
-        {onOffer && <Button tone="primary" onClick={onOffer} title="Put it back in the review menu">Offer again</Button>}
-        {onDrop && (
-          <Button tone={r.builtIn ? "plain" : "danger"} onClick={onDrop} title={r.builtIn ? "Take it out of the menu" : "Delete it"}>
-            {r.builtIn ? "Hide" : "Delete"}
-          </Button>
-        )}
-        {onReset && <Button tone="danger" onClick={onReset} title="Back to the wording it ships with">Reset to built-in</Button>}
-      </>}>
-        <SettingsForm label={r.id ? `Edit ${r.title}` : "New prompt"} onSubmit={() => onSave(r)}>
-          <div className="agx-le-eb">
-          <div className="agx-le-ef">
-          <Field label="Title" htmlFor={f("title")} help="What the menu shows.">
-            <input id={f("title")} value={r.title} onChange={(e) => set({ title: e.target.value })}
-              aria-describedby={helpIdFor(f("title"))} placeholder="What changed since my review"
-              className={INPUT} style={INPUT_STYLE} />
-          </Field>
-          <Field label="Group" htmlFor={f("group")}>
-            <Select title="Group" className={FIELD_SELECT} value={r.group} onChange={(v) => set({ group: v as ReviewRecipeGroup })}
-              options={GROUPS.map((g) => ({ value: g.id, label: g.label }))} />
-          </Field>
-
+    <Section id="review-edit" title={r.id ? `Edit ${r.title || "prompt"}` : "New prompt"}
+      intro={[r.id && r.builtIn ? "Built in." : "", r.edited ? "Edited." : "", !r.id ? "Draft." : ""].filter(Boolean).join(" ") || undefined}>
+      <SettingRow kind="control" label="View" help="Edit the prompt, or see it filled in for a demo pull request."
+        control={<Segmented label="Edit or preview" value={tab} onChange={setTab} options={[{ id: "edit", label: "Edit" }, { id: "preview", label: "Preview" }]} />} />
+      {tab === "preview" ? (
+        <div className="agx-le-pv px-3 py-2.5" aria-label="Preview with a demo pull request" style={{ borderTop: LINE }}>
+          <b>Preview</b> · Pull request #1042 of acme/orbit.{" "}
+          {parts.length
+            ? <>{shown.map((p, i) => (p.filled ? <mark key={i}>{p.text}</mark> : <span key={i}>{p.text}</span>))}{parts.reduce((n, p) => n + p.text.length, 0) > PREVIEW_CHARS ? "…" : ""}</>
+            : <span className="agx-le-pv-none">Nothing to preview yet.</span>}
+        </div>
+      ) : (
+        <>
+          <SettingRow kind="control" label="Title" help="What the menu shows."
+            control={<FormInput id={f("title")} aria-label="Title" value={r.title} onChange={(e) => set({ title: e.target.value })} placeholder="What changed since my review"
+              className={INPUT} style={{ ...INPUT_STYLE, ...wide }} />} />
+          <SettingRow kind="control" label="Group" help="Where the menu lists it."
+            control={<Select title="Group" className={FIELD_SELECT} value={r.group} onChange={(v) => set({ group: v as ReviewRecipeGroup })}
+              options={GROUPS.map((g) => ({ value: g.id, label: g.label }))} />} />
           {r.group === "conflicts" ? (
             <>
-              <Field label="Project" htmlFor={f("repo")} help={r.builtIn ? "Choosing one saves a copy for it." : undefined}>
-                <Select title="Project" className={FIELD_SELECT} value={r.repo ?? ""} onChange={(v) => set({ repo: v || undefined })}
+              <SettingRow kind="control" label="Project" help={r.builtIn ? "Choosing one saves a copy for it." : "The project this prompt is for."}
+                control={<Select title="Project" className={FIELD_SELECT} value={r.repo ?? ""} onChange={(v) => set({ repo: v || undefined })}
                   options={[
                     { value: "", label: "Every project" },
                     ...projects.map((p) => ({ value: p.root, label: p.name })),
-                    /* A project that is no longer listed (moved, hidden, the list did
-                       not load) must not read as "every project" while the old path
-                       is still what gets saved. */
+                    /* A project that is no longer listed must not read as "every project" while the old path is still what gets saved. */
                     ...(r.repo && !projects.some((p) => p.root === r.repo) ? [{ value: r.repo, label: `${r.repo.split("/").pop()} (not found)` }] : []),
-                  ]} />
-              </Field>
-              <Field label="Model" htmlFor={f("model")}>
-                <Select title="Model" className={FIELD_SELECT} value={r.model ?? "auto"} onChange={(v) => set({ model: v as ConflictModel })}
-                  options={MODELS.map(([id, label]) => ({ value: id, label }))} />
-              </Field>
-              <Field label="Effort" htmlFor={f("effort")}>
-                <Select title="Effort" className={FIELD_SELECT} value={r.effort ?? "auto"} onChange={(v) => set({ effort: v as ConflictEffort })}
-                  options={EFFORTS.map(([id, label]) => ({ value: id, label }))} />
-              </Field>
+                  ]} />} />
+              <SettingRow kind="control" label="Model" help="The model the conflict tab opens on."
+                control={<Select title="Model" className={FIELD_SELECT} value={r.model ?? "auto"} onChange={(v) => set({ model: v as ConflictModel })}
+                  options={MODELS.map(([id, label]) => ({ value: id, label }))} />} />
+              <SettingRow kind="control" label="Effort" help="How hard it thinks before it answers."
+                control={<Select title="Effort" className={FIELD_SELECT} value={r.effort ?? "auto"} onChange={(v) => set({ effort: v as ConflictEffort })}
+                  options={EFFORTS.map(([id, label]) => ({ value: id, label }))} />} />
             </>
           ) : (
-            <Field label="Suggest it" htmlFor={f("when")} help="Pick when it is offered on a PR. Only decides what is suggested first: every prompt is always in the menu.">
-              <Select title="Suggest it" className={FIELD_SELECT} value={r.when} onChange={(v) => set({ when: v as ReviewRecipeWhen })}
-                options={WHEN.map((w) => ({ value: w.id, label: w.label }))} />
-            </Field>
+            <SettingRow kind="control" label="Suggest it" help="Decides what is suggested first. Every prompt stays in the menu."
+              control={<Select title="Suggest it" className={FIELD_SELECT} value={r.when} onChange={(v) => set({ when: v as ReviewRecipeWhen })}
+                options={WHEN.map((w) => ({ value: w.id, label: w.label }))} />} />
           )}
-
-          {/* The skill, in two halves: which one, and what to pass it. Split
-              because the arguments are where the placeholders go and a single
-              text box made people type the slash and the name by hand every
-              time — with the name being the half the machine already knows. */}
-          <Field label="Run a skill" htmlFor={f("skill")} help="Optional.">
-            <Select title="Run a skill" className={FIELD_SELECT} value={chosen?.name ?? ""}
+          <SettingRow kind="control" label="Run a skill" help="Optional. Runs before the prompt."
+            control={<Select title="Run a skill" className={FIELD_SELECT} value={chosen?.name ?? ""}
               onChange={(name) => {
                 if (!name) { set({ skill: "" }); return; }
                 const rest = r.skill?.split(/\s+/).slice(1).join(" ") ?? "";
                 set({ skill: `/${name}${rest ? ` ${rest}` : ""}` });
               }}
-              options={[{ value: "", label: "None, just the prompt" }, ...ordered.map((s) => ({ value: s.name, label: `/${s.name}` }))]} />
-          </Field>
-
-          {/* Not on a conflict prompt: that tab is opened by the merge view with
-              its own model choice, and the field would be one that does nothing. */}
+              options={[{ value: "", label: "None, just the prompt" }, ...ordered.map((s) => ({ value: s.name, label: `/${s.name}` }))]} />} />
+          {/* Not on a conflict prompt: that tab is opened by the merge view with its own model choice. */}
           {r.group !== "conflicts" && (
-            <Field label="Permission mode" htmlFor={f("mode")} help="How the terminal this prompt opens asks before a tool runs.">
-              <LaunchModeSelect value={r.permissionMode} onChange={(m) => set({ permissionMode: m })} />
-            </Field>
+            <SettingRow kind="control" label="Permission mode" help="How the terminal it opens asks before a tool runs."
+              control={<LaunchModeSelect value={r.permissionMode} onChange={(m) => set({ permissionMode: m })} />} />
           )}
-
-          <Field label="Arguments" htmlFor={f("args")} help={chosen?.argument_hint}>
-            <input id={f("args")} value={r.skill?.split(/\s+/).slice(1).join(" ") ?? ""}
-              disabled={!chosen}
-              aria-describedby={chosen?.argument_hint ? helpIdFor(f("args")) : undefined}
+          <SettingRow kind="control" label="Arguments" help={chosen?.argument_hint ?? "What to pass the skill."}
+            control={<FormInput id={f("args")} aria-label="Arguments" value={r.skill?.split(/\s+/).slice(1).join(" ") ?? ""} disabled={!chosen}
               placeholder={chosen?.argument_hint ?? "{number}"}
               onChange={(e) => set({ skill: `/${chosen?.name ?? ""}${e.target.value ? ` ${e.target.value}` : ""}` })}
-              className={`t-mono ${INPUT}`} style={{ ...INPUT_STYLE, opacity: chosen ? 1 : 0.5 }} />
-          </Field>
-
-          {/* Starting from one that exists beats starting from an empty box: the
-              built-ins are the worked examples, and copying one is how somebody
-              gets a prompt of their own that is any good. */}
+              className={`t-mono ${INPUT}`} style={{ ...INPUT_STYLE, opacity: chosen ? 1 : 0.5 }} />} />
           {!r.id && !!presets.length && (
-            <Field label="Or start from one of these" htmlFor={f("preset")}>
-              <Select title="Or start from one of these" className={FIELD_SELECT} value="" placeholder="Empty"
+            <SettingRow kind="control" label="Start from one of these" help="Copy a built-in, then change it."
+              control={<Select title="Or start from one of these" className={FIELD_SELECT} value="" placeholder="Empty"
                 onChange={(v) => {
                   const p = presets.find((x) => x.id === v);
                   if (p) set({ title: `${p.title} (mine)`, body: p.body, skill: p.skill, group: p.group, when: p.when, model: p.model, effort: p.effort });
                 }}
-                options={presets.map((p) => ({ value: p.id, label: p.title }))} />
-            </Field>
+                options={presets.map((p) => ({ value: p.id, label: p.title }))} />} />
           )}
-          </div>
-
-          <div className="agx-le-ep">
-            <label htmlFor={f("body")} className="agx-le-pl">The prompt</label>
-            <div className="agx-le-vars" role="group" aria-label="Placeholders">
-              <span>Insert:</span>
-              {tokens.map(([tok, what]) => (
-                <button key={tok} type="button" title={what} className="t-mono" onClick={() => set({ body: `${r.body}${tok}` })}>{tok}</button>
-              ))}
-              <span className="flex-1" />
-              <span className="agx-le-count">{sizeWords(r.body)}</span>
-            </div>
-            <textarea id={f("body")} value={r.body} onChange={(e) => set({ body: e.target.value })}
-              aria-describedby={r.skill ? helpIdFor(f("body")) : undefined}
-              spellCheck={false}
+          <SettingRow kind="control" label="The prompt" help={`${sizeWords(r.body)}. ${r.skill ? "Sent after the skill line, as context." : "Placeholders are filled in when it runs."}`}
+            control={<textarea id={f("body")} aria-label="The prompt" value={r.body} onChange={(e) => set({ body: e.target.value })} spellCheck={false} rows={8}
               placeholder={"Pull request #{number} of {repo}.\n\nRead-only: change nothing…"}
-              className="agx-le-ta t-mono" style={INPUT_STYLE} />
-            {r.skill && <p id={helpIdFor(f("body"))} className="agx-le-help">Sent after the skill line, as context.</p>}
-            <div className="agx-le-pv" aria-label="Preview with a demo pull request">
-              <b>Preview</b> · Pull request #1042 of acme/orbit.{" "}
-              {parts.length
-                ? <>{shown.map((p, i) => (p.filled ? <mark key={i}>{p.text}</mark> : <span key={i}>{p.text}</span>))}{parts.reduce((n, p) => n + p.text.length, 0) > PREVIEW_CHARS ? "…" : ""}</>
-                : <span className="agx-le-pv-none">Nothing to preview yet.</span>}
-            </div>
+              className="agx-le-ta t-mono" style={{ ...INPUT_STYLE, ...wide }} />} />
+          <div className="agx-le-vars px-3 pb-2.5" role="group" aria-label="Placeholders">
+            <span>Insert:</span>
+            {tokens.map(([tok, what]) => (
+              <button key={tok} type="button" data-tip={what} className="t-mono" onClick={() => set({ body: `${r.body}${tok}` })}>{tok}</button>
+            ))}
           </div>
-          </div>
-          <EditorFoot dirty={!r.id || differs(r, saved)} canSave noun="prompt" onCancel={onCancel} busy={busy} />
-        </SettingsForm>
-    </EditorPanel>
+        </>
+      )}
+      <div className="px-3 py-2.5" style={{ borderTop: LINE }}>
+        <GroupActions primary="Save prompt" dirty={!r.id || differs(r, saved)} busy={busy} onPrimary={() => onSave(r)} onCancel={onCancel} />
+      </div>
+    </Section>
   );
 }

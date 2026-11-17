@@ -97,7 +97,7 @@ describe("the strip uses it", () => {
   });
 
   test("names are cut with an ellipsis and the full name is on the peek card, which wraps it", () => {
-    expect(tabSrc).toContain("max-w-[16ch] truncate");
+    expect(tabSrc).toContain("max-w-[28ch] truncate");
     expect(readFileSync(new URL("../src/components/terminal/PeekCard.tsx", import.meta.url), "utf8")).toContain("break-all font-semibold text-[12px]");
   });
 });

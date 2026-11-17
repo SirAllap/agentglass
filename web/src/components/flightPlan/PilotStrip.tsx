@@ -13,7 +13,7 @@ const NEEDS_ENGINE: StripButtonId[] = ["hold", "resume"];
 function Meter({ label, used, cap, withCap, known }: { label: string; used: number; cap: number; withCap: boolean; known: boolean }) {
   const m = meter(used, cap);
   return (
-    <div className="pv-meter" data-unknown={known ? undefined : ""} title={known ? undefined : "Spend is read from the orchestrator engine, which does not answer yet."}>
+    <div className="pv-meter" data-unknown={known ? undefined : ""} data-tip={known ? undefined : "Spend is read from the orchestrator engine, which does not answer yet."}>
       <div className="lab"><span>{label}</span><b>{known ? `${usd(used)}${withCap ? ` / ${money(cap)}` : ""}` : "not read"}</b></div>
       <div className="pv-bar" role="meter" aria-label={`${label} spend`} aria-valuemin={0} aria-valuemax={cap} aria-valuenow={known ? Math.min(used, cap) : 0} data-tone={known ? m.tone : undefined} style={{ ["--p" as string]: known ? m.pct : 0 }}><i /></div>
     </div>
@@ -41,7 +41,7 @@ export function PilotStrip({ strip, engine, busy, error, onButton, onSecondary }
   return (
     <div className="pv-strip" data-mode={strip.mode}>
       <div><ModeBadge strip={strip} /></div>
-      <div className="pv-say" aria-live="polite" title={strip.sentence}>
+      <div className="pv-say" aria-live="polite" data-tip={strip.sentence}>
         <strong>{strip.lead}</strong>{rest}{error && <> <span className="bad" role="alert">{error}</span></>}
       </div>
       <div className="pv-acts">
@@ -53,7 +53,7 @@ export function PilotStrip({ strip, engine, busy, error, onButton, onSecondary }
           {strip.secondary && <button type="button" className="btn ghost" disabled={busy || !engine} onClick={onSecondary}>{strip.secondary.label}</button>}
           <button
             type="button" className={`btn ${b.tone === "danger" ? "hold" : b.tone === "go" ? "go" : ""}`} aria-busy={busy || undefined}
-            disabled={busy || b.disabled || down} title={down ? "The orchestrator engine does not answer yet." : undefined}
+            disabled={busy || b.disabled || down} data-tip={down ? "The orchestrator engine does not answer yet." : undefined}
             aria-label={b.id === "hold" ? "Hold Autopilot: no new Go, builders stop at their next safe point" : undefined}
             onClick={() => onButton(b.id)}
           >

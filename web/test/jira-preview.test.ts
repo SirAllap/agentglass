@@ -19,7 +19,7 @@ describe("the preview tells the truth about a Jira card", () => {
     const st = jiraSteps(all);
     return renderToStaticMarkup(React.createElement(PrView, { adapter: JIRA, status: "Building", steps: st, all: st, writes: true, hover: null, linked: true }));
   };
-  const blocks = { handoff: { enabled: true, blocks: [{ type: "comment" as const, text: "Opened" }] }, review: { enabled: true, blocks: [{ type: "move" as const, statusNames: ["Peer check"] }] }, merge: off };
+  const blocks = { handoff: { enabled: true, blocks: [{ type: "comment" as const, text: "Opened" }] }, review: { enabled: true, blocks: [{ type: "move" as const, statusNames: ["Peer check"] }] }, merge: off, people: off, note: off };
 
   test("the review step is a button beside the hand-off, as it is on the card, not an item in a menu", () => {
     const html = draw(blocks);
@@ -35,6 +35,6 @@ describe("the preview tells the truth about a Jira card", () => {
   });
 
   test("no steps, no control", () => {
-    expect(draw({ handoff: off, review: off, merge: off })).toContain("No control from a step here.");
+    expect(draw({ handoff: off, review: off, merge: off, people: off, note: off })).toContain("No control from a step here.");
   });
 });

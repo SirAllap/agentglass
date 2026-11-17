@@ -49,6 +49,8 @@ const KEYED_ELSEWHERE: Record<string, { header?: string; verbs?: string[] }> = {
   "/polaris/x": { header: '"/polaris/settings"' },
   "/seat/x": { verbs: ["/seat/settings", "/seat/change", "/seat/wake"] },
   "/finder/devices": { verbs: ["/finder/devices/eject"] },
+  // The /prs/ door asks the key only for the person-only verbs (server/src/personOnlyPrRoutes.ts).
+  "/prs/x": { verbs: ["/prs/merge", "/prs/close", "/prs/unstick-close", "/prs/approve-runs"] },
 };
 
 const guarded = new Map<string, number>();

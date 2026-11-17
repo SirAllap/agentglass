@@ -62,6 +62,6 @@ describe("the zoom badge", () => {
        ridiculously small" is a rule by now. */
     const row = addressRow();
     expect(row).toMatch(/minWidth: 3\d/);
-    expect(row).toMatch(/height: 2\d/);
+    expect(row).toMatch(/height: (2\d|MIN_BOX)\b/);
   });
 });

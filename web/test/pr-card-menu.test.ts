@@ -3,7 +3,7 @@ import { applyOff, cardMenu, menuHead, trackerNameOf, walkIds, type CardMenu, ty
 import { cardView } from "../src/lib/prCardView.ts";
 import { cardReviewers } from "../src/lib/cardReviewers.ts";
 import { syncCardView, type SyncCardStep } from "../src/lib/prSyncCards.ts";
-import type { Filed } from "../src/lib/prLanes.ts";
+import type { Filed } from "../../shared/prLanes.ts";
 import type { PrCheckRollup } from "../../shared/types.ts";
 
 const roll = (o: Partial<PrCheckRollup> = {}): PrCheckRollup => ({

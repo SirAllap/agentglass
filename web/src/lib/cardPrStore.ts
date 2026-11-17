@@ -19,7 +19,8 @@
  * its own.
  */
 import { api } from "./api.ts";
-import { pickCardPr, type CardPr } from "./cardPrPick.ts";
+import { pickCardPr, classifyCardPrs, sortedCardPrs, legacyKeysOf, type CardPr } from "./cardPrPick.ts";
+import { peekJiraLinks } from "./jiraLinks.ts";
 import { digitMetrics, forgetDigitMetrics, prChipWidth } from "./tasksColumnFit.ts";
 
 /** Ten minutes, no longer the board's own poll interval (`BOARD_POLL_MS` in
@@ -33,10 +34,22 @@ export const TTL_MS = 10 * 60_000;
  *  server, and a board's worth of rows is a burst, not a stream. */
 const AT_ONCE = 2;
 
-type Entry = { at: number; prs: CardPr[]; error: boolean };
+/** `prs` is the card's OWN pull requests, the only ones any "this card has a PR" reading may use; `mentions` only name the card (data for the UI, drawn nowhere yet). */
+type Entry = { at: number; prs: CardPr[]; mentions?: CardPr[]; error: boolean };
 /** Whose pull-request search answers for a card. */
 export type PrTracker = "clickup" | "jira";
 
+/** A card's description was read (the detail opened): remember the old key it names, so every PR reading of that card counts it. */
+export function noteCardLegacyKeys(card: string, description: string | undefined): void {
+  const k = card.trim().toUpperCase();
+  const keys = legacyKeysOf(description);
+  if (keys.join() === (legacy.get(k) ?? []).join()) return;
+  if (keys.length) legacy.set(k, keys); else legacy.delete(k);
+  tell();
+}
+
+/** Old keys of migrated cards, learned from any description that was read. */
+const legacy = new Map<string, string[]>();
 const seen = new Map<string, Entry>();
 const inflight = new Set<string>();
 const waiting: { key: string; taskId: string; tracker: PrTracker; card: string; field: string; cwd: string; project?: string }[] = [];
@@ -148,7 +161,11 @@ function jiraCardPrs(card: string, cwd: string): Entry | null {
     waiting.push({ key, taskId: "", tracker: "jira", card: "", field: "", cwd, project });
     pump();
   }
-  return hit ? { at: hit.at, prs: hit.byCard[card.trim().toUpperCase()] ?? [], error: hit.error } : null;
+  if (!hit) return null;
+  // What the card says on the site (read when it was opened, never asked for here) makes a PR the card's own.
+  const linked = peekJiraLinks(card.trim().toUpperCase())?.links ?? [];
+  const { own, mentions } = classifyCardPrs(hit.byCard[card.trim().toUpperCase()] ?? [], card, linked, legacy.get(card.trim().toUpperCase()) ?? []);
+  return { at: hit.at, prs: sortedCardPrs(own), mentions, error: hit.error };
 }
 
 /** Forget everything — a board switch or an explicit refresh, same trigger as

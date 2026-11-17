@@ -14,7 +14,7 @@ import { JiraHead } from "./jira/JiraFacts.tsx";
 export function JiraCardPane({ t, writable, onTask, nav, onClose, onAllow }: CardPaneProps) {
   return (
     <div className="flex flex-col flex-1 min-h-0 min-w-0">
-      <JiraCard key={t.id} t={t} header={(r) => <JiraHead t={t} writable={writable} onTask={onTask} onRefresh={r.onRefresh} refreshing={r.refreshing} ed={r.ed} follow={r.follow} nav={nav} onClose={onClose} />} writes={writable} onTask={onTask} onAllow={onAllow} />
+      <JiraCard key={t.id} t={t} header={(r) => <JiraHead t={t} writable={writable} onTask={onTask} onRefresh={r.onRefresh} refreshing={r.refreshing} ed={r.ed} follow={r.follow} nav={nav} onClose={onClose} updatedAt={r.updatedAt} />} writes={writable} onTask={onTask} onAllow={onAllow} />
     </div>
   );
 }

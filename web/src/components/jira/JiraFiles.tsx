@@ -20,7 +20,9 @@
  * Ceiling: files go up one at a time, in the order dropped; a file over 25 MB is
  * refused here with the sentence, not sent.
  */
+import type { AddAsk } from "../../lib/stateRule.ts";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { tipAttr } from "../../lib/tip.ts";
 import type { CardAttachment } from "../../../../shared/providers.ts";
 import { addedSaid, checkUpload, dragHasFiles, droppedFiles, withAddresses } from "../../lib/jiraFiles.ts";
 import { CardFiles } from "../CardFiles.tsx";
@@ -42,7 +44,7 @@ function download(a: CardAttachment): void {
   el.click();
 }
 
-export function AttachmentsBlock({ files, card, writable, act }: { files: CardAttachment[]; card: string; writable: boolean; act: FileAct }) {
+export function AttachmentsBlock({ files, card, writable, act, folded, ask }: { folded?: boolean; ask?: AddAsk;  files: CardAttachment[]; card: string; writable: boolean; act: FileAct }) {
   const [said, setSaid] = useState<Said | null>(null);
   const [adding, setAdding] = useState<string | null>(null);
   const [err, setErr] = useState("");
@@ -53,6 +55,7 @@ export function AttachmentsBlock({ files, card, writable, act }: { files: CardAt
   const depth = useRef(0);
   useEffect(() => { setSaid(null); setErr(""); setAsking(null); setAdding(null); setOver(false); depth.current = 0; }, [card]);
   const shown = useMemo(() => withAddresses(files), [files]);
+  useEffect(() => { if (ask?.k === "file" && !adding) pick.current?.click(); }, [ask?.n]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!files.length && !writable) return null;
 
   const addAll = async (list: File[]) => {
@@ -74,6 +77,8 @@ export function AttachmentsBlock({ files, card, writable, act }: { files: CardAt
     setSaid(why ? { text: why, warn: true } : { text: `${a.title} taken off` });
   };
   const target = asking ? shown.find((a) => a.id === asking) : undefined;
+  /* Folded into the card's one "Empty: …" line: only the file picker stays, so that line's Add can open it. */
+  if (folded && !files.length && !adding && !err) return writable ? <input ref={pick} type="file" multiple hidden aria-label="Choose files to add" onChange={(e) => { const l = Array.from(e.target.files ?? []); e.target.value = ""; void addAll(l); }} /> : null;
 
   return (
     <div className="relative min-w-0"
@@ -83,7 +88,7 @@ export function AttachmentsBlock({ files, card, writable, act }: { files: CardAt
       onDrop={(e) => { if (!writable || !dragHasFiles(e.dataTransfer)) return; e.preventDefault(); depth.current = 0; setOver(false); void addAll(droppedFiles(e.dataTransfer)); }}
       style={{ outline: over ? "1.5px dashed var(--primary)" : "1.5px dashed transparent", outlineOffset: 4, borderRadius: 6 }}>
       <JiraSection id="attachments" title="Attachments" count={files.length || undefined}
-        aside={<Aside plain={adding ? <span role="status" className="truncate min-w-0" title={adding}>Adding {adding}…</span> : null} said={said} onSaid={setSaid}
+        aside={<Aside plain={adding ? <span role="status" className="truncate min-w-0" data-tip={tipAttr({ name: "Uploading", text: adding })}>Adding {adding}…</span> : null} said={said} onSaid={setSaid}
           open={false} onToggle={() => { if (!adding) pick.current?.click(); }} label="Add a file" canAdd={writable} />}>
         {writable && <input ref={pick} type="file" multiple hidden aria-label="Choose files to add" onChange={(e) => { const l = Array.from(e.target.files ?? []); e.target.value = ""; void addAll(l); }} />}
         {err && <div className="text-[10.5px] mb-1" role="alert" style={{ color: "var(--error-ink)" }}>{err}</div>}
