@@ -66,7 +66,10 @@ const call = (f: F, c: { kind: "person" | "seat" | "worker" | "other"; powers?: 
 /** Waits for the sign-off run the server started for this plan to end: up to 30 s, returning the moment it ends. A 5 s cap ran out on a slow CI runner, the run was still going, and every test after it read 409 merge-busy. */
 const runEnds = async (f: F) => {
   for (let i = 0; i < 1200; i++) { const r = Store.listRuns({ root: f.repo }).find((x) => x.moment === "before-merge"); if (r && r.state !== "running") return r; await Bun.sleep(25); }
-  throw new Error("the review never ended");
+  // diag: temporary, so the next GitHub run says what the stuck review was
+  const rows = Store.listRuns({ root: f.repo }).map((x) => ({ id: x.id, moment: x.moment, state: x.state, engine: (x.input as { engine?: string }).engine ?? null, error: (x as { error?: string }).error ?? null }));
+  const ps = Bun.spawnSync(["ps", "-eo", "pid,ppid,etimes,args"]).stdout.toString().split("\n").filter((l) => /preflightStub|claude|opencode|bun/.test(l)).slice(0, 15);
+  throw new Error(`the review never ended: ${JSON.stringify({ rows, stub: STUB, bin: process.execPath, ps })}`);
 };
 const verdicts = (f: F) => db.query<{ verdict: string }, [string]>(`SELECT verdict FROM flight_plan_signoff WHERE plan_id = ? ORDER BY id`).all(f.id).map((r) => r.verdict);
 const merges = (f: F) => Plans.mergesOf(f.id);
