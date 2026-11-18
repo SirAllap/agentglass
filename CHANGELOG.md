@@ -8,6 +8,8 @@ carries its own notes, the desktop installers and the phone's `.apk`.
 
 ## Released
 
+- **v1.1.1** — **Moving a Jira card from the app works again.**
+  - **Jira.** v1.1.0 read the person's own card moves, comments and edits as an agent's and refused them ("Only the person changes cards in Jira; an agent cannot."); the window now sends the desktop key on every person-only Jira write.
 - **v1.1.0** — **A faster, calmer window, a rebuilt Settings and Jira board, and agents that guide you through a page.**
   - **Settings and Jira.** One layout for every Settings page with per-project Claude accounts, and a Jira board that follows the workflow, shows each card's agent, and edits several cards at once.
   - **Browser and workers.** Agents can guide you on your own tab under a per-site grant, and resumed workers keep their skills and MCP servers.
