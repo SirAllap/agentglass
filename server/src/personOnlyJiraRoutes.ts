@@ -12,15 +12,8 @@
  */
 export const JIRA_PERSON_ONLY_REFUSED = "Only the person changes cards in Jira; an agent cannot.";
 
-/** Raw write routes the central guard in index.ts refuses to an agent. */
-export const PERSON_ONLY_JIRA_ROUTES: readonly string[] = [
-  "/jira/link", "/jira/connect", "/jira/transition", "/jira/assignee", "/jira/handoff", "/jira/steps", "/jira/step",
-  "/jira/rank", "/jira/sprint-move", "/jira/backlog-move", "/jira/bulk", "/jira/clone", "/jira/edit",
-  "/jira/comment", "/jira/comment/edit", "/jira/comment/delete",
-  "/jira/worklog", "/jira/worklog/edit", "/jira/worklog/delete", "/jira/watch", "/jira/vote",
-  "/jira/subtask", "/jira/relate", "/jira/relate/remove", "/jira/weblink", "/jira/weblink/remove",
-  "/jira/attach", "/jira/attach/remove",
-];
+import { PERSON_ONLY_JIRA_ROUTES } from "../../shared/personOnlyJiraRoutes.ts";
+export { PERSON_ONLY_JIRA_ROUTES };
 
 /** Routes an agent may call because they carry their own approval policy: the card door, and the two switches that go through the Settings door. */
 export const DOOR_ONLY_JIRA_ROUTES: readonly string[] = ["/jira/door/", "/jira/writes", "/jira/write-kinds"];

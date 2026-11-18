@@ -2,6 +2,8 @@
 // app's own key on each (index.ts: `deskHeld() && deskKeyOk(req)`). A request without it is refused
 // with a sentence that says "only the desktop app", whoever is asking.
 
+import { PERSON_ONLY_JIRA_ROUTES } from "../../../shared/personOnlyJiraRoutes.ts";
+
 /** Routes that take the desk key. A prefix ends in a slash or is a whole path. */
 export const DESK_GATED: readonly string[] = [
   "/finder/bookmarks", "/finder/remotes/", "/finder/devices/", "/finder/actions/", "/finder/openwith/launch", "/fs/op",
@@ -52,6 +54,8 @@ export const DESK_GATED: readonly string[] = [
   "/jira/sprint-move", "/jira/backlog-move", "/jira/bulk", "/jira/edit",
   // A project's flow is the person's, like the policy beside it (index.ts /flow), and so is its undo.
   "/flow", "/flow/",
+  // Every raw Jira write the server keeps for the person (one list, shared with the server guard).
+  ...PERSON_ONLY_JIRA_ROUTES,
 ];
 
 export function deskGated(path: string): boolean {
