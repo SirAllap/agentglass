@@ -50,3 +50,26 @@ describe("the by-type stats index", () => {
     expect(src).toContain("CREATE INDEX IF NOT EXISTS idx_events_type_cov_scoped");
   });
 });
+
+/*
+ * Three single-column indexes were the leftmost prefix of a wider one and cost a
+ * write per inserted event. They are gone; what must stay is the query each
+ * served, answered from the wider index without touching the table.
+ */
+describe("prefix-redundant events indexes", () => {
+  test("source, type and model single-column indexes are gone; ts and session stay", () => {
+    const names = indexes();
+    for (const n of ["idx_events_source", "idx_events_type", "idx_events_model"]) expect(names).not.toContain(n);
+    expect(names).toContain("idx_events_ts"); // ORDER BY timestamp DESC, id DESC LIMIT n without a sort
+    expect(names).toContain("idx_events_session"); // pinned by INDEXED BY in db.ts
+  });
+
+  test("the lookups they served still use an index-only plan", () => {
+    const plan = (sql: string) =>
+      db.query<{ detail: string }, []>(`EXPLAIN QUERY PLAN ${sql}`).all().map((r) => r.detail).join(" | ");
+    expect(plan("SELECT COUNT(*) FROM events WHERE source_app = 'a' AND timestamp >= 1")).toContain("idx_events_app_cov");
+    expect(plan("SELECT COUNT(*) FROM events WHERE model_name = 'm'")).toContain("idx_events_model_cov");
+    expect(plan("SELECT COUNT(*) FROM events WHERE hook_event_type = 'Stop'")).toMatch(/COVERING INDEX idx_events_(type_cov_scoped|first_prompt)/);
+    expect(plan("SELECT * FROM events ORDER BY timestamp DESC, id DESC LIMIT 5")).not.toContain("TEMP B-TREE");
+  });
+});

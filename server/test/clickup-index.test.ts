@@ -14,6 +14,7 @@
  */
 import { describe, expect, test, beforeEach } from "bun:test";
 import * as Index from "../src/clickupindex.ts";
+import { db } from "../src/db.ts";
 import type { ProviderTask } from "../../shared/providers.ts";
 
 const card = (over: Partial<ProviderTask> & { body?: string }) => ({
@@ -65,6 +66,38 @@ describe("what the sweep wrote down", () => {
 });
 
 /*
+ * THE INDEX IS A CACHE, NOT HISTORY: it is worth less than the row it costs
+ * once nobody has swept past it in a while. `evictOld` is the sweep that
+ * says so, and the cards it drops are the ones a board did NOT touch — a
+ * card still open keeps getting its `seen_at` refreshed by `remember`, so
+ * the cutoff alone is what keeps it.
+ */
+describe("evicting what nobody has seen in a while", () => {
+  const withSeenAt = (id: string, seenAt: number) => {
+    Index.remember([card({ id })]);
+    // `remember` always writes `Date.now()`; back-date it directly for the test.
+    db.run("UPDATE clickup_cards SET seen_at = ? WHERE id = ?", [seenAt, id]);
+  };
+
+  test("older than the window is dropped, newer stays", () => {
+    const now = Date.now();
+    withSeenAt("old", now - 40 * 86_400_000);
+    withSeenAt("fresh", now - 1 * 86_400_000);
+    const n = Index.evictOld(30);
+    expect(n).toBe(1);
+    expect(Index.indexed().cards).toBe(1);
+    expect(Index.named("pagination").map((c) => c.id)).toEqual(["fresh"]);
+  });
+
+  test("0 or less keeps everything", () => {
+    withSeenAt("old", Date.now() - 400 * 86_400_000);
+    expect(Index.evictOld(0)).toBe(0);
+    expect(Index.evictOld(-5)).toBe(0);
+    expect(Index.indexed().cards).toBe(1);
+  });
+});
+
+/*
  * WHAT A NOTIFICATION SAID, ON THE CARD IT WAS ABOUT.
  *
  * A notification read "Grace assigned this task to: ada" and the card's Activity
@@ -108,5 +141,78 @@ describe("notifications kept against a card", () => {
     expect(got).toHaveLength(1);
     expect(got[0]!.text.length).toBe(4096);
     expect(Index.notesAbout("", "L".repeat(512))).toHaveLength(1);
+  });
+});
+
+describe("the body scan is paid once per card number", () => {
+  test("a repeat is answered from memory until the index changes", () => {
+    Index.remember([card({ id: "m1", body: "see ORBIT-1042" })]);
+    const before = Index.bodyScans;
+    expect(Index.mentioning("1042").map((c) => c.id)).toEqual(["m1"]);
+    expect(Index.mentioning("1042").map((c) => c.id)).toEqual(["m1"]);
+    expect(Index.bodyScans - before, "one scan for two asks").toBe(1);
+    Index.remember([card({ id: "m2", body: "also ORBIT-1042" })]);
+    expect(Index.mentioning("1042").map((c) => c.id).sort()).toEqual(["m1", "m2"]);
+    expect(Index.bodyScans - before, "a write forgets the answer").toBe(2);
+  });
+});
+
+/*
+ * The body column was a third of a 946 MB database (301 MB for 10,218 cards)
+ * and was only ever asked "does it mention card N". It now holds the card ids
+ * the body names, and the answer must not change by one card.
+ */
+describe("the index keeps what a body mentions, not the body", () => {
+  const long = `${"Steps to reproduce, at length. ".repeat(2000)} Same root cause as ORBIT-1042 and (acme_v2-77). Not call 891042, not ORBIT-1042x.`;
+  const stored = (id: string) => (db.query("SELECT body FROM clickup_cards WHERE id = ?").get(id) as { body: string }).body;
+
+  test("a long body is stored as the ids it names and still answers the same", () => {
+    Index.remember([card({ id: "big", body: long }), card({ id: "plain", body: "no card named here" })]);
+    expect(stored("big").length).toBeLessThan(40);
+    expect(stored("big")).toContain("ORBIT-1042");
+    expect(Index.mentioning("1042").map((c) => c.id)).toEqual(["big"]);
+    expect(Index.mentioning("77").map((c) => c.id)).toEqual(["big"]);
+    expect(Index.mentioning("891042")).toEqual([]);
+    // A body with no card in it still counts as read.
+    expect(Index.indexed()).toEqual({ cards: 2, withBody: 2 });
+  });
+
+  test("the rule gives one answer on a text and on what is kept of it", async () => {
+    const { cardRefsIn, mentionsCardId } = await import("../../shared/cardRef.ts");
+    const bits = ["ORBIT-1042", "orbit-7", "a_b-12", "x-12-34", "ab-cd-123", "9-55", "T-10x", "(ACME-300)", "ACME-300.", "-41", "é-12", "k9-0042", " ", "\n", "see", "1042", "_z-5"];
+    let seed = 7;
+    const next = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff);
+    for (let i = 0; i < 400; i++) {
+      const text = Array.from({ length: 1 + (next() % 8) }, () => bits[next() % bits.length]).join(next() % 3 ? " " : "");
+      for (const d of ["1042", "7", "12", "34", "123", "55", "10", "300", "41", "0042", "5", "42"]) {
+        expect(mentionsCardId(cardRefsIn(text), d), `${JSON.stringify(text)} / ${d}`).toBe(mentionsCardId(text, d));
+      }
+    }
+  });
+
+  test("a slim step reads a byte budget, not a row count", () => {
+    const fat = "PROJ-1 ".repeat(20_000); // ~140 KB
+    Index.remember([card({ id: "f1" }), card({ id: "f2" }), card({ id: "f3" })]);
+    db.run("UPDATE clickup_cards SET body = ? WHERE id IN ('f1','f2','f3')", [fat]);
+    Index.__slimAgain();
+    const first = Index.slimOld(100);
+    expect(first).toBeGreaterThan(0);
+    expect(first).toBeLessThan(3); // 100 rows asked, ~140 KB each: the 256 KB budget stops it at 1-2
+    while (Index.slimOld(100)) { /* rest of the pass */ }
+    expect(stored("f3").length).toBeLessThan(40);
+  });
+
+
+  test("rows written whole before this are cut down a page at a time", () => {
+    Index.remember([card({ id: "o1" }), card({ id: "o2" }), card({ id: "o3" })]);
+    db.run("UPDATE clickup_cards SET body = ? WHERE id IN ('o1','o2')", [long]);
+    Index.__slimAgain();
+    expect(Index.slimOld(2)).toBe(2);
+    expect(Index.slimOld(2)).toBe(1);
+    expect(Index.slimOld(2)).toBe(0);
+    expect(stored("o1").length).toBeLessThan(40);
+    expect(stored("o2").length).toBeLessThan(40);
+    expect(stored("o3")).toBe("");
+    expect(Index.mentioning("1042").map((c) => c.id).sort()).toEqual(["o1", "o2"]);
   });
 });

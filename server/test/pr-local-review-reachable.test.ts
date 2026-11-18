@@ -57,13 +57,15 @@ describe("the Overview", () => {
   test("says whether anything has reviewed this pull request, above the description", () => {
     const overview = between(PANEL, "function Overview({", "\nfunction ");
     expect(overview, "the local strip is part of the answer to 'can this land'").toContain("<LocalStrip");
-    expect(overview.indexOf("<LocalStrip")).toBeLessThan(overview.indexOf("<Description"));
+    // The description is the PR story now.
+    expect(overview.indexOf("<PrStory")).toBeGreaterThan(-1);
+    expect(overview.indexOf("<LocalStrip")).toBeLessThan(overview.indexOf("<PrStory"));
   });
 });
 
 describe("a link to a pull request in another project", () => {
   test("looks for the checkout that holds it instead of searching the wrong repository", () => {
-    const jump = between(PANEL, "const jump = useSyncExternalStore", "const [busy, setBusy]");
+    const jump = between(PANEL, "const sharedJump = useSyncExternalStore", "const [running, setBusy]");
     expect(jump).toContain("api.prLocate");
     // The loan is visible and reversible: a panel quietly showing a
     // repository nobody selected is the kind of wrong that takes a minute to
@@ -108,7 +110,10 @@ describe("a plugin's own settings", () => {
     const modal = await Bun.file(new URL("../../web/src/components/SettingsModal.tsx", import.meta.url)).text();
     expect(modal, "no run-time pages added to the nav").not.toContain("setPluginTabs");
     // A link that named one still lands on it.
-    expect(modal).toContain('<PluginsPane open={open} focus={pane.slice("plugin:".length)} />');
+    // (The modal renders the Plugins page, which hands `focus` on to PluginsPane.)
+    expect(modal).toContain('<PluginsSettingsPage c={pageCtx} focus={pane.slice("plugin:".length)} />');
+    const page = await Bun.file(new URL("../../web/src/components/settings/pages/PluginsPage.tsx", import.meta.url)).text();
+    expect(page).toContain("<PluginsPane open={c.open} focus={focus} />");
 
     const pane = await Bun.file(new URL("../../web/src/components/PluginsPane.tsx", import.meta.url)).text();
     expect(pane).toContain("<PluginSettingsPane");

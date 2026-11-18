@@ -15,6 +15,7 @@
  */
 import { describe, expect, test, beforeAll } from "bun:test";
 import { mkdtempSync, mkdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -23,7 +24,13 @@ const SCOPE = join(dir, "project");
 const OUTSIDE = join(dir, "elsewhere");
 mkdirSync(SCOPE, { recursive: true });
 mkdirSync(OUTSIDE, { recursive: true });
+// A scope inside a git checkout resolves to that checkout's top, so a TMPDIR
+// under the repo (the sandbox sets one) widened SCOPE to the whole repo and
+// OUTSIDE stopped being outside. Making SCOPE its own repo pins its top.
+spawnSync("git", ["init", "-q", SCOPE]);
+process.env.AGENTGLASS_DB = join(dir, "recent.db");
 process.env.AGENTGLASS_ROOT = SCOPE;
+process.env.XDG_CONFIG_HOME = dir;
 
 let mod: typeof import("../src/db.ts");
 let ing: typeof import("../src/ingest.ts");

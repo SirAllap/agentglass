@@ -25,6 +25,18 @@
  * left none says so in the line instead of "done": the turn was wasted, and
  * that is the seat's to see.
  *
+ * A TUI TURN ENDS WITHOUT ITS PROCESS. The interactive CLI stays in its pane
+ * after a turn, so the seat hears "finished its turn, waiting" (the line that
+ * says to answer it) from the transcript's own marker, and the process leaving
+ * later is not a second notice: both take the same marker row.
+ *
+ * THE PROJECT, NOT THE SPELLING. A seat working in a linked worktree beside its
+ * project (`~/code/orbit-1042` next to `~/code/orbit`) and a chair seated at
+ * the project spell the same project two ways, and the chair's name is a hash
+ * of the root it was seated at. So the root is resolved by the git common dir
+ * before the seat is looked up (`seat.ts seatHome`), on this side and in
+ * `promptSeat`; otherwise the notice is typed to nobody and nothing says so.
+ *
  * The brief's report path is not guessed at: a brief is free prose, and the
  * only place a worker says where it wrote is its own transcript, which this
  * does not read. The notice names the worker instead, which is what `read`
@@ -40,10 +52,12 @@ import * as AgentOps from "../agentops.ts";
 import { db } from "../db.ts";
 import { projectRootOf } from "../git.ts";
 import { roleOwesResult } from "../rolePrompt.ts";
+import { seatHome } from "../seat.ts";
 import { reportedSince } from "../seatreport.ts";
+import { runOutOfMemory } from "../scopes.ts";
 import { promptSeat } from "../seatwake.ts";
 import { owesResult } from "../../../shared/workerRoles.ts";
-import { reportOf, runFiles } from "./headless.ts";
+import { answerOf, runFiles } from "./headless.ts";
 import { startedByOf } from "./workerstart.ts";
 
 /** How long an ending is remembered. The marker is only ever asked about the
@@ -92,7 +106,7 @@ const looks = new Map<string, { at: number; missing: boolean }>();
 
 /**
  * Whether a clean turn left nothing to read. The result of a headless turn is
- * its last message (headless.ts `reportOf`) or a report to the seat; a role
+ * its last message (headless.ts `answerOf`) or a report to the seat; a role
  * that owes one and left neither has failed at the only thing it was for.
  *
  * A turn that failed is not this: it already reaches the seat as a report and a
@@ -106,27 +120,82 @@ export function endedWithoutResult(a: Pick<AgentOps.NamedAgent, "name" | "starte
   if (had && had.at === a.startedAt) return had.missing;
   // An engine that frames its answer can frame an empty one: Claude's last
   // frame is a result whatever the model said, so whitespace is no result.
-  const missing = !reportedSince(a.name, a.startedAt) && !reportOf(readText(runFiles(a.name).out))?.trim();
+  const missing = !reportedSince(a.name, a.startedAt) && !answerOf(by.tui, readText(runFiles(a.name).out))?.trim();
   looks.set(a.name, { at: a.startedAt, missing });
   return missing;
 }
 
+/**
+ * Whether the turn's last message ends with a question for the orchestrator.
+ *
+ * A scout that has to choose between two plans, or a builder that needs a
+ * decision, asks it in its last line. A turn that ends on a question is not
+ * dead work: the session it ran in is kept and `agentglass-agent prompt <name>
+ * "answer"` resumes it (`policystart.ts resumeTurn`), and the worker's card
+ * says it is waiting for an answer.
+ *
+ * Ceiling: this reads the shape of the last line, not the meaning of the
+ * message. A report that ends "no questions." is not a question, and one whose
+ * question lost its "?" is not seen. The brief asks a worker to end with the
+ * question it needs answered, which is the marker this reads.
+ */
+export function endsWithQuestion(text: string | null | undefined): boolean {
+  const last = (text ?? "").trimEnd().split("\n").map((l) => l.trim()).filter(Boolean).at(-1) ?? "";
+  return /\?[\s"')\]]*$/.test(last);
+}
+
+/* One look per turn: the result is final once the status file exists. */
+const answers = new Map<string, { at: number; asking: boolean }>();
+
+/** Whether this finished turn left a question, read once per turn. */
+export function awaitingAnswer(a: Pick<AgentOps.NamedAgent, "name" | "startedAt" | "exitCode" | "startedBy">): boolean {
+  const by = startedByOf(a);
+  if (a.exitCode !== 0 || !by) return false;
+  const had = answers.get(a.name);
+  if (had && had.at === a.startedAt) return had.asking;
+  const asking = endsWithQuestion(answerOf(by.tui, readText(runFiles(a.name).out)));
+  answers.set(a.name, { at: a.startedAt, asking });
+  return asking;
+}
+
 /** The one line the seat is woken with: what ended, how, and for how long. */
-export function endLine(name: string, ending: Ending, exitCode: number, ms: number, withoutResult = false): string {
+export function endLine(
+  name: string, ending: Ending, exitCode: number, ms: number, withoutResult = false, oomCeiling: string | null = null,
+): string {
   if (withoutResult) return `worker ${name} ended without a result after ${elapsed(ms)}. Read it with \`agentglass-agent read ${name}\` and decide the next step.`;
-  const how = ending === "failed" ? `failed (exit ${exitCode})` : ending;
+  const how = oomCeiling
+    ? `out of memory (worker ceiling ${oomCeiling})`
+    : ending === "failed" ? `failed (exit ${exitCode})` : ending;
   return `worker ${name} ended: ${how} after ${elapsed(ms)}. Read it with \`agentglass-agent read ${name}\` and decide the next step.`;
+}
+
+/**
+ * The one line for a turn that is over while its worker is not: an interactive
+ * Claude turn ends and the CLI stays in its pane, ready for the next one. The
+ * seat's move is to answer it, so the line says that and not "ended".
+ */
+export function waitingLine(name: string): string {
+  return `worker ${name} finished its turn, waiting. Answer it with \`agentglass-agent prompt ${name} "..."\` or read it with \`agentglass-agent read ${name}\`.`;
 }
 
 export interface EndDeps {
   now?: number;
   /** The send, injected so a suite can watch it without a tmux chair. */
   send?: (root: string, text: string) => Promise<unknown>;
+  /** The ceiling that bound the run when the kernel OOM-killed something in
+   *  it — both when the shared slice is in use ("7G, shared 20G"), because the
+   *  child's counter cannot say which wall fired — or null. Injected so a suite
+   *  reads no cgroup. */
+  outOfMemory?: (name: string) => string | null;
 }
 
 /**
  * Tell the seat that started this worker how its turn ended. Idempotent: the
  * second call for the same ending says nothing and answers false.
+ *
+ * A failed turn whose scope was OOM killed says so instead of its exit line:
+ * the engine's socket dying is the symptom, and ECONNRESET sends the seat
+ * looking for a network fault that is not there.
  */
 export async function announceWorkerEnd(name: string, deps: EndDeps = {}): Promise<boolean> {
   const a = AgentOps.agentNamed(name);
@@ -138,6 +207,26 @@ export async function announceWorkerEnd(name: string, deps: EndDeps = {}): Promi
   const now = deps.now ?? Date.now();
   if (claim.run(name, a.startedAt, now).changes === 0) return false;
   prune.run(now - KEEP_MS);
-  await (deps.send ?? promptSeat)(a.seatRoot, endLine(name, ending, a.exitCode ?? 0, now - a.startedAt, endedWithoutResult(a)));
+  const oom = ending === "failed" ? (deps.outOfMemory ?? runOutOfMemory)(name) : null;
+  await (deps.send ?? promptSeat)(seatHome(a.seatRoot), endLine(name, ending, a.exitCode ?? 0, now - a.startedAt, endedWithoutResult(a), oom));
+  return true;
+}
+
+/**
+ * Tell the seat that an interactive turn is over and the worker is waiting for
+ * its next one. The same door and the same marker as the ending: claimed here
+ * first, so the CLI leaving the pane later is not a second notice for a turn
+ * the seat has already heard about.
+ */
+export async function announceWorkerWaiting(name: string, deps: EndDeps = {}): Promise<boolean> {
+  const a = AgentOps.agentNamed(name);
+  if (!a || !a.seatRoot || !startedByOf(a)) return false;
+  const now = deps.now ?? Date.now();
+  /* Claimed before the send, and before the status the folder's watch reads is
+     written (tuiturn.ts calls this first): the ending that watch settles must
+     not be announced over the top of this. */
+  if (claim.run(name, a.startedAt, now).changes === 0) return false;
+  prune.run(now - KEEP_MS);
+  await (deps.send ?? promptSeat)(seatHome(a.seatRoot), waitingLine(name));
   return true;
 }

@@ -74,36 +74,36 @@ describe("what git stops remembering", () => {
     expect(git("ls-files", "-u", "a.txt").stdout.toString()).toBe("");
   });
 
-  it("remembers the set from before anything was resolved", () => {
-    expect(mergeSession(repo).files).toEqual(["a.txt", "b.txt", "c.txt"]);
-    resolveWith(repo, "a.txt", "ours");
-    const s = mergeSession(repo);
+  it("remembers the set from before anything was resolved", async () => {
+    expect((await mergeSession(repo)).files).toEqual(["a.txt", "b.txt", "c.txt"]);
+    await resolveWith(repo, "a.txt", "ours");
+    const s = await mergeSession(repo);
     expect(s.files).toEqual(["a.txt", "b.txt", "c.txt"]);   // still three
     expect(s.left).toEqual(["b.txt", "c.txt"]);             // two to go
   });
 
-  it("survives a reload, which is the case that broke the counter", () => {
+  it("survives a reload, which is the case that broke the counter", async () => {
     // The panel being closed and reopened is not an edge case, it is Tuesday.
-    mergeSession(repo);
-    resolveWith(repo, "a.txt", "ours");
-    resolveWith(repo, "b.txt", "theirs");
-    const fresh = mergeSession(repo);
+    await mergeSession(repo);
+    await resolveWith(repo, "a.txt", "ours");
+    await resolveWith(repo, "b.txt", "theirs");
+    const fresh = await mergeSession(repo);
     expect(fresh.files).toHaveLength(3);
     expect(fresh.left).toEqual(["c.txt"]);
   });
 
-  it("knows which files this app resolved, and which it did not", () => {
-    mergeSession(repo);                       // the screen opens: all three seen
-    resolveWith(repo, "a.txt", "ours");
+  it("knows which files this app resolved, and which it did not", async () => {
+    await mergeSession(repo);                       // the screen opens: all three seen
+    await resolveWith(repo, "a.txt", "ours");
     // b.txt gets settled the way an agent in a tmux tab would do it.
     writeFileSync(join(repo, "b.txt"), "a third thing\n");
     git("add", "b.txt");
-    const s = mergeSession(repo);
+    const s = await mergeSession(repo);
     expect(s.mine).toEqual(["a.txt"]);
     expect(s.files).toContain("b.txt");
   });
 
-  it("cannot know about a file resolved before it ever looked", () => {
+  it("cannot know about a file resolved before it ever looked", async () => {
     // The honest limit of a record built by observation: if an agent settles a
     // file in a terminal and only then is the screen opened, that file is
     // indistinguishable from the forty that merged cleanly — git kept nothing
@@ -111,27 +111,27 @@ describe("what git stops remembering", () => {
     // left to do. Pinned so nobody later mistakes it for a bug in the counter.
     writeFileSync(join(repo, "a.txt"), "settled elsewhere, before we looked\n");
     git("add", "a.txt");
-    const s = mergeSession(repo);
+    const s = await mergeSession(repo);
     expect(s.files).toEqual(["b.txt", "c.txt"]);
     expect(s.left).toEqual(["b.txt", "c.txt"]);
   });
 
-  it("keeps a rebase's stops apart, because each one has its own files", () => {
+  it("keeps a rebase's stops apart, because each one has its own files", async () => {
     // One key per operation would carry commit 1's three files into commit 2's
     // screen, which would then open claiming it was nearly done.
-    const a = sessionOp(mergeInfo(repo));
+    const a = sessionOp(await mergeInfo(repo));
     expect(a).toStartWith("merging:");
     git("merge", "--abort");
     git("checkout", "-q", "feat");
     git("rebase", "main");
-    const b = sessionOp(mergeInfo(repo));
+    const b = sessionOp(await mergeInfo(repo));
     expect(b).toStartWith("rebasing:");
     expect(b).not.toBe(a);
   });
 
-  it("says nothing at all once the merge is over", () => {
+  it("says nothing at all once the merge is over", async () => {
     git("merge", "--abort");
-    const s = mergeSession(repo);
+    const s = await mergeSession(repo);
     expect(s.op).toBe("");
     expect(s.files).toEqual([]);
   });
@@ -149,62 +149,62 @@ describe("putting a conflict back", () => {
     expect(read("a.txt")).not.toContain("the answer I worked out");
   });
 
-  it("refuses without a confirmation, and says what would be lost", () => {
-    mergeSession(repo);
-    resolveBlocks(repo, "a.txt", [{ edit: ["the answer I worked out"] }]);
-    const r = reopenConflict(repo, "a.txt");
+  it("refuses without a confirmation, and says what would be lost", async () => {
+    await mergeSession(repo);
+    await resolveBlocks(repo, "a.txt", [{ edit: ["the answer I worked out"] }]);
+    const r = await reopenConflict(repo, "a.txt");
     expect(r.ok).toBe(false);
     expect(r.error).toContain("throws away");
     expect(read("a.txt")).toContain("the answer I worked out");   // untouched
   });
 
-  it("warns differently when the work is not ours to describe", () => {
+  it("warns differently when the work is not ours to describe", async () => {
     // Resolved by an agent or an editor. We cannot show what is about to be
     // deleted, and the wording has to admit that rather than imply we can.
-    mergeSession(repo);
+    await mergeSession(repo);
     writeFileSync(join(repo, "a.txt"), "an agent's careful merge\n");
     git("add", "a.txt");
-    const r = reopenConflict(repo, "a.txt");
+    const r = await reopenConflict(repo, "a.txt");
     expect(r.ok).toBe(false);
     expect(r.error).toContain("outside this panel");
     expect(r.error).toContain("Open the file first");
   });
 
-  it("does it when confirmed, and proves the conflict is really back", () => {
-    mergeSession(repo);
-    resolveWith(repo, "a.txt", "ours");
+  it("does it when confirmed, and proves the conflict is really back", async () => {
+    await mergeSession(repo);
+    await resolveWith(repo, "a.txt", "ours");
     expect(unmerged()).not.toContain("a.txt");
-    const r = reopenConflict(repo, "a.txt", true);
+    const r = await reopenConflict(repo, "a.txt", true);
     expect(r.ok).toBe(true);
     expect(unmerged()).toContain("a.txt");
     expect(read("a.txt")).toContain("<<<<<<<");
   });
 
-  it("stops being ours once it is conflicted again", () => {
-    mergeSession(repo);
-    resolveWith(repo, "a.txt", "ours");
-    reopenConflict(repo, "a.txt", true);
-    expect(mergeSession(repo).mine).not.toContain("a.txt");
+  it("stops being ours once it is conflicted again", async () => {
+    await mergeSession(repo);
+    await resolveWith(repo, "a.txt", "ours");
+    await reopenConflict(repo, "a.txt", true);
+    expect((await mergeSession(repo)).mine).not.toContain("a.txt");
   });
 
-  it("refuses a file that was never one of this merge's conflicts", () => {
-    mergeSession(repo);
-    const r = reopenConflict(repo, "clean-3.txt", true);
+  it("refuses a file that was never one of this merge's conflicts", async () => {
+    await mergeSession(repo);
+    const r = await reopenConflict(repo, "clean-3.txt", true);
     expect(r.ok).toBe(false);
     expect(r.error).toContain("not one of this merge's conflicts");
   });
 
-  it("refuses a file that is still conflicted, rather than doing nothing", () => {
-    mergeSession(repo);
-    const r = reopenConflict(repo, "b.txt", true);
+  it("refuses a file that is still conflicted, rather than doing nothing", async () => {
+    await mergeSession(repo);
+    const r = await reopenConflict(repo, "b.txt", true);
     expect(r.ok).toBe(false);
     expect(r.error).toContain("nothing to put back");
   });
 
-  it("refuses when nothing is being merged", () => {
-    mergeSession(repo);
+  it("refuses when nothing is being merged", async () => {
+    await mergeSession(repo);
     git("merge", "--abort");
-    expect(reopenConflict(repo, "a.txt", true).ok).toBe(false);
+    expect((await reopenConflict(repo, "a.txt", true)).ok).toBe(false);
   });
 });
 
@@ -223,62 +223,62 @@ describe("what a stopped checkout refuses", () => {
     "/git/checkout", "/git/reset", "/git/stash-push", "/git/merge", "/git/undo-merge",
   ];
 
-  it("refuses every move that would make this worse, and says what to do", () => {
+  it("refuses every move that would make this worse, and says what to do", async () => {
     for (const p of REFUSED) {
-      const r = stoppedRefusal(repo, p);
+      const r = await stoppedRefusal(repo, p);
       expect(r, p).not.toBeNull();
       expect(r!.error, p).toContain("abandon");
     }
   });
 
-  it("counts what is left, so the message is about this merge", () => {
-    expect(stoppedRefusal(repo, "/git/push")!.error).toContain("3 files still conflicted");
+  it("counts what is left, so the message is about this merge", async () => {
+    expect((await stoppedRefusal(repo, "/git/push"))!.error).toContain("3 files still conflicted");
   });
 
-  it("names the operation with its own word, never a clipped one", () => {
+  it("names the operation with its own word, never a clipped one", async () => {
     // Stripping "ing" turned "merging" into "mid-merg" and "rebasing" into "rebas".
-    const e = stoppedRefusal(repo, "/git/push")!.error;
+    const e = (await stoppedRefusal(repo, "/git/push"))!.error;
     expect(e).toContain("mid-merge");
     expect(e).toContain("abandon the merge");
   });
 
-  it("still refuses once everything is resolved but nothing is committed", () => {
+  it("still refuses once everything is resolved but nothing is committed", async () => {
     // The merge is not over until it is committed, and pushing here publishes
     // the state from BEFORE it — which reads as the merge having vanished.
-    for (const f of ["a.txt", "b.txt", "c.txt"]) resolveWith(repo, f, "ours");
-    const r = stoppedRefusal(repo, "/git/push");
+    for (const f of ["a.txt", "b.txt", "c.txt"]) await resolveWith(repo, f, "ours");
+    const r = await stoppedRefusal(repo, "/git/push");
     expect(r).not.toBeNull();
     expect(r!.error).toContain("Finish it or abandon it");
   });
 
-  it("lets through the moves that are the way out", () => {
+  it("lets through the moves that are the way out", async () => {
     for (const p of ["/git/resolve", "/git/resolve-blocks", "/git/merge-abort", "/git/merge-continue", "/git/reopen-conflict", "/git/fetch"]) {
-      expect(stoppedRefusal(repo, p), p).toBeNull();
+      expect(await stoppedRefusal(repo, p), p).toBeNull();
     }
   });
 
-  it("goes quiet the moment the merge is over", () => {
+  it("goes quiet the moment the merge is over", async () => {
     git("merge", "--abort");
-    expect(stoppedRefusal(repo, "/git/push")).toBeNull();
+    expect(await stoppedRefusal(repo, "/git/push")).toBeNull();
   });
 
-  it("does not speak for a bisect, which is not this kind of stopped", () => {
+  it("does not speak for a bisect, which is not this kind of stopped", async () => {
     git("merge", "--abort");
     git("bisect", "start");
-    expect(stoppedRefusal(repo, "/git/stage")).toBeNull();
+    expect(await stoppedRefusal(repo, "/git/stage")).toBeNull();
     git("bisect", "reset");
   });
 
-  it("says nothing about a path it has no opinion on", () => {
-    expect(stoppedRefusal(repo, "/git/worktree-add")).toBeNull();
+  it("says nothing about a path it has no opinion on", async () => {
+    expect(await stoppedRefusal(repo, "/git/worktree-add")).toBeNull();
   });
 });
 
 describe("committing a merge that still has markers in it", () => {
-  it("finds markers in a staged file", () => {
+  it("finds markers in a staged file", async () => {
     // b.txt is resolved first on purpose: left conflicted it would of course
     // have markers too, and the assertion would prove nothing.
-    resolveWith(repo, "b.txt", "ours");
+    await resolveWith(repo, "b.txt", "ours");
     writeFileSync(join(repo, "a.txt"), "<<<<<<< HEAD\nx\n=======\ny\n>>>>>>> feat\n");
     git("add", "a.txt");
     expect(markersLeft(repo, ["a.txt", "b.txt"])).toEqual(["a.txt"]);
@@ -289,42 +289,42 @@ describe("committing a merge that still has markers in it", () => {
     expect(markersLeft(repo, ["a.txt"])).toEqual([]);
   });
 
-  it("refuses to continue, and names the file", () => {
+  it("refuses to continue, and names the file", async () => {
     // git is perfectly happy here: the file is staged, so --diff-filter=U is
     // empty and `commit` would put the markers on the branch.
-    mergeSession(repo);
+    await mergeSession(repo);
     for (const f of ["a.txt", "b.txt", "c.txt"]) {
       if (f === "a.txt") { git("add", f); continue; }   // markers and all
-      resolveWith(repo, f, "ours");
+      await resolveWith(repo, f, "ours");
     }
     expect(unmerged()).toEqual([]);
-    const r = mergeContinue(repo);
+    const r = await mergeContinue(repo);
     expect(r.ok).toBe(false);
     expect(r.error).toContain("a.txt");
     expect(r.error).toContain("conflict markers");
   });
 
-  it("only looks at this merge's own files", () => {
+  it("only looks at this merge's own files", async () => {
     // A sweep of the index would trip over every committed fixture whose
     // content is conflict markers — this repository has several — and block
     // every merge forever.
     writeFileSync(join(repo, "fixture.txt"), "<<<<<<< HEAD\na\n=======\nb\n>>>>>>> x\n");
     git("add", "fixture.txt");
-    mergeSession(repo);
-    for (const f of ["a.txt", "b.txt", "c.txt"]) resolveWith(repo, f, "ours");
-    expect(mergeContinue(repo).ok).toBe(true);
+    await mergeSession(repo);
+    for (const f of ["a.txt", "b.txt", "c.txt"]) await resolveWith(repo, f, "ours");
+    expect((await mergeContinue(repo)).ok).toBe(true);
   });
 
-  it("can be overridden, for the file that is meant to contain them", () => {
-    mergeSession(repo);
+  it("can be overridden, for the file that is meant to contain them", async () => {
+    await mergeSession(repo);
     git("add", "a.txt");
-    for (const f of ["b.txt", "c.txt"]) resolveWith(repo, f, "ours");
-    expect(mergeContinue(repo).ok).toBe(false);
-    expect(mergeContinue(repo, true).ok).toBe(true);
+    for (const f of ["b.txt", "c.txt"]) await resolveWith(repo, f, "ours");
+    expect((await mergeContinue(repo)).ok).toBe(false);
+    expect((await mergeContinue(repo, true)).ok).toBe(true);
   });
 
-  it("still refuses while anything is genuinely unmerged", () => {
-    const r = mergeContinue(repo);
+  it("still refuses while anything is genuinely unmerged", async () => {
+    const r = await mergeContinue(repo);
     expect(r.ok).toBe(false);
     expect(r.error).toContain("3 file(s) to resolve");
   });
@@ -339,7 +339,7 @@ describe("committing a merge that still has markers in it", () => {
    * over a repository that had in fact just landed a commit and stopped on the
    * next one, with the screen still showing the previous step.
    */
-  it("calls a rebase that stopped again a success, because it advanced", () => {
+  it("calls a rebase that stopped again a success, because it advanced", async () => {
     // Three commits, each conflicting on its own file, so continuing lands one
     // and immediately stops on the next.
     const root = join(dir, `rb-${Math.random().toString(36).slice(2)}`);
@@ -357,26 +357,26 @@ describe("committing a merge that still has markers in it", () => {
     g("commit", "-qam", "main side");
     g("checkout", "-q", "feat"); g("rebase", "main");
 
-    expect(mergeInfo(root).step).toBe(1);
-    resolveWith(root, "x.txt", "ours");
-    const r = mergeContinue(root);
+    expect((await mergeInfo(root)).step).toBe(1);
+    await resolveWith(root, "x.txt", "ours");
+    const r = await mergeContinue(root);
     expect(r.ok).toBe(true);                      // it advanced; git's exit code says otherwise
     expect(r.output).toContain("commit 2 of 3");  // and says where it landed
-    expect(mergeInfo(root).step).toBe(2);
-    expect(mergeInfo(root).state).toBe("rebasing");
+    expect((await mergeInfo(root)).step).toBe(2);
+    expect((await mergeInfo(root)).state).toBe("rebasing");
   });
 
-  it("still reports a genuine failure as one", () => {
+  it("still reports a genuine failure as one", async () => {
     // Nothing resolved, so `continue` cannot advance and the repository is
     // exactly where it was.
-    const r = mergeContinue(repo);
+    const r = await mergeContinue(repo);
     expect(r.ok).toBe(false);
   });
 
-  it("forgets the stop once the merge is committed", () => {
-    mergeSession(repo);
-    for (const f of ["a.txt", "b.txt", "c.txt"]) resolveWith(repo, f, "ours");
-    expect(mergeContinue(repo).ok).toBe(true);
-    expect(mergeSession(repo).op).toBe("");
+  it("forgets the stop once the merge is committed", async () => {
+    await mergeSession(repo);
+    for (const f of ["a.txt", "b.txt", "c.txt"]) await resolveWith(repo, f, "ours");
+    expect((await mergeContinue(repo)).ok).toBe(true);
+    expect((await mergeSession(repo)).op).toBe("");
   });
 });

@@ -19,7 +19,10 @@
 // container, to read --rm, exit code and image), one git worktree list and one `gh pr
 // list` per repo, about four git calls per worktree, and `du` in batches of 20
 // paths; it is cached for five minutes and `?fresh=1` may not rescan faster than
-// every 30 s. A clean reuses a scan younger than that instead of making a second.
+// every 30 s. A read answers the cached report at once and refreshes behind it;
+// the first read with no cache says it is scanning instead of holding the pane
+// read until the scan ends. A clean reuses a scan younger than that instead of
+// making a second.
 //
 // WHAT IT CANNOT DO, on purpose: it never removes a Docker volume, a
 // worktree that is not merged and clean, anything under ~/.claude, or anything
@@ -31,31 +34,69 @@
 // --rm: exit 0 alone is also how a shell you left or a database you stopped ends.
 
 import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync } from "node:fs";
+import { statfs } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 import { parseWorktreeList, worktreeLeftovers } from "./gitwork.ts";
+import { runChild } from "./broker/brokerRun.ts";
 import type {
-  DiskCleanKind, DiskCleanLine, DiskCleanLineResult, DiskCleanMount, DiskCleanReport, DiskCleanRunResult, DiskCleanTarget, DiskCleanVerdict,
+  DiskCleanKind, DiskCleanLine, DiskCleanLineResult, DiskCleanMount, DiskCleanReport, DiskCleanRunResult, DiskCleanTarget, DiskCleanVerdict, DiskExplain, DiskSpace,
 } from "../../shared/types.ts";
 
 // ------------------------------------------------------------------ I/O ----
 
-export interface RunOut { code: number; stdout: string; stderr: string; missing?: boolean }
-export type Runner = (cmd: string, args: string[], o?: { cwd?: string; timeoutMs?: number }) => Promise<RunOut>;
+/** Why a gh call failed, in the words of what was seen: not found, not signed in, stopped by its time limit, or gh's own first error line. */
+export function ghCause(r: RunOut): string {
+  const err = `${r.stderr}`.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (r.missing || /^gh not found$|gh: not found/.test(err[0] ?? "")) return "gh was not found on the server's PATH";
+  if (r.timedOut) return `gh did not finish in ${GH_TIMEOUT_MS / 1000} s`;
+  const text = err.join(" ");
+  if (/gh auth login|not logged in|authentication required|HTTP 401|bad credentials/i.test(text)) return `gh is not signed in for the server (${(err.find((l) => /auth|credential|401|logged/i.test(l)) ?? err[0]!).slice(0, 160)})`;
+  if (r.notStarted) return `gh could not be started (${(err[0] ?? "unknown error").slice(0, 160)})`;
+  if (!err.length) return `gh stopped with exit code ${r.code} and no message (killed, or out of time)`;
+  return `gh said: ${err[0]!.slice(0, 200)}`;
+}
+
+
+export interface RunOut { code: number; stdout: string; stderr: string; missing?: boolean; /** killed by its timeout */ timedOut?: boolean; /** the program was found but could not be started */ notStarted?: boolean }
+export type Runner = (cmd: string, args: string[], o?: {
+  cwd?: string; timeoutMs?: number;
+  /** A repo-owned script: no AGENTGLASS_* / *TOKEN* / *SECRET* / *KEY* variable, and its own process group that a timeout kills whole. */
+  isolated?: boolean;
+}) => Promise<RunOut>;
 
 /** The real runner. `Bun.which` first, so a program that is not installed is
  *  `missing` rather than a thrown ENOENT; bounded by a timeout on every call. */
 export const spawnRunner: Runner = async (cmd, args, o = {}) => {
   if (!Bun.which(cmd)) return { code: 127, stdout: "", stderr: `${cmd}: not found`, missing: true };
   try {
-    const p = Bun.spawn([cmd, ...args], {
-      cwd: o.cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: o.timeoutMs ?? 20_000, killSignal: "SIGKILL",
+    if (o.isolated) return await spawnIsolated(cmd, args, o.cwd, o.timeoutMs ?? 20_000);
+    // Through the spawn broker: a disk scan runs many of these, and each fork of the server stalls it.
+    const r = await runChild([cmd, ...args], {
+      cwd: o.cwd, timeoutMs: o.timeoutMs ?? 20_000,
       env: { ...process.env, LC_ALL: "C", GIT_TERMINAL_PROMPT: "0", GH_PROMPT_DISABLED: "1" },
     });
-    const [stdout, stderr] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
-    return { code: await p.exited, stdout, stderr };
-  } catch (e) { return { code: 1, stdout: "", stderr: String(e) }; }
+    if (r.code === null && !r.timedOut && !r.signal) return { code: 1, stdout: "", stderr: r.error ?? r.stderr, notStarted: true };
+    return { code: r.code ?? 1, stdout: r.stdout, stderr: r.stderr, ...(r.timedOut ? { timedOut: true } : {}) };
+  } catch (e) { return { code: 1, stdout: "", stderr: String(e), notStarted: true }; }
 };
+
+/**
+ * `Bun.spawn` kills only the pid it started, so a script that forks (`docker compose down &`) would outlive its timeout:
+ * the script leads its own process group (setsid) and the timeout kills the whole group.
+ */
+async function spawnIsolated(cmd: string, args: string[], cwd: string | undefined, timeoutMs: number): Promise<RunOut> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !/^AGENTGLASS_|TOKEN|SECRET|KEY/i.test(k)) env[k] = v;
+  const p = Bun.spawn([cmd, ...args], { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe", detached: true, env: { ...env, LC_ALL: "C", GIT_TERMINAL_PROMPT: "0", GH_PROMPT_DISABLED: "1" } });
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; try { process.kill(-p.pid, "SIGKILL"); } catch { p.kill("SIGKILL"); } }, timeoutMs); // loop-ok: kills a child group on timeout
+  try {
+    const [stdout, stderr] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+    const code = await p.exited;
+    return { code, stdout, stderr, ...(timedOut ? { timedOut: true } : {}) };
+  } finally { clearTimeout(timer); }
+}
 
 export interface DiskCtx {
   home: string;
@@ -74,6 +115,8 @@ export interface DiskCtx {
   procDir?: string;
   /** The ignored files a removal of a checkout would delete; gitwork's worktreeLeftovers unless a test says otherwise. */
   leftovers?: (repo: string, path: string) => Promise<{ names: string[]; more: number; error?: string }>;
+  /** How GitHub is asked: the server hands in the call its pull-request board uses (same binary lookup, same spawn broker). Unset: `run("gh")`. */
+  gh?: (args: string[], cwd: string, timeoutMs: number) => Promise<{ code: number; stdout: string; stderr: string }>;
 }
 
 export function defaultDiskCtx(over: Partial<DiskCtx> = {}): DiskCtx {
@@ -89,8 +132,67 @@ export const MIN_LINE_BYTES = MB;
 export const CLAUDE_TEMP_MIN_AGE_MS = 24 * 3600_000;
 export const SCAN_TTL_MS = 5 * 60_000;
 export const SCAN_MIN_RESCAN_MS = 30_000;
+/** The longest one `gh pr list` may take. */
+const GH_TIMEOUT_MS = 30_000;
 /** Pull requests asked for per repository in one call. */
 const PR_BATCH = 200;
+// Low-space thresholds. Why these numbers: below 5 GB a Docker pull, a build or a
+// package install starts to fail with "no space left", so that is critical. Under
+// 10% or 15 GB is the point where it is time to clean, but nothing is failing yet:
+// the percentage covers small disks, the 15 GB floor covers big disks where 10% is
+// still hundreds of GB.
+export const LOW_FREE_FRACTION = 0.10;
+export const LOW_FREE_BYTES = 15e9;
+export const CRITICAL_FREE_BYTES = 5e9;
+
+/** ok, low (under 10% free or under 15 GB), critical (under 5 GB). Pure. */
+export function diskSpaceState(freeBytes: number, totalBytes: number): DiskSpace["state"] {
+  if (freeBytes < CRITICAL_FREE_BYTES) return "critical";
+  if (freeBytes < LOW_FREE_BYTES || (totalBytes > 0 && freeBytes < totalBytes * LOW_FREE_FRACTION)) return "low";
+  return "ok";
+}
+
+/**
+ * The once-per-crossing rule, pure. `armed` starts true; a critical reading while
+ * armed fires and disarms; only a reading back at `ok` (above low) re-arms, so a
+ * disk bouncing between critical and low does not notify again.
+ */
+export function criticalCrossing(armed: boolean, state: DiskSpace["state"]): { fire: boolean; armed: boolean } {
+  if (state === "ok") return { fire: false, armed: true };
+  if (state === "critical" && armed) return { fire: true, armed: false };
+  return { fire: false, armed };
+}
+
+export const criticalText = (freeBytes: number): string =>
+  `Disk almost full: ${(freeBytes / 1e9).toFixed(1)} GB free. Open Disk cleanup to free space.`;
+
+let spaceArmed = true;
+let lastSpace: DiskSpace | null = null;
+let criticalSink: ((text: string) => void) | null = null;
+/** The server hands in what raises the notification; no notification code here. */
+export const onDiskCritical = (fn: ((text: string) => void) | null): void => { criticalSink = fn; };
+/** Test seam: forget the armed state. */
+export const resetDiskSpace = (): void => { spaceArmed = true; lastSpace = null; };
+
+/**
+ * Measure the home filesystem and apply the crossing rule. Called when a scan
+ * finishes and when the machine panel asks (peek): no timer of its own.
+ * `statfsOf` is a seam; a failed statfs keeps the last answer.
+ */
+export async function checkDiskSpace(home: string = homedir(), statfsOf: (p: string) => Promise<{ bsize: number; blocks: number; bavail: number }> = statfs): Promise<DiskSpace | null> {
+  try {
+    const s = await statfsOf(home);
+    const free = s.bavail * s.bsize, total = s.blocks * s.bsize;
+    const space: DiskSpace = { state: diskSpaceState(free, total), free, total };
+    const step = criticalCrossing(spaceArmed, space.state);
+    spaceArmed = step.armed;
+    lastSpace = space;
+    if (step.fire) criticalSink?.(criticalText(free));
+    return space;
+  } catch { return lastSpace; }
+}
+export const lastDiskSpace = (): DiskSpace | null => lastSpace;
+
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
 const UUID_DIR = new RegExp(`^${UUID.source}$`);
 
@@ -540,6 +642,9 @@ async function scanFsSimple(sc: Scan): Promise<LineDraftAt[]> {
   return out;
 }
 
+/** The command that sizes a snapshots directory. Shown to the person, never run here. */
+export const snapshotSizeCommand = (dir: string): string => `sudo btrfs filesystem du -s --human-readable '${dir.replace(/'/g, "'\\''")}'`;
+
 /** Swap files and btrfs snapshots: cheap to notice, shown only so the numbers add up. */
 async function scanSystem(sc: Scan): Promise<LineDraftAt[]> {
   const out: LineDraftAt[] = [];
@@ -555,7 +660,8 @@ async function scanSystem(sc: Scan): Promise<LineDraftAt[]> {
   const snaps = sc.ctx.snapshotsDir ?? "/.snapshots";
   if (existsSync(snaps)) {
     out.push({ id: "snapshots", kind: "snapshots", label: "System snapshots (btrfs)", bytes: null, verdict: "explain", target: null, at: snaps,
-      why: "Old copies of the system disk kept by snapper or Timeshift. They can hold a lot without showing up in du, and measuring them needs root: `sudo snapper list`." });
+      sizeCommand: snapshotSizeCommand(snaps),
+      why: "Old copies of the system disk kept by snapper or Timeshift. They can hold a lot without showing up in du, and measuring them needs root. Agentglass does not run sudo; run the command shown to see the size." });
   }
   return out;
 }
@@ -585,25 +691,36 @@ async function scanWorktrees(sc: Scan): Promise<LineDraftAt[]> {
   if (gitMissing) sc.problems.push("git is not installed, so worktrees were not checked.");
   if (!cands.length) return [];
   const [sizes, busy] = await Promise.all([sizesOf(sc, cands.map((c) => c.path)), busyDirs(sc.ctx)]);
-  let ghFailed = false;
+  let ghFailed: string | null = null;
   // One `gh pr list` per repository, not per checkout: 30 checkouts of a repo were 30 GitHub calls a scan.
-  const ghRows = async (cwd: string, extra: string[]): Promise<Record<string, unknown>[] | null> => {
-    const r = await sc.ctx.run("gh", ["pr", "list", ...extra, "--state", "all", "--json", "number,state,headRefOid,headRefName,isCrossRepository,updatedAt"], { cwd, timeoutMs: 30_000 });
-    if (r.code !== 0) return null;
-    try { const j = JSON.parse(r.stdout); return Array.isArray(j) ? j : null; } catch { return null; }
+  // gh gets `-R owner/repo` from the main checkout's origin: with only a cwd it fails with "no git remotes found" wherever the cwd has none.
+  const slugs = new Map<string, Promise<string | null>>();
+  const slugOf = (repo: string) => slugs.get(repo) ?? (slugs.set(repo, sc.ctx.run("git", ["-C", repo, "remote", "get-url", "origin"], { timeoutMs: 15_000 }).then((r) => {
+    const m = r.code === 0 ? /([^/:\s]+\/[^/:\s]+?)(?:\.git)?\s*$/.exec(r.stdout.trim()) : null;
+    return m ? m[1]! : null;
+  })), slugs.get(repo)!);
+  const ghRows = async (cwd: string, extra: string[], slug: string): Promise<Record<string, unknown>[] | null> => {
+    const args = ["pr", "list", "-R", slug, ...extra, "--state", "all", "--json", "number,state,headRefOid,headRefName,isCrossRepository,updatedAt"];
+    const r: RunOut = sc.ctx.gh
+      ? await sc.ctx.gh(args, cwd, GH_TIMEOUT_MS).then((o) => ({ ...o, ...(o.code === 127 ? { missing: true } : {}) }), (e) => ({ code: 1, stdout: "", stderr: String(e), notStarted: true }))
+      : await sc.ctx.run("gh", args, { cwd, timeoutMs: GH_TIMEOUT_MS });
+    if (r.code !== 0) { ghFailed ??= ghCause(r); return null; }
+    try { const j = JSON.parse(r.stdout); if (Array.isArray(j)) return j; ghFailed ??= "gh answered with something that is not a list of pull requests"; return null; } catch { ghFailed ??= "gh answered with text that is not JSON"; return null; }
   };
   const batches = new Map<string, Promise<Record<string, unknown>[] | null>>();
-  const batchOf = (repo: string) => batches.get(repo) ?? (batches.set(repo, ghRows(repo, ["--limit", String(PR_BATCH)])), batches.get(repo)!);
+  const batchOf = (repo: string, slug: string) => batches.get(repo) ?? (batches.set(repo, ghRows(repo, ["--limit", String(PR_BATCH)], slug)), batches.get(repo)!);
   const out = await pool(cands, 4, async (c): Promise<LineDraftAt> => {
     const g = (args: string[]) => sc.ctx.run("git", ["-C", c.path, ...args], { timeoutMs: 20_000 });
     const [st, up, head] = await Promise.all([g(["status", "--porcelain"]), g(["rev-list", "--count", "HEAD", "--not", "--remotes"]), g(["rev-parse", "HEAD"])]);
     const detached = c.branch === "(detached)";
-    let pr: WorktreeFacts["pr"] = null, prKnown = true;
-    if (!detached) {
-      let rows = await batchOf(c.repo);
+    let pr: WorktreeFacts["pr"] = null, prKnown = true, noRemote = false;
+    const slug = detached ? null : await slugOf(c.repo);
+    if (!detached && !slug) { prKnown = false; noRemote = true; }
+    else if (!detached && slug) {
+      let rows = await batchOf(c.repo, slug);
       // A repository with more pull requests than the batch holds may have this branch's only beyond it: ask for the branch alone.
-      if (rows && rows.length >= PR_BATCH && !rows.some((x) => x.headRefName === c.branch)) rows = await ghRows(c.path, ["--head", c.branch, "--limit", "5"]);
-      if (!rows) { prKnown = false; ghFailed = true; }
+      if (rows && rows.length >= PR_BATCH && !rows.some((x) => x.headRefName === c.branch)) rows = await ghRows(c.repo, ["--head", c.branch, "--limit", "5"], slug);
+      if (!rows) prKnown = false;
       else {
         const mine = rows.filter((x) => x.isCrossRepository !== true && x.headRefName === c.branch)
           .sort((a, b) => Number(b.state === "OPEN") - Number(a.state === "OPEN") || String(b.updatedAt).localeCompare(String(a.updatedAt)));
@@ -621,10 +738,11 @@ async function scanWorktrees(sc: Scan): Promise<LineDraftAt[]> {
     });
     return {
       id: `worktree:${c.path}`, kind: "worktree", label: `Checkout ${basename(c.path)}${detached ? "" : ` (${c.branch})`}`, bytes: sizes.get(c.path) ?? 0, ...v,
+      ...(noRemote ? { why: "Its repository has no remote, so GitHub was not asked (no remote). Kept for you to look at." } : {}),
       target: v.verdict === "safe" ? { via: "worktree", repo: c.repo, path: c.path } : null, at: c.path,
     };
   });
-  if (ghFailed) sc.problems.push("GitHub did not answer (gh missing or signed out), so some checkouts are kept for you to look at.");
+  if (ghFailed) sc.problems.push(`GitHub could not be asked: ${ghFailed}. Some checkouts are kept for you to look at.`);
   return out;
 }
 
@@ -682,9 +800,22 @@ type LineDraftAt = LineDraft & { at: string };
 
 const RANK: Record<DiskCleanVerdict, number> = { safe: 0, ask: 1, inuse: 2, explain: 3 };
 
+/** The parts of the scan still being read, in the order they started; the panel and the header pill name them while it runs. */
+const readingNow: string[] = [];
+/** What the running scan is reading, or null when none runs. */
+export const scanReading = (): string | null => (readingNow.length ? readingNow.join(", ") : null);
+async function step<T>(name: string, p: Promise<T>): Promise<T> {
+  readingNow.push(name);
+  scanSink?.();
+  try { return await p; } finally { readingNow.splice(readingNow.indexOf(name), 1); scanSink?.(); }
+}
+
 export async function scanDisk(ctx: DiskCtx): Promise<DiskCleanReport> {
   const sc: Scan = { ctx, mounts: new Map(), mountOf: new Map(), problems: [] };
-  const parts = await Promise.all([scanDocker(sc), scanWorktrees(sc), scanFsSimple(sc), scanClaudeTemp(sc), scanSystem(sc)]);
+  const parts = await Promise.all([
+    step("Docker", scanDocker(sc)), step("checkouts", scanWorktrees(sc)), step("caches and the trash", scanFsSimple(sc)),
+    step("Claude temp files", scanClaudeTemp(sc)), step("swap and snapshots", scanSystem(sc)),
+  ]);
   const lines: DiskCleanLine[] = [];
   for (const d of parts.flat()) {
     const { at, ...rest } = d;
@@ -695,27 +826,101 @@ export async function scanDisk(ctx: DiskCtx): Promise<DiskCleanReport> {
   lines.sort((a, b) => RANK[a.verdict] - RANK[b.verdict] || (b.bytes ?? 0) - (a.bytes ?? 0));
   let safeBytes = 0;
   for (const l of lines) if (l.verdict === "safe") { safeBytes += l.bytes ?? 0; const m = sc.mounts.get(l.mount); if (m) m.safeBytes += l.bytes ?? 0; }
-  return { lines, mounts: [...sc.mounts.values()], safeBytes, at: ctx.now, problems: sc.problems };
+  const space = await checkDiskSpace(ctx.home);
+  return { lines, mounts: [...sc.mounts.values()], safeBytes, at: ctx.now, generatedAt: Date.now(), state: "ready", problems: sc.problems, ...(space ? { space } : {}) };
 }
 
-let last: { at: number; report: DiskCleanReport } | null = null;
+/** `cleaned`: a clean ran since this scan, so what it lists is the scan minus what went, not a fresh look. */
+type Kept = { at: number; report: DiskCleanReport; cleaned?: boolean; explain?: DiskExplain };
+let last: Kept | null = null;
 /** The scan `last` replaced. A screen showing it still asks to clean it; see runDiskClean. */
-let prior: { at: number; report: DiskCleanReport } | null = null;
+let prior: Kept | null = null;
 let flying: Promise<DiskCleanReport> | null = null;
 /** Bumped by every clean: a scan that started before it describes a disk that is gone and must not be cached. */
 let generation = 0;
 
-/** Cached; a fresh scan is allowed only when the last one is older than SCAN_MIN_RESCAN_MS. */
-export async function diskCleanReport(fresh: boolean, ctx: DiskCtx = defaultDiskCtx()): Promise<DiskCleanReport> {
-  const age = last ? Date.now() - last.at : Infinity;
-  if (last && (fresh ? age < SCAN_MIN_RESCAN_MS : age < SCAN_TTL_MS)) return last.report;
-  if (flying) return flying;
+/** No scan has finished: answer at once, so a pane read is never held until a scan ends. */
+function scanningReport(at: number): DiskCleanReport {
+  return { lines: [], mounts: [], safeBytes: 0, at, generatedAt: null, state: "scanning", note: "scanning, ask again in a few seconds", problems: [] };
+}
+
+/** True while a scan runs on the server, whoever started it: a panel opened mid-scan attaches to it. */
+export const scanInFlight = (): boolean => flying !== null;
+let scanSink: (() => void) | null = null;
+/** The server pushes one pointer frame when a scan starts or ends; no clock. */
+export const onScanChange = (fn: (() => void) | null): void => { scanSink = fn; };
+
+/** One scan at a time: a caller while one runs joins that promise and never starts a second. */
+function runScan(ctx: DiskCtx): Promise<DiskCleanReport> {
   const gen = generation;
+  queueMicrotask(() => scanSink?.());
   const p: Promise<DiskCleanReport> = scanDisk({ ...ctx, now: Date.now() })
     .then((report) => { if (gen === generation) { prior = last; last = { at: Date.now(), report }; } return report; })
-    .finally(() => { if (flying === p) flying = null; });
+    .finally(() => { if (flying === p) flying = null; scanSink?.(); });
   flying = p;
   return p;
+}
+
+/** A refresh never holds a read: its failure is for the next read to try again. */
+function refresh(ctx: DiskCtx): void {
+  if (flying) return;
+  void runScan(ctx).catch(() => { /* the next read tries again */ });
+}
+
+/**
+ * The cached report, at once. A plain read never waits for a scan: with a cache
+ * it answers that report and refreshes behind it once it is older than
+ * SCAN_TTL_MS; with none it says it is scanning and the caller asks again.
+ * `fresh` is the person's own Scan press: it may wait, and joins a scan already
+ * running instead of starting a second.
+ */
+export async function diskCleanReport(fresh: boolean, ctx: DiskCtx = defaultDiskCtx()): Promise<DiskCleanReport> {
+  const age = last ? Date.now() - last.at : Infinity;
+  if (fresh) {
+    if (last && !last.cleaned && age < SCAN_MIN_RESCAN_MS) return last.report;
+    return flying ?? runScan(ctx);
+  }
+  if (!last) { refresh(ctx); return scanningReport(Date.now()); }
+  if (age >= SCAN_TTL_MS) refresh(ctx);
+  return last.report;
+}
+
+/**
+ * What the panel shows on open: the last scan as the server kept it, or null. It
+ * never starts a scan (a scan walks the disk and calls GitHub; nothing here
+ * repeats on its own). `staleWhy` is set when the plan can no longer be trusted:
+ * a clean ran since, or it is older than SCAN_TTL_MS, the same bound after which
+ * runDiskClean refuses to act on it, so the screen never offers a button the
+ * server would turn down.
+ */
+export function peekDiskClean(now = Date.now()): DiskCleanReport | null {
+  if (!last) return null;
+  const mins = Math.round(SCAN_TTL_MS / 60_000);
+  const staleWhy = last.cleaned ? "A clean ran after this scan, so the rest may have changed. Scan again before cleaning more."
+    : now - last.at >= SCAN_TTL_MS ? `This scan is more than ${mins} minutes old, and the disk may have changed. Scan again before cleaning.` : null;
+  return { ...last.report, generatedAt: last.report.generatedAt ?? last.at, staleWhy, ...(last.explain ? { explain: last.explain } : {}) };
+}
+
+/** The kept scan the report is about, or null. The report module reads it and writes back only through setExplain. */
+export function keptScan(): { at: number; report: DiskCleanReport } | null {
+  return last ? { at: last.at, report: last.report } : null;
+}
+
+/** Keep the report with the scan it is about. A scan made since replaced that one, so a late answer is dropped. */
+export function setExplain(scanAt: number, e: DiskExplain | null): boolean {
+  if (!last || last.at !== scanAt) return false;
+  if (e) last.explain = e; else delete last.explain;
+  return true;
+}
+
+/** The kept scan after a clean: the lines that went are dropped and the sums follow. */
+function withoutGone(k: Kept, gone: Set<string>): Kept {
+  const lines = k.report.lines.filter((l) => !gone.has(l.id));
+  const safe = new Map<string, number>();
+  let safeBytes = 0;
+  for (const l of lines) if (l.verdict === "safe") { safeBytes += l.bytes ?? 0; safe.set(l.mount, (safe.get(l.mount) ?? 0) + (l.bytes ?? 0)); }
+  const explain = k.explain?.items ? (() => { const items = k.explain.items.filter((i) => !gone.has(i.id)); return { ...k.explain, items, count: items.length }; })() : k.explain;
+  return { at: k.at, cleaned: true, ...(explain ? { explain } : {}), report: { ...k.report, lines, safeBytes, mounts: k.report.mounts.map((m) => ({ ...m, safeBytes: safe.get(m.mount) ?? 0 })) } };
 }
 
 // -------------------------------------------------------------- deleting ----
@@ -800,7 +1005,9 @@ async function deleteFs(t: Extract<DiskCleanTarget, { via: "fs" }>, ctx: DiskCtx
     // The trash's index goes with its files, through the same guard.
     if (t.root === join(ctx.home, TRASH_REL)) {
       const info = join(ctx.home, TRASH_INFO_REL), gi = guardFs({ root: info, path: info }, ctx.home);
-      if (gi.ok) removeGuarded(gi, info);
+      if (gi.ok) {
+        try { removeGuarded(gi, info); } catch { return { status: "freed", detail: "The files are gone. The trash index could not be emptied (part of it may belong to root), so a file manager may still list ghosts." }; }
+      }
     }
     return skipped.length ? { status: "freed", detail: `Left alone, because each is another disk mounted inside: ${skipped.slice(0, 3).join(", ")}${skipped.length > 3 ? ` and ${skipped.length - 3} more` : ""}.` } : { status: "freed" };
   } catch (e) {
@@ -928,8 +1135,12 @@ export async function runDiskClean(idsIn: unknown, opts: { dryRun?: boolean; at?
       const freed = r.status === "freed" ? Math.max(0, post - pre) : 0;
       results.push({ id, label: line.label, status: r.status === "freed" && freed === 0 ? "nothing" : r.status, freed, detail: r.detail });
     }
-    // Not after a dry run: nothing changed, and the confirm click that follows reuses this very scan.
-    if (!dryRun) { generation++; flying = null; last = null; prior = null; }
+    // Not after a dry run: nothing changed, and the confirm click that follows reuses this very scan. After a real one the kept scan loses what went and says a clean ran.
+    if (!dryRun) {
+      generation++; flying = null; prior = null;
+      const gone = new Set(results.filter((r) => r.status === "freed" || r.status === "nothing").map((r) => r.id));
+      last = last ? withoutGone(last, gone) : null;
+    }
     return {
       ok: true, dryRun, lines: results,
       mounts: [...before].map(([mount, b]) => ({ mount, before: b, after: after.get(mount) ?? b })),

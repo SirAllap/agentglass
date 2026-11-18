@@ -86,11 +86,10 @@ describe("the result contract", () => {
 });
 
 describe("both start paths use it", () => {
-  const fn = (src: string, at: string) => src.slice(src.indexOf(at), src.indexOf(at) + 6000);
   test("policystart and the plain start build the brief through withRolePrompt", async () => {
     const ps = await Bun.file(join(import.meta.dir, "../src/agents/policystart.ts")).text();
     const ix = await Bun.file(join(import.meta.dir, "../src/index.ts")).text();
-    expect(fn(ps, "async function startNow(")).toContain("withRolePrompt(p.prompt, rolePromptFor(p.policyRoot, plan.role.id))");
-    expect(ix).toContain("withRolePrompt(asked, rolePromptFor(policyRoot, role.id))");
+    expect(ps).toContain("withRolePrompt(asked, rolePromptFor(p.policyRoot, plan.role.id))");
+    expect(ix).toContain("withRolePrompt(brief, rolePromptFor(policyRoot, role.id))");
   });
 });

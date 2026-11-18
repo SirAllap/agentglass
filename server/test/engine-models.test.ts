@@ -58,3 +58,11 @@ test("opencode models come from the CLI on PATH", async () => {
 test("opencode missing from PATH is an empty list, not an error", async () => {
   expect(await listIn("none")).toEqual([]);
 });
+
+test("primeOpencodeModels: a list that never answers returns within the bound and leaves names as stored", async () => {
+    const { primeOpencodeModels, qualifyOpencode } = await import("../src/enginemodels.ts");
+    const t0 = Date.now();
+    await primeOpencodeModels(200, () => new Promise(() => {}));
+    expect(Date.now() - t0).toBeLessThan(1500);
+    expect(qualifyOpencode("orbit-glm")).toBe("orbit-glm");
+});

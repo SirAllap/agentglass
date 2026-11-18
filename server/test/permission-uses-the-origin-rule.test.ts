@@ -46,7 +46,9 @@ describe("granting a permission", () => {
        not visit would be a gate beside it. */
     process.env.AGENTGLASS_BROWSER_ORIGINS = "localhost:8001";
     const out = ask("https://example.com") as { error?: string };
-    expect(out.error).toContain("not in AGENTGLASS_BROWSER_ORIGINS");
+    // The allow-list now has a Settings row; the env var still wins and locks it.
+    expect(out.error).toContain("is not in the allow-list (localhost:8001)");
+    expect(out.error).toContain("locked: AGENTGLASS_BROWSER_ORIGINS");
     /* Same host, wrong port, when the entry names a port. */
     expect(ask("http://localhost:9999")).toHaveProperty("error");
     expect(ask("http://localhost:8001")).not.toHaveProperty("error");

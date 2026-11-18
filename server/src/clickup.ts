@@ -16,6 +16,7 @@
  * unusual enough to be worth stating: ClickUp's personal tokens are sent bare,
  * and adding `Bearer` produces a 401 that looks exactly like a wrong token.
  */
+import { groupReactions } from "../../shared/commentReactions.ts";
 import { statusSpaces, type CardsRead, type StatusSpaces } from "../../shared/statusSpaces.ts";
 import { singleFlight } from "./singleflight.ts";
 import { facetsOf, judgeStale, noteSeen, type Facet } from "./cardStamp.ts";
@@ -24,7 +25,9 @@ import { matchesQuery, mergeRequestNumber, prAddress, readTaskRef } from "../../
 import * as Index from "./clickupindex.ts";
 import { writesAllowed } from "./clickupviews.ts";
 import { clickupPrefs, matchPref, DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN } from "./clickupPrefs.ts";
-import { secretFor, annotate, redacted, fingerprint, notConnected } from "./credentials.ts";
+import { secretFor as secretOf, annotate, redactedAccount, fingerprint } from "./credentials.ts";
+import { clickupAccount, clickupNotConnected } from "./clickupAccount.ts";
+import { trackerChoiceFor } from "./trackerProjects.ts";
 import { markdownToDelta, type MentionPerson } from "./clickupDelta.ts";
 import type {
   ListMember, TaskReply, ProviderTask, ClickUpUser, ClickUpWorkspace, ListStatus, ListField, ListPlace, TaskDetail,
@@ -32,9 +35,13 @@ import type {
 
 import type { CallResult, WriteOutcome } from "./trackerTypes.ts";
 import { hasUrlCredentials } from "../../shared/urlCredentials.ts";
+import { setTimeoutAs } from "./loopwatch.ts";
 
+const acct = clickupAccount;
+const secretFor = (id: "clickup"): string | null => secretOf(id, acct());
+const redacted = (id: "clickup") => redactedAccount(id, acct());
 /** The line for a call made without a token: with the keyring on and locked, it says so. */
-const notConnectedMsg = (): string => notConnected("clickup", "ClickUp is not connected");
+const notConnectedMsg = (): string => clickupNotConnected("ClickUp is not connected");
 // Defined in trackerTypes.ts so the Jira client can use them without importing
 // this file; re-exported so no existing importer changes.
 export type { CallResult, WriteOutcome };
@@ -129,9 +136,11 @@ const RESERVE = 5;
 const flying = new Map<string, Promise<CallResult<unknown>>>();
 
 /* `fresh` opts out: a Refresh press exists to get past a read already in the
-   air (see `refresh` in providers.ts), so it must not be merged into it. */
-function call<T>(pathname: string, token: string, timeoutMs = TIMEOUT_MS, fresh = false): Promise<CallResult<T>> {
-  if (fresh) return callOnce<T>(pathname, token, timeoutMs);
+   air (see `refresh` in providers.ts), so it must not be merged into it. A
+   caller's own abort is not merged either: aborting it would abort another
+   caller's read of the same path. */
+function call<T>(pathname: string, token: string, timeoutMs = TIMEOUT_MS, fresh = false, signal?: AbortSignal): Promise<CallResult<T>> {
+  if (fresh || signal) return callOnce<T>(pathname, token, timeoutMs, signal);
   const key = `${base}${pathname}\n${token}`;
   const held = flying.get(key);
   if (held) return held as Promise<CallResult<T>>;
@@ -140,17 +149,18 @@ function call<T>(pathname: string, token: string, timeoutMs = TIMEOUT_MS, fresh 
   return p;
 }
 
-async function callOnce<T>(pathname: string, token: string, timeoutMs: number): Promise<CallResult<T>> {
+async function callOnce<T>(pathname: string, token: string, timeoutMs: number, caller?: AbortSignal): Promise<CallResult<T>> {
   if (budget && budget.remaining <= RESERVE && Date.now() < budget.resetAt) {
     return { ok: false, throttled: true, error: "Holding off — ClickUp's rate limit is nearly used up" };
   }
   const ctl = new AbortController();
   const kill = setTimeout(() => ctl.abort(), timeoutMs);
+  const signal = caller ? AbortSignal.any([ctl.signal, caller]) : ctl.signal;
   try {
     const r = await fetch(`${base}${pathname}`, {
       // Bare, not `Bearer`. See the note at the top of this file.
       headers: { Authorization: token, "content-type": "application/json" },
-      signal: ctl.signal,
+      signal,
     });
     // A MISSING header is not a budget of zero, and this used to say it was:
     // `Number(null)` is 0 and `Number.isFinite(0)` is true, so any response that
@@ -165,7 +175,12 @@ async function callOnce<T>(pathname: string, token: string, timeoutMs: number): 
     const remainingRaw = r.headers.get("x-ratelimit-remaining");
     const remaining = remainingRaw === null ? NaN : Number(remainingRaw);
     const reset = Number(r.headers.get("x-ratelimit-reset"));
-    if (Number.isFinite(remaining)) {
+    /* Only a read the app is staying for speaks for the budget. One carrying
+       the caller's abort is a brief's, which the start walks away from: its 429
+       (and the `remaining: 0` that rides with it) must not answer the person's
+       own reads with "Holding off" for the next minute. Jira's path returns
+       before publishing its hold for the same reason. */
+    if (Number.isFinite(remaining) && !caller) {
       budget = {
         remaining,
         // The header is unix SECONDS. Treating it as milliseconds would put the
@@ -806,7 +821,7 @@ async function sweepWorkspace(
   const gen = credGen;
   const me = redacted("clickup");
   if (!me?.workspaceId) return { ok: false, error: "No ClickUp workspace chosen yet" };
-  const held = withBodies ? sweepBodies : sweep;
+  const held = acct() ? null : withBodies ? sweepBodies : sweep;
   const fresh = held && Date.now() - held.at < (withBodies ? SWEEP_BODIES_TTL_MS : SWEEP_TTL_MS);
   if (fresh && !force) return { ok: true, data: held!.tasks, reach: held!.reach };
   const out: SweptTask[] = [];
@@ -905,7 +920,8 @@ async function sweepWorkspace(
     out.push(...mapped);
     /* Written down as it is read: a sweep that takes 45 seconds is already
        useful to the next question after its first page. */
-    Index.remember(mapped);
+    // The index is the default account's: another account's cards stay out of it.
+    if (!acct()) Index.remember(mapped);
     onPage?.(mapped, out.length);
   }
   /* A PARTIAL SWEEP IS NOT CACHED FOR TEN MINUTES.
@@ -914,7 +930,8 @@ async function sweepWorkspace(
      workspace contains until the next coffee. */
   const at = missed ? Date.now() - (withBodies ? SWEEP_BODIES_TTL_MS : SWEEP_TTL_MS) + PARTIAL_TTL_MS : Date.now();
   const reach: Reach = { oldest: Number.isFinite(oldest) ? oldest : 0, capped };
-  if (withBodies) sweepBodies = { at, tasks: out, reach };
+  if (acct()) { /* another account's sweep is not kept in the default's slot */ }
+  else if (withBodies) sweepBodies = { at, tasks: out, reach };
   else sweep = { at, tasks: out, reach };
   return { ok: true, data: out, partial: missed > 0, reach };
 }
@@ -976,8 +993,17 @@ export function matchesText(t: Pick<ProviderTask, "title" | "customId" | "id" | 
  * Never awaited by a route. Failures are silent on purpose: this is a
  * convenience, and a warm-up that reports an error is a warm-up that has
  * become somebody's problem.
+ *
+ * `repo`, when given, is the project whose board is asking: a project whose
+ * tracker was explicitly set to Jira has no business paying for a sweep of
+ * the whole ClickUp workspace just because it opened. With no repo (an
+ * unscoped caller, or a checkout trackerProjects.ts cannot name) the sweep
+ * still runs — the old behaviour — because there is nothing here to say it
+ * should not. The single-card read (`findCard`/`taskDetail`) does not call
+ * this and is never gated by it.
  */
-export function warmBodySweep(): void {
+export function warmBodySweep(repo?: string | null): void {
+  if (repo && trackerChoiceFor(repo) === "jira") return;
   if (!secretFor("clickup")) return;
   if (sweepBodies && Date.now() - sweepBodies.at < SWEEP_BODIES_TTL_MS) return;
   void sweepWorkspace(false, true).catch(() => { /* the search will do it */ });
@@ -1007,8 +1033,10 @@ export async function searchTasksStream(
    * whatever it missed arrives a moment later through the same callback.
    */
   try {
-    say(Index.named(text));
-    if (digits !== null) say(Index.mentioning(digits));
+    if (!acct()) {
+      say(Index.named(text));
+      if (digits !== null) say(Index.mentioning(digits));
+    }
   } catch { /* an index that cannot be read is a slower search, not a broken one */ }
 
   /*
@@ -1534,6 +1562,8 @@ interface DeltaBlock {
    *  and carries no newline, so without this it welds itself to whatever the
    *  author wrote under the rule. */
   type?: string;
+  /** On a `tag` piece: the person it names. */
+  user?: { id?: string | number; username?: string; initials?: string; color?: string };
   attributes?: {
     bold?: boolean; italic?: boolean; code?: boolean; link?: string;
     header?: number;
@@ -1679,6 +1709,28 @@ function renderRuns(runs: { text: string; a: DeltaBlock["attributes"]; md?: bool
     i = j;
   }
   return out.join("");
+}
+
+/**
+ * The people a comment names, from its `tag` pieces: one per person, in the
+ * order they first appear, named by `username` (the text of the piece reads
+ * "@username"). The card draws them as the same chip Jira's mentions get.
+ *
+ * Ceiling: no "(edited)" for ClickUp. A comment read carries `date` and nothing
+ * for a later change, so there is no honest edit time to show.
+ */
+export function commentMentions(blocks: DeltaBlock[]): { id: string; name: string }[] {
+  const seen = new Set<string>();
+  const out: { id: string; name: string }[] = [];
+  for (const b of blocks) {
+    if (b.type !== "tag" || b.user?.id == null) continue;
+    const id = String(b.user.id);
+    const name = (b.user.username ?? "").trim();
+    if (!name || seen.has(id)) continue;
+    seen.add(id);
+    out.push({ id, name });
+  }
+  return out;
 }
 
 export function commentMarkdown(blocks: DeltaBlock[]): string {
@@ -1879,7 +1931,7 @@ const listViewCache = new Map<string, { at: number; id: string | null }>();
 const LIST_VIEW_TTL_MS = 30 * 60_000;
 
 export async function defaultViewOf(token: string, listId: string): Promise<string | null> {
-  const hit = listViewCache.get(listId);
+  const hit = listViewCache.get(`${acct() ?? ""}|${listId}`);
   if (hit && Date.now() - hit.at < LIST_VIEW_TTL_MS) return hit.id;
   const r = await call<{ required_views?: { list?: { id?: string } } }>(
     `/list/${encodeURIComponent(listId)}/view`, token,
@@ -1887,7 +1939,7 @@ export async function defaultViewOf(token: string, listId: string): Promise<stri
   const id = r.ok ? (r.data?.required_views?.list?.id ?? null) : null;
   // A failure is not cached as "no view": the next read should try again rather
   // than fall back to the raw list for the rest of the session.
-  if (r.ok) listViewCache.set(listId, { at: Date.now(), id });
+  if (r.ok) listViewCache.set(`${acct() ?? ""}|${listId}`, { at: Date.now(), id });
   return id;
 }
 
@@ -2053,7 +2105,7 @@ function drainOneCount(): void {
   }).finally(() => {
     countActive = null;
     settleCount(next.key);
-    if (countQueue.length) { countTimer = setTimeout(drainOneCount, COUNT_EVERY_MS); countTimer.unref?.(); }
+    if (countQueue.length) { countTimer = setTimeoutAs("clickup count drain", drainOneCount, COUNT_EVERY_MS); countTimer.unref?.(); }
   });
 }
 
@@ -2078,7 +2130,7 @@ export function refreshCommentCounts(tasks: ProviderTask[], token: string, onCou
   if (commentCounts.size > 2000) commentCounts.clear();
   // The first one is asked now rather than after a wait, so a board that is
   // opened and looked at gets its first badges without a dead interval.
-  if (countQueue.length && !countTimer && !countActive) { countTimer = setTimeout(drainOneCount, 0); countTimer.unref?.(); }
+  if (countQueue.length && !countTimer && !countActive) { countTimer = setTimeoutAs("clickup count drain", drainOneCount, 0); countTimer.unref?.(); }
   if (!waitOn.size) return Promise.resolve();
   return new Promise<void>((done) => { countWaiters.push({ keys: waitOn, done }); });
 }
@@ -2811,18 +2863,18 @@ async function roster(): Promise<MentionPerson[]> {
 }
 
 async function workspacePeople(token: string): Promise<MentionPerson[]> {
-  if (people && Date.now() - people.at < PEOPLE_TTL_MS) return people.who;
+  if (!acct() && people && Date.now() - people.at < PEOPLE_TTL_MS) return people.who;
   const me = redacted("clickup");
   const gen = credGen;
   const r = await teamOnce(token);
-  if (!r.ok) return people?.who ?? [];
+  if (!r.ok) return (!acct() && people?.who) || [];
   const who = (r.data?.teams ?? [])
     .filter((t) => !me?.workspaceId || String(t.id ?? "") === me.workspaceId)
     .flatMap((t) => (t.members ?? []).map((m) => m.user).filter(Boolean))
     .filter((u) => u!.id != null && (u!.username ?? "").trim())
     .map((u) => ({ id: Number(u!.id), name: String(u!.username).trim(), email: u!.email || undefined, initials: u!.initials || undefined }));
   if (gen !== credGen) return [];
-  people = { at: Date.now(), who };
+  if (!acct()) people = { at: Date.now(), who };
   return who;
 }
 
@@ -2950,15 +3002,18 @@ export function cardEvents(
  */
 function withSeen(events: CardEvent[], id: string, customId: string): CardEvent[] {
   let seen: { text: string; at: number }[] = [];
-  try { seen = Index.notesAbout(id, customId); } catch { seen = []; }
+  try { seen = acct() ? [] : Index.notesAbout(id, customId); } catch { seen = []; }
   if (!seen.length) return events;
   return [...events, ...seen.map((n) => ({ at: n.at, kind: "seen" as const, text: n.text }))]
     .sort((a, b) => a.at - b.at);
 }
 
-export async function taskDetail(askedId: string): Promise<CallResult<TaskDetail>> {
+export async function taskDetail(askedId: string, o: { signal?: AbortSignal; /** The card's own words only: a brief never reads the conversation, and a reply thread it waits on is a request nobody is left to answer. */ threads?: boolean } = {}): Promise<CallResult<TaskDetail>> {
   const token = secretFor("clickup");
   if (!token) return { ok: false, error: notConnectedMsg() };
+  /* Every read here carries the caller's own abort when it has one, so a card
+     read a start gave up on stops asking. */
+  const read = <T>(pathname: string): Promise<CallResult<T>> => call<T>(pathname, token, TIMEOUT_MS, false, o.signal);
   /* A link on a workspace with custom ids names the card by its human id
      (ORBIT-1042), and every call below takes the plain one — the comment and
      time-in-status routes do not take the custom-id flag at all. One read
@@ -2966,12 +3021,12 @@ export async function taskDetail(askedId: string): Promise<CallResult<TaskDetail
   let taskId = defaultIdOf(askedId) ?? askedId;
   const workspace = redacted("clickup")?.workspaceId;
   if (/-/.test(taskId) && workspace) {
-    const found = await call<RawTask>(
-      `/task/${encodeURIComponent(taskId)}?custom_task_ids=true&team_id=${encodeURIComponent(workspace)}`, token);
+    const found = await read<RawTask>(
+      `/task/${encodeURIComponent(taskId)}?custom_task_ids=true&team_id=${encodeURIComponent(workspace)}`);
     if (!found.ok) return { ...found, data: undefined };
     taskId = found.data?.id ?? taskId;
   }
-  const r = await call<RawTask & {
+  const r = await read<RawTask & {
     description?: string; markdown_description?: string;
     subtasks?: RawTask[];
     checklists?: { name?: string; items?: { name?: string; resolved?: boolean }[] }[];
@@ -2982,7 +3037,7 @@ export async function taskDetail(askedId: string): Promise<CallResult<TaskDetail
       url?: string; url_w_host?: string; thumbnail_medium?: string; thumbnail_small?: string;
       date?: string | number; user?: { username?: string };
     }[];
-  }>(`/task/${encodeURIComponent(taskId)}?include_subtasks=true&include_markdown_description=true`, token);
+  }>(`/task/${encodeURIComponent(taskId)}?include_subtasks=true&include_markdown_description=true`);
   if (!r.ok) return { ...r, data: undefined };
   const d = r.data!;
   const me = redacted("clickup")?.accountId;
@@ -2999,24 +3054,29 @@ export async function taskDetail(askedId: string): Promise<CallResult<TaskDetail
    * a card somebody has just opened, and the description and the conversation are
    * what they opened it for.
    */
-  const hp = call<{
+  const hp = read<{
     current_status?: { status?: string; color?: string; total_time?: { since?: string } };
     status_history?: { status?: string; color?: string; total_time?: { since?: string } }[];
-  }>(`/task/${encodeURIComponent(taskId)}/time_in_status`, token);
+  }>(`/task/${encodeURIComponent(taskId)}/time_in_status`);
 
-  const c = await call<{ comments?: {
-    id: string; comment_text?: string; date?: string; reply_count?: number; resolved?: boolean;
+  /* A brief reads the card's own words and not its conversation: no comment
+     request, and no reply thread under it — one request per threaded comment,
+     each awaited before the card answers, which is how a card with enough of
+     them lost its title and description to the brief's deadline. */
+  const c = o.threads === false ? null : await read<{ comments?: {
+    id: string; comment_text?: string; date?: string; reply_count?: number | string; resolved?: boolean;
     /* Same three the reply call already asks for — the face beside the name. */
     user?: { username?: string; id?: number | string; initials?: string; color?: string; profilePicture?: string };
     /** ClickUp's own rich representation: a Quill delta, one piece per run of
      *  text, carrying the formatting its editor applied. See commentMarkdown. */
     comment?: DeltaBlock[];
+    reactions?: unknown;
   }[] }>(
-    `/task/${encodeURIComponent(taskId)}/comment`, token,
+    `/task/${encodeURIComponent(taskId)}/comment`,
   );
   // The card's badge on its board, for the price of nothing: this read is
   // already the count `refreshCommentCounts` would otherwise spend a call on.
-  if (c.ok) commentCounts.set(`${String(d.id)}:${Number(d.date_updated) || 0}`, (c.data?.comments ?? []).length);
+  if (c?.ok) commentCounts.set(`${String(d.id)}:${Number(d.date_updated) || 0}`, (c.data?.comments ?? []).length);
   return {
     ok: true,
     data: {
@@ -3068,18 +3128,18 @@ export async function taskDetail(askedId: string): Promise<CallResult<TaskDetail
        * backwards: the reply lands before the thing it replies to, which is
        * how "this looks good" ends up above what was good.
        */
-      comments: (await Promise.all((c.data?.comments ?? []).map(async (x) => {
+      comments: (c?.data?.comments ?? []).map((x) => {
         const text = commentMarkdown(x.comment ?? []) || (x.comment_text ?? "");
         return {
           id: x.id, who: x.user?.username ?? "", text,
           at: Number(x.date) || 0,
+          ...(commentMentions(x.comment ?? []).length ? { mentions: commentMentions(x.comment ?? []) } : null),
           /* The same three the reply rows already carry: a picture when there
              is one, initials in the workspace's own colour when there is not. */
           ...(x.user?.profilePicture ? { avatar: x.user.profilePicture } : null),
           initials: x.user?.initials || initialsOf(x.user?.username ?? ""),
           ...(x.user?.color ? { color: x.user.color } : null),
-          replies: x.reply_count || undefined,
-          replyList: x.reply_count ? await commentReplies(x.id, token, me) : undefined,
+          replies: Number(x.reply_count) || undefined,
           /* Whose it is, decided HERE. ClickUp refuses an edit on somebody
              else's comment, and a panel that offers the button anyway teaches
              people that the button lies. Compared by id rather than by name:
@@ -3087,31 +3147,35 @@ export async function taskDetail(askedId: string): Promise<CallResult<TaskDetail
              usually the one you are. */
           ...(me && String(x.user?.id ?? "") === String(me) ? { mine: true } : null),
           ...(x.resolved ? { resolved: true } : null),
+          ...(groupReactions(x.reactions, me).length ? { reactions: groupReactions(x.reactions, me) } : null),
         };
-      }))).sort((a, b) => a.at - b.at),
+      }).sort((a, b) => a.at - b.at),
     },
   };
 }
 
 /**
- * The replies under one comment.
- *
- * A separate endpoint in the workspace's API — `/comment/<id>/reply` — and the
- * reason a threaded comment arrived as a bare count. Only asked for when the
- * count says there is something to ask about, so a card of unthreaded comments
- * costs exactly the calls it did before.
- *
- * A failure returns nothing rather than propagating. The card is the thing
- * somebody opened; losing all of it because one thread would not load is a
- * worse answer than a comment that still shows its count and cannot expand.
+ * The replies under one comment: `GET /comment/<id>/reply`, asked when the
+ * thread is expanded and only for a comment whose `reply_count` is above zero,
+ * never one request per comment up front. A failure is an error answer for that
+ * thread alone; the card itself has already loaded without it.
  */
-async function commentReplies(commentId: string, token: string, me?: string): Promise<TaskReply[]> {
+export async function repliesOf(commentId: string, signal?: AbortSignal): Promise<CallResult<{ replies: TaskReply[] }>> {
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: notConnectedMsg() };
+  const me = redacted("clickup")?.accountId;
+  const r = await commentReplies(commentId, token, me, signal);
+  return r === null ? { ok: false, error: "ClickUp did not answer for that thread" } : { ok: true, data: { replies: r } };
+}
+
+async function commentReplies(commentId: string, token: string, me?: string, signal?: AbortSignal): Promise<TaskReply[] | null> {
   const r = await call<{ comments?: {
     id: string; comment_text?: string; date?: string;
     user?: { id?: number | string; username?: string; initials?: string; color?: string; profilePicture?: string };
     comment?: DeltaBlock[];
-  }[] }>(`/comment/${encodeURIComponent(commentId)}/reply`, token);
-  if (!r.ok) return [];
+    reactions?: unknown;
+  }[] }>(`/comment/${encodeURIComponent(commentId)}/reply`, token, TIMEOUT_MS, false, signal);
+  if (!r.ok) return null;
   return (r.data?.comments ?? [])
     .map((x) => {
       const who = x.user?.username ?? "";
@@ -3130,6 +3194,7 @@ async function commentReplies(commentId: string, token: string, me?: string): Pr
         avatar: x.user?.profilePicture || undefined,
         initials: x.user?.initials || initialsOf(who),
         color: x.user?.color || undefined,
+        ...(groupReactions(x.reactions, me).length ? { reactions: groupReactions(x.reactions, me) } : null),
       };
     })
     // Oldest first, like the thread above it. A reply read before the reply it
@@ -3234,8 +3299,9 @@ const findCache = new Map<string, { at: number; gen: number; p: Promise<CallResu
 export function __clearFindCache(): void { findCache.clear(); }
 
 export function findCard(text: string, knownPrefix: string, o: FindOptions = {}): Promise<CallResult<FoundCard>> {
-  const asked = normaliseCardQuery(text, knownPrefix);
-  if (!asked) return findCardUncached(text, knownPrefix, o);
+  const q = normaliseCardQuery(text, knownPrefix);
+  if (!q) return findCardUncached(text, knownPrefix, o);
+  const asked = `${acct() ?? ""}|${q}`;
   const hit = findCache.get(asked);
   if (hit && hit.gen === findGen && Date.now() - hit.at < FIND_TTL_MS) return hit.p;
   const gen = findGen;
@@ -3472,7 +3538,7 @@ export async function cardPullRequests(
   // a pull request that does not name the card.
   const searches: string[][] = [[term]];
   if (cardId) searches.push([`head:${cardId}`]);
-  const rows: { number: number; title: string; state: string; isDraft?: boolean; url: string; body?: string; headRefName?: string; author?: { login?: string } }[] = [];
+  const rows: { number: number; title: string; state: string; isDraft?: boolean; url: string; body?: string; headRefName?: string; author?: { login?: string }; reviewDecision?: string }[] = [];
   let failed = "";
   for (const q of searches) {
     const r = await gh(
@@ -3540,6 +3606,34 @@ export function withStatedLinks(prs: CardPr[], links: { url: string; number: num
   return out.sort((a, b) => Number(!!b.stated) - Number(!!a.stated) || b.number - a.number);
 }
 
+/**
+ * The checks of every OPEN pull request the board shows, in ONE GraphQL request
+ * (the list's own batched rollup read, never one call per card). A read that
+ * fails leaves the rows without `checks`: the card then says nothing about CI
+ * rather than guessing.
+ */
+async function attachRollups(byCard: Record<string, CardPr[]>, root: string): Promise<void> {
+  const open = new Map<number, CardPr[]>();
+  for (const list of Object.values(byCard)) for (const p of list) if (p.state === "OPEN") open.set(p.number, [...(open.get(p.number) ?? []), p]);
+  if (!open.size) return;
+  try {
+    const { fetchCheckRollups, repoIdFor } = await import("./prs.ts");
+    const repo = await repoIdFor(root);
+    if (!repo) return;
+    const merge = new Map<number, string>();
+    const base = new Map<number, string>();
+    // A slow GraphQL call must not hold the whole project read: past 3 s the cards draw without checks.
+    const slow = Symbol("slow");
+    const rolls = await Promise.race([fetchCheckRollups(repo, [...open.keys()].slice(0, 100), merge, base), new Promise<typeof slow>((r) => setTimeout(() => r(slow), 3000))]);
+    if (rolls === slow) return;
+    const readAt = Date.now();
+    for (const [n, rows] of open) {
+      const c = rolls.get(n), m = merge.get(n), b = base.get(n);
+      for (const p of rows) { if (c) { p.checks = c; p.checksAt = readAt; } if (b) p.base = b; if (m === "CONFLICTING" || m === "MERGEABLE" || m === "UNKNOWN") p.mergeable = m; }
+    }
+  } catch { /* no rollup is an answer the card can draw */ }
+}
+
 /** How many pull requests one project search reads. */
 export const PROJECT_PR_LIMIT = 200;
 
@@ -3556,23 +3650,32 @@ export const PROJECT_PR_LIMIT = 200;
  * `XORBIT-12` gives nothing to ORBIT-12.
  *
  * Ceilings: only the newest PROJECT_PR_LIMIT rows are read (`truncated` says
- * so), and GitHub's search does not look at branch names, so a card whose key
- * appears only in a branch is missed here; the per-card search finds it.
+ * so). GitHub's search does not look at branch names, so the newest
+ * PROJECT_PR_LIMIT pull requests are also read as a plain listing and matched
+ * here; a branch-only key older than that is missed (the per-card search finds it).
  */
 export async function projectPullRequests(
   project: string, root: string,
 ): Promise<{ ok: boolean; byCard: Record<string, CardPr[]>; truncated?: boolean; error?: string }> {
   const { gh } = await import("./prs.ts");
-  const r = await gh(
-    ["pr", "list", "--search", project, "--state", "all", "--limit", String(PROJECT_PR_LIMIT),
-      "--json", "number,title,state,isDraft,url,body,headRefName,author"],
-    root,
-  );
+  const fields = "number,title,state,isDraft,url,body,headRefName,author,reviewDecision";
+  const [r, recent] = await Promise.all([
+    gh(["pr", "list", "--search", project, "--state", "all", "--limit", String(PROJECT_PR_LIMIT), "--json", fields], root),
+    // The plain listing is what carries a pull request whose key is only in its branch.
+    gh(["pr", "list", "--state", "all", "--limit", String(PROJECT_PR_LIMIT), "--json", fields], root),
+  ]);
   if (r.code !== 0) return { ok: false, byCard: {}, error: r.stderr.trim().slice(0, 160) || "could not search GitHub" };
   const byCard: Record<string, CardPr[]> = {};
-  let rows: { number: number; title: string; state: string; isDraft?: boolean; url: string; body?: string; headRefName?: string; author?: { login?: string } }[] = [];
+  let rows: { number: number; title: string; state: string; isDraft?: boolean; url: string; body?: string; headRefName?: string; author?: { login?: string }; reviewDecision?: string }[] = [];
   try { rows = JSON.parse(r.stdout); } catch { /* a search that answered nothing usable is a search with no rows */ }
   if (!Array.isArray(rows)) rows = [];
+  if (recent.code === 0) {
+    try {
+      const more = JSON.parse(recent.stdout);
+      const have = new Set(rows.map((p) => p.number));
+      if (Array.isArray(more)) rows = rows.concat(more.filter((p) => !have.has(p.number)));
+    } catch { /* an unreadable listing adds nothing */ }
+  }
   const me = await viewerLogin(gh, root);
   const candidate = new RegExp(`${project.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-\\d+`, "gi");
   for (const p of rows) {
@@ -3582,12 +3685,15 @@ export async function projectPullRequests(
       if (!link) continue;
       (byCard[id] ??= []).push({
         number: p.number, title: p.title, state: p.state, draft: p.isDraft, url: p.url, author: p.author?.login,
+        ...(p.headRefName ? { branch: p.headRefName } : null),
+        ...(p.state === "OPEN" ? { reviewDecision: p.reviewDecision || null } : null),
         ...(link === "own" ? { link } : { link, belongsTo: readTaskRef(p)?.label }),
         mine: !!me && p.author?.login?.toLowerCase() === me,
       });
     }
   }
   for (const list of Object.values(byCard)) list.sort((a, b) => b.number - a.number);
+  await attachRollups(byCard, root);
   return { ok: true, byCard, ...(rows.length >= PROJECT_PR_LIMIT ? { truncated: true } : {}) };
 }
 
@@ -3811,16 +3917,16 @@ const taskSpaceCache = new Map<string, string>();
 export async function tagsForTask(taskId: string): Promise<CallResult<string[]>> {
   const token = secretFor("clickup");
   if (!token) return { ok: false, error: notConnectedMsg() };
-  let space = taskSpaceCache.get(taskId);
+  let space = taskSpaceCache.get(`${acct() ?? ""}|${taskId}`);
   if (!space) {
     const t = await call<{ space?: { id?: string } }>(`/task/${encodeURIComponent(taskId)}`, token);
     if (!t.ok) return { ...t, data: undefined };
     space = t.data?.space?.id;
-    if (space) taskSpaceCache.set(taskId, space);
+    if (space) taskSpaceCache.set(`${acct() ?? ""}|${taskId}`, space);
   }
   if (!space) return { ok: true, data: [] };
 
-  const hit = spaceTagCache.get(space);
+  const hit = spaceTagCache.get(`${acct() ?? ""}|${space}`);
   if (hit && Date.now() - hit.at < SPACE_TAG_TTL_MS) return { ok: true, data: hit.tags };
 
   const gen = credGen;
@@ -3832,6 +3938,6 @@ export async function tagsForTask(taskId: string): Promise<CallResult<string[]>>
     .sort((a, b) => a.localeCompare(b));
   // Only a real answer is cached: a failure must not become "this space has no
   // tags" for the next half hour.
-  if (gen === credGen) spaceTagCache.set(space, { at: Date.now(), tags });
+  if (gen === credGen) spaceTagCache.set(`${acct() ?? ""}|${space}`, { at: Date.now(), tags });
   return { ok: true, data: tags };
 }

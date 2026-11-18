@@ -6,25 +6,26 @@
  */
 import { namedFiles, runPreflight, type PreflightDeps, type PreflightInput } from "./preflight.ts";
 import { linkPreflight, type SeatTask } from "./seatqueue.ts";
-import { type LaunchedWhere, type Plan, countAutoRun, findingsAnswered, gateSince, listPlans, markLaunched, failCount, passedRoles, setPreflightRun, versionOf } from "./flightPlanStore.ts";
+import { storedFacts, saveFacts, idsWithoutFacts, type LaunchedWhere, type Plan, type PlanHead, planTextOf, countAutoRun, findingsAnswered, gateSince, listPlans, markLaunched, failCount, passedRoles, passedAtTip, everPassedRoles, setPreflightRun, versionOf } from "./flightPlanStore.ts";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { isLaunchMode, type LaunchMode } from "../../shared/launchModes.ts";
 import { existsSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { commandVerdict, isInside, realish } from "./builderGuard.ts";
 import { ruleRoot } from "./agentRulesStore.ts";
-import { addWorktree } from "./gitwork.ts";
-import { git } from "./git.ts";
-import { APP, REVIEW_OF, clearRetired, createRun, fail, finish, getRun, getSetting, PREFLIGHT_MODEL_ALIAS, retiredSetting, setState, type Moment, type Run } from "./preflightStore.ts";
+import { addWorktree, gitWriteTurn } from "./gitwork.ts";
+import { gitAsync } from "./git.ts";
+import { APP, REVIEW_OF, clearRetired, createRun, doneFindings, fail, finish, getRun, getSetting, PREFLIGHT_MODEL_ALIAS, retiredSetting, setState, type Moment, type Run } from "./preflightStore.ts";
 import { readFlow } from "./flow.ts";
 import { readStoredFlow, workerRoles, writeWorkerRole } from "./config.ts";
 import { roleLockFor, rolePromptFor } from "./rolePrompt.ts";
 import { toolsDeniedFor } from "./agents/envelope.ts";
 import { chainInForce } from "./orchestration.ts";
-import { budgetState } from "./flightBudget.ts";
-import { builderPick, overrideVerdict, sensitiveHit, sensitivePath, type BuilderModel, type BuilderPick } from "../../shared/builderModel.ts";
+import { budgetState, type BudgetState } from "./flightBudget.ts";
+import { builderPick, roleModel, overrideVerdict, sensitiveHit, sensitivePath, type BuilderModel, type BuilderPick } from "../../shared/builderModel.ts";
 import { preflightTargetFromChain, type PreflightTarget } from "../../shared/preflightEngine.ts";
 import type { BuilderState, Pilot, StopReason } from "../../shared/types.ts";
+import { waitedFor } from "./loopwatch.ts";
 
 /** Tests swap the runner's deps; a booted test server reads AGENTGLASS_PREFLIGHT_BIN, honoured only under NODE_ENV=test. */
 let depsOverride: PreflightDeps | null = null;
@@ -59,6 +60,7 @@ export function request(r: RequestIn): Requested {
   const input: PreflightInput = {
     files: r.files ?? [], ...(r.ranges ? { ranges: r.ranges } : {}), ...(r.leftOut?.length ? { leftOut: r.leftOut } : {}), mockups: r.mockups ?? [], root: r.root, ...(r.pr ? { pr: r.pr } : {}), ...(r.extraText ? { extraText: r.extraText } : {}),
     engine: target.engine, model: target.model, budgetUsd: r.capUsd ?? Number(getSetting(r.root, "flightPlan.preflight.costCapUsd")),
+    fileCapBytes: Number(getSetting(r.root, "flightPlan.preflight.fileCapBytes")),
   };
   const run = createRun({ root: r.root, moment: r.moment, state: "running", by: r.by, input, taskId: r.taskId });
   return { ok: true, run, done: execute(run.id) };
@@ -93,9 +95,25 @@ export function afterTaskDone(t: SeatTask, by: string): Promise<void> {
 
 const brief = (p: Plan) => `# ${p.title}\n\n## Request\n${p.request}\n\n## Flight plan\n${p.planMd}\n`;
 
+/** Whether `flightPlan.preflight.sizes` looks at this plan's size: L only, or M and L. */
+const sizesReviewed = (size: Plan["size"]): boolean =>
+  size === "L" || (size === "M" && getSetting(APP, "flightPlan.preflight.sizes") !== "L");
+
+/**
+ * Why a plan may not be made at this size, or null: the setting says which
+ * sizes are plans at all, and the door refuses the rest for every caller.
+ */
+export function sizeRefusal(size: Plan["size"]): string | null {
+  if (sizesReviewed(size)) return null;
+  const setting = String(getSetting(APP, "flightPlan.preflight.sizes"));
+  const what = size === "M" ? `flightPlan.preflight.sizes is ${setting}: only L plans are made` : `flightPlan.preflight.sizes is ${setting} and an S plan is never made`;
+  return `${what}, so this one goes straight to a worker: \`agentglass-agent start <name> --cwd <checkout> --role builder\`.`;
+}
+
 /** A Preflight over the plan and its mockups, at the before-launch moment: the project's list of reviews decides whether it runs. An S plan never gets one. */
 export function preflightPlan(p: Plan, by: string, capUsd?: number): Requested {
   if (p.size === "S") return { ok: false, error: "an S plan gets no Preflight: a change that small is sent straight to a builder" };
+  if (!sizesReviewed(p.size)) return { ok: false, error: `this is an ${p.size} plan and flightPlan.preflight.sizes is L: only L plans get a Preflight, so it goes straight to a builder: \`agentglass-agent start <name> --cwd <checkout> --role builder\`. A person changes that setting in Settings ▸ Orchestration.` };
   // A second press while a review runs or waits for Go is the same review: a double click must not spend twice.
   const openRun = p.preflightRunId ? getRun(p.preflightRunId) : null;
   if (openRun && (openRun.state === "running" || openRun.state === "awaiting-go")) return { ok: true, run: openRun, done: Promise.resolve() };
@@ -117,8 +135,8 @@ export const autoRunsMax = (): number => 1 + Number(getSetting(APP, "flightPlan.
 export const AUTOPILOT_PREFLIGHTS_MAX = 8;
 
 /** Autopilot, not held, and the budget not reached: the coordinator is held by money, not by the second looks. A reached budget is Co-pilot until it resets. */
-const flownOnMoney = (root: string, now = Date.now(), fresh = false): boolean =>
-  pilotOf(root) === "autopilot" && !isHeld(root) && !budgetState(now, undefined, fresh).reached;
+const flownOnMoney = (root: string, now = Date.now(), fresh = false, budget?: BudgetState): boolean =>
+  pilotOf(root) === "autopilot" && !isHeld(root) && !(budget ?? budgetState(now, undefined, fresh)).reached;
 
 /**
  * Why the project's coordinator may not start another Preflight on this plan
@@ -132,9 +150,8 @@ export function seatMayPreflight(p: Plan, seat: boolean, now = Date.now()): stri
 }
 
 /** A blocker nobody has answered yet in the plan's last finished Preflight. */
-const openBlocker = (p: Plan): boolean => {
-  const run = p.preflightRunId ? getRun(p.preflightRunId) : null;
-  return run?.state === "done" && (run.certificate?.findings ?? []).some((f) => f.severity === "blocker" && f.action === null);
+const openBlocker = (p: PlanHead): boolean => {
+  return !!p.preflightRunId && doneFindings(p.preflightRunId).some((f) => f.severity === "blocker" && f.action === null);
 };
 
 /**
@@ -144,8 +161,7 @@ const openBlocker = (p: Plan): boolean => {
  * Go goes back to ready when its text changes, so it is reviewed again too.
  */
 export function afterPlanText(p: Plan, by: string): Requested | null {
-  if (!p.planMd.trim() || p.size === "S") return null;
-  if (p.size === "M" && getSetting(APP, "flightPlan.preflight.sizes") === "L") return null;
+  if (!p.planMd.trim() || !sizesReviewed(p.size)) return null;
   const open = p.preflightRunId ? getRun(p.preflightRunId)?.state : undefined;
   if (open === "running" || open === "awaiting-go") return null;
   if (p.autoRuns >= autoRunsMax() || p.reviewRounds >= AUTOPILOT_PREFLIGHTS_MAX) return null;
@@ -182,26 +198,77 @@ export function launchPlan(p: Plan, mint: () => string, where: LaunchedWhere = {
  * remote one, use the local one. A diverged or missing local branch keeps the
  * remote ref (shortcut: no attempt to pick between diverged branches).
  */
-export function localBase(root: string, base: string): string {
+export async function localBase(root: string, base: string, refs?: RefShas | null): Promise<string> {
   if (!base.startsWith("origin/")) return base;
   const local = base.slice("origin/".length);
-  const has = git(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${local}`]).code === 0;
-  return has && git(root, ["merge-base", "--is-ancestor", base, `refs/heads/${local}`]).code === 0 ? local : base;
+  // On every `GET /flight-plan/plans`: one ref read, and the ancestry walk only when a ref moved.
+  const r = refs === undefined ? await refShas(root) : refs;
+  if (!r) {
+    const has = (await gitAsync(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${local}`])).code === 0;
+    return has && (await gitAsync(root, ["merge-base", "--is-ancestor", base, `refs/heads/${local}`])).code === 0 ? local : base;
+  }
+  const localSha = r.get(`refs/heads/${local}`), baseSha = shaOf(r, base);
+  if (!localSha) return base;
+  if (!baseSha) return (await gitAsync(root, ["merge-base", "--is-ancestor", base, `refs/heads/${local}`])).code === 0 ? local : base;
+  return (await isAncestor(root, baseSha, localSha)) ? local : base;
 }
 
-export function cutBuilderWorktree(root: string, title: string, base: string | null): { ok: true; path: string; branch: string } | { ok: false; error: string } {
+/**
+ * Every branch tip of a project in one `for-each-ref`: refs only, a few
+ * blocks of disk. The plan list used to ask `merge-base --is-ancestor` for
+ * the trunk and for every launched branch on every call; on a repo far ahead
+ * of its remote that walk read ~146k disk blocks (stall log, 583 ms cpu).
+ * Null when git did not answer: callers then ask git the old way.
+ */
+export type RefShas = ReadonlyMap<string, string>;
+export async function refShas(root: string): Promise<RefShas | null> {
+  const r = await gitAsync(root, ["for-each-ref", "--format=%(objectname) %(refname)", "refs/heads", "refs/remotes"]);
+  if (r.code !== 0) return null;
+  const m = new Map<string, string>();
+  for (const line of r.stdout.split("\n")) { const i = line.indexOf(" "); if (i > 0) m.set(line.slice(i + 1), line.slice(0, i)); }
+  return m;
+}
+/** The tip of a short ref name (`main`, `origin/main`) or a full one, as `git rev-parse` would pick it. */
+const shaOf = (refs: RefShas, name: string): string | undefined =>
+  refs.get(name) ?? refs.get(`refs/heads/${name}`) ?? refs.get(`refs/remotes/${name}`);
+/**
+ * Whether commit `a` is an ancestor of commit `b`. Two fixed commits never
+ * change their history, so the answer is kept for good, keyed by both SHAs:
+ * the walk happens once per pair of tips, not once per list.
+ */
+const ancestry = new Map<string, boolean>();
+const ANCESTRY_MAX = 2000;
+async function isAncestor(root: string, a: string, b: string): Promise<boolean> {
+  const key = `${a}..${b}`;
+  const hit = ancestry.get(key);
+  if (hit !== undefined) return hit;
+  const r = await gitAsync(root, ["merge-base", "--is-ancestor", a, b]);
+  // 0 yes, 1 no; anything else (a missing object, a timeout) is not an answer to keep.
+  if (r.code !== 0 && r.code !== 1) return false;
+  if (ancestry.size >= ANCESTRY_MAX) ancestry.clear();
+  ancestry.set(key, r.code === 0);
+  return r.code === 0;
+}
+
+export async function cutBuilderWorktree(root: string, title: string, base: string | null): Promise<{ ok: true; path: string; branch: string } | { ok: false; error: string }> {
   if (!base) return { ok: false, error: "no main branch found in that project, so there is nothing to cut a worktree from" };
   const slug = title.toLowerCase().replace(/[`'"]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "") || "plan";
   const name = basename(root).replace(/\.git$/, "");
+  // One turn around the whole search: the free-slot check and the add must be
+  // one step, or two plans with the same title both pick slot 1 and the second
+  // add fails. Same turn the /git/ write route takes, so it waits for those too.
+  const endTurn = await gitWriteTurn(root);
+  try {
   for (let n = 1; n <= 20; n++) {
     const s = n === 1 ? slug : `${slug}-${n}`;
     const path = join(dirname(root), `${name}-fp-${s}`);
     const branch = `flight-plan/${s}`;
-    if (existsSync(path) || git(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).code === 0) continue;
-    const r = addWorktree(root, path, branch, true, base);
+    if (existsSync(path) || (await gitAsync(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0) continue;
+    const r = await addWorktree(root, path, branch, true, base);
     return r.ok ? { ok: true, path, branch } : { ok: false, error: `could not create the builder's worktree: ${r.error ?? "git refused"}` };
   }
   return { ok: false, error: "twenty worktrees for this plan title already exist: remove some" };
+  } finally { endTurn(); }
 }
 
 /** What the author agent is told: our own words, short. It saves the plan through the door, so the plan stays a draft until it has. */
@@ -262,12 +329,14 @@ export const BUILDER_DENY: readonly string[] = [
 export function builderDenyFor(root: string): readonly string[] {
   const lock = roleLockFor(root, "builder");
   if (!lock) return BUILDER_DENY;
-  return [...new Set([...BUILDER_DENY, ...(lock.readsOnly ? ["Edit", "Write", "NotebookEdit", "MultiEdit"] : []), ...toolsDeniedFor(lock.tools)])];
+  return [...new Set([...BUILDER_DENY, ...(lock.readsOnly ? ["Edit", "Write", "NotebookEdit"] : []), ...toolsDeniedFor(lock.tools)])];
 }
 
 /** What the launched builder starts with: the person's chosen permission mode (Auto unless set), and the model the plan's size and what it touches pick. */
-export function builderLaunch(plan: { size: "S" | "M" | "L" | null; planMd: string }, role: { provider: string; model: string }, permissions: string, strong: string): { mode: LaunchMode; model: BuilderModel; why: string } {
-  const pick = builderPick(plan, role, strong);
+export function builderLaunch(plan: { id?: string; size: "S" | "M" | "L" | null; planMd?: string; updatedAt?: number }, role: { provider: string; model: string }, permissions: string, strong: string, engine = "claude"): { mode: LaunchMode; model: BuilderModel; why: string; engine?: string } {
+  /* A chain on another engine names its own model: the card says so instead of offering a Claude one. */
+  if (engine !== "claude") return { mode: isLaunchMode(permissions) ? permissions : "auto", model: roleModel(role), why: `This project's builder chain starts on ${engine}, so the builder runs there on the model the chain names.`, engine };
+  const pick = builderPick({ size: plan.size, planMd: plan.planMd ?? "" }, role, strong, planSensitiveHit(plan));
   return { mode: isLaunchMode(permissions) ? permissions : "auto", model: pick.model, why: pick.why };
 }
 /** A model asked for at Go, or why it cannot be used: a stronger one than the plan's pick is the person's. */
@@ -330,23 +399,70 @@ export const isHeld = (root: string): boolean => getSetting(heldKey(root), "flig
 
 /** Paths whose change the person looks at first. The list lives with the model pick, which reads the same plan text. */
 
+const hitMemo = new Map<string, { hash: number | bigint; hit: string | null }>();
+/**
+ * What the plan list needs from a plan's text: its size in bytes and the
+ * sensitive-path hit. Stored beside the text when it is written (`patchPlan`),
+ * so a list after a restart reads no text. A plan written some other way is
+ * filled in by `backfillPlanFacts`; only a plan neither has reached is read here.
+ */
+let factsMisses = 0;
+/** How many plan texts `planFacts` has read: the test's count of text reads. */
+export const planFactsMisses = (): number => factsMisses;
+export function planFacts(p: { id: string; updatedAt: number }): { bytes: number; hit: string | null } {
+  const stored = storedFacts(p.id, p.updatedAt);
+  if (stored) return stored;
+  factsMisses++;
+  const text = planTextOf(p.id);
+  const f = { bytes: Buffer.byteLength(text), hit: sensitiveHit(text) };
+  saveFacts(p.id, p.updatedAt, f);
+  return f;
+}
+/** Fill in the facts of plans that have none: one plan per loop turn, the loop free between plans. Never runs inside a request. */
+export async function backfillPlanFacts(pauseMs = 25): Promise<number> {
+  let done = 0;
+  for (;;) {
+    const [p] = waitedFor("boot:plan-facts-backfill:list", () => idsWithoutFacts(1));
+    if (!p) return done;
+    waitedFor("boot:plan-facts-backfill:plan", () => planFacts(p)); done++;
+    await new Promise((r) => setTimeout(r, pauseMs));
+  }
+}
+/**
+ * sensitiveHit of a plan, scanned once per plan text. The plan list asks twice
+ * per plan (the model pick and stopReason) and the scan took ~125 ms on a
+ * 67 KB plan; an unchanged plan answers from its text hash. No id: scanned.
+ * A plan without its text (a list head) answers from `planFacts`.
+ */
+export function planSensitiveHit(p: { id?: string; planMd?: string; updatedAt?: number }): string | null {
+  if (p.planMd === undefined) return p.id && p.updatedAt !== undefined ? planFacts({ id: p.id, updatedAt: p.updatedAt }).hit : null;
+  if (!p.id) return sensitiveHit(p.planMd);
+  const hash = Bun.hash(p.planMd);
+  const seen = hitMemo.get(p.id);
+  if (seen?.hash === hash) return seen.hit;
+  const hit = sensitiveHit(p.planMd);
+  hitMemo.set(p.id, { hash, hit });
+  return hit;
+}
+
 /**
  * Why this plan needs the person before it flies, or null when nothing does.
  * One rule at a time, in the order a person would read them: a question that
  * is already open, a finding nobody could decide, a blocker that survived the
  * second looks, then the size, what it touches and the money. Computed, not
  * stored, so a toggle turned off or a cap raised takes effect on the next look.
+ * `budget`: the books read once for a whole list. Each read sums the week's
+ * Preflight runs, so the plan list asking per plan cost ~700 ms with 200 plans.
  */
-export function stopReason(p: Plan, now = Date.now(), fresh = false): StopReason | null {
+export function stopReason(p: PlanHead & { planMd?: string }, now = Date.now(), fresh = false, budget?: BudgetState): StopReason | null {
   if (p.question && !p.question.answer && p.stopReason) return p.stopReason;
-  const run = p.preflightRunId ? getRun(p.preflightRunId) : null;
-  const findings = run?.state === "done" ? run.certificate?.findings ?? [] : [];
+  const findings = p.preflightRunId ? doneFindings(p.preflightRunId) : [];
   if (findings.some((f) => f.action === "ask")) return "ask-finding";
   // In Autopilot the coordinator answers a blocker itself (fix, contest, ask) and seatMayFly holds its Go until it has: not the person's stop. Co-pilot keeps the second looks.
-  if (!flownOnMoney(p.root, now, fresh) && p.autoRuns >= autoRunsMax() && openBlocker(p)) return "open-blocker";
+  if (!flownOnMoney(p.root, now, fresh, budget) && p.autoRuns >= autoRunsMax() && openBlocker(p)) return "open-blocker";
   if (p.size === "L" && getSetting(p.root, "flightPlan.autopilot.askOnLarge") === true) return "large";
-  if (getSetting(p.root, "flightPlan.autopilot.askOnSensitive") === true && sensitiveHit(p.planMd)) return "sensitive";
-  if (budgetState(now, undefined, fresh).reached) return "budget";
+  if (getSetting(p.root, "flightPlan.autopilot.askOnSensitive") === true && planSensitiveHit(p)) return "sensitive";
+  if ((budget ?? budgetState(now, undefined, fresh)).reached) return "budget";
   if (p.id && roundsUsed(p).length) return "rounds-used";
   return null;
 }
@@ -379,8 +495,53 @@ export function requiredMissing(p: Plan): string[] {
   return flow.roster.filter((r) => r.required && flow.path.includes(r.id) && !done.has(r.id)).map((r) => r.name);
 }
 
+/**
+ * requiredMissing, judged at one branch tip instead of by plan version: a pass counts only when it was
+ * given to this exact commit. `stale` are the missing roles that passed once on other code (re-run them).
+ * integrate-check keeps requiredMissing and stays advisory; merge-local is the gate and is stricter.
+ */
+export function requiredMissingAtTip(p: Plan, tip: string): { missing: string[]; stale: string[]; passes: { role: string; worker: string | null; tip: string }[] } {
+  const none = { missing: [], stale: [], passes: [] };
+  if (p.createdAt < gateSince()) return none;
+  const flow = readStoredFlow(p.root);
+  if (!flow) return none;
+  const at = passedAtTip(p.id, tip), ever = everPassedRoles(p.id);
+  const need = flow.roster.filter((r) => r.required && flow.path.includes(r.id));
+  const missing = need.filter((r) => !at.has(r.id));
+  return {
+    missing: missing.map((r) => r.name), stale: missing.filter((r) => ever.has(r.id)).map((r) => r.name),
+    passes: flow.roster.filter((r) => at.has(r.id)).map((r) => ({ role: r.name, worker: at.get(r.id)!.worker, tip })),
+  };
+}
+
+export interface GateStop { ok: false; status: 403 | 409; stopReason: StopReason; error: string; missing?: string[]; file?: string }
+export interface GateOk { ok: true; overridden: string[]; warnings: string[]; passes: { role: string; worker: string | null; tip: string }[] }
+/**
+ * The flow's gates for a local merge, in one place. One condition per refusal (the first that holds), the person's
+ * override lifts all that hold and names each. A seat is refused (403) by any of them and has no override.
+ * `p.stopReason` reaches stopReason() only while a question is open; the rest are computed here on every look.
+ */
+export async function integrateGate(p: Plan, o: { asPerson: boolean; override: boolean; tip: string }): Promise<GateOk | GateStop> {
+  const stop: GateStop[] = [], warnings: string[] = [];
+  const why = stopReason(p, Date.now(), true);
+  if (why && why !== "rounds-used") stop.push({ ok: false, status: 409, stopReason: why, error: `Stopped: ${STOP_SENTENCE[why]}` });
+  const hit = getSetting(p.root, "flightPlan.autopilot.askOnSensitive") === true ? await sensitiveDiff(p) : null;
+  if (hit) {
+    if (o.asPerson) warnings.push(`sensitive-diff: ${STOP_SENTENCE["sensitive-diff"]} (${hit})`);
+    else stop.push({ ok: false, status: 403, stopReason: "sensitive-diff", file: hit, error: `Integrate is the person's here: ${STOP_SENTENCE["sensitive-diff"]} (${hit})` });
+  }
+  const spent = roundsUsed(p);
+  if (spent.length) stop.push({ ok: false, status: 409, stopReason: "rounds-used", error: `Rounds used: ${spent.join(", ")}. ${STOP_SENTENCE["rounds-used"]}` });
+  const req = requiredMissingAtTip(p, o.tip);
+  if (req.missing.length) stop.push({ ok: false, status: 409, stopReason: "required-step", missing: req.missing, error: `Required step not done at the branch's current commit: ${req.missing.join(", ")}.${req.stale.length ? ` ${req.stale.join(", ")}: re-run on the current commit.` : ""} ${STOP_SENTENCE["required-step"]}` });
+  if (!stop.length) return { ok: true, overridden: [], warnings, passes: req.passes };
+  if (!o.asPerson) return { ...stop[0]!, status: 403 };
+  if (!o.override) return stop[0]!;
+  return { ok: true, overridden: stop.map((s) => s.stopReason), warnings, passes: req.passes };
+}
+
 /** A failing arrow whose role has failed this plan as many times as it allows. */
-const spentEdge = (p: Plan, e: { on: string; from: string; maxRounds?: number }): boolean =>
+const spentEdge = (p: PlanHead, e: { on: string; from: string; maxRounds?: number }): boolean =>
   e.on === "fail" && e.maxRounds !== undefined && Number.isInteger(e.maxRounds) && e.maxRounds > 0 && failCount(p.id, e.from) >= e.maxRounds;
 
 /**
@@ -389,7 +550,7 @@ const spentEdge = (p: Plan, e: { on: string; from: string; maxRounds?: number })
  * integer maxRounds is not enforced. Same exemption and same no-flag rule as
  * requiredMissing: counts are read now, so raising maxRounds clears it.
  */
-export function roundsUsed(p: Plan): string[] {
+export function roundsUsed(p: PlanHead): string[] {
   if (p.createdAt < gateSince()) return [];
   if (!readStoredFlow(p.root)) return [];
   const flow = readFlow(p.root).flow, names = new Map(flow.roster.map((r) => [r.id, r.name]));
@@ -428,15 +589,38 @@ export function seatMayFly(p: Plan): { ok: true } | { ok: false; error: string }
  * branch still on its starting commit has landed nothing, though git calls it
  * an ancestor of main.
  */
-export function landed(p: Plan, base: string): boolean {
+export async function landed(p: PlanHead, base: string, refs?: RefShas | null): Promise<boolean> {
   const l = p.launched;
   if (!l?.branch) return true;
-  const tip = git(p.root, ["rev-parse", "--verify", "--quiet", `refs/heads/${l.branch}`]);
-  if (tip.code !== 0) return true;
-  return tip.stdout.trim() !== l.from && git(p.root, ["merge-base", "--is-ancestor", `refs/heads/${l.branch}`, base]).code === 0;
+  const r = refs === undefined ? await refShas(p.root) : refs;
+  if (!r) {
+    const tip = await gitAsync(p.root, ["rev-parse", "--verify", "--quiet", `refs/heads/${l.branch}`]);
+    if (tip.code !== 0) return true;
+    return tip.stdout.trim() !== l.from && (await gitAsync(p.root, ["merge-base", "--is-ancestor", `refs/heads/${l.branch}`, base])).code === 0;
+  }
+  const tip = r.get(`refs/heads/${l.branch}`);
+  if (!tip) return true;
+  if (tip === l.from) return false;
+  const baseSha = shaOf(r, base);
+  return baseSha ? isAncestor(p.root, tip, baseSha) : (await gitAsync(p.root, ["merge-base", "--is-ancestor", `refs/heads/${l.branch}`, base])).code === 0;
 }
-/** The builders of a project still in the air: launched, and not landed. */
-export const flying = (root: string, base: string): Plan[] => listPlans({ root, state: "launched" }).filter((p) => !landed(p, base));
+/** The full sha of a commit when the base branch holds it, else null. A word that is not a hex sha is refused before git sees it, so it cannot pass as an option. */
+export async function commitInBase(root: string, sha: string, base: string): Promise<string | null> {
+  if (!/^[0-9a-f]{7,40}$/i.test(sha)) return null;
+  const full = await gitAsync(root, ["rev-parse", "--verify", "--quiet", `${sha}^{commit}`]);
+  if (full.code !== 0) return null;
+  const id = full.stdout.trim();
+  return (await gitAsync(root, ["merge-base", "--is-ancestor", id, base])).code === 0 ? id : null;
+}
+/** The builders of a project still in the air: launched, and not landed. One ref read for all of them. */
+export async function flying(root: string, base: string, refs?: RefShas | null): Promise<Plan[]> {
+  const plans = listPlans({ root, state: "launched" });
+  if (!plans.length) return [];
+  const r = refs === undefined ? await refShas(root) : refs;
+  const done = await Promise.all(plans.map((p) => landed(p, base, r)));
+  return plans.filter((_, i) => !done[i]);
+}
+
 /** A builder is at work while its tab has a live pane. A launched plan whose tab is gone is paused: it holds no slot and costs nothing. */
 export const builderLive = (panes: readonly { dead?: boolean }[] | null): boolean => !!panes?.some((x) => !x.dead);
 
@@ -446,6 +630,11 @@ export function workerPhase(name: string | null | undefined, rows: readonly { na
   if (!name) return null;
   const row = rows.find((r) => r.name === name);
   return row ? (row.endedAt === null ? "working" : "ended") : null;
+}
+
+/** Why Go or Launch must not start a builder: a plan at ready or Go whose linked worker still runs is built already. */
+export function alreadyBuilding(p: { state: string; worker: string | null }, phase: WorkerState | null): string | null {
+  return p.worker && phase === "working" && (p.state === "ready" || p.state === "go") ? `a worker is already building this plan: ${p.worker}` : null;
 }
 
 /** The windows of every tmux session as `allWindowTrees` lists them; null when tmux did not answer. */
@@ -540,8 +729,7 @@ export function builderVerdict(bound: string, cwd: string, tool: string, input: 
  * the plan and its Go record say so. The size is never excused.
  */
 export function reviewBlock(p: Plan): string | null {
-  if (p.size === "S" || !(getSetting(p.root, "flightPlan.preflight.reviews") as string[]).includes("plan")) return null;
-  if (p.size === "M" && getSetting(APP, "flightPlan.preflight.sizes") === "L") return null;
+  if (!sizesReviewed(p.size) || !(getSetting(p.root, "flightPlan.preflight.reviews") as string[]).includes("plan")) return null;
   const run = p.preflightRunId ? getRun(p.preflightRunId) : null;
   if (!run) return "this plan has not been reviewed yet: a Preflight has to finish on it before Go";
   if (run.state === "running" || run.state === "awaiting-go") return "the Preflight is still reading this plan: Go when it finishes";
@@ -552,13 +740,13 @@ export function reviewBlock(p: Plan): string | null {
 }
 
 /** Paths a builder changed, between the commit it was cut from and its branch now. Empty when git cannot say. */
-export function builderDiff(p: Plan): string[] {
+export async function builderDiff(p: Plan): Promise<string[]> {
   const l = p.launched;
   if (!l?.branch || !l.from) return [];
-  const r = git(p.root, ["diff", "--name-only", `${l.from}..refs/heads/${l.branch}`]);
+  const r = await gitAsync(p.root, ["diff", "--name-only", `${l.from}..refs/heads/${l.branch}`]);
   return r.code === 0 ? r.stdout.split("\n").filter(Boolean) : [];
 }
 /** The first sensitive path in the builder's real diff, or null: what stops Integrate with `sensitive-diff`. */
-export function sensitiveDiff(p: Plan): string | null {
-  return builderDiff(p).find(sensitivePath) ?? null;
+export async function sensitiveDiff(p: Plan): Promise<string | null> {
+  return (await builderDiff(p)).find(sensitivePath) ?? null;
 }

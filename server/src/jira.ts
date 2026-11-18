@@ -50,7 +50,12 @@ import { cardExtras } from "./jirafields.ts";
 import { webLinksOf } from "./jiraCardRead.ts";
 import { facetsOf, judgeStale, noteSeen, type Facet } from "./cardStamp.ts";
 import type { CardWebLink } from "../../shared/providers.ts";
-import { clearCredential, redacted, secretFor, storeCredential } from "./credentials.ts";
+import { clearCredential, storeCredential } from "./credentials.ts";
+import { jiraAccount, jiraSecret, jiraNotes } from "./jiraAccount.ts";
+
+// Every credential read below is for the account in force (the default when no repo named one).
+const secretFor = (_id: "jira"): string | null => jiraSecret();
+const redacted = (_id: "jira") => jiraNotes();
 import { reasonOf } from "./keyring.ts";
 import type { CallResult, WriteOutcome } from "./trackerTypes.ts";
 import { prAddress } from "../../shared/taskref.ts";
@@ -201,17 +206,26 @@ export function storedCreds(): JiraCreds | null {
   return { site: r.site, token, auth, email: r.email, api: r.api, cloudId: r.cloudId };
 }
 
-let holdUntil = 0;
-let holdSentence = "";
-/** What the last response said was left in the quota. Recorded, never acted on:
- *  which bucket it counts for token traffic is not known, and a response that
- *  lacks the header says nothing about the quota. */
-let lastRemaining: number | null = null;
-export const rateNote = (): { remaining: number | null; holdUntil: number } => ({ remaining: lastRemaining, holdUntil });
-
-/** The stored credential was refused on its last use. Cleared by the next success. */
-let refused = false;
-export const jiraRefused = (): boolean => refused;
+/**
+ * What the last calls found out about one account's token: a hold after a 429, the quota
+ * left, and whether the credential was refused. One per account, because a 401 or a 429
+ * on the named account says nothing about the default's token or its quota.
+ *  - `lastRemaining`: what the last response said was left in the quota. Recorded, never
+ *    acted on: which bucket it counts for token traffic is not known, and a response that
+ *    lacks the header says nothing about the quota.
+ *  - `refused`: the stored credential was refused on its last use. Cleared by the next success.
+ */
+type Health = { holdUntil: number; holdSentence: string; lastRemaining: number | null; refused: boolean };
+const health = new Map<string, Health>();
+/** The account in force (the default's is ""). Created on first use. */
+function healthOf(): Health {
+  const key = jiraAccount() ?? "";
+  let h = health.get(key);
+  if (!h) { h = { holdUntil: 0, holdSentence: "", lastRemaining: null, refused: false }; health.set(key, h); }
+  return h;
+}
+export const rateNote = (): { remaining: number | null; holdUntil: number } => { const h = healthOf(); return { remaining: h.lastRemaining, holdUntil: h.holdUntil }; };
+export const jiraRefused = (): boolean => healthOf().refused;
 
 let generation = 0;
 /** Bumps whenever everything remembered is forgotten; a held answer from before it is stale. */
@@ -220,16 +234,14 @@ const flying = new Map<string, Promise<JiraResult<unknown>>>();
 const memo = new Map<string, { at: number; r: CallResult<any> }>();
 
 /** Everything remembered about the connection: after a disconnect, or a new base. */
-export function forgetJira(): void {
+export function forgetJira(only?: string): void {
   generation++;
   flying.clear();
   memo.clear();
   misses.clear();
   mineHeld.clear();
-  holdUntil = 0;
-  holdSentence = "";
-  lastRemaining = null;
-  refused = false;
+  // One account's disconnect leaves the others' health alone; with no key everything is forgotten.
+  if (only === undefined) health.clear(); else health.delete(only);
 }
 
 /** A key part for a credential that is not the credential. */
@@ -259,6 +271,16 @@ export interface CallOpts {
   fresh?: boolean;
   /** A file to attach, sent as multipart. The anti-forgery header the site asks for rides with it. */
   form?: FormData;
+  /** The caller's own abort, for a read it may walk away from: it stops the request and keeps the answer from setting the app-wide hold. */
+  signal?: AbortSignal;
+  /** An empty 2xx body is "no data" (ok, `data` undefined). Only the space-tree reads accept that; every other caller gets the unreadable sentence. */
+  emptyOk?: boolean;
+}
+
+/** "Jira answered something that is not JSON": which call, the status and the content type. The body is never quoted: a login wall or proxy page can carry an email, an account id or a session. */
+export function unreadableSentence(method: string, pathname: string, status: number, type: string | null): string {
+  const kind = (type ?? "").split(";")[0]!.replace(/[^\w.+/-]/g, "").slice(0, 60) || "no content-type";
+  return `Jira answered something that is not JSON (${method} ${pathname.split("?")[0]}: ${status}, ${kind})`;
 }
 
 /**
@@ -269,8 +291,10 @@ export interface CallOpts {
  */
 export function jiraCall<T>(creds: JiraCreds, pathname: string, o: CallOpts = {}): Promise<JiraResult<T>> {
   const method = o.method ?? "GET";
-  // Only a read is merged: two identical writes are two writes.
-  if (method !== "GET" || o.fresh) return callOnce<T>(creds, pathname, o);
+  // Only a read is merged: two identical writes are two writes. A read carrying
+  // the caller's own abort is not merged either: aborting it would abort another
+  // caller's read of the same path.
+  if (method !== "GET" || o.fresh || o.signal) return callOnce<T>(creds, pathname, o);
   const key = `${baseOverride ?? ""}|${fingerprintOf(creds)}|${pathname}|${o.optional ? 1 : 0}`;
   const held = flying.get(key);
   if (held) return held as Promise<JiraResult<T>>;
@@ -290,7 +314,8 @@ async function callOnce<T>(creds: JiraCreds, pathname: string, o: CallOpts): Pro
   const method = o.method ?? "GET";
   const site = parseSite(creds.site);
   if (!site.ok) return { ok: false, error: site.error };
-  if (o.optional && Date.now() < holdUntil) return { ok: false, throttled: true, error: holdSentence };
+  const h = healthOf();
+  if (o.optional && Date.now() < h.holdUntil) return { ok: false, throttled: true, error: h.holdSentence };
 
   const origin = baseOverride ?? (creds.cloudId ? gatewayOrigin(creds.cloudId) : `https://${site.site}`);
   const url = `${origin}${pathname}`;
@@ -304,12 +329,13 @@ async function callOnce<T>(creds: JiraCreds, pathname: string, o: CallOpts): Pro
   // The boundary in a multipart type is the fetch's to write, so no content type here; the site refuses an upload without the header.
   if (o.form) headers["X-Atlassian-Token"] = "no-check";
   const body = o.form ?? (o.body === undefined ? undefined : JSON.stringify(o.body));
-  const stored = secretFor("jira") === creds.token;
+  const stored = jiraSecret() === creds.token;
 
   const ctl = new AbortController();
   const kill = setTimeout(() => ctl.abort(), o.timeoutMs ?? TIMEOUT_MS);
+  const signal = o.signal ? AbortSignal.any([ctl.signal, o.signal]) : ctl.signal;
   const attempt = async (): Promise<{ res: Response } | { error: string }> => {
-    const init: RequestInit = { method, headers, body, signal: ctl.signal };
+    const init: RequestInit = { method, headers, body, signal };
     if (baseOverride) return { res: await fetch(url, { ...init, redirect: "manual" }) };
     // The same host and port, over https, on every hop: a redirect to another
     // tenant (or any other host) would carry this person's credentials there.
@@ -336,9 +362,13 @@ async function callOnce<T>(creds: JiraCreds, pathname: string, o: CallOpts): Pro
       // Reflected into a sentence, so only the shape Jira documents.
       const reason = reasonRaw && /^[a-z][a-z-]{0,39}$/.test(reasonRaw) ? reasonRaw : null;
       const sentence = limitSentence(reason, secs, pathname);
-      holdUntil = Date.now() + secs * 1000;
-      holdSentence = sentence;
       void res.body?.cancel();
+      /* A read the caller may walk away from neither waits nor publishes the
+         app-wide hold: the hold answers the person's own reads, and a card read
+         a start has abandoned must not make one. */
+      if (o.signal) return { ok: false, throttled: true, error: sentence };
+      h.holdUntil = Date.now() + secs * 1000;
+      h.holdSentence = sentence;
       // One retry for a read that was told to wait a moment. Never for a write:
       // the first one may have landed, and a second is a second comment.
       if (method !== "GET" || wait === null || wait > RETRY_MAX_S) return { ok: false, throttled: true, error: sentence };
@@ -347,14 +377,14 @@ async function callOnce<T>(creds: JiraCreds, pathname: string, o: CallOpts): Pro
       if ("error" in sent) return { ok: false, error: `Not contacting that address: ${sent.error}` };
       res = sent.res;
       if (res.status === 429) { void res.body?.cancel(); return { ok: false, throttled: true, error: sentence }; }
-      holdUntil = 0;
+      h.holdUntil = 0;
     }
     const remaining = res.headers.get("x-ratelimit-remaining");
-    if (remaining !== null && /^\d{1,9}$/.test(remaining.trim())) lastRemaining = Number(remaining);
+    if (remaining !== null && /^\d{1,9}$/.test(remaining.trim())) h.lastRemaining = Number(remaining);
 
     if (res.status === 401) {
       void res.body?.cancel();
-      if (stored) refused = true;
+      if (stored) h.refused = true;
       return { status: res.status, ok: false, unauthorised: true, error: JIRA_REFUSED };
     }
     if (res.status === 403) { void res.body?.cancel(); return { status: res.status, ok: false, error: "Your Jira account cannot do that" }; }
@@ -365,12 +395,16 @@ async function callOnce<T>(creds: JiraCreds, pathname: string, o: CallOpts): Pro
     if (res.status >= 300 && res.status < 400) { void res.body?.cancel(); return { status: res.status, ok: false, error: "Jira redirected the request" }; }
     if (res.status >= 500) { void res.body?.cancel(); return { status: res.status, ok: false, error: "Could not reach Jira" }; }
     if (!res.ok) { void res.body?.cancel(); return { status: res.status, ok: false, error: `Jira answered ${res.status}` }; }
-    if (stored) refused = false;
+    if (stored) h.refused = false;
     if (res.status === 204) return { ok: true };
+    // Text first: an empty 2xx body is "no data", and a body that is not JSON is named (call, status, type, start) so a report says why.
+    let text: string;
+    try { text = await res.text(); } catch { return { ok: false, error: "Could not reach Jira" }; }
+    if (!text.trim()) return o.emptyOk ? { status: res.status, ok: true } : { status: res.status, ok: false, error: unreadableSentence(method, pathname, res.status, res.headers.get("content-type")) };
     try {
-      return { ok: true, data: (await res.json()) as T };
+      return { ok: true, data: JSON.parse(text) as T };
     } catch {
-      return { ok: false, error: "Jira answered with something unreadable" };
+      return { status: res.status, ok: false, error: unreadableSentence(method, pathname, res.status, res.headers.get("content-type")) };
     }
   } catch (e) {
     const aborted = (e as { name?: string })?.name === "AbortError";
@@ -444,6 +478,9 @@ export function memoHas(creds: JiraCreds, key: string): boolean {
   const miss = misses.get(k);
   return !!miss && Date.now() - miss.at < MISS_TTL_MS;
 }
+
+/** Drop a remembered failure, so the next ask goes to Jira: for a failure that was not Jira's answer about the thing (a timeout, a 5xx). */
+export function forgetMiss(creds: JiraCreds, key: string): void { misses.delete(memoKey(creds, key)); }
 
 /**
  * Answers that hold still, asked once per ten minutes. A success is kept. A
@@ -660,6 +697,38 @@ export function siteFields(creds: JiraCreds): Promise<JiraResult<JiraFieldIds>> 
   }, true);
 }
 
+/** A custom field a step may set, as the picker offers it: by name, with the kind of value it takes. */
+export interface JiraCustomField { name: string; type: "text" | "number" | "date" | "select" }
+
+/**
+ * The site's custom fields a step can set, by name, read from `GET /field` (the
+ * same answer `siteFields` uses, under its own key). Only kinds whose value is
+ * something a person types are offered: a select is typed by the name of its
+ * option, because the options belong to the card's edit screen, not the site's
+ * field list. A field whose kind is not here is left out rather than offered
+ * and refused later.
+ */
+export function customFields(creds: JiraCreds): Promise<JiraResult<JiraCustomField[]>> {
+  return memoOk<JiraCustomField[]>(creds, "custom-fields", async () => {
+    const r = await jiraCall<unknown>(creds, `/rest/api/${apiOf(creds)}/field`);
+    if (!r.ok) return { ...r, data: undefined };
+    const rows = (Array.isArray(r.data) ? r.data : []).filter(isObj).filter((f) => CUSTOM_ID.test(str(f.id)));
+    const out: JiraCustomField[] = [];
+    for (const f of rows) {
+      const name = str(f.name);
+      const schema = isObj(f.schema) ? f.schema : {};
+      const type = str(schema.type);
+      const custom = str(schema.custom);
+      const kind = type === "number" ? "number" : type === "date" ? "date" : type === "string" ? "text"
+        : type === "option" || (type === "array" && str(schema.items) === "option") ? "select" : null;
+      if (!name || !kind || !custom) continue;
+      if (!out.some((x) => x.name.trim().toLowerCase() === name.trim().toLowerCase())) out.push({ name, type: kind });
+    }
+    return { ok: true, data: out.sort((a, b) => a.name.localeCompare(b.name)) };
+  });
+}
+export const customFieldsStored = (): Promise<JiraResult<JiraCustomField[]>> => withStored(customFields);
+
 /** Site priorities, most urgent first. */
 export interface JiraPriorities { ids: string[]; names: string[] }
 
@@ -773,7 +842,8 @@ export function toTask(issue: unknown, cx: TaskContext, arrival?: number): Provi
     people: who && whoId
       ? [{ key: whoId, name: whoName, initials: initialsOf(whoName), ...(avatars.startsWith("https://") ? { avatar: avatars } : {}), ...(cx.me && cx.me === whoId ? { me: true } : {}) }]
       : [],
-    mine: !!(cx.me && whoId && cx.me === whoId),
+    /* Left out when the account is not known (a connection made before its id was kept): "not yours" and "do not know" are different answers, and a tile that read the second as the first took the buttons off the person's own cards. */
+    ...(cx.me ? { mine: !!(whoId && cx.me === whoId) } : {}),
   };
   if (created) task.created = created;
   if (isObj(f.issuetype) && str(f.issuetype.name)) task.issueType = str(f.issuetype.name);
@@ -793,7 +863,7 @@ export const taskContext = async (creds: JiraCreds): Promise<TaskContext> => {
 export async function readIssue(creds: JiraCreds, ref: string, o: { fresh?: boolean } = {}): Promise<JiraResult<ProviderTask>> {
   if (!/^(?:\d{1,19}|[A-Za-z][A-Za-z0-9_]*-\d+)$/.test(ref)) return { ok: false, error: "That is not a Jira card id" };
   const [r, cx] = await Promise.all([
-    jiraCall<unknown>(creds, `/rest/api/${apiOf(creds)}/issue/${encodeURIComponent(ref)}?fields=${CARD_FIELDS.join(",")}`, { fresh: o.fresh }),
+    jiraCall<unknown>(creds, `/rest/api/${apiOf(creds)}/issue/${encodeURIComponent(ref)}?fields=${[...CARD_FIELDS, "parent"].join(",")}`, { fresh: o.fresh }),
     taskContext(creds),
   ]);
   if (!r.ok) return { ...r, data: undefined };
@@ -869,12 +939,16 @@ export interface SeenStatus { id: string; name: string; category: string; color:
 export interface JiraTasks {
   tasks: ProviderTask[];
   truncated: boolean;
+  /** Only the backlog page was cut: the sprint read itself is whole. */
+  backlogCut?: boolean;
+  /** How many cards the site says match, when a capped search stopped short of them all (an estimate on Cloud). */
+  matching?: number;
   /** Only a board read (`o.board`) fills it: the statuses the cards wore, in the order first met. */
   seen?: SeenStatus[];
 }
 
 /** What a view read asks for beyond a card list. `points` is the field the board counts in, when it names one. */
-export interface BoardAsk { points?: string }
+export interface BoardAsk { points?: string; /** Ask for each sub-task's epic (one batched search): only a board read that lacks it; an epic view or a known parent's sub-tasks already know it. */ subEpics?: boolean }
 
 /**
  * The only caller of the search endpoints. It refuses a query that is not
@@ -882,7 +956,7 @@ export interface BoardAsk { points?: string }
  * cap cut the list short. A page that fails is the answer: a search that lost
  * its second page never reads as a short list.
  */
-export async function searchJql(creds: JiraCreds, jql: string, o: { pages?: number; optional?: boolean; light?: boolean; board?: BoardAsk } = {}): Promise<JiraResult<JiraTasks>> {
+export async function searchJql(creds: JiraCreds, jql: string, o: { pages?: number; optional?: boolean; light?: boolean; board?: BoardAsk; signal?: AbortSignal } = {}): Promise<JiraResult<JiraTasks>> {
   if (!boundedJql(jql)) return { ok: false, error: "Refusing to search Jira without a restriction" };
   const pages = Math.max(1, o.pages ?? SEARCH_PAGES);
   // `light`: a caller that never shows a priority does not pay for the list.
@@ -921,14 +995,19 @@ export async function searchJql(creds: JiraCreds, jql: string, o: { pages?: numb
       }
     }
   };
-  const done = (truncated: boolean): JiraResult<JiraTasks> => ({ ok: true, data: { tasks, truncated, ...(o.board ? { seen: [...seen.values()] } : null) } });
+  const done = async (truncated: boolean): Promise<JiraResult<JiraTasks>> => {
+    if (o.board?.subEpics) await epicsOfSubtasks(creds, tasks, o.signal);
+    return doneNow(truncated);
+  };
+  const doneNow = (truncated: boolean): JiraResult<JiraTasks> => ({ ok: true, data: { tasks, truncated, ...(o.board ? { seen: [...seen.values()] } : null) } });
 
   if (apiOf(creds) === 2) {
     // Data Center: `startAt`. A short page, or an empty one, is the last.
     let start = 0;
     for (let page = 0; page < pages; page++) {
+      if (o.signal?.aborted) return { ok: false, error: "Cancelled" };
       const r = await jiraCall<{ issues?: unknown[]; maxResults?: number }>(creds, "/rest/api/2/search",
-        { method: "POST", optional: o.optional, body: { jql, fields, maxResults: SEARCH_PAGE, startAt: start } });
+        { method: "POST", optional: o.optional, signal: o.signal, body: { jql, fields, maxResults: SEARCH_PAGE, startAt: start } });
       if (!r.ok) return { ...r, data: undefined };
       const issues = Array.isArray(r.data?.issues) ? r.data!.issues! : [];
       await keep(issues);
@@ -943,8 +1022,9 @@ export async function searchJql(creds: JiraCreds, jql: string, o: { pages?: numb
   // Cloud: `nextPageToken` until `isLast`.
   let token: string | undefined;
   for (let page = 0; page < pages; page++) {
+    if (o.signal?.aborted) return { ok: false, error: "Cancelled" };
     const r = await jiraCall<{ issues?: unknown[]; isLast?: boolean; nextPageToken?: string }>(creds, "/rest/api/3/search/jql",
-      { method: "POST", optional: o.optional, body: { jql, fields, maxResults: SEARCH_PAGE, ...(token ? { nextPageToken: token } : {}) } });
+      { method: "POST", optional: o.optional, signal: o.signal, body: { jql, fields, maxResults: SEARCH_PAGE, ...(token ? { nextPageToken: token } : {}) } });
     if (!r.ok) return { ...r, data: undefined };
     await keep(r.data?.issues);
     token = typeof r.data?.nextPageToken === "string" && r.data.nextPageToken ? r.data.nextPageToken : undefined;
@@ -953,8 +1033,55 @@ export async function searchJql(creds: JiraCreds, jql: string, o: { pages?: numb
   return done(true);
 }
 
-/** What is on you and not done, newest change first. Bounded by the assignee. */
-export const MINE_JQL = "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC";
+/**
+ * A sub-task's epic is its parent's parent, which Jira does not send with the sub-task. The parent's own row is used when it is
+ * in the same read; the rest are asked in one batched search by key (50 a request, never one per card). A failed ask leaves
+ * the sub-tasks without an epic, never fails the board.
+ */
+async function epicsOfSubtasks(creds: JiraCreds, tasks: ProviderTask[], signal?: AbortSignal): Promise<void> {
+  const byKey = new Map(tasks.flatMap((t) => (t.customId ? [[t.customId, t] as const] : [])));
+  const ask = new Set<string>();
+  for (const t of tasks) {
+    if (!t.parent || !/^sub-?task$/i.test((t.issueType ?? "").replace(/\s+/g, ""))) continue;
+    const home = byKey.get(t.parent.key);
+    if (home?.parent) t.epic = { key: home.parent.key, title: home.parent.title };
+    else if (!home) ask.add(t.parent.key);
+  }
+  const keys = [...ask].filter((k) => /^[A-Z][A-Z0-9_]*-\d+$/i.test(k));
+  const found = new Map<string, { key: string; title: string }>();
+  for (let i = 0; i < keys.length; i += SEARCH_PAGE) {
+    const jql = `key in (${keys.slice(i, i + SEARCH_PAGE).join(",")}) ORDER BY key ASC`;
+    const body = { jql, fields: ["summary", "parent"], maxResults: SEARCH_PAGE };
+    const r = await jiraCall<{ issues?: unknown[] }>(creds, apiOf(creds) === 2 ? "/rest/api/2/search" : "/rest/api/3/search/jql", { method: "POST", optional: true, signal, body });
+    if (!r.ok) return;
+    for (const x of Array.isArray(r.data?.issues) ? r.data!.issues! : []) {
+      if (!isObj(x) || !isObj(x.fields) || !isObj(x.fields.parent) || !str(x.fields.parent.key)) continue;
+      const pf = isObj(x.fields.parent.fields) ? x.fields.parent.fields : {};
+      found.set(str(x.key), { key: str(x.fields.parent.key), title: str(pf.summary) });
+    }
+  }
+  for (const t of tasks) if (t.parent && !t.epic && found.has(t.parent.key)) t.epic = found.get(t.parent.key)!;
+}
+
+/**
+ * A parent's sub-tasks as the board's own rows, for the chevron a list opens under a card: one bounded search, one page of
+ * 50, so a parent is one search whatever it holds (beside the site's own fields and priorities, kept ten minutes as the
+ * board keeps them). The fields are a board's, so a child carries who, the due date, the points and its own parent like any
+ * row. Its parent is the card above it, never the epic: the epic is that card's.
+ */
+export async function childCards(creds: JiraCreds, key: string): Promise<JiraResult<JiraTasks>> {
+  if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
+  return searchJql(creds, `parent = ${key.toUpperCase()} ORDER BY rank ASC`, { board: {}, pages: 1 });
+}
+
+export const childCardsStored = (key: string): Promise<JiraResult<JiraTasks>> => withStored((c) => childCards(c, key));
+
+/**
+ * What is on you, newest change first. `resolution = Unresolved` is Jira's own "Assigned to me":
+ * a card can sit in a Done-CATEGORY status (In staging, Ready for deployment) and still be
+ * unresolved, so `statusCategory != Done` undercounts against the site's own filter.
+ */
+export const MINE_JQL = "assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC";
 
 /**
  * The Tasks tab asks for this on every visit and every return to the window, so
@@ -1015,8 +1142,10 @@ export async function searchText(creds: JiraCreds, q: string): Promise<JiraResul
 export const NOT_CONNECTED = "Jira is not connected";
 export async function withStored<T>(run: (c: JiraCreds) => Promise<JiraResult<T>>): Promise<JiraResult<T>> {
   const c = storedCreds();
-  return c ? run(c) : { ok: false, error: NOT_CONNECTED };
+  return c ? run(c) : { ok: false, error: jiraNotConnected() };
 }
+/** The sentence for no token: it names a named account, and is the plain line for the default. */
+export const jiraNotConnected = (): string => { const a = jiraAccount(); return a ? `The Jira account "${a}" is not connected` : NOT_CONNECTED; };
 
 // ---------------------------------------------------------------------------
 // connect, status, disconnect
@@ -1053,7 +1182,7 @@ export interface JiraConnectInput { email?: unknown; site?: unknown; token?: unk
  * access token alone). Left out, it is `basic` when an email was given and
  * `bearer` when not. Jira Cloud only signs in with `basic`.
  */
-export async function connectJira(input: JiraConnectInput): Promise<JiraConnectResult> {
+export async function connectJira(input: JiraConnectInput, accountKey?: string): Promise<JiraConnectResult> {
   const email = typeof input.email === "string" ? input.email.trim() : "";
   const token = typeof input.token === "string" ? input.token.trim() : "";
   const site = parseSite(input.site);
@@ -1086,14 +1215,14 @@ export async function connectJira(input: JiraConnectInput): Promise<JiraConnectR
     await storeCredential("jira", {
       token, email: creds.email, auth, site: site.site, api: server.data.api, deployment: server.data.deployment, cloudId: creds.cloudId,
       account: me.data.name, accountId: me.data.accountId, verifiedAt: Date.now(),
-    });
+    }, accountKey);
   } catch (e) {
     return { ok: false, error: reasonOf(e) };
   }
   // A hold or a memo from the previous credential says nothing about this one.
   forgetJira();
-  // The rows cached by the previous account were read as that account.
-  forgetCached();
+  // The rows cached by the previous account were read as that account. A second account leaves the default's rows alone.
+  if (accountKey === undefined) forgetCached();
   return { ok: true, account: me.data.name };
 }
 
@@ -1120,11 +1249,13 @@ export async function jiraStatus(): Promise<JiraStatus> {
   };
 }
 
-export function disconnectJira(): void {
-  clearCredential("jira");
-  forgetJira();
+export function disconnectJira(accountKey?: string, o: { wasDefault?: boolean } = {}): void {
+  clearCredential("jira", accountKey);
+  // A named account takes only its own health with it; the default's disconnect forgets all of them.
+  forgetJira(o.wasDefault === false ? accountKey : undefined);
   // The last read of each view is the other person's data once the token is gone; the addresses are not.
-  forgetCached();
+  // Dropping a second account leaves the default's cached rows alone.
+  if (o.wasDefault !== false) forgetCached();
 }
 
 // ---------------------------------------------------------------------------
@@ -1494,8 +1625,17 @@ export function toPerson(u: unknown, v: 2 | 3): JiraPerson | null {
   const key = v === 3 ? str(u.accountId) : str(u.name);
   if (!key || !PERSON_KEY.test(key)) return null;
   const avatar = isObj(u.avatarUrls) ? str(u.avatarUrls["48x48"]) : "";
-  return { key, id: personId(u), name: personName(u), ...(avatar.startsWith("https://") ? { avatar } : null) };
+  const email = str(u.emailAddress);
+  const kind = str(u.accountType);
+  return { key, id: personId(u), name: personName(u), ...(avatar.startsWith("https://") ? { avatar } : null), ...(email ? { email } : null), ...(kind ? { accountType: kind } : null) };
 }
+
+/**
+ * An account a person may be put on a card: an app or a customer portal account is
+ * not one. Cloud says which it is (`accountType`); Data Center sends no type at all,
+ * so a person there is kept rather than hidden.
+ */
+export const isPersonAccount = (p: Pick<JiraPerson, "accountType">): boolean => !p.accountType || p.accountType === "atlassian";
 
 /**
  * Who the card can be given to, matching what was typed.
@@ -1518,12 +1658,49 @@ export function assignable(creds: JiraCreds, key: string, query: string, transit
     const r = await jiraCall<unknown>(creds, `/rest/api/${v}/user/assignable/search?${params}`);
     if (!r.ok) return { ...r, data: undefined };
     const list = Array.isArray(r.data) ? r.data : [];
-    return { ok: true, data: list.map((u) => toPerson(u, v)).filter((p): p is JiraPerson => !!p) };
+    const mine = redacted("jira")?.accountId;
+    // An automation account is assignable in Jira and is not a person: the question does not offer it.
+    return { ok: true, data: list.map((u) => toPerson(u, v)).filter((p): p is JiraPerson => !!p && isPersonAccount(p)).map((p) => (mine && p.id === mine ? { ...p, me: true } : p)) };
   });
 }
 
 export const assignableStored = (key: string, query: string, transitionId = ""): Promise<JiraResult<JiraPerson[]>> =>
   withStored((c) => assignable(c, key, query, transitionId));
+
+const MEMBER_PAGE = 50;
+const MEMBER_PAGES = 20;
+
+/**
+ * Every person assignable to the project, not just those already holding a card: the Team row's own list.
+ * Pages the project's own assignable search (`project=`, not `issueKey=`) until a page comes back short.
+ * Asked once per project and kept with the other Jira answers (`memoOk`), so opening a board again, or a
+ * second board of the same project, costs no request.
+ */
+export function projectMembers(creds: JiraCreds, project: string): Promise<JiraResult<JiraPerson[]>> {
+  if (!projectKey(project)) return Promise.resolve({ ok: false, error: "That is not a Jira project key" });
+  const v = apiOf(creds);
+  return memoOk<JiraPerson[]>(creds, `members|${project}`, async () => {
+    const out: JiraPerson[] = [];
+    const seen = new Set<string>();
+    let start = 0;
+    for (let page = 0; page < MEMBER_PAGES; page++) {
+      const params = new URLSearchParams({ project, startAt: String(start), maxResults: String(MEMBER_PAGE) });
+      const r = await jiraCall<unknown>(creds, `/rest/api/${v}/user/assignable/search?${params}`);
+      if (!r.ok) return { ...r, data: undefined };
+      const list = Array.isArray(r.data) ? r.data : [];
+      for (const u of list) {
+        const p = toPerson(u, v);
+        if (p && isPersonAccount(p) && !seen.has(p.key)) { seen.add(p.key); out.push(p); }
+      }
+      start += list.length;
+      if (list.length < MEMBER_PAGE) break;
+    }
+    return { ok: true, data: out };
+  });
+}
+
+export const projectMembersStored = (project: string): Promise<JiraResult<JiraPerson[]>> =>
+  withStored((c) => projectMembers(c, project));
 
 export const assigneeBody = (creds: JiraCreds, who: string | null) => (apiOf(creds) === 3 ? { accountId: who } : { name: who });
 
@@ -1644,23 +1821,55 @@ export function setHandoffRule(project: unknown, rule: unknown): { ok: boolean; 
   return { ok: true, settings: jiraSettings() };
 }
 
-/** A project's statuses, for the settings row: one list across its issue types, by id. Remembered ten minutes. */
-export function projectStatuses(creds: JiraCreds, project: string): Promise<JiraResult<{ id: string; name: string; kind: "open" | "done" | "other" }[]>> {
+/** One status of a project's workflow, with the category it belongs to (`new`, `indeterminate`, `done`) and that category's colour name. */
+export interface WorkflowStatus { id: string; name: string; kind: "open" | "done" | "other"; category: string; color: string;
+  /** The issue types whose workflow has this status (Jira answers per type): lets a board drop a status only an absent type has. */
+  types?: string[];
+  /** The Jira hierarchy level of each of those types (1 epic, 0 standard, -1 sub-task): what a board's column set reads, never the cards loaded. */
+  levels?: number[] }
+
+/** Hierarchy level by issue type id, from the site's one issue types list (remembered; Data Center does not say, so absent there). */
+function issueTypeLevels(creds: JiraCreds): Promise<JiraResult<Record<string, number>>> {
+  return memoOk(creds, "issuetype-levels", async () => {
+    const r = await jiraCall<unknown>(creds, `/rest/api/${apiOf(creds)}/issuetype`);
+    if (!r.ok) return { ...r, data: undefined };
+    const out: Record<string, number> = {};
+    for (const t of Array.isArray(r.data) ? r.data : []) if (isObj(t) && typeof t.hierarchyLevel === "number") out[idText(t.id)] = t.hierarchyLevel;
+    return { ok: true, data: out };
+  }, true);
+}
+
+/**
+ * THE statuses of a project's workflow: one list across its issue types, by id, in the order Jira lists them, from the
+ * same endpoint the card's own status menu reads. The board's columns, the hand-off row and the PR rules' "Card status
+ * is" all ask here, so there is no second list to drift from it. Remembered ten minutes; a project that refuses the read
+ * (403/404) is an error, remembered two minutes, and only the board turns it into no statuses.
+ */
+export function projectStatuses(creds: JiraCreds, project: string): Promise<JiraResult<WorkflowStatus[]>> {
   if (!projectKey(project)) return Promise.resolve({ ok: false, error: "That is not a Jira project key" });
   return memoOk(creds, `statuses|${project}`, async () => {
     const r = await jiraCall<unknown>(creds, `/rest/api/${apiOf(creds)}/project/${encodeURIComponent(project)}/statuses`);
+    // The error stays: the hand-off row says why. Only the board turns it into an empty list.
     if (!r.ok) return { ...r, data: undefined };
-    const seen = new Map<string, { id: string; name: string; kind: "open" | "done" | "other" }>();
+    const seen = new Map<string, WorkflowStatus>();
+    const byId = (await issueTypeLevels(creds)).data ?? {};
     for (const type of Array.isArray(r.data) ? r.data : []) {
+      // Jira's own level; without it a sub-task is -1, an Epic 1, the rest 0.
+      const level = !isObj(type) ? 0 : byId[idText(type.id)] ?? (type.subtask === true ? -1 : str(type.name).toLowerCase() === "epic" ? 1 : 0);
       for (const s of isObj(type) && Array.isArray(type.statuses) ? type.statuses : []) {
         const id = isObj(s) ? idText(s.id) : "";
         if (!id || !str(s.name)) continue;
-        const cat = isObj(s.statusCategory) ? str(s.statusCategory.key) : "";
-        seen.set(id, { id, name: str(s.name), kind: cat === "done" ? "done" : cat === "new" || cat === "indeterminate" ? "open" : "other" });
+        const cat = isObj(s.statusCategory) ? s.statusCategory : {};
+        const key = str(cat.key);
+        const tname = isObj(type) ? str(type.name) : "";
+        const had = seen.get(id);
+        const types = [...(had?.types ?? []), ...(tname && !had?.types?.includes(tname) ? [tname] : [])];
+        const levels = [...(had?.levels ?? []), level];
+        seen.set(id, { id, name: str(s.name), kind: key === "done" ? "done" : key === "new" || key === "indeterminate" ? "open" : "other", category: key, color: str(cat.colorName), ...(types.length ? { types } : {}), levels });
       }
     }
     return { ok: true, data: [...seen.values()] };
-  });
+  }, true);
 }
 
 export const projectStatusesStored = (project: string) => withStored((c) => projectStatuses(c, project));

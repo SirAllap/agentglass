@@ -40,9 +40,13 @@ const named = /^(\d+):(\d+)$/.exec(process.env.AGENTGLASS_DESK_FD?.trim() ?? "")
 export const DESK_STARTED = !!named && Number(named[2]) === process.ppid;
 
 let key = "";
+/* The second line: Electron MAIN's own key (login vault, sensitive pulls).
+   Main never hands it to a window, so the renderer, a page or a plugin in it
+   cannot speak as main; see server/src/vaultAsk.ts. */
+let main = "";
 if (DESK_STARTED) {
   const fd = Number(named![1]);
-  try { key = readFileSync(fd, "utf8").trim(); } catch { /* an unreadable pipe is an empty one */ }
+  try { [key = "", main = ""] = readFileSync(fd, "utf8").split("\n").map((l) => l.trim()); } catch { /* an unreadable pipe is an empty one */ }
   try { closeSync(fd); } catch { /* already closed */ }
   if (!key) {
     console.error("[agentglass] the desktop app started this server and sent no key: a held call can be "
@@ -97,6 +101,9 @@ export const deskKey = (): string => key || claim?.key || "";
 
 /** Somebody holds this server's desk: the key, and not an Origin, lets a hold go. */
 export const deskHeld = (): boolean => DESK_STARTED || !!claim;
+
+/** Electron main's own key, or "" (an adopted server never has one). Never the renderer's. */
+export const mainKey = (): string => main;
 
 /** The header the desktop app's renderer carries it in. */
 export const DESK_HEADER = "x-agentglass-desk";

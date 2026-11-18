@@ -270,6 +270,13 @@ describe("comments", () => {
     expect(last().path).toBe("/comment/c1/reply");
   });
 
+  test("a reply is sent as ops, like a comment, so formatting and mentions survive", async () => {
+    await CU.replyToComment("c1", "**on it**");
+    const body = last().body as { comment: { text?: string; attributes?: Record<string, unknown> }[] };
+    expect(body).not.toHaveProperty("comment_text");
+    expect(body.comment[0]).toEqual({ text: "on it", attributes: { bold: true } });
+  });
+
   test("resolving and deleting are their own verbs", async () => {
     await CU.resolveComment("c1", true);
     expect(last()).toMatchObject({ method: "PUT", path: "/comment/c1", body: { resolved: true } });

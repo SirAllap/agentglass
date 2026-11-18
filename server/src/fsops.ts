@@ -34,6 +34,7 @@ import { browseReal } from "./browse.ts";
 import { diskRoots } from "./disk.ts";
 import { safeAbs } from "./git.ts";
 import { workspaceRoots } from "./config.ts";
+import { runChild } from "./broker/brokerRun.ts";
 
 export interface Fail { ok: false; error: string }
 type Ok<T> = { ok: true } & T;
@@ -413,6 +414,9 @@ export async function fsDelete(paths: unknown, confirm: unknown, local: boolean)
 /* ---- jobs: copy, move, duplicate, compress ----------------------------- */
 
 export interface JobView { id: string; kind: string; label: string; state: "running" | "done" | "error" | "cancelled"; total: number | null; done: number; items: number; error?: string; output?: string; started: number; ended?: number }
+/** A compress past this is ended: six hours, far past any real archive. */
+const COMPRESS_LIMIT_MS = 6 * 60 * 60_000;
+
 interface Job extends JobView { stop: boolean; proc?: { kill: () => void } }
 const jobs = new Map<string, Job>();
 let jobSeq = 0;
@@ -654,11 +658,10 @@ export async function fsCompress(paths: unknown, archive: unknown, format: unkno
   const job = newJob("compress", `Compressing ${names.length === 1 ? names[0] : plural(names.length, "item")}`, null);
   const run = (async () => {
     try {
-      const proc = Bun.spawn(argv, { cwd: dir, stdout: "ignore", stderr: "pipe" });
-      job.proc = proc;
-      const code = await proc.exited;
+      // Through the spawn broker: a fork of the server stalls every request for a second or two.
+      const r = await runChild(argv, { cwd: dir, timeoutMs: COMPRESS_LIMIT_MS, maxBytes: 256 * 1024, onKill: (kill) => { job.proc = { kill }; } });
       if (job.stop) throw new Cancelled();
-      if (code !== 0) throw new Error((await new Response(proc.stderr).text()).trim().split("\n").pop() || `${tool} failed`);
+      if (r.code !== 0) throw new Error(r.stderr.trim().split("\n").pop() || r.error || `${tool} failed`);
       await publish(tmp, join(dir, name), false);
       remember("create", `Undo compress to ${name}`, [{ to: join(dir, name) }]);
       job.state = "done";

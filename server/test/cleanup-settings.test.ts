@@ -70,6 +70,16 @@ describe("cleanup.mode, cleanup.autoCleanDays, cleanup.include", () => {
     expect(cleanupConfigOf(OTHER).include).toHaveLength(8);
   });
 
+  test("cleanup.orphanAutoRemove: off by default, an agent turning it on waits for the person, turning it off applies", async () => {
+    expect(get("cleanup.orphanAutoRemove").read(R)).toBe(false);
+    expect(get("cleanup.orphanAutoRemove").validate("yes", R)).toHaveProperty("error");
+    expect(agentVerdict("cleanup.orphanAutoRemove", false, true, false)).not.toBe("apply");
+    expect(agentVerdict("cleanup.orphanAutoRemove", true, false, false)).toBe("apply");
+    await get("cleanup.orphanAutoRemove").apply(true, R);
+    expect(cleanupConfigOf(R).orphanAutoRemove).toBe(true);
+    expect(cleanupConfigOf(OTHER).orphanAutoRemove).toBe(false);
+  });
+
   test("an agent may tighten at once and must wait for the person to loosen", () => {
     const v = (id: string, prev: unknown, next: unknown) => agentVerdict(id, prev, next, false);
     expect(v("cleanup.mode", "ask", "off")).toBe("apply");

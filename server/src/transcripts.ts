@@ -12,17 +12,22 @@
 // same offset is what makes the poll loop double as the live path: an active
 // session's transcript grows on disk, and we pick up the tail every tick.
 
-import { readdirSync, statSync, type Stats } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
+import { watch as fsWatch, closeSync, openSync, readSync, statSync, type Stats } from "node:fs";
+import { openWatcher, IN_MODIFY, IN_CREATE, IN_MOVED_TO, IN_DELETE_SELF, IN_MOVE_SELF, IN_Q_OVERFLOW, IN_IGNORED, type Watcher, type WatchEvent } from "./inotify";
 import { homedir } from "node:os";
 import { basename, delimiter, join } from "node:path";
 import type { IngestBody } from "../../shared/types.ts";
 import { normalize } from "./ingest.ts";
-import { entered, backoff, terminalHot } from "./loopwatch.ts";
+import { backoff, entered, resumedAs, setIntervalAs, setTimeoutAs, terminalHot, waitedFor } from "./loopwatch.ts";
 import { db, insertEvent, setSessionTitles, RETENTION_DAYS, dbClaimedElsewhere, dbPath, type InsertResult } from "./db.ts";
 // safeAbs: translates Windows drive paths, so a WSL-side transcript groups
 // under its own folder rather than collapsing onto the server's cwd.
+import { claudeAccountDirs } from "./claudeAccount.ts";
 import { projectRootOf, safeAbs } from "./git.ts";
-import { scopeKey, inScope } from "./config.ts";
+import { scopeKey, inScope, envLimit } from "./config.ts";
+import { judgeWatchEvent, NON_TRANSCRIPT_DIRS, planTick, takeNewest, DIRTY_CHUNK } from "./transcriptDirty.ts";
+import { batchFull, shouldYield } from "./transcriptSlice.ts";
 
 // One root by default; a path.delimiter-separated list (":" on POSIX, ";" on
 // Windows) sweeps several at once — e.g. a WSL home next to a Windows one.
@@ -37,15 +42,18 @@ import { scopeKey, inScope } from "./config.ts";
 function projectsDirs(): string[] {
   return [
     ...new Set(
-      (process.env.AGENTGLASS_PROJECTS_DIR || join(homedir(), ".claude", "projects"))
-        .split(delimiter)
+      (process.env.AGENTGLASS_PROJECTS_DIR
+        ? process.env.AGENTGLASS_PROJECTS_DIR.split(delimiter)
+        // Default: the CLI's own folder, plus the "projects" folder of each account a project picked.
+        : [join(homedir(), ".claude", "projects"), ...claudeAccountDirs().map((d) => join(d, "projects"))]
+      )
         .map((d) => d.trim())
         .filter(Boolean)
     ),
   ];
 }
 const POLL_MS = Math.max(500, Number(process.env.AGENTGLASS_SCAN_INTERVAL_MS || 3000));
-export const SCAN_ENABLED = process.env.AGENTGLASS_SCAN_DISABLED !== "1";
+export const SCAN_ENABLED = envLimit("AGENTGLASS_SCAN_DISABLED") !== "1";
 
 // --- keeping the sweep off the loop the PTY rides ----------------------------
 //
@@ -77,6 +85,13 @@ export const SCAN_ENABLED = process.env.AGENTGLASS_SCAN_DISABLED !== "1";
 // overrides them. It is a handful of env reads per file — nothing measurable.
 const batchLines = () => Math.max(1, Number(process.env.AGENTGLASS_SCAN_BATCH_LINES || 500));
 const batchBytes = () => Math.max(64 * 1024, Number(process.env.AGENTGLASS_SCAN_BATCH_BYTES || 1024 * 1024));
+/** Wall-clock cap on one batch (one transaction), on top of the line and byte
+ *  caps: 500 ordinary lines measured ~40 ms, and a cluster of heavy ones takes
+ *  longer under the same line count. ~15 ms keeps a commit under the 20 ms the
+ *  loop budget asks for. */
+const batchMs = () => Math.max(1, Number(process.env.AGENTGLASS_SCAN_BATCH_MS || 15));
+/** Between files, hand the loop back once the sweep has held it this long. */
+const fileSliceMs = () => Math.max(1, Number(process.env.AGENTGLASS_SCAN_SLICE_MS || 8));
 /**
  * A single line larger than this is not parsed on the loop.
  *
@@ -101,8 +116,11 @@ const YIELD_HOT_MS = 4;
  *  the next batch. setTimeout(0) is a macrotask: pending I/O callbacks fire
  *  first, which is precisely the terminal's bytes getting served. */
 function yieldLoop(hot: boolean): Promise<void> {
-  return new Promise((r) => setTimeout(r, hot ? YIELD_HOT_MS : 0));
+  // The label set here is gone by the time the awaiting code resumes: set it again from the promise chain.
+  return new Promise<void>((r) => setTimeout(r, hot ? YIELD_HOT_MS : 0)).then(() => resumedAs(SCAN_LABEL));
 }
+/** What a stall in a scan continuation (after an await) is called: the label does not survive an await by itself. */
+const SCAN_LABEL = "transcript scan";
 let oversizeLogged = 0;
 function noteOversize(path: string, bytes: number): void {
   // Log the first few, then stay quiet: a machine full of these would otherwise
@@ -126,6 +144,34 @@ CREATE TABLE IF NOT EXISTS transcript_files (
   mtime INTEGER NOT NULL DEFAULT 0
 );
 `);
+
+// Resume state for a restart: what a warm `Tail` holds, per transcript, so a boot
+// reads only the bytes appended since (see `loadResume`). Additive; a missing
+// or stale row only costs the old whole-file read.
+db.exec(`
+CREATE TABLE IF NOT EXISTS transcript_resume (
+  path TEXT PRIMARY KEY,
+  lines INTEGER NOT NULL,
+  bytes INTEGER NOT NULL,
+  ended_nl INTEGER NOT NULL,
+  state TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS transcript_refused (
+  path TEXT PRIMARY KEY,
+  scope TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  mtime REAL NOT NULL
+);
+`);
+// Additive columns on tables an older build already made: the file the resume row
+// came from (head hash, its length, mtime) and when a refusal was decided.
+for (const alter of [
+  "ALTER TABLE transcript_resume ADD COLUMN head TEXT",
+  "ALTER TABLE transcript_resume ADD COLUMN head_len INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE transcript_resume ADD COLUMN mtime REAL NOT NULL DEFAULT 0",
+  "ALTER TABLE transcript_resume ADD COLUMN tail_hash TEXT",
+  "ALTER TABLE transcript_refused ADD COLUMN at REAL",
+]) { try { db.exec(alter); } catch { /* column already there */ } }
 
 interface FileRow {
   path: string;
@@ -171,6 +217,65 @@ const putFileIfUnmoved = db.query(`
     mtime = excluded.mtime
   WHERE transcript_files.lines_done = $expect
 `);
+
+/**
+ * Forget progress rows for transcripts that are no longer on disk.
+ *
+ * Nothing else deletes from this table, and Claude Code removes old transcripts
+ * on its own schedule, so the rows for files that are gone pile up for ever:
+ * measured on a real database, 5320 of 8697 rows named a file that no longer
+ * existed. A row is dropped only when all of these hold:
+ *  - its mtime is older than `cut` (the events it fed are past retention),
+ *  - stat says ENOENT (any other error, such as EACCES, keeps the row),
+ *  - the file was also missing the last time this row was checked, so a folder
+ *    that is away for one pass (an unmounted disk, a moved checkout) and then
+ *    back is not read again from line 0. Scanner events have no dedupe key
+ *    (`event_id: null`), so a re-read counts every event, token and cost twice,
+ *  - another row of the same source_app has a project_path, so knownProjects()
+ *    and the project picker seeded from this table at boot still list that
+ *    project.
+ * With retention 0 (keep forever) nothing is dropped: the scanner has no age
+ * limit then, so any old file that comes back is re-read.
+ * One slice of `limit` rows per call, keyed on path with a cursor that wraps, so
+ * an hourly call stats a bounded number of files however big the table is.
+ */
+let goneCursor = "";
+/** Paths found missing at their last check, waiting for a second miss. */
+const missingOnce = new Set<string>();
+/** Paths looked at since the cursor last wrapped: a mark not seen in a whole lap is for a row that left the window. */
+let lapSeen = new Set<string>();
+export function pruneGoneTranscripts(days = RETENTION_DAYS, limit = 2000): number {
+  if (days === 0) return 0;
+  const cut = Date.now() - days * 86_400_000;
+  const rows = db
+    .query<{ path: string }, [number, string, number]>(
+      "SELECT path FROM transcript_files WHERE mtime < ? AND path > ? ORDER BY path LIMIT ?"
+    )
+    .all(cut, goneCursor, limit);
+  const wrapped = rows.length < limit;
+  goneCursor = wrapped ? "" : rows[rows.length - 1]!.path;
+  const gone: string[] = [];
+  for (const r of rows) {
+    lapSeen.add(r.path);
+    let missing = false;
+    try { statSync(r.path); } catch (e) { missing = (e as NodeJS.ErrnoException).code === "ENOENT"; }
+    if (!missing) missingOnce.delete(r.path);
+    else if (missingOnce.delete(r.path)) gone.push(r.path);
+    else missingOnce.add(r.path);
+  }
+  if (wrapped) {
+    for (const p of missingOnce) if (!lapSeen.has(p)) missingOnce.delete(p);
+    lapSeen = new Set();
+  }
+  if (!gone.length) return 0;
+  const del = db.query<never, [string]>(
+    `DELETE FROM transcript_files WHERE path = ?
+       AND EXISTS (SELECT 1 FROM transcript_files t2 WHERE t2.source_app = transcript_files.source_app
+                     AND t2.path != transcript_files.path AND t2.project_path != '')`
+  );
+  const delResumeRow = db.query<never, [string]>("DELETE FROM transcript_resume WHERE path = ?");
+  return db.transaction(() => gone.reduce((n, p) => { delResumeRow.run(p); forgetRefused(p); return n + del.run(p).changes; }, 0))();
+}
 
 /**
  * May this process sweep transcripts at all?
@@ -332,6 +437,23 @@ function isMetaPrompt(o: Record<string, unknown>, text: string): boolean {
   return META_PREFIXES.some((p) => t.startsWith(p));
 }
 
+/** True when the next non-empty line is the same assistant reply (same message.id) carrying a tool_use. */
+function repliesWithToolUse(o: Record<string, unknown>, lines: string[], next: number): boolean {
+  const id = str((o.message as Record<string, unknown> | undefined)?.id);
+  if (!id) return false;
+  for (let k = next; k < lines.length; k++) {
+    const t = lines[k]!.trim();
+    if (!t) continue;
+    if (t.length > maxLineBytes()) return false;
+    try {
+      const m = (JSON.parse(t) as { type?: unknown; message?: { id?: unknown; content?: unknown } });
+      if (m.type !== "assistant" || m.message?.id !== id) return false;
+      if (Array.isArray(m.message.content) && m.message.content.some((b) => (b as { type?: unknown })?.type === "tool_use")) return true;
+    } catch { return false; }
+  }
+  return false;
+}
+
 /**
  * Turn one transcript line into zero or more ingest bodies.
  *
@@ -346,7 +468,7 @@ function isMetaPrompt(o: Record<string, unknown>, text: string): boolean {
  */
 function lineToBodies(
   o: Record<string, unknown>,
-  ctx: { source_app: string; project_path: string; cwd: string; session_id: string; toolCalls: Map<string, { name: string; input: unknown }>; seenUsage: Set<string> },
+  ctx: { source_app: string; project_path: string; cwd: string; session_id: string; toolCalls: Map<string, { name: string; input: unknown }>; seenUsage: Set<string>; carryUsage?: Map<string, Record<string, unknown>> },
   fallbackTs: number
 ): IngestBody[] {
   const type = str(o.type);
@@ -390,7 +512,9 @@ function lineToBodies(
     const msgId = str(msg.id);
     const firstOfResponse = !msgId || !ctx.seenUsage.has(msgId);
     if (msgId) ctx.seenUsage.add(msgId);
-    const usage = firstOfResponse ? (msg.usage as Record<string, unknown> | undefined) : undefined;
+    let usage = firstOfResponse ? (msg.usage as Record<string, unknown> | undefined) : undefined;
+    // A dropped narration Stop left its usage here; the reply's tool_use line carries it instead.
+    if (toolUses.length && msgId && ctx.carryUsage?.has(msgId)) { usage ??= ctx.carryUsage.get(msgId); ctx.carryUsage.delete(msgId); }
 
     if (toolUses.length) {
       toolUses.forEach((b, i) => {
@@ -516,11 +640,19 @@ function lineToBodies(
  *    that re-sniffed would file the session under its own uuid instead of its
  *    project.
  *
- * Deliberately *not* persisted, and no new `transcript_files` column: the byte
- * offset is worthless without the maps above, which can't be cheaply written to
- * SQLite, so a cold start has to re-read whole regardless. `lines_done` stays
- * the only durable progress marker, and every path below keeps it exact so a
- * restart with a warm DB and a cold cache is still correct.
+ * Persisted too, in `transcript_resume` (see `saveResume`/`loadResume`). The
+ * old note here said the maps "can't be cheaply written to SQLite". True for a
+ * write per sweep, not for a throttled one: a matched tool_use input is dropped
+ * on sight, so the open calls are few, and `seenUsage` is one short id per
+ * reply. Measured on the resume-test fixture (its payload test): 781 bytes
+ * for 50 seen ids (short fixture ids) and 3 open calls. Real message ids are
+ * ~30 characters, so by arithmetic, not measurement, ~35 bytes per reply and
+ * ~350 KB for a 10,000-reply session.
+ * That is why the write is throttled
+ * (`resumeEveryMs`) and skipped when no line was added, and why a row over
+ * MAX_RESUME_STATE_BYTES is not kept. The row may lag `lines_done`; `loadResume`
+ * accepts that and the lines in between are parsed for state only.
+ * `lines_done` stays the durable marker, and every path below keeps it exact.
  */
 interface Tail {
   /** Byte offset just past the last complete line processed. */
@@ -545,6 +677,121 @@ interface Tail {
 }
 const tails = new Map<string, Tail>();
 
+/** Lines JSON-parsed by the ingest loop. Test/measure only. */
+let linesParsed = 0;
+export function __linesParsedCount(): number { return linesParsed; }
+export function __resetLinesParsedCount(): void { linesParsed = 0; }
+
+/** Above this the serialized state is not worth a row: that file restarts cold. */
+const MAX_RESUME_STATE_BYTES = 4 * 1024 * 1024;
+const putResume = db.query(
+  "INSERT OR REPLACE INTO transcript_resume (path, lines, bytes, ended_nl, state, head, head_len, mtime, tail_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+);
+const getResume = db.query<{ lines: number; bytes: number; ended_nl: number; state: string; head: string | null; head_len: number; mtime: number; tail_hash: string | null }, [string]>(
+  "SELECT lines, bytes, ended_nl, state, head, head_len, mtime, tail_hash FROM transcript_resume WHERE path = ?"
+);
+const RESUME_HEAD_BYTES = 4096;
+/** Hash of the file's first `len` bytes (null if unreadable). A transcript only
+ *  ever grows at the end, so its head is what says "same file". */
+function headHash(path: string, len: number): string | null {
+  try {
+    const fd = openSync(path, "r");
+    try {
+      const buf = Buffer.alloc(len);
+      const n = readSync(fd, buf, 0, len, 0);
+      if (n < len) return null;
+      return Bun.hash(buf).toString(36);
+    } finally { closeSync(fd); }
+  } catch { return null; }
+}
+const RESUME_TAIL_BYTES = 1024;
+/** Hash of the (up to) 1 KB just before byte `end`. The head alone cannot tell a
+ *  rewrite that kept the first 4 KB; the bytes the offset lands after can. */
+function tailHash(path: string, end: number): string | null {
+  const len = Math.min(RESUME_TAIL_BYTES, end);
+  if (len <= 0) return null;
+  try {
+    const fd = openSync(path, "r");
+    try {
+      const buf = Buffer.alloc(len);
+      if (readSync(fd, buf, 0, len, end - len) < len) return null;
+      return Bun.hash(buf).toString(36);
+    } finally { closeSync(fd); }
+  } catch { return null; }
+}
+const delResume = db.query("DELETE FROM transcript_resume WHERE path = ?");
+
+/** Persist the tail so a restart resumes at its offset. Call only once the
+ *  file's own progress row says `t.lines` (scanOnce, after the final write). */
+const resumeSaved = new Map<string, { at: number; lines: number }>();
+let resumeWrites = 0;
+export function __resumeWriteCount(): number { return resumeWrites; }
+export function __resetResumeWriteCount(): void { resumeWrites = 0; }
+/** At most one resume write per file per this long. 30 s: a live file is swept
+ *  every 3 s, so this turns ~10 writes of a state that can reach MBs into 1,
+ *  and what a restart gives up is re-parsing the lines appended in the last
+ *  30 s (a few dozen) — they are parsed for state only, not re-inserted. */
+const resumeEveryMs = () => Number(process.env.AGENTGLASS_RESUME_SAVE_MS ?? 30_000);
+
+function saveResume(path: string): void {
+  const t = tails.get(path);
+  if (!t) return;
+  const last = resumeSaved.get(path);
+  // State only moves with new lines: no new lines, nothing to serialise or write.
+  if (last && (last.lines === t.lines || Date.now() - last.at < resumeEveryMs())) return;
+  const state = JSON.stringify({
+    toolCalls: [...t.toolCalls], seenUsage: [...t.seenUsage],
+    customTitle: t.customTitle, aiTitle: t.aiTitle, cwd: t.cwd,
+    source_app: t.source_app, project_path: t.project_path, session_id: t.session_id,
+  });
+  resumeSaved.set(path, { at: Date.now(), lines: t.lines });
+  if (state.length > MAX_RESUME_STATE_BYTES) { delResume.run(path); return; }
+  resumeWrites++;
+  const headLen = Math.min(RESUME_HEAD_BYTES, t.bytes);
+  const head = headLen > 0 ? headHash(path, headLen) : null;
+  let mtime = 0;
+  try { mtime = statSync(path).mtimeMs; } catch { /* no mtime: loads as stale */ }
+  const tailH = tailHash(path, t.bytes);
+  if (head === null || tailH === null || !mtime) { delResume.run(path); return; } // cannot say which file this was: restart cold
+  putResume.run(path, t.lines, t.bytes, t.endedWithNewline ? 1 : 0, state, head, headLen, mtime, tailH);
+}
+
+/** A persisted tail, only if it does not run AHEAD of `transcript_files`
+ *  (`lines <= from`) and still fits inside the file. It may lag (saves are
+ *  throttled): the lines between it and `from` are parsed for state only, never
+ *  re-inserted. Anything else returns undefined and the caller reads whole. */
+function loadResume(path: string, from: number, fileSize: number): Tail | undefined {
+  if (from <= 0) return undefined;
+  const r = getResume.get(path);
+  if (!r || r.lines <= 0 || r.lines > from || r.bytes > fileSize) return undefined;
+  // Same file? A path rewritten while the server was down (resume, compaction)
+  // can be as long or longer: the offset would land mid-line and the carried
+  // state would be another file's. Head hash and mtime must still agree.
+  if (!r.head || r.head_len <= 0 || headHash(path, r.head_len) !== r.head) return undefined;
+  // The bytes just before the offset must be the ones saved; a row without the hash (older build) reads whole.
+  if (!r.tail_hash || tailHash(path, r.bytes) !== r.tail_hash) return undefined;
+  try { if (statSync(path).mtimeMs < r.mtime) return undefined; } catch { return undefined; }
+  try {
+    const o = JSON.parse(r.state) as {
+      toolCalls: [string, { name: string; input: unknown }][]; seenUsage: string[];
+      customTitle: string | null; aiTitle: string | null; cwd: string;
+      source_app: string; project_path: string; session_id: string;
+    };
+    return {
+      bytes: r.bytes, lines: r.lines, endedWithNewline: r.ended_nl === 1,
+      toolCalls: new Map(o.toolCalls), seenUsage: new Set(o.seenUsage),
+      customTitle: o.customTitle, aiTitle: o.aiTitle, cwd: o.cwd,
+      source_app: o.source_app, project_path: o.project_path, session_id: o.session_id,
+      touched: Date.now(),
+    };
+  } catch { return undefined; }
+}
+/** Cache misses that forced a whole-file re-read of a transcript that already
+ *  had progress (`from > 0`) — the cost `MAX_TAILS` exists to bound. Test-only. */
+let coldRereads = 0;
+export function __coldRereadCount(): number { return coldRereads; }
+export function __resetColdRereadCount(): void { coldRereads = 0; }
+
 /**
  * Transcripts this workspace has already decided are somebody else's.
  *
@@ -566,6 +813,24 @@ const tails = new Map<string, Tail>();
  * keyed BY SCOPE, so a different workspace does not match it.
  */
 const refused = new Map<string, { scope: string; size: number; mtime: number; at: number }>();
+const putRefused = db.query("INSERT OR REPLACE INTO transcript_refused (path, scope, size, mtime, at) VALUES (?, ?, ?, ?, ?)");
+const getRefused = db.query<{ scope: string; size: number; mtime: number; at: number | null }, [string]>(
+  "SELECT scope, size, mtime, at FROM transcript_refused WHERE path = ?"
+);
+const delRefused = db.query("DELETE FROM transcript_refused WHERE path = ?");
+/** Forget a verdict in memory and on disk. */
+let refusedDeletes = 0;
+export const __refusedDeleteCount = (): number => refusedDeletes;
+function forgetRefused(path: string): void {
+  // Memory first: a path that was never refused has no row, so no write.
+  const had = refused.delete(path);
+  if (had || refusedOnDisk.has(path)) { refusedDeletes++; delRefused.run(path); refusedOnDisk.delete(path); }
+}
+/** Paths that may have a row because it was loaded from disk (the map is empty
+ *  after a restart) or written; lets `forgetRefused` skip the DELETE otherwise. */
+const refusedOnDisk = new Set<string>(
+  db.query<{ path: string }, []>("SELECT path FROM transcript_refused").all().map((r) => r.path)
+);
 
 /** The open projects, out of the one-string scope this file passes around. A
  *  path cannot hold a NUL, so the split cannot cut one in two. */
@@ -580,11 +845,15 @@ function noteRefused(path: string, scope: string, size: number, mtime: number): 
   // without this the eviction below — which reads insertion order — would throw
   // away the entry being refused most often and keep the cold ones.
   refused.delete(path);
-  refused.set(path, { scope, size, mtime, at: Date.now() });
+  const at = Date.now();
+  refused.set(path, { scope, size, mtime, at });
+  putRefused.run(path, scope, size, mtime, at);
+  refusedOnDisk.add(path);
   // Bounded like the tail cache: a machine with hundreds of old transcripts
   // should not grow a map for ever. Cheap to lose — losing one costs one read.
   if (refused.size > MAX_REFUSED) {
-    for (const k of [...refused.keys()].slice(0, refused.size - MAX_REFUSED)) refused.delete(k);
+    // The row goes with the entry, or the table grows without bound.
+    for (const k of [...refused.keys()].slice(0, refused.size - MAX_REFUSED)) { refused.delete(k); refusedOnDisk.delete(k); delRefused.run(k); }
   }
 }
 
@@ -599,10 +868,17 @@ function noteRefused(path: string, scope: string, size: number, mtime: number): 
  */
 function stillRefused(path: string, scope: string | null, rewritten: boolean, size: number, mtime: number): "yes" | "stale" | "no" {
   if (!scope || rewritten) return "no";
-  const seen = refused.get(path);
+  let seen = refused.get(path);
+  // After a restart the memo is empty; the persisted verdict stands in for it.
+  // It keeps the time it was decided, so it is trusted for the TTL from THEN.
+  if (!seen) {
+    const d = getRefused.get(path);
+    // A row from an older build has no time: treat it as ancient (re-ask now).
+    if (d) { seen = { scope: d.scope, size: d.size, mtime: d.mtime, at: d.at ?? 0 }; refused.set(path, seen); refusedOnDisk.add(path); }
+  }
   if (!seen || seen.scope !== scope) return "no";
   // Shorter, or changed without growing: the content that was judged is gone.
-  if (size < seen.size || (size === seen.size && mtime !== seen.mtime)) { refused.delete(path); return "no"; }
+  if (size < seen.size || (size === seen.size && mtime !== seen.mtime)) { forgetRefused(path); return "no"; }
   // And it expires, because the verdict is only as good as the answer `inScope`
   // could give at the time. That answer goes through `worktreeFamily`, whose
   // own cache holds for 5 seconds ON PURPOSE — "adding a worktree shows up
@@ -661,13 +937,18 @@ async function judgeByHead(path: string, scope: string): Promise<boolean | null>
 
 /** The file's mtime, or 0 when it cannot be read. Only ever compared against
  *  another reading of the same thing, so 0 simply means "assume it changed". */
-function mtimeOf(path: string): number {
-  try { return statSync(path).mtimeMs; } catch { return 0; }
+async function mtimeOf(path: string): Promise<number> {
+  try { return (await stat(path)).mtimeMs; } catch { return 0; }
 }
 
 /** Room for a machine that has run a lot of sessions elsewhere. Each entry is
  *  one short string and three numbers. */
-const MAX_REFUSED = 4096;
+let MAX_REFUSED = 4096;
+/** Test-only: shrink the refusal cap so eviction is reachable. */
+export function __setMaxRefused(n: number): void { MAX_REFUSED = n; }
+export const __noteRefused = (p: string, scope: string, size: number, mtime: number): void => noteRefused(p, scope, size, mtime);
+export const __stillRefused = (p: string, scope: string | null, size: number, mtime: number) => stillRefused(p, scope, false, size, mtime);
+export const __forgetRefused = (p: string): void => forgetRefused(p);
 /** How long a refusal is trusted before it is asked again — see `stillRefused`
  *  for why it has to expire at all, and `judgeByHead` for what re-asking costs.
  *  A minute against a 3-second sweep is 1 read in 20 for a file that is still
@@ -691,14 +972,26 @@ const TAIL_IDLE_MS = 10 * 60_000;
  *  transient-memory spike and event-loop stall the tail was built to avoid. 64
  *  keeps a realistic working set warm on the cheap incremental path; each tail is
  *  also far lighter now that a matched tool_use input is dropped on sight (see
- *  the toolCalls.delete above), so the memory this trades for is modest. */
-const MAX_TAILS = 64;
+ *  the toolCalls.delete above), so the memory this trades for is modest.
+ *
+ * MEASURED on a machine running an orchestrator plus a fleet of builder,
+ * reviewer and flight-plan agents across several worktrees at once: well over
+ * 64 transcripts were actively growing in the same minute, so the 64th-oldest
+ * got evicted before its next append and was re-read WHOLE on growth — the
+ * exact spike this cache exists to avoid, now every full sweep instead of
+ * every sweep. RSS sawtoothed 3-4.8 GB roughly every minute with nothing
+ * open in the UI. Env-tunable because "realistic" depends on the fleet. */
+const MAX_TAILS = Math.max(64, Number(process.env.AGENTGLASS_SCAN_MAX_TAILS || 512));
 /** Drop every cached tail. Exported for the tests, which use it to stand in for
  *  a server restart — offsets gone, `lines_done` intact — and so to prove that
  *  eviction can only cost time, never correctness. */
-export function __dropTailCache(): void {
+export function __dropTailCache(keepDisk = false): void {
   tails.clear();
   refused.clear();
+  resumeSaved.clear();
+  // A real restart keeps the persisted resume and refusal rows; the older tests
+  // mean "cold, nothing remembered", so the default empties them too.
+  if (!keepDisk) { db.exec("DELETE FROM transcript_resume; DELETE FROM transcript_refused;"); refusedOnDisk.clear(); }
 }
 
 /** Age every refusal past its TTL, so a test can watch the revalidation without
@@ -729,6 +1022,31 @@ function evictTails(now: number): void {
  * second process that moved it in the meantime is detected rather than
  * overwritten. `lost` in the result says that happened.
  */
+type IngestResult = { lines: number; ingested: number; source_app: string; project_path: string; session_id: string; skipped?: boolean; lost?: boolean; expect: number; more?: boolean };
+
+/**
+ * Bytes of one transcript held as a string at a time.
+ *
+ * MEASURED: an isolated server started over this machine's real
+ * `~/.claude/projects` (12 GB, 74 files over 20 MB, the largest 1.75 GB) went
+ * from nothing to 6.8 GB RSS in under 10 seconds and back to 0.7 GB once the
+ * first sweep ended. A cold start has no tail cache, so each file was read with
+ * one `file.text()`, then `split("\n")` again, then per-line copies: several
+ * times the file's size live at once, for a file this cockpit often refuses
+ * anyway. Reading in windows bounds that to the window, whatever the file.
+ *
+ * MEASURED 2026-11-12 on a copy of the real database over the same 13 GB of
+ * transcripts (no Jira, no network): at 64 MB the first sweep peaked at 2.15 and
+ * 2.25 GB RSS (JS heap only ~285 MB: the rest is native memory for the window
+ * text, its split lines and their parsed records, which scales with the window,
+ * not the file). Same run, same data: 8 MB peaked at 0.73 GB, 2 MB at 0.54 GB.
+ * A window is only a read size, so a smaller one costs a few more reads and no
+ * correctness; 4 MB keeps most of the saving.
+ */
+export const SCAN_WINDOW_DEFAULT_BYTES = 4 * 1024 * 1024;
+const windowBytes = () => Math.max(4096, Number(process.env.AGENTGLASS_SCAN_WINDOW_BYTES || SCAN_WINDOW_DEFAULT_BYTES));
+
+/** Ingest a transcript a window at a time; the work per window is `ingestWindow`. */
 async function ingestFile(
   path: string,
   fallbackSessionId: string,
@@ -737,24 +1055,70 @@ async function ingestFile(
   onLive: ((r: InsertResult) => void) | null,
   scope: string | null,
   allowTail = true
-): Promise<{ lines: number; ingested: number; source_app: string; project_path: string; session_id: string; skipped?: boolean; lost?: boolean; expect: number }> {
+): Promise<IngestResult> {
+  let ingested = 0;
+  let r = await ingestWindow(path, fallbackSessionId, from, expectLines, onLive, scope, allowTail, false);
+  ingested += r.ingested;
+  while (r.more) {
+    // A file that shrinks mid-scan drops its tail, so the next window starts at
+    // byte 0 and reports `more` forever without moving `expect`. Every real
+    // window ends on a newline and so advances it; one that does not is the
+    // loop, and the next sweep re-reads whatever is left.
+    const before = r.expect;
+    r = await ingestWindow(path, fallbackSessionId, from, r.expect, onLive, scope, true, true);
+    ingested += r.ingested;
+    if (r.expect <= before) break;
+  }
+  return { ...r, ingested };
+}
+
+async function ingestWindow(
+  path: string,
+  fallbackSessionId: string,
+  from: number,
+  expectLines: number,
+  onLive: ((r: InsertResult) => void) | null,
+  scope: string | null,
+  allowTail: boolean,
+  continuing: boolean
+): Promise<IngestResult> {
   // Read the sweep's tuning once for this file: batch shape and the oversize cap.
-  const BATCH_LINES = batchLines();
-  const BATCH_BYTES = batchBytes();
+  const batchLimits = { lines: batchLines(), bytes: batchBytes(), ms: batchMs() };
   const MAX_LINE = maxLineBytes();
   const file = Bun.file(path);
-  const cached = allowTail ? tails.get(path) : undefined;
+  let resumedLag = false;
+  let cached = allowTail ? tails.get(path) : undefined;
+  // Cold cache after a restart: the persisted tail stands in for the warm one.
+  if (!cached && allowTail && !continuing) {
+    cached = loadResume(path, from, file.size);
+    if (cached) { tails.set(path, cached); resumedLag = true; }
+  }
   // Only tail when the cache still agrees with the durable progress marker. If
   // they ever drift — a DB row rewritten underneath us, a failed sweep, a file
   // replaced at the same size — the offset points into content it wasn't taken
   // from, which silently drops or duplicates records. Re-reading whole is slow,
   // wrong numbers are forever.
-  const tail = cached && cached.lines === from && cached.bytes <= file.size ? cached : undefined;
-  if (!tail) tails.delete(path);
+  const tail = cached && (continuing || resumedLag || cached.lines === from) && cached.bytes <= file.size ? cached : undefined;
+  if (!tail) {
+    tails.delete(path);
+    delResume.run(path);
+    if (from > 0) coldRereads++;
+  }
 
   let baseByte = tail?.bytes ?? 0;
   const baseLine = tail?.lines ?? 0;
-  let chunk = tail ? await file.slice(baseByte).text() : await file.text();
+  // One window. A window that is not the file's end is cut at its last newline
+  // and ends the chunk there; if it holds no newline at all (one line longer
+  // than the window) it doubles until it does, or reaches the end.
+  let end = Math.min(file.size, baseByte + windowBytes());
+  let chunk = !tail && end >= file.size ? await file.text() : await file.slice(baseByte, end).text();
+  if (end < file.size) {
+    while (!chunk.includes("\n") && end < file.size) {
+      end = Math.min(file.size, end + (end - baseByte));
+      chunk = await file.slice(baseByte, end).text();
+    }
+  }
+  const windowed = end < file.size;
 
   // The previous sweep committed a record whose terminating newline hadn't
   // landed yet (a live write caught between the record's bytes and its "\n",
@@ -783,7 +1147,10 @@ async function ingestFile(
   // whose final line has no trailing newline would otherwise do.
   let complete = chunk;
   const nl = chunk.lastIndexOf("\n");
-  if (nl < chunk.length - 1) {
+  if (windowed && nl >= 0) {
+    // Not the file's end: the cut is a window, not a half-written record.
+    complete = chunk.slice(0, nl + 1);
+  } else if (nl < chunk.length - 1) {
     const rest = chunk.slice(nl + 1).trim();
     let restIsWholeRecord = false;
     if (rest) {
@@ -869,18 +1236,18 @@ async function ingestFile(
       /* Remembered, so the next sweep does not read the whole thing again to
          reach this same answer — see `refused`. The verdict is a fact about
          this file's cwd and this scope, and both are in the key. */
-      noteRefused(path, scope, file.size, mtimeOf(path));
+      noteRefused(path, scope, file.size, await mtimeOf(path));
       return { lines: 0, ingested: 0, source_app: "", project_path: "", session_id, skipped: true, expect: expectLines };
     }
   }
   // It is ours after all (the workspace widened, or the cwd moved into scope):
   // forget any older refusal so a later narrowing is judged fresh.
-  if (refused.has(path)) refused.delete(path);
+  forgetRefused(path);
   if (cwd) projectPaths.set(source_app, project_path);
 
-  const ctx = { source_app, project_path, cwd, session_id, toolCalls, seenUsage };
+  const ctx = { source_app, project_path, cwd, session_id, toolCalls, seenUsage, carryUsage: new Map<string, Record<string, unknown>>() };
   let ingested = 0;
-  const fileMtime = statSync(path).mtimeMs;
+  const fileMtime = (await stat(path)).mtimeMs;
   // What the session is called. Both kinds are appended as their own lines and
   // rewritten on every change, so the *last* one in the file is the current
   // one — carried across sweeps so a tail read that sees no title line still
@@ -941,6 +1308,7 @@ async function ingestFile(
     let bi = i;
     let bConsumed = consumed;
     let bDone = doneLines;
+    const retentionCut = RETENTION_DAYS ? Date.now() - RETENTION_DAYS * 86_400_000 : 0;
     const run = db.transaction(() => {
       // THE CLAIM. Re-read the progress marker here, inside the write
       // transaction, and abandon the batch if it is no longer where we left it —
@@ -956,7 +1324,8 @@ async function ingestFile(
       if ((linesDoneOf.get(path)?.lines_done ?? 0) !== expect) { lost = true; return; }
       let nInBatch = 0;
       let bytesInBatch = 0;
-      while (bi < lines.length && nInBatch < BATCH_LINES && bytesInBatch < BATCH_BYTES) {
+      const batchT0 = performance.now();
+      while (bi < lines.length && !batchFull(nInBatch, bytesInBatch, performance.now() - batchT0, batchLimits)) {
         const raw = lines[bi]!;
         const lineBytes = Buffer.byteLength(raw, "utf8");
         // Every line here is newline-terminated except possibly the very last.
@@ -976,6 +1345,7 @@ async function ingestFile(
         if (lineBytes > MAX_LINE) { noteOversize(path, lineBytes); continue; }
         let o: Record<string, unknown>;
         try {
+          linesParsed++;
           o = JSON.parse(line) as Record<string, unknown>;
         } catch {
           continue;
@@ -984,11 +1354,33 @@ async function ingestFile(
         // session's human name exists.
         if (o.type === "custom-title") customTitle = str(o.customTitle) ?? customTitle;
         else if (o.type === "ai-title") aiTitle = str(o.aiTitle) ?? aiTitle;
-        const bodies = lineToBodies(o, ctx, fileMtime);
+        let bodies = lineToBodies(o, ctx, fileMtime);
+        /* Claude Code writes ONE jsonl line per content block, all with the same message.id: a
+           reply that narrates and then calls a tool is a text-only line followed by a tool_use
+           line. The text line looked like a turn end, so every narrated tool call recorded a
+           Stop (one orchestrator session: 42,369 Stop rows over 3 days on a few hundred turns).
+           A text line that the next line of the same reply continues with a tool_use is not an
+           end of turn. */
+        if (bodies.length === 1 && bodies[0]!.hook_event_type === "Stop" && repliesWithToolUse(o, lines, bi)) {
+          // The Stop was the row carrying the reply's usage: hand it to the tool_use line.
+          const u = (bodies[0]!.payload as { usage?: Record<string, unknown> }).usage;
+          const mid = str((o.message as Record<string, unknown> | undefined)?.id);
+          if (u && mid && !ctx.carryUsage.has(mid)) ctx.carryUsage.set(mid, u);
+          bodies = [];
+        }
         // Absolute position in the file: on the tail path the chunk starts at
         // baseLine, so `from` still means "lines already ingested".
         if (baseLine + idx < from) continue; // already ingested — parsed only for tool names/state
         for (const body of bodies) {
+          /* Not past the retention window. A rewritten transcript (it got shorter: a resume or a
+             compaction) is re-read from line 0, and a long session's file holds every line it ever
+             had. Those went back in with their old timestamps, after the prune had already folded
+             them into daily_rollup: measured on the live DB, 47,082 events 8-17 days old from ONE
+             session, ids spread over 1M inserts, days that daily_rollup already held. They were
+             deleted at the next hourly prune and came back at the next rewrite, and every round
+             folded them into the roll-up again. The line still counts as read; only the row is not
+             kept. Retention 0 keeps everything, so there is no cutoff then. */
+          if (retentionCut && Number(body.timestamp) < retentionCut) continue;
           emitted.push(insertEvent(normalize(body)));
           ingested++;
         }
@@ -1022,7 +1414,12 @@ async function ingestFile(
       // NOT wait out (measured: "database is locked" aborting a whole file's
       // sweep). Taking the write lock at BEGIN turns that into an ordinary wait
       // and makes claim-then-write one indivisible step across processes.
-      run.immediate();
+      // Labelled, because the write lock is the one place a batch can WAIT
+      // rather than compute: the server's own stall log shows 92% of its stalls
+      // over 1.5 s as "waiting, not computing" (tens of ms of CPU inside
+      // seconds), and a lock wait here used to be filed under whatever label
+      // happened to be entered last.
+      waitedFor("transcript batch commit", () => run.immediate());
     } catch (e) {
       // The rollback undoes this batch's inserts and its progress row, but not
       // the in-memory maps lineToBodies already mutated — seenUsage in
@@ -1062,23 +1459,28 @@ async function ingestFile(
   // entirely; still refresh the tail so its byte/line offset is recorded.
   if (customTitle || aiTitle) setSessionTitles(session_id, customTitle, aiTitle);
   saveTail(consumed, doneLines);
-  return { lines: doneLines, ingested, source_app, project_path, session_id, expect };
+  return { lines: doneLines, ingested, source_app, project_path, session_id, expect, ...(windowed ? { more: true } : {}) };
 }
 
 /** Every *.jsonl under a project dir, at any depth.
  *  Claude Code nests a session's subagent transcripts in
  *  `<session-id>/subagents/`, and those are the multi-agent runs the whole
- *  dashboard is about — a flat listing would miss all of them. */
-function walkTranscripts(dir: string, out: string[] = []): string[] {
+ *  dashboard is about — a flat listing would miss all of them.
+ *
+ *  Asynchronous: this walk is the sweep's cold cost. Measured over a real
+ *  `~/.claude/projects`, the 3s sweep spent thousands of blocking readdir/stat
+ *  calls before it opened a single file — 3,678 ms of a frozen terminal in the
+ *  log, all of it in the walk. Awaiting each one hands the loop back. */
+async function walkTranscripts(dir: string, out: string[] = []): Promise<string[]> {
   let entries;
   try {
-    entries = readdirSync(dir, { withFileTypes: true });
+    entries = await readdir(dir, { withFileTypes: true });
   } catch {
     return out;
   }
   for (const e of entries) {
     const p = join(dir, e.name);
-    if (e.isDirectory()) walkTranscripts(p, out);
+    if (e.isDirectory()) await walkTranscripts(p, out);
     else if (e.isFile() && e.name.endsWith(".jsonl")) out.push(p);
   }
   return out;
@@ -1095,9 +1497,9 @@ function walkTranscripts(dir: string, out: string[] = []): string[] {
  * What that gives up: a cold transcript that gets appended to — an old session
  * resumed — is noticed up to FULL_MS late instead of 3s. Its own hooks still
  * report its events live, so the delay is the backfill's, not the screen's.
- * Not here: watching the directories with inotify, which would drop the walk
- * too. The walk is a readdir per directory, not a stat per file, and is cheap
- * enough to leave.
+ * That is the FALLBACK poll now. With file watching available the sweep reads
+ * only what a watch event marked (see watcher below), and this walk happens at
+ * startup and on the 5-minute reconcile, not every 3 s.
  */
 const COLD_MS = 10 * 60_000;
 const FULL_MS = 60_000;
@@ -1130,7 +1532,24 @@ const coldPauseMs = () => Math.max(0, Number(process.env.AGENTGLASS_SCAN_COLD_PA
  *  waiting on the 3s timer. `full` (the default) looks at every file; the
  *  timer passes false between full sweeps. A `budget` (bytes) stops the sweep
  *  once that much has been read, newest first; see scanBacklog(). */
-export async function scanOnce(onLive: ((r: InsertResult) => void) | null, full = true, budget = Infinity): Promise<number> {
+/** How many stat calls one wave of the walk has in flight.
+ *  Measured: one `await stat()` after another, 200,000 files took 4 s on an idle
+ *  machine and did not finish in 120 s with all 20 cores busy. The time is not
+ *  the stat: each await is a round trip to the I/O thread and back, and on a
+ *  busy machine each wake-up waits for a free core. A wave of 32 pays that wait
+ *  once for 32 files. The loop does the same work either way. */
+const STAT_WAVE = 32;
+
+/** `stat` of every path in waves of STAT_WAVE, in order; null where it failed. */
+async function statEach(paths: string[]): Promise<(Stats | null)[]> {
+  const out: (Stats | null)[] = [];
+  for (let i = 0; i < paths.length; i += STAT_WAVE) {
+    out.push(...(await Promise.all(paths.slice(i, i + STAT_WAVE).map((p) => stat(p).catch(() => null)))));
+  }
+  return out;
+}
+
+export async function scanOnce(onLive: ((r: InsertResult) => void) | null, full = true, budget = Infinity, only?: Iterable<string>): Promise<number> {
   // Read the workspace once per sweep so every file in it sees the same scope.
   // As one string — every open project, NUL-separated — because it is also the
   // key the refused-file memo compares; see rootsOf().
@@ -1144,41 +1563,63 @@ export async function scanOnce(onLive: ((r: InsertResult) => void) | null, full 
   // the session somebody is looking at is ingested before the week-old ones
   // behind it, instead of whenever its directory happened to sort.
   const queue: { path: string; st: Stats }[] = [];
-  for (const root of projectsDirs()) {
+  if (only) {
+    // Watch-driven: the caller already knows which files moved, so no walk and
+    // no stat of anything else. This is what makes an idle machine free.
+    for (const path of only) {
+      let st: Stats;
+      try {
+        st = await stat(path);
+      } catch {
+        lastMtime.delete(path);
+        continue;
+      }
+      lastMtime.set(path, st.mtimeMs);
+      if (cutoff && st.mtimeMs < cutoff) continue;
+      queue.push({ path, st });
+    }
+  }
+  else for (const root of projectsDirs()) {
     let dirs: string[];
     try {
-      dirs = readdirSync(root);
+      dirs = await readdir(root);
     } catch {
       continue; // this root doesn't exist (yet) — the others still count
     }
     for (const dir of dirs) {
       const dirPath = join(root, dir);
       try {
-        if (!statSync(dirPath).isDirectory()) continue;
+        if (!(await stat(dirPath)).isDirectory()) continue;
       } catch {
         continue;
       }
-      for (const path of walkTranscripts(dirPath)) {
+      const want = (await walkTranscripts(dirPath)).filter((path) => {
         const seen = lastMtime.get(path);
-        if (!full && seen !== undefined && Date.now() - seen > COLD_MS) continue;
-        let st: Stats;
-        try {
-          st = statSync(path);
-        } catch {
-          lastMtime.delete(path);
-          continue;
-        }
+        return full || seen === undefined || Date.now() - seen <= COLD_MS;
+      });
+      const stats = await statEach(want);
+      resumedAs(SCAN_LABEL);
+      want.forEach((path, i) => {
+        const st = stats[i];
+        if (!st) { lastMtime.delete(path); return; }
         lastMtime.set(path, st.mtimeMs);
-        if (cutoff && st.mtimeMs < cutoff) continue; // outside retention
+        if (cutoff && st.mtimeMs < cutoff) return; // outside retention
         queue.push({ path, st });
-      }
+      });
     }
   }
   queue.sort((a, b) => b.st.mtimeMs - a.st.mtimeMs);
 
   let spent = 0;
   backlog = 0;
+  let sliceStart = performance.now();
   for (const { path, st } of queue) {
+    // A run of files, each under the batch caps, still adds up: hand the loop
+    // back between files once the sweep has held it for its slice.
+    if (shouldYield(performance.now() - sliceStart, fileSliceMs())) {
+      await yieldLoop(terminalHot());
+      sliceStart = performance.now();
+    }
     // The budget is spent: leave this file for the next sweep. It must not
     // stay in lastMtime, or a light sweep would take a file nobody has read
     // yet for a cold one and not look at it again until the next full sweep.
@@ -1211,12 +1652,13 @@ export async function scanOnce(onLive: ((r: InsertResult) => void) | null, full 
          multi-hundred-megabyte transcript whole. */
       if (verdict === "stale" && scope) {
         const again = await judgeByHead(path, scope);
+        resumedAs(SCAN_LABEL);
         if (again === true) { noteRefused(path, scope, st.size, st.mtimeMs); continue; }
         // false, or "the head could not say": both go the long way. false
         // because the file has come into scope and now has to be INGESTED,
         // and null because a head that found no cwd must never be believed —
         // `ingestFile` reads an empty cwd as "no scope test to make".
-        refused.delete(path);
+        forgetRefused(path);
       }
       // This read is outside any transaction and is only a *hint* by the time
       // the batch below writes — see putFileIfUnmoved. `from` and the marker
@@ -1226,6 +1668,7 @@ export async function scanOnce(onLive: ((r: InsertResult) => void) | null, full 
       // A rewrite also invalidates the cached tail: its byte offset and its
       // carried tool calls describe content that no longer exists.
       const r = await ingestFile(path, basename(path, ".jsonl"), from, marker, onLive, scope, !rewritten);
+      resumedAs(SCAN_LABEL);
       // Out of scope: claim nothing, so widening the scope later can still
       // pick it up, and the hook path isn't blocked for a session we skipped.
       if (r.skipped) continue;
@@ -1250,6 +1693,7 @@ export async function scanOnce(onLive: ((r: InsertResult) => void) | null, full 
         $mtime: Math.floor(st.mtimeMs),
         $expect: r.expect,
       });
+      saveResume(path);
     } catch (e) {
       console.error(`[scan] ${path}: ${e instanceof Error ? e.message : e}`);
     }
@@ -1392,7 +1836,178 @@ async function backfillTitles(): Promise<number> {
   return named;
 }
 
-export function startScanner(onLive: (r: InsertResult) => void): void {
+/** A missed watch event is caught by a full walk at most this often, and only
+ *  while the app is in use. */
+const RECONCILE_MS = 5 * 60_000;
+
+/**
+ * What this file uses of a directory watcher: stop it, and hear that it broke.
+ *
+ * Written out rather than taken from `FSWatcher`, because the typecheck did not
+ * agree with itself about that type: one install's declarations give it the
+ * event emitter's `on`, another's do not ("Property 'on' does not exist on type
+ * 'FSWatcher'"), and the difference is which @types/node the lockfile of the
+ * checkout resolved. At run time it is an event emitter in Bun and in Node, and
+ * an 'error' nobody listens for is thrown, so the listener is not optional.
+ */
+type DirWatch = { close(): void };
+
+/** One non-recursive watcher per directory under every projects root; see
+ *  transcriptDirty.ts for why not recursive. Marks transcripts dirty; reads
+ *  nothing. */
+const watcher = {
+  /** One inotify instance for every directory; wd -> directory. */
+  ino: null as Watcher | null,
+  /** Seam: a test forces this to return null to take the no-inotify path. */
+  openWatcher: openWatcher as typeof openWatcher,
+  /** inotify is not available here (macOS): watch each directory with fs.watch. */
+  noIno: false,
+  wds: new Map<number, string>(),
+  /** false once any directory could not be watched: the caller then polls. */
+  ok: false,
+  /** Transcripts to read, oldest mark first: a file marked again moves to the
+   *  end, so the end of the set is what changed last (see takeNewest). */
+  dirty: new Set<string>(),
+  dirDirty: new Set<string>(),
+  onDirty: (() => {}) as () => void,
+  dirs: new Map<string, DirWatch>(),
+  mark(path: string): void {
+    this.dirty.delete(path);
+    this.dirty.add(path);
+  },
+  onEvent(e: WatchEvent): void {
+    if (e.mask & IN_Q_OVERFLOW) {
+      // Events were lost, so any append may have been: every transcript read
+      // so far is dirty, and every root is looked at again for new directories.
+      for (const f of lastMtime.keys()) this.mark(f);
+      for (const r of projectsDirs()) this.dirDirty.add(r);
+      this.onDirty();
+      return;
+    }
+    const dir = this.wds.get(e.wd);
+    if (dir === undefined) return;
+    if (e.mask & (IN_IGNORED | IN_DELETE_SELF | IN_MOVE_SELF)) {
+      // The directory went away: forget it; syncDir tells gone from unwatchable.
+      this.dirs.delete(dir);
+      this.wds.delete(e.wd);
+      // A rename leaves the kernel watch behind (a delete does not).
+      if (e.mask & IN_MOVE_SELF) { try { this.ino?.rm(e.wd); } catch { /* already gone */ } }
+      this.dirDirty.add(dir);
+      this.onDirty();
+      return;
+    }
+    this.onName(dir, e.name === "" ? null : e.name);
+  },
+  /** One entry of `dir` changed (from inotify or fs.watch). */
+  onName(dir: string, name: string | null): void {
+    const v = judgeWatchEvent(dir, name);
+    if (v.kind === "file") this.mark(v.path);
+    else if (v.kind === "dir" && !(this.dirs.has(v.path) && v.path !== dir)) this.dirDirty.add(v.path);
+    else return;
+    this.onDirty();
+  },
+  /** fs.watch fallback: close and forget the watcher of a folder that no longer exists, and mark it dirty. */
+  dropIfGone(dir: string): void {
+    const d = this.dirs.get(dir);
+    if (!d) return;
+    try { statSync(dir); return; } catch { /* gone */ }
+    try { d.close(); } catch { /* already closed */ }
+    this.dirs.delete(dir);
+    this.dirDirty.add(dir);
+    this.onDirty();
+  },
+  /** Watch `dir` if it is not watched yet. false when watching itself failed. */
+  watchDir(dir: string): boolean {
+    if (this.dirs.has(dir)) return true;
+    try {
+      if (!this.ino && !this.noIno) {
+        this.ino = this.openWatcher((evs) => {
+          for (const e of evs) this.onEvent(e);
+        }, IN_MODIFY | IN_CREATE | IN_MOVED_TO | IN_DELETE_SELF | IN_MOVE_SELF);
+        if (!this.ino) this.noIno = true;
+      }
+      if (this.noIno) {
+        // No inotify (macOS): one fs.watch per directory, never per file.
+        const w = fsWatch(dir, { persistent: false }, (ev, name) => {
+          if (ev === "rename") {
+            // A deleted folder emits no error, and some runtimes send no event for the folder itself:
+            // check this folder and the child the event names, and drop the watcher of any that is gone,
+            // so a folder recreated under the same name is watched again.
+            this.dropIfGone(dir);
+            if (name) this.dropIfGone(join(dir, String(name)));
+          }
+          this.onName(dir, name ? String(name) : null);
+        });
+        (w as unknown as { on(ev: string, f: () => void): void }).on("error", () => {
+          try { w.close(); } catch { /* already closed */ }
+          if (this.dirs.get(dir)?.close === close) this.dirs.delete(dir);
+          this.dirDirty.add(dir);
+          this.onDirty();
+        });
+        const close = () => w.close();
+        this.dirs.set(dir, { close });
+        return true;
+      }
+      if (!this.ino) return false;
+      const wd = this.ino.add(dir);
+      if (wd < 0) return false;
+      const prev = this.wds.get(wd);
+      if (prev && prev !== dir) this.dirs.delete(prev);
+      this.wds.set(wd, dir);
+      this.dirs.set(dir, { close: () => { if (this.wds.get(wd) === dir) this.wds.delete(wd); } });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  /**
+   * Watch `dir` and everything under it; files found in a directory that was
+   * not watched before are dirty (they may have been written in the gap).
+   *
+   * The watch is set BEFORE the directory is listed. The other way round, a
+   * file created between the listing and the watch is in neither: not in the
+   * list, and no event for it. And a directory that cannot be watched still
+   * has its files marked: the first version returned before marking them, so
+   * with the watch refused (no inotify room) a new project's transcripts were
+   * never read at all while nobody had the app open, since the only other net,
+   * the reconcile walk, runs only then.
+   */
+  async syncDir(dir: string, markNew = true): Promise<void> {
+    if (NON_TRANSCRIPT_DIRS.has(basename(dir))) return;
+    const fresh = !this.dirs.has(dir);
+    const watched = this.watchDir(dir);
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      // Not a directory, or gone since the event: nothing to watch here.
+      if (fresh && watched) {
+        const w = this.dirs.get(dir);
+        this.dirs.delete(dir);
+        try { w?.close(); } catch { /* already closed */ }
+      }
+      return;
+    }
+    if (!watched) this.ok = false;
+    for (const e of entries) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) await this.syncDir(p, markNew);
+      else if (markNew && (fresh || !watched) && e.isFile() && e.name.endsWith(".jsonl")) this.mark(p);
+    }
+  },
+  /** Every root, every directory. Roots that do not exist yet are skipped;
+   *  the reconcile tries again. */
+  async attach(): Promise<void> {
+    this.ok = true;
+    // Not marking anything dirty: the startup backfill and the reconcile walk
+    // read every file anyway.
+    for (const root of projectsDirs()) await this.syncDir(root, false);
+  },
+};
+export const __watcherForTest = watcher;
+export const __lastMtimeForTest = lastMtime;
+
+export function startScanner(onLive: (r: InsertResult) => void, inUse: () => boolean = () => true): void {
   if (!SCAN_ENABLED) {
     console.log("📴 transcript scan disabled (AGENTGLASS_SCAN_DISABLED=1)");
     return;
@@ -1418,15 +2033,21 @@ export function startScanner(onLive: (r: InsertResult) => void): void {
   // token and dollar for those sessions was silently doubled in the DB.
   sweepBusy = true;
   entered("first transcript scan");
+  // Watching starts BEFORE the backfill, so a transcript that grows while it
+  // runs is marked dirty instead of falling in the gap. The backfill's own
+  // files are marked too (a new directory's files count as written), which
+  // costs each one a stat and a database lookup when the sweep after it runs.
+  const attached = watcher.attach().catch(() => { watcher.ok = false; });
   const coldBackfill = async (): Promise<number> => {
     let n = 0;
     do {
       n += await scanOnce(null, true, coldBudgetBytes());
-      if (backlog) await new Promise((r) => setTimeout(r, coldPauseMs()));
+      resumedAs(SCAN_LABEL);
+      if (backlog) await new Promise((r) => setTimeoutAs(SCAN_LABEL, r as () => void, coldPauseMs()));
     } while (backlog);
     return n;
   };
-  coldBackfill()
+  attached.then(() => coldBackfill())
     .then((n) => {
       const projects = projectPaths.size;
       console.log(
@@ -1438,27 +2059,96 @@ export function startScanner(onLive: (r: InsertResult) => void): void {
         .catch((e) => console.error(`[scan] title backfill failed: ${e instanceof Error ? e.message : e}`));
       let skipped = 0;
       let lastFull = Date.now();
-      setInterval(async () => {
-        if (sweepBusy) return; // a slow sweep must not stack up behind the timer
-        // Reading and parsing transcripts is synchronous work on the thread the
-        // terminal needs. While someone is typing, skip ticks rather than take
-        // it — but never more than a few in a row, or a busy session would stop
-        // ingesting its own events.
-        if (backoff() > 1 && skipped < 3) { skipped++; return; }
+      // One sweep, whichever way it was asked for. A slow sweep must not stack
+      // up behind the timer, and typing takes priority (never skipped more than
+      // three times in a row, or a busy session would stop ingesting).
+      const sweep = async (run: () => Promise<unknown>): Promise<boolean> => {
+        if (sweepBusy) return false;
+        if (backoff() > 1 && skipped < 3) { skipped++; return false; }
         skipped = 0;
         entered("transcript sweep");
         sweepBusy = true;
-        try {
+        try { await run(); } catch (e) {
+          console.error(`[scan] sweep failed: ${e instanceof Error ? e.message : e}`);
+        } finally { sweepBusy = false; }
+        return true;
+      };
+      // Watching is not available (no inotify room, no such platform), or
+      // stopped being available for some directory later: the old poll,
+      // unchanged. Costly when idle, and the only honest fallback. Started at
+      // most once; the watch events that still arrive only make it sooner.
+      let polling = false;
+      const poll = () => {
+        if (polling) return;
+        polling = true;
+        console.warn("[scan] file watching unavailable; polling every " + POLL_MS + "ms");
+        setIntervalAs("transcript sweep", () => void sweep(async () => {
           const now = Date.now();
           const full = now - lastFull >= FULL_MS;
           if (full) lastFull = now;
           await scanOnce(onLive, full);
-        } catch (e) {
-          console.error(`[scan] sweep failed: ${e instanceof Error ? e.message : e}`);
-        } finally {
-          sweepBusy = false;
-        }
-      }, POLL_MS);
+        }), POLL_MS);
+      };
+      if (!watcher.ok) { poll(); return; }
+      // Event-driven. No timer wakes while nothing changed: a watch event arms
+      // one sweep POLL_MS out (so a burst of appends is one read), and the only
+      // standing timer is the reconcile below. Worst-case delay for a MISSED
+      // event is one reconcile: RECONCILE_MS (5 min) after the last one while the
+      // app is in use, checked every RECONCILE_MS / 2, so at most 7.5 min.
+      let armed: ReturnType<typeof setTimeout> | null = null;
+      let lastReconcile = Date.now();
+      const arm = (ms = POLL_MS) => { if (!armed) armed = setTimeoutAs("transcript tick", tick, ms); };
+      const tick = async () => {
+        armed = null;
+        const plan = planTick({
+          dirty: watcher.dirty.size,
+          dirDirty: watcher.dirDirty.size,
+          now: Date.now(),
+          lastReconcile,
+          reconcileMs: RECONCILE_MS,
+          inUse: inUse(),
+        });
+        if (plan === "idle") return;
+        const ran = await sweep(async () => {
+          if (plan === "reconcile") {
+            lastReconcile = Date.now();
+            watcher.dirty.clear();
+            watcher.dirDirty.clear();
+            // attach() says whether every directory is watched NOW, so a
+            // failure that has healed (room again) is not held against it; the
+            // poll, once started, stays.
+            await watcher.attach();
+            await scanOnce(onLive, true);
+            return;
+          }
+          const dirs = [...watcher.dirDirty];
+          watcher.dirDirty.clear();
+          for (const d of dirs) await watcher.syncDir(d);
+          /* At most DIRTY_CHUNK files a sweep, the last marked first. The
+             first version handed the sweep every dirty file at once, and a
+             sweep finishes its list before the next one starts: when a tree of
+             200,000 transcripts appeared, whatever the first tick had seen of
+             it (tens of thousands of files) was read to the end before a
+             transcript written afterwards was looked at. The test that drops
+             such a tree in and waits for the one in-scope transcript, written
+             last, gave up after 120 s without it; this order is the cause as
+             read from the code, not one that was timed. The rest stays in the set for the next
+             sweep, which follows after the cold pause instead of a whole poll
+             interval. */
+          const files = takeNewest(watcher.dirty, DIRTY_CHUNK);
+          if (files.length) await scanOnce(onLive, false, Infinity, files);
+        });
+        // A directory could not be watched, now or since: poll as well.
+        if (!watcher.ok) poll();
+        // Skipped (busy, or typing): the work is still in the sets.
+        if (!ran) arm();
+        else if (watcher.dirty.size || watcher.dirDirty.size) arm(Math.min(POLL_MS, coldPauseMs()));
+      };
+      watcher.onDirty = () => arm();
+      // The net under a missed event. Not a poll: it asks the clock, and does
+      // nothing at all unless somebody is looking at the app.
+      setIntervalAs("transcript reconcile", () => { if (inUse()) void tick(); }, RECONCILE_MS / 2).unref?.();
+      arm();
     })
     .catch((e) => console.error(`[scan] initial sweep failed: ${e}`))
     .finally(() => { sweepBusy = false; });

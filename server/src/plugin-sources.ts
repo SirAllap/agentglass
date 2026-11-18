@@ -12,6 +12,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpat
 import { tmpdir } from "node:os";
 import { pluginGitEnv, PLUGIN_GIT_CONFIG } from "./plugin-env.ts";
 import { dirname, isAbsolute, join, normalize, relative, sep } from "node:path";
+import { spawnSyncAs } from "./loopwatch.ts";
 
 /**
  * "Where did this come from" as a closed set of shapes rather than a free
@@ -284,7 +285,7 @@ function indexExecutables(dir: string): Set<string> {
   const found = new Set<string>();
   if (!existsSync(join(dir, ".git"))) return found;
   try {
-    const p = Bun.spawnSync(
+    const p = spawnSyncAs("plugin source git", 
       ["git", ...PLUGIN_GIT_CONFIG, "-C", dir, "-c", "core.fsmonitor=false", "--git-dir", join(dir, ".git"), "--work-tree", dir, "ls-files", "--stage", "-z"],
       { cwd: tmpdir(), env: pluginGitEnv(), stdout: "pipe", stderr: "ignore", stdin: "ignore" },
     );

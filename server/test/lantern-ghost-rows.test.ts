@@ -11,7 +11,7 @@
  * so it is tested here rather than in a pure `merged()` fixture.
  */
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,6 +21,8 @@ process.env.AGENTGLASS_STATE_DIR = join(dir, "state");
 process.env.XDG_CONFIG_HOME = join(dir, "config");
 process.env.XDG_DATA_HOME = join(dir, "data");
 process.env.XDG_CACHE_HOME = join(dir, "cache");
+const prevTmuxTmp = process.env.TMUX_TMPDIR;
+mkdirSync(join(dir, "tmux"), { recursive: true }); // the guard stats it: a path that is not there is refused
 process.env.TMUX_TMPDIR = join(dir, "tmux");
 delete process.env.AGENTGLASS_ROOT;
 
@@ -44,6 +46,7 @@ beforeAll(async () => {
 
 afterAll(() => {
   delete process.env.AGENTGLASS_TMUX_PATH;
+  if (prevTmuxTmp === undefined) delete process.env.TMUX_TMPDIR; else process.env.TMUX_TMPDIR = prevTmuxTmp;
 });
 
 describe("a registry row whose window is gone", () => {

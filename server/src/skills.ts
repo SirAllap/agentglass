@@ -4,7 +4,9 @@
 // answer to "what skills do we have and what do they do?".
 import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
+import { gitAsync } from "./git.ts";
+import { fileStamp, localRefsStamp } from "./refstamp.ts";
 import type { SkillInfo } from "../../shared/types.ts";
 import { skillUsageDetail, RETENTION_DAYS } from "./db.ts";
 
@@ -147,19 +149,47 @@ async function scanClaudeRoot(root: string, source: string): Promise<RawEntry[]>
  * across worktrees (checkout resets them, so every copy clusters at checkout
  * time); git history is the honest signal for "newest".
  */
+const addedSeen = new Map<string, { stamp: string; map: Map<string, number> }>();
+/** The repo's history moves only with its refs: asked again only when the refs on disk moved (refstamp.ts). */
+async function historyStamp(repo: string): Promise<string> {
+  // gitDir(), read without a sync call: `.git` is the dir, or a file naming it (a linked worktree).
+  const dot = join(repo, ".git");
+  let g: string;
+  try {
+    const st = await stat(dot);
+    if (st.isDirectory()) g = dot;
+    else {
+      const m = /^gitdir:\s*(.+?)\s*$/m.exec(await readFile(dot, "utf8"));
+      if (!m) return "";
+      g = resolve(repo, m[1]!);
+    }
+  } catch { return ""; }
+  let common = g;
+  try { common = resolve(g, (await readFile(join(g, "commondir"), "utf8")).trim()); } catch { /* not linked */ }
+  return `${await fileStamp(join(g, "HEAD"))}\n${await localRefsStamp(common)}`;
+}
+
 async function gitAddedDates(repo: string): Promise<Map<string, number>> {
+  // Stamp first, read second: a ref that moves in between makes the next stamp differ, never a stale hit.
+  const stamp = await historyStamp(repo);
+  const kept = addedSeen.get(repo);
+  if (stamp && kept?.stamp === stamp) return kept.map;
+  const map = await gitAddedDatesNow(repo);
+  if (stamp) addedSeen.set(repo, { stamp, map });
+  return map;
+}
+
+async function gitAddedDatesNow(repo: string): Promise<Map<string, number>> {
   const map = new Map<string, number>();
   try {
     // A full history walk, and it was synchronous: the loop watchdog caught it
     // at 790ms — the last thing in the app still freezing a steady-state
     // session, once a minute when the cache below expires. Awaited now, so the
     // walk costs wall clock rather than a terminal that has stopped echoing.
-    const proc = Bun.spawn(
-      ["git", "-C", repo, "log", "--diff-filter=A", "--format=C %ct", "--name-only", "--", ".claude/skills", ".claude/commands"],
-      { stdout: "pipe", stderr: "ignore" }
-    );
-    const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-    if (code !== 0) return map;
+    // Through gitAsync: the spawn broker forks git, not this server (broker/wire.ts).
+    const r = await gitAsync(repo, ["log", "--diff-filter=A", "--format=C %ct", "--name-only", "--", ".claude/skills", ".claude/commands"]);
+    if (r.code !== 0) return map;
+    const out = r.stdout;
     let ts = 0;
     for (const line of out.split("\n")) {
       if (line.startsWith("C ")) {

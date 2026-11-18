@@ -39,53 +39,53 @@ const tagNames = async () => (await tags(repo)).map((t) => t.name);
 
 describe("tags", () => {
   it("creates a lightweight tag on HEAD", async () => {
-    const r = createTag(repo, "v1.0");
+    const r = await createTag(repo, "v1.0");
     expect(r.ok).toBe(true);
     expect(await tagNames()).toEqual(["v1.0"]);
     expect(git("tag", "-l").stdout.toString().trim()).toBe("v1.0");
   });
 
   it("annotated tag round-trips its message", async () => {
-    const r = createTag(repo, "v1.0", { annotated: true, message: "the big one" });
+    const r = await createTag(repo, "v1.0", { annotated: true, message: "the big one" });
     expect(r.ok).toBe(true);
     const out = git("for-each-ref", "refs/tags", "--format=%(objecttype)|%(contents:subject)").stdout.toString().trim();
     expect(out).toBe("tag|the big one");
   });
 
-  it("annotated tag without a message is refused", () => {
-    const r = createTag(repo, "v1.0", { annotated: true });
+  it("annotated tag without a message is refused", async () => {
+    const r = await createTag(repo, "v1.0", { annotated: true });
     expect(r.ok).toBe(false);
     expect(r.error).toContain("needs a message");
   });
 
-  it("refuses to double-tag", () => {
-    createTag(repo, "v1.0");
-    const r = createTag(repo, "v1.0");
+  it("refuses to double-tag", async () => {
+    await createTag(repo, "v1.0");
+    const r = await createTag(repo, "v1.0");
     expect(r.ok).toBe(false);
     expect(r.error).toContain("already exists");
   });
 
-  it("refuses an invalid name", () => {
-    const r = createTag(repo, "..");
+  it("refuses an invalid name", async () => {
+    const r = await createTag(repo, "..");
     expect(r.ok).toBe(false);
   });
 
   it("deletes a local tag, and only a local one", async () => {
-    createTag(repo, "v1.0");
-    expect(deleteTag(repo, "v1.0").ok).toBe(true);
+    await createTag(repo, "v1.0");
+    expect((await deleteTag(repo, "v1.0")).ok).toBe(true);
     expect(await tagNames()).toEqual([]);
     // Not a local tag — `-d` must refuse rather than touch anything.
-    const r = deleteTag(repo, "origin/main");
+    const r = await deleteTag(repo, "origin/main");
     expect(r.ok).toBe(false);
     expect(git("branch", "-r").stdout.toString()).toContain("origin/main");
   });
 
   it("push sends the tag to the remote; remote-delete removes it", async () => {
-    createTag(repo, "v1.0");
-    const p = pushTag(repo, "v1.0");
+    await createTag(repo, "v1.0");
+    const p = await pushTag(repo, "v1.0");
     expect(p.ok).toBe(true);
     expect(git("ls-remote", "--tags", remote).stdout.toString()).toContain("refs/tags/v1.0");
-    const d = deleteRemoteTag(repo, "v1.0");
+    const d = await deleteRemoteTag(repo, "v1.0");
     expect(d.ok).toBe(true);
     expect(git("ls-remote", "--tags", remote).stdout.toString()).not.toContain("v1.0");
     // Local tag survives the remote delete.
@@ -93,9 +93,9 @@ describe("tags", () => {
   });
 
   it("push refuses a tag that is not local, and a remote that is not there", async () => {
-    expect(pushTag(repo, "nope").ok).toBe(false);
-    createTag(repo, "v1.0");
-    const r = pushTag(repo, "v1.0", "nowhere");
+    expect((await pushTag(repo, "nope")).ok).toBe(false);
+    await createTag(repo, "v1.0");
+    const r = await pushTag(repo, "v1.0", "nowhere");
     expect(r.ok).toBe(false);
     expect(r.error).toBe("no such remote");
   });

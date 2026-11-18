@@ -1,6 +1,7 @@
 # Every suite here opens scratch directories under /tmp and almost none of them
 # remove one. See test/tmpsweep.ts for what that cost and why the cleanup lives
 # in a preload rather than in 182 `afterAll`s. test/envscope.ts does the same for
-# the AGENTGLASS_* variables a file leaves behind.
+# the AGENTGLASS_* variables a file leaves behind, test/childreap.ts for the
+# processes a file started and never stopped.
 [test]
-preload = ["./test/isolation.ts", "./test/tmuxleak.ts", "./test/tmpsweep.ts", "./test/envscope.ts"]
+preload = ["./test/isolation.ts", "./test/tmuxleak.ts", "./test/childreap.ts", "./test/tmpsweep.ts", "./test/envscope.ts", "./test/opencodelist.ts", "./test/tmpguard.ts"]

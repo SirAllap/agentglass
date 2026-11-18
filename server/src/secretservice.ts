@@ -211,7 +211,7 @@ class Bus {
     const uid = Buffer.from(String(userInfo().uid), "ascii").toString("hex");
     const hello = await new Promise<string>((res) => {
       let acc = "";
-      const wait = setTimeout(() => { sock.off("data", on); res(acc); }, 2000);
+      const wait = setTimeout(() => { sock.off("data", on); res(acc); }, 2000); // loop-ok: resolves a read with its buffer
       const on = (d: Buffer) => {
         acc += d.toString("ascii");
         if (acc.includes("\r\n")) { clearTimeout(wait); sock.off("data", on); res(acc); }
@@ -230,7 +230,7 @@ class Bus {
   call(path: string, iface: string, member: string, dest: string, sig: string, body: Buffer): Promise<Msg> {
     const serial = ++this.serial;
     return new Promise((res, rej) => {
-      const timer = setTimeout(() => { this.queue.delete(serial); rej(new Error(`${member} timed out`)); }, 5000);
+      const timer = setTimeout(() => { this.queue.delete(serial); rej(new Error(`${member} timed out`)); }, 5000); // loop-ok: rejects one pending call
       this.queue.set(serial, (m) => { clearTimeout(timer); m instanceof Error ? rej(m) : m.error ? rej(new Error(m.error)) : res(m); });
       if (this.sock.destroyed) { this.drain(new Error("the session bus connection closed")); return; }
       this.sock.write(frame(serial, path, iface, member, dest, sig, body));
@@ -255,10 +255,25 @@ const SVC = "org.freedesktop.Secret.Service";
  * worth an exception.
  */
 export async function keyringPassword(attrs: Record<string, string>): Promise<Buffer | null> {
+  const got = await keyringLookup(attrs);
+  return got.state === "found" ? got.value : null;
+}
+
+/**
+ * The same ask, saying which of the ways it came back empty.
+ *
+ * "no-answer" (no bus, nothing speaking Secret Service), "locked" (the item is
+ * there, behind a lock nobody opened) and "absent" (no such item) are three
+ * different things to tell a person, and the importer used to say "would not
+ * decrypt" for all of them. Still never prompts.
+ */
+export type KeyringLookup = { state: "found"; value: Buffer } | { state: "no-answer" | "locked" | "absent" };
+
+export async function keyringLookup(attrs: Record<string, string>): Promise<KeyringLookup> {
   let bus: Bus | null = null;
   try {
     bus = await Bus.open();
-    if (!bus) return null;
+    if (!bus) return { state: "no-answer" };
 
     // OpenSession("plain", variant("")) → (variant, objectpath)
     const w1 = new Writer();
@@ -268,7 +283,7 @@ export async function keyringPassword(attrs: Record<string, string>): Promise<Bu
     const r1 = new Reader(open.body);
     r1.sig(); r1.str();                // skip the returned variant
     const session = r1.str();
-    if (!session) return null;
+    if (!session) return { state: "no-answer" };
 
     // SearchItems(a{ss}) → (ao unlocked, ao locked)
     const inner = new Writer();
@@ -287,10 +302,11 @@ export async function keyringPassword(attrs: Record<string, string>): Promise<Bu
       return out;
     };
     const unlocked = readPaths();
+    const locked = readPaths();
     // Locked items are left alone on purpose: unlocking prompts, and a
     // password dialog nobody asked for is not what "import my logins" means.
     const item = unlocked[0];
-    if (!item) return null;
+    if (!item) return { state: locked.length ? "locked" : "absent" };
 
     // GetSecrets(ao, o) → a{o(oayays)}
     const w3 = new Writer();
@@ -314,11 +330,11 @@ export async function keyringPassword(attrs: Record<string, string>): Promise<Bu
       const paramsLen = r3.u32(); r3.bytes(paramsLen);
       const valueLen = r3.u32();
       const value = r3.bytes(valueLen);
-      return Buffer.from(value);
+      return { state: "found", value: Buffer.from(value) };
     }
-    return null;
+    return { state: "absent" };
   } catch {
-    return null;
+    return { state: "no-answer" };
   } finally {
     bus?.close();
   }

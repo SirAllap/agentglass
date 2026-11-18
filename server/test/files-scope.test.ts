@@ -39,7 +39,7 @@ const files = async () => await import("../src/files.ts");
 describe("fileTree stays inside the checkout", () => {
   test("lists what is actually there", async () => {
     const { fileTree } = await files();
-    const r = fileTree(repo, "");
+    const r = await fileTree(repo, "");
     expect(r.ok).toBe(true);
     expect(r.entries.map((e) => e.name).sort()).toEqual(["README.md", "src"]);
     // Directories first is the order a tree is scanned in.
@@ -48,33 +48,33 @@ describe("fileTree stays inside the checkout", () => {
 
   test("a subdirectory is reached by its relative path", async () => {
     const { fileTree } = await files();
-    const r = fileTree(repo, "src");
+    const r = await fileTree(repo, "src");
     expect(r.ok).toBe(true);
     expect(r.entries.map((e) => e.rel)).toEqual(["src/a.ts"]);
   });
 
   test("`..` does not climb out", async () => {
     const { fileTree } = await files();
-    expect(fileTree(repo, "../..").ok).toBe(false);
-    expect(fileTree(repo, "src/../../..").ok).toBe(false);
-    expect(fileTree(repo, "../outside").ok).toBe(false);
+    expect((await fileTree(repo, "../..")).ok).toBe(false);
+    expect((await fileTree(repo, "src/../../..")).ok).toBe(false);
+    expect((await fileTree(repo, "../outside")).ok).toBe(false);
   });
 
   test("an absolute rel is still resolved against the root, not obeyed", async () => {
     const { fileTree } = await files();
     // resolve(root, "/etc") is "/etc" — which is exactly why the check is on the
     // RESULT rather than on the string that was sent.
-    expect(fileTree(repo, "/etc").ok).toBe(false);
+    expect((await fileTree(repo, "/etc")).ok).toBe(false);
   });
 
   test("a NUL in the path is refused rather than truncated by the syscall", async () => {
     const { fileTree } = await files();
-    expect(fileTree(repo, "src\0/../../..").ok).toBe(false);
+    expect((await fileTree(repo, "src\0/../../..")).ok).toBe(false);
   });
 
   test("a root outside the workspace is refused whatever it is", async () => {
     const { fileTree } = await files();
-    const r = fileTree(outside, "");
+    const r = await fileTree(outside, "");
     expect(r.ok).toBe(false);
     expect(r.error).toContain("outside");
   });
@@ -85,7 +85,7 @@ describe("fileTree stays inside the checkout", () => {
     mkdirSync(`${repo}-evil`, { recursive: true });
     writeFileSync(join(`${repo}-evil`, "x.txt"), "x\n");
     try {
-      const r = fileTree(repo, "../repo-evil");
+      const r = await fileTree(repo, "../repo-evil");
       expect(r.ok).toBe(false);
     } finally {
       rmSync(`${repo}-evil`, { recursive: true, force: true });
@@ -94,16 +94,16 @@ describe("fileTree stays inside the checkout", () => {
 
   test("nothing, or something that is not a directory, is refused", async () => {
     const { fileTree } = await files();
-    expect(fileTree("", "").ok).toBe(false);
-    expect(fileTree(join(repo, "README.md"), "").ok).toBe(false);
-    expect(fileTree(join(repo, "nope"), "").ok).toBe(false);
+    expect((await fileTree("", "")).ok).toBe(false);
+    expect((await fileTree(join(repo, "README.md"), "")).ok).toBe(false);
+    expect((await fileTree(join(repo, "nope"), "")).ok).toBe(false);
   });
 
   test(".git is machinery, not content", async () => {
     const { fileTree } = await files();
     mkdirSync(join(repo, ".git", "objects"), { recursive: true });
     try {
-      expect(fileTree(repo, "").entries.some((e) => e.name === ".git")).toBe(false);
+      expect((await fileTree(repo, "")).entries.some((e) => e.name === ".git")).toBe(false);
     } finally {
       rmSync(join(repo, ".git"), { recursive: true, force: true });
     }
@@ -113,7 +113,7 @@ describe("fileTree stays inside the checkout", () => {
     const { fileTree } = await files();
     symlinkSync(join(box, "gone"), join(repo, "dangling"));
     try {
-      const r = fileTree(repo, "");
+      const r = await fileTree(repo, "");
       expect(r.ok).toBe(true);
       expect(r.entries.some((e) => e.name === "dangling")).toBe(false);
     } finally {
@@ -125,15 +125,43 @@ describe("fileTree stays inside the checkout", () => {
 describe("search is held to the same boundary", () => {
   test("find and grep both refuse a root outside the workspace", async () => {
     const { findFiles, grepFiles } = await files();
-    expect(findFiles(outside, "secret").ok).toBe(false);
-    expect(grepFiles(outside, "not yours").ok).toBe(false);
+    expect((await findFiles(outside, "secret")).ok).toBe(false);
+    expect((await grepFiles(outside, "not yours")).ok).toBe(false);
   });
 
   test("one letter is not a content search", async () => {
     // Same floor the in-review search uses: every file matches "a".
     const { grepFiles } = await files();
-    const r = grepFiles(repo, "a");
+    const r = await grepFiles(repo, "a");
     expect(r.ok).toBe(true);
     expect(r.hits).toEqual([]);
+  });
+});
+
+// The machine-wide twin of this search froze the installed app for 20 s at a
+// time: a blocking spawn on the server's one thread. This one had the same
+// shape with a 15 s limit.
+const filesSource = await Bun.file(new URL("../src/files.ts", import.meta.url)).text();
+
+describe("a content search does not hold the server", () => {
+  test("runs beside the loop: a timer ticks while it searches, and the hit is the same", async () => {
+    const { grepFiles } = await files();
+    let ticks = 0;
+    const timer = setInterval(() => { ticks++; }, 1);
+    const r = await grepFiles(repo, "export const");
+    clearInterval(timer);
+    expect(r.ok).toBe(true);
+    if (r.via === "rg") {
+      expect(r.hits.map((h) => [h.rel, h.line, h.text])).toEqual([["src/a.ts", 1, "export const a = 1;"]]);
+      expect(ticks).toBeGreaterThan(0);
+    }
+  });
+
+  test("has no blocking spawn left, and a newer search of the checkout ends the older", async () => {
+    const at = filesSource.indexOf("export async function grepFiles(");
+    expect(at).toBeGreaterThan(-1);
+    const code = filesSource.slice(at, filesSource.indexOf("\n}\n", at)).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+    expect(code).not.toContain("spawnSync");
+    expect(code.split("latest: grepKey").length - 1).toBe(3);
   });
 });

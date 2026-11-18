@@ -5,7 +5,7 @@
 // invalidates it so the card updates on the very next read. These tests assert
 // that contract by reference identity, so they say nothing about timing and
 // cannot go flaky.
-import { describe, expect, test, beforeAll } from "bun:test";
+import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,9 +14,17 @@ import { story } from "./story.ts";
 // Set before the dynamic import: db.ts opens its Database at module load.
 const dir = mkdtempSync(join(tmpdir(), "agx-opentool-"));
 process.env.AGENTGLASS_DB = join(dir, "opentool.db");
+const prevXdgConfig = process.env.XDG_CONFIG_HOME;
+const prevRoot = process.env.AGENTGLASS_ROOT;
 process.env.XDG_CONFIG_HOME = dir;
 // Unscoped on purpose: the memo's behaviour is what's under test, not scoping.
 delete process.env.AGENTGLASS_ROOT;
+// Every file shares one process: a config home left behind renames the tmux
+// conf for the files after this one (panel-corpse-stamp deleted the wrong file).
+afterAll(() => {
+  if (prevXdgConfig === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = prevXdgConfig;
+  if (prevRoot === undefined) delete process.env.AGENTGLASS_ROOT; else process.env.AGENTGLASS_ROOT = prevRoot;
+});
 
 let db: typeof import("../src/db.ts");
 
@@ -100,7 +108,11 @@ describe("open-tool pairing without a tool_use_id (legacy path)", () => {
 
 describe("sessions memo", () => {
   step("an unchanged read of the same key is served from the memo", () => {
-    const a = db.getSessions(50);
+    /* Files share one process and one db module, so earlier files may have left
+       more cold sessions than one read warms (RISK_WARM_BATCH): a read that
+       deferred any is not memoized. Read until one is whole, then ask again. */
+    let a = db.getSessions(50);
+    for (let i = 0; i < 100 && db.getSessions(50) !== a; i++) a = db.getSessions(50);
     expect(db.getSessions(50)).toBe(a); // same (limit, provider, scope) within the TTL
   });
 });

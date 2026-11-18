@@ -74,6 +74,13 @@ describe("desktop alert routing", () => {
     expect(fallbacks[0].body).toContain("ls fixture-two");
   });
 
+  test("no page runs: the same hold sent twice pops up exactly once", () => {
+    broadcasts = []; fallbacks = []; census = { attached: 0, live: 0 };
+    alerts.pushGate("app:sess2b", "Bash", "ls fixture-twice");
+    alerts.pushGate("app:sess2b", "Bash", "ls fixture-twice");
+    expect(fallbacks.length).toBe(1);
+  });
+
   /*
    * The one that dropped an alert and left no trace.
    *

@@ -22,7 +22,7 @@ async function saveRoundsFlow(max: number): Promise<void> {
   const cur = await (await fetch(q, { headers: { Authorization: `Bearer ${MACHINE}` } })).json() as { flow: { roster: Record<string, unknown>[]; path: string[]; edges: Record<string, unknown>[] } };
   const flow = {
     ...cur.flow,
-    path: [...cur.flow.path.filter((x) => x !== "devops"), "devops"],
+    path: (() => { const rest = cur.flow.path.filter((x) => x !== "devops"); return [...rest.slice(0, -1), "devops", ...rest.slice(-1)]; })(), // the Gate stays last
     roster: [...cur.flow.roster.filter((r) => r.id !== "devops").map((r) => ({ ...r, required: false })), {
       ...cur.flow.roster[0]!, id: "devops", name: "DevOps", does: "Checks ports", prompt: "check ports", policyRole: undefined, required: false,
       chain: [{ engine: "opencode", model: "opencode/big-pickle" }], tools: [], readsOnly: true, resolvedChain: undefined,
@@ -40,7 +40,8 @@ async function saveFlow(): Promise<void> {
   const cur = await (await fetch(q, { headers: { Authorization: `Bearer ${MACHINE}` } })).json() as { flow: { roster: Record<string, unknown>[]; path: string[] } };
   const flow = {
     ...cur.flow,
-    path: [...cur.flow.path, "devops"],
+    // The Gate ("landing") has to stay the last step: the new role goes in before it.
+    path: [...cur.flow.path.slice(0, -1), "devops", ...cur.flow.path.slice(-1)],
     roster: [...cur.flow.roster.map((r) => (r.id === "inspector" ? { ...r, required: true } : r)), {
       ...cur.flow.roster[0]!, id: "devops", name: "DevOps", does: "Checks ports", prompt: "check ports", policyRole: undefined,
       chain: [{ engine: "opencode", model: "opencode/big-pickle" }], tools: [], readsOnly: true, required: true, resolvedChain: undefined,

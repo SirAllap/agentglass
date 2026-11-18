@@ -28,11 +28,12 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { TEST_TERM } from "./tmuxTerm.ts";
 import { story } from "./story.ts";
+import { agxTestBase } from "./tmuxTmp.ts";
 
 /** Short, for the 108-byte unix socket path limit. The DIRECTORY carries the
  *  pid and the socket NAME stays fixed — see tmux-attach-claim.test.ts for the
  *  measurements behind that split. */
-const TMPDIR = `/tmp/agx-tmux-rec-${process.pid}`;
+const TMPDIR = agxTestBase("agx-tmux-rec");
 const SOCK = "agx-rec";
 const OURS = ["-L", SOCK];
 const REAL_TMPDIR = process.env.TMUX_TMPDIR;
@@ -134,12 +135,12 @@ describe.if(HAVE_TMUX)("a window a phone left pinned", () => {
     expect(mark(pinned)).toBe("none");
   });
 
-  step("is not reclaimed the instant it looks free", () => {
+  step("is not reclaimed the instant it looks free", async () => {
     // A phone switching tabs closes one socket and opens the next, and between
     // them the window is pinned with nothing on it. Acting there gives the desk
     // its width and takes it away again — two reflows to arrive back where it
     // started.
-    expect(ctl.reclaimPinnedWindow(OURS, sessionId, pinned, true)).toBe(false);
+    expect(await ctl.reclaimPinnedWindow(OURS, sessionId, pinned, true)).toBe(false);
     expect(cols(pinned)).toBe(70);
   });
 
@@ -147,14 +148,14 @@ describe.if(HAVE_TMUX)("a window a phone left pinned", () => {
     await Bun.sleep(PAST_THE_WAIT);
     // `false` is "a phone is on it": the window is owed to that phone's own
     // teardown, and the clock starts again when it goes.
-    expect(ctl.reclaimPinnedWindow(OURS, sessionId, pinned, false)).toBe(false);
-    expect(ctl.reclaimPinnedWindow(OURS, sessionId, pinned, true)).toBe(false);
+    expect(await ctl.reclaimPinnedWindow(OURS, sessionId, pinned, false)).toBe(false);
+    expect(await ctl.reclaimPinnedWindow(OURS, sessionId, pinned, true)).toBe(false);
     expect(cols(pinned)).toBe(70);
   });
 
   step("and puts itself back once it has really been left", async () => {
     await Bun.sleep(PAST_THE_WAIT);
-    expect(ctl.reclaimPinnedWindow(OURS, sessionId, pinned, true)).toBe(true);
+    expect(await ctl.reclaimPinnedWindow(OURS, sessionId, pinned, true)).toBe(true);
     // The desk's own client is the largest thing viewing it, which is the whole
     // of what `-A` computes.
     expect(cols(pinned)).toBe(200);
@@ -172,10 +173,15 @@ describe.if(HAVE_TMUX)("a window a phone left pinned", () => {
     expect(cols(theirs)).toBe(60);
     expect(mark(theirs)).toBe("");
 
-    expect(ctl.reclaimPinnedWindow(OURS, sessionId, theirs, true)).toBe(false);
+    expect(await ctl.reclaimPinnedWindow(OURS, sessionId, theirs, true)).toBe(false);
     await Bun.sleep(PAST_THE_WAIT);
-    expect(ctl.reclaimPinnedWindow(OURS, sessionId, theirs, true)).toBe(false);
+    expect(await ctl.reclaimPinnedWindow(OURS, sessionId, theirs, true)).toBe(false);
     expect(cols(theirs)).toBe(60);
     expect(sizeOpt(theirs)).toBe("manual");
   }, 15_000);
+});
+
+test("reclaimPinnedWindow never rejects: the pty path calls it with void", async () => {
+  // A socket that is not an array makes the first tmux call throw before any child runs.
+  expect(await ctl.reclaimPinnedWindow(null as unknown as string[], "$1", "@1", true)).toBe(false);
 });

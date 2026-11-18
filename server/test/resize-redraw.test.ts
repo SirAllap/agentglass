@@ -13,7 +13,9 @@
  * was somebody asking for the screen again.
  */
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const src = readFileSync(new URL("../src/terminal.ts", import.meta.url).pathname, "utf8");
 const ctl = readFileSync(new URL("../src/tmuxctl.ts", import.meta.url).pathname, "utf8");
@@ -27,8 +29,40 @@ describe("an attach ends in a redraw too", () => {
        a row out of place until something else happened to resize it. */
     const at = src.indexOf("session.tmuxClient = resolveClient(proc.pid);");
     expect(at).toBeGreaterThan(-1);
-    const body = src.slice(at, at + 1400);
-    expect(body).toContain("redrawClient(c.socket, c.tty)");
+    const body = src.slice(at, at + 1600);
+    // Async: first contact is on the request path, a blocking spawn stalls it.
+    expect(body).toContain("redrawClientAsync(c.socket, c.tty)");
+    expect(body).not.toContain("redrawClient(c.socket, c.tty)");
+  });
+
+  test("the async redraw sends the same tmux call and never blocks the loop", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "agx-redraw-"));
+    try {
+      const log = join(dir, "calls.log");
+      const stub = join(dir, "tmux");
+      writeFileSync(stub, `#!/bin/sh\necho "$@" >> "${log}"\nsleep 1\n`);
+      chmodSync(stub, 0o755);
+      const script = join(dir, "probe.ts");
+      writeFileSync(script, `
+        import { redrawClientAsync } from ${JSON.stringify(new URL("../src/tmuxctl.ts", import.meta.url).pathname)};
+        let ticks = 0;
+        const t = setInterval(() => { ticks++; }, 20);
+        const p = redrawClientAsync(["-L", "agx-redraw-stub"], "/dev/pts/9");
+        const t0 = Date.now();
+        await p;
+        clearInterval(t);
+        console.log(JSON.stringify({ ms: Date.now() - t0, ticks }));
+      `);
+      const env: Record<string, string> = { ...process.env as Record<string, string>, PATH: `${dir}:${process.env.PATH ?? ""}`, TMUX_TMPDIR: dir };
+      delete env.TMUX;
+      const r = Bun.spawnSync([process.execPath, script], { env, cwd: dir });
+      const out = JSON.parse(r.stdout.toString().trim().split("\n").pop() ?? "{}");
+      // The stub sleeps 1s; a blocked loop would tick ~0 times meanwhile.
+      expect(out.ticks).toBeGreaterThan(10);
+      expect(readFileSync(log, "utf8")).toContain("-L agx-redraw-stub refresh-client -t /dev/pts/9");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -46,14 +80,14 @@ describe("resize ends in a redraw", () => {
     expect(body).toContain("const c = s.tmuxClient;");
     expect(body).toContain("redrawClient(c.socket, c.tty)");
     // And it waits for the client rather than giving up on it.
-    expect(body).toContain("setTimeout(() => askRedraw(false), 900)");
+    expect(body).toContain('setTimeoutAs("terminal redraw retry", () => askRedraw(false), 900)');
   });
 
   test("and it is debounced, because a drag is a resize per frame", () => {
     const at = src.indexOf('} else if (msg.t === "resize") {');
     const body = src.slice(at, at + 2600);
     expect(body).toContain("if (s.redrawTimer) clearTimeout(s.redrawTimer)");
-    expect(body).toContain("setTimeout(() => askRedraw(true), 120)");
+    expect(body).toContain('setTimeoutAs("terminal redraw", () => askRedraw(true), 120)');
   });
 
   test("the redraw names the client, since a popup would otherwise take it", () => {

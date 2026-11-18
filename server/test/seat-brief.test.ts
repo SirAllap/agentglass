@@ -7,14 +7,20 @@
  * these tests are about that paragraph existing, being editable, and carrying
  * the four rules that were paid for rather than designed.
  */
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { story } from "./story.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "agx-brief-"));
 process.env.AGENTGLASS_DOCTRINE = join(dir, "data");
+const prevTmuxTmp = process.env.TMUX_TMPDIR;
+mkdirSync(join(dir, "tmux"), { recursive: true }); // private, so the tmux guard lets pane helpers answer
+process.env.TMUX_TMPDIR = join(dir, "tmux");
+afterAll(() => {
+  if (prevTmuxTmp === undefined) delete process.env.TMUX_TMPDIR; else process.env.TMUX_TMPDIR = prevTmuxTmp;
+});
 /* The open project, so `seatable` lets these through: its gate fires first and
    would otherwise answer every adoption test with "not a project this app
    knows", which is a true answer to a different question. */

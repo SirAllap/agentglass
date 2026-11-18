@@ -37,7 +37,7 @@ describe("a download from a target=_blank link", () => {
 
   test("an armed tab fetches the link itself instead of opening a tab", () => {
     const h = openHandler();
-    expect(h).toContain("guestDownloadDir.has(guest)");
+    expect(h).toContain("armedEntry(guest)"); // an arming nobody used in time no longer counts
     expect(h).toContain("guest.downloadURL(safe)");
     // The download is taken before the tab is opened, or both would happen.
     expect(h.indexOf("guest.downloadURL(safe)")).toBeLessThan(h.indexOf("ag:browser-open-tab"));

@@ -52,7 +52,7 @@ test("an explicit state dir still wins, so an installed app is untouched", () =>
   expect(confPath()).toStartWith(st);
 });
 
-test("the sweep removes the hashed confs the old placement left, and nothing else", () => {
+test("the sweep removes the hashed confs the old placement left, and nothing else", async () => {
   const st = mkdtempSync(join(tmpdir(), "agx-state-"));
   made.push(st);
   process.env.AGENTGLASS_STATE_DIR = st;
@@ -71,7 +71,7 @@ test("the sweep removes the hashed confs the old placement left, and nothing els
   utimesSync(mine, then, then);
   utimesSync(other, then, then);
 
-  const gone = sweepStaleConfs();
+  const gone = await sweepStaleConfs();
   expect(gone).toBe(1);
   expect(existsSync(old), "an old hashed conf goes").toBe(false);
   expect(existsSync(fresh), "a fresh one may still belong to a server starting up").toBe(true);

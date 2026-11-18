@@ -38,14 +38,14 @@ beforeAll(async () => {
 });
 
 describe("removeWorktree membership", () => {
-  test("refuses a worktree that belongs to a different repo", () => {
-    const r = gitwork.removeWorktree(A, Bwt, false);
+  test("refuses a worktree that belongs to a different repo", async () => {
+    const r = await gitwork.removeWorktree(A, Bwt, false);
     expect(r.ok).toBe(false);
     expect(r.error).toContain("not a worktree of this repository");
   });
 
-  test("still removes a real worktree of the repo", () => {
-    const r = gitwork.removeWorktree(A, Awt, false);
+  test("still removes a real worktree of the repo", async () => {
+    const r = await gitwork.removeWorktree(A, Awt, false);
     expect(r.ok).toBe(true);
   });
 });

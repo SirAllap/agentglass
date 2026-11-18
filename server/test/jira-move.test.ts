@@ -97,6 +97,15 @@ function suite(flavor: FakeFlavor) {
         expect(fake.requests[0]!.query.expand).toBe("transitions.fields");
       });
 
+      test("the screen's required fields come with their names, in the same one read, and nothing is written", async () => {
+        addMove("2", { id: "23", name: "Close it", toStatusId: "3", requiredFields: ["resolution"] });
+        const r = await J.movesStored("ORBIT-1042");
+        const m = r.data!.options.find((o) => o.id === "23")!;
+        expect(m.needs).toEqual(["resolution"]);
+        expect(m.fields!.find((f) => f.key === "resolution")).toMatchObject({ name: "Resolution", required: true });
+        expect(wire()).toEqual(["GET /issue/ORBIT-1042/transitions"]);
+      });
+
       test("a move that needs a field says which, and a finished status says it is done", async () => {
         const r = await J.movesStored("ORBIT-1044");
         expect(r.data!.options.map((o) => [o.id, o.label, o.toKind, o.needs])).toEqual([

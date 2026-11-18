@@ -16,7 +16,7 @@ import { describe, expect, it } from "bun:test";
 const src = await Bun.file(new URL("../src/prs.ts", import.meta.url)).text();
 
 const facetBlock = (() => {
-  const at = src.indexOf("const [contribs, assignees, labels, milestones, branches]");
+  const at = src.indexOf("const [contribs, assignees, labels, milestones, branches");
   return src.slice(at, src.indexOf("]);", at));
 })();
 

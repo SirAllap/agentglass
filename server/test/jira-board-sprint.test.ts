@@ -148,6 +148,15 @@ for (const flavor of ["cloud", "datacenter"] as const) {
       const r = await B.viewRead("board:3");
       expect(searches().filter((q) => jqlOf(q).includes("sprint is EMPTY")).length).toBe(1);
       expect(r.truncated).toBe(true);
+      // The sprint's own search was whole: only the backlog was cut, so a view of the sprint alone can say so.
+      expect(r.backlogCut).toBe(true);
+    });
+
+    test("a backlog that fits in its page is not cut at all", async () => {
+      seedHistory();
+      const r = await B.viewRead("board:3");
+      expect(r.truncated).toBeUndefined();
+      expect(r.backlogCut).toBeUndefined();
     });
 
     test("a board with no active sprint is the one search it was", async () => {

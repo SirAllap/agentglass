@@ -94,10 +94,11 @@ beforeAll(async () => {
   // The fixture, verbatim, with only the placeholder directory filled in.
   // JSON.stringify does the escaping so a Windows path's backslashes cannot
   // turn a valid record into a parse error.
+  // The fixture's own dates age out of the retention window and the scanner skips what is older: stamp it with today.
   const raw = readFileSync(join(FIXTURES, "claude-code-transcript.jsonl"), "utf8");
   const projects = join(dir, "projects", "-srv-notekeeper");
   mkdirSync(projects, { recursive: true });
-  writeFileSync(join(projects, `${SESSION}.jsonl`), raw.replaceAll("__CWD__", JSON.stringify(CWD).slice(1, -1)));
+  writeFileSync(join(projects, `${SESSION}.jsonl`), raw.replaceAll("2026-08-19", new Date().toISOString().slice(0, 10)).replaceAll("__CWD__", JSON.stringify(CWD).slice(1, -1)));
 });
 
 // `bun test` shares one process and the database may be one an earlier file

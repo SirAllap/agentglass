@@ -260,7 +260,7 @@ describe("a window setting of the escalation class, through /control", () => {
       if (f.type !== "control" || !f.rid) return;
       frames.push({ data: f.data, ...(f.grant ? { grant: f.grant, expect: f.expect } : {}) });
       // The window's own rule (settingsRegistry.ts): an escalation without a grant waits.
-      const answer = f.data.do === "settings.get" ? { ok: true, applied: true, value: { ok: true, id: f.data.args.id, value: "acme/orbit" } }
+      const answer = f.data.do === "settings.get" ? { ok: true, value: { ok: true, id: f.data.args.id, value: "acme/orbit" } }
         : f.grant ? { ok: true, applied: true } : { ok: false, applied: false, error: NEEDS_APPROVAL };
       await fetch(base + "/control/result", { method: "POST", headers: fromApp(), body: JSON.stringify({ rid: f.rid, ...answer }) });
     });

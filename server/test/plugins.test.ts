@@ -876,10 +876,11 @@ describe("a pinned catalogue entry installs its commit or nothing", () => {
     expect(readlinkSync(join(local.result.plugin!.installDir, "run.sh"))).toBe("listed.sh");
   }, 30_000);
 
-  test("an entry that pins nothing still installs the default branch, as a catalogue from elsewhere may", async () => {
-    const r = await install({ kind: "catalogue", id: "orbit-clock", catalogue: catalogue(entry({ source: { kind: "git", url: "https://github.com/acme/orbit-clock", ref: null }, sha256: undefined })) });
-    expect(r.result.ok).toBe(true);
-    expect(r.runSh).toBe("echo something else\n");
-    expect(r.log).toContain("clone");
+  test("an entry that pins nothing, or only a branch, is refused and nothing is cloned", async () => {
+    for (const ref of [null, "main"]) {
+      const r = await install({ kind: "catalogue", id: "orbit-clock", catalogue: catalogue(entry({ source: { kind: "git", url: "https://github.com/acme/orbit-clock", ref }, sha256: undefined })) });
+      expect(r.result.ok).toBe(false);
+      expect(r.log).not.toContain("clone");
+    }
   }, 30_000);
 });

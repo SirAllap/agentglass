@@ -25,7 +25,7 @@ import { dirname, join, basename } from "node:path";
 import { gh, ghGraphql } from "./prs.ts";
 import type { IssueViewCounts } from "../../shared/types.ts";
 import { git, safeAbs } from "./git.ts";
-import { addWorktree, removeWorktree } from "./gitwork.ts";
+import { addWorktree, removeWorktree, gitWriteTurn } from "./gitwork.ts";
 import { inScopeReal } from "./config.ts";
 
 export interface IssueRow {
@@ -518,8 +518,15 @@ export async function startIssue(rootIn: unknown, numberIn: unknown, modeIn: unk
   }
 
   const path = worktreePathFor(root, number, d.issue.title);
-  if (existsSync(path)) return { ok: false, error: `${path} already exists` };
-  const r = addWorktree(root, path, branch, true);
+  // The free-path check and the add as one step, in the same turn the /git/
+  // write route takes: two starts of one issue would otherwise both see the
+  // path free and the second add would fail half-way.
+  const endTurn = await gitWriteTurn(root);
+  let r;
+  try {
+    if (existsSync(path)) return { ok: false, error: `${path} already exists` };
+    r = await addWorktree(root, path, branch, true);
+  } finally { endTurn(); }
   if (!r.ok) return { ok: false, error: r.error ?? "could not create the worktree" };
 
   const work: IssueWork = { number, repo, branch, path, mode, startedAt: Date.now() };
@@ -552,7 +559,7 @@ export async function finishIssue(rootIn: unknown, numberIn: unknown, force = fa
     return { ok: false, error: `${dirty.length} uncommitted change${dirty.length === 1 ? "" : "s"} in that worktree`, dirty: dirty.slice(0, 12) };
   }
 
-  const rm = removeWorktree(root, work.path, force);
+  const rm = await removeWorktree(root, work.path, force);
   if (!rm.ok) return { ok: false, error: rm.error ?? "could not remove the worktree" };
   // The branch only goes if it is merged, unless forced. `-d` refuses an
   // unmerged branch, which is exactly the check wanted here.

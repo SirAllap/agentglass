@@ -25,6 +25,8 @@
  * there is one, `ps` where there is not.
  */
 import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { setTimeoutAs, spawnSyncAs } from "./loopwatch.ts";
 
 /**
  * Direct children of a pid.
@@ -93,7 +95,7 @@ function runPs(): string {
   try {
     // `-o` with trailing `=` suppresses the header, so there is no first line to
     // skip and no locale-dependent column name to match.
-    const p = Bun.spawnSync(["ps", "-axo", "pid=,ppid=,comm="], { stdout: "pipe", stderr: "ignore" });
+    const p = spawnSyncAs("ps children", ["ps", "-axo", "pid=,ppid=,comm="], { stdout: "pipe", stderr: "ignore" });
     return p.success ? new TextDecoder().decode(p.stdout) : "";
   } catch { return ""; }
 }
@@ -155,4 +157,36 @@ export function findTmuxBelow(pid: number, depth = 0): number | null {
     if (deeper) return deeper;
   }
   return null;
+}
+
+/**
+ * The same walk as findTmuxBelow, without holding the loop: every /proc read is
+ * a threadpool read, so a read the kernel makes wait (memory pressure, a busy
+ * mmap_lock) costs this call time and not the loop. Linux only; elsewhere the
+ * sync walk answers (its `ps` is labelled and held for a second).
+ */
+export async function findTmuxBelowAsync(pid: number, depth = 0): Promise<number | null> {
+  if (depth > 4) return null;
+  if (process.platform !== "linux") return findTmuxBelow(pid, depth);
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  let kids: number[] = [];
+  try {
+    kids = (await readFile(`/proc/${pid}/task/${pid}/children`, "utf8")).trim().split(/\s+/).filter(Boolean).map(Number).filter((n) => Number.isInteger(n) && n > 0);
+  } catch { return null; }
+  for (const c of kids) {
+    let comm = "";
+    try { comm = (await readFile(`/proc/${c}/comm`, "utf8")).trim(); } catch { /* gone */ }
+    if (isTmuxComm(comm)) return c;
+    const deeper = await findTmuxBelowAsync(c, depth + 1);
+    if (deeper) return deeper;
+  }
+  return null;
+}
+
+/** Is a tmux client below this shell? Gives `fallback` (the last known answer) if the walk takes longer than `timeoutMs`. */
+export function tmuxRunningAsync(pid: number, fallback: boolean, timeoutMs = 1500, walk: (pid: number) => Promise<number | null> = findTmuxBelowAsync): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const t = setTimeoutAs("tmux walk timeout", () => resolve(fallback), timeoutMs);
+    walk(pid).then((r) => { clearTimeout(t); resolve(r !== null); }, () => { clearTimeout(t); resolve(fallback); });
+  });
 }

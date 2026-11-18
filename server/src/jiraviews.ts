@@ -21,6 +21,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { jiraAccount } from "./jiraAccount.ts";
 import { ASSIGNED_VIEW_ID, ASSIGNED_VIEW_NAME } from "../../shared/providers.ts";
 import type { JiraColumn, ListStatus, ProviderTask, SavedFolder, SavedView } from "../../shared/providers.ts";
 
@@ -28,7 +29,7 @@ const FILE = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "ag
 
 /** Test seam, so a suite never reads or writes the developer's own views. */
 let override: string | null = null;
-export function __setJiraViewsPath(p: string | null): void { override = p; cache = undefined; }
+export function __setJiraViewsPath(p: string | null): void { override = p; cache = undefined; savedViewsMemo.clear(); }
 const path = (): string => override ?? FILE;
 
 export interface CachedJiraView {
@@ -38,11 +39,19 @@ export interface CachedJiraView {
   /** The board's columns; empty for a filter or a search. */
   columns: JiraColumn[];
   statuses?: ListStatus[];
+  /** The board a non-board view's `statuses` came from, when one project's answered for all of it. */
+  statusBoard?: { id: string; name: string; key: string };
   /** When that read happened. */
   at: number;
   /** The read stopped at the page cap. */
   truncated?: boolean;
+  backlogCut?: boolean;
+  /** Version of the status rules that wrote this entry; an entry without the current one is not served. */
+  sv?: number;
 }
+
+/** Bump when the statuses a read carries change meaning: older cached entries then stop painting first. */
+export const STATUS_VERSION = 3;
 
 interface SiteStore {
   views: SavedView[];
@@ -57,6 +66,8 @@ interface SiteStore {
 interface Store { sites: Record<string, SiteStore> }
 
 let cache: Store | undefined;
+/** Bumped on every write, so `savedViews` below knows the store it built its answer from is still the current one. */
+let storeVersion = 0;
 
 function load(): Store {
   if (cache) return cache;
@@ -72,6 +83,7 @@ function load(): Store {
 
 function save(s: Store): void {
   cache = s;
+  storeVersion++;
   const p = path();
   try {
     mkdirSync(dirname(p), { recursive: true });
@@ -105,7 +117,11 @@ export const boardAddress = (site: string, boardId: string): string =>
  * board, the board is on the bar. A board both pasted and inside a saved
  * folder shows once, as the folder's, because that copy keeps up with Jira.
  */
+const savedViewsMemo = new Map<string, { ver: number; views: SavedView[] }>();
+
 export function savedViews(site: string): SavedView[] {
+  const hit = savedViewsMemo.get(site);
+  if (hit && hit.ver === storeVersion) return hit.views;
   const s = siteOf(site);
   const fromFolders = s.folders.flatMap((f) => (f.lists ?? []).map((l): SavedView => ({
     id: `board:${l.id}`,
@@ -119,12 +135,33 @@ export function savedViews(site: string): SavedView[] {
     spaceName: f.spaceName,
   })));
   const taken = new Set(fromFolders.map((v) => v.id));
-  return [ASSIGNED, ...s.views.filter((v) => !taken.has(v.id)), ...fromFolders];
+  const views = [ASSIGNED, ...s.views.filter((v) => !taken.has(v.id)), ...fromFolders];
+  savedViewsMemo.set(site, { ver: storeVersion, views });
+  return views;
 }
 
 export const savedFolders = (site: string): SavedFolder[] => siteOf(site).folders;
 export const currentView = (site: string): string | undefined => siteOf(site).current;
-export const cachedFor = (site: string, id: string): CachedJiraView | undefined => siteOf(site).cache[id];
+/**
+ * Cached rows are what one token could see, so they are kept per account as well as per site:
+ * two accounts on one site (another person, another token) never read each other's rows.
+ * The default account's rows keep the bare view id, as they always were.
+ */
+const SEP = "\u0001";
+const slot = (id: string): string => { const a = jiraAccount(); return a ? `${a}${SEP}${id}` : id; };
+/** The cached views of the account in force: the id they were put under, and the entry. */
+function ownCache(site: string): [string, CachedJiraView][] {
+  const a = jiraAccount();
+  const own: [string, CachedJiraView][] = [];
+  for (const [k, v] of Object.entries(siteOf(site).cache)) {
+    if (a ? k.startsWith(a + SEP) : !k.includes(SEP)) own.push([a ? k.slice(a.length + 1) : k, v]);
+  }
+  return own;
+}
+export const cachedFor = (site: string, id: string): CachedJiraView | undefined => {
+  const c = siteOf(site).cache[slot(id)];
+  return c && c.sv === STATUS_VERSION ? c : undefined;
+};
 
 export function setCurrent(site: string, id: string): void {
   if (!savedViews(site).some((v) => v.id === id)) return;
@@ -139,10 +176,36 @@ export function addView(site: string, v: SavedView): void {
   put(site, { ...s, views: [...s.views.filter((x) => x.id !== v.id), v], current: v.id });
 }
 
+/** Keep a view without making it the open one (a saved query is not a request to switch boards). */
+export function upsertView(site: string, v: SavedView): void {
+  if (v.id === ASSIGNED_VIEW_ID) return;
+  const s = siteOf(site);
+  put(site, { ...s, views: [...s.views.filter((x) => x.id !== v.id), v] });
+}
+
+/**
+ * Change a stored view in place; false when it is not one of the stored ones (the built-in, a project's board).
+ * The kept read of a view whose address changed is dropped, since it answered another search.
+ */
+export function patchView(site: string, id: string, patch: Partial<Pick<SavedView, "name" | "team" | "tab" | "url">>): SavedView | null {
+  const s = siteOf(site);
+  const at = s.views.findIndex((v) => v.id === id);
+  if (at < 0) return null;
+  const next: SavedView = { ...s.views[at]!, ...patch };
+  if (patch.team === false) delete next.team;
+  if (patch.tab === false) delete next.tab;
+  const views = s.views.map((v, i) => (i === at ? next : v));
+  const { [id]: kept, ...rest } = s.cache;
+  const cacheNext = kept && patch.url === undefined ? { ...rest, [id]: { ...kept, view: next } } : rest;
+  put(site, { ...s, views, cache: cacheNext });
+  return next;
+}
+
 export function removeView(site: string, id: string): void {
   if (id === ASSIGNED_VIEW_ID) return;
   const s = siteOf(site);
-  const { [id]: _gone, ...rest } = s.cache;
+  // The view goes from every account's cache, not only the one in force.
+  const rest = Object.fromEntries(Object.entries(s.cache).filter(([k]) => k !== id && !k.endsWith(SEP + id)));
   const views = s.views.filter((v) => v.id !== id);
   put(site, { ...s, views, cache: rest, current: s.current === id ? undefined : s.current });
 }
@@ -193,9 +256,8 @@ export function removeFolder(site: string, id: string): void {
 export function boardHolding(site: string, cardId: string, o: { freshMs?: number } = {}): { viewId: string; task: ProviderTask; at: number } | null {
   const want = cardId.trim().toLowerCase();
   if (!want) return null;
-  const s = siteOf(site);
   let best: { viewId: string; task: ProviderTask; at: number } | null = null;
-  for (const [viewId, entry] of Object.entries(s.cache)) {
+  for (const [viewId, entry] of ownCache(site)) {
     for (const t of entry?.tasks ?? []) {
       if (t.id.toLowerCase() !== want && (t.customId ?? "").toLowerCase() !== want) continue;
       const at = entry.at ?? 0;
@@ -210,7 +272,7 @@ export function boardHolding(site: string, cardId: string, o: { freshMs?: number
 /** The project keys the cached cards of this site carry: what a branch name can be read against without a request. */
 export function knownKeys(site: string): string[] {
   const keys = new Set<string>();
-  for (const entry of Object.values(siteOf(site).cache)) {
+  for (const [, entry] of ownCache(site)) {
     for (const t of entry?.tasks ?? []) {
       const m = /^([A-Z][A-Z0-9_]*)-\d+$/.exec(t.customId ?? "");
       if (m) keys.add(m[1]!);
@@ -221,7 +283,7 @@ export function knownKeys(site: string): string[] {
 
 export function putCache(site: string, id: string, c: CachedJiraView): void {
   const s = siteOf(site);
-  put(site, { ...s, cache: { ...s.cache, [id]: c } });
+  put(site, { ...s, cache: { ...s.cache, [slot(id)]: { ...c, sv: STATUS_VERSION } } });
 }
 
 /** Every cached row of every site; the addresses and folders stay. A disconnect is not a delete of the address book. */

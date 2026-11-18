@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
-  ROLE_IDS, chainFor, composePolicy, defaultStored, envelopeWithin, looksLikeSecret, resolve, ruleSentence, storedOf,
+  ROLE_IDS, chainFor, clampEnvelope, clampedFields, composePolicy, defaultStored, envelopeWithin, looksLikeSecret, resolve, ruleSentence, storedOf,
   validateStored, validatePolicy, DEFAULT_CEILING, DEFAULT_WORKER_ENVELOPE,
   type Policy, type PolicyRule, type RuleFacts,
 } from "../../shared/orchestration.ts";
@@ -130,6 +130,22 @@ describe("validateStored", () => {
     const v = validateStored({ ...defaultStored(), ceiling: { ...DEFAULT_CEILING, docker: "yes" } });
     expect(v.ok).toBe(false);
     if (!v.ok) expect(v.error).toContain("policy.ceiling.docker");
+  });
+  test("a policy saved before worktreeOps existed reads it as off, not as a broken file", () => {
+    const old = JSON.parse(JSON.stringify(defaultStored())) as { ceiling: { worktreeOps?: boolean }; workerDefault: { worktreeOps?: boolean } };
+    delete old.ceiling.worktreeOps;
+    delete old.workerDefault.worktreeOps;
+    const v = validateStored(old);
+    expect(v.ok).toBe(true);
+    if (v.ok) {
+      expect(v.value.ceiling.worktreeOps).toBe(false);
+      expect(v.value.workerDefault.worktreeOps).toBe(false);
+    }
+  });
+  test("a worktreeOps that is not true or false is refused by name", () => {
+    const v = validateStored({ ...defaultStored(), ceiling: { ...DEFAULT_CEILING, worktreeOps: "yes" } });
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.error).toContain("policy.ceiling.worktreeOps");
   });
 });
 
@@ -259,7 +275,7 @@ describe("the owner's case, as a fixture with invented names", () => {
 });
 
 describe("envelopeWithin, the ceiling's one test", () => {
-  const e = (over: Partial<typeof DEFAULT_CEILING> = {}) => ({ ...DEFAULT_WORKER_ENVELOPE, ...over });
+  const e = (over: Partial<typeof DEFAULT_CEILING> = {}) => ({ ...DEFAULT_WORKER_ENVELOPE, network: false, commit: false, docker: false, worktreeOps: false, ...over });
   test("narrower or equal is within", () => {
     expect(envelopeWithin(e(), DEFAULT_CEILING)).toBe(true);
     expect(envelopeWithin(e({ write: "none" }), e())).toBe(true);
@@ -270,6 +286,39 @@ describe("envelopeWithin, the ceiling's one test", () => {
     expect(envelopeWithin(e({ docker: true }), e())).toBe(false);
     expect(envelopeWithin(e({ deny: [] }), e({ deny: ["make deploy"] }))).toBe(false);
     expect(envelopeWithin(e({ deny: ["make deploy", "make db"] }), e({ deny: ["make deploy"] }))).toBe(true);
+  });
+});
+
+describe("clampEnvelope, resuming inside a ceiling that moved", () => {
+  const e = (over: Partial<typeof DEFAULT_CEILING> = {}) => ({ ...DEFAULT_WORKER_ENVELOPE, network: false, commit: false, docker: false, worktreeOps: false, ...over });
+  test("a wider ceiling clamps nothing: the stored envelope comes back unchanged", () => {
+    const stored = e({ network: true, commit: true });
+    const wider = e({ network: true, commit: true, docker: true });
+    const narrowed = clampEnvelope(stored, wider);
+    expect(narrowed).toEqual(stored);
+    expect(clampedFields(stored, narrowed)).toEqual([]);
+    expect(envelopeWithin(narrowed, stored)).toBe(true);
+    expect(envelopeWithin(narrowed, wider)).toBe(true);
+  });
+  test("a narrower ceiling clamps the envelope down to it, naming what moved", () => {
+    const stored = e({ network: true, commit: true, docker: true });
+    const narrower = e({ network: false, commit: true, docker: false, deny: ["make deploy"] });
+    const narrowed = clampEnvelope(stored, narrower);
+    expect(narrowed).toEqual({ write: "worktree", network: false, commit: true, docker: false, worktreeOps: false, deny: ["make deploy"] });
+    expect(clampedFields(stored, narrowed).sort()).toEqual(["deny", "docker", "network"]);
+  });
+  test("a role's tool list survives the clamp: a resumed worker never gets back tools its role took away", () => {
+    const stored = { ...e({ network: true }), tools: ["read", "run"] };
+    const narrowed = clampEnvelope(stored, e());
+    expect(narrowed.tools).toEqual(["read", "run"]);
+    expect(clampEnvelope(e(), e()).tools).toBeUndefined();
+  });
+  test("the result is never wider than the stored envelope or the ceiling", () => {
+    const stored = e({ write: "worktree", network: true, commit: false, docker: true, deny: ["a"] });
+    const ceiling = e({ write: "none", network: false, commit: true, docker: false, deny: ["b"] });
+    const narrowed = clampEnvelope(stored, ceiling);
+    expect(envelopeWithin(narrowed, stored)).toBe(true);
+    expect(envelopeWithin(narrowed, ceiling)).toBe(true);
   });
 });
 

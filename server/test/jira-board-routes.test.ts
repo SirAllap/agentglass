@@ -68,7 +68,7 @@ afterAll(async () => {
 const headers = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
 let seen = "";
 const call = async (method: string, path: string, body?: unknown, extra: Record<string, string> = {}) => {
-  const r = await fetch(base + path, { method, headers: { ...headers, ...extra }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const r = await fetch(base + path, { method, headers: { ...headers, origin: base, ...extra }, body: body === undefined ? undefined : JSON.stringify(body) });
   const text = await r.text();
   seen += text;
   return { status: r.status, body: JSON.parse(text) as Record<string, any> };
@@ -83,7 +83,7 @@ describe("the board routes", () => {
     expect(fake.requests.length).toBe(0);
   });
 
-  step("connected: the context is three reads, and a second ask is none", async () => {
+  step("connected: the context is four reads (filters, sprint, epics, next sprint), and a second ask is none", async () => {
     expect((await call("POST", "/jira/connect", { email: FAKE_EMAIL, site: "acme.atlassian.net", token: FAKE_TOKEN })).status).toBe(200);
     expect((await call("POST", "/jira/views/add", { kind: "board", id: "3" })).status).toBe(200);
     fake.requests.length = 0;
@@ -92,9 +92,9 @@ describe("the board routes", () => {
     expect(r.body.filters.map((q: { name: string }) => q.name)).toEqual(["Only bugs", "High priority"]);
     expect(r.body.sprint).toMatchObject({ name: "Sprint 4" });
     expect(JSON.stringify(r.body)).not.toContain("issuetype = Bug");
-    expect(fake.requests.length).toBe(3);
+    expect(fake.requests.length).toBe(4);
     await call("GET", "/jira/board-context?id=board:3");
-    expect(fake.requests.length).toBe(3);
+    expect(fake.requests.length).toBe(4);
   });
 
   step("a board read takes filter ids, and an id it does not have is a sentence", async () => {

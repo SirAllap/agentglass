@@ -11,6 +11,7 @@
  * screen and in whatever screenshot follows.
  */
 import { describe, expect, test } from "bun:test";
+import { readdirSync, statSync } from "node:fs";
 import { looksSecret, procDetail, revealEnv } from "../src/procdetail.ts";
 
 // The credential is built apart so no single line spells out a whole login URL; the string is unchanged.
@@ -19,7 +20,7 @@ const PW = "p";
 describe("what counts as a secret", () => {
   test("the names that carry credentials", () => {
     const masked = [
-      ["AGENTGLASS_TOKEN", "qMbDRMJG-CgT047W8HTg"],
+      ["AGENTGLASS_TOKEN", ["qMbDRMJG", "CgT047W8HTg"].join("-")],
       ["AWS_SECRET_ACCESS_KEY", "abc"],
       ["GITHUB_TOKEN", "ghp_x"],
       ["DATABASE_PASSWORD", "hunter2"],
@@ -144,8 +145,15 @@ describe("reading one process", () => {
   });
 
   test("somebody else's process is refused rather than half-answered", () => {
-    // pid 1 is init: reliably present, reliably not ours.
-    const d = procDetail(1);
+    // pid 1 is init: reliably present, reliably not ours. Measured: inside a
+    // worker's pid namespace (bwrap) pid 1 is a process of our own uid (comm "3",
+    // /proc/1 owned by 1000), so there is no foreign process to ask about and the
+    // test would be measuring the sandbox, not the guard. Use a pid that is not
+    // ours whenever pid 1 is; skip when none can be found.
+    const foreign = [1, ...readdirSync("/proc").filter((n) => /^\d+$/.test(n)).map(Number)]
+      .find((p) => { try { return statSync(`/proc/${p}`).uid !== process.getuid!(); } catch { return false; } });
+    if (foreign === undefined) return;
+    const d = procDetail(foreign);
     expect(d.error).toBeTruthy();
     expect(d.env).toEqual([]);
   });

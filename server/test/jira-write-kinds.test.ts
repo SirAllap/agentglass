@@ -19,7 +19,7 @@ const Comments = await import("../src/jiraComments.ts");
 const creds = { email: "a@acme.example", site: "acme.atlassian.net", token: "t", auth: "basic" as const, api: 3 as const };
 
 beforeAll(() => { J.__setJiraSettingsPath(join(dir, "jira-settings.json")); });
-afterAll(() => { J.__setJiraSettingsPath(null); rmSync(dir, { recursive: true, force: true }); if (saved !== undefined) process.env.AGENTGLASS_JIRA_WRITE = saved; });
+afterAll(async () => { (await import("../src/jiraEdit.ts")).__forgetOffered(); J.__setJiraSettingsPath(null); rmSync(dir, { recursive: true, force: true }); if (saved !== undefined) process.env.AGENTGLASS_JIRA_WRITE = saved; });
 
 describe("write kinds", () => {
   test("every kind is allowed until it is switched off", () => {

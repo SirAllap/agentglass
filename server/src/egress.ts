@@ -11,6 +11,7 @@
  * its two service hosts are named below. ANTHROPIC_BASE_URL carries repository
  * code, so it trusts Anthropic's own endpoint and nothing else.
  */
+import { envLimit } from "./config.ts";
 export type OutboundDestination =
   | { ok: true; url: string; host: string }
   | { ok: false; error: string };
@@ -52,7 +53,7 @@ export function outboundDestination(
   const trusted = LOOPBACK_HOSTS.has(hostname)
     || LOOPBACK_V4.test(hostname)
     || trustedHosts.some((host) => hostname === host.toLowerCase());
-  if (!trusted && env.AGENTGLASS_ALLOW_REMOTE !== "1") {
+  if (!trusted && envLimit("AGENTGLASS_ALLOW_REMOTE", env) !== "1") {
     return {
       ok: false,
       error: `${label} points at remote host ${parsed.host}; set AGENTGLASS_ALLOW_REMOTE=1 to allow it`,

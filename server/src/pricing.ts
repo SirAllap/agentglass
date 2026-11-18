@@ -1,6 +1,7 @@
 import type { StatsSummary } from "../../shared/types.ts";
 import { statSync } from "node:fs";
 import { outboundDestination } from "./egress.ts";
+import { setIntervalAs } from "./loopwatch.ts";
 
 // Model pricing, USD per 1,000,000 tokens.
 //
@@ -354,7 +355,7 @@ export function startPricingRefresh(): void {
   if (refreshStarted || userTable || !/^(1|true|yes|on)$/i.test(process.env.AGENTGLASS_PRICING_REFRESH ?? "")) return;
   refreshStarted = true;
   void refreshLiteLlmPricing();
-  setInterval(() => void refreshLiteLlmPricing(), REFRESH_MS).unref?.();
+  setIntervalAs("pricing refresh", () => void refreshLiteLlmPricing(), REFRESH_MS).unref?.();
 }
 
 export function priceFor(modelName: string | null | undefined): ModelPrice | null {

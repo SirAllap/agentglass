@@ -453,8 +453,11 @@ describe.skipIf(!have)("enlisting a pane this app did not open", () => {
     const at = argv.indexOf("--settings");
     expect(at).toBeGreaterThan(-1);
     const deny = (JSON.parse(argv[at + 1]!) as { permissions: { deny: string[] } }).permissions.deny;
-    expect(deny).toContain("Bash(git push:*)");
-    expect(deny).toContain("Bash(git commit:*)");
+    // A worker has its seat's powers now: git push and commit are no longer on its
+    // lock (the base never-rules guard the trunk). The lock keeps the network, docker, sudo and the writes.
+    expect(deny).not.toContain("Bash(git push:*)");
+    expect(deny).toContain("Bash(sudo:*)");
+    expect(deny).toContain("Bash(curl:*)");
     expect(deny).toContain("Edit");
     expect(argv.slice(argv.indexOf("--model"), argv.indexOf("--model") + 2)).toEqual(["--model", "haiku"]);
     await cli("stop", "r1");
@@ -466,6 +469,14 @@ describe.skipIf(!have)("enlisting a pane this app did not open", () => {
     expect(out.error).toContain("this role runs on claude");
   }, SLOW);
 
+  step("--flow-role reaches the server, which answers with the ids the flow does have", async () => {
+    // No flow is saved here, so the template's roster is the answer.
+    const { code, out } = await cli("start", "r3", "--cwd", wt, "--flow-role", "builder-jupiter", "--timeout", "0");
+    expect(code).toBe(1);
+    expect(out.error).toStartWith('no such flow role: "builder-jupiter"');
+    expect(out.error).toContain("planner");
+  }, SLOW);
+
   step("a plain shell is refused, because prompting one types into somebody's command line", async () => {
     const mk = tmuxCmd("new-session", "-d", "-s", "plain", "-n", "just-a-shell", "-c", wt);
     expect(await mk.exited).toBe(0);
@@ -475,4 +486,66 @@ describe.skipIf(!have)("enlisting a pane this app did not open", () => {
     expect(r.out.error).toContain("not an agent");
     await tmuxCmd("kill-session", "-t", "=plain").exited;
   }, SLOW);
+});
+
+/*
+ * `agentglass-agent adopt` reads its pane from $TMUX_PANE. A hook, or a session
+ * started with `env -u TMUX_PANE`, has none and is still in a pane the app can
+ * use, so the CLI asks the tmux client it runs in. When even that fails it names
+ * the flag instead of asking the person to guess.
+ */
+describe.skipIf(!have)("adopt, when $TMUX_PANE is empty", () => {
+  const home = mkdtempSync(join(tmpdir(), "agx-adopt-pane-"));
+  afterAll(() => rmSync(home, { recursive: true, force: true }));
+
+  /** bin/agentglass-agent loaded as a module: its main does not run. */
+  function probe(body: string, data: unknown, env: Record<string, string> = {}): unknown {
+    const src = `
+import json, os, sys
+ns = {"__name__": "probe", "__file__": ${JSON.stringify(CLI)}}
+exec(compile(open(${JSON.stringify(CLI)}).read(), ${JSON.stringify(CLI)}, "exec"), ns)
+D = json.loads(sys.stdin.read())
+g = ns
+${body}
+`;
+    const p = Bun.spawnSync(["python3", "-c", src], {
+      env: { PATH: process.env.PATH ?? "", HOME: home, XDG_CONFIG_HOME: join(home, "config"), ...env },
+      stdin: new TextEncoder().encode(JSON.stringify(data)), stdout: "pipe", stderr: "pipe",
+    });
+    if (p.exitCode !== 0) throw new Error(p.stderr.toString());
+    return JSON.parse(p.stdout.toString());
+  }
+
+  const pane = (data: unknown) => probe(`
+def client():
+    if "client" not in D: raise AssertionError("tmux was asked, and it should not have been")
+    return D["client"]
+print(json.dumps(list(g["adopt_pane"](D.get("given"), D.get("env") or {}, client))))
+`, data);
+
+  test("the flag wins, then the environment, and tmux is not asked for either", () => {
+    expect(pane({ given: "%5", env: { TMUX_PANE: "%9" } })).toEqual(["%5", null]);
+    expect(pane({ given: null, env: { TMUX_PANE: "%9" } })).toEqual(["%9", null]);
+  });
+
+  test("with neither, it asks the tmux client it runs in", () => {
+    expect(pane({ given: null, env: {}, client: "%7" })).toEqual(["%7", null]);
+  });
+
+  test("and asks it for the pane of this client, not some pane of the session", () => {
+    const bin = join(home, "bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, "tmux"), `#!/bin/sh\nprintf '%s\\n' "$@" > ${JSON.stringify(join(home, "asked"))}\nprintf '%%3\\n'\n`);
+    chmodSync(join(bin, "tmux"), 0o755);
+    const got = probe(`print(json.dumps(list(g["adopt_pane"](None, {}, None))))`, {}, { PATH: `${bin}:${process.env.PATH ?? ""}` });
+    expect(got).toEqual(["%3", null]);
+    expect(readFileSync(join(home, "asked"), "utf8").trim().split("\n")).toEqual(["display-message", "-p", "#{pane_id}"]);
+  });
+
+  test("when there is no pane anywhere, the answer is the flag to pass", () => {
+    const [p, why] = pane({ given: null, env: {}, client: "" }) as [string, string];
+    expect(p).toBe("");
+    expect(why).toContain("--pane %N");
+    expect(why).toContain("display-message");
+  });
 });

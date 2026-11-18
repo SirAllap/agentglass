@@ -17,7 +17,8 @@
  * Ceiling: the site's own words never reach the answer, only ours, and a 404 on a vote is not told apart from "voting is
  * off" (measured on no real site yet; the fake and the documented API only).
  */
-import { redacted } from "./credentials.ts";
+import { jiraNotes } from "./jiraAccount.ts";
+const redacted = (_id: "jira") => jiraNotes();
 import { ISSUE_KEY, NOT_CONNECTED, WRITE_OFF, apiOf, jiraCall, jiraWriteEnabled, storedCreds, type JiraCreds, type JiraResult } from "./jira.ts";
 import type { FollowKind } from "../../shared/jiraFollow.ts";
 import type { WriteOutcome } from "./trackerTypes.ts";

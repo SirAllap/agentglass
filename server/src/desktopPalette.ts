@@ -17,6 +17,7 @@ import { readFileSync, statSync, watch } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { desktopTheme, parseColors, type DesktopTheme } from "../../shared/desktopPalette.ts";
+import { setTimeoutAs } from "./loopwatch.ts";
 
 export interface DesktopPalette {
   /** Which desktop it came from, for the label under the switch. */
@@ -108,7 +109,7 @@ export function watchDesktopPalette(onChange: () => void, open: typeof watch = w
   };
   function schedule() {
     if (timer) clearTimeout(timer);
-    timer = setTimeout(() => {
+    timer = setTimeoutAs("desktop palette timer", () => {
       timer = null;
       if (stopped) return;
       /* Reopened here, on the debounce, so an error storm costs four opens a

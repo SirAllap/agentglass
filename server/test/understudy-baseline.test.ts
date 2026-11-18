@@ -120,4 +120,48 @@ describe("the baseline says whether the model earned anything", () => {
       expect(c.baseN).toBe(c.n);
     }
   });
+
+  test("baselines() streams a lot of rows and still gets one answer", () => {
+    // Enough rows that an OFFSET-based page or a naive re-scan would show up
+    // in the numbers if one were wrong, inserted directly so the test stays
+    // fast — decide() would mean this many round trips through sealing and
+    // prediction for no extra coverage. Every row answers the same way, so
+    // the expanding-window math is easy to check by hand: the first row has
+    // no history to be a hit against, and every row after it repeats the
+    // only answer the majority rule has ever seen.
+    const { db } = require("../src/db.ts") as typeof import("../src/db.ts");
+    const N = 5_003;
+    const ins = db.query(
+      `INSERT INTO understudy_ledger
+         (kind, class, subject, partition, provenance, sealed_at, predicted, predicted_at, actual, actual_at, verdict)
+       VALUES ('decision', 'CPAGE', 'solo', 'agentglass', 'clicked', ?, '{}', ?, '{"same":true}', ?, 'agree')`,
+    );
+    const tx = db.transaction(() => {
+      for (let i = 0; i < N; i++) ins.run(1000 + i, 1000 + i, 1000 + i);
+    });
+    tx();
+    U.__resetBaselineCache();
+    const b = U.baselines()["CPAGE"]!;
+    expect(b.n).toBe(N);
+    // hits = N - 1: only the very first row has no majority answer yet.
+    expect(b.hits).toBe(N - 1);
+    expect(Math.round(b.raw * N)).toBe(N - 1);
+  });
+
+  test("a second call with no ledger change does not rescan", () => {
+    // decide() writes a row and recordDecision bumps the fingerprint
+    // (COUNT(*) and the newest scored timestamp), so the cache is already
+    // primed with whatever the suite above left behind. What this checks is
+    // that calling baselines() twice in a row with nothing written between
+    // them triggers exactly one scan, not two.
+    decide("CSCAN", "solo", { x: 1 });
+    U.__resetBaselineCache(); // force a clean first scan, isolated from other tests
+    const before = U.baselineScans;
+    U.baselines();
+    expect(U.baselineScans).toBe(before + 1);
+    U.baselines();
+    U.baselines();
+    // Two more calls, zero more scans: the fingerprint hasn't moved.
+    expect(U.baselineScans).toBe(before + 1);
+  });
 });

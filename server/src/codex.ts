@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { MODEL_RE } from "./agentids.ts";
 import type { CodexModel } from "../../shared/types.ts";
+import { envLimit } from "./config.ts";
 
 const codexBin = () => Bun.which("codex");
 /*
@@ -19,7 +20,7 @@ const codexBin = () => Bun.which("codex");
  * same trap with a measurement against a stub that was silently bypassed;
  * the lesson was learnt there and not here.
  */
-export const CODEX_ENABLED = (): boolean => !!codexBin() && process.env.AGENTGLASS_CODEX_DISABLED !== "1";
+export const CODEX_ENABLED = (): boolean => !!codexBin() && envLimit("AGENTGLASS_CODEX_DISABLED") !== "1";
 
 export const DEFAULT_SANDBOX = "read-only";
 
@@ -128,14 +129,37 @@ export function codexModels(): CodexModel[] {
  * The working directory is set on the spawn, not with `-C`:
  * `codex exec resume` has no `-C` either.
  */
-export function codexArgs(bin: string, model: string, sandbox: string, resumeId: string): string[] {
+export interface CodexWall {
+  /** Directories the turn may write: its worktree and run folder, nothing else. */
+  write: string[];
+  /** Directories it may not even read: the app's own config and state (the token lives there). */
+  deny: string[];
+}
+
+/** The `-c` pair that names a permission profile: read the system, write only `wall.write`, see nothing in `wall.deny`.
+ *  Without it `sandbox_mode=workspace-write` still lets the shell read the whole home directory.
+ *  The read base is `:root`, never `:minimal`: measured with a real `codex sandbox`, `:minimal` kills every turn
+ *  ("bwrap: execvp <codex binary>: No such file or directory"), because Codex re-runs its own binary inside the
+ *  sandbox and `:minimal` leaves out a binary installed under the home directory. `:root` is the same read surface
+ *  as Codex's default workspace-write, minus the denied dirs (those give "Permission denied"). */
+export function codexWallArgs(wall: CodexWall): string[] {
+  const entries = [
+    `":root"="read"`,
+    ...wall.write.map((p) => `${JSON.stringify(p)}="write"`),
+    ...wall.deny.map((p) => `${JSON.stringify(p)}="none"`),
+  ];
+  return ["-c", 'default_permissions="agx_worker"', "-c", `permissions.agx_worker.filesystem={${entries.join(", ")}}`];
+}
+
+export function codexArgs(bin: string, model: string, sandbox: string, resumeId: string, wall?: CodexWall): string[] {
   const args = [bin, "exec"];
   if (resumeId) args.push("resume", resumeId);
   args.push("--json", "-m", model);
   if (sandbox === "full-access") {
     args.push("--dangerously-bypass-approvals-and-sandbox");
   } else {
-    args.push("-c", `sandbox_mode=${sandbox}`);
+    if (wall) args.push(...codexWallArgs(wall));
+    else args.push("-c", `sandbox_mode=${sandbox}`);
     // `codex exec` has no channel to ask down, so an approval policy that would
     // prompt can only stall or deny. Saying "never" up front makes the sandbox
     // the only thing deciding, which is what the mode label already claims.

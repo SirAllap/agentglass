@@ -21,6 +21,8 @@ import { join, resolve } from "node:path";
 const require = createRequire(import.meta.url);
 const guard = require("../../electron/guest-guard.js") as {
   permissionAllowed: (permission: unknown) => boolean;
+  armingFresh: (e: { at?: number } | undefined, now?: number) => boolean;
+  downloadTarget: (a: { armedDir?: string; armedAt?: number; now?: number; agent: boolean; agentName?: string; baseDir: string }) => { dir: string; armed: boolean } | null;
   uniqueSavePath: (dir: string, name: string, exists: (p: string) => boolean) => string;
   permissionVerdict: (
     permission: unknown,
@@ -378,6 +380,15 @@ describe("main.js wiring", () => {
     expect(armed.length).toBe(attaches.length);
   });
 
+  test("wireDownloads is declared at module level, so guardWebviews can call it", () => {
+    // Indented declarations live inside a function; this one has to be flush left.
+    expect(mainSrc).toMatch(/^const wireDownloads = /m);
+    expect(mainSrc).toMatch(/^const downloadWired = new WeakSet/m);
+    const head = mainSrc.indexOf("function guardWebviews(");
+    expect(head).toBeGreaterThan(-1);
+    expect(mainSrc.indexOf("if (opts.lane) wireDownloads(guest)", head)).toBeGreaterThan(head);
+  });
+
   const dl = bodyOf(mainSrc, "const wireDownloads = ");
 
   test("a download is keyed by its own webContents, never by the guest that wired the session", () => {
@@ -414,5 +425,32 @@ describe("downloadFile passes the caller's tab through", () => {
     expect(body.includes("...p.via")).toBe(true);
     // and the tab is let go again however the verb ends
     expect(/finally\s*\{[\s\S]*behavior: "default"/.test(body)).toBe(true);
+  });
+});
+
+describe("armingFresh", () => {
+  test("a stale arming is not armed, so a popup is not turned into a denied download", () => {
+    expect(guard.armingFresh(undefined)).toBe(false);
+    expect(guard.armingFresh({ at: 1000 }, 1000 + 5_000)).toBe(true);
+    expect(guard.armingFresh({ at: 1000 }, 1000 + 60_000)).toBe(false);
+  });
+});
+
+describe("downloadTarget", () => {
+  test("an armed directory wins", () => {
+    expect(guard.downloadTarget({ armedDir: "/a", agent: true, baseDir: "/b" })).toEqual({ dir: "/a", armed: true });
+  });
+  test("an arming that was never used expires, so a later page download is not saved in the agent's directory", () => {
+    const a = { armedDir: "/a", armedAt: 1000, agent: true, agentName: "orbit-1", baseDir: "/b" };
+    expect(guard.downloadTarget({ ...a, now: 1000 + 5_000 })).toEqual({ dir: "/a", armed: true });
+    expect(guard.downloadTarget({ ...a, now: 1000 + 60_000 })).toEqual({ dir: "/b/orbit-1", armed: false });
+    expect(guard.downloadTarget({ ...a, agent: false, now: 1000 + 60_000 })).toBeNull();
+  });
+  test("an agent tab with nothing armed gets its own folder, never the default", () => {
+    expect(guard.downloadTarget({ agent: true, agentName: "orbit-1", baseDir: "/b" })).toEqual({ dir: "/b/orbit-1", armed: false });
+    expect(guard.downloadTarget({ agent: true, agentName: "../x", baseDir: "/b" })?.dir).toBe("/b/_x");
+  });
+  test("the person's tab keeps Electron's default", () => {
+    expect(guard.downloadTarget({ agent: false, baseDir: "/b" })).toBeNull();
   });
 });

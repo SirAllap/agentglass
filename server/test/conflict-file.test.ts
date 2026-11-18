@@ -66,64 +66,64 @@ beforeEach(() => {
 afterAll(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe("the file comes back whole", () => {
-  it("keeps the code around the conflicts, not just the conflicts", () => {
-    const r = conflictFile(repo, "load.ts");
+  it("keeps the code around the conflicts, not just the conflicts", async () => {
+    const r = await conflictFile(repo, "load.ts");
     expect(r.ok).toBe(true);
     const text = r.segments.filter((s) => s.kind === "text").flatMap((s) => (s as { lines: string[] }).lines);
     expect(text).toContain("export function load(path: string) {");
     expect(text).toContain("export const VERSION = 2;");
   });
 
-  it("alternates text and conflict in the order they appear", () => {
-    const r = conflictFile(repo, "load.ts");
+  it("alternates text and conflict in the order they appear", async () => {
+    const r = await conflictFile(repo, "load.ts");
     expect(r.segments.map((s) => s.kind)).toEqual(["text", "conflict", "text", "conflict", "text"]);
   });
 
-  it("finds both conflicts and numbers them from zero", () => {
-    const r = conflictFile(repo, "load.ts");
+  it("finds both conflicts and numbers them from zero", async () => {
+    const r = await conflictFile(repo, "load.ts");
     expect(r.blocks.map((b) => b.index)).toEqual([0, 1]);
     expect(r.blocks[1]!.ours).toEqual(["export const RETRIES = 3;"]);
     expect(r.blocks[1]!.theirs).toEqual(["export const RETRIES = 5;"]);
   });
 
-  it("counts the lines, so a caller can decide to window it", () => {
-    expect(conflictFile(repo, "load.ts").lines).toBe(18);
+  it("counts the lines, so a caller can decide to window it", async () => {
+    expect((await conflictFile(repo, "load.ts")).lines).toBe(18);
   });
 });
 
 describe("the line numbers are the file's own", () => {
-  it("starts the first run of text at line 1", () => {
-    const first = conflictFile(repo, "load.ts").segments[0] as { from: number; lines: string[] };
+  it("starts the first run of text at line 1", async () => {
+    const first = (await conflictFile(repo, "load.ts")).segments[0] as { from: number; lines: string[] };
     expect(first.from).toBe(1);
     expect(first.lines).toHaveLength(3);
   });
 
-  it("puts each conflict where the marker really is", () => {
-    const [a, b] = conflictFile(repo, "load.ts").blocks;
+  it("puts each conflict where the marker really is", async () => {
+    const [a, b] = (await conflictFile(repo, "load.ts")).blocks;
     expect(a!.line).toBe(4);
     expect(b!.line).toBe(13);
   });
 
-  it("numbers each side's first line and the closing marker", () => {
-    const [a] = conflictFile(repo, "load.ts").blocks;
+  it("numbers each side's first line and the closing marker", async () => {
+    const [a] = (await conflictFile(repo, "load.ts")).blocks;
     expect(a!.ourLine).toBe(5);
     expect(a!.theirLine).toBe(8);
     expect(a!.endLine).toBe(9);
   });
 
-  it("resumes the numbering after a conflict, not from zero", () => {
+  it("resumes the numbering after a conflict, not from zero", async () => {
     // The run between the two conflicts is lines 10..12 of the real file. Get
     // this wrong and every jump-to-editor below the first conflict is off.
-    const mid = conflictFile(repo, "load.ts").segments[2] as { from: number; lines: string[] };
+    const mid = (await conflictFile(repo, "load.ts")).segments[2] as { from: number; lines: string[] };
     expect(mid.from).toBe(10);
     expect(mid.lines).toEqual(["}", "", "export const VERSION = 2;"]);
   });
 
-  it("agrees with the file on disk, line for line", () => {
+  it("agrees with the file on disk, line for line", async () => {
     // The strongest form of the claim: read the file, and every located line
     // must be at the number it was given.
     const disk = readFileSync(join(repo, "load.ts"), "utf8").split("\n");
-    const r = conflictFile(repo, "load.ts");
+    const r = await conflictFile(repo, "load.ts");
     for (const s of r.segments) {
       if (s.kind !== "text") continue;
       s.lines.forEach((l, i) => expect(disk[s.from + i - 1]).toBe(l));
@@ -136,21 +136,21 @@ describe("the line numbers are the file's own", () => {
     }
   });
 
-  it("handles a conflict that starts on line 1, with no text before it", () => {
+  it("handles a conflict that starts on line 1, with no text before it", async () => {
     writeFileSync(join(repo, "load.ts"), ["<<<<<<< HEAD", "a", "=======", "b", ">>>>>>> feat", "tail"].join("\n"));
-    const r = conflictFile(repo, "load.ts");
+    const r = await conflictFile(repo, "load.ts");
     expect(r.segments.map((s) => s.kind)).toEqual(["conflict", "text"]);
     expect(r.blocks[0]!.line).toBe(1);
     expect((r.segments[1] as { from: number }).from).toBe(6);
   });
 
-  it("locates a diff3 conflict past its base section", () => {
+  it("locates a diff3 conflict past its base section", async () => {
     // With merge.conflictStyle=diff3 there is a third section, and forgetting
     // it puts every line below the marker off by its length.
     writeFileSync(join(repo, "load.ts"), [
       "head", "<<<<<<< HEAD", "ours", "||||||| base", "was", "this", "=======", "theirs", ">>>>>>> feat", "tail",
     ].join("\n"));
-    const b = conflictFile(repo, "load.ts").blocks[0]!;
+    const b = (await conflictFile(repo, "load.ts")).blocks[0]!;
     expect(b.base).toEqual(["was", "this"]);
     expect(b.ourLine).toBe(3);
     expect(b.theirLine).toBe(8);
@@ -164,29 +164,29 @@ describe("the stamp", () => {
     expect(contentStamp("abc")).not.toBe(contentStamp("abd"));
   });
 
-  it("refuses a resolve made against a parse that no longer exists", () => {
+  it("refuses a resolve made against a parse that no longer exists", async () => {
     // The case the count check cannot see: something rewrote the file and left
     // the same NUMBER of conflicts. Applying the old choices then resolves the
     // wrong block with the wrong side, and reports success.
-    const stale = conflictFile(repo, "load.ts").stamp;
+    const stale = (await conflictFile(repo, "load.ts")).stamp;
     writeFileSync(join(repo, "load.ts"), FILE.replace("RETRIES = 3", "RETRIES = 4"));
-    const r = resolveBlocks(repo, "load.ts", ["ours", "ours"], stale);
+    const r = await resolveBlocks(repo, "load.ts", ["ours", "ours"], stale);
     expect(r.ok).toBe(false);
     expect(r.error).toContain("changed since you opened it");
   });
 
-  it("lets a resolve through when the file is untouched", () => {
-    const { stamp } = conflictFile(repo, "load.ts");
-    expect(resolveBlocks(repo, "load.ts", ["ours", "theirs"], stamp).ok).toBe(true);
+  it("lets a resolve through when the file is untouched", async () => {
+    const { stamp } = await conflictFile(repo, "load.ts");
+    expect((await resolveBlocks(repo, "load.ts", ["ours", "theirs"], stamp)).ok).toBe(true);
     const out = readFileSync(join(repo, "load.ts"), "utf8");
     expect(out).toContain("const raw = readFileSync(path, 'utf8');");
     expect(out).toContain("export const RETRIES = 5;");
     expect(out).not.toContain("<<<<<<<");
   });
 
-  it("still works for a caller that sends no stamp", () => {
+  it("still works for a caller that sends no stamp", async () => {
     // conflictBlocks() and its callers predate this and are not being changed.
-    expect(resolveBlocks(repo, "load.ts", ["ours", "ours"]).ok).toBe(true);
+    expect((await resolveBlocks(repo, "load.ts", ["ours", "ours"])).ok).toBe(true);
   });
 });
 
@@ -202,8 +202,8 @@ describe("the stamp", () => {
 describe("writing a block by hand", () => {
   const read = () => readFileSync(join(repo, "load.ts"), "utf8");
 
-  it("writes exactly the lines given, in place of the whole region", () => {
-    const r = resolveBlocks(repo, "load.ts", [
+  it("writes exactly the lines given, in place of the whole region", async () => {
+    const r = await resolveBlocks(repo, "load.ts", [
       { edit: ["  const raw = readFileSync(path, 'utf8');", "  return JSON.parse(raw) as Config;"] },
       "theirs",
     ]);
@@ -215,82 +215,82 @@ describe("writing a block by hand", () => {
     expect(out).not.toContain("=======");
   });
 
-  it("mixes with the fixed sides, block by block", () => {
-    expect(resolveBlocks(repo, "load.ts", ["ours", { edit: ["export const RETRIES = 4;"] }]).ok).toBe(true);
+  it("mixes with the fixed sides, block by block", async () => {
+    expect((await resolveBlocks(repo, "load.ts", ["ours", { edit: ["export const RETRIES = 4;"] }])).ok).toBe(true);
     expect(read()).toContain("export const RETRIES = 4;");
   });
 
-  it("accepts an empty edit as deleting the region", () => {
+  it("accepts an empty edit as deleting the region", async () => {
     // "Neither side, and nothing in their place" is a real resolution — both
     // branches added a line the merge no longer needs.
-    expect(resolveBlocks(repo, "load.ts", ["ours", { edit: [] }]).ok).toBe(true);
+    expect((await resolveBlocks(repo, "load.ts", ["ours", { edit: [] }])).ok).toBe(true);
     const out = read();
     expect(out).not.toContain("RETRIES");
     expect(out).toContain("export const VERSION = 2;");
   });
 
-  it("refuses an edit that would put conflict markers back in the file", () => {
+  it("refuses an edit that would put conflict markers back in the file", async () => {
     // The one that corrupts rather than annoys: git stages it as RESOLVED
     // while the file still reads as conflicted, so the next parse finds a
     // conflict git does not know about and the commit carries the markers.
-    const r = resolveBlocks(repo, "load.ts", ["ours", { edit: ["<<<<<<< HEAD", "x"] }]);
+    const r = await resolveBlocks(repo, "load.ts", ["ours", { edit: ["<<<<<<< HEAD", "x"] }]);
     expect(r.ok).toBe(false);
     expect(r.error).toContain("conflict markers");
     expect(read()).toContain("<<<<<<<");  // nothing was written
   });
 
-  it("refuses each of the three marker kinds, not only the first", () => {
+  it("refuses each of the three marker kinds, not only the first", async () => {
     for (const marker of ["<<<<<<< x", "=======", ">>>>>>> y", "||||||| base"]) {
-      expect(resolveBlocks(repo, "load.ts", ["ours", { edit: [marker] }]).ok).toBe(false);
+      expect((await resolveBlocks(repo, "load.ts", ["ours", { edit: [marker] }])).ok).toBe(false);
     }
   });
 
-  it("refuses a blob pretending to be lines", () => {
+  it("refuses a blob pretending to be lines", async () => {
     // The reassembly joins with "\n", so an embedded newline would produce a
     // line count nobody chose — and quietly shift every number below it.
-    const r = resolveBlocks(repo, "load.ts", ["ours", { edit: ["one\ntwo"] }]);
+    const r = await resolveBlocks(repo, "load.ts", ["ours", { edit: ["one\ntwo"] }]);
     expect(r.ok).toBe(false);
     expect(r.error).toContain("split into lines");
   });
 
-  it("refuses a shape that is not a choice at all", () => {
-    expect(resolveBlocks(repo, "load.ts", ["ours", { nope: 1 }]).ok).toBe(false);
-    expect(resolveBlocks(repo, "load.ts", ["ours", null]).ok).toBe(false);
-    expect(resolveBlocks(repo, "load.ts", ["ours", { edit: [1, 2] }]).ok).toBe(false);
+  it("refuses a shape that is not a choice at all", async () => {
+    expect((await resolveBlocks(repo, "load.ts", ["ours", { nope: 1 }])).ok).toBe(false);
+    expect((await resolveBlocks(repo, "load.ts", ["ours", null])).ok).toBe(false);
+    expect((await resolveBlocks(repo, "load.ts", ["ours", { edit: [1, 2] }])).ok).toBe(false);
   });
 
-  it("caps how much one block may carry", () => {
-    const r = resolveBlocks(repo, "load.ts", ["ours", { edit: Array.from({ length: 5001 }, () => "x") }]);
+  it("caps how much one block may carry", async () => {
+    const r = await resolveBlocks(repo, "load.ts", ["ours", { edit: Array.from({ length: 5001 }, () => "x") }]);
     expect(r.ok).toBe(false);
     expect(r.error).toContain("5000 lines");
   });
 
-  it("stages the result, which is what marks the file resolved", () => {
+  it("stages the result, which is what marks the file resolved", async () => {
     // Asserted as "it is in the index", not as "--diff-filter=U is empty":
     // this fixture writes markers without running a merge, so the unmerged
     // list is empty either way and that assertion would pass for a resolve
     // that never staged anything.
-    resolveBlocks(repo, "load.ts", [{ edit: ["  return null;"] }, "ours"]);
+    await resolveBlocks(repo, "load.ts", [{ edit: ["  return null;"] }, "ours"]);
     expect(git("diff", "--name-only", "--cached").stdout.toString().trim()).toBe("load.ts");
   });
 });
 
 describe("what it refuses", () => {
-  it("says a binary file has to be resolved whole", () => {
+  it("says a binary file has to be resolved whole", async () => {
     writeFileSync(join(repo, "load.ts"), Buffer.from([0x89, 0x50, 0x00, 0x4e, 0x47]));
-    const r = conflictFile(repo, "load.ts");
+    const r = await conflictFile(repo, "load.ts");
     expect(r.ok).toBe(false);
     expect(r.error).toContain("resolve it whole");
   });
 
-  it("refuses a path outside the repository", () => {
-    expect(conflictFile(repo, "../../../etc/passwd").ok).toBe(false);
+  it("refuses a path outside the repository", async () => {
+    expect((await conflictFile(repo, "../../../etc/passwd")).ok).toBe(false);
   });
 
-  it("reports a file with no conflicts as a file with no conflicts", () => {
+  it("reports a file with no conflicts as a file with no conflicts", async () => {
     // Not an error: it is what you get the moment somebody else resolves it.
     writeFileSync(join(repo, "load.ts"), "all settled\n");
-    const r = conflictFile(repo, "load.ts");
+    const r = await conflictFile(repo, "load.ts");
     expect(r.ok).toBe(true);
     expect(r.blocks).toEqual([]);
     expect(r.segments).toHaveLength(1);

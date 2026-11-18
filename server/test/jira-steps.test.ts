@@ -226,11 +226,65 @@ function suite(flavor: FakeFlavor) {
         expect(person("ORBIT-1042")).toBeNull();
       });
 
+      test("one step, one status change and one assignee change: asked for, both land", async () => {
+        setup("handoff", [{ type: "move", statusNames: ["In Review"] }, { type: "assign", ask: true, who: "none" }]);
+        const r = await run("ORBIT-1042", "handoff", { assign: lin });
+        expect(r).toMatchObject({ ok: true, was: "In Progress", task: { status: "In Review", assignees: ["Lin Tester"] } });
+        expect(r.partial).toBeUndefined();
+        expect(status("ORBIT-1042")).toBe("In Review");
+        expect(person("ORBIT-1042")).toBe("acc-0003");
+        // The assignee rides inside the move when its screen has the field, so it is one write.
+        expect(writes().map((w) => `${w.method} ${w.path}`)).toEqual(["POST /issue/ORBIT-1042/transitions"]);
+        expect(writes()[0]!.body).toEqual({ transition: { id: "21" }, fields: { assignee: { [field]: lin } } });
+      });
+
+      test("the same step with the picker left as is: the move only, nobody written", async () => {
+        setup("handoff", [{ type: "move", statusNames: ["In Review"] }, { type: "assign", ask: true, who: "none" }]);
+        const r = await run("ORBIT-1042", "handoff", {});
+        expect(r).toMatchObject({ ok: true, was: "In Progress", task: { status: "In Review" } });
+        expect(writes().map((w) => `${w.method} ${w.path}`)).toEqual(["POST /issue/ORBIT-1042/transitions"]);
+        expect(writes()[0]!.body).toEqual({ transition: { id: "21" } });
+        // Nobody was written: the card keeps the person step 1 saw.
+        expect(person("ORBIT-1042")).toBe("acc-0001");
+      });
+
       test("the default-assignee word is refused before any request", async () => {
         setup("handoff", [{ type: "assign", ask: true, who: "none" }]);
         const r = await run("ORBIT-1042", "handoff", { assign: "-1" });
         expect(r).toEqual({ ok: false, error: "That is not somebody Jira knows" });
         expect(fake.requests.length).toBe(0);
+      });
+
+      test("a review step that only moves the card still takes the person picked in its confirmation, in one write", async () => {
+        setup("review", [{ type: "move", statusNames: ["In Review"] }]);
+        const r = await run("ORBIT-1042", "review", { assign: lin });
+        expect(r).toMatchObject({ ok: true, was: "In Progress", task: { status: "In Review", assignees: ["Lin Tester"] } });
+        expect(r.partial).toBeUndefined();
+        expect(writes().map((w) => `${w.method} ${w.path}`)).toEqual(["POST /issue/ORBIT-1042/transitions"]);
+        expect(writes()[0]!.body).toEqual({ transition: { id: "21" }, fields: { assignee: { [field]: lin } } });
+        expect(status("ORBIT-1042")).toBe("In Review");
+        expect(person("ORBIT-1042")).toBe("acc-0003");
+      });
+
+      test("the same step with nothing picked moves the card and writes nobody", async () => {
+        setup("review", [{ type: "move", statusNames: ["In Review"] }]);
+        const r = await run("ORBIT-1042", "review", {});
+        expect(r).toMatchObject({ ok: true, was: "In Progress", task: { status: "In Review" } });
+        expect(writes().map((w) => `${w.method} ${w.path}`)).toEqual(["POST /issue/ORBIT-1042/transitions"]);
+        expect(writes()[0]!.body).toEqual({ transition: { id: "21" } });
+        // The card keeps the person step 1 saw.
+        expect(person("ORBIT-1042")).toBe("acc-0001");
+      });
+
+      test("a person picked in the confirmation is refused while assigning is off, before anything is written", async () => {
+        setup("review", [{ type: "move", statusNames: ["In Review"] }]);
+        J.setJiraWriteKind("assign", false);
+        try {
+          const r = await run("ORBIT-1042", "review", { assign: lin });
+          expect(r).toEqual({ ok: false, error: "Assigning a person is switched off in Settings, and this step uses it" });
+          expect(writes().length).toBe(0);
+          expect(status("ORBIT-1042")).toBe("In Progress");
+        } finally { J.setJiraWriteKind("assign", true); }
       });
     });
 
@@ -320,6 +374,87 @@ function suite(flavor: FakeFlavor) {
      * answer says what every block did in run order, in a sentence that carries
      * no text the site sent back.
      */
+    describe("the field", () => {
+      const TEAM = "customfield_90001";
+      const ATL = "com.atlassian.jira.plugin.system.customfieldtypes";
+      const withFields = (fields: { name: string; id?: string; schema?: Record<string, unknown>; allowedValues?: { id: string; name: string }[] }[]) => {
+        fake.state.issues["ORBIT-1042"]!.editmeta = ["summary", ...fields];
+      };
+      const choice = { name: "Team", id: TEAM, schema: { type: "option", custom: ATL + ":select" }, allowedValues: [{ id: "10", name: "Blue" }, { id: "11", name: "Red" }] };
+
+      test("the picker is offered the site's custom fields by name, and only the kinds a step can set", async () => {
+        const r = await J.withStored((c) => J.customFields(c));
+        expect(r.ok).toBe(true);
+        const fields = r.data ?? [];
+        expect(fields.map((f) => f.name)).toContain("Start date");
+        expect(fields.map((f) => f.name)).not.toContain("Sprint");
+        expect(fields.map((f) => f.name)).not.toContain("Rank");
+        for (const f of fields) expect(["text", "number", "date", "select"]).toContain(f.type);
+        expect(fields.find((f) => f.name === "Start date")!.type).toBe("date");
+      });
+
+      test("a custom field is found by NAME on the card and set by the id the site gave it", async () => {
+        withFields([choice]);
+        setup("review", [{ type: "field", field: "team", value: "Blue" }]);
+        const r = await run("ORBIT-1042", "review");
+        expect(r).toMatchObject({ ok: true });
+        expect(r.blocks).toEqual([{ block: "field", state: "done" }]);
+        expect(writes().map((w) => `${w.method} ${w.path}`)).toEqual([`PUT /issue/ORBIT-1042`]);
+        expect(writes()[0]!.body).toEqual({ fields: { [TEAM]: { id: "10" } } });
+      });
+
+      test("a number and a date go as the site's own shapes", async () => {
+        withFields([{ name: "Budget", id: "customfield_90002", schema: { type: "number", custom: ATL + ":float" } }, { name: "Ship by", id: "customfield_90003", schema: { type: "date", custom: ATL + ":datepicker" } }]);
+        setup("review", [{ type: "field", field: "Budget", value: "2.5" }]);
+        expect((await run("ORBIT-1042", "review")).ok).toBe(true);
+        expect(writes()[0]!.body).toEqual({ fields: { customfield_90002: 2.5 } });
+        fake.requests.length = 0;
+        setup("review", [{ type: "field", field: "Ship by", value: "2026-10-31" }]);
+        expect((await run("ORBIT-1042", "review")).ok).toBe(true);
+        expect(writes()[0]!.body).toEqual({ fields: { customfield_90003: "2026-10-31" } });
+      });
+
+      test("a name the card does not offer is refused, in our words, with no write", async () => {
+        withFields([choice]);
+        setup("review", [{ type: "field", field: "Nope", value: "Blue" }]);
+        const r = await run("ORBIT-1042", "review");
+        expect(r).toEqual({ ok: false, error: "This card has no custom field called “Nope”" });
+        expect(writes().length).toBe(0);
+      });
+
+      test("a value the field does not offer, and a kind a step cannot set, are both refused before a write", async () => {
+        withFields([choice, { name: "Reviewer", id: "customfield_90004", schema: { type: "user", custom: ATL + ":userpicker" } }]);
+        setup("review", [{ type: "field", field: "Team", value: "Mystery" }]);
+        expect(await run("ORBIT-1042", "review")).toEqual({ ok: false, error: "“Team” has no value called “Mystery”" });
+        setup("review", [{ type: "field", field: "Reviewer", value: "Ada Tester" }]);
+        expect(await run("ORBIT-1042", "review")).toEqual({ ok: false, error: "“Reviewer” is a field a step cannot set yet" });
+        expect(writes().length).toBe(0);
+      });
+
+      test("a value that is not what the field holds is refused before a write", async () => {
+        withFields([{ name: "Budget", id: "customfield_90002", schema: { type: "number", custom: ATL + ":float" } }, { name: "Ship by", id: "customfield_90003", schema: { type: "date", custom: ATL + ":datepicker" } }]);
+        setup("review", [{ type: "field", field: "Budget", value: "two" }]);
+        expect(await run("ORBIT-1042", "review")).toEqual({ ok: false, error: "“two” is not a number" });
+        setup("review", [{ type: "field", field: "Ship by", value: "31-10-2026" }]);
+        expect(await run("ORBIT-1042", "review")).toEqual({ ok: false, error: "“31-10-2026” is not a date (write it as 2026-10-31)" });
+        setup("review", [{ type: "field", field: "Budget", value: "  " }]);
+        expect(await run("ORBIT-1042", "review")).toEqual({ ok: false, error: "“Budget” has no value in this step: set one in Settings" });
+        expect(writes().length).toBe(0);
+      });
+
+      test("after a move that landed, a field the site refuses is partial and the move stands", async () => {
+        withFields([choice]);
+        setup("handoff", [{ type: "move", statusNames: ["In Review"] }, { type: "field", field: "Team", value: "Blue" }]);
+        fake.fail({ path: "/issue/ORBIT-1042", method: "PUT", status: 400 });
+        const r = await run("ORBIT-1042");
+        expect(r.ok).toBe(true);
+        expect(r.partial).toBe("Moved to In Review, but “Team” was not set");
+        expect(status("ORBIT-1042")).toBe("In Review");
+        expect(r.blocks).toEqual([{ block: "move", state: "done" }, { block: "field", state: "failed", why: "Jira did not take that value" }]);
+      });
+
+    });
+
     describe("what each block did", () => {
       test("every block that landed is done, in run order, assignee included", async () => {
         setup("handoff", [{ type: "link" }, { type: "comment", text: "Opened {pr}" }, { type: "assign", who: "me" }, { type: "move", statusNames: ["In Review"] }]);
@@ -478,18 +613,27 @@ describe("the settings", () => {
   beforeEach(() => { rmSync(settingsFile, { force: true }); });
   const blocks = [{ type: "move", statusNames: ["Ready"] }, { type: "assign", who: "person", person: { id: "acc-0003", name: "Lin Tester" } }, { type: "comment", text: "{pr}" }, { type: "link" }];
 
+  test("the two single controls save as steps of their own, and take no blocks", () => {
+    expect(S.setJiraSteps({ people: { enabled: true }, note: { enabled: true } })).toMatchObject({ ok: true });
+    const s = S.jiraSteps().steps;
+    expect(s.people).toEqual({ enabled: true, blocks: [] });
+    expect(s.note).toEqual({ enabled: true, blocks: [] });
+    expect(S.setJiraSteps({ note: { blocks: [{ type: "comment", text: "{pr}" }] } })).toEqual({ ok: false, error: "steps.note.blocks is not a setting: that step has no blocks" });
+    expect(S.STEP_KEYS).toEqual(["handoff", "review", "merge", "people", "note"]);
+  });
+
   test("a step with every Jira block is saved, ids as strings, and reads back the same", () => {
     const r = S.setJiraSteps({ merge: { enabled: true, blocks } });
     expect(r).toMatchObject({ ok: true });
     expect(S.jiraSteps().steps.merge as unknown).toEqual({ enabled: true, blocks });
   });
 
-  test("the closed schema: an unknown key, a number for a Jira person, a custom field and a second block of a kind are refused, and nothing is written", () => {
+  test("the closed schema: an unknown key, a number for a Jira person, an asking field and a second block of a kind are refused, and nothing is written", () => {
     for (const bad of [
       { nope: {} },
       { handoff: { enabled: true, statusNames: ["x"] } },
       { handoff: { blocks: [{ type: "assign", who: "person", person: { id: 12, name: "Lin" } }] } },
-      { handoff: { blocks: [{ type: "field", field: "Team", value: "Blue" }] } },
+      { handoff: { blocks: [{ type: "field", field: "Team", value: "Blue", ask: true }] } },
       { handoff: { blocks: [{ type: "move", statusNames: ["a"], fallback: true }] } },
       { handoff: { blocks: [{ type: "link", ask: true }] } },
       { handoff: { blocks: [{ type: "move", statusNames: ["a"] }, { type: "move", statusNames: ["b"] }] } },
@@ -500,6 +644,24 @@ describe("the settings", () => {
       expect(r.ok).toBe(false);
       expect(existsSync(settingsFile)).toBe(false);
     }
+  });
+
+  test("a question may start at the reviewer's learned account, which is a starting point and never a write of its own", () => {
+    const asking = { type: "assign", who: "reviewer", ask: true } as const;
+    expect(S.setJiraSteps({ review: { enabled: true, blocks: [{ type: "move", statusNames: ["Code review"] }, asking] } })).toMatchObject({ ok: true });
+    expect(S.jiraSteps().steps.review.blocks).toEqual([{ type: "move", statusNames: ["Code review"] }, asking]);
+    // Fixed, it would name nobody the server could resolve: the pair is learned on this machine.
+    expect(S.setJiraSteps({ review: { blocks: [{ type: "assign", who: "reviewer" }] } })).toEqual({
+      ok: false, error: 'steps.review.blocks[0].who "reviewer" is where the question starts: set ask: true, or name the person to assign',
+    });
+  });
+
+  test("a custom field is saved by name, and refused when it asks: the value saved is the one it sets", () => {
+    expect(S.setJiraSteps({ review: { enabled: true, blocks: [{ type: "field", field: "Team", value: "Blue" }] } })).toMatchObject({ ok: true });
+    expect(S.jiraSteps().steps.review.blocks).toEqual([{ type: "field", field: "Team", value: "Blue" }]);
+    expect(S.setJiraSteps({ review: { blocks: [{ type: "field", field: "Team", value: "Blue", ask: true }] } })).toEqual({
+      ok: false, error: "steps.review.blocks[0].ask is not offered for Jira: the step sets the field to the value saved here",
+    });
   });
 
   test("a refusal in the second step leaves the first unsaved too", () => {

@@ -26,6 +26,7 @@ import { join } from "node:path";
 import { endPhoneSession } from "../src/tmuxctl.ts";
 import { TEST_TERM } from "./tmuxTerm.ts";
 import { freePort } from "./freePort.ts";
+import { agxTestBase } from "./tmuxTmp.ts";
 
 /*
  * Short paths, and it is a hard limit rather than a preference: a unix socket
@@ -50,7 +51,7 @@ import { freePort } from "./freePort.ts";
  * `afterAll` removes the whole directory instead. A crash now leaves one empty
  * directory, which is the honest price of not colliding.
  */
-const TMPDIR = `/tmp/agx-tmux-shut-${process.pid}`;
+const TMPDIR = agxTestBase("agx-tmux-shut");
 const SOCK = "agx-shut";
 const REAL_TMPDIR = process.env.TMUX_TMPDIR;
 const HAVE_TMUX = !!Bun.which("tmux") && !!Bun.which("python3") && process.platform === "linux";

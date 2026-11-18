@@ -19,7 +19,7 @@
  * rule is loosened here — this is a third door into the same two rooms, not a
  * new room.
  */
-import { opendirSync, readdirSync, statSync, lstatSync, openSync, readSync, closeSync, readFileSync } from "node:fs";
+import { opendirSync, readdirSync, statSync, lstatSync, openSync, readSync, read as fdRead, closeSync, readFileSync, realpathSync, fstatSync, readlinkSync, constants as fsc } from "node:fs";
 import { homedir } from "node:os";
 import { failed } from "./refused.ts";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -27,6 +27,8 @@ import { diskAllows, diskEnabled, diskRoots } from "./disk.ts";
 import { safeAbs } from "./git.ts";
 import { mountAllows } from "./volumes.ts";
 import { agentglassConfigDirs, agentglassPrivate, inScope, realish, workspaceRoots } from "./config.ts";
+import type { PageFacts } from "./auth.ts";
+import { setTimeoutAs } from "./loopwatch.ts";
 
 /** How many entries one folder hands back. A directory with 40,000 files in it
  *  is not a list anybody reads, and the count says what was left. */
@@ -387,6 +389,95 @@ const IMAGE_CONVERTIBLE = new Set([
   ".cr2", ".cr3", ".nef", ".arw", ".dng", ".orf", ".raf", ".rw2", ".sr2",
 ]);
 
+/** The ImageMagick reader for each convertible extension, always named in the
+ *  argv (`heic:-[0]`). Left to itself ImageMagick picks the reader from the
+ *  bytes, so an .heic that is really SVG or MVG is read as one, and those
+ *  readers open other files by name (`text:~/.ssh/id_ed25519`). An extension
+ *  with no reader here is refused. */
+const MAGICK_CODER: Record<string, string> = {
+  ".tif": "tiff", ".tiff": "tiff", ".heic": "heic", ".heif": "heif", ".psd": "psd", ".xcf": "xcf",
+  ".dds": "dds", ".tga": "tga", ".pcx": "pcx", ".ppm": "ppm", ".pgm": "pgm", ".pbm": "pbm",
+  ".jp2": "jp2", ".j2k": "j2k", ".jxl": "jxl", ".exr": "exr", ".hdr": "hdr",
+  ".cr2": "cr2", ".cr3": "cr3", ".nef": "nef", ".arw": "arw", ".dng": "dng", ".orf": "orf",
+  ".raf": "raf", ".rw2": "rw2", ".sr2": "sr2",
+};
+
+/** ImageMagick's argv for one picture: the reader from the extension, the
+ *  first frame only, PNG out. `input` is a path or "-" for stdin. Null when
+ *  the extension has no reader on the list. */
+export function magickArgv(tool: string, file: string, input: string): string[] | null {
+  const coder = MAGICK_CODER[extname(file).toLowerCase()];
+  // The first frame only: a multi-page TIFF converted whole is a hundred
+  // megabytes for a thumbnail nobody asked for.
+  return coder ? [tool, `${coder}:${input}[0]`, "png:-"] : null;
+}
+
+/** How long a converter may run before it is killed. */
+let convertMs = 5_000;
+/** Test seam. */
+export function __setConvertTimeoutForTest(ms: number): void { convertMs = ms; }
+
+/** The ffmpeg demuxer for each extension it may read, always named in the argv
+ *  (`-f tiff_pipe`). Left to itself ffmpeg picks the demuxer from the bytes, so
+ *  a .tif that is really an HLS playlist or an ffconcat list is read as one, and
+ *  those open other files by name. Image pipe demuxers only; an extension with
+ *  none here (heic, raw, tga, xcf) is refused. */
+const FFMPEG_DEMUXER: Record<string, string> = {
+  ".tif": "tiff_pipe", ".tiff": "tiff_pipe", ".dds": "dds_pipe", ".pcx": "pcx_pipe",
+  ".ppm": "ppm_pipe", ".pgm": "pgm_pipe", ".pbm": "pbm_pipe", ".jp2": "j2k_pipe", ".j2k": "j2k_pipe",
+  ".jxl": "jpegxl_pipe", ".exr": "exr_pipe", ".hdr": "hdr_pipe", ".psd": "psd_pipe",
+};
+
+/** ffmpeg's argv for one picture read from stdin: the demuxer from the
+ *  extension, no protocol but the pipe, the first frame only, PNG out. Null
+ *  when the extension has no demuxer on the list. */
+export function ffmpegArgv(tool: string, file: string): string[] | null {
+  const demuxer = FFMPEG_DEMUXER[extname(file).toLowerCase()];
+  return demuxer
+    ? [tool, "-v", "error", "-protocol_whitelist", "pipe", "-f", demuxer, "-i", "pipe:0", "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"]
+    : null;
+}
+
+/** Feed `input` to the converter's stdin, a chunk at a time. Not handed to
+ *  Bun.spawn as the stdin itself: when the converter exits before reading it
+ *  all (a bad header, the timeout kill) Bun's own pipe write fails with EPIPE
+ *  and that takes the whole server down. Here a failed write just stops the
+ *  feed, and so does the converter exiting. The input is always cancelled, so
+ *  the file handle behind it closes. */
+async function feed(p: { stdin: import("bun").FileSink; exited: Promise<number> }, input: ReadableStream<Uint8Array>): Promise<void> {
+  const reader = input.getReader();
+  const gone = p.exited.then(() => null, () => null);
+  try {
+    for (;;) {
+      const r = await Promise.race([reader.read(), gone]);
+      if (!r || r.done) break;
+      try { await p.stdin.write(r.value); await p.stdin.flush(); } catch { break; }
+    }
+  } catch { /* the input failed: the converter sees an end and says so */ } finally {
+    try { await p.stdin.end(); } catch { /* already closed */ }
+    await reader.cancel().catch(() => { /* already closed */ });
+  }
+}
+
+/** Run a converter to a PNG on stdout. Its error output is not read (a
+ *  converter that prints more than a pipe holds would block on it), and it is
+ *  killed after `convertMs`, so a request never hangs on it. */
+export async function runConverter(argv: string[], stdin: ReadableStream<Uint8Array> | "ignore"): Promise<{ ok: true; body: ArrayBuffer } | { ok: false; error: string }> {
+  const name = basename(argv[0]!);
+  const p = Bun.spawn(argv, { stdin: stdin === "ignore" ? "ignore" : "pipe", stdout: "pipe", stderr: "ignore" });
+  const fed = stdin === "ignore" ? Promise.resolve() : feed(p as unknown as { stdin: import("bun").FileSink; exited: Promise<number> }, stdin);
+  let late = false;
+  const timer = setTimeoutAs("preview converter deadline", () => { late = true; try { p.kill("SIGKILL"); } catch { /* gone */ } }, convertMs);
+  try {
+    const out = await new Response(p.stdout).arrayBuffer();
+    const code = await p.exited;
+    await fed;
+    if (late) return { ok: false, error: `${name} took longer than ${Math.round(convertMs / 1000)} s to convert this image, so it was stopped` };
+    if (code !== 0 || out.byteLength === 0) return { ok: false, error: `${name} could not convert this image` };
+    return { ok: true, body: out };
+  } finally { clearTimeout(timer); }
+}
+
 const TEXT_EXT = new Set([
   ".txt", ".md", ".markdown", ".rst", ".log", ".csv", ".tsv", ".json", ".jsonl", ".ndjson",
   ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".env", ".properties",
@@ -592,19 +683,16 @@ export async function fileBytes(pathIn: unknown, local = false): Promise<{ ok: t
 
   const tool = imageConverter();
   if (!tool) return { ok: false, error: "no image converter on this machine (magick, convert, heif-convert or ffmpeg)" };
-  const argv = tool.endsWith("ffmpeg")
-    ? [tool, "-v", "error", "-i", abs, "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"]
+  const ffmpeg = tool.endsWith("ffmpeg");
+  const argv = ffmpeg
+    ? ffmpegArgv(tool, abs)
     : tool.endsWith("heif-convert")
       ? [tool, abs, "/dev/stdout"]
-      // ImageMagick: the first frame only. A multi-page TIFF converted whole is
-      // a hundred megabytes for a thumbnail nobody asked for.
-      : [tool, `${abs}[0]`, "png:-"];
-  const p = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
-  const out = await new Response(p.stdout).arrayBuffer();
-  if ((await p.exited) !== 0 || out.byteLength === 0) {
-    return { ok: false, error: `${basename(tool)} could not convert this image` };
-  }
-  return { ok: true, body: out, mime: "image/png" };
+      : magickArgv(tool, abs, abs);
+  if (!argv) return { ok: false, error: `${basename(tool)} is not trusted to read a ${extname(abs).toLowerCase() || "file with no extension"}` };
+  // ffmpeg reads stdin only (ffmpegArgv): it is never handed a path.
+  const c = await runConverter(argv, ffmpeg ? Bun.file(abs).stream() : "ignore");
+  return c.ok ? { ok: true, body: c.body, mime: "image/png" } : c;
 }
 
 /** The first 64 KB, read as 64 KB: `readFileSync` of a 50 MB log to look at its
@@ -699,7 +787,12 @@ export function openInDesktop(pathIn: unknown, local = false): { ok: boolean; wi
   // that was judged by its name and points somewhere else.
   const abs = browseReal(pathIn, local);
   if (!abs) return { ok: false, error: refusal(safeAbs(pathIn) ?? "") };
-  try { statSync(abs); } catch { return { ok: false, error: "no such file" }; }
+  let st: ReturnType<typeof statSync>;
+  try { st = statSync(abs); } catch { return { ok: false, error: "no such file" }; }
+  // The default handler LAUNCHES a .desktop file or an executable; "open" must only view.
+  if (/\.desktop$/i.test(abs) || (st.mode & 0o111 && !st.isDirectory())) {
+    return { ok: false, error: "that file can run programs, so it is not opened from here" };
+  }
 
   const opener = process.platform === "darwin"
     ? Bun.which("open", { PATH: process.env.PATH ?? "" })
@@ -709,9 +802,10 @@ export function openInDesktop(pathIn: unknown, local = false): { ok: boolean; wi
   try {
     // Detached and with its output thrown away: the viewer outlives this
     // request, and a photo viewer's stdout has no business in the engine's log.
-    Bun.spawn(opener.endsWith("gio") ? [opener, "open", abs] : [opener, abs], {
+    const p = Bun.spawn(opener.endsWith("gio") ? [opener, "open", abs] : [opener, abs], {
       stdout: "ignore", stderr: "ignore", stdin: "ignore",
     });
+    p.unref(); void p.exited; // reaped when it ends, no zombie until exit
     return { ok: true, with: basename(opener) };
   } catch (e) {
     return { ok: false, error: failed("preview/open", e, "the desktop could not open that file") };
@@ -755,7 +849,8 @@ export function revealInFileManager(pathIn: unknown, local = false): { ok: boole
   const argv = revealArgv(process.platform, (b) => Bun.which(b, { PATH: process.env.PATH ?? "" }), t.dir);
   if (!argv) return { ok: false, error: "no file manager opener on this machine (xdg-open or gio)" };
   try {
-    Bun.spawn(argv, { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
+    const p = Bun.spawn(argv, { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
+    p.unref(); void p.exited;
     return { ok: true, with: basename(argv[0]!) };
   } catch (e) {
     return { ok: false, error: failed("preview/reveal", e, "the file manager could not be opened") };
@@ -765,16 +860,192 @@ export function revealInFileManager(pathIn: unknown, local = false): { ok: boole
 /**
  * How a file is served to a browser TAB, as opposed to a preview pane.
  *
- * An .html file is a page, so it is served as one, but a page from disk must
- * not run: `sandbox` with no allowances gives it an opaque origin, and the rest
- * of the policy leaves it no scripts and no network, so what opens is what the
- * file says in markup and inline style, never something that can read this
- * server's answers. Anything else keeps the preview policy (null).
+ * An .html file is a page, so it is served as one, and by default it does not
+ * run: `sandbox` with no allowances gives it an opaque origin and no scripts,
+ * so what opens is what the file says in markup and inline style.
+ *
+ * `scripts` is the person asking for "Open with its scripts" (a mockup that
+ * switches states). Then `sandbox allow-scripts` runs its inline scripts, still
+ * without `allow-same-origin`: the opaque origin means it cannot read this
+ * server's answers, cookies or storage, and `default-src 'none'` stops fetch,
+ * XHR, WebSocket and loads. That is the whole wall. It does NOT stop
+ * navigation: CSP does not govern it, and a sandboxed top-level page may still
+ * send itself elsewhere, so a running script can take what the page holds
+ * (the file's own contents) to any site in the address, or make top-level GETs
+ * with the browser's Lax cookies. Hence scripts are off unless asked for. The
+ * token is never in the address either way (auth.ts pageTicket).
+ *
+ * Anything else keeps the preview policy (null).
  */
-export function pagePolicy(pathIn: string): { mime: string; csp: string } | null {
-  return /\.html?$/i.test(pathIn)
-    ? { mime: "text/html; charset=utf-8", csp: "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:" }
-    : null;
+export function pagePolicy(pathIn: string, scripts = false): { mime: string; csp: string } | null {
+  if (!/\.html?$/i.test(pathIn)) return null;
+  return {
+    mime: "text/html; charset=utf-8",
+    csp: scripts
+      ? "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:"
+      : "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+  };
+}
+
+/** What a preview served as bytes gets when it is not a page: drawn, never run. */
+export const PREVIEW_CSP = "default-src 'none'; img-src 'self' data: blob:; style-src 'unsafe-inline'";
+
+/**
+ * The file at a path, opened ONCE for a page ticket, with the facts of the
+ * open file (fstat of the handle, never a second look by name).
+ *
+ * A link at the last step is refused (O_NOFOLLOW): the link the Finder hands
+ * out names the real file. `real` is where the open handle actually is
+ * (/proc/self/fd on Linux), so a folder swapped for a link mid-way is judged
+ * where it landed. The caller owns `fd` and closes it. "link": the last step
+ * is a link, so nothing was opened.
+ */
+function openPage(pathIn: unknown): { fd: number; facts: PageFacts } | "link" | null {
+  const abs = safeAbs(pathIn);
+  if (!abs) return null;
+  let fd: number;
+  try { fd = openSync(abs, fsc.O_RDONLY | fsc.O_NOFOLLOW | fsc.O_NONBLOCK); }
+  catch (e) { return (e as NodeJS.ErrnoException)?.code === "ELOOP" ? "link" : null; }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) { closeSync(fd); return null; }
+    let real: string;
+    try { real = readlinkSync(`/proc/self/fd/${fd}`); } catch { real = realpathSync(abs); }
+    return { fd, facts: { real, size: st.size, mtimeMs: st.mtimeMs, dev: st.dev, ino: st.ino } };
+  } catch { try { closeSync(fd); } catch { /* gone */ } return null; }
+}
+
+/**
+ * What a page ticket signs (auth.ts pageTicket): the file behind the path,
+ * as its open handle reports it. Null when there is no such file, or the
+ * last step is a link. Asks no permission: the read that follows does.
+ */
+export function pageFacts(pathIn: unknown): PageFacts | null {
+  const o = openPage(pathIn);
+  if (!o || o === "link") return null;
+  try { closeSync(o.fd); } catch { /* gone */ }
+  return o.facts;
+}
+
+/**
+ * `/preview/page` by ticket: open once, judge the OPEN file, read that file.
+ *
+ * Judging a path and then reading it by name again is a race a worker can
+ * win: swap a folder for a link between the check and the read and the check
+ * saw one file while the read returned another. So the ticket is checked
+ * against the handle's facts (device, inode, size, mtime, real path), the
+ * boundary and `heldBack` judge where the handle really is, and the bytes come
+ * from that same handle. Nothing here opens the path a second time.
+ */
+export async function pageByTicket(
+  pathIn: unknown,
+  pathRefusal: () => string | null,
+  ticketRefusal: (f: PageFacts | null) => string | null,
+  heldBack: (real: string) => boolean,
+  headers: Record<string, string> = {},
+  scripts = false,
+): Promise<Response | { status: 401 | 403 | 404; error: string }> {
+  // The signature on the path's words first: a made-up ticket opens nothing.
+  const forged = pathRefusal();
+  if (forged) return { status: 401, error: forged };
+  const opened = openPage(pathIn);
+  const o = opened === "link" ? null : opened;
+  let handed = false;
+  try {
+    // No such file, a link at the last step, not a regular file, another file:
+    // one sentence for all of them (auth.ts PAGE_TICKET_STALE).
+    const refused = ticketRefusal(o?.facts ?? null);
+    if (refused || !o) return { status: 401, error: refused ?? "no such file" };
+    const { fd, facts } = o;
+    if (heldBack(facts.real)) return { status: 403, error: "held back" };
+    if (!browseAllows(facts.real, false)) return { status: 404, error: refusal(facts.real) };
+    const head = Buffer.alloc(Math.min(64 * 1024, facts.size));
+    const { kind, mime } = kindOf(facts.real, head.subarray(0, readSync(fd, head, 0, head.length, 0)));
+    let body: ReadableStream<Uint8Array> | ArrayBuffer;
+    let type = mime;
+    if (kind === "image-convert") {
+      // The stream owns the handle from here, on every way out.
+      handed = true;
+      const c = await convertFrom(streamFd(fd, facts.size), facts.real);
+      if (!c.ok) return { status: 404, error: c.error };
+      body = c.body; type = "image/png";
+    } else {
+      // The handle is the stream's now: it closes it at the end, or when the
+      // request goes away.
+      handed = true;
+      body = streamFd(fd, facts.size);
+    }
+    const page = pagePolicy(facts.real, scripts);
+    return new Response(body, {
+      headers: {
+        ...headers,
+        "content-type": page?.mime ?? type,
+        "cache-control": "no-store",
+        "content-security-policy": page?.csp ?? PREVIEW_CSP,
+        "x-content-type-options": "nosniff",
+      },
+    });
+  } finally { if (o && !handed) try { closeSync(o.fd); } catch { /* gone */ } }
+}
+
+/** How much of a file one read takes while streaming it. */
+const STREAM_CHUNK = 256 * 1024;
+
+/**
+ * An open file as a stream, from its handle: `size` is the fstat the ticket
+ * checked. Each read is off the event loop (fs.read), so a 3 GB video neither
+ * fills memory nor stops other routes. Closes the handle at the end, on an
+ * error, or when the reader cancels (the request went away) — never while a
+ * read is still on it, so the number is not reused under that read.
+ */
+function streamFd(fd: number, size: number): ReadableStream<Uint8Array> {
+  let at = 0, reading = false, done = false, closed = false;
+  const close = () => { done = true; if (!reading && !closed) { closed = true; try { closeSync(fd); } catch { /* gone */ } } };
+  return new ReadableStream<Uint8Array>({
+    async pull(c) {
+      if (done || at >= size) { close(); c.close(); return; }
+      const buf = Buffer.allocUnsafe(Math.min(STREAM_CHUNK, size - at));
+      reading = true;
+      let n: number;
+      try {
+        n = await new Promise<number>((ok, no) => fdRead(fd, buf, 0, buf.length, at, (e, got) => e ? no(e) : ok(got)));
+      } catch (e) { reading = false; close(); c.error(e); return; }
+      reading = false;
+      if (done) { close(); return; }
+      if (n === 0) { close(); c.close(); return; }
+      at += n;
+      c.enqueue(buf.subarray(0, n));
+    },
+    cancel() { close(); },
+  }, { highWaterMark: 0 });
+}
+
+/** A picture the browser cannot draw, converted from its bytes on stdin: the
+ *  tool is never handed a path to open by name, and ImageMagick is told the
+ *  reader (magickArgv). heif-convert reads only files, so it is not used here. */
+async function convertFrom(input: ReadableStream<Uint8Array>, file: string): Promise<{ ok: true; body: ArrayBuffer } | { ok: false; error: string }> {
+  const tool = imageConverter();
+  const stop = () => input.cancel().catch(() => { /* already closed */ });
+  if (!tool || tool.endsWith("heif-convert")) { await stop(); return { ok: false, error: "no image converter on this machine that reads a picture from its input (magick, convert or ffmpeg)" }; }
+  const argv = tool.endsWith("ffmpeg") ? ffmpegArgv(tool, file) : magickArgv(tool, file, "-");
+  if (!argv) { await stop(); return { ok: false, error: `${basename(tool)} is not trusted to read a ${extname(file).toLowerCase() || "file with no extension"}` }; }
+  try { return await runConverter(argv, input); } finally { await stop(); }
+}
+
+/** `/preview/page`: a file from disk as a browser tab sees it. Same boundary as every Finder read; a refusal is a sentence. */
+export async function pageResponse(pathIn: string, local: boolean, headers: Record<string, string> = {}, scripts = false): Promise<Response> {
+  const r = await fileBytes(pathIn, local);
+  if (!r.ok) return new Response(JSON.stringify({ error: r.error }), { status: 404, headers: { ...headers, "content-type": "application/json" } });
+  const page = pagePolicy(pathIn, scripts);
+  return new Response(r.body, {
+    headers: {
+      ...headers,
+      "content-type": page?.mime ?? r.mime,
+      "cache-control": "no-store",
+      "content-security-policy": page?.csp ?? PREVIEW_CSP,
+      "x-content-type-options": "nosniff",
+    },
+  });
 }
 
 /*

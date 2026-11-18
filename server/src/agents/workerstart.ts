@@ -11,10 +11,12 @@
  * to the person's ceiling, and never to a remote effect (envelope.ts).
  */
 import { agentProvider, workerModelFor } from "../../../shared/agentKinds.ts";
-import { chainFor, envelopeWithin, resolve, type Chain, type Envelope, type EngineChoice, type Policy, type RuleFacts } from "../../../shared/orchestration.ts";
+import { DEFAULT_CEILING, DEFAULT_WORKER_ENVELOPE, LEGACY_CEILING, LEGACY_WORKER_ENVELOPE, chainFor, clampEnvelope, envelopeWithin, resolve, type Chain, type Envelope, type EngineChoice, type Policy, type RuleFacts } from "../../../shared/orchestration.ts";
 import type { EngineReadiness } from "../../../shared/types.ts";
 import { workerRole, type RoleId, type WorkerRole } from "../../../shared/workerRoles.ts";
 import { headlessRefusal } from "./headless.ts";
+import { runsPersonHooks } from "./hooks.ts";
+import { opencodeModelIds, opencodeOffers, qualifyChain, qualifyOpencode } from "../enginemodels.ts";
 
 /** What a start stamps on the row: who chose, and why. */
 export interface StartedBy {
@@ -30,8 +32,14 @@ export interface StartedBy {
   envelope: Envelope;
   /** Always true here: a row with this field is a headless, policy-started worker. */
   headless: true;
+  /** This turn runs the engine's own TUI in the pane rather than a headless
+   *  one-shot (`agents/headless.ts` `headlessTurn`): its `out` is the turn's
+   *  answer as plain text, and its end is the CLI's transcript marker. */
+  tui?: true;
   /** The turn limit this turn runs under. */
   turnMinutes?: number;
+  /** The plan's branch tip when the worker started, so a pass is tied to the code it saw: a commit made while it ran leaves the pass on the older tip. Kept by every restamp. */
+  branchTip?: string;
   /** Which turn of this worker the row is on: 1 for a start, one more for
    *  every instruction after it. Only a first turn can move to another engine. */
   turn?: number;
@@ -44,6 +52,10 @@ export interface StartedBy {
   from?: string;
   /** The flight plan this worker's ending is recorded for (`start --plan`). */
   planId?: string;
+  /** Its engine's shell is not sandboxed: a lifted network or docker the sandbox
+   *  cannot hold (`unsandboxedBecause`). The row's `because` carries the
+   *  sentence. */
+  unsandboxed?: true;
 }
 
 export interface WorkerAsk {
@@ -81,13 +93,14 @@ const list = (chain: Chain): string => chain.map(label).join(", ") || "none";
 
 export function planWorker(
   ask: WorkerAsk,
-  view: { policy: Policy; scope: "project" | "global" },
+  /** `noClaude`: Settings ▸ Advanced ▸ Worker sandbox ▸ No Claude in workers, for this project. */
+  view: { policy: Policy; scope: "project" | "global"; noClaude?: boolean },
   facts: RuleFacts,
   readiness: readonly EngineReadiness[],
   /** Live workers this seat already owns; null when a person (not a seat) asks. */
   liveForSeat: number | null,
-  /** A custom flow role: the policy has no slot for it, so its own chain is the one asked. */
-  custom?: { role: WorkerRole; chain: Chain },
+  /** A custom flow role: the policy has no slot for it, so its own chain is the one asked. A `policyRole` keeps that role's slot for its "ask". */
+  custom?: { role: WorkerRole; chain: Chain; policyRole?: RoleId },
 ): Plan {
   const role = custom?.role ?? workerRole(ask.role);
   if (!role) return { ok: false, error: "no such role" };
@@ -103,7 +116,7 @@ export function planWorker(
       allow.add(a as string);
     }
   }
-  const envelope: Envelope = {
+  let envelope: Envelope = {
     ...policy.workerDefault,
     network: policy.workerDefault.network || allow.has("network"),
     commit: policy.workerDefault.commit || allow.has("commit"),
@@ -123,8 +136,10 @@ export function planWorker(
   }
 
   if (ask.model !== undefined && typeof ask.model !== "string") return { ok: false, error: "model: a model name from the chain" };
-  const chain = custom ? custom.chain : chainFor(policy, facts, role.id as RoleId);
-  const resolved = custom ? null : resolve(policy, facts, readiness).workers[role.id as RoleId];
+  const chain = qualifyChain(custom ? custom.chain : chainFor(policy, facts, role.id as RoleId));
+  if (ask.engine === "opencode" && typeof ask.model === "string") ask = { ...ask, model: qualifyOpencode(ask.model) };
+  const slots = resolve(policy, facts, readiness).workers;
+  const resolved = custom ? null : slots[role.id as RoleId];
   let choice: EngineChoice;
   let because: string[];
   let position: number;
@@ -132,8 +147,15 @@ export function planWorker(
 
   if (ask.engine !== undefined) {
     if (typeof ask.engine !== "string") return { ok: false, error: "engine: a name from the chain" };
-    const at = chain.findIndex((c) => c.engine === ask.engine && (typeof ask.model !== "string" || c.model === ask.model));
+    // No model named: the first slot of that engine the engine really offers. A named model is taken as asked.
+    const offered = (c: EngineChoice) => typeof ask.model === "string" || c.engine !== "opencode" || opencodeOffers(c.model);
+    const at = chain.findIndex((c) => c.engine === ask.engine && (typeof ask.model !== "string" || c.model === ask.model) && offered(c));
     if (at < 0) {
+      const lacking = chain.filter((c) => c.engine === ask.engine && !offered(c));
+      if (lacking.length) {
+        const names = lacking.map((c) => `"${c.model}"`).join(", ");
+        return { ok: false, error: `${names} ${lacking.length > 1 ? "are" : "is"} not offered by the installed OpenCode. Its models: ${opencodeModelIds().join(", ")}` };
+      }
       const what = typeof ask.model === "string" ? `${ask.engine} (${ask.model})` : ask.engine;
       return { ok: false, error: `${what} is not in the chain for the ${role.id} role here: ${list(chain)}. The policy decides the choices; change it in Settings, not in the start.` };
     }
@@ -146,12 +168,28 @@ export function planWorker(
     rule = resolved ? { name: resolved.ruleName ?? "base", id: resolved.ruleId } : { name: "flow" };
   } else if (custom) {
     if (ask.model !== undefined) return { ok: false, error: "model: it goes with an engine from the chain; say which with --engine" };
-    // Ready is the test the engine switch uses.
-    const at = chain.findIndex((c) => {
+    /* A flow role that runs as a built-in obeys that role's "ask": the person
+       said to choose the engine, so the first ready one is not chosen for them. */
+    const slot = custom.policyRole ? slots[custom.policyRole] : null;
+    if (slot?.ok && slot.ask) {
+      const ready = chain.filter((c) => readiness.find((e) => e.id === c.engine)?.roles.worker.ok);
+      return { ok: false, error: `this role is set to ask which engine to use: pick one with --engine. Ready now: ${list(ready)}.` };
+    }
+    // Ready is the test the engine switch uses. A slot whose model the installed
+    // OpenCode does not offer is skipped the same way.
+    const ready = (c: EngineChoice) => {
       const r = readiness.find((e) => e.id === c.engine);
       return !!(r?.path && r.roles.worker.ok) && !headlessRefusal(c.engine);
-    });
-    if (at < 0) return { ok: false, error: `no engine ready for role "${role.id}"` };
+    };
+    const at = chain.findIndex((c) => ready(c) && (c.engine !== "opencode" || opencodeOffers(c.model)));
+    if (at < 0) {
+      const lacking = chain.filter((c) => ready(c) && c.engine === "opencode" && !opencodeOffers(c.model));
+      if (lacking.length) {
+        const names = lacking.map((c) => `"${c.model}"`).join(", ");
+        return { ok: false, error: `${names} ${lacking.length > 1 ? "are" : "is"} not offered by the installed OpenCode, and no other engine in the chain for role "${role.id}" is ready. Its models: ${opencodeModelIds().join(", ")}` };
+      }
+      return { ok: false, error: `no engine ready for role "${role.id}"` };
+    }
     choice = chain[at]!;
     position = at;
     because = [`the ${role.id} flow role's chain: ${label(choice)} is the first one ready`];
@@ -170,8 +208,44 @@ export function planWorker(
     rule = { name: resolved.ruleName ?? "base", id: resolved.ruleId };
   }
 
+  /* No Claude in workers: whatever picked Claude (the policy, a flow role's
+     chain, an --engine), the turn goes to the chain's first other ready engine,
+     else to OpenCode on its default model, else it is refused with where to change it. */
+  if (view.noClaude && choice.engine === "claude") {
+    const usable = (c: EngineChoice) => {
+      const r = readiness.find((e) => e.id === c.engine);
+      return c.engine !== "claude" && !!(r?.path && r.roles.worker.ok) && !headlessRefusal(c.engine) && (c.engine !== "opencode" || opencodeOffers(c.model));
+    };
+    const at = chain.findIndex(usable);
+    const swap = at >= 0 ? chain[at]! : usable({ engine: "opencode", model: "" }) ? { engine: "opencode", model: "" } : null;
+    if (!swap) {
+      return { ok: false, error: `role "${role.id}" is set to Claude, and "No Claude in workers" is on for this project, and no other engine is ready. Turn it off in Settings ▸ Advanced ▸ Worker sandbox, or sign in OpenCode in Settings ▸ Agent engines.` };
+    }
+    because = [...because, `"No Claude in workers" is on, so ${label(choice)} became ${label(swap)}`];
+    position = at >= 0 ? at : chain.length;
+    choice = swap;
+  }
+
+  // A built-in role's slot comes from the policy, not from `chain`: same bare name, same fix.
+  if (choice.engine === "opencode") choice = { ...choice, model: qualifyOpencode(choice.model) };
   const why = headlessRefusal(choice.engine);
   if (why) return { ok: false, error: why };
+
+  /* An engine that runs none of the person's hooks has no seat powers: it starts from the old defaults, and a
+     ceiling nobody changed from the new default is the old one for it. The old floor itself is the lock's (deniedFor). */
+  if (!runsPersonHooks(choice.engine)) {
+    const same = (a: Envelope, b: Envelope): boolean => JSON.stringify([a.write, a.network, a.commit, a.docker, !!a.worktreeOps, [...a.deny].sort()]) === JSON.stringify([b.write, b.network, b.commit, b.docker, !!b.worktreeOps, [...b.deny].sort()]);
+    const ceiling = same(policy.ceiling, DEFAULT_CEILING) ? LEGACY_CEILING : policy.ceiling;
+    // A default the person changed is theirs; one nobody touched is the old one on this engine.
+    const start = same(policy.workerDefault, DEFAULT_WORKER_ENVELOPE) ? LEGACY_WORKER_ENVELOPE : policy.workerDefault;
+    for (const a of ALLOWS) {
+      if (allow.has(a) && !ceiling[a]) return { ok: false, error: `--allow ${a} is beyond this project's ceiling (Settings ▸ Orchestration): ${BEYOND[a]}. Nothing was started.` };
+    }
+    envelope = clampEnvelope({
+      ...start,
+      network: start.network || allow.has("network"), commit: start.commit || allow.has("commit"), docker: start.docker || allow.has("docker"),
+    }, ceiling);
+  }
 
   // An entry left on "default model" for an engine that cannot start without
   // one runs the engine's own default, and the person is told which.
@@ -207,10 +281,12 @@ export function nextEngine(p: {
   // An engine it has left stays out; the one it is on may still be tried again
   // with another model, which is how a spent plan falls to a free twin.
   const left = new Set(p.by.from ? [p.by.from] : []);
-  const at = p.chain.findIndex((c) => c.engine === p.by.engine && c.model === p.by.model);
-  for (let i = at + 1; i < p.chain.length; i++) {
-    const c = p.chain[i]!;
-    if (left.has(c.engine) || (c.engine === p.by.engine && c.model === p.by.model)) continue;
+  const chain = qualifyChain(p.chain);
+  const byModel = p.by.engine === "opencode" ? qualifyOpencode(p.by.model) : p.by.model;
+  const at = chain.findIndex((c) => c.engine === p.by.engine && c.model === byModel);
+  for (let i = at + 1; i < chain.length; i++) {
+    const c = chain[i]!;
+    if (left.has(c.engine) || (c.engine === p.by.engine && c.model === byModel)) continue;
     if (p.usable(c)) return { ok: true, choice: c, position: i };
   }
   return { ok: false, why: "no other engine in the chain is ready" };

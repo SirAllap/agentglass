@@ -95,6 +95,20 @@ describe("the marking, on its own", () => {
   test("a window that was never made (empty id) is not marked", () => {
     expect(marks.restoredMarks([{ id: "", window: win([sh]) }], "lazy")).toEqual({});
   });
+
+  test("putting the banner away is the record's, not one renderer's: the marks stay and a reload keeps it quiet", () => {
+    marks.noteRestored([{ id: "@1", window: win([sh]) }, { id: "@2", window: win([sh]) }], "lazy", "9.9");
+    marks.__forgetRestoredCache();
+    expect(marks.restoredFields("@1")?.restoredDismissed, "not put away yet").toBeUndefined();
+
+    marks.dismissRestoredBanner();
+    marks.__forgetRestoredCache(); // the next page load, the next process
+    expect(marks.restoredFields("@1")?.restoredDismissed, "still quiet after a reload").toBe(true);
+    expect(marks.restoredIds().sort(), "the windows keep their mark and their card").toEqual(["@1", "@2"]);
+
+    marks.noteRestored([{ id: "@3", window: win([sh]) }], "lazy", "9.9");
+    expect(marks.restoredFields("@3")?.restoredDismissed, "the next restore is announced").toBeUndefined();
+  });
 });
 
 describe.skipIf(!have)("after a restore", () => {

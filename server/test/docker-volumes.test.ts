@@ -8,7 +8,7 @@
  * "which of these 32 volumes can I delete".
  */
 import { describe, expect, test } from "bun:test";
-import { humanSize, parseSize, parseStat, parseTotals, pickPeekImage } from "../src/dockervolumes.ts";
+import { humanSize, parseSize, parseStat, parseTotals, pickPeekImage, reclaimableByKind } from "../src/dockervolumes.ts";
 
 describe("docker's own sizes", () => {
   test("the shapes it prints", () => {
@@ -139,6 +139,10 @@ describe("the totals line", () => {
 
   test("the percentage docker appends is not a size", () => {
     expect(parseTotals('{"Reclaimable":"45.67GB (49%)","Size":"91.89GB","Type":"Images"}').reclaimable).toBe(45_670_000_000);
+  });
+
+  test("reclaimable comes out per kind from the same text", () => {
+    expect(reclaimableByKind(df)).toEqual({ images: 45_670_000_000, containers: 0, volumes: 6_200_000_000, buildCache: 174_100_000_000 });
   });
 
   test("nothing readable is zero, not a crash", () => {

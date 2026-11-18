@@ -33,7 +33,8 @@ import { copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSyn
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { CookieRow, SourceKind } from "./cookieimport.ts";
-import { chromeEpochSeconds, ffExpirySeconds } from "./cookieimport.ts";
+import { mozLz4Json } from "./mozlz4.ts";
+import { chromeEpochSeconds, ffExpirySeconds, firefoxPartitionKey, parseOriginAttributes } from "./cookieimport.ts";
 
 function home(): string {
   const env = process.platform === "win32" ? process.env.USERPROFILE : process.env.HOME;
@@ -66,6 +67,9 @@ export const LINUX_SOURCES: SourceDef[] = [
   { id: "chrome", label: "Google Chrome", kind: "chromium", keyring: "chrome", dirs: [".config/google-chrome"] },
   { id: "chromium", label: "Chromium", kind: "chromium", keyring: "chromium", dirs: [".config/chromium", "snap/chromium/common/chromium"] },
   { id: "brave", label: "Brave", kind: "chromium", keyring: "brave", dirs: [".config/BraveSoftware/Brave-Browser", ".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser"] },
+  { id: "edge", label: "Microsoft Edge", kind: "chromium", keyring: "microsoft-edge", dirs: [".config/microsoft-edge", ".var/app/com.microsoft.Edge/config/microsoft-edge"] },
+  { id: "vivaldi", label: "Vivaldi", kind: "chromium", keyring: "vivaldi", dirs: [".config/vivaldi", ".var/app/com.vivaldi.Vivaldi/config/vivaldi"] },
+  { id: "opera", label: "Opera", kind: "chromium", keyring: "opera", dirs: [".config/opera", "snap/opera/current/.config/opera"] },
 ];
 
 /**
@@ -89,6 +93,9 @@ export const MAC_SOURCES: SourceDef[] = [
   { id: "chrome", label: "Google Chrome", kind: "chromium", keyring: "chrome", dirs: ["Library/Application Support/Google/Chrome"] },
   { id: "chromium", label: "Chromium", kind: "chromium", keyring: "chromium", dirs: ["Library/Application Support/Chromium"] },
   { id: "brave", label: "Brave", kind: "chromium", keyring: "brave", dirs: ["Library/Application Support/BraveSoftware/Brave-Browser"] },
+  { id: "edge", label: "Microsoft Edge", kind: "chromium", keyring: "microsoft-edge", dirs: ["Library/Application Support/Microsoft Edge"] },
+  { id: "vivaldi", label: "Vivaldi", kind: "chromium", keyring: "vivaldi", dirs: ["Library/Application Support/Vivaldi"] },
+  { id: "opera", label: "Opera", kind: "chromium", keyring: "opera", dirs: ["Library/Application Support/com.operasoftware.Opera"] },
 ];
 
 /** The list for a platform. Windows has neither yet and answers with nothing
@@ -164,13 +171,18 @@ export function findProfiles(platform: string = process.platform, homeDir: strin
         }
       } else {
         // Chromium keeps its profiles as plain directories beside Local State.
+        // Opera keeps its one profile in the base directory itself.
+        dirs.push({ name: "Default", dir: base });
         for (const name of ["Default", ...safeList(base).filter((n) => n.startsWith("Profile "))]) {
           dirs.push({ name, dir: join(base, name) });
         }
       }
       for (const p of dirs) {
-        const db = join(p.dir, dbName);
-        try { if (!statSync(db).isFile()) continue; } catch { continue; }
+        // Chrome 96+ moved the jar to `Network/Cookies`; older profiles and
+        // other forks keep it beside the profile. The newer one wins.
+        const candidates = src.kind === "firefox" ? [join(p.dir, dbName)] : [join(p.dir, "Network", dbName), join(p.dir, dbName)];
+        const db = candidates.find((c) => { try { return statSync(c).isFile(); } catch { return false; } });
+        if (!db) continue;
         found.push({
           id: `${src.id}:${basename(p.dir)}`,
           source: src.id, label: `${src.label} — ${p.name}`, kind: src.kind, dir: p.dir, db,
@@ -218,7 +230,12 @@ export function readFirefox(db: string): CookieRow[] {
       const rows = conn.query<Record<string, unknown>, []>(
         "SELECT host, name, value, path, expiry, isSecure, isHttpOnly, sameSite, originAttributes FROM moz_cookies",
       ).all();
-      return rows.map((r) => ({
+      return rows.map((r) => {
+        const oa = parseOriginAttributes(String(r.originAttributes ?? ""));
+        const pk = oa.partitionKey ? firefoxPartitionKey(oa.partitionKey) : null;
+        // A partition key this cannot read stays a partition it cannot carry.
+        const partition = [oa.partitionKey && !pk ? `partitionKey=${oa.partitionKey}` : "", oa.other].filter(Boolean).join("&");
+        return {
         host: String(r.host ?? ""),
         name: String(r.name ?? ""),
         value: String(r.value ?? ""),
@@ -227,11 +244,63 @@ export function readFirefox(db: string): CookieRow[] {
         secure: Number(r.isSecure ?? 0) === 1,
         httpOnly: Number(r.isHttpOnly ?? 0) === 1,
         sameSite: Number(r.sameSite ?? 256),
-        // Containers and partitioned cookies both live here.
-        partition: String(r.originAttributes ?? "") || undefined,
-      }));
+        // The container is which jar; anything else in the column is a partition.
+        container: oa.container,
+        ...(pk ? { partitionKey: pk } : {}),
+        partition: partition || undefined,
+      };
+      });
     } finally { conn.close(); }
   } finally { snap.dispose(); }
+}
+
+/** One cookie as Firefox's session store writes it. */
+interface SessionCookie {
+  host?: string; name?: string; value?: string; path?: string;
+  secure?: boolean; httponly?: boolean; sameSite?: number; expiry?: number;
+  originAttributes?: { userContextId?: number; partitionKey?: string; firstPartyDomain?: string; privateBrowsingId?: number };
+}
+
+/**
+ * Session cookies, which Firefox never writes to `cookies.sqlite`.
+ *
+ * With session restore on, Firefox and Zen keep them in the session store
+ * (`sessionstore-backups/recovery.jsonlz4` while running, `sessionstore.jsonlz4`
+ * after a clean exit). Nothing read that file, so a site whose login is a
+ * session cookie was lost with no counter to show it. Rows come back with
+ * `expires: 0`; a row also in `cookies.sqlite` is the caller's to dedupe.
+ */
+export function readFirefoxSession(profileDir: string): CookieRow[] {
+  const file = [join(profileDir, "sessionstore-backups", "recovery.jsonlz4"), join(profileDir, "sessionstore.jsonlz4")]
+    .find((f) => existsSync(f));
+  if (!file) return [];
+  let state: { cookies?: SessionCookie[] };
+  try { state = mozLz4Json(readFileSync(file)); } catch { return []; }
+  const out: CookieRow[] = [];
+  for (const c of state.cookies ?? []) {
+    const oa = c.originAttributes ?? {};
+    if (oa.privateBrowsingId) continue;
+    const pk = oa.partitionKey ? firefoxPartitionKey(oa.partitionKey) : null;
+    const partition = [oa.partitionKey && !pk ? `partitionKey=${oa.partitionKey}` : "", oa.firstPartyDomain ? `firstPartyDomain=${oa.firstPartyDomain}` : ""]
+      .filter(Boolean).join("&");
+    out.push({
+      host: String(c.host ?? ""), name: String(c.name ?? ""), value: String(c.value ?? ""), path: String(c.path ?? "/"),
+      expires: 0, secure: !!c.secure, httpOnly: !!c.httponly, sameSite: Number(c.sameSite ?? 256),
+      container: String(oa.userContextId ?? 0),
+      ...(pk ? { partitionKey: pk } : {}),
+      partition: partition || undefined,
+    });
+  }
+  return out;
+}
+
+/** The sqlite rows plus the session store's, without a cookie counted twice. */
+export function readFirefoxAll(db: string, profileDir: string): CookieRow[] {
+  const rows = readFirefox(db);
+  const key = (r: CookieRow) => [r.host, r.name, r.path, r.container ?? "0", r.partitionKey?.topLevelSite ?? "", r.partition ?? ""].join("\u0000");
+  const seen = new Set(rows.map(key));
+  for (const r of readFirefoxSession(profileDir)) if (!seen.has(key(r))) { seen.add(key(r)); rows.push(r); }
+  return rows;
 }
 
 export type ChromiumRefusal = "v11-keyring" | "v10-peanuts" | "app-bound" | "unreadable";

@@ -237,22 +237,73 @@ export function attributeSpend(
  * over idx_events_project_ts and idx_events_cwd_ts that scopeClause was shaped
  * for, so the window is honoured inside the index rather than row by row. That
  * is a synchronous block on the thread the terminal rides, which is why the
- * answer is cached for the whole board rather than asked per pull request.
+ * answer is cached for the whole board rather than asked per pull request, and
+ * why the route assembles it in slices (spendRowsInSlices below).
  */
+const spendRowSql = (clause: string, bounded: boolean) =>
+  `SELECT COALESCE(json_extract(payload, '$.git_branch'), '') AS branch,
+          COALESCE(cwd_path, project_path, '') AS dir,
+          session_id,
+          SUM(cost_usd) AS usd,
+          MAX(timestamp) AS last_ts
+     FROM events
+    WHERE timestamp >= ?${bounded ? " AND timestamp < ?" : ""} AND cost_usd > 0${clause}
+    GROUP BY 1, 2, 3`;
+
 export function spendRows(root: string, since: number): SpendRow[] {
   const { clause, args } = scopeClause(root);
+  return db.query<SpendRow, any[]>(spendRowSql(clause, false)).all(since, ...args);
+}
+
+/**
+ * How many slices the board's query is cut into.
+ *
+ * One query over a cold cockpit blocked the loop for up to 3,993 ms (measured
+ * in the server's own log, four times in one session). The loop it blocks is
+ * the one the terminal rides, so the answer is assembled over twelve disjoint
+ * time windows with a macrotask between them: the same rows, the same SUM per
+ * group.
+ *
+ * What that does not do is make the loop free. Divided as it is, the same cold
+ * query still holds it for about a twelfth of 3,993 ms — some 330 ms — at a
+ * time; the count is chosen, not measured. The test's fixture is a ~200 ms
+ * query in total, so it can only show that the slicing yields, not that a real
+ * cockpit stays under a third of a second: on this query the guard below is
+ * green whether or not the ceiling matters. Deriving the count from a measured
+ * first slice, or moving the read off this thread, is the next step.
+ */
+const SPEND_SLICES = 12;
+
+/** The oldest turn that carried a cost, so `since` 0 does not hand the last
+ *  slice every year of history. The timestamp index stops at the first row. */
+function oldestCosted(): number {
   return db
-    .query<SpendRow, any[]>(
-      `SELECT COALESCE(json_extract(payload, '$.git_branch'), '') AS branch,
-              COALESCE(cwd_path, project_path, '') AS dir,
-              session_id,
-              SUM(cost_usd) AS usd,
-              MAX(timestamp) AS last_ts
-         FROM events
-        WHERE timestamp >= ? AND cost_usd > 0${clause}
-        GROUP BY 1, 2, 3`
-    )
-    .all(since, ...args);
+    .query<{ t: number }, []>("SELECT timestamp AS t FROM events WHERE cost_usd > 0 ORDER BY timestamp ASC LIMIT 1")
+    .get()?.t ?? 0;
+}
+
+/**
+ * The same rows as spendRows(), in slices that hand the loop back between
+ * them. Used by the route; the synchronous one stays for callers already on a
+ * cached path.
+ */
+async function spendRowsInSlices(root: string, since: number): Promise<SpendRow[]> {
+  const { clause, args } = scopeClause(root);
+  const from = since > 0 ? since : oldestCosted();
+  const now = Date.now();
+  if (now <= from) return [];
+  const step = Math.max(1, Math.ceil((now - from) / SPEND_SLICES));
+  const rows: SpendRow[] = [];
+  for (let at = from; at <= now; at += step) {
+    const last = at + step > now;
+    rows.push(
+      ...db
+        .query<SpendRow, any[]>(spendRowSql(clause, !last))
+        .all(at, ...(last ? [] : [at + step]), ...args)
+    );
+    if (!last) await new Promise<void>((r) => setTimeout(r, 0));
+  }
+  return rows;
 }
 
 /** The day before a given YYYY-MM-DD, in UTC. */
@@ -352,7 +403,7 @@ async function computeSpend(root: string): Promise<RepoSpend> {
   let value: RepoSpend;
   try {
     const checkouts = await checkoutBranches(root);
-    const { branches, worktrees } = attributeSpend(spendRows(root, since), checkouts);
+    const { branches, worktrees } = attributeSpend(await spendRowsInSlices(root, since), checkouts);
     value = { ok: true, since, seamDay, beforeSeamUsd: spendBeforeSeam(root, seamDay), branches, worktrees };
   } catch (e) {
     // A failure here is a missing number on a chip, never a broken board — so

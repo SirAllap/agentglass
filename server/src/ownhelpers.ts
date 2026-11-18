@@ -16,6 +16,7 @@
  * written down one by one.
  */
 import { STOP_GRACE_MS, startStamp } from "./childledger.ts";
+import { spawnSyncAs } from "./loopwatch.ts";
 
 /** The exact tail of each long-lived helper this server starts, from the two
  *  `watchDevices` spawns in volumes.ts; change them together. argv[0] is
@@ -82,7 +83,7 @@ export function classifyOwnHelpers(rows: PsRow[], ctx: HelperContext): PsRow[] {
 }
 
 function readPs(): string {
-  const r = Bun.spawnSync(["ps", "-eo", PS_FORMAT], { stdout: "pipe", stderr: "ignore", stdin: "ignore", timeout: 5_000 });
+  const r = spawnSyncAs("ps helpers", ["ps", "-eo", PS_FORMAT], { stdout: "pipe", stderr: "ignore", stdin: "ignore", timeout: 5_000 });
   return r.success ? r.stdout.toString() : "";
 }
 

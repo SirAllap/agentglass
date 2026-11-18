@@ -51,7 +51,7 @@ exit 0
     console.log(JSON.stringify((await overview(true)).networks));`;
   const p = Bun.spawnSync(["bun", "-e", code], {
     env: {
-      PATH: `${join(dir, "bin")}:${process.env.PATH ?? ""}`, HOME: dir, XDG_CONFIG_HOME: dir, XDG_DATA_HOME: dir, XDG_CACHE_HOME: dir,
+      PATH: `${join(dir, "bin")}:${process.env.PATH ?? ""}`, HOME: dir, TMPDIR: dir, XDG_CONFIG_HOME: dir, XDG_DATA_HOME: dir, XDG_CACHE_HOME: dir,
       AGENTGLASS_STATE_DIR: join(dir, "state"), AGENTGLASS_DB: join(dir, "d.db"), AGENTGLASS_ROOT: dir,
       AGENTGLASS_SCAN_DISABLED: "1", NODE_ENV: "test",
     },

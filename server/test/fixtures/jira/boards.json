@@ -40,6 +40,9 @@
     { "id": "10011", "name": "ACME board filter", "jql": "project = ACME ORDER BY Rank ASC", "favourite": false, "owner": "acc-0001" },
     { "id": "10020", "name": "Orbit bugs", "jql": "project = ORBIT AND assignee is EMPTY ORDER BY key", "favourite": true, "owner": "acc-0002" },
     { "id": "10030", "name": "Everything", "jql": "ORDER BY key", "favourite": true, "owner": "acc-0002" },
-    { "id": "10040", "name": "Private to somebody else", "jql": "project = ORBIT", "favourite": false, "owner": "acc-0003", "visible": false }
+    { "id": "10050", "name": "Needs QA review", "jql": "project = ORBIT AND status = QA", "favourite": true, "owner": "acc-0002" },
+    { "id": "10040", "name": "Private to somebody else", "jql": "project = ORBIT", "favourite": false, "owner": "acc-0003", "visible": false },
+    { "id": "10060", "name": "ACME board filter, typed issues only", "jql": "project = ACME AND type != Epic ORDER BY Rank ASC", "favourite": false, "owner": "acc-0001" },
+    { "id": "10070", "name": "Release train", "jql": "project in (ACME, ORBIT) ORDER BY Rank ASC", "favourite": false, "owner": "acc-0001" }
   ]
 }

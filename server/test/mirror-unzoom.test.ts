@@ -25,7 +25,11 @@ import { join } from "node:path";
 
 const NAME = `agx-unzoom-${process.pid}`;
 const SOCK = ["-f", "/dev/null", "-L", NAME];
-const sh = (args: string[]) => Bun.spawnSync(["tmux", ...SOCK, ...args], { stdout: "pipe", stderr: "pipe" });
+/* Its own TMUX_TMPDIR: `-L NAME` alone resolves in /tmp/tmux-<uid>, the developer's. */
+const tmuxDir = mkdtempSync(join(tmpdir(), "agx-unzoom-tmux-"));
+const before = process.env.TMUX_TMPDIR;
+process.env.TMUX_TMPDIR = tmuxDir;
+const sh = (args: string[]) => Bun.spawnSync(["tmux", ...SOCK, ...args], { env: { ...process.env, TMUX_TMPDIR: tmuxDir } as Record<string, string>, stdout: "pipe", stderr: "pipe" });
 const out = (args: string[]) => sh(args).stdout.toString().trim();
 const state = mkdtempSync(join(tmpdir(), "agx-unzoom-state-"));
 
@@ -38,7 +42,8 @@ beforeAll(() => {
 
 afterAll(() => {
   sh(["kill-server"]);
-  try { rmSync(join(tmpdir(), `tmux-${process.getuid?.() ?? 0}`, NAME), { force: true }); } catch { /* gone */ }
+  try { rmSync(tmuxDir, { recursive: true, force: true }); } catch { /* gone */ }
+  if (before === undefined) delete process.env.TMUX_TMPDIR; else process.env.TMUX_TMPDIR = before;
   try { rmSync(state, { recursive: true, force: true }); } catch { /* gone */ }
 });
 
@@ -49,7 +54,7 @@ const ids = () => ({
   paneId: out(["display", "-t", "work", "-p", "#{pane_id}"]),
 });
 
-test("the sweep takes off the zoom the record says a mirror applied", () => {
+test("the sweep takes off the zoom the record says a mirror applied", async () => {
   const { sessionId, windowId, paneId } = ids();
   expect(out(["list-panes", "-t", "work", "-F", "x"]).split("\n").length, "two panes to zoom between").toBe(2);
 
@@ -63,12 +68,12 @@ test("the sweep takes off the zoom the record says a mirror applied", () => {
     zoomed: { sessionId, windowId, paneId },
   });
 
-  reapMirrorSessions();
+  await reapMirrorSessions();
   expect(zoomFlag(), "and off again once nothing is on it").toBe("0");
   expect(mirrorLeases().length, "the record goes with it").toBe(0);
 });
 
-test("a zoom nobody wrote down is left alone", () => {
+test("a zoom nobody wrote down is left alone", async () => {
   /* tmux offers no way to tell a phone's zoom from a person's, so the record is
      the only thing that may authorise touching one. Without it, hands off. */
   const { paneId } = ids();
@@ -80,12 +85,12 @@ test("a zoom nobody wrote down is left alone", () => {
     socket: SOCK, session: `agx-phone-2-${process.pid}`, token: "t", opened: Date.now(),
     zoomed: null,
   });
-  reapMirrorSessions();
+  await reapMirrorSessions();
   expect(zoomFlag(), "somebody's own zoom stays theirs").toBe("1");
   sh(["resize-pane", "-Z", "-t", paneId]);
 });
 
-test("and a window the record names is only unzoomed if it is still on that pane", () => {
+test("and a window the record names is only unzoomed if it is still on that pane", async () => {
   /* The window may have moved on: a person zoomed something else in the
      meantime, and undoing "the zoom" would then undo theirs. */
   const { sessionId, windowId } = ids();
@@ -99,7 +104,7 @@ test("and a window the record names is only unzoomed if it is still on that pane
     socket: SOCK, session: `agx-phone-3-${process.pid}`, token: "t", opened: Date.now(),
     zoomed: { sessionId, windowId, paneId: panes[0]! === other ? panes[1]! : panes[0]! },
   });
-  reapMirrorSessions();
+  await reapMirrorSessions();
   expect(zoomFlag(), "a different pane is zoomed now — not ours to undo").toBe("1");
   sh(["resize-pane", "-Z", "-t", other]);
 });

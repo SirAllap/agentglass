@@ -30,13 +30,19 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Writable } from "node:stream";
 import { DESK_HEADER } from "../src/desk.ts";
 import { freePort } from "./freePort.ts";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
+
+/* Measured on the m41 run: `cpSync(..., { recursive: true })` of the config dir died with
+   `ENXIO: no such device or address, open` because that dir held a pipe or socket (a live
+   process's, left by another test in the same process or by the machine). Only paired-device
+   files are wanted, so anything that is not a plain file or directory is left out. */
+const plainOnly = (src: string): boolean => { const st = lstatSync(src); return st.isDirectory() || st.isFile(); };
 
 const TOKEN = "machine-token-for-this-test";
 
@@ -286,7 +292,7 @@ describe("on a server the desktop app started, an Origin no longer lets a hold g
   beforeAll(async () => {
     dDir = mkdtempSync(join(tmpdir(), "agx-gatedesk-"));
     // The same paired phone and look-only tablet as the server above.
-    cpSync(join(dir, "agentglass"), join(dDir, "agentglass"), { recursive: true });
+    cpSync(join(dir, "agentglass"), join(dDir, "agentglass"), { recursive: true, filter: plainOnly });
     const p = await freePort();
     dBase = `http://127.0.0.1:${p}`;
     dProc = spawnFromDesk(dDir, p, DESK);
@@ -407,8 +413,8 @@ describe("a desk is its pipe and its parent, not a variable", () => {
 
   beforeAll(() => {
     eDir = mkdtempSync(join(tmpdir(), "agx-gatedesk-edge-"));
-    cpSync(join(dir, "agentglass"), join(eDir, "a", "agentglass"), { recursive: true });
-    cpSync(join(dir, "agentglass"), join(eDir, "b", "agentglass"), { recursive: true });
+    cpSync(join(dir, "agentglass"), join(eDir, "a", "agentglass"), { recursive: true, filter: plainOnly });
+    cpSync(join(dir, "agentglass"), join(eDir, "b", "agentglass"), { recursive: true, filter: plainOnly });
   });
 
   afterAll(() => {
@@ -469,6 +475,7 @@ describe("the desktop app hands its key to the ends that use it, and nowhere els
     expect(MAIN).toMatch(/^let deskKey = null;/m);
     const env = code(body(MAIN, "function sidecarEnv("));
     expect(env).not.toContain("deskKey");
+    expect(env).not.toContain("mainKey");
     expect(env).toContain("if (DESK_PIPE) env.AGENTGLASS_DESK_FD = `3:${process.pid}`;");
     const boot = code(body(MAIN, "async function ensureServer("));
     // An adopted server was never piped a key: the app claims one for it
@@ -485,13 +492,16 @@ describe("the desktop app hands its key to the ends that use it, and nowhere els
     // The listener first: a sidecar that exits unread answers with ECONNRESET.
     const listen = boot.indexOf('desk?.on("error"');
     expect(listen).toBeGreaterThan(-1);
-    expect(listen).toBeLessThan(boot.indexOf('if (deskKey) desk?.end(deskKey + "\\n");'));
+    // The main key (the vault's yes, vault-ask.test.ts) rides the same pipe,
+    // minted only when there is a desk key to send it with.
+    expect(boot).toContain('mainKey = deskKey ? require("crypto").randomBytes(32).toString("base64url") : null;');
+    expect(listen).toBeLessThan(boot.indexOf('if (deskKey) desk?.end(deskKey + "\\n" + mainKey + "\\n");'));
     // Declared, cleared, set and pushed by the adopted server's claim, minted,
-    // piped (twice on one line), pushed on restart, cleared and pushed when an
+    // gating the main key's mint, piped (twice on one line), pushed on restart, cleared and pushed when an
     // adopted server's desk is taken and the app leaves it, and the IPC line
     // (the channel's name and the answer): a use past these — a file, a variable, a
     // log line — is a change somebody has to look at.
-    expect([...code(MAIN).matchAll(/\bdeskKey\b/g)]).toHaveLength(10);
+    expect([...code(MAIN).matchAll(/\bdeskKey\b/g)]).toHaveLength(11);
   });
 
   test("the renderer asks for it from a window's own page, is handed the next one on a restart, and carries it on the two requests that need it", () => {
@@ -508,6 +518,9 @@ describe("the desktop app hands its key to the ends that use it, and nowhere els
        the point: another use is a change somebody has to look at. */
     expect(sent).toContain('"/browser/ready", { client, on, manager: true }, deskHeader())');
     expect(sent).toContain('"/browser/ready", { client, on, lanes }, deskHeader())');
+    /* A guide's own events (the person pressing OK, Back, Done on a card) are
+       the person's too: the guide run takes them only with the desk key. */
+    expect(sent).toContain('"/browser/guide/event", ev, deskHeader()');
     /* The fifth is the orchestration policy: which engine runs and what a worker
        may do is the person's to change, so the window proves it with the desk
        key and an agent's machine token cannot (mayChangePolicy on the server). */
@@ -529,15 +542,16 @@ describe("the desktop app hands its key to the ends that use it, and nowhere els
        one more use. */
     const polarisCalls = [...sent.matchAll(/\/polaris\/[^\n]*deskHeader\(\)/g)].length;
     expect(polarisCalls).toBeGreaterThan(0);
-    /* The flow of a project is the person's too: saving and resetting it are
-       proven with the desk key, so an agent's machine token cannot rewrite the
-       rules the orchestrator is told. Counted apart for the same reason. */
-    const flowCalls = [...sent.matchAll(/`\/flow\?[^\n]*deskHeader\(\)/g)].length;
+    /* The flow of a project is the person's too: saving, resetting and undoing
+       it are proven with the desk key, so an agent's machine token cannot
+       rewrite the rules the orchestrator is told. Counted apart for the same
+       reason. */
+    const flowCalls = [...sent.matchAll(/`\/flow(?:\/undo)?\?[^\n]*deskHeader\(\)/g)].length;
     expect(flowCalls).toBeGreaterThan(0);
     /* The GET and DELETE helpers send the key on a gated path, as the POST and PUT ones do; the flow route is the first to need them. */
     const gatedHelpers = [...sent.matchAll(/(?:fetch\(SERVER \+ path, \{ headers|method: "DELETE", headers): authHeaders\([^\n]*deskGated\(path\) \? deskHeader\(\)/g)].length;
     expect(gatedHelpers).toBe(2);
-    expect([...sent.matchAll(/deskHeader\(\)/g)]).toHaveLength(7 + 1 + polarisCalls + flowCalls + gatedHelpers);
+    expect([...sent.matchAll(/deskHeader\(\)/g)]).toHaveLength(7 + 1 + 1 + polarisCalls + flowCalls + gatedHelpers);
   });
 });
 

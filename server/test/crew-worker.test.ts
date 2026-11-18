@@ -8,9 +8,10 @@
  * shape (fixtures/fakeEngines.ts, OpenCode 1.18.32).
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import * as Crew from "../src/crewworker.ts";
 import { crewFactsOfRun, crewFactsOfWorker } from "../src/crewworker.ts";
 
 const j = (o: unknown) => JSON.stringify(o);
@@ -101,5 +102,59 @@ describe("the worker's own folder", () => {
     expect(crewFactsOfWorker("orbit-fix")?.ended).toBe(false);
     writeFileSync(join(dir, "worker-runs", "orbit-fix", "rc"), "0\n");
     expect(crewFactsOfWorker("orbit-fix")?.ended).toBe(true);
+  });
+
+  /* The board polls this every 5-20 s per worker, and turns run to 60 MB: a
+     stream is read once, then only what was appended since. */
+  test("reads each byte of a turn once, then only what was appended", () => {
+    process.env.AGENTGLASS_STATE_DIR = dir;
+    Crew.__resetRunCache();
+    const run = join(dir, "worker-runs", "orbit-grow");
+    mkdirSync(run, { recursive: true });
+    const out = join(run, "out");
+    const lines = RUN.split("\n");
+    writeFileSync(out, lines.slice(0, 3).join("\n") + "\n");
+    const first = Buffer.byteLength(lines.slice(0, 3).join("\n") + "\n");
+    expect(crewFactsOfWorker("orbit-grow")?.tools).toBe(1);
+    expect(Crew.runBytesRead).toBe(first);
+
+    // Unchanged: nothing is read again, however often it is asked.
+    for (let i = 0; i < 5; i++) expect(crewFactsOfWorker("orbit-grow")?.tools).toBe(1);
+    expect(Crew.runBytesRead).toBe(first);
+
+    // Grown by a frame cut in half: only the new bytes, and the half is not lost.
+    const fourth = lines[3]!;
+    appendFileSync(out, fourth.slice(0, 20));
+    expect(crewFactsOfWorker("orbit-grow")?.tools).toBe(1);
+    appendFileSync(out, fourth.slice(20) + "\n" + lines.slice(4).join("\n"));
+    const f = crewFactsOfWorker("orbit-grow")!;
+    expect(f).toEqual(crewFactsOfRun(RUN));
+    expect(Crew.runBytesRead).toBe(Buffer.byteLength(RUN) + 20);
+
+    // A shorter file is a new turn: read from the start.
+    writeFileSync(out, lines[2] + "\n");
+    expect(crewFactsOfWorker("orbit-grow")?.tools).toBe(1);
+    expect(crewFactsOfWorker("orbit-grow")?.cost).toBe(0);
+  });
+
+  /* `out` is deleted and made again each turn, and the inode can come back:
+     a new stream that is longer than the last one is still a new stream. */
+  test("a new stream at the same path and inode, longer than the last, is read from the start", () => {
+    process.env.AGENTGLASS_STATE_DIR = dir;
+    Crew.__resetRunCache();
+    const run = join(dir, "worker-runs", "orbit-reuse");
+    mkdirSync(run, { recursive: true });
+    const out = join(run, "out");
+    const lines = RUN.split("\n");
+    const old = lines.slice(0, 4).join("\n") + "\n";
+    writeFileSync(out, old);
+    expect(crewFactsOfWorker("orbit-reuse")?.tools).toBe(2);
+    // Same inode (truncated in place), longer, no tools: only its own totals.
+    const fresh = [lines[4], lines[5], ...Array(8).fill(lines[1])].join("\n") + "\n";
+    expect(fresh.length).toBeGreaterThan(old.length);
+    writeFileSync(out, fresh);
+    const f = crewFactsOfWorker("orbit-reuse")!;
+    expect(f.tools).toBe(0);
+    expect(f).toEqual(crewFactsOfRun(fresh));
   });
 });

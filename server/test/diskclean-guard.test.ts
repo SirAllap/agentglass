@@ -188,6 +188,23 @@ describe("deleteTarget: what actually happens", () => {
     expect(existsSync(info)).toBe(true);
   });
 
+  // Root ignores directory modes, so the removal would succeed and there is no failure to report.
+  test.skipIf(process.getuid?.() === 0)("a trash index that cannot be emptied does not hide that the files were freed", async () => {
+    const w = world();
+    const files = join(w.home, ".local/share/Trash/files"), info = join(w.home, ".local/share/Trash/info");
+    mkdirSync(files, { recursive: true });
+    mkdirSync(info, { recursive: true });
+    writeFileSync(join(files, "old.zip"), "x");
+    writeFileSync(join(info, "old.zip.trashinfo"), "[Trash Info]");
+    chmodSync(info, 0o500);
+    try {
+      const r = await deleteTarget({ via: "fs", root: files, path: files }, w.ctx);
+      expect(existsSync(join(files, "old.zip"))).toBe(false);
+      expect(r.status).toBe("freed");
+      expect(r.detail).toContain("index");
+    } finally { chmodSync(info, 0o700); }
+  });
+
   test("GUARD: the last look before the rm: a folder swapped for a link after the check is not followed", () => {
     const w = world();
     const sess = join(w.tmp, "p/sess");

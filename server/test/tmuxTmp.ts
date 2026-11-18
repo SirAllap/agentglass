@@ -37,9 +37,46 @@
  * one stops a test's server from finding the developer's tmux.
  */
 import { lstatSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 const myUid = typeof process.getuid === "function" ? process.getuid() : 0;
+
+/*
+ * A worker runs this suite inside a sandbox where `/tmp` itself is read-only
+ * (bare mkdir on it throws EROFS) and the writable scratch directory is
+ * `os.tmpdir()` instead — on this host that resolves under
+ * `~/.cache/claude-tmp/...`, a path already longer than a hand-written
+ * `/tmp/agx-test-tmux-N` ever was.
+ *
+ * That length matters for a reason the old fixed path never had to think
+ * about: a unix domain socket path is capped at 108 bytes (`sun_path`,
+ * `linux/un.h`), and tmux's socket lives two path segments under
+ * TMUX_TMPDIR (`$TMUX_TMPDIR/tmux-<uid>/<name>`). A sandboxed tmpdir deep
+ * enough — several directories of session id under a cache root — leaves too
+ * few bytes for that plus a socket name before `bind()` refuses it outright,
+ * which is a failure tmux reports as a plain connection error with nothing
+ * pointing back at the path that caused it.
+ *
+ * So: prefer the sandbox-writable tmpdir, but only when there is still room
+ * for a socket under it; otherwise fall back to the historical `/tmp` path
+ * and say so, because on a machine where `/tmp` is itself writable (no
+ * sandbox) that fallback is also just the plain, unsurprising behavior this
+ * file always had.
+ */
+const SOCKET_NAME_BUDGET = 32; // longest socket basename this suite hands out, plus slack
+
+/**
+ * Every test file that used to hardcode `/tmp/agx-<name>-<pid>` for its own
+ * TMUX_TMPDIR (not just this file's) takes it from here instead, so they all
+ * get the same sandbox-writable base and the same socket-length fallback.
+ */
+export function agxTestBase(name: string): string {
+  const candidate = join(resolve(tmpdir()), `${name}-${process.pid}`);
+  const worstCaseSocketPath = join(candidate, `tmux-${myUid}`, "x".repeat(SOCKET_NAME_BUDGET));
+  if (worstCaseSocketPath.length < 108) return candidate;
+  return `/tmp/${name}-${process.pid}`; // os.tmpdir() too deep for a socket; /tmp is shorter
+}
 
 /**
  * `path` exists, is a real directory (not a symlink to one), and is ours.
@@ -54,7 +91,7 @@ function realOwnedDir(path: string): boolean {
   } catch { return false; }
 }
 
-export const TMUX_TEST_TMPDIR = `/tmp/agx-test-tmux-${process.pid}`;
+export const TMUX_TEST_TMPDIR = agxTestBase("agx-test-tmux");
 
 /*
  * Loud when the directory cannot be made, because the quiet version armed the
@@ -202,7 +239,9 @@ try { sweepDeadSockets(socketDirUnder(TMUX_TEST_TMPDIR)); } catch { /* best-effo
  */
 const REAP_MIN_AGE_MS = 15 * 60_000;
 
-export function reapOrphanRuns(root = "/tmp"): number {
+// Dirname of TMUX_TEST_TMPDIR, not a fresh tmpdir() call: when that picked the
+// /tmp fallback (socket-length budget), orphans from past runs live there too.
+export function reapOrphanRuns(root = join(TMUX_TEST_TMPDIR, "..")): number {
   let reaped = 0;
   let names: string[];
   try { names = readdirSync(root); } catch { return 0; }

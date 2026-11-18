@@ -389,7 +389,7 @@ for (const flavor of ["cloud", "datacenter"] as const) {
         expect(keysOf(r.tasks)).toEqual(["ORBIT-1001", "ORBIT-1046"]);
         expect(jqls()).toEqual(["project = ORBIT AND assignee is EMPTY ORDER BY key"]);
         expect(count("/filter/10020")).toBe(0); // named when added, remembered
-        expect(count(/\/rest\/agile/)).toBe(0);
+        expect(count(/\/rest\/agile/)).toBe(2); // ORBIT is not a saved folder: its own board is found and read once, for column order
       });
 
       test("a filter with no restriction is refused before a search is sent, and says so", async () => {
@@ -414,7 +414,7 @@ for (const flavor of ["cloud", "datacenter"] as const) {
         expect(V.savedViews(site).length).toBe(1);
       });
 
-      test("a pasted search is read with no configuration and no filter lookups", async () => {
+      test("a pasted search is read with no filter lookup; its project's own board is consulted once, for column order", async () => {
         const url = `https://${site}/issues/?jql=${encodeURIComponent("project = ORBIT AND status = QA ORDER BY key")}`;
         const a = await B.addViewByUrl(url);
         expect(a.data).toMatchObject({ ok: true, view: { name: "Search: project = ORBIT AND status = QA ORDER BY" } });
@@ -422,7 +422,8 @@ for (const flavor of ["cloud", "datacenter"] as const) {
         const id = (a.data as { view: { id: string } }).view.id;
         const r = await B.viewRead(id);
         expect(keysOf(r.tasks)).toEqual(["ORBIT-1044"]);
-        expect(count("/filter/10020") + count(/agile/)).toBe(0);
+        expect(count("/filter/10020")).toBe(0);
+        expect(count(/agile/)).toBe(2); // ORBIT is not a saved folder: its board is found and its configuration read once
       });
 
       test("a search with no restriction is refused with no request", async () => {
@@ -445,7 +446,7 @@ for (const flavor of ["cloud", "datacenter"] as const) {
         expect(r.data!.boards.map((b) => [b.id, b.name, b.type, b.projectKey])).toEqual([
           ["1", "ORBIT board", "kanban", "ORBIT"], ["2", "ACME sprint board", "scrum", "ACME"], ["3", "ORBIT sprint board", "scrum", "ORBIT"], ["4", "ACME ideas", "kanban", "ACME"],
         ]);
-        expect(r.data!.filters.map((f) => f.id)).toEqual(["10020", "10030"]);
+        expect(r.data!.filters.map((f) => f.id)).toEqual(["10020", "10030", "10050"]);
         expect(fake.requests.length).toBe(2);
         await J.withStored((c) => B.viewChoices(c, ""));
         expect(fake.requests.length).toBe(2);
@@ -464,7 +465,7 @@ for (const flavor of ["cloud", "datacenter"] as const) {
         const r = await J.withStored((c) => B.viewChoices(c, ""));
         expect(r.ok).toBe(true);
         expect(r.data!.boards).toEqual([]);
-        expect(r.data!.filters.length).toBe(2);
+        expect(r.data!.filters.length).toBe(3);
         expect(r.data!.error).toContain("Boards");
         const healed = await J.withStored((c) => B.viewChoices(c, ""));
         expect(healed.data!.boards.length).toBe(4);
@@ -604,6 +605,23 @@ for (const flavor of ["cloud", "datacenter"] as const) {
         B.jiraViews();
         await B.refreshJiraFoldersIfStale();
         expect(fake.requests.length).toBe(0);
+      });
+    });
+
+    describe("the address book is rebuilt only when it changes", () => {
+      test("repeat calls with nothing changed answer the same array, not a rebuild of it", () => {
+        V.addView(site, { id: "board:9", name: "Elsewhere", url: "", addedAt: 1 });
+        const first = V.savedViews(site);
+        for (let i = 0; i < 50; i++) expect(V.savedViews(site)).toBe(first);
+      });
+
+      test("a real change still shows up, as a new array", () => {
+        V.addView(site, { id: "board:9", name: "Elsewhere", url: "", addedAt: 1 });
+        const first = V.savedViews(site);
+        V.addView(site, { id: "board:10", name: "Another", url: "", addedAt: 2 });
+        const second = V.savedViews(site);
+        expect(second).not.toBe(first);
+        expect(second.map((v) => v.id)).toContain("board:10");
       });
     });
   });

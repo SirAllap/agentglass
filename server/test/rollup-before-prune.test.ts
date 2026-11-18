@@ -11,6 +11,7 @@
 // in the same transaction — either both happened or neither did.
 import { describe, expect, test, beforeAll } from "bun:test";
 import { mkdtempSync, mkdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { story } from "./story.ts";
@@ -19,6 +20,8 @@ const dir = mkdtempSync(join(tmpdir(), "agx-rollup-"));
 const ROOT = join(dir, "proj");
 const OTHER = join(dir, "other");
 for (const d of [ROOT, OTHER]) mkdirSync(d, { recursive: true });
+// Own repo: a TMPDIR under the checkout would widen this scope to the whole repo.
+spawnSync("git", ["init", "-q", ROOT]);
 process.env.AGENTGLASS_DB = join(dir, "rollup.db");
 process.env.AGENTGLASS_ROOT = ROOT;
 process.env.XDG_CONFIG_HOME = dir;

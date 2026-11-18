@@ -26,18 +26,32 @@ const CLIS = ["agentglass-agent", "agentglass-cleanup", "agentglass-browser", "a
 
 /** Load a CLI as a module without running its main: the same trick the MCP
  *  suite uses, `__name__` set to something other than `__main__`. */
-function probe(file: string, body: string, env: Record<string, string> = {}): { code: number; out: string; err: string } {
-  const src = `
+const probeSrc = (file: string, body: string) => `
 import json, os, sys
 ns = {"__name__": "probe", "__file__": ${JSON.stringify(file)}}
 exec(compile(open(${JSON.stringify(file)}).read(), ${JSON.stringify(file)}, "exec"), ns)
 ${body}
 `;
+function probe(file: string, body: string, env: Record<string, string> = {}): { code: number; out: string; err: string } {
+  const src = probeSrc(file, body);
   const p = Bun.spawnSync(["python3", "-c", src], {
     env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", ...env },
     stdout: "pipe", stderr: "pipe",
   });
   return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
+}
+
+/** `probe`, without holding the test while it runs: 8 CLIs x 6 urls is 48
+ *  interpreter loads (~6 s one after another on an idle machine), which ran
+ *  past the 20 s test timeout under a full check's load. */
+async function probeAsync(file: string, body: string, env: Record<string, string> = {}): Promise<{ code: number; out: string; err: string }> {
+  const src = probeSrc(file, body);
+  const p = Bun.spawn(["python3", "-c", src], {
+    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", ...env },
+    stdout: "pipe", stderr: "pipe",
+  });
+  const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+  return { code, out, err };
 }
 
 describe.skipIf(!HAVE_PY)("where the token may go", () => {
@@ -53,13 +67,15 @@ describe.skipIf(!HAVE_PY)("where the token may go", () => {
     }
   });
 
-  test("http to this machine and https anywhere are fine", () => {
+  test("http to this machine and https anywhere are fine", async () => {
+    const urls = ["http://localhost:4000", "http://127.0.0.1:4000", "http://[::1]:4000", "http://127.0.0.2:4000", "https://agentglass.example.invalid", "https://10.0.0.5:4000"];
+    // One CLI at a time, its six urls at once: six interpreters, not 48.
     for (const cli of CLIS) {
-      for (const url of ["http://localhost:4000", "http://127.0.0.1:4000", "http://[::1]:4000", "http://127.0.0.2:4000", "https://agentglass.example.invalid", "https://10.0.0.5:4000"]) {
-        const r = probe(BIN(cli), "print(ns['SERVER'])", { AGENTGLASS_SERVER: url });
-        expect(r.code, `${cli} ${url}: ${r.err}`).toBe(0);
-        expect(r.out.trim()).toBe(url);
-      }
+      const runs = await Promise.all(urls.map((url) => probeAsync(BIN(cli), "print(ns['SERVER'])", { AGENTGLASS_SERVER: url })));
+      runs.forEach((r, i) => {
+        expect(r.code, `${cli} ${urls[i]}: ${r.err}`).toBe(0);
+        expect(r.out.trim()).toBe(urls[i]);
+      });
     }
   });
 

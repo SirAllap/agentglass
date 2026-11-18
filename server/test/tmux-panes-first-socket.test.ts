@@ -12,6 +12,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir as osTmpdir } from "node:os";
 import { join } from "node:path";
 import { panesWithPids, activePane } from "../src/tmuxctl.ts";
 
@@ -36,7 +37,7 @@ let windowId = "";
 
 describe("panesWithPids/activePane ask the known socket alone first", () => {
   beforeAll(() => {
-    tmpdir = mkdtempSync("/tmp/agx-firstsock-");
+    tmpdir = mkdtempSync(join(osTmpdir(), "agx-firstsock-"));
     sockDir = join(tmpdir, `tmux-${uid}`);
     if (tmux("agx-first-a", "new-session", "-d", "sleep", "60").exitCode !== 0) {
       throw new Error("could not start server A");

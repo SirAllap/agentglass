@@ -76,7 +76,7 @@ afterAll(async () => {
 const headers = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
 let seen = "";
 const call = async (method: string, path: string, body?: unknown, extra: Record<string, string> = {}) => {
-  const r = await fetch(base + path, { method, headers: { ...headers, ...extra }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const r = await fetch(base + path, { method, headers: { ...headers, origin: base, ...extra }, body: body === undefined ? undefined : JSON.stringify(body) });
   const text = await r.text();
   seen += text;
   return { status: r.status, body: JSON.parse(text) as Record<string, any> };

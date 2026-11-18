@@ -221,23 +221,23 @@ describe("foreignOwned", () => {
 });
 
 describe("fixWorktreeOwnership", () => {
-  step("refuses a path that is not a worktree of this repo", () => {
+  step("refuses a path that is not a worktree of this repo", async () => {
     // This is the ONE call that reaches root. The path must come from git, not
     // from the request, or a crafted call points chown at anything.
-    const r = gw.fixWorktreeOwnership(REPO, dir);
+    const r = await gw.fixWorktreeOwnership(REPO, dir);
     expect(r.ok).toBe(false);
     expect(r.error).toContain("not a worktree");
   });
 
-  step("refuses the main checkout", () => {
-    const r = gw.fixWorktreeOwnership(REPO, REPO);
+  step("refuses the main checkout", async () => {
+    const r = await gw.fixWorktreeOwnership(REPO, REPO);
     expect(r.ok).toBe(false);
   });
 
-  step("does nothing, and elevates nothing, when the files are already ours", () => {
+  step("does nothing, and elevates nothing, when the files are already ours", async () => {
     // No pkexec, no dialog, no root: there is nothing to hand back. If this
     // ever starts prompting on a clean checkout, that is the bug.
-    const r = gw.fixWorktreeOwnership(REPO, WT);
+    const r = await gw.fixWorktreeOwnership(REPO, WT);
     expect(r.ok).toBe(true);
     expect(r.output).toBe("already yours");
   });

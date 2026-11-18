@@ -51,33 +51,33 @@ beforeEach(() => { __resetMirrorLeases(); });
 afterEach(() => { __resetMirrorLeases(); });
 
 describe("a session we never recorded", () => {
-  test("his real sessions on the same socket are never touched, however phone-shaped their name looks", () => {
+  test("his real sessions on the same socket are never touched, however phone-shaped their name looks", async () => {
     // `agx-phone-…` name, three days old, attached — everything a heuristic
     // keyed on the name would flag. What it does not have is our record.
     const t = fakeTmux({ "agx-phone-999-oldold": { attached: true } });
-    expect(reapMirrorSessions(t.io)).toEqual([]);
+    expect(await reapMirrorSessions(t.io)).toEqual([]);
     expect(t.killed).toEqual([]);
   });
 
-  test("his OWN unattached, non-phone session is never touched either", () => {
+  test("his OWN unattached, non-phone session is never touched either", async () => {
     const t = fakeTmux({ orbit: { attached: false } });
-    expect(reapMirrorSessions(t.io)).toEqual([]);
+    expect(await reapMirrorSessions(t.io)).toEqual([]);
     expect(t.killed).toEqual([]);
   });
 });
 
 describe("a mirror we recorded but whose stamp has moved", () => {
-  test("is dropped from the record and never killed", () => {
+  test("is dropped from the record and never killed", async () => {
     const t = fakeTmux({ "agx-phone-1-a1b2c3": { attached: false } }); // no stamp on it
     recordMirrorLease(lease("agx-phone-1-a1b2c3", "ours-1234"));
-    expect(reapMirrorSessions(t.io)).toEqual([]);
+    expect(await reapMirrorSessions(t.io)).toEqual([]);
     expect(t.killed).toEqual([]);
     expect(mirrorLeases()).toEqual([]);
   });
 });
 
 describe("the two orphan mirrors", () => {
-  test("recorded, stamped, unattached: reaped at startup", () => {
+  test("recorded, stamped, unattached: reaped at startup", async () => {
     const t = fakeTmux({
       "agx-phone-210-4k9m8b": { stamp: "tok-a-1234", attached: false },
       "agx-phone-210-iw92a1": { stamp: "tok-b-1234", attached: false },
@@ -85,27 +85,27 @@ describe("the two orphan mirrors", () => {
     recordMirrorLease(lease("agx-phone-210-4k9m8b", "tok-a-1234"));
     recordMirrorLease(lease("agx-phone-210-iw92a1", "tok-b-1234"));
 
-    expect(reapMirrorSessions(t.io)).toEqual(["agx-phone-210-4k9m8b", "agx-phone-210-iw92a1"]);
+    expect(await reapMirrorSessions(t.io)).toEqual(["agx-phone-210-4k9m8b", "agx-phone-210-iw92a1"]);
     expect(t.killed).toEqual(["agx-phone-210-4k9m8b", "agx-phone-210-iw92a1"]);
     expect(mirrorLeases()).toEqual([]);
   });
 
-  test("stamped but still attached: left alone, record kept", () => {
+  test("stamped but still attached: left alone, record kept", async () => {
     const t = fakeTmux({ "agx-phone-7-zz1122": { stamp: "tok-12345", attached: true } });
     recordMirrorLease(lease("agx-phone-7-zz1122", "tok-12345"));
 
-    expect(reapMirrorSessions(t.io)).toEqual([]);
+    expect(await reapMirrorSessions(t.io)).toEqual([]);
     expect(t.killed).toEqual([]);
     expect(mirrorLeases().map((l) => l.session)).toEqual(["agx-phone-7-zz1122"]);
   });
 });
 
 describe("the survives-a-server-restart shape", () => {
-  test("the in-memory record is gone; the file is not, and the sweep still finds it", () => {
+  test("the in-memory record is gone; the file is not, and the sweep still finds it", async () => {
     const t = fakeTmux({ "agx-phone-1-restart": { stamp: "tok-12345", attached: false } });
     recordMirrorLease(lease("agx-phone-1-restart", "tok-12345"));
     __forgetMirrorLeases(); // the process that knew about this mirror is gone; the file is not
-    expect(reapMirrorSessions(t.io)).toEqual(["agx-phone-1-restart"]);
+    expect(await reapMirrorSessions(t.io)).toEqual(["agx-phone-1-restart"]);
     expect(t.killed).toEqual(["agx-phone-1-restart"]);
   });
 });

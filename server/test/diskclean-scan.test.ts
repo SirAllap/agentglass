@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, w
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DiskCleanReport, DiskCleanRunResult } from "../../shared/types.ts";
+import { ghCause, type RunOut } from "../src/diskclean.ts";
 import { C1, C2, GB, LEGACY_ID, LIVE_ID, OLD_ID, TEMP_PROJ, YOUNG_ID, makeFixture, row, populateHome, type Fixture } from "./diskcleanFixture.ts";
 
 const MODULE = fileURLToPath(new URL("../src/diskclean.ts", import.meta.url));
@@ -30,11 +31,20 @@ function driver(fx: Fixture): string {
     '  async "scan-then-run"() { await m.diskCleanReport(true, ctx); return m.runDiskClean(["trash"], {}, ctx); },',
     '  async "scan-dry-run-then-run"() { await m.diskCleanReport(true, ctx); await m.runDiskClean(undefined, { dryRun: true }, ctx); return m.runDiskClean(["trash"], {}, ctx); },',
     '  async "stale-scan-after-a-clean"() { const slow = m.diskCleanReport(true, { ...ctx, run: async (...a) => { await Bun.sleep(50); return ctx.run(...a); } }); await m.runDiskClean(undefined, {}, ctx); await slow; return m.diskCleanReport(false, ctx); },',
+    '  async "stale-read-refreshes-behind"() { const a = await m.diskCleanReport(true, ctx); const real = Date.now; Date.now = () => real() + m.SCAN_TTL_MS + 1; try { const t0 = performance.now(); const b = await m.diskCleanReport(false, ctx); const ms = performance.now() - t0; let c = b; for (let i = 0; i < 200 && c.generatedAt === a.generatedAt; i++) { await Bun.sleep(25); c = await m.diskCleanReport(false, ctx); } return { first: a.generatedAt, second: b.generatedAt, state: b.state, ms, after: c.generatedAt }; } finally { Date.now = real; } },',
     // the confirm carries the scan the person looked at (`at`), or one that is not it
     '  async "scan-then-run-with-its-at"() { const r = await m.diskCleanReport(true, ctx); return m.runDiskClean(["trash"], { at: r.at }, ctx); },',
     '  async "scan-then-run-with-another-at"() { const r = await m.diskCleanReport(true, ctx); return m.runDiskClean(["trash"], { at: r.at - 1 }, ctx); },',
     // another caller's fresh scan (30 s later) lands while the person reads scan A, then they confirm A
     '  async "another-scan-lands-then-run-with-the-first-at"() { const a = await m.diskCleanReport(true, ctx); const real = Date.now; Date.now = () => real() + 31_000; try { const b = await m.diskCleanReport(true, ctx); if (b.at === a.at) throw new Error("no second scan"); } finally { Date.now = real; } return m.runDiskClean(["trash"], { at: a.at }, ctx); },',
+    // the kept scan the panel reads on open
+    '  async "peek-before-any-scan"() { return { kept: m.peekDiskClean() }; },',
+    '  async "peek-after-scan"() { const a = await m.diskCleanReport(true, ctx); const n = (await Bun.file(process.env.AGX_LOG).text()).length; const k = m.peekDiskClean(); const n2 = (await Bun.file(process.env.AGX_LOG).text()).length; return { at: a.at, kept: k, lines: a.lines.length, noNewCalls: n === n2 }; },',
+    '  async "peek-while-scanning"() { const p = m.diskCleanReport(true, { ...ctx, run: async (...a) => { await Bun.sleep(30); return ctx.run(...a); } }); await Bun.sleep(40); const mid = { on: m.scanInFlight(), reading: m.scanReading() }; await p; return { mid, after: { on: m.scanInFlight(), reading: m.scanReading() } }; },',
+    '  async "peek-when-old"() { const a = await m.diskCleanReport(true, ctx); return { fresh: m.peekDiskClean(a.generatedAt + 4 * 60_000).staleWhy, old: m.peekDiskClean(a.generatedAt + m.SCAN_TTL_MS + 1).staleWhy }; },',
+    '  async "peek-after-clean"() { const a = await m.diskCleanReport(true, ctx); const run = await m.runDiskClean(["trash"], { at: a.at }, ctx); const k = m.peekDiskClean(); const again = await m.diskCleanReport(true, ctx); return { run, before: a.lines.map((l) => l.id), kept: k, again: again.generatedAt !== a.generatedAt }; },',
+    '  async "gh-answers-nothing"() { return m.scanDisk({ ...ctx, gh: async () => ({ code: 1, stdout: "", stderr: "" }) }); },',
+    '  async "gh-injected-is-used"() { let n = 0; const r = await m.scanDisk({ ...ctx, gh: async () => { n++; return { code: 0, stdout: "[]", stderr: "" }; } }); return { n, problems: r.problems }; },',
     '};',
     'const out = mode === "seq" ? await seq[arg]() : mode === "del" ? await m.deleteTarget(JSON.parse(arg), ctx) : mode === "scan" ? await m.scanDisk(ctx) : await m.runDiskClean(arg === "all" ? undefined : JSON.parse(arg), { dryRun: mode === "dry" }, ctx);',
     'process.stdout.write("RESULT " + JSON.stringify(out) + "\\n");',
@@ -207,6 +217,77 @@ describe("a Docker that is down or a GitHub that is signed out", () => {
   });
 });
 
+describe("why GitHub could not be asked", () => {
+  test("gh's own error line is named, not guessed as 'missing or signed out'", () => {
+    const { fx } = fixture({ ghFail: true });
+    const p = go<DiskCleanReport>(fx, "scan").problems.join(" ");
+    expect(p).toContain("gh said: gh: not signed in");
+    expect(p).not.toContain("missing or signed out");
+  });
+  test("a gh that stops with no message says so, with its exit code", () => {
+    const { fx } = fixture();
+    expect(go<DiskCleanReport>(fx, "seq", "gh-answers-nothing").problems.join(" ")).toContain("exit code 1 and no message");
+  });
+  test("the server's own gh call is the one used when it is handed in", () => {
+    const { fx } = fixture();
+    const r = go<{ n: number; problems: string[] }>(fx, "seq", "gh-injected-is-used");
+    expect(r.n).toBeGreaterThan(0);
+    expect(calls(fx).some((l) => l.startsWith("gh "))).toBe(false);
+    expect(r.problems.join(" ")).not.toContain("GitHub could not be asked");
+  });
+  test("causes: not found, timed out, not signed in, could not start", () => {
+    const out = (o: Partial<RunOut>) => ghCause({ code: 1, stdout: "", stderr: "", ...o });
+    expect(out({ code: 127, stderr: "gh: not found", missing: true })).toContain("not found on the server's PATH");
+    expect(out({ timedOut: true })).toContain("did not finish in 30 s");
+    expect(out({ stderr: "To get started with GitHub CLI, please run:  gh auth login" })).toContain("not signed in");
+    expect(out({ notStarted: true, stderr: "Error: spawn EACCES" })).toContain("could not be started (Error: spawn EACCES)");
+  });
+});
+
+describe("the scan the server keeps", () => {
+  test("nothing is kept before the first scan, and reading it starts nothing", () => {
+    const { fx } = fixture();
+    expect(go<{ kept: unknown }>(fx, "seq", "peek-before-any-scan").kept).toBeNull();
+    expect(existsSync(fx.log) ? calls(fx).length : 0).toBe(0);
+  });
+  test("a finished scan is there to read, with its time, and reading it runs nothing", () => {
+    const { fx } = fixture();
+    const r = go<{ at: number; kept: DiskCleanReport; lines: number; noNewCalls: boolean }>(fx, "seq", "peek-after-scan");
+    expect(r.kept.lines.length).toBe(r.lines);
+    expect(typeof r.kept.generatedAt).toBe("number");
+    expect(r.kept.staleWhy).toBeNull();
+    expect(r.noNewCalls).toBe(true);
+  });
+  test("it reports its age: fresh at 4 minutes, stale past the bound a clean would refuse it", () => {
+    const { fx } = fixture();
+    const r = go<{ fresh: string | null; old: string }>(fx, "seq", "peek-when-old");
+    expect(r.fresh).toBeNull();
+    expect(r.old).toContain("more than 5 minutes old");
+  });
+  test("a clean keeps the scan, drops what went, and says a clean ran", () => {
+    const { fx } = fixture();
+    const r = go<{ run: DiskCleanRunResult; before: string[]; kept: DiskCleanReport; again: boolean }>(fx, "seq", "peek-after-clean");
+    expect(["freed", "nothing"]).toContain(r.run.lines[0]?.status);
+    expect(r.before).toContain("trash");
+    expect(r.kept.lines.some((l) => l.id === "trash")).toBe(false);
+    expect(r.kept.lines.length).toBe(r.before.length - 1);
+    expect(r.kept.staleWhy).toContain("A clean ran after this scan");
+    // and the person's Scan press right after is a real scan, not the trimmed one
+    expect(r.again).toBe(true);
+  });
+});
+
+describe("a scan says what it is reading while it runs", () => {
+  test("a name while it runs, none once it ends", () => {
+    const { fx } = fixture();
+    const r = go<{ mid: { on: boolean; reading: string | null }; after: { on: boolean; reading: string | null } }>(fx, "seq", "peek-while-scanning");
+    expect(r.mid.on).toBe(true);
+    expect(typeof r.mid.reading).toBe("string");
+    expect(r.mid.reading!.length).toBeGreaterThan(0);
+    expect(r.after).toEqual({ on: false, reading: null });
+  });
+});
+
 describe("what a scan costs", () => {
   const ghCalls = (fx: Fixture) => calls(fx).filter((l) => l.startsWith("gh pr list"));
 
@@ -216,6 +297,18 @@ describe("what a scan costs", () => {
     expect(r.lines.filter((l) => l.kind === "worktree").length).toBe(6);
     expect(ghCalls(fx).length).toBe(1);
     expect(byId(r, "worktree:" + wt["ORBIT-1042"]!)!.verdict).toBe("safe");
+  });
+
+  test("gh is told the repository from the main checkout's remote (-R), and a repository with no remote is its own line, not a global warning", () => {
+    const { fx, wt } = fixture();
+    const r = go<DiskCleanReport>(fx, "scan");
+    expect(ghCalls(fx).every((l) => l.includes("-R acme/orbit"))).toBe(true);
+    expect(r.problems.join(" ")).not.toContain("GitHub could not be asked");
+    rmSync(join(fx.dir, "state", "git", "orbit.remote"));
+    const n = go<DiskCleanReport>(fx, "scan", "all", { AGX_NOCACHE: "1" });
+    expect(n.problems.join(" ")).not.toContain("GitHub could not be asked");
+    expect(byId(n, "worktree:" + wt["ORBIT-1042"]!)).toMatchObject({ verdict: "ask", target: null });
+    expect(byId(n, "worktree:" + wt["ORBIT-1042"]!)!.why).toContain("no remote");
   });
 
   test("a repository with more pull requests than one call holds: the branch missing from it is asked for alone", () => {
@@ -230,6 +323,16 @@ describe("what a scan costs", () => {
     const { fx } = fixture();
     go<DiskCleanRunResult>(fx, "seq", "scan-then-run");
     expect(ghCalls(fx).length).toBe(1);
+  });
+
+  test("a stale read answers the cached report at once and refreshes behind it, once", () => {
+    const { fx } = fixture();
+    const r = go<{ first: number; second: number; state: string; ms: number; after: number }>(fx, "seq", "stale-read-refreshes-behind");
+    expect(r.state).toBe("ready");
+    expect(r.second).toBe(r.first);
+    expect(r.ms).toBeLessThan(50);
+    expect(r.after).not.toBe(r.first);
+    expect(ghCalls(fx).length).toBe(2);
   });
 
   test("a dry run and the confirm that follows it share one scan", () => {

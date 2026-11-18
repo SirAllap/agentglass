@@ -7,7 +7,7 @@
  */
 import { PRESETS, validateStoredPolaris, withEnabled, withPreset, type PresetId, type StoredPolaris } from "../../shared/polaris.ts";
 import { readPolaris, readStoredPolaris, writePolaris } from "./config.ts";
-import { askAction, executeAction, polarisItems, type ActionArgs, type PolarisIo, type PolarisWho } from "./polaris.ts";
+import { askAction, executeAction, githubStatus, polarisItems, type ActionArgs, type PolarisIo, type PolarisWho } from "./polaris.ts";
 import type { PolarisAsk } from "../../shared/polaris.ts";
 export type { PolarisWho };
 
@@ -19,7 +19,9 @@ const absRoot = (v: unknown): string | undefined | null =>
 const settingsView = (root?: string) => {
   const r = readPolaris(root);
   // A project's answer carries the global layer as stored: the view reads what a dropped door falls back to.
-  return { ok: true, ...(root ? { root, below: readStoredPolaris() } : {}), ...r.settings, layers: r.layers, enabledLayer: r.enabledLayer, presetLayer: r.presetLayer };
+  // It also carries the layer this page edits, so the window reads the master switch with the shared resolver.
+  const stored = readStoredPolaris(root);
+  return { ok: true, ...(root ? { root, below: readStoredPolaris() } : {}), ...(stored ? { stored } : {}), ...r.settings, layers: r.layers, enabledLayer: r.enabledLayer, enabledInvalid: r.enabledInvalid, presetLayer: r.presetLayer };
 };
 
 const CLICK_TYPES = ["beacon-draft", "beacon-edit", "beacon-discard", "dock", "ignore", "propose", "sync", "beacon-send-on-click"];
@@ -34,7 +36,21 @@ export async function polarisRoute(method: string, pathname: string, query: URLS
   }
   if (pathname === "/polaris/items" && method === "GET") {
     const root = absRoot(query.get("root"));
-    return root ? { status: 200, body: { ...(await polarisItems(root)) } } : bad("root: an absolute path is needed");
+    return root ? { status: 200, body: { ...(await polarisItems(root, io)) } } : bad("root: an absolute path is needed");
+  }
+  // One pull request: the same read as the list, cut to its row. No GitHub call the list would not make.
+  const one = /^\/polaris\/items\/(\d{1,9})$/.exec(pathname);
+  if (one && method === "GET") {
+    const root = absRoot(query.get("root"));
+    if (!root) return bad("root: an absolute path is needed");
+    const all = await polarisItems(root, io);
+    const item = all.items.find((i) => i.number === Number(one[1]));
+    if (item) return { status: 200, body: { ok: true, item } };
+    return { status: 404, body: { ok: false, error: all.uncharted ?? `pull request #${one[1]} is not among the open pull requests`, ...(all.uncharted ? { uncharted: all.uncharted } : {}) } };
+  }
+  if (pathname === "/polaris/github" && method === "GET") {
+    const root = absRoot(query.get("root"));
+    return root ? { status: 200, body: { ...(await githubStatus(root)) } } : bad("root: an absolute path is needed");
   }
   if (method !== "PUT" && method !== "POST") return null;
   const m = /^\/polaris\/items\/(\d+)\/(action|beacon\/(?:send|edit|discard))$/.exec(pathname);

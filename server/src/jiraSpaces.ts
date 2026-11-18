@@ -37,7 +37,8 @@ function storedSpaces(): JiraSpace[] {
     if (!isObj(v) || !goodKey(v.key) || seen.has(v.key)) continue;
     seen.add(v.key);
     const avatarUrl = shownAvatar(v.avatarUrl);
-    out.push({ key: v.key, name: str(v.name) || v.key, ...(avatarUrl ? { avatarUrl } : {}) });
+    const columnBoard = typeof v.columnBoard === "string" && /^\d{1,12}$/.test(v.columnBoard) ? v.columnBoard : undefined;
+    out.push({ key: v.key, name: str(v.name) || v.key, ...(avatarUrl ? { avatarUrl } : {}), ...(columnBoard ? { columnBoard } : {}) });
   }
   return out.slice(0, MAX_SPACES);
 }
@@ -97,6 +98,25 @@ export async function spacesEdit(body: unknown): Promise<JiraSpacesOut | { ok: f
     found = r.data;
   }
   return done([...have, found]);
+}
+
+/** The space's own pick for its column order, by project key, when it has one and is still on the sidebar. */
+export function spaceColumnBoard(key: string): string | undefined {
+  return storedSpaces().find((s) => s.key === key)?.columnBoard;
+}
+
+/** Set, or clear ("Automatic"), which board a space reads its column order from. `boardId` is trusted by its caller to be one of that project's own boards. */
+export function setSpaceColumnBoard(key: unknown, boardId: unknown): JiraSpacesOut | { ok: false; error: string } {
+  if (!goodKey(key)) return { ok: false, error: BAD_KEY };
+  const id = boardId == null || boardId === "" ? undefined : typeof boardId === "string" && /^\d{1,12}$/.test(boardId) ? boardId : null;
+  if (id === null) return { ok: false, error: "That is not a board id" };
+  const have = storedSpaces();
+  const at = have.findIndex((s) => s.key === key);
+  if (at < 0) return { ok: false, error: "That project is not on your sidebar" };
+  const { columnBoard: _drop, ...rest } = have[at]!;
+  const next = id ? { ...rest, columnBoard: id } : rest;
+  writeSettingsKey("spaces", have.map((s, i) => (i === at ? next : s)));
+  return spacesList();
 }
 
 // ---------------------------------------------------------------------------
@@ -163,9 +183,10 @@ const MAX_CARDS = SEARCH_PAGE * MAX_PAGES;
 
 interface RawEpic { key: string; id: string; summary: string; status: JiraTreeEpic["status"]; components: string[]; assignee: JiraPerson | null; reporter: JiraPerson | null }
 interface RawCard { parent: string; done: boolean; components: string[] }
-interface Raw { at: number; components: { id: string; name: string }[]; epics: RawEpic[]; cards: RawCard[] }
+interface Raw { /** Reads that failed while the rest loaded: the tree is drawn without them. */ missing?: string[]; at: number; components: { id: string; name: string }[]; epics: RawEpic[]; cards: RawCard[] }
 
-const held = new Map<string, { gen: number; raw: Raw }>();
+const PARTIAL_TTL_MS = 60_000;
+const held = new Map<string, { gen: number; raw: Raw; until?: number }>();
 const flying = new Map<string, Promise<JiraResult<Raw>>>();
 const heldKey = (c: JiraCreds, space: string): string => `${c.site}|${c.cloudId ?? ""}|${space}`;
 
@@ -185,7 +206,7 @@ async function pageIssues(c: JiraCreds, jql: string, fields: string[], optional:
   let start = 0;
   for (let page = 0; page < MAX_PAGES; page++) {
     if (apiOf(c) === 2) {
-      const r = await jiraCall<{ issues?: unknown[]; maxResults?: number }>(c, "/rest/api/2/search", { method: "POST", optional, body: { jql, fields, maxResults: SEARCH_PAGE, startAt: start } });
+      const r = await jiraCall<{ issues?: unknown[]; maxResults?: number }>(c, "/rest/api/2/search", { method: "POST", optional, emptyOk: true, body: { jql, fields, maxResults: SEARCH_PAGE, startAt: start } });
       if (!r.ok) return { ...r, data: undefined };
       const issues = Array.isArray(r.data?.issues) ? r.data!.issues! : [];
       out.push(...issues);
@@ -193,7 +214,7 @@ async function pageIssues(c: JiraCreds, jql: string, fields: string[], optional:
       const asked = typeof r.data?.maxResults === "number" && r.data.maxResults > 0 ? Math.min(r.data.maxResults, SEARCH_PAGE) : SEARCH_PAGE;
       if (issues.length < asked) return { ok: true, data: out };
     } else {
-      const r = await jiraCall<{ issues?: unknown[]; isLast?: boolean; nextPageToken?: string }>(c, "/rest/api/3/search/jql", { method: "POST", optional, body: { jql, fields, maxResults: SEARCH_PAGE, ...(token ? { nextPageToken: token } : {}) } });
+      const r = await jiraCall<{ issues?: unknown[]; isLast?: boolean; nextPageToken?: string }>(c, "/rest/api/3/search/jql", { method: "POST", optional, emptyOk: true, body: { jql, fields, maxResults: SEARCH_PAGE, ...(token ? { nextPageToken: token } : {}) } });
       if (!r.ok) return { ...r, data: undefined };
       out.push(...(Array.isArray(r.data?.issues) ? r.data!.issues! : []));
       token = typeof r.data?.nextPageToken === "string" && r.data.nextPageToken ? r.data.nextPageToken : undefined;
@@ -207,10 +228,16 @@ const fieldsOf = (i: unknown): Record<string, unknown> => (isObj(i) && isObj(i.f
 const categoryOf = (f: Record<string, unknown>): string => (isObj(f.status) && isObj(f.status.statusCategory) ? str(f.status.statusCategory.key) : "");
 const componentNames = (f: Record<string, unknown>): string[] => (Array.isArray(f.components) ? f.components.map((x) => (isObj(x) ? str(x.name) : "")).filter(Boolean) : []);
 
+/** A refusal, a hold or a project that is not there is the whole space's. */
+const hard = (r: JiraResult<unknown>): boolean => r.unauthorised === true || r.throttled === true || r.status === 404;
+
 async function readRaw(c: JiraCreds, space: string, optional: boolean): Promise<JiraResult<Raw>> {
-  const comps = await jiraCall<unknown>(c, `/rest/api/${apiOf(c)}/project/${space}/components`, { optional });
-  if (!comps.ok) return { ...comps, data: undefined };
-  const components = (Array.isArray(comps.data) ? comps.data : []).flatMap((x) => (isObj(x) && str(x.name) ? [{ id: idText(x.id), name: str(x.name) }] : []));
+  const missing: string[] = [];
+  const comps = await jiraCall<unknown>(c, `/rest/api/${apiOf(c)}/project/${space}/components`, { optional, emptyOk: true });
+  if (!comps.ok && hard(comps)) return { ...comps, data: undefined };
+  // The component list only names and orders the groups: the cards carry their component names, so the tree is whole without it. Epics and cards are never skipped: a short tree would read as the project.
+  if (!comps.ok) missing.push("components");
+  const components = (comps.ok && Array.isArray(comps.data) ? comps.data : []).flatMap((x) => (isObj(x) && str(x.name) ? [{ id: idText(x.id), name: str(x.name) }] : []));
 
   const epicRows = await pageIssues(c, `project = ${space} AND issuetype = Epic ORDER BY key ASC`, ["summary", "status", "components", "assignee", "reporter"], optional);
   if (!epicRows.ok) return { ...epicRows, data: undefined };
@@ -231,7 +258,7 @@ async function readRaw(c: JiraCreds, space: string, optional: boolean): Promise<
     if (isObj(f.issuetype) && f.issuetype.subtask === true) return [];
     return [{ parent: isObj(f.parent) ? str(f.parent.key) : "", done: categoryOf(f) === "done", components: componentNames(f) }];
   });
-  return { ok: true, data: { at: Date.now(), components, epics, cards } };
+  return { ok: true, data: { at: Date.now(), components, epics, cards, ...(missing.length ? { missing } : {}) } };
 }
 
 /** The cached read, or one request chain; two readers of one space share the chain. */
@@ -239,12 +266,13 @@ function raw(c: JiraCreds, space: string, fresh: boolean): Promise<JiraResult<Ra
   const k = heldKey(c, space);
   const gen = jiraGeneration();
   const hit = held.get(k);
-  if (!fresh && hit && hit.gen === gen && Date.now() - hit.raw.at < TREE_TTL_MS) return Promise.resolve({ ok: true, data: hit.raw });
+  if (!fresh && hit && hit.gen === gen && Date.now() - hit.raw.at < TREE_TTL_MS && (hit.until === undefined || Date.now() < hit.until)) return Promise.resolve({ ok: true, data: hit.raw });
   const going = flying.get(k);
   if (going) return going;
   const p = readRaw(c, space, !fresh).then((r) => {
     // A disconnect while this was in the air: do not write it back.
-    if (r.ok && r.data && gen === jiraGeneration()) held.set(k, { gen, raw: r.data });
+    // A partial read is held too, but only for a minute: a space whose components keep failing must not re-read every epic and card page on each request.
+    if (r.ok && r.data && gen === jiraGeneration()) held.set(k, { gen, raw: r.data, ...(r.data.missing ? { until: Date.now() + PARTIAL_TTL_MS } : {}) });
     return r;
   }).finally(() => { if (flying.get(k) === p) flying.delete(k); });
   flying.set(k, p);
@@ -298,7 +326,7 @@ function build(space: string, r: Raw, showDone: boolean): JiraSpaceTree {
   const none = groups.get(NONE);
   const components = [...groups].filter(([k]) => k !== NONE).map(([, g]) => shown(g));
   if (none && (none.issues || none.epics.size)) components.push(shown(none));
-  return { space, noEpic, components, total: r.cards.length, done, hidDone, readAt: r.at };
+  return { space, noEpic, components, total: r.cards.length, done, hidDone, readAt: r.at, ...(r.missing ? { missing: r.missing } : {}) };
 }
 
 export async function jiraSpaceTreeStored(space: string, fresh: boolean, showDone: boolean): Promise<JiraSpaceTreeOut> {

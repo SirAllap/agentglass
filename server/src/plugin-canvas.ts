@@ -23,6 +23,7 @@
  */
 import { CANVAS_LIMITS, applyOps, sizeOf, type CanvasFrame, type CanvasOp, type CanvasScene } from "../../shared/pluginCanvas.ts";
 import type { Contributes } from "../../shared/pluginUi.ts";
+import { setTimeoutAs } from "./loopwatch.ts";
 
 // ---------------------------------------------------------------- limits
 
@@ -200,7 +201,7 @@ function queueFrame(plugin: string, panel: string, cv: Canvas, ops: CanvasOp[]):
   }
   if (p && p.epoch === cv.epoch) { p.to = cv.version; p.ops.push(...ops); p.bytes += bytes; }
   else pending.set(k, { epoch: cv.epoch, from: cv.version - 1, to: cv.version, ops: [...ops], bytes });
-  if (!timer) { timer = setTimeout(flushCanvases, FLUSH_MS); (timer as { unref?: () => void }).unref?.(); }
+  if (!timer) { timer = setTimeoutAs("plugin canvas flush", flushCanvases, FLUSH_MS); (timer as { unref?: () => void }).unref?.(); }
 }
 
 /** Send what accumulated. Exported so a test does not have to wait a tick. */

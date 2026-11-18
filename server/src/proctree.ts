@@ -1,3 +1,4 @@
+import { spawnSyncAs } from "./loopwatch.ts";
 /**
  * Stopping a turn has to reach the whole job tree, on every platform.
  *
@@ -26,7 +27,7 @@ export interface Stoppable {
 export type Runner = (cmd: string[]) => { exitCode: number | null };
 
 const defaultRunner: Runner = (cmd) => {
-  const r = Bun.spawnSync(cmd, { stdout: "ignore", stderr: "ignore" });
+  const r = spawnSyncAs("proctree signal", cmd, { stdout: "ignore", stderr: "ignore" });
   return { exitCode: r.exitCode };
 };
 

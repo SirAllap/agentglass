@@ -21,13 +21,13 @@
 // Nothing here touches the user's tmux. Only the engine's own socket is read,
 // and the data lands in the engine's state dir. The user's ~/.tmux/resurrect
 // saves are nobody's business but theirs (see tmuxsnapshot.ts).
-import { readFileSync, readlinkSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync, copyFileSync } from "node:fs";
+import { readFileSync, readlinkSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync, copyFileSync, statSync, accessSync, readdirSync, promises as fsp, constants as fsConstants } from "node:fs";
 import { failed } from "./refused.ts";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { tmuxStateDir } from "./tmuxbin.ts";
-import { tmux, validSessionName, tmuxSocket, setCaptureHook, isPanelViewSession, KEPT_MARK } from "./tmuxpane.ts";
+import { tmux, validSessionName, tmuxSocket, setCaptureHook, isPanelViewSession, KEPT_MARK, GIVEN_OPTION, CARD_OPTION } from "./tmuxpane.ts";
 import { confPath } from "./tmuxconf.ts";
-import { resolveTmuxBin, engineSocketArgs } from "./tmuxbin.ts";
+import { resolveTmuxBin, engineSocketArgs, engineRefused } from "./tmuxbin.ts";
 import { paneAgentNote } from "./panewt.ts";
 import { wasPromptOf, wasPromptAnywhere, newestPromptId, promptedSince, firstPromptSince } from "./db.ts";
 import { agentNamed } from "./paneloc.ts";
@@ -36,7 +36,12 @@ import { LANTERN_PROMPT_MARK } from "./lanternmark.ts";
 import { windowTree, allWindowTrees, LAYOUT_RE, type TmuxWindowDetail, type TmuxPaneRow } from "./tmuxlayout.ts";
 import { tmuxResume } from "./config.ts";
 import { noteRestored, dropStaleMarks, restoredMark, dismissRestored, agentOf } from "./tmuxrestored.ts";
-import { agentWindowGuard } from "./browseraccess.ts";
+import { AGENT_KINDS } from "../../shared/agentKinds.ts";
+import { agentWindowEnv, agentWindowTmux, discardCredentialFile, personPaneEnv, sessionCredentialArgv, sessionCredentialFile } from "./browseraccess.ts";
+import { ownerFromEnviron } from "./reaper.ts";
+import { projectRootOf } from "./git.ts";
+import { paneRoleFor, seatWindowEnv } from "./seatwindow.ts";
+import { setIntervalAs, setTimeoutAs, spawnSyncAs, waitedFor } from "./loopwatch.ts";
 
 /** A pane as captured. `startCommand` is the exact argv the pane was born
  *  with — replaying it in "all" mode is what resumes agent sessions. */
@@ -69,6 +74,20 @@ export interface CapturedPane extends TmuxPaneRow {
    * `startCommand` for why the string tmux reports cannot be.
    */
   startArgv?: string[];
+  /**
+   * The owner this app launched the window as (`AGX_OWNER`, reaper.ts), read
+   * from the pane's own process. Present only on a window agentglass opened for
+   * an agent — a worker, or a seat — and it is how a restore tells one of those
+   * from a Claude the person opened themselves. Absent on a worker's pane in a
+   * photograph too old to have asked, so absence alone is not "the person's".
+   */
+  owner?: string;
+  /**
+   * Photographed, and the process named no owner: the person's own tab. Its
+   * replay keeps the environment a person's terminal has, which is what a
+   * restore of a hand-opened tab got wrong before this field existed.
+   */
+  person?: true;
 }
 
 export interface CapturedWindow extends TmuxWindowDetail {
@@ -96,6 +115,27 @@ export interface RestoreState {
    *  sweep writes before the desk has been put back and so would call a
    *  crashed-and-remade server "the same one". */
   wholeOn?: string;
+  /** Windows a restore did not build because their folder is gone for good.
+   *  Kept for SKIPPED_KEEP_MS and merged back by every capture, so the saved
+   *  layout never loses them silently. */
+  skipped?: SkippedWindow[];
+}
+
+export interface SkippedWindow { session: string; window: CapturedWindow; at: number }
+const SKIPPED_KEEP_MS = 7 * 86_400_000;
+/** Skips of this process, written into the file by the next capture. */
+let pendingSkips: SkippedWindow[] = [];
+/** Skipped windows this process has put back; the next capture drops them from the file. */
+let pendingRevived: SkippedWindow[] = [];
+
+/** Old records still inside the keep window, plus the new ones. A window is
+ *  one record: the same session, name and first path replaces the older one. */
+export const skippedKey = (x: SkippedWindow) => `${x.session}\u0000${x.window.name ?? ""}\u0000${x.window.panes?.[0]?.path ?? ""}`;
+export function mergeSkipped(before: readonly SkippedWindow[] | undefined, added: readonly SkippedWindow[], now: number, revived: readonly SkippedWindow[] = []): SkippedWindow[] {
+  const out = new Map<string, SkippedWindow>();
+  for (const x of [...(before ?? []), ...added]) if (now - x.at <= SKIPPED_KEEP_MS) out.set(skippedKey(x), x);
+  for (const x of revived) out.delete(skippedKey(x));
+  return [...out.values()];
 }
 
 /*
@@ -305,8 +345,9 @@ export function agentArgsOf(argv: string[], isPrompt: (text: string) => boolean 
 export interface ProcReader {
   platform: string;
   /** stdout of a command, or "" — a missing binary and an empty answer are the
-   *  same thing to every caller here. */
-  run: (argv: string[]) => string;
+   *  same thing to every caller here. A promise on the machine, so a `ps`
+   *  never holds the event loop; a test may answer plainly. */
+  run: (argv: string[]) => string | Promise<string>;
   /** A file's text; throws when it is not there. */
   read: (path: string) => string;
   /** A process's working directory, or "" when the machine cannot say. Linux
@@ -321,10 +362,11 @@ export interface ProcReader {
 
 const machineProc: ProcReader = {
   platform: process.platform,
-  run: (argv) => {
+  run: async (argv) => {
     try {
-      const p = Bun.spawnSync(argv, { stdout: "pipe", stderr: "pipe" });
-      return new TextDecoder().decode(p.stdout);
+      const p = Bun.spawn(argv, { stdout: "pipe", stderr: "ignore" });
+      const [out] = await Promise.all([new Response(p.stdout).text(), p.exited]);
+      return out;
     } catch { return ""; }
   },
   read: (path) => readFileSync(path, "utf8"),
@@ -357,8 +399,30 @@ export function startedAtOf(pid: number, proc: ProcReader = machineProc): number
   } catch { return 0; }
 }
 
+/**
+ * The owner this app launched a window as, read from the pane's own process
+ * (`AGX_OWNER`, reaper.ts), or `null` when the machine cannot say.
+ *
+ * Empty means the process names no owner: the person's own tab. `null` is a
+ * different answer — no `/proc` to read, or the process went between the walk
+ * and the read — and a caller must not turn it into "the person's", because
+ * that would hand a worker the server's own machine token. Only the marker is
+ * taken out of the environment; nothing else in it is read.
+ */
+export function ownerOf(pid: number, proc: ProcReader = machineProc): string | null {
+  if (proc.platform !== "linux" || !(pid > 1)) return null;
+  try { return ownerFromEnviron(proc.read(`/proc/${pid}/environ`))?.owner ?? ""; } catch { return null; }
+}
+
+/** What a photograph says about whose window a captured agent pane was.
+ *  Empty when the machine could not say, which keeps the conservative answer. */
+function whoseWindow(pid: number | undefined): Pick<CapturedPane, "owner" | "person"> {
+  const owner = pid ? ownerOf(pid) : null;
+  return owner === null ? {} : owner ? { owner } : { person: true };
+}
+
 /** Direct children of a pid, or an empty list. */
-export function childPidsOf(pid: number, proc: ProcReader = machineProc): number[] {
+export async function childPidsOf(pid: number, proc: ProcReader = machineProc): Promise<number[]> {
   // `pgrep -P` is in BSD pgrep and procps alike, but the Linux branch keeps
   // the `ps` it was measured with rather than trading a known answer for a
   // portable one.
@@ -374,8 +438,8 @@ export function childPidsOf(pid: number, proc: ProcReader = machineProc): number
   }
   const out = listed !== null ? listed.replace(/\s+/g, "\n")
     : proc.platform === "linux"
-    ? proc.run(["ps", "-o", "pid=", "--ppid", String(pid)])
-    : proc.run(["pgrep", "-P", String(pid)]);
+    ? await proc.run(["ps", "-o", "pid=", "--ppid", String(pid)])
+    : await proc.run(["pgrep", "-P", String(pid)]);
   const pids: number[] = [];
   for (const line of out.split("\n")) {
     const child = Number(line.trim());
@@ -397,12 +461,12 @@ export function childPidsOf(pid: number, proc: ProcReader = machineProc): number
  * otherwise, and a long command line cut at column 80 loses the flags at its
  * end — which is where `--resume` is.
  */
-export function argvOf(pid: number, proc: ProcReader = machineProc): string[] {
+export async function argvOf(pid: number, proc: ProcReader = machineProc): Promise<string[]> {
   if (proc.platform === "linux") {
     try { return proc.read(`/proc/${pid}/cmdline`).split("\0").filter(Boolean); }
     catch { return []; }
   }
-  return proc.run(["ps", "-ww", "-o", "args=", "-p", String(pid)]).trim().split(/\s+/).filter(Boolean);
+  return (await proc.run(["ps", "-ww", "-o", "args=", "-p", String(pid)])).trim().split(/\s+/).filter(Boolean);
 }
 
 /** How far down a pane's process tree to look for the agent: a shell, a
@@ -432,17 +496,17 @@ export interface AgentUnder { name: string; argv: string[]; cwd: string; started
  * package when the binary is `node` — which is how a qwen is told apart
  * from a build.
  */
-export function agentUnder(panePid: number, proc: ProcReader = machineProc): AgentUnder | null {
+export async function agentUnder(panePid: number, proc: ProcReader = machineProc): Promise<AgentUnder | null> {
   let level = [panePid];
   let seen = 0;
   for (let depth = 0; depth <= WALK_DEPTH && level.length; depth++) {
     const next: number[] = [];
     for (const pid of level) {
       if (++seen > WALK_MAX) return null;
-      const argv = argvOf(pid, proc);
+      const argv = await argvOf(pid, proc);
       const name = agentNamed(argv);
       if (name) return { name, argv, cwd: proc.cwd?.(pid) ?? "", startedAt: proc.startedAt?.(pid) ?? 0 };
-      next.push(...childPidsOf(pid, proc));
+      next.push(...(await childPidsOf(pid, proc)));
     }
     level = next;
   }
@@ -619,6 +683,14 @@ const FINAL_NO = -1;
  *  to its promise. */
 const promptLookups = new Map<number, number>();
 export function __promptLookups(pid: number): number { return promptLookups.get(pid) ?? 0; }
+/** The database asks, replaceable by a test that needs to see how they are called. */
+const promptAsk = { of: wasPromptOf, anywhere: wasPromptAnywhere };
+export function __setPromptAsk(f: Partial<typeof promptAsk>): () => void {
+  const was = { ...promptAsk }; Object.assign(promptAsk, f); return () => Object.assign(promptAsk, was);
+}
+/** The loop handed back, so the pane after this one is not asked in the same run. */
+export const yieldToLoop = (): Promise<void> => new Promise<void>((r) => setImmediate(r));
+export const __wasPromptFor = (...a: Parameters<typeof wasPromptFor>) => wasPromptFor(...a);
 function wasPromptFor(pid: number, text: string, sessions: (string | undefined)[], bornAt: number, newest: number): boolean {
   const key = `${pid}\0${text}`;
   if (promptVerdicts.has(key)) return true;
@@ -631,7 +703,8 @@ function wasPromptFor(pid: number, text: string, sessions: (string | undefined)[
   const since = bornAt ? bornAt - NOTE_SLACK_MS : 0;
   if (promptLookups.size > 2000) promptLookups.clear();
   promptLookups.set(pid, (promptLookups.get(pid) ?? 0) + 1);
-  const yes = sessions.some((id) => !!id && wasPromptOf(id, text, since)) || wasPromptAnywhere(text, since);
+  /* Labelled: right after a boot nothing is cached, and each "anywhere" ask walks every prompt row (~100 ms on a 1.6 GB file). */
+  const yes = waitedFor("restore prompt lookup", () => sessions.some((id) => !!id && promptAsk.of(id, text, since)) || promptAsk.anywhere(text, since));
   if (promptVerdicts.size > 2000) promptVerdicts.clear();
   if (promptNos.size > 2000) promptNos.clear();
   if (yes) { promptVerdicts.add(key); promptNos.delete(key); return true; }
@@ -735,20 +808,24 @@ function writeMerged(fresh: CapturedSession[], now: number, whole: boolean, engi
   }
   const sessions = [...fresh.map((s) => ({ ...s, windows: carried.get(s.name) ?? s.windows, lastSeen: now })), ...kept];
   const wholeOn = whole ? engine : before?.wholeOn;
-  const state: RestoreState = { capturedAt: now, sessions, ...(engine ? { engine } : {}), ...(wholeOn ? { wholeOn } : {}) };
+  const skipped = mergeSkipped(before?.skipped, pendingSkips, now, pendingRevived);
+  const state: RestoreState = { capturedAt: now, sessions, ...(engine ? { engine } : {}), ...(wholeOn ? { wholeOn } : {}), ...(skipped.length ? { skipped } : {}) };
   /* A photograph that says what the file already says is not written: only
      the two timestamps differ, and 27 KB rewritten six times a minute (plus a
      copy to layout.prev.json each time) was measured at 24 sessions. The file
      is refreshed at least every FRESH_MS so `lastSeen` never ages toward the
      fortnight floor, and `lastCaptureAt` answers from memory in between. */
   lastTickAt = now;
-  if (before && now - before.capturedAt < FRESH_MS && sameDesk(before, state)) return before;
+  /* The file already says all of it (the pending skips are in it), so they are done. */
+  if (before && now - before.capturedAt < FRESH_MS && sameDesk(before, state)) { pendingSkips = []; pendingRevived = []; return before; }
   mkdirSync(restoreDir(), { recursive: true });
   const tmp = `${layoutPath()}.${process.pid}.tmp`;
   /* The person's own, and now with the arguments of what they were running
      in it — prompts included. Not for the other accounts on the machine. */
   writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
   swapInLayout(tmp);
+  /* Only after the write went through: a throw above keeps them for the next capture. */
+  pendingSkips = []; pendingRevived = [];
   return state;
 }
 
@@ -909,24 +986,32 @@ async function captureOnce(now: number): Promise<RestoreState | null> {
    * own is born, and is photographed as a shell (`tmuxName` below), as
    * before.
    */
-  const serverArgv = engine ? argvOf(Number(engine.split(".")[0])).join(" ") : "";
+  const serverArgv = engine ? (await argvOf(Number(engine.split(".")[0]))).join(" ") : "";
   const tmuxName = (serverArgv.split(" ")[0] || resolveTmuxBin() || "tmux").split("/").pop() || "tmux";
-  const unborn = (p: { command: string; pid?: number }): boolean =>
-    !!serverArgv && p.command === tmuxName && !!p.pid && argvOf(p.pid).join(" ") === serverArgv;
+  const unborn = async (p: { command: string; pid?: number }): Promise<boolean> =>
+    !!serverArgv && p.command === tmuxName && !!p.pid && (await argvOf(p.pid)).join(" ") === serverArgv;
+  const someUnborn = async (ws: { panes: { command: string; pid?: number }[] }[]): Promise<boolean> => {
+    for (const w of ws) for (const p of w.panes) if (await unborn(p)) return true;
+    return false;
+  };
   const sessions: CapturedSession[] = [];
   /* The whole desk in two calls (`allWindowTrees`); asked one session at a
      time only when tmux did not answer the batch. */
   let batch = await allWindowTrees();
-  const anyUnborn = () => !!batch && [...batch.trees.values()].some((ws) => ws.some((w) => w.panes.some(unborn)));
-  for (let i = 0; i < 20 && anyUnborn(); i++) {
-    await new Promise((r) => setTimeout(r, 25));
+  const anyUnborn = async () => {
+    if (!batch) return false;
+    for (const ws of batch.trees.values()) if (await someUnborn(ws)) return true;
+    return false;
+  };
+  for (let i = 0; i < 20 && await anyUnborn(); i++) {
+    await new Promise((r) => setTimeoutAs("boot:restore-sweeper:pause", () => r(undefined), 25));
     batch = await allWindowTrees();
   }
   for (const name of names) {
     if (!validSessionName(name)) continue;
     if (isEphemeralSession(name)) continue;
     const windows = batch ? batch.trees.get(name) ?? [] : await windowTree(name);
-    if (windows.some((w) => w.panes.some(unborn))) continue;
+    if (await someUnborn(windows)) continue;
     const out: CapturedWindow[] = [];
     for (const w of windows) {
       const panes: CapturedPane[] = [];
@@ -1001,7 +1086,7 @@ async function captureOnce(now: number): Promise<RestoreState | null> {
              a value. */
           const first = was?.agentArgs?.length && agentSession ? firstPromptSince(agentSession, startedAt - NOTE_SLACK_MS) : "";
           const agentArgs = was?.agentArgs ? agentArgsOf(["", ...was.agentArgs], (text) => !!first && text === first) : undefined;
-          panes.push({ ...p, path: p.path || was?.path || "", startCommand: "", ...(agentSession ? { agentSession, ...(agentArgs?.length ? { agentArgs } : {}) } : {}) });
+          panes.push({ ...p, path: p.path || was?.path || "", startCommand: "", ...(agentSession ? { agentSession, ...(agentArgs?.length ? { agentArgs } : {}), ...(was?.owner ? { owner: was.owner } : was?.person ? { person: true as const } : {}) } : {}) });
           continue;
         }
         /*
@@ -1032,7 +1117,7 @@ async function captureOnce(now: number): Promise<RestoreState | null> {
         const wrapped = startCommand.includes(KEPT_MARK);
         /* No walk under a pane whose foreground is its shell: nothing is
            running in it, and a job a person backgrounded is not its agent. */
-        const found = pid && (wrapped || !SHELLS.has(p.command)) ? agentUnder(pid) : null;
+        const found = pid && (wrapped || !SHELLS.has(p.command)) ? await agentUnder(pid) : null;
         const under = found && (wrapped || isForeground(found, p.command)) ? found : null;
         if (under && under.name === claudeName()) {
           /*
@@ -1048,11 +1133,13 @@ async function captureOnce(now: number): Promise<RestoreState | null> {
           const resumed = resumeIdIn(under.argv);
           const agentSession = (noteFits ? note!.session_id : undefined) || resumed;
           /* The note's conversation only when the note is this agent's. */
+          /* One pane's lookups at a time, the loop free in between: a boot with ten panes asked ~1 s of them in one run. */
+          await yieldToLoop();
           const agentArgs = agentArgsOf(under.argv, (text) => wasPromptFor(pid, text, [agentSession, resumed, noteFits ? note!.session_id : undefined], under.startedAt, newestPrompt));
           /* A conversation, or nothing: the born-with line is blanked so a
              pane whose id could not be found comes back as a shell rather
              than as its command line, prompt and all. */
-          panes.push({ ...p, startCommand: "", agentSession, agentArgs: agentArgs.length ? agentArgs : undefined });
+          panes.push({ ...p, startCommand: "", agentSession, agentArgs: agentArgs.length ? agentArgs : undefined, ...whoseWindow(pid) });
           continue;
         }
         /* Another CLI: itself, with its prompt taken off. Nothing else: the
@@ -1067,11 +1154,11 @@ async function captureOnce(now: number): Promise<RestoreState | null> {
            its exec still carries the wrapper's line, and is not the command. */
         const clean = (argv: string[]) => argv.filter((a) => !/[\n\r\0]/.test(a)).slice(0, 64);
         const root = !pid ? []
-          : !wrapped ? clean(argvOf(pid))
-          : !under && SHELLS.has(p.command) ? clean(childPidsOf(pid).slice(0, 1).flatMap((c) => argvOf(c))) : [];
+          : !wrapped ? clean(await argvOf(pid))
+          : !under && SHELLS.has(p.command) ? clean((await Promise.all((await childPidsOf(pid)).slice(0, 1).map((c) => argvOf(c)))).flat()) : [];
         const startArgv = under ? withoutPromptFlags(under.name, under.argv)
           : (root[0] || "").split("/").pop() !== tmuxName && !isBareShell(root) && !isKeepAlive(root) && !root.some((a) => a.includes(KEPT_MARK)) ? root : [];
-        panes.push({ ...p, startCommand: wrapped ? "" : startCommand, ...(startArgv.length ? { startArgv } : {}) });
+        panes.push({ ...p, startCommand: wrapped ? "" : startCommand, ...(startArgv.length ? { startArgv } : {}), ...(under ? whoseWindow(pid) : {}) });
       }
       if (panes.length) out.push({ ...w, panes });
     }
@@ -1127,11 +1214,12 @@ export function captureLayoutSync(now = Date.now()): void {
   try {
     if (restoring || capturingHalted()) return;
     const bin = resolveTmuxBin();
-    if (!bin) return;
+    if (!bin || engineRefused()) return;
     /* The server too, as `liveSessions` spells it: a photograph that does not
        say which server it was taken on leaves the next sweep without a
        previous one to read a dead pane from. */
-    const r = Bun.spawnSync([bin, ...engineSocketArgs(), "-f", confPath(), "list-sessions", "-F", "#{session_name}\t#{pid}\t#{start_time}"],
+    /* Sync on purpose: a signal handler's `process.exit` never waits for a promise. */
+    const r = spawnSyncAs("tmux list-sessions", [bin, ...engineSocketArgs(), "-f", confPath(), "list-sessions", "-F", "#{session_name}\t#{pid}\t#{start_time}"],
       { stdout: "pipe", stderr: "pipe", env: process.env });
     const rows = new TextDecoder().decode(r.stdout).split("\n").map((l) => l.split("\t"));
     const names = rows.map(([n = ""]) => n.trim()).filter((n) => n && validSessionName(n));
@@ -1246,33 +1334,115 @@ export function runArgs(mode: "lazy" | "all", pane: CapturedPane | undefined, bi
  *  a command line built here. */
 const SESSION_ID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
-/** `runArgs`, through the browser door when the pane was an agent.
+/** The engine a photographed agent pane was running, so its credential is
+ *  minted for the CLI that actually came back. */
+export function agentEngineOf(p: CapturedPane): string {
+  if (p.agentSession) return "claude";
+  const head = basename(p.startArgv?.[0] ?? "");
+  return AGENT_KINDS.find((k) => k.bin === head)?.id ?? "claude";
+}
+
+/**
+ * `runArgs`, through the browser door when the pane was an agent.
  *
- *  A restored agent pane is created by a direct tmux call, so it inherits the
- *  server's environment — including the person's machine token. No credential
- *  is minted for a restore (there is no turn and no worker name), so the pane is
- *  marked off and the credential variables are removed: the supplied CLI and
- *  MCP server then refuse rather than fall back to the identity in the file. A
- *  person's own command is replayed exactly as it was. */
-function replayArgs(mode: "lazy" | "all", pane: CapturedPane | undefined): string[] {
+ * A restored agent pane is created by a direct tmux call, so it inherits the
+ * server's environment — including the person's machine token. Every agent pane
+ * therefore goes through `agentWindowEnv` (browseraccess.ts), the same door a
+ * fresh start uses, and ON is the default:
+ *
+ *  - a PROJECT SEAT is handed the credential its chair was seated with
+ *    (`seatWindowEnv`, which calls the same door), named after the tab;
+ *  - a WORKER is handed a fresh credential of its own, named after the window
+ *    it is being rebuilt in — a restore has no turn to inherit one from, and
+ *    off here is the P0 this file's replay used to cause;
+ *  - a window THE PERSON opened by hand is theirs: they are handed their own
+ *    credential explicitly (`-e`), never an agent's. Nothing is handed at all
+ *    only when the server holds none — an empty token is worse than none, since
+ *    the supplied CLI falls back to the person's token file on one.
+ *
+ * A photograph too old to say whose window it was (no `owner`, no `person`)
+ * is treated as an agent's, which is the safe direction: the window gets a
+ * credential of its own instead of the server's machine token. The next sweep
+ * photographs it correctly.
+ */
+export function replayArgs(
+  mode: "lazy" | "all", pane: CapturedPane | undefined, window?: string,
+): { argv: string[]; set: [string, string][]; unsets: readonly string[] } {
   const argv = runArgs(mode, pane);
-  return argv.length && pane && agentOf(pane) ? [...agentWindowGuard(), ...argv] : argv;
+  /* The credential is the window's identity, not its command: `lazy` leaves
+     argv empty (the pane starts as a plain shell, nothing to resume yet), and
+     that used to be read as "nothing to decide" — so every window `restore`
+     rebuilt, agent or seat, came back with none of the four variables set at
+     all and no OFF marker either, which left it holding whatever the tmux
+     session's own environment already carried. The decision below runs
+     whether or not there is a command, so the pane is born with the right
+     credential — or the right OFF marker — before anything is ever resumed
+     into it. */
+  if (!pane || !agentOf(pane)) return { argv, set: [], unsets: [] };
+  if (pane.person) return { argv, set: Object.entries(personPaneEnv()), unsets: [] };
+  const role = paneRoleFor({ name: window, owner: pane.owner }, pane.path ?? "");
+  const name = pane.owner || window || "restored-agent";
+  const cred = role.kind === "seat"
+    ? seatWindowEnv({ root: role.root, powers: role.powers, kind: role.engine, name })
+    : agentWindowEnv({ name, engine: agentEngineOf(pane), root: projectRootOf(pane.path ?? "") ?? pane.path ?? undefined });
+  /* The credential rides in tmux's `-e`, so it is not in the line a pane was
+     born with (`pane_start_command`), which the restore photographs into a
+     file. The tmux client's own argv carries the values for the length of the
+     call, and `/proc/<that pid>/cmdline` shows them while it runs; nothing of
+     it is left behind afterwards. Only the variables the window must not
+     inherit go on the argv, through `env -u` — and only when there is a
+     command for `env` to run: an empty argv (lazy) has nothing to wrap, and
+     its OFF marker or credential still rides on `-e`. `unsets` rides back
+     regardless, for a caller that cannot put them on the argv at all — the
+     first window of a brand-new session, whose credential goes through a
+     sourced file rather than `-e` or `env -u` (see `sessionCredentialArgv`). */
+  const { set, unsets } = agentWindowTmux(cred.env);
+  const guarded = argv.length && unsets.length ? ["env", ...unsets.flatMap((v) => ["-u", v]), ...argv] : argv;
+  return { argv: guarded, set, unsets };
 }
 
 /** The id tmux just printed, or "" — `-P -F` gives us the NEW id, which is the
  *  only way to address something we have just made. */
 const printed = (r: { ok: boolean; stdout: string }): string => (r.ok ? r.stdout.trim() : "");
 
+/**
+ * Take the restore's `-e` variables back OUT of a session.
+ *
+ * The first window has them; the session must not, or every window made into it
+ * afterwards — the person's included — inherits the chair's or a worker's
+ * credential. A `-u` that fails leaves it there, so the result is reported
+ * rather than dropped, and a caller that reads it can say which one stayed.
+ */
+export async function unsetSessionVars(
+  session: string,
+  keys: readonly string[],
+  run: (args: string[]) => Promise<{ ok: boolean; stderr: string }> = tmux,
+): Promise<string[]> {
+  const kept: string[] = [];
+  for (const k of keys) {
+    const r = await run(["set-environment", "-t", `=${session}`, "-u", k]);
+    if (r.ok) continue;
+    kept.push(k);
+    console.warn(`[tmux/restore] "${session}" kept ${k} in its session environment: ${r.stderr.replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 120)}`);
+  }
+  return kept;
+}
+
+/** The variables tmux puts on a new or respawned pane (`-e`). The value is a
+ *  credential, so it goes here rather than into the line the pane is born with. */
+const envArgs = (set: [string, string][]): string[] => set.flatMap(([k, v]) => ["-e", `${k}=${v}`]);
+
 /** The panes of a window beyond its first, split into the window that exists
  *  now. */
-async function restorePanes(name: string, windowId: string, panes: CapturedPane[], mode: "lazy" | "all"): Promise<void> {
+async function restorePanes(name: string, windowId: string, panes: CapturedPane[], mode: "lazy" | "all", window = ""): Promise<void> {
   /* Each split targets the pane the previous one printed. Targeting the window
      means its ACTIVE pane, the first, so every new pane landed right after it
      and a window of four came back as [1, 4, 3, 2]. */
   let after = `=${name}:${windowId}`;
   for (const p of panes) {
+    const rep = replayArgs(mode, p, window);
     const r = await tmux(["split-window", "-d", "-v", "-P", "-F", "#{pane_id}", "-t", after,
-      "-c", p.path || ".", ...replayArgs(mode, p)]);
+      "-c", p.path || ".", ...envArgs(rep.set), ...rep.argv]);
     const pid = printed(r);
     if (pid) after = pid;
   }
@@ -1419,6 +1589,8 @@ async function restoreOnce(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
   restoring = true;
   try {
     const r = await restorePass(mode);
+    /* No server-to-window notice path fits a boot message, so this line in the log is the only report. */
+    if (pendingSkips.length) console.warn(`[tmux/restore] ${pendingSkips.length} tab${pendingSkips.length === 1 ? " was" : "s were"} not reopened because their folder is gone; kept in layout.json "skipped" for 7 days, and rebuilt if the folder comes back`);
     /*
      * SETTLED ONLY WHEN THE PASS ACTUALLY FINISHED, and that is why this line
      * is not in the `finally` below.
@@ -1474,6 +1646,22 @@ async function restorePass(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
      person, with nobody photographing — and is not this pass's to rebuild.
      A different server is the crash this file exists for. */
   const sameServer = !!engine && state.wholeOn === engine;
+  /* Folder checks off the event loop, each with a 2 s cap (a hung mount is "not proven gone"). */
+  const wanted = new Set<string>();
+  for (const s of state.sessions) for (const w of s.windows) { const p = w.panes?.[0]?.path; if (p) wanted.add(p); }
+  for (const x of state.skipped ?? []) { const p = x.window.panes?.[0]?.path; if (p) wanted.add(p); }
+  const goneSet = new Set<string>(), existsSet = new Set<string>();
+  await Promise.all([...wanted].map(async (p) => {
+    const pr = await probePath(p);
+    if (pathGoneDecision(pr)) goneSet.add(p);
+    if (pr.stat === null) existsSet.add(p);
+  }));
+  const isGone = (p: string) => goneSet.has(p);
+  const revive = windowsToRevive(state.skipped, existsSet, Date.now());
+  for (const s0 of state.sessions) {
+    const back = revive.filter((x) => x.session === s0.name);
+    if (back.length) { s0.windows = [...s0.windows, ...back.map((x) => x.window)]; pendingRevived.push(...back); }
+  }
   for (const s of state.sessions) {
     /*
      * A mirror in the file is a mirror this build must not rebuild.
@@ -1486,6 +1674,7 @@ async function restorePass(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
     if (isEphemeralSession(s.name)) continue;
     if (!validSessionName(s.name)) continue;
     const have = await tmux(["has-session", "-t", `=${s.name}`]);
+    if (have.refused) continue; // never asked: nothing to rebuild on a guess
     if (!have.ok && sameServer) continue;
     if (have.ok) {
       /*
@@ -1513,22 +1702,23 @@ async function restorePass(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
        */
       if (deskIsWhole(engine) || sameServer) continue;
       const live = await windowTree(s.name).catch(() => [] as TmuxWindowDetail[]);
-      const key = (n: string | undefined, path: string | undefined) => `${n ?? ""}\u0000${path ?? ""}`;
-      const here = new Set(live.map((w) => key(w.name, w.panes[0]?.path)));
+      const toBuild = windowsToBuild(windowsWithPath(s.windows, isGone, undefined, noteSkip(s.name)), live);
       /* Only when the desk is genuinely short of what was recorded. A session
          a person has since rearranged is not a session to rebuild. */
-      for (const w of s.windows) {
-        if (here.has(key(w.name, w.panes[0]?.path))) continue;
+      for (const w of toBuild) {
+        const rep = replayArgs(mode, w.panes[0], w.name);
         const nw = await tmux(["new-window", "-d", "-P", "-F", "#{window_id}", "-t", `=${s.name}:`,
-          ...(w.name ? ["-n", w.name] : []), "-c", w.panes[0]?.path || ".", ...replayArgs(mode, w.panes[0])]);
+          ...(w.name ? ["-n", w.name] : []), "-c", w.panes[0]?.path || ".", ...envArgs(rep.set), ...rep.argv]);
         const wid = printed(nw);
         made.push({ session: s.name, window: w, id: wid });
         if (!wid) continue;
-        await restorePanes(s.name, wid, w.panes.slice(1), mode);
+        await keepWindowPins(wid, w);
+        await restorePanes(s.name, wid, w.panes.slice(1), mode, w.name);
       }
       continue;
     }
-    const first = s.windows[0];
+    const wins = windowsWithPath(s.windows, isGone, undefined, noteSkip(s.name));
+    const first = wins[0];
     if (!first) continue;
     const cwd0 = first.panes[0]?.path || ".";
     /* `-P -F` on every creation, and that is the fix.
@@ -1537,8 +1727,21 @@ async function restorePass(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
        =session:@3` fails, and the failure was swallowed by `if (r.ok)`, so a
        session with six windows came back with one and nobody was told. tmux
        hands back the id of what it has just made; everything below uses that. */
+    const mkRep = replayArgs(mode, first.panes[0], first.name);
+    /*
+     * `NEW-SESSION -e` IS SESSION-WIDE, and that is a leak the first window
+     * does not need. tmux puts those variables in the SESSION's environment,
+     * so every window made into it afterwards — including a tab the person
+     * opened — would inherit the seat's or a worker's credential, readable by
+     * name with `tmux show-environment` the moment it exists: unsetting it a
+     * moment later (the previous fix here) still leaves that moment. So the
+     * credential never takes `-e` on this call at all; it goes through the
+     * file `sessionCredentialFile` writes, which the first window's own
+     * command sources and deletes before anything else runs in the session.
+     */
+    const credFile = sessionCredentialFile(Object.fromEntries(mkRep.set));
     const mk = await tmux(["new-session", "-d", "-P", "-F", "#{window_id}", "-s", s.name,
-      ...(first.name ? ["-n", first.name] : []), "-c", cwd0, ...replayArgs(mode, first.panes[0])]);
+      ...(first.name ? ["-n", first.name] : []), "-c", cwd0, ...sessionCredentialArgv(credFile, {}, mkRep.unsets, mkRep.argv)]);
     /*
      * RECORDED EVEN WHEN IT COULD NOT BE MADE, and that is the case this
      * whole sweep exists for. A first window whose command exits takes the
@@ -1549,20 +1752,22 @@ async function restorePass(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
      * missing with the count still reading five.
      */
     const firstWin = printed(mk);
+    if (!firstWin) discardCredentialFile(credFile);
     made.push({ session: s.name, window: first, id: firstWin });
     if (firstWin) {
-      const firstPane = printed(await tmux(["display-message", "-p", "-t", `=${s.name}:${firstWin}`, "#{pane_id}"]));
-      await restorePanes(s.name, firstWin, first.panes.slice(1), mode);
+      await keepWindowPins(firstWin, first);
+      await restorePanes(s.name, firstWin, first.panes.slice(1), mode, first.name);
     }
 
-    for (const w of s.windows.slice(1)) {
+    for (const w of wins.slice(1)) {
+      const rep = replayArgs(mode, w.panes[0], w.name);
       const nw = await tmux(["new-window", "-d", "-P", "-F", "#{window_id}", "-t", `=${s.name}:`,
-        ...(w.name ? ["-n", w.name] : []), "-c", w.panes[0]?.path || ".", ...replayArgs(mode, w.panes[0])]);
+        ...(w.name ? ["-n", w.name] : []), "-c", w.panes[0]?.path || ".", ...envArgs(rep.set), ...rep.argv]);
       const wid = printed(nw);
       made.push({ session: s.name, window: w, id: wid });
       if (!wid) continue;
-      const pid = printed(await tmux(["display-message", "-p", "-t", `=${s.name}:${wid}`, "#{pane_id}"]));
-      await restorePanes(s.name, wid, w.panes.slice(1), mode);
+      await keepWindowPins(wid, w);
+      await restorePanes(s.name, wid, w.panes.slice(1), mode, w.name);
     }
   }
   const restored = await keepTheDesk(made, mode);
@@ -1573,6 +1778,117 @@ async function restorePass(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
 }
 
 type Made = { session: string; window: CapturedWindow; id: string };
+
+/**
+ * The recorded windows a live session still lacks, matched by NAME AND first
+ * pane path. A renamed tab, or a stray window with the same name somewhere
+ * else, must not hide a tab that is really missing. Same-named windows are
+ * still counted, not collapsed: two recorded `fish` tabs in one directory
+ * against one live `fish` there still build one.
+ */
+type PathWin = { name?: string; panes?: readonly { path?: string }[] };
+const winKey = (w: PathWin) => `${w.name ?? ""}\u0000${w.panes?.[0]?.path ?? ""}`;
+export function windowsToBuild<W extends PathWin>(recorded: readonly W[], live: readonly PathWin[]): W[] {
+  const standing = new Map<string, number>();
+  for (const w of live) standing.set(winKey(w), (standing.get(winKey(w)) ?? 0) + 1);
+  const left: W[] = [];
+  for (const w of recorded) {
+    const n = standing.get(winKey(w)) ?? 0;
+    if (n > 0) standing.set(winKey(w), n - 1); else left.push(w);
+  }
+  /* Name-only fallback: a live window with that name that sits somewhere else
+     ($HOME, a cd) and that no record has used is still that tab. */
+  const byName = new Map<string, number>();
+  for (const [k, n] of standing) { const nm = k.split("\u0000")[0]; if (nm && n > 0) byName.set(nm, (byName.get(nm) ?? 0) + n); }
+  return left.filter((w) => {
+    const n = w.name ? byName.get(w.name) ?? 0 : 0;
+    if (n > 0) { byName.set(w.name!, n - 1); return false; }
+    return true;
+  });
+}
+
+export interface PathProbe {
+  /** null = exists; an error code; "timeout" = no answer in time. */
+  stat: string | null;
+  parent: { readable: boolean; empty: boolean };
+}
+/**
+ * True only when `p` is gone for good: ENOENT, and the parent directory is
+ * readable AND not empty. An empty parent is what an unmounted drive's mount
+ * point looks like, so it proves nothing. EACCES, a timeout or an unreadable
+ * parent are not proof either: the window is built as before.
+ */
+export function pathGoneDecision(pr: PathProbe): boolean {
+  return pr.stat === "ENOENT" && pr.parent.readable && !pr.parent.empty;
+}
+
+const PROBE_MS = 2000;
+const withTimeout = <T>(pr: Promise<T>, fallback: T): Promise<T> => {
+  let t: ReturnType<typeof setTimeout>;
+  return Promise.race([pr, new Promise<T>((res) => { t = setTimeoutAs("restore probe timeout", () => res(fallback), PROBE_MS); })]).finally(() => clearTimeout(t));
+};
+/** Async probe off the event loop; a hung mount costs at most PROBE_MS. */
+export async function probePath(p: string): Promise<PathProbe> {
+  const stat = await withTimeout(fsp.stat(p).then(() => null as string | null, (e: any) => String(e?.code ?? "ERR")), "timeout");
+  if (stat !== "ENOENT") return { stat, parent: { readable: false, empty: false } };
+  const dir = dirname(p);
+  const parent = await withTimeout(
+    fsp.access(dir, fsConstants.R_OK | fsConstants.X_OK).then(() => fsp.readdir(dir)).then(
+      (names) => ({ readable: true, empty: names.length === 0 }), () => ({ readable: false, empty: false })),
+    { readable: false, empty: false });
+  return { stat, parent };
+}
+
+/** Sync form, kept for callers that cannot await. The restore pass uses `probePath`. */
+export function pathIsGone(p: string): boolean {
+  let code: string | null = null;
+  try { statSync(p); } catch (e: any) { code = String(e?.code ?? "ERR"); }
+  if (code !== "ENOENT") return false;
+  try {
+    accessSync(dirname(p), fsConstants.R_OK | fsConstants.X_OK);
+    return pathGoneDecision({ stat: code, parent: { readable: true, empty: readdirSync(dirname(p)).length === 0 } });
+  } catch { return false; }
+}
+
+/** Skipped records still inside the keep window whose folder exists again. */
+export function windowsToRevive(skipped: readonly SkippedWindow[] | undefined, exists: ReadonlySet<string>, now: number): SkippedWindow[] {
+  return (skipped ?? []).filter((x) => { const p = x.window.panes?.[0]?.path; return !!p && exists.has(p) && now - x.at <= SKIPPED_KEEP_MS; });
+}
+
+/** Adds a skip once per session, name and path. */
+export function addSkip(list: SkippedWindow[], x: SkippedWindow): void {
+  if (!list.some((y) => skippedKey(y) === skippedKey(x))) list.push(x);
+}
+
+/**
+ * Drop recorded windows whose directory is gone for good (a removed worktree).
+ * Building one anyway lands it in tmux's default directory — two finished
+ * worker tabs came back at $HOME and sat on Claude's trust prompt for hours.
+ * A window with no recorded path is kept, and so is one whose path merely
+ * cannot be read. `onSkip` gets each dropped window so the caller can record it.
+ */
+export function windowsWithPath<W extends PathWin>(
+  windows: readonly W[], gone: (p: string) => boolean = pathIsGone,
+  log: (line: string) => void = (l) => console.warn(l),
+  onSkip?: (w: W) => void,
+): W[] {
+  return windows.filter((w) => {
+    const p = w.panes?.[0]?.path;
+    if (!p || !gone(p)) return true;
+    log(`[tmux/restore] skipping window "${w.name ?? ""}": its directory ${p} no longer exists`);
+    onSkip?.(w);
+    return false;
+  });
+}
+
+const noteSkip = (session: string) => (w: CapturedWindow) => { addSkip(pendingSkips, { session, window: w, at: Date.now() }); };
+
+/** The pins that make a restored window still the card's tab, not just a name. */
+async function keepWindowPins(id: string, w: CapturedWindow): Promise<void> {
+  if (!id) return;
+  if (w.given) await tmux(["set-option", "-w", "-t", id, GIVEN_OPTION, w.given]);
+  if (w.card) await tmux(["set-option", "-w", "-t", id, CARD_OPTION, w.card]);
+}
 
 /** The shell the engine gives a new pane — `default-shell`, which tmux takes
  *  from $SHELL at start. Asked once per process; `/bin/sh` if it will not say. */
@@ -1622,7 +1938,7 @@ async function keepTheDesk(made: Made[], mode: "lazy" | "all"): Promise<number> 
   /* In lazy mode nothing was started, so nothing can have exited — but a
      window can still be missing because the call to make it failed, and the
      sweep is what notices. Only the wait is skipped. */
-  if (mode === "all") await new Promise((r) => setTimeout(r, SETTLE_MS));
+  if (mode === "all") await new Promise((r) => setTimeoutAs("boot:restore-sweeper:settle", () => r(undefined), SETTLE_MS));
   let standing = 0;
   for (const m of made) {
     const live = await tmux(["list-windows", "-t", `=${m.session}`, "-F", "#{window_id}"]);
@@ -1651,6 +1967,7 @@ async function keepTheDesk(made: Made[], mode: "lazy" | "all"): Promise<number> 
       m.id = id; // the mark below is about the window that stands, not the one asked for
     }
     standing++;
+    await keepWindowPins(id, m.window);
 
     /*
      * And the splits, counted rather than assumed.
@@ -1704,12 +2021,15 @@ async function keepTheDesk(made: Made[], mode: "lazy" | "all"): Promise<number> 
 export async function resumeRestored(windowId: string): Promise<boolean> {
   const mark = restoredMark(windowId);
   if (!/^@\d+$/.test(windowId) || !mark?.pane) return false;
-  const argv = replayArgs("all", mark.pane);
-  if (!argv.length) return false;
+  /* The window's name here for a photograph old enough to have no owner on the
+     pane: the seat is recognised by it, and a worker by not being one. */
+  const named = (await tmux(["display-message", "-p", "-t", windowId, "#{window_name}"])).stdout.trim();
+  const rep = replayArgs("all", mark.pane, named);
+  if (!rep.argv.length) return false;
   const rows = await tmux(["list-panes", "-t", windowId, "-F", "#{pane_id}"]);
   const target = rows.ok ? rows.stdout.split("\n").map((l) => l.trim()).filter(Boolean)[mark.paneIndex ?? 0] : undefined;
   if (!target) return false;
-  const r = await tmux(["respawn-pane", "-k", "-t", target, "-c", mark.pane.path || ".", ...argv]);
+  const r = await tmux(["respawn-pane", "-k", "-t", target, "-c", mark.pane.path || ".", ...envArgs(rep.set), ...rep.argv]);
   if (r.ok) dismissRestored([windowId]);
   return r.ok;
 }
@@ -1745,24 +2065,25 @@ export function clearRestoreState(): void {
   try { rmSync(restoreDir(), { recursive: true, force: true }); } catch { /* gone */ }
 }
 
+export const RESTORE_FALLBACK_MS = 60_000;
 let captureTimer: ReturnType<typeof setInterval> | null = null;
 /** Start the periodic layout sweep. Idempotent; a no-op when tmux is unusable
  *  or the restore feature is off, so callers need not check either. */
 export function startRestoreSweeper(enabled: () => boolean): void {
   if (captureTimer || !enabled()) return;
   /*
-   * TEN SECONDS, not sixty.
+   * SIXTY SECONDS, as a safety net only.
    *
-   * With the merge in place a late capture can no longer LOSE anything — the
-   * worst it can do is not yet know about a session made in the last few
-   * seconds. Sixty seconds of that was the window a reboot fell into; ten is
-   * short enough that a session has to be seconds old to be missed, and a full
-   * sweep is a handful of tmux calls against a socket that is already there.
-   *
-   * `captureNow()` below closes even that gap for the paths that know they
-   * changed something.
+   * The paths of ours that create a session or a window, rename one or
+   * close one (the layout ops, `startAgent`, closing an owned window, the
+   * phone's `+` and the new-tab buttons) call `noteLayoutChanged()`, which
+   * lands in `captureNow()`, so a change is photographed when it happens and an idle
+   * desk spawns no tmux at all (the ten second sweep cost 3% of a core at
+   * idle). What this timer still catches is a change made from outside, by a
+   * hand-typed tmux command; a crash right after one loses at most a minute
+   * of layout. The capture merges, so a late one loses nothing.
    */
-  captureTimer = setInterval(() => { if (enabled()) void captureLayout(); }, 10_000);
+  captureTimer = setIntervalAs("tmux layout capture", () => { if (enabled()) void captureLayout(); }, RESTORE_FALLBACK_MS);
   (captureTimer as unknown as { unref?: () => void }).unref?.();
 }
 /**
@@ -1778,7 +2099,7 @@ export function startRestoreSweeper(enabled: () => boolean): void {
 let coalescing: ReturnType<typeof setTimeout> | null = null;
 export function captureNow(): void {
   if (coalescing) return;
-  coalescing = setTimeout(() => {
+  coalescing = setTimeoutAs("boot:restore-sweeper:coalesce", () => {
     coalescing = null;
     void captureLayout().catch(() => { /* the sweeper will have another go */ });
   }, 150);

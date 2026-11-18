@@ -17,6 +17,7 @@
  *     agent that lost its lane must not start clicking in the person's window.
  */
 import { foldWorkerName } from "../../shared/workerContainer.ts";
+import { setIntervalAs } from "./loopwatch.ts";
 
 export interface Lane {
   id: string;
@@ -39,6 +40,9 @@ export interface Lane {
      feature itself. Left as the next simplification after this, not one
      this diff is confident enough in to do unmeasured at the same time. */
   name?: string;
+  /** `lane new --ephemeral --vault NAME`: the vault every sign-in on a first
+   *  visit of this lane pulls from. Absent = the helper's own rule. */
+  vault?: string;
   created: number;
   lastAsk: number;
 }
@@ -65,6 +69,13 @@ interface Deps {
 let deps: Deps | null = null;
 const table = new Map<string, Lane>();
 const missingSince = new Map<string, number>();
+/* lane id -> the sites an on-visit sign-in was already TRIED for in it,
+   whatever came of it: nothing is asked twice per lane per site. Dropped
+   with the lane. */
+const visitTried = new Map<string, Set<string>>();
+/* The sites a sign-in actually succeeded for: a re-open that NAMES a vault may
+   try again for a site not in here (the first try was ambiguous or failed). */
+const visitSigned = new Map<string, Set<string>>();
 let sweeper: ReturnType<typeof setInterval> | null = null;
 
 export function configureLanes(d: Deps): void { deps = d; }
@@ -84,9 +95,12 @@ export const laneKnown = (id: unknown): boolean => typeof id === "string" && tab
  * because the credential is the one thing in the request the caller cannot
  * write.
  */
+export const noLaneError = (id: string): string =>
+  `no lane called ${id} (it was closed, or it never existed) — \`lane list\`, or \`lane new\``;
+
 export function laneRefusal(id: string, as: unknown, force = false, ownedOnly = false): string | null {
   const l = table.get(id);
-  if (!l) return `no lane called ${id} (it was closed, or it never existed) — \`lane list\`, or \`lane new\``;
+  if (!l) return noLaneError(id);
   if (ownedOnly) {
     /* A credential's principal is compared under the one fold, on both sides:
        `Alba` and `alba` are one worker, and the lane table is where that used
@@ -101,10 +115,58 @@ export function laneRefusal(id: string, as: unknown, force = false, ownedOnly = 
   return null;
 }
 
-/** An ask reached this lane: it is not idle. */
+/** A copy of one lane's record, or undefined. */
+export function laneRecord(id: unknown): Lane | undefined {
+  const l = typeof id === "string" ? table.get(id) : undefined;
+  return l ? { ...l } : undefined;
+}
+
+/** True the first time `site` is tried in this lane, false after (and for a
+ *  lane that is not in the table). The site stays tried whatever the outcome. */
+export function tryVisitSite(id: string, site: string, named = false): boolean {
+  if (!table.has(id)) return false;
+  const tried = visitTried.get(id) ?? new Set<string>();
+  /* `named`: the open named a vault. Tried again unless the lane is already signed in for it. */
+  if (tried.has(site) && !(named && !visitSigned.get(id)?.has(site))) return false;
+  tried.add(site);
+  visitTried.set(id, tried);
+  return true;
+}
+
+/** The sign-in for `site` worked in this lane. */
+export function markVisitSigned(id: string, site: string): void {
+  if (!table.has(id)) return;
+  const s = visitSigned.get(id) ?? new Set<string>();
+  s.add(site);
+  visitSigned.set(id, s);
+}
+
+/** A lane asked of within this long is "working" in the Browser pane's overview. */
+export const LANE_BUSY_MS = 10_000;
+
+/* Who hears that the lane table changed: the server, which pushes the rows to
+   the person's Browser pane (index.ts). `show` names a lane an agent asked to
+   bring forward with `--show`. One listener, set once; null in a test. */
+let changed: ((show?: string) => void) | null = null;
+export function onLanesChanged(fn: ((show?: string) => void) | null): void { changed = fn; }
+const tell = (show?: string): void => { try { changed?.(show); } catch { /* a push is best effort */ } };
+
+/** Ask the person's pane to bring this lane's tab forward. False when no lane has that id. */
+export function showLane(id: string): boolean {
+  if (!table.has(id)) return false;
+  tell(id);
+  return true;
+}
+
+/** An ask reached this lane: it is not idle. The pane hears only when the lane
+ *  goes from quiet to working, not on every ask; it ages "working" out itself. */
 export function touchLane(id: unknown): void {
   const l = typeof id === "string" ? table.get(id) : undefined;
-  if (l) l.lastAsk = Date.now();
+  if (!l) return;
+  const now = Date.now();
+  const wasQuiet = now - l.lastAsk >= LANE_BUSY_MS;
+  l.lastAsk = now;
+  if (wasQuiet) tell();
 }
 
 /** Every lane, or only the ones `as` opened. A caller that names nobody sees all. */
@@ -123,7 +185,7 @@ export const listOwnedLanes = (principal: string): Lane[] =>
 export const isLaneId = (id: unknown): id is string => typeof id === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(id);
 
 export async function openLane(
-  as: string | undefined, container: Lane["container"], name?: string,
+  as: string | undefined, container: Lane["container"], name?: string, vault?: string,
 ): Promise<{ ok: true; lane: Lane } | { ok: false; error: string }> {
   if (!deps) return { ok: false, error: "lanes are not available" };
   if (table.size >= MAX_LANES) {
@@ -135,7 +197,7 @@ export async function openLane(
   const now = Date.now();
   /* A lane in the shared container is the person's: the CLI sends `as` for it
      too, and recording that name made it look like the agent's own lane. */
-  const lane: Lane = { id, ...(as && container !== "shared" ? { as } : {}), container, ...(name ? { name } : {}), created: now, lastAsk: now };
+  const lane: Lane = { id, ...(as && container !== "shared" ? { as } : {}), container, ...(name ? { name } : {}), ...(vault ? { vault } : {}), created: now, lastAsk: now };
   table.set(id, lane);
   const made = await deps.manage({ make: id, container, ...(name ? { name } : {}) });
   if (!made.ok) {
@@ -149,15 +211,19 @@ export async function openLane(
     return { ok: false, error: "the lane's window did not come up in time" };
   }
   startSweeper();
+  tell();
   return { ok: true, lane: { ...lane } };
 }
 
 export async function closeLane(id: string, as?: string, force = false, ownedOnly = false): Promise<{ ok: boolean; error?: string }> {
   const refused = laneRefusal(id, as, force, ownedOnly);
   if (refused) return { ok: false, error: refused };
-  table.delete(id);
+  const had = table.delete(id);
   missingSince.delete(id);
+  visitTried.delete(id);
+  visitSigned.delete(id);
   deps?.forget(id);
+  if (had) tell();
   /* Best effort: the table is already right, and a window that cannot be asked
      is one that is gone. */
   await deps?.manage({ drop: id }).catch(() => undefined);
@@ -178,7 +244,7 @@ export async function sweepLanes(now = Date.now()): Promise<void> {
 
 function startSweeper(): void {
   if (sweeper) return;
-  sweeper = setInterval(() => { void sweepLanes(); }, 30_000);
+  sweeper = setIntervalAs("lanes sweep", () => { void sweepLanes(); }, 30_000);
   (sweeper as { unref?: () => void }).unref?.();
 }
 function stopSweeper(): void {
@@ -189,6 +255,8 @@ function stopSweeper(): void {
 export function resetLanes(): void {
   table.clear();
   missingSince.clear();
+  visitTried.clear();
+  visitSigned.clear();
   stopSweeper();
   hostWaitMs = 10_000;
   deps = null;

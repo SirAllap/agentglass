@@ -9,9 +9,11 @@ import type { UsagePayload } from "./usage.ts";
 import { getUsage } from "./usage.ts";
 import { windowLabel } from "../../shared/quota.ts";
 import { codexUsage } from "./codexusage.ts";
-import { opencodeUsage } from "./opencodeusage.ts";
+import { opencodeUsageFresh } from "./opencodeusage.ts";
 import { probeAgents } from "./agentprobe.ts";
 import { holderOf } from "./accounts.ts";
+import { usageAccounts } from "./usageaccounts.ts";
+import type { UsageAccount } from "../../shared/usageAccounts.ts";
 import type { AccountsInput } from "../../shared/pluginAccounts.ts";
 
 /**
@@ -185,6 +187,26 @@ export function withAccounts(row: ProviderUsage, list: AccountsInput | null | un
 }
 
 /**
+ * One row per account the person added. The default account is the provider's
+ * own row and is not repeated. These accounts have no reading of their own
+ * yet, so the row says so in a sentence instead of borrowing the default's
+ * numbers; the gauge appears when a source can answer for it.
+ */
+export function ownAccountRows(rows: readonly ProviderUsage[], accounts: readonly UsageAccount[]): ProviderUsage[] {
+  const out: ProviderUsage[] = [];
+  for (const a of accounts) {
+    const base = rows.find((r) => r.provider === a.provider && !r.ownAccount);
+    if (!base) continue;
+    out.push({
+      provider: a.provider, label: base.label, available: false, windows: [],
+      note: a.source ? `No reading for this account yet. Source: ${a.source}.` : "No reading for this account yet. Pick a source.",
+      ownAccount: { id: a.id, label: a.label, ...(a.source ? { source: a.source } : {}) },
+    });
+  }
+  return out;
+}
+
+/**
  * The real roster, plus the one agent the roster has no probe row for.
  *
  * OpenCode has no `probe` facet in shared/agentKinds.ts, so it never appears in
@@ -207,6 +229,7 @@ function defaultProbes(): ProbedAgent[] {
 export async function allProviderUsage(
   probes: readonly ProbedAgent[] = defaultProbes(),
   accountsOf: (provider: string) => AccountsInput | undefined = (p) => holderOf(p)?.list,
+  own: () => readonly UsageAccount[] = usageAccounts,
 ): Promise<ProviderUsage[]> {
   const show = installedProviders(probes);
   const rows: ProviderUsage[] = [];
@@ -215,7 +238,7 @@ export async function allProviderUsage(
   if (show.has("opencode")) {
     // The row is computed from steps already recorded, so a poll costs a file
     // read. The console is never read here: the strip's button asks for it.
-    rows.push(opencodeUsage());
+    rows.push(await opencodeUsageFresh());
   }
   if (show.has("antigravity")) {
     rows.push({
@@ -223,5 +246,6 @@ export async function allProviderUsage(
       windows: [], note: ANTIGRAVITY_NOTE,
     });
   }
-  return rows.flatMap((r) => withAccounts(r, accountsOf(r.provider)));
+  const shown = rows.flatMap((r) => withAccounts(r, accountsOf(r.provider)));
+  return [...shown, ...ownAccountRows(shown, own())];
 }

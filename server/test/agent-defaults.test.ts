@@ -75,4 +75,10 @@ describe("applied", () => {
     expect(a.indexOf("--disallowedTools")).toBeLessThan(a.indexOf("--permission-mode"));
     expect(cc.claudeCode.argv(spec)).not.toContain("--disallowedTools");
   });
+  test("an unattended run denies both names of the Agent tool unless its role may start subagents", () => {
+    const spec = { sessionId: "s", cwd: "/repo", model: "m", effort: "", mode: "default", fresh: true, unattended: true };
+    const off = cc.claudeCode.argv(spec);
+    expect(off[off.indexOf("--disallowed-tools") + 1]).toBe("Agent Task");
+    expect(cc.claudeCode.argv({ ...spec, subagents: true })).not.toContain("--disallowed-tools");
+  });
 });

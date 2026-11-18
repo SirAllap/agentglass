@@ -27,7 +27,8 @@
 // inScope(), and config.ts sits below everything else in the import graph.
 
 import { readFileSync, statSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { spawnSyncAs } from "./loopwatch.ts";
 
 /**
  * The main repo a linked worktree belongs to — read from its `.git` file, with
@@ -106,7 +107,7 @@ export function gitDir(dir: string): string | null {
 // of those should pay for a subprocess. Same TTL as the repo sweep's cache, so
 // adding a worktree shows up everywhere at the same time.
 const FAMILY_CACHE_MS = 5_000;
-const familyCache = new Map<string, { at: number; roots: string[]; main: string | null }>();
+const familyCache = new Map<string, { at: number; roots: string[]; main: string | null; mark: number; settled: boolean }>();
 
 /**
  * Every checkout of the repository that owns `root` — the main worktree and all
@@ -123,14 +124,67 @@ const familyCache = new Map<string, { at: number; roots: string[]; main: string 
  */
 export function worktreeFamily(root: string): string[] {
   const hit = familyCache.get(root);
-  if (hit && Date.now() - hit.at < FAMILY_CACHE_MS) return hit.roots;
+  // An idle server asked for the same family every five seconds: one
+  // `git worktree list` fork per root per tick (3.3 a minute measured on one
+  // quiet project). A stat says nothing was cut or removed, so the answer
+  // stands for FAMILY_STABLE_MS; a `worktree move` edits a file inside and
+  // moves no mtime, hence a ceiling rather than forever.
+  if (hit) {
+    const age = Date.now() - hit.at;
+    if (age < FAMILY_CACHE_MS) return hit.roots;
+    // Stat only past the 5 s fast path. Trust the entry only if its mark was
+    // already settled when it was listed: judged at lookup time, a second
+    // worktree cut in the same coarse mtime tick would hide behind it.
+    if (hit.settled && age < FAMILY_STABLE_MS) {
+      const mark = worktreesMark(root);
+      if (mark !== NO_MARK && mark === hit.mark) return hit.roots;
+    }
+  }
   if (familyCache.size > 64) familyCache.clear();
+  // Mark first, then list: a worktree cut in between is seen by the next stat.
+  const at = Date.now();
+  const mark = worktreesMark(root);
   const listed = listWorktrees(root);
   const roots = [root, ...listed.roots].filter(
     (r, i, all) => r && all.indexOf(r) === i
   );
-  familyCache.set(root, { at: Date.now(), roots, main: listed.main });
+  familyCache.set(root, { at, roots, main: listed.main, mark, settled: mark !== NO_MARK && at - mark > MARK_SETTLE_MS });
   return roots;
+}
+const FAMILY_STABLE_MS = 60_000;
+
+/**
+ * Like `worktreeFamily`, but for the "was a worktree cut seconds ago" check in
+ * `inScope`. Measured, forgetting the entry on every check of a linked path
+ * cost 3.6 s of loop time in `git worktree list` spawns.
+ *
+ * `git worktree add` creates `<root>/.git/worktrees/<name>`, which moves the
+ * mtime of `<root>/.git/worktrees` (and creates it the first time), so a stat
+ * says "something was cut since the last listing" without a spawn: list again
+ * only then. When the stat cannot say (`root` is itself a linked worktree, its
+ * `.git` is a file), fall back to a one-second bound.
+ */
+export function worktreeFamilyFresh(root: string): string[] {
+  const hit = familyCache.get(root);
+  const mark = worktreesMark(root);
+  const age = hit ? Date.now() - hit.at : Infinity;
+  // Reuse only while: the mark is unchanged, the entry is younger than the old
+  // 5 s TTL (an edit inside .git/worktrees/<name> does not move the directory's
+  // mtime), and the mark itself is not so fresh that a second worktree cut in
+  // the same filesystem tick could hide behind it (hit.settled, MARK_SETTLE_MS).
+  const fresh = mark === NO_MARK ? age < FAMILY_RECHECK_MS : !!hit?.settled && age < FAMILY_STABLE_MS;
+  if (hit && mark === hit.mark && fresh) return hit.roots;
+  forgetWorktreeFamily(root);
+  return worktreeFamily(root);
+}
+const FAMILY_RECHECK_MS = 1_000;
+const NO_MARK = -1;
+const MARK_SETTLE_MS = 2_000;
+/** A main repo that never cut a linked worktree has no `.git/worktrees`; that absence is a stable mark too, and creating the first one ends it. */
+const ABSENT_MARK = -2;
+function worktreesMark(root: string): number {
+  try { return statSync(join(root, ".git", "worktrees")).mtimeMs; } catch { /* absent or .git is a file */ }
+  try { return statSync(join(root, ".git")).isDirectory() ? ABSENT_MARK : NO_MARK; } catch { return NO_MARK; }
 }
 
 /** Drop the cached family of `root`, so the next ask lists it again. */
@@ -169,7 +223,7 @@ export function mainWorktree(root: string): string | null {
 function listWorktrees(root: string): { roots: string[]; main: string | null } {
   const none = { roots: [], main: null };
   try {
-    const p = Bun.spawnSync(["git", "-C", root, "worktree", "list", "--porcelain"], {
+    const p = spawnSyncAs("git worktree list", ["git", "-C", root, "worktree", "list", "--porcelain"], {
       stdout: "pipe",
       stderr: "pipe",
     });

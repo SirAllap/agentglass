@@ -14,10 +14,15 @@
  * cannot be done — one command, and the user knows it — but because a button
  * for it in a panel is an invitation, and the thing it destroys is measured in
  * hours of other people's afternoons.
+ *
+ * Volumes a person opted into by pattern (cache volumes like `app-cache-{slug}` of a deleted checkout) are removed by
+ * dockerorphans.ts, not here: that one is opt-in by pattern and re-checks mounts, and `removeVolume` below keeps
+ * refusing everything but node_modules volumes.
  */
 import { dockerBin } from "./docker.ts";
 import { parseSize } from "./dockervolumes.ts";
 import { isNodeModulesVolume } from "../../shared/dockerVolume.ts";
+import { runChild } from "./broker/brokerRun.ts";
 
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:@-]*$/;
 
@@ -32,11 +37,10 @@ export interface PruneResult {
 
 async function run(args: string[], timeoutMs = 120_000): Promise<{ code: number; stdout: string; stderr: string }> {
   try {
-    const p = Bun.spawn([dockerBin() ?? "docker", ...args], { stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
-    const [stdout, stderr, code] = await Promise.all([
-      new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited,
-    ]);
-    return { code: code ?? 1, stdout, stderr };
+    // Started by the spawn broker (broker/brokerRun.ts), not a fork of this server.
+    const p = await runChild([dockerBin() ?? "docker", ...args], { timeoutMs });
+    if (p.error !== undefined && p.error !== "lost") return { code: 1, stdout: "", stderr: p.error };
+    return { code: p.code ?? 1, stdout: p.stdout, stderr: p.stderr };
   } catch (e) {
     return { code: 1, stdout: "", stderr: String(e) };
   }

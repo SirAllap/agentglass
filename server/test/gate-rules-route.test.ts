@@ -185,13 +185,13 @@ describe("a project rule follows the directory the hook reports", () => {
     expect((await pending()).some((g) => g.id === id)).toBe(true);
   });
 
-  test("an outward action is held even when its tool is on the allow list", async () => {
+  test("an outward action is not waved through when its tool is on the allow list", async () => {
     // A push has left the machine the moment it runs. The allow list is about
-    // what a person does not need to see; an outward action is by definition
-    // something they do.
+    // what a person does not need to see. A push to the trunk is a base never-rule
+    // now, so it is refused outright instead of held: either way the allow list does not pass it.
     const id = nextId();
-    expect(await ask(id, "Bash", { command: "git push origin main" }, `${ORBIT}/web`)).toBe("held");
-    expect((await pending()).some((g) => g.id === id)).toBe(true);
+    expect(await ask(id, "Bash", { command: "git push origin main" }, `${ORBIT}/web`)).toMatchObject({ decision: "deny" });
+    expect((await pending()).some((g) => g.id === id)).toBe(false);
   });
 
   test("a relative cwd is not trusted as a place", async () => {

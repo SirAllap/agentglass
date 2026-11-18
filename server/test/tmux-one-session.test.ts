@@ -30,6 +30,7 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { benchWindowName, engineAttachArgv, engineSessionName, isPanelViewSession, CONSOLE_WINDOW } from "../src/tmuxpane.ts";
 import { agentSession } from "../src/agentops.ts";
+import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 
 const root = "/home/someone/code/orbit";
 const allowedSession = (n: string): boolean =>
@@ -39,7 +40,15 @@ const nameOf = (argv: string[] | null): string => argv![argv!.indexOf("-s") + 1]
 
 describe("session names the app makes", () => {
   test("every one is in the allowed set", () => {
-    for (const n of [nameOf(engineAttachArgv(root)), agentSession(root), "agx-view-12-ab3x", "agx-phone-12-ab3x", "scratch"]) {
+    /* The attach argv is refused (null) outside a private TMUX_TMPDIR: the engine
+       guard keeps tests off the person's live tmux, so this one names its own. */
+    const beforeTmp = process.env.TMUX_TMPDIR;
+    process.env.TMUX_TMPDIR = TMUX_TEST_TMPDIR;
+    let attach: string[] | null;
+    try { attach = engineAttachArgv(root); } finally {
+      if (beforeTmp === undefined) delete process.env.TMUX_TMPDIR; else process.env.TMUX_TMPDIR = beforeTmp;
+    }
+    for (const n of [nameOf(attach), agentSession(root), "agx-view-12-ab3x", "agx-phone-12-ab3x", "scratch"]) {
       expect(allowedSession(n), n).toBe(true);
     }
     for (const n of ["agents", "6f1c9b52-0000-4000-8000-0123456789ab", "orbit-agents", "other", "orbit-console", "orbit-bench1"]) {
@@ -78,7 +87,9 @@ describe("session names the app makes", () => {
 
 describe("only the known files start a session", () => {
   const dir = new URL("../src/", import.meta.url).pathname;
-  const starters = readdirSync(dir).filter((f) => f.endsWith(".ts")).filter((f) => {
+  const starters = readdirSync(dir).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts")).filter((f) => {
+    // Measured: src/ holds agentfocus.test.ts and agentspace.test.ts, which name "new-session"
+    // in fixtures. A test file is not code that starts a session.
     const text = readFileSync(dir + f, "utf8");
     return text.split("\n").some((l) => !/^\s*(\/\/|\*|\/\*)/.test(l) && /["']new-session["']/.test(l));
   }).sort();

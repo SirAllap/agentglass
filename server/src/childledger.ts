@@ -33,6 +33,7 @@
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
+import { spawnSyncAs } from "./loopwatch.ts";
 
 export interface ChildRecord {
   /** Kernel process id. */
@@ -85,7 +86,7 @@ export function bootId(): string {
   let boot = "";
   if (process.platform === "darwin") {
     try {
-      const r = Bun.spawnSync(["sysctl", "-n", "kern.boottime"], { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+      const r = spawnSyncAs("sysctl boottime", ["sysctl", "-n", "kern.boottime"], { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
       const m = /sec\s*=\s*(\d+)/.exec(r.stdout.toString());
       boot = m ? `boot:${m[1]}` : "";
     } catch { /* no boot id: the next boot drops the rows, so they leak */ }
@@ -123,7 +124,7 @@ export function startStamp(pid: number): string {
   const fields = procFields(pid);
   if (fields) return fields[19] ?? "";
   try {
-    const r = Bun.spawnSync(["ps", "-o", "lstart=", "-p", String(pid)], { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+    const r = spawnSyncAs("ps lstart", ["ps", "-o", "lstart=", "-p", String(pid)], { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
     return r.stdout.toString().trim();
   } catch {
     return "";
@@ -263,7 +264,7 @@ export function stopChild(pid: number): void {
   const e = tracked.get(pid);
   if (!e) return;
   signalIfSame(e.rec, "SIGTERM");
-  setTimeout(() => signalIfSame(e.rec, "SIGKILL"), STOP_GRACE_MS).unref?.();
+  setTimeout(() => signalIfSame(e.rec, "SIGKILL"), STOP_GRACE_MS).unref?.(); // loop-ok: one signal to a known pid
 }
 
 function ledgerFiles(dir: string): string[] {

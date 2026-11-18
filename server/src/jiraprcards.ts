@@ -46,7 +46,12 @@ export function readJiraRef(keys: readonly string[], branch: string, title: stri
   if (!alt) return undefined;
   const read = (text: string, flags: string): string | undefined =>
     new RegExp(`(?<![A-Za-z0-9_])(${alt})-(\\d+)(?![A-Za-z0-9_]|-\\d)`, flags).exec(text)?.slice(1, 3).join("-").toUpperCase();
-  return read(branch, "i") ?? read(title, "");
+  /* A key in brackets opening the title (`[ORBIT-1042] - …`) is written on purpose and beats the branch's: a head
+     branch cannot be renamed without closing the pull request, so a pull request re-pointed at a new card keeps the
+     old key in its branch. The same rule as shared/taskref.ts reads for the panel; this copy read the branch first,
+     so the board's card named the old card while the panel named the new one. */
+  const lead = /^\s*\[\s*[A-Za-z][A-Za-z0-9_]*-\d+\s*\]/.exec(title)?.[0];
+  return (lead ? read(lead, "") : undefined) ?? read(branch, "i") ?? read(title, "");
 }
 
 /** Every project key this site is known by: those on cached cards, then those Jira listed when a list asked. */

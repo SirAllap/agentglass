@@ -222,7 +222,8 @@ export interface WorkerSeen {
   cwd: string;
   paneId: string;
   startedAt: number;
-  /** The role the policy started it as, when one did. Falls back to `kind`. */
+  /** The role the start named — the column every role start writes, else the
+   *  policy stamp. Falls back to `kind`. */
   role?: string;
   endedAt?: number | null;
   exitCode?: number;
@@ -730,7 +731,15 @@ export function merged(p: {
     if (w.exitCode !== undefined) continue;
     const key = drawn.get(w.name) ?? (w.paneId ? drawn.get(w.paneId) : undefined);
     const had = key === undefined ? undefined : rows.get(key);
-    if (had && had.state === "working") continue;
+    if (had && key !== undefined && had.state === "working") {
+      /* The pane's own row wins the card, and the registry still knows the role
+         it was started as: without it the Flow counts nothing, because a board
+         row is only countable while it says which role ran. Only a role a start
+         named: a kind is not one, and grafting it on would replace an enlisted
+         tab's live tool with the CLI's name. */
+      if (!had.worker && w.role) rows.set(key, { ...had, worker: { role: w.role, since: w.startedAt } });
+      continue;
+    }
     if (had && key !== undefined) {
       /* An idle row under the same name is its previous turn's line; the
          running worker outranks it, and the old line kept it out of Working. */

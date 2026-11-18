@@ -26,7 +26,7 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("fixWorktreeOwnership gate", () => {
-  it("refuses a fabricated prunable worktree, so pkexec can't be aimed at an arbitrary path", () => {
+  it("refuses a fabricated prunable worktree, so pkexec can't be aimed at an arbitrary path", async () => {
     // Stands in for a root-owned directory the attacker wants chowned to them.
     const target = mkdtempSync(join(tmpdir(), "agx-target-"));
     // The attack: write a worktree registration whose gitdir names `target`.
@@ -43,18 +43,18 @@ describe("fixWorktreeOwnership gate", () => {
     expect(listed).toContain(target);
     expect(listed).toContain("prunable");
 
-    const r = fixWorktreeOwnership(dir, target);
+    const r = await fixWorktreeOwnership(dir, target);
     expect(r.ok).toBe(false);
     expect(r.error).toContain("not a worktree");
 
     rmSync(target, { recursive: true, force: true });
   });
 
-  it("still accepts a real, live worktree", () => {
+  it("still accepts a real, live worktree", async () => {
     const wtPath = join(mkdtempSync(join(tmpdir(), "agx-wt-")), "feature");
     expect(git("worktree", "add", "-q", "-b", "feature", wtPath).status).toBe(0);
     // Its files are ours, so the gate passes and there is nothing to chown.
-    const r = fixWorktreeOwnership(dir, wtPath);
+    const r = await fixWorktreeOwnership(dir, wtPath);
     expect(r.ok).toBe(true);
     expect(r.output).toContain("already yours");
     rmSync(wtPath, { recursive: true, force: true });

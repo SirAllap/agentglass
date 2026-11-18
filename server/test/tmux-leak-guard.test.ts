@@ -6,6 +6,7 @@
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { leakedByThisRun } from "./tmuxleak.ts";
 import { reapOrphanRuns, socketDirUnder } from "./tmuxTmp.ts";
@@ -25,7 +26,7 @@ describe("leakedByThisRun", () => {
 });
 
 describe("reapOrphanRuns", () => {
-  const root = mkdtempSync("/tmp/agx-reap-");
+  const root = mkdtempSync(join(tmpdir(), "agx-reap-"));
   const deadPid = (() => { const p = Bun.spawnSync(["true"]); return p.pid; })();
   const orphan = join(root, `agx-test-tmux-${deadPid}`);
   const living = join(root, `agx-test-tmux-${process.ppid}`);
@@ -71,7 +72,7 @@ describe("reapOrphanRuns", () => {
   });
 
   test("a run dir that is a symlink is never followed, never killed, never removed", () => {
-    const targetRoot = mkdtempSync("/tmp/agx-reap-target-");
+    const targetRoot = mkdtempSync(join(tmpdir(), "agx-reap-target-"));
     const targetSockDir = socketDirUnder(targetRoot);
     mkdirSync(targetSockDir, { recursive: true, mode: 0o700 });
     const targetSock = join(targetSockDir, "agx-orbit");

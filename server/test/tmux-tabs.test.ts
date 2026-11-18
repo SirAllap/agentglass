@@ -10,6 +10,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
+import { agxTestBase } from "./tmuxTmp.ts";
 
 /*
  * "A test that spawns tmux" is what the paragraph above says this file is not,
@@ -37,7 +38,7 @@ import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
  * socket away from his `default`, and only the config keeps his plugins out of
  * a server this file starts.
  */
-const TMPDIR = `/tmp/agx-tmux-tabs-${process.pid}`;
+const TMPDIR = agxTestBase("agx-tmux-tabs");
 const REAL_TMPDIR = process.env.TMUX_TMPDIR;
 
 // A socket meant to have nothing on it — unique per run, because "nothing is
@@ -71,7 +72,7 @@ afterAll(() => {
 import { parseWindows, parseFrame, socketFromArgv, runAction, sanitizeWindowName, prefixKeys, setStatusLine, type TmuxTarget } from "../src/tmuxctl.ts";
 
 describe("reading tmux's window list", () => {
-  test("id, index, name, active flag and tmux's own marks", () => {
+  test("id, index, name, active flag and tmux's own marks", async () => {
     const out = "@0\t1\tAI01\t0\t-\n@4\t2\tlazygit\t1\t*\n";
     expect(parseWindows(out)).toEqual([
       { id: "@0", index: 1, name: "AI01", active: false, flags: "-" },
@@ -79,7 +80,7 @@ describe("reading tmux's window list", () => {
     ]);
   });
 
-  test("names with spaces survive", () => {
+  test("names with spaces survive", async () => {
     // The reason the format is tab-separated. A space-separated one turns this
     // single window into three, and the tab strip grows phantom tabs.
     const [w] = parseWindows("@2\t3\tnpm run dev\t1\t*\n");
@@ -87,12 +88,12 @@ describe("reading tmux's window list", () => {
     expect(w!.index).toBe(3);
   });
 
-  test("a window with no name is not dropped", () => {
+  test("a window with no name is not dropped", async () => {
     const [w] = parseWindows("@7\t4\t\t0\t\n");
     expect(w).toEqual({ id: "@7", index: 4, name: "", active: false, flags: "" });
   });
 
-  test("a window whose process exited carries its status and when, and a live one carries nothing", () => {
+  test("a window whose process exited carries its status and when, and a live one carries nothing", async () => {
     const [dead, live] = parseWindows([
       "@8\t1\tbuild\t0\t\t\t80\t24\t\t\t\t/tmp\t1\t3\t1700000000",
       "@9\t2\tbash\t0\t\t\t80\t24\t\t\t\t/tmp\t0\t\t",
@@ -102,7 +103,12 @@ describe("reading tmux's window list", () => {
     expect(live!.exit).toBeUndefined();
   });
 
-  test("blank lines and unparseable indexes are skipped, not guessed at", () => {
+  test("a pane killed by a signal carries the signal, which its status of 0 does not say", async () => {
+    const [killed] = parseWindows("@8\t1\tclaude\t0\t\t\t80\t24\t\t\t\t/tmp\t1\t0\t1700000000\t\t\t\t9");
+    expect(killed).toMatchObject({ dead: true, exit: 0, signal: 9 });
+  });
+
+  test("blank lines and unparseable indexes are skipped, not guessed at", async () => {
     expect(parseWindows("\n\n")).toEqual([]);
     expect(parseWindows("no such session: =agx\n")).toEqual([]);
     expect(parseWindows("@0\t1\tok\t1\t*\ngarbage\n")).toHaveLength(1);
@@ -110,13 +116,13 @@ describe("reading tmux's window list", () => {
     expect(parseWindows("1\tok\t1\t*\n")).toEqual([]);
   });
 
-  test("geometry rides on the end of the same line", () => {
+  test("geometry rides on the end of the same line", async () => {
     const [w] = parseWindows("@0\t1\tAI01\t0\t-\t\t80\t24\n");
     expect(w!.cols).toBe(80);
     expect(w!.rows).toBe(24);
   });
 
-  test("a line with no geometry has none, rather than zero", () => {
+  test("a line with no geometry has none, rather than zero", async () => {
     // The desk decides "a phone is holding this window narrow" by comparing
     // this against its own terminal width. A window that answered 0 would be
     // narrower than every client there has ever been, and the notice would go
@@ -128,7 +134,7 @@ describe("reading tmux's window list", () => {
     expect(parseWindows("@0\t1\tAI01\t0\t-\t\tnope\tnope\n")[0]!.cols).toBeUndefined();
   });
 
-  test("bell and activity marks are passed through for the panel to interpret", () => {
+  test("bell and activity marks are passed through for the panel to interpret", async () => {
     const [bell, activity] = parseWindows("@0\t1\tbuild\t0\t!\n@1\t2\ttest\t0\t#\n");
     expect(bell!.flags).toBe("!");
     expect(activity!.flags).toBe("#");
@@ -150,25 +156,25 @@ describe("which session the client is on", () => {
     "w\t$2\t@4\t2\tAI02\t0\t-",
   ].join("\n");
 
-  test("our client's session, and only our session's windows", () => {
+  test("our client's session, and only our session's windows", async () => {
     const f = parseFrame(frame, "/dev/pts/0");
     expect(f!.session).toBe("main");
     expect(f!.id).toBe("$2");
     expect(f!.windows.map((w) => w.name)).toEqual(["AI01", "AI02"]);
   });
 
-  test("windows are matched by session id, not by name", () => {
+  test("windows are matched by session id, not by name", async () => {
     // resurrect will happily restore a second session called `main`, and a
     // kill-window aimed at the wrong one of those is unrecoverable.
     const twoMains = "c\t/dev/pts/0\tmain\t$2\nw\t$9\t@1\t1\tmain\t1\t*\nw\t$2\t@2\t1\tours\t1\t*";
     expect(parseFrame(twoMains, "/dev/pts/0")!.windows.map((w) => w.name)).toEqual(["ours"]);
   });
 
-  test("a session with no windows of its own reads as empty, not as somebody else's", () => {
+  test("a session with no windows of its own reads as empty, not as somebody else's", async () => {
     expect(parseFrame("c\t/dev/pts/0\tmain\t$2\nw\t$1\t@0\t1\tnot-ours\t1\t*", "/dev/pts/0")!.windows).toEqual([]);
   });
 
-  test("the size on the frame is OUR client's, not the first one listed", () => {
+  test("the size on the frame is OUR client's, not the first one listed", async () => {
     /*
      * Every client on the server is on this list, and some of them are phones.
      * Taking the first line would have the desk comparing its window against
@@ -189,11 +195,11 @@ describe("which session the client is on", () => {
     expect(parseFrame(withPhone, "/dev/pts/9")!.client).toEqual({ cols: 80, rows: 24 });
   });
 
-  test("a client line with no size is null, not a zero-wide terminal", () => {
+  test("a client line with no size is null, not a zero-wide terminal", async () => {
     expect(parseFrame("c\t/dev/pts/0\tmain\t$2\nw\t$2\t@3\t1\tAI01\t1\t*", "/dev/pts/0")!.client).toBeNull();
   });
 
-  test("no client on our terminal is no answer at all", () => {
+  test("no client on our terminal is no answer at all", async () => {
     // Mid-attach, or the client detached between the /proc walk and the ask.
     // Answering with the first session in the list would put somebody else's
     // windows in the strip, and a click there kills somebody else's window.
@@ -201,7 +207,7 @@ describe("which session the client is on", () => {
     expect(parseFrame("", "/dev/pts/0")).toBeNull();
   });
 
-  test("window names with tabs in them do not smuggle a session id", () => {
+  test("window names with tabs in them do not smuggle a session id", async () => {
     // The name is the last-but-two field and is not re-split, so this is a
     // window called what it says, in $2, and not one in $7.
     const f = parseFrame("c\t/dev/pts/0\tmain\t$2\nw\t$2\t@1\t1\tnpm run dev\t1\t*", "/dev/pts/0");
@@ -213,17 +219,17 @@ describe("finding the right tmux server", () => {
   // Asking the default server about a session that lives on another socket gets
   // a confident answer about somebody else's windows, so this is read off the
   // client's own command line rather than assumed.
-  test("-L and -S are carried over", () => {
+  test("-L and -S are carried over", async () => {
     expect(socketFromArgv(["tmux", "-L", "work", "attach", "-t", "main"])).toEqual(["-L", "work"]);
     expect(socketFromArgv(["tmux", "-S", "/run/user/1000/tmux", "new"])).toEqual(["-S", "/run/user/1000/tmux"]);
   });
 
-  test("the default socket is expressed as no flags at all", () => {
+  test("the default socket is expressed as no flags at all", async () => {
     expect(socketFromArgv(["tmux", "attach"])).toEqual([]);
     expect(socketFromArgv(["tmux"])).toEqual([]);
   });
 
-  test("a trailing -S with nothing after it is not a socket", () => {
+  test("a trailing -S with nothing after it is not a socket", async () => {
     expect(socketFromArgv(["tmux", "attach", "-S"])).toEqual([]);
   });
 });
@@ -234,27 +240,27 @@ describe("what a tab strip is allowed to ask for", () => {
   // of these is refused before tmux is invoked at all.
   const t: TmuxTarget = { pid: 1, socket: DEAD, session: "s", id: "$0" };
 
-  test("an action outside the four is refused", () => {
-    expect((runAction as unknown as (t: TmuxTarget, a: string) => boolean)(t, "kill-server")).toBe(false);
-    expect((runAction as unknown as (t: TmuxTarget, a: string) => boolean)(t, "run-shell")).toBe(false);
+  test("an action outside the four is refused", async () => {
+    expect(await (runAction as unknown as (t: TmuxTarget, a: string) => Promise<boolean>)(t, "kill-server")).toBe(false);
+    expect(await (runAction as unknown as (t: TmuxTarget, a: string) => Promise<boolean>)(t, "run-shell")).toBe(false);
   });
 
-  test("selecting or killing without a real window id is refused", () => {
+  test("selecting or killing without a real window id is refused", async () => {
     // Ids go on a command line, and the strip they came from is up to a poll
     // stale, so anything that is not `@` plus digits is not addressed at all.
-    expect(runAction(t, "select")).toBe(false);
-    expect(runAction(t, "kill")).toBe(false);
-    expect(runAction(t, "select", "2")).toBe(false);          // an index, not an id
-    expect(runAction(t, "select", "@1 ; kill-server")).toBe(false);
-    expect(runAction(t, "kill", "@")).toBe(false);
-    expect(runAction(t, "select", "$0")).toBe(false);          // a session, not a window
+    expect(await runAction(t, "select")).toBe(false);
+    expect(await runAction(t, "kill")).toBe(false);
+    expect(await runAction(t, "select", "2")).toBe(false);          // an index, not an id
+    expect(await runAction(t, "select", "@1 ; kill-server")).toBe(false);
+    expect(await runAction(t, "kill", "@")).toBe(false);
+    expect(await runAction(t, "select", "$0")).toBe(false);          // a session, not a window
   });
 
-  test("a rename with no usable name, or no window, is refused", () => {
-    expect(runAction(t, "rename", "@1", "\u001b\u0007\u0000")).toBe(false); // nothing left after cleaning
-    expect(runAction(t, "rename", "@1", "   ")).toBe(false);
-    expect(runAction(t, "rename", "@1", "")).toBe(false);
-    expect(runAction(t, "rename", undefined, "valid")).toBe(false);
+  test("a rename with no usable name, or no window, is refused", async () => {
+    expect(await runAction(t, "rename", "@1", "\u001b\u0007\u0000")).toBe(false); // nothing left after cleaning
+    expect(await runAction(t, "rename", "@1", "   ")).toBe(false);
+    expect(await runAction(t, "rename", "@1", "")).toBe(false);
+    expect(await runAction(t, "rename", undefined, "valid")).toBe(false);
   });
 });
 
@@ -263,19 +269,19 @@ describe("window names", () => {
   // sequence smuggled through it writes wherever it likes on the terminal.
   // Stripped rather than rejected: the printable part of "buil\u001b[2Jd" is
   // still what the user meant to call it.
-  test("control characters are removed, the rest is kept", () => {
+  test("control characters are removed, the rest is kept", async () => {
     expect(sanitizeWindowName("buil\u001b[2Jd")).toBe("buil[2Jd");
     expect(sanitizeWindowName("npm run dev")).toBe("npm run dev");
     expect(sanitizeWindowName("api\u0000")).toBe("api");
   });
 
-  test("a name that is only control characters is not a name", () => {
+  test("a name that is only control characters is not a name", async () => {
     expect(sanitizeWindowName("\u001b\u0007")).toBeNull();
     expect(sanitizeWindowName("  ")).toBeNull();
     expect(sanitizeWindowName(42)).toBeNull();
   });
 
-  test("absurdly long names are cut, not passed on", () => {
+  test("absurdly long names are cut, not passed on", async () => {
     expect(sanitizeWindowName("x".repeat(500))!.length).toBe(64);
   });
 });
@@ -288,14 +294,14 @@ describe("borrowing the status line", () => {
   // bookkeeping: whether we claim to have borrowed something we did not.
   const t: TmuxTarget = { pid: 1, socket: DEAD, session: "s", id: "$0" };
 
-  test("an unreachable server is not reported as borrowed", () => {
+  test("an unreachable server is not reported as borrowed", async () => {
     // The caller remembers what it borrowed so it can give it back on the way
     // out. A false claim here leaves a restore aimed at a session we never
     // touched, and — worse — swallows the real one.
     expect(setStatusLine(t, false)).toBe(false);
   });
 
-  test("giving it back reports failure rather than pretending", () => {
+  test("giving it back reports failure rather than pretending", async () => {
     expect(setStatusLine(t, true)).toBe(false);
   });
 });
@@ -304,7 +310,7 @@ describe("the prefix the panel advertises", () => {
   // The "tmux is listening" mark has to know which key that is. Hardcoding C-b
   // would light up for everyone except the people who rebound it, who are the
   // ones who use tmux enough to have missed the indicator in the first place.
-  test("an unreachable server yields no prefix rather than a guessed one", () => {
+  test("an unreachable server yields no prefix rather than a guessed one", async () => {
     const t: TmuxTarget = { pid: 1, socket: DEAD, session: "s", id: "$0" };
     expect(prefixKeys(t)).toEqual([]);
   });

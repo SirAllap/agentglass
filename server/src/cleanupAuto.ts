@@ -17,15 +17,21 @@
  *  - a pull request merged while the app was not reading the list is seen only
  *    by the hourly sweep (Automatic: merged in the last day; every mode: the age rule,
  *    autoCleanDays > 0) or by a person's click;
+ *  - a pull request blocked ONLY by a tab or session in its checkout is asked
+ *    again by the app's own PR-list read (no timer), at most once an hour per
+ *    pull request: measured, a retry that still finds the tab is two `gh`, three
+ *    `docker` and one `tmux` call plus the git reads of a plan, and the reads in
+ *    between cost a database query and nothing else. Any other block is never
+ *    retried;
  *  - the sweep looks at the 30 newest merged pull requests of the repository
  *    that are the person's own, at most once an hour per repository;
  *  - a run that failed halfway is recorded as failed and not retried by itself.
  */
 import {
-  CleanupError, mainCheckout, planCleanup, runCleanupGated, shouldAutoClean,
+  CleanupError, ghWhy, mainCheckout, planCleanup, runCleanupGated, shouldAutoClean,
   type CleanupConfig, type CleanupCtx, type CleanupMode,
 } from "./cleanup.ts";
-import { autoRow, claimAuto, finishAuto, interruptedPrs, noteBlocked, progressAuto } from "./cleanupState.ts";
+import { autoRow, claimAuto, finishAuto, interruptedPrs, noteBlocked, progressAuto, waitingPrs } from "./cleanupState.ts";
 
 export interface AutoSettings { mode: CleanupMode; days: number; config: CleanupConfig }
 
@@ -85,12 +91,25 @@ async function cleanOne(d: AutoDeps, main: string, pr: number): Promise<AutoOutc
   const c = d.ctx();
   if (prior && !(prior.state === "blocked" && c.now - prior.started_at >= HOUR_MS)) return "skipped";
   let plan;
-  try { plan = await planCleanup(main, pr, s.config, c); } catch (e) { if (e instanceof CleanupError) return "skipped"; throw e; }
+  try { plan = await planCleanup(main, pr, s.config, c); } catch (e) {
+    if (!(e instanceof CleanupError)) throw e;
+    // gh could not answer (502): a merged PR's checkout stayed behind with no word why. Say why, and ask again after the hour.
+    if (e.status === 502) { noteBlocked({ repo: main, pr, slug: "", title: `#${pr}`, label: await d.label(main), reason: e.message.split("\n")[0]!, waiting: true, now: c.now }); d.changed(); return "blocked"; }
+    return "skipped";
+  }
   const who = { repo: main, pr, slug: plan.slug ?? "", title: plan.title, label: await d.label(main) };
   const verdict = shouldAutoClean(s.mode, plan, plan.mergedAt, c.now, s.days);
   if (!verdict.clean) {
-    if (plan.state !== "MERGED" || !plan.blocks.length) return "skipped";
-    noteBlocked({ ...who, reason: verdict.reason, now: c.now });
+    if (plan.state !== "MERGED" || !plan.blocks.length) {
+      // The tab closed but the run is still refused for another reason (too recent for the days setting): the row
+      // stops waiting, or every PR-list read after its hour would plan it again.
+      if (prior?.waiting) { noteBlocked({ ...who, reason: verdict.reason, waiting: false, now: c.now }); d.changed(); }
+      return "skipped";
+    }
+    // The live-session block is the only one that clears on its own (a tab or session closes); uncommitted work,
+    // unpushed commits and a stacked PR wait for a person. Marked so a later PR-list read asks again.
+    const waiting = plan.blocks.length === 1 && plan.blocks[0]!.kind === "live-session";
+    noteBlocked({ ...who, reason: verdict.reason, waiting, now: c.now });
     d.changed();
     return "blocked";
   }
@@ -124,8 +143,11 @@ export const cleanMerged = (d: AutoDeps, repo: string, pr: number): Promise<Auto
   });
 
 const swept = new Map<string, number>();
+/** Why the last age sweep of a repository did not run (gh failed); cleared by the next good read. */
+const sweepSkips = new Map<string, string>();
+export const sweepSkipReason = (main: string): string | null => sweepSkips.get(main) ?? null;
 /** Only for tests: the hourly mark is process-wide. */
-export const __resetSweeps = (): void => swept.clear();
+export const __resetSweeps = (): void => { swept.clear(); sweepSkips.clear(); };
 
 /** Ceiling chosen: Automatic's catch-up covers what was merged in the last day (the gap it exists for: merged while the app was closed); anything between that and the age rule is left to a click. */
 export const CATCH_UP_DAYS = 1;
@@ -142,8 +164,14 @@ export async function sweepOld(d: AutoDeps, main: string): Promise<number> {
   const c = d.ctx();
   if (c.now - (swept.get(main) ?? 0) < HOUR_MS) return 0;
   swept.set(main, c.now);
-  const r = await c.gh(["pr", "list", "--state", "merged", "--author", "@me", "--limit", "30", "--json", "number,mergedAt"], main).catch(() => null);
-  if (!r || r.code !== 0) return 0;
+  const r = await c.gh(["pr", "list", "--state", "merged", "--author", "@me", "--limit", "30", "--json", "number,mergedAt"], main).catch((e) => ({ code: -1, stdout: "", stderr: String((e as Error)?.message ?? e) }));
+  if (r.code !== 0) {
+    const why = `the age sweep skipped: gh could not list the merged pull requests (${ghWhy(r.stderr)}); asked again in an hour`;
+    sweepSkips.set(main, why);
+    console.warn(`[cleanup] ${main}: ${why}`);
+    return 0;
+  }
+  sweepSkips.delete(main);
   let list: { number?: number; mergedAt?: string }[] = [];
   try { list = JSON.parse(r.stdout); } catch { return 0; }
   let n = 0;
@@ -160,16 +188,21 @@ export async function sweepOld(d: AutoDeps, main: string): Promise<number> {
  * about once (gh, through the engine): the merged ones are cleaned when the
  * project's setting says so. A project whose settings never clean on their own
  * costs nothing here, not even a gh call.
+ *
+ * This is also the retry of a pull request waiting for its tab to close: the
+ * read happens on every complete open page (prs.ts), so a waiting one is asked
+ * again on the first read after its hour is up.
  */
 export async function onPrsGone(d: AutoDeps, repoKey: string, numbers: number[]): Promise<void> {
   const mains = new Set<string>();
+  const c = d.ctx();
   for (const root of await d.roots(repoKey).catch(() => [] as string[])) {
     let main: string;
-    try { main = await mainCheckout(root, d.ctx()); } catch { continue; }
+    try { main = await mainCheckout(root, c); } catch { continue; }
     if (mains.has(main)) continue;
     mains.add(main);
     if (!wantsAuto(d.settings(main))) continue;
-    const todo = [...numbers, ...interruptedPrs(main)];
+    const todo = [...new Set([...numbers, ...interruptedPrs(main), ...waitingPrs(main, c.now - HOUR_MS)])];
     await eachQueued(d, todo, (n) => cleanOne(d, main, n));
     await sweepOld(d, main);
   }

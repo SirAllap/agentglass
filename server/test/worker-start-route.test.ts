@@ -192,8 +192,15 @@ describe.skipIf(!have)("a seat starting workers through the policy", () => {
       const before = new Set(readdirSync(own.logs).filter((f) => f.endsWith(".envnames")));
       const r = await own.asPerson("/agents/named/start", { name, cwd: own.wt, role: "builder" });
       expect(r.ok).toBe(true);
-      const file = await own.until(async () => readdirSync(own.logs).find((f) => f.endsWith(".envnames") && !before.has(f)));
-      const seen = readFileSync(join(own.logs, file), "utf8").split("\n").filter(Boolean);
+      /* The shell makes the file before `env | sed` fills it, so the file can be
+         seen empty or part-written. Wait for the list itself: the role name is
+         always in it, so a list without it is not all there yet. */
+      const seen = await own.until(async () => {
+        const file = readdirSync(own.logs).find((f) => f.endsWith(".envnames") && !before.has(f));
+        if (!file) return undefined;
+        const names = readFileSync(join(own.logs, file), "utf8").split("\n").filter(Boolean);
+        return names.includes("AGENTGLASS_ROLE") ? names : undefined;
+      });
       for (const v of ["AGENTGLASS_TOKEN", "AGENTGLASS_WORKER_TOKEN", "AGENTGLASS_PROFILE", "AGENTGLASS_BROWSER_AS"]) expect(seen).not.toContain(v);
       // Off takes the browser credential away and nothing else the role gives it.
       expect(seen).toContain("AGENTGLASS_ROLE");
@@ -296,9 +303,15 @@ describe.skipIf(!have)("a seat starting workers through the policy", () => {
     for (const x of names) expect(await h.row(x)).toBeUndefined();
   });
 
-  test("a seat starts workers with a role: without one the policy would be advice", async () => {
+  test("a seat starts a plain Claude worker without a role, and any other engine only with one", async () => {
+    /* A plain Claude worker loads the person's and the project's hooks like
+       the seat itself, so it needs no envelope. OpenCode skips hooks: without
+       a role it would run with none of the person's walls. */
     await withNights();
-    for (const body of [{ kind: "claude" }, { kind: "opencode" }, { kind: "claude", yolo: true }, {}]) {
+    const plain = nm("plain");
+    expect((await h.asSeat("/agents/named/start", { name: plain, cwd: h.wt, kind: "claude", keep: true })).ok).toBe(true);
+    await h.asSeat("/agents/named/stop", { name: plain });
+    for (const body of [{ kind: "opencode" }, { kind: "codex" }]) {
       const name = nm("norole");
       const r = await h.asSeat("/agents/named/start", { name, cwd: h.wt, ...body });
       expect(r.status).toBe(400);
@@ -350,15 +363,19 @@ describe.skipIf(!have)("a seat starting workers through the policy", () => {
     expect(argv[argv.indexOf("--model") + 1]).toBe("opencode/big-pickle");
   }, 40_000);
 
-  test("a resumed turn does not outlive the ceiling: narrowed since, it is refused", async () => {
+  test("a resumed turn does not outlive the ceiling: narrowed since, it is clamped to the current one", async () => {
     await withNights({ ceiling: { commit: true } });
     const name = nm("w-wide");
-    expect((await startBuilder(name, { allow: ["commit"] })).ok).toBe(true);
+    const started = await startBuilder(name, { allow: ["commit"] });
+    expect(started.ok).toBe(true);
+    expect(started.result?.envelope).toMatchObject({ commit: true });
     await h.exited(name);
     await withNights({ ceiling: { commit: false } });
     const r = await h.asSeat("/agents/named/prompt", { name, text: "go on" });
-    expect(r.status).toBe(400);
-    expect(r.error).toContain("ceiling");
+    expect(r.ok).toBe(true);
+    expect(r.result?.clamped).toContain("commit");
+    const row = await h.row(name);
+    expect(row?.startedBy?.envelope).toMatchObject({ commit: false });
   }, 40_000);
 
   test("two prompts arriving together on a finished worker start one turn, not two", async () => {
@@ -686,6 +703,27 @@ describe.skipIf(!have)("who may reach an agent, and who may start one", () => {
     expect(rows.some((a) => a.action === "/agents/named/stop" && a.actor === actor)).toBe(true);
     expect(rows.some((a) => a.action === "/agents/named/enlist" && a.actor === actor)).toBe(true);
   }, 30_000);
+
+  test("a second start of a running tab is refused and leaves that tab's credential alone", async () => {
+    /* No policy is stored on this server, so a role start takes the route's own
+       branch (index.ts), which is where a tab's credential is minted. */
+    const own = await startHarness("wkeep");
+    try {
+      const name = nm("w-keep");
+      const start = { name, cwd: own.wt, kind: "claude", yolo: true, keep: true };
+      const first = await own.asPerson("/agents/named/start", start);
+      expect(first.ok).toBe(true);
+      const again = await own.asPerson("/agents/named/start", start);
+      expect(again.status).toBe(409);
+      /* The tab is still running, so the server must still accept the
+         credential it was handed: the refused start mints one for itself and
+         takes that one back, never the running tab's. */
+      const tabs = await own.read("/browser/agent-tabs", MACHINE);
+      expect(tabs.status).toBe(200);
+      expect(tabs.body.tabs.find((t: { name: string }) => t.name === name)?.state).toBe("ok");
+      await own.asPerson("/agents/named/stop", { name });
+    } finally { await own.stop(); }
+  }, 40_000);
 
   test("a process that presents a worker's name cannot start, stop or seat anything, nor change the wake hours", async () => {
     await withNights();

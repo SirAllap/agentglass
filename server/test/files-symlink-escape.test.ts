@@ -49,31 +49,31 @@ const files = async () => await import("../src/files.ts");
 describe("a link out of the checkout is refused", () => {
   test("reading through a linked directory", async () => {
     const { fileText } = await files();
-    const r = fileText(repo, "escape/config/token");
+    const r = await fileText(repo, "escape/config/token");
     expect(r.ok).toBe(false);
     expect(r.text).toBe("");
   });
 
   test("reading a linked file", async () => {
     const { fileText } = await files();
-    const r = fileText(repo, "leak");
+    const r = await fileText(repo, "leak");
     expect(r.ok).toBe(false);
     expect(r.text).toBe("");
   });
 
   test("a dangling link is judged by where it points, not by its name", async () => {
     const { fileText } = await files();
-    const r = fileText(repo, "dangle");
+    const r = await fileText(repo, "dangle");
     expect(r.ok).toBe(false);
     expect(r.error).toContain("outside");
   });
 
   test("listing through a link, as the path or as the root", async () => {
     const { fileTree } = await files();
-    expect(fileTree(repo, "escape").ok).toBe(false);
-    expect(fileTree(repo, "escape/config").ok).toBe(false);
-    expect(fileTree(join(repo, "escape"), "").ok).toBe(false);
-    expect(fileTree(join(repo, "escape"), "config").ok).toBe(false);
+    expect((await fileTree(repo, "escape")).ok).toBe(false);
+    expect((await fileTree(repo, "escape/config")).ok).toBe(false);
+    expect((await fileTree(join(repo, "escape"), "")).ok).toBe(false);
+    expect((await fileTree(join(repo, "escape"), "config")).ok).toBe(false);
   });
 
   test("the existence oracle says nothing about what is out there", async () => {
@@ -108,15 +108,15 @@ describe("a link out of the checkout is refused", () => {
 describe("a link that stays in the checkout still works", () => {
   test("a file linked to another file of the same repo reads", async () => {
     const { fileText } = await files();
-    const r = fileText(repo, "alias.ts");
+    const r = await fileText(repo, "alias.ts");
     expect(r.ok).toBe(true);
     expect(r.text).toBe("export const a = 1;\n");
   });
 
   test("a directory linked inside the repo lists and reads", async () => {
     const { fileTree, fileText } = await files();
-    expect(fileTree(repo, "src-link").ok).toBe(true);
-    expect(fileText(repo, "src-link/a.ts").ok).toBe(true);
+    expect((await fileTree(repo, "src-link")).ok).toBe(true);
+    expect((await fileText(repo, "src-link/a.ts")).ok).toBe(true);
   });
 });
 
@@ -154,21 +154,21 @@ describe("the app's own directories are never readable", () => {
       if (root) process.env.AGENTGLASS_ROOT = outside; else delete process.env.AGENTGLASS_ROOT;
       const { fileText, fileTree, filesExist } = await files();
       const { measureFile } = await import("../src/filemeasure.ts");
-      expect(fileText(join(cfg, "agentglass"), "token").ok).toBe(false);
-      expect(fileText(cfg, "agentglass/token").ok).toBe(false);
-      expect(fileTree(cfg, "agentglass").ok).toBe(false);
-      expect(fileText(data, "agentglass-orbit/state.json").ok).toBe(false);
-      expect(fileText(outside, "moved.db").ok).toBe(false);
-      expect(fileText(outside, "moved.db-wal").ok).toBe(false);
+      expect((await fileText(join(cfg, "agentglass"), "token")).ok).toBe(false);
+      expect((await fileText(cfg, "agentglass/token")).ok).toBe(false);
+      expect((await fileTree(cfg, "agentglass")).ok).toBe(false);
+      expect((await fileText(data, "agentglass-orbit/state.json")).ok).toBe(false);
+      expect((await fileText(outside, "moved.db")).ok).toBe(false);
+      expect((await fileText(outside, "moved.db-wal")).ok).toBe(false);
       expect(filesExist(cfg, ["agentglass/token"]).here).toEqual([]);
       expect((await measureFile(join(cfg, "agentglass", "token"))).ok).toBe(false);
       // Through a link, too.
-      expect(fileText(repo, "escape/cfg/agentglass/token").ok).toBe(false);
+      expect((await fileText(repo, "escape/cfg/agentglass/token")).ok).toBe(false);
       // The preview door too, which has its own project check.
       const { browseReal } = await import("../src/browse.ts");
       expect(browseReal(join(cfg, "agentglass", "token"))).toBeNull();
       // And the rest of that project is still a project.
-      expect(fileText(outside, "notes.txt").ok).toBe(true);
+      expect((await fileText(outside, "notes.txt")).ok).toBe(true);
     });
   }
 });
@@ -197,10 +197,10 @@ describe("repository readers do not follow a link out", () => {
 
   test("a conflict view", async () => {
     const { conflictFile, conflictBlocks } = await import("../src/gitwork.ts");
-    const f = conflictFile(git, "tracked-link");
+    const f = await conflictFile(git, "tracked-link");
     expect(f.ok).toBe(false);
     expect(JSON.stringify(f)).not.toContain("fake-token");
-    expect(conflictBlocks(git, "tracked-link").ok).toBe(false);
+    expect((await conflictBlocks(git, "tracked-link")).ok).toBe(false);
   });
 
   test("CODEOWNERS", async () => {

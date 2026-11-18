@@ -115,6 +115,31 @@ describe.skipIf(!HAVE_PY)("arguments, as pure functions", () => {
     expect((kv(["=x"]) as [unknown, string])[1]).toContain("name=value");
     expect((kv(["a=1", "a=2"]) as [unknown, string])[1]).toContain("twice");
   });
+
+  /* A seat building a reads-only inspector, or a step the person answers as
+     "You", needs the two flags the CLI has: the schema has to name them and the
+     door has to carry them, or one of the two is a field nothing reads. */
+  test("the flow role door offers reads_only and actor, and carries them to the CLI's own arguments", () => {
+    const seen = py(MCP, `
+import types
+seen = {}
+def add(root, a):
+    seen["add"] = {"id": a.id, "reads_only": a.reads_only, "actor": a.actor}
+    return {"ok": True}
+def edit(root, rid, a):
+    seen["edit"] = {"id": rid, "actor": a.actor}
+    return {"ok": True}
+g["UI"] = types.SimpleNamespace(flow_role_add=add, flow_role_edit=edit,
+    FLOW_DEFAULTS={"stage": "development", "ico": "chart", "hue": "g-general", "tools": ["read"]})
+g["run_flow_tool"]("ui_flow_role", {"verb": "add", "id": "you", "reads_only": "yes", "actor": "person"})
+g["run_flow_tool"]("ui_flow_role", {"verb": "edit", "id": "you", "actor": "none"})
+tool = [t for t in g["FLOW_TOOLS"] if t["name"] == "ui_flow_role"][0]
+print(json.dumps({"seen": seen, "props": tool["inputSchema"]["properties"]}))
+`, null) as { seen: unknown; props: Record<string, { enum?: string[] }> };
+    expect(seen.seen).toEqual({ add: { id: "you", reads_only: "yes", actor: "person" }, edit: { id: "you", actor: "none" } });
+    expect(seen.props.reads_only!.enum).toEqual(["yes", "no"]);
+    expect(seen.props.actor!.enum).toEqual(["person", "none"]);
+  });
 });
 
 describe.skipIf(!HAVE_PY)("a command, built from what the app offers", () => {
@@ -312,6 +337,15 @@ describe.skipIf(!HAVE_PY)("the MCP tool list is the registry", () => {
     for (const id of UI_ACTION_IDS) expect(src.includes(`"${id}"`), id).toBe(false);
   });
 
+  test("a flow tool asks for one project's root: the route refuses \"*\", so nothing advertises it", () => {
+    const roots = py(MCP, "print(json.dumps([t['inputSchema']['properties']['root']['description'] for t in g['FLOW_TOOLS']]))") as string[];
+    expect(roots).toHaveLength(5);
+    for (const d of roots) {
+      expect(d).not.toContain("*");
+      expect(d).toContain("absolute path");
+    }
+  });
+
   test("the route that feeds the list is the registry cut at the server's level", () => {
     const idx = readFileSync(new URL("../src/index.ts", import.meta.url).pathname, "utf8");
     const at = idx.indexOf('pathname === "/control/actions"');
@@ -431,10 +465,10 @@ describe.skipIf(!HAVE_PY)("against a running app", () => {
   });
 
   test("a read reaches the window and its answer comes back; the log names the caller and not the value", async () => {
-    const w = await window_((d) => ({ ok: true, applied: true, value: { state: { open: d.do }, untrusted: {} } }));
+    const w = await window_((d) => ({ ok: true, value: { state: { open: d.do }, untrusted: {} } }));
     const r = await cli("--as", "orbit-agent", "read", "bench");
     expect(r.code).toBe(0);
-    expect(r.out).toEqual({ ok: true, applied: true, value: { state: { open: "ui.read" }, untrusted: {} } });
+    expect(r.out).toEqual({ ok: true, value: { state: { open: "ui.read" }, untrusted: {} } });
     expect(w.seen[0]).toEqual({ cmd: "ui", do: "ui.read", args: { panel: "bench" } });
     const log = await (await fetch(base + "/actions?limit=50")).json() as { actions: { action: string; target: string }[] };
     expect(log.actions.find((a) => a.action === "/control/ui.read")?.target).toBe("as orbit-agent");
@@ -537,7 +571,7 @@ describe.skipIf(!HAVE_PY)("against a running app", () => {
     const listed = (await reply(2)).result.tools as { name: string }[];
     // The registry's doors, then the card verbs: those are a route's, not the registry's (see jira-door-routes.test.ts).
     // This server is at the level it starts with, so the verbs that change a Jira site are not on the list.
-    expect(listed.map((t) => t.name)).toEqual([...names2(L2), ...DOOR_VERBS.filter((v) => !isActing(v)).map((v) => `ui_jira_${v}`), "ui_rules_list", "ui_rules_suggest", "ui_rules_set", "ui_polaris_items", "ui_polaris_act", "ui_polaris_requests", "ui_flight_plan_list", "ui_flight_plan_show", "ui_flight_plan_run", "ui_flight_plan_go", "ui_flight_plan_no_go", "ui_flight_plan_resolve", ...["new", "list", "show", "set", "mockup", "preflight", "go", "no_go", "launch", "ask", "answer", "integrate_check", "report"].map((v) => `ui_flight_plan_plan_${v}`), "ui_flight_plan_hold", "ui_flight_plan_resume"]);
+    expect(listed.map((t) => t.name)).toEqual([...names2(L2), ...DOOR_VERBS.filter((v) => !isActing(v)).map((v) => `ui_jira_${v}`), "ui_pr_reviews", "ui_pr_comments", "ui_rules_list", "ui_rules_suggest", "ui_rules_set", "ui_flow_get", "ui_flow_set", "ui_flow_role", "ui_flow_path", "ui_flow_undo", "ui_polaris_items", "ui_polaris_github", "ui_polaris_act", "ui_polaris_requests", "ui_flight_plan_list", "ui_flight_plan_show", "ui_flight_plan_run", "ui_flight_plan_go", "ui_flight_plan_no_go", "ui_flight_plan_resolve", ...["new", "list", "show", "set", "mockup", "preflight", "go", "no_go", "launch", "ask", "answer", "integrate_check", "land", "report"].map((v) => `ui_flight_plan_plan_${v}`), "ui_flight_plan_hold", "ui_flight_plan_resume"]);
     send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "ui_settings_open", arguments: { page: "diff", row: "wrap-long-lines" } } });
     const called = await reply(3);
     expect(called.result.isError).toBeUndefined();

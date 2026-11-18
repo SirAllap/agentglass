@@ -468,7 +468,7 @@ describe("priorities and people", () => {
       expect(r.status).toBe(200);
       expect(r.json.map((t: { name: string }) => t.name)).toEqual(["Task", "Bug"]);
       expect(r.json[0].statuses.map((s: { id: string; name: string; statusCategory: { key: string } }) => [s.id, s.name, s.statusCategory.key]))
-        .toEqual([["1", "To Do", "new"], ["2", "In Progress", "indeterminate"], ["3", "In Review", "indeterminate"], ["4", "QA", "indeterminate"], ["5", "Done", "done"]]);
+        .toEqual([["1", "To Do", "new"], ["2", "In Progress", "indeterminate"], ["3", "In Review", "indeterminate"], ["4", "QA", "indeterminate"], ["5", "Done", "done"], ["6", "In staging", "done"], ["7", "Ready for deployment", "done"]]);
       expect((await call("GET", "/project/NOPE/statuses", { on })).status).toBe(404);
     }
   });
@@ -899,7 +899,7 @@ describe("boards and saved filters", () => {
 
     it(`${flavor}: a filter by id, the favourites, and one that is not visible`, async () => {
       expect((await at("GET", "/filter/10010")).json).toMatchObject({ id: "10010", name: "ORBIT board filter", jql: "project = ORBIT ORDER BY Rank ASC" });
-      expect((await at("GET", "/filter/favourite")).json.map((x: any) => x.id)).toEqual(["10020", "10030"]);
+      expect((await at("GET", "/filter/favourite")).json.map((x: any) => x.id)).toEqual(["10020", "10030", "10050"]);
       expect((await at("GET", "/filter/10040")).status).toBe(404);
       expect((await at("GET", "/filter/55555")).status).toBe(404);
     });
@@ -1023,7 +1023,7 @@ describe("what a board needs", () => {
 
     it(`${flavor}: the project's statuses are in workflow order unless the fake is told to shuffle them`, async () => {
       const ids = async (on: FakeJira) => ((await call("GET", "/project/ORBIT/statuses", { on })).json[0].statuses as any[]).map((s) => s.id);
-      expect(await ids(f)).toEqual(["1", "2", "3", "4", "5"]);
+      expect(await ids(f)).toEqual(["1", "2", "3", "4", "5", "6", "7"]);
       const shuffled = startFakeJira({ flavor, shuffleProjectStatuses: true });
       try {
         // The board's columns read 1, 2, 3, 4, 5; this is nobody's order.

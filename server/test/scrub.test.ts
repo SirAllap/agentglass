@@ -4,7 +4,7 @@
 // home paths, a payload) that must appear NOWHERE in the emitted SafeReport —
 // not just a couple of examples.
 import { describe, expect, test } from "bun:test";
-import { scrub, redactText, type SafeReport } from "../../shared/scrub.ts";
+import { scrub, redactText, dropHeadlessKeyBody, type SafeReport } from "../../shared/scrub.ts";
 
 // Everything here is a thing a real agentglass error could carry and that must
 // never leave the machine.
@@ -63,7 +63,7 @@ describe("scrub — no user data survives", () => {
     const err = new Error("JSON parse error") as Error & Record<string, unknown>;
     err.prompt = "write me a function that deletes /home/ada/code/orbit";
     err.userFile = "/home/ada/code/orbit/secret.ts";
-    err.env = { OPENAI_API_KEY: "sk-abcdef0123456789abcdef" };
+    err.env = { OPENAI_API_KEY: ["sk", "abcdef0123456789abcdef"].join("-") };
     const r = scrub({ error: err });
     assertClean(r);
     expect(r.message).toBe("JSON parse error"); // only the message came through
@@ -105,5 +105,38 @@ describe("scrub — the allowlist is exactly what it emits", () => {
     expect(redactText("at /home/ada/code/agentglass/server/src/db.ts:5")).toContain("server/src/db.ts");
     expect(redactText("opened /home/ada/code/orbit/x.ts")).not.toContain("orbit");
     expect(redactText("read/write ratio is fine")).toBe("read/write ratio is fine"); // prose slash left alone
+  });
+});
+
+import { redactText as _rt } from "../../shared/scrub.ts";
+describe("home paths and mapped addresses", () => {
+  for (const [name, p] of [
+    ["windows with spaces", "opened C:\\Users\\ada\\My Docs\\x.ts"],
+    ["/root", "opened /root/my notes/x.ts"],
+    ["wsl", "opened /mnt/c/Users/ada/My Docs/x.ts"],
+    ["/var/home", "opened /var/home/ada/my notes/x.ts"],
+  ] as const) {
+    test(name, () => {
+      const out = _rt(p);
+      expect(out).not.toMatch(/ada|Docs|notes|x\.ts/);
+    });
+  }
+  test("ipv4-mapped ipv6 is scrubbed whole", () => {
+    expect(_rt("from ::ffff:10.1.2.3 ok")).toBe("from <ip> ok");
+  });
+});
+
+describe("a key body whose head was cut off", () => {
+  test("a 5-character first fragment still starts the run and the END line goes too", () => {
+    const text = "aB3dE\n" + "A".repeat(64) + "\n" + "B".repeat(64) + "\n" + "Zm9v\n-----END OPENSSH PRIVATE KEY-----\nafter\n";
+    expect(dropHeadlessKeyBody(text)).toBe("after\n");
+  });
+  test("a text starting with a one-word line and one SHA line keeps both", () => {
+    const text = "Error\n" + "a".repeat(40) + "\nnext line\n";
+    expect(dropHeadlessKeyBody(text)).toBe(text);
+  });
+  test("a short first fragment with 2 full lines but no END line keeps the first fragment", () => {
+    const text = "Error\n" + "a".repeat(40) + "\n" + "b".repeat(40) + "\nnext\n";
+    expect(dropHeadlessKeyBody(text).startsWith("Error\n")).toBe(true);
   });
 });

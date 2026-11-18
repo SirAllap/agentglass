@@ -184,10 +184,12 @@ describe("round 8: the identity gate is the CLI's, folded, and force is not a le
 
   test("a mint cannot take the pane, and a template lane is a template tab", () => {
     /* `show` is consent, not data: a worker's mint bringing the view forward
-       pulls it off whoever is typing. A template lane is the lane twin of a
-       template tab, and both carry another container's saved cookies. */
-    expect(agentAskRefusal({ profile: own, url: "https://example.test", show: true }, own, "open")).not.toBeNull();
-    expect(agentAskRefusal({ profile: own, url: "https://example.test", show: true }, own, "newtab")).not.toBeNull();
+       pulls it off whoever is typing. It is no longer refused at the gate: the
+       relay drops it and says so (lane-pane-visible.test.ts), so it still
+       cannot take the pane. A template lane is the lane twin of a template
+       tab, and both carry another container's saved cookies. */
+    expect(agentAskRefusal({ profile: own, url: "https://example.test", show: true }, own, "open")).toBeNull();
+    expect(agentAskRefusal({ profile: own, url: "https://example.test", show: true }, own, "newtab")).toBeNull();
     expect(agentAskRefusal({ profile: own, url: "https://example.test" }, own, "open")).toBeNull();
     expect(agentAskRefusal({ action: "new", ephemeral: true }, own, "lane")).not.toBeNull();
     expect(agentAskRefusal({ action: "new" }, own, "lane")).toBeNull();
@@ -239,14 +241,18 @@ describe("round 8: the identity gate is the CLI's, folded, and force is not a le
     const src = (p: string) => readFileSync(new URL(p, import.meta.url), "utf8");
     // The identity is stamped once, in the helper both start paths mint through.
     const access = src("../src/browseraccess.ts");
-    expect(access).toContain("env.AGENTGLASS_PROFILE = name");
-    expect(access).toContain("env.AGENTGLASS_BROWSER_AS = name");
+    expect(access).toContain("env.AGENTGLASS_PROFILE = a.name");
+    expect(access).toContain("env.AGENTGLASS_BROWSER_AS = a.name");
     const policy = src("../src/agents/policystart.ts");
     expect(policy).toContain("mintBrowserCredential(turn.env");
     const route = src("../src/index.ts");
-    expect(route).toContain("mintBrowserCredential(role.env, name, wanted, role.id");
+    /* `replace: false` is the call's, not the role branch's: a start with no
+       role minted over the live tab of that name, and its refusal then cut
+       that tab's credential. */
+    expect(route).toContain("replace: false");
+    expect(route).not.toContain("{ role: role.id, base: role.env, replace: false }");
     // The resolved role id, not a second reading of the body.
-    expect(route).not.toContain("mintBrowserCredential(role.env, name, wanted, String(b.role)");
+    expect(route).not.toContain("role: String(b.role)");
     // Never by name: that cut the live worker's credential on an `exists`.
     expect(route).toContain("revokeWorkerToken(mintedTo)");
     expect(route).not.toContain("revokeWorkerTokens(name)");
@@ -306,17 +312,17 @@ describe("a credential ends when its turn does (M3, M4, S5)", () => {
     // resumeTurn: stopAgent revokes the name, so the mint follows it, and it
     // comes before the serve for the same reason as startNow.
     const resume = at("async function resumeTurn");
-    expect(at("stopAgent(a, Date.now(), true)", resume)).toBeLessThan(at("mintBrowserCredential(turn.env, a.name", resume));
-    expect(at("mintBrowserCredential(turn.env, a.name", resume)).toBeLessThan(at("await guardTurn(by.engine", resume));
+    expect(at("stopAgent(a, Date.now(), true, { endsWindow: false })", resume)).toBeLessThan(at("mintBrowserCredential(turn.env, a.name", resume));
+    expect(at("mintBrowserCredential(turn.env, a.name", resume)).toBeLessThan(at("await guardTurn(engine", resume));
     // switchEngine: same order.
     const swap = at("function switchEngine");
-    expect(at("stopAgent(a, Date.now(), true)", swap)).toBeLessThan(at("mintBrowserCredential(turn.env, a.name", swap));
+    expect(at("stopAgent(a, Date.now(), true, { endsWindow: false })", swap)).toBeLessThan(at("mintBrowserCredential(turn.env, a.name", swap));
     expect(at("mintBrowserCredential(turn.env, a.name", swap)).toBeLessThan(at("await guardTurn(next.choice.engine", swap));
   });
 
   test("the start route mints after the checks that can refuse", () => {
     const s = source("../src/index.ts");
     const at = (needle: string) => s.indexOf(needle);
-    expect(at("this role runs on ${role.kind}")).toBeLessThan(at("mintBrowserCredential(role.env, name,"));
+    expect(at("this role runs on ${role.kind}")).toBeLessThan(at("const windowEnv = agentWindowEnv({"));
   });
 });

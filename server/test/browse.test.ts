@@ -390,6 +390,14 @@ describe("the facts a preview needs", () => {
 });
 
 describe("handing a file to the desktop", () => {
+  test("a file the desktop would launch is refused, not opened", () => {
+    // Measured: without the guard both reach the opener (the default handler runs a .desktop file or an executable).
+    const d = tmp();
+    writeFileSync(join(d, "x.desktop"), "[Desktop Entry]\nExec=true\n");
+    writeFileSync(join(d, "run.sh"), "#!/bin/sh\n", { mode: 0o755 });
+    for (const f of ["x.desktop", "run.sh"]) expect(openInDesktop(join(d, f)).error).toContain("can run programs");
+  });
+
   test("outside the boundary is refused before anything is spawned", () => {
     noRootsForOpen();
     expect(openInDesktop("/etc/passwd")).toMatchObject({ ok: false });
@@ -496,12 +504,20 @@ describe("the bench editor command carries the file", () => {
 });
 
 describe("a page from disk, in a browser tab", () => {
-  test("html is a page with no scripts and no network", () => {
+  test("html is a page with no scripts and no network unless asked", () => {
     const p = pagePolicy("/home/u/Documents/sheet.HTML");
     expect(p?.mime).toContain("text/html");
-    expect(p?.csp).toContain("sandbox");
+    expect(p?.csp).toMatch(/^sandbox;/);
     expect(p?.csp).toContain("default-src 'none'");
     expect(p?.csp.includes("script-src")).toBe(false);
+  });
+
+  test("asked, its inline scripts run in an opaque sandbox, with no network", () => {
+    const p = pagePolicy("/home/u/Documents/sheet.HTML", true);
+    expect(p?.csp).toMatch(/^sandbox allow-scripts;/);
+    expect(p?.csp.includes("allow-same-origin")).toBe(false);
+    expect(p?.csp).toContain("default-src 'none'");
+    expect(p?.csp).toContain("script-src 'unsafe-inline'");
   });
 
   test("anything else keeps the preview policy", () => {

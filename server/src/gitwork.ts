@@ -8,11 +8,12 @@ import { resolve, basename, relative, dirname, sep, delimiter, join } from "node
 import { seedWorktree, type SeedReport } from "./worktreeseed.ts";
 import { statSync, readFileSync, writeFileSync, readdirSync, readlinkSync, existsSync, mkdirSync, rmSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { readdir, stat } from "node:fs/promises";
 import { git, gitAsync, safeAbs, repoRootOfAsync, currentBranch } from "./git.ts";
-import { configuredRepoDirs, panelRepoDirs, workspaceRoots, hiddenProjects, inScopeReal, staysIn } from "./config.ts";
+import { configuredRepoDirs, panelRepoDirs, workspaceRoots, hiddenProjects, inScopeReal, staysIn, envLimit } from "./config.ts";
 import { worktreeParent, gitDir } from "./worktree.ts";
 import { observe, noteResolved, noteReopened, stopFor, forget } from "./mergesession.ts";
-import { entered, backoff } from "./loopwatch.ts";
+import { backoff, entered, finished, setIntervalAs, setTimeoutAs } from "./loopwatch.ts";
 import type {
   ConflictBlock, ConflictFile, ConflictSegment, MergeSessionView, BlockChoice, MergeInfo, MergeSide,
   GitFileChange, GitBranchInfo, WorkingTree, GitRepoRef, GitActionResult, DiffHunk, GitFileStatus,
@@ -22,8 +23,12 @@ import type {
 import { reflogEnableArgv, reflogOff } from "../../shared/gitReflog.ts";
 import { protectedList, isProtectedBranch } from "../../shared/gitProtected.ts";
 import { amendRefusal } from "../../shared/gitAmend.ts";
+import { spawnOut } from "./spawnOut.ts";
+import { runChild } from "./broker/brokerRun.ts";
+import { forgetWorktreeBranch } from "./ownBranchCommit.ts";
+import { clearTask as clearFlowDone } from "./flowDone.ts";
 
-export const GIT_WRITE_ENABLED = process.env.AGENTGLASS_GIT_WRITE_DISABLED !== "1";
+export const GIT_WRITE_ENABLED = envLimit("AGENTGLASS_GIT_WRITE_DISABLED") !== "1";
 const UNTRACKED_MAX_BYTES = 512 * 1024; // don't inline-diff huge new files
 
 /**
@@ -38,12 +43,14 @@ const UNTRACKED_MAX_BYTES = 512 * 1024; // don't inline-diff huge new files
 const ROOT_TTL_MS = 60_000;
 const rootCache = new Map<string, { at: number; top: string }>();
 
-function repoRoot(root: unknown): string | null {
+/** Awaited, like every git call in this file: its first rev-parse per checkout
+ *  is a cold spawn, and a synchronous one holds the loop the terminal rides. */
+async function repoRootAsync(root: unknown): Promise<string | null> {
   const abs = safeAbs(root);
   if (!abs) return null;
   const hit = rootCache.get(abs);
   if (hit && Date.now() - hit.at < ROOT_TTL_MS) return hit.top;
-  const top = git(abs, ["rev-parse", "--show-toplevel"]);
+  const top = await gitAsync(abs, ["rev-parse", "--show-toplevel"]);
   if (top.code !== 0) return null;
   const t = top.stdout.trim();
   if (!t) return null;
@@ -247,7 +254,7 @@ async function branchInfo(root: string): Promise<GitBranchInfo> {
 
 /** Full working-tree state for one repo. */
 export async function workingTree(rootIn: unknown): Promise<WorkingTree> {
-  const root = repoRoot(rootIn);
+  const root = await repoRootAsync(rootIn);
   if (!root) {
     return { root: String(rootIn ?? ""), branch: { name: "", upstream: null, ahead: 0, behind: 0, detached: false }, staged: [], unstaged: [], clean: true, writeEnabled: GIT_WRITE_ENABLED, error: "not a git repository" };
   }
@@ -292,7 +299,7 @@ const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
  * which "what did I just commit" is asking about.
  */
 export async function lastCommitChanges(rootIn: unknown): Promise<{ subject: string; changes: GitFileChange[] }> {
-  const root = repoRoot(rootIn);
+  const root = await repoRootAsync(rootIn);
   if (!root) return { subject: "", changes: [] };
   // The last NON-MERGE commit, not HEAD: a "merge master into branch" is one
   // commit that touches every file the merge brought — 161 files on a real
@@ -468,7 +475,7 @@ async function repoRef(root: string): Promise<GitRepoRef | null> {
  * checkout, so a card elsewhere on the list is as old as that list is.
  */
 export async function repoNow(rootIn: unknown): Promise<GitRepoRef | null> {
-  const top = repoRoot(rootIn);
+  const top = await repoRootAsync(rootIn);
   return top ? repoRef(top) : null;
 }
 
@@ -633,7 +640,7 @@ export async function discoverRepos(
   const open = opts.ignoreScope ? [] : workspaceRoots();
   if (open.length) {
     // Each open project, in the order they were chosen — usually one.
-    const selves = open.map((root) => repoRoot(root));
+    const selves = await Promise.all(open.map((root) => repoRootAsync(root)));
     const found = new Set<string>();
     await Promise.all(open.map(async (root, i) => {
       const self = selves[i];
@@ -828,9 +835,9 @@ function within(repos: GitRepoRef[], dirs: string[]): GitRepoRef[] {
 
 // --- mutating ops (all gated + path-validated) -------------------------------
 
-function guard(root: string): GitActionResult | null {
+async function guard(root: string): Promise<GitActionResult | null> {
   if (!GIT_WRITE_ENABLED) return { ok: false, error: "git write is disabled (AGENTGLASS_GIT_WRITE_DISABLED=1)" };
-  if (!repoRoot(root)) return { ok: false, error: "not a git repository root" };
+  if (!await repoRootAsync(root)) return { ok: false, error: "not a git repository root" };
   // A cockpit opened for one project should not be able to commit, stage or
   // discard in a different one. The message names the way out rather than just
   // refusing: scoping to a parent folder is the supported multi-repo setup.
@@ -856,6 +863,28 @@ function validRels(root: string, rels: unknown): string[] | null {
 let onGitChange: (() => void) | null = null;
 export function setGitChangeHook(fn: (() => void) | null): void { onGitChange = fn; }
 
+/**
+ * One git write at a time per checkout. The git calls here used to block the
+ * thread, and that alone kept two writes from interleaving: a stage could not
+ * start while a commit was halfway through its steps. Awaited, they can, and
+ * the second one trips on index.lock or reads the first one's half-done state.
+ * The write route takes a turn here; reads do not wait.
+ */
+const writeTurns = new Map<string, Promise<void>>();
+// Keyed per checkout, not per shared .git, so one slow push never holds other worktrees.
+// Accepted race: a branch-delete on the main checkout vs a worktree-remove in a worktree.
+export async function gitWriteTurn(root: string): Promise<() => void> {
+  // The resolved checkout, so `/repo`, `/repo/sub` and a symlink spelling share one turn.
+  const key = resolve((await repoRootAsync(root)) ?? (root || "."));
+  const prev = writeTurns.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const mine = new Promise<void>((r) => { release = r; });
+  const tail = prev.then(() => mine);
+  writeTurns.set(key, tail);
+  await prev;
+  return () => { release(); if (writeTurns.get(key) === tail) writeTurns.delete(key); };
+}
+
 function afterMutation(root: string): void {
   // Every mutating path goes through here, so this is the one place that has to
   // know the merged-set may have moved — rather than each of the twenty callers
@@ -877,74 +906,84 @@ function afterMutation(root: string): void {
   try { onGitChange?.(); } catch { /* a broken listener must not fail the op */ }
 }
 
-function run(root: string, args: string[]): GitActionResult {
-  const r = git(root, args);
+/*
+ * Run a git action, waiting for git beside the server loop. Measured on the
+ * installed app, a `git pull` from the Git panel held the loop 3,220 ms
+ * ("server stall ms=3220 last=git pull"), and every terminal waited with it.
+ * The short local reads went the same way after: ~108 blocking calls in this
+ * file added up to the same stall, one panel poll at a time.
+ */
+async function runAsync(root: string, args: string[]): Promise<GitActionResult> {
+  return answer(args, await gitAsync(root, args), root);
+}
+
+function answer(args: string[], r: { code: number; stdout: string; stderr: string }, root: string): GitActionResult {
   afterMutation(root);
   if (r.code !== 0) return { ok: false, error: r.stderr.trim() || r.stdout.trim() || `git ${args[0]} failed`, output: (r.stdout + r.stderr).trim() };
   return { ok: true, output: (r.stdout + r.stderr).trim() };
 }
 
-export function stage(rootIn: string, rels: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function stage(rootIn: string, rels: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const v = validRels(root, rels); if (!v || !v.length) return { ok: false, error: "no valid paths" };
-  return run(root, ["add", "-A", "--", ...v]);
+  return await runAsync(root, ["add", "-A", "--", ...v]);
 }
 
-export function unstage(rootIn: string, rels: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function unstage(rootIn: string, rels: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const v = validRels(root, rels); if (!v || !v.length) return { ok: false, error: "no valid paths" };
   // `restore --staged` handles the no-HEAD (empty repo) case gracefully.
-  return run(root, ["reset", "-q", "--", ...v]);
+  return await runAsync(root, ["reset", "-q", "--", ...v]);
 }
 
-export function stageAll(rootIn: string): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
-  return run(root, ["add", "-A"]);
+export async function stageAll(rootIn: string): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
+  return await runAsync(root, ["add", "-A"]);
 }
 
-export function unstageAll(rootIn: string): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
-  return run(root, ["reset", "-q", "HEAD", "--"]);
+export async function unstageAll(rootIn: string): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
+  return await runAsync(root, ["reset", "-q", "HEAD", "--"]);
 }
 
 /** Discard working-tree changes for tracked paths, and delete untracked ones. */
-export function discard(rootIn: string, rels: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function discard(rootIn: string, rels: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const v = validRels(root, rels); if (!v || !v.length) return { ok: false, error: "no valid paths" };
   // Split tracked vs untracked; restore the former, clean the latter.
   const tracked: string[] = [], others: string[] = [];
   for (const rel of v) {
-    const known = git(root, ["ls-files", "--error-unmatch", "--", rel]).code === 0;
+    const known = (await gitAsync(root, ["ls-files", "--error-unmatch", "--", rel])).code === 0;
     (known ? tracked : others).push(rel);
   }
   if (tracked.length) {
-    const r = run(root, ["restore", "--staged", "--worktree", "--", ...tracked]);
+    const r = await runAsync(root, ["restore", "--staged", "--worktree", "--", ...tracked]);
     if (!r.ok) return r;
   }
   if (others.length) {
-    const r = run(root, ["clean", "-fd", "--", ...others]);
+    const r = await runAsync(root, ["clean", "-fd", "--", ...others]);
     if (!r.ok) return r;
   }
   return { ok: true, output: `discarded ${v.length} path(s)` };
 }
 
 /** Commit whatever is currently staged (the index). */
-export function commitStaged(rootIn: string, title: string, body: string): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function commitStaged(rootIn: string, title: string, body: string): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   if (!title.trim()) return { ok: false, error: "commit title required" };
-  const staged = git(root, ["diff", "--cached", "--name-only"]).stdout.trim();
+  const staged = (await gitAsync(root, ["diff", "--cached", "--name-only"])).stdout.trim();
   if (!staged) return { ok: false, error: "nothing staged to commit" };
   const args = ["commit", "-m", title.trim()];
   if (body && body.trim()) args.push("-m", body.trim());
-  const r = run(root, args);
+  const r = await runAsync(root, args);
   if (!r.ok) return r;
-  const sha = git(root, ["rev-parse", "--short", "HEAD"]).stdout.trim();
+  const sha = (await gitAsync(root, ["rev-parse", "--short", "HEAD"])).stdout.trim();
   return { ok: true, output: `committed ${sha}` };
 }
 
@@ -954,55 +993,55 @@ export function commitStaged(rootIn: string, title: string, body: string): GitAc
  *  the repo's own config says on top of it. Stored as a comma-joined config
  *  value (`git config agx.protectedbranches`), so a terminal user can see and
  *  edit it with plain git, and it travels with the repo, not the panel. */
-export function protectedBranches(rootIn: unknown): { ok: boolean; branches?: string[]; error?: string } {
-  const root = repoRoot(rootIn);
+export async function protectedBranches(rootIn: unknown): Promise<{ ok: boolean; branches?: string[]; error?: string }> {
+  const root = await repoRootAsync(rootIn);
   if (!root) return { ok: false, error: "not a git repository root" };
-  return { ok: true, branches: protectedList(git(root, ["config", "--get", "agx.protectedbranches"]).stdout) };
+  return { ok: true, branches: protectedList((await gitAsync(root, ["config", "--get", "agx.protectedbranches"])).stdout) };
 }
 
 /** Replace the protected list with exactly these names (main/master always
  *  survive — unprotecting the default trunk is the user shooting their own
  *  foot, and they can do it in a terminal if they really mean it). */
-export function setProtectedBranches(rootIn: unknown, namesIn: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function setProtectedBranches(rootIn: unknown, namesIn: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const names = Array.isArray(namesIn)
     ? namesIn.filter((n): n is string => typeof n === "string" && validRef(n.trim()))
     : [];
   const joined = [...new Set(["main", "master", ...names.map((n) => n.trim())])].join(",");
-  return run(root, ["config", "agx.protectedbranches", joined]);
+  return await runAsync(root, ["config", "agx.protectedbranches", joined]);
 }
 
 /** Is this branch on the protected list? (List read fresh each call — the
  *  guard is a config read, not a cache that can go stale.) */
-function isProtected(root: string, branch: string): boolean {
-  return isProtectedBranch(protectedBranches(root).branches ?? [], branch);
+async function isProtected(root: string, branch: string): Promise<boolean> {
+  return isProtectedBranch((await protectedBranches(root)).branches ?? [], branch);
 }
 
-export function push(rootIn: string, optsIn?: { force?: boolean }): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function push(rootIn: string, optsIn?: { force?: boolean }): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const force = optsIn?.force === true;
   // The refspec is explicit: a bare `git push` reads push.default and can
   // resolve to nothing ("src refspec main does not match any") or to more
   // than one branch. "Push the current branch to its own upstream" is the
   // only reading this panel ever means.
-  const branch = git(root, ["symbolic-ref", "--short", "HEAD"]).stdout.trim();
-  const remote = git(root, ["config", "--get", `branch.${branch}.remote`]).stdout.trim() || "origin";
+  const branch = (await gitAsync(root, ["symbolic-ref", "--short", "HEAD"])).stdout.trim();
+  const remote = (await gitAsync(root, ["config", "--get", `branch.${branch}.remote`])).stdout.trim() || "origin";
   if (!branch) return { ok: false, error: "not on a branch (detached HEAD) — nothing to push" };
   // A force-push from the panel is ALWAYS --force-with-lease: it refuses to
   // overwrite a remote that has moved since the last fetch, which is the
   // only thing that protects the work of whoever else shares the branch.
   // Plain `--force` is what "a colleague's push got clobbered" is made of,
   // and no panel button is worth that.
-  return run(root, force ? ["push", "--force-with-lease", remote, branch] : ["push", remote, branch]);
+  return runAsync(root, force ? ["push", "--force-with-lease", remote, branch] : ["push", remote, branch]);
 }
-export function pull(rootIn: string): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function pull(rootIn: string): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   // Dirty tree + --ff-only fails; auto-stash makes the pull go through and
   // restores the changes after, or leaves them safely stashed on conflict.
-  return withAutoStash(root, () => run(root, ["pull", "--ff-only"]));
+  return withAutoStashAsync(root, () => runAsync(root, ["pull", "--ff-only"]));
 }
 /**
  * Keep ahead/behind honest, in the background.
@@ -1047,8 +1086,87 @@ export const FETCH_ARGV = ["fetch", "--prune", "--atomic"] as const;
  * auto-fetch swallows stderr, so such a repository silently never refreshed.
  * Atomic per remote keeps the all-or-nothing guarantee on each one.
  */
-export function fetchArgvs(root: string): string[][] {
-  return git(root, ["remote"]).stdout.split("\n").map((r) => r.trim()).filter(Boolean).map((r) => [...FETCH_ARGV, r]);
+const argvsOf = (remotes: string): string[][] =>
+  remotes.split("\n").map((r) => r.trim()).filter(Boolean).map((r) => [...FETCH_ARGV, r]);
+export async function fetchArgvs(root: string): Promise<string[][]> {
+  return argvsOf((await gitAsync(root, ["remote"])).stdout);
+}
+/** The auto-fetch's own read of the remotes: it runs on a timer over the open
+ *  projects, and a synchronous spawn there freezes the terminal for as long as
+ *  git takes. Same argv, awaited. */
+async function fetchArgvsAsync(root: string): Promise<string[][]> {
+  // The remote list lives in the config file, and in this worktree's own
+  // config.worktree when extensions.worktreeConfig is on; while both are the
+  // same, so is the list. Not watched: a file pulled in by include.path and
+  // ~/.gitconfig. A remote added there is seen on the next .git/config change
+  // or a server restart.
+  const common = commonDirOf(root);
+  const own = gitDir(root);
+  const stamp = common && own
+    ? `${await stampOf(join(common, "config"))}|${await stampOf(join(own, "config.worktree"))}`
+    : null;
+  const kept = remotesSeen.get(root);
+  if (stamp && kept?.stamp === stamp) return argvsOf(kept.out);
+  const r = await gitAsync(root, ["remote"]);
+  if (stamp && r.code === 0) remotesSeen.set(root, { stamp, out: r.stdout });
+  return argvsOf(r.stdout);
+}
+
+/*
+ * The auto-fetch ran four git spawns per open project a minute: `git remote`,
+ * a for-each-ref before the fetch, the fetch, a for-each-ref after. Each spawn
+ * forks the ~1 GB server, and under memory pressure the fork alone held the
+ * main thread in kernel_clone for 2.4 s (audit 17). Only the fetch can learn
+ * something new; the other three are answered from disk when nothing moved.
+ * Measured with a logging git, 5 projects, one window, idle: 22.5 spawns/min.
+ */
+const remotesSeen = new Map<string, { stamp: string; out: string }>();
+const refsSeen = new Map<string, { stamp: string; refs: string }>();
+/** The repository's common `.git`, where a linked worktree's refs and config live. Read from disk, no git. */
+function commonDirOf(root: string): string | null {
+  const g = gitDir(root);
+  if (!g) return null;
+  try { return resolve(g, readFileSync(join(g, "commondir"), "utf8").trim()); } catch { return g; }
+}
+const stampOf = async (p: string): Promise<string> => {
+  try { const st = await stat(p); return `${st.mtimeMs}:${st.size}`; } catch { return "-"; }
+};
+/**
+ * What moves when a remote-tracking ref moves: git writes a loose ref as a lock
+ * file renamed over the old one (a new inode and mtime), deletes the file when
+ * the ref goes, rewrites packed-refs whole, and appends to reftable's list.
+ * Files, not directories: a fetch that changes nothing still makes and drops
+ * lock files, so the directory's mtime moves every minute (measured), while
+ * every ref file keeps its inode and mtime.
+ */
+const fileStamp = async (p: string): Promise<string> => {
+  try { const st = await stat(p); return `${st.ino}:${st.mtimeMs}:${st.size}`; } catch { return "-"; }
+};
+async function remoteRefsStamp(common: string): Promise<string> {
+  const parts = [await fileStamp(join(common, "packed-refs")), await fileStamp(join(common, "reftable", "tables.list"))];
+  const walk = async (d: string): Promise<void> => {
+    let ents;
+    try { ents = await readdir(d, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      const p = join(d, e.name);
+      if (e.isDirectory()) await walk(p);
+      else parts.push(`${p} ${await fileStamp(p)}`);
+    }
+  };
+  await walk(join(common, "refs", "remotes"));
+  return parts.join("\n");
+}
+/** `remoteRefsAsync`, but a stamp that has not moved since the last read answers from memory. */
+async function remoteRefsKept(root: string): Promise<string> {
+  const common = commonDirOf(root);
+  if (!common) return remoteRefsAsync(root);
+  // Stamp first, read second: a ref that moves in between makes the next stamp differ, never a stale hit.
+  const stamp = await remoteRefsStamp(common);
+  const kept = refsSeen.get(root);
+  if (kept?.stamp === stamp) return kept.refs;
+  const refs = await remoteRefsAsync(root);
+  refsSeen.set(root, { stamp, refs });
+  return refs;
 }
 let fetching = false;
 /**
@@ -1080,17 +1198,31 @@ async function autoFetchOnce(): Promise<void> {
   // once a minute is exactly the cost this feature must not have. Several open
   // projects are fetched one after another, never at once: the ceiling below
   // is per fetch, and a slow remote should not have company.
-  const roots = workspaceRoots().filter((r) => repoRoot(r));
-  if (!roots.length) return;
+  const open = workspaceRoots();
+  const tops = await Promise.all(open.map((r) => repoRootAsync(r)));
+  // One fetch per repository, not per open checkout: every worktree of a repo
+  // shares its remotes and remote refs, so a second fetch learns nothing. Two
+  // open paths in one repo, or ten worktrees, were each fetched every minute
+  // (36 fetches in 2 min measured on the live app).
+  const byRepo = new Map<string, string[]>();
+  for (let i = 0; i < open.length; i++) {
+    if (!tops[i]) continue;
+    const top = String(tops[i]);
+    const key = commonDirOf(top) ?? top;
+    const at = byRepo.get(key);
+    if (at) at.push(open[i]!); else byRepo.set(key, [open[i]!]);
+  }
+  if (!byRepo.size) return;
   fetching = true;
   try {
-    for (const root of roots) await fetchOne(root);
+    for (const roots of byRepo.values()) await fetchOne(roots[0]!, roots.slice(1));
   } finally {
     fetching = false;
   }
 }
 
-async function fetchOne(root: string): Promise<void> {
+/** `also`: other open checkouts of the same repository; what the fetch moved is theirs too. */
+async function fetchOne(root: string, also: string[] = []): Promise<void> {
   try {
     // What the remote refs point at, before and after. Invalidating on every
     // tick regardless is what broke squash detection outright: the sweep that
@@ -1099,8 +1231,8 @@ async function fetchOne(root: string): Promise<void> {
     // each time — so on a 38-branch repo the sweep NEVER finished, the panel
     // sat on "still checking for squash merges…" permanently, and not one
     // squash-merged branch was ever recognised. Most fetches change nothing.
-    const refsOf = () => remoteRefs(root);
-    const before = refsOf();
+    const refsOf = () => remoteRefsKept(root);
+    const before = await refsOf();
     // --atomic, and this is the important word in the line.
     //
     // Without it, `git fetch` updates remote-tracking refs one at a time, and a
@@ -1118,11 +1250,12 @@ async function fetchOne(root: string): Promise<void> {
     // transaction: all of them or none, whatever happens to the process.
     // One process per remote: --atomic does not combine with --all (see fetchArgvs).
     const reached: string[] = []; // a remote that failed was not fetched, whatever the tooltip says
-    for (const argv of fetchArgvs(root)) {
-      const proc = Bun.spawn(["git", "-C", root, ...argv, "--quiet"], {
-        stdout: "ignore",
-        stderr: "ignore",
+    for (const argv of await fetchArgvsAsync(root)) {
+      // Started by the spawn broker (broker/brokerRun.ts): a fork of the big server was the freeze.
+      const run = runChild(["git", "-C", root, ...argv, "--quiet"], {
         env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS_REQUIRE: "never" },
+        timeoutMs: AUTO_FETCH_CEILING_MS,
+        maxBytes: 64 * 1024,
       });
       // A backstop for a wedged process, not a routine deadline.
       //
@@ -1135,16 +1268,16 @@ async function fetchOne(root: string): Promise<void> {
       //
       // SIGTERM rather than a kill: it gives git the chance to unwind its ref
       // transaction rather than being shot between two writes.
-      const timer = setTimeout(() => { try { proc.kill("SIGTERM"); } catch { /* already gone */ } }, AUTO_FETCH_CEILING_MS);
-      await proc.exited;
-      clearTimeout(timer);
-      if (proc.exitCode === 0) reached.push(argv[argv.length - 1]!);
+      // The limit above ends it with SIGTERM, in the broker or here.
+      if ((await run).code === 0) reached.push(argv[argv.length - 1]!);
     }
     // A fetch that MOVED origin/* changes what "merged into the trunk" means.
     // One that moved nothing changes nothing, and must not throw away work.
-    const after = refsOf();
-    if (after !== before) invalidateMerged(root);
-    if (reached.length) recordFetch(root, reached, newRefs(before, after));
+    const after = await refsOf();
+    for (const r of [root, ...also]) {
+      if (after !== before) invalidateMerged(r);
+      if (reached.length) recordFetch(r, reached, newRefs(before, after));
+    }
   } catch {
     // Offline, no remote, no credentials — all ordinary. The counts simply stay
     // where they were, which is the same as the old behaviour.
@@ -1153,7 +1286,12 @@ async function fetchOne(root: string): Promise<void> {
 
 export function startAutoFetch(): void {
   if (AUTO_FETCH_MS <= 0) return; // AGENTGLASS_AUTOFETCH_SECONDS=0 turns it off
-  setInterval(() => { entered("auto-fetch"); void autoFetchOnce(); }, AUTO_FETCH_MS).unref?.();
+  setIntervalAs("git auto-fetch sweep", () => {
+    // Finished at once: the label covers only the synchronous start of the pass. Left open, any stall in the
+    // next seconds was filed under "auto-fetch" whoever caused it.
+    const mark = entered("auto-fetch");
+    try { void autoFetchOnce(); } finally { finished(mark); }
+  }, AUTO_FETCH_MS).unref?.();
   autoFetchOnce(); // don't make the first minute a lie
 }
 
@@ -1178,8 +1316,8 @@ function recordFetch(root: string, remotes: string[], news: number): void {
     : { at: now, remotes, news });
   while (lastFetches.size > LAST_FETCH_CAP) lastFetches.delete(lastFetches.keys().next().value as string);
 }
-export function lastFetch(rootIn: unknown): GitLastFetch | null {
-  const root = repoRoot(rootIn);
+export async function lastFetch(rootIn: unknown): Promise<GitLastFetch | null> {
+  const root = await repoRootAsync(rootIn);
   return (root && lastFetches.get(root)) || null;
 }
 /** Remote refs that exist after but not before: new branches and moved tips. origin/HEAD is a symref that moves with its branch, so it is not a second one. */
@@ -1187,14 +1325,17 @@ const newRefs = (before: string, after: string): number => {
   const seen = new Set(before.split("\n"));
   return after.split("\n").filter((l) => l && !seen.has(l) && !l.endsWith("/HEAD")).length;
 };
-const remoteRefs = (root: string) => git(root, ["for-each-ref", "--format=%(objectname) %(refname)", "refs/remotes"]).stdout;
+const remoteRefs = async (root: string) => (await gitAsync(root, ["for-each-ref", "--format=%(objectname) %(refname)", "refs/remotes"])).stdout;
+/** Awaited twin for the auto-fetch, which runs this twice a tick on the timer. */
+const remoteRefsAsync = async (root: string) =>
+  (await gitAsync(root, ["for-each-ref", "--format=%(objectname) %(refname)", "refs/remotes"])).stdout;
 
-export function fetch(rootIn: string, remote?: string): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function fetch(rootIn: string, remote?: string): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   // With no remote, --atomic answers "can only be used when fetching from one remote".
-  if (!git(root, ["remote"]).stdout.trim()) return { ok: false, error: "no remote is configured for this repository" };
-  let argvs = fetchArgvs(root);
+  if (!(await gitAsync(root, ["remote"])).stdout.trim()) return { ok: false, error: "no remote is configured for this repository" };
+  let argvs = await fetchArgvs(root);
   if (remote) {
     // A name is taken only if `git remote` lists it, which also keeps a name
     // that starts with `-` from ever reaching git as an option.
@@ -1202,9 +1343,9 @@ export function fetch(rootIn: string, remote?: string): GitActionResult {
     if (!argvs.length) return { ok: false, error: `no such remote: ${remote}` };
   }
   let last: GitActionResult = { ok: true } as GitActionResult;
-  const before = remoteRefs(root);
-  for (const argv of argvs) { last = run(root, argv); if (!last.ok) return last; }
-  recordFetch(root, argvs.map((a) => a[a.length - 1]), newRefs(before, remoteRefs(root)));
+  const before = await remoteRefs(root);
+  for (const argv of argvs) { last = await runAsync(root, argv); if (!last.ok) return last; }
+  recordFetch(root, argvs.map((a) => a[a.length - 1]), newRefs(before, await remoteRefs(root)));
   return last;
 }
 
@@ -1214,7 +1355,7 @@ export function fetch(rootIn: string, remote?: string): GitActionResult {
  * together: 21 spawns once per opening of the picker, not on a poll.
  */
 export async function rangeCounts(rootIn: unknown): Promise<GitRangeCounts> {
-  const root = repoRoot(rootIn);
+  const root = await repoRootAsync(rootIn);
   if (!root) return { tags: [], root: 0 };
   const count = async (range: string) => {
     const r = await gitAsync(root, ["rev-list", "--count", "--end-of-options", range]);
@@ -1423,8 +1564,8 @@ const probeRunning = new Set<string>();
 const probeMemo = new Map<string, Map<string, string>>();
 
 /** Every local branch and the commit it points at, newest first — one spawn. */
-function branchTips(root: string): Map<string, string> {
-  const r = git(root, ["for-each-ref", "--sort=-committerdate", "refs/heads", `--format=%(refname:short)${US}%(objectname)`]);
+async function branchTips(root: string): Promise<Map<string, string>> {
+  const r = await gitAsync(root, ["for-each-ref", "--sort=-committerdate", "refs/heads", `--format=%(refname:short)${US}%(objectname)`]);
   const out = new Map<string, string>();
   for (const line of r.stdout.split("\n")) {
     if (!line) continue;
@@ -1437,10 +1578,10 @@ function branchTips(root: string): Map<string, string> {
 /** Re-apply the sweep's verdicts to a freshly built ancestry set, forgetting
  *  any whose branch has since moved or gone. Costs a spawn, and only when there
  *  is something to re-apply. */
-function applyMemo(root: string, key: string, set: Set<string>): void {
+async function applyMemo(root: string, key: string, set: Set<string>): Promise<void> {
   const memo = probeMemo.get(key);
   if (!memo?.size) return;
-  const tips = branchTips(root);
+  const tips = await branchTips(root);
   for (const [name, sha] of memo) {
     if (tips.get(name) === sha) set.add(name);
     else memo.delete(name);
@@ -1483,7 +1624,7 @@ async function mergedInto(root: string, ref: string): Promise<Set<string>> {
    * epic branch was reported "not merged" because only the trunk was asked.
    */
   for (const name of await mergedAnywhere(root, ref)) set.add(name);
-  applyMemo(root, key, set);
+  await applyMemo(root, key, set);
   mergedCache.set(key, { at: Date.now(), set });
   sweepProbes(root, ref, key, set);
   return set;
@@ -1600,7 +1741,7 @@ function sweepProbes(root: string, ref: string, key: string, set: Set<string>): 
   };
   const step = async () => {
     try {
-      if (!started) { all = [...branchTips(root)]; started = true; }
+      if (!started) { all = [...await branchTips(root)]; started = true; }
       while (idx < all.length) {
         const [name, sha] = all[idx++]!;
         if (set.has(name)) continue;
@@ -1617,7 +1758,7 @@ function sweepProbes(root: string, ref: string, key: string, set: Set<string>): 
           if (!memo) probeMemo.set(key, (memo = new Map()));
           memo.set(name, sha);
         }
-        setTimeout(() => { void step(); }, 0); // one probe per turn of the loop
+        setTimeoutAs("git probe step", () => { void step(); }, 0); // one probe per turn of the loop
         return;
       }
       probedAt.set(key, Date.now());
@@ -1627,7 +1768,7 @@ function sweepProbes(root: string, ref: string, key: string, set: Set<string>): 
       finish();
     }
   };
-  setTimeout(() => { void step(); }, 0);
+  setTimeoutAs("git probe step", () => { void step(); }, 0);
 }
 
 /**
@@ -1699,7 +1840,7 @@ export function invalidateMerged(root?: string): void {
 
 
 export async function branches(rootIn: unknown): Promise<{ current: string; branches: GitBranch[]; trunk: string | null; checking: boolean }> {
-  const root = repoRoot(rootIn);
+  const root = await repoRootAsync(rootIn);
   if (!root) return { current: "", branches: [], trunk: null, checking: false };
   const base = `%(refname:short)${US}%(HEAD)${US}%(upstream:short)${US}%(upstream:track)${US}%(committerdate:relative)${US}%(contents:subject)${US}%(authorname)`;
   // The ref list and the trunk lookup are independent; run them together and
@@ -1747,40 +1888,40 @@ export async function branches(rootIn: unknown): Promise<{ current: string; bran
 }
 
 // lazygit-style branch ops
-export function mergeBranch(rootIn: string, name: string): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function mergeBranch(rootIn: string, name: string): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   if (!validRef(name)) return { ok: false, error: "invalid branch name" };
-  return run(root, ["merge", "--no-edit", name]);
+  return await runAsync(root, ["merge", "--no-edit", name]);
 }
-export function rebaseBranch(rootIn: string, name: string): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function rebaseBranch(rootIn: string, name: string): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   if (!validRef(name)) return { ok: false, error: "invalid branch name" };
-  return run(root, ["rebase", name]);
+  return await runAsync(root, ["rebase", name]);
 }
-export function renameBranch(rootIn: string, name: string, to: string): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function renameBranch(rootIn: string, name: string, to: string): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   if (!validRef(name) || !validRef(to)) return { ok: false, error: "invalid branch name" };
-  if (isProtected(root, name)) return { ok: false, error: `${name} is protected — unprotect it in the Branches tab to rename it` };
-  return run(root, ["branch", "-m", name, to]);
+  if (await isProtected(root, name)) return { ok: false, error: `${name} is protected — unprotect it in the Branches tab to rename it` };
+  return await runAsync(root, ["branch", "-m", name, to]);
 }
 /** Hard-reset a protected branch: refused unless `force` — the escape hatch
  *  the reflog's own "reset here" uses (that path already double-confirms). */
-export function resetTo(rootIn: string, ref: string, mode: "soft" | "mixed" | "hard", force = false): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function resetTo(rootIn: string, ref: string, mode: "soft" | "mixed" | "hard", force = false): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   if (!validHash(ref) && !validRef(ref)) return { ok: false, error: "invalid ref" };
   if (!["soft", "mixed", "hard"].includes(mode)) return { ok: false, error: "invalid reset mode" };
   // Hard resetting a protected branch rewrites its history — the same act a
   // force-push then ships. The guardrails refuse the act outright; an
   // unprotect in the Branches tab is the way around it, not a louder confirm.
   if (mode === "hard" && !force) {
-    const branch = git(root, ["symbolic-ref", "--short", "HEAD"]).stdout.trim();
-    if (isProtected(root, branch)) return { ok: false, error: `${branch} is protected — unprotect it in the Branches tab to hard-reset it` };
+    const branch = (await gitAsync(root, ["symbolic-ref", "--short", "HEAD"])).stdout.trim();
+    if (await isProtected(root, branch)) return { ok: false, error: `${branch} is protected — unprotect it in the Branches tab to hard-reset it` };
   }
-  return run(root, ["reset", `--${mode}`, ref]);
+  return await runAsync(root, ["reset", `--${mode}`, ref]);
 }
 
 /**
@@ -1797,9 +1938,9 @@ export function resetTo(rootIn: string, ref: string, mode: "soft" | "mixed" | "h
  * not begin a second sequencer run, and the message names the state so the
  * panel can point at the banner instead of making the user guess.
  */
-export function cherryPick(rootIn: string, hashesIn: unknown, noCommitIn?: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function cherryPick(rootIn: string, hashesIn: unknown, noCommitIn?: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const state = treeState(root);
   if (state !== "clean") return { ok: false, error: `this checkout is mid-${state.replace(/ing$/, "")} — finish or abandon it before cherry-picking` };
   // Hashes only, never refs: the sequencer resolves each argument itself, and
@@ -1813,32 +1954,32 @@ export function cherryPick(rootIn: string, hashesIn: unknown, noCommitIn?: unkno
   // panel sends them that way already. Sorting here would only create a
   // second place to get the direction wrong.
   args.push(...hashes);
-  return withAutoStash(root, () => {
-    const r = run(root, args);
+  return await withAutoStash(root, async () => {
+    const r = await runAsync(root, args);
     // An empty pick (already on the branch) leaves the sequencer open with
     // nothing to resolve; skipping it is the only way out, so do it here.
-    if (!r.ok && /empty|allow-empty/.test(r.output ?? "") && treeState(root) === "cherry-picking" && !git(root, ["diff", "--name-only", "--diff-filter=U"]).stdout.trim())
-      git(root, ["cherry-pick", "--skip"]);
+    if (!r.ok && /empty|allow-empty/.test(r.output ?? "") && treeState(root) === "cherry-picking" && !(await gitAsync(root, ["diff", "--name-only", "--diff-filter=U"])).stdout.trim())
+      await gitAsync(root, ["cherry-pick", "--skip"]);
     return r;
   });
 }
 
 /** Finish a paused cherry-pick once every conflict is resolved. */
-export function cherryPickContinue(rootIn: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function cherryPickContinue(rootIn: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   if (treeState(root) !== "cherry-picking") return { ok: false, error: "nothing to continue" };
   // The shared path already knows the editor trap: plain `--continue` can open
   // an editor when a conflict was resolved, so it passes `-c core.editor=true`.
-  return mergeContinue(root);
+  return await mergeContinue(root);
 }
 
 /** Abandon the paused cherry-pick and put the tree back. */
-export function cherryPickAbort(rootIn: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function cherryPickAbort(rootIn: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   if (treeState(root) !== "cherry-picking") return { ok: false, error: "nothing to abort" };
-  return mergeAbort(root);
+  return await mergeAbort(root);
 }
 
 /**
@@ -1850,38 +1991,38 @@ export function cherryPickAbort(rootIn: unknown): GitActionResult {
  * `--no-edit` on the way in too: the panel has no message editor for a revert,
  * and an interactive editor opening out of a web request is a hang.
  */
-export function revertCommit(rootIn: unknown, hashIn: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function revertCommit(rootIn: unknown, hashIn: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const hash = typeof hashIn === "string" && validHash(hashIn) ? hashIn : "";
   if (!hash) return { ok: false, error: "no valid commit hash to revert" };
   const state = treeState(root);
   if (state !== "clean") return { ok: false, error: `this checkout is mid-${state.replace(/ing$/, "")} — finish or abandon it before reverting` };
-  if (git(root, ["rev-list", "--parents", "-n1", hash]).stdout.trim().split(" ").length > 2)
+  if ((await gitAsync(root, ["rev-list", "--parents", "-n1", hash])).stdout.trim().split(" ").length > 2)
     return { ok: false, error: `${hash.slice(0, 7)} is a merge commit — reverting one needs a choice of parent, which this panel does not offer yet` };
-  return run(root, ["-c", "core.editor=true", "revert", "--no-edit", hash]);
+  return await runAsync(root, ["-c", "core.editor=true", "revert", "--no-edit", hash]);
 }
 
-function amendFacts(root: string) {
-  const empty = git(root, ["rev-parse", "--verify", "-q", "HEAD"]).code !== 0;
+async function amendFacts(root: string) {
+  const empty = (await gitAsync(root, ["rev-parse", "--verify", "-q", "HEAD"])).code !== 0;
   return {
     empty,
     state: treeState(root),
-    detached: git(root, ["symbolic-ref", "-q", "HEAD"]).code !== 0,
+    detached: (await gitAsync(root, ["symbolic-ref", "-q", "HEAD"])).code !== 0,
     // `-r --contains` also lists origin/HEAD, so a commit the remote has is never missed.
-    onRemote: !empty && git(root, ["branch", "-r", "--contains", "HEAD"]).stdout.trim() !== "",
+    onRemote: !empty && (await gitAsync(root, ["branch", "-r", "--contains", "HEAD"])).stdout.trim() !== "",
   };
 }
 
 /** What the amend box needs: the tip's message to prefill, and the refusal if any. */
-export function amendInfo(rootIn: unknown): GitActionResult & { hash?: string; title?: string; body?: string; refusal?: string } {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
-  const refusal = amendRefusal(amendFacts(root));
+export async function amendInfo(rootIn: unknown): Promise<GitActionResult & { hash?: string; title?: string; body?: string; refusal?: string }> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
+  const refusal = amendRefusal(await amendFacts(root));
   if (refusal) return { ok: true, refusal };
-  const hash = git(root, ["rev-parse", "--short", "HEAD"]).stdout.trim();
-  const title = git(root, ["log", "-1", "--format=%s"]).stdout.trim();
-  const body = git(root, ["log", "-1", "--format=%b"]).stdout.trim();
+  const hash = (await gitAsync(root, ["rev-parse", "--short", "HEAD"])).stdout.trim();
+  const title = (await gitAsync(root, ["log", "-1", "--format=%s"])).stdout.trim();
+  const body = (await gitAsync(root, ["log", "-1", "--format=%b"])).stdout.trim();
   return { ok: true, hash, title, body };
 }
 
@@ -1892,14 +2033,14 @@ export function amendInfo(rootIn: unknown): GitActionResult & { hash?: string; t
  * be clean besides what is staged — `--amend` with stray unstaged changes would
  * silently leave them out of the commit they look like they belong to.
  */
-export function amendCommit(rootIn: unknown, titleIn: unknown, bodyIn: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function amendCommit(rootIn: unknown, titleIn: unknown, bodyIn: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const title = typeof titleIn === "string" ? titleIn.trim() : "";
   if (!title) return { ok: false, error: "commit title required" };
-  const no = amendRefusal(amendFacts(root)); if (no) return { ok: false, error: no };
-  const staged = git(root, ["diff", "--cached", "--name-only"]).stdout.trim();
-  const stray = git(root, ["diff", "--name-only"]).stdout.trim();
+  const no = amendRefusal(await amendFacts(root)); if (no) return { ok: false, error: no };
+  const staged = (await gitAsync(root, ["diff", "--cached", "--name-only"])).stdout.trim();
+  const stray = (await gitAsync(root, ["diff", "--name-only"])).stdout.trim();
   if (!staged && !stray) return { ok: false, error: "nothing staged to amend" };
   // Checked before the "nothing staged" branch above can hide it: a tree with
   // only unstaged changes must not be told to stage before being told it is
@@ -1908,7 +2049,7 @@ export function amendCommit(rootIn: unknown, titleIn: unknown, bodyIn: unknown):
   const args = ["commit", "--amend", "-m", title];
   const body = typeof bodyIn === "string" ? bodyIn.trim() : "";
   if (body) args.push("-m", body);
-  return run(root, args);
+  return await runAsync(root, args);
 }
 
 /**
@@ -1920,34 +2061,34 @@ export function amendCommit(rootIn: unknown, titleIn: unknown, bodyIn: unknown):
  * whole range is verified contiguous BEFORE anything moves, so a gap cannot
  * silently swallow commits that were never picked.
  */
-export function squashCommits(rootIn: unknown, oldestIn: unknown, newestIn: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function squashCommits(rootIn: unknown, oldestIn: unknown, newestIn: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const oldest = typeof oldestIn === "string" && validHash(oldestIn) ? oldestIn : "";
   const newest = typeof newestIn === "string" && validHash(newestIn) ? newestIn : "";
   if (!oldest || !newest) return { ok: false, error: "no valid commit hashes to squash" };
   const state = treeState(root);
   if (state !== "clean") return { ok: false, error: `this checkout is mid-${state.replace(/ing$/, "")} — finish or abandon it before squashing` };
   // The picked range must sit at the tip of this branch and be contiguous.
-  if (git(root, ["merge-base", "--is-ancestor", newest, "HEAD"]).code !== 0)
+  if ((await gitAsync(root, ["merge-base", "--is-ancestor", newest, "HEAD"])).code !== 0)
     return { ok: false, error: `${newest} is not in this branch's history — squash only commits on the current branch` };
-  const count = git(root, ["rev-list", "--count", `${oldest}^..${newest}`]).stdout.trim();
-  const span = git(root, ["rev-list", "--count", `${oldest}^..HEAD`]).stdout.trim();
+  const count = (await gitAsync(root, ["rev-list", "--count", `${oldest}^..${newest}`])).stdout.trim();
+  const span = (await gitAsync(root, ["rev-list", "--count", `${oldest}^..HEAD`])).stdout.trim();
   if (count !== span) return { ok: false, error: `${oldest}..${newest} is not a contiguous run to HEAD — pick a consecutive span ending at the tip` };
-  const msg = git(root, ["log", "-1", "--format=%s", newest]).stdout.trim();
+  const msg = (await gitAsync(root, ["log", "-1", "--format=%s", newest])).stdout.trim();
   // The title is the newest subject, not git's `squash!` autosquash marker (that
   // prefix is for `rebase --autosquash` to consume, and nothing here does); the
   // folded subjects ride in the body so no message is dropped.
-  const folded = git(root, ["log", "--reverse", "--format=- %s", `${oldest}^..${newest}`]).stdout.trim();
-  const headBefore = git(root, ["rev-parse", "HEAD"]).stdout.trim();
+  const folded = (await gitAsync(root, ["log", "--reverse", "--format=- %s", `${oldest}^..${newest}`])).stdout.trim();
+  const headBefore = (await gitAsync(root, ["rev-parse", "HEAD"])).stdout.trim();
   // Two steps, each observable: the soft reset stops with the tree intact and
   // everything the run touched staged, so a failure cannot lose work — the
   // index is the squash's contents either way.
-  const reset = run(root, ["reset", "--soft", `${oldest}^`]);
+  const reset = await runAsync(root, ["reset", "--soft", `${oldest}^`]);
   if (!reset.ok) return reset;
-  const commit = run(root, ["commit", "-m", msg, "-m", folded]);
+  const commit = await runAsync(root, ["commit", "-m", msg, "-m", folded]);
   if (!commit.ok) return { ...commit, error: `${commit.error} — the changes are staged at ${oldest}^; commit them to finish the squash` };
-  const undone = git(root, ["rev-parse", "ORIG_HEAD"]).stdout.trim();
+  const undone = (await gitAsync(root, ["rev-parse", "ORIG_HEAD"])).stdout.trim();
   if (undone !== headBefore) {
     // Should not happen: reset --soft writes ORIG_HEAD. Refuse silently losing
     // the tip rather than claim a clean squash.
@@ -1970,29 +2111,29 @@ export interface RebaseStep {
 /** The commits `base..HEAD`, oldest first — the list an interactive rebase
  *  starts from. Read-only; the caller edits it and passes it back to
  *  `runRebase`. */
-export function rebaseSteps(rootIn: unknown, baseIn: unknown): { ok: boolean; steps?: RebaseStep[]; unpushed?: number; error?: string } {
-  const root = repoRoot(rootIn);
+export async function rebaseSteps(rootIn: unknown, baseIn: unknown): Promise<{ ok: boolean; steps?: RebaseStep[]; unpushed?: number; error?: string }> {
+  const root = await repoRootAsync(rootIn);
   if (!root) return { ok: false, error: "not a git repository root" };
   const base = typeof baseIn === "string" && validRef(baseIn) ? baseIn : "";
   if (!base) return { ok: false, error: "invalid base ref" };
-  if (git(root, ["merge-base", "--is-ancestor", base, "HEAD"]).code !== 0)
+  if ((await gitAsync(root, ["merge-base", "--is-ancestor", base, "HEAD"])).code !== 0)
     return { ok: false, error: `${base} is not an ancestor of HEAD — pick the point this branch forked` };
-  const out = git(root, ["log", "--reverse", "--format=%H%x1f%s", `${base}..HEAD`]).stdout;
+  const out = (await gitAsync(root, ["log", "--reverse", "--format=%H%x1f%s", `${base}..HEAD`])).stdout;
   const steps: RebaseStep[] = [];
   for (const line of out.split("\n")) {
     const [hash, subject] = line.split(US);
     if (hash && subject) steps.push({ action: "pick", hash, subject });
   }
   if (!steps.length) return { ok: false, error: `nothing to rebase — ${base} is already an ancestor with no commits in between` };
-  return { ok: true, steps, unpushed: unpushedCount(root) };
+  return { ok: true, steps, unpushed: await unpushedCount(root) };
 }
 
 /** Commits on HEAD that no remote has: against the upstream when there is one,
  *  else against every remote-tracking ref. The step list counts commits above
  *  the BASE, which says nothing about what was ever pushed. */
-function unpushedCount(root: string): number {
-  const up = git(root, ["rev-list", "--count", "@{upstream}..HEAD"]);
-  const r = up.code === 0 ? up : git(root, ["rev-list", "--count", "HEAD", "--not", "--remotes"]);
+async function unpushedCount(root: string): Promise<number> {
+  const up = await gitAsync(root, ["rev-list", "--count", "@{upstream}..HEAD"]);
+  const r = up.code === 0 ? up : await gitAsync(root, ["rev-list", "--count", "HEAD", "--not", "--remotes"]);
   const n = Number(r.stdout.trim());
   return r.code === 0 && Number.isInteger(n) ? n : 0;
 }
@@ -2013,9 +2154,9 @@ const shq = (s: string) => `'${s.replace(/\\/g, "\\\\").replace(/'/g, "'\\''")}'
  * the list exactly once, and every hash must be one of them — otherwise a
  * stale or tampered list could drop or invent commits silently.
  */
-export function runRebase(rootIn: unknown, baseIn: unknown, stepsIn: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function runRebase(rootIn: unknown, baseIn: unknown, stepsIn: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const base = typeof baseIn === "string" && validRef(baseIn) ? baseIn : "";
   if (!base) return { ok: false, error: "invalid base ref" };
   const state = treeState(root);
@@ -2040,14 +2181,14 @@ export function runRebase(rootIn: unknown, baseIn: unknown, stepsIn: unknown): G
     }
   }
   // Every commit between base and HEAD is accounted for, exactly once.
-  const span = git(root, ["rev-list", "--format=%H", base + "..HEAD"]).stdout.split("\n").filter((l) => /^[0-9a-f]{40}$/.test(l));
+  const span = (await gitAsync(root, ["rev-list", "--format=%H", base + "..HEAD"])).stdout.split("\n").filter((l) => /^[0-9a-f]{40}$/.test(l));
   const spanSet = new Set(span);
   for (const h of seen) if (!spanSet.has(h)) return { ok: false, error: `commit ${h.slice(0, 7)} is not in ${base}..HEAD — the plan no longer matches the branch` };
   if (span.some((h) => !seen.has(h))) return { ok: false, error: "the plan is missing commits from the branch — every commit must appear exactly once" };
 
   // `pick` cannot replay a merge commit; git only finds out after it has begun,
   // and leaves a rebase with nothing done. Refuse before starting.
-  if (git(root, ["rev-list", "--merges", "--count", base + "..HEAD"]).stdout.trim() !== "0")
+  if ((await gitAsync(root, ["rev-list", "--merges", "--count", base + "..HEAD"])).stdout.trim() !== "0")
     return { ok: false, error: `${base.slice(0, 7)}..HEAD holds a merge commit, which an interactive rebase cannot replay — pick a base above the merge` };
 
   // A temp dir owned by this call: the todo file is consumed by the sequence
@@ -2056,7 +2197,7 @@ export function runRebase(rootIn: unknown, baseIn: unknown, stepsIn: unknown): G
   const todoFile = join(td, "todo");
   writeFileSync(todoFile, todo.join("\n") + "\n");
   try {
-    return withAutoStash(root, () => run(root, ["-c", "core.editor=true", "-c", `sequence.editor=cp ${todoFile}`, "rebase", "-i", base]));
+    return await withAutoStash(root, async () => await runAsync(root, ["-c", "core.editor=true", "-c", `sequence.editor=cp ${todoFile}`, "rebase", "-i", base]));
   } finally {
     try { rmSync(td, { recursive: true, force: true }); } catch { /* best effort */ }
   }
@@ -2076,7 +2217,7 @@ export function runRebase(rootIn: unknown, baseIn: unknown, stepsIn: unknown): G
  * a click away for the times you genuinely want the whole graph.
  */
 export async function logGraph(rootIn: unknown, limit = 400, scope: "head" | "all" = "head"): Promise<{ lines: GitGraphLine[]; scope: "head" | "all"; branch: string }> {
-  const root = repoRoot(rootIn);
+  const root = await repoRootAsync(rootIn);
   if (!root) return { lines: [], scope, branch: "" };
   const n = Math.max(1, Math.min(2000, limit | 0));
   // NUL can't go in an argv string (execve truncates at it), so use the same
@@ -2390,9 +2531,9 @@ async function sameBranch(root: string, a: string, b: string): Promise<boolean> 
   return !!x && x === await short(b);
 }
 
-export function setBase(rootIn: unknown, branch: unknown, base: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function setBase(rootIn: unknown, branch: unknown, base: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   if (typeof branch !== "string" || !validRef(branch)) return { ok: false, error: "invalid branch" };
   if (base === null || base === "") {
     const key = `branch.${branch}.agentglassbase`;
@@ -2401,11 +2542,11 @@ export function setBase(rootIn: unknown, branch: unknown, base: unknown): GitAct
     // turn "work it out for me" into an error toast on every branch that never
     // had an override — which is most of them. Nothing goes stale by skipping
     // the write either: with no override, the base already was the inferred one.
-    if (!git(root, ["config", "--get", key]).stdout.trim()) return { ok: true };
-    return run(root, ["config", "--unset", key]);
+    if (!(await gitAsync(root, ["config", "--get", key])).stdout.trim()) return { ok: true };
+    return await runAsync(root, ["config", "--unset", key]);
   }
   if (typeof base !== "string" || !validRef(base)) return { ok: false, error: "invalid base" };
-  return run(root, ["config", `branch.${branch}.agentglassbase`, base]);
+  return await runAsync(root, ["config", `branch.${branch}.agentglassbase`, base]);
 }
 
 /** How many commits the base has that this branch does not. Cached: it moves
@@ -2437,8 +2578,8 @@ export async function behindBase(root: string, branch: string, base: string): Pr
  * branch you are not on, and a worktree per card means every branch is on one.
  */
 export async function syncFromBase(dirIn: unknown, baseIn?: unknown): Promise<GitActionResult> {
-  const dir = repoRoot(dirIn); if (!dir) return { ok: false, error: "not a git repository root" };
-  const g = guard(dir); if (g) return g;
+  const dir = await repoRootAsync(dirIn); if (!dir) return { ok: false, error: "not a git repository root" };
+  const g = await guard(dir); if (g) return g;
   const branch = await currentBranch(dir);
   if (!branch || branch === "(detached)") return { ok: false, error: "this checkout is not on a branch" };
   const base = typeof baseIn === "string" && baseIn ? baseIn : await baseOf(dir, branch);
@@ -2447,8 +2588,8 @@ export async function syncFromBase(dirIn: unknown, baseIn?: unknown): Promise<Gi
   // Refuse on a dirty tree rather than merging over uncommitted work: git would
   // usually stop anyway, but "usually" is not a promise worth making with
   // somebody's changes.
-  if (git(dir, ["status", "--porcelain"]).stdout.trim()) return { ok: false, error: "commit or stash your changes first" };
-  return run(dir, ["merge", "--no-edit", base]);
+  if ((await gitAsync(dir, ["status", "--porcelain"])).stdout.trim()) return { ok: false, error: "commit or stash your changes first" };
+  return await runAsync(dir, ["merge", "--no-edit", base]);
 }
 
 /**
@@ -2459,10 +2600,10 @@ export async function syncFromBase(dirIn: unknown, baseIn?: unknown): Promise<Gi
  * working-tree lists showed them alongside ordinary edits with no way to tell,
  * which is how you end up committing a file with `<<<<<<<` in it.
  */
-export function conflicts(rootIn: unknown): { ok: boolean; state: GitTreeState; files: string[]; error?: string } {
-  const root = repoRoot(rootIn);
+export async function conflicts(rootIn: unknown): Promise<{ ok: boolean; state: GitTreeState; files: string[]; error?: string }> {
+  const root = await repoRootAsync(rootIn);
   if (!root) return { ok: false, state: "clean", files: [], error: "not a git repository root" };
-  const r = git(root, ["diff", "--name-only", "--diff-filter=U", "-z"]);
+  const r = await gitAsync(root, ["diff", "--name-only", "--diff-filter=U", "-z"]);
   const files = r.stdout.split("\u0000").filter(Boolean).map((rel) => join(root, rel));
   return { ok: true, state: treeState(root), files };
 }
@@ -2470,42 +2611,42 @@ export function conflicts(rootIn: unknown): { ok: boolean; state: GitTreeState; 
 /** Take one side of a conflicted file wholesale, and stage it — the two
  *  resolutions that need no editor and cover most conflicts (a lockfile, a
  *  generated migration, a file the other branch deleted). */
-export function resolveWith(rootIn: unknown, relIn: unknown, side: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function resolveWith(rootIn: unknown, relIn: unknown, side: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   if (side !== "ours" && side !== "theirs") return { ok: false, error: "side must be ours or theirs" };
   const rels = validRels(root, Array.isArray(relIn) ? relIn : [relIn]);
   if (!rels?.length) return { ok: false, error: "invalid path" };
-  const co = run(root, ["checkout", `--${side}`, "--", ...rels]);
+  const co = await runAsync(root, ["checkout", `--${side}`, "--", ...rels]);
   if (!co.ok) return co;
-  const added = run(root, ["add", "--", ...rels]);
-  if (added.ok) noteResolved(root, sessionOp(mergeInfo(root)), rels);
+  const added = await runAsync(root, ["add", "--", ...rels]);
+  if (added.ok) noteResolved(root, sessionOp(await mergeInfo(root)), rels);
   return added;
 }
 
 /** Abandon the merge and put the tree back exactly as it was. The only move
  *  that is always safe, and the one someone reaches for first. */
-export function mergeAbort(rootIn: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function mergeAbort(rootIn: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const state = treeState(root);
-  if (state === "rebasing") return run(root, ["rebase", "--abort"]);
-  if (state === "cherry-picking") return run(root, ["cherry-pick", "--abort"]);
-  if (state === "reverting") return run(root, ["revert", "--abort"]);
+  if (state === "rebasing") return await runAsync(root, ["rebase", "--abort"]);
+  if (state === "cherry-picking") return await runAsync(root, ["cherry-pick", "--abort"]);
+  if (state === "reverting") return await runAsync(root, ["revert", "--abort"]);
   // A bisect is not a merge, and the fallthrough treated it as one: this ran
   // `git merge --abort` and came back with "There is no merge to abort", so a
   // repository left mid-bisect was a dead end on every surface — treeState()
   // named the state, the header showed it, and nothing could leave it.
-  if (state === "bisecting") return run(root, ["bisect", "reset"]);
-  return run(root, ["merge", "--abort"]);
+  if (state === "bisecting") return await runAsync(root, ["bisect", "reset"]);
+  return await runAsync(root, ["merge", "--abort"]);
 }
 
 /** Finish once every conflict is staged. Refuses while any remain rather than
  *  letting git fail with a message nobody reads. */
-export function mergeContinue(rootIn: unknown, anywayIn?: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
-  const left = git(root, ["diff", "--name-only", "--diff-filter=U"]).stdout.trim();
+export async function mergeContinue(rootIn: unknown, anywayIn?: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
+  const left = (await gitAsync(root, ["diff", "--name-only", "--diff-filter=U"])).stdout.trim();
   if (left) return { ok: false, error: `still conflicted: ${left.split("\n").length} file(s) to resolve` };
 
   /*
@@ -2520,7 +2661,7 @@ export function mergeContinue(rootIn: unknown, anywayIn?: unknown): GitActionRes
   // Read before continuing: MERGE_HEAD and rebase-merge/ are gone the instant
   // it succeeds, so neither the stop nor which commit it was can be named
   // afterwards.
-  const before = mergeInfo(root);
+  const before = await mergeInfo(root);
   const op = sessionOp(before);
   const step0 = stepLabel(before);
   if (anywayIn !== true) {
@@ -2535,11 +2676,11 @@ export function mergeContinue(rootIn: unknown, anywayIn?: unknown): GitActionRes
   }
 
   const state = treeState(root);
-  const r = state === "rebasing" ? run(root, ["-c", "core.editor=true", "rebase", "--continue"])
-    : state === "cherry-picking" ? run(root, ["-c", "core.editor=true", "cherry-pick", "--continue"])
-    : state === "reverting" ? run(root, ["-c", "core.editor=true", "revert", "--continue"])
+  const r = state === "rebasing" ? await runAsync(root, ["-c", "core.editor=true", "rebase", "--continue"])
+    : state === "cherry-picking" ? await runAsync(root, ["-c", "core.editor=true", "cherry-pick", "--continue"])
+    : state === "reverting" ? await runAsync(root, ["-c", "core.editor=true", "revert", "--continue"])
     // `merge --continue` needs an editor; --no-edit keeps git's own message.
-    : run(root, ["commit", "--no-edit"]);
+    : await runAsync(root, ["commit", "--no-edit"]);
 
   /*
    * A rebase that stops again has not failed — it has advanced.
@@ -2560,10 +2701,10 @@ export function mergeContinue(rootIn: unknown, anywayIn?: unknown): GitActionRes
   // A resolution that leaves the tree as it was ("Keep ours" on a revert):
   // git refuses to commit nothing and stays mid-operation. Skip the step.
   if (!r.ok && /nothing to commit|now empty/.test(r.output ?? "") && (state === "reverting" || state === "cherry-picking")) {
-    const sk = run(root, ["-c", "core.editor=true", state === "reverting" ? "revert" : "cherry-pick", "--skip"]);
+    const sk = await runAsync(root, ["-c", "core.editor=true", state === "reverting" ? "revert" : "cherry-pick", "--skip"]);
     if (sk.ok && treeState(root) === "clean") { forget(root, op); return { ok: true, output: "the resolution left the branch unchanged — nothing to commit, step skipped" }; }
   }
-  const after = mergeInfo(root);
+  const after = await mergeInfo(root);
   const moved = sessionOp(after) !== op;
   if (r.ok || moved) {
     forget(root, op);
@@ -2594,16 +2735,16 @@ function stepLabel(i: MergeInfo): string | null {
  * Remotes first: on a repo where every branch is a ticket, the thing you merge
  * from is nearly always upstream.
  */
-export function baseCandidates(rootIn: unknown): { ok: boolean; refs: { name: string; remote: boolean }[] } {
-  const root = repoRoot(rootIn);
+export async function baseCandidates(rootIn: unknown): Promise<{ ok: boolean; refs: { name: string; remote: boolean }[] }> {
+  const root = await repoRootAsync(rootIn);
   if (!root) return { ok: false, refs: [] };
-  const read = (ref: string) =>
-    git(root, ["for-each-ref", "--sort=-committerdate", ref, "--format=%(refname:short)"])
+  const read = async (ref: string) =>
+    (await gitAsync(root, ["for-each-ref", "--sort=-committerdate", ref, "--format=%(refname:short)"]))
       .stdout.split("\n").filter(Boolean);
   // Drop `origin/HEAD` and the bare `origin` symref: neither is a branch you
   // merge from, and the bare one reads as if it were.
-  const remotes = read("refs/remotes").filter((n) => !n.endsWith("/HEAD") && n.includes("/"));
-  const locals = read("refs/heads");
+  const remotes = (await read("refs/remotes")).filter((n) => !n.endsWith("/HEAD") && n.includes("/"));
+  const locals = await read("refs/heads");
   const seen = new Set<string>();
   const refs: { name: string; remote: boolean }[] = [];
   for (const n of remotes) if (!seen.has(n)) { seen.add(n); refs.push({ name: n, remote: true }); }
@@ -2683,8 +2824,8 @@ async function undoTreeState(root: string): Promise<{ dirty: boolean; clash: str
 
 /** Put the branch back exactly as it stood before its last merge. */
 export async function undoMerge(rootIn: unknown): Promise<GitActionResult> {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   // Re-checked here, never trusted from the client: this is a hard reset, and
   // these conditions are the only thing making it safe.
   const info = await branchInfo(root);
@@ -2700,7 +2841,7 @@ export async function undoMerge(rootIn: unknown): Promise<GitActionResult> {
     }
     return { ok: false, error: "nothing to undo — the tip is not an unpushed merge, or the tree is dirty" };
   }
-  return run(root, ["reset", "--hard", "HEAD^1"]);
+  return await runAsync(root, ["reset", "--hard", "HEAD^1"]);
 }
 
 /** Parse `git worktree list --porcelain` — no base branch, no rev-list, no
@@ -2733,8 +2874,8 @@ export function parseWorktreeList(stdout: string, root: string): GitWorktree[] {
 /** Synchronous — for the mutating guards that already run off any poll (a
  *  worktree add/remove, a rescue), where one spawn on the loop is not the cost
  *  and the caller is a one-shot. */
-function worktreeList(root: string): GitWorktree[] {
-  return parseWorktreeList(git(root, ["worktree", "list", "--porcelain"]).stdout, root);
+async function worktreeList(root: string): Promise<GitWorktree[]> {
+  return parseWorktreeList((await gitAsync(root, ["worktree", "list", "--porcelain"])).stdout, root);
 }
 
 /** Awaited twin — for the poll paths (`worktrees()`, the scoped repo picker).
@@ -2746,7 +2887,7 @@ async function worktreeListAsync(root: string): Promise<GitWorktree[]> {
 }
 
 export async function worktrees(rootIn: unknown): Promise<GitWorktree[]> {
-  const root = repoRoot(rootIn);
+  const root = await repoRootAsync(rootIn);
   if (!root) return [];
   const out = await worktreeListAsync(root);
   // The trunk, a branch's base and its behind-count are shared by the whole
@@ -2889,9 +3030,9 @@ function worktreeSpot(root: string, abs: string): boolean {
  * "start a new card from where I am" and wrong for "give me a checkout of
  * somebody's branch", and those are the two things this call is used for.
  */
-export function addWorktree(rootIn: string, pathIn: unknown, branch: string, newBranch: boolean, startPoint?: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function addWorktree(rootIn: string, pathIn: unknown, branch: string, newBranch: boolean, startPoint?: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const abs = safeAbs(pathIn); if (!abs) return { ok: false, error: "invalid path" };
   if (!worktreeSpot(root, abs)) {
     return { ok: false, error: `worktree path must be ${basename(root)}-<name> beside the repo, or under ${basename(root)}/.worktrees/` };
@@ -2900,10 +3041,10 @@ export function addWorktree(rootIn: string, pathIn: unknown, branch: string, new
   let from: string[] = [];
   if (startPoint != null && startPoint !== "") {
     if (typeof startPoint !== "string" || !validRef(startPoint)) return { ok: false, error: "invalid start point" };
-    if (git(root, ["rev-parse", "--verify", "--quiet", startPoint]).code !== 0) return { ok: false, error: `${startPoint} does not exist here — fetch first` };
+    if ((await gitAsync(root, ["rev-parse", "--verify", "--quiet", startPoint])).code !== 0) return { ok: false, error: `${startPoint} does not exist here — fetch first` };
     from = [startPoint];
   }
-  const r = run(root, newBranch ? ["worktree", "add", "-b", branch, abs, ...from] : ["worktree", "add", abs, branch]);
+  const r = await runAsync(root, newBranch ? ["worktree", "add", "-b", branch, abs, ...from] : ["worktree", "add", abs, branch]);
   // Record what the new branch was cut from, so a later "sync" merges from its
   // REAL base instead of falling back to the trunk. Without this a card stacked
   // on another feature branch (base = ORBIT-…, not master) synced against master
@@ -2913,7 +3054,7 @@ export function addWorktree(rootIn: string, pathIn: unknown, branch: string, new
   // any, is already recorded. `branch.*` config is shared across worktrees, so
   // writing it from the main root is visible from the new checkout.
   if (r.ok && newBranch && from.length) {
-    run(root, ["config", `branch.${branch}.agentglassbase`, from[0]!]);
+    await runAsync(root, ["config", `branch.${branch}.agentglassbase`, from[0]!]);
   }
   if (r.ok) seedFrom(root, abs);
   return r;
@@ -2922,6 +3063,9 @@ export function addWorktree(rootIn: string, pathIn: unknown, branch: string, new
 /** What git does not carry into a new worktree, from the repository's own
  *  `.worktreeinclude` — see worktreeseed.ts. Tracked paths are git's. */
 export function seedFrom(root: string, worktree: string): SeedReport {
+  // Still a blocking git per include path: seedWorktree asks through a sync
+  // predicate, and its own `git check-ignore` beside it is sync too. Making
+  // the seed async is worktreeseed's change, not this one.
   return seedWorktree(root, worktree, (rel) => git(root, ["ls-files", "--error-unmatch", "--", rel]).code === 0);
 }
 /**
@@ -2954,14 +3098,14 @@ export interface ConflictPrep {
   error?: string;
 }
 
-export function prepareConflictMerge(rootIn: string, branch: string, base: string): ConflictPrep {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return { ok: false, error: g.error };
+export async function prepareConflictMerge(rootIn: string, branch: string, base: string): Promise<ConflictPrep> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return { ok: false, error: g.error };
   if (!validRef(branch) || !validRef(base)) return { ok: false, error: "invalid branch name" };
 
   // Fresh refs first: merging a base the checkout last saw a week ago produces
   // a conflict that is nobody's, or hides one that is real.
-  for (const argv of fetchArgvs(root)) git(root, argv);
+  for (const argv of await fetchArgvs(root)) await gitAsync(root, argv);
 
   /*
    * The checkout that already has this branch, when there is one.
@@ -2975,50 +3119,50 @@ export function prepareConflictMerge(rootIn: string, branch: string, base: strin
    * thing this whole design exists to avoid, so a dirty one is refused with the
    * two words that fix it.
    */
-  const held = worktreeList(root).find((w) => w.branch === branch && w.path !== root);
+  const held = (await worktreeList(root)).find((w) => w.branch === branch && w.path !== root);
   if (held) {
     // Our own half-done merge first. Conflict markers ARE uncommitted changes,
     // so checking "is it dirty" before this refuses on the work the first
     // button just did — which it did, and the tests are why this order exists.
-    const standing = unmerged(held.path);
+    const standing = await unmerged(held.path);
     if (standing.length) return { ok: true, root: held.path, conflicts: standing };
     // Then somebody else's. Not left to git: it only refuses when the merge
     // would touch the same files, so unrelated work in that checkout would have
     // been merged around silently — a branch quietly given a merge commit in a
     // tree somebody is using.
-    const dirty = git(held.path, ["status", "--porcelain"]).stdout.trim();
+    const dirty = (await gitAsync(held.path, ["status", "--porcelain"])).stdout.trim();
     if (dirty) {
       return { ok: false, error: `${branch} is checked out at ${held.path}, and it has uncommitted changes — commit or stash them there and press again` };
     }
-    return mergeInto(held.path, base);
+    return await mergeInto(held.path, base);
   }
 
   // Beside the repo, named for the pull request's branch — the same shape the
   // worktree guard already allows, so this cannot write outside it.
   const abs = `${root}-conflict-${branch.replace(/[^A-Za-z0-9._-]+/g, "-").slice(0, 60)}`;
-  const already = worktreeList(root).find((w) => w.path === abs);
+  const already = (await worktreeList(root)).find((w) => w.path === abs);
   if (!already) {
-    const local = git(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).code === 0;
+    const local = (await gitAsync(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0;
     // Adopt the local branch when there is one; otherwise cut it from the
     // remote. `-b` against an existing branch is an error, and adopting a
     // branch that only exists on the remote is not possible.
     // A branch neither here nor fetched is a fact about the checkout, not a
     // git failure to quote: say what to do about it.
-    if (!local && git(root, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`]).code !== 0) {
+    if (!local && (await gitAsync(root, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`])).code !== 0) {
       return { ok: false, error: `${branch} is not in this checkout — it is not fetched from origin. Fetch it (git fetch origin ${branch}) and press again` };
     }
     const add = local
-      ? run(root, ["worktree", "add", abs, branch])
-      : run(root, ["worktree", "add", "-b", branch, abs, `origin/${branch}`]);
+      ? await runAsync(root, ["worktree", "add", abs, branch])
+      : await runAsync(root, ["worktree", "add", "-b", branch, abs, `origin/${branch}`]);
     if (!add.ok) return { ok: false, error: add.error ?? "could not cut a worktree" };
     seedFrom(root, abs);
   }
-  return mergeInto(abs, base);
+  return await mergeInto(abs, base);
 }
 
 /** The files git has marked as unmerged — the resolver's whole input. */
-function unmerged(where: string): string[] {
-  return git(where, ["diff", "--name-only", "--diff-filter=U"]).stdout
+async function unmerged(where: string): Promise<string[]> {
+  return (await gitAsync(where, ["diff", "--name-only", "--diff-filter=U"])).stdout
     .split("\n").map((l) => l.trim()).filter(Boolean);
 }
 
@@ -3029,14 +3173,14 @@ function unmerged(where: string): string[] {
  * `origin/<base>` rather than `<base>` because the local copy of the base is
  * exactly what tends to be stale.
  */
-function mergeInto(where: string, base: string): ConflictPrep {
+async function mergeInto(where: string, base: string): Promise<ConflictPrep> {
   // Already mid-merge from a previous press: report where it stands rather than
   // running `git merge` again, which refuses and says nothing useful.
-  const standing = unmerged(where);
+  const standing = await unmerged(where);
   if (standing.length) return { ok: true, root: where, conflicts: standing };
 
-  const merged = git(where, ["merge", "--no-edit", `origin/${base}`]);
-  const conflicts = unmerged(where);
+  const merged = await gitAsync(where, ["merge", "--no-edit", `origin/${base}`]);
+  const conflicts = await unmerged(where);
   if (conflicts.length) return { ok: true, root: where, conflicts };
   if (merged.code === 0) return { ok: true, root: where, conflicts: [], clean: true };
   // Merged badly and left nothing marked: not a conflict, something else — a
@@ -3180,8 +3324,8 @@ export function foreignOwned(dir: string): BlockedByOwner | null {
 /** The repository's main working checkout — where a rescued file belongs.
  *  `git worktree list` puts it first; that is its documented order, and it is
  *  the one entry whose `.git` is a real directory rather than a file. */
-function mainCheckout(root: string): string {
-  return worktreeList(root)[0]?.path ?? root;
+async function mainCheckout(root: string): Promise<string> {
+  return (await worktreeList(root))[0]?.path ?? root;
 }
 
 /** Bytes under `p`, recursive, bounded. -1 when it can't be read at all. */
@@ -3254,12 +3398,12 @@ async function compareToMain(main: string, worktree: string, rel: string): Promi
  * difference between 403 lines and 3356 on this repo, and 100ms of work.
  */
 export async function worktreeLeftovers(rootIn: string, pathIn: unknown): Promise<WorktreeLeftovers> {
-  const root = repoRoot(rootIn);
+  const root = await repoRootAsync(rootIn);
   const abs = safeAbs(pathIn);
   if (!root || !abs) return { path: String(pathIn ?? ""), entries: [], more: 0, skipped: 0, identical: 0, error: "invalid path" };
   // Only a path this repo actually owns as a worktree, so this can't be used to
   // enumerate arbitrary directories through the API.
-  if (!worktreeList(root).some((w) => w.path === abs)) {
+  if (!(await worktreeList(root)).some((w) => w.path === abs)) {
     return { path: abs, entries: [], more: 0, skipped: 0, identical: 0, error: "not a worktree of this repository" };
   }
   const r = await gitAsync(abs, ["-c", "core.quotePath=false", "status", "--porcelain=v1", "--ignored"]);
@@ -3321,7 +3465,7 @@ export async function worktreeLeftovers(rootIn: string, pathIn: unknown): Promis
   // checkout already have at each of these paths? A worktree is a second copy
   // of the repo, so most of this list is a duplicate of a file sitting safely
   // in the main checkout — on the repo this was built for, 20 of 34.
-  const main = mainCheckout(root);
+  const main = await mainCheckout(root);
   const entries: LeftoverEntry[] = [];
   let identical = 0;
   // Work git would have stopped for goes first: if there is any, the answer is
@@ -3347,6 +3491,9 @@ export async function worktreeLeftovers(rootIn: string, pathIn: unknown): Promis
   };
 }
 
+/** How long one rescued path may take to copy before the copy is ended. */
+export const RESCUE_COPY_LIMIT_MS = 10 * 60_000;
+
 /**
  * Copy chosen leftovers out of a worktree and into the main checkout, at the
  * same relative path, before the worktree is removed.
@@ -3368,11 +3515,11 @@ export async function worktreeLeftovers(rootIn: string, pathIn: unknown): Promis
  * than reaching into the filesystem.
  */
 export async function rescueLeftovers(rootIn: string, pathIn: unknown, relsIn: unknown): Promise<GitActionResult & { copied?: string[]; skipped?: { path: string; why: string }[] }> {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const abs = safeAbs(pathIn); if (!abs) return { ok: false, error: "invalid path" };
-  if (!worktreeList(root).some((w) => w.path === abs)) return { ok: false, error: "not a worktree of this repository" };
-  const main = mainCheckout(root);
+  if (!(await worktreeList(root)).some((w) => w.path === abs)) return { ok: false, error: "not a worktree of this repository" };
+  const main = await mainCheckout(root);
   if (main === abs) return { ok: false, error: "that is the main checkout — nothing to rescue it into" };
   if (!Array.isArray(relsIn)) return { ok: false, error: "no paths given" };
   const rels = relsIn.filter((r): r is string => typeof r === "string" && !!r).slice(0, 500);
@@ -3394,8 +3541,14 @@ export async function rescueLeftovers(rootIn: string, pathIn: unknown, relsIn: u
       // `cp -R` rather than a hand-rolled walk: it is one spawn for a file or a
       // whole tree, and it preserves what a copy of somebody's notes should
       // preserve. `-n` is a second refusal to clobber behind the check above.
-      const p = Bun.spawnSync(["cp", "-Rn", from, to], { stdout: "pipe", stderr: "pipe" });
-      if (p.exitCode !== 0) { skipped.push({ path: rel, why: p.stderr?.toString().trim() || "copy failed" }); continue; }
+      //
+      // Beside the loop (spawnOut). It was a blocking spawn with no limit at
+      // all, on the server's only thread: copying a tree of a few GB out of a
+      // worktree held every panel until `cp` was done. A limit of ten minutes
+      // now ends a copy that hangs (a dead network mount), and a copy that was
+      // ended is reported as not copied, whatever part of it arrived.
+      const p = await spawnOut(["cp", "-Rn", from, to], { timeoutMs: RESCUE_COPY_LIMIT_MS });
+      if (p.killed || p.exitCode !== 0) { skipped.push({ path: rel, why: p.stderr.trim() || (p.killed ? "copy took too long and was stopped" : "copy failed") }); continue; }
       // Look, rather than believe the exit code. `cp -n` returns 0 when it
       // declines to overwrite, and a caller about to delete the original needs
       // "it is there" to mean the file is there. Five screenshots were reported
@@ -3424,7 +3577,7 @@ export async function rescueLeftovers(rootIn: string, pathIn: unknown, relsIn: u
  * ones the failed removal did delete show up as deletions to restore, rather
  * than as a checkout nobody can read.
  */
-function restoreRegistration(root: string, abs: string, branch: string): boolean {
+async function restoreRegistration(root: string, abs: string, branch: string): Promise<boolean> {
   try {
     const dotgit = join(abs, ".git");
     if (!existsSync(dotgit)) return false;
@@ -3439,7 +3592,7 @@ function restoreRegistration(root: string, abs: string, branch: string): boolean
     writeFileSync(join(admin, "gitdir"), `${dotgit}\n`);
     writeFileSync(join(admin, "commondir"), "../..\n");
     writeFileSync(join(admin, "HEAD"), branch && branch !== "(detached)" ? `ref: refs/heads/${branch}\n` : "");
-    git(abs, ["reset", "-q"]);
+    await gitAsync(abs, ["reset", "-q"]);
     return true;
   } catch { return false; }
 }
@@ -3464,9 +3617,12 @@ function restoreRegistration(root: string, abs: string, branch: string): boolean
  *      an arbitrary directory. Arguments go as an array — there is no shell to
  *      inject into.
  */
-export function fixWorktreeOwnership(rootIn: string, pathIn: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+/** How long the pkexec password prompt may stay open before the chown gives up. */
+const CHOWN_DIALOG_MS = 120_000;
+
+export async function fixWorktreeOwnership(rootIn: string, pathIn: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const abs = safeAbs(pathIn); if (!abs) return { ok: false, error: "invalid path" };
   // Only a path git itself vouches for, and never the checkout we are in.
   if (abs === root) return { ok: false, error: "that is the main checkout" };
@@ -3476,15 +3632,30 @@ export function fixWorktreeOwnership(rootIn: string, pathIn: unknown): GitAction
   // Trusting it here would point `pkexec chown -R` at that path — a privilege
   // escalation. `git worktree list` flags such entries prunable, so we require a
   // non-prunable match before handing the path to root.
-  if (!worktreeList(root).some((w) => w.path === abs && !w.prunable)) return { ok: false, error: "not a worktree of this repository" };
+  if (!(await worktreeList(root)).some((w) => w.path === abs && !w.prunable)) return { ok: false, error: "not a worktree of this repository" };
   if (!foreignOwned(abs)) return { ok: true, output: "already yours" };
 
   const uid = typeof process.getuid === "function" ? process.getuid() : -1;
   const gid = typeof process.getgid === "function" ? process.getgid() : -1;
   if (uid < 0 || gid < 0) return { ok: false, error: "no user to hand ownership to on this platform" };
 
-  const p = Bun.spawnSync(["pkexec", "chown", "-R", `${uid}:${gid}`, "--", abs], { stdout: "pipe", stderr: "pipe" });
-  const err = p.stderr?.toString().trim() ?? "";
+  // Awaited: pkexec waits on a password dialog, and a blocking spawn held the
+  // loop (every terminal with it) for as long as the user took to answer.
+  //
+  // Bounded: this runs inside the root's write turn, so a dialog left open
+  // would hold every git write on that repository for as long as it stayed up.
+  // The turn is kept (not released before the dialog) because the worktree
+  // check above and the chown must stay one step: let a remove or add run in
+  // between and root could be pointed at whatever sits at that path by then.
+  // Through the spawn broker: a fork of the server stalls every request.
+  const ran = await runChild(["pkexec", "chown", "-R", `${uid}:${gid}`, "--", abs], { timeoutMs: CHOWN_DIALOG_MS });
+  // pkexec runs setuid root, so the timeout's kill (as the user) fails with
+  // EPERM and the dialog can outlive this turn: an answer given later still
+  // runs chown -R, on a check made minutes ago, and may stop halfway. So say
+  // so instead of "try again", which invites a second dialog.
+  if (ran.timedOut) return { ok: false, error: "the password prompt was not answered in time. It may still be open: close it, because answering it later can still change ownership, possibly only in part. Then check the folder and try again" };
+  const p = { exitCode: ran.code ?? 127 };
+  const err = (ran.stderr || ran.error || "").trim();
   if (p.exitCode === 126 || /dismissed|not authorized/i.test(err)) return { ok: false, error: "cancelled" };
   if (p.exitCode !== 0) return { ok: false, error: err || `pkexec exited ${p.exitCode}` };
   // Verified, not assumed: pkexec can succeed while chown skips something.
@@ -3494,9 +3665,9 @@ export function fixWorktreeOwnership(rootIn: string, pathIn: unknown): GitAction
     : { ok: true, output: "ownership restored" };
 }
 
-export function removeWorktree(rootIn: string, pathIn: unknown, force: boolean): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function removeWorktree(rootIn: string, pathIn: unknown, force: boolean): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const abs = safeAbs(pathIn); if (!abs) return { ok: false, error: "invalid path" };
   if (abs === root) return { ok: false, error: "can't remove the current worktree" };
   // Must be a worktree git reports for THIS root — the same check its siblings
@@ -3504,7 +3675,7 @@ export function removeWorktree(rootIn: string, pathIn: unknown, force: boolean):
   // it, a linked worktree of a *different* repo makes `git worktree remove` fail
   // and the restoreRegistration fallback below fabricates a phantom registration
   // inside this repo's .git, corrupting its metadata.
-  if (!worktreeList(root).some((w) => w.path === abs)) return { ok: false, error: "not a worktree of this repository" };
+  if (!(await worktreeList(root)).some((w) => w.path === abs)) return { ok: false, error: "not a worktree of this repository" };
 
   // Refuse rather than start something that cannot finish. Git deletes the
   // registration before the files, so "try it and see" is not free: the failure
@@ -3523,52 +3694,69 @@ export function removeWorktree(rootIn: string, pathIn: unknown, force: boolean):
 
   // The branch, captured while the worktree is still registered — it is what
   // the registration has to be rebuilt from if the removal fails anyway.
-  const branch = worktreeList(root).find((w) => w.path === abs)?.branch ?? "";
-  const r = run(root, force ? ["worktree", "remove", "--force", abs] : ["worktree", "remove", abs]);
-  if (!r.ok && existsSync(abs) && restoreRegistration(root, abs, branch)) {
+  const branch = (await worktreeList(root)).find((w) => w.path === abs)?.branch ?? "";
+  const r = await runAsync(root, force ? ["worktree", "remove", "--force", abs] : ["worktree", "remove", abs]);
+  if (!r.ok && existsSync(abs) && await restoreRegistration(root, abs, branch)) {
     return { ...r, error: `${r.error ?? "worktree remove failed"} — the worktree is still registered; nothing was left orphaned` };
   }
+  if (r.ok) { forgetWorktreeBranch(abs); clearFlowDone(abs); }
   return r;
 }
 
 /** `git worktree unlock` — a locked worktree refuses removal and pruning. Same
  *  guard as removal: the path must be one git reports for THIS root. */
-export function unlockWorktree(rootIn: string, pathIn: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function unlockWorktree(rootIn: string, pathIn: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const abs = safeAbs(pathIn); if (!abs) return { ok: false, error: "invalid path" };
-  if (!worktreeList(root).some((w) => w.path === abs)) return { ok: false, error: "not a worktree of this repository" };
-  return run(root, ["worktree", "unlock", abs]);
+  if (!(await worktreeList(root)).some((w) => w.path === abs)) return { ok: false, error: "not a worktree of this repository" };
+  return await runAsync(root, ["worktree", "unlock", abs]);
 }
 
-export function checkout(rootIn: string, name: string): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function checkout(rootIn: string, name: string): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   if (!validRef(name)) return { ok: false, error: "invalid branch name" };
-  return run(root, ["checkout", name, "--"]); // -- so a name matching a tracked path can't silently revert that file
+  return await runAsync(root, ["checkout", name, "--"]); // -- so a name matching a tracked path can't silently revert that file
 }
-export function createBranch(rootIn: string, name: string, from?: string): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function createBranch(rootIn: string, name: string, from?: string): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   if (!validRef(name)) return { ok: false, error: "invalid branch name" };
   if (from && !validHash(from)) return { ok: false, error: "invalid start commit" };
-  return run(root, from ? ["checkout", "-b", name, from] : ["checkout", "-b", name]); // create + switch
+  return await runAsync(root, from ? ["checkout", "-b", name, from] : ["checkout", "-b", name]); // create + switch
 }
-export function deleteBranch(rootIn: string, name: string, force: boolean): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function deleteBranch(rootIn: string, name: string, force: boolean): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   if (!validRef(name)) return { ok: false, error: "invalid branch name" };
-  if (isProtected(root, name)) return { ok: false, error: `${name} is protected — unprotect it in the Branches tab to delete it` };
-  if (git(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim() === name) return { ok: false, error: `${name} is checked out here — switch away before deleting it` };
-  return run(root, ["branch", force ? "-D" : "-d", name]);
+  if (await isProtected(root, name)) return { ok: false, error: `${name} is protected — unprotect it in the Branches tab to delete it` };
+  if ((await gitAsync(root, ["symbolic-ref", "--quiet", "--short", "HEAD"])).stdout.trim() === name) return { ok: false, error: `${name} is checked out here — switch away before deleting it` };
+  return await runAsync(root, ["branch", force ? "-D" : "-d", name]);
 }
 
-export function log(rootIn: unknown, limit = 100): GitCommit[] {
-  const root = repoRoot(rootIn);
+/** Commits on `name` that no other branch (local or remote) holds: what deleting
+ *  it would strand. Newest first, capped; null when git cannot say. */
+export async function branchOnlyHere(rootIn: unknown, name: string): Promise<{ count: number; shared: number; commits: { shortHash: string; subject: string }[] } | null> {
+  const root = await repoRootAsync(rootIn);
+  if (!root || !name || name.startsWith("-")) return null;
+  const r = await gitAsync(root, ["log", "-n20", `--pretty=format:%h${US}%s`, `refs/heads/${name}`, "--not", `--exclude=refs/heads/${name}`, "--branches", "--remotes"]);
+  if (r.code !== 0) return null;
+  const c = await gitAsync(root, ["rev-list", "--count", `refs/heads/${name}`, "--not", `--exclude=refs/heads/${name}`, "--branches", "--remotes"]);
+  const commits = r.stdout.split("\n").filter(Boolean).map((l) => { const [shortHash, subject] = l.split(US); return { shortHash, subject: subject || "" }; });
+  const count = c.code === 0 ? Number(c.stdout.trim()) || commits.length : commits.length;
+  // Shared = commits just below the only-here run that another ref also has: the boundary of that run. 0 for a never-pushed branch.
+  const b = await gitAsync(root, ["rev-list", "--boundary", "-n40", `refs/heads/${name}`, "--not", `--exclude=refs/heads/${name}`, "--branches", "--remotes"]);
+  const shared = b.code === 0 ? Math.min(3, b.stdout.split("\n").filter((l) => l.startsWith("-")).length) : 0;
+  return { count, shared, commits };
+}
+
+export async function log(rootIn: unknown, limit = 100): Promise<GitCommit[]> {
+  const root = await repoRootAsync(rootIn);
   if (!root) return [];
   const n = Math.max(1, Math.min(500, limit | 0));
   const fmt = `%H${US}%h${US}%s${US}%an${US}%ar${US}%D`;
-  const r = git(root, ["log", `-n${n}`, `--pretty=format:${fmt}`]);
+  const r = await gitAsync(root, ["log", `-n${n}`, `--pretty=format:${fmt}`]);
   const out: GitCommit[] = [];
   for (const line of r.stdout.split("\n")) {
     if (!line) continue;
@@ -3579,11 +3767,11 @@ export function log(rootIn: unknown, limit = 100): GitCommit[] {
 }
 
 /** The diff a single commit introduced (vs its first parent), as FileChanges. */
-export function commitDiff(rootIn: unknown, hash: string): GitFileChange[] {
-  const root = repoRoot(rootIn);
+export async function commitDiff(rootIn: unknown, hash: string): Promise<GitFileChange[]> {
+  const root = await repoRootAsync(rootIn);
   if (!root || !validHash(hash)) return [];
   // vs first parent (matches the comment) + UTF-8 paths.
-  const r = git(root, ["-c", "core.quotePath=false", "show", hash, "--no-color", "--first-parent", "--format=", "--unified=3"]);
+  const r = await gitAsync(root, ["-c", "core.quotePath=false", "show", hash, "--no-color", "--first-parent", "--format=", "--unified=3"]);
   return parseDiff(root, r.stdout, false);
 }
 
@@ -3595,27 +3783,27 @@ export function commitDiff(rootIn: unknown, hash: string): GitFileChange[] {
  */
 /** The `other` of a compare that means the working tree. */
 const WORKTREE = "@worktree";
-export function compareRefs(rootIn: unknown, baseIn: unknown, otherIn: unknown): { ok: boolean; ahead?: GitCommit[]; behind?: GitCommit[]; diff?: GitFileChange[]; error?: string } {
-  const root = repoRoot(rootIn);
+export async function compareRefs(rootIn: unknown, baseIn: unknown, otherIn: unknown): Promise<{ ok: boolean; ahead?: GitCommit[]; behind?: GitCommit[]; diff?: GitFileChange[]; error?: string }> {
+  const root = await repoRootAsync(rootIn);
   if (!root) return { ok: false, error: "not a git repository root" };
   const base = typeof baseIn === "string" ? baseIn.trim() : "";
   const other = typeof otherIn === "string" ? otherIn.trim() : "";
   if (!base || !other) return { ok: false, error: "two refs are required" };
   // git log is silent about refs it cannot resolve — an empty ahead/behind is
   // indistinguishable from a real \"nothing to compare\" unless we ask.
-  if (git(root, ["rev-parse", "--verify", "--quiet", `${base}^{commit}`]).code !== 0) return { ok: false, error: `${base} is not a commit` };
+  if ((await gitAsync(root, ["rev-parse", "--verify", "--quiet", `${base}^{commit}`])).code !== 0) return { ok: false, error: `${base} is not a commit` };
   // `@worktree` is not a ref: it means "the files as they are on disk". A real
   // ref cannot be spelled with an `@` alone plus letters, so it never collides.
   if (other === WORKTREE) {
-    const out = git(root, ["-c", "core.quotePath=false", "diff", base, "--no-color", "--unified=3", "--"]);
+    const out = await gitAsync(root, ["-c", "core.quotePath=false", "diff", base, "--no-color", "--unified=3", "--"]);
     return { ok: true, ahead: [], behind: [], diff: parseDiff(root, out.stdout, false) };
   }
-  if (git(root, ["rev-parse", "--verify", "--quiet", `${other}^{commit}`]).code !== 0) return { ok: false, error: `${other} is not a commit` };
+  if ((await gitAsync(root, ["rev-parse", "--verify", "--quiet", `${other}^{commit}`])).code !== 0) return { ok: false, error: `${other} is not a commit` };
   const fmt = `%H${US}%h${US}%s${US}%an${US}%ar${US}%D`;
   // Ahead: commits base has that other lacks (other..base).
-  const aheadOut = git(root, ["log", "--pretty=format:" + fmt, `${other}..${base}`]);
+  const aheadOut = await gitAsync(root, ["log", "--pretty=format:" + fmt, `${other}..${base}`]);
   // Behind: commits other has that base lacks (base..other).
-  const behindOut = git(root, ["log", "--pretty=format:" + fmt, `${base}..${other}`]);
+  const behindOut = await gitAsync(root, ["log", "--pretty=format:" + fmt, `${base}..${other}`]);
   const parse = (text: string): GitCommit[] => text
     .split("\n")
     .filter(Boolean)
@@ -3623,7 +3811,7 @@ export function compareRefs(rootIn: unknown, baseIn: unknown, otherIn: unknown):
       const [hash, shortHash, subject, author, date, refs] = line.split(US);
       return { hash, shortHash, subject: subject || "", author: author || "", date: date || "", refs: refs || "" };
     });
-  const diffOut = git(root, ["-c", "core.quotePath=false", "diff", `${other}...${base}`, "--no-color", "--unified=3"]);
+  const diffOut = await gitAsync(root, ["-c", "core.quotePath=false", "diff", `${other}...${base}`, "--no-color", "--unified=3"]);
   return {
     ok: true,
     ahead: parse(aheadOut.stdout),
@@ -3636,8 +3824,8 @@ export function compareRefs(rootIn: unknown, baseIn: unknown, otherIn: unknown):
  * Every ref a compare dialog could pick: local branches, tags, then remote
  * branches. Short names, roughly grouped, so a ref menu reads like a menu.
  */
-export function refs(rootIn: unknown): { ok: boolean; refs?: string[]; error?: string } {
-  const root = repoRoot(rootIn);
+export async function refs(rootIn: unknown): Promise<{ ok: boolean; refs?: string[]; error?: string }> {
+  const root = await repoRootAsync(rootIn);
   if (!root) return { ok: false, error: "not a git repository root" };
   const out: string[] = [];
   for (const [prefix, re] of [
@@ -3645,7 +3833,7 @@ export function refs(rootIn: unknown): { ok: boolean; refs?: string[]; error?: s
     ["refs/tags", null],
     ["refs/remotes", /\/HEAD$/],
   ] as const) {
-    const r = git(root, ["for-each-ref", "--format=%(refname:short)", prefix]);
+    const r = await gitAsync(root, ["for-each-ref", "--format=%(refname:short)", prefix]);
     for (const line of r.stdout.split("\n")) {
       if (!line) continue;
       if (re && re.test(line)) continue;
@@ -3658,11 +3846,11 @@ export function refs(rootIn: unknown): { ok: boolean; refs?: string[]; error?: s
 /** Configured remotes, with a branch count each so the list says something
  *  before you drill into it. `remote -v` lists fetch and push separately, and
  *  they differ on a fork setup (push to yours, fetch from upstream). */
-export function remotes(rootIn: unknown): GitRemote[] {
-  const root = repoRoot(rootIn);
+export async function remotes(rootIn: unknown): Promise<GitRemote[]> {
+  const root = await repoRootAsync(rootIn);
   if (!root) return [];
   const counts = new Map<string, number>();
-  for (const line of git(root, ["for-each-ref", "--format=%(refname:short)", "refs/remotes"]).stdout.split("\n")) {
+  for (const line of (await gitAsync(root, ["for-each-ref", "--format=%(refname:short)", "refs/remotes"])).stdout.split("\n")) {
     const name = line.split("/")[0];
     // Count `origin/x`, never `origin` on its own.
     //
@@ -3674,7 +3862,7 @@ export function remotes(rootIn: unknown): GitRemote[] {
     if (name && line.includes("/") && !line.endsWith("/HEAD")) counts.set(name, (counts.get(name) ?? 0) + 1);
   }
   const byName = new Map<string, GitRemote>();
-  for (const line of git(root, ["remote", "-v"]).stdout.split("\n")) {
+  for (const line of (await gitAsync(root, ["remote", "-v"])).stdout.split("\n")) {
     // "origin\tgit@host:owner/repo.git (fetch)"
     const m = line.match(/^(\S+)\s+(\S+)\s+\((fetch|push)\)$/);
     if (!m) continue;
@@ -3704,10 +3892,10 @@ export function remotes(rootIn: unknown): GitRemote[] {
  * `origin/HEAD` is dropped: it is a symbolic pointer at another row in this
  * same list, not a branch of its own.
  */
-export function remoteBranches(rootIn: unknown, remoteIn: unknown, limit = 3000): { ok: boolean; remote: string; branches: GitRemoteBranch[]; error?: string } {
-  const root = repoRoot(rootIn);
+export async function remoteBranches(rootIn: unknown, remoteIn: unknown, limit = 3000): Promise<{ ok: boolean; remote: string; branches: GitRemoteBranch[]; error?: string }> {
+  const root = await repoRootAsync(rootIn);
   if (!root) return { ok: false, remote: "", branches: [], error: "not a git repository root" };
-  const remote = typeof remoteIn === "string" && remoteIn ? remoteIn : (remotes(root)[0]?.name ?? "");
+  const remote = typeof remoteIn === "string" && remoteIn ? remoteIn : ((await remotes(root))[0]?.name ?? "");
   if (!remote) return { ok: true, remote: "", branches: [] };
   if (!validRef(remote) || remote.includes("/")) return { ok: false, remote: "", branches: [], error: "invalid remote" };
 
@@ -3715,17 +3903,17 @@ export function remoteBranches(rootIn: unknown, remoteIn: unknown, limit = 3000)
   // a call per row: local heads, what each one tracks, and which checkout has
   // it out.
   const localTracks = new Map<string, string>(); // local branch -> its upstream
-  for (const line of git(root, ["for-each-ref", `--format=%(refname:short)${US}%(upstream:short)`, "refs/heads"]).stdout.split("\n")) {
+  for (const line of (await gitAsync(root, ["for-each-ref", `--format=%(refname:short)${US}%(upstream:short)`, "refs/heads"])).stdout.split("\n")) {
     if (!line) continue;
     const [name, upstream] = line.split(US);
     if (name) localTracks.set(name, upstream || "");
   }
   const checkedOut = new Map<string, string>(); // branch -> worktree path
-  for (const w of worktreeList(root)) if (w.branch && w.branch !== "(detached)") checkedOut.set(w.branch, w.path);
+  for (const w of await worktreeList(root)) if (w.branch && w.branch !== "(detached)") checkedOut.set(w.branch, w.path);
 
   const n = Math.max(1, Math.min(10_000, limit | 0));
   const fmt = `%(refname:short)${US}%(objectname:short)${US}%(contents:subject)${US}%(authorname)${US}%(committerdate:relative)`;
-  const r = git(root, ["-c", "core.quotePath=false", "for-each-ref", "--sort=-committerdate", `--count=${n}`, `refs/remotes/${remote}`, `--format=${fmt}`]);
+  const r = await gitAsync(root, ["-c", "core.quotePath=false", "for-each-ref", "--sort=-committerdate", `--count=${n}`, `refs/remotes/${remote}`, `--format=${fmt}`]);
   const branches: GitRemoteBranch[] = [];
   for (const line of r.stdout.split("\n")) {
     if (!line) continue;
@@ -3757,32 +3945,32 @@ export function remoteBranches(rootIn: unknown, remoteIn: unknown, limit = 3000)
  * the difference between checking that out and checking out the remote's
  * version is somebody's afternoon.
  */
-export function trackRemoteBranch(rootIn: unknown, refIn: unknown, opts: { switch?: boolean } = {}): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function trackRemoteBranch(rootIn: unknown, refIn: unknown, opts: { switch?: boolean } = {}): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const ref = typeof refIn === "string" ? refIn : "";
   if (!validRef(ref) || !ref.includes("/")) return { ok: false, error: "invalid remote branch" };
   // The remote prefix has to be a real remote, or "origin/feature/x" and a
   // local branch literally called that are indistinguishable.
   const remote = ref.slice(0, ref.indexOf("/"));
-  if (!remotes(root).some((r) => r.name === remote)) return { ok: false, error: `no remote called ${remote}` };
+  if (!(await remotes(root)).some((r) => r.name === remote)) return { ok: false, error: `no remote called ${remote}` };
   const name = ref.slice(remote.length + 1);
   if (!name || name === "HEAD" || !validRef(name)) return { ok: false, error: "invalid branch name" };
-  if (git(root, ["rev-parse", "--verify", "--quiet", `refs/remotes/${ref}`]).code !== 0) {
+  if ((await gitAsync(root, ["rev-parse", "--verify", "--quiet", `refs/remotes/${ref}`])).code !== 0) {
     return { ok: false, error: `${ref} is not here — fetch first` };
   }
-  if (git(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`]).code === 0) {
+  if ((await gitAsync(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`])).code === 0) {
     return { ok: false, error: `you already have a local ${name} — check it out from the Branches tab` };
   }
   return opts.switch
-    ? run(root, ["switch", "-c", name, "--track", ref])
-    : run(root, ["branch", "--track", name, ref]);
+    ? await runAsync(root, ["switch", "-c", name, "--track", ref])
+    : await runAsync(root, ["branch", "--track", name, ref]);
 }
 
 /** Tags, newest first. `creatordate` rather than `taggerdate` so lightweight
  *  tags — which have no tagger — sort by their commit instead of sorting last. */
 export async function tags(rootIn: unknown, limit = 300): Promise<GitTag[]> {
-  const root = repoRoot(rootIn);
+  const root = await repoRootAsync(rootIn);
   if (!root) return [];
   const fmt = `%(refname:short)${US}%(objecttype)${US}%(contents:subject)${US}%(creatordate:relative)${US}%(objectname:short)`;
   const r = await gitAsync(root, ["for-each-ref", "--sort=-creatordate", `--count=${Math.max(1, Math.min(1000, limit | 0))}`, "refs/tags", `--format=${fmt}`]);
@@ -3797,7 +3985,7 @@ export async function tags(rootIn: unknown, limit = 300): Promise<GitTag[]> {
 
 /** Remote names of a repo, `origin` first — the order F9 asks the remotes in. */
 export async function remoteNames(rootIn: unknown): Promise<string[]> {
-  const root = repoRoot(rootIn);
+  const root = await repoRootAsync(rootIn);
   if (!root) return [];
   const names = (await gitAsync(root, ["remote"])).stdout.split("\n").map((l) => l.trim()).filter(Boolean);
   return names.sort((a, b) => Number(b === "origin") - Number(a === "origin"));
@@ -3808,12 +3996,15 @@ export async function remoteNames(rootIn: unknown): Promise<string[]> {
  *  password is a remote that did not answer. */
 async function remoteTagNames(root: string, remote: string, ms: number): Promise<Set<string> | null> {
   try {
-    const proc = Bun.spawn(["git", "-C", root, "ls-remote", "--tags", "--refs", "--", remote], {
-      stdout: "pipe", stderr: "ignore", timeout: ms, killSignal: "SIGKILL",
+    // Through the spawn broker: a fork of the server stalls every request.
+    // stderr goes to /dev/null in the child, not to a pipe: a transport helper
+    // git starts (ssh, ext::) inherits it, and a pipe it holds open would keep
+    // the read waiting past the limit that already ended git.
+    const { stdout: text, code } = await runChild(["sh", "-c", 'exec "$@" 2>/dev/null', "sh", "git", "-C", root, "ls-remote", "--tags", "--refs", "--", remote], {
+      timeoutMs: ms, read: true,
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS_REQUIRE: "never" },
     });
-    const [text, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-    if (code !== 0) return null; // a killed process exits non-zero too
+    if (code !== 0) return null; // a killed process ends with a null code
     const out = new Set<string>();
     for (const line of text.split("\n")) {
       const ref = line.split("\t")[1];
@@ -3831,7 +4022,7 @@ async function remoteTagNames(root: string, remote: string, ms: number): Promise
  * No remotes: nothing was asked, so every tag is "unknown" and no process runs.
  */
 export async function tagsOrigin(rootIn: unknown, ms = 8_000): Promise<{ name: string; onOrigin: "yes" | "no" | "unknown"; remote?: string }[]> {
-  const root = repoRoot(rootIn);
+  const root = await repoRootAsync(rootIn);
   if (!root) return [];
   const [local, names] = await Promise.all([tags(root, 1000), remoteNames(root)]);
   const held = await Promise.all(names.map((n) => remoteTagNames(root, n, ms)));
@@ -3849,12 +4040,12 @@ export async function tagsOrigin(rootIn: unknown, ms = 8_000): Promise<{ name: s
  *  adds `-s` (which is annotated too and so also needs the message — a signed
  *  tag without one would open an editor nobody can drive). The target is HEAD
  *  unless `target` is given. Refuses names that already exist locally. */
-export function createTag(rootIn: unknown, nameIn: unknown, optsIn?: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function createTag(rootIn: unknown, nameIn: unknown, optsIn?: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const name = String(nameIn ?? "").trim();
   if (!validRef(name)) return { ok: false, error: "invalid tag name" };
-  if (git(root, ["rev-parse", "--verify", "--quiet", `refs/tags/${name}`]).code === 0) {
+  if ((await gitAsync(root, ["rev-parse", "--verify", "--quiet", `refs/tags/${name}`])).code === 0) {
     return { ok: false, error: `tag ${name} already exists` };
   }
   const opts = (optsIn ?? {}) as { annotated?: boolean; message?: string; signed?: boolean; target?: string };
@@ -3869,51 +4060,51 @@ export function createTag(rootIn: unknown, nameIn: unknown, optsIn?: unknown): G
   args.push(name);
   const target = String(opts.target ?? "").trim();
   if (target) args.push(target);
-  return run(root, args);
+  return await runAsync(root, args);
 }
 
 /** Delete a local tag. `tag -d` refuses tags that are not stored in
  *  `refs/tags` (i.e. on a branch or remote), which is the ownership check the
  *  plan wants: it never touches a tag you don't have locally. */
-export function deleteTag(rootIn: unknown, nameIn: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function deleteTag(rootIn: unknown, nameIn: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const name = String(nameIn ?? "").trim();
   if (!validRef(name)) return { ok: false, error: "invalid tag name" };
-  if (git(root, ["rev-parse", "--verify", "--quiet", `refs/tags/${name}`]).code !== 0) {
+  if ((await gitAsync(root, ["rev-parse", "--verify", "--quiet", `refs/tags/${name}`])).code !== 0) {
     return { ok: false, error: `no local tag ${name}` };
   }
-  return run(root, ["tag", "-d", name]);
+  return await runAsync(root, ["tag", "-d", name]);
 }
 
-function tagRemote(root: string, remoteIn?: unknown): string | null {
+async function tagRemote(root: string, remoteIn?: unknown): Promise<string | null> {
   const remote = String(remoteIn ?? "").trim() || "origin";
-  return git(root, ["remote"]).stdout.split("\n").includes(remote) ? remote : null;
+  return (await gitAsync(root, ["remote"])).stdout.split("\n").includes(remote) ? remote : null;
 }
 
 /** Push a tag to the remote. */
-export function pushTag(rootIn: unknown, nameIn: unknown, remoteIn?: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function pushTag(rootIn: unknown, nameIn: unknown, remoteIn?: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const name = String(nameIn ?? "").trim();
   if (!validRef(name)) return { ok: false, error: "invalid tag name" };
-  if (git(root, ["rev-parse", "--verify", "--quiet", `refs/tags/${name}`]).code !== 0) {
+  if ((await gitAsync(root, ["rev-parse", "--verify", "--quiet", `refs/tags/${name}`])).code !== 0) {
     return { ok: false, error: `no local tag ${name}` };
   }
-  const remote = tagRemote(root, remoteIn);
+  const remote = await tagRemote(root, remoteIn);
   if (!remote) return { ok: false, error: "no such remote" };
-  return run(root, ["push", remote, name]);
+  return await runAsync(root, ["push", remote, name]);
 }
 
 /** Delete a tag on the remote (`push <remote> :refs/tags/<name>`). */
-export function deleteRemoteTag(rootIn: unknown, nameIn: unknown, remoteIn?: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function deleteRemoteTag(rootIn: unknown, nameIn: unknown, remoteIn?: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const name = String(nameIn ?? "").trim();
   if (!validRef(name)) return { ok: false, error: "invalid tag name" };
-  const remote = tagRemote(root, remoteIn);
+  const remote = await tagRemote(root, remoteIn);
   if (!remote) return { ok: false, error: "no such remote" };
-  return run(root, ["push", remote, `:refs/tags/${name}`]);
+  return await runAsync(root, ["push", remote, `:refs/tags/${name}`]);
 }
 
 // --- Blame + file history ---------------------------------------------------
@@ -3940,21 +4131,21 @@ export type FileHistoryEntry = {
 /** `git blame --line-porcelain`: every group of consecutive lines from one
  *  commit carries its own header block, then the content lines (tab-prefixed).
  *  The header fields we keep are `author`, `author-time` and `summary`. */
-export function blameFile(rootIn: unknown, pathIn: unknown, refIn: unknown): { ok: boolean; lines?: BlameLine[]; error?: string } {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+export async function blameFile(rootIn: unknown, pathIn: unknown, refIn: unknown): Promise<{ ok: boolean; lines?: BlameLine[]; error?: string }> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const pathStr = String(pathIn ?? "").trim();
   if (!pathStr || pathStr.startsWith("-")) return { ok: false, error: "invalid path" };
   const abs = inRepo(root, pathStr);
   if (!abs) return { ok: false, error: "invalid path" };
   const path = relative(root, abs);
   const ref = typeof refIn === "string" && refIn.trim() && refIn.trim() !== "HEAD" ? refIn.trim() : null;
-  const inTree = git(root, ["cat-file", "-e", `${ref ?? "HEAD"}:${path}`]);
+  const inTree = await gitAsync(root, ["cat-file", "-e", `${ref ?? "HEAD"}:${path}`]);
   if (inTree.code !== 0) return { ok: false, error: `${path} is not in ${ref ?? "HEAD"} — nothing to blame` };
   // Only pass the revision when there is one. With a rev git blames the file
   // CONTENT at that rev — which is exactly what "reblame as of this commit"
   // wants — while without one it blames the working tree, where the lines not
   // yet committed come out as zero-sha "local" entries. Measured on 2.55.0.
-  const r = git(root, ["blame", "--line-porcelain", ...(ref ? [ref] : []), "--", path]);
+  const r = await gitAsync(root, ["blame", "--line-porcelain", ...(ref ? [ref] : []), "--", path]);
   if (r.code !== 0) return { ok: false, error: r.stderr.trim() || "blame failed" };
   const lines: BlameLine[] = [];
   let cur: BlameLine | null = null;
@@ -3992,14 +4183,14 @@ export function blameFile(rootIn: unknown, pathIn: unknown, refIn: unknown): { o
 
 /** A file's commit history, following renames. `--follow` only accepts a
  *  single path, which is exactly what this takes. */
-export function fileHistory(rootIn: unknown, pathIn: unknown): { ok: boolean; entries?: FileHistoryEntry[]; error?: string } {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+export async function fileHistory(rootIn: unknown, pathIn: unknown): Promise<{ ok: boolean; entries?: FileHistoryEntry[]; error?: string }> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const pathStr = String(pathIn ?? "").trim();
   if (!pathStr || pathStr.startsWith("-")) return { ok: false, error: "invalid path" };
   const abs = inRepo(root, pathStr);
   if (!abs) return { ok: false, error: "invalid path" };
   const path = relative(root, abs);
-  const r = git(root, ["log", "--follow", `--format=%H${US}%an${US}%at${US}%s${RS}`, "--", path]);
+  const r = await gitAsync(root, ["log", "--follow", `--format=%H${US}%an${US}%at${US}%s${RS}`, "--", path]);
   if (r.code !== 0) return { ok: false, error: r.stderr.trim() || "git log failed" };
   const entries: FileHistoryEntry[] = [];
   for (const line of r.stdout.split("\n")) {
@@ -4030,26 +4221,26 @@ export type GitBisectStatus = {
   firstBad?: { sha: string; subject: string };
 };
 
-function headInfo(root: string, ref: string): { sha: string; subject: string } | null {
-  const r = git(root, ["log", "-1", `--format=%H${US}%s`, ref]);
+async function headInfo(root: string, ref: string): Promise<{ sha: string; subject: string } | null> {
+  const r = await gitAsync(root, ["log", "-1", `--format=%H${US}%s`, ref]);
   if (r.code !== 0) return null;
   const [sha, subject] = r.stdout.trim().split(US);
   if (!sha) return null;
   return { sha, subject: (subject || "").replace(/\x1e$/, "") };
 }
 
-export function bisectStatus(rootIn: unknown): GitBisectStatus {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, bisecting: false, error: "not a git repository root" };
+export async function bisectStatus(rootIn: unknown): Promise<GitBisectStatus> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, bisecting: false, error: "not a git repository root" };
   const dir = gitDir(root);
   if (!dir || !existsSync(join(dir, "BISECT_LOG"))) return { ok: true, bisecting: false };
   const log = readFileSync(join(dir, "BISECT_LOG"), "utf8");
   const st: GitBisectStatus = { ok: true, bisecting: true };
-  st.current = headInfo(root, "HEAD") ?? undefined;
+  st.current = await headInfo(root, "HEAD") ?? undefined;
   // Converged: "# first <term> commit: [<sha>] <subject>" (terms are quoted
   // with the default bad/good — "first 'bad' commit" — so accept any term).
   const verdict = /^# first .* commit: \[([0-9a-f]{7,40})\] (.+)$/m.exec(log);
   if (verdict) {
-    st.firstBad = headInfo(root, verdict[1]) ?? { sha: verdict[1], subject: verdict[2] };
+    st.firstBad = await headInfo(root, verdict[1]) ?? { sha: verdict[1], subject: verdict[2] };
     return st;
   }
   // Mid-run: ask git itself. `rev-list --bisect-vars` is the computation
@@ -4057,11 +4248,11 @@ export function bisectStatus(rootIn: unknown): GitBisectStatus {
   // every good mark and the bad one. The old range count and log2 shown here
   // said 13 and 4 where git said 6 and 3: the range counts every suspect, git
   // counts what is left after the NEXT test, and the step estimate is not log2.
-  const refs = git(root, ["for-each-ref", "--format=%(refname)", "refs/bisect"]).stdout.split("\n").filter(Boolean);
+  const refs = (await gitAsync(root, ["for-each-ref", "--format=%(refname)", "refs/bisect"])).stdout.split("\n").filter(Boolean);
   const bad = refs.find((r) => r === "refs/bisect/bad");
   const goods = refs.filter((r) => r.startsWith("refs/bisect/good-"));
   if (bad && goods.length) {
-    const v = git(root, ["rev-list", "--bisect-vars", bad, "--not", ...goods]);
+    const v = await gitAsync(root, ["rev-list", "--bisect-vars", bad, "--not", ...goods]);
     const nr = /^bisect_nr=(\d+)$/m.exec(v.stdout)?.[1];
     const steps = /^bisect_steps=(\d+)$/m.exec(v.stdout)?.[1];
     if (v.code === 0 && nr != null && steps != null) { st.remaining = Number(nr); st.steps = Number(steps); }
@@ -4069,39 +4260,39 @@ export function bisectStatus(rootIn: unknown): GitBisectStatus {
   return st;
 }
 
-function bisectRef(root: string, refIn: unknown, label: string): { ok: boolean; ref?: string; error?: string } {
+async function bisectRef(root: string, refIn: unknown, label: string): Promise<{ ok: boolean; ref?: string; error?: string }> {
   const ref = String(refIn ?? "").trim();
   if (!ref || ref.startsWith("-")) return { ok: false, error: `invalid ${label} ref` };
   // Refnames like "HEAD~4" legitimately reach a commit; git's own
   // rev-parse --verify is the judge of whether that is true.
-  if (git(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).code !== 0) {
+  if ((await gitAsync(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`])).code !== 0) {
     return { ok: false, error: `${label} ${ref} is not a commit` };
   }
   return { ok: true, ref };
 }
 
-export function bisectStart(rootIn: unknown, badIn: unknown, goodIn: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
-  const bad = bisectRef(root, badIn, "bad");
+export async function bisectStart(rootIn: unknown, badIn: unknown, goodIn: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
+  const bad = await bisectRef(root, badIn, "bad");
   if (!bad.ok) return bad;
-  const good = bisectRef(root, goodIn, "good");
+  const good = await bisectRef(root, goodIn, "good");
   if (!good.ok) return good;
-  return run(root, ["bisect", "start", bad.ref!, good.ref!]);
+  return await runAsync(root, ["bisect", "start", bad.ref!, good.ref!]);
 }
 
-export function bisectMark(rootIn: unknown, markIn: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function bisectMark(rootIn: unknown, markIn: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const mark = String(markIn ?? "").trim();
   if (mark !== "good" && mark !== "bad") return { ok: false, error: "mark must be good or bad" };
-  return run(root, ["bisect", mark]);
+  return await runAsync(root, ["bisect", mark]);
 }
 
-export function bisectReset(rootIn: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
-  return run(root, ["bisect", "reset"]);
+export async function bisectReset(rootIn: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
+  return await runAsync(root, ["bisect", "reset"]);
 }
 
 // --- Submodules -------------------------------------------------------------
@@ -4121,13 +4312,13 @@ export type GitSubmodule = {
  *  the index gitlinks (mode 160000 — what this repo pins), and `submodule
  *  status` (where the checkout actually is: "-" uninitialized, "+" ahead of
  *  the pin, "U" conflicted). */
-export function submodules(rootIn: unknown): GitSubmodule[] {
-  const root = repoRoot(rootIn);
+export async function submodules(rootIn: unknown): Promise<GitSubmodule[]> {
+  const root = await repoRootAsync(rootIn);
   if (!root) return [];
   // .gitmodules sections: submodule.<name>.path / .url / .branch. The path is
   // the stable join key with the index gitlinks below.
   const byName = new Map<string, { name: string; path: string; url: string; branch: string }>();
-  const cfg = git(root, ["config", "-f", ".gitmodules", "--null", "--list"]);
+  const cfg = await gitAsync(root, ["config", "-f", ".gitmodules", "--null", "--list"]);
   // --null emits "<key>\n<value>\0" per entry — the parts split on \0 and the
   // key/value pair is joined by the first \n.
   for (const part of cfg.stdout.split("\0")) {
@@ -4150,7 +4341,7 @@ export function submodules(rootIn: unknown): GitSubmodule[] {
   // Gitlinks in the index (mode 160000) — the authoritative submodule set.
   // The index rather than HEAD: `submodule add` only stages, and a remove only
   // un-stages; reading HEAD would ghost in or out entries that never moved.
-  const ls = git(root, ["ls-files", "-s"]);
+  const ls = await gitAsync(root, ["ls-files", "-s"]);
   for (const line of ls.stdout.split("\n")) {
     const m = /^160000 ([0-9a-f]{40}) \d+\t(.+)$/.exec(line.trim());
     if (!m) continue;
@@ -4162,7 +4353,7 @@ export function submodules(rootIn: unknown): GitSubmodule[] {
   }
   // The checkout state from `git submodule status` — "-" uninitialized, "+"
   // checked-out differs from the pin, "U" conflicted.
-  const st = git(root, ["submodule", "status"]);
+  const st = await gitAsync(root, ["submodule", "status"]);
   for (const line of st.stdout.split("\n")) {
     const m = /^([-+U]?)([0-9a-f]{40})\s+(.+?)(?:\s+\((.*)\))?$/.exec(line.trim());
     if (!m) continue;
@@ -4179,36 +4370,36 @@ export function submodules(rootIn: unknown): GitSubmodule[] {
   return [...byPath2.values()];
 }
 
-function submodulePath(root: string, pathIn: unknown): string | null {
+async function submodulePath(root: string, pathIn: unknown): Promise<string | null> {
   if (typeof pathIn !== "string" || !pathIn.trim()) return null;
   const p = pathIn.trim();
-  return submodules(root).some((s) => s.path === p) ? p : null;
+  return (await submodules(root)).some((s) => s.path === p) ? p : null;
 }
 
 /** Add a submodule: clone `url` into `path` and record the gitlink. A network
  *  op like pull, so it is bounded by the same machinery. */
-export function submoduleAdd(rootIn: unknown, urlIn: unknown, pathIn: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function submoduleAdd(rootIn: unknown, urlIn: unknown, pathIn: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const url = String(urlIn ?? "").trim();
   if (!url || url.startsWith("-")) return { ok: false, error: "invalid submodule URL" };
   const path = String(pathIn ?? "").trim();
   if (!path || path.startsWith("-") || path.includes("..") || !validRef(path.replace(/\//g, "-"))) {
     return { ok: false, error: "invalid submodule path" };
   }
-  if (git(root, ["ls-files", "--error-unmatch", "--", path]).code === 0) {
+  if ((await gitAsync(root, ["ls-files", "--error-unmatch", "--", path])).code === 0) {
     return { ok: false, error: `${path} is already tracked` };
   }
-  return run(root, ["submodule", "add", url, path]);
+  return await runAsync(root, ["submodule", "add", url, path]);
 }
 
 /** Initialize and check out submodules (optionally one). A network op —
  *  async so the terminal's loop never blocks on it. */
 export async function submoduleUpdate(rootIn: unknown, pathIn: unknown): Promise<GitActionResult> {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const args = ["submodule", "update", "--init", "--recursive"];
-  const path = submodulePath(root, pathIn);
+  const path = await submodulePath(root, pathIn);
   if (path) args.push("--", path);
   const r = await gitAsync(root, args);
   afterMutation(root);
@@ -4217,50 +4408,50 @@ export async function submoduleUpdate(rootIn: unknown, pathIn: unknown): Promise
 
 /** Re-write the submodule URLs from .gitmodules into the checkouts (and into
  *  .git/config) — what you run after the remote URL moves. */
-export function submoduleSync(rootIn: unknown, pathIn: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function submoduleSync(rootIn: unknown, pathIn: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const args = ["submodule", "sync", "--recursive"];
-  const path = submodulePath(root, pathIn);
+  const path = await submodulePath(root, pathIn);
   if (path) args.push("--", path);
-  return run(root, args);
+  return await runAsync(root, args);
 }
 
 /** Detach a submodule's checkout: the directory goes, the gitlink and the
  *  .gitmodules section stay. */
-export function submoduleDeinit(rootIn: unknown, pathIn: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
-  const path = submodulePath(root, pathIn);
+export async function submoduleDeinit(rootIn: unknown, pathIn: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
+  const path = await submodulePath(root, pathIn);
   if (!path) return { ok: false, error: "pick a submodule from the list" };
-  return run(root, ["submodule", "deinit", "-f", "--", path]);
+  return await runAsync(root, ["submodule", "deinit", "-f", "--", path]);
 }
 
 /** Remove a submodule for good: deinit (directory goes), drop the gitlink,
  *  strip its .gitmodules section (and the file itself if it empties). */
-export function submoduleRemove(rootIn: unknown, pathIn: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
-  const path = submodulePath(root, pathIn);
+export async function submoduleRemove(rootIn: unknown, pathIn: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
+  const path = await submodulePath(root, pathIn);
   if (!path) return { ok: false, error: "pick a submodule from the list" };
-  const sm = submodules(root).find((s) => s.path === path);
+  const sm = (await submodules(root)).find((s) => s.path === path);
   const name = sm?.name || path;
-  let r = run(root, ["submodule", "deinit", "-f", "--", path]);
+  let r = await runAsync(root, ["submodule", "deinit", "-f", "--", path]);
   if (!r.ok) return r;
-  r = run(root, ["rm", "--cached", "-f", "--", path]);
+  r = await runAsync(root, ["rm", "--cached", "-f", "--", path]);
   if (!r.ok) return r;
   // deinit only empties the directory; the shell of it can survive, and a
   // stale checkout directory at the gitlink path would shadow the next add.
   const absPath = inRepo(root, path);
   if (absPath && existsSync(absPath)) rmSync(absPath, { recursive: true, force: true });
-  r = run(root, ["config", "-f", ".gitmodules", "--remove-section", `submodule.${name}`]);
+  r = await runAsync(root, ["config", "-f", ".gitmodules", "--remove-section", `submodule.${name}`]);
   if (!r.ok) return r;
   const modulesFile = join(root, ".gitmodules");
   const remaining = existsSync(modulesFile) ? readFileSync(modulesFile, "utf8").trim() : "";
   if (!remaining) {
-    r = run(root, ["rm", "-f", "--", ".gitmodules"]);
+    r = await runAsync(root, ["rm", "-f", "--", ".gitmodules"]);
   } else {
-    r = run(root, ["add", "-A", "--", ".gitmodules"]);
+    r = await runAsync(root, ["add", "-A", "--", ".gitmodules"]);
   }
   return r;
 }
@@ -4274,12 +4465,12 @@ export function submoduleRemove(rootIn: unknown, pathIn: unknown): GitActionResu
  * wrong. `%gs` is "reset: moving to HEAD~3", so the action is everything up to
  * the first colon.
  */
-export function reflog(rootIn: unknown, limit = 200): GitReflogEntry[] {
-  const root = repoRoot(rootIn);
+export async function reflog(rootIn: unknown, limit = 200): Promise<GitReflogEntry[]> {
+  const root = await repoRootAsync(rootIn);
   if (!root) return [];
   const n = Math.max(1, Math.min(1000, limit | 0));
   const fmt = `%gD${US}%h${US}%gs${US}%ar`;
-  const r = git(root, ["reflog", `-n${n}`, `--pretty=format:${fmt}`]);
+  const r = await gitAsync(root, ["reflog", `-n${n}`, `--pretty=format:${fmt}`]);
   const out: GitReflogEntry[] = [];
   for (const line of r.stdout.split("\n")) {
     if (!line) continue;
@@ -4295,26 +4486,26 @@ export function reflog(rootIn: unknown, limit = 200): GitReflogEntry[] {
 }
 
 /** Whether git is told to keep no reflog here (`core.logAllRefUpdates=false`). */
-export function reflogIsOff(rootIn: unknown): boolean {
-  const root = repoRoot(rootIn);
+export async function reflogIsOff(rootIn: unknown): Promise<boolean> {
+  const root = await repoRootAsync(rootIn);
   if (!root) return false;
-  return reflogOff(git(root, ["config", "--get", "core.logAllRefUpdates"]).stdout);
+  return reflogOff((await gitAsync(root, ["config", "--get", "core.logAllRefUpdates"])).stdout);
 }
 
 /** Turn the reflog on for this repository. Idempotent: already on is ok. */
-export function reflogEnable(rootIn: string): GitActionResult {
-  const g = guard(rootIn); if (g) return g;
-  return run(repoRoot(rootIn)!, reflogEnableArgv());
+export async function reflogEnable(rootIn: string): Promise<GitActionResult> {
+  const g = await guard(rootIn); if (g) return g;
+  return await runAsync((await repoRootAsync(rootIn))!, reflogEnableArgv());
 }
 
 /** Files one stash touches. `git show` on the stash commit, first parent only
  *  (`-m --first-parent`): a stash is a merge commit, and the default combined
  *  view lists only paths that differ from BOTH parents. Untracked files live
  *  in a third parent and are not listed. */
-export function stashFiles(rootIn: string, hash: string): { status: string; path: string }[] {
-  const root = repoRoot(rootIn);
+export async function stashFiles(rootIn: string, hash: string): Promise<{ status: string; path: string }[]> {
+  const root = await repoRootAsync(rootIn);
   if (!root || !validHash(hash)) return [];
-  const r = git(root, ["show", "-m", "--first-parent", "--name-status", "--format=", hash]);
+  const r = await gitAsync(root, ["show", "-m", "--first-parent", "--name-status", "--format=", hash]);
   if (r.code !== 0) return [];
   const out: { status: string; path: string }[] = [];
   for (const line of r.stdout.split("\n")) {
@@ -4325,10 +4516,10 @@ export function stashFiles(rootIn: string, hash: string): { status: string; path
   return out;
 }
 
-export function stashList(rootIn: unknown): GitStash[] {
-  const root = repoRoot(rootIn);
+export async function stashList(rootIn: unknown): Promise<GitStash[]> {
+  const root = await repoRootAsync(rootIn);
   if (!root) return [];
-  const r = git(root, ["stash", "list", `--format=%gd${US}%gs${US}%H`]);
+  const r = await gitAsync(root, ["stash", "list", `--format=%gd${US}%gs${US}%H`]);
   const out: GitStash[] = [];
   for (const line of r.stdout.split("\n")) {
     if (!line) continue;
@@ -4342,36 +4533,36 @@ export function stashList(rootIn: unknown): GitStash[] {
   return out;
 }
 /** The stash on top, or "". A push that changed it made a stash, whatever it exited with. */
-const stashTop = (root: string): string => git(root, ["rev-parse", "-q", "--verify", "refs/stash"]).stdout.trim();
+const stashTop = async (root: string): Promise<string> => (await gitAsync(root, ["rev-parse", "-q", "--verify", "refs/stash"])).stdout.trim();
 
-export function stashPush(rootIn: string, message: string): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function stashPush(rootIn: string, message: string): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const args = ["stash", "push", "--include-untracked"];
   if (message && message.trim()) args.push("-m", message.trim());
-  const before = stashTop(root);
-  const r = run(root, args);
+  const before = await stashTop(root);
+  const r = await runAsync(root, args);
   // `-u` exits non-zero AFTER stashing when it cannot open or empty a directory
   // (a volume owned by another user): the files are in the stash, and "failed"
   // would leave them there out of sight.
-  if (!r.ok && stashTop(root) !== before) return { ok: true, output: `Stashed, though git reported a problem: ${r.error ?? "unknown"}` };
+  if (!r.ok && await stashTop(root) !== before) return { ok: true, output: `Stashed, though git reported a problem: ${r.error ?? "unknown"}` };
   return r;
 }
-function stashOp(rootIn: string, op: "apply" | "pop" | "drop", index: number): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+async function stashOp(rootIn: string, op: "apply" | "pop" | "drop", index: number): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   if (!Number.isInteger(index) || index < 0 || index > 999) return { ok: false, error: "invalid stash index" };
-  return run(root, ["stash", op, `stash@{${index}}`]);
+  return await runAsync(root, ["stash", op, `stash@{${index}}`]);
 }
-export const stashApply = (r: string, i: number) => stashOp(r, "apply", i);
-export const stashPop = (r: string, i: number) => stashOp(r, "pop", i);
-export const stashDrop = (r: string, i: number) => stashOp(r, "drop", i);
+export const stashApply = async (r: string, i: number) => await stashOp(r, "apply", i);
+export const stashPop = async (r: string, i: number) => await stashOp(r, "pop", i);
+export const stashDrop = async (r: string, i: number) => await stashOp(r, "drop", i);
 
 /** The stash is a reflog: `logs/refs/stash`, oldest entry first, so entry i is
  *  `lines[len - 1 - i]`. Each line is "<sha> <sha> <name> <email> <ts> <tz>\t
  *  <subject>" and the subject is what `git stash list` shows. */
-function stashReflog(root: string): string {
-  const common = git(root, ["rev-parse", "--git-common-dir"]).stdout.trim();
+async function stashReflog(root: string): Promise<string> {
+  const common = (await gitAsync(root, ["rev-parse", "--git-common-dir"])).stdout.trim();
   return join(resolve(root, common), "logs", "refs", "stash");
 }
 
@@ -4379,14 +4570,14 @@ function stashReflog(root: string): string {
  *  the row still says which branch it belongs to. There is no porcelain for
  *  this — `update-ref` can only append entries — so the reflog file is
  *  rewritten in place, preserving identity, timestamp and every other field. */
-export function stashRename(rootIn: unknown, indexIn: unknown, messageIn: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function stashRename(rootIn: unknown, indexIn: unknown, messageIn: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const index = Number(indexIn);
   if (!Number.isInteger(index) || index < 0 || index > 999) return { ok: false, error: "invalid stash index" };
   const message = String(messageIn ?? "").trim();
   if (!message) return { ok: false, error: "stash message required" };
-  const file = stashReflog(root);
+  const file = await stashReflog(root);
   if (!existsSync(file)) return { ok: false, error: "no stashes to rename" };
   const lines = readFileSync(file, "utf8").split("\n");
   const pos = lines.length - 2 - index; // -1 for the trailing newline, -index for the entry
@@ -4412,37 +4603,37 @@ export function stashRename(rootIn: unknown, indexIn: unknown, messageIn: unknow
 /** Split a stash off onto its own branch: `git stash branch` checks out a new
  *  branch at the stash's base, applies the stash onto it, and drops the stash
  *  on success (on a conflict it keeps the stash and says so). */
-export function stashToBranch(rootIn: unknown, indexIn: unknown, branchIn: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function stashToBranch(rootIn: unknown, indexIn: unknown, branchIn: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const index = Number(indexIn);
   if (!Number.isInteger(index) || index < 0 || index > 999) return { ok: false, error: "invalid stash index" };
   const branch = String(branchIn ?? "").trim();
   if (!validRef(branch)) return { ok: false, error: "invalid branch name" };
-  if (git(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).code === 0) {
+  if ((await gitAsync(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0) {
     return { ok: false, error: `a branch called ${branch} already exists` };
   }
-  return run(root, ["stash", "branch", branch, `stash@{${index}}`]);
+  return await runAsync(root, ["stash", "branch", branch, `stash@{${index}}`]);
 }
 
 /** Stash only the given paths (with an optional keep-index). Untracked files
  *  among them come along, matching the panel's "stash all" behavior. */
-export function stashPartial(rootIn: unknown, pathsIn: unknown, keepIndexIn?: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function stashPartial(rootIn: unknown, pathsIn: unknown, keepIndexIn?: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const v = validRels(root, pathsIn); if (!v || !v.length) return { ok: false, error: "no valid paths" };
   const keep = keepIndexIn === true;
   // "stash & keep" means the picked files stay in the working tree, staged and
   // ready to commit. --keep-index only preserves changes that are in the
   // index, so the picked paths are staged first.
   if (keep) {
-    const r = run(root, ["add", "-A", "--", ...v]);
+    const r = await runAsync(root, ["add", "-A", "--", ...v]);
     if (!r.ok) return r;
   }
   const args = ["stash", "push", "--include-untracked"];
   if (keep) args.push("--keep-index");
   args.push("--", ...v);
-  return run(root, args);
+  return await runAsync(root, args);
 }
 
 /** Undo a stash apply that clashed: `git reset --merge` puts the index and every
@@ -4450,34 +4641,34 @@ export function stashPartial(rootIn: unknown, pathsIn: unknown, keepIndexIn?: un
  *  it (those paths differ between index and tree, which --merge leaves alone).
  *  The stash entry is not touched. Only while unmerged paths exist: with none,
  *  the same command would quietly drop a staged change that was never a clash. */
-export function stashPutBack(rootIn: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
-  if (!unmerged(root).length) return { ok: false, error: "nothing is in conflict, so there is nothing to put back" };
+export async function stashPutBack(rootIn: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
+  if (!(await unmerged(root)).length) return { ok: false, error: "nothing is in conflict, so there is nothing to put back" };
   // A real merge or cherry-pick conflict also has unmerged paths, and `reset --merge` would drop its state.
   if (!["clean", "bisecting"].includes(treeState(root)))
     return { ok: false, error: "a merge, rebase or pick is in progress, not a stash apply, so there is nothing to put back" };
-  return run(root, ["reset", "--merge"]);
+  return await runAsync(root, ["reset", "--merge"]);
 }
 
 /** Apply a stash even when the working tree has moved on at the stashed paths:
  *  delete the colliding working-tree versions first, then apply. The deleted
  *  content is replaced by the stash's — which is why the panel confirms this
  *  before calling it. */
-export function stashApplyOverwrite(rootIn: unknown, indexIn: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function stashApplyOverwrite(rootIn: unknown, indexIn: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const index = Number(indexIn);
   if (!Number.isInteger(index) || index < 0 || index > 999) return { ok: false, error: "invalid stash index" };
-  const sha = git(root, ["rev-parse", "--verify", "--quiet", `refs/stash@{${index}}`]).stdout.trim();
+  const sha = (await gitAsync(root, ["rev-parse", "--verify", "--quiet", `refs/stash@{${index}}`])).stdout.trim();
   if (!sha) return { ok: false, error: `no stash@{${index}}` };
-  return overwriteThenApply(root, sha, `stash@{${index}}`);
+  return await overwriteThenApply(root, sha, `stash@{${index}}`);
 }
 
 /** Delete the working-tree files a stash-shaped commit would collide with, then
  *  apply it. Shared by a stash and a WIP snapshot: both are `stash create`
  *  commits. */
-function overwriteThenApply(root: string, sha: string, applyRef: string): GitActionResult {
+async function overwriteThenApply(root: string, sha: string, applyRef: string): Promise<GitActionResult> {
   // A plain apply dies on two things: a path the working tree changed AND the
   // stash changed ("local changes would be overwritten"), and an untracked file
   // the stash also holds ("already exists"). Only those paths go. The first
@@ -4488,21 +4679,21 @@ function overwriteThenApply(root: string, sha: string, applyRef: string): GitAct
   // What the stash changed is its delta against the commit it was taken on (the
   // first parent), plus, when taken with --include-untracked, the files in its
   // third parent.
-  const lines = (a: string[]) => git(root, a).stdout.split("\n").filter(Boolean);
-  const delta = new Set(lines(["diff", "--name-only", `${sha}^1`, sha]));
-  if (git(root, ["rev-parse", "--verify", "--quiet", `${sha}^3`]).code === 0) {
-    for (const p of lines(["ls-tree", "-r", "--name-only", `${sha}^3`])) delta.add(p);
+  const lines = async (a: string[]) => (await gitAsync(root, a)).stdout.split("\n").filter(Boolean);
+  const delta = new Set(await lines(["diff", "--name-only", `${sha}^1`, sha]));
+  if ((await gitAsync(root, ["rev-parse", "--verify", "--quiet", `${sha}^3`])).code === 0) {
+    for (const p of await lines(["ls-tree", "-r", "--name-only", `${sha}^3`])) delta.add(p);
   }
   // Dirty means changed since HEAD (index or working tree) or untracked: that is
   // what makes apply refuse, even when the file already equals the stash's copy.
-  const dirty = lines(["diff", "--name-only", "HEAD", "--", "."]);
-  const untracked = lines(["ls-files", "--others", "--exclude-standard"]);
+  const dirty = await lines(["diff", "--name-only", "HEAD", "--", "."]);
+  const untracked = await lines(["ls-files", "--others", "--exclude-standard"]);
   const doomed = [...new Set([...dirty, ...untracked])].filter((p) => delta.has(p));
   for (const p of doomed) {
     const abs = inRepo(root, p);
     if (abs) rmSync(abs, { force: true });
   }
-  return run(root, ["stash", "apply", applyRef]);
+  return await runAsync(root, ["stash", "apply", applyRef]);
 }
 
 // --- WIP snapshots ----------------------------------------------------------
@@ -4543,11 +4734,11 @@ function wipTs(ref: string): number {
 }
 
 /** All snapshots, newest first. */
-export function listSnapshots(rootIn: unknown): { ok: boolean; snapshots?: WipSnapshot[]; error?: string } {
-  const root = repoRoot(rootIn);
+export async function listSnapshots(rootIn: unknown): Promise<{ ok: boolean; snapshots?: WipSnapshot[]; error?: string }> {
+  const root = await repoRootAsync(rootIn);
   if (!root) return { ok: false, error: "not a git repository root" };
   const fmt = `%(refname)${US}%(objectname)${US}%(creatordate:iso8601)`;
-  const r = git(root, ["for-each-ref", `--format=${fmt}`, "refs/agx/wip"]);
+  const r = await gitAsync(root, ["for-each-ref", `--format=${fmt}`, "refs/agx/wip"]);
   const snapshots: WipSnapshot[] = [];
   for (const line of r.stdout.split("\n")) {
     if (!line) continue;
@@ -4561,56 +4752,56 @@ export function listSnapshots(rootIn: unknown): { ok: boolean; snapshots?: WipSn
 
 /** Capture the working tree as a snapshot. Requires a dirty tree (a clean
  *  snapshot is a nothing-burger), and label may be empty. */
-export function createSnapshot(rootIn: unknown, labelIn: unknown): GitActionResult & { sha?: string; ref?: string } {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function createSnapshot(rootIn: unknown, labelIn: unknown): Promise<GitActionResult & { sha?: string; ref?: string }> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   if (treeState(root) !== "clean") return { ok: false, error: `cannot snapshot while ${treeState(root)}` };
-  const dirty = git(root, ["status", "--porcelain"]).stdout.trim();
+  const dirty = (await gitAsync(root, ["status", "--porcelain"])).stdout.trim();
   if (!dirty) return { ok: false, error: "the working tree is clean — nothing to snapshot" };
   const label = typeof labelIn === "string" ? labelIn.trim().slice(0, 80) : "";
   // Note: no -u. `git stash create` ignores it (it becomes part of the
   // message) — snapshots capture tracked changes, which is what a safety net
   // needs to guarantee; untracked files are already cheap to regenerate.
-  const made = git(root, ["stash", "create", "-m", label || "wip snapshot"]);
+  const made = await gitAsync(root, ["stash", "create", "-m", label || "wip snapshot"]);
   if (made.code !== 0 || !made.stdout.trim()) return { ok: false, error: "could not create a snapshot commit" };
   const sha = made.stdout.trim();
   if (!validHash(sha)) return { ok: false, error: "snapshot produced an unusable commit" };
   const ref = wipRef(Date.now(), label);
-  const upd = run(root, ["update-ref", ref, sha]);
+  const upd = await runAsync(root, ["update-ref", ref, sha]);
   if (!upd.ok) return upd;
   // Prune the oldest beyond the cap — the ts lives in the ref name.
-  const all = git(root, ["for-each-ref", "--format=%(refname)", "refs/agx/wip"]).stdout.trim().split("\n").filter(Boolean);
+  const all = (await gitAsync(root, ["for-each-ref", "--format=%(refname)", "refs/agx/wip"])).stdout.trim().split("\n").filter(Boolean);
   all.sort((a, b) => wipTs(b) - wipTs(a));
-  for (const old of all.slice(WIP_CAP)) run(root, ["update-ref", "-d", old]);
+  for (const old of all.slice(WIP_CAP)) await runAsync(root, ["update-ref", "-d", old]);
   return { ok: true, output: upd.output, sha, ref };
 }
 
 /** Bring a snapshot's tree back. Applies the snapshot commit's tree onto the
  *  current tree — the stash-apply machinery, which leaves the snapshot ref
  *  in place (restore is not a one-shot ticket). */
-export function restoreSnapshot(rootIn: unknown, shaIn: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function restoreSnapshot(rootIn: unknown, shaIn: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const sha = typeof shaIn === "string" ? shaIn.trim() : "";
   if (!validHash(sha)) return { ok: false, error: "invalid snapshot sha" };
   // The dialog promises that changed files at the snapshot's paths are
   // replaced; a plain `stash apply` aborts "would be overwritten by merge" on
   // exactly those, so the colliding files go first (same path as a stash).
-  return overwriteThenApply(root, sha, sha);
+  return await overwriteThenApply(root, sha, sha);
 }
 
 /** Delete a snapshot for good. */
-export function deleteSnapshot(rootIn: unknown, shaIn: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function deleteSnapshot(rootIn: unknown, shaIn: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const sha = typeof shaIn === "string" ? shaIn.trim() : "";
   if (!validHash(sha)) return { ok: false, error: "invalid snapshot sha" };
   // The ref is `refs/agx/wip/<timestamp>`, not the sha — find the one that
   // points at this snapshot.
-  const r = git(root, ["for-each-ref", `--format=%(refname)${US}%(objectname)`, "refs/agx/wip"]);
+  const r = await gitAsync(root, ["for-each-ref", `--format=%(refname)${US}%(objectname)`, "refs/agx/wip"]);
   for (const line of r.stdout.split("\n")) {
     const [ref, obj] = line.split(US);
-    if (obj === sha) return run(root, ["update-ref", "-d", ref || ""]);
+    if (obj === sha) return await runAsync(root, ["update-ref", "-d", ref || ""]);
   }
   return { ok: false, error: "no snapshot with that sha" };
 }
@@ -4623,21 +4814,53 @@ export function deleteSnapshot(rootIn: unknown, shaIn: unknown): GitActionResult
  *  One exception: a refusal that changed nothing (HEAD where it was, tree
  *  clean — a pull that cannot fast-forward) has no partial state to protect,
  *  so the stash is popped back and Changes shows the work as before. */
-export function withAutoStash(root: string, op: () => GitActionResult): GitActionResult {
-  const dirty = git(root, ["status", "--porcelain"]).stdout.trim();
-  if (!dirty) return op();
-  const before = stashTop(root);
-  const head = git(root, ["rev-parse", "HEAD"]).stdout.trim();
-  const pushed = git(root, ["stash", "push", "--include-untracked", "-m", "agx: auto-stash before surgery"]);
+export async function withAutoStash(root: string, op: () => GitActionResult | Promise<GitActionResult>): Promise<GitActionResult> {
+  return await underStashLock(root, async () => {
+    const st = await stashBefore(root);
+    if ("refused" in st) return st.refused;
+    return st.dirty ? await stashAfter(root, st.head, await op()) : op();
+  });
+}
+
+/** The stash stack is shared by every worktree of a repo, and `stashAfter` pops
+ *  `stash@{0}`: two push-op-pop dances must not interleave, or one pops the
+ *  other's work. One queue per common git dir. */
+const stashLocks = new Map<string, Promise<void>>();
+async function underStashLock<T>(root: string, fn: () => Promise<T>): Promise<T> {
+  const common = (await gitAsync(root, ["rev-parse", "--git-common-dir"])).stdout.trim();
+  const key = resolve(root, common || ".git");
+  const prev = stashLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const mine = new Promise<void>((r) => { release = r; });
+  const tail = prev.then(() => mine);
+  stashLocks.set(key, tail);
+  await prev;
+  try { return await fn(); } finally { release(); if (stashLocks.get(key) === tail) stashLocks.delete(key); }
+}
+
+/** The same, for an op that waits for git beside the loop (pull). */
+export async function withAutoStashAsync(root: string, op: () => Promise<GitActionResult>): Promise<GitActionResult> {
+  return await withAutoStash(root, op);
+}
+
+async function stashBefore(root: string): Promise<{ dirty: boolean; head: string } | { refused: GitActionResult }> {
+  const dirty = (await gitAsync(root, ["status", "--porcelain"])).stdout.trim();
+  if (!dirty) return { dirty: false, head: "" };
+  const before = await stashTop(root);
+  const head = (await gitAsync(root, ["rev-parse", "HEAD"])).stdout.trim();
+  const pushed = await gitAsync(root, ["stash", "push", "--include-untracked", "-m", "agx: auto-stash before surgery"]);
   // A non-zero exit with a new stash on top still stashed (see stashPush): carry on.
-  if (pushed.code !== 0 && stashTop(root) === before) return { ok: false, error: "auto-stash failed — the operation was not started" };
-  const r = op();
+  if (pushed.code !== 0 && await stashTop(root) === before) return { refused: { ok: false, error: "auto-stash failed — the operation was not started" } };
+  return { dirty: true, head };
+}
+
+async function stashAfter(root: string, head: string, r: GitActionResult): Promise<GitActionResult> {
   if (!r.ok) {
-    const untouched = git(root, ["rev-parse", "HEAD"]).stdout.trim() === head && git(root, ["status", "--porcelain"]).stdout.trim() === "";
-    if (untouched && git(root, ["stash", "pop", "stash@{0}"]).code === 0) return r;
+    const untouched = (await gitAsync(root, ["rev-parse", "HEAD"])).stdout.trim() === head && (await gitAsync(root, ["status", "--porcelain"])).stdout.trim() === "";
+    if (untouched && (await gitAsync(root, ["stash", "pop", "stash@{0}"])).code === 0) return r;
   }
   if (!r.ok) return { ...r, error: `${r.error ?? "operation failed"} — your changes are safe in stash@{0} ("agx: auto-stash before surgery")` };
-  const popped = git(root, ["stash", "pop", "stash@{0}"]);
+  const popped = await gitAsync(root, ["stash", "pop", "stash@{0}"]);
   if (popped.code !== 0) {
     // The op succeeded; the pop hit a conflict (the op touched the same files).
     // Leaving the stash is the only honest option — the tree is NOT dirty by
@@ -4648,19 +4871,20 @@ export function withAutoStash(root: string, op: () => GitActionResult): GitActio
 }
 
 // --- interactive hunk staging (lazygit's signature) --------------------------
-function gitApplyStdin(root: string, args: string[], patch: string): { code: number; stderr: string } {
+async function gitApplyStdin(root: string, args: string[], patch: string): Promise<{ code: number; stderr: string }> {
   try {
-    const proc = Bun.spawnSync(["git", "-C", root, ...args], { stdin: new TextEncoder().encode(patch), stdout: "pipe", stderr: "pipe", timeout: 15_000 });
-    return { code: proc.exitCode ?? 1, stderr: proc.stderr?.toString() ?? "" };
+    // Through the spawn broker: a fork of the server stalls every request.
+    const r = await runChild(["git", "-C", root, ...args], { stdin: patch, timeoutMs: 15_000 });
+    return { code: r.code ?? 1, stderr: r.stderr || (r.error ?? "") };
   } catch (e) { return { code: 1, stderr: String(e) }; }
 }
 
 type HunkIn = { oldStart: number; oldLines: number; newStart: number; newLines: number; lines: string[] };
 
 /** Stage / unstage / discard a single hunk by re-applying a one-hunk patch. */
-export function applyHunk(rootIn: string, pathAbs: unknown, staged: boolean, action: "stage" | "unstage" | "discard", hunk: HunkIn): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function applyHunk(rootIn: string, pathAbs: unknown, staged: boolean, action: "stage" | "unstage" | "discard", hunk: HunkIn): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const abs = safeAbs(pathAbs); if (!abs) return { ok: false, error: "invalid path" };
   const rel = relative(root, abs);
   if (!inRepo(root, rel)) return { ok: false, error: "path escapes repo" };
@@ -4686,7 +4910,7 @@ export function applyHunk(rootIn: string, pathAbs: unknown, staged: boolean, act
       : null;
   if (!args) return { ok: false, error: "invalid action" };
   void staged;
-  const r = gitApplyStdin(root, args, patch);
+  const r = await gitApplyStdin(root, args, patch);
   if (r.code !== 0) return { ok: false, error: r.stderr.trim() || "git apply failed (the hunk may no longer apply cleanly)" };
   return { ok: true, output: `${action}d hunk` };
 }
@@ -4703,25 +4927,49 @@ export function applyHunk(rootIn: string, pathAbs: unknown, staged: boolean, act
  * `name-rev` would happily call it `feat~2`, which is not a branch and reads
  * like one.
  */
-function refAt(root: string, sha: string): string | null {
+async function refAt(root: string, sha: string): Promise<string | null> {
   if (!validHash(sha)) return null;
-  const heads = git(root, ["for-each-ref", "--points-at", sha, "--format=%(refname:short)", "refs/heads"])
+  const heads = (await gitAsync(root, ["for-each-ref", "--points-at", sha, "--format=%(refname:short)", "refs/heads"]))
     .stdout.split("\n").filter(Boolean);
   if (heads.length) return heads[0]!;
-  const remotes = git(root, ["for-each-ref", "--points-at", sha, "--format=%(refname:short)", "refs/remotes"])
+  const remotes = (await gitAsync(root, ["for-each-ref", "--points-at", sha, "--format=%(refname:short)", "refs/remotes"]))
     .stdout.split("\n").filter(Boolean).filter((n) => !n.endsWith("/HEAD"));
   return remotes[0] ?? null;
 }
 
 /** A commit's first line, so a side with no branch name is still nameable. */
-function subjectOf(root: string, sha: string): string {
+async function subjectOf(root: string, sha: string): Promise<string> {
   if (!validHash(sha)) return "";
-  const r = git(root, ["log", "-1", "--format=%s", sha]);
+  const r = await gitAsync(root, ["log", "-1", "--format=%s", sha]);
   return r.code === 0 ? r.stdout.trim() : "";
 }
 
-const sideOf = (root: string, sha: string, ref?: string | null): MergeSide | null =>
-  validHash(sha) ? { ref: ref ?? refAt(root, sha), sha, subject: subjectOf(root, sha) } : null;
+const sideOf = async (root: string, sha: string, ref?: string | null): Promise<MergeSide | null> =>
+  validHash(sha) ? { ref: ref ?? await refAt(root, sha), sha, subject: await subjectOf(root, sha) } : null;
+
+/* Awaited twins of the three above, for the read routes (see mergeInfoAsync).
+   Same commands in the same order; only the waiting differs. */
+async function refAtAsync(root: string, sha: string): Promise<string | null> {
+  if (!validHash(sha)) return null;
+  const heads = (await gitAsync(root, ["for-each-ref", "--points-at", sha, "--format=%(refname:short)", "refs/heads"]))
+    .stdout.split("\n").filter(Boolean);
+  if (heads.length) return heads[0]!;
+  const remotes = (await gitAsync(root, ["for-each-ref", "--points-at", sha, "--format=%(refname:short)", "refs/remotes"]))
+    .stdout.split("\n").filter(Boolean).filter((n) => !n.endsWith("/HEAD"));
+  return remotes[0] ?? null;
+}
+
+async function subjectOfAsync(root: string, sha: string): Promise<string> {
+  if (!validHash(sha)) return "";
+  const r = await gitAsync(root, ["log", "-1", "--format=%s", sha]);
+  return r.code === 0 ? r.stdout.trim() : "";
+}
+
+async function sideOfAsync(root: string, sha: string, ref?: string | null): Promise<MergeSide | null> {
+  if (!validHash(sha)) return null;
+  const name = ref ?? await refAtAsync(root, sha);
+  return { ref: name, sha, subject: await subjectOfAsync(root, sha) };
+}
 
 /** Read one of git's little state files, or "" — they are absent as often as
  *  they are present, and an absent one is not an error. */
@@ -4750,23 +4998,73 @@ function stateFile(dir: string, name: string): string {
  * Goes through gitDir(), never `<root>/.git`: in a linked worktree that path is
  * a FILE containing a pointer, and every read here would come back empty.
  */
-export function mergeInfo(rootIn: unknown): MergeInfo {
-  const root = repoRoot(rootIn);
+export async function mergeInfo(rootIn: unknown): Promise<MergeInfo> {
+  const root = await repoRootAsync(rootIn);
   if (!root) return { ok: false, state: "clean", ours: null, theirs: null, error: "not a git repository root" };
   const dir = gitDir(root);
   if (!dir) return { ok: false, state: "clean", ours: null, theirs: null, error: "cannot find the git directory" };
 
   const state = treeState(root);
-  const head = git(root, ["rev-parse", "HEAD"]).stdout.trim();
-  const branch = git(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim() || null;
+  const head = (await gitAsync(root, ["rev-parse", "HEAD"])).stdout.trim();
+  const branch = (await gitAsync(root, ["symbolic-ref", "--quiet", "--short", "HEAD"])).stdout.trim() || null;
 
+  const ask = mergeAsk(dir, state, head, branch);
+  // Bisecting is a state, but not one with two sides to choose between.
+  if (!ask) return { ok: true, state, ours: null, theirs: null };
+  const ours = ask.ours ? await sideOf(root, ask.ours.sha, ask.ours.ref) : null;
+  const theirs = ask.theirs ? await sideOf(root, ask.theirs.sha, ask.theirs.ref) : null;
+  return { ok: true, state, ours, theirs, ...(ask.step ? { step: ask.step } : {}), ...(ask.total ? { total: ask.total } : {}) };
+}
+
+/**
+ * {@link mergeInfo}, waiting for git beside the server's loop: what the read
+ * routes call (`GET /git/merge-info`, and the merge session behind
+ * `GET /git/merge-session`).
+ *
+ * mergeInfo is up to eight blocking spawns (HEAD, the branch, then two
+ * for-each-ref and a log per side) on the server's only thread, and the
+ * conflict screen asks for it while a merge is stopped, which on a loaded
+ * machine is when a spawn is slow. A blocking spawn of the same kind was
+ * measured holding the installed app for 9.7 s and 19.9 s.
+ *
+ * A twin, not a replacement, and that is the ceiling of this change: the
+ * write paths (resolveWith, resolveBlocks, mergeContinue, reopenConflict)
+ * still call the blocking mergeInfo, between blocking git writes of their
+ * own. Which sides are asked about is decided once, in mergeAsk, so the two
+ * cannot come to name different commits.
+ */
+export async function mergeInfoAsync(rootIn: unknown): Promise<MergeInfo> {
+  const root = await repoRootAsync(rootIn);
+  if (!root) return { ok: false, state: "clean", ours: null, theirs: null, error: "not a git repository root" };
+  const dir = gitDir(root);
+  if (!dir) return { ok: false, state: "clean", ours: null, theirs: null, error: "cannot find the git directory" };
+
+  const state = treeState(root);
+  const head = (await gitAsync(root, ["rev-parse", "HEAD"])).stdout.trim();
+  const branch = (await gitAsync(root, ["symbolic-ref", "--quiet", "--short", "HEAD"])).stdout.trim() || null;
+
+  const ask = mergeAsk(dir, state, head, branch);
+  if (!ask) return { ok: true, state, ours: null, theirs: null };
+  const ours = ask.ours ? await sideOfAsync(root, ask.ours.sha, ask.ours.ref) : null;
+  const theirs = ask.theirs ? await sideOfAsync(root, ask.theirs.sha, ask.theirs.ref) : null;
+  return { ok: true, state, ours, theirs, ...(ask.step ? { step: ask.step } : {}), ...(ask.total ? { total: ask.total } : {}) };
+}
+
+/** One side as it will be asked of git: the commit, and its name when the
+ *  operation's own state already gives one. */
+type SideAsk = { sha: string; ref?: string | null };
+
+/**
+ * Which two commits a stopped operation is between, read from its state
+ * files. No git call: the blocking and the awaited mergeInfo both start here.
+ * Null when the state has no two sides.
+ */
+function mergeAsk(
+  dir: string, state: GitTreeState, head: string, branch: string | null,
+): { ours: SideAsk | null; theirs: SideAsk | null; step?: number; total?: number } | null {
   switch (state) {
     case "merging":
-      return {
-        ok: true, state,
-        ours: sideOf(root, head, branch),
-        theirs: sideOf(root, stateFile(dir, "MERGE_HEAD")),
-      };
+      return { ours: { sha: head, ref: branch }, theirs: { sha: stateFile(dir, "MERGE_HEAD") } };
 
     case "rebasing": {
       // Two implementations, and they keep the same facts under different
@@ -4780,34 +5078,22 @@ export function mergeInfo(rootIn: unknown): MergeInfo {
       const step = Number(stateFile(md, "msgnum") || stateFile(md, "next")) || undefined;
       const total = Number(stateFile(md, "end") || stateFile(md, "last")) || undefined;
       return {
-        ok: true, state,
         // Inverted on purpose: see above.
-        ours: sideOf(root, onto || head),
-        theirs: stopped === head && headName
-          ? sideOf(root, stopped, headName)
-          : sideOf(root, stopped),
+        ours: { sha: onto || head },
+        theirs: stopped === head && headName ? { sha: stopped, ref: headName } : { sha: stopped },
         ...(step ? { step } : {}),
         ...(total ? { total } : {}),
       };
     }
 
     case "cherry-picking":
-      return {
-        ok: true, state,
-        ours: sideOf(root, head, branch),
-        theirs: sideOf(root, stateFile(dir, "CHERRY_PICK_HEAD")),
-      };
+      return { ours: { sha: head, ref: branch }, theirs: { sha: stateFile(dir, "CHERRY_PICK_HEAD") } };
 
     case "reverting":
-      return {
-        ok: true, state,
-        ours: sideOf(root, head, branch),
-        theirs: sideOf(root, stateFile(dir, "REVERT_HEAD")),
-      };
+      return { ours: { sha: head, ref: branch }, theirs: { sha: stateFile(dir, "REVERT_HEAD") } };
 
     default:
-      // Bisecting is a state, but not one with two sides to choose between.
-      return { ok: true, state, ours: null, theirs: null };
+      return null;
   }
 }
 
@@ -4876,7 +5162,7 @@ export interface ConflictPreview {
  * beats offline-and-silent.
  */
 export async function conflictPreview(rootIn: unknown, base: string, head: string, number?: number, githubHead?: string): Promise<ConflictPreview> {
-  const root = repoRoot(rootIn);
+  const root = await repoRootAsync(rootIn);
   if (!root) return { ok: false, conflicts: [], clean: false, error: "not a git repository root" };
   if (!validRef(base) || !validRef(head)) return { ok: false, conflicts: [], clean: false, error: "invalid branch name" };
   const pr = Number.isInteger(number) && (number as number) > 0 ? (number as number) : null;
@@ -4900,8 +5186,8 @@ export async function conflictPreview(rootIn: unknown, base: string, head: strin
    * the next look recomputes, fetch and all. No polling, no extra network on
    * the quiet path.
    */
-  const localTipOf = (b: string) => git(root, ["rev-parse", "--verify", "--quiet", `${b}^{commit}`]).stdout.trim();
-  const tip = localTipOf(head);
+  const localTipOf = async (b: string) => (await gitAsync(root, ["rev-parse", "--verify", "--quiet", `${b}^{commit}`])).stdout.trim();
+  const tip = await localTipOf(head);
   const hit = previewCache.get(key);
   if (hit && Date.now() - hit.at < PREVIEW_TTL_MS && hit.localTip === tip) return hit.v;
 
@@ -4925,9 +5211,9 @@ export async function conflictPreview(rootIn: unknown, base: string, head: strin
   const fetched = await gitAsync(root, ["fetch", "--quiet", "origin", ...spec]);
   const stale = fetched.code !== 0;
 
-  const have = (ref: string) => git(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).code === 0;
-  const pick = (b: string) => (have(`origin/${b}`) ? `origin/${b}` : have(b) ? b : null);
-  const a = pick(base);
+  const have = async (ref: string) => (await gitAsync(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`])).code === 0;
+  const pick = async (b: string) => (await have(`origin/${b}`) ? `origin/${b}` : await have(b) ? b : null);
+  const a = await pick(base);
   // The pull ref first: it is the pull request's actual head wherever it
   // lives, and a same-named local branch may be something else entirely.
   /*
@@ -4940,9 +5226,9 @@ export async function conflictPreview(rootIn: unknown, base: string, head: strin
    * the fetch above did not bring that commit down, it is asked for by SHA,
    * once; only if that fails too does the answer fall back to the refs.
    */
-  if (sha && !have(sha)) await gitAsync(root, ["fetch", "--quiet", "origin", sha]);
-  const z = (sha && have(sha) ? sha : null)
-    ?? (pr && have(`origin/pr/${pr}`) ? `origin/pr/${pr}` : null) ?? pick(head);
+  if (sha && !await have(sha)) await gitAsync(root, ["fetch", "--quiet", "origin", sha]);
+  const z = (sha && await have(sha) ? sha : null)
+    ?? (pr && await have(`origin/pr/${pr}`) ? `origin/pr/${pr}` : null) ?? await pick(head);
   if (!a || !z) {
     const v: ConflictPreview = { ok: false, conflicts: [], clean: false, error: `no local copy of ${!a ? base : head} — fetch first` };
     previewCache.set(key, { at: Date.now(), v, localTip: tip });
@@ -4973,18 +5259,18 @@ export async function conflictPreview(rootIn: unknown, base: string, head: strin
    * where there is a conflict to explain, so a clean pull request pays nothing.
    */
   let resolvedLocally: ConflictPreview["resolvedLocally"];
-  if (conflicts.length && have(head)) {
-    const contains = git(root, ["merge-base", "--is-ancestor", a, head]).code === 0;
+  if (conflicts.length && await have(head)) {
+    const contains = (await gitAsync(root, ["merge-base", "--is-ancestor", a, head])).code === 0;
     if (contains) {
       // What pushing would send: commits the local branch has and the pushed
       // head does not. Counted against `z`, which is the pull request's actual
       // head wherever it lives.
-      const ahead = Number(git(root, ["rev-list", "--count", `${z}..${head}`]).stdout.trim()) || 0;
+      const ahead = Number((await gitAsync(root, ["rev-list", "--count", `${z}..${head}`])).stdout.trim()) || 0;
       resolvedLocally = { branch: head, ahead };
     }
   }
 
-  const headSha = git(root, ["rev-parse", "--verify", "--quiet", `${z}^{commit}`]).stdout.trim();
+  const headSha = (await gitAsync(root, ["rev-parse", "--verify", "--quiet", `${z}^{commit}`])).stdout.trim();
   const v: ConflictPreview = {
     ok: true, conflicts, clean: r.code === 0,
     ...(headSha ? { headSha } : {}),
@@ -5018,12 +5304,41 @@ export function sessionOp(info: MergeInfo): string {
  * that reliably happens: the panel may be opened at any point during a merge,
  * including one somebody started in a terminal an hour ago.
  */
-export function mergeSession(rootIn: unknown): MergeSessionView {
-  const root = repoRoot(rootIn);
+export async function mergeSession(rootIn: unknown): Promise<MergeSessionView> {
+  const root = await repoRootAsync(rootIn);
   if (!root) return { ok: false, op: "", files: [], left: [], mine: [], error: "not a git repository root" };
-  const info = mergeInfo(root);
+  const info = await mergeInfo(root);
+  const left = (await gitAsync(root, ["diff", "--name-only", "--diff-filter=U", "-z"])).stdout.split("\u0000").filter(Boolean);
+  return sessionView(root, info, left);
+}
+
+/** {@link mergeSession}, waiting for git beside the server's loop: what
+ *  `GET /git/merge-session` calls. See mergeInfoAsync for why, and for what
+ *  still uses the blocking one. */
+export async function mergeSessionAsync(rootIn: unknown): Promise<MergeSessionView> {
+  const root = await repoRootAsync(rootIn);
+  if (!root) return { ok: false, op: "", files: [], left: [], mine: [], error: "not a git repository root" };
+  const info = await mergeInfoAsync(root);
+  const left = (await gitAsync(root, ["diff", "--name-only", "--diff-filter=U", "-z"])).stdout.split("\u0000").filter(Boolean);
+  const view = sessionView(root, info, left);
+  if (view.op && left.length) {
+    const places: Record<string, number> = {};
+    for (const rel of left.slice(0, 200)) {
+      try {
+        const abs = join(root, rel);
+        if (statSync(abs).size > 2_000_000) continue;
+        places[rel] = (readFileSync(abs, "utf8").match(/^<<<<<<< /gm) ?? []).length;
+      } catch { /* a file git lists but the disk lacks: no count */ }
+    }
+    view.places = places;
+  }
+  return view;
+}
+
+/** The session as the screen reads it, from what git just said. The
+ *  observation (see mergeSession) happens here, for both ways of asking. */
+function sessionView(root: string, info: MergeInfo, left: string[]): MergeSessionView {
   const op = sessionOp(info);
-  const left = git(root, ["diff", "--name-only", "--diff-filter=U", "-z"]).stdout.split("\u0000").filter(Boolean);
   if (!op) {
     // Nothing is stopped. Whatever we knew is about a merge that is over.
     return { ok: true, op: "", files: [], left, mine: [] };
@@ -5046,21 +5361,21 @@ export function mergeSession(rootIn: unknown): MergeSessionView {
  * would be lost — including, when the file was resolved somewhere else, that
  * the work being thrown away is not ours and we cannot say what it was.
  */
-export function reopenConflict(rootIn: unknown, relIn: unknown, confirmIn?: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function reopenConflict(rootIn: unknown, relIn: unknown, confirmIn?: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const rels = validRels(root, [relIn]);
   if (!rels?.length) return { ok: false, error: "invalid path" };
   const rel = rels[0]!;
 
-  const info = mergeInfo(root);
+  const info = await mergeInfo(root);
   const op = sessionOp(info);
   if (!op) return { ok: false, error: "nothing is being merged here — there is no conflict to put back" };
   const stop = stopFor(root, op);
   if (!stop?.files.includes(rel)) {
     return { ok: false, error: `${rel} was not one of this merge's conflicts` };
   }
-  const unmerged = git(root, ["diff", "--name-only", "--diff-filter=U", "-z"]).stdout.split("\u0000").filter(Boolean);
+  const unmerged = (await gitAsync(root, ["diff", "--name-only", "--diff-filter=U", "-z"])).stdout.split("\u0000").filter(Boolean);
   if (unmerged.includes(rel)) return { ok: false, error: `${rel} is still conflicted — there is nothing to put back` };
 
   if (confirmIn !== true) {
@@ -5073,12 +5388,12 @@ export function reopenConflict(rootIn: unknown, relIn: unknown, confirmIn?: unkn
     };
   }
 
-  const r = run(root, ["checkout", "--merge", "--", rel]);
+  const r = await runAsync(root, ["checkout", "--merge", "--", rel]);
   if (!r.ok) return r;
   // Verify rather than assume: `checkout --merge` exits 0 in cases where it
   // has done nothing, and a button that silently does nothing is worse than
   // one that fails.
-  const after = git(root, ["diff", "--name-only", "--diff-filter=U", "-z"]).stdout.split("\u0000").filter(Boolean);
+  const after = (await gitAsync(root, ["diff", "--name-only", "--diff-filter=U", "-z"])).stdout.split("\u0000").filter(Boolean);
   if (!after.includes(rel)) return { ok: false, error: `git did not put the conflict in ${rel} back` };
   noteReopened(root, op, rel);
   return { ok: true, output: `${rel} is conflicted again` };
@@ -5124,13 +5439,13 @@ const STOPPED_REFUSES = new Set([
  * whole content of the message, and the two buttons that do those things are
  * on the screen it will appear on.
  */
-export function stoppedRefusal(rootIn: unknown, pathname: string): GitActionResult | null {
+export async function stoppedRefusal(rootIn: unknown, pathname: string): Promise<GitActionResult | null> {
   if (!STOPPED_REFUSES.has(pathname)) return null;
-  const root = repoRoot(rootIn);
+  const root = await repoRootAsync(rootIn);
   if (!root) return null;
   const state = treeState(root);
   if (state === "clean" || state === "bisecting") return null;
-  const n = git(root, ["diff", "--name-only", "--diff-filter=U"]).stdout.trim();
+  const n = (await gitAsync(root, ["diff", "--name-only", "--diff-filter=U"])).stdout.trim();
   const left = n ? n.split("\n").length : 0;
   // "merging" -> "merge", "rebasing" -> "rebase"; stripping "ing" gave "merg".
   const doing = ({ merging: "merge", rebasing: "rebase", reverting: "revert", "cherry-picking": "cherry-pick" } as Record<string, string>)[state] ?? state;
@@ -5305,9 +5620,20 @@ function locate(segments: (string[] | ConflictBlock)[]): ConflictSegment[] {
  *  browser tab. */
 const CONFLICT_FILE_MAX = 4 * 1024 * 1024;
 
-export function conflictFile(rootIn: unknown, relIn: unknown): ConflictFile {
+export async function conflictFile(rootIn: unknown, relIn: unknown): Promise<ConflictFile> {
+  return conflictFileAt(await repoRootAsync(rootIn), relIn);
+}
+
+/** {@link conflictFile} for `GET /git/conflict-file`: the one git call in it,
+ *  finding the repository root, waits beside the server's loop. The file
+ *  itself is read the same way by both. */
+export async function conflictFileAsync(rootIn: unknown, relIn: unknown): Promise<ConflictFile> {
+  return conflictFileAt(await repoRootAsync(rootIn), relIn);
+}
+
+function conflictFileAt(root: string | null, relIn: unknown): ConflictFile {
   const empty = { segments: [], blocks: [], lines: 0, stamp: "" };
-  const root = repoRoot(rootIn); if (!root) return { ok: false, ...empty, error: "not a git repository root" };
+  if (!root) return { ok: false, ...empty, error: "not a git repository root" };
   const rels = validRels(root, [relIn]);
   if (!rels?.length) return { ok: false, ...empty, error: "invalid path" };
   if (!staysIn(root, join(root, rels[0]!))) return { ok: false, ...empty, error: "that path leaves the repository" };
@@ -5359,7 +5685,7 @@ export async function conflictPreviewFile(
   const empty = { segments: [], blocks: [], lines: 0, stamp: "" };
   const fail = (error: string) => ({ ok: false, ...empty, error });
   if (typeof path !== "string" || !path) return fail("invalid path");
-  const root = repoRoot(rootIn);
+  const root = await repoRootAsync(rootIn);
   if (!root) return fail("not a git repository root");
   const read = async (v: ConflictPreview) => {
     if (!v.ok) return { error: v.error ?? "could not compare those branches" };
@@ -5387,10 +5713,24 @@ export async function conflictPreviewFile(
   return parsed.ok && !parsed.blocks.length ? { ...parsed, noMarkers: true } : parsed;
 }
 
-export function conflictBlocks(rootIn: unknown, relIn: unknown): {
+export async function conflictBlocks(rootIn: unknown, relIn: unknown): Promise<{
+  ok: boolean; blocks: ConflictBlock[]; error?: string;
+}> {
+  return conflictBlocksAt(await repoRootAsync(rootIn), relIn);
+}
+
+/** {@link conflictBlocks} for `GET /git/conflict-blocks`, the root found
+ *  without holding the server's loop. */
+export async function conflictBlocksAsync(rootIn: unknown, relIn: unknown): Promise<{
+  ok: boolean; blocks: ConflictBlock[]; error?: string;
+}> {
+  return conflictBlocksAt(await repoRootAsync(rootIn), relIn);
+}
+
+function conflictBlocksAt(root: string | null, relIn: unknown): {
   ok: boolean; blocks: ConflictBlock[]; error?: string;
 } {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, blocks: [], error: "not a git repository root" };
+  if (!root) return { ok: false, blocks: [], error: "not a git repository root" };
   const rels = validRels(root, [relIn]);
   if (!rels?.length) return { ok: false, blocks: [], error: "invalid path" };
   if (!staysIn(root, join(root, rels[0]!))) return { ok: false, blocks: [], error: "that path leaves the repository" };
@@ -5449,9 +5789,9 @@ function validateChoices(list: unknown[]): string | null {
   return null;
 }
 
-export function resolveBlocks(rootIn: unknown, relIn: unknown, choicesIn: unknown, stampIn?: unknown): GitActionResult {
-  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
-  const g = guard(root); if (g) return g;
+export async function resolveBlocks(rootIn: unknown, relIn: unknown, choicesIn: unknown, stampIn?: unknown): Promise<GitActionResult> {
+  const root = await repoRootAsync(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = await guard(root); if (g) return g;
   const rels = validRels(root, [relIn]);
   if (!rels?.length) return { ok: false, error: "invalid path" };
   if (!Array.isArray(choicesIn)) return { ok: false, error: "choices must be a list" };
@@ -5497,7 +5837,7 @@ export function resolveBlocks(rootIn: unknown, relIn: unknown, choicesIn: unknow
   const out = outLines.join("\n");
 
   try { writeFileSync(abs, out); } catch { return { ok: false, error: "cannot write that file" }; }
-  const added = run(root, ["add", "--", rels[0]!]);
-  if (added.ok) noteResolved(root, sessionOp(mergeInfo(root)), [rels[0]!]);
+  const added = await runAsync(root, ["add", "--", rels[0]!]);
+  if (added.ok) noteResolved(root, sessionOp(await mergeInfo(root)), [rels[0]!]);
   return added;
 }

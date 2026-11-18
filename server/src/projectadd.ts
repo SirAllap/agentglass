@@ -35,6 +35,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { reposUnder } from "./gitwork.ts";
 import type { FolderPrecheck } from "../../shared/types.ts";
+import { runChild } from "./broker/brokerRun.ts";
 
 /** How long a clone may take before it is abandoned. Generous, because a real
  *  repository over a slow line legitimately takes minutes; bounded, because the
@@ -167,11 +168,9 @@ export function gitFailure(stderr: string): string {
  *  find out what this already knew. */
 async function git(args: string[], cwd: string, timeout: number): Promise<{ ok: boolean; err: string }> {
   try {
-    const p = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
-    const timer = setTimeout(() => { try { p.kill(); } catch { /* already gone */ } }, timeout);
-    const [code, err] = await Promise.all([p.exited, new Response(p.stderr).text()]);
-    clearTimeout(timer);
-    return code === 0 ? { ok: true, err: "" } : { ok: false, err: gitFailure(err) };
+    // Through the spawn broker: a fork of the server stalls every request.
+    const r = await runChild(["git", ...args], { cwd, timeoutMs: timeout });
+    return r.code === 0 ? { ok: true, err: "" } : { ok: false, err: gitFailure(r.stderr || (r.error ?? "")) };
   } catch (e) {
     return { ok: false, err: e instanceof Error ? e.message : String(e) };
   }

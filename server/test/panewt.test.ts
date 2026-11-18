@@ -360,6 +360,26 @@ describe("paneDirs", () => {
   test("no agent, no note, no answer — and no throw", () => {
     expect(paneDirs("%9913", 1, () => []).dirs).toEqual([]);
   });
+
+  test("a plain shell with no agent still answers, with its own tmux directory", () => {
+    // `agentCwdsUnder` only reports an agent CLI's /proc cwd, so a pane running
+    // a bare shell gets `cwds = []` — the branch a card is read off of must
+    // still come from somewhere, and the only thing a plain shell has is the
+    // directory tmux itself reports for it (`pane_current_path`).
+    const { dirs, agent } = paneDirs("%9914", 1, () => [], undefined, WT);
+    expect(dirs).toEqual([WT]);
+    expect(agent).toBe("");
+  });
+
+  test("an agent's own directory still comes first, ahead of the plain-shell fallback", () => {
+    const { dirs } = paneDirs("%9915", 1, () => [REPO], undefined, WT);
+    expect(dirs[0]).toBe(REPO);
+  });
+
+  test("the fallback is not duplicated when the agent already stands there", () => {
+    const { dirs } = paneDirs("%9916", 1, () => [WT], undefined, WT);
+    expect(dirs).toEqual([WT]);
+  });
 });
 
 describe("paneHeldSessions", () => {

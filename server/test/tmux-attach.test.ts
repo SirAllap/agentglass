@@ -25,6 +25,7 @@ import { story } from "./story.ts";
 import { mkdirSync, rmSync } from "node:fs";
 import { attachArgvFor, readFrame, runAction, restoreWindows, phoneWindows, type TmuxTarget } from "../src/tmuxctl.ts";
 import { TEST_TERM } from "./tmuxTerm.ts";
+import { agxTestBase } from "./tmuxTmp.ts";
 
 const SOCK = "agx-attach-test";
 /*
@@ -67,7 +68,7 @@ const SOCK = "agx-attach-test";
  * Short on purpose, still: the 108-byte limit below is measured, and a pid is
  * five or six of those bytes.
  */
-const TMPDIR = `/tmp/agx-tmux-${process.pid}`;
+const TMPDIR = agxTestBase("agx-tmux");
 const REAL_TMPDIR = process.env.TMUX_TMPDIR;
 const HAVE_TMUX = !!Bun.which("tmux") && !!Bun.which("python3") && process.platform === "linux";
 
@@ -194,7 +195,7 @@ afterAll(() => {
 
 describe.if(HAVE_TMUX)("attaching a phone to a pane that already exists", () => {
   const step = story();
-  step("the fixture is a wide desk with something running in it", () => {
+  step("the fixture is a wide desk with something running in it", async () => {
     expect(paneId).toMatch(/^%\d+$/);
     expect(sessionId).toMatch(/^\$\d+$/);
     // 200 columns, from this file's own `new-session -x 200`. When this read 80
@@ -206,7 +207,7 @@ describe.if(HAVE_TMUX)("attaching a phone to a pane that already exists", () => 
     expect(tmux("list-sessions", "-F", "#{session_name}").trim()).toBe("work");
   });
 
-  step("no command is built for anything that is not a live pane", () => {
+  step("no command is built for anything that is not a live pane", async () => {
     // The id goes onto a command line, so this is the boundary that matters.
     // A caller can only ever name a pane the machine is really running.
     expect(attachArgvFor(OURS, "%99999")).toBeNull();
@@ -215,7 +216,7 @@ describe.if(HAVE_TMUX)("attaching a phone to a pane that already exists", () => 
     expect(attachArgvFor(OURS, "$0")).toBeNull();
   });
 
-  step("and the one it builds says exactly what it does", () => {
+  step("and the one it builds says exactly what it does", async () => {
     const built = attachArgvFor(OURS, paneId, "fixed");
     expect(ours(built)).toBe(true);
     expect(built).not.toBeNull();
@@ -246,7 +247,7 @@ describe.if(HAVE_TMUX)("attaching a phone to a pane that already exists", () => 
     expect(argv).not.toContain("resize-window");
   });
 
-  step("a fit costs exactly the window that was opened", () => {
+  step("a fit costs exactly the window that was opened", async () => {
     const built = attachArgvFor(OURS, paneId, "fixed", true, { cols: 80, rows: 24 })!;
     expect(ours(built)).toBe(true);
     const argv = built.argv;
@@ -316,7 +317,7 @@ describe.if(HAVE_TMUX)("attaching a phone to a pane that already exists", () => 
     }
   }, 30_000);
 
-  step("and a fit with no size given leaves the window alone", () => {
+  step("and a fit with no size given leaves the window alone", async () => {
     // Rather than guessing at one. A window resized to a number nobody sent is
     // worse than a window that was not resized.
     const built = attachArgvFor(OURS, paneId, "fixed", true)!;
@@ -441,7 +442,7 @@ describe.if(HAVE_TMUX)("taking the width back from a phone", () => {
 
   afterAll(() => { phone?.kill(); });
 
-  step("the frame carries the client's size and every window's, in one read", () => {
+  step("the frame carries the client's size and every window's, in one read", async () => {
     // Both halves of the comparison the desk makes, off the SAME
     // list-clients/list-windows the tab strip was already paying for. If this
     // ever costs a second tmux call it is being run twice a second, per client.
@@ -492,7 +493,7 @@ describe.if(HAVE_TMUX)("taking the width back from a phone", () => {
 
   step("take-over gives the desk its width back and leaves the phone attached", async () => {
     const before = others.map(geom);
-    expect(runAction(target, "takeover", win)).toBe(true);
+    expect(await runAction(target, "takeover", win)).toBe(true);
     await Bun.sleep(600);
     expect(cols(win)).toBe(deskWidth);
     /*
@@ -593,15 +594,15 @@ describe.if(HAVE_TMUX)("taking the width back from a phone", () => {
     }
   }, 30_000);
 
-  step("and nothing but a window id on our own server can be taken over", () => {
+  step("and nothing but a window id on our own server can be taken over", async () => {
     // Same envelope as `kill`: the id goes onto a command line, and the socket
     // is the one we resolved from our own client rather than anything a caller
     // named. The narrower "was it on the frame we sent" check lives at the
     // socket handler, which is the only place that knows what was sent.
-    expect(runAction(target, "takeover")).toBe(false);
-    expect(runAction(target, "takeover", "2")).toBe(false);
-    expect(runAction(target, "takeover", "$0")).toBe(false);
-    expect(runAction(target, "takeover", "@1 ; kill-server")).toBe(false);
+    expect(await runAction(target, "takeover")).toBe(false);
+    expect(await runAction(target, "takeover", "2")).toBe(false);
+    expect(await runAction(target, "takeover", "$0")).toBe(false);
+    expect(await runAction(target, "takeover", "@1 ; kill-server")).toBe(false);
     expect(tmux("list-sessions", "-F", "#{session_name}")).toContain("work");
   });
 });
@@ -667,7 +668,7 @@ describe.if(HAVE_TMUX)("zooming the pane the phone opened", () => {
 
   afterAll(() => { phone?.kill(); });
 
-  step("the fixture is a two-pane window with a wide desk beside it", () => {
+  step("the fixture is a two-pane window with a wide desk beside it", async () => {
     expect(zwin).toMatch(/^@\d+$/);
     expect(tapped).toMatch(/^%\d+$/);
     expect(other).toMatch(/^%\d+$/);
@@ -679,7 +680,7 @@ describe.if(HAVE_TMUX)("zooming the pane the phone opened", () => {
     expect(Number(paneGeom(tapped).split("x")[0])).toBeLessThan(Number(geom(zwin).split("x")[0]));
   });
 
-  step("a window with one pane is not zoomed, because there is nothing to zoom", () => {
+  step("a window with one pane is not zoomed, because there is nothing to zoom", async () => {
     // Not an optimisation. `resize-pane -Z` on a single-pane window is a no-op
     // on tmux 3.6a (measured: exit 0, flag still 0), so the reason to skip it is
     // not that tmux would mind — it is that recording "this window was not
@@ -691,7 +692,7 @@ describe.if(HAVE_TMUX)("zooming the pane the phone opened", () => {
     expect(built.argv).not.toContain("resize-pane");
   });
 
-  step("the command zooms the pane that was tapped, and says which one it owes back", () => {
+  step("the command zooms the pane that was tapped, and says which one it owes back", async () => {
     const built = attachArgvFor(OURS, tapped, "zoom", true, { cols: 44, rows: 60 })!;
     expect(ours(built)).toBe(true);
     // The pane, not the window: tmux zooms whichever pane the target names, and
@@ -809,7 +810,7 @@ describe.if(HAVE_TMUX)("zooming the pane the phone opened", () => {
     expect(zoomed(zwin)).toBe("1");
   }, 40_000);
 
-  step("a reconnection to the pane already zoomed sends nothing and still owes it", () => {
+  step("a reconnection to the pane already zoomed sends nothing and still owes it", async () => {
     /*
      * The mirror of the case above, and the one that must send NOTHING: a
      * window already zoomed onto the pane being opened. `select-pane` on the
@@ -830,7 +831,7 @@ describe.if(HAVE_TMUX)("zooming the pane the phone opened", () => {
   });
 
   step("the desk asking for its window back gets its panes as well as its width", async () => {
-    expect(runAction(target, "takeover", zwin)).toBe(true);
+    expect(await runAction(target, "takeover", zwin)).toBe(true);
     await Bun.sleep(800);
     // Both halves. The width alone was what this button used to do, and on a
     // zoomed window that is a window of the right shape still missing three of
@@ -842,7 +843,7 @@ describe.if(HAVE_TMUX)("zooming the pane the phone opened", () => {
     expect(tmux("list-clients", "-F", "#{client_session}")).toContain("agx-phone-");
   }, 30_000);
 
-  step("and the phone reconnecting does not undo the click that caused it", () => {
+  step("and the phone reconnecting does not undo the click that caused it", async () => {
     /*
      * The race this feature would have shipped with.
      *

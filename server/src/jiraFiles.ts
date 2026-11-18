@@ -45,7 +45,8 @@ import {
   type JiraCreds,
 } from "./jira.ts";
 import { readBack, refusal, type RelateOutcome } from "./jiraRelate.ts";
-import { redacted } from "./credentials.ts";
+import { jiraNotes } from "./jiraAccount.ts";
+const redacted = (_id: "jira") => jiraNotes();
 
 export const INLINE_MAX = 25 * 1024 * 1024;
 export const DOWNLOAD_MAX = 100 * 1024 * 1024;

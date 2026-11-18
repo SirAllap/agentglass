@@ -490,9 +490,9 @@ describe.skipIf(!HAVE_PY)("the MCP surface addresses its own tab", () => {
     sent = [];
     says = {};
     /* The composed tools never put their own name on the wire: they are made
-       of other verbs, and the page has to reach THOSE. Each is checked on the
+       of other verbs (browser_guide_run is `guide` with action run), and the page has to reach THOSE. Each is checked on the
        first verb it sends. */
-    const COMPOSED: Record<string, string> = { browser_storage_state: "cdp", browser_set_storage_state: "cdp" };
+    const COMPOSED: Record<string, string> = { browser_storage_state: "cdp", browser_set_storage_state: "cdp", browser_guide_run: "guide" };
     await client("orbit-wire", freshState(), targetable.map((t) => ({
       name: t.name,
       /* `do` is the one that cannot take a bare page: the server's `do` route
@@ -708,7 +708,7 @@ describe.skipIf(!HAVE_PY)("the MCP surface addresses its own tab", () => {
 import json
 out = []
 for f in ${JSON.stringify([new URL("../../bin/agentglass-browser", import.meta.url).pathname, MCP])}:
-    ns = {"__name__": "probe"}
+    ns = {"__name__": "probe", "__file__": f}
     exec(compile(open(f).read(), f, "exec"), ns)
     out.append([ns["my_name"](), ns["_tabs_path"]()])
 print(json.dumps(out))

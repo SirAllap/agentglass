@@ -7,7 +7,7 @@
 // opencodeusage.ts prices — so the numbers are already on this machine and only
 // had to be mapped. Nothing here is a guess: a fact with no frame behind it is
 // left out rather than drawn as zero.
-import { readFileSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -59,60 +59,77 @@ const modelOf = (m: unknown): string | undefined => {
  * the one thing the stream alone cannot say.
  */
 export function crewFactsOfRun(out: string, opts: { model?: string; exitCode?: number | null } = {}): RunFacts {
-  const f: RunFacts = { tools: 0, errors: 0, cost: 0, ended: opts.exitCode !== undefined && opts.exitCode !== null };
-  let frameModel: string | undefined;
-  for (const line of out.split("\n")) {
-    const raw = line.trim();
-    if (!raw) continue;
-    if (!raw.startsWith("{")) {
-      f.activity = collapse(raw);
-      continue;
-    }
-    let frame: Record<string, unknown>;
-    try { frame = JSON.parse(raw) as Record<string, unknown>; } catch { continue; }
-    if (!frame || typeof frame !== "object") continue;
-    const part = (frame.part && typeof frame.part === "object" ? frame.part : {}) as Record<string, unknown>;
-    frameModel ??= modelOf(part.modelID) ?? modelOf(frame.modelID)
-      ?? modelOf((part.model as { id?: unknown } | undefined)?.id) ?? modelOf((frame.model as { id?: unknown } | undefined)?.id)
-      ?? modelOf(frame.model);
+  const st = newFold();
+  for (const line of out.split("\n")) foldLine(st, line);
+  return finishFold(st, opts);
+}
 
-    const at = Number(frame.timestamp ?? part.timestamp);
-    if (Number.isFinite(at) && at > 0) f.lastSeen = Math.max(f.lastSeen ?? 0, at);
+/* The stream folded so far. One line at a time, so a turn that grew by a few
+   frames is read from where the last read stopped, not from byte 0. */
+interface Fold { f: RunFacts; frameModel?: string; any: boolean }
+const newFold = (): Fold => ({ f: { tools: 0, errors: 0, cost: 0, ended: false }, any: false });
+const cloneFold = (st: Fold): Fold => ({
+  f: { ...st.f, ...(st.f.lastTool ? { lastTool: { ...st.f.lastTool } } : {}) },
+  frameModel: st.frameModel, any: st.any,
+});
 
-    const kind = String(frame.type ?? "");
-    if (kind === "tool_use" || part.type === "tool") {
-      const state = (part.state && typeof part.state === "object" ? part.state : {}) as Record<string, unknown>;
-      const name = typeof part.tool === "string" && part.tool ? part.tool : "tool";
-      const what = toolWhat(state.input);
-      f.tools++;
-      if (state.status === "error") f.errors++;
-      f.activity = collapse(what ? `${name} · ${what}` : name);
-      if (Number.isFinite(at)) f.lastTool = { name, what, at };
-      continue;
-    }
-    if (kind === "error") {
-      const err = frame.error;
-      const data = (err && typeof err === "object" ? (err as { data?: { message?: unknown }; message?: unknown }).data : undefined);
-      const msg = typeof data?.message === "string" ? data.message
-        : typeof (err as { message?: unknown } | undefined)?.message === "string" ? String((err as { message?: unknown }).message)
-          : typeof err === "string" ? err : "";
-      f.errors++;
-      f.activity = collapse(msg || "the engine reported an error");
-      continue;
-    }
-    if (kind === "text" || part.type === "text") {
-      const text = typeof part.text === "string" ? part.text : typeof frame.text === "string" ? frame.text : "";
-      if (text.trim()) f.activity = collapse(text);
-      continue;
-    }
-    if (kind === "step_finish" || kind === "step-finish") {
-      const cost = Number(part.cost ?? frame.cost);
-      if (Number.isFinite(cost) && cost > 0) f.cost += cost;
-    }
-  }
-  const model = frameModel ?? modelOf(opts.model);
+function finishFold(st: Fold, opts: { model?: string; exitCode?: number | null }): RunFacts {
+  const f: RunFacts = { ...st.f, ...(st.f.lastTool ? { lastTool: { ...st.f.lastTool } } : {}), ended: opts.exitCode !== undefined && opts.exitCode !== null };
+  const model = st.frameModel ?? modelOf(opts.model);
   if (model) f.model = model;
   return f;
+}
+
+function foldLine(st: Fold, line: string): void {
+  const f = st.f;
+  const raw = line.trim();
+  if (!raw) return;
+  st.any = true;
+  if (!raw.startsWith("{")) {
+    f.activity = collapse(raw);
+    return;
+  }
+  let frame: Record<string, unknown>;
+  try { frame = JSON.parse(raw) as Record<string, unknown>; } catch { return; }
+  if (!frame || typeof frame !== "object") return;
+  const part = (frame.part && typeof frame.part === "object" ? frame.part : {}) as Record<string, unknown>;
+  st.frameModel ??= modelOf(part.modelID) ?? modelOf(frame.modelID)
+    ?? modelOf((part.model as { id?: unknown } | undefined)?.id) ?? modelOf((frame.model as { id?: unknown } | undefined)?.id)
+    ?? modelOf(frame.model);
+
+  const at = Number(frame.timestamp ?? part.timestamp);
+  if (Number.isFinite(at) && at > 0) f.lastSeen = Math.max(f.lastSeen ?? 0, at);
+
+  const kind = String(frame.type ?? "");
+  if (kind === "tool_use" || part.type === "tool") {
+    const state = (part.state && typeof part.state === "object" ? part.state : {}) as Record<string, unknown>;
+    const name = typeof part.tool === "string" && part.tool ? part.tool : "tool";
+    const what = toolWhat(state.input);
+    f.tools++;
+    if (state.status === "error") f.errors++;
+    f.activity = collapse(what ? `${name} · ${what}` : name);
+    if (Number.isFinite(at)) f.lastTool = { name, what, at };
+    return;
+  }
+  if (kind === "error") {
+    const err = frame.error;
+    const data = (err && typeof err === "object" ? (err as { data?: { message?: unknown }; message?: unknown }).data : undefined);
+    const msg = typeof data?.message === "string" ? data.message
+      : typeof (err as { message?: unknown } | undefined)?.message === "string" ? String((err as { message?: unknown }).message)
+        : typeof err === "string" ? err : "";
+    f.errors++;
+    f.activity = collapse(msg || "the engine reported an error");
+    return;
+  }
+  if (kind === "text" || part.type === "text") {
+    const text = typeof part.text === "string" ? part.text : typeof frame.text === "string" ? frame.text : "";
+    if (text.trim()) f.activity = collapse(text);
+    return;
+  }
+  if (kind === "step_finish" || kind === "step-finish") {
+    const cost = Number(part.cost ?? frame.cost);
+    if (Number.isFinite(cost) && cost > 0) f.cost += cost;
+  }
 }
 
 function stateDir(): string {
@@ -133,13 +150,89 @@ export function workerRunDir(name: string): string {
  */
 export function crewFactsOfWorker(name: string, opts: { model?: string } = {}): RunFacts | null {
   const dir = workerRunDir(name);
-  let out: string;
-  try { out = readFileSync(join(dir, "out"), "utf8"); } catch { return null; }
-  if (!out.trim()) return null;
+  const st = readRun(join(dir, "out"));
+  if (!st || !st.any) return null;
   let exitCode: number | null = null;
   try {
     const rc = readFileSync(join(dir, "rc"), "utf8").trim();
     exitCode = /^\d+$/.test(rc) ? Number(rc) : null;
   } catch { /* still running: the wrapper moves `rc` in when the tab has drained */ }
-  return crewFactsOfRun(out, { model: opts.model, exitCode });
+  return finishFold(st, { model: opts.model, exitCode });
+}
+
+/*
+ * EACH TURN'S STREAM IS READ ONCE, then only what was appended.
+ *
+ * The board asks for these on every `GET /agents/board`, which the rail polls
+ * every 5 to 20 s, for every open worker and every one that ended in the last
+ * half hour. This read the whole `out` each time and parsed every frame: turns
+ * run to 20-60 MB, and the stall log had it at 170-330k disk blocks and
+ * 600-800 ms per call with nothing else going on. A stream only grows while
+ * its turn runs, so the fold is kept with the byte offset it reached: the same
+ * size and mtime is no read at all, a bigger file is read from that offset,
+ * and anything else (another inode, a shorter file, a rewrite of the same
+ * size) starts again from byte 0. The partial last line is folded into a copy,
+ * never into what is kept, so a frame cut in half is read whole next time.
+ * `out` is deleted and made again each turn, and ext4 gives the inode back, so
+ * the same inode and a bigger size can still be a new stream: the first bytes
+ * are kept too, and when they differ the read starts again from byte 0.
+ */
+interface RunCache { ino: number; size: number; mtimeMs: number; offset: number; head: Buffer; fold: Fold; result: Fold }
+const RUN_HEAD = 256;
+const runCache = new Map<string, RunCache>();
+const RUN_CACHE_MAX = 256;
+/** Bytes read from `out` files, for the test that pins the read budget. */
+export let runBytesRead = 0;
+export function __resetRunCache(): void { runCache.clear(); runBytesRead = 0; }
+
+function readRun(path: string): Fold | null {
+  let s: { ino: number; size: number; mtimeMs: number };
+  try { s = statSync(path); } catch { runCache.delete(path); return null; }
+  let c = runCache.get(path);
+  if (c && c.ino === s.ino && c.size === s.size && c.mtimeMs === s.mtimeMs) return c.result;
+  if (!c || c.ino !== s.ino || s.size < c.offset || (s.size <= c.size && s.mtimeMs !== c.mtimeMs)) c = undefined;
+  let buf: Buffer;
+  let start = 0;
+  try {
+    const fd = openSync(path, "r");
+    try {
+      // Same inode, bigger file: an append only if it still starts as it did.
+      // These few bytes are not counted in runBytesRead, which is the stream.
+      if (c && c.head.length > 0) {
+        const now = Buffer.alloc(c.head.length);
+        const n = readSync(fd, now, 0, now.length, 0);
+        if (n !== now.length || !now.equals(c.head)) c = undefined;
+      }
+      if (!c) c = { ino: s.ino, size: 0, mtimeMs: 0, offset: 0, head: Buffer.alloc(0), fold: newFold(), result: newFold() };
+      start = c.offset;
+      const want = Math.max(0, s.size - c.offset);
+      buf = Buffer.alloc(want);
+      let got = 0;
+      while (got < want) {
+        const n = readSync(fd, buf, got, want - got, c.offset + got);
+        if (n <= 0) break;
+        got += n;
+      }
+      buf = buf.subarray(0, got);
+    } finally { closeSync(fd); }
+  } catch { return null; }
+  runBytesRead += buf.length;
+  if (c.head.length < RUN_HEAD && start <= c.head.length) {
+    c.head = Buffer.from(Buffer.concat([c.head.subarray(0, start), buf]).subarray(0, RUN_HEAD));
+  }
+  const cut = buf.lastIndexOf(0x0a);
+  if (cut >= 0) {
+    for (const line of buf.subarray(0, cut).toString("utf8").split("\n")) foldLine(c.fold, line);
+    c.offset += cut + 1;
+  }
+  const tail = buf.subarray(cut + 1).toString("utf8");
+  const result = tail.trim() ? cloneFold(c.fold) : c.fold;
+  if (tail.trim()) foldLine(result, tail);
+  c.size = c.offset + (buf.length - cut - 1);
+  c.mtimeMs = s.mtimeMs;
+  c.result = result;
+  runCache.delete(path);
+  if (runCache.size >= RUN_CACHE_MAX) runCache.delete(runCache.keys().next().value!);
+  runCache.set(path, c);
+  return result;
 }

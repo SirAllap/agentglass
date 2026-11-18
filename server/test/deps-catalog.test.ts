@@ -29,7 +29,11 @@ const ALL = [...sources(SRC), join(import.meta.dir, "..", "..", "shared", "agent
 /** Binaries the server spawns or probes for, read out of the code itself. */
 function spawned(): Set<string> {
   const found = new Set<string>();
-  for (const re of [/Bun\.which\(\s*"([a-z0-9_.-]+)"/g, /spawnSync\(\s*\[\s*"([a-z0-9_.-]+)"/g, /Bun\.spawn\(\s*\[\s*"([a-z0-9_.-]+)"/g]) {
+  for (const re of [/Bun\.which\(\s*"([a-z0-9_.-]+)"/g, /spawnSync\(\s*\[\s*"([a-z0-9_.-]+)"/g,
+    // The labelled form (`spawnSyncAs("ss listen", ["ss", ...])`) the loop watch asks for: same call, one label first.
+    /spawnSyncAs\(\s*"[^"]*"\s*,\s*\[\s*"([a-z0-9_.-]+)"/g, /Bun\.spawn\(\s*\[\s*"([a-z0-9_.-]+)"/g,
+    // The async helper the blocking calls moved to: what it runs is still run.
+    /spawnOut\(\s*\[\s*"([a-z0-9_.-]+)"/g]) {
     for (const m of ALL.matchAll(re)) found.add(m[1]!);
   }
   return found;
@@ -53,7 +57,7 @@ describe("the requirements catalogue matches what the app actually runs", () => 
   });
 
   test("ss is listed, because the ports panel has no other way to look", () => {
-    expect(ALL).toContain('spawnSync(["ss"');
+    expect(spawned().has("ss")).toBe(true);
     expect(DEPS.some((d) => d.bin === "ss")).toBe(true);
   });
 
@@ -88,6 +92,12 @@ describe("the requirements catalogue matches what the app actually runs", () => 
     rg: "search falls back to `git grep`; nothing stands down",
     fd: "file-finding falls back to `git ls-tree`; nothing stands down",
     fdfind: "the Debian name for fd, looked for beside it",
+    // The memory-capped scope each child runs in (server/src/scopes.ts). Looked
+    // up with Bun.which first: without systemd the child runs unscoped, so
+    // nothing stands down, and a row would promise a feature the person cannot
+    // install on a machine that has no systemd.
+    "systemd-run": "child scopes; without it a child runs unscoped",
+    systemctl: "reads and stops those scopes; a missing one reads as no scopes",
     // POSIX furniture. A machine without these is not a machine this app can be
     // told to run on, and a row for `cp` would be noise on a page whose value
     // is that everything on it is worth reading.

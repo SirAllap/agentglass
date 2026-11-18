@@ -131,6 +131,8 @@ export interface FakeTransition {
 export interface FakeWorkflow {
   categories: Record<string, { id: number; key: string; name: string; colorName: string }>;
   statuses: { id: string; name: string; category: string }[];
+  /** Status ids only the Epic type has (a project's workflow lists them under Epic alone). */
+  epicOnly?: string[];
   transitions: Record<string, FakeTransition[]>;
 }
 
@@ -210,9 +212,13 @@ export interface FakeIssue {
   /** Work logged, oldest first; `worklogCount` makes that many short ones. */
   worklogs?: FakeWorklog[];
   worklogCount?: number;
-  /** The fields `expand=editmeta` lists; the default is a project with none of components, versions or time tracking. */
-  editmeta?: string[];
+  /** The fields `expand=editmeta` lists; the default is a project with none of components, versions or time tracking. An entry
+   *  carries `schema` and `allowedValues` when the test needs a custom field's kind, as a real site's edit screen does. */
+  editmeta?: (string | FakeEditField)[];
 }
+
+/** One field of a card's edit screen: its name, and what a real site adds for a custom one. */
+export interface FakeEditField { name: string; /** The site's own key for it (a custom field's id); the name when left out. */ id?: string; schema?: Record<string, unknown>; allowedValues?: { id: string; name: string }[]; required?: boolean }
 
 export interface FakeSprint { id: number; name: string; state: "active" | "closed" | "future" }
 
@@ -316,8 +322,13 @@ export interface FakeJiraOptions {
   assignableScanCap?: number;
   /** Boards per page of `GET /board`, capped at 50. Default 50. */
   boardPageSize?: number;
+  /** Sprints per page of `GET /board/{id}/sprint`, capped at 50. Default 50. */
+  sprintPageSize?: number;
   /** List `GET /project/{key}/statuses` in an order that is no board's. Default: workflow order. */
   shuffleProjectStatuses?: boolean;
+  /** A site that looks lived in, for a screen: Orbit lists three components, some cards carry one, and the active sprint
+   *  ends a few days from now instead of on the day the fixture was written. Default off: tests count on the plain seed. */
+  lively?: boolean;
 }
 
 export interface FakeJira {
@@ -334,6 +345,18 @@ export interface FakeJira {
   /** Back to the seed: state, request log, rules, limiter, header. */
   reset(): void;
   stop(): Promise<void>;
+}
+
+const DAY_MS = 86_400_000;
+
+/** The look-lived-in extras (`FakeJiraOptions.lively`): components, and a sprint that is 8 days old with 6 to go. */
+export function makeLively(state: FakeState, now = Date.now()): FakeState {
+  state.projectComponents.ORBIT = [{ id: "20101", name: "Sync" }, { id: "20102", name: "Api" }, { id: "20103", name: "Web" }];
+  const byKey: Record<string, string> = { "ORBIT-1001": "Web", "ORBIT-1042": "Sync", "ORBIT-1043": "Api", "ORBIT-1044": "Web", "ORBIT-1045": "Api", "ORBIT-1046": "Web", "ORBIT-1050": "Api" };
+  for (const [key, name] of Object.entries(byKey)) if (state.issues[key] && !state.issues[key]!.components?.length) state.issues[key]!.components = [name];
+  const sprint = state.sprints[3]?.find((x) => x.state === "active");
+  if (sprint) { sprint.startDate = new Date(now - 8 * DAY_MS).toISOString(); sprint.endDate = new Date(now + 6 * DAY_MS).toISOString(); }
+  return state;
 }
 
 const statusById = (id: string) => workflow.statuses.find((s) => s.id === id)!;
@@ -412,7 +435,8 @@ function userObject(id: string | null, dc: boolean, asSelf = false) {
   }
   return {
     accountId: u.accountId,
-    accountType: "atlassian",
+    // An automation account says so; a person is "atlassian".
+    accountType: u.accountType ?? "atlassian",
     displayName: u.displayName,
     active: u.active,
     avatarUrls: { "48x48": `https://avatar.acme.example/${u.accountId}/48.png` },
@@ -454,6 +478,12 @@ const FIELD_IDS = {
   datacenter: { sprint: "customfield_10104", points: { primary: "customfield_10106", alt: "customfield_10109" }, rank: "customfield_10105", team: null, start: "customfield_10110", flag: "customfield_10111" },
 } as const;
 
+/** A sprint field on a card carries its dates and goal, as the site sends it: found by name among the boards' sprints. */
+const datesOf = (state: FakeState, name: string) => {
+  const b = Object.values(state.sprints).flat().find((x) => x.name === name && x.startDate);
+  return b ? { startDate: b.startDate, endDate: b.endDate, ...(b.goal ? { goal: b.goal } : {}) } : {};
+};
+
 const linkedIssue = (k: string, state: FakeState, dc: boolean) => {
   const o = state.issues[k]!;
   return { id: o.id, key: o.key, self: `${prefixOf(dc ? "datacenter" : "cloud")}/issue/${o.id}`, fields: { summary: o.summary, status: statusObject(o.statusId), issuetype: { name: o.issueType } } };
@@ -473,7 +503,7 @@ function boardFields(i: FakeIssue, state: FakeState, dc: boolean): Record<string
   // Cloud sends sprints as objects; older Data Center as the bean's own text.
   const sprint = i.sprints.map((s) => (dc
     ? `com.atlassian.greenhopper.service.sprint.Sprint@1b2c3d[id=${s.id},rapidViewId=3,state=${s.state.toUpperCase()},name=${s.name},startDate=2026-01-05T09:00:00.000Z,endDate=2026-01-19T09:00:00.000Z,completeDate=<null>,sequence=${s.id}]`
-    : { id: s.id, name: s.name, state: s.state, boardId: 3 }));
+    : { id: s.id, name: s.name, state: s.state, boardId: 3, ...datesOf(state, s.name) }));
   const out: Record<string, unknown> = {
     issuelinks: links,
     subtasks: i.subtasks.map((k) => linkedIssue(k, state, dc)),
@@ -522,7 +552,11 @@ function issueObject(i: FakeIssue, state: FakeState, dc: boolean, fieldsParam?: 
   // The edit screen's field list, by the site's own ids; only when `expand` asks, as a real site does.
   const editmeta = (expandParam ?? "").split(",").includes("editmeta")
     ? { editmeta: { fields: Object.fromEntries((i.editmeta ?? ["summary", "description", "labels", "priority", "duedate", "assignee", "reporter"])
-        .map((n) => [n === "startDate" ? ids.start : n === "flagged" ? ids.flag : n, { name: n, required: false }])) } }
+        .map((e) => {
+          const f = typeof e === "string" ? { name: e } : e;
+          const field = f.id ?? (f.name === "startDate" ? ids.start : f.name === "flagged" ? ids.flag : f.name);
+          return [field, { name: f.name, required: f.required ?? false, ...(f.schema ? { schema: f.schema } : null), ...(f.allowedValues ? { allowedValues: f.allowedValues } : null) }];
+        })) } }
     : {};
   // The whole history rides inside the issue only when asked: this is the cost the card read never pays on open.
   const hs = (i.changelog ?? []).map((h) => historyObject(h, dc));
@@ -652,6 +686,28 @@ const balanced = (t: string): boolean => {
   return d === 0;
 };
 
+/** The alternatives of a group joined by `OR` at the top level, or nothing when
+ *  the query has no such group. `(a OR b)` and `a OR b` read the same. */
+function alternativesOf(text: string): string[] {
+  const open = /^\(([\s\S]*)\)$/.exec(text);
+  const body = open && balanced(open[1]) ? open[1].trim() : text;
+  const parts: string[] = [];
+  let depth = 0;
+  let from = 0;
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (ch === "(") depth++;
+    else if (ch === ")") depth--;
+    else if (depth === 0 && /^\sor\s/i.test(body.slice(i, i + 4))) {
+      parts.push(body.slice(from, i).trim());
+      from = i + 4;
+      i += 3;
+    }
+  }
+  parts.push(body.slice(from).trim());
+  return parts.length > 1 && parts.every(Boolean) ? parts : [];
+}
+
 /** Cloud wants a bounded query: at least one clause before any `order by`.
  *  Data Center accepts an empty restriction and names people by login or key. */
 function runJql(jql: string, issues: Record<string, FakeIssue>, dc: boolean): FakeIssue[] | { error: string } {
@@ -659,17 +715,56 @@ function runJql(jql: string, issues: Record<string, FakeIssue>, dc: boolean): Fa
   const restriction = (order ? jql.slice(0, order.index) : jql).trim();
   if (!restriction && !dc) return { error: "unbounded" };
   let rows = Object.values(issues);
+  // A group of alternatives matches the cards either side of it would: each
+  // side is answered on its own, and the union carries on to the rest of the query.
+  const alternatives = alternativesOf(restriction);
+  if (alternatives.length) {
+    const union = new Set<string>();
+    for (const part of alternatives) {
+      const got = runJql(part, issues, dc);
+      if (!Array.isArray(got)) return got;
+      for (const i of got) union.add(i.key);
+    }
+    rows = rows.filter((i) => union.has(i.key));
+  }
   // An assignee as the flavor spells it: an account id, or a login name or key.
   const person = (s: string) => (dc ? userDirectory.find((u) => u.name === s || u.key === s)?.accountId : userById(s)?.accountId);
-  for (const clause of restriction ? splitAnd(restriction) : []) {
+  const clauses = alternatives.length ? [] : restriction ? splitAnd(restriction) : [];
+  for (const clause of clauses) {
     const c = clause.trim();
     let m: RegExpExecArray | null;
     const q = (s: string) => s.replace(/^"|"$/g, "");
+    // An OR group AND'd with the rest, e.g. the Mine/people clause: `(assignee = currentUser() OR assignee = "x")`. The
+    // top-level `alternatives` above only catches a whole restriction shaped that way; this is the same union, one AND
+    // clause down. Checked first, or a clause like `assignee = currentUser() OR assignee = "x"` is read by the generic
+    // `assignee = <value>` match below, which does not know OR and tries to look up the whole right side as one person.
+    // Excludes the board's own `sprint is EMPTY OR sprint != id` clause below: its two sides are not valid on their own.
+    const orParts = /^sprint\s+is\s+empty\s+or\s+sprint\s*!=\s*\d+$/i.test(c) ? [] : alternativesOf(c);
+    if (orParts.length) {
+      const union = new Set<string>();
+      for (const part of orParts) {
+        const got = runJql(part, issues, dc);
+        if (!Array.isArray(got)) return got;
+        for (const i of got) union.add(i.key);
+      }
+      rows = rows.filter((i) => union.has(i.key));
+      continue;
+    }
     if ((m = /^project\s*(!?=)\s*(.+)$/i.exec(c))) rows = rows.filter((i) => (i.projectKey === q(m![2]).toUpperCase()) === (m![1] === "="));
     else if ((m = /^project\s+in\s*\(([^)]*)\)$/i.exec(c))) { const want = m[1].split(",").map((v) => q(v.trim()).toUpperCase()); rows = rows.filter((i) => want.includes(i.projectKey)); }
     // The text search the pane's pickers use: a phrase inside the title (the real index also reads the description and comments).
     else if ((m = /^text\s*~\s*"(.*)"$/i.exec(c))) rows = rows.filter((i) => i.summary.toLowerCase().includes(m![1].toLowerCase()));
+    else if ((m = /^filter\s*=\s*(\d+)$/i.exec(c))) {
+      const f = boardFixture.filters.find((x) => x.id === m![1] && x.visible !== false);
+      if (!f) return { error: `A value with ID '${m[1]}' does not exist for the field 'filter'.` };
+      const got = runJql(f.jql, issues, dc);
+      if (!Array.isArray(got)) return got;
+      const keep = new Set(got.map((i) => i.key));
+      rows = rows.filter((i) => keep.has(i.key));
+    }
     else if (/^assignee\s*=\s*currentUser\(\)$/i.test(c)) rows = rows.filter((i) => i.assignee === myselfFixture.accountId);
+    else if (/^reporter\s*=\s*currentUser\(\)$/i.test(c)) rows = rows.filter((i) => i.reporter === myselfFixture.accountId);
+    else if (/^watcher\s*=\s*currentUser\(\)$/i.test(c)) rows = rows.filter((i) => (i.watchers ?? []).includes(myselfFixture.accountId));
     else if ((m = /^assignee\s+is\s+(not\s+)?empty$/i.exec(c))) rows = rows.filter((i) => (i.assignee === null) === !m![1]);
     else if ((m = /^assignee\s*=\s*(.+)$/i.exec(c))) {
       const who = person(q(m[1]));
@@ -684,6 +779,7 @@ function runJql(jql: string, issues: Record<string, FakeIssue>, dc: boolean): Fa
     else if ((m = /^status\s*(!?=)\s*(.+)$/i.exec(c))) rows = rows.filter((i) => (statusById(i.statusId).name.toLowerCase() === q(m![2]).toLowerCase()) === (m![1] === "="));
     else if ((m = /^issuetype\s*(!?=)\s*(.+)$/i.exec(c))) rows = rows.filter((i) => (i.issueType.toLowerCase() === q(m![2]).toLowerCase()) === (m![1] === "="));
     else if ((m = /^priority\s*(!?=)\s*(.+)$/i.exec(c))) rows = rows.filter((i) => (priorities.find((p) => p.id === i.priorityId)!.name.toLowerCase() === q(m![2]).toLowerCase()) === (m![1] === "="));
+    else if ((m = /^resolution\s*(!?=)\s*Unresolved$/i.exec(c))) rows = rows.filter((i) => (i.resolution === null) === (m![1] === "="));
     else if ((m = /^statusCategory\s*(!?=)\s*(.+)$/i.exec(c))) {
       rows = rows.filter((i) => {
         const k = workflow.categories[statusById(i.statusId).category];
@@ -723,6 +819,7 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
   const PREFIX = prefixOf(flavor);
   const pageSize = opts.pageSize ?? 4;
   const boardPageSize = opts.boardPageSize ?? 50;
+  const sprintPage = opts.sprintPageSize;
   const scanCap = opts.assignableScanCap ?? 3;
   const shuffleStatuses = opts.shuffleProjectStatuses ?? false;
   const requests: LoggedRequest[] = [];
@@ -731,9 +828,10 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
   const seedRemaining = dc ? null : 100;
   let remaining: number | null = seedRemaining;
   let writes = new Map<string, number[]>();
-  let seedSnapshot = seedState(flavor);
+  const seed = () => (opts.lively ? makeLively(seedState(flavor)) : seedState(flavor));
+  let seedSnapshot = seed();
   // Handed out once; reset() refills it in place so a test holding it still sees the live object.
-  const live = seedState(flavor);
+  const live = seed();
 
   const headersFor = (extra?: Record<string, string>) => {
     const h = new Headers({ "content-type": "application/json;charset=UTF-8", ...extra });
@@ -899,7 +997,29 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
       // Shuffled: no board puts To Do after QA, and a client that trusts this order shows it.
       const listed = shuffleStatuses ? ["4", "2", "5", "1", "3"].flatMap((id) => live.workflow.statuses.filter((s) => s.id === id)) : live.workflow.statuses;
       const statuses = listed.map((s) => ({ ...statusObject(s.id), self: `${PREFIX}/status/${s.id}`, description: "" }));
-      return json(200, ["Task", "Bug"].map((name, i) => ({ id: String(10001 + i), name, subtask: false, self: `${PREFIX}/issuetype/${10001 + i}`, statuses })));
+      const epicOnly = live.workflow.epicOnly ?? [];
+      const plain = epicOnly.length ? statuses.filter((s) => !epicOnly.includes(s.id)) : statuses;
+      const epic = statuses.filter((s) => epicOnly.includes(s.id));
+      return json(200, [...["Task", "Bug"].map((name, i) => ({ id: String(10001 + i), name, subtask: false, self: `${PREFIX}/issuetype/${10001 + i}`, statuses: plain })), ...(epic.length ? [{ id: "10009", name: "Epic", subtask: false, self: `${PREFIX}/issuetype/10009`, statuses: epic }] : [])]);
+    }
+
+    // Jira Software's sprint move: the cards named join the sprint. A sprint no board lists answers 404, as the site does.
+    if (m === "POST" && (r = /^\/rest\/agile\/1\.0\/sprint\/(\d+)\/issue$/.exec(path))) {
+      const id = Number(r[1]);
+      const sprint: { id: number; name: string; state: FakeSprint["state"] } | undefined = [...Object.values(live.sprints).flat() as FakeSprint[], ...Object.values(live.issues).flatMap((i) => i.sprints)].find((x) => x.id === id);
+      if (!sprint) return json(404, { errorMessages: ["Sprint does not exist or you do not have permission to view it."], errors: {} });
+      const keys = ((body ?? {}) as { issues?: string[] }).issues ?? [];
+      if (!keys.length || keys.some((k) => !live.issues[k])) return json(400, { errorMessages: ["Issue does not exist."], errors: {} });
+      for (const k of keys) live.issues[k]!.sprints = [{ id: sprint.id, name: sprint.name, state: sprint.state }];
+      return new Response(null, { status: 204 });
+    }
+
+    // Jira Software's backlog move: the cards named leave their sprint.
+    if (m === "POST" && path === "/rest/agile/1.0/backlog/issue") {
+      const keys = ((body ?? {}) as { issues?: string[] }).issues ?? [];
+      if (!keys.length || keys.some((k) => !live.issues[k])) return json(400, { errorMessages: ["Issue does not exist."], errors: {} });
+      for (const k of keys) live.issues[k]!.sprints = [];
+      return new Response(null, { status: 204 });
     }
 
     // Ranking: the dragged card goes before or after a named neighbour. Every card is re-sequenced, which is all a test needs of a lexorank.
@@ -940,7 +1060,8 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
         const p = projectOf(b.projectKey);
         return json(200, {
           id: b.id, name: b.name, type: b.type, self: `${base}/rest/agile/1.0/board/${b.id}/configuration`,
-          location: { type: "project", key: b.projectKey, id: p.id, self: `${PREFIX}/project/${p.id}`, name: p.name },
+          // A board spanning several projects sometimes names none as home: a test sets `noLocation` to play that.
+          ...("noLocation" in b && b.noLocation ? {} : { location: { type: "project", key: b.projectKey, id: p.id, self: `${PREFIX}/project/${p.id}`, name: p.name } }),
           filter: { id: b.filterId, self: `${PREFIX}/filter/${b.filterId}` },
           // Boards that state an estimate name the field; the others say nothing, as a kanban board does.
           ...("estimation" in b && b.estimation
@@ -948,7 +1069,7 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
             : {}),
           ...("subQuery" in b && b.subQuery ? { subQuery: { query: b.subQuery } } : {}),
           columnConfig: {
-            columns: b.columns.map((c) => ({ name: c.name, statuses: c.statusIds.map((id) => ({ id, self: `${PREFIX}/status/${id}` })) })),
+            columns: b.columns.map((c) => ({ name: c.name, statuses: c.statusIds.map((id) => ({ id, self: `${PREFIX}/status/${id}` })), ...("max" in c && typeof c.max === "number" ? { max: c.max } : {}) })),
             constraintType: "none",
           },
         });
@@ -963,7 +1084,11 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
         if (r[2] === "sprint") {
           const states = String(query.state ?? "").split(",").filter(Boolean);
           const rows = (live.sprints[id] ?? []).filter((x) => !states.length || states.includes(x.state));
-          return json(200, { maxResults: 50, startAt: 0, isLast: true, values: rows.map((x) => ({ ...x, originBoardId: id })) });
+          // Paged as the site pages: `startAt` and `maxResults` (the site's own ceiling is 50), `isLast` on the final page.
+          const at = Math.max(0, Number(query.startAt ?? 0) || 0);
+          const size = Math.min(Math.max(1, Number(query.maxResults ?? 50) || 50), sprintPage ?? 50);
+          const page = rows.slice(at, at + size);
+          return json(200, { maxResults: size, startAt: at, isLast: at + size >= rows.length, values: page.map((x) => ({ ...x, originBoardId: id })) });
         }
         const epics = Object.values(live.issues).filter((i) => i.issueType === "Epic" && i.projectKey === b.projectKey);
         return json(200, { maxResults: 50, startAt: 0, isLast: true, values: epics.map((e, n) => ({ id: Number(e.id), key: e.key, name: e.summary, done: false, color: { key: ["color_1", "color_4", "color_6"][n % 3] } })) });
@@ -974,6 +1099,14 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
 
     if (m === "GET" && path === "/filter/favourite") {
       return json(200, boardFixture.filters.filter((f) => f.favourite && f.visible !== false).map(filterObject));
+    }
+    if ((r = /^\/filter\/(\d+)$/.exec(path)) && m === "PUT") {
+      const f = boardFixture.filters.find((x) => x.id === r![1]);
+      if (!f || f.visible === false) return json(404, { errorMessages: ["The filter does not exist or you do not have permission to view it."], errors: {} });
+      const b = (body ?? {}) as { name?: unknown; jql?: unknown };
+      if (typeof b.name !== "string" || !b.name) return json(400, { errorMessages: [], errors: { name: "The name is required." } });
+      if (typeof b.jql === "string") f.jql = b.jql;
+      return json(200, filterObject(f));
     }
     if ((r = /^\/filter\/(\d+)$/.exec(path)) && m === "GET") {
       const f = boardFixture.filters.find((x) => x.id === r![1]);
@@ -1011,6 +1144,10 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
       const size = Math.min(Number(b.maxResults ?? pageSize) || pageSize, pageSize);
       const fields = Array.isArray(b.fields) ? b.fields.join(",") : b.fields ?? null;
       return json(200, { expand: "schema,names", startAt: start, maxResults: size, total: rows.length, issues: rows.slice(start, start + size).map((i) => issueObject(i, live, true, fields)) });
+    }
+    if (!dc && m === "POST" && path === "/search/approximate-count") {
+      const rows = runJql(((body ?? {}) as { jql?: string }).jql ?? "", live.issues, false);
+      return "error" in rows ? bad({}, [rows.error]) : json(200, { count: rows.length });
     }
     if (!dc && m === "POST" && path === "/search/jql") {
       const b = (body ?? {}) as { jql?: string; fields?: string[]; maxResults?: number; nextPageToken?: string };
@@ -1104,6 +1241,21 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
       }
     }
 
+    // Cloud's JQL vocabulary: a small, fixed set, enough to prove the trim and the field/types/operators shape.
+    if (m === "GET" && !dc && path === "/jql/autocompletedata") {
+      return json(200, {
+        visibleFieldNames: [
+          { value: "assignee", displayName: "Assignee", auto: "enabled", orderable: true, searchable: true, operators: ["=", "!=", "in", "not in", "is", "is not"], types: ["user"] },
+          { value: "summary", displayName: "Summary", auto: "enabled", orderable: true, searchable: true, operators: ["~", "!~", "is", "is not"], types: ["text"] },
+          { value: "cf[10015]", displayName: "Start date", cfid: "customfield_10015", auto: "enabled", orderable: true, searchable: true, operators: ["=", "!=", ">", ">=", "<", "<=", "is", "is not"], types: ["date"] },
+        ],
+        visibleFunctionNames: [
+          { value: "currentUser()", displayName: "currentUser()", isList: false, types: ["user"] },
+          { value: "openSprints()", displayName: "openSprints()", isList: true, types: ["sprint"] },
+        ],
+        jqlReservedWords: ["and", "or", "not"],
+      });
+    }
     // Cloud's label autocomplete and Data Center's suggest route: the labels cards carry, matching what was typed.
     if (m === "GET" && ((!dc && path === "/jql/autocompletedata/suggestions") || (dc && path === "/rest/api/1.0/labels/suggest"))) {
       const q = (query.fieldValue ?? query.query ?? "").toLowerCase();
@@ -1121,26 +1273,26 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
     if (m === "GET" && dc && path === "/issue/createmeta") {
       return json(200, { projects: String(query.projectKeys ?? "").split(",").filter(Boolean).map((k) => ({ key: k, issuetypes: typeObjects(k) })) });
     }
-    // A new card. Only what a sub-task needs is modelled: a parent, a title, a type that is a sub-task type exactly when there is a parent.
+    // A new card: a parent, a title, a type that is a sub-task type exactly when there is a parent (an epic may also parent a card), labels.
     if (m === "POST" && path === "/issue") {
-      const f = ((body ?? {}) as { fields?: { project?: { key?: string }; parent?: { key?: string }; summary?: string; issuetype?: { id?: string } } }).fields ?? {};
-      const type = TYPES.find(([id]) => id === f.issuetype?.id);
+      const f = ((body ?? {}) as { fields?: { project?: { key?: string }; parent?: { key?: string }; summary?: string; issuetype?: { id?: string; name?: string }; labels?: string[] } }).fields ?? {};
+      const type = TYPES.find(([id, name]) => id === f.issuetype?.id || (!f.issuetype?.id && name === f.issuetype?.name));
       if (!type) return bad({ issuetype: "Specify a valid issue type" });
       if (typeof f.summary !== "string" || !f.summary.trim()) return bad({ summary: "You must specify a summary of the issue." });
       const parent = f.parent?.key ? live.issues[f.parent.key] : undefined;
       if (type[2] && !parent) return bad({ parent: "Sub-task must be created with a parent." });
-      if (!type[2] && f.parent?.key) return bad({ issuetype: "Issues of this type cannot have a parent." });
+      if (!type[2] && f.parent?.key && parent?.issueType !== "Epic") return bad({ issuetype: "Issues of this type cannot have a parent." });
       if (parent && parent.issueType === "Sub-task") return bad({ parent: "Sub-tasks cannot have sub-tasks." });
       const project = f.project?.key ?? parent?.projectKey ?? "";
       const n = Math.max(0, ...Object.values(live.issues).filter((i) => i.projectKey === project).map((i) => Number(i.key.split("-")[1]))) + 1;
       const key = `${project}-${n}`;
       const made: FakeIssue = {
-        id: String(30000 + n), key, projectKey: project, summary: f.summary, issueType: type[1], priorityId: "3", labels: [], parentKey: parent?.key ?? null,
+        id: String(30000 + n), key, projectKey: project, summary: f.summary, issueType: type[1], priorityId: "3", labels: Array.isArray(f.labels) ? f.labels : [], parentKey: parent?.key ?? null,
         reporter: "acc-0001", created: stamp(++live.tick), statusId: "1", assignee: null, resolution: null, description: null, updated: stamp(++live.tick),
         comments: [], rank: `0|z${String(n).padStart(5, "0")}:`, sprints: [], points: null, pointsIn: "primary", team: null, subtasks: [],
       };
       live.issues[key] = made;
-      if (parent) { parent.subtasks = [...parent.subtasks, key]; bump(parent); }
+      if (parent && type[2]) { parent.subtasks = [...parent.subtasks, key]; bump(parent); }
       return json(201, { id: made.id, key, self: `${PREFIX}/issue/${made.id}` });
     }
     // Links between two cards. `inwardIssue` is the one that holds the OUTWARD phrase: "A blocks B" is `inwardIssue` A, `outwardIssue` B,
@@ -1502,10 +1654,10 @@ export function startFakeJira(opts: FakeJiraOptions = {}): FakeJira {
       remaining = n;
     },
     reset() {
-      const fresh = seedState(flavor);
+      const fresh = seed();
       for (const k of Object.keys(live)) delete (live as unknown as Record<string, unknown>)[k];
       Object.assign(live, fresh);
-      seedSnapshot = seedState(flavor);
+      seedSnapshot = seed();
       requests.length = 0;
       rules = [];
       writes = new Map();

@@ -75,17 +75,17 @@ beforeEach(() => { repo = build(); });
 afterAll(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe("nothing is stopped", () => {
-  it("says clean and offers no sides to choose between", () => {
-    const i = mergeInfo(repo);
+  it("says clean and offers no sides to choose between", async () => {
+    const i = await mergeInfo(repo);
     expect(i.ok).toBe(true);
     expect(i.state).toBe("clean");
     expect(i.ours).toBeNull();
     expect(i.theirs).toBeNull();
   });
 
-  it("a bisect is a state, but not one with two sides", () => {
+  it("a bisect is a state, but not one with two sides", async () => {
     git(repo, "bisect", "start");
-    const i = mergeInfo(repo);
+    const i = await mergeInfo(repo);
     expect(i.state).toBe("bisecting");
     expect(i.theirs).toBeNull();
     git(repo, "bisect", "reset");
@@ -95,21 +95,21 @@ describe("nothing is stopped", () => {
 describe("a merge", () => {
   beforeEach(() => { git(repo, "merge", "feat"); });
 
-  it("names the branch you are on and the branch coming in", () => {
-    const i = mergeInfo(repo);
+  it("names the branch you are on and the branch coming in", async () => {
+    const i = await mergeInfo(repo);
     expect(i.state).toBe("merging");
     expect(i.ours?.ref).toBe("main");
     expect(i.theirs?.ref).toBe("feat");
   });
 
-  it("carries the shas, not only the names", () => {
-    const i = mergeInfo(repo);
+  it("carries the shas, not only the names", async () => {
+    const i = await mergeInfo(repo);
     expect(i.theirs?.sha).toBe(sha(repo, "feat"));
     expect(i.theirs?.subject).toBe("feat commit 3");
   });
 
-  it("does not invent a step count — a merge happens once", () => {
-    const i = mergeInfo(repo);
+  it("does not invent a step count — a merge happens once", async () => {
+    const i = await mergeInfo(repo);
     expect(i.step).toBeUndefined();
     expect(i.total).toBeUndefined();
   });
@@ -121,35 +121,35 @@ describe("a rebase", () => {
     git(repo, "rebase", "main");
   });
 
-  it("puts the sides the way git actually has them, which is inverted", () => {
+  it("puts the sides the way git actually has them, which is inverted", async () => {
     // "ours" is the branch being replayed ONTO. Getting this backwards is the
     // failure the whole function exists to prevent.
-    const i = mergeInfo(repo);
+    const i = await mergeInfo(repo);
     expect(i.state).toBe("rebasing");
     expect(i.ours?.ref).toBe("main");
     expect(i.ours?.sha).toBe(sha(repo, "main"));
   });
 
-  it("names theirs as the commit being replayed, not as a branch", () => {
+  it("names theirs as the commit being replayed, not as a branch", async () => {
     // It is a commit in the middle of a series. Calling it "feat" would be a
     // lie: feat's tip is two commits further on.
-    const i = mergeInfo(repo);
+    const i = await mergeInfo(repo);
     expect(i.theirs?.subject).toBe("feat commit 1");
     expect(i.theirs?.ref).toBeNull();
   });
 
-  it("says which commit of how many, because a rebase repeats", () => {
-    const i = mergeInfo(repo);
+  it("says which commit of how many, because a rebase repeats", async () => {
+    const i = await mergeInfo(repo);
     expect(i.step).toBe(1);
     expect(i.total).toBe(3);
   });
 
-  it("counts up as the rebase advances", () => {
+  it("counts up as the rebase advances", async () => {
     // The second stop is a different commit and a different number — a screen
     // that says "done" after the first one is lying.
     takeTheirs(repo);
     git(repo, "-c", "core.editor=true", "rebase", "--continue");
-    const i = mergeInfo(repo);
+    const i = await mergeInfo(repo);
     expect(i.state).toBe("rebasing");
     expect(i.step).toBe(2);
     expect(i.total).toBe(3);
@@ -158,9 +158,9 @@ describe("a rebase", () => {
 });
 
 describe("a cherry-pick", () => {
-  it("names the commit being picked, and the branch it lands on", () => {
+  it("names the commit being picked, and the branch it lands on", async () => {
     git(repo, "cherry-pick", sha(repo, "feat"));
-    const i = mergeInfo(repo);
+    const i = await mergeInfo(repo);
     expect(i.state).toBe("cherry-picking");
     expect(i.ours?.ref).toBe("main");
     expect(i.theirs?.subject).toBe("feat commit 3");
@@ -168,26 +168,26 @@ describe("a cherry-pick", () => {
 });
 
 describe("a revert", () => {
-  it("names the commit being undone", () => {
+  it("names the commit being undone", async () => {
     // Two commits on main so there is an earlier one to revert into a conflict.
     writeFileSync(join(repo, "f.txt"), "later\n");
     git(repo, "commit", "-qam", "later still");
     git(repo, "revert", "--no-edit", "HEAD~1");
-    const i = mergeInfo(repo);
+    const i = await mergeInfo(repo);
     expect(i.state).toBe("reverting");
     expect(i.theirs?.subject).toBe("main side");
   });
 });
 
 describe("in a linked worktree", () => {
-  it("reads the state at all, where <root>/.git is a file and not a directory", () => {
+  it("reads the state at all, where <root>/.git is a file and not a directory", async () => {
     // The trap this test exists for: `join(root, ".git", "MERGE_HEAD")` finds
     // nothing here, silently, and every side comes back null. agentglass runs
     // in linked worktrees essentially always.
     const held = join(dir, `wt-${Math.random().toString(36).slice(2)}`);
     git(repo, "worktree", "add", "-q", held, "feat");
     git(held, "merge", "main");
-    const i = mergeInfo(held);
+    const i = await mergeInfo(held);
     expect(i.state).toBe("merging");
     expect(i.ours?.ref).toBe("feat");
     expect(i.theirs?.ref).toBe("main");

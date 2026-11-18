@@ -1,5 +1,5 @@
 import type { Budget, BudgetPeriod, BudgetStatus } from "../../shared/types.ts";
-import { spendBetween } from "./db.ts";
+import { costedModels, scopeClause, spendBetween, spendEpoch } from "./db.ts";
 import { readBudgets, inScope } from "./config.ts";
 import { noteForSession } from "./panewt.ts";
 
@@ -104,6 +104,62 @@ export function budgetStatus(
   });
 }
 
+/** Sums the gate actually ran, for the test that counts them. */
+export let gateSpendSums = 0;
+const gateSpendKept = new Map<string, { epoch: string; usd: number }>();
+
+/**
+ * `spendBetween` for the gate, kept until a write that can change it.
+ *
+ * The gate runs on every tool call of every session. With a budget set and a
+ * rule covering the call, each one summed `events.cost_usd` and the rollup
+ * over the whole budget period, per budget, on the server's only thread: with
+ * thirty agents that is a scan of a month of events several times a second,
+ * of a file that goes cold under memory pressure (2 to 4.5 s stalls measured
+ * with the thread waiting on its pages). The sum only moves when an event
+ * with a cost lands, the retention fold runs, history is erased, or another
+ * process commits: `spendEpoch` counts exactly those, so the kept answer is
+ * the one a fresh sum would give and a hold arrives no later than before.
+ * Ceiling: a row written straight into `events` or `daily_rollup` on this
+ * connection, outside those three paths, is not seen until the next counted
+ * write. Nothing in src does that; `__forgetGateSpend` is for a test that does.
+ * Only the gate uses this. The budgets route and the insight still sum.
+ */
+export const gateSpend: typeof spendBetween = (o) => {
+  // The checkouts the root covers are part of the question: a worktree added to the project changes the
+  // sum with no write at all, so the scope's own paths are in the key.
+  const key = `${o.fromDay}|${o.toDay}|${o.root || ""}|${o.model || ""}|${scopeClause(o.root || null).args.join("\n")}`;
+  const epoch = spendEpoch();
+  const hit = gateSpendKept.get(key);
+  if (hit && hit.epoch === epoch) return hit.usd;
+  gateSpendSums++;
+  const usd = spendBetween(o);
+  if (gateSpendKept.size >= 64) gateSpendKept.delete(gateSpendKept.keys().next().value!);
+  gateSpendKept.set(key, { epoch, usd });
+  return usd;
+};
+export function __forgetGateSpend(): void { gateSpendKept.clear(); modelsKept = null; }
+
+/** Scans run by `costedModelsKept`, for the test that counts them. */
+export let costedModelsScans = 0;
+let modelsKept: { epoch: string; models: string[] } | null = null;
+
+/**
+ * `costedModels` kept until a write that can change it. It is a scan of every
+ * event (no index covers cost_usd > 0), and GET /budgets ran it on each open of
+ * the pane: one such read blocked the event loop 1.9 s on ~100 MB of cold pages
+ * (server-stall.log 2026-11-17T09:02:18Z). A model only starts to count through
+ * an event with a cost or the retention fold, both of which `spendEpoch` counts.
+ */
+export function costedModelsKept(): string[] {
+  const epoch = spendEpoch();
+  if (modelsKept && modelsKept.epoch === epoch) return modelsKept.models;
+  costedModelsScans++;
+  const models = costedModels();
+  modelsKept = { epoch, models };
+  return models;
+}
+
 /** What a status is about, in the words the insight will use. */
 export function budgetScopeLabel(b: Budget): string {
   const where = b.root ? b.root.split("/").filter(Boolean).pop() || b.root : "everything";
@@ -200,7 +256,7 @@ export function budgetHoldFor(session: string, failClosed: boolean, cwd?: string
     // note the hook records carries it, which is how describeSession recovers
     // it too. No pane note means no project, and no project means no project
     // budget — overBudgetFor refuses to guess one.
-    const over = overBudgetFor(cwd || sessionCwd(session));
+    const over = overBudgetFor(cwd || sessionCwd(session), budgetStatus(undefined, undefined, gateSpend));
     return over ? budgetHoldReason(over, failClosed) : undefined;
   } catch (e) {
     console.warn("[gate] budget check skipped:", e instanceof Error ? e.message : e);

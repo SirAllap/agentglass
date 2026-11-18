@@ -101,12 +101,13 @@ describe("what the panel's repeated reads cost", () => {
 
   it("the pending review, the behind count and the checks rollup are asked once", () => {
     expect(out.pendingReviewX3).toBe(1);
-    expect(out.behindX3).toBe(1);
+    // The comparison, plus "What main brings" (the newest commits, read once when the branch is behind): two spawns for the first call, none for the next two.
+    expect(out.behindX3).toBe(2);
     expect(out.rollupX3).toBe(1);
   });
 
   it("an explicit refresh of the behind count still asks GitHub", () => {
-    expect(out.behindFresh).toBe(1);
+    expect(out.behindFresh).toBe(2); // the same two reads, both skipping the cache
   });
 
   it("the same file at the same commit is fetched once however often it is expanded", () => {

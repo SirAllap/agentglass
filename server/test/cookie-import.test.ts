@@ -114,7 +114,7 @@ describe("what is refused, and named", () => {
   test("each reason is its own answer", () => {
     expect(toElectronCookie(row({ expires: NOW - 1 }), "firefox", NOW)).toEqual({ ok: false, reason: "expired" });
     expect(toElectronCookie(row({ expires: 0 }), "firefox", NOW)).toEqual({ ok: false, reason: "session-only" });
-    expect(toElectronCookie(row({ partition: "^userContextId=2" }), "firefox", NOW)).toEqual({ ok: false, reason: "partitioned" });
+    expect(toElectronCookie(row({ partition: "firstPartyDomain=acme.test" }), "firefox", NOW)).toEqual({ ok: false, reason: "partitioned" });
     expect(toElectronCookie(row({ encrypted: true }), "chromium", NOW)).toEqual({ ok: false, reason: "encrypted" });
     expect(toElectronCookie(row({ host: "" }), "firefox", NOW)).toEqual({ ok: false, reason: "bad-host" });
   });
@@ -150,19 +150,23 @@ describe("which sites, and the invariant underneath it", () => {
     expect(siteOf("www.bbc.co.uk")).toBe("bbc.co.uk");
     expect(siteOf("shop.example.com.au")).toBe("example.com.au");
     expect(siteOf("localhost")).toBe("localhost");
+    // An address stays whole: one row each, never "0.1".
+    expect(siteOf("127.0.0.1")).toBe("127.0.0.1");
+    expect(siteOf(".10.0.0.7")).toBe("10.0.0.7");
+    expect(siteOf("[::1]")).toBe("[::1]");
   });
 
   test("counts add up, per reason, so the UI can say what happened", () => {
     const plan = planImport([
       row({ host: ".example.com", name: "live" }),
       row({ host: ".example.com", name: "old", expires: NOW - 5 }),
-      row({ host: ".example.com", name: "jar", partition: "^userContextId=3" }),
+      row({ host: ".example.com", name: "jar", container: "3" }),
       row({ host: ".other.com", name: "elsewhere" }),
     ], "firefox", { sites: ["example.com"], nowSeconds: NOW });
 
     expect(plan.install.map((c) => c.name)).toEqual(["live"]);
     expect(plan.skipped).toEqual({
-      expired: 1, "session-only": 0, partitioned: 1, encrypted: 0, "not-selected": 1, "bad-host": 0,
+      expired: 1, "session-only": 0, partitioned: 0, encrypted: 0, "not-selected": 1, "bad-host": 0, "other-container": 1,
     });
     expect(plan.sites).toEqual([
       { site: "example.com", cookies: 1 },

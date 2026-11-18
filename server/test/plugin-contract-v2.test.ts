@@ -146,13 +146,14 @@ describe("run decision: Approve run and Skip", () => {
 });
 
 describe("cost per plugin per day", () => {
-  const T = Date.UTC(2026, 9, 17, 10);
+  // Yesterday, so the run is always inside the retention window.
+  const T = Math.floor(Date.now() / 86_400_000) * 86_400_000 - 86_400_000 + 10 * 3_600_000;
   test("sums the runs of a day, counting a run once however often its cost is repeated", () => {
     upsertRun(P, C, run({ id: "a", costUsd: 0.1, startedAt: T }));
     upsertRun(P, C, run({ id: "a", costUsd: 0.25, startedAt: T }));
     upsertRun(P, C, run({ id: "b", costUsd: 0.5, startedAt: T + 1000 }));
     const r = costByDay(P);
-    expect(r).toEqual({ ok: true, days: [{ plugin: P, day: "2026-10-17", usd: 0.75, runs: 2 }] });
+    expect(r).toEqual({ ok: true, days: [{ plugin: P, day: new Date(T).toISOString().slice(0, 10), usd: 0.75, runs: 2 }] });
   });
   test("separates days and plugins, newest first, and filters by plugin", () => {
     const today = Date.now();

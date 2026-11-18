@@ -22,7 +22,8 @@
  * minutes, since the days in a site's working week are its own setting.
  */
 import { apiOf, jiraCall, withStored, type JiraCreds, type JiraResult } from "./jira.ts";
-import { redacted } from "./credentials.ts";
+import { jiraNotes } from "./jiraAccount.ts";
+const redacted = (_id: "jira") => jiraNotes();
 import { avatarOf, commentRows, epochOf, personId, textReader } from "./jiraCardRead.ts";
 import type { CardEvent, TaskDetail } from "../../shared/providers.ts";
 
@@ -149,7 +150,10 @@ export function historyEvents(histories: unknown): CardEvent[] {
       const it = itemOf(raw);
       const text = it ? describeItem(it) : null;
       if (!text) continue;
-      out.push({ e: { at, kind: "change", who, text, ...(avatar ? { avatar } : {}) }, n: n++ });
+      const f = it!.field.toLowerCase();
+      const edit = f === "assignee" || f === "status" ? { edit: { field: f as "assignee" | "status", from: it!.from, to: it!.to, fromString: it!.fromString, toString: it!.toString } } : {};
+      const whoId = personId(a);
+      out.push({ e: { at, kind: "change", who, ...(whoId ? { whoId } : {}), text, ...edit, ...(avatar ? { avatar } : {}) }, n: n++ });
     }
   }
   // Same second keeps the site's own order (an entry's items are one edit).
@@ -224,12 +228,13 @@ export async function worklogPage(creds: JiraCreds, key: string, startAt = WORKL
   return { ok: true, data: { events: worklogEvents(box.worklogs, v, me), total, ...(at + got < total && got > 0 ? { next: at + got } : {}) } };
 }
 
-/** The comments from `startAt` on, oldest first, `COMMENT_PAGE` at a time. */
-export async function commentsPage(creds: JiraCreds, key: string, startAt: number, me?: string): Promise<JiraResult<ActivityPage>> {
+/** The comments from `startAt` on, oldest first, `COMMENT_PAGE` at a time. `newest` counts from
+ *  the other end, for a caller that wants the last few on a card with a long history. */
+export async function commentsPage(creds: JiraCreds, key: string, startAt: number, me?: string, o: { newest?: boolean } = {}): Promise<JiraResult<ActivityPage>> {
   if (!ISSUE_KEY.test(key)) return { ok: false, error: BAD_KEY };
   const v = apiOf(creds);
   const at = Math.max(0, Math.floor(startAt) || 0);
-  const r = await jiraCall<unknown>(creds, `/rest/api/${v}/issue/${encodeURIComponent(key)}/comment?orderBy=created&startAt=${at}&maxResults=${COMMENT_PAGE}`, { fresh: true });
+  const r = await jiraCall<unknown>(creds, `/rest/api/${v}/issue/${encodeURIComponent(key)}/comment?orderBy=${o.newest ? "-created" : "created"}&startAt=${at}&maxResults=${COMMENT_PAGE}`, { fresh: true });
   if (!r.ok) return { ...r, data: undefined };
   const box = isObj(r.data) ? r.data : {};
   const raw = (Array.isArray(box.comments) ? box.comments : []).filter(isObj);

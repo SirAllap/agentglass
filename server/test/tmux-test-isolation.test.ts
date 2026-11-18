@@ -85,6 +85,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, 
 import { dirname, join } from "node:path";
 import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
 import { story } from "./story.ts";
+import { agxTestBase } from "./tmuxTmp.ts";
 
 /*
  * Short, for the 108-byte unix socket path limit — a pid is five or six of
@@ -101,7 +102,7 @@ import { story } from "./story.ts";
  * than the 3-8 apiece the server fixtures lost, because this file's whole life
  * is 64ms rather than seconds; a smaller window is not a closed one.
  */
-const STAND_IN = `/tmp/agx-tmux-guard-${process.pid}`;
+const STAND_IN = agxTestBase("agx-tmux-guard");
 const UID = process.getuid?.() ?? 0;
 const SOCKET = join(STAND_IN, `tmux-${UID}`, "default");
 const HAVE_TMUX = !!Bun.which("tmux") && process.platform === "linux";
@@ -117,7 +118,7 @@ const HAVE_TMUX = !!Bun.which("tmux") && process.platform === "linux";
  * run it would reach him on. So the "elsewhere" is another private server of
  * ours, and the assertion is the same one.
  */
-const OUTSIDE_DIR = `/tmp/agx-tmux-out-${process.pid}`;
+const OUTSIDE_DIR = agxTestBase("agx-tmux-out");
 const OUTSIDE = join(OUTSIDE_DIR, `tmux-${UID}`, "default");
 
 /** Where the pin ledger lands: `tmuxctl.ts` puts it beside the sockets it is a
@@ -891,7 +892,12 @@ describe("no test file runs tmux without isolating it", () => {
       .map((m) => decls.get(m[1]!)).filter((v): v is string => v !== undefined);
   };
 
-  const files = roots.flatMap((r) => lintFiles(repo, r).filter((f) => runsTmux(f.src)));
+  /* Comments stripped first: prose saying "isolated on its own socket: …" matched
+     `socket:` and put a file in this population for a header, not for a call. */
+  const withoutComments = (src: string): string =>
+    src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+
+  const files = roots.flatMap((r) => lintFiles(repo, r).filter((f) => runsTmux(withoutComments(f.src))));
 
   step("every one of them starts its tmux with an empty configuration", () => {
     const offenders = files.filter((f) => !readsNoConfig(f.src)).map((f) => f.rel);
@@ -908,6 +914,18 @@ describe("no test file runs tmux without isolating it", () => {
     const offenders = files.flatMap((f) =>
       tmpdirsSet(f.src).filter((v) => !v.includes("process.pid")).map((v) => `${f.rel} → ${v}`));
     expect(offenders, "give the file a TMUX_TMPDIR carrying process.pid, and put the old value back in afterAll").toEqual([]);
+  });
+
+  step("a test that spawns a literal `tmux` on a `-L` name gives it a private TMUX_TMPDIR", () => {
+    // `-L name` resolves in $TMUX_TMPDIR, else /tmp/tmux-<uid>: the developer's
+    // live engine directory. `-S <path>` names its own socket and is exempt.
+    const spawns = (src: string): string[] =>
+      [...src.matchAll(/spawn(?:Sync)?\(\s*\[\s*"tmux"[^\n]*/g)].map((m) => m[0]);
+    const offenders = roots.flatMap((r) => lintFiles(repo, r)).filter((f) => {
+      const src = withoutComments(f.src);
+      return spawns(src).some((c) => !/"-S"/.test(c)) && !/TMUX_TMPDIR|TMUX_TEST_TMPDIR|TMUX_ISOLATED/.test(src);
+    }).map((f) => f.rel);
+    expect(offenders, "these spawn tmux with no private TMUX_TMPDIR in env: the socket lands in /tmp/tmux-<uid>").toEqual([]);
   });
 
   step("the lint is looking at the files it thinks it is", () => {

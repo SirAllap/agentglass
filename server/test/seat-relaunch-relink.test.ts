@@ -9,6 +9,8 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { tmpdir } from "node:os";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
 import { MACHINE, startHarness, type Harness } from "./fixtures/workerHarness.ts";
+import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
+import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
 
 const have = !!Bun.which("tmux") && !!Bun.which("python3");
 let h: Harness;
@@ -24,7 +26,7 @@ describe.skipIf(!have)("a relaunched orchestrator", () => {
     // A tab elsewhere keeps the tmux server (and its pane numbering) alive, so the new pane is not given the old one's id.
     await h.handTab(tmpdir(), "elsewhere");
     const old = await h.handTab(h.dir, "Orchestrator-orbit");
-    expect((await h.asPerson("/seat/adopt", { root: h.dir, pane: old, powers: "assign" })).ok).toBe(true);
+    expect((await h.adoptAsPerson({ root: h.dir, pane: old, powers: "assign" })).ok).toBe(true);
     expect((await status()).live).toBe(true);
 
     // The relay: the old window goes, a new one with the same name takes over, nobody adopts.
@@ -35,7 +37,7 @@ describe.skipIf(!have)("a relaunched orchestrator", () => {
     expect((await status()).live).toBe(true);
 
     // The re-link carries no credential (it can only be handed over in an answer): the new session adopts once to get its own.
-    const adopted = await h.asPerson("/seat/adopt", { root: h.dir, pane: fresh, powers: "assign" });
+    const adopted = await h.adoptAsPerson({ root: h.dir, pane: fresh, powers: "assign" });
     expect(adopted.ok).toBe(true);
     expect((adopted as any).token).toMatch(/^st_/);
 
@@ -50,5 +52,18 @@ describe.skipIf(!have)("a relaunched orchestrator", () => {
     const r = await h.asPerson("/seat/open", { root: h.dir });
     expect(r.ok).toBe(false);
     expect((r as any).error).toContain("already running");
+  });
+
+  test("standing down a relaunched orchestrator nobody re-read never closes a tab", async () => {
+    const old = await h.handTab(h.dir, "Orchestrator-orbit");
+    expect((await h.adoptAsPerson({ root: h.dir, pane: old, powers: "assign" })).ok).toBe(true);
+    await h.closeTab(old);
+    // The relay, and straight to "Stand down": no status read re-linked the row first.
+    const fresh = await h.handTab(h.dir, "Orchestrator-orbit");
+    expect((await h.asPerson("/seat/close", { root: h.dir })).ok).toBe(true);
+    await Bun.sleep(300);
+    const alive = Bun.spawnSync(["tmux", "-L", `agx-relink-${process.pid}`, ...TMUX_ISOLATED, "display-message", "-p", "-t", fresh, "#{pane_id}"],
+      { env: { ...process.env, TMUX_TMPDIR: TMUX_TEST_TMPDIR, TMUX: "" } });
+    expect(alive.stdout.toString().trim()).toBe(fresh);
   });
 });

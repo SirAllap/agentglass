@@ -92,7 +92,7 @@ async function probe(body: string): Promise<any> {
   const p = Bun.spawn([process.execPath, "-e", code], {
     stdout: "pipe", stderr: "pipe",
     env: {
-      PATH: `${dir}:${process.env.PATH ?? ""}`, HOME: dir, XDG_CONFIG_HOME: dir, XDG_DATA_HOME: dir, XDG_CACHE_HOME: dir,
+      PATH: `${dir}:${process.env.PATH ?? ""}`, HOME: dir, TMPDIR: dir, XDG_CONFIG_HOME: dir, XDG_DATA_HOME: dir, XDG_CACHE_HOME: dir,
       AGENTGLASS_STATE_DIR: join(dir, "state"), AGENTGLASS_DB: join(dir, "d.db"), AGENTGLASS_ROOT: dir, NODE_ENV: "test",
     },
   });
